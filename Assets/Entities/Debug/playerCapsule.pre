@@ -1,17 +1,25 @@
+// Local player: ONE entity — an invisible upright capsule body (LockRotation) with the skinned
+// character as its render mesh. InputControls (key C) possesses and moves the body; PlayerBody.dsl
+// drives the CharacterAnimator "speed" param and writes the facing yaw into the entity rotation,
+// which a rotation-locked body deliberately never overwrites (PhysicsComponent skips the rot
+// write-back). Render Scale 0.0125 = the character's authored 0.005 divided by the entity's 0.4;
+// Position 0 -2 0 puts the model's origin at the capsule bottom.
 Prefab playerCapsule
 	Position 0 0 0
 	Rotation 0 0 0
 	Scale 0.4
-	Component Scene
-		// Character visual at the capsule bottom; Scale 2.5 cancels the root's 0.4 so the model
-		// keeps its authored size. Animated/yawed from the capsule's movement by PlayerBody.scr.
-		Prefab playerBody
-			Position 0 -2 0
-			Scale 2.5
 	Component Render
-		ObjectContainer wireshapes
-		Node Capsule
-		Type StaticMesh
+		ObjectContainer character
+		Node ROOT
+		Type SkinnedMesh
+			Rig Humanoid
+		Position 0 -2 0
+		Scale 0.0125
+	Component Animator
+		Animator CharacterAnimator
+	Component Script
+		Path Scripts/PlayerBody.dsl
+		Enabled true
 	Component Physics
 		Body Dynamic
 		Shape Capsule

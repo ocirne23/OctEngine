@@ -1,7 +1,0 @@
-SCRIPT_EXPORT void Update(const ScriptContext* ctx, Entity* self, float deltaSec, void* scriptData)
-{
-	ctx->log("DSL walking skeleton: Update ran");
-}
-
-REGISTER_UPDATE()
-

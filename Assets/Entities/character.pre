@@ -17,6 +17,3 @@ Prefab character
 			Path Sounds/bloop.wav
 		Sound Blip
 			Path Sounds/blip.wav
-	Component Script
-		Path Scripts/Character.scr
-		Enabled true

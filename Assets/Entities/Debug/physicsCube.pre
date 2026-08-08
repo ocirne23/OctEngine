@@ -25,6 +25,3 @@ Prefab physicsCube
 			Path Sounds/bloop.wav
 				Volume 0.1
 				Pitch 4
-	Component Script
-		Path Scripts/PhysicsCube.scr
-		Enabled true

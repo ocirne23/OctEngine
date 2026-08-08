@@ -11,6 +11,7 @@ void PhysicsComponent::spawn(Entity& entity, const SpawnInfo& info, const Transf
 {
     enabled = info.enabled;
     bodyType = info.bodyType;
+    lockRotation = info.lockRotation;
     lastStep = Globals::physics.getStepCount();
 
     // `base` is parent-local for a prefab child; the ancestor chain is already positioned by now.
@@ -87,7 +88,9 @@ void PhysicsComponent::update(Entity& entity, const Transform& parentWorld)
         const glm::quat rot = glm::slerp(prevRot, currRot, alpha);
         const Transform local = parentWorld.inverse() * Transform(pos, parentWorld.scale * entity.scale, rot);
         entity.pos = local.pos;
-        entity.rot = local.quat;
+        if (!lockRotation)
+            entity.rot = local.quat; // a locked body's rot is frozen at spawn — writing it back
+                                     // would stomp script-driven facing (see the player capsule)
     }
 }
 

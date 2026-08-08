@@ -24,6 +24,8 @@ export struct PhysicsComponent
     float shapeScale = 1.0f;  // world scale baked into the shape at spawn
     uint32 lastStep = 0;
     EPhysicsBodyType bodyType = EPhysicsBodyType::Dynamic;
+    bool lockRotation = false; // locked bodies write back only their position: the body never
+                               // rotates, so entity.rot stays free for script-driven facing
     bool enabled = true;
     bool suspended = false;   // body removed from the simulation (entity disabled via EEntityFlag_Enabled)
 	PhysicsWorld::ContactEvent* pContactEventList = nullptr; // linked list of contact events collected this frame

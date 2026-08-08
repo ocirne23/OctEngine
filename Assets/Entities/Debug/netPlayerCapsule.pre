@@ -2,22 +2,26 @@
 // client drives it with WASD/Space (key C toggles player control — the free-fly camera releases
 // those keys; V toggles first/third person), simulating it LOCALLY for full responsiveness; the
 // claim stream carries the resulting body state to the server, validated by the Network/Validation
-// plausibility gate (move implausibly fast or through geometry and the server rejects +
-// force-corrects). Everyone else sees it as a normal replica. LockRotation keeps it upright inside
-// the solver on every instance (owner, server twin, replicas).
+// plausibility gate. Everyone else sees it as a normal replica.
+// ONE entity: an invisible rotation-locked capsule body with the skinned character as its render
+// mesh. PlayerBody.dsl animates + yaws it from the entity's actual movement (position-delta based,
+// so replicas on other clients animate too); a locked body never writes rot back, so the script's
+// facing survives. Render Scale 0.0125 = authored 0.005 / entity 0.4; Position 0 -2 0 puts the
+// model's origin at the capsule bottom.
 Prefab netPlayerCapsule
 	Scale 0.4
-	Component Scene
-		// Character visual at the capsule bottom; Scale 2.5 cancels the root's 0.4 so the model
-		// keeps its authored size. Animated/yawed from the capsule's movement by PlayerBody.scr —
-		// position-delta based, so replicas on other clients animate too.
-		Prefab playerBody
-			Position 0 -2 0
-			Scale 2.5
 	Component Render
-		ObjectContainer wireshapes
-		Node Capsule
-		Type StaticMesh
+		ObjectContainer character
+		Node ROOT
+		Type SkinnedMesh
+			Rig Humanoid
+		Position 0 -2 0
+		Scale 0.0125
+	Component Animator
+		Animator CharacterAnimator
+	Component Script
+		Path Scripts/PlayerBody.dsl
+		Enabled true
 	Component Physics
 		Body Dynamic
 		Shape Capsule

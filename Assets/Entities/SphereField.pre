@@ -5,6 +5,3 @@ Prefab SphereField
 	Component Force
 		Output 1
 		Reach 5
-	Component Script
-		Path Scripts/SphereField.scr
-		Enabled true

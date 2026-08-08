@@ -8,5 +8,5 @@ Prefab skysphere
 		Type StaticMesh
 		Scale 100
 	Component Script
-		Path Scripts/Sky.scr
+		Path Scripts/sky.dsl
 		Enabled true
