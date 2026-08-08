@@ -26,6 +26,11 @@ enum class ENetMsg : uint8
     OwnerChange, // server -> client, ch2: [varuint netId][varuint ownerClientId] (per ENTITY, unlike Spawn's per-tree owner)
 };
 
+// Bounds on a quantization range read off the wire. The sender declares its own live tweak values,
+// so a hostile or misconfigured peer can otherwise scale every decoded velocity in the message.
+constexpr float MinWireQuantizeRange = 1.0f;
+constexpr float MaxWireQuantizeRange = 1000.0f;
+
 constexpr size_t MaxEventNameLength = 64;  // event names; real ones are identifiers
 constexpr size_t MaxEventDataBytes = 1024; // payload cap: bounded so one event stays in one packet
 // type byte + senderClientId + senderNetId + name length + name + payload length (varints are <= 5B
@@ -803,12 +808,12 @@ void NetworkManager::handleClaimMessage(NetPeerId peer, NetReader& reader)
     if (reader.overflowed() || netId == 0 || count == 0 || count > ClaimRedundancy || (claimFlags & ~1))
         return;
     const bool quantized = (claimFlags & 1) != 0;
-    float maxVel = 50.0f;
-    float maxAngVel = 50.0f;
+    float maxVel = s_maxVel;       // only read (and only used) when the payload is quantized
+    float maxAngVel = s_maxAngVel;
     if (quantized) // the owner encoded with ITS live ranges; decode with the same
     {
-        maxVel = glm::clamp(reader.read<float>(), 1.0f, 1000.0f);
-        maxAngVel = glm::clamp(reader.read<float>(), 1.0f, 1000.0f);
+        maxVel = glm::clamp(reader.read<float>(), MinWireQuantizeRange, MaxWireQuantizeRange);
+        maxAngVel = glm::clamp(reader.read<float>(), MinWireQuantizeRange, MaxWireQuantizeRange);
     }
 
     Entity* entity = nullptr;
@@ -1305,12 +1310,13 @@ void NetworkManager::handleSnapshot(NetReader& reader)
         return;
     }
     const bool quantized = (flags & SnapshotFlag_Quantized) != 0;
-    float maxVel = 50.0f;
-    float maxAngVel = 50.0f;
+    float maxVel = s_maxVel;       // only read (and only used) when the payload is quantized
+    float maxAngVel = s_maxAngVel;
     if (quantized) // the quantization ranges are live tweaks server-side, so they ride in the header
     {
-        maxVel = reader.read<float>();
-        maxAngVel = reader.read<float>();
+        // clamped like the claim path: a garbage range decodes every velocity in the message
+        maxVel = glm::clamp(reader.read<float>(), MinWireQuantizeRange, MaxWireQuantizeRange);
+        maxAngVel = glm::clamp(reader.read<float>(), MinWireQuantizeRange, MaxWireQuantizeRange);
     }
     const uint32 count = reader.read<uint16>();
 
