@@ -935,6 +935,20 @@ bool AutoCompleteRules::isFunctionReferenced(const DSLSymbol* funcDecl, const DS
 	return false;
 }
 
+bool AutoCompleteRules::isFunctionResultUsed(const DSLSymbol* funcDecl, const DSLScriptFile& file)
+{
+	using ST = DSLSymbol::SymbolType;
+
+	// A call that is its own line's HEAD is a call statement -- the one shape that ignores the result. Any
+	// other position (an initializer, an argument, an operand, a return's value) consumed it at its old type.
+	for (const std::unique_ptr<DSLCodeLine>& line : file.lines)
+		for (const std::unique_ptr<DSLSymbol>& s : line->symbols)
+			if (s->type == ST::FunctionCall && std::get<DSLSymbol::FunctionCall>(s->data).functionSymbol == funcDecl
+				&& line->head() != s.get())
+				return true;
+	return false;
+}
+
 std::vector<Candidate> AutoCompleteRules::candidatesForAnyValue(const DSLCodeLine& atLine, const DSLScriptFile& file,
 	const std::vector<std::unique_ptr<DSLSymbol>>& sidebar, const std::vector<std::unique_ptr<DSLSymbol>>& builtins,
 	const std::string& typedPrefix, DSLSymbol* excludeVariable, bool offerLiterals)

@@ -432,15 +432,16 @@ void ScriptEditor::beginCompose()
 		// A LOCKED entry-point function always returns void, non-negotiably (see EntryPointDef).
 		if (isLockedEntryFunction(span->symbol))
 			return;
-		// A called function's return type is load-bearing at every call site's typing -- it can only change
-		// while nothing references the function.
-		if (AutoCompleteRules::isFunctionReferenced(span->symbol, m_document.file))
+		// The return type is load-bearing only at call sites that CONSUME the result -- a call statement ignores
+		// it, so a statement-only-called function may change or drop its type freely (and ADDING one to a Void
+		// function is always safe: nothing can consume a Void result in the first place).
+		const DSLSymbol::FunctionDeclaration& f = std::get<DSLSymbol::FunctionDeclaration>(span->symbol->data);
+		if (f.returnType != DSLType::Void && AutoCompleteRules::isFunctionResultUsed(span->symbol, m_document.file))
 			return;
 		// "-> " is only PART of the compose box when the span itself is blank (returnType == Void, see
 		// renderSymbol's FunctionDeclaration case) -- when a type is already set, " -> " is already part of the
 		// surrounding line text BEFORE this span (only the type name itself is the span/what's being replaced),
 		// so prefixing it again here would visually double it up.
-		const DSLSymbol::FunctionDeclaration& f = std::get<DSLSymbol::FunctionDeclaration>(span->symbol->data);
 		enterCompose(ComposeMode::FunctionReturnType, (f.returnType == DSLType::Void) ? "-> " : "");
 		return;
 	}
@@ -621,6 +622,17 @@ void ScriptEditor::refreshCandidates()
 		}
 		break;
 	case ComposeMode::FunctionReturnType:
+	{
+		m_candidates = AutoCompleteRules::typeKeywordCandidates(m_pendingWord);
+		// "void" REMOVES the return type -- the confirmable spelling of removal, which the type list otherwise
+		// has no entry for (Backspace on the span removes too, but not once the edit is already open). Only
+		// here: the fresh-declaration stage (FunctionDeclareReturnType) says void by not typing the arrow at
+		// all, and a for-loop counter can't be void.
+		Candidate voidKeyword{ dslTypeName(DSLType::Void), Candidate::Kind::DeclareType, nullptr, DSLType::Void };
+		if (m_pendingWord.empty() || voidKeyword.label.compare(0, m_pendingWord.size(), m_pendingWord) == 0)
+			m_candidates.push_back(std::move(voidKeyword));
+		break;
+	}
 	case ComposeMode::FunctionDeclareReturnType:
 	case ComposeMode::ForVarType:
 		m_candidates = AutoCompleteRules::typeKeywordCandidates(m_pendingWord);
@@ -1288,13 +1300,15 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 		// against, and no count that ends the list -- only ')' or Enter (allowCommit) closes one.
 		const bool inVarargs = callee.isVariadic && stage.argChains.size() >= declaredCount;
 
-		// A fixed-arity call STATEMENT's LAST argument commits the whole line, so Space stops short of it. A
-		// variadic one has no known last argument, so the guard can't apply -- Space just moves to the next slot.
-		if (!allowCommit && stage.returnMode == ComposeMode::None && !callee.isVariadic
-			&& stage.argChains.size() + 1 == declaredCount)
+		// A fixed-arity call's LAST argument completes the call, so Space stops short of it -- statement AND
+		// value alike: auto-completing a nested call on Space would seal the argument the instant its first
+		// term resolved ("math.cos(x = deltaSeconds|)"), making "deltaSeconds * 50" unauthorable. Space still
+		// resolves the highlighted term; the argument stays a live chain compose until ')' or Enter closes it.
+		// A variadic callee has no known last argument, so the guard can't apply -- Space just moves on.
+		if (!allowCommit && !callee.isVariadic && stage.argChains.size() + 1 == declaredCount)
 		{
-			tryResolveCandidateOnSpace(); // can't commit the call (Enter/')' only) -- but Space can still resolve this argument's highlighted term
-			return; // a call STATEMENT's final argument commits the line -- Enter/')' only; a call VALUE just resolves a term
+			tryResolveCandidateOnSpace();
+			return; // completing the call -- and, for a statement, the line -- stays an Enter/')' gesture
 		}
 
 		std::vector<PendingExprTerm> terms;
@@ -2900,8 +2914,12 @@ void ScriptEditor::commitFunctionRedeclare()
 	bool signatureChanged = (oldCount != m_pendingParamTypes.size());
 	for (size_t i = 0; !signatureChanged && i < oldCount; ++i)
 		signatureChanged = (paramTypeOf(f.parameterVarDeclarations[i]) != m_pendingParamTypes[i]);
-	if ((signatureChanged || m_pendingReturnType != f.returnType) && AutoCompleteRules::isFunctionReferenced(funcSymbol, m_document.file))
-		return; // existing call sites are built against the old signature/return type -- they'd all break
+	if (signatureChanged && AutoCompleteRules::isFunctionReferenced(funcSymbol, m_document.file))
+		return; // existing call sites carry arguments typed against the old parameter list -- they'd all break
+	// The return type is gentler: only a call site that CONSUMES the result was typed against it, so a
+	// statement-only-called function changes or drops it freely (same rule as the span edit, see beginCompose).
+	if (m_pendingReturnType != f.returnType && AutoCompleteRules::isFunctionResultUsed(funcSymbol, m_document.file))
+		return;
 	for (size_t i = 0; i < oldCount; ++i)
 	{
 		const bool kept = i < m_pendingParamTypes.size() && paramTypeOf(f.parameterVarDeclarations[i]) == m_pendingParamTypes[i];
@@ -4879,12 +4897,13 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 				if (isLockedEntryFunction(span->symbol))
 					return;
 				// Backspace at the header's END: a set return type clears first (one keystroke, like deleting
-				// a chain term) -- but only while nothing calls the function (a caller's typing depends on
-				// it); otherwise, and once blank, the staged Declare-function flow re-opens over the whole
-				// header (beginWidenFunctionHeader) so further Backspace peels parameters, then the name,
-				// then -- guarded -- the function itself. Typing on this span still composes a return type.
+				// a chain term) -- but only while no call site CONSUMES the result (a call statement ignores
+				// it, so statement-only callers survive the removal); otherwise, and once blank, the staged
+				// Declare-function flow re-opens over the whole header (beginWidenFunctionHeader) so further
+				// Backspace peels parameters, then the name, then -- guarded -- the function itself. Typing on
+				// this span still composes a return type.
 				DSLSymbol::FunctionDeclaration& f = std::get<DSLSymbol::FunctionDeclaration>(span->symbol->data);
-				if (f.returnType != DSLType::Void && !AutoCompleteRules::isFunctionReferenced(span->symbol, m_document.file))
+				if (f.returnType != DSLType::Void && !AutoCompleteRules::isFunctionResultUsed(span->symbol, m_document.file))
 				{
 					f.returnType = DSLType::Void;
 					applyFunctionReturnChange(span->symbol, DSLType::Void); // a void function returns nothing -- its return lines go too
@@ -5690,10 +5709,11 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 		{
 			// '-' starts appending the return syntax: "name(...) -> <type>" -- picking the type commits the
 			// whole function with it (the '>' needn't be typed; the prefix supplies the full arrow). A
-			// re-authored function that's called anywhere can't change its return type, so the stage doesn't
-			// open there (commitFunctionRedeclare would refuse the change anyway).
+			// re-authored function whose RESULT is consumed somewhere can't change its return type, so the
+			// stage doesn't open there (commitFunctionRedeclare would refuse the change anyway); statement-only
+			// callers ignore the result, so they don't block it.
 			if (m_flowEditLine == nullptr || m_flowEditLine->head() == nullptr
-				|| !AutoCompleteRules::isFunctionReferenced(m_flowEditLine->head(), m_document.file))
+				|| !AutoCompleteRules::isFunctionResultUsed(m_flowEditLine->head(), m_document.file))
 				enterCompose(ComposeMode::FunctionDeclareReturnType, functionDeclarePrefix() + ") -> ");
 		}
 		return; // nothing else means anything between the ')' and the commit/arrow

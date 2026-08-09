@@ -307,4 +307,9 @@ public:
 	// guards deleting an (empty) function declaration the same way isVariableReferenced guards a local's. Global,
 	// not scoped to one function, since a function can be called from anywhere (see knownFunctions).
 	static bool isFunctionReferenced(const DSLSymbol* funcDecl, const DSLScriptFile& file);
+	// The finer sibling: whether any call site CONSUMES `funcDecl`'s return value (a call anywhere but a line's
+	// own head). What return-type edits guard on -- a call STATEMENT ignores the result, so a statement-only-
+	// called function can change or drop its return type without breaking a single call site, while parameter
+	// changes (which every call shape carries typed arguments for) still need isFunctionReferenced.
+	static bool isFunctionResultUsed(const DSLSymbol* funcDecl, const DSLScriptFile& file);
 };

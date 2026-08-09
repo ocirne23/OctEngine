@@ -500,6 +500,7 @@ void registerScriptDslBindings()
             { "trunc",      T::Float, { { "x", T::Float } },                                        "glm::trunc($1)" },
             { "fract",      T::Float, { { "x", T::Float } },                                        "glm::fract($1)" },
             { "toInt",      T::Int,   { { "x", T::Float } },                                        "((int)($1))" }, // truncates, like C++
+            { "toFloat",    T::Float, { { "i", T::Int } },                                          "((float)($1))" },
 
             // -- interpolation / ranges --
             { "lerp",         T::Float, { { "a", T::Float }, { "b", T::Float }, { "t", T::Float } }, "glm::mix($1, $2, $3)" },
