@@ -64,6 +64,7 @@ export import <new>;
 export import <bit>;
 export import <cmath>;
 export import <random>;
+export import <sstream>;
 
 export template<typename T, size_t N>
 constexpr size_t ARRAY_SIZE(const T(&)[N]) { return N; }

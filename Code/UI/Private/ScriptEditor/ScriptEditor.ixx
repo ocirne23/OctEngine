@@ -246,6 +246,15 @@ private:
 	// (which passes the open document's own path to re-read it from disk). On success every selection/compose
 	// state resets (all old symbol pointers are dead); on failure nothing changes.
 	void loadDocument(const std::string& path);
+	// Ctrl+C / Ctrl+V. Copy takes the cursor's LINE -- or, on a block header (or its synthetic `end`), the
+	// whole block -- as plain expanded-view DSL text, tab-indented and rebased to column 0, so it also reads
+	// correctly pasted into any outside text editor. Paste splices the clipboard below the cursor (into a
+	// header's body when the cursor sits on one, same rule as Enter) and REPARSES the whole candidate document
+	// through ScriptLoader::loadFromText: anything that doesn't resolve there -- an unknown name, bad nesting,
+	// a fragment missing its `end` -- rejects the paste with the loader's own error and leaves the document
+	// untouched. That loader gate is what keeps "everything always compiles" true for text from anywhere.
+	void copySelection();
+	void pasteClipboard();
 	DSLSymbol* pushSymbol(DSLCodeLine& line, DSLSymbol::SymbolType type, DSLSymbol::Data data); // constructs a fresh symbol owned by `line`, returns the raw ptr -- shared by every apply/commit function below
 
 	void moveHorizontal(int delta);  // Left/Right, Tab/Shift-Tab (not composing): next/prev span

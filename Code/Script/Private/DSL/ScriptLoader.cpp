@@ -1390,27 +1390,7 @@ bool ScriptLoader::save(DSL& document, const std::string& path, const std::strin
 		file << '\n';
 	}
 	file << "//@@dsl 1\n";
-	if (!document.requiredComponents.empty())
-	{
-		file << "//@@require ";
-		for (size_t i = 0; i < document.requiredComponents.size(); ++i)
-		{
-			const char* name = Globals::scriptBindings.componentTypeName(document.requiredComponents[i]);
-			file << (i > 0 ? ", " : "") << (name != nullptr ? name : "?");
-		}
-		file << '\n';
-	}
-	// "//@@data [private|public] <type> <name>" -- the keyword is OMITTED for Hidden, which is the default, so
-	// every field authored before visibility existed round-trips byte-identically.
-	for (const DSLDataField& field : document.dataFields)
-	{
-		file << "//@@data ";
-		if (field.visibility != DSLFieldVisibility::Hidden)
-			file << dslFieldVisibilityName(field.visibility) << ' ';
-		file << dslTypeName(field.type) << ' ' << field.name << '\n';
-	}
-	for (const std::string& eventName : document.eventNames)
-		file << "//@@event " << eventName << '\n';
+	file << directiveText(document);
 	for (const SyntaxLine& line : Syntax::format(document.file, /*compact*/ false))
 	{
 		file << "//@";
@@ -1422,22 +1402,59 @@ bool ScriptLoader::save(DSL& document, const std::string& path, const std::strin
 	return file.good();
 }
 
+std::string ScriptLoader::directiveText(const DSL& document)
+{
+	std::ostringstream out;
+	if (!document.requiredComponents.empty())
+	{
+		out << "//@@require ";
+		for (size_t i = 0; i < document.requiredComponents.size(); ++i)
+		{
+			const char* name = Globals::scriptBindings.componentTypeName(document.requiredComponents[i]);
+			out << (i > 0 ? ", " : "") << (name != nullptr ? name : "?");
+		}
+		out << '\n';
+	}
+	// "//@@data [private|public] <type> <name>" -- the keyword is OMITTED for Hidden, which is the default, so
+	// every field authored before visibility existed round-trips byte-identically.
+	for (const DSLDataField& field : document.dataFields)
+	{
+		out << "//@@data ";
+		if (field.visibility != DSLFieldVisibility::Hidden)
+			out << dslFieldVisibilityName(field.visibility) << ' ';
+		out << dslTypeName(field.type) << ' ' << field.name << '\n';
+	}
+	for (const std::string& eventName : document.eventNames)
+		out << "//@@event " << eventName << '\n';
+	return out.str();
+}
+
 ScriptLoader::LoadResult ScriptLoader::load(DSL& document, const std::string& path, const std::vector<std::unique_ptr<DSLSymbol>>& builtins,
 	const ScriptBindings& bindings)
+{
+	std::ifstream stream(path, std::ios::in | std::ios::binary);
+	if (!stream.is_open())
+	{
+		LoadResult result;
+		result.error = "cannot open '" + path + "'";
+		return result;
+	}
+	std::ostringstream content;
+	content << stream.rdbuf();
+	return loadFromText(document, content.str(), path, builtins, bindings);
+}
+
+ScriptLoader::LoadResult ScriptLoader::loadFromText(DSL& document, const std::string& text, const std::string& originName,
+	const std::vector<std::unique_ptr<DSLSymbol>>& builtins, const ScriptBindings& bindings)
 {
 	LoadResult result;
 	const auto failAt = [&](int lineNo, const std::string& what) -> LoadResult
 	{
-		result.error = path + "(" + std::to_string(lineNo) + "): " + what;
+		result.error = originName + "(" + std::to_string(lineNo) + "): " + what;
 		return result;
 	};
 
-	std::ifstream file(path, std::ios::in | std::ios::binary);
-	if (!file.is_open())
-	{
-		result.error = "cannot open '" + path + "'";
-		return result;
-	}
+	std::istringstream file(text);
 
 	// Extract the "//@@dsl" block: every following "//@"-prefixed line until "//@@end" (or the first
 	// unprefixed line/EOF), prefixes stripped; "//@@require" directive lines carry the file's required
@@ -1566,7 +1583,7 @@ ScriptLoader::LoadResult ScriptLoader::load(DSL& document, const std::string& pa
 		}
 		if (!inBlock && blockLines.empty())
 		{
-			result.error = "'" + path + "' has no //@@dsl block";
+			result.error = "'" + originName + "' has no //@@dsl block";
 			return result;
 		}
 	}
@@ -1726,14 +1743,14 @@ ScriptLoader::LoadResult ScriptLoader::load(DSL& document, const std::string& pa
 	rebuilt.lines = std::move(parser.outLines);
 	const std::vector<SyntaxLine> rendered = Syntax::format(rebuilt, /*compact*/ false);
 	if (rendered.size() != blockLines.size())
-		Log::warning("ScriptLoader: '" + path + "' re-renders to " + std::to_string(rendered.size())
+		Log::warning("ScriptLoader: '" + originName + "' re-renders to " + std::to_string(rendered.size())
 			+ " lines where the file has " + std::to_string(blockLines.size()));
 	for (size_t i = 0; i < rendered.size() && i < blockLines.size(); ++i)
 	{
 		std::string expected(static_cast<size_t>(rendered[i].scopeLevel), '\t');
 		expected += rendered[i].text;
 		if (expected != blockLines[i].text)
-			Log::warning("ScriptLoader: '" + path + "' line " + std::to_string(blockLines[i].fileLineNo)
+			Log::warning("ScriptLoader: '" + originName + "' line " + std::to_string(blockLines[i].fileLineNo)
 				+ " re-renders as \"" + expected + "\" (file has \"" + blockLines[i].text + "\")");
 	}
 

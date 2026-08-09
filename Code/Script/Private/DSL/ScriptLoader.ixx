@@ -48,6 +48,16 @@ public:
 
 	static bool save(DSL& document, const std::string& path, const std::string& generatedCode);
 
+	// The "//@@require"/"//@@data"/"//@@event" directive lines, exactly as save() writes them -- shared with
+	// the editor's PASTE path, which rebuilds a candidate document as text and reparses it via loadFromText.
+	static std::string directiveText(const DSL& document);
+
+	// load() minus the file: parses any text containing a "//@@dsl 1" ... "//@@end" block. `originName` only
+	// labels error messages. Same transactional contract as load: on failure the document is untouched -- which
+	// is what lets the editor's paste offer the WHOLE candidate and simply cancel when it doesn't resolve.
+	static LoadResult loadFromText(DSL& document, const std::string& text, const std::string& originName,
+		const std::vector<std::unique_ptr<DSLSymbol>>& builtins, const ScriptBindings& bindings);
+
 	// Parses a file save() wrote and REPLACES document.file.lines (+ requiredComponents, from the file's
 	// "//@@require" line) on success; on failure the document is left untouched. document.sidebar, `builtins`
 	// and `bindings` are the name-resolution context (the same fixed sets the editor composes against --

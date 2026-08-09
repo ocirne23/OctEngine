@@ -4767,10 +4767,21 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 	const bool composing = m_composeMode != ComposeMode::None;
 
 	// Ctrl+S saves from anywhere, composing included -- a compose never touches the document, so what lands on
-	// disk is exactly the committed state.
+	// disk is exactly the committed state. Copy reads the same committed state; paste cancels any in-flight
+	// compose first (a compose never touches the document, so cancelling is lossless).
 	if (ctrl && evt.key.scancode == SDL_SCANCODE_S)
 	{
 		saveDocument();
+		return;
+	}
+	if (ctrl && evt.key.scancode == SDL_SCANCODE_C)
+	{
+		copySelection();
+		return;
+	}
+	if (ctrl && evt.key.scancode == SDL_SCANCODE_V)
+	{
+		pasteClipboard();
 		return;
 	}
 
@@ -7067,6 +7078,147 @@ void ScriptEditor::loadDocument(const std::string& path)
 	m_pendingSelectLineEnd = -1;
 	m_pendingComposeReturnValue = false;
 	Log::info("Script loaded from " + path);
+}
+
+// See the declaration in ScriptEditor.ixx. Works on the EXPANDED rendering regardless of the current view
+// mode: compact only changes text within lines, never the line structure, so m_cursorLine indexes both lists
+// identically -- and the expanded text is the only form the loader is guaranteed to parse back.
+void ScriptEditor::copySelection()
+{
+	if (m_document.file.lines.empty())
+		return;
+	const std::vector<SyntaxLine> expanded = Syntax::format(m_document.file, /*compact*/ false);
+	if (expanded.empty())
+		return;
+	const int idx = std::clamp(m_cursorLine, 0, static_cast<int>(expanded.size()) - 1);
+	int first = idx, last = idx;
+
+	const SyntaxLine& cur = expanded[idx];
+	if (cur.sourceLine == nullptr && cur.endOfSymbol != nullptr)
+	{
+		// A synthetic `end` selects the whole block it closes, header included.
+		for (first = idx - 1; first >= 0; --first)
+			if (expanded[first].sourceLine != nullptr && expanded[first].sourceLine->head() == cur.endOfSymbol)
+				break;
+		if (first < 0)
+			return;
+	}
+	else if (cur.sourceLine != nullptr && Syntax::isBlockOpener(cur.sourceLine->head()))
+	{
+		// A block header selects through its own synthetic `end` -- matched by head symbol rather than by
+		// scope-level walking, so an if/elseif/else CHAIN comes as one unit (the end ties to the original if).
+		// An elseif/else header finds no end of its own and degrades to the single line; pasting that fragment
+		// is then refused by the loader, which is the honest outcome for half a chain.
+		DSLSymbol* head = cur.sourceLine->head();
+		for (last = idx + 1; last < static_cast<int>(expanded.size()); ++last)
+			if (expanded[last].sourceLine == nullptr && expanded[last].endOfSymbol == head)
+				break;
+		if (last >= static_cast<int>(expanded.size()))
+			last = idx;
+	}
+
+	std::string text;
+	const int base = expanded[first].scopeLevel;
+	for (int i = first; i <= last; ++i)
+	{
+		for (int tab = expanded[i].scopeLevel - base; tab > 0; --tab)
+			text += '\t';
+		text += expanded[i].text;
+		text += '\n';
+	}
+	ImGui::SetClipboardText(text.c_str());
+}
+
+// See the declaration in ScriptEditor.ixx: build the WHOLE candidate document as text -- directives, every
+// current line, the clipboard spliced in at the cursor -- and reparse it through the loader. All-or-nothing by
+// construction: loadFromText leaves the document untouched on failure, so a bad paste is a log line, never a
+// half-applied edit.
+void ScriptEditor::pasteClipboard()
+{
+	const char* clip = ImGui::GetClipboardText();
+	if (clip == nullptr || *clip == '\0')
+		return;
+	cancelCompose(); // lossless -- a compose never touches the document
+
+	const std::vector<SyntaxLine> expanded = Syntax::format(m_document.file, /*compact*/ false);
+	int insertAfter = expanded.empty() ? -1 : std::clamp(m_cursorLine, 0, static_cast<int>(expanded.size()) - 1);
+	int indent = 0;
+	if (insertAfter >= 0)
+	{
+		const SyntaxLine& cur = expanded[insertAfter];
+		indent = cur.scopeLevel;
+		if (cur.sourceLine != nullptr && Syntax::isBlockOpener(cur.sourceLine->head()))
+			++indent; // below a header means inside its body -- Enter's rule
+	}
+
+	// Clipboard -> (indent, body) lines: leading TABS carry the fragment's own nesting, rebased so its
+	// shallowest non-empty line lands at the insertion indent. Trailing blank lines drop (a final '\n' is not
+	// a line); interior blanks keep -- they are real blank-statement lines.
+	std::vector<std::pair<int, std::string>> clipLines;
+	{
+		const std::string_view all(clip);
+		int minTabs = INT_MAX;
+		size_t pos = 0;
+		while (pos <= all.size())
+		{
+			const size_t newline = all.find('\n', pos);
+			std::string_view line = all.substr(pos, newline == std::string_view::npos ? all.size() - pos : newline - pos);
+			pos = (newline == std::string_view::npos) ? all.size() + 1 : newline + 1;
+			if (!line.empty() && line.back() == '\r')
+				line.remove_suffix(1);
+			int tabs = 0;
+			while (tabs < static_cast<int>(line.size()) && line[tabs] == '\t')
+				++tabs;
+			const std::string body(line.substr(static_cast<size_t>(tabs)));
+			clipLines.emplace_back(tabs, body);
+			if (!body.empty())
+				minTabs = std::min(minTabs, tabs);
+		}
+		while (!clipLines.empty() && clipLines.back().second.empty())
+			clipLines.pop_back();
+		if (clipLines.empty() || minTabs == INT_MAX)
+			return; // nothing but whitespace
+		for (auto& [tabs, body] : clipLines)
+			tabs = indent + std::max(0, tabs - minTabs);
+	}
+
+	std::string text = "//@@dsl 1\n" + ScriptLoader::directiveText(m_document);
+	const auto emit = [&text](int tabs, const std::string& body)
+	{
+		text += "//@";
+		for (int t = 0; t < tabs; ++t)
+			text += '\t';
+		text += body;
+		text += '\n';
+	};
+	for (int i = 0; i < static_cast<int>(expanded.size()); ++i)
+	{
+		emit(expanded[i].scopeLevel, expanded[i].text);
+		if (i == insertAfter)
+			for (const auto& [tabs, body] : clipLines)
+				emit(tabs, body);
+	}
+	if (insertAfter < 0)
+		for (const auto& [tabs, body] : clipLines)
+			emit(tabs, body);
+	text += "//@@end\n";
+
+	const ScriptLoader::LoadResult result = ScriptLoader::loadFromText(m_document, text, "paste", m_builtins, m_bindings);
+	if (!result.success)
+	{
+		Log::warning("Paste rejected: " + result.error);
+		return;
+	}
+
+	// Every symbol pointer from the replaced document is dead -- same reset as loadDocument, landing on the
+	// last pasted line.
+	m_cursorLine = 0;
+	m_cursorSpan = 0;
+	m_pendingSelectTarget = nullptr;
+	m_pendingSelectOperatorIndex = -1;
+	m_pendingSelectGroupClose = false;
+	m_pendingComposeReturnValue = false;
+	m_pendingSelectLineEnd = insertAfter + static_cast<int>(clipLines.size());
 }
 
 void ScriptEditor::requestOpen(const std::string& path)

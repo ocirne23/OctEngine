@@ -364,7 +364,6 @@ public:
     {
         ScriptEventManager& scriptEvents = Globals::scriptEvents;
         Renderer& renderer = Globals::rendererVK;
-        UI& ui = Globals::ui;
 
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_W) scriptEvents.fireEvent(evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN ? "W Down" : "W Up");
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_A) scriptEvents.fireEvent(evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN ? "A Down" : "A Up");
