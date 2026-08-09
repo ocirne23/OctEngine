@@ -33,12 +33,13 @@ static bool isObjectContainer(const std::string& ext)
 
 static bool isScriptFile(const std::string& ext)
 {
-	return ext == ".scr" || ext == ".dsl"; // node-graph-generated / DSL-editor-generated -- both run through ScriptHost the same way
+	return ext == ".dsl"; // the one authorable script format -- .scr (the removed node editor's) reads as plain text now
 }
 
 static bool isTextFile(const std::string& ext)
 {
-	return ext == ".txt";
+	// .scr: the removed node editor's format -- kept viewable as the generated C++ it is, no longer a script.
+	return ext == ".txt" || ext == ".scr";
 }
 
 static bool isSpawnableFile(const std::filesystem::path& p)
@@ -659,7 +660,14 @@ void AssetBrowser::renderNewAssetContextMenu()
 	if (!ImGui::BeginPopupContextWindow("##ab_winctx", ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
 		return;
 	if (ImGui::MenuItem("New Script"))
-		m_scriptCreateRequest = makeUniqueAssetPath("NewScript", ".scr").string();
+	{
+		// A .dsl, not a .scr -- the node system is deprecated for new scripts. The file written is the SMALLEST
+		// loadable document (an empty version-1 block); it opens in the Script Editor immediately through the
+		// same request a double-click raises, and that editor's own Save writes the full form from then on.
+		const std::filesystem::path path = makeUniqueAssetPath("NewScript", ".dsl");
+		if (FileSystem::writeFileStr(path.string(), "//@@dsl 1\n//@@end\n"))
+			m_scriptOpenRequest = path.string();
+	}
 	if (ImGui::MenuItem("New Text File"))
 	{
 		const std::filesystem::path path = makeUniqueAssetPath("NewText", ".txt");

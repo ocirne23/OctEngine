@@ -6597,6 +6597,26 @@ void ScriptEditor::renderSidebarPanel()
 {
 	ImGui::BeginChild("##dsl_sidebar", ImVec2(m_sidebarWidth, 0.0f), ImGuiChildFlags_None);
 
+	// The open document. OPENING isn't done here at all -- double-click or drag a .dsl in the Content browser
+	// -- so this is just Save (also Ctrl+S), Reload (discard unsaved edits, re-read the file), and which file
+	// it is. The sidebar is narrow, so the label is the bare filename; the full path rides in the tooltip.
+	{
+		const bool hasDocument = !m_document.filePath.empty();
+		ImGui::BeginDisabled(!hasDocument);
+		if (ImGui::Button("Save"))
+			saveDocument();
+		ImGui::SameLine();
+		if (ImGui::Button("Reload"))
+			loadDocument(m_document.filePath);
+		ImGui::EndDisabled();
+		ImGui::SameLine();
+		ImGui::TextDisabled("%s", hasDocument
+			? std::filesystem::path(m_document.filePath).filename().string().c_str() : "<no script open>");
+		if (hasDocument && ImGui::IsItemHovered())
+			ImGui::SetTooltip("%s", m_document.filePath.c_str());
+		ImGui::Separator();
+	}
+
 	bool firstSegment = true;
 	auto seg = [&firstSegment](const ImVec4& color, const char* text)
 	{
@@ -7001,19 +7021,6 @@ void ScriptEditor::render()
 	ImGui::SameLine();
 	ImGui::BeginChild("##dsl_main", ImVec2(0.0f, 0.0f), false);
 
-	// Save/Load toolbar. While the path field is being typed into, ImGui's WantTextInput keeps handleKeyEvent
-	// out, so the document cursor and the field never fight over keys.
-	ImGui::SetNextItemWidth(240.0f);
-	ImGui::InputText("##dsl_path", m_pathBuf, sizeof(m_pathBuf));
-	ImGui::SameLine();
-	if (ImGui::Button("Save"))
-		saveDocument();
-	ImGui::SameLine();
-	if (ImGui::Button("Load"))
-		loadDocument();
-
-	ImGui::Separator();
-
 	renderTextArea();
 
 	ImGui::EndChild();
@@ -7021,10 +7028,12 @@ void ScriptEditor::render()
 
 void ScriptEditor::saveDocument()
 {
-	const std::string path = m_pathBuf;
+	const std::string& path = m_document.filePath;
 	if (path.empty())
+	{
+		Log::warning("No script open -- double-click a .dsl in the Content browser to open one");
 		return;
-	m_document.filePath = path;
+	}
 	if (ScriptLoader::save(m_document, path, Transpiler::transpile(m_document, m_bindings)))
 	{
 		Log::info("Script saved to " + path);
@@ -7037,9 +7046,8 @@ void ScriptEditor::saveDocument()
 		Log::error("Failed to write " + path);
 }
 
-void ScriptEditor::loadDocument()
+void ScriptEditor::loadDocument(const std::string& path)
 {
-	const std::string path = m_pathBuf;
 	if (path.empty())
 		return;
 	cancelCompose(); // resolve any in-flight edit against the OLD document before replacing it
@@ -7065,6 +7073,5 @@ void ScriptEditor::requestOpen(const std::string& path)
 {
 	if (path.empty() || path == m_document.filePath)
 		return; // already the active document
-	strncpy_s(m_pathBuf, sizeof(m_pathBuf), path.c_str(), sizeof(m_pathBuf) - 1);
-	loadDocument();
+	loadDocument(path);
 }

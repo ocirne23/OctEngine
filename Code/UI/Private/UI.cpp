@@ -7,8 +7,6 @@ import Core.glm;
 import Core.SDL;
 import Entity;
 
-import :imgui_node_editor;
-import :Scene;
 import :AssetBrowser;
 import :SceneView;
 import :PropertiesPanel;
@@ -20,15 +18,6 @@ import :TextEditor;
 import :ScriptEditor;
 import :GameHudOverlay;
 
-UI::~UI()
-{
-    if (m_nodeEditorContext != nullptr)
-    {
-        ed::DestroyEditor(m_nodeEditorContext);
-        m_nodeEditorContext = nullptr;
-    }
-}
-
 void UI::initialize()
 {
     ImGuiContext* context = ImGui::GetCurrentContext();
@@ -37,36 +26,9 @@ void UI::initialize()
 
     ImGui::GetStyle().Colors[ImGuiCol_DockingEmptyBg] = ImVec4(0.0, 0.0, 0.0, 0.0);
 
-    m_scene.initialize();
     m_assetBrowser.initialize();
     m_gameHudOverlay.registerTweaks();
 }
-
-struct LinkInfo
-{
-    ed::LinkId Id;
-    ed::PinId  InputId;
-    ed::PinId  OutputId;
-};
-void ImGuiEx_BeginColumn()
-{
-    ImGui::BeginGroup();
-}
-
-void ImGuiEx_NextColumn()
-{
-    ImGui::EndGroup();
-    ImGui::SameLine();
-    ImGui::BeginGroup();
-}
-
-void ImGuiEx_EndColumn()
-{
-    ImGui::EndGroup();
-}
-bool                 m_FirstFrame = true;    // Flag set for first frame only, some action need to be executed once.
-ImVector<LinkInfo>   m_Links;                // List of live links. It is dynamic unless you want to create read-only view over nodes.
-int                  m_NextLinkId = 100;
 
 void UI::drawGizmoEntity(Renderer& renderer, float deltaSec)
 {
@@ -126,7 +88,6 @@ void UI::update(const std::vector<EntityPtr>& rootEntities, const Camera& camera
             ImGui::DockBuilderDockWindow("Memory",     dock_id_left_bottom);
             ImGui::DockBuilderDockWindow("Content",       dock_id_down);
             ImGui::DockBuilderDockWindow("Entity Editor",  dock_id_properties);
-            ImGui::DockBuilderDockWindow("Script",        dock_id_up);
             ImGui::DockBuilderDockWindow("Text Editor",   dock_id_up);
             ImGui::DockBuilderDockWindow("Script Editor", dock_id_up);
             ImGui::DockBuilderDockWindow("Viewport",   dock_id_up);
@@ -181,105 +142,6 @@ void UI::update(const std::vector<EntityPtr>& rootEntities, const Camera& camera
     }
 
     {
-        if (ImGui::Begin("Script"))
-        {
-            if (ImGui::Button("New"))
-                m_scene.newGraph();
-            ImGui::SameLine();
-            if (ImGui::Button("Save"))
-                m_scene.save();
-            ImGui::SameLine();
-            if (ImGui::Button("Save As..."))
-                ImGui::OpenPopup("Save Script As");
-            ImGui::SameLine();
-            if (ImGui::Button("Compile & Run"))
-            {
-                m_scene.save();
-                m_scriptReloadRequests.push_back(m_scene.scriptPath());
-            }
-            ImGui::SameLine();
-            ImGui::TextDisabled("%s  (right-click canvas to add nodes)",
-                std::filesystem::path(m_scene.scriptPath()).filename().string().c_str());
-
-            if (ImGui::BeginPopup("Save Script As"))
-            {
-                static char nameBuf[128] = "MyScript";
-                ImGui::TextUnformatted("File name (saved under Scripts/ as .scr):");
-                ImGui::SetNextItemWidth(220.0f);
-                const bool entered = ImGui::InputText("##saveas", nameBuf, sizeof(nameBuf), ImGuiInputTextFlags_EnterReturnsTrue);
-                ImGui::SameLine();
-                if ((ImGui::Button("Save##as") || entered) && nameBuf[0] != '\0')
-                {
-                    std::string name = nameBuf;
-                    if (!name.ends_with(".scr")) name += ".scr";
-                    m_scene.setScriptPath("Scripts/" + name);
-                    m_scene.save();
-                    ImGui::CloseCurrentPopup();
-                }
-                ImGui::EndPopup();
-            }
-
-            if (m_openUnsavedScriptPopup)
-            {
-                ImGui::OpenPopup("Unsaved Script Changes");
-                m_openUnsavedScriptPopup = false;
-            }
-            if (ImGui::BeginPopupModal("Unsaved Script Changes", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
-            {
-                ImGui::Text("'%s' has unsaved changes.",
-                    std::filesystem::path(m_scene.scriptPath()).filename().string().c_str());
-                ImGui::Text("Switch to '%s'?",
-                    std::filesystem::path(m_pendingScriptOpen).filename().string().c_str());
-                ImGui::Separator();
-                const bool save = ImGui::Button("Save");
-                ImGui::SameLine();
-                const bool discard = ImGui::Button("Discard");
-                ImGui::SameLine();
-                const bool cancel = ImGui::Button("Cancel");
-                if (save)
-                    m_scene.save();
-                if (save || discard)
-                    m_scene.open(m_pendingScriptOpen);
-                if (save || discard || cancel)
-                {
-                    m_pendingScriptOpen.clear();
-                    ImGui::CloseCurrentPopup();
-                }
-                ImGui::EndPopup();
-            }
-
-            // Feed the Trigger Audio nodes the sound aliases of the entity that owns the open script (its
-            // AudioComponent). Unknown while the selection doesn't own the open script, so a script opened
-            // standalone (asset browser) keeps whatever alias pins its file declared.
-            {
-                std::vector<std::string> aliases;
-                bool aliasesKnown = false;
-                if (Entity* selected = m_sceneView.getSelected())
-                    if (ScriptComponent* script = getComponent<ScriptComponent>(selected);
-                        script && script->scriptModule && script->scriptModule->scriptPath == m_scene.scriptPath())
-                    {
-                        aliasesKnown = true;
-                        if (AudioComponent* audio = getComponent<AudioComponent>(selected))
-                            for (const AudioComponent::SoundDesc& sound : audio->getSounds())
-                                aliases.push_back(sound.alias);
-                    }
-                m_scene.setAudioAliases(aliasesKnown ? &aliases : nullptr);
-            }
-
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-            // NoScrollWithMouse/NoScrollbar: otherwise this child can pick up its own scroll offset (e.g. once
-            // its content size ever grows past its visible rect for a frame) and starts eating the mouse wheel
-            // itself before the node editor's own scroll-to-zoom gets a chance to see it.
-            ImGui::BeginChild("ScriptCanvas", ImVec2(0.0f, 0.0f), false,
-                ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar);
-            m_scene.update(deltaSec);
-            ImGui::EndChild();
-            ImGui::PopStyleVar(1);
-        }
-        ImGui::End();
-    }
-
-    {
         if (ImGui::Begin("Text Editor"))
             m_textEditor.render();
         ImGui::End();
@@ -302,10 +164,8 @@ void UI::update(const std::vector<EntityPtr>& rootEntities, const Camera& camera
         ImGui::End();
     }
 
-    // When the hierarchy selection changes to an entity carrying a script, make that script active in whichever
-    // editor owns its format: a .scr into the node editor (guarded by the unsaved-changes prompt below if the
-    // current graph has pending edits), a .dsl straight into the Script Editor (no such prompt there -- see
-    // ScriptEditor::requestOpen).
+    // When the hierarchy selection changes to an entity carrying a .dsl script, make it active in the Script
+    // Editor (the only script editor -- the node panel and its .scr routes are gone).
     if (Entity* selected = m_sceneView.getSelected(); selected != m_scriptSelectionTracked)
     {
         m_scriptSelectionTracked = selected;
@@ -316,8 +176,6 @@ void UI::update(const std::vector<EntityPtr>& rootEntities, const Camera& camera
                     const std::string& path = script->scriptModule->scriptPath;
                     if (std::filesystem::path(path).extension() == ".dsl")
                         m_scriptEditor.requestOpen(path);
-                    else if (path != m_scene.scriptPath())
-                        requestOpenScript(path);
                 }
     }
 
@@ -384,21 +242,17 @@ void UI::update(const std::vector<EntityPtr>& rootEntities, const Camera& camera
             m_assetBrowser.render();
         ImGui::End();
 
-        // Route script file actions from the asset browser (double-click, right-click "Open Script") into
-        // whichever editor owns the format: .dsl into the Script Editor, everything else (.scr) into the node
-        // editor, same split as the Scene-selection routing above.
+        // Route script file actions from the asset browser (double-click / "New Script") into the Script
+        // Editor. Only .dsl raises this request now -- a .scr reads as a plain text file (the node editor and
+        // its whole integration are gone; the NodeEditor/ sources remain for reference only).
         if (std::string openPath = m_assetBrowser.takeScriptOpenRequest(); !openPath.empty())
         {
-            if (std::filesystem::path(openPath).extension() == ".dsl")
-                m_scriptEditor.requestOpen(openPath);
-            else
-                m_scene.open(openPath);
-        }
-        if (std::string createPath = m_assetBrowser.takeScriptCreateRequest(); !createPath.empty())
-        {
-            m_scene.newGraph();
-            m_scene.setScriptPath(createPath);
-            m_scene.save();
+            m_scriptEditor.requestOpen(openPath);
+            // ...and surface the tab: an explicit "open this script" gesture should end with the editor in
+            // front, even when the file was already the open document. By name, so it works whichever dock
+            // tab currently covers it (applies on the next frame's Begin). The Scene-selection follow above
+            // deliberately does NOT do this -- clicking entities must never yank the focused tab around.
+            ImGui::SetWindowFocus("Script Editor");
         }
 
         // Route the asset browser's "Edit Entity" action into the Entity Editor.
@@ -451,40 +305,10 @@ void UI::update(const std::vector<EntityPtr>& rootEntities, const Camera& camera
         m_gizmo->update(camera, m_viewportRect, m_sceneView.getSelected(), deltaSec);
 }
 
-void UI::copyScriptSelection()
-{
-    if (ImGui::GetIO().WantTextInput)
-        return; // a text field elsewhere is active — let it handle its own copy instead of hijacking Ctrl+C
-    m_scene.requestCopy();
-}
-
-void UI::pasteScriptSelection()
-{
-    if (ImGui::GetIO().WantTextInput)
-        return; // ditto for paste
-    m_scene.requestPaste();
-}
-
 void UI::handleKeyEvent(SDL_Event evt)
 {
     if (m_scriptEditorOpen)
         m_scriptEditor.handleKeyEvent(evt);
-}
-
-void UI::requestOpenScript(const std::string& path)
-{
-    if (path.empty() || path == m_scene.scriptPath())
-        return; // already the active script
-
-    if (m_scene.isDirty())
-    {
-        m_pendingScriptOpen = path;       // defer the switch behind the unsaved-changes prompt
-        m_openUnsavedScriptPopup = true;
-    }
-    else
-    {
-        m_scene.open(path);
-    }
 }
 
 void UI::render()

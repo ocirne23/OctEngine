@@ -392,13 +392,6 @@ public:
             if (evt.scancode == SDL_Scancode::SDL_SCANCODE_R) gizmo.setMode(EGizmoMode::Rotate);
             if (evt.scancode == SDL_Scancode::SDL_SCANCODE_G) gizmo.setMode(EGizmoMode::Scale);
         }
-        if (evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN && !evt.repeat && (evt.mod & SDL_KMOD_CTRL) != 0)
-        {
-            // Node copy/paste for the Script editor, mirrored here so it also works as a plain global
-            // shortcut (UI::copy/pasteScriptSelection no-op while an ImGui text field elsewhere has focus).
-            if (evt.scancode == SDL_Scancode::SDL_SCANCODE_C) ui.copyScriptSelection();
-            if (evt.scancode == SDL_Scancode::SDL_SCANCODE_V) ui.pasteScriptSelection();
-        }
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_F5 && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN)
             renderer.reloadShaders();
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_F6 && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN)

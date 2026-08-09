@@ -18,9 +18,9 @@ public:
 
 	std::vector<EntityChange> takeChanges() { return std::move(m_changes); }
 
-	// Script (.scr) files: the UI drains these and drives the Script panel / Scene.
+	// Script files: the UI drains this and routes by extension -- .dsl to the Script Editor, .scr to the node
+	// panel. Covers open AND create ("New Script" writes a minimal .dsl and raises this same request).
 	std::string takeScriptOpenRequest()   { return std::move(m_scriptOpenRequest); }
-	std::string takeScriptCreateRequest() { return std::move(m_scriptCreateRequest); }
 
 	// Text (.txt) files: the UI drains this and drives the Text Editor panel.
 	std::string takeTextOpenRequest() { return std::move(m_textOpenRequest); }
@@ -52,8 +52,7 @@ private:
 	std::filesystem::path m_selectedPath;
 
 	std::vector<EntityChange> m_changes;          // prefab saves queued for the app to drain
-	std::string           m_scriptOpenRequest;     // .scr the user asked to open (drained by UI)
-	std::string           m_scriptCreateRequest;   // .scr the user asked to create (drained by UI)
+	std::string           m_scriptOpenRequest;     // script the user asked to open/create (drained by UI)
 	std::string           m_textOpenRequest;       // .txt the user asked to open (drained by UI)
 	std::string           m_entityEditRequest;       // .pre the user asked to edit (drained by UI)
 	EntityPtr             m_pendingSaveRoot;       // entity awaiting overwrite confirmation (kept alive)

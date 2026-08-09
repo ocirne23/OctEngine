@@ -9,11 +9,6 @@ import Entity;
 import UI.Gizmo;
 
 import UI.fwd;
-import :imgui_node_editor;
-import :NodeDef;
-import :Node;
-import :Link;
-import :Scene;
 import :AssetBrowser;
 import :SceneView;
 import :PropertiesPanel;
@@ -34,7 +29,6 @@ export class UI final
 public:
 
     UI() {}
-    ~UI();
     UI(const UI&) = delete;
 
     void initialize();
@@ -83,24 +77,12 @@ public:
     void onOpened(EntityPtr root, const std::string& path) { m_entityEditor.onOpened(root, path); }
     void onEntityRespawned(EntityPtr oldEntity, EntityPtr newEntity) { m_entityEditor.onRespawned(oldEntity, newEntity); }
 
-    // Script paths the Script panel (node graph) OR the DSL Script Editor asked the host to (re)compile +
-    // hot-reload this frame -- the node editor's own "Compile & Run" (m_scriptReloadRequests, UI.cpp) merged
-    // with every path the DSL editor just saved (ScriptEditor::takeReloadRequests -- a save there always writes
-    // fresh generated C++, so it's ready to (re)compile the moment it lands).
+    // Script paths the DSL Script Editor asked the host to (re)compile + hot-reload this frame -- every path it
+    // just saved (a save always writes fresh generated C++, so it's ready to (re)compile the moment it lands).
     std::vector<std::string> takeScriptReloadRequests()
     {
-        std::vector<std::string> requests = std::move(m_scriptReloadRequests);
-        m_scriptReloadRequests.clear();
-        std::vector<std::string> dslRequests = m_scriptEditor.takeReloadRequests();
-        requests.insert(requests.end(), std::make_move_iterator(dslRequests.begin()), std::make_move_iterator(dslRequests.end()));
-        return requests;
+        return m_scriptEditor.takeReloadRequests();
     }
-
-    // Triggers the Script editor's node copy/paste from outside the UI frame (e.g. a global keyboard hook in
-    // main.cpp), mirroring the in-editor Ctrl+C/Ctrl+V shortcut. No-ops while an ImGui text field is being
-    // edited elsewhere, so it doesn't hijack that field's own copy/paste.
-    void copyScriptSelection();
-    void pasteScriptSelection();
 
     void handleKeyEvent(SDL_Event evt);
 
@@ -112,18 +94,11 @@ private:
     bool m_scriptEditorOpen = false;
     Rect m_viewportRect = Rect();
     std::vector<EntityChange> m_viewportChanges;   // assets dropped onto the viewport, drained via takeEntityChanges
-    std::vector<std::string> m_scriptReloadRequests; // Script panel compile requests, drained via takeScriptReloadRequests
 
-    // Follow the hierarchy selection into the Script editor: when a selected entity has a ScriptComponent,
-    // open its script. m_pendingScriptOpen holds a switch deferred behind the unsaved-changes prompt.
-    void requestOpenScript(const std::string& path);
-    Entity*     m_scriptSelectionTracked = nullptr; // last selection we reacted to (only act on changes)
-    std::string m_pendingScriptOpen;                // script to open once the user resolves unsaved changes
-    bool        m_openUnsavedScriptPopup = false;    // request to open the modal next frame
+    // Follow the hierarchy selection into the Script Editor: when a selected entity carries a .dsl script, open
+    // it. Only ever acts on selection CHANGES, hence the tracking pointer.
+    Entity*     m_scriptSelectionTracked = nullptr;
 
-    ed::EditorContext* m_nodeEditorContext = nullptr;
-
-	NodeEditor::Scene m_scene;
 	IGizmo* m_gizmo = nullptr; // non-owning, see setGizmo
 	Stats m_renderStats;
 	AssetBrowser    m_assetBrowser;

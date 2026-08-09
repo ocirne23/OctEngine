@@ -227,23 +227,25 @@ public:
 		return requests;
 	}
 
-	// Makes `path` the active document, same effect as typing it into the toolbar field and pressing Load --
-	// used by UI.cpp to follow the Scene hierarchy selection onto a .dsl-scripted entity (mirroring the node
-	// editor's requestOpenScript) and to route the asset browser's open/drag actions for .dsl files here instead
-	// of into the node editor. No unsaved-changes prompt: unlike the node graph, this editor has no separate
-	// dirty flag to guard (every edit already lives in m_document; Save is the only thing that ever touches
-	// disk), so switching documents is exactly what the toolbar's own Load button already does. No-op if `path`
-	// is empty or already the open document.
+	// Makes `path` the active document -- the ONLY way one opens: used by UI.cpp to follow the Scene hierarchy
+	// selection onto a .dsl-scripted entity (mirroring the node editor's requestOpenScript) and to route the
+	// asset browser's double-click/drag actions for .dsl files here instead of into the node editor. No
+	// unsaved-changes prompt: unlike the node graph, this editor has no separate dirty flag to guard (every
+	// edit already lives in m_document; Save is the only thing that ever touches disk). No-op if `path` is
+	// empty or already the open document.
 	void requestOpen(const std::string& path);
 
 private:
 
 	void renderTextArea();
 	void renderAutocompletePopup();
-	void saveDocument(); // toolbar Save / Ctrl+S: writes m_document to m_pathBuf (ScriptLoader::save). Safe
-	                     // mid-compose -- a compose never touches the document, so exactly the committed state saves
-	void loadDocument(); // toolbar Load: replaces the document from m_pathBuf (ScriptLoader::load); on success every
-	                     // selection/compose state resets (all old symbol pointers are dead), on failure nothing changes
+	void saveDocument(); // sidebar Save / Ctrl+S: writes m_document to its OWN filePath (ScriptLoader::save).
+	                     // Safe mid-compose -- a compose never touches the document, so exactly the committed
+	                     // state saves. A warning when nothing is open (there is no path field to name one).
+	// Replaces the document from `path` (ScriptLoader::load) -- requestOpen's engine, and the sidebar Reload's
+	// (which passes the open document's own path to re-read it from disk). On success every selection/compose
+	// state resets (all old symbol pointers are dead); on failure nothing changes.
+	void loadDocument(const std::string& path);
 	DSLSymbol* pushSymbol(DSLCodeLine& line, DSLSymbol::SymbolType type, DSLSymbol::Data data); // constructs a fresh symbol owned by `line`, returns the raw ptr -- shared by every apply/commit function below
 
 	void moveHorizontal(int delta);  // Left/Right, Tab/Shift-Tab (not composing): next/prev span
@@ -839,9 +841,6 @@ private:
 
 	std::vector<std::string> m_pendingReloadRequests; // paths saveDocument just wrote, pending takeReloadRequests
 
-	char m_pathBuf[256] = "Scripts/script.dsl"; // toolbar path field -- relative to Assets/ (the working
-	                                             // directory); alongside .scr, so gatherScriptFiles/the cooked
-	                                             // build's aggregate glob (Assets/Scripts/*) both find it
 	float m_sidebarWidth = 240.0f; // drag-resizable via the splitter between the sidebar and the text area
 
 	// SCRIPT DATA sidebar section: the pending new-field controls (type combo + free-typed name), reset once
