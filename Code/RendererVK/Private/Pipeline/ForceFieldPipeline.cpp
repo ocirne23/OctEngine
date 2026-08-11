@@ -170,11 +170,8 @@ void ForceFieldPipeline::upload(uint32 frameIdx, std::span<const ForceEmitterGpu
     ForceEmittersGpu* dst = m_mappedEmitters[frameIdx].data();
     uint32 count = 0;
     uint32 bigCount = 0;
-    for (uint32 slot = 0; slot < (uint32)slots.size(); ++slot)
+    const auto compact = [&](const ForceEmitterGpu& e, uint32 slot)
     {
-        const ForceEmitterGpu& e = slots[slot];
-        if (!(e.teamFlags.y & FORCE_FLAG_ACTIVE))
-            continue;
         ForceEmitterGpu& out = dst->emitters[count];
         out = e;
         out.teamFlags.z = slot; // slot-indexed readback target
@@ -189,7 +186,17 @@ void ForceFieldPipeline::upload(uint32 frameIdx, std::span<const ForceEmitterGpu
         else
             out.teamFlags.y &= ~FORCE_FLAG_BIG;
         ++count;
-    }
+    };
+    // Two-pass partition: drawable shells first so the shell draw's instanceCount can stop before
+    // the shellAlpha-0 emitters — an invisible world-scale emitter still contributes field (grid/
+    // force/query dispatches use the FULL count) but never costs its full-screen ray march.
+    for (uint32 slot = 0; slot < (uint32)slots.size(); ++slot)
+        if ((slots[slot].teamFlags.y & FORCE_FLAG_ACTIVE) && slots[slot].outputParams.y > 0.0f)
+            compact(slots[slot], slot);
+    const uint32 drawCount = count;
+    for (uint32 slot = 0; slot < (uint32)slots.size(); ++slot)
+        if ((slots[slot].teamFlags.y & FORCE_FLAG_ACTIVE) && slots[slot].outputParams.y <= 0.0f)
+            compact(slots[slot], slot);
     dst->count = count;
     dst->bigCount = bigCount;
     m_emitterBuffers[frameIdx].flushMappedMemory(FORCE_EMITTER_HEADER_SIZE + count * sizeof(ForceEmitterGpu));
@@ -202,7 +209,7 @@ void ForceFieldPipeline::upload(uint32 frameIdx, std::span<const ForceEmitterGpu
     m_queryBuffers[frameIdx].flushMappedMemory(FORCE_QUERY_HEADER_SIZE + numQueries * sizeof(ForceQueryGpu));
 
     uint32* ind = m_mappedIndirect[frameIdx].data();
-    ind[DRAW_CMD_OFFSET + 1] = count; // instanceCount
+    ind[DRAW_CMD_OFFSET + 1] = drawCount; // instanceCount: drawable shells only (see partition above)
     ind[GRID_DISPATCH_OFFSET] = count; // single-thread workgroups (see force_grid.cs.glsl)
     ind[EMITTER_DISPATCH_OFFSET] = (count + FORCE_SIM_GROUP_SIZE - 1) / FORCE_SIM_GROUP_SIZE;
     ind[QUERY_DISPATCH_OFFSET] = (numQueries + FORCE_SIM_GROUP_SIZE - 1) / FORCE_SIM_GROUP_SIZE;

@@ -31,7 +31,7 @@ public:
 		if (size.x <= 0 || size.y <= 0)
 			return;
 		const GameHud::Snapshot hud = Globals::gameHud.snapshot();
-		if (!hud.hotbarActive && hud.bars.empty() && hud.counters.empty())
+		if (!hud.hotbarActive && hud.bars.empty() && hud.counters.empty() && hud.worldLabels.empty())
 			return;
 
 		ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -90,6 +90,50 @@ public:
 				const ImVec2 valSize = font->CalcTextSizeA(fontSize, noWrap, 0.0f, buf);
 				text(ImVec2(x + rowW - valSize.x, y), fontSize, colV(counter.color, 1.0f), buf);
 				y += fontSize + gap * 0.7f;
+			}
+		}
+
+		// ---- world-anchored labels (screenPos pre-projected by gameplay): title above the bar,
+		// ---- the bar centered on the anchor, info lines below. Drawn under the hotbar. ----
+		for (const HudWorldLabel& label : hud.worldLabels)
+		{
+			const float e = label.emphasized ? 1.3f : 1.0f;
+			if (label.screenPos.x < vpMin.x - 100.0f || label.screenPos.x > vpMax.x + 100.0f
+				|| label.screenPos.y < vpMin.y - 100.0f || label.screenPos.y > vpMax.y + 100.0f)
+				continue; // fully off the viewport (the clip rect would eat it anyway)
+			const float labelFont = fontSize * 0.78f * e;
+			float y = label.screenPos.y;
+			if (!label.title.empty())
+			{
+				const ImVec2 ts = font->CalcTextSizeA(labelFont, noWrap, 0.0f, label.title.c_str());
+				text(ImVec2(label.screenPos.x - ts.x * 0.5f, y - ts.y - 2.0f * s), labelFont,
+					col(1.0f, 1.0f, 1.0f, 1.0f), label.title.c_str());
+			}
+			if (label.barMax > 0.0f)
+			{
+				const float barW = 52.0f * s * e;
+				const float barH = 6.0f * s * e;
+				const ImVec2 bMin(label.screenPos.x - barW * 0.5f, y);
+				const ImVec2 bMax(label.screenPos.x + barW * 0.5f, y + barH);
+				dl->AddRectFilled(bMin, bMax, col(0.06f, 0.06f, 0.08f, 0.75f), 2.0f * s);
+				const float frac = glm::clamp(label.barValue / label.barMax, 0.0f, 1.0f);
+				if (frac > 0.0f)
+					dl->AddRectFilled(bMin, ImVec2(bMin.x + barW * frac, bMax.y), colV(label.barColor, 0.95f), 2.0f * s);
+				dl->AddRect(bMin, bMax, col(0.0f, 0.0f, 0.0f, 0.9f), 2.0f * s, 0, 1.0f * s);
+				y += barH + 3.0f * s;
+			}
+			// info: '\n'-separated lines, centered under the bar
+			const char* line = label.info.c_str();
+			while (*line)
+			{
+				const char* end = strchr(line, '\n');
+				const size_t len = end ? size_t(end - line) : strlen(line);
+				char lineBuf[96];
+				snprintf(lineBuf, sizeof(lineBuf), "%.*s", (int)len, line);
+				const ImVec2 ts = font->CalcTextSizeA(labelFont, noWrap, 0.0f, lineBuf);
+				text(ImVec2(label.screenPos.x - ts.x * 0.5f, y), labelFont, col(0.9f, 0.9f, 0.9f, 1.0f), lineBuf);
+				y += ts.y + 1.0f * s;
+				line += len + (end ? 1 : 0);
 			}
 		}
 

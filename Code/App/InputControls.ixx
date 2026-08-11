@@ -49,6 +49,8 @@ private:
                                   // 1 = target end); budget-conserving bump
     float width = 1.0f;           // lateral scale (reach untouched): 1 = round, < 1 = narrower/sharper
 
+    bool gameMode = false;           // --game: the Game library owns player/camera/spawn keys — the
+                                     // testbed spawn/possess keys are muted (F5/F6/gizmo modes stay)
     bool playerControl = false;      // key C: WASD/Space drive the player entity, camera flight paused
     bool playerJumpWasDown = false;  // Space edge detection
     float playerMoveSpeed = 8.0f;    // m/s horizontal target (keep under Network/Validation "Max speed")
@@ -132,9 +134,13 @@ public:
     // Per-frame maintenance of the test force-balls: the emitter follows the simulated body and the
     // GPU-read-back applied force (opposing bubbles pressing on it) feeds back as a physics impulse.
     // Call after world.update (body poses synced), before forceSystem.update pushes emitter state.
+    void setGameMode(bool enabled) { gameMode = enabled; }
+
     void update(float deltaSec)
     {
         ProfileScope profileScope("Input controls", EProfileCategory::App);
+        if (gameMode)
+            return; // the Game library drives the player; no testbed force balls
         if (playerControl)
         {
             if (Globals::networkManager.role() == ENetRole::Client)
@@ -395,6 +401,8 @@ public:
             renderer.reloadShaders();
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_F6 && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN)
 			Globals::scriptHost.reloadCurrentScript(); // F6: recompile + hot-reload the script the Script panel is editing
+        if (gameMode)
+            return; // game mode: everything below is testbed spawns/possession — the Game library owns those keys
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_K && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN)
             Globals::networkManager.fireNetworkEvent("NetPing"); // K: network-event smoke test (fires on every connected instance)
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_C && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN

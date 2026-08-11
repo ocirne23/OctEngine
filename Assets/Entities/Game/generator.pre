@@ -1,0 +1,11 @@
+# Generator: burns Fuel to produce grid power. No field of its own. Spawned origin 0.75 above ground.
+Prefab gameGenerator
+	Component Render
+		ObjectContainer wireshapes
+		Node Wedge
+		Type StaticMesh
+		Scale 1 0.75 1
+	Component Physics
+		Body Static
+		Shape Box
+		HalfExtents 1 0.75 1

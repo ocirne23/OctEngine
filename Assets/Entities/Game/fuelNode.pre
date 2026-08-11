@@ -1,0 +1,12 @@
+# Fuel resource node: captured by player proximity, accrues the Fuel stock while owned (generators
+# burn it). Cone shape distinguishes it from the mineral sphere. Spawned origin 0.8 above ground.
+Prefab gameFuelNode
+	Component Render
+		ObjectContainer baseshapes
+		Node Cone
+		Type StaticMesh
+		Scale 0.8
+	Component Physics
+		Body Static
+		Shape Box
+		HalfExtents 0.6 0.8 0.6

@@ -36,6 +36,20 @@ export struct HudCounter
 	glm::vec3   color = glm::vec3(1.0f);
 };
 
+// World-anchored UI element (a health bar / info block over an entity). Gameplay PRE-PROJECTS the
+// world position into viewport pixels (Camera::worldToScreen) and replaces the whole list every
+// frame — no keys, no persistence; off-screen entities are simply not submitted.
+export struct HudWorldLabel
+{
+	glm::vec2   screenPos{};      // viewport-space anchor: bar centered on x, stacked down from y
+	std::string title;            // line above the bar (empty = none)
+	std::string info;             // lines below the bar, '\n'-separated (empty = none)
+	float       barValue = 0.0f;
+	float       barMax = 0.0f;    // <= 0 = no bar
+	glm::vec3   barColor = glm::vec3(1.0f);
+	bool        emphasized = false; // selected: drawn larger
+};
+
 export class GameHud final
 {
 public:
@@ -113,6 +127,13 @@ public:
 		std::erase_if(m_counters, [name](const HudCounter& c) { return c.name == name; });
 	}
 
+	// Replaces the whole world-label list (per-frame rebuild; pass {} to clear).
+	void setWorldLabels(std::vector<HudWorldLabel>&& labels)
+	{
+		const std::lock_guard lock(m_mutex);
+		m_worldLabels = std::move(labels);
+	}
+
 	// Removes every slot, bar and counter (a script's OnDestroy typically calls this).
 	void clearAll()
 	{
@@ -121,6 +142,7 @@ public:
 			slot = HudSlot();
 		m_bars.clear();
 		m_counters.clear();
+		m_worldLabels.clear();
 		m_selectedSlot = 0;
 	}
 
@@ -147,6 +169,7 @@ public:
 		bool    hotbarActive = false;
 		std::vector<HudBar> bars;
 		std::vector<HudCounter> counters;
+		std::vector<HudWorldLabel> worldLabels;
 	};
 
 	// One copy per frame for the overlay (UI thread).
@@ -160,6 +183,7 @@ public:
 		out.hotbarActive = hotbarActiveLocked();
 		out.bars = m_bars;
 		out.counters = m_counters;
+		out.worldLabels = m_worldLabels;
 		return out;
 	}
 
@@ -191,6 +215,7 @@ private:
 	bool m_hotbarVisible = true; // an explicit off-switch; slots being assigned is what shows it
 	std::vector<HudBar> m_bars;
 	std::vector<HudCounter> m_counters;
+	std::vector<HudWorldLabel> m_worldLabels;
 };
 
 export namespace Globals

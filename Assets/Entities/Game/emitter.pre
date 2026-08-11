@@ -1,0 +1,18 @@
+# Emitter pylon: projects the friendly field while powered by its grid. The Game layer overrides
+# the live output every tick (0 when unpowered); authored Output/Reach are the powered values'
+# defaults only. Spawned with its origin at half height (1.5) above the ground hit.
+Prefab gameEmitter
+	Component Render
+		ObjectContainer wireshapes
+		Node Cube
+		Type StaticMesh
+		Scale 0.4 1.5 0.4
+	Component Physics
+		Body Static
+		Shape Box
+		HalfExtents 0.4 1.5 0.4
+	Component Force
+		Team 0
+		Output 1.2
+		Reach 12
+		Centered true

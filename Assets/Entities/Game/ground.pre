@@ -1,0 +1,14 @@
+# Whitebox ground plane: 400x400 m, physics box top at entity y + 0.5 (the game spawns the root at
+# y = -0.5 so the walkable surface sits at world y = 0; the render plane is offset up to match).
+Prefab gameGround
+	Component Render
+		ObjectContainer baseshapes
+		Node Plane
+		Type StaticMesh
+		Position 0 0.5 0
+		Scale 200
+	Component Physics
+		Body Static
+		Shape Box
+		HalfExtents 200 0.5 200
+		Friction 0.6

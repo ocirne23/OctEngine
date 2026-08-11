@@ -1,0 +1,8 @@
+# Objective marker at the map center: pure visual (the world-scale enemy emitter is created in C++
+# because it needs setShellAlpha(0) + live output control). Half-buried dome look at ground level.
+Prefab gameObjective
+	Component Render
+		ObjectContainer baseshapes
+		Node Sphere
+		Type StaticMesh
+		Scale 4

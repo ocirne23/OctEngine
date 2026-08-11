@@ -65,6 +65,26 @@ public:
         return position + worldDir * 15.0f;
     }
 
+    // Projects a world point into viewport-space pixels — the inverse of screenToRay (same fov/
+    // aspect conventions). Returns false when the point is behind the camera or the viewport is
+    // degenerate. For world-anchored UI (labels/bars over entities).
+    bool worldToScreen(const Rect& viewport, const glm::vec3& world, glm::vec2& outScreen) const
+    {
+        const glm::vec2 size = glm::vec2(viewport.getSize());
+        if (size.x <= 0.0f || size.y <= 0.0f)
+            return false;
+        const glm::vec3 view = glm::vec3(viewMatrix * glm::vec4(world, 1.0f));
+        if (view.z >= -1e-4f) // view space looks down -Z
+            return false;
+        const float tanHalfFov = glm::tan(glm::radians(fovDeg) * 0.5f);
+        const float aspect = size.x / size.y;
+        const float ndcX = view.x / (-view.z * tanHalfFov * aspect);
+        const float ndcY = view.y / (-view.z * tanHalfFov);
+        outScreen.x = viewport.min.x + (ndcX * 0.5f + 0.5f) * size.x;
+        outScreen.y = viewport.min.y + (0.5f - ndcY * 0.5f) * size.y;
+        return true;
+    }
+
     glm::mat4 viewMatrix;
     glm::vec3 position;
     // VR only: the play-space yaw. Locomotion turn rotates this; the renderer composes the headset pose

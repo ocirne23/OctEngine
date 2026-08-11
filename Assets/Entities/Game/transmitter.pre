@@ -1,0 +1,12 @@
+# Transmitter: thin pole that extends the power grid (pure connectivity, no field, no power use).
+# Spawned origin 2.0 above ground.
+Prefab gameTransmitter
+	Component Render
+		ObjectContainer wireshapes
+		Node Cube
+		Type StaticMesh
+		Scale 0.2 2 0.2
+	Component Physics
+		Body Static
+		Shape Box
+		HalfExtents 0.2 2 0.2

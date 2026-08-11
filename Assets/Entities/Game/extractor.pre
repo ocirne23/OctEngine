@@ -1,0 +1,13 @@
+# Extractor: flat pad built ON a resource node (one per node) — the node produces its resource only
+# while its extractor stands. No field, no power use. Spawned origin 0.4 above ground, overlapping
+# the node mesh (static vs static never collides).
+Prefab gameExtractor
+	Component Render
+		ObjectContainer wireshapes
+		Node Cube
+		Type StaticMesh
+		Scale 1.2 0.4 1.2
+	Component Physics
+		Body Static
+		Shape Box
+		HalfExtents 1.2 0.4 1.2

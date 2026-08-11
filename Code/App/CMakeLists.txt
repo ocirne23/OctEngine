@@ -7,7 +7,7 @@ add_executable(${PROJECT_NAME} ${PROJECT_PRIVATE_FILES})
 set_target_properties(${PROJECT_NAME} PROPERTIES FOLDER Apps)
 set_target_properties(${PROJECT_NAME} PROPERTIES LINK_FLAGS "/ignore:4099")
 
-target_link_libraries(${PROJECT_NAME} PRIVATE Core Animation RendererVK UI Entity File Input Script Physics Network Audio Spatial Threading Procedural Particle Force AppScripts)
+target_link_libraries(${PROJECT_NAME} PRIVATE Core Animation RendererVK UI Entity File Input Script Physics Network Audio Spatial Threading Procedural Particle Force Game AppScripts)
 
 # Cooked build: AppScripts' whole job is the scripts' static-init registrations (ocRegisterScriptEntry). Nothing
 # references its symbols, so a normal static-lib link dead-strips the entire object and NO script registers.
@@ -56,4 +56,13 @@ set_target_properties(run-headless PROPERTIES
 	EXCLUDE_FROM_ALL TRUE
 	VS_DEBUGGER_COMMAND "$<TARGET_FILE:App>"
 	VS_DEBUGGER_COMMAND_ARGUMENTS "--server --headless"
+	VS_DEBUGGER_WORKING_DIRECTORY "${ROOT_DIR}")
+
+add_custom_target(run-game COMMAND ${CMAKE_COMMAND} -E true VERBATIM)
+add_dependencies(run-game App)
+set_target_properties(run-game PROPERTIES
+	FOLDER Apps
+	EXCLUDE_FROM_ALL TRUE
+	VS_DEBUGGER_COMMAND "$<TARGET_FILE:App>"
+	VS_DEBUGGER_COMMAND_ARGUMENTS "--game"
 	VS_DEBUGGER_WORKING_DIRECTORY "${ROOT_DIR}")

@@ -44,12 +44,27 @@ public:
     // shape narrower (cones keep their straight taper at a sharper angle, spheres go prolate).
     void setWidth(float width);
     void setTeam(uint32 team); // main-thread (rare)
+    // Shell rendering opacity [0,1]; 0 skips the ray-marched shell draw entirely (the field still
+    // exists — it deforms other bubbles and produces force/pressure/query results). The intended
+    // use is huge invisible fields whose proxy box would otherwise become a full-screen march.
+    void setShellAlpha(float alpha);
 
     // GPU readback results, ~2 frames old (zero until the first readback lands). Force is the
     // opposing teams' field pressure integrated over this emitter's own bubble; pressure is the
     // mean opposing field strength (how hard the emitter is being pushed on overall).
     glm::vec3 getAppliedForce() const;
     float getPressure() const;
+    // Estimated CURRENT bubble radius under external pressure: the closed-form iso profile at the
+    // widest station with the threshold raised from iso to max(iso, pressure) — i.e. where the own
+    // field meets the (assumed locally uniform) opposing level the pressure readback measured.
+    // An average: the true equilibrium surface sits closer on the enemy-facing side. Inherits the
+    // readback's ~2-frame latency; 0 = no bubble survives.
+    float getEquilibriumRadius() const;
+    // Field density at the bubble's CENTER per unit of Output — the budget fold times the
+    // distribution gain at the center station (~1.11 for the default centered sphere: Output is a
+    // total budget, and the distribution bump concentrates it mid-line). Divide a measured density
+    // by this to read it in Output units.
+    float getCenterDensityFactor() const;
 
     // Authored-field getters mirroring the setters above — read the live instance state (valid immediately,
     // unlike the GPU-latched applied force / pressure). Return the type's default for an invalid handle.
@@ -59,6 +74,7 @@ public:
     float getDistribution() const;
     float getWidth() const;
     uint32 getTeam() const;
+    float getShellAlpha() const;
 
 private:
     friend class ForceSystem;
@@ -87,9 +103,15 @@ public:
     {
         uint32 owningTeam = 0;      // strongest team at the point (only meaningful when inside)
         bool inside = false;        // inside owningTeam's bubble (field > iso and beats all others)
-        float ownField = 0.0f;      // the owning team's field strength at the point
+        float ownField = 0.0f;      // the STRONGEST team's field at the point — written even when
+                                    // not inside any bubble (below iso), so it doubles as the
+                                    // density readout; the debug density view heat-maps this value
         float opposingField = 0.0f; // best opposing team's field strength
         bool valid = false;         // false until the first readback for this slot lands
+
+        // The field density at the point (the "Density" debug view's value): the strongest team's
+        // field strength, meaningful inside AND outside bubbles.
+        float density() const { return ownField; }
     };
     Result getResult() const; // latched by ForceSystem::update, ~2 frames old
 
@@ -132,6 +154,7 @@ private:
         float focus = 0.0f;
         float distribution = 0.5f;
         float width = 1.0f;
+        float shellAlpha = 1.0f;
         // Cached gain-weighted shape budget integral (1D quadrature; depends only on focus +
         // distribution, refreshed when either changes; width scales the total analytically).
         float distNormE = 1.0f;

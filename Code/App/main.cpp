@@ -12,6 +12,8 @@ import Core.Windows;
 
 import App.InputControls;
 
+import Game;
+
 import Animation;
 import File;
 import Input;
@@ -45,6 +47,7 @@ int main(int argc, char* argv[])
     int tickHz = 60;
     std::string connectAddress;
     bool headless = false;
+    bool gameMode = false;
     for (int i = 1; i < argc; ++i)
     {
         const std::string_view arg = argv[i];
@@ -53,12 +56,18 @@ int main(int argc, char* argv[])
         else if (arg == "--port" && i + 1 < argc)         netPort = uint16(std::atoi(argv[++i]));
         else if (arg == "--tickrate" && i + 1 < argc)     tickHz = glm::clamp(std::atoi(argv[++i]), 10, 240);
         else if (arg == "--headless")                     headless = true;
+        else if (arg == "--game")                         gameMode = true; // whitebox game instead of the testbed scene
         // both ends must agree, or the handshake denies with a clear reason
         else if (arg == "--no-encrypt")                   NetworkManager::setEncryption(false);
         else Log::warning("Unknown command line argument: " + std::string(arg));
     }
     if (headless && launchMode != ELaunchMode::Server)
         Log::warning("--headless only applies to --server, ignoring");
+    if (gameMode && launchMode != ELaunchMode::Single)
+    {
+        Log::warning("--game is single player for now, ignoring"); // MP arrives in a later iteration
+        gameMode = false;
+    }
     const bool headlessServer = headless && launchMode == ELaunchMode::Server;
 
     Window window;
@@ -169,7 +178,8 @@ int main(int argc, char* argv[])
         };
     }
 
-    Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/sponza.pre", Transform(), true));
+    if (!gameMode)
+        Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/sponza.pre", Transform(), true));
     //Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/skysphere.pre", Transform(spawnOffset), true));
     //Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/character.pre", Transform(spawnOffset), true));
     //Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/particle.pre", Transform(spawnOffset), true));
@@ -182,6 +192,13 @@ int main(int argc, char* argv[])
 
     GizmoController gizmo;
     InputControls controls(gizmo, cameraController, Globals::world); // headless-inert: update/key handling never run
+    GameMatch game(gameMode); // stack local: holds EntityPtrs/Force handles, destructs before the globals
+    if (game.enabled())
+    {
+        game.spawnWorld();
+        controls.setGameMode(true);                  // mutes the testbed spawn/possess keys
+        cameraController.setMovementEnabled(false);  // WASD belongs to the game player
+    }
 
     Camera camera;
     camera.viewMatrix = glm::mat4(1.0f);
@@ -253,6 +270,7 @@ int main(int argc, char* argv[])
                 cameraController.update(deltaSec);
                 camera = cameraController.getCamera();
                 controls.applyPlayerCamera(camera); // possessed capsule view (first/third person), see InputControls
+                game.updateWindowed(camera, (float)deltaSec); // game mode: follow-camera overwrite + aim/HUD/debug draw
             }
             Globals::ui.update(Globals::world.rootEntities(), camera, deltaSec); // also drives the gizmo it owns
 
@@ -262,6 +280,7 @@ int main(int argc, char* argv[])
         for (EntityChange& change : Globals::scriptEvents.takeEntityChanges()) Globals::world.handleEntityChange(change, camera, Globals::ui.getViewportRect());
 
         Globals::networkManager.receive(deltaSec); // snapshot targets + events land before the sim/entity updates read them
+        game.update((float)deltaSec); // authority tick, pre-physics (direct body setters sanctioned); becomes the server tick in MP
         Globals::scriptContext.update(camera, (float)deltaSec, (float)Globals::time.getElapsedSec());
         Globals::physics.update(deltaSec, [](const PhysicsWorld::ContactEvent& evt) { Globals::world.handleContactEvent(evt); });
 

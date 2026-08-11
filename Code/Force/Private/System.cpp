@@ -147,6 +147,12 @@ void ForceEmitter::setTeam(uint32 team)
         inst->team = glm::min(team, MAX_FORCE_TEAMS - 1);
 }
 
+void ForceEmitter::setShellAlpha(float alpha)
+{
+    if (ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
+        inst->shellAlpha = glm::clamp(alpha, 0.0f, 1.0f);
+}
+
 glm::vec3 ForceEmitter::getAppliedForce() const
 {
     if (const ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
@@ -159,6 +165,33 @@ float ForceEmitter::getPressure() const
     if (const ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
         return inst->pressure;
     return 0.0f;
+}
+
+float ForceEmitter::getEquilibriumRadius() const
+{
+    const ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle);
+    if (!inst)
+        return 0.0f;
+    // Same fold + gain the upload and the debug rings use; the distNorm cache is refreshed by
+    // every update(), so a same-frame focus/distribution setter is at most one frame stale.
+    const float W = glm::clamp(inst->width, 0.05f, 4.0f);
+    const float folded = inst->output * forceReferenceBudget() / (glm::max(inst->distNormE, 1e-6f) * W * W);
+    const float centerDensity = folded * forceDistributionGain(0.5f, glm::clamp(inst->distribution, 0.0f, 1.0f));
+    const float threshold = glm::max(Globals::forceSystem.getParams().isoThreshold, inst->pressure);
+    if (threshold <= 0.0f || centerDensity <= threshold)
+        return 0.0f;
+    const float u2 = 1.0f - std::sqrt(threshold / centerDensity);
+    return 0.5f * glm::max(inst->reach, 1e-3f) * W * std::sqrt(u2);
+}
+
+float ForceEmitter::getCenterDensityFactor() const
+{
+    const ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle);
+    if (!inst)
+        return 1.0f;
+    const float W = glm::clamp(inst->width, 0.05f, 4.0f);
+    const float fold = forceReferenceBudget() / (glm::max(inst->distNormE, 1e-6f) * W * W);
+    return fold * forceDistributionGain(0.5f, glm::clamp(inst->distribution, 0.0f, 1.0f));
 }
 
 float ForceEmitter::getOutput() const
@@ -201,6 +234,13 @@ uint32 ForceEmitter::getTeam() const
     if (const ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
         return inst->team;
     return 0;
+}
+
+float ForceEmitter::getShellAlpha() const
+{
+    if (const ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
+        return inst->shellAlpha;
+    return 1.0f;
 }
 
 // ---- ForceQuery handle ----
@@ -273,13 +313,14 @@ void ForceSystem::initialize()
 // outputScale = the distribution budget fold (refreshDistributionScale): the GPU sees Output
 // pre-divided by the gain's field-weighted mean, so total emitted field stays exactly conserved.
 static ForceEmitterGpu buildEmitterGpu(const glm::vec3& pos, const glm::vec3& dir, float output,
-    float reach, float focus, uint32 team, float distribution, float width, float outputScale)
+    float reach, float focus, uint32 team, float distribution, float width, float outputScale,
+    float shellAlpha)
 {
     ForceEmitterGpu gpu;
     gpu.posReach = glm::vec4(pos, glm::max(reach, 1e-3f));
     const glm::vec3 d = glm::dot(dir, dir) > 1e-6f ? glm::normalize(dir) : glm::vec3(0.0f, 1.0f, 0.0f);
     gpu.dirFocus = glm::vec4(d, glm::clamp(focus, 0.0f, 1.0f));
-    gpu.outputParams = glm::vec4(glm::max(output, 0.0f) * outputScale, 1.0f,
+    gpu.outputParams = glm::vec4(glm::max(output, 0.0f) * outputScale, glm::clamp(shellAlpha, 0.0f, 1.0f),
         glm::clamp(distribution, 0.0f, 1.0f), glm::clamp(width, 0.05f, 4.0f));
     gpu.teamFlags = glm::uvec4(glm::min(team, MAX_FORCE_TEAMS - 1), FORCE_FLAG_ACTIVE, 0u, 0u);
     return gpu;
@@ -293,7 +334,7 @@ ForceEmitter ForceSystem::createEmitter(uint32 team, const glm::vec3& pos, const
     staged.distribution = distribution;
     const float outputScale = refreshDistributionScale(staged);
     const uint32 slot = Globals::rendererVK.createForceEmitter(
-        buildEmitterGpu(pos, direction, output, reach, focus, team, distribution, width, outputScale));
+        buildEmitterGpu(pos, direction, output, reach, focus, team, distribution, width, outputScale, 1.0f));
     if (slot == UINT32_MAX)
     {
         printf("ForceSystem: out of force emitter slots (%u live)\n", m_numLiveEmitters);
@@ -414,7 +455,7 @@ void ForceSystem::update(Renderer& renderer, float)
             continue;
         renderer.updateForceEmitter(inst.rendererSlot,
             buildEmitterGpu(inst.pos, inst.dir, inst.output, inst.reach, inst.focus, inst.team,
-                inst.distribution, inst.width, refreshDistributionScale(inst)));
+                inst.distribution, inst.width, refreshDistributionScale(inst), inst.shellAlpha));
         // Latch the GPU force readback (slot-indexed, ~2 frames old; zero until the first lands).
         const glm::vec4 readback = renderer.getForceEmitterReadback(inst.rendererSlot);
         inst.appliedForce = glm::vec3(readback);
