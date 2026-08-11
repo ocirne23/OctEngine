@@ -47,6 +47,9 @@ export struct HudWorldLabel
 	float       barValue = 0.0f;
 	float       barMax = 0.0f;    // <= 0 = no bar
 	glm::vec3   barColor = glm::vec3(1.0f);
+	float       bar2Value = 0.0f; // optional second bar stacked under the first (e.g. stored energy)
+	float       bar2Max = 0.0f;   // <= 0 = no second bar
+	glm::vec3   bar2Color = glm::vec3(1.0f);
 	bool        emphasized = false; // selected: drawn larger
 };
 

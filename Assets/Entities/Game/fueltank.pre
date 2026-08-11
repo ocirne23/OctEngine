@@ -1,0 +1,13 @@
+# Fuel tank: adds fuel storage to its cabled grid ("Fuel tank capacity" tweak). Its fuel lives on
+# the structure — destroying it loses the stored fuel. Cone = fuel iconography (fuel nodes are
+# cones). Spawned origin 1.4 above ground.
+Prefab gameFuelTank
+	Component Render
+		ObjectContainer wireshapes
+		Node Cone
+		Type StaticMesh
+		Scale 1 1.4 1
+	Component Physics
+		Body Static
+		Shape Box
+		HalfExtents 0.8 1.4 0.8

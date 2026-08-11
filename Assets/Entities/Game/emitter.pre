@@ -16,3 +16,4 @@ Prefab gameEmitter
 		Output 1.2
 		Reach 12
 		Centered true
+		Direction 0 1 0

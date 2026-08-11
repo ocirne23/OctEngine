@@ -81,14 +81,15 @@ vec4 forceShadeHit(vec3 rayOrigin, vec3 rayDir, float tHit, uint hitTeam, bool c
 {
     const vec3 hitPos = rayOrigin + rayDir * tHit;
     float phi[MAX_FORCE_TEAMS];
-    forceAccumulate(hitPos, phi);
+    float phiVis[MAX_FORCE_TEAMS]; // shell-alpha-weighted: invisible fields shape, never tint
+    forceAccumulateVisible(hitPos, phi, phiVis);
     const float ownPhi = phi[hitTeam];
     if (ownPhi <= 0.0)
         return vec4(0.0);
-    float opposingPhi = 0.0;
+    float opposingPhiVis = 0.0;
     for (uint t = 0u; t < MAX_FORCE_TEAMS; ++t)
         if (t != hitTeam)
-            opposingPhi = max(opposingPhi, phi[t]);
+            opposingPhiVis = max(opposingPhiVis, phiVis[t]);
 
     const float iso = u_forceParams0.x;
     const float h = max(0.005 * fe_emitters[v_emitterIdx].posReach.w, 0.01);
@@ -97,23 +98,26 @@ vec4 forceShadeHit(vec3 rayOrigin, vec3 rayDir, float tHit, uint hitTeam, bool c
     if (viewedFromInside)
         n = -n;
 
-    // Field-weighted team color (sharpened phi^4 weights): isolated bubbles keep their pure color,
-    // but toward the junction both sides converge to the same mix — so whichever surface (or side)
-    // a pixel's march classified, it shades the same there. Hard per-team lookups printed
-    // march-step-sized color jaggies along the junction rim.
+    // Field-weighted team color (sharpened phi^4 weights over the VISIBLE fields): isolated
+    // bubbles keep their pure color, but toward a junction of two visible shells both sides
+    // converge to the same mix — so whichever surface (or side) a pixel's march classified, it
+    // shades the same there. Hard per-team lookups printed march-step-sized color jaggies along
+    // the junction rim. Invisible fields (shell alpha 0) carry no color weight: a bubble pressed
+    // by one keeps its pure team color instead of going junction-purple.
     vec3 teamColor = vec3(0.0);
     float weightSum = 0.0;
     for (uint t = 0u; t < MAX_FORCE_TEAMS; ++t)
     {
-        float w = phi[t] * phi[t];
+        float w = phiVis[t] * phiVis[t];
         w *= w;
         teamColor += u_forceTeamColors[t].rgb * w;
         weightSum += w;
     }
     teamColor /= max(weightSum, 1e-12);
     const float fresnel = pow(1.0 - clamp(dot(n, -rayDir), 0.0, 1.0), u_forceParams0.y);
-    // Contact glow: the equilibrium seam lights up as the best opposing field approaches our own.
-    const float contact = smoothstep(1.0 - u_forceParams1.y, 1.0, opposingPhi / max(ownPhi, 1e-4));
+    // Contact glow: the equilibrium seam lights up as the best VISIBLE opposing field approaches
+    // our own — an invisible field pressing in doesn't light the whole rim as a seam.
+    const float contact = smoothstep(1.0 - u_forceParams1.y, 1.0, opposingPhiVis / max(ownPhi, 1e-4));
     // Geometry glow: the shell surface fading into nearby opaque geometry along the view ray.
     const float geoGlow = u_forceParams1.z > 0.0
         ? 1.0 - clamp((sceneDist - tHit) / u_forceParams1.z, 0.0, 1.0) : 0.0;
@@ -310,6 +314,7 @@ void main()
             }
             float tWall = -1.0;
             float wallFade = 0.0;
+            uint wallSkinTeam = MAX_FORCE_TEAMS; // < MAX: wall shades as this team's SKIN, not a pane
             if (teamFlip)
             {
                 float lo = tPrev, hi = t;
@@ -326,6 +331,28 @@ void main()
                 wallFade = smoothstep(iso, iso * 1.3, min(wallOwn, wallOpposing));
                 if (wallFade <= 0.001)
                     tWall = -1.0;
+                if (tWall >= 0.0)
+                {
+                    // A wall against an INVISIBLE field (shell alpha ~0, e.g. a map-scale gameplay
+                    // emitter) is not a contested pane — it IS the visible side's surface, pressed
+                    // flat. Reclassify it as that team's skin: it then shades with the normal team
+                    // look (phiVis already keeps the color pure) and, critically, is OWNED by the
+                    // visible team's dominant emitter — the invisible side's proxy never
+                    // rasterizes, which silently dropped the entry-side wall entirely.
+                    float phiW[MAX_FORCE_TEAMS];
+                    float phiVisW[MAX_FORCE_TEAMS];
+                    forceAccumulateVisible(rayOrigin + rayDir * tWall, phiW, phiVisW);
+                    const float visPrev = phiVisW[prevTeam] / max(phiW[prevTeam], 1e-6);
+                    const float visBest = phiVisW[bestTeam] / max(phiW[bestTeam], 1e-6);
+                    if (min(visPrev, visBest) < 0.05)
+                    {
+                        wallSkinTeam = visPrev > visBest ? prevTeam : bestTeam;
+                        // A rim step can hold this wall AND the true skin crossing of the same
+                        // visible surface — shading both would double the shell there.
+                        if (tHit >= 0.0)
+                            tWall = -1.0;
+                    }
+                }
             }
             // Composite this step's events in ray order (a rim step can hold skin AND wall), each
             // ownership-checked so exactly one proxy shades it; unowned events still advance the march.
@@ -334,9 +361,13 @@ void main()
                 const bool wallFirst = tWall >= 0.0 && (tHit < 0.0 || tWall < tHit);
                 if (wallFirst)
                 {
-                    if (forceDominantEmitter(rayOrigin + rayDir * tWall, prevTeam) == v_emitterIdx)
+                    const bool asSkin = wallSkinTeam != MAX_FORCE_TEAMS;
+                    const uint ownTeam = asSkin ? wallSkinTeam : prevTeam;
+                    if (forceDominantEmitter(rayOrigin + rayDir * tWall, ownTeam) == v_emitterIdx)
                     {
-                        const vec4 layer = forceShadeWall(rayOrigin, rayDir, tWall, prevTeam, bestTeam, wallFade);
+                        const vec4 layer = asSkin
+                            ? forceShadeHit(rayOrigin, rayDir, tWall, wallSkinTeam, cameraInsideField, sceneDist)
+                            : forceShadeWall(rayOrigin, rayDir, tWall, prevTeam, bestTeam, wallFade);
                         accumColor += (1.0 - accumAlpha) * layer.rgb;
                         accumAlpha += (1.0 - accumAlpha) * layer.a;
                         ++numShaded;

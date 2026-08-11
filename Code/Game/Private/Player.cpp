@@ -30,6 +30,13 @@ void GamePlayer::registerTweaks()
     Tweak::floatVar("Game/Player", "Spawn grace (s)", &m_spawnGraceSec, 0.0f, 10.0f, 0.1f);
     Tweak::floatVar("Game/Shield", "Damage radius", &m_damageRadius, 0.0f, 3.0f, 0.05f);
     Tweak::floatVar("Game/Shield", "Push gain", &m_shieldPushGain, 0.0f, 100000.0f, 100.0f);
+    Tweak::floatVar("Game/Combat", "Projectile speed", &m_projSpeed, 5.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Combat", "Projectile lifetime", &m_projLifetime, 0.5f, 30.0f, 0.25f);
+    Tweak::floatVar("Game/Combat", "Projectile push gain", &m_projPushGain, 0.0f, 100000.0f, 100.0f);
+    Tweak::floatVar("Game/Combat", "Fire interval", &m_fireInterval, 0.05f, 2.0f, 0.01f);
+    Tweak::floatVar("Game/Combat", "Melee range", &m_meleeRange, 1.0f, 10.0f, 0.1f);
+    Tweak::floatVar("Game/Combat", "Melee impulse", &m_meleeImpulse, 0.0f, 5000.0f, 10.0f);
+    Tweak::floatVar("Game/Combat", "Melee interval", &m_meleeInterval, 0.1f, 3.0f, 0.05f);
 }
 
 void GamePlayer::spawn(const glm::vec3& pos)
@@ -51,10 +58,94 @@ void GamePlayer::spawn(const glm::vec3& pos)
 
 void GamePlayer::despawn()
 {
+    for (Projectile& p : m_projectiles)
+        if (p.entity)
+            Globals::world.removeRootEntity(p.entity.get());
+    m_projectiles.clear();
     if (m_entity)
         Globals::world.removeRootEntity(m_entity.get());
     m_entity = EntityPtr();
     m_query = ForceQuery();
+}
+
+void GamePlayer::tickCombat(const glm::vec3& cameraForwardPlanar, float deltaSec)
+{
+    m_fireCooldown = glm::max(0.0f, m_fireCooldown - deltaSec);
+    m_meleeCooldown = glm::max(0.0f, m_meleeCooldown - deltaSec);
+    m_meleeFlash = glm::max(0.0f, m_meleeFlash - deltaSec);
+    PhysicsComponent* ppc = m_entity ? getComponent<PhysicsComponent>(m_entity.get()) : nullptr;
+    const bool alive = ppc && ppc->body.isValid();
+
+    if (m_shotQueued && m_fireCooldown <= 0.0f && alive && glm::dot(m_queuedShotDir, m_queuedShotDir) > 1e-6f)
+    {
+        // Muzzle outside the capsule (world radius 0.4) so the shot never spawns intersecting it.
+        const glm::vec3 dir = glm::normalize(m_queuedShotDir);
+        const glm::vec3 origin = ppc->body.getPosition() + glm::vec3(0.0f, 0.5f, 0.0f) + dir * 1.2f;
+        if (EntityPtr p = Globals::world.spawnAssetFile("Entities/Game/projectile.pre", Transform(origin), true))
+        {
+            p->setName("Projectile");
+            if (PhysicsComponent* pc = getComponent<PhysicsComponent>(p.get()))
+                pc->body.setLinearVelocity(dir * m_projSpeed);
+            Globals::world.addRootEntity(p);
+            m_projectiles.push_back(Projectile{ std::move(p), 0.0f });
+            m_fireCooldown = m_fireInterval;
+        }
+    }
+    m_shotQueued = false;
+
+    if (m_meleeQueued && m_meleeCooldown <= 0.0f && alive)
+    {
+        // Melee: shove every dynamic body in a ~120° planar cone in front of the facing (root-list
+        // scan is the engine's lookup pattern; static bodies ignore impulses so no type filtering
+        // beyond dynamic is needed).
+        const glm::vec3 selfPos = ppc->body.getPosition();
+        for (const EntityPtr& root : Globals::world.rootEntities())
+        {
+            if (root.get() == m_entity.get())
+                continue;
+            PhysicsComponent* pc = getComponent<PhysicsComponent>(root.get());
+            if (!pc || pc->bodyType != EPhysicsBodyType::Dynamic || !pc->body.isValid())
+                continue;
+            const glm::vec3 d = pc->body.getPosition() - selfPos;
+            const glm::vec2 planar(d.x, d.z);
+            const float dist = glm::length(planar);
+            if (dist > m_meleeRange || dist < 1e-3f)
+                continue;
+            if (glm::dot(planar / dist, glm::vec2(cameraForwardPlanar.x, cameraForwardPlanar.z)) < 0.5f)
+                continue; // outside the 120° cone
+            const glm::vec3 shove = glm::normalize(glm::vec3(d.x, 0.0f, d.z)) + glm::vec3(0.0f, 0.4f, 0.0f);
+            pc->body.applyImpulse(shove * m_meleeImpulse);
+        }
+        m_meleeCooldown = m_meleeInterval;
+        m_meleeFlash = 0.18f;
+    }
+    m_meleeQueued = false;
+
+    // Age projectiles out and let the fields act on them: the applied-force readback is the
+    // opposing pressure on the projectile's own small bubble (the testbed force-ball pattern) —
+    // enemy fields brake and deflect shots in flight.
+    for (size_t i = 0; i < m_projectiles.size();)
+    {
+        Projectile& p = m_projectiles[i];
+        p.age += deltaSec;
+        if (!p.entity || p.age > m_projLifetime)
+        {
+            if (p.entity)
+                Globals::world.removeRootEntity(p.entity.get());
+            m_projectiles.erase(m_projectiles.begin() + i);
+            continue;
+        }
+        PhysicsComponent* pc = getComponent<PhysicsComponent>(p.entity.get());
+        ForceComponent* fc = getComponent<ForceComponent>(p.entity.get());
+        if (pc && pc->body.isValid() && fc)
+        {
+            const glm::vec3 force = fc->emitter.getAppliedForce();
+            const float pressure = fc->emitter.getPressure();
+            if (glm::dot(force, force) > 1e-8f)
+                pc->body.applyImpulse(force * deltaSec * m_projPushGain * pressure);
+        }
+        ++i;
+    }
 }
 
 // Distance from the body center to the shape's lowest point, world units (grounds the jump

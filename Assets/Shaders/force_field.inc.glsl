@@ -142,6 +142,29 @@ void forceAccumulate(vec3 x, out float phi[MAX_FORCE_TEAMS])
     }
 }
 
+// forceAccumulate plus a SHELL-VISIBLE variant of each team's field: every contribution also
+// scaled by its emitter's shell alpha (outputParams.y). The shading path weighs team colors and
+// contact glow by the VISIBLE fields, so an invisible emitter (alpha 0 — e.g. a map-scale gameplay
+// field) still deforms bubble geometry but neither tints the junction color mix nor lights the
+// whole rim as a contested seam.
+void forceAccumulateVisible(vec3 x, out float phi[MAX_FORCE_TEAMS], out float phiVis[MAX_FORCE_TEAMS])
+{
+    for (uint t = 0u; t < MAX_FORCE_TEAMS; ++t)
+    {
+        phi[t] = 0.0;
+        phiVis[t] = 0.0;
+    }
+    const uint cell = forceCandidateCell(x);
+    const uint n = forceNumCandidates(cell);
+    for (uint k = 0u; k < n; ++k)
+    {
+        const ForceEmitterData e = fe_emitters[forceCandidateIdx(cell, k)];
+        const float c = forceContribution(x, e);
+        phi[e.teamFlags.x] += c;
+        phiVis[e.teamFlags.x] += c * e.outputParams.y;
+    }
+}
+
 // C1 smooth max (k = blend width; 0 = hard max). Used for the surface's opposing bound so the
 // shells meet the equilibrium wall in a rounded fillet instead of a hard crease — the crease's
 // discontinuous normals printed march-step-sized classification jaggies along the junction.

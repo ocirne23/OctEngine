@@ -9,14 +9,19 @@ import Force;
 // the power grids connecting them.
 //  - A node produces nothing on its own: an EXTRACTOR must be built on it (one per node), and the
 //    extractor must be cabled into a POWERED grid. Powered mineral extractors accrue Minerals
-//    (spent to build), fuel extractors accrue Fuel (burned by generators).
+//    (global — the build currency). FUEL IS GRID-LOCAL: powered fuel extractors feed fuel into
+//    their OWN grid's tanks (generators + Base, "Generator fuel tank" each); generators burn from
+//    their grid's pool and stop when it runs dry. Fuel never teleports between grids — haul it by
+//    cabling the fuel extractor's grid into the consumer grid.
 //  - Power flows over MANUAL CABLES (the hotbar Cable tool, no auto-linking): ANY two structures
 //    within cable range connect (two emitters relay power fine); transmitters are just the cheap
-//    long-run piece, not a topological requirement. Cable-connected structures form a power GRID
-//    (union-find over cables). Generators burn Fuel to supply their grid; emitters and extractors
-//    consume that supply in placement order — beyond it (or out of Fuel) emitters go dark and
-//    extractors stop harvesting. An uncabled consumer is a one-structure grid with zero supply,
-//    so "must be connected" is just the power gate.
+//    long-run piece, not a topological requirement. Cable-connected structures form a GRID
+//    (union-find over cables) with an ENERGY economy: generators turn Fuel into energy/s, BATTERY
+//    structures (and the Base, worth one battery) store it — charge lives ON the storage members,
+//    so grid merges pool it, splits carry it, and a destroyed battery loses its charge. Consumers
+//    (emitters, extractors) drain stored+generated energy in placement order — beyond it emitters
+//    go dark and extractors stop harvesting. Generators only run against demand or an unfilled
+//    battery (no idle Fuel burn); a storage-less grid still works as pure throughput.
 //  - Every structure has health and drains while standing in ENEMY-owned territory (per-structure
 //    ForceQuery); a friendly bubble overhead protects. Dead structures despawn (a dead extractor
 //    frees its node; cables to a dead structure are pruned).
@@ -25,8 +30,8 @@ import Force;
 //  - The BASE exists from game start (spawnBase, never placeable): respawn anchor, always-on
 //    emitter (self-powered), passive income equal to one extractor of EACH type, cable-connectable
 //    like a building, and is invulnerable (a dead base would soft-lock the respawn).
-export enum class EStructureType : uint8 { Emitter, Generator, Transmitter, Extractor, Base, Count };
-export constexpr int NumPlaceableStructures = 4; // hotbar slots 0..3; Base is spawned, never placed
+export enum class EStructureType : uint8 { Emitter, Generator, Transmitter, Extractor, Battery, FuelTank, Base, Count };
+export constexpr int NumPlaceableStructures = 6; // hotbar slots 0..5; Base is spawned, never placed
 
 export enum class ENodeType : uint8 { Mineral, Fuel };
 
@@ -78,10 +83,25 @@ public:
     int cableCount() const { return (int)m_cables.size(); }
 
     float minerals() const { return m_minerals; }
-    float fuel() const { return m_fuel; }
-    float powerUsed() const { return m_powerUsed; }         // allocated to powered consumers
-    float powerCapacity() const { return m_powerCapacity; } // what every fueled generator COULD supply
-    float powerDemand() const { return m_powerDemand; }
+    float fuel() const { return m_fuelTotal; } // total across all grid tanks (HUD)
+    float gridEnergy() const { return m_gridEnergyTotal; }           // stored across all grids
+    float gridEnergyCapacity() const { return m_gridCapacityTotal; } // batteries + Base storage
+    float energyGenPerSec() const { return m_genRateTotal; }         // running generators' output
+    float energyUsePerSec() const { return m_useRateTotal; }         // powered consumers' draw
+    float structureCharge(int index) const { return m_structures[index].charge; }
+    float structureCapacity(int index) const
+    {
+        const EStructureType t = m_structures[index].type;
+        return t == EStructureType::Battery || t == EStructureType::Base ? m_batteryCapacity : 0.0f;
+    }
+    float structureFuel(int index) const { return m_structures[index].fuel; }
+    float structureFuelCapacity(int index) const { return fuelCapacityOf(m_structures[index].type); }
+    float fuelCapacityOf(EStructureType t) const
+    {
+        if (t == EStructureType::FuelTank)
+            return m_fuelTankCapacity;
+        return t == EStructureType::Generator || t == EStructureType::Base ? m_generatorFuelTank : 0.0f;
+    }
     float mineralCost(EStructureType type) const { return m_costs[(int)type]; }
     int affordableCount(EStructureType type) const
     {
@@ -121,6 +141,9 @@ private:
         EStructureType type = EStructureType::Emitter;
         glm::vec3 pos{ 0.0f };
         float health = 100.0f;
+        float charge = 0.0f; // stored energy (Battery/Base only) — rides the structure through
+                             // grid merges/splits and dies with it
+        float fuel = 0.0f;   // stored fuel (Generator/Base tanks only) — same contract as charge
         bool powered = false;
         uint16 gridId = 0;
         int nodeIndex = -1; // Extractor: the node it harvests (node indices are stable)
@@ -154,11 +177,11 @@ private:
     std::vector<std::pair<uint16, uint16>> m_links; // index pairs of live cables (debug draw)
     uint32 m_nextStructureId = 1; // 0 = invalid
     float m_minerals = 0.0f;
-    float m_fuel = 0.0f;
-    float m_powerUsed = 0.0f;     // totals across grids, for the HUD
-    float m_powerCapacity = 0.0f; // generators only RUN on demand (no idle burn) — capacity is what
-                                  // the HUD shows so building a generator visibly adds headroom
-    float m_powerDemand = 0.0f;
+    float m_fuelTotal = 0.0f;         // totals across grids, for the HUD
+    float m_gridEnergyTotal = 0.0f;
+    float m_gridCapacityTotal = 0.0f;
+    float m_genRateTotal = 0.0f;
+    float m_useRateTotal = 0.0f;
 
     // Tweaks ("Game/Economy", "Game/Structures")
     float m_startMinerals = 100.0f;
@@ -166,11 +189,14 @@ private:
     float m_extractorSnapRadius = 5.0f; // aim within this of a free node snaps the extractor onto it
     float m_mineralRate = 5.0f;      // minerals/s per powered mineral extractor
     float m_fuelRate = 5.0f;         // fuel/s per powered fuel extractor
-    float m_costs[4] = { 30.0f, 50.0f, 15.0f, 40.0f }; // Emitter, Generator, Transmitter, Extractor
-    float m_fuelBurnRate = 1.0f;     // fuel/s per RUNNING generator
-    float m_powerPerGenerator = 10.0f;
-    float m_powerPerEmitter = 2.0f;
-    float m_powerPerExtractor = 1.0f;
+    float m_costs[6] = { 30.0f, 50.0f, 15.0f, 40.0f, 40.0f, 25.0f }; // Emitter, Generator, Transmitter, Extractor, Battery, FuelTank
+    float m_fuelBurnRate = 1.0f;        // fuel/s per RUNNING generator
+    float m_genEnergyPerSec = 10.0f;    // energy/s a running generator adds to its grid
+    float m_emitterEnergyPerSec = 2.0f; // energy/s an emitter drains
+    float m_extractorEnergyPerSec = 1.0f;
+    float m_batteryCapacity = 100.0f;   // storage per Battery (the Base stores the same)
+    float m_generatorFuelTank = 50.0f;  // fuel storage per Generator (the Base holds one tank too)
+    float m_fuelTankCapacity = 150.0f;  // fuel storage per dedicated Fuel tank structure
     float m_cableRange = 18.0f;      // max cable length
     float m_placeRange = 20.0f;
     float m_emitterOutput = 1.2f;    // powered pylon field strength

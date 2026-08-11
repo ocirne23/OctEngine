@@ -32,6 +32,16 @@ public:
     glm::vec3 interpolatedPos() const; // render-smooth body pose for the follow camera
     glm::vec3 bodyPos() const;         // current body position (authority logic)
 
+    // Combat (neutral mode: LMB shoots at the cursor, F melees). Inputs queue from the windowed
+    // tick; tickCombat (authority, pre-physics) spawns/ages projectiles and applies the melee
+    // shove. Projectiles carry a small team-0 field — enemy fields decelerate/deflect them via the
+    // per-emitter applied-force readback (the testbed force-ball mechanism).
+    void queueShot(const glm::vec3& dir) { m_queuedShotDir = dir; m_shotQueued = true; }
+    void queueMelee() { m_meleeQueued = true; }
+    void tickCombat(const glm::vec3& cameraForwardPlanar, float deltaSec);
+    float meleeRange() const { return m_meleeRange; }
+    float meleeFlash() const { return m_meleeFlash; } // seconds left of swing visual
+
     float health() const { return m_health; }
     float healthMax() const { return m_healthMax; }
     // Energy IS the shield resource: the bar drains/refills in its own units ("Energy regen/s",
@@ -46,9 +56,22 @@ public:
                                                       // field, the Density debug view's value)
 
 private:
+    struct Projectile
+    {
+        EntityPtr entity;
+        float age = 0.0f;
+    };
+
     EntityPtr m_entity;
     ForceQuery m_query; // point query at the body center — feeds the density readout
+    std::vector<Projectile> m_projectiles;
     glm::vec3 m_spawnPos{ 0.0f };
+    glm::vec3 m_queuedShotDir{ 0.0f };
+    float m_fireCooldown = 0.0f;
+    float m_meleeCooldown = 0.0f;
+    float m_meleeFlash = 0.0f;
+    bool m_shotQueued = false;
+    bool m_meleeQueued = false;
     bool m_jumpWasDown = false;
 
     float m_health = 100.0f;
@@ -74,6 +97,14 @@ private:
                                          // the own output (standing inside a team emitter's bubble)
     float m_spawnGraceSec = 1.0f;        // no energy/health drain this long after (re)spawn — the
                                          // GPU readbacks still carry the death position for ~2 frames
+    // Tweaks ("Game/Combat")
+    float m_projSpeed = 30.0f;
+    float m_projLifetime = 5.0f;
+    float m_projPushGain = 10000.0f;     // field applied-force -> impulse (force-ball scale)
+    float m_fireInterval = 0.25f;
+    float m_meleeRange = 3.0f;
+    float m_meleeImpulse = 600.0f;
+    float m_meleeInterval = 0.5f;
     float m_damageRadius = 0.8f;        // metres: health drains once the equilibrium shield radius
                                         // squishes below this (capsule half-height is 0.8 world)
     float m_shieldPushGain = 10000.0f;  // applied-force -> impulse scale (testbed force-ball precedent)

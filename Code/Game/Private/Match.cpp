@@ -129,7 +129,9 @@ void GameMatch::spawnWorld()
     Globals::gameHud.setSlot(1, "Generator", 0);   // reroutes those keys away from the testbed spawns
     Globals::gameHud.setSlot(2, "Transmitter", 0);
     Globals::gameHud.setSlot(3, "Extractor", 0);
-    Globals::gameHud.setSlot(4, "Cable", 0);       // the connect tool, not a structure
+    Globals::gameHud.setSlot(4, "Battery", 0);
+    Globals::gameHud.setSlot(5, "Fuel tank", 0);
+    Globals::gameHud.setSlot(6, "Cable", 0);       // the connect tool, not a structure
     Globals::gameHud.setHotbarVisible(false);      // hidden until Build mode (B) — see setMode
     Globals::gameHud.selectSlot(0);
 
@@ -146,6 +148,7 @@ void GameMatch::update(float deltaSec)
     m_structures.tickAuthority(playerPos, deltaSec);
     m_player.tickMovement(m_camera.forwardPlanar(), deltaSec);
     m_player.tickShieldAndHealth(deltaSec);
+    m_player.tickCombat(m_camera.forwardPlanar(), deltaSec);
 
     // World field: powered pylons near the objective grind its output down; it slowly regrows.
     const float suppression = m_structures.suppressionAt(m_objectivePos, m_worldReach * 0.5f);
@@ -232,10 +235,10 @@ void GameMatch::setMode(EPlayerMode mode)
     Globals::gameHud.setHotbarVisible(mode == EPlayerMode::Build); // the hotbar IS the Build indicator
     switch (mode)
     {
-    case EPlayerMode::Build:  Log::info("Build mode (B): hotbar 1-5 picks, LMB/F places — B to exit"); break;
+    case EPlayerMode::Build:  Log::info("Build mode (B): hotbar 1-7 picks, LMB/F places — B to exit"); break;
     case EPlayerMode::Delete: Log::info("Delete mode (X): click a structure to demolish — X to exit"); break;
     case EPlayerMode::Select: Log::info("Select mode (V): click a structure to inspect — V to exit"); break;
-    case EPlayerMode::None:   Log::info("Neutral mode: B build, X delete, V select"); break;
+    case EPlayerMode::None:   Log::info("Combat mode: LMB shoot, F melee — B build, X delete, V select"); break;
     }
 }
 
@@ -386,13 +389,34 @@ void GameMatch::buildWorldLabels(const Camera& camera)
             const float frac = label.barValue / label.barMax;
             label.barColor = glm::mix(glm::vec3(1.0f, 0.25f, 0.2f), glm::vec3(0.3f, 1.0f, 0.4f), frac);
         }
+        const float energyCap = m_structures.structureCapacity(i);
+        const float fuelCap = m_structures.structureFuelCapacity(i);
+        if (energyCap > 0.0f) // energy storage (Battery/Base): stored-energy bar under health
+        {
+            label.bar2Value = m_structures.structureCharge(i);
+            label.bar2Max = energyCap;
+            label.bar2Color = glm::vec3(1.0f, 0.9f, 0.3f);
+        }
+        else if (fuelCap > 0.0f) // fuel storage (Generator/Fuel tank): fuel bar instead
+        {
+            label.bar2Value = m_structures.structureFuel(i);
+            label.bar2Max = fuelCap;
+            label.bar2Color = glm::vec3(1.0f, 0.6f, 0.2f);
+        }
         if (i == selected)
         {
             label.emphasized = true;
             label.title = structureTypeName(type);
-            char info[96];
-            if (type == EStructureType::Base)
-                snprintf(info, sizeof(info), "Invulnerable");
+            char info[160];
+            if (type == EStructureType::Base) // holds energy AND fuel; the bar shows energy
+                snprintf(info, sizeof(info), "Invulnerable\nEnergy %.0f / %.0f\nFuel %.0f / %.0f",
+                    m_structures.structureCharge(i), energyCap, m_structures.structureFuel(i), fuelCap);
+            else if (energyCap > 0.0f)
+                snprintf(info, sizeof(info), "HP %.0f / %.0f\nEnergy %.0f / %.0f",
+                    label.barValue, label.barMax, label.bar2Value, label.bar2Max);
+            else if (fuelCap > 0.0f)
+                snprintf(info, sizeof(info), "HP %.0f / %.0f\nFuel %.0f / %.0f",
+                    label.barValue, label.barMax, label.bar2Value, label.bar2Max);
             else if (consumer)
                 snprintf(info, sizeof(info), "HP %.0f / %.0f\n%s", label.barValue, label.barMax,
                     m_structures.structurePowered(i) ? "Powered" : "No power");
@@ -430,13 +454,17 @@ void GameMatch::updateHud()
     hud.setCounter("Shield radius", m_player.shieldRadius(), 2, glm::vec3(0.3f, 0.8f, 1.0f));
     hud.setCounter("Minerals", m_structures.minerals(), 0, glm::vec3(0.6f, 0.8f, 1.0f));
     hud.setCounter("Fuel", m_structures.fuel(), 0, glm::vec3(1.0f, 0.6f, 0.2f));
-    hud.setCounter("Power use", m_structures.powerUsed(), 0, glm::vec3(1.0f, 0.9f, 0.3f));
-    hud.setCounter("Power cap", m_structures.powerCapacity(), 0, glm::vec3(1.0f, 0.9f, 0.3f));
+    hud.setBar("Grid energy", m_structures.gridEnergy(), glm::max(m_structures.gridEnergyCapacity(), 1.0f),
+        glm::vec3(1.0f, 0.9f, 0.3f));
+    hud.setCounter("Energy gen/s", m_structures.energyGenPerSec(), 1, glm::vec3(1.0f, 0.9f, 0.3f));
+    hud.setCounter("Energy use/s", m_structures.energyUsePerSec(), 1, glm::vec3(1.0f, 0.9f, 0.3f));
     hud.setSlotCount(0, m_structures.affordableCount(EStructureType::Emitter));
     hud.setSlotCount(1, m_structures.affordableCount(EStructureType::Generator));
     hud.setSlotCount(2, m_structures.affordableCount(EStructureType::Transmitter));
     hud.setSlotCount(3, m_structures.affordableCount(EStructureType::Extractor));
-    hud.setSlotCount(4, m_structures.cableCount()); // cables are free — the count shows existing ones
+    hud.setSlotCount(4, m_structures.affordableCount(EStructureType::Battery));
+    hud.setSlotCount(5, m_structures.affordableCount(EStructureType::FuelTank));
+    hud.setSlotCount(6, m_structures.cableCount()); // cables are free — the count shows existing ones
     if (m_victory)
         hud.setCounter("VICTORY", 1.0f, 0, glm::vec3(0.3f, 1.0f, 0.4f));
 }
@@ -453,23 +481,47 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     m_dragDeltaX = 0.0f;
     m_wheelAccum = 0.0f;
 
-    // Mode keys first, then the active mode consumes the confirm (LMB edge from the listener, or
-    // key F as the fallback the UI can never eat). Neutral mode: clicks do nothing. Requests queue
-    // here and are validated/applied in the authority tick.
+    // Mode keys first, then the active mode consumes the inputs. In the tool modes LMB and F both
+    // confirm (F is the fallback the UI can never eat); in NEUTRAL mode they are the combat keys —
+    // LMB shoots a projectile at the cursor, F swings melee. Requests queue here and are
+    // validated/applied in the authority tick.
     updateModeSwitching();
     const bool fDown = input.isKeyDown(SDL_Scancode::SDL_SCANCODE_F)
         && input.isWindowHasFocus() && Globals::ui.isViewportFocused();
-    const bool confirmEdge = m_placeClicked || (fDown && !m_placeKeyWasDown);
+    const bool lmbEdge = m_placeClicked;
+    const bool fEdge = fDown && !m_placeKeyWasDown;
     m_placeKeyWasDown = fDown;
     m_placeClicked = false;
+    const bool confirmEdge = lmbEdge || fEdge;
 
     switch (m_mode)
     {
     case EPlayerMode::Build:  updateBuildMode(camera, confirmEdge); break;
     case EPlayerMode::Delete: updateDeleteMode(camera, confirmEdge); break;
     case EPlayerMode::Select: updateSelectMode(camera, confirmEdge); break;
-    case EPlayerMode::None:   break;
+    case EPlayerMode::None:
+    {
+        if (lmbEdge)
+        {
+            glm::vec3 target;
+            if (aimGroundPoint(camera, target))
+            {
+                const glm::vec3 muzzle = m_player.bodyPos() + glm::vec3(0.0f, 0.5f, 0.0f);
+                const glm::vec3 dir = target - muzzle;
+                if (glm::dot(dir, dir) > 1e-4f)
+                    m_player.queueShot(glm::normalize(dir));
+            }
+        }
+        if (fEdge)
+            m_player.queueMelee();
+        break;
     }
+    }
+
+    // Melee swing visual: a brief ring in front of the player while the swing flash runs.
+    if (m_player.meleeFlash() > 0.0f)
+        drawCircle(m_player.interpolatedPos() + m_camera.forwardPlanar() * m_player.meleeRange() * 0.6f,
+            m_player.meleeRange() * 0.5f, packColor(glm::vec3(1.0f, 1.0f, 0.9f)), 20);
 
     // Faint ring at the estimated equilibrium shield radius — compare it against the drawn bubble.
     const float shieldR = m_player.shieldRadius();

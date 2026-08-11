@@ -1,0 +1,21 @@
+# Player projectile: dense physics sphere carrying a small team-0 field bubble — the per-emitter
+# applied-force readback makes enemy fields decelerate/deflect it in flight (the testbed force-ball
+# mechanism). Spawned by GamePlayer::tickCombat, aged out after "Projectile lifetime".
+Prefab gameProjectile
+	Component Render
+		ObjectContainer wireshapes
+		Node Sphere
+		Type StaticMesh
+		Scale 0.2
+	Component Physics
+		Body Dynamic
+		Shape Sphere
+		Radius 0.2
+		Density 400
+		Restitution 0.3
+		ContactEvents true
+	Component Force
+		Team 0
+		Output 0.4
+		Reach 1.5
+		Centered true

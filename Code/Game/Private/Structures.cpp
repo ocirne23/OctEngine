@@ -11,11 +11,12 @@ import Force;
 import RendererVK;
 import :Structures;
 
-static constexpr const char* structurePrefabs[5] = {
+static constexpr const char* structurePrefabs[7] = {
     "Entities/Game/emitter.pre", "Entities/Game/generator.pre", "Entities/Game/transmitter.pre",
-    "Entities/Game/extractor.pre", "Entities/Game/base.pre" };
-static constexpr const char* structureNames[5] = { "Emitter", "Generator", "Transmitter", "Extractor", "Base" };
-static constexpr float structureSpawnHeights[5] = { 1.5f, 0.75f, 2.0f, 0.4f, 1.5f }; // origin above the ground hit
+    "Entities/Game/extractor.pre", "Entities/Game/battery.pre", "Entities/Game/fueltank.pre",
+    "Entities/Game/base.pre" };
+static constexpr const char* structureNames[7] = { "Emitter", "Generator", "Transmitter", "Extractor", "Battery", "Fuel tank", "Base" };
+static constexpr float structureSpawnHeights[7] = { 1.5f, 0.75f, 2.0f, 0.4f, 1.0f, 1.4f, 1.5f }; // origin above the ground hit
 
 const char* structureTypeName(EStructureType type)
 {
@@ -57,10 +58,15 @@ void StructureSystem::registerTweaks()
     Tweak::floatVar("Game/Economy", "Generator cost", &m_costs[1], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Transmitter cost", &m_costs[2], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Extractor cost", &m_costs[3], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Battery cost", &m_costs[4], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Fuel tank cost", &m_costs[5], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Fuel tank capacity", &m_fuelTankCapacity, 10.0f, 1000.0f, 5.0f);
     Tweak::floatVar("Game/Economy", "Fuel burn/s per generator", &m_fuelBurnRate, 0.0f, 20.0f, 0.05f);
-    Tweak::floatVar("Game/Economy", "Power per generator", &m_powerPerGenerator, 0.5f, 20.0f, 0.25f);
-    Tweak::floatVar("Game/Economy", "Power per emitter", &m_powerPerEmitter, 0.1f, 10.0f, 0.1f);
-    Tweak::floatVar("Game/Economy", "Power per extractor", &m_powerPerExtractor, 0.1f, 10.0f, 0.1f);
+    Tweak::floatVar("Game/Economy", "Energy gen/s per generator", &m_genEnergyPerSec, 0.5f, 50.0f, 0.25f);
+    Tweak::floatVar("Game/Economy", "Emitter energy/s", &m_emitterEnergyPerSec, 0.1f, 20.0f, 0.1f);
+    Tweak::floatVar("Game/Economy", "Extractor energy/s", &m_extractorEnergyPerSec, 0.1f, 20.0f, 0.1f);
+    Tweak::floatVar("Game/Economy", "Battery capacity", &m_batteryCapacity, 10.0f, 1000.0f, 5.0f);
+    Tweak::floatVar("Game/Economy", "Generator fuel tank", &m_generatorFuelTank, 5.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Cable max length", &m_cableRange, 4.0f, 60.0f, 0.5f);
     Tweak::floatVar("Game/Economy", "Place range", &m_placeRange, 4.0f, 60.0f, 0.5f);
     Tweak::floatVar("Game/Structures", "Emitter output", &m_emitterOutput, 0.2f, 5.0f, 0.05f);
@@ -71,8 +77,7 @@ void StructureSystem::registerTweaks()
 
 void StructureSystem::spawnNodes()
 {
-    m_minerals = m_startMinerals;
-    m_fuel = m_startFuel;
+    m_minerals = m_startMinerals; // fuel is grid-local: "Start fuel" seeds the Base tank instead
 
     // Authored whitebox layout: player starts around (0, 140); nodes line the approach toward the
     // objective at the origin so pushing inward is what grows the economy.
@@ -242,6 +247,8 @@ void StructureSystem::spawnBase(const glm::vec3& groundPos)
     s.type = EStructureType::Base;
     s.pos = groundPos + glm::vec3(0.0f, structureSpawnHeights[(int)EStructureType::Base], 0.0f);
     s.health = m_structureHealthMax; // never drained — the Base is skipped in tickDamage
+    s.charge = m_batteryCapacity;    // its battery-worth of storage starts full
+    s.fuel = glm::min(m_startFuel, m_generatorFuelTank); // "Start fuel" seeds the Base tank
     s.entity = Globals::world.spawnAssetFile(structurePrefabs[(int)EStructureType::Base], Transform(s.pos), true);
     if (!s.entity)
         return;
@@ -318,52 +325,79 @@ void StructureSystem::rebuildGrids()
 
 void StructureSystem::tickPower(float deltaSec)
 {
-    // Per grid: demand = emitters + extractors (each their tweak draw); generators run only while
-    // there is Fuel AND demand to serve (no idle burn), supplying powerPerGenerator each.
-    // Consumers draw supply in placement order — the tail goes unpowered first (emitters go dark,
-    // extractors stop harvesting). Power-gating instead of placement-blocking keeps placement
-    // always-responsive with no refund logic. An uncabled consumer sits alone in a generator-less
-    // grid, so connection-required needs no extra rule.
+    // ENERGY model per grid: generators turn Fuel into energy/s, batteries (and the Base) store
+    // it, consumers drain stored+generated energy in placement order — the tail goes unpowered
+    // first (emitters dark, extractors idle). Generators run only against demand or an unfilled
+    // battery (no idle Fuel burn) and quantize to whole running generators. Charge lives ON the
+    // storage structures (equal split — all storage has the same capacity), so grid merges pool
+    // it, splits carry it, and a destroyed battery loses it. A storage-less grid still works as
+    // pure generator->consumer throughput. Power-gating instead of placement-blocking keeps
+    // placement always-responsive; an uncabled consumer sits alone in a dead grid = unpowered.
     const auto consumerDraw = [&](EStructureType type) {
-        return type == EStructureType::Emitter ? m_powerPerEmitter
-             : type == EStructureType::Extractor ? m_powerPerExtractor : 0.0f;
+        return type == EStructureType::Emitter ? m_emitterEnergyPerSec
+             : type == EStructureType::Extractor ? m_extractorEnergyPerSec : 0.0f;
     };
-    struct GridState { int generators = 0; float demand = 0.0f; float supply = 0.0f; float used = 0.0f; };
+    const auto energyCapacityOf = [&](EStructureType type) {
+        return type == EStructureType::Battery || type == EStructureType::Base ? m_batteryCapacity : 0.0f;
+    };
+    struct GridState
+    {
+        int generators = 0;
+        float energyCap = 0.0f, energyPool = 0.0f, demandRate = 0.0f;
+        float fuelCap = 0.0f, fuelPool = 0.0f;
+        float available = 0.0f; // energy pool + this tick's generation, drained by the consumer pass
+    };
     std::unordered_map<uint16, GridState> grids;
+    const float dt = glm::max(deltaSec, 1e-6f);
     for (const Structure& s : m_structures)
     {
         GridState& g = grids[s.gridId];
         if (s.type == EStructureType::Generator) ++g.generators;
-        g.demand += consumerDraw(s.type);
+        g.energyCap += energyCapacityOf(s.type);
+        g.energyPool += s.charge;
+        g.fuelCap += fuelCapacityOf(s.type);
+        g.fuelPool += s.fuel;
+        g.demandRate += consumerDraw(s.type);
+        // Grid-local FUEL income: powered fuel extractors and the Base feed THEIR grid's tanks
+        // (clamped to the tank capacity at write-back; a tank-less grid loses the fuel).
+        if ((s.type == EStructureType::Extractor && s.powered && s.nodeIndex >= 0
+                && m_nodes[s.nodeIndex].type == ENodeType::Fuel)
+            || s.type == EStructureType::Base)
+            g.fuelPool += m_fuelRate * dt;
     }
-    m_powerCapacity = 0.0f;
-    m_powerDemand = 0.0f;
-    int runningGenerators = 0;
+
+    m_genRateTotal = 0.0f;
     for (auto& [id, g] : grids)
     {
+        // Desired output = live demand + whatever refills the storage this tick; quantized up to
+        // whole generators so the battery actually charges instead of asymptoting. Fuel caps the
+        // running count: generators burn from THEIR grid's tanks and stop when they run dry.
+        const float refillRate = glm::max(0.0f, g.energyCap - g.energyPool) / dt;
+        const float desiredRate = g.demandRate + refillRate;
         int running = 0;
-        if (g.demand > 0.0f && m_fuel > 0.0f && m_powerPerGenerator > 0.0f)
-            running = glm::min(g.generators, (int)std::ceil(g.demand / m_powerPerGenerator));
-        g.supply = running * m_powerPerGenerator;
-        runningGenerators += running;
-        if (m_fuel > 0.0f) // idle generators still count as capacity — headroom the HUD can show
-            m_powerCapacity += g.generators * m_powerPerGenerator;
-        m_powerDemand += g.demand;
+        if (desiredRate > 1e-4f && g.fuelPool > 0.0f && m_genEnergyPerSec > 0.0f)
+        {
+            running = glm::min(g.generators, (int)std::ceil(desiredRate / m_genEnergyPerSec));
+            if (m_fuelBurnRate > 0.0f)
+                running = glm::min(running, (int)(g.fuelPool / (m_fuelBurnRate * dt)));
+        }
+        g.fuelPool = glm::max(0.0f, g.fuelPool - running * m_fuelBurnRate * dt);
+        g.available = g.energyPool + running * m_genEnergyPerSec * dt;
+        m_genRateTotal += running * m_genEnergyPerSec;
     }
-    m_fuel = glm::max(0.0f, m_fuel - runningGenerators * m_fuelBurnRate * deltaSec);
 
-    m_powerUsed = 0.0f;
+    m_useRateTotal = 0.0f;
     for (Structure& s : m_structures)
     {
         const float draw = consumerDraw(s.type);
         if (draw <= 0.0f)
             continue;
         GridState& g = grids[s.gridId];
-        s.powered = g.used + draw <= g.supply + 1e-4f;
+        s.powered = g.available >= draw * dt - 1e-4f;
         if (s.powered)
         {
-            g.used += draw;
-            m_powerUsed += draw;
+            g.available -= draw * dt;
+            m_useRateTotal += draw;
         }
         if (s.type == EStructureType::Emitter)
             if (ForceComponent* fc = getComponent<ForceComponent>(s.entity.get()))
@@ -371,6 +405,30 @@ void StructureSystem::tickPower(float deltaSec)
                 fc->emitter.setOutput(s.powered ? m_emitterOutput : 0.0f);
                 fc->emitter.setReach(m_emitterReach);
             }
+    }
+
+    // Write both pools back into their storage members proportional to capacity, clamped (surplus
+    // over full storage is lost — but generators don't run for it, see desiredRate).
+    m_gridEnergyTotal = 0.0f;
+    m_gridCapacityTotal = 0.0f;
+    m_fuelTotal = 0.0f;
+    for (auto& [id, g] : grids)
+    {
+        g.energyPool = glm::min(g.available, g.energyCap);
+        g.fuelPool = glm::min(g.fuelPool, g.fuelCap);
+        m_gridEnergyTotal += g.energyPool;
+        m_gridCapacityTotal += g.energyCap;
+        m_fuelTotal += g.fuelPool;
+    }
+    for (Structure& s : m_structures)
+    {
+        const GridState& g = grids[s.gridId];
+        const float energyCap = energyCapacityOf(s.type);
+        if (energyCap > 0.0f)
+            s.charge = g.energyCap > 0.0f ? g.energyPool * (energyCap / g.energyCap) : 0.0f;
+        const float fuelCap = fuelCapacityOf(s.type);
+        if (fuelCap > 0.0f)
+            s.fuel = g.fuelCap > 0.0f ? g.fuelPool * (fuelCap / g.fuelCap) : 0.0f;
     }
 }
 
@@ -409,21 +467,16 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
         applyDemolishRequest(id);
     m_demolishRequests.clear();
 
-    // A node produces only through a POWERED extractor (powered = last tick's power state — one
-    // tick of lag is invisible at these rates). The Base provides one extractor's worth of EACH
-    // resource, unconditionally (it is self-powered).
+    // MINERAL income (global build currency; powered = last tick's power state — one tick of lag
+    // is invisible at these rates). The Base provides one extractor's worth unconditionally.
+    // FUEL income is grid-local and lives in tickPower.
     for (const Structure& s : m_structures)
     {
-        if (s.type == EStructureType::Extractor && s.powered && s.nodeIndex >= 0)
-        {
-            if (m_nodes[s.nodeIndex].type == ENodeType::Mineral) m_minerals += m_mineralRate * deltaSec;
-            else                                                 m_fuel += m_fuelRate * deltaSec;
-        }
-        else if (s.type == EStructureType::Base)
-        {
+        if (s.type == EStructureType::Extractor && s.powered && s.nodeIndex >= 0
+            && m_nodes[s.nodeIndex].type == ENodeType::Mineral)
             m_minerals += m_mineralRate * deltaSec;
-            m_fuel += m_fuelRate * deltaSec;
-        }
+        else if (s.type == EStructureType::Base)
+            m_minerals += m_mineralRate * deltaSec;
     }
 
     // Damage BEFORE the grid rebuild: tickDamage erases from m_structures, and m_links carries raw

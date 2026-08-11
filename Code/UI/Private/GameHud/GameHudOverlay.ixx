@@ -109,19 +109,23 @@ public:
 				text(ImVec2(label.screenPos.x - ts.x * 0.5f, y - ts.y - 2.0f * s), labelFont,
 					col(1.0f, 1.0f, 1.0f, 1.0f), label.title.c_str());
 			}
-			if (label.barMax > 0.0f)
+			const auto miniBar = [&](float value, float maxValue, const glm::vec3& color)
 			{
 				const float barW = 52.0f * s * e;
 				const float barH = 6.0f * s * e;
 				const ImVec2 bMin(label.screenPos.x - barW * 0.5f, y);
 				const ImVec2 bMax(label.screenPos.x + barW * 0.5f, y + barH);
 				dl->AddRectFilled(bMin, bMax, col(0.06f, 0.06f, 0.08f, 0.75f), 2.0f * s);
-				const float frac = glm::clamp(label.barValue / label.barMax, 0.0f, 1.0f);
+				const float frac = glm::clamp(value / maxValue, 0.0f, 1.0f);
 				if (frac > 0.0f)
-					dl->AddRectFilled(bMin, ImVec2(bMin.x + barW * frac, bMax.y), colV(label.barColor, 0.95f), 2.0f * s);
+					dl->AddRectFilled(bMin, ImVec2(bMin.x + barW * frac, bMax.y), colV(color, 0.95f), 2.0f * s);
 				dl->AddRect(bMin, bMax, col(0.0f, 0.0f, 0.0f, 0.9f), 2.0f * s, 0, 1.0f * s);
 				y += barH + 3.0f * s;
-			}
+			};
+			if (label.barMax > 0.0f)
+				miniBar(label.barValue, label.barMax, label.barColor);
+			if (label.bar2Max > 0.0f)
+				miniBar(label.bar2Value, label.bar2Max, label.bar2Color);
 			// info: '\n'-separated lines, centered under the bar
 			const char* line = label.info.c_str();
 			while (*line)
