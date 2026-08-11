@@ -21,6 +21,36 @@ import :Player;
 import :Structures;
 import :Npc;
 
+// The grid hotbar's category tables. Key 1..3 picks a category at the top level; inside one,
+// keys 1..N arm an item and key 0 backs out.
+static constexpr const char* c_buildCategories[3] = { "Emitters", "Production", "Distribution" };
+static constexpr BuildItem c_emitterItems[] = {
+    { "Emitter", false, EStructureType::Emitter, ECableType::Basic },
+};
+static constexpr BuildItem c_productionItems[] = {
+    { "Generator", false, EStructureType::Generator, ECableType::Basic },
+    { "Solar", false, EStructureType::Solar, ECableType::Basic },
+    { "Extractor", false, EStructureType::Extractor, ECableType::Basic },
+    { "Fabricator", false, EStructureType::Fabricator, ECableType::Basic },
+};
+static constexpr BuildItem c_distributionItems[] = {
+    { "Transmitter", false, EStructureType::Transmitter, ECableType::Basic },
+    { "Battery", false, EStructureType::Battery, ECableType::Basic },
+    { "Fuel tank", false, EStructureType::FuelTank, ECableType::Basic },
+    { "Cable", true, EStructureType::Emitter, ECableType::Basic },
+    { "H-Cable", true, EStructureType::Emitter, ECableType::Heavy },
+};
+static std::span<const BuildItem> buildCategoryItems(int category)
+{
+    switch (category)
+    {
+    case 0: return c_emitterItems;
+    case 1: return c_productionItems;
+    case 2: return c_distributionItems;
+    default: return {};
+    }
+}
+
 static uint32 packColor(const glm::vec3& c)
 {
     const glm::vec3 s = glm::clamp(c, 0.0f, 1.0f) * 255.0f;
@@ -107,16 +137,8 @@ void GameMatch::spawnWorld()
     m_structures.spawnBase(m_basePos); // before the player: the spawn point sits in its bubble
     m_player.spawn(m_playerStart);
 
-    Globals::gameHud.setSlot(0, "Emitter", 0);     // slot keys 1..5; activating the hotbar also
-    Globals::gameHud.setSlot(1, "Generator", 0);   // reroutes those keys away from the testbed spawns
-    Globals::gameHud.setSlot(2, "Transmitter", 0);
-    Globals::gameHud.setSlot(3, "Extractor", 0);
-    Globals::gameHud.setSlot(4, "Battery", 0);
-    Globals::gameHud.setSlot(5, "Fuel tank", 0);
-    Globals::gameHud.setSlot(6, "Cable", 0);       // connect tools, not structures
-    Globals::gameHud.setSlot(7, "H-Cable", 0);
-    Globals::gameHud.setHotbarVisible(false);      // hidden until Build mode (B) — see setMode
-    Globals::gameHud.selectSlot(0);
+    Globals::gameHud.setHotbarVisible(false); // hidden until Build mode (B); setMode populates the
+    Globals::gameHud.selectSlot(0);           // grid hotbar (categories -> items) when entered
 
     Log::info("Game mode: B = build (hotbar 1-7, LMB/F confirms), X = delete, V = select. The enemy "
               "field surrounds you — build powered Emitters on the frontier to expand the safe zone");
@@ -146,13 +168,10 @@ void GameMatch::update(float deltaSec)
         m_npcs.applyPlayerMelee(m_player.bodyPos(), m_player.meleeDir(), m_player.meleeRange());
 }
 
-GameMatch::Aim GameMatch::computeAim(const Camera& camera) const
+GameMatch::Aim GameMatch::computeAim(const Camera& camera, EStructureType type) const
 {
     Aim aim;
-    const int slot = Globals::gameHud.getSelectedSlot();
-    if (slot < 0 || slot >= NumPlaceableStructures) // the Base is never placeable
-        return aim;
-    aim.type = (EStructureType)slot;
+    aim.type = type;
 
     glm::vec3 pos;
     if (!aimGroundPoint(camera, pos))
@@ -203,6 +222,31 @@ int GameMatch::hoveredStructure(const Camera& camera) const
     return m_structures.findConnectableNear(aimPos, 4.0f);
 }
 
+// Slot labels/counts for the current grid level: categories at the top, the picked category's
+// items (+ "Back" on key 0) inside one. Called every Build-mode frame — counts stay live.
+void GameMatch::refreshBuildHotbar()
+{
+    GameHud& hud = Globals::gameHud;
+    if (m_buildCategory < 0)
+    {
+        for (int i = 0; i < 3; ++i)
+            hud.setSlot(i, c_buildCategories[i], 0);
+        for (int i = 3; i < GameHud::NumSlots; ++i)
+            hud.clearSlot(i);
+        return;
+    }
+    const std::span<const BuildItem> items = buildCategoryItems(m_buildCategory);
+    for (int i = 0; i < (int)items.size(); ++i)
+        hud.setSlot(i, items[i].label, items[i].isCable
+            ? m_structures.cableCount(items[i].cable)
+            : m_structures.affordableCount(items[i].structure));
+    for (int i = (int)items.size(); i < GameHud::NumSlots - 1; ++i)
+        hud.clearSlot(i);
+    hud.setSlot(GameHud::NumSlots - 1, "Back", 0); // key 0
+    if (m_buildSelection >= 0)
+        hud.selectSlot(m_buildSelection);
+}
+
 void GameMatch::setMode(EPlayerMode mode)
 {
     if (m_mode == mode)
@@ -210,10 +254,15 @@ void GameMatch::setMode(EPlayerMode mode)
     m_mode = mode;
     m_cablePendingId = 0;
     m_selectedId = 0;
+    m_buildCategory = -1;
+    m_buildSelection = -1;
     Globals::gameHud.setHotbarVisible(mode == EPlayerMode::Build); // the hotbar IS the Build indicator
+    if (mode == EPlayerMode::Build)
+        refreshBuildHotbar();
     switch (mode)
     {
-    case EPlayerMode::Build:  Log::info("Build mode (B): hotbar 1-8 picks, LMB/F places — B to exit"); break;
+    case EPlayerMode::Build:  Log::info("Build mode (B): 1-3 picks a category, then 1-9 arms an item "
+                                        "(0 = back), LMB/F places — B to exit"); break;
     case EPlayerMode::Delete: Log::info("Delete mode (X): click a structure to demolish — X to exit"); break;
     case EPlayerMode::Select: Log::info("Select mode (V): click a structure to inspect — V to exit"); break;
     case EPlayerMode::None:   Log::info("Combat mode: LMB shoot, F melee — B build, X delete, V select"); break;
@@ -292,15 +341,46 @@ void GameMatch::updateCableTool(const Camera& camera, bool confirmEdge, ECableTy
 
 void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge)
 {
-    const int slot = Globals::gameHud.getSelectedSlot();
-    const int cableType = slot - NumPlaceableStructures; // slots after the placeables = cable tools
-    if (cableType >= 0 && cableType < (int)ECableType::Count)
+    // Grid navigation: polled 1..9,0 edges (SDL scancodes are contiguous; InputControls routes the
+    // same keys to the HUD's selectSlot for the highlight — harmless duplication).
+    Input& input = Globals::input;
+    const bool focus = input.isWindowHasFocus() && Globals::ui.isViewportFocused();
+    int pressed = -1;
+    for (int k = 0; k < 10; ++k)
     {
-        updateCableTool(camera, confirmEdge, (ECableType)cableType);
+        const bool down = focus && input.isKeyDown((SDL_Scancode)((int)SDL_Scancode::SDL_SCANCODE_1 + k));
+        if (down && !m_numKeyWasDown[k])
+            pressed = k;
+        m_numKeyWasDown[k] = down;
+    }
+    if (pressed >= 0)
+    {
+        m_cablePendingId = 0; // switching tools drops a half-made connection
+        if (m_buildCategory < 0)
+        {
+            if (pressed < 3)
+                m_buildCategory = pressed;
+        }
+        else if (pressed == 9) // key 0 = Back
+        {
+            m_buildCategory = -1;
+            m_buildSelection = -1;
+        }
+        else if (pressed < (int)buildCategoryItems(m_buildCategory).size())
+            m_buildSelection = pressed;
+    }
+    refreshBuildHotbar();
+
+    if (m_buildCategory < 0 || m_buildSelection < 0)
+        return; // nothing armed — browsing the grid
+    const BuildItem& item = buildCategoryItems(m_buildCategory)[m_buildSelection];
+    if (item.isCable)
+    {
+        updateCableTool(camera, confirmEdge, item.cable);
         return;
     }
-    m_cablePendingId = 0; // leaving the cable tool drops a half-made connection
-    const Aim aim = computeAim(camera);
+    m_cablePendingId = 0;
+    const Aim aim = computeAim(camera, item.structure);
     if (!aim.valid)
         return;
     const uint32 color = packColor(aim.affordable ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.3f, 0.2f));
@@ -451,14 +531,6 @@ void GameMatch::updateHud()
         glm::vec3(1.0f, 0.9f, 0.3f));
     hud.setCounter("Energy gen/s", m_structures.energyGenPerSec(), 1, glm::vec3(1.0f, 0.9f, 0.3f));
     hud.setCounter("Energy use/s", m_structures.energyUsePerSec(), 1, glm::vec3(1.0f, 0.9f, 0.3f));
-    hud.setSlotCount(0, m_structures.affordableCount(EStructureType::Emitter));
-    hud.setSlotCount(1, m_structures.affordableCount(EStructureType::Generator));
-    hud.setSlotCount(2, m_structures.affordableCount(EStructureType::Transmitter));
-    hud.setSlotCount(3, m_structures.affordableCount(EStructureType::Extractor));
-    hud.setSlotCount(4, m_structures.affordableCount(EStructureType::Battery));
-    hud.setSlotCount(5, m_structures.affordableCount(EStructureType::FuelTank));
-    hud.setSlotCount(6, m_structures.cableCount(ECableType::Basic)); // cables are free — counts show existing
-    hud.setSlotCount(7, m_structures.cableCount(ECableType::Heavy));
 }
 
 void GameMatch::updateWindowed(Camera& camera, float deltaSec)

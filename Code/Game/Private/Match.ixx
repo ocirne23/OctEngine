@@ -11,6 +11,17 @@ import :Player;
 import :Structures;
 import :Npc;
 
+// One entry of the RTS grid hotbar (Build mode): the top level shows the CATEGORIES (keys 1..3);
+// picking one repopulates the hotbar with its items (keys 1..N arm the ghost/tool, key 0 = Back).
+// Partition-scope so Match.cpp's category tables can be plain file statics.
+struct BuildItem
+{
+    const char* label;
+    bool isCable;
+    EStructureType structure;
+    ECableType cable;
+};
+
 // The match orchestrator: owns the whitebox world (ground, objective, world-scale enemy emitter),
 // the player, the structure/economy system and the follow camera. MUST be a stack local in main()
 // (holds EntityPtrs and Force handles — a global would need an InitSeg slot).
@@ -44,12 +55,13 @@ private:
         int nodeIndex = -1; // Extractor: the free node the ghost snapped to
     };
     // Interaction modes: neutral by default — clicking does NOTHING until a mode key is pressed.
-    // B = Build (hotbar placement + cable tool), X = Delete, V = Select. Pressing the active
+    // B = Build (grid hotbar + placement/cable tools), X = Delete, V = Select. Pressing the active
     // mode's key returns to neutral; the hotbar is visible only in Build mode (= mode indicator).
     enum class EPlayerMode : uint8 { None, Build, Delete, Select };
 
-    Aim computeAim(const Camera& camera) const;
+    Aim computeAim(const Camera& camera, EStructureType type) const;
     bool aimGroundPoint(const Camera& camera, glm::vec3& outPos) const; // cursor ray vs colliders/ground plane
+    void refreshBuildHotbar(); // repopulates slot labels/counts for the current grid level
     void updateModeSwitching();
     void updateBuildMode(const Camera& camera, bool confirmEdge);
     void updateCableTool(const Camera& camera, bool confirmEdge, ECableType type);
@@ -79,6 +91,9 @@ private:
     EPlayerMode m_mode = EPlayerMode::None;
     uint32 m_selectedId = 0;     // Select mode: highlighted structure (stable id; 0 = none)
     bool m_modeKeyWasDown[3] = { false, false, false }; // B, X, V edges
+    int m_buildCategory = -1;    // grid hotbar: -1 = category level, else index into the categories
+    int m_buildSelection = -1;   // armed item within the category (-1 = nothing armed, no ghost)
+    bool m_numKeyWasDown[10] = {}; // 1..9,0 edges (polled — the grid logic reads raw keys)
 
     bool m_enabled = false;
 

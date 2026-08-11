@@ -142,7 +142,7 @@ void NpcSystem::tickAuthority(const glm::vec3& spawnCenter, float spawnRingRadiu
         int target = u.targetId != 0 ? structures.structureIndexById(u.targetId) : -1;
         if (target < 0 || u.retargetTimer <= 0.0f)
         {
-            u.targetId = structures.randomTargetStructureId();
+            u.targetId = structures.randomTargetStructureId(pos);
             u.retargetTimer = m_retargetInterval * glm::linearRand(0.7f, 1.3f);
             target = u.targetId != 0 ? structures.structureIndexById(u.targetId) : -1;
         }

@@ -31,8 +31,8 @@ import Force;
 //  - The BASE exists from game start (spawnBase, never placeable): respawn anchor, always-on
 //    emitter (self-powered), passive income equal to one extractor of EACH type, cable-connectable
 //    like a building, and is invulnerable (a dead base would soft-lock the respawn).
-export enum class EStructureType : uint8 { Emitter, Generator, Transmitter, Extractor, Battery, FuelTank, Base, Count };
-export constexpr int NumPlaceableStructures = 6; // hotbar slots 0..5; Base is spawned, never placed
+export enum class EStructureType : uint8 { Emitter, Generator, Transmitter, Extractor, Battery, FuelTank, Solar, Fabricator, Base, Count };
+export constexpr int NumPlaceableStructures = 8; // everything but the Base (spawned, never placed)
 
 export enum class ENodeType : uint8 { Mineral, Fuel };
 export enum class ECableType : uint8 { Basic, Heavy, Count };
@@ -55,9 +55,11 @@ public:
     void queueCableRequest(uint32 idA, uint32 idB, ECableType type);
     // Delete mode: removes the structure (no refund). The Base is refused at apply time.
     void queueDemolishRequest(uint32 id);
-    // NPC attack surface: a random damageable structure (Base excluded; 0 = none exist), and
-    // direct damage by stable id (main thread; death cleanup in the next tickDamage sweep).
-    uint32 randomTargetStructureId() const;
+    // NPC attack surface: a random pick among the 4 CLOSEST damageable structures to nearPos
+    // (Base excluded; 0 = none exist) — units harass their neighbourhood instead of marching
+    // across the map — and direct damage by stable id (main thread; death cleanup in the next
+    // tickDamage sweep).
+    uint32 randomTargetStructureId(const glm::vec3& nearPos) const;
     void damageStructure(uint32 id, float amount);
     // Enemy units pressing on emitter bubbles cost energy: deposits the FULL energyPerSec onto the
     // NEAREST ACTIVE emitter within `radius` (flat — in range is in range) — a unit physically
@@ -136,7 +138,9 @@ public:
         {
         case EStructureType::Emitter:
         case EStructureType::Extractor:
-        case EStructureType::Transmitter: return m_internalBuffer;
+        case EStructureType::Transmitter:
+        case EStructureType::Solar:
+        case EStructureType::Fabricator:  return m_internalBuffer;
         case EStructureType::Generator:   return m_generatorBuffer;
         case EStructureType::Battery:
         case EStructureType::Base:        return m_batteryCapacity;
@@ -241,9 +245,13 @@ private:
     float m_extractorSnapRadius = 5.0f; // aim within this of a free node snaps the extractor onto it
     float m_mineralRate = 5.0f;      // minerals/s per powered mineral extractor
     float m_fuelRate = 5.0f;         // fuel/s per powered fuel extractor
-    float m_costs[6] = { 30.0f, 50.0f, 15.0f, 40.0f, 40.0f, 25.0f }; // Emitter, Generator, Transmitter, Extractor, Battery, FuelTank
+    float m_costs[8] = { 30.0f, 50.0f, 15.0f, 40.0f, 40.0f, 25.0f, 20.0f, 60.0f }; // Emitter, Generator,
+                        // Transmitter, Extractor, Battery, FuelTank, Solar, Fabricator
     float m_fuelBurnRate = 1.0f;        // fuel/s per RUNNING generator
     float m_genEnergyPerSec = 10.0f;    // energy/s a running generator adds to its grid
+    float m_solarEnergyPerSec = 1.5f;   // energy/s a solar panel trickles into its buffer (no fuel)
+    float m_fabricatorEnergyPerSec = 4.0f;  // energy/s a fabricator drains while producing
+    float m_fabricatorMineralsPerSec = 2.0f; // minerals/s a POWERED fabricator produces
     float m_emitterEnergyPerSec = 1.0f; // energy/s an emitter drains at rest
     float m_emitterPressureDraw = 3.0f; // EXTRA energy/s per unit of pressure on the emitter's
                                         // field — contested emitters cost more to hold

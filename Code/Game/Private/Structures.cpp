@@ -11,12 +11,13 @@ import Force;
 import RendererVK;
 import :Structures;
 
-static constexpr const char* structurePrefabs[7] = {
+static constexpr const char* structurePrefabs[9] = {
     "Entities/Game/emitter.pre", "Entities/Game/generator.pre", "Entities/Game/transmitter.pre",
     "Entities/Game/extractor.pre", "Entities/Game/battery.pre", "Entities/Game/fueltank.pre",
-    "Entities/Game/base.pre" };
-static constexpr const char* structureNames[7] = { "Emitter", "Generator", "Transmitter", "Extractor", "Battery", "Fuel tank", "Base" };
-static constexpr float structureSpawnHeights[7] = { 1.5f, 0.75f, 2.0f, 0.4f, 1.0f, 1.4f, 1.5f }; // origin above the ground hit
+    "Entities/Game/solar.pre", "Entities/Game/fabricator.pre", "Entities/Game/base.pre" };
+static constexpr const char* structureNames[9] = { "Emitter", "Generator", "Transmitter", "Extractor",
+    "Battery", "Fuel tank", "Solar", "Fabricator", "Base" };
+static constexpr float structureSpawnHeights[9] = { 1.5f, 0.75f, 2.0f, 0.4f, 1.0f, 1.4f, 1.0f, 1.0f, 1.5f }; // origin above the ground hit
 
 const char* structureTypeName(EStructureType type)
 {
@@ -60,6 +61,11 @@ void StructureSystem::registerTweaks()
     Tweak::floatVar("Game/Economy", "Extractor cost", &m_costs[3], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Battery cost", &m_costs[4], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Fuel tank cost", &m_costs[5], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Solar cost", &m_costs[6], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Fabricator cost", &m_costs[7], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Solar energy/s", &m_solarEnergyPerSec, 0.0f, 20.0f, 0.1f);
+    Tweak::floatVar("Game/Economy", "Fabricator energy/s", &m_fabricatorEnergyPerSec, 0.1f, 20.0f, 0.1f);
+    Tweak::floatVar("Game/Economy", "Fabricator minerals/s", &m_fabricatorMineralsPerSec, 0.0f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Economy", "Fuel tank capacity", &m_fuelTankCapacity, 10.0f, 1000.0f, 5.0f);
     Tweak::floatVar("Game/Economy", "Fuel burn/s per generator", &m_fuelBurnRate, 0.0f, 20.0f, 0.05f);
     Tweak::floatVar("Game/Economy", "Energy gen/s per generator", &m_genEnergyPerSec, 0.5f, 50.0f, 0.25f);
@@ -176,21 +182,32 @@ int StructureSystem::structureIndexById(uint32 id) const
     return -1;
 }
 
-uint32 StructureSystem::randomTargetStructureId() const
+uint32 StructureSystem::randomTargetStructureId(const glm::vec3& nearPos) const
 {
-    uint32 candidates[256];
+    // Keep the 4 nearest damageable structures (insertion into a tiny sorted array), then roll
+    // among them — local harassment with some unpredictability, no cross-map beelines.
+    constexpr int MaxCandidates = 4;
+    struct Candidate { float distSq; uint32 id; };
+    Candidate best[MaxCandidates];
     int count = 0;
     for (const Structure& s : m_structures)
     {
         if (s.type == EStructureType::Base)
             continue; // invulnerable — gnawing it would be a soft-lock treadmill
-        candidates[count++] = s.id;
-        if (count == 256)
-            break;
+        const glm::vec2 d = glm::vec2(s.pos.x, s.pos.z) - glm::vec2(nearPos.x, nearPos.z);
+        const Candidate c{ glm::dot(d, d), s.id };
+        if (count < MaxCandidates)
+            best[count++] = c;
+        else if (c.distSq < best[MaxCandidates - 1].distSq)
+            best[MaxCandidates - 1] = c;
+        else
+            continue;
+        for (int i = glm::min(count, MaxCandidates) - 1; i > 0 && best[i].distSq < best[i - 1].distSq; --i)
+            std::swap(best[i], best[i - 1]);
     }
     if (count == 0)
         return 0;
-    return candidates[glm::clamp((int)glm::linearRand(0.0f, (float)count), 0, count - 1)];
+    return best[glm::clamp((int)glm::linearRand(0.0f, (float)count), 0, count - 1)].id;
 }
 
 void StructureSystem::damageStructure(uint32 id, float amount)
@@ -377,7 +394,8 @@ void StructureSystem::tickPower(float deltaSec)
     // no fuel burn); consumers drain their internal battery. FUEL stays grid-pooled (union-find).
     const auto consumerDraw = [&](EStructureType type) {
         return type == EStructureType::Emitter ? m_emitterEnergyPerSec
-             : type == EStructureType::Extractor ? m_extractorEnergyPerSec : 0.0f;
+             : type == EStructureType::Extractor ? m_extractorEnergyPerSec
+             : type == EStructureType::Fabricator ? m_fabricatorEnergyPerSec : 0.0f;
     };
     const float dt = glm::max(deltaSec, 1e-6f);
 
@@ -395,10 +413,19 @@ void StructureSystem::tickPower(float deltaSec)
             g.pool += m_fuelRate * dt;
     }
 
-    // ---- generators: produce into their own buffer, burning grid fuel proportionally ----
+    // ---- producers: generators burn grid fuel, solar panels trickle for free — both into their
+    // ---- OWN buffer only (full buffer = export-limited = production stops) ----
     m_genRateTotal = 0.0f;
     for (Structure& s : m_structures)
     {
+        if (s.type == EStructureType::Solar)
+        {
+            const float add = glm::min(m_solarEnergyPerSec * dt,
+                glm::max(energyCapacityOf(s.type) - s.charge, 0.0f));
+            s.charge += add;
+            m_genRateTotal += add / dt;
+            continue;
+        }
         if (s.type != EStructureType::Generator || m_genEnergyPerSec <= 0.0f)
             continue;
         GridFuel& g = fuel[s.gridId];
@@ -584,6 +611,8 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
         if (s.type == EStructureType::Extractor && s.powered && s.nodeIndex >= 0
             && m_nodes[s.nodeIndex].type == ENodeType::Mineral)
             m_minerals += m_mineralRate * deltaSec;
+        else if (s.type == EStructureType::Fabricator && s.powered)
+            m_minerals += m_fabricatorMineralsPerSec * deltaSec; // energy -> minerals converter
         else if (s.type == EStructureType::Base)
             m_minerals += m_mineralRate * deltaSec;
     }
@@ -635,6 +664,7 @@ void StructureSystem::drawDebug() const
     // answerable at a glance (unconnected extractors show it too — cable them to a powered grid).
     const uint32 unpoweredColor = packColor(glm::vec3(1.0f, 0.25f, 0.2f));
     for (const Structure& s : m_structures)
-        if ((s.type == EStructureType::Emitter || s.type == EStructureType::Extractor) && !s.powered)
+        if ((s.type == EStructureType::Emitter || s.type == EStructureType::Extractor
+            || s.type == EStructureType::Fabricator) && !s.powered)
             drawCircle(glm::vec3(s.pos.x, 0.3f, s.pos.z), 1.0f, unpoweredColor, 16);
 }

@@ -1,0 +1,12 @@
+# Solar panel: trickles a small amount of energy into its own buffer, no fuel needed. Flat raised
+# panel look. Spawned origin 1.0 above ground.
+Prefab gameSolar
+	Component Render
+		ObjectContainer wireshapes
+		Node Cube
+		Type StaticMesh
+		Scale 1.2 0.08 1.2
+	Component Physics
+		Body Static
+		Shape Box
+		HalfExtents 1.2 0.3 1.2
