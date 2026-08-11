@@ -46,6 +46,8 @@ void GamePlayer::spawn(const glm::vec3& pos)
     m_energy = m_energyMax;
     m_shieldCollapsed = false;
     m_graceTimer = m_spawnGraceSec;
+    for (float& h : m_outputHistory)
+        h = m_shieldMaxOutput;
     m_entity = Globals::world.spawnAssetFile("Entities/Game/player.pre", Transform(pos), true);
     if (m_entity)
     {
@@ -73,6 +75,7 @@ void GamePlayer::tickCombat(const glm::vec3& cameraForwardPlanar, float deltaSec
     m_fireCooldown = glm::max(0.0f, m_fireCooldown - deltaSec);
     m_meleeCooldown = glm::max(0.0f, m_meleeCooldown - deltaSec);
     m_meleeFlash = glm::max(0.0f, m_meleeFlash - deltaSec);
+    m_meleeSwung = false;
     PhysicsComponent* ppc = m_entity ? getComponent<PhysicsComponent>(m_entity.get()) : nullptr;
     const bool alive = ppc && ppc->body.isValid();
 
@@ -95,9 +98,12 @@ void GamePlayer::tickCombat(const glm::vec3& cameraForwardPlanar, float deltaSec
 
     if (m_meleeQueued && m_meleeCooldown <= 0.0f && alive)
     {
-        // Melee: shove every dynamic body in a ~120° planar cone in front of the facing (root-list
-        // scan is the engine's lookup pattern; static bodies ignore impulses so no type filtering
-        // beyond dynamic is needed).
+        // Melee: shove every dynamic body in a ~120° planar cone toward the CURSOR (the queued aim
+        // direction; camera forward is only the no-aim fallback). Root-list scan is the engine's
+        // lookup pattern; static bodies ignore impulses so no type filtering beyond dynamic.
+        m_meleeDir = glm::dot(m_queuedMeleeDir, m_queuedMeleeDir) > 1e-6f
+            ? glm::normalize(glm::vec3(m_queuedMeleeDir.x, 0.0f, m_queuedMeleeDir.z))
+            : cameraForwardPlanar;
         const glm::vec3 selfPos = ppc->body.getPosition();
         for (const EntityPtr& root : Globals::world.rootEntities())
         {
@@ -111,13 +117,14 @@ void GamePlayer::tickCombat(const glm::vec3& cameraForwardPlanar, float deltaSec
             const float dist = glm::length(planar);
             if (dist > m_meleeRange || dist < 1e-3f)
                 continue;
-            if (glm::dot(planar / dist, glm::vec2(cameraForwardPlanar.x, cameraForwardPlanar.z)) < 0.5f)
+            if (glm::dot(planar / dist, glm::vec2(m_meleeDir.x, m_meleeDir.z)) < 0.5f)
                 continue; // outside the 120° cone
             const glm::vec3 shove = glm::normalize(glm::vec3(d.x, 0.0f, d.z)) + glm::vec3(0.0f, 0.4f, 0.0f);
             pc->body.applyImpulse(shove * m_meleeImpulse);
         }
         m_meleeCooldown = m_meleeInterval;
         m_meleeFlash = 0.18f;
+        m_meleeSwung = true;
     }
     m_meleeQueued = false;
 
@@ -243,13 +250,22 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
         m_shieldCollapsed = false;
     fc->emitter.setOutput(m_shieldCollapsed ? 0.01f : m_shieldMaxOutput);
 
-    const glm::vec3 force = fc->emitter.getAppliedForce();
+    // Physical push-out, INDEPENDENT of the shield state: getAppliedForce scales with the
+    // emitter's own output, so it is normalized by the output that produced the readback (the
+    // oldest history entry, matching the ~2-frame latency — dividing by the CURRENT output would
+    // spike ~150x on the collapse frame). A collapsed shield pushes exactly like a full one.
+    const glm::vec3 force = fc->emitter.getAppliedForce() / glm::max(m_outputHistory[0], 1e-3f);
     if (glm::dot(force, force) > 1e-8f)
         pc->body.applyImpulse(force * deltaSec * m_shieldPushGain * pressure * drainMult);
+    m_outputHistory[0] = m_outputHistory[1];
+    m_outputHistory[1] = m_outputHistory[2];
+    m_outputHistory[2] = m_shieldCollapsed ? 0.01f : m_shieldMaxOutput;
 
     const float iso = Globals::forceSystem.getParams().isoThreshold;
     if (!inGrace && coverSurplus <= 0.0f && shieldRadius() < m_damageRadius && pressure > iso)
         m_health -= m_healthDrainRate * deltaSec;
+    if (bodyPos.y < -20.0f)
+        m_health = 0.0f; // fell out of the world — respawn below
 
     if (m_health <= 0.0f)
     {

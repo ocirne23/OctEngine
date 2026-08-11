@@ -14,6 +14,6 @@ Prefab gameBase
 		HalfExtents 2 1.5 2
 	Component Force
 		Team 0
-		Output 1.3
-		Reach 16
+		Output 2.4
+		Reach 24
 		Centered true

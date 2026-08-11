@@ -19,6 +19,7 @@ import :Match;
 import :GameCamera;
 import :Player;
 import :Structures;
+import :Npc;
 
 static uint32 packColor(const glm::vec3& c)
 {
@@ -43,15 +44,13 @@ GameMatch::GameMatch(bool enabled) : m_enabled(enabled)
     if (!m_enabled)
         return;
 
-    Tweak::floatVar("Game/World", "Field output max", &m_worldOutputMax, 0.2f, 10.0f, 0.05f);
-    Tweak::floatVar("Game/World", "Field output min", &m_worldOutputMin, 0.0f, 2.0f, 0.01f);
-    Tweak::floatVar("Game/World", "Field reach", &m_worldReach, 50.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/World", "Suppress rate", &m_suppressRate, 0.0f, 1.0f, 0.002f);
-    Tweak::floatVar("Game/World", "Regrow rate", &m_regrowRate, 0.0f, 1.0f, 0.002f);
-    Tweak::floatVar("Game/World", "Win radius", &m_winRadius, 2.0f, 50.0f, 0.5f);
+    Tweak::floatVar("Game/World", "Safe radius", &m_safeRadius, 2.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/World", "Field gradient", &m_fieldSlope, 0.001f, 0.5f, 0.001f);
+    Tweak::floatVar("Game/World", "Field max strength", &m_fieldMaxStrength, 0.2f, 10.0f, 0.05f);
     m_camera.registerTweaks();
     m_player.registerTweaks();
     m_structures.registerTweaks();
+    m_npcs.registerTweaks();
 
     m_mouse = Globals::input.addMouseListener();
     m_mouse->onMouseMoved = [this](const SDL_MouseMotionEvent& evt)
@@ -84,12 +83,12 @@ GameMatch::~GameMatch()
 {
     if (!m_enabled)
         return;
+    Globals::forceSystem.setAmbientField(1u, glm::vec2(0.0f), 0.0f, 0.0f, 0.0f); // slope 0 = off
+    m_npcs.clear();
     m_structures.clear();
     m_player.despawn();
     if (m_ground)
         Globals::world.removeRootEntity(m_ground.get());
-    if (m_objective)
-        Globals::world.removeRootEntity(m_objective.get());
 }
 
 void GameMatch::spawnWorld()
@@ -104,23 +103,6 @@ void GameMatch::spawnWorld()
         m_ground->setName("Ground");
         Globals::world.addRootEntity(m_ground);
     }
-    m_objective = Globals::world.spawnAssetFile("Entities/Game/objective.pre", Transform(m_objectivePos), true);
-    if (m_objective)
-    {
-        m_objective->setName("Objective");
-        Globals::world.addRootEntity(m_objective);
-    }
-
-    // The enemy world field: one map-scale emitter centered on the objective (focus 0.5 sphere
-    // spanning objective - up*reach/2 .. + up*reach/2). Reach exceeds the Force "Big reach
-    // threshold", so it bypasses the GPU grid into the global big-emitter list; shellAlpha 0 skips
-    // its full-screen ray march while the field keeps deforming bubbles and driving readbacks.
-    m_worldOutput = m_worldOutputMax;
-    m_worldEmitter = Globals::forceSystem.createEmitter(1u,
-        m_objectivePos - glm::vec3(0.0f, m_worldReach * 0.5f, 0.0f), glm::vec3(0.0f, 1.0f, 0.0f),
-        m_worldOutput, m_worldReach);
-    m_worldEmitter.setShellAlpha(0.0f);
-
     m_structures.spawnNodes();
     m_structures.spawnBase(m_basePos); // before the player: the spawn point sits in its bubble
     m_player.spawn(m_playerStart);
@@ -131,12 +113,13 @@ void GameMatch::spawnWorld()
     Globals::gameHud.setSlot(3, "Extractor", 0);
     Globals::gameHud.setSlot(4, "Battery", 0);
     Globals::gameHud.setSlot(5, "Fuel tank", 0);
-    Globals::gameHud.setSlot(6, "Cable", 0);       // the connect tool, not a structure
+    Globals::gameHud.setSlot(6, "Cable", 0);       // connect tools, not structures
+    Globals::gameHud.setSlot(7, "H-Cable", 0);
     Globals::gameHud.setHotbarVisible(false);      // hidden until Build mode (B) — see setMode
     Globals::gameHud.selectSlot(0);
 
-    Log::info("Game mode: B = build (hotbar 1-5, LMB/F confirms), X = delete, V = select. Build "
-              "Extractors on nodes, wire Generators to Emitters through Transmitters — reach the objective");
+    Log::info("Game mode: B = build (hotbar 1-7, LMB/F confirms), X = delete, V = select. The enemy "
+              "field surrounds you — build powered Emitters on the frontier to expand the safe zone");
 }
 
 void GameMatch::update(float deltaSec)
@@ -150,22 +133,17 @@ void GameMatch::update(float deltaSec)
     m_player.tickShieldAndHealth(deltaSec);
     m_player.tickCombat(m_camera.forwardPlanar(), deltaSec);
 
-    // World field: powered pylons near the objective grind its output down; it slowly regrows.
-    const float suppression = m_structures.suppressionAt(m_objectivePos, m_worldReach * 0.5f);
-    m_worldOutput = glm::clamp(m_worldOutput + (m_regrowRate - m_suppressRate * suppression) * deltaSec,
-        m_worldOutputMin, m_worldOutputMax);
-    m_worldEmitter.setOutput(m_worldOutput);
-    m_worldEmitter.setReach(m_worldReach);
+    // The ambient enemy field: zero within "Safe radius" of the Base, growing with distance.
+    // Pushed every tick so all three tweaks stay live.
+    Globals::forceSystem.setAmbientField(1u, glm::vec2(m_basePos.x, m_basePos.z), m_safeRadius,
+        m_fieldSlope, m_fieldMaxStrength);
 
-    if (!m_victory)
-    {
-        const glm::vec2 d = glm::vec2(playerPos.x, playerPos.z) - glm::vec2(m_objectivePos.x, m_objectivePos.z);
-        if (glm::dot(d, d) < m_winRadius * m_winRadius)
-        {
-            m_victory = true;
-            Log::info("VICTORY — the objective has been reached!");
-        }
-    }
+    // Waves spawn on the frontier ring (where the ambient crosses iso), all around the safe zone.
+    const float iso = Globals::forceSystem.getParams().isoThreshold;
+    const float frontierIso = m_safeRadius + iso / glm::max(m_fieldSlope, 1e-4f);
+    m_npcs.tickAuthority(m_basePos, frontierIso, playerPos, m_structures, deltaSec);
+    if (m_player.meleeJustSwung()) // the shove happened in tickCombat; the damage lands here
+        m_npcs.applyPlayerMelee(m_player.bodyPos(), m_player.meleeDir(), m_player.meleeRange());
 }
 
 GameMatch::Aim GameMatch::computeAim(const Camera& camera) const
@@ -235,7 +213,7 @@ void GameMatch::setMode(EPlayerMode mode)
     Globals::gameHud.setHotbarVisible(mode == EPlayerMode::Build); // the hotbar IS the Build indicator
     switch (mode)
     {
-    case EPlayerMode::Build:  Log::info("Build mode (B): hotbar 1-7 picks, LMB/F places — B to exit"); break;
+    case EPlayerMode::Build:  Log::info("Build mode (B): hotbar 1-8 picks, LMB/F places — B to exit"); break;
     case EPlayerMode::Delete: Log::info("Delete mode (X): click a structure to demolish — X to exit"); break;
     case EPlayerMode::Select: Log::info("Select mode (V): click a structure to inspect — V to exit"); break;
     case EPlayerMode::None:   Log::info("Combat mode: LMB shoot, F melee — B build, X delete, V select"); break;
@@ -261,7 +239,7 @@ void GameMatch::updateModeSwitching()
 // structure toggles the cable between them (create when valid, remove when it already exists —
 // removal works at any distance). Clicking empty ground or the selected structure clears the
 // selection. Selection persists by stable id, so a structure dying mid-selection just clears it.
-void GameMatch::updateCableTool(const Camera& camera, bool confirmEdge)
+void GameMatch::updateCableTool(const Camera& camera, bool confirmEdge, ECableType type)
 {
     const int hover = hoveredStructure(camera);
 
@@ -282,12 +260,13 @@ void GameMatch::updateCableTool(const Camera& camera, bool confirmEdge)
             packColor(glm::vec3(0.3f, 1.0f, 0.4f)), 20);
     if (pendingIdx >= 0 && hover >= 0 && hover != pendingIdx)
     {
-        // Preview: green = will connect, orange = will remove the existing cable, red = refused
-        // (building-to-building or too far — route through a transmitter).
+        // Preview: cable-type hue = will connect (yellow basic / cyan heavy), orange = will
+        // remove/retype the existing cable, red = refused (out of cable range).
+        const glm::vec3 typeHue = type == ECableType::Heavy
+            ? glm::vec3(0.3f, 0.9f, 1.0f) : glm::vec3(0.9f, 0.9f, 0.3f);
         const bool exists = m_structures.cableExists(m_cablePendingId, m_structures.structureId(hover));
         const glm::vec3 previewColor = exists ? glm::vec3(1.0f, 0.6f, 0.2f)
-            : m_structures.cableAllowed(pendingIdx, hover) ? glm::vec3(0.3f, 1.0f, 0.4f)
-                                                           : glm::vec3(1.0f, 0.3f, 0.2f);
+            : m_structures.cableAllowed(pendingIdx, hover) ? typeHue : glm::vec3(1.0f, 0.3f, 0.2f);
         Globals::rendererVK.addDebugLine(m_structures.structurePos(pendingIdx),
             m_structures.structurePos(hover), packColor(previewColor));
     }
@@ -306,7 +285,7 @@ void GameMatch::updateCableTool(const Camera& camera, bool confirmEdge)
         m_cablePendingId = 0;
     else
     {
-        m_structures.queueCableRequest(m_cablePendingId, hoverId); // validated in the authority tick
+        m_structures.queueCableRequest(m_cablePendingId, hoverId, type); // validated in the authority tick
         m_cablePendingId = 0;
     }
 }
@@ -314,9 +293,10 @@ void GameMatch::updateCableTool(const Camera& camera, bool confirmEdge)
 void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge)
 {
     const int slot = Globals::gameHud.getSelectedSlot();
-    if (slot == NumPlaceableStructures) // slot 5 = the Cable tool
+    const int cableType = slot - NumPlaceableStructures; // slots after the placeables = cable tools
+    if (cableType >= 0 && cableType < (int)ECableType::Count)
     {
-        updateCableTool(camera, confirmEdge);
+        updateCableTool(camera, confirmEdge, (ECableType)cableType);
         return;
     }
     m_cablePendingId = 0; // leaving the cable tool drops a half-made connection
@@ -391,39 +371,54 @@ void GameMatch::buildWorldLabels(const Camera& camera)
         }
         const float energyCap = m_structures.structureCapacity(i);
         const float fuelCap = m_structures.structureFuelCapacity(i);
-        if (energyCap > 0.0f) // energy storage (Battery/Base): stored-energy bar under health
-        {
-            label.bar2Value = m_structures.structureCharge(i);
-            label.bar2Max = energyCap;
-            label.bar2Color = glm::vec3(1.0f, 0.9f, 0.3f);
-        }
-        else if (fuelCap > 0.0f) // fuel storage (Generator/Fuel tank): fuel bar instead
+        // Every structure stores energy now; the second bar shows fuel on the fuel holders
+        // (Generator/Fuel tank — their buffers live in the selected info) and energy elsewhere.
+        const bool fuelBar = type == EStructureType::Generator || type == EStructureType::FuelTank;
+        if (fuelBar)
         {
             label.bar2Value = m_structures.structureFuel(i);
             label.bar2Max = fuelCap;
             label.bar2Color = glm::vec3(1.0f, 0.6f, 0.2f);
         }
+        else if (energyCap > 0.0f)
+        {
+            label.bar2Value = m_structures.structureCharge(i);
+            label.bar2Max = energyCap;
+            label.bar2Color = glm::vec3(1.0f, 0.9f, 0.3f);
+        }
         if (i == selected)
         {
             label.emphasized = true;
             label.title = structureTypeName(type);
-            char info[160];
-            if (type == EStructureType::Base) // holds energy AND fuel; the bar shows energy
-                snprintf(info, sizeof(info), "Invulnerable\nEnergy %.0f / %.0f\nFuel %.0f / %.0f",
-                    m_structures.structureCharge(i), energyCap, m_structures.structureFuel(i), fuelCap);
-            else if (energyCap > 0.0f)
-                snprintf(info, sizeof(info), "HP %.0f / %.0f\nEnergy %.0f / %.0f",
-                    label.barValue, label.barMax, label.bar2Value, label.bar2Max);
-            else if (fuelCap > 0.0f)
-                snprintf(info, sizeof(info), "HP %.0f / %.0f\nFuel %.0f / %.0f",
-                    label.barValue, label.barMax, label.bar2Value, label.bar2Max);
-            else if (consumer)
-                snprintf(info, sizeof(info), "HP %.0f / %.0f\n%s", label.barValue, label.barMax,
+            char info[192];
+            int len = type == EStructureType::Base
+                ? snprintf(info, sizeof(info), "Invulnerable")
+                : snprintf(info, sizeof(info), "HP %.0f / %.0f", label.barValue, label.barMax);
+            if (energyCap > 0.0f && len > 0 && len < (int)sizeof(info))
+                len += snprintf(info + len, sizeof(info) - len, "\nEnergy %.0f / %.0f",
+                    m_structures.structureCharge(i), energyCap);
+            if (fuelCap > 0.0f && len > 0 && len < (int)sizeof(info))
+                len += snprintf(info + len, sizeof(info) - len, "\nFuel %.0f / %.0f",
+                    m_structures.structureFuel(i), fuelCap);
+            if (consumer && len > 0 && len < (int)sizeof(info))
+                snprintf(info + len, sizeof(info) - len, "\n%s",
                     m_structures.structurePowered(i) ? "Powered" : "No power");
-            else
-                snprintf(info, sizeof(info), "HP %.0f / %.0f", label.barValue, label.barMax);
             label.info = info;
         }
+        labels.push_back(std::move(label));
+    }
+    // Enemy units: red health bar overhead.
+    for (int i = 0; i < m_npcs.unitCount(); ++i)
+    {
+        HudWorldLabel label;
+        if (!camera.worldToScreen(viewport, m_npcs.unitPos(i) + glm::vec3(0.0f, 1.6f, 0.0f), label.screenPos))
+            continue;
+        label.barValue = m_npcs.unitHealth(i);
+        label.barMax = m_npcs.unitHealthMax();
+        label.barColor = glm::vec3(1.0f, 0.25f, 0.2f);
+        label.bar2Value = m_npcs.unitEnergy(i); // shield battery (no regen) under the health bar
+        label.bar2Max = m_npcs.unitEnergyMax();
+        label.bar2Color = glm::vec3(1.0f, 0.9f, 0.3f);
         labels.push_back(std::move(label));
     }
     Globals::gameHud.setWorldLabels(std::move(labels));
@@ -431,15 +426,15 @@ void GameMatch::buildWorldLabels(const Camera& camera)
 
 void GameMatch::drawWorldFieldBoundary() const
 {
-    // The uncontested iso radius of the world sphere on the ground plane (closed form from the
-    // Force docs: r_vis = (reach/2) * sqrt(1 - sqrt(iso/output))) — a cheap readable stand-in for
-    // the suppressed-field boundary; the real equilibrium surface is not rendered (shellAlpha 0).
+    // The frontier: where the ambient enemy field crosses iso around the BASE — inside the purple
+    // ring is safe ground (the ambient itself is never rendered). A second faint ring marks the
+    // zero line (the safe radius the emitters are pushing).
     const float iso = Globals::forceSystem.getParams().isoThreshold;
-    if (m_worldOutput <= iso)
-        return;
-    const float r = 0.5f * m_worldReach * std::sqrt(1.0f - std::sqrt(iso / m_worldOutput));
-    drawCircle(glm::vec3(m_objectivePos.x, 0.5f, m_objectivePos.z), r,
+    const float frontier = m_safeRadius + iso / glm::max(m_fieldSlope, 1e-4f);
+    drawCircle(glm::vec3(m_basePos.x, 0.5f, m_basePos.z), frontier,
         packColor(glm::vec3(0.8f, 0.3f, 1.0f)), 64);
+    drawCircle(glm::vec3(m_basePos.x, 0.5f, m_basePos.z), m_safeRadius,
+        packColor(glm::vec3(0.4f, 0.2f, 0.5f)), 64);
 }
 
 void GameMatch::updateHud()
@@ -447,8 +442,6 @@ void GameMatch::updateHud()
     GameHud& hud = Globals::gameHud;
     hud.setBar("Health", m_player.health(), m_player.healthMax(), glm::vec3(0.9f, 0.25f, 0.2f));
     hud.setBar("Energy", m_player.energy(), m_player.energyMax(), glm::vec3(0.3f, 0.8f, 1.0f));
-    hud.setBar("Enemy Core", m_worldOutput - m_worldOutputMin, m_worldOutputMax - m_worldOutputMin,
-        glm::vec3(0.8f, 0.3f, 1.0f));
     hud.setCounter("Pressure", m_player.pressure(), 2, glm::vec3(0.8f, 0.4f, 1.0f));
     hud.setCounter("Density", m_player.density(), 2, glm::vec3(0.6f, 0.9f, 0.6f));
     hud.setCounter("Shield radius", m_player.shieldRadius(), 2, glm::vec3(0.3f, 0.8f, 1.0f));
@@ -464,9 +457,8 @@ void GameMatch::updateHud()
     hud.setSlotCount(3, m_structures.affordableCount(EStructureType::Extractor));
     hud.setSlotCount(4, m_structures.affordableCount(EStructureType::Battery));
     hud.setSlotCount(5, m_structures.affordableCount(EStructureType::FuelTank));
-    hud.setSlotCount(6, m_structures.cableCount()); // cables are free — the count shows existing ones
-    if (m_victory)
-        hud.setCounter("VICTORY", 1.0f, 0, glm::vec3(0.3f, 1.0f, 0.4f));
+    hud.setSlotCount(6, m_structures.cableCount(ECableType::Basic)); // cables are free — counts show existing
+    hud.setSlotCount(7, m_structures.cableCount(ECableType::Heavy));
 }
 
 void GameMatch::updateWindowed(Camera& camera, float deltaSec)
@@ -513,14 +505,21 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
             }
         }
         if (fEdge)
-            m_player.queueMelee();
+        {
+            // Swing toward the cursor; a failed aim (ray up into the sky) falls back to camera
+            // forward inside tickCombat (zero direction queued).
+            glm::vec3 target, dir(0.0f);
+            if (aimGroundPoint(camera, target))
+                dir = target - m_player.bodyPos();
+            m_player.queueMelee(dir);
+        }
         break;
     }
     }
 
-    // Melee swing visual: a brief ring in front of the player while the swing flash runs.
+    // Melee swing visual: a brief ring along the swing direction while the flash runs.
     if (m_player.meleeFlash() > 0.0f)
-        drawCircle(m_player.interpolatedPos() + m_camera.forwardPlanar() * m_player.meleeRange() * 0.6f,
+        drawCircle(m_player.interpolatedPos() + m_player.meleeDir() * m_player.meleeRange() * 0.6f,
             m_player.meleeRange() * 0.5f, packColor(glm::vec3(1.0f, 1.0f, 0.9f)), 20);
 
     // Faint ring at the estimated equilibrium shield radius — compare it against the drawn bubble.

@@ -9,6 +9,7 @@ import Input;
 import :GameCamera;
 import :Player;
 import :Structures;
+import :Npc;
 
 // The match orchestrator: owns the whitebox world (ground, objective, world-scale enemy emitter),
 // the player, the structure/economy system and the follow camera. MUST be a stack local in main()
@@ -51,7 +52,7 @@ private:
     bool aimGroundPoint(const Camera& camera, glm::vec3& outPos) const; // cursor ray vs colliders/ground plane
     void updateModeSwitching();
     void updateBuildMode(const Camera& camera, bool confirmEdge);
-    void updateCableTool(const Camera& camera, bool confirmEdge);
+    void updateCableTool(const Camera& camera, bool confirmEdge, ECableType type);
     void updateDeleteMode(const Camera& camera, bool confirmEdge);
     void updateSelectMode(const Camera& camera, bool confirmEdge);
     int hoveredStructure(const Camera& camera) const; // structure index under the cursor, or -1
@@ -63,11 +64,9 @@ private:
     GamePlayer m_player;
     GameCamera m_camera;
     StructureSystem m_structures;
+    NpcSystem m_npcs;
 
     EntityPtr m_ground;
-    EntityPtr m_objective;
-    ForceEmitter m_worldEmitter; // team 1, map-scale, shellAlpha 0 (rides the big-emitter list)
-    float m_worldOutput = 2.0f;
 
     MouseListenerHandle m_mouse; // caches window-space mouse pos, wheel + RMB drag accumulation
     glm::vec2 m_mousePos{ 0.0f };
@@ -82,16 +81,14 @@ private:
     bool m_modeKeyWasDown[3] = { false, false, false }; // B, X, V edges
 
     bool m_enabled = false;
-    bool m_victory = false;
 
-    // Tweaks ("Game/World")
-    glm::vec3 m_objectivePos{ 0.0f, 0.0f, 0.0f };
+    // Tweaks ("Game/World"). The ambient enemy field surrounds the player: zero within "Safe
+    // radius" of the BASE, growing at "Field gradient" per metre beyond it — weakest at home,
+    // strongest far out. The radius is a plain live tweak (no dynamics); local ground is won with
+    // emitter bubbles, not by moving the frontier.
     glm::vec3 m_basePos{ 0.0f, 0.0f, 146.0f };     // game-start Base; its bubble covers the spawn
     glm::vec3 m_playerStart{ 0.0f, 1.0f, 140.0f }; // just in front of the Base = the respawn point
-    float m_worldOutputMax = 2.0f;
-    float m_worldOutputMin = 0.25f;
-    float m_worldReach = 300.0f; // sphere spanning the reach: radius = half of this
-    float m_suppressRate = 0.02f; // output/s removed per unit of pylon suppression
-    float m_regrowRate = 0.01f;   // output/s regained
-    float m_winRadius = 10.0f;
+    float m_safeRadius = 30.0f;
+    float m_fieldSlope = 0.04f;     // ambient strength per metre beyond the safe radius
+    float m_fieldMaxStrength = 2.0f;
 };

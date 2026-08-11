@@ -13,15 +13,16 @@ import Force;
 //    their OWN grid's tanks (generators + Base, "Generator fuel tank" each); generators burn from
 //    their grid's pool and stop when it runs dry. Fuel never teleports between grids — haul it by
 //    cabling the fuel extractor's grid into the consumer grid.
-//  - Power flows over MANUAL CABLES (the hotbar Cable tool, no auto-linking): ANY two structures
-//    within cable range connect (two emitters relay power fine); transmitters are just the cheap
-//    long-run piece, not a topological requirement. Cable-connected structures form a GRID
-//    (union-find over cables) with an ENERGY economy: generators turn Fuel into energy/s, BATTERY
-//    structures (and the Base, worth one battery) store it — charge lives ON the storage members,
-//    so grid merges pool it, splits carry it, and a destroyed battery loses its charge. Consumers
-//    (emitters, extractors) drain stored+generated energy in placement order — beyond it emitters
-//    go dark and extractors stop harvesting. Generators only run against demand or an unfilled
-//    battery (no idle Fuel burn); a storage-less grid still works as pure throughput.
+//  - ENERGY is a FLOW NETWORK over MANUAL CABLES (no auto-linking; any two structures within
+//    cable range connect): EVERY structure holds LOCAL charge (consumers/transmitters a small
+//    internal buffer, generators a production buffer, batteries/Base big storage). Each tick,
+//    every cable moves energy toward EQUAL FILL FRACTIONS of its two endpoints, capped by the
+//    cable TYPE's throughput (Basic/Heavy) — energy propagates hop by hop, so long thin lines
+//    starve and local generation + storage wins. Generators produce into their OWN buffer only
+//    while it has space (a full buffer = export-limited = no fuel burn); consumers drain their
+//    internal battery and go unpowered when it empties. Charge dies with its structure.
+//  - FUEL stays grid-pooled (union-find over cables): tanks on generators/fuel tanks/Base, fed by
+//    powered fuel extractors of the same grid, burned by that grid's generators.
 //  - Every structure has health and drains while standing in ENEMY-owned territory (per-structure
 //    ForceQuery); a friendly bubble overhead protects. Dead structures despawn (a dead extractor
 //    frees its node; cables to a dead structure are pruned).
@@ -34,6 +35,7 @@ export enum class EStructureType : uint8 { Emitter, Generator, Transmitter, Extr
 export constexpr int NumPlaceableStructures = 6; // hotbar slots 0..5; Base is spawned, never placed
 
 export enum class ENodeType : uint8 { Mineral, Fuel };
+export enum class ECableType : uint8 { Basic, Heavy, Count };
 
 export const char* structureTypeName(EStructureType type);
 
@@ -48,10 +50,39 @@ public:
     // nodeIndex: Extractor only — the node it builds on (from findFreeNodeNear); -1 otherwise.
     void queuePlaceRequest(EStructureType type, const glm::vec3& groundPos, int nodeIndex = -1);
     // Cable tool: toggles the cable between two structures (by STABLE id) — creates it when the
-    // pair validates (cableAllowed), removes it when it already exists.
-    void queueCableRequest(uint32 idA, uint32 idB);
+    // pair validates (cableAllowed), removes it when it already exists with the SAME type, and
+    // RETYPES it when it exists with a different type (upgrade/downgrade in place).
+    void queueCableRequest(uint32 idA, uint32 idB, ECableType type);
     // Delete mode: removes the structure (no refund). The Base is refused at apply time.
     void queueDemolishRequest(uint32 id);
+    // NPC attack surface: a random damageable structure (Base excluded; 0 = none exist), and
+    // direct damage by stable id (main thread; death cleanup in the next tickDamage sweep).
+    uint32 randomTargetStructureId() const;
+    void damageStructure(uint32 id, float amount);
+    // Enemy units pressing on emitter bubbles cost energy: deposits the FULL energyPerSec onto the
+    // NEAREST ACTIVE emitter within `radius` (flat — in range is in range) — a unit physically
+    // leans on one bubble, and dark emitters (no bubble) are pressed by nothing. The next tickPower
+    // adds it to that emitter's draw. A CPU term on purpose — the 13-sample pressure integral is
+    // too sparse to feel small unit bubbles reliably.
+    void addEmitterLoad(const glm::vec3& pos, float radius, float energyPerSec)
+    {
+        int best = -1;
+        float bestDist = radius;
+        for (int i = 0; i < (int)m_structures.size(); ++i)
+        {
+            const Structure& s = m_structures[i];
+            if (s.type != EStructureType::Emitter || s.outputFrac <= 0.05f)
+                continue; // only a live bubble takes the strain
+            const float d = glm::distance(glm::vec2(s.pos.x, s.pos.z), glm::vec2(pos.x, pos.z));
+            if (d < bestDist)
+            {
+                bestDist = d;
+                best = i;
+            }
+        }
+        if (best >= 0)
+            m_structures[best].unitLoad += energyPerSec;
+    }
     void tickAuthority(const glm::vec3& playerPos, float deltaSec);
     void drawDebug() const; // cable lines + node rings (windowed tick)
 
@@ -80,7 +111,14 @@ public:
     bool cableExists(uint32 idA, uint32 idB) const;
     // Valid NEW cable: distinct live endpoints within cable length (any structure types).
     bool cableAllowed(int indexA, int indexB) const;
-    int cableCount() const { return (int)m_cables.size(); }
+    int cableCount(ECableType type) const
+    {
+        int n = 0;
+        for (const Cable& c : m_cables)
+            if (c.type == type)
+                ++n;
+        return n;
+    }
 
     float minerals() const { return m_minerals; }
     float fuel() const { return m_fuelTotal; } // total across all grid tanks (HUD)
@@ -89,10 +127,21 @@ public:
     float energyGenPerSec() const { return m_genRateTotal; }         // running generators' output
     float energyUsePerSec() const { return m_useRateTotal; }         // powered consumers' draw
     float structureCharge(int index) const { return m_structures[index].charge; }
-    float structureCapacity(int index) const
+    float structureCapacity(int index) const { return energyCapacityOf(m_structures[index].type); }
+    // Every structure stores energy locally now: consumers/transmitters a small internal buffer,
+    // generators a production buffer, batteries/Base the big storage.
+    float energyCapacityOf(EStructureType t) const
     {
-        const EStructureType t = m_structures[index].type;
-        return t == EStructureType::Battery || t == EStructureType::Base ? m_batteryCapacity : 0.0f;
+        switch (t)
+        {
+        case EStructureType::Emitter:
+        case EStructureType::Extractor:
+        case EStructureType::Transmitter: return m_internalBuffer;
+        case EStructureType::Generator:   return m_generatorBuffer;
+        case EStructureType::Battery:
+        case EStructureType::Base:        return m_batteryCapacity;
+        default:                          return 0.0f;
+        }
     }
     float structureFuel(int index) const { return m_structures[index].fuel; }
     float structureFuelCapacity(int index) const { return fuelCapacityOf(m_structures[index].type); }
@@ -113,19 +162,6 @@ public:
     float emitterFieldReach() const { return m_emitterReach; }
     float emitterFieldOutput() const { return m_emitterOutput; }
 
-    // World-field suppression driver: sum over POWERED emitter pylons of a linear proximity weight
-    // (1 at the objective, 0 at `radius`). Deliberately NOT the world emitter's getPressure() — its
-    // 13-sample integral over a map-sized bubble is too sparse to see 12 m pylon bubbles reliably.
-    float suppressionAt(const glm::vec3& objective, float radius) const
-    {
-        float sum = 0.0f;
-        for (const Structure& s : m_structures)
-            if (s.type == EStructureType::Emitter && s.powered)
-                sum += glm::max(0.0f, 1.0f - glm::distance(glm::vec2(s.pos.x, s.pos.z),
-                    glm::vec2(objective.x, objective.z)) / glm::max(radius, 1.0f));
-        return sum;
-    }
-
 private:
     struct Node
     {
@@ -144,6 +180,13 @@ private:
         float charge = 0.0f; // stored energy (Battery/Base only) — rides the structure through
                              // grid merges/splits and dies with it
         float fuel = 0.0f;   // stored fuel (Generator/Base tanks only) — same contract as charge
+        float outputFrac = 0.0f;      // Emitter: smoothed output fraction — the bubble shrinks over
+                                      // "Emitter shrink time" on power loss, regrows on restart
+        float unitLoad = 0.0f;        // Emitter: extra energy/s deposited by enemy units pressing
+                                      // on it (addEmitterLoad) — consumed and cleared by tickPower
+        bool emitterDown = false;     // Emitter: latched off until the internal battery refills to
+                                      // "Emitter restart charge" (no per-tick flicker at empty)
+        bool lastHitByAttack = false; // diagnostic: which source landed the last damage (log on death)
         bool powered = false;
         uint16 gridId = 0;
         int nodeIndex = -1; // Extractor: the node it harvests (node indices are stable)
@@ -158,10 +201,17 @@ private:
     struct Cable
     {
         uint32 idA = 0, idB = 0; // unordered pair of structure ids
+        ECableType type = ECableType::Basic;
+        float lastFlowRate = 0.0f; // energy/s moved last tick, signed A->B (drives the flow visual)
+    };
+    struct Link // per-tick resolved cable (indices valid until the next structure erase)
+    {
+        uint16 a = 0, b = 0;
+        uint16 cableIndex = 0;
     };
 
     void placeStructure(EStructureType type, const glm::vec3& groundPos, int nodeIndex);
-    void applyCableRequest(uint32 idA, uint32 idB);
+    void applyCableRequest(uint32 idA, uint32 idB, ECableType type);
     void applyDemolishRequest(uint32 id);
     void destroyStructureAt(size_t index); // frees the node, removes the entity, erases
     void rebuildGrids(); // prune dead cables, union-find over the live ones, refill m_links
@@ -174,10 +224,12 @@ private:
     std::vector<Cable> m_cableRequests;
     std::vector<uint32> m_demolishRequests;
     std::vector<Cable> m_cables;
-    std::vector<std::pair<uint16, uint16>> m_links; // index pairs of live cables (debug draw)
+    std::vector<Link> m_links; // per-tick resolved cables (flow sim + debug draw)
+    float m_time = 0.0f;       // drives the flow-pulse visual
     uint32 m_nextStructureId = 1; // 0 = invalid
     float m_minerals = 0.0f;
     float m_fuelTotal = 0.0f;         // totals across grids, for the HUD
+    bool m_wasFuelDry = false;        // edge detector for the fuel-collapse log
     float m_gridEnergyTotal = 0.0f;
     float m_gridCapacityTotal = 0.0f;
     float m_genRateTotal = 0.0f;
@@ -192,15 +244,23 @@ private:
     float m_costs[6] = { 30.0f, 50.0f, 15.0f, 40.0f, 40.0f, 25.0f }; // Emitter, Generator, Transmitter, Extractor, Battery, FuelTank
     float m_fuelBurnRate = 1.0f;        // fuel/s per RUNNING generator
     float m_genEnergyPerSec = 10.0f;    // energy/s a running generator adds to its grid
-    float m_emitterEnergyPerSec = 2.0f; // energy/s an emitter drains
+    float m_emitterEnergyPerSec = 1.0f; // energy/s an emitter drains at rest
+    float m_emitterPressureDraw = 3.0f; // EXTRA energy/s per unit of pressure on the emitter's
+                                        // field — contested emitters cost more to hold
     float m_extractorEnergyPerSec = 1.0f;
     float m_batteryCapacity = 100.0f;   // storage per Battery (the Base stores the same)
+    float m_internalBuffer = 10.0f;     // emitter/extractor/transmitter local energy buffer
+    float m_generatorBuffer = 20.0f;    // generator production buffer (full = production throttles)
+    float m_cableThroughput[2] = { 5.0f, 20.0f }; // energy/s per cable type (Basic, Heavy)
     float m_generatorFuelTank = 50.0f;  // fuel storage per Generator (the Base holds one tank too)
     float m_fuelTankCapacity = 150.0f;  // fuel storage per dedicated Fuel tank structure
     float m_cableRange = 18.0f;      // max cable length
     float m_placeRange = 20.0f;
-    float m_emitterOutput = 1.2f;    // powered pylon field strength
-    float m_emitterReach = 12.0f;    // keep under Force "Big reach threshold" (48)
+    float m_emitterOutput = 2.0f;    // powered pylon field strength
+    float m_emitterReach = 25.0f;    // keep under Force "Big reach threshold" (48)
+    float m_emitterShrinkTime = 1.5f; // seconds for a starved emitter's bubble to fade out
+    float m_emitterGrowTime = 0.5f;   // seconds to regrow after a restart
+    float m_emitterRestartCharge = 5.0f; // internal battery level that clears the down-latch
     float m_structureHealthMax = 100.0f;
     float m_structureDamageRate = 8.0f; // health/s in enemy-owned territory
 };

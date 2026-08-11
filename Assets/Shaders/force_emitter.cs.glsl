@@ -58,7 +58,7 @@ void main()
         force += wSelf * -grad;
         pressure += opp;
     }
-    force *= u_forceParams2.w * e.outputParams.x * (1.0 / 13.0); // forceGain * Output * mean
-    pressure *= 1.0 / 13.0;
+    force *= e.outputParams.x * (1.0 / 13.0); // Output * mean — the raw integral; the "Force gain"
+    pressure *= 1.0 / 13.0;                   // tweak is a CPU-side multiplier on the readback
     out_forces[e.teamFlags.z] = vec4(force, pressure);
 }

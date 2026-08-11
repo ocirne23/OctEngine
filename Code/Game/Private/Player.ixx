@@ -37,10 +37,13 @@ public:
     // shove. Projectiles carry a small team-0 field — enemy fields decelerate/deflect them via the
     // per-emitter applied-force readback (the testbed force-ball mechanism).
     void queueShot(const glm::vec3& dir) { m_queuedShotDir = dir; m_shotQueued = true; }
-    void queueMelee() { m_meleeQueued = true; }
+    void queueMelee(const glm::vec3& dirPlanar) { m_queuedMeleeDir = dirPlanar; m_meleeQueued = true; }
     void tickCombat(const glm::vec3& cameraForwardPlanar, float deltaSec);
     float meleeRange() const { return m_meleeRange; }
     float meleeFlash() const { return m_meleeFlash; } // seconds left of swing visual
+    glm::vec3 meleeDir() const { return m_meleeDir; } // planar direction of the last swing
+    bool meleeJustSwung() const { return m_meleeSwung; } // true for the tick the swing landed
+                                                         // (GameMatch feeds it to NpcSystem damage)
 
     float health() const { return m_health; }
     float healthMax() const { return m_healthMax; }
@@ -67,17 +70,24 @@ private:
     std::vector<Projectile> m_projectiles;
     glm::vec3 m_spawnPos{ 0.0f };
     glm::vec3 m_queuedShotDir{ 0.0f };
+    glm::vec3 m_queuedMeleeDir{ 0.0f };
+    glm::vec3 m_meleeDir{ 0.0f, 0.0f, -1.0f };
     float m_fireCooldown = 0.0f;
     float m_meleeCooldown = 0.0f;
     float m_meleeFlash = 0.0f;
     bool m_shotQueued = false;
     bool m_meleeQueued = false;
+    bool m_meleeSwung = false;
     bool m_jumpWasDown = false;
 
     float m_health = 100.0f;
     float m_energy = 100.0f;
     float m_lastPressure = 0.0f;
     float m_lastDensity = 0.0f;
+    float m_outputHistory[3] = { 1.5f, 1.5f, 1.5f }; // outputs of recent ticks — the applied-force
+                                                     // readback is ~2 frames latent and scales with
+                                                     // output, so the push normalizes by the output
+                                                     // that PRODUCED it (shield-state-independent)
     float m_graceTimer = 0.0f;      // seconds of post-spawn drain immunity (stale readbacks)
     bool m_shieldCollapsed = false; // latched at empty battery, cleared at "Reboot energy"
 

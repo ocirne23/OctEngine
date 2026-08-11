@@ -481,13 +481,16 @@ export namespace RendererVKLayout
         glm::vec4 forceParams1; // x = contact glow intensity, y = contact glow width (opposing/own ratio band),
                                 // z = geometry glow distance (m), w = march steps
         glm::vec4 forceParams2; // x = pattern scale (1/m), y = pattern scroll speed, z = pattern intensity,
-                                // w = force gain (readback scale)
+                                // w = unused (the force-gain readback scale moved CPU-side)
         glm::vec4 forceParams3; // x = interior alpha (shell opacity floor seen from inside),
                                 // y = backface alpha (far/inner surface visibility from outside),
                                 // z = contact wall alpha (interior equilibrium pane),
                                 // w = junction smoothing (smooth-max width as a fraction of iso)
         glm::vec4 forceParams4; // x = density debug view (0/1: heatmap of peak field along the ray),
-                                // y = density range (field value mapping to white), zw unused
+                                // y = density range (field value mapping to white),
+                                // z = ambient field slope (strength/m; <= 0 disables), w = ambient team
+        glm::vec4 forceParams5; // ambient field: xy = planar world center, z = safe radius (m),
+                                // w = max strength
     };
 
     struct alignas(16) RenderNodeTransform : Transform {};

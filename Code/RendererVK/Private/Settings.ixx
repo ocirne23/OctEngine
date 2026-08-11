@@ -409,7 +409,7 @@ export struct ForceFieldParams
     bool useGrid = true;             // hash-grid candidate gathering; off = brute-force scan of every
                                      // emitter per evaluation (small scenes / A-B correctness check).
                                      // Toggling rebuilds the force pipelines (FORCE_GRID define)
-    float forceGain = 1.0f;          // scale on the read-back per-emitter applied forces
+    float forceGain = 5.0f;          // scale on the read-back per-emitter applied forces
     float shellAlpha = 0.33f;        // base shell opacity (rim-weighted in the shader)
     float interiorAlpha = 0.0f;     // shell opacity floor when seen from INSIDE the bubble (the rim
                                      // math reads near-zero head-on from within; this keeps the dome visible)
@@ -425,6 +425,15 @@ export struct ForceFieldParams
                                        // the view ray instead of the shell (tip power/merging readout);
                                        // white contour marks the iso threshold
     float densityRange = 2.0f;         // field value that maps to the heatmap's white end
+    // GLOBAL AMBIENT FIELD: an analytic distance-based field term added to one team everywhere —
+    // zero within safeRadius of the planar center, growing at `slope` per metre, capped at
+    // maxStrength. Never drawn (no proxy; shading treats it as an invisible field), but it deforms
+    // bubbles and feeds pressure/query readbacks like any field. slope <= 0 disables.
+    uint32 ambientTeam = 1;
+    glm::vec2 ambientCenter = glm::vec2(0.0f); // world XZ
+    float ambientSafeRadius = 30.0f;
+    float ambientSlope = 0.0f;         // field strength per metre beyond the safe radius
+    float ambientMaxStrength = 2.0f;
     float junctionSmoothing = 0.5f;    // smooth-max width (fraction of iso) rounding the crease where
                                        // shells meet the wall: continuous normals kill the junction
                                        // jaggies; 0 = hard crease. Queries use the same function, so

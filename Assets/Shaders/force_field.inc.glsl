@@ -128,6 +128,19 @@ uint forceNumCandidates(uint cell) { return fe_count; }
 uint forceCandidateIdx(uint cell, uint k) { return k; }
 #endif
 
+// GLOBAL AMBIENT FIELD (u_forceParams4.zw + u_forceParams5): an analytic distance-based term added
+// to one team everywhere — zero within the safe radius of the planar center, growing per metre,
+// capped. No emitter, no proxy, never drawn (the visible-field shading path sees it at zero
+// visibility); it deforms bubbles and feeds every readback like any other field. slope <= 0 = off.
+float forceAmbientField(vec3 x)
+{
+    const float slope = u_forceParams4.z;
+    if (slope <= 0.0)
+        return 0.0;
+    const float d = distance(x.xz, u_forceParams5.xy);
+    return clamp((d - u_forceParams5.z) * slope, 0.0, u_forceParams5.w);
+}
+
 // Per-team field accumulation at x. MAX_FORCE_TEAMS is injected from Layout.ixx (= 8).
 void forceAccumulate(vec3 x, out float phi[MAX_FORCE_TEAMS])
 {
@@ -140,6 +153,7 @@ void forceAccumulate(vec3 x, out float phi[MAX_FORCE_TEAMS])
         const ForceEmitterData e = fe_emitters[forceCandidateIdx(cell, k)];
         phi[e.teamFlags.x] += forceContribution(x, e);
     }
+    phi[uint(u_forceParams4.w)] += forceAmbientField(x);
 }
 
 // forceAccumulate plus a SHELL-VISIBLE variant of each team's field: every contribution also
@@ -163,6 +177,7 @@ void forceAccumulateVisible(vec3 x, out float phi[MAX_FORCE_TEAMS], out float ph
         phi[e.teamFlags.x] += c;
         phiVis[e.teamFlags.x] += c * e.outputParams.y;
     }
+    phi[uint(u_forceParams4.w)] += forceAmbientField(x); // invisible: shapes, never tints
 }
 
 // C1 smooth max (k = blend width; 0 = hard max). Used for the surface's opposing bound so the

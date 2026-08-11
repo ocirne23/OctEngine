@@ -1,0 +1,24 @@
+# Enemy NPC unit: upright capsule carrying a small team-1 field bubble — friendly emitter fields
+# physically push it back (applied-force readback), and its bubble presses on the player's shield.
+# Spawned from the objective by NpcSystem; steers toward the nearest structure and gnaws it in
+# attack range. ContactEvents feed projectile hit damage.
+Prefab gameEnemyUnit
+	Component Render
+		ObjectContainer wireshapes
+		Node Cube
+		Type StaticMesh
+		Scale 0.5 0.8 0.5
+	Component Physics
+		Body Dynamic
+		Shape Capsule
+		Radius 0.5
+		HalfHeight 0.3
+		Density 100
+		Friction 0.3
+		LockRotation true
+		ContactEvents true
+	Component Force
+		Team 1
+		Output 0.8
+		Reach 3
+		Centered true

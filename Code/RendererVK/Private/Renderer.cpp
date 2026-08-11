@@ -802,11 +802,14 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
         ubo.forceParams1 = glm::vec4(glm::max(force.contactGlowIntensity, 0.0f), glm::max(force.contactGlowWidth, 1e-3f),
             glm::max(force.geoGlowDistance, 0.0f), (float)glm::clamp(force.marchSteps, 8, 256));
         ubo.forceParams2 = glm::vec4(glm::max(force.patternScale, 0.0f), force.patternSpeed,
-            glm::max(force.patternIntensity, 0.0f), force.forceGain);
+            glm::max(force.patternIntensity, 0.0f), 0.0f); // w unused (force gain is CPU-side)
         ubo.forceParams3 = glm::vec4(glm::clamp(force.interiorAlpha, 0.0f, 1.0f),
             glm::clamp(force.backfaceAlpha, 0.0f, 1.0f), glm::clamp(force.contactWallAlpha, 0.0f, 1.0f),
             glm::clamp(force.junctionSmoothing, 0.0f, 2.0f));
-        ubo.forceParams4 = glm::vec4(force.densityView ? 1.0f : 0.0f, glm::max(force.densityRange, 1e-3f), 0.0f, 0.0f);
+        ubo.forceParams4 = glm::vec4(force.densityView ? 1.0f : 0.0f, glm::max(force.densityRange, 1e-3f),
+            force.ambientSlope, (float)glm::min(force.ambientTeam, RendererVKLayout::MAX_FORCE_TEAMS - 1));
+        ubo.forceParams5 = glm::vec4(force.ambientCenter, glm::max(force.ambientSafeRadius, 0.0f),
+            glm::max(force.ambientMaxStrength, 0.0f));
     }
 
     const TerrainTexTweaks& tex = m_terrainTexTweaks;

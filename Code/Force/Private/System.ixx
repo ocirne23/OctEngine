@@ -140,6 +140,19 @@ public:
     uint32 getNumEmitters() const { return m_numLiveEmitters; }
     const ForceFieldParams& getParams() const { return m_params; }
 
+    // The GLOBAL AMBIENT FIELD: an analytic distance-based term one team projects everywhere —
+    // zero within safeRadius of the planar center, +slope per metre beyond it, capped at
+    // maxStrength. No emitter, never drawn; deforms bubbles and feeds every readback like any
+    // field. slope <= 0 disables. Main thread (params push with update()).
+    void setAmbientField(uint32 team, const glm::vec2& centerXZ, float safeRadius, float slope, float maxStrength)
+    {
+        m_params.ambientTeam = team;
+        m_params.ambientCenter = centerXZ;
+        m_params.ambientSafeRadius = safeRadius;
+        m_params.ambientSlope = slope;
+        m_params.ambientMaxStrength = maxStrength;
+    }
+
 private:
     friend class ForceEmitter;
     friend class ForceQuery;

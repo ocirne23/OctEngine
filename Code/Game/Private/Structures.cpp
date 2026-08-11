@@ -64,13 +64,21 @@ void StructureSystem::registerTweaks()
     Tweak::floatVar("Game/Economy", "Fuel burn/s per generator", &m_fuelBurnRate, 0.0f, 20.0f, 0.05f);
     Tweak::floatVar("Game/Economy", "Energy gen/s per generator", &m_genEnergyPerSec, 0.5f, 50.0f, 0.25f);
     Tweak::floatVar("Game/Economy", "Emitter energy/s", &m_emitterEnergyPerSec, 0.1f, 20.0f, 0.1f);
+    Tweak::floatVar("Game/Economy", "Emitter energy/s @ pressure 1", &m_emitterPressureDraw, 0.0f, 50.0f, 0.1f);
     Tweak::floatVar("Game/Economy", "Extractor energy/s", &m_extractorEnergyPerSec, 0.1f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Economy", "Battery capacity", &m_batteryCapacity, 10.0f, 1000.0f, 5.0f);
+    Tweak::floatVar("Game/Economy", "Internal buffer", &m_internalBuffer, 1.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Economy", "Generator buffer", &m_generatorBuffer, 1.0f, 200.0f, 0.5f);
+    Tweak::floatVar("Game/Economy", "Cable throughput", &m_cableThroughput[0], 0.5f, 100.0f, 0.25f);
+    Tweak::floatVar("Game/Economy", "Heavy cable throughput", &m_cableThroughput[1], 0.5f, 200.0f, 0.25f);
     Tweak::floatVar("Game/Economy", "Generator fuel tank", &m_generatorFuelTank, 5.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Cable max length", &m_cableRange, 4.0f, 60.0f, 0.5f);
     Tweak::floatVar("Game/Economy", "Place range", &m_placeRange, 4.0f, 60.0f, 0.5f);
     Tweak::floatVar("Game/Structures", "Emitter output", &m_emitterOutput, 0.2f, 5.0f, 0.05f);
     Tweak::floatVar("Game/Structures", "Emitter reach", &m_emitterReach, 2.0f, 40.0f, 0.5f);
+    Tweak::floatVar("Game/Structures", "Emitter shrink time", &m_emitterShrinkTime, 0.05f, 10.0f, 0.05f);
+    Tweak::floatVar("Game/Structures", "Emitter grow time", &m_emitterGrowTime, 0.05f, 10.0f, 0.05f);
+    Tweak::floatVar("Game/Structures", "Emitter restart charge", &m_emitterRestartCharge, 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Structures", "Health max", &m_structureHealthMax, 10.0f, 1000.0f, 1.0f);
     Tweak::floatVar("Game/Structures", "Damage/s in enemy field", &m_structureDamageRate, 0.0f, 100.0f, 0.5f);
 }
@@ -79,8 +87,9 @@ void StructureSystem::spawnNodes()
 {
     m_minerals = m_startMinerals; // fuel is grid-local: "Start fuel" seeds the Base tank instead
 
-    // Authored whitebox layout: player starts around (0, 140); nodes line the approach toward the
-    // objective at the origin so pushing inward is what grows the economy.
+    // Authored whitebox layout: the Base sits near (0, 146) and the ambient enemy field grows with
+    // distance from it — nodes further out sit in progressively deeper field, so expanding the
+    // safe zone is what grows the economy.
     static constexpr struct { float x, z; ENodeType type; } layout[] = {
         {  40.0f,  115.0f, ENodeType::Mineral },
         { -45.0f,  110.0f, ENodeType::Fuel },
@@ -128,9 +137,9 @@ void StructureSystem::queuePlaceRequest(EStructureType type, const glm::vec3& gr
     m_requests.push_back(PlaceRequest{ type, groundPos, nodeIndex });
 }
 
-void StructureSystem::queueCableRequest(uint32 idA, uint32 idB)
+void StructureSystem::queueCableRequest(uint32 idA, uint32 idB, ECableType type)
 {
-    m_cableRequests.push_back(Cable{ idA, idB });
+    m_cableRequests.push_back(Cable{ idA, idB, type });
 }
 
 void StructureSystem::queueDemolishRequest(uint32 id)
@@ -165,6 +174,32 @@ int StructureSystem::structureIndexById(uint32 id) const
         if (m_structures[i].id == id)
             return i;
     return -1;
+}
+
+uint32 StructureSystem::randomTargetStructureId() const
+{
+    uint32 candidates[256];
+    int count = 0;
+    for (const Structure& s : m_structures)
+    {
+        if (s.type == EStructureType::Base)
+            continue; // invulnerable — gnawing it would be a soft-lock treadmill
+        candidates[count++] = s.id;
+        if (count == 256)
+            break;
+    }
+    if (count == 0)
+        return 0;
+    return candidates[glm::clamp((int)glm::linearRand(0.0f, (float)count), 0, count - 1)];
+}
+
+void StructureSystem::damageStructure(uint32 id, float amount)
+{
+    const int index = structureIndexById(id);
+    if (index < 0 || m_structures[index].type == EStructureType::Base)
+        return;
+    m_structures[index].health -= amount; // <= 0 despawns in the next tickDamage sweep
+    m_structures[index].lastHitByAttack = true;
 }
 
 int StructureSystem::findConnectableNear(const glm::vec3& pos, float maxDist) const
@@ -202,23 +237,33 @@ bool StructureSystem::cableAllowed(int indexA, int indexB) const
     return glm::dot(d, d) <= m_cableRange * m_cableRange;
 }
 
-void StructureSystem::applyCableRequest(uint32 idA, uint32 idB)
+void StructureSystem::applyCableRequest(uint32 idA, uint32 idB, ECableType type)
 {
     // Validated at APPLY time (the MP validation seam): endpoints may have died, or a same-frame
     // duplicate may already have toggled the pair.
-    if (cableExists(idA, idB))
+    for (size_t i = 0; i < m_cables.size(); ++i)
     {
-        std::erase_if(m_cables, [&](const Cable& c) {
-            return (c.idA == idA && c.idB == idB) || (c.idA == idB && c.idB == idA); });
-        Log::info("Cable removed");
+        Cable& c = m_cables[i];
+        if (!((c.idA == idA && c.idB == idB) || (c.idA == idB && c.idB == idA)))
+            continue;
+        if (c.type == type)
+        {
+            m_cables.erase(m_cables.begin() + i);
+            Log::info("Cable removed");
+        }
+        else
+        {
+            c.type = type; // retype in place (upgrade/downgrade)
+            Log::info(type == ECableType::Heavy ? "Cable upgraded to heavy" : "Cable downgraded to basic");
+        }
         return;
     }
     const int a = structureIndexById(idA);
     const int b = structureIndexById(idB);
     if (!cableAllowed(a, b))
         return;
-    m_cables.push_back(Cable{ idA, idB });
-    Log::info("Cable connected");
+    m_cables.push_back(Cable{ idA, idB, type });
+    Log::info(type == ECableType::Heavy ? "Heavy cable connected" : "Cable connected");
 }
 
 int StructureSystem::findFreeNodeNear(const glm::vec3& groundPos, float maxDist) const
@@ -315,7 +360,7 @@ void StructureSystem::rebuildGrids()
             m_cables.erase(m_cables.begin() + c); // an endpoint died — the cable goes with it
             continue;
         }
-        m_links.emplace_back((uint16)a, (uint16)b);
+        m_links.push_back(Link{ (uint16)a, (uint16)b, (uint16)c });
         parent[find((uint16)a)] = find((uint16)b);
         ++c;
     }
@@ -325,115 +370,173 @@ void StructureSystem::rebuildGrids()
 
 void StructureSystem::tickPower(float deltaSec)
 {
-    // ENERGY model per grid: generators turn Fuel into energy/s, batteries (and the Base) store
-    // it, consumers drain stored+generated energy in placement order — the tail goes unpowered
-    // first (emitters dark, extractors idle). Generators run only against demand or an unfilled
-    // battery (no idle Fuel burn) and quantize to whole running generators. Charge lives ON the
-    // storage structures (equal split — all storage has the same capacity), so grid merges pool
-    // it, splits carry it, and a destroyed battery loses it. A storage-less grid still works as
-    // pure generator->consumer throughput. Power-gating instead of placement-blocking keeps
-    // placement always-responsive; an uncabled consumer sits alone in a dead grid = unpowered.
+    // ENERGY FLOW SIM: every structure holds LOCAL charge; each cable moves energy toward equal
+    // fill fractions of its endpoints, capped by the cable type's throughput — energy propagates
+    // hop by hop, so transport capacity (not a global pool) decides what stays powered.
+    // Generators produce into their OWN buffer while it has space (full buffer = export-limited =
+    // no fuel burn); consumers drain their internal battery. FUEL stays grid-pooled (union-find).
     const auto consumerDraw = [&](EStructureType type) {
         return type == EStructureType::Emitter ? m_emitterEnergyPerSec
              : type == EStructureType::Extractor ? m_extractorEnergyPerSec : 0.0f;
     };
-    const auto energyCapacityOf = [&](EStructureType type) {
-        return type == EStructureType::Battery || type == EStructureType::Base ? m_batteryCapacity : 0.0f;
-    };
-    struct GridState
-    {
-        int generators = 0;
-        float energyCap = 0.0f, energyPool = 0.0f, demandRate = 0.0f;
-        float fuelCap = 0.0f, fuelPool = 0.0f;
-        float available = 0.0f; // energy pool + this tick's generation, drained by the consumer pass
-    };
-    std::unordered_map<uint16, GridState> grids;
     const float dt = glm::max(deltaSec, 1e-6f);
+
+    // ---- fuel: grid-local pools (tanks: generators / fuel tanks / Base) + extractor income ----
+    struct GridFuel { float cap = 0.0f, pool = 0.0f; };
+    std::unordered_map<uint16, GridFuel> fuel;
     for (const Structure& s : m_structures)
     {
-        GridState& g = grids[s.gridId];
-        if (s.type == EStructureType::Generator) ++g.generators;
-        g.energyCap += energyCapacityOf(s.type);
-        g.energyPool += s.charge;
-        g.fuelCap += fuelCapacityOf(s.type);
-        g.fuelPool += s.fuel;
-        g.demandRate += consumerDraw(s.type);
-        // Grid-local FUEL income: powered fuel extractors and the Base feed THEIR grid's tanks
-        // (clamped to the tank capacity at write-back; a tank-less grid loses the fuel).
+        GridFuel& g = fuel[s.gridId];
+        g.cap += fuelCapacityOf(s.type);
+        g.pool += s.fuel;
         if ((s.type == EStructureType::Extractor && s.powered && s.nodeIndex >= 0
                 && m_nodes[s.nodeIndex].type == ENodeType::Fuel)
             || s.type == EStructureType::Base)
-            g.fuelPool += m_fuelRate * dt;
+            g.pool += m_fuelRate * dt;
     }
 
+    // ---- generators: produce into their own buffer, burning grid fuel proportionally ----
     m_genRateTotal = 0.0f;
-    for (auto& [id, g] : grids)
-    {
-        // Desired output = live demand + whatever refills the storage this tick; quantized up to
-        // whole generators so the battery actually charges instead of asymptoting. Fuel caps the
-        // running count: generators burn from THEIR grid's tanks and stop when they run dry.
-        const float refillRate = glm::max(0.0f, g.energyCap - g.energyPool) / dt;
-        const float desiredRate = g.demandRate + refillRate;
-        int running = 0;
-        if (desiredRate > 1e-4f && g.fuelPool > 0.0f && m_genEnergyPerSec > 0.0f)
-        {
-            running = glm::min(g.generators, (int)std::ceil(desiredRate / m_genEnergyPerSec));
-            if (m_fuelBurnRate > 0.0f)
-                running = glm::min(running, (int)(g.fuelPool / (m_fuelBurnRate * dt)));
-        }
-        g.fuelPool = glm::max(0.0f, g.fuelPool - running * m_fuelBurnRate * dt);
-        g.available = g.energyPool + running * m_genEnergyPerSec * dt;
-        m_genRateTotal += running * m_genEnergyPerSec;
-    }
-
-    m_useRateTotal = 0.0f;
     for (Structure& s : m_structures)
     {
+        if (s.type != EStructureType::Generator || m_genEnergyPerSec <= 0.0f)
+            continue;
+        GridFuel& g = fuel[s.gridId];
+        const float space = energyCapacityOf(s.type) - s.charge;
+        float want = glm::min(m_genEnergyPerSec * dt, glm::max(space, 0.0f));
+        if (want <= 0.0f)
+            continue;
+        const float fuelNeeded = m_fuelBurnRate * want / m_genEnergyPerSec;
+        if (fuelNeeded > 1e-9f)
+        {
+            const float fuelTaken = glm::min(fuelNeeded, g.pool);
+            want *= fuelTaken / fuelNeeded;
+            g.pool -= fuelTaken;
+        }
+        s.charge += want;
+        m_genRateTotal += want / dt;
+    }
+
+    // ---- cable flows: equalize fill fractions, capped by the cable type's throughput. The exact
+    // ---- equalizing transfer is (fillA - fillB) * capA*capB/(capA+capB) — never overshoots, so
+    // ---- the sim is stable at any dt; the clamp is what makes thin cables a real bottleneck. ----
+    for (const Link& l : m_links)
+    {
+        Cable& c = m_cables[l.cableIndex];
+        Structure& a = m_structures[l.a];
+        Structure& b = m_structures[l.b];
+        const float capA = energyCapacityOf(a.type);
+        const float capB = energyCapacityOf(b.type);
+        c.lastFlowRate = 0.0f;
+        if (capA <= 0.0f || capB <= 0.0f)
+            continue;
+        const float tEq = (a.charge / capA - b.charge / capB) * (capA * capB / (capA + capB));
+        const float maxT = m_cableThroughput[(int)c.type] * dt;
+        const float T = glm::clamp(tEq, -maxT, maxT);
+        a.charge -= T;
+        b.charge += T;
+        c.lastFlowRate = T / dt;
+    }
+
+    // ---- consumers drain their internal battery. Emitters pay EXTRA per unit of pressure on
+    // ---- their field, LATCH OFF at empty until the battery refills to "Emitter restart charge"
+    // ---- (no per-tick flicker), and their bubble output ramps smoothly: fading out over the
+    // ---- shrink time when starved, regrowing over the grow time on restart. A tiny sentinel
+    // ---- output keeps the pressure sensor alive while dark. ----
+    m_useRateTotal = 0.0f;
+    float totalDemand = 0.0f;
+    for (Structure& s : m_structures)
+    {
+        if (s.type == EStructureType::Emitter)
+        {
+            ForceComponent* fc = getComponent<ForceComponent>(s.entity.get());
+            const float draw = m_emitterEnergyPerSec
+                + (fc ? fc->emitter.getPressure() * m_emitterPressureDraw : 0.0f)
+                + s.unitLoad; // enemy units leaning on the bubble (deposited by NpcSystem)
+            s.unitLoad = 0.0f;
+            totalDemand += draw;
+            if (s.emitterDown && s.charge >= glm::min(m_emitterRestartCharge, m_internalBuffer))
+                s.emitterDown = false;
+            bool paid = false;
+            if (!s.emitterDown)
+            {
+                paid = s.charge >= draw * dt - 1e-4f;
+                if (paid)
+                {
+                    s.charge -= draw * dt;
+                    m_useRateTotal += draw;
+                }
+                else
+                    s.emitterDown = true;
+            }
+            s.powered = paid;
+            const float target = paid ? 1.0f : 0.0f;
+            const float rampTime = glm::max(target > s.outputFrac ? m_emitterGrowTime : m_emitterShrinkTime, 0.01f);
+            s.outputFrac = glm::clamp(s.outputFrac + (target > s.outputFrac ? dt : -dt) / rampTime, 0.0f, 1.0f);
+            if (fc)
+            {
+                fc->emitter.setOutput(glm::max(m_emitterOutput * s.outputFrac, 0.01f));
+                fc->emitter.setReach(m_emitterReach);
+            }
+            continue;
+        }
         const float draw = consumerDraw(s.type);
         if (draw <= 0.0f)
             continue;
-        GridState& g = grids[s.gridId];
-        s.powered = g.available >= draw * dt - 1e-4f;
+        totalDemand += draw;
+        s.powered = s.charge >= draw * dt - 1e-4f;
         if (s.powered)
         {
-            g.available -= draw * dt;
+            s.charge -= draw * dt;
             m_useRateTotal += draw;
         }
-        if (s.type == EStructureType::Emitter)
-            if (ForceComponent* fc = getComponent<ForceComponent>(s.entity.get()))
-            {
-                fc->emitter.setOutput(s.powered ? m_emitterOutput : 0.0f);
-                fc->emitter.setReach(m_emitterReach);
-            }
     }
 
-    // Write both pools back into their storage members proportional to capacity, clamped (surplus
-    // over full storage is lost — but generators don't run for it, see desiredRate).
+    // ---- totals + fuel write-back (fuel pools clamp to tank capacity, split proportionally) ----
     m_gridEnergyTotal = 0.0f;
     m_gridCapacityTotal = 0.0f;
-    m_fuelTotal = 0.0f;
-    for (auto& [id, g] : grids)
+    for (const Structure& s : m_structures)
     {
-        g.energyPool = glm::min(g.available, g.energyCap);
-        g.fuelPool = glm::min(g.fuelPool, g.fuelCap);
-        m_gridEnergyTotal += g.energyPool;
-        m_gridCapacityTotal += g.energyCap;
-        m_fuelTotal += g.fuelPool;
+        m_gridEnergyTotal += s.charge;
+        m_gridCapacityTotal += energyCapacityOf(s.type);
+    }
+    m_fuelTotal = 0.0f;
+    for (auto& [id, g] : fuel)
+    {
+        g.pool = glm::min(g.pool, g.cap);
+        m_fuelTotal += g.pool;
     }
     for (Structure& s : m_structures)
     {
-        const GridState& g = grids[s.gridId];
-        const float energyCap = energyCapacityOf(s.type);
-        if (energyCap > 0.0f)
-            s.charge = g.energyCap > 0.0f ? g.energyPool * (energyCap / g.energyCap) : 0.0f;
         const float fuelCap = fuelCapacityOf(s.type);
         if (fuelCap > 0.0f)
-            s.fuel = g.fuelCap > 0.0f ? g.fuelPool * (fuelCap / g.fuelCap) : 0.0f;
+        {
+            const GridFuel& g = fuel[s.gridId];
+            s.fuel = g.cap > 0.0f ? g.pool * (fuelCap / g.cap) : 0.0f;
+        }
     }
+    // Fuel-collapse tripwire: the usual death spiral is fuel dry -> generators stopped -> emitters
+    // dark -> waves eat everything. Make the FIRST domino loud.
+    const bool fuelDry = m_fuelTotal <= 0.01f && totalDemand > 0.0f;
+    if (fuelDry && !m_wasFuelDry)
+        Log::warning("FUEL DRY — generators stopped, buffers draining; emitters go dark next");
+    m_wasFuelDry = fuelDry;
 }
 
 void StructureSystem::tickDamage(float deltaSec)
 {
+    // Field damage needs BOTH: the query says the point is enemy-owned (so a friendly bubble
+    // overhead protects), AND the analytic AMBIENT field is meaningfully present there (exact CPU
+    // mirror of forceAmbientField — it is a closed-form distance field). The second condition
+    // keeps roaming enemy UNITS' bubbles from field-draining structures by mere proximity: units
+    // hurt structures only by actually attacking (their proximity gnaw), never by walking past.
+    const ForceFieldParams& fp = Globals::forceSystem.getParams();
+    const auto ambientAt = [&](const glm::vec3& p) {
+        if (fp.ambientSlope <= 0.0f)
+            return 0.0f;
+        const float d = glm::distance(glm::vec2(p.x, p.z), fp.ambientCenter);
+        return glm::clamp((d - fp.ambientSafeRadius) * fp.ambientSlope, 0.0f, fp.ambientMaxStrength);
+    };
     for (size_t i = 0; i < m_structures.size();)
     {
         Structure& s = m_structures[i];
@@ -443,11 +546,16 @@ void StructureSystem::tickDamage(float deltaSec)
             continue;
         }
         const ForceQuery::Result territory = s.query.getResult();
-        if (territory.valid && territory.inside && territory.owningTeam != 0)
+        if (territory.valid && territory.inside && territory.owningTeam != 0
+            && ambientAt(s.pos) > fp.isoThreshold)
+        {
             s.health -= m_structureDamageRate * deltaSec;
+            s.lastHitByAttack = false;
+        }
         if (s.health <= 0.0f)
         {
-            Log::info(std::string(structureNames[(int)s.type]) + " destroyed by the enemy field");
+            Log::info(std::string(structureNames[(int)s.type])
+                + (s.lastHitByAttack ? " destroyed by enemy units" : " destroyed by the enemy field"));
             destroyStructureAt(i); // grid rebuilds right after this pass
             continue;
         }
@@ -457,11 +565,12 @@ void StructureSystem::tickDamage(float deltaSec)
 
 void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
 {
+    m_time += deltaSec;
     for (const PlaceRequest& req : m_requests)
         placeStructure(req.type, req.pos, req.nodeIndex);
     m_requests.clear();
     for (const Cable& req : m_cableRequests)
-        applyCableRequest(req.idA, req.idB);
+        applyCableRequest(req.idA, req.idB, req.type);
     m_cableRequests.clear();
     for (uint32 id : m_demolishRequests)
         applyDemolishRequest(id);
@@ -490,10 +599,27 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
 
 void StructureSystem::drawDebug() const
 {
-    // Cables: a line between every connected structure pair.
-    const uint32 linkColor = packColor(glm::vec3(0.9f, 0.9f, 0.3f));
-    for (const auto& [a, b] : m_links)
-        Globals::rendererVK.addDebugLine(m_structures[a].pos, m_structures[b].pos, linkColor);
+    // Cables: base hue by TYPE (yellow basic, cyan heavy), brightness by UTILIZATION (idle cables
+    // are dim), plus a pulse mark travelling in the flow direction — speed scales with load.
+    for (const Link& l : m_links)
+    {
+        const Cable& c = m_cables[l.cableIndex];
+        const glm::vec3 posA = m_structures[l.a].pos;
+        const glm::vec3 posB = m_structures[l.b].pos;
+        const float throughput = glm::max(m_cableThroughput[(int)c.type], 1e-3f);
+        const float util = glm::clamp(glm::abs(c.lastFlowRate) / throughput, 0.0f, 1.0f);
+        const glm::vec3 hue = c.type == ECableType::Heavy
+            ? glm::vec3(0.3f, 0.9f, 1.0f) : glm::vec3(0.9f, 0.9f, 0.3f);
+        Globals::rendererVK.addDebugLine(posA, posB, packColor(hue * (0.25f + 0.75f * util)));
+        if (util > 0.02f)
+        {
+            float t = glm::fract(m_time * (0.4f + 1.2f * util));
+            if (c.lastFlowRate < 0.0f)
+                t = 1.0f - t; // pulse travels WITH the energy (A->B positive)
+            const glm::vec3 p = glm::mix(posA, posB, t);
+            Globals::rendererVK.addDebugLine(p, p + glm::vec3(0.0f, 0.6f, 0.0f), packColor(hue));
+        }
+    }
 
     // Node rings: cyan = mineral, orange = fuel; dim while free (build an extractor here), full
     // color once extracted.

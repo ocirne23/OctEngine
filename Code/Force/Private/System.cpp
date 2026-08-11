@@ -457,8 +457,10 @@ void ForceSystem::update(Renderer& renderer, float)
             buildEmitterGpu(inst.pos, inst.dir, inst.output, inst.reach, inst.focus, inst.team,
                 inst.distribution, inst.width, refreshDistributionScale(inst), inst.shellAlpha));
         // Latch the GPU force readback (slot-indexed, ~2 frames old; zero until the first lands).
+        // "Force gain" applies HERE, not on the GPU: the compute writes the raw integral, so the
+        // tweak takes effect instantly on the CPU read instead of riding the readback latency.
         const glm::vec4 readback = renderer.getForceEmitterReadback(inst.rendererSlot);
-        inst.appliedForce = glm::vec3(readback);
+        inst.appliedForce = glm::vec3(readback) * m_params.forceGain;
         inst.pressure = readback.w;
         if (m_debugDraw)
             debugDrawEmitter(renderer, inst);
