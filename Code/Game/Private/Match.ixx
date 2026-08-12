@@ -55,8 +55,10 @@ private:
         int nodeIndex = -1; // Extractor: the free node the ghost snapped to
     };
     // Interaction modes: neutral by default — clicking does NOTHING until a mode key is pressed.
-    // B = Build (grid hotbar + placement/cable tools), X = Delete, V = Select. Pressing the active
-    // mode's key returns to neutral; the hotbar is visible only in Build mode (= mode indicator).
+    // B/V/C jump STRAIGHT into Build mode with that category (Emitters/Production/Distribution) —
+    // b->1->LMB, v->3->LMB style; pressing the ACTIVE category's key exits to neutral. X = Delete,
+    // Tab = Select. The hotbar (visible only in Build) always shows the current category's items:
+    // keys 1..N arm, 0 disarms.
     enum class EPlayerMode : uint8 { None, Build, Delete, Select };
 
     Aim computeAim(const Camera& camera, EStructureType type) const;
@@ -90,10 +92,14 @@ private:
     uint32 m_cablePendingId = 0; // cable tool: first selected endpoint (stable id; 0 = none)
     EPlayerMode m_mode = EPlayerMode::None;
     uint32 m_selectedId = 0;     // Select mode: highlighted structure (stable id; 0 = none)
-    bool m_modeKeyWasDown[3] = { false, false, false }; // B, X, V edges
+    bool m_modeKeyWasDown[5] = {}; // B, V, C (categories), X, Tab edges
     int m_buildCategory = -1;    // grid hotbar: -1 = category level, else index into the categories
     int m_buildSelection = -1;   // armed item within the category (-1 = nothing armed, no ghost)
     bool m_numKeyWasDown[10] = {}; // 1..9,0 edges (polled — the grid logic reads raw keys)
+    bool m_lanceAiming = false;  // Lance two-click placement: first click anchored, awaiting facing
+    glm::vec3 m_lancePendingPos{ 0.0f };
+    bool m_wallPlacing = false;  // Wall two-click placement: first click anchored the line start
+    glm::vec3 m_wallStart{ 0.0f };
 
     bool m_enabled = false;
 
@@ -101,8 +107,9 @@ private:
     // radius" of the BASE, growing at "Field gradient" per metre beyond it — weakest at home,
     // strongest far out. The radius is a plain live tweak (no dynamics); local ground is won with
     // emitter bubbles, not by moving the frontier.
-    glm::vec3 m_basePos{ 0.0f, 0.0f, 146.0f };     // game-start Base; its bubble covers the spawn
-    glm::vec3 m_playerStart{ 0.0f, 1.0f, 140.0f }; // just in front of the Base = the respawn point
+    glm::vec3 m_basePos{ 0.0f, 0.0f, 0.0f };      // game-start Base at the MAP CENTER; the ambient
+                                                  // enemy field surrounds it on all sides
+    glm::vec3 m_playerStart{ 0.0f, 1.0f, -6.0f }; // just beside the Base = the respawn point
     float m_safeRadius = 30.0f;
     float m_fieldSlope = 0.04f;     // ambient strength per metre beyond the safe radius
     float m_fieldMaxStrength = 2.0f;

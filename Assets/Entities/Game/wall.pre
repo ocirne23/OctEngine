@@ -1,0 +1,13 @@
+# Wall segment: a plain square physical barrier — no field, no power, just mass and health.
+# Placed as a two-click LINE (segments every 2 m along the path). Enemies gnaw through it or go
+# around; a cheap way to shape their approach. Spawned origin 1.2 above ground.
+Prefab gameWall
+	Component Render
+		ObjectContainer wireshapes
+		Node Cube
+		Type StaticMesh
+		Scale 1 1.2 1
+	Component Physics
+		Body Static
+		Shape Box
+		HalfExtents 1 1.2 1

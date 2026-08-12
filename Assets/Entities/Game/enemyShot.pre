@@ -1,0 +1,21 @@
+# Enemy projectile (Spitter shot): dense sphere with a team-1 mini-field — PLAYER emitter fields
+# brake and deflect it in flight (the force-ball mechanism, mirrored). Damages the structure it
+# hits (contact hook in NpcSystem), ages out otherwise.
+Prefab gameEnemyShot
+	Component Render
+		ObjectContainer wireshapes
+		Node Sphere
+		Type StaticMesh
+		Scale 0.25
+	Component Physics
+		Body Dynamic
+		Shape Sphere
+		Radius 0.25
+		Density 400
+		Restitution 0.3
+		ContactEvents true
+	Component Force
+		Team 1
+		Output 0.4
+		Reach 1.5
+		Centered true

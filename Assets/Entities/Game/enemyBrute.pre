@@ -1,0 +1,23 @@
+# Enemy Brute: slow heavy siege unit — triple health, big battery, stronger bubble, high mass
+# (shrugs off melee shoves), hits structures and emitter reserves hard. Stat multipliers live in
+# NpcSystem's type table.
+Prefab gameEnemyBrute
+	Component Render
+		ObjectContainer wireshapes
+		Node Cube
+		Type StaticMesh
+		Scale 0.8 1.1 0.8
+	Component Physics
+		Body Dynamic
+		Shape Capsule
+		Radius 0.8
+		HalfHeight 0.5
+		Density 220
+		Friction 0.3
+		LockRotation true
+		ContactEvents true
+	Component Force
+		Team 1
+		Output 1.0
+		Reach 4
+		Centered true

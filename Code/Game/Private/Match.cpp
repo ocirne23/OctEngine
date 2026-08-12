@@ -26,12 +26,19 @@ import :Npc;
 static constexpr const char* c_buildCategories[3] = { "Emitters", "Production", "Distribution" };
 static constexpr BuildItem c_emitterItems[] = {
     { "Emitter", false, EStructureType::Emitter, ECableType::Basic },
+    { "Bastion", false, EStructureType::Bastion, ECableType::Basic },
+    { "Lance", false, EStructureType::Lance, ECableType::Basic },
+    { "Wall", false, EStructureType::Wall, ECableType::Basic },
+    { "Turret", false, EStructureType::Turret, ECableType::Basic },
 };
+static constexpr float c_wallSegmentSpacing = 2.0f; // one segment per box width along the line
+static constexpr int c_wallMaxSegments = 16;
 static constexpr BuildItem c_productionItems[] = {
     { "Generator", false, EStructureType::Generator, ECableType::Basic },
     { "Solar", false, EStructureType::Solar, ECableType::Basic },
     { "Extractor", false, EStructureType::Extractor, ECableType::Basic },
     { "Fabricator", false, EStructureType::Fabricator, ECableType::Basic },
+    { "Barracks", false, EStructureType::Barracks, ECableType::Basic },
 };
 static constexpr BuildItem c_distributionItems[] = {
     { "Transmitter", false, EStructureType::Transmitter, ECableType::Basic },
@@ -39,6 +46,7 @@ static constexpr BuildItem c_distributionItems[] = {
     { "Fuel tank", false, EStructureType::FuelTank, ECableType::Basic },
     { "Cable", true, EStructureType::Emitter, ECableType::Basic },
     { "H-Cable", true, EStructureType::Emitter, ECableType::Heavy },
+    { "Pipe", true, EStructureType::Emitter, ECableType::Pipe },
 };
 static std::span<const BuildItem> buildCategoryItems(int category)
 {
@@ -135,6 +143,7 @@ void GameMatch::spawnWorld()
     }
     m_structures.spawnNodes();
     m_structures.spawnBase(m_basePos); // before the player: the spawn point sits in its bubble
+    m_npcs.spawnEnemyCamps(m_basePos); // fortified camps ring the deep field
     m_player.spawn(m_playerStart);
 
     Globals::gameHud.setHotbarVisible(false); // hidden until Build mode (B); setMode populates the
@@ -164,6 +173,9 @@ void GameMatch::update(float deltaSec)
     const float iso = Globals::forceSystem.getParams().isoThreshold;
     const float frontierIso = m_safeRadius + iso / glm::max(m_fieldSlope, 1e-4f);
     m_npcs.tickAuthority(m_basePos, frontierIso, playerPos, m_structures, deltaSec);
+    m_npcs.tickFriendlies(m_structures, deltaSec);
+    m_npcs.tickTurrets(m_structures, deltaSec);
+    m_npcs.tickEnemyStructures(m_structures, playerPos, deltaSec);
     if (m_player.meleeJustSwung()) // the shove happened in tickCombat; the damage lands here
         m_npcs.applyPlayerMelee(m_player.bodyPos(), m_player.meleeDir(), m_player.meleeRange());
 }
@@ -227,22 +239,13 @@ int GameMatch::hoveredStructure(const Camera& camera) const
 void GameMatch::refreshBuildHotbar()
 {
     GameHud& hud = Globals::gameHud;
-    if (m_buildCategory < 0)
-    {
-        for (int i = 0; i < 3; ++i)
-            hud.setSlot(i, c_buildCategories[i], 0);
-        for (int i = 3; i < GameHud::NumSlots; ++i)
-            hud.clearSlot(i);
-        return;
-    }
     const std::span<const BuildItem> items = buildCategoryItems(m_buildCategory);
     for (int i = 0; i < (int)items.size(); ++i)
         hud.setSlot(i, items[i].label, items[i].isCable
             ? m_structures.cableCount(items[i].cable)
             : m_structures.affordableCount(items[i].structure));
-    for (int i = (int)items.size(); i < GameHud::NumSlots - 1; ++i)
+    for (int i = (int)items.size(); i < GameHud::NumSlots; ++i)
         hud.clearSlot(i);
-    hud.setSlot(GameHud::NumSlots - 1, "Back", 0); // key 0
     if (m_buildSelection >= 0)
         hud.selectSlot(m_buildSelection);
 }
@@ -254,18 +257,18 @@ void GameMatch::setMode(EPlayerMode mode)
     m_mode = mode;
     m_cablePendingId = 0;
     m_selectedId = 0;
-    m_buildCategory = -1;
+    m_lanceAiming = false;
+    m_buildCategory = glm::max(m_buildCategory, 0); // default to Emitters; the category keys set it
     m_buildSelection = -1;
     Globals::gameHud.setHotbarVisible(mode == EPlayerMode::Build); // the hotbar IS the Build indicator
     if (mode == EPlayerMode::Build)
         refreshBuildHotbar();
     switch (mode)
     {
-    case EPlayerMode::Build:  Log::info("Build mode (B): 1-3 picks a category, then 1-9 arms an item "
-                                        "(0 = back), LMB/F places — B to exit"); break;
+    case EPlayerMode::Build:  break; // the category switch logs its own line (updateModeSwitching)
     case EPlayerMode::Delete: Log::info("Delete mode (X): click a structure to demolish — X to exit"); break;
-    case EPlayerMode::Select: Log::info("Select mode (V): click a structure to inspect — V to exit"); break;
-    case EPlayerMode::None:   Log::info("Combat mode: LMB shoot, F melee — B build, X delete, V select"); break;
+    case EPlayerMode::Select: Log::info("Select mode (Tab): click a structure to inspect — Tab to exit"); break;
+    case EPlayerMode::None:   Log::info("Combat mode: LMB shoot, F melee — B/V/C build, X delete, Tab select"); break;
     }
 }
 
@@ -273,14 +276,39 @@ void GameMatch::updateModeSwitching()
 {
     Input& input = Globals::input;
     const bool focused = input.isWindowHasFocus() && Globals::ui.isViewportFocused();
-    const SDL_Scancode keys[3] = { SDL_Scancode::SDL_SCANCODE_B, SDL_Scancode::SDL_SCANCODE_X, SDL_Scancode::SDL_SCANCODE_V };
-    const EPlayerMode modes[3] = { EPlayerMode::Build, EPlayerMode::Delete, EPlayerMode::Select };
+    // B/V/C jump straight into Build with that category (fast chains: b->1->LMB, v->3->LMB);
+    // the ACTIVE category's key exits to neutral, another one switches category in place.
+    const SDL_Scancode catKeys[3] = { SDL_Scancode::SDL_SCANCODE_B, SDL_Scancode::SDL_SCANCODE_V, SDL_Scancode::SDL_SCANCODE_C };
     for (int i = 0; i < 3; ++i)
     {
-        const bool down = focused && input.isKeyDown(keys[i]);
+        const bool down = focused && input.isKeyDown(catKeys[i]);
         if (down && !m_modeKeyWasDown[i])
-            setMode(m_mode == modes[i] ? EPlayerMode::None : modes[i]); // same key toggles back out
+        {
+            if (m_mode == EPlayerMode::Build && m_buildCategory == i)
+                setMode(EPlayerMode::None);
+            else
+            {
+                if (m_mode != EPlayerMode::Build)
+                    setMode(EPlayerMode::Build);
+                m_buildCategory = i;
+                m_buildSelection = -1;
+                m_cablePendingId = 0;
+                m_lanceAiming = false;
+                refreshBuildHotbar();
+                Log::info(std::string("Build: ") + c_buildCategories[i]
+                    + " — 1-9 arms, 0 disarms, LMB/F places, same key exits");
+            }
+        }
         m_modeKeyWasDown[i] = down;
+    }
+    const SDL_Scancode modeKeys[2] = { SDL_Scancode::SDL_SCANCODE_X, SDL_Scancode::SDL_SCANCODE_TAB };
+    const EPlayerMode modes[2] = { EPlayerMode::Delete, EPlayerMode::Select };
+    for (int i = 0; i < 2; ++i)
+    {
+        const bool down = focused && input.isKeyDown(modeKeys[i]);
+        if (down && !m_modeKeyWasDown[3 + i])
+            setMode(m_mode == modes[i] ? EPlayerMode::None : modes[i]); // same key toggles back out
+        m_modeKeyWasDown[3 + i] = down;
     }
 }
 
@@ -309,12 +337,12 @@ void GameMatch::updateCableTool(const Camera& camera, bool confirmEdge, ECableTy
             packColor(glm::vec3(0.3f, 1.0f, 0.4f)), 20);
     if (pendingIdx >= 0 && hover >= 0 && hover != pendingIdx)
     {
-        // Preview: cable-type hue = will connect (yellow basic / cyan heavy), orange = will
-        // remove/retype the existing cable, red = refused (out of cable range).
-        const glm::vec3 typeHue = type == ECableType::Heavy
-            ? glm::vec3(0.3f, 0.9f, 1.0f) : glm::vec3(0.9f, 0.9f, 0.3f);
+        // Preview: cable-type hue = will connect (yellow basic / cyan heavy / orange pipe),
+        // white = will remove/retype the existing link, red = refused (out of cable range).
+        const glm::vec3 typeHue = type == ECableType::Pipe ? glm::vec3(1.0f, 0.55f, 0.15f)
+            : type == ECableType::Heavy ? glm::vec3(0.3f, 0.9f, 1.0f) : glm::vec3(0.9f, 0.9f, 0.3f);
         const bool exists = m_structures.cableExists(m_cablePendingId, m_structures.structureId(hover));
-        const glm::vec3 previewColor = exists ? glm::vec3(1.0f, 0.6f, 0.2f)
+        const glm::vec3 previewColor = exists ? glm::vec3(0.9f, 0.9f, 0.9f)
             : m_structures.cableAllowed(pendingIdx, hover) ? typeHue : glm::vec3(1.0f, 0.3f, 0.2f);
         Globals::rendererVK.addDebugLine(m_structures.structurePos(pendingIdx),
             m_structures.structurePos(hover), packColor(previewColor));
@@ -355,24 +383,18 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge)
     }
     if (pressed >= 0)
     {
-        m_cablePendingId = 0; // switching tools drops a half-made connection
-        if (m_buildCategory < 0)
-        {
-            if (pressed < 3)
-                m_buildCategory = pressed;
-        }
-        else if (pressed == 9) // key 0 = Back
-        {
-            m_buildCategory = -1;
+        m_cablePendingId = 0; // switching tools drops a half-made connection (and half-done aims)
+        m_lanceAiming = false;
+        m_wallPlacing = false;
+        if (pressed == 9) // key 0 disarms the ghost
             m_buildSelection = -1;
-        }
         else if (pressed < (int)buildCategoryItems(m_buildCategory).size())
             m_buildSelection = pressed;
     }
     refreshBuildHotbar();
 
-    if (m_buildCategory < 0 || m_buildSelection < 0)
-        return; // nothing armed — browsing the grid
+    if (m_buildSelection < 0)
+        return; // nothing armed — browsing the category
     const BuildItem& item = buildCategoryItems(m_buildCategory)[m_buildSelection];
     if (item.isCable)
     {
@@ -380,17 +402,91 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge)
         return;
     }
     m_cablePendingId = 0;
+
+    // Lance second click: the position is anchored — the cursor now aims the cone's facing
+    // (relative to the anchor); confirm places, too-close clicks just keep waiting.
+    if (m_lanceAiming)
+    {
+        const glm::vec3 up(0.0f, 0.3f, 0.0f);
+        const uint32 color = packColor(glm::vec3(0.3f, 1.0f, 0.4f));
+        drawCircle(m_lancePendingPos + up, 1.0f, color, 20);
+        glm::vec3 target;
+        glm::vec3 facing(0.0f);
+        if (aimGroundPoint(camera, target))
+        {
+            const glm::vec2 d(target.x - m_lancePendingPos.x, target.z - m_lancePendingPos.z);
+            if (glm::dot(d, d) > 0.25f)
+            {
+                const glm::vec2 dir = glm::normalize(d);
+                facing = glm::vec3(dir.x, 0.0f, dir.y);
+                // Preview: the aim line plus the lobe extent along the chosen facing.
+                Globals::rendererVK.addDebugLine(m_lancePendingPos + up, target + up, color);
+                Globals::rendererVK.addDebugLine(m_lancePendingPos + up,
+                    m_lancePendingPos + facing * m_structures.emitterReachOf(EStructureType::Lance) + up,
+                    packColor(glm::vec3(0.3f, 0.8f, 1.0f)));
+            }
+        }
+        if (confirmEdge && glm::dot(facing, facing) > 0.5f)
+        {
+            m_structures.queuePlaceRequest(EStructureType::Lance, m_lancePendingPos, -1, facing);
+            m_lanceAiming = false;
+        }
+        return;
+    }
+
+    // Wall second click: segments preview along the anchored line; confirm queues one placement
+    // per segment (each pays its own cost — a short stock places a partial wall).
+    if (m_wallPlacing)
+    {
+        const Aim end = computeAim(camera, EStructureType::Wall);
+        if (end.valid)
+        {
+            const glm::vec2 span(end.pos.x - m_wallStart.x, end.pos.z - m_wallStart.z);
+            const float len = glm::length(span);
+            const int segments = glm::clamp((int)(len / c_wallSegmentSpacing) + 1, 1, c_wallMaxSegments);
+            const glm::vec2 dir = len > 1e-3f ? span / len : glm::vec2(0.0f);
+            const int affordableSegs = (int)(m_structures.minerals() / glm::max(m_structures.mineralCost(EStructureType::Wall), 0.01f));
+            for (int s = 0; s < segments; ++s)
+            {
+                const glm::vec3 p = m_wallStart + glm::vec3(dir.x, 0.0f, dir.y) * (c_wallSegmentSpacing * s);
+                drawCircle(p + glm::vec3(0.0f, 0.3f, 0.0f), 0.9f,
+                    packColor(s < affordableSegs ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.3f, 0.2f)), 12);
+            }
+            if (confirmEdge)
+            {
+                for (int s = 0; s < segments; ++s)
+                    m_structures.queuePlaceRequest(EStructureType::Wall,
+                        m_wallStart + glm::vec3(dir.x, 0.0f, dir.y) * (c_wallSegmentSpacing * s));
+                m_wallPlacing = false;
+            }
+        }
+        return;
+    }
+
     const Aim aim = computeAim(camera, item.structure);
     if (!aim.valid)
         return;
     const uint32 color = packColor(aim.affordable ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.3f, 0.2f));
     drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), 1.0f, color, 20);
-    if (aim.type == EStructureType::Emitter) // show the field footprint a powered pylon would get
-        drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.emitterFieldReach() * 0.5f, color, 32);
+    if (isEmitterType(aim.type)) // show the field footprint the powered variant would get
+        drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.emitterReachOf(aim.type) * 0.5f, color, 32);
     drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.cableRange(),
         packColor(glm::vec3(0.4f, 0.4f, 0.45f)), 40); // cable reach from this spot
     if (confirmEdge && aim.affordable)
-        m_structures.queuePlaceRequest(aim.type, aim.pos, aim.nodeIndex);
+    {
+        if (aim.type == EStructureType::Lance)
+        {
+            m_lanceAiming = true; // first click anchors; the next click aims the cone
+            m_lancePendingPos = aim.pos;
+        }
+        else if (aim.type == EStructureType::Wall)
+        {
+            m_wallPlacing = true; // first click anchors the line start; the next click ends it
+            m_wallStart = aim.pos;
+        }
+        else
+            m_structures.queuePlaceRequest(aim.type, aim.pos, aim.nodeIndex);
+    }
 }
 
 void GameMatch::updateDeleteMode(const Camera& camera, bool confirmEdge)
@@ -441,7 +537,8 @@ void GameMatch::buildWorldLabels(const Camera& camera)
         if (!camera.worldToScreen(viewport, m_structures.structureLabelAnchor(i), label.screenPos))
             continue;
         const EStructureType type = m_structures.structureType(i);
-        const bool consumer = type == EStructureType::Emitter || type == EStructureType::Extractor;
+        const bool consumer = isEmitterType(type) || type == EStructureType::Extractor
+            || type == EStructureType::Fabricator;
         if (type != EStructureType::Base) // the Base is invulnerable — no health bar
         {
             label.barValue = m_structures.structureHealth(i);
@@ -487,17 +584,41 @@ void GameMatch::buildWorldLabels(const Camera& camera)
         }
         labels.push_back(std::move(label));
     }
-    // Enemy units: red health bar overhead.
+    // Enemy units: red health bar overhead; friendlies: green.
     for (int i = 0; i < m_npcs.unitCount(); ++i)
     {
         HudWorldLabel label;
         if (!camera.worldToScreen(viewport, m_npcs.unitPos(i) + glm::vec3(0.0f, 1.6f, 0.0f), label.screenPos))
             continue;
         label.barValue = m_npcs.unitHealth(i);
-        label.barMax = m_npcs.unitHealthMax();
+        label.barMax = m_npcs.unitHealthMax(i); // per-type: Brutes have triple bars, Runners half
         label.barColor = glm::vec3(1.0f, 0.25f, 0.2f);
         label.bar2Value = m_npcs.unitEnergy(i); // shield battery (no regen) under the health bar
-        label.bar2Max = m_npcs.unitEnergyMax();
+        label.bar2Max = m_npcs.unitEnergyMax(i);
+        label.bar2Color = glm::vec3(1.0f, 0.9f, 0.3f);
+        labels.push_back(std::move(label));
+    }
+    // Enemy camp structures: red health bar + name on the core (the kill priority).
+    for (int i = 0; i < m_npcs.enemyStructureCount(); ++i)
+    {
+        HudWorldLabel label;
+        if (!camera.worldToScreen(viewport, m_npcs.enemyStructurePos(i) + glm::vec3(0.0f, 2.4f, 0.0f), label.screenPos))
+            continue;
+        label.barValue = m_npcs.enemyStructureHealth(i);
+        label.barMax = m_npcs.enemyStructureHealthMax(i);
+        label.barColor = glm::vec3(1.0f, 0.25f, 0.2f);
+        labels.push_back(std::move(label));
+    }
+    for (int i = 0; i < m_npcs.friendlyCount(); ++i)
+    {
+        HudWorldLabel label;
+        if (!camera.worldToScreen(viewport, m_npcs.friendlyPos(i) + glm::vec3(0.0f, 1.4f, 0.0f), label.screenPos))
+            continue;
+        label.barValue = m_npcs.friendlyHealth(i);
+        label.barMax = m_npcs.friendlyHealthMax();
+        label.barColor = glm::vec3(0.3f, 1.0f, 0.4f);
+        label.bar2Value = m_npcs.friendlyEnergy(i);
+        label.bar2Max = m_npcs.friendlyEnergyMax();
         label.bar2Color = glm::vec3(1.0f, 0.9f, 0.3f);
         labels.push_back(std::move(label));
     }

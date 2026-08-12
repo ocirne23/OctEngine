@@ -1,0 +1,13 @@
+# Enemy camp SPAWNER: produces wave units near itself while the camp CORE lives (per-camp alive
+# cap). Killed by projectiles/turret fire/melee.
+Prefab gameEnemySpawner
+	Component Render
+		ObjectContainer wireshapes
+		Node Cube
+		Type StaticMesh
+		Scale 1.4 1.0 1.0
+	Component Physics
+		Body Static
+		Shape Box
+		HalfExtents 1.4 1.0 1.0
+		ContactEvents true

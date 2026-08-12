@@ -1,0 +1,13 @@
+# Barracks: spawns friendly NPC units up to a per-barracks alive limit; each spawn spends
+# "Barracks spawn energy" from its internal store, so unit production needs a cable feed.
+# Spawned origin 1.2 above ground.
+Prefab gameBarracks
+	Component Render
+		ObjectContainer wireshapes
+		Node Cube
+		Type StaticMesh
+		Scale 1.4 1.2 1.0
+	Component Physics
+		Body Static
+		Shape Box
+		HalfExtents 1.4 1.2 1.0

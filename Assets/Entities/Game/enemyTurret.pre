@@ -1,0 +1,13 @@
+# Enemy camp TURRET: fires spitter-type shots at the player or the nearest player structure in
+# range while the camp CORE lives. Killed by projectiles/turret fire/melee.
+Prefab gameEnemyTurret
+	Component Render
+		ObjectContainer wireshapes
+		Node Cone
+		Type StaticMesh
+		Scale 0.6 1.3 0.6
+	Component Physics
+		Body Static
+		Shape Box
+		HalfExtents 0.5 1.3 0.5
+		ContactEvents true

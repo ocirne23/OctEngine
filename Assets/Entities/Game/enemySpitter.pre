@@ -1,0 +1,22 @@
+# Enemy Spitter: ranged type — stands off at "Spitter range" and lobs shots at structures. Cone
+# silhouette marks it as the priority kill. Stat multipliers live in NpcSystem's type table.
+Prefab gameEnemySpitter
+	Component Render
+		ObjectContainer wireshapes
+		Node Cone
+		Type StaticMesh
+		Scale 0.5 0.8 0.5
+	Component Physics
+		Body Dynamic
+		Shape Capsule
+		Radius 0.5
+		HalfHeight 0.3
+		Density 100
+		Friction 0.3
+		LockRotation true
+		ContactEvents true
+	Component Force
+		Team 1
+		Output 0.8
+		Reach 3
+		Centered true

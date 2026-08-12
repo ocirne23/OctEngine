@@ -1,0 +1,18 @@
+# Bastion emitter: the heavy anchor variant — bigger, stronger bubble, much hungrier ("Bastion
+# output/reach/energy" tweaks; the live output is driven by the power tick like every emitter).
+# Spawned origin 2.0 above ground.
+Prefab gameBastion
+	Component Render
+		ObjectContainer wireshapes
+		Node Cube
+		Type StaticMesh
+		Scale 0.6 2 0.6
+	Component Physics
+		Body Static
+		Shape Box
+		HalfExtents 0.6 2 0.6
+	Component Force
+		Team 0
+		Output 2.0
+		Reach 18
+		Centered true

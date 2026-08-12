@@ -1,0 +1,21 @@
+# Lance emitter: the directional push variant — a focused cone along entity FORWARD (-Z), spanning
+# from the structure outward (Centered false). placeStructure rotates the spawn so the cone always
+# faces AWAY from the Base, into the enemy field. Spawned origin 1.0 above ground.
+Prefab gameLance
+	Component Render
+		ObjectContainer wireshapes
+		Node Wedge
+		Type StaticMesh
+		Scale 0.5 1 1.2
+	Component Physics
+		Body Static
+		Shape Box
+		HalfExtents 0.5 1 1.2
+	Component Force
+		Team 0
+		Direction 0 0 -1
+		Focus 0.85
+		Width 0.7
+		Output 1.4
+		Reach 20
+		Centered false
