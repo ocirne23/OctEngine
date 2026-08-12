@@ -1,11 +1,12 @@
-# Player projectile: dense physics sphere carrying a small team-0 field bubble — the per-emitter
+# Player projectile: dense physics sphere carrying a small team-0 field bubble - the per-emitter
 # applied-force readback makes enemy fields decelerate/deflect it in flight (the testbed force-ball
 # mechanism). Spawned by GamePlayer::tickCombat, aged out after "Projectile lifetime".
 Prefab gameProjectile
 	Component Render
-		ObjectContainer wireshapes
+		ObjectContainer baseshapes
 		Node Sphere
 		Type StaticMesh
+		Color 0.6 0.95 1
 		Scale 0.2
 	Component Physics
 		Body Dynamic
@@ -19,3 +20,4 @@ Prefab gameProjectile
 		Output 0.4
 		Reach 1.5
 		Centered true
+	Component Network

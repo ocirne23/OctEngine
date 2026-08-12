@@ -1,5 +1,5 @@
 ObjectContainer baseshapes
 	Path "Models/baseshapes.glb"
-	MaterialOverrides
-		PipelineIdx UnlitOpaque
-		ExcludeFromRayTracing true
+#	MaterialOverrides
+#		PipelineIdx UnlitOpaque
+#		ExcludeFromRayTracing true

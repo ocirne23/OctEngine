@@ -1,11 +1,12 @@
-# Enemy camp CORE: the camp's power plant and shield — a strong team-1 bubble protects the camp
+# Enemy camp CORE: the camp's power plant and shield - a strong team-1 bubble protects the camp
 # while it stands; destroying it disables the camp's spawner and turrets (NpcSystem checks core
 # liveness per camp). High health; killed by projectiles/turret fire/melee.
 Prefab gameEnemyCore
 	Component Render
-		ObjectContainer wireshapes
+		ObjectContainer baseshapes
 		Node Cube
 		Type StaticMesh
+		Color 1 0.15 0.35
 		Scale 1.6 1.6 1.6
 	Component Physics
 		Body Static
@@ -17,3 +18,4 @@ Prefab gameEnemyCore
 		Output 2.0
 		Reach 20
 		Centered true
+	Component Network

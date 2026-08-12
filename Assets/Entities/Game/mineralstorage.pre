@@ -1,0 +1,15 @@
+# Mineral silo: raises the team's mineral STORAGE CAP ("Mineral silo capacity" per silo on top of
+# "Mineral base capacity") - income clamps at the cap, so banking a bigger war chest needs silos.
+# No power, no grid role; just capacity that dies with it. Spawned origin 1.3 above the ground hit.
+Prefab gameMineralStorage
+	Component Render
+		ObjectContainer baseshapes
+		Node Cube
+		Type StaticMesh
+		Color 0.25 0.45 1
+		Scale 2
+	Component Physics
+		Body Static
+		ContactEvents true
+		Shape Box
+		HalfExtents 2 2 2

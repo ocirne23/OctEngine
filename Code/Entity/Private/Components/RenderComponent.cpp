@@ -18,6 +18,8 @@ void RenderComponent::spawn(Entity& entity, const SpawnInfo& info, const Transfo
         node = info.container->spawnSkinnedNode(world);
     else
         node = info.container->spawnNodeForIdx(info.nodeIdx, world);
+    if (node.isValid() && info.color.x >= 0.0f) // authored tint: flat solid-color material override
+        node.setMaterialOverride(Globals::rendererVK.createSolidColorMaterial(info.color));
     if (node.isValid())
     {
         const Sphere bounds = node.getWorldBounds();

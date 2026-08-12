@@ -3,11 +3,13 @@
 # Spawned origin 1.2 above ground.
 Prefab gameBarracks
 	Component Render
-		ObjectContainer wireshapes
+		ObjectContainer baseshapes
 		Node Cube
 		Type StaticMesh
-		Scale 1.4 1.2 1.0
+		Color 0.2 0.8 0.7
+		Scale 3
 	Component Physics
 		Body Static
+		ContactEvents true
 		Shape Box
-		HalfExtents 1.4 1.2 1.0
+		HalfExtents 3 3 3

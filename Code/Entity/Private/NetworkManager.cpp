@@ -10,8 +10,13 @@ import Physics;
 // Bump on ANY wire format change: the transport handshake denies mismatched protocol ids, so old
 // builds fail to connect instead of misparsing. GameNetVersion rides in Hello/Welcome purely so the
 // mismatch produces a readable log line when the protocolId was forgotten.
-constexpr uint32 GameProtocolId = 0x4F435343; // "OCSC": events carry a payload + sender netId
-constexpr uint16 GameNetVersion = 11;
+constexpr uint32 GameProtocolId = 0x4F435345; // "OCSE": snapshot records carry NetRecFlag_ServerPlayer
+constexpr uint16 GameNetVersion = 13;
+
+// Engine-reserved event: Synced-flagged tweak values, server -> clients (full set at join +
+// re-broadcast on change). Intercepted in fireEventAttributed — never reaches scripts or the
+// game hook, and a client-sent copy is dropped (only clients APPLY it).
+constexpr std::string_view TweakSyncEventName = "OcTweakSync";
 
 enum class ENetMsg : uint8
 {
@@ -326,6 +331,7 @@ void NetworkManager::shutdown()
     m_peerClients.clear();
     m_claimRings.clear();
     m_remoteBuffers.clear();
+    m_preWelcomeEvents.clear();
     m_localClientId = 0;
     m_nextClientId = 1;
 }
@@ -380,6 +386,7 @@ void NetworkManager::receive(double deltaSec)
                 Log::warning(std::string("Network: disconnected from server (") + disconnectReasonName(evt.reason) + ")");
                 m_serverPeer = InvalidNetPeerId;
                 m_localClientId = 0;
+                m_preWelcomeEvents.clear(); // stale parked events must not replay into a new session
                 // auto-reconnect: heals startup-time handshake failures and server restarts alike;
                 // a failed attempt takes connectTimeoutSec to report, which self-paces the retries.
                 // The re-handshake re-runs Hello->Welcome and the world replay is idempotent.
@@ -550,6 +557,14 @@ void NetworkManager::handleSessionMessage(NetPeerId peer, NetReader& reader, uin
                     m_host.send(peer, ownerWriter.data(), ENetDelivery::Reliable, ChannelSession);
                 }
         }
+        // Synced tweak values ride the same ordered channel: the joiner starts with the server's
+        // gameplay configuration instead of its own local defaults.
+        {
+            std::vector<std::vector<uint8>> chunks;
+            TweakRegistry::get().packSynced(chunks);
+            for (const std::vector<uint8>& chunk : chunks)
+                sendEventTo(peer, TweakSyncEventName, 0, 0, chunk);
+        }
         Log::info("Network: client " + std::to_string(clientId) + " ready (" + std::to_string(m_readyPeers.size())
             + " total, " + std::to_string(m_dynamicSpawns.size()) + " spawns replayed)");
         if (m_onClientJoined)
@@ -594,6 +609,9 @@ void NetworkManager::handleSessionMessage(NetPeerId peer, NetReader& reader, uin
         m_serverSnapshotHz = glm::clamp(snapshotHz, 1.0f, 240.0f); // the interp playback clock runs in the server's tick units
         Log::info("Network: welcomed by server as client " + std::to_string(clientId) + " (version "
             + std::to_string(version) + ", " + std::to_string(snapshotHz) + " Hz, tick " + std::to_string(serverTick) + ")");
+        // Events that raced ahead of this Welcome on their own channel replay now, in arrival order.
+        for (const std::vector<uint8>& pending : std::exchange(m_preWelcomeEvents, {}))
+            handleEventMessage(m_serverPeer, pending);
         break;
     }
     case ENetMsg::Deny:
@@ -616,10 +634,20 @@ void NetworkManager::handleSpawnMessage(NetReader& reader)
     const glm::vec3 pos = reader.read<glm::vec3>();
     const glm::quat rot = reader.read<glm::quat>();
     const float scale = reader.read<float>();
+    glm::vec3 linVel = reader.read<glm::vec3>();
+    glm::vec3 angVel = reader.read<glm::vec3>();
     if (reader.overflowed() || baseId == 0 || count == 0 || path.empty())
         return;
     if (!isFinite(pos) || !isFinite(rot) || !isFinite(scale) || scale <= 0.0f)
         return;
+    if (!isFinite(linVel) || !isFinite(angVel))
+        return;
+    // wire values, so cap them: a hostile server must not launch bodies at absurd speeds
+    const float linSpeed = glm::length(linVel), angSpeed = glm::length(angVel);
+    if (linSpeed > 200.0f)
+        linVel *= 200.0f / linSpeed;
+    if (angSpeed > 100.0f)
+        angVel *= 100.0f / angSpeed;
     // the path goes to the asset loader, so keep it inside Assets/: a hostile server must not be
     // able to aim a client's file reads anywhere on its disk
     if (path.size() > 256 || path.find("..") != std::string::npos || path.find(':') != std::string::npos
@@ -654,6 +682,14 @@ void NetworkManager::handleSpawnMessage(NetReader& reader)
     if (registered != count)
         Log::warning("Network: replicated '" + path + "' registered " + std::to_string(registered)
             + " NetworkComponents, server announced " + std::to_string(count) + " (asset mismatch?)");
+    // The announced launch velocities start the local twin moving like the original (a projectile
+    // flies instead of dropping from rest). Main thread pre-physics — direct setters sanctioned.
+    if (PhysicsComponent* pc = getComponent<PhysicsComponent>(spawned.get());
+        pc && pc->bodyType == EPhysicsBodyType::Dynamic && pc->body.isValid())
+    {
+        pc->body.setLinearVelocity(linVel);
+        pc->body.setAngularVelocity(angVel);
+    }
     Globals::world.addRootEntity(std::move(spawned));
 }
 
@@ -1039,18 +1075,35 @@ void NetworkManager::transferOwnership(uint32 netId, NetworkComponent* comp, uin
         m_host.send(peer, writer.data(), ENetDelivery::Reliable, ChannelSession);
 }
 
+void NetworkManager::setOwnershipTransfers(bool enabled)
+{
+    s_transferEnabled = enabled; // writes through the tweak's live variable — the panel shows it
+}
+
+void NetworkManager::setServerPrimary(Entity& entity, bool primary)
+{
+    if (m_role != ENetRole::Server)
+        return; // single player / client: no session state to mark
+    NetworkComponent* comp = getComponent<NetworkComponent>(&entity);
+    if (comp && comp->netId != 0 && comp->state)
+        comp->state->server.serverPrimary = primary;
+}
+
 void NetworkManager::updateOwnershipTransfers(double deltaSec)
 {
     if (!s_transferEnabled)
         return;
     const std::lock_guard<std::mutex> lock(m_entityMutex);
 
-    // transfer sources: every client's PRIMARY (non-transferred) owned dynamic bodies
+    // transfer sources: every client's PRIMARY (non-transferred) owned dynamic bodies, plus the
+    // SERVER's own primary under clientId 0 (it re-claims, never acquires for a client)
     m_transferSources.clear();
     for (const auto& [netId, replicated] : m_entities)
     {
         const NetworkComponent* comp = replicated.comp;
-        if (comp->ownerClientId == 0 || comp->state->transferredOwnership)
+        const bool clientPrimary = comp->ownerClientId != 0 && !comp->state->transferredOwnership;
+        const bool serverPrimary = comp->ownerClientId == 0 && comp->state->server.serverPrimary;
+        if (!clientPrimary && !serverPrimary)
             continue;
         const PhysicsComponent* physics = getComponent<PhysicsComponent>(replicated.entity);
         if (physics && physics->bodyType == EPhysicsBodyType::Dynamic && physics->body.isValid())
@@ -1074,6 +1127,8 @@ void NetworkManager::updateOwnershipTransfers(double deltaSec)
 
         if (comp->ownerClientId == 0)
         {
+            if (comp->state->server.serverPrimary)
+                continue; // the server's own player is never handed to a client
             if (comp->state->server.contestedUntilTick > m_serverTick)
                 continue; // contested: stays server-owned until the window decays
             if (!physics->body.isAwake())
@@ -1082,7 +1137,7 @@ void NetworkManager::updateOwnershipTransfers(double deltaSec)
             // server-owned AND moving: hand it to the first client whose primary body is close
             // enough — its physics then drives the object, so pushing it feels local to that player
             for (const auto& [clientId, sourcePos] : m_transferSources)
-                if (glm::dot(sourcePos - pos, sourcePos - pos) < transferRadiusSq)
+                if (clientId != 0 && glm::dot(sourcePos - pos, sourcePos - pos) < transferRadiusSq)
                 {
                     transferOwnership(netId, comp, clientId);
                     break;
@@ -1090,6 +1145,19 @@ void NetworkManager::updateOwnershipTransfers(double deltaSec)
         }
         else if (comp->state->transferredOwnership)
         {
+            // The SERVER's primary RE-CLAIMS by proximity, exactly like a client acquires — the
+            // server player pushing a client-held object takes its simulation back. Only ever
+            // touches TRANSFERRED objects; a client's own primary is never in this branch.
+            bool reclaimed = false;
+            for (const auto& [clientId, sourcePos] : m_transferSources)
+                if (clientId == 0 && glm::dot(sourcePos - pos, sourcePos - pos) < transferRadiusSq)
+                {
+                    transferOwnership(netId, comp, 0);
+                    reclaimed = true;
+                    break;
+                }
+            if (reclaimed)
+                continue;
             // release with hysteresis once away from the owner's primaries (an owner's own primary
             // never releases — it is one of the sources, at distance zero from itself)
             float nearestSq = FLT_MAX;
@@ -1192,16 +1260,26 @@ void NetworkManager::sendSpawnTo(NetPeerId peer, const DynamicSpawn& record)
     glm::vec3 pos = record.spawnPos;
     glm::quat rot = record.spawnRot;
     float scale = record.spawnScale;
+    glm::vec3 linVel(0.0f), angVel(0.0f);
     {
         const std::lock_guard<std::mutex> lock(m_entityMutex);
         if (const auto it = m_entities.find(record.baseId); it != m_entities.end())
         {
-            const Entity* root = it->second.entity;
+            Entity* root = it->second.entity;
             while (root->parent)
                 root = root->parent;
             pos = root->pos; // root local == world
             rot = root->rot;
             scale = root->scale;
+            // The root body's velocities ride along, so the receiver's LOCAL twin starts moving
+            // like the original instead of dropping from rest until corrections catch it — the
+            // announce goes out in send(), AFTER the spawner set any launch velocity (projectiles).
+            if (const PhysicsComponent* pc = getComponent<PhysicsComponent>(root);
+                pc && pc->bodyType == EPhysicsBodyType::Dynamic && pc->body.isValid())
+            {
+                linVel = pc->body.getLinearVelocity();
+                angVel = pc->body.getAngularVelocity();
+            }
         }
     }
     uint8 buffer[512];
@@ -1214,6 +1292,8 @@ void NetworkManager::sendSpawnTo(NetPeerId peer, const DynamicSpawn& record)
     writer.write(pos);
     writer.write(rot);
     writer.write<float>(scale);
+    writer.write(linVel);
+    writer.write(angVel);
     if (writer.overflowed())
     {
         Log::warning("Network: spawn path too long, not replicated: " + record.path);
@@ -1231,8 +1311,18 @@ void NetworkManager::handleEventMessage(NetPeerId peer, std::span<const uint8> b
         if (!m_peerClients.contains(peer))
             return;
     }
-    else if (peer != m_serverPeer || m_localClientId == 0)
+    else if (peer != m_serverPeer)
         return; // clients accept events only from the server they are welcomed by
+    else if (m_localClientId == 0)
+    {
+        // Events (ch1) share no ordering with the ch2 Welcome, so the server's join-time burst
+        // (game world replay, tweak sync) can arrive BEFORE we process the Welcome. The reliable
+        // transport has already acked these — dropping here loses them forever. Park them and
+        // replay the moment the Welcome lands.
+        if (m_preWelcomeEvents.size() < 256)
+            m_preWelcomeEvents.emplace_back(bytes.begin(), bytes.end());
+        return;
+    }
 
     NetReader reader(bytes.subspan(1));
     // IDENTITY: the server takes it from the connection the packet arrived on (a client-supplied one
@@ -1261,7 +1351,6 @@ void NetworkManager::handleEventMessage(NetPeerId peer, std::span<const uint8> b
         return;
     }
 
-    Log::info("Network: event '" + std::string(name) + "' from client " + std::to_string(senderClientId));
     fireEventAttributed(name, senderClientId, data);
     if (m_role == ENetRole::Server) // re-serialized, not forwarded raw: the id must be ours, not theirs
         for (const NetPeerId other : m_readyPeers)
@@ -1271,6 +1360,15 @@ void NetworkManager::handleEventMessage(NetPeerId peer, std::span<const uint8> b
 
 // The netId comes off the wire, so it is a CLAIM. Resolving it without the ownership check would let
 // a client pin its events on any entity it likes, including another player's.
+Entity* NetworkManager::findEntity(uint32 netId) const
+{
+    if (netId == 0)
+        return nullptr;
+    const std::lock_guard<std::mutex> lock(m_entityMutex);
+    const auto it = m_entities.find(netId);
+    return it != m_entities.end() ? it->second.entity : nullptr;
+}
+
 Entity* NetworkManager::findOwnedEntity(uint32 netId, uint32 clientId) const
 {
     if (netId == 0 || clientId == 0)
@@ -1286,11 +1384,22 @@ Entity* NetworkManager::findOwnedEntity(uint32 netId, uint32 clientId) const
 // ctx->networkEventSender). Dispatch is synchronous, so a plain scoped set is enough.
 void NetworkManager::fireEventAttributed(std::string_view name, uint32 senderClientId, std::span<const uint8> data)
 {
+    if (name == TweakSyncEventName)
+    {
+        // Engine-reserved tweak sync. Applied only when WE are the client — a hostile client
+        // cannot push values to a server — and applySyncedBlob itself ignores every key the
+        // receiver did not flag as Synced, clamping to the receiver's own bounds.
+        if (m_role == ENetRole::Client)
+            TweakRegistry::get().applySyncedBlob(data);
+        return;
+    }
     const uint32 previousSender = m_currentEventSender;
     const std::span<const uint8> previousData = m_currentEventData;
     m_currentEventSender = senderClientId;
     m_currentEventData = data;
     Globals::scriptEvents.fireEvent(std::string(name));
+    if (m_onGameEvent)
+        m_onGameEvent(name); // C++ listener: sender/data stay readable for the call
     m_currentEventSender = previousSender;
     m_currentEventData = previousData;
 }
@@ -1325,7 +1434,7 @@ void NetworkManager::handleSnapshot(NetReader& reader)
     {
         const uint32 netId = uint32(reader.readVarUInt());
         const uint8 recFlags = reader.read<uint8>();
-        if (recFlags & ~(NetRecFlag_Physics | NetRecFlag_Asleep | NetRecFlag_Forced | NetRecFlag_Arbitrated))
+        if (recFlags & ~(NetRecFlag_Physics | NetRecFlag_Asleep | NetRecFlag_Forced | NetRecFlag_Arbitrated | NetRecFlag_ServerPlayer))
         {
             if (!m_warnedUnknownRecFlags)
             {
@@ -1364,8 +1473,11 @@ void NetworkManager::handleSnapshot(NetReader& reader)
         if (comp->state->client.hasTarget && tick <= comp->state->client.serverTick)
             continue; // stale (reordered unreliable packet)
         // remote-owned entities also record into their interpolation ring (another player's entity:
-        // the observer plays this history back a couple of ticks behind — see NetSnapshotRing)
-        if ((recFlags & NetRecFlag_Physics) && comp->ownerClientId != 0 && comp->ownerClientId != m_localClientId)
+        // the observer plays this history back a couple of ticks behind — see NetSnapshotRing).
+        // The SERVER's own player rides the same path (flagged — it is server-owned by id).
+        if ((recFlags & NetRecFlag_Physics)
+            && ((recFlags & NetRecFlag_ServerPlayer)
+                || (comp->ownerClientId != 0 && comp->ownerClientId != m_localClientId)))
         {
             std::unique_ptr<NetSnapshotRing>& ring = m_remoteBuffers[netId];
             if (!ring)
@@ -1391,6 +1503,17 @@ void NetworkManager::send(double deltaSec)
     if (m_role == ENetRole::None)
         return;
     ProfileScope scope("NetworkManager::send", EProfileCategory::Network);
+
+    // Synced tweaks: whenever any flagged value changed, re-broadcast the full set (small and
+    // idempotent — no per-var dirty bookkeeping). Queued here, drained with the other events below.
+    if (m_role == ENetRole::Server && TweakRegistry::get().syncGeneration() != m_sentTweakGeneration)
+    {
+        m_sentTweakGeneration = TweakRegistry::get().syncGeneration();
+        std::vector<std::vector<uint8>> chunks;
+        TweakRegistry::get().packSynced(chunks);
+        for (const std::vector<uint8>& chunk : chunks)
+            fireNetworkEvent(TweakSyncEventName, chunk);
+    }
 
     // outgoing events queued this frame (worker-thread script thunks can't touch NetHost themselves)
     std::vector<PendingEvent> pendingEvents;
@@ -1551,7 +1674,8 @@ void NetworkManager::sendSnapshotTick()
                 comp->state->sleepDirty = false;
             else if (!keyframe)
                 continue;
-            recFlags |= NetRecFlag_Physics | (asleep ? NetRecFlag_Asleep : 0);
+            recFlags |= NetRecFlag_Physics | (asleep ? NetRecFlag_Asleep : 0)
+                | (comp->state->server.serverPrimary ? NetRecFlag_ServerPlayer : uint8(0));
             pos = physics->body.getPosition();
             rot = physics->body.getRotation();
             linVel = physics->body.getLinearVelocity();

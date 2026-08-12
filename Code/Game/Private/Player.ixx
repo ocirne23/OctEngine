@@ -20,6 +20,19 @@ public:
     void registerTweaks();
     void spawn(const glm::vec3& pos); // spawnAssetFile + addRootEntity; creates the territory query
     void despawn();
+    // PvP: the player's Force team — the shield, projectiles and the cover check all follow it.
+    // Applies to an already-spawned/adopted capsule too (the client learns its team at Welcome).
+    void setTeam(uint32 team);
+    uint32 team() const { return m_team; }
+    // CO-OP CLIENT: the server spawned our player (Component Network + setOwner) — poll-adopt the
+    // locally-owned capsule instead of spawning one. Movement/shield/health then run on the SAME
+    // code paths (the owner simulates; the claim stream carries the body state to the server).
+    void clientAdopt(const glm::vec3& respawnPos);
+    float fireInterval() const { return m_fireInterval; }   // server-side rate limit for client
+    float meleeInterval() const { return m_meleeInterval; } // combat requests
+    // Server: adopt an externally spawned projectile (client combat requests) into the aging +
+    // field-push loop, so it despawns and deflects like every other shot.
+    void trackProjectile(EntityPtr projectile) { m_projectiles.push_back(Projectile{ std::move(projectile), 0.0f }); }
 
     // Camera-relative WASD velocity steering + LShift sprint + Space jump off a ground raycast
     // (port of the testbed's updateLocalPlayer). Windowed input only — no-ops without window focus.
@@ -54,9 +67,19 @@ public:
     float energyMax() const { return m_energyMax; }
     float shieldFrac() const { return m_energyMax > 0.0f ? m_energy / m_energyMax : 0.0f; }
     float shieldRadius() const; // pressure-aware equilibrium radius estimate, 0 = no bubble
+    // MATERIALS inventory: refilled near own-team Silos/Base, invested into nearby blueprints.
+    // Server-authoritative for every player (GameMatch runs the transfers); clients receive their
+    // own value through the GSh mirror.
+    float materials() const { return m_materials; }
+    float materialsMax() const { return m_materialsMax; }
+    void setMaterials(float value) { m_materials = glm::clamp(value, 0.0f, m_materialsMax); }
     float pressure() const { return m_lastPressure; } // last readback, for the HUD (threshold tuning)
     float density() const { return m_lastDensity; }   // field density at the body (strongest team's
                                                       // field, the Density debug view's value)
+    bool shieldCollapsed() const { return m_shieldCollapsed; }
+    // Collapse/reboot EDGE since the last poll — the co-op shield mirror flushes an event
+    // immediately on it instead of waiting for the periodic send.
+    bool takeShieldEdge() { const bool e = m_shieldEdge; m_shieldEdge = false; return e; }
 
 private:
     struct Projectile
@@ -80,8 +103,10 @@ private:
     bool m_meleeSwung = false;
     bool m_jumpWasDown = false;
 
+    uint32 m_team = 0;
     float m_health = 100.0f;
     float m_energy = 100.0f;
+    float m_materials = 0.0f; // carried construction stock (see materials())
     float m_lastPressure = 0.0f;
     float m_lastDensity = 0.0f;
     float m_outputHistory[3] = { 1.5f, 1.5f, 1.5f }; // outputs of recent ticks — the applied-force
@@ -90,10 +115,11 @@ private:
                                                      // that PRODUCED it (shield-state-independent)
     float m_graceTimer = 0.0f;      // seconds of post-spawn drain immunity (stale readbacks)
     bool m_shieldCollapsed = false; // latched at empty battery, cleared at "Reboot energy"
+    bool m_shieldEdge = false;      // collapse/reboot happened this tick (co-op mirror flush)
 
     // Tweaks ("Game/Player", "Game/Shield")
-    float m_moveSpeed = 8.0f;
-    float m_accel = 60.0f;
+    float m_moveSpeed = 4.0f;
+    float m_accel = 30.0f; // deliberately soft: steering force must lose against bubble push
     float m_jumpSpeed = 6.0f;
     float m_sprintMult = 2.0f;
     float m_healthMax = 100.0f;
@@ -105,6 +131,7 @@ private:
     float m_rebootEnergy = 20.0f;       // collapsed shield restarts once the battery refills to this
     float m_coverDrainReduction = 0.75f; // drain reduction per unit of FRIENDLY field surplus over
                                          // the own output (standing inside a team emitter's bubble)
+    float m_materialsMax = 50.0f;        // inventory size ("Game/Player/Materials max")
     float m_spawnGraceSec = 1.0f;        // no energy/health drain this long after (re)spawn — the
                                          // GPU readbacks still carry the death position for ~2 frames
     // Tweaks ("Game/Combat")
@@ -118,4 +145,7 @@ private:
     float m_damageRadius = 0.8f;        // metres: health drains once the equilibrium shield radius
                                         // squishes below this (capsule half-height is 0.8 world)
     float m_shieldPushGain = 10000.0f;  // applied-force -> impulse scale (testbed force-ball precedent)
+    float m_shieldTension = 1.5f;       // SURFACE TENSION: push AND energy drain scale by
+                                        // (1 + tension * pressure) — leaning deep into a bubble
+                                        // stiffens superlinearly and burns both sides' batteries
 };

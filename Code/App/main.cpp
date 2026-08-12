@@ -37,6 +37,7 @@ int main(int argc, char* argv[])
     Globals::profiler.endStaticInit(); // closes the "Static init" scope opened at the profiler's static-init construction; must precede any main() scope
     ProfileScope initScope("main() initialize", EProfileCategory::App);
     FileSystem::initialize();
+    TweakRegistry::get().loadSaved(); // Saved-flagged tweaks apply from Local/tweaks.cfg from here on
 
     // --server [--port N] [--headless] [--tickrate N] hosts an authoritative session; --connect
     // <ip[:port]> joins one; no flags = single player (networking fully inert). Same executable for
@@ -48,6 +49,7 @@ int main(int argc, char* argv[])
     std::string connectAddress;
     bool headless = false;
     bool gameMode = false;
+    bool pvpMode = false;
     for (int i = 1; i < argc; ++i)
     {
         const std::string_view arg = argv[i];
@@ -57,16 +59,17 @@ int main(int argc, char* argv[])
         else if (arg == "--tickrate" && i + 1 < argc)     tickHz = glm::clamp(std::atoi(argv[++i]), 10, 240);
         else if (arg == "--headless")                     headless = true;
         else if (arg == "--game")                         gameMode = true; // whitebox game instead of the testbed scene
+        else if (arg == "--pvp")                          pvpMode = true;  // with --game: no ambient/enemies, per-client teams
         // both ends must agree, or the handshake denies with a clear reason
         else if (arg == "--no-encrypt")                   NetworkManager::setEncryption(false);
         else Log::warning("Unknown command line argument: " + std::string(arg));
     }
     if (headless && launchMode != ELaunchMode::Server)
         Log::warning("--headless only applies to --server, ignoring");
-    if (gameMode && launchMode != ELaunchMode::Single)
+    if (gameMode && headless && launchMode == ELaunchMode::Server)
     {
-        Log::warning("--game is single player for now, ignoring"); // MP arrives in a later iteration
-        gameMode = false;
+        Log::warning("--game needs a window (GPU field readbacks drive the authority sim), ignoring --game");
+        gameMode = false; // co-op = a WINDOWED listen server (--game --server) + clients (--game --connect)
     }
     const bool headlessServer = headless && launchMode == ELaunchMode::Server;
 
@@ -100,7 +103,6 @@ int main(int argc, char* argv[])
     }
     Globals::networkManager.initialize();
 
-    Globals::scriptHost.setCurrentScriptPath("Scripts/Graph.scr");
     Globals::scriptEvents.initialize();
     registerScriptDslBindings(); // must run before anything touches Globals::scriptBindings (ScriptEditor's build() included)
 
@@ -185,19 +187,26 @@ int main(int argc, char* argv[])
     //Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/particle.pre", Transform(spawnOffset), true));
     //Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/SphereField.pre", Transform(spawnOffset), true));
 
-    if (launchMode == ELaunchMode::Server)
+    if (!gameMode && launchMode == ELaunchMode::Server)
     {
         Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/Debug/networkTest.pre", Transform(glm::vec3(0, 0, 0)), true));
     }
 
     GizmoController gizmo;
     InputControls controls(gizmo, cameraController, Globals::world); // headless-inert: update/key handling never run
-    GameMatch game(gameMode); // stack local: holds EntityPtrs/Force handles, destructs before the globals
+    GameMatch game(gameMode, pvpMode && gameMode); // stack local: holds EntityPtrs/Force handles, destructs before the globals
     if (game.enabled())
     {
         game.spawnWorld();
         controls.setGameMode(true);                  // mutes the testbed spawn/possess keys
         cameraController.setMovementEnabled(false);  // WASD belongs to the game player
+        if (Globals::networkManager.role() == ENetRole::Server)
+        {
+            // Co-op: the game owns per-client lifecycles (player spawn + world-state replay),
+            // replacing the testbed's netPlayerCapsule hooks registered above.
+            Globals::networkManager.setOnClientJoined([&game](uint32 clientId) { game.onClientJoined(clientId); });
+            Globals::networkManager.setOnClientLeft([&game](uint32 clientId) { game.onClientLeft(clientId); });
+        }
     }
 
     Camera camera;
@@ -255,6 +264,9 @@ int main(int argc, char* argv[])
 
         Globals::time.update();
         const double deltaSec = Globals::time.getDeltaSec();
+        TweakRegistry::get().update((float)deltaSec); // Saved/Synced change detection
+
+
 
         if (!headlessServer)
         {

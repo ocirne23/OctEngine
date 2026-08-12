@@ -1,0 +1,14 @@
+# PvP corridor border segment: solid indestructible 10 m block. The Game layer rings the arena
+# with a row of these (deterministic local spawn on every instance - no network, no gameplay
+# role), parented under the Ground entity to keep the scene root lean.
+Prefab gameBorderWall
+	Component Render
+		ObjectContainer baseshapes
+		Node Cube
+		Type StaticMesh
+		Color 0.45 0.45 0.5
+		Scale 5
+	Component Physics
+		Body Static
+		Shape Box
+		HalfExtents 5 5 5

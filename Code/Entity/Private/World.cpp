@@ -243,6 +243,8 @@ std::shared_ptr<RenderComponent::SpawnInfo> World::buildRenderSpawnInfo(const As
         Log::warning("Scene: entity '" + ownerName + "' references unknown node '" + nodePath + "', using ROOT");
     info->nodePath = nodePath.empty() ? "ROOT" : nodePath;
     info->localTransform = readNodeTransform(renderNode); // mesh offset within the entity
+    if (const AssetNode* colorNode = renderNode.find("Color"))
+        info->color = glm::clamp(colorNode->asVec3(), 0.0f, 1.0f); // solid tint (see SpawnInfo)
     return info;
 }
 
@@ -261,6 +263,7 @@ void writeRenderSpawnInfo(const RenderComponent::SpawnInfo& info, AssetNode& out
     if (lt.pos != glm::vec3(0.0f))         out.set("Position", lt.pos);
     if (lt.quat != glm::quat(1, 0, 0, 0))  out.set("Rotation", glm::degrees(glm::eulerAngles(lt.quat)));
     if (lt.scale != 1.0f)                  out.set("Scale", lt.scale);
+    if (info.color.x >= 0.0f)              out.set("Color", info.color);
 }
 
 const AnimationSet* World::getOrBuildClipSet(const Skeleton* skel, const AnimatorDesc& desc)
@@ -794,8 +797,12 @@ EntityPtr World::spawnAssetFile(const std::string& path, const Transform& base, 
         return EntityPtr{};
 
     const Transform& dt = tmpl->defaultTransform;
+    // Override replaces the POSITION and COMPOSES the caller's rotation onto the authored default
+    // (identity callers keep the authored rotation exactly). The rotation used to be dropped
+    // outright — aimed Lances and replicated spawns silently spawned with the prefab default.
     const glm::vec3 pos = overrideDefaultTransform ? base.pos : dt.pos;
-    return Entity::create(*tmpl, Transform(pos, dt.scale, dt.quat));
+    const glm::quat quat = overrideDefaultTransform ? base.quat * dt.quat : dt.quat;
+    return Entity::create(*tmpl, Transform(pos, dt.scale, quat));
 }
 
 EntityPtr World::createEmptyEntity(const std::string& name)

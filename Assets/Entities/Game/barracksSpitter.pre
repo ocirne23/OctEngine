@@ -1,0 +1,14 @@
+# Spitter barracks: spawns SPITTER attack units (PvP) / guards (PvE) from conveyor-fed materials.
+# 6 m box (3x3 cells).
+Prefab game_barracksSpitter
+	Component Render
+		ObjectContainer baseshapes
+		Node Cube
+		Type StaticMesh
+		Color 0.45 0.55 0.85
+		Scale 3
+	Component Physics
+		Body Static
+		ContactEvents true
+		Shape Box
+		HalfExtents 3 3 3

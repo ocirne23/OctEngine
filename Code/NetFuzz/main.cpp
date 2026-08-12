@@ -386,7 +386,7 @@ static int fuzzGame(const NetAddress& target, uint32 iterations, uint64 seed)
     }
     // must match GameProtocolId in NetworkManager.cpp — bumped on every wire change, which is the
     // signal to re-run this mode
-    constexpr uint32 GameProtocolId = 0x4F435343; // "OCSC"
+    constexpr uint32 GameProtocolId = 0x4F435345; // "OCSE"
     if (!handshake(socket, target, GameProtocolId, rng.next()))
     {
         printf("[game] FAIL: no handshake — is the server running, and is GameProtocolId current?\n");

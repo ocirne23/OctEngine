@@ -32,6 +32,8 @@ float NpcSystem::unitEnergyMax(int index) const
 
 void NpcSystem::registerTweaks()
 {
+    // Gameplay tweaks persist between runs and the server's values overrule the clients'.
+    const Tweak::ScopedFlags scoped(ETweakFlags::Saved | ETweakFlags::Synced);
     Tweak::floatVar("Game/Enemies", "Unit health", &m_unitHealth, 5.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Enemies", "Move speed", &m_moveSpeed, 0.5f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Enemies", "Accel", &m_accel, 1.0f, 200.0f, 0.5f);
@@ -44,6 +46,7 @@ void NpcSystem::registerTweaks()
     Tweak::floatVar("Game/Enemies", "Projectile damage", &m_projectileDamage, 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Enemies", "Melee damage", &m_meleeDamage, 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Enemies", "Field push gain", &m_fieldPushGain, 0.0f, 100000.0f, 100.0f);
+    Tweak::floatVar("Game/Enemies", "Push tension", &m_fieldTension, 0.0f, 10.0f, 0.05f);
     Tweak::floatVar("Game/Enemies", "Emitter drain/s per unit", &m_emitterDrainPerUnit, 0.0f, 50.0f, 0.25f);
     Tweak::floatVar("Game/Enemies", "Emitter drain radius", &m_emitterDrainRadius, 1.0f, 30.0f, 0.5f);
     Tweak::floatVar("Game/Enemies", "Unit energy", &m_unitEnergy, 1.0f, 500.0f, 1.0f);
@@ -59,7 +62,7 @@ void NpcSystem::registerTweaks()
     Tweak::floatVar("Game/Enemies", "Shot drain radius", &m_shotEmitterDrainRadius, 1.0f, 20.0f, 0.25f);
     Tweak::intVar("Game/Friendlies", "Barracks unit limit", &m_barracksUnitLimit, 0, 16, 1);
     Tweak::floatVar("Game/Friendlies", "Barracks spawn interval", &m_barracksSpawnInterval, 1.0f, 60.0f, 0.5f);
-    Tweak::floatVar("Game/Friendlies", "Barracks spawn energy", &m_barracksSpawnEnergy, 0.0f, 50.0f, 0.5f);
+    Tweak::floatVar("Game/Friendlies", "Barracks spawn materials", &m_barracksSpawnMaterials, 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Friendlies", "Attack dps", &m_friendlyAttackDps, 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Friendlies", "Aggro radius", &m_friendlyAggroRadius, 2.0f, 60.0f, 0.5f);
     Tweak::floatVar("Game/Friendlies", "Leash radius", &m_friendlyLeash, 4.0f, 100.0f, 0.5f);
@@ -177,7 +180,7 @@ void NpcSystem::tickTurrets(StructureSystem& structures, float deltaSec)
         return structures.structureIndexById(kv.first) < 0; });
 }
 
-void NpcSystem::fireSpitterShot(const glm::vec3& from, const glm::vec3& at)
+void NpcSystem::fireSpitterShot(const glm::vec3& from, const glm::vec3& at, uint8 team)
 {
     glm::vec3 dir = (at + glm::vec3(0.0f, 1.0f, 0.0f)) - (from + glm::vec3(0.0f, 0.8f, 0.0f));
     const float len = glm::length(dir);
@@ -190,6 +193,9 @@ void NpcSystem::fireSpitterShot(const glm::vec3& from, const glm::vec3& at)
     if (!shot.entity)
         return;
     shot.entity->setName("EnemyShot");
+    shot.team = team;
+    if (ForceComponent* fc = getComponent<ForceComponent>(shot.entity.get()))
+        fc->emitter.setTeam(team); // the prefab authors team 1 — PvP spitters shoot their own team's field
     if (PhysicsComponent* pc = getComponent<PhysicsComponent>(shot.entity.get()))
     {
         pc->body.setLinearVelocity(dir * m_spitterShotSpeed);
@@ -211,15 +217,17 @@ void NpcSystem::tickShots(StructureSystem& structures, float deltaSec)
     // (ground, player, units) just despawns it — no bouncing shells rolling around.
     for (const ShotHit& hit : m_pendingShotHits)
     {
-        const int structure = structures.structureIndexByEntity(hit.victim);
-        if (structure >= 0)
-            structures.damageStructure(structures.structureId(structure), m_spitterShotDamage);
+        uint8 shotTeam = 1;
         for (Shot& s : m_shots)
             if (s.entity.get() == hit.shot)
             {
+                shotTeam = s.team;
                 s.age = m_spitterShotLifetime + 1.0f; // marked: the sweep below removes it
                 break;
             }
+        const int structure = structures.structureIndexByEntity(hit.victim);
+        if (structure >= 0 && structures.structureTeam(structure) != shotTeam)
+            structures.damageStructure(structures.structureId(structure), m_spitterShotDamage);
     }
     m_pendingShotHits.clear();
 
@@ -239,7 +247,7 @@ void NpcSystem::tickShots(StructureSystem& structures, float deltaSec)
         // Player emitter fields brake/deflect incoming shots (the force-ball pattern, mirrored),
         // and a shot pressing near a bubble SAPS it: same nearest-active-emitter deposit the units
         // use, so barrages drain a shield wall even when nothing penetrates.
-        structures.addEmitterLoad(pc->body.getPosition(), m_shotEmitterDrainRadius, m_shotEmitterDrain);
+        structures.addEmitterLoad(pc->body.getPosition(), m_shotEmitterDrainRadius, m_shotEmitterDrain, s.team);
         if (const ForceComponent* fc = getComponent<ForceComponent>(s.entity.get()))
         {
             const glm::vec3 force = fc->emitter.getAppliedForce();
@@ -257,12 +265,36 @@ glm::vec3 NpcSystem::friendlyPos(int index) const
     return pc && pc->body.isValid() ? pc->body.getPosition() : m_friendlies[index].entity->pos;
 }
 
-void NpcSystem::spawnFriendly(const glm::vec3& barracksPos, uint32 barracksId)
+// A unit spawn point on a ring around a building, on the first of 8 probed angles whose cell is
+// free of structures (and inside the arena bounds) — units must never spawn INSIDE the building
+// (they have no pathfinding to escape it). Falls back to the first angle when everything is full.
+static glm::vec3 freeSpawnPointAround(const StructureSystem& structures, const glm::vec3& center,
+    float ringRadius)
 {
-    const float angle = glm::linearRand(0.0f, glm::two_pi<float>());
-    const glm::vec3 pos = glm::vec3(barracksPos.x, 1.0f, barracksPos.z)
-        + glm::vec3(std::cos(angle) * 2.5f, 0.0f, std::sin(angle) * 2.5f);
+    const float start = glm::linearRand(0.0f, glm::two_pi<float>());
+    for (int k = 0; k < 8; ++k)
+    {
+        const float a = start + (float)k * glm::two_pi<float>() / 8.0f;
+        const glm::vec3 p(center.x + std::cos(a) * ringRadius, 1.0f, center.z + std::sin(a) * ringRadius);
+        if (structures.cellsFree(EStructureType::Emitter, p)) // 1x1 probe
+            return p;
+    }
+    return glm::vec3(center.x + std::cos(start) * ringRadius, 1.0f, center.z + std::sin(start) * ringRadius);
+}
+
+// Spawn ring: just outside the barracks' own footprint.
+static float barracksSpawnRadius()
+{
+    return StructureSystem::footprintCellsOf(EStructureType::Barracks)
+        * StructureSystem::GridCellSize * 0.5f + 1.5f;
+}
+
+void NpcSystem::spawnFriendly(const StructureSystem& structures, const glm::vec3& barracksPos, uint32 barracksId)
+{
+    const glm::vec3 pos = freeSpawnPointAround(structures,
+        glm::vec3(barracksPos.x, 0.0f, barracksPos.z), barracksSpawnRadius());
     Unit u;
+    u.team = 0; // the Unit default is the ENEMY team — guards are the player's
     u.health = m_unitHealth;
     u.energy = m_unitEnergy;
     for (float& h : u.outputHistory)
@@ -280,14 +312,16 @@ void NpcSystem::spawnFriendly(const glm::vec3& barracksPos, uint32 barracksId)
 void NpcSystem::tickFriendlies(StructureSystem& structures, float deltaSec)
 {
     // Barracks production: one unit per interval while under the per-barracks alive limit AND the
-    // barracks can pay the spawn energy from its internal store (supply-gated unit output).
+    // barracks can pay the spawn MATERIALS from its conveyor-fed store (supply-gated output).
+    // PvE guards are typeless — any barracks variant produces the same guard.
     for (int i = 0; i < structures.structureCount(); ++i)
     {
-        if (structures.structureType(i) != EStructureType::Barracks)
+        if (!isBarracksType(structures.structureType(i)) || structures.structureBlueprint(i))
             continue;
         const uint32 id = structures.structureId(i);
         float& timer = m_barracksTimers[id];
-        timer = glm::max(0.0f, timer - deltaSec);
+        // idle Constructors in range accelerate the spawn clock (boost 1 = double speed)
+        timer = glm::max(0.0f, timer - deltaSec * (1.0f + structures.barracksSpawnBoost(id)));
         if (timer > 0.0f)
             continue;
         int alive = 0;
@@ -296,9 +330,9 @@ void NpcSystem::tickFriendlies(StructureSystem& structures, float deltaSec)
                 ++alive;
         if (alive >= m_barracksUnitLimit)
             continue; // full roster: retry the moment a slot frees (timer stays 0)
-        if (!structures.trySpendEnergy(id, m_barracksSpawnEnergy))
-            continue; // store empty: retry when the cables have refilled it
-        spawnFriendly(structures.structurePos(i), id);
+        if (!structures.trySpendStoredMinerals(id, m_barracksSpawnMaterials))
+            continue; // store empty: retry when the conveyors have refilled it
+        spawnFriendly(structures, structures.structurePos(i), id);
         timer = m_barracksSpawnInterval;
     }
 
@@ -369,7 +403,11 @@ void NpcSystem::tickFriendlies(StructureSystem& structures, float deltaSec)
         if (ForceComponent* fc = getComponent<ForceComponent>(u.entity.get()))
         {
             const float pressure = fc->emitter.getPressure();
-            u.energy = glm::max(0.0f, u.energy - pressure * m_unitEnergyDrainRate * deltaSec);
+            const float tension = 1.0f + m_fieldTension * pressure; // surface tension (player rule)
+            const float energyBefore = u.energy;
+            u.energy = glm::max(0.0f, u.energy - pressure * tension * m_unitEnergyDrainRate * deltaSec);
+            if (energyBefore > 0.0f && u.energy <= 0.0f)
+                m_shieldCollapseEdge = true; // co-op: flush the shield mirror this tick
             fc->emitter.setOutput(u.energy > 0.0f ? m_unitShieldOutput : 0.01f);
 
             const float iso = Globals::forceSystem.getParams().isoThreshold;
@@ -379,7 +417,7 @@ void NpcSystem::tickFriendlies(StructureSystem& structures, float deltaSec)
             const glm::vec3 force = fc->emitter.getAppliedForce() / glm::max(u.outputHistory[0], 1e-3f);
             if (glm::dot(force, force) > 1e-8f)
             {
-                pc->body.applyImpulse(force * deltaSec * m_fieldPushGain * pressure);
+                pc->body.applyImpulse(force * deltaSec * m_fieldPushGain * pressure * tension);
                 const glm::vec3 vel = pc->body.getLinearVelocity();
                 const float speed = glm::length(vel);
                 const float maxSpeed = m_moveSpeed * 3.0f;
@@ -404,6 +442,43 @@ glm::vec3 NpcSystem::unitPos(int index) const
     return pc && pc->body.isValid() ? pc->body.getPosition() : m_units[index].entity->pos;
 }
 
+void NpcSystem::collectShieldStates(std::vector<ShieldNetState>& out) const
+{
+    const auto append = [&out](const Unit& u, float healthMax, float energyMax, uint8 kind)
+    {
+        const NetworkComponent* net = getComponent<NetworkComponent>(u.entity.get());
+        if (!net || net->netId == 0)
+            return;
+        const ForceComponent* fc = getComponent<ForceComponent>(u.entity.get());
+        ShieldNetState s;
+        s.netId = net->netId;
+        s.healthFrac = glm::clamp(u.health / glm::max(healthMax, 1e-3f), 0.0f, 1.0f);
+        s.energyFrac = glm::clamp(u.energy / glm::max(energyMax, 1e-3f), 0.0f, 1.0f);
+        s.output = fc ? fc->emitter.getOutput() : 0.0f;
+        s.collapsed = u.energy <= 0.0f;
+        s.kind = kind;
+        s.team = u.team;
+        out.push_back(s);
+    };
+    for (int i = 0; i < (int)m_units.size(); ++i)
+        append(m_units[i], unitHealthMax(i), unitEnergyMax(i), 0);
+    for (const Unit& u : m_friendlies)
+        append(u, friendlyHealthMax(), friendlyEnergyMax(), 1);
+    for (const EnemyStructure& e : m_enemyStructures) // health-only records (kind 3; cores kind 4)
+    {
+        const NetworkComponent* net = getComponent<NetworkComponent>(e.entity.get());
+        if (!net || net->netId == 0)
+            continue;
+        ShieldNetState s;
+        s.netId = net->netId;
+        s.healthFrac = glm::clamp(e.health / glm::max(e.maxHealth, 1e-3f), 0.0f, 1.0f);
+        s.energyFrac = 0.0f;
+        s.kind = e.type == EEnemyStructType::Core ? 4 : 3;
+        s.team = 1;
+        out.push_back(s);
+    }
+}
+
 void NpcSystem::damageByEntity(const Entity* entity, float amount)
 {
     for (Unit& u : m_units)
@@ -422,26 +497,31 @@ void NpcSystem::spawnUnit(const glm::vec3& center, float ringRadius)
         + glm::vec3(std::cos(angle) * r, 1.0f, std::sin(angle) * r), 0);
 }
 
-void NpcSystem::spawnUnitAt(const glm::vec3& pos, uint32 sourceId)
+void NpcSystem::spawnUnitAt(const glm::vec3& pos, uint32 sourceId, uint8 team, ENpcType forceType)
 {
-    // Weighted type roll: the wave mix comes from the table's spawnWeight column.
-    float totalWeight = 0.0f;
-    for (const NpcTypeDef& def : c_npcTypes)
-        totalWeight += def.spawnWeight;
-    float roll = glm::linearRand(0.0f, totalWeight);
-    ENpcType type = ENpcType::Grunt;
-    for (int t = 0; t < (int)ENpcType::Count; ++t)
+    // Weighted type roll (waves/camps); barracks variants FORCE their unit type instead.
+    ENpcType type = forceType;
+    if (type == ENpcType::Count)
     {
-        roll -= c_npcTypes[t].spawnWeight;
-        if (roll <= 0.0f)
+        float totalWeight = 0.0f;
+        for (const NpcTypeDef& def : c_npcTypes)
+            totalWeight += def.spawnWeight;
+        float roll = glm::linearRand(0.0f, totalWeight);
+        type = ENpcType::Grunt;
+        for (int t = 0; t < (int)ENpcType::Count; ++t)
         {
-            type = (ENpcType)t;
-            break;
+            roll -= c_npcTypes[t].spawnWeight;
+            if (roll <= 0.0f)
+            {
+                type = (ENpcType)t;
+                break;
+            }
         }
     }
     const NpcTypeDef& def = c_npcTypes[(int)type];
     Unit u;
     u.type = type;
+    u.team = team;
     u.sourceId = sourceId;
     u.health = m_unitHealth * def.health;
     u.energy = m_unitEnergy * def.energy;
@@ -452,12 +532,18 @@ void NpcSystem::spawnUnitAt(const glm::vec3& pos, uint32 sourceId)
         return;
     u.entity->setName(def.name);
     Globals::world.addRootEntity(u.entity);
-    // Projectile hits hurt: contact events fire main-thread inside physics.update, and this system
-    // outlives its units (GameMatch member), so the capture is safe.
+    if (ForceComponent* fc = getComponent<ForceComponent>(u.entity.get()))
+        fc->emitter.setTeam(team); // prefabs author team 1 — PvP barracks units carry their builder's
+    // ENEMY-team projectile hits hurt (own shots pass free — PvE units are team 1 vs team-0 shots,
+    // so nothing changes there). Contact events fire main-thread inside physics.update, and this
+    // system outlives its units (GameMatch member), so the capture is safe.
     if (PhysicsComponent* pc = getComponent<PhysicsComponent>(u.entity.get()))
-        pc->onContact = [this, unit = u.entity.get()](Entity& other, bool begin)
+        pc->onContact = [this, unit = u.entity.get(), team](Entity& other, bool begin)
         {
-            if (begin && std::string_view(other.getName()) == "Projectile")
+            if (!begin || std::string_view(other.getName()) != "Projectile")
+                return;
+            const ForceComponent* fc = getComponent<ForceComponent>(&other);
+            if (!fc || fc->emitter.getTeam() != team)
                 damageByEntity(unit, m_projectileDamage);
         };
     m_units.push_back(std::move(u));
@@ -517,7 +603,8 @@ void NpcSystem::spawnEnemyCamps(const glm::vec3& basePos)
     }
 }
 
-void NpcSystem::tickEnemyStructures(StructureSystem& structures, const glm::vec3& playerPos, float deltaSec)
+void NpcSystem::tickEnemyStructures(StructureSystem& structures, std::span<const PlayerInfo> players,
+    float deltaSec)
 {
     // A camp is POWERED while its core lives — dead cores silence the spawner and turrets (and the
     // core's bubble died with its entity), but the remains stay clearable.
@@ -558,10 +645,21 @@ void NpcSystem::tickEnemyStructures(StructureSystem& structures, const glm::vec3
             }
             else if (s.type == EEnemyStructType::Turret)
             {
-                // Player first if in range, else the nearest player structure.
-                glm::vec3 target = playerPos;
-                bool haveTarget = glm::distance(glm::vec2(pos.x, pos.z), glm::vec2(playerPos.x, playerPos.z))
-                    <= m_campTurretRange;
+                // Nearest player first if in range (ANY player — clients included), else the
+                // nearest player structure.
+                glm::vec3 target(0.0f);
+                bool haveTarget = false;
+                float bestDist = m_campTurretRange;
+                for (const PlayerInfo& p : players)
+                {
+                    const float dist = glm::distance(glm::vec2(pos.x, pos.z), glm::vec2(p.pos.x, p.pos.z));
+                    if (dist <= bestDist)
+                    {
+                        bestDist = dist;
+                        target = p.pos;
+                        haveTarget = true;
+                    }
+                }
                 if (!haveTarget)
                 {
                     const int nearest = structures.findConnectableNear(pos, m_campTurretRange);
@@ -582,7 +680,7 @@ void NpcSystem::tickEnemyStructures(StructureSystem& structures, const glm::vec3
     }
 }
 
-void NpcSystem::applyPlayerMelee(const glm::vec3& pos, const glm::vec3& dirPlanar, float range)
+void NpcSystem::applyPlayerMelee(const glm::vec3& pos, const glm::vec3& dirPlanar, float range, uint8 team)
 {
     for (EnemyStructure& s : m_enemyStructures)
     {
@@ -597,6 +695,8 @@ void NpcSystem::applyPlayerMelee(const glm::vec3& pos, const glm::vec3& dirPlana
     }
     for (Unit& u : m_units)
     {
+        if (u.team == team)
+            continue; // PvP: never chop your own barracks units (PvE: melee 0 vs units 1 — all hit)
         const PhysicsComponent* pc = getComponent<PhysicsComponent>(u.entity.get());
         if (!pc || !pc->body.isValid())
             continue;
@@ -611,11 +711,71 @@ void NpcSystem::applyPlayerMelee(const glm::vec3& pos, const glm::vec3& dirPlana
     }
 }
 
-void NpcSystem::tickAuthority(const glm::vec3& spawnCenter, float spawnRingRadius, const glm::vec3& playerPos,
-    StructureSystem& structures, float deltaSec)
+// The nearest ENEMY player body to `pos` — the unit/turret targeting fallback. Returns `pos`
+// itself when no enemy players exist (the unit simply idles).
+static glm::vec3 nearestPlayerTo(const glm::vec3& pos, std::span<const PlayerInfo> players, uint8 excludeTeam)
+{
+    glm::vec3 best = pos;
+    float bestDistSq = FLT_MAX;
+    for (const PlayerInfo& p : players)
+    {
+        if (p.team == excludeTeam)
+            continue;
+        const glm::vec2 d = glm::vec2(p.pos.x, p.pos.z) - glm::vec2(pos.x, pos.z);
+        const float distSq = glm::dot(d, d);
+        if (distSq < bestDistSq)
+        {
+            bestDistSq = distSq;
+            best = p.pos;
+        }
+    }
+    return best;
+}
+
+void NpcSystem::tickPvpBarracks(StructureSystem& structures, float deltaSec)
+{
+    // PvP: barracks are the ONLY unit source — each VARIANT produces its own unit type, paying
+    // MATERIALS from its conveyor-fed store; the units ride the shared sim and hunt the enemy.
+    const auto unitOfBarracks = [](EStructureType t)
+    {
+        return t == EStructureType::BarracksBrute ? ENpcType::Brute
+             : t == EStructureType::BarracksRunner ? ENpcType::Runner
+             : t == EStructureType::BarracksSpitter ? ENpcType::Spitter : ENpcType::Grunt;
+    };
+    for (int i = 0; i < structures.structureCount(); ++i)
+    {
+        if (!isBarracksType(structures.structureType(i)) || structures.structureBlueprint(i))
+            continue;
+        const uint32 id = structures.structureId(i);
+        float& timer = m_barracksTimers[id];
+        // idle Constructors in range accelerate the spawn clock (boost 1 = double speed)
+        timer = glm::max(0.0f, timer - deltaSec * (1.0f + structures.barracksSpawnBoost(id)));
+        if (timer > 0.0f)
+            continue;
+        // The ONLY cap is the per-barracks "Barracks unit limit" — each team's army size is its
+        // own barracks count x limit. The PvE wave cap ("Enemies/Max units") deliberately does
+        // NOT apply here: it silently starved whichever team spawned second.
+        int alive = 0;
+        for (const Unit& u : m_units)
+            if (u.sourceId == id)
+                ++alive;
+        if (alive >= m_barracksUnitLimit)
+            continue;
+        if (!structures.trySpendStoredMinerals(id, m_barracksSpawnMaterials))
+            continue;
+        spawnUnitAt(freeSpawnPointAround(structures, structures.structurePos(i), barracksSpawnRadius()),
+            id, structures.structureTeam(i), unitOfBarracks(structures.structureType(i)));
+        timer = m_barracksSpawnInterval;
+    }
+    std::erase_if(m_barracksTimers, [&](const auto& kv) {
+        return structures.structureIndexById(kv.first) < 0; });
+}
+
+void NpcSystem::tickAuthority(const glm::vec3& spawnCenter, float spawnRingRadius,
+    std::span<const PlayerInfo> players, StructureSystem& structures, float deltaSec)
 {
     m_spawnTimer -= deltaSec;
-    if (m_spawnTimer <= 0.0f && (int)m_units.size() < m_maxUnits)
+    if (!m_pvp && m_spawnTimer <= 0.0f && (int)m_units.size() < m_maxUnits)
     {
         spawnUnit(spawnCenter, spawnRingRadius);
         m_spawnTimer = m_spawnInterval;
@@ -651,11 +811,12 @@ void NpcSystem::tickAuthority(const glm::vec3& spawnCenter, float spawnRingRadiu
         int target = u.targetId != 0 ? structures.structureIndexById(u.targetId) : -1;
         if (target < 0 || u.retargetTimer <= 0.0f)
         {
-            u.targetId = structures.randomTargetStructureId(pos);
+            u.targetId = structures.randomTargetStructureId(pos, u.team);
             u.retargetTimer = m_retargetInterval * def.retarget * glm::linearRand(0.7f, 1.3f);
             target = u.targetId != 0 ? structures.structureIndexById(u.targetId) : -1;
         }
-        const glm::vec3 targetPos = target >= 0 ? structures.structurePos(target) : playerPos;
+        const glm::vec3 targetPos = target >= 0 ? structures.structurePos(target)
+                                                : nearestPlayerTo(pos, players, u.team);
         const glm::vec2 toTarget(targetPos.x - pos.x, targetPos.z - pos.z);
         const float dist = glm::length(toTarget);
         const float moveSpeed = m_moveSpeed * def.speed;
@@ -668,7 +829,7 @@ void NpcSystem::tickAuthority(const glm::vec3& spawnCenter, float spawnRingRadiu
             u.fireTimer -= deltaSec;
             if (u.fireTimer <= 0.0f)
             {
-                fireSpitterShot(pos, targetPos);
+                fireSpitterShot(pos, targetPos, u.team);
                 u.fireTimer = m_spitterFireInterval * glm::linearRand(0.8f, 1.2f);
             }
         }
@@ -680,8 +841,27 @@ void NpcSystem::tickAuthority(const glm::vec3& spawnCenter, float spawnRingRadiu
         if (dist > stopRange || (!ranged && dist > 1e-3f && glm::distance(pos, targetPos) > m_attackRange))
         {
             // Camera-free planar velocity steering (the player-movement pattern).
-            const glm::vec2 dir = toTarget / glm::max(dist, 1e-3f);
+            glm::vec2 dir = toTarget / glm::max(dist, 1e-3f);
             glm::vec3 vel = pc->body.getLinearVelocity();
+            // NO pathfinding: a unit driving straight into a static box (its own barracks, a wall)
+            // pins there forever. Detect "wants to move but barely moves" and sidestep for a
+            // moment — repeated detours walk it around any convex obstacle.
+            const glm::vec2 planarVel(vel.x, vel.z);
+            if (glm::dot(planarVel, planarVel) < 0.09f * moveSpeed * moveSpeed)
+                u.stuckTimer += deltaSec;
+            else
+                u.stuckTimer = 0.0f;
+            if (u.stuckTimer > 0.7f && u.avoidTimer <= 0.0f)
+            {
+                u.avoidTimer = glm::linearRand(0.6f, 1.2f);
+                u.avoidSign = glm::linearRand(0.0f, 1.0f) < 0.5f ? -1.0f : 1.0f;
+                u.stuckTimer = 0.0f;
+            }
+            if (u.avoidTimer > 0.0f)
+            {
+                u.avoidTimer -= deltaSec;
+                dir = glm::normalize(glm::vec2(-dir.y, dir.x) * u.avoidSign + dir * 0.25f);
+            }
             glm::vec3 dv = glm::vec3(dir.x * moveSpeed - vel.x, 0.0f, dir.y * moveSpeed - vel.z);
             const float maxDv = m_accel * deltaSec;
             const float dvLen = glm::length(dv);
@@ -692,11 +872,10 @@ void NpcSystem::tickAuthority(const glm::vec3& spawnCenter, float spawnRingRadiu
             pc->body.setLinearVelocity(vel);
         }
 
-        // A shielded unit leaning on emitter bubbles costs them energy (linear proximity falloff);
-        // collapsed shields press nothing. This is the units' main siege weapon: crowds drain a
-        // contested emitter's supply line faster than it can recharge.
-        if (u.energy > 0.0f)
-            structures.addEmitterLoad(pos, m_emitterDrainRadius, m_emitterDrainPerUnit * def.emitterDrain);
+        // A unit leaning on emitter bubbles costs them energy (nearest-active-bubble deposit) —
+        // SHIELD-INDEPENDENT: a collapsed unit strains the emitter exactly like a shielded one, so
+        // breaking a unit's battery never makes the siege cheaper for the defender.
+        structures.addEmitterLoad(pos, m_emitterDrainRadius, m_emitterDrainPerUnit * def.emitterDrain, u.team);
 
         // The unit's bubble follows the PLAYER's shield rules, minus regen: player-field pressure
         // drains its energy battery; empty = PERMANENT collapse (sentinel output keeps the
@@ -707,7 +886,11 @@ void NpcSystem::tickAuthority(const glm::vec3& spawnCenter, float spawnRingRadiu
         if (ForceComponent* fc = getComponent<ForceComponent>(u.entity.get()))
         {
             const float pressure = fc->emitter.getPressure();
-            u.energy = glm::max(0.0f, u.energy - pressure * m_unitEnergyDrainRate * deltaSec);
+            const float tension = 1.0f + m_fieldTension * pressure; // surface tension (player rule)
+            const float energyBefore = u.energy;
+            u.energy = glm::max(0.0f, u.energy - pressure * tension * m_unitEnergyDrainRate * deltaSec);
+            if (energyBefore > 0.0f && u.energy <= 0.0f)
+                m_shieldCollapseEdge = true; // co-op: flush the shield mirror this tick
             const float liveOutput = m_unitShieldOutput * def.shieldOutput;
             fc->emitter.setOutput(u.energy > 0.0f ? liveOutput : 0.01f);
 
@@ -722,7 +905,7 @@ void NpcSystem::tickAuthority(const glm::vec3& spawnCenter, float spawnRingRadiu
             const glm::vec3 force = fc->emitter.getAppliedForce() / glm::max(u.outputHistory[0], 1e-3f);
             if (glm::dot(force, force) > 1e-8f)
             {
-                pc->body.applyImpulse(force * deltaSec * m_fieldPushGain * pressure);
+                pc->body.applyImpulse(force * deltaSec * m_fieldPushGain * pressure * tension);
                 // Field shoves must never turn into launches: clamp the resulting speed, or a
                 // strong emitter wall flings units through the ground / into orbit.
                 const glm::vec3 vel = pc->body.getLinearVelocity();

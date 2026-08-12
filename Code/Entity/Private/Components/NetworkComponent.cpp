@@ -93,7 +93,11 @@ void NetworkComponent::update(Entity& entity, float deltaSeconds)
         // reconciles once the grace lingers out. STRICTLY ServerOwned — a RemoteOwner entity is
         // driven by ITS owner's claims, so suspending its corrections only fabricates false local
         // control over another player's cube.
-        if (params.interactionRadius > 0.0f && authority() == ENetAuthority::ServerOwned)
+        // The SERVER's player is server-owned by id but is an actively-steered body: grace-freeing
+        // it for local shoves only fabricates divergence (its server sim resists the push) — it
+        // follows the interp playback below instead, like every other remote player.
+        const bool serverPlayer = (net.targetFlags & NetRecFlag_ServerPlayer) != 0;
+        if (params.interactionRadius > 0.0f && authority() == ENetAuthority::ServerOwned && !serverPlayer)
         {
             const float radiusSq = params.interactionRadius * params.interactionRadius;
             for (const glm::vec3& ownedPos : Globals::networkManager.localOwnedBodyPositions())
@@ -103,7 +107,7 @@ void NetworkComponent::update(Entity& entity, float deltaSeconds)
                     break;
                 }
         }
-        if (net.localInteractionGrace > 0.0f && authority() == ENetAuthority::ServerOwned)
+        if (net.localInteractionGrace > 0.0f && authority() == ENetAuthority::ServerOwned && !serverPlayer)
         {
             net.localInteractionGrace -= deltaSeconds;
             // deliberately does NOT touch lastAppliedTick: when the grace ends, the newest
@@ -135,7 +139,7 @@ void NetworkComponent::update(Entity& entity, float deltaSeconds)
         // of chasing the newest state — a capped-accel body following a delayed, input-spiky signal
         // lag-chases starts and overshoots stops, and no target tuning fixes that. A loss gap at the
         // cursor falls through to the push for that frame.
-        if (authority() == ENetAuthority::RemoteOwner
+        if ((authority() == ENetAuthority::RemoteOwner || serverPlayer)
             && net.remoteBuffer != nullptr && net.remoteBuffer->count >= 2)
         {
             const NetSnapshotRing& ring = *net.remoteBuffer;

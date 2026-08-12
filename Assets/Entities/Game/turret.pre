@@ -1,13 +1,15 @@
 # Turret: fires player-type projectiles at the nearest enemy unit in range; each shot spends
-# "Turret shot energy" from its internal store — defense output rides the supply network.
+# "Turret shot energy" from its internal store - defense output rides the supply network.
 # Spawned origin 1.2 above ground.
 Prefab gameTurret
 	Component Render
-		ObjectContainer wireshapes
+		ObjectContainer baseshapes
 		Node Cone
 		Type StaticMesh
-		Scale 0.6 1.2 0.6
+		Color 1 0.45 0.15
+		Scale 2
 	Component Physics
 		Body Static
+		ContactEvents true
 		Shape Box
-		HalfExtents 0.5 1.2 0.5
+		HalfExtents 2 2 2

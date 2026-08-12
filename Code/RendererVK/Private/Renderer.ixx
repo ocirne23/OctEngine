@@ -179,6 +179,10 @@ public:
     // Loads a standalone texture (path relative to Assets/) into the bindless array for particle
     // emitters / decals to reference (ParticleEmitterGpu::texFlags.x, DecalInfo::params.x).
     uint16 loadEffectTexture(const char* filePath, bool sRGB = true);
+    // A material whose diffuse is a 1x1 solid-color texture — the per-entity TINT path: pass the
+    // returned index to RenderNode::setMaterialOverride. Cached per quantized color (repeat calls
+    // with the same color are free); main thread.
+    uint16 createSolidColorMaterial(const glm::vec3& color);
 
     // ---- Forcefield bubbles (driven by the Force library) ----
     // Emitter slot management is main-thread (the Force system's serial update is the only writer).
@@ -736,6 +740,7 @@ private:
 
     Buffer m_meshInfosBuffer;
     Buffer m_materialInfosBuffer;
+    std::unordered_map<uint32, uint16> m_solidColorMaterials; // packed RGB8 -> material idx (tint cache)
     Buffer m_instanceOffsetsBuffer;
 
     // GPU LOD selection (shared, device-local): per-mesh group index, packed group data, and the

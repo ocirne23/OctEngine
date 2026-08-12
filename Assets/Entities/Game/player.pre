@@ -8,6 +8,7 @@ Prefab player
 		Node ROOT
 		Type SkinnedMesh
 			Rig Humanoid
+		Color 0.4 0.8 1
 		Position 0 -2 0
 		Scale 0.0125
 	Component Animator
@@ -27,3 +28,4 @@ Prefab player
 	Component Script
 		Path Scripts/PlayerBody.dsl
 		Enabled true
+	Component Network

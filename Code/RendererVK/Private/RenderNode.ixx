@@ -78,6 +78,15 @@ public:
 
     inline size_t getNumMeshInstances() const { return m_meshInstances.size(); }
 
+    // Per-entity TINT: rewrites every mesh instance's material index (pair with
+    // Renderer::createSolidColorMaterial). Takes effect the next time the node is submitted —
+    // instances are copied from this node's CPU list every renderNode() call. Main thread.
+    inline void setMaterialOverride(uint16 materialIdx)
+    {
+        for (RendererVKLayout::InMeshInstance& instance : m_meshInstances)
+            instance.materialIdx = materialIdx;
+    }
+
     // Valid only for nodes spawned via ObjectContainer::spawnSkinnedNode. Pass to Renderer::setSkinningPalette
     // each frame with the AnimationPlayer's bone palette. UINT32_MAX for non-skinned nodes.
     inline bool isSkinned() const { return m_skinnedPaletteHandle != UINT32_MAX; }

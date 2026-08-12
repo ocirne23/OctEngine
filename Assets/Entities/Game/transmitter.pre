@@ -1,12 +1,15 @@
-# Transmitter: thin pole that extends the power grid (pure connectivity, no field, no power use).
-# Spawned origin 2.0 above ground.
-Prefab gameTransmitter
+# Connector: thin pole all links route through — every cable/pipe/conveyor needs a Connector
+# endpoint, and one Connector carries exactly ONE medium (power, fuel or minerals).
+# Spawned origin 2.0 above ground. (File keeps its historic name; the game calls it Connector.)
+Prefab gameConnector
 	Component Render
-		ObjectContainer wireshapes
+		ObjectContainer baseshapes
 		Node Cube
 		Type StaticMesh
-		Scale 0.2 2 0.2
+		Color 0.85 0.85 0.9
+		Scale 1
 	Component Physics
 		Body Static
+		ContactEvents true
 		Shape Box
-		HalfExtents 0.2 2 0.2
+		HalfExtents 1 1 1

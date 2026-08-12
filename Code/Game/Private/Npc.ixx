@@ -21,6 +21,32 @@ struct NpcTypeDef
     float spawnWeight;  // relative pick chance per wave slot
 };
 
+// A player body + its Force team — the targeting input for units and camp turrets (PvE players
+// are all team 0; PvP units only hunt OTHER teams' players).
+export struct PlayerInfo
+{
+    glm::vec3 pos{ 0.0f };
+    uint8 team = 0;
+};
+
+// One netId-keyed record of the co-op shield mirror ("GSh", server -> clients): enough for a
+// receiving instance to drive the remote actor's bubble output and draw its overhead bars.
+export struct ShieldNetState
+{
+    uint32 netId = 0;
+    float healthFrac = 1.0f;
+    float energyFrac = 1.0f;
+    float output = 0.0f;    // live emitter output (world units; u8-quantized on the wire)
+    bool collapsed = false;
+    uint8 kind = 0;         // 0 = enemy unit, 1 = friendly unit, 2 = player, 3 = enemy camp
+                            // structure, 4 = enemy camp CORE (3/4 are HEALTH ONLY — receivers must
+                            // not touch their emitter: the core's bubble is authored constant,
+                            // output 0 would stomp it; 4 additionally drives the camp ring marker)
+    uint8 team = 0;         // Force team (bits 4-6 of the wire flags) — receivers color bars
+                            // own-team green / enemy red
+    float materialsFrac = 0.0f; // players only: carried construction stock (client HUD mirror)
+};
+
 // Enemy NPC units (Entities/Game/enemyUnit.pre): spawned in waves from the objective, they steer
 // toward the nearest player structure and damage it while in attack range (the Base is excluded —
 // invulnerable). Each carries a small team-1 field bubble, so friendly emitter fields brake and
@@ -31,12 +57,19 @@ export class NpcSystem final
 {
 public:
     void registerTweaks();
+    void setPvp(bool pvp) { m_pvp = pvp; } // PvP: no ambient waves — barracks are the only source
     void clear(); // drops every unit (before world teardown)
 
     // Spawns arrive on a ring: spawnRingRadius (the field frontier, from GameMatch) + the "Spawn
     // margin" tweak — always just inside the enemy field, all around the safe zone.
-    void tickAuthority(const glm::vec3& spawnCenter, float spawnRingRadius, const glm::vec3& playerPos,
-        StructureSystem& structures, float deltaSec);
+    // players = EVERY player body + team (server's own + each client capsule) — units fall back
+    // to the nearest ENEMY player when no structure tempts them, and camp turrets shoot the
+    // nearest player in range; a single server-player position left client players invisible.
+    void tickAuthority(const glm::vec3& spawnCenter, float spawnRingRadius,
+        std::span<const PlayerInfo> players, StructureSystem& structures, float deltaSec);
+    // PvP: every barracks produces ATTACK units of its own team into the shared unit sim — they
+    // seek out enemy structures/players like PvE waves do, instead of guarding home.
+    void tickPvpBarracks(StructureSystem& structures, float deltaSec);
     // FRIENDLY units: spawned by Barracks structures (per-barracks alive limit, each spawn spends
     // barracks energy), they guard their home — aggro on enemy units within range, leashed to the
     // barracks — and fight through the same field rules (team-0 bubble, no-regen battery).
@@ -50,17 +83,20 @@ public:
     // spitter shots at the player / nearest structure). A dead core DISABLES the camp (no spawns,
     // no fire; its bubble died with it) — the camp's remains can still be cleared for good.
     void spawnEnemyCamps(const glm::vec3& basePos);
-    void tickEnemyStructures(StructureSystem& structures, const glm::vec3& playerPos, float deltaSec);
+    void tickEnemyStructures(StructureSystem& structures, std::span<const PlayerInfo> players,
+        float deltaSec);
     int enemyStructureCount() const { return (int)m_enemyStructures.size(); }
+    bool enemyStructureIsCore(int index) const { return m_enemyStructures[index].type == EEnemyStructType::Core; }
     glm::vec3 enemyStructurePos(int index) const { return m_enemyStructures[index].entity->pos; }
     float enemyStructureHealth(int index) const { return m_enemyStructures[index].health; }
     float enemyStructureHealthMax(int index) const { return m_enemyStructures[index].maxHealth; }
 
-    // The player's melee swing: damage every unit in the planar cone (called by GameMatch when
-    // GamePlayer reports a swing; the physics shove happens in GamePlayer::tickCombat).
-    void applyPlayerMelee(const glm::vec3& pos, const glm::vec3& dirPlanar, float range);
+    // The player's melee swing: damage every ENEMY-team unit in the planar cone (called by
+    // GameMatch when GamePlayer reports a swing; the physics shove happens in tickCombat).
+    void applyPlayerMelee(const glm::vec3& pos, const glm::vec3& dirPlanar, float range, uint8 team = 0);
 
     int unitCount() const { return (int)m_units.size(); }
+    uint8 unitTeam(int index) const { return m_units[index].team; }
     glm::vec3 unitPos(int index) const;
     float unitHealth(int index) const { return m_units[index].health; }
     float unitHealthMax(int index) const; // per-type (Brute 3x, Runner 0.5x the tweak baseline)
@@ -72,6 +108,13 @@ public:
     glm::vec3 friendlyPos(int index) const;
     float friendlyHealth(int index) const { return m_friendlies[index].health; }
     float friendlyEnergy(int index) const { return m_friendlies[index].energy; }
+
+    // CO-OP: appends every unit's + friendly's shield record for the server's GSh mirror
+    // (entities without a netId — single player / local-inert — are skipped).
+    void collectShieldStates(std::vector<ShieldNetState>& out) const;
+    // A battery hit zero this tick (permanent collapse). The mirror flushes immediately on it, so
+    // clients see the bubble drop the same tick instead of at the next periodic send.
+    bool takeShieldCollapseEdge() { const bool e = m_shieldCollapseEdge; m_shieldCollapseEdge = false; return e; }
 
 private:
     struct Unit
@@ -91,11 +134,17 @@ private:
         glm::vec3 homePos{ 0.0f };  // FRIENDLY: leash anchor (the barracks position)
         ENpcType type = ENpcType::Grunt; // ENEMY: which stat row of the type table
         float fireTimer = 0.0f;     // SPITTER: cooldown until the next shot
+        uint8 team = 1;             // Force team (PvE waves 1; PvP barracks units their builder's)
+        float stuckTimer = 0.0f;    // seconds of wanting to move but barely moving (blocked by a
+                                    // structure/wall — there is no pathfinding)
+        float avoidTimer = 0.0f;    // sidestep steering remaining, armed by the stuck detector
+        float avoidSign = 1.0f;     // which way the sidestep goes (rolled per detour)
     };
-    struct Shot // enemy projectile (Spitter): team-1 mini-field sphere, damages structures on hit
+    struct Shot // spitter projectile: mini-field sphere, damages ENEMY-team structures on hit
     {
         EntityPtr entity;
         float age = 0.0f;
+        uint8 team = 1;
     };
     struct ShotHit // recorded by contact hooks (fire inside physics.update), processed next tick.
     {              // POINTER VALUES only — never dereferenced, so a same-frame despawn is safe.
@@ -115,12 +164,14 @@ private:
     };
 
     void spawnUnit(const glm::vec3& center, float ringRadius);
-    void spawnUnitAt(const glm::vec3& pos, uint32 sourceId); // shared init (ring waves + camp spawners)
-    void spawnFriendly(const glm::vec3& barracksPos, uint32 barracksId);
+    // ring waves + camp spawners (weighted type roll) + barracks (forceType = the variant's unit)
+    void spawnUnitAt(const glm::vec3& pos, uint32 sourceId, uint8 team = 1,
+        ENpcType forceType = ENpcType::Count);
+    void spawnFriendly(const StructureSystem& structures, const glm::vec3& barracksPos, uint32 barracksId);
     void spawnEnemyStructure(EEnemyStructType type, const glm::vec3& pos, int camp);
     void damageByEntity(const Entity* entity, float amount); // projectile contact hook
     void damageEnemyStructByEntity(const Entity* entity, float amount);
-    void fireSpitterShot(const glm::vec3& from, const glm::vec3& at);
+    void fireSpitterShot(const glm::vec3& from, const glm::vec3& at, uint8 team = 1);
     void tickShots(StructureSystem& structures, float deltaSec);
 
     std::vector<Unit> m_units;
@@ -132,11 +183,13 @@ private:
     std::unordered_map<uint32, float> m_barracksTimers; // per-barracks spawn cooldown (by stable id)
     std::unordered_map<uint32, float> m_turretTimers;   // per-turret fire cooldown (by stable id)
     float m_spawnTimer = 4.0f; // first wave a few seconds in
+    bool m_pvp = false;        // see setPvp
+    bool m_shieldCollapseEdge = false; // set where a battery empties; polled by GameMatch
 
     // Tweaks ("Game/Enemies")
     float m_unitHealth = 60.0f;
     float m_moveSpeed = 4.0f;
-    float m_accel = 30.0f;
+    float m_accel = 15.0f; // soft on purpose: units must lose the shoving match against bubbles
     float m_attackRange = 1.5f;    // must actually reach the structure — a powered emitter's field
                                    // pushes them out well past this, so damage is purely proximity
     float m_attackDps = 6.0f;      // structure health/s while in range
@@ -147,6 +200,8 @@ private:
     float m_projectileDamage = 25.0f;
     float m_meleeDamage = 40.0f;
     float m_fieldPushGain = 20000.0f; // friendly fields shoving units (force-ball scale)
+    float m_fieldTension = 1.5f;      // surface tension: unit push + battery drain scale by
+                                      // (1 + tension * pressure) — mirrors the player shield
     float m_unitEnergy = 40.0f;      // shield battery (no regen)
     float m_unitEnergyDrainRate = 25.0f; // energy/s per unit of pressure (player rule)
     float m_unitShieldOutput = 0.8f; // bubble output while the battery lives (collapse -> sentinel)
@@ -157,7 +212,8 @@ private:
     // Friendlies ("Game/Friendlies") — shield/battery stats reuse the enemy "Unit *" tweaks.
     int m_barracksUnitLimit = 3;        // alive units per barracks
     float m_barracksSpawnInterval = 8.0f;
-    float m_barracksSpawnEnergy = 8.0f; // spent from the barracks' internal store per spawn
+    float m_barracksSpawnMaterials = 10.0f; // MATERIALS spent from the barracks' conveyor-fed
+                                            // mineral store per spawned unit
     float m_friendlyAttackDps = 8.0f;   // enemy-unit health/s in attack range
     float m_friendlyAggroRadius = 14.0f; // sees enemy units within this of ITSELF
     float m_friendlyLeash = 22.0f;      // never chases beyond this of its barracks

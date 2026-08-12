@@ -3,14 +3,16 @@
 # defaults only. Spawned with its origin at half height (1.5) above the ground hit.
 Prefab gameEmitter
 	Component Render
-		ObjectContainer wireshapes
+		ObjectContainer baseshapes
 		Node Cube
 		Type StaticMesh
-		Scale 0.4 1.5 0.4
+		Color 0.3 0.85 1
+		Scale 1
 	Component Physics
 		Body Static
+		ContactEvents true
 		Shape Box
-		HalfExtents 0.4 1.5 0.4
+		HalfExtents 1 1 1
 	Component Force
 		Team 0
 		Output 1.2

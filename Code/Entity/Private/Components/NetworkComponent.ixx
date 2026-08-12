@@ -12,6 +12,7 @@ export constexpr uint8 NetRecFlag_Physics = 1 << 0; // record carries body WORLD
 export constexpr uint8 NetRecFlag_Asleep  = 1 << 1; // the server's body is asleep: hard-sync once and sleep too
 export constexpr uint8 NetRecFlag_Forced  = 1 << 2; // owner must accept this correction (claims were rejected); non-owners ignore it
 export constexpr uint8 NetRecFlag_Arbitrated = 1 << 3; // player-vs-player contact: the server solver owns the pose — the owner softly corrects toward it while still steering (claims are velocity intent)
+export constexpr uint8 NetRecFlag_ServerPlayer = 1 << 4; // the SERVER's own player body: observers use the remote-player interp ring and never apply the interaction grace (locally shoving an actively-steered body only fabricates divergence)
 
 // Which simulation drives this entity, seen from the LOCAL process (derived, never stored):
 // the same entity reads LocalOwner on the client that owns it and RemoteOwner on the server/everyone else.
@@ -123,6 +124,12 @@ export struct NetEntityState
         uint32 contestClients[2] = { 0, 0 };
         float contestAges[2] = { 0.0f, 0.0f };
         uint32 contestedUntilTick = 0;
+
+        // This entity is the SERVER's own primary (its player body, marked via
+        // NetworkManager::setServerPrimary): it acts as a transfer SOURCE — re-claims transferred
+        // objects it approaches, exactly like a client's primary acquires — and is never itself
+        // handed to a client by the proximity transfer.
+        bool serverPrimary = false;
 
         // change detection against the last sent state (non-physics; physics uses sleepDirty)
         glm::vec3 lastSentPos = glm::vec3(FLT_MAX); // FLT_MAX forces the first change-detection send

@@ -1,12 +1,14 @@
 # Battery: adds energy storage to its cabled grid ("Battery capacity" tweak). Its charge lives on
-# the structure — destroying it loses the stored energy. Spawned origin 1.0 above ground.
+# the structure - destroying it loses the stored energy. Spawned origin 1.0 above ground.
 Prefab gameBattery
 	Component Render
-		ObjectContainer wireshapes
+		ObjectContainer baseshapes
 		Node Cube
 		Type StaticMesh
-		Scale 0.9 1 0.9
+		Color 1 0.7 0.1
+		Scale 1
 	Component Physics
 		Body Static
+		ContactEvents true
 		Shape Box
-		HalfExtents 0.9 1 0.9
+		HalfExtents 1 1 1

@@ -1,0 +1,15 @@
+# Constructor: automated builder — powered (cable) + fed materials by CONVEYOR into its internal
+# stock, it invests them into the nearest own-team blueprint within "Constructor range".
+# Spawned origin 1.1 above the ground hit.
+Prefab gameConstructor
+	Component Render
+		ObjectContainer baseshapes
+		Node Cube
+		Type StaticMesh
+		Color 1 0.75 0.45
+		Scale 1
+	Component Physics
+		Body Static
+		ContactEvents true
+		Shape Box
+		HalfExtents 1 1 1

@@ -1,6 +1,7 @@
 module Entity;
 
 import Core;
+import Core.Log;
 import Core.glm;
 import Core.Sphere;
 import Core.Transform;
@@ -411,9 +412,21 @@ void Entity::reparentEntity(Entity* newParent)
     detachKeepAllocation(this); // break decision made above; reparenting a whole allocation root never breaks
 
     if (newParent && !hasComponent<SceneComponent>(newParent))
-        return; // only scene entities can hold children
+    {
+        // LOUD refusal: the detach above already ran, so the entity is now parentless — if the
+        // caller drops its EntityPtr believing the parent holds one, the entity silently dies
+        // (this exact failure shipped once: walls parented under a Scene-less ground vanished).
+        Log::warning("Entity: cannot parent '" + std::string(getName()) + "' under '"
+            + std::string(newParent->getName()) + "' — the parent has no SceneComponent (add "
+            "'Component Scene' to its prefab); the entity is now UNPARENTED");
+        return;
+    }
     if (newParent && isSelfOrDescendant(newParent, this))
-        return; // would create a cycle
+    {
+        Log::warning("Entity: cannot parent '" + std::string(getName()) + "' under its own "
+            "descendant '" + std::string(newParent->getName()) + "' (cycle); the entity is now UNPARENTED");
+        return;
+    }
 
     parent = newParent;
 

@@ -1176,6 +1176,40 @@ void Renderer::checkForceGridCapacity()
     }
 }
 
+uint16 Renderer::createSolidColorMaterial(const glm::vec3& color)
+{
+    const glm::vec3 c = glm::clamp(color, 0.0f, 1.0f);
+    const uint32 key = uint32(c.x * 255.0f + 0.5f) | (uint32(c.y * 255.0f + 0.5f) << 8)
+        | (uint32(c.z * 255.0f + 0.5f) << 16);
+    if (const auto it = m_solidColorMaterials.find(key); it != m_solidColorMaterials.end())
+        return it->second;
+
+    struct SolidColorTexture final : public ITextureData
+    {
+        Pixel pixel{};
+        const char* getFileName() const override { return "solid_color"; }
+        const Pixel* getPixels() const override { return &pixel; }
+        uint32 getWidth() const override { return 1; }
+        uint32 getHeight() const override { return 1; }
+        const char* getFormatInfo() const override { return "rgba8888"; }
+    };
+    SolidColorTexture texture;
+    texture.pixel = { uint8(key & 0xFF), uint8((key >> 8) & 0xFF), uint8((key >> 16) & 0xFF), 0xFF };
+    const uint16 texIdx = Globals::textureManager.upload(texture, false, true);
+
+    RendererVKLayout::MaterialInfo material{};
+    material.flags = RendererVKLayout::MATERIAL_FLAG_NO_RAYTRACING; // tints are debug-flat visuals
+    material.opacity = 1.0f;
+    material.diffuseTexIdx = texIdx;
+    material.normalTexIdx = RendererVKLayout::FALLBACK_NORMAL_TEX_IDX;
+    material.metalRoughnessTexIdx = 0xFFFF; // lit shading's "no texture": metal 0, roughness 0.65
+    material.alphaMode = 0;
+    const uint16 materialIdx = (uint16)addMaterialInfos({ material });
+    m_solidColorMaterials.emplace(key, materialIdx);
+    setHaveToRecordCommandBuffers(); // the new texture slot must land in the bindless arrays
+    return materialIdx;
+}
+
 uint16 Renderer::loadEffectTexture(const char* filePath, bool sRGB)
 {
     const uint16 idx = Globals::textureManager.upload(filePath, true, sRGB);

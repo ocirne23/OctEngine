@@ -1,11 +1,12 @@
-# Enemy Runner: fast fragile harasser — half health, weak shield, retargets twice as often; slips
+# Enemy Runner: fast fragile harasser - half health, weak shield, retargets twice as often; slips
 # through field gaps on speed and picks at whatever is unguarded. Stat multipliers live in
 # NpcSystem's type table.
 Prefab gameEnemyRunner
 	Component Render
-		ObjectContainer wireshapes
+		ObjectContainer baseshapes
 		Node Cube
 		Type StaticMesh
+		Color 1 0.4 0.7
 		Scale 0.35 0.5 0.35
 	Component Physics
 		Body Dynamic
@@ -21,3 +22,4 @@ Prefab gameEnemyRunner
 		Output 0.6
 		Reach 2
 		Centered true
+	Component Network

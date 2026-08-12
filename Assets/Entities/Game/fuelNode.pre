@@ -5,6 +5,7 @@ Prefab gameFuelNode
 		ObjectContainer baseshapes
 		Node Cone
 		Type StaticMesh
+		Color 1 0.55 0.15
 		Scale 0.8
 	Component Physics
 		Body Static

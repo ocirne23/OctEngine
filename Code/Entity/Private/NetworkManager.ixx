@@ -189,6 +189,14 @@ public:
         std::span<const uint8> data, Entity* sender)>;
     void setEventFilter(EventFilterFn callback) { m_eventFilter = std::move(callback); }
 
+    // C++ listener for every dispatched network event (locally fired AND received) — the
+    // counterpart of the script listeners, for game code that isn't a script. Runs synchronously
+    // inside the dispatch, so currentEventSender()/currentEventData() are readable for its
+    // duration. Main thread for received events; a locally fired event dispatches on the firing
+    // thread (worker script thunks included) — keep the handler cheap and thread-tolerant, or
+    // filter to names only the main thread fires.
+    void setOnGameEvent(std::function<void(std::string_view name)> callback) { m_onGameEvent = std::move(callback); }
+
     // Main thread only. Returns the assigned netId, or 0 = LOCAL-INERT for any registration that
     // isn't the server minting one or a client adopting one from a replicated Spawn.
     // An occupied id is REPLACED with a warning — the Entity Editor respawns before destroying, so a
@@ -197,6 +205,20 @@ public:
     // Unregistering a BASE id queues the Despawn; despawn is all-or-nothing at the root.
     uint32 registerEntity(Entity& entity, NetworkComponent* comp);
     void unregisterEntity(uint32 netId, const NetworkComponent* comp);
+
+    // Main thread. The live entity behind a netId (any owner), or null — the receive-side lookup
+    // for netId-keyed game-state mirrors (the Game layer's co-op shield sync).
+    Entity* findEntity(uint32 netId) const;
+
+    // Proximity ownership transfer + contact stealing master switch — the programmatic twin of
+    // the "Network/Ownership" "Transfer enabled" tweak.
+    void setOwnershipTransfers(bool enabled);
+
+    // Server role: mark the server's OWN player body as a primary. It joins the proximity
+    // transfer as a source under clientId 0 — transferred objects it approaches revert to
+    // server-owned, mirroring how a client's primary acquires — and it is never itself handed
+    // to a client. Client primaries (their players) are untouched either way.
+    void setServerPrimary(Entity& entity, bool primary);
 
     // "SERVER 2 peers | out 12.4 KB/s" — empty when role None or the stats tweak is off
     std::string getStatusText() const;
@@ -244,6 +266,12 @@ private:
     std::map<uint32, Replicated> m_entities;   // ordered: deterministic round-robin cursor
     mutable std::mutex m_entityMutex;
 
+    uint32 m_sentTweakGeneration = 0; // server: last TweakRegistry sync generation broadcast
+    // Client: events that arrived before the Welcome was processed (events ride ch1, the Welcome
+    // ch2 — no cross-channel ordering), replayed in order once welcomed. Bounded; cleared on
+    // disconnect with the rest of the session state.
+    std::vector<std::vector<uint8>> m_preWelcomeEvents;
+
     // Server: one record per live replicated spawn — scene load and runtime alike (announced to
     // clients, replayed to late joiners; that replay is how the networked world arrives at connect).
     // Component ids are baseId..baseId+componentCount-1, contiguous because a tree spawn registers
@@ -275,6 +303,7 @@ private:
     uint32 m_currentEventSender = 0; // see currentEventSender()
     std::span<const uint8> m_currentEventData;
     EventFilterFn m_eventFilter; // server, see setEventFilter
+    std::function<void(std::string_view)> m_onGameEvent; // see setOnGameEvent
     uint32 m_nextClientId = 1;  // server
     std::unordered_map<NetPeerId, uint32> m_peerClients; // server: ready peer -> clientId (erased on Disconnected)
     std::function<void(uint32 clientId)> m_onClientJoined; // server, main thread

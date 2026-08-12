@@ -1,0 +1,14 @@
+# Brute barracks: spawns BRUTE attack units (PvP) / guards (PvE) from conveyor-fed materials.
+# 6 m box (3x3 cells).
+Prefab game_barracksBrute
+	Component Render
+		ObjectContainer baseshapes
+		Node Cube
+		Type StaticMesh
+		Color 0.55 0.25 0.3
+		Scale 3
+	Component Physics
+		Body Static
+		ContactEvents true
+		Shape Box
+		HalfExtents 3 3 3

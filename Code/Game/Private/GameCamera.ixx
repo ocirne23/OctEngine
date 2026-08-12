@@ -14,6 +14,8 @@ export class GameCamera final
 public:
     void registerTweaks()
     {
+        // Camera feel is a PERSONAL preference: saved locally, never synced from the server.
+        const Tweak::ScopedFlags scoped(ETweakFlags::Saved);
         Tweak::floatVar("Game/Camera", "Pitch", &m_pitchDeg, 30.0f, 75.0f, 0.5f);
         Tweak::floatVar("Game/Camera", "Distance", &m_distance, 4.0f, 80.0f, 0.5f);
         Tweak::floatVar("Game/Camera", "Min distance", &m_minDistance, 2.0f, 40.0f, 0.5f);

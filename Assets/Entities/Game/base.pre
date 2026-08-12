@@ -1,17 +1,18 @@
 # Base: exists from game start (never placeable, never damaged). Respawn anchor, always-on team-0
-# bubble (self-powered — tickPower never touches non-Emitter types, so the authored Output stands),
+# bubble (self-powered - tickPower never touches non-Emitter types, so the authored Output stands),
 # and passive income equal to one extractor of EACH type. Conducts grid links like any structure.
 # Spawned origin 1.5 above ground.
 Prefab gameBase
 	Component Render
-		ObjectContainer wireshapes
+		ObjectContainer baseshapes
 		Node Cube
 		Type StaticMesh
-		Scale 2 1.5 2
+		Color 0.95 0.95 1
+		Scale 3
 	Component Physics
 		Body Static
 		Shape Box
-		HalfExtents 2 1.5 2
+		HalfExtents 3 3 3
 	Component Force
 		Team 0
 		Output 2.4
