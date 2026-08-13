@@ -41,6 +41,13 @@ public:
         camera.viewMatrix = glm::lookAt(eye, target, glm::vec3(0.0f, 1.0f, 0.0f));
     }
 
+    // Point the planar forward along dir (spawn: face the map center). No-op on a ~zero direction.
+    void setYawToward(const glm::vec3& dir)
+    {
+        if (dir.x * dir.x + dir.z * dir.z > 1e-6f)
+            m_yawDeg = glm::degrees(std::atan2(dir.x, -dir.z));
+    }
+
     // Yaw-derived planar forward for camera-relative player movement (valid on any thread/tick —
     // pure function of the stored yaw).
     glm::vec3 forwardPlanar() const

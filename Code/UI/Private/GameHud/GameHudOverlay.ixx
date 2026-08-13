@@ -102,11 +102,12 @@ public:
 				|| label.screenPos.y < vpMin.y - 100.0f || label.screenPos.y > vpMax.y + 100.0f)
 				continue; // fully off the viewport (the clip rect would eat it anyway)
 			const float labelFont = fontSize * 0.78f * e;
+			const float titleFont = fontSize * 0.95f * e; // the type tag reads at a glance
 			float y = label.screenPos.y;
 			if (!label.title.empty())
 			{
-				const ImVec2 ts = font->CalcTextSizeA(labelFont, noWrap, 0.0f, label.title.c_str());
-				text(ImVec2(label.screenPos.x - ts.x * 0.5f, y - ts.y - 2.0f * s), labelFont,
+				const ImVec2 ts = font->CalcTextSizeA(titleFont, noWrap, 0.0f, label.title.c_str());
+				text(ImVec2(label.screenPos.x - ts.x * 0.5f, y - ts.y - 2.0f * s), titleFont,
 					col(1.0f, 1.0f, 1.0f, 1.0f), label.title.c_str());
 			}
 			const auto miniBar = [&](float value, float maxValue, const glm::vec3& color)

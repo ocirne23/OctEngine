@@ -1,10 +1,10 @@
-# Wall segment: a plain square physical barrier - no field, no power, just mass and health.
-# Placed as a two-click LINE (segments every 2 m along the path). Enemies gnaw through it or go
-# around; a cheap way to shape their approach. Spawned origin 1.2 above ground.
+# Wall segment: a 2x4x2 m physical barrier (Pillar2) - no field, no power, just mass and health.
+# Placed as a two-click LINE (segments every 2 m along the path). Enemy units gnaw through it or
+# go around; a cheap way to shape their approach. Spawned origin 2.0 above ground.
 Prefab gameWall
 	Component Render
 		ObjectContainer baseshapes
-		Node Cube
+		Node Pillar2
 		Type StaticMesh
 		Color 0.55 0.55 0.6
 		Scale 1
@@ -12,4 +12,4 @@ Prefab gameWall
 		Body Static
 		ContactEvents true
 		Shape Box
-		HalfExtents 1 1 1
+		HalfExtents 1 2 1

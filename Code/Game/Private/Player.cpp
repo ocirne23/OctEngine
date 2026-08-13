@@ -16,7 +16,7 @@ import :Player;
 void GamePlayer::registerTweaks()
 {
     // Gameplay tweaks persist between runs and the server's values overrule the clients'.
-    const Tweak::ScopedFlags scoped(ETweakFlags::Saved | ETweakFlags::Synced);
+    const Tweak::ScopedFlags scoped( ETweakFlags::Synced);
     Tweak::floatVar("Game/Player", "Move speed", &m_moveSpeed, 0.5f, 30.0f, 0.1f);
     Tweak::floatVar("Game/Player", "Accel", &m_accel, 1.0f, 200.0f, 0.5f);
     Tweak::floatVar("Game/Player", "Jump speed", &m_jumpSpeed, 0.5f, 20.0f, 0.1f);
@@ -28,6 +28,7 @@ void GamePlayer::registerTweaks()
     Tweak::floatVar("Game/Shield", "Energy regen/s", &m_energyRegenRate, 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Shield", "Energy drain/s @ pressure 1", &m_energyDrainRate, 0.0f, 200.0f, 0.5f);
     Tweak::floatVar("Game/Shield", "Reboot energy", &m_rebootEnergy, 0.0f, 1000.0f, 1.0f);
+    Tweak::floatVar("Game/Shield", "Damage absorb (energy per hp)", &m_damageAbsorb, 0.0f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Shield", "Cover drain reduction", &m_coverDrainReduction, 0.0f, 5.0f, 0.05f);
     Tweak::floatVar("Game/Player", "Spawn grace (s)", &m_spawnGraceSec, 0.0f, 10.0f, 0.1f);
     Tweak::floatVar("Game/Player", "Materials max", &m_materialsMax, 5.0f, 500.0f, 1.0f);
@@ -257,6 +258,29 @@ void GamePlayer::tickMovement(const glm::vec3& cameraForwardPlanar, float deltaS
     }
     m_jumpWasDown = jumpDown;
     pc->body.setLinearVelocity(vel);
+}
+
+void GamePlayer::applyDamage(float amount)
+{
+    if (m_graceTimer > 0.0f || amount <= 0.0f)
+        return;
+    // The battery eats the hit FIRST: a live shield converts damage into energy at "Damage absorb"
+    // energy per hp, and only what the battery cannot pay reaches health. An emptied battery
+    // collapses right here (same latch tickShieldAndHealth uses) and flushes the co-op mirror, so
+    // the bubble drops the moment a swarm chews through it instead of at the next tick.
+    if (!m_shieldCollapsed && m_damageAbsorb > 0.0f && m_energy > 0.0f)
+    {
+        const float absorbedHp = glm::min(amount, m_energy / m_damageAbsorb);
+        m_energy = glm::max(m_energy - absorbedHp * m_damageAbsorb, 0.0f);
+        amount -= absorbedHp;
+        if (m_energy <= 0.0f)
+        {
+            m_shieldCollapsed = true;
+            m_shieldEdge = true;
+        }
+    }
+    if (amount > 0.0f)
+        m_health = glm::max(m_health - amount, 0.0f);
 }
 
 void GamePlayer::tickShieldAndHealth(float deltaSec)

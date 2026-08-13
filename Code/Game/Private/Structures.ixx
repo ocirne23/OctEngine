@@ -3,6 +3,7 @@ export module Game:Structures;
 import Core;
 import Core.glm;
 import Entity;
+import File; // AssetNode (save/load)
 import Force;
 
 // The build/economy layer: resource nodes, the Minerals/Fuel stocks, the placeable structures and
@@ -110,10 +111,16 @@ public:
     int structureNodeIndex(int index) const { return m_structures[index].nodeIndex; }
     float structureOutputFrac(int index) const { return m_structures[index].outputFrac; }
 
+    // SAVE/LOAD (server): every structure (id/type/pos/facing/node/team/blueprint + stores +
+    // route) and cable into/from an AssetNode tree. loadFrom CLEARS the current set first
+    // (removal hooks fire, so connected clients prune) and preserves ids.
+    void saveTo(AssetNode& root) const;
+    void loadFrom(const AssetNode& root);
+    void clearAllStructures();
+
     void registerTweaks();
-    void setPvp(bool pvp) { m_pvp = pvp; } // switches tickDamage to the PvP field rule (see there)
-    // Authored whitebox layout (same on every instance — no sync needed). PvE = the radial map;
-    // PvP = the corridor arena's symmetric layout (starters at each end, contested middle).
+    // Authored whitebox layout (same on every instance — no sync needed): the corridor arena's
+    // symmetric node set (starters at each end, contested middle).
     void spawnNodes();
     void spawnBase(const glm::vec3& groundPos, uint8 team = 0); // game-start Base (free; PvP spawns
                                                                 // one per playing team)
@@ -132,6 +139,24 @@ public:
     // Delete mode: removes the structure (no refund). The Base and other teams' structures are
     // refused at apply time.
     void queueDemolishRequest(uint32 id, uint8 team = 0);
+    // BARRACKS ROUTES: replace the barracks' waypoint list (validated at apply: own-team barracks
+    // only, clamped to MaxRouteWaypoints). Spawned units walk the route, advancing when they touch
+    // each waypoint's "destination circle" (waypointRadius); combat AI resumes after the last.
+    static constexpr int MaxRouteWaypoints = 6; // also bounds the GqW request under the 64B cap
+    void queueRouteRequest(uint32 id, std::span<const glm::vec3> points, uint8 team = 0);
+    std::function<void(uint32 id)> onRouteChanged; // server -> send GRt (mirror + join replay)
+    void mirrorRoute(uint32 id, std::span<const glm::vec3> points);
+    const std::vector<glm::vec3>& structureRoute(int index) const { return m_structures[index].route; }
+    const std::vector<glm::vec3>* structureRouteById(uint32 id) const
+    {
+        const int index = structureIndexById(id);
+        return index >= 0 ? &m_structures[index].route : nullptr;
+    }
+    float waypointRadius() const { return m_waypointRadius; }
+    // SMART CONNECT: the link type to auto-create between two structures — a Connector's already-
+    // carried medium wins, else A's (the selected building's) resource OUTPUT, else B's, else the
+    // first medium BOTH hold. Count = no sensible/valid link.
+    ECableType smartLinkTypeFor(int indexA, int indexB) const;
     // NPC attack surface: a random pick among the 4 CLOSEST damageable structures to nearPos
     // (Base excluded; 0 = none exist) — units harass their neighbourhood instead of marching
     // across the map — and direct damage by stable id (main thread; death cleanup in the next
@@ -227,6 +252,14 @@ public:
     float structureHealthMax() const { return m_structureHealthMax; }
     bool structurePowered(int index) const { return m_structures[index].powered; }
     bool cableExists(uint32 idA, uint32 idB) const;
+    // The existing link's type between a pair (Count = none) — the Disconnect/Upgrade tools.
+    ECableType cableTypeBetween(uint32 idA, uint32 idB) const
+    {
+        for (const Cable& c : m_cables)
+            if ((c.idA == idA && c.idB == idB) || (c.idA == idB && c.idB == idA))
+                return c.type;
+        return ECableType::Count;
+    }
     // Valid NEW link of `type`: distinct live endpoints within cable length, AT LEAST ONE endpoint
     // a Connector (links never run building-to-building), and every Connector endpoint carries
     // only ONE medium (power / fuel / minerals) across all its links. ignoreCableIndex skips one
@@ -265,15 +298,12 @@ public:
         case EStructureType::Connector:
         case EStructureType::Solar:
         case EStructureType::Fabricator:
-        case EStructureType::Barracks:
-        case EStructureType::BarracksBrute:
-        case EStructureType::BarracksRunner:
-        case EStructureType::BarracksSpitter:
         case EStructureType::Constructor:
         case EStructureType::Turret:      return m_internalBuffer;
+        // Barracks hold NO energy: they run purely on conveyor-fed minerals, so an energy buffer
+        // would only show an idle bar and let a useless power cable attach.
         case EStructureType::Generator:   return m_generatorBuffer;
-        case EStructureType::Battery:
-        case EStructureType::Base:        return m_batteryCapacity;
+        case EStructureType::Battery:     return m_batteryCapacity; // the Base stores NO energy
         default:                          return 0.0f;
         }
     }
@@ -316,8 +346,7 @@ public:
         switch (t)
         {
         case EStructureType::FuelTank:   return m_fuelTankCapacity;
-        case EStructureType::Generator:
-        case EStructureType::Base:       return m_generatorFuelTank;
+        case EStructureType::Generator:  return m_generatorFuelTank; // the Base stores NO fuel
         case EStructureType::Extractor:  // fuel extractors export from here; mineral ones never fill it
         case EStructureType::Fabricator:
         case EStructureType::Connector:  return m_internalBuffer; // flows RELAY through connectors,
@@ -376,7 +405,9 @@ public:
         m_hasBounds = true;
     }
     // Free = inside the bounds AND the footprint overlaps no existing structure's (blueprints
-    // included). Also used as a probe for unit spawn points (a 1x1 footprint).
+    // included) AND no free resource node's RESERVED extractor slot — a building can neither
+    // block an extractor's future spot nor overlap one placed later. Also used as a probe for
+    // unit spawn points (a 1x1 footprint).
     bool cellsFree(EStructureType t, const glm::vec3& snappedPos) const
     {
         const float half = footprintCellsOf(t) * GridCellSize * 0.5f;
@@ -388,6 +419,19 @@ public:
             const float limit = half + footprintCellsOf(s.type) * GridCellSize * 0.5f - 0.01f;
             if (glm::abs(s.pos.x - snappedPos.x) < limit && glm::abs(s.pos.z - snappedPos.z) < limit)
                 return false;
+        }
+        if (t != EStructureType::Extractor) // the extractor itself is what the slot is FOR
+        {
+            const float slotHalf = footprintCellsOf(EStructureType::Extractor) * GridCellSize * 0.5f;
+            for (const Node& node : m_nodes)
+            {
+                if (node.extracted)
+                    continue; // the standing extractor already occupies these cells
+                const glm::vec3 slot = snapToGrid(EStructureType::Extractor, node.pos);
+                const float limit = half + slotHalf - 0.01f;
+                if (glm::abs(slot.x - snappedPos.x) < limit && glm::abs(slot.z - snappedPos.z) < limit)
+                    return false;
+            }
         }
         return true;
     }
@@ -458,6 +502,8 @@ private:
                                     // fields, no income). HEALTH IS THE PROGRESS: materials heal
                                     // it at cost/healthMax per hp; full health = built. Damage
                                     // during construction literally undoes the work.
+        std::vector<glm::vec3> route; // BARRACKS: spawn waypoints — units walk them in order
+                                      // before their combat AI takes over (dies with the barracks)
     };
     struct PlaceRequest
     {
@@ -498,6 +544,13 @@ private:
     std::vector<PlaceRequest> m_requests;
     std::vector<Cable> m_cableRequests;
     std::vector<std::pair<uint32, uint8>> m_demolishRequests; // id + requester team
+    struct RouteRequest
+    {
+        uint32 id = 0;
+        uint8 team = 0;
+        std::vector<glm::vec3> points;
+    };
+    std::vector<RouteRequest> m_routeRequests;
     std::vector<Cable> m_cables;
     std::vector<Link> m_links; // per-tick resolved cables (flow sim + debug draw)
     float m_time = 0.0f;       // drives the flow-pulse visual
@@ -514,21 +567,38 @@ private:
 
     // Tweaks ("Game/Economy", "Game/Structures")
     float m_startMinerals = 100.0f;
-    float m_startFuel = 60.0f;
     float m_extractorSnapRadius = 5.0f; // aim within this of a free node snaps the extractor onto it
-    float m_mineralRate = 5.0f;      // minerals/s per powered mineral extractor
-    float m_fuelRate = 5.0f;         // fuel/s per powered fuel extractor
+    float m_mineralRate = 1.0f;      // minerals/s per powered mineral extractor
+    float m_fuelRate = 4.0f;         // fuel/s per powered fuel extractor
     float m_baseIncomeMult = 0.25f;  // the Base's passive income as a fraction of an extractor —
                                      // a trickle to bootstrap, not a substitute for map control
-    float m_costs[18] = { 30.0f, 50.0f, 15.0f, 40.0f, 40.0f, 25.0f, 20.0f, 60.0f, 70.0f, 45.0f,
-                          50.0f, 65.0f, 55.0f, 60.0f, 8.0f, 55.0f, 35.0f, 50.0f }; // Emitter,
+    float m_costs[18] = { 
+        40.0f,  // Emitter,
+        30.0f,  // Generator
+        10.0f,  // Connector
+        40.0f,  // Extractor
+		40.0f,  // Battery
+		40.0f,  // FuelTank
+		30.0f,  // Solar
+		60.0f,  // Fabricator
+		70.0f,  // Bastion
+		45.0f,  // Lance
+		100.0f,  // Barracks
+		200.0f,  // BarracksBrute
+		75.0f,  // BarracksRunner
+		150.0f,  // BarracksSpitter
+		5.0f,   // Wall (per segment)
+		50.0f,  // Turret
+		40.0f,  // MineralSilo
+		40.0f };// Constructor
                         // Generator, Connector, Extractor, Battery, FuelTank, Solar, Fabricator,
                         // Bastion, Lance, Barracks(+Brute/Runner/Spitter), Wall (per segment),
                         // Turret, MineralSilo, Constructor
-    float m_mineralBaseCapacity = 200.0f; // per-team mineral cap without silos
-    float m_mineralSiloCapacity = 300.0f; // extra cap per Mineral silo
+    float m_mineralBaseCapacity = 100.0f; // per-team mineral cap without silos
+    float m_mineralSiloCapacity = 100.0f; // extra cap per Mineral silo
     float m_constructorRange = 14.0f;     // Constructor: builds blueprints within this
     float m_constructorBuildRate = 6.0f;  // materials/s a powered Constructor invests
+    float m_waypointRadius = 3.0f;            // a route waypoint counts as reached inside this
     float m_constructorBoostRate = 1.0f;      // spawn-speed ADDED to the nearest barracks (1 = 2x)
     float m_constructorBoostMaterials = 2.0f; // materials/s the boost burns
     float m_constructorBoostEnergy = 2.0f;    // energy/s the boost burns (from the internal buffer)
@@ -536,9 +606,9 @@ private:
     float m_fuelBurnRate = 1.0f;        // fuel/s per RUNNING generator
     float m_genEnergyPerSec = 10.0f;    // energy/s a running generator adds to its grid
     float m_solarEnergyPerSec = 1.5f;   // energy/s a solar panel trickles into its buffer (no fuel)
-    float m_fabricatorEnergyPerSec = 4.0f;  // energy/s a fabricator drains while producing
-    float m_fabricatorFuelPerSec = 0.5f;    // fuel/s it burns alongside (piped into its own tank)
-    float m_fabricatorMineralsPerSec = 2.0f; // minerals/s a POWERED fabricator produces
+    float m_fabricatorEnergyPerSec = 5.0f;  // energy/s a fabricator drains while producing
+    float m_fabricatorFuelPerSec = 1.0f;    // fuel/s it burns alongside (piped into its own tank)
+    float m_fabricatorMineralsPerSec = 0.5f; // minerals/s a POWERED fabricator produces
     float m_emitterEnergyPerSec = 1.0f; // energy/s an emitter drains at rest
     float m_emitterPressureDraw = 3.0f; // EXTRA energy/s per unit of pressure on the emitter's
                                         // field — contested emitters cost more to hold
@@ -550,8 +620,8 @@ private:
     float m_generatorBuffer = 20.0f;    // generator production buffer (full = production throttles)
     float m_cableThroughput[4] = { 5.0f, 20.0f, 4.0f, 6.0f }; // per-type transfer/s: Basic + Heavy
                                                               // carry ENERGY, Pipe FUEL, Conveyor MINERALS
-    float m_generatorFuelTank = 50.0f;  // fuel storage per Generator (the Base holds one tank too)
-    float m_fuelTankCapacity = 150.0f;  // fuel storage per dedicated Fuel tank structure
+    float m_generatorFuelTank = 10.0f;  // fuel storage per Generator (the Base holds one tank too)
+    float m_fuelTankCapacity = 100.0f;  // fuel storage per dedicated Fuel tank structure
     float m_cableRange = 18.0f;      // max building-to-building link length
     float m_connectorRange = 32.0f;  // max link length when either endpoint is a Connector
     float m_placeRange = 20.0f;
@@ -570,6 +640,7 @@ private:
     float m_emitterRestartCharge = 5.0f; // internal battery level that clears the down-latch
     float m_structureHealthMax = 100.0f;
     float m_structureDamageRate = 8.0f; // health/s in enemy-owned territory
-    float m_projectileStructDamage = 20.0f; // health per enemy-team projectile hit (PvP combat)
-    bool m_pvp = false;
+    float m_projectileStructDamage = 20.0f; // health per enemy-team projectile hit
+    bool m_cheatInstantBuild = false; // "Game/Cheats/Free instant build": placements spawn BUILT
+                                      // at full health — no blueprint, no material investment
 };

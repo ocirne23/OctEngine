@@ -16,6 +16,7 @@ import Physics;
 import Force;
 import RendererVK;
 import Network;
+import File; // AssetNode + loadAssetFile/writeAssetText (game save/load)
 import :Match;
 import :GameCamera;
 import :Player;
@@ -24,42 +25,42 @@ import :Npc;
 
 // The grid hotbar's category tables. Key 1..3 picks a category at the top level; inside one,
 // keys 1..N arm an item and key 0 backs out.
-static constexpr const char* c_buildCategories[3] = { "Emitters", "Production", "Distribution" };
-static constexpr BuildItem c_emitterItems[] = {
-    { "Emitter", false, EStructureType::Emitter, ECableType::Basic },
-    { "Bastion", false, EStructureType::Bastion, ECableType::Basic },
-    { "Lance", false, EStructureType::Lance, ECableType::Basic },
-    { "Wall", false, EStructureType::Wall, ECableType::Basic },
-    { "Turret", false, EStructureType::Turret, ECableType::Basic },
+static constexpr const char* c_buildCategories[3] = { "Combat", "Production", "Distribution" };
+static constexpr BuildItem c_combatItems[] = {
+    { "Emitter", EBuildTool::Structure, EStructureType::Emitter },
+    { "Bastion", EBuildTool::Structure, EStructureType::Bastion },
+    { "Lance", EBuildTool::Structure, EStructureType::Lance },
+    { "Wall", EBuildTool::Structure, EStructureType::Wall },
+    { "Turret", EBuildTool::Structure, EStructureType::Turret },
+    { "Barracks", EBuildTool::Structure, EStructureType::Barracks },
+    { "B-Brute", EBuildTool::Structure, EStructureType::BarracksBrute },
+    { "B-Runner", EBuildTool::Structure, EStructureType::BarracksRunner },
+    { "B-Spitter", EBuildTool::Structure, EStructureType::BarracksSpitter },
 };
 static constexpr float c_wallSegmentSpacing = 2.0f; // one segment per box width along the line
 static constexpr int c_wallMaxSegments = 16;
 static constexpr BuildItem c_productionItems[] = {
-    { "Generator", false, EStructureType::Generator, ECableType::Basic },
-    { "Solar", false, EStructureType::Solar, ECableType::Basic },
-    { "Extractor", false, EStructureType::Extractor, ECableType::Basic },
-    { "Fabricator", false, EStructureType::Fabricator, ECableType::Basic },
-    { "Barracks", false, EStructureType::Barracks, ECableType::Basic },
-    { "B-Brute", false, EStructureType::BarracksBrute, ECableType::Basic },
-    { "B-Runner", false, EStructureType::BarracksRunner, ECableType::Basic },
-    { "B-Spitter", false, EStructureType::BarracksSpitter, ECableType::Basic },
-    { "Constructor", false, EStructureType::Constructor, ECableType::Basic },
+    { "Generator", EBuildTool::Structure, EStructureType::Generator },
+    { "Solar", EBuildTool::Structure, EStructureType::Solar },
+    { "Extractor", EBuildTool::Structure, EStructureType::Extractor },
+    { "Fabricator", EBuildTool::Structure, EStructureType::Fabricator },
+    { "Constructor", EBuildTool::Structure, EStructureType::Constructor },
 };
+// Link CREATION lives in Select mode (right-click smart connect); the hotbar keeps only the
+// two-click management tools.
 static constexpr BuildItem c_distributionItems[] = {
-    { "Connector", false, EStructureType::Connector, ECableType::Basic },
-    { "Cable", true, EStructureType::Emitter, ECableType::Basic },
-    { "H-Cable", true, EStructureType::Emitter, ECableType::Heavy },
-    { "Pipe", true, EStructureType::Emitter, ECableType::Pipe },
-    { "Conveyor", true, EStructureType::Emitter, ECableType::Conveyor },
-    { "Battery", false, EStructureType::Battery, ECableType::Basic },
-    { "Fuel tank", false, EStructureType::FuelTank, ECableType::Basic },
-    { "M-Silo", false, EStructureType::MineralSilo, ECableType::Basic },
+    { "Connector", EBuildTool::Structure, EStructureType::Connector },
+    { "Disconnect", EBuildTool::Disconnect, EStructureType::Emitter },
+    { "Upgrade", EBuildTool::Upgrade, EStructureType::Emitter },
+    { "Battery", EBuildTool::Structure, EStructureType::Battery },
+    { "Fuel tank", EBuildTool::Structure, EStructureType::FuelTank },
+    { "M-Silo", EBuildTool::Structure, EStructureType::MineralSilo },
 };
 static std::span<const BuildItem> buildCategoryItems(int category)
 {
     switch (category)
     {
-    case 0: return c_emitterItems;
+    case 0: return c_combatItems;
     case 1: return c_productionItems;
     case 2: return c_distributionItems;
     default: return {};
@@ -84,34 +85,25 @@ static void drawCircle(const glm::vec3& center, float radius, uint32 color, int 
     }
 }
 
-// PvP arena: a walled corridor along X — combat funnels through the middle.
-static constexpr float c_pvpCorridorHalfLength = 65.0f; // x extent of the play area
-static constexpr float c_pvpCorridorHalfWidth = 20.0f;   // z extent
-static constexpr float c_pvpWallStep = 10.0f;            // border block size (borderwall.pre)
+// The arena: a walled corridor along X — combat funnels through the middle.
+static constexpr float c_corridorHalfLength = 65.0f; // x extent of the play area
+static constexpr float c_corridorHalfWidth = 20.0f;  // z extent
+static constexpr float c_wallStep = 10.0f;           // border block size (borderwall.pre)
 
-GameMatch::GameMatch(bool enabled, bool pvp) : m_enabled(enabled), m_pvp(pvp)
+GameMatch::GameMatch(bool enabled) : m_enabled(enabled)
 {
     if (!m_enabled)
         return;
-    if (m_pvp)
-    {
-        // The corridor map: one Base at each end, walls all around (spawnCorridorWalls).
-        m_basePos = glm::vec3(-55.0f, 0.0f, 0.0f);
-        m_playerStart = m_basePos + glm::vec3(0.0f, 1.0f, -6.0f);
-        m_pvpEnemyBasePos = glm::vec3(55.0f, 0.0f, 0.0f);
-        Log::info("PvP TEST mode: corridor arena, no ambient field/enemies; per-client teams + resources");
-    }
 
     {
         // Gameplay tweaks persist between runs and the server's values overrule the clients'.
-        const Tweak::ScopedFlags scoped(ETweakFlags::Saved | ETweakFlags::Synced);
-        Tweak::floatVar("Game/World", "Safe radius", &m_safeRadius, 2.0f, 500.0f, 1.0f);
-        Tweak::floatVar("Game/World", "Field gradient", &m_fieldSlope, 0.001f, 0.5f, 0.001f);
-        Tweak::floatVar("Game/World", "Field max strength", &m_fieldMaxStrength, 0.2f, 10.0f, 0.05f);
+        const Tweak::ScopedFlags scoped(ETweakFlags::Synced);
         Tweak::floatVar("Game/Construction", "Refill radius", &m_refillRadius, 1.0f, 30.0f, 0.25f);
         Tweak::floatVar("Game/Construction", "Refill rate", &m_refillRate, 0.5f, 100.0f, 0.5f);
         Tweak::floatVar("Game/Construction", "Player build radius", &m_buildRadius, 1.0f, 30.0f, 0.25f);
         Tweak::floatVar("Game/Construction", "Player build rate", &m_playerBuildRate, 0.5f, 100.0f, 0.5f);
+        Tweak::floatVar("Game/Player", "Base heal radius", &m_baseHealRadius, 0.0f, 60.0f, 0.5f);
+        Tweak::floatVar("Game/Player", "Base heal/s", &m_baseHealRate, 0.0f, 100.0f, 0.5f);
     }
     m_camera.registerTweaks();
     m_player.registerTweaks();
@@ -129,7 +121,12 @@ GameMatch::GameMatch(bool enabled, bool pvp) : m_enabled(enabled), m_pvp(pvp)
     m_mouse->onMousePressed = [this](const SDL_MouseButtonEvent& evt)
     {
         if (evt.button == 3)
+        {
             m_rmbDown = true;
+            if (Globals::input.isWindowHasFocus() && Globals::ui.isViewportFocused()
+                && !Globals::input.isMouseCaptured())
+                m_rmbClicked = true;
+        }
         if (evt.button == 1 && Globals::input.isWindowHasFocus() && Globals::ui.isViewportFocused()
             && !Globals::input.isMouseCaptured())
             m_placeClicked = true;
@@ -149,7 +146,6 @@ GameMatch::~GameMatch()
 {
     if (!m_enabled)
         return;
-    Globals::forceSystem.setAmbientField(1u, glm::vec2(0.0f), 0.0f, 0.0f, 0.0f); // slope 0 = off
     m_npcs.clear();
     m_structures.clear();
     m_player.despawn();
@@ -188,30 +184,27 @@ void GameMatch::spawnWorld()
         {
             sendCableChanged(a, b, t, removed);
         };
+        m_structures.onRouteChanged = [this](uint32 id)
+        {
+            if (const int index = m_structures.structureIndexById(id); index >= 0)
+                sendRoute(index);
+        };
         Globals::networkManager.setEventFilter([](uint32, std::string_view name, std::span<const uint8> data, Entity*)
         {
             return name.size() >= 2 && name[0] == 'G' && name[1] == 'q' && data.size() <= 64;
         });
     }
 
-    m_structures.setPvp(m_pvp);
-    m_npcs.setPvp(m_pvp);
     m_structures.spawnNodes(); // deterministic on every instance (no sync needed)
-    if (m_pvp)
-    {
-        spawnCorridorWalls();  // deterministic local scenery too — every role builds its own copy
-        // Placement stays INSIDE the arena (footprints may not clip the border wall ring).
-        m_structures.setPlacementBounds(
-            glm::vec2(-c_pvpCorridorHalfLength, -c_pvpCorridorHalfWidth),
-            glm::vec2(c_pvpCorridorHalfLength, c_pvpCorridorHalfWidth));
-    }
+    spawnCorridorWalls();      // deterministic local scenery too — every role builds its own copy
+    // Placement stays INSIDE the arena (footprints may not clip the border wall ring).
+    m_structures.setPlacementBounds(
+        glm::vec2(-c_corridorHalfLength, -c_corridorHalfWidth),
+        glm::vec2(c_corridorHalfLength, c_corridorHalfWidth));
     if (!m_isClient)
     {
         m_structures.spawnBase(m_basePos); // clients get it through the GPl mirror stream
-        if (m_pvp)
-            m_structures.spawnBase(m_pvpEnemyBasePos, 1); // the opposing team's anchor + income
-        else
-            m_npcs.spawnEnemyCamps(m_basePos); // camp/unit/shot entities replicate (Component Network)
+        m_structures.spawnBase(m_enemyBasePos, 1); // the opposing team's anchor + income
         m_player.spawn(m_playerStart);     // clients ADOPT the capsule the server spawns for them
         // The server's own capsule is a PRIMARY: never handed to a client by the proximity
         // transfer, and it re-claims transferred objects it walks up to (the client symmetric).
@@ -219,22 +212,32 @@ void GameMatch::spawnWorld()
             Globals::networkManager.setServerPrimary(*m_player.entity(), true);
     }
 
+    // Spawn view faces the MAP CENTER from wherever this instance's player starts (each end of
+    // the corridor looks inward at the other team).
+    const glm::vec3 cameraAnchor = m_isClient
+        ? m_enemyBasePos + glm::vec3(0.0f, 1.0f, -6.0f) : m_playerStart;
+    m_camera.setYawToward(glm::vec3(0.0f) - cameraAnchor);
+
     Globals::gameHud.setHotbarVisible(false); // hidden until Build mode (B); setMode populates the
     Globals::gameHud.selectSlot(0);           // grid hotbar (categories -> items) when entered
 
-    Log::info("Game mode: B = build (hotbar 1-7, LMB/F confirms), X = delete, V = select. The enemy "
-              "field surrounds you — build powered Emitters on the frontier to expand the safe zone");
+    Log::info("Game mode: SELECT by default (click inspects, RMB smart-connects, ground-click sets "
+              "barracks routes). B/V/C = build categories, X = delete. Build powered Emitters to "
+              "hold ground");
 }
 
 void GameMatch::spawnCorridorWalls()
 {
-    // A ring of 10 m blocks: two long sides whose inner faces sit ON the half-width, and two end
-    // caps behind the bases (~52 segments). Parented under the Ground entity — the scene root
-    // stays lean and the whole ring dies with it. The static body bakes at the WORLD pose at
-    // spawn; the pos rewrite below re-expresses it in the ground's local space for the render.
+    // A ring of border segments (borderwall.pre): the VISIBLE wall is a low 10x5x10 half-cube the
+    // camera sees over, but the COLLIDER is a tall 10x20x10 box — an invisible fence keeps bodies
+    // inside (the prefab offsets the render node down to the ground). Two long sides whose inner
+    // faces sit ON the half-width, and two end caps behind the bases (~52 segments). Parented
+    // under the Ground entity — the scene root stays lean and the whole ring dies with it. The
+    // static body bakes at the WORLD pose at spawn; the pos rewrite below re-expresses it in the
+    // ground's local space for the render.
     const auto spawnSegment = [this](float x, float z)
     {
-        const glm::vec3 worldPos(x, c_pvpWallStep * 0.5f, z);
+        const glm::vec3 worldPos(x, c_wallStep, z); // collider center: half of the 20 m tall box
         EntityPtr wall = Globals::world.spawnAssetFile("Entities/Game/borderwall.pre",
             Transform(worldPos), true);
         if (!wall)
@@ -248,17 +251,17 @@ void GameMatch::spawnCorridorWalls()
         else
             Globals::world.addRootEntity(wall);
     };
-    const float half = c_pvpWallStep * 0.5f;
-    for (float x = -c_pvpCorridorHalfLength + half; x < c_pvpCorridorHalfLength; x += c_pvpWallStep)
+    const float half = c_wallStep * 0.5f;
+    for (float x = -c_corridorHalfLength + half; x < c_corridorHalfLength; x += c_wallStep)
     {
-        spawnSegment(x, -c_pvpCorridorHalfWidth - half);
-        spawnSegment(x, c_pvpCorridorHalfWidth + half);
+        spawnSegment(x, -c_corridorHalfWidth - half);
+        spawnSegment(x, c_corridorHalfWidth + half);
     }
-    for (float z = -c_pvpCorridorHalfWidth - c_pvpWallStep + half;
-         z < c_pvpCorridorHalfWidth + c_pvpWallStep; z += c_pvpWallStep)
+    for (float z = -c_corridorHalfWidth - c_wallStep + half;
+         z < c_corridorHalfWidth + c_wallStep; z += c_wallStep)
     {
-        spawnSegment(-c_pvpCorridorHalfLength - half, z);
-        spawnSegment(c_pvpCorridorHalfLength + half, z);
+        spawnSegment(-c_corridorHalfLength - half, z);
+        spawnSegment(c_corridorHalfLength + half, z);
     }
 }
 
@@ -266,17 +269,17 @@ void GameMatch::onClientJoined(uint32 clientId)
 {
     // Their player: spawned server-side (player.pre carries Component Network), handed over with
     // setOwner in the SAME frame; the client adopts + drives it through the claim stream.
-    // PvP: clients spawn beside THEIR team's Base instead of the server's.
-    const glm::vec3 clientStart = m_pvp ? m_pvpEnemyBasePos + glm::vec3(0.0f, 1.0f, -6.0f) : m_playerStart;
+    // Clients spawn beside THEIR team's Base.
+    const glm::vec3 clientStart = m_enemyBasePos + glm::vec3(0.0f, 1.0f, -6.0f);
     EntityPtr player = Globals::world.spawnAssetFile("Entities/Game/player.pre",
         Transform(clientStart + glm::vec3(2.0f * (float)(clientId % 5), 0.0f, 1.5f * (float)(clientId % 3))), true);
     if (player)
     {
         player->setName(("Player " + std::to_string(clientId)).c_str());
         Globals::networkManager.setOwner(*player, clientId);
-        if (m_pvp) // the server-side twin's field carries the client's team (readbacks, visuals)
-            if (ForceComponent* fc = getComponent<ForceComponent>(player.get()))
-                fc->emitter.setTeam(teamOfClient(clientId));
+        // the server-side twin's field carries the client's team (readbacks, visuals)
+        if (ForceComponent* fc = getComponent<ForceComponent>(player.get()))
+            fc->emitter.setTeam(teamOfClient(clientId));
         Globals::world.addRootEntity(player);
         m_clientPlayers[clientId] = std::move(player);
     }
@@ -291,6 +294,9 @@ void GameMatch::onClientJoined(uint32 clientId)
         m_structures.cableAt(i, idA, idB, type);
         sendCableChanged(idA, idB, type, false);
     }
+    for (int i = 0; i < m_structures.structureCount(); ++i)
+        if (!m_structures.structureRoute(i).empty())
+            sendRoute(i); // barracks waypoint routes replay too
     Log::info("Game: client " + std::to_string(clientId) + " joined, world replayed");
 }
 
@@ -306,8 +312,6 @@ void GameMatch::onClientLeft(uint32 clientId)
         }
         m_clientPlayers.erase(it);
     }
-    m_clientFireCooldown.erase(clientId);
-    m_clientMeleeCooldown.erase(clientId);
     m_clientMaterials.erase(clientId);
 }
 
@@ -349,6 +353,102 @@ void GameMatch::sendCableChanged(uint32 idA, uint32 idB, ECableType type, bool r
     Globals::networkManager.fireNetworkEvent("GCb", writer.data());
 }
 
+void GameMatch::sendRoute(int index)
+{
+    uint8 buffer[80];
+    NetWriter writer(buffer);
+    const std::vector<glm::vec3>& route = m_structures.structureRoute(index);
+    writer.write<uint32>(m_structures.structureId(index));
+    writer.write<uint8>((uint8)route.size());
+    for (const glm::vec3& p : route)
+    {
+        writer.write<float>(p.x);
+        writer.write<float>(p.z);
+    }
+    Globals::networkManager.fireNetworkEvent("GRt", writer.data());
+}
+
+static constexpr const char* c_gameSavePath = "Local/gamesave.txt"; // cwd = Assets/
+
+void GameMatch::saveGame()
+{
+    if (m_isClient)
+    {
+        Log::warning("Save game: server only");
+        return;
+    }
+    AssetNode root; // unnamed — writeAssetText writes only the children
+    m_structures.saveTo(root);
+    m_npcs.saveUnits(root);
+    std::ofstream file(c_gameSavePath, std::ios::out | std::ios::binary | std::ios::trunc);
+    if (!file)
+    {
+        Log::warning(std::string("Save game: cannot write ") + c_gameSavePath);
+        return;
+    }
+    file << writeAssetText(root);
+    Log::info(std::string("Game saved to ") + c_gameSavePath);
+}
+
+void GameMatch::loadGame()
+{
+    if (m_isClient)
+    {
+        Log::warning("Load game: server only");
+        return;
+    }
+    AssetNode root;
+    std::string error;
+    if (!loadAssetFile(c_gameSavePath, root, error))
+    {
+        Log::warning("Load game: " + error);
+        return;
+    }
+    // Replace the sim. Structure removal hooks fire during the clear (GRm to clients), then the
+    // loaded state re-broadcasts below; unit entities resync through the normal despawn/spawn
+    // replication (Component Network in their prefabs).
+    m_structures.loadFrom(root);
+    m_npcs.loadUnits(root);
+    m_selectedId = 0;
+    m_cablePendingId = 0;
+    if (m_isServer)
+    {
+        for (int i = 0; i < m_structures.structureCount(); ++i)
+        {
+            sendStructurePlaced(i);
+            if (!m_structures.structureRoute(i).empty())
+                sendRoute(i);
+        }
+        for (int c = 0; c < m_structures.cableTotal(); ++c)
+        {
+            uint32 idA, idB;
+            ECableType type;
+            m_structures.cableAt(c, idA, idB, type);
+            sendCableChanged(idA, idB, type, false);
+        }
+    }
+}
+
+void GameMatch::requestSetRoute(uint32 id, std::span<const glm::vec3> points)
+{
+    const size_t count = glm::min(points.size(), (size_t)StructureSystem::MaxRouteWaypoints);
+    if (!m_isClient)
+    {
+        m_structures.queueRouteRequest(id, points.subspan(0, count), (uint8)m_team);
+        return;
+    }
+    uint8 buffer[64]; // 6 waypoints = 53B, inside the Gq* request cap
+    NetWriter writer(buffer);
+    writer.write<uint32>(id);
+    writer.write<uint8>((uint8)count);
+    for (size_t k = 0; k < count; ++k)
+    {
+        writer.write<float>(points[k].x);
+        writer.write<float>(points[k].z);
+    }
+    Globals::networkManager.fireNetworkEvent("GqW", writer.data());
+}
+
 void GameMatch::sendStats()
 {
     // Volatile mirror state at ~5 Hz: resource totals + per-structure fractions (u8-quantized).
@@ -385,9 +485,9 @@ void GameMatch::sendStats()
 void GameMatch::sendShieldStates()
 {
     // Full netId-keyed shield snapshot (~10 Hz + an immediate flush on any collapse/reboot edge):
-    // units + friendlies from the npc lists, our own player, and every client player as last
-    // reported through GqE. Snapshot semantics — the receiver replaces its map wholesale, so dead
-    // entities drop out without pruning.
+    // every unit, our own player, and every client player as last reported through GqE. Snapshot
+    // semantics — the receiver replaces its map wholesale, so dead entities drop out without
+    // pruning.
     std::vector<ShieldNetState> records;
     m_npcs.collectShieldStates(records);
     if (Entity* own = m_player.entity())
@@ -460,25 +560,6 @@ void GameMatch::sendShieldReport()
     Globals::networkManager.fireNetworkEvent("GqE", writer.data());
 }
 
-// Server-side melee for a CLIENT's swing: npc damage + the physics shove cone, at their twin.
-void GameMatch::serverMeleeFrom(const glm::vec3& pos, const glm::vec3& dirPlanar, uint8 team)
-{
-    m_npcs.applyPlayerMelee(pos, dirPlanar, m_player.meleeRange(), team);
-    for (const EntityPtr& root : Globals::world.rootEntities())
-    {
-        PhysicsComponent* pc = getComponent<PhysicsComponent>(root.get());
-        if (!pc || pc->bodyType != EPhysicsBodyType::Dynamic || !pc->body.isValid())
-            continue;
-        const glm::vec3 d = pc->body.getPosition() - pos;
-        const glm::vec2 planar(d.x, d.z);
-        const float dist = glm::length(planar);
-        if (dist > m_player.meleeRange() || dist < 1e-3f
-            || glm::dot(planar / dist, glm::vec2(dirPlanar.x, dirPlanar.z)) < 0.5f)
-            continue;
-        pc->body.applyImpulse((glm::normalize(glm::vec3(d.x, 0.0f, d.z)) + glm::vec3(0.0f, 0.4f, 0.0f)) * 600.0f);
-    }
-}
-
 void GameMatch::handleNetEvent(std::string_view name)
 {
     // Both roles share the hook; each side reacts only to the names meant for it (our own
@@ -542,6 +623,33 @@ void GameMatch::handleNetEvent(std::string_view name)
                 m_structures.mirrorTotals(minerals, fuel, energy, cap, gen, use);
             // (mirrorTotals takes the spans by value into its own arrays — safe past this scope)
         }
+        else if (name == "GDm")
+        {
+            // Unit melee damage the server's sim dealt to OUR player (we own our health).
+            const uint8 count = reader.read<uint8>();
+            for (uint8 k = 0; k < count && !reader.overflowed(); ++k)
+            {
+                const uint32 clientId = reader.read<uint32>();
+                const float damage = reader.read<float>();
+                if (!reader.overflowed() && clientId == Globals::networkManager.localClientId()
+                    && damage > 0.0f && damage < 1000.0f)
+                    m_player.applyDamage(damage);
+            }
+        }
+        else if (name == "GRt")
+        {
+            const uint32 id = reader.read<uint32>();
+            const uint8 count = reader.read<uint8>();
+            glm::vec3 points[StructureSystem::MaxRouteWaypoints];
+            const uint8 used = glm::min<uint8>(count, StructureSystem::MaxRouteWaypoints);
+            for (uint8 k = 0; k < used; ++k)
+            {
+                const float x = reader.read<float>(), z = reader.read<float>();
+                points[k] = glm::vec3(x, 0.0f, z);
+            }
+            if (!reader.overflowed())
+                m_structures.mirrorRoute(id, std::span<const glm::vec3>(points, used));
+        }
         else if (name == "GSh")
         {
             // Shield snapshot: apply each record's output to the entity's LOCAL emitter (remote
@@ -574,10 +682,9 @@ void GameMatch::handleNetEvent(std::string_view name)
                 rs.collapsed = (flags & 1u) != 0;
                 rs.kind = (uint8)((flags >> 1) & 7u);
                 rs.team = (uint8)((flags >> 4) & 7u);
-                if (rs.kind < 3) // camp structures/cores are health-only — their bubble is authored
-                    if (Entity* entity = Globals::networkManager.findEntity(netId))
-                        if (ForceComponent* fc = getComponent<ForceComponent>(entity))
-                            fc->emitter.setOutput(glm::max(rs.output, 0.01f));
+                if (Entity* entity = Globals::networkManager.findEntity(netId))
+                    if (ForceComponent* fc = getComponent<ForceComponent>(entity))
+                        fc->emitter.setOutput(glm::max(rs.output, 0.01f));
                 m_remoteShields[netId] = rs;
             }
         }
@@ -611,6 +718,20 @@ void GameMatch::handleNetEvent(std::string_view name)
         if (!reader.overflowed())
             m_structures.queueDemolishRequest(id, requestTeam(sender));
     }
+    else if (name == "GqW")
+    {
+        const uint32 id = reader.read<uint32>();
+        const uint8 count = reader.read<uint8>();
+        glm::vec3 points[StructureSystem::MaxRouteWaypoints];
+        const uint8 used = glm::min<uint8>(count, StructureSystem::MaxRouteWaypoints);
+        for (uint8 k = 0; k < used; ++k)
+        {
+            const float x = reader.read<float>(), z = reader.read<float>();
+            points[k] = glm::vec3(x, 0.0f, z);
+        }
+        if (!reader.overflowed()) // team/barracks ownership validated at apply
+            m_structures.queueRouteRequest(id, std::span<const glm::vec3>(points, used), requestTeam(sender));
+    }
     else if (name == "GqE")
     {
         // The owner's self-reported shield state: apply to their twin's emitter (server-side
@@ -634,46 +755,8 @@ void GameMatch::handleNetEvent(std::string_view name)
             fc->emitter.setOutput(glm::max(rs.output, 0.01f));
         m_remoteShields[net->netId] = rs;
     }
-    else if (name == "GqS" || name == "GqM")
-    {
-        const auto it = m_clientPlayers.find(sender);
-        PhysicsComponent* pc = it != m_clientPlayers.end() && it->second
-            ? getComponent<PhysicsComponent>(it->second.get()) : nullptr;
-        if (!pc || !pc->body.isValid())
-            return;
-        const glm::vec3 from = pc->body.getPosition();
-        const float dx = reader.read<float>(), dy = reader.read<float>(), dz = reader.read<float>();
-        const glm::vec3 dir(dx, dy, dz);
-        if (reader.overflowed() || glm::dot(dir, dir) < 1e-6f || !std::isfinite(dx + dy + dz))
-            return;
-        if (name == "GqS")
-        {
-            float& cooldown = m_clientFireCooldown[sender];
-            if (cooldown > 0.0f)
-                return;
-            cooldown = m_player.fireInterval();
-            const glm::vec3 shotDir = glm::normalize(dir);
-            if (EntityPtr p = Globals::world.spawnAssetFile("Entities/Game/projectile.pre",
-                Transform(from + glm::vec3(0.0f, 0.5f, 0.0f) + shotDir * 1.2f), true))
-            {
-                p->setName("Projectile");
-                if (PhysicsComponent* ppc = getComponent<PhysicsComponent>(p.get()))
-                    ppc->body.setLinearVelocity(shotDir * 30.0f);
-                if (ForceComponent* fc = getComponent<ForceComponent>(p.get()))
-                    fc->emitter.setTeam(requestTeam(sender)); // the shooter's team field
-                Globals::world.addRootEntity(p);
-                m_player.trackProjectile(std::move(p)); // rides the aging + field-push loop
-            }
-        }
-        else
-        {
-            float& cooldown = m_clientMeleeCooldown[sender];
-            if (cooldown > 0.0f)
-                return;
-            cooldown = m_player.meleeInterval();
-            serverMeleeFrom(from, glm::normalize(glm::vec3(dir.x, 0.0f, dir.z)), requestTeam(sender));
-        }
-    }
+    // (GqS/GqM — player shooting and melee — were removed with player combat; unknown Gq* names
+    // from stale builds simply fall through here.)
 }
 
 void GameMatch::update(float deltaSec)
@@ -681,28 +764,23 @@ void GameMatch::update(float deltaSec)
     if (!m_enabled)
         return;
 
-    // The ambient enemy field: zero within "Safe radius" of the Base, growing with distance.
-    // Pushed every tick on EVERY instance (clients evaluate fields locally) — tweaks stay live.
-    // PvP: slope 0 = no ambient field at all (the map belongs to the players).
-    Globals::forceSystem.setAmbientField(1u, glm::vec2(m_basePos.x, m_basePos.z), m_safeRadius,
-        m_pvp ? 0.0f : m_fieldSlope, m_fieldMaxStrength);
-
     if (m_isClient)
     {
-        // PvP: our team comes from the Welcome's clientId — latch it the frame it appears, BEFORE
+        // Our team comes from the Welcome's clientId — latch it the frame it appears, BEFORE
         // adoption, so the adopted capsule's field re-teams immediately.
-        if (m_pvp && m_team == 0)
+        if (m_team == 0)
             if (const uint32 clientId = Globals::networkManager.localClientId(); clientId != 0)
             {
                 m_team = teamOfClient(clientId);
                 m_player.setTeam(m_team);
-                Log::info("PvP: we are team " + std::to_string(m_team));
+                Log::info("We are team " + std::to_string(m_team));
             }
         // CLIENT: adopt + drive our own capsule (the owner simulates; claims stream the state);
         // shield/health run on LOCAL readbacks against the mirrored fields. World sim is remote.
-        m_player.clientAdopt(m_pvp ? m_pvpEnemyBasePos + glm::vec3(0.0f, 1.0f, -6.0f) : m_playerStart);
+        m_player.clientAdopt(m_enemyBasePos + glm::vec3(0.0f, 1.0f, -6.0f));
         m_player.tickMovement(m_camera.forwardPlanar(), deltaSec);
         m_player.tickShieldAndHealth(deltaSec);
+        tickBaseHealing(deltaSec);
         m_structures.tickMirror(deltaSec);
         m_reportTimer -= deltaSec;
         if (m_player.takeShieldEdge() || m_reportTimer <= 0.0f)
@@ -717,17 +795,25 @@ void GameMatch::update(float deltaSec)
     m_structures.tickAuthority(playerPos, deltaSec);
     m_player.tickMovement(m_camera.forwardPlanar(), deltaSec);
     m_player.tickShieldAndHealth(deltaSec);
-    m_player.tickCombat(m_camera.forwardPlanar(), deltaSec);
+    tickBaseHealing(deltaSec);
 
-    // EVERY player body + team (ours + each client capsule): unit fallback targeting and camp
-    // turrets see everyone, not just the server's own player.
+    // EVERY player body + team (ours + each client capsule): unit fallback targeting sees
+    // everyone, not just the server's own player. playerClientIds runs parallel (0 = the server
+    // itself) so unit melee damage routes to each player's owning instance.
     std::vector<PlayerInfo> players;
+    std::vector<uint32> playerClientIds;
     players.reserve(1 + m_clientPlayers.size());
+    playerClientIds.reserve(1 + m_clientPlayers.size());
     players.push_back({ playerPos, (uint8)m_team });
+    playerClientIds.push_back(0);
     for (const auto& [id, p] : m_clientPlayers)
         if (p)
             if (const PhysicsComponent* pc = getComponent<PhysicsComponent>(p.get()); pc && pc->body.isValid())
+            {
                 players.push_back({ pc->body.getPosition(), requestTeam(id) });
+                playerClientIds.push_back(id);
+            }
+    std::vector<float> playerDamage(players.size(), 0.0f);
 
     // MATERIALS loop (server-authoritative for every player): refill the carried inventory from
     // nearby own-team Silos/Base, invest it into nearby blueprints.
@@ -748,34 +834,26 @@ void GameMatch::update(float deltaSec)
                     tickPlayerMaterials(pc->body.getPosition(), requestTeam(id), m_clientMaterials[id]);
     }
 
-    if (!m_pvp)
+    // Barracks produce per-team ATTACK units that ride the shared unit sim and march on enemy
+    // structures/players; turrets pick off enemy-team units in range.
+    m_npcs.tickBarracks(m_structures, deltaSec);
+    m_npcs.tickTurrets(m_structures, deltaSec);
+    m_npcs.tickAuthority(players, playerDamage, m_structures, deltaSec);
+
+    // Route DIRECT unit melee damage to each player's owning instance: ours applies now, client
+    // players' accumulates and flushes as GDm at the shield-mirror cadence.
+    for (size_t p = 0; p < players.size(); ++p)
     {
-        // Waves spawn on the frontier ring (where the ambient crosses iso), all around the safe zone.
-        const float iso = Globals::forceSystem.getParams().isoThreshold;
-        const float frontierIso = m_safeRadius + iso / glm::max(m_fieldSlope, 1e-4f);
-        m_npcs.tickAuthority(m_basePos, frontierIso, players, m_structures, deltaSec);
-        m_npcs.tickFriendlies(m_structures, deltaSec);
-        m_npcs.tickTurrets(m_structures, deltaSec);
-        m_npcs.tickEnemyStructures(m_structures, players, deltaSec);
-        if (m_player.meleeJustSwung()) // the shove happened in tickCombat; the damage lands here
-            m_npcs.applyPlayerMelee(m_player.bodyPos(), m_player.meleeDir(), m_player.meleeRange());
-    }
-    else
-    {
-        // PvP: no waves/friendlies/camps — barracks produce per-team ATTACK units that ride the
-        // same unit sim and march on enemy structures/players.
-        m_npcs.tickPvpBarracks(m_structures, deltaSec);
-        m_npcs.tickAuthority(m_basePos, 0.0f, players, m_structures, deltaSec);
-        if (m_player.meleeJustSwung())
-            m_npcs.applyPlayerMelee(m_player.bodyPos(), m_player.meleeDir(), m_player.meleeRange(), (uint8)m_team);
+        if (playerDamage[p] <= 0.0f)
+            continue;
+        if (playerClientIds[p] == 0)
+            m_player.applyDamage(playerDamage[p]);
+        else
+            m_clientPendingDamage[playerClientIds[p]] += playerDamage[p];
     }
 
     if (m_isServer)
     {
-        for (auto& [id, cooldown] : m_clientFireCooldown)
-            cooldown = glm::max(0.0f, cooldown - deltaSec);
-        for (auto& [id, cooldown] : m_clientMeleeCooldown)
-            cooldown = glm::max(0.0f, cooldown - deltaSec);
         m_statTimer -= deltaSec;
         if (m_statTimer <= 0.0f)
         {
@@ -788,6 +866,24 @@ void GameMatch::update(float deltaSec)
         if (npcEdge || playerEdge || m_shieldTimer <= 0.0f)
         {
             sendShieldStates(); // collapse edges flush the same tick; else the ~10 Hz mirror
+            if (!m_clientPendingDamage.empty())
+            {
+                // GDm: unit melee damage owed to client players (each client applies its own —
+                // health is owner-computed there).
+                uint8 buffer[300];
+                NetWriter writer(buffer);
+                writer.write<uint8>((uint8)glm::min(m_clientPendingDamage.size(), (size_t)32));
+                int written = 0;
+                for (const auto& [clientId, damage] : m_clientPendingDamage)
+                {
+                    if (written++ >= 32)
+                        break;
+                    writer.write<uint32>(clientId);
+                    writer.write<float>(damage);
+                }
+                Globals::networkManager.fireNetworkEvent("GDm", writer.data());
+                m_clientPendingDamage.clear();
+            }
             m_shieldTimer = 0.1f;
         }
     }
@@ -877,16 +973,13 @@ GameMatch::Aim GameMatch::computeAim(const Camera& camera, EStructureType type) 
 
 bool GameMatch::aimGroundPoint(const Camera& camera, glm::vec3& outPos) const
 {
+    // Analytic ray vs the y=0 ground plane — the world floor IS flat, and a physics raycast kept
+    // hitting the tall border-wall colliders (and other bodies) instead of the ground behind them,
+    // which made near-wall placement jumpy.
     const Ray ray = camera.screenToRay(Globals::ui.getViewportRect(), m_mousePos);
-    const PhysicsComponent* ppc = m_player.entity() ? getComponent<PhysicsComponent>(m_player.entity()) : nullptr;
-    const PhysicsWorld::RayHit hit = Globals::physics.castRayClosest(ray.origin, ray.dir * 500.0f,
-        PhysicsLayers::All, ppc ? &ppc->body : nullptr);
-    if (hit.hit)
-        outPos = hit.point;
-    else if (ray.dir.y < -1e-4f) // no collider under the cursor: fall back to the y=0 plane
-        outPos = ray.origin + ray.dir * (-ray.origin.y / ray.dir.y);
-    else
-        return false;
+    if (ray.dir.y > -1e-4f)
+        return false; // looking at/above the horizon — no ground under the cursor
+    outPos = ray.origin + ray.dir * (-ray.origin.y / ray.dir.y);
     return true;
 }
 
@@ -905,9 +998,8 @@ void GameMatch::refreshBuildHotbar()
     GameHud& hud = Globals::gameHud;
     const std::span<const BuildItem> items = buildCategoryItems(m_buildCategory);
     for (int i = 0; i < (int)items.size(); ++i)
-        hud.setSlot(i, items[i].label, items[i].isCable
-            ? m_structures.cableCount(items[i].cable)
-            : m_structures.affordableCount(items[i].structure, (uint8)m_team));
+        hud.setSlot(i, items[i].label, items[i].tool == EBuildTool::Structure
+            ? m_structures.affordableCount(items[i].structure, (uint8)m_team) : 0);
     for (int i = (int)items.size(); i < GameHud::NumSlots; ++i)
         hud.clearSlot(i);
     if (m_buildSelection >= 0)
@@ -930,9 +1022,9 @@ void GameMatch::setMode(EPlayerMode mode)
     switch (mode)
     {
     case EPlayerMode::Build:  break; // the category switch logs its own line (updateModeSwitching)
-    case EPlayerMode::Delete: Log::info("Delete mode (X): click a structure to demolish — X to exit"); break;
-    case EPlayerMode::Select: Log::info("Select mode (Tab): click a structure to inspect — Tab to exit"); break;
-    case EPlayerMode::None:   Log::info("Combat mode: LMB shoot, F melee — B/V/C build, X delete, Tab select"); break;
+    case EPlayerMode::Delete: Log::info("Delete mode (X): click a structure to demolish — X returns to Select"); break;
+    case EPlayerMode::Select: Log::info("Select mode: click inspects, RMB smart-connects, ground-click sets barracks routes — B/V/C build, X delete"); break;
+    case EPlayerMode::None:   break; // unused — Select is the neutral mode
     }
 }
 
@@ -949,7 +1041,7 @@ void GameMatch::updateModeSwitching()
         if (down && !m_modeKeyWasDown[i])
         {
             if (m_mode == EPlayerMode::Build && m_buildCategory == i)
-                setMode(EPlayerMode::None);
+                setMode(EPlayerMode::Select);
             else
             {
                 if (m_mode != EPlayerMode::Build)
@@ -965,23 +1057,36 @@ void GameMatch::updateModeSwitching()
         }
         m_modeKeyWasDown[i] = down;
     }
-    const SDL_Scancode modeKeys[2] = { SDL_Scancode::SDL_SCANCODE_X, SDL_Scancode::SDL_SCANCODE_TAB };
-    const EPlayerMode modes[2] = { EPlayerMode::Delete, EPlayerMode::Select };
-    for (int i = 0; i < 2; ++i)
-    {
-        const bool down = focused && input.isKeyDown(modeKeys[i]);
-        if (down && !m_modeKeyWasDown[3 + i])
-            setMode(m_mode == modes[i] ? EPlayerMode::None : modes[i]); // same key toggles back out
-        m_modeKeyWasDown[3 + i] = down;
-    }
+    // X toggles Delete <-> Select; Tab always returns to Select (the neutral mode).
+    const bool xDown = focused && input.isKeyDown(SDL_Scancode::SDL_SCANCODE_X);
+    if (xDown && !m_modeKeyWasDown[3])
+        setMode(m_mode == EPlayerMode::Delete ? EPlayerMode::Select : EPlayerMode::Delete);
+    m_modeKeyWasDown[3] = xDown;
+    const bool tabDown = focused && input.isKeyDown(SDL_Scancode::SDL_SCANCODE_TAB);
+    if (tabDown && !m_modeKeyWasDown[4])
+        setMode(EPlayerMode::Select);
+    m_modeKeyWasDown[4] = tabDown;
+    // F9 save / F10 load (authority only — a client has no sim to save).
+    const bool saveDown = focused && input.isKeyDown(SDL_Scancode::SDL_SCANCODE_F9);
+    if (saveDown && !m_saveKeyWasDown)
+        saveGame();
+    m_saveKeyWasDown = saveDown;
+    const bool loadDown = focused && input.isKeyDown(SDL_Scancode::SDL_SCANCODE_F10);
+    if (loadDown && !m_loadKeyWasDown)
+        loadGame();
+    m_loadKeyWasDown = loadDown;
 }
 
-// The Cable tool (hotbar slot 5): first click selects an endpoint, second click on another
-// structure toggles the cable between them (create when valid, remove when it already exists —
-// removal works at any distance). Clicking empty ground or the selected structure clears the
-// selection. Selection persists by stable id, so a structure dying mid-selection just clears it.
-void GameMatch::updateCableTool(const Camera& camera, bool confirmEdge, ECableType type)
+// The Disconnect/Upgrade tools: first click selects an endpoint, second click the other — acts on
+// the EXISTING link between them (Disconnect removes it; Upgrade retypes a Basic cable to Heavy,
+// the only tiered medium). Link CREATION lives in Select mode's right-click smart connect.
+// Clicking empty ground, the selected structure, or RIGHT-clicking clears the selection; it
+// persists by stable id.
+void GameMatch::updateLinkTool(const Camera& camera, bool confirmEdge, bool cancelEdge, EBuildTool tool)
 {
+    if (cancelEdge)
+        m_cablePendingId = 0; // RIGHT-click drops the selected endpoint
+
     const int hover = hoveredStructure(camera);
 
     int pendingIdx = -1;
@@ -1001,15 +1106,13 @@ void GameMatch::updateCableTool(const Camera& camera, bool confirmEdge, ECableTy
             packColor(glm::vec3(0.3f, 1.0f, 0.4f)), 20);
     if (pendingIdx >= 0 && hover >= 0 && hover != pendingIdx)
     {
-        // Preview: cable-type hue = will connect (yellow basic / cyan heavy / orange pipe / blue
-        // conveyor), white = will remove/retype the existing link, red = refused (range, no
-        // Connector endpoint, or a Connector already carrying another medium).
-        const glm::vec3 typeHue = type == ECableType::Pipe ? glm::vec3(1.0f, 0.55f, 0.15f)
-            : type == ECableType::Conveyor ? glm::vec3(0.35f, 0.5f, 1.0f)
-            : type == ECableType::Heavy ? glm::vec3(0.3f, 0.9f, 1.0f) : glm::vec3(0.9f, 0.9f, 0.3f);
-        const bool exists = m_structures.cableExists(m_cablePendingId, m_structures.structureId(hover));
-        const glm::vec3 previewColor = exists ? glm::vec3(0.9f, 0.9f, 0.9f)
-            : m_structures.cableAllowed(pendingIdx, hover, type) ? typeHue : glm::vec3(1.0f, 0.3f, 0.2f);
+        // Preview: white = Disconnect will remove, cyan = Upgrade applies (Basic -> Heavy),
+        // red = no link between the pair (or nothing to upgrade).
+        const ECableType existing = m_structures.cableTypeBetween(m_cablePendingId, m_structures.structureId(hover));
+        const bool actionable = existing != ECableType::Count
+            && (tool == EBuildTool::Disconnect || existing == ECableType::Basic);
+        const glm::vec3 previewColor = !actionable ? glm::vec3(1.0f, 0.3f, 0.2f)
+            : tool == EBuildTool::Disconnect ? glm::vec3(0.9f, 0.9f, 0.9f) : glm::vec3(0.3f, 0.9f, 1.0f);
         Globals::rendererVK.addDebugLine(m_structures.structurePos(pendingIdx),
             m_structures.structurePos(hover), packColor(previewColor));
     }
@@ -1028,12 +1131,20 @@ void GameMatch::updateCableTool(const Camera& camera, bool confirmEdge, ECableTy
         m_cablePendingId = 0;
     else
     {
-        requestCable(m_cablePendingId, hoverId, type); // validated in the authority tick (server)
+        const ECableType existing = m_structures.cableTypeBetween(m_cablePendingId, hoverId);
+        if (existing == ECableType::Count)
+            Log::info("No link between those structures");
+        else if (tool == EBuildTool::Disconnect)
+            requestCable(m_cablePendingId, hoverId, existing); // same pair + same type = remove
+        else if (existing == ECableType::Basic)
+            requestCable(m_cablePendingId, hoverId, ECableType::Heavy); // retype in place
+        else
+            Log::info("Only Basic cables upgrade (to Heavy)");
         m_cablePendingId = 0;
     }
 }
 
-void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge)
+void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool cancelEdge)
 {
     // Grid navigation: polled 1..9,0 edges (SDL scancodes are contiguous; InputControls routes the
     // same keys to the HUD's selectSlot for the highlight — harmless duplication).
@@ -1062,17 +1173,23 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge)
     if (m_buildSelection < 0)
         return; // nothing armed — browsing the category
     const BuildItem& item = buildCategoryItems(m_buildCategory)[m_buildSelection];
-    if (item.isCable)
+    if (item.tool != EBuildTool::Structure)
     {
-        updateCableTool(camera, confirmEdge, item.cable);
+        updateLinkTool(camera, confirmEdge, cancelEdge, item.tool);
         return;
     }
     m_cablePendingId = 0;
 
     // Lance second click: the position is anchored — the cursor now aims the cone's facing
-    // (relative to the anchor); confirm places, too-close clicks just keep waiting.
+    // (relative to the anchor); confirm places, too-close clicks just keep waiting. RIGHT-click
+    // cancels the anchor before the confirm.
     if (m_lanceAiming)
     {
+        if (cancelEdge)
+        {
+            m_lanceAiming = false;
+            return;
+        }
         const glm::vec3 up(0.0f, 0.3f, 0.0f);
         const uint32 color = packColor(glm::vec3(0.3f, 1.0f, 0.4f));
         drawCircle(m_lancePendingPos + up, 1.0f, color, 20);
@@ -1101,9 +1218,14 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge)
     }
 
     // Wall second click: segments preview along the anchored line; confirm queues one placement
-    // per segment (each pays its own cost — a short stock places a partial wall).
+    // per segment. RIGHT-click cancels the anchored line before the confirm.
     if (m_wallPlacing)
     {
+        if (cancelEdge)
+        {
+            m_wallPlacing = false;
+            return;
+        }
         const Aim end = computeAim(camera, EStructureType::Wall);
         if (end.valid)
         {
@@ -1111,19 +1233,30 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge)
             const float len = glm::length(span);
             const int segments = glm::clamp((int)(len / c_wallSegmentSpacing) + 1, 1, c_wallMaxSegments);
             const glm::vec2 dir = len > 1e-3f ? span / len : glm::vec2(0.0f);
-            const int affordableSegs = c_wallMaxSegments; // blueprints are free to place
+            // Snap each sample to the SAME grid placeStructure uses — the preview circles must sit
+            // exactly where the segments will land. Diagonal lines can snap two samples into the
+            // same cell; dedup so it draws (and places) once.
+            glm::vec3 points[c_wallMaxSegments];
+            int count = 0;
             for (int s = 0; s < segments; ++s)
             {
-                const glm::vec3 p = m_wallStart + glm::vec3(dir.x, 0.0f, dir.y) * (c_wallSegmentSpacing * s);
-                drawCircle(p + glm::vec3(0.0f, 0.3f, 0.0f), 0.9f,
-                    packColor(s < affordableSegs ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.3f, 0.2f)), 12);
+                const glm::vec3 snapped = StructureSystem::snapToGrid(EStructureType::Wall,
+                    m_wallStart + glm::vec3(dir.x, 0.0f, dir.y) * (c_wallSegmentSpacing * s));
+                if (count > 0 && glm::distance(glm::vec2(points[count - 1].x, points[count - 1].z),
+                    glm::vec2(snapped.x, snapped.z)) < 0.1f)
+                    continue;
+                points[count++] = snapped;
+            }
+            for (int s = 0; s < count; ++s)
+            {
+                const bool free = m_structures.cellsFree(EStructureType::Wall, points[s]);
+                drawCircle(points[s] + glm::vec3(0.0f, 0.3f, 0.0f), 0.9f,
+                    packColor(free ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.3f, 0.2f)), 12);
             }
             if (confirmEdge)
             {
-                for (int s = 0; s < segments; ++s)
-                    requestPlace(EStructureType::Wall,
-                        m_wallStart + glm::vec3(dir.x, 0.0f, dir.y) * (c_wallSegmentSpacing * s),
-                        -1, glm::vec3(0.0f));
+                for (int s = 0; s < count; ++s)
+                    requestPlace(EStructureType::Wall, points[s], -1, glm::vec3(0.0f));
                 m_wallPlacing = false;
             }
         }
@@ -1168,9 +1301,45 @@ void GameMatch::updateDeleteMode(const Camera& camera, bool confirmEdge)
         requestDemolish(m_structures.structureId(hover)); // validated in the authority tick (server)
 }
 
-void GameMatch::updateSelectMode(const Camera& camera, bool confirmEdge)
+void GameMatch::updateSelectMode(const Camera& camera, bool confirmEdge, bool smartLinkEdge)
 {
     const int hover = hoveredStructure(camera);
+
+    // RIGHT-CLICK actions with a selection: on a structure = SMART CONNECT (link with the
+    // inferred medium — connector's carried medium > selected building's output > first shared;
+    // selection chains to the target). On GROUND with an own-team BARRACKS selected = set its
+    // unit ROUTE waypoint (SHIFT appends, plain click restarts the route).
+    if (smartLinkEdge && m_selectedId != 0)
+    {
+        const int sel = m_structures.structureIndexById(m_selectedId);
+        if (hover >= 0)
+        {
+            const uint32 hoverId = m_structures.structureId(hover);
+            if (sel >= 0 && sel != hover && hoverId != m_selectedId
+                && m_structures.structureTeam(sel) == (uint8)m_team
+                && m_structures.structureTeam(hover) == (uint8)m_team
+                && !m_structures.cableExists(m_selectedId, hoverId))
+            {
+                const ECableType type = m_structures.smartLinkTypeFor(sel, hover);
+                if (type != ECableType::Count)
+                {
+                    requestCable(m_selectedId, hoverId, type);
+                    m_selectedId = hoverId; // chain: the next right-click continues from here
+                }
+            }
+        }
+        else if (glm::vec3 ground; sel >= 0 && isBarracksType(m_structures.structureType(sel))
+            && m_structures.structureTeam(sel) == (uint8)m_team && aimGroundPoint(camera, ground))
+        {
+            ground.y = 0.0f;
+            std::vector<glm::vec3> route;
+            if (Globals::input.isKeyDown(SDL_Scancode::SDL_SCANCODE_LSHIFT))
+                route = m_structures.structureRoute(sel); // hold shift: extend the route
+            if ((int)route.size() < StructureSystem::MaxRouteWaypoints)
+                route.push_back(ground);
+            requestSetRoute(m_selectedId, route);
+        }
+    }
     if (hover >= 0)
         drawCircle(m_structures.structurePos(hover) * glm::vec3(1, 0, 1) + glm::vec3(0.0f, 0.3f, 0.0f), 1.6f,
             packColor(glm::vec3(0.9f, 0.9f, 0.9f)), 20);
@@ -1189,6 +1358,27 @@ void GameMatch::updateSelectMode(const Camera& camera, bool confirmEdge)
             packColor(glm::vec3(0.3f, 1.0f, 0.4f)), 24);
 }
 
+// Short 3-5 char tags drawn above every structure/unit bar — the baseshape boxes all look alike,
+// so the tag says what a thing is at a glance. The selected structure shows its full name instead.
+static constexpr const char* c_structureShortNames[] = { "EMIT", "GEN", "CON", "EXTR", "BATT",
+    "FUEL", "SOL", "FAB", "BSTN", "LNC", "BRK", "BRK-B", "BRK-R", "BRK-S", "WALL", "TRT", "SILO",
+    "CNST", "BASE" };
+static_assert(std::size(c_structureShortNames) == (size_t)EStructureType::Count);
+static constexpr const char* c_unitShortNames[] = { "GRNT", "BRUT", "RUN", "SPIT" };
+static_assert(std::size(c_unitShortNames) == (size_t)ENpcType::Count);
+
+// Remote actors (client side) carry no type on the wire — derive the tag from the replicated
+// entity's prefab-derived name ("gameEnemyBrute", ...).
+static const char* remoteShortName(std::string_view entityName, uint8 kind)
+{
+    if (kind == 2)
+        return "PLR";
+    if (entityName.find("Brute") != std::string_view::npos)   return "BRUT";
+    if (entityName.find("Runner") != std::string_view::npos)  return "RUN";
+    if (entityName.find("Spitter") != std::string_view::npos) return "SPIT";
+    return "GRNT";
+}
+
 // World-anchored UI: a health bar above every damageable structure, plus name/HP/power info on the
 // selected one. Projected here with THIS frame's final camera (worldToScreen), replaced wholesale
 // each frame; the overlay just paints at the given viewport pixels.
@@ -1204,6 +1394,7 @@ void GameMatch::buildWorldLabels(const Camera& camera)
         if (!camera.worldToScreen(viewport, m_structures.structureLabelAnchor(i), label.screenPos))
             continue;
         const EStructureType type = m_structures.structureType(i);
+        label.title = c_structureShortNames[(int)type]; // the selected one overrides w/ full name
         const bool consumer = isEmitterType(type) || type == EStructureType::Extractor
             || type == EStructureType::Fabricator;
         if (type != EStructureType::Base) // the Base is invulnerable — no health bar
@@ -1218,10 +1409,11 @@ void GameMatch::buildWorldLabels(const Camera& camera)
         const float energyCap = m_structures.structureCapacity(i);
         const float fuelCap = m_structures.structureFuelCapacity(i);
         const float mineralCap = m_structures.structureMineralCapacity(i);
-        // Second bar: fuel (orange) on the fuel holders, MINERALS (blue) on the mineral stores,
-        // energy (yellow) elsewhere.
+        // Second bar: fuel (orange) on the fuel holders, MINERALS (blue) on the mineral stores and
+        // on anything that runs on minerals alone (barracks), energy (yellow) elsewhere.
         const bool fuelBar = type == EStructureType::Generator || type == EStructureType::FuelTank;
-        const bool mineralBar = type == EStructureType::MineralSilo;
+        const bool mineralBar = type == EStructureType::MineralSilo
+            || (mineralCap > 0.0f && energyCap <= 0.0f);
         if (m_structures.structureBlueprint(i))
         {
         } // blueprint: no second bar — the (blue) health bar IS the build progress
@@ -1263,15 +1455,31 @@ void GameMatch::buildWorldLabels(const Camera& camera)
             int len = type == EStructureType::Base
                 ? snprintf(info, sizeof(info), "Invulnerable")
                 : snprintf(info, sizeof(info), "HP %.0f / %.0f", label.barValue, label.barMax);
-            if (energyCap > 0.0f && len > 0 && len < (int)sizeof(info))
-                len += snprintf(info + len, sizeof(info) - len, "\nEnergy %.0f / %.0f",
-                    m_structures.structureCharge(i), energyCap);
-            if (fuelCap > 0.0f && len > 0 && len < (int)sizeof(info))
-                len += snprintf(info + len, sizeof(info) - len, "\nFuel %.0f / %.0f",
-                    m_structures.structureFuel(i), fuelCap);
-            if (mineralCap > 0.0f && len > 0 && len < (int)sizeof(info))
-                len += snprintf(info + len, sizeof(info) - len, "\nMinerals %.0f / %.0f",
-                    m_structures.structureMinerals(i), mineralCap);
+            if (type == EStructureType::Connector)
+            {
+                // A Connector holds capacity in every medium but carries exactly ONE — report
+                // that one (and how hard its busiest link runs), not three idle relay buffers.
+                const int medium = m_structures.connectorMedium(i);
+                if (len > 0 && len < (int)sizeof(info))
+                    len += snprintf(info + len, sizeof(info) - len, "\n%s",
+                        medium < 0 ? "No links" : medium == 1 ? "Fuel line"
+                        : medium == 2 ? "Conveyor" : "Power line");
+                if (medium >= 0 && len > 0 && len < (int)sizeof(info))
+                    len += snprintf(info + len, sizeof(info) - len, "\nThroughput %.0f%%",
+                        m_structures.connectorUtilization(i) * 100.0f);
+            }
+            else
+            {
+                if (energyCap > 0.0f && len > 0 && len < (int)sizeof(info))
+                    len += snprintf(info + len, sizeof(info) - len, "\nEnergy %.0f / %.0f",
+                        m_structures.structureCharge(i), energyCap);
+                if (fuelCap > 0.0f && len > 0 && len < (int)sizeof(info))
+                    len += snprintf(info + len, sizeof(info) - len, "\nFuel %.0f / %.0f",
+                        m_structures.structureFuel(i), fuelCap);
+                if (mineralCap > 0.0f && len > 0 && len < (int)sizeof(info))
+                    len += snprintf(info + len, sizeof(info) - len, "\nMinerals %.0f / %.0f",
+                        m_structures.structureMinerals(i), mineralCap);
+            }
             if (consumer && len > 0 && len < (int)sizeof(info))
                 snprintf(info + len, sizeof(info) - len, "\n%s",
                     m_structures.structurePowered(i) ? "Powered" : "No power");
@@ -1279,42 +1487,19 @@ void GameMatch::buildWorldLabels(const Camera& camera)
         }
         labels.push_back(std::move(label));
     }
-    // Enemy units: red health bar overhead; friendlies: green.
+    // Units: own team green, enemy teams red.
     for (int i = 0; i < m_npcs.unitCount(); ++i)
     {
         HudWorldLabel label;
         if (!camera.worldToScreen(viewport, m_npcs.unitPos(i) + glm::vec3(0.0f, 1.6f, 0.0f), label.screenPos))
             continue;
+        label.title = c_unitShortNames[(int)m_npcs.unitType(i)];
         label.barValue = m_npcs.unitHealth(i);
         label.barMax = m_npcs.unitHealthMax(i); // per-type: Brutes have triple bars, Runners half
-        label.barColor = m_npcs.unitTeam(i) == (uint8)m_team // PvP: own barracks units read friendly
+        label.barColor = m_npcs.unitTeam(i) == (uint8)m_team
             ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.25f, 0.2f);
         label.bar2Value = m_npcs.unitEnergy(i); // shield battery (no regen) under the health bar
         label.bar2Max = m_npcs.unitEnergyMax(i);
-        label.bar2Color = glm::vec3(1.0f, 0.9f, 0.3f);
-        labels.push_back(std::move(label));
-    }
-    // Enemy camp structures: red health bar + name on the core (the kill priority).
-    for (int i = 0; i < m_npcs.enemyStructureCount(); ++i)
-    {
-        HudWorldLabel label;
-        if (!camera.worldToScreen(viewport, m_npcs.enemyStructurePos(i) + glm::vec3(0.0f, 2.4f, 0.0f), label.screenPos))
-            continue;
-        label.barValue = m_npcs.enemyStructureHealth(i);
-        label.barMax = m_npcs.enemyStructureHealthMax(i);
-        label.barColor = glm::vec3(1.0f, 0.25f, 0.2f);
-        labels.push_back(std::move(label));
-    }
-    for (int i = 0; i < m_npcs.friendlyCount(); ++i)
-    {
-        HudWorldLabel label;
-        if (!camera.worldToScreen(viewport, m_npcs.friendlyPos(i) + glm::vec3(0.0f, 1.4f, 0.0f), label.screenPos))
-            continue;
-        label.barValue = m_npcs.friendlyHealth(i);
-        label.barMax = m_npcs.friendlyHealthMax();
-        label.barColor = glm::vec3(0.3f, 1.0f, 0.4f);
-        label.bar2Value = m_npcs.friendlyEnergy(i);
-        label.bar2Max = m_npcs.friendlyEnergyMax();
         label.bar2Color = glm::vec3(1.0f, 0.9f, 0.3f);
         labels.push_back(std::move(label));
     }
@@ -1327,36 +1512,42 @@ void GameMatch::buildWorldLabels(const Camera& camera)
         if (!entity)
             continue;
         HudWorldLabel label;
-        const float height = rs.kind >= 3 ? 2.4f : rs.kind == 2 ? 2.0f : 1.6f;
+        const float height = rs.kind == 2 ? 2.0f : 1.6f;
         if (!camera.worldToScreen(viewport, entity->pos + glm::vec3(0.0f, height, 0.0f), label.screenPos))
             continue;
+        label.title = remoteShortName(entity->getName(), rs.kind);
         label.barValue = rs.healthFrac;
         label.barMax = 1.0f;
-        // OWN team reads green, everything else red (camps are team 1 — red for everyone in PvE).
-        label.barColor = rs.kind >= 3 || rs.team != (uint8)m_team
+        // OWN team reads green, everything else red.
+        label.barColor = rs.team != (uint8)m_team
             ? glm::vec3(1.0f, 0.25f, 0.2f) : glm::vec3(0.3f, 1.0f, 0.4f);
-        if (rs.kind < 3) // camp structures: health bar only (no battery)
-        {
-            label.bar2Value = rs.energyFrac;
-            label.bar2Max = 1.0f;
-            label.bar2Color = glm::vec3(1.0f, 0.9f, 0.3f);
-        }
+        label.bar2Value = rs.energyFrac;
+        label.bar2Max = 1.0f;
+        label.bar2Color = glm::vec3(1.0f, 0.9f, 0.3f);
         labels.push_back(std::move(label));
     }
     Globals::gameHud.setWorldLabels(std::move(labels));
 }
 
-void GameMatch::drawWorldFieldBoundary() const
+void GameMatch::tickBaseHealing(float deltaSec)
 {
-    // The frontier: where the ambient enemy field crosses iso around the BASE — inside the purple
-    // ring is safe ground (the ambient itself is never rendered). A second faint ring marks the
-    // zero line (the safe radius the emitters are pushing).
-    const float iso = Globals::forceSystem.getParams().isoThreshold;
-    const float frontier = m_safeRadius + iso / glm::max(m_fieldSlope, 1e-4f);
-    drawCircle(glm::vec3(m_basePos.x, 0.5f, m_basePos.z), frontier,
-        packColor(glm::vec3(0.8f, 0.3f, 1.0f)), 64);
-    drawCircle(glm::vec3(m_basePos.x, 0.5f, m_basePos.z), m_safeRadius,
-        packColor(glm::vec3(0.4f, 0.2f, 0.5f)), 64);
+    // Own player only: health is OWNER-computed, so every instance heals its own capsule against
+    // its LOCAL structure mirror (clients hold the Bases through the GPl replay) — no sync needed.
+    if (m_baseHealRate <= 0.0f || m_baseHealRadius <= 0.0f || !m_player.entity())
+        return;
+    const glm::vec3 pos = m_player.bodyPos();
+    for (int i = 0; i < m_structures.structureCount(); ++i)
+    {
+        if (m_structures.structureType(i) != EStructureType::Base
+            || m_structures.structureTeam(i) != (uint8)m_team)
+            continue;
+        const glm::vec3 basePos = m_structures.structurePos(i);
+        if (glm::distance(glm::vec2(pos.x, pos.z), glm::vec2(basePos.x, basePos.z)) <= m_baseHealRadius)
+        {
+            m_player.heal(m_baseHealRate * deltaSec);
+            return; // one Base is enough — never stack multiple
+        }
+    }
 }
 
 void GameMatch::updateHud()
@@ -1396,71 +1587,20 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     const bool fDown = input.isKeyDown(SDL_Scancode::SDL_SCANCODE_F)
         && input.isWindowHasFocus() && Globals::ui.isViewportFocused();
     const bool lmbEdge = m_placeClicked;
+    const bool rmbEdge = m_rmbClicked;
     const bool fEdge = fDown && !m_placeKeyWasDown;
     m_placeKeyWasDown = fDown;
     m_placeClicked = false;
+    m_rmbClicked = false;
     const bool confirmEdge = lmbEdge || fEdge;
 
     switch (m_mode)
     {
-    case EPlayerMode::Build:  updateBuildMode(camera, confirmEdge); break;
+    case EPlayerMode::Build:  updateBuildMode(camera, confirmEdge, rmbEdge); break;
     case EPlayerMode::Delete: updateDeleteMode(camera, confirmEdge); break;
-    case EPlayerMode::Select: updateSelectMode(camera, confirmEdge); break;
-    case EPlayerMode::None:
-    {
-        if (lmbEdge)
-        {
-            glm::vec3 target;
-            if (aimGroundPoint(camera, target))
-            {
-                const glm::vec3 muzzle = m_player.bodyPos() + glm::vec3(0.0f, 0.5f, 0.0f);
-                const glm::vec3 dir = target - muzzle;
-                if (glm::dot(dir, dir) > 1e-4f)
-                {
-                    if (!m_isClient)
-                        m_player.queueShot(glm::normalize(dir));
-                    else // co-op client: the server spawns the (replicated) projectile at our twin
-                    {
-                        uint8 buffer[16];
-                        NetWriter writer(buffer);
-                        const glm::vec3 d = glm::normalize(dir);
-                        writer.write<float>(d.x);
-                        writer.write<float>(d.y);
-                        writer.write<float>(d.z);
-                        Globals::networkManager.fireNetworkEvent("GqS", writer.data());
-                    }
-                }
-            }
-        }
-        if (fEdge)
-        {
-            // Swing toward the cursor; a failed aim (ray up into the sky) falls back to camera
-            // forward inside tickCombat (zero direction queued).
-            glm::vec3 target, dir(0.0f);
-            if (aimGroundPoint(camera, target))
-                dir = target - m_player.bodyPos();
-            if (!m_isClient)
-                m_player.queueMelee(dir);
-            else
-            {
-                const glm::vec3 d = glm::dot(dir, dir) > 1e-4f
-                    ? glm::normalize(glm::vec3(dir.x, 0.0f, dir.z)) : m_camera.forwardPlanar();
-                uint8 buffer[16];
-                NetWriter writer(buffer);
-                writer.write<float>(d.x);
-                writer.write<float>(d.y);
-                writer.write<float>(d.z);
-                Globals::networkManager.fireNetworkEvent("GqM", writer.data());
-            }
-        }
-        break;
+    case EPlayerMode::Select: updateSelectMode(camera, confirmEdge, rmbEdge); break;
+    case EPlayerMode::None:   break; // unused — Select IS the neutral mode (no player combat)
     }
-    }
-
-    // Melee swing visual: a brief ring along the swing direction while the flash runs.
-    if (m_player.meleeFlash() > 0.0f)
-        drawCircle(m_player.interpolatedPos() + m_player.meleeDir() * m_player.meleeRange() * 0.6f,
-            m_player.meleeRange() * 0.5f, packColor(glm::vec3(1.0f, 1.0f, 0.9f)), 20);
 
     // Faint ring at the estimated equilibrium shield radius — compare it against the drawn bubble.
     const float shieldR = m_player.shieldRadius();
@@ -1468,29 +1608,24 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
         drawCircle(m_player.interpolatedPos(), shieldR, packColor(glm::vec3(0.3f, 0.8f, 1.0f)), 32);
 
     m_structures.drawDebug();
-    if (!m_pvp)
-        drawWorldFieldBoundary(); // safe-radius/frontier rings mean nothing without the ambient
 
-    // Powered camp cores: the core's bubble is REAL (it pressures shields and deforms bubbles),
-    // but a shell surface cannot draw inside the same-team ambient field — the total team-1 field
-    // never falls to iso out there, so there is no crossing to rasterize. A ring at the bubble's
-    // span marks the active stronghold instead; it dies with the core.
-    const uint32 campRingColor = packColor(glm::vec3(1.0f, 0.25f, 0.55f));
-    if (!m_isClient)
+    // Barracks unit routes (own team): line chain from the barracks through its waypoints, each
+    // with its destination circle — bright for the selected barracks, dim otherwise.
+    for (int i = 0; i < m_structures.structureCount(); ++i)
     {
-        for (int i = 0; i < m_npcs.enemyStructureCount(); ++i)
-            if (m_npcs.enemyStructureIsCore(i))
-            {
-                const glm::vec3 pos = m_npcs.enemyStructurePos(i);
-                drawCircle(glm::vec3(pos.x, 0.5f, pos.z), 10.0f, campRingColor, 40);
-            }
-    }
-    else
-    {
-        for (const auto& [netId, rs] : m_remoteShields)
-            if (rs.kind == 4)
-                if (const Entity* entity = Globals::networkManager.findEntity(netId))
-                    drawCircle(glm::vec3(entity->pos.x, 0.5f, entity->pos.z), 10.0f, campRingColor, 40);
+        const std::vector<glm::vec3>& route = m_structures.structureRoute(i);
+        if (route.empty() || m_structures.structureTeam(i) != (uint8)m_team)
+            continue;
+        const bool bright = m_structures.structureId(i) == m_selectedId;
+        const uint32 routeColor = packColor(glm::vec3(0.3f, 0.95f, 0.6f) * (bright ? 1.0f : 0.4f));
+        glm::vec3 prev = m_structures.structurePos(i) * glm::vec3(1, 0, 1) + glm::vec3(0.0f, 0.4f, 0.0f);
+        for (const glm::vec3& wp : route)
+        {
+            const glm::vec3 p(wp.x, 0.4f, wp.z);
+            Globals::rendererVK.addDebugLine(prev, p, routeColor);
+            drawCircle(p, m_structures.waypointRadius(), routeColor, 24);
+            prev = p;
+        }
     }
 
     buildWorldLabels(camera);

@@ -40,6 +40,14 @@ public:
     // Shield shrink/regen from the shield emitter's pressure readback, push-out impulse, health
     // drain / death respawn.
     void tickShieldAndHealth(float deltaSec);
+    // DIRECT damage (enemy unit melee, routed from the server's unit sim). The SHIELD BATTERY
+    // absorbs it first ("Damage absorb" energy per hp) — only the overflow, or everything while
+    // the shield is collapsed, reaches health. Spawn grace applies; death resolves through
+    // tickShieldAndHealth's existing respawn path.
+    void applyDamage(float amount);
+    // Regeneration (standing near an own-team Base). Never revives past max; dead players are
+    // handled by the respawn path, so this is a plain top-up.
+    void heal(float amount) { m_health = glm::min(m_health + glm::max(amount, 0.0f), m_healthMax); }
 
     Entity* entity() const { return m_entity.get(); }
     glm::vec3 interpolatedPos() const; // render-smooth body pose for the follow camera
@@ -126,9 +134,11 @@ private:
     float m_healthDrainRate = 15.0f;    // health/s while unshielded in enemy territory
     float m_shieldMaxOutput = 1.5f;     // field output while the battery holds ANY charge
     float m_energyMax = 100.0f;
-    float m_energyRegenRate = 15.0f;    // energy/s refill (battery only — never grows the bubble)
-    float m_energyDrainRate = 25.0f;    // energy/s drained per unit of pressure
+    float m_energyRegenRate = 10.0f;    // energy/s refill (battery only — never grows the bubble)
+    float m_energyDrainRate = 50.0f;    // energy/s drained per unit of pressure
     float m_rebootEnergy = 20.0f;       // collapsed shield restarts once the battery refills to this
+    float m_damageAbsorb = 2.0f;        // shield ENERGY spent per hp of direct damage absorbed
+                                        // (0 = the shield absorbs nothing, hits go straight to hp)
     float m_coverDrainReduction = 0.75f; // drain reduction per unit of FRIENDLY field surplus over
                                          // the own output (standing inside a team emitter's bubble)
     float m_materialsMax = 50.0f;        // inventory size ("Game/Player/Materials max")

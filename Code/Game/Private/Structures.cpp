@@ -9,6 +9,7 @@ import Entity;
 import Physics;
 import Force;
 import RendererVK;
+import File;
 import :Structures;
 
 // One entry per EStructureType, INCLUDING Base last — static_asserted against Count so an enum
@@ -26,8 +27,12 @@ static constexpr const char* structureNames[] = { "Emitter", "Generator", "Conne
     "Runner barracks", "Spitter barracks", "Wall", "Turret", "Mineral silo", "Constructor", "Base" };
 // Grid-aligned sizes: 1x1-cell buildings are 2 m cubes (half 1), 2x2 ones 4 m (half 2) — the
 // spawn height IS the half height, so every box sits flush on the ground.
-static constexpr float structureSpawnHeights[] = { 1.0f, 1.0f, 1.0f, 2.0f, 1.0f, 2.0f, 1.0f, 2.0f, 2.0f, 1.0f, 3.0f, 3.0f, 3.0f, 3.0f, 1.0f, 2.0f, 2.0f, 1.0f, 3.0f }; // origin above the ground hit
-                                                // (Solar sits at 1: a flat 4x4x2 panel)
+static constexpr float structureSpawnHeights[] = { 1.0f, 1.0f, 3.0f, 2.0f, 0.5f, 2.0f, 0.5f, 2.0f, 2.0f, 1.0f, 3.0f, 3.0f, 3.0f, 3.0f, 2.0f, 2.0f, 4.0f, 1.0f, 3.0f }; // origin above the ground hit
+                                                // Non-cube shapes (origin still centered):
+                                                // Connector = Pillar3 pylon (half 3), Wall =
+                                                // Pillar2 (half 2), Silo = Pillar2 x2 (half 4),
+                                                // Battery = CubeHalf (0.5), Solar = CubeQuarter
+                                                // x2 (0.5)
 static constexpr glm::vec3 c_blueprintColor(0.45f, 0.55f, 0.7f); // ghost tint until built
 static_assert(std::size(structurePrefabs) == (size_t)EStructureType::Count);
 static_assert(std::size(structureNames) == (size_t)EStructureType::Count);
@@ -65,11 +70,11 @@ static void drawCircle(const glm::vec3& center, float radius, uint32 color, int 
 void StructureSystem::registerTweaks()
 {
     // Gameplay tweaks persist between runs and the server's values overrule the clients'.
-    const Tweak::ScopedFlags scoped(ETweakFlags::Saved | ETweakFlags::Synced);
+    const Tweak::ScopedFlags scoped(ETweakFlags::Synced);
     Tweak::floatVar("Game/Combat", "Projectile structure damage", &m_projectileStructDamage, 0.0f, 200.0f, 1.0f);
+    Tweak::boolean("Game/Construction", "Free instant build", &m_cheatInstantBuild);
     Tweak::floatVar("Game/Structures", "Pressure draw tension", &m_pressureDrawTension, 0.0f, 10.0f, 0.05f);
     Tweak::floatVar("Game/Economy", "Start minerals", &m_startMinerals, 0.0f, 1000.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Start fuel", &m_startFuel, 0.0f, 1000.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Extractor snap radius", &m_extractorSnapRadius, 1.0f, 20.0f, 0.25f);
     Tweak::floatVar("Game/Economy", "Minerals/s per node", &m_mineralRate, 0.0f, 50.0f, 0.1f);
     Tweak::floatVar("Game/Economy", "Fuel/s per node", &m_fuelRate, 0.0f, 50.0f, 0.1f);
@@ -95,6 +100,7 @@ void StructureSystem::registerTweaks()
     Tweak::floatVar("Game/Structures", "Constructor boost rate", &m_constructorBoostRate, 0.0f, 5.0f, 0.05f);
     Tweak::floatVar("Game/Structures", "Constructor boost materials/s", &m_constructorBoostMaterials, 0.0f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Structures", "Constructor boost energy/s", &m_constructorBoostEnergy, 0.0f, 20.0f, 0.1f);
+    Tweak::floatVar("Game/Structures", "Waypoint radius", &m_waypointRadius, 0.5f, 15.0f, 0.25f);
     Tweak::floatVar("Game/Economy", "Mineral base capacity", &m_mineralBaseCapacity, 10.0f, 5000.0f, 5.0f);
     Tweak::floatVar("Game/Economy", "Mineral silo capacity", &m_mineralSiloCapacity, 10.0f, 5000.0f, 5.0f);
     Tweak::floatVar("Game/Economy", "Wall cost (per segment)", &m_costs[14], 0.0f, 100.0f, 0.5f);
@@ -139,33 +145,8 @@ void StructureSystem::registerTweaks()
 void StructureSystem::spawnNodes()
 {
     // No global seed: "Start minerals" lands in each Base's mineral STORE at spawnBase — spendable
-    // minerals are the Silo+Base stores, recomputed per tick. Fuel likewise seeds the Base tank.
+    // minerals are the Silo+Base stores, recomputed per tick.
 
-    // Authored whitebox layout: the Base sits at the ORIGIN and the ambient enemy field grows with
-    // distance from it in every direction. Two starter nodes sit inside the initial safe radius;
-    // the rest ring outward in progressively deeper field, so expansion pays in all directions.
-    static constexpr struct { float x, z; ENodeType type; } layout[] = {
-        // starters (inside the ~30 m safe zone)
-        {   14.0f,  -10.0f, ENodeType::Mineral },
-        {  -12.0f,   14.0f, ENodeType::Fuel },
-        // mid ring (~55-75 m)
-        {   55.0f,   30.0f, ENodeType::Mineral },
-        {  -60.0f,  -25.0f, ENodeType::Fuel },
-        {   10.0f,   65.0f, ENodeType::Fuel },
-        {  -35.0f,  -60.0f, ENodeType::Mineral },
-        // outer ring (~100-140 m)
-        {  105.0f,  -40.0f, ENodeType::Mineral },
-        {  -95.0f,   60.0f, ENodeType::Mineral },
-        {   40.0f, -115.0f, ENodeType::Fuel },
-        {  -50.0f,  110.0f, ENodeType::Fuel },
-        {  120.0f,   70.0f, ENodeType::Fuel },
-        // far ring (~160-185 m)
-        {  160.0f,  -90.0f, ENodeType::Mineral },
-        { -150.0f, -110.0f, ENodeType::Mineral },
-        {   90.0f,  165.0f, ENodeType::Fuel },
-        { -170.0f,   40.0f, ENodeType::Mineral },
-        {  175.0f,   15.0f, ENodeType::Fuel },
-    };
     const auto spawnNode = [this](float x, float z, ENodeType type)
     {
         Node node;
@@ -180,21 +161,18 @@ void StructureSystem::spawnNodes()
         Globals::world.addRootEntity(node.entity);
         m_nodes.push_back(std::move(node));
     };
-    if (m_pvp)
-    {
-        // The CORRIDOR arena (GameMatch::spawnCorridorWalls: x -65..65, z -20..20, bases at
-        // x = -55 / +55): mirrored starters at each end, contested resources in the middle.
-        static constexpr struct { float x, z; ENodeType type; } corridor[] = {
-            { -45.0f,   8.0f, ENodeType::Mineral }, {  45.0f,  -8.0f, ENodeType::Mineral },
-            { -37.0f, -10.0f, ENodeType::Fuel },    {  37.0f,  10.0f, ENodeType::Fuel },
-            { -20.0f,   0.0f, ENodeType::Mineral }, {  20.0f,   0.0f, ENodeType::Mineral },
-            {   0.0f,  14.0f, ENodeType::Fuel },    {   0.0f, -14.0f, ENodeType::Fuel },
-        };
-        for (const auto& n : corridor)
-            spawnNode(n.x, n.z, n.type);
-        return; // the radial PvE layout stays outside the walls
-    }
-    for (const auto& n : layout)
+    // The CORRIDOR arena (GameMatch::spawnCorridorWalls: x -65..65, z -20..20, bases at
+    // x = -55 / +55): every node lives on a SIDE, exactly mirrored (180° symmetry) — the
+    // center itself stays EMPTY; each side's FORWARD fuel node (±14) is the exposed prize
+    // nearest the contested middle.
+    static constexpr struct { float x, z; ENodeType type; } corridor[] = {
+        { -45.0f,   8.0f, ENodeType::Mineral }, {  45.0f,  -8.0f, ENodeType::Mineral },
+        { -37.0f, -10.0f, ENodeType::Fuel },    {  37.0f,  10.0f, ENodeType::Fuel },
+        { -25.0f,  12.0f, ENodeType::Mineral }, {  25.0f, -12.0f, ENodeType::Mineral },
+        { -14.0f, -10.0f, ENodeType::Fuel },    {  14.0f,  10.0f, ENodeType::Fuel }, // forward
+                                                // fuel: closest to the contested middle
+    };
+    for (const auto& n : corridor)
         spawnNode(n.x, n.z, n.type);
 }
 
@@ -229,6 +207,25 @@ void StructureSystem::queueCableRequest(uint32 idA, uint32 idB, ECableType type,
 void StructureSystem::queueDemolishRequest(uint32 id, uint8 team)
 {
     m_demolishRequests.push_back({ id, team });
+}
+
+void StructureSystem::queueRouteRequest(uint32 id, std::span<const glm::vec3> points, uint8 team)
+{
+    RouteRequest request;
+    request.id = id;
+    request.team = team;
+    const size_t count = glm::min(points.size(), (size_t)MaxRouteWaypoints);
+    request.points.assign(points.begin(), points.begin() + count);
+    m_routeRequests.push_back(std::move(request));
+}
+
+void StructureSystem::mirrorRoute(uint32 id, std::span<const glm::vec3> points)
+{
+    const int index = structureIndexById(id);
+    if (index < 0)
+        return;
+    const size_t count = glm::min(points.size(), (size_t)MaxRouteWaypoints);
+    m_structures[index].route.assign(points.begin(), points.begin() + count);
 }
 
 void StructureSystem::destroyStructureAt(size_t index)
@@ -327,6 +324,58 @@ bool StructureSystem::cableExists(uint32 idA, uint32 idB) const
         if ((c.idA == idA && c.idB == idB) || (c.idA == idB && c.idB == idA))
             return true;
     return false;
+}
+
+ECableType StructureSystem::smartLinkTypeFor(int indexA, int indexB) const
+{
+    if (indexA < 0 || indexB < 0 || indexA == indexB)
+        return ECableType::Count;
+    const auto capacityIn = [&](EStructureType t, int medium) {
+        return medium == 1 ? fuelCapacityOf(t) : medium == 2 ? mineralCapacityOf(t) : energyCapacityOf(t); };
+    const auto bothHold = [&](int medium) {
+        return capacityIn(m_structures[indexA].type, medium) > 0.0f
+            && capacityIn(m_structures[indexB].type, medium) > 0.0f; };
+    // 1) A Connector endpoint that already carries a medium FORCES it (its single-medium rule
+    //    would refuse anything else anyway). Two connectors with different media = no link.
+    int medium = -1;
+    for (const int endpoint : { indexA, indexB })
+        if (m_structures[endpoint].type == EStructureType::Connector)
+            if (const int carried = connectorMedium(endpoint); carried >= 0)
+                medium = (medium < 0 || medium == carried) ? carried : -2;
+    if (medium == -2)
+        return ECableType::Count;
+    // 2) The selected building's resource OUTPUT (A first, then B): generators/batteries push
+    //    energy, tanks fuel, silos/fabricators minerals, extractors whatever their node yields.
+    const auto outputMedium = [&](const Structure& s) -> int {
+        switch (s.type)
+        {
+        case EStructureType::Generator:
+        case EStructureType::Solar:
+        case EStructureType::Battery:     return 0;
+        case EStructureType::FuelTank:    return 1;
+        case EStructureType::MineralSilo:
+        case EStructureType::Fabricator:  return 2;
+        case EStructureType::Extractor:
+            return s.nodeIndex >= 0 && s.nodeIndex < (int)m_nodes.size()
+                && m_nodes[s.nodeIndex].type == ENodeType::Fuel ? 1 : 2;
+        default:                          return -1;
+        }
+    };
+    if (medium < 0)
+        if (const int out = outputMedium(m_structures[indexA]); out >= 0 && bothHold(out))
+            medium = out;
+    if (medium < 0)
+        if (const int out = outputMedium(m_structures[indexB]); out >= 0 && bothHold(out))
+            medium = out;
+    // 3) Fall back to the first medium both endpoints hold (energy, fuel, minerals).
+    for (int m = 0; medium < 0 && m < 3; ++m)
+        if (bothHold(m))
+            medium = m;
+    if (medium < 0 || !bothHold(medium))
+        return ECableType::Count;
+    const ECableType type = medium == 1 ? ECableType::Pipe
+                          : medium == 2 ? ECableType::Conveyor : ECableType::Basic;
+    return cableAllowed(indexA, indexB, type) ? type : ECableType::Count;
 }
 
 bool StructureSystem::cableAllowed(int indexA, int indexB, ECableType type, int ignoreCableIndex) const
@@ -540,8 +589,8 @@ void StructureSystem::spawnBase(const glm::vec3& groundPos, uint8 team)
     s.team = team;
     s.pos = groundPos + glm::vec3(0.0f, structureSpawnHeights[(int)EStructureType::Base], 0.0f);
     s.health = m_structureHealthMax; // never drained — the Base is skipped in tickDamage
-    s.charge = m_batteryCapacity;    // its battery-worth of storage starts full
-    s.fuel = glm::min(m_startFuel, m_generatorFuelTank); // "Start fuel" seeds the Base tank
+    // The Base stores ONLY minerals (the team's bank): no energy, no fuel — power and fuel
+    // infrastructure must be built ("Start fuel" only matters once a tank/generator exists).
     s.mineralStore = glm::min(m_startMinerals, m_mineralBaseCapacity); // the starting war chest
     s.entity = Globals::world.spawnAssetFile(structurePrefabs[(int)EStructureType::Base], Transform(s.pos), true);
     if (!s.entity)
@@ -613,8 +662,11 @@ void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groun
     s.entity->setName(structureNames[(int)type]);
     Globals::world.addRootEntity(s.entity);
     s.team = team;
-    s.blueprint = true;
-    s.health = 1.0f; // health IS the build progress — a fresh ghost is nearly dead until funded
+    // CHEAT ("Game/Cheats/Free instant build", Synced — the server's value rules): skip the
+    // blueprint phase entirely, for EVERY team's placements (client requests land here too).
+    s.blueprint = !m_cheatInstantBuild;
+    if (s.blueprint)
+        s.health = 1.0f; // health IS the build progress — a fresh ghost is nearly dead until funded
     if (ForceComponent* fc = getComponent<ForceComponent>(s.entity.get()))
         fc->emitter.setTeam(team); // prefabs author team 0 — the builder's team owns the field
     // Enemy-team projectiles chip structures on contact (same-team and co-op shots are free:
@@ -650,9 +702,8 @@ void StructureSystem::mirrorPlace(uint32 id, EStructureType type, const glm::vec
     s.facingXZ = facingXZ;
     s.nodeIndex = nodeIndex;
     s.team = team;
-    if (!built)
-        s.health = 1.0f; // health mirrors the build progress until GSt refreshes it
-    s.health = m_structureHealthMax;
+    // Health mirrors the build progress until GSt refreshes it.
+    s.health = built ? m_structureHealthMax : 1.0f;
     glm::quat rot(1.0f, 0.0f, 0.0f, 0.0f);
     if (glm::dot(facingXZ, facingXZ) > 1e-4f)
     {
@@ -672,6 +723,128 @@ void StructureSystem::mirrorPlace(uint32 id, EStructureType type, const glm::vec
         m_nodes[nodeIndex].extracted = true;
     m_nextStructureId = glm::max(m_nextStructureId, id + 1);
     m_structures.push_back(std::move(s));
+}
+
+void StructureSystem::saveTo(AssetNode& root) const
+{
+    for (const Structure& s : m_structures)
+    {
+        AssetNode& n = root.addChild("Structure");
+        n.set("Id", std::to_string(s.id));
+        n.set("Type", std::to_string((int)s.type));
+        n.set("Position", s.pos);
+        n.set("Facing", glm::vec3(s.facingXZ.x, 0.0f, s.facingXZ.y));
+        n.set("NodeIndex", std::to_string(s.nodeIndex));
+        n.set("Team", std::to_string((int)s.team));
+        n.set("Blueprint", s.blueprint);
+        n.set("Health", s.health);
+        n.set("Charge", s.charge);
+        n.set("Fuel", s.fuel);
+        n.set("Minerals", s.mineralStore);
+        n.set("OutputFrac", s.outputFrac);
+        if (!s.route.empty())
+        {
+            AssetNode& r = n.addChild("Route");
+            for (const glm::vec3& wp : s.route)
+            {
+                AssetNode& p = r.addChild("Point");
+                p.values = { std::to_string(wp.x), std::to_string(wp.z) };
+            }
+        }
+    }
+    for (const Cable& c : m_cables)
+    {
+        AssetNode& n = root.addChild("Cable");
+        n.set("A", std::to_string(c.idA));
+        n.set("B", std::to_string(c.idB));
+        n.set("Type", std::to_string((int)c.type));
+    }
+}
+
+void StructureSystem::clearAllStructures()
+{
+    while (!m_structures.empty())
+        destroyStructureAt(m_structures.size() - 1); // fires onStructureRemoved — clients prune
+    m_cables.clear();
+    m_links.clear();
+    m_requests.clear();
+    m_cableRequests.clear();
+    m_demolishRequests.clear();
+    m_routeRequests.clear();
+    m_barracksBoost.clear();
+}
+
+void StructureSystem::loadFrom(const AssetNode& root)
+{
+    clearAllStructures();
+    for (const AssetNode* n : root.findAll("Structure"))
+    {
+        const int typeInt = n->find("Type") ? n->find("Type")->asInt() : -1;
+        const uint32 id = n->find("Id") ? (uint32)n->find("Id")->asInt() : 0;
+        if (typeInt < 0 || typeInt >= (int)EStructureType::Count || id == 0 || structureIndexById(id) >= 0)
+            continue; // garbage / duplicate entry
+        Structure s;
+        s.id = id;
+        s.type = (EStructureType)typeInt;
+        s.pos = n->find("Position") ? n->find("Position")->asVec3() : glm::vec3(0.0f);
+        const glm::vec3 facing = n->find("Facing") ? n->find("Facing")->asVec3() : glm::vec3(0.0f);
+        s.facingXZ = glm::vec2(facing.x, facing.z);
+        s.nodeIndex = n->find("NodeIndex") ? n->find("NodeIndex")->asInt() : -1;
+        s.team = (uint8)glm::clamp(n->find("Team") ? n->find("Team")->asInt() : 0, 0, GameMaxTeams - 1);
+        s.blueprint = n->find("Blueprint") ? n->find("Blueprint")->asBool() : false;
+        s.health = glm::clamp(n->find("Health") ? n->find("Health")->asFloat() : m_structureHealthMax,
+            1.0f, m_structureHealthMax);
+        s.charge = glm::clamp(n->find("Charge") ? n->find("Charge")->asFloat() : 0.0f, 0.0f, energyCapacityOf(s.type));
+        s.fuel = glm::clamp(n->find("Fuel") ? n->find("Fuel")->asFloat() : 0.0f, 0.0f, fuelCapacityOf(s.type));
+        s.mineralStore = glm::clamp(n->find("Minerals") ? n->find("Minerals")->asFloat() : 0.0f,
+            0.0f, mineralCapacityOf(s.type));
+        s.outputFrac = glm::clamp(n->find("OutputFrac") ? n->find("OutputFrac")->asFloat() : 0.0f, 0.0f, 1.0f);
+        if (const AssetNode* r = n->find("Route"))
+            for (const AssetNode* p : r->findAll("Point"))
+                if ((int)s.route.size() < MaxRouteWaypoints)
+                    s.route.push_back(glm::vec3(p->asFloat(0), 0.0f, p->asFloat(1)));
+        glm::quat rot(1.0f, 0.0f, 0.0f, 0.0f);
+        if (glm::dot(s.facingXZ, s.facingXZ) > 1e-4f)
+        {
+            const glm::vec2 dir = glm::normalize(s.facingXZ);
+            rot = glm::angleAxis(std::atan2(-dir.x, -dir.y), glm::vec3(0.0f, 1.0f, 0.0f));
+        }
+        s.entity = Globals::world.spawnAssetFile(structurePrefabs[typeInt], Transform(s.pos, 1.0f, rot), true);
+        if (!s.entity)
+            continue;
+        s.entity->setName(structureNames[typeInt]);
+        Globals::world.addRootEntity(s.entity);
+        if (ForceComponent* fc = getComponent<ForceComponent>(s.entity.get()))
+            fc->emitter.setTeam(s.team);
+        if (s.type != EStructureType::Base) // same contact hook as placeStructure
+            if (PhysicsComponent* pc = getComponent<PhysicsComponent>(s.entity.get()))
+                pc->onContact = [this, hookId = s.id, team = s.team](Entity& other, bool begin)
+                {
+                    if (!begin || std::string_view(other.getName()) != "Projectile")
+                        return;
+                    const ForceComponent* fc = getComponent<ForceComponent>(&other);
+                    if (!fc || fc->emitter.getTeam() != team)
+                        damageStructure(hookId, m_projectileStructDamage);
+                };
+        if (s.type != EStructureType::Base)
+            s.query = Globals::forceSystem.createQuery(s.pos);
+        applyStructureTint(s);
+        if (s.nodeIndex >= 0 && s.nodeIndex < (int)m_nodes.size())
+            m_nodes[s.nodeIndex].extracted = true;
+        m_nextStructureId = glm::max(m_nextStructureId, id + 1);
+        m_structures.push_back(std::move(s));
+    }
+    for (const AssetNode* n : root.findAll("Cable"))
+    {
+        const uint32 idA = n->find("A") ? (uint32)n->find("A")->asInt() : 0;
+        const uint32 idB = n->find("B") ? (uint32)n->find("B")->asInt() : 0;
+        const int type = n->find("Type") ? n->find("Type")->asInt() : -1;
+        if (type >= 0 && type < (int)ECableType::Count
+            && structureIndexById(idA) >= 0 && structureIndexById(idB) >= 0 && !cableExists(idA, idB))
+            m_cables.push_back(Cable{ idA, idB, (ECableType)type });
+    }
+    Log::info("Game state loaded: " + std::to_string(m_structures.size()) + " structures, "
+        + std::to_string(m_cables.size()) + " cables");
 }
 
 void StructureSystem::mirrorRemove(uint32 id)
@@ -767,6 +940,7 @@ void StructureSystem::tickPower(float deltaSec)
 
     // ---- fuel income: powered fuel extractors fill their OWN tank, the Base its own — a full
     // ---- tank stalls production (export-limited), the same rule generators obey for energy ----
+    // (The Base gets NO fuel income — its only passive yield is the mineral trickle.)
     for (Structure& s : m_structures)
     {
         if (s.blueprint)
@@ -774,8 +948,6 @@ void StructureSystem::tickPower(float deltaSec)
         if (s.type == EStructureType::Extractor && s.powered && s.nodeIndex >= 0
             && m_nodes[s.nodeIndex].type == ENodeType::Fuel)
             s.fuel = glm::min(s.fuel + m_fuelRate * dt, fuelCapacityOf(s.type));
-        else if (s.type == EStructureType::Base)
-            s.fuel = glm::min(s.fuel + m_fuelRate * m_baseIncomeMult * dt, fuelCapacityOf(s.type));
     }
 
     // ---- producers: generators burn from their OWN tank, solar panels trickle for free — both
@@ -834,9 +1006,19 @@ void StructureSystem::tickPower(float deltaSec)
             continue;
         float& storeA = medium == 1 ? a.fuel : medium == 2 ? a.mineralStore : a.charge;
         float& storeB = medium == 1 ? b.fuel : medium == 2 ? b.mineralStore : b.charge;
-        const float tEq = (storeA / capA - storeB / capB) * (capA * capB / (capA + capB));
+        // SINKS: mineral CONSUMERS that spend in quanta (barracks pay a whole spawn cost at once,
+        // constructors bank build stock) never reach the network's average fill, so plain
+        // equalization starves them until the WHOLE grid is nearly full. Treating a sink's fill
+        // as 0 makes every link feed it toward CAPACITY instead of toward the average.
+        const auto isMineralSink = [](EStructureType t) {
+            return isBarracksType(t) || t == EStructureType::Constructor; };
+        const float fillA = medium == 2 && isMineralSink(a.type) ? 0.0f : storeA / capA;
+        const float fillB = medium == 2 && isMineralSink(b.type) ? 0.0f : storeB / capB;
+        const float tEq = (fillA - fillB) * (capA * capB / (capA + capB));
         const float maxT = m_cableThroughput[(int)c.type] * dt;
-        const float T = glm::clamp(tEq, -maxT, maxT);
+        float T = glm::clamp(tEq, -maxT, maxT);
+        // The sink fiction can point past a real limit — clamp to what the stores actually allow.
+        T = glm::clamp(T, -glm::min(storeB, capA - storeA), glm::min(storeA, capB - storeB));
         storeA -= T;
         storeB += T;
         c.lastFlowRate = T / dt;
@@ -958,18 +1140,6 @@ void StructureSystem::tickPower(float deltaSec)
 
 void StructureSystem::tickDamage(float deltaSec)
 {
-    // Field damage needs BOTH: the query says the point is enemy-owned (so a friendly bubble
-    // overhead protects), AND the analytic AMBIENT field is meaningfully present there (exact CPU
-    // mirror of forceAmbientField — it is a closed-form distance field). The second condition
-    // keeps roaming enemy UNITS' bubbles from field-draining structures by mere proximity: units
-    // hurt structures only by actually attacking (their proximity gnaw), never by walking past.
-    const ForceFieldParams& fp = Globals::forceSystem.getParams();
-    const auto ambientAt = [&](const glm::vec3& p) {
-        if (fp.ambientSlope <= 0.0f)
-            return 0.0f;
-        const float d = glm::distance(glm::vec2(p.x, p.z), fp.ambientCenter);
-        return glm::clamp((d - fp.ambientSafeRadius) * fp.ambientSlope, 0.0f, fp.ambientMaxStrength);
-    };
     for (size_t i = 0; i < m_structures.size();)
     {
         Structure& s = m_structures[i];
@@ -979,13 +1149,10 @@ void StructureSystem::tickDamage(float deltaSec)
             continue;
         }
         const ForceQuery::Result territory = s.query.getResult();
-        // PvP: HOSTILE = any OTHER team's bubble owns the structure's point (push your field over
-        // their base to siege it) — the ambient gate is meaningless with the ambient off. PvE keeps
-        // the ambient requirement so unit bubbles never field-drain structures by proximity.
-        const bool hostileField = m_pvp
-            ? territory.valid && territory.inside && territory.owningTeam != (int)s.team
-            : territory.valid && territory.inside && territory.owningTeam != 0
-                && ambientAt(s.pos) > fp.isoThreshold;
+        // HOSTILE = any OTHER team's bubble owns the structure's point (push your field over
+        // their base to siege it).
+        const bool hostileField = territory.valid && territory.inside
+            && territory.owningTeam != (int)s.team;
         if (hostileField)
         {
             s.health -= m_structureDamageRate * deltaSec;
@@ -1014,6 +1181,17 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
     for (const auto& [id, team] : m_demolishRequests)
         applyDemolishRequest(id, team);
     m_demolishRequests.clear();
+    for (RouteRequest& request : m_routeRequests)
+    {
+        const int index = structureIndexById(request.id);
+        if (index < 0 || !isBarracksType(m_structures[index].type)
+            || m_structures[index].team != request.team)
+            continue; // died, not a barracks, or someone else's — refused (the MP seam)
+        m_structures[index].route = std::move(request.points);
+        if (onRouteChanged)
+            onRouteChanged(request.id);
+    }
+    m_routeRequests.clear();
 
     // MINERAL income fills each producer's OWN buffer (full = production stalls, the generator
     // rule); Conveyor links haul it to Silos/the Base in tickPower's flow pass. The Base trickle

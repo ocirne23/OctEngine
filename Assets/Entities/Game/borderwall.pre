@@ -1,14 +1,18 @@
-# PvP corridor border segment: solid indestructible 10 m block. The Game layer rings the arena
-# with a row of these (deterministic local spawn on every instance - no network, no gameplay
-# role), parented under the Ground entity to keep the scene root lean.
+# Corridor border segment: LOW 10x5x10 m visual (CubeHalf) so the camera sees over it, but the
+# COLLIDER stays a tall 10x20x10 box — an invisible fence above the visible wall keeps bodies and
+# projectiles inside (the mismatch is deliberate). The render node is offset DOWN so the half-cube
+# sits on the ground while the entity origin stays at the collider center (y 10 at spawn).
+# The Game layer rings the arena with a row of these (deterministic local spawn on every instance
+# - no network, no gameplay role), parented under the Ground entity to keep the scene root lean.
 Prefab gameBorderWall
 	Component Render
 		ObjectContainer baseshapes
-		Node Cube
+		Node CubeHalf
 		Type StaticMesh
 		Color 0.45 0.45 0.5
+		Position 0 -7.5 0
 		Scale 5
 	Component Physics
 		Body Static
 		Shape Box
-		HalfExtents 5 5 5
+		HalfExtents 5 10 5

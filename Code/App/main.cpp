@@ -49,7 +49,6 @@ int main(int argc, char* argv[])
     std::string connectAddress;
     bool headless = false;
     bool gameMode = false;
-    bool pvpMode = false;
     for (int i = 1; i < argc; ++i)
     {
         const std::string_view arg = argv[i];
@@ -59,7 +58,6 @@ int main(int argc, char* argv[])
         else if (arg == "--tickrate" && i + 1 < argc)     tickHz = glm::clamp(std::atoi(argv[++i]), 10, 240);
         else if (arg == "--headless")                     headless = true;
         else if (arg == "--game")                         gameMode = true; // whitebox game instead of the testbed scene
-        else if (arg == "--pvp")                          pvpMode = true;  // with --game: no ambient/enemies, per-client teams
         // both ends must agree, or the handshake denies with a clear reason
         else if (arg == "--no-encrypt")                   NetworkManager::setEncryption(false);
         else Log::warning("Unknown command line argument: " + std::string(arg));
@@ -194,7 +192,7 @@ int main(int argc, char* argv[])
 
     GizmoController gizmo;
     InputControls controls(gizmo, cameraController, Globals::world); // headless-inert: update/key handling never run
-    GameMatch game(gameMode, pvpMode && gameMode); // stack local: holds EntityPtrs/Force handles, destructs before the globals
+    GameMatch game(gameMode); // stack local: holds EntityPtrs/Force handles, destructs before the globals
     if (game.enabled())
     {
         game.spawnWorld();
