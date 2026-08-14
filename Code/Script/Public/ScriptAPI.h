@@ -342,7 +342,35 @@ struct OcScriptField
     X(void,        hudRemoveBar,           (const char*, name)) \
     X(void,        hudSetCounter,          (const char*, name), (float, value), (int, decimals), (glm::vec3, color)) /* decimals 0 = integer display */ \
     X(void,        hudRemoveCounter,       (const char*, name)) \
-    X(void,        hudClear,               (int, unused)) /* removes every slot, bar and counter */
+    X(void,        hudClear,               (int, unused)) /* removes every slot, bar and counter */ \
+    /* ---- game components (GameUnit/GameStructure/GameProjectile — the shared C++ sim; the DSL is
+       the orders/config tier: read state, re-tune stats, set/clear a unit's walk target) ---- */ \
+    X(void*,       entityGetGameUnitComponent,(Entity*, entity)) \
+    X(float,       gameUnitGetHealth,      (void*, gameUnit)) \
+    X(void,        gameUnitSetHealth,      (void*, gameUnit), (float, health)) \
+    X(float,       gameUnitGetHealthMax,   (void*, gameUnit)) \
+    X(float,       gameUnitGetEnergy,      (void*, gameUnit)) \
+    X(void,        gameUnitSetEnergy,      (void*, gameUnit), (float, energy)) \
+    X(float,       gameUnitGetEnergyMax,   (void*, gameUnit)) \
+    X(int,         gameUnitGetTeam,        (void*, gameUnit)) \
+    X(int,         gameUnitIsCollapsed,    (void*, gameUnit)) \
+    X(void,        gameUnitDamage,         (void*, gameUnit), (float, amount)) \
+    X(void,        gameUnitSetTarget,      (void*, gameUnit), (glm::vec3, position)) /* LOCKS the walk target until cleared */ \
+    X(void,        gameUnitClearTarget,    (void*, gameUnit)) /* back to automatic targeting */ \
+    X(glm::vec3,   gameUnitGetTarget,      (void*, gameUnit)) \
+    X(int,         gameUnitHasTarget,      (void*, gameUnit)) \
+    X(void,        gameUnitSetMoveSpeed,   (void*, gameUnit), (float, speed)) \
+    X(float,       gameUnitGetMoveSpeed,   (void*, gameUnit)) \
+    X(void*,       entityGetGameStructureComponent,(Entity*, entity)) \
+    X(float,       gameStructureGetHealth, (void*, gameStructure)) \
+    X(void,        gameStructureSetHealth, (void*, gameStructure), (float, health)) \
+    X(float,       gameStructureGetHealthMax,(void*, gameStructure)) \
+    X(int,         gameStructureGetTeam,   (void*, gameStructure)) \
+    X(int,         gameStructureIsBlueprint,(void*, gameStructure)) \
+    X(void,        gameStructureDamage,    (void*, gameStructure), (float, amount)) /* respects invulnerable */ \
+    X(void*,       entityGetGameProjectileComponent,(Entity*, entity)) \
+    X(int,         gameProjectileGetTeam,  (void*, gameProjectile)) \
+    X(float,       gameProjectileGetAge,   (void*, gameProjectile))
 
 #if defined(SCRIPT_STATIC_BUILD)
 // Cooked build: the engine thunks the inline ctx methods forward to (defined extern "C" in ScriptContext.cpp,

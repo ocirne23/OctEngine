@@ -23,3 +23,5 @@ Prefab lance
 		Distribution 0.5
 		Width 0.2
 		Centered false
+	Component GameStructure
+		MeleeRadius 1

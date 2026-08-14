@@ -13,3 +13,5 @@ Prefab gameWall
 		ContactEvents true
 		Shape Box
 		HalfExtents 1 2 1
+	Component GameStructure
+		MeleeRadius 1

@@ -24,3 +24,4 @@ Prefab gameEnemyUnit
 		Reach 3
 		Centered true
 	Component Network
+	Component GameUnit

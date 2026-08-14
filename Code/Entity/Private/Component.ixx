@@ -13,6 +13,7 @@ export import :ParticleComponent;
 export import :ForceComponent;
 export import :LightComponent;
 export import :NetworkComponent;
+export import :GameComponents;
 export import :ScriptComponent;
 
 import :Entity;
@@ -37,7 +38,7 @@ export void breakContiguousAllocationFromRoot(Entity* root);
 // (refcount 1) — i.e. destroying the tree is guaranteed to destroy all of them.
 export bool contiguousTreeSolelyOwned(Entity* entity);
 
-export constexpr uint16 MaxInlineComponentTypes = 10;
+export constexpr uint16 MaxInlineComponentTypes = 13;
 export constexpr uint16 ComponentAlignment = 16;
 
 export Transform composeTransform(const Transform& parent, const Transform& local);
@@ -55,6 +56,9 @@ export constexpr const char* componentTypeName(EComponentID id)
     case EComponentID_Force:  return "Force";
     case EComponentID_Light:  return "Light";
     case EComponentID_Network: return "Network";
+    case EComponentID_GameUnit: return "GameUnit";
+    case EComponentID_GameStructure: return "GameStructure";
+    case EComponentID_GameProjectile: return "GameProjectile";
     case EComponentID_Script: return "Script";
     default:                  return "Unknown";
     }
@@ -74,6 +78,9 @@ export namespace EntityComponentDetail
         alignUp(uint16(sizeof(ForceComponent)),   ComponentAlignment),
         alignUp(uint16(sizeof(LightComponent)),   ComponentAlignment),
         alignUp(uint16(sizeof(NetworkComponent)), ComponentAlignment),
+        alignUp(uint16(sizeof(GameUnitComponent)), ComponentAlignment),
+        alignUp(uint16(sizeof(GameStructureComponent)), ComponentAlignment),
+        alignUp(uint16(sizeof(GameProjectileComponent)), ComponentAlignment),
         alignUp(uint16(sizeof(ScriptComponent)),  ComponentAlignment),
     };
     static_assert(EComponentID_Scene == 0);
@@ -85,7 +92,10 @@ export namespace EntityComponentDetail
     static_assert(EComponentID_Force == 6);
     static_assert(EComponentID_Light == 7);
     static_assert(EComponentID_Network == 8);
-    static_assert(EComponentID_Script == 9);
+    static_assert(EComponentID_GameUnit == 9);
+    static_assert(EComponentID_GameStructure == 10);
+    static_assert(EComponentID_GameProjectile == 11);
+    static_assert(EComponentID_Script == 12);
 
     inline constexpr uint16 entityBaseOffset = alignUp(uint16(sizeof(Entity)), ComponentAlignment);
 }

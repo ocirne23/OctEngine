@@ -22,3 +22,12 @@ Prefab gameEnemySpitter
 		Reach 3
 		Centered true
 	Component Network
+	Component GameUnit
+		HealthMax 48
+		EnergyMax 32
+		ShieldOutput 0.64
+		MoveSpeed 3.6
+		AttackDps 0
+		PlayerDps 0
+		EmitterDrain 2.5
+		Ranged true

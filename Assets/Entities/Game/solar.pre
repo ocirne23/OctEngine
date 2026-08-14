@@ -12,3 +12,5 @@ Prefab gameSolar
 		ContactEvents true
 		Shape Box
 		HalfExtents 2 0.5 2
+	Component GameStructure
+		MeleeRadius 2

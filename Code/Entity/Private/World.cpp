@@ -696,6 +696,50 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         tmpl.spawnInfos.emplace_back(std::make_shared<NetworkComponent::SpawnInfo>());
     }
 
+    // GAME components (Components/GameComponents.ixx) — !m_headless like Force: they create Force
+    // queries/read readbacks, and --game refuses headless anyway.
+    if (const AssetNode* unitNode = findComponentNode(node, "GameUnit"); unitNode && !m_headless)
+    {
+        auto info = std::make_shared<GameUnitComponent::SpawnInfo>();
+        if (const AssetNode* n = unitNode->find("Team"))          info->team = uint32(glm::max(n->asInt(), 0));
+        if (const AssetNode* n = unitNode->find("HealthMax"))     info->healthMax = n->asFloat(0, info->healthMax);
+        if (const AssetNode* n = unitNode->find("EnergyMax"))     info->energyMax = n->asFloat(0, info->energyMax);
+        if (const AssetNode* n = unitNode->find("ShieldOutput"))  info->shieldOutput = n->asFloat(0, info->shieldOutput);
+        if (const AssetNode* n = unitNode->find("MoveSpeed"))     info->moveSpeed = n->asFloat(0, info->moveSpeed);
+        if (const AssetNode* n = unitNode->find("Accel"))         info->accel = n->asFloat(0, info->accel);
+        if (const AssetNode* n = unitNode->find("AttackRange"))   info->attackRange = n->asFloat(0, info->attackRange);
+        if (const AssetNode* n = unitNode->find("AttackDps"))     info->attackDps = n->asFloat(0, info->attackDps);
+        if (const AssetNode* n = unitNode->find("PlayerDps"))     info->playerDps = n->asFloat(0, info->playerDps);
+        if (const AssetNode* n = unitNode->find("EmitterDrain"))  info->emitterDrain = n->asFloat(0, info->emitterDrain);
+        if (const AssetNode* n = unitNode->find("Ranged"))        info->ranged = n->asBool();
+        if (const AssetNode* n = unitNode->find("StandoffRange")) info->standoffRange = n->asFloat(0, info->standoffRange);
+        if (const AssetNode* n = unitNode->find("FireInterval"))  info->fireInterval = n->asFloat(0, info->fireInterval);
+        typeBits |= uint16(1 << EComponentID_GameUnit);
+        tmpl.spawnInfos.emplace_back(std::move(info));
+    }
+    if (const AssetNode* structNode = findComponentNode(node, "GameStructure"); structNode && !m_headless)
+    {
+        auto info = std::make_shared<GameStructureComponent::SpawnInfo>();
+        if (const AssetNode* n = structNode->find("Team"))         info->team = uint32(glm::max(n->asInt(), 0));
+        if (const AssetNode* n = structNode->find("HealthMax"))    info->healthMax = n->asFloat(0, info->healthMax);
+        if (const AssetNode* n = structNode->find("Invulnerable")) info->invulnerable = n->asBool();
+        if (const AssetNode* n = structNode->find("MeleeRadius"))  info->meleeRadius = n->asFloat(0, info->meleeRadius);
+        typeBits |= uint16(1 << EComponentID_GameStructure);
+        tmpl.spawnInfos.emplace_back(std::move(info));
+    }
+    if (const AssetNode* projNode = findComponentNode(node, "GameProjectile"); projNode && !m_headless)
+    {
+        auto info = std::make_shared<GameProjectileComponent::SpawnInfo>();
+        if (const AssetNode* n = projNode->find("Team"))            info->team = uint32(glm::max(n->asInt(), 0));
+        if (const AssetNode* n = projNode->find("UnitDamage"))      info->unitDamage = n->asFloat(0, info->unitDamage);
+        if (const AssetNode* n = projNode->find("StructureDamage")) info->structureDamage = n->asFloat(0, info->structureDamage);
+        if (const AssetNode* n = projNode->find("Lifetime"))        info->lifetime = n->asFloat(0, info->lifetime);
+        if (const AssetNode* n = projNode->find("EmitterDrain"))    info->emitterDrain = n->asFloat(0, info->emitterDrain);
+        if (const AssetNode* n = projNode->find("EmitterDrainRadius")) info->emitterDrainRadius = n->asFloat(0, info->emitterDrainRadius);
+        typeBits |= uint16(1 << EComponentID_GameProjectile);
+        tmpl.spawnInfos.emplace_back(std::move(info));
+    }
+
     if (const AssetNode* scriptNode = findComponentNode(node, "Script"))
     {
         auto info = std::make_shared<ScriptComponent::SpawnInfo>();

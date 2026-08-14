@@ -11,3 +11,5 @@ Prefab gameGenerator
 		ContactEvents true
 		Shape Box
 		HalfExtents 1 1 1
+	Component GameStructure
+		MeleeRadius 1

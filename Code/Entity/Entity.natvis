@@ -12,7 +12,10 @@
 
     Component order (EComponentID in EntityP.ixx) — keep in sync when adding a component type:
       Scene 0x01, Render 0x02, Animator 0x04, Physics 0x08,
-      Audio 0x10, Particle 0x20, Force 0x40, Light 0x80, Network 0x100, Script 0x200
+      Audio 0x10, Particle 0x20, Force 0x40, Light 0x80, Network 0x100,
+      GameUnit 0x200, GameStructure 0x400, GameProjectile 0x800, Script 0x1000
+    (The Game*/Script offset chains below stop at Network — expand them the same way if you need
+    those components in the debugger; the Script entry's chain must add the three Game sizes.)
   -->
 
   <Type Name="Entity">
@@ -106,7 +109,7 @@
               + (((typeBits &amp; 0x40) != 0) ? ((sizeof(ForceComponent)+15)&amp;~0xF) : 0)
               + (((typeBits &amp; 0x80) != 0) ? ((sizeof(LightComponent)+15)&amp;~0xF) : 0))
           </Item>
-          <Item Name="[Script]" Condition="(typeBits &amp; 0x200) != 0">
+          <Item Name="[Script]" Condition="(typeBits &amp; 0x1000) != 0">
             *(ScriptComponent*)((char*)this
               + ((sizeof(Entity)+15)&amp;~0xF)
               + (((typeBits &amp; 0x01) != 0) ? ((sizeof(SceneComponent)+15)&amp;~0xF) : 0)
@@ -117,7 +120,10 @@
               + (((typeBits &amp; 0x20) != 0) ? ((sizeof(ParticleComponent)+15)&amp;~0xF) : 0)
               + (((typeBits &amp; 0x40) != 0) ? ((sizeof(ForceComponent)+15)&amp;~0xF) : 0)
               + (((typeBits &amp; 0x80) != 0) ? ((sizeof(LightComponent)+15)&amp;~0xF) : 0)
-              + (((typeBits &amp; 0x100) != 0) ? ((sizeof(NetworkComponent)+15)&amp;~0xF) : 0))
+              + (((typeBits &amp; 0x100) != 0) ? ((sizeof(NetworkComponent)+15)&amp;~0xF) : 0)
+              + (((typeBits &amp; 0x200) != 0) ? ((sizeof(GameUnitComponent)+15)&amp;~0xF) : 0)
+              + (((typeBits &amp; 0x400) != 0) ? ((sizeof(GameStructureComponent)+15)&amp;~0xF) : 0)
+              + (((typeBits &amp; 0x800) != 0) ? ((sizeof(GameProjectileComponent)+15)&amp;~0xF) : 0))
           </Item>
         </Expand>
       </Synthetic>

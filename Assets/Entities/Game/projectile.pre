@@ -21,3 +21,7 @@ Prefab gameProjectile
 		Reach 1.5
 		Centered true
 	Component Network
+	Component GameProjectile
+		UnitDamage 25
+		StructureDamage 20
+		Lifetime 6

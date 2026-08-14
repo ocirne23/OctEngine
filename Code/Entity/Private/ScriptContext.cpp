@@ -391,6 +391,55 @@ void registerScriptDslBindings()
             { "pressure",     T::Float, "ctx->forceGetPressure($r)",            /*writable*/ false },
         } });
 
+    // GAME components: the shared C++ sim (units/structures/projectiles) with the DSL as the
+    // orders/config tier — a script sets a unit's target or reads health; walking/fighting is C++.
+    const DSLType unitType = bindings.registerComponentType("unit", "GameUnitComponent", EComponentID_GameUnit,
+        "ctx->entityGetGameUnitComponent($r)");
+    bindings.registerObject({ "unit", unitType, /*sidebarTopLevel*/ false,
+        {
+            { "setHealth",    T::Void, { { "health", T::Float } },   "ctx->gameUnitSetHealth($r, $1)" },
+            { "setEnergy",    T::Void, { { "energy", T::Float } },   "ctx->gameUnitSetEnergy($r, $1)" },
+            { "damage",       T::Void, { { "amount", T::Float } },   "ctx->gameUnitDamage($r, $1)" },
+            // LOCKS the walk target (overrides auto-targeting) until clearTarget.
+            { "setTarget",    T::Void, { { "position", vec3 } },     "ctx->gameUnitSetTarget($r, $1)" },
+            { "clearTarget",  T::Void, {},                           "ctx->gameUnitClearTarget($r)" },
+            { "setMoveSpeed", T::Void, { { "speed", T::Float } },    "ctx->gameUnitSetMoveSpeed($r, $1)" },
+        },
+        {
+            { "health",    T::Float, "ctx->gameUnitGetHealth($r)",       /*writable*/ false },
+            { "healthMax", T::Float, "ctx->gameUnitGetHealthMax($r)",    /*writable*/ false },
+            { "energy",    T::Float, "ctx->gameUnitGetEnergy($r)",       /*writable*/ false },
+            { "energyMax", T::Float, "ctx->gameUnitGetEnergyMax($r)",    /*writable*/ false },
+            { "team",      T::Int,   "ctx->gameUnitGetTeam($r)",         /*writable*/ false },
+            { "collapsed", T::Bool,  "(ctx->gameUnitIsCollapsed($r) != 0)", /*writable*/ false },
+            { "target",    vec3,     "ctx->gameUnitGetTarget($r)",       /*writable*/ false },
+            { "hasTarget", T::Bool,  "(ctx->gameUnitHasTarget($r) != 0)", /*writable*/ false },
+            { "moveSpeed", T::Float, "ctx->gameUnitGetMoveSpeed($r)",    /*writable*/ false },
+        } });
+
+    const DSLType structureType = bindings.registerComponentType("structure", "GameStructureComponent", EComponentID_GameStructure,
+        "ctx->entityGetGameStructureComponent($r)");
+    bindings.registerObject({ "structure", structureType, /*sidebarTopLevel*/ false,
+        {
+            { "setHealth", T::Void, { { "health", T::Float } }, "ctx->gameStructureSetHealth($r, $1)" },
+            { "damage",    T::Void, { { "amount", T::Float } }, "ctx->gameStructureDamage($r, $1)" },
+        },
+        {
+            { "health",    T::Float, "ctx->gameStructureGetHealth($r)",    /*writable*/ false },
+            { "healthMax", T::Float, "ctx->gameStructureGetHealthMax($r)", /*writable*/ false },
+            { "team",      T::Int,   "ctx->gameStructureGetTeam($r)",      /*writable*/ false },
+            { "blueprint", T::Bool,  "(ctx->gameStructureIsBlueprint($r) != 0)", /*writable*/ false },
+        } });
+
+    const DSLType projectileType = bindings.registerComponentType("projectile", "GameProjectileComponent", EComponentID_GameProjectile,
+        "ctx->entityGetGameProjectileComponent($r)");
+    bindings.registerObject({ "projectile", projectileType, /*sidebarTopLevel*/ false,
+        {},
+        {
+            { "team", T::Int,   "ctx->gameProjectileGetTeam($r)", /*writable*/ false },
+            { "age",  T::Float, "ctx->gameProjectileGetAge($r)",  /*writable*/ false },
+        } });
+
     // One light as a VALUE the DSL can hold, iterate and edit whole: `Light` mirrors OcLight (ScriptAPI.h).
     // Every member is writable ON THE COPY -- what makes an edit land is writing it back through a `ref`
     // binding (below), where the host clamps/normalizes (lightSetAt), so no per-member validation lives here.
@@ -1239,6 +1288,40 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
         const float len2 = glm::dot(v, v);
         asForce(p)->localDirection = len2 > 1e-12f ? v * glm::inversesqrt(len2) : glm::vec3(0.0f, 0.0f, -1.0f);
     }
+
+    // ---- game components ----
+    // The DSL's orders/config tier over the C++ sim in Components/GameComponents.cpp. Null-checked:
+    // unlike self.* (require-gated), these handles also arrive from cross-entity expressions.
+    void* thunk_entityGetGameUnitComponent(Entity* en) { return en ? getComponent<GameUnitComponent>(en) : nullptr; }
+    GameUnitComponent* asGameUnit(void* p) { return static_cast<GameUnitComponent*>(p); }
+    float thunk_gameUnitGetHealth(void* p)    { return p ? asGameUnit(p)->health : 0.0f; }
+    void  thunk_gameUnitSetHealth(void* p, float v) { if (p) asGameUnit(p)->health = glm::clamp(v, 0.0f, asGameUnit(p)->healthMax); }
+    float thunk_gameUnitGetHealthMax(void* p) { return p ? asGameUnit(p)->healthMax : 0.0f; }
+    float thunk_gameUnitGetEnergy(void* p)    { return p ? asGameUnit(p)->energy : 0.0f; }
+    void  thunk_gameUnitSetEnergy(void* p, float v) { if (p) asGameUnit(p)->energy = glm::clamp(v, 0.0f, asGameUnit(p)->energyMax); }
+    float thunk_gameUnitGetEnergyMax(void* p) { return p ? asGameUnit(p)->energyMax : 0.0f; }
+    int   thunk_gameUnitGetTeam(void* p)      { return p ? int(asGameUnit(p)->team) : 0; }
+    int   thunk_gameUnitIsCollapsed(void* p)  { return p && asGameUnit(p)->collapsed ? 1 : 0; }
+    void  thunk_gameUnitDamage(void* p, float v) { if (p) asGameUnit(p)->damage(v); }
+    void  thunk_gameUnitSetTarget(void* p, glm::vec3 v) { if (!p) return; asGameUnit(p)->targetPos = v; asGameUnit(p)->hasTarget = true; asGameUnit(p)->targetLocked = true; }
+    void  thunk_gameUnitClearTarget(void* p)  { if (!p) return; asGameUnit(p)->targetLocked = false; asGameUnit(p)->hasTarget = false; }
+    glm::vec3 thunk_gameUnitGetTarget(void* p) { return p ? asGameUnit(p)->targetPos : glm::vec3(0.0f); }
+    int   thunk_gameUnitHasTarget(void* p)    { return p && asGameUnit(p)->hasTarget ? 1 : 0; }
+    void  thunk_gameUnitSetMoveSpeed(void* p, float v) { if (p) asGameUnit(p)->moveSpeed = glm::max(v, 0.0f); }
+    float thunk_gameUnitGetMoveSpeed(void* p) { return p ? asGameUnit(p)->moveSpeed : 0.0f; }
+
+    void* thunk_entityGetGameStructureComponent(Entity* en) { return en ? getComponent<GameStructureComponent>(en) : nullptr; }
+    GameStructureComponent* asGameStructure(void* p) { return static_cast<GameStructureComponent*>(p); }
+    float thunk_gameStructureGetHealth(void* p)    { return p ? asGameStructure(p)->health : 0.0f; }
+    void  thunk_gameStructureSetHealth(void* p, float v) { if (p) asGameStructure(p)->health = glm::clamp(v, 0.0f, asGameStructure(p)->healthMax); }
+    float thunk_gameStructureGetHealthMax(void* p) { return p ? asGameStructure(p)->healthMax : 0.0f; }
+    int   thunk_gameStructureGetTeam(void* p)      { return p ? int(asGameStructure(p)->team) : 0; }
+    int   thunk_gameStructureIsBlueprint(void* p)  { return p && asGameStructure(p)->blueprint ? 1 : 0; }
+    void  thunk_gameStructureDamage(void* p, float v) { if (p) asGameStructure(p)->damage(v); }
+
+    void* thunk_entityGetGameProjectileComponent(Entity* en) { return en ? getComponent<GameProjectileComponent>(en) : nullptr; }
+    int   thunk_gameProjectileGetTeam(void* p) { return p ? int(static_cast<GameProjectileComponent*>(p)->team) : 0; }
+    float thunk_gameProjectileGetAge(void* p)  { return p ? static_cast<GameProjectileComponent*>(p)->age : 0.0f; }
 
     // ---- light component ----
     // Per-index access into the component's light list; find() bounds-checks, so a bad index reads type

@@ -56,6 +56,15 @@ void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform&
 
     if (!frozen)
     {
+        // Game-layer sim BEFORE the script, so DSL orders/reads see this frame's state. Authority
+        // gating and thread-safety live inside the components (see GameComponents.ixx).
+        if (GameUnitComponent* gameUnit = getComponent<GameUnitComponent>(this))
+            gameUnit->update(*this, deltaSeconds);
+        if (GameStructureComponent* gameStructure = getComponent<GameStructureComponent>(this))
+            gameStructure->update(*this, deltaSeconds);
+        if (GameProjectileComponent* gameProjectile = getComponent<GameProjectileComponent>(this))
+            gameProjectile->update(*this, deltaSeconds);
+
         if (ScriptComponent* script = getComponent<ScriptComponent>(this))
             script->update(*this, deltaSeconds);
 
@@ -293,6 +302,27 @@ void Entity::createComponent(EComponentID id, uint16 componentOffset, const void
         nc->spawn(*this, *static_cast<const NetworkComponent::SpawnInfo*>(info), base);
         break;
     }
+    case EComponentID_GameUnit:
+    {
+        GameUnitComponent* gu = reinterpret_cast<GameUnitComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
+        new (gu) GameUnitComponent();
+        gu->spawn(*this, *static_cast<const GameUnitComponent::SpawnInfo*>(info), base);
+        break;
+    }
+    case EComponentID_GameStructure:
+    {
+        GameStructureComponent* gs = reinterpret_cast<GameStructureComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
+        new (gs) GameStructureComponent();
+        gs->spawn(*this, *static_cast<const GameStructureComponent::SpawnInfo*>(info), base);
+        break;
+    }
+    case EComponentID_GameProjectile:
+    {
+        GameProjectileComponent* gp = reinterpret_cast<GameProjectileComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
+        new (gp) GameProjectileComponent();
+        gp->spawn(*this, *static_cast<const GameProjectileComponent::SpawnInfo*>(info), base);
+        break;
+    }
     case EComponentID_Script:
     {
         ScriptComponent* scr = reinterpret_cast<ScriptComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
@@ -370,6 +400,27 @@ void Entity::destroyComponent(EComponentID id, uint16 componentOffset, const voi
         NetworkComponent* nc = reinterpret_cast<NetworkComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
         nc->destroy(*this, *static_cast<const NetworkComponent::SpawnInfo*>(info));
         nc->~NetworkComponent();
+        break;
+    }
+    case EComponentID_GameUnit:
+    {
+        GameUnitComponent* gu = reinterpret_cast<GameUnitComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
+        gu->destroy(*this, *static_cast<const GameUnitComponent::SpawnInfo*>(info));
+        gu->~GameUnitComponent();
+        break;
+    }
+    case EComponentID_GameStructure:
+    {
+        GameStructureComponent* gs = reinterpret_cast<GameStructureComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
+        gs->destroy(*this, *static_cast<const GameStructureComponent::SpawnInfo*>(info));
+        gs->~GameStructureComponent();
+        break;
+    }
+    case EComponentID_GameProjectile:
+    {
+        GameProjectileComponent* gp = reinterpret_cast<GameProjectileComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
+        gp->destroy(*this, *static_cast<const GameProjectileComponent::SpawnInfo*>(info));
+        gp->~GameProjectileComponent();
         break;
     }
     case EComponentID_Script:

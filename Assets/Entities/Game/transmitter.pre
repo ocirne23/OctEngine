@@ -13,3 +13,5 @@ Prefab gameConnector
 		ContactEvents true
 		Shape Box
 		HalfExtents 1 3 1
+	Component GameStructure
+		MeleeRadius 1

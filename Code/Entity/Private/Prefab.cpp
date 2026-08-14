@@ -69,6 +69,21 @@ static void writeEntityBody(Entity* entity, AssetNode& node, const std::string& 
             if (const LightComponent::SpawnInfo* li = getLightSpawnInfo(entity))
                 writeLightSpawnInfo(*li, comp);
         }
+        else if (id == EComponentID_GameUnit)
+        {
+            if (const GameUnitComponent::SpawnInfo* gi = getGameUnitSpawnInfo(entity))
+                writeGameUnitSpawnInfo(*gi, comp);
+        }
+        else if (id == EComponentID_GameStructure)
+        {
+            if (const GameStructureComponent::SpawnInfo* gi = getGameStructureSpawnInfo(entity))
+                writeGameStructureSpawnInfo(*gi, comp);
+        }
+        else if (id == EComponentID_GameProjectile)
+        {
+            if (const GameProjectileComponent::SpawnInfo* gi = getGameProjectileSpawnInfo(entity))
+                writeGameProjectileSpawnInfo(*gi, comp);
+        }
         else if (id == EComponentID_Network)
         {
             if (const NetworkComponent::SpawnInfo* ni = getNetworkSpawnInfo(entity))

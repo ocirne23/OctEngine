@@ -357,7 +357,7 @@ void GameMatch::sendRoute(int index)
 {
     uint8 buffer[80];
     NetWriter writer(buffer);
-    const std::vector<glm::vec3>& route = m_structures.structureRoute(index);
+    const std::span<const glm::vec3> route = m_structures.structureRoute(index);
     writer.write<uint32>(m_structures.structureId(index));
     writer.write<uint8>((uint8)route.size());
     for (const glm::vec3& p : route)
@@ -408,7 +408,7 @@ void GameMatch::loadGame()
     // loaded state re-broadcasts below; unit entities resync through the normal despawn/spawn
     // replication (Component Network in their prefabs).
     m_structures.loadFrom(root);
-    m_npcs.loadUnits(root);
+    m_npcs.loadUnits(root, m_structures);
     m_selectedId = 0;
     m_cablePendingId = 0;
     if (m_isServer)
@@ -834,11 +834,18 @@ void GameMatch::update(float deltaSec)
                     tickPlayerMaterials(pc->body.getPosition(), requestTeam(id), m_clientMaterials[id]);
     }
 
-    // Barracks produce per-team ATTACK units that ride the shared unit sim and march on enemy
-    // structures/players; turrets pick off enemy-team units in range.
+    // The unit SIM runs inside the entity pass (GameUnitComponent); here we publish the player
+    // fallback targets, sweep the units once (spatial query — fire requests, collapse edges,
+    // player melee damage) and run production. tickUnits FIRST: barracks/turrets reuse its query.
+    {
+        std::vector<GamePlayerTarget> targets(players.size());
+        for (size_t p = 0; p < players.size(); ++p)
+            targets[p] = { players[p].pos, players[p].team };
+        GameUnitComponent::setPlayerTargets(targets);
+    }
+    m_npcs.tickUnits(players, playerDamage, m_structures, deltaSec);
     m_npcs.tickBarracks(m_structures, deltaSec);
     m_npcs.tickTurrets(m_structures, deltaSec);
-    m_npcs.tickAuthority(players, playerDamage, m_structures, deltaSec);
 
     // Route DIRECT unit melee damage to each player's owning instance: ours applies now, client
     // players' accumulates and flushes as GDm at the shield-mirror cadence.
@@ -1171,7 +1178,13 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
     refreshBuildHotbar();
 
     if (m_buildSelection < 0)
-        return; // nothing armed — browsing the category
+    {
+        // Nothing armed — browsing the category: clicks inspect and RMB smart-connects / sets
+        // barracks routes, exactly as Select mode.
+        updateRightClickActions(camera, cancelEdge);
+        updateSelectionClick(camera, confirmEdge, /*allowPick*/ true);
+        return;
+    }
     const BuildItem& item = buildCategoryItems(m_buildCategory)[m_buildSelection];
     if (item.tool != EBuildTool::Structure)
     {
@@ -1265,7 +1278,14 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
 
     const Aim aim = computeAim(camera, item.structure);
     if (!aim.valid)
+    {
+        // No ghost here (off-map, or an armed EXTRACTOR with no free node under the cursor — its
+        // aim is invalid over ordinary ground). Clicks still inspect and right-click still
+        // connects/routes: this path is the common one while wiring an extractor up.
+        updateRightClickActions(camera, cancelEdge);
+        updateSelectionClick(camera, confirmEdge, /*allowPick*/ true);
         return;
+    }
     const uint32 color = packColor(aim.affordable ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.3f, 0.2f));
     drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), 1.0f, color, 20);
     if (isEmitterType(aim.type)) // show the field footprint the powered variant would get
@@ -1287,6 +1307,12 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         else
             requestPlace(aim.type, aim.pos, aim.nodeIndex, glm::vec3(0.0f));
     }
+    // RMB with a selection links to the hovered building / sets a barracks route waypoint on
+    // ground (nothing is mid-placement here — the two-click flows above consume their own cancel).
+    updateRightClickActions(camera, cancelEdge);
+    // A click the placement REFUSES (occupied cells — i.e. on a building) inspects it instead of
+    // doing nothing; a click that can place always places.
+    updateSelectionClick(camera, confirmEdge, /*allowPick*/ !aim.affordable);
 }
 
 void GameMatch::updateDeleteMode(const Camera& camera, bool confirmEdge)
@@ -1303,48 +1329,75 @@ void GameMatch::updateDeleteMode(const Camera& camera, bool confirmEdge)
 
 void GameMatch::updateSelectMode(const Camera& camera, bool confirmEdge, bool smartLinkEdge)
 {
-    const int hover = hoveredStructure(camera);
+    updateRightClickActions(camera, smartLinkEdge);
+    updateSelectionClick(camera, confirmEdge, /*allowPick*/ true);
+}
 
-    // RIGHT-CLICK actions with a selection: on a structure = SMART CONNECT (link with the
-    // inferred medium — connector's carried medium > selected building's output > first shared;
-    // selection chains to the target). On GROUND with an own-team BARRACKS selected = set its
-    // unit ROUTE waypoint (SHIFT appends, plain click restarts the route).
-    if (smartLinkEdge && m_selectedId != 0)
-    {
-        const int sel = m_structures.structureIndexById(m_selectedId);
-        if (hover >= 0)
-        {
-            const uint32 hoverId = m_structures.structureId(hover);
-            if (sel >= 0 && sel != hover && hoverId != m_selectedId
-                && m_structures.structureTeam(sel) == (uint8)m_team
-                && m_structures.structureTeam(hover) == (uint8)m_team
-                && !m_structures.cableExists(m_selectedId, hoverId))
-            {
-                const ECableType type = m_structures.smartLinkTypeFor(sel, hover);
-                if (type != ECableType::Count)
-                {
-                    requestCable(m_selectedId, hoverId, type);
-                    m_selectedId = hoverId; // chain: the next right-click continues from here
-                }
-            }
-        }
-        else if (glm::vec3 ground; sel >= 0 && isBarracksType(m_structures.structureType(sel))
-            && m_structures.structureTeam(sel) == (uint8)m_team && aimGroundPoint(camera, ground))
-        {
-            ground.y = 0.0f;
-            std::vector<glm::vec3> route;
-            if (Globals::input.isKeyDown(SDL_Scancode::SDL_SCANCODE_LSHIFT))
-                route = m_structures.structureRoute(sel); // hold shift: extend the route
-            if ((int)route.size() < StructureSystem::MaxRouteWaypoints)
-                route.push_back(ground);
-            requestSetRoute(m_selectedId, route);
-        }
-    }
+// RIGHT-CLICK actions with a selection, shared by Select AND Build mode: on a structure = SMART
+// CONNECT (below); on GROUND with an own-team BARRACKS selected = set its unit ROUTE waypoint
+// (SHIFT appends, a plain click restarts the route).
+void GameMatch::updateRightClickActions(const Camera& camera, bool rmbEdge)
+{
+    if (!rmbEdge || m_selectedId == 0)
+        return;
+    const int hover = hoveredStructure(camera);
     if (hover >= 0)
+    {
+        trySmartConnect(hover);
+        return;
+    }
+    const int sel = m_structures.structureIndexById(m_selectedId);
+    glm::vec3 ground;
+    if (sel < 0 || !isBarracksType(m_structures.structureType(sel))
+        || m_structures.structureTeam(sel) != (uint8)m_team || !aimGroundPoint(camera, ground))
+        return;
+    ground.y = 0.0f;
+    std::vector<glm::vec3> route;
+    if (Globals::input.isKeyDown(SDL_Scancode::SDL_SCANCODE_LSHIFT))
+    {
+        const std::span<const glm::vec3> current = m_structures.structureRoute(sel);
+        route.assign(current.begin(), current.end()); // hold shift: extend the route
+    }
+    if ((int)route.size() < StructureSystem::MaxRouteWaypoints)
+        route.push_back(ground);
+    requestSetRoute(m_selectedId, route);
+}
+
+// RIGHT-click SMART CONNECT, shared by Select AND Build mode: links the selection to the hovered
+// structure with the inferred medium (connector's carried medium > the selection's output > the
+// first medium both hold), then CHAINS the selection to the target so runs are one click each.
+// No cableExists gate: a pair holds one link PER MEDIUM, and smartLinkTypeFor skips media the
+// pair already has — a second right-click adds the NEXT medium (pipe from the extractor first,
+// then the power cable from the generator side).
+void GameMatch::trySmartConnect(int hoverIndex)
+{
+    const int sel = m_structures.structureIndexById(m_selectedId);
+    if (sel < 0 || hoverIndex < 0 || sel == hoverIndex)
+        return;
+    const uint32 hoverId = m_structures.structureId(hoverIndex);
+    if (hoverId == m_selectedId
+        || m_structures.structureTeam(sel) != (uint8)m_team
+        || m_structures.structureTeam(hoverIndex) != (uint8)m_team)
+        return;
+    const ECableType type = m_structures.smartLinkTypeFor(sel, hoverIndex);
+    if (type == ECableType::Count)
+        return;
+    requestCable(m_selectedId, hoverId, type);
+    m_selectedId = hoverId; // chain: the next right-click continues from here
+}
+
+// Click-to-select, shared by Select AND Build mode so inspecting a building never needs a mode
+// switch: hover ring, LMB picks (empty ground deselects), and the selection keeps its highlight.
+// allowPick false = this frame's click belongs to something else (a valid placement), so only the
+// rings draw — the selection still shows while building.
+void GameMatch::updateSelectionClick(const Camera& camera, bool confirmEdge, bool allowPick)
+{
+    const int hover = hoveredStructure(camera);
+    if (hover >= 0 && allowPick)
         drawCircle(m_structures.structurePos(hover) * glm::vec3(1, 0, 1) + glm::vec3(0.0f, 0.3f, 0.0f), 1.6f,
             packColor(glm::vec3(0.9f, 0.9f, 0.9f)), 20);
-    if (confirmEdge)
-        m_selectedId = hover >= 0 ? m_structures.structureId(hover) : 0; // empty ground deselects
+    if (confirmEdge && allowPick)
+        m_selectedId = hover >= 0 ? m_structures.structureId(hover) : 0;
 
     int selected = -1;
     if (m_selectedId != 0)
@@ -1364,8 +1417,6 @@ static constexpr const char* c_structureShortNames[] = { "EMIT", "GEN", "CON", "
     "FUEL", "SOL", "FAB", "BSTN", "LNC", "BRK", "BRK-B", "BRK-R", "BRK-S", "WALL", "TRT", "SILO",
     "CNST", "BASE" };
 static_assert(std::size(c_structureShortNames) == (size_t)EStructureType::Count);
-static constexpr const char* c_unitShortNames[] = { "GRNT", "BRUT", "RUN", "SPIT" };
-static_assert(std::size(c_unitShortNames) == (size_t)ENpcType::Count);
 
 // Remote actors (client side) carry no type on the wire — derive the tag from the replicated
 // entity's prefab-derived name ("gameEnemyBrute", ...).
@@ -1487,19 +1538,23 @@ void GameMatch::buildWorldLabels(const Camera& camera)
         }
         labels.push_back(std::move(label));
     }
-    // Units: own team green, enemy teams red.
-    for (int i = 0; i < m_npcs.unitCount(); ++i)
+    // Units: own team green, enemy teams red (this frame's spatial query — authority side only;
+    // clients label remote units through the shield mirror below).
+    for (Entity* unitEntity : m_npcs.unitsThisFrame())
     {
-        HudWorldLabel label;
-        if (!camera.worldToScreen(viewport, m_npcs.unitPos(i) + glm::vec3(0.0f, 1.6f, 0.0f), label.screenPos))
+        const GameUnitComponent* u = getComponent<GameUnitComponent>(unitEntity);
+        if (!u)
             continue;
-        label.title = c_unitShortNames[(int)m_npcs.unitType(i)];
-        label.barValue = m_npcs.unitHealth(i);
-        label.barMax = m_npcs.unitHealthMax(i); // per-type: Brutes have triple bars, Runners half
-        label.barColor = m_npcs.unitTeam(i) == (uint8)m_team
+        HudWorldLabel label;
+        if (!camera.worldToScreen(viewport, unitEntity->pos + glm::vec3(0.0f, 1.6f, 0.0f), label.screenPos))
+            continue;
+        label.title = remoteShortName(unitEntity->getName(), 0);
+        label.barValue = u->health;
+        label.barMax = u->healthMax; // per-type: Brutes have triple bars, Runners half
+        label.barColor = u->team == (uint32)m_team
             ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.25f, 0.2f);
-        label.bar2Value = m_npcs.unitEnergy(i); // shield battery (no regen) under the health bar
-        label.bar2Max = m_npcs.unitEnergyMax(i);
+        label.bar2Value = u->energy; // shield battery (no regen) under the health bar
+        label.bar2Max = u->energyMax;
         label.bar2Color = glm::vec3(1.0f, 0.9f, 0.3f);
         labels.push_back(std::move(label));
     }
@@ -1613,7 +1668,7 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     // with its destination circle — bright for the selected barracks, dim otherwise.
     for (int i = 0; i < m_structures.structureCount(); ++i)
     {
-        const std::vector<glm::vec3>& route = m_structures.structureRoute(i);
+        const std::span<const glm::vec3> route = m_structures.structureRoute(i);
         if (route.empty() || m_structures.structureTeam(i) != (uint8)m_team)
             continue;
         const bool bright = m_structures.structureId(i) == m_selectedId;

@@ -19,3 +19,5 @@ Prefab gameEmitter
 		Reach 12
 		Centered true
 		Direction 0 1 0
+	Component GameStructure
+		MeleeRadius 1

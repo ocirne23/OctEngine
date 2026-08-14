@@ -114,7 +114,6 @@ private:
     uint32 m_team = 0;
     float m_health = 100.0f;
     float m_energy = 100.0f;
-    float m_materials = 0.0f; // carried construction stock (see materials())
     float m_lastPressure = 0.0f;
     float m_lastDensity = 0.0f;
     float m_outputHistory[3] = { 1.5f, 1.5f, 1.5f }; // outputs of recent ticks — the applied-force
@@ -142,6 +141,7 @@ private:
     float m_coverDrainReduction = 0.75f; // drain reduction per unit of FRIENDLY field surplus over
                                          // the own output (standing inside a team emitter's bubble)
     float m_materialsMax = 50.0f;        // inventory size ("Game/Player/Materials max")
+    float m_materials = m_materialsMax; // carried construction stock (see materials())
     float m_spawnGraceSec = 1.0f;        // no energy/health drain this long after (re)spawn — the
                                          // GPU readbacks still carry the death position for ~2 frames
     // Tweaks ("Game/Combat")

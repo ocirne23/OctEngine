@@ -23,3 +23,11 @@ Prefab gameEnemyBrute
 		Reach 4
 		Centered true
 	Component Network
+	Component GameUnit
+		HealthMax 180
+		EnergyMax 80
+		ShieldOutput 1.04
+		MoveSpeed 2.4
+		AttackDps 12
+		PlayerDps 20
+		EmitterDrain 7.5

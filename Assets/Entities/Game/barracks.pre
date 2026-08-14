@@ -13,3 +13,5 @@ Prefab gameBarracks
 		ContactEvents true
 		Shape Box
 		HalfExtents 3 3 3
+	Component GameStructure
+		MeleeRadius 3

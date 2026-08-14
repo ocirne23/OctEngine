@@ -83,6 +83,11 @@ private:
     void updateLinkTool(const Camera& camera, bool confirmEdge, bool cancelEdge, EBuildTool tool);
     void updateDeleteMode(const Camera& camera, bool confirmEdge);
     void updateSelectMode(const Camera& camera, bool confirmEdge, bool smartLinkEdge);
+    // Shared click-to-select (Select mode, and Build mode wherever the click can't place).
+    void updateSelectionClick(const Camera& camera, bool confirmEdge, bool allowPick);
+    // Shared RMB handling (both modes): smart connect on a structure, barracks route on ground.
+    void updateRightClickActions(const Camera& camera, bool rmbEdge);
+    void trySmartConnect(int hoverIndex); // RMB link from the selection
     int hoveredStructure(const Camera& camera) const; // structure index under the cursor, or -1
     void setMode(EPlayerMode mode);
     void buildWorldLabels(const Camera& camera); // health bars + selected info over structures

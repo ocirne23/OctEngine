@@ -21,3 +21,9 @@ Prefab gameEnemyShot
 		Reach 1.5
 		Centered true
 	Component Network
+	Component GameProjectile
+		UnitDamage 0
+		StructureDamage 10
+		Lifetime 6
+		EmitterDrain 15
+		EmitterDrainRadius 5

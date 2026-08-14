@@ -13,3 +13,5 @@ Prefab gameBattery
 		ContactEvents true
 		Shape Box
 		HalfExtents 1 0.5 1
+	Component GameStructure
+		MeleeRadius 1

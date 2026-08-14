@@ -14,3 +14,5 @@ Prefab gameMineralStorage
 		ContactEvents true
 		Shape Box
 		HalfExtents 2 4 2
+	Component GameStructure
+		MeleeRadius 2

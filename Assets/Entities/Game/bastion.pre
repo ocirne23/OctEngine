@@ -18,3 +18,5 @@ Prefab gameBastion
 		Output 2.0
 		Reach 18
 		Centered true
+	Component GameStructure
+		MeleeRadius 2

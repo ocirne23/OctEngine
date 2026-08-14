@@ -23,3 +23,11 @@ Prefab gameEnemyRunner
 		Reach 2
 		Centered true
 	Component Network
+	Component GameUnit
+		HealthMax 30
+		EnergyMax 16
+		ShieldOutput 0.56
+		MoveSpeed 7.6
+		AttackDps 4.2
+		PlayerDps 7
+		EmitterDrain 2.5
