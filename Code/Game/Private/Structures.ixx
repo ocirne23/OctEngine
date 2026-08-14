@@ -260,11 +260,11 @@ public:
         case EStructureType::Extractor:
         case EStructureType::Fabricator:
         case EStructureType::Connector:
+        case EStructureType::Constructor:  return m_internalBuffer;
         case EStructureType::Barracks:     // conveyor-fed: units are SPAWNED from materials
         case EStructureType::BarracksBrute:
         case EStructureType::BarracksRunner:
-        case EStructureType::BarracksSpitter:
-        case EStructureType::Constructor:  return m_internalBuffer;
+        case EStructureType::BarracksSpitter: return m_barracksMineralCapacity;
         case EStructureType::MineralSilo:  return m_mineralSiloCapacity;
         case EStructureType::Base:         return m_mineralBaseCapacity;
         default:                           return 0.0f;
@@ -443,6 +443,7 @@ private:
     float m_fuelTankCapacity = 100.0f;
     float m_mineralSiloCapacity = 100.0f;
     float m_mineralBaseCapacity = 100.0f;
+    float m_barracksMineralCapacity = 20.0f; // conveyor-fed spawn stock (own buffer, not the shared one)
     float m_genEnergyPerSec = 7.5f;
     float m_solarEnergyPerSec = 1.0f;
     float m_fuelBurnRate = 1.0f;

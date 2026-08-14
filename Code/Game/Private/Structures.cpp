@@ -111,6 +111,7 @@ void StructureSystem::registerTweaks()
     Tweak::floatVar("Game/Structures", "Waypoint radius", &m_waypointRadius, 0.5f, 15.0f, 0.25f);
     Tweak::floatVar("Game/Economy", "Mineral base capacity", &m_mineralBaseCapacity, 10.0f, 5000.0f, 5.0f);
     Tweak::floatVar("Game/Economy", "Mineral silo capacity", &m_mineralSiloCapacity, 10.0f, 5000.0f, 5.0f);
+    Tweak::floatVar("Game/Economy", "Barracks mineral capacity", &m_barracksMineralCapacity, 1.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Wall cost (per segment)", &m_costs[14], 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Economy", "Turret cost", &m_costs[15], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Bastion energy/s", &m_bastionEnergyPerSec, 0.1f, 30.0f, 0.1f);
