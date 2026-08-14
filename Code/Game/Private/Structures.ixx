@@ -236,9 +236,8 @@ public:
     float connectorUtilization(int index) const { return m_frame[index].state->flowUtil; }
     int connectorMedium(int index) const // the ONE medium this connector carries (-1 = no links)
     {
-        for (const GameStructureLink& l : m_frame[index].state->links)
-            return (int)l.medium;
-        return -1;
+        const std::vector<GameStructureLink>& links = m_frame[index].state->links;
+        return links.empty() ? -1 : (int)links.front().medium;
     }
     float structureMinerals(int index) const { return m_frame[index].state->store[2]; }
     float structureMineralCapacity(int index) const { return mineralCapacityOf(m_frame[index].type); }
@@ -479,4 +478,7 @@ private:
     float m_waypointRadius = 3.0f;
     float m_projectileStructDamage = 20.0f;
     bool m_cheatInstantBuild = false;
+    // MATERIALS a barracks pays per spawned unit, per unit type (Grunt/Brute/Runner/Spitter) —
+    // stamped onto each barracks' component as its spawnCost.
+    float m_spawnMaterials[4] = { 5.0f, 12.0f, 6.0f, 9.0f };
 };

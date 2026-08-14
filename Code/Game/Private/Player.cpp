@@ -274,10 +274,7 @@ void GamePlayer::applyDamage(float amount)
         m_energy = glm::max(m_energy - absorbedHp * m_damageAbsorb, 0.0f);
         amount -= absorbedHp;
         if (m_energy <= 0.0f)
-        {
             m_shieldCollapsed = true;
-            m_shieldEdge = true;
-        }
     }
     if (amount > 0.0f)
         m_health = glm::max(m_health - amount, 0.0f);
@@ -289,7 +286,6 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
     ForceComponent* fc = m_entity ? getComponent<ForceComponent>(m_entity.get()) : nullptr;
     if (!pc || !pc->body.isValid() || !fc)
         return;
-    const bool wasCollapsed = m_shieldCollapsed;
 
     const float pressure = fc->emitter.getPressure();
     m_lastPressure = pressure;
@@ -358,8 +354,27 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
         m_shieldCollapsed = false;
         m_graceTimer = m_spawnGraceSec;
     }
-    if (m_shieldCollapsed != wasCollapsed)
-        m_shieldEdge = true; // co-op: flush the shield mirror this tick, not at the next send
+    // Publish into the capsule's PUPPET GameUnitComponent — the state's network surface. The
+    // entity snapshot/claim game blob packs from and applies to it (change-detected server-side,
+    // so a collapse edge flushes on the very next snapshot tick). Materials flow the OTHER way on
+    // a client: server-authoritative, snapshot-applied to the component, read back here.
+    if (GameUnitComponent* unit = getComponent<GameUnitComponent>(m_entity.get()))
+    {
+        // Damage other actors banked on our puppet inbox (unit melee, enemy projectiles — the
+        // same damage() call every victim gets) applies through the shield-absorb rules.
+        applyDamage(unit->takePendingDamage());
+        unit->healthMax = m_healthMax;
+        unit->health = m_health;
+        unit->energyMax = m_energyMax;
+        unit->energy = m_energy;
+        unit->collapsed = m_shieldCollapsed;
+        unit->team = uint8(m_team);
+        const NetworkComponent* net = getComponent<NetworkComponent>(m_entity.get());
+        if (net && net->authority() == ENetAuthority::LocalOwner)
+            m_materials = glm::clamp(unit->materialsFrac, 0.0f, 1.0f) * m_materialsMax;
+        else
+            unit->materialsFrac = m_materialsMax > 0.0f ? m_materials / m_materialsMax : 0.0f;
+    }
 }
 
 float GamePlayer::shieldRadius() const

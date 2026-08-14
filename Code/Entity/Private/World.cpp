@@ -702,6 +702,7 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
     {
         auto info = std::make_shared<GameUnitComponent::SpawnInfo>();
         if (const AssetNode* n = unitNode->find("Team"))          info->team = uint32(glm::max(n->asInt(), 0));
+        if (const AssetNode* n = unitNode->find("Puppet"))        info->puppet = n->asBool();
         if (const AssetNode* n = unitNode->find("HealthMax"))     info->healthMax = n->asFloat(0, info->healthMax);
         if (const AssetNode* n = unitNode->find("EnergyMax"))     info->energyMax = n->asFloat(0, info->energyMax);
         if (const AssetNode* n = unitNode->find("ShieldOutput"))  info->shieldOutput = n->asFloat(0, info->shieldOutput);

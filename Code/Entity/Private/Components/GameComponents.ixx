@@ -29,38 +29,51 @@ export struct GameUnitParams
     float damageRadius = 0.6f;     // equilibrium radius below this + pressure = exposure damage
     float pushGain = 20000.0f;     // enemy fields shoving the body (force-ball scale)
     float retargetInterval = 8.0f; // auto-target re-roll cadence (jittered per unit)
-    float targetSearchRadius = 200.0f; // spatial radius of the auto-target structure search
+    float targetSearchRadius = 50.0f; // spatial radius of the auto-target search (structures +
+                                      // player fallback) — LOCAL harassment: the barracks route
+                                      // does the long-distance delivery, this only picks fights
+                                      // around wherever the unit ends up
     float maxSpeedMult = 3.0f;     // field shoves never launch: speed clamp = moveSpeed * this
     float waypointRadius = 3.0f;   // a route waypoint counts as reached inside this
     float voidY = -20.0f;          // fell out of the world -> despawn
 };
 
-// A player body + team an enemy unit may fall back to when no structure tempts it. Published by
-// the game each frame BEFORE the entity pass (main thread); workers only read.
-export struct GamePlayerTarget
-{
-    glm::vec3 pos{ 0.0f };
-    uint32 team = 0;
-};
-
 // A combat unit: team bubble on player-shield rules minus regen (pressure drains the battery,
 // empty = permanent collapse, exposure bleeds health), enemy-field push-back, C++ steering toward
 // a target with stuck-sidestep (no pathfinding), melee gnaw on any enemy structure in reach, and
-// an optional RANGED stance (stand off and raise wantsFire — the game spawns the shot main-thread).
+// an optional RANGED stance (stand off and ask for a shot — spawning is main-thread only).
 // TARGETING: automatic (random pick among the 4 nearest enemy structures via spatial query,
-// nearest enemy player fallback) unless the DSL LOCKS an explicit target (setTarget) — orders come
-// from scripts, the walking/fighting is here.
+// nearest enemy player fallback — puppets found in the SAME query, nothing publishes a player
+// list) unless the DSL LOCKS an explicit target (setTarget) — orders come from scripts, the
+// walking/fighting is here.
 export struct GameUnitComponent
 {
     static constexpr EComponentID getId() { return EComponentID_GameUnit; }
     ~GameUnitComponent() {}
 
     static GameUnitParams params;
-    static void setPlayerTargets(std::span<const GamePlayerTarget> players); // main thread, pre-pass
+
+    // ---- worker-side EVENTS, drained by the game on the main thread ----------------------------
+    // Everything the game used to learn by walking a roster of units, a unit now REPORTS while it
+    // updates. Nothing outside holds unit handles: the game drains these queues, and anything that
+    // genuinely needs every unit at once (the shield mirror, overhead labels) runs its own spatial
+    // query at the point of need.
+    struct FireRequest // RANGED units ask for a shot; spawning is main-thread only
+    {
+        glm::vec3 from{ 0.0f };
+        glm::vec3 target{ 0.0f };
+        uint8 team = 1;
+    };
+    static void takeFireRequests(std::vector<FireRequest>& out);
+    static void takeDeaths(std::vector<uint32>& outSourceIds); // spawner ids of units that died
+    // (There is NO separate shield mirror: this component's state RIDES THE ENTITY SYNC — the
+    // engine's snapshot/claim records carry a quantized game blob whenever the entity has a
+    // GameUnitComponent. See NetworkManager's packGameStateBlob/applyGameStateBlob.)
 
     struct SpawnInfo
     {
         uint32 team = 1;
+        bool puppet = false; // see the `puppet` field
         float healthMax = 60.0f;
         float energyMax = 40.0f;      // shield battery (no regen)
         float shieldOutput = 0.8f;    // bubble output while the battery lives (collapse -> sentinel)
@@ -70,7 +83,7 @@ export struct GameUnitComponent
         float attackDps = 6.0f;       // structure health/s while in reach
         float playerDps = 10.0f;      // player health/s while in reach (game routes it to the owner)
         float emitterDrain = 5.0f;    // energy/s this unit costs the nearest active enemy emitter
-        bool ranged = false;          // spitter stance: hold at standoffRange and raise wantsFire
+        bool ranged = false;          // spitter stance: hold at standoffRange and queue FireRequests
         float standoffRange = 16.0f;
         float fireInterval = 3.0f;
     };
@@ -86,11 +99,21 @@ export struct GameUnitComponent
     bool ranged = false;
     float standoffRange = 16.0f, fireInterval = 3.0f;
 
+    // PUPPET (player capsules author `Puppet true`): the component is a pure state CARRIER —
+    // update() runs no sim at all. The owning GamePlayer writes health/energy/collapsed/materials
+    // into it, and the entity sync's game blob moves it owner -> server -> other clients. Gives
+    // players the same overhead bars/labels path as units without the unit AI ever touching them.
+    bool puppet = false;
+    float pendingDamage = 0.0f; // puppets: damage() lands HERE instead of on health (health is
+                                // owner-computed) — the game drains it to the owning instance,
+                                // whose GamePlayer::applyDamage runs the shield-absorb rules
+    float materialsFrac = 0.0f; // players: carried construction stock (server-authoritative — the
+                                // server writes it, the snapshot blob delivers it to the owner)
     bool collapsed = false;     // latched at empty battery (permanent — no regen)
-    bool collapseEdge = false;  // set the tick the battery empties; the game's mirror flush polls it
-    bool wantsFire = false;     // RANGED: raise + firePos; the game spawns the shot and clears it
-    glm::vec3 firePos{ 0.0f };
-    uint32 sourceId = 0;        // the spawner's stable id (barracks alive-limit counting)
+    bool deathReported = false; // the death event is emitted once, even if a tick runs before the
+                                // queued destroy is drained
+    uint32 sourceId = 0;        // the spawner's stable id — rides the death event so the barracks
+                                // can decrement its alive count without anyone tracking units
 
     // Orders: an explicit DSL/game target overrides auto-targeting until cleared or reached+dry.
     bool targetLocked = false;
@@ -104,7 +127,10 @@ export struct GameUnitComponent
     void spawn(Entity& entity, const SpawnInfo& info, const Transform& base);
     void destroy(Entity& entity, const SpawnInfo& info) {}
     void update(Entity& entity, float deltaSec); // authority only — see the contract above
-    void damage(float amount); // atomic (projectile contacts are main-thread, melee is workers)
+    // Atomic (projectile contacts are main-thread, melee is workers). Units: CAS on health.
+    // Puppets: accumulates into pendingDamage — ONE damage entry point for every victim kind.
+    void damage(float amount);
+    float takePendingDamage(); // main thread: drain the puppet inbox (atomic exchange)
     bool alive() const { return health > 0.0f; }
 
 private:
@@ -120,6 +146,13 @@ private:
 export struct GameStructureParams
 {
     float fieldDamageRate = 6.0f; // health/s while an enemy team's bubble owns the query point
+    // Shared production tuning (the game's tweaks point here; per-TYPE values are stamped
+    // per-instance instead — e.g. BarracksData::spawnCost):
+    float barracksSpawnInterval = 8.0f;
+    int barracksUnitLimit = 5;    // alive units per barracks
+    float turretRange = 18.0f;
+    float turretFireInterval = 1.2f;
+    float turretShotEnergy = 1.5f; // spent from the turret's own energy store per shot
 };
 
 // One end of a resource link (cable/pipe/conveyor). The SAME link exists mirrored on BOTH
@@ -205,12 +238,29 @@ export struct GameStructureComponent
     {
         float spawnTimer;   // counts down; Constructor boost accelerates it
         float boost;        // extra spawn speed from idle Constructors (rebuilt every tick)
-        int aliveUnits;     // spawned-unit tally against the barracks limit (rebuilt every tick)
+        int aliveUnits;     // ++ here at each spawn decision, -- by the game per death event
+        float spawnCost;    // minerals per unit, stamped per BARRACKS TYPE by the game each tick
     };
     struct TurretData
     {
         float fireTimer;
     };
+    // The union's ACTIVE variant, stamped by the game from the structure's type (None for plain
+    // buildings). update() runs the matching machine logic: a BARRACKS counts its spawn clock
+    // down, pays minerals from its own store and QUEUES a spawn request; a TURRET picks the
+    // nearest enemy unit via its own spatial query, pays energy and QUEUES a shot — spawning is
+    // main-thread only, so the game drains both queues.
+    enum class EMachineKind : uint8 { None, Barracks, Turret };
+    EMachineKind machineKind = EMachineKind::None;
+
+    struct TurretFireRequest
+    {
+        glm::vec3 from{ 0.0f };
+        glm::vec3 target{ 0.0f };
+        uint8 team = 0;
+    };
+    static void takeSpawnRequests(std::vector<uint32>& outStructureIds); // barracks wanting a unit
+    static void takeTurretFireRequests(std::vector<TurretFireRequest>& out);
     struct EmitterData
     {
         float outputFrac;       // smoothed output fraction (shrink/grow ramps)

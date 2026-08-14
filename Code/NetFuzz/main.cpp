@@ -386,7 +386,7 @@ static int fuzzGame(const NetAddress& target, uint32 iterations, uint64 seed)
     }
     // must match GameProtocolId in NetworkManager.cpp — bumped on every wire change, which is the
     // signal to re-run this mode
-    constexpr uint32 GameProtocolId = 0x4F435345; // "OCSE"
+    constexpr uint32 GameProtocolId = 0x4F435346;
     if (!handshake(socket, target, GameProtocolId, rng.next()))
     {
         printf("[game] FAIL: no handshake — is the server running, and is GameProtocolId current?\n");
@@ -405,7 +405,7 @@ static int fuzzGame(const NetAddress& target, uint32 iterations, uint64 seed)
         writer.write<uint16>(0);                  // message seq
         writer.writeVarUInt(3);
         writer.write<uint8>(1);      // ENetMsg::Hello
-        writer.write<uint16>(11);    // GameNetVersion
+        writer.write<uint16>(14);    // GameNetVersion
         sendPayload(socket, target, seq++, writer.data());
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }

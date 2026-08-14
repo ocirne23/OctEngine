@@ -102,8 +102,6 @@ private:
     void sendStructurePlaced(int index);
     void sendCableChanged(uint32 idA, uint32 idB, ECableType type, bool removed);
     void sendStats();
-    void sendShieldStates(); // server: netId-keyed shield mirror ("GSh", ~10 Hz + collapse edges)
-    void sendShieldReport(); // client: own locally computed shield -> server ("GqE")
     void spawnCorridorWalls(); // arena border (deterministic local spawn on every instance)
     // SAVE/LOAD (F9/F10, server/single player only — clients refuse): structures/cables/units for
     // all teams to Assets/Local/gamesave.txt (players are NOT saved). Loading clears the current
@@ -152,26 +150,12 @@ private:
     float m_statTimer = 0.0f; // server: GSt cadence
     std::unordered_map<uint32, EntityPtr> m_clientPlayers;    // server: clientId -> their capsule
     std::unordered_map<uint32, float> m_clientMaterials;      // server: per-client carried materials
-                                                              // (authoritative; mirrored via GSh)
+                                                              // (authoritative; the twin's puppet
+                                                              // GameUnitComponent mirrors it back
+                                                              // through the snapshot game blob)
     std::unordered_map<uint32, float> m_clientPendingDamage;  // server: unit melee damage owed to
-                                                              // each client's player (flushed as GDm
-                                                              // at the shield-mirror cadence)
-    // Shield mirror ("GSh"): netId-keyed health/battery/output for actors this instance does NOT
-    // simulate. A client holds every unit + other player (bubble output applied + overhead bars);
-    // the server holds the client players, as last self-reported through "GqE" (each owner
-    // computes its shield locally — its readbacks run there).
-    struct RemoteShield
-    {
-        float healthFrac = 1.0f;
-        float energyFrac = 1.0f;
-        float output = 0.0f;
-        bool collapsed = false;
-        uint8 kind = 0; // ShieldNetState kinds: 0 unit, 2 player
-        uint8 team = 0; // bars color own-team green / everything else red
-    };
-    std::unordered_map<uint32, RemoteShield> m_remoteShields;
-    float m_shieldTimer = 0.0f; // server: GSh cadence (collapse edges flush immediately)
-    float m_reportTimer = 0.0f; // client: GqE cadence (collapse edges flush immediately)
+                                                              // each client's player (flushed as GDm)
+    float m_damageTimer = 0.0f; // server: GDm flush cadence
 
     // Corridor anchors (see the constructor): one Base at each end, clients spawn beside theirs.
     glm::vec3 m_basePos{ -55.0f, 0.0f, 0.0f };        // team 0's Base

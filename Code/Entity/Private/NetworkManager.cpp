@@ -10,8 +10,8 @@ import Physics;
 // Bump on ANY wire format change: the transport handshake denies mismatched protocol ids, so old
 // builds fail to connect instead of misparsing. GameNetVersion rides in Hello/Welcome purely so the
 // mismatch produces a readable log line when the protocolId was forgotten.
-constexpr uint32 GameProtocolId = 0x4F435345; // "OCSE": snapshot records carry NetRecFlag_ServerPlayer
-constexpr uint16 GameNetVersion = 13;
+constexpr uint32 GameProtocolId = 0x4F435346; // snapshot/claim records may carry the GAME blob (NetRecFlag_Game)
+constexpr uint16 GameNetVersion = 14;
 
 // Engine-reserved event: Synced-flagged tweak values, server -> clients (full set at join +
 // re-broadcast on change). Intercepted in fireEventAttributed — never reaches scripts or the
@@ -736,6 +736,60 @@ void NetworkManager::setOwner(Entity& root, uint32 clientId)
             + "' after its spawn was announced - clients will not learn the ownership");
 }
 
+// ---- GAME BLOB: GameUnitComponent state riding the entity sync. Snapshot records (server ->
+// clients) and claim packets (owner -> server) append these 5 bytes whenever the entity carries
+// the component, so units AND player capsules (puppets) sync shields/teams/materials through the
+// ONE per-entity stream — no separate game event. Layout: healthFrac u8, energyFrac u8, emitter
+// output u8 (over 0..8), materialsFrac u8, flags u8 (bit0 collapsed, bits 4-6 team).
+constexpr float GameBlobOutputRange = 8.0f;
+constexpr size_t GameBlobBytes = 5;
+
+static bool packGameStateBlob(Entity* entity, uint8 out[GameBlobBytes])
+{
+    const GameUnitComponent* unit = getComponent<GameUnitComponent>(entity);
+    if (!unit)
+        return false;
+    const auto frac8 = [](float v) { return (uint8)glm::clamp(v * 255.0f, 0.0f, 255.0f); };
+    float output = 0.0f;
+    if (const ForceComponent* fc = getComponent<ForceComponent>(entity); fc && fc->emitter.isValid())
+        output = fc->emitter.getOutput();
+    out[0] = frac8(unit->health / glm::max(unit->healthMax, 1e-3f));
+    out[1] = frac8(unit->energy / glm::max(unit->energyMax, 1e-3f));
+    out[2] = frac8(output / GameBlobOutputRange);
+    out[3] = frac8(unit->materialsFrac);
+    out[4] = uint8((unit->collapsed ? 1u : 0u) | (uint32(glm::min((int)unit->team, 7)) << 4u));
+    return true;
+}
+
+// applyShield: everything but materials/team (skipped on the RECEIVING owner — it computes its
+// own). applyMaterials: server-authoritative, so a claim (owner -> server) never applies it while
+// a snapshot (server -> anyone, the owner included) always does. applyTeam is snapshot-only for
+// the same reason inverted: a client re-teaming its twin's FIELD server-side would merge its
+// bubble into enemy fields.
+static void applyGameStateBlob(Entity* entity, const uint8 blob[GameBlobBytes],
+    bool applyShield, bool applyMaterials, bool applyTeam)
+{
+    GameUnitComponent* unit = getComponent<GameUnitComponent>(entity);
+    if (!unit)
+        return;
+    if (applyMaterials)
+        unit->materialsFrac = blob[3] / 255.0f;
+    if (!applyShield)
+        return;
+    unit->health = blob[0] / 255.0f * unit->healthMax;
+    unit->energy = blob[1] / 255.0f * unit->energyMax;
+    unit->collapsed = (blob[4] & 1u) != 0;
+    if (applyTeam)
+        unit->team = (blob[4] >> 4u) & 7u;
+    if (ForceComponent* fc = getComponent<ForceComponent>(entity); fc && fc->emitter.isValid())
+    {
+        // The remote bubble renders the true drain/collapse state, on the true team.
+        fc->emitter.setOutput(glm::max(blob[2] / 255.0f * GameBlobOutputRange, 0.01f));
+        if (applyTeam)
+            fc->emitter.setTeam(unit->team);
+    }
+}
+
 void NetworkManager::sendClaims()
 {
     // every packet carries the ring's full recent history: a claim only vanishes if ClaimRedundancy
@@ -793,13 +847,16 @@ void NetworkManager::sendClaims()
         const uint32 count = glm::min(ring.validCount, uint32(glm::clamp(s_claimRedundancy, 1, int(ClaimRedundancy))));
         const float maxVel = glm::max(1.0f, s_maxVel);
         const float maxAngVel = glm::max(1.0f, s_maxAngVel);
+        // owner-computed game state (the player capsule's shield) rides once per packet, like look
+        uint8 gameBlob[GameBlobBytes];
+        const bool hasGame = packGameStateBlob(entity, gameBlob);
         uint8 buffer[1024];
         NetWriter writer(buffer);
         writer.write<uint8>(uint8(ENetMsg::Claim));
         writer.writeVarUInt(netId);
         writer.writeVarUInt(seq);
         writer.write<uint8>(uint8(count));
-        writer.write<uint8>(s_quantize ? uint8(1) : uint8(0));
+        writer.write<uint8>(uint8((s_quantize ? 1u : 0u) | (hasGame ? 2u : 0u)));
         if (s_quantize)
         {
             writer.write<float>(maxVel);
@@ -825,6 +882,9 @@ void NetworkManager::sendClaims()
             }
         }
         writer.write(record.input.look); // newest look, applied to every record server-side
+        if (hasGame)
+            for (size_t c = 0; c < GameBlobBytes; ++c)
+                writer.write<uint8>(gameBlob[c]);
         assert(!writer.overflowed());
         m_host.send(m_serverPeer, writer.data(), ENetDelivery::Unreliable, ChannelClaim);
     }
@@ -841,9 +901,10 @@ void NetworkManager::handleClaimMessage(NetPeerId peer, NetReader& reader)
     const uint32 newestSeq = uint32(reader.readVarUInt());
     const uint32 count = reader.read<uint8>();
     const uint8 claimFlags = reader.read<uint8>();
-    if (reader.overflowed() || netId == 0 || count == 0 || count > ClaimRedundancy || (claimFlags & ~1))
+    if (reader.overflowed() || netId == 0 || count == 0 || count > ClaimRedundancy || (claimFlags & ~3))
         return;
     const bool quantized = (claimFlags & 1) != 0;
+    const bool hasGame = (claimFlags & 2) != 0;
     float maxVel = s_maxVel;       // only read (and only used) when the payload is quantized
     float maxAngVel = s_maxAngVel;
     if (quantized) // the owner encoded with ITS live ranges; decode with the same
@@ -896,8 +957,18 @@ void NetworkManager::handleClaimMessage(NetPeerId peer, NetReader& reader)
         }
     }
     const glm::vec3 look = reader.read<glm::vec3>();
+    uint8 gameBlob[GameBlobBytes];
+    if (hasGame)
+        for (size_t c = 0; c < GameBlobBytes; ++c)
+            gameBlob[c] = reader.read<uint8>();
     if (reader.overflowed() || !isFinite(look))
         return;
+    // The owner's self-computed game state (its shield) lands on the twin regardless of how the
+    // pose claims fare — it is display/team state, and this replaces the old GqE report event.
+    // Materials stay server-authoritative: a client cannot claim its own inventory.
+    if (hasGame)
+        applyGameStateBlob(entity, gameBlob, /*applyShield*/ true, /*applyMaterials*/ false,
+            /*applyTeam*/ false);
     for (uint32 i = 0; i < count; ++i)
     {
         // hostile-input gate: non-finite values would pass every plausibility test below (all
@@ -1434,7 +1505,7 @@ void NetworkManager::handleSnapshot(NetReader& reader)
     {
         const uint32 netId = uint32(reader.readVarUInt());
         const uint8 recFlags = reader.read<uint8>();
-        if (recFlags & ~(NetRecFlag_Physics | NetRecFlag_Asleep | NetRecFlag_Forced | NetRecFlag_Arbitrated | NetRecFlag_ServerPlayer))
+        if (recFlags & ~(NetRecFlag_Physics | NetRecFlag_Asleep | NetRecFlag_Forced | NetRecFlag_Arbitrated | NetRecFlag_ServerPlayer | NetRecFlag_Game))
         {
             if (!m_warnedUnknownRecFlags)
             {
@@ -1459,6 +1530,12 @@ void NetworkManager::handleSnapshot(NetReader& reader)
                 linVel = reader.read<glm::vec3>();
                 angVel = reader.read<glm::vec3>();
             }
+        }
+        uint8 gameBlob[GameBlobBytes] = {};
+        if (recFlags & NetRecFlag_Game) // parsed even when the entity resolve below misses — record framing
+        {
+            for (size_t c = 0; c < GameBlobBytes; ++c)
+                gameBlob[c] = reader.read<uint8>();
         }
         if (reader.overflowed())
             return;
@@ -1495,6 +1572,12 @@ void NetworkManager::handleSnapshot(NetReader& reader)
         comp->state->client.serverTick = tick;
         comp->state->client.timeSinceSnapshot = 0.0f;
         comp->state->client.hasTarget = true;
+        // game state applies for everyone; the entity's OWNER keeps its self-computed shield and
+        // takes only the server-authoritative materials
+        if (recFlags & NetRecFlag_Game)
+            applyGameStateBlob(it->second.entity, gameBlob,
+                /*applyShield*/ comp->ownerClientId != m_localClientId || comp->ownerClientId == 0,
+                /*applyMaterials*/ true, /*applyTeam*/ true);
     }
 }
 
@@ -1657,9 +1740,16 @@ void NetworkManager::sendSnapshotTick()
         if (comp->ownerClientId != 0 && m_serverTick < comp->state->server.arbitratedUntilTick)
             forcedFlag |= NetRecFlag_Arbitrated; // owner: soft-correct toward the solver-owned pose while steering
 
+        // game state rides the same record; a blob change forces the record out even when the pose
+        // alone would have been skipped (asleep body / unmoved entity)
+        uint8 gameBlob[GameBlobBytes];
+        const bool hasGame = packGameStateBlob(entity, gameBlob);
+        const bool gameChanged = hasGame
+            && std::memcmp(gameBlob, comp->state->server.lastSentGameBlob, GameBlobBytes) != 0;
+
         glm::vec3 pos;
         glm::quat rot;
-        uint8 recFlags = forcedFlag;
+        uint8 recFlags = forcedFlag | (hasGame ? NetRecFlag_Game : uint8(0));
         glm::vec3 linVel(0.0f);
         glm::vec3 angVel(0.0f);
         if (physicsBody)
@@ -1672,7 +1762,7 @@ void NetworkManager::sendSnapshotTick()
                 comp->state->sleepDirty = true;
             else if (comp->state->sleepDirty)
                 comp->state->sleepDirty = false;
-            else if (!keyframe)
+            else if (!keyframe && !gameChanged)
                 continue;
             recFlags |= NetRecFlag_Physics | (asleep ? NetRecFlag_Asleep : 0)
                 | (comp->state->server.serverPrimary ? NetRecFlag_ServerPlayer : uint8(0));
@@ -1730,7 +1820,7 @@ void NetworkManager::sendSnapshotTick()
             const glm::vec3 posDelta = entity->pos - comp->state->server.lastSentPos;
             const bool moved = glm::dot(posDelta, posDelta) > posEpsilonSq
                 || quatAngleDeg(entity->rot, comp->state->server.lastSentRot) > s_sendRotEpsilonDeg;
-            if (!keyframe && !moved)
+            if (!keyframe && !moved && !gameChanged)
                 continue;
             pos = entity->pos;
             rot = entity->rot;
@@ -1738,7 +1828,7 @@ void NetworkManager::sendSnapshotTick()
             comp->state->server.lastSentRot = rot;
         }
 
-        constexpr size_t MaxRecordBytes = 5 + 1 + 12 + 16 + 24; // varint id + flags + pos + raw quat + raw velocities
+        constexpr size_t MaxRecordBytes = 5 + 1 + 12 + 16 + 24 + GameBlobBytes; // varint id + flags + pos + raw quat + raw velocities + game blob
         if (writer.size() + MaxRecordBytes > writer.capacity())
         {
             flushMessage();
@@ -1763,6 +1853,12 @@ void NetworkManager::sendSnapshotTick()
                 writer.write(linVel);
                 writer.write(angVel);
             }
+        }
+        if (recFlags & NetRecFlag_Game)
+        {
+            for (size_t c = 0; c < GameBlobBytes; ++c)
+                writer.write<uint8>(gameBlob[c]);
+            std::memcpy(comp->state->server.lastSentGameBlob, gameBlob, GameBlobBytes);
         }
         ++count;
         ++sent;

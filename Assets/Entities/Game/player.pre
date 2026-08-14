@@ -28,4 +28,6 @@ Prefab player
 	Component Script
 		Path Scripts/PlayerBody.dsl
 		Enabled true
+	Component GameUnit
+		Puppet true
 	Component Network

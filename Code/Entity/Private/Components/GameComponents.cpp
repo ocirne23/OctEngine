@@ -16,15 +16,24 @@ GameUnitParams GameUnitComponent::params;
 GameStructureParams GameStructureComponent::params;
 GameProjectileParams GameProjectileComponent::params;
 
-// Player fallback targets: fixed slots published by the game main-thread BEFORE the entity pass.
-static GamePlayerTarget g_playerTargets[32];
-static int g_playerTargetCount = 0;
+// Worker-side reports, drained by the game (see the queues' declarations). The mutex only ever
+// guards two small append-only vectors touched on the rare tick where a unit fires or dies.
+static std::mutex g_unitEventMutex;
+static std::vector<GameUnitComponent::FireRequest> g_fireRequests;
+static std::vector<uint32> g_deaths;
 
-void GameUnitComponent::setPlayerTargets(std::span<const GamePlayerTarget> players)
+void GameUnitComponent::takeFireRequests(std::vector<FireRequest>& out)
 {
-    g_playerTargetCount = (int)glm::min(players.size(), std::size(g_playerTargets));
-    for (int i = 0; i < g_playerTargetCount; ++i)
-        g_playerTargets[i] = players[i];
+    const std::lock_guard<std::mutex> lock(g_unitEventMutex);
+    out.swap(g_fireRequests);
+    g_fireRequests.clear();
+}
+
+void GameUnitComponent::takeDeaths(std::vector<uint32>& outSourceIds)
+{
+    const std::lock_guard<std::mutex> lock(g_unitEventMutex);
+    outSourceIds.swap(g_deaths);
+    g_deaths.clear();
 }
 
 static bool isAuthority()
@@ -51,6 +60,7 @@ static void atomicAdd(float& value, float amount)
 
 void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Transform&)
 {
+    puppet = info.puppet;
     team = info.team;
     health = healthMax = info.healthMax;
     energy = energyMax = info.energyMax;
@@ -80,8 +90,9 @@ static float unitRand01(uint32& state)
 
 void GameUnitComponent::update(Entity& entity, float deltaSec)
 {
-    if (!isAuthority())
-        return; // client: the GSh mirror drives output/bars; this is a state container
+    if (puppet || !isAuthority())
+        return; // puppets are state carriers (GamePlayer writes them); clients mirror via the
+                // entity sync's game blob — either way, no sim here
     PhysicsComponent* pc = getComponent<PhysicsComponent>(&entity);
     ForceComponent* fc = getComponent<ForceComponent>(&entity);
     if (!pc || !pc->body.isValid())
@@ -89,8 +100,17 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
     const glm::vec3 pos = pc->body.getPosition();
     if (health <= 0.0f || pos.y < params.voidY)
     {
-        Globals::scriptEvents.addDestroyRequest(EntityPtr(&entity)); // drained by the main loop
         health = 0.0f;
+        if (!deathReported) // report ONCE — the destroy is queued, so a tick may still run
+        {
+            deathReported = true;
+            Globals::scriptEvents.addDestroyRequest(EntityPtr(&entity)); // drained by the main loop
+            if (sourceId != 0)
+            {
+                const std::lock_guard<std::mutex> lock(g_unitEventMutex);
+                g_deaths.push_back(sourceId); // its spawner frees a roster slot
+            }
+        }
         return;
     }
 
@@ -123,9 +143,24 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             struct Candidate { float distSq; glm::vec3 pos; };
             Candidate best[4];
             int count = 0;
+            // The nearest enemy PLAYER rides the same query: capsules carry puppet
+            // GameUnitComponents and sit in the spatial index like everything else.
+            float bestPlayerDistSq = FLT_MAX;
+            glm::vec3 bestPlayerPos(0.0f);
             for (const uint64 user : results)
             {
                 Entity* other = reinterpret_cast<Entity*>(user);
+                if (const GameUnitComponent* pu = getComponent<GameUnitComponent>(other);
+                    pu && pu->puppet && pu->team != team && pu->alive())
+                {
+                    const glm::vec2 d = glm::vec2(other->pos.x, other->pos.z) - glm::vec2(pos.x, pos.z);
+                    if (glm::dot(d, d) < bestPlayerDistSq)
+                    {
+                        bestPlayerDistSq = glm::dot(d, d);
+                        bestPlayerPos = other->pos;
+                    }
+                    continue;
+                }
                 const GameStructureComponent* sc = getComponent<GameStructureComponent>(other);
                 if (!sc || sc->invulnerable || sc->team == team || !sc->alive())
                     continue;
@@ -148,24 +183,13 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                 targetPos = best[glm::min(int(unitRand01(m_rng) * count), count - 1)].pos;
                 hasTarget = true;
             }
-            else
+            else if (bestPlayerDistSq < FLT_MAX)
             {
-                hasTarget = false;
-                float bestDistSq = FLT_MAX;
-                for (int i = 0; i < g_playerTargetCount; ++i)
-                {
-                    if (g_playerTargets[i].team == team)
-                        continue;
-                    const glm::vec2 d = glm::vec2(g_playerTargets[i].pos.x, g_playerTargets[i].pos.z)
-                        - glm::vec2(pos.x, pos.z);
-                    if (glm::dot(d, d) < bestDistSq)
-                    {
-                        bestDistSq = glm::dot(d, d);
-                        targetPos = g_playerTargets[i].pos;
-                        hasTarget = true;
-                    }
-                }
+                targetPos = bestPlayerPos;
+                hasTarget = true;
             }
+            else
+                hasTarget = false;
         }
         walkTarget = targetPos;
         haveWalkTarget = hasTarget;
@@ -202,8 +226,9 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             if (haveWalkTarget && m_fireTimer <= 0.0f && glm::distance(glm::vec2(pos.x, pos.z),
                 glm::vec2(walkTarget.x, walkTarget.z)) <= standoffRange)
             {
-                wantsFire = true; // the game spawns the shot main-thread and clears this
-                firePos = walkTarget;
+                // Spawning is main-thread only: ASK for the shot, the game services the queue.
+                const std::lock_guard<std::mutex> lock(g_unitEventMutex);
+                g_fireRequests.push_back(FireRequest{ pos, walkTarget, (uint8)team });
                 m_fireTimer = fireInterval * (0.8f + 0.4f * unitRand01(m_rng));
             }
         }
@@ -230,6 +255,24 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
         }
         if (strain)
             strain->addLoad(emitterDrain);
+
+        // DIRECT player damage: any enemy-team player inside melee reach gets chewed — no
+        // targeting needed, standing in the swarm hurts. Found in the SAME short probe as the
+        // structure bite; same damage() call as every other victim (the puppet component banks it
+        // in pendingDamage; the game routes that to the owner).
+        if (playerDps > 0.0f)
+            for (const uint64 user : nearby)
+            {
+                Entity* other = reinterpret_cast<Entity*>(user);
+                GameUnitComponent* pu = getComponent<GameUnitComponent>(other);
+                if (!pu || !pu->puppet || pu->team == team)
+                    continue;
+                const glm::vec2 toPlayer(other->pos.x - pos.x, other->pos.z - pos.z);
+                const float reach = attackRange + 0.8f; // capsule body allowance
+                if (glm::dot(toPlayer, toPlayer) < reach * reach
+                    && glm::abs(other->pos.y - pos.y) < 3.0f)
+                    pu->damage(playerDps * deltaSec);
+            }
     }
 
     // ---- steering: planar velocity toward the walk target, stuck-sidestep instead of pathfinding.
@@ -277,10 +320,8 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
         const float before = energy;
         energy = glm::max(0.0f, energy - pressure * tension * params.energyDrainRate * deltaSec);
         if (before > 0.0f && energy <= 0.0f)
-        {
-            collapsed = true;
-            collapseEdge = true; // the game's shield mirror flushes on it
-        }
+            collapsed = true; // reaches clients promptly: the game blob's change detection forces
+                              // this entity's next snapshot record out
         fc->emitter.setOutput(energy > 0.0f ? shieldOutput : 0.01f);
 
         const float iso = Globals::forceSystem.getParams().isoThreshold;
@@ -305,15 +346,45 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
         m_outputHistory[1] = m_outputHistory[2];
         m_outputHistory[2] = energy > 0.0f ? shieldOutput : 0.01f;
     }
+
 }
 
 void GameUnitComponent::damage(float amount)
 {
-    if (amount > 0.0f)
+    if (amount <= 0.0f)
+        return;
+    if (puppet)
+        atomicAdd(pendingDamage, amount); // player health is owner-computed — bank it for routing
+    else
         atomicSubClamped(health, amount);
 }
 
+float GameUnitComponent::takePendingDamage()
+{
+    std::atomic_ref<float> ref(pendingDamage);
+    return ref.exchange(0.0f);
+}
+
 // ---------------------------------------------------------------- GameStructureComponent
+
+// Machine event queues (rare, tiny — same discipline as the unit events above).
+static std::mutex g_structureEventMutex;
+static std::vector<uint32> g_spawnRequests;
+static std::vector<GameStructureComponent::TurretFireRequest> g_turretFire;
+
+void GameStructureComponent::takeSpawnRequests(std::vector<uint32>& outStructureIds)
+{
+    const std::lock_guard<std::mutex> lock(g_structureEventMutex);
+    outStructureIds.swap(g_spawnRequests);
+    g_spawnRequests.clear();
+}
+
+void GameStructureComponent::takeTurretFireRequests(std::vector<TurretFireRequest>& out)
+{
+    const std::lock_guard<std::mutex> lock(g_structureEventMutex);
+    out.swap(g_turretFire);
+    g_turretFire.clear();
+}
 
 void GameStructureComponent::spawn(Entity& entity, const SpawnInfo& info, const Transform& base)
 {
@@ -454,6 +525,59 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
     for (const Outflow& o : outs)
         o.link->lastFlow = atomicTransfer(store[o.medium], o.far->store[o.medium],
             o.far->capacity[o.medium], o.desired * shareFactor[o.medium]) * invDt;
+
+    // ---- machine logic (the union's stamped variant): the DECISION runs here per-entity, worker-
+    // side, spending from the structure's OWN stores; the actual entity spawn rides an event queue
+    // because spawning is main-thread only.
+    if (machineKind == EMachineKind::Barracks && !blueprint)
+    {
+        BarracksData& b = barracks;
+        // idle Constructors in range accelerate the spawn clock (boost 1 = double speed)
+        b.spawnTimer = glm::max(0.0f, b.spawnTimer - deltaSec * (1.0f + b.boost));
+        if (b.spawnTimer <= 0.0f && b.aliveUnits < params.barracksUnitLimit && store[2] >= b.spawnCost)
+        {
+            store[2] -= b.spawnCost; // conveyor-fed minerals pay the unit (refunded on spawn fail)
+            ++b.aliveUnits;          // the unit's death event decrements it again
+            b.spawnTimer = params.barracksSpawnInterval;
+            const std::lock_guard<std::mutex> lock(g_structureEventMutex);
+            g_spawnRequests.push_back(structureId);
+        }
+    }
+    else if (machineKind == EMachineKind::Turret && !blueprint)
+    {
+        turret.fireTimer = glm::max(0.0f, turret.fireTimer - deltaSec);
+        // No target = no cooldown reset: it fires the moment one appears.
+        if (turret.fireTimer <= 0.0f && store[0] >= params.turretShotEnergy)
+        {
+            const glm::vec3 pos = entity.pos;
+            thread_local std::vector<uint64> nearby;
+            Globals::spatialIndex.querySphere(glm::dvec3(pos), params.turretRange,
+                SpatialLayer_Render, nearby);
+            Entity* target = nullptr;
+            float bestDistSq = params.turretRange * params.turretRange;
+            for (const uint64 user : nearby)
+            {
+                Entity* other = reinterpret_cast<Entity*>(user);
+                const GameUnitComponent* u = getComponent<GameUnitComponent>(other);
+                if (!u || u->puppet || u->team == team || !u->alive())
+                    continue; // puppets are player capsules — turrets target only units (known gap)
+                const glm::vec3 d = other->pos - pos;
+                if (glm::dot(d, d) < bestDistSq)
+                {
+                    bestDistSq = glm::dot(d, d);
+                    target = other;
+                }
+            }
+            if (target)
+            {
+                store[0] -= params.turretShotEnergy;
+                turret.fireTimer = params.turretFireInterval;
+                const std::lock_guard<std::mutex> lock(g_structureEventMutex);
+                g_turretFire.push_back(TurretFireRequest{ pos + glm::vec3(0.0f, 1.0f, 0.0f),
+                    target->pos, team });
+            }
+        }
+    }
     // Smooth each OWNED link's rate for the visuals/gauges (~0.25 s): the raw per-tick transfer is
     // bursty — a consumer drains its buffer and then takes a full packet, and the fair split
     // reshuffles shares as receivers fill — which made the cable brightness and flow pulses
@@ -600,6 +724,8 @@ void GameProjectileComponent::onContact(Entity& self, Entity& other, bool begin)
     // enemy-team victims take the hit, everything else (ground, own team) just stops it.
     if (!begin || spent || !isAuthority())
         return;
+    // damage() handles puppets itself (banks into pendingDamage for owner routing), so enemy
+    // projectiles hurt players through the exact same call as units.
     if (GameUnitComponent* unit = getComponent<GameUnitComponent>(&other); unit && unit->team != team)
         unit->damage(unitDamage);
     else if (GameStructureComponent* sc = getComponent<GameStructureComponent>(&other); sc && sc->team != team)
@@ -632,6 +758,7 @@ void writeGameUnitSpawnInfo(const GameUnitComponent::SpawnInfo& info, AssetNode&
 {
     const GameUnitComponent::SpawnInfo d;
     if (info.team != d.team)                 out.set("Team", std::to_string(info.team));
+    if (info.puppet != d.puppet)             out.set("Puppet", info.puppet);
     if (info.healthMax != d.healthMax)       out.set("HealthMax", info.healthMax);
     if (info.energyMax != d.energyMax)       out.set("EnergyMax", info.energyMax);
     if (info.shieldOutput != d.shieldOutput) out.set("ShieldOutput", info.shieldOutput);

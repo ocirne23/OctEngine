@@ -77,7 +77,7 @@ public:
     float shieldRadius() const; // pressure-aware equilibrium radius estimate, 0 = no bubble
     // MATERIALS inventory: refilled near own-team Silos/Base, invested into nearby blueprints.
     // Server-authoritative for every player (GameMatch runs the transfers); clients receive their
-    // own value through the GSh mirror.
+    // own value through the entity snapshot's game blob (GameUnitComponent::materialsFrac).
     float materials() const { return m_materials; }
     float materialsMax() const { return m_materialsMax; }
     void setMaterials(float value) { m_materials = glm::clamp(value, 0.0f, m_materialsMax); }
@@ -85,9 +85,6 @@ public:
     float density() const { return m_lastDensity; }   // field density at the body (strongest team's
                                                       // field, the Density debug view's value)
     bool shieldCollapsed() const { return m_shieldCollapsed; }
-    // Collapse/reboot EDGE since the last poll — the co-op shield mirror flushes an event
-    // immediately on it instead of waiting for the periodic send.
-    bool takeShieldEdge() { const bool e = m_shieldEdge; m_shieldEdge = false; return e; }
 
 private:
     struct Projectile
@@ -122,7 +119,6 @@ private:
                                                      // that PRODUCED it (shield-state-independent)
     float m_graceTimer = 0.0f;      // seconds of post-spawn drain immunity (stale readbacks)
     bool m_shieldCollapsed = false; // latched at empty battery, cleared at "Reboot energy"
-    bool m_shieldEdge = false;      // collapse/reboot happened this tick (co-op mirror flush)
 
     // Tweaks ("Game/Player", "Game/Shield")
     float m_moveSpeed = 4.0f;

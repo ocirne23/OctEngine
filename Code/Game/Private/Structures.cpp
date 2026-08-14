@@ -151,6 +151,18 @@ void StructureSystem::registerTweaks()
     // The territory drain runs in GameStructureComponent::update — tune its shared param.
     Tweak::floatVar("Game/Structures", "Damage/s in enemy field",
         &GameStructureComponent::params.fieldDamageRate, 0.0f, 100.0f, 0.5f);
+    // Production tuning consumed by the component's machine logic (names unchanged — the saved
+    // cfg keys keep applying).
+    GameStructureParams& sp = GameStructureComponent::params;
+    Tweak::intVar("Game/Friendlies", "Barracks unit limit", &sp.barracksUnitLimit, 0, 16, 1);
+    Tweak::floatVar("Game/Friendlies", "Barracks spawn interval", &sp.barracksSpawnInterval, 1.0f, 60.0f, 0.5f);
+    Tweak::floatVar("Game/Friendlies", "Grunt spawn materials", &m_spawnMaterials[0], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Friendlies", "Brute spawn materials", &m_spawnMaterials[1], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Friendlies", "Runner spawn materials", &m_spawnMaterials[2], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Friendlies", "Spitter spawn materials", &m_spawnMaterials[3], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Friendlies", "Turret range", &sp.turretRange, 4.0f, 60.0f, 0.5f);
+    Tweak::floatVar("Game/Friendlies", "Turret fire interval", &sp.turretFireInterval, 0.1f, 10.0f, 0.05f);
+    Tweak::floatVar("Game/Friendlies", "Turret shot energy", &sp.turretShotEnergy, 0.0f, 20.0f, 0.1f);
 }
 
 // ---------------------------------------------------------------- frame view
@@ -234,6 +246,20 @@ void StructureSystem::stampTuning(const Ref& s)
     // Link throughputs follow the live tweaks.
     for (GameStructureLink& l : c.links)
         l.throughput = m_cableThroughput[l.cableTier];
+    // The union's machine variant (barracks spawn / turret fire logic runs per-entity in the
+    // component update; the per-TYPE spawn cost is stamped here so the tweak stays live).
+    if (isBarracksType(s.type))
+    {
+        c.machineKind = GameStructureComponent::EMachineKind::Barracks;
+        c.barracks.spawnCost = m_spawnMaterials[
+            s.type == EStructureType::BarracksBrute ? 1
+            : s.type == EStructureType::BarracksRunner ? 2
+            : s.type == EStructureType::BarracksSpitter ? 3 : 0];
+    }
+    else
+        c.machineKind = s.type == EStructureType::Turret
+            ? GameStructureComponent::EMachineKind::Turret
+            : GameStructureComponent::EMachineKind::None;
 }
 
 void StructureSystem::clear()
@@ -1066,6 +1092,23 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
         s.route = std::move(request.points);
         if (onRouteChanged)
             onRouteChanged(request.id);
+        // LIVE ORDERS: units already spawned from this barracks pick the new route up too (a
+        // route change is a rare user action — one arena query then is fine). The march index is
+        // KEPT and clamped: an appended route continues where the unit was, a unit that had
+        // finished marches to the new tail, and a fresh single-waypoint route restarts at 0.
+        thread_local std::vector<uint64> results;
+        Globals::spatialIndex.querySphere(glm::dvec3(0.0), 1000.0f, SpatialLayer_Render, results);
+        for (const uint64 user : results)
+        {
+            Entity* unitEntity = reinterpret_cast<Entity*>(user);
+            GameUnitComponent* u = getComponent<GameUnitComponent>(unitEntity);
+            if (!u || u->sourceId != request.id)
+                continue;
+            u->routeCount = (uint8)glm::min((int)s.route.size(), (int)GameUnitComponent::MaxRoutePoints);
+            for (int i = 0; i < u->routeCount; ++i)
+                u->route[i] = s.route[i];
+            u->routeIndex = (uint8)glm::min((int)u->routeIndex, glm::max((int)u->routeCount - 1, 0));
+        }
     }
     m_routeRequests.clear();
 

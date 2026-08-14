@@ -13,6 +13,7 @@ export constexpr uint8 NetRecFlag_Asleep  = 1 << 1; // the server's body is asle
 export constexpr uint8 NetRecFlag_Forced  = 1 << 2; // owner must accept this correction (claims were rejected); non-owners ignore it
 export constexpr uint8 NetRecFlag_Arbitrated = 1 << 3; // player-vs-player contact: the server solver owns the pose — the owner softly corrects toward it while still steering (claims are velocity intent)
 export constexpr uint8 NetRecFlag_ServerPlayer = 1 << 4; // the SERVER's own player body: observers use the remote-player interp ring and never apply the interaction grace (locally shoving an actively-steered body only fabricates divergence)
+export constexpr uint8 NetRecFlag_Game = 1 << 5; // record carries the 5-byte GAME blob (GameUnitComponent state: health/energy/output/materials/flags) — see NetworkManager's packGameStateBlob
 
 // Which simulation drives this entity, seen from the LOCAL process (derived, never stored):
 // the same entity reads LocalOwner on the client that owns it and RemoteOwner on the server/everyone else.
@@ -134,6 +135,7 @@ export struct NetEntityState
         // change detection against the last sent state (non-physics; physics uses sleepDirty)
         glm::vec3 lastSentPos = glm::vec3(FLT_MAX); // FLT_MAX forces the first change-detection send
         glm::quat lastSentRot = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        uint8 lastSentGameBlob[5] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF }; // forces the first blob send
     };
 
     struct ClientState

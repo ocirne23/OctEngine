@@ -305,22 +305,10 @@ void GameMatch::onClientLeft(uint32 clientId)
     if (const auto it = m_clientPlayers.find(clientId); it != m_clientPlayers.end())
     {
         if (it->second)
-        {
-            if (const NetworkComponent* net = getComponent<NetworkComponent>(it->second.get()))
-                m_remoteShields.erase(net->netId);
             Globals::world.removeRootEntity(it->second.get());
-        }
         m_clientPlayers.erase(it);
     }
     m_clientMaterials.erase(clientId);
-}
-
-// Shield mirror quantization: fractions as u8; output as u8 over a fixed range (covers the player
-// max output and every unit multiplier at ~0.03 resolution).
-constexpr float c_shieldOutputRange = 8.0f;
-static uint8 packFrac8(float v)
-{
-    return (uint8)glm::clamp(v * 255.0f, 0.0f, 255.0f);
 }
 
 void GameMatch::sendStructurePlaced(int index)
@@ -482,84 +470,6 @@ void GameMatch::sendStats()
     Globals::networkManager.fireNetworkEvent("GSt", writer.data());
 }
 
-void GameMatch::sendShieldStates()
-{
-    // Full netId-keyed shield snapshot (~10 Hz + an immediate flush on any collapse/reboot edge):
-    // every unit, our own player, and every client player as last reported through GqE. Snapshot
-    // semantics — the receiver replaces its map wholesale, so dead entities drop out without
-    // pruning.
-    std::vector<ShieldNetState> records;
-    m_npcs.collectShieldStates(records);
-    if (Entity* own = m_player.entity())
-    {
-        const NetworkComponent* net = getComponent<NetworkComponent>(own);
-        if (net && net->netId != 0)
-        {
-            ShieldNetState s;
-            s.netId = net->netId;
-            s.healthFrac = m_player.health() / glm::max(m_player.healthMax(), 1e-3f);
-            s.energyFrac = m_player.shieldFrac();
-            if (const ForceComponent* fc = getComponent<ForceComponent>(own))
-                s.output = fc->emitter.getOutput();
-            s.collapsed = m_player.shieldCollapsed();
-            s.kind = 2;
-            s.team = (uint8)m_team;
-            s.materialsFrac = m_player.materials() / glm::max(m_player.materialsMax(), 1e-3f);
-            records.push_back(s);
-        }
-    }
-    // Client players carry their server-authoritative materials (netId -> clientId resolved here).
-    std::unordered_map<uint32, uint32> clientByNetId;
-    for (const auto& [clientId, p] : m_clientPlayers)
-        if (p)
-            if (const NetworkComponent* net = getComponent<NetworkComponent>(p.get()); net && net->netId != 0)
-                clientByNetId.emplace(net->netId, clientId);
-    for (const auto& [netId, rs] : m_remoteShields)
-    {
-        ShieldNetState s{ netId, rs.healthFrac, rs.energyFrac, rs.output, rs.collapsed, rs.kind, rs.team };
-        if (const auto it = clientByNetId.find(netId); it != clientByNetId.end())
-            if (const auto materials = m_clientMaterials.find(it->second); materials != m_clientMaterials.end())
-                s.materialsFrac = materials->second / glm::max(m_player.materialsMax(), 1e-3f);
-        records.push_back(s);
-    }
-
-    const int count = glm::min((int)records.size(), 110); // 9B each under the 1024B event cap
-    uint8 buffer[1000];
-    NetWriter writer(buffer);
-    writer.write<uint16>((uint16)count);
-    for (int i = 0; i < count; ++i)
-    {
-        const ShieldNetState& s = records[i];
-        writer.write<uint32>(s.netId);
-        writer.write<uint8>(packFrac8(s.healthFrac));
-        writer.write<uint8>(packFrac8(s.energyFrac));
-        writer.write<uint8>(packFrac8(s.output / c_shieldOutputRange));
-        writer.write<uint8>(packFrac8(s.materialsFrac));
-        writer.write<uint8>((uint8)((s.collapsed ? 1u : 0u) | (uint32(s.kind) << 1)
-            | (uint32(glm::min((int)s.team, 7)) << 4)));
-    }
-    Globals::networkManager.fireNetworkEvent("GSh", writer.data());
-}
-
-void GameMatch::sendShieldReport()
-{
-    // Owner -> server: our locally computed shield result. The server applies it to our twin's
-    // emitter (its view and unit interactions match) and re-emits it to other clients via GSh.
-    Entity* own = m_player.entity();
-    if (!own)
-        return;
-    float output = 0.01f;
-    if (const ForceComponent* fc = getComponent<ForceComponent>(own))
-        output = fc->emitter.getOutput();
-    uint8 buffer[8];
-    NetWriter writer(buffer);
-    writer.write<uint8>(packFrac8(m_player.health() / glm::max(m_player.healthMax(), 1e-3f)));
-    writer.write<uint8>(packFrac8(m_player.shieldFrac()));
-    writer.write<uint8>(packFrac8(output / c_shieldOutputRange));
-    writer.write<uint8>((uint8)((m_player.shieldCollapsed() ? 1u : 0u) | (2u << 1)));
-    Globals::networkManager.fireNetworkEvent("GqE", writer.data());
-}
-
 void GameMatch::handleNetEvent(std::string_view name)
 {
     // Both roles share the hook; each side reacts only to the names meant for it (our own
@@ -650,44 +560,7 @@ void GameMatch::handleNetEvent(std::string_view name)
             if (!reader.overflowed())
                 m_structures.mirrorRoute(id, std::span<const glm::vec3>(points, used));
         }
-        else if (name == "GSh")
-        {
-            // Shield snapshot: apply each record's output to the entity's LOCAL emitter (remote
-            // bubbles now render true collapse/drain state) and keep the values for overhead
-            // bars. Wholesale replace; our own player is skipped — the owner simulates locally.
-            uint32 ownNetId = 0;
-            if (Entity* own = m_player.entity())
-                if (const NetworkComponent* net = getComponent<NetworkComponent>(own))
-                    ownNetId = net->netId;
-            m_remoteShields.clear();
-            const uint16 count = reader.read<uint16>();
-            for (uint16 i = 0; i < count && !reader.overflowed(); ++i)
-            {
-                const uint32 netId = reader.read<uint32>();
-                const uint8 health = reader.read<uint8>(), energy = reader.read<uint8>();
-                const uint8 output = reader.read<uint8>(), materials = reader.read<uint8>();
-                const uint8 flags = reader.read<uint8>();
-                if (reader.overflowed() || netId == 0)
-                    continue;
-                if (netId == ownNetId)
-                {
-                    // Our shield/health are locally simulated, but MATERIALS are server-authoritative.
-                    m_player.setMaterials(materials / 255.0f * m_player.materialsMax());
-                    continue;
-                }
-                RemoteShield rs;
-                rs.healthFrac = health / 255.0f;
-                rs.energyFrac = energy / 255.0f;
-                rs.output = output / 255.0f * c_shieldOutputRange;
-                rs.collapsed = (flags & 1u) != 0;
-                rs.kind = (uint8)((flags >> 1) & 7u);
-                rs.team = (uint8)((flags >> 4) & 7u);
-                if (Entity* entity = Globals::networkManager.findEntity(netId))
-                    if (ForceComponent* fc = getComponent<ForceComponent>(entity))
-                        fc->emitter.setOutput(glm::max(rs.output, 0.01f));
-                m_remoteShields[netId] = rs;
-            }
-        }
+        // (shield/materials state rides the entity snapshot's game blob now — no GSh event)
         return;
     }
     if (!m_isServer || name[1] != 'q')
@@ -732,31 +605,9 @@ void GameMatch::handleNetEvent(std::string_view name)
         if (!reader.overflowed()) // team/barracks ownership validated at apply
             m_structures.queueRouteRequest(id, std::span<const glm::vec3>(points, used), requestTeam(sender));
     }
-    else if (name == "GqE")
-    {
-        // The owner's self-reported shield state: apply to their twin's emitter (server-side
-        // bubble + unit interactions match the owner's sim) and keep it for the GSh re-emit.
-        const auto it = m_clientPlayers.find(sender);
-        if (it == m_clientPlayers.end() || !it->second)
-            return;
-        const uint8 health = reader.read<uint8>(), energy = reader.read<uint8>();
-        const uint8 output = reader.read<uint8>(), flags = reader.read<uint8>();
-        const NetworkComponent* net = getComponent<NetworkComponent>(it->second.get());
-        if (reader.overflowed() || !net || net->netId == 0)
-            return;
-        RemoteShield rs;
-        rs.healthFrac = health / 255.0f;
-        rs.energyFrac = energy / 255.0f;
-        rs.output = output / 255.0f * c_shieldOutputRange;
-        rs.collapsed = (flags & 1u) != 0;
-        rs.kind = 2;
-        rs.team = requestTeam(sender);
-        if (ForceComponent* fc = getComponent<ForceComponent>(it->second.get()))
-            fc->emitter.setOutput(glm::max(rs.output, 0.01f));
-        m_remoteShields[net->netId] = rs;
-    }
-    // (GqS/GqM — player shooting and melee — were removed with player combat; unknown Gq* names
-    // from stale builds simply fall through here.)
+    // (GqE — the owner's shield self-report — now rides the claim stream's game blob, applied by
+    // NetworkManager to the twin's GameUnitComponent + emitter. GqS/GqM went with player combat.
+    // Unknown Gq* names from stale builds simply fall through here.)
 }
 
 void GameMatch::update(float deltaSec)
@@ -782,12 +633,6 @@ void GameMatch::update(float deltaSec)
         m_player.tickShieldAndHealth(deltaSec);
         tickBaseHealing(deltaSec);
         m_structures.tickMirror(deltaSec);
-        m_reportTimer -= deltaSec;
-        if (m_player.takeShieldEdge() || m_reportTimer <= 0.0f)
-        {
-            sendShieldReport(); // collapse/reboot edges flush immediately; else ~10 Hz
-            m_reportTimer = 0.1f;
-        }
         return;
     }
 
@@ -797,23 +642,8 @@ void GameMatch::update(float deltaSec)
     m_player.tickShieldAndHealth(deltaSec);
     tickBaseHealing(deltaSec);
 
-    // EVERY player body + team (ours + each client capsule): unit fallback targeting sees
-    // everyone, not just the server's own player. playerClientIds runs parallel (0 = the server
-    // itself) so unit melee damage routes to each player's owning instance.
-    std::vector<PlayerInfo> players;
-    std::vector<uint32> playerClientIds;
-    players.reserve(1 + m_clientPlayers.size());
-    playerClientIds.reserve(1 + m_clientPlayers.size());
-    players.push_back({ playerPos, (uint8)m_team });
-    playerClientIds.push_back(0);
-    for (const auto& [id, p] : m_clientPlayers)
-        if (p)
-            if (const PhysicsComponent* pc = getComponent<PhysicsComponent>(p.get()); pc && pc->body.isValid())
-            {
-                players.push_back({ pc->body.getPosition(), requestTeam(id) });
-                playerClientIds.push_back(id);
-            }
-    std::vector<float> playerDamage(players.size(), 0.0f);
+    // (No player-target publish step: units find enemy players — puppet GameUnitComponents —
+    // through the same spatial queries as structures, and damage them through the same damage().)
 
     // MATERIALS loop (server-authoritative for every player): refill the carried inventory from
     // nearby own-team Silos/Base, invest it into nearby blueprints.
@@ -831,33 +661,33 @@ void GameMatch::update(float deltaSec)
         for (const auto& [id, p] : m_clientPlayers)
             if (p)
                 if (const PhysicsComponent* pc = getComponent<PhysicsComponent>(p.get()); pc && pc->body.isValid())
-                    tickPlayerMaterials(pc->body.getPosition(), requestTeam(id), m_clientMaterials[id]);
+                {
+                    float& materials = m_clientMaterials[id];
+                    tickPlayerMaterials(pc->body.getPosition(), requestTeam(id), materials);
+                    // publish onto the twin's puppet component: the entity snapshot's game blob
+                    // carries it back to the owner (server-authoritative inventory). Team is
+                    // stamped here too — claims never apply it (client-forgeable), and units read
+                    // it straight off the component now.
+                    if (GameUnitComponent* unit = getComponent<GameUnitComponent>(p.get()))
+                    {
+                        unit->materialsFrac = materials / glm::max(m_player.materialsMax(), 1e-3f);
+                        unit->team = requestTeam(id);
+                    }
+                }
     }
 
-    // The unit SIM runs inside the entity pass (GameUnitComponent); here we publish the player
-    // fallback targets, sweep the units once (spatial query — fire requests, collapse edges,
-    // player melee damage) and run production. tickUnits FIRST: barracks/turrets reuse its query.
-    {
-        std::vector<GamePlayerTarget> targets(players.size());
-        for (size_t p = 0; p < players.size(); ++p)
-            targets[p] = { players[p].pos, players[p].team };
-        GameUnitComponent::setPlayerTargets(targets);
-    }
-    m_npcs.tickUnits(players, playerDamage, m_structures, deltaSec);
-    m_npcs.tickBarracks(m_structures, deltaSec);
-    m_npcs.tickTurrets(m_structures, deltaSec);
+    // The unit SIM runs inside the entity pass (GameUnitComponent); this drains what it queued
+    // (shots to spawn, deaths) and runs production.
+    m_npcs.service(m_structures);
 
-    // Route DIRECT unit melee damage to each player's owning instance: ours applies now, client
-    // players' accumulates and flushes as GDm at the shield-mirror cadence.
-    for (size_t p = 0; p < players.size(); ++p)
-    {
-        if (playerDamage[p] <= 0.0f)
-            continue;
-        if (playerClientIds[p] == 0)
-            m_player.applyDamage(playerDamage[p]);
-        else
-            m_clientPendingDamage[playerClientIds[p]] += playerDamage[p];
-    }
+    // Damage banked on the client twins' puppet inboxes during the pass is OWED to each owner
+    // (health is owner-computed there) — flushed as GDm below. Our own capsule's inbox drains in
+    // GamePlayer::tickShieldAndHealth.
+    for (const auto& [id, p] : m_clientPlayers)
+        if (p)
+            if (GameUnitComponent* unit = getComponent<GameUnitComponent>(p.get()))
+                if (const float damage = unit->takePendingDamage(); damage > 0.0f)
+                    m_clientPendingDamage[id] += damage;
 
     if (m_isServer)
     {
@@ -867,12 +697,9 @@ void GameMatch::update(float deltaSec)
             sendStats();
             m_statTimer = 0.2f; // ~5 Hz volatile-state mirror
         }
-        const bool npcEdge = m_npcs.takeShieldCollapseEdge();    // both polled every tick so the
-        const bool playerEdge = m_player.takeShieldEdge();       // flags never latch stale
-        m_shieldTimer -= deltaSec;
-        if (npcEdge || playerEdge || m_shieldTimer <= 0.0f)
+        m_damageTimer -= deltaSec;
+        if (m_damageTimer <= 0.0f)
         {
-            sendShieldStates(); // collapse edges flush the same tick; else the ~10 Hz mirror
             if (!m_clientPendingDamage.empty())
             {
                 // GDm: unit melee damage owed to client players (each client applies its own —
@@ -891,7 +718,7 @@ void GameMatch::update(float deltaSec)
                 Globals::networkManager.fireNetworkEvent("GDm", writer.data());
                 m_clientPendingDamage.clear();
             }
-            m_shieldTimer = 0.1f;
+            m_damageTimer = 0.1f;
         }
     }
 }
@@ -1538,46 +1365,29 @@ void GameMatch::buildWorldLabels(const Camera& camera)
         }
         labels.push_back(std::move(label));
     }
-    // Units: own team green, enemy teams red (this frame's spatial query — authority side only;
-    // clients label remote units through the shield mirror below).
-    for (Entity* unitEntity : m_npcs.unitsThisFrame())
+    // Units + players: own team green, enemy teams red. Only VISIBLE ones are fetched — an
+    // off-screen one would just fail worldToScreen below. Works identically on server AND client:
+    // remote instances' GameUnitComponents are populated by the snapshot game blob. Puppets are
+    // player capsules; the own player is skipped (its HUD bars cover it).
+    Entity* ownPlayer = m_player.entity();
+    thread_local std::vector<Entity*> units;
+    NpcSystem::queryVisibleUnits(camera, units);
+    for (Entity* unitEntity : units)
     {
         const GameUnitComponent* u = getComponent<GameUnitComponent>(unitEntity);
-        if (!u)
+        if (!u || unitEntity == ownPlayer)
             continue;
         HudWorldLabel label;
-        if (!camera.worldToScreen(viewport, unitEntity->pos + glm::vec3(0.0f, 1.6f, 0.0f), label.screenPos))
+        const float height = u->puppet ? 2.0f : 1.6f;
+        if (!camera.worldToScreen(viewport, unitEntity->pos + glm::vec3(0.0f, height, 0.0f), label.screenPos))
             continue;
-        label.title = remoteShortName(unitEntity->getName(), 0);
+        label.title = remoteShortName(unitEntity->getName(), u->puppet ? 2 : 0);
         label.barValue = u->health;
-        label.barMax = u->healthMax; // per-type: Brutes have triple bars, Runners half
+        label.barMax = glm::max(u->healthMax, 1e-3f); // per-type: Brutes triple, Runners half
         label.barColor = u->team == (uint32)m_team
             ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.25f, 0.2f);
-        label.bar2Value = u->energy; // shield battery (no regen) under the health bar
-        label.bar2Max = u->energyMax;
-        label.bar2Color = glm::vec3(1.0f, 0.9f, 0.3f);
-        labels.push_back(std::move(label));
-    }
-    // Shield mirror: bars over remote actors this instance does not simulate — on a client every
-    // unit and other player; on the server the client players (self-reported through GqE). The
-    // own player is never in the map (its HUD bars cover it).
-    for (const auto& [netId, rs] : m_remoteShields)
-    {
-        const Entity* entity = Globals::networkManager.findEntity(netId);
-        if (!entity)
-            continue;
-        HudWorldLabel label;
-        const float height = rs.kind == 2 ? 2.0f : 1.6f;
-        if (!camera.worldToScreen(viewport, entity->pos + glm::vec3(0.0f, height, 0.0f), label.screenPos))
-            continue;
-        label.title = remoteShortName(entity->getName(), rs.kind);
-        label.barValue = rs.healthFrac;
-        label.barMax = 1.0f;
-        // OWN team reads green, everything else red.
-        label.barColor = rs.team != (uint8)m_team
-            ? glm::vec3(1.0f, 0.25f, 0.2f) : glm::vec3(0.3f, 1.0f, 0.4f);
-        label.bar2Value = rs.energyFrac;
-        label.bar2Max = 1.0f;
+        label.bar2Value = u->energy; // shield battery under the health bar
+        label.bar2Max = glm::max(u->energyMax, 1e-3f);
         label.bar2Color = glm::vec3(1.0f, 0.9f, 0.3f);
         labels.push_back(std::move(label));
     }
