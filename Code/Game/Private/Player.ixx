@@ -28,11 +28,6 @@ public:
     // locally-owned capsule instead of spawning one. Movement/shield/health then run on the SAME
     // code paths (the owner simulates; the claim stream carries the body state to the server).
     void clientAdopt(const glm::vec3& respawnPos);
-    float fireInterval() const { return m_fireInterval; }   // server-side rate limit for client
-    float meleeInterval() const { return m_meleeInterval; } // combat requests
-    // Server: adopt an externally spawned projectile (client combat requests) into the aging +
-    // field-push loop, so it despawns and deflects like every other shot.
-    void trackProjectile(EntityPtr projectile) { m_projectiles.push_back(Projectile{ std::move(projectile), 0.0f }); }
 
     // Camera-relative WASD velocity steering + LShift sprint + Space jump off a ground raycast
     // (port of the testbed's updateLocalPlayer). Windowed input only — no-ops without window focus.
@@ -52,19 +47,6 @@ public:
     Entity* entity() const { return m_entity.get(); }
     glm::vec3 interpolatedPos() const; // render-smooth body pose for the follow camera
     glm::vec3 bodyPos() const;         // current body position (authority logic)
-
-    // Combat (neutral mode: LMB shoots at the cursor, F melees). Inputs queue from the windowed
-    // tick; tickCombat (authority, pre-physics) spawns/ages projectiles and applies the melee
-    // shove. Projectiles carry a small team-0 field — enemy fields decelerate/deflect them via the
-    // per-emitter applied-force readback (the testbed force-ball mechanism).
-    void queueShot(const glm::vec3& dir) { m_queuedShotDir = dir; m_shotQueued = true; }
-    void queueMelee(const glm::vec3& dirPlanar) { m_queuedMeleeDir = dirPlanar; m_meleeQueued = true; }
-    void tickCombat(const glm::vec3& cameraForwardPlanar, float deltaSec);
-    float meleeRange() const { return m_meleeRange; }
-    float meleeFlash() const { return m_meleeFlash; } // seconds left of swing visual
-    glm::vec3 meleeDir() const { return m_meleeDir; } // planar direction of the last swing
-    bool meleeJustSwung() const { return m_meleeSwung; } // true for the tick the swing landed
-                                                         // (GameMatch feeds it to NpcSystem damage)
 
     float health() const { return m_health; }
     float healthMax() const { return m_healthMax; }
@@ -87,25 +69,9 @@ public:
     bool shieldCollapsed() const { return m_shieldCollapsed; }
 
 private:
-    struct Projectile
-    {
-        EntityPtr entity;
-        float age = 0.0f;
-    };
-
     EntityPtr m_entity;
     ForceQuery m_query; // point query at the body center — feeds the density readout
-    std::vector<Projectile> m_projectiles;
     glm::vec3 m_spawnPos{ 0.0f };
-    glm::vec3 m_queuedShotDir{ 0.0f };
-    glm::vec3 m_queuedMeleeDir{ 0.0f };
-    glm::vec3 m_meleeDir{ 0.0f, 0.0f, -1.0f };
-    float m_fireCooldown = 0.0f;
-    float m_meleeCooldown = 0.0f;
-    float m_meleeFlash = 0.0f;
-    bool m_shotQueued = false;
-    bool m_meleeQueued = false;
-    bool m_meleeSwung = false;
     bool m_jumpWasDown = false;
 
     uint32 m_team = 0;
@@ -140,14 +106,6 @@ private:
     float m_materials = m_materialsMax; // carried construction stock (see materials())
     float m_spawnGraceSec = 1.0f;        // no energy/health drain this long after (re)spawn — the
                                          // GPU readbacks still carry the death position for ~2 frames
-    // Tweaks ("Game/Combat")
-    float m_projSpeed = 30.0f;
-    float m_projLifetime = 5.0f;
-    float m_projPushGain = 10000.0f;     // field applied-force -> impulse (force-ball scale)
-    float m_fireInterval = 0.25f;
-    float m_meleeRange = 3.0f;
-    float m_meleeImpulse = 600.0f;
-    float m_meleeInterval = 0.5f;
     float m_damageRadius = 0.8f;        // metres: health drains once the equilibrium shield radius
                                         // squishes below this (capsule half-height is 0.8 world)
     float m_shieldPushGain = 10000.0f;  // applied-force -> impulse scale (testbed force-ball precedent)

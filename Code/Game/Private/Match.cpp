@@ -308,7 +308,6 @@ void GameMatch::onClientLeft(uint32 clientId)
             Globals::world.removeRootEntity(it->second.get());
         m_clientPlayers.erase(it);
     }
-    m_clientMaterials.erase(clientId);
 }
 
 void GameMatch::sendStructurePlaced(int index)
@@ -658,36 +657,26 @@ void GameMatch::update(float deltaSec)
         float serverMaterials = m_player.materials();
         tickPlayerMaterials(playerPos, (uint8)m_team, serverMaterials);
         m_player.setMaterials(serverMaterials);
+        // Client twins: the puppet component IS the store — materialsFrac holds the
+        // server-authoritative inventory (the snapshot game blob carries it back to the owner),
+        // so it dies with the capsule and no clientId-keyed map exists. Team is stamped here too:
+        // claims never apply it (client-forgeable), and units read it straight off the component.
+        const float materialsMax = glm::max(m_player.materialsMax(), 1e-3f);
         for (const auto& [id, p] : m_clientPlayers)
             if (p)
                 if (const PhysicsComponent* pc = getComponent<PhysicsComponent>(p.get()); pc && pc->body.isValid())
-                {
-                    float& materials = m_clientMaterials[id];
-                    tickPlayerMaterials(pc->body.getPosition(), requestTeam(id), materials);
-                    // publish onto the twin's puppet component: the entity snapshot's game blob
-                    // carries it back to the owner (server-authoritative inventory). Team is
-                    // stamped here too — claims never apply it (client-forgeable), and units read
-                    // it straight off the component now.
                     if (GameUnitComponent* unit = getComponent<GameUnitComponent>(p.get()))
                     {
-                        unit->materialsFrac = materials / glm::max(m_player.materialsMax(), 1e-3f);
+                        float materials = glm::clamp(unit->materialsFrac, 0.0f, 1.0f) * materialsMax;
+                        tickPlayerMaterials(pc->body.getPosition(), requestTeam(id), materials);
+                        unit->materialsFrac = materials / materialsMax;
                         unit->team = requestTeam(id);
                     }
-                }
     }
 
     // The unit SIM runs inside the entity pass (GameUnitComponent); this drains what it queued
     // (shots to spawn, deaths) and runs production.
     m_npcs.service(m_structures);
-
-    // Damage banked on the client twins' puppet inboxes during the pass is OWED to each owner
-    // (health is owner-computed there) — flushed as GDm below. Our own capsule's inbox drains in
-    // GamePlayer::tickShieldAndHealth.
-    for (const auto& [id, p] : m_clientPlayers)
-        if (p)
-            if (GameUnitComponent* unit = getComponent<GameUnitComponent>(p.get()))
-                if (const float damage = unit->takePendingDamage(); damage > 0.0f)
-                    m_clientPendingDamage[id] += damage;
 
     if (m_isServer)
     {
@@ -697,26 +686,38 @@ void GameMatch::update(float deltaSec)
             sendStats();
             m_statTimer = 0.2f; // ~5 Hz volatile-state mirror
         }
+        // GDm: damage banked on the client twins' puppet inboxes (unit melee, projectile hits —
+        // the same damage() call every victim gets) is owed to each owner, whose GamePlayer runs
+        // the shield-absorb rules (health is owner-computed). The component inbox accumulates
+        // between flushes, so no clientId-keyed map is needed. Our own capsule's inbox drains in
+        // GamePlayer::tickShieldAndHealth.
         m_damageTimer -= deltaSec;
         if (m_damageTimer <= 0.0f)
         {
-            if (!m_clientPendingDamage.empty())
+            constexpr int c_maxDamageRecords = 32; // = the engine's client cap; 1 + 32*8 B fits the buffer
+            uint32 owedIds[c_maxDamageRecords];
+            float owed[c_maxDamageRecords];
+            int count = 0;
+            for (const auto& [id, p] : m_clientPlayers)
+                if (p && count < c_maxDamageRecords)
+                    if (GameUnitComponent* unit = getComponent<GameUnitComponent>(p.get()))
+                        if (const float damage = unit->takePendingDamage(); damage > 0.0f)
+                        {
+                            owedIds[count] = id;
+                            owed[count] = damage;
+                            ++count;
+                        }
+            if (count > 0)
             {
-                // GDm: unit melee damage owed to client players (each client applies its own —
-                // health is owner-computed there).
                 uint8 buffer[300];
                 NetWriter writer(buffer);
-                writer.write<uint8>((uint8)glm::min(m_clientPendingDamage.size(), (size_t)32));
-                int written = 0;
-                for (const auto& [clientId, damage] : m_clientPendingDamage)
+                writer.write<uint8>((uint8)count);
+                for (int i = 0; i < count; ++i)
                 {
-                    if (written++ >= 32)
-                        break;
-                    writer.write<uint32>(clientId);
-                    writer.write<float>(damage);
+                    writer.write<uint32>(owedIds[i]);
+                    writer.write<float>(owed[i]);
                 }
                 Globals::networkManager.fireNetworkEvent("GDm", writer.data());
-                m_clientPendingDamage.clear();
             }
             m_damageTimer = 0.1f;
         }

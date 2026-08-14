@@ -149,12 +149,9 @@ private:
     bool m_isClient = false;
     float m_statTimer = 0.0f; // server: GSt cadence
     std::unordered_map<uint32, EntityPtr> m_clientPlayers;    // server: clientId -> their capsule
-    std::unordered_map<uint32, float> m_clientMaterials;      // server: per-client carried materials
-                                                              // (authoritative; the twin's puppet
-                                                              // GameUnitComponent mirrors it back
-                                                              // through the snapshot game blob)
-    std::unordered_map<uint32, float> m_clientPendingDamage;  // server: unit melee damage owed to
-                                                              // each client's player (flushed as GDm)
+                                                              // (the ONLY per-client store — carried
+                                                              // materials live on the twin's puppet
+                                                              // component, damage owed in its inbox)
     float m_damageTimer = 0.0f; // server: GDm flush cadence
 
     // Corridor anchors (see the constructor): one Base at each end, clients spawn beside theirs.
