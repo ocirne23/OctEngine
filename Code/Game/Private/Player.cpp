@@ -270,12 +270,22 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
         unit->energyMax = m_energyMax;
         unit->energy = m_energy;
         unit->collapsed = m_shieldCollapsed;
-        unit->team = uint8(m_team);
         const NetworkComponent* net = getComponent<NetworkComponent>(m_entity.get());
         if (net && net->authority() == ENetAuthority::LocalOwner)
+        {
+            // Client: materials AND team are the server's to decide — read both off the component
+            // (the snapshot game blob writes them), never stamp over them. Gated on a snapshot
+            // having actually landed: until then the component still holds the PREFAB's authored
+            // team, and latching that would look like a real assignment.
             m_materials = glm::clamp(unit->materialsFrac, 0.0f, 1.0f) * m_materialsMax;
+            if (net->state && net->state->client.hasTarget && unit->team != m_team)
+                setTeam(unit->team);
+        }
         else
+        {
             unit->materialsFrac = m_materialsMax > 0.0f ? m_materials / m_materialsMax : 0.0f;
+            unit->team = uint8(m_team);
+        }
     }
 }
 

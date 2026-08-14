@@ -761,33 +761,35 @@ static bool packGameStateBlob(Entity* entity, uint8 out[GameBlobBytes])
     return true;
 }
 
-// applyShield: everything but materials/team (skipped on the RECEIVING owner — it computes its
-// own). applyMaterials: server-authoritative, so a claim (owner -> server) never applies it while
-// a snapshot (server -> anyone, the owner included) always does. applyTeam is snapshot-only for
-// the same reason inverted: a client re-teaming its twin's FIELD server-side would merge its
-// bubble into enemy fields.
+// Which parts of the blob the receiver adopts, by direction:
+// * applyShield — health/battery/output. Off on the RECEIVING OWNER: it computes its own.
+// * applyMaterials / applyTeam — server-authoritative, so a snapshot (server -> anyone, the owner
+//   INCLUDED) always applies them while a claim (owner -> server) never does: a client must not
+//   be able to mint its own inventory, nor re-team its twin's field into the enemy's bubbles.
+//   Both apply independently of applyShield — an owner still learns the team the server gave it.
 static void applyGameStateBlob(Entity* entity, const uint8 blob[GameBlobBytes],
     bool applyShield, bool applyMaterials, bool applyTeam)
 {
     GameUnitComponent* unit = getComponent<GameUnitComponent>(entity);
     if (!unit)
         return;
+    ForceComponent* fc = getComponent<ForceComponent>(entity);
+    const bool hasEmitter = fc && fc->emitter.isValid();
     if (applyMaterials)
         unit->materialsFrac = blob[3] / 255.0f;
+    if (applyTeam)
+    {
+        unit->team = (blob[4] >> 4u) & 7u;
+        if (hasEmitter)
+            fc->emitter.setTeam(unit->team);
+    }
     if (!applyShield)
         return;
     unit->health = blob[0] / 255.0f * unit->healthMax;
     unit->energy = blob[1] / 255.0f * unit->energyMax;
     unit->collapsed = (blob[4] & 1u) != 0;
-    if (applyTeam)
-        unit->team = (blob[4] >> 4u) & 7u;
-    if (ForceComponent* fc = getComponent<ForceComponent>(entity); fc && fc->emitter.isValid())
-    {
-        // The remote bubble renders the true drain/collapse state, on the true team.
+    if (hasEmitter) // the remote bubble renders the true drain/collapse state
         fc->emitter.setOutput(glm::max(blob[2] / 255.0f * GameBlobOutputRange, 0.01f));
-        if (applyTeam)
-            fc->emitter.setTeam(unit->team);
-    }
 }
 
 void NetworkManager::sendClaims()

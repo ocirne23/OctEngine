@@ -24,6 +24,8 @@ public:
     // Applies to an already-spawned/adopted capsule too (the client learns its team at Welcome).
     void setTeam(uint32 team);
     uint32 team() const { return m_team; }
+    // Re-anchor the death respawn (a client learns its team — and so its Base — after adopting).
+    void setRespawnPos(const glm::vec3& pos) { m_spawnPos = pos; }
     // CO-OP CLIENT: the server spawned our player (Component Network + setOwner) — poll-adopt the
     // locally-owned capsule instead of spawning one. Movement/shield/health then run on the SAME
     // code paths (the owner simulates; the claim stream carries the body state to the server).

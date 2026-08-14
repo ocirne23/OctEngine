@@ -80,6 +80,7 @@ private:
     void refreshBuildHotbar(); // repopulates slot labels/counts for the current grid level
     void updateModeSwitching();
     void updateBuildMode(const Camera& camera, bool confirmEdge, bool cancelEdge);
+    void disarmBuild(); // drop the armed item + any half-finished two-click flow (RMB / key 0)
     void updateLinkTool(const Camera& camera, bool confirmEdge, bool cancelEdge, EBuildTool tool);
     void updateDeleteMode(const Camera& camera, bool confirmEdge);
     void updateSelectMode(const Camera& camera, bool confirmEdge, bool smartLinkEdge);
@@ -138,13 +139,23 @@ private:
     bool m_wallPlacing = false;  // Wall two-click placement: first click anchored the line start
     glm::vec3 m_wallStart{ 0.0f };
 
-    static uint32 teamOfClient(uint32 clientId) { return glm::min(clientId, uint32(GameMaxTeams - 1)); }
-    // The team a client's build/demolish/cable request acts as.
-    uint8 requestTeam(uint32 clientId) const { return (uint8)teamOfClient(clientId); }
+    // TEAMS are SLOTS, never derived from the clientId: ids are minted monotonically and never
+    // recycled (a reconnect or a failed first attempt burns one), so the second connection of the
+    // same friend used to land on team 2 — a team with no Base. The map spawns one Base per
+    // playable team (see spawnWorld), and a player without a Base has no respawn anchor, no
+    // mineral bank and no healing, so the slot pool is exactly that many.
+    static constexpr uint8 PlayableTeams = 2;
+    uint8 allocateClientTeam() const;      // lowest free slot; extras double up on the last one
+    int clientTeam(uint32 clientId) const; // -1 = unknown client (no capsule yet); 0 = the server
+    // The team a client's build/demolish/cable request acts as. Callers must reject unknown
+    // senders first (handleNetEvent does) — this clamps rather than failing.
+    uint8 requestTeam(uint32 clientId) const { return (uint8)glm::max(clientTeam(clientId), 0); }
+    glm::vec3 teamStartPos(uint8 team) const; // spawn/respawn anchor beside that team's Base
 
     bool m_enabled = false;
-    uint32 m_team = 0;       // OUR team: 0 on server/single player; latched from the Welcome's
-                             // clientId on a client (0 until welcomed)
+    uint32 m_team = 0;       // OUR team: 0 on server/single player; on a client it follows the
+                             // team the SERVER assigned our capsule (read off its puppet
+                             // GameUnitComponent, which the snapshot game blob carries)
     bool m_isServer = false; // co-op roles, latched in spawnWorld
     bool m_isClient = false;
     float m_statTimer = 0.0f; // server: GSt cadence

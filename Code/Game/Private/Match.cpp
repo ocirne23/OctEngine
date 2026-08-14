@@ -265,23 +265,63 @@ void GameMatch::spawnCorridorWalls()
     }
 }
 
+uint8 GameMatch::allocateClientTeam() const
+{
+    // Lowest free playable slot. The server holds m_team (0); each connected client's team lives
+    // on its capsule's puppet component, so the live set needs no separate bookkeeping. With every
+    // slot taken the extras double up on the last one — sharing a team beats having no Base.
+    bool used[PlayableTeams] = {};
+    if (m_team < PlayableTeams)
+        used[m_team] = true;
+    for (const auto& [id, p] : m_clientPlayers)
+        if (p)
+            if (const GameUnitComponent* u = getComponent<GameUnitComponent>(p.get()); u && u->team < PlayableTeams)
+                used[u->team] = true;
+    for (uint8 t = 0; t < PlayableTeams; ++t)
+        if (!used[t])
+            return t;
+    return PlayableTeams - 1;
+}
+
+int GameMatch::clientTeam(uint32 clientId) const
+{
+    if (clientId == 0)
+        return (int)m_team; // the server itself
+    const auto it = m_clientPlayers.find(clientId);
+    if (it == m_clientPlayers.end() || !it->second)
+        return -1; // unknown: no capsule spawned for that id (never grant it a team's authority)
+    const GameUnitComponent* u = getComponent<GameUnitComponent>(it->second.get());
+    return u ? (int)u->team : -1;
+}
+
+glm::vec3 GameMatch::teamStartPos(uint8 team) const
+{
+    // One Base per playable team; the spawn sits just beside it (same offset the host uses).
+    return team == 0 ? m_playerStart : m_enemyBasePos + glm::vec3(0.0f, 1.0f, -6.0f);
+}
+
 void GameMatch::onClientJoined(uint32 clientId)
 {
     // Their player: spawned server-side (player.pre carries Component Network), handed over with
     // setOwner in the SAME frame; the client adopts + drives it through the claim stream.
-    // Clients spawn beside THEIR team's Base.
-    const glm::vec3 clientStart = m_enemyBasePos + glm::vec3(0.0f, 1.0f, -6.0f);
+    // Clients spawn beside THEIR team's Base — the team is a freshly allocated slot, and the
+    // capsule's puppet component carries it to the owner through the snapshot game blob.
+    const uint8 team = allocateClientTeam();
+    const glm::vec3 clientStart = teamStartPos(team);
     EntityPtr player = Globals::world.spawnAssetFile("Entities/Game/player.pre",
         Transform(clientStart + glm::vec3(2.0f * (float)(clientId % 5), 0.0f, 1.5f * (float)(clientId % 3))), true);
     if (player)
     {
         player->setName(("Player " + std::to_string(clientId)).c_str());
         Globals::networkManager.setOwner(*player, clientId);
+        if (GameUnitComponent* unit = getComponent<GameUnitComponent>(player.get()))
+            unit->team = team; // the authoritative assignment: everything else reads it from here
         // the server-side twin's field carries the client's team (readbacks, visuals)
         if (ForceComponent* fc = getComponent<ForceComponent>(player.get()))
-            fc->emitter.setTeam(teamOfClient(clientId));
+            fc->emitter.setTeam(team);
         Globals::world.addRootEntity(player);
         m_clientPlayers[clientId] = std::move(player);
+        Log::info("Game: client " + std::to_string(clientId) + " assigned team " + std::to_string(team));
     }
     // World-state replay for the late joiner: every structure + cable, broadcast (mirrorPlace/
     // mirrorCable are idempotent, so already-connected clients shrug the duplicates off).
@@ -564,8 +604,11 @@ void GameMatch::handleNetEvent(std::string_view name)
     }
     if (!m_isServer || name[1] != 'q')
         return;
-    // Client requests, validated here + through the same authority seams local input uses.
+    // Client requests, validated here + through the same authority seams local input uses. A
+    // sender with no capsule has no assigned team, so it gets no authority to act as one.
     const uint32 sender = Globals::networkManager.currentEventSender();
+    if (clientTeam(sender) < 0)
+        return;
     if (name == "GqP")
     {
         const uint8 type = reader.read<uint8>();
@@ -616,18 +659,18 @@ void GameMatch::update(float deltaSec)
 
     if (m_isClient)
     {
-        // Our team comes from the Welcome's clientId — latch it the frame it appears, BEFORE
-        // adoption, so the adopted capsule's field re-teams immediately.
-        if (m_team == 0)
-            if (const uint32 clientId = Globals::networkManager.localClientId(); clientId != 0)
-            {
-                m_team = teamOfClient(clientId);
-                m_player.setTeam(m_team);
-                Log::info("We are team " + std::to_string(m_team));
-            }
         // CLIENT: adopt + drive our own capsule (the owner simulates; claims stream the state);
         // shield/health run on LOCAL readbacks against the mirrored fields. World sim is remote.
-        m_player.clientAdopt(m_enemyBasePos + glm::vec3(0.0f, 1.0f, -6.0f));
+        m_player.clientAdopt(teamStartPos((uint8)m_team));
+        // Our team is the SERVER's assignment, carried on our capsule's puppet component by the
+        // snapshot game blob (never derived from the clientId — see allocateClientTeam). It lands
+        // a snapshot or two after adoption; follow it whenever it changes.
+        if (m_player.team() != m_team)
+        {
+            m_team = m_player.team();
+            m_player.setRespawnPos(teamStartPos((uint8)m_team));
+            Log::info("We are team " + std::to_string(m_team));
+        }
         m_player.tickMovement(m_camera.forwardPlanar(), deltaSec);
         m_player.tickShieldAndHealth(deltaSec);
         tickBaseHealing(deltaSec);
@@ -917,6 +960,15 @@ void GameMatch::updateModeSwitching()
 // the only tiered medium). Link CREATION lives in Select mode's right-click smart connect.
 // Clicking empty ground, the selected structure, or RIGHT-clicking clears the selection; it
 // persists by stable id.
+void GameMatch::disarmBuild()
+{
+    m_buildSelection = -1;
+    m_lanceAiming = false;
+    m_wallPlacing = false;
+    m_cablePendingId = 0;
+    refreshBuildHotbar(); // the slot highlight follows in the same frame
+}
+
 void GameMatch::updateLinkTool(const Camera& camera, bool confirmEdge, bool cancelEdge, EBuildTool tool)
 {
     if (cancelEdge)
@@ -998,7 +1050,7 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         m_cablePendingId = 0; // switching tools drops a half-made connection (and half-done aims)
         m_lanceAiming = false;
         m_wallPlacing = false;
-        if (pressed == 9) // key 0 disarms the ghost
+        if (pressed == 9) // key 0 disarms the ghost (RMB does the same, see below)
             m_buildSelection = -1;
         else if (pressed < (int)buildCategoryItems(m_buildCategory).size())
             m_buildSelection = pressed;
@@ -1013,9 +1065,17 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         updateSelectionClick(camera, confirmEdge, /*allowPick*/ true);
         return;
     }
+    // RMB CANCELS, one step at a time: a half-finished two-click flow (link endpoint, Lance aim,
+    // Wall line) drops first, and the next RMB disarms the item itself. Only once nothing is armed
+    // does RMB go back to its Select-mode meaning (smart connect / barracks route) above.
     const BuildItem& item = buildCategoryItems(m_buildCategory)[m_buildSelection];
     if (item.tool != EBuildTool::Structure)
     {
+        if (cancelEdge && m_cablePendingId == 0)
+        {
+            disarmBuild();
+            return;
+        }
         updateLinkTool(camera, confirmEdge, cancelEdge, item.tool);
         return;
     }
@@ -1104,13 +1164,17 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         return;
     }
 
+    if (cancelEdge) // nothing half-placed (the two-click flows returned above): drop the ghost
+    {
+        disarmBuild();
+        return;
+    }
+
     const Aim aim = computeAim(camera, item.structure);
     if (!aim.valid)
     {
         // No ghost here (off-map, or an armed EXTRACTOR with no free node under the cursor — its
-        // aim is invalid over ordinary ground). Clicks still inspect and right-click still
-        // connects/routes: this path is the common one while wiring an extractor up.
-        updateRightClickActions(camera, cancelEdge);
+        // aim is invalid over ordinary ground). Clicks still inspect.
         updateSelectionClick(camera, confirmEdge, /*allowPick*/ true);
         return;
     }
@@ -1135,9 +1199,6 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         else
             requestPlace(aim.type, aim.pos, aim.nodeIndex, glm::vec3(0.0f));
     }
-    // RMB with a selection links to the hovered building / sets a barracks route waypoint on
-    // ground (nothing is mid-placement here — the two-click flows above consume their own cancel).
-    updateRightClickActions(camera, cancelEdge);
     // A click the placement REFUSES (occupied cells — i.e. on a building) inspects it instead of
     // doing nothing; a click that can place always places.
     updateSelectionClick(camera, confirmEdge, /*allowPick*/ !aim.affordable);
