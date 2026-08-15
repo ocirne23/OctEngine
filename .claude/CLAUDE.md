@@ -71,7 +71,36 @@ Guidance for Claude Code when working in this repository.
 * int8/uint64-style typedefs from `Core`; glm via `Core.glm`; `assert` compiled out in non-debug via forceinclude.h
 
 # Libraries
-Dependency direction (`target_link_libraries`, public): everything imports Core. `Animation`, `Physics`, `Network`, `Audio`, `Threading` depend only on Core; `Script` adds File (ScriptHost compiles/loads .dsl from disk, and disk access is File-only now); `Spatial` adds Threading; `File` adds Animation; `RendererVK` adds Animation + File + Threading; `Particle` adds RendererVK + File; `Force` adds RendererVK; `Procedural` adds RendererVK + File + Spatial + Physics (+ onnxruntime, zstd PRIVATE); `Entity` adds RendererVK + File + Script + Physics + Audio + Particle + Force + Spatial + Threading + Network; `UI` adds Entity + RendererVK + Script; `Input` adds UI; `Game` adds Entity + Force + Physics + Input; `App` links all + Game + AppScripts. The Profiler/MemoryTracker are part of Core, not a separate library.
+DEPENDENCY DIRECTION (`target_link_libraries`, PUBLIC unless noted). Everything imports Core, and a
+library NEVER links one printed above it — read the stack bottom-up, each row may use every row
+below it. Third-party libs in parentheses are PRIVATE (they never leak through a public interface).
+
+```
+   LIBRARY        DEPENDS ON (beyond Core)
+   ------------------------------------------------------------------------------------------------
+   App            everything + Game + AppScripts
+   Game           Entity, Force, Physics, Input
+   Input          UI                                             (+ openxr_loader)
+   UI             Entity, RendererVK, Script                     (+ imgui)
+   Entity         RendererVK, File, Script, Physics, Audio, Particle, Force, Spatial, Threading, Network
+   ------------------------------------------------------------------------------------------------
+   Particle       RendererVK, File
+   Force          RendererVK
+   Procedural     RendererVK, File, Spatial, Physics             (+ onnxruntime, zstd)
+   RendererVK     Animation, File, Threading                     (+ vulkan, glslang, Aftermath)
+   ------------------------------------------------------------------------------------------------
+   Script         File          (ScriptHost compiles/loads .dsl from disk; disk access is File-only)
+   Spatial        Threading
+   File           Animation                                      (+ assimp, zlib, meshoptimizer)
+   ------------------------------------------------------------------------------------------------
+   Animation      -                                              -- these five are Core-only
+   Physics        -                                              (+ box3d)
+   Network        -                                              (+ Ws2_32, Bcrypt)
+   Audio          -                                              (+ Steam Audio, miniaudio)
+   Threading      -
+   ------------------------------------------------------------------------------------------------
+   Core           std header units, math, containers, Profiler + MemoryTracker  -- no dependencies
+```
 
 ## Core
 * Cross-library utilities; wrappers for big headers (glm, SDL, imgui, Windows — the Vulkan wrapper is RendererVK-private `Util/VK.ixx`)
