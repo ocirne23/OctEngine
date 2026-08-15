@@ -2439,9 +2439,13 @@ void Renderer::recordEyeAdaptation(uint32 frameIdx)
     CommandBuffer& cb = frameData.eyeAdaptCommandBuffer;
     vk::CommandBufferInheritanceInfo inheritance;
     cb.begin(false, &inheritance);
+    // TAA OFF: the pass is not recorded or executed at all (see recordCommandBuffers), so the
+    // post chain reads this frame's scene colour directly instead of TAA's resolved image.
+    const bool taaOn = m_taaParams.taaEnabled;
     EyeAdaptationPipeline::RecordParams params{
-        .resolvedView = m_taaPipeline.getResolvedView(frameIdx, 0),
-        .sampler = m_taaPipeline.getSampler(),
+        .resolvedView = taaOn ? m_taaPipeline.getResolvedView(frameIdx, 0) : frameData.sceneColor.getColorLayerView(0),
+        .resolvedLayout = taaOn ? vk::ImageLayout::eGeneral : vk::ImageLayout::eShaderReadOnlyOptimal,
+        .sampler = taaOn ? m_taaPipeline.getSampler() : frameData.sceneColor.getSampler(),
         .viewportMin = m_viewportRect.min,
         .viewportSize = m_viewportRect.getSize(),
     };
@@ -2462,10 +2466,12 @@ void Renderer::recordComposite(uint32 frameIdx)
     vkCb.setViewport(0, vk::Viewport{.x = 0.0f, .y = 0.0f, .width = (float)extent.width, .height = (float)extent.height, .minDepth = 0.0f, .maxDepth = 1.0f });
     vkCb.setScissor(0, vk::Rect2D{.offset = vk::Offset2D{ vpMin.x, vpMin.y }, .extent = vk::Extent2D{ (uint32)vpSize.x, (uint32)vpSize.y } });
 
+    const bool taaOn = m_taaParams.taaEnabled; // TAA bypassed: tonemap the scene colour directly
     CompositePipeline::RecordParams params{
         .descriptorSet = frameData.compositeDescriptorSet,
-        .resolvedView = m_taaPipeline.getResolvedView(frameIdx, 0),
-        .sampler = m_taaPipeline.getSampler(),
+        .resolvedView = taaOn ? m_taaPipeline.getResolvedView(frameIdx, 0) : frameData.sceneColor.getColorLayerView(0),
+        .resolvedLayout = taaOn ? vk::ImageLayout::eGeneral : vk::ImageLayout::eShaderReadOnlyOptimal,
+        .sampler = taaOn ? m_taaPipeline.getSampler() : frameData.sceneColor.getSampler(),
         .exposureBuffer = m_eyeAdaptationPipeline.getExposureBuffer().getBuffer(),
         .exposureEV = m_postParams.exposureEV,
         .tonemapper = m_postParams.tonemapper,
@@ -2765,7 +2771,8 @@ void Renderer::recordCommandBuffers()
             recordParticles(frameIdx);
             recordAO(frameIdx);
             recordFogApply(frameIdx);
-            recordTaa(frameIdx);
+            if (m_taaParams.taaEnabled) // bypassed entirely when off — nothing to record or execute
+                recordTaa(frameIdx);
         }
         frameData.updated = true;
     }
@@ -3012,9 +3019,10 @@ void Renderer::recordCommandBuffers()
                 vkCommandBuffer.setScissor(0, vk::Rect2D{ .offset = vk::Offset2D{ 0, 0 }, .extent = ext });
                 CompositePipeline::RecordParams eyeComposite{
                     .descriptorSet = m_vrCompositeDescriptorSet[eye],
-                    .resolvedView = m_taaPipeline.getResolvedView(frameIdx, eye),
-                    .resolvedLayout = vk::ImageLayout::eGeneral,
-                    .sampler = m_taaPipeline.getSampler(),
+                    .resolvedView = m_taaParams.taaEnabled ? m_taaPipeline.getResolvedView(frameIdx, eye)
+                        : frameData.sceneColor.getColorLayerView(eye),
+                    .resolvedLayout = m_taaParams.taaEnabled ? vk::ImageLayout::eGeneral : vk::ImageLayout::eShaderReadOnlyOptimal,
+                    .sampler = m_taaParams.taaEnabled ? m_taaPipeline.getSampler() : frameData.sceneColor.getSampler(),
                     .exposureBuffer = m_eyeAdaptationPipeline.getExposureBuffer().getBuffer(),
                     .exposureEV = m_postParams.exposureEV,
                     .tonemapper = m_postParams.tonemapper,
@@ -3122,10 +3130,19 @@ void Renderer::recordCommandBuffers()
                 .image = sceneColor.getColorImage(),
                 .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 },
             };
+            // TAA OFF: eye adaptation (compute) and the composite (fragment) sample this image
+            // instead of TAA's resolved one, so the read must be visible to both stages.
+            if (!m_taaParams.taaEnabled)
+                colorToTaaImg.dstStageMask |= vk::PipelineStageFlagBits2::eFragmentShader;
             vkCommandBuffer.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &colorToTaaImg });
-            m_gpuProfiler.beginScope(vkCommandBuffer, "TAA");
-            vkCommandBuffer.executeCommands(1, &vkTaaCommandBuffer);
-            m_gpuProfiler.endScope(vkCommandBuffer);
+            // Disabled TAA used to still run the full-screen resolve with feedback 0 (a visible "TAA"
+            // scope in the profiler for a pass that only copied) — now the dispatch is skipped outright.
+            if (m_taaParams.taaEnabled)
+            {
+                m_gpuProfiler.beginScope(vkCommandBuffer, "TAA");
+                vkCommandBuffer.executeCommands(1, &vkTaaCommandBuffer);
+                m_gpuProfiler.endScope(vkCommandBuffer);
+            }
             // Eye adaptation: reads the resolved colour (TAA barrier above), writes the exposure the composite reads.
             m_gpuProfiler.beginScope(vkCommandBuffer, "Eye adaptation");
             vkCommandBuffer.executeCommands(1, &vkEyeAdaptCommandBuffer);

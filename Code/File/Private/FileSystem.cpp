@@ -32,6 +32,23 @@ namespace
     }
 }
 
+namespace
+{
+    // A ProfileScope that NO-OPS on threads the profiler does not track. Plain ProfileScope
+    // dereferences the calling thread's track (and asserts), but IO legitimately runs on threads
+    // the engine deliberately leaves unregistered — the transient startup texture-bake pool, for
+    // instance (a track is permanent and 1 MiB, so short-lived pools do not get one).
+    struct IoScope final
+    {
+        std::optional<ProfileScope> scope;
+        explicit IoScope(const char* name)
+        {
+            if (Globals::profiler.threadTrack() != nullptr)
+                scope.emplace(name, EProfileCategory::File);
+        }
+    };
+}
+
 FileSystem::AllowMainThreadIO::AllowMainThreadIO() { ++t_allowMainThreadDepth; }
 FileSystem::AllowMainThreadIO::~AllowMainThreadIO() { --t_allowMainThreadDepth; }
 
@@ -55,6 +72,7 @@ bool FileSystem::initialize()
     g_mainThreadId = std::this_thread::get_id();
     g_mainThreadKnown = true;
     const AllowMainThreadIO allowIo; // startup: finding the repo root is main-thread by definition
+    const IoScope profileScope("FileSystem::initialize");
 
     std::cout.setf(std::ios::unitbuf);
 
@@ -87,6 +105,7 @@ bool FileSystem::initialize()
 std::string FileSystem::readFileStr(const std::string& path, bool allowMainThread)
 {
     assertIoThread(allowMainThread);
+    const IoScope profileScope("FileSystem::readFileStr");
     std::ifstream file(toPath(path), std::ios::in | std::ios::binary | std::ios::ate);
     if (!file.is_open())
         return std::string();
@@ -101,6 +120,7 @@ std::string FileSystem::readFileStr(const std::string& path, bool allowMainThrea
 bool FileSystem::readFileBytes(const std::string& path, std::vector<uint8>& out, bool allowMainThread)
 {
     assertIoThread(allowMainThread);
+    const IoScope profileScope("FileSystem::readFileBytes");
     out.clear();
     std::ifstream file(toPath(path), std::ios::in | std::ios::binary | std::ios::ate);
     if (!file.is_open())
@@ -116,6 +136,7 @@ bool FileSystem::readFileBytes(const std::string& path, std::vector<uint8>& out,
 bool FileSystem::writeFileStr(const std::string& path, const std::string& content, bool allowMainThread)
 {
     assertIoThread(allowMainThread);
+    const IoScope profileScope("FileSystem::writeFileStr");
     std::ofstream file(toPath(path), std::ios::out | std::ios::binary | std::ios::trunc);
     if (!file.is_open())
         return false;
@@ -126,6 +147,7 @@ bool FileSystem::writeFileStr(const std::string& path, const std::string& conten
 bool FileSystem::writeFileBytes(const std::string& path, std::span<const uint8> data, bool allowMainThread)
 {
     assertIoThread(allowMainThread);
+    const IoScope profileScope("FileSystem::writeFileBytes");
     std::ofstream file(toPath(path), std::ios::out | std::ios::binary | std::ios::trunc);
     if (!file.is_open())
         return false;
@@ -139,6 +161,7 @@ bool FileSystem::writeFileBytes(const std::string& path, std::span<const uint8> 
 bool FileSystem::exists(const std::string& path, bool allowMainThread)
 {
     assertIoThread(allowMainThread);
+    const IoScope profileScope("FileSystem::exists");
     std::error_code ec;
     return std::filesystem::exists(toPath(path), ec);
 }
@@ -146,6 +169,7 @@ bool FileSystem::exists(const std::string& path, bool allowMainThread)
 bool FileSystem::isDirectory(const std::string& path, bool allowMainThread)
 {
     assertIoThread(allowMainThread);
+    const IoScope profileScope("FileSystem::isDirectory");
     std::error_code ec;
     return std::filesystem::is_directory(toPath(path), ec);
 }
@@ -153,6 +177,7 @@ bool FileSystem::isDirectory(const std::string& path, bool allowMainThread)
 bool FileSystem::isRegularFile(const std::string& path, bool allowMainThread)
 {
     assertIoThread(allowMainThread);
+    const IoScope profileScope("FileSystem::isRegularFile");
     std::error_code ec;
     return std::filesystem::is_regular_file(toPath(path), ec);
 }
@@ -160,6 +185,7 @@ bool FileSystem::isRegularFile(const std::string& path, bool allowMainThread)
 uint64 FileSystem::fileSize(const std::string& path, bool allowMainThread)
 {
     assertIoThread(allowMainThread);
+    const IoScope profileScope("FileSystem::fileSize");
     std::error_code ec;
     const auto size = std::filesystem::file_size(toPath(path), ec);
     return ec ? 0ull : (uint64)size;
@@ -168,6 +194,7 @@ uint64 FileSystem::fileSize(const std::string& path, bool allowMainThread)
 int64 FileSystem::lastWriteTimeSec(const std::string& path, bool allowMainThread)
 {
     assertIoThread(allowMainThread);
+    const IoScope profileScope("FileSystem::lastWriteTimeSec");
     std::error_code ec;
     const auto time = std::filesystem::last_write_time(toPath(path), ec);
     if (ec)
@@ -178,6 +205,7 @@ int64 FileSystem::lastWriteTimeSec(const std::string& path, bool allowMainThread
 bool FileSystem::createDirectories(const std::string& path, bool allowMainThread)
 {
     assertIoThread(allowMainThread);
+    const IoScope profileScope("FileSystem::createDirectories");
     std::error_code ec;
     std::filesystem::create_directories(toPath(path), ec);
     return !ec;
@@ -186,6 +214,7 @@ bool FileSystem::createDirectories(const std::string& path, bool allowMainThread
 bool FileSystem::remove(const std::string& path, bool allowMainThread)
 {
     assertIoThread(allowMainThread);
+    const IoScope profileScope("FileSystem::remove");
     std::error_code ec;
     return std::filesystem::remove(toPath(path), ec);
 }
@@ -193,6 +222,7 @@ bool FileSystem::remove(const std::string& path, bool allowMainThread)
 uint64 FileSystem::removeAll(const std::string& path, bool allowMainThread)
 {
     assertIoThread(allowMainThread);
+    const IoScope profileScope("FileSystem::removeAll");
     std::error_code ec;
     const auto count = std::filesystem::remove_all(toPath(path), ec);
     return ec ? 0ull : (uint64)count;
@@ -201,6 +231,7 @@ uint64 FileSystem::removeAll(const std::string& path, bool allowMainThread)
 bool FileSystem::rename(const std::string& from, const std::string& to, bool allowMainThread)
 {
     assertIoThread(allowMainThread);
+    const IoScope profileScope("FileSystem::rename");
     std::error_code ec;
     std::filesystem::rename(toPath(from), toPath(to), ec);
     return !ec;
@@ -209,6 +240,7 @@ bool FileSystem::rename(const std::string& from, const std::string& to, bool all
 bool FileSystem::copyLastWriteTime(const std::string& from, const std::string& to, bool allowMainThread)
 {
     assertIoThread(allowMainThread);
+    const IoScope profileScope("FileSystem::copyLastWriteTime");
     std::error_code ec;
     const auto time = std::filesystem::last_write_time(toPath(from), ec);
     if (ec)
@@ -220,6 +252,7 @@ bool FileSystem::copyLastWriteTime(const std::string& from, const std::string& t
 bool FileSystem::copyFile(const std::string& from, const std::string& to, bool overwrite, bool allowMainThread)
 {
     assertIoThread(allowMainThread);
+    const IoScope profileScope("FileSystem::copyFile");
     std::error_code ec;
     return std::filesystem::copy_file(toPath(from), toPath(to), overwrite
         ? std::filesystem::copy_options::overwrite_existing : std::filesystem::copy_options::none, ec);
@@ -256,6 +289,7 @@ namespace
 bool FileSystem::listDirectory(const std::string& dir, std::vector<DirEntry>& out, bool allowMainThread)
 {
     assertIoThread(allowMainThread);
+    const IoScope profileScope("FileSystem::listDirectory");
     out.clear();
     std::error_code ec;
     std::filesystem::directory_iterator it(toPath(dir), ec);
@@ -267,6 +301,7 @@ bool FileSystem::listDirectory(const std::string& dir, std::vector<DirEntry>& ou
 bool FileSystem::listDirectoryRecursive(const std::string& dir, std::vector<DirEntry>& out, bool allowMainThread)
 {
     assertIoThread(allowMainThread);
+    const IoScope profileScope("FileSystem::listDirectoryRecursive");
     out.clear();
     std::error_code ec;
     std::filesystem::recursive_directory_iterator it(toPath(dir), ec);
@@ -278,6 +313,7 @@ bool FileSystem::listDirectoryRecursive(const std::string& dir, std::vector<DirE
 std::string FileSystem::currentPath(bool allowMainThread)
 {
     assertIoThread(allowMainThread);
+    const IoScope profileScope("FileSystem::currentPath");
     std::error_code ec;
     return fromPath(std::filesystem::current_path(ec));
 }
@@ -285,6 +321,7 @@ std::string FileSystem::currentPath(bool allowMainThread)
 bool FileSystem::setCurrentPath(const std::string& path, bool allowMainThread)
 {
     assertIoThread(allowMainThread);
+    const IoScope profileScope("FileSystem::setCurrentPath");
     std::error_code ec;
     std::filesystem::current_path(toPath(path), ec);
     return !ec;
@@ -293,6 +330,7 @@ bool FileSystem::setCurrentPath(const std::string& path, bool allowMainThread)
 std::string FileSystem::absolutePath(const std::string& path, bool allowMainThread)
 {
     assertIoThread(allowMainThread);
+    const IoScope profileScope("FileSystem::absolutePath");
     std::error_code ec;
     const std::filesystem::path result = std::filesystem::absolute(toPath(path), ec);
     return ec ? path : fromPath(result);
@@ -301,6 +339,7 @@ std::string FileSystem::absolutePath(const std::string& path, bool allowMainThre
 std::string FileSystem::canonicalPath(const std::string& path, bool allowMainThread)
 {
     assertIoThread(allowMainThread);
+    const IoScope profileScope("FileSystem::canonicalPath");
     std::error_code ec;
     const std::filesystem::path result = std::filesystem::canonical(toPath(path), ec);
     return ec ? std::string() : fromPath(result);
@@ -309,6 +348,7 @@ std::string FileSystem::canonicalPath(const std::string& path, bool allowMainThr
 std::string FileSystem::weaklyCanonicalPath(const std::string& path, bool allowMainThread)
 {
     assertIoThread(allowMainThread);
+    const IoScope profileScope("FileSystem::weaklyCanonicalPath");
     std::error_code ec;
     const std::filesystem::path result = std::filesystem::weakly_canonical(toPath(path), ec);
     return ec ? std::string() : fromPath(result);
@@ -317,6 +357,7 @@ std::string FileSystem::weaklyCanonicalPath(const std::string& path, bool allowM
 std::string FileSystem::relativePath(const std::string& path, const std::string& base, bool allowMainThread)
 {
     assertIoThread(allowMainThread);
+    const IoScope profileScope("FileSystem::relativePath");
     std::error_code ec;
     const std::filesystem::path result = base.empty()
         ? std::filesystem::relative(toPath(path), ec)
@@ -350,6 +391,11 @@ std::string FileSystem::replaceExtension(std::string_view path, std::string_view
 std::string FileSystem::normalize(std::string_view path)
 {
     return fromPath(toPath(path).lexically_normal());
+}
+
+std::string FileSystem::lexicallyRelative(std::string_view path, std::string_view base)
+{
+    return fromPath(toPath(path).lexically_relative(toPath(base)));
 }
 
 bool FileSystem::isAbsolute(std::string_view path)

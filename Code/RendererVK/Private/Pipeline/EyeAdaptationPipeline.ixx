@@ -25,7 +25,9 @@ public:
     // resize like the other passes).
     struct RecordParams
     {
-        vk::ImageView resolvedView; // TAA-resolved scene colour for this frame (GENERAL layout)
+        vk::ImageView resolvedView; // TAA-resolved scene colour for this frame
+        // GENERAL for TAA's storage image, SHADER_READ_ONLY when TAA is off and this samples SceneColor
+        vk::ImageLayout resolvedLayout = vk::ImageLayout::eGeneral;
         vk::Sampler   sampler;
         glm::ivec2 viewportMin;     // viewport rect within the resolved image
         glm::ivec2 viewportSize;

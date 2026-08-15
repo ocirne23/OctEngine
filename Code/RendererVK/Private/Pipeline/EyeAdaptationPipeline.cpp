@@ -108,7 +108,7 @@ void EyeAdaptationPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx
         vk::DescriptorSet vkSet = set.getDescriptorSet();
         auto histInfo = vk::DescriptorBufferInfo{ .buffer = m_histogramBuffer.getBuffer(), .range = vk::WholeSize };
         std::array<DescriptorSetUpdateInfo, 3> updates{
-            DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.sampler, .imageView = params.resolvedView, .imageLayout = vk::ImageLayout::eGeneral } } },
+            DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.sampler, .imageView = params.resolvedView, .imageLayout = params.resolvedLayout } } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { histInfo } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { paramsInfo } },
         };

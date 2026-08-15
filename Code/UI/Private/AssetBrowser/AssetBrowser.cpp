@@ -387,7 +387,9 @@ void AssetBrowser::renderToolbar()
 			navigateTo(m_rootPath);
 		ImGui::PopID();
 
-		const std::string rel = FileSystem::relativePath(m_currentPath, m_rootPath, /*allowMainThread*/ true);
+		// LEXICAL, not relativePath(): this runs every frame and std::filesystem::relative resolves
+		// both sides through weakly_canonical (real syscalls). Both paths are already canonical.
+		const std::string rel = FileSystem::lexicallyRelative(m_currentPath, m_rootPath);
 		std::string accumulated = m_rootPath;
 		if (!rel.empty() && rel != ".")
 		{
@@ -437,10 +439,9 @@ void AssetBrowser::renderToolbar()
 
 void AssetBrowser::renderDirectoryTree(const std::string& dir)
 {
-	std::error_code ec;
-	if (!FileSystem::isDirectory(dir, /*allowMainThread*/ true))
-		return;
-
+	// NO is_directory() probe here: it ran per node PER FRAME (a stat syscall each). The caller only
+	// ever recurses into entries the cached listing already marked as directories, and a folder that
+	// disappeared simply lists empty (drawn as a leaf) until the next rescan notices.
 	const bool isCurrent = (dir == m_currentPath);
 	DirListing& dirListing = listing(dir); // cached — no per-frame enumeration
 	const bool hasSubDirs = dirListing.hasSubDirs;

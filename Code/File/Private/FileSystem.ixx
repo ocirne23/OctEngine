@@ -103,6 +103,10 @@ public:
     static std::string extension(std::string_view path);      // ".ext" (with the dot), lowercase-preserving
     static std::string replaceExtension(std::string_view path, std::string_view ext);
     static std::string normalize(std::string_view path);      // lexically normal, forward slashes
+    // Relative path computed PURELY from the strings — no disk access, unlike relativePath() which
+    // resolves both sides through weakly_canonical. Correct when both are already absolute+canonical
+    // (which is what the asset browser holds), and the right choice for anything per-frame.
+    static std::string lexicallyRelative(std::string_view path, std::string_view base);
     static bool isAbsolute(std::string_view path);
     static bool pathEquals(std::string_view a, std::string_view b); // separator- and case-insensitive (Windows)
 
