@@ -34,7 +34,7 @@ Guidance for Claude Code when working in this repository.
 * **[Game](#game)**
 
 # Response Rules
-* DO NOT PRAISE ME. If I'm correct in a statement just say "correct", nothing more.
+* DO NOT PRAISE THE USER. If the user is correct in a statement just say "correct", nothing more.
 * Always talk in ASD-STE100 Simplified Technical English.
 * Always read CLAUDE.md/CONTEXT.md files.
 * For each assertion, add a tag for your confidence in the statement: [Certain] for hard evidence, [Likely] for strong guess, [Guessing] for filling gaps. Rather than relying on English.
