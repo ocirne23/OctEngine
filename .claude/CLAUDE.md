@@ -38,15 +38,13 @@ Guidance for Claude Code when working in this repository.
 * Always talk in ASD-STE100 Simplified Technical English.
 * Always read CLAUDE.md/CONTEXT.md files.
 * For each assertion, add a tag for your confidence in the statement: [Certain] for hard evidence, [Likely] for strong guess, [Guessing] for filling gaps. Rather than relying on English.
-
-# Project Description
-**OctEngine** (`C:\Github\OctEngine`). A modern C++ game engine. Windows/MSVC only. Engine-owned identifiers use the `Oc`/`oc`/`OC_` prefix (`OcArray`, `ocArrGet`, `OC_FIELD_INT`); a `Vr`/`vr`/`VR` prefix means actual Virtual Reality (`VrInput`, `IVrSession`, `VRFreeFlyCameraController`). The `App` executable is the testbed: an ImGui editor (scene hierarchy, properties, asset browser, DSL script editor, entity editor, tweaks, profiler, memory panel) around a viewport showing a procedural terrain/ocean/scatter world. The old Sponza/character spawns in main.cpp are commented out; `Entities/Debug/networkTest.pre` spawns only in `--server` mode. VR initializes with `EVr::DISABLED` in main.cpp — flip to `ENABLED` for an OpenXR headset.
-
-## Claude
 * Do not commit or push files
 * Do not notify about App.exe linking failed due to in-use, the user knows to re-link if the linking failed due to in-use executable.
 * Prefer to let the user test out changes myself rather than looking at log output/screen yourself
 * Keep this file up to date
+
+# Project Description
+**OctEngine** (`C:\Github\OctEngine`). A modern C++ game engine. Windows/VS2026 only.  The `App` executable is the testbed: an ImGui editor (scene hierarchy, properties, asset browser, DSL script editor, entity editor, tweaks, profiler, memory panel) around a viewport.
 
 ## Building
 * CMake, Visual Studio 18 2026 generator, build dir `Build/`
