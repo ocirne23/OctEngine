@@ -36,6 +36,7 @@ static constexpr SDL_Scancode c_gridKeys[c_gridSlots] = {
 static constexpr std::string_view c_gridKeyLabels[c_gridSlots] = { "Q", "W", "E", "R", "A", "S", "D", "F", "Z", "X", "C", "V" };
 // Root page slots: the two category pages, the two LINK TOOLS (armed directly — they need no
 // page of their own), Delete.
+static constexpr int c_rootConnectSlot = 2;    // E
 static constexpr int c_rootDisconnectSlot = 6; // D
 static constexpr int c_rootUpgradeSlot = 7;    // F
 static constexpr int c_rootDeleteSlot = 9;     // X
@@ -66,8 +67,8 @@ static constexpr EStructureType c_combatItems[] = {
 static constexpr float c_wallSegmentSpacing = 2.0f; // one segment per box width along the line
 static constexpr int c_wallMaxSegments = 16;
 // Everything that is not a weapon: generation, extraction and the distribution buildings (the old
-// separate Distribution page is gone — link CREATION is Select-mode right-click smart connect, and
-// the two management TOOLS sit on the root page).
+// separate Distribution page is gone — the three link TOOLS, creation included, sit on the root
+// page as two-click tools).
 static constexpr EStructureType c_productionItems[] = {
     EStructureType::Generator,
     EStructureType::Solar,
@@ -948,12 +949,14 @@ void GameMatch::refreshBuildHotbar()
     {
         for (int i = 0; i < c_numCategories; ++i)
             hud.setSlot(i, c_buildCategories[i], 0);
+        hud.setSlot(c_rootConnectSlot, "CONN", 0);
         hud.setSlot(c_rootDisconnectSlot, "DISC", 0);
         hud.setSlot(c_rootUpgradeSlot, "UPGR", 0);
         hud.setSlot(c_rootDeleteSlot, "DEL", 0);
         hud.selectSlot(m_mode == EPlayerMode::Delete ? c_rootDeleteSlot
             : m_mode == EPlayerMode::Link
-                ? (m_linkTool == EBuildTool::Disconnect ? c_rootDisconnectSlot : c_rootUpgradeSlot)
+                ? (m_linkTool == EBuildTool::Connect ? c_rootConnectSlot
+                    : m_linkTool == EBuildTool::Disconnect ? c_rootDisconnectSlot : c_rootUpgradeSlot)
                 : -1);
         return;
     }
@@ -983,10 +986,12 @@ void GameMatch::setMode(EPlayerMode mode)
     {
     case EPlayerMode::Build:  break; // the category entry logs its own line (activateSlot)
     case EPlayerMode::Delete: Log::info("Delete mode (X): click a structure to demolish — X returns to Select"); break;
-    case EPlayerMode::Link:   Log::info(m_linkTool == EBuildTool::Disconnect
+    case EPlayerMode::Link:   Log::info(m_linkTool == EBuildTool::Connect
+        ? "Connect (E): click one structure, then the other — the medium is inferred; same key/Esc exits"
+        : m_linkTool == EBuildTool::Disconnect
         ? "Disconnect (D): click the two ends of a link to remove it — same key/Esc exits"
         : "Upgrade (F): click the two ends of a Basic cable to make it Heavy — same key/Esc exits"); break;
-    case EPlayerMode::Select: Log::info("Select mode: click inspects, RMB smart-connects / routes / moves — Q/W build, D/F link tools, X delete"); break;
+    case EPlayerMode::Select: Log::info("Select mode: click inspects, RMB routes / moves — Q/W build, E/D/F link tools, X delete"); break;
     }
 }
 
@@ -1027,11 +1032,12 @@ void GameMatch::activateSlot(int slot)
             Log::info(std::string("Build: ") + c_buildCategoryNames[slot]
                 + " — grid keys arm an item, LMB places, RMB cancels, V/Esc back");
         }
-        else if (slot == c_rootDisconnectSlot || slot == c_rootUpgradeSlot)
+        else if (slot == c_rootConnectSlot || slot == c_rootDisconnectSlot || slot == c_rootUpgradeSlot)
         {
             // Link TOOLS arm straight off the root page (no category page of their own): the same
-            // key toggles back to Select, the other switches tool in place.
-            const EBuildTool tool = slot == c_rootDisconnectSlot ? EBuildTool::Disconnect : EBuildTool::Upgrade;
+            // key toggles back to Select, another switches tool in place.
+            const EBuildTool tool = slot == c_rootConnectSlot ? EBuildTool::Connect
+                : slot == c_rootDisconnectSlot ? EBuildTool::Disconnect : EBuildTool::Upgrade;
             if (m_mode == EPlayerMode::Link && m_linkTool == tool)
                 setMode(EPlayerMode::Select);
             else
@@ -1099,7 +1105,7 @@ void GameMatch::updateModeSwitching()
 
 // The Disconnect/Upgrade tools: first click selects an endpoint, second click the other — acts on
 // the EXISTING link between them (Disconnect removes it; Upgrade retypes a Basic cable to Heavy,
-// the only tiered medium). Link CREATION lives in Select mode's right-click smart connect.
+// the only tiered medium); Connect CREATES one, inferring the medium.
 // Clicking empty ground, the selected structure, or RIGHT-clicking clears the selection; it
 // persists by stable id.
 void GameMatch::disarmBuild()
@@ -1114,10 +1120,7 @@ void GameMatch::disarmBuild()
 void GameMatch::updateLinkTool(const Camera& camera, bool confirmEdge, bool cancelEdge, EBuildTool tool)
 {
     if (cancelEdge && m_cablePendingId != 0)
-    {
-        m_cablePendingId = 0; // RIGHT-click drops the selected endpoint
-        m_rmbConsumed = true;
-    }
+        m_cablePendingId = 0; // RIGHT-click drops the selected endpoint (and still moves — see below)
 
     const int hover = hoveredStructure(camera);
 
@@ -1138,12 +1141,17 @@ void GameMatch::updateLinkTool(const Camera& camera, bool confirmEdge, bool canc
             packColor(glm::vec3(0.3f, 1.0f, 0.4f)), 20);
     if (pendingIdx >= 0 && hover >= 0 && hover != pendingIdx)
     {
-        // Preview: white = Disconnect will remove, cyan = Upgrade applies (Basic -> Heavy),
-        // red = no link between the pair (or nothing to upgrade).
+        // Preview: green = Connect will create (the inferred medium), white = Disconnect will
+        // remove, cyan = Upgrade applies (Basic -> Heavy), red = the pair refuses this action.
         const ECableType existing = m_structures.cableTypeBetween(m_cablePendingId, m_structures.structureId(hover));
-        const bool actionable = existing != ECableType::Count
-            && (tool == EBuildTool::Disconnect || existing == ECableType::Basic);
+        bool actionable = false;
+        if (tool == EBuildTool::Connect)
+            actionable = m_structures.smartLinkTypeFor(pendingIdx, hover) != ECableType::Count;
+        else
+            actionable = existing != ECableType::Count
+                && (tool == EBuildTool::Disconnect || existing == ECableType::Basic);
         const glm::vec3 previewColor = !actionable ? glm::vec3(1.0f, 0.3f, 0.2f)
+            : tool == EBuildTool::Connect ? glm::vec3(0.3f, 1.0f, 0.4f)
             : tool == EBuildTool::Disconnect ? glm::vec3(0.9f, 0.9f, 0.9f) : glm::vec3(0.3f, 0.9f, 1.0f);
         Globals::rendererVK.addDebugLine(m_structures.structurePos(pendingIdx),
             m_structures.structurePos(hover), packColor(previewColor));
@@ -1164,6 +1172,19 @@ void GameMatch::updateLinkTool(const Camera& camera, bool confirmEdge, bool canc
     else
     {
         const ECableType existing = m_structures.cableTypeBetween(m_cablePendingId, hoverId);
+        if (tool == EBuildTool::Connect)
+        {
+            // Medium inference (smartLinkTypeFor): the connector's
+            // carried medium > the source's output > the first medium both endpoints hold. A pair
+            // that already has every medium it can carry (or cannot reach) simply refuses.
+            const ECableType type = m_structures.smartLinkTypeFor(pendingIdx, hover);
+            if (type == ECableType::Count)
+                Log::info("Those two cannot be linked (range, capacity, or already connected)");
+            else
+                requestCable(m_cablePendingId, hoverId, type);
+            m_cablePendingId = hoverId; // CHAIN: the new endpoint stays picked for the next click
+            return;
+        }
         if (existing == ECableType::Count)
             Log::info("No link between those structures");
         else if (tool == EBuildTool::Disconnect)
@@ -1190,7 +1211,7 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
     }
     // RMB CANCELS, one step at a time: a half-finished two-click flow (Lance aim, Wall line) drops
     // first, and the next RMB disarms the item itself. Only once nothing is armed does RMB go back
-    // to its Select-mode meaning (smart connect / barracks route) above.
+    // to its Select-mode meaning (barracks route / move order) above.
     const EStructureType armed = buildCategoryItems(m_buildCategory)[m_buildSelection];
     m_cablePendingId = 0;
 
@@ -1202,8 +1223,7 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         if (cancelEdge)
         {
             m_lanceAiming = false;
-            m_rmbConsumed = true;
-            return;
+            return; // NOT consumed: the same press also walks the player (see the RMB chain)
         }
         const glm::vec3 up(0.0f, 0.3f, 0.0f);
         const uint32 color = packColor(glm::vec3(0.3f, 1.0f, 0.4f));
@@ -1239,8 +1259,7 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         if (cancelEdge)
         {
             m_wallPlacing = false;
-            m_rmbConsumed = true;
-            return;
+            return; // NOT consumed: the same press also walks the player
         }
         const Aim end = computeAim(camera, EStructureType::Wall);
         if (end.valid)
@@ -1283,8 +1302,7 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
     if (cancelEdge) // nothing half-placed (the two-click flows returned above): drop the ghost
     {
         disarmBuild();
-        m_rmbConsumed = true;
-        return;
+        return; // NOT consumed: cancelling and moving are one press (see the RMB chain)
     }
 
     const Aim aim = computeAim(camera, armed);
@@ -1333,9 +1351,9 @@ void GameMatch::updateDeleteMode(const Camera& camera, bool confirmEdge)
         requestDemolish(m_structures.structureId(hover)); // validated in the authority tick (server)
 }
 
-void GameMatch::updateSelectMode(const Camera& camera, bool confirmEdge, bool smartLinkEdge)
+void GameMatch::updateSelectMode(const Camera& camera, bool confirmEdge, bool rmbEdge)
 {
-    updateRightClickActions(camera, smartLinkEdge);
+    updateRightClickActions(camera, rmbEdge);
     updateSelectionClick(camera, confirmEdge, /*allowPick*/ true);
 }
 
@@ -1346,14 +1364,9 @@ void GameMatch::updateRightClickActions(const Camera& camera, bool rmbEdge)
 {
     if (!rmbEdge || m_selectedId == 0)
         return;
-    const int hover = hoveredStructure(camera);
-    if (hover >= 0)
-    {
-        trySmartConnect(hover);
-        // deliberately NOT consumed: the caller also walks the player to the building (both are
-        // wanted from one press — you connect it and go stand next to it)
-        return;
-    }
+    // (Linking moved to the two-click CONN tool on the root page — RMB no longer creates cables.)
+    if (hoveredStructure(camera) >= 0)
+        return; // on a building: the caller turns it into a MOVE order
     const int sel = m_structures.structureIndexById(m_selectedId);
     glm::vec3 ground;
     if (sel < 0 || !isBarracksType(m_structures.structureType(sel))
@@ -1372,28 +1385,6 @@ void GameMatch::updateRightClickActions(const Camera& camera, bool rmbEdge)
     requestSetRoute(m_selectedId, route);
 }
 
-// RIGHT-click SMART CONNECT, shared by Select AND Build mode: links the selection to the hovered
-// structure with the inferred medium (connector's carried medium > the selection's output > the
-// first medium both hold), then CHAINS the selection to the target so runs are one click each.
-// No cableExists gate: a pair holds one link PER MEDIUM, and smartLinkTypeFor skips media the
-// pair already has — a second right-click adds the NEXT medium (pipe from the extractor first,
-// then the power cable from the generator side).
-void GameMatch::trySmartConnect(int hoverIndex)
-{
-    const int sel = m_structures.structureIndexById(m_selectedId);
-    if (sel < 0 || hoverIndex < 0 || sel == hoverIndex)
-        return;
-    const uint32 hoverId = m_structures.structureId(hoverIndex);
-    if (hoverId == m_selectedId
-        || m_structures.structureTeam(sel) != (uint8)m_team
-        || m_structures.structureTeam(hoverIndex) != (uint8)m_team)
-        return;
-    const ECableType type = m_structures.smartLinkTypeFor(sel, hoverIndex);
-    if (type == ECableType::Count)
-        return;
-    requestCable(m_selectedId, hoverId, type);
-    m_selectedId = hoverId; // chain: the next right-click continues from here
-}
 
 // Click-to-select, shared by Select AND Build mode so inspecting a building never needs a mode
 // switch: hover ring, LMB picks (empty ground deselects), and the selection keeps its highlight.
@@ -1653,21 +1644,19 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
         // RMB drops the picked endpoint, then exits the tool — the same one-step-at-a-time cancel
         // Build mode uses (and neither becomes a move order).
         if (rmbEdge && m_cablePendingId == 0)
-        {
-            setMode(EPlayerMode::Select);
-            m_rmbConsumed = true;
-        }
+            setMode(EPlayerMode::Select); // NOT consumed: the press also becomes a move order
         else
             updateLinkTool(camera, confirmEdge, rmbEdge, m_linkTool);
         break;
     case EPlayerMode::Select: updateSelectMode(camera, confirmEdge, rmbEdge); break;
     }
 
-    // MOVE ORDER (RTS right-click): the last meaning of RMB, taken unless a CANCEL or a barracks
-    // ROUTE waypoint already ate the press (m_rmbConsumed). Right-clicking a BUILDING still walks
-    // the player to it — that press may also have smart-connected, and both are wanted: you wire
-    // a structure and go stand next to it (to fund its blueprint, refill from a silo, ...). The
-    // order then stops at the footprint's edge instead of shoving into the wall forever.
+    // MOVE ORDER (RTS right-click): RMB ALWAYS moves the player. Cancelling rides along on the
+    // same press — disarming a ghost, dropping a Lance/Wall anchor or a picked link endpoint, or
+    // leaving a link tool all happen AND the capsule starts walking, because a cancel that also
+    // ate the movement felt like a dropped input. Only the barracks ROUTE waypoint consumes the
+    // press (m_rmbConsumed): it is a positive order, not a cancel, and pairing it with a move
+    // would send the player off toward every rally point.
     if (!m_rmbDown)
         m_rmbMoveDrag = false;
     if (rmbEdge && !m_rmbConsumed)

@@ -14,9 +14,10 @@ import :Npc;
 // One entry of the RTS grid hotbar (Build mode): the top level shows the CATEGORIES (keys 1..3);
 // picking one repopulates the hotbar with its items (keys 1..N arm the ghost/tool, key 0 = Back).
 // Partition-scope so Match.cpp's category tables can be plain file statics.
-// The two-click link MANAGEMENT tools, armed straight off the root hotbar page (Link mode). Links
-// are CREATED only via Select-mode right-click smart connect; these manage existing ones.
-enum class EBuildTool : uint8 { Disconnect, Upgrade };
+// The two-click LINK tools, armed straight off the root hotbar page (Link mode): click one
+// structure, then the other. Connect creates (medium inferred by smartLinkTypeFor), Disconnect
+// removes, Upgrade retypes Basic -> Heavy.
+enum class EBuildTool : uint8 { Connect, Disconnect, Upgrade };
 
 // The match orchestrator: owns the whitebox world (ground, objective, world-scale enemy emitter),
 // the player, the structure/economy system and the follow camera. MUST be a stack local in main()
@@ -68,7 +69,7 @@ private:
     // Tab = Select. The hotbar (visible only in Build) always shows the current category's items:
     // keys 1..N arm, 0 disarms.
     // Select is the neutral mode. Link = a two-click cable TOOL armed straight off the root
-    // hotbar page (Disconnect on D, Upgrade on F) — no category page involved.
+    // hotbar page (Connect on E, Disconnect on D, Upgrade on F) — no category page involved.
     enum class EPlayerMode : uint8 { Link, Build, Delete, Select };
 
     Aim computeAim(const Camera& camera, EStructureType type) const;
@@ -81,12 +82,11 @@ private:
     void cancelOneLevel();       // C slot, Esc, Tab: two-click step -> armed item -> page/mode, one per press
     void updateLinkTool(const Camera& camera, bool confirmEdge, bool cancelEdge, EBuildTool tool);
     void updateDeleteMode(const Camera& camera, bool confirmEdge);
-    void updateSelectMode(const Camera& camera, bool confirmEdge, bool smartLinkEdge);
+    void updateSelectMode(const Camera& camera, bool confirmEdge, bool rmbEdge);
     // Shared click-to-select (Select mode, and Build mode wherever the click can't place).
     void updateSelectionClick(const Camera& camera, bool confirmEdge, bool allowPick);
-    // Shared RMB handling (both modes): smart connect on a structure, barracks route on ground.
+    // Shared RMB handling (both modes): barracks route on ground (linking is the CONN tool now).
     void updateRightClickActions(const Camera& camera, bool rmbEdge);
-    void trySmartConnect(int hoverIndex); // RMB link from the selection
     int hoveredStructure(const Camera& camera) const; // structure index under the cursor, or -1
     void setMode(EPlayerMode mode);
     void buildWorldLabels(const Camera& camera); // health bars + selected info over structures
@@ -126,10 +126,10 @@ private:
     bool m_rmbMoveDrag = false;  // this RMB hold started as a move order: keep steering at the
                                  // cursor until the button comes up
     bool m_placeClicked = false; // LMB edge inside the viewport (consumed by the active mode)
-    bool m_rmbClicked = false;   // RMB edge inside the viewport (Select mode's SMART CONNECT)
+    bool m_rmbClicked = false;   // RMB edge inside the viewport (route waypoint / move order)
     uint32 m_cablePendingId = 0; // cable tool: first selected endpoint (stable id; 0 = none)
     EPlayerMode m_mode = EPlayerMode::Select; // Select IS the neutral mode (player combat removed)
-    EBuildTool m_linkTool = EBuildTool::Disconnect; // which tool Link mode runs (root slot D or F)
+    EBuildTool m_linkTool = EBuildTool::Connect; // which tool Link mode runs (root slot E, D or F)
     uint32 m_selectedId = 0;     // Select mode: highlighted structure (stable id; 0 = none)
     bool m_modeKeyWasDown[1] = {}; // Esc/Tab edge
     bool m_saveKeyWasDown = false; // F9/F10 edges (save/load game state)
