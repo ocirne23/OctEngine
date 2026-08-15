@@ -124,16 +124,26 @@ namespace
     }
 }
 
+void MemoryPanel::prepare()
+{
+    ProfileScope scope("Memory panel prepare", EProfileCategory::UI);
+    m_prepared = true;
+    m_nodes.clear();
+    if (const MemScopeNode* root = Globals::memoryTracker.getRoot())
+        buildSnapshot(root);
+}
+
 void MemoryPanel::render()
 {
-    m_nodes.clear();
+    if (!m_prepared)
+        prepare(); // nothing ran ahead of us — inline
+    m_prepared = false;
     const MemScopeNode* root = Globals::memoryTracker.getRoot();
-    if (root == nullptr)
+    if (root == nullptr || m_nodes.empty())
     {
         ImGui::TextDisabled("MemoryTracker not initialized");
         return;
     }
-    buildSnapshot(root);
 
     drawHeader();
     drawTreemap();
@@ -258,6 +268,7 @@ void MemoryPanel::drawHeader()
 
 void MemoryPanel::drawTreemap()
 {
+    ProfileScope scope("Memory treemap", EProfileCategory::UI);
     // Find the zoomed node's snapshot index (fall back to root if it vanished from view).
     uint32 rootIdx = 0;
     if (m_zoom != nullptr)

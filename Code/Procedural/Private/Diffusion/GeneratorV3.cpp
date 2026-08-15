@@ -5,6 +5,7 @@ module;
 module Procedural;
 
 import Core;
+import File; // disk access goes through FileSystem
 import Core.Log;
 import Threading;
 import :GeneratorV3;
@@ -151,13 +152,40 @@ namespace Procedural
 			uint32 pad = 0;
 		};
 
-		std::filesystem::path tileCachePath(uint64 seed, bool fp16, bool coarse, int32 ti, int32 tj)
+		std::string tileCachePath(uint64 seed, bool fp16, bool coarse, int32 ti, int32 tj)
 		{
 			// j <-> x, i <-> z: the same axis convention sampleFromBlock documents.
-			return std::filesystem::path("Local/Diffusion")
-				/ (fp16 ? std::format("{}_fp16", seed) : std::format("{}", seed))
-				/ std::format("{}_x{}_z{}.tile", coarse ? "coarse" : "full", tj, ti);
+			return FileSystem::join(FileSystem::join("Local/Diffusion",
+					fp16 ? std::format("{}_fp16", seed) : std::format("{}", seed)),
+				std::format("{}_x{}_z{}.tile", coarse ? "coarse" : "full", tj, ti));
 		}
+
+		// The tile cache moved off std::fstream when Core stopped exporting it: the file is read/written
+		// WHOLE through FileSystem (one syscall instead of a dozen small ones) and parsed from memory.
+		struct ByteReader
+		{
+			const std::vector<uint8>& data;
+			size_t cursor = 0;
+			bool ok = true;
+			bool read(void* dst, size_t bytes)
+			{
+				if (!ok || cursor + bytes > data.size())
+					return ok = false;
+				std::memcpy(dst, data.data() + cursor, bytes);
+				cursor += bytes;
+				return true;
+			}
+			bool atEnd() const { return cursor == data.size(); }
+		};
+		struct ByteWriter
+		{
+			std::vector<uint8> data;
+			void write(const void* src, size_t bytes)
+			{
+				const uint8* p = (const uint8*)src;
+				data.insert(data.end(), p, p + bytes);
+			}
+		};
 
 		struct PlaneHeader
 		{
@@ -179,18 +207,20 @@ namespace Procedural
 			{ &FieldTile::precip,  true  }, // humidity is 8-bit anyway
 		};
 
-		FieldTilePtr loadTileFromDisk(const std::filesystem::path& path, uint64 seed, int32 ti, int32 tj,
+		FieldTilePtr loadTileFromDisk(const std::string& path, uint64 seed, int32 ti, int32 tj,
 		                              int32 expectWidth)
 		{
-			std::ifstream f(path, std::ios::binary);
-			if (!f)
+			// Tile IO runs on the diffusion job (never the main thread) — the FileSystem assert covers it.
+			std::vector<uint8> bytes;
+			if (!FileSystem::readFileBytes(path, bytes) || bytes.empty())
 				return nullptr;
+			ByteReader f{ bytes };
 
 			TileCacheHeader h;
-			f.read((char*)&h, sizeof(h));
+			f.read(&h, sizeof(h));
 			// A mismatch is not an error, it is a miss: truncated writes, old versions and hand-copied
 			// files from another seed folder all just regenerate and overwrite.
-			if (!f || h.magic != TILE_CACHE_MAGIC || h.version != TILE_CACHE_VERSION
+			if (!f.ok || h.magic != TILE_CACHE_MAGIC || h.version != TILE_CACHE_VERSION
 				|| h.seed != seed || h.ti != ti || h.tj != tj || h.width != expectWidth)
 				return nullptr;
 
@@ -205,26 +235,25 @@ namespace Procedural
 				PlaneHeader ph;
 				uint8 codec = 0;
 				uint32 payloadSize = 0;
-				f.read((char*)&ph, sizeof(ph));
-				f.read((char*)&codec, sizeof(codec));
-				f.read((char*)&payloadSize, sizeof(payloadSize));
-				if (!f || payloadSize == 0 || payloadSize > rawBytes)
+				f.read(&ph, sizeof(ph));
+				f.read(&codec, sizeof(codec));
+				f.read(&payloadSize, sizeof(payloadSize));
+				if (!f.ok || payloadSize == 0 || payloadSize > rawBytes)
 					return nullptr;
 
 				if ((EPlaneCodec)codec == EPlaneCodec::Stored)
 				{
 					if (payloadSize != rawBytes)
 						return nullptr;
-					f.read((char*)(ps.eightBit ? (void*)q8.data() : (void*)q16.data()),
-					       (std::streamsize)payloadSize);
-					if (!f)
+					f.read(ps.eightBit ? (void*)q8.data() : (void*)q16.data(), payloadSize);
+					if (!f.ok)
 						return nullptr;
 				}
 				else if ((EPlaneCodec)codec == EPlaneCodec::Zstd)
 				{
 					comp.resize(payloadSize);
-					f.read((char*)comp.data(), (std::streamsize)payloadSize);
-					if (!f)
+					f.read(comp.data(), payloadSize);
+					if (!f.ok)
 						return nullptr;
 					const size_t n = ZSTD_decompress(raw.data(), rawBytes, comp.data(), comp.size());
 					if (ZSTD_isError(n) || n != rawBytes)
@@ -246,28 +275,20 @@ namespace Procedural
 				for (size_t i = 0; i < plane; i++)
 					v[i] = ph.minV + (float)(ps.eightBit ? q8[i] : q16[i]) * step;
 			}
-			// One trailing probe: exactly at EOF means the file is whole, anything else is truncation
-			// or trailing garbage.
-			char probe;
-			if (!f || (f.read(&probe, 1), !f.eof()))
+			// Exactly at the end means the file is whole; anything left over is truncation or garbage.
+			if (!f.ok || !f.atEnd())
 				return nullptr;
 			return t;
 		}
 
 		// NOT const: every plane is roundtripped through its quantized form in place, so the tile the RAM
 		// cache ends up holding is exactly what a later load returns.
-		void saveTileToDisk(const std::filesystem::path& path, FieldTile& t, uint64 seed,
+		void saveTileToDisk(const std::string& path, FieldTile& t, uint64 seed,
 		                    int32 ti, int32 tj)
 		{
-			std::error_code ec;
-			std::filesystem::create_directories(path.parent_path(), ec);
+			FileSystem::createDirectories(FileSystem::parentPath(path));
 
-			std::ofstream f(path, std::ios::binary | std::ios::trunc);
-			if (!f)
-			{
-				Log::warning(std::format("[Diffusion] tile cache write failed: {}", path.string()));
-				return;
-			}
+			ByteWriter f; // built in memory, written in one go below
 			TileCacheHeader h;
 			h.magic = TILE_CACHE_MAGIC;
 			h.version = TILE_CACHE_VERSION;
@@ -275,7 +296,7 @@ namespace Procedural
 			h.ti = ti;
 			h.tj = tj;
 			h.width = t.width;
-			f.write((const char*)&h, sizeof(h));
+			f.write(&h, sizeof(h));
 
 			const size_t plane = (size_t)t.width * t.width;
 			std::vector<uint16> q16(plane);
@@ -291,7 +312,7 @@ namespace Procedural
 					hi = std::max(hi, x);
 				}
 				const PlaneHeader ph{ lo, hi };
-				f.write((const char*)&ph, sizeof(ph));
+				f.write(&ph, sizeof(ph));
 				const float maxQ = ps.eightBit ? 255.0f : 65535.0f;
 				const float range = hi - lo;
 				const float scale = range > 0.0f ? maxQ / range : 0.0f;
@@ -320,22 +341,23 @@ namespace Procedural
 				{
 					const uint8 codec = (uint8)EPlaneCodec::Zstd;
 					const uint32 payloadSize = (uint32)n;
-					f.write((const char*)&codec, sizeof(codec));
-					f.write((const char*)&payloadSize, sizeof(payloadSize));
-					f.write((const char*)comp.data(), (std::streamsize)n);
+					f.write(&codec, sizeof(codec));
+					f.write(&payloadSize, sizeof(payloadSize));
+					f.write(comp.data(), n);
 				}
 				else
 				{
 					const uint8 codec = (uint8)EPlaneCodec::Stored;
 					const uint32 payloadSize = (uint32)rawBytes;
-					f.write((const char*)&codec, sizeof(codec));
-					f.write((const char*)&payloadSize, sizeof(payloadSize));
-					f.write((const char*)(ps.eightBit ? (const void*)q8.data() : (const void*)q16.data()),
-					        (std::streamsize)rawBytes);
+					f.write(&codec, sizeof(codec));
+					f.write(&payloadSize, sizeof(payloadSize));
+					f.write(ps.eightBit ? (const void*)q8.data() : (const void*)q16.data(), rawBytes);
 				}
 			}
 			// A write cut short (crash, full disk) leaves a file the loader's size probe rejects, so the
 			// worst case is a regenerate — no tmp+rename dance needed, same contract as the .vsc cache.
+			if (!FileSystem::writeFileBytes(path, f.data))
+				Log::warning(std::format("[Diffusion] tile cache write failed: {}", path));
 		}
 
 		// -------------------------------------------------------------------------------------------------

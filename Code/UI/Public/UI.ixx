@@ -6,6 +6,7 @@ import Core.Camera;
 import Core.glm;
 import Core.SDL;
 import Entity;
+import Threading; // JobCounter for the panel prepare jobs
 import UI.Gizmo;
 
 import UI.fwd;
@@ -32,6 +33,14 @@ public:
     UI(const UI&) = delete;
 
     void initialize();
+    // TWO PHASES per frame. ImGui itself is single-context/single-thread, so the widget pass
+    // (update) stays serial — but the panels' DATA work (profiler ring snapshot + per-track sort,
+    // memory treemap snapshot, log snapshot + filter) touches no ImGui and runs on JOBS. Call
+    // prepare() as early in the frame as possible (main.cpp: right after input.update, before the
+    // camera/game/controls work) — the jobs overlap with everything up to update(), which waits on
+    // them first thing. Only panels that were OPEN last frame prepare, and every panel prepares
+    // inline in its render if nothing ran ahead, so prepare() is an optimization, never required.
+    void prepare();
     void update(const std::vector<EntityPtr>& rootEntities, const Camera& camera, double deltaSec);
     void render();
 	void setRenderStats(const Stats& stats) { m_renderStats = stats; }
@@ -92,6 +101,13 @@ private:
     bool m_isViewportFocused = false;
     bool m_hasViewportGainedFocus = false;
     bool m_scriptEditorOpen = false;
+    // prepare-phase gating: which data-heavy panels were open last frame (ImGui::Begin result),
+    // and the counter update() waits on before ImGui::NewFrame
+    bool m_profilerOpen = false;
+    bool m_memoryOpen = false;
+    bool m_logOpen = false;
+    bool m_contentOpen = false;
+    JobCounter m_prepareCounter;
     Rect m_viewportRect = Rect();
     std::vector<EntityChange> m_viewportChanges;   // assets dropped onto the viewport, drained via takeEntityChanges
 

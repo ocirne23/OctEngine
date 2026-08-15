@@ -124,7 +124,7 @@ uint64 Texture::getAllocatedBytes() const
 
 bool Texture::initialize(const char* filePath, bool generateMips, bool sRGB)
 {
-    std::filesystem::path path(filePath);
+    const std::string extension = FileSystem::extension(filePath);
     std::vector<uint8> fileData;
     std::vector<std::span<uint8>> imgData; // pixel data per mip level
 
@@ -133,7 +133,7 @@ bool Texture::initialize(const char* filePath, bool generateMips, bool sRGB)
 	vk::Format format = vk::Format::eUndefined;
 	uint32 numMipLevels = 0;
 
-    if (path.extension() == ".dds")
+    if (extension == ".dds")
     {
         FILE* pFile;
         fopen_s(&pFile, filePath, "rb");
@@ -143,7 +143,8 @@ bool Texture::initialize(const char* filePath, bool generateMips, bool sRGB)
             assert(false && "Failed to open file");
             return false;
         }
-        const size_t size = std::filesystem::file_size(filePath);
+        // Texture loads run on the streaming/loader threads; the assert catches a main-thread slip.
+        const size_t size = (size_t)FileSystem::fileSize(filePath);
 
         // Header first: it lays out the whole mip chain, so the pixel read below can be narrowed to
         // just the mips this image will actually contain.
@@ -257,10 +258,9 @@ bool Texture::initialize(const ITextureData& textureData, bool generateMips, boo
         const std::string& rootFolder = textureData.getRootFolder();
         if (!rootFolder.empty())
         {
-            const std::filesystem::path candidate = std::filesystem::path(rootFolder) / filePath;
-            std::error_code ec;
-            if (std::filesystem::exists(candidate, ec))
-                return initialize(candidate.string().c_str(), generateMips, sRGB);
+            const std::string candidate = FileSystem::join(rootFolder, filePath);
+            if (FileSystem::exists(candidate))
+                return initialize(candidate.c_str(), generateMips, sRGB);
         }
         return initialize(filePath, generateMips, sRGB);
     }

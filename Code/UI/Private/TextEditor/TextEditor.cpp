@@ -96,7 +96,7 @@ void TextEditor::renderToolbar()
 
 	ImGui::SameLine();
 	const std::string label = m_hasDoc
-		? (m_path.empty() ? std::string("(unsaved)") : std::filesystem::path(m_path).filename().string())
+		? (m_path.empty() ? std::string("(unsaved)") : FileSystem::filename(m_path))
 		: std::string("(no file open — double-click a .txt in Content)");
 	ImGui::TextDisabled("%s%s", label.c_str(), isDirty() ? " *" : "");
 
@@ -140,9 +140,9 @@ void TextEditor::renderUnsavedPopup()
 		return;
 
 	ImGui::Text("'%s' has unsaved changes.",
-		(m_path.empty() ? std::string("(unsaved)") : std::filesystem::path(m_path).filename().string()).c_str());
+		(m_path.empty() ? std::string("(unsaved)") : FileSystem::filename(m_path)).c_str());
 	if (m_pendingSwitch == PendingSwitch::OpenPath)
-		ImGui::Text("Switch to '%s'?", std::filesystem::path(m_pendingSwitchPath).filename().string().c_str());
+		ImGui::Text("Switch to '%s'?", FileSystem::filename(m_pendingSwitchPath).c_str());
 	else
 		ImGui::TextUnformatted("Start a new file?");
 

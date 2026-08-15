@@ -24,12 +24,14 @@ static int compileDsl(const std::string& inputPath, const std::string& outputPat
 	std::vector<std::unique_ptr<DSLSymbol>> builtins;
 	Globals::scriptBindings.build(document.sidebar, builtins);
 
-	std::ifstream in(inputPath, std::ios::in | std::ios::binary);
-	if (!in.is_open())
+	// A console tool: everything runs on its one (main) thread by design.
+	const FileSystem::AllowMainThreadIO allowIo;
+	if (!FileSystem::exists(inputPath))
 	{
 		std::cout << "error: cannot open '" << inputPath << "'\n";
 		return 1;
 	}
+	std::istringstream in(FileSystem::readFileStr(inputPath));
 	std::vector<std::string> lines;
 	bool alreadyWrapped = false;
 	for (std::string raw; std::getline(in, raw); )
@@ -39,8 +41,6 @@ static int compileDsl(const std::string& inputPath, const std::string& outputPat
 		alreadyWrapped = alreadyWrapped || raw.rfind("//@@dsl", 0) == 0;
 		lines.push_back(std::move(raw));
 	}
-	in.close();
-
 	std::string loadPath = inputPath;
 	std::string tempPath;
 	int lineShift = 0;
@@ -52,20 +52,17 @@ static int compileDsl(const std::string& inputPath, const std::string& outputPat
 			wrapped += "//@" + line + "\n";
 		wrapped += "//@@end\n";
 		tempPath = outputPath + ".wrap.tmp";
-		std::ofstream temp(tempPath, std::ios::out | std::ios::binary | std::ios::trunc);
-		if (!temp.is_open())
+		if (!FileSystem::writeFileStr(tempPath, wrapped))
 		{
 			std::cout << "error: cannot write '" << tempPath << "'\n";
 			return 1;
 		}
-		temp << wrapped;
-		temp.close();
 		loadPath = tempPath;
 	}
 
 	const ScriptLoader::LoadResult result = ScriptLoader::load(document, loadPath, builtins, Globals::scriptBindings);
 	if (!tempPath.empty())
-		std::filesystem::remove(tempPath);
+		FileSystem::remove(tempPath);
 	if (!result.success)
 	{
 		std::string error = result.error; // "<path>(<line>): <what>"
@@ -149,7 +146,7 @@ int main(int argc, char* argv[])
 	}
 	const std::string& input = paths[0];
 	const std::string output = paths.size() > 1 ? paths[1]
-		: std::filesystem::path(input).replace_extension(".dsl").string();
+		: FileSystem::replaceExtension(input, ".dsl");
 
 	int code = compileDsl(input, output);
 	if (code == 0 && checkCompile)

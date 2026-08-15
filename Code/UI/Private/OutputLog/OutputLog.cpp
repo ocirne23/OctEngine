@@ -46,8 +46,40 @@ static bool levelToggle(const char* label, bool* active, ImVec4 colour)
 	return clicked;
 }
 
+void OutputLog::prepare()
+{
+	ProfileScope scope("Log panel prepare", EProfileCategory::UI);
+	m_prepared = true;
+	const uint32 rev = Log::getRevision();
+	if (rev != m_cachedRevision)
+	{
+		m_snapshot       = Log::getMessages();
+		m_cachedRevision = rev;
+	}
+	const bool hasFilter = m_filterBuf[0] != '\0';
+	m_visible.clear();
+	for (uint32 i = 0; i < static_cast<uint32>(m_snapshot.size()); ++i)
+	{
+		const Log::Message& msg = m_snapshot[i];
+		switch (msg.level)
+		{
+		case Log::Level::Verbose: if (!m_showVerbose) continue; break;
+		case Log::Level::Info:    if (!m_showInfo)    continue; break;
+		case Log::Level::Warning: if (!m_showWarning) continue; break;
+		case Log::Level::Error:   if (!m_showError)   continue; break;
+		default: break;
+		}
+		if (hasFilter && msg.text.find(m_filterBuf) == std::string::npos)
+			continue;
+		m_visible.push_back(i);
+	}
+}
+
 void OutputLog::render()
 {
+	if (!m_prepared)
+		prepare(); // nothing ran ahead of us — inline
+	m_prepared = false;
 	if (ImGui::Button("Clear"))
 		Log::clear();
 
@@ -69,37 +101,13 @@ void OutputLog::render()
 
 	ImGui::Separator();
 
-	const uint32 rev = Log::getRevision();
-	if (rev != m_cachedRevision)
-	{
-		m_snapshot       = Log::getMessages();
-		m_cachedRevision = rev;
-	}
-
+	// (snapshot + filter ran in prepare(): m_visible indexes m_snapshot — both replaced together,
+	// so the pair is always consistent; a filter edit shows up next frame)
 	ImGui::BeginChild("##ol_scroll", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None,
 		ImGuiWindowFlags_HorizontalScrollbar);
 
-	const bool hasFilter = m_filterBuf[0] != '\0';
-
 	ImGuiListClipper clipper;
-	static std::vector<uint32> s_visible; // static to avoid per-frame alloc
-	s_visible.clear();
-	for (uint32 i = 0; i < static_cast<uint32>(m_snapshot.size()); ++i)
-	{
-		const Log::Message& msg = m_snapshot[i];
-		switch (msg.level)
-		{
-		case Log::Level::Verbose: if (!m_showVerbose) continue; break;
-		case Log::Level::Info:    if (!m_showInfo)    continue; break;
-		case Log::Level::Warning: if (!m_showWarning) continue; break;
-		case Log::Level::Error:   if (!m_showError)   continue; break;
-		default: break;
-		}
-		if (hasFilter && msg.text.find(m_filterBuf) == std::string::npos)
-			continue;
-		s_visible.push_back(i);
-	}
-
+	const std::vector<uint32>& s_visible = m_visible;
 	clipper.Begin(static_cast<int>(s_visible.size()));
 	while (clipper.Step())
 	{

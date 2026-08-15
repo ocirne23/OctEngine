@@ -4,6 +4,11 @@ module;
 
 module File;
 
+// File IS the filesystem library: its readers stream binary ranges directly (Core no longer
+// exports these). Entry points call FileSystem::assertIoThread so the main-thread policy still holds.
+import <filesystem>;
+import <fstream>;
+
 import Core;
 import Core.glm;
 import Core.AABB;
@@ -137,6 +142,9 @@ const IMeshData* CookedSceneData::getMesh(const char* pMeshName) const
 
 bool CookedSceneData::load(const std::string& cachePath, const std::string& sourcePath, uint64 sourceMTime, uint64 sourceSize, uint64 optionsHash)
 {
+    // Cooked scenes load at SPAWN (main thread, cached afterwards) and on the terrain/mesh-stream
+    // jobs — both intended, so the main-thread policy is satisfied explicitly here.
+    FileSystem::assertIoThread(/*allowMainThread*/ true);
     FILE* pFile = nullptr;
     fopen_s(&pFile, cachePath.c_str(), "rb");
     if (!pFile)

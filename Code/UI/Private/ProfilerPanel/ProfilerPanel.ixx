@@ -5,9 +5,17 @@ import Core;
 // The Profiler window: frame-time graph (click a bar to pause + inspect that frame), a per-thread +
 // GPU flame timeline (wheel zoom, drag pan), and a sortable aggregate stats table. Purely a READER
 // of Globals::profiler - pausing here freezes the panel's snapshot, recording continues.
+//
+// TWO PHASES: prepare() is the data work (auto-pause check, ring snapshot + per-track sort, stats
+// aggregation) and touches NO ImGui — UI::prepare runs it on a job, overlapped with the rest of the
+// pre-UI main-thread work, and the tracks snapshot itself is a parallelFor. render() is the ImGui
+// phase and only reads what prepare built (it prepares inline if nothing ran, so the split is an
+// optimization, never a requirement). All the view state prepare reads (pause, zoom, filters) is
+// what render wrote LAST frame — exactly the ordering the single-threaded version had.
 export class ProfilerPanel
 {
 public:
+    void prepare(); // worker-safe, no ImGui
     void render();
 
 private:
@@ -40,10 +48,14 @@ private:
     void refresh();
     void selectFrame(uint64 frameIdx);
     void snapshotTracks();
+    void aggregateStats(); // fills m_statsRows for the displayed window (prepare side)
     void drawToolbar();
     void drawFrameGraph();
     void drawTimeline();
     void drawStatsTable();
+
+    bool m_prepared = false;     // prepare() ran for this UI frame (render clears it)
+    bool m_statsVisible = false; // the Stats tab was open last frame — only then aggregate
 
     // ---- auto pause ----
     bool m_autoPause = false;
@@ -66,6 +78,7 @@ private:
     uint64 m_snapshotStart = 0;          // ticks; frame window expanded by the zoom/pan view, what snapshotTracks copies
     uint64 m_snapshotEnd = 0;
     std::vector<TrackView> m_tracks;
+    std::vector<TrackView> m_trackScratch; // one slot per profiler track: the parallel snapshot's targets
 
     // ---- timeline view state (ms relative to m_windowStart) ----
     double m_viewMin = 0.0;

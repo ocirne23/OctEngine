@@ -1,6 +1,7 @@
 module RendererVK;
 
 import Core;
+import File; // disk access goes through FileSystem (Core no longer exports <filesystem>)
 import Core.Windows;
 import :Aftermath;
 
@@ -303,12 +304,9 @@ void GpuCrashTracker::WriteGpuCrashDumpToFile(const void* pGpuCrashDump, const u
     // registered with Nsight Graphics.
     const std::string crashDumpFileName = dumpFolder + baseFileName + ".nv-gpudmp";
 	printf("Crash dump file: %s", crashDumpFileName.c_str());
-    std::ofstream dumpFile(crashDumpFileName, std::ios::out | std::ios::binary);
-    if (dumpFile)
-    {
-        dumpFile.write((const char*)pGpuCrashDump, gpuCrashDumpSize);
-        dumpFile.close();
-    }
+    // A GPU crash dump: the process is dying, main-thread IO is fine and wanted.
+    FileSystem::writeFileBytes(crashDumpFileName,
+        std::span<const uint8>((const uint8*)pGpuCrashDump, gpuCrashDumpSize), /*allowMainThread*/ true);
 
     // Decode the crash dump to a JSON string.
     // Step 1: Generate the JSON and get the size.
@@ -331,13 +329,9 @@ void GpuCrashTracker::WriteGpuCrashDumpToFile(const void* pGpuCrashDump, const u
 
     // Write the crash dump data as JSON to a file.
     const std::string jsonFileName = crashDumpFileName + ".json";
-    std::ofstream jsonFile(jsonFileName, std::ios::out | std::ios::binary);
-    if (jsonFile)
-    {
-        // Write the JSON to the file (excluding string termination)
-        jsonFile.write(json.data(), json.size() - 1);
-        jsonFile.close();
-    }
+    // (excluding string termination)
+    FileSystem::writeFileBytes(jsonFileName,
+        std::span<const uint8>((const uint8*)json.data(), json.size() - 1), /*allowMainThread*/ true);
 
     // Destroy the GPU crash dump decoder object.
     AFTERMATH_CHECK_ERROR(GFSDK_Aftermath_GpuCrashDump_DestroyDecoder(decoder));
@@ -352,11 +346,8 @@ void GpuCrashTracker::WriteShaderDebugInformationToFile(
     // Create a unique file name.
     const std::string filePath = dumpFolder + "shader-" + std::to_string(identifier) + ".nvdbg";
 
-    std::ofstream f(filePath, std::ios::out | std::ios::binary);
-    if (f)
-    {
-        f.write((const char*)pShaderDebugInfo, shaderDebugInfoSize);
-    }
+    FileSystem::writeFileBytes(filePath,
+        std::span<const uint8>((const uint8*)pShaderDebugInfo, shaderDebugInfoSize), /*allowMainThread*/ true);
 }
 
 // Handler for shader debug information lookup callbacks.

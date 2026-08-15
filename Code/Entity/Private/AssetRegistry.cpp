@@ -21,9 +21,9 @@ static bool iequals(std::string_view a, std::string_view b)
 
 static constexpr const char* s_assetExtensions[] = { ".oc", ".pre", ".anm", ".apl" };
 
-static bool isAssetFile(const std::filesystem::path& path)
+static bool isAssetFile(const std::string& extension)
 {
-    const std::string ext = path.extension().string();
+    const std::string& ext = extension;
     for (const char* known : s_assetExtensions)
         if (iequals(ext, known))
             return true;
@@ -37,9 +37,9 @@ static std::string toLower(std::string s)
     return s;
 }
 
-static std::string fileKey(const std::filesystem::path& path)
+static std::string fileKey(const std::string& path)
 {
-    return toLower(path.lexically_normal().string());
+    return toLower(FileSystem::normalize(path));
 }
 
 void AssetRegistry::clear()
@@ -55,24 +55,21 @@ void AssetRegistry::scanDirectory(const std::string& rootDir)
 {
     clear();
 
-    std::error_code ec;
-    auto iter = std::filesystem::recursive_directory_iterator(
-        rootDir, std::filesystem::directory_options::skip_permission_denied, ec);
-    if (ec)
+    // Startup asset scan: main thread by design (nothing can spawn before it finishes).
+    const FileSystem::AllowMainThreadIO allowIo;
+    std::vector<FileSystem::DirEntry> entries;
+    if (!FileSystem::listDirectoryRecursive(rootDir, entries))
     {
         Log::warning("AssetRegistry: could not scan directory: " + rootDir);
         return;
     }
 
-    for (const std::filesystem::directory_entry& entry : iter)
+    for (const FileSystem::DirEntry& entry : entries)
     {
-        if (entry.is_regular_file(ec) && isAssetFile(entry.path()))
-        {
-            auto path = entry.path().string();
-            const std::filesystem::path relativePath = std::filesystem::relative(path, ec);
-            const std::string filePath = (ec || relativePath.empty()) ? path : relativePath.string();
-            registerFile(filePath);
-        }
+        if (entry.isDirectory || !isAssetFile(entry.extension))
+            continue;
+        const std::string relativePath = FileSystem::relativePath(entry.path);
+        registerFile(relativePath.empty() ? entry.path : relativePath);
     }
 }
 

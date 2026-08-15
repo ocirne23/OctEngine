@@ -2,6 +2,7 @@ module Script;
 
 import Core;
 import Core.Log;
+import File; // all disk access goes through FileSystem
 import :DSL;
 import :ScriptBindings;
 import :ScriptLang;
@@ -1378,9 +1379,7 @@ bool ScriptLoader::save(DSL& document, const std::string& path, const std::strin
 		return false;
 	}
 
-	std::ofstream file(path, std::ios::out | std::ios::binary | std::ios::trunc);
-	if (!file.is_open())
-		return false;
+	std::ostringstream file; // built in memory, written through FileSystem below
 
 	if (!generatedCode.empty())
 	{
@@ -1399,7 +1398,8 @@ bool ScriptLoader::save(DSL& document, const std::string& path, const std::strin
 		file << line.text << '\n';
 	}
 	file << kBlockEnd << '\n';
-	return file.good();
+	// Saving is an explicit editor action on the main thread.
+	return FileSystem::writeFileStr(path, file.str(), /*allowMainThread*/ true);
 }
 
 std::string ScriptLoader::directiveText(const DSL& document)
@@ -1432,16 +1432,14 @@ std::string ScriptLoader::directiveText(const DSL& document)
 ScriptLoader::LoadResult ScriptLoader::load(DSL& document, const std::string& path, const std::vector<std::unique_ptr<DSLSymbol>>& builtins,
 	const ScriptBindings& bindings)
 {
-	std::ifstream stream(path, std::ios::in | std::ios::binary);
-	if (!stream.is_open())
+	// Loading a script document is an explicit editor/compile action (main thread by design).
+	if (!FileSystem::exists(path, /*allowMainThread*/ true))
 	{
 		LoadResult result;
 		result.error = "cannot open '" + path + "'";
 		return result;
 	}
-	std::ostringstream content;
-	content << stream.rdbuf();
-	return loadFromText(document, content.str(), path, builtins, bindings);
+	return loadFromText(document, FileSystem::readFileStr(path, /*allowMainThread*/ true), path, builtins, bindings);
 }
 
 ScriptLoader::LoadResult ScriptLoader::loadFromText(DSL& document, const std::string& text, const std::string& originName,

@@ -6,6 +6,11 @@ module;
 
 module File;
 
+// File IS the filesystem library: its readers stream binary ranges directly (Core no longer
+// exports these). Entry points call FileSystem::assertIoThread so the main-thread policy still holds.
+import <filesystem>;
+import <fstream>;
+
 import Core;
 import Core.glm;
 

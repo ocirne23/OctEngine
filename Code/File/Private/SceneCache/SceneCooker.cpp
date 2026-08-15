@@ -27,6 +27,11 @@ module;
 
 module File;
 
+// File IS the filesystem library: its readers stream binary ranges directly (Core no longer
+// exports these). Entry points call FileSystem::assertIoThread so the main-thread policy still holds.
+import <filesystem>;
+import <fstream>;
+
 import Core;
 import Core.glm;
 import Core.AABB;
@@ -760,6 +765,8 @@ namespace
 
 std::unique_ptr<ISceneData> ISceneData::loadCached(const char* filePath, bool mergeNodes, bool preTransformVertices, const SceneCookOptions& options)
 {
+    // Scene import/cook: main thread at spawn (cached afterwards) and on the terrain jobs.
+    FileSystem::assertIoThread(/*allowMainThread*/ true);
     // Import options that shape the cooked data feed the header hash; the file NAME only hashes the
     // source path + Assimp options, so LOD/texture option changes re-cook in place instead of piling
     // up stale files (and two .oc's importing one model with different Assimp options don't thrash).

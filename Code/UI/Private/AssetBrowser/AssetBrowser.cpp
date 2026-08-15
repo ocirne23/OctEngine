@@ -2,9 +2,39 @@ module UI;
 
 import Core;
 import Core.imgui;
+import Core.Time;
 import Entity;
 import File;
 import :AssetBrowser;
+
+// Splits a relative path into its components ("a/b/c" -> {a, b, c}) — the breadcrumb walks these.
+static std::vector<std::string> splitPathComponents(const std::string& path)
+{
+	std::vector<std::string> parts;
+	size_t start = 0;
+	while (start <= path.size())
+	{
+		const size_t sep = path.find_first_of("/\\", start);
+		const std::string part = path.substr(start, sep == std::string::npos ? std::string::npos : sep - start);
+		if (!part.empty())
+			parts.push_back(part);
+		if (sep == std::string::npos)
+			break;
+		start = sep + 1;
+	}
+	return parts;
+}
+
+// Case-insensitive substring match against the search box (empty filter passes everything).
+static bool passesFilter(const std::string& name, const char* filter)
+{
+	if (filter == nullptr || filter[0] == '\0')
+		return true;
+	const std::string_view needle(filter);
+	const auto it = std::search(name.begin(), name.end(), needle.begin(), needle.end(),
+		[](char a, char b) { return std::tolower((unsigned char)a) == std::tolower((unsigned char)b); });
+	return it != name.end();
+}
 
 static bool isImageFile(const std::string& ext)
 {
@@ -42,15 +72,11 @@ static bool isTextFile(const std::string& ext)
 	return ext == ".txt" || ext == ".scr";
 }
 
-static bool isSpawnableFile(const std::filesystem::path& p)
+// NOTE: isDirectory + ext come from the cached listing — these used to call
+// std::filesystem::is_directory() PER ITEM PER FRAME (a syscall each).
+static const char* fileIcon(bool isDirectory, const std::string& ext)
 {
-	return p.extension() == ".pre";
-}
-
-static const char* fileIcon(const std::filesystem::path& p)
-{
-	if (std::filesystem::is_directory(p)) return "[Dir]";
-	auto ext = p.extension().string();
+	if (isDirectory) return "[Dir]";
 	if (isImageFile(ext))                  return "[Img]";
 	if (isMeshFile(ext))                   return "[Msh]";
 	if (isShaderFile(ext))                 return "[Shd]";
@@ -61,10 +87,9 @@ static const char* fileIcon(const std::filesystem::path& p)
 	return "[Fil]";
 }
 
-static ImVec4 fileColor(const std::filesystem::path& p)
+static ImVec4 fileColor(bool isDirectory, const std::string& ext)
 {
-	if (std::filesystem::is_directory(p)) return ImVec4(1.0f, 0.85f, 0.4f, 1.0f);   // yellow
-	auto ext = p.extension().string();
+	if (isDirectory) return ImVec4(1.0f, 0.85f, 0.4f, 1.0f);   // yellow
 	if (isImageFile(ext))                   return ImVec4(0.4f, 0.8f,  1.0f, 1.0f);   // cyan
 	if (isMeshFile(ext))                    return ImVec4(0.6f, 1.0f,  0.6f, 1.0f);   // green
 	if (isShaderFile(ext))                  return ImVec4(1.0f, 0.6f,  0.3f, 1.0f);   // orange
@@ -75,22 +100,22 @@ static ImVec4 fileColor(const std::filesystem::path& p)
 	return ImVec4(0.85f, 0.85f, 0.85f, 1.0f);                                         // grey
 }
 
-static void assetDragSource(const std::filesystem::path& p)
+static void assetDragSource(const std::string& p, bool isDirectory, const std::string& ext)
 {
-	if (std::filesystem::is_directory(p))
+	if (isDirectory)
 		return; // dragging a folder isn't meaningful to any current drop target
 
-	const bool spawnable = isSpawnableFile(p);
-	const bool script = isScriptFile(p.extension().string());
+	const bool spawnable = ext == ".pre";
+	const bool script = isScriptFile(ext);
 	if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None))
 	{
-		const std::string path = p.string();
+		const std::string path = p;
 		// Every file is draggable: spawnable/script (.scr or .dsl) keep their dedicated payload (viewport
 		// spawn / script assign), anything else falls back to TEXT_FILE so it can be dropped onto the Script
 		// Editor and viewed/edited as plain text.
 		const char* payloadTag = spawnable ? "ASSET_FILE" : script ? "SCRIPT_FILE" : "TEXT_FILE";
 		ImGui::SetDragDropPayload(payloadTag, path.c_str(), path.size() + 1);
-		ImGui::Text(spawnable ? "Spawn %s" : script ? "Assign %s" : "View %s as text", p.filename().string().c_str());
+		ImGui::Text(spawnable ? "Spawn %s" : script ? "Assign %s" : "View %s as text", FileSystem::filename(p).c_str());
 		ImGui::EndDragDropSource();
 	}
 }
@@ -113,32 +138,95 @@ static std::string truncateLabel(const std::string& name, float maxWidth)
 
 void AssetBrowser::initialize()
 {
-	std::error_code ec;
-	m_rootPath = std::filesystem::canonical(std::filesystem::current_path(), ec);
-	if (ec)
-		m_rootPath = std::filesystem::current_path();
+	m_rootPath = FileSystem::canonicalPath(FileSystem::currentPath(/*allowMainThread*/ true), true);
+	if (m_rootPath.empty())
+		m_rootPath = FileSystem::currentPath(/*allowMainThread*/ true);
 	m_currentPath = m_rootPath;
 }
 
-bool AssetBrowser::isWithinRoot(const std::filesystem::path& path) const
+bool AssetBrowser::isWithinRoot(const std::string& path) const
 {
-	std::error_code ec;
-	const auto canonical = std::filesystem::weakly_canonical(path, ec);
-	if (ec)
+	const std::string canonical = FileSystem::weaklyCanonicalPath(path, /*allowMainThread*/ true);
+	if (canonical.empty())
 		return false;
-	const auto rel = std::filesystem::relative(canonical, m_rootPath, ec);
-	if (ec || rel.empty())
-		return false;
-	return *rel.begin() != "..";   // anything starting with ".." escapes the root upward
+	const std::string rel = FileSystem::relativePath(canonical, m_rootPath, /*allowMainThread*/ true);
+	// anything starting with ".." escapes the root upward
+	return !rel.empty() && !rel.starts_with("..");
+}
+
+void AssetBrowser::scanDirectory(const std::string& dir, DirListing& out)
+{
+	ProfileScope scope("Asset dir scan", EProfileCategory::File);
+	out.entries.clear();
+	out.hasSubDirs = false;
+	// The rescan poll runs on the prepare JOB; the first scan of a folder happens inline on the
+	// main thread (there is nothing to draw otherwise), so the listing itself is allowed either way.
+	std::vector<FileSystem::DirEntry> listed;
+	FileSystem::listDirectory(dir, listed, /*allowMainThread*/ true);
+	out.entries.reserve(listed.size());
+	for (const FileSystem::DirEntry& e : listed)
+	{
+		DirEntryInfo info;
+		info.path = e.path;
+		info.name = e.name;
+		info.extension = e.extension;
+		info.isDirectory = e.isDirectory;
+		info.size = e.size;
+		if (info.isDirectory)
+			out.hasSubDirs = true;
+		out.entries.push_back(std::move(info));
+	}
+	std::sort(out.entries.begin(), out.entries.end(), [](const DirEntryInfo& a, const DirEntryInfo& b)
+		{ return a.isDirectory != b.isDirectory ? a.isDirectory : a.name < b.name; });
+	out.lastScanSec = Globals::time.getElapsedSec();
+}
+
+AssetBrowser::DirListing& AssetBrowser::listing(const std::string& dir)
+{
+	DirListing& cached = m_dirCache[dir];
+	if (cached.lastScanSec < 0.0)
+		scanDirectory(dir, cached); // never seen: scan inline, there is nothing to draw otherwise
+	cached.touchedFrame = m_frame;  // prepare() only refreshes what a render actually reads
+	return cached;
+}
+
+void AssetBrowser::invalidateListings()
+{
+	for (auto& [path, cached] : m_dirCache)
+		cached.lastScanSec = -1.0; // next listing() call re-scans (the user just changed something)
+}
+
+void AssetBrowser::prepare()
+{
+	// Periodic refresh of the listings the panel actually drew, on a job. Files also appear from
+	// OUTSIDE the browser (prefab saves, compiled scripts, cooked assets), so a poll is the only
+	// way to notice — but only while the panel is being used.
+	if (!m_active)
+		return;
+	ProfileScope scope("Asset browser prepare", EProfileCategory::UI);
+	const double now = Globals::time.getElapsedSec();
+	for (auto& [path, cached] : m_dirCache)
+		if (cached.touchedFrame + 2 >= m_frame && now - cached.lastScanSec > RescanIntervalSec)
+			scanDirectory(path, cached);
 }
 
 void AssetBrowser::render()
 {
-	renderToolbar();
+	++m_frame;
+	// Focused OR hovered counts as "in use" — the rescan poll (prepare) runs only then.
+	m_active = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)
+		|| ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows);
+	{
+		ProfileScope scope("AB toolbar", EProfileCategory::UI);
+		renderToolbar();
+	}
 	ImGui::Separator();
 
 	ImGui::BeginChild("##ab_left", ImVec2(m_leftPaneWidth, 0.0f), ImGuiChildFlags_Borders);
-	renderDirectoryTree(m_rootPath);
+	{
+		ProfileScope scope("AB dir tree", EProfileCategory::UI);
+		renderDirectoryTree(m_rootPath);
+	}
 	ImGui::EndChild();
 
 	ImGui::SameLine();
@@ -163,20 +251,27 @@ void AssetBrowser::render()
 		renderContentList();
 	else
 		renderContentGrid();
-	acceptPrefabDrop();
-	renderNewAssetContextMenu();
+	{
+		ProfileScope scope("AB drop + menus", EProfileCategory::UI);
+		acceptPrefabDrop();
+		renderNewAssetContextMenu();
+	}
 	ImGui::EndChild();
 
-	renderOverwritePopup();
-	renderCyclePopup();
-	renderRenamePopup();
+	{
+		ProfileScope scope("AB popups", EProfileCategory::UI);
+		renderOverwritePopup();
+		renderCyclePopup();
+		renderRenamePopup();
+	}
 }
 
-void AssetBrowser::queueSavePrefab(Entity* root, const std::filesystem::path& path)
+void AssetBrowser::queueSavePrefab(Entity* root, const std::string& path)
 {
+	invalidateListings(); // the app writes the .pre this frame — show it on the next draw
 	std::error_code ec;
-	const std::filesystem::path rel = std::filesystem::relative(path, ec);
-	const std::string savePath = (ec || rel.empty()) ? path.string() : rel.string();
+	const std::string rel = FileSystem::relativePath(path, std::string(), /*allowMainThread*/ true);
+	const std::string savePath = (ec || rel.empty()) ? path : rel;
 	m_changes.push_back({ EntityChange::SavePrefab{ EntityPtr(root), savePath } });
 	m_selectedPath = path; // absolute, to match the directory listing for highlight
 }
@@ -191,14 +286,14 @@ void AssetBrowser::acceptPrefabDrop()
 	{
 		Entity* entity = *static_cast<Entity**>(payload->Data);
 		const std::string name = entity->hasName() ? std::string(entity->getName()) : std::string("Prefab");
-		const std::filesystem::path out = m_currentPath / (name + ".pre");
+		const std::string out = FileSystem::join(m_currentPath, name + ".pre");
 		std::error_code ec;
 		if (prefabWouldCycle(entity, name))
 		{
 			m_pendingSavePath = out; // for the message filename
 			m_openCyclePopup = true;
 		}
-		else if (std::filesystem::exists(out, ec))
+		else if (FileSystem::exists(out, /*allowMainThread*/ true))
 		{
 			m_pendingSaveRoot = EntityPtr(entity);
 			m_pendingSavePath = out;
@@ -227,7 +322,7 @@ void AssetBrowser::renderOverwritePopup()
 	if (!ImGui::BeginPopupModal(popupId, nullptr, ImGuiWindowFlags_AlwaysAutoResize))
 		return;
 
-	ImGui::Text("\"%s\" already exists.\nOverwrite it?", m_pendingSavePath.filename().string().c_str());
+	ImGui::Text("\"%s\" already exists.\nOverwrite it?", FileSystem::filename(m_pendingSavePath).c_str());
 	ImGui::Separator();
 	if (ImGui::Button("Overwrite", ImVec2(120.0f, 0.0f)))
 	{
@@ -260,7 +355,7 @@ void AssetBrowser::renderCyclePopup()
 		return;
 
 	ImGui::Text("\"%s\" contains an instance of itself.\nSaving it would create a prefab cycle.",
-		m_pendingSavePath.filename().string().c_str());
+		FileSystem::filename(m_pendingSavePath).c_str());
 	ImGui::Separator();
 	if (ImGui::Button("OK", ImVec2(120.0f, 0.0f)))
 		ImGui::CloseCurrentPopup();
@@ -269,7 +364,7 @@ void AssetBrowser::renderCyclePopup()
 
 void AssetBrowser::renderToolbar()
 {
-	const bool canGoUp = (m_currentPath != m_rootPath) && m_currentPath.has_parent_path();
+	const bool canGoUp = (m_currentPath != m_rootPath) && !FileSystem::parentPath(m_currentPath).empty();
 	if (!canGoUp)
 	{
 		ImGui::BeginDisabled();
@@ -284,28 +379,27 @@ void AssetBrowser::renderToolbar()
 	ImGui::SameLine();
 
 	{
-		const std::string rootLabel = m_rootPath.filename().empty()
-			? m_rootPath.string()
-			: m_rootPath.filename().string();
+		const std::string rootLabel = FileSystem::filename(m_rootPath).empty()
+			? m_rootPath
+			: FileSystem::filename(m_rootPath);
 		ImGui::PushID("##ab_crumb_root");
 		if (ImGui::SmallButton(rootLabel.c_str()))
 			navigateTo(m_rootPath);
 		ImGui::PopID();
 
-		std::error_code ec;
-		const std::filesystem::path rel = std::filesystem::relative(m_currentPath, m_rootPath, ec);
-		std::filesystem::path accumulated = m_rootPath;
-		if (!ec && rel != ".")
+		const std::string rel = FileSystem::relativePath(m_currentPath, m_rootPath, /*allowMainThread*/ true);
+		std::string accumulated = m_rootPath;
+		if (!rel.empty() && rel != ".")
 		{
 			int i = 0;
-			for (const auto& part : rel)
+			for (const std::string& part : splitPathComponents(rel))
 			{
-				accumulated /= part;
+				accumulated = FileSystem::join(accumulated, part);
 				ImGui::SameLine(0.0f, 2.0f);
 				ImGui::TextDisabled("/");
 				ImGui::SameLine(0.0f, 2.0f);
 				ImGui::PushID(i++);
-				if (ImGui::SmallButton(part.string().c_str()))
+				if (ImGui::SmallButton(part.c_str()))
 					navigateTo(accumulated);
 				ImGui::PopID();
 			}
@@ -341,17 +435,15 @@ void AssetBrowser::renderToolbar()
 	}
 }
 
-void AssetBrowser::renderDirectoryTree(const std::filesystem::path& dir)
+void AssetBrowser::renderDirectoryTree(const std::string& dir)
 {
 	std::error_code ec;
-	if (!std::filesystem::is_directory(dir, ec))
+	if (!FileSystem::isDirectory(dir, /*allowMainThread*/ true))
 		return;
 
 	const bool isCurrent = (dir == m_currentPath);
-
-	bool hasSubDirs = false;
-	for (const auto& e : std::filesystem::directory_iterator(dir, ec))
-		if (e.is_directory()) { hasSubDirs = true; break; }
+	DirListing& dirListing = listing(dir); // cached — no per-frame enumeration
+	const bool hasSubDirs = dirListing.hasSubDirs;
 
 	ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow
 		| ImGuiTreeNodeFlags_SpanAvailWidth
@@ -360,9 +452,9 @@ void AssetBrowser::renderDirectoryTree(const std::filesystem::path& dir)
 	if (!hasSubDirs) flags |= ImGuiTreeNodeFlags_Leaf;
 	if (dir == m_rootPath) flags |= ImGuiTreeNodeFlags_DefaultOpen;
 
-	const std::string label = dir.filename().string().empty()
-		? dir.string()
-		: dir.filename().string();
+	const std::string label = FileSystem::filename(dir).empty()
+		? dir
+		: FileSystem::filename(dir);
 
 	ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.4f, 1.0f));
 	const bool open = ImGui::TreeNodeEx(label.c_str(), flags);
@@ -373,11 +465,14 @@ void AssetBrowser::renderDirectoryTree(const std::filesystem::path& dir)
 
 	if (open)
 	{
-		std::vector<std::filesystem::path> subDirs;
-		for (const auto& e : std::filesystem::directory_iterator(dir, ec))
-			if (e.is_directory()) subDirs.push_back(e.path());
-		std::sort(subDirs.begin(), subDirs.end());
-		for (const auto& sub : subDirs)
+		// The listing is sorted directories-first by name, so this is the same order as before.
+		// Copy the paths: the recursion inserts into m_dirCache, and while unordered_map keeps
+		// references stable, the vector inside THIS listing must not be read across those inserts.
+		std::vector<std::string> subDirs;
+		for (const DirEntryInfo& entry : dirListing.entries)
+			if (entry.isDirectory)
+				subDirs.push_back(entry.path);
+		for (const std::string& sub : subDirs)
 			renderDirectoryTree(sub);
 		ImGui::TreePop();
 	}
@@ -385,38 +480,21 @@ void AssetBrowser::renderDirectoryTree(const std::filesystem::path& dir)
 
 void AssetBrowser::renderContentGrid()
 {
+	ProfileScope scope("AB grid", EProfileCategory::UI);
 	const float cellSize    = m_iconSize + 20.0f;
 	const float panelWidth  = ImGui::GetContentRegionAvail().x;
 	const int   columnCount = std::max(1, static_cast<int>(panelWidth / cellSize));
-	const std::string filter(m_searchBuf);
-
-	std::error_code ec;
-	std::vector<std::filesystem::directory_entry> entries;
-	for (const auto& e : std::filesystem::directory_iterator(m_currentPath, ec))
-	{
-		if (!filter.empty())
-		{
-			const std::string fname = e.path().filename().string();
-			auto it = std::search(fname.begin(), fname.end(), filter.begin(), filter.end(),
-				[](char a, char b) { return std::tolower((unsigned char)a) == std::tolower((unsigned char)b); });
-			if (it == fname.end()) continue;
-		}
-		entries.push_back(e);
-	}
-
-	std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
-		const bool ad = a.is_directory(), bd = b.is_directory();
-		if (ad != bd) return ad > bd;
-		return a.path().filename() < b.path().filename();
-	});
+	DirListing& dirListing = listing(m_currentPath); // cached + pre-sorted
 
 	if (ImGui::BeginTable("##ab_grid", columnCount, ImGuiTableFlags_None))
 	{
-		for (const auto& entry : entries)
+		for (DirEntryInfo& entry : dirListing.entries)
 		{
+			if (!passesFilter(entry.name, m_searchBuf))
+				continue;
 			ImGui::TableNextColumn();
-			const std::filesystem::path& p = entry.path();
-			const std::string name = p.filename().string();
+			const std::string& p = entry.path;
+			const std::string& name = entry.name;
 			const bool isSelected  = (p == m_selectedPath);
 
 			ImGui::PushID(name.c_str());
@@ -426,28 +504,34 @@ void AssetBrowser::renderContentGrid()
 			else
 				ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
 
-			ImGui::PushStyleColor(ImGuiCol_Text, fileColor(p));
-			const bool clicked = ImGui::Button(fileIcon(p), ImVec2(m_iconSize, m_iconSize));
+			ImGui::PushStyleColor(ImGuiCol_Text, fileColor(entry.isDirectory, entry.extension));
+			const bool clicked = ImGui::Button(fileIcon(entry.isDirectory, entry.extension), ImVec2(m_iconSize, m_iconSize));
 			ImGui::PopStyleColor(2); // Text + Button
 
-			assetDragSource(p);
+			assetDragSource(p, entry.isDirectory, entry.extension);
 
 			if (clicked)
 				m_selectedPath = p;
 
 			if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 			{
-				if (entry.is_directory())
+				if (entry.isDirectory)
 					navigateTo(p);
-				else if (isScriptFile(p.extension().string()))
-					m_scriptOpenRequest = p.string();
-				else if (isTextFile(p.extension().string()))
-					m_textOpenRequest = p.string();
+				else if (isScriptFile(entry.extension))
+					m_scriptOpenRequest = p;
+				else if (isTextFile(entry.extension))
+					m_textOpenRequest = p;
 			}
 
 			renderContextMenu(p);
 
-			const std::string display = truncateLabel(name, cellSize - 4.0f);
+			const float labelWidth = cellSize - 4.0f;
+			if (entry.displayWidth != labelWidth) // re-fit only when the icon size changed
+			{
+				entry.display = truncateLabel(name, labelWidth);
+				entry.displayWidth = labelWidth;
+			}
+			const std::string& display = entry.display;
 			ImGui::TextUnformatted(display.c_str());
 			if (display != name && ImGui::IsItemHovered())
 				ImGui::SetTooltip("%s", name.c_str());
@@ -466,27 +550,8 @@ void AssetBrowser::renderContentGrid()
 
 void AssetBrowser::renderContentList()
 {
-	const std::string filter(m_searchBuf);
-
-	std::error_code ec;
-	std::vector<std::filesystem::directory_entry> entries;
-	for (const auto& e : std::filesystem::directory_iterator(m_currentPath, ec))
-	{
-		if (!filter.empty())
-		{
-			const std::string fname = e.path().filename().string();
-			auto it = std::search(fname.begin(), fname.end(), filter.begin(), filter.end(),
-				[](char a, char b) { return std::tolower((unsigned char)a) == std::tolower((unsigned char)b); });
-			if (it == fname.end()) continue;
-		}
-		entries.push_back(e);
-	}
-
-	std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
-		const bool ad = a.is_directory(), bd = b.is_directory();
-		if (ad != bd) return ad > bd;
-		return a.path().filename() < b.path().filename();
-	});
+	ProfileScope scope("AB list", EProfileCategory::UI);
+	DirListing& dirListing = listing(m_currentPath); // cached + pre-sorted, sizes included
 
 	const ImGuiTableFlags tableFlags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV
 		| ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
@@ -498,17 +563,19 @@ void AssetBrowser::renderContentList()
 		ImGui::TableSetupColumn("Size",  ImGuiTableColumnFlags_WidthStretch, 1.0f);
 		ImGui::TableHeadersRow();
 
-		for (const auto& entry : entries)
+		for (const DirEntryInfo& entry : dirListing.entries)
 		{
-			const std::filesystem::path& p = entry.path();
-			const std::string name         = p.filename().string();
+			if (!passesFilter(entry.name, m_searchBuf))
+				continue;
+			const std::string& p = entry.path;
+			const std::string& name        = entry.name;
 			const bool isSelected          = (p == m_selectedPath);
 
 			ImGui::TableNextRow();
 			ImGui::TableSetColumnIndex(0);
 
 			ImGui::PushID(name.c_str());
-			ImGui::PushStyleColor(ImGuiCol_Text, fileColor(p));
+			ImGui::PushStyleColor(ImGuiCol_Text, fileColor(entry.isDirectory, entry.extension));
 			if (ImGui::Selectable(name.c_str(), isSelected,
 				ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
 				ImVec2(0.0f, 0.0f)))
@@ -517,40 +584,36 @@ void AssetBrowser::renderContentList()
 			}
 			ImGui::PopStyleColor();
 
-			assetDragSource(p);
+			assetDragSource(p, entry.isDirectory, entry.extension);
 
 			if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 			{
-				if (entry.is_directory())
+				if (entry.isDirectory)
 					navigateTo(p);
-				else if (isScriptFile(p.extension().string()))
-					m_scriptOpenRequest = p.string();
-				else if (isTextFile(p.extension().string()))
-					m_textOpenRequest = p.string();
+				else if (isScriptFile(entry.extension))
+					m_scriptOpenRequest = p;
+				else if (isTextFile(entry.extension))
+					m_textOpenRequest = p;
 			}
 
 			renderContextMenu(p);
 
 			ImGui::TableSetColumnIndex(1);
-			if (entry.is_directory())
+			if (entry.isDirectory)
 				ImGui::TextDisabled("Folder");
 			else
-				ImGui::TextDisabled("%s", p.extension().string().c_str());
+				ImGui::TextDisabled("%s", entry.extension.c_str());
 
 			ImGui::TableSetColumnIndex(2);
-			if (!entry.is_directory())
+			if (!entry.isDirectory) // size cached at scan time (was a syscall per row, per frame)
 			{
-				std::error_code sec;
-				const auto bytes = entry.file_size(sec);
-				if (!sec)
-				{
-					if (bytes < 1024)
-						ImGui::TextDisabled("%llu B", bytes);
-					else if (bytes < 1024 * 1024)
-						ImGui::TextDisabled("%.1f KB", bytes / 1024.0);
-					else
-						ImGui::TextDisabled("%.1f MB", bytes / (1024.0 * 1024.0));
-				}
+				const uint64 bytes = entry.size;
+				if (bytes < 1024)
+					ImGui::TextDisabled("%llu B", bytes);
+				else if (bytes < 1024 * 1024)
+					ImGui::TextDisabled("%.1f KB", bytes / 1024.0);
+				else
+					ImGui::TextDisabled("%.1f MB", bytes / (1024.0 * 1024.0));
 			}
 
 			ImGui::PopID();
@@ -565,23 +628,25 @@ void AssetBrowser::renderContentList()
 	}
 }
 
-void AssetBrowser::renderContextMenu(const std::filesystem::path& p)
+void AssetBrowser::renderContextMenu(const std::string& p)
 {
+	// (no ProfileScope: this runs PER ITEM — hundreds of records per frame would flood the ring.
+	// The early-out below means an unopened popup costs one ImGui call.)
 	if (!ImGui::BeginPopupContextItem("##ab_ctx"))
 		return;
 
 	m_selectedPath = p;
 
 	if (ImGui::MenuItem("Copy path"))
-		ImGui::SetClipboardText(p.string().c_str());
+		ImGui::SetClipboardText(p.c_str());
 
 	if (ImGui::MenuItem("Copy filename"))
-		ImGui::SetClipboardText(p.filename().string().c_str());
+		ImGui::SetClipboardText(FileSystem::filename(p).c_str());
 
 	if (ImGui::MenuItem("Rename"))
 	{
 		m_renameTarget = p;
-		const std::string fname = p.filename().string();
+		const std::string fname = FileSystem::filename(p);
 		const size_t n = std::min(fname.size(), sizeof(m_renameBuf) - 1);
 		for (size_t i = 0; i < sizeof(m_renameBuf); ++i) m_renameBuf[i] = i < n ? fname[i] : '\0';
 		m_openRenamePopup = true;
@@ -592,33 +657,33 @@ void AssetBrowser::renderContextMenu(const std::filesystem::path& p)
 #if defined(_WIN32)
 	if (ImGui::MenuItem("Show in Explorer"))
 	{
-		const std::string cmd = "explorer /select,\"" + p.string() + "\"";
+		const std::string cmd = "explorer /select,\"" + p + "\"";
 		std::system(cmd.c_str());
 	}
 #endif
 
-	if (isScriptFile(p.extension().string()))
+	if (isScriptFile(FileSystem::extension(p)))
 	{
 		ImGui::Separator();
 		if (ImGui::MenuItem("Open Script"))
-			m_scriptOpenRequest = p.string();
+			m_scriptOpenRequest = p;
 	}
 
-	if (isTextFile(p.extension().string()))
+	if (isTextFile(FileSystem::extension(p)))
 	{
 		ImGui::Separator();
 		if (ImGui::MenuItem("Open Text File"))
-			m_textOpenRequest = p.string();
+			m_textOpenRequest = p;
 	}
 
-	if (isSpawnableFile(p))
+	if (isPrefabFile(FileSystem::extension(p)))
 	{
 		ImGui::Separator();
 		if (ImGui::MenuItem("Edit Entity"))
-			m_entityEditRequest = p.string();
+			m_entityEditRequest = p;
 	}
 
-	if (std::filesystem::is_directory(p))
+	if (FileSystem::isDirectory(p, /*allowMainThread*/ true))
 	{
 		ImGui::Separator();
 		if (ImGui::MenuItem("Open folder"))
@@ -628,31 +693,33 @@ void AssetBrowser::renderContextMenu(const std::filesystem::path& p)
 	ImGui::EndPopup();
 }
 
-void AssetBrowser::navigateTo(const std::filesystem::path& path)
+void AssetBrowser::navigateTo(const std::string& path)
 {
 	std::error_code ec;
-	if (std::filesystem::is_directory(path, ec) && isWithinRoot(path))
+	if (FileSystem::isDirectory(path, /*allowMainThread*/ true) && isWithinRoot(path))
 	{
-		m_currentPath  = std::filesystem::canonical(path, ec);
+		m_currentPath  = FileSystem::canonicalPath(path, /*allowMainThread*/ true);
 		m_selectedPath.clear();
 		m_searchBuf[0] = '\0';
+		// Entering a folder is the one moment a stale listing would be most visible: re-scan it
+		// on the spot (one directory, on a click — not per frame).
+		scanDirectory(m_currentPath, m_dirCache[m_currentPath]);
 	}
 }
 
-void AssetBrowser::selectFile(const std::filesystem::path& path)
+void AssetBrowser::selectFile(const std::string& path)
 {
-	std::error_code ec;
-	const std::filesystem::path abs = std::filesystem::canonical(path, ec);
-	if (ec || !abs.has_parent_path())
+	const std::string abs = FileSystem::canonicalPath(path, /*allowMainThread*/ true);
+	if (abs.empty() || FileSystem::parentPath(abs).empty())
 		return;
-	navigateTo(abs.parent_path());
+	navigateTo(FileSystem::parentPath(abs));
 	m_selectedPath = abs;
 }
 
 void AssetBrowser::navigateUp()
 {
-	if (m_currentPath != m_rootPath && m_currentPath.has_parent_path())
-		navigateTo(m_currentPath.parent_path());
+	if (m_currentPath != m_rootPath && !FileSystem::parentPath(m_currentPath).empty())
+		navigateTo(FileSystem::parentPath(m_currentPath));
 }
 
 void AssetBrowser::renderNewAssetContextMenu()
@@ -664,39 +731,45 @@ void AssetBrowser::renderNewAssetContextMenu()
 		// A .dsl, not a .scr -- the node system is deprecated for new scripts. The file written is the SMALLEST
 		// loadable document (an empty version-1 block); it opens in the Script Editor immediately through the
 		// same request a double-click raises, and that editor's own Save writes the full form from then on.
-		const std::filesystem::path path = makeUniqueAssetPath("NewScript", ".dsl");
-		if (FileSystem::writeFileStr(path.string(), "//@@dsl 1\n//@@end\n"))
-			m_scriptOpenRequest = path.string();
+		const std::string path = makeUniqueAssetPath("NewScript", ".dsl");
+		if (FileSystem::writeFileStr(path, "//@@dsl 1\n//@@end\n"))
+		{
+			m_scriptOpenRequest = path;
+			invalidateListings(); // the new file must show up now, not at the next poll
+		}
 	}
 	if (ImGui::MenuItem("New Text File"))
 	{
-		const std::filesystem::path path = makeUniqueAssetPath("NewText", ".txt");
-		if (FileSystem::writeFileStr(path.string(), ""))
-			m_textOpenRequest = path.string();
+		const std::string path = makeUniqueAssetPath("NewText", ".txt");
+		if (FileSystem::writeFileStr(path, ""))
+		{
+			m_textOpenRequest = path;
+			invalidateListings();
+		}
 	}
 	if (ImGui::MenuItem("New Prefab"))
 	{
-		const std::filesystem::path path = makeUniqueAssetPath("NewPrefab", ".pre");
-		const std::string id = path.stem().string();
-		if (FileSystem::writeFileStr(path.string(), "Prefab " + id + "\n"))
+		const std::string path = makeUniqueAssetPath("NewPrefab", ".pre");
+		const std::string id = FileSystem::stem(path);
+		if (FileSystem::writeFileStr(path, "Prefab " + id + "\n"))
 		{
-			Globals::assetRegistry.addPrefab(id, path.string());
-			m_entityEditRequest = path.string();
+			Globals::assetRegistry.addPrefab(id, path);
+			m_entityEditRequest = path;
+			invalidateListings();
 		}
 	}
 	ImGui::EndPopup();
 }
 
-std::filesystem::path AssetBrowser::makeUniqueAssetPath(const char* stem, const char* ext) const
+std::string AssetBrowser::makeUniqueAssetPath(const char* stem, const char* ext) const
 {
-	std::error_code ec;
-	std::filesystem::path candidate = m_currentPath / (std::string(stem) + ext);
-	if (!std::filesystem::exists(candidate, ec))
+	std::string candidate = FileSystem::join(m_currentPath, std::string(stem) + ext);
+	if (!FileSystem::exists(candidate, /*allowMainThread*/ true))
 		return candidate;
 	for (int i = 1; i < 1000; ++i)
 	{
-		candidate = m_currentPath / (stem + std::to_string(i) + ext);
-		if (!std::filesystem::exists(candidate, ec))
+		candidate = FileSystem::join(m_currentPath, stem + std::to_string(i) + ext);
+		if (!FileSystem::exists(candidate, /*allowMainThread*/ true))
 			return candidate;
 	}
 	return candidate;
@@ -723,12 +796,12 @@ void AssetBrowser::renderRenamePopup()
 
 	const bool hasName = m_renameBuf[0] != '\0';
 	std::error_code ec;
-	std::filesystem::path dest;
+	std::string dest;
 	bool conflict = false;
 	if (hasName)
 	{
-		dest = m_renameTarget.parent_path() / m_renameBuf;
-		conflict = dest != m_renameTarget && std::filesystem::exists(dest, ec);
+		dest = FileSystem::join(FileSystem::parentPath(m_renameTarget), m_renameBuf);
+		conflict = dest != m_renameTarget && FileSystem::exists(dest, /*allowMainThread*/ true);
 	}
 	if (conflict)
 		ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "A file with that name already exists.");
@@ -742,9 +815,12 @@ void AssetBrowser::renderRenamePopup()
 	{
 		if (dest != m_renameTarget)
 		{
-			std::filesystem::rename(m_renameTarget, dest, ec);
+			FileSystem::rename(m_renameTarget, dest, /*allowMainThread*/ true);
 			if (!ec)
+			{
 				m_selectedPath = dest;
+				invalidateListings();
+			}
 		}
 		ImGui::CloseCurrentPopup();
 	}

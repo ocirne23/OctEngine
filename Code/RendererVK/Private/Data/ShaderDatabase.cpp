@@ -1,6 +1,7 @@
 module RendererVK;
 
 import Core;
+import File; // disk access goes through FileSystem (Core no longer exports <filesystem>)
 import Core.Windows;
 import :Aftermath;
 
@@ -158,39 +159,22 @@ void ShaderDatabase::Initialize(bool applicationUsesStrippedShaders)
         // them to be correlated when decoding a GPU crash dump.
 
         // for each file in Assets/Shaders, add
-        auto shaderFolder = std::filesystem::path("Local/spv");
-		if (!std::filesystem::exists(shaderFolder) || !std::filesystem::is_directory(shaderFolder))
+        const std::string shaderFolder = "Local/spv";
+		if (!FileSystem::isDirectory(shaderFolder, /*allowMainThread*/ true))
 			return;
 
-        for (const auto& entry : std::filesystem::directory_iterator(shaderFolder))
-        {
-            if (entry.is_regular_file())
-            {
-                const auto& path = entry.path();
-                if (path.extension() == ".spv")
-                {
-                    AddShaderBinary(std::filesystem::absolute(path).string().c_str());
-                }
-            }
-        }
+        std::vector<FileSystem::DirEntry> entries;
+        FileSystem::listDirectory(shaderFolder, entries, /*allowMainThread*/ true);
+        for (const FileSystem::DirEntry& entry : entries)
+            if (!entry.isDirectory && entry.extension == ".spv")
+                AddShaderBinary(FileSystem::absolutePath(entry.path, true).c_str());
     }
 }
 
 bool ShaderDatabase::ReadFile(const char* filename, std::vector<uint8_t>& data)
 {
-    std::ifstream fs(filename, std::ios::in | std::ios::binary);
-    if (!fs)
-    {
-        return false;
-    }
-
-    fs.seekg(0, std::ios::end);
-    data.resize(fs.tellg());
-    fs.seekg(0, std::ios::beg);
-    fs.read(reinterpret_cast<char*>(data.data()), data.size());
-    fs.close();
-
-    return true;
+    // Aftermath crash-dump bookkeeping: runs at init/crash time on the main thread.
+    return FileSystem::readFileBytes(filename, data, /*allowMainThread*/ true);
 }
 
 void ShaderDatabase::AddShaderBinary(const char* shaderFilePath)

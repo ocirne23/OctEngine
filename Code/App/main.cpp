@@ -37,6 +37,17 @@ int main(int argc, char* argv[])
     Globals::profiler.endStaticInit(); // closes the "Static init" scope opened at the profiler's static-init construction; must precede any main() scope
     ProfileScope initScope("main() initialize", EProfileCategory::App);
     FileSystem::initialize();
+    // STARTUP loads the world off the disk (asset registry scan, scenes, shaders, cooked caches):
+    // main-thread IO is expected here and only here. The scope ends with initScope, so any disk
+    // access from the FRAME LOOP trips FileSystem's main-thread assert instead — which is the point.
+    std::optional<FileSystem::AllowMainThreadIO> startupIo;
+    startupIo.emplace();
+    // Core sits below File, so the tweak registry gets its file IO injected from here (startup +
+    // the debounced save are explicit main-thread work).
+    TweakRegistry::get().setFileIo(
+        [](const std::string& path) { return FileSystem::readFileStr(path, /*allowMainThread*/ true); },
+        [](const std::string& path, const std::string& content)
+        { return FileSystem::writeFileStr(path, content, /*allowMainThread*/ true); });
     TweakRegistry::get().loadSaved(); // Saved-flagged tweaks apply from Local/tweaks.cfg from here on
 
     // --server [--port N] [--headless] [--tickrate N] hosts an authoritative session; --connect
@@ -255,6 +266,7 @@ int main(int argc, char* argv[])
         });
 
     initScope.stop();
+    startupIo.reset(); // from here on, main-thread IO asserts (see FileSystem)
 
     while (g_running)
     {
@@ -276,6 +288,7 @@ int main(int argc, char* argv[])
         if (!headlessServer)
         {
             Globals::input.update(deltaSec);
+            Globals::ui.prepare(); // panel data jobs (profiler snapshot etc.) — overlap everything below until ui.update
             controls.update((float)deltaSec);
             if (Globals::rendererVK.isVrEnabled())
             {

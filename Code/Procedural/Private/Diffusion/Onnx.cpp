@@ -11,6 +11,7 @@ module;
 module Procedural;
 
 import Core;
+import File; // disk access goes through FileSystem
 import Core.Log;
 import :Diffusion.Onnx;
 
@@ -45,9 +46,14 @@ namespace Procedural::Diffusion
 			Log::info(std::format("[Diffusion] inference provider: {}", g_resolvedProvider));
 		}
 
-		std::wstring widenPath(const std::filesystem::path& p)
+		// ORT's Windows API takes a wide path; the engine speaks UTF-8 strings everywhere.
+		std::wstring widenPath(const std::string& p)
 		{
-			return p.wstring();
+			const int len = MultiByteToWideChar(CP_UTF8, 0, p.c_str(), (int)p.size(), nullptr, 0);
+			std::wstring wide((size_t)std::max(len, 0), L' ');
+			if (len > 0)
+				MultiByteToWideChar(CP_UTF8, 0, p.c_str(), (int)p.size(), wide.data(), len);
+			return wide;
 		}
 	}
 
@@ -92,14 +98,13 @@ namespace Procedural::Diffusion
 		return g_resolvedProvider;
 	}
 
-	bool OnnxModel::load(const std::filesystem::path& modelPath, std::string_view name, EInferenceDevice device)
+	bool OnnxModel::load(const std::string& modelPath, std::string_view name, EInferenceDevice device)
 	{
 		m_impl->name.assign(name);
 
-		std::error_code ec;
-		if (!std::filesystem::exists(modelPath, ec))
+		if (!FileSystem::exists(modelPath))
 		{
-			Log::error(std::format("[Diffusion] model '{}' not found at {}", name, modelPath.string()));
+			Log::error(std::format("[Diffusion] model '{}' not found at {}", name, modelPath));
 			return false;
 		}
 

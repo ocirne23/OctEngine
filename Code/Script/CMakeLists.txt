@@ -8,7 +8,9 @@ add_library(${PROJECT_NAME} STATIC ${PROJECT_PRIVATE_FILES} ${PROJECT_PUBLIC_FIL
 target_include_directories(${PROJECT_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Private")
 target_include_directories(${PROJECT_NAME} PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/Public")
 
-target_link_libraries(${PROJECT_NAME} PUBLIC Core)
+# File: ScriptHost reads/writes .dsl + generated .cpp and scans Assets/Local/Scripts — since Core
+# stopped exporting <filesystem>/<fstream>, ALL disk access goes through File's FileSystem.
+target_link_libraries(${PROJECT_NAME} PUBLIC Core File)
 
 set_target_properties(${PROJECT_NAME} PROPERTIES FOLDER Engine)
 

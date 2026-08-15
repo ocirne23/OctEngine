@@ -168,12 +168,12 @@ namespace
 	// True when outPath exists and is newer than its source (a missing source doesn't invalidate a bake).
 	bool terrainTexCacheFresh(const std::string& outPath, const std::string& source)
 	{
-		std::error_code ec;
-		const auto outTime = std::filesystem::last_write_time(outPath, ec);
-		if (ec)
+		// Runs on the startup bake thread (never the main thread).
+		const int64 outTime = FileSystem::lastWriteTimeSec(outPath);
+		if (outTime == 0)
 			return false;
-		const auto srcTime = std::filesystem::last_write_time(source, ec);
-		return ec || srcTime <= outTime;
+		const int64 srcTime = FileSystem::lastWriteTimeSec(source);
+		return srcTime == 0 || srcTime <= outTime;
 	}
 
 	// Bakes every stale terrain texture into the DDS cache. Runs on a background jthread at startup;
@@ -181,8 +181,7 @@ namespace
 	// thread pool and the stop token is checked between files (app shutdown mid-first-bake).
 	void bakeTerrainTexCache(const std::atomic<bool>& stopRequested)
 	{
-		std::error_code ec;
-		std::filesystem::create_directories(TERRAIN_TEX_CACHE_DIR, ec);
+		FileSystem::createDirectories(TERRAIN_TEX_CACHE_DIR);
 
 		struct BakeTask { const TerrainTexSource* src; int map; }; // map: 0 = diff, 1 = nor, 2 = arm
 		std::vector<BakeTask> tasks;
@@ -472,8 +471,8 @@ namespace Procedural
 			mat.diffuseDds = terrainTexCachePath(src, "diff");
 			mat.normalDds = terrainTexCachePath(src, "nor");
 			mat.armDds = terrainTexCachePath(src, "arm");
-			std::error_code ec;
-			if (!std::filesystem::exists(mat.diffuseDds, ec) || !std::filesystem::exists(mat.normalDds, ec) || !std::filesystem::exists(mat.armDds, ec))
+			if (!FileSystem::exists(mat.diffuseDds, /*allowMainThread*/ true) || !FileSystem::exists(mat.normalDds, true)
+				|| !FileSystem::exists(mat.armDds, true))
 			{
 				// Source images missing / bake failed: drop the entry. A ground or rock entry just leaves
 				// its climate to the neighbouring boxes; a missing beach or snow entry disables that

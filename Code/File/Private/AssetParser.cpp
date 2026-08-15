@@ -223,7 +223,10 @@ bool parseAssetText(std::string_view text, AssetNode& outRoot, std::string& outE
 
 bool loadAssetFile(const std::string& path, AssetNode& outRoot, std::string& outError)
 {
-    const std::string content = FileSystem::readFileStr(path);
+    // Asset TEXT loads (.pre/.oc/.anm/.apl) are main-thread by design: World::buildTemplate reads a
+    // prefab the first time it is spawned and caches the template, so this is a warm-up cost, not a
+    // per-frame one. Marked explicitly rather than silently tripping the FileSystem main-thread assert.
+    const std::string content = FileSystem::readFileStr(path, /*allowMainThread*/ true);
     if (content.empty())
     {
         outError = "Could not read file (missing or empty): " + path;

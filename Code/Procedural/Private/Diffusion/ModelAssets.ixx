@@ -75,15 +75,15 @@ export namespace Procedural::Diffusion
 		const std::string& error() const { return m_error; }
 
 		// Assets/TerrainDiffusion, relative to the CWD (FileSystem::initialize sets it to Assets/).
-		static std::filesystem::path modelDir();
-		static std::filesystem::path assetPath(std::string_view fileName);
+		static std::string modelDir();
+		static std::string assetPath(std::string_view fileName);
 		// The model file to load for `stem` ("coarse_model", "base_model", "decoder_model") at the requested
 		// precision, falling back to the fp32 original when the converted file is absent — which is the
 		// normal state, since converting is an optional offline step.
-		static std::filesystem::path modelPath(std::string_view stem, EPrecision precision);
+		static std::string modelPath(std::string_view stem, EPrecision precision);
 		// The converted model beside its fp32 original: Assets/TerrainDiffusion/<stem>_fp16.onnx. Written by
 		// Tools/convert_models_fp16.py, by hand; the engine only ever reads it.
-		static std::filesystem::path fp16Path(std::string_view stem);
+		static std::string fp16Path(std::string_view stem);
 		// True when EVERY model of the set has an fp16 file present. Mixing precisions across the three
 		// stages is allowed and works (each session is independent), but it makes a perf number impossible
 		// to interpret, so the caller logs which stages actually got converted.

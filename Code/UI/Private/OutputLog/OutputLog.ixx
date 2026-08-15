@@ -6,9 +6,14 @@ import Core.Log;
 export class OutputLog
 {
 public:
+	// prepare() = the log SNAPSHOT (copy on revision change) + the level/text FILTER pass, no
+	// ImGui: UI::prepare runs it on a job. render() draws the filtered list (prepares inline if
+	// nothing ran ahead). The filter settings it reads are what render's widgets set last frame.
+	void prepare();
 	void render();
 
 private:
+	bool   m_prepared = false; // prepare() ran for this UI frame (render clears it)
 	bool   m_showVerbose  = true;
 	bool   m_showInfo     = true;
 	bool   m_showWarning  = true;
@@ -18,4 +23,5 @@ private:
 
 	uint32                   m_cachedRevision = UINT32_MAX;
 	std::vector<Log::Message> m_snapshot;
+	std::vector<uint32>       m_visible; // indices into m_snapshot passing the filters
 };

@@ -36,7 +36,7 @@ export namespace Procedural::Diffusion
 
 		// Creates the session. Returns false (and logs) on failure, leaving the model unusable.
 		// `name` is only for diagnostics.
-		bool load(const std::filesystem::path& modelPath, std::string_view name, EInferenceDevice device);
+		bool load(const std::string& modelPath, std::string_view name, EInferenceDevice device);
 		bool isValid() const;
 
 		// Runs the model and copies OUTPUT 0 into `out` (resized to the element count). Any further outputs

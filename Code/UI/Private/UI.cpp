@@ -1,11 +1,13 @@
 module UI;
 
 import Core;
+import File; // disk access goes through FileSystem (Core no longer exports <filesystem>)
 import Core.imgui;
 import Core.Log;
 import Core.glm;
 import Core.SDL;
 import Entity;
+import Threading;
 
 import :AssetBrowser;
 import :SceneView;
@@ -37,13 +39,39 @@ void UI::drawGizmoEntity(Renderer& renderer, float deltaSec)
         m_gizmo->getGizmoEntity()->update(renderer, deltaSec);
 }
 
+void UI::prepare()
+{
+    // One job per data-heavy panel that was open last frame; each panel's prepare() is worker-safe
+    // (no ImGui, reads only its own state + reader-safe engine sources: profiler rings, the memory
+    // tracker's atomic tree, the log under its mutex). update() waits on the counter before
+    // ImGui::NewFrame, so nothing here ever overlaps the widget pass that reads the results.
+    if (m_profilerOpen)
+        Globals::jobSystem.submit([this] { m_profilerPanel.prepare(); }, EJobPriority::High, &m_prepareCounter, "uiProfilerPrepare");
+    if (m_memoryOpen)
+        Globals::jobSystem.submit([this] { m_memoryPanel.prepare(); }, EJobPriority::High, &m_prepareCounter, "uiMemoryPrepare");
+    if (m_logOpen)
+        Globals::jobSystem.submit([this] { m_outputLog.prepare(); }, EJobPriority::High, &m_prepareCounter, "uiLogPrepare");
+    if (m_contentOpen) // the asset browser's filesystem rescans (it gates itself on focus/hover)
+        Globals::jobSystem.submit([this] { m_assetBrowser.prepare(); }, EJobPriority::High, &m_prepareCounter, "uiContentPrepare");
+}
+
 void UI::update(const std::vector<EntityPtr>& rootEntities, const Camera& camera, double deltaSec)
 {
     ProfileScope profileScope("UI update", EProfileCategory::UI);
-    ImGui_ImplSDL3_NewFrame();
-    ImGui::NewFrame();
+    {
+        // The panel prepare jobs (see prepare()) must have landed before any panel renders — a
+        // wait that shows up here means the prep did not fully overlap the pre-UI work.
+        ProfileScope waitScope("UI prepare wait", EProfileCategory::Wait);
+        Globals::jobSystem.wait(m_prepareCounter);
+    }
+    {
+        ProfileScope scope("ImGui new frame", EProfileCategory::UI);
+        ImGui_ImplSDL3_NewFrame();
+        ImGui::NewFrame();
+    }
 
     {
+        ProfileScope scope("Dockspace", EProfileCategory::UI);
         ImGuiViewport* viewport = ImGui::GetMainViewport();
         ImGui::SetNextWindowPos(viewport->Pos);
         ImGui::SetNextWindowSize(viewport->Size);
@@ -98,6 +126,7 @@ void UI::update(const std::vector<EntityPtr>& rootEntities, const Camera& camera
     }
 
     {
+        ProfileScope scope("Panel: Viewport", EProfileCategory::UI);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
         const bool viewportOpen = ImGui::Begin("Viewport", nullptr, ImGuiWindowFlags_NoBackground);
 
@@ -134,6 +163,7 @@ void UI::update(const std::vector<EntityPtr>& rootEntities, const Camera& camera
 
             // In-game HUD, painted into this window's draw list so it stays clipped to the viewport
             // and never takes focus (pure drawing, no widgets).
+            ProfileScope hudScope("Game HUD overlay", EProfileCategory::UI);
             m_gameHudOverlay.render(m_viewportRect);
         }
 
@@ -142,12 +172,14 @@ void UI::update(const std::vector<EntityPtr>& rootEntities, const Camera& camera
     }
 
     {
+        ProfileScope scope("Panel: Text Editor", EProfileCategory::UI);
         if (ImGui::Begin("Text Editor"))
             m_textEditor.render();
         ImGui::End();
     }
 
     {
+        ProfileScope scope("Panel: Script Editor", EProfileCategory::UI);
         if (ImGui::Begin("Script Editor"))
         {
             m_scriptEditorOpen = true;
@@ -159,6 +191,7 @@ void UI::update(const std::vector<EntityPtr>& rootEntities, const Camera& camera
     }
 
     {
+        ProfileScope scope("Panel: Scene", EProfileCategory::UI);
         if (ImGui::Begin("Scene"))
             m_sceneView.render(rootEntities);
         ImGui::End();
@@ -174,29 +207,38 @@ void UI::update(const std::vector<EntityPtr>& rootEntities, const Camera& camera
                 if (script->scriptModule)
                 {
                     const std::string& path = script->scriptModule->scriptPath;
-                    if (std::filesystem::path(path).extension() == ".dsl")
+                    if (FileSystem::extension(path) == ".dsl")
                         m_scriptEditor.requestOpen(path);
                 }
     }
 
+    // The three data-heavy panels remember whether they were open: only open ones get a prepare
+    // job next frame (a hidden panel costs nothing, exactly as before).
     {
-        if (ImGui::Begin("Log"))
+        ProfileScope scope("Panel: Log", EProfileCategory::UI);
+        m_logOpen = ImGui::Begin("Log");
+        if (m_logOpen)
             m_outputLog.render();
         ImGui::End();
     }
 
     {
-        if (ImGui::Begin("Profiler"))
+        ProfileScope scope("Panel: Profiler", EProfileCategory::UI);
+        m_profilerOpen = ImGui::Begin("Profiler");
+        if (m_profilerOpen)
             m_profilerPanel.render();
         ImGui::End();
     }
 
     {
-        if (ImGui::Begin("Memory"))
+        ProfileScope scope("Panel: Memory", EProfileCategory::UI);
+        m_memoryOpen = ImGui::Begin("Memory");
+        if (m_memoryOpen)
             m_memoryPanel.render();
         ImGui::End();
     }
 
+    ProfileScope statsScope("Panel: Stats", EProfileCategory::UI);
     if (ImGui::Begin("Stats"))
     {
         ImGui::Text("numMeshInstances: %i (%.1f%%)", m_renderStats.numMeshInstances, (float)m_renderStats.numMeshInstances / m_renderStats.maxMeshInstances * 100.0f);
@@ -236,9 +278,12 @@ void UI::update(const std::vector<EntityPtr>& rootEntities, const Camera& camera
             m_renderStats.lodInstanceCounts[3], m_renderStats.lodInstanceCounts[4]);
     }
     ImGui::End();
+    statsScope.stop();
 
     {
-        if (ImGui::Begin("Content"))
+        ProfileScope scope("Panel: Content", EProfileCategory::UI);
+        m_contentOpen = ImGui::Begin("Content");
+        if (m_contentOpen)
             m_assetBrowser.render();
         ImGui::End();
 
@@ -265,12 +310,14 @@ void UI::update(const std::vector<EntityPtr>& rootEntities, const Camera& camera
     }
 
     {
+        ProfileScope scope("Panel: Tweaks", EProfileCategory::UI);
         if (ImGui::Begin("Tweaks"))
             m_tweakPanel.render();
         ImGui::End();
     }
 
     {
+        ProfileScope scope("Panel: Entity Editor", EProfileCategory::UI);
         if (ImGui::Begin("Entity Editor"))
         {
             m_entityEditor.render(m_sceneView.getSelected());
@@ -294,6 +341,7 @@ void UI::update(const std::vector<EntityPtr>& rootEntities, const Camera& camera
     }
 
     {
+        ProfileScope scope("Panel: Properties", EProfileCategory::UI);
         if (ImGui::Begin("Properties"))
             m_propertiesPanel.render(m_sceneView.getSelected());
         ImGui::End();
@@ -302,7 +350,10 @@ void UI::update(const std::vector<EntityPtr>& rootEntities, const Camera& camera
     // Last: the panels above settle this frame's viewport rect and selection, which is exactly what the
     // gizmo follows.
     if (m_gizmo)
+    {
+        ProfileScope scope("Gizmo update", EProfileCategory::UI);
         m_gizmo->update(camera, m_viewportRect, m_sceneView.getSelected(), deltaSec);
+    }
 }
 
 void UI::handleKeyEvent(SDL_Event evt)

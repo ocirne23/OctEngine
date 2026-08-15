@@ -2,6 +2,7 @@ module UI;
 
 import Core;
 import Core.imgui;
+import Threading;
 import :ProfilerPanel;
 
 namespace
@@ -56,19 +57,19 @@ namespace
     }
 }
 
-void ProfilerPanel::render()
+void ProfilerPanel::prepare()
 {
+    ProfileScope scope("Profiler panel prepare", EProfileCategory::UI);
     Profiler& profiler = Globals::profiler;
+    m_prepared = true;
     if (profiler.getFrameCount() < 4)
-    {
-        ImGui::TextDisabled("Waiting for frames...");
         return;
-    }
 
     // Auto pause: stop on the first NEW frame exceeding the threshold. Only frames <= frameCount-3
     // are tested - pausing freezes the rings, so pausing sooner would drop the spike frame's own
     // GPU records (they land when its frame slot's fence is next waited). The rings comfortably
-    // retain those 2 extra frames, so nothing of the spike is lost.
+    // retain those 2 extra frames, so nothing of the spike is lost. (selectFrame only ever SETS
+    // paused — an atomic exchange — so this is safe off the main thread; resume stays in render.)
     if (m_autoPause && !m_paused)
     {
         const uint64 frameCount = profiler.getFrameCount();
@@ -92,6 +93,21 @@ void ProfilerPanel::render()
     }
 
     refresh(); // every UI frame, paused too: zoom/pan may need a wider snapshot of the (frozen) rings
+    if (m_statsVisible)
+        aggregateStats();
+}
+
+void ProfilerPanel::render()
+{
+    Profiler& profiler = Globals::profiler;
+    if (!m_prepared)
+        prepare(); // nothing ran ahead of us (first frame after opening, or no UI::prepare) — inline
+    m_prepared = false;
+    if (profiler.getFrameCount() < 4)
+    {
+        ImGui::TextDisabled("Waiting for frames...");
+        return;
+    }
 
     // Space toggles pause while the panel has focus.
     if (ImGui::IsWindowFocused(ImGuiFocusedFlags_ChildWindows) && ImGui::IsKeyPressed(ImGuiKey_Space, false))
@@ -112,11 +128,15 @@ void ProfilerPanel::render()
             drawTimeline();
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Stats"))
+        const bool statsOpen = ImGui::BeginTabItem("Stats");
+        if (statsOpen)
         {
+            if (!m_statsVisible)
+                aggregateStats(); // tab just opened: prepare skipped it — catch up inline this once
             drawStatsTable();
             ImGui::EndTabItem();
         }
+        m_statsVisible = statsOpen;
         ImGui::EndTabBar();
     }
 }
@@ -169,20 +189,42 @@ void ProfilerPanel::selectFrame(uint64 frameIdx)
 
 void ProfilerPanel::snapshotTracks()
 {
+    ProfileScope scope("Profiler tracks snapshot", EProfileCategory::UI);
     Profiler& profiler = Globals::profiler;
-    m_tracks.clear();
     const uint32 numTracks = profiler.getNumTracks();
-    for (uint32 i = 0; i < numTracks; ++i)
+    // One slot per track, filled IN PARALLEL: the copy out of each ring plus its sort is the bulk of
+    // the panel's cost, and the tracks are independent (each ring is single-writer; a reader on any
+    // thread is what snapshotTrack is for). Last frame's record buffers are handed back to their
+    // slots first so the vectors keep their capacity — no per-frame reallocation of tens of
+    // thousands of records.
+    m_trackScratch.resize(numTracks);
+    for (TrackView& shown : m_tracks)
+        if (shown.trackIdx < numTracks)
+        {
+            m_trackScratch[shown.trackIdx].records = std::move(shown.records);
+            m_trackScratch[shown.trackIdx].records.clear();
+        }
+    m_tracks.clear();
+    const double msPerTick = profiler.getMsPerTick();
+    Globals::jobSystem.parallelFor(0u, numTracks, 1u, [&](uint32 begin, uint32 end)
     {
-        TrackView view;
+    // Per chunk (~one track each): the fan-out lands on whichever workers pick it up, so each
+    // piece carries its own marker on that worker's track.
+    ProfileScope chunkScope("Profiler track snapshot", EProfileCategory::UI);
+    for (uint32 i = begin; i < end; ++i)
+    {
+        TrackView& view = m_trackScratch[i];
         view.trackIdx = i;
+        view.name = nullptr;
+        view.maxDepth = 0;
+        view.busyMs = 0.0;
         profiler.snapshotTrack(i, m_snapshotStart, m_snapshotEnd, view.records);
         const ProfileTrack& track = profiler.getTrack(i);
         // Keep tracks that have EVER recorded even when this window is empty - an idle worker shows
         // a stable empty lane instead of flickering in and out of the list frame to frame. Only
         // tracks that never recorded anything (registered-but-unprofiled service threads) stay hidden.
         if (view.records.empty() && track.getCursor() == 0)
-            continue;
+            continue; // name stays null = hidden
         view.name = track.getName();
         view.sortKey = track.getSortKey();
 
@@ -191,7 +233,6 @@ void ProfilerPanel::snapshotTracks()
         std::sort(view.records.begin(), view.records.end(), [](const ProfileRecord& a, const ProfileRecord& b)
             { return a.start != b.start ? a.start < b.start : a.depth < b.depth; });
 
-        const double msPerTick = profiler.getMsPerTick();
         for (const ProfileRecord& record : view.records)
         {
             view.maxDepth = std::max(view.maxDepth, (uint32)record.depth);
@@ -203,6 +244,15 @@ void ProfilerPanel::snapshotTracks()
                     view.busyMs += (double)(clampedEnd - clampedStart) * msPerTick;
             }
         }
+    }
+    });
+    // Serial merge: the visible list + the per-track lane-count memory (a map — not for workers).
+    // The record buffers MOVE into m_tracks and come back at the top of the next snapshot.
+    for (uint32 i = 0; i < numTracks; ++i)
+    {
+        TrackView& view = m_trackScratch[i];
+        if (view.name == nullptr)
+            continue;
         // Lane count from the deepest nesting EVER seen on this track, not just this window: the
         // vertical offsets between tracks stay constant instead of shifting when one frame nests
         // deeper than its neighbors.
@@ -218,7 +268,6 @@ void ProfilerPanel::snapshotTracks()
     // sits OUTSIDE it, so this is pure CPU work) and "GPU Frame" (GPU track). A scope's record can
     // straddle the frame marks (the GPU frame lands a slot late), so per track take the matching
     // depth-0 record with the largest overlap with the frame window and use its FULL duration.
-    const double msPerTick = profiler.getMsPerTick();
     const auto scopeMs = [&](std::string_view scopeName) -> double
     {
         uint64 bestOverlap = 0;
@@ -305,6 +354,7 @@ void ProfilerPanel::drawToolbar()
 
 void ProfilerPanel::drawFrameGraph()
 {
+    ProfileScope scope("Profiler frame graph", EProfileCategory::UI);
     Profiler& profiler = Globals::profiler;
     const double msPerTick = profiler.getMsPerTick();
     const uint64 frameCount = profiler.getFrameCount();
@@ -369,6 +419,7 @@ void ProfilerPanel::drawFrameGraph()
 
 void ProfilerPanel::drawTimeline()
 {
+    ProfileScope scope("Profiler timeline", EProfileCategory::UI);
     Profiler& profiler = Globals::profiler;
     const double msPerTick = profiler.getMsPerTick();
     const double windowMs = (double)(m_windowEnd - m_windowStart) * msPerTick;
@@ -548,31 +599,14 @@ void ProfilerPanel::drawTimeline()
     ImGui::EndChild();
 }
 
-void ProfilerPanel::drawStatsTable()
+// The Stats tab's data pass (prepare side, no ImGui): per-name totals over the displayed window,
+// live smoothing, and the name filter. The options it reads (track/name filter, Smooth) are what
+// the table drew last frame.
+void ProfilerPanel::aggregateStats()
 {
+    ProfileScope scope("Profiler stats aggregate", EProfileCategory::UI);
     Profiler& profiler = Globals::profiler;
     const double msPerTick = profiler.getMsPerTick();
-    const double windowMs = (double)(m_windowEnd - m_windowStart) * msPerTick;
-
-    // ---- options row ----
-    ImGui::SetNextItemWidth(150.0f);
-    const char* trackPreview = m_trackFilter < 0 || m_trackFilter >= (int)m_tracks.size() ? "All tracks" : m_tracks[m_trackFilter].name;
-    if (ImGui::BeginCombo("##trackFilter", trackPreview))
-    {
-        if (ImGui::Selectable("All tracks", m_trackFilter < 0))
-            m_trackFilter = -1;
-        for (int i = 0; i < (int)m_tracks.size(); ++i)
-            if (ImGui::Selectable(m_tracks[i].name, m_trackFilter == i))
-                m_trackFilter = i;
-        ImGui::EndCombo();
-    }
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(160.0f);
-    ImGui::InputTextWithHint("##nameFilter", "filter", m_nameFilter, sizeof(m_nameFilter));
-    ImGui::SameLine();
-    ImGui::Checkbox("Smooth", &m_smooth);
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Exponential moving average over frames while live (paused shows exact values)");
 
     // ---- aggregate the displayed window ----
     m_statsRows.clear();
@@ -668,6 +702,35 @@ void ProfilerPanel::drawStatsTable()
                 return true;
             });
     }
+
+}
+
+void ProfilerPanel::drawStatsTable()
+{
+    ProfileScope scope("Profiler stats table", EProfileCategory::UI);
+    Profiler& profiler = Globals::profiler;
+    const double msPerTick = profiler.getMsPerTick();
+    const double windowMs = (double)(m_windowEnd - m_windowStart) * msPerTick;
+
+    // ---- options row ----
+    ImGui::SetNextItemWidth(150.0f);
+    const char* trackPreview = m_trackFilter < 0 || m_trackFilter >= (int)m_tracks.size() ? "All tracks" : m_tracks[m_trackFilter].name;
+    if (ImGui::BeginCombo("##trackFilter", trackPreview))
+    {
+        if (ImGui::Selectable("All tracks", m_trackFilter < 0))
+            m_trackFilter = -1;
+        for (int i = 0; i < (int)m_tracks.size(); ++i)
+            if (ImGui::Selectable(m_tracks[i].name, m_trackFilter == i))
+                m_trackFilter = i;
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(160.0f);
+    ImGui::InputTextWithHint("##nameFilter", "filter", m_nameFilter, sizeof(m_nameFilter));
+    ImGui::SameLine();
+    ImGui::Checkbox("Smooth", &m_smooth);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Exponential moving average over frames while live (paused shows exact values)");
 
     // ---- table ----
     constexpr ImGuiTableFlags tableFlags = ImGuiTableFlags_Sortable | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV

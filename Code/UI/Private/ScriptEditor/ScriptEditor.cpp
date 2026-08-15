@@ -1,6 +1,7 @@
 module UI;
 
 import Core;
+import File; // disk access goes through FileSystem (Core no longer exports <filesystem>)
 import Core.Log;
 import Core.imgui;
 import Core.SDL;
@@ -6622,7 +6623,7 @@ void ScriptEditor::renderSidebarPanel()
 		ImGui::EndDisabled();
 		ImGui::SameLine();
 		ImGui::TextDisabled("%s", hasDocument
-			? std::filesystem::path(m_document.filePath).filename().string().c_str() : "<no script open>");
+			? FileSystem::filename(m_document.filePath).c_str() : "<no script open>");
 		if (hasDocument && ImGui::IsItemHovered())
 			ImGui::SetTooltip("%s", m_document.filePath.c_str());
 		ImGui::Separator();
@@ -7007,7 +7008,7 @@ void ScriptEditor::render()
 		if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SCRIPT_FILE"))
 		{
 			const std::string droppedPath = static_cast<const char*>(payload->Data);
-			if (std::filesystem::path(droppedPath).extension() == ".dsl")
+			if (FileSystem::extension(droppedPath) == ".dsl")
 				requestOpen(droppedPath);
 		}
 		ImGui::EndDragDropTarget();

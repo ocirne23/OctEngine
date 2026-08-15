@@ -75,12 +75,12 @@ public:
 private:
 
     void sweepPendingPdbs();
-    void retirePdbs(const std::filesystem::path& dir, const std::string& stem, const std::filesystem::path& keep);
+    void retirePdbs(const std::string& dir, const std::string& stem, const std::string& keep);
     const std::string& findVcvars();
-    bool compile(const std::string& sourcePath, const std::filesystem::path& pdbPath, std::string& outDll, std::string& outErrors);
-    std::filesystem::path scriptDllPath(const std::string& sourcePath) const;
+    bool compile(const std::string& sourcePath, const std::string& pdbPath, std::string& outDll, std::string& outErrors);
+    std::string scriptDllPath(const std::string& sourcePath) const;
     struct CachedScript;
-    bool loadDll(CachedScript& slot, const std::filesystem::path& dll);
+    bool loadDll(CachedScript& slot, const std::string& dll);
     void unloadAll();
 
 private:

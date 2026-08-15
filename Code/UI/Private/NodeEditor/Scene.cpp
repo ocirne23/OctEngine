@@ -1,6 +1,7 @@
 module UI;
 
 import Core;
+import File; // disk access goes through FileSystem
 import Core.imgui;
 import Core.SDL;
 import :imgui_node_editor;
@@ -1279,25 +1280,24 @@ bool Scene::readFunctionSignature(const std::string& path, const std::string& fu
 // popup can offer them for import. A function is any Function Input node's name.
 std::vector<Scene::FunctionRef> Scene::scanImportableFunctions() const
 {
-    namespace fs = std::filesystem;
     std::vector<FunctionRef> refs;
-    std::error_code ec;
-    const fs::path dir = "Scripts";
-    if (!fs::is_directory(dir, ec))
+    const std::string dir = "Scripts";
+    std::vector<FileSystem::DirEntry> entries;
+    if (!FileSystem::listDirectory(dir, entries, /*allowMainThread*/ true))
         return refs;
 
-    for (const auto& entry : fs::directory_iterator(dir, ec))
+    for (const FileSystem::DirEntry& entry : entries)
     {
-        if (ec || !entry.is_regular_file() || entry.path().extension() != ".scr")
+        if (entry.isDirectory || entry.extension != ".scr")
             continue;
-        const std::string rel = "Scripts/" + entry.path().filename().string();
+        const std::string rel = "Scripts/" + entry.name;
         if (rel == m_scriptPath)
             continue; // don't import yourself
 
         Scene tmp;
         if (!tmp.loadFromFile(rel))
             continue;
-        const std::string stem = entry.path().stem().string();
+        const std::string stem = FileSystem::stem(entry.name);
         for (const auto& node : tmp.m_nodes)
             if (node->isFunctionInput() && !node->getFunctionName().empty())
                 refs.push_back({ rel, node->getFunctionName(), stem + ": " + node->getFunctionName() });
@@ -1727,12 +1727,11 @@ std::string Scene::serializeGraph()
 bool Scene::saveToFile(const std::string& path)
 {
     const std::string code = generateCpp();
-    std::ofstream file(path, std::ios::out | std::ios::binary | std::ios::trunc);
-    if (!file.is_open())
+    // Editor save: an explicit user action on the main thread.
+    if (!FileSystem::writeFileStr(path, code, /*allowMainThread*/ true))
         return false;
-    file.write(code.data(), code.size());
     m_hasBaseline = false; // re-baseline against the just-saved state next frame
-    return file.good();
+    return true;
 }
 
 namespace
@@ -1986,9 +1985,9 @@ void Scene::pruneDanglingReroutes(std::vector<Node*>& byIndex)
 
 bool Scene::loadFromFile(const std::string& path)
 {
-    std::ifstream file(path, std::ios::in | std::ios::binary);
-    if (!file.is_open())
+    if (!FileSystem::exists(path, /*allowMainThread*/ true))
         return false;
+    std::istringstream file(FileSystem::readFileStr(path, /*allowMainThread*/ true));
 
     std::vector<std::string> lines;
     std::string line;

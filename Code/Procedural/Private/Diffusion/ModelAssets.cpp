@@ -1,6 +1,7 @@
 module Procedural;
 
 import Core;
+import File; // disk access goes through FileSystem
 import Core.Log;
 import :Diffusion.Json;
 import :Diffusion.ModelAssets;
@@ -45,14 +46,11 @@ namespace Procedural::Diffusion
 		}
 
 		// A git-lfs pointer is a small text file. Detect it explicitly so the error can say what to do.
-		bool looksLikeLfsPointer(const std::filesystem::path& p)
+		bool looksLikeLfsPointer(const std::string& p)
 		{
-			std::ifstream f(p, std::ios::binary);
-			if (!f)
-				return false;
-			char buf[64] = {};
-			f.read(buf, sizeof(buf) - 1);
-			return std::string_view(buf).starts_with(LFS_POINTER_MAGIC);
+			// Model asset checks run at generator init (a worker job) — no main-thread exemption.
+			const std::string head = FileSystem::readFileStr(p);
+			return std::string_view(head).starts_with(LFS_POINTER_MAGIC);
 		}
 
 		// A converted model counts as usable only if it is real weights. No size check, unlike REQUIRED,
@@ -61,34 +59,32 @@ namespace Procedural::Diffusion
 		// they sit beside the originals under the repo's "*.onnx filter=lfs" rule, so a clone without
 		// `git lfs pull` leaves a text pointer exactly where the weights should be; feeding that to ORT is
 		// the inscrutable-protobuf-error failure the fp32 check already exists to prevent.
-		bool fp16Usable(const std::filesystem::path& p)
+		bool fp16Usable(const std::string& p)
 		{
-			std::error_code ec;
-			return std::filesystem::exists(p, ec) && !looksLikeLfsPointer(p);
+			return FileSystem::exists(p) && !looksLikeLfsPointer(p);
 		}
 
-		bool readAll(const std::filesystem::path& p, std::string& out)
+		bool readAll(const std::string& p, std::string& out)
 		{
-			std::ifstream f(p, std::ios::binary);
-			if (!f)
+			if (!FileSystem::exists(p))
 				return false;
-			out.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+			out = FileSystem::readFileStr(p);
 			return true;
 		}
 	}
 
-	std::filesystem::path ModelAssets::modelDir()
+	std::string ModelAssets::modelDir()
 	{
 		// CWD is Assets/ (FileSystem::initialize).
-		return std::filesystem::path("TerrainDiffusion");
+		return "TerrainDiffusion";
 	}
 
-	std::filesystem::path ModelAssets::assetPath(std::string_view fileName)
+	std::string ModelAssets::assetPath(std::string_view fileName)
 	{
-		return modelDir() / std::filesystem::path(fileName);
+		return FileSystem::join(modelDir(), fileName);
 	}
 
-	std::filesystem::path ModelAssets::fp16Path(std::string_view stem)
+	std::string ModelAssets::fp16Path(std::string_view stem)
 	{
 		// Beside the fp32 originals, NOT in Local/: these are shipped assets like the models they came from,
 		// converted once and committed, not a cache the engine may regenerate. Nothing here ever writes
@@ -96,7 +92,7 @@ namespace Procedural::Diffusion
 		return assetPath(std::string(stem) + "_fp16.onnx");
 	}
 
-	std::filesystem::path ModelAssets::modelPath(std::string_view stem, EPrecision precision)
+	std::string ModelAssets::modelPath(std::string_view stem, EPrecision precision)
 	{
 		if (precision == EPrecision::Fp16 && fp16Usable(fp16Path(stem)))
 			return fp16Path(stem);
@@ -128,29 +124,27 @@ namespace Procedural::Diffusion
 		};
 
 		// --- Presence / integrity ------------------------------------------------------------------
-		std::error_code ec;
 		for (const RequiredAsset& a : REQUIRED)
 		{
 			if (!assetInSet(a, set))
 				continue;
 
-			const std::filesystem::path p = assetPath(a.name);
-			if (!std::filesystem::exists(p, ec))
+			const std::string p = assetPath(a.name);
+			if (!FileSystem::exists(p))
 				return fail(std::format("missing model asset Assets/{} - the diffusion models ship with the "
-				                        "repo; if this is a fresh clone run 'git lfs pull'",
-				                        p.generic_string()));
+				                        "repo; if this is a fresh clone run 'git lfs pull'", p));
 
-			const uint64 actual = (uint64)std::filesystem::file_size(p, ec);
-			if (ec)
-				return fail(std::format("cannot stat Assets/{}: {}", p.generic_string(), ec.message()));
+			const uint64 actual = FileSystem::fileSize(p);
+			if (actual == 0)
+				return fail(std::format("cannot stat Assets/{}", p));
 
 			if (a.sizeBytes != 0 && actual != a.sizeBytes)
 			{
 				if (looksLikeLfsPointer(p))
 					return fail(std::format("Assets/{} is an unfetched git-lfs pointer, not the real file - "
-					                        "run 'git lfs pull'", p.generic_string()));
+					                        "run 'git lfs pull'", p));
 				return fail(std::format("Assets/{} is {} bytes, expected {} - the file looks truncated or is "
-				                        "from a different model revision", p.generic_string(), actual, a.sizeBytes));
+				                        "from a different model revision", p, actual, a.sizeBytes));
 			}
 		}
 

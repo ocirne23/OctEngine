@@ -92,15 +92,26 @@ public:
 	void setDefaultFlags(ETweakFlags flags) { m_defaultFlags = flags; }
 
 	// ---- Saved --------------------------------------------------------------------------
+	// Core sits BELOW the File library, so it cannot touch the disk itself: main() installs these
+	// two hooks (FileSystem::readFileStr / writeFileStr) before loadSaved(). Without them the
+	// Saved flag is simply inert — the registry keeps working in-memory.
+	using ReadFileFn = std::function<std::string(const std::string& path)>;
+	using WriteFileFn = std::function<bool(const std::string& path, const std::string& content)>;
+	void setFileIo(ReadFileFn read, WriteFileFn write)
+	{
+		m_readFile = std::move(read);
+		m_writeFile = std::move(write);
+	}
+
 	// Call ONCE from main() right after FileSystem::initialize() (the path is Assets/-relative).
 	// Applies stored values to everything already registered; later registrations apply their
 	// value inside registerVar.
 	void loadSaved()
 	{
 		m_savedLoaded = true;
-		std::ifstream file(c_savePath);
-		if (!file.is_open())
+		if (!m_readFile)
 			return;
+		std::istringstream file(m_readFile(c_savePath));
 		std::string line;
 		while (std::getline(file, line))
 		{
@@ -333,12 +344,9 @@ private:
 				const Value value = readValue(var);
 				m_savedValues[keyOf(var)].assign(value.v, value.v + value.count);
 			}
-		std::ofstream file(c_savePath, std::ios::trunc);
-		if (!file.is_open())
-		{
-			Log::warning("Tweaks: cannot write " + std::string(c_savePath));
-			return;
-		}
+		if (!m_writeFile)
+			return; // no IO hook installed (headless tooling): Saved is inert
+		std::ostringstream file;
 		file << std::setprecision(9);
 		for (const auto& [key, values] : m_savedValues) // unknown keys kept — other run modes
 		{
@@ -349,6 +357,8 @@ private:
 				file << ' ' << v;
 			file << '\n';
 		}
+		if (!m_writeFile(c_savePath, file.str()))
+			Log::warning("Tweaks: cannot write " + std::string(c_savePath));
 	}
 
 	static constexpr const char* c_savePath = "Local/tweaks.cfg";
@@ -361,6 +371,8 @@ private:
 	float m_saveTimer = 0.0f;
 	bool m_saveDirty = false;
 	bool m_savedLoaded = false;
+	ReadFileFn m_readFile;   // installed by main (FileSystem) — Core cannot import File
+	WriteFileFn m_writeFile;
 };
 
 // ---- Convenience registration helpers --------------------------------------------------

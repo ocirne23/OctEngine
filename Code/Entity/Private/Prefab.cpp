@@ -233,7 +233,7 @@ bool savePrefab(Entity* root, const std::string& path, const std::string& text)
 {
     if (!root)
         return false;
-    const std::string id = std::filesystem::path(path).stem().string();
+    const std::string id = FileSystem::stem(path);
     if (prefabWouldCycle(root, id))
     {
         Log::warning("Prefab: refusing to save '" + id + "' â€” it contains a prefab instance of itself (cycle)");

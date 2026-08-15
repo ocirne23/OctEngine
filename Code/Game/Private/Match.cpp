@@ -469,13 +469,12 @@ void GameMatch::saveGame()
     AssetNode root; // unnamed — writeAssetText writes only the children
     m_structures.saveTo(root);
     m_npcs.saveUnits(root);
-    std::ofstream file(c_gameSavePath, std::ios::out | std::ios::binary | std::ios::trunc);
-    if (!file)
+    // F9: an explicit user action, main thread.
+    if (!FileSystem::writeFileStr(c_gameSavePath, writeAssetText(root), /*allowMainThread*/ true))
     {
         Log::warning(std::string("Save game: cannot write ") + c_gameSavePath);
         return;
     }
-    file << writeAssetText(root);
     Log::info(std::string("Game saved to ") + c_gameSavePath);
 }
 

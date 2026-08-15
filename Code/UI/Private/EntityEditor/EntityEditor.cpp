@@ -150,19 +150,17 @@ static void gatherScriptFiles(std::vector<std::string>& out)
 {
 	out.clear();
 	std::error_code ec;
-	const std::filesystem::path root = std::filesystem::current_path(ec);
-	for (std::filesystem::recursive_directory_iterator it(root, std::filesystem::directory_options::skip_permission_denied, ec), end; it != end; it.increment(ec))
+	const std::string root = FileSystem::currentPath(/*allowMainThread*/ true);
+	std::vector<FileSystem::DirEntry> entries;
+	FileSystem::listDirectoryRecursive(root, entries, /*allowMainThread*/ true);
+	for (const FileSystem::DirEntry& entry : entries)
 	{
-		if (it->is_directory(ec))
-		{
-			if (it->path().filename() == "Local")
-				it.disable_recursion_pending();
+		if (entry.isDirectory || entry.extension != ".dsl")
 			continue;
-		}
-		const std::filesystem::path ext = it->path().extension();
-		if (ext != ".dsl")
+		const std::string relative = FileSystem::relativePath(entry.path, root, /*allowMainThread*/ true);
+		if (relative.starts_with("Local/")) // generated output, not authorable scripts
 			continue;
-		out.push_back(std::filesystem::relative(it->path(), root, ec).generic_string());
+		out.push_back(relative.empty() ? entry.path : relative);
 	}
 	std::sort(out.begin(), out.end());
 }
@@ -190,7 +188,7 @@ static bool readPrefabFileTransform(const std::string& path, Transform& out)
 std::string EntityEditor::currentId() const
 {
 	if (!m_path.empty())
-		return std::filesystem::path(m_path).stem().string();
+		return FileSystem::stem(m_path);
 	return (m_editRoot && m_editRoot->hasName()) ? std::string(m_editRoot->getName()) : std::string("NewEntity");
 }
 
@@ -469,8 +467,7 @@ void EntityEditor::trySave(const std::string& path)
 	if (!m_editRoot || path.empty())
 		return;
 
-	std::error_code ec;
-	if (path != m_path && std::filesystem::exists(path, ec))
+	if (path != m_path && FileSystem::exists(path, /*allowMainThread*/ true))
 	{
 		m_pendingSavePath    = path;
 		m_openOverwritePopup = true;
@@ -1825,7 +1822,7 @@ void EntityEditor::commitRespawn()
 	// Keep the prefab identity across respawns — losing it would break "Open Selected"'s registry lookup
 	// and re-serialize the entity inline instead of as a "Prefab <name>" reference.
 	tmpl->prefabName = (m_selected.get() == m_editRoot.get() && !m_path.empty())
-		? std::filesystem::path(m_path).stem().string()
+		? FileSystem::stem(m_path)
 		: m_selected->getPrefabName();
 
 	m_changes.push_back({ EntityChange::RespawnEntity{ m_selected, tmpl } });

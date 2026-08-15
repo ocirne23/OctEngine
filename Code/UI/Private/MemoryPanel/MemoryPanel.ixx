@@ -10,6 +10,10 @@ import Core.MemoryTracker;
 export class MemoryPanel
 {
 public:
+    // prepare() = the treemap SNAPSHOT (walks the tracker's tree — atomics, reader-safe on any
+    // thread), no ImGui: UI::prepare runs it on a job. render() draws it (prepares inline if
+    // nothing ran ahead). The metric toggle it reads is what the header set last frame.
+    void prepare();
     void render();
 
 private:
@@ -33,6 +37,7 @@ private:
     void drawNode(uint32 nodeIdx, float x0, float y0, float x1, float y1, uint32 depth);
 
     std::vector<ViewNode> m_nodes; // snapshot rebuilt every frame; index 0 = tree root
+    bool m_prepared = false;       // prepare() ran for this UI frame (render clears it)
     const MemScopeNode* m_zoom = nullptr; // zoom target (null = root); MemScopeNodes are never freed
     bool m_showCumulative = false;
 

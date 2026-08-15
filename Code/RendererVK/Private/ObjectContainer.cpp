@@ -464,7 +464,7 @@ void ObjectContainer::initializeMaterials(const ISceneData& sceneData, TempInitD
 
     // Loose texture files are referenced relative to the scene file; record its folder on each texture so
     // the loader resolves them next to the .fbx/.glb first, then falls back to the asset root.
-    const std::string rootFolder = std::filesystem::path(sceneData.getFilePath()).parent_path().string();
+    const std::string rootFolder = FileSystem::parentPath(sceneData.getFilePath());
     for (uint32 texIdx = 0; texIdx < sceneData.getNumTextures(); texIdx++)
         const_cast<ITextureData*>(sceneData.getTexture(texIdx))->setRootFolder(rootFolder);
 

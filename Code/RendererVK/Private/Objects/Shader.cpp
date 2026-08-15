@@ -77,7 +77,7 @@ class ShaderIncluder final : public glslang::TShader::Includer
 public:
     explicit ShaderIncluder(const std::string& rootFilePath)
     {
-        m_rootDir = std::filesystem::path(rootFilePath).parent_path();
+        m_rootDir = FileSystem::parentPath(rootFilePath);
     }
 
     IncludeResult* includeLocal(const char* headerName, const char* includerName, size_t /*depth*/) override
@@ -95,19 +95,20 @@ public:
 private:
     IncludeResult* resolve(const char* headerName, const char* includerName)
     {
-        std::vector<std::filesystem::path> candidates;
+        std::vector<std::string> candidates;
         if (includerName != nullptr && includerName[0] != '\0')
         {
-            const std::filesystem::path includerDir = std::filesystem::path(includerName).parent_path();
+            const std::string includerDir = FileSystem::parentPath(includerName);
             if (!includerDir.empty())
-                candidates.push_back(includerDir / headerName);
+                candidates.push_back(FileSystem::join(includerDir, headerName));
         }
-        candidates.push_back(m_rootDir / headerName);
+        candidates.push_back(FileSystem::join(m_rootDir, headerName));
 
-        for (const std::filesystem::path& candidate : candidates)
+        for (const std::string& candidate : candidates)
         {
-            const std::string resolvedPath = candidate.lexically_normal().generic_string();
-            std::string content = FileSystem::readFileStr(resolvedPath);
+            const std::string resolvedPath = FileSystem::normalize(candidate);
+            // Shader compiles run at startup and on F5 (an explicit user action) — main thread.
+            std::string content = FileSystem::readFileStr(resolvedPath, /*allowMainThread*/ true);
             if (content.empty())
                 continue;
 
@@ -118,7 +119,7 @@ private:
         return nullptr;
     }
 
-    std::filesystem::path m_rootDir;
+    std::string m_rootDir;
     std::vector<std::unique_ptr<std::string>> m_contents;
     std::vector<std::unique_ptr<IncludeResult>> m_results;
 };
@@ -191,13 +192,13 @@ bool Shader::GLSLtoSPV(const vk::ShaderStageFlagBits type, const std::string& so
 {
     std::string debugOutputFolder = "Local/";
 	// make folder if it doesn't exist
-	if (!std::filesystem::exists(debugOutputFolder))
-		std::filesystem::create_directories(debugOutputFolder);
+	if (!FileSystem::exists(debugOutputFolder, /*allowMainThread*/ true))
+		FileSystem::createDirectories(debugOutputFolder, true);
     std::string spvBinPath = debugOutputFolder + debugFilePath + ".spv";
 	std::string preprocessFilePath = debugOutputFolder + debugFilePath;
-    std::string preprocessFileFolder = std::filesystem::path(preprocessFilePath).parent_path().string();
-    if (!std::filesystem::exists(preprocessFileFolder))
-        std::filesystem::create_directories(preprocessFileFolder);
+    const std::string preprocessFileFolder = FileSystem::parentPath(preprocessFilePath);
+    if (!FileSystem::exists(preprocessFileFolder, /*allowMainThread*/ true))
+        FileSystem::createDirectories(preprocessFileFolder, true);
 
     // Enable SPIR-V and Vulkan rules when parsing GLSL
     EShMessages messages = (EShMessages)(EShMsgSpvRules | EShMsgVulkanRules);

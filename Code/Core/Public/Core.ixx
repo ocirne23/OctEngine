@@ -39,9 +39,10 @@ export import <string>;
 export import <string_view>;
 export import <variant>;
 export import <tuple>;
-export import <fstream>;
+// NO <fstream> / <filesystem> here on purpose: ALL file and directory access goes through the File
+// library's FileSystem (string paths, main-thread assert). Only File itself includes them; a
+// library that needs the disk links File and calls FileSystem.
 export import <iostream>;
-export import <filesystem>;
 export import <functional>;
 export import <memory>;
 export import <mutex>;

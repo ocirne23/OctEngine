@@ -832,9 +832,10 @@ std::shared_ptr<const EntitySpawnTemplate> World::getOrBuildPrefabTemplate(const
 
 EntityPtr World::spawnAssetFile(const std::string& path, const Transform& base, bool overrideDefaultTransform)
 {
-    std::error_code ec;
-    const std::filesystem::path relativePath = std::filesystem::relative(path, ec);
-    const std::string fileName = (ec || relativePath.empty()) ? path : relativePath.string();
+    // Spawning from a path resolves it against the working directory (Assets/); spawns happen on
+    // the main thread and on jobs alike, so the query is allowed either way.
+    const std::string relativePath = FileSystem::relativePath(path, std::string(), /*allowMainThread*/ true);
+    const std::string fileName = relativePath.empty() ? path : relativePath;
 
     const std::string* rootName = Globals::assetRegistry.findRootForFile(fileName);
     std::shared_ptr<const EntitySpawnTemplate> tmpl = rootName ? getOrBuildPrefabTemplate(*rootName) : buildFileTemplate(fileName);
@@ -899,7 +900,7 @@ void World::handleEntityChange(EntityChange& change, const Camera& camera, const
     else if (auto* sp = std::get_if<EntityChange::SavePrefab>(&change.type))
     {
         if (savePrefab(sp->root.get(), sp->path, sp->text))
-            invalidatePrefab(std::filesystem::path(sp->path).stem().string());
+            invalidatePrefab(FileSystem::stem(sp->path));
     }
     else if (auto* op = std::get_if<EntityChange::OpenPrefabForEdit>(&change.type))
     {
