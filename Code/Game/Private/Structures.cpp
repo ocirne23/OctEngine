@@ -170,6 +170,7 @@ void StructureSystem::registerTweaks()
 
 void StructureSystem::refresh()
 {
+    ProfileScope scope("Structures refresh (query)", EProfileCategory::Game);
     m_frame.clear();
     m_byId.clear();
     thread_local std::vector<uint64> results;
@@ -383,6 +384,31 @@ bool StructureSystem::cellsFree(EStructureType type, const glm::vec3& p) const
     return true;
 }
 
+float StructureSystem::spawnHeightOf(EStructureType type)
+{
+    return structureSpawnHeights[(int)type]; // = the prefab box's HALF height (it sits flush)
+}
+
+bool StructureSystem::actorInFootprint(EStructureType type, const glm::vec3& p)
+{
+    // A player capsule or a unit standing on the cells blocks the placement: the structure would
+    // spawn inside them and the solver would fling whatever it engulfs. Checked at aim (red ghost)
+    // AND in placeStructure (the MP seam) — actors move between the two.
+    constexpr float actorRadius = 0.7f; // capsule/unit body, generous by design
+    const float half = footprintCellsOf(type) * GridCellSize * 0.5f + actorRadius;
+    thread_local std::vector<uint64> results;
+    Globals::spatialIndex.querySphere(glm::dvec3(p), half * 1.5f, SpatialLayer_Render, results);
+    for (const uint64 user : results)
+    {
+        const Entity* entity = reinterpret_cast<const Entity*>(user);
+        if (!hasComponent<GameUnitComponent>(entity)) // units AND player capsules (puppets)
+            continue;
+        if (glm::abs(entity->pos.x - p.x) < half && glm::abs(entity->pos.z - p.z) < half)
+            return true;
+    }
+    return false;
+}
+
 // ---------------------------------------------------------------- requests
 
 void StructureSystem::queuePlaceRequest(EStructureType type, const glm::vec3& groundPos, int nodeIndex,
@@ -497,7 +523,7 @@ void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groun
     // GRID: every placement snaps (extractors snap the node's position too) and occupied cells
     // refuse — validated HERE, the MP seam, not just at aim time.
     const glm::vec3 snappedGround = snapToGrid(type, groundPos);
-    if (!cellsFree(type, snappedGround))
+    if (!cellsFree(type, snappedGround) || actorInFootprint(type, snappedGround))
         return; // overlap raced the ghost — silently refused (it already showed red)
     if (type == EStructureType::Extractor)
     {
@@ -855,6 +881,7 @@ float StructureSystem::fundNearbyBlueprint(const glm::vec3& pos, float radius, u
 
 void StructureSystem::tickProduction(float deltaSec)
 {
+    ProfileScope scope("Structures production", EProfileCategory::Game);
     const float dt = glm::max(deltaSec, 1e-6f);
     const auto consumerDraw = [&](EStructureType type) {
         return type == EStructureType::Emitter ? m_emitterEnergyPerSec
@@ -1005,6 +1032,7 @@ void StructureSystem::tickProduction(float deltaSec)
 
 void StructureSystem::tickDamage(float)
 {
+    ProfileScope scope("Structures death sweep", EProfileCategory::Game);
     // Damage happens ON the entities (territory drain + atomic intake in the component) — this is
     // the DEATH SWEEP plus the strainable mark units aim their siege drain at.
     for (size_t i = 0; i < m_frame.size();)
@@ -1024,6 +1052,7 @@ void StructureSystem::tickDamage(float)
 
 void StructureSystem::tickConstructors(float deltaSec)
 {
+    ProfileScope scope("Structures constructors", EProfileCategory::Game);
     // A powered Constructor invests its conveyor-fed mineral stock into the nearest own-team
     // blueprint OR damaged structure in range; with nothing to build it SPEEDS UP the nearest
     // own-team barracks (materials + energy, all-or-nothing per tick). The boost lives ON the
@@ -1071,8 +1100,10 @@ void StructureSystem::tickConstructors(float deltaSec)
 
 void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
 {
+    ProfileScope scope("Structures authority", EProfileCategory::Game);
     m_time += deltaSec;
     refresh(); // the frame view every request/tick below works on
+    ProfileScope requestScope("Structure requests", EProfileCategory::Game);
     for (const PlaceRequest& req : m_requests)
         placeStructure(req.type, req.pos, req.nodeIndex, req.facing, req.team);
     m_requests.clear();
@@ -1112,6 +1143,7 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
         }
     }
     m_routeRequests.clear();
+    requestScope.stop();
 
     tickProduction(deltaSec); // flows themselves run per-entity in the engine's pass
     tickConstructors(deltaSec);
@@ -1120,6 +1152,7 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
 
 void StructureSystem::tickMirror(float deltaSec)
 {
+    ProfileScope scope("Structures mirror", EProfileCategory::Game);
     refresh();
     // Ease each emitter's fraction toward the synced target at ramp-like speed, then drive the
     // LOCAL field from it — the bubble animates as smoothly as the server's own.
@@ -1321,6 +1354,7 @@ void StructureSystem::loadFrom(const AssetNode& root)
 
 void StructureSystem::drawDebug() const
 {
+    ProfileScope scope("Structures debug draw", EProfileCategory::Game);
     // Links: base hue by TIER, brightness by UTILIZATION, plus a pulse mark travelling in the
     // flow direction. Iterates each structure's OWNED links — no cable list anywhere.
     for (const Ref& s : m_frame)

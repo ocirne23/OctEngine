@@ -50,6 +50,14 @@ private:
     float m_autoPauseMs = 33.4f;
     uint64 m_autoPauseChecked = 0; // newest frame index already tested (reset on enable/resume so history/the pause gap can't trigger)
 
+    // ---- uncapped fps: what the frame WOULD run at without the vsync/fence throttle = the longer
+    // ---- of the CPU work ("main loop", which excludes the fence wait) and the GPU work ("GPU Frame")
+    // ---- of the displayed frame. Live view shows a short EMA so the number is readable; paused = exact.
+    double m_uncappedMainMs = 0.0;
+    double m_uncappedGpuMs = 0.0;
+    double m_uncappedEmaMs = 0.0;
+    uint64 m_uncappedEmaFrame = 0;       // frame the EMA was last fed (feed once per displayed frame)
+
     // ---- displayed window ----
     bool m_paused = false;
     uint64 m_displayedFrame = 0;         // profiler frame index shown

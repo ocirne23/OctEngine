@@ -258,6 +258,13 @@ int main(int argc, char* argv[])
 
     while (g_running)
     {
+        // The vsync/GPU throttle: block on this frame slot's fence FIRST, before the loop scope opens
+        // and before input is sampled — so the stall shows as its own top-level "Fence wait" (the
+        // "main loop" scope measures only real work) and input -> sim -> present stays tight instead
+        // of the sampled input going stale during the wait.
+        if (!headlessServer)
+            Globals::rendererVK.waitFrameSlot();
+
         ProfileScope mainLoopScope("main loop", EProfileCategory::App);
 
         Globals::time.update();

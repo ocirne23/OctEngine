@@ -213,6 +213,40 @@ void ProfilerPanel::snapshotTracks()
     }
     std::sort(m_tracks.begin(), m_tracks.end(), [](const TrackView& a, const TrackView& b)
         { return a.sortKey != b.sortKey ? a.sortKey < b.sortKey : a.trackIdx < b.trackIdx; });
+
+    // Uncapped fps inputs: the displayed frame's "main loop" (Main track, depth 0 — the fence wait
+    // sits OUTSIDE it, so this is pure CPU work) and "GPU Frame" (GPU track). A scope's record can
+    // straddle the frame marks (the GPU frame lands a slot late), so per track take the matching
+    // depth-0 record with the largest overlap with the frame window and use its FULL duration.
+    const double msPerTick = profiler.getMsPerTick();
+    const auto scopeMs = [&](std::string_view scopeName) -> double
+    {
+        uint64 bestOverlap = 0;
+        double bestMs = 0.0;
+        for (const TrackView& track : m_tracks)
+            for (const ProfileRecord& record : track.records)
+            {
+                if (record.depth != 0 || !record.name || scopeName != record.name)
+                    continue;
+                const uint64 lo = std::max(record.start, m_windowStart);
+                const uint64 hi = std::min(record.end, m_windowEnd);
+                const uint64 overlap = hi > lo ? hi - lo : 0;
+                if (overlap > bestOverlap)
+                {
+                    bestOverlap = overlap;
+                    bestMs = (double)(record.end - record.start) * msPerTick;
+                }
+            }
+        return bestMs;
+    };
+    m_uncappedMainMs = scopeMs("main loop");
+    m_uncappedGpuMs = scopeMs("GPU Frame");
+    const double uncappedMs = std::max(m_uncappedMainMs, m_uncappedGpuMs);
+    if (m_uncappedEmaFrame != m_displayedFrame) // feed once per displayed frame, not per UI redraw
+    {
+        m_uncappedEmaFrame = m_displayedFrame;
+        m_uncappedEmaMs = m_uncappedEmaMs > 0.0 ? m_uncappedEmaMs * 0.9 + uncappedMs * 0.1 : uncappedMs;
+    }
 }
 
 void ProfilerPanel::drawToolbar()
@@ -248,6 +282,16 @@ void ProfilerPanel::drawToolbar()
     const double frameMs = (double)(m_windowEnd - m_windowStart) * profiler.getMsPerTick();
     ImGui::SameLine();
     ImGui::Text("Frame %llu  |  %.2f ms (%.0f fps)", (unsigned long long)m_displayedFrame, frameMs, frameMs > 0.0 ? 1000.0 / frameMs : 0.0);
+    // Uncapped: exact for the displayed frame when paused, a short EMA live (per-frame values flicker).
+    const double uncappedMs = m_paused ? std::max(m_uncappedMainMs, m_uncappedGpuMs) : m_uncappedEmaMs;
+    ImGui::SameLine();
+    ImGui::TextColored(m_uncappedMainMs >= m_uncappedGpuMs ? ImVec4(0.75f, 0.85f, 1.0f, 1.0f) : ImVec4(0.6f, 1.0f, 0.6f, 1.0f),
+        "|  Uncapped %.0f fps (%.2f ms, %s-bound)", uncappedMs > 0.0 ? 1000.0 / uncappedMs : 0.0, uncappedMs,
+        m_uncappedMainMs >= m_uncappedGpuMs ? "CPU" : "GPU");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("What this frame would run at without the vsync / frame-slot throttle:\n"
+            "max(main loop %.2f ms, GPU Frame %.2f ms). The main loop excludes the fence wait.",
+            m_uncappedMainMs, m_uncappedGpuMs);
     if (m_paused)
     {
         ImGui::SameLine();

@@ -32,6 +32,7 @@ void GamePlayer::registerTweaks()
     Tweak::floatVar("Game/Shield", "Cover drain reduction", &m_coverDrainReduction, 0.0f, 5.0f, 0.05f);
     Tweak::floatVar("Game/Player", "Spawn grace (s)", &m_spawnGraceSec, 0.0f, 10.0f, 0.1f);
     Tweak::floatVar("Game/Player", "Materials max", &m_materialsMax, 5.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Player", "Move arrive radius", &m_arriveRadius, 0.1f, 5.0f, 0.05f);
     Tweak::floatVar("Game/Shield", "Damage radius", &m_damageRadius, 0.0f, 3.0f, 0.05f);
     Tweak::floatVar("Game/Shield", "Push gain", &m_shieldPushGain, 0.0f, 100000.0f, 100.0f);
     Tweak::floatVar("Game/Shield", "Surface tension", &m_shieldTension, 0.0f, 10.0f, 0.05f);
@@ -120,6 +121,7 @@ static float shapeBottomDistance(const Entity* entity, const PhysicsComponent& p
 
 void GamePlayer::tickMovement(const glm::vec3& cameraForwardPlanar, float deltaSec)
 {
+    ProfileScope scope("Player movement", EProfileCategory::Game);
     Input& input = Globals::input;
     if (!input.isWindowHasFocus() || !Globals::ui.isViewportFocused())
         return;
@@ -127,18 +129,21 @@ void GamePlayer::tickMovement(const glm::vec3& cameraForwardPlanar, float deltaS
     if (!pc || pc->bodyType != EPhysicsBodyType::Dynamic || !pc->body.isValid())
         return;
 
-    glm::vec3 forward = cameraForwardPlanar;
-    const float forwardLen = glm::length(forward);
-    forward = forwardLen > 1e-4f ? forward / forwardLen : glm::vec3(0.0f, 0.0f, -1.0f);
-    const glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f)));
-
+    (void)cameraForwardPlanar; // no keyboard steering: WASD belong to the grid hotkeys — the
+                               // capsule moves ONLY by RMB move orders (see setMoveTarget)
     glm::vec3 move(0.0f);
-    if (input.isKeyDown(SDL_Scancode::SDL_SCANCODE_W)) move += forward;
-    if (input.isKeyDown(SDL_Scancode::SDL_SCANCODE_S)) move -= forward;
-    if (input.isKeyDown(SDL_Scancode::SDL_SCANCODE_D)) move += right;
-    if (input.isKeyDown(SDL_Scancode::SDL_SCANCODE_A)) move -= right;
-    if (glm::dot(move, move) > 1e-8f)
-        move = glm::normalize(move);
+    if (m_hasMoveTarget)
+    {
+        // RMB move order: steer planar toward the target and STOP inside the arrive radius (the
+        // capsule coasts the last bit — braking is the same accel clamp below, with move = 0).
+        const glm::vec3 bodyPos = pc->body.getPosition();
+        const glm::vec2 toTarget(m_moveTarget.x - bodyPos.x, m_moveTarget.z - bodyPos.z);
+        const float dist = glm::length(toTarget);
+        if (dist <= m_arriveRadius)
+            m_hasMoveTarget = false;
+        else
+            move = glm::vec3(toTarget.x / dist, 0.0f, toTarget.y / dist);
+    }
     const float speed = m_moveSpeed * (input.isKeyDown(SDL_Scancode::SDL_SCANCODE_LSHIFT) ? m_sprintMult : 1.0f);
 
     glm::vec3 vel = pc->body.getLinearVelocity();
@@ -184,6 +189,7 @@ void GamePlayer::applyDamage(float amount)
 
 void GamePlayer::tickShieldAndHealth(float deltaSec)
 {
+    ProfileScope scope("Player shield/health", EProfileCategory::Game);
     PhysicsComponent* pc = m_entity ? getComponent<PhysicsComponent>(m_entity.get()) : nullptr;
     ForceComponent* fc = m_entity ? getComponent<ForceComponent>(m_entity.get()) : nullptr;
     if (!pc || !pc->body.isValid() || !fc)
@@ -255,6 +261,7 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
         m_materials = 0.0f; // death drops the carried construction stock
         m_shieldCollapsed = false;
         m_graceTimer = m_spawnGraceSec;
+        m_hasMoveTarget = false; // do not walk back to where we died
     }
     // Publish into the capsule's PUPPET GameUnitComponent — the state's network surface. The
     // entity snapshot/claim game blob packs from and applies to it (change-detected server-side,

@@ -3,11 +3,14 @@ export module Core.GameHud;
 import Core;
 import Core.glm;
 
-// The in-game HUD's data model: a 10-slot hotbar (keys 1..9,0 -> slots 0..9), plus bars (health/energy
-// style, a fill against a max) and numeric counters stacked from the top left. PURE STATE -- gameplay
-// (script thunks, C++) writes it from any thread, the UI's GameHudOverlay snapshots and draws it once
-// per frame over the viewport. Bars and counters are keyed by their display name; insertion order is
-// display order. Colors are linear 0..1 RGB, matching the DSL surface.
+// The in-game HUD's data model: a 12-slot hotbar (default keys 1..9,0 -> slots 0..9 in one row; a
+// game may relabel the keys and fold it into a GRID via setHotbarLayout -- the RTS "QWER/ASDF/ZXCV"
+// pattern), plus bars (health/energy style, a fill against a max) and numeric counters stacked from
+// the top left. PURE STATE -- gameplay (script thunks, C++) writes it from any thread, the UI's
+// GameHudOverlay snapshots and draws it once per frame over the viewport. Bars and counters are keyed
+// by their display name; insertion order is display order. Colors are linear 0..1 RGB, matching the
+// DSL surface. The overlay reports each drawn slot's screen rect back (setSlotScreenRects) so
+// gameplay can hit-test mouse clicks against the hotbar (slotAtScreenPos).
 //
 // Mutex-guarded because scripts tick on workers (see THUNK THREAD-SAFETY): every write is a short
 // lock, the UI takes one snapshot copy per frame. A plain .CRT$XCU global, so it outlives ~World's
@@ -57,9 +60,30 @@ export class GameHud final
 {
 public:
 
-	static constexpr int NumSlots = 10;
+	static constexpr int NumSlots = 12;
 
 	// ---- writes (any thread) ------------------------------------------------
+
+	// Grid shape + the key label drawn in each slot's corner. columns <= 0 = one row. Labels past
+	// the given span keep their defaults (1..9,0,-,=).
+	void setHotbarLayout(int columns, std::span<const std::string_view> keyLabels)
+	{
+		const std::lock_guard lock(m_mutex);
+		m_columns = glm::clamp(columns, 0, NumSlots);
+		for (int i = 0; i < NumSlots && i < (int)keyLabels.size(); ++i)
+			m_keyLabels[i] = keyLabels[i];
+	}
+
+	// The overlay reports where it drew each slot (viewport/window pixel space) -- or nothing when
+	// the hotbar was not drawn -- so clicks can be resolved against the hotbar.
+	void setSlotScreenRects(std::span<const glm::vec4> minMax) // per slot: (minX, minY, maxX, maxY)
+	{
+		const std::lock_guard lock(m_mutex);
+		m_slotRectsValid = minMax.size() == (size_t)NumSlots;
+		if (m_slotRectsValid)
+			for (int i = 0; i < NumSlots; ++i)
+				m_slotRects[i] = minMax[i];
+	}
 
 	void setSlot(int index, std::string_view label, int count)
 	{
@@ -88,10 +112,10 @@ public:
 		m_slots[index] = HudSlot();
 	}
 
-	void selectSlot(int index)
+	void selectSlot(int index) // -1 = no slot highlighted
 	{
 		const std::lock_guard lock(m_mutex);
-		m_selectedSlot = glm::clamp(index, 0, NumSlots - 1);
+		m_selectedSlot = glm::clamp(index, -1, NumSlots - 1);
 	}
 
 	void setHotbarVisible(bool visible)
@@ -165,9 +189,27 @@ public:
 		return hotbarActiveLocked();
 	}
 
+	// The slot drawn under a screen position last frame (-1 = none / hotbar not drawn). Any slot
+	// counts, assigned or not: a click on an empty slot must still not fall through to the world.
+	int slotAtScreenPos(const glm::vec2& pos) const
+	{
+		const std::lock_guard lock(m_mutex);
+		if (!m_slotRectsValid || !hotbarActiveLocked())
+			return -1;
+		for (int i = 0; i < NumSlots; ++i)
+		{
+			const glm::vec4& r = m_slotRects[i];
+			if (pos.x >= r.x && pos.y >= r.y && pos.x <= r.z && pos.y <= r.w)
+				return i;
+		}
+		return -1;
+	}
+
 	struct Snapshot
 	{
 		HudSlot slots[NumSlots];
+		std::string keyLabels[NumSlots];
+		int     columns = 0;
 		int     selectedSlot = 0;
 		bool    hotbarActive = false;
 		std::vector<HudBar> bars;
@@ -181,7 +223,11 @@ public:
 		const std::lock_guard lock(m_mutex);
 		Snapshot out;
 		for (int i = 0; i < NumSlots; ++i)
+		{
 			out.slots[i] = m_slots[i];
+			out.keyLabels[i] = m_keyLabels[i];
+		}
+		out.columns = m_columns;
 		out.selectedSlot = m_selectedSlot;
 		out.hotbarActive = hotbarActiveLocked();
 		out.bars = m_bars;
@@ -214,6 +260,10 @@ private:
 
 	mutable std::mutex m_mutex;
 	HudSlot m_slots[NumSlots];
+	std::string m_keyLabels[NumSlots] = { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "=" };
+	glm::vec4 m_slotRects[NumSlots] = {};
+	bool m_slotRectsValid = false;
+	int  m_columns = 0; // 0 = single row
 	int  m_selectedSlot = 0;
 	bool m_hotbarVisible = true; // an explicit off-switch; slots being assigned is what shows it
 	std::vector<HudBar> m_bars;

@@ -382,7 +382,9 @@ public:
         // script), keys 1..9,0 select slots 0..9 and fire the global "Hotbar Select" script event; the
         // testbed spawn keys on those scancodes are skipped via the return. With no hotbar the testbed
         // keys keep their meaning. SDL scancodes 1..9,0 are contiguous (SDL_SCANCODE_1 .. SDL_SCANCODE_0).
-        if (evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN && !evt.repeat
+        // In --game mode the Game library drives the hotbar itself (grid hotkeys QWER/ASDF/ZXCV +
+        // slot clicks), so the number keys stay out of it.
+        if (evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN && !evt.repeat && !gameMode
             && evt.scancode >= SDL_Scancode::SDL_SCANCODE_1 && evt.scancode <= SDL_Scancode::SDL_SCANCODE_0
             && (evt.mod & SDL_KMOD_CTRL) == 0 && Globals::gameHud.isHotbarActive())
         {

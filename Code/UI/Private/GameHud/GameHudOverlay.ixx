@@ -21,6 +21,8 @@ public:
 		Tweak::boolean("HUD", "Enabled", &m_enabled);
 		Tweak::floatVar("HUD", "Scale", &m_scale, 0.5f, 3.0f, 0.05f);
 		Tweak::floatVar("HUD", "Opacity", &m_opacity, 0.1f, 1.0f, 0.05f);
+		Tweak::floatVar("HUD", "Hotbar slot size", &m_hotbarSlotSize, 24.0f, 160.0f, 1.0f);
+		Tweak::floatVar("HUD", "Hotbar text scale", &m_hotbarTextScale, 0.5f, 4.0f, 0.05f);
 	}
 
 	void render(const Rect& viewport)
@@ -31,6 +33,8 @@ public:
 		if (size.x <= 0 || size.y <= 0)
 			return;
 		const GameHud::Snapshot hud = Globals::gameHud.snapshot();
+		if (!hud.hotbarActive)
+			Globals::gameHud.setSlotScreenRects({}); // nothing drawn = nothing clickable
 		if (!hud.hotbarActive && hud.bars.empty() && hud.counters.empty() && hud.worldLabels.empty())
 			return;
 
@@ -142,37 +146,54 @@ public:
 			}
 		}
 
-		// ---- bottom center: the hotbar ----
+		// ---- bottom LEFT: the hotbar (one row, or a columns-wide GRID -- the RTS QWER/ASDF/ZXCV
+		// ---- pattern -- laid out row-major, bottom-anchored). Each slot's rect is reported back so
+		// ---- clicks can be resolved against it, and the slot under the cursor lights up. ----
 		if (hud.hotbarActive)
 		{
-			const float slot = 46.0f * s;
+			const float slot = m_hotbarSlotSize * s;
 			const float pad = 5.0f * s;
-			const float totalW = GameHud::NumSlots * slot + (GameHud::NumSlots - 1) * pad;
-			const float y = vpMax.y - slot - 14.0f * s;
-			const float keyFontSize = fontSize * 0.72f;
-			float x = vpMin.x + ((vpMax.x - vpMin.x) - totalW) * 0.5f;
-			for (int i = 0; i < GameHud::NumSlots; ++i, x += slot + pad)
+			const float margin = 14.0f * s;
+			const int columns = hud.columns > 0 ? hud.columns : GameHud::NumSlots;
+			const int rows = (GameHud::NumSlots + columns - 1) / columns;
+			const float totalH = rows * slot + (rows - 1) * pad;
+			const float x0 = vpMin.x + margin;
+			const float y0 = vpMax.y - totalH - margin;
+			const float keyFontSize = fontSize * 0.95f;
+			const ImVec2 mouse = ImGui::GetIO().MousePos;
+			glm::vec4 rects[GameHud::NumSlots];
+			for (int i = 0; i < GameHud::NumSlots; ++i)
 			{
+				const float x = x0 + (i % columns) * (slot + pad);
+				const float y = y0 + (i / columns) * (slot + pad);
 				const HudSlot& hudSlot = hud.slots[i];
 				const bool selected = i == hud.selectedSlot;
 				const ImVec2 sMin(x, y), sMax(x + slot, y + slot);
-				dl->AddRectFilled(sMin, sMax, col(0.06f, 0.06f, 0.08f, selected ? 0.85f : 0.65f), 5.0f * s);
+				rects[i] = glm::vec4(sMin.x, sMin.y, sMax.x, sMax.y);
+				// hover: only ASSIGNED slots light up -- an empty cell is not a button
+				const bool hovered = hudSlot.used && mouse.x >= sMin.x && mouse.x <= sMax.x
+					&& mouse.y >= sMin.y && mouse.y <= sMax.y;
+				dl->AddRectFilled(sMin, sMax, selected ? col(0.10f, 0.12f, 0.16f, 0.9f)
+					: hovered ? col(0.16f, 0.18f, 0.22f, 0.85f) : col(0.06f, 0.06f, 0.08f, 0.65f), 5.0f * s);
 				if (selected)
 					dl->AddRect(ImVec2(sMin.x - 2.0f * s, sMin.y - 2.0f * s), ImVec2(sMax.x + 2.0f * s, sMax.y + 2.0f * s),
 						col(1.0f, 1.0f, 1.0f, 0.95f), 6.0f * s, 0, 2.5f * s);
+				else if (hovered)
+					dl->AddRect(sMin, sMax, col(1.0f, 1.0f, 1.0f, 0.8f), 5.0f * s, 0, 2.0f * s);
 				else
 					dl->AddRect(sMin, sMax, col(0.5f, 0.5f, 0.55f, 0.6f), 5.0f * s, 0, 1.0f * s);
-				// the key that selects this slot, top left corner (slot 9 is key 0)
-				snprintf(buf, sizeof(buf), "%d", (i + 1) % 10);
-				text(ImVec2(sMin.x + 3.0f * s, sMin.y + 2.0f * s), keyFontSize, col(0.7f, 0.7f, 0.7f, 0.9f), buf);
+				// the key that selects this slot, top left corner
+				text(ImVec2(sMin.x + 3.0f * s, sMin.y + 2.0f * s), keyFontSize, col(0.7f, 0.7f, 0.7f, 0.9f), hud.keyLabels[i].c_str());
 				if (!hudSlot.used)
 					continue;
-				// item label centered, shrunk to fit when long (icons can come later; text always works)
+				// item label centered, shrunk to fit when long (icons can come later; text always
+				// works). Slot captions are short tags (3-5 chars), so they carry the slot: the
+				// base size is deliberately large and only over-long labels scale back.
 				if (!hudSlot.label.empty())
 				{
-					float labelSize = fontSize * 0.85f;
+					float labelSize = fontSize * m_hotbarTextScale;
 					ImVec2 ts = font->CalcTextSizeA(labelSize, noWrap, 0.0f, hudSlot.label.c_str());
-					const float maxW = slot - 6.0f * s;
+					const float maxW = slot - 8.0f * s;
 					if (ts.x > maxW)
 					{
 						labelSize *= maxW / ts.x;
@@ -187,6 +208,7 @@ public:
 					text(ImVec2(sMax.x - cs.x - 3.0f * s, sMax.y - cs.y - 2.0f * s), keyFontSize, col(1.0f, 0.95f, 0.6f, 1.0f), buf);
 				}
 			}
+			Globals::gameHud.setSlotScreenRects(rects);
 		}
 
 		dl->PopClipRect();
@@ -204,4 +226,6 @@ private:
 	bool  m_enabled = true;
 	float m_scale = 1.0f;
 	float m_opacity = 0.9f;
+	float m_hotbarSlotSize = 72.0f; // px at scale 1 (the grid is the main build UI — big enough to read)
+	float m_hotbarTextScale = 1.9f; // slot caption size, x the base font
 };

@@ -14,15 +14,9 @@ import :Npc;
 // One entry of the RTS grid hotbar (Build mode): the top level shows the CATEGORIES (keys 1..3);
 // picking one repopulates the hotbar with its items (keys 1..N arm the ghost/tool, key 0 = Back).
 // Partition-scope so Match.cpp's category tables can be plain file statics.
-// Hotbar entries are either a structure ghost or a two-click LINK TOOL. Links are CREATED only
-// via Select-mode right-click (smart connect); the tools manage existing ones.
-enum class EBuildTool : uint8 { Structure, Disconnect, Upgrade };
-struct BuildItem
-{
-    const char* label;
-    EBuildTool tool;
-    EStructureType structure; // Structure tool only
-};
+// The two-click link MANAGEMENT tools, armed straight off the root hotbar page (Link mode). Links
+// are CREATED only via Select-mode right-click smart connect; these manage existing ones.
+enum class EBuildTool : uint8 { Disconnect, Upgrade };
 
 // The match orchestrator: owns the whitebox world (ground, objective, world-scale enemy emitter),
 // the player, the structure/economy system and the follow camera. MUST be a stack local in main()
@@ -73,14 +67,18 @@ private:
     // b->1->LMB, v->3->LMB style; pressing the ACTIVE category's key exits to neutral. X = Delete,
     // Tab = Select. The hotbar (visible only in Build) always shows the current category's items:
     // keys 1..N arm, 0 disarms.
-    enum class EPlayerMode : uint8 { None, Build, Delete, Select };
+    // Select is the neutral mode. Link = a two-click cable TOOL armed straight off the root
+    // hotbar page (Disconnect on D, Upgrade on F) — no category page involved.
+    enum class EPlayerMode : uint8 { Link, Build, Delete, Select };
 
     Aim computeAim(const Camera& camera, EStructureType type) const;
     bool aimGroundPoint(const Camera& camera, glm::vec3& outPos) const; // cursor ray vs colliders/ground plane
     void refreshBuildHotbar(); // repopulates slot labels/counts for the current grid level
     void updateModeSwitching();
     void updateBuildMode(const Camera& camera, bool confirmEdge, bool cancelEdge);
-    void disarmBuild(); // drop the armed item + any half-finished two-click flow (RMB / key 0)
+    void disarmBuild(); // drop the armed item + any half-finished two-click flow (RMB / Esc)
+    void activateSlot(int slot); // grid hotkey OR click on the drawn slot: category / item / Delete / Cancel / Back
+    void cancelOneLevel();       // C slot, Esc, Tab: two-click step -> armed item -> page/mode, one per press
     void updateLinkTool(const Camera& camera, bool confirmEdge, bool cancelEdge, EBuildTool tool);
     void updateDeleteMode(const Camera& camera, bool confirmEdge);
     void updateSelectMode(const Camera& camera, bool confirmEdge, bool smartLinkEdge);
@@ -119,21 +117,26 @@ private:
 
     MouseListenerHandle m_mouse; // caches window-space mouse pos, wheel + RMB drag accumulation
     glm::vec2 m_mousePos{ 0.0f };
-    float m_dragDeltaX = 0.0f; // RMB-held horizontal pixels this frame (consumed by the camera)
+    float m_dragDeltaX = 0.0f; // MIDDLE-held horizontal pixels this frame (consumed by the camera)
     float m_wheelAccum = 0.0f;
+    bool m_mmbDown = false;
     bool m_rmbDown = false;
+    bool m_rmbConsumed = false;  // an RMB action (cancel/connect/route) ate this frame's click, so
+                                 // it must NOT also become a move order
+    bool m_rmbMoveDrag = false;  // this RMB hold started as a move order: keep steering at the
+                                 // cursor until the button comes up
     bool m_placeClicked = false; // LMB edge inside the viewport (consumed by the active mode)
     bool m_rmbClicked = false;   // RMB edge inside the viewport (Select mode's SMART CONNECT)
-    bool m_placeKeyWasDown = false;
     uint32 m_cablePendingId = 0; // cable tool: first selected endpoint (stable id; 0 = none)
     EPlayerMode m_mode = EPlayerMode::Select; // Select IS the neutral mode (player combat removed)
+    EBuildTool m_linkTool = EBuildTool::Disconnect; // which tool Link mode runs (root slot D or F)
     uint32 m_selectedId = 0;     // Select mode: highlighted structure (stable id; 0 = none)
-    bool m_modeKeyWasDown[5] = {}; // B, V, C (categories), X, Tab edges
+    bool m_modeKeyWasDown[1] = {}; // Esc/Tab edge
     bool m_saveKeyWasDown = false; // F9/F10 edges (save/load game state)
     bool m_loadKeyWasDown = false;
-    int m_buildCategory = -1;    // grid hotbar: -1 = category level, else index into the categories
+    int m_buildCategory = -1;    // grid hotbar page: -1 = ROOT (categories), else index into the categories
     int m_buildSelection = -1;   // armed item within the category (-1 = nothing armed, no ghost)
-    bool m_numKeyWasDown[10] = {}; // 1..9,0 edges (polled — the grid logic reads raw keys)
+    bool m_gridKeyWasDown[12] = {}; // QWER/ASDF/ZXCV edges (polled — one per hotbar slot)
     bool m_lanceAiming = false;  // Lance two-click placement: first click anchored, awaiting facing
     glm::vec3 m_lancePendingPos{ 0.0f };
     bool m_wallPlacing = false;  // Wall two-click placement: first click anchored the line start

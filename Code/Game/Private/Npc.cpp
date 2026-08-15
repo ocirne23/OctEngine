@@ -36,6 +36,7 @@ static void collectUnits(std::span<const uint64> results, std::vector<Entity*>& 
 // and thrown away, so it is never fetched. Transient by design: nothing holds the result.
 void NpcSystem::queryVisibleUnits(const Camera& camera, std::vector<Entity*>& out)
 {
+    ProfileScope scope("Npc visible units (query)", EProfileCategory::Game);
     thread_local std::vector<uint64> results;
     const glm::dvec3 cameraPos(camera.position);
     // The renderer's current view-projection is the frustum this frame is drawn with; the spatial
@@ -166,6 +167,7 @@ void NpcSystem::fireShot(const char* prefabPath, const char* name, const glm::ve
 
 void NpcSystem::service(StructureSystem& structures)
 {
+    ProfileScope scope("Npc service", EProfileCategory::Game);
     // Units the BARRACKS decided to produce during the pass (their component paid the minerals,
     // claimed the roster slot and set the cooldown — this only performs the entity spawn). A
     // failed spawn refunds the cost and the slot.

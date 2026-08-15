@@ -23,46 +23,68 @@ import :Player;
 import :Structures;
 import :Npc;
 
-// The grid hotbar's category tables. Key 1..3 picks a category at the top level; inside one,
-// keys 1..N arm an item and key 0 backs out.
-static constexpr const char* c_buildCategories[3] = { "Combat", "Production", "Distribution" };
-static constexpr BuildItem c_combatItems[] = {
-    { "Emitter", EBuildTool::Structure, EStructureType::Emitter },
-    { "Bastion", EBuildTool::Structure, EStructureType::Bastion },
-    { "Lance", EBuildTool::Structure, EStructureType::Lance },
-    { "Wall", EBuildTool::Structure, EStructureType::Wall },
-    { "Turret", EBuildTool::Structure, EStructureType::Turret },
-    { "Barracks", EBuildTool::Structure, EStructureType::Barracks },
-    { "B-Brute", EBuildTool::Structure, EStructureType::BarracksBrute },
-    { "B-Runner", EBuildTool::Structure, EStructureType::BarracksRunner },
-    { "B-Spitter", EBuildTool::Structure, EStructureType::BarracksSpitter },
+// GRID HOTKEYS (RTS style): the 12 hotbar slots map onto QWER / ASDF / ZXCV, row-major. The ROOT
+// page holds the categories (Q Combat, W Production, E Distribution) and Delete on X; a category
+// page holds its items in order with Back on V (the last slot). The same slot index is reached by
+// its key or by clicking the drawn slot.
+static constexpr int c_gridSlots = 12;
+static constexpr SDL_Scancode c_gridKeys[c_gridSlots] = {
+    SDL_Scancode::SDL_SCANCODE_Q, SDL_Scancode::SDL_SCANCODE_W, SDL_Scancode::SDL_SCANCODE_E, SDL_Scancode::SDL_SCANCODE_R,
+    SDL_Scancode::SDL_SCANCODE_A, SDL_Scancode::SDL_SCANCODE_S, SDL_Scancode::SDL_SCANCODE_D, SDL_Scancode::SDL_SCANCODE_F,
+    SDL_Scancode::SDL_SCANCODE_Z, SDL_Scancode::SDL_SCANCODE_X, SDL_Scancode::SDL_SCANCODE_C, SDL_Scancode::SDL_SCANCODE_V,
+};
+static constexpr std::string_view c_gridKeyLabels[c_gridSlots] = { "Q", "W", "E", "R", "A", "S", "D", "F", "Z", "X", "C", "V" };
+// Root page slots: the two category pages, the two LINK TOOLS (armed directly — they need no
+// page of their own), Delete.
+static constexpr int c_rootDisconnectSlot = 6; // D
+static constexpr int c_rootUpgradeSlot = 7;    // F
+static constexpr int c_rootDeleteSlot = 9;     // X
+static constexpr int c_cancelSlot = 10;        // C: one level back (armed item -> disarm; else -> Select), like Esc
+static constexpr int c_pageBackSlot = 11;      // V: straight back to Select
+static constexpr int c_numCategories = 2;
+static constexpr const char* c_buildCategories[c_numCategories] = { "CMBT", "PROD" };      // slot captions
+static constexpr const char* c_buildCategoryNames[c_numCategories] = { "Combat", "Production" }; // log prose
+// 3-5 char shorthands, indexed by EStructureType — the SAME vocabulary the world tag over a
+// building uses, so a hotbar slot and the thing it builds read identically.
+static constexpr const char* c_structureShortNames[] = { "EMIT", "GEN", "CON", "EXTR", "BATT",
+    "FUEL", "SOL", "FAB", "BSTN", "LNC", "BRK", "BRK-B", "BRK-R", "BRK-S", "WALL", "TRT", "SILO",
+    "CNST", "BASE" };
+static_assert(std::size(c_structureShortNames) == (size_t)EStructureType::Count);
+// A category page is just its list of placeable types — the shorthand table above IS each slot's
+// caption, and the two link TOOLS live on the root page (Link mode), not inside a page.
+static constexpr EStructureType c_combatItems[] = {
+    EStructureType::Emitter,
+    EStructureType::Bastion,
+    EStructureType::Lance,
+    EStructureType::Wall,
+    EStructureType::Turret,
+    EStructureType::Barracks,
+    EStructureType::BarracksBrute,
+    EStructureType::BarracksRunner,
+    EStructureType::BarracksSpitter,
 };
 static constexpr float c_wallSegmentSpacing = 2.0f; // one segment per box width along the line
 static constexpr int c_wallMaxSegments = 16;
-static constexpr BuildItem c_productionItems[] = {
-    { "Generator", EBuildTool::Structure, EStructureType::Generator },
-    { "Solar", EBuildTool::Structure, EStructureType::Solar },
-    { "Extractor", EBuildTool::Structure, EStructureType::Extractor },
-    { "Fabricator", EBuildTool::Structure, EStructureType::Fabricator },
-    { "Constructor", EBuildTool::Structure, EStructureType::Constructor },
+// Everything that is not a weapon: generation, extraction and the distribution buildings (the old
+// separate Distribution page is gone — link CREATION is Select-mode right-click smart connect, and
+// the two management TOOLS sit on the root page).
+static constexpr EStructureType c_productionItems[] = {
+    EStructureType::Generator,
+    EStructureType::Solar,
+    EStructureType::Extractor,
+    EStructureType::Fabricator,
+    EStructureType::Constructor,
+    EStructureType::Connector,
+    EStructureType::Battery,
+    EStructureType::FuelTank,
+    EStructureType::MineralSilo,
 };
-// Link CREATION lives in Select mode (right-click smart connect); the hotbar keeps only the
-// two-click management tools.
-static constexpr BuildItem c_distributionItems[] = {
-    { "Connector", EBuildTool::Structure, EStructureType::Connector },
-    { "Disconnect", EBuildTool::Disconnect, EStructureType::Emitter },
-    { "Upgrade", EBuildTool::Upgrade, EStructureType::Emitter },
-    { "Battery", EBuildTool::Structure, EStructureType::Battery },
-    { "Fuel tank", EBuildTool::Structure, EStructureType::FuelTank },
-    { "M-Silo", EBuildTool::Structure, EStructureType::MineralSilo },
-};
-static std::span<const BuildItem> buildCategoryItems(int category)
+static std::span<const EStructureType> buildCategoryItems(int category)
 {
     switch (category)
     {
     case 0: return c_combatItems;
     case 1: return c_productionItems;
-    case 2: return c_distributionItems;
     default: return {};
     }
 }
@@ -82,6 +104,35 @@ static void drawCircle(const glm::vec3& center, float radius, uint32 color, int 
         const glm::vec3 p = center + glm::vec3(std::cos(a) * radius, 0.0f, std::sin(a) * radius);
         Globals::rendererVK.addDebugLine(prev, p, color);
         prev = p;
+    }
+}
+
+// GHOST: the exact box the structure will occupy — footprint square × the prefab's height, drawn
+// as a wireframe at the snapped position (every whitebox building IS a box, so this is the real
+// shape, not an approximation), plus the interior cell lines so the grid it takes is unambiguous.
+static void drawStructureGhost(EStructureType type, const glm::vec3& groundPos, uint32 color)
+{
+    const int cells = StructureSystem::footprintCellsOf(type);
+    const float half = cells * StructureSystem::GridCellSize * 0.5f;
+    const float height = StructureSystem::spawnHeightOf(type) * 2.0f;
+    const glm::vec3 c(groundPos.x, 0.0f, groundPos.z);
+    const glm::vec3 corner[4] = {
+        c + glm::vec3(-half, 0.0f, -half), c + glm::vec3(half, 0.0f, -half),
+        c + glm::vec3(half, 0.0f, half),   c + glm::vec3(-half, 0.0f, half) };
+    const glm::vec3 up(0.0f, height, 0.0f);
+    for (int i = 0; i < 4; ++i)
+    {
+        const glm::vec3& a = corner[i];
+        const glm::vec3& b = corner[(i + 1) % 4];
+        Globals::rendererVK.addDebugLine(a, b, color);                 // base
+        Globals::rendererVK.addDebugLine(a + up, b + up, color);       // top
+        Globals::rendererVK.addDebugLine(a, a + up, color);            // riser
+    }
+    for (int i = 1; i < cells; ++i) // interior grid: which cells are taken
+    {
+        const float o = -half + i * StructureSystem::GridCellSize;
+        Globals::rendererVK.addDebugLine(c + glm::vec3(o, 0.0f, -half), c + glm::vec3(o, 0.0f, half), color);
+        Globals::rendererVK.addDebugLine(c + glm::vec3(-half, 0.0f, o), c + glm::vec3(half, 0.0f, o), color);
     }
 }
 
@@ -111,28 +162,34 @@ GameMatch::GameMatch(bool enabled) : m_enabled(enabled)
     m_npcs.registerTweaks();
 
     m_mouse = Globals::input.addMouseListener();
+    // MIDDLE-drag yaws the camera. RMB cannot: holding it steers the player (RTS move order), and
+    // a held button cannot mean two things at once — Q/E remain the keyboard yaw.
     m_mouse->onMouseMoved = [this](const SDL_MouseMotionEvent& evt)
     {
         const glm::vec2 pos(float(evt.x), float(evt.y));
-        if (m_rmbDown)
+        if (m_mmbDown)
             m_dragDeltaX += pos.x - m_mousePos.x;
         m_mousePos = pos;
     };
     m_mouse->onMousePressed = [this](const SDL_MouseButtonEvent& evt)
     {
+        const bool inViewport = Globals::input.isWindowHasFocus() && Globals::ui.isViewportFocused()
+            && !Globals::input.isMouseCaptured();
+        if (evt.button == 2)
+            m_mmbDown = true;
         if (evt.button == 3)
         {
             m_rmbDown = true;
-            if (Globals::input.isWindowHasFocus() && Globals::ui.isViewportFocused()
-                && !Globals::input.isMouseCaptured())
+            if (inViewport)
                 m_rmbClicked = true;
         }
-        if (evt.button == 1 && Globals::input.isWindowHasFocus() && Globals::ui.isViewportFocused()
-            && !Globals::input.isMouseCaptured())
+        if (evt.button == 1 && inViewport)
             m_placeClicked = true;
     };
     m_mouse->onMouseReleased = [this](const SDL_MouseButtonEvent& evt)
     {
+        if (evt.button == 2)
+            m_mmbDown = false;
         if (evt.button == 3)
             m_rmbDown = false;
     };
@@ -218,12 +275,17 @@ void GameMatch::spawnWorld()
         ? m_enemyBasePos + glm::vec3(0.0f, 1.0f, -6.0f) : m_playerStart;
     m_camera.setYawToward(glm::vec3(0.0f) - cameraAnchor);
 
-    Globals::gameHud.setHotbarVisible(false); // hidden until Build mode (B); setMode populates the
-    Globals::gameHud.selectSlot(0);           // grid hotbar (categories -> items) when entered
+    // The grid hotbar is always up in game mode: the ROOT page in Select/Delete, a category page in
+    // Build. refreshBuildHotbar rebuilds it every windowed frame.
+    Globals::gameHud.setHotbarLayout(4, c_gridKeyLabels);
+    Globals::gameHud.setHotbarVisible(true);
+    m_buildCategory = -1;
+    refreshBuildHotbar();
 
-    Log::info("Game mode: SELECT by default (click inspects, RMB smart-connects, ground-click sets "
-              "barracks routes). B/V/C = build categories, X = delete. Build powered Emitters to "
-              "hold ground");
+    Log::info("Game mode: SELECT by default (click inspects, RMB smart-connects / sets barracks routes "
+              "/ moves the player). Grid hotkeys QWER/ASDF/ZXCV or click the slots: Q/W = build "
+              "categories, D/F = disconnect/upgrade, X = delete, C = cancel. Build powered Emitters "
+              "to hold ground");
 }
 
 void GameMatch::spawnCorridorWalls()
@@ -478,6 +540,7 @@ void GameMatch::requestSetRoute(uint32 id, std::span<const glm::vec3> points)
 
 void GameMatch::sendStats()
 {
+    ProfileScope scope("Game send stats", EProfileCategory::Game);
     // Volatile mirror state at ~5 Hz: resource totals + per-structure fractions (u8-quantized).
     uint8 buffer[1000];
     NetWriter writer(buffer);
@@ -511,6 +574,7 @@ void GameMatch::sendStats()
 
 void GameMatch::handleNetEvent(std::string_view name)
 {
+    ProfileScope scope("Game net event", EProfileCategory::Game);
     // Both roles share the hook; each side reacts only to the names meant for it (our own
     // broadcasts self-dispatch locally and fall through harmlessly).
     if (name.size() < 3 || name[0] != 'G')
@@ -656,6 +720,7 @@ void GameMatch::update(float deltaSec)
 {
     if (!m_enabled)
         return;
+    ProfileScope scope("Game update", EProfileCategory::Game);
 
     if (m_isClient)
     {
@@ -690,6 +755,7 @@ void GameMatch::update(float deltaSec)
     // MATERIALS loop (server-authoritative for every player): refill the carried inventory from
     // nearby own-team Silos/Base, invest it into nearby blueprints.
     {
+        ProfileScope materialsScope("Player materials", EProfileCategory::Game);
         const auto tickPlayerMaterials = [&](const glm::vec3& pos, uint8 team, float& materials)
         {
             materials += m_structures.takeStoredMinerals(pos, m_refillRadius, team,
@@ -843,9 +909,11 @@ GameMatch::Aim GameMatch::computeAim(const Camera& camera, EStructureType type) 
     aim.pos = StructureSystem::snapToGrid(aim.type, aim.pos); // grid-aligned (extractors too)
 
     aim.valid = true;
-    // Placing a blueprint is free — "affordable" now means the footprint's cells are unoccupied
-    // (drives the red ghost AND gates the confirm click).
-    aim.affordable = m_structures.cellsFree(aim.type, aim.pos);
+    // Placing a blueprint is free — "affordable" now means the footprint is CLEAR: no structure
+    // (or reserved node) on those cells, and nobody standing in them (drives the red ghost AND
+    // gates the confirm click; placeStructure re-checks both, the MP seam).
+    aim.affordable = m_structures.cellsFree(aim.type, aim.pos)
+        && !StructureSystem::actorInFootprint(aim.type, aim.pos);
     return aim;
 }
 
@@ -869,19 +937,34 @@ int GameMatch::hoveredStructure(const Camera& camera) const
     return m_structures.findConnectableNear(aimPos, 4.0f);
 }
 
-// Slot labels/counts for the current grid level: categories at the top, the picked category's
-// items (+ "Back" on key 0) inside one. Called every Build-mode frame — counts stay live.
+// The hotbar page for the current state: ROOT (Select/Delete: categories + Delete on X) or the
+// picked category's items (+ Back on V). Called every windowed frame — counts stay live and the
+// highlight always mirrors the real state (the engine's number-key routing may poke selectSlot).
 void GameMatch::refreshBuildHotbar()
 {
     GameHud& hud = Globals::gameHud;
-    const std::span<const BuildItem> items = buildCategoryItems(m_buildCategory);
-    for (int i = 0; i < (int)items.size(); ++i)
-        hud.setSlot(i, items[i].label, items[i].tool == EBuildTool::Structure
-            ? m_structures.affordableCount(items[i].structure, (uint8)m_team) : 0);
-    for (int i = (int)items.size(); i < GameHud::NumSlots; ++i)
+    for (int i = 0; i < GameHud::NumSlots; ++i)
         hud.clearSlot(i);
-    if (m_buildSelection >= 0)
-        hud.selectSlot(m_buildSelection);
+    if (m_mode != EPlayerMode::Build || m_buildCategory < 0)
+    {
+        for (int i = 0; i < c_numCategories; ++i)
+            hud.setSlot(i, c_buildCategories[i], 0);
+        hud.setSlot(c_rootDisconnectSlot, "DISC", 0);
+        hud.setSlot(c_rootUpgradeSlot, "UPGR", 0);
+        hud.setSlot(c_rootDeleteSlot, "DEL", 0);
+        hud.selectSlot(m_mode == EPlayerMode::Delete ? c_rootDeleteSlot
+            : m_mode == EPlayerMode::Link
+                ? (m_linkTool == EBuildTool::Disconnect ? c_rootDisconnectSlot : c_rootUpgradeSlot)
+                : -1);
+        return;
+    }
+    const std::span<const EStructureType> items = buildCategoryItems(m_buildCategory);
+    for (int i = 0; i < (int)items.size() && i < c_cancelSlot; ++i)
+        hud.setSlot(i, c_structureShortNames[(int)items[i]],
+            m_structures.affordableCount(items[i], (uint8)m_team));
+    hud.setSlot(c_cancelSlot, "CNCL", 0);
+    hud.setSlot(c_pageBackSlot, "BACK", 0);
+    hud.selectSlot(m_buildSelection);
 }
 
 void GameMatch::setMode(EPlayerMode mode)
@@ -892,58 +975,118 @@ void GameMatch::setMode(EPlayerMode mode)
     m_cablePendingId = 0;
     m_selectedId = 0;
     m_lanceAiming = false;
-    m_buildCategory = glm::max(m_buildCategory, 0); // default to Emitters; the category keys set it
+    m_wallPlacing = false;
     m_buildSelection = -1;
-    Globals::gameHud.setHotbarVisible(mode == EPlayerMode::Build); // the hotbar IS the Build indicator
-    if (mode == EPlayerMode::Build)
-        refreshBuildHotbar();
+    if (mode != EPlayerMode::Build)
+        m_buildCategory = -1; // back to the root page
+    refreshBuildHotbar();
     switch (mode)
     {
-    case EPlayerMode::Build:  break; // the category switch logs its own line (updateModeSwitching)
+    case EPlayerMode::Build:  break; // the category entry logs its own line (activateSlot)
     case EPlayerMode::Delete: Log::info("Delete mode (X): click a structure to demolish — X returns to Select"); break;
-    case EPlayerMode::Select: Log::info("Select mode: click inspects, RMB smart-connects, ground-click sets barracks routes — B/V/C build, X delete"); break;
-    case EPlayerMode::None:   break; // unused — Select is the neutral mode
+    case EPlayerMode::Link:   Log::info(m_linkTool == EBuildTool::Disconnect
+        ? "Disconnect (D): click the two ends of a link to remove it — same key/Esc exits"
+        : "Upgrade (F): click the two ends of a Basic cable to make it Heavy — same key/Esc exits"); break;
+    case EPlayerMode::Select: Log::info("Select mode: click inspects, RMB smart-connects / routes / moves — Q/W build, D/F link tools, X delete"); break;
     }
+}
+
+// One level back: a half-finished two-click step drops first, then the armed item disarms, then
+// the category page (or Delete mode) returns to Select. Esc/Tab and the C "Cancel" slot.
+void GameMatch::cancelOneLevel()
+{
+    if (m_mode == EPlayerMode::Link && m_cablePendingId != 0)
+        m_cablePendingId = 0; // drop the picked endpoint, keep the tool
+    else if (m_mode == EPlayerMode::Build && m_buildSelection >= 0)
+    {
+        if (m_lanceAiming || m_wallPlacing)
+        {
+            m_lanceAiming = false;
+            m_wallPlacing = false;
+        }
+        else
+            disarmBuild();
+    }
+    else
+        setMode(EPlayerMode::Select);
+}
+
+// ONE entry point for a hotbar slot, whether its key was pressed or the drawn slot was clicked.
+void GameMatch::activateSlot(int slot)
+{
+    if (slot < 0 || slot >= c_gridSlots)
+        return;
+    if (m_mode != EPlayerMode::Build || m_buildCategory < 0)
+    {
+        // ROOT page
+        if (slot < c_numCategories)
+        {
+            setMode(EPlayerMode::Build);
+            m_buildCategory = slot;
+            m_buildSelection = -1;
+            refreshBuildHotbar();
+            Log::info(std::string("Build: ") + c_buildCategoryNames[slot]
+                + " — grid keys arm an item, LMB places, RMB cancels, V/Esc back");
+        }
+        else if (slot == c_rootDisconnectSlot || slot == c_rootUpgradeSlot)
+        {
+            // Link TOOLS arm straight off the root page (no category page of their own): the same
+            // key toggles back to Select, the other switches tool in place.
+            const EBuildTool tool = slot == c_rootDisconnectSlot ? EBuildTool::Disconnect : EBuildTool::Upgrade;
+            if (m_mode == EPlayerMode::Link && m_linkTool == tool)
+                setMode(EPlayerMode::Select);
+            else
+            {
+                m_linkTool = tool;
+                setMode(EPlayerMode::Link);
+                m_cablePendingId = 0;
+                refreshBuildHotbar();
+            }
+        }
+        else if (slot == c_rootDeleteSlot)
+            setMode(m_mode == EPlayerMode::Delete ? EPlayerMode::Select : EPlayerMode::Delete);
+        else if (slot == c_cancelSlot)
+            setMode(EPlayerMode::Select); // cancels Delete/Link mode; a no-op in Select
+        return;
+    }
+    // CATEGORY page
+    if (slot == c_pageBackSlot)
+    {
+        setMode(EPlayerMode::Select);
+        return;
+    }
+    if (slot == c_cancelSlot)
+    {
+        cancelOneLevel();
+        return;
+    }
+    if (slot >= (int)buildCategoryItems(m_buildCategory).size() || slot >= c_cancelSlot)
+        return; // empty slot
+    m_cablePendingId = 0; // switching tools drops a half-made connection (and half-done aims)
+    m_lanceAiming = false;
+    m_wallPlacing = false;
+    m_buildSelection = slot;
+    refreshBuildHotbar();
 }
 
 void GameMatch::updateModeSwitching()
 {
     Input& input = Globals::input;
     const bool focused = input.isWindowHasFocus() && Globals::ui.isViewportFocused();
-    // B/V/C jump straight into Build with that category (fast chains: b->1->LMB, v->3->LMB);
-    // the ACTIVE category's key exits to neutral, another one switches category in place.
-    const SDL_Scancode catKeys[3] = { SDL_Scancode::SDL_SCANCODE_B, SDL_Scancode::SDL_SCANCODE_V, SDL_Scancode::SDL_SCANCODE_C };
-    for (int i = 0; i < 3; ++i)
+    // Grid hotkeys: polled edges on the 12 keys, each mapping straight onto its slot.
+    for (int k = 0; k < c_gridSlots; ++k)
     {
-        const bool down = focused && input.isKeyDown(catKeys[i]);
-        if (down && !m_modeKeyWasDown[i])
-        {
-            if (m_mode == EPlayerMode::Build && m_buildCategory == i)
-                setMode(EPlayerMode::Select);
-            else
-            {
-                if (m_mode != EPlayerMode::Build)
-                    setMode(EPlayerMode::Build);
-                m_buildCategory = i;
-                m_buildSelection = -1;
-                m_cablePendingId = 0;
-                m_lanceAiming = false;
-                refreshBuildHotbar();
-                Log::info(std::string("Build: ") + c_buildCategories[i]
-                    + " — 1-9 arms, 0 disarms, LMB/F places, same key exits");
-            }
-        }
-        m_modeKeyWasDown[i] = down;
+        const bool down = focused && input.isKeyDown(c_gridKeys[k]) && (SDL_GetModState() & SDL_KMOD_CTRL) == 0;
+        if (down && !m_gridKeyWasDown[k])
+            activateSlot(k);
+        m_gridKeyWasDown[k] = down;
     }
-    // X toggles Delete <-> Select; Tab always returns to Select (the neutral mode).
-    const bool xDown = focused && input.isKeyDown(SDL_Scancode::SDL_SCANCODE_X);
-    if (xDown && !m_modeKeyWasDown[3])
-        setMode(m_mode == EPlayerMode::Delete ? EPlayerMode::Select : EPlayerMode::Delete);
-    m_modeKeyWasDown[3] = xDown;
-    const bool tabDown = focused && input.isKeyDown(SDL_Scancode::SDL_SCANCODE_TAB);
-    if (tabDown && !m_modeKeyWasDown[4])
-        setMode(EPlayerMode::Select);
-    m_modeKeyWasDown[4] = tabDown;
+    // Escape/Tab: one level back (same as the C "Cancel" slot).
+    const bool backDown = focused && (input.isKeyDown(SDL_Scancode::SDL_SCANCODE_ESCAPE)
+        || input.isKeyDown(SDL_Scancode::SDL_SCANCODE_TAB));
+    if (backDown && !m_modeKeyWasDown[0])
+        cancelOneLevel();
+    m_modeKeyWasDown[0] = backDown;
     // F9 save / F10 load (authority only — a client has no sim to save).
     const bool saveDown = focused && input.isKeyDown(SDL_Scancode::SDL_SCANCODE_F9);
     if (saveDown && !m_saveKeyWasDown)
@@ -971,8 +1114,11 @@ void GameMatch::disarmBuild()
 
 void GameMatch::updateLinkTool(const Camera& camera, bool confirmEdge, bool cancelEdge, EBuildTool tool)
 {
-    if (cancelEdge)
+    if (cancelEdge && m_cablePendingId != 0)
+    {
         m_cablePendingId = 0; // RIGHT-click drops the selected endpoint
+        m_rmbConsumed = true;
+    }
 
     const int hover = hoveredStructure(camera);
 
@@ -1033,31 +1179,9 @@ void GameMatch::updateLinkTool(const Camera& camera, bool confirmEdge, bool canc
 
 void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool cancelEdge)
 {
-    // Grid navigation: polled 1..9,0 edges (SDL scancodes are contiguous; InputControls routes the
-    // same keys to the HUD's selectSlot for the highlight — harmless duplication).
-    Input& input = Globals::input;
-    const bool focus = input.isWindowHasFocus() && Globals::ui.isViewportFocused();
-    int pressed = -1;
-    for (int k = 0; k < 10; ++k)
-    {
-        const bool down = focus && input.isKeyDown((SDL_Scancode)((int)SDL_Scancode::SDL_SCANCODE_1 + k));
-        if (down && !m_numKeyWasDown[k])
-            pressed = k;
-        m_numKeyWasDown[k] = down;
-    }
-    if (pressed >= 0)
-    {
-        m_cablePendingId = 0; // switching tools drops a half-made connection (and half-done aims)
-        m_lanceAiming = false;
-        m_wallPlacing = false;
-        if (pressed == 9) // key 0 disarms the ghost (RMB does the same, see below)
-            m_buildSelection = -1;
-        else if (pressed < (int)buildCategoryItems(m_buildCategory).size())
-            m_buildSelection = pressed;
-    }
-    refreshBuildHotbar();
-
-    if (m_buildSelection < 0)
+    // (Grid keys / slot clicks arm items through activateSlot — see updateModeSwitching and the
+    // hotbar click in updateWindowed.)
+    if (m_buildCategory < 0 || m_buildSelection < 0)
     {
         // Nothing armed — browsing the category: clicks inspect and RMB smart-connects / sets
         // barracks routes, exactly as Select mode.
@@ -1065,20 +1189,10 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         updateSelectionClick(camera, confirmEdge, /*allowPick*/ true);
         return;
     }
-    // RMB CANCELS, one step at a time: a half-finished two-click flow (link endpoint, Lance aim,
-    // Wall line) drops first, and the next RMB disarms the item itself. Only once nothing is armed
-    // does RMB go back to its Select-mode meaning (smart connect / barracks route) above.
-    const BuildItem& item = buildCategoryItems(m_buildCategory)[m_buildSelection];
-    if (item.tool != EBuildTool::Structure)
-    {
-        if (cancelEdge && m_cablePendingId == 0)
-        {
-            disarmBuild();
-            return;
-        }
-        updateLinkTool(camera, confirmEdge, cancelEdge, item.tool);
-        return;
-    }
+    // RMB CANCELS, one step at a time: a half-finished two-click flow (Lance aim, Wall line) drops
+    // first, and the next RMB disarms the item itself. Only once nothing is armed does RMB go back
+    // to its Select-mode meaning (smart connect / barracks route) above.
+    const EStructureType armed = buildCategoryItems(m_buildCategory)[m_buildSelection];
     m_cablePendingId = 0;
 
     // Lance second click: the position is anchored — the cursor now aims the cone's facing
@@ -1089,11 +1203,12 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         if (cancelEdge)
         {
             m_lanceAiming = false;
+            m_rmbConsumed = true;
             return;
         }
         const glm::vec3 up(0.0f, 0.3f, 0.0f);
         const uint32 color = packColor(glm::vec3(0.3f, 1.0f, 0.4f));
-        drawCircle(m_lancePendingPos + up, 1.0f, color, 20);
+        drawStructureGhost(EStructureType::Lance, m_lancePendingPos, color);
         glm::vec3 target;
         glm::vec3 facing(0.0f);
         if (aimGroundPoint(camera, target))
@@ -1125,6 +1240,7 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         if (cancelEdge)
         {
             m_wallPlacing = false;
+            m_rmbConsumed = true;
             return;
         }
         const Aim end = computeAim(camera, EStructureType::Wall);
@@ -1150,9 +1266,10 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
             }
             for (int s = 0; s < count; ++s)
             {
-                const bool free = m_structures.cellsFree(EStructureType::Wall, points[s]);
-                drawCircle(points[s] + glm::vec3(0.0f, 0.3f, 0.0f), 0.9f,
-                    packColor(free ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.3f, 0.2f)), 12);
+                const bool free = m_structures.cellsFree(EStructureType::Wall, points[s])
+                    && !StructureSystem::actorInFootprint(EStructureType::Wall, points[s]);
+                drawStructureGhost(EStructureType::Wall, points[s],
+                    packColor(free ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.3f, 0.2f)));
             }
             if (confirmEdge)
             {
@@ -1167,10 +1284,11 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
     if (cancelEdge) // nothing half-placed (the two-click flows returned above): drop the ghost
     {
         disarmBuild();
+        m_rmbConsumed = true;
         return;
     }
 
-    const Aim aim = computeAim(camera, item.structure);
+    const Aim aim = computeAim(camera, armed);
     if (!aim.valid)
     {
         // No ghost here (off-map, or an armed EXTRACTOR with no free node under the cursor — its
@@ -1179,7 +1297,7 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         return;
     }
     const uint32 color = packColor(aim.affordable ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.3f, 0.2f));
-    drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), 1.0f, color, 20);
+    drawStructureGhost(aim.type, aim.pos, color); // the exact box that will be built
     if (isEmitterType(aim.type)) // show the field footprint the powered variant would get
         drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.emitterReachOf(aim.type) * 0.5f, color, 32);
     drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.cableRange(),
@@ -1233,14 +1351,17 @@ void GameMatch::updateRightClickActions(const Camera& camera, bool rmbEdge)
     if (hover >= 0)
     {
         trySmartConnect(hover);
+        // deliberately NOT consumed: the caller also walks the player to the building (both are
+        // wanted from one press — you connect it and go stand next to it)
         return;
     }
     const int sel = m_structures.structureIndexById(m_selectedId);
     glm::vec3 ground;
     if (sel < 0 || !isBarracksType(m_structures.structureType(sel))
         || m_structures.structureTeam(sel) != (uint8)m_team || !aimGroundPoint(camera, ground))
-        return;
+        return; // not a route click either: the caller turns it into a MOVE order
     ground.y = 0.0f;
+    m_rmbConsumed = true;
     std::vector<glm::vec3> route;
     if (Globals::input.isKeyDown(SDL_Scancode::SDL_SCANCODE_LSHIFT))
     {
@@ -1302,11 +1423,6 @@ void GameMatch::updateSelectionClick(const Camera& camera, bool confirmEdge, boo
 
 // Short 3-5 char tags drawn above every structure/unit bar — the baseshape boxes all look alike,
 // so the tag says what a thing is at a glance. The selected structure shows its full name instead.
-static constexpr const char* c_structureShortNames[] = { "EMIT", "GEN", "CON", "EXTR", "BATT",
-    "FUEL", "SOL", "FAB", "BSTN", "LNC", "BRK", "BRK-B", "BRK-R", "BRK-S", "WALL", "TRT", "SILO",
-    "CNST", "BASE" };
-static_assert(std::size(c_structureShortNames) == (size_t)EStructureType::Count);
-
 // Remote actors (client side) carry no type on the wire — derive the tag from the replicated
 // entity's prefab-derived name ("gameEnemyBrute", ...).
 static const char* remoteShortName(std::string_view entityName, uint8 kind)
@@ -1324,6 +1440,7 @@ static const char* remoteShortName(std::string_view entityName, uint8 kind)
 // each frame; the overlay just paints at the given viewport pixels.
 void GameMatch::buildWorldLabels(const Camera& camera)
 {
+    ProfileScope scope("Game world labels", EProfileCategory::Game);
     std::vector<HudWorldLabel> labels;
     labels.reserve(m_structures.structureCount());
     const Rect& viewport = Globals::ui.getViewportRect();
@@ -1498,36 +1615,95 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
 {
     if (!m_enabled)
         return;
+    ProfileScope scope("Game windowed", EProfileCategory::Game);
 
     Input& input = Globals::input;
-    const float qeAxis = (input.isKeyDown(SDL_Scancode::SDL_SCANCODE_E) ? 1.0f : 0.0f)
-                       - (input.isKeyDown(SDL_Scancode::SDL_SCANCODE_Q) ? 1.0f : 0.0f);
-    m_camera.apply(camera, m_player.interpolatedPos(), deltaSec, qeAxis, m_dragDeltaX, m_wheelAccum);
+    // Camera yaw on the ARROW keys (Q/E belong to the grid hotkeys) + middle-drag.
+    const float yawAxis = (input.isKeyDown(SDL_Scancode::SDL_SCANCODE_RIGHT) ? 1.0f : 0.0f)
+                        - (input.isKeyDown(SDL_Scancode::SDL_SCANCODE_LEFT) ? 1.0f : 0.0f);
+    m_camera.apply(camera, m_player.interpolatedPos(), deltaSec, yawAxis, m_dragDeltaX, m_wheelAccum);
     m_dragDeltaX = 0.0f;
     m_wheelAccum = 0.0f;
 
-    // Mode keys first, then the active mode consumes the inputs. In the tool modes LMB and F both
-    // confirm (F is the fallback the UI can never eat); in NEUTRAL mode they are the combat keys —
-    // LMB shoots a projectile at the cursor, F swings melee. Requests queue here and are
-    // validated/applied in the authority tick.
+    // Grid keys first, then the active mode consumes the clicks. Requests queue here and are
+    // validated/applied in the authority tick. Whatever RMB the mode does NOT consume becomes a
+    // player MOVE ORDER below. The HOTBAR eats clicks over it: LMB on a slot activates it (same
+    // path as its key), and neither button reaches the world through the hotbar.
     updateModeSwitching();
-    const bool fDown = input.isKeyDown(SDL_Scancode::SDL_SCANCODE_F)
-        && input.isWindowHasFocus() && Globals::ui.isViewportFocused();
-    const bool lmbEdge = m_placeClicked;
-    const bool rmbEdge = m_rmbClicked;
-    const bool fEdge = fDown && !m_placeKeyWasDown;
-    m_placeKeyWasDown = fDown;
+    m_rmbConsumed = false;
+    bool lmbEdge = m_placeClicked;
+    bool rmbEdge = m_rmbClicked;
     m_placeClicked = false;
     m_rmbClicked = false;
-    const bool confirmEdge = lmbEdge || fEdge;
+    if (const int slot = Globals::gameHud.slotAtScreenPos(m_mousePos); slot >= 0)
+    {
+        if (lmbEdge)
+            activateSlot(slot);
+        lmbEdge = false;
+        rmbEdge = false;
+        m_rmbMoveDrag = false; // dragging a move order onto the hotbar ends it
+    }
+    const bool confirmEdge = lmbEdge;
+    refreshBuildHotbar(); // page + counts + highlight, every frame
 
     switch (m_mode)
     {
     case EPlayerMode::Build:  updateBuildMode(camera, confirmEdge, rmbEdge); break;
     case EPlayerMode::Delete: updateDeleteMode(camera, confirmEdge); break;
+    case EPlayerMode::Link:
+        // RMB drops the picked endpoint, then exits the tool — the same one-step-at-a-time cancel
+        // Build mode uses (and neither becomes a move order).
+        if (rmbEdge && m_cablePendingId == 0)
+        {
+            setMode(EPlayerMode::Select);
+            m_rmbConsumed = true;
+        }
+        else
+            updateLinkTool(camera, confirmEdge, rmbEdge, m_linkTool);
+        break;
     case EPlayerMode::Select: updateSelectMode(camera, confirmEdge, rmbEdge); break;
-    case EPlayerMode::None:   break; // unused — Select IS the neutral mode (no player combat)
     }
+
+    // MOVE ORDER (RTS right-click): the last meaning of RMB, taken unless a CANCEL or a barracks
+    // ROUTE waypoint already ate the press (m_rmbConsumed). Right-clicking a BUILDING still walks
+    // the player to it — that press may also have smart-connected, and both are wanted: you wire
+    // a structure and go stand next to it (to fund its blueprint, refill from a silo, ...). The
+    // order then stops at the footprint's edge instead of shoving into the wall forever.
+    if (!m_rmbDown)
+        m_rmbMoveDrag = false;
+    if (rmbEdge && !m_rmbConsumed)
+    {
+        const int hover = hoveredStructure(camera);
+        glm::vec3 clicked;
+        if (hover >= 0 && aimGroundPoint(camera, clicked))
+        {
+            // Walk to WHERE you clicked, not to the building's middle: the cursor's ground point
+            // is the destination, pushed just outside the footprint along the side it fell on, so
+            // the capsule ends up standing at that face instead of grinding into the wall.
+            const glm::vec3 center = m_structures.structurePos(hover);
+            const float half = StructureSystem::footprintCellsOf(m_structures.structureType(hover))
+                * StructureSystem::GridCellSize * 0.5f + 1.2f; // + capsule and a gap
+            glm::vec2 d(clicked.x - center.x, clicked.z - center.z);
+            const float deepest = glm::max(glm::abs(d.x), glm::abs(d.y));
+            if (deepest < half) // inside the inflated footprint: push out to the nearest face
+            {
+                if (deepest < 1e-3f) // dead center: come from the player's side
+                    d = glm::vec2(m_player.bodyPos().x - center.x, m_player.bodyPos().z - center.z);
+                const float scale = glm::max(glm::abs(d.x), glm::abs(d.y));
+                d = scale > 1e-3f ? d * (half / scale) : glm::vec2(half, 0.0f);
+            }
+            m_player.setMoveTarget(glm::vec3(center.x + d.x, 0.0f, center.z + d.y));
+            m_rmbMoveDrag = false; // a building order is one-shot: dragging off it must not re-aim
+        }
+        else if (hover < 0)
+            m_rmbMoveDrag = true; // ground: holding keeps re-aiming at the cursor
+    }
+    glm::vec3 moveGround;
+    if (m_rmbMoveDrag && aimGroundPoint(camera, moveGround))
+        m_player.setMoveTarget(glm::vec3(moveGround.x, 0.0f, moveGround.z));
+    if (m_player.hasMoveTarget()) // destination marker until the capsule arrives
+        drawCircle(m_player.moveTarget() + glm::vec3(0.0f, 0.15f, 0.0f), 0.6f,
+            packColor(glm::vec3(0.3f, 0.95f, 0.6f)), 16);
 
     // Faint ring at the estimated equilibrium shield radius — compare it against the drawn bubble.
     const float shieldR = m_player.shieldRadius();

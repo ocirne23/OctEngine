@@ -137,6 +137,12 @@ public:
     // Anything that may run headless and would touch GPU/mapped state must gate on this.
     bool isInitialized() const { return m_initialized; }
 
+    // Blocks until this frame slot's previous GPU submission has retired (the slot's fence) — the
+    // vsync/GPU throttle of the whole loop. Call it FIRST THING in the frame, before input is
+    // sampled: nothing else may write the slot's host-visible per-frame buffers before it, and
+    // waiting at the top keeps input -> sim -> present tight instead of letting the sampled input
+    // go stale during the stall. beginFrame asserts it ran; present() re-arms it.
+    void waitFrameSlot();
     // viewportRect is the editor's viewport sub-rect within the swapchain (ignored in VR, which renders
     // full-extent); a change to it re-records the command buffers.
     const Frustum& beginFrame(const Camera& camera, const Rect& viewportRect); // [Concurrency: SERIAL-OWNER of the render chain]
@@ -655,6 +661,7 @@ private:
     glm::ivec2 m_windowSize;
     Rect m_viewportRect = Rect();
     bool m_initialized = false;
+    bool m_frameSlotWaited = false; // waitFrameSlot() ran for the current slot (cleared by present)
     bool m_windowMinimized = false;
     bool m_vsyncEnabled = true;
     bool m_wireframe = false; // "Renderer/Wireframe" tweak: forward scene variants rasterize as lines

@@ -506,11 +506,8 @@ void Renderer::setTerrainSplatClimate(std::span<const glm::vec4> boxes)
     memcpy(m_terrainSplatClimate, boxes.data(), boxes.size() * sizeof(glm::vec4));
 }
 
-const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewportRect)
+void Renderer::waitFrameSlot()
 {
-    ProfileScope beginFrameScope("Begin frame", EProfileCategory::Renderer);
-    setViewportRect(viewportRect); // first: this frame's projection is built from the viewport's aspect below
-
     // This frame slot's fence must be waited BEFORE anything writes its host-visible per-frame buffers
     // (renderNode instance memcpys, LOD meshIdx redirects, firstInstance prefix sums, sparse transform
     // uploads) — the wait inside acquireNextImage happens at the END of the CPU frame, after all those
@@ -518,15 +515,30 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
     // invisible while per-frame data is byte-identical, but LOD switches change instance meshIdx en
     // masse and the torn instance/prefix data made the cull's buckets overflow into neighbouring
     // meshes' draw ranges (one-frame flashes with foreign materials).
+    // It runs at the TOP of the main loop (not inside beginFrame) so the vsync/GPU stall lands
+    // before input sampling rather than between input and the sim; the slot index only advances in
+    // present(), so it is the same fence either way.
+    if (m_frameSlotWaited)
+        return; // idempotent within a frame
+    // GPU-bound (or vsync-throttled) frames show up here: the CPU waiting for the frame slot's fence.
+    ProfileScope profileScope("Fence wait", EProfileCategory::Wait);
+    if (!m_swapChain.waitForFrame(m_swapChain.getCurrentFrameIndex()))
     {
-        // GPU-bound frames show up here: the CPU waiting for the frame slot's fence.
-        ProfileScope profileScope("Fence wait", EProfileCategory::Wait);
-        if (!m_swapChain.waitForFrame(m_swapChain.getCurrentFrameIndex()))
-        {
-            Log::error("Renderer: failed to wait for frame, recreating swapchain");
-            recreateSwapchain();
-        }
+        Log::error("Renderer: failed to wait for frame, recreating swapchain");
+        recreateSwapchain();
     }
+    m_frameSlotWaited = true;
+}
+
+const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewportRect)
+{
+    ProfileScope beginFrameScope("Begin frame", EProfileCategory::Renderer);
+    setViewportRect(viewportRect); // first: this frame's projection is built from the viewport's aspect below
+
+    // The slot's fence is waited at the loop top (waitFrameSlot); anything that reached here without
+    // it is a main-loop ordering bug — but never run unsynchronized, so wait now (asserting).
+    assert(m_frameSlotWaited && "Renderer::waitFrameSlot() must run at the top of the frame, before any per-slot writes");
+    waitFrameSlot();
 
     // This slot's fence is waited, so its previous submission's GPU timestamps have landed.
     m_gpuProfiler.collect(m_swapChain.getCurrentFrameIndex());
@@ -1417,6 +1429,7 @@ void Renderer::present()
             recreateSwapchain();
         }
     }
+    m_frameSlotWaited = false; // the slot advanced: next frame must wait its own fence first
 }
 
 uint32 Renderer::addRenderNodeTransform(const Transform& transform)

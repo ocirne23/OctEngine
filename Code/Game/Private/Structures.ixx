@@ -307,6 +307,11 @@ public:
     }
     static glm::vec3 snapToGrid(EStructureType type, const glm::vec3& groundPos);
     bool cellsFree(EStructureType type, const glm::vec3& snappedGroundPos) const;
+    static float spawnHeightOf(EStructureType type); // the prefab box's HALF height (ghost preview)
+    // A player capsule or unit standing on the footprint (spatial query — no rosters). Separate
+    // from cellsFree on purpose: that one also probes unit SPAWN points, which must not refuse a
+    // cell just because units stand nearby.
+    static bool actorInFootprint(EStructureType type, const glm::vec3& snappedGroundPos);
     void setPlacementBounds(const glm::vec2& boundsMin, const glm::vec2& boundsMax)
     {
         m_boundsMin = boundsMin;

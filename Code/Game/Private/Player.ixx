@@ -31,9 +31,18 @@ public:
     // code paths (the owner simulates; the claim stream carries the body state to the server).
     void clientAdopt(const glm::vec3& respawnPos);
 
-    // Camera-relative WASD velocity steering + LShift sprint + Space jump off a ground raycast
-    // (port of the testbed's updateLocalPlayer). Windowed input only — no-ops without window focus.
+    // Velocity steering toward the standing RMB move order + LShift sprint + Space jump off a
+    // ground raycast. NO WASD: those keys are grid hotkeys — the player moves by mouse only.
+    // Windowed input only — no-ops without window focus.
     void tickMovement(const glm::vec3& cameraForwardPlanar, float deltaSec);
+
+    // RTS move order (right-click ground, or hold RMB to steer at the cursor): a planar
+    // destination the capsule walks to and forgets on arrival. Set from the windowed tick,
+    // consumed by tickMovement.
+    void setMoveTarget(const glm::vec3& worldPos) { m_moveTarget = worldPos; m_hasMoveTarget = true; }
+    void clearMoveTarget() { m_hasMoveTarget = false; }
+    bool hasMoveTarget() const { return m_hasMoveTarget; }
+    glm::vec3 moveTarget() const { return m_moveTarget; } // for the destination marker
     // Shield shrink/regen from the shield emitter's pressure readback, push-out impulse, health
     // drain / death respawn.
     void tickShieldAndHealth(float deltaSec);
@@ -74,6 +83,8 @@ private:
     EntityPtr m_entity;
     ForceQuery m_query; // point query at the body center — feeds the density readout
     glm::vec3 m_spawnPos{ 0.0f };
+    glm::vec3 m_moveTarget{ 0.0f };
+    bool m_hasMoveTarget = false;
     bool m_jumpWasDown = false;
 
     uint32 m_team = 0;
@@ -108,6 +119,7 @@ private:
     float m_materials = m_materialsMax; // carried construction stock (see materials())
     float m_spawnGraceSec = 1.0f;        // no energy/health drain this long after (re)spawn — the
                                          // GPU readbacks still carry the death position for ~2 frames
+    float m_arriveRadius = 0.8f;         // metres: a move order completes inside this ring
     float m_damageRadius = 0.8f;        // metres: health drains once the equilibrium shield radius
                                         // squishes below this (capsule half-height is 0.8 world)
     float m_shieldPushGain = 10000.0f;  // applied-force -> impulse scale (testbed force-ball precedent)

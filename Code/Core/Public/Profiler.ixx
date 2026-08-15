@@ -16,7 +16,7 @@ export module Core.Profiler;
 export enum class EProfileCategory : uint8_t
 {
     App, Core, Entity, Script, Animation, Physics, Audio, Particle, Force, Spatial,
-    Threading, Procedural, Network, File, Renderer, GPU, UI, Input, Wait, Other,
+    Threading, Procedural, Network, File, Renderer, GPU, UI, Input, Game, Wait, Other,
     Count
 };
 
@@ -24,7 +24,7 @@ export constexpr const char* profileCategoryName(EProfileCategory category)
 {
     constexpr const char* names[(uint32_t)EProfileCategory::Count] = {
         "App", "Core", "Entity", "Script", "Animation", "Physics", "Audio", "Particle", "Force", "Spatial",
-        "Threading", "Procedural", "Network", "File", "Renderer", "GPU", "UI", "Input", "Wait", "Other",
+        "Threading", "Procedural", "Network", "File", "Renderer", "GPU", "UI", "Input", "Game", "Wait", "Other",
     };
     return names[(uint32_t)category];
 }
@@ -51,6 +51,7 @@ export constexpr uint32_t profileCategoryColor(EProfileCategory category)
         0xFF78DC46, // GPU        - vivid green
         0xFFC850C8, // UI         - magenta
         0xFF50DC8C, // Input      - light green
+        0xFF40A0F0, // Game       - amber
         0xFF706860, // Wait       - dark gray
         0xFF909090, // Other      - gray
     };
