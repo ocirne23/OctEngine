@@ -319,18 +319,11 @@ void ProfilerPanel::drawToolbar()
             Globals::profiler.setPaused(true); // freezes ring writes + frame marks: the whole frame history stays inspectable
         }
     }
-    ImGui::SameLine();
-    if (ImGui::Checkbox("Auto pause >", &m_autoPause) && m_autoPause)
-        m_autoPauseChecked = profiler.getFrameCount(); // only frames completed from now on can trigger, not history
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(64.0f);
-    ImGui::DragFloat("##autoPauseMs", &m_autoPauseMs, 0.5f, 1.0f, 1000.0f, "%.1f ms");
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Pause recording when a frame exceeds this time.\nTriggers 2 frames late so the spike frame's GPU data is complete (still fully retained).");
-
+    // Layout: the two fps readouts sit right after Pause (the numbers you actually watch), then the
+    // frame identity, then the auto-pause controls last — they are a setting, not a live number.
     const double frameMs = (double)(m_windowEnd - m_windowStart) * profiler.getMsPerTick();
     ImGui::SameLine();
-    ImGui::Text("Frame %llu  |  %.2f ms (%.0f fps)", (unsigned long long)m_displayedFrame, frameMs, frameMs > 0.0 ? 1000.0 / frameMs : 0.0);
+    ImGui::Text("%.2f ms (%.0f fps)", frameMs, frameMs > 0.0 ? 1000.0 / frameMs : 0.0);
     // Uncapped: exact for the displayed frame when paused, a short EMA live (per-frame values flicker).
     const double uncappedMs = m_paused ? std::max(m_uncappedMainMs, m_uncappedGpuMs) : m_uncappedEmaMs;
     ImGui::SameLine();
@@ -341,6 +334,9 @@ void ProfilerPanel::drawToolbar()
         ImGui::SetTooltip("What this frame would run at without the vsync / frame-slot throttle:\n"
             "max(main loop %.2f ms, GPU Frame %.2f ms). The main loop excludes the fence wait.",
             m_uncappedMainMs, m_uncappedGpuMs);
+
+    ImGui::SameLine();
+    ImGui::Text("|  Frame %llu", (unsigned long long)m_displayedFrame);
     if (m_paused)
     {
         ImGui::SameLine();
@@ -350,6 +346,17 @@ void ProfilerPanel::drawToolbar()
     ImGui::TextDisabled("(?)");
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Click a frame bar to inspect it.\nTimeline: mouse wheel = zoom, drag = pan, double-click = fit, Space = pause.");
+
+    ImGui::SameLine();
+    ImGui::Text("|");
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Auto pause >", &m_autoPause) && m_autoPause)
+        m_autoPauseChecked = profiler.getFrameCount(); // only frames completed from now on can trigger, not history
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(64.0f);
+    ImGui::DragFloat("##autoPauseMs", &m_autoPauseMs, 0.5f, 1.0f, 1000.0f, "%.1f ms");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Pause recording when a frame exceeds this time.\nTriggers 2 frames late so the spike frame's GPU data is complete (still fully retained).");
 }
 
 void ProfilerPanel::drawFrameGraph()

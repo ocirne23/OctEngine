@@ -521,7 +521,7 @@ void Renderer::waitFrameSlot()
     if (m_frameSlotWaited)
         return; // idempotent within a frame
     // GPU-bound (or vsync-throttled) frames show up here: the CPU waiting for the frame slot's fence.
-    ProfileScope profileScope("Fence wait", EProfileCategory::Wait);
+    ProfileScope profileScope("Frame wait", EProfileCategory::Wait);
     if (!m_swapChain.waitForFrame(m_swapChain.getCurrentFrameIndex()))
     {
         Log::error("Renderer: failed to wait for frame, recreating swapchain");
