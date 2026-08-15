@@ -44,7 +44,8 @@ Guidance for Claude Code when working in this repository.
 
 ## Claude
 * Do not commit or push files
-* Prefer to let me test out changes myself rather than looking at log output/screen yourself
+* Do not notify about App.exe linking failed due to in-use, the user knows to re-link if the linking failed due to in-use executable.
+* Prefer to let the user test out changes myself rather than looking at log output/screen yourself
 * Keep this file up to date
 
 ## Building
