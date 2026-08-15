@@ -40,7 +40,7 @@ Guidance for Claude Code when working in this repository.
 * For each assertion, add a tag for your confidence in the statement: [Certain] for hard evidence, [Likely] for strong guess, [Guessing] for filling gaps. Rather than relying on English.
 * Do not commit or push files
 * Do not notify about App.exe linking failed due to in-use, the user knows to re-link if the linking failed due to in-use executable.
-* Prefer to let the user test out changes myself rather than looking at log output/screen yourself
+* Prefer to let the user test out changes rather than looking at log output/screen yourself
 * Keep this file up to date
 
 # Project Description
