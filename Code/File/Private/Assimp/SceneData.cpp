@@ -330,7 +330,7 @@ bool ISceneData::loadAnimations(const char* filePath, const Skeleton& targetSkel
         if (included(pScene->mAnimations[a]))
             ++keptCount;
 
-    const oc::string stem = std::filesystem::path(filePath).stem().string();
+    const oc::string stem = oc::fromStd(std::filesystem::path(oc::toStd(filePath)).stem().string());
     const oc::string baseName = (clipNameOverride && *clipNameOverride) ? clipNameOverride : stem;
     const bool multiple = keptCount > 1;
     uint32 added = 0;

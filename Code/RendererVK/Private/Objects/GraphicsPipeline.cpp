@@ -261,7 +261,7 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
     {
         vk::Result   result;
         vk::Pipeline pipeline;
-        oc::tie(result, pipeline) = vkDevice.createGraphicsPipeline(m_pipelineCache, graphicsPipelineCreateInfo);
+        std::tie(result, pipeline) = vkDevice.createGraphicsPipeline(m_pipelineCache, graphicsPipelineCreateInfo);
         if (result != vk::Result::eSuccess)
         {
             assert((!assertOnFailure) && "Failed to create graphics pipeline");
@@ -295,7 +295,7 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
 
         vk::Result   result;
         vk::Pipeline pipeline;
-        oc::tie(result, pipeline) = vkDevice.createGraphicsPipeline(m_pipelineCache, graphicsPipelineCreateInfo);
+        std::tie(result, pipeline) = vkDevice.createGraphicsPipeline(m_pipelineCache, graphicsPipelineCreateInfo);
         if (result != vk::Result::eSuccess)
         {
             assert((!assertOnFailure) && "Failed to create graphics pipeline");

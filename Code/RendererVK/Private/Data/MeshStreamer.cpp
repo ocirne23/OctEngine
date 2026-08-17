@@ -235,7 +235,7 @@ void MeshStreamer::drainCompletions()
         {
             // Cache file gone/changed mid-run: the set stays evicted (and invisible). It re-cooks on
             // the next app start; don't retry-spam the worker.
-            Log::warning(std::format("MeshStreamer: re-stream from '{}' failed; mesh stays evicted", m_files[set.fileId]));
+            Log::warning(oc::format("MeshStreamer: re-stream from '{}' failed; mesh stays evicted", m_files[set.fileId]));
             set.state = EState::Evicted;
             set.failed = true;
             continue;

@@ -43,4 +43,8 @@
 // independent of each other; shared terrain data is handed out as shared_ptr copies.
 #define OC_SEG_PROCEDURAL ".CRT$XCUA" // terrain, terrainCollider, ocean, scatter
 
+// -- Nav: navSystem's dtor waits on its in-flight field-build jobs (-> job system); holds no
+// entities and touches no other global, so it may go first of all.
+#define OC_SEG_NAV ".CRT$XCUB" // navSystem
+
 #define OC_INIT_SEG(seg) __pragma(warning(disable: 4075)) __pragma(init_seg(seg)) __pragma(warning(default: 4075))

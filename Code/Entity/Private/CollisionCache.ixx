@@ -24,7 +24,7 @@ public:
     // Snapshots a container's geometry at load time (see World::loadContainer) so hull/mesh shapes never
     // need the source file again. No-op when that container is already captured.
     void captureSource(const oc::string& containerName, const ISceneData& sceneData);
-    bool hasSource(const oc::string& containerName) const { return m_sources.contains(containerName); }
+    bool hasSource(const oc::string& containerName) const { return oc::contains(m_sources, containerName); }
 
     // Hull shape: the flattened point cloud for one spawnable node. Empty when the container wasn't captured.
     oc::vector<glm::vec3> buildHullPoints(const oc::string& containerName, const oc::string& nodePath) const;

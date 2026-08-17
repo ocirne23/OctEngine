@@ -156,8 +156,8 @@ namespace Procedural
 		{
 			// j <-> x, i <-> z: the same axis convention sampleFromBlock documents.
 			return FileSystem::join(FileSystem::join("Local/Diffusion",
-					fp16 ? std::format("{}_fp16", seed) : std::format("{}", seed)),
-				std::format("{}_x{}_z{}.tile", coarse ? "coarse" : "full", tj, ti));
+					fp16 ? oc::format("{}_fp16", seed) : oc::format("{}", seed)),
+				oc::format("{}_x{}_z{}.tile", coarse ? "coarse" : "full", tj, ti));
 		}
 
 		// The tile cache moved off std::fstream when Core stopped exporting it: the file is read/written
@@ -357,7 +357,7 @@ namespace Procedural
 			// A write cut short (crash, full disk) leaves a file the loader's size probe rejects, so the
 			// worst case is a regenerate — no tmp+rename dance needed, same contract as the .vsc cache.
 			if (!FileSystem::writeFileBytes(path, f.data))
-				Log::warning(std::format("[Diffusion] tile cache write failed: {}", path));
+				Log::warning(oc::format("[Diffusion] tile cache write failed: {}", path));
 		}
 
 		// -------------------------------------------------------------------------------------------------
@@ -423,7 +423,7 @@ namespace Procedural
 					m_cache.clear();
 					m_coarseCache.clear();
 				}
-				Log::info(std::format("[Diffusion] reseeded to {}", seed));
+				Log::info(oc::format("[Diffusion] reseeded to {}", seed));
 			}
 
 			void setMaxResidentTiles(int32 n)
@@ -473,7 +473,7 @@ namespace Procedural
 					m_cache.clear();
 					m_coarseCache.clear();
 				}
-				Log::info(std::format("[Diffusion] switching to {} - reloading models",
+				Log::info(oc::format("[Diffusion] switching to {} - reloading models",
 				                      p == EPrecision::Fp16 ? "fp16" : "fp32"));
 				m_loader = std::thread([this]() { loadWorker(); });
 			}
@@ -489,7 +489,7 @@ namespace Procedural
 			void setStatus(oc::string_view s)
 			{
 				std::lock_guard<std::mutex> lk(m_statusMutex);
-				m_status.assign(s);
+				m_status.assign(s.data(), s.size());
 			}
 
 			void loadWorker()

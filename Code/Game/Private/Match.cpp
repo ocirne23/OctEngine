@@ -16,6 +16,7 @@ import Physics;
 import Force;
 import RendererVK;
 import Network;
+import Nav;
 import File; // AssetNode + loadAssetFile/writeAssetText (game save/load)
 import :Match;
 import :GameCamera;
@@ -161,6 +162,7 @@ GameMatch::GameMatch(bool enabled) : m_enabled(enabled)
     m_player.registerTweaks();
     m_structures.registerTweaks();
     m_npcs.registerTweaks();
+    Globals::navSystem.initialize(); // "Nav" tweaks + density staging (job system is up by now)
 
     m_mouse = Globals::input.addMouseListener();
     // MIDDLE-drag yaws the camera. RMB cannot: holding it steers the player (RTS move order), and
@@ -204,6 +206,7 @@ GameMatch::~GameMatch()
 {
     if (!m_enabled)
         return;
+    Globals::navSystem.clear(); // waits on in-flight builds before the world goes
     m_npcs.clear();
     m_structures.clear();
     m_player.despawn();
@@ -298,9 +301,12 @@ void GameMatch::spawnCorridorWalls()
     // under the Ground entity — the scene root stays lean and the whole ring dies with it. The
     // static body bakes at the WORLD pose at spawn; the pos rewrite below re-expresses it in the
     // ground's local space for the render.
+    m_wallObstacles.clear();
     const auto spawnSegment = [this](float x, float z)
     {
         const glm::vec3 worldPos(x, c_wallStep, z); // collider center: half of the 20 m tall box
+        const float half = c_wallStep * 0.5f;
+        m_wallObstacles.push_back(Nav::NavObstacle{ glm::vec2(x - half, z - half), glm::vec2(x + half, z + half) });
         EntityPtr wall = Globals::world.spawnAssetFile("Entities/Game/borderwall.pre",
             Transform(worldPos), true);
         if (!wall)
@@ -787,6 +793,9 @@ void GameMatch::update(float deltaSec)
     // (shots to spawn, deaths) and runs production.
     m_npcs.service(m_structures);
 
+    // Flow fields for the units' next pass: obstacles + per-team sources in, published fields out.
+    feedNav(deltaSec);
+
     if (m_isServer)
     {
         m_statTimer -= deltaSec;
@@ -831,6 +840,46 @@ void GameMatch::update(float deltaSec)
             m_damageTimer = 0.1f;
         }
     }
+}
+
+void GameMatch::feedNav(float deltaSec)
+{
+    ProfileScope scope("Game nav feed", EProfileCategory::Game);
+    // Obstacles: every structure footprint (the same half-extent math as cellsFree) over the static
+    // border ring. Change-detected inside Nav, so rebuilding the list per frame costs a hash.
+    m_navObstacles.assign(m_wallObstacles.begin(), m_wallObstacles.end());
+    for (oc::vector<Nav::NavSource>& v : m_navSources)
+        v.clear();
+    for (const StructureSystem::Ref& s : m_structures.structures())
+    {
+        const float half = StructureSystem::footprintCellsOf(s.type) * StructureSystem::GridCellSize * 0.5f;
+        const glm::vec2 c(s.entity->pos.x, s.entity->pos.z);
+        m_navObstacles.push_back(Nav::NavObstacle{ c - half, c + half });
+        // Sources: what units of OTHER teams walk toward — the same filter the local search used
+        // (alive, not the invulnerable Base).
+        if (s.state->invulnerable || !s.state->alive() || s.state->team >= Nav::MaxTeams)
+            continue;
+        m_navSources[s.state->team].push_back(Nav::NavSource{
+            s.entity->pos, glm::max(s.state->meleeRadius, half), s.state->structureId, 0 });
+    }
+    // Player bodies (puppets) are targets too: our capsule + every client twin.
+    const auto addPlayer = [&](Entity* e, uint8 team)
+    {
+        if (!e || team >= Nav::MaxTeams)
+            return;
+        const PhysicsComponent* pc = getComponent<PhysicsComponent>(e);
+        if (!pc || !pc->body.isValid())
+            return;
+        m_navSources[team].push_back(Nav::NavSource{ pc->body.getPosition(), 0.5f, 0, 1 });
+    };
+    addPlayer(m_player.entity(), (uint8)m_team);
+    for (const auto& [id, p] : m_clientPlayers)
+        addPlayer(p.get(), requestTeam(id));
+
+    Globals::navSystem.setObstacles(m_navObstacles);
+    for (uint32 t = 0; t < Nav::MaxTeams; ++t)
+        Globals::navSystem.setTeamSources(t, m_navSources[t]);
+    Globals::navSystem.update(deltaSec);
 }
 
 // Build/delete/cable intents: local queue on the authority, Gq* request events from a client —
@@ -1699,6 +1748,9 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
         drawCircle(m_player.interpolatedPos(), shieldR, packColor(glm::vec3(0.3f, 0.8f, 1.0f)), 32);
 
     m_structures.drawDebug();
+    if (Globals::navSystem.debugMode() > 0)
+        Globals::navSystem.drawDebug(m_player.interpolatedPos(),
+            [](const glm::vec3& a, const glm::vec3& b, uint32 color) { Globals::rendererVK.addDebugLine(a, b, color); });
 
     // Barracks unit routes (own team): line chain from the barracks through its waypoints, each
     // with its destination circle — bright for the selected barracks, dim otherwise.

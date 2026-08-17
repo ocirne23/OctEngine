@@ -154,7 +154,7 @@ namespace
 		// name in different branches (e.g. Physics/World vs Ocean/World) don't collide.
 		oc::string path(parentPath);
 		path += '/';
-		path += node.name;
+		path.append(node.name.data(), node.name.size()); // eastl::string has no string_view +=
 
 		oc::string label(node.name);
 		label += "##";

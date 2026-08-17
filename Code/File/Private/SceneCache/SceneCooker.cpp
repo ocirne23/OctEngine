@@ -65,6 +65,10 @@ namespace
     template <typename T> requires (!std::is_pointer_v<T>)
     uint64 fnv1a(const T& value, uint64 hash) { return fnv1a(&value, sizeof(T), hash); }
 
+    // oc::string is not a std::filesystem::path source under either backing (and is a distinct
+    // type entirely under EASTL), so the cooker crosses into <filesystem> through this one seam.
+    std::filesystem::path toPath(oc::string_view path) { return std::filesystem::path(oc::toStd(path)); }
+
     uint64 fileMTimeTicks(const std::filesystem::path& path, std::error_code& ec)
     {
         return (uint64)std::filesystem::last_write_time(path, ec).time_since_epoch().count();
@@ -527,11 +531,11 @@ namespace
             }
         }
 
-        const oc::string modelFolder = std::filesystem::path(sourcePath).parent_path().string();
+        const oc::string modelFolder = oc::fromStd(toPath(sourcePath).parent_path().string());
         // A recook regenerates every conversion, so clear out the previous set first — otherwise .dds
         // files of textures the scene no longer references would pile up.
         std::error_code ecPurge;
-        std::filesystem::remove_all(texFolder, ecPurge);
+        std::filesystem::remove_all(toPath(texFolder), ecPurge);
         bool texFolderCreated = false;
         for (uint32 texIdx = 0; texIdx < numTextures; ++texIdx)
         {
@@ -549,18 +553,18 @@ namespace
                 if (originalPath.empty())
                     continue;
                 std::error_code ec;
-                const std::filesystem::path nextToModel = std::filesystem::path(modelFolder) / originalPath;
-                resolvedFile = std::filesystem::exists(nextToModel, ec) ? nextToModel.string() : originalPath;
-                if (std::filesystem::path(resolvedFile).extension() == ".dds")
+                const std::filesystem::path nextToModel = toPath(modelFolder) / oc::toStd(originalPath);
+                resolvedFile = std::filesystem::exists(nextToModel, ec) ? oc::fromStd(nextToModel.string()) : originalPath;
+                if (toPath(resolvedFile).extension() == ".dds")
                     continue; // already streamable
-                if (!std::filesystem::exists(resolvedFile, ec))
+                if (!std::filesystem::exists(toPath(resolvedFile), ec))
                 {
-                    Log::warning(std::format("SceneCache: texture '{}' of '{}' not found; keeping original reference", originalPath, sourcePath));
+                    Log::warning(oc::format("SceneCache: texture '{}' of '{}' not found; keeping original reference", originalPath, sourcePath));
                     continue;
                 }
             }
 
-            oc::string stem = std::filesystem::path(originalPath).stem().string();
+            oc::string stem = oc::fromStd(toPath(originalPath).stem().string());
             if (stem.empty() || stem[0] == '*')
                 stem = "embedded";
             for (char& c : stem)
@@ -571,12 +575,12 @@ namespace
             if (!texFolderCreated)
             {
                 std::error_code ec;
-                std::filesystem::create_directories(texFolder, ec);
+                std::filesystem::create_directories(toPath(texFolder), ec);
                 texFolderCreated = true;
             }
             if (!convertTextureToDds(texData, resolvedFile, (ETexUsage)usage[texIdx], coverageCutoff[texIdx], cookedPath))
             {
-                Log::warning(std::format("SceneCache: failed to convert texture '{}' of '{}'; keeping original reference", originalPath, sourcePath));
+                Log::warning(oc::format("SceneCache: failed to convert texture '{}' of '{}'; keeping original reference", originalPath, sourcePath));
                 continue;
             }
 
@@ -587,8 +591,8 @@ namespace
                 CookedTexStamp& stamp = ctx.texStamps.emplace_back();
                 stamp.sourcePathOffset = ctx.strings.add(resolvedFile);
                 stamp.cookedPathOffset = ctx.strings.add(cookedPath);
-                stamp.size = std::filesystem::file_size(resolvedFile, ec);
-                stamp.mtime = fileMTimeTicks(resolvedFile, ec);
+                stamp.size = std::filesystem::file_size(toPath(resolvedFile), ec);
+                stamp.mtime = fileMTimeTicks(toPath(resolvedFile), ec);
             }
         }
     }
@@ -698,7 +702,7 @@ namespace
                     && fread(sourcePath, 1, sizeof(sourcePath) - 1, pFile) > 0)
                 {
                     const uint64 srcSize = std::filesystem::file_size(sourcePath, ec);
-                    stale = ec || srcSize != header.sourceSize || fileMTimeTicks(sourcePath, ec) != header.sourceMTime || ec;
+                    stale = ec || srcSize != header.sourceSize || fileMTimeTicks(toPath(sourcePath), ec) != header.sourceMTime || ec;
                 }
             }
             if (stale)
@@ -708,7 +712,7 @@ namespace
                 texFolder += "_tex";
                 std::filesystem::remove(entry.path(), ec);
                 std::filesystem::remove_all(texFolder, ec);
-                Log::info(std::format("SceneCache: removed stale cache '{}'", entry.path().string()));
+                Log::info(oc::format("SceneCache: removed stale cache '{}'", entry.path().string()));
             }
         }
     }
@@ -749,12 +753,12 @@ namespace
         memcpy(ctx.blob.data.data(), &header, sizeof(header));
 
         std::error_code ec;
-        std::filesystem::create_directories(std::filesystem::path(cachePath).parent_path(), ec);
+        std::filesystem::create_directories(toPath(cachePath).parent_path(), ec);
         FILE* pFile = nullptr;
         fopen_s(&pFile, cachePath.c_str(), "wb");
         if (!pFile)
         {
-            Log::warning(std::format("SceneCache: could not write '{}'", cachePath));
+            Log::warning(oc::format("SceneCache: could not write '{}'", cachePath));
             return false;
         }
         const bool ok = fwrite(ctx.blob.data.data(), 1, ctx.blob.data.size(), pFile) == ctx.blob.data.size();
@@ -788,11 +792,11 @@ oc::unique_ptr<ISceneData> ISceneData::loadCached(const char* filePath, bool mer
         sourceMTime = fileMTimeTicks(filePath, ec);
     const bool cacheUsable = options.enableCache && !ec;
 
-    oc::string stem = std::filesystem::path(filePath).stem().string();
+    oc::string stem = oc::fromStd(toPath(filePath).stem().string());
     for (char& c : stem)
         if (!isalnum((uint8)c) && c != '_' && c != '-')
             c = '_';
-    const oc::string cacheTag = std::format("{}_{:08x}", stem, (uint32)(nameHash ^ (nameHash >> 32)));
+    const oc::string cacheTag = oc::format("{}_{:08x}", stem, (uint32)(nameHash ^ (nameHash >> 32)));
     const oc::string cachePath = "Local/Cooked/" + cacheTag + ".vsc";
     const oc::string texFolder = "Local/Cooked/" + cacheTag + "_tex/";
 
@@ -801,7 +805,7 @@ oc::unique_ptr<ISceneData> ISceneData::loadCached(const char* filePath, bool mer
         auto cooked = oc::make_unique<CookedSceneData>();
         if (cooked->load(cachePath, filePath, sourceMTime, sourceSize, optionsHash))
         {
-            Log::info(std::format("SceneCache: '{}' served from '{}'", filePath, cachePath));
+            Log::info(oc::format("SceneCache: '{}' served from '{}'", filePath, cachePath));
             return cooked;
         }
     }
@@ -822,10 +826,10 @@ oc::unique_ptr<ISceneData> ISceneData::loadCached(const char* filePath, bool mer
             if (cooked->load(cachePath, filePath, sourceMTime, sourceSize, optionsHash))
             {
                 const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - cookStart).count();
-                Log::info(std::format("SceneCache: cooked '{}' -> '{}' in {} ms", filePath, cachePath, ms));
+                Log::info(oc::format("SceneCache: cooked '{}' -> '{}' in {} ms", filePath, cachePath, ms));
                 return cooked;
             }
-            Log::warning(std::format("SceneCache: read-back of freshly cooked '{}' failed; serving direct import", cachePath));
+            Log::warning(oc::format("SceneCache: read-back of freshly cooked '{}' failed; serving direct import", cachePath));
         }
     }
     return imported;
@@ -837,7 +841,7 @@ bool TextureConvert::convertToDds(const char* srcPath, EUsage usage, const char*
     stbi_uc* pDecoded = stbi_load(srcPath, &w, &h, &comp, 4);
     if (!pDecoded)
     {
-        Log::warning(std::format("TextureConvert: could not decode '{}'", srcPath));
+        Log::warning(oc::format("TextureConvert: could not decode '{}'", srcPath));
         return false;
     }
     const bool ok = compressRgbaToDds(pDecoded, (uint32)w, (uint32)h, usage, outPath);
@@ -858,7 +862,7 @@ bool TextureConvert::convertPackedToDds(const char* srcPathR, const char* srcPat
         stbi_uc* pGray = stbi_load(srcPaths[channel], &w, &h, &comp, 1);
         if (!pGray)
         {
-            Log::warning(std::format("TextureConvert: could not decode '{}'", srcPaths[channel]));
+            Log::warning(oc::format("TextureConvert: could not decode '{}'", srcPaths[channel]));
             return false;
         }
         if (rgba.empty())
@@ -872,7 +876,7 @@ bool TextureConvert::convertPackedToDds(const char* srcPathR, const char* srcPat
         }
         else if ((uint32)w != width || (uint32)h != height)
         {
-            Log::warning(std::format("TextureConvert: '{}' is {}x{}, expected {}x{} (all packed sources must match)", srcPaths[channel], w, h, width, height));
+            Log::warning(oc::format("TextureConvert: '{}' is {}x{}, expected {}x{} (all packed sources must match)", srcPaths[channel], w, h, width, height));
             stbi_image_free(pGray);
             return false;
         }

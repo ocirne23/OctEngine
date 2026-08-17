@@ -100,7 +100,7 @@ inline oc::string  AftermathErrorMessage(GFSDK_Aftermath_Result result)
     case GFSDK_Aftermath_Result_FAIL_DriverVersionNotSupported:
         return "Unsupported driver version - requires an NVIDIA R495 display driver or newer.";
     default:
-        return "Aftermath Error 0x" + std::to_hex_string(result);
+        return oc::fromStd("Aftermath Error 0x" + std::to_hex_string(result));
     }
 }
 

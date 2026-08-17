@@ -7,6 +7,7 @@ import :Entity;
 import Force;
 import Physics;
 import Spatial;
+import Nav;
 
 // See GameComponents.ixx for the design + authority/thread contract. Everything here runs either
 // on the parallel entity pass (update — authority instances only) or on the main thread (spawn,
@@ -90,14 +91,18 @@ static float unitRand01(uint32& state)
 
 void GameUnitComponent::update(Entity& entity, float deltaSec)
 {
-    if (puppet || !isAuthority())
-        return; // puppets are state carriers (GamePlayer writes them); clients mirror via the
-                // entity sync's game blob — either way, no sim here
+    if (!isAuthority())
+        return; // clients mirror via the entity sync's game blob — no sim here
     PhysicsComponent* pc = getComponent<PhysicsComponent>(&entity);
     ForceComponent* fc = getComponent<ForceComponent>(&entity);
     if (!pc || !pc->body.isValid())
         return;
     const glm::vec3 pos = pc->body.getPosition();
+    // Crowd presence for the anti-clumping gradient (players count as crowd too).
+    if (params.navEnabled && Globals::navSystem.isEnabled())
+        Globals::navSystem.density(team).splat(glm::vec2(pos.x, pos.z), 1);
+    if (puppet)
+        return; // puppets are state carriers (GamePlayer writes them) — no sim
     if (health <= 0.0f || pos.y < params.voidY)
     {
         health = 0.0f;
@@ -129,7 +134,43 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             routing = haveWalkTarget = true;
         }
     }
-    if (!routing)
+    // NAV: sample every other team's flow field at our cell; the geodesically nearest enemy wins
+    // and its descent direction is the walk direction (routes around walls). Falls through to the
+    // local search when no field covers us.
+    bool navResolved = false; // a field named our target (steer by it, skip the local search)
+    bool navSteer = false;    // ... and gave a usable direction (zero AT the source)
+    glm::vec2 navDir(0.0f);
+    if (!routing && !targetLocked && params.navEnabled && Globals::navSystem.anyFieldPublished())
+    {
+        Nav::TeamField::Sample best;
+        const Nav::TeamField* bestField = nullptr;
+        for (uint32 t = 0; t < Nav::MaxTeams; ++t)
+        {
+            if (t == team)
+                continue;
+            const Nav::TeamField* field = Globals::navSystem.teamField(t);
+            if (!field)
+                continue;
+            const Nav::TeamField::Sample s = field->sample(glm::vec2(pos.x, pos.z), m_rng);
+            if (s.valid && (!best.valid || s.dist < best.dist))
+            {
+                best = s;
+                bestField = field;
+            }
+        }
+        if (best.valid)
+        {
+            const Nav::NavSource& src = bestField->sourceAt(best.srcIndex);
+            targetPos = src.pos;
+            hasTarget = true;
+            walkTarget = targetPos;
+            haveWalkTarget = true;
+            navDir = best.descentDir;
+            navResolved = true;
+            navSteer = glm::dot(navDir, navDir) > 0.5f;
+        }
+    }
+    if (!routing && !navResolved)
     {
         m_retargetTimer -= deltaSec;
         if (!targetLocked && (m_retargetTimer <= 0.0f || !hasTarget))
@@ -275,8 +316,9 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             }
     }
 
-    // ---- steering: planar velocity toward the walk target, stuck-sidestep instead of pathfinding.
-    // Writes are QUEUED (workers) — one frame of latency, the queue's normal contract.
+    // ---- steering: planar velocity along the flow-field descent (or straight at the walk target
+    // where no field covers us), minus the own-crowd density gradient, stuck-sidestep as the last
+    // resort. Writes are QUEUED (workers) — one frame of latency, the queue's normal contract.
     glm::vec3 vel = pc->body.getLinearVelocity();
     if (haveWalkTarget)
     {
@@ -284,13 +326,24 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
         const float dist = glm::length(toTarget);
         if (dist > stopRange)
         {
-            glm::vec2 dir = toTarget / glm::max(dist, 1e-3f);
+            glm::vec2 dir = navSteer ? navDir : toTarget / glm::max(dist, 1e-3f);
+            if (params.navEnabled && params.spreadGain > 0.0f && Globals::navSystem.isEnabled())
+            {
+                // Down the crowd gradient: a unit shifts away from where its own team is thickest.
+                // Bounded so a wall of allies never overrides the destination entirely.
+                const glm::vec2 g = Globals::navSystem.density(team).gradient(glm::vec2(pos.x, pos.z));
+                const float gl = glm::length(g);
+                if (gl > 1e-4f)
+                    dir = glm::normalize(dir - g / gl * glm::min(gl * params.spreadGain, 0.9f));
+            }
             const glm::vec2 planarVel(vel.x, vel.z);
             if (glm::dot(planarVel, planarVel) < 0.09f * moveSpeed * moveSpeed)
                 m_stuckTimer += deltaSec;
             else
                 m_stuckTimer = 0.0f;
-            if (m_stuckTimer > 0.7f && m_avoidTimer <= 0.0f)
+            // With a field steering, the sidestep only fires after a longer stall (bodies blocking
+            // each other) — the field already routes around geometry.
+            if (m_stuckTimer > (navSteer ? 1.5f : 0.7f) && m_avoidTimer <= 0.0f)
             {
                 m_avoidTimer = 0.6f + 0.6f * unitRand01(m_rng);
                 m_avoidSign = unitRand01(m_rng) < 0.5f ? -1.0f : 1.0f;

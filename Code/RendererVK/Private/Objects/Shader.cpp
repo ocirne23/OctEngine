@@ -113,7 +113,7 @@ private:
                 continue;
 
             const oc::string& stored = *m_contents.emplace_back(oc::make_unique<oc::string>(oc::move(content)));
-            m_results.push_back(oc::make_unique<IncludeResult>(resolvedPath, stored.data(), stored.size(), nullptr));
+            m_results.push_back(oc::make_unique<IncludeResult>(oc::toStd(resolvedPath), stored.data(), stored.size(), nullptr));
             return m_results.back().get();
         }
         return nullptr;
@@ -203,7 +203,7 @@ bool Shader::GLSLtoSPV(const vk::ShaderStageFlagBits type, const oc::string& sou
     // Enable SPIR-V and Vulkan rules when parsing GLSL
     EShMessages messages = (EShMessages)(EShMsgSpvRules | EShMsgVulkanRules);
     EShLanguage stage = translateShaderStage(type);
-    oc::string preprocessed;
+    std::string preprocessed; // glslang::TShader::preprocess writes into a std::string* directly
     {
         glslang::TShader preprocessShader(stage);
         const char* shaderStrings[1] = { source.data() };
@@ -241,7 +241,7 @@ bool Shader::GLSLtoSPV(const vk::ShaderStageFlagBits type, const oc::string& sou
         size_t lineEnd = preprocessed.find('\n', versionPos);
         if (lineEnd != oc::string::npos)
         {
-            oc::string versionLine = preprocessed.substr(versionPos, lineEnd - versionPos + 1);
+            std::string versionLine = preprocessed.substr(versionPos, lineEnd - versionPos + 1);
             preprocessed.erase(versionPos, lineEnd - versionPos + 1);
             preprocessed = versionLine + preprocessed;
         }
@@ -296,9 +296,11 @@ bool Shader::GLSLtoSPV(const vk::ShaderStageFlagBits type, const oc::string& sou
     spvOptions.emitNonSemanticShaderDebugInfo = true;
     spvOptions.emitNonSemanticShaderDebugSource = true;
     spvOptions.compileOnly = false;
-    glslang::GlslangToSpv(*program.getIntermediate(stage), spirv, &spvOptions);
+    std::vector<unsigned int> spirvStd; // GlslangToSpv/OutputSpvBin take std::vector by reference
+    glslang::GlslangToSpv(*program.getIntermediate(stage), spirvStd, &spvOptions);
 
-    glslang::OutputSpvBin(spirv, spvBinPath.c_str());
+    glslang::OutputSpvBin(spirvStd, spvBinPath.c_str());
+    spirv = oc::fromStd(spirvStd);
 
 
     return true;

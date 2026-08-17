@@ -166,8 +166,8 @@ void VolumetricFogPipeline::initialize()
     const vk::ImageSubresourceRange fullRange{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
     for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
     {
-        cmd.clearColorImage(m_scatter.image[i], vk::ImageLayout::eGeneral, vk::ClearColorValue{ oc::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { fullRange });
-        cmd.clearColorImage(m_integrated.image[i], vk::ImageLayout::eGeneral, vk::ClearColorValue{ oc::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } }, { fullRange });
+        cmd.clearColorImage(m_scatter.image[i], vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { fullRange });
+        cmd.clearColorImage(m_integrated.image[i], vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } }, { fullRange });
     }
     vk::MemoryBarrier2 clearToRead{
         .srcStageMask = vk::PipelineStageFlagBits2::eClear,

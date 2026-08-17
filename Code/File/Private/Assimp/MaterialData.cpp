@@ -212,5 +212,5 @@ oc::string MaterialData::getTexturePath(ETextureType type) const
 		return path.C_Str();
 	}
     else
-        return std::filesystem::path(path.C_Str()).lexically_proximate(std::filesystem::current_path()).string();
+        return oc::fromStd(std::filesystem::path(path.C_Str()).lexically_proximate(std::filesystem::current_path()).string());
 }

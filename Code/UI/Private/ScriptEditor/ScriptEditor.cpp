@@ -6255,7 +6255,7 @@ namespace
 				const char* wordEnd = p;
 				while (wordEnd < end && std::isalpha(static_cast<unsigned char>(*wordEnd)))
 					++wordEnd;
-				const oc::string_view word(p, wordEnd);
+				const oc::string_view word(p, size_t(wordEnd - p)); // eastl::string_view takes (ptr, size), not a pair of pointers
 				drawPiece(p, wordEnd, (word == "function" || word == "ref") ? kColDeclKeyword : kColPunct, firstPiece);
 				p = wordEnd;
 			}

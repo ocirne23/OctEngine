@@ -121,7 +121,7 @@ void TextEditor::renderSaveAsPopup()
 	if ((ImGui::Button("Save##ted_as") || entered) && m_saveAsBuf[0] != '\0')
 	{
 		oc::string name = m_saveAsBuf;
-		if (!name.ends_with(".txt"))
+		if (!oc::endsWith(name, ".txt"))
 			name += ".txt";
 		saveAs(name);
 		ImGui::CloseCurrentPopup();

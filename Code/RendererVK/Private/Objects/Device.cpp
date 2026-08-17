@@ -78,7 +78,7 @@ bool Device::initialize()
     }
 
     m_graphicsQueueIndex = UINT32_MAX;
-    oc::vector<vk::QueueFamilyProperties> queueFamilyProperties = m_physicalDevice.getQueueFamilyProperties();
+    oc::vector<vk::QueueFamilyProperties> queueFamilyProperties = oc::fromStd(m_physicalDevice.getQueueFamilyProperties());
     for (uint32 i = 0; i < queueFamilyProperties.size(); i++)
     {
         if (queueFamilyProperties[i].queueFlags & vk::QueueFlagBits::eGraphics)
@@ -488,7 +488,7 @@ bool Device::supportsExtensions(oc::vector<const char*> extensions)
         assert(false && "Could not enumerate device extension properties\n");
         return false;
     }
-    oc::vector<vk::ExtensionProperties> extensionProperties = enumResult.value;
+    oc::vector<vk::ExtensionProperties> extensionProperties = oc::fromStd(enumResult.value);
     for (const char* deviceExtension : extensions)
     {
         bool found = false;

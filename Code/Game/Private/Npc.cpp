@@ -68,6 +68,8 @@ void NpcSystem::registerTweaks()
     Tweak::floatVar("Game/Enemies", "Field push gain", &up.pushGain, 0.0f, 100000.0f, 100.0f);
     Tweak::floatVar("Game/Enemies", "Retarget interval", &up.retargetInterval, 1.0f, 60.0f, 0.5f);
     Tweak::floatVar("Game/Enemies", "Target search radius", &up.targetSearchRadius, 5.0f, 400.0f, 1.0f);
+    Tweak::boolean("Game/Enemies", "Nav fields", &up.navEnabled);
+    Tweak::floatVar("Game/Enemies", "Spread gain", &up.spreadGain, 0.0f, 3.0f, 0.05f);
     // Shot speeds, applied when the fire queues are serviced here (the rest of the production
     // tuning registers from StructureSystem onto the component params).
     Tweak::floatVar("Game/Friendlies", "Turret shot speed", &m_turretShotSpeed, 5.0f, 100.0f, 0.5f);

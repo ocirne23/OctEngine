@@ -52,14 +52,14 @@ bool SwapChain::initialize(const Surface& surface, uint32 swapChainSize, bool vs
         assert(false && "Failed to get surface present modes");
         return false;
     }
-    oc::vector<vk::PresentModeKHR> presentModes = presentModesResult.value;
+    oc::vector<vk::PresentModeKHR> presentModes = oc::fromStd(presentModesResult.value);
     auto surfaceFormatsResult = vkPhysicalDevice.getSurfaceFormatsKHR(vkSurface);
     if (surfaceFormatsResult.result != vk::Result::eSuccess)
     {
         assert(false && "Failed to get surface formats");
         return false;
     }
-    oc::vector<vk::SurfaceFormatKHR> surfaceFormats = surfaceFormatsResult.value;
+    oc::vector<vk::SurfaceFormatKHR> surfaceFormats = oc::fromStd(surfaceFormatsResult.value);
 
     vk::SurfaceFormatKHR surfaceFormat = surfaceFormats[0];
     for (const auto& availableFormat : surfaceFormats)
@@ -138,7 +138,7 @@ bool SwapChain::initialize(const Surface& surface, uint32 swapChainSize, bool vs
         assert(false && "Failed to get swapchain images");
         return false;
     }
-    m_images = imagesResult.value;
+    m_images = oc::fromStd(imagesResult.value);
 
     return true;
 }

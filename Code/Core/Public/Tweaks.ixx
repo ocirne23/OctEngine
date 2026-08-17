@@ -111,9 +111,9 @@ public:
 		m_savedLoaded = true;
 		if (!m_readFile)
 			return;
-		std::istringstream file(m_readFile(c_savePath));
+		std::istringstream file(oc::toStd(m_readFile(c_savePath)));
 		oc::string line;
-		while (std::getline(file, line))
+		while (oc::getline(file, line))
 		{
 			const size_t sep = line.find(" = ");
 			if (sep == oc::string::npos || sep == 0 || sep + 3 >= line.size())
@@ -357,7 +357,7 @@ private:
 				file << ' ' << v;
 			file << '\n';
 		}
-		if (!m_writeFile(c_savePath, file.str()))
+		if (!m_writeFile(c_savePath, oc::fromStd(file.str())))
 			Log::warning("Tweaks: cannot write " + oc::string(c_savePath));
 	}
 

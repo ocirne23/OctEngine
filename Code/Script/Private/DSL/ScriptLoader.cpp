@@ -1399,7 +1399,7 @@ bool ScriptLoader::save(DSL& document, const oc::string& path, const oc::string&
 	}
 	file << kBlockEnd << '\n';
 	// Saving is an explicit editor action on the main thread.
-	return FileSystem::writeFileStr(path, file.str(), /*allowMainThread*/ true);
+	return FileSystem::writeFileStr(path, oc::fromStd(file.str()), /*allowMainThread*/ true);
 }
 
 oc::string ScriptLoader::directiveText(const DSL& document)
@@ -1426,7 +1426,7 @@ oc::string ScriptLoader::directiveText(const DSL& document)
 	}
 	for (const oc::string& eventName : document.eventNames)
 		out << "//@@event " << eventName << '\n';
-	return out.str();
+	return oc::fromStd(out.str());
 }
 
 ScriptLoader::LoadResult ScriptLoader::load(DSL& document, const oc::string& path, const oc::vector<oc::unique_ptr<DSLSymbol>>& builtins,
@@ -1452,7 +1452,7 @@ ScriptLoader::LoadResult ScriptLoader::loadFromText(DSL& document, const oc::str
 		return result;
 	};
 
-	std::istringstream file(text);
+	std::istringstream file(oc::toStd(text));
 
 	// Extract the "//@@dsl" block: every following "//@"-prefixed line until "//@@end" (or the first
 	// unprefixed line/EOF), prefixes stripped; "//@@require" directive lines carry the file's required
@@ -1466,7 +1466,7 @@ ScriptLoader::LoadResult ScriptLoader::loadFromText(DSL& document, const oc::str
 		oc::string raw;
 		int lineNo = 0;
 		bool inBlock = false, done = false;
-		while (!done && std::getline(file, raw))
+		while (!done && oc::getline(file, raw))
 		{
 			++lineNo;
 			if (!raw.empty() && raw.back() == '\r')

@@ -85,7 +85,7 @@ static void appendNodeGeometry(const CollisionSource& source, const CollisionSou
         // "Col_*" proxy meshes always collide; a render mesh is skipped when a proxy exists for its
         // (or its node's) name — the proxy replaces it.
         if (!nodeIsProxy && !isCollisionName(mesh.name)
-            && (source.proxiedNames.contains(mesh.name) || source.proxiedNames.contains(node.name)))
+            && (oc::contains(source.proxiedNames, mesh.name) || oc::contains(source.proxiedNames, node.name)))
             continue;
         const uint32 baseVertex = uint32(outGeometry.vertices.size());
         for (const glm::vec3& v : mesh.vertices)
@@ -126,7 +126,7 @@ static PhysicsGeometry buildCollisionGeometry(const CollisionSource& source, con
 
 void CollisionCache::captureSource(const oc::string& containerName, const ISceneData& sceneData)
 {
-    if (m_sources.contains(containerName))
+    if (oc::contains(m_sources, containerName))
         return;
 
     auto source = oc::make_shared<CollisionSource>();
@@ -174,7 +174,7 @@ oc::shared_ptr<PhysicsMesh> CollisionCache::getOrBuildMesh(const oc::string& con
         boundsMin = glm::min(boundsMin, v);
         boundsMax = glm::max(boundsMax, v);
     }
-    Log::info(std::format("Physics: collision mesh '{}': {} verts, {} tris, bounds ({:.2f}, {:.2f}, {:.2f}) - ({:.2f}, {:.2f}, {:.2f})",
+    Log::info(oc::format("Physics: collision mesh '{}': {} verts, {} tris, bounds ({:.2f}, {:.2f}, {:.2f}) - ({:.2f}, {:.2f}, {:.2f})",
         key, geometry.vertices.size(), geometry.indices.size() / 3,
         boundsMin.x, boundsMin.y, boundsMin.z, boundsMax.x, boundsMax.y, boundsMax.z));
     auto mesh = oc::make_shared<PhysicsMesh>(Globals::physics.createCollisionMesh(geometry.vertices, geometry.indices));

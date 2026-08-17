@@ -136,7 +136,7 @@ public:
 	void removeBar(oc::string_view name)
 	{
 		const std::lock_guard lock(m_mutex);
-		oc::erase_if(m_bars, [name](const HudBar& b) { return b.name == name; });
+		oc::erase_if(m_bars, [name](const HudBar& b) { return name == b.name; });
 	}
 
 	void setCounter(oc::string_view name, float value, int decimals, const glm::vec3& color)
@@ -151,7 +151,7 @@ public:
 	void removeCounter(oc::string_view name)
 	{
 		const std::lock_guard lock(m_mutex);
-		oc::erase_if(m_counters, [name](const HudCounter& c) { return c.name == name; });
+		oc::erase_if(m_counters, [name](const HudCounter& c) { return name == c.name; });
 	}
 
 	// Replaces the whole world-label list (per-frame rebuild; pass {} to clear).

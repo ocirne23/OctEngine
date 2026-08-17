@@ -79,7 +79,17 @@ private:
     const oc::string& findVcvars();
     bool compile(const oc::string& sourcePath, const oc::string& pdbPath, oc::string& outDll, oc::string& outErrors);
     oc::string scriptDllPath(const oc::string& sourcePath) const;
-    struct CachedScript;
+    // Defined here, not in the .cpp: the `scripts` map below needs it COMPLETE. std::unordered_map
+    // tolerates an incomplete mapped type until instantiation; EASTL's hash_map instantiates its
+    // pair<const K, V> eagerly and rejects one.
+    struct CachedScript
+    {
+        ScriptModule entries;
+        void*        module = nullptr; // HMODULE
+        oc::string   dllPath;
+        oc::string   pdbPath;          // program PDB of the loaded build
+        int          pdbSerial = -1;   // monotonic build counter; next build uses pdbSerial+1 for a fresh PDB name
+    };
     bool loadDll(CachedScript& slot, const oc::string& dll);
     void unloadAll();
 

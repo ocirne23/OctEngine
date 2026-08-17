@@ -42,8 +42,8 @@ namespace Procedural::Diffusion
 			std::lock_guard<std::mutex> lk(g_providerMutex);
 			if (!g_resolvedProvider.empty())
 				return;
-			g_resolvedProvider.assign(p);
-			Log::info(std::format("[Diffusion] inference provider: {}", g_resolvedProvider));
+			g_resolvedProvider.assign(p.data(), p.size());
+			Log::info(oc::format("[Diffusion] inference provider: {}", g_resolvedProvider));
 		}
 
 		// ORT's Windows API takes a wide path; the engine speaks UTF-8 strings everywhere.
@@ -100,11 +100,11 @@ namespace Procedural::Diffusion
 
 	bool OnnxModel::load(const oc::string& modelPath, oc::string_view name, EInferenceDevice device)
 	{
-		m_impl->name.assign(name);
+		m_impl->name.assign(name.data(), name.size());
 
 		if (!FileSystem::exists(modelPath))
 		{
-			Log::error(std::format("[Diffusion] model '{}' not found at {}", name, modelPath));
+			Log::error(oc::format("[Diffusion] model '{}' not found at {}", name, modelPath));
 			return false;
 		}
 
@@ -130,10 +130,10 @@ namespace Procedural::Diffusion
 				{
 					if (device == EInferenceDevice::Gpu)
 					{
-						Log::error(std::format("[Diffusion] DirectML requested but unavailable: {}", e.what()));
+						Log::error(oc::format("[Diffusion] DirectML requested but unavailable: {}", e.what()));
 						return false;
 					}
-					Log::warning(std::format("[Diffusion] DirectML unavailable ({}), falling back to CPU. "
+					Log::warning(oc::format("[Diffusion] DirectML unavailable ({}), falling back to CPU. "
 					                         "Inference will be very slow.", e.what()));
 				}
 			}
@@ -149,14 +149,14 @@ namespace Procedural::Diffusion
 			for (size_t i = 0; i < nOut; i++)
 				m_impl->outputNames.push_back(m_impl->session->GetOutputNameAllocated(i, alloc).get());
 
-			Log::info(std::format("[Diffusion] loaded '{}' in {} ms",
+			Log::info(oc::format("[Diffusion] loaded '{}' in {} ms",
 			                      name,
 			                      std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count()));
 			return true;
 		}
 		catch (const Ort::Exception& e)
 		{
-			Log::error(std::format("[Diffusion] failed to load model '{}': {}", name, e.what()));
+			Log::error(oc::format("[Diffusion] failed to load model '{}': {}", name, e.what()));
 			m_impl->session.reset();
 			return false;
 		}
@@ -186,7 +186,7 @@ namespace Procedural::Diffusion
 			}
 
 			const char* outName = m_impl->outputNames[0].c_str();
-			oc::vector<Ort::Value> results = m_impl->session->Run(
+			std::vector<Ort::Value> results = m_impl->session->Run( // Ort::Value is move-only; keep the ONNX container
 				Ort::RunOptions{ nullptr }, names.data(), values.data(), values.size(), &outName, 1);
 
 			const Ort::Value& r = results[0];
@@ -206,7 +206,7 @@ namespace Procedural::Diffusion
 		}
 		catch (const Ort::Exception& e)
 		{
-			Log::error(std::format("[Diffusion] inference failed on '{}': {}", m_impl->name, e.what()));
+			Log::error(oc::format("[Diffusion] inference failed on '{}': {}", m_impl->name, e.what()));
 			return false;
 		}
 	}

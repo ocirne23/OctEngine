@@ -211,7 +211,7 @@ void OceanSimulationPipeline::createImages()
         };
         cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = (uint32)barriers.size(), .pImageMemoryBarriers = barriers.data() });
 
-        const vk::ClearColorValue zero{ oc::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } };
+        const vk::ClearColorValue zero{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }; // vk::ClearColorValue is spelled in std::array
         const vk::ImageSubresourceRange foamRange = allSubresources(1, 2);
         cmd.clearColorImage(m_foamImage, vk::ImageLayout::eTransferDstOptimal, &zero, 1, &foamRange);
 

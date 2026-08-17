@@ -12,7 +12,7 @@ void GpuProfiler::initialize()
 {
     const vk::PhysicalDevice physicalDevice = Globals::device.getPhysicalDevice();
     const vk::PhysicalDeviceProperties properties = physicalDevice.getProperties();
-    const oc::vector<vk::QueueFamilyProperties> queueFamilies = physicalDevice.getQueueFamilyProperties();
+    const oc::vector<vk::QueueFamilyProperties> queueFamilies = oc::fromStd(physicalDevice.getQueueFamilyProperties());
     const uint32 timestampValidBits = queueFamilies[Globals::device.getGraphicsQueueIndex()].timestampValidBits;
     if (timestampValidBits == 0 || properties.limits.timestampPeriod <= 0.0f)
     {

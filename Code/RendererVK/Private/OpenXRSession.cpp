@@ -122,7 +122,7 @@ bool OpenXRSession::initInstanceAndSystem()
         destroy();
         return false;
     }
-    oc::vector<XrViewConfigurationView> views(viewCount, { XR_TYPE_VIEW_CONFIGURATION_VIEW });
+    oc::vector<XrViewConfigurationView> views(viewCount, XrViewConfigurationView{ XR_TYPE_VIEW_CONFIGURATION_VIEW });
     if (!xrCheck(xrEnumerateViewConfigurationViews(m_instance, m_systemId,
         XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, viewCount, &viewCount, views.data()), "xrEnumerateViewConfigurationViews"))
     {
@@ -274,7 +274,7 @@ bool OpenXRSession::createSession(vk::Instance vkInstance, vk::PhysicalDevice vk
         uint32 imageCount = 0;
         if (!xrCheck(xrEnumerateSwapchainImages(m_swapchains[eye], 0, &imageCount, nullptr), "xrEnumerateSwapchainImages(count)"))
             return false;
-        m_swapchainImages[eye].assign(imageCount, { XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR });
+        m_swapchainImages[eye].assign(imageCount, XrSwapchainImageVulkanKHR{ XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR });
         if (!xrCheck(xrEnumerateSwapchainImages(m_swapchains[eye], imageCount, &imageCount,
             (XrSwapchainImageBaseHeader*)m_swapchainImages[eye].data()), "xrEnumerateSwapchainImages"))
             return false;

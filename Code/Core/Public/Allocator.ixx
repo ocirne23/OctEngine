@@ -622,6 +622,29 @@ void* operator new[](std::size_t n, std::align_val_t align)
     }
 }
 
+// EASTL (the oc:: container backing -- see Core.OcSTL) routes every container allocation through
+// these two named/aligned operator new[] forms rather than plain new[], so it can carry a debug name
+// and an alignment. It DECLARES them and expects the application to define them; without these two
+// the engine does not link.
+//
+// They must hand back memory the PLAIN operator delete[] above can free: eastl::allocator::deallocate
+// frees with delete[] whichever form allocated the block. That rules out the _aligned_malloc path the
+// align_val_t overloads take -- an _aligned_malloc block passed to Allocator::deallocate corrupts the
+// heap. So the engine allocator's own alignment is all EASTL can get here, and a stronger request
+// asserts instead of failing silently. EASTL only calls the aligned form when the element type is
+// over-aligned (alignment > EASTL_ALLOCATOR_MIN_ALIGNMENT), so nothing reaches it today.
+void* operator new[](std::size_t n, const char*, int, unsigned, const char*, int)
+{
+    return Globals::allocator.allocate(n);
+}
+
+void* operator new[](std::size_t n, std::size_t align, std::size_t alignOffset, const char*, int, unsigned, const char*, int)
+{
+    assert(align <= __STDCPP_DEFAULT_NEW_ALIGNMENT__ && alignOffset == 0
+        && "over-aligned EASTL allocation: it would come back through plain operator delete[]");
+    return Globals::allocator.allocate(n);
+}
+
 void operator delete(void* p)
 {
     if (p)

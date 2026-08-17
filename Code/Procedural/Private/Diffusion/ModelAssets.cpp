@@ -119,7 +119,7 @@ namespace Procedural::Diffusion
 		auto fail = [&](oc::string s)
 		{
 			m_error = oc::move(s);
-			Log::error(std::format("[Diffusion] {}", m_error));
+			Log::error(oc::format("[Diffusion] {}", m_error));
 			return false;
 		};
 
@@ -131,19 +131,19 @@ namespace Procedural::Diffusion
 
 			const oc::string p = assetPath(a.name);
 			if (!FileSystem::exists(p))
-				return fail(std::format("missing model asset Assets/{} - the diffusion models ship with the "
+				return fail(oc::format("missing model asset Assets/{} - the diffusion models ship with the "
 				                        "repo; if this is a fresh clone run 'git lfs pull'", p));
 
 			const uint64 actual = FileSystem::fileSize(p);
 			if (actual == 0)
-				return fail(std::format("cannot stat Assets/{}", p));
+				return fail(oc::format("cannot stat Assets/{}", p));
 
 			if (a.sizeBytes != 0 && actual != a.sizeBytes)
 			{
 				if (looksLikeLfsPointer(p))
-					return fail(std::format("Assets/{} is an unfetched git-lfs pointer, not the real file - "
+					return fail(oc::format("Assets/{} is an unfetched git-lfs pointer, not the real file - "
 					                        "run 'git lfs pull'", p));
-				return fail(std::format("Assets/{} is {} bytes, expected {} - the file looks truncated or is "
+				return fail(oc::format("Assets/{} is {} bytes, expected {} - the file looks truncated or is "
 				                        "from a different model revision", p, actual, a.sizeBytes));
 			}
 		}
@@ -153,7 +153,7 @@ namespace Procedural::Diffusion
 		JsonValue root;
 		oc::string jerr;
 		if (!readAll(assetPath("world_pipeline_config.json"), text) || !JsonValue::parse(text, root, jerr))
-			return fail(std::format("could not read/parse world_pipeline_config.json: {}", jerr));
+			return fail(oc::format("could not read/parse world_pipeline_config.json: {}", jerr));
 
 		{
 			ModelConfig c;
@@ -186,7 +186,7 @@ namespace Procedural::Diffusion
 			// The reference throws on anything else, and so do we: coarse_pooling != 1 changes the
 			// conditioning path in ways nothing here implements.
 			if (c.coarsePooling != 1)
-				return fail(std::format("world_pipeline_config: coarse_pooling={} is not supported", c.coarsePooling));
+				return fail(oc::format("world_pipeline_config: coarse_pooling={} is not supported", c.coarsePooling));
 
 			if (!cm || !cm->asFloatArray(c.coarseMeans, 6))
 				return fail("world_pipeline_config: coarse_means must be 6 numbers");
@@ -208,7 +208,7 @@ namespace Procedural::Diffusion
 
 		// --- pipeline_data.json ----------------------------------------------------------------------
 		if (!readAll(assetPath("pipeline_data.json"), text) || !JsonValue::parse(text, root, jerr))
-			return fail(std::format("could not read/parse pipeline_data.json: {}", jerr));
+			return fail(oc::format("could not read/parse pipeline_data.json: {}", jerr));
 
 		{
 			PipelineData d;
@@ -222,7 +222,7 @@ namespace Procedural::Diffusion
 				return fail("pipeline_data: n_quantiles missing or <= 0");
 			d.nQuantiles = nq->asInt();
 			if (!dq || !dq->asFloatArray2D(d.dataQuantiles, 5, d.nQuantiles))
-				return fail(std::format("pipeline_data: data_quantile_tables must be [5][{}]", d.nQuantiles));
+				return fail(oc::format("pipeline_data: data_quantile_tables must be [5][{}]", d.nQuantiles));
 			if (!a || !b || !p1 || !p99)
 				return fail("pipeline_data: a_temp_std/b_temp_std/temp_std_p1/temp_std_p99 missing");
 			d.aTempStd = a->asFloat();
@@ -234,7 +234,7 @@ namespace Procedural::Diffusion
 			m_data = oc::move(d);
 		}
 
-		Log::verbose(std::format("[Diffusion] model assets found ({} m/px, latent compression {})",
+		Log::verbose(oc::format("[Diffusion] model assets found ({} m/px, latent compression {})",
 		                         m_config.nativeResolution, m_config.latentCompression));
 		m_loaded = true;
 		return true;

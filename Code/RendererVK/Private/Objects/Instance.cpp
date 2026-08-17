@@ -90,14 +90,14 @@ bool Instance::initialize(Window& window, bool enableValidationLayers)
         assert(false && "Failed to enumerate instance extension properties");
         return false;
     }
-    m_supportedExtensions = enumerateExtensionsResult.value;
+    m_supportedExtensions = oc::fromStd(enumerateExtensionsResult.value);
     auto enumerateLayersResult = vk::enumerateInstanceLayerProperties();
     if (enumerateLayersResult.result != vk::Result::eSuccess)
     {
         assert(false && "Failed to enumerate instance layer properties");
         return false;
     }
-    m_supportedLayers = enumerateLayersResult.value;
+    m_supportedLayers = oc::fromStd(enumerateLayersResult.value);
     m_apiVersion = VK_MAKE_API_VERSION(0, 1, 3, 0);
 
     uint32 numExtensions = 0;

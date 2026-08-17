@@ -68,7 +68,7 @@ namespace Procedural
 
 		// --- Adopt the finished build: create the static body at the tile origin (geometry is
 		// tile-local in XZ with world Y, like render chunks — keeps float precision high).
-		if (haveDone && done.generation == m_generation && done.mesh.isValid() && !m_tiles.contains(done.key))
+		if (haveDone && done.generation == m_generation && done.mesh.isValid() && !oc::contains(m_tiles, done.key))
 		{
 			PhysicsBodyDesc desc;
 			desc.userData = m_terrainUserData;
@@ -117,7 +117,7 @@ namespace Procedural
 			for (int tx = minX; tx <= maxX; ++tx)
 			{
 				const glm::ivec2 coord(tx, tz);
-				if (m_tiles.contains(tileKey(coord)))
+				if (oc::contains(m_tiles, tileKey(coord)))
 					continue;
 				const glm::vec2 d = tileDist(coord);
 				if (glm::max(d.x, d.y) > radius) // square scan, disk membership

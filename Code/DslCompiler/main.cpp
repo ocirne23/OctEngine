@@ -31,10 +31,10 @@ static int compileDsl(const oc::string& inputPath, const oc::string& outputPath)
 		std::cout << "error: cannot open '" << inputPath << "'\n";
 		return 1;
 	}
-	std::istringstream in(FileSystem::readFileStr(inputPath));
+	std::istringstream in(oc::toStd(FileSystem::readFileStr(inputPath)));
 	oc::vector<oc::string> lines;
 	bool alreadyWrapped = false;
-	for (oc::string raw; std::getline(in, raw); )
+	for (oc::string raw; oc::getline(in, raw); )
 	{
 		if (!raw.empty() && raw.back() == '\r')
 			raw.pop_back();

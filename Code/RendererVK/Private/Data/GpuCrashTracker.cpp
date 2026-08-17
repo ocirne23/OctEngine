@@ -101,7 +101,7 @@ inline oc::string  AftermathErrorMessage(GFSDK_Aftermath_Result result)
     case GFSDK_Aftermath_Result_FAIL_DriverVersionNotSupported:
         return "Unsupported driver version - requires an NVIDIA R495 display driver or newer.";
     default:
-        return "Aftermath Error 0x" + std::to_hex_string(result);
+        return oc::fromStd("Aftermath Error 0x" + std::to_hex_string(result));
     }
 }
 
@@ -299,9 +299,9 @@ void GpuCrashTracker::WriteGpuCrashDumpToFile(const void* pGpuCrashDump, const u
     const oc::string baseFileName =
         oc::string(applicationName.data())
         + "-"
-        + std::to_string(baseInfo.pid)
+        + oc::to_string(baseInfo.pid)
         + "-"
-        + std::to_string(++count);
+        + oc::to_string(++count);
 
     // Write the crash dump data to a file using the .nv-gpudmp extension
     // registered with Nsight Graphics.
@@ -347,7 +347,7 @@ void GpuCrashTracker::WriteShaderDebugInformationToFile(
     const uint32_t shaderDebugInfoSize)
 {
     // Create a unique file name.
-    const oc::string filePath = dumpFolder + "shader-" + std::to_string(identifier) + ".nvdbg";
+    const oc::string filePath = dumpFolder + "shader-" + oc::fromStd(std::to_string(identifier)) + ".nvdbg";
 
     FileSystem::writeFileBytes(filePath,
         oc::span<const uint8>((const uint8*)pShaderDebugInfo, shaderDebugInfoSize), /*allowMainThread*/ true);

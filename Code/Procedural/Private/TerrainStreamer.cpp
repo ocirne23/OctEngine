@@ -138,12 +138,12 @@ namespace
 		const int slot = map[0] == 'd' ? 0 : (map[0] == 'n' ? 1 : 2);
 		if (overrides[slot])
 			return overrides[slot];
-		return std::format("Textures/Terrain/{}/{}_{}_2k.jpg", src.stem, src.stem, map);
+		return oc::format("Textures/Terrain/{}/{}_{}_2k.jpg", src.stem, src.stem, map);
 	}
 
 	oc::string terrainTexCachePath(const TerrainTexSource& src, const char* map)
 	{
-		return std::format("{}{}_{}.dds", TERRAIN_TEX_CACHE_DIR, src.stem, map);
+		return oc::format("{}{}_{}.dds", TERRAIN_TEX_CACHE_DIR, src.stem, map);
 	}
 
 	// The entry's climate in REAL units, as the streamer stores it: (tempMinC, tempMaxC, precipMinMm,
@@ -214,11 +214,11 @@ namespace
 				case 2: ok = TextureConvert::convertToDds(terrainTexSrcPath(src, "arm").c_str(), TextureConvert::EUsage::Data, terrainTexCachePath(src, "arm").c_str()); break;
 				}
 				if (!ok)
-					Log::warning(std::format("Terrain: failed to bake splat texture '{}' map {}", src.stem, tasks[i].map));
+					Log::warning(oc::format("Terrain: failed to bake splat texture '{}' map {}", src.stem, tasks[i].map));
 			}
 		}, EJobPriority::Low);
 		const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - bakeStart).count();
-		Log::info(std::format("Terrain: baked {} splat textures into {} in {} ms", tasks.size(), TERRAIN_TEX_CACHE_DIR, ms));
+		Log::info(oc::format("Terrain: baked {} splat textures into {} in {} ms", tasks.size(), TERRAIN_TEX_CACHE_DIR, ms));
 	}
 }
 
@@ -478,7 +478,7 @@ namespace Procedural
 				// its climate to the neighbouring boxes; a missing beach or snow entry disables that
 				// overlay outright, which is worth saying out loud — a world with no snow layer looks like
 				// a climate bug rather than a missing file.
-				Log::warning(std::format("Terrain: splat set '{}' incomplete, skipping", src.stem));
+				Log::warning(oc::format("Terrain: splat set '{}' incomplete, skipping", src.stem));
 				return oc::nullopt;
 			}
 			return mat;
@@ -794,7 +794,7 @@ namespace Procedural
 						yMin = glm::min(yMin, t[0]); yMax = glm::max(yMax, t[0]);
 						aMin = glm::min(aMin, t[3]); aMax = glm::max(aMax, t[3]);
 					}
-					Log::info(std::format("[Terrain] baked cascade {} ({:.0f} m): height {:.0f}..{:.0f} | "
+					Log::info(oc::format("[Terrain] baked cascade {} ({:.0f} m): height {:.0f}..{:.0f} | "
 					                      "altitude {:.0f}..{:.0f} | temp {:.1f}..{:.1f} C | humidity {:.2f}..{:.2f}",
 					                      c, baked.ranges[(int)c], yMin, yMax, aMin, aMax, tMin, tMax, hMin, hMax));
 				}
@@ -842,7 +842,7 @@ namespace Procedural
 				if (now - m_v3LastStatusLog > 1.0)
 				{
 					m_v3LastStatusLog = now;
-					Log::info(std::format("[Terrain] V3: {}", TerrainGenV3::statusText()));
+					Log::info(oc::format("[Terrain] V3: {}", TerrainGenV3::statusText()));
 				}
 			}
 		}

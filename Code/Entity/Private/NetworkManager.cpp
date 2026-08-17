@@ -497,7 +497,7 @@ void NetworkManager::handleSessionMessage(NetPeerId peer, NetReader& reader, uin
         }
         // slot cap: accepting a client costs a full world replay plus whatever the app spawns for it
         // (a player body), and nothing else bounds how many connections one attacker opens
-        if (!m_peerClients.contains(peer) && m_peerClients.size() >= MaxClients)
+        if (!oc::contains(m_peerClients, peer) && m_peerClients.size() >= MaxClients)
         {
             Log::warning("Network: refusing client, server full (" + oc::to_string(MaxClients) + ")");
             uint8 fullBuffer[64];
@@ -658,7 +658,7 @@ void NetworkManager::handleSpawnMessage(NetReader& reader)
     }
     {
         const std::lock_guard<std::mutex> lock(m_entityMutex);
-        if (m_entities.contains(baseId))
+        if (oc::contains(m_entities, baseId))
             return; // duplicate (late-joiner replay overlapping the frame's announce) — idempotent by design
     }
     // spawn the same prefab locally with the server's ids forced onto its NetworkComponents in tree
@@ -1381,7 +1381,7 @@ void NetworkManager::handleEventMessage(NetPeerId peer, oc::span<const uint8> by
     // who can open a connection fires arbitrary script events and gets them relayed to every client
     if (m_role == ENetRole::Server)
     {
-        if (!m_peerClients.contains(peer))
+        if (!oc::contains(m_peerClients, peer))
             return;
     }
     else if (peer != m_serverPeer)

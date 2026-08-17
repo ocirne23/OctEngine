@@ -2907,9 +2907,9 @@ void Renderer::recordCommandBuffers()
         SceneColor& sceneColor = frameData.sceneColor;
         GBuffer& gbuffer = frameData.gbuffer;
         // Reversed-Z: the far plane / "no geometry" depth is 0.0 (shadow maps stay standard, cleared 1.0).
-        oc::array<vk::ClearValue, 2> gbufferClears{ vk::ClearColorValue{ oc::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, vk::ClearDepthStencilValue{ 0.0f, 0 } };
+        oc::array<vk::ClearValue, 2> gbufferClears{ vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, vk::ClearDepthStencilValue{ 0.0f, 0 } };
         const vk::Rect2D gbufferArea{ .offset = vk::Offset2D{ 0, 0 }, .extent = vk::Extent2D{ gbuffer.getWidth(), gbuffer.getHeight() } };
-        oc::array<vk::ClearValue, 2> sceneClears{ vk::ClearColorValue{ oc::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } }, vk::ClearDepthStencilValue{ 0.0f, 0 } };
+        oc::array<vk::ClearValue, 2> sceneClears{ vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } }, vk::ClearDepthStencilValue{ 0.0f, 0 } };
         const vk::Rect2D sceneArea{ .offset = vk::Offset2D{ m_viewportRect.min.x, m_viewportRect.min.y }, .extent = vk::Extent2D{ sceneColor.getWidth() - m_viewportRect.min.x, sceneColor.getHeight() - m_viewportRect.min.y } };
         const vk::AccelerationStructureKHR tlas = m_accelStructure.getTlas(frameIdx);
 
@@ -3006,7 +3006,7 @@ void Renderer::recordCommandBuffers()
             const vk::Extent2D ext = m_swapChain.getLayout().extent;
             for (uint32 eye = 0; eye < 2; ++eye)
             {
-                oc::array<vk::ClearValue, 2> eyeClears{ vk::ClearColorValue{ oc::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } }, vk::ClearDepthStencilValue{ 0.0f, 0 } };
+                oc::array<vk::ClearValue, 2> eyeClears{ vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } }, vk::ClearDepthStencilValue{ 0.0f, 0 } };
                 const vk::RenderPassBeginInfo eyeCompositeBegin{
                     .renderPass = m_renderPass.getRenderPass(),
                     .framebuffer = m_eyeFramebuffer[eye],
@@ -3151,7 +3151,7 @@ void Renderer::recordCommandBuffers()
     }
 
     // Swapchain render pass: composite the resolved scene into the swapchain, then ImGui on top.
-    constexpr oc::array<vk::ClearValue, 2> clearValues{ vk::ClearColorValue{ oc::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, vk::ClearDepthStencilValue{ 0.0f, 0 } };
+    constexpr oc::array<vk::ClearValue, 2> clearValues{ vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, vk::ClearDepthStencilValue{ 0.0f, 0 } };
     const vk::RenderPassBeginInfo renderPassBeginInfo{
         .renderPass = m_renderPass.getRenderPass(),
         .framebuffer = m_framebuffers.getFramebuffer(m_swapChain.getCurrentImageIdx()),

@@ -152,7 +152,7 @@ bool CookedSceneData::load(const oc::string& cachePath, const oc::string& source
     oc::unique_ptr<FILE, void(*)(FILE*)> file(pFile, [](FILE* p) { fclose(p); });
 
     std::error_code ec;
-    const uint64 fileSize = std::filesystem::file_size(cachePath, ec);
+    const uint64 fileSize = std::filesystem::file_size(std::filesystem::path(oc::toStd(cachePath)), ec);
     if (ec || fileSize < sizeof(CookedHeader))
         return false;
     m_blob.resize(fileSize);

@@ -125,15 +125,6 @@ namespace
 }
 
 // A loaded module plus the DLL handle/path needed to unload and recompile it.
-struct ScriptHost::CachedScript
-{
-    ScriptModule entries;
-    void*        module = nullptr; // HMODULE
-    oc::string  dllPath;
-    oc::string  pdbPath;          // program PDB of the loaded build
-    int          pdbSerial = -1;   // monotonic build counter; next build uses pdbSerial+1 for a fresh PDB name
-};
-
 
 // Try to delete every superseded PDB; drop the ones now gone. The VS debugger keeps PDBs cached after a
 // module unloads, so a just-superseded PDB often can't be deleted until a later build/shutdown.

@@ -179,20 +179,20 @@ namespace Procedural
 			oc::string ocError;
 			if (!loadObjectContainerDesc(desc.ocPath, ocDesc, ocError))
 			{
-				Log::warning(std::format("Scatter: failed to load '{}' for asset '{}': {}", desc.ocPath, desc.name, ocError));
+				Log::warning(oc::format("Scatter: failed to load '{}' for asset '{}': {}", desc.ocPath, desc.name, ocError));
 				continue;
 			}
 			cookOptions.decimationFactor = ocDesc.decimationFactor;
 			oc::unique_ptr<ISceneData> scene = ISceneData::loadCached(ocDesc.path.c_str(), ocDesc.mergeNodes, ocDesc.preTransformVertices, cookOptions);
 			if (!scene)
 			{
-				Log::warning(std::format("Scatter: failed to load '{}' for asset '{}'", ocDesc.path, desc.name));
+				Log::warning(oc::format("Scatter: failed to load '{}' for asset '{}'", ocDesc.path, desc.name));
 				continue;
 			}
 			auto container = oc::make_unique<ObjectContainer>();
 			if (!container->initialize(*scene))
 			{
-				Log::warning(std::format("Scatter: failed to initialize container for asset '{}'", desc.name));
+				Log::warning(oc::format("Scatter: failed to initialize container for asset '{}'", desc.name));
 				continue;
 			}
 			oc::vector<NodeSpawnIdx> variants;
@@ -200,7 +200,7 @@ namespace Procedural
 			{
 				const NodeSpawnIdx idx = container->getSpawnIdxForPath(node);
 				if (idx == NodeSpawnIdx_INVALID)
-					Log::warning(std::format("Scatter: node '{}' not found in '{}'", node, ocDesc.path));
+					Log::warning(oc::format("Scatter: node '{}' not found in '{}'", node, ocDesc.path));
 				else
 					variants.push_back(idx);
 			}
@@ -208,7 +208,7 @@ namespace Procedural
 				variants.push_back(NodeSpawnIdx_ROOT);
 			if (variants.empty())
 			{
-				Log::warning(std::format("Scatter: asset '{}' has no spawnable variants, dropping", desc.name));
+				Log::warning(oc::format("Scatter: asset '{}' has no spawnable variants, dropping", desc.name));
 				continue;
 			}
 			m_assets[i].container = oc::move(container);
@@ -230,7 +230,7 @@ namespace Procedural
 				if (strcmp(assets[a].name, rule.asset) == 0) { assetIdx = (uint16)a; break; }
 			if (assetIdx == UINT16_MAX)
 			{
-				Log::warning(std::format("Scatter: rule {} references unknown asset '{}', dropping", i, rule.asset));
+				Log::warning(oc::format("Scatter: rule {} references unknown asset '{}', dropping", i, rule.asset));
 				continue;
 			}
 			if (!m_assets[assetIdx].container)

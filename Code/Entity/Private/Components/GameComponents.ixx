@@ -36,16 +36,22 @@ export struct GameUnitParams
     float maxSpeedMult = 3.0f;     // field shoves never launch: speed clamp = moveSpeed * this
     float waypointRadius = 3.0f;   // a route waypoint counts as reached inside this
     float voidY = -20.0f;          // fell out of the world -> despawn
+    bool navEnabled = true;        // steer by the Nav flow fields when one covers the unit
+    float spreadGain = 0.5f;       // anti-clumping: weight of the own-team density gradient
 };
 
 // A combat unit: team bubble on player-shield rules minus regen (pressure drains the battery,
 // empty = permanent collapse, exposure bleeds health), enemy-field push-back, C++ steering toward
-// a target with stuck-sidestep (no pathfinding), melee gnaw on any enemy structure in reach, and
-// an optional RANGED stance (stand off and ask for a shot — spawning is main-thread only).
-// TARGETING: automatic (random pick among the 4 nearest enemy structures via spatial query,
-// nearest enemy player fallback — puppets found in the SAME query, nothing publishes a player
-// list) unless the DSL LOCKS an explicit target (setTarget) — orders come from scripts, the
-// walking/fighting is here.
+// a target, melee gnaw on any enemy structure in reach, and an optional RANGED stance (stand off
+// and ask for a shot — spawning is main-thread only).
+// TARGETING + PATHING: the Nav flow fields first — every OTHER team's field is sampled at the
+// unit's cell and the geodesically nearest enemy (structure or player) wins; its descent
+// direction routes around walls, and the own-team density gradient spreads the crowd. Where no
+// field covers the unit (far from every source, Nav disabled) the old local search runs: random
+// pick among the 4 nearest enemy structures via spatial query, nearest enemy player fallback —
+// puppets found in the SAME query, nothing publishes a player list — with the stuck-sidestep as
+// the only obstacle handling. The DSL may LOCK an explicit target (setTarget), which steers
+// straight — orders come from scripts, the walking/fighting is here.
 export struct GameUnitComponent
 {
     static constexpr EComponentID getId() { return EComponentID_GameUnit; }

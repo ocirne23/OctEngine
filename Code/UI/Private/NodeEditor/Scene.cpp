@@ -1987,11 +1987,11 @@ bool Scene::loadFromFile(const oc::string& path)
 {
     if (!FileSystem::exists(path, /*allowMainThread*/ true))
         return false;
-    std::istringstream file(FileSystem::readFileStr(path, /*allowMainThread*/ true));
+    std::istringstream file(oc::toStd(FileSystem::readFileStr(path, /*allowMainThread*/ true)));
 
     oc::vector<oc::string> lines;
     oc::string line;
-    while (std::getline(file, line))
+    while (oc::getline(file, line))
         lines.push_back(line);
 
     m_links.clear();

@@ -19,11 +19,11 @@ namespace
 
     std::filesystem::path toPath(oc::string_view s)
     {
-        return std::filesystem::path(oc::u8string_view(reinterpret_cast<const char8_t*>(s.data()), s.size()));
+        return std::filesystem::path(std::u8string_view(reinterpret_cast<const char8_t*>(s.data()), s.size()));
     }
     oc::string fromPath(const std::filesystem::path& p)
     {
-        const oc::u8string s = p.u8string();
+        const std::u8string s = p.u8string();
         oc::string out(reinterpret_cast<const char*>(s.data()), s.size());
         for (char& c : out) // one separator everywhere: paths get compared and logged as strings
             if (c == '\\')

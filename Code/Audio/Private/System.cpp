@@ -189,7 +189,7 @@ AudioBuffer AudioSystem::loadSound(oc::string_view path)
         return {};
     }
     return createBuffer(channels == 2 ? EAudioFormat::StereoFloat32 : EAudioFormat::MonoFloat32,
-        std::as_bytes(oc::span(frames)), sampleRate);
+        oc::as_bytes(oc::span<const float>(frames)), sampleRate);
 }
 
 AudioSource AudioSystem::createSource()

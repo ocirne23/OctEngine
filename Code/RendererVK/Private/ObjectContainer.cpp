@@ -413,7 +413,7 @@ void ObjectContainer::initializeMeshes(const ISceneData& sceneData, TempInitData
     {
         if (lods.levels[0] == UINT16_MAX)
         {
-            Log::warning(std::format("Scene: LOD chain '{}' in '{}' has no level 0 ('Lod0_{}' or plain '{}'); ignoring", logicalName, m_filePath, logicalName, logicalName));
+            Log::warning(oc::format("Scene: LOD chain '{}' in '{}' has no level 0 ('Lod0_{}' or plain '{}'); ignoring", logicalName, m_filePath, logicalName, logicalName));
             continue;
         }
         MeshLodGroup group;
@@ -621,7 +621,7 @@ void ObjectContainer::initializeNodes(const ISceneData& sceneData, TempInitData&
         const float nonUniformScaleAmount = glm::max(glm::distance(scale.x, scale.y), glm::distance(scale.x, scale.z));
         if (nonUniformScaleAmount > 0.001f)
         {
-			oc::string msg = std::format("Scene: node '{}' in '{}' has non-uniform scale ({}, {}, {}), which is not supported and may cause visual artifacts", pStackNode->getName(), m_filePath, scale.x, scale.y, scale.z);
+			oc::string msg = oc::format("Scene: node '{}' in '{}' has non-uniform scale ({}, {}, {}), which is not supported and may cause visual artifacts", pStackNode->getName(), m_filePath, scale.x, scale.y, scale.z);
             Log::warning(msg);
         }
         //assert(nonUniformScaleAmount < 0.0001f && "Non-uniform scaling is not supported");

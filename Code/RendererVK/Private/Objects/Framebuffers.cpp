@@ -44,7 +44,7 @@ bool Framebuffers::initialize(const RenderPass& renderPass, const SwapChain& swa
         assert(false && "Failed to get swapchain images");
         return false;
     }
-    oc::vector<vk::Image> images = swapchainImagesResult.value;
+    oc::vector<vk::Image> images = oc::fromStd(swapchainImagesResult.value);
     m_imageViews.reserve(images.size());
     for (const vk::Image& image : images)
     {

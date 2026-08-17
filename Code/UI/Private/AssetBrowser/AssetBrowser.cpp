@@ -151,7 +151,7 @@ bool AssetBrowser::isWithinRoot(const oc::string& path) const
 		return false;
 	const oc::string rel = FileSystem::relativePath(canonical, m_rootPath, /*allowMainThread*/ true);
 	// anything starting with ".." escapes the root upward
-	return !rel.empty() && !rel.starts_with("..");
+	return !rel.empty() && !oc::startsWith(rel, "..");
 }
 
 void AssetBrowser::scanDirectory(const oc::string& dir, DirListing& out)

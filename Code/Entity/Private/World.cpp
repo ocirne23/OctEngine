@@ -328,7 +328,7 @@ const AnimationSet* World::getOrBuildClipSet(const Skeleton* skel, const Animato
         for (const AnimatorDesc::BlendSample& s : bs.samples)
             ensureClip(s.clip);
     for (const AnimatorDesc::State& st : desc.stateMachine.states)
-        if (!blendNames.contains(st.play))
+        if (!oc::contains(blendNames, st.play))
             ensureClip(st.play);
 
     Log::info("Animator '" + desc.name + "': built clip set (" + oc::to_string(clips.numClips()) + " clips)");
@@ -812,7 +812,7 @@ oc::shared_ptr<const EntitySpawnTemplate> World::getOrBuildPrefabTemplate(const 
     if (auto it = m_templates.find(name); it != m_templates.end())
         return it->second; // cache hit: no asset file touched
 
-    if (m_buildingTemplates.contains(name))
+    if (oc::contains(m_buildingTemplates, name))
     {
         Log::warning("Scene: prefab cycle detected at '" + name + "', skipping");
         return nullptr;

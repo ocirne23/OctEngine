@@ -83,7 +83,7 @@ export namespace oc
             else
             {
                 const size_type grown = wanted > m_capacity * 2 ? wanted : m_capacity * 2;
-                T* fresh = allocator<T>().allocate(grown);
+                T* fresh = allocateArray<T>(grown); // backing-agnostic: std and EASTL allocators differ
                 for (size_type i = 0; i < m_size; ++i)
                 {
                     ::new (static_cast<void*>(fresh + i)) T(move(m_data[i]));
@@ -144,7 +144,7 @@ export namespace oc
         void releaseHeap()
         {
             if (m_heap == nullptr) return;
-            allocator<T>().deallocate(m_heap, m_capacity);
+            deallocateArray<T>(m_heap, m_capacity);
             m_heap = nullptr;
         }
         // A heap block is stolen outright; inline elements have to be moved one by one.

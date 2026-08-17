@@ -155,11 +155,11 @@ namespace Procedural::Diffusion
 		auto fmt = [](oc::string_view name, const OnnxModel::RunStats& s)
 		{
 			if (s.calls == 0)
-				return std::format("{} idle", name);
-			return std::format("{} {} calls / {} items, {:.0f} ms ({:.2f} ms/call)",
+				return oc::format("{} idle", name);
+			return oc::format("{} {} calls / {} items, {:.0f} ms ({:.2f} ms/call)",
 			                   name, s.calls, s.batchItems, s.totalMs, s.totalMs / (double)s.calls);
 		};
-		return std::format("{} | {} | {}", fmt("coarse", m_coarseModel.stats()),
+		return oc::format("{} | {} | {}", fmt("coarse", m_coarseModel.stats()),
 		                   fmt("base", m_baseModel.stats()), fmt("decoder", m_decoderModel.stats()));
 	}
 
@@ -183,7 +183,7 @@ namespace Procedural::Diffusion
 		if (!coarseOnly && (DECODER_TILE_SIZE % cfg.latentCompression != 0 ||
 		                    DECODER_TILE_STRIDE % cfg.latentCompression != 0))
 		{
-			Log::error(std::format("[Diffusion] latent_compression={} does not divide the decoder tile "
+			Log::error(oc::format("[Diffusion] latent_compression={} does not divide the decoder tile "
 			                       "size/stride ({}/{})", cfg.latentCompression, DECODER_TILE_SIZE,
 			                       DECODER_TILE_STRIDE));
 			return false;
@@ -223,7 +223,7 @@ namespace Procedural::Diffusion
 		const auto t0 = Clock::now();
 		m_syntheticMap = oc::make_unique<SyntheticMapFactory>(m_seed, m_config, m_data);
 		const auto t1 = Clock::now();
-		Log::verbose(std::format("[Diffusion] synthetic map built in {} ms",
+		Log::verbose(oc::format("[Diffusion] synthetic map built in {} ms",
 		                         std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count()));
 
 		m_tileStore = oc::make_unique<MemoryTileStore>();

@@ -158,7 +158,7 @@ static void gatherScriptFiles(oc::vector<oc::string>& out)
 		if (entry.isDirectory || entry.extension != ".dsl")
 			continue;
 		const oc::string relative = FileSystem::relativePath(entry.path, root, /*allowMainThread*/ true);
-		if (relative.starts_with("Local/")) // generated output, not authorable scripts
+		if (oc::startsWith(relative, "Local/")) // generated output, not authorable scripts
 			continue;
 		out.push_back(relative.empty() ? entry.path : relative);
 	}
