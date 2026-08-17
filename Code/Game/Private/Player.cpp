@@ -11,7 +11,10 @@ import UI;
 import Entity;
 import Physics;
 import Force;
+import Nav;
 import :Player;
+
+static constexpr uint32 c_navGoalSlot = 0; // the local player's move-order goal field
 
 void GamePlayer::registerTweaks()
 {
@@ -136,14 +139,41 @@ void GamePlayer::tickMovement(const glm::vec3& cameraForwardPlanar, float deltaS
     {
         // RMB move order: steer planar toward the target and STOP inside the arrive radius (the
         // capsule coasts the last bit — braking is the same accel clamp below, with move = 0).
+        // The route comes from a Nav GOAL field (one-source flow field around the order, so the
+        // capsule walks AROUND buildings); straight line until the field is built / where it
+        // does not reach.
         const glm::vec3 bodyPos = pc->body.getPosition();
         const glm::vec2 toTarget(m_moveTarget.x - bodyPos.x, m_moveTarget.z - bodyPos.z);
         const float dist = glm::length(toTarget);
         if (dist <= m_arriveRadius)
+        {
             m_hasMoveTarget = false;
+            Globals::navSystem.clearGoal(c_navGoalSlot);
+        }
         else
+        {
             move = glm::vec3(toTarget.x / dist, 0.0f, toTarget.y / dist);
+            Globals::navSystem.setGoal(c_navGoalSlot, m_moveTarget, dist * 1.5f + 40.0f);
+            if (const Nav::TeamField* goal = Globals::navSystem.goalField(c_navGoalSlot))
+            {
+                // Straight whenever the destination is visible across the raster; the field's
+                // descent only where something stands in between.
+                const glm::vec2 here(bodyPos.x, bodyPos.z);
+                glm::vec2 steer;
+                const float bodyRadius = 0.6f; // capsule + margin: corners are tested for the body, not a point
+                if (!goal->lineOfSight(here, glm::vec2(m_moveTarget.x, m_moveTarget.z), bodyRadius)
+                    && goal->steerPoint(here, 96, bodyRadius, steer))
+                {
+                    const glm::vec2 to = steer - here;
+                    const float len = glm::length(to);
+                    if (len > 0.05f)
+                        move = glm::vec3(to.x / len, 0.0f, to.y / len);
+                }
+            }
+        }
     }
+    else
+        Globals::navSystem.clearGoal(c_navGoalSlot);
     const float speed = m_moveSpeed * (input.isKeyDown(SDL_Scancode::SDL_SCANCODE_LSHIFT) ? m_sprintMult : 1.0f);
 
     glm::vec3 vel = pc->body.getLinearVelocity();

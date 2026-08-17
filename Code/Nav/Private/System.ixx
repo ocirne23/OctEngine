@@ -41,6 +41,18 @@ export namespace Nav
         const DensityField& density(uint32 team) const { return m_density[glm::min(team, MaxTeams - 1)]; }
         bool anyFieldPublished() const { return m_publishedCount > 0; }
 
+        // GOAL fields: a single-destination field for one walker (the local player's move order),
+        // the same TeamField with ONE source. Rebuilt when the destination moves > half a cell or
+        // the obstacle raster changes; radius sized per order. Main thread; goalField() is
+        // main-thread too (the player steers on main).
+        static constexpr uint32 MaxGoals = 4;
+        void setGoal(uint32 slot, const glm::vec3& dest, float radius);
+        void clearGoal(uint32 slot);
+        const TeamField* goalField(uint32 slot) const
+        {
+            return slot < MaxGoals ? m_goals[slot].published.get() : nullptr;
+        }
+
         // Debug lines (renderer-agnostic sink): mode 1 chunk outlines, 2 + descent arrows of
         // "Debug team" near `focus`, 3 + density bars.
         void drawDebug(const glm::vec3& focus,
@@ -59,15 +71,19 @@ export namespace Nav
             oc::shared_ptr<const TeamField> published;
             JobCounter counter;
             float timer = 0.0f;
+            float radius = 0.0f;   // 0 = the "Field radius" tweak (team fields); goals set their own
+            bool periodic = true;  // team fields re-run on the interval; goals only on change
             bool sourcesDirty = false;
             bool building = false;
         };
 
         bool sourcesChanged(const oc::vector<NavSource>& a, oc::span<const NavSource> b) const;
-        void kickBuild(uint32 team);
+        void kickBuild(TeamSlot& slot);
+        void tickSlot(TeamSlot& slot, float deltaSec);
         void waitAll();
 
         TeamSlot m_teams[MaxTeams];
+        TeamSlot m_goals[MaxGoals];
         DensityField m_density[MaxTeams];
         oc::vector<NavObstacle> m_obstacles;
         oc::vector<NavObstacle> m_buildObstacles; // snapshot shared by every in-flight job
@@ -80,7 +96,7 @@ export namespace Nav
         bool m_enabled = true;
         float m_fieldRadius = 120.0f;
         float m_rebuildInterval = 0.25f;
-        int m_clearanceCost = 3;
+        int m_clearanceCost = 1; // 2x on wall-adjacent cells: nudge off walls, no wide detours
         int m_keepFrames = 120;
         int m_debugMode = 0;
         int m_debugTeam = 1;

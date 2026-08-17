@@ -198,10 +198,183 @@ TeamField::Sample TeamField::sample(const glm::vec2& xz, uint32 seed) const
         out.descentDir = len > 1e-3f ? to / len : glm::vec2(0.0f);
         return out;
     }
-    const glm::vec2 to = cellCenter(bestCell) - xz;
-    const float len = glm::length(to);
-    out.descentDir = len > 1e-3f ? to / len : glm::vec2(0.0f);
+    // Direction = drop-weighted blend of every neighbour lower than the reference (the centre,
+    // or the best neighbour when the centre is unreached): two equally lower neighbours pull
+    // diagonally between them instead of snapping to one cell centre — a straight corridor reads
+    // as a straight line, not a 45° stair. Blocked neighbours never enter (unreached).
+    const uint32 refDist = centreDist != Unreached ? centreDist : bestDist + 1;
+    glm::vec2 blend(0.0f);
+    cachedCoord = chunkCoord;
+    cached = m_chunks.find(chunkKey(chunkCoord));
+    for (int dz = -1; dz <= 1; ++dz)
+        for (int dx = -1; dx <= 1; ++dx)
+        {
+            if (!(dx | dz))
+                continue;
+            const glm::ivec2 n = c + glm::ivec2(dx, dz);
+            const glm::ivec2 nc = chunkOf(n);
+            if (nc != cachedCoord)
+            {
+                cachedCoord = nc;
+                cached = m_chunks.find(chunkKey(nc));
+            }
+            if (!cached)
+                continue;
+            const uint32 d = cached->dist[cellIndex(n)];
+            if (d == Unreached || d >= refDist)
+                continue;
+            const glm::vec2 to = cellCenter(n) - xz;
+            const float len = glm::length(to);
+            if (len > 1e-3f)
+                blend += to / len * float(refDist - d);
+        }
+    const float bl = glm::length(blend);
+    if (bl > 1e-3f)
+        out.descentDir = blend / bl;
+    else
+    {
+        const glm::vec2 to = cellCenter(bestCell) - xz;
+        const float len = glm::length(to);
+        out.descentDir = len > 1e-3f ? to / len : glm::vec2(0.0f);
+    }
     return out;
+}
+
+bool TeamField::steerPoint(const glm::vec2& xz, int maxSteps, float radius, glm::vec2& outPoint) const
+{
+    // Greedy descent walk over cells (lowest 8-neighbour, no corner cutting), then the farthest
+    // visible point wins — the pulled string hugs corners instead of the cell-centre stair.
+    static constexpr glm::ivec2 c_offsets[8] = {
+        { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 } };
+    glm::ivec2 cell = cellOf(xz);
+    const Chunk* chunk = findChunk(cell);
+    if (!chunk)
+        return false;
+    uint32 dist = chunk->dist[cellIndex(cell)];
+    if (dist == Unreached)
+    {
+        // Standing inside a blocked/unreached cell: hop to the best reached neighbour first.
+        uint32 best = Unreached;
+        glm::ivec2 bestCell = cell;
+        for (const glm::ivec2& o : c_offsets)
+        {
+            const glm::ivec2 n = cell + o;
+            const Chunk* nc = findChunk(n);
+            if (!nc)
+                continue;
+            const uint32 d = nc->dist[cellIndex(n)];
+            if (d < best)
+            {
+                best = d;
+                bestCell = n;
+            }
+        }
+        if (best == Unreached)
+            return false;
+        outPoint = cellCenter(bestCell);
+        return true;
+    }
+    oc::fixed_vector<glm::vec2, 256> path;
+    uint16 src = chunk->src[cellIndex(cell)];
+    bool reachedSource = false;
+    for (int step = 0; step < maxSteps && step < 255; ++step)
+    {
+        if (dist == 0)
+        {
+            reachedSource = true;
+            break;
+        }
+        uint32 bestD = dist;
+        glm::ivec2 bestCell = cell;
+        for (int k = 0; k < 8; ++k)
+        {
+            const glm::ivec2 n = cell + c_offsets[k];
+            const Chunk* nc = findChunk(n);
+            if (!nc)
+                continue;
+            const uint32 d = nc->dist[cellIndex(n)];
+            if (d >= bestD)
+                continue;
+            if (k >= 4 && (costAt(cell + glm::ivec2(c_offsets[k].x, 0)) == Blocked
+                || costAt(cell + glm::ivec2(0, c_offsets[k].y)) == Blocked))
+                continue;
+            bestD = d;
+            bestCell = n;
+        }
+        if (bestCell == cell)
+            break; // plateau
+        cell = bestCell;
+        dist = bestD;
+        src = findChunk(cell)->src[cellIndex(cell)];
+        path.push_back(cellCenter(cell));
+    }
+    if (reachedSource && src < m_sources.size())
+    {
+        const NavSource& s = m_sources[src];
+        const glm::vec2 sp(s.pos.x, s.pos.z);
+        if (lineOfSight(xz, sp, radius))
+        {
+            outPoint = sp;
+            return true;
+        }
+    }
+    for (int i = int(path.size()) - 1; i >= 0; --i)
+        if (lineOfSight(xz, path[i], radius))
+        {
+            outPoint = path[i];
+            return true;
+        }
+    if (path.empty())
+        return false;
+    outPoint = path[0];
+    return true;
+}
+
+bool TeamField::lineOfSight(const glm::vec2& a, const glm::vec2& b, float radius) const
+{
+    if (radius > 0.0f)
+    {
+        const glm::vec2 d = b - a;
+        const float len = glm::length(d);
+        if (len > 1e-3f)
+        {
+            const glm::vec2 side = glm::vec2(-d.y, d.x) / len * radius;
+            if (!lineOfSight(a + side, b + side) || !lineOfSight(a - side, b - side))
+                return false;
+        }
+    }
+    // Grid DDA from a to b, testing every crossed cell for Blocked (absent chunk = open).
+    glm::ivec2 cell = cellOf(a);
+    const glm::ivec2 end = cellOf(b);
+    const glm::vec2 d = b - a;
+    const glm::ivec2 step(d.x > 0.0f ? 1 : -1, d.y > 0.0f ? 1 : -1);
+    const glm::vec2 invAbs(glm::abs(d.x) > 1e-6f ? 1.0f / glm::abs(d.x) : FLT_MAX,
+                           glm::abs(d.y) > 1e-6f ? 1.0f / glm::abs(d.y) : FLT_MAX);
+    const glm::vec2 cellMin = glm::vec2(cell) * CellSize;
+    glm::vec2 tMax(
+        (d.x > 0.0f ? cellMin.x + CellSize - a.x : a.x - cellMin.x) * invAbs.x,
+        (d.y > 0.0f ? cellMin.y + CellSize - a.y : a.y - cellMin.y) * invAbs.y);
+    const glm::vec2 tDelta = CellSize * invAbs;
+    for (int guard = 0; guard < 4096; ++guard)
+    {
+        if (costAt(cell) == Blocked)
+            return false;
+        if (cell == end)
+            return true;
+        if (tMax.x < tMax.y)
+        {
+            if (tMax.x > 1.0f) return true;
+            cell.x += step.x;
+            tMax.x += tDelta.x;
+        }
+        else
+        {
+            if (tMax.y > 1.0f) return true;
+            cell.y += step.y;
+            tMax.y += tDelta.y;
+        }
+    }
+    return false;
 }
 
 }

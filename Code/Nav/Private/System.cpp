@@ -17,13 +17,19 @@ void NavSystem::waitAll()
 {
     if (!Globals::jobSystem.isInitialized())
         return;
-    for (TeamSlot& slot : m_teams)
+    const auto waitSlot = [](TeamSlot& slot)
+    {
         if (slot.building)
         {
             Globals::jobSystem.wait(slot.counter);
             slot.building = false;
             slot.pending.reset();
         }
+    };
+    for (TeamSlot& slot : m_teams)
+        waitSlot(slot);
+    for (TeamSlot& slot : m_goals)
+        waitSlot(slot);
 }
 
 void NavSystem::initialize()
@@ -39,7 +45,7 @@ void NavSystem::initialize()
     Tweak::intVar("Nav", "Clearance cost", &m_clearanceCost, 0, 32);
     Tweak::intVar("Nav", "Chunk keep frames", &m_keepFrames, 1, 2000);
     Tweak::intVar("Nav", "Debug draw", &m_debugMode, 0, 3);
-    Tweak::intVar("Nav", "Debug team", &m_debugTeam, 0, int(MaxTeams) - 1);
+    Tweak::intVar("Nav", "Debug team", &m_debugTeam, 0, int(MaxTeams + MaxGoals) - 1); // 8+ = goal fields
     Tweak::floatVar("Nav", "Debug radius", &m_debugRadius, 5.0f, 400.0f, 1.0f);
 }
 
@@ -92,21 +98,64 @@ void NavSystem::setTeamSources(uint32 team, oc::span<const NavSource> sources)
     slot.sourcesDirty = true;
 }
 
-void NavSystem::kickBuild(uint32 team)
+void NavSystem::setGoal(uint32 slotIndex, const glm::vec3& dest, float radius)
 {
-    TeamSlot& slot = m_teams[team];
+    if (slotIndex >= MaxGoals)
+        return;
+    TeamSlot& slot = m_goals[slotIndex];
+    slot.periodic = false;
+    const NavSource src{ dest, 0.5f, 0, 2 };
+    const bool moved = sourcesChanged(slot.sources, oc::span<const NavSource>(&src, 1));
+    if (moved)
+    {
+        slot.sources.assign(1, src);
+        slot.sourcesDirty = true;
+    }
+    slot.radius = glm::max(radius, 10.0f);
+}
+
+void NavSystem::clearGoal(uint32 slotIndex)
+{
+    if (slotIndex >= MaxGoals)
+        return;
+    TeamSlot& slot = m_goals[slotIndex];
+    slot.sources.clear();
+    slot.sourcesDirty = false;
+    if (!slot.building)
+        slot.published.reset();
+}
+
+void NavSystem::kickBuild(TeamSlot& slot)
+{
     slot.buildSources = slot.sources;
     slot.pending = oc::make_shared<TeamField>();
     slot.building = true;
     slot.sourcesDirty = false;
     slot.timer = m_rebuildInterval;
-    const TeamField::BuildParams params{ m_fieldRadius, uint8(glm::clamp(m_clearanceCost, 0, 254)) };
+    const TeamField::BuildParams params{ slot.radius > 0.0f ? slot.radius : m_fieldRadius,
+        uint8(glm::clamp(m_clearanceCost, 0, 254)) };
     NavSystem* self = this;
     TeamSlot* slotPtr = &slot;
     Globals::jobSystem.submit([self, slotPtr, params]
     {
         slotPtr->pending->build(self->m_buildObstacles, slotPtr->buildSources, params);
     }, EJobPriority::Low, &slot.counter, "navFieldBuild");
+}
+
+void NavSystem::tickSlot(TeamSlot& slot, float deltaSec)
+{
+    slot.timer -= deltaSec;
+    if (slot.building)
+        return;
+    if (!m_enabled || slot.sources.empty())
+    {
+        slot.published.reset(); // no sources = no field (units fall back to local search)
+        slot.sourcesDirty = false;
+        return;
+    }
+    const bool due = slot.sourcesDirty || (slot.periodic && slot.timer <= 0.0f) || !slot.published;
+    if (due && !m_obstaclesDirty)
+        kickBuild(slot);
 }
 
 void NavSystem::update(float deltaSec)
@@ -116,18 +165,26 @@ void NavSystem::update(float deltaSec)
         return;
 
     // 1. Publish finished builds.
-    for (TeamSlot& slot : m_teams)
+    const auto publish = [](TeamSlot& slot)
+    {
         if (slot.building && slot.counter.isDone())
         {
             slot.building = false;
             slot.published = oc::move(slot.pending);
             slot.pending.reset();
         }
+    };
+    for (TeamSlot& slot : m_teams)
+        publish(slot);
+    for (TeamSlot& slot : m_goals)
+        publish(slot);
 
     // 2. Kick rebuilds. The obstacle snapshot is shared by every job, so it may only be replaced
     //    while NO build is in flight; a dirty obstacle set waits for the fleet to drain.
     bool anyBuilding = false;
     for (TeamSlot& slot : m_teams)
+        anyBuilding |= slot.building;
+    for (TeamSlot& slot : m_goals)
         anyBuilding |= slot.building;
     if (m_obstaclesDirty && !anyBuilding)
     {
@@ -135,28 +192,13 @@ void NavSystem::update(float deltaSec)
         m_obstaclesDirty = false;
         for (TeamSlot& slot : m_teams)
             slot.sourcesDirty = true; // every field depends on the raster
+        for (TeamSlot& slot : m_goals)
+            slot.sourcesDirty = true;
     }
-    if (m_enabled)
-        for (uint32 t = 0; t < MaxTeams; ++t)
-        {
-            TeamSlot& slot = m_teams[t];
-            slot.timer -= deltaSec;
-            if (slot.building)
-                continue;
-            if (slot.sources.empty())
-            {
-                slot.published.reset(); // no sources = no field (units fall back to local search)
-                slot.sourcesDirty = false;
-                continue;
-            }
-            const bool due = slot.sourcesDirty || slot.timer <= 0.0f || !slot.published;
-            if (due && !m_obstaclesDirty)
-                kickBuild(t);
-        }
-    else
-        for (TeamSlot& slot : m_teams)
-            if (!slot.building)
-                slot.published.reset();
+    for (TeamSlot& slot : m_teams)
+        tickSlot(slot, deltaSec);
+    for (TeamSlot& slot : m_goals)
+        tickSlot(slot, deltaSec);
 
     m_publishedCount = 0;
     for (const TeamSlot& slot : m_teams)
@@ -170,13 +212,17 @@ void NavSystem::update(float deltaSec)
 void NavSystem::clear()
 {
     waitAll();
-    for (TeamSlot& slot : m_teams)
+    const auto clearSlot = [](TeamSlot& slot)
     {
         slot.sources.clear();
         slot.buildSources.clear();
         slot.published.reset();
         slot.sourcesDirty = false;
-    }
+    };
+    for (TeamSlot& slot : m_teams)
+        clearSlot(slot);
+    for (TeamSlot& slot : m_goals)
+        clearSlot(slot);
     for (DensityField& d : m_density)
         d.clear();
     m_obstacles.clear();
@@ -196,8 +242,11 @@ void NavSystem::drawDebug(const glm::vec3& focus,
 {
     if (m_debugMode <= 0)
         return;
-    const uint32 team = uint32(glm::clamp(m_debugTeam, 0, int(MaxTeams) - 1));
-    const TeamField* field = m_teams[team].published.get();
+    // Debug team 0..7 = team fields, 8.. = goal slots (8 = the local player's move order).
+    const uint32 sel = uint32(glm::clamp(m_debugTeam, 0, int(MaxTeams + MaxGoals) - 1));
+    const uint32 team = glm::min(sel, MaxTeams - 1);
+    const TeamField* field = sel < MaxTeams ? m_teams[sel].published.get()
+                                            : m_goals[sel - MaxTeams].published.get();
     const float y = 0.15f;
     const glm::vec2 f(focus.x, focus.z);
     const float r2 = m_debugRadius * m_debugRadius;

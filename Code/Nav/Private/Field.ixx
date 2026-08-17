@@ -72,6 +72,14 @@ export namespace Nav
         // (equidistant between two sources) does not stall a whole crowd on one line.
         Sample sample(const glm::vec2& xz, uint32 seed) const;
         bool hasData(const glm::vec2& xz) const;
+        // Raster line of sight: no BLOCKED cell between a and b (clearance cells pass). Lets a
+        // walker go straight when the goal is visible instead of following cell-centre steps.
+        // `radius` > 0 also tests the two parallel lines offset by it (a body, not a point).
+        bool lineOfSight(const glm::vec2& a, const glm::vec2& b, float radius = 0.0f) const;
+        // String pulling for a single walker (main thread — O(steps * LOS)): greedily walk the
+        // descent from xz up to maxSteps cells, return the farthest path point visible from xz
+        // (the source position itself when the walk reaches it). false = no field data here.
+        bool steerPoint(const glm::vec2& xz, int maxSteps, float radius, glm::vec2& outPoint) const;
         oc::span<const NavSource> sources() const { return m_sources; }
         const NavSource& sourceAt(uint32 index) const { return m_sources[index]; }
         const ChunkMap<Chunk>& chunks() const { return m_chunks; }

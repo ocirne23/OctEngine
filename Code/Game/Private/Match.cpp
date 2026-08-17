@@ -746,6 +746,7 @@ void GameMatch::update(float deltaSec)
         m_player.tickShieldAndHealth(deltaSec);
         tickBaseHealing(deltaSec);
         m_structures.tickMirror(deltaSec);
+        feedNav(deltaSec); // obstacles only: the local player's move-order goal field
         return;
     }
 
@@ -856,8 +857,9 @@ void GameMatch::feedNav(float deltaSec)
         const glm::vec2 c(s.entity->pos.x, s.entity->pos.z);
         m_navObstacles.push_back(Nav::NavObstacle{ c - half, c + half });
         // Sources: what units of OTHER teams walk toward — the same filter the local search used
-        // (alive, not the invulnerable Base).
-        if (s.state->invulnerable || !s.state->alive() || s.state->team >= Nav::MaxTeams)
+        // (alive, not the invulnerable Base). Clients run no unit sim: obstacles only, for the
+        // local player's goal field.
+        if (m_isClient || s.state->invulnerable || !s.state->alive() || s.state->team >= Nav::MaxTeams)
             continue;
         m_navSources[s.state->team].push_back(Nav::NavSource{
             s.entity->pos, glm::max(s.state->meleeRadius, half), s.state->structureId, 0 });
@@ -872,9 +874,12 @@ void GameMatch::feedNav(float deltaSec)
             return;
         m_navSources[team].push_back(Nav::NavSource{ pc->body.getPosition(), 0.5f, 0, 1 });
     };
-    addPlayer(m_player.entity(), (uint8)m_team);
-    for (const auto& [id, p] : m_clientPlayers)
-        addPlayer(p.get(), requestTeam(id));
+    if (!m_isClient)
+    {
+        addPlayer(m_player.entity(), (uint8)m_team);
+        for (const auto& [id, p] : m_clientPlayers)
+            addPlayer(p.get(), requestTeam(id));
+    }
 
     Globals::navSystem.setObstacles(m_navObstacles);
     for (uint32 t = 0; t < Nav::MaxTeams; ++t)
