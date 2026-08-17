@@ -17,7 +17,7 @@ namespace Procedural::Diffusion
 		// an unfetched git-lfs pointer, and a truncated copy.
 		struct RequiredAsset
 		{
-			std::string_view name;
+			oc::string_view name;
 			uint64 sizeBytes;
 			bool coarseSetOnly;
 		};
@@ -38,7 +38,7 @@ namespace Procedural::Diffusion
 			{ "base_model.onnx",           2029994361ull, false },
 		};
 
-		constexpr std::string_view LFS_POINTER_MAGIC = "version https://git-lfs.github.com/spec/v1";
+		constexpr oc::string_view LFS_POINTER_MAGIC = "version https://git-lfs.github.com/spec/v1";
 
 		bool assetInSet(const RequiredAsset& a, EAssetSet set)
 		{
@@ -46,11 +46,11 @@ namespace Procedural::Diffusion
 		}
 
 		// A git-lfs pointer is a small text file. Detect it explicitly so the error can say what to do.
-		bool looksLikeLfsPointer(const std::string& p)
+		bool looksLikeLfsPointer(const oc::string& p)
 		{
 			// Model asset checks run at generator init (a worker job) — no main-thread exemption.
-			const std::string head = FileSystem::readFileStr(p);
-			return std::string_view(head).starts_with(LFS_POINTER_MAGIC);
+			const oc::string head = FileSystem::readFileStr(p);
+			return oc::string_view(head).starts_with(LFS_POINTER_MAGIC);
 		}
 
 		// A converted model counts as usable only if it is real weights. No size check, unlike REQUIRED,
@@ -59,12 +59,12 @@ namespace Procedural::Diffusion
 		// they sit beside the originals under the repo's "*.onnx filter=lfs" rule, so a clone without
 		// `git lfs pull` leaves a text pointer exactly where the weights should be; feeding that to ORT is
 		// the inscrutable-protobuf-error failure the fp32 check already exists to prevent.
-		bool fp16Usable(const std::string& p)
+		bool fp16Usable(const oc::string& p)
 		{
 			return FileSystem::exists(p) && !looksLikeLfsPointer(p);
 		}
 
-		bool readAll(const std::string& p, std::string& out)
+		bool readAll(const oc::string& p, oc::string& out)
 		{
 			if (!FileSystem::exists(p))
 				return false;
@@ -73,30 +73,30 @@ namespace Procedural::Diffusion
 		}
 	}
 
-	std::string ModelAssets::modelDir()
+	oc::string ModelAssets::modelDir()
 	{
 		// CWD is Assets/ (FileSystem::initialize).
 		return "TerrainDiffusion";
 	}
 
-	std::string ModelAssets::assetPath(std::string_view fileName)
+	oc::string ModelAssets::assetPath(oc::string_view fileName)
 	{
 		return FileSystem::join(modelDir(), fileName);
 	}
 
-	std::string ModelAssets::fp16Path(std::string_view stem)
+	oc::string ModelAssets::fp16Path(oc::string_view stem)
 	{
 		// Beside the fp32 originals, NOT in Local/: these are shipped assets like the models they came from,
 		// converted once and committed, not a cache the engine may regenerate. Nothing here ever writes
 		// them — Tools/convert_models_fp16.py does, by hand, when the model set changes.
-		return assetPath(std::string(stem) + "_fp16.onnx");
+		return assetPath(oc::string(stem) + "_fp16.onnx");
 	}
 
-	std::string ModelAssets::modelPath(std::string_view stem, EPrecision precision)
+	oc::string ModelAssets::modelPath(oc::string_view stem, EPrecision precision)
 	{
 		if (precision == EPrecision::Fp16 && fp16Usable(fp16Path(stem)))
 			return fp16Path(stem);
-		return assetPath(std::string(stem) + ".onnx");
+		return assetPath(oc::string(stem) + ".onnx");
 	}
 
 	bool ModelAssets::hasFp16Models(EAssetSet set)
@@ -116,9 +116,9 @@ namespace Procedural::Diffusion
 		m_loaded = false;
 		m_error.clear();
 
-		auto fail = [&](std::string s)
+		auto fail = [&](oc::string s)
 		{
-			m_error = std::move(s);
+			m_error = oc::move(s);
 			Log::error(std::format("[Diffusion] {}", m_error));
 			return false;
 		};
@@ -129,7 +129,7 @@ namespace Procedural::Diffusion
 			if (!assetInSet(a, set))
 				continue;
 
-			const std::string p = assetPath(a.name);
+			const oc::string p = assetPath(a.name);
 			if (!FileSystem::exists(p))
 				return fail(std::format("missing model asset Assets/{} - the diffusion models ship with the "
 				                        "repo; if this is a fresh clone run 'git lfs pull'", p));
@@ -149,15 +149,15 @@ namespace Procedural::Diffusion
 		}
 
 		// --- world_pipeline_config.json --------------------------------------------------------------
-		std::string text;
+		oc::string text;
 		JsonValue root;
-		std::string jerr;
+		oc::string jerr;
 		if (!readAll(assetPath("world_pipeline_config.json"), text) || !JsonValue::parse(text, root, jerr))
 			return fail(std::format("could not read/parse world_pipeline_config.json: {}", jerr));
 
 		{
 			ModelConfig c;
-			auto num = [&](std::string_view k, float& dst) -> bool
+			auto num = [&](oc::string_view k, float& dst) -> bool
 			{
 				const JsonValue* v = root.find(k);
 				if (!v || v->type != JsonValue::EType::Number)
@@ -203,7 +203,7 @@ namespace Procedural::Diffusion
 			else if (!hr->asFloatArray(c.histogramRaw, 5))
 				return fail("world_pipeline_config: histogram_raw must be 5 numbers or null");
 
-			m_config = std::move(c);
+			m_config = oc::move(c);
 		}
 
 		// --- pipeline_data.json ----------------------------------------------------------------------
@@ -231,7 +231,7 @@ namespace Procedural::Diffusion
 			d.tempStdP99 = p99->asFloat();
 			// noise_quantile_tables is also present in the file but deliberately unused: the noise side is
 			// seed-dependent, so SyntheticMapFactory rebuilds it per world (as the reference does).
-			m_data = std::move(d);
+			m_data = oc::move(d);
 		}
 
 		Log::verbose(std::format("[Diffusion] model assets found ({} m/px, latent compression {})",

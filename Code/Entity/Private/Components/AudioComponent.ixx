@@ -18,7 +18,7 @@ export enum class EAudioSelect : uint8
 };
 
 export const char* audioSelectToken(EAudioSelect select);
-export EAudioSelect audioSelectFromToken(std::string_view token);
+export EAudioSelect audioSelectFromToken(oc::string_view token);
 
 // A set of named, triggerable sounds ("Component Audio" in .pre files): each Sound entry pairs an
 // alias with one or more sound-file clips (each with its own playback settings) and a Select mode that
@@ -32,8 +32,8 @@ export struct AudioComponent
     // child lines (Volume/Pitch/...) are these fields.
     struct Clip
     {
-        std::string path;                         // sound file, relative to Assets/ (WAV/FLAC/MP3)
-        std::shared_ptr<AudioBuffer> buffer;      // World-cached, shared between entities using the same file
+        oc::string path;                         // sound file, relative to Assets/ (WAV/FLAC/MP3)
+        oc::shared_ptr<AudioBuffer> buffer;      // World-cached, shared between entities using the same file
         float volume = 1.0f;
         float pitch = 1.0f;
         bool loop = false;
@@ -45,23 +45,23 @@ export struct AudioComponent
 
     struct SoundDesc
     {
-        std::string alias;                        // the name gameplay/scripts trigger it by
+        oc::string alias;                        // the name gameplay/scripts trigger it by
         EAudioSelect select = EAudioSelect::Single;
-        std::vector<Clip> clips;
+        oc::vector<Clip> clips;
     };
 
     struct SpawnInfo
     {
-        std::vector<SoundDesc> sounds;
+        oc::vector<SoundDesc> sounds;
     };
 
     // Per-trigger overrides for the authored settings; unset fields keep the selected clip's values. A
     // set position pins the sound at that world position instead of following the entity.
     struct TriggerOverrides
     {
-        std::optional<glm::vec3> position;
-        std::optional<float> volume;
-        std::optional<float> pitch;
+        oc::optional<glm::vec3> position;
+        oc::optional<float> volume;
+        oc::optional<float> pitch;
     };
 
     struct Voice // playback state per SoundDesc (parallel to info->sounds)
@@ -74,12 +74,12 @@ export struct AudioComponent
     };
 
     const SpawnInfo* info = nullptr;
-    std::vector<Voice> voices;
+    oc::vector<Voice> voices;
 
-    bool trigger(Entity& entity, std::string_view alias, const TriggerOverrides& overrides = {});
-    void stopSound(std::string_view alias); // empty alias = stop every sound
-    int findSound(std::string_view alias) const;
-    std::span<const SoundDesc> getSounds() const { return info ? std::span<const SoundDesc>(info->sounds) : std::span<const SoundDesc>(); }
+    bool trigger(Entity& entity, oc::string_view alias, const TriggerOverrides& overrides = {});
+    void stopSound(oc::string_view alias); // empty alias = stop every sound
+    int findSound(oc::string_view alias) const;
+    oc::span<const SoundDesc> getSounds() const { return info ? oc::span<const SoundDesc>(info->sounds) : oc::span<const SoundDesc>(); }
 
     void spawn(Entity& entity, const SpawnInfo& info, const Transform& base);
     void destroy(Entity& entity, const SpawnInfo& info);

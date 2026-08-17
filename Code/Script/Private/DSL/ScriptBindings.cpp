@@ -8,13 +8,13 @@ namespace
 {
 	using ST = DSLSymbol::SymbolType;
 
-	DSLSymbol* addSymbol(std::vector<std::unique_ptr<DSLSymbol>>& container, ST type, DSLSymbol::Data data)
+	DSLSymbol* addSymbol(oc::vector<oc::unique_ptr<DSLSymbol>>& container, ST type, DSLSymbol::Data data)
 	{
-		auto symbol = std::make_unique<DSLSymbol>();
+		auto symbol = oc::make_unique<DSLSymbol>();
 		symbol->type = type;
-		symbol->data = std::move(data);
+		symbol->data = oc::move(data);
 		DSLSymbol* ptr = symbol.get();
-		container.push_back(std::move(symbol));
+		container.push_back(oc::move(symbol));
 		return ptr;
 	}
 }
@@ -22,13 +22,13 @@ namespace
 DSLType ScriptBindings::registerStruct(BindingStruct def)
 {
 	const DSLType type = dslStructType(static_cast<int>(m_structDefs.size()));
-	m_structDefs.push_back(std::move(def));
+	m_structDefs.push_back(oc::move(def));
 	return type;
 }
 
 void ScriptBindings::registerObject(BindingObject def)
 {
-	m_objectDefs.push_back(std::move(def));
+	m_objectDefs.push_back(oc::move(def));
 }
 
 DSLType ScriptBindings::registerComponentType(const char* memberName, const char* typeName, int componentBit, const char* fetchEmit)
@@ -44,9 +44,9 @@ DSLType ScriptBindings::registerComponentType(const char* memberName, const char
 	// that gate guarantees the component exists; reaching ANOTHER entity's component goes through `ifexist`
 	// and componentFetchEmit instead, which is where the null case is handled.
 	for (BindingObject& object : m_objectDefs)
-		if (object.name != nullptr && std::string_view(object.name) == "self")
+		if (object.name != nullptr && oc::string_view(object.name) == "self")
 		{
-			object.members.push_back({ memberName, type, "scriptData->" + std::string(memberName),
+			object.members.push_back({ memberName, type, "scriptData->" + oc::string(memberName),
 				/*writable*/ false, /*selfOnly*/ true, /*requiredComponent*/ type });
 			break;
 		}
@@ -93,7 +93,7 @@ DSLType ScriptBindings::registerSequenceType(const char* name, DSLType elementTy
 		object.elementWritable = true;
 		object.elementSetEmit = elementSetEmit;
 	}
-	m_objectDefs.push_back(std::move(object));
+	m_objectDefs.push_back(oc::move(object));
 	return type;
 }
 
@@ -106,7 +106,7 @@ DSLType ScriptBindings::registerOptionalType(const char* name, DSLType valueType
 	object.lookupKeyType = DSLType::Void;
 	object.lookupValueType = valueType;
 	object.lookupEmit = lookupEmit;
-	m_objectDefs.push_back(std::move(object));
+	m_objectDefs.push_back(oc::move(object));
 	return type;
 }
 
@@ -120,10 +120,10 @@ DSLType ScriptBindings::registerNamespace(const char* name)
 
 void ScriptBindings::registerEntryPoint(EntryPointDef def)
 {
-	m_entryPointDefs.push_back(std::move(def));
+	m_entryPointDefs.push_back(oc::move(def));
 }
 
-DSLType ScriptBindings::typeByName(const std::string& name) const
+DSLType ScriptBindings::typeByName(const oc::string& name) const
 {
 	for (size_t i = 0; i < m_structDefs.size(); ++i)
 		if (name == m_structDefs[i].name)
@@ -131,7 +131,7 @@ DSLType ScriptBindings::typeByName(const std::string& name) const
 	return componentTypeByName(name);
 }
 
-DSLType ScriptBindings::componentTypeByName(const std::string& name) const
+DSLType ScriptBindings::componentTypeByName(const oc::string& name) const
 {
 	for (size_t i = 0; i < m_componentTypeNames.size(); ++i)
 		if (name == m_componentTypeNames[i])
@@ -139,7 +139,7 @@ DSLType ScriptBindings::componentTypeByName(const std::string& name) const
 	return DSLType::Void;
 }
 
-void ScriptBindings::build(std::vector<std::unique_ptr<DSLSymbol>>& sidebarOut, std::vector<std::unique_ptr<DSLSymbol>>& builtinsOut)
+void ScriptBindings::build(oc::vector<oc::unique_ptr<DSLSymbol>>& sidebarOut, oc::vector<oc::unique_ptr<DSLSymbol>>& builtinsOut)
 {
 	if (!m_emits.empty())
 	{
@@ -152,12 +152,12 @@ void ScriptBindings::build(std::vector<std::unique_ptr<DSLSymbol>>& sidebarOut, 
 	// (free positional calls named like the struct itself). `selfType` (struct rows only) resolves any
 	// DSLType::ThisBinding in `returnType`/a param's type to the struct's own concrete type -- Void everywhere
 	// else, where no BindingFunc ever spells ThisBinding.
-	auto buildFunction = [&](const char* name, DSLType returnType, const std::vector<BindingParam>& params,
+	auto buildFunction = [&](const char* name, DSLType returnType, const oc::vector<BindingParam>& params,
 		const char* emit, bool requiresReceiver, bool isPositionalCall, DSLType selfType = DSLType::Void,
 		bool isVariadic = false, bool mutatesContainer = false) -> DSLSymbol*
 	{
 		const auto resolveSelf = [selfType](DSLType t) { return t == DSLType::ThisBinding ? selfType : t; };
-		std::vector<DSLSymbol*> built;
+		oc::vector<DSLSymbol*> built;
 		for (const BindingParam& param : params)
 		{
 			DSLSymbol* paramType = addSymbol(builtinsOut, ST::TypeDeclaration, DSLSymbol::TypeDeclaration{ resolveSelf(param.type) });
@@ -165,7 +165,7 @@ void ScriptBindings::build(std::vector<std::unique_ptr<DSLSymbol>>& sidebarOut, 
 				DSLSymbol::VariableDeclaration{ param.name, paramType, nullptr, param.isRef }));
 		}
 		DSLSymbol* funcSymbol = addSymbol(builtinsOut, ST::FunctionDeclaration, DSLSymbol::FunctionDeclaration{
-			name, std::move(built), resolveSelf(returnType), requiresReceiver, isPositionalCall, isVariadic,
+			name, oc::move(built), resolveSelf(returnType), requiresReceiver, isPositionalCall, isVariadic,
 			mutatesContainer });
 		m_emits.emplace_back(funcSymbol, emit);
 		return funcSymbol;
@@ -178,7 +178,7 @@ void ScriptBindings::build(std::vector<std::unique_ptr<DSLSymbol>>& sidebarOut, 
 	// Appended to m_objectDefs BEFORE the build loop below, so that loop picks them up with everything else
 	// (and nothing holds a pointer into the vector across the append).
 	{
-		std::vector<DSLType> elementTypes{ DSLType::Int, DSLType::Float, DSLType::Bool, DSLType::String, DSLType::Entity };
+		oc::vector<DSLType> elementTypes{ DSLType::Int, DSLType::Float, DSLType::Bool, DSLType::String, DSLType::Entity };
 		for (size_t i = 0; i < m_structDefs.size(); ++i)
 			elementTypes.push_back(dslStructType(static_cast<int>(i)));
 
@@ -191,9 +191,9 @@ void ScriptBindings::build(std::vector<std::unique_ptr<DSLSymbol>>& sidebarOut, 
 			// The C++ spelling, NOT the DSL one: the template argument has to be the type the ABI actually
 			// writes through the void* (Entity* / const char* / the value type), and for a struct it has to be
 			// a name that exists in the generated TU ("glm::vec3", not "vec3").
-			const std::string elementName = cppTypeName(elementType);
-			m_arrayEmits.push_back(std::make_unique<std::string>(
-				"ocArrPush<" + elementName + ">(ctx, self, &$r, " + std::to_string(static_cast<int>(elementType)) + ", $1)"));
+			const oc::string elementName = cppTypeName(elementType);
+			m_arrayEmits.push_back(oc::make_unique<oc::string>(
+				"ocArrPush<" + elementName + ">(ctx, self, &$r, " + oc::to_string(static_cast<int>(elementType)) + ", $1)"));
 			const char* pushEmit = m_arrayEmits.back()->c_str();
 
 			BindingObject arrayObject;
@@ -223,26 +223,26 @@ void ScriptBindings::build(std::vector<std::unique_ptr<DSLSymbol>>& sidebarOut, 
 			{
 				arrayObject.sequenceBeginEmit = "ctx->arrayResolve($r)";
 				arrayObject.sequenceCountEmit = "ctx->arrayViewCount($r)";
-				m_arrayEmits.push_back(std::make_unique<std::string>("ocArrViewGet<" + elementName + ">(ctx, $r, $i)"));
+				m_arrayEmits.push_back(oc::make_unique<oc::string>("ocArrViewGet<" + elementName + ">(ctx, $r, $i)"));
 				arrayObject.sequenceAtEmit = m_arrayEmits.back()->c_str();
 				// A `ref` write-back goes through the resolved view too. Without this it would fall back to the
 				// handle form, whose receiver is a source local that a begin-emit container no longer declares.
-				m_arrayEmits.push_back(std::make_unique<std::string>("ocArrViewSet<" + elementName + ">(ctx, $r, $1, $v)"));
+				m_arrayEmits.push_back(oc::make_unique<oc::string>("ocArrViewSet<" + elementName + ">(ctx, $r, $1, $v)"));
 				arrayObject.sequenceElementSetEmit = m_arrayEmits.back()->c_str();
 			}
 			else
 			{
-				m_arrayEmits.push_back(std::make_unique<std::string>(
+				m_arrayEmits.push_back(oc::make_unique<oc::string>(
 					"ctx->arraySpan($r, (int)sizeof(" + elementName + "))"));
 				arrayObject.sequenceBeginEmit = m_arrayEmits.back()->c_str();
 				arrayObject.sequenceCountEmit = "$r.count";
-				m_arrayEmits.push_back(std::make_unique<std::string>(
+				m_arrayEmits.push_back(oc::make_unique<oc::string>(
 					"static_cast<const " + elementName + "*>($r.data)[$i]"));
 				arrayObject.sequenceAtEmit = m_arrayEmits.back()->c_str();
-				m_arrayEmits.push_back(std::make_unique<std::string>(
+				m_arrayEmits.push_back(oc::make_unique<oc::string>(
 					"static_cast<" + elementName + "*>($r.data)[$1] = $v"));
 				arrayObject.sequenceElementSetEmit = m_arrayEmits.back()->c_str();
-				m_arrayEmits.push_back(std::make_unique<std::string>(
+				m_arrayEmits.push_back(oc::make_unique<oc::string>(
 					"static_cast<" + elementName + "*>($r.data)[$i]"));
 				arrayObject.sequenceElementRefEmit = m_arrayEmits.back()->c_str();
 			}
@@ -260,18 +260,18 @@ void ScriptBindings::build(std::vector<std::unique_ptr<DSLSymbol>>& sidebarOut, 
 				: "ctx->arrayGet($r, $1, (int)sizeof($v), &$v)";
 			if (rawElements)
 			{
-				m_arrayEmits.push_back(std::make_unique<std::string>("static_cast<" + elementName
+				m_arrayEmits.push_back(oc::make_unique<oc::string>("static_cast<" + elementName
 					+ "*>(ctx->arrayElem($r, $1, (int)sizeof(" + elementName + ")))"));
 				arrayObject.lookupRefEmit = m_arrayEmits.back()->c_str();
 			}
 			// Elements are writable via a `ref` binding; the write-back re-resolves the handle and range-checks
 			// at write time, so a body that pushed or cleared drops the write instead of corrupting anything.
 			arrayObject.elementWritable = true;
-			m_arrayEmits.push_back(std::make_unique<std::string>(rawElements
+			m_arrayEmits.push_back(oc::make_unique<oc::string>(rawElements
 				? "ocArrStore(ctx, $r, $1, $v)"
 				: "ocArrSet<" + elementName + ">(ctx, $r, $1, $v)"));
 			arrayObject.elementSetEmit = m_arrayEmits.back()->c_str();
-			m_objectDefs.push_back(std::move(arrayObject));
+			m_objectDefs.push_back(oc::move(arrayObject));
 		}
 	}
 
@@ -304,7 +304,7 @@ void ScriptBindings::build(std::vector<std::unique_ptr<DSLSymbol>>& sidebarOut, 
 	}
 }
 
-std::span<const BindingObject> ScriptBindings::objects() const
+oc::span<const BindingObject> ScriptBindings::objects() const
 {
 	return m_objectDefs;
 }
@@ -333,7 +333,7 @@ const BindingObject* ScriptBindings::objectForDecl(const DSLSymbol* sidebarDecl)
 	return nullptr;
 }
 
-std::span<DSLSymbol* const> ScriptBindings::functionSymbols(const BindingObject& object) const
+oc::span<DSLSymbol* const> ScriptBindings::functionSymbols(const BindingObject& object) const
 {
 	for (const BuiltObject& built : m_built)
 		if (built.def == &object)
@@ -341,9 +341,9 @@ std::span<DSLSymbol* const> ScriptBindings::functionSymbols(const BindingObject&
 	return {};
 }
 
-const BindingMember* ScriptBindings::findMember(DSLType receiverType, const std::string& name) const
+const BindingMember* ScriptBindings::findMember(DSLType receiverType, const oc::string& name) const
 {
-	const std::vector<BindingMember>* members = nullptr;
+	const oc::vector<BindingMember>* members = nullptr;
 	if (const BindingObject* object = objectFor(receiverType); object != nullptr)
 		members = &object->members;
 	else if (const BindingStruct* structDef = structFor(receiverType); structDef != nullptr)
@@ -396,7 +396,7 @@ int ScriptBindings::componentBit(DSLType type) const
 	return m_componentBits[index];
 }
 
-std::span<const BindingStruct> ScriptBindings::structs() const
+oc::span<const BindingStruct> ScriptBindings::structs() const
 {
 	return m_structDefs;
 }
@@ -444,7 +444,7 @@ const BindingStruct* ScriptBindings::structFor(DSLType type) const
 	return m_builtStructs[index].def;
 }
 
-std::span<DSLSymbol* const> ScriptBindings::structFunctionSymbols(DSLType type) const
+oc::span<DSLSymbol* const> ScriptBindings::structFunctionSymbols(DSLType type) const
 {
 	if (!dslIsStructType(type))
 		return {};
@@ -462,12 +462,12 @@ const char* ScriptBindings::emitFor(const DSLSymbol* funcDecl) const
 	return nullptr;
 }
 
-std::span<const EntryPointDef> ScriptBindings::entryPoints() const
+oc::span<const EntryPointDef> ScriptBindings::entryPoints() const
 {
 	return m_entryPointDefs;
 }
 
-const EntryPointDef* ScriptBindings::entryPointFor(const std::string& name) const
+const EntryPointDef* ScriptBindings::entryPointFor(const oc::string& name) const
 {
 	for (const EntryPointDef& def : m_entryPointDefs)
 		if (name == def.name)

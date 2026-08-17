@@ -16,12 +16,12 @@ import Entity;
 // of EVERY line -- which is exactly what turns "@require" into the stored "//@@require" form -- and brackets
 // the result with the "//@@dsl 1"/"//@@end" markers ScriptLoader::load reads. Do not write "@dsl"/"@end"
 // marker lines in raw input; the wrapper owns those.
-static int compileDsl(const std::string& inputPath, const std::string& outputPath)
+static int compileDsl(const oc::string& inputPath, const oc::string& outputPath)
 {
 	registerScriptDslBindings();
 
 	DSL document;
-	std::vector<std::unique_ptr<DSLSymbol>> builtins;
+	oc::vector<oc::unique_ptr<DSLSymbol>> builtins;
 	Globals::scriptBindings.build(document.sidebar, builtins);
 
 	// A console tool: everything runs on its one (main) thread by design.
@@ -32,23 +32,23 @@ static int compileDsl(const std::string& inputPath, const std::string& outputPat
 		return 1;
 	}
 	std::istringstream in(FileSystem::readFileStr(inputPath));
-	std::vector<std::string> lines;
+	oc::vector<oc::string> lines;
 	bool alreadyWrapped = false;
-	for (std::string raw; std::getline(in, raw); )
+	for (oc::string raw; std::getline(in, raw); )
 	{
 		if (!raw.empty() && raw.back() == '\r')
 			raw.pop_back();
 		alreadyWrapped = alreadyWrapped || raw.rfind("//@@dsl", 0) == 0;
-		lines.push_back(std::move(raw));
+		lines.push_back(oc::move(raw));
 	}
-	std::string loadPath = inputPath;
-	std::string tempPath;
+	oc::string loadPath = inputPath;
+	oc::string tempPath;
 	int lineShift = 0;
 	if (!alreadyWrapped)
 	{
-		std::string wrapped = "//@@dsl 1\n";
+		oc::string wrapped = "//@@dsl 1\n";
 		lineShift = 1; // the inserted header shifts every line number the loader reports by one
-		for (const std::string& line : lines)
+		for (const oc::string& line : lines)
 			wrapped += "//@" + line + "\n";
 		wrapped += "//@@end\n";
 		tempPath = outputPath + ".wrap.tmp";
@@ -65,13 +65,13 @@ static int compileDsl(const std::string& inputPath, const std::string& outputPat
 		FileSystem::remove(tempPath);
 	if (!result.success)
 	{
-		std::string error = result.error; // "<path>(<line>): <what>"
+		oc::string error = result.error; // "<path>(<line>): <what>"
 		if (!tempPath.empty() && error.rfind(tempPath + "(", 0) == 0)
 		{
 			const size_t close = error.find(')');
 			const int line = std::atoi(error.c_str() + tempPath.size() + 1);
-			error = inputPath + "(" + std::to_string(std::max(1, line - lineShift)) + ")"
-				+ (close != std::string::npos ? error.substr(close + 1) : std::string());
+			error = inputPath + "(" + oc::to_string(oc::max(1, line - lineShift)) + ")"
+				+ (close != oc::string::npos ? error.substr(close + 1) : oc::string());
 		}
 		std::cout << "error: " << error << "\n";
 		return 1;
@@ -93,7 +93,7 @@ static int compileDsl(const std::string& inputPath, const std::string& outputPat
 // produced DLL is the same file the engine would build, mtime-stamped, so the engine can skip recompiling it.
 // A fresh process has no "previous build" to fall back to, which makes a non-empty dllPath the exact
 // "compiled AND exported entry points" signal (see ScriptHost::getOrLoad's failure paths).
-static int compileOutput(const std::string& outputPath)
+static int compileOutput(const oc::string& outputPath)
 {
 	const ScriptModule* module = Globals::scriptHost.getOrLoad(outputPath, /*forceRecompile*/ true);
 	if (module == nullptr || module->dllPath.empty())
@@ -112,7 +112,7 @@ static int compileOutput(const std::string& outputPath)
 	if (!module->eventNames.empty())
 	{
 		std::cout << ", events:";
-		for (const std::string& name : module->eventNames)
+		for (const oc::string& name : module->eventNames)
 			std::cout << " " << name;
 	}
 	std::cout << "\n";
@@ -125,14 +125,14 @@ int main(int argc, char* argv[])
 	FileSystem::initialize(); // relative paths resolve against Assets/, like everywhere else in the engine
 
 	bool checkCompile = false;
-	std::vector<std::string> paths;
+	oc::vector<oc::string> paths;
 	for (int i = 1; i < argc; ++i)
 	{
-		const std::string_view arg = argv[i];
+		const oc::string_view arg = argv[i];
 		if (arg == "--compile" || arg == "-c")
 			checkCompile = true;
 		else
-			paths.push_back(std::string(arg));
+			paths.push_back(oc::string(arg));
 	}
 	if (paths.empty() || paths.size() > 2)
 	{
@@ -144,8 +144,8 @@ int main(int argc, char* argv[])
 		std::cout.flush();
 		std::_Exit(1);
 	}
-	const std::string& input = paths[0];
-	const std::string output = paths.size() > 1 ? paths[1]
+	const oc::string& input = paths[0];
+	const oc::string output = paths.size() > 1 ? paths[1]
 		: FileSystem::replaceExtension(input, ".dsl");
 
 	int code = compileDsl(input, output);

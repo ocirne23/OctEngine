@@ -14,18 +14,18 @@ public:
     virtual bool operator==(const INodeData& other) const = 0;
     virtual bool isValid() const = 0;
 
-    virtual std::unique_ptr<INodeData> clone() const = 0;
+    virtual oc::unique_ptr<INodeData> clone() const = 0;
 
     virtual const char* getName() const = 0;
 
     virtual uint32 getNumChildren() const = 0;
-    virtual std::unique_ptr<INodeData> getChild(uint32 idx) const = 0;
+    virtual oc::unique_ptr<INodeData> getChild(uint32 idx) const = 0;
 
     virtual uint32 getNumChildrenRecursive() const = 0;
 
-    //virtual std::unique_ptr<INodeData> findChild(std::initializer_list<const char*> hierarchy) const = 0;
+    //virtual oc::unique_ptr<INodeData> findChild(oc::initializer_list<const char*> hierarchy) const = 0;
 
-    virtual std::vector<std::string> getChildrenNames() const = 0;
+    virtual oc::vector<oc::string> getChildrenNames() const = 0;
 
     virtual uint32 getNumMeshes() const = 0;
     virtual uint32 getMeshIndex(uint32 meshIdx) const = 0;

@@ -28,7 +28,7 @@ namespace Procedural
 		// The halo is not overhead: the old code already sampled outside the chunk for the border vertices'
 		// differences. It just did it one point at a time.
 		const uint32 gpr = vpr + 2; // grid points per row: the vertex grid plus a 1-point halo
-		std::vector<TerrainPoint> field((size_t)gpr * gpr);
+		oc::vector<TerrainPoint> field((size_t)gpr * gpr);
 		maps.sampleGrid(ox - (double)step, oz - (double)step, (double)step, gpr, gpr, field);
 
 		// Vertex coords -> grid entry. SIGNED on purpose: the border vertices ask for col/row -1, which the
@@ -94,7 +94,7 @@ namespace Procedural
 		if (params.skirtDepth > 0.0f)
 		{
 			// Perimeter vertex indices, walked as a closed loop.
-			std::vector<uint32> perimeter;
+			oc::vector<uint32> perimeter;
 			perimeter.reserve(4u * res);
 			for (uint32 col = 0; col < res; ++col)           perimeter.push_back(0u * vpr + col);        // top row, L->R
 			for (uint32 row = 0; row < res; ++row)           perimeter.push_back(row * vpr + res);        // right col, T->B

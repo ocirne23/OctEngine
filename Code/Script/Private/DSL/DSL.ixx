@@ -238,7 +238,7 @@ public:
 	struct Constant
 	{
 		DSLType type;
-		std::string value;
+		oc::string value;
 	};
 	struct TypeDeclaration
 	{
@@ -253,7 +253,7 @@ public:
 	};
 	struct VariableDeclaration
 	{
-		std::string name;
+		oc::string name;
 		DSLSymbol* typeSymbol = nullptr;   // -> TypeDeclaration
 		DSLSymbol* initialValue = nullptr; // optional initializer value; nullptr = no initializer (also unused on parameters)
 		bool isRef = false; // by-reference output parameter (only meaningful on a function's parameterVarDeclarations)
@@ -274,12 +274,12 @@ public:
 	{
 		DSLSymbol* functionSymbol = nullptr; // -> FunctionDeclaration (user-authored or a static builtin, e.g. vec3/print/applyForce)
 		DSLSymbol* receiver = nullptr;       // -> VariableReference; null = free call (print(...)), non-null = dot-call (physics.getMass())
-		std::vector<CallArgument> arguments;
+		oc::vector<CallArgument> arguments;
 	};
 	struct FunctionDeclaration
 	{
-		std::string name;
-		std::vector<DSLSymbol*> parameterVarDeclarations; // -> VariableDeclaration, owned by this decl's header line
+		oc::string name;
+		oc::vector<DSLSymbol*> parameterVarDeclarations; // -> VariableDeclaration, owned by this decl's header line
 		DSLType returnType = DSLType::Void;
 		bool requiresReceiver = false; // builtin component methods (physics.getVelocity(), world.rayCast(...)) --
 		                                // AutoCompleteRules excludes these from plain call-statement/value
@@ -348,8 +348,8 @@ public:
 	// in-place expression editing).
 	struct Expression
 	{
-		std::vector<DSLSymbol*> operands;
-		std::vector<DSLOperator> operators;
+		oc::vector<DSLSymbol*> operands;
+		oc::vector<DSLOperator> operators;
 		bool grouped = false; // explicit parentheses around this whole chain (only meaningful as another chain's operand)
 	};
 	// Field-style access on a receiver, e.g. `self.pos` or `self.pos.x` -- NOT a call (see
@@ -359,14 +359,14 @@ public:
 	struct MemberAccess
 	{
 		DSLSymbol* receiver = nullptr; // -> VariableReference, or a nested MemberAccess (chained access)
-		std::string memberName;
+		oc::string memberName;
 		DSLType type = DSLType::Void;
 	};
 	// A whole-line comment ("# ...") -- pure annotation: no cross-references, never a value, freely deletable.
 	// The Transpiler emits it as a C++ comment.
 	struct Comment
 	{
-		std::string text;
+		oc::string text;
 	};
 	// A yet-unfilled slot -- what keeps the document "always compilable" even mid-edit. `expectedType` names
 	// what belongs here: DSLType::Void means a whole STATEMENT slot (AutoCompleteRules offers if/while/return/
@@ -396,7 +396,7 @@ public:
 	};
 	// Named so code building a symbol from one of the alternatives above (e.g. ScriptEditor's pushSymbol helper)
 	// can take it as a plain, non-template parameter -- any alternative converts to this implicitly.
-	using Data = std::variant<Constant, TypeDeclaration, VariableReference, VariableDeclaration, FunctionCall, FunctionDeclaration, FlowControl, Expression, MemberAccess, Comment, Placeholder>;
+	using Data = oc::variant<Constant, TypeDeclaration, VariableReference, VariableDeclaration, FunctionCall, FunctionDeclaration, FlowControl, Expression, MemberAccess, Comment, Placeholder>;
 
 	SymbolType type;
 	Data data;
@@ -409,7 +409,7 @@ public:
 	int scopeLevel = 0;
 	int scopeId = 0;
 
-	std::vector<std::unique_ptr<DSLSymbol>> symbols;
+	oc::vector<oc::unique_ptr<DSLSymbol>> symbols;
 
 	// The line's primary/defining symbol -- symbols.back(), per the post-order ownership convention above.
 	// Null only for a line with no symbols at all (a transient state mid-edit, never a resting one).
@@ -419,7 +419,7 @@ public:
 export class DSLScriptFile
 {
 public:
-	std::vector<std::unique_ptr<DSLCodeLine>> lines;
+	oc::vector<oc::unique_ptr<DSLCodeLine>> lines;
 };
 
 // ---------------------------------------------------------------------------
@@ -439,27 +439,27 @@ export inline DSLType dslValueType(const DSLSymbol* symbol)
 	switch (symbol->type)
 	{
 	case DSLSymbol::SymbolType::Constant:
-		return std::get<DSLSymbol::Constant>(symbol->data).type;
+		return oc::get<DSLSymbol::Constant>(symbol->data).type;
 	case DSLSymbol::SymbolType::VariableReference:
 	{
-		const DSLSymbol* decl = std::get<DSLSymbol::VariableReference>(symbol->data).declaration;
+		const DSLSymbol* decl = oc::get<DSLSymbol::VariableReference>(symbol->data).declaration;
 		if (decl == nullptr)
 			return DSLType::Void;
-		const DSLSymbol* typeSymbol = std::get<DSLSymbol::VariableDeclaration>(decl->data).typeSymbol;
-		return typeSymbol != nullptr ? std::get<DSLSymbol::TypeDeclaration>(typeSymbol->data).type : DSLType::Void;
+		const DSLSymbol* typeSymbol = oc::get<DSLSymbol::VariableDeclaration>(decl->data).typeSymbol;
+		return typeSymbol != nullptr ? oc::get<DSLSymbol::TypeDeclaration>(typeSymbol->data).type : DSLType::Void;
 	}
 	case DSLSymbol::SymbolType::FunctionCall:
 	{
-		const DSLSymbol* callee = std::get<DSLSymbol::FunctionCall>(symbol->data).functionSymbol;
-		return callee != nullptr ? std::get<DSLSymbol::FunctionDeclaration>(callee->data).returnType : DSLType::Void;
+		const DSLSymbol* callee = oc::get<DSLSymbol::FunctionCall>(symbol->data).functionSymbol;
+		return callee != nullptr ? oc::get<DSLSymbol::FunctionDeclaration>(callee->data).returnType : DSLType::Void;
 	}
 	case DSLSymbol::SymbolType::Placeholder:
-		return std::get<DSLSymbol::Placeholder>(symbol->data).expectedType;
+		return oc::get<DSLSymbol::Placeholder>(symbol->data).expectedType;
 	case DSLSymbol::SymbolType::MemberAccess:
-		return std::get<DSLSymbol::MemberAccess>(symbol->data).type; // stamped from the member registry at author/load time
+		return oc::get<DSLSymbol::MemberAccess>(symbol->data).type; // stamped from the member registry at author/load time
 	case DSLSymbol::SymbolType::Expression:
 	{
-		const DSLSymbol::Expression& e = std::get<DSLSymbol::Expression>(symbol->data);
+		const DSLSymbol::Expression& e = oc::get<DSLSymbol::Expression>(symbol->data);
 		// A comparison or logical chain EVALUATES to Bool regardless of what its operands are.
 		if (!e.operators.empty() && (dslIsComparisonOperator(e.operators[0]) || dslIsLogicalOperator(e.operators[0])))
 			return DSLType::Bool;
@@ -486,18 +486,18 @@ export inline int dslLineIndex(const DSLScriptFile& file, const DSLCodeLine* lin
 // there ("self.data.scores" -> {self, "data.scores"}). False for anything that isn't a plain variable/member
 // chain -- a call, a literal, an operator chain. Together the pair IDENTIFIES the storage a value names, which
 // is what "is this the same container?" comparisons need (see the mutate-while-iterating rule).
-export inline bool dslChainToRoot(const DSLSymbol* value, const DSLSymbol*& outRoot, std::string& outPath)
+export inline bool dslChainToRoot(const DSLSymbol* value, const DSLSymbol*& outRoot, oc::string& outPath)
 {
 	outPath.clear();
 	while (value != nullptr && value->type == DSLSymbol::SymbolType::MemberAccess)
 	{
-		const DSLSymbol::MemberAccess& access = std::get<DSLSymbol::MemberAccess>(value->data);
+		const DSLSymbol::MemberAccess& access = oc::get<DSLSymbol::MemberAccess>(value->data);
 		outPath = outPath.empty() ? access.memberName : access.memberName + "." + outPath;
 		value = access.receiver;
 	}
 	if (value == nullptr || value->type != DSLSymbol::SymbolType::VariableReference)
 		return false;
-	outRoot = std::get<DSLSymbol::VariableReference>(value->data).declaration;
+	outRoot = oc::get<DSLSymbol::VariableReference>(value->data).declaration;
 	return outRoot != nullptr;
 }
 
@@ -513,7 +513,7 @@ export inline bool dslIsElementBinding(const DSLSymbol* varDecl)
 	const DSLSymbol* head = varDecl->line->head();
 	if (head == nullptr || head->type != DSLSymbol::SymbolType::FlowControl)
 		return false;
-	const DSLSymbol::FlowControl& fc = std::get<DSLSymbol::FlowControl>(head->data);
+	const DSLSymbol::FlowControl& fc = oc::get<DSLSymbol::FlowControl>(head->data);
 	return fc.forLoopVar == varDecl
 		&& (fc.control == DSLFlowControl::ForEach || fc.control == DSLFlowControl::IfExist);
 }
@@ -523,7 +523,7 @@ export inline bool dslSameStorage(const DSLSymbol* a, const DSLSymbol* b)
 {
 	const DSLSymbol* rootA = nullptr;
 	const DSLSymbol* rootB = nullptr;
-	std::string pathA, pathB;
+	oc::string pathA, pathB;
 	return dslChainToRoot(a, rootA, pathA) && dslChainToRoot(b, rootB, pathB) && rootA == rootB && pathA == pathB;
 }
 
@@ -608,7 +608,7 @@ export inline bool dslCanExposeFieldType(DSLType type)
 
 export struct DSLDataField
 {
-	std::string name;
+	oc::string name;
 	DSLType type;
 	DSLFieldVisibility visibility = DSLFieldVisibility::Hidden;
 };
@@ -621,8 +621,8 @@ export struct DSLDataField
 export class DSL
 {
 public:
-	std::string filePath;
-	std::vector<std::unique_ptr<DSLSymbol>> sidebar; // VariableDeclaration entries (self + engine-object kinds,
+	oc::string filePath;
+	oc::vector<oc::unique_ptr<DSLSymbol>> sidebar; // VariableDeclaration entries (self + engine-object kinds,
 	                                                  // built once by ScriptBindings); line == nullptr. ALL bindings
 	                                                  // exist here for stable identity -- requiredComponents below
 	                                                  // gates which are offered/legal, never which are built
@@ -633,22 +633,22 @@ public:
 	// else. Only required components' bindings appear in autocomplete -- engine-side enforcement (a script only
 	// assignable to entities that have every component it required, making every component binding non-null by
 	// construction) is separate future work.
-	std::vector<DSLType> requiredComponents;
+	oc::vector<DSLType> requiredComponents;
 	// This script's persistent per-instance data fields, reachable in the body as self.data.<name> -- Transpiler
 	// emits them as a real "struct ScriptData { ... };" (+ ScriptDataSize()/REGISTER_SCRIPT_DATA_SIZE()) that
 	// self.data casts the host's zeroed scriptData block to. Insertion order (append on add, like
 	// requiredComponents); names unique within this list (enforced at add time).
-	std::vector<DSLDataField> dataFields;
+	oc::vector<DSLDataField> dataFields;
 	// This script's named On Event entries, reachable in the body as self.events.<name> (a read-only Int, the
 	// entry's INDEX -- compare against OnEvent's own eventIdx parameter). Insertion order = index order, also
 	// what Transpiler's ScriptEventName switch emits from, so the host's name->index resolution agrees with
 	// self.events.<name>'s own compile-time value. Names unique within this list (enforced at add time).
-	std::vector<std::string> eventNames;
+	oc::vector<oc::string> eventNames;
 };
 
 export inline bool dslIsComponentRequired(const DSL& document, DSLType componentType)
 {
-	return std::find(document.requiredComponents.begin(), document.requiredComponents.end(), componentType)
+	return oc::find(document.requiredComponents.begin(), document.requiredComponents.end(), componentType)
 		!= document.requiredComponents.end();
 }
 
@@ -656,7 +656,7 @@ export inline bool dslIsComponentRequired(const DSL& document, DSLType component
 // (ScriptEditor's chain-building, ScriptLoader's dot-chain parser -- which parses its own file-local dataFields
 // before they become DSL::dataFields, hence taking the vector directly rather than a whole DSL -- and
 // Transpiler's memberText), so they can't drift apart on what counts as a match.
-export inline const DSLDataField* dslFindDataField(const std::vector<DSLDataField>& fields, const std::string& name)
+export inline const DSLDataField* dslFindDataField(const oc::vector<DSLDataField>& fields, const oc::string& name)
 {
 	for (const DSLDataField& field : fields)
 		if (field.name == name)
@@ -667,7 +667,7 @@ export inline const DSLDataField* dslFindDataField(const std::vector<DSLDataFiel
 // `name`'s index in `names` (-1 if none) -- the ONE lookup every self.events.<name> resolution site shares
 // (ScriptEditor's chain-building, ScriptLoader's dot-chain parser, Transpiler's memberText/ScriptEventName), so
 // they can't drift apart on what index a name means.
-export inline int dslFindEventIndex(const std::vector<std::string>& names, const std::string& name)
+export inline int dslFindEventIndex(const oc::vector<oc::string>& names, const oc::string& name)
 {
 	for (size_t i = 0; i < names.size(); ++i)
 		if (names[i] == name)

@@ -102,7 +102,7 @@ bool Instance::initialize(Window& window, bool enableValidationLayers)
 
     uint32 numExtensions = 0;
     const char* const* ppExtensions = SDL_Vulkan_GetInstanceExtensions(&numExtensions);
-    std::vector<const char*> extensions;
+    oc::vector<const char*> extensions;
 
     for (uint32 i = 0; i < numExtensions; i++)
         if (ppExtensions[i] && supportsExtension(ppExtensions[i]))
@@ -110,10 +110,10 @@ bool Instance::initialize(Window& window, bool enableValidationLayers)
 
     // Instance extensions the OpenXR runtime requires (none when VR is disabled). Kept alive for the
     // duration of this call; skip any SDL already added.
-    std::vector<std::string> xrExtensions;
+    oc::vector<oc::string> xrExtensions;
     if (Globals::openXR.isEnabled())
         xrExtensions = Globals::openXR.getRequiredVulkanInstanceExtensions();
-    for (const std::string& ext : xrExtensions)
+    for (const oc::string& ext : xrExtensions)
     {
         bool alreadyAdded = false;
         for (const char* have : extensions)
@@ -136,7 +136,7 @@ bool Instance::initialize(Window& window, bool enableValidationLayers)
 		.pfnCallback = debugReportCallback,
 	};
 
-    std::vector<vk::ValidationFeatureEnableEXT> validationFeaturesList =
+    oc::vector<vk::ValidationFeatureEnableEXT> validationFeaturesList =
     {
     //    vk::ValidationFeatureEnableEXT::eDebugPrintf
     };

@@ -42,13 +42,13 @@ private:
 
     vk::Image m_normalImage;
     VmaAllocation m_normalMemory = nullptr;
-    std::array<vk::ImageView, 2> m_normalViews{}; // per-eye 2D views (layer i)
+    oc::array<vk::ImageView, 2> m_normalViews{}; // per-eye 2D views (layer i)
 
     vk::Image m_depthImage;
     VmaAllocation m_depthMemory = nullptr;
-    std::array<vk::ImageView, 2> m_depthViews{}; // per-eye 2D views (layer i)
+    oc::array<vk::ImageView, 2> m_depthViews{}; // per-eye 2D views (layer i)
 
     vk::RenderPass m_renderPass;
-    std::array<vk::Framebuffer, 2> m_framebuffers{}; // one single-layer framebuffer per eye
+    oc::array<vk::Framebuffer, 2> m_framebuffers{}; // one single-layer framebuffer per eye
     vk::Sampler m_sampler;
 };

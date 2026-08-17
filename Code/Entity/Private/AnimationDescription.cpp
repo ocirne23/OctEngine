@@ -7,7 +7,7 @@ import :AnimationDescription;
 
 static char animLower(char c) { return (c >= 'A' && c <= 'Z') ? char(c + 32) : c; }
 
-static bool animIEquals(std::string_view a, std::string_view b)
+static bool animIEquals(oc::string_view a, oc::string_view b)
 {
     if (a.size() != b.size())
         return false;
@@ -38,14 +38,14 @@ bool toAnimationClipDesc(const AssetNode& node, AnimationClipDesc& out)
     return true;
 }
 
-static AnimatorDesc::ParamType parseParamType(std::string_view s)
+static AnimatorDesc::ParamType parseParamType(oc::string_view s)
 {
     if (animIEquals(s, "Bool"))    return AnimatorDesc::ParamType::Bool;
     if (animIEquals(s, "Trigger")) return AnimatorDesc::ParamType::Trigger;
     return AnimatorDesc::ParamType::Float;
 }
 
-static AnimatorDesc::Condition::Op parseConditionOp(std::string_view s)
+static AnimatorDesc::Condition::Op parseConditionOp(oc::string_view s)
 {
     using Op = AnimatorDesc::Condition::Op;
     if (animIEquals(s, "Less"))    return Op::Less;
@@ -77,7 +77,7 @@ static void parseStateMachine(const AssetNode& smNode, AnimatorDesc::StateMachin
             if (const AssetNode* p = child.find("Play"))
                 state.play = p->asString();
             parseSpeedBinding(child, state.speed);
-            sm.states.push_back(std::move(state));
+            sm.states.push_back(oc::move(state));
         }
         else if (animIEquals(child.key, "Transition") || animIEquals(child.key, "AnyTransition"))
         {
@@ -101,11 +101,11 @@ static void parseStateMachine(const AssetNode& smNode, AnimatorDesc::StateMachin
                     cond.boolValue = c->asBool(2);
                 else
                     cond.value = c->asFloat(2);
-                tr.conditions.push_back(std::move(cond));
+                tr.conditions.push_back(oc::move(cond));
             }
             if (const AssetNode* f = child.find("Fade"))     tr.fade = f->asFloat();
             if (const AssetNode* e = child.find("ExitTime")) tr.exitTime = e->asFloat();
-            sm.transitions.push_back(std::move(tr));
+            sm.transitions.push_back(oc::move(tr));
         }
     }
 }
@@ -129,7 +129,7 @@ bool toAnimatorDesc(const AssetNode& node, AnimatorDesc& out)
                 p.boolValue = child.asBool(2);
             else if (p.type == AnimatorDesc::ParamType::Float)
                 p.floatValue = child.asFloat(2);
-            out.params.push_back(std::move(p));
+            out.params.push_back(oc::move(p));
         }
         else if (animIEquals(child.key, "Clip"))
         {
@@ -139,7 +139,7 @@ bool toAnimatorDesc(const AssetNode& node, AnimatorDesc& out)
             ref.anmName = (child.numValues() >= 3 && animIEquals(child.asString(1), "Anim"))
                 ? child.asString(2)
                 : child.asString(1);
-            out.clips.push_back(std::move(ref));
+            out.clips.push_back(oc::move(ref));
         }
         else if (animIEquals(child.key, "BlendSpace1D"))
         {
@@ -148,7 +148,7 @@ bool toAnimatorDesc(const AssetNode& node, AnimatorDesc& out)
             bs.axisParam = child.asString(1);
             for (const AssetNode* s : child.findAll("Sample"))
                 bs.samples.push_back({ s->asString(0), s->asFloat(1) });
-            out.blendSpaces.push_back(std::move(bs));
+            out.blendSpaces.push_back(oc::move(bs));
         }
         else if (animIEquals(child.key, "StateMachine"))
         {

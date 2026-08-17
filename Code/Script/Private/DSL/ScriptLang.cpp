@@ -10,10 +10,10 @@ const char* dslTypeName(DSLType type)
 	// return stays a stable `const char*` like every other branch here (callers hold it as one).
 	if (dslIsArrayType(type))
 	{
-		static std::unordered_map<uint16, std::string> names;
+		static oc::unordered_map<uint16, oc::string> names;
 		auto it = names.find(static_cast<uint16>(type));
 		if (it == names.end())
-			it = names.emplace(static_cast<uint16>(type), std::string(dslTypeName(dslArrayElementType(type))) + "[]").first;
+			it = names.emplace(static_cast<uint16>(type), oc::string(dslTypeName(dslArrayElementType(type))) + "[]").first;
 		return it->second.c_str();
 	}
 	// Struct types are dynamic -- their spelling lives in the registry (see DSLType::FirstStruct).
@@ -28,7 +28,7 @@ const char* dslTypeName(DSLType type)
 	// live engine collection is an implementation detail of the emits, not something the DSL spells differently.
 	if (dslIsSequenceType(type))
 	{
-		static std::unordered_map<uint16, std::string> names;
+		static oc::unordered_map<uint16, oc::string> names;
 		auto it = names.find(static_cast<uint16>(type));
 		if (it == names.end())
 		{
@@ -37,12 +37,12 @@ const char* dslTypeName(DSLType type)
 			// registered name ("math"). See registerSequenceType / registerOptionalType / registerNamespace.
 			const BindingObject* object = Globals::scriptBindings.objectFor(type);
 			const char* registered = Globals::scriptBindings.sequenceTypeName(type);
-			std::string name = (registered != nullptr) ? registered : "?";
+			oc::string name = (registered != nullptr) ? registered : "?";
 			if (object != nullptr && object->sequenceElementType != DSLType::Void)
-				name = std::string(dslTypeName(object->sequenceElementType)) + "[]";
+				name = oc::string(dslTypeName(object->sequenceElementType)) + "[]";
 			else if (object != nullptr && object->lookupValueType != DSLType::Void)
-				name = std::string(dslTypeName(object->lookupValueType)) + "?";
-			it = names.emplace(static_cast<uint16>(type), std::move(name)).first;
+				name = oc::string(dslTypeName(object->lookupValueType)) + "?";
+			it = names.emplace(static_cast<uint16>(type), oc::move(name)).first;
 		}
 		return it->second.c_str();
 	}
@@ -110,7 +110,7 @@ namespace
 		}
 	}
 
-	void appendSpan(DSLSymbol* symbol, const std::string& text, size_t startPos, std::vector<SyntaxSpan>& outSpans, SlotRef slot = {}, int operatorIndex = -1)
+	void appendSpan(DSLSymbol* symbol, const oc::string& text, size_t startPos, oc::vector<SyntaxSpan>& outSpans, SlotRef slot = {}, int operatorIndex = -1)
 	{
 		outSpans.push_back(SyntaxSpan{ symbol, static_cast<int>(startPos), static_cast<int>(text.size()), slot, operatorIndex });
 	}
@@ -123,7 +123,7 @@ namespace
 	// identifying span; when recursing into a child, either a fresh slot is built (the three tracked
 	// positions: FlowControl::condition, CallArgument::value, VariableDeclaration::initialValue) or `{}` is
 	// passed (everywhere else -- not independently replaceable).
-	void renderSymbol(DSLSymbol* symbol, bool compact, bool isFunctionParamContext, const SlotRef& slot, std::string& outText, std::vector<SyntaxSpan>& outSpans)
+	void renderSymbol(DSLSymbol* symbol, bool compact, bool isFunctionParamContext, const SlotRef& slot, oc::string& outText, oc::vector<SyntaxSpan>& outSpans)
 	{
 		if (symbol == nullptr)
 			return;
@@ -132,7 +132,7 @@ namespace
 		{
 		case ST::Constant:
 		{
-			const DSLSymbol::Constant& c = std::get<DSLSymbol::Constant>(symbol->data);
+			const DSLSymbol::Constant& c = oc::get<DSLSymbol::Constant>(symbol->data);
 			const size_t start = outText.size();
 			outText += (c.type == DSLType::String) ? ("\"" + c.value + "\"") : c.value;
 			appendSpan(symbol, outText, start, outSpans, slot);
@@ -140,7 +140,7 @@ namespace
 		}
 		case ST::TypeDeclaration:
 		{
-			const DSLSymbol::TypeDeclaration& t = std::get<DSLSymbol::TypeDeclaration>(symbol->data);
+			const DSLSymbol::TypeDeclaration& t = oc::get<DSLSymbol::TypeDeclaration>(symbol->data);
 			const size_t start = outText.size();
 			outText += dslTypeName(t.type);
 			appendSpan(symbol, outText, start, outSpans, slot);
@@ -148,8 +148,8 @@ namespace
 		}
 		case ST::VariableReference:
 		{
-			const DSLSymbol::VariableReference& r = std::get<DSLSymbol::VariableReference>(symbol->data);
-			const DSLSymbol::VariableDeclaration& decl = std::get<DSLSymbol::VariableDeclaration>(r.declaration->data);
+			const DSLSymbol::VariableReference& r = oc::get<DSLSymbol::VariableReference>(symbol->data);
+			const DSLSymbol::VariableDeclaration& decl = oc::get<DSLSymbol::VariableDeclaration>(r.declaration->data);
 			const size_t start = outText.size();
 			outText += decl.name;
 			appendSpan(symbol, outText, start, outSpans, slot); // span -> the reference itself, not the declaration
@@ -157,7 +157,7 @@ namespace
 		}
 		case ST::VariableDeclaration:
 		{
-			const DSLSymbol::VariableDeclaration& v = std::get<DSLSymbol::VariableDeclaration>(symbol->data);
+			const DSLSymbol::VariableDeclaration& v = oc::get<DSLSymbol::VariableDeclaration>(symbol->data);
 			if (v.isRef)
 				outText += "ref ";
 			if (!(compact && isFunctionParamContext))
@@ -178,7 +178,7 @@ namespace
 		}
 		case ST::FunctionDeclaration:
 		{
-			const DSLSymbol::FunctionDeclaration& f = std::get<DSLSymbol::FunctionDeclaration>(symbol->data);
+			const DSLSymbol::FunctionDeclaration& f = oc::get<DSLSymbol::FunctionDeclaration>(symbol->data);
 			outText += "function ";
 			size_t start = outText.size();
 			outText += f.name;
@@ -208,13 +208,13 @@ namespace
 		}
 		case ST::FunctionCall:
 		{
-			const DSLSymbol::FunctionCall& call = std::get<DSLSymbol::FunctionCall>(symbol->data);
+			const DSLSymbol::FunctionCall& call = oc::get<DSLSymbol::FunctionCall>(symbol->data);
 			if (call.receiver != nullptr)
 			{
 				renderSymbol(call.receiver, compact, false, {}, outText, outSpans);
 				outText += ".";
 			}
-			const DSLSymbol::FunctionDeclaration& callee = std::get<DSLSymbol::FunctionDeclaration>(call.functionSymbol->data);
+			const DSLSymbol::FunctionDeclaration& callee = oc::get<DSLSymbol::FunctionDeclaration>(call.functionSymbol->data);
 			size_t start = outText.size();
 			outText += callee.name;
 			appendSpan(symbol, outText, start, outSpans, slot); // span -> the call site, not the callee's own declaration
@@ -225,7 +225,7 @@ namespace
 				const DSLSymbol::CallArgument& arg = call.arguments[i];
 				if (arg.parameter != nullptr)
 				{
-					const DSLSymbol::VariableDeclaration& param = std::get<DSLSymbol::VariableDeclaration>(arg.parameter->data);
+					const DSLSymbol::VariableDeclaration& param = oc::get<DSLSymbol::VariableDeclaration>(arg.parameter->data);
 					if (param.isRef)
 						outText += "ref ";
 					if (!compact)
@@ -250,7 +250,7 @@ namespace
 		}
 		case ST::FlowControl:
 		{
-			const DSLSymbol::FlowControl& fc = std::get<DSLSymbol::FlowControl>(symbol->data);
+			const DSLSymbol::FlowControl& fc = oc::get<DSLSymbol::FlowControl>(symbol->data);
 			if (fc.control == DSLFlowControl::For)
 			{
 				// Unlike every other FlowControl kind, "for" previously had no span of its own at all (only its
@@ -304,15 +304,15 @@ namespace
 		}
 		case ST::Expression:
 		{
-			const DSLSymbol::Expression& e = std::get<DSLSymbol::Expression>(symbol->data);
+			const DSLSymbol::Expression& e = oc::get<DSLSymbol::Expression>(symbol->data);
 
 			// "ref" prefixes an assignment into a ref-parameter's reference (e.g. `ref appliedForce = toApply`
 			// inside the function that owns it) -- distinct from a `ref` argument at a CALL site, handled above.
 			if (!e.operators.empty() && dslIsAssignOperator(e.operators[0])
 				&& !e.operands.empty() && e.operands[0]->type == ST::VariableReference)
 			{
-				const DSLSymbol::VariableReference& leftRef = std::get<DSLSymbol::VariableReference>(e.operands[0]->data);
-				if (std::get<DSLSymbol::VariableDeclaration>(leftRef.declaration->data).isRef)
+				const DSLSymbol::VariableReference& leftRef = oc::get<DSLSymbol::VariableReference>(e.operands[0]->data);
+				if (oc::get<DSLSymbol::VariableDeclaration>(leftRef.declaration->data).isRef)
 					outText += "ref ";
 			}
 
@@ -353,7 +353,7 @@ namespace
 		}
 		case ST::MemberAccess:
 		{
-			const DSLSymbol::MemberAccess& m = std::get<DSLSymbol::MemberAccess>(symbol->data);
+			const DSLSymbol::MemberAccess& m = oc::get<DSLSymbol::MemberAccess>(symbol->data);
 			renderSymbol(m.receiver, compact, false, {}, outText, outSpans);
 			outText += ".";
 			const size_t start = outText.size();
@@ -364,26 +364,26 @@ namespace
 		case ST::Comment:
 		{
 			const size_t start = outText.size();
-			outText += "# " + std::get<DSLSymbol::Comment>(symbol->data).text;
+			outText += "# " + oc::get<DSLSymbol::Comment>(symbol->data).text;
 			appendSpan(symbol, outText, start, outSpans, slot);
 			break;
 		}
 		case ST::Placeholder:
 		{
-			const DSLSymbol::Placeholder& p = std::get<DSLSymbol::Placeholder>(symbol->data);
+			const DSLSymbol::Placeholder& p = oc::get<DSLSymbol::Placeholder>(symbol->data);
 			const size_t start = outText.size();
 			// A statement placeholder renders as an empty span -- a blank line, like an empty line in any text
 			// editor (Enter, not an ever-visible marker, is what creates one -- see ScriptEditor). A VALUE
 			// placeholder still needs a visible marker since it sits inside an otherwise-real line of code.
 			if (p.expectedType != DSLType::Void)
-				outText += "<" + std::string(dslTypeName(p.expectedType)) + ">";
+				outText += "<" + oc::string(dslTypeName(p.expectedType)) + ">";
 			appendSpan(symbol, outText, start, outSpans, slot);
 			break;
 		}
 		}
 	}
 
-	void renderLine(DSLCodeLine& line, bool compact, std::string& outText, std::vector<SyntaxSpan>& outSpans)
+	void renderLine(DSLCodeLine& line, bool compact, oc::string& outText, oc::vector<SyntaxSpan>& outSpans)
 	{
 		if (line.head() != nullptr)
 			renderSymbol(line.head(), compact, false, SlotRef{ SlotRef::Kind::LineHead, nullptr, &line }, outText, outSpans);
@@ -393,7 +393,7 @@ namespace
 	{
 		if (head == nullptr || head->type != ST::FlowControl)
 			return false;
-		const DSLFlowControl control = std::get<DSLSymbol::FlowControl>(head->data).control;
+		const DSLFlowControl control = oc::get<DSLSymbol::FlowControl>(head->data).control;
 		return control == DSLFlowControl::ElseIf || control == DSLFlowControl::Else;
 	}
 
@@ -409,7 +409,7 @@ namespace
 
 	// ---- AutoCompleteRules helpers ----
 
-	bool matchesPrefix(const std::string& label, const std::string& prefix)
+	bool matchesPrefix(const oc::string& label, const oc::string& prefix)
 	{
 		if (prefix.size() > label.size())
 			return false;
@@ -419,13 +419,13 @@ namespace
 		return true;
 	}
 
-	void addIfMatches(std::vector<Candidate>& out, Candidate candidate, const std::string& typedPrefix)
+	void addIfMatches(oc::vector<Candidate>& out, Candidate candidate, const oc::string& typedPrefix)
 	{
 		if (matchesPrefix(candidate.label, typedPrefix))
-			out.push_back(std::move(candidate));
+			out.push_back(oc::move(candidate));
 	}
 
-	bool equalsCaseInsensitive(const std::string& a, const std::string& b)
+	bool equalsCaseInsensitive(const oc::string& a, const oc::string& b)
 	{
 		if (a.size() != b.size())
 			return false;
@@ -439,20 +439,20 @@ namespace
 	// list, preserving every other candidate's relative order -- so finishing a name to an exact match (e.g.
 	// typing "test" when both "test" and "test2" are in scope) always surfaces it first, ready to confirm,
 	// instead of wherever it happened to fall out of the underlying scan order.
-	void sortExactMatchFirst(std::vector<Candidate>& candidates, const std::string& typedPrefix)
+	void sortExactMatchFirst(oc::vector<Candidate>& candidates, const oc::string& typedPrefix)
 	{
 		if (typedPrefix.empty())
 			return;
-		const auto it = std::find_if(candidates.begin(), candidates.end(),
+		const auto it = oc::find_if(candidates.begin(), candidates.end(),
 			[&](const Candidate& c) { return equalsCaseInsensitive(c.label, typedPrefix); });
 		if (it != candidates.end() && it != candidates.begin())
-			std::rotate(candidates.begin(), it, it + 1);
+			oc::rotate(candidates.begin(), it, it + 1);
 	}
 
 	// Whether `text` reads as a real Int/Float literal -- so "bla" is never offered (or accepted) as a numeric
 	// value just because a variable/function of that name doesn't happen to exist either. An optional leading
 	// sign, digits, and (Float only) at most one '.' with at least one digit somewhere.
-	bool looksLikeIntLiteral(const std::string& text)
+	bool looksLikeIntLiteral(const oc::string& text)
 	{
 		if (text.empty())
 			return false;
@@ -465,7 +465,7 @@ namespace
 		return true;
 	}
 
-	bool looksLikeFloatLiteral(const std::string& text)
+	bool looksLikeFloatLiteral(const oc::string& text)
 	{
 		if (text.empty())
 			return false;
@@ -480,7 +480,7 @@ namespace
 		return sawDigit;
 	}
 
-	bool isValidLiteralTextImpl(DSLType type, const std::string& text)
+	bool isValidLiteralTextImpl(DSLType type, const oc::string& text)
 	{
 		// A string literal is QUOTED, exactly once: `"..."` -- an unquoted word in a string slot names a
 		// variable/function, never a literal (the quotes are what disambiguate `s2 = s1` from `s2 = "s1"`).
@@ -503,10 +503,10 @@ namespace
 	// SAME treatment one level up: it's declared ON the header line itself (at the header's own, shallower
 	// scopeLevel -- see commitForStatement), but scoped to just its body, so it's excluded once atLine sits at
 	// or past the loop's matching `end`.
-	std::vector<DSLSymbol*> inScopeVariables(const DSLCodeLine& atLine, const DSLScriptFile& file, const std::vector<std::unique_ptr<DSLSymbol>>& sidebar)
+	oc::vector<DSLSymbol*> inScopeVariables(const DSLCodeLine& atLine, const DSLScriptFile& file, const oc::vector<oc::unique_ptr<DSLSymbol>>& sidebar)
 	{
-		std::vector<DSLSymbol*> result;
-		for (const std::unique_ptr<DSLSymbol>& s : sidebar)
+		oc::vector<DSLSymbol*> result;
+		for (const oc::unique_ptr<DSLSymbol>& s : sidebar)
 			if (s->type == ST::VariableDeclaration)
 				result.push_back(s.get());
 
@@ -534,12 +534,12 @@ namespace
 			const DSLSymbol* head = line.head();
 			if (head != nullptr && head->type == ST::FlowControl && atIndex >= dslBlockEnd(file, i))
 			{
-				const DSLFlowControl control = std::get<DSLSymbol::FlowControl>(head->data).control;
+				const DSLFlowControl control = oc::get<DSLSymbol::FlowControl>(head->data).control;
 				if (control == DSLFlowControl::For || control == DSLFlowControl::ForEach
 					|| control == DSLFlowControl::IfExist)
 					continue;
 			}
-			for (const std::unique_ptr<DSLSymbol>& s : line.symbols)
+			for (const oc::unique_ptr<DSLSymbol>& s : line.symbols)
 				if (s->type == ST::VariableDeclaration)
 					result.push_back(s.get());
 			if (line.head() != nullptr && line.head()->type == ST::FunctionDeclaration)
@@ -553,13 +553,13 @@ namespace
 	// receiver-less call (see ScriptEditor::applyCandidate) -- offering one here would silently produce a
 	// wrong, receiver-less call to a method that needs one. Dot-calls are only reachable by dotting into their
 	// receiver's BindingObject (receiverCandidates, below).
-	std::vector<DSLSymbol*> knownFunctions(const DSLScriptFile& file, const std::vector<std::unique_ptr<DSLSymbol>>& builtins)
+	oc::vector<DSLSymbol*> knownFunctions(const DSLScriptFile& file, const oc::vector<oc::unique_ptr<DSLSymbol>>& builtins)
 	{
-		std::vector<DSLSymbol*> result;
-		for (const std::unique_ptr<DSLSymbol>& s : builtins)
-			if (s->type == ST::FunctionDeclaration && !std::get<DSLSymbol::FunctionDeclaration>(s->data).requiresReceiver)
+		oc::vector<DSLSymbol*> result;
+		for (const oc::unique_ptr<DSLSymbol>& s : builtins)
+			if (s->type == ST::FunctionDeclaration && !oc::get<DSLSymbol::FunctionDeclaration>(s->data).requiresReceiver)
 				result.push_back(s.get());
-		for (const std::unique_ptr<DSLCodeLine>& line : file.lines)
+		for (const oc::unique_ptr<DSLCodeLine>& line : file.lines)
 			if (line->head() != nullptr && line->head()->type == ST::FunctionDeclaration)
 				result.push_back(line->head());
 		return result;
@@ -571,7 +571,7 @@ namespace
 	// Whether a foreach/ifexist in a block ENCLOSING atLine is reading the storage named by (root, path) --
 	// what makes a container-mutating call (push/clear) refuse to be offered/authored there. See
 	// FunctionDeclaration::mutatesContainer: a diagnostic for a logic mistake, not a safety mechanism.
-	bool isContainerIterated(const DSLSymbol* root, const std::string& path, const DSLCodeLine& atLine,
+	bool isContainerIterated(const DSLSymbol* root, const oc::string& path, const DSLCodeLine& atLine,
 		const DSLScriptFile& file)
 	{
 		if (root == nullptr)
@@ -586,11 +586,11 @@ namespace
 			const DSLSymbol* head = file.lines[i]->head();
 			if (head == nullptr || head->type != ST::FlowControl)
 				continue;
-			const DSLSymbol::FlowControl& fc = std::get<DSLSymbol::FlowControl>(head->data);
+			const DSLSymbol::FlowControl& fc = oc::get<DSLSymbol::FlowControl>(head->data);
 			if (fc.control == DSLFlowControl::ForEach || fc.control == DSLFlowControl::IfExist)
 			{
 				const DSLSymbol* loopRoot = nullptr;
-				std::string loopPath;
+				oc::string loopPath;
 				if (dslChainToRoot(fc.condition, loopRoot, loopPath) && loopRoot == root && loopPath == path)
 					return true;
 			}
@@ -598,16 +598,16 @@ namespace
 		return false;
 	}
 
-	void addVariableCandidates(std::vector<Candidate>& out, const DSLCodeLine& atLine, const DSLScriptFile& file,
-		const std::vector<std::unique_ptr<DSLSymbol>>& sidebar, const std::string& typedPrefix,
+	void addVariableCandidates(oc::vector<Candidate>& out, const DSLCodeLine& atLine, const DSLScriptFile& file,
+		const oc::vector<oc::unique_ptr<DSLSymbol>>& sidebar, const oc::string& typedPrefix,
 		Candidate::Kind kind, DSLSymbol* excludeVariable, auto&& accept)
 	{
 		for (DSLSymbol* var : inScopeVariables(atLine, file, sidebar))
 		{
 			if (var == excludeVariable)
 				continue;
-			const DSLSymbol::VariableDeclaration& v = std::get<DSLSymbol::VariableDeclaration>(var->data);
-			const DSLType varType = std::get<DSLSymbol::TypeDeclaration>(v.typeSymbol->data).type;
+			const DSLSymbol::VariableDeclaration& v = oc::get<DSLSymbol::VariableDeclaration>(var->data);
+			const DSLType varType = oc::get<DSLSymbol::TypeDeclaration>(v.typeSymbol->data).type;
 			// SIDEBAR bindings (self/physics/...) are never plain values or assignment targets -- they're
 			// offered as Kind::BindingObject dot-into candidates instead (ScriptEditor appends those, gated on
 			// the script's required-components set). Told apart from a local by having no owning line: a
@@ -645,13 +645,13 @@ namespace
 	// editor stages arguments for call STATEMENTS and for call VALUES inside chain composes (ScriptEditor's
 	// CallArgValue flow), but not, e.g., for another call's own argument slot (no nested staging), and
 	// placeholder arguments never land in the document.
-	void addFunctionCandidates(std::vector<Candidate>& out, const DSLScriptFile& file,
-		const std::vector<std::unique_ptr<DSLSymbol>>& builtins, const std::string& typedPrefix,
+	void addFunctionCandidates(oc::vector<Candidate>& out, const DSLScriptFile& file,
+		const oc::vector<oc::unique_ptr<DSLSymbol>>& builtins, const oc::string& typedPrefix,
 		bool includeParameterized, auto&& accept)
 	{
 		for (DSLSymbol* func : knownFunctions(file, builtins))
 		{
-			const DSLSymbol::FunctionDeclaration& f = std::get<DSLSymbol::FunctionDeclaration>(func->data);
+			const DSLSymbol::FunctionDeclaration& f = oc::get<DSLSymbol::FunctionDeclaration>(func->data);
 			if (!accept(f.returnType))
 				continue;
 			if (!includeParameterized && !f.parameterVarDeclarations.empty())
@@ -680,7 +680,7 @@ bool Syntax::isBlockOpener(const DSLSymbol* head)
 		return true;
 	if (head->type == ST::FlowControl)
 	{
-		const DSLFlowControl control = std::get<DSLSymbol::FlowControl>(head->data).control;
+		const DSLFlowControl control = oc::get<DSLSymbol::FlowControl>(head->data).control;
 		return control == DSLFlowControl::If || control == DSLFlowControl::ElseIf
 			|| control == DSLFlowControl::Else || control == DSLFlowControl::While
 			|| control == DSLFlowControl::For || control == DSLFlowControl::ForEach
@@ -689,14 +689,14 @@ bool Syntax::isBlockOpener(const DSLSymbol* head)
 	return false;
 }
 
-std::vector<SyntaxLine> Syntax::format(DSLScriptFile& file, bool compact)
+oc::vector<SyntaxLine> Syntax::format(DSLScriptFile& file, bool compact)
 {
-	std::vector<SyntaxLine> out;
+	oc::vector<SyntaxLine> out;
 
 	struct OpenBlock { int scopeLevel; DSLSymbol* headerSymbol; };
-	std::vector<OpenBlock> stack;
+	oc::vector<OpenBlock> stack;
 
-	for (std::unique_ptr<DSLCodeLine>& linePtr : file.lines)
+	for (oc::unique_ptr<DSLCodeLine>& linePtr : file.lines)
 	{
 		DSLCodeLine& line = *linePtr;
 		DSLSymbol* head = line.head();
@@ -716,7 +716,7 @@ std::vector<SyntaxLine> Syntax::format(DSLScriptFile& file, bool compact)
 		syntaxLine.sourceLine = &line;
 		syntaxLine.scopeLevel = line.scopeLevel;
 		renderLine(line, compact, syntaxLine.text, syntaxLine.spans);
-		out.push_back(std::move(syntaxLine));
+		out.push_back(oc::move(syntaxLine));
 
 		if (isBlockOpener(head) && !continuation)
 			stack.push_back({ line.scopeLevel, head });
@@ -731,11 +731,11 @@ std::vector<SyntaxLine> Syntax::format(DSLScriptFile& file, bool compact)
 	return out;
 }
 
-std::vector<Candidate> AutoCompleteRules::candidatesFor(DSLType expectedType, const DSLCodeLine& atLine, const DSLScriptFile& file,
-	const std::vector<std::unique_ptr<DSLSymbol>>& sidebar, const std::vector<std::unique_ptr<DSLSymbol>>& builtins,
-	const std::string& typedPrefix, DSLSymbol* excludeVariable, bool offerComparisonLeads)
+oc::vector<Candidate> AutoCompleteRules::candidatesFor(DSLType expectedType, const DSLCodeLine& atLine, const DSLScriptFile& file,
+	const oc::vector<oc::unique_ptr<DSLSymbol>>& sidebar, const oc::vector<oc::unique_ptr<DSLSymbol>>& builtins,
+	const oc::string& typedPrefix, DSLSymbol* excludeVariable, bool offerComparisonLeads)
 {
-	std::vector<Candidate> out;
+	oc::vector<Candidate> out;
 
 	if (expectedType == DSLType::Void)
 	{
@@ -761,7 +761,7 @@ std::vector<Candidate> AutoCompleteRules::candidatesFor(DSLType expectedType, co
 		const DSLSymbol* branchHead = (headerIndex >= 0) ? file.lines[headerIndex]->head() : nullptr;
 		if (branchHead != nullptr && branchHead->type == ST::FlowControl)
 		{
-			const DSLFlowControl branchControl = std::get<DSLSymbol::FlowControl>(branchHead->data).control;
+			const DSLFlowControl branchControl = oc::get<DSLSymbol::FlowControl>(branchHead->data).control;
 			// `ifexist` takes an `else` (the thing wasn't there) but no `elseif`: an elseif carries a bool
 			// condition, which has nothing to continue from a lookup that either found something or didn't.
 			const bool chainable = branchControl == DSLFlowControl::If || branchControl == DSLFlowControl::ElseIf
@@ -773,7 +773,7 @@ std::vector<Candidate> AutoCompleteRules::candidatesFor(DSLType expectedType, co
 				bool chainHasElse = false;
 				for (int i = headerIndex; !chainHasElse; )
 				{
-					const DSLFlowControl c = std::get<DSLSymbol::FlowControl>(file.lines[i]->head()->data).control;
+					const DSLFlowControl c = oc::get<DSLSymbol::FlowControl>(file.lines[i]->head()->data).control;
 					if (c == DSLFlowControl::Else)
 						chainHasElse = true;
 					const int next = dslBlockEnd(file, i);
@@ -783,7 +783,7 @@ std::vector<Candidate> AutoCompleteRules::candidatesFor(DSLType expectedType, co
 					const DSLSymbol* nextHead = file.lines[next]->head();
 					if (nextHead == nullptr || nextHead->type != ST::FlowControl)
 						break;
-					const DSLFlowControl nc = std::get<DSLSymbol::FlowControl>(nextHead->data).control;
+					const DSLFlowControl nc = oc::get<DSLSymbol::FlowControl>(nextHead->data).control;
 					if (nc != DSLFlowControl::ElseIf && nc != DSLFlowControl::Else)
 						break;
 					i = next;
@@ -854,14 +854,14 @@ std::vector<Candidate> AutoCompleteRules::candidatesFor(DSLType expectedType, co
 	return out;
 }
 
-bool AutoCompleteRules::isValidLiteralText(DSLType type, const std::string& text)
+bool AutoCompleteRules::isValidLiteralText(DSLType type, const oc::string& text)
 {
 	return isValidLiteralTextImpl(type, text);
 }
 
-std::vector<Candidate> AutoCompleteRules::typeKeywordCandidates(const std::string& typedPrefix)
+oc::vector<Candidate> AutoCompleteRules::typeKeywordCandidates(const oc::string& typedPrefix)
 {
-	std::vector<Candidate> out;
+	oc::vector<Candidate> out;
 	auto add = [&](DSLType t)
 	{
 		Candidate c;
@@ -878,7 +878,7 @@ std::vector<Candidate> AutoCompleteRules::typeKeywordCandidates(const std::strin
 	return out;
 }
 
-bool AutoCompleteRules::isFunctionNameTaken(const std::string& name, const DSLScriptFile& file, const std::vector<std::unique_ptr<DSLSymbol>>& builtins,
+bool AutoCompleteRules::isFunctionNameTaken(const oc::string& name, const DSLScriptFile& file, const oc::vector<oc::unique_ptr<DSLSymbol>>& builtins,
 	DSLSymbol* excludeFunction)
 {
 	using ST = DSLSymbol::SymbolType;
@@ -891,13 +891,13 @@ bool AutoCompleteRules::isFunctionNameTaken(const std::string& name, const DSLSc
 	// from every plain candidate list (see candidatesForAnyValue) and the loader resolves a bare identifier
 	// against requiresReceiver=false only -- so a local or function of the same name is never ambiguous, and its
 	// generated C++ is a qualified/member call either way.
-	for (const std::unique_ptr<DSLSymbol>& s : builtins)
-		if (s->type == ST::FunctionDeclaration && !std::get<DSLSymbol::FunctionDeclaration>(s->data).requiresReceiver
-			&& std::get<DSLSymbol::FunctionDeclaration>(s->data).name == name)
+	for (const oc::unique_ptr<DSLSymbol>& s : builtins)
+		if (s->type == ST::FunctionDeclaration && !oc::get<DSLSymbol::FunctionDeclaration>(s->data).requiresReceiver
+			&& oc::get<DSLSymbol::FunctionDeclaration>(s->data).name == name)
 			return true;
-	for (const std::unique_ptr<DSLCodeLine>& line : file.lines)
+	for (const oc::unique_ptr<DSLCodeLine>& line : file.lines)
 		if (line->head() != nullptr && line->head() != excludeFunction && line->head()->type == ST::FunctionDeclaration
-			&& std::get<DSLSymbol::FunctionDeclaration>(line->head()->data).name == name)
+			&& oc::get<DSLSymbol::FunctionDeclaration>(line->head()->data).name == name)
 			return true;
 	return false;
 }
@@ -917,8 +917,8 @@ bool AutoCompleteRules::isVariableReferenced(const DSLSymbol* varDecl, const DSL
 	// DSL.ixx's ownership model) -- no recursive tree-walk needed to find nested VariableReferences.
 	const int blockEnd = dslBlockEnd(file, headerIndex);
 	for (int i = headerIndex + 1; i < blockEnd; ++i)
-		for (const std::unique_ptr<DSLSymbol>& s : file.lines[i]->symbols)
-			if (s->type == ST::VariableReference && std::get<DSLSymbol::VariableReference>(s->data).declaration == varDecl)
+		for (const oc::unique_ptr<DSLSymbol>& s : file.lines[i]->symbols)
+			if (s->type == ST::VariableReference && oc::get<DSLSymbol::VariableReference>(s->data).declaration == varDecl)
 				return true;
 
 	return false;
@@ -928,9 +928,9 @@ bool AutoCompleteRules::isFunctionReferenced(const DSLSymbol* funcDecl, const DS
 {
 	using ST = DSLSymbol::SymbolType;
 
-	for (const std::unique_ptr<DSLCodeLine>& line : file.lines)
-		for (const std::unique_ptr<DSLSymbol>& s : line->symbols)
-			if (s->type == ST::FunctionCall && std::get<DSLSymbol::FunctionCall>(s->data).functionSymbol == funcDecl)
+	for (const oc::unique_ptr<DSLCodeLine>& line : file.lines)
+		for (const oc::unique_ptr<DSLSymbol>& s : line->symbols)
+			if (s->type == ST::FunctionCall && oc::get<DSLSymbol::FunctionCall>(s->data).functionSymbol == funcDecl)
 				return true;
 	return false;
 }
@@ -941,19 +941,19 @@ bool AutoCompleteRules::isFunctionResultUsed(const DSLSymbol* funcDecl, const DS
 
 	// A call that is its own line's HEAD is a call statement -- the one shape that ignores the result. Any
 	// other position (an initializer, an argument, an operand, a return's value) consumed it at its old type.
-	for (const std::unique_ptr<DSLCodeLine>& line : file.lines)
-		for (const std::unique_ptr<DSLSymbol>& s : line->symbols)
-			if (s->type == ST::FunctionCall && std::get<DSLSymbol::FunctionCall>(s->data).functionSymbol == funcDecl
+	for (const oc::unique_ptr<DSLCodeLine>& line : file.lines)
+		for (const oc::unique_ptr<DSLSymbol>& s : line->symbols)
+			if (s->type == ST::FunctionCall && oc::get<DSLSymbol::FunctionCall>(s->data).functionSymbol == funcDecl
 				&& line->head() != s.get())
 				return true;
 	return false;
 }
 
-std::vector<Candidate> AutoCompleteRules::candidatesForAnyValue(const DSLCodeLine& atLine, const DSLScriptFile& file,
-	const std::vector<std::unique_ptr<DSLSymbol>>& sidebar, const std::vector<std::unique_ptr<DSLSymbol>>& builtins,
-	const std::string& typedPrefix, DSLSymbol* excludeVariable, bool offerLiterals)
+oc::vector<Candidate> AutoCompleteRules::candidatesForAnyValue(const DSLCodeLine& atLine, const DSLScriptFile& file,
+	const oc::vector<oc::unique_ptr<DSLSymbol>>& sidebar, const oc::vector<oc::unique_ptr<DSLSymbol>>& builtins,
+	const oc::string& typedPrefix, DSLSymbol* excludeVariable, bool offerLiterals)
 {
-	std::vector<Candidate> out;
+	oc::vector<Candidate> out;
 	if (offerLiterals)
 	{
 		addIfMatches(out, Candidate{ "true", Candidate::Kind::KeywordTrue }, typedPrefix);
@@ -981,9 +981,9 @@ namespace
 {
 	// The one construction path every fixed operator list shares -- labels always come from operatorText, so
 	// candidate labels can never drift from how the operator renders.
-	std::vector<Candidate> operatorCandidates(std::initializer_list<DSLOperator> operators, Candidate::Kind kind, const std::string& typedPrefix)
+	oc::vector<Candidate> operatorCandidates(oc::initializer_list<DSLOperator> operators, Candidate::Kind kind, const oc::string& typedPrefix)
 	{
-		std::vector<Candidate> out;
+		oc::vector<Candidate> out;
 		for (DSLOperator op : operators)
 		{
 			Candidate c;
@@ -997,12 +997,12 @@ namespace
 	}
 }
 
-std::vector<Candidate> AutoCompleteRules::receiverCandidates(const ScriptBindings& bindings, const DSL& document, DSLSymbol* receiverDecl,
+oc::vector<Candidate> AutoCompleteRules::receiverCandidates(const ScriptBindings& bindings, const DSL& document, DSLSymbol* receiverDecl,
 	DSLType receiverType, DSLType expectedType, bool anyValue, bool receiverWritable, bool receiverIsRoot,
-	const DSLCodeLine* atLine, const DSLScriptFile& file, const std::string& receiverPath,
-	const std::string& typedPrefix)
+	const DSLCodeLine* atLine, const DSLScriptFile& file, const oc::string& receiverPath,
+	const oc::string& typedPrefix)
 {
-	std::vector<Candidate> out;
+	oc::vector<Candidate> out;
 
 	// self.data: no functions, just the document's OWN fields (DSL::dataFields) -- always writable (persistent
 	// data is meant to be read/write), type-filtered the same way any other member is. This is the one place a
@@ -1035,7 +1035,7 @@ std::vector<Candidate> AutoCompleteRules::receiverCandidates(const ScriptBinding
 	if (receiverType == DSLType::ScriptEvents)
 	{
 		const bool statementContext = expectedType == DSLType::Void && !anyValue;
-		for (const std::string& name : document.eventNames)
+		for (const oc::string& name : document.eventNames)
 		{
 			const bool accepted = !statementContext && (anyValue || expectedType == DSLType::Int);
 			if (!accepted)
@@ -1054,9 +1054,9 @@ std::vector<Candidate> AutoCompleteRules::receiverCandidates(const ScriptBinding
 
 	// A receiver is a binding OBJECT (physics/self) or any STRUCT-typed value -- same candidate shapes either
 	// way, sourced from the matching registry side.
-	const std::vector<BindingFunc>* functions = nullptr;
-	const std::vector<BindingMember>* members = nullptr;
-	std::span<DSLSymbol* const> functionSymbols;
+	const oc::vector<BindingFunc>* functions = nullptr;
+	const oc::vector<BindingMember>* members = nullptr;
+	oc::span<DSLSymbol* const> functionSymbols;
 	if (const BindingObject* object = bindings.objectFor(receiverType); object != nullptr)
 	{
 		functions = &object->functions;
@@ -1135,7 +1135,7 @@ bool AutoCompleteRules::isEqualityOnlyType(DSLType type)
 	return dslIsEngineObjectType(type);
 }
 
-std::vector<Candidate> AutoCompleteRules::comparisonOperatorCandidates(const std::string& typedPrefix, bool equalityOnly)
+oc::vector<Candidate> AutoCompleteRules::comparisonOperatorCandidates(const oc::string& typedPrefix, bool equalityOnly)
 {
 	if (equalityOnly)
 		return operatorCandidates({ DSLOperator::Equal, DSLOperator::NotEqual }, Candidate::Kind::Comparator, typedPrefix);
@@ -1144,26 +1144,26 @@ std::vector<Candidate> AutoCompleteRules::comparisonOperatorCandidates(const std
 		Candidate::Kind::Comparator, typedPrefix);
 }
 
-std::vector<Candidate> AutoCompleteRules::compoundAssignOperatorCandidates(const std::string& typedPrefix)
+oc::vector<Candidate> AutoCompleteRules::compoundAssignOperatorCandidates(const oc::string& typedPrefix)
 {
 	return operatorCandidates({ DSLOperator::AssignAdd, DSLOperator::AssignSubtract, DSLOperator::AssignMultiply,
 		DSLOperator::AssignDivide, DSLOperator::AssignModulus },
 		Candidate::Kind::AssignOperator, typedPrefix);
 }
 
-std::vector<Candidate> AutoCompleteRules::arithmeticOperatorCandidates(const std::string& typedPrefix)
+oc::vector<Candidate> AutoCompleteRules::arithmeticOperatorCandidates(const oc::string& typedPrefix)
 {
 	return operatorCandidates({ DSLOperator::Add, DSLOperator::Subtract, DSLOperator::Multiply,
 		DSLOperator::Divide, DSLOperator::Modulus },
 		Candidate::Kind::ArithmeticOperator, typedPrefix);
 }
 
-std::vector<Candidate> AutoCompleteRules::logicalOperatorCandidates(const std::string& typedPrefix)
+oc::vector<Candidate> AutoCompleteRules::logicalOperatorCandidates(const oc::string& typedPrefix)
 {
 	return operatorCandidates({ DSLOperator::And, DSLOperator::Or }, Candidate::Kind::LogicalOperator, typedPrefix);
 }
 
-std::vector<Candidate> AutoCompleteRules::assignOperatorCandidates(const std::string& typedPrefix)
+oc::vector<Candidate> AutoCompleteRules::assignOperatorCandidates(const oc::string& typedPrefix)
 {
 	return operatorCandidates({ DSLOperator::Assign, DSLOperator::AssignAdd, DSLOperator::AssignSubtract,
 		DSLOperator::AssignMultiply, DSLOperator::AssignDivide, DSLOperator::AssignModulus },
@@ -1175,7 +1175,7 @@ DSLType AutoCompleteRules::enclosingFunctionReturnType(const DSLCodeLine& atLine
 	const int headerIndex = dslEnclosingFunctionHeader(file, dslLineIndex(file, &atLine));
 	if (headerIndex < 0)
 		return DSLType::Void;
-	return std::get<DSLSymbol::FunctionDeclaration>(file.lines[headerIndex]->head()->data).returnType;
+	return oc::get<DSLSymbol::FunctionDeclaration>(file.lines[headerIndex]->head()->data).returnType;
 }
 
 DSLType AutoCompleteRules::expectedTypeForSlot(const SlotRef& slot, const DSLScriptFile& file)
@@ -1189,7 +1189,7 @@ DSLType AutoCompleteRules::expectedTypeForSlot(const SlotRef& slot, const DSLScr
 
 	case SlotRef::Kind::FlowControlCondition:
 	{
-		const DSLSymbol::FlowControl& fc = std::get<DSLSymbol::FlowControl>(slot.parent->data);
+		const DSLSymbol::FlowControl& fc = oc::get<DSLSymbol::FlowControl>(slot.parent->data);
 		if (fc.control == DSLFlowControl::Return)
 			return slot.line != nullptr ? enclosingFunctionReturnType(*slot.line, file) : DSLType::Void;
 		if (fc.control == DSLFlowControl::ForEach)
@@ -1199,8 +1199,8 @@ DSLType AutoCompleteRules::expectedTypeForSlot(const SlotRef& slot, const DSLScr
 			// isn't offered -- the whole header re-authors through the staged flow instead.
 			if (fc.forLoopVar == nullptr)
 				return DSLType::Void;
-			const DSLSymbol::VariableDeclaration& elem = std::get<DSLSymbol::VariableDeclaration>(fc.forLoopVar->data);
-			return dslArrayOf(std::get<DSLSymbol::TypeDeclaration>(elem.typeSymbol->data).type);
+			const DSLSymbol::VariableDeclaration& elem = oc::get<DSLSymbol::VariableDeclaration>(fc.forLoopVar->data);
+			return dslArrayOf(oc::get<DSLSymbol::TypeDeclaration>(elem.typeSymbol->data).type);
 		}
 		if (fc.control == DSLFlowControl::IfExist)
 		{
@@ -1209,8 +1209,8 @@ DSLType AutoCompleteRules::expectedTypeForSlot(const SlotRef& slot, const DSLScr
 			// an engine collection) re-authors through the staged flow instead.
 			if (fc.forLoopVar == nullptr)
 				return DSLType::Void;
-			const DSLSymbol::VariableDeclaration& elem = std::get<DSLSymbol::VariableDeclaration>(fc.forLoopVar->data);
-			const DSLType boundType = std::get<DSLSymbol::TypeDeclaration>(elem.typeSymbol->data).type;
+			const DSLSymbol::VariableDeclaration& elem = oc::get<DSLSymbol::VariableDeclaration>(fc.forLoopVar->data);
+			const DSLType boundType = oc::get<DSLSymbol::TypeDeclaration>(elem.typeSymbol->data).type;
 			return dslIsComponentType(boundType) ? DSLType::Entity : dslArrayOf(boundType);
 		}
 		return DSLType::Bool; // If/ElseIf/While
@@ -1219,7 +1219,7 @@ DSLType AutoCompleteRules::expectedTypeForSlot(const SlotRef& slot, const DSLScr
 	case SlotRef::Kind::IfExistKey:
 	{
 		// The key type is the CONTAINER's, not the element's (Int for an array index, whatever a map declares).
-		const DSLSymbol::FlowControl& fc = std::get<DSLSymbol::FlowControl>(slot.parent->data);
+		const DSLSymbol::FlowControl& fc = oc::get<DSLSymbol::FlowControl>(slot.parent->data);
 		const BindingObject* container = (fc.condition != nullptr)
 			? Globals::scriptBindings.objectFor(dslValueType(fc.condition)) : nullptr;
 		return container != nullptr ? container->lookupKeyType : DSLType::Void;
@@ -1227,7 +1227,7 @@ DSLType AutoCompleteRules::expectedTypeForSlot(const SlotRef& slot, const DSLScr
 
 	case SlotRef::Kind::CallArgumentValue:
 	{
-		const DSLSymbol::FunctionCall& call = std::get<DSLSymbol::FunctionCall>(slot.parent->data);
+		const DSLSymbol::FunctionCall& call = oc::get<DSLSymbol::FunctionCall>(slot.parent->data);
 		if (slot.argIndex < 0 || slot.argIndex >= static_cast<int>(call.arguments.size()))
 			return DSLType::Void;
 		const DSLSymbol* paramSym = call.arguments[slot.argIndex].parameter;
@@ -1235,19 +1235,19 @@ DSLType AutoCompleteRules::expectedTypeForSlot(const SlotRef& slot, const DSLScr
 		{
 			// Positional argument (vec3(0, 1, 0)) -- fall back to the CALLEE's parameter list by index, so e.g.
 			// a vector literal's components still edit as the Floats they are.
-			const DSLSymbol::FunctionDeclaration& callee = std::get<DSLSymbol::FunctionDeclaration>(call.functionSymbol->data);
+			const DSLSymbol::FunctionDeclaration& callee = oc::get<DSLSymbol::FunctionDeclaration>(call.functionSymbol->data);
 			if (slot.argIndex >= static_cast<int>(callee.parameterVarDeclarations.size()))
 				return DSLType::Void; // past the callee's declared count -- shouldn't occur via the editor
 			paramSym = callee.parameterVarDeclarations[slot.argIndex];
 		}
-		const DSLSymbol::VariableDeclaration& param = std::get<DSLSymbol::VariableDeclaration>(paramSym->data);
-		return std::get<DSLSymbol::TypeDeclaration>(param.typeSymbol->data).type;
+		const DSLSymbol::VariableDeclaration& param = oc::get<DSLSymbol::VariableDeclaration>(paramSym->data);
+		return oc::get<DSLSymbol::TypeDeclaration>(param.typeSymbol->data).type;
 	}
 
 	case SlotRef::Kind::VariableDeclarationInitialValue:
 	{
-		const DSLSymbol::VariableDeclaration& v = std::get<DSLSymbol::VariableDeclaration>(slot.parent->data);
-		return std::get<DSLSymbol::TypeDeclaration>(v.typeSymbol->data).type;
+		const DSLSymbol::VariableDeclaration& v = oc::get<DSLSymbol::VariableDeclaration>(slot.parent->data);
+		return oc::get<DSLSymbol::TypeDeclaration>(v.typeSymbol->data).type;
 	}
 
 	case SlotRef::Kind::ExpressionOperand:
@@ -1256,7 +1256,7 @@ DSLType AutoCompleteRules::expectedTypeForSlot(const SlotRef& slot, const DSLScr
 		// comparison or arithmetic chain, whatever any OTHER operand resolves to (all operands of one chain
 		// share a type by construction -- skipping the operand being edited keeps its current occupant from
 		// deciding its own replacement's type).
-		const DSLSymbol::Expression& e = std::get<DSLSymbol::Expression>(slot.parent->data);
+		const DSLSymbol::Expression& e = oc::get<DSLSymbol::Expression>(slot.parent->data);
 		for (size_t i = 0; i < e.operands.size(); ++i)
 		{
 			if (static_cast<int>(i) == slot.argIndex)
@@ -1287,7 +1287,7 @@ namespace
 			const DSLSymbol* head = file.lines[next]->head();
 			if (head == nullptr || head->type != ST::FlowControl)
 				return next;
-			const DSLFlowControl c = std::get<DSLSymbol::FlowControl>(head->data).control;
+			const DSLFlowControl c = oc::get<DSLSymbol::FlowControl>(head->data).control;
 			if (c != DSLFlowControl::ElseIf && c != DSLFlowControl::Else)
 				return next;
 			i = next;
@@ -1298,25 +1298,25 @@ namespace
 	// inScopeVariables makes readable: the binding is readable only in the construct's own branch, but it stays
 	// RESERVED across the sibling `else` too, because the generated C++ scopes the condition declaration over
 	// the entire if/else -- redeclaring the name in the else would silently shadow it there.
-	bool isChainBoundName(const std::string& name, const DSLScriptFile& file, int atIndex, DSLSymbol* excludeVariable)
+	bool isChainBoundName(const oc::string& name, const DSLScriptFile& file, int atIndex, DSLSymbol* excludeVariable)
 	{
 		for (int i = atIndex; i >= 0; --i)
 		{
 			const DSLSymbol* head = file.lines[i]->head();
 			if (head == nullptr || head->type != ST::FlowControl)
 				continue;
-			const DSLSymbol::FlowControl& fc = std::get<DSLSymbol::FlowControl>(head->data);
+			const DSLSymbol::FlowControl& fc = oc::get<DSLSymbol::FlowControl>(head->data);
 			if (fc.control != DSLFlowControl::IfExist || fc.forLoopVar == nullptr || fc.forLoopVar == excludeVariable)
 				continue;
 			if (atIndex < chainEnd(file, i)
-				&& std::get<DSLSymbol::VariableDeclaration>(fc.forLoopVar->data).name == name)
+				&& oc::get<DSLSymbol::VariableDeclaration>(fc.forLoopVar->data).name == name)
 				return true;
 		}
 		return false;
 	}
 }
 
-bool AutoCompleteRules::isReservedWord(const std::string& name)
+bool AutoCompleteRules::isReservedWord(const oc::string& name)
 {
 	// Every fixed word the grammar's statement/expression parsers (ScriptLang.cpp's flowControlKeyword,
 	// ScriptLoader.cpp's matching literal checks) match LITERALLY -- a name equal to one of these would silently
@@ -1347,8 +1347,8 @@ bool AutoCompleteRules::isReservedWord(const std::string& name)
 	return false;
 }
 
-bool AutoCompleteRules::isNameInScope(const std::string& name, const DSLCodeLine& atLine, const DSLScriptFile& file,
-	const std::vector<std::unique_ptr<DSLSymbol>>& sidebar, const std::vector<std::unique_ptr<DSLSymbol>>& builtins,
+bool AutoCompleteRules::isNameInScope(const oc::string& name, const DSLCodeLine& atLine, const DSLScriptFile& file,
+	const oc::vector<oc::unique_ptr<DSLSymbol>>& sidebar, const oc::vector<oc::unique_ptr<DSLSymbol>>& builtins,
 	DSLSymbol* excludeVariable)
 {
 	using ST = DSLSymbol::SymbolType;
@@ -1357,9 +1357,9 @@ bool AutoCompleteRules::isNameInScope(const std::string& name, const DSLCodeLine
 		return true;
 
 	// Sidebar bindings are visible everywhere.
-	for (const std::unique_ptr<DSLSymbol>& s : sidebar)
+	for (const oc::unique_ptr<DSLSymbol>& s : sidebar)
 		if (s->type == ST::VariableDeclaration && s.get() != excludeVariable
-			&& std::get<DSLSymbol::VariableDeclaration>(s->data).name == name)
+			&& oc::get<DSLSymbol::VariableDeclaration>(s->data).name == name)
 			return true;
 
 	// A variable can't shadow a function name either -- see isFunctionNameTaken for the same check in the
@@ -1374,7 +1374,7 @@ bool AutoCompleteRules::isNameInScope(const std::string& name, const DSLCodeLine
 	// Backward: anything CURRENTLY reachable from atLine, via the SAME block-scoping rule inScopeVariables uses
 	// (parameters included -- they're seeded there too, from the function header's own line).
 	for (DSLSymbol* var : inScopeVariables(atLine, file, sidebar))
-		if (var != excludeVariable && std::get<DSLSymbol::VariableDeclaration>(var->data).name == name)
+		if (var != excludeVariable && oc::get<DSLSymbol::VariableDeclaration>(var->data).name == name)
 			return true;
 
 	// An enclosing ifexist's binding is reserved even where it isn't readable -- see the helper.
@@ -1391,9 +1391,9 @@ bool AutoCompleteRules::isNameInScope(const std::string& name, const DSLCodeLine
 	const int enclosingHeader = dslEnclosingBlockHeader(file, atIndex);
 	const int scopeEnd = dslBlockEnd(file, enclosingHeader >= 0 ? enclosingHeader : dslEnclosingFunctionHeader(file, atIndex));
 	for (int i = atIndex; i < scopeEnd; ++i)
-		for (const std::unique_ptr<DSLSymbol>& s : file.lines[i]->symbols)
+		for (const oc::unique_ptr<DSLSymbol>& s : file.lines[i]->symbols)
 			if (s->type == ST::VariableDeclaration && s.get() != excludeVariable
-				&& std::get<DSLSymbol::VariableDeclaration>(s->data).name == name)
+				&& oc::get<DSLSymbol::VariableDeclaration>(s->data).name == name)
 				return true;
 
 	return false;

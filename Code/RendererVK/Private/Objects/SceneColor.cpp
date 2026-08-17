@@ -64,7 +64,7 @@ void SceneColor::destroy()
     m_colorMemory = nullptr; m_depthMemory = nullptr;
 }
 
-bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height, uint32 viewCount, const std::array<vk::ImageView, 2>& prepassDepthViews)
+bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height, uint32 viewCount, const oc::array<vk::ImageView, 2>& prepassDepthViews)
 {
     vk::Device vkDevice = Globals::device.getDevice();
     destroy();
@@ -89,7 +89,7 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
     }
 
     // ---- Render pass: colour (ends SHADER_READ_ONLY for the TAA compute pass) + transient depth ----
-    std::array<vk::AttachmentDescription2, 2> attachments{
+    oc::array<vk::AttachmentDescription2, 2> attachments{
         vk::AttachmentDescription2{ // 0: scene colour
             .format = colorFormat,
             .samples = vk::SampleCountFlagBits::e1,
@@ -125,7 +125,7 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
     // compute read (an explicit barrier in Renderer::recordCommandBuffers alone was not picked up by
     // synchronization validation for this cross-render-pass-boundary transition).
     const vk::PipelineStageFlags depthStages = vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests;
-    std::array<vk::SubpassDependency2, 3> dependencies{
+    oc::array<vk::SubpassDependency2, 3> dependencies{
         vk::SubpassDependency2{
             .srcSubpass = vk::SubpassExternal,
             .dstSubpass = 0,
@@ -165,7 +165,7 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
 
     for (uint32 i = 0; i < viewCount; ++i)
     {
-        std::array<vk::ImageView, 2> fbViews{ m_colorLayerViews[i], m_depthLayerViews[i] };
+        oc::array<vk::ImageView, 2> fbViews{ m_colorLayerViews[i], m_depthLayerViews[i] };
         vk::FramebufferCreateInfo fbInfo{
             .renderPass = m_renderPass,
             .attachmentCount = (uint32)fbViews.size(),
@@ -195,7 +195,7 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
         // layout round-trip is done with explicit barriers around the pass instead
         // (Renderer::recordReuseDepthBarrier). initial == final == the reference layout: this pass
         // performs no depth transitions itself.
-        std::array<vk::AttachmentDescription2, 2> reuseAttachments{
+        oc::array<vk::AttachmentDescription2, 2> reuseAttachments{
             attachments[0], // colour: identical to the main pass
             vk::AttachmentDescription2{
                 .format = SCENE_DEPTH_FORMAT, // == the G-buffer depth format
@@ -227,7 +227,7 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
 
         for (uint32 i = 0; i < viewCount; ++i)
         {
-            std::array<vk::ImageView, 2> reuseFbViews{ m_colorLayerViews[i], prepassDepthViews[i] };
+            oc::array<vk::ImageView, 2> reuseFbViews{ m_colorLayerViews[i], prepassDepthViews[i] };
             vk::FramebufferCreateInfo reuseFbInfo{
                 .renderPass = m_reuseRenderPass,
                 .attachmentCount = (uint32)reuseFbViews.size(),

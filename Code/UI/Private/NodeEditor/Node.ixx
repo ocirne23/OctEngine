@@ -39,18 +39,18 @@ export struct MemberEdit
     EMemberOp   op = EMemberOp::None;
     int         index = -1;               // member row for Remove / Rename / Retype
     EDataType   type = EDataType::Float;   // new type for Add / Retype
-    std::string name;                      // new name for Rename
+    oc::string name;                      // new name for Rename
 };
 
 export struct Pin
 {
-    std::string name;
+    oc::string name;
     Node* node = nullptr;
     EPinType type;
     EPinShape shape;
     uint32 color;
     EDataType dataType = EDataType::Exec;
-    std::string defaultValue;          // C++ literal used for an unconnected data input
+    oc::string defaultValue;          // C++ literal used for an unconnected data input
     int typeGroup = 0;                 // wildcard pins sharing a group resolve to the same concrete type
     EMutableType mutability = EMutableType::Readable; // input: required of its source; output: what it provides
     uint8 numConnections = 0;
@@ -63,15 +63,15 @@ export class Node
 public:
 
 	Node(uint32 nodeIdx) : m_nodeIdx(nodeIdx) {}
-    Node& initialize(ImVec2 initialPos, std::string name, ENodeStyle style, uint32 color);
+    Node& initialize(ImVec2 initialPos, oc::string name, ENodeStyle style, uint32 color);
     Node& initFromDef(ImVec2 initialPos, const NodeDef& def);
-    Node& addInput(EDataType dataType, const std::string& name, const std::string& defaultValue);
-    Node& addOutput(EDataType dataType, const std::string& name);
+    Node& addInput(EDataType dataType, const oc::string& name, const oc::string& defaultValue);
+    Node& addOutput(EDataType dataType, const oc::string& name);
 
     // Script Data node only: its output pins are user-defined persistent members. A member is a writable,
     // concretely-typed output pin. eraseOutputPin drops one (Scene fixes up its links first).
     bool isDynamic() const { return isScriptDataType(m_typeId); }
-    Node& addMember(EDataType type, const std::string& name);
+    Node& addMember(EDataType type, const oc::string& name);
     void  eraseOutputPin(int index);
 
     // The structural member edit recorded by the in-node editor this frame (op == None if none). Consumed by
@@ -86,12 +86,12 @@ public:
     // takeMemberEdit machinery as Script Data (Scene replays edits across every On Event node); `type` in the
     // edit is unused here since every entry is Exec.
     bool isEventNode() const { return isEventEntryType(m_typeId); }
-    Node& addEventEntry(const std::string& name);
+    Node& addEventEntry(const oc::string& name);
 
     // Trigger Audio node only: its exec INPUT pins are the target AudioComponent's sound aliases, kept in
     // front of the data inputs (synced from the entity by Scene::setAudioAliases, not user-edited).
     bool isTriggerAudio() const { return isTriggerAudioType(m_typeId); }
-    Node& addAudioEntry(const std::string& name);
+    Node& addAudioEntry(const oc::string& name);
 
     // Function boundary + call nodes. Function Input/Output edit their own typed pins (params/returns) via the
     // MemberEdit machinery, but are not synced across nodes. A Function Call mirrors an imported function's
@@ -100,24 +100,24 @@ public:
     bool isFunctionOutput() const { return isFunctionOutputType(m_typeId); }
     bool isFunctionCall() const   { return isFunctionCallType(m_typeId); }
 
-    const std::string& getFunctionName() const { return m_funcName; }
-    void setFunctionName(const std::string& name) { m_funcName = name; m_name = name.empty() ? m_name : name; }
-    const std::string& getFunctionScriptPath() const { return m_funcScriptPath; }
-    void setFunctionScriptPath(const std::string& path) { m_funcScriptPath = path; }
+    const oc::string& getFunctionName() const { return m_funcName; }
+    void setFunctionName(const oc::string& name) { m_funcName = name; m_name = name.empty() ? m_name : name; }
+    const oc::string& getFunctionScriptPath() const { return m_funcScriptPath; }
+    void setFunctionScriptPath(const oc::string& path) { m_funcScriptPath = path; }
 
-    Node& addParam(EDataType type, const std::string& name);  // Function Input: a typed data OUTPUT pin
-    Node& addReturn(EDataType type, const std::string& name); // Function Output: a typed data INPUT pin
+    Node& addParam(EDataType type, const oc::string& name);  // Function Input: a typed data OUTPUT pin
+    Node& addReturn(EDataType type, const oc::string& name); // Function Output: a typed data INPUT pin
     void  eraseInputPin(int index);
 
     // Function Call: builds the fixed exec in/out plus one input per param and one output per return, in the
     // order the signature lists them.
-    Node& makeFunctionCall(const std::vector<std::pair<EDataType, std::string>>& params,
-                           const std::vector<std::pair<EDataType, std::string>>& returns);
+    Node& makeFunctionCall(const oc::vector<oc::pair<EDataType, oc::string>>& params,
+                           const oc::vector<oc::pair<EDataType, oc::string>>& returns);
 
     // Label (comment box) accessors, used by save/load to persist the caption and box size.
     bool isLabel() const { return isLabelType(m_typeId); }
-    const std::string& getLabelText() const { return m_labelText; }
-    void setLabelText(const std::string& text) { m_labelText = text; }
+    const oc::string& getLabelText() const { return m_labelText; }
+    void setLabelText(const oc::string& text) { m_labelText = text; }
     ImVec2 getLabelSize() const { return m_labelSize; }
     void setLabelSize(ImVec2 size) { m_labelSize = size; }
 
@@ -127,9 +127,9 @@ public:
     ed::NodeId getId() const { return ed::NodeId(this); }
     operator ed::NodeId() const { return ed::NodeId(this); }
 
-    const std::string& getTypeId() const { return m_typeId; }
-    const std::vector<std::unique_ptr<Pin>>& getInputPins() const { return m_inputPins; }
-    const std::vector<std::unique_ptr<Pin>>& getOutputPins() const { return m_outputPins; }
+    const oc::string& getTypeId() const { return m_typeId; }
+    const oc::vector<oc::unique_ptr<Pin>>& getInputPins() const { return m_inputPins; }
+    const oc::vector<oc::unique_ptr<Pin>>& getOutputPins() const { return m_outputPins; }
 
     int getEnumSelection() const { return m_enumSelection; }
     void setEnumSelection(int selection) { m_enumSelection = selection; }
@@ -146,18 +146,18 @@ private:
     ImVec2 m_initialPos;
     uint32 m_color;
     ENodeStyle m_style;
-    std::string m_name;
-    std::string m_typeId;
+    oc::string m_name;
+    oc::string m_typeId;
     int m_enumSelection = 0;             // index into the node def's enumOptions (dropdown property)
     MemberEdit m_pendingEdit;            // Script Data: structural member edit recorded this frame
-    std::string m_funcName;              // Function Input/Output/Call: the function's name (pairs I/O, titles Call)
-    std::string m_funcScriptPath;        // Function Call: the .scr the imported function lives in
-    std::string m_labelText = "Label";   // Label: title-bar caption
+    oc::string m_funcName;              // Function Input/Output/Call: the function's name (pairs I/O, titles Call)
+    oc::string m_funcScriptPath;        // Function Call: the .scr the imported function lives in
+    oc::string m_labelText = "Label";   // Label: title-bar caption
     ImVec2 m_labelSize = ImVec2(0.0f, 0.0f); // Label: current group box size (updated as the user resizes)
     bool m_editingLabel = false;         // Label: title bar is in rename (InputText) mode
     bool m_labelFocusPending = false;    // Label: focus the rename field on the frame editing begins
-    std::vector<std::unique_ptr<Pin>> m_inputPins;
-    std::vector<std::unique_ptr<Pin>> m_outputPins;
+    oc::vector<oc::unique_ptr<Pin>> m_inputPins;
+    oc::vector<oc::unique_ptr<Pin>> m_outputPins;
 };
 
 } // namespace NodeEditor

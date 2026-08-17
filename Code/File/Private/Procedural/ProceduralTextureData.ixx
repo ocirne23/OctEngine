@@ -31,8 +31,8 @@ public:
 	const char*  getFormatInfo() const override;
 
 private:
-	std::string        m_fileName;
-	std::vector<Pixel> m_pixels;
+	oc::string        m_fileName;
+	oc::vector<Pixel> m_pixels;
 	uint32             m_width  = 0;
 	uint32             m_height = 0;
 };

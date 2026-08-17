@@ -55,11 +55,11 @@ export uint8 mutableBits(EMutableType m)
 // typeGroup > 0 marks a wildcard pin; all pins on a node sharing a group resolve to the same concrete type.
 export struct PinDef
 {
-    std::string  name;
+    oc::string  name;
     EDataType    type;
-    std::string  defaultValue;
+    oc::string  defaultValue;
     int          typeGroup = 0;
-    std::string  expr;        // for an output pin: its value expression (overrides the node-level emit)
+    oc::string  expr;        // for an output pin: its value expression (overrides the node-level emit)
     EMutableType mutability = EMutableType::Readable; // read/write capability; restricts what may connect here
 };
 
@@ -73,15 +73,15 @@ export struct PinDef
 // pin's `expr` (PinDef::expr), since `emit` on an exec node is a statement, not an expression.
 export struct NodeDef
 {
-    std::string          typeId;       // stable id stored in the file (no spaces)
-    std::string          displayName;  // shown on the node + palette
-    std::string          category;     // palette grouping
+    oc::string          typeId;       // stable id stored in the file (no spaces)
+    oc::string          displayName;  // shown on the node + palette
+    oc::string          category;     // palette grouping
     bool                 isExec = false;
-    std::vector<PinDef>  inputs;
-    std::vector<PinDef>  outputs;
-    std::string          emit;
-    std::vector<std::string> enumOptions; // dropdown labels for the node's property (empty = no property)
-    std::vector<std::string> enumTokens;  // code token per option, parallel to enumOptions, substituted for ENUM_TOKEN
+    oc::vector<PinDef>  inputs;
+    oc::vector<PinDef>  outputs;
+    oc::string          emit;
+    oc::vector<oc::string> enumOptions; // dropdown labels for the node's property (empty = no property)
+    oc::vector<oc::string> enumTokens;  // code token per option, parallel to enumOptions, substituted for ENUM_TOKEN
 };
 
 export uint32 dataTypeColor(EDataType type)
@@ -104,36 +104,36 @@ export uint32 dataTypeColor(EDataType type)
 }
 
 // The Script Data node is special: user-defined members instead of static pins (see nodeRegistry / codegen).
-export bool isScriptDataType(std::string_view typeId) { return typeId == "ScriptData"; }
+export bool isScriptDataType(oc::string_view typeId) { return typeId == "ScriptData"; }
 
 // The Label node is a resizable comment box (a group). It has no pins and emits no code â€” it only organizes
 // and documents the graph, and drags any nodes inside it along when moved.
-export bool isLabelType(std::string_view typeId) { return typeId == "Label"; }
+export bool isLabelType(oc::string_view typeId) { return typeId == "Label"; }
 
 // The Reroute node is a draggable waypoint on a link: one input + one output pin of the carried type, drawn
 // as a small dot. It emits no code â€” codegen passes straight through it (see realSourceOfInput). Created by
 // double-clicking a link, not from the palette.
-export bool isRerouteType(std::string_view typeId) { return typeId == "Reroute"; }
+export bool isRerouteType(oc::string_view typeId) { return typeId == "Reroute"; }
 
 // The On Event node is special like Script Data: user-defined named entries instead of static pins, each one
 // a plain Exec output. Multiple On Event nodes stay in sync (same entry set); codegen dispatches a fired
 // event name to the matching entry's exec chain (see Scene::generateCpp / applyEventEdit).
-export bool isEventEntryType(std::string_view typeId) { return typeId == "OnEvent"; }
+export bool isEventEntryType(oc::string_view typeId) { return typeId == "OnEvent"; }
 
 // The Trigger Audio node is special like On Event, but with dynamic exec INPUT pins: one per Sound alias
 // of the target entity's AudioComponent (synced from the selected entity by the UI, serialized as
 // //@audioentry lines). Flow entering an alias pin plays that sound; codegen picks the alias from the
 // entered pin (see emitExecChain's enteredPin).
-export bool isTriggerAudioType(std::string_view typeId) { return typeId == "TriggerAudio"; }
+export bool isTriggerAudioType(oc::string_view typeId) { return typeId == "TriggerAudio"; }
 
 // Function boundary + call nodes. A .scr can define multiple named functions; each is a (Function Input,
 // Function Output) pair sharing a function name. Function Input holds a fixed Exec output plus user-defined
 // typed OUTPUT pins (the parameters); Function Output holds a fixed Exec input plus user-defined typed INPUT
 // pins (the return values). A Function Call node (created by importing a function, hidden from the palette)
 // mirrors that signature and, at codegen, expands to a real C++ function call. See Scene::generateCpp.
-export bool isFunctionInputType(std::string_view typeId)  { return typeId == "FunctionInput"; }
-export bool isFunctionOutputType(std::string_view typeId) { return typeId == "FunctionOutput"; }
-export bool isFunctionCallType(std::string_view typeId)   { return typeId == "FunctionCall"; }
+export bool isFunctionInputType(oc::string_view typeId)  { return typeId == "FunctionInput"; }
+export bool isFunctionOutputType(oc::string_view typeId) { return typeId == "FunctionOutput"; }
+export bool isFunctionCallType(oc::string_view typeId)   { return typeId == "FunctionCall"; }
 
 // Serialization token for any pin data type (covers Exec/String too, unlike memberTypeToken).
 export const char* dataTypeToken(EDataType type)
@@ -154,7 +154,7 @@ export const char* dataTypeToken(EDataType type)
     return "Float";
 }
 
-export EDataType dataTypeFromToken(std::string_view token)
+export EDataType dataTypeFromToken(oc::string_view token)
 {
     for (int i = 0; i <= (int)EDataType::Wildcard; ++i)
         if (token == dataTypeToken((EDataType)i))
@@ -163,7 +163,7 @@ export EDataType dataTypeFromToken(std::string_view token)
 }
 
 // Value types a Script Data member (persistent per-instance struct field) may have. Deliberately excluded:
-// String (an std::string can't live in the POD block that crosses the script ABI) and the raw handle types
+// String (an oc::string can't live in the POD block that crosses the script ABI) and the raw handle types
 // Entity / Pointer — a component/entity handle persisted across frames would dangle once its target is
 // destroyed, so handles must be re-fetched each frame (see entityGetForceComponent), never stored.
 export inline constexpr EDataType memberTypes[] = { EDataType::Int, EDataType::Float, EDataType::Bool, EDataType::Vec3 };
@@ -205,7 +205,7 @@ export const char* memberTypeToken(EDataType type)
     }
 }
 
-export EDataType memberTypeFromToken(std::string_view token)
+export EDataType memberTypeFromToken(oc::string_view token)
 {
     for (EDataType t : memberTypes)
         if (token == memberTypeToken(t))
@@ -215,7 +215,7 @@ export EDataType memberTypeFromToken(std::string_view token)
 
 // C++ literal used for an unconnected data input of the given type. A String's default is RAW text (no
 // quotes) â€” codegen wraps it into a literal (see emitDataExpr) â€” so its default here is the empty string.
-export std::string defaultValueForType(EDataType type)
+export oc::string defaultValueForType(EDataType type)
 {
     switch (type)
     {
@@ -233,7 +233,7 @@ export std::string defaultValueForType(EDataType type)
 
 static char lower(char c) { return (c >= 'A' && c <= 'Z') ? char(c + 32) : c; }
 
-static bool iequals(std::string_view a, std::string_view b)
+static bool iequals(oc::string_view a, oc::string_view b)
 {
     if (a.size() != b.size())
         return false;
@@ -246,7 +246,7 @@ static bool iequals(std::string_view a, std::string_view b)
 // "default" is a sentinel literal accepted in any inline default box, regardless of the pin's type: it
 // means "use this pin's/type's engine default" and stays valid across a wildcard pin's type changing (see
 // resolveNodeTypes) since it is resolved to a concrete literal only at codegen time (see emitDataExpr).
-export bool isDefaultToken(const std::string& text)
+export bool isDefaultToken(const oc::string& text)
 {
     return iequals(text, "default");
 }
@@ -254,19 +254,19 @@ export bool isDefaultToken(const std::string& text)
 // Canonical C++ float literal for a value (e.g. 5.0f -> "5.0f"). to_chars omits the decimal point for whole
 // numbers (e.g. "5"), but a bare digit-sequence plus an 'f' suffix isn't a valid C++ floating literal
 // (needs a '.' or exponent), so one is added when missing.
-export std::string formatFloatLiteral(float value)
+export oc::string formatFloatLiteral(float value)
 {
     char buf[32];
     const auto [ptr, ec] = std::to_chars(buf, buf + sizeof(buf), value);
-    std::string formatted(buf, ptr);
-    if (formatted.find_first_of(".eE") == std::string::npos)
+    oc::string formatted(buf, ptr);
+    if (formatted.find_first_of(".eE") == oc::string::npos)
         formatted += ".0";
     return formatted + "f";
 }
 
 // Parses one float literal token (an optional trailing f/F suffix, otherwise whatever std::from_chars
 // accepts). Used both for a plain Float pin and for each component of a Vec3 pin's literal.
-export bool parseFloatToken(std::string_view text, float& outValue)
+export bool parseFloatToken(oc::string_view text, float& outValue)
 {
     if (!text.empty() && (text.back() == 'f' || text.back() == 'F'))
         text.remove_suffix(1);
@@ -278,29 +278,29 @@ export bool parseFloatToken(std::string_view text, float& outValue)
 
 // Extracts the x/y/z components out of a Vec3 pin's default text ("glm::vec3{ x, y, z }") for the inline
 // X/Y/Z boxes. Tolerant of the "default" sentinel and anything else that doesn't parse â€” falls back to 0.
-export std::array<float, 3> parseVec3Literal(const std::string& text)
+export oc::array<float, 3> parseVec3Literal(const oc::string& text)
 {
-    std::array<float, 3> v{ 0.0f, 0.0f, 0.0f };
+    oc::array<float, 3> v{ 0.0f, 0.0f, 0.0f };
     const size_t open = text.find('{');
     const size_t close = text.find('}');
-    if (open == std::string::npos || close == std::string::npos || close <= open)
+    if (open == oc::string::npos || close == oc::string::npos || close <= open)
         return v;
-    std::string_view inner(text.data() + open + 1, close - open - 1);
+    oc::string_view inner(text.data() + open + 1, close - open - 1);
     for (int comp = 0; comp < 3; ++comp)
     {
         const size_t comma = inner.find(',');
-        std::string_view tok = inner.substr(0, comma);
+        oc::string_view tok = inner.substr(0, comma);
         while (!tok.empty() && tok.front() == ' ') tok.remove_prefix(1);
         while (!tok.empty() && tok.back() == ' ') tok.remove_suffix(1);
         parseFloatToken(tok, v[comp]);
-        if (comma == std::string_view::npos) break;
+        if (comma == oc::string_view::npos) break;
         inner.remove_prefix(comma + 1);
     }
     return v;
 }
 
 // Formats three components back into the canonical Vec3 literal (see defaultValueForType).
-export std::string formatVec3Literal(const std::array<float, 3>& v)
+export oc::string formatVec3Literal(const oc::array<float, 3>& v)
 {
     return "glm::vec3{ " + formatFloatLiteral(v[0]) + ", " + formatFloatLiteral(v[1]) + ", " + formatFloatLiteral(v[2]) + " }";
 }
@@ -308,32 +308,32 @@ export std::string formatVec3Literal(const std::array<float, 3>& v)
 // Validates and reformats text typed into an inline default box into a canonical literal for `type`
 // (e.g. "3" -> "3.0f", "TRUE" -> "true"). Returns nullopt if the text isn't a valid literal for that type,
 // so the caller can reject the edit instead of committing something that breaks codegen.
-export std::optional<std::string> formatLiteral(EDataType type, const std::string& text)
+export oc::optional<oc::string> formatLiteral(EDataType type, const oc::string& text)
 {
     if (isDefaultToken(text))
-        return std::string("default");
+        return oc::string("default");
 
     switch (type)
     {
         case EDataType::Bool:
         {
-            if (iequals(text, "true"))  return std::string("true");
-            if (iequals(text, "false")) return std::string("false");
-            return std::nullopt;
+            if (iequals(text, "true"))  return oc::string("true");
+            if (iequals(text, "false")) return oc::string("false");
+            return oc::nullopt;
         }
         case EDataType::Int:
         {
             int value = 0;
             const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
             if (result.ec != std::errc() || result.ptr != text.data() + text.size())
-                return std::nullopt;
-            return std::to_string(value);
+                return oc::nullopt;
+            return oc::to_string(value);
         }
         case EDataType::Float:
         {
             float value = 0.0f;
             if (!parseFloatToken(text, value))
-                return std::nullopt;
+                return oc::nullopt;
             return formatFloatLiteral(value);
         }
         case EDataType::String:
@@ -344,11 +344,11 @@ export std::optional<std::string> formatLiteral(EDataType type, const std::strin
 }
 
 // The full palette of node types. Returned by const ref so pointers into it stay stable.
-export const std::vector<NodeDef>& nodeRegistry()
+export const oc::vector<NodeDef>& nodeRegistry()
 {
-    static const std::vector<NodeDef> registry = []{
+    static const oc::vector<NodeDef> registry = []{
     using D = EDataType;
-    std::vector<NodeDef> r;
+    oc::vector<NodeDef> r;
 
     // ---- organization ----
     // Comment/label box (isLabelType): a movable, resizable group with an editable caption. Pure annotation,
@@ -393,21 +393,21 @@ export const std::vector<NodeDef>& nodeRegistry()
     r.push_back({ "If", "If", "Flow", true,
         { { "", D::Exec, "" }, { "Cond", D::Wildcard, "0.0f", 1 }, { "Comp", D::Wildcard, "0.0f", 1 } },
         { { "true", D::Exec, "" }, { "break", D::Exec, "" } },
-        "if ($1 " + std::string(1, ENUM_TOKEN) + " $2)\n{\n" + std::string(1, INDENT_UP) + "#0" + std::string(1, INDENT_DOWN) + "}\n#1",
+        "if ($1 " + oc::string(1, ENUM_TOKEN) + " $2)\n{\n" + oc::string(1, INDENT_UP) + "#0" + oc::string(1, INDENT_DOWN) + "}\n#1",
         { "Less than", "Greater than", "Equals", "Not Equals" },
         { "<", ">", "==", "!=" } });
 
     r.push_back({ "IfElse", "If Else", "Flow", true,
         { { "", D::Exec, "" }, { "Cond", D::Wildcard, "0.0f", 1 }, { "Comp", D::Wildcard, "0.0f", 1 } },
         { { "true", D::Exec, "" }, { "false", D::Exec, "" }, { "break", D::Exec, "" } },
-        "if ($1 " + std::string(1, ENUM_TOKEN) + " $2)\n{\n" + std::string(1, INDENT_UP) + "#0" + std::string(1, INDENT_DOWN) + "}\nelse\n{\n" + std::string(1, INDENT_UP) + "#1" + std::string(1, INDENT_DOWN) + "}\n#2",
+        "if ($1 " + oc::string(1, ENUM_TOKEN) + " $2)\n{\n" + oc::string(1, INDENT_UP) + "#0" + oc::string(1, INDENT_DOWN) + "}\nelse\n{\n" + oc::string(1, INDENT_UP) + "#1" + oc::string(1, INDENT_DOWN) + "}\n#2",
         { "Less than", "Greater than", "Equals", "Not Equals" },
         { "<", ">", "==", "!=" } });
     
     r.push_back({ "ForLoop", "For Loop", "Flow", true,
         { { "", D::Exec, "" }, { "start", D::Int, "0" }, { "count", D::Int, "10" } },
         { { "body", D::Exec, "" }, { "break", D::Exec, "" }, { "idx", D::Int, "", 0, "i@"}},
-        "for (int i@ = $1; i@ " + std::string(1, ENUM_TOKEN) + " $2; ++i@)\n{\n" + std::string(1, INDENT_UP) + "#0" + std::string(1, INDENT_DOWN) + "}\n#1",
+        "for (int i@ = $1; i@ " + oc::string(1, ENUM_TOKEN) + " $2; ++i@)\n{\n" + oc::string(1, INDENT_UP) + "#0" + oc::string(1, INDENT_DOWN) + "}\n#1",
         { "Less than", "Less or Equals", "Equals", "Greater or Equals", "Greater than", "Not Equals" },
         { "<", "<=", "==", ">=", ">", "!=" } });
 
@@ -426,7 +426,7 @@ export const std::vector<NodeDef>& nodeRegistry()
     r.push_back({ "Cast", "Cast", "Flow", false,
         { { "Cast",   D::Wildcard, "0.0f", 1 } },
         { { "res", D::Wildcard, "", 2 } },
-        "((" + std::string(1, ENUM_TOKEN) + ")$0)",
+        "((" + oc::string(1, ENUM_TOKEN) + ")$0)",
         { "int", "float", "bool" },
         { "int", "float", "bool" }});
 
@@ -449,17 +449,17 @@ export const std::vector<NodeDef>& nodeRegistry()
 
     r.push_back({ "Float", "Var Float", "Variables", false,
         { { "val", D::Float, "0.0f" }},
-        { { "f@", D::Float, "", 0, std::string("float f@ = $0;\n") + HOIST + "f@", EMutableType::ReadWritable } },
+        { { "f@", D::Float, "", 0, oc::string("float f@ = $0;\n") + HOIST + "f@", EMutableType::ReadWritable } },
         "" });
 
     r.push_back({ "Int", "Var Int", "Variables", false,
         { { "val", D::Int, "0" }},
-        { { "i@", D::Int, "", 0, std::string("int i@ = $0;\n") + HOIST + "i@", EMutableType::ReadWritable } },
+        { { "i@", D::Int, "", 0, oc::string("int i@ = $0;\n") + HOIST + "i@", EMutableType::ReadWritable } },
         "" });
 
     r.push_back({ "Bool", "Var Bool", "Variables", false,
         { { "val", D::Bool, "false" }},
-        { { "b@", D::Bool, "", 0, std::string("bool b@ = $0;\n") + HOIST + "b@", EMutableType::ReadWritable } },
+        { { "b@", D::Bool, "", 0, oc::string("bool b@ = $0;\n") + HOIST + "b@", EMutableType::ReadWritable } },
         "" });
 
     r.push_back({ "ConstFloat", "Const Float", "Variables", false,
@@ -595,7 +595,7 @@ export const std::vector<NodeDef>& nodeRegistry()
     r.push_back({ "SplitVec3", "Split Vec3", "Math", false,
         { { "vec", D::Vec3, "" } },
         { { "x", D::Float, "", 0, "v@.x" }, { "y", D::Float, "", 0, "v@.y" }, { "z", D::Float, "", 0, "v@.z" } },
-        std::string("glm::vec3 v@ = $0;\n") + HOIST + "v@"});
+        oc::string("glm::vec3 v@ = $0;\n") + HOIST + "v@"});
 
     // Dot/Normalize are wildcarded (Vec3 or Quat â€” glm::dot/normalize support both); Cross stays Vec3-only
     // (undefined for quaternions).
@@ -707,7 +707,7 @@ export const std::vector<NodeDef>& nodeRegistry()
         { { "true", D::Exec, "" }, { "break", D::Exec, "" },
             { "Component", D::Pointer, "", 0, "forceComp@" } },
         "if (void* forceComp@ = ctx->entityGetForceComponent($1))\n{\n"
-        + std::string(1, INDENT_UP) + "#0" + std::string(1, INDENT_DOWN) + "}\n#1" });
+        + oc::string(1, INDENT_UP) + "#0" + oc::string(1, INDENT_DOWN) + "}\n#1" });
 
     // Get Force: reads the live field values off the Component handle (from Get Force Component). Valid is true
     // when the handle is non-null (the entity has a ForceComponent); the getters return type defaults for null.
@@ -760,7 +760,7 @@ export const std::vector<NodeDef>& nodeRegistry()
             { "Component", D::Pointer, "", 0, "lightComp@" },
             { "Count", D::Int, "", 0, "ctx->lightGetCount(lightComp@)" } },
         "if (void* lightComp@ = ctx->entityGetLightComponent($1))\n{\n"
-        + std::string(1, INDENT_UP) + "#0" + std::string(1, INDENT_DOWN) + "}\n#1" });
+        + oc::string(1, INDENT_UP) + "#0" + oc::string(1, INDENT_DOWN) + "}\n#1" });
 
     // Get Light: reads one light (by Index) off the Component handle. Valid is true when the handle is non-null
     // AND the index is in range; the pins read type defaults otherwise (ocLightAt's contract). Each connected
@@ -859,7 +859,7 @@ export const std::vector<NodeDef>& nodeRegistry()
         { { "true", D::Exec, "" }, { "break", D::Exec, "" },
             { "Component", D::Pointer, "", 0, "sceneComp@" } },
         "if (void* sceneComp@ = ctx->entityGetSceneComponent($1))\n{\n"
-        + std::string(1, INDENT_UP) + "#0" + std::string(1, INDENT_DOWN) + "}\n#1" });
+        + oc::string(1, INDENT_UP) + "#0" + oc::string(1, INDENT_DOWN) + "}\n#1" });
 
     // Get Child Entity: looks up a direct child by name on the given SceneComponent (from Get Scene Component)
     // and branches on whether it exists; the found child is exposed as an Entity output only valid on the
@@ -868,8 +868,8 @@ export const std::vector<NodeDef>& nodeRegistry()
         { { "", D::Exec, "" }, { "Component", D::Pointer, "nullptr" }, { "Name", D::String, "" } },
         { { "Found", D::Exec, "" }, { "Not Found", D::Exec, "" }, { "Child", D::Entity, "", 0, "child@" } },
         "Entity* child@ = ctx->sceneFindChild($1, $2);\n"
-        "if (child@)\n{\n" + std::string(1, INDENT_UP) + "#0" + std::string(1, INDENT_DOWN) + "}\n"
-        "else\n{\n" + std::string(1, INDENT_UP) + "#1" + std::string(1, INDENT_DOWN) + "}\n" });
+        "if (child@)\n{\n" + oc::string(1, INDENT_UP) + "#0" + oc::string(1, INDENT_DOWN) + "}\n"
+        "else\n{\n" + oc::string(1, INDENT_UP) + "#1" + oc::string(1, INDENT_DOWN) + "}\n" });
 
     // Add Child: reparents Child under the SceneComponent's owner entity (the parent). Component from Get
     // Scene Component; Child self by default -- connect a real value before using.
@@ -899,7 +899,7 @@ export const std::vector<NodeDef>& nodeRegistry()
         { { "true", D::Exec, "" }, { "break", D::Exec, "" },
             { "Component", D::Pointer, "", 0, "physComp@" } },
         "if (void* physComp@ = ctx->entityGetPhysicsComponent($1))\n{\n"
-        + std::string(1, INDENT_UP) + "#0" + std::string(1, INDENT_DOWN) + "}\n#1" });
+        + oc::string(1, INDENT_UP) + "#0" + oc::string(1, INDENT_DOWN) + "}\n#1" });
 
     // Get Physics: reads off the PhysicsComponent handle (from Get Physics Component). Valid is true when the
     // handle is non-null (the entity has a body); the getters return zero for null.
@@ -943,8 +943,8 @@ export const std::vector<NodeDef>& nodeRegistry()
             { "Distance", D::Float, "", 0, "(hitFraction@ * $3)" } },
         "glm::vec3 hitPoint@{ 0.0f, 0.0f, 0.0f };\nglm::vec3 hitNormal@{ 0.0f, 0.0f, 0.0f };\nfloat hitFraction@ = 0.0f;\n"
         "if (ctx->physicsRayCast($1, glm::normalize($2) * $3, &hitPoint@, &hitNormal@, &hitFraction@) != 0)\n{\n"
-        + std::string(1, INDENT_UP) + "#0" + std::string(1, INDENT_DOWN) + "}\nelse\n{\n"
-        + std::string(1, INDENT_UP) + "#1" + std::string(1, INDENT_DOWN) + "}\n" });
+        + oc::string(1, INDENT_UP) + "#0" + oc::string(1, INDENT_DOWN) + "}\nelse\n{\n"
+        + oc::string(1, INDENT_UP) + "#1" + oc::string(1, INDENT_DOWN) + "}\n" });
 
     // Get Contact Point: resolves an On Physics Event node's ContactId to its world-space hit position/normal
     // (ctx->physicsContactGetPoint). Hit is false (Point/Normal stay zero) for a stale id or a sensor event.
@@ -953,7 +953,7 @@ export const std::vector<NodeDef>& nodeRegistry()
         { { "Hit",    D::Bool, "", 0, "contactHit@" },
             { "Point",  D::Vec3, "", 0, "contactPoint@" },
             { "Normal", D::Vec3, "", 0, "contactNormal@" } },
-        std::string("glm::vec3 contactPoint@{ 0.0f, 0.0f, 0.0f };\nglm::vec3 contactNormal@{ 0.0f, 0.0f, 0.0f };\n"
+        oc::string("glm::vec3 contactPoint@{ 0.0f, 0.0f, 0.0f };\nglm::vec3 contactNormal@{ 0.0f, 0.0f, 0.0f };\n"
             "const bool contactHit@ = (ctx->physicsContactGetPoint($0, &contactPoint@, &contactNormal@) != 0);\n")
         + HOIST + "contactHit@" });
 
@@ -995,9 +995,9 @@ export const std::vector<NodeDef>& nodeRegistry()
             { "Radius",   D::Float, "10.0f" } },
         { { "Each", D::Exec, "" }, { "Done", D::Exec, "" },
             { "Entity", D::Entity, "", 0, "spatialFound@[spatialIt@]" } },
-        std::string("Entity* spatialFound@[64];\nconst int spatialCount@ = ctx->spatialQueryRadius($1, $2, spatialFound@, 64);\n"
+        oc::string("Entity* spatialFound@[64];\nconst int spatialCount@ = ctx->spatialQueryRadius($1, $2, spatialFound@, 64);\n"
             "for (int spatialIt@ = 0; spatialIt@ < spatialCount@; ++spatialIt@)\n{\n")
-        + std::string(1, INDENT_UP) + "#0" + std::string(1, INDENT_DOWN) + "}\n#1" });
+        + oc::string(1, INDENT_UP) + "#0" + oc::string(1, INDENT_DOWN) + "}\n#1" });
 
     // ---- audio (target the entity's AudioComponent; entities without one no-op) ----
     // Get Audio Component: resolves the entity's AudioComponent ONCE and branches on it (same shape as Get
@@ -1007,7 +1007,7 @@ export const std::vector<NodeDef>& nodeRegistry()
         { { "true", D::Exec, "" }, { "break", D::Exec, "" },
             { "Component", D::Pointer, "", 0, "audioComp@" } },
         "if (void* audioComp@ = ctx->entityGetAudioComponent($1))\n{\n"
-        + std::string(1, INDENT_UP) + "#0" + std::string(1, INDENT_DOWN) + "}\n#1" });
+        + oc::string(1, INDENT_UP) + "#0" + oc::string(1, INDENT_DOWN) + "}\n#1" });
 
     // Trigger Audio is special-cased (isTriggerAudioType): its exec input pins are the alias entries of the
     // target entity's AudioComponent â€” flow entering an alias pin plays that sound. Component (from Get Audio
@@ -1055,7 +1055,7 @@ export const std::vector<NodeDef>& nodeRegistry()
     return registry;
 }
 
-export const NodeDef* findNodeDef(const std::string& typeId)
+export const NodeDef* findNodeDef(const oc::string& typeId)
 {
     for (const NodeDef& def : nodeRegistry())
         if (def.typeId == typeId)

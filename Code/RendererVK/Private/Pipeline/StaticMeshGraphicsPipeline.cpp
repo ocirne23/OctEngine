@@ -42,8 +42,8 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         .depthWrite = false,
     });
     // Variant 2 (MeshShaderVariant::UnlitOpaque): unlit opaque.
-    const std::string unlitVariantPath = "Shaders/instanced_indirect_unlit.fs.glsl";
-	const std::string unlitVariantText = FileSystem::readFileStr(unlitVariantPath);
+    const oc::string unlitVariantPath = "Shaders/instanced_indirect_unlit.fs.glsl";
+	const oc::string unlitVariantText = FileSystem::readFileStr(unlitVariantPath);
     graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
         .fragmentShader = ShaderSource{
             .text = unlitVariantText,
@@ -60,8 +60,8 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		.depthWrite = false,
 	});
 	// Variant 4 (EPipelineIndex::Sky): analytic sky + sun disc, for the inside of the sky sphere.
-	const std::string skyVariantPath = "Shaders/sky.fs.glsl";
-	const std::string skyVariantText = FileSystem::readFileStr(skyVariantPath);
+	const oc::string skyVariantPath = "Shaders/sky.fs.glsl";
+	const oc::string skyVariantText = FileSystem::readFileStr(skyVariantPath);
 	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
 		.fragmentShader = ShaderSource{
 			.text = skyVariantText,
@@ -69,8 +69,8 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		},
 	});
 	// Variants 5-7 (Wireframe + gizmos) all shade by vertex position (debug color).
-    const std::string& gizmoVariantPath = unlitVariantPath;
-	const std::string& gizmoVariantText = unlitVariantText;
+    const oc::string& gizmoVariantPath = unlitVariantPath;
+	const oc::string& gizmoVariantText = unlitVariantText;
 	// Variant 5 (EPipelineIndex::WireframeTransparent): tangent-debug color, drawn as lines.
 	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
 		.fragmentShader = ShaderSource{
@@ -119,8 +119,8 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 	// on (all layout defaults).
 	// A dedicated vertex shader passes only world position + normal (the terrain FS builds its own tangent
 	// bases and needs no UV), trimming the interpolated attributes from a full TBN+UV to two vec3s.
-	const std::string terrainVertexPath = "Shaders/instanced_indirect_terrain.vs.glsl";
-	const std::string terrainVariantPath = "Shaders/instanced_indirect_terrain.fs.glsl";
+	const oc::string terrainVertexPath = "Shaders/instanced_indirect_terrain.vs.glsl";
+	const oc::string terrainVariantPath = "Shaders/instanced_indirect_terrain.fs.glsl";
 	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
 		.vertexShader = ShaderSource{
 			.text = FileSystem::readFileStr(terrainVertexPath),
@@ -137,12 +137,12 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 	// glint, RAY-TRACED refraction with Beer-Lambert absorption, Jacobian foam). Opaque + depth write
 	// (matches the G-buffer prepass ocean branch); double-sided so it still draws when the camera dips
 	// below the surface.
-	const std::string oceanVertexPath = "Shaders/instanced_indirect_ocean.vs.glsl";
-	const std::string oceanVariantPath = "Shaders/ocean.fs.glsl";
-	const std::string oceanVariantText = FileSystem::readFileStr(oceanVariantPath);
+	const oc::string oceanVertexPath = "Shaders/instanced_indirect_ocean.vs.glsl";
+	const oc::string oceanVariantPath = "Shaders/ocean.fs.glsl";
+	const oc::string oceanVariantText = FileSystem::readFileStr(oceanVariantPath);
 	// OCEAN_HIT_LIGHTS: also evaluate the scene's grid lights at refraction/reflection ray hits
 	// ("Ocean/Shading/Hit lighting" tweak; toggling reloads this pipeline via setOceanParams).
-	std::vector<ShaderDefine> oceanFragDefines;
+	oc::vector<ShaderDefine> oceanFragDefines;
 	if (m_oceanHitLights)
 		oceanFragDefines.push_back({ "OCEAN_HIT_LIGHTS", "1" });
 	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
@@ -153,7 +153,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		.fragmentShader = ShaderSource{
 			.text = oceanVariantText,
 			.debugFilePath = oceanVariantPath,
-			.defines = std::move(oceanFragDefines),
+			.defines = oc::move(oceanFragDefines),
 		},
 		.cullMode = vk::CullModeFlagBits::eNone,
 	});
@@ -485,7 +485,7 @@ void StaticMeshGraphicsPipeline::reloadShaders(vk::RenderPass renderPass, uint32
 
 void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params, bool updateDescriptors)
 {
-    std::array<DescriptorSetUpdateInfo, 16> graphicsDescriptorSetUpdateInfos
+    oc::array<DescriptorSetUpdateInfo, 16> graphicsDescriptorSetUpdateInfos
     {
         DescriptorSetUpdateInfo{
             .binding = 0,
@@ -671,6 +671,6 @@ void StaticMeshGraphicsPipeline::recordExecuteGeneratedCommands(vk::CommandBuffe
     vkCommandBuffer.executeGeneratedCommandsEXT(vk::False, generatedCommandsInfo);
 }
 
-void StaticMeshGraphicsPipeline::update(uint32 frameIdx, std::vector<ObjectContainer*>& objectContainers)
+void StaticMeshGraphicsPipeline::update(uint32 frameIdx, oc::vector<ObjectContainer*>& objectContainers)
 {
 }

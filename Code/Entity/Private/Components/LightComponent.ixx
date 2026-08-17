@@ -17,7 +17,7 @@ export enum class ELightType : uint8
 };
 
 export const char* lightTypeToken(ELightType type);
-export ELightType lightTypeFromToken(std::string_view token);
+export ELightType lightTypeFromToken(oc::string_view token);
 
 // One or more lights attached to the entity ("Component Light" in .pre files): every update each
 // enabled light is pushed to the renderer for this frame (renderer.addLightInfo, lock-free, so this
@@ -55,11 +55,11 @@ export struct LightComponent
 
     struct SpawnInfo
     {
-        std::vector<LightDesc> lights;
+        oc::vector<LightDesc> lights;
         bool debugDraw = false;
     };
 
-    std::vector<LightDesc> lights; // live copy of the authored set; gameplay edits these in place
+    oc::vector<LightDesc> lights; // live copy of the authored set; gameplay edits these in place
     bool debugDraw = false;
 
     void spawn(Entity& entity, const SpawnInfo& info, const Transform& base);

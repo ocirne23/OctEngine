@@ -31,7 +31,10 @@ import :Aftermath;
 
 //*********************************************************
 // Some std::to_string overloads for some Nsight Aftermath
-// API types.
+// API types. These stay std:: (not oc::) on both sides: the
+// callers reach them by qualified lookup into std, which the
+// using-declaration in Core.OcSTL cannot serve -- it snapshots
+// the overloads visible where it is written.
 //
 
 namespace std
@@ -90,7 +93,7 @@ inline bool operator<(const GFSDK_Aftermath_ShaderDebugName& lhs, const GFSDK_Af
 // Helper for checking Nsight Aftermath failures.
 //
 
-inline std::string  AftermathErrorMessage(GFSDK_Aftermath_Result result)
+inline oc::string  AftermathErrorMessage(GFSDK_Aftermath_Result result)
 {
     switch (result)
     {
@@ -159,11 +162,11 @@ void ShaderDatabase::Initialize(bool applicationUsesStrippedShaders)
         // them to be correlated when decoding a GPU crash dump.
 
         // for each file in Assets/Shaders, add
-        const std::string shaderFolder = "Local/spv";
+        const oc::string shaderFolder = "Local/spv";
 		if (!FileSystem::isDirectory(shaderFolder, /*allowMainThread*/ true))
 			return;
 
-        std::vector<FileSystem::DirEntry> entries;
+        oc::vector<FileSystem::DirEntry> entries;
         FileSystem::listDirectory(shaderFolder, entries, /*allowMainThread*/ true);
         for (const FileSystem::DirEntry& entry : entries)
             if (!entry.isDirectory && entry.extension == ".spv")
@@ -171,7 +174,7 @@ void ShaderDatabase::Initialize(bool applicationUsesStrippedShaders)
     }
 }
 
-bool ShaderDatabase::ReadFile(const char* filename, std::vector<uint8_t>& data)
+bool ShaderDatabase::ReadFile(const char* filename, oc::vector<uint8_t>& data)
 {
     // Aftermath crash-dump bookkeeping: runs at init/crash time on the main thread.
     return FileSystem::readFileBytes(filename, data, /*allowMainThread*/ true);
@@ -180,7 +183,7 @@ bool ShaderDatabase::ReadFile(const char* filename, std::vector<uint8_t>& data)
 void ShaderDatabase::AddShaderBinary(const char* shaderFilePath)
 {
     // Read the shader binary code from the file
-    std::vector<uint8_t> data;
+    oc::vector<uint8_t> data;
     if (!ReadFile(shaderFilePath, data))
     {
         return;
@@ -202,12 +205,12 @@ void ShaderDatabase::AddShaderBinary(const char* shaderFilePath)
 void ShaderDatabase::AddShaderBinaryWithDebugInfo(const char* strippedShaderFilePath, const char* shaderFilePath)
 {
     // Read the shader debug data from the file
-    std::vector<uint8_t> data;
+    oc::vector<uint8_t> data;
     if (!ReadFile(shaderFilePath, data))
     {
         return;
     }
-    std::vector<uint8_t> strippedData;
+    oc::vector<uint8_t> strippedData;
     if (!ReadFile(strippedShaderFilePath, strippedData))
     {
         return;
@@ -229,7 +232,7 @@ void ShaderDatabase::AddShaderBinaryWithDebugInfo(const char* strippedShaderFile
 }
 
 // Find a shader binary by shader hash.
-bool ShaderDatabase::FindShaderBinary(const GFSDK_Aftermath_ShaderBinaryHash& shaderHash, std::vector<uint8_t>& shader) const
+bool ShaderDatabase::FindShaderBinary(const GFSDK_Aftermath_ShaderBinaryHash& shaderHash, oc::vector<uint8_t>& shader) const
 {
     // Find shader binary data for the shader hash
     auto i_shader = m_shaderBinaries.find(shaderHash);
@@ -244,7 +247,7 @@ bool ShaderDatabase::FindShaderBinary(const GFSDK_Aftermath_ShaderBinaryHash& sh
 }
 
 // Find a shader binary with debug information by shader debug name.
-bool ShaderDatabase::FindShaderBinaryWithDebugData(const GFSDK_Aftermath_ShaderDebugName& shaderDebugName, std::vector<uint8_t>& shader) const
+bool ShaderDatabase::FindShaderBinaryWithDebugData(const GFSDK_Aftermath_ShaderDebugName& shaderDebugName, oc::vector<uint8_t>& shader) const
 {
     // Find shader binary for the shader debug name.
     auto i_shader = m_shaderBinariesWithDebugInfo.find(shaderDebugName);

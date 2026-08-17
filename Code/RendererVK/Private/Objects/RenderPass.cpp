@@ -13,7 +13,7 @@ RenderPass::~RenderPass()
 
 bool RenderPass::initialize(const SwapChain& swapChain)
 {
-    std::array<vk::AttachmentDescription2, 2> attachments;
+    oc::array<vk::AttachmentDescription2, 2> attachments;
     attachments[0] = {
         .flags = vk::AttachmentDescriptionFlags(),
         .format = swapChain.getLayout().surfaceFormat.format,
@@ -48,7 +48,7 @@ bool RenderPass::initialize(const SwapChain& swapChain)
         .pDepthStencilAttachment = &depthRef,
     };
     vk::PipelineStageFlags depthStages = vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests;
-    std::array<vk::SubpassDependency2, 2> dependencies
+    oc::array<vk::SubpassDependency2, 2> dependencies
     {
         //vk::SubpassDependency2{
         //    .srcSubpass = vk::SubpassExternal,

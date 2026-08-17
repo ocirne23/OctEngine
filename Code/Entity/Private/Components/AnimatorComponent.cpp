@@ -33,7 +33,7 @@ void AnimatorComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
     player.setClipLibrary(clipSet);
 
     // Blend spaces (reserve so the state machine can hold stable pointers into this vector).
-    std::unordered_map<std::string, size_t> blendIndex;
+    oc::unordered_map<oc::string, size_t> blendIndex;
     blendSpaces.reserve(desc.blendSpaces.size());
     for (const AnimatorDesc::BlendSpace& bs : desc.blendSpaces)
     {
@@ -42,7 +42,7 @@ void AnimatorComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
             if (const AnimationClip* c = clipSet->find(s.clip))
                 space.addSample(c, s.position);
         blendIndex[bs.name] = blendSpaces.size();
-        blendSpaces.push_back(std::move(space));
+        blendSpaces.push_back(oc::move(space));
     }
 
     defaultSpeed = desc.speed;
@@ -58,7 +58,7 @@ void AnimatorComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
             else if (p.type == AnimatorDesc::ParamType::Bool) stateMachine.setBool(p.name, p.boolValue);
         }
 
-        std::unordered_map<std::string, AnimStateMachine::StateId> stateIds;
+        oc::unordered_map<oc::string, AnimStateMachine::StateId> stateIds;
         for (const AnimatorDesc::State& st : desc.stateMachine.states)
         {
             AnimStateMachine::StateId id = AnimStateMachine::INVALID_STATE;
@@ -80,7 +80,7 @@ void AnimatorComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
 
         for (const AnimatorDesc::Transition& tr : desc.stateMachine.transitions)
         {
-            std::vector<AnimCondition> conds;
+            oc::vector<AnimCondition> conds;
             conds.reserve(tr.conditions.size());
             for (const AnimatorDesc::Condition& c : tr.conditions)
                 conds.push_back(toAnimCondition(c));
@@ -90,11 +90,11 @@ void AnimatorComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
                 continue;
             if (tr.from.empty())
             {
-                stateMachine.addAnyTransition(toIt->second, std::move(conds), tr.fade, tr.exitTime);
+                stateMachine.addAnyTransition(toIt->second, oc::move(conds), tr.fade, tr.exitTime);
             }
             else if (const auto fromIt = stateIds.find(tr.from); fromIt != stateIds.end())
             {
-                stateMachine.addTransition(fromIt->second, toIt->second, std::move(conds), tr.fade, tr.exitTime);
+                stateMachine.addTransition(fromIt->second, toIt->second, oc::move(conds), tr.fade, tr.exitTime);
             }
         }
     }
@@ -135,7 +135,7 @@ void AnimatorComponent::update(Entity& entity, Renderer& renderer, float deltaSe
 
     if (!player.getFiredEvents().empty())
     {
-        for (const std::string& e : player.getFiredEvents()) // notifies crossed this tick
+        for (const oc::string& e : player.getFiredEvents()) // notifies crossed this tick
         {
             if (onEvent) onEvent(e);
         }

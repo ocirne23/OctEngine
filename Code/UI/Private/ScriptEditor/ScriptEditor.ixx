@@ -159,8 +159,8 @@ struct PendingExprTerm; // fwd decl -- PendingExprChain (below) needs it before 
 // one-term chain.
 struct PendingExprChain
 {
-	std::vector<PendingExprTerm> terms;
-	std::vector<DSLOperator> ops;
+	oc::vector<PendingExprTerm> terms;
+	oc::vector<DSLOperator> ops;
 };
 
 // One term in a compound "value [op value]*" expression being composed (see the comment above): a plain
@@ -172,9 +172,9 @@ struct PendingExprTerm
 {
 	bool isGroup = false;
 	Candidate candidate;                     // meaningful if !isGroup
-	std::vector<PendingExprTerm> groupTerms; // meaningful if isGroup
-	std::vector<DSLOperator> groupOps;       // meaningful if isGroup -- groupOps.size() == groupTerms.size() - 1
-	std::vector<PendingExprChain> callArgs;  // non-empty = a parameterized call's staged arguments, one FULL
+	oc::vector<PendingExprTerm> groupTerms; // meaningful if isGroup
+	oc::vector<DSLOperator> groupOps;       // meaningful if isGroup -- groupOps.size() == groupTerms.size() - 1
+	oc::vector<PendingExprChain> callArgs;  // non-empty = a parameterized call's staged arguments, one FULL
 	                                          // (possibly compound/nested-call) chain per callee parameter
 };
 
@@ -188,8 +188,8 @@ struct PendingExprTerm
 // closes/pops the frame), so callers can treat the `ops.size() == terms.size()` check as the sole invariant.
 struct ExprFrame
 {
-	std::vector<PendingExprTerm> terms;
-	std::vector<DSLOperator> ops;
+	oc::vector<PendingExprTerm> terms;
+	oc::vector<DSLOperator> ops;
 };
 
 // One resolved term of a LOGICAL (&&/||) chain being staged through the Condition* stages -- either a full
@@ -220,9 +220,9 @@ public:
 	// Script paths a save just wrote fresh generated C++ into (see saveDocument) -- UI::takeScriptReloadRequests
 	// merges these in with the node editor's own "Compile & Run" queue, so main.cpp's drain loop
 	// (Globals::scriptHost.getOrLoad(path, true)) picks either kind up the same way.
-	std::vector<std::string> takeReloadRequests()
+	oc::vector<oc::string> takeReloadRequests()
 	{
-		std::vector<std::string> requests = std::move(m_pendingReloadRequests);
+		oc::vector<oc::string> requests = oc::move(m_pendingReloadRequests);
 		m_pendingReloadRequests.clear();
 		return requests;
 	}
@@ -233,7 +233,7 @@ public:
 	// unsaved-changes prompt: unlike the node graph, this editor has no separate dirty flag to guard (every
 	// edit already lives in m_document; Save is the only thing that ever touches disk). No-op if `path` is
 	// empty or already the open document.
-	void requestOpen(const std::string& path);
+	void requestOpen(const oc::string& path);
 
 private:
 
@@ -245,7 +245,7 @@ private:
 	// Replaces the document from `path` (ScriptLoader::load) -- requestOpen's engine, and the sidebar Reload's
 	// (which passes the open document's own path to re-read it from disk). On success every selection/compose
 	// state resets (all old symbol pointers are dead); on failure nothing changes.
-	void loadDocument(const std::string& path);
+	void loadDocument(const oc::string& path);
 	// Ctrl+C / Ctrl+V. Copy takes the cursor's LINE -- or, on a block header (or its synthetic `end`), the
 	// whole block -- as plain expanded-view DSL text, tab-indented and rebased to column 0, so it also reads
 	// correctly pasted into any outside text editor. Paste splices the clipboard below the cursor (into a
@@ -294,7 +294,7 @@ private:
 	// means it must have come from toggleEntryFunction, since isEntryPointName blocks these names from the
 	// ordinary declare-function/rename flows (see confirmCompose's FunctionDeclareName/Rename handling).
 	bool isLockedEntryFunction(const DSLSymbol* funcDecl) const;
-	bool isEntryPointName(const std::string& name) const;
+	bool isEntryPointName(const oc::string& name) const;
 
 	// FilterCandidates: normal single-step slot fill. DeclareName/DeclareValue: declaring a brand-new variable.
 	// ConditionLeft/ConditionOp/ConditionRight: building an if/while condition. Rename: selecting an EXISTING
@@ -373,7 +373,7 @@ private:
 	// The one-stop stage transition every staged flow uses: sets the compose box to `prefix` (+ `pendingWord`,
 	// for step-backs that restore previously-typed text), switches to `mode`, and rebuilds the candidate list
 	// against the new mode/text (a no-op for free-typing modes, which end up with an empty list).
-	void enterCompose(ComposeMode mode, std::string prefix, std::string pendingWord = {});
+	void enterCompose(ComposeMode mode, oc::string prefix, oc::string pendingWord = {});
 	bool hasCandidateList() const; // does the CURRENT compose mode show an arrow-cyclable candidate list
 	void applyCandidate(const Candidate& candidate);
 	DSLCodeLine* currentLineHeadOrCancel(); // resolves the LineHead slot's line at the cursor, or cancelCompose()+nullptr if not there
@@ -383,7 +383,7 @@ private:
 	// (defensive -- the confirms refuse empty values, so it shouldn't occur in practice). Shared by
 	// applyDeclareVariable, the reassign/redeclare commits, and commitForStatement's loop-variable init.
 	DSLSymbol* resolveValueOrPlaceholder(DSLType type,
-		const std::vector<PendingExprTerm>& terms, const std::vector<DSLOperator>& ops, DSLCodeLine& line);
+		const oc::vector<PendingExprTerm>& terms, const oc::vector<DSLOperator>& ops, DSLCodeLine& line);
 	DSLSymbol* buildExpressionTerm(const PendingExprTerm& term, DSLCodeLine& line); // a plain candidate, or (isGroup) a nested `grouped` chain via buildExpressionFromTerms
 	// Builds a flat term/operator sequence into a real Expression chain VERBATIM -- no precedence folding
 	// (DSLSymbol::Expression stores exactly what was authored; the transpiler applies precedence at emit time,
@@ -392,21 +392,21 @@ private:
 	// be non-empty; a single plain term returns unwrapped (no Expression node), while a single GROUP keeps its
 	// authored parens -- they're the edit anchor later "chain after the parens" edits hang off, never stripped
 	// as redundant.
-	DSLSymbol* buildExpressionFromTerms(const std::vector<PendingExprTerm>& terms, const std::vector<DSLOperator>& ops, DSLCodeLine& line);
+	DSLSymbol* buildExpressionFromTerms(const oc::vector<PendingExprTerm>& terms, const oc::vector<DSLOperator>& ops, DSLCodeLine& line);
 	// True if the compound expression can be finalized right now (every paren closed, and either nothing was
 	// ever typed or the trailing term is fully resolved) -- fills `outTerms`/`outOps` and consumes any pending
 	// group/candidate into them. False means "keep composing", e.g. an open paren or a dangling operator with
 	// nothing typed for its right-hand term yet.
-	bool exprTryFinalize(std::vector<PendingExprTerm>& outTerms, std::vector<DSLOperator>& outOps);
-	std::string exprBasePrefix() const; // "type name = " (DeclareValue) or "name = " (ReassignValue) -- everything before the expression itself
-	std::string exprBasePrefixFor(ComposeMode mode) const; // exprBasePrefix's worker, for a mode OTHER than the current one (the comparison-value flow's stages)
+	bool exprTryFinalize(oc::vector<PendingExprTerm>& outTerms, oc::vector<DSLOperator>& outOps);
+	oc::string exprBasePrefix() const; // "type name = " (DeclareValue) or "name = " (ReassignValue) -- everything before the expression itself
+	oc::string exprBasePrefixFor(ComposeMode mode) const; // exprBasePrefix's worker, for a mode OTHER than the current one (the comparison-value flow's stages)
 	// exprBasePrefixFor(mode) + exprComposePrefixFromStack(), generalized for a possibly-CallArgValue `mode`
 	// (which has no exprBasePrefixFor case of its own -- a call's own lead-in text is per-stage cached in
 	// CallStage::outerLeadText instead, via callStagePrefix()). `mode` is whichever compose is CURRENTLY
 	// suspended in the live m_exprStack/m_callStack.back() at the call site -- callers capture this BEFORE
 	// saving/resetting either, so the live state still reflects it.
-	std::string chainLeadTextFor(ComposeMode mode) const;
-	std::string conditionFlowBasePrefix() const; // what precedes the condition being staged: the flow keyword ("if "), or the value mode's own base ("bool b = ")
+	oc::string chainLeadTextFor(ComposeMode mode) const;
+	oc::string conditionFlowBasePrefix() const; // what precedes the condition being staged: the flow keyword ("if "), or the value mode's own base ("bool b = ")
 	// The declaration being built/re-edited through the CURRENT comparison/logical-chain handoff
 	// (m_conditionValueReturnMode), if any -- excluded from ConditionLeft/Right's own candidate lists so
 	// "bool test = ... && test" can never reference the not-yet-existing symbol it's building. A REASSIGNMENT's
@@ -425,25 +425,25 @@ private:
 	// m_redeclareTarget/m_editSlot stay set across the whole nested chain).
 	DSLSymbol* callArgExcludeVariable() const;
 	void commitBoolValue(const PendingLogicalTerm& finalTerm); // the staged comparison/logical chain IS a value ("bool b = i < 5") -- routes per m_conditionValueReturnMode
-	std::string exprComposePrefixFromStack() const; // renders m_exprStack (+ m_exprPendingGroup, if any) back to text -- always assigned to m_composePrefix after any state change, forward or backward, so the two can never drift apart
-	std::string exprTermText(const PendingExprTerm& term) const; // recursive -- "(" + ... + ")" for a group, else candidateDisplayText
-	void applyDeclareVariable(const std::string& name, DSLType type, const std::vector<PendingExprTerm>& terms,
-		const std::vector<DSLOperator>& ops, DSLCodeLine& line);
+	oc::string exprComposePrefixFromStack() const; // renders m_exprStack (+ m_exprPendingGroup, if any) back to text -- always assigned to m_composePrefix after any state change, forward or backward, so the two can never drift apart
+	oc::string exprTermText(const PendingExprTerm& term) const; // recursive -- "(" + ... + ")" for a group, else candidateDisplayText
+	void applyDeclareVariable(const oc::string& name, DSLType type, const oc::vector<PendingExprTerm>& terms,
+		const oc::vector<DSLOperator>& ops, DSLCodeLine& line);
 	// DeclareValue's confirm when m_redeclareTarget is set: applies the (possibly renamed) name + freshly
 	// composed initializer IN PLACE on the existing declaration -- see m_redeclareTarget's comment.
-	void commitRedeclare(const std::vector<PendingExprTerm>& terms, const std::vector<DSLOperator>& ops);
+	void commitRedeclare(const oc::vector<PendingExprTerm>& terms, const oc::vector<DSLOperator>& ops);
 	// ConditionRight's (or a bare-bool ConditionLeft's) confirm: commits the whole if/while header (or a
 	// chain's new elseif) -- the condition is `finalTerm` appended to whatever m_logicalTerms/m_logicalOps
 	// accumulated ("if i > 0 && i != 42"), built via buildStagedBool.
 	void applyConditionalStatement(const PendingLogicalTerm& finalTerm);
 	// The staged condition/bool-value as ONE value symbol: a single comparison/bare value, or a flat logical
 	// chain of them (`terms`+`finalTerm` joined by `ops`). Captured pre-cancel by every caller.
-	DSLSymbol* buildStagedBool(const std::vector<PendingLogicalTerm>& terms, const std::vector<DSLOperator>& ops,
+	DSLSymbol* buildStagedBool(const oc::vector<PendingLogicalTerm>& terms, const oc::vector<DSLOperator>& ops,
 		const PendingLogicalTerm& finalTerm, DSLCodeLine& line);
-	std::string stagedConditionPrefix() const; // conditionFlowBasePrefix() + every accumulated logical term + its trailing &&/||
+	oc::string stagedConditionPrefix() const; // conditionFlowBasePrefix() + every accumulated logical term + its trailing &&/||
 
 	// Chain-stage plumbing (the staged flows' value slots ARE m_exprStack composes -- see PendingExprChain):
-	std::string chainDisplayText(const PendingExprChain& chain) const; // terms joined by their operator characters
+	oc::string chainDisplayText(const PendingExprChain& chain) const; // terms joined by their operator characters
 	// Consumes the live compose (stack + matched candidate / pending group) into `out` -- false keeps composing
 	// (open paren, dangling operator, or nothing typed). Same finalize rules as a declaration's value.
 	bool captureComposedChain(PendingExprChain& out);
@@ -457,12 +457,12 @@ private:
 	void applyElseStatement(DSLSymbol* chainHead, DSLCodeLine& originLine); // "else" picked inside a branch: appends the else at the chain's end, consuming the blank origin line
 	DSLCodeLine& insertLineAfter(DSLCodeLine& afterLine, int scopeLevel);
 	DSLSymbol* seedStatementPlaceholder(DSLCodeLine& line);
-	std::string functionDeclarePrefix() const; // rebuilds "function name(type0 name0, type1 name1" from pending state
+	oc::string functionDeclarePrefix() const; // rebuilds "function name(type0 name0, type1 name1" from pending state
 	// The FunctionParamType stage's lead-in: functionDeclarePrefix() + this parameter's own "ref " once picked.
 	// currentParamPrefix() is this plus the resolved type -- i.e. the NAME stage's lead-in.
-	std::string paramTypeStagePrefix() const;
-	std::string currentParamPrefix() const;    // functionDeclarePrefix() + the CURRENT parameter's "[, ][ref ]type " lead-in
-	bool isPendingParamNameTaken(const std::string& name) const;
+	oc::string paramTypeStagePrefix() const;
+	oc::string currentParamPrefix() const;    // functionDeclarePrefix() + the CURRENT parameter's "[, ][ref ]type " lead-in
+	bool isPendingParamNameTaken(const oc::string& name) const;
 	void commitFunctionDeclaration(); // FunctionParamType/Name's ')'-or-confirm: commits the whole new function declaration
 	// Backspace on a function's (blank) return-type span: the staged Declare-function flow re-opens over the
 	// EXISTING header at its last parameter's name (or the function name, when parameter-less), whole-line box
@@ -485,8 +485,8 @@ private:
 	// Calls nest to any depth ("float t = myvec.dot(vec3(1, 2, |"): the walk outward rebuilds ONE CallStage per
 	// level, the same stack forward authoring would have pushed, so the peel out mirrors the way in.
 	bool tryWidenValueCallEdit();
-	std::string callComposePrefix() const;  // "name(param0 = <resolved>, param1 = " -- rebuilt from the staged-call state each stage
-	std::string callStagePrefix() const;    // callComposePrefix, led by the suspended chain compose's own prefix when staging a call VALUE
+	oc::string callComposePrefix() const;  // "name(param0 = <resolved>, param1 = " -- rebuilt from the staged-call state each stage
+	oc::string callStagePrefix() const;    // callComposePrefix, led by the suspended chain compose's own prefix when staging a call VALUE
 	DSLType currentCallParamType() const;   // the parameter the CallArgValue stage is currently composing a value for
 	void commitCallStatement();             // the last argument's confirm: commits the call line -- or returns the resolved call TERM to the suspended chain
 	// A matched parameterized-Function candidate in a chain compose can't be consumed bare (its call needs
@@ -500,12 +500,12 @@ private:
 	// Dotting into a matched BindingObject/struct-variable candidate ('.', or a confirm over it): captures the
 	// current mode as the return context and opens the receiver's member/function list (ComposeMode::MemberSelect).
 	void enterMemberSelect(DSLSymbol* receiverDecl);
-	void restoreMemberPath(const std::string& dottedPath); // re-applies a dotted chain onto a fresh MemberSelect
+	void restoreMemberPath(const oc::string& dottedPath); // re-applies a dotted chain onto a fresh MemberSelect
 	// One member-chain hop's resolved type (Void = no such member) -- self.data's OWN fields come from
 	// m_document.dataFields (per-document, see DSLType::ScriptData), everything else from the static
 	// ScriptBindings registry (m_bindings.findMember). The ONE lookup every chain-walking site shares
 	// (restoreMemberPath, buildReceiverChain, the MemberSelect Backspace-peel walk, reassignTargetType).
-	DSLType resolveMemberType(DSLType receiverType, const std::string& name) const;
+	DSLType resolveMemberType(DSLType receiverType, const oc::string& name) const;
 	// Whether the member chain CURRENTLY walked in MemberSelect (m_memberReceiver + m_memberPath) is assignable
 	// through -- false as soon as any hop is a read-only member, since everything reachable through one is
 	// read-only too (`self.parent.pos = ...` would mutate an object the script only has read access to). What
@@ -523,15 +523,15 @@ private:
 	void renderSidebarPanel(); // the Entity/Engine bindings browser + required-component checkboxes
 	// Whether any statement dots into self.data.<name> -- guards removing a SCRIPT DATA field still in use, the
 	// per-document twin of isComponentMemberReferenced.
-	bool isDataFieldReferenced(const std::string& name) const;
+	bool isDataFieldReferenced(const oc::string& name) const;
 	// Same guard for self.events.<name> -- a named On Event entry still in use.
-	bool isEventReferenced(const std::string& name) const;
+	bool isEventReferenced(const oc::string& name) const;
 	// The receiver expression a dotted path names: the root's VariableReference, wrapped in one MemberAccess
 	// per path segment ("pos.x" -> self->pos->x), each hop's type stamped from the registry. Empty path = just
 	// the reference. Shared by member values, member-assign targets, and dot-call receivers.
-	DSLSymbol* buildReceiverChain(DSLSymbol* rootDecl, const std::string& dottedPath, DSLCodeLine& line);
-	DSLSymbol* buildCallFromStagedArgs(DSLSymbol* funcSymbol, DSLSymbol* receiverDecl, const std::string& receiverPath,
-		const std::vector<PendingExprChain>& argChains, DSLCodeLine& line); // shared by commitCallStatement and call-term builds
+	DSLSymbol* buildReceiverChain(DSLSymbol* rootDecl, const oc::string& dottedPath, DSLCodeLine& line);
+	DSLSymbol* buildCallFromStagedArgs(DSLSymbol* funcSymbol, DSLSymbol* receiverDecl, const oc::string& receiverPath,
+		const oc::vector<PendingExprChain>& argChains, DSLCodeLine& line); // shared by commitCallStatement and call-term builds
 	void restoreTermIntoBox(PendingExprTerm&& term); // back into the live compose: groups/resolved calls as the pending term, plain candidates as typed text
 	// A restored term that IS a member access reopens in MemberSelect (the stage that authored it) rather than
 	// as an inert resolved term: its last path segment becomes the typed word, the rest the receiver path. Only
@@ -539,39 +539,39 @@ private:
 	// Backspace ladder is what peels a chain apart segment by segment. False = not a member term; the caller
 	// falls back to restoreTermIntoBox. Switches m_composeMode, which is why enterChainStage re-checks it.
 	bool tryRestoreMemberTermIntoMemberSelect(const PendingExprTerm& term);
-	std::string forVarPrefix() const;       // "for <type> <name> = " -- before the loop var's own initial value
-	std::string forVarDeclPrefix() const;   // forVarPrefix() + the resolved initial value -- the whole loop-var clause
-	std::string forConditionPrefix() const; // forVarDeclPrefix() + ", <name> <op> <value>" -- the whole condition clause too
+	oc::string forVarPrefix() const;       // "for <type> <name> = " -- before the loop var's own initial value
+	oc::string forVarDeclPrefix() const;   // forVarPrefix() + the resolved initial value -- the whole loop-var clause
+	oc::string forConditionPrefix() const; // forVarDeclPrefix() + ", <name> <op> <value>" -- the whole condition clause too
 	void commitForStatement(); // ForIncrementValue's confirm: commits the whole new for-loop
 	// The TYPE stages' lead-ins: the keyword plus this binding's own "ref " once picked (see paramTypeStagePrefix).
-	std::string forEachTypeStagePrefix() const;
-	std::string ifExistTypeStagePrefix() const;
-	std::string forEachPrefix() const; // "foreach [ref] <type> <name> in " -- everything before the sequence
+	oc::string forEachTypeStagePrefix() const;
+	oc::string ifExistTypeStagePrefix() const;
+	oc::string forEachPrefix() const; // "foreach [ref] <type> <name> in " -- everything before the sequence
 	void commitForEachStatement(const PendingExprChain& sequence); // ForEachSource's confirm: commits the whole loop
 	// Whether `sequenceType` iterates as `elementType` -- a registered BindingSequence (self.scene) or an array
 	// of it. What ForEachSource filters its candidates by, so only iterable values of the right element type
 	// are offered in the first place.
 	bool sequenceYields(DSLType sequenceType, DSLType elementType) const;
-	std::string ifExistPrefix() const;    // "ifexist [ref] <type> <name> in " -- everything before the container
-	std::string ifExistKeyPrefix() const; // ...plus the resolved container and " at "
+	oc::string ifExistPrefix() const;    // "ifexist [ref] <type> <name> in " -- everything before the container
+	oc::string ifExistKeyPrefix() const; // ...plus the resolved container and " at "
 	// The container the staged flow has resolved so far (null until IfExistSource confirms) -- what the key
 	// stage reads lookupKeyType off, and what decides whether there IS a key stage at all.
 	const BindingObject* ifExistContainer() const;
 	void commitIfExistStatement(const PendingExprChain& key); // IfExistSource/Key's confirm
 	// The re-edit half of the commits above (foreach/ifexist headers are structurally identical): applies a
 	// new bound name + source to an EXISTING header, preserving the bound declaration's symbol identity.
-	void rebuildBoundHeaderSource(DSLCodeLine& line, DSLSymbol* boundVar, const std::string& boundName,
+	void rebuildBoundHeaderSource(DSLCodeLine& line, DSLSymbol* boundVar, const oc::string& boundName,
 		bool boundIsRef, const PendingExprChain& source, const PendingExprChain* key = nullptr);
 	DSLType reassignTargetType() const; // m_reassignTarget's own declared type
 	// Same `terms`/`ops` convention as applyDeclareVariable, for a `name = value` statement instead.
-	void commitReassignStatement(const std::vector<PendingExprTerm>& terms, const std::vector<DSLOperator>& ops);
+	void commitReassignStatement(const oc::vector<PendingExprTerm>& terms, const oc::vector<DSLOperator>& ops);
 	// ReassignValue's confirm when m_reassignEditExpr is set: swaps only the right-hand value in place.
-	void commitReassignInPlace(const std::vector<PendingExprTerm>& terms, const std::vector<DSLOperator>& ops);
+	void commitReassignInPlace(const oc::vector<PendingExprTerm>& terms, const oc::vector<DSLOperator>& ops);
 	void clearLineToBlankStatement(DSLCodeLine& line); // the staged flows' final Backspace: line becomes a selected blank statement placeholder
 
 	// In-place expression editing (EditExpr/ReplaceOperator -- see the class comment).
 	void beginEditExprReplace(const SyntaxSpan& span); // compose a replacement for an existing value-slot occupant / chain operand
-	void beginEditExprInsert(const SyntaxSpan& span, DSLOperator leadOp, const std::string& anchorText); // an operator typed over a selected value: compose the term(s) to chain in after it
+	void beginEditExprInsert(const SyntaxSpan& span, DSLOperator leadOp, const oc::string& anchorText); // an operator typed over a selected value: compose the term(s) to chain in after it
 	// Backspace on a committed group's ')' span: reopens the group for re-composing -- its contents seed the
 	// expression stack exactly as they were mid-authoring right before the ')' was typed (paren open, last term
 	// restored into the box), so the whole group must be re-closed and re-confirmed as one unit. False if any
@@ -591,7 +591,7 @@ private:
 	// and beyond exactly like every other value.
 	bool tryWidenComparisonValueEdit();
 	// EditExpr's confirm: splice/wrap/replace per m_edit* state.
-	void applyEditExpr(const std::vector<PendingExprTerm>& terms, const std::vector<DSLOperator>& ops);
+	void applyEditExpr(const oc::vector<PendingExprTerm>& terms, const oc::vector<DSLOperator>& ops);
 	void writeSlot(const SlotRef& slot, DSLSymbol* newSymbol); // repoints the slot's owning field at newSymbol (never LineHead)
 	void repointSymbol(DSLCodeLine& line, DSLSymbol* oldSymbol, DSLSymbol* newSymbol); // every structural field in `line` pointing at oldSymbol -> newSymbol (chain unwrap)
 	// After any in-line structural edit: moves `originalHead` back to symbols.back() (the post-order convention,
@@ -609,9 +609,9 @@ private:
 	ScriptBindings& m_bindings = Globals::scriptBindings; // THE engine-exposure registry (global -- dslTypeName
 	                           // and the loader/transpiler consult it too); builds m_document.sidebar +
 	                           // m_builtins once (stable symbol identity), answers receiver/member/emit lookups
-	std::vector<std::unique_ptr<DSLSymbol>> m_builtins; // every registry FunctionDeclaration (engine free
+	oc::vector<oc::unique_ptr<DSLSymbol>> m_builtins; // every registry FunctionDeclaration (engine free
 	                                                     // functions + requiresReceiver object functions)
-	std::vector<SyntaxLine> m_formatted; // rebuilt from m_document each render() -- cheap at this document size
+	oc::vector<SyntaxLine> m_formatted; // rebuilt from m_document each render() -- cheap at this document size
 	bool m_compact = false;              // Syntax::format supports compact rendering; no toolbar toggle wires it up yet -- always expanded
 
 	int m_cursorLine = 0; // index into m_formatted
@@ -637,12 +637,12 @@ private:
 	int m_pendingSelectLineEnd = -1;
 
 	ComposeMode m_composeMode = ComposeMode::None;
-	std::string m_composePrefix;
-	std::string m_pendingWord;
-	std::vector<Candidate> m_candidates;
+	oc::string m_composePrefix;
+	oc::string m_pendingWord;
+	oc::vector<Candidate> m_candidates;
 	int m_candidateSelected = 0;
 	DSLType m_pendingDeclareType = DSLType::Void; // DeclareName/DeclareValue: which type was picked in step 1
-	std::string m_pendingDeclareName;             // DeclareValue: the name resolved in step 2
+	oc::string m_pendingDeclareName;             // DeclareValue: the name resolved in step 2
 	DSLSymbol* m_renameTarget = nullptr;           // Rename: the VariableDeclaration being renamed
 
 	// Non-null: the DeclareName/DeclareValue staged flow is RE-authoring this EXISTING declaration instead of
@@ -659,7 +659,7 @@ private:
 	// by both (see the class comment above and ScriptEditor.cpp's expr* helpers). Reset to one empty frame
 	// whenever either mode is (re-)entered. m_exprPendingGroup/m_exprHasPendingGroup hold whatever a ')' most
 	// recently resolved, until an operator, an enclosing ')', or the final confirm consumes it.
-	std::vector<ExprFrame> m_exprStack;
+	oc::vector<ExprFrame> m_exprStack;
 	PendingExprTerm m_exprPendingGroup;
 	bool m_exprHasPendingGroup = false;
 
@@ -692,7 +692,7 @@ private:
 	bool m_editInsert = false;                   // false: replace the anchor; true: insert after it (m_editLeadOp leads the new segment)
 	DSLOperator m_editLeadOp = DSLOperator::Add;
 	DSLSymbol* m_editAnchorSymbol = nullptr;     // the slot's current occupant (standalone insert wraps around it)
-	std::string m_editAnchorText;                // its rendered text -- the compose box shows "anchor op ..." while inserting
+	oc::string m_editAnchorText;                // its rendered text -- the compose box shows "anchor op ..." while inserting
 	DSLType m_editValueType = DSLType::Void;     // the chain's element type, constraining every composed term's candidates
 
 	// ReplaceOperator: which operator of which Expression chain is being swapped (candidates come from the
@@ -730,18 +730,18 @@ private:
 		DSLSymbol* func = nullptr;
 		DSLSymbol* receiver = nullptr;  // the receiver chain's ROOT declaration a dot-call stages against
 		                                 // ("physics.applyImpulse(...)"); null = a free call
-		std::string receiverPath;       // dotted member path root->call, "" for a direct dot-call ("pos" in
+		oc::string receiverPath;       // dotted member path root->call, "" for a direct dot-call ("pos" in
 		                                 // `self.pos.length()`)
-		std::vector<PendingExprChain> argChains; // confirmed arguments so far, one full chain each
+		oc::vector<PendingExprChain> argChains; // confirmed arguments so far, one full chain each
 		ComposeMode returnMode = ComposeMode::None; // None = a STATEMENT call (completion commits the line);
 		                                             // else the mode THIS call's resolved value returns into
 		                                             // once every argument is in hand (may itself be
 		                                             // CallArgValue -- a call nested in another call's argument)
-		std::string outerLeadText;              // the SUSPENDED context's own lead-in text ("bool b = ", or an
+		oc::string outerLeadText;              // the SUSPENDED context's own lead-in text ("bool b = ", or an
 		                                         // enclosing call's own "outer(arg0 = "), captured ONCE at push
 		                                         // time (see chainLeadTextFor) -- constant for this stage's whole
 		                                         // lifetime; callStagePrefix() prepends it to this call's own text
-		std::vector<ExprFrame> savedExprStack;  // the ENCLOSING compose's m_exprStack, frozen while THIS call's
+		oc::vector<ExprFrame> savedExprStack;  // the ENCLOSING compose's m_exprStack, frozen while THIS call's
 		                                         // own arguments stage -- restored once it resolves or is abandoned
 		PendingExprTerm savedPendingGroup;
 		bool savedHasPendingGroup = false;
@@ -751,7 +751,7 @@ private:
 	// the call only completes once EVERY argument is in hand (commitCallStatement), which pops this level and,
 	// if CallStage::returnMode != None, delivers the resolved call as a PendingExprTerm into the level (or
 	// chain mode) beneath, restoring ITS OWN m_exprStack exactly where it left off.
-	std::vector<CallStage> m_callStack;
+	oc::vector<CallStage> m_callStack;
 
 	// MemberSelect (dotted into a binding object or a struct-typed variable): the chain's ROOT declaration,
 	// the member PATH walked so far ("pos" after `self.pos.` -- each '.' over a struct-typed member appends),
@@ -759,7 +759,7 @@ private:
 	// (stage results return there; Backspace-empty peels the path then restores the root), and the value
 	// constraints captured at entry (see valueContextExpectedType).
 	DSLSymbol* m_memberReceiver = nullptr;
-	std::vector<std::string> m_memberPath;
+	oc::vector<oc::string> m_memberPath;
 	DSLType m_memberReceiverType = DSLType::Void;
 	ComposeMode m_memberReturnMode = ComposeMode::None;
 	DSLType m_memberExpectedType = DSLType::Void;
@@ -769,12 +769,12 @@ private:
 	// ("self.pos.x = ..."): the dotted path from the root declaration to the written member. Entered by
 	// confirming a writable Member candidate in a STATEMENT MemberSelect; commitReassignStatement builds the
 	// MemberAccess chain as the assignment's target.
-	std::vector<std::string> m_reassignMemberPath;
+	oc::vector<oc::string> m_reassignMemberPath;
 
-	std::string m_pendingFunctionName;            // FunctionDeclareName's resolved name, once confirmed
-	std::vector<DSLType> m_pendingParamTypes;     // accumulated parameter types, parallel to m_pendingParamNames
-	std::vector<std::string> m_pendingParamNames; // accumulated parameter names, parallel to m_pendingParamTypes
-	std::vector<bool> m_pendingParamRefs;         // parallel `ref` flags -- always false when AUTHORING (the flow can't
+	oc::string m_pendingFunctionName;            // FunctionDeclareName's resolved name, once confirmed
+	oc::vector<DSLType> m_pendingParamTypes;     // accumulated parameter types, parallel to m_pendingParamNames
+	oc::vector<oc::string> m_pendingParamNames; // accumulated parameter names, parallel to m_pendingParamTypes
+	oc::vector<bool> m_pendingParamRefs;         // parallel `ref` flags -- always false when AUTHORING (the flow can't
 	                                               // create ref params); restored from an existing header on a re-edit
 	                                               // so its display and commit round-trip them (see beginWidenFunctionHeader)
 	DSLType m_pendingParamType = DSLType::Void;    // FunctionParamName: type just picked for the CURRENT (not yet named) parameter
@@ -791,7 +791,7 @@ private:
 	// its own appearances inside the clauses ride as SENTINEL Variable candidates (refSymbol null, label =
 	// m_forVarName), resolved to the real symbol via m_forBuildLoopVar at build time.
 	DSLType m_forVarType = DSLType::Void;
-	std::string m_forVarName;
+	oc::string m_forVarName;
 	PendingExprChain m_forVarInitChain;
 	PendingExprChain m_forConditionLeftChain;
 	Candidate m_forConditionOpCandidate;    // keeps both .op and .label -- the label re-displays in the compose box on step-back
@@ -805,7 +805,7 @@ private:
 	// chain compose. Nothing touches the document until the sequence resolves. The element variable can't be
 	// referenced by the sequence (it isn't in scope until the body), so no sentinel candidate is needed here.
 	DSLType m_forEachElementType = DSLType::Void;
-	std::string m_forEachElementName;
+	oc::string m_forEachElementName;
 	bool m_forEachRef = false; // the element binds by reference (write-back on assignment, see the Transpiler)
 
 	// The staged ifexist flow (IfExistType -> IfExistName -> IfExistSource -> IfExistKey, committed by
@@ -813,7 +813,7 @@ private:
 	// the key's type (BindingObject::lookupKeyType) -- and a container that declares none skips the key stage
 	// and commits straight from the source.
 	DSLType m_ifExistType = DSLType::Void;
-	std::string m_ifExistName;
+	oc::string m_ifExistName;
 	bool m_ifExistRef = false;
 	PendingExprChain m_ifExistContainerChain;
 
@@ -841,14 +841,14 @@ private:
 	// with its operator and loops back to ConditionLeft for the next term; the final term rides into
 	// applyConditionalStatement/commitBoolValue instead. Sizes stay equal while awaiting the next term.
 	// Cleared at every condition-flow entry; Backspace at an empty ConditionLeft pops one term back open.
-	std::vector<PendingLogicalTerm> m_logicalTerms;
-	std::vector<DSLOperator> m_logicalOps;
+	oc::vector<PendingLogicalTerm> m_logicalTerms;
+	oc::vector<DSLOperator> m_logicalOps;
 	DSLOperator m_conditionOp = DSLOperator::Equal;         // ConditionRight: the resolved comparator
 
 	bool m_hasFocus = false;
 	bool m_built = false;
 
-	std::vector<std::string> m_pendingReloadRequests; // paths saveDocument just wrote, pending takeReloadRequests
+	oc::vector<oc::string> m_pendingReloadRequests; // paths saveDocument just wrote, pending takeReloadRequests
 
 	float m_sidebarWidth = 240.0f; // drag-resizable via the splitter between the sidebar and the text area
 

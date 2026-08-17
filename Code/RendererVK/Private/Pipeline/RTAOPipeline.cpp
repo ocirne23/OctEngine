@@ -183,7 +183,7 @@ void RTAOPipeline::recreateImages(uint32 fullWidth, uint32 fullHeight)
 
     // One-time UNDEFINED -> GENERAL for every AO image, so the history accum buffer can be sampled on the very first frame
     ImageSet* sets[] = { &m_raw, &m_accum, &m_final };
-    std::vector<vk::ImageMemoryBarrier2> bars;
+    oc::vector<vk::ImageMemoryBarrier2> bars;
     for (ImageSet* s : sets)
         for (uint32 f = 0; f < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++f)
         for (uint32 e = 0; e < m_viewCount; ++e)
@@ -324,7 +324,7 @@ void RTAOPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 
         DescriptorSet& set = m_traceSets[cur];
         vk::DescriptorSet vkSet = set.getDescriptorSet();
         auto bufInfo = [](Buffer& buf) { return vk::DescriptorBufferInfo{ .buffer = buf.getBuffer(), .range = buf.getSize() }; };
-        std::vector<DescriptorSetUpdateInfo> updates{
+        oc::vector<DescriptorSetUpdateInfo> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { uboInfo } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.gbufferSampler, params.gbufferNormalView) } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.gbufferSampler, params.gbufferDepthView) } },
@@ -343,7 +343,7 @@ void RTAOPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 
             for (uint16 texIdx = 0; texIdx < (uint16)Globals::textureManager.getNumTextures(); ++texIdx)
                 texUpdate.imageInfos.push_back(vk::DescriptorImageInfo{ .sampler = m_textureSampler.getSampler(), .imageView = Globals::textureManager.getViewForDescriptor(texIdx), .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal });
             if (!texUpdate.imageInfos.empty())
-                updates.push_back(std::move(texUpdate));
+                updates.push_back(oc::move(texUpdate));
         }
         commandBuffer.cmdUpdateDescriptorSets(traceLayout, vk::PipelineBindPoint::eCompute, vkSet, updates);
         vk::WriteDescriptorSetAccelerationStructureKHR asInfo{ .accelerationStructureCount = 1, .pAccelerationStructures = &params.tlas };
@@ -352,7 +352,7 @@ void RTAOPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 
 
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_tracePipeline.getPipeline());
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, traceLayout, 0, 1, &vkSet, 0, nullptr);
-        RtaoPC pc{ .numRays = uint32(std::max(m_pParams->rays, 1)), .radius = m_pParams->radius, .power = m_pParams->power,
+        RtaoPC pc{ .numRays = uint32(oc::max(m_pParams->rays, 1)), .radius = m_pParams->radius, .power = m_pParams->power,
             .intensity = m_pParams->intensity, .aoWidth = m_width, .aoHeight = m_height, .viewIndex = viewIndex,
             .fadeStart = m_pParams->fadeStart, .maxDistance = m_pParams->maxDistance,
             .normalBias = m_pParams->normalBias, .distanceBias = m_pParams->distanceBias };
@@ -366,7 +366,7 @@ void RTAOPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 
 
         DescriptorSet& set = m_temporalSets[cur];
         vk::DescriptorSet vkSet = set.getDescriptorSet();
-        std::array<DescriptorSetUpdateInfo, 6> updates{
+        oc::array<DescriptorSetUpdateInfo, 6> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { uboInfo } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.gbufferSampler, params.gbufferDepthView) } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.gbufferSampler, params.prevGbufferDepthView) } },
@@ -389,7 +389,7 @@ void RTAOPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 
 
         DescriptorSet& set = m_spatialSets[cur];
         vk::DescriptorSet vkSet = set.getDescriptorSet();
-        std::array<DescriptorSetUpdateInfo, 5> updates{
+        oc::array<DescriptorSetUpdateInfo, 5> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { uboInfo } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.gbufferSampler, params.gbufferDepthView) } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.gbufferSampler, params.gbufferNormalView) } },

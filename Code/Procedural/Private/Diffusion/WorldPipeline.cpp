@@ -76,17 +76,17 @@ namespace Procedural::Diffusion
 		// Separable tent: 1.0 at the tile centre falling linearly to eps at each edge. Every stage
 		// pre-multiplies its data channels by this and ships the raw window as the last channel, so summing
 		// overlapping tiles and dividing by the summed weight yields a smooth partition-of-unity blend.
-		std::vector<float> linearWeightWindow(int32 size)
+		oc::vector<float> linearWeightWindow(int32 size)
 		{
-			std::vector<float> w((size_t)size * size);
+			oc::vector<float> w((size_t)size * size);
 			const float mid = (float)(size - 1) / 2.0f;
 			const float eps = 1e-3f;
 			for (int32 r = 0; r < size; r++)
 			{
-				const float wy = 1.0f - (1.0f - eps) * std::min(1.0f, std::abs((float)r - mid) / mid);
+				const float wy = 1.0f - (1.0f - eps) * oc::min(1.0f, std::abs((float)r - mid) / mid);
 				for (int32 c = 0; c < size; c++)
 				{
-					const float wx = 1.0f - (1.0f - eps) * std::min(1.0f, std::abs((float)c - mid) / mid);
+					const float wx = 1.0f - (1.0f - eps) * oc::min(1.0f, std::abs((float)c - mid) / mid);
 					w[(size_t)r * size + c] = wy * wx;
 				}
 			}
@@ -116,10 +116,10 @@ namespace Procedural::Diffusion
 		// Bilinear sample of a grid at a fractional index, clamped to the grid.
 		float bilinearSample(const Grid& g, float gy, float gx)
 		{
-			const float y = std::clamp(gy, 0.0f, (float)(g.h - 1));
-			const float x = std::clamp(gx, 0.0f, (float)(g.w - 1));
+			const float y = oc::clamp(gy, 0.0f, (float)(g.h - 1));
+			const float x = oc::clamp(gx, 0.0f, (float)(g.w - 1));
 			const int32 y0 = (int32)y, x0 = (int32)x;
-			const int32 y1 = std::min(g.h - 1, y0 + 1), x1 = std::min(g.w - 1, x0 + 1);
+			const int32 y1 = oc::min(g.h - 1, y0 + 1), x1 = oc::min(g.w - 1, x0 + 1);
 			const float wy = y - (float)y0, wx = x - (float)x0;
 			return (1 - wy) * (1 - wx) * g.at(y0, x0) + (1 - wy) * wx * g.at(y0, x1)
 			     + wy * (1 - wx) * g.at(y1, x0) + wy * wx * g.at(y1, x1);
@@ -150,9 +150,9 @@ namespace Procedural::Diffusion
 		return m_tileStore ? m_tileStore->getResidentBytes() : 0;
 	}
 
-	std::string WorldPipeline::inferenceStatsText() const
+	oc::string WorldPipeline::inferenceStatsText() const
 	{
-		auto fmt = [](std::string_view name, const OnnxModel::RunStats& s)
+		auto fmt = [](oc::string_view name, const OnnxModel::RunStats& s)
 		{
 			if (s.calls == 0)
 				return std::format("{} idle", name);
@@ -221,12 +221,12 @@ namespace Procedural::Diffusion
 		m_ww256 = linearWeightWindow(DECODER_TILE_SIZE);
 
 		const auto t0 = Clock::now();
-		m_syntheticMap = std::make_unique<SyntheticMapFactory>(m_seed, m_config, m_data);
+		m_syntheticMap = oc::make_unique<SyntheticMapFactory>(m_seed, m_config, m_data);
 		const auto t1 = Clock::now();
 		Log::verbose(std::format("[Diffusion] synthetic map built in {} ms",
 		                         std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count()));
 
-		m_tileStore = std::make_unique<MemoryTileStore>();
+		m_tileStore = oc::make_unique<MemoryTileStore>();
 		buildCoarseStage();
 		if (!coarseOnly)
 		{
@@ -246,7 +246,7 @@ namespace Procedural::Diffusion
 		// The stage lambdas read m_seed through `this`, so they pick this up with no rebuild — matching the
 		// reference, where seed is volatile and read through the lambda's enclosing instance. Capturing the
 		// seed BY VALUE in the lambda would silently break reseeding.
-		m_syntheticMap = std::make_unique<SyntheticMapFactory>(m_seed, m_config, m_data);
+		m_syntheticMap = oc::make_unique<SyntheticMapFactory>(m_seed, m_config, m_data);
 		m_tileStore->clearAllCaches();
 	}
 
@@ -263,14 +263,14 @@ namespace Procedural::Diffusion
 
 		m_coarse = m_tileStore->getOrCreateBatched(
 			"base_coarse_map", 3,
-			[this](std::span<const WindowKey> wis, std::span<const std::vector<FloatTensor>>)
+			[this](oc::span<const WindowKey> wis, oc::span<const oc::vector<FloatTensor>>)
 			{
 				return coarseBatch(wis);
 			},
 			outWin, {}, {}, CACHE_LIMIT_BYTES, COARSE_BATCH);
 	}
 
-	std::vector<FloatTensor> WorldPipeline::coarseBatch(std::span<const WindowKey> windowIndices)
+	oc::vector<FloatTensor> WorldPipeline::coarseBatch(oc::span<const WindowKey> windowIndices)
 	{
 		const int32 S = COARSE_TILE_SIZE, ST = COARSE_TILE_STRIDE;
 		const size_t plane = (size_t)S * S;
@@ -278,9 +278,9 @@ namespace Procedural::Diffusion
 		static constexpr int32 MEAN_IDX[5] = { 0, 2, 3, 4, 5 };
 
 		// --- Per-tile conditioning + initial noise ---------------------------------------------------
-		std::vector<float> condMixed((size_t)batch * 5 * plane);
-		std::vector<float> sample((size_t)batch * 6 * plane);
-		std::vector<float> syn, condNoise((size_t)5 * plane);
+		oc::vector<float> condMixed((size_t)batch * 5 * plane);
+		oc::vector<float> sample((size_t)batch * 6 * plane);
+		oc::vector<float> syn, condNoise((size_t)5 * plane);
 
 		EDMScheduler protoSched(COARSE_STEPS);
 		const float sigma0 = protoSched.sigmas()[0];
@@ -332,47 +332,47 @@ namespace Procedural::Diffusion
 		// --- 20-step DPM-Solver++, all tiles stepping together ---------------------------------------
 		// Every tile shares the sigma schedule, so step k is one dispatch for the whole batch. Each tile
 		// still needs its own scheduler: the multistep solver carries per-tile history.
-		std::vector<EDMScheduler> scheds;
+		oc::vector<EDMScheduler> scheds;
 		scheds.reserve((size_t)batch);
 		for (int32 b = 0; b < batch; b++)
 			scheds.emplace_back(COARSE_STEPS);
 
-		std::vector<float> xIn((size_t)batch * 11 * plane);
-		std::vector<float> scaledIn(6 * plane);
-		std::vector<float> modelOut;
-		std::vector<float> cnoise((size_t)batch);
-		std::vector<float> condScalar((size_t)batch);
+		oc::vector<float> xIn((size_t)batch * 11 * plane);
+		oc::vector<float> scaledIn(6 * plane);
+		oc::vector<float> modelOut;
+		oc::vector<float> cnoise((size_t)batch);
+		oc::vector<float> condScalar((size_t)batch);
 		const int64 xShape[4] = { batch, 11, S, S };
 		const int64 scalarShape[1] = { batch };
 		static const char* const COND_NAMES[5] = { "cond_0", "cond_1", "cond_2", "cond_3", "cond_4" };
 
-		std::vector<std::vector<float>> condScalars((size_t)5);
+		oc::vector<oc::vector<float>> condScalars((size_t)5);
 		for (int32 c = 0; c < 5; c++)
 			condScalars[(size_t)c].assign((size_t)batch, m_condVals[(size_t)c]);
 
-		auto failed = [&]() -> std::vector<FloatTensor>
+		auto failed = [&]() -> oc::vector<FloatTensor>
 		{
 			m_inferenceFailed = true;
-			std::vector<FloatTensor> r;
+			oc::vector<FloatTensor> r;
 			for (int32 b = 0; b < batch; b++)
-				r.emplace_back(std::array<int32, 3>{ 7, S, S });
+				r.emplace_back(oc::array<int32, 3>{ 7, S, S });
 			return r;
 		};
 
 		for (int32 step = 0; step < COARSE_STEPS; step++)
 		{
 			const float sigma = protoSched.sigmas()[(size_t)step];
-			std::fill(cnoise.begin(), cnoise.end(), EDMScheduler::trigflowPreconditionNoise(sigma));
+			oc::fill(cnoise.begin(), cnoise.end(), EDMScheduler::trigflowPreconditionNoise(sigma));
 
 			for (int32 b = 0; b < batch; b++)
 			{
-				const std::span<const float> s(sample.data() + (size_t)b * 6 * plane, 6 * plane);
+				const oc::span<const float> s(sample.data() + (size_t)b * 6 * plane, 6 * plane);
 				EDMScheduler::preconditionInputs(s, sigma, scaledIn);
 				// x = [6 noisy sample channels | 5 mixed conditioning channels]
 				float* dst = xIn.data() + (size_t)b * 11 * plane;
-				std::copy(scaledIn.begin(), scaledIn.end(), dst);
+				oc::copy(scaledIn.begin(), scaledIn.end(), dst);
 				const float* cm = condMixed.data() + (size_t)b * 5 * plane;
-				std::copy(cm, cm + 5 * plane, dst + 6 * plane);
+				oc::copy(cm, cm + 5 * plane, dst + 6 * plane);
 			}
 
 			OnnxInput inputs[7];
@@ -388,16 +388,16 @@ namespace Procedural::Diffusion
 			// Each tile advances its own solver state, in place on its slice of the shared batch buffer.
 			for (int32 b = 0; b < batch; b++)
 			{
-				const std::span<const float> mo(modelOut.data() + (size_t)b * 6 * plane, 6 * plane);
-				const std::span<float> s(sample.data() + (size_t)b * 6 * plane, 6 * plane);
+				const oc::span<const float> mo(modelOut.data() + (size_t)b * 6 * plane, 6 * plane);
+				const oc::span<float> s(sample.data() + (size_t)b * 6 * plane, 6 * plane);
 				scheds[(size_t)b].step(mo, s);
 			}
 		}
 
 		// --- Denormalise + emit ----------------------------------------------------------------------
-		std::vector<FloatTensor> results;
+		oc::vector<FloatTensor> results;
 		results.reserve((size_t)batch);
-		std::vector<float> out(6 * plane);
+		oc::vector<float> out(6 * plane);
 		for (int32 b = 0; b < batch; b++)
 		{
 			// The coarse output is NOT negated (unlike base/decoder) — it goes through the scheduler's EDM
@@ -416,7 +416,7 @@ namespace Procedural::Diffusion
 				out[plane + px] = out[px] - out[plane + px];
 
 			// Emit 7 channels: the 6 data channels pre-multiplied by the tent window, then the raw window.
-			FloatTensor result(std::array<int32, 3>{ 7, S, S });
+			FloatTensor result(oc::array<int32, 3>{ 7, S, S });
 			for (int32 ch = 0; ch < 6; ch++)
 			{
 				const float* src = out.data() + (size_t)ch * plane;
@@ -424,8 +424,8 @@ namespace Procedural::Diffusion
 				for (size_t px = 0; px < plane; px++)
 					dst[px] = src[px] * m_ww64[px];
 			}
-			std::copy(m_ww64.begin(), m_ww64.end(), result.data.begin() + (ptrdiff_t)(6 * plane));
-			results.push_back(std::move(result));
+			oc::copy(m_ww64.begin(), m_ww64.end(), result.data.begin() + (ptrdiff_t)(6 * plane));
+			results.push_back(oc::move(result));
 		}
 		return results;
 	}
@@ -463,7 +463,7 @@ namespace Procedural::Diffusion
 
 		m_initLatent = m_tileStore->getOrCreateBatched(
 			"init_latent_map", 3,
-			[this, tInit](std::span<const WindowKey> wis, std::span<const std::vector<FloatTensor>> args)
+			[this, tInit](oc::span<const WindowKey> wis, oc::span<const oc::vector<FloatTensor>> args)
 			{
 				return latentBatch(wis, nullptr, args[0], tInit, 5819);
 			},
@@ -475,7 +475,7 @@ namespace Procedural::Diffusion
 
 		m_latents = m_tileStore->getOrCreateBatched(
 			"step_latent_map_0", 3,
-			[this, interT](std::span<const WindowKey> wis, std::span<const std::vector<FloatTensor>> args)
+			[this, interT](oc::span<const WindowKey> wis, oc::span<const oc::vector<FloatTensor>> args)
 			{
 				return latentBatch(wis, &args[0], args[1], interT, 5820);
 			},
@@ -537,9 +537,9 @@ namespace Procedural::Diffusion
 		assert(off == COND_TOTAL);
 	}
 
-	std::vector<FloatTensor> WorldPipeline::latentBatch(std::span<const WindowKey> windowIndices,
-	                                                    const std::vector<FloatTensor>* prevSamples,
-	                                                    const std::vector<FloatTensor>& coarseSlices,
+	oc::vector<FloatTensor> WorldPipeline::latentBatch(oc::span<const WindowKey> windowIndices,
+	                                                    const oc::vector<FloatTensor>* prevSamples,
+	                                                    const oc::vector<FloatTensor>& coarseSlices,
 	                                                    float t, uint64 seedOffset)
 	{
 		const int32 S = LATENT_TILE_SIZE, ST = LATENT_TILE_STRIDE;
@@ -549,10 +549,10 @@ namespace Procedural::Diffusion
 		const float cosT = (float)std::cos((double)t);
 		const float sinT = (float)std::sin((double)t);
 
-		std::vector<std::vector<float>> xTArr((size_t)batch);
-		std::vector<float> modelIn((size_t)batch * chans * plane);
-		std::vector<float> cond((size_t)batch * COND_TOTAL);
-		std::vector<float> noise(chans * plane);
+		oc::vector<oc::vector<float>> xTArr((size_t)batch);
+		oc::vector<float> modelIn((size_t)batch * chans * plane);
+		oc::vector<float> cond((size_t)batch * COND_TOTAL);
+		oc::vector<float> noise(chans * plane);
 
 		for (int32 b = 0; b < batch; b++)
 		{
@@ -563,7 +563,7 @@ namespace Procedural::Diffusion
 
 			// The chained step starts from the previous step's (weight-normalised) output; the init step
 			// starts from zero.
-			std::vector<float> sample(chans * plane, 0.0f);
+			oc::vector<float> sample(chans * plane, 0.0f);
 			if (prevSamples)
 			{
 				const FloatTensor& ps = (*prevSamples)[(size_t)b];
@@ -577,7 +577,7 @@ namespace Procedural::Diffusion
 
 			gaussianNoisePatch(m_seed + seedOffset, i1, j1, S, S, (int32)chans, S, S, noise.data());
 
-			std::vector<float>& xT = xTArr[(size_t)b];
+			oc::vector<float>& xT = xTArr[(size_t)b];
 			xT.resize(chans * plane);
 			for (size_t k = 0; k < chans * plane; k++)
 			{
@@ -587,7 +587,7 @@ namespace Procedural::Diffusion
 			}
 		}
 
-		std::vector<float> noiseLabels((size_t)batch, t);
+		oc::vector<float> noiseLabels((size_t)batch, t);
 		const int64 xShape[4] = { batch, (int64)chans, S, S };
 		const int64 nlShape[1] = { batch };
 		const int64 condShape[2] = { batch, COND_TOTAL };
@@ -597,23 +597,23 @@ namespace Procedural::Diffusion
 		inputs[1] = { "noise_labels", noiseLabels, nlShape };
 		inputs[2] = { "cond_0", cond, condShape };
 
-		std::vector<float> pred;
-		std::vector<FloatTensor> results;
+		oc::vector<float> pred;
+		oc::vector<FloatTensor> results;
 		results.reserve((size_t)batch);
 
 		if (!m_baseModel.run(inputs, pred))
 		{
 			m_inferenceFailed = true;
 			for (int32 b = 0; b < batch; b++)
-				results.emplace_back(std::array<int32, 3>{ 6, S, S });
+				results.emplace_back(oc::array<int32, 3>{ 6, S, S });
 			return results;
 		}
 		assert(pred.size() == (size_t)batch * chans * plane);
 
 		for (int32 b = 0; b < batch; b++)
 		{
-			const std::vector<float>& xT = xTArr[(size_t)b];
-			FloatTensor out(std::array<int32, 3>{ 6, S, S });
+			const oc::vector<float>& xT = xTArr[(size_t)b];
+			FloatTensor out(oc::array<int32, 3>{ 6, S, S });
 			for (size_t ch = 0; ch < chans; ch++)
 				for (size_t px = 0; px < plane; px++)
 				{
@@ -623,8 +623,8 @@ namespace Procedural::Diffusion
 					const float v = (cosT * xT[k] - sinT * EDMScheduler::SIGMA_DATA * p) / EDMScheduler::SIGMA_DATA;
 					out.data[k] = v * m_ww64[px];
 				}
-			std::copy(m_ww64.begin(), m_ww64.end(), out.data.begin() + (ptrdiff_t)(chans * plane));
-			results.push_back(std::move(out));
+			oc::copy(m_ww64.begin(), m_ww64.end(), out.data.begin() + (ptrdiff_t)(chans * plane));
+			results.push_back(oc::move(out));
 		}
 		return results;
 	}
@@ -650,14 +650,14 @@ namespace Procedural::Diffusion
 
 		m_residual = m_tileStore->getOrCreate(
 			"init_residual_map", 3,
-			[this, t](std::span<const int32> wi, std::span<const FloatTensor> args)
+			[this, t](oc::span<const int32> wi, oc::span<const FloatTensor> args)
 			{
 				return decoderTile(wi, args[0], t);
 			},
 			outWin, deps, depWins, CACHE_LIMIT_BYTES);
 	}
 
-	FloatTensor WorldPipeline::decoderTile(std::span<const int32> windowIndex, const FloatTensor& latentSlice, float t)
+	FloatTensor WorldPipeline::decoderTile(oc::span<const int32> windowIndex, const FloatTensor& latentSlice, float t)
 	{
 		const int32 S = DECODER_TILE_SIZE, ST = DECODER_TILE_STRIDE, lc = m_config.latentCompression;
 		const int32 Slc = S / lc;
@@ -669,35 +669,35 @@ namespace Procedural::Diffusion
 
 		// Recover latent channels 0..3 (channel 4 is the low-frequency elevation band, used by computeElev;
 		// channel 5 is the weight).
-		std::vector<float> lat(4 * lplane);
+		oc::vector<float> lat(4 * lplane);
 		for (size_t ch = 0; ch < 4; ch++)
 			for (size_t px = 0; px < lplane; px++)
 				lat[ch * lplane + px] = unweight(latentSlice.data[ch * lplane + px], latentSlice.data[5 * lplane + px]);
 
-		std::vector<float> upsampled(4 * plane);
+		oc::vector<float> upsampled(4 * plane);
 		nearestUpsample(lat.data(), 4, Slc, Slc, S, S, upsampled.data());
 
 		// One flow-matching step from a zero sample, so x_t is pure noise scaled by sin(t).
-		std::vector<float> noise(plane);
+		oc::vector<float> noise(plane);
 		gaussianNoisePatch(m_seed + 5819, i1, j1, S, S, 1, S, S, noise.data());
-		std::vector<float> xT(plane);
+		oc::vector<float> xT(plane);
 		for (size_t k = 0; k < plane; k++)
 			xT[k] = sinT * noise[k] * EDMScheduler::SIGMA_DATA;
 
 		// model_in = [xT/sigma_data | upsampled latents] -> 5 channels
-		std::vector<float> modelIn(5 * plane);
+		oc::vector<float> modelIn(5 * plane);
 		for (size_t k = 0; k < plane; k++)
 			modelIn[k] = xT[k] / EDMScheduler::SIGMA_DATA;
-		std::copy(upsampled.begin(), upsampled.end(), modelIn.begin() + (ptrdiff_t)plane);
+		oc::copy(upsampled.begin(), upsampled.end(), modelIn.begin() + (ptrdiff_t)plane);
 
 		const int64 xShape[4] = { 1, 5, S, S };
 		const int64 nlShape[1] = { 1 };
 		OnnxInput inputs[2];
 		inputs[0] = { "x", modelIn, xShape };
-		inputs[1] = { "noise_labels", std::span<const float>(&t, 1), nlShape };
+		inputs[1] = { "noise_labels", oc::span<const float>(&t, 1), nlShape };
 
-		std::vector<float> rawPred;
-		FloatTensor result(std::array<int32, 3>{ 2, S, S });
+		oc::vector<float> rawPred;
+		FloatTensor result(oc::array<int32, 3>{ 2, S, S });
 		if (!m_decoderModel.run(inputs, rawPred))
 		{
 			m_inferenceFailed = true;
@@ -711,7 +711,7 @@ namespace Procedural::Diffusion
 			const float v = (cosT * xT[k] - sinT * EDMScheduler::SIGMA_DATA * p) / EDMScheduler::SIGMA_DATA;
 			result.data[k] = v * m_ww256[k];
 		}
-		std::copy(m_ww256.begin(), m_ww256.end(), result.data.begin() + (ptrdiff_t)plane);
+		oc::copy(m_ww256.begin(), m_ww256.end(), result.data.begin() + (ptrdiff_t)plane);
 		return result;
 	}
 
@@ -719,8 +719,8 @@ namespace Procedural::Diffusion
 	// Elevation / climate assembly
 	// =====================================================================================================
 
-	void WorldPipeline::computeElev(int32 i1, int32 j1, int32 i2, int32 j2, std::vector<float>& outElev,
-	                                std::vector<float>* outMacro)
+	void WorldPipeline::computeElev(int32 i1, int32 j1, int32 i2, int32 j2, oc::vector<float>& outElev,
+	                                oc::vector<float>* outMacro)
 	{
 		const int32 lc = m_config.latentCompression;
 		constexpr float sigma = 5.0f;
@@ -802,7 +802,7 @@ namespace Procedural::Diffusion
 	//
 	// Nearly free: the coarse tiles this reads are already resident, since the latent stage is conditioned
 	// on them and computeClimate slices the same window with a larger pad.
-	void WorldPipeline::computeCoarseSurface(int32 i1, int32 j1, int32 i2, int32 j2, std::vector<float>& out)
+	void WorldPipeline::computeCoarseSurface(int32 i1, int32 j1, int32 i2, int32 j2, oc::vector<float>& out)
 	{
 		const int32 S = 32 * m_config.latentCompression; // native pixels per coarse pixel (256)
 		const int32 ci1 = floorDiv(i1, S), cj1 = floorDiv(j1, S);
@@ -842,8 +842,8 @@ namespace Procedural::Diffusion
 		}
 	}
 
-	void WorldPipeline::computeClimate(int32 i1, int32 j1, int32 i2, int32 j2, std::span<const float> elev,
-	                                   int32 H, int32 W, std::vector<float>& outClimate)
+	void WorldPipeline::computeClimate(int32 i1, int32 j1, int32 i2, int32 j2, oc::span<const float> elev,
+	                                   int32 H, int32 W, oc::vector<float>& outClimate)
 	{
 		const int32 lc = m_config.latentCompression;
 		const int32 S = 32 * lc; // native pixels per coarse pixel
@@ -867,7 +867,7 @@ namespace Procedural::Diffusion
 			const float w = coarseSlice.data[6 * cplane + i];
 			// Coarse elevation: undo the sqrt, clamping ocean to 0 (as the reference does here — note this
 			// differs from computeElev, which keeps the sign).
-			const float e = std::max(0.0f, unweight(coarseSlice.data[0 * cplane + i], w));
+			const float e = oc::max(0.0f, unweight(coarseSlice.data[0 * cplane + i], w));
 			coarseElev.data[i] = e * e;
 			coarseTemp.data[i] = unweight(coarseSlice.data[2 * cplane + i], w);
 			central[0].data[i] = unweight(coarseSlice.data[3 * cplane + i], w);
@@ -906,7 +906,7 @@ namespace Procedural::Diffusion
 				const float b = bilinearSample(beta, gridY, gridX);
 				const float e = elev[(size_t)r * W + c];
 
-				outClimate[0 * plane + (size_t)r * W + c] = tBase + b * std::max(0.0f, e);
+				outClimate[0 * plane + (size_t)r * W + c] = tBase + b * oc::max(0.0f, e);
 				outClimate[1 * plane + (size_t)r * W + c] = bilinearSample(cropped[0], gridY, gridX);
 				outClimate[2 * plane + (size_t)r * W + c] = bilinearSample(cropped[1], gridY, gridX);
 				outClimate[3 * plane + (size_t)r * W + c] = bilinearSample(cropped[2], gridY, gridX);
@@ -916,8 +916,8 @@ namespace Procedural::Diffusion
 	}
 
 	bool WorldPipeline::get(int32 i1, int32 j1, int32 i2, int32 j2, bool withClimate,
-	                        std::vector<float>& outElev, std::vector<float>& outClimate,
-	                        std::vector<float>* outMacro)
+	                        oc::vector<float>& outElev, oc::vector<float>& outClimate,
+	                        oc::vector<float>* outMacro)
 	{
 		assert(m_valid);
 		if (m_coarseOnly)

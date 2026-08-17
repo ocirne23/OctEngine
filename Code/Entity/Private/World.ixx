@@ -22,7 +22,7 @@ import :AnimationDescription;
 // Per-worker scratch for the depth-parallel entity update: the next level's nodes this worker found.
 export struct EntityUpdateStaging
 {
-    std::vector<EntityUpdateNode> children;
+    oc::vector<EntityUpdateNode> children;
 };
 
 export class World final
@@ -42,38 +42,38 @@ public:
     bool isHeadless() const { return m_headless; }
 
     // Entity Creation
-    EntityPtr spawn(const std::string& name, const Transform& base);
-    EntityPtr spawnAssetFile(const std::string& path, const Transform& base, bool overrideDefaultTransform = true);
-    EntityPtr createEmptyEntity(const std::string& name);
+    EntityPtr spawn(const oc::string& name, const Transform& base);
+    EntityPtr spawnAssetFile(const oc::string& path, const Transform& base, bool overrideDefaultTransform = true);
+    EntityPtr createEmptyEntity(const oc::string& name);
 
     // Entity Ownership
-    void addRootEntity(EntityPtr entity) { if (entity) m_rootEntities.push_back(std::move(entity)); }
+    void addRootEntity(EntityPtr entity) { if (entity) m_rootEntities.push_back(oc::move(entity)); }
     // Drops the World's ownership of a root entity (it dies here unless something else still holds it).
-    void removeRootEntity(const Entity* entity) { std::erase_if(m_rootEntities, [entity](const EntityPtr& e) { return e.get() == entity; }); }
-    const std::vector<EntityPtr>& rootEntities() const { return m_rootEntities; }
+    void removeRootEntity(const Entity* entity) { oc::erase_if(m_rootEntities, [entity](const EntityPtr& e) { return e.get() == entity; }); }
+    const oc::vector<EntityPtr>& rootEntities() const { return m_rootEntities; }
     void clearRootEntities() { m_rootEntities.clear(); }
 
     // Applies one EntityChange event
     void handleEntityChange(EntityChange& change, const Camera& camera, const Rect& viewportRect);
 
     // Editor prefab editing
-    void setOnPrefabOpened(std::function<void(const EntityPtr&, const std::string&)> callback) { m_onPrefabOpened = std::move(callback); }
-    void setOnEntityRespawned(std::function<void(const EntityPtr&, const EntityPtr&)> callback) { m_onEntityRespawned = std::move(callback); }
+    void setOnPrefabOpened(oc::function<void(const EntityPtr&, const oc::string&)> callback) { m_onPrefabOpened = oc::move(callback); }
+    void setOnEntityRespawned(oc::function<void(const EntityPtr&, const EntityPtr&)> callback) { m_onEntityRespawned = oc::move(callback); }
     void reloadPrefabs();
-    void invalidatePrefab(const std::string& name);
+    void invalidatePrefab(const oc::string& name);
 
     // captureCollisionSource keeps a CPU snapshot of the scene geometry for physics
-    ObjectContainer* getOrLoadContainer(const std::string& name, bool captureCollisionSource = false);
+    ObjectContainer* getOrLoadContainer(const oc::string& name, bool captureCollisionSource = false);
     size_t getNumContainers() const { return m_containers.size(); }
 
     // Keep old instances of edited templates alive (for pre-existing entities)
-    void keepTemplateAlive(std::shared_ptr<const EntitySpawnTemplate> tmpl) { m_editorTemplates.push_back(std::move(tmpl)); }
+    void keepTemplateAlive(oc::shared_ptr<const EntitySpawnTemplate> tmpl) { m_editorTemplates.push_back(oc::move(tmpl)); }
 
     // Component SpawnInfo builders
-    std::shared_ptr<RenderComponent::SpawnInfo> buildRenderSpawnInfo(const AssetNode& renderNode, const std::string& ownerName, bool captureCollisionSource = false);
-    std::shared_ptr<AnimatorComponent::SpawnInfo> buildAnimatorSpawnInfo(const AssetNode& animatorNode, const std::string& siblingContainerName, const std::string& ownerName);
-    std::shared_ptr<PhysicsComponent::SpawnInfo> buildPhysicsSpawnInfo(const AssetNode& physicsNode, const std::string& containerName, const std::string& nodePath, const std::string& ownerName);
-    std::shared_ptr<AudioComponent::SpawnInfo> buildAudioSpawnInfo(const AssetNode& audioNode, const std::string& ownerName);
+    oc::shared_ptr<RenderComponent::SpawnInfo> buildRenderSpawnInfo(const AssetNode& renderNode, const oc::string& ownerName, bool captureCollisionSource = false);
+    oc::shared_ptr<AnimatorComponent::SpawnInfo> buildAnimatorSpawnInfo(const AssetNode& animatorNode, const oc::string& siblingContainerName, const oc::string& ownerName);
+    oc::shared_ptr<PhysicsComponent::SpawnInfo> buildPhysicsSpawnInfo(const AssetNode& physicsNode, const oc::string& containerName, const oc::string& nodePath, const oc::string& ownerName);
+    oc::shared_ptr<AudioComponent::SpawnInfo> buildAudioSpawnInfo(const AssetNode& audioNode, const oc::string& ownerName);
 
     void handleContactEvent(const PhysicsWorld::ContactEvent& evt)
     {
@@ -102,42 +102,42 @@ private:
     // skeleton + animator name so a source FBX is imported once, not per spawned entity.
     const AnimationSet* getOrBuildClipSet(const Skeleton* skel, const AnimatorDesc& desc);
 
-    std::shared_ptr<const EntitySpawnTemplate> getOrBuildPrefabTemplate(const std::string& name);
+    oc::shared_ptr<const EntitySpawnTemplate> getOrBuildPrefabTemplate(const oc::string& name);
 
-    std::shared_ptr<const EntitySpawnTemplate> cacheTemplate(const std::string& name, const std::string& sourceFile, const AssetNode& node);
+    oc::shared_ptr<const EntitySpawnTemplate> cacheTemplate(const oc::string& name, const oc::string& sourceFile, const AssetNode& node);
 
-    std::shared_ptr<const EntitySpawnTemplate> buildInlineTemplate(const AssetNode& node);
+    oc::shared_ptr<const EntitySpawnTemplate> buildInlineTemplate(const AssetNode& node);
 
-    std::shared_ptr<const EntitySpawnTemplate> buildFileTemplate(const std::string& path);
+    oc::shared_ptr<const EntitySpawnTemplate> buildFileTemplate(const oc::string& path);
 
     void buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl);
 
-    std::shared_ptr<SceneComponent::SpawnInfo> buildSceneSpawnInfo(const AssetNode& sceneNode);
+    oc::shared_ptr<SceneComponent::SpawnInfo> buildSceneSpawnInfo(const AssetNode& sceneNode);
 
     // Audio buffer for a sound file, shared between every entity referencing the same path. A failed
     // load is cached too (as an invalid buffer) so a bad path doesn't retry + re-log every spawn.
-    std::shared_ptr<AudioBuffer> getOrLoadAudioBuffer(const std::string& path);
+    oc::shared_ptr<AudioBuffer> getOrLoadAudioBuffer(const oc::string& path);
 
     // Makes sure the cache holds a snapshot for this container: normally captured during loadContainer,
     // falling back to a one-time re-import when the container was loaded before physics asked for it.
-    bool ensureCollisionSource(const std::string& containerName);
+    bool ensureCollisionSource(const oc::string& containerName);
 
-    std::unordered_map<std::string, std::unique_ptr<ObjectContainer>> m_containers;
+    oc::unordered_map<oc::string, oc::unique_ptr<ObjectContainer>> m_containers;
     CollisionCache m_collision; // collision snapshots + BVHs + occluders derived from loaded containers
-    std::unordered_map<std::string, std::unique_ptr<AnimationSet>> m_clipSets; // key: skeleton ptr + animator name
-    std::unordered_map<std::string, std::shared_ptr<AudioBuffer>> m_audioBuffers; // key: sound file path
-    std::unordered_map<std::string, std::shared_ptr<EntitySpawnTemplate>> m_templates; // prefab templates, keyed by name
-    std::vector<std::shared_ptr<EntitySpawnTemplate>> m_retiredTemplates; // superseded by reloadPrefabs, kept alive for live entities
-    std::unordered_set<std::string> m_buildingTemplates; // prefab names currently being built (cycle guard)
-    std::shared_ptr<EntitySpawnTemplate> m_emptyTemplate; // blank Scene-only template for editable (non-prefab) entities
-    std::vector<std::shared_ptr<const EntitySpawnTemplate>> m_editorTemplates; // ad-hoc templates kept alive via keepTemplateAlive()
-    std::vector<EntityPtr> m_rootEntities;
+    oc::unordered_map<oc::string, oc::unique_ptr<AnimationSet>> m_clipSets; // key: skeleton ptr + animator name
+    oc::unordered_map<oc::string, oc::shared_ptr<AudioBuffer>> m_audioBuffers; // key: sound file path
+    oc::unordered_map<oc::string, oc::shared_ptr<EntitySpawnTemplate>> m_templates; // prefab templates, keyed by name
+    oc::vector<oc::shared_ptr<EntitySpawnTemplate>> m_retiredTemplates; // superseded by reloadPrefabs, kept alive for live entities
+    oc::unordered_set<oc::string> m_buildingTemplates; // prefab names currently being built (cycle guard)
+    oc::shared_ptr<EntitySpawnTemplate> m_emptyTemplate; // blank Scene-only template for editable (non-prefab) entities
+    oc::vector<oc::shared_ptr<const EntitySpawnTemplate>> m_editorTemplates; // ad-hoc templates kept alive via keepTemplateAlive()
+    oc::vector<EntityPtr> m_rootEntities;
     bool m_headless = false;
-    std::vector<EntityUpdateNode> m_updateLevel;
+    oc::vector<EntityUpdateNode> m_updateLevel;
     PerWorker<EntityUpdateStaging> m_updateStaging;
     JobCost m_updateCost{ 2000 };
-    std::function<void(const EntityPtr&, const std::string&)> m_onPrefabOpened;
-    std::function<void(const EntityPtr&, const EntityPtr&)> m_onEntityRespawned;
+    oc::function<void(const EntityPtr&, const oc::string&)> m_onPrefabOpened;
+    oc::function<void(const EntityPtr&, const EntityPtr&)> m_onEntityRespawned;
 };
 
 export namespace Globals

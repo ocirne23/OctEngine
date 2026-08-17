@@ -29,7 +29,7 @@ import Procedural;
 import Particle;
 import Force;
 
-static std::atomic<bool> g_running = true; // cleared by the window's onQuit (windowed) or the console ctrl handler (headless)
+static oc::atomic<bool> g_running = true; // cleared by the window's onQuit (windowed) or the console ctrl handler (headless)
 static BOOL __stdcall consoleCtrlHandler(DWORD) { g_running = false; return TRUE; } // any console ctrl event = clean shutdown
 
 int main(int argc, char* argv[])
@@ -40,13 +40,13 @@ int main(int argc, char* argv[])
     // STARTUP loads the world off the disk (asset registry scan, scenes, shaders, cooked caches):
     // main-thread IO is expected here and only here. The scope ends with initScope, so any disk
     // access from the FRAME LOOP trips FileSystem's main-thread assert instead — which is the point.
-    std::optional<FileSystem::AllowMainThreadIO> startupIo;
+    oc::optional<FileSystem::AllowMainThreadIO> startupIo;
     startupIo.emplace();
     // Core sits below File, so the tweak registry gets its file IO injected from here (startup +
     // the debounced save are explicit main-thread work).
     TweakRegistry::get().setFileIo(
-        [](const std::string& path) { return FileSystem::readFileStr(path, /*allowMainThread*/ true); },
-        [](const std::string& path, const std::string& content)
+        [](const oc::string& path) { return FileSystem::readFileStr(path, /*allowMainThread*/ true); },
+        [](const oc::string& path, const oc::string& content)
         { return FileSystem::writeFileStr(path, content, /*allowMainThread*/ true); });
     TweakRegistry::get().loadSaved(); // Saved-flagged tweaks apply from Local/tweaks.cfg from here on
 
@@ -57,12 +57,12 @@ int main(int argc, char* argv[])
     ELaunchMode launchMode = ELaunchMode::Single;
     uint16 netPort = 27888;
     int tickHz = 60;
-    std::string connectAddress;
+    oc::string connectAddress;
     bool headless = false;
     bool gameMode = false;
     for (int i = 1; i < argc; ++i)
     {
-        const std::string_view arg = argv[i];
+        const oc::string_view arg = argv[i];
         if (arg == "--server")                            launchMode = ELaunchMode::Server;
         else if (arg == "--connect" && i + 1 < argc)      { launchMode = ELaunchMode::Client; connectAddress = argv[++i]; }
         else if (arg == "--port" && i + 1 < argc)         netPort = uint16(std::atoi(argv[++i]));
@@ -71,7 +71,7 @@ int main(int argc, char* argv[])
         else if (arg == "--game")                         gameMode = true; // whitebox game instead of the testbed scene
         // both ends must agree, or the handshake denies with a clear reason
         else if (arg == "--no-encrypt")                   NetworkManager::setEncryption(false);
-        else Log::warning("Unknown command line argument: " + std::string(arg));
+        else Log::warning("Unknown command line argument: " + oc::string(arg));
     }
     if (headless && launchMode != ELaunchMode::Server)
         Log::warning("--headless only applies to --server, ignoring");
@@ -130,7 +130,7 @@ int main(int argc, char* argv[])
                     Transform(glm::vec3(0, 10.0f, 0)), true);
                 if (!player)
                     return;
-                player->setName("Player " + std::to_string(clientId));
+                player->setName("Player " + oc::to_string(clientId));
                 Globals::networkManager.setOwner(*player, clientId);
                 // ownership STEALING: whatever this player's body collides with becomes theirs (last
                 // collider wins, other players' primaries excluded) — needs ContactEvents on the shapes
@@ -140,11 +140,11 @@ int main(int argc, char* argv[])
                         if (begin)
                             Globals::networkManager.stealOwnershipOnContact(other, clientId);
                     };
-                Globals::world.addRootEntity(std::move(player));
+                Globals::world.addRootEntity(oc::move(player));
             });
             Globals::networkManager.setOnClientLeft([](uint32 clientId)
             {
-                std::vector<Entity*> owned; // collected first: removeRootEntity mutates the list being walked
+                oc::vector<Entity*> owned; // collected first: removeRootEntity mutates the list being walked
                 for (const EntityPtr& root : Globals::world.rootEntities())
                     if (const NetworkComponent* comp = getComponent<NetworkComponent>(root.get()); comp && comp->ownerClientId == clientId)
                         owned.push_back(root.get());
@@ -226,7 +226,7 @@ int main(int argc, char* argv[])
         gizmo.initialize(Globals::world);
         Globals::ui.setGizmo(&gizmo);
         Globals::physics.setDebugDrawCallback([](const glm::vec3& a, const glm::vec3& b, uint32 color) { Globals::rendererVK.addDebugLine(a, b, color); }, [&camera]() { return camera.position; });
-        Globals::world.setOnPrefabOpened([](const EntityPtr& entity, const std::string& path) { Globals::ui.onOpened(entity, path); });
+        Globals::world.setOnPrefabOpened([](const EntityPtr& entity, const oc::string& path) { Globals::ui.onOpened(entity, path); });
         Globals::world.setOnEntityRespawned([](const EntityPtr& oldEntity, const EntityPtr& newEntity) { Globals::ui.onEntityRespawned(oldEntity, newEntity); });
     }
 
@@ -243,7 +243,7 @@ int main(int argc, char* argv[])
                 return Timer::REPEAT; // no window; the status Timer below logs instead
             glm::vec3 pos = cameraController.getPosition();
             glm::vec3 dir = cameraController.getDirection();
-            const std::string netStatus = Globals::networkManager.getStatusText(); // empty in single player
+            const oc::string netStatus = Globals::networkManager.getStatusText(); // empty in single player
             char windowTitleBuf[320];
             sprintf_s(windowTitleBuf, sizeof(windowTitleBuf), "%s%sFPS: %i mem: %.2fmb instances: %i meshtypes: %i materials: %i, pos: %.1f, %.1f, %.1f, dir: %.1f, %.1f, %.1f",
                 netStatus.c_str(), netStatus.empty() ? "" : " | ",
@@ -261,7 +261,7 @@ int main(int argc, char* argv[])
 
     Timer headlessStatusTimer(std::chrono::seconds(5), [&](Timer& timer) {
             if (headlessServer)
-                Log::info("Headless: " + std::to_string(fps) + " ticks/s | " + Globals::networkManager.getStatusText());
+                Log::info("Headless: " + oc::to_string(fps) + " ticks/s | " + Globals::networkManager.getStatusText());
             return Timer::REPEAT;
         });
 
@@ -304,7 +304,7 @@ int main(int argc, char* argv[])
             }
             Globals::ui.update(Globals::world.rootEntities(), camera, deltaSec); // also drives the gizmo it owns
 
-            for (const std::string& reloadPath : Globals::ui.takeScriptReloadRequests()) Globals::scriptHost.getOrLoad(reloadPath, true);
+            for (const oc::string& reloadPath : Globals::ui.takeScriptReloadRequests()) Globals::scriptHost.getOrLoad(reloadPath, true);
             for (EntityChange& change : Globals::ui.takeEntityChanges()) Globals::world.handleEntityChange(change, camera, Globals::ui.getViewportRect());
         }
         for (EntityChange& change : Globals::scriptEvents.takeEntityChanges()) Globals::world.handleEntityChange(change, camera, Globals::ui.getViewportRect());

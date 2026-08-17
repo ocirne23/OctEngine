@@ -21,8 +21,8 @@ struct Fiber
     void* returnFiber = nullptr; // scheduler fiber of the worker currently running us
     Job* job = nullptr;
     EState state = EState::Idle;
-    std::atomic<uint32> switchDone = 0;  // parked fiber has fully switched out; resumers spin on this
-    std::atomic<uint32> debugRunning = 0; // debug-only tripwire: a fiber must never run on two workers
+    oc::atomic<uint32> switchDone = 0;  // parked fiber has fully switched out; resumers spin on this
+    oc::atomic<uint32> debugRunning = 0; // debug-only tripwire: a fiber must never run on two workers
 
     // Open profile scopes travel WITH the fiber across a park (saved on the parking thread before
     // the switch-out, replayed by runFiber on whichever thread resumes it - see
@@ -52,7 +52,7 @@ struct alignas(64) WorkerContext
 // Fiber-based work-stealing job scheduler. All memory is allocated in initialize(); the
 // steady-state hot paths are lock-free (Chase-Lev deque per worker, Vyukov MPMC rings for the
 // priority queues / fiber freelist / resume queue / job pool) and workers sleep on an eventcount
-// (std::atomic wait -> WaitOnAddress) when idle. Priorities order the shared queues; a worker's
+// (oc::atomic wait -> WaitOnAddress) when idle. Priorities order the shared queues; a worker's
 // own continuations always run LIFO from its local deque first, which is what makes fork/join
 // fast. Delayed jobs sit in a min-heap serviced by a dedicated timer thread. initialize() must
 // be called on the main thread: it registers the caller as a helper context so wait() on the
@@ -88,12 +88,12 @@ public:
         Job* job = allocatePooledJob();
         if (!job) // pool exhausted: run it here rather than lose it
         {
-            m_numInlineFallbacks.fetch_add(1, std::memory_order_relaxed);
+            m_numInlineFallbacks.fetch_add(1, oc::memory_order_relaxed);
             assert(false && "job pool exhausted - raise JobSystemDesc::jobPoolCapacity");
             func();
             return;
         }
-        setJobCallable(*job, std::forward<Func>(func));
+        setJobCallable(*job, oc::forward<Func>(func));
         job->priority = priority;
         job->effectivePriority = priority;
         job->name = name;
@@ -111,12 +111,12 @@ public:
         Job* job = allocatePooledJob();
         if (!job)
         {
-            m_numInlineFallbacks.fetch_add(1, std::memory_order_relaxed);
+            m_numInlineFallbacks.fetch_add(1, oc::memory_order_relaxed);
             assert(false && "job pool exhausted - raise JobSystemDesc::jobPoolCapacity");
             func();
             return;
         }
-        setJobCallable(*job, std::forward<Func>(func));
+        setJobCallable(*job, oc::forward<Func>(func));
         job->priority = priority;
         job->effectivePriority = priority;
         job->name = name;
@@ -142,7 +142,7 @@ public:
     template<typename Func>
     void parallelFor(uint32 begin, uint32 end, uint32 grainSize, Func&& func, EJobPriority priority = EJobPriority::Normal)
     {
-        parallelForImpl(begin, end, grainSize, nullptr, std::forward<Func>(func), priority);
+        parallelForImpl(begin, end, grainSize, nullptr, oc::forward<Func>(func), priority);
     }
 
     // Auto-grain: the chunk size is derived from the tracker's measured ns/item to hit
@@ -150,14 +150,14 @@ public:
     template<typename Func>
     void parallelFor(uint32 begin, uint32 end, JobCost& cost, Func&& func, EJobPriority priority = EJobPriority::Normal)
     {
-        const uint64 grain = std::max<uint64>(1, m_targetChunkNs / cost.nsPerItem());
-        parallelForImpl(begin, end, uint32(std::min<uint64>(grain, UINT32_MAX)), &cost, std::forward<Func>(func), priority);
+        const uint64 grain = oc::max<uint64>(1, m_targetChunkNs / cost.nsPerItem());
+        parallelForImpl(begin, end, uint32(oc::min<uint64>(grain, UINT32_MAX)), &cost, oc::forward<Func>(func), priority);
     }
 
     // Scheduler plumbing shared with JobGraph - not for gameplay code.
     Job* allocatePooledJob();
     void submitReady(Job* job);                        // job->pending must already be zero
-    void submitReadyBatch(std::span<Job* const> jobs); // fan-out path: straight to the shared queues
+    void submitReadyBatch(oc::span<Job* const> jobs); // fan-out path: straight to the shared queues
 
 private:
 
@@ -167,7 +167,7 @@ private:
         if (end <= begin)
             return;
         const uint32 count = end - begin;
-        grainSize = std::max(grainSize, 1u);
+        grainSize = oc::max(grainSize, 1u);
         if (count <= grainSize || m_numWorkers == 0)
         {
             const Clock::time_point start = cost ? Clock::now() : Clock::time_point{};
@@ -178,7 +178,7 @@ private:
         }
         struct Shared
         {
-            std::atomic<uint64> next;
+            oc::atomic<uint64> next;
             uint64 end;
             uint32 grain;
             JobCost* cost;
@@ -191,10 +191,10 @@ private:
             uint32 numItems = 0;
             for (;;)
             {
-                const uint64 chunkBegin = shared.next.fetch_add(shared.grain, std::memory_order_relaxed);
+                const uint64 chunkBegin = shared.next.fetch_add(shared.grain, oc::memory_order_relaxed);
                 if (chunkBegin >= shared.end)
                     break;
-                const uint32 chunkEnd = uint32(std::min(chunkBegin + shared.grain, shared.end));
+                const uint32 chunkEnd = uint32(oc::min(chunkBegin + shared.grain, shared.end));
                 (*shared.func)(uint32(chunkBegin), chunkEnd);
                 numItems += chunkEnd - uint32(chunkBegin);
             }
@@ -202,7 +202,7 @@ private:
                 shared.cost->addSample(uint64(std::chrono::nanoseconds(Clock::now() - start).count()), numItems);
         };
         const uint32 numChunks = (count + grainSize - 1) / grainSize;
-        const uint32 numHelpers = std::min(m_numWorkers, numChunks - 1);
+        const uint32 numHelpers = oc::min(m_numWorkers, numChunks - 1);
         JobCounter counter;
         for (uint32 i = 0; i < numHelpers; ++i)
             submit(runner, priority, &counter, "parallelFor");
@@ -246,10 +246,10 @@ private:
         bool operator()(const TimedJob& a, const TimedJob& b) const { return a.due > b.due; }
     };
 
-    std::unique_ptr<Job[]> m_jobPool;
-    std::unique_ptr<Fiber[]> m_fibers;
-    std::unique_ptr<WorkerContext[]> m_contexts; // [0] = main thread, [1..numWorkers] = workers
-    std::vector<std::thread> m_threads;
+    oc::unique_ptr<Job[]> m_jobPool;
+    oc::unique_ptr<Fiber[]> m_fibers;
+    oc::unique_ptr<WorkerContext[]> m_contexts; // [0] = main thread, [1..numWorkers] = workers
+    oc::vector<std::thread> m_threads;
     TaggedIndexStack m_freeJobs;
     TaggedIndexStack m_freeFibers;
     MPMCQueue<Fiber*> m_resumeQueue;
@@ -259,17 +259,17 @@ private:
     uint32 m_numFibers = 0;
     uint32 m_jobPoolCapacity = 0;
     uint32 m_targetChunkNs = 25000;
-    std::atomic<bool> m_running = false;
-    std::atomic<uint64> m_numInlineFallbacks = 0;
-    std::atomic<int32> m_pooledInFlight = 0;
+    oc::atomic<bool> m_running = false;
+    oc::atomic<uint64> m_numInlineFallbacks = 0;
+    oc::atomic<int32> m_pooledInFlight = 0;
 
-    alignas(64) std::atomic<uint32> m_wakeEpoch = 0;
-    std::atomic<uint32> m_numSleepers = 0;
+    alignas(64) oc::atomic<uint32> m_wakeEpoch = 0;
+    oc::atomic<uint32> m_numSleepers = 0;
 
     std::thread m_timerThread;
     std::mutex m_timedMutex;
     std::condition_variable m_timedCv;
-    std::priority_queue<TimedJob, std::vector<TimedJob>, TimedJobLater> m_timedJobs;
+    oc::priority_queue<TimedJob, oc::vector<TimedJob>, TimedJobLater> m_timedJobs;
 };
 
 export namespace Globals

@@ -33,7 +33,7 @@ static constexpr SDL_Scancode c_gridKeys[c_gridSlots] = {
     SDL_Scancode::SDL_SCANCODE_A, SDL_Scancode::SDL_SCANCODE_S, SDL_Scancode::SDL_SCANCODE_D, SDL_Scancode::SDL_SCANCODE_F,
     SDL_Scancode::SDL_SCANCODE_Z, SDL_Scancode::SDL_SCANCODE_X, SDL_Scancode::SDL_SCANCODE_C, SDL_Scancode::SDL_SCANCODE_V,
 };
-static constexpr std::string_view c_gridKeyLabels[c_gridSlots] = { "Q", "W", "E", "R", "A", "S", "D", "F", "Z", "X", "C", "V" };
+static constexpr oc::string_view c_gridKeyLabels[c_gridSlots] = { "Q", "W", "E", "R", "A", "S", "D", "F", "Z", "X", "C", "V" };
 // Root page slots: the two category pages, the two LINK TOOLS (armed directly — they need no
 // page of their own), Delete.
 static constexpr int c_rootConnectSlot = 2;    // E
@@ -50,7 +50,7 @@ static constexpr const char* c_buildCategoryNames[c_numCategories] = { "Combat",
 static constexpr const char* c_structureShortNames[] = { "EMIT", "GEN", "CON", "EXTR", "BATT",
     "FUEL", "SOL", "FAB", "BSTN", "LNC", "BRK", "BRK-B", "BRK-R", "BRK-S", "WALL", "TRT", "SILO",
     "CNST", "BASE" };
-static_assert(std::size(c_structureShortNames) == (size_t)EStructureType::Count);
+static_assert(oc::size(c_structureShortNames) == (size_t)EStructureType::Count);
 // A category page is just its list of placeable types — the shorthand table above IS each slot's
 // caption, and the two link TOOLS live on the root page (Link mode), not inside a page.
 static constexpr EStructureType c_combatItems[] = {
@@ -80,7 +80,7 @@ static constexpr EStructureType c_productionItems[] = {
     EStructureType::FuelTank,
     EStructureType::MineralSilo,
 };
-static std::span<const EStructureType> buildCategoryItems(int category)
+static oc::span<const EStructureType> buildCategoryItems(int category)
 {
     switch (category)
     {
@@ -226,7 +226,7 @@ void GameMatch::spawnWorld()
         Globals::world.addRootEntity(m_ground);
     }
 
-    Globals::networkManager.setOnGameEvent([this](std::string_view name) { handleNetEvent(name); });
+    Globals::networkManager.setOnGameEvent([this](oc::string_view name) { handleNetEvent(name); });
     if (m_isServer)
     {
         // Structure changes broadcast to the client mirrors; only Gq* requests may come FROM clients.
@@ -247,7 +247,7 @@ void GameMatch::spawnWorld()
             if (const int index = m_structures.structureIndexById(id); index >= 0)
                 sendRoute(index);
         };
-        Globals::networkManager.setEventFilter([](uint32, std::string_view name, std::span<const uint8> data, Entity*)
+        Globals::networkManager.setEventFilter([](uint32, oc::string_view name, oc::span<const uint8> data, Entity*)
         {
             return name.size() >= 2 && name[0] == 'G' && name[1] == 'q' && data.size() <= 64;
         });
@@ -375,7 +375,7 @@ void GameMatch::onClientJoined(uint32 clientId)
         Transform(clientStart + glm::vec3(2.0f * (float)(clientId % 5), 0.0f, 1.5f * (float)(clientId % 3))), true);
     if (player)
     {
-        player->setName(("Player " + std::to_string(clientId)).c_str());
+        player->setName(("Player " + oc::to_string(clientId)).c_str());
         Globals::networkManager.setOwner(*player, clientId);
         if (GameUnitComponent* unit = getComponent<GameUnitComponent>(player.get()))
             unit->team = team; // the authoritative assignment: everything else reads it from here
@@ -383,8 +383,8 @@ void GameMatch::onClientJoined(uint32 clientId)
         if (ForceComponent* fc = getComponent<ForceComponent>(player.get()))
             fc->emitter.setTeam(team);
         Globals::world.addRootEntity(player);
-        m_clientPlayers[clientId] = std::move(player);
-        Log::info("Game: client " + std::to_string(clientId) + " assigned team " + std::to_string(team));
+        m_clientPlayers[clientId] = oc::move(player);
+        Log::info("Game: client " + oc::to_string(clientId) + " assigned team " + oc::to_string(team));
     }
     // World-state replay for the late joiner: every structure + cable, broadcast (mirrorPlace/
     // mirrorCable are idempotent, so already-connected clients shrug the duplicates off).
@@ -400,7 +400,7 @@ void GameMatch::onClientJoined(uint32 clientId)
     for (int i = 0; i < m_structures.structureCount(); ++i)
         if (!m_structures.structureRoute(i).empty())
             sendRoute(i); // barracks waypoint routes replay too
-    Log::info("Game: client " + std::to_string(clientId) + " joined, world replayed");
+    Log::info("Game: client " + oc::to_string(clientId) + " joined, world replayed");
 }
 
 void GameMatch::onClientLeft(uint32 clientId)
@@ -447,7 +447,7 @@ void GameMatch::sendRoute(int index)
 {
     uint8 buffer[80];
     NetWriter writer(buffer);
-    const std::span<const glm::vec3> route = m_structures.structureRoute(index);
+    const oc::span<const glm::vec3> route = m_structures.structureRoute(index);
     writer.write<uint32>(m_structures.structureId(index));
     writer.write<uint8>((uint8)route.size());
     for (const glm::vec3& p : route)
@@ -473,10 +473,10 @@ void GameMatch::saveGame()
     // F9: an explicit user action, main thread.
     if (!FileSystem::writeFileStr(c_gameSavePath, writeAssetText(root), /*allowMainThread*/ true))
     {
-        Log::warning(std::string("Save game: cannot write ") + c_gameSavePath);
+        Log::warning(oc::string("Save game: cannot write ") + c_gameSavePath);
         return;
     }
-    Log::info(std::string("Game saved to ") + c_gameSavePath);
+    Log::info(oc::string("Game saved to ") + c_gameSavePath);
 }
 
 void GameMatch::loadGame()
@@ -487,7 +487,7 @@ void GameMatch::loadGame()
         return;
     }
     AssetNode root;
-    std::string error;
+    oc::string error;
     if (!loadAssetFile(c_gameSavePath, root, error))
     {
         Log::warning("Load game: " + error);
@@ -518,7 +518,7 @@ void GameMatch::loadGame()
     }
 }
 
-void GameMatch::requestSetRoute(uint32 id, std::span<const glm::vec3> points)
+void GameMatch::requestSetRoute(uint32 id, oc::span<const glm::vec3> points)
 {
     const size_t count = glm::min(points.size(), (size_t)StructureSystem::MaxRouteWaypoints);
     if (!m_isClient)
@@ -572,7 +572,7 @@ void GameMatch::sendStats()
     Globals::networkManager.fireNetworkEvent("GSt", writer.data());
 }
 
-void GameMatch::handleNetEvent(std::string_view name)
+void GameMatch::handleNetEvent(oc::string_view name)
 {
     ProfileScope scope("Game net event", EProfileCategory::Game);
     // Both roles share the hook; each side reacts only to the names meant for it (our own
@@ -661,7 +661,7 @@ void GameMatch::handleNetEvent(std::string_view name)
                 points[k] = glm::vec3(x, 0.0f, z);
             }
             if (!reader.overflowed())
-                m_structures.mirrorRoute(id, std::span<const glm::vec3>(points, used));
+                m_structures.mirrorRoute(id, oc::span<const glm::vec3>(points, used));
         }
         // (shield/materials state rides the entity snapshot's game blob now — no GSh event)
         return;
@@ -709,7 +709,7 @@ void GameMatch::handleNetEvent(std::string_view name)
             points[k] = glm::vec3(x, 0.0f, z);
         }
         if (!reader.overflowed()) // team/barracks ownership validated at apply
-            m_structures.queueRouteRequest(id, std::span<const glm::vec3>(points, used), requestTeam(sender));
+            m_structures.queueRouteRequest(id, oc::span<const glm::vec3>(points, used), requestTeam(sender));
     }
     // (GqE — the owner's shield self-report — now rides the claim stream's game blob, applied by
     // NetworkManager to the twin's GameUnitComponent + emitter. GqS/GqM went with player combat.
@@ -734,7 +734,7 @@ void GameMatch::update(float deltaSec)
         {
             m_team = m_player.team();
             m_player.setRespawnPos(teamStartPos((uint8)m_team));
-            Log::info("We are team " + std::to_string(m_team));
+            Log::info("We are team " + oc::to_string(m_team));
         }
         m_player.tickMovement(m_camera.forwardPlanar(), deltaSec);
         m_player.tickShieldAndHealth(deltaSec);
@@ -960,7 +960,7 @@ void GameMatch::refreshBuildHotbar()
                 : -1);
         return;
     }
-    const std::span<const EStructureType> items = buildCategoryItems(m_buildCategory);
+    const oc::span<const EStructureType> items = buildCategoryItems(m_buildCategory);
     for (int i = 0; i < (int)items.size() && i < c_cancelSlot; ++i)
         hud.setSlot(i, c_structureShortNames[(int)items[i]],
             m_structures.affordableCount(items[i], (uint8)m_team));
@@ -1029,7 +1029,7 @@ void GameMatch::activateSlot(int slot)
             m_buildCategory = slot;
             m_buildSelection = -1;
             refreshBuildHotbar();
-            Log::info(std::string("Build: ") + c_buildCategoryNames[slot]
+            Log::info(oc::string("Build: ") + c_buildCategoryNames[slot]
                 + " — grid keys arm an item, LMB places, RMB cancels, V/Esc back");
         }
         else if (slot == c_rootConnectSlot || slot == c_rootDisconnectSlot || slot == c_rootUpgradeSlot)
@@ -1374,10 +1374,10 @@ void GameMatch::updateRightClickActions(const Camera& camera, bool rmbEdge)
         return; // not a route click either: the caller turns it into a MOVE order
     ground.y = 0.0f;
     m_rmbConsumed = true;
-    std::vector<glm::vec3> route;
+    oc::vector<glm::vec3> route;
     if (Globals::input.isKeyDown(SDL_Scancode::SDL_SCANCODE_LSHIFT))
     {
-        const std::span<const glm::vec3> current = m_structures.structureRoute(sel);
+        const oc::span<const glm::vec3> current = m_structures.structureRoute(sel);
         route.assign(current.begin(), current.end()); // hold shift: extend the route
     }
     if ((int)route.size() < StructureSystem::MaxRouteWaypoints)
@@ -1415,13 +1415,13 @@ void GameMatch::updateSelectionClick(const Camera& camera, bool confirmEdge, boo
 // so the tag says what a thing is at a glance. The selected structure shows its full name instead.
 // Remote actors (client side) carry no type on the wire — derive the tag from the replicated
 // entity's prefab-derived name ("gameEnemyBrute", ...).
-static const char* remoteShortName(std::string_view entityName, uint8 kind)
+static const char* remoteShortName(oc::string_view entityName, uint8 kind)
 {
     if (kind == 2)
         return "PLR";
-    if (entityName.find("Brute") != std::string_view::npos)   return "BRUT";
-    if (entityName.find("Runner") != std::string_view::npos)  return "RUN";
-    if (entityName.find("Spitter") != std::string_view::npos) return "SPIT";
+    if (entityName.find("Brute") != oc::string_view::npos)   return "BRUT";
+    if (entityName.find("Runner") != oc::string_view::npos)  return "RUN";
+    if (entityName.find("Spitter") != oc::string_view::npos) return "SPIT";
     return "GRNT";
 }
 
@@ -1431,7 +1431,7 @@ static const char* remoteShortName(std::string_view entityName, uint8 kind)
 void GameMatch::buildWorldLabels(const Camera& camera)
 {
     ProfileScope scope("Game world labels", EProfileCategory::Game);
-    std::vector<HudWorldLabel> labels;
+    oc::vector<HudWorldLabel> labels;
     labels.reserve(m_structures.structureCount());
     const Rect& viewport = Globals::ui.getViewportRect();
     const int selected = m_selectedId != 0 ? m_structures.structureIndexById(m_selectedId) : -1;
@@ -1532,14 +1532,14 @@ void GameMatch::buildWorldLabels(const Camera& camera)
                     m_structures.structurePowered(i) ? "Powered" : "No power");
             label.info = info;
         }
-        labels.push_back(std::move(label));
+        labels.push_back(oc::move(label));
     }
     // Units + players: own team green, enemy teams red. Only VISIBLE ones are fetched — an
     // off-screen one would just fail worldToScreen below. Works identically on server AND client:
     // remote instances' GameUnitComponents are populated by the snapshot game blob. Puppets are
     // player capsules; the own player is skipped (its HUD bars cover it).
     Entity* ownPlayer = m_player.entity();
-    thread_local std::vector<Entity*> units;
+    thread_local oc::vector<Entity*> units;
     NpcSystem::queryVisibleUnits(camera, units);
     for (Entity* unitEntity : units)
     {
@@ -1558,9 +1558,9 @@ void GameMatch::buildWorldLabels(const Camera& camera)
         label.bar2Value = u->energy; // shield battery under the health bar
         label.bar2Max = glm::max(u->energyMax, 1e-3f);
         label.bar2Color = glm::vec3(1.0f, 0.9f, 0.3f);
-        labels.push_back(std::move(label));
+        labels.push_back(oc::move(label));
     }
-    Globals::gameHud.setWorldLabels(std::move(labels));
+    Globals::gameHud.setWorldLabels(oc::move(labels));
 }
 
 void GameMatch::tickBaseHealing(float deltaSec)
@@ -1704,7 +1704,7 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     // with its destination circle — bright for the selected barracks, dim otherwise.
     for (int i = 0; i < m_structures.structureCount(); ++i)
     {
-        const std::span<const glm::vec3> route = m_structures.structureRoute(i);
+        const oc::span<const glm::vec3> route = m_structures.structureRoute(i);
         if (route.empty() || m_structures.structureTeam(i) != (uint8)m_team)
             continue;
         const bool bright = m_structures.structureId(i) == m_selectedId;

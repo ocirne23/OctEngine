@@ -23,25 +23,25 @@ public:
 
     // Snapshots a container's geometry at load time (see World::loadContainer) so hull/mesh shapes never
     // need the source file again. No-op when that container is already captured.
-    void captureSource(const std::string& containerName, const ISceneData& sceneData);
-    bool hasSource(const std::string& containerName) const { return m_sources.contains(containerName); }
+    void captureSource(const oc::string& containerName, const ISceneData& sceneData);
+    bool hasSource(const oc::string& containerName) const { return m_sources.contains(containerName); }
 
     // Hull shape: the flattened point cloud for one spawnable node. Empty when the container wasn't captured.
-    std::vector<glm::vec3> buildHullPoints(const std::string& containerName, const std::string& nodePath) const;
+    oc::vector<glm::vec3> buildHullPoints(const oc::string& containerName, const oc::string& nodePath) const;
 
     // Mesh shape: the triangle BVH for one spawnable node, cached per container|node. Null when the
     // container wasn't captured or the node has no triangles. Building one also extracts its occluders.
-    std::shared_ptr<PhysicsMesh> getOrBuildMesh(const std::string& containerName, const std::string& nodePath);
+    oc::shared_ptr<PhysicsMesh> getOrBuildMesh(const oc::string& containerName, const oc::string& nodePath);
 
     // Occluder triangles for a node whose mesh was built above: the same flattened geometry doubles as the
     // CPU occlusion-culling source, so a static mesh collider is an occluder for free. Null if never built.
-    std::shared_ptr<const OccluderData> getOccluders(const std::string& containerName, const std::string& nodePath) const;
+    oc::shared_ptr<const OccluderData> getOccluders(const oc::string& containerName, const oc::string& nodePath) const;
 
 private:
 
-    static std::string meshKey(const std::string& containerName, const std::string& nodePath) { return containerName + "|" + nodePath; }
+    static oc::string meshKey(const oc::string& containerName, const oc::string& nodePath) { return containerName + "|" + nodePath; }
 
-    std::unordered_map<std::string, std::shared_ptr<const CollisionSource>> m_sources; // key: container name
-    std::unordered_map<std::string, std::shared_ptr<PhysicsMesh>> m_meshes;            // key: container|node
-    std::unordered_map<std::string, std::shared_ptr<const OccluderData>> m_occluders;  // key: container|node
+    oc::unordered_map<oc::string, oc::shared_ptr<const CollisionSource>> m_sources; // key: container name
+    oc::unordered_map<oc::string, oc::shared_ptr<PhysicsMesh>> m_meshes;            // key: container|node
+    oc::unordered_map<oc::string, oc::shared_ptr<const OccluderData>> m_occluders;  // key: container|node
 };

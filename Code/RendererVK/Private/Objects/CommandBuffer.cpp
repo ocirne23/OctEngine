@@ -64,7 +64,7 @@ void CommandBuffer::submitGraphics(vk::Fence fence)
     m_waitStage = vk::PipelineStageFlagBits2::eNone;
 }
 
-void CommandBuffer::cmdUpdateDescriptorSets(vk::PipelineLayout pipelineLayout, vk::PipelineBindPoint bindPoint, vk::DescriptorSet descriptorSet, const std::span<DescriptorSetUpdateInfo>& updateInfo)
+void CommandBuffer::cmdUpdateDescriptorSets(vk::PipelineLayout pipelineLayout, vk::PipelineBindPoint bindPoint, vk::DescriptorSet descriptorSet, const oc::span<DescriptorSetUpdateInfo>& updateInfo)
 {
     vk::WriteDescriptorSet* descriptorWrites = (vk::WriteDescriptorSet*)_alloca(sizeof(vk::WriteDescriptorSet) * updateInfo.size());
     for (uint32 i = 0; i < updateInfo.size(); i++)
@@ -74,7 +74,7 @@ void CommandBuffer::cmdUpdateDescriptorSets(vk::PipelineLayout pipelineLayout, v
             .dstSet = descriptorSet,
             .dstBinding = updateInfo[i].binding,
             .dstArrayElement = updateInfo[i].startIdx,
-            .descriptorCount = (uint32)std::max(updateInfo[i].imageInfos.size(), updateInfo[i].bufferInfos.size()),
+            .descriptorCount = (uint32)oc::max(updateInfo[i].imageInfos.size(), updateInfo[i].bufferInfos.size()),
             .descriptorType = updateInfo[i].type,
             .pImageInfo = updateInfo[i].imageInfos.size() ? updateInfo[i].imageInfos.data() : nullptr,
             .pBufferInfo = updateInfo[i].bufferInfos.size() ? updateInfo[i].bufferInfos.data() : nullptr,

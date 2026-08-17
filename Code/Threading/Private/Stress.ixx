@@ -30,20 +30,20 @@ private:
     // hazard validation: writers must be exclusive, readers must never overlap a writer
     struct alignas(64) ResourceGuard
     {
-        std::atomic<int32> writers = 0;
-        std::atomic<int32> readers = 0;
+        oc::atomic<int32> writers = 0;
+        oc::atomic<int32> readers = 0;
     };
     static constexpr uint32 NumBenchResources = 16;
     static constexpr uint32 NumBenchJobs = 128;
 
     JobGraph m_benchGraph;
-    std::unique_ptr<JobResource[]> m_benchResources;
-    std::unique_ptr<ResourceGuard[]> m_guards;
-    std::vector<float> m_parallelData;
-    std::atomic<uint32> m_violations = 0;
-    std::atomic<int32> m_workSink = 0;
-    std::atomic<uint32> m_delayedFlag = 0;
-    std::atomic<int64> m_delayedMicros = 0;
+    oc::unique_ptr<JobResource[]> m_benchResources;
+    oc::unique_ptr<ResourceGuard[]> m_guards;
+    oc::vector<float> m_parallelData;
+    oc::atomic<uint32> m_violations = 0;
+    oc::atomic<int32> m_workSink = 0;
+    oc::atomic<uint32> m_delayedFlag = 0;
+    oc::atomic<int64> m_delayedMicros = 0;
 
     int m_mode = 0;
     int m_batchSize = 10000;

@@ -23,23 +23,23 @@ export namespace Procedural::Diffusion
 	public:
 		FloatTensor() = default;
 		// Zero-initialised — the accumulate semantics of addFrom depend on it.
-		explicit FloatTensor(std::span<const int32> shape);
+		explicit FloatTensor(oc::span<const int32> shape);
 
 		int32 ndim() const { return (int32)m_shape.size(); }
 		size_t byteSize() const { return data.size() * sizeof(float); }
-		const std::vector<int32>& shape() const { return m_shape; }
-		const std::vector<int32>& strides() const { return m_strides; }
+		const oc::vector<int32>& shape() const { return m_shape; }
+		const oc::vector<int32>& strides() const { return m_strides; }
 
-		std::vector<float> data;
+		oc::vector<float> data;
 
 		// data[dstRegion] += src.data[srcRegion], elementwise. ACCUMULATE, not assign: this is the sole
 		// reason overlapping windows blend (see InfiniteTensor). dstRegion drives the extents; srcRegion
 		// must have identical counts (asserted).
-		void addFrom(const FloatTensor& src, std::span<const Range> dstRegion, std::span<const Range> srcRegion);
+		void addFrom(const FloatTensor& src, oc::span<const Range> dstRegion, oc::span<const Range> srcRegion);
 
 	private:
-		std::vector<int32> m_shape;
-		std::vector<int32> m_strides;
+		oc::vector<int32> m_shape;
+		oc::vector<int32> m_strides;
 	};
 
 	// The affine map from a window index to the pixel bounds it covers:
@@ -50,29 +50,29 @@ export namespace Procedural::Diffusion
 	public:
 		TensorWindow() = default;
 		// stride defaults to size (non-overlapping), offset to 0.
-		explicit TensorWindow(std::span<const int32> size);
-		TensorWindow(std::span<const int32> size, std::span<const int32> stride);
-		TensorWindow(std::span<const int32> size, std::span<const int32> stride, std::span<const int32> offset);
+		explicit TensorWindow(oc::span<const int32> size);
+		TensorWindow(oc::span<const int32> size, oc::span<const int32> stride);
+		TensorWindow(oc::span<const int32> size, oc::span<const int32> stride, oc::span<const int32> offset);
 
 		int32 ndim() const { return (int32)m_size.size(); }
-		const std::vector<int32>& size() const { return m_size; }
+		const oc::vector<int32>& size() const { return m_size; }
 
 		// Pixel bounds covered by a window index. out must have ndim entries.
-		void getBounds(std::span<const int32> windowIndex, std::span<Range> out) const;
+		void getBounds(oc::span<const int32> windowIndex, oc::span<Range> out) const;
 
 		// The inclusive window-index range whose windows intersect pixelRange. Note these are INCLUSIVE
 		// on both ends, unlike the half-open pixel ranges they are derived from.
-		void getLowestIntersection(std::span<const Range> pixelRange, std::span<int32> out) const;
-		void getHighestIntersection(std::span<const Range> pixelRange, std::span<int32> out) const;
+		void getLowestIntersection(oc::span<const Range> pixelRange, oc::span<int32> out) const;
+		void getHighestIntersection(oc::span<const Range> pixelRange, oc::span<int32> out) const;
 
 	private:
-		std::vector<int32> m_size;
-		std::vector<int32> m_stride;
-		std::vector<int32> m_offset;
+		oc::vector<int32> m_size;
+		oc::vector<int32> m_stride;
+		oc::vector<int32> m_offset;
 	};
 
 	// Visit every window index in the INCLUSIVE box [lo, hi], last dim varying fastest. Returns without
 	// calling fn if the box is empty in any dimension.
-	void iterateWindows(std::span<const int32> lo, std::span<const int32> hi,
-	                    const std::function<void(std::span<const int32>)>& fn);
+	void iterateWindows(oc::span<const int32> lo, oc::span<const int32> hi,
+	                    const oc::function<void(oc::span<const int32>)>& fn);
 }

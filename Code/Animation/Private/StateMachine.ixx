@@ -9,16 +9,16 @@ import :Clip;
 export struct AnimCondition
 {
     enum class Type : uint8 { FloatGreater, FloatLess, BoolEquals, Trigger };
-    std::string param;
+    oc::string param;
     Type type = Type::FloatGreater;
     float value = 0.0f;     // FloatGreater / FloatLess threshold
     bool boolValue = false; // BoolEquals target
 };
 
-export inline AnimCondition floatGreater(const std::string& p, float v) { return AnimCondition{ p, AnimCondition::Type::FloatGreater, v, false }; }
-export inline AnimCondition floatLess(const std::string& p, float v)    { return AnimCondition{ p, AnimCondition::Type::FloatLess, v, false }; }
-export inline AnimCondition boolIs(const std::string& p, bool b)        { return AnimCondition{ p, AnimCondition::Type::BoolEquals, 0.0f, b }; }
-export inline AnimCondition trigger(const std::string& p)               { return AnimCondition{ p, AnimCondition::Type::Trigger, 0.0f, false }; }
+export inline AnimCondition floatGreater(const oc::string& p, float v) { return AnimCondition{ p, AnimCondition::Type::FloatGreater, v, false }; }
+export inline AnimCondition floatLess(const oc::string& p, float v)    { return AnimCondition{ p, AnimCondition::Type::FloatLess, v, false }; }
+export inline AnimCondition boolIs(const oc::string& p, bool b)        { return AnimCondition{ p, AnimCondition::Type::BoolEquals, 0.0f, b }; }
+export inline AnimCondition trigger(const oc::string& p)               { return AnimCondition{ p, AnimCondition::Type::Trigger, 0.0f, false }; }
 
 // A simple animation state machine that drives an AnimationPlayer. Each state plays a single clip or a 1D
 // blend space (whose axis is bound to a float parameter). Transitions crossfade between states when their
@@ -33,55 +33,55 @@ public:
 
     void initialize(AnimationPlayer* pPlayer) { m_pPlayer = pPlayer; }
 
-    StateId addClipState(const std::string& name, const AnimationClip* pClip);
+    StateId addClipState(const oc::string& name, const AnimationClip* pClip);
     // A blend-space state: blendParam names the float parameter that drives the blend axis each update.
-    StateId addBlendState(const std::string& name, const BlendSpace1D* pBlendSpace, const std::string& blendParam);
+    StateId addBlendState(const oc::string& name, const BlendSpace1D* pBlendSpace, const oc::string& blendParam);
     void setEntryState(StateId id) { m_entry = id; }
 
-    void addTransition(StateId from, StateId to, std::vector<AnimCondition> conditions, float fadeSeconds = 0.2f, float exitTime = 0.0f);
+    void addTransition(StateId from, StateId to, oc::vector<AnimCondition> conditions, float fadeSeconds = 0.2f, float exitTime = 0.0f);
     // A transition evaluable from any state (e.g. a death trigger). Checked before per-state transitions.
-    void addAnyTransition(StateId to, std::vector<AnimCondition> conditions, float fadeSeconds = 0.2f, float exitTime = 0.0f);
+    void addAnyTransition(StateId to, oc::vector<AnimCondition> conditions, float fadeSeconds = 0.2f, float exitTime = 0.0f);
 
-    void setFloat(const std::string& name, float v) { m_floats[name] = v; }
-    void setBool(const std::string& name, bool v)   { m_bools[name] = v; }
-    void setTrigger(const std::string& name)        { m_triggers[name] = true; }
+    void setFloat(const oc::string& name, float v) { m_floats[name] = v; }
+    void setBool(const oc::string& name, bool v)   { m_bools[name] = v; }
+    void setTrigger(const oc::string& name)        { m_triggers[name] = true; }
 
-    float getFloat(const std::string& name) const { const auto it = m_floats.find(name); return it == m_floats.end() ? 0.0f : it->second; }
-    bool getBool(const std::string& name) const   { const auto it = m_bools.find(name); return it == m_bools.end() ? false : it->second; }
+    float getFloat(const oc::string& name) const { const auto it = m_floats.find(name); return it == m_floats.end() ? 0.0f : it->second; }
+    bool getBool(const oc::string& name) const   { const auto it = m_bools.find(name); return it == m_bools.end() ? false : it->second; }
 
     void update(float deltaSeconds);
 
     StateId getCurrentState() const { return m_current; }
-    const std::string& getCurrentStateName() const;
+    const oc::string& getCurrentStateName() const;
     float getTimeInState() const { return m_timeInState; }
 
 private:
     struct State
     {
-        std::string name;
+        oc::string name;
         const AnimationClip* clip = nullptr;
         const BlendSpace1D* blend = nullptr;
-        std::string blendParam;
+        oc::string blendParam;
     };
     struct Transition
     {
         StateId from = INVALID_STATE;
         StateId to = INVALID_STATE;
-        std::vector<AnimCondition> conditions;
+        oc::vector<AnimCondition> conditions;
         float fade = 0.2f;
         float exitTime = 0.0f; // if > 0, only fire once the current source reaches this normalized time
         bool fromAny = false;
     };
 
-    bool conditionsMet(const std::vector<AnimCondition>& conds) const;
+    bool conditionsMet(const oc::vector<AnimCondition>& conds) const;
     void enterState(StateId id, float fade);
 
     AnimationPlayer* m_pPlayer = nullptr;
-    std::vector<State> m_states;
-    std::vector<Transition> m_transitions;
-    std::unordered_map<std::string, float> m_floats;
-    std::unordered_map<std::string, bool> m_bools;
-    std::unordered_map<std::string, bool> m_triggers;
+    oc::vector<State> m_states;
+    oc::vector<Transition> m_transitions;
+    oc::unordered_map<oc::string, float> m_floats;
+    oc::unordered_map<oc::string, bool> m_bools;
+    oc::unordered_map<oc::string, bool> m_triggers;
     StateId m_entry = INVALID_STATE;
     StateId m_current = INVALID_STATE;
     float m_timeInState = 0.0f;

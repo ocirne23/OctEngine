@@ -22,7 +22,7 @@ EntityAllocator::~EntityAllocator()
 // Called with m_chunkLock held. Re-checks the active chunk so racing losers don't each add one.
 EntityAllocator::Chunk* EntityAllocator::addChunkLocked(uint32 minSize, Chunk* expectedActive)
 {
-    Chunk* current = m_activeChunk.load(std::memory_order_acquire);
+    Chunk* current = m_activeChunk.load(oc::memory_order_acquire);
     if (current != expectedActive)
         return current; // another thread already replaced it
 
@@ -32,8 +32,8 @@ EntityAllocator::Chunk* EntityAllocator::addChunkLocked(uint32 minSize, Chunk* e
     Chunk* chunk = new (memory) Chunk{ .offset = 0, .size = payloadSize, .base = memory + headerSize };
 
     m_chunks.push_back(chunk);
-    m_numChunks.store(m_chunks.size(), std::memory_order_relaxed);
-    m_activeChunk.store(chunk, std::memory_order_release);
+    m_numChunks.store(m_chunks.size(), oc::memory_order_relaxed);
+    m_activeChunk.store(chunk, oc::memory_order_release);
     return chunk;
 }
 
@@ -43,31 +43,31 @@ void* EntityAllocator::allocate(uint32 size)
     size = alignUp(size, ALIGNMENT);
 
     // recycled block of the exact size: lock-free tagged pop (tag defeats ABA on concurrent pop/push)
-    std::atomic<uint64>& freeList = m_freeLists[size / ALIGNMENT - 1];
-    uint64 head = freeList.load(std::memory_order_acquire);
+    oc::atomic<uint64>& freeList = m_freeLists[size / ALIGNMENT - 1];
+    uint64 head = freeList.load(oc::memory_order_acquire);
     while (headPtr(head))
     {
         FreeBlock* block = headPtr(head);
         if (freeList.compare_exchange_weak(head, packHead(block->next, (head >> 48) + 1),
-                                           std::memory_order_acquire, std::memory_order_acquire))
+                                           oc::memory_order_acquire, oc::memory_order_acquire))
             return block;
     }
 
     for (;;)
     {
-        Chunk* chunk = m_activeChunk.load(std::memory_order_acquire);
+        Chunk* chunk = m_activeChunk.load(oc::memory_order_acquire);
         if (chunk)
         {
-            const uint32 offset = chunk->offset.fetch_add(size, std::memory_order_relaxed);
+            const uint32 offset = chunk->offset.fetch_add(size, oc::memory_order_relaxed);
             if (offset + size <= chunk->size)
                 return chunk->base + offset;
             // chunk exhausted (tail bytes wasted, bounded by one claim per racing thread)
         }
 
-        while (m_chunkLock.test_and_set(std::memory_order_acquire))
+        while (m_chunkLock.test_and_set(oc::memory_order_acquire))
             _mm_pause();
         addChunkLocked(size, chunk);
-        m_chunkLock.clear(std::memory_order_release);
+        m_chunkLock.clear(oc::memory_order_release);
     }
 }
 
@@ -77,12 +77,12 @@ void EntityAllocator::deallocate(void* ptr, uint32 size)
     size = alignUp(size, ALIGNMENT);
 
     // lock-free tagged push
-    std::atomic<uint64>& freeList = m_freeLists[size / ALIGNMENT - 1];
+    oc::atomic<uint64>& freeList = m_freeLists[size / ALIGNMENT - 1];
     FreeBlock* block = static_cast<FreeBlock*>(ptr);
-    uint64 head = freeList.load(std::memory_order_relaxed);
+    uint64 head = freeList.load(oc::memory_order_relaxed);
     do
     {
         block->next = headPtr(head);
     } while (!freeList.compare_exchange_weak(head, packHead(block, (head >> 48) + 1),
-                                             std::memory_order_release, std::memory_order_relaxed));
+                                             oc::memory_order_release, oc::memory_order_relaxed));
 }

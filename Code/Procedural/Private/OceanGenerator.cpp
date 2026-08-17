@@ -150,10 +150,10 @@ namespace Procedural
 		const int   rings = glm::clamp(m_rings, 1, 12);
 		constexpr float MORPH_BAND_START = 0.7f; // morph over the outer 30% of each ring
 
-		std::vector<glm::vec3> positions;
-		std::vector<glm::vec3> normals;
-		std::vector<glm::vec3> texCoords;
-		std::vector<uint32> indices;
+		oc::vector<glm::vec3> positions;
+		oc::vector<glm::vec3> normals;
+		oc::vector<glm::vec3> texCoords;
+		oc::vector<uint32> indices;
 
 		// Wraps the accumulated arrays into one sector: container + node + SpatialIndex registration
 		// (SpatialLayer_Terrain like terrain chunks — render culling only, invisible to gameplay
@@ -171,7 +171,7 @@ namespace Procedural
 			geom.numIndices = (uint32)indices.size();
 			geom.name = "Ocean";
 
-			std::unique_ptr<ISceneData> scene = ISceneData::createMeshScene(geom);
+			oc::unique_ptr<ISceneData> scene = ISceneData::createMeshScene(geom);
 			if (scene)
 			{
 				ObjectContainer::MaterialOverrides overrides;
@@ -184,13 +184,13 @@ namespace Procedural
 				// per-sector meshes are small enough that the selector actually used them (stretched
 				// triangles, per-sector pops, cracked borders).
 				overrides.disableGeneratedLods = true;
-				auto container = std::make_unique<ObjectContainer>();
+				auto container = oc::make_unique<ObjectContainer>();
 				if (container->initialize(*scene, &overrides))
 				{
 					Sector& s = m_sectors.emplace_back();
 					s.node = container->spawnRootNode(
 						Transform(glm::vec3(0.0f, m_seaLevel, 0.0f), 1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f)));
-					s.container = std::move(container);
+					s.container = oc::move(container);
 					glm::vec3 mn(FLT_MAX), mx(-FLT_MAX);
 					for (const glm::vec3& p : positions)
 					{
@@ -380,7 +380,7 @@ namespace Procedural
 	}
 
 	void OceanGenerator::update(Renderer& renderer, const Camera& camera,
-	                           std::shared_ptr<const BakedTerrainData> terrainData, float seaLevel)
+	                           oc::shared_ptr<const BakedTerrainData> terrainData, float seaLevel)
 	{
 		ProfileScope profileScope("Ocean", EProfileCategory::Procedural);
 		// ONE sea level, owned by the terrain (see the header). Adopted here every frame rather than
@@ -391,7 +391,7 @@ namespace Procedural
 		m_seaLevel = seaLevel;
 		// Adopt the streamer's active bake (the GPU passes read the same one): buoyancy and wind steering
 		// sample this snapshot until the next update.
-		m_terrainData = std::move(terrainData);
+		m_terrainData = oc::move(terrainData);
 
 		// A new bake rebuilds the dry-sector block grid: per-block MAX of (water level - height) over the
 		// COARSEST cascade (largest coverage; its max is at least as wet as any finer view of the same
@@ -559,7 +559,7 @@ namespace Procedural
 		// (the slot's buffer is stable between beginFrame and present, and physics updates BEFORE
 		// beginFrame — so buoyancy must query an owned copy, not the live buffer).
 		uint32 tileRes = 0;
-		const std::span<const uint16> tile = renderer.getOceanDisplacementReadback(tileRes);
+		const oc::span<const uint16> tile = renderer.getOceanDisplacementReadback(tileRes);
 		m_dispTile.assign(tile.begin(), tile.end());
 		m_dispTileRes = tileRes;
 

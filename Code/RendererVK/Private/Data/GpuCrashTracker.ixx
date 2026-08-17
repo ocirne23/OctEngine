@@ -39,7 +39,7 @@ export class GpuCrashTracker
 public:
     // keep four frames worth of marker history
     const static unsigned int c_markerFrameHistory = 4;
-    typedef std::array<std::map<uint64_t, std::string>, c_markerFrameHistory> MarkerMap;
+    typedef oc::array<oc::map<uint64_t, oc::string>, c_markerFrameHistory> MarkerMap;
 
     GpuCrashTracker();
     GpuCrashTracker(const MarkerMap& markerMap);
@@ -50,7 +50,7 @@ public:
 
     // Set the process command line for inclusion in crash dump descriptions.
     // May be called before Initialize(); value is cached and used in OnDescription.
-    void SetCommandLine(const std::string& commandLine) { m_commandLine = commandLine; }
+    void SetCommandLine(const oc::string& commandLine) { m_commandLine = commandLine; }
 
 private:
 
@@ -160,7 +160,7 @@ private:
     mutable std::mutex m_mutex;
 
     // List of Shader Debug Information by ShaderDebugInfoIdentifier.
-    std::map<GFSDK_Aftermath_ShaderDebugInfoIdentifier, std::vector<uint8_t>> m_shaderDebugInfo;
+    oc::map<GFSDK_Aftermath_ShaderDebugInfoIdentifier, oc::vector<uint8_t>> m_shaderDebugInfo;
 
     // The mock shader database.
     ShaderDatabase m_shaderDatabase;
@@ -169,5 +169,5 @@ private:
     const MarkerMap& m_markerMap;
 
     // Optional: command line string for crash dump description
-    std::string m_commandLine;
+    oc::string m_commandLine;
 };

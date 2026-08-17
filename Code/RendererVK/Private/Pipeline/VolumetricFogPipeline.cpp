@@ -150,7 +150,7 @@ void VolumetricFogPipeline::initialize()
     init.initialize(vk::CommandBufferLevel::ePrimary);
     vk::CommandBuffer cmd = init.begin(true);
     const ImageSet* sets[] = { &m_scatter, &m_integrated };
-    std::vector<vk::ImageMemoryBarrier2> bars;
+    oc::vector<vk::ImageMemoryBarrier2> bars;
     for (const ImageSet* s : sets)
         for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
             bars.push_back(vk::ImageMemoryBarrier2{
@@ -166,8 +166,8 @@ void VolumetricFogPipeline::initialize()
     const vk::ImageSubresourceRange fullRange{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
     for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
     {
-        cmd.clearColorImage(m_scatter.image[i], vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { fullRange });
-        cmd.clearColorImage(m_integrated.image[i], vk::ImageLayout::eGeneral, vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } }, { fullRange });
+        cmd.clearColorImage(m_scatter.image[i], vk::ImageLayout::eGeneral, vk::ClearColorValue{ oc::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, { fullRange });
+        cmd.clearColorImage(m_integrated.image[i], vk::ImageLayout::eGeneral, vk::ClearColorValue{ oc::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } }, { fullRange });
     }
     vk::MemoryBarrier2 clearToRead{
         .srcStageMask = vk::PipelineStageFlagBits2::eClear,
@@ -244,7 +244,7 @@ void VolumetricFogPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx
     { // -------- Pass 1: scatter (write scatter[cur], read scatter[prev] as history) --------
         DescriptorSet& set = m_scatterSets[frameIdx];
         vk::DescriptorSet vkSet = set.getDescriptorSet();
-        std::array<DescriptorSetUpdateInfo, 10> updates{
+        oc::array<DescriptorSetUpdateInfo, 10> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { uboInfo } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.lightInfosBuffer) } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.lightGridsBuffer) } },
@@ -277,7 +277,7 @@ void VolumetricFogPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx
     { // -------- Pass 2: integrate along Z (read scatter[cur], write integrated[cur]) --------
         DescriptorSet& set = m_integrateSets[frameIdx];
         vk::DescriptorSet vkSet = set.getDescriptorSet();
-        std::array<DescriptorSetUpdateInfo, 3> updates{
+        oc::array<DescriptorSetUpdateInfo, 3> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { uboInfo } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_sampler, m_scatter.view[frameIdx]) } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageImage, .imageInfos = { imgInfoGeneral(m_integrated.view[frameIdx]) } },
@@ -307,7 +307,7 @@ void VolumetricFogPipeline::recordApply(CommandBuffer& commandBuffer, uint32 fra
     DescriptorSet& set = m_applySets[applySlot(frameIdx, eye)];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
     auto uboInfo = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) };
-    std::array<DescriptorSetUpdateInfo, 4> updates{
+    oc::array<DescriptorSetUpdateInfo, 4> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { uboInfo } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
             vk::DescriptorImageInfo{ .sampler = params.gbufferSampler, .imageView = params.gbufferDepthView, .imageLayout = params.gbufferDepthLayout } } },
@@ -328,7 +328,7 @@ void VolumetricFogPipeline::updateTerrainDescriptor(uint32 frameIdx, vk::ImageVi
     // every frame so a CPU re-bake swaps images without re-recording the cached fog CB.
     vk::DescriptorImageInfo imageInfo{ .sampler = terrainSampler, .imageView = terrainView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal };
     // Scatter set (binding 10), then every eye's apply set (binding 3).
-    std::array<vk::WriteDescriptorSet, 1 + MAX_VIEWS> writes{};
+    oc::array<vk::WriteDescriptorSet, 1 + MAX_VIEWS> writes{};
     uint32 numWrites = 0;
     writes[numWrites++] = vk::WriteDescriptorSet{ .dstSet = m_scatterSets[frameIdx].getDescriptorSet(), .dstBinding = 10, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };

@@ -23,7 +23,7 @@ export struct ParticleComponent
 
     struct SpawnInfo
     {
-        std::string effectPath; // .pfx, relative to Assets/
+        oc::string effectPath; // .pfx, relative to Assets/
         bool emitting = true;   // initial continuous-emission state
     };
 

@@ -32,10 +32,10 @@ private:
 	struct PerFrameData
 	{
 		Buffer inIndirectCommandBuffer;
-		std::span<vk::DispatchIndirectCommand> mappedIndirectCommands;
+		oc::span<vk::DispatchIndirectCommand> mappedIndirectCommands;
 	};
 	void buildComputeLayout(ComputePipelineLayout& layout);
 
-	std::array<PerFrameData, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_perFrameData;
+	oc::array<PerFrameData, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_perFrameData;
 	ComputePipeline m_computePipeline;
 };

@@ -17,7 +17,7 @@ void NetworkComponent::spawn(Entity& entity, const SpawnInfo& info, const Transf
     // sync state exists only inside a session; allocated BEFORE registering — the registration path
     // (id adoption, setOwner in the spawn's frame) already writes through it
     if (Globals::networkManager.role() != ENetRole::None)
-        state = std::make_unique<NetEntityState>(Globals::networkManager.role() == ENetRole::Server);
+        state = oc::make_unique<NetEntityState>(Globals::networkManager.role() == ENetRole::Server);
     // the manager is the only id authority: on the server this mints an id and replicates the spawn
     // to clients; on a client it adopts the incoming server id while executing a replicated Spawn;
     // everywhere else (client-local content, single player) it returns 0 = local-inert, never synced

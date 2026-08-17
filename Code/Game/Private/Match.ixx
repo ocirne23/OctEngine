@@ -92,11 +92,11 @@ private:
     void buildWorldLabels(const Camera& camera); // health bars + selected info over structures
     void updateHud();
     void tickBaseHealing(float deltaSec); // own player only — the owner computes its own health
-    void handleNetEvent(std::string_view name); // NetworkManager::setOnGameEvent target
+    void handleNetEvent(oc::string_view name); // NetworkManager::setOnGameEvent target
     void requestPlace(EStructureType type, const glm::vec3& pos, int nodeIndex, const glm::vec3& facing);
     void requestCable(uint32 idA, uint32 idB, ECableType type);
     void requestDemolish(uint32 id);
-    void requestSetRoute(uint32 id, std::span<const glm::vec3> points); // barracks waypoints
+    void requestSetRoute(uint32 id, oc::span<const glm::vec3> points); // barracks waypoints
     void sendRoute(int index); // server: GRt broadcast (mirror + join replay)
     void sendStructurePlaced(int index);
     void sendCableChanged(uint32 idA, uint32 idB, ECableType type, bool removed);
@@ -162,7 +162,7 @@ private:
     bool m_isServer = false; // co-op roles, latched in spawnWorld
     bool m_isClient = false;
     float m_statTimer = 0.0f; // server: GSt cadence
-    std::unordered_map<uint32, EntityPtr> m_clientPlayers;    // server: clientId -> their capsule
+    oc::unordered_map<uint32, EntityPtr> m_clientPlayers;    // server: clientId -> their capsule
                                                               // (the ONLY per-client store — carried
                                                               // materials live on the twin's puppet
                                                               // component, damage owed in its inbox)

@@ -80,7 +80,7 @@ bool ProceduralTextureData::initialize(EProceduralTextureType type, uint32 width
 			for (int c = 0; c < 3; c++)
 			{
 				rgb[c] = (t <= 0.0f) ? horizon[c] + (zenith[c] - horizon[c]) * std::sqrt(-t)
-				                     : horizon[c] + (ground[c] - horizon[c]) * std::min(t * 2.0f, 1.0f);
+				                     : horizon[c] + (ground[c] - horizon[c]) * oc::min(t * 2.0f, 1.0f);
 			}
 			for (uint32 x = 0; x < width; x++)
 			{
@@ -117,23 +117,23 @@ uint32       ProceduralTextureData::getWidth()      const { return m_width; }
 uint32       ProceduralTextureData::getHeight()     const { return m_height; }
 const char*  ProceduralTextureData::getFormatInfo() const { return "rgba8888"; }
 
-std::unique_ptr<ITextureData> ITextureData::createFallbackDiffuseTexture()
+oc::unique_ptr<ITextureData> ITextureData::createFallbackDiffuseTexture()
 {
-	auto pTex = std::make_unique<ProceduralTextureData>();
+	auto pTex = oc::make_unique<ProceduralTextureData>();
 	pTex->initialize(EProceduralTextureType::Checkerboard, 8, 8);
 	return pTex;
 }
 
-std::unique_ptr<ITextureData> ITextureData::createFallbackWhiteTexture()
+oc::unique_ptr<ITextureData> ITextureData::createFallbackWhiteTexture()
 {
-	auto pTex = std::make_unique<ProceduralTextureData>();
+	auto pTex = oc::make_unique<ProceduralTextureData>();
 	pTex->initialize(EProceduralTextureType::White, 8, 8);
 	return pTex;
 }
 
-std::unique_ptr<ITextureData> ITextureData::createFallbackNormalTexture()
+oc::unique_ptr<ITextureData> ITextureData::createFallbackNormalTexture()
 {
-	auto pTex = std::make_unique<ProceduralTextureData>();
+	auto pTex = oc::make_unique<ProceduralTextureData>();
 	pTex->initialize(EProceduralTextureType::FlatNormal, 8, 8);
 	return pTex;
 }

@@ -139,7 +139,7 @@ export namespace Procedural
 		// (the native resolution has a default), so callers need not gate on isReady().
 		static float worldScale(float metersPerPixel);
 		// Short human-readable status, or the reason it failed.
-		static std::string statusText();
+		static oc::string statusText();
 
 		float sampleHeight(double worldX, double worldZ) const override;
 		float sampleWaterHeight(double worldX, double worldZ) const override;
@@ -158,7 +158,7 @@ export namespace Procedural
 		// Wide-area consumers should use this rather than looping samplePoint — on V3 the difference is one
 		// lock per tile versus one per point.
 		void sampleGrid(double originX, double originZ, double step, uint32 resX, uint32 resZ,
-		                std::span<TerrainPoint> out, ESampleDetail detail = ESampleDetail::Full) const override;
+		                oc::span<TerrainPoint> out, ESampleDetail detail = ESampleDetail::Full) const override;
 		// The smooth 30 m/px diffusion surface WITHOUT the procedural detail layer — the terrain shader uses
 		// this to tell "a mountain" from "high flatland".
 		float sampleAltitude(double worldX, double worldZ) const override;

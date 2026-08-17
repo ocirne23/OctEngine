@@ -32,7 +32,7 @@ namespace
 	// old noise generator's attractors were. So trees can disagree with the ground they stand on — worth
 	// fixing, but it is a tuning pass with nothing to do with removing the generator.
 
-	std::span<const ScatterAsset> scatterAssets()
+	oc::span<const ScatterAsset> scatterAssets()
 	{
 		static const ScatterAsset assets[] =
 		{
@@ -52,7 +52,7 @@ namespace
 		return assets;
 	}
 
-	std::span<const ScatterRule> scatterRules()
+	oc::span<const ScatterRule> scatterRules()
 	{
 		static const ScatterRule rules[] =
 		{
@@ -170,32 +170,32 @@ namespace Procedural
 		cookOptions.lodReduction = lodParams.generateReduction;
 		cookOptions.lodMinIndices = lodParams.minIndices;
 
-		const std::span<const ScatterAsset> assets = scatterAssets();
+		const oc::span<const ScatterAsset> assets = scatterAssets();
 		m_assets.resize(assets.size());
 		for (size_t i = 0; i < assets.size(); ++i)
 		{
 			const ScatterAsset& desc = assets[i];
 			ObjectContainerDesc ocDesc;
-			std::string ocError;
+			oc::string ocError;
 			if (!loadObjectContainerDesc(desc.ocPath, ocDesc, ocError))
 			{
 				Log::warning(std::format("Scatter: failed to load '{}' for asset '{}': {}", desc.ocPath, desc.name, ocError));
 				continue;
 			}
 			cookOptions.decimationFactor = ocDesc.decimationFactor;
-			std::unique_ptr<ISceneData> scene = ISceneData::loadCached(ocDesc.path.c_str(), ocDesc.mergeNodes, ocDesc.preTransformVertices, cookOptions);
+			oc::unique_ptr<ISceneData> scene = ISceneData::loadCached(ocDesc.path.c_str(), ocDesc.mergeNodes, ocDesc.preTransformVertices, cookOptions);
 			if (!scene)
 			{
 				Log::warning(std::format("Scatter: failed to load '{}' for asset '{}'", ocDesc.path, desc.name));
 				continue;
 			}
-			auto container = std::make_unique<ObjectContainer>();
+			auto container = oc::make_unique<ObjectContainer>();
 			if (!container->initialize(*scene))
 			{
 				Log::warning(std::format("Scatter: failed to initialize container for asset '{}'", desc.name));
 				continue;
 			}
-			std::vector<NodeSpawnIdx> variants;
+			oc::vector<NodeSpawnIdx> variants;
 			for (const char* node : desc.nodes)
 			{
 				const NodeSpawnIdx idx = container->getSpawnIdxForPath(node);
@@ -211,13 +211,13 @@ namespace Procedural
 				Log::warning(std::format("Scatter: asset '{}' has no spawnable variants, dropping", desc.name));
 				continue;
 			}
-			m_assets[i].container = std::move(container);
-			m_assets[i].variants = std::move(variants);
+			m_assets[i].container = oc::move(container);
+			m_assets[i].variants = oc::move(variants);
 		}
 
 		// Resolve rules against the loaded assets; generation order is footprint-descending so large
 		// objects claim ground first and small ones fill the gaps around them.
-		const std::span<const ScatterRule> rules = scatterRules();
+		const oc::span<const ScatterRule> rules = scatterRules();
 		m_rules.resize(rules.size());
 		// Constructed at size, not resize()d: vector relocation would instantiate the map's copy ctor
 		// (unordered_map's move isn't noexcept), which the move-only RuleGroup value forbids.
@@ -243,7 +243,7 @@ namespace Procedural
 			m_ruleOrder.push_back((uint16)i);
 			m_maxViewDistance = glm::max(m_maxViewDistance, rule.viewDistance);
 		}
-		std::sort(m_ruleOrder.begin(), m_ruleOrder.end(), [&](uint16 a, uint16 b)
+		oc::sort(m_ruleOrder.begin(), m_ruleOrder.end(), [&](uint16 a, uint16 b)
 		{
 			return scatterAssets()[m_rules[a].assetIdx].footprintRadius > scatterAssets()[m_rules[b].assetIdx].footprintRadius;
 		});
@@ -269,15 +269,15 @@ namespace Procedural
 	// borders only the jittered grid's spacing separates instances, which in practice keeps footprints
 	// from stacking without the cost of neighbor-cell regeneration.
 	void ScatterSystem::generateCell(const ITerrainSampler& maps, glm::ivec2 coord, const GenParams& p,
-		std::span<const RuleRuntime> ruleRt, std::span<const uint16> order, std::vector<GroupResult>& outGroups)
+		oc::span<const RuleRuntime> ruleRt, oc::span<const uint16> order, oc::vector<GroupResult>& outGroups)
 	{
-		const std::span<const ScatterAsset> assets = scatterAssets();
-		const std::span<const ScatterRule> rules = scatterRules();
+		const oc::span<const ScatterAsset> assets = scatterAssets();
+		const oc::span<const ScatterRule> rules = scatterRules();
 		const double cs = p.cellSize;
 		const double ox = coord.x * cs, oz = coord.y * cs;
 		constexpr float TEMP_RANGE = TEMPERATURE_MAX_C - TEMPERATURE_MIN_C;
 
-		std::vector<glm::vec3> accepted; // (x, z, footprint radius) of everything placed so far in this cell
+		oc::vector<glm::vec3> accepted; // (x, z, footprint radius) of everything placed so far in this cell
 
 		for (uint16 ruleIdx : order)
 		{
@@ -385,7 +385,7 @@ namespace Procedural
 				}
 			}
 			if (!group.instances.empty())
-				outGroups.push_back(std::move(group));
+				outGroups.push_back(oc::move(group));
 		}
 	}
 
@@ -394,10 +394,10 @@ namespace Procedural
 		const int32 cap = glm::clamp(m_maxGenJobs, 1, 16);
 		for (size_t spawned = 0; spawned < numNew; )
 		{
-			int32 cur = m_numPumps.load(std::memory_order_relaxed);
+			int32 cur = m_numPumps.load(oc::memory_order_relaxed);
 			if (cur >= cap)
 				return;
-			if (m_numPumps.compare_exchange_weak(cur, cur + 1, std::memory_order_acq_rel))
+			if (m_numPumps.compare_exchange_weak(cur, cur + 1, oc::memory_order_acq_rel))
 			{
 				Globals::jobSystem.submit([this] { pumpJob(); }, EJobPriority::Low, &m_pumpCounter, "scatterCellPump");
 				++spawned;
@@ -417,7 +417,7 @@ namespace Procedural
 				// queued bounce back as dropped results so the main thread releases their pending keys.
 				while (!m_requests.empty())
 				{
-					req = std::move(m_requests.front());
+					req = oc::move(m_requests.front());
 					m_requests.pop_front();
 					const glm::ivec2 d = req.coord - m_ringCam;
 					if (glm::max(glm::abs(d.x), glm::abs(d.y)) <= m_ringR)
@@ -430,25 +430,25 @@ namespace Procedural
 					drop.generation = req.generation;
 					drop.coord = req.coord;
 					drop.dropped = true;
-					m_results.push_back(std::move(drop));
+					m_results.push_back(oc::move(drop));
 				}
 			}
 			if (!haveWork)
 			{
 				// same claim/exit-recheck protocol as the terrain pump
-				m_numPumps.fetch_sub(1, std::memory_order_release);
+				m_numPumps.fetch_sub(1, oc::memory_order_release);
 				{
 					std::lock_guard<std::mutex> lk(m_mutex);
 					if (m_requests.empty())
 						return;
 				}
 				const int32 cap = glm::clamp(m_maxGenJobs, 1, 16);
-				int32 cur = m_numPumps.load(std::memory_order_relaxed);
+				int32 cur = m_numPumps.load(oc::memory_order_relaxed);
 				for (;;)
 				{
 					if (cur >= cap)
 						return; // an appender's kicks refilled the pool; those jobs take over
-					if (m_numPumps.compare_exchange_weak(cur, cur + 1, std::memory_order_acq_rel))
+					if (m_numPumps.compare_exchange_weak(cur, cur + 1, oc::memory_order_acq_rel))
 						break;
 				}
 				continue;
@@ -463,7 +463,7 @@ namespace Procedural
 
 			{
 				std::lock_guard<std::mutex> lk(m_mutex);
-				m_results.push_back(std::move(res));
+				m_results.push_back(oc::move(res));
 			}
 		}
 	}
@@ -482,7 +482,7 @@ namespace Procedural
 			const Sphere b = node.getWorldBounds();
 			bounds = first ? b : mergeSpheres(bounds, b);
 			first = false;
-			group.nodes.push_back(std::move(node));
+			group.nodes.push_back(oc::move(node));
 		}
 		if (group.nodes.empty())
 			return;
@@ -498,7 +498,7 @@ namespace Procedural
 		group.spatialEntry.reset();
 	}
 
-	void ScatterSystem::update(Renderer& renderer, const Camera& camera, const std::shared_ptr<const ITerrainSampler>& maps)
+	void ScatterSystem::update(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps)
 	{
 		ProfileScope profileScope("Scatter", EProfileCategory::Procedural);
 		// The sampler's identity doubles as the terrain's config generation: a rebuilt field (or terrain
@@ -543,7 +543,7 @@ namespace Procedural
 		// --- Enqueue any ring cell that is neither resident nor in flight (nearest-first, like terrain).
 		// A stationary ring's contents can't change, so the scan only runs when it moved (or a reset/
 		// dropped result flagged it dirty).
-		std::vector<Request> newRequests;
+		oc::vector<Request> newRequests;
 		if (ringMoved || m_ringDirty)
 		{
 			m_ringDirty = false;
@@ -561,7 +561,7 @@ namespace Procedural
 					req.coord = coord;
 					req.params = GenParams{ cellSize, m_densityScale, (uint32)m_seed };
 					req.maps = maps;
-					newRequests.push_back(std::move(req));
+					newRequests.push_back(oc::move(req));
 					m_pending.insert(key);
 				}
 			}
@@ -569,7 +569,7 @@ namespace Procedural
 		if (ringMoved || !newRequests.empty())
 		{
 			const glm::ivec2 cam(camCX, camCZ);
-			std::sort(newRequests.begin(), newRequests.end(), [&](const Request& a, const Request& b)
+			oc::sort(newRequests.begin(), newRequests.end(), [&](const Request& a, const Request& b)
 			{
 				const glm::ivec2 da = a.coord - cam, db = b.coord - cam;
 				return da.x * da.x + da.y * da.y < db.x * db.x + db.y * db.y;
@@ -578,14 +578,14 @@ namespace Procedural
 			m_ringCam = cam;
 			m_ringR = R;
 			for (Request& r : newRequests)
-				m_requests.push_back(std::move(r));
+				m_requests.push_back(oc::move(r));
 		}
 		if (!newRequests.empty())
 			kickPump(newRequests.size());
 
 		// --- Drain generated cells. Admission is just moving vectors into the resident map (node
 		// spawning is budgeted separately below), so no per-frame cap is needed here.
-		std::vector<Result> ready;
+		oc::vector<Result> ready;
 		{
 			std::lock_guard<std::mutex> lk(m_mutex);
 			ready.swap(m_results);
@@ -609,8 +609,8 @@ namespace Procedural
 			{
 				RuleGroup group;
 				group.ruleIdx = g.ruleIdx;
-				group.instances = std::move(g.instances);
-				m_ruleGroups[g.ruleIdx].emplace(res.key, std::move(group));
+				group.instances = oc::move(g.instances);
+				m_ruleGroups[g.ruleIdx].emplace(res.key, oc::move(group));
 			}
 			m_spawnScan = true;
 		}
@@ -623,9 +623,9 @@ namespace Procedural
 				const glm::ivec2 d = cellCoord(key) - glm::ivec2(camCX, camCZ);
 				return glm::max(glm::abs(d.x), glm::abs(d.y)) > R;
 			};
-			std::erase_if(m_residentCells, outsideRing);
+			oc::erase_if(m_residentCells, outsideRing);
 			for (auto& groups : m_ruleGroups)
-				std::erase_if(groups, [&](const auto& kv) { return outsideRing(kv.first); });
+				oc::erase_if(groups, [&](const auto& kv) { return outsideRing(kv.first); });
 		}
 
 		// --- Spawn scan: per rule, probe only the cells inside that rule's OWN view-distance ring — the
@@ -634,7 +634,7 @@ namespace Procedural
 		// camera travel since the last scan (a group spawns at most that late; despawns stay exact, handled
 		// every frame below). Once the frame's spawn budget is gone the scan stops and retries next frame.
 		// m_ruleOrder is footprint-descending, so big objects also claim the budget first.
-		const std::span<const ScatterRule> rules = scatterRules();
+		const oc::span<const ScatterRule> rules = scatterRules();
 		const glm::vec2 camXZ((float)camera.position.x, (float)camera.position.z);
 		const float hysteresis = glm::max(10.0f, cellSize * 0.25f);
 		auto cellDist = [&](glm::ivec2 coord) {

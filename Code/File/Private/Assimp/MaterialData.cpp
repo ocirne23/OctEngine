@@ -196,7 +196,7 @@ float MaterialData::getRefractiveIndex() const
         return 0.04f;
 }
 
-std::string MaterialData::getTexturePath(ETextureType type) const
+oc::string MaterialData::getTexturePath(ETextureType type) const
 {
     const aiTextureType aiType = static_cast<aiTextureType>(type);
     assert(m_pMaterial->GetTextureCount(aiType) <= 1 && "Only one texture per type supported");

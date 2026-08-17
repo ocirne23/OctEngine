@@ -28,10 +28,10 @@ export namespace Procedural::Diffusion
 		// Samples the half-open rect [x1,x2) x [y1,y2). x is the COLUMN axis and y the ROW axis.
 		// `out` is resized to 5*H*W and indexed out[ch*H*W + r*W + c], H = y2-y1, W = x2-x1.
 		// Callers beware: WorldPipeline's coarse tile deliberately calls this with its i/j swapped.
-		void sample(int32 x1, int32 y1, int32 x2, int32 y2, std::vector<float>& out) const;
+		void sample(int32 x1, int32 y1, int32 x2, int32 y2, oc::vector<float>& out) const;
 
 	private:
 		struct Impl; // hides FastNoiseLite, which must only ever be compiled in the /fp:precise .cpp
-		std::unique_ptr<Impl> m_impl;
+		oc::unique_ptr<Impl> m_impl;
 	};
 }

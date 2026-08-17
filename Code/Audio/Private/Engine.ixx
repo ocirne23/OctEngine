@@ -25,7 +25,7 @@ export constexpr uint32 SampleRate = 48000;
 
 export struct SoundData
 {
-    std::vector<float> frames; // interleaved f32
+    oc::vector<float> frames; // interleaved f32
     uint32 channels = 1;
     uint32 sampleRate = SampleRate;
     uint32 frameCount() const { return uint32(frames.size() / channels); }
@@ -38,8 +38,8 @@ export struct BinauralNode
 {
     ma_node_base base; // must be first
     IPLBinauralEffect effect = nullptr;
-    std::atomic<float> dirX{ 0.0f }, dirY{ 0.0f }, dirZ{ -1.0f }; // listener-space unit direction to the source
-    std::atomic<float> blend{ 1.0f };                             // 0 = unspatialized passthrough (relative sources)
+    oc::atomic<float> dirX{ 0.0f }, dirY{ 0.0f }, dirZ{ -1.0f }; // listener-space unit direction to the source
+    oc::atomic<float> blend{ 1.0f };                             // 0 = unspatialized passthrough (relative sources)
 
     float inFifo[IplFrameSize] = {};           // downmixed mono, waiting for a full block
     uint32 inCount = 0;
@@ -74,8 +74,8 @@ export struct SystemState
     IPLContext iplContext = nullptr;
     IPLHRTF hrtf = nullptr;
     IPLAudioSettings iplAudioSettings = { SampleRate, (IPLint32)IplFrameSize };
-    std::vector<std::unique_ptr<SoundData>> buffers;
-    std::vector<std::unique_ptr<SourceState>> sources;
+    oc::vector<oc::unique_ptr<SoundData>> buffers;
+    oc::vector<oc::unique_ptr<SourceState>> sources;
     glm::vec3 listenerPos = glm::vec3(0.0f);
     glm::vec3 listenerFwd = glm::vec3(0.0f, 0.0f, -1.0f);
     glm::vec3 listenerUp = glm::vec3(0.0f, 1.0f, 0.0f);

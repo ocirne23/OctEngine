@@ -19,7 +19,7 @@ public:
         m_properties = move.m_properties;
         m_debugName = move.m_debugName;
         m_hostAccess = move.m_hostAccess;
-        m_backingStore = std::move(move.m_backingStore);
+        m_backingStore = oc::move(move.m_backingStore);
         m_uploadOffset = move.m_uploadOffset;
         m_hasBackingStore = move.m_hasBackingStore;
         move.m_size = 0;
@@ -41,7 +41,7 @@ public:
             m_properties = move.m_properties;
             m_debugName = move.m_debugName;
             m_hostAccess = move.m_hostAccess;
-            m_backingStore = std::move(move.m_backingStore);
+            m_backingStore = oc::move(move.m_backingStore);
             m_uploadOffset = move.m_uploadOffset;
             m_hasBackingStore = move.m_hasBackingStore;
             move.m_size = 0;
@@ -64,25 +64,25 @@ public:
 
     bool resize(vk::DeviceSize newSize);
 
-    std::vector<uint8>& getBackingStore() { return m_backingStore; }
+    oc::vector<uint8>& getBackingStore() { return m_backingStore; }
     template<typename T>
-    std::span<T> getBackingStoreAs() { return std::span<T>((T*)m_backingStore.data(), m_backingStore.size() / sizeof(T)); }
+    oc::span<T> getBackingStoreAs() { return oc::span<T>((T*)m_backingStore.data(), m_backingStore.size() / sizeof(T)); }
     template<typename T>
-    void appendToBackingStore(std::span<const T> items)
+    void appendToBackingStore(oc::span<const T> items)
     {
         const uint8* bytes = (const uint8*)items.data();
         m_backingStore.insert(m_backingStore.end(), bytes, bytes + items.size_bytes());
     }
     bool upload(vk::DeviceSize dataSize, const void* data, vk::DeviceSize dstOffset = 0);
     template<typename T>
-    bool upload(std::span<const T> items, vk::DeviceSize dstOffset = 0)
+    bool upload(oc::span<const T> items, vk::DeviceSize dstOffset = 0)
     {
         return upload(items.size_bytes(), items.data(), dstOffset);
     }
 
     vk::DeviceSize appendUpload(vk::DeviceSize dataSize, const void* data);
     template<typename T>
-    vk::DeviceSize appendUpload(std::span<const T> items)
+    vk::DeviceSize appendUpload(oc::span<const T> items)
     {
         return appendUpload(items.size_bytes(), items.data());
     }
@@ -91,12 +91,12 @@ public:
 
     vk::DeviceAddress getDeviceAddress() const;
 
-    std::span<uint8> mapMemory(uint64 offset = 0, uint64 size = vk::WholeSize);
+    oc::span<uint8> mapMemory(uint64 offset = 0, uint64 size = vk::WholeSize);
     template<typename T>
-    std::span<T> mapMemory(uint64 offsetBytes = 0, uint64 sizeBytes = vk::WholeSize)
+    oc::span<T> mapMemory(uint64 offsetBytes = 0, uint64 sizeBytes = vk::WholeSize)
     {
-        std::span<uint8> spanBytes = mapMemory(offsetBytes, sizeBytes);
-        return std::span<T>((T*)spanBytes.data(), spanBytes.size() / sizeof(T));
+        oc::span<uint8> spanBytes = mapMemory(offsetBytes, sizeBytes);
+        return oc::span<T>((T*)spanBytes.data(), spanBytes.size() / sizeof(T));
     }
     void unmapMemory();
     void flushMappedMemory(size_t size, size_t offset = 0);
@@ -116,7 +116,7 @@ private:
     vk::MemoryPropertyFlags m_properties;
     const char* m_debugName = nullptr;
     BufferHostAccess m_hostAccess = BufferHostAccess::eRandom;
-    std::vector<uint8> m_backingStore;
+    oc::vector<uint8> m_backingStore;
     vk::DeviceSize m_uploadOffset = 0;
     bool m_hasBackingStore = false;
 };

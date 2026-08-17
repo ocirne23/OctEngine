@@ -13,7 +13,7 @@ export namespace Procedural::Diffusion
 	// per-row indirection.
 	struct Grid
 	{
-		std::vector<float> data;
+		oc::vector<float> data;
 		int32 h = 0;
 		int32 w = 0;
 
@@ -34,11 +34,11 @@ export namespace Procedural::Diffusion
 	Grid bilinearResizeExtrapolated(const Grid& src, int32 dstH, int32 dstW);
 
 	// ks = 2*floor(floor(2*sigma)/2) + 1, normalised to sum 1. For the pipeline's sigma=5: ks=11.
-	std::vector<float> gaussianKernel1D(float sigma);
+	oc::vector<float> gaussianKernel1D(float sigma);
 
 	// Separable blur with REPLICATE (clamp) padding. The reference's doc comment claims reflect padding; the
 	// code clamps. The code is what matters — do not "fix" this to match the comment.
-	Grid separableGaussianBlur(const Grid& src, std::span<const float> kernel1D);
+	Grid separableGaussianBlur(const Grid& src, oc::span<const float> kernel1D);
 
 	// residual + bilinearUpsample(lowres) at the residual's resolution.
 	Grid laplacianDecode(const Grid& residual, const Grid& lowres);

@@ -18,12 +18,12 @@ public:
     JobMutex() = default;
     JobMutex(const JobMutex&) = delete;
     JobMutex& operator=(const JobMutex&) = delete;
-    ~JobMutex() { assert(m_state.load(std::memory_order_relaxed) == 0 && !m_waiters); }
+    ~JobMutex() { assert(m_state.load(oc::memory_order_relaxed) == 0 && !m_waiters); }
 
     bool tryLock()
     {
-        uint32 state = m_state.load(std::memory_order_relaxed);
-        return !(state & LockedBit) && m_state.compare_exchange_strong(state, state | LockedBit, std::memory_order_acquire, std::memory_order_relaxed);
+        uint32 state = m_state.load(oc::memory_order_relaxed);
+        return !(state & LockedBit) && m_state.compare_exchange_strong(state, state | LockedBit, oc::memory_order_acquire, oc::memory_order_relaxed);
     }
 
     void lock()
@@ -36,11 +36,11 @@ public:
     {
         // seq_cst pairs with the blocked-thread announce in the lock slow path (Dekker): either
         // we see the blocked count here, or the blocker sees the cleared lock bit before waiting
-        const uint32 old = m_state.fetch_and(~LockedBit, std::memory_order_seq_cst);
+        const uint32 old = m_state.fetch_and(~LockedBit, oc::memory_order_seq_cst);
         assert(old & LockedBit);
         if (old & WaitersBit)
             Globals::jobSystem.unlockJobMutexSlow(*this);
-        else if (m_numBlockedThreads.load(std::memory_order_seq_cst) != 0)
+        else if (m_numBlockedThreads.load(oc::memory_order_seq_cst) != 0)
             m_state.notify_all();
     }
 
@@ -62,9 +62,9 @@ private:
     static constexpr uint32 LockedBit = 1;
     static constexpr uint32 WaitersBit = 2; // parked fibers present; set/cleared under m_listLock
 
-    std::atomic<uint32> m_state = 0;
-    std::atomic<uint32> m_listLock = 0;
-    std::atomic<uint32> m_numBlockedThreads = 0; // unregistered threads blocked on m_state
+    oc::atomic<uint32> m_state = 0;
+    oc::atomic<uint32> m_listLock = 0;
+    oc::atomic<uint32> m_numBlockedThreads = 0; // unregistered threads blocked on m_state
     FiberWaitNode* m_waiters = nullptr;          // guarded by m_listLock
 };
 
@@ -87,21 +87,21 @@ public:
     void wait() { Globals::jobSystem.wait(m_counter); }
     void signal()
     {
-        if (!m_signaled.exchange(true, std::memory_order_acq_rel))
+        if (!m_signaled.exchange(true, oc::memory_order_acq_rel))
             Globals::jobSystem.signal(m_counter);
     }
-    bool isSignaled() const { return m_signaled.load(std::memory_order_acquire); }
+    bool isSignaled() const { return m_signaled.load(oc::memory_order_acquire); }
     void reset() // only between batches: no concurrent wait/signal
     {
         assert(isSignaled());
-        m_signaled.store(false, std::memory_order_relaxed);
+        m_signaled.store(false, oc::memory_order_relaxed);
         m_counter.add(1);
     }
 
 private:
 
     JobCounter m_counter;
-    std::atomic<bool> m_signaled = false;
+    oc::atomic<bool> m_signaled = false;
 };
 
 // One cacheline-aligned T per scheduler context (main helper + workers): the substrate for
@@ -117,7 +117,7 @@ public:
     {
         m_numSlots = Globals::jobSystem.getNumContexts();
         assert(m_numSlots != 0 && "initialize the JobSystem first");
-        m_slots = std::make_unique<Slot[]>(m_numSlots);
+        m_slots = oc::make_unique<Slot[]>(m_numSlots);
     }
 
     bool isInitialized() const { return m_numSlots != 0; }
@@ -141,6 +141,6 @@ private:
         T value{};
     };
 
-    std::unique_ptr<Slot[]> m_slots;
+    oc::unique_ptr<Slot[]> m_slots;
     uint32 m_numSlots = 0;
 };

@@ -31,27 +31,27 @@ void ScriptEventManager::fireEvent(EventKey key)
 	}
 }
 
-void ScriptEventManager::onScriptLoadedCallback(const ScriptModule* script, const std::vector<std::string>& oldNames)
+void ScriptEventManager::onScriptLoadedCallback(const ScriptModule* script, const oc::vector<oc::string>& oldNames)
 {
-	const std::vector<std::string>& newNames = script->eventNames;
+	const oc::vector<oc::string>& newNames = script->eventNames;
 
 	// Drop this script only from buckets for names it no longer has.
-	for (const std::string& oldName : oldNames)
+	for (const oc::string& oldName : oldNames)
 	{
-		if (std::find(newNames.begin(), newNames.end(), oldName) != newNames.end())
+		if (oc::find(newNames.begin(), newNames.end(), oldName) != newNames.end())
 			continue; // still present — keep the existing registration
 		auto keyIt = m_eventNameKeyLookup.find(oldName);
 		if (keyIt == m_eventNameKeyLookup.end())
 			continue;
 		auto bucketIt = m_listenersByEvent.find(keyIt->second);
 		if (bucketIt != m_listenersByEvent.end())
-			std::erase(bucketIt->second, script);
+			oc::erase(bucketIt->second, script);
 	}
 
 	// Register it only under names it didn't have before, minting a key for any never-seen name.
-	for (const std::string& newName : newNames)
+	for (const oc::string& newName : newNames)
 	{
-		if (std::find(oldNames.begin(), oldNames.end(), newName) != oldNames.end())
+		if (oc::find(oldNames.begin(), oldNames.end(), newName) != oldNames.end())
 			continue; // already registered from the previous load
 		m_listenersByEvent[getEventKeyForName(newName)].push_back(script);
 	}

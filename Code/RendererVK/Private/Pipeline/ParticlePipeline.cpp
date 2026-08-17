@@ -175,7 +175,7 @@ void ParticlePipeline::updateTextureDescriptor(uint32 frameIdx, uint32 slotIdx, 
     const vk::DescriptorImageInfo imageInfo{
         .sampler = m_textureSampler.getSampler(),
         .imageView = view, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal };
-    std::array<vk::WriteDescriptorSet, MAX_VIEWS> writes;
+    oc::array<vk::WriteDescriptorSet, MAX_VIEWS> writes;
     for (uint32 eye = 0; eye < m_viewCount; ++eye)
         writes[eye] = vk::WriteDescriptorSet{ .dstSet = m_drawSets[drawSlot(frameIdx, eye)].getDescriptorSet(),
             .dstBinding = 20, .dstArrayElement = slotIdx, .descriptorCount = 1,
@@ -183,8 +183,8 @@ void ParticlePipeline::updateTextureDescriptor(uint32 frameIdx, uint32 slotIdx, 
     Globals::device.getDevice().updateDescriptorSets(m_viewCount, writes.data(), 0, nullptr);
 }
 
-void ParticlePipeline::update(uint32 frameIdx, std::span<const ParticleEmitterGpu> emitters,
-    std::span<const std::pair<uint16, uint16>> spawnRequests, float dt, bool collision, bool reset)
+void ParticlePipeline::update(uint32 frameIdx, oc::span<const ParticleEmitterGpu> emitters,
+    oc::span<const oc::pair<uint16, uint16>> spawnRequests, float dt, bool collision, bool reset)
 {
     if (!emitters.empty())
     {
@@ -193,10 +193,10 @@ void ParticlePipeline::update(uint32 frameIdx, std::span<const ParticleEmitterGp
     }
 
     uint32 spawnCount = 0;
-    std::span<uint32> spawnMap = m_mappedSpawns[frameIdx];
+    oc::span<uint32> spawnMap = m_mappedSpawns[frameIdx];
     for (const auto& [emitterIdx, count] : spawnRequests)
     {
-        const uint32 n = std::min<uint32>(count, MAX_PARTICLE_SPAWNS_PER_FRAME - spawnCount);
+        const uint32 n = oc::min<uint32>(count, MAX_PARTICLE_SPAWNS_PER_FRAME - spawnCount);
         for (uint32 i = 0; i < n; ++i)
             spawnMap[spawnCount + i] = emitterIdx;
         spawnCount += n;
@@ -213,13 +213,13 @@ void ParticlePipeline::update(uint32 frameIdx, std::span<const ParticleEmitterGp
     params.collision = collision ? 1u : 0u;
     m_paramsBuffers[frameIdx].flushMappedMemory(sizeof(FrameParams));
 
-    std::span<uint32> beginDispatch = m_mappedBeginDispatch[frameIdx];
+    oc::span<uint32> beginDispatch = m_mappedBeginDispatch[frameIdx];
     beginDispatch[0] = reset ? (MAX_PARTICLES + 255) / 256 : 1;
     beginDispatch[1] = 1;
     beginDispatch[2] = 1;
     m_beginDispatchBuffers[frameIdx].flushMappedMemory(sizeof(vk::DispatchIndirectCommand));
 
-    std::span<uint32> emitDispatch = m_mappedEmitDispatch[frameIdx];
+    oc::span<uint32> emitDispatch = m_mappedEmitDispatch[frameIdx];
     emitDispatch[0] = (spawnCount + 63) / 64;
     emitDispatch[1] = 1;
     emitDispatch[2] = 1;
@@ -248,7 +248,7 @@ void ParticlePipeline::recordSim(CommandBuffer& commandBuffer, uint32 frameIdx, 
 
     { // begin: pool reset or per-frame prepare
         DescriptorSet& set = m_beginSets[frameIdx];
-        std::array<DescriptorSetUpdateInfo, 3> updates{
+        oc::array<DescriptorSetUpdateInfo, 3> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { bufInfo(m_paramsBuffers[frameIdx]) } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_countersBuffer) } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_deadListBuffer) } },
@@ -265,7 +265,7 @@ void ParticlePipeline::recordSim(CommandBuffer& commandBuffer, uint32 frameIdx, 
 
     { // emit: one thread per spawn
         DescriptorSet& set = m_emitSets[frameIdx];
-        std::array<DescriptorSetUpdateInfo, 7> updates{
+        oc::array<DescriptorSetUpdateInfo, 7> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { bufInfo(m_paramsBuffers[frameIdx]) } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_poolBuffer) } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_aliveBuffers[parity]) } },
@@ -288,7 +288,7 @@ void ParticlePipeline::recordSim(CommandBuffer& commandBuffer, uint32 frameIdx, 
 
     { // sim: integrate + compact survivors into the OUT list
         DescriptorSet& set = m_simSets[frameIdx];
-        std::array<DescriptorSetUpdateInfo, 10> updates{
+        oc::array<DescriptorSetUpdateInfo, 10> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { bufInfo(m_paramsBuffers[frameIdx]) } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(Ubo) } } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_poolBuffer) } },
@@ -334,7 +334,7 @@ void ParticlePipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameIdx,
     DescriptorSet& set = m_drawSets[drawSlot(frameIdx, eye)];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
 
-    std::array<DescriptorSetUpdateInfo, 7> updates{
+    oc::array<DescriptorSetUpdateInfo, 7> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(Ubo) } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_poolBuffer) } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_aliveBuffers[1 - parity]) } },

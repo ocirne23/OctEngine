@@ -197,10 +197,10 @@ private:
     void destroyQuery(uint64 handle);
     void debugDrawEmitter(Renderer& renderer, const EmitterInstance& inst) const;
 
-    std::vector<EmitterInstance> m_emitters; // indexed by handle low 32 bits; slots recycled by generation
-    std::vector<uint32> m_freeEmitters;
-    std::vector<QueryInstance> m_queries;
-    std::vector<uint32> m_freeQueries;
+    oc::vector<EmitterInstance> m_emitters; // indexed by handle low 32 bits; slots recycled by generation
+    oc::vector<uint32> m_freeEmitters;
+    oc::vector<QueryInstance> m_queries;
+    oc::vector<uint32> m_freeQueries;
     uint32 m_numLiveEmitters = 0;
     uint32 m_generationCounter = 1;
 

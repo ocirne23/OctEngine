@@ -56,7 +56,7 @@ void Profiler::suspendScopes(ProfileScopeStack& out, uint32 baseDepth)
     ProfileTrack* track = threadTrack();
     const uint64 now = tick();
     assert(track->m_openDepth <= ProfileTrack::MAX_OPEN_DEPTH && "scopes past MAX_OPEN_DEPTH cannot migrate with a parking fiber");
-    const uint32 depth = std::min(track->m_openDepth, ProfileTrack::MAX_OPEN_DEPTH);
+    const uint32 depth = oc::min(track->m_openDepth, ProfileTrack::MAX_OPEN_DEPTH);
     out.depth = 0;
     for (uint32 i = baseDepth; i < depth; ++i)
     {
@@ -114,7 +114,7 @@ void Profiler::endFrame()
 
     // Paused: the clock keeps calibrating (cheap, keeps GPU alignment fresh for the resume) but
     // frame marks stop - the frame graph freezes on the recorded history.
-    if (!g_profilerPaused.load(std::memory_order_relaxed))
+    if (!g_profilerPaused.load(oc::memory_order_relaxed))
     {
         m_frameIsGap[m_frameCount % FRAME_HISTORY] = 0; // slot recycled from an old gap frame
         m_frameMarks[m_frameCount % FRAME_HISTORY] = t;
@@ -124,7 +124,7 @@ void Profiler::endFrame()
 
 void Profiler::setPaused(bool paused)
 {
-    const bool wasPaused = g_profilerPaused.exchange(paused, std::memory_order_relaxed);
+    const bool wasPaused = g_profilerPaused.exchange(paused, oc::memory_order_relaxed);
     if (wasPaused && !paused)
     {
         // Resume: a fresh boundary lets the next real frame measure cleanly. The pseudo-frame this
@@ -166,24 +166,24 @@ ProfileTrack* Profiler::registerTrack(const char* name, uint32 threadId, uint32 
     // land misattributed in "<other threads>"/"<unscoped>".
     MemoryHookSuppress suppressTracking;
 
-    while (m_registerLock.exchange(1, std::memory_order_acquire) != 0)
+    while (m_registerLock.exchange(1, oc::memory_order_acquire) != 0)
         std::this_thread::yield();
 
     ProfileTrack* track = nullptr;
-    const uint32 idx = m_numTracks.load(std::memory_order_relaxed);
+    const uint32 idx = m_numTracks.load(oc::memory_order_relaxed);
     if (idx < MAX_TRACKS)
     {
-        m_tracks[idx] = std::make_unique<ProfileTrack>();
+        m_tracks[idx] = oc::make_unique<ProfileTrack>();
         m_tracks[idx]->initialize(name, threadId, sortKey);
         track = m_tracks[idx].get();
-        m_numTracks.store(idx + 1, std::memory_order_release); // publish after construction
+        m_numTracks.store(idx + 1, oc::memory_order_release); // publish after construction
     }
 
-    m_registerLock.store(0, std::memory_order_release);
+    m_registerLock.store(0, oc::memory_order_release);
     return track;
 }
 
-bool Profiler::snapshotTrack(uint32 trackIdx, uint64 tMin, uint64 tMax, std::vector<ProfileRecord>& out) const
+bool Profiler::snapshotTrack(uint32 trackIdx, uint64 tMin, uint64 tMax, oc::vector<ProfileRecord>& out) const
 {
     out.clear();
     const ProfileTrack& track = *m_tracks[trackIdx];

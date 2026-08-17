@@ -65,7 +65,7 @@ namespace
 	// Whole-string form of isIdentifierChar -- what the SCRIPT DATA/EVENTS sidebar sections validate a freshly
 	// typed name against before adding it (those are plain ImGui::InputText fields, unfiltered per-keystroke
 	// unlike the main text area's DeclareName compose): non-empty, and every character legal at its position.
-	bool isValidIdentifierName(const std::string& name)
+	bool isValidIdentifierName(const oc::string& name)
 	{
 		if (name.empty())
 			return false;
@@ -121,11 +121,11 @@ namespace
 			// its type rides in declareType instead.
 			if (candidate.refSymbol == nullptr)
 				return candidate.declareType;
-			const DSLSymbol::VariableDeclaration& v = std::get<DSLSymbol::VariableDeclaration>(candidate.refSymbol->data);
-			return std::get<DSLSymbol::TypeDeclaration>(v.typeSymbol->data).type;
+			const DSLSymbol::VariableDeclaration& v = oc::get<DSLSymbol::VariableDeclaration>(candidate.refSymbol->data);
+			return oc::get<DSLSymbol::TypeDeclaration>(v.typeSymbol->data).type;
 		}
 		if (candidate.kind == Candidate::Kind::Function)
-			return std::get<DSLSymbol::FunctionDeclaration>(candidate.refSymbol->data).returnType;
+			return oc::get<DSLSymbol::FunctionDeclaration>(candidate.refSymbol->data).returnType;
 		if (candidate.kind == Candidate::Kind::Literal)
 			return candidate.declareType;
 		if (candidate.kind == Candidate::Kind::KeywordTrue || candidate.kind == Candidate::Kind::KeywordFalse)
@@ -141,7 +141,7 @@ namespace
 	{
 		if (candidate.kind != Candidate::Kind::Function || candidate.refSymbol == nullptr)
 			return false;
-		const DSLSymbol::FunctionDeclaration& f = std::get<DSLSymbol::FunctionDeclaration>(candidate.refSymbol->data);
+		const DSLSymbol::FunctionDeclaration& f = oc::get<DSLSymbol::FunctionDeclaration>(candidate.refSymbol->data);
 		// A variadic callee stages even with no declared parameters -- its argument list is still authored one
 		// argument at a time, just closed by ')' rather than by a count.
 		return !f.parameterVarDeclarations.empty() || f.isVariadic;
@@ -149,7 +149,7 @@ namespace
 
 	// The element type a chain of pending terms evaluates in -- the first resolvable term's type (groups
 	// recurse). Void = nothing resolvable (or an empty chain).
-	DSLType chainElementType(const std::vector<PendingExprTerm>& terms)
+	DSLType chainElementType(const oc::vector<PendingExprTerm>& terms)
 	{
 		for (const PendingExprTerm& term : terms)
 		{
@@ -163,7 +163,7 @@ namespace
 	// Whether any composed term (recursing into groups) is NOT Bool-typed -- guards the Bool value commits: a
 	// numeric comparison LEAD offered in a Bool slot ("bool b = i < 5"'s `i`) must never commit as the value
 	// itself; only a typed comparator consumes it.
-	bool containsNonBoolTerm(const std::vector<PendingExprTerm>& terms)
+	bool containsNonBoolTerm(const oc::vector<PendingExprTerm>& terms)
 	{
 		for (const PendingExprTerm& term : terms)
 		{
@@ -199,7 +199,7 @@ namespace
 		if (line.sourceLine == nullptr)
 			return false;
 		const DSLSymbol* head = line.sourceLine->head();
-		return head != nullptr && head->type == ST::Placeholder && std::get<DSLSymbol::Placeholder>(head->data).expectedType == DSLType::Void;
+		return head != nullptr && head->type == ST::Placeholder && oc::get<DSLSymbol::Placeholder>(head->data).expectedType == DSLType::Void;
 	}
 
 	// Same check as isBlankStatementLine, but directly against a DSLCodeLine (no formatted SyntaxLine at hand) --
@@ -209,35 +209,35 @@ namespace
 	{
 		const DSLSymbol* head = line.head();
 		return head == nullptr
-			|| (head->type == ST::Placeholder && std::get<DSLSymbol::Placeholder>(head->data).expectedType == DSLType::Void);
+			|| (head->type == ST::Placeholder && oc::get<DSLSymbol::Placeholder>(head->data).expectedType == DSLType::Void);
 	}
 
 	// How a chosen-but-not-yet-applied candidate should read in a growing compose prefix (e.g. ConditionLeft's
 	// "if height " or "if canJump() ") -- a bare Candidate::label is correct for everything except Function,
 	// which needs its call parens (and one <type> placeholder marker per parameter it'll be built with) shown
 	// too, or e.g. "canJump() == true" would misleadingly read as "canJump == true" before it's even committed.
-	std::string candidateDisplayText(const Candidate& candidate)
+	oc::string candidateDisplayText(const Candidate& candidate)
 	{
 		// A binding object's MEMBER reads with its receiver ("self.pos") -- refSymbol IS the receiver's
 		// declaration for Kind::Member (see receiverCandidates).
 		if (candidate.kind == Candidate::Kind::Member)
-			return std::get<DSLSymbol::VariableDeclaration>(candidate.refSymbol->data).name + "." + candidate.label;
+			return oc::get<DSLSymbol::VariableDeclaration>(candidate.refSymbol->data).name + "." + candidate.label;
 		if (candidate.kind != Candidate::Kind::Function)
 			return candidate.label;
 
-		const DSLSymbol::FunctionDeclaration& callee = std::get<DSLSymbol::FunctionDeclaration>(candidate.refSymbol->data);
-		std::string text = (candidate.receiver != nullptr
-			? std::get<DSLSymbol::VariableDeclaration>(candidate.receiver->data).name + "."
-				+ (candidate.receiverPath.empty() ? std::string() : candidate.receiverPath + ".")
-			: std::string())
+		const DSLSymbol::FunctionDeclaration& callee = oc::get<DSLSymbol::FunctionDeclaration>(candidate.refSymbol->data);
+		oc::string text = (candidate.receiver != nullptr
+			? oc::get<DSLSymbol::VariableDeclaration>(candidate.receiver->data).name + "."
+				+ (candidate.receiverPath.empty() ? oc::string() : candidate.receiverPath + ".")
+			: oc::string())
 			+ candidate.label + "(";
 		for (size_t i = 0; i < callee.parameterVarDeclarations.size(); ++i)
 		{
 			if (i > 0)
 				text += ", ";
-			const DSLSymbol::VariableDeclaration& param = std::get<DSLSymbol::VariableDeclaration>(callee.parameterVarDeclarations[i]->data);
-			const DSLType paramType = std::get<DSLSymbol::TypeDeclaration>(param.typeSymbol->data).type;
-			text += "<" + std::string(dslTypeName(paramType)) + ">";
+			const DSLSymbol::VariableDeclaration& param = oc::get<DSLSymbol::VariableDeclaration>(callee.parameterVarDeclarations[i]->data);
+			const DSLType paramType = oc::get<DSLSymbol::TypeDeclaration>(param.typeSymbol->data).type;
+			text += "<" + oc::string(dslTypeName(paramType)) + ">";
 		}
 		text += ")";
 		return text;
@@ -245,27 +245,27 @@ namespace
 
 	DSLType declaredTypeOf(const DSLSymbol* varDecl)
 	{
-		const DSLSymbol::VariableDeclaration& decl = std::get<DSLSymbol::VariableDeclaration>(varDecl->data);
-		return std::get<DSLSymbol::TypeDeclaration>(decl.typeSymbol->data).type;
+		const DSLSymbol::VariableDeclaration& decl = oc::get<DSLSymbol::VariableDeclaration>(varDecl->data);
+		return oc::get<DSLSymbol::TypeDeclaration>(decl.typeSymbol->data).type;
 	}
 
-	std::string joinedMemberPath(const std::vector<std::string>& path)
+	oc::string joinedMemberPath(const oc::vector<oc::string>& path)
 	{
-		std::string text;
-		for (const std::string& segment : path)
+		oc::string text;
+		for (const oc::string& segment : path)
 			text += (text.empty() ? "" : ".") + segment;
 		return text;
 	}
 
-	std::vector<std::string> splitMemberPath(const std::string& dottedPath)
+	oc::vector<oc::string> splitMemberPath(const oc::string& dottedPath)
 	{
-		std::vector<std::string> path;
+		oc::vector<oc::string> path;
 		size_t start = 0;
 		while (start < dottedPath.size())
 		{
 			const size_t dot = dottedPath.find('.', start);
-			path.push_back(dottedPath.substr(start, dot == std::string::npos ? std::string::npos : dot - start));
-			if (dot == std::string::npos)
+			path.push_back(dottedPath.substr(start, dot == oc::string::npos ? oc::string::npos : dot - start));
+			if (dot == oc::string::npos)
 				break;
 			start = dot + 1;
 		}
@@ -282,9 +282,9 @@ void ScriptEditor::clampCursor()
 		m_cursorSpan = 0;
 		return;
 	}
-	m_cursorLine = std::clamp(m_cursorLine, 0, static_cast<int>(m_formatted.size()) - 1);
+	m_cursorLine = oc::clamp(m_cursorLine, 0, static_cast<int>(m_formatted.size()) - 1);
 	const int spanCount = static_cast<int>(m_formatted[m_cursorLine].spans.size());
-	m_cursorSpan = std::clamp(m_cursorSpan, 0, std::max(0, spanCount - 1));
+	m_cursorSpan = oc::clamp(m_cursorSpan, 0, oc::max(0, spanCount - 1));
 }
 
 void ScriptEditor::moveHorizontal(int delta)
@@ -318,12 +318,12 @@ void ScriptEditor::moveVertical(int delta)
 	if (m_formatted.empty())
 		return;
 
-	const int targetLine = std::clamp(m_cursorLine + delta, 0, static_cast<int>(m_formatted.size()) - 1);
+	const int targetLine = oc::clamp(m_cursorLine + delta, 0, static_cast<int>(m_formatted.size()) - 1);
 	if (targetLine == m_cursorLine)
 		return;
 
 	m_cursorLine = targetLine;
-	m_cursorSpan = std::max(0, static_cast<int>(m_formatted[targetLine].spans.size()) - 1);
+	m_cursorSpan = oc::max(0, static_cast<int>(m_formatted[targetLine].spans.size()) - 1);
 }
 
 void ScriptEditor::moveHome()
@@ -344,21 +344,21 @@ DSLCodeLine& ScriptEditor::insertLineAfter(DSLCodeLine& afterLine, int scopeLeve
 {
 	auto& lines = m_document.file.lines;
 	const int index = dslLineIndex(m_document.file, &afterLine);
-	auto newLine = std::make_unique<DSLCodeLine>();
+	auto newLine = oc::make_unique<DSLCodeLine>();
 	newLine->scopeLevel = scopeLevel;
 	DSLCodeLine& ref = *newLine;
-	lines.insert(index >= 0 ? lines.begin() + index + 1 : lines.end(), std::move(newLine));
+	lines.insert(index >= 0 ? lines.begin() + index + 1 : lines.end(), oc::move(newLine));
 	return ref;
 }
 
 DSLSymbol* ScriptEditor::seedStatementPlaceholder(DSLCodeLine& line)
 {
-	auto symbol = std::make_unique<DSLSymbol>();
+	auto symbol = oc::make_unique<DSLSymbol>();
 	symbol->type = ST::Placeholder;
 	symbol->data = DSLSymbol::Placeholder{ DSLType::Void };
 	symbol->line = &line;
 	DSLSymbol* ptr = symbol.get();
-	line.symbols.push_back(std::move(symbol));
+	line.symbols.push_back(oc::move(symbol));
 	return ptr;
 }
 
@@ -366,14 +366,14 @@ DSLSymbol* ScriptEditor::seedStatementPlaceholder(DSLCodeLine& line)
 // nullptr if there's nothing sensible to look at (empty document/line).
 namespace
 {
-	const SyntaxSpan* currentSpan(const std::vector<SyntaxLine>& formatted, int cursorLine, int cursorSpan)
+	const SyntaxSpan* currentSpan(const oc::vector<SyntaxLine>& formatted, int cursorLine, int cursorSpan)
 	{
 		if (formatted.empty() || cursorLine < 0 || cursorLine >= static_cast<int>(formatted.size()))
 			return nullptr;
 		const SyntaxLine& line = formatted[cursorLine];
 		if (line.spans.empty())
 			return nullptr;
-		return &line.spans[std::clamp(cursorSpan, 0, static_cast<int>(line.spans.size()) - 1)];
+		return &line.spans[oc::clamp(cursorSpan, 0, static_cast<int>(line.spans.size()) - 1)];
 	}
 }
 
@@ -409,7 +409,7 @@ void ScriptEditor::beginCompose()
 	// A comment's span re-opens its free-text compose with the text restored for editing.
 	if (span->symbol != nullptr && span->symbol->type == ST::Comment)
 	{
-		enterCompose(ComposeMode::CommentText, "# ", std::get<DSLSymbol::Comment>(span->symbol->data).text);
+		enterCompose(ComposeMode::CommentText, "# ", oc::get<DSLSymbol::Comment>(span->symbol->data).text);
 		return;
 	}
 
@@ -436,7 +436,7 @@ void ScriptEditor::beginCompose()
 		// The return type is load-bearing only at call sites that CONSUME the result -- a call statement ignores
 		// it, so a statement-only-called function may change or drop its type freely (and ADDING one to a Void
 		// function is always safe: nothing can consume a Void result in the first place).
-		const DSLSymbol::FunctionDeclaration& f = std::get<DSLSymbol::FunctionDeclaration>(span->symbol->data);
+		const DSLSymbol::FunctionDeclaration& f = oc::get<DSLSymbol::FunctionDeclaration>(span->symbol->data);
 		if (f.returnType != DSLType::Void && AutoCompleteRules::isFunctionResultUsed(span->symbol, m_document.file))
 			return;
 		// "-> " is only PART of the compose box when the span itself is blank (returnType == Void, see
@@ -468,14 +468,14 @@ void ScriptEditor::refreshCandidates()
 	// sortExactMatchFirst gives the regular lists.
 	auto appendBindingObjects = [&]()
 	{
-		for (const std::unique_ptr<DSLSymbol>& s : m_document.sidebar)
+		for (const oc::unique_ptr<DSLSymbol>& s : m_document.sidebar)
 		{
 			if (s->type != ST::VariableDeclaration)
 				continue;
 			const BindingObject* object = m_bindings.objectForDecl(s.get());
 			if (object == nullptr)
 				continue;
-			const std::string label = object->name;
+			const oc::string label = object->name;
 			if (m_pendingWord.size() > label.size())
 				continue;
 			bool matches = true;
@@ -486,14 +486,14 @@ void ScriptEditor::refreshCandidates()
 			// An Entity slot already lists `self` as a plain VALUE candidate (see addVariableCandidates' one
 			// sidebar exception), and that form can do strictly more: it delivers as the value AND still dots
 			// into its members. Skipping the duplicate keeps one entry per name.
-			if (std::any_of(m_candidates.begin(), m_candidates.end(),
+			if (oc::any_of(m_candidates.begin(), m_candidates.end(),
 				[&](const Candidate& existing) { return existing.label == label; }))
 				continue;
 			Candidate c{ label, Candidate::Kind::BindingObject, s.get() };
 			if (label.size() == m_pendingWord.size())
-				m_candidates.insert(m_candidates.begin(), std::move(c));
+				m_candidates.insert(m_candidates.begin(), oc::move(c));
 			else
-				m_candidates.push_back(std::move(c));
+				m_candidates.push_back(oc::move(c));
 		}
 	};
 
@@ -502,7 +502,7 @@ void ScriptEditor::refreshCandidates()
 	if (m_composeMode == ComposeMode::ReplaceOperator)
 	{
 		// Same class as the operator being replaced -- a `+` can become `*`, an `&&` an `||`, never a `<=`.
-		const DSLSymbol::Expression& replaceChain = std::get<DSLSymbol::Expression>(m_replaceOpExpr->data);
+		const DSLSymbol::Expression& replaceChain = oc::get<DSLSymbol::Expression>(m_replaceOpExpr->data);
 		const DSLOperator current = replaceChain.operators[m_replaceOpIndex];
 		// A comparison's operand type narrows the swap set the same way authoring it did (Entity: == / != only).
 		const bool equalityOnly = m_replaceOpIndex < static_cast<int>(replaceChain.operands.size())
@@ -619,7 +619,7 @@ void ScriptEditor::refreshCandidates()
 		{
 			Candidate refKeyword{ "ref", Candidate::Kind::KeywordRef };
 			if (m_pendingWord.empty() || refKeyword.label.compare(0, m_pendingWord.size(), m_pendingWord) == 0)
-				m_candidates.push_back(std::move(refKeyword));
+				m_candidates.push_back(oc::move(refKeyword));
 		}
 		break;
 	case ComposeMode::FunctionReturnType:
@@ -631,7 +631,7 @@ void ScriptEditor::refreshCandidates()
 		// all, and a for-loop counter can't be void.
 		Candidate voidKeyword{ dslTypeName(DSLType::Void), Candidate::Kind::DeclareType, nullptr, DSLType::Void };
 		if (m_pendingWord.empty() || voidKeyword.label.compare(0, m_pendingWord.size(), m_pendingWord) == 0)
-			m_candidates.push_back(std::move(voidKeyword));
+			m_candidates.push_back(oc::move(voidKeyword));
 		break;
 	}
 	case ComposeMode::FunctionDeclareReturnType:
@@ -647,14 +647,14 @@ void ScriptEditor::refreshCandidates()
 		m_candidates = AutoCompleteRules::typeKeywordCandidates(m_pendingWord);
 		Candidate entityElement{ dslTypeName(DSLType::Entity), Candidate::Kind::DeclareType, nullptr, DSLType::Entity };
 		if (m_pendingWord.empty() || entityElement.label.compare(0, m_pendingWord.size(), m_pendingWord) == 0)
-			m_candidates.push_back(std::move(entityElement));
+			m_candidates.push_back(oc::move(entityElement));
 		// "ref" binds the element by reference instead of by value (see the write-back in the Transpiler) --
 		// the same modifier-then-type shape a function parameter uses, dropped once picked so it can't stack.
 		if (!(m_composeMode == ComposeMode::ForEachType ? m_forEachRef : m_ifExistRef))
 		{
 			Candidate refKeyword{ "ref", Candidate::Kind::KeywordRef };
 			if (m_pendingWord.empty() || refKeyword.label.compare(0, m_pendingWord.size(), m_pendingWord) == 0)
-				m_candidates.push_back(std::move(refKeyword));
+				m_candidates.push_back(oc::move(refKeyword));
 		}
 		// ifexist ALSO binds components -- every registered component type, by name. Not gated on //@@require:
 		// reaching another entity's component is exactly the case that needs no prior declaration.
@@ -667,7 +667,7 @@ void ScriptEditor::refreshCandidates()
 						continue;
 					Candidate c{ typeName, Candidate::Kind::DeclareType, nullptr, object.type };
 					if (m_pendingWord.empty() || c.label.compare(0, m_pendingWord.size(), m_pendingWord) == 0)
-						m_candidates.push_back(std::move(c));
+						m_candidates.push_back(oc::move(c));
 				}
 		break;
 	}
@@ -677,7 +677,7 @@ void ScriptEditor::refreshCandidates()
 		// ("e." reaching e.scene.children). A waypoint can't be confirmed bare: this stage's own confirm
 		// re-checks the resolved chain. Sidebar roots come through appendBindingObjects below.
 		m_candidates = AutoCompleteRules::candidatesForAnyValue(atLine, m_document.file, m_document.sidebar, m_builtins, m_pendingWord);
-		std::erase_if(m_candidates, [&](const Candidate& c)
+		oc::erase_if(m_candidates, [&](const Candidate& c)
 			{
 				const DSLType type = candidateValueType(c);
 				return !sequenceYields(type, m_forEachElementType) && !dslIsChainableType(type);
@@ -689,7 +689,7 @@ void ScriptEditor::refreshCandidates()
 		// waypoints toward one ("e." reaching e.parent). A waypoint can't be confirmed bare: this stage's own
 		// confirm re-checks the resolved chain. Sidebar roots come through appendBindingObjects below.
 		m_candidates = AutoCompleteRules::candidatesForAnyValue(atLine, m_document.file, m_document.sidebar, m_builtins, m_pendingWord);
-		std::erase_if(m_candidates, [&](const Candidate& c)
+		oc::erase_if(m_candidates, [&](const Candidate& c)
 			{
 				const DSLType type = candidateValueType(c);
 				if (dslIsComponentType(m_ifExistType))
@@ -761,10 +761,10 @@ void ScriptEditor::refreshCandidates()
 		// A `ref` parameter receives the callee's OUTPUT -- only an actual variable can stand there, never a
 		// nested call/compound expression, so those (and dot-into waypoints) are excluded for it specifically.
 		const CallStage& stage = m_callStack.back();
-		const DSLSymbol::FunctionDeclaration& callee = std::get<DSLSymbol::FunctionDeclaration>(stage.func->data);
+		const DSLSymbol::FunctionDeclaration& callee = oc::get<DSLSymbol::FunctionDeclaration>(stage.func->data);
 		if (stage.argChains.size() < callee.parameterVarDeclarations.size()
-			&& std::get<DSLSymbol::VariableDeclaration>(callee.parameterVarDeclarations[stage.argChains.size()]->data).isRef)
-			std::erase_if(m_candidates, [](const Candidate& c) { return c.kind != Candidate::Kind::Variable; });
+			&& oc::get<DSLSymbol::VariableDeclaration>(callee.parameterVarDeclarations[stage.argChains.size()]->data).isRef)
+			oc::erase_if(m_candidates, [](const Candidate& c) { return c.kind != Candidate::Kind::Variable; });
 		break;
 	}
 	default:
@@ -779,7 +779,7 @@ void ScriptEditor::refreshCandidates()
 	if (m_pendingWord.size() >= 2 && m_pendingWord.front() == '"' && m_pendingWord.back() == '"'
 		&& m_pendingWord.find('"', 1) == m_pendingWord.size() - 1)
 	{
-		std::erase_if(m_candidates, [](const Candidate& c) { return c.kind != Candidate::Kind::Literal; });
+		oc::erase_if(m_candidates, [](const Candidate& c) { return c.kind != Candidate::Kind::Literal; });
 		m_candidateSelected = 0;
 		return; // binding objects must not be appended below either
 	}
@@ -808,9 +808,9 @@ void ScriptEditor::refreshCandidates()
 		// Same ref-parameter exclusion as the erase above -- a `ref` slot only ever accepts a bare Variable.
 		// A variadic tail slot has no declaration to check, and never refuses them.
 		const CallStage& stage = m_callStack.back();
-		const DSLSymbol::FunctionDeclaration& callee = std::get<DSLSymbol::FunctionDeclaration>(stage.func->data);
+		const DSLSymbol::FunctionDeclaration& callee = oc::get<DSLSymbol::FunctionDeclaration>(stage.func->data);
 		if (stage.argChains.size() >= callee.parameterVarDeclarations.size()
-			|| !std::get<DSLSymbol::VariableDeclaration>(callee.parameterVarDeclarations[stage.argChains.size()]->data).isRef)
+			|| !oc::get<DSLSymbol::VariableDeclaration>(callee.parameterVarDeclarations[stage.argChains.size()]->data).isRef)
 			appendBindingObjects();
 		break;
 	}
@@ -858,7 +858,7 @@ const Candidate* ScriptEditor::selectedCandidate() const
 {
 	if (m_candidates.empty())
 		return nullptr;
-	return &m_candidates[std::clamp(m_candidateSelected, 0, static_cast<int>(m_candidates.size()) - 1)];
+	return &m_candidates[oc::clamp(m_candidateSelected, 0, static_cast<int>(m_candidates.size()) - 1)];
 }
 
 bool ScriptEditor::tryCompleteCandidateOnSpace()
@@ -868,7 +868,7 @@ bool ScriptEditor::tryCompleteCandidateOnSpace()
 	const Candidate* picked = selectedCandidate();
 	if (picked == nullptr || isParameterizedFunction(*picked))
 		return false;
-	const std::string full = candidateDisplayText(*picked);
+	const oc::string full = candidateDisplayText(*picked);
 	if (full == m_pendingWord)
 		return false; // already fully typed -- nothing to complete
 	m_pendingWord = full;
@@ -898,11 +898,11 @@ bool ScriptEditor::tryResolveCandidateOnSpace()
 
 // See the declaration in ScriptEditor.ixx. Clearing the old candidate list before refreshing matters for the
 // free-typing modes (whose refresh is a no-op) -- they must not keep showing/cycling the PREVIOUS stage's list.
-void ScriptEditor::enterCompose(ComposeMode mode, std::string prefix, std::string pendingWord)
+void ScriptEditor::enterCompose(ComposeMode mode, oc::string prefix, oc::string pendingWord)
 {
 	m_composeMode = mode;
-	m_composePrefix = std::move(prefix);
-	m_pendingWord = std::move(pendingWord);
+	m_composePrefix = oc::move(prefix);
+	m_pendingWord = oc::move(pendingWord);
 	m_candidates.clear();
 	m_candidateSelected = 0;
 	refreshCandidates();
@@ -999,15 +999,15 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 			// into the new CallStage exactly like tryBeginValueCallStaging -- this dot-call may itself be
 			// nested inside another call's argument. Entering MemberSelect never touched m_exprStack, so it
 			// still holds that suspended state here -- captured into the prefix BEFORE the save/reset below.
-			const std::string outerLead = statementContext ? std::string() : (chainLeadTextFor(back) + exprComposePrefixFromStack());
+			const oc::string outerLead = statementContext ? oc::string() : (chainLeadTextFor(back) + exprComposePrefixFromStack());
 			CallStage& stage = m_callStack.emplace_back();
 			stage.func = picked->refSymbol;
 			stage.receiver = picked->receiver;
 			stage.receiverPath = joinedMemberPath(m_memberPath);
 			stage.returnMode = statementContext ? ComposeMode::None : back;
 			stage.outerLeadText = outerLead;
-			stage.savedExprStack = std::move(m_exprStack);
-			stage.savedPendingGroup = std::move(m_exprPendingGroup);
+			stage.savedExprStack = oc::move(m_exprStack);
+			stage.savedPendingGroup = oc::move(m_exprPendingGroup);
 			stage.savedHasPendingGroup = m_exprHasPendingGroup;
 			m_memberReceiver = nullptr;
 			m_memberReturnMode = ComposeMode::None;
@@ -1043,7 +1043,7 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 				// flow ('=' authored; compound member assigns are a later nicety).
 				m_reassignTarget = m_memberReceiver;
 				m_reassignMemberPath.clear();
-				for (const std::string& segment : m_memberPath)
+				for (const oc::string& segment : m_memberPath)
 					m_reassignMemberPath.push_back(segment);
 				m_reassignMemberPath.push_back(picked->label);
 				m_reassignOp = DSLOperator::Assign;
@@ -1077,12 +1077,12 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 		// The member / zero-argument dot-call becomes an already-resolved pending term of the suspended chain
 		// compose -- exactly commitCallStatement's value-branch delivery.
 		PendingExprTerm term;
-		term.candidate = std::move(chosen);
+		term.candidate = oc::move(chosen);
 		m_memberReceiver = nullptr;
 		m_memberReturnMode = ComposeMode::None;
 		m_memberPath.clear();
 		enterCompose(back, "");
-		m_exprPendingGroup = std::move(term);
+		m_exprPendingGroup = oc::move(term);
 		m_exprHasPendingGroup = true;
 		m_candidates.clear(); // nothing is being typed right after the resolved term -- operators continue it
 		m_composePrefix = exprBasePrefix() + exprComposePrefixFromStack();
@@ -1103,7 +1103,7 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 		if (linePtr == nullptr)
 			return;
 		DSLCodeLine& line = *linePtr;
-		const std::string text = m_pendingWord;
+		const oc::string text = m_pendingWord;
 		cancelCompose();
 		line.symbols.clear();
 		m_pendingSelectTarget = pushSymbol(line, ST::Comment, DSLSymbol::Comment{ text });
@@ -1129,7 +1129,7 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 			if (AutoCompleteRules::isFunctionNameTaken(m_pendingWord, m_document.file, m_builtins, m_renameTarget)
 				|| isEntryPointName(m_pendingWord))
 				return; // name already taken -- keep editing instead of accepting the collision
-			std::get<DSLSymbol::FunctionDeclaration>(m_renameTarget->data).name = m_pendingWord;
+			oc::get<DSLSymbol::FunctionDeclaration>(m_renameTarget->data).name = m_pendingWord;
 			m_pendingSelectTarget = m_renameTarget;
 			cancelCompose();
 			return;
@@ -1137,7 +1137,7 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 		if (m_renameTarget->line != nullptr
 			&& AutoCompleteRules::isNameInScope(m_pendingWord, *m_renameTarget->line, m_document.file, m_document.sidebar, m_builtins, m_renameTarget))
 			return; // name already taken in this scope -- keep editing instead of accepting the collision
-		std::get<DSLSymbol::VariableDeclaration>(m_renameTarget->data).name = m_pendingWord;
+		oc::get<DSLSymbol::VariableDeclaration>(m_renameTarget->data).name = m_pendingWord;
 		m_pendingSelectTarget = m_renameTarget;
 		cancelCompose();
 		return;
@@ -1176,8 +1176,8 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 		// symbol), never through the whole-line rebuild below -- see m_redeclareTarget's comment.
 		if (m_redeclareTarget != nullptr)
 		{
-			std::vector<PendingExprTerm> terms;
-			std::vector<DSLOperator> ops;
+			oc::vector<PendingExprTerm> terms;
+			oc::vector<DSLOperator> ops;
 			if (!exprTryFinalize(terms, ops) || terms.empty())
 				return;
 			if (m_pendingDeclareType == DSLType::Bool && containsNonBoolTerm(terms))
@@ -1186,8 +1186,8 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 			return;
 		}
 
-		std::vector<PendingExprTerm> terms;
-		std::vector<DSLOperator> ops;
+		oc::vector<PendingExprTerm> terms;
+		oc::vector<DSLOperator> ops;
 		if (!exprTryFinalize(terms, ops) || terms.empty())
 			return; // open paren, dangling operator, or nothing typed at all -- keep composing until valid
 		if (m_pendingDeclareType == DSLType::Bool && containsNonBoolTerm(terms))
@@ -1197,7 +1197,7 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 		if (linePtr == nullptr)
 			return;
 		DSLCodeLine& line = *linePtr;
-		const std::string name = m_pendingDeclareName;
+		const oc::string name = m_pendingDeclareName;
 		const DSLType type = m_pendingDeclareType;
 		cancelCompose();
 		applyDeclareVariable(name, type, terms, ops, line);
@@ -1222,8 +1222,8 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 			return; // finishing stage -- Enter only
 		}
 		// Same no-placeholder rule as DeclareValue: incomplete values refuse to confirm.
-		std::vector<PendingExprTerm> terms;
-		std::vector<DSLOperator> ops;
+		oc::vector<PendingExprTerm> terms;
+		oc::vector<DSLOperator> ops;
 		if (!exprTryFinalize(terms, ops) || terms.empty())
 			return;
 		if (reassignTargetType() == DSLType::Bool && containsNonBoolTerm(terms))
@@ -1242,8 +1242,8 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 			tryResolveCandidateOnSpace();
 			return; // an in-place edit commits on confirm -- Enter only
 		}
-		std::vector<PendingExprTerm> terms;
-		std::vector<DSLOperator> ops;
+		oc::vector<PendingExprTerm> terms;
+		oc::vector<DSLOperator> ops;
 		if (!exprTryFinalize(terms, ops))
 			return; // open paren, or a dangling operator with nothing typed yet -- keep composing
 		if (terms.empty())
@@ -1267,8 +1267,8 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 		// A value-returning function's `return` commits WITH its whole value in one shot -- possibly a
 		// compound/parenthesized chain ("return a + 5"), same expression machinery as an initializer; there is
 		// no committed "return <type>" intermediate state (no placeholders anywhere, per the editing model).
-		std::vector<PendingExprTerm> terms;
-		std::vector<DSLOperator> ops;
+		oc::vector<PendingExprTerm> terms;
+		oc::vector<DSLOperator> ops;
 		if (!exprTryFinalize(terms, ops) || terms.empty())
 			return; // open paren, dangling operator, or nothing typed -- keep composing until valid
 		// Re-editing an existing return line resolves it directly (the cursor sits on its value span, not a
@@ -1295,7 +1295,7 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 		// ("a + b") or contain a nested call ("vec3(other.x, 1, 2)"), staged via tryBeginValueCallStaging like
 		// anywhere else (see m_callStack).
 		CallStage& stage = m_callStack.back();
-		const DSLSymbol::FunctionDeclaration& callee = std::get<DSLSymbol::FunctionDeclaration>(stage.func->data);
+		const DSLSymbol::FunctionDeclaration& callee = oc::get<DSLSymbol::FunctionDeclaration>(stage.func->data);
 		const size_t declaredCount = callee.parameterVarDeclarations.size();
 		// Past the declared parameters = composing a variadic callee's tail: no declaration to type/ref-check
 		// against, and no count that ends the list -- only ')' or Enter (allowCommit) closes one.
@@ -1312,8 +1312,8 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 			return; // completing the call -- and, for a statement, the line -- stays an Enter/')' gesture
 		}
 
-		std::vector<PendingExprTerm> terms;
-		std::vector<DSLOperator> ops;
+		oc::vector<PendingExprTerm> terms;
+		oc::vector<DSLOperator> ops;
 		if (!exprTryFinalize(terms, ops) || terms.empty())
 		{
 			// Closing a variadic list on an EMPTY slot is how it ends -- zero varargs, or a ')' right after the
@@ -1324,9 +1324,9 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 		}
 		if (!inVarargs)
 		{
-			const DSLSymbol::VariableDeclaration& param = std::get<DSLSymbol::VariableDeclaration>(
+			const DSLSymbol::VariableDeclaration& param = oc::get<DSLSymbol::VariableDeclaration>(
 				callee.parameterVarDeclarations[stage.argChains.size()]->data);
-			const DSLType paramType = std::get<DSLSymbol::TypeDeclaration>(param.typeSymbol->data).type;
+			const DSLType paramType = oc::get<DSLSymbol::TypeDeclaration>(param.typeSymbol->data).type;
 			if (param.isRef && (terms.size() != 1 || !ops.empty() || terms[0].isGroup || !terms[0].callArgs.empty()
 				|| terms[0].candidate.kind != Candidate::Kind::Variable))
 				return; // a `ref` parameter receives the callee's OUTPUT -- only a bare existing variable, never a
@@ -1335,7 +1335,7 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 				return; // a numeric comparison lead isn't a bool value -- type a comparator to continue
 		}
 
-		stage.argChains.push_back(PendingExprChain{ std::move(terms), std::move(ops) });
+		stage.argChains.push_back(PendingExprChain{ oc::move(terms), oc::move(ops) });
 		// Fixed arity completes on its own count; a variadic list needs the closing gesture, which may be the
 		// very keystroke that just resolved this argument (")" straight after typing it).
 		if (callee.isVariadic ? (allowCommit && stage.argChains.size() >= declaredCount)
@@ -1366,7 +1366,7 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 		cancelCompose();
 		// Flat chain storage is what makes this a one-field write: precedence lives in the transpiler, so
 		// swapping `+` for `*` never restructures anything (see DSL.ixx's Expression comment).
-		std::get<DSLSymbol::Expression>(expr->data).operators[index] = op;
+		oc::get<DSLSymbol::Expression>(expr->data).operators[index] = op;
 		m_pendingSelectTarget = expr;
 		m_pendingSelectOperatorIndex = index;
 		return;
@@ -1474,7 +1474,7 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 			return;
 		}
 		DSLSymbol* funcSymbol = span->slot.parent;
-		DSLSymbol::FunctionDeclaration& f = std::get<DSLSymbol::FunctionDeclaration>(funcSymbol->data);
+		DSLSymbol::FunctionDeclaration& f = oc::get<DSLSymbol::FunctionDeclaration>(funcSymbol->data);
 		const DSLType oldReturnType = f.returnType;
 		f.returnType = picked->declareType;
 		m_pendingSelectTarget = funcSymbol;
@@ -1642,7 +1642,7 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 		if (picked == nullptr)
 			return;
 		m_forVarType = picked->declareType;
-		enterCompose(ComposeMode::ForVarName, "for " + std::string(dslTypeName(m_forVarType)) + " ");
+		enterCompose(ComposeMode::ForVarName, "for " + oc::string(dslTypeName(m_forVarType)) + " ");
 		return;
 	}
 
@@ -1813,7 +1813,7 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 		// Staged flow starts here: this step only picks the TYPE. The box keeps growing ("float ", then
 		// "float test", then "float test = ...") instead of applying anything to the document yet.
 		m_pendingDeclareType = chosen.declareType;
-		enterCompose(ComposeMode::DeclareName, std::string(dslTypeName(chosen.declareType)) + " ");
+		enterCompose(ComposeMode::DeclareName, oc::string(dslTypeName(chosen.declareType)) + " ");
 		return;
 	}
 
@@ -1865,7 +1865,7 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 		// `ifexist` chains an `else` but never an `elseif` -- there's no bool condition to continue from a
 		// component fetch (see candidatesFor, which only offers `else` there).
 		const DSLFlowControl chainControl = (chainHead != nullptr && chainHead->type == ST::FlowControl)
-			? std::get<DSLSymbol::FlowControl>(chainHead->data).control : DSLFlowControl::Break;
+			? oc::get<DSLSymbol::FlowControl>(chainHead->data).control : DSLFlowControl::Break;
 		const bool validBranch = chainControl == DSLFlowControl::If || chainControl == DSLFlowControl::ElseIf
 			|| (chainControl == DSLFlowControl::IfExist && chosen.kind == Candidate::Kind::KeywordElse);
 		if (!validBranch)
@@ -1959,12 +1959,12 @@ void ScriptEditor::confirmCompose(bool allowCommit)
 // builds its symbols through this one helper instead of each redefining an identical local lambda.
 DSLSymbol* ScriptEditor::pushSymbol(DSLCodeLine& line, DSLSymbol::SymbolType type, DSLSymbol::Data data)
 {
-	auto symbol = std::make_unique<DSLSymbol>();
+	auto symbol = oc::make_unique<DSLSymbol>();
 	symbol->type = type;
-	symbol->data = std::move(data);
+	symbol->data = oc::move(data);
 	symbol->line = &line;
 	DSLSymbol* ptr = symbol.get();
-	line.symbols.push_back(std::move(symbol));
+	line.symbols.push_back(oc::move(symbol));
 	return ptr;
 }
 
@@ -2001,12 +2001,12 @@ DSLSymbol* ScriptEditor::buildValueFromCandidate(const Candidate& candidate, DSL
 			DSLSymbol::VariableReference{ candidate.refSymbol != nullptr ? candidate.refSymbol : m_forBuildLoopVar });
 	case Candidate::Kind::Function:
 	{
-		const DSLSymbol::FunctionDeclaration& callee = std::get<DSLSymbol::FunctionDeclaration>(candidate.refSymbol->data);
-		std::vector<DSLSymbol::CallArgument> args;
+		const DSLSymbol::FunctionDeclaration& callee = oc::get<DSLSymbol::FunctionDeclaration>(candidate.refSymbol->data);
+		oc::vector<DSLSymbol::CallArgument> args;
 		for (DSLSymbol* param : callee.parameterVarDeclarations)
 		{
-			const DSLSymbol::VariableDeclaration& p = std::get<DSLSymbol::VariableDeclaration>(param->data);
-			const DSLType pType = std::get<DSLSymbol::TypeDeclaration>(p.typeSymbol->data).type;
+			const DSLSymbol::VariableDeclaration& p = oc::get<DSLSymbol::VariableDeclaration>(param->data);
+			const DSLType pType = oc::get<DSLSymbol::TypeDeclaration>(p.typeSymbol->data).type;
 			DSLSymbol* argPlaceholder = pushSymbol(line, ST::Placeholder, DSLSymbol::Placeholder{ pType });
 			// Positional builtins (vec3(...)) get parameter=nullptr slots -- named ones identify which
 			// parameter each fills, per CallArgument's convention (see DSL.ixx).
@@ -2037,8 +2037,8 @@ DSLSymbol* ScriptEditor::buildValueFromCandidate(const Candidate& candidate, DSL
 // (possibly multi-term, possibly containing parenthesized groups) expression `terms`/`ops` resolves the value;
 // failing that, the initializer is left as a placeholder rather than accepting whatever raw text was typed
 // verbatim -- "bla" must never become a Float constant just because it also isn't an existing variable.
-void ScriptEditor::applyDeclareVariable(const std::string& name, DSLType type, const std::vector<PendingExprTerm>& terms,
-	const std::vector<DSLOperator>& ops, DSLCodeLine& line)
+void ScriptEditor::applyDeclareVariable(const oc::string& name, DSLType type, const oc::vector<PendingExprTerm>& terms,
+	const oc::vector<DSLOperator>& ops, DSLCodeLine& line)
 {
 	line.symbols.clear();
 
@@ -2053,11 +2053,11 @@ void ScriptEditor::applyDeclareVariable(const std::string& name, DSLType type, c
 // symbol, so every VariableReference elsewhere keeps pointing at it -- the one thing applyDeclareVariable's
 // wholesale line rebuild could never do. An empty compose (nothing typed for the value) leaves a type-matched
 // placeholder, same tolerance as a brand-new declaration.
-void ScriptEditor::commitRedeclare(const std::vector<PendingExprTerm>& terms, const std::vector<DSLOperator>& ops)
+void ScriptEditor::commitRedeclare(const oc::vector<PendingExprTerm>& terms, const oc::vector<DSLOperator>& ops)
 {
 	DSLSymbol* target = m_redeclareTarget;
 	const DSLType type = m_pendingDeclareType;
-	const std::string name = m_pendingDeclareName;
+	const oc::string name = m_pendingDeclareName;
 	cancelCompose();
 	if (target == nullptr || target->line == nullptr)
 		return;
@@ -2065,7 +2065,7 @@ void ScriptEditor::commitRedeclare(const std::vector<PendingExprTerm>& terms, co
 	DSLSymbol* originalHead = line.head();
 
 	DSLSymbol* value = resolveValueOrPlaceholder(type, terms, ops, line);
-	DSLSymbol::VariableDeclaration& decl = std::get<DSLSymbol::VariableDeclaration>(target->data);
+	DSLSymbol::VariableDeclaration& decl = oc::get<DSLSymbol::VariableDeclaration>(target->data);
 	decl.name = name;
 	decl.initialValue = value;
 
@@ -2075,8 +2075,8 @@ void ScriptEditor::commitRedeclare(const std::vector<PendingExprTerm>& terms, co
 
 // See the declaration in ScriptEditor.ixx: shared by applyDeclareVariable, commitReassignStatement, and
 // commitForStatement's loop-variable init.
-DSLSymbol* ScriptEditor::resolveValueOrPlaceholder(DSLType type, const std::vector<PendingExprTerm>& terms,
-	const std::vector<DSLOperator>& ops, DSLCodeLine& line)
+DSLSymbol* ScriptEditor::resolveValueOrPlaceholder(DSLType type, const oc::vector<PendingExprTerm>& terms,
+	const oc::vector<DSLOperator>& ops, DSLCodeLine& line)
 {
 	if (!terms.empty())
 		return buildExpressionFromTerms(terms, ops, line);
@@ -2102,7 +2102,7 @@ DSLSymbol* ScriptEditor::buildExpressionTerm(const PendingExprTerm& term, DSLCod
 	DSLSymbol* built = buildExpressionFromTerms(term.groupTerms, term.groupOps, line);
 	if (built != nullptr && built->type == ST::Expression)
 	{
-		std::get<DSLSymbol::Expression>(built->data).grouped = true; // an inner lone group stays ONE level of parens, not doubled
+		oc::get<DSLSymbol::Expression>(built->data).grouped = true; // an inner lone group stays ONE level of parens, not doubled
 		return built;
 	}
 	return pushSymbol(line, ST::Expression, DSLSymbol::Expression{ { built }, {}, /*grouped*/ true });
@@ -2113,12 +2113,12 @@ DSLSymbol* ScriptEditor::buildExpressionTerm(const PendingExprTerm& term, DSLCod
 // over +, - at emit time; the stored structure only encodes explicit parens, via buildExpressionTerm's groups).
 // `terms` must be non-empty; a single PLAIN term returns unwrapped (no Expression node needed), while a single
 // GROUP keeps its parens (see buildExpressionTerm's comment).
-DSLSymbol* ScriptEditor::buildExpressionFromTerms(const std::vector<PendingExprTerm>& terms, const std::vector<DSLOperator>& ops, DSLCodeLine& line)
+DSLSymbol* ScriptEditor::buildExpressionFromTerms(const oc::vector<PendingExprTerm>& terms, const oc::vector<DSLOperator>& ops, DSLCodeLine& line)
 {
 	if (terms.size() == 1)
 		return buildExpressionTerm(terms[0], line); // plain value / resolved call unwrapped; a lone group KEEPS its parens
 
-	std::vector<DSLSymbol*> built;
+	oc::vector<DSLSymbol*> built;
 	built.reserve(terms.size());
 	for (const PendingExprTerm& term : terms)
 		built.push_back(buildExpressionTerm(term, line));
@@ -2128,7 +2128,7 @@ DSLSymbol* ScriptEditor::buildExpressionFromTerms(const std::vector<PendingExprT
 // Renders a single term back to text -- a plain candidate's display text, or (recursively) a fully-parenthesized
 // group. Used both to rebuild the live compose-box preview (exprComposePrefixFromStack) and, transitively, for
 // any groups nested inside a group.
-std::string ScriptEditor::exprTermText(const PendingExprTerm& term) const
+oc::string ScriptEditor::exprTermText(const PendingExprTerm& term) const
 {
 	if (!term.isGroup)
 	{
@@ -2139,11 +2139,11 @@ std::string ScriptEditor::exprTermText(const PendingExprTerm& term) const
 		// compose (this term is embedded in) itself commits.
 		if (!term.callArgs.empty())
 		{
-			const DSLSymbol::FunctionDeclaration& callee = std::get<DSLSymbol::FunctionDeclaration>(term.candidate.refSymbol->data);
-			std::string text = (term.candidate.receiver != nullptr
-				? std::get<DSLSymbol::VariableDeclaration>(term.candidate.receiver->data).name + "."
-					+ (term.candidate.receiverPath.empty() ? std::string() : term.candidate.receiverPath + ".")
-				: std::string())
+			const DSLSymbol::FunctionDeclaration& callee = oc::get<DSLSymbol::FunctionDeclaration>(term.candidate.refSymbol->data);
+			oc::string text = (term.candidate.receiver != nullptr
+				? oc::get<DSLSymbol::VariableDeclaration>(term.candidate.receiver->data).name + "."
+					+ (term.candidate.receiverPath.empty() ? oc::string() : term.candidate.receiverPath + ".")
+				: oc::string())
 				+ term.candidate.label + "(";
 			for (size_t i = 0; i < term.callArgs.size(); ++i)
 			{
@@ -2152,10 +2152,10 @@ std::string ScriptEditor::exprTermText(const PendingExprTerm& term) const
 				// Variadic extras sit past the declared parameters and show as bare positional values.
 				if (!callee.isPositionalCall && i < callee.parameterVarDeclarations.size())
 				{
-					const DSLSymbol::VariableDeclaration& param = std::get<DSLSymbol::VariableDeclaration>(callee.parameterVarDeclarations[i]->data);
+					const DSLSymbol::VariableDeclaration& param = oc::get<DSLSymbol::VariableDeclaration>(callee.parameterVarDeclarations[i]->data);
 					if (param.isRef)
 						text += "ref ";
-					text += std::string(dslTypeName(std::get<DSLSymbol::TypeDeclaration>(param.typeSymbol->data).type)) + " " + param.name + " = ";
+					text += oc::string(dslTypeName(oc::get<DSLSymbol::TypeDeclaration>(param.typeSymbol->data).type)) + " " + param.name + " = ";
 				}
 				text += chainDisplayText(term.callArgs[i]);
 			}
@@ -2163,28 +2163,28 @@ std::string ScriptEditor::exprTermText(const PendingExprTerm& term) const
 		}
 		return candidateDisplayText(term.candidate);
 	}
-	std::string inner;
+	oc::string inner;
 	for (size_t i = 0; i < term.groupTerms.size(); ++i)
 	{
 		if (i > 0)
-			inner += " " + std::string(dslOperatorText(term.groupOps[i - 1])) + " ";
+			inner += " " + oc::string(dslOperatorText(term.groupOps[i - 1])) + " ";
 		inner += exprTermText(term.groupTerms[i]);
 	}
 	return "(" + inner + ")";
 }
 
-std::string ScriptEditor::exprBasePrefixFor(ComposeMode mode) const
+oc::string ScriptEditor::exprBasePrefixFor(ComposeMode mode) const
 {
 	if (mode == ComposeMode::DeclareValue)
-		return std::string(dslTypeName(m_pendingDeclareType)) + " " + m_pendingDeclareName + " = ";
+		return oc::string(dslTypeName(m_pendingDeclareType)) + " " + m_pendingDeclareName + " = ";
 	if (mode == ComposeMode::ReassignValue && m_reassignTarget != nullptr)
 	{
 		// A widened re-edit keeps the existing statement's own operator (`thing += |`); the staged flow for a
 		// brand-new reassignment shows whatever the ReassignOp stage picked (plain `=` when it was skipped).
 		const char* opText = (m_reassignEditExpr != nullptr)
-			? dslOperatorText(std::get<DSLSymbol::Expression>(m_reassignEditExpr->data).operators[0])
+			? dslOperatorText(oc::get<DSLSymbol::Expression>(m_reassignEditExpr->data).operators[0])
 			: dslOperatorText(m_reassignOp);
-		std::string target = std::get<DSLSymbol::VariableDeclaration>(m_reassignTarget->data).name;
+		oc::string target = oc::get<DSLSymbol::VariableDeclaration>(m_reassignTarget->data).name;
 		if (!m_reassignMemberPath.empty())
 			target += "." + joinedMemberPath(m_reassignMemberPath); // a member-assign statement ("self.pos.x = ...")
 		return target + " " + opText + " ";
@@ -2192,7 +2192,7 @@ std::string ScriptEditor::exprBasePrefixFor(ComposeMode mode) const
 	// Inserting after an existing value: the compose box (which renders in place of the anchor's own span)
 	// keeps showing that anchor plus the operator that started the insert; a replacement shows segment only.
 	if (mode == ComposeMode::EditExpr && m_editInsert)
-		return m_editAnchorText + " " + std::string(dslOperatorText(m_editLeadOp)) + " ";
+		return m_editAnchorText + " " + oc::string(dslOperatorText(m_editLeadOp)) + " ";
 	if (mode == ComposeMode::ReturnValue)
 		return "return ";
 	// The staged flows' chain-composing value stages (see enterChainStage -- the prefix is always derived,
@@ -2220,19 +2220,19 @@ std::string ScriptEditor::exprBasePrefixFor(ComposeMode mode) const
 	// even when the SUSPENDED context being captured is itself another CallArgValue level (nested calls).
 	if (mode == ComposeMode::CallArgValue)
 		return callStagePrefix();
-	return std::string();
+	return oc::string();
 }
 
-std::string ScriptEditor::exprBasePrefix() const
+oc::string ScriptEditor::exprBasePrefix() const
 {
 	return exprBasePrefixFor(m_composeMode);
 }
 
-std::string ScriptEditor::conditionFlowBasePrefix() const
+oc::string ScriptEditor::conditionFlowBasePrefix() const
 {
 	return (m_conditionValueReturnMode != ComposeMode::None)
 		? exprBasePrefixFor(m_conditionValueReturnMode)
-		: std::string(conditionKeywordPrefix(m_conditionControl));
+		: oc::string(conditionKeywordPrefix(m_conditionControl));
 }
 
 DSLSymbol* ScriptEditor::conditionValueExcludeVariable() const
@@ -2260,22 +2260,22 @@ DSLSymbol* ScriptEditor::callArgExcludeVariable() const
 
 // See the declaration in ScriptEditor.ixx: the whole staged logical chain so far, ending in the dangling
 // &&/|| awaiting its next term -- "if i > 0 && ".
-std::string ScriptEditor::stagedConditionPrefix() const
+oc::string ScriptEditor::stagedConditionPrefix() const
 {
-	std::string text = conditionFlowBasePrefix();
+	oc::string text = conditionFlowBasePrefix();
 	for (size_t i = 0; i < m_logicalTerms.size(); ++i)
 	{
 		const PendingLogicalTerm& term = m_logicalTerms[i];
 		text += term.isComparison
 			? chainDisplayText(term.left) + " " + dslOperatorText(term.comparator) + " " + chainDisplayText(term.right)
 			: chainDisplayText(term.left);
-		text += std::string(" ") + dslOperatorText(m_logicalOps[i]) + " ";
+		text += oc::string(" ") + dslOperatorText(m_logicalOps[i]) + " ";
 	}
 	return text;
 }
 
 // See the declaration in ScriptEditor.ixx: one comparison/bare value, or the flat &&/|| chain of them.
-DSLSymbol* ScriptEditor::buildStagedBool(const std::vector<PendingLogicalTerm>& terms, const std::vector<DSLOperator>& ops,
+DSLSymbol* ScriptEditor::buildStagedBool(const oc::vector<PendingLogicalTerm>& terms, const oc::vector<DSLOperator>& ops,
 	const PendingLogicalTerm& finalTerm, DSLCodeLine& line)
 {
 	auto buildTerm = [&](const PendingLogicalTerm& term) -> DSLSymbol*
@@ -2287,7 +2287,7 @@ DSLSymbol* ScriptEditor::buildStagedBool(const std::vector<PendingLogicalTerm>& 
 		return pushSymbol(line, ST::Expression, DSLSymbol::Expression{ { left, right }, { term.comparator } });
 	};
 
-	std::vector<DSLSymbol*> built;
+	oc::vector<DSLSymbol*> built;
 	built.reserve(terms.size() + 1);
 	for (const PendingLogicalTerm& term : terms)
 		built.push_back(buildTerm(term));
@@ -2299,9 +2299,9 @@ DSLSymbol* ScriptEditor::buildStagedBool(const std::vector<PendingLogicalTerm>& 
 
 // See the declaration in ScriptEditor.ixx: rebuilt fresh from m_exprStack (+ m_exprPendingGroup, if any) after
 // every state change, forward or backward, instead of hand-patching m_composePrefix incrementally.
-std::string ScriptEditor::exprComposePrefixFromStack() const
+oc::string ScriptEditor::exprComposePrefixFromStack() const
 {
-	std::string text;
+	oc::string text;
 	for (size_t depth = 0; depth < m_exprStack.size(); ++depth)
 	{
 		if (depth > 0)
@@ -2310,11 +2310,11 @@ std::string ScriptEditor::exprComposePrefixFromStack() const
 		for (size_t i = 0; i < frame.terms.size(); ++i)
 		{
 			if (i > 0)
-				text += " " + std::string(dslOperatorText(frame.ops[i - 1])) + " ";
+				text += " " + oc::string(dslOperatorText(frame.ops[i - 1])) + " ";
 			text += exprTermText(frame.terms[i]);
 		}
 		if (!frame.ops.empty() && frame.ops.size() == frame.terms.size())
-			text += " " + std::string(dslOperatorText(frame.ops.back())) + " "; // dangling operator, awaiting the next term
+			text += " " + oc::string(dslOperatorText(frame.ops.back())) + " "; // dangling operator, awaiting the next term
 	}
 	if (m_exprHasPendingGroup)
 		text += exprTermText(m_exprPendingGroup);
@@ -2322,7 +2322,7 @@ std::string ScriptEditor::exprComposePrefixFromStack() const
 }
 
 // See the declaration in ScriptEditor.ixx.
-bool ScriptEditor::exprTryFinalize(std::vector<PendingExprTerm>& outTerms, std::vector<DSLOperator>& outOps)
+bool ScriptEditor::exprTryFinalize(oc::vector<PendingExprTerm>& outTerms, oc::vector<DSLOperator>& outOps)
 {
 	if (m_exprStack.size() != 1)
 		return false; // an open paren still needs to be closed first
@@ -2350,13 +2350,13 @@ bool ScriptEditor::exprTryFinalize(std::vector<PendingExprTerm>& outTerms, std::
 	return true;
 }
 
-std::string ScriptEditor::chainDisplayText(const PendingExprChain& chain) const
+oc::string ScriptEditor::chainDisplayText(const PendingExprChain& chain) const
 {
-	std::string text;
+	oc::string text;
 	for (size_t i = 0; i < chain.terms.size(); ++i)
 	{
 		if (i > 0)
-			text += " " + std::string(dslOperatorText(chain.ops[i - 1])) + " ";
+			text += " " + oc::string(dslOperatorText(chain.ops[i - 1])) + " ";
 		text += exprTermText(chain.terms[i]);
 	}
 	return text;
@@ -2372,12 +2372,12 @@ bool ScriptEditor::captureComposedChain(PendingExprChain& out)
 void ScriptEditor::restoreChainIntoCompose(const PendingExprChain& chain)
 {
 	ExprFrame frame{ chain.terms, chain.ops };
-	PendingExprTerm last = std::move(frame.terms.back());
+	PendingExprTerm last = oc::move(frame.terms.back());
 	frame.terms.pop_back();
-	m_exprStack.assign(1, std::move(frame));
+	m_exprStack.assign(1, oc::move(frame));
 	m_exprHasPendingGroup = false;
 	m_pendingWord.clear();
-	restoreTermIntoBox(std::move(last));
+	restoreTermIntoBox(oc::move(last));
 }
 
 // See the declaration in ScriptEditor.ixx.
@@ -2390,12 +2390,12 @@ bool ScriptEditor::tryRestoreMemberTermIntoMemberSelect(const PendingExprTerm& t
 	// the last segment re-walks as the receiver path; the last becomes the typed word, exactly the state the
 	// segment was confirmed from -- so '.' extends it, further Backspaces peel it apart segment by segment
 	// (MemberSelect's own ladder), and a confirm re-resolves it.
-	const std::string& path = term.candidate.label;
+	const oc::string& path = term.candidate.label;
 	const size_t lastDot = path.rfind('.');
 	enterMemberSelect(term.candidate.refSymbol);
-	if (lastDot != std::string::npos)
+	if (lastDot != oc::string::npos)
 		restoreMemberPath(path.substr(0, lastDot));
-	m_pendingWord = (lastDot == std::string::npos) ? path : path.substr(lastDot + 1);
+	m_pendingWord = (lastDot == oc::string::npos) ? path : path.substr(lastDot + 1);
 	refreshCandidates();
 	return true;
 }
@@ -2420,7 +2420,7 @@ void ScriptEditor::restoreTermIntoBox(PendingExprTerm&& term)
 	if (term.isGroup || !term.callArgs.empty()
 		|| term.candidate.receiver != nullptr || term.candidate.kind == Candidate::Kind::Member)
 	{
-		m_exprPendingGroup = std::move(term);
+		m_exprPendingGroup = oc::move(term);
 		m_exprHasPendingGroup = true;
 	}
 	else
@@ -2487,7 +2487,7 @@ PendingExprChain ScriptEditor::loopVarSeedChain() const
 	return seed;
 }
 
-DSLType ScriptEditor::resolveMemberType(DSLType receiverType, const std::string& name) const
+DSLType ScriptEditor::resolveMemberType(DSLType receiverType, const oc::string& name) const
 {
 	if (receiverType == DSLType::ScriptData)
 	{
@@ -2506,7 +2506,7 @@ bool ScriptEditor::isMemberPathWritable() const
 	if (m_memberReceiver == nullptr)
 		return true;
 	DSLType type = declaredTypeOf(m_memberReceiver);
-	for (const std::string& segment : m_memberPath)
+	for (const oc::string& segment : m_memberPath)
 	{
 		if (type == DSLType::ScriptData)
 		{
@@ -2534,7 +2534,7 @@ DSLType ScriptEditor::reassignTargetType() const
 		return DSLType::Void;
 	DSLType type = declaredTypeOf(m_reassignTarget);
 	// A member-assign statement's value composes against the written MEMBER's type, not the root's.
-	for (const std::string& segment : m_reassignMemberPath)
+	for (const oc::string& segment : m_reassignMemberPath)
 		type = resolveMemberType(type, segment);
 	return type;
 }
@@ -2544,14 +2544,14 @@ DSLType ScriptEditor::reassignTargetType() const
 // value-resolution rules (compound expression / placeholder fallback) and `terms`/`ops` convention as
 // applyDeclareVariable. Unlike a declaration, this doesn't open a block, so there's no body to seed -- lands
 // directly on the assignment itself.
-void ScriptEditor::commitReassignStatement(const std::vector<PendingExprTerm>& terms, const std::vector<DSLOperator>& ops)
+void ScriptEditor::commitReassignStatement(const oc::vector<PendingExprTerm>& terms, const oc::vector<DSLOperator>& ops)
 {
 	DSLCodeLine* linePtr = currentLineHeadOrCancel();
 	if (linePtr == nullptr)
 		return;
 	DSLCodeLine& line = *linePtr;
 	DSLSymbol* target = m_reassignTarget;
-	const std::string memberPath = joinedMemberPath(m_reassignMemberPath);
+	const oc::string memberPath = joinedMemberPath(m_reassignMemberPath);
 	const DSLType targetType = reassignTargetType();
 	const DSLOperator assignOp = m_reassignOp; // plain `=`, or the ReassignOp stage's compound pick ("i += 1")
 	cancelCompose();
@@ -2570,7 +2570,7 @@ void ScriptEditor::commitReassignStatement(const std::vector<PendingExprTerm>& t
 // Re-commits an EXISTING assignment statement edited through the widened Reassign flow (see
 // m_reassignEditExpr): ONLY the right-hand value swaps, in place -- the target reference and the statement's
 // own operator (which may be a compound +=/-=/... the staged flow never authors) stay exactly as they were.
-void ScriptEditor::commitReassignInPlace(const std::vector<PendingExprTerm>& terms, const std::vector<DSLOperator>& ops)
+void ScriptEditor::commitReassignInPlace(const oc::vector<PendingExprTerm>& terms, const oc::vector<DSLOperator>& ops)
 {
 	DSLSymbol* expr = m_reassignEditExpr;
 	const DSLType targetType = reassignTargetType();
@@ -2581,7 +2581,7 @@ void ScriptEditor::commitReassignInPlace(const std::vector<PendingExprTerm>& ter
 	DSLSymbol* originalHead = line.head();
 
 	DSLSymbol* value = resolveValueOrPlaceholder(targetType, terms, ops, line);
-	std::get<DSLSymbol::Expression>(expr->data).operands[1] = value;
+	oc::get<DSLSymbol::Expression>(expr->data).operands[1] = value;
 
 	restoreHeadAndCollect(line, originalHead);
 	selectExpressionTail(value);
@@ -2604,8 +2604,8 @@ void ScriptEditor::clearLineToBlankStatement(DSLCodeLine& line)
 // with a placeholder again", no special-casing needed for a multi-field statement.
 void ScriptEditor::applyConditionalStatement(const PendingLogicalTerm& finalTerm)
 {
-	const std::vector<PendingLogicalTerm> logicalTerms = m_logicalTerms; // captured -- cancelCompose clears them
-	const std::vector<DSLOperator> logicalOps = m_logicalOps;
+	const oc::vector<PendingLogicalTerm> logicalTerms = m_logicalTerms; // captured -- cancelCompose clears them
+	const oc::vector<DSLOperator> logicalOps = m_logicalOps;
 
 	// A NEW elseif branch (picked inside an if/elseif's own body -- see m_conditionChainHeader): the blank
 	// origin line is consumed and the header inserts AFTER the enclosing branch's block, at its level, with a
@@ -2671,8 +2671,8 @@ void ScriptEditor::applyConditionalStatement(const PendingLogicalTerm& finalTerm
 void ScriptEditor::commitBoolValue(const PendingLogicalTerm& finalTerm)
 {
 	const ComposeMode returnMode = m_conditionValueReturnMode;
-	const std::vector<PendingLogicalTerm> logicalTerms = m_logicalTerms; // captured -- cancelCompose clears them
-	const std::vector<DSLOperator> logicalOps = m_logicalOps;
+	const oc::vector<PendingLogicalTerm> logicalTerms = m_logicalTerms; // captured -- cancelCompose clears them
+	const oc::vector<DSLOperator> logicalOps = m_logicalOps;
 
 	auto buildComparison = [&](DSLCodeLine& line) -> DSLSymbol*
 	{
@@ -2684,14 +2684,14 @@ void ScriptEditor::commitBoolValue(const PendingLogicalTerm& finalTerm)
 		if (m_redeclareTarget != nullptr)
 		{
 			DSLSymbol* target = m_redeclareTarget;
-			const std::string name = m_pendingDeclareName;
+			const oc::string name = m_pendingDeclareName;
 			cancelCompose();
 			if (target->line == nullptr)
 				return;
 			DSLCodeLine& line = *target->line;
 			DSLSymbol* originalHead = line.head();
 			DSLSymbol* comparison = buildComparison(line);
-			DSLSymbol::VariableDeclaration& decl = std::get<DSLSymbol::VariableDeclaration>(target->data);
+			DSLSymbol::VariableDeclaration& decl = oc::get<DSLSymbol::VariableDeclaration>(target->data);
 			decl.name = name;
 			decl.initialValue = comparison;
 			restoreHeadAndCollect(line, originalHead);
@@ -2702,7 +2702,7 @@ void ScriptEditor::commitBoolValue(const PendingLogicalTerm& finalTerm)
 		if (linePtr == nullptr)
 			return;
 		DSLCodeLine& line = *linePtr;
-		const std::string name = m_pendingDeclareName;
+		const oc::string name = m_pendingDeclareName;
 		const DSLType type = m_pendingDeclareType;
 		cancelCompose();
 		line.symbols.clear();
@@ -2724,7 +2724,7 @@ void ScriptEditor::commitBoolValue(const PendingLogicalTerm& finalTerm)
 			DSLCodeLine& line = *expr->line;
 			DSLSymbol* originalHead = line.head();
 			DSLSymbol* comparison = buildComparison(line);
-			std::get<DSLSymbol::Expression>(expr->data).operands[1] = comparison;
+			oc::get<DSLSymbol::Expression>(expr->data).operands[1] = comparison;
 			restoreHeadAndCollect(line, originalHead);
 			selectExpressionTail(comparison);
 			return;
@@ -2769,7 +2769,7 @@ void ScriptEditor::commitBoolValue(const PendingLogicalTerm& finalTerm)
 	DSLSymbol* originalHead = line.head();
 	DSLSymbol* comparison = buildComparison(line);
 	if (chainExpr != nullptr)
-		std::get<DSLSymbol::Expression>(chainExpr->data).operands[operandIndex] = comparison;
+		oc::get<DSLSymbol::Expression>(chainExpr->data).operands[operandIndex] = comparison;
 	else
 		writeSlot(slot, comparison);
 	restoreHeadAndCollect(line, originalHead);
@@ -2800,7 +2800,7 @@ void ScriptEditor::applyElseStatement(DSLSymbol* chainHead, DSLCodeLine& originL
 		const DSLSymbol* nextHead = lines[next]->head();
 		if (nextHead == nullptr || nextHead->type != ST::FlowControl)
 			break;
-		const DSLFlowControl control = std::get<DSLSymbol::FlowControl>(nextHead->data).control;
+		const DSLFlowControl control = oc::get<DSLSymbol::FlowControl>(nextHead->data).control;
 		if (control != DSLFlowControl::ElseIf && control != DSLFlowControl::Else)
 			break;
 		branchIndex = next;
@@ -2814,37 +2814,37 @@ void ScriptEditor::applyElseStatement(DSLSymbol* chainHead, DSLCodeLine& originL
 // "function name(type0 name0, type1 name1" -- rebuilt from the pending declare-function state on every stage
 // transition (including step-back), rather than hand-appended piecewise, so the compose box can never drift
 // out of sync with what's actually been resolved so far.
-std::string ScriptEditor::functionDeclarePrefix() const
+oc::string ScriptEditor::functionDeclarePrefix() const
 {
-	std::string text = "function " + m_pendingFunctionName + "(";
+	oc::string text = "function " + m_pendingFunctionName + "(";
 	for (size_t i = 0; i < m_pendingParamNames.size(); ++i)
 	{
 		if (i > 0)
 			text += ", ";
 		if (m_pendingParamRefs[i])
 			text += "ref ";
-		text += std::string(dslTypeName(m_pendingParamTypes[i])) + " " + m_pendingParamNames[i];
+		text += oc::string(dslTypeName(m_pendingParamTypes[i])) + " " + m_pendingParamNames[i];
 	}
 	return text;
 }
 
 // The TYPE stage's lead-in: everything resolved so far, plus this parameter's own "ref " once picked (the type
 // itself is what's being composed, so it isn't part of the prefix yet).
-std::string ScriptEditor::paramTypeStagePrefix() const
+oc::string ScriptEditor::paramTypeStagePrefix() const
 {
 	return functionDeclarePrefix() + (m_pendingParamNames.empty() ? "" : ", ") + (m_pendingParamRef ? "ref " : "");
 }
 
-std::string ScriptEditor::currentParamPrefix() const
+oc::string ScriptEditor::currentParamPrefix() const
 {
 	return paramTypeStagePrefix() + dslTypeName(m_pendingParamType) + " ";
 }
 
-bool ScriptEditor::isPendingParamNameTaken(const std::string& name) const
+bool ScriptEditor::isPendingParamNameTaken(const oc::string& name) const
 {
 	if (AutoCompleteRules::isReservedWord(name))
 		return true;
-	for (const std::string& existing : m_pendingParamNames)
+	for (const oc::string& existing : m_pendingParamNames)
 		if (existing == name)
 			return true;
 	return false;
@@ -2868,15 +2868,15 @@ void ScriptEditor::commitFunctionDeclaration()
 	if (linePtr == nullptr)
 		return;
 	DSLCodeLine& line = *linePtr;
-	const std::string name = m_pendingFunctionName;
-	const std::vector<DSLType> paramTypes = m_pendingParamTypes;
-	const std::vector<std::string> paramNames = m_pendingParamNames;
+	const oc::string name = m_pendingFunctionName;
+	const oc::vector<DSLType> paramTypes = m_pendingParamTypes;
+	const oc::vector<oc::string> paramNames = m_pendingParamNames;
 	const DSLType returnType = m_pendingReturnType;
 	cancelCompose();
 
 	line.symbols.clear();
 
-	std::vector<DSLSymbol*> params;
+	oc::vector<DSLSymbol*> params;
 	for (size_t i = 0; i < paramNames.size(); ++i)
 	{
 		DSLSymbol* typeDecl = pushSymbol(line, ST::TypeDeclaration, DSLSymbol::TypeDeclaration{ paramTypes[i] });
@@ -2903,11 +2903,11 @@ void ScriptEditor::commitFunctionRedeclare()
 		cancelCompose();
 		return;
 	}
-	DSLSymbol::FunctionDeclaration& f = std::get<DSLSymbol::FunctionDeclaration>(funcSymbol->data);
+	DSLSymbol::FunctionDeclaration& f = oc::get<DSLSymbol::FunctionDeclaration>(funcSymbol->data);
 	auto paramTypeOf = [](const DSLSymbol* param) -> DSLType
 	{
-		const DSLSymbol::VariableDeclaration& d = std::get<DSLSymbol::VariableDeclaration>(param->data);
-		return std::get<DSLSymbol::TypeDeclaration>(d.typeSymbol->data).type;
+		const DSLSymbol::VariableDeclaration& d = oc::get<DSLSymbol::VariableDeclaration>(param->data);
+		return oc::get<DSLSymbol::TypeDeclaration>(d.typeSymbol->data).type;
 	};
 
 	// Guards run BEFORE anything mutates or the compose ends -- a refusal keeps the flow alive.
@@ -2928,21 +2928,21 @@ void ScriptEditor::commitFunctionRedeclare()
 			return; // the body still uses a parameter this edit would remove/retype
 	}
 
-	const std::string name = m_pendingFunctionName;
-	const std::vector<DSLType> paramTypes = m_pendingParamTypes;
-	const std::vector<std::string> paramNames = m_pendingParamNames;
-	const std::vector<bool> paramRefs = m_pendingParamRefs;
+	const oc::string name = m_pendingFunctionName;
+	const oc::vector<DSLType> paramTypes = m_pendingParamTypes;
+	const oc::vector<oc::string> paramNames = m_pendingParamNames;
+	const oc::vector<bool> paramRefs = m_pendingParamRefs;
 	const DSLType returnType = m_pendingReturnType;
 	cancelCompose();
 
 	DSLSymbol* originalHead = line.head();
-	std::vector<DSLSymbol*> params;
+	oc::vector<DSLSymbol*> params;
 	for (size_t i = 0; i < paramTypes.size(); ++i)
 	{
 		DSLSymbol* existing = (i < oldCount) ? f.parameterVarDeclarations[i] : nullptr;
 		if (existing != nullptr && paramTypeOf(existing) == paramTypes[i])
 		{
-			DSLSymbol::VariableDeclaration& d = std::get<DSLSymbol::VariableDeclaration>(existing->data);
+			DSLSymbol::VariableDeclaration& d = oc::get<DSLSymbol::VariableDeclaration>(existing->data);
 			d.name = paramNames[i];
 			d.isRef = paramRefs[i];
 			params.push_back(existing);
@@ -2968,33 +2968,33 @@ void ScriptEditor::commitFunctionRedeclare()
 DSLType ScriptEditor::currentCallParamType() const
 {
 	const CallStage& stage = m_callStack.back();
-	const DSLSymbol::FunctionDeclaration& callee = std::get<DSLSymbol::FunctionDeclaration>(stage.func->data);
+	const DSLSymbol::FunctionDeclaration& callee = oc::get<DSLSymbol::FunctionDeclaration>(stage.func->data);
 	// Past the declared parameters = a variadic callee's tail, which constrains nothing: Void here means "any
 	// value" to refreshCandidates (see its CallArgValue case), not "statement slot".
 	if (stage.argChains.size() >= callee.parameterVarDeclarations.size())
 		return DSLType::Void;
-	const DSLSymbol::VariableDeclaration& param = std::get<DSLSymbol::VariableDeclaration>(
+	const DSLSymbol::VariableDeclaration& param = oc::get<DSLSymbol::VariableDeclaration>(
 		callee.parameterVarDeclarations[stage.argChains.size()]->data);
-	return std::get<DSLSymbol::TypeDeclaration>(param.typeSymbol->data).type;
+	return oc::get<DSLSymbol::TypeDeclaration>(param.typeSymbol->data).type;
 }
 
 // "name(param0 = <resolved>, param1 = " -- rebuilt from the staged-call state (m_callStack.back()) on every
 // stage transition (including step-back), same never-hand-patched convention as functionDeclarePrefix.
 // Positional builtins (vec3 as a statement) skip the "name = " labels, matching how their calls render.
-std::string ScriptEditor::callComposePrefix() const
+oc::string ScriptEditor::callComposePrefix() const
 {
 	const CallStage& stage = m_callStack.back();
-	const DSLSymbol::FunctionDeclaration& callee = std::get<DSLSymbol::FunctionDeclaration>(stage.func->data);
-	std::string text = (stage.receiver != nullptr
-		? std::get<DSLSymbol::VariableDeclaration>(stage.receiver->data).name + "."
-			+ (stage.receiverPath.empty() ? std::string() : stage.receiverPath + ".")
-		: std::string())
+	const DSLSymbol::FunctionDeclaration& callee = oc::get<DSLSymbol::FunctionDeclaration>(stage.func->data);
+	oc::string text = (stage.receiver != nullptr
+		? oc::get<DSLSymbol::VariableDeclaration>(stage.receiver->data).name + "."
+			+ (stage.receiverPath.empty() ? oc::string() : stage.receiverPath + ".")
+		: oc::string())
 		+ callee.name + "(";
 	// A variadic callee's tail has no declared parameters to cap this at -- every resolved argument shows, plus
 	// the slot being composed.
 	const size_t declaredCount = callee.parameterVarDeclarations.size();
 	const size_t shownParams = callee.isVariadic
-		? stage.argChains.size() + 1 : std::min(stage.argChains.size() + 1, declaredCount);
+		? stage.argChains.size() + 1 : oc::min(stage.argChains.size() + 1, declaredCount);
 	for (size_t i = 0; i < shownParams; ++i)
 	{
 		if (i > 0)
@@ -3002,12 +3002,12 @@ std::string ScriptEditor::callComposePrefix() const
 		// Variadic extras are positional (no declaration behind them), so they show as bare values.
 		if (!callee.isPositionalCall && i < declaredCount)
 		{
-			const DSLSymbol::VariableDeclaration& param = std::get<DSLSymbol::VariableDeclaration>(callee.parameterVarDeclarations[i]->data);
+			const DSLSymbol::VariableDeclaration& param = oc::get<DSLSymbol::VariableDeclaration>(callee.parameterVarDeclarations[i]->data);
 			if (param.isRef)
 				text += "ref ";
 			// Matches the committed call's own non-compact rendering (Syntax::renderSymbol's FunctionCall
 			// case): "[ref] type name = ", not just the bare name.
-			text += std::string(dslTypeName(std::get<DSLSymbol::TypeDeclaration>(param.typeSymbol->data).type)) + " " + param.name + " = ";
+			text += oc::string(dslTypeName(oc::get<DSLSymbol::TypeDeclaration>(param.typeSymbol->data).type)) + " " + param.name + " = ";
 		}
 		if (i < stage.argChains.size())
 			text += chainDisplayText(stage.argChains[i]);
@@ -3017,12 +3017,12 @@ std::string ScriptEditor::callComposePrefix() const
 
 // The CURRENT call stage's own full lead-in: whatever context it was staged FROM (cached once at push, see
 // CallStage::outerLeadText) plus this call's own "name(args so far" text.
-std::string ScriptEditor::callStagePrefix() const
+oc::string ScriptEditor::callStagePrefix() const
 {
 	return m_callStack.back().outerLeadText + callComposePrefix();
 }
 
-std::string ScriptEditor::chainLeadTextFor(ComposeMode mode) const
+oc::string ScriptEditor::chainLeadTextFor(ComposeMode mode) const
 {
 	return exprBasePrefixFor(mode); // covers CallArgValue too (see its own case there)
 }
@@ -3039,7 +3039,7 @@ bool ScriptEditor::tryBeginValueCallStaging(bool requireTypedText)
 		return false;
 
 	// Captured BEFORE the save/reset below, while m_exprStack/m_composeMode still reflect what's being suspended.
-	const std::string outerLead = chainLeadTextFor(m_composeMode) + exprComposePrefixFromStack();
+	const oc::string outerLead = chainLeadTextFor(m_composeMode) + exprComposePrefixFromStack();
 
 	CallStage& stage = m_callStack.emplace_back();
 	stage.func = picked->refSymbol;
@@ -3047,8 +3047,8 @@ bool ScriptEditor::tryBeginValueCallStaging(bool requireTypedText)
 	stage.receiverPath = picked->receiverPath;
 	stage.returnMode = m_composeMode;
 	stage.outerLeadText = outerLead;
-	stage.savedExprStack = std::move(m_exprStack);
-	stage.savedPendingGroup = std::move(m_exprPendingGroup);
+	stage.savedExprStack = oc::move(m_exprStack);
+	stage.savedPendingGroup = oc::move(m_exprPendingGroup);
 	stage.savedHasPendingGroup = m_exprHasPendingGroup;
 	m_exprStack.assign(1, ExprFrame{});
 	m_exprHasPendingGroup = false;
@@ -3117,17 +3117,17 @@ DSLType ScriptEditor::valueContextExpectedType(ComposeMode mode, bool& outAnyVal
 // receiver's member/function list; the current stage suspends exactly like the call-value sub-flow.
 // Re-applies a dotted member path onto a just-entered MemberSelect (the reverse of the '.'-extension steps) --
 // how an abandoned chained dot-call staging ("self.pos.length(|" backspaced empty) reopens at its member list.
-void ScriptEditor::restoreMemberPath(const std::string& dottedPath)
+void ScriptEditor::restoreMemberPath(const oc::string& dottedPath)
 {
 	size_t start = 0;
 	while (start < dottedPath.size())
 	{
 		const size_t dot = dottedPath.find('.', start);
-		const std::string segment = dottedPath.substr(start, dot == std::string::npos ? std::string::npos : dot - start);
+		const oc::string segment = dottedPath.substr(start, dot == oc::string::npos ? oc::string::npos : dot - start);
 		m_memberPath.push_back(segment);
 		m_memberReceiverType = resolveMemberType(m_memberReceiverType, segment);
 		m_composePrefix += segment + ".";
-		if (dot == std::string::npos)
+		if (dot == oc::string::npos)
 			break;
 		start = dot + 1;
 	}
@@ -3140,13 +3140,13 @@ void ScriptEditor::enterMemberSelect(DSLSymbol* receiverDecl)
 	m_memberReceiverType = declaredTypeOf(receiverDecl);
 	m_memberReturnMode = m_composeMode;
 	m_memberExpectedType = valueContextExpectedType(m_composeMode, m_memberAnyValue);
-	const std::string& name = std::get<DSLSymbol::VariableDeclaration>(receiverDecl->data).name;
+	const oc::string& name = oc::get<DSLSymbol::VariableDeclaration>(receiverDecl->data).name;
 	enterCompose(ComposeMode::MemberSelect, m_composePrefix + name + ".");
 }
 
 // See the declaration in ScriptEditor.ixx: the fully-staged arguments become real CallArgument values -- a
 // picked candidate or a complete vector component list each, never a placeholder.
-DSLSymbol* ScriptEditor::buildReceiverChain(DSLSymbol* rootDecl, const std::string& dottedPath, DSLCodeLine& line)
+DSLSymbol* ScriptEditor::buildReceiverChain(DSLSymbol* rootDecl, const oc::string& dottedPath, DSLCodeLine& line)
 {
 	DSLSymbol* current = pushSymbol(line, ST::VariableReference, DSLSymbol::VariableReference{ rootDecl });
 	DSLType currentType = declaredTypeOf(rootDecl);
@@ -3154,22 +3154,22 @@ DSLSymbol* ScriptEditor::buildReceiverChain(DSLSymbol* rootDecl, const std::stri
 	while (start < dottedPath.size())
 	{
 		const size_t dot = dottedPath.find('.', start);
-		const std::string name = dottedPath.substr(start, dot == std::string::npos ? std::string::npos : dot - start);
+		const oc::string name = dottedPath.substr(start, dot == oc::string::npos ? oc::string::npos : dot - start);
 		const DSLType memberType = resolveMemberType(currentType, name);
 		current = pushSymbol(line, ST::MemberAccess, DSLSymbol::MemberAccess{ current, name, memberType });
 		currentType = memberType;
-		if (dot == std::string::npos)
+		if (dot == oc::string::npos)
 			break;
 		start = dot + 1;
 	}
 	return current;
 }
 
-DSLSymbol* ScriptEditor::buildCallFromStagedArgs(DSLSymbol* funcSymbol, DSLSymbol* receiverDecl, const std::string& receiverPath,
-	const std::vector<PendingExprChain>& argChains, DSLCodeLine& line)
+DSLSymbol* ScriptEditor::buildCallFromStagedArgs(DSLSymbol* funcSymbol, DSLSymbol* receiverDecl, const oc::string& receiverPath,
+	const oc::vector<PendingExprChain>& argChains, DSLCodeLine& line)
 {
-	const DSLSymbol::FunctionDeclaration& callee = std::get<DSLSymbol::FunctionDeclaration>(funcSymbol->data);
-	std::vector<DSLSymbol::CallArgument> args;
+	const DSLSymbol::FunctionDeclaration& callee = oc::get<DSLSymbol::FunctionDeclaration>(funcSymbol->data);
+	oc::vector<DSLSymbol::CallArgument> args;
 	for (size_t i = 0; i < argChains.size(); ++i)
 	{
 		DSLSymbol* value = buildExpressionFromTerms(argChains[i].terms, argChains[i].ops, line);
@@ -3189,26 +3189,26 @@ DSLSymbol* ScriptEditor::buildCallFromStagedArgs(DSLSymbol* funcSymbol, DSLSymbo
 // guarantee as every other staged statement.
 void ScriptEditor::commitCallStatement()
 {
-	CallStage stage = std::move(m_callStack.back());
+	CallStage stage = oc::move(m_callStack.back());
 	m_callStack.pop_back();
 
 	if (stage.returnMode != ComposeMode::None)
 	{
 		const ComposeMode back = stage.returnMode;
 		PendingExprTerm term;
-		term.candidate = Candidate{ std::get<DSLSymbol::FunctionDeclaration>(stage.func->data).name,
+		term.candidate = Candidate{ oc::get<DSLSymbol::FunctionDeclaration>(stage.func->data).name,
 			Candidate::Kind::Function, stage.func };
 		term.candidate.receiver = stage.receiver;
 		term.candidate.receiverPath = stage.receiverPath;
-		term.callArgs = std::move(stage.argChains);
+		term.callArgs = oc::move(stage.argChains);
 
 		// Resume the SUSPENDED context (restoring ITS OWN m_exprStack, frozen since this call's staging
 		// began) with the resolved call as the pending term, exactly like a group's ')' just closed.
-		m_exprStack = std::move(stage.savedExprStack);
-		m_exprPendingGroup = std::move(stage.savedPendingGroup);
+		m_exprStack = oc::move(stage.savedExprStack);
+		m_exprPendingGroup = oc::move(stage.savedPendingGroup);
 		m_exprHasPendingGroup = stage.savedHasPendingGroup;
 		enterCompose(back, "");
-		m_exprPendingGroup = std::move(term);
+		m_exprPendingGroup = oc::move(term);
 		m_exprHasPendingGroup = true;
 		m_candidates.clear(); // nothing is being typed right after the resolved call -- operators continue it
 		m_composePrefix = chainLeadTextFor(back) + exprComposePrefixFromStack();
@@ -3223,8 +3223,8 @@ void ScriptEditor::commitCallStatement()
 	DSLCodeLine& line = *linePtr;
 	DSLSymbol* func = stage.func;
 	DSLSymbol* receiver = stage.receiver;
-	const std::string receiverPath = stage.receiverPath;
-	const std::vector<PendingExprChain> argChains = std::move(stage.argChains);
+	const oc::string receiverPath = stage.receiverPath;
+	const oc::vector<PendingExprChain> argChains = oc::move(stage.argChains);
 	cancelCompose();
 
 	line.symbols.clear();
@@ -3233,36 +3233,36 @@ void ScriptEditor::commitCallStatement()
 }
 
 // "for <type> <name> = " -- everything up to (not including) the loop variable's own initial value.
-std::string ScriptEditor::forVarPrefix() const
+oc::string ScriptEditor::forVarPrefix() const
 {
-	return "for " + std::string(dslTypeName(m_forVarType)) + " " + m_forVarName + " = ";
+	return "for " + oc::string(dslTypeName(m_forVarType)) + " " + m_forVarName + " = ";
 }
 
 // "foreach <type> <name> in " -- everything up to (not including) the sequence being composed.
 // The TYPE stages' lead-ins: the keyword plus this binding's own "ref " once picked (the type itself is what's
 // being composed, so it isn't part of the prefix yet) -- the same shape paramTypeStagePrefix has.
-std::string ScriptEditor::forEachTypeStagePrefix() const
+oc::string ScriptEditor::forEachTypeStagePrefix() const
 {
-	return std::string("foreach ") + (m_forEachRef ? "ref " : "");
+	return oc::string("foreach ") + (m_forEachRef ? "ref " : "");
 }
 
-std::string ScriptEditor::ifExistTypeStagePrefix() const
+oc::string ScriptEditor::ifExistTypeStagePrefix() const
 {
-	return std::string("ifexist ") + (m_ifExistRef ? "ref " : "");
+	return oc::string("ifexist ") + (m_ifExistRef ? "ref " : "");
 }
 
-std::string ScriptEditor::forEachPrefix() const
+oc::string ScriptEditor::forEachPrefix() const
 {
 	return forEachTypeStagePrefix() + dslTypeName(m_forEachElementType) + " " + m_forEachElementName + " in ";
 }
 
-std::string ScriptEditor::ifExistPrefix() const
+oc::string ScriptEditor::ifExistPrefix() const
 {
-	return "ifexist " + std::string(m_ifExistRef ? "ref " : "") + dslTypeName(m_ifExistType) + " "
+	return "ifexist " + oc::string(m_ifExistRef ? "ref " : "") + dslTypeName(m_ifExistType) + " "
 		+ m_ifExistName + " in ";
 }
 
-std::string ScriptEditor::ifExistKeyPrefix() const
+oc::string ScriptEditor::ifExistKeyPrefix() const
 {
 	return ifExistPrefix() + chainDisplayText(m_ifExistContainerChain) + " at ";
 }
@@ -3285,7 +3285,7 @@ void ScriptEditor::commitIfExistStatement(const PendingExprChain& key)
 	DSLCodeLine& line = *linePtr;
 	DSLSymbol* existingBoundVar = m_flowEditLoopVar;
 	const DSLType elementType = m_ifExistType;
-	const std::string elementName = m_ifExistName;
+	const oc::string elementName = m_ifExistName;
 	const bool isRef = m_ifExistRef;
 	const bool reAuthoring = m_flowEditLine != nullptr;
 	const PendingExprChain container = m_ifExistContainerChain;
@@ -3315,18 +3315,18 @@ void ScriptEditor::commitIfExistStatement(const PendingExprChain& key)
 // body statements reference it -- so it's mutated in place on the SAME FlowControl head rather than rebuilt,
 // and its TYPE stays fixed for the same reason (the type stage is never re-entered on a re-edit, see
 // m_flowEditLoopVar). Everything the old source/key left behind is swept by the reachability pass.
-void ScriptEditor::rebuildBoundHeaderSource(DSLCodeLine& line, DSLSymbol* boundVar, const std::string& boundName,
+void ScriptEditor::rebuildBoundHeaderSource(DSLCodeLine& line, DSLSymbol* boundVar, const oc::string& boundName,
 	bool boundIsRef, const PendingExprChain& source, const PendingExprChain* key)
 {
 	DSLSymbol* originalHead = line.head();
 	if (originalHead == nullptr || originalHead->type != ST::FlowControl)
 		return;
-	std::get<DSLSymbol::VariableDeclaration>(boundVar->data).name = boundName;
-	std::get<DSLSymbol::VariableDeclaration>(boundVar->data).isRef = boundIsRef;
+	oc::get<DSLSymbol::VariableDeclaration>(boundVar->data).name = boundName;
+	oc::get<DSLSymbol::VariableDeclaration>(boundVar->data).isRef = boundIsRef;
 	DSLSymbol* sourceValue = buildExpressionFromTerms(source.terms, source.ops, line);
 	DSLSymbol* keyValue = (key != nullptr && !key->terms.empty())
 		? buildExpressionFromTerms(key->terms, key->ops, line) : nullptr;
-	DSLSymbol::FlowControl& fc = std::get<DSLSymbol::FlowControl>(originalHead->data);
+	DSLSymbol::FlowControl& fc = oc::get<DSLSymbol::FlowControl>(originalHead->data);
 	fc.condition = sourceValue;
 	fc.forCondition = keyValue;
 	restoreHeadAndCollect(line, originalHead);
@@ -3354,7 +3354,7 @@ void ScriptEditor::commitForEachStatement(const PendingExprChain& sequence)
 	DSLCodeLine& line = *linePtr;
 	DSLSymbol* existingElementVar = m_flowEditLoopVar;
 	const DSLType elementType = m_forEachElementType;
-	const std::string elementName = m_forEachElementName;
+	const oc::string elementName = m_forEachElementName;
 	const bool elementIsRef = m_forEachRef;
 	const bool reAuthoring = m_flowEditLine != nullptr;
 	cancelCompose();
@@ -3379,14 +3379,14 @@ void ScriptEditor::commitForEachStatement(const PendingExprChain& sequence)
 // forVarPrefix() + the resolved initial value (a possibly-compound chain) -- the whole loop-variable clause,
 // exactly as it'll read once committed. Only ever called after ForVarValue has confirmed, so the init chain is
 // always meaningful by then.
-std::string ScriptEditor::forVarDeclPrefix() const
+oc::string ScriptEditor::forVarDeclPrefix() const
 {
 	return forVarPrefix() + chainDisplayText(m_forVarInitChain);
 }
 
 // forVarDeclPrefix() + ", <left> <op> <value>" -- the whole condition clause too, once resolved (both sides
 // possibly-compound chains, e.g. "i + 2 < n * 2").
-std::string ScriptEditor::forConditionPrefix() const
+oc::string ScriptEditor::forConditionPrefix() const
 {
 	return forVarDeclPrefix() + ", " + chainDisplayText(m_forConditionLeftChain) + " "
 		+ m_forConditionOpCandidate.label + " " + chainDisplayText(m_forConditionValueChain);
@@ -3408,7 +3408,7 @@ void ScriptEditor::commitForStatement()
 	DSLCodeLine& line = *linePtr;
 	DSLSymbol* existingLoopVar = m_flowEditLoopVar;
 	const DSLType varType = m_forVarType;
-	const std::string varName = m_forVarName;
+	const oc::string varName = m_forVarName;
 	const PendingExprChain initChain = m_forVarInitChain;
 	const PendingExprChain conditionLeftChain = m_forConditionLeftChain;
 	const Candidate conditionOpCandidate = m_forConditionOpCandidate;
@@ -3425,7 +3425,7 @@ void ScriptEditor::commitForStatement()
 		// the SAME FlowControl head, everything superseded swept by the reachability pass.
 		DSLSymbol* originalHead = line.head();
 		m_forBuildLoopVar = existingLoopVar; // sentinel loop-var candidates in the chains resolve to it
-		DSLSymbol::VariableDeclaration& decl = std::get<DSLSymbol::VariableDeclaration>(existingLoopVar->data);
+		DSLSymbol::VariableDeclaration& decl = oc::get<DSLSymbol::VariableDeclaration>(existingLoopVar->data);
 		decl.name = varName;
 		decl.initialValue = resolveValueOrPlaceholder(varType, initChain.terms, initChain.ops, line);
 
@@ -3437,7 +3437,7 @@ void ScriptEditor::commitForStatement()
 		DSLSymbol* increment = pushSymbol(line, ST::Expression, DSLSymbol::Expression{ { incrLeft, incrRight }, { incrementOpCandidate.op } });
 		m_forBuildLoopVar = nullptr;
 
-		DSLSymbol::FlowControl& fc = std::get<DSLSymbol::FlowControl>(originalHead->data);
+		DSLSymbol::FlowControl& fc = oc::get<DSLSymbol::FlowControl>(originalHead->data);
 		fc.forCondition = condition;
 		fc.forIncrement = increment;
 
@@ -3518,26 +3518,26 @@ namespace
 	// Every symbol reachable from `symbol` through the structural cross-reference fields (see DSL.ixx's
 	// ownership model). Cross-line/builtin targets get marked too -- harmless, since the sweep below only ever
 	// erases symbols owned by the ONE line being collected. Linear lookup: lines own a few dozen symbols at most.
-	void markReachable(const DSLSymbol* symbol, std::vector<const DSLSymbol*>& reachable)
+	void markReachable(const DSLSymbol* symbol, oc::vector<const DSLSymbol*>& reachable)
 	{
-		if (symbol == nullptr || std::find(reachable.begin(), reachable.end(), symbol) != reachable.end())
+		if (symbol == nullptr || oc::find(reachable.begin(), reachable.end(), symbol) != reachable.end())
 			return;
 		reachable.push_back(symbol);
 		switch (symbol->type)
 		{
 		case ST::VariableReference:
-			markReachable(std::get<DSLSymbol::VariableReference>(symbol->data).declaration, reachable);
+			markReachable(oc::get<DSLSymbol::VariableReference>(symbol->data).declaration, reachable);
 			break;
 		case ST::VariableDeclaration:
 		{
-			const DSLSymbol::VariableDeclaration& v = std::get<DSLSymbol::VariableDeclaration>(symbol->data);
+			const DSLSymbol::VariableDeclaration& v = oc::get<DSLSymbol::VariableDeclaration>(symbol->data);
 			markReachable(v.typeSymbol, reachable);
 			markReachable(v.initialValue, reachable);
 			break;
 		}
 		case ST::FunctionCall:
 		{
-			const DSLSymbol::FunctionCall& call = std::get<DSLSymbol::FunctionCall>(symbol->data);
+			const DSLSymbol::FunctionCall& call = oc::get<DSLSymbol::FunctionCall>(symbol->data);
 			markReachable(call.functionSymbol, reachable);
 			markReachable(call.receiver, reachable);
 			for (const DSLSymbol::CallArgument& arg : call.arguments)
@@ -3548,12 +3548,12 @@ namespace
 			break;
 		}
 		case ST::FunctionDeclaration:
-			for (DSLSymbol* param : std::get<DSLSymbol::FunctionDeclaration>(symbol->data).parameterVarDeclarations)
+			for (DSLSymbol* param : oc::get<DSLSymbol::FunctionDeclaration>(symbol->data).parameterVarDeclarations)
 				markReachable(param, reachable);
 			break;
 		case ST::FlowControl:
 		{
-			const DSLSymbol::FlowControl& fc = std::get<DSLSymbol::FlowControl>(symbol->data);
+			const DSLSymbol::FlowControl& fc = oc::get<DSLSymbol::FlowControl>(symbol->data);
 			markReachable(fc.condition, reachable);
 			markReachable(fc.forLoopVar, reachable);
 			markReachable(fc.forCondition, reachable);
@@ -3561,11 +3561,11 @@ namespace
 			break;
 		}
 		case ST::Expression:
-			for (DSLSymbol* operand : std::get<DSLSymbol::Expression>(symbol->data).operands)
+			for (DSLSymbol* operand : oc::get<DSLSymbol::Expression>(symbol->data).operands)
 				markReachable(operand, reachable);
 			break;
 		case ST::MemberAccess:
-			markReachable(std::get<DSLSymbol::MemberAccess>(symbol->data).receiver, reachable);
+			markReachable(oc::get<DSLSymbol::MemberAccess>(symbol->data).receiver, reachable);
 			break;
 		default:
 			break; // Constant/TypeDeclaration/Placeholder hold no cross-references
@@ -3580,20 +3580,20 @@ namespace
 	// Walks a receiver expression (a VariableReference, or a MemberAccess chain over one) down to its ROOT
 	// declaration, collecting the dotted member path ("" when `symbol` IS the plain reference). False = any
 	// other shape (nothing else is a legal receiver).
-	bool receiverChainToRoot(const DSLSymbol* symbol, DSLSymbol*& outRootDecl, std::string& outPath)
+	bool receiverChainToRoot(const DSLSymbol* symbol, DSLSymbol*& outRootDecl, oc::string& outPath)
 	{
-		std::string path;
+		oc::string path;
 		const DSLSymbol* current = symbol;
 		while (current != nullptr && current->type == ST::MemberAccess)
 		{
-			const DSLSymbol::MemberAccess& m = std::get<DSLSymbol::MemberAccess>(current->data);
+			const DSLSymbol::MemberAccess& m = oc::get<DSLSymbol::MemberAccess>(current->data);
 			path = m.memberName + (path.empty() ? "" : "." + path);
 			current = m.receiver;
 		}
 		if (current == nullptr || current->type != ST::VariableReference)
 			return false;
-		outRootDecl = std::get<DSLSymbol::VariableReference>(current->data).declaration;
-		outPath = std::move(path);
+		outRootDecl = oc::get<DSLSymbol::VariableReference>(current->data).declaration;
+		outPath = oc::move(path);
 		return outRootDecl != nullptr;
 	}
 
@@ -3610,18 +3610,18 @@ namespace
 		{
 		case ST::Constant:
 		{
-			const DSLSymbol::Constant& c = std::get<DSLSymbol::Constant>(symbol->data);
-			const std::string label = (c.type == DSLType::String) ? "\"" + c.value + "\"" : c.value;
+			const DSLSymbol::Constant& c = oc::get<DSLSymbol::Constant>(symbol->data);
+			const oc::string label = (c.type == DSLType::String) ? "\"" + c.value + "\"" : c.value;
 			out = PendingExprTerm{ false, Candidate{ label, Candidate::Kind::Literal, nullptr, c.type }, {}, {} };
 			return true;
 		}
 		case ST::VariableReference:
 		{
-			const DSLSymbol::VariableReference& r = std::get<DSLSymbol::VariableReference>(symbol->data);
+			const DSLSymbol::VariableReference& r = oc::get<DSLSymbol::VariableReference>(symbol->data);
 			if (r.declaration == nullptr)
 				return false;
 			out = PendingExprTerm{ false,
-				Candidate{ std::get<DSLSymbol::VariableDeclaration>(r.declaration->data).name, Candidate::Kind::Variable, r.declaration }, {}, {} };
+				Candidate{ oc::get<DSLSymbol::VariableDeclaration>(r.declaration->data).name, Candidate::Kind::Variable, r.declaration }, {}, {} };
 			return true;
 		}
 		case ST::MemberAccess:
@@ -3629,32 +3629,32 @@ namespace
 			// A member chain ("self.pos.x"): refSymbol = the chain's ROOT declaration, label = the dotted
 			// path, declareType = the OUTER member's stamped type -- receiverCandidates' exact shape.
 			DSLSymbol* rootDecl = nullptr;
-			std::string path;
+			oc::string path;
 			if (!receiverChainToRoot(symbol, rootDecl, path))
 				return false;
 			out = PendingExprTerm{ false, Candidate{ path, Candidate::Kind::Member, rootDecl,
-				std::get<DSLSymbol::MemberAccess>(symbol->data).type }, {}, {} };
+				oc::get<DSLSymbol::MemberAccess>(symbol->data).type }, {}, {} };
 			return true;
 		}
 		case ST::FunctionCall:
 		{
-			const DSLSymbol::FunctionCall& call = std::get<DSLSymbol::FunctionCall>(symbol->data);
+			const DSLSymbol::FunctionCall& call = oc::get<DSLSymbol::FunctionCall>(symbol->data);
 			if (call.functionSymbol == nullptr)
 				return false;
 			// A dot-call restores WITH its receiver chain riding in the candidate (see buildExpressionTerm).
 			DSLSymbol* receiverDecl = nullptr;
-			std::string receiverPath;
+			oc::string receiverPath;
 			if (call.receiver != nullptr)
 			{
-				std::string fullPath;
+				oc::string fullPath;
 				if (!receiverChainToRoot(call.receiver, receiverDecl, fullPath))
 					return false;
-				receiverPath = std::move(fullPath); // "" for a direct dot-call (receiver = the root reference)
+				receiverPath = oc::move(fullPath); // "" for a direct dot-call (receiver = the root reference)
 			}
-			const DSLSymbol::FunctionDeclaration& callee = std::get<DSLSymbol::FunctionDeclaration>(call.functionSymbol->data);
+			const DSLSymbol::FunctionDeclaration& callee = oc::get<DSLSymbol::FunctionDeclaration>(call.functionSymbol->data);
 			PendingExprTerm term{ false, Candidate{ callee.name, Candidate::Kind::Function, call.functionSymbol }, {}, {} };
 			term.candidate.receiver = receiverDecl;
-			term.candidate.receiverPath = std::move(receiverPath);
+			term.candidate.receiverPath = oc::move(receiverPath);
 			if (!call.arguments.empty())
 			{
 				// A variadic call carries extras past its declared parameters -- everything from the declared
@@ -3667,27 +3667,27 @@ namespace
 					PendingExprChain argChain;
 					if (!chainFromSymbol(arg.value, argChain))
 						return false; // not restorable (a placeholder, ...) -- refuse, never approximate
-					term.callArgs.push_back(std::move(argChain));
+					term.callArgs.push_back(oc::move(argChain));
 				}
 			}
-			out = std::move(term);
+			out = oc::move(term);
 			return true;
 		}
 		case ST::Expression:
 		{
 			// Grouped or not, a nested chain re-composes as a group -- inside an arithmetic chain the two are
 			// only distinguishable by parens, and a group is the shape the compose flow can hold.
-			const DSLSymbol::Expression& e = std::get<DSLSymbol::Expression>(symbol->data);
+			const DSLSymbol::Expression& e = oc::get<DSLSymbol::Expression>(symbol->data);
 			PendingExprTerm group{ true, {}, {}, {} };
 			for (const DSLSymbol* operand : e.operands)
 			{
 				PendingExprTerm term;
 				if (!termFromSymbol(operand, term))
 					return false;
-				group.groupTerms.push_back(std::move(term));
+				group.groupTerms.push_back(oc::move(term));
 			}
 			group.groupOps = e.operators;
-			out = std::move(group);
+			out = oc::move(group);
 			return true;
 		}
 		default:
@@ -3701,7 +3701,7 @@ namespace
 	{
 		if (symbol != nullptr && symbol->type == ST::Expression)
 		{
-			const DSLSymbol::Expression& e = std::get<DSLSymbol::Expression>(symbol->data);
+			const DSLSymbol::Expression& e = oc::get<DSLSymbol::Expression>(symbol->data);
 			if (!e.grouped && !e.operators.empty() && dslIsArithmeticOperator(e.operators[0]))
 			{
 				out.terms.clear();
@@ -3710,7 +3710,7 @@ namespace
 					PendingExprTerm term;
 					if (!termFromSymbol(operand, term))
 						return false;
-					out.terms.push_back(std::move(term));
+					out.terms.push_back(oc::move(term));
 				}
 				out.ops = e.operators;
 				return true;
@@ -3719,7 +3719,7 @@ namespace
 		PendingExprTerm term;
 		if (!termFromSymbol(symbol, term))
 			return false;
-		out.terms.assign(1, std::move(term));
+		out.terms.assign(1, oc::move(term));
 		out.ops.clear();
 		return true;
 	}
@@ -3732,20 +3732,20 @@ void ScriptEditor::restoreHeadAndCollect(DSLCodeLine& line, DSLSymbol* originalH
 {
 	if (originalHead != nullptr && line.head() != originalHead)
 	{
-		auto it = std::find_if(line.symbols.begin(), line.symbols.end(),
-			[&](const std::unique_ptr<DSLSymbol>& s) { return s.get() == originalHead; });
+		auto it = oc::find_if(line.symbols.begin(), line.symbols.end(),
+			[&](const oc::unique_ptr<DSLSymbol>& s) { return s.get() == originalHead; });
 		if (it != line.symbols.end())
 		{
-			std::unique_ptr<DSLSymbol> moved = std::move(*it);
+			oc::unique_ptr<DSLSymbol> moved = oc::move(*it);
 			line.symbols.erase(it);
-			line.symbols.push_back(std::move(moved));
+			line.symbols.push_back(oc::move(moved));
 		}
 	}
 
-	std::vector<const DSLSymbol*> reachable;
+	oc::vector<const DSLSymbol*> reachable;
 	markReachable(line.head(), reachable);
-	std::erase_if(line.symbols, [&](const std::unique_ptr<DSLSymbol>& s)
-		{ return std::find(reachable.begin(), reachable.end(), s.get()) == reachable.end(); });
+	oc::erase_if(line.symbols, [&](const oc::unique_ptr<DSLSymbol>& s)
+		{ return oc::find(reachable.begin(), reachable.end(), s.get()) == reachable.end(); });
 }
 
 // Repoints whichever structural field currently holds this slot's occupant. LineHead never comes through here
@@ -3755,16 +3755,16 @@ void ScriptEditor::writeSlot(const SlotRef& slot, DSLSymbol* newSymbol)
 	switch (slot.kind)
 	{
 	case SlotRef::Kind::FlowControlCondition:
-		std::get<DSLSymbol::FlowControl>(slot.parent->data).condition = newSymbol;
+		oc::get<DSLSymbol::FlowControl>(slot.parent->data).condition = newSymbol;
 		break;
 	case SlotRef::Kind::CallArgumentValue:
-		std::get<DSLSymbol::FunctionCall>(slot.parent->data).arguments[slot.argIndex].value = newSymbol;
+		oc::get<DSLSymbol::FunctionCall>(slot.parent->data).arguments[slot.argIndex].value = newSymbol;
 		break;
 	case SlotRef::Kind::VariableDeclarationInitialValue:
-		std::get<DSLSymbol::VariableDeclaration>(slot.parent->data).initialValue = newSymbol;
+		oc::get<DSLSymbol::VariableDeclaration>(slot.parent->data).initialValue = newSymbol;
 		break;
 	case SlotRef::Kind::ExpressionOperand:
-		std::get<DSLSymbol::Expression>(slot.parent->data).operands[slot.argIndex] = newSymbol;
+		oc::get<DSLSymbol::Expression>(slot.parent->data).operands[slot.argIndex] = newSymbol;
 		break;
 	default:
 		break;
@@ -3777,16 +3777,16 @@ void ScriptEditor::writeSlot(const SlotRef& slot, DSLSymbol* newSymbol)
 void ScriptEditor::repointSymbol(DSLCodeLine& line, DSLSymbol* oldSymbol, DSLSymbol* newSymbol)
 {
 	auto fix = [&](DSLSymbol*& field) { if (field == oldSymbol) field = newSymbol; };
-	for (const std::unique_ptr<DSLSymbol>& s : line.symbols)
+	for (const oc::unique_ptr<DSLSymbol>& s : line.symbols)
 	{
 		switch (s->type)
 		{
 		case ST::VariableDeclaration:
-			fix(std::get<DSLSymbol::VariableDeclaration>(s->data).initialValue);
+			fix(oc::get<DSLSymbol::VariableDeclaration>(s->data).initialValue);
 			break;
 		case ST::FunctionCall:
 		{
-			DSLSymbol::FunctionCall& call = std::get<DSLSymbol::FunctionCall>(s->data);
+			DSLSymbol::FunctionCall& call = oc::get<DSLSymbol::FunctionCall>(s->data);
 			fix(call.receiver);
 			for (DSLSymbol::CallArgument& arg : call.arguments)
 				fix(arg.value);
@@ -3794,18 +3794,18 @@ void ScriptEditor::repointSymbol(DSLCodeLine& line, DSLSymbol* oldSymbol, DSLSym
 		}
 		case ST::FlowControl:
 		{
-			DSLSymbol::FlowControl& fc = std::get<DSLSymbol::FlowControl>(s->data);
+			DSLSymbol::FlowControl& fc = oc::get<DSLSymbol::FlowControl>(s->data);
 			fix(fc.condition);
 			fix(fc.forCondition);
 			fix(fc.forIncrement);
 			break;
 		}
 		case ST::Expression:
-			for (DSLSymbol*& operand : std::get<DSLSymbol::Expression>(s->data).operands)
+			for (DSLSymbol*& operand : oc::get<DSLSymbol::Expression>(s->data).operands)
 				fix(operand);
 			break;
 		case ST::MemberAccess:
-			fix(std::get<DSLSymbol::MemberAccess>(s->data).receiver);
+			fix(oc::get<DSLSymbol::MemberAccess>(s->data).receiver);
 			break;
 		default:
 			break;
@@ -3820,7 +3820,7 @@ void ScriptEditor::selectExpressionTail(DSLSymbol* value)
 	bool groupClose = false;
 	while (target != nullptr && target->type == ST::Expression)
 	{
-		const DSLSymbol::Expression& e = std::get<DSLSymbol::Expression>(target->data);
+		const DSLSymbol::Expression& e = oc::get<DSLSymbol::Expression>(target->data);
 		if (e.grouped)
 		{
 			groupClose = true; // the group's own ')' span IS its end
@@ -3838,8 +3838,8 @@ void ScriptEditor::selectExpressionTail(DSLSymbol* value)
 void ScriptEditor::finishChainShrink(DSLSymbol* exprSymbol, DSLSymbol* originalHead, int selectOperand)
 {
 	DSLCodeLine& line = *exprSymbol->line;
-	DSLSymbol::Expression& e = std::get<DSLSymbol::Expression>(exprSymbol->data);
-	DSLSymbol* select = e.operands[std::clamp(selectOperand, 0, static_cast<int>(e.operands.size()) - 1)];
+	DSLSymbol::Expression& e = oc::get<DSLSymbol::Expression>(exprSymbol->data);
+	DSLSymbol* select = e.operands[oc::clamp(selectOperand, 0, static_cast<int>(e.operands.size()) - 1)];
 	if (e.operands.size() == 1)
 		repointSymbol(line, exprSymbol, e.operands[0]);
 	restoreHeadAndCollect(line, originalHead);
@@ -3851,7 +3851,7 @@ void ScriptEditor::finishChainShrink(DSLSymbol* exprSymbol, DSLSymbol* originalH
 // or assignment's side isn't half-deletable.
 void ScriptEditor::deleteChainOperand(DSLSymbol* exprSymbol, int operandIndex)
 {
-	DSLSymbol::Expression& e = std::get<DSLSymbol::Expression>(exprSymbol->data);
+	DSLSymbol::Expression& e = oc::get<DSLSymbol::Expression>(exprSymbol->data);
 	const int opIndex = (operandIndex > 0) ? operandIndex - 1 : 0;
 	if (opIndex >= static_cast<int>(e.operators.size()) || !dslIsChainOperator(e.operators[opIndex]))
 		return;
@@ -3865,7 +3865,7 @@ void ScriptEditor::deleteChainOperand(DSLSymbol* exprSymbol, int operandIndex)
 // keystroke added together, mirroring the compose flow's own Backspace undo).
 void ScriptEditor::deleteChainOperator(DSLSymbol* exprSymbol, int operatorIndex)
 {
-	DSLSymbol::Expression& e = std::get<DSLSymbol::Expression>(exprSymbol->data);
+	DSLSymbol::Expression& e = oc::get<DSLSymbol::Expression>(exprSymbol->data);
 	if (operatorIndex >= static_cast<int>(e.operators.size()) || !dslIsChainOperator(e.operators[operatorIndex]))
 		return;
 	DSLSymbol* originalHead = exprSymbol->line->head();
@@ -3891,14 +3891,14 @@ void ScriptEditor::beginEditExprReplace(const SyntaxSpan& span)
 // segment chains in right AFTER that value. Splices into its parent chain when that parent is itself an
 // arithmetic chain; otherwise (a standalone slot value, or one side of a comparison/assignment) the anchor
 // wraps into a fresh nested chain with itself as the first operand, keeping structural Expressions binary.
-void ScriptEditor::beginEditExprInsert(const SyntaxSpan& span, DSLOperator leadOp, const std::string& anchorText)
+void ScriptEditor::beginEditExprInsert(const SyntaxSpan& span, DSLOperator leadOp, const oc::string& anchorText)
 {
 	m_editSlot = span.slot;
 	m_editChainExpr = nullptr;
 	m_editOperandIndex = 0;
 	if (span.slot.kind == SlotRef::Kind::ExpressionOperand)
 	{
-		const DSLSymbol::Expression& e = std::get<DSLSymbol::Expression>(span.slot.parent->data);
+		const DSLSymbol::Expression& e = oc::get<DSLSymbol::Expression>(span.slot.parent->data);
 		// Chains are uniformly one operator class (see DSL.ixx); a one-operand group ("(a)") has no operators
 		// at all and splices the same way -- inserting after its operand grows the chain INSIDE the parens.
 		if (e.operators.empty() || dslIsArithmeticOperator(e.operators[0]))
@@ -3934,17 +3934,17 @@ bool ScriptEditor::beginReopenGroup(const SyntaxSpan& span)
 	// Stack = [outer empty frame, the group's own frame with its LAST term popped back into the box] -- the
 	// exact state authoring was in right before its ')' was typed. The open paren means confirming is
 	// impossible until it's re-closed (exprTryFinalize), which is what "re-confirmed as a whole" enforces.
-	ExprFrame reopened{ std::move(groupTerm.groupTerms), std::move(groupTerm.groupOps) };
-	PendingExprTerm lastTerm = std::move(reopened.terms.back());
+	ExprFrame reopened{ oc::move(groupTerm.groupTerms), oc::move(groupTerm.groupOps) };
+	PendingExprTerm lastTerm = oc::move(reopened.terms.back());
 	reopened.terms.pop_back();
 	m_exprStack.assign(1, ExprFrame{});
-	m_exprStack.push_back(std::move(reopened));
+	m_exprStack.push_back(oc::move(reopened));
 	m_exprHasPendingGroup = false;
 
 	enterCompose(ComposeMode::EditExpr, "");
 	if (lastTerm.isGroup)
 	{
-		m_exprPendingGroup = std::move(lastTerm);
+		m_exprPendingGroup = oc::move(lastTerm);
 		m_exprHasPendingGroup = true;
 	}
 	else
@@ -3968,18 +3968,18 @@ void ScriptEditor::computeComposeCover(const SyntaxSpan& groupCloseSpan)
 	const DSLSymbol* leftmost = groupCloseSpan.symbol;
 	while (leftmost->type == ST::Expression)
 	{
-		const DSLSymbol::Expression& e = std::get<DSLSymbol::Expression>(leftmost->data);
+		const DSLSymbol::Expression& e = oc::get<DSLSymbol::Expression>(leftmost->data);
 		if (e.grouped)
 			++leadingParens;
 		leftmost = e.operands.front();
 	}
 
-	m_composeCoverStart = std::max(0, groupCloseSpan.startCol - 1); // fallback: at least the ')' itself
+	m_composeCoverStart = oc::max(0, groupCloseSpan.startCol - 1); // fallback: at least the ')' itself
 	if (m_cursorLine >= 0 && m_cursorLine < static_cast<int>(m_formatted.size()))
 		for (const SyntaxSpan& s : m_formatted[m_cursorLine].spans)
 			if (s.symbol == leftmost)
 			{
-				m_composeCoverStart = std::max(0, s.startCol - leadingParens);
+				m_composeCoverStart = oc::max(0, s.startCol - leadingParens);
 				break;
 			}
 	m_composeCoverEnd = groupCloseSpan.endCol;
@@ -3994,7 +3994,7 @@ bool ScriptEditor::tryWidenFlowHeaderEdit()
 	if (line == nullptr || line->head() == nullptr || line->head()->type != ST::FlowControl)
 		return false;
 	DSLSymbol* head = line->head();
-	const DSLSymbol::FlowControl& fc = std::get<DSLSymbol::FlowControl>(head->data);
+	const DSLSymbol::FlowControl& fc = oc::get<DSLSymbol::FlowControl>(head->data);
 
 	// return <value> -> the ReturnValue stage.
 	if (fc.control == DSLFlowControl::Return)
@@ -4024,7 +4024,7 @@ bool ScriptEditor::tryWidenFlowHeaderEdit()
 		}
 		if (fc.condition != m_editChainExpr)
 			return false;
-		const DSLSymbol::Expression& cmp = std::get<DSLSymbol::Expression>(m_editChainExpr->data);
+		const DSLSymbol::Expression& cmp = oc::get<DSLSymbol::Expression>(m_editChainExpr->data);
 		if (cmp.operands.size() != 2 || cmp.operators.size() != 1 || !dslIsComparisonOperator(cmp.operators[0]))
 			return false;
 		m_conditionControl = fc.control;
@@ -4054,8 +4054,8 @@ bool ScriptEditor::tryWidenFlowHeaderEdit()
 		if (m_editChainExpr != nullptr || fc.forLoopVar == nullptr || m_editSlot.parent != head
 			|| (!onKey && m_editSlot.kind != SlotRef::Kind::FlowControlCondition))
 			return false;
-		const DSLSymbol::VariableDeclaration& boundDecl = std::get<DSLSymbol::VariableDeclaration>(fc.forLoopVar->data);
-		const DSLType boundType = std::get<DSLSymbol::TypeDeclaration>(boundDecl.typeSymbol->data).type;
+		const DSLSymbol::VariableDeclaration& boundDecl = oc::get<DSLSymbol::VariableDeclaration>(fc.forLoopVar->data);
+		const DSLType boundType = oc::get<DSLSymbol::TypeDeclaration>(boundDecl.typeSymbol->data).type;
 		if (fc.control == DSLFlowControl::IfExist)
 		{
 			// The container has to round-trip first: the key stage's own candidates are typed off it, and
@@ -4092,10 +4092,10 @@ bool ScriptEditor::tryWidenFlowHeaderEdit()
 	if (fc.forLoopVar == nullptr || fc.forCondition == nullptr || fc.forIncrement == nullptr
 		|| fc.forCondition->type != ST::Expression || fc.forIncrement->type != ST::Expression)
 		return false;
-	const DSLSymbol::VariableDeclaration& loopDecl = std::get<DSLSymbol::VariableDeclaration>(fc.forLoopVar->data);
-	const DSLType varType = std::get<DSLSymbol::TypeDeclaration>(loopDecl.typeSymbol->data).type;
-	const DSLSymbol::Expression& cond = std::get<DSLSymbol::Expression>(fc.forCondition->data);
-	const DSLSymbol::Expression& incr = std::get<DSLSymbol::Expression>(fc.forIncrement->data);
+	const DSLSymbol::VariableDeclaration& loopDecl = oc::get<DSLSymbol::VariableDeclaration>(fc.forLoopVar->data);
+	const DSLType varType = oc::get<DSLSymbol::TypeDeclaration>(loopDecl.typeSymbol->data).type;
+	const DSLSymbol::Expression& cond = oc::get<DSLSymbol::Expression>(fc.forCondition->data);
+	const DSLSymbol::Expression& incr = oc::get<DSLSymbol::Expression>(fc.forIncrement->data);
 	if (cond.operands.size() != 2 || cond.operators.size() != 1 || !dslIsComparisonOperator(cond.operators[0])
 		|| incr.operands.size() != 2 || incr.operators.size() != 1 || !dslIsAssignOperator(incr.operators[0]))
 		return false;
@@ -4143,7 +4143,7 @@ bool ScriptEditor::tryWidenFlowHeaderEdit()
 // See the declaration in ScriptEditor.ixx: the staged Declare-function flow re-opened over an existing header.
 void ScriptEditor::beginWidenFunctionHeader(DSLSymbol* funcSymbol)
 {
-	const DSLSymbol::FunctionDeclaration& f = std::get<DSLSymbol::FunctionDeclaration>(funcSymbol->data);
+	const DSLSymbol::FunctionDeclaration& f = oc::get<DSLSymbol::FunctionDeclaration>(funcSymbol->data);
 	m_pendingFunctionName = f.name;
 	m_pendingReturnType = f.returnType; // round-trips through a re-confirm; re-pickable via the ')' + '-' stages
 	m_pendingParamTypes.clear();
@@ -4151,8 +4151,8 @@ void ScriptEditor::beginWidenFunctionHeader(DSLSymbol* funcSymbol)
 	m_pendingParamRefs.clear();
 	for (DSLSymbol* param : f.parameterVarDeclarations)
 	{
-		const DSLSymbol::VariableDeclaration& d = std::get<DSLSymbol::VariableDeclaration>(param->data);
-		m_pendingParamTypes.push_back(std::get<DSLSymbol::TypeDeclaration>(d.typeSymbol->data).type);
+		const DSLSymbol::VariableDeclaration& d = oc::get<DSLSymbol::VariableDeclaration>(param->data);
+		m_pendingParamTypes.push_back(oc::get<DSLSymbol::TypeDeclaration>(d.typeSymbol->data).type);
 		m_pendingParamNames.push_back(d.name);
 		m_pendingParamRefs.push_back(d.isRef);
 	}
@@ -4167,7 +4167,7 @@ void ScriptEditor::beginWidenFunctionHeader(DSLSymbol* funcSymbol)
 	// before that parameter was finalized.
 	m_pendingParamType = m_pendingParamTypes.back();
 	m_pendingParamRef = m_pendingParamRefs.back();
-	const std::string lastName = m_pendingParamNames.back();
+	const oc::string lastName = m_pendingParamNames.back();
 	m_pendingParamTypes.pop_back();
 	m_pendingParamNames.pop_back();
 	m_pendingParamRefs.pop_back();
@@ -4182,14 +4182,14 @@ bool ScriptEditor::tryWidenCallStatementEdit()
 	DSLSymbol* callSymbol = m_editSlot.parent;
 	if (callSymbol->line == nullptr || callSymbol->line->head() != callSymbol)
 		return false; // only call STATEMENTS re-stage; a call nested in some larger value has no staged flow
-	const DSLSymbol::FunctionCall& call = std::get<DSLSymbol::FunctionCall>(callSymbol->data);
+	const DSLSymbol::FunctionCall& call = oc::get<DSLSymbol::FunctionCall>(callSymbol->data);
 	if (call.functionSymbol == nullptr)
 		return false;
 	DSLSymbol* receiverDecl = nullptr;
-	std::string receiverPath;
+	oc::string receiverPath;
 	if (call.receiver != nullptr && !receiverChainToRoot(call.receiver, receiverDecl, receiverPath))
 		return false;
-	const DSLSymbol::FunctionDeclaration& callee = std::get<DSLSymbol::FunctionDeclaration>(call.functionSymbol->data);
+	const DSLSymbol::FunctionDeclaration& callee = oc::get<DSLSymbol::FunctionDeclaration>(call.functionSymbol->data);
 	const int argIndex = m_editSlot.argIndex;
 	// A variadic call's extras sit past the declared count and stage the same way (see the CallArgValue flow);
 	// anything else must match its declaration exactly to have a staged flow to re-enter.
@@ -4200,21 +4200,21 @@ bool ScriptEditor::tryWidenCallStatementEdit()
 
 	// Arguments BEFORE the edited one restore as already-resolved (possibly compound/nested-call) chains; the
 	// edited one (and everything after) re-authors forward, exactly like authoring the call fresh from there.
-	std::vector<PendingExprChain> argChains;
+	oc::vector<PendingExprChain> argChains;
 	for (int i = 0; i < argIndex; ++i)
 	{
 		PendingExprChain chain;
 		if (!chainFromSymbol(call.arguments[i].value, chain))
 			return false;
-		argChains.push_back(std::move(chain));
+		argChains.push_back(oc::move(chain));
 	}
 
 	m_callStack.clear(); // safe: EditExpr (the only caller) never has a call already staging
 	CallStage& stage = m_callStack.emplace_back();
 	stage.func = call.functionSymbol;
 	stage.receiver = receiverDecl;
-	stage.receiverPath = std::move(receiverPath);
-	stage.argChains = std::move(argChains);
+	stage.receiverPath = oc::move(receiverPath);
+	stage.argChains = oc::move(argChains);
 	stage.returnMode = ComposeMode::None; // a STATEMENT call -- completion re-commits the line
 	stage.savedExprStack.assign(1, ExprFrame{});
 
@@ -4239,7 +4239,7 @@ bool ScriptEditor::tryWidenValueCallEdit()
 	// authoring would have built (each '(' pushes one, see tryBeginValueCallStaging), so the peel back out
 	// mirrors the way in: argument by argument, then call by call, then the owning value stage.
 	struct Level { DSLSymbol* call; int argIndex; }; // argIndex = the argument OF THIS CALL the peel re-enters at
-	std::vector<Level> levels{ { callSymbol, m_editSlot.argIndex } };
+	oc::vector<Level> levels{ { callSymbol, m_editSlot.argIndex } };
 	while (line.head() != levels.back().call && levels.size() <= line.symbols.size())
 	{
 		// Which call (if any) holds this level as an argument. Every symbol on the line is a peer in its flat
@@ -4247,11 +4247,11 @@ bool ScriptEditor::tryWidenValueCallEdit()
 		DSLSymbol* child = levels.back().call;
 		DSLSymbol* outer = nullptr;
 		int outerArg = -1;
-		for (const std::unique_ptr<DSLSymbol>& s : line.symbols)
+		for (const oc::unique_ptr<DSLSymbol>& s : line.symbols)
 		{
 			if (s->type != ST::FunctionCall)
 				continue;
-			const DSLSymbol::FunctionCall& candidate = std::get<DSLSymbol::FunctionCall>(s->data);
+			const DSLSymbol::FunctionCall& candidate = oc::get<DSLSymbol::FunctionCall>(s->data);
 			for (size_t i = 0; i < candidate.arguments.size() && outer == nullptr; ++i)
 				if (candidate.arguments[i].value == child)
 				{
@@ -4265,18 +4265,18 @@ bool ScriptEditor::tryWidenValueCallEdit()
 			break; // this level sits in a non-call slot -- the owning-context resolve below decides if we stage it
 		levels.push_back({ outer, outerArg });
 	}
-	std::reverse(levels.begin(), levels.end()); // outermost first: the order the stack is built in
+	oc::reverse(levels.begin(), levels.end()); // outermost first: the order the stack is built in
 
 	// Everything restorable resolves BEFORE any state mutates -- a refusal must leave no trace. Per level:
 	// the receiver path, and the arguments preceding the one the peel re-enters at.
-	struct Restored { DSLSymbol* func; DSLSymbol* receiver; std::string receiverPath; std::vector<PendingExprChain> argChains; };
-	std::vector<Restored> restored;
+	struct Restored { DSLSymbol* func; DSLSymbol* receiver; oc::string receiverPath; oc::vector<PendingExprChain> argChains; };
+	oc::vector<Restored> restored;
 	for (const Level& level : levels)
 	{
-		const DSLSymbol::FunctionCall& call = std::get<DSLSymbol::FunctionCall>(level.call->data);
+		const DSLSymbol::FunctionCall& call = oc::get<DSLSymbol::FunctionCall>(level.call->data);
 		if (call.functionSymbol == nullptr)
 			return false;
-		const DSLSymbol::FunctionDeclaration& callee = std::get<DSLSymbol::FunctionDeclaration>(call.functionSymbol->data);
+		const DSLSymbol::FunctionDeclaration& callee = oc::get<DSLSymbol::FunctionDeclaration>(call.functionSymbol->data);
 		// Same variadic allowance as tryWidenCallStatementEdit -- extras past the declared count re-stage too.
 		if (level.argIndex < 0 || level.argIndex >= static_cast<int>(call.arguments.size())
 			|| (callee.isVariadic ? call.arguments.size() < callee.parameterVarDeclarations.size()
@@ -4291,7 +4291,7 @@ bool ScriptEditor::tryWidenValueCallEdit()
 			PendingExprChain chain;
 			if (!chainFromSymbol(call.arguments[i].value, chain))
 				return false;
-			entry.argChains.push_back(std::move(chain));
+			entry.argChains.push_back(oc::move(chain));
 		}
 	}
 
@@ -4306,18 +4306,18 @@ bool ScriptEditor::tryWidenValueCallEdit()
 		m_flowEditLine = &line; // a call STATEMENT: peeling past its first argument deletes the line
 	}
 	else if (head != nullptr && head->type == ST::VariableDeclaration
-		&& std::get<DSLSymbol::VariableDeclaration>(head->data).initialValue == outermost)
+		&& oc::get<DSLSymbol::VariableDeclaration>(head->data).initialValue == outermost)
 	{
 		m_redeclareTarget = head;
 		m_pendingDeclareType = declaredTypeOf(head);
-		m_pendingDeclareName = std::get<DSLSymbol::VariableDeclaration>(head->data).name;
+		m_pendingDeclareName = oc::get<DSLSymbol::VariableDeclaration>(head->data).name;
 		returnMode = ComposeMode::DeclareValue;
 	}
 	else if (head != nullptr && head->type == ST::Expression)
 	{
-		const DSLSymbol::Expression& assign = std::get<DSLSymbol::Expression>(head->data);
+		const DSLSymbol::Expression& assign = oc::get<DSLSymbol::Expression>(head->data);
 		DSLSymbol* targetRoot = nullptr;
-		std::string targetPath;
+		oc::string targetPath;
 		if (assign.operators.size() == 1 && dslIsAssignOperator(assign.operators[0])
 			&& assign.operands.size() == 2 && assign.operands[1] == outermost
 			&& receiverChainToRoot(assign.operands[0], targetRoot, targetPath))
@@ -4341,14 +4341,14 @@ bool ScriptEditor::tryWidenValueCallEdit()
 	// "type name = " / "target op = " for a value context (m_pendingDeclare*/m_reassign* are set above), empty
 	// for a statement. Each nested level's lead is then the ENCLOSING stage's full prefix at the moment it
 	// would have been pushed -- which is what callStagePrefix() reads off the stack top, so build in order.
-	std::string lead = exprBasePrefixFor(returnMode);
+	oc::string lead = exprBasePrefixFor(returnMode);
 	for (size_t i = 0; i < restored.size(); ++i)
 	{
 		CallStage& stage = m_callStack.emplace_back();
 		stage.func = restored[i].func;
 		stage.receiver = restored[i].receiver;
-		stage.receiverPath = std::move(restored[i].receiverPath);
-		stage.argChains = std::move(restored[i].argChains);
+		stage.receiverPath = oc::move(restored[i].receiverPath);
+		stage.argChains = oc::move(restored[i].argChains);
 		// Only the outermost resumes the owning context; an inner one resumes the argument compose of the
 		// stage around it, with its own name re-typed there (see the CallArgValue Backspace ladder).
 		stage.returnMode = (i == 0) ? returnMode : ComposeMode::CallArgValue;
@@ -4369,7 +4369,7 @@ bool ScriptEditor::tryWidenComparisonValueEdit()
 	if (m_editChainExpr == nullptr || m_editChainExpr->line == nullptr)
 		return false;
 	DSLSymbol* cmp = m_editChainExpr;
-	const DSLSymbol::Expression& e = std::get<DSLSymbol::Expression>(cmp->data);
+	const DSLSymbol::Expression& e = oc::get<DSLSymbol::Expression>(cmp->data);
 	if (e.operands.size() != 2 || e.operators.size() != 1 || !dslIsComparisonOperator(e.operators[0]))
 		return false;
 	DSLCodeLine* line = cmp->line;
@@ -4384,26 +4384,26 @@ bool ScriptEditor::tryWidenComparisonValueEdit()
 		return false; // a non-round-trippable left side can't re-stage
 
 	if (head->type == ST::VariableDeclaration
-		&& std::get<DSLSymbol::VariableDeclaration>(head->data).initialValue == cmp)
+		&& oc::get<DSLSymbol::VariableDeclaration>(head->data).initialValue == cmp)
 	{
 		// A plain local declaration's initializer (a for-loop counter's line is headed by its FlowControl, so
 		// it can never match here) -- restore the whole-line re-declare context, same as the declare widen.
-		const DSLSymbol::VariableDeclaration& decl = std::get<DSLSymbol::VariableDeclaration>(head->data);
+		const DSLSymbol::VariableDeclaration& decl = oc::get<DSLSymbol::VariableDeclaration>(head->data);
 		m_redeclareTarget = head;
-		m_pendingDeclareType = std::get<DSLSymbol::TypeDeclaration>(decl.typeSymbol->data).type;
+		m_pendingDeclareType = oc::get<DSLSymbol::TypeDeclaration>(decl.typeSymbol->data).type;
 		m_pendingDeclareName = decl.name;
 		m_conditionValueReturnMode = ComposeMode::DeclareValue;
 	}
 	else if (head->type == ST::Expression)
 	{
 		// An assignment statement's right-hand side -- restore the widened-reassign context.
-		const DSLSymbol::Expression& assign = std::get<DSLSymbol::Expression>(head->data);
+		const DSLSymbol::Expression& assign = oc::get<DSLSymbol::Expression>(head->data);
 		if (assign.operators.empty() || !dslIsAssignOperator(assign.operators[0])
 			|| assign.operands.size() != 2 || assign.operands[1] != cmp
 			|| assign.operands[0]->type != ST::VariableReference)
 			return false;
 		m_reassignEditExpr = head;
-		m_reassignTarget = std::get<DSLSymbol::VariableReference>(assign.operands[0]->data).declaration;
+		m_reassignTarget = oc::get<DSLSymbol::VariableReference>(assign.operands[0]->data).declaration;
 		m_conditionValueReturnMode = ComposeMode::ReassignValue;
 	}
 	else
@@ -4429,7 +4429,7 @@ bool ScriptEditor::tryWidenComparisonValueEdit()
 // EditExpr's confirm: builds the composed segment's symbols and splices them into the document per the state
 // beginEditExprReplace/Insert captured. All shapes end the same way: head restored, orphans swept, cursor on
 // the last term just composed.
-void ScriptEditor::applyEditExpr(const std::vector<PendingExprTerm>& terms, const std::vector<DSLOperator>& ops)
+void ScriptEditor::applyEditExpr(const oc::vector<PendingExprTerm>& terms, const oc::vector<DSLOperator>& ops)
 {
 	const SlotRef slot = m_editSlot;
 	DSLSymbol* chainExpr = m_editChainExpr;
@@ -4444,19 +4444,19 @@ void ScriptEditor::applyEditExpr(const std::vector<PendingExprTerm>& terms, cons
 	DSLCodeLine& line = *slot.line;
 	DSLSymbol* originalHead = line.head();
 
-	std::vector<DSLSymbol*> built;
+	oc::vector<DSLSymbol*> built;
 	built.reserve(terms.size());
 	for (const PendingExprTerm& term : terms)
 		built.push_back(buildExpressionTerm(term, line));
 
 	if (chainExpr != nullptr)
 	{
-		DSLSymbol::Expression& e = std::get<DSLSymbol::Expression>(chainExpr->data);
+		DSLSymbol::Expression& e = oc::get<DSLSymbol::Expression>(chainExpr->data);
 		if (insert)
 		{
 			// [.. anchor leadOp s0 op0 s1 ..] -- the segment slides in right after the anchor operand.
 			e.operands.insert(e.operands.begin() + operandIndex + 1, built.begin(), built.end());
-			std::vector<DSLOperator> newOps{ leadOp };
+			oc::vector<DSLOperator> newOps{ leadOp };
 			newOps.insert(newOps.end(), ops.begin(), ops.end());
 			e.operators.insert(e.operators.begin() + operandIndex, newOps.begin(), newOps.end());
 		}
@@ -4482,9 +4482,9 @@ void ScriptEditor::applyEditExpr(const std::vector<PendingExprTerm>& terms, cons
 	else if (insert)
 	{
 		// Wrap: the slot's occupant becomes the first operand of a fresh (ungrouped) chain in its place.
-		std::vector<DSLSymbol*> operands{ anchor };
+		oc::vector<DSLSymbol*> operands{ anchor };
 		operands.insert(operands.end(), built.begin(), built.end());
-		std::vector<DSLOperator> operators{ leadOp };
+		oc::vector<DSLOperator> operators{ leadOp };
 		operators.insert(operators.end(), ops.begin(), ops.end());
 		writeSlot(slot, pushSymbol(line, ST::Expression, DSLSymbol::Expression{ operands, operators }));
 	}
@@ -4545,7 +4545,7 @@ void ScriptEditor::deleteLine(DSLCodeLine& line)
 
 	lines.erase(lines.begin() + index);
 
-	m_pendingSelectLineEnd = std::max(0, m_cursorLine - 1);
+	m_pendingSelectLineEnd = oc::max(0, m_cursorLine - 1);
 }
 
 // Whether `headSymbol` (an If -- While never has one) has no attached elseif/else chain, or every branch in
@@ -4571,7 +4571,7 @@ bool ScriptEditor::attachedElseChainEmpty(const DSLSymbol* headSymbol) const
 		const DSLSymbol* branchHead = lines[i]->head();
 		if (branchHead == nullptr || branchHead->type != ST::FlowControl)
 			break;
-		const DSLFlowControl control = std::get<DSLSymbol::FlowControl>(branchHead->data).control;
+		const DSLFlowControl control = oc::get<DSLSymbol::FlowControl>(branchHead->data).control;
 		if (control != DSLFlowControl::ElseIf && control != DSLFlowControl::Else)
 			break; // not a continuation -- some unrelated sibling statement follows instead
 
@@ -4613,7 +4613,7 @@ void ScriptEditor::deleteBlockKeepBody(DSLSymbol* headSymbol)
 		const DSLSymbol* branchHead = lines[bodyEnd]->head();
 		if (branchHead == nullptr || branchHead->type != ST::FlowControl)
 			break;
-		const DSLFlowControl control = std::get<DSLSymbol::FlowControl>(branchHead->data).control;
+		const DSLFlowControl control = oc::get<DSLSymbol::FlowControl>(branchHead->data).control;
 		if (control != DSLFlowControl::ElseIf && control != DSLFlowControl::Else)
 			break;
 
@@ -4624,7 +4624,7 @@ void ScriptEditor::deleteBlockKeepBody(DSLSymbol* headSymbol)
 
 	// End of the visible line above the deleted header (the cursor sat on the header -- every caller's
 	// contract), same landing rule as deleteLine: where typing/backspacing continues.
-	m_pendingSelectLineEnd = std::max(0, m_cursorLine - 1);
+	m_pendingSelectLineEnd = oc::max(0, m_cursorLine - 1);
 }
 
 // Whether the block `headSymbol` opens (a FunctionDeclaration, or an If/ElseIf/Else/While) has nothing worth
@@ -4659,7 +4659,7 @@ bool ScriptEditor::isFunctionBodyDeletable(const DSLSymbol* headSymbol) const
 		return false;
 	const DSLSymbol* bodyHead = m_document.file.lines[headerIndex + 1]->head();
 	return bodyHead != nullptr && bodyHead->type == ST::FlowControl
-		&& std::get<DSLSymbol::FlowControl>(bodyHead->data).control == DSLFlowControl::Return;
+		&& oc::get<DSLSymbol::FlowControl>(bodyHead->data).control == DSLFlowControl::Return;
 }
 
 // See the declaration in ScriptEditor.ixx: is `line` the untouchable bottom return of a non-Void function.
@@ -4669,7 +4669,7 @@ bool ScriptEditor::isProtectedBottomReturn(const DSLCodeLine* line) const
 		return false;
 	const DSLSymbol* head = line->head();
 	if (head == nullptr || head->type != ST::FlowControl
-		|| std::get<DSLSymbol::FlowControl>(head->data).control != DSLFlowControl::Return)
+		|| oc::get<DSLSymbol::FlowControl>(head->data).control != DSLFlowControl::Return)
 		return false;
 	const int lineIndex = dslLineIndex(m_document.file, line);
 	if (lineIndex < 0)
@@ -4678,7 +4678,7 @@ bool ScriptEditor::isProtectedBottomReturn(const DSLCodeLine* line) const
 	if (headerIndex < 0)
 		return false;
 	const DSLCodeLine& headerLine = *m_document.file.lines[headerIndex];
-	if (std::get<DSLSymbol::FunctionDeclaration>(headerLine.head()->data).returnType == DSLType::Void)
+	if (oc::get<DSLSymbol::FunctionDeclaration>(headerLine.head()->data).returnType == DSLType::Void)
 		return false;
 	// The bottom return: physically last in the function AND at body level (a deeper return tucked inside a
 	// trailing block sits before its own inner `end`s, not the function's).
@@ -4702,7 +4702,7 @@ void ScriptEditor::applyFunctionReturnChange(DSLSymbol* funcSymbol, DSLType newR
 	{
 		const DSLSymbol* head = lines[i]->head();
 		if (head != nullptr && head->type == ST::FlowControl
-			&& std::get<DSLSymbol::FlowControl>(head->data).control == DSLFlowControl::Return)
+			&& oc::get<DSLSymbol::FlowControl>(head->data).control == DSLFlowControl::Return)
 			lines.erase(lines.begin() + i);
 	}
 
@@ -4741,7 +4741,7 @@ void ScriptEditor::deleteEmptyBlock(DSLSymbol* headSymbol)
 		const DSLSymbol* branchHead = lines[bodyEnd]->head();
 		if (branchHead == nullptr || branchHead->type != ST::FlowControl)
 			break;
-		const DSLFlowControl control = std::get<DSLSymbol::FlowControl>(branchHead->data).control;
+		const DSLFlowControl control = oc::get<DSLSymbol::FlowControl>(branchHead->data).control;
 		if (control != DSLFlowControl::ElseIf && control != DSLFlowControl::Else)
 			break;
 
@@ -4751,7 +4751,7 @@ void ScriptEditor::deleteEmptyBlock(DSLSymbol* headSymbol)
 	lines.erase(lines.begin() + headerIndex, lines.begin() + bodyEnd);
 
 	// Same end-of-previous-line landing as deleteLine/deleteBlockKeepBody (the cursor sat on the header).
-	m_pendingSelectLineEnd = std::max(0, m_cursorLine - 1);
+	m_pendingSelectLineEnd = oc::max(0, m_cursorLine - 1);
 }
 
 void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
@@ -4824,7 +4824,7 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 		{
 			const SyntaxSpan* span = currentSpan(m_formatted, m_cursorLine, m_cursorSpan);
 			const DSLFlowControl* selectedControl = (span != nullptr && span->symbol != nullptr && span->symbol->type == ST::FlowControl)
-				? &std::get<DSLSymbol::FlowControl>(span->symbol->data).control : nullptr;
+				? &oc::get<DSLSymbol::FlowControl>(span->symbol->data).control : nullptr;
 			// The function's own NAME span specifically -- its slot is LineHead, distinguishing it from the
 			// SAME symbol's separate return-type span (Kind::FunctionReturnType), which must Backspace into
 			// FunctionReturnType editing instead (handled by beginCompose, below), not this deletion path.
@@ -4840,7 +4840,7 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 			{
 				DSLSymbol* ownerHead = span->symbol->line->head();
 				if (ownerHead != nullptr && ownerHead->type == ST::VariableDeclaration
-					&& std::get<DSLSymbol::VariableDeclaration>(ownerHead->data).typeSymbol == span->symbol)
+					&& oc::get<DSLSymbol::VariableDeclaration>(ownerHead->data).typeSymbol == span->symbol)
 					selectedDeclarationType = ownerHead;
 			}
 			// A bare assignment/compound-assign statement's own operator span, or a call statement's own name
@@ -4858,11 +4858,11 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 			// keeps hitting selectedAssignmentStatement, never these.
 			const bool selectedChainOperator = span != nullptr && span->symbol != nullptr
 				&& span->symbol->type == ST::Expression && span->operatorIndex >= 0
-				&& dslIsChainOperator(std::get<DSLSymbol::Expression>(span->symbol->data).operators[span->operatorIndex]);
+				&& dslIsChainOperator(oc::get<DSLSymbol::Expression>(span->symbol->data).operators[span->operatorIndex]);
 			bool selectedChainOperand = false;
 			if (span != nullptr && span->slot.kind == SlotRef::Kind::ExpressionOperand)
 			{
-				const DSLSymbol::Expression& chain = std::get<DSLSymbol::Expression>(span->slot.parent->data);
+				const DSLSymbol::Expression& chain = oc::get<DSLSymbol::Expression>(span->slot.parent->data);
 				const int adjacentOp = (span->slot.argIndex > 0) ? span->slot.argIndex - 1 : 0;
 				selectedChainOperand = adjacentOp < static_cast<int>(chain.operators.size())
 					&& dslIsChainOperator(chain.operators[adjacentOp]);
@@ -4914,7 +4914,7 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 				// Declare-function flow re-opens over the whole header (beginWidenFunctionHeader) so further
 				// Backspace peels parameters, then the name, then -- guarded -- the function itself. Typing on
 				// this span still composes a return type.
-				DSLSymbol::FunctionDeclaration& f = std::get<DSLSymbol::FunctionDeclaration>(span->symbol->data);
+				DSLSymbol::FunctionDeclaration& f = oc::get<DSLSymbol::FunctionDeclaration>(span->symbol->data);
 				if (f.returnType != DSLType::Void && !AutoCompleteRules::isFunctionResultUsed(span->symbol, m_document.file))
 				{
 					f.returnType = DSLType::Void;
@@ -5009,13 +5009,13 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 				// arguments drop (type '(' to stage them again). A DOT-call reopens its receiver's member
 				// picker with the method name typed -- the bare name would re-resolve against nothing on its
 				// own (receiver-based functions are excluded from the plain candidate lists).
-				PendingExprTerm resolved = std::move(m_exprPendingGroup);
+				PendingExprTerm resolved = oc::move(m_exprPendingGroup);
 				m_exprHasPendingGroup = false;
 				m_composePrefix = exprBasePrefix() + exprComposePrefixFromStack(); // now excludes the term itself
 				if (resolved.candidate.kind == Candidate::Kind::Function && resolved.candidate.receiver != nullptr)
 				{
-					const std::string name = resolved.candidate.label;
-					const std::string receiverPath = resolved.candidate.receiverPath;
+					const oc::string name = resolved.candidate.label;
+					const oc::string receiverPath = resolved.candidate.receiverPath;
 					enterMemberSelect(resolved.candidate.receiver);
 					restoreMemberPath(receiverPath);
 					m_pendingWord = name;
@@ -5032,12 +5032,12 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 				// "being edited" (or, if that term was itself a group/resolved call, back into the pending
 				// term) -- the operator (if any) leading into that term is left in place, since typing it was
 				// a separate, earlier keystroke.
-				ExprFrame reopened{ std::move(m_exprPendingGroup.groupTerms), std::move(m_exprPendingGroup.groupOps) };
+				ExprFrame reopened{ oc::move(m_exprPendingGroup.groupTerms), oc::move(m_exprPendingGroup.groupOps) };
 				m_exprHasPendingGroup = false;
-				PendingExprTerm lastTerm = std::move(reopened.terms.back());
+				PendingExprTerm lastTerm = oc::move(reopened.terms.back());
 				reopened.terms.pop_back();
-				m_exprStack.push_back(std::move(reopened));
-				restoreTermIntoBox(std::move(lastTerm));
+				m_exprStack.push_back(oc::move(reopened));
+				restoreTermIntoBox(oc::move(lastTerm));
 			}
 			else if (m_exprStack.size() > 1 && m_exprStack.back().terms.empty())
 			{
@@ -5050,15 +5050,15 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 				// keystroke (typing the operator), so both are undone together, restoring that term for
 				// further editing.
 				ExprFrame& frame = m_exprStack.back();
-				PendingExprTerm lastTerm = std::move(frame.terms.back());
+				PendingExprTerm lastTerm = oc::move(frame.terms.back());
 				frame.terms.pop_back();
 				frame.ops.pop_back();
-				restoreTermIntoBox(std::move(lastTerm));
+				restoreTermIntoBox(oc::move(lastTerm));
 			}
 			else if (m_composeMode == ComposeMode::DeclareValue)
 			{
 				// Nothing chained/typed at all yet -- step back to re-edit the name.
-				enterCompose(ComposeMode::DeclareName, std::string(dslTypeName(m_pendingDeclareType)) + " ", m_pendingDeclareName);
+				enterCompose(ComposeMode::DeclareName, oc::string(dslTypeName(m_pendingDeclareType)) + " ", m_pendingDeclareName);
 			}
 			else if (m_composeMode == ComposeMode::EditExpr && !m_editInsert && m_editChainExpr == nullptr
 				&& m_editSlot.kind == SlotRef::Kind::VariableDeclarationInitialValue
@@ -5071,8 +5071,8 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 				// covering the whole line ("float test = |"), so further Backspace peels into the name and
 				// beyond -- see m_redeclareTarget's comment in the .ixx.
 				m_redeclareTarget = m_editSlot.parent;
-				const DSLSymbol::VariableDeclaration& decl = std::get<DSLSymbol::VariableDeclaration>(m_redeclareTarget->data);
-				m_pendingDeclareType = std::get<DSLSymbol::TypeDeclaration>(decl.typeSymbol->data).type;
+				const DSLSymbol::VariableDeclaration& decl = oc::get<DSLSymbol::VariableDeclaration>(m_redeclareTarget->data);
+				m_pendingDeclareType = oc::get<DSLSymbol::TypeDeclaration>(decl.typeSymbol->data).type;
 				m_pendingDeclareName = decl.name;
 				enterChainStage(ComposeMode::DeclareValue);
 			}
@@ -5085,9 +5085,9 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 				// declaration's initializer does: the staged Reassign flow re-opens over the existing line,
 				// showing its actual operator ("thing += |" / "test.x = |") -- member-assign targets restore
 				// their dotted path too. See m_reassignEditExpr's comment in the .ixx.
-				const DSLSymbol::Expression& assign = std::get<DSLSymbol::Expression>(m_editChainExpr->data);
+				const DSLSymbol::Expression& assign = oc::get<DSLSymbol::Expression>(m_editChainExpr->data);
 				DSLSymbol* targetRoot = nullptr;
-				std::string targetPath;
+				oc::string targetPath;
 				if (!assign.operators.empty() && dslIsAssignOperator(assign.operators[0])
 					&& receiverChainToRoot(assign.operands[0], targetRoot, targetPath))
 				{
@@ -5132,7 +5132,7 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 				// structural (comparison/assignment-side) operand can't be half-deleted, so that just cancels.
 				DSLSymbol* chainExpr = m_editChainExpr;
 				const int operandIndex = m_editOperandIndex;
-				const DSLSymbol::Expression& chain = std::get<DSLSymbol::Expression>(chainExpr->data);
+				const DSLSymbol::Expression& chain = oc::get<DSLSymbol::Expression>(chainExpr->data);
 				const int adjacentOp = (operandIndex > 0) ? operandIndex - 1 : 0;
 				const bool deletable = adjacentOp < static_cast<int>(chain.operators.size())
 					&& dslIsChainOperator(chain.operators[adjacentOp]);
@@ -5155,10 +5155,10 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 					// A fresh member-assign steps back into its MemberSelect, the written member re-typed
 					// ("test.x = |" -> "test.|x") -- the '.'-flow's own reverse.
 					DSLSymbol* root = m_reassignTarget;
-					std::vector<std::string> path = m_reassignMemberPath;
+					oc::vector<oc::string> path = m_reassignMemberPath;
 					m_reassignTarget = nullptr;
 					m_reassignMemberPath.clear();
-					const std::string last = path.back();
+					const oc::string last = path.back();
 					path.pop_back();
 					enterCompose(ComposeMode::FilterCandidates, "");
 					enterMemberSelect(root);
@@ -5170,7 +5170,7 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 				{
 					// The NEW-statement flow steps back to re-pick the assignment operator, name kept.
 					enterCompose(ComposeMode::ReassignOp,
-						std::get<DSLSymbol::VariableDeclaration>(m_reassignTarget->data).name + " ");
+						oc::get<DSLSymbol::VariableDeclaration>(m_reassignTarget->data).name + " ");
 				}
 			}
 			else if (m_composeMode == ComposeMode::ReturnValue && m_flowEditLine != nullptr
@@ -5222,7 +5222,7 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 				DSLSymbol* head = m_flowEditLine->head();
 				if (head != nullptr && head->type == ST::FlowControl)
 				{
-					if (std::get<DSLSymbol::FlowControl>(head->data).control == DSLFlowControl::ElseIf)
+					if (oc::get<DSLSymbol::FlowControl>(head->data).control == DSLFlowControl::ElseIf)
 					{
 						if (isBlockBodyEmpty(head))
 						{
@@ -5241,13 +5241,13 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 			else if (m_composeMode == ComposeMode::ForVarValue)
 			{
 				// Re-edit the loop variable's name instead of losing it entirely.
-				enterCompose(ComposeMode::ForVarName, "for " + std::string(dslTypeName(m_forVarType)) + " ", m_forVarName);
+				enterCompose(ComposeMode::ForVarName, "for " + oc::string(dslTypeName(m_forVarType)) + " ", m_forVarName);
 			}
 			else if (m_composeMode == ComposeMode::ForEachSource)
 			{
 				// Step back to re-edit the element's name instead of losing the whole header.
 				enterCompose(ComposeMode::ForEachName,
-					"foreach " + std::string(dslTypeName(m_forEachElementType)) + " ", m_forEachElementName);
+					"foreach " + oc::string(dslTypeName(m_forEachElementType)) + " ", m_forEachElementName);
 			}
 			else if (m_composeMode == ComposeMode::IfExistKey)
 			{
@@ -5285,7 +5285,7 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 				CallStage& stage = m_callStack.back();
 				if (!stage.argChains.empty())
 				{
-					PendingExprChain prev = std::move(stage.argChains.back());
+					PendingExprChain prev = oc::move(stage.argChains.back());
 					stage.argChains.pop_back();
 					m_exprStack.assign(1, ExprFrame{});
 					m_exprHasPendingGroup = false;
@@ -5302,14 +5302,14 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 					// the SUSPENDED context (restoring ITS OWN m_exprStack), the callee's name re-typed there
 					// -- a dot-call reopens its receiver's MemberSelect instead (the bare method name would
 					// never re-resolve through the plain candidate lists).
-					CallStage popped = std::move(m_callStack.back());
+					CallStage popped = oc::move(m_callStack.back());
 					m_callStack.pop_back();
 					const ComposeMode back = popped.returnMode;
-					m_exprStack = std::move(popped.savedExprStack);
-					m_exprPendingGroup = std::move(popped.savedPendingGroup);
+					m_exprStack = oc::move(popped.savedExprStack);
+					m_exprPendingGroup = oc::move(popped.savedPendingGroup);
 					m_exprHasPendingGroup = popped.savedHasPendingGroup;
-					const std::string name = std::get<DSLSymbol::FunctionDeclaration>(popped.func->data).name;
-					enterCompose(back, "", popped.receiver != nullptr ? std::string() : name);
+					const oc::string name = oc::get<DSLSymbol::FunctionDeclaration>(popped.func->data).name;
+					enterCompose(back, "", popped.receiver != nullptr ? oc::string() : name);
 					m_composePrefix = chainLeadTextFor(back) + exprComposePrefixFromStack();
 					refreshCandidates();
 					if (popped.receiver != nullptr)
@@ -5330,8 +5330,8 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 				{
 					// A fresh dot-call STATEMENT abandons back into its receiver's MemberSelect, method name re-typed.
 					DSLSymbol* receiver = stage.receiver;
-					const std::string receiverPath = stage.receiverPath;
-					const std::string name = std::get<DSLSymbol::FunctionDeclaration>(stage.func->data).name;
+					const oc::string receiverPath = stage.receiverPath;
+					const oc::string name = oc::get<DSLSymbol::FunctionDeclaration>(stage.func->data).name;
 					cancelCompose();
 					enterCompose(ComposeMode::FilterCandidates, "");
 					enterMemberSelect(receiver);
@@ -5404,7 +5404,7 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 			else if (!m_pendingParamNames.empty())
 			{
 				// Step back into the PREVIOUS parameter's name instead of losing it.
-				const std::string restoredName = m_pendingParamNames.back();
+				const oc::string restoredName = m_pendingParamNames.back();
 				m_pendingParamType = m_pendingParamTypes.back();
 				m_pendingParamRef = m_pendingParamRefs.back();
 				m_pendingParamNames.pop_back();
@@ -5483,7 +5483,7 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 		else if (m_composeMode == ComposeMode::ForVarValue)
 		{
 			// (Vector loop variables only -- scalar ForVarValue steps back inside the chain ladder above.)
-			enterCompose(ComposeMode::ForVarName, "for " + std::string(dslTypeName(m_forVarType)) + " ", m_forVarName);
+			enterCompose(ComposeMode::ForVarName, "for " + oc::string(dslTypeName(m_forVarType)) + " ", m_forVarName);
 		}
 		else if (m_composeMode == ComposeMode::ForConditionOp)
 		{
@@ -5509,8 +5509,8 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 		else if (m_composeMode == ComposeMode::ReassignOp)
 		{
 			// Step back into the statement compose with the target's name re-typed for further editing.
-			const std::string name = (m_reassignTarget != nullptr)
-				? std::get<DSLSymbol::VariableDeclaration>(m_reassignTarget->data).name : std::string();
+			const oc::string name = (m_reassignTarget != nullptr)
+				? oc::get<DSLSymbol::VariableDeclaration>(m_reassignTarget->data).name : oc::string();
 			enterCompose(ComposeMode::FilterCandidates, "", name);
 		}
 		else if (m_composeMode == ComposeMode::FunctionDeclareName && m_flowEditLine != nullptr)
@@ -5530,13 +5530,13 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 			if (!m_memberPath.empty())
 			{
 				// Peel one chain segment: "self.pos.|" steps back to "self.|pos", the segment re-typed.
-				const std::string segment = m_memberPath.back();
+				const oc::string segment = m_memberPath.back();
 				m_memberPath.pop_back();
 				DSLType type = declaredTypeOf(m_memberReceiver);
-				for (const std::string& walked : m_memberPath)
+				for (const oc::string& walked : m_memberPath)
 					type = resolveMemberType(type, walked);
 				m_memberReceiverType = type;
-				const std::string prefix = m_composePrefix.substr(0, m_composePrefix.size() - segment.size() - 1);
+				const oc::string prefix = m_composePrefix.substr(0, m_composePrefix.size() - segment.size() - 1);
 				enterCompose(ComposeMode::MemberSelect, prefix, segment); // member-select context survives (see enterMemberSelect)
 			}
 			else
@@ -5545,8 +5545,8 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 				// as typed text (it re-matches its BindingObject/Variable candidate there).
 				DSLSymbol* receiver = m_memberReceiver;
 				const ComposeMode back = m_memberReturnMode;
-				const std::string name = std::get<DSLSymbol::VariableDeclaration>(receiver->data).name;
-				const std::string prefix = m_composePrefix.substr(0, m_composePrefix.size() - name.size() - 1);
+				const oc::string name = oc::get<DSLSymbol::VariableDeclaration>(receiver->data).name;
+				const oc::string prefix = m_composePrefix.substr(0, m_composePrefix.size() - name.size() - 1);
 				m_memberReceiver = nullptr;
 				m_memberReturnMode = ComposeMode::None;
 				enterCompose(back, prefix, name);
@@ -5806,7 +5806,7 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 		{
 			m_reassignTarget = picked->refSymbol;
 			m_reassignOp = DSLOperator::Assign;
-			enterCompose(ComposeMode::ReassignOp, picked->label + " ", std::string(1, c));
+			enterCompose(ComposeMode::ReassignOp, picked->label + " ", oc::string(1, c));
 			return;
 		}
 	}
@@ -5828,13 +5828,13 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 			{
 				m_conditionLeftChain = left;
 				enterCompose(ComposeMode::ConditionOp,
-					stagedConditionPrefix() + chainDisplayText(left) + " ", std::string(1, c));
+					stagedConditionPrefix() + chainDisplayText(left) + " ", oc::string(1, c));
 			}
 			else
 			{
 				m_forConditionLeftChain = left;
 				enterCompose(ComposeMode::ForConditionOp,
-					forVarDeclPrefix() + ", " + chainDisplayText(left) + " ", std::string(1, c));
+					forVarDeclPrefix() + ", " + chainDisplayText(left) + " ", oc::string(1, c));
 			}
 		}
 		return;
@@ -5849,7 +5849,7 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 		m_forVarInitChain = init;
 		m_forConditionLeftChain = loopVarSeedChain();
 		enterCompose(ComposeMode::ForConditionOp,
-			forVarDeclPrefix() + ", " + chainDisplayText(m_forConditionLeftChain) + " ", std::string(1, c));
+			forVarDeclPrefix() + ", " + chainDisplayText(m_forConditionLeftChain) + " ", oc::string(1, c));
 		return;
 	}
 
@@ -5898,7 +5898,7 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 			// the same rule applies to it unchanged).
 			if (c == ')' && span->slot.kind == SlotRef::Kind::ExpressionOperand)
 			{
-				const DSLSymbol::Expression& parentChain = std::get<DSLSymbol::Expression>(span->slot.parent->data);
+				const DSLSymbol::Expression& parentChain = oc::get<DSLSymbol::Expression>(span->slot.parent->data);
 				if (parentChain.grouped && span->slot.argIndex == static_cast<int>(parentChain.operands.size()) - 1)
 				{
 					m_pendingSelectTarget = span->slot.parent;
@@ -5908,7 +5908,7 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 			}
 			if (span->operatorIndex >= 0 && span->symbol->type == ST::Expression)
 			{
-				const DSLOperator current = std::get<DSLSymbol::Expression>(span->symbol->data).operators[span->operatorIndex];
+				const DSLOperator current = oc::get<DSLSymbol::Expression>(span->symbol->data).operators[span->operatorIndex];
 				const bool classChar = dslIsComparisonOperator(current) ? isOperatorChar(c)
 					: dslIsAssignOperator(current) ? isAssignOperatorChar(c)
 					: dslIsLogicalOperator(current) ? (c == '&' || c == '|')
@@ -5917,7 +5917,7 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 				{
 					m_replaceOpExpr = span->symbol;
 					m_replaceOpIndex = span->operatorIndex;
-					enterCompose(ComposeMode::ReplaceOperator, "", std::string(1, c));
+					enterCompose(ComposeMode::ReplaceOperator, "", oc::string(1, c));
 					return;
 				}
 			}
@@ -5941,7 +5941,7 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 				if (type == DSLType::Int || type == DSLType::Float)
 				{
 					const SyntaxLine& syntaxLine = m_formatted[m_cursorLine];
-					const std::string anchorText = syntaxLine.text.substr(span->startCol, span->endCol - span->startCol);
+					const oc::string anchorText = syntaxLine.text.substr(span->startCol, span->endCol - span->startCol);
 					beginEditExprInsert(*span, arithmeticOperatorFromChar(c), anchorText);
 					return;
 				}
@@ -5994,7 +5994,7 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 				m_logicalTerms.clear();
 				m_logicalOps.clear();
 				enterCompose(ComposeMode::ConditionOp,
-					stagedConditionPrefix() + chainDisplayText(left) + " ", std::string(1, c));
+					stagedConditionPrefix() + chainDisplayText(left) + " ", oc::string(1, c));
 			}
 			return;
 		}
@@ -6022,7 +6022,7 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 			if (m_exprHasPendingGroup)
 			{
 				m_exprHasPendingGroup = false;
-				return std::move(m_exprPendingGroup);
+				return oc::move(m_exprPendingGroup);
 			}
 			return PendingExprTerm{ false, *selectedCandidate(), {}, {} };
 		};
@@ -6039,9 +6039,9 @@ void ScriptEditor::handleKeyEvent(const SDL_Event& evt)
 		if (c == ')' && m_exprStack.size() > 1 && haveTerm)
 		{
 			m_exprStack.back().terms.push_back(takeCurrentTerm());
-			ExprFrame closed = std::move(m_exprStack.back());
+			ExprFrame closed = oc::move(m_exprStack.back());
 			m_exprStack.pop_back();
-			m_exprPendingGroup = PendingExprTerm{ true, Candidate{}, std::move(closed.terms), std::move(closed.ops) };
+			m_exprPendingGroup = PendingExprTerm{ true, Candidate{}, oc::move(closed.terms), oc::move(closed.ops) };
 			m_exprHasPendingGroup = true;
 			m_pendingWord.clear();
 			m_candidates.clear(); // nothing is being typed right after a ')' -- no list until an operator continues the chain
@@ -6169,9 +6169,9 @@ DSLSymbol* ScriptEditor::referenceHighlightTarget(DSLSymbol* symbol) const
 	case ST::FunctionDeclaration:
 		return symbol;
 	case ST::VariableReference:
-		return std::get<DSLSymbol::VariableReference>(symbol->data).declaration;
+		return oc::get<DSLSymbol::VariableReference>(symbol->data).declaration;
 	case ST::FunctionCall:
-		return std::get<DSLSymbol::FunctionCall>(symbol->data).functionSymbol;
+		return oc::get<DSLSymbol::FunctionCall>(symbol->data).functionSymbol;
 	default:
 		return nullptr;
 	}
@@ -6214,7 +6214,7 @@ namespace
 			return kColVariable;
 		case ST::Constant:
 		{
-			const DSLType type = std::get<DSLSymbol::Constant>(span.symbol->data).type;
+			const DSLType type = oc::get<DSLSymbol::Constant>(span.symbol->data).type;
 			return type == DSLType::String ? kColString : type == DSLType::Bool ? kColDeclKeyword : kColNumber;
 		}
 		case ST::Expression: // operator spans and a group's ')'
@@ -6255,7 +6255,7 @@ namespace
 				const char* wordEnd = p;
 				while (wordEnd < end && std::isalpha(static_cast<unsigned char>(*wordEnd)))
 					++wordEnd;
-				const std::string_view word(p, wordEnd);
+				const oc::string_view word(p, wordEnd);
 				drawPiece(p, wordEnd, (word == "function" || word == "ref") ? kColDeclKeyword : kColPunct, firstPiece);
 				p = wordEnd;
 			}
@@ -6284,13 +6284,13 @@ namespace
 				continue;
 			if (span.startCol >= toCol)
 				break;
-			const int glueEnd = std::clamp(span.startCol, fromCol, toCol);
+			const int glueEnd = oc::clamp(span.startCol, fromCol, toCol);
 			if (glueEnd > cursor)
 				drawGlue(text + cursor, text + glueEnd, firstPiece);
-			const int pieceBegin = std::max(span.startCol, fromCol);
-			const int pieceEnd = std::min(span.endCol, toCol);
+			const int pieceBegin = oc::max(span.startCol, fromCol);
+			const int pieceEnd = oc::min(span.endCol, toCol);
 			drawPiece(text + pieceBegin, text + pieceEnd, syntaxSpanColor(span, syntheticEnd), firstPiece);
-			cursor = std::max(cursor, pieceEnd);
+			cursor = oc::max(cursor, pieceEnd);
 		}
 		if (toCol > cursor)
 			drawGlue(text + cursor, text + toCol, firstPiece);
@@ -6313,7 +6313,7 @@ void ScriptEditor::renderTextArea()
 	ImGuiIO& io = ImGui::GetIO();
 	if (ImGui::IsWindowHovered() && io.KeyCtrl && io.MouseWheel != 0.0f)
 	{
-		m_fontScale = std::clamp(m_fontScale + io.MouseWheel * 0.1f, 0.3f, 4.0f);
+		m_fontScale = oc::clamp(m_fontScale + io.MouseWheel * 0.1f, 0.3f, 4.0f);
 		io.MouseWheel = 0.0f;
 	}
 
@@ -6359,7 +6359,7 @@ void ScriptEditor::renderTextArea()
 				const float startX = ImGui::CalcTextSize(line.text.data(), line.text.data() + hspan.startCol).x;
 				const float endX = ImGui::CalcTextSize(line.text.data(), line.text.data() + hspan.endCol).x;
 				const ImVec2 rectMin(lineOrigin.x + indent + startX, lineOrigin.y);
-				const ImVec2 rectMax(lineOrigin.x + indent + std::max(endX, startX + 6.0f), lineOrigin.y + ImGui::GetTextLineHeight());
+				const ImVec2 rectMax(lineOrigin.x + indent + oc::max(endX, startX + 6.0f), lineOrigin.y + ImGui::GetTextLineHeight());
 				drawList->AddRect(rectMin, rectMax, ImGui::GetColorU32(ImVec4(0.30f, 0.70f, 1.0f, 0.85f)));
 			}
 		}
@@ -6367,7 +6367,7 @@ void ScriptEditor::renderTextArea()
 		const bool isCursorLine = (i == m_cursorLine) && !line.spans.empty();
 		if (isCursorLine)
 		{
-			const int spanIdx = std::clamp(m_cursorSpan, 0, static_cast<int>(line.spans.size()) - 1);
+			const int spanIdx = oc::clamp(m_cursorSpan, 0, static_cast<int>(line.spans.size()) - 1);
 			const SyntaxSpan& span = line.spans[spanIdx];
 			// A staged re-declare's or widened reassignment's compose box covers the ENTIRE line, not just the
 			// selected span -- those flows re-author the whole statement (see m_redeclareTarget /
@@ -6385,13 +6385,13 @@ void ScriptEditor::renderTextArea()
 			// been resolved so far, plus what's being typed right now) -- rendered inline, in the same
 			// highlight rectangle, rather than a separate floating box (see AutoCompleteRules' candidate
 			// list, still shown below via renderAutocompletePopup).
-			const std::string composedText = composing ? (m_composePrefix + m_pendingWord + "|") : std::string();
+			const oc::string composedText = composing ? (m_composePrefix + m_pendingWord + "|") : oc::string();
 			const float hiWidth = composing
-				? std::max(6.0f, ImGui::CalcTextSize(composedText.c_str()).x)
+				? oc::max(6.0f, ImGui::CalcTextSize(composedText.c_str()).x)
 				// A blank statement-placeholder line has a zero-width span (see Syntax's Placeholder
 				// rendering) -- keep it visible instead of collapsing to an invisible sliver, same as a text
 				// cursor on an empty line.
-				: std::max(6.0f, ImGui::CalcTextSize(line.text.data() + selStart, line.text.data() + selEnd).x);
+				: oc::max(6.0f, ImGui::CalcTextSize(line.text.data() + selStart, line.text.data() + selEnd).x);
 
 			const ImVec2 rectMin(lineOrigin.x + indent + preWidth, lineOrigin.y);
 			const ImVec2 rectMax(lineOrigin.x + indent + preWidth + hiWidth, lineOrigin.y + ImGui::GetTextLineHeight());
@@ -6428,13 +6428,13 @@ void ScriptEditor::renderTextArea()
 
 		const ImVec2 mouse = ImGui::GetMousePos();
 		int clickedLine = static_cast<int>((mouse.y - m_textOriginY) / m_lineHeight);
-		clickedLine = std::clamp(clickedLine, 0, static_cast<int>(m_formatted.size()) - 1);
+		clickedLine = oc::clamp(clickedLine, 0, static_cast<int>(m_formatted.size()) - 1);
 		const SyntaxLine& line = m_formatted[clickedLine];
 		const float indent = static_cast<float>(line.scopeLevel) * indentUnitWidth;
 		const float relX = mouse.x - m_textOriginX - indent;
 
 		int bestSpan = 0;
-		float bestDist = std::numeric_limits<float>::max();
+		float bestDist = oc::numeric_limits<float>::max();
 		for (int s = 0; s < static_cast<int>(line.spans.size()); ++s)
 		{
 			const SyntaxSpan& span = line.spans[s];
@@ -6501,38 +6501,38 @@ bool ScriptEditor::isComponentMemberReferenced(DSLType memberType) const
 	// Every use of a component member (self.physics, dotted into as a call receiver or a chained access) is a
 	// MemberAccess stamped with that member's own type (see DSL.ixx's MemberAccess::type), owned flat by some
 	// line (see DSL.ixx's ownership model) -- no need to walk back to which VariableDeclaration it hangs off.
-	for (const std::unique_ptr<DSLCodeLine>& line : m_document.file.lines)
-		for (const std::unique_ptr<DSLSymbol>& s : line->symbols)
-			if (s->type == ST::MemberAccess && std::get<DSLSymbol::MemberAccess>(s->data).type == memberType)
+	for (const oc::unique_ptr<DSLCodeLine>& line : m_document.file.lines)
+		for (const oc::unique_ptr<DSLSymbol>& s : line->symbols)
+			if (s->type == ST::MemberAccess && oc::get<DSLSymbol::MemberAccess>(s->data).type == memberType)
 				return true;
 	return false;
 }
 
-bool ScriptEditor::isDataFieldReferenced(const std::string& name) const
+bool ScriptEditor::isDataFieldReferenced(const oc::string& name) const
 {
 	// A field's own MemberAccess ("self.data.<name>") is distinguished from any OTHER member sharing the same
 	// spelling (e.g. self.pos vs. a field literally named "pos") by its RECEIVER's type -- only self.data's own
 	// members ever resolve to DSLType::ScriptData.
-	for (const std::unique_ptr<DSLCodeLine>& line : m_document.file.lines)
-		for (const std::unique_ptr<DSLSymbol>& s : line->symbols)
+	for (const oc::unique_ptr<DSLCodeLine>& line : m_document.file.lines)
+		for (const oc::unique_ptr<DSLSymbol>& s : line->symbols)
 			if (s->type == ST::MemberAccess)
 			{
-				const DSLSymbol::MemberAccess& m = std::get<DSLSymbol::MemberAccess>(s->data);
+				const DSLSymbol::MemberAccess& m = oc::get<DSLSymbol::MemberAccess>(s->data);
 				if (m.memberName == name && dslValueType(m.receiver) == DSLType::ScriptData)
 					return true;
 			}
 	return false;
 }
 
-bool ScriptEditor::isEventReferenced(const std::string& name) const
+bool ScriptEditor::isEventReferenced(const oc::string& name) const
 {
 	// The per-document twin of isDataFieldReferenced -- an event's own MemberAccess ("self.events.<name>") is
 	// distinguished by its RECEIVER resolving to DSLType::ScriptEvents.
-	for (const std::unique_ptr<DSLCodeLine>& line : m_document.file.lines)
-		for (const std::unique_ptr<DSLSymbol>& s : line->symbols)
+	for (const oc::unique_ptr<DSLCodeLine>& line : m_document.file.lines)
+		for (const oc::unique_ptr<DSLSymbol>& s : line->symbols)
 			if (s->type == ST::MemberAccess)
 			{
-				const DSLSymbol::MemberAccess& m = std::get<DSLSymbol::MemberAccess>(s->data);
+				const DSLSymbol::MemberAccess& m = oc::get<DSLSymbol::MemberAccess>(s->data);
 				if (m.memberName == name && dslValueType(m.receiver) == DSLType::ScriptEvents)
 					return true;
 			}
@@ -6541,17 +6541,17 @@ bool ScriptEditor::isEventReferenced(const std::string& name) const
 
 DSLSymbol* ScriptEditor::findEntryFunctionHead(const char* name) const
 {
-	for (const std::unique_ptr<DSLCodeLine>& line : m_document.file.lines)
+	for (const oc::unique_ptr<DSLCodeLine>& line : m_document.file.lines)
 	{
 		DSLSymbol* head = line->head();
 		if (line->scopeLevel == 0 && head != nullptr && head->type == ST::FunctionDeclaration
-			&& std::get<DSLSymbol::FunctionDeclaration>(head->data).name == name)
+			&& oc::get<DSLSymbol::FunctionDeclaration>(head->data).name == name)
 			return head;
 	}
 	return nullptr;
 }
 
-bool ScriptEditor::isEntryPointName(const std::string& name) const
+bool ScriptEditor::isEntryPointName(const oc::string& name) const
 {
 	return m_bindings.entryPointFor(name) != nullptr;
 }
@@ -6560,7 +6560,7 @@ bool ScriptEditor::isLockedEntryFunction(const DSLSymbol* funcDecl) const
 {
 	if (funcDecl == nullptr || funcDecl->type != ST::FunctionDeclaration)
 		return false;
-	return isEntryPointName(std::get<DSLSymbol::FunctionDeclaration>(funcDecl->data).name);
+	return isEntryPointName(oc::get<DSLSymbol::FunctionDeclaration>(funcDecl->data).name);
 }
 
 void ScriptEditor::toggleEntryFunction(const EntryPointDef& def, bool enable)
@@ -6571,18 +6571,18 @@ void ScriptEditor::toggleEntryFunction(const EntryPointDef& def, bool enable)
 		if (existing != nullptr)
 			return; // already present (shouldn't happen -- the checkbox already reads as checked)
 
-		auto headerPtr = std::make_unique<DSLCodeLine>();
+		auto headerPtr = oc::make_unique<DSLCodeLine>();
 		headerPtr->scopeLevel = 0;
 		DSLCodeLine& header = *headerPtr;
-		m_document.file.lines.push_back(std::move(headerPtr));
+		m_document.file.lines.push_back(oc::move(headerPtr));
 
-		std::vector<DSLSymbol*> params;
+		oc::vector<DSLSymbol*> params;
 		for (const EntryPointParam& param : def.dslParams)
 		{
 			DSLSymbol* typeSymbol = pushSymbol(header, ST::TypeDeclaration, DSLSymbol::TypeDeclaration{ param.type });
 			params.push_back(pushSymbol(header, ST::VariableDeclaration, DSLSymbol::VariableDeclaration{ param.name, typeSymbol }));
 		}
-		pushSymbol(header, ST::FunctionDeclaration, DSLSymbol::FunctionDeclaration{ def.name, std::move(params), DSLType::Void });
+		pushSymbol(header, ST::FunctionDeclaration, DSLSymbol::FunctionDeclaration{ def.name, oc::move(params), DSLType::Void });
 
 		seedStatementPlaceholder(insertLineAfter(header, header.scopeLevel + 1));
 		return;
@@ -6594,7 +6594,7 @@ void ScriptEditor::toggleEntryFunction(const EntryPointDef& def, bool enable)
 		return;
 	if (!isFunctionBodyDeletable(existing) || AutoCompleteRules::isFunctionReferenced(existing, m_document.file))
 	{
-		Log::warning(std::string("Can't remove '") + def.name + "' -- it has a body, or is still called elsewhere");
+		Log::warning(oc::string("Can't remove '") + def.name + "' -- it has a body, or is still called elsewhere");
 		return;
 	}
 	deleteEmptyBlock(existing);
@@ -6661,7 +6661,7 @@ void ScriptEditor::renderSidebarPanel()
 			seg(kColPunct, func.params.empty() ? "..." : ", ...");
 		seg(kColPunct, ")");
 	};
-	// Recursive (std::function, since it calls itself): a plain data member (including struct-typed ones like
+	// Recursive (oc::function, since it calls itself): a plain data member (including struct-typed ones like
 	// "vec3 pos" -- their own shape is browsable separately, under TYPES) draws as "type name"; an ENGINE-OBJECT
 	// member (self.physics and friends) draws as its own tree node instead -- checkbox-gated when
 	// component-bound -- browsing the matching binding object's own members/functions, mirroring how the DSL
@@ -6673,7 +6673,7 @@ void ScriptEditor::renderSidebarPanel()
 	// under a nested Entity (self.parent) would read as "require the parent's physics", which is not a thing --
 	// another entity's components are reached with `ifexist`. The same root-only rule the candidate lists
 	// and the loader enforce (see receiverCandidates' receiverIsRoot / checkMemberUsable).
-	std::function<void(const BindingObject&, bool)> drawObjectContents = [&](const BindingObject& object, bool isRoot)
+	oc::function<void(const BindingObject&, bool)> drawObjectContents = [&](const BindingObject& object, bool isRoot)
 	{
 		for (const BindingMember& member : object.members)
 		{
@@ -6697,14 +6697,14 @@ void ScriptEditor::renderSidebarPanel()
 				if (member.requiredComponent != DSLType::Void)
 				{
 					bool checkboxValue = dslIsComponentRequired(m_document, member.requiredComponent);
-					if (ImGui::Checkbox((std::string("##req_") + member.name).c_str(), &checkboxValue))
+					if (ImGui::Checkbox((oc::string("##req_") + member.name).c_str(), &checkboxValue))
 					{
 						if (checkboxValue)
 							m_document.requiredComponents.push_back(member.requiredComponent);
 						else if (!isComponentMemberReferenced(member.type))
-							std::erase(m_document.requiredComponents, member.requiredComponent);
+							oc::erase(m_document.requiredComponents, member.requiredComponent);
 						else
-							Log::warning(std::string("Can't un-require '") + member.name + "' -- the script still references it");
+							Log::warning(oc::string("Can't un-require '") + member.name + "' -- the script still references it");
 					}
 					ImGui::SameLine();
 					if (!dslIsComponentRequired(m_document, member.requiredComponent))
@@ -6784,7 +6784,7 @@ void ScriptEditor::renderSidebarPanel()
 	{
 		// The same declarable-type set typeKeywordCandidates offers (primitives + every registered struct),
 		// plus an ARRAY of each. Entity is deliberately NOT offered, in either form -- see DSLDataField.
-		std::vector<DSLType> typeOptions = { DSLType::Int, DSLType::Float, DSLType::Bool, DSLType::String };
+		oc::vector<DSLType> typeOptions = { DSLType::Int, DSLType::Float, DSLType::Bool, DSLType::String };
 		for (size_t i = 0; i < m_bindings.structs().size(); ++i)
 			typeOptions.push_back(dslStructType(static_cast<int>(i)));
 		const size_t scalarCount = typeOptions.size();
@@ -6805,7 +6805,7 @@ void ScriptEditor::renderSidebarPanel()
 		ImGui::SameLine();
 		if (ImGui::SmallButton("Add"))
 		{
-			const std::string name = m_pendingDataFieldName;
+			const oc::string name = m_pendingDataFieldName;
 			if (!isValidIdentifierName(name))
 				Log::warning("'" + name + "' isn't a valid field name");
 			else if (AutoCompleteRules::isReservedWord(name))
@@ -6828,7 +6828,7 @@ void ScriptEditor::renderSidebarPanel()
 	ImGui::TextDisabled("EVENTS");
 	for (size_t i = 0; i < m_document.eventNames.size(); ++i)
 	{
-		const std::string& name = m_document.eventNames[i];
+		const oc::string& name = m_document.eventNames[i];
 		ImGui::PushID(static_cast<int>(i));
 		firstSegment = true;
 		seg(kColType, "int");
@@ -6849,7 +6849,7 @@ void ScriptEditor::renderSidebarPanel()
 	ImGui::SameLine();
 	if (ImGui::SmallButton("Add##addEvent"))
 	{
-		const std::string name = m_pendingEventName;
+		const oc::string name = m_pendingEventName;
 		if (!isValidIdentifierName(name))
 			Log::warning("'" + name + "' isn't a valid event name");
 		else if (AutoCompleteRules::isReservedWord(name))
@@ -6931,9 +6931,9 @@ void ScriptEditor::render()
 	// to type/compose on (deleting the last line otherwise leaves no way to enter anything again).
 	if (m_document.file.lines.empty())
 	{
-		auto blankLine = std::make_unique<DSLCodeLine>();
+		auto blankLine = oc::make_unique<DSLCodeLine>();
 		DSLCodeLine& line = *blankLine;
-		m_document.file.lines.push_back(std::move(blankLine));
+		m_document.file.lines.push_back(oc::move(blankLine));
 		seedStatementPlaceholder(line);
 	}
 
@@ -6943,10 +6943,10 @@ void ScriptEditor::render()
 	// holds however the first line came to be occupied (typing on it, deleting the one above it, a load).
 	if (!isBlankStatementDSLLine(*m_document.file.lines.front()) || m_document.file.lines.front()->scopeLevel != 0)
 	{
-		auto blankLine = std::make_unique<DSLCodeLine>();
+		auto blankLine = oc::make_unique<DSLCodeLine>();
 		DSLCodeLine& line = *blankLine;
 		line.scopeLevel = 0;
-		m_document.file.lines.insert(m_document.file.lines.begin(), std::move(blankLine));
+		m_document.file.lines.insert(m_document.file.lines.begin(), oc::move(blankLine));
 		seedStatementPlaceholder(line);
 		// Everything shifted down by one; the cursor has to follow, or a pending edit lands on the wrong line.
 		if (m_cursorLine >= 0)
@@ -6960,8 +6960,8 @@ void ScriptEditor::render()
 
 	if (m_pendingSelectLineEnd >= 0 && !m_formatted.empty())
 	{
-		m_cursorLine = std::clamp(m_pendingSelectLineEnd, 0, static_cast<int>(m_formatted.size()) - 1);
-		m_cursorSpan = std::max(0, static_cast<int>(m_formatted[m_cursorLine].spans.size()) - 1);
+		m_cursorLine = oc::clamp(m_pendingSelectLineEnd, 0, static_cast<int>(m_formatted.size()) - 1);
+		m_cursorSpan = oc::max(0, static_cast<int>(m_formatted[m_cursorLine].spans.size()) - 1);
 		m_pendingSelectLineEnd = -1;
 	}
 
@@ -7007,7 +7007,7 @@ void ScriptEditor::render()
 	{
 		if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SCRIPT_FILE"))
 		{
-			const std::string droppedPath = static_cast<const char*>(payload->Data);
+			const oc::string droppedPath = static_cast<const char*>(payload->Data);
 			if (FileSystem::extension(droppedPath) == ".dsl")
 				requestOpen(droppedPath);
 		}
@@ -7024,7 +7024,7 @@ void ScriptEditor::render()
 	if (ImGui::IsItemActive())
 	{
 		m_sidebarWidth += ImGui::GetIO().MouseDelta.x;
-		m_sidebarWidth  = std::clamp(m_sidebarWidth, 80.0f, 600.0f);
+		m_sidebarWidth  = oc::clamp(m_sidebarWidth, 80.0f, 600.0f);
 	}
 	if (ImGui::IsItemHovered())
 		ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
@@ -7040,7 +7040,7 @@ void ScriptEditor::render()
 
 void ScriptEditor::saveDocument()
 {
-	const std::string& path = m_document.filePath;
+	const oc::string& path = m_document.filePath;
 	if (path.empty())
 	{
 		Log::warning("No script open -- double-click a .dsl in the Content browser to open one");
@@ -7058,7 +7058,7 @@ void ScriptEditor::saveDocument()
 		Log::error("Failed to write " + path);
 }
 
-void ScriptEditor::loadDocument(const std::string& path)
+void ScriptEditor::loadDocument(const oc::string& path)
 {
 	if (path.empty())
 		return;
@@ -7088,10 +7088,10 @@ void ScriptEditor::copySelection()
 {
 	if (m_document.file.lines.empty())
 		return;
-	const std::vector<SyntaxLine> expanded = Syntax::format(m_document.file, /*compact*/ false);
+	const oc::vector<SyntaxLine> expanded = Syntax::format(m_document.file, /*compact*/ false);
 	if (expanded.empty())
 		return;
-	const int idx = std::clamp(m_cursorLine, 0, static_cast<int>(expanded.size()) - 1);
+	const int idx = oc::clamp(m_cursorLine, 0, static_cast<int>(expanded.size()) - 1);
 	int first = idx, last = idx;
 
 	const SyntaxLine& cur = expanded[idx];
@@ -7118,7 +7118,7 @@ void ScriptEditor::copySelection()
 			last = idx;
 	}
 
-	std::string text;
+	oc::string text;
 	const int base = expanded[first].scopeLevel;
 	for (int i = first; i <= last; ++i)
 	{
@@ -7141,8 +7141,8 @@ void ScriptEditor::pasteClipboard()
 		return;
 	cancelCompose(); // lossless -- a compose never touches the document
 
-	const std::vector<SyntaxLine> expanded = Syntax::format(m_document.file, /*compact*/ false);
-	int insertAfter = expanded.empty() ? -1 : std::clamp(m_cursorLine, 0, static_cast<int>(expanded.size()) - 1);
+	const oc::vector<SyntaxLine> expanded = Syntax::format(m_document.file, /*compact*/ false);
+	int insertAfter = expanded.empty() ? -1 : oc::clamp(m_cursorLine, 0, static_cast<int>(expanded.size()) - 1);
 	int indent = 0;
 	if (insertAfter >= 0)
 	{
@@ -7155,36 +7155,36 @@ void ScriptEditor::pasteClipboard()
 	// Clipboard -> (indent, body) lines: leading TABS carry the fragment's own nesting, rebased so its
 	// shallowest non-empty line lands at the insertion indent. Trailing blank lines drop (a final '\n' is not
 	// a line); interior blanks keep -- they are real blank-statement lines.
-	std::vector<std::pair<int, std::string>> clipLines;
+	oc::vector<oc::pair<int, oc::string>> clipLines;
 	{
-		const std::string_view all(clip);
+		const oc::string_view all(clip);
 		int minTabs = INT_MAX;
 		size_t pos = 0;
 		while (pos <= all.size())
 		{
 			const size_t newline = all.find('\n', pos);
-			std::string_view line = all.substr(pos, newline == std::string_view::npos ? all.size() - pos : newline - pos);
-			pos = (newline == std::string_view::npos) ? all.size() + 1 : newline + 1;
+			oc::string_view line = all.substr(pos, newline == oc::string_view::npos ? all.size() - pos : newline - pos);
+			pos = (newline == oc::string_view::npos) ? all.size() + 1 : newline + 1;
 			if (!line.empty() && line.back() == '\r')
 				line.remove_suffix(1);
 			int tabs = 0;
 			while (tabs < static_cast<int>(line.size()) && line[tabs] == '\t')
 				++tabs;
-			const std::string body(line.substr(static_cast<size_t>(tabs)));
+			const oc::string body(line.substr(static_cast<size_t>(tabs)));
 			clipLines.emplace_back(tabs, body);
 			if (!body.empty())
-				minTabs = std::min(minTabs, tabs);
+				minTabs = oc::min(minTabs, tabs);
 		}
 		while (!clipLines.empty() && clipLines.back().second.empty())
 			clipLines.pop_back();
 		if (clipLines.empty() || minTabs == INT_MAX)
 			return; // nothing but whitespace
 		for (auto& [tabs, body] : clipLines)
-			tabs = indent + std::max(0, tabs - minTabs);
+			tabs = indent + oc::max(0, tabs - minTabs);
 	}
 
-	std::string text = "//@@dsl 1\n" + ScriptLoader::directiveText(m_document);
-	const auto emit = [&text](int tabs, const std::string& body)
+	oc::string text = "//@@dsl 1\n" + ScriptLoader::directiveText(m_document);
+	const auto emit = [&text](int tabs, const oc::string& body)
 	{
 		text += "//@";
 		for (int t = 0; t < tabs; ++t)
@@ -7222,7 +7222,7 @@ void ScriptEditor::pasteClipboard()
 	m_pendingSelectLineEnd = insertAfter + static_cast<int>(clipLines.size());
 }
 
-void ScriptEditor::requestOpen(const std::string& path)
+void ScriptEditor::requestOpen(const oc::string& path)
 {
 	if (path.empty() || path == m_document.filePath)
 		return; // already the active document

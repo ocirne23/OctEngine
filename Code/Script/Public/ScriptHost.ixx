@@ -16,8 +16,8 @@ export import :Transpiler;
 // ScriptContext and casts these. A null `update` marks a script that failed to compile.
 export struct ScriptModule
 {
-    std::string dllPath;
-    std::string scriptPath;
+    oc::string dllPath;
+    oc::string scriptPath;
     // Do not cache these pointers, they can get swapped when scripts reload!
     void* onSpawn = nullptr;   // ScriptInitFn
     void* update = nullptr;    // ScriptUpdateFn
@@ -35,7 +35,7 @@ export struct ScriptModule
     const void* dataFields = nullptr;
     int numDataFields = 0;
     uint32 requiredComponents = 0; // EComponentID bitmask (0 = none), from ScriptRequiredComponents()
-	std::vector<std::string> eventNames; // in the order the script declared them
+	oc::vector<oc::string> eventNames; // in the order the script declared them
 
 	// Set when an entry point hardware-faulted (caught by Entity's SEH-guarded invokers -- integer divide by
 	// zero, a stale pointer). Every entry-point gate skips a faulted module; the next successful (re)load
@@ -47,10 +47,10 @@ export struct ScriptModule
 	// Owned/filled by ScriptEventManager in onScriptLoadedCallback and rebuilt on every reload (indices can
 	// shift when events are added/removed/reordered); mutable so it can be written through the const ScriptModule*
 	// the load callback receives. Lets fireEvent translate a fired key into this script's eventIdx with one lookup.
-	mutable std::unordered_map<uint32, int> eventKeyToIndex;
+	mutable oc::unordered_map<uint32, int> eventKeyToIndex;
 };
 
-export typedef void(*ScriptLoadedCallback)(const ScriptModule* script, const std::vector<std::string>& oldEventNames);
+export typedef void(*ScriptLoadedCallback)(const ScriptModule* script, const oc::vector<oc::string>& oldEventNames);
 
 // Compiles visual scripts to self-contained DLLs via the installed MSVC toolchain and caches them by path.
 // Extension-agnostic: a .scr (node-graph-generated) and a .dsl (DSL-editor-generated, see Code/Script/Private/
@@ -67,20 +67,20 @@ public:
     // Returns the cached module for `path`, compiling it on first use (or when forced). Returns null and
     // keeps the previous build on failure; first-time failures are cached so they aren't retried each frame.
     // The returned pointer is stable until shutdown().
-    const ScriptModule* getOrLoad(const std::string& path, bool forceRecompile = false);
+    const ScriptModule* getOrLoad(const oc::string& path, bool forceRecompile = false);
 
-	void setCurrentScriptPath(const std::string& path) { m_currentScriptPath = path; }
+	void setCurrentScriptPath(const oc::string& path) { m_currentScriptPath = path; }
 	void reloadCurrentScript() { if (!m_currentScriptPath.empty()) getOrLoad(m_currentScriptPath, true); }
 
 private:
 
     void sweepPendingPdbs();
-    void retirePdbs(const std::string& dir, const std::string& stem, const std::string& keep);
-    const std::string& findVcvars();
-    bool compile(const std::string& sourcePath, const std::string& pdbPath, std::string& outDll, std::string& outErrors);
-    std::string scriptDllPath(const std::string& sourcePath) const;
+    void retirePdbs(const oc::string& dir, const oc::string& stem, const oc::string& keep);
+    const oc::string& findVcvars();
+    bool compile(const oc::string& sourcePath, const oc::string& pdbPath, oc::string& outDll, oc::string& outErrors);
+    oc::string scriptDllPath(const oc::string& sourcePath) const;
     struct CachedScript;
-    bool loadDll(CachedScript& slot, const std::string& dll);
+    bool loadDll(CachedScript& slot, const oc::string& dll);
     void unloadAll();
 
 private:
@@ -92,11 +92,11 @@ private:
 
     ScriptLoadedCallback m_scriptLoadedCallback = nullptr;
 
-    std::string vcvarsPath;                                 // cached after first lookup
-    std::unordered_map<std::string, CachedScript> scripts;  // keyed by canonical source path
-    std::vector<std::string> pendingPdbDeletes;             // superseded PDBs the debugger still holds; retried later
+    oc::string vcvarsPath;                                 // cached after first lookup
+    oc::unordered_map<oc::string, CachedScript> scripts;  // keyed by canonical source path
+    oc::vector<oc::string> pendingPdbDeletes;             // superseded PDBs the debugger still holds; retried later
 
-	std::string m_currentScriptPath;                        // the script the editor panel is currently editing (F6 recompiles it)
+	oc::string m_currentScriptPath;                        // the script the editor panel is currently editing (F6 recompiles it)
 };
 
 export namespace Globals

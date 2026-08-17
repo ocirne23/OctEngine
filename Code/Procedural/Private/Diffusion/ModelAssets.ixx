@@ -43,11 +43,11 @@ export namespace Procedural::Diffusion
 		int32 coarsePooling = 1;          // only 1 is supported (as in the reference)
 		float residualMean = 0.0f;
 		float residualStd = 0.7f;
-		std::vector<float> coarseMeans;   // 6
-		std::vector<float> coarseStds;    // 6
-		std::vector<float> condSnr;       // 5
-		std::vector<float> frequencyMult; // 5
-		std::vector<float> histogramRaw;  // 5; all zeros when the file says null (which it does)
+		oc::vector<float> coarseMeans;   // 6
+		oc::vector<float> coarseStds;    // 6
+		oc::vector<float> condSnr;       // 5
+		oc::vector<float> frequencyMult; // 5
+		oc::vector<float> histogramRaw;  // 5; all zeros when the file says null (which it does)
 	};
 
 	// pipeline_data.json — seed-INDEPENDENT real-world (WorldClim/ETOPO) distributions. The matching
@@ -55,7 +55,7 @@ export namespace Procedural::Diffusion
 	struct PipelineData
 	{
 		int32 nQuantiles = 64;
-		std::vector<float> dataQuantiles; // [5][nQuantiles], row-major
+		oc::vector<float> dataQuantiles; // [5][nQuantiles], row-major
 		float aTempStd = 0.0f;
 		float bTempStd = 0.0f;
 		float tempStdP1 = 0.0f;
@@ -72,18 +72,18 @@ export namespace Procedural::Diffusion
 
 		const ModelConfig& config() const { return m_config; }
 		const PipelineData& data() const { return m_data; }
-		const std::string& error() const { return m_error; }
+		const oc::string& error() const { return m_error; }
 
 		// Assets/TerrainDiffusion, relative to the CWD (FileSystem::initialize sets it to Assets/).
-		static std::string modelDir();
-		static std::string assetPath(std::string_view fileName);
+		static oc::string modelDir();
+		static oc::string assetPath(oc::string_view fileName);
 		// The model file to load for `stem` ("coarse_model", "base_model", "decoder_model") at the requested
 		// precision, falling back to the fp32 original when the converted file is absent — which is the
 		// normal state, since converting is an optional offline step.
-		static std::string modelPath(std::string_view stem, EPrecision precision);
+		static oc::string modelPath(oc::string_view stem, EPrecision precision);
 		// The converted model beside its fp32 original: Assets/TerrainDiffusion/<stem>_fp16.onnx. Written by
 		// Tools/convert_models_fp16.py, by hand; the engine only ever reads it.
-		static std::string fp16Path(std::string_view stem);
+		static oc::string fp16Path(oc::string_view stem);
 		// True when EVERY model of the set has an fp16 file present. Mixing precisions across the three
 		// stages is allowed and works (each session is independent), but it makes a perf number impossible
 		// to interpret, so the caller logs which stages actually got converted.
@@ -92,7 +92,7 @@ export namespace Procedural::Diffusion
 	private:
 		ModelConfig m_config;
 		PipelineData m_data;
-		std::string m_error;
+		oc::string m_error;
 		bool m_loaded = false;
 	};
 }

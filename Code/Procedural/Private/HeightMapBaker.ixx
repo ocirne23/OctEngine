@@ -15,7 +15,7 @@ export namespace Procedural
 	// direction in bits 8-15; bit-cast, never float arithmetic), A = macro altitude.
 	struct BakedTerrainData
 	{
-		std::vector<float> texels;
+		oc::vector<float> texels;
 		glm::vec2 center = glm::vec2(0.0f);
 		glm::vec2 ranges = glm::vec2(0.0f); // world size per cascade
 		uint32 res = 0;
@@ -80,8 +80,8 @@ export namespace Procedural
 		// shore (and from rescuing the plain around it). The depth one keeps a puddle from doing the same:
 		// terrain a centimetre under sea level is not something swell arrives from.
 		constexpr float kSeaEps = 0.05f; // matches the shader's seaFade toe (ocean_wave.inc.glsl)
-		const float seedLevel = seaLevel - std::max(cfg.swashDepth, 0.0f);
-		std::vector<float> dist(n, FLT_MAX);
+		const float seedLevel = seaLevel - oc::max(cfg.swashDepth, 0.0f);
+		oc::vector<float> dist(n, FLT_MAX);
 		for (size_t i = 0; i < n; ++i)
 		{
 			const float* t = texels + i * channels;
@@ -119,7 +119,7 @@ export namespace Procedural
 			}
 
 		const float r0 = cfg.radius;
-		const float r1 = cfg.radius + std::max(cfg.feather, 1.0f);
+		const float r1 = cfg.radius + oc::max(cfg.feather, 1.0f);
 		for (size_t i = 0; i < n; ++i)
 		{
 			float* t = texels + i * channels;
@@ -218,10 +218,10 @@ export namespace Procedural
 		// but PROPAGATING the nearest dry texel's coords and scoring candidates by true euclidean distance
 		// to them. Directions come out of this — chamfer distances alone visibly bend them near corners.
 		constexpr uint32 kNoSeed = 0xFFFFFFFFu;
-		std::vector<uint32> seed(n);  // packed (y << 16 | x) of the nearest non-ocean texel
-		std::vector<float> distSq(n); // squared distance to it, in texels
+		oc::vector<uint32> seed(n);  // packed (y << 16 | x) of the nearest non-ocean texel
+		oc::vector<float> distSq(n); // squared distance to it, in texels
 		enum : uint8 { Land = 0, Shore = 1, OpenOcean = 2 };
-		std::vector<uint8> cls(n);
+		oc::vector<uint8> cls(n);
 		for (uint32 j = 0; j < res; ++j)
 			for (uint32 i = 0; i < res; ++i)
 			{
@@ -275,7 +275,7 @@ export namespace Procedural
 		const float r1 = cfg.oceanRange;
 		const float r0 = glm::max(r1 - glm::max(cfg.oceanFade, 0.0f), 0.0f);
 		const glm::vec2 windDir(std::cos(cfg.windAngle), std::sin(cfg.windAngle));
-		std::vector<glm::vec3> field(n, glm::vec3(0.0f));
+		oc::vector<glm::vec3> field(n, glm::vec3(0.0f));
 		for (uint32 j = 0; j < res; ++j)
 			for (uint32 i = 0; i < res; ++i)
 			{
@@ -310,7 +310,7 @@ export namespace Procedural
 		const int32 radius = (int32)glm::clamp(cfg.smoothRadius / (float)texelSize + 0.5f, 0.0f, (float)(res / 4));
 		if (radius > 0)
 		{
-			std::vector<glm::vec3> tmp(n);
+			oc::vector<glm::vec3> tmp(n);
 			for (uint32 j = 0; j < res; ++j)
 			{
 				const glm::vec3* src = field.data() + (size_t)j * res;
@@ -323,7 +323,7 @@ export namespace Procedural
 					if (i >= 0)                  dst[i] = sum;
 				}
 			}
-			std::vector<glm::vec3> acc(res, glm::vec3(0.0f)); // per-column running sums, streamed row-major
+			oc::vector<glm::vec3> acc(res, glm::vec3(0.0f)); // per-column running sums, streamed row-major
 			for (int32 j = -radius; j < (int32)res; ++j)
 			{
 				if (j + radius < (int32)res)
@@ -337,7 +337,7 @@ export namespace Procedural
 					for (uint32 i = 0; i < res; ++i) acc[i] -= row[i];
 				}
 				if (j >= 0)
-					std::copy(acc.begin(), acc.end(), field.begin() + (size_t)j * res);
+					oc::copy(acc.begin(), acc.end(), field.begin() + (size_t)j * res);
 			}
 		}
 
@@ -389,7 +389,7 @@ export namespace Procedural
 	public:
 		struct Baked
 		{
-			std::vector<float> texels;
+			oc::vector<float> texels;
 			glm::vec2 center = glm::vec2(0.0f);
 			glm::vec2 ranges = glm::vec2(0.0f); // world size per cascade (y = x when single-cascade)
 		};
@@ -405,18 +405,18 @@ export namespace Procedural
 		// patterns possible) — shaders decode texels via floatBitsToUint (terrainClimateAt); altitude is
 		// a plain float (bilinear-safe). The flow bits carry the generator's authored angle where it has
 		// one, the computed toward-land/downhill field where flowField is non-null (applyFlowField).
-		bool update(Baked& out, bool active, const std::shared_ptr<const ITerrainSampler>& maps,
+		bool update(Baked& out, bool active, const oc::shared_ptr<const ITerrainSampler>& maps,
 			const glm::vec2& camXZ, glm::vec2 ranges, uint32 res, uint32 numCascades, uint32 channels = 1,
 			const WaterReach* waterReach = nullptr, const FlowField* flowField = nullptr)
 		{
 			bool shipped = false;
 			if (m_bakeInFlight && m_bakeCounter.isDone())
 			{
-				std::vector<float> texels = std::move(m_bake->result);
+				oc::vector<float> texels = oc::move(m_bake->result);
 				m_bakeInFlight = false;
 				if (active) // a bake finishing after its consumer got disabled is dropped
 				{
-					out.texels = std::move(texels);
+					out.texels = oc::move(texels);
 					out.center = m_pendingCenter;
 					out.ranges = m_pendingRanges;
 					m_activeCenter = m_pendingCenter;
@@ -477,20 +477,20 @@ export namespace Procedural
 			m_pendingFlowOn = flowOnNow;
 			// The bake parameters exceed the job's 64-byte inline capture - box them (result rides
 			// in the same box, written before the counter signals; read only after isDone).
-			m_bake = std::make_shared<BakeJob>(BakeJob{ maps, center, ranges, res, numCascades, channels,
+			m_bake = oc::make_shared<BakeJob>(BakeJob{ maps, center, ranges, res, numCascades, channels,
 				reachNow, reachOnNow, flowNow, flowOnNow, {} });
 			m_bakeInFlight = true;
 			Globals::jobSystem.submit([bake = m_bake]() {
 				ProfileScope profileScope("HeightMapBaker::update", EProfileCategory::Procedural);
 
-				const std::shared_ptr<const ITerrainSampler>& maps = bake->maps;
+				const oc::shared_ptr<const ITerrainSampler>& maps = bake->maps;
 				const glm::vec2 center = bake->center, ranges = bake->ranges;
 				const uint32 res = bake->res, numCascades = bake->numCascades, channels = bake->channels;
 				const bool applyReach = bake->applyReach, applyFlow = bake->applyFlow;
 				const WaterReach reach = bake->reach;
 				const FlowField flow = bake->flow;
-				std::vector<float> heights((size_t)numCascades * res * res * channels);
-				std::vector<TerrainPoint> points; // reused across cascades
+				oc::vector<float> heights((size_t)numCascades * res * res * channels);
+				oc::vector<TerrainPoint> points; // reused across cascades
 				for (uint32 c = 0; c < numCascades; ++c)
 				{
 					float* dst = heights.data() + (size_t)c * res * res * channels;
@@ -560,7 +560,7 @@ export namespace Procedural
 					if (applyFlow)
 						applyFlowField(dst, res, channels, texelSize, maps->seaLevel(), flow);
 				}
-				bake->result = std::move(heights);
+				bake->result = oc::move(heights);
 			}, EJobPriority::Low, &m_bakeCounter, "heightMapBake");
 			return shipped;
 		}
@@ -574,16 +574,16 @@ export namespace Procedural
 	private:
 		struct BakeJob
 		{
-			std::shared_ptr<const ITerrainSampler> maps;
+			oc::shared_ptr<const ITerrainSampler> maps;
 			glm::vec2 center, ranges;
 			uint32 res, numCascades, channels;
 			WaterReach reach;
 			bool applyReach;
 			FlowField flow;
 			bool applyFlow;
-			std::vector<float> result;
+			oc::vector<float> result;
 		};
-		std::shared_ptr<BakeJob> m_bake;
+		oc::shared_ptr<BakeJob> m_bake;
 		JobCounter m_bakeCounter;
 		bool m_bakeInFlight = false;
 		WaterReach m_activeReach;      // the reach rule baked into the live map (see update)

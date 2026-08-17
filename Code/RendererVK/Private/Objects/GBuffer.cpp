@@ -81,7 +81,7 @@ bool GBuffer::initialize(uint32 width, uint32 height, uint32 viewCount)
     }
 
     // ---- Render pass: color (normal) + depth, both end SHADER_READ_ONLY for the AO compute pass ----
-    std::array<vk::AttachmentDescription2, 2> attachments{
+    oc::array<vk::AttachmentDescription2, 2> attachments{
         vk::AttachmentDescription2{ // 0: normal color
             .format = GBUFFER_NORMAL_FORMAT,
             .samples = vk::SampleCountFlagBits::e1,
@@ -107,7 +107,7 @@ bool GBuffer::initialize(uint32 width, uint32 height, uint32 viewCount)
         .pColorAttachments = &colorRef,
         .pDepthStencilAttachment = &depthRef,
     };
-    std::array<vk::SubpassDependency2, 2> dependencies{
+    oc::array<vk::SubpassDependency2, 2> dependencies{
         vk::SubpassDependency2{
             .srcSubpass = vk::SubpassExternal,
             .dstSubpass = 0,
@@ -139,7 +139,7 @@ bool GBuffer::initialize(uint32 width, uint32 height, uint32 viewCount)
 
     for (uint32 i = 0; i < viewCount; ++i)
     {
-        std::array<vk::ImageView, 2> fbViews{ m_normalViews[i], m_depthViews[i] };
+        oc::array<vk::ImageView, 2> fbViews{ m_normalViews[i], m_depthViews[i] };
         vk::FramebufferCreateInfo fbInfo{
             .renderPass = m_renderPass,
             .attachmentCount = (uint32)fbViews.size(),
@@ -178,7 +178,7 @@ bool GBuffer::initialize(uint32 width, uint32 height, uint32 viewCount)
         CommandBuffer init;
         init.initialize(vk::CommandBufferLevel::ePrimary);
         vk::CommandBuffer cmd = init.begin(true);
-        std::array<vk::ImageMemoryBarrier2, 2> bars{
+        oc::array<vk::ImageMemoryBarrier2, 2> bars{
             vk::ImageMemoryBarrier2{
                 .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
                 .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader,

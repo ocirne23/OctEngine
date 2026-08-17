@@ -32,7 +32,10 @@ import :Aftermath;
 
 //*********************************************************
 // Some std::to_string overloads for some Nsight Aftermath
-// API types.
+// API types. These stay std:: (not oc::) on both sides: the
+// callers reach them by qualified lookup into std, which the
+// using-declaration in Core.OcSTL cannot serve -- it snapshots
+// the overloads visible where it is written.
 //
 
 namespace std
@@ -91,7 +94,7 @@ inline bool operator<(const GFSDK_Aftermath_ShaderDebugName& lhs, const GFSDK_Af
 // Helper for checking Nsight Aftermath failures.
 //
 
-inline std::string  AftermathErrorMessage(GFSDK_Aftermath_Result result)
+inline oc::string  AftermathErrorMessage(GFSDK_Aftermath_Result result)
 {
     switch (result)
     {
@@ -126,7 +129,7 @@ inline std::string  AftermathErrorMessage(GFSDK_Aftermath_Result result)
     }                                                                                                   \
 }()
 #endif
-const std::string dumpFolder = "Local/";
+const oc::string dumpFolder = "Local/";
 
 //*********************************************************
 // GpuCrashTracker implementation
@@ -214,7 +217,7 @@ void GpuCrashTracker::OnShaderDebugInfo(const void* pShaderDebugInfo, const uint
 
     // Store information for decoding of GPU crash dumps with shader address mapping
     // from within the application.
-    std::vector<uint8_t> data((uint8_t*)pShaderDebugInfo, (uint8_t*)pShaderDebugInfo + shaderDebugInfoSize);
+    oc::vector<uint8_t> data((uint8_t*)pShaderDebugInfo, (uint8_t*)pShaderDebugInfo + shaderDebugInfoSize);
     m_shaderDebugInfo[identifier].swap(data);
 
     // Write to file for later in-depth analysis of crash dumps with Nsight Graphics
@@ -236,7 +239,7 @@ void GpuCrashTracker::OnDescription(PFN_GFSDK_Aftermath_AddGpuCrashDumpDescripti
     // Include command line if provided
     if (!m_commandLine.empty())
     {
-        std::string clPrefixed = std::string("CommandLine: ") + m_commandLine;
+        oc::string clPrefixed = oc::string("CommandLine: ") + m_commandLine;
         addDescription(GFSDK_Aftermath_GpuCrashDumpDescriptionKey_UserDefined + 3, clPrefixed.c_str());
     }
 }
@@ -249,7 +252,7 @@ void GpuCrashTracker::OnResolveMarker(const void* pMarkerData, const uint32_t ma
         const auto& foundMarker = map.find((uint64_t)pMarkerData);
         if (foundMarker != map.end())
         {
-            const std::string& foundMarkerData = foundMarker->second;
+            const oc::string& foundMarkerData = foundMarker->second;
             resolveMarker(foundMarkerData.data(), (uint32_t)foundMarkerData.length());
             return;
         }
@@ -280,7 +283,7 @@ void GpuCrashTracker::WriteGpuCrashDumpToFile(const void* pGpuCrashDump, const u
         GFSDK_Aftermath_GpuCrashDumpDescriptionKey_ApplicationName,
         &applicationNameLength));
 
-    std::vector<char> applicationName(applicationNameLength, '\0');
+    oc::vector<char> applicationName(applicationNameLength, '\0');
 
     AFTERMATH_CHECK_ERROR(GFSDK_Aftermath_GpuCrashDump_GetDescription(
         decoder,
@@ -293,8 +296,8 @@ void GpuCrashTracker::WriteGpuCrashDumpToFile(const void* pGpuCrashDump, const u
     // driver release) we may see redundant crash dumps. As a workaround,
     // attach a unique count to each generated file name.
     static int count = 0;
-    const std::string baseFileName =
-        std::string(applicationName.data())
+    const oc::string baseFileName =
+        oc::string(applicationName.data())
         + "-"
         + std::to_string(baseInfo.pid)
         + "-"
@@ -302,11 +305,11 @@ void GpuCrashTracker::WriteGpuCrashDumpToFile(const void* pGpuCrashDump, const u
 
     // Write the crash dump data to a file using the .nv-gpudmp extension
     // registered with Nsight Graphics.
-    const std::string crashDumpFileName = dumpFolder + baseFileName + ".nv-gpudmp";
+    const oc::string crashDumpFileName = dumpFolder + baseFileName + ".nv-gpudmp";
 	printf("Crash dump file: %s", crashDumpFileName.c_str());
     // A GPU crash dump: the process is dying, main-thread IO is fine and wanted.
     FileSystem::writeFileBytes(crashDumpFileName,
-        std::span<const uint8>((const uint8*)pGpuCrashDump, gpuCrashDumpSize), /*allowMainThread*/ true);
+        oc::span<const uint8>((const uint8*)pGpuCrashDump, gpuCrashDumpSize), /*allowMainThread*/ true);
 
     // Decode the crash dump to a JSON string.
     // Step 1: Generate the JSON and get the size.
@@ -321,17 +324,17 @@ void GpuCrashTracker::WriteGpuCrashDumpToFile(const void* pGpuCrashDump, const u
         this,
         &jsonSize));
     // Step 2: Allocate a buffer and fetch the generated JSON.
-    std::vector<char> json(jsonSize);
+    oc::vector<char> json(jsonSize);
     AFTERMATH_CHECK_ERROR(GFSDK_Aftermath_GpuCrashDump_GetJSON(
         decoder,
         uint32_t(json.size()),
         json.data()));
 
     // Write the crash dump data as JSON to a file.
-    const std::string jsonFileName = crashDumpFileName + ".json";
+    const oc::string jsonFileName = crashDumpFileName + ".json";
     // (excluding string termination)
     FileSystem::writeFileBytes(jsonFileName,
-        std::span<const uint8>((const uint8*)json.data(), json.size() - 1), /*allowMainThread*/ true);
+        oc::span<const uint8>((const uint8*)json.data(), json.size() - 1), /*allowMainThread*/ true);
 
     // Destroy the GPU crash dump decoder object.
     AFTERMATH_CHECK_ERROR(GFSDK_Aftermath_GpuCrashDump_DestroyDecoder(decoder));
@@ -344,10 +347,10 @@ void GpuCrashTracker::WriteShaderDebugInformationToFile(
     const uint32_t shaderDebugInfoSize)
 {
     // Create a unique file name.
-    const std::string filePath = dumpFolder + "shader-" + std::to_string(identifier) + ".nvdbg";
+    const oc::string filePath = dumpFolder + "shader-" + std::to_string(identifier) + ".nvdbg";
 
     FileSystem::writeFileBytes(filePath,
-        std::span<const uint8>((const uint8*)pShaderDebugInfo, shaderDebugInfoSize), /*allowMainThread*/ true);
+        oc::span<const uint8>((const uint8*)pShaderDebugInfo, shaderDebugInfoSize), /*allowMainThread*/ true);
 }
 
 // Handler for shader debug information lookup callbacks.
@@ -381,7 +384,7 @@ void GpuCrashTracker::OnShaderLookup(
     PFN_GFSDK_Aftermath_SetData setShaderBinary) const
 {
     // Find shader binary data for the shader hash in the shader database.
-    std::vector<uint8_t> shaderBinary;
+    oc::vector<uint8_t> shaderBinary;
     if (!m_shaderDatabase.FindShaderBinary(shaderHash, shaderBinary))
     {
         // Early exit, nothing found. No need to call setShaderBinary.
@@ -402,7 +405,7 @@ void GpuCrashTracker::OnShaderSourceDebugInfoLookup(
     PFN_GFSDK_Aftermath_SetData setShaderBinary) const
 {
     // Find source debug info for the shader DebugName in the shader database.
-    std::vector<uint8_t> shaderBinary;
+    oc::vector<uint8_t> shaderBinary;
     if (!m_shaderDatabase.FindShaderBinaryWithDebugData(shaderDebugName, shaderBinary))
     {
         // Early exit, nothing found. No need to call setShaderBinary.

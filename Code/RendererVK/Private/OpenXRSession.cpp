@@ -40,14 +40,14 @@ namespace
         return false;
     }
 
-    std::vector<std::string> tokenize(const std::string& s)
+    oc::vector<oc::string> tokenize(const oc::string& s)
     {
-        std::vector<std::string> out;
+        oc::vector<oc::string> out;
         size_t start = 0;
         while (start < s.size())
         {
             size_t end = s.find(' ', start);
-            if (end == std::string::npos) end = s.size();
+            if (end == oc::string::npos) end = s.size();
             if (end > start)
                 out.emplace_back(s.substr(start, end - start));
             start = end + 1;
@@ -122,7 +122,7 @@ bool OpenXRSession::initInstanceAndSystem()
         destroy();
         return false;
     }
-    std::vector<XrViewConfigurationView> views(viewCount, { XR_TYPE_VIEW_CONFIGURATION_VIEW });
+    oc::vector<XrViewConfigurationView> views(viewCount, { XR_TYPE_VIEW_CONFIGURATION_VIEW });
     if (!xrCheck(xrEnumerateViewConfigurationViews(m_instance, m_systemId,
         XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, viewCount, &viewCount, views.data()), "xrEnumerateViewConfigurationViews"))
     {
@@ -155,24 +155,24 @@ bool OpenXRSession::loadKhrFunctions()
     return ok;
 }
 
-std::vector<std::string> OpenXRSession::getRequiredVulkanInstanceExtensions() const
+oc::vector<oc::string> OpenXRSession::getRequiredVulkanInstanceExtensions() const
 {
     uint32 size = 0;
     if (!xrCheck(m_pfnGetVulkanInstanceExtensions(m_instance, m_systemId, 0, &size, nullptr), "xrGetVulkanInstanceExtensionsKHR(size)"))
         return {};
-    std::string buffer(size, '\0');
+    oc::string buffer(size, '\0');
     if (!xrCheck(m_pfnGetVulkanInstanceExtensions(m_instance, m_systemId, size, &size, buffer.data()), "xrGetVulkanInstanceExtensionsKHR"))
         return {};
     if (!buffer.empty() && buffer.back() == '\0') buffer.pop_back();
     return tokenize(buffer);
 }
 
-std::vector<std::string> OpenXRSession::getRequiredVulkanDeviceExtensions() const
+oc::vector<oc::string> OpenXRSession::getRequiredVulkanDeviceExtensions() const
 {
     uint32 size = 0;
     if (!xrCheck(m_pfnGetVulkanDeviceExtensions(m_instance, m_systemId, 0, &size, nullptr), "xrGetVulkanDeviceExtensionsKHR(size)"))
         return {};
-    std::string buffer(size, '\0');
+    oc::string buffer(size, '\0');
     if (!xrCheck(m_pfnGetVulkanDeviceExtensions(m_instance, m_systemId, size, &size, buffer.data()), "xrGetVulkanDeviceExtensionsKHR"))
         return {};
     if (!buffer.empty() && buffer.back() == '\0') buffer.pop_back();
@@ -192,7 +192,7 @@ int64_t OpenXRSession::selectSwapchainFormat() const
     uint32 count = 0;
     if (!xrCheck(xrEnumerateSwapchainFormats(m_session, 0, &count, nullptr), "xrEnumerateSwapchainFormats(count)"))
         return 0;
-    std::vector<int64_t> formats(count);
+    oc::vector<int64_t> formats(count);
     if (!xrCheck(xrEnumerateSwapchainFormats(m_session, count, &count, formats.data()), "xrEnumerateSwapchainFormats"))
         return 0;
 
@@ -233,7 +233,7 @@ bool OpenXRSession::createSession(vk::Instance vkInstance, vk::PhysicalDevice vk
         uint32 spaceCount = 0;
         if (XR_SUCCEEDED(xrEnumerateReferenceSpaces(m_session, 0, &spaceCount, nullptr)))
         {
-            std::vector<XrReferenceSpaceType> spaces(spaceCount);
+            oc::vector<XrReferenceSpaceType> spaces(spaceCount);
             if (XR_SUCCEEDED(xrEnumerateReferenceSpaces(m_session, spaceCount, &spaceCount, spaces.data())))
                 for (XrReferenceSpaceType type : spaces)
                     if (type == XR_REFERENCE_SPACE_TYPE_STAGE) { appSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE; break; }
@@ -454,10 +454,10 @@ glm::mat4 OpenXRSession::getCombinedProjection(float nearZ, float farZ) const
     XrFovf u = m_views[0].fov;
     for (uint32 i = 1; i < VIEW_COUNT; ++i)
     {
-        u.angleLeft  = std::min(u.angleLeft,  m_views[i].fov.angleLeft);
-        u.angleRight = std::max(u.angleRight, m_views[i].fov.angleRight);
-        u.angleDown  = std::min(u.angleDown,  m_views[i].fov.angleDown);
-        u.angleUp    = std::max(u.angleUp,    m_views[i].fov.angleUp);
+        u.angleLeft  = oc::min(u.angleLeft,  m_views[i].fov.angleLeft);
+        u.angleRight = oc::max(u.angleRight, m_views[i].fov.angleRight);
+        u.angleDown  = oc::min(u.angleDown,  m_views[i].fov.angleDown);
+        u.angleUp    = oc::max(u.angleUp,    m_views[i].fov.angleUp);
     }
     constexpr float margin = 1.1f;
     const float l = std::tan(u.angleLeft)  * nearZ * margin;

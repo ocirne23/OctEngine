@@ -53,10 +53,10 @@ private:
 
     struct ImageSet
     {
-        std::array<vk::Image, SLOTS> image{};
-        std::array<VmaAllocation, SLOTS> memory{};
-        std::array<vk::ImageView, SLOTS> view{};
-        std::array<bool, SLOTS> initialized{};
+        oc::array<vk::Image, SLOTS> image{};
+        oc::array<VmaAllocation, SLOTS> memory{};
+        oc::array<vk::ImageView, SLOTS> view{};
+        oc::array<bool, SLOTS> initialized{};
     };
 
     void buildLayout(ComputePipelineLayout& layout);
@@ -66,7 +66,7 @@ private:
 
     uint32 m_viewCount = 1;
     ComputePipeline m_pipeline;
-    std::array<DescriptorSet, SLOTS> m_sets;
+    oc::array<DescriptorSet, SLOTS> m_sets;
 
     uint32 m_width = 0;
     uint32 m_height = 0;

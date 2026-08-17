@@ -64,7 +64,7 @@ bool AudioSystem::initialize()
         [this]() { if (m_initialized) ma_engine_set_volume(&audioState().engine, m_masterVolume); });
 
     const ma_device* device = ma_engine_get_device(&state.engine);
-    Log::info("Audio: miniaudio + Steam Audio HRTF on '" + std::string(device ? device->playback.name : "unknown") + "'");
+    Log::info("Audio: miniaudio + Steam Audio HRTF on '" + oc::string(device ? device->playback.name : "unknown") + "'");
     return true;
 }
 
@@ -74,7 +74,7 @@ void AudioSystem::shutdown()
         return;
     SystemState& state = audioState();
     m_oneShotPool.clear(); // releases its sources from the registry
-    for (std::unique_ptr<SourceState>& source : state.sources)
+    for (oc::unique_ptr<SourceState>& source : state.sources)
         destroySourceState(*source); // sources still held by user handles; those handles no-op after this
     state.sources.clear();
     state.buffers.clear();
@@ -95,17 +95,17 @@ void AudioSystem::update(const Camera& camera, const glm::vec3& listenerVelocity
     state.listenerFwd = glm::normalize(-glm::vec3(camToWorld[2]));
     state.listenerUp = glm::normalize(glm::vec3(camToWorld[1]));
     state.listenerVel = listenerVelocity;
-    for (std::unique_ptr<SourceState>& source : state.sources)
+    for (oc::unique_ptr<SourceState>& source : state.sources)
         updateSource(*source);
 }
 
-AudioBuffer AudioSystem::createBuffer(EAudioFormat format, std::span<const std::byte> pcmData, uint32 sampleRate)
+AudioBuffer AudioSystem::createBuffer(EAudioFormat format, oc::span<const std::byte> pcmData, uint32 sampleRate)
 {
     if (!m_initialized || pcmData.empty() || sampleRate == 0)
         return {};
 
     const bool stereo = format == EAudioFormat::Stereo8 || format == EAudioFormat::Stereo16 || format == EAudioFormat::StereoFloat32;
-    std::unique_ptr<SoundData> data = std::make_unique<SoundData>();
+    oc::unique_ptr<SoundData> data = oc::make_unique<SoundData>();
     data->channels = stereo ? 2 : 1;
     data->sampleRate = sampleRate;
 
@@ -145,15 +145,15 @@ AudioBuffer AudioSystem::createBuffer(EAudioFormat format, std::span<const std::
     AudioBuffer buffer;
     buffer.m_handle = reinterpret_cast<uint64>(data.get());
     buffer.m_durationSec = float(data->frameCount()) / float(sampleRate);
-    audioState().buffers.push_back(std::move(data));
+    audioState().buffers.push_back(oc::move(data));
     return buffer;
 }
 
-AudioBuffer AudioSystem::loadSound(std::string_view path)
+AudioBuffer AudioSystem::loadSound(oc::string_view path)
 {
     if (!m_initialized)
         return {};
-    const std::string pathStr(path);
+    const oc::string pathStr(path);
     ma_decoder_config decoderConfig = ma_decoder_config_init(ma_format_f32, 0, 0); // native channels/rate
     ma_decoder decoder;
     if (ma_decoder_init_file(pathStr.c_str(), &decoderConfig, &decoder) != MA_SUCCESS)
@@ -166,12 +166,12 @@ AudioBuffer AudioSystem::loadSound(std::string_view path)
     ma_decoder_get_data_format(&decoder, &format, &channels, &sampleRate, nullptr, 0);
     if (channels != 1 && channels != 2)
     {
-        Log::error("Audio: '" + pathStr + "' has " + std::to_string(channels) + " channels, only mono/stereo is supported");
+        Log::error("Audio: '" + pathStr + "' has " + oc::to_string(channels) + " channels, only mono/stereo is supported");
         ma_decoder_uninit(&decoder);
         return {};
     }
 
-    std::vector<float> frames;
+    oc::vector<float> frames;
     float chunk[4096];
     const ma_uint64 chunkFrames = 4096 / channels;
     for (;;)
@@ -189,7 +189,7 @@ AudioBuffer AudioSystem::loadSound(std::string_view path)
         return {};
     }
     return createBuffer(channels == 2 ? EAudioFormat::StereoFloat32 : EAudioFormat::MonoFloat32,
-        std::as_bytes(std::span(frames)), sampleRate);
+        std::as_bytes(oc::span(frames)), sampleRate);
 }
 
 AudioSource AudioSystem::createSource()
@@ -197,7 +197,7 @@ AudioSource AudioSystem::createSource()
     if (!m_initialized)
         return {};
     SystemState& state = audioState();
-    state.sources.push_back(std::make_unique<SourceState>());
+    state.sources.push_back(oc::make_unique<SourceState>());
     return AudioSource(reinterpret_cast<uint64>(state.sources.back().get()));
 }
 
@@ -220,10 +220,10 @@ void AudioSystem::detachBuffer(uint64 bufferHandle)
 {
     SystemState& state = audioState();
     const SoundData* data = reinterpret_cast<const SoundData*>(bufferHandle);
-    for (std::unique_ptr<SourceState>& source : state.sources)
+    for (oc::unique_ptr<SourceState>& source : state.sources)
         if (source->data == data)
             clearSourceSound(*source);
-    std::erase_if(state.buffers, [&](const std::unique_ptr<SoundData>& b) { return b.get() == data; });
+    oc::erase_if(state.buffers, [&](const oc::unique_ptr<SoundData>& b) { return b.get() == data; });
 }
 
 AudioSource& AudioSystem::acquireOneShotSource()

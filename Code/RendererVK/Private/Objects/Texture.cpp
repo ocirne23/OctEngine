@@ -111,7 +111,7 @@ Texture::Texture(Texture&& move)
     m_image = move.m_image;
     m_imageMemory = move.m_imageMemory;
     m_imageView = move.m_imageView;
-    m_pStreamingMeta = std::move(move.m_pStreamingMeta);
+    m_pStreamingMeta = oc::move(move.m_pStreamingMeta);
     move.m_image = VK_NULL_HANDLE;
     move.m_imageMemory = VK_NULL_HANDLE;
     move.m_imageView = VK_NULL_HANDLE;
@@ -124,9 +124,9 @@ uint64 Texture::getAllocatedBytes() const
 
 bool Texture::initialize(const char* filePath, bool generateMips, bool sRGB)
 {
-    const std::string extension = FileSystem::extension(filePath);
-    std::vector<uint8> fileData;
-    std::vector<std::span<uint8>> imgData; // pixel data per mip level
+    const oc::string extension = FileSystem::extension(filePath);
+    oc::vector<uint8> fileData;
+    oc::vector<oc::span<uint8>> imgData; // pixel data per mip level
 
     uint32 width = 0;
     uint32 height = 0;
@@ -137,7 +137,7 @@ bool Texture::initialize(const char* filePath, bool generateMips, bool sRGB)
     {
         FILE* pFile;
         fopen_s(&pFile, filePath, "rb");
-        std::unique_ptr<FILE, void(*)(FILE*)> file(pFile, [](FILE* p) { if (p) fclose(p); });
+        oc::unique_ptr<FILE, void(*)(FILE*)> file(pFile, [](FILE* p) { if (p) fclose(p); });
         if (!file)
         {
             assert(false && "Failed to open file");
@@ -148,7 +148,7 @@ bool Texture::initialize(const char* filePath, bool generateMips, bool sRGB)
 
         // Header first: it lays out the whole mip chain, so the pixel read below can be narrowed to
         // just the mips this image will actually contain.
-        const size_t headerSize = std::min(size, sizeof(dds::Header));
+        const size_t headerSize = oc::min(size, sizeof(dds::Header));
         fileData.resize(headerSize);
         if (fread(fileData.data(), 1, headerSize, file.get()) != headerSize)
         {
@@ -173,7 +173,7 @@ bool Texture::initialize(const char* filePath, bool generateMips, bool sRGB)
         // the file so the TextureStreamer can re-read arbitrary mip ranges later.
         if (numMipLevels > 1 && !header.is_cubemap() && !header.is_1d() && !header.is_3d() && header.array_size() == 1)
         {
-            m_pStreamingMeta = std::make_unique<StreamedTextureMeta>();
+            m_pStreamingMeta = oc::make_unique<StreamedTextureMeta>();
             m_pStreamingMeta->filePath = filePath;
             m_pStreamingMeta->format = format;
             m_pStreamingMeta->fullWidth = (uint16)width;
@@ -184,8 +184,8 @@ bool Texture::initialize(const char* filePath, bool generateMips, bool sRGB)
                 m_pStreamingMeta->mips.push_back(TextureMipRange{
                     .fileOffset = header.mip_offset(i),
                     .byteSize = (uint32)header.mip_size(i),
-                    .width = (uint16)std::max(1u, width >> i),
-                    .height = (uint16)std::max(1u, height >> i),
+                    .width = (uint16)oc::max(1u, width >> i),
+                    .height = (uint16)oc::max(1u, height >> i),
                 });
             }
         }
@@ -213,18 +213,18 @@ bool Texture::initialize(const char* filePath, bool generateMips, bool sRGB)
         uint64 bufferOffset = 0;
         for (uint32 i = firstMip; i < numMipLevels; i++)
         {
-            imgData.push_back(std::span(fileData.data() + bufferOffset, header.mip_size(i)));
+            imgData.push_back(oc::span(fileData.data() + bufferOffset, header.mip_size(i)));
             bufferOffset += header.mip_size(i);
         }
-        width = std::max(1u, width >> firstMip);
-        height = std::max(1u, height >> firstMip);
+        width = oc::max(1u, width >> firstMip);
+        height = oc::max(1u, height >> firstMip);
         numMipLevels -= firstMip;
     }
     else
     {
         assert(false && "reimplement non dds loading");
         /*
-        std::unique_ptr<uint8, void(*)(uint8*)> pData(
+        oc::unique_ptr<uint8, void(*)(uint8*)> pData(
             stbi_load(pFilePath, (int*)&m_width, (int*)&m_height, (int*)&m_numChannels, 4),
             [](uint8* p) { if (p) stbi_image_free(p); });
 
@@ -255,22 +255,22 @@ bool Texture::initialize(const ITextureData& textureData, bool generateMips, boo
 			return false;
         }
         // Prefer the file relative to the scene file's folder; fall back to the asset-root-relative path.
-        const std::string& rootFolder = textureData.getRootFolder();
+        const oc::string& rootFolder = textureData.getRootFolder();
         if (!rootFolder.empty())
         {
-            const std::string candidate = FileSystem::join(rootFolder, filePath);
+            const oc::string candidate = FileSystem::join(rootFolder, filePath);
             if (FileSystem::exists(candidate))
                 return initialize(candidate.c_str(), generateMips, sRGB);
         }
         return initialize(filePath, generateMips, sRGB);
     }
-    std::string formatInfo = textureData.getFormatInfo();
+    oc::string formatInfo = textureData.getFormatInfo();
     
     int width = textureData.getWidth();
     int height = textureData.getHeight();
     vk::Format format = vk::Format::eUndefined;
 
-    std::vector<std::span<uint8>> imgData;
+    oc::vector<oc::span<uint8>> imgData;
     
     if (height == 0)
     {
@@ -287,7 +287,7 @@ bool Texture::initialize(const ITextureData& textureData, bool generateMips, boo
                 assert(false && "Failed to load png image");
                 return false;
 			}
-            imgData.push_back(std::span((uint8*)pixelData, width * height * desiredComponents));
+            imgData.push_back(oc::span((uint8*)pixelData, width * height * desiredComponents));
             switch (desiredComponents)
             {
             case 1:
@@ -323,7 +323,7 @@ bool Texture::initialize(const ITextureData& textureData, bool generateMips, boo
         if (formatInfo.compare("rgba8888") == 0)
 		{
 			const size_t dataSize = (size_t)width * height * sizeof(ITextureData::Pixel);
-			imgData.push_back(std::span((uint8*)textureData.getPixels(), dataSize));
+			imgData.push_back(oc::span((uint8*)textureData.getPixels(), dataSize));
 			format = sRGB ? vk::Format::eR8G8B8A8Srgb : vk::Format::eR8G8B8A8Unorm;
 		}
 		else
@@ -336,7 +336,7 @@ bool Texture::initialize(const ITextureData& textureData, bool generateMips, boo
     return initialize(width, height, format, imgData, generateMips);
 }
 
-bool Texture::initialize(uint32 width, uint32 height, vk::Format format, const std::vector<std::span<uint8>>& imageDataMips, bool generateMips)
+bool Texture::initialize(uint32 width, uint32 height, vk::Format format, const oc::vector<oc::span<uint8>>& imageDataMips, bool generateMips)
 {
     vk::Device vkDevice = Globals::device.getDevice();
 	m_width = width;
@@ -347,7 +347,7 @@ bool Texture::initialize(uint32 width, uint32 height, vk::Format format, const s
     // the upload loop stay in lockstep — otherwise the loop reads past imageDataMips and upper levels of the
     // image are left undefined.
     const bool generateFromSingle = generateMips && imageDataMips.size() == 1;
-    m_numMipLevels = generateFromSingle ? (uint32)(std::floor(std::log2(std::max(width, height)))) + 1 : (uint32)imageDataMips.size();
+    m_numMipLevels = generateFromSingle ? (uint32)(std::floor(std::log2(oc::max(width, height)))) + 1 : (uint32)imageDataMips.size();
 
     vk::ImageCreateInfo imageCreateInfo{
         .imageType = vk::ImageType::e2D,
@@ -402,7 +402,7 @@ bool Texture::initialize(uint32 width, uint32 height, vk::Format format, const s
     {
         for (uint32 i = 0; i < m_numMipLevels; i++)
         {
-            Globals::stagingManager.uploadImage(m_image, std::max(1u, m_width >> i), std::max(1u, m_height >> i), imageDataMips[i].size(), imageDataMips[i].data(), i);
+            Globals::stagingManager.uploadImage(m_image, oc::max(1u, m_width >> i), oc::max(1u, m_height >> i), imageDataMips[i].size(), imageDataMips[i].data(), i);
         }
     }
 

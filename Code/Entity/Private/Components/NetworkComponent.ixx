@@ -199,7 +199,7 @@ export struct NetworkComponent
 
     // null outside a session (role None, or a local-inert registration). NetworkManager only
     // touches registered components so it never null-checks; update() and outside readers must.
-    std::unique_ptr<NetEntityState> state;
+    oc::unique_ptr<NetEntityState> state;
 
     // Local, ServerOwned, LocalOwner or RemoteOwner — from THIS process's perspective (see the enum)
     ENetAuthority authority() const;

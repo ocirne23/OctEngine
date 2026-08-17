@@ -27,7 +27,7 @@ private:
         const char* name = nullptr; // points at the ProfileTrack's stable name storage
         uint32 maxDepth = 0;
         double busyMs = 0.0; // depth-0 time inside the window
-        std::vector<ProfileRecord> records;
+        oc::vector<ProfileRecord> records;
     };
     struct StatsRow
     {
@@ -77,23 +77,23 @@ private:
     uint64 m_windowEnd = 0;
     uint64 m_snapshotStart = 0;          // ticks; frame window expanded by the zoom/pan view, what snapshotTracks copies
     uint64 m_snapshotEnd = 0;
-    std::vector<TrackView> m_tracks;
-    std::vector<TrackView> m_trackScratch; // one slot per profiler track: the parallel snapshot's targets
+    oc::vector<TrackView> m_tracks;
+    oc::vector<TrackView> m_trackScratch; // one slot per profiler track: the parallel snapshot's targets
 
     // ---- timeline view state (ms relative to m_windowStart) ----
     double m_viewMin = 0.0;
     double m_viewMax = 16.0;
     bool m_userView = false;             // user zoomed/panned; stop auto-fitting
-    std::unordered_map<uint32, bool> m_collapsed; // per trackIdx
-    std::unordered_map<uint32, uint32> m_trackMaxDepth; // per trackIdx, monotonic: lane count stays constant so tracks don't shift vertically frame to frame
+    oc::unordered_map<uint32, bool> m_collapsed; // per trackIdx
+    oc::unordered_map<uint32, uint32> m_trackMaxDepth; // per trackIdx, monotonic: lane count stays constant so tracks don't shift vertically frame to frame
 
     // ---- stats state ----
     int m_trackFilter = -1;              // index into m_tracks, -1 = all
     bool m_smooth = true;
     char m_nameFilter[96] = {};
-    std::unordered_map<const char*, SmoothedRow> m_smoothed;
+    oc::unordered_map<const char*, SmoothedRow> m_smoothed;
 
     // scratch (persistent to avoid per-frame allocation)
-    std::vector<StatsRow> m_statsRows;
-    std::vector<uint64> m_childSumScratch;
+    oc::vector<StatsRow> m_statsRows;
+    oc::vector<uint64> m_childSumScratch;
 };

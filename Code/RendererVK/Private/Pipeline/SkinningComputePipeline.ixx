@@ -34,7 +34,7 @@ public:
     void reloadShaders();
     // Copies this frame's concatenated bone palettes + job list into the mapped GPU buffers and writes
     // the indirect dispatch dimensions.
-    void update(uint32 frameIdx, std::span<const glm::mat4> palettes, std::span<const RendererVKLayout::SkinningJob> jobs);
+    void update(uint32 frameIdx, oc::span<const glm::mat4> palettes, oc::span<const RendererVKLayout::SkinningJob> jobs);
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params);
     void resizePaletteBuffer(uint32 maxPaletteEntries);
     void resizeJobBuffer(uint32 maxJobs);
@@ -52,11 +52,11 @@ private:
     struct PerFrameData
     {
         Buffer paletteBuffer; // 2 - bone matrices (host-visible, mapped); concatenated per skinned instance
-        std::span<glm::mat4> mappedPalettes;
+        oc::span<glm::mat4> mappedPalettes;
         Buffer jobBuffer;     // 3 - SkinningJob[] (host-visible, mapped)
-        std::span<RendererVKLayout::SkinningJob> mappedJobs;
+        oc::span<RendererVKLayout::SkinningJob> mappedJobs;
         Buffer dispatchArgsBuffer; // vk::DispatchIndirectCommand (host-visible, mapped)
-        std::span<vk::DispatchIndirectCommand> mappedDispatchArgs;
+        oc::span<vk::DispatchIndirectCommand> mappedDispatchArgs;
     };
-    std::array<PerFrameData, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_perFrameData;
+    oc::array<PerFrameData, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_perFrameData;
 };

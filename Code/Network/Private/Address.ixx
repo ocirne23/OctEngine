@@ -12,14 +12,14 @@ export struct NetAddress final
     uint64 key() const { return (uint64(ip) << 16) | port; } // unique map key
     bool operator==(const NetAddress&) const = default;
 
-    std::string toString() const
+    oc::string toString() const
     {
-        return std::to_string((ip >> 24) & 0xff) + "." + std::to_string((ip >> 16) & 0xff) + "." +
-               std::to_string((ip >> 8) & 0xff) + "." + std::to_string(ip & 0xff) + ":" + std::to_string(port);
+        return oc::to_string((ip >> 24) & 0xff) + "." + oc::to_string((ip >> 16) & 0xff) + "." +
+               oc::to_string((ip >> 8) & 0xff) + "." + oc::to_string(ip & 0xff) + ":" + oc::to_string(port);
     }
 
     // "127.0.0.1:1234" or "127.0.0.1" (port stays 0). No DNS — use netResolveHost for names.
-    static NetAddress fromString(std::string_view text)
+    static NetAddress fromString(oc::string_view text)
     {
         NetAddress out;
         const char* ptr = text.data();

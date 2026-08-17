@@ -12,16 +12,16 @@ import Core.glm;
 //   # ... or // ...            -> comment line
 export struct AssetNode
 {
-    std::string key;
-    std::vector<std::string> values;
-    std::vector<AssetNode> children;
+    oc::string key;
+    oc::vector<oc::string> values;
+    oc::vector<AssetNode> children;
 
     bool hasValue(size_t idx = 0) const { return idx < values.size(); }
     size_t numValues() const { return values.size(); }
 
-    const std::string& asString(size_t idx = 0) const
+    const oc::string& asString(size_t idx = 0) const
     {
-        static const std::string empty;
+        static const oc::string empty;
         return idx < values.size() ? values[idx] : empty;
     }
     bool asBool(size_t idx = 0, bool fallback = false) const;
@@ -30,17 +30,17 @@ export struct AssetNode
     glm::vec3 asVec3(const glm::vec3& fallback = glm::vec3(0.0f)) const;
 
     // Case-insensitive lookup of a direct child by key (keys are human-authored).
-    const AssetNode* find(std::string_view childKey) const;
-    std::vector<const AssetNode*> findAll(std::string_view childKey) const;
+    const AssetNode* find(oc::string_view childKey) const;
+    oc::vector<const AssetNode*> findAll(oc::string_view childKey) const;
 
-    AssetNode& addChild(std::string key);
-    AssetNode& set(std::string key, std::string value);          // single string value
-    AssetNode& set(std::string key, const char* str);            // single string value
-    AssetNode& set(std::string key, float value);
-    AssetNode& set(std::string key, bool value);
-    AssetNode& set(std::string key, const glm::vec3& value);     // "x, y, z"
+    AssetNode& addChild(oc::string key);
+    AssetNode& set(oc::string key, oc::string value);          // single string value
+    AssetNode& set(oc::string key, const char* str);            // single string value
+    AssetNode& set(oc::string key, float value);
+    AssetNode& set(oc::string key, bool value);
+    AssetNode& set(oc::string key, const glm::vec3& value);     // "x, y, z"
 };
 
-export bool parseAssetText(std::string_view text, AssetNode& outRoot, std::string& outError);
-export bool loadAssetFile(const std::string& path, AssetNode& outRoot, std::string& outError);
-export std::string writeAssetText(const AssetNode& root);
+export bool parseAssetText(oc::string_view text, AssetNode& outRoot, oc::string& outError);
+export bool loadAssetFile(const oc::string& path, AssetNode& outRoot, oc::string& outError);
+export oc::string writeAssetText(const AssetNode& root);

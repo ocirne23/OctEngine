@@ -37,7 +37,7 @@ export struct PhysicsShape
     uint64 maskBits = PhysicsLayers::All;    // the layers this shape collides with
     int groupIndex = 0;                      // box3d collision group override, 0 = none
 
-    std::vector<glm::vec3> hullPoints;       // Hull: point cloud, reduced to a convex hull at body creation
+    oc::vector<glm::vec3> hullPoints;       // Hull: point cloud, reduced to a convex hull at body creation
     int maxHullVertices = 32;                // Hull: vertex budget for the reduction (clamped to [4, 64])
     const PhysicsMesh* mesh = nullptr;       // Mesh: shared triangle BVH, must outlive the body
 

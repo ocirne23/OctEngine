@@ -54,7 +54,7 @@ import :RenderNode;
 
 import Core.fwd;
 
-static_assert(std::size(ForceFieldParams{}.teamColors) == RendererVKLayout::MAX_FORCE_TEAMS,
+static_assert(oc::size(ForceFieldParams{}.teamColors) == RendererVKLayout::MAX_FORCE_TEAMS,
     "ForceFieldParams::teamColors must cover MAX_FORCE_TEAMS (Settings.ixx doesn't import :Layout)");
 
 export enum class EValidation { ENABLED, DISABLED };
@@ -88,7 +88,7 @@ export struct IndexRangeFreeList
     {
         if (count == 0)
             return;
-        auto it = std::lower_bound(m_ranges.begin(), m_ranges.end(), base,
+        auto it = oc::lower_bound(m_ranges.begin(), m_ranges.end(), base,
             [](const Range& range, uint32 b) { return range.base < b; });
         it = m_ranges.insert(it, Range{ base, count });
         if (auto next = it + 1; next != m_ranges.end() && it->base + it->count == next->base)
@@ -104,7 +104,7 @@ export struct IndexRangeFreeList
     }
 
 private:
-    std::vector<Range> m_ranges; // sorted by base, no two adjacent
+    oc::vector<Range> m_ranges; // sorted by base, no two adjacent
 };
 
 // One mesh LOD chain: global mesh indices per level ([0] = full resolution) sharing one set of local
@@ -162,7 +162,7 @@ public:
     // [Concurrency: LOCK-FREE - per-worker staging, merged in present]
     void addDebugLine(const glm::vec3& a, const glm::vec3& b, uint32 color)
     {
-        std::vector<DebugLinePipeline::LineVertex>& verts = m_debugLineVerts.local();
+        oc::vector<DebugLinePipeline::LineVertex>& verts = m_debugLineVerts.local();
         verts.push_back({ a, color });
         verts.push_back({ b, color });
     }
@@ -238,9 +238,9 @@ public:
     // are two dozen floats and track live tweaks.
     struct TerrainSplatMaterial
     {
-        std::string diffuseDds;
-        std::string normalDds;
-        std::string armDds; // packed AO (R) / roughness (G) / metalness (B); sampled linear
+        oc::string diffuseDds;
+        oc::string normalDds;
+        oc::string armDds; // packed AO (R) / roughness (G) / metalness (B); sampled linear
     };
     // Layout of a registered set, in the order the shader composites it bottom-up. The beach and snow
     // entries are OVERLAYS, not materials the climate blend can pick: beach paints over the waterline
@@ -257,7 +257,7 @@ public:
     // match. Call once (or again to replace — old materials stay allocated, textures are freed; cheap
     // enough for a config-tweak refresh, not a per-frame path). Textures mip-stream like cooked scene
     // textures.
-    void setTerrainSplatMaterials(std::span<const TerrainSplatMaterial> mats, const TerrainSplatCounts& counts);
+    void setTerrainSplatMaterials(oc::span<const TerrainSplatMaterial> mats, const TerrainSplatCounts& counts);
     // The CLIMATE BOX each ground/rock entry covers, parallel to the registered mats (trailing beach/snow
     // entries are not climate-selected; their boxes are ignored). Per box, in the generator's normalized
     // space: xy = (t01 min, t01 max), zw = (h01 min, h01 max). Weight is 1 inside the box and
@@ -266,7 +266,7 @@ public:
     // Cheap — push it per frame. The boxes are authored in real climate units and converted through the
     // generator's live precipitation scale, so a tweak change must reach the shader without dragging a
     // texture re-upload behind it.
-    void setTerrainSplatClimate(std::span<const glm::vec4> boxes);
+    void setTerrainSplatClimate(oc::span<const glm::vec4> boxes);
     // Terrain splat shaping (UBO terrainTexParams0..4); tweak-backed, owned by TerrainStreamer
     // (Terrain/Textures category) and pushed here every frame.
     struct TerrainTexTweaks
@@ -320,14 +320,14 @@ public:
     // by the fog channel, and the ocean reads the same cascades for its water depth/level (shoaling,
     // surf, swash, land cull). Staged ping-pong (BakedWorldMap): active next frame together with its
     // UBO center/ranges; no GPU sync, no command-buffer re-record.
-    void setFogTerrainHeightMap(std::span<const float> heightTexels, const glm::vec2& centerXZ, const glm::vec2& cascadeWorldSizes, float seaLevel) { m_fogTerrainMap.upload(heightTexels, centerXZ, cascadeWorldSizes, seaLevel, m_swapChain.getCurrentFrameIndex()); }
+    void setFogTerrainHeightMap(oc::span<const float> heightTexels, const glm::vec2& centerXZ, const glm::vec2& cascadeWorldSizes, float seaLevel) { m_fogTerrainMap.upload(heightTexels, centerXZ, cascadeWorldSizes, seaLevel, m_swapChain.getCurrentFrameIndex()); }
     void clearFogTerrainHeightMap() { m_fogTerrainMap.clear(); } // fog reverts to the flat height base
     // This frame slot's ocean displacement readback: RGBA16F texels (Dx, h, Dz, dDxz), outRes^2 per
     // cascade, cascades packed consecutively. Safe to read between beginFrame (fence waited) and
     // present (slot resubmits) — copy it out inside that window (Procedural::OceanGenerator does, for
     // the buoyancy water-height queries); contents are ~2 frames old and only refresh while the ocean
     // simulates.
-    std::span<const uint16> getOceanDisplacementReadback(uint32& outRes) const
+    oc::span<const uint16> getOceanDisplacementReadback(uint32& outRes) const
     {
         outRes = OceanSimulationPipeline::READBACK_RES;
         return m_oceanSimPipeline.getDisplacementReadback(m_swapChain.getCurrentFrameIndex());
@@ -474,10 +474,10 @@ private:
     // skinnedOutputs: MeshInfos pointing at per-instance skinned output regions — excluded from the
     // one-time static BLAS builds (and thus compaction): their regions are uninitialized until the
     // skinning compute runs, and their addresses are owned per frame slot by the skinned BLAS rebuild.
-    uint32 addMeshInfos(const std::vector<RendererVKLayout::MeshInfo>& meshInfos, std::span<const uint32> vertexCounts, bool skinnedOutputs = false);
+    uint32 addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>& meshInfos, oc::span<const uint32> vertexCounts, bool skinnedOutputs = false);
     uint16 getRtMeshAlias(uint16 meshIdx) const { return (uint16)m_accelStructure.getMeshAlias(meshIdx); }
-    uint32 addMaterialInfos(const std::vector<RendererVKLayout::MaterialInfo>& materialInfos);
-    uint32 addMeshInstanceOffsets(const std::vector<RendererVKLayout::MeshInstanceOffset>& meshInstanceOffsets);
+    uint32 addMaterialInfos(const oc::vector<RendererVKLayout::MaterialInfo>& materialInfos);
+    uint32 addMeshInstanceOffsets(const oc::vector<RendererVKLayout::MeshInstanceOffset>& meshInstanceOffsets);
     uint32 addMeshLodGroup(const MeshLodGroup& group)
     {
         uint32 groupIdx;
@@ -496,7 +496,7 @@ private:
         }
         // One shared BLAS per chain: every level aliases the RT level's geometry (rays don't need
         // per-level fidelity), so only that level's BLAS is ever built.
-        const uint8 rtLevel = (uint8)std::clamp(m_rtParams.blasLodLevel, 0, (int)group.numLods - 1);
+        const uint8 rtLevel = (uint8)oc::clamp(m_rtParams.blasLodLevel, 0, (int)group.numLods - 1);
         for (uint8 k = 0; k < group.numLods; ++k)
             m_accelStructure.setMeshAlias(group.meshIdx[k], group.meshIdx[rtLevel]);
         // GPU LOD selection: publish the group and point every member mesh at it.
@@ -519,7 +519,7 @@ private:
     uint32 allocateLodStateRange(uint32 count);
     void growLodStateCapacity(uint32 needed);
     void growMeshLodGroupCapacity(uint32 needed);
-    uint32 addSkinnedMeshSources(const std::vector<RendererVKLayout::SkinnedMeshSource>& sources);
+    uint32 addSkinnedMeshSources(const oc::vector<RendererVKLayout::SkinnedMeshSource>& sources);
     const RendererVKLayout::SkinnedMeshSource& getSkinnedMeshSource(uint32 idx) const { return m_skinnedMeshSources[idx]; }
 
     // Everything one spawnSkinnedNode allocated (per-instance MeshInfo range, output vertex regions,
@@ -534,8 +534,8 @@ private:
         uint32 paletteHandle;
         uint32 firstJob;     // first entry of the contiguous SkinningJob/SkinnedBlasBuild range
         uint32 numMeshes;
-        std::vector<uint32> lodGroupForMesh; // per mesh: MeshLodGroup idx (UINT32_MAX = no chain)
-        std::vector<uint32> blasIndexCounts; // per mesh: the skinned BLAS's index count (its RT level's,
+        oc::vector<uint32> lodGroupForMesh; // per mesh: MeshLodGroup idx (UINT32_MAX = no chain)
+        oc::vector<uint32> blasIndexCounts; // per mesh: the skinned BLAS's index count (its RT level's,
                                              // restored on unpark — src.indexCount would be level 0's)
     };
     uint32 acquireSkinnedBundle(uint32 sourceKey); // reactivates + returns a parked bundle, UINT32_MAX if none free
@@ -549,7 +549,7 @@ private:
 
     friend class AnimatorComponent;
     uint32 allocateSkinningPalette(uint32 boneCount);
-    void setSkinningPalette(uint32 paletteHandle, std::span<const glm::mat4> palette);
+    void setSkinningPalette(uint32 paletteHandle, oc::span<const glm::mat4> palette);
     // A bundle's SkinningJob/SkinnedBlasBuild entries must be one contiguous range (the per-frame
     // skinned BLAS slots are positional), so the range is allocated as a block — from the free list
     // (destroyed containers) when one fits, appended otherwise — and filled per mesh afterwards.
@@ -601,10 +601,10 @@ private:
     ForceFieldPipeline m_forceFieldPipeline;
     // CPU emitter slot table, re-uploaded per frame; retired slots keep their KILL flag alive until the
     // sim has drained their particles, then recycle.
-    std::vector<RendererVKLayout::ParticleEmitterGpu> m_particleEmitters;
-    std::vector<uint32> m_freeParticleEmitterSlots;
-    std::vector<std::pair<uint32, uint32>> m_retiredParticleEmitters; // slot, retire frame
-    std::vector<std::pair<uint16, uint16>> m_particleSpawnRequests;   // emitter slot, count
+    oc::vector<RendererVKLayout::ParticleEmitterGpu> m_particleEmitters;
+    oc::vector<uint32> m_freeParticleEmitterSlots;
+    oc::vector<oc::pair<uint32, uint32>> m_retiredParticleEmitters; // slot, retire frame
+    oc::vector<oc::pair<uint16, uint16>> m_particleSpawnRequests;   // emitter slot, count
     bool m_particlesEnabled = true;
     bool m_particleCollision = true;
     float m_particleTimeScale = 1.0f;
@@ -618,15 +618,15 @@ private:
     // CPU force-emitter slot table (Force library), compact-uploaded per frame; destroyed slots stay
     // reserved (FORCE_FLAG_ACTIVE cleared) until the in-flight frames drain, then recycle — the
     // per-emitter force readback is slot-indexed and must never pair a new emitter with stale results.
-    std::vector<RendererVKLayout::ForceEmitterGpu> m_forceEmitters;
-    std::vector<uint32> m_freeForceEmitterSlots;
-    std::vector<std::pair<uint32, uint32>> m_retiredForceEmitters; // slot, retire frame
-    std::vector<RendererVKLayout::ForceQueryGpu> m_forceQueries;   // persistent query slots (same contract)
-    std::vector<uint32> m_freeForceQuerySlots;
-    std::vector<std::pair<uint32, uint32>> m_retiredForceQuerySlots;
+    oc::vector<RendererVKLayout::ForceEmitterGpu> m_forceEmitters;
+    oc::vector<uint32> m_freeForceEmitterSlots;
+    oc::vector<oc::pair<uint32, uint32>> m_retiredForceEmitters; // slot, retire frame
+    oc::vector<RendererVKLayout::ForceQueryGpu> m_forceQueries;   // persistent query slots (same contract)
+    oc::vector<uint32> m_freeForceQuerySlots;
+    oc::vector<oc::pair<uint32, uint32>> m_retiredForceQuerySlots;
     ForceFieldParams m_forceFieldParams;
-    PerWorker<std::vector<DebugLinePipeline::LineVertex>> m_debugLineVerts; // per-worker CPU staging, merged in present()
-    std::vector<DebugLinePipeline::LineVertex> m_debugLineMergedVerts;
+    PerWorker<oc::vector<DebugLinePipeline::LineVertex>> m_debugLineVerts; // per-worker CPU staging, merged in present()
+    oc::vector<DebugLinePipeline::LineVertex> m_debugLineMergedVerts;
 
     SkyParams m_skyParams;
     ShadowParams m_shadowParams;
@@ -636,7 +636,7 @@ private:
     // Terrain splat materials (setTerrainSplatMaterials): contiguous material range + owned textures.
     int32  m_terrainSplatBaseMaterial = -1; // -1 = no set registered (shader uses flat-color fallback)
     TerrainSplatCounts m_terrainSplatCounts;
-    std::vector<uint16> m_terrainSplatTextures; // for the per-frame streaming noteUse + replacement frees
+    oc::vector<uint16> m_terrainSplatTextures; // for the per-frame streaming noteUse + replacement frees
     glm::vec4 m_terrainSplatClimate[RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS]{};
     TerrainTexTweaks m_terrainTexTweaks; // see setTerrainTextureParams
     float m_oceanWaveTrough = 0.0f;  // see setOceanWaveTrough; 0 while the ocean is disabled
@@ -670,11 +670,11 @@ private:
     uint32 m_sceneViewCount = 1; // 2 in VR: SceneColor + forward pass are multiview (one layer per eye)
 
     // VR: per-eye LDR composite targets
-    std::array<vk::Image, 2> m_eyeColorImage{};
-    std::array<VmaAllocation, 2> m_eyeColorMem{};
-    std::array<vk::ImageView, 2> m_eyeColorView{};
-    std::array<vk::Framebuffer, 2> m_eyeFramebuffer{};
-    std::array<DescriptorSet, 2> m_vrCompositeDescriptorSet;
+    oc::array<vk::Image, 2> m_eyeColorImage{};
+    oc::array<VmaAllocation, 2> m_eyeColorMem{};
+    oc::array<vk::ImageView, 2> m_eyeColorView{};
+    oc::array<vk::Framebuffer, 2> m_eyeFramebuffer{};
+    oc::array<DescriptorSet, 2> m_vrCompositeDescriptorSet;
     vk::Image m_eyeDepthImage;
     VmaAllocation m_eyeDepthMem = nullptr;
     vk::ImageView m_eyeDepthView;
@@ -694,32 +694,32 @@ private:
     uint32 m_meshDataGeneration = 0; // last seen MeshDataManager::getGeneration(); change -> re-record
     uint32 m_textureGeneration = 0;  // last seen TextureManager::getGeneration(); change -> rebuild texture-array pipelines
 
-    std::vector<Transform>& m_renderNodeTransforms = Globals::renderNodeTransforms;
+    oc::vector<Transform>& m_renderNodeTransforms = Globals::renderNodeTransforms;
 
     // Skinned mesh state. Palette regions and skinning jobs are persistent (set up at spawn); palette
     // CONTENTS are refreshed each frame via setSkinningPalette and uploaded in present().
     struct SkinningPaletteRegion { uint32 offset; uint32 boneCount; };
-    std::vector<SkinningPaletteRegion> m_skinningPaletteRegions;
-    std::vector<glm::mat4> m_skinningPalettes;   // CPU staging (concatenated per region), uploaded each frame
-    std::vector<RendererVKLayout::SkinningJob> m_skinningJobs; // one per skinned mesh instance; uploaded each frame
-    std::vector<AccelerationStructure::SkinnedBlasBuild> m_skinnedBlasBuilds; // parallel to m_skinningJobs; per-frame BLAS rebuild
-    std::vector<RendererVKLayout::SkinnedMeshSource> m_skinnedMeshSources; // per-container skinned-mesh source data (CPU-only)
+    oc::vector<SkinningPaletteRegion> m_skinningPaletteRegions;
+    oc::vector<glm::mat4> m_skinningPalettes;   // CPU staging (concatenated per region), uploaded each frame
+    oc::vector<RendererVKLayout::SkinningJob> m_skinningJobs; // one per skinned mesh instance; uploaded each frame
+    oc::vector<AccelerationStructure::SkinnedBlasBuild> m_skinnedBlasBuilds; // parallel to m_skinningJobs; per-frame BLAS rebuild
+    oc::vector<RendererVKLayout::SkinnedMeshSource> m_skinnedMeshSources; // per-container skinned-mesh source data (CPU-only)
     uint32 m_maxSkinningPaletteEntries = RendererVKLayout::INITIAL_SKINNING_PALETTE;
     uint32 m_maxSkinningJobs = RendererVKLayout::INITIAL_SKINNING_JOBS;
     void growSkinningPaletteCapacity(uint32 needed);
     void growSkinningJobCapacity(uint32 needed);
 
-    std::vector<ObjectContainer*> m_objectContainers;
-    std::vector<uint32> m_numInstancesPerMesh;
-    std::vector<uint32> m_meshVertexCounts;    // exact per-MeshInfo vertex count (BLAS maxVertex)
-    std::vector<uint8> m_meshIsSkinnedOutput;  // per MeshInfo: skinned output region (no static BLAS build)
-    std::vector<uint32> m_pendingBlasRebuilds; // re-streamed meshes awaiting a BLAS rebuild in recordGlobalIllum
-    std::vector<MeshLodGroup> m_meshLodGroups;
-    std::vector<uint32> m_meshToLodGroup; // per MeshInfo: owning MeshLodGroup (UINT32_MAX = no chain); mirrors m_meshLodGroupIdxBuffer
-    std::array<uint32, RendererVKLayout::MAX_MESH_LODS> m_lodInstanceCounts{}; // stats snapshot of the GPU cull's per-level picks
-    std::vector<uint32> m_freeRenderNodeIndexes;
-    std::vector<SkinnedInstanceBundle> m_skinnedBundles;
-    std::unordered_map<uint32, std::vector<uint32>> m_freeSkinnedBundles; // sourceKey -> parked bundle handles
+    oc::vector<ObjectContainer*> m_objectContainers;
+    oc::vector<uint32> m_numInstancesPerMesh;
+    oc::vector<uint32> m_meshVertexCounts;    // exact per-MeshInfo vertex count (BLAS maxVertex)
+    oc::vector<uint8> m_meshIsSkinnedOutput;  // per MeshInfo: skinned output region (no static BLAS build)
+    oc::vector<uint32> m_pendingBlasRebuilds; // re-streamed meshes awaiting a BLAS rebuild in recordGlobalIllum
+    oc::vector<MeshLodGroup> m_meshLodGroups;
+    oc::vector<uint32> m_meshToLodGroup; // per MeshInfo: owning MeshLodGroup (UINT32_MAX = no chain); mirrors m_meshLodGroupIdxBuffer
+    oc::array<uint32, RendererVKLayout::MAX_MESH_LODS> m_lodInstanceCounts{}; // stats snapshot of the GPU cull's per-level picks
+    oc::vector<uint32> m_freeRenderNodeIndexes;
+    oc::vector<SkinnedInstanceBundle> m_skinnedBundles;
+    oc::unordered_map<uint32, oc::vector<uint32>> m_freeSkinnedBundles; // sourceKey -> parked bundle handles
 
     // Slot recycling for destroyed ObjectContainers: the shared info/offset buffers and CPU arrays are
     // append-only (holes are never compacted), freed ranges are reused by later containers instead.
@@ -728,10 +728,10 @@ private:
     IndexRangeFreeList m_freeInstanceOffsetSlots;
     IndexRangeFreeList m_freeSkinnedSourceSlots;
     IndexRangeFreeList m_freeSkinningJobSlots;      // freed slots stay inert (vertexCount/indexCount 0)
-    std::vector<uint32> m_freeMeshLodGroups;
-    std::vector<uint32> m_freeSkinningPaletteHandles; // regions reused on exact boneCount match
-    std::vector<uint32> m_freeSkinnedBundleSlots;
-    std::vector<uint16> m_pendingTextureFrees; // images possibly still sampled in flight; freed in present() after the GPU drain
+    oc::vector<uint32> m_freeMeshLodGroups;
+    oc::vector<uint32> m_freeSkinningPaletteHandles; // regions reused on exact boneCount match
+    oc::vector<uint32> m_freeSkinnedBundleSlots;
+    oc::vector<uint16> m_pendingTextureFrees; // images possibly still sampled in flight; freed in present() after the GPU drain
 
     uint32 m_frameCounter = 0; // monotonic; rotates the GI probe ray/taa samples set each frame
     uint32 m_meshInfoCounter = 0;
@@ -747,7 +747,7 @@ private:
 
     Buffer m_meshInfosBuffer;
     Buffer m_materialInfosBuffer;
-    std::unordered_map<uint32, uint16> m_solidColorMaterials; // packed RGB8 -> material idx (tint cache)
+    oc::unordered_map<uint32, uint16> m_solidColorMaterials; // packed RGB8 -> material idx (tint cache)
     Buffer m_instanceOffsetsBuffer;
 
     // GPU LOD selection (shared, device-local): per-mesh group index, packed group data, and the
@@ -768,8 +768,8 @@ private:
         ShadowMap shadowMap;
 
         // Per-eye in VR
-        std::array<DescriptorSet, 2> staticMeshPipelineDescriptorSet;
-        std::array<DescriptorSet, 2> gbufferDescriptorSet;
+        oc::array<DescriptorSet, 2> staticMeshPipelineDescriptorSet;
+        oc::array<DescriptorSet, 2> gbufferDescriptorSet;
         DescriptorSet compositeDescriptorSet;
         DescriptorSet indirectCullPipelineDescriptorSet;
         DescriptorSet skinningDescriptorSet;
@@ -810,29 +810,29 @@ private:
         Buffer inMeshInstancesBuffer;
         Buffer inFirstInstancesBuffer;
         Buffer lodStatsBuffer; // per-level LOD pick counts, written by the cull, read back for stats
-        std::span<uint32> mappedLodStats;
+        oc::span<uint32> mappedLodStats;
         // This frame's unique-mesh count, read on the GPU by the DGC executes (sequenceCountAddress) and
         // the G-buffer's drawIndexedIndirectCount, so registering new meshes never re-records.
         Buffer meshCountBuffer;
-        std::span<uint32> mappedMeshCount;
+        oc::span<uint32> mappedMeshCount;
 
         Buffer lightInfosBuffer;
         Buffer lightGridsBuffer;
         Buffer lightTableBuffer;
 
         RendererVKLayout::Ubo* mappedUniformBuffer = nullptr;
-        std::span<RendererVKLayout::RenderNodeTransform> mappedRenderNodeTransforms;
-        std::span<uint32> mappedNodePassMasks;
-        std::span<int32> mappedNodeLodStateBias;
-        std::span<RendererVKLayout::InMeshInstance> mappedMeshInstances;
-        std::span<uint32> mappedFirstInstances;
+        oc::span<RendererVKLayout::RenderNodeTransform> mappedRenderNodeTransforms;
+        oc::span<uint32> mappedNodePassMasks;
+        oc::span<int32> mappedNodeLodStateBias;
+        oc::span<RendererVKLayout::InMeshInstance> mappedMeshInstances;
+        oc::span<uint32> mappedFirstInstances;
 
-        std::span<RendererVKLayout::LightInfo> mappedLightInfos;
+        oc::span<RendererVKLayout::LightInfo> mappedLightInfos;
 
         Buffer fogVolumesBuffer;
-        std::span<RendererVKLayout::FogVolumes> mappedFogVolumes; // single element: count header + array
+        oc::span<RendererVKLayout::FogVolumes> mappedFogVolumes; // single element: count header + array
     };
-    std::array<PerFrameData, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_perFrameData;
+    oc::array<PerFrameData, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_perFrameData;
 };
 
 export namespace Globals

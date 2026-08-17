@@ -61,9 +61,9 @@ void binauralNodeProcess(ma_node* pNode, const float** ppFramesIn, ma_uint32* pF
             break; // not enough input for a full block yet
 
         IPLBinauralEffectParams params{};
-        params.direction = IPLVector3{ node.dirX.load(std::memory_order_relaxed), node.dirY.load(std::memory_order_relaxed), node.dirZ.load(std::memory_order_relaxed) };
+        params.direction = IPLVector3{ node.dirX.load(oc::memory_order_relaxed), node.dirY.load(oc::memory_order_relaxed), node.dirZ.load(oc::memory_order_relaxed) };
         params.interpolation = IPL_HRTFINTERPOLATION_BILINEAR;
-        params.spatialBlend = node.blend.load(std::memory_order_relaxed);
+        params.spatialBlend = node.blend.load(oc::memory_order_relaxed);
         params.hrtf = audioState().hrtf;
         float* inChannels[1] = { node.inFifo };
         IPLAudioBuffer inBuffer{ 1, (IPLint32)IplFrameSize, inChannels };
@@ -101,7 +101,7 @@ void updateSource(SourceState& s)
     {
         if (s.relative)
         {
-            s.node.blend.store(0.0f, std::memory_order_relaxed);
+            s.node.blend.store(0.0f, oc::memory_order_relaxed);
         }
         else
         {
@@ -109,10 +109,10 @@ void updateSource(SourceState& s)
             const float dist = glm::length(toSource);
             const IPLVector3 dir = iplCalculateRelativeDirection(state.iplContext,
                 toIpl(s.position), toIpl(state.listenerPos), toIpl(state.listenerFwd), toIpl(state.listenerUp));
-            s.node.dirX.store(dir.x, std::memory_order_relaxed);
-            s.node.dirY.store(dir.y, std::memory_order_relaxed);
-            s.node.dirZ.store(dir.z, std::memory_order_relaxed);
-            s.node.blend.store(1.0f, std::memory_order_relaxed);
+            s.node.dirX.store(dir.x, oc::memory_order_relaxed);
+            s.node.dirY.store(dir.y, oc::memory_order_relaxed);
+            s.node.dirZ.store(dir.z, oc::memory_order_relaxed);
+            s.node.blend.store(1.0f, oc::memory_order_relaxed);
 
             const float clamped = glm::clamp(dist, s.refDist, s.maxDist);
             attenuation = s.refDist / (s.refDist + s.rolloff * (clamped - s.refDist));

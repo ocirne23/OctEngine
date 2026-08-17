@@ -30,7 +30,7 @@ namespace Procedural
 		Tweak::floatVar("Terrain/Collision", "Friction", &m_friction, 0.0f, 2.0f, 0.01f, dirty);
 	}
 
-	void TerrainCollider::update(const glm::vec3& focusPos, std::shared_ptr<const ITerrainSampler> maps)
+	void TerrainCollider::update(const glm::vec3& focusPos, oc::shared_ptr<const ITerrainSampler> maps)
 	{
 		ProfileScope profileScope("Terrain collider", EProfileCategory::Procedural);
 		// Drain the in-flight build FIRST: even on a reset frame the result must be consumed, and a
@@ -39,7 +39,7 @@ namespace Procedural
 		bool haveDone = false;
 		if (m_buildInFlight && m_buildCounter.isDone())
 		{
-			done = std::move(m_buildResult);
+			done = oc::move(m_buildResult);
 			m_buildInFlight = false;
 			haveDone = true;
 		}
@@ -85,9 +85,9 @@ namespace Procedural
 
 			Tile tile;
 			tile.body = Globals::physics.createBody(desc, { &shape, 1 });
-			tile.mesh = std::move(done.mesh);
+			tile.mesh = oc::move(done.mesh);
 			tile.coord = done.coord;
-			m_tiles.emplace(done.key, std::move(tile));
+			m_tiles.emplace(done.key, oc::move(tile));
 		}
 
 		// --- Evict tiles that left the radius, with half a tile of hysteresis so the boundary
@@ -154,17 +154,17 @@ namespace Procedural
 			const double step = (double)tileSize / (double)res;
 			const double ox = (double)coord.x * (double)tileSize;
 			const double oz = (double)coord.y * (double)tileSize;
-			std::vector<TerrainPoint> field((size_t)vpr * vpr);
+			oc::vector<TerrainPoint> field((size_t)vpr * vpr);
 			maps->sampleGrid(ox, oz, step, vpr, vpr, field);
 
-			std::vector<glm::vec3> positions;
+			oc::vector<glm::vec3> positions;
 			positions.reserve((size_t)vpr * vpr);
 			for (uint32 row = 0; row < vpr; ++row)
 				for (uint32 col = 0; col < vpr; ++col)
 					positions.push_back({ (float)((double)col * step), field[(size_t)row * vpr + col].height, (float)((double)row * step) });
 
 			// generateChunk's triangulation exactly, so the contact surface IS the drawn surface.
-			std::vector<uint32> indices;
+			oc::vector<uint32> indices;
 			indices.reserve((size_t)res * res * 6);
 			for (uint32 row = 0; row < res; ++row)
 			{
@@ -181,7 +181,7 @@ namespace Procedural
 
 			// Standalone BVH build (no world touched), safe off the main thread.
 			out.mesh = Globals::physics.createCollisionMesh(positions, indices);
-			m_buildResult = std::move(out); // single producer; read only after the counter completes
+			m_buildResult = oc::move(out); // single producer; read only after the counter completes
 		}, EJobPriority::Low, &m_buildCounter, "terrainColliderTile");
 	}
 }

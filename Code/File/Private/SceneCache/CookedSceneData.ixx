@@ -144,7 +144,7 @@ public:
     float getAlphaCutoff() const override { return m_pMaterial->alphaCutoff; }
     float getEmissiveIntensity() const override { return m_pMaterial->emissiveIntensity; }
     float getRefractiveIndex() const override { return m_pMaterial->refractiveIndex; }
-    std::string getTexturePath(ETextureType) const override { return {}; } // unused outside importers
+    oc::string getTexturePath(ETextureType) const override { return {}; } // unused outside importers
 
     uint32 getDiffuseTexIdx() const override { return m_pMaterial->diffuseTexIdx; }
     uint32 getNormalTexIdx() const override { return m_pMaterial->normalTexIdx; }
@@ -183,13 +183,13 @@ public:
     bool operator==(const INodeData& other) const override { return getName() == other.getName(); }
     bool isValid() const override { return m_pScene != nullptr; }
 
-    std::unique_ptr<INodeData> clone() const override { return std::make_unique<CookedNodeData>(m_pScene, m_nodeIdx); }
+    oc::unique_ptr<INodeData> clone() const override { return oc::make_unique<CookedNodeData>(m_pScene, m_nodeIdx); }
 
     const char* getName() const override;
     uint32 getNumChildren() const override;
-    std::unique_ptr<INodeData> getChild(uint32 idx) const override;
+    oc::unique_ptr<INodeData> getChild(uint32 idx) const override;
     uint32 getNumChildrenRecursive() const override;
-    std::vector<std::string> getChildrenNames() const override;
+    oc::vector<oc::string> getChildrenNames() const override;
     uint32 getNumMeshes() const override;
     uint32 getMeshIndex(uint32 meshIdx) const override;
     void getTransform(glm::vec3& pos, glm::vec3& scale, glm::quat& rot) const override;
@@ -213,12 +213,12 @@ public:
 
     // Reads and validates a cooked cache file: magic/version, source stamp, options hash, and every
     // converted texture's source stamp + cooked .dds presence. Any mismatch returns false (recook).
-    bool load(const std::string& cachePath, const std::string& sourcePath, uint64 sourceMTime, uint64 sourceSize, uint64 optionsHash);
+    bool load(const oc::string& cachePath, const oc::string& sourcePath, uint64 sourceMTime, uint64 sourceSize, uint64 optionsHash);
 
     bool initialize(const char*, bool, bool) override { assert(false && "CookedSceneData loads via load()"); return false; }
     bool isValid() const override { return !m_blob.empty(); }
 
-    const std::string& getFilePath() const override { return m_filePath; }
+    const oc::string& getFilePath() const override { return m_filePath; }
     const INodeData& getRootNode() const override { return m_rootNode; }
 
     uint32 getNumMeshes() const override { return (uint32)m_meshes.size(); }
@@ -236,14 +236,14 @@ private:
 
     const char* string(uint32 offset) const;
 
-    std::string m_filePath;  // the ORIGINAL source model path (consumers resolve loose files against it)
-    std::string m_cachePath; // the .vsc this data came from (handed out as the mesh re-stream source)
-    std::vector<uint8> m_blob;
+    oc::string m_filePath;  // the ORIGINAL source model path (consumers resolve loose files against it)
+    oc::string m_cachePath; // the .vsc this data came from (handed out as the mesh re-stream source)
+    oc::vector<uint8> m_blob;
     const SceneCache::CookedNode* m_nodes = nullptr;
     const uint32* m_meshRefs = nullptr;
     uint32 m_numNodes = 0;
-    std::vector<CookedMeshData> m_meshes;
-    std::vector<CookedMaterialData> m_materials;
-    std::vector<CookedTextureData> m_textures;
+    oc::vector<CookedMeshData> m_meshes;
+    oc::vector<CookedMaterialData> m_materials;
+    oc::vector<CookedTextureData> m_textures;
     CookedNodeData m_rootNode;
 };

@@ -16,7 +16,7 @@ public:
     [[nodiscard]] void* allocate(uint32 size);
     void deallocate(void* ptr, uint32 size);
 
-    size_t getNumChunks() const { return m_numChunks.load(std::memory_order_relaxed); }
+    size_t getNumChunks() const { return m_numChunks.load(oc::memory_order_relaxed); }
 
 private:
 
@@ -29,7 +29,7 @@ private:
 
     struct Chunk
     {
-        std::atomic<uint32> offset;
+        oc::atomic<uint32> offset;
         uint32 size;
         uint8* base;
     };
@@ -40,12 +40,12 @@ private:
 
     Chunk* addChunkLocked(uint32 minSize, Chunk* expectedActive);
 
-    std::atomic<Chunk*> m_activeChunk = nullptr;
-    std::atomic_flag m_chunkLock;                       // guards m_chunks growth only (C++20 default-clear)
-    std::vector<Chunk*> m_chunks;                       // chunk headers (allocated in-chunk), freed in the destructor
-    std::atomic<size_t> m_numChunks = 0;
+    oc::atomic<Chunk*> m_activeChunk = nullptr;
+    oc::atomic_flag m_chunkLock;                       // guards m_chunks growth only (C++20 default-clear)
+    oc::vector<Chunk*> m_chunks;                       // chunk headers (allocated in-chunk), freed in the destructor
+    oc::atomic<size_t> m_numChunks = 0;
 
-    alignas(64) std::atomic<uint64> m_freeLists[NUM_SIZE_CLASSES] = {}; // exact size class -> tagged Treiber stack head
+    alignas(64) oc::atomic<uint64> m_freeLists[NUM_SIZE_CLASSES] = {}; // exact size class -> tagged Treiber stack head
 };
 
 export namespace Globals

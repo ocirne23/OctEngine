@@ -60,5 +60,5 @@ private:
 
     vk::DeviceSize m_preprocessSize = 0;
     // One preprocess scratch per frame in flight (a single multiview execute renders all cascades).
-    std::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_preprocessBuffers;
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_preprocessBuffers;
 };

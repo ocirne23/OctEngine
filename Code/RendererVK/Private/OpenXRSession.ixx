@@ -32,8 +32,8 @@ public:
     bool initInstanceAndSystem();
 
     // Vulkan instance/device creation inputs the runtime dictates. Valid after initInstanceAndSystem().
-    std::vector<std::string> getRequiredVulkanInstanceExtensions() const;
-    std::vector<std::string> getRequiredVulkanDeviceExtensions() const;
+    oc::vector<oc::string> getRequiredVulkanInstanceExtensions() const;
+    oc::vector<oc::string> getRequiredVulkanDeviceExtensions() const;
     vk::PhysicalDevice getVulkanGraphicsDevice(vk::Instance vkInstance) const;
 
     // Phase 2: create the XrSession bound to the (already created) Vulkan device, plus the reference
@@ -109,7 +109,7 @@ private:
     // (arraySize>1) swapchains. Multiview rendering still happens into our own 2-layer array target;
     // each layer is copied into the matching eye swapchain before submit.
     XrSwapchain m_swapchains[VIEW_COUNT] = { XR_NULL_HANDLE, XR_NULL_HANDLE };
-    std::vector<XrSwapchainImageVulkanKHR> m_swapchainImages[VIEW_COUNT];
+    oc::vector<XrSwapchainImageVulkanKHR> m_swapchainImages[VIEW_COUNT];
     XrViewConfigurationView m_viewConfig{ XR_TYPE_VIEW_CONFIGURATION_VIEW };
     int64_t m_swapchainFormat = 0;
 

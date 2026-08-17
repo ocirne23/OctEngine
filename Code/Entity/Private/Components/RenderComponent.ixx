@@ -21,14 +21,14 @@ export struct RenderComponent
     struct SpawnInfo
     {
         ObjectContainer* container = nullptr;       // null = nothing to spawn
-        std::string containerName;                  // ObjectContainer reference name, kept for re-serialization
-        std::string nodePath;                       // For debug/display. nodeIdx is used at runtime for spawning.
+        oc::string containerName;                  // ObjectContainer reference name, kept for re-serialization
+        oc::string nodePath;                       // For debug/display. nodeIdx is used at runtime for spawning.
         NodeSpawnIdx nodeIdx = NodeSpawnIdx_ROOT;
         Transform localTransform;                   // applied on top of the spawn base transform
         glm::vec3 color{ -1.0f };                   // >= 0: solid TINT — the node's materials override
                                                     // to a flat color (authored as `Color r g b`)
         bool skinned = false;                       // spawn a skinned node (GPU skinning) instead of a static one
-        std::string rigType;                        // skinned only: "Humanoid" / "Generic" (empty = unspecified; informational, not yet consumed)
+        oc::string rigType;                        // skinned only: "Humanoid" / "Generic" (empty = unspecified; informational, not yet consumed)
     };
 
     void spawn(Entity& entity, const SpawnInfo& info, const Transform& base);

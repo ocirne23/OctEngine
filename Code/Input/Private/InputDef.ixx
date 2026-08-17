@@ -21,26 +21,26 @@ export enum SDL_Scancode : int;
 export class MouseListener
 {
 public:
-    std::function<void(const SDL_MouseMotionEvent&)> onMouseMoved;
-    std::function<void(const SDL_MouseWheelEvent&)>  onMouseWheelMoved;
-    std::function<void(const SDL_MouseButtonEvent&)> onMousePressed;
-    std::function<void(const SDL_MouseButtonEvent&)> onMouseReleased;
+    oc::function<void(const SDL_MouseMotionEvent&)> onMouseMoved;
+    oc::function<void(const SDL_MouseWheelEvent&)>  onMouseWheelMoved;
+    oc::function<void(const SDL_MouseButtonEvent&)> onMousePressed;
+    oc::function<void(const SDL_MouseButtonEvent&)> onMouseReleased;
 };
 
 export class KeyboardListener
 {
 public:
-    std::function<void(const SDL_TextEditingEvent&)> onTextEditing;
-    std::function<void(const SDL_TextInputEvent&)>   onTextInput;
-    std::function<void(const SDL_KeyboardEvent&)>    onKeyPressed;
-    std::function<void(const SDL_KeyboardEvent&)>    onKeyReleased;
+    oc::function<void(const SDL_TextEditingEvent&)> onTextEditing;
+    oc::function<void(const SDL_TextInputEvent&)>   onTextInput;
+    oc::function<void(const SDL_KeyboardEvent&)>    onKeyPressed;
+    oc::function<void(const SDL_KeyboardEvent&)>    onKeyReleased;
 };
 
 export class SystemEventListener
 {
 public:
-    std::function<void(const SDL_WindowEvent&)> onWindowEvent;
-    std::function<void()> onQuit;
+    oc::function<void(const SDL_WindowEvent&)> onWindowEvent;
+    oc::function<void()> onQuit;
 };
 
 export class JoystickListener
@@ -61,13 +61,13 @@ class InputListenerHandle final
 public:
     InputListenerHandle() = default;
     ~InputListenerHandle() { reset(); }
-    InputListenerHandle(InputListenerHandle&& other) noexcept : m_listener(std::exchange(other.m_listener, nullptr)) {}
+    InputListenerHandle(InputListenerHandle&& other) noexcept : m_listener(oc::exchange(other.m_listener, nullptr)) {}
     InputListenerHandle& operator=(InputListenerHandle&& other) noexcept
     {
         if (this != &other)
         {
             reset();
-            m_listener = std::exchange(other.m_listener, nullptr);
+            m_listener = oc::exchange(other.m_listener, nullptr);
         }
         return *this;
     }
@@ -118,21 +118,21 @@ public:
     bool wantMouseVisible() const          { return m_wantMouseVisible; }
     bool isMouseCaptured() const           { return m_mouseCaptured; }
 
-    [[nodiscard]] MouseListenerHandle addMouseListener()             { return MouseListenerHandle(m_mouseListeners.emplace_back(std::make_unique<MouseListener>()).get()); }
-    [[nodiscard]] KeyboardListenerHandle addKeyboardListener()       { return KeyboardListenerHandle(m_keyboardListeners.emplace_back(std::make_unique<KeyboardListener>()).get()); }
-    [[nodiscard]] SystemEventListenerHandle addSystemEventListener() { return SystemEventListenerHandle(m_systemEventListeners.emplace_back(std::make_unique<SystemEventListener>()).get()); }
+    [[nodiscard]] MouseListenerHandle addMouseListener()             { return MouseListenerHandle(m_mouseListeners.emplace_back(oc::make_unique<MouseListener>()).get()); }
+    [[nodiscard]] KeyboardListenerHandle addKeyboardListener()       { return KeyboardListenerHandle(m_keyboardListeners.emplace_back(oc::make_unique<KeyboardListener>()).get()); }
+    [[nodiscard]] SystemEventListenerHandle addSystemEventListener() { return SystemEventListenerHandle(m_systemEventListeners.emplace_back(oc::make_unique<SystemEventListener>()).get()); }
 
 private:
 
     template<typename T> friend class InputListenerHandle;
-    void removeListener(const MouseListener* listener)       { std::erase_if(m_mouseListeners,       [listener](const auto& l) { return l.get() == listener; }); }
-    void removeListener(const KeyboardListener* listener)    { std::erase_if(m_keyboardListeners,    [listener](const auto& l) { return l.get() == listener; }); }
-    void removeListener(const SystemEventListener* listener) { std::erase_if(m_systemEventListeners, [listener](const auto& l) { return l.get() == listener; }); }
+    void removeListener(const MouseListener* listener)       { oc::erase_if(m_mouseListeners,       [listener](const auto& l) { return l.get() == listener; }); }
+    void removeListener(const KeyboardListener* listener)    { oc::erase_if(m_keyboardListeners,    [listener](const auto& l) { return l.get() == listener; }); }
+    void removeListener(const SystemEventListener* listener) { oc::erase_if(m_systemEventListeners, [listener](const auto& l) { return l.get() == listener; }); }
 
     const bool* m_pKeyStates = nullptr;
-    std::vector<std::unique_ptr<MouseListener>>    m_mouseListeners;
-    std::vector<std::unique_ptr<KeyboardListener>> m_keyboardListeners;
-    std::vector<std::unique_ptr<SystemEventListener>> m_systemEventListeners;
+    oc::vector<oc::unique_ptr<MouseListener>>    m_mouseListeners;
+    oc::vector<oc::unique_ptr<KeyboardListener>> m_keyboardListeners;
+    oc::vector<oc::unique_ptr<SystemEventListener>> m_systemEventListeners;
 
     bool m_mouseCaptured = false;
     bool m_mouseInWindow = false;

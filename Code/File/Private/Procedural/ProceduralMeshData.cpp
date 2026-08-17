@@ -38,8 +38,8 @@ bool ProceduralMeshData::initialize(EProceduralShape shape, const char* name)
 		return false;
 	}
 
-	m_aabb.min = glm::vec3(std::numeric_limits<float>::max());
-	m_aabb.max = glm::vec3(std::numeric_limits<float>::lowest());
+	m_aabb.min = glm::vec3(oc::numeric_limits<float>::max());
+	m_aabb.max = glm::vec3(oc::numeric_limits<float>::lowest());
 	for (const glm::vec3& v : m_vertices)
 	{
 		m_aabb.min = glm::min(m_aabb.min, v);
@@ -81,8 +81,8 @@ bool ProceduralMeshData::initializeFromGeometry(
 
 	m_indices.assign(indices, indices + numIndices);
 
-	m_aabb.min = glm::vec3(std::numeric_limits<float>::max());
-	m_aabb.max = glm::vec3(std::numeric_limits<float>::lowest());
+	m_aabb.min = glm::vec3(oc::numeric_limits<float>::max());
+	m_aabb.max = glm::vec3(oc::numeric_limits<float>::lowest());
 	for (const glm::vec3& v : m_vertices)
 	{
 		m_aabb.min = glm::min(m_aabb.min, v);
@@ -162,8 +162,8 @@ bool ProceduralMeshData::initializeTerrain(const TerrainParams& params, const ch
 	m_name = name ? name : "Terrain";
 	buildTerrain(params);
 
-	m_aabb.min = glm::vec3(std::numeric_limits<float>::max());
-	m_aabb.max = glm::vec3(std::numeric_limits<float>::lowest());
+	m_aabb.min = glm::vec3(oc::numeric_limits<float>::max());
+	m_aabb.max = glm::vec3(oc::numeric_limits<float>::lowest());
 	for (const glm::vec3& v : m_vertices)
 	{
 		m_aabb.min = glm::min(m_aabb.min, v);
@@ -311,7 +311,7 @@ void ProceduralMeshData::buildSkySphere(uint32 stacks, uint32 slices)
 	for (glm::vec3& n : m_normals)    n = -n;
 	for (glm::vec3& b : m_bitangents) b = -b; // keep the TBN right-handed with the flipped normal
 	for (size_t i = 0; i + 2 < m_indices.size(); i += 3)
-		std::swap(m_indices[i + 1], m_indices[i + 2]);
+		oc::swap(m_indices[i + 1], m_indices[i + 2]);
 
 	// The sky gradient only varies vertically, so collapse u (the longitude seam and the u-derivative
 	// blow-up at the poles otherwise cause a visible pinch) and inset v from the texture edges: at

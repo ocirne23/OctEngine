@@ -69,7 +69,7 @@ void OutputLog::prepare()
 		case Log::Level::Error:   if (!m_showError)   continue; break;
 		default: break;
 		}
-		if (hasFilter && msg.text.find(m_filterBuf) == std::string::npos)
+		if (hasFilter && msg.text.find(m_filterBuf) == oc::string::npos)
 			continue;
 		m_visible.push_back(i);
 	}
@@ -107,7 +107,7 @@ void OutputLog::render()
 		ImGuiWindowFlags_HorizontalScrollbar);
 
 	ImGuiListClipper clipper;
-	const std::vector<uint32>& s_visible = m_visible;
+	const oc::vector<uint32>& s_visible = m_visible;
 	clipper.Begin(static_cast<int>(s_visible.size()));
 	while (clipper.Step())
 	{

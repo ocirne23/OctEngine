@@ -6,7 +6,7 @@ import Core.glm;
 namespace
 {
     template <typename KeyT>
-    uint32 findKey(const std::vector<KeyT>& keys, float t, float& outFactor)
+    uint32 findKey(const oc::vector<KeyT>& keys, float t, float& outFactor)
     {
         for (uint32 i = 0; i + 1 < (uint32)keys.size(); ++i)
         {
@@ -21,7 +21,7 @@ namespace
         return (uint32)keys.size() - 1;
     }
 
-    glm::vec3 sampleVec(const std::vector<PositionKey>& keys, float t, const glm::vec3& fallback)
+    glm::vec3 sampleVec(const oc::vector<PositionKey>& keys, float t, const glm::vec3& fallback)
     {
         if (keys.empty()) return fallback;
         if (keys.size() == 1) return keys[0].value;
@@ -31,7 +31,7 @@ namespace
         return glm::mix(keys[i].value, keys[i + 1].value, f);
     }
 
-    glm::vec3 sampleScale(const std::vector<ScaleKey>& keys, float t, const glm::vec3& fallback)
+    glm::vec3 sampleScale(const oc::vector<ScaleKey>& keys, float t, const glm::vec3& fallback)
     {
         if (keys.empty()) return fallback;
         if (keys.size() == 1) return keys[0].value;
@@ -41,7 +41,7 @@ namespace
         return glm::mix(keys[i].value, keys[i + 1].value, f);
     }
 
-    glm::quat sampleQuat(const std::vector<RotationKey>& keys, float t, const glm::quat& fallback)
+    glm::quat sampleQuat(const oc::vector<RotationKey>& keys, float t, const glm::quat& fallback)
     {
         if (keys.empty()) return fallback;
         if (keys.size() == 1) return keys[0].value;
@@ -120,7 +120,7 @@ void AnimationPlayer::play(const AnimationClip* pClip, float fadeSeconds)
     evaluate();
 }
 
-bool AnimationPlayer::play(const std::string& name, float fadeSeconds)
+bool AnimationPlayer::play(const oc::string& name, float fadeSeconds)
 {
     if (!m_pLibrary)
         return false;
@@ -148,7 +148,7 @@ AnimationPlayer::BlendResult AnimationPlayer::resolveBlend() const
         r.a = m_pClip;
         return r;
     }
-    const std::vector<BlendSample1D>& s = m_pBlendSpace->samples;
+    const oc::vector<BlendSample1D>& s = m_pBlendSpace->samples;
     if (s.size() == 1 || m_blendParam <= s.front().position) { r.a = s.front().clip; return r; }
     if (m_blendParam >= s.back().position)                   { r.a = s.back().clip;  return r; }
     uint32 i = 0;
@@ -273,7 +273,7 @@ void AnimationPlayer::evaluate()
         blendPose(m_poseA, m_snapshot, 1.0f - m_fade); // = lerp(snapshot, foreground, m_fade)
 
     // Build local matrices from the (blended) TRS, applying any programmatic per-bone modifiers.
-    std::vector<glm::mat4> local(numBones);
+    oc::vector<glm::mat4> local(numBones);
     for (uint32 i = 0; i < numBones; ++i)
     {
         local[i] = glm::translate(glm::mat4(1.0f), m_poseA.pos[i]) * glm::mat4_cast(m_poseA.rot[i]) * glm::scale(glm::mat4(1.0f), m_poseA.scale[i]);
@@ -306,7 +306,7 @@ float AnimationPlayer::getNormalizedTime() const
     return 0.0f;
 }
 
-int32 AnimationPlayer::findBone(const std::string& name) const
+int32 AnimationPlayer::findBone(const oc::string& name) const
 {
     return m_pSkeleton ? m_pSkeleton->findBone(name) : -1;
 }
@@ -319,14 +319,14 @@ void AnimationPlayer::setBoneTransform(uint32 boneIndex, const glm::mat4& localT
     m_anyBoneModifier = true;
 }
 
-void AnimationPlayer::setBoneTransform(const std::string& name, const glm::mat4& localTransform)
+void AnimationPlayer::setBoneTransform(const oc::string& name, const glm::mat4& localTransform)
 {
     const int32 idx = findBone(name);
     if (idx >= 0)
         setBoneTransform((uint32)idx, localTransform);
 }
 
-void AnimationPlayer::setBoneTransform(const std::string& name, const glm::vec3& pos, const glm::quat& rot, const glm::vec3& scale)
+void AnimationPlayer::setBoneTransform(const oc::string& name, const glm::vec3& pos, const glm::quat& rot, const glm::vec3& scale)
 {
     const glm::mat4 m = glm::translate(glm::mat4(1.0f), pos) * glm::mat4_cast(rot) * glm::scale(glm::mat4(1.0f), scale);
     setBoneTransform(name, m);
@@ -340,14 +340,14 @@ void AnimationPlayer::setBoneOffset(uint32 boneIndex, const glm::mat4& localOffs
     m_anyBoneModifier = true;
 }
 
-void AnimationPlayer::setBoneOffset(const std::string& name, const glm::mat4& localOffset)
+void AnimationPlayer::setBoneOffset(const oc::string& name, const glm::mat4& localOffset)
 {
     const int32 idx = findBone(name);
     if (idx >= 0)
         setBoneOffset((uint32)idx, localOffset);
 }
 
-void AnimationPlayer::setBoneOffset(const std::string& name, const glm::quat& deltaRotation)
+void AnimationPlayer::setBoneOffset(const oc::string& name, const glm::quat& deltaRotation)
 {
     setBoneOffset(name, glm::mat4_cast(deltaRotation));
 }
@@ -362,7 +362,7 @@ void AnimationPlayer::clearBoneModifier(uint32 boneIndex)
         if (mod.mode != BoneModifierMode::None) { m_anyBoneModifier = true; break; }
 }
 
-void AnimationPlayer::clearBoneModifier(const std::string& name)
+void AnimationPlayer::clearBoneModifier(const oc::string& name)
 {
     const int32 idx = findBone(name);
     if (idx >= 0)

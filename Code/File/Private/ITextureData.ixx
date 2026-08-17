@@ -22,13 +22,13 @@ public:
 
     // Folder of the scene file (.fbx/.glb) this texture belongs to, used to resolve loose texture files
     // relative to the model first, before falling back to the asset-root-relative path. Empty by default.
-    void setRootFolder(std::string_view rootFolder) { m_rootFolder = rootFolder; }
-    const std::string& getRootFolder() const { return m_rootFolder; }
+    void setRootFolder(oc::string_view rootFolder) { m_rootFolder = rootFolder; }
+    const oc::string& getRootFolder() const { return m_rootFolder; }
 
-    static std::unique_ptr<ITextureData> createFallbackDiffuseTexture();
-    static std::unique_ptr<ITextureData> createFallbackWhiteTexture();
-    static std::unique_ptr<ITextureData> createFallbackNormalTexture();
+    static oc::unique_ptr<ITextureData> createFallbackDiffuseTexture();
+    static oc::unique_ptr<ITextureData> createFallbackWhiteTexture();
+    static oc::unique_ptr<ITextureData> createFallbackNormalTexture();
 
 private:
-    std::string m_rootFolder;
+    oc::string m_rootFolder;
 };

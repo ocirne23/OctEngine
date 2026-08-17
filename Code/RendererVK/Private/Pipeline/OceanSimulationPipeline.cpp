@@ -178,7 +178,7 @@ void OceanSimulationPipeline::createImages()
         CommandBuffer init;
         init.initialize(vk::CommandBufferLevel::ePrimary);
         vk::CommandBuffer cmd = init.begin(true);
-        std::array<vk::ImageMemoryBarrier2, 4> barriers;
+        oc::array<vk::ImageMemoryBarrier2, 4> barriers;
         for (uint32 i = 0; i < 2; ++i)
         {
             barriers[i] = vk::ImageMemoryBarrier2{
@@ -211,7 +211,7 @@ void OceanSimulationPipeline::createImages()
         };
         cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = (uint32)barriers.size(), .pImageMemoryBarriers = barriers.data() });
 
-        const vk::ClearColorValue zero{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } };
+        const vk::ClearColorValue zero{ oc::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } };
         const vk::ImageSubresourceRange foamRange = allSubresources(1, 2);
         cmd.clearColorImage(m_foamImage, vk::ImageLayout::eTransferDstOptimal, &zero, 1, &foamRange);
 
@@ -329,7 +329,7 @@ void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameI
 
     // ---- 1. Spectrum: TMA h0(k) + time evolution -> packed complex spectra (ping) ----
     {
-        std::array<DescriptorSetUpdateInfo, 2> updates{
+        oc::array<DescriptorSetUpdateInfo, 2> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
                 .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
             storageImage(m_spectrumView[0]),
@@ -347,7 +347,7 @@ void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameI
     {
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_fftPipeline.getPipeline());
 
-        std::array<DescriptorSetUpdateInfo, 2> horizontal{ storageImage(m_spectrumView[0]), storageImage(m_spectrumView[1]) };
+        oc::array<DescriptorSetUpdateInfo, 2> horizontal{ storageImage(m_spectrumView[0]), storageImage(m_spectrumView[1]) };
         horizontal[0].binding = 0; horizontal[1].binding = 1;
         vk::DescriptorSet hSet = m_fftHorizontalSets[frameIdx].getDescriptorSet();
         commandBuffer.cmdUpdateDescriptorSets(m_fftPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, hSet, horizontal);
@@ -357,7 +357,7 @@ void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameI
         cmd.dispatch(N, SPECTRUM_LAYERS, 1); // one workgroup per row per layer
         computeBarrier();
 
-        std::array<DescriptorSetUpdateInfo, 2> vertical{ storageImage(m_spectrumView[1]), storageImage(m_spectrumView[0]) };
+        oc::array<DescriptorSetUpdateInfo, 2> vertical{ storageImage(m_spectrumView[1]), storageImage(m_spectrumView[0]) };
         vertical[0].binding = 0; vertical[1].binding = 1;
         vk::DescriptorSet vSet = m_fftVerticalSets[frameIdx].getDescriptorSet();
         commandBuffer.cmdUpdateDescriptorSets(m_fftPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vSet, vertical);
@@ -370,7 +370,7 @@ void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameI
 
     // ---- 3. Assemble: permute sign, unpack the 8 signals -> displacement/gradient/moments maps (mip 0) ----
     {
-        std::array<DescriptorSetUpdateInfo, 2> updates{ storageImage(m_spectrumView[0]), storageImage(m_mapsMip0View) };
+        oc::array<DescriptorSetUpdateInfo, 2> updates{ storageImage(m_spectrumView[0]), storageImage(m_mapsMip0View) };
         updates[0].binding = 0; updates[1].binding = 1;
         vk::DescriptorSet set = m_assembleSets[frameIdx].getDescriptorSet();
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_assemblePipeline.getPipeline());
@@ -385,7 +385,7 @@ void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameI
     // here) so a 1.5m mask texel reads each cascade's AVERAGE local folding, not one aliased full-res
     // sample. The crisp foam edges come from noise erosion in the water shader, not from this mask. ----
     {
-        std::array<DescriptorSetUpdateInfo, 4> updates{
+        oc::array<DescriptorSetUpdateInfo, 4> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
                 .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
             storageImage(m_mapsMip0View),
@@ -440,7 +440,7 @@ void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameI
             blit.srcOffsets[0] = vk::Offset3D{ 0, 0, 0 };
             blit.srcOffsets[1] = vk::Offset3D{ srcSize, srcSize, 1 };
             blit.dstOffsets[0] = vk::Offset3D{ 0, 0, 0 };
-            blit.dstOffsets[1] = vk::Offset3D{ std::max(dstSize, 1), std::max(dstSize, 1), 1 };
+            blit.dstOffsets[1] = vk::Offset3D{ oc::max(dstSize, 1), oc::max(dstSize, 1), 1 };
             vk::BlitImageInfo2 blitInfo{
                 .srcImage = m_mapsImage, .srcImageLayout = vk::ImageLayout::eTransferSrcOptimal,
                 .dstImage = m_mapsImage, .dstImageLayout = vk::ImageLayout::eTransferDstOptimal,

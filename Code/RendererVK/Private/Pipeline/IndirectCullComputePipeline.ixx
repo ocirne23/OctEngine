@@ -66,7 +66,7 @@ private:
         Buffer outIndirectCommandBuffer;          // 8 - opaque
         Buffer outTransparentIndirectCommandBuffer; // 9 - transparent
 
-        std::span<vk::DispatchIndirectCommand> mappedIndirectCommands;
+        oc::span<vk::DispatchIndirectCommand> mappedIndirectCommands;
     };
-    std::array<PerFrameData, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_perFrameData;
+    oc::array<PerFrameData, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_perFrameData;
 };

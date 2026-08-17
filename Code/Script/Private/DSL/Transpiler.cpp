@@ -20,12 +20,12 @@ namespace
 	// The type-appropriate default an unresolved value falls back to -- a committed document never actually
 	// holds one (the editor's no-placeholder rule refuses to confirm), but Placeholder/field-initializer emit
 	// both want the SAME rule if one ever slips through, so it's one switch, not two.
-	std::string defaultValueText(DSLType type, const ScriptBindings& bindings)
+	oc::string defaultValueText(DSLType type, const ScriptBindings& bindings)
 	{
 		if (dslIsArrayType(type))
 			return "0"; // no array yet -- the first push creates one and writes its handle back (see OcArray)
 		if (const BindingStruct* structDef = bindings.structFor(type); structDef != nullptr)
-			return std::string(structDef->cppName) + "()";
+			return oc::string(structDef->cppName) + "()";
 		switch (type)
 		{
 		case DSLType::Float:  return "0.0f";
@@ -38,22 +38,22 @@ namespace
 
 	const DSLSymbol::VariableDeclaration& declOf(const DSLSymbol* varDecl)
 	{
-		return std::get<DSLSymbol::VariableDeclaration>(varDecl->data);
+		return oc::get<DSLSymbol::VariableDeclaration>(varDecl->data);
 	}
 
 	DSLType declaredType(const DSLSymbol* varDecl)
 	{
-		return std::get<DSLSymbol::TypeDeclaration>(declOf(varDecl).typeSymbol->data).type;
+		return oc::get<DSLSymbol::TypeDeclaration>(declOf(varDecl).typeSymbol->data).type;
 	}
 
 	struct Emitter
 	{
 		const DSL& document;
 		const ScriptBindings& bindings;
-		std::string out;
+		oc::string out;
 		int indent = 0;
 
-		void emitLine(const std::string& text)
+		void emitLine(const oc::string& text)
 		{
 			if (!text.empty())
 				out.append(static_cast<size_t>(indent), '\t');
@@ -64,17 +64,17 @@ namespace
 		// ---- expressions ----
 
 		// A Float constant needs a real C++ float literal: "1" -> "1.0f", "0.5" -> "0.5f", "1." -> "1.0f".
-		static std::string floatLiteral(const std::string& value)
+		static oc::string floatLiteral(const oc::string& value)
 		{
-			std::string text = value;
-			if (text.find('.') == std::string::npos)
+			oc::string text = value;
+			if (text.find('.') == oc::string::npos)
 				text += ".0";
 			else if (text.back() == '.')
 				text += '0';
 			return text + "f";
 		}
 
-		static std::string constantText(const DSLSymbol::Constant& c)
+		static oc::string constantText(const DSLSymbol::Constant& c)
 		{
 			switch (c.type)
 			{
@@ -95,16 +95,16 @@ namespace
 		// match: a call's template has no "$i", a sequence's `at` has no "$1", and neither has "$v".
 		struct EmitArgs
 		{
-			std::string receiver;             // "$r" -- the receiver's own emitted expression
-			std::vector<std::string> args;    // "$1".."$9" -- by CALLEE-parameter position (a lookup's key is $1)
-			std::vector<std::string> varargs; // "$*" -- a variadic callee's tail, each preceded by ", "
-			std::string index;                // "$i" -- a sequence walk's own index local
-			std::string boundVar;             // "$v" -- the variable a lookup writes through / reads back
+			oc::string receiver;             // "$r" -- the receiver's own emitted expression
+			oc::vector<oc::string> args;    // "$1".."$9" -- by CALLEE-parameter position (a lookup's key is $1)
+			oc::vector<oc::string> varargs; // "$*" -- a variadic callee's tail, each preceded by ", "
+			oc::string index;                // "$i" -- a sequence walk's own index local
+			oc::string boundVar;             // "$v" -- the variable a lookup writes through / reads back
 		};
 
-		static std::string substituteEmit(const char* emitTemplate, const EmitArgs& a)
+		static oc::string substituteEmit(const char* emitTemplate, const EmitArgs& a)
 		{
-			std::string result;
+			oc::string result;
 			for (const char* p = emitTemplate; *p != '\0'; ++p)
 			{
 				if (*p != '$' || p[1] == '\0')
@@ -118,7 +118,7 @@ namespace
 				else if (code == 'v') result += a.boundVar;
 				else if (code == '*')
 				{
-					for (const std::string& extra : a.varargs)
+					for (const oc::string& extra : a.varargs)
 						result += ", " + extra;
 				}
 				else if (code >= '1' && code <= '9')
@@ -137,15 +137,15 @@ namespace
 			return result;
 		}
 
-		std::string callText(const DSLSymbol* callSymbol)
+		oc::string callText(const DSLSymbol* callSymbol)
 		{
-			const DSLSymbol::FunctionCall& call = std::get<DSLSymbol::FunctionCall>(callSymbol->data);
-			const DSLSymbol::FunctionDeclaration& callee = std::get<DSLSymbol::FunctionDeclaration>(call.functionSymbol->data);
+			const DSLSymbol::FunctionCall& call = oc::get<DSLSymbol::FunctionCall>(callSymbol->data);
+			const DSLSymbol::FunctionDeclaration& callee = oc::get<DSLSymbol::FunctionDeclaration>(call.functionSymbol->data);
 
 			// Argument expressions in the CALLEE's parameter order -- named arguments reorder to their
 			// parameter's position, positional ones keep their index (the DSL's order-independent named
 			// matching becomes plain positional C++ here).
-			std::vector<std::string> args(std::max(call.arguments.size(), callee.parameterVarDeclarations.size()));
+			oc::vector<oc::string> args(oc::max(call.arguments.size(), callee.parameterVarDeclarations.size()));
 			for (size_t i = 0; i < call.arguments.size(); ++i)
 			{
 				size_t index = i;
@@ -165,10 +165,10 @@ namespace
 				// The receiver is its own emitted EXPRESSION (a handle-fetch call like
 				// "ctx->entityGetPhysicsComponent(self)", or a chained member access like "self.pos"), so emit
 				// templates compose textually.
-				const std::string receiverName = (call.receiver != nullptr) ? expressionText(call.receiver) : std::string();
+				const oc::string receiverName = (call.receiver != nullptr) ? expressionText(call.receiver) : oc::string();
 				// A variadic callee's extras sit past its declared parameters (always positional, so `args` holds
 				// them at their own indices) and reach the template through "$*" instead of "$1".."$9".
-				std::vector<std::string> varargs;
+				oc::vector<oc::string> varargs;
 				if (callee.isVariadic && args.size() > callee.parameterVarDeclarations.size())
 					varargs.assign(args.begin() + callee.parameterVarDeclarations.size(), args.end());
 				return substituteEmit(emitTemplate, { receiverName, args, varargs });
@@ -177,15 +177,15 @@ namespace
 			// A user function: ctx/self/scriptData are auto-threaded through exactly like the callee's own
 			// signature (see emitFunction) -- invisible to the DSL author at both the declaration and every
 			// call site.
-			std::string text = callee.name + "(ctx, self, scriptData";
-			for (const std::string& arg : args)
+			oc::string text = callee.name + "(ctx, self, scriptData";
+			for (const oc::string& arg : args)
 				text += ", " + arg;
 			return text + ")";
 		}
 
-		std::string memberText(const DSLSymbol* symbol)
+		oc::string memberText(const DSLSymbol* symbol)
 		{
-			const DSLSymbol::MemberAccess& m = std::get<DSLSymbol::MemberAccess>(symbol->data);
+			const DSLSymbol::MemberAccess& m = oc::get<DSLSymbol::MemberAccess>(symbol->data);
 			const DSLType receiverType = dslValueType(m.receiver);
 			// self.events.<name> IS its index, a compile-time constant -- "self.events" itself is never even
 			// rendered (no receiverText needed): the name->index mapping is this document's OWN (DSL::eventNames),
@@ -193,9 +193,9 @@ namespace
 			if (receiverType == DSLType::ScriptEvents)
 			{
 				const int index = dslFindEventIndex(document.eventNames, m.memberName);
-				return std::to_string(index >= 0 ? index : 0); // defensive -- authored/loaded names always exist
+				return oc::to_string(index >= 0 ? index : 0); // defensive -- authored/loaded names always exist
 			}
-			const std::string receiverText = expressionText(m.receiver); // recursion makes chains compose ("self.pos" -> ".x")
+			const oc::string receiverText = expressionText(m.receiver); // recursion makes chains compose ("self.pos" -> ".x")
 			// self.data's own fields are this DOCUMENT's, not the static registry (DSLType::ScriptData) -- "data"
 			// itself dereferences to a VALUE ("(*(ScriptData*)scriptData)", see ScriptBindings' self.data emit),
 			// so every field hop composes with "." exactly like any other member chain.
@@ -206,16 +206,16 @@ namespace
 			return receiverText + "." + m.memberName; // defensive -- authored/loaded members always exist in the registry
 		}
 
-		std::string expressionText(const DSLSymbol* symbol)
+		oc::string expressionText(const DSLSymbol* symbol)
 		{
 			if (symbol == nullptr)
 				return "0";
 			switch (symbol->type)
 			{
 			case ST::Constant:
-				return constantText(std::get<DSLSymbol::Constant>(symbol->data));
+				return constantText(oc::get<DSLSymbol::Constant>(symbol->data));
 			case ST::VariableReference:
-				return declOf(std::get<DSLSymbol::VariableReference>(symbol->data).declaration).name;
+				return declOf(oc::get<DSLSymbol::VariableReference>(symbol->data).declaration).name;
 			case ST::FunctionCall:
 				return callText(symbol);
 			case ST::MemberAccess:
@@ -224,8 +224,8 @@ namespace
 			{
 				// FLAT, exactly as authored: C++'s own precedence supplies the "*, / over +, -" the DSL defers
 				// to emit time (DSL.ixx); parens appear only where the author grouped.
-				const DSLSymbol::Expression& e = std::get<DSLSymbol::Expression>(symbol->data);
-				std::string text;
+				const DSLSymbol::Expression& e = oc::get<DSLSymbol::Expression>(symbol->data);
+				oc::string text;
 				for (size_t i = 0; i < e.operands.size(); ++i)
 				{
 					if (i > 0)
@@ -241,17 +241,17 @@ namespace
 			case ST::Placeholder:
 				// Committed documents never hold value placeholders (the editor's no-placeholder rule) -- emit
 				// a type default anyway rather than broken text if one ever slips through.
-				return defaultValueText(std::get<DSLSymbol::Placeholder>(symbol->data).expectedType, bindings);
+				return defaultValueText(oc::get<DSLSymbol::Placeholder>(symbol->data).expectedType, bindings);
 			default:
 				return "0"; // no other symbol kind is a value
 			}
 		}
 
 		// "float applied = 0.0f" (no trailing ';') -- local declarations and the for-loop's first clause.
-		std::string declarationText(const DSLSymbol* declSymbol)
+		oc::string declarationText(const DSLSymbol* declSymbol)
 		{
 			const DSLSymbol::VariableDeclaration& v = declOf(declSymbol);
-			std::string text = std::string(cppTypeName(declaredType(declSymbol))) + " " + v.name;
+			oc::string text = oc::string(cppTypeName(declaredType(declSymbol))) + " " + v.name;
 			if (v.initialValue != nullptr)
 				text += " = " + expressionText(v.initialValue);
 			return text;
@@ -265,7 +265,7 @@ namespace
 		struct OpenScope
 		{
 			int scopeLevel;
-			std::string trailing;
+			oc::string trailing;
 		};
 
 		// Names the hoisted source locals (see the ForEach/IfExist cases). Monotonic per FUNCTION rather than
@@ -282,19 +282,19 @@ namespace
 		{
 			const int blockEnd = dslBlockEnd(document.file, headerIndex);
 			for (int i = headerIndex + 1; i < blockEnd; ++i)
-				for (const std::unique_ptr<DSLSymbol>& s : document.file.lines[i]->symbols)
+				for (const oc::unique_ptr<DSLSymbol>& s : document.file.lines[i]->symbols)
 				{
 					if (s->type != ST::Expression)
 						continue;
-					const DSLSymbol::Expression& e = std::get<DSLSymbol::Expression>(s->data);
+					const DSLSymbol::Expression& e = oc::get<DSLSymbol::Expression>(s->data);
 					if (e.operators.empty() || !dslIsAssignOperator(e.operators[0]) || e.operands.empty())
 						continue;
 					// Walk the target back to its root declaration -- "p" and "p.x" both root at boundVar.
 					const DSLSymbol* target = e.operands[0];
 					while (target != nullptr && target->type == ST::MemberAccess)
-						target = std::get<DSLSymbol::MemberAccess>(target->data).receiver;
+						target = oc::get<DSLSymbol::MemberAccess>(target->data).receiver;
 					if (target != nullptr && target->type == ST::VariableReference
-						&& std::get<DSLSymbol::VariableReference>(target->data).declaration == boundVar)
+						&& oc::get<DSLSymbol::VariableReference>(target->data).declaration == boundVar)
 						return true;
 				}
 			return false;
@@ -308,13 +308,13 @@ namespace
 		// `at` key for an ifexist.
 		// iterText: the loop's hoisted local (ForEach only, empty elsewhere). A container that resolved its
 		// storage there writes back through it; everything else re-resolves from the receiver.
-		std::string elementWriteBack(const DSLCodeLine& line, const DSLSymbol::FlowControl* flow,
-			const DSLSymbol::VariableDeclaration& bound, const std::string& receiverText, const std::string& keyText,
-			const std::string& iterText = {})
+		oc::string elementWriteBack(const DSLCodeLine& line, const DSLSymbol::FlowControl* flow,
+			const DSLSymbol::VariableDeclaration& bound, const oc::string& receiverText, const oc::string& keyText,
+			const oc::string& iterText = {})
 		{
 			if (!bound.isRef || flow->condition == nullptr)
 				return {};
-			const DSLType elemType = std::get<DSLSymbol::TypeDeclaration>(bound.typeSymbol->data).type;
+			const DSLType elemType = oc::get<DSLSymbol::TypeDeclaration>(bound.typeSymbol->data).type;
 			if (dslIsEngineObjectType(elemType))
 				return {}; // a handle, not a copy
 			const BindingObject* container = bindings.objectFor(dslValueType(flow->condition));
@@ -363,13 +363,13 @@ namespace
 		// through too. Non-entry functions ALSO get `scriptData` as their 3rd (self.data needs it in scope
 		// wherever it's dotted into, not just from an entry point) -- an entry point already has one,
 		// positioned wherever the real ABI puts it (see cppSuffix).
-		std::string functionSignature(int headerIndex)
+		oc::string functionSignature(int headerIndex)
 		{
 			const DSLSymbol::FunctionDeclaration& func =
-				std::get<DSLSymbol::FunctionDeclaration>(document.file.lines[headerIndex]->head()->data);
+				oc::get<DSLSymbol::FunctionDeclaration>(document.file.lines[headerIndex]->head()->data);
 			const EntryPointDef* entry = bindings.entryPointFor(func.name);
 
-			std::string signature = std::string(entry != nullptr ? "SCRIPT_EXPORT " : "static ")
+			oc::string signature = oc::string(entry != nullptr ? "SCRIPT_EXPORT " : "static ")
 				+ cppTypeName(func.returnType) + " " + func.name + "(const ScriptContext* ctx, Entity* self";
 			if (entry != nullptr)
 			{
@@ -396,7 +396,7 @@ namespace
 		void emitFunction(int headerIndex, int bodyEnd)
 		{
 			const DSLSymbol::FunctionDeclaration& func =
-				std::get<DSLSymbol::FunctionDeclaration>(document.file.lines[headerIndex]->head()->data);
+				oc::get<DSLSymbol::FunctionDeclaration>(document.file.lines[headerIndex]->head()->data);
 			const EntryPointDef* entry = bindings.entryPointFor(func.name);
 
 			emitLine(functionSignature(headerIndex));
@@ -405,14 +405,14 @@ namespace
 			// One entry per currently-open nested block: its header's scopeLevel, plus a statement (if any) to
 			// emit just BEFORE the closing brace -- what a `ref` binding's write-back rides on (see IfExist/
 			// ForEach), so the copy back lands at the end of the block whichever way the block is closed.
-			std::vector<OpenScope> openScopes;
+			oc::vector<OpenScope> openScopes;
 			sourceLocalCounter = 0;
 			for (int i = headerIndex + 1; i < bodyEnd; ++i)
 			{
 				const DSLCodeLine& line = *document.file.lines[i];
 				const DSLSymbol* head = line.head();
 				const DSLSymbol::FlowControl* flow = (head != nullptr && head->type == ST::FlowControl)
-					? &std::get<DSLSymbol::FlowControl>(head->data) : nullptr;
+					? &oc::get<DSLSymbol::FlowControl>(head->data) : nullptr;
 				const bool continuation = flow != nullptr
 					&& (flow->control == DSLFlowControl::ElseIf || flow->control == DSLFlowControl::Else);
 
@@ -451,13 +451,13 @@ namespace
 				if (func.name == "OnEvent")
 				{
 					emitLine("");
-					emitLine("SCRIPT_EXPORT int ScriptEventCount(void) { return " + std::to_string(document.eventNames.size()) + "; }");
+					emitLine("SCRIPT_EXPORT int ScriptEventCount(void) { return " + oc::to_string(document.eventNames.size()) + "; }");
 					emitLine("SCRIPT_EXPORT const char* ScriptEventName(int eventIdx)");
 					openBlock();
 					emitLine("switch (eventIdx)");
 					openBlock();
 					for (size_t i = 0; i < document.eventNames.size(); ++i)
-						emitLine("case " + std::to_string(i) + ": return \"" + document.eventNames[i] + "\";");
+						emitLine("case " + oc::to_string(i) + ": return \"" + document.eventNames[i] + "\";");
 					emitLine("default: return \"\";");
 					closeBlock();
 					closeBlock();
@@ -468,7 +468,7 @@ namespace
 		}
 
 		void emitStatement(const DSLCodeLine& line, const DSLSymbol* head, const DSLSymbol::FlowControl* flow,
-			std::vector<OpenScope>& openScopes)
+			oc::vector<OpenScope>& openScopes)
 		{
 			if (head == nullptr || head->type == ST::Placeholder)
 			{
@@ -478,7 +478,7 @@ namespace
 			switch (head->type)
 			{
 			case ST::Comment:
-				emitLine("// " + std::get<DSLSymbol::Comment>(head->data).text);
+				emitLine("// " + oc::get<DSLSymbol::Comment>(head->data).text);
 				return;
 			case ST::VariableDeclaration:
 				emitLine(declarationText(head) + ";");
@@ -500,7 +500,7 @@ namespace
 			{
 			case DSLFlowControl::If:
 			case DSLFlowControl::While:
-				emitLine(std::string(flow->control == DSLFlowControl::If ? "if" : "while")
+				emitLine(oc::string(flow->control == DSLFlowControl::If ? "if" : "while")
 					+ " (" + expressionText(flow->condition) + ")");
 				openBlock();
 				openScopes.push_back({ line.scopeLevel, {} });
@@ -520,22 +520,22 @@ namespace
 				// sequence* fields) -- an array walks the generic handle ABI, an engine collection its own
 				// count/at pair. The index is a generated local the DSL author can't name, so the only way to
 				// index the sequence is the one the loop does, and `at` is range-safe by contract.
-				const DSLSymbol::VariableDeclaration& elem = std::get<DSLSymbol::VariableDeclaration>(flow->forLoopVar->data);
-				const DSLType elemType = std::get<DSLSymbol::TypeDeclaration>(elem.typeSymbol->data).type;
+				const DSLSymbol::VariableDeclaration& elem = oc::get<DSLSymbol::VariableDeclaration>(flow->forLoopVar->data);
+				const DSLType elemType = oc::get<DSLSymbol::TypeDeclaration>(elem.typeSymbol->data).type;
 
 				// The sequence expression is hoisted into a local ONLY when it is named more than once: a
 				// source that is a CALL (world.entitiesInRadius(...)) must not run per element. A container
 				// with a begin emit names it exactly once -- the begin emit resolves it and count/at read that
 				// result -- so there the hoist local never appears at all.
 				const auto localId = sourceLocalCounter++;
-				const std::string sourceText = expressionText(flow->condition);
-				const std::string sourceName = "ocSrc" + std::to_string(localId);
+				const oc::string sourceText = expressionText(flow->condition);
+				const oc::string sourceName = "ocSrc" + oc::to_string(localId);
 				const BindingObject* object = bindings.objectFor(dslValueType(flow->condition));
 				if (object == nullptr || object->sequenceBeginEmit == nullptr)
 					emitLine("const auto " + sourceName + " = " + sourceText + ";");
 
-				const std::string indexName = "ocIdx" + std::to_string(openScopes.size());
-				std::string countText, atText, iterName, refAtText;
+				const oc::string indexName = "ocIdx" + oc::to_string(openScopes.size());
+				oc::string countText, atText, iterName, refAtText;
 				if (object != nullptr && object->sequenceCountEmit != nullptr && object->sequenceAtEmit != nullptr)
 				{
 					// The begin emit resolves the container once, turning a per-element lookup (an array's
@@ -543,7 +543,7 @@ namespace
 					iterName = sourceName;
 					if (object->sequenceBeginEmit != nullptr)
 					{
-						iterName = "ocIter" + std::to_string(localId);
+						iterName = "ocIter" + oc::to_string(localId);
 						emitLine("const auto " + iterName + " = " + substituteEmit(object->sequenceBeginEmit, { sourceText }) + ";");
 					}
 					countText = substituteEmit(object->sequenceCountEmit, { iterName });
@@ -558,12 +558,12 @@ namespace
 				openBlock();
 				if (!refAtText.empty())
 				{
-					emitLine(std::string(cppTypeName(elemType)) + "& " + elem.name + " = " + refAtText + ";");
+					emitLine(oc::string(cppTypeName(elemType)) + "& " + elem.name + " = " + refAtText + ";");
 					openScopes.push_back({ line.scopeLevel, {} }); // the reference IS the write-back
 				}
 				else
 				{
-					emitLine(std::string(cppTypeName(elemType)) + " " + elem.name + " = " + atText + ";");
+					emitLine(oc::string(cppTypeName(elemType)) + " " + elem.name + " = " + atText + ";");
 					openScopes.push_back({ line.scopeLevel, elementWriteBack(line, flow, elem, sourceName, indexName, iterName) });
 				}
 				return;
@@ -575,15 +575,15 @@ namespace
 				// so the lookup can write through it and the branch can read it; C++ scopes that declaration
 				// across an attached `else` too, which is exactly why the DSL reserves the name there (see
 				// isChainComponentBinding) even though it isn't readable in that branch.
-				const DSLSymbol::VariableDeclaration& bound = std::get<DSLSymbol::VariableDeclaration>(flow->forLoopVar->data);
-				const DSLType elemType = std::get<DSLSymbol::TypeDeclaration>(bound.typeSymbol->data).type;
+				const DSLSymbol::VariableDeclaration& bound = oc::get<DSLSymbol::VariableDeclaration>(flow->forLoopVar->data);
+				const DSLType elemType = oc::get<DSLSymbol::TypeDeclaration>(bound.typeSymbol->data).type;
 				// The source is hoisted into a local ONLY when it is used more than once -- i.e. when a copied
 				// `ref` binding needs a write-back at block end, where re-evaluating a source that is a call
 				// would run it twice. The component fetch and the pointer lookup below each name it exactly
 				// once, so they inline it and the local never appears.
-				const std::string sourceText = expressionText(flow->condition);
-				const std::string sourceName = "ocSrc" + std::to_string(sourceLocalCounter++);
-				const std::string keyText = (flow->forCondition != nullptr) ? expressionText(flow->forCondition) : std::string();
+				const oc::string sourceText = expressionText(flow->condition);
+				const oc::string sourceName = "ocSrc" + oc::to_string(sourceLocalCounter++);
+				const oc::string keyText = (flow->forCondition != nullptr) ? expressionText(flow->forCondition) : oc::string();
 
 				// A COMPONENT is fetched off the entity rather than looked up in a container: the fetch call IS
 				// the condition (a null handle is the miss), so it needs no lookup registration of its own --
@@ -591,9 +591,9 @@ namespace
 				if (dslIsComponentType(elemType))
 				{
 					const char* fetchEmit = bindings.componentFetchEmit(elemType);
-					const std::string fetchText = (fetchEmit != nullptr)
-						? substituteEmit(fetchEmit, { sourceText }) : std::string("nullptr");
-					emitLine("if (" + std::string(cppTypeName(elemType)) + " " + bound.name + " = " + fetchText + ")");
+					const oc::string fetchText = (fetchEmit != nullptr)
+						? substituteEmit(fetchEmit, { sourceText }) : oc::string("nullptr");
+					emitLine("if (" + oc::string(cppTypeName(elemType)) + " " + bound.name + " = " + fetchText + ")");
 					openBlock();
 					openScopes.push_back({ line.scopeLevel, {} });
 					return;
@@ -608,25 +608,25 @@ namespace
 				// which keeps every expression that reads the binding exactly as it was.
 				if (bound.isRef && container != nullptr && container->lookupRefEmit != nullptr)
 				{
-					const std::string pointerName = "ocPtr" + std::to_string(sourceLocalCounter++);
-					emitLine("if (" + std::string(cppTypeName(elemType)) + "* " + pointerName + " = "
+					const oc::string pointerName = "ocPtr" + oc::to_string(sourceLocalCounter++);
+					emitLine("if (" + oc::string(cppTypeName(elemType)) + "* " + pointerName + " = "
 						+ substituteEmit(container->lookupRefEmit, { sourceText, { keyText } }) + ")");
 					openBlock();
-					emitLine(std::string(cppTypeName(elemType)) + "& " + bound.name + " = *" + pointerName + ";");
+					emitLine(oc::string(cppTypeName(elemType)) + "& " + bound.name + " = *" + pointerName + ";");
 					openScopes.push_back({ line.scopeLevel, {} }); // the reference IS the write-back
 					return;
 				}
 
 				// The write-back is resolved BEFORE anything is emitted: it decides whether the source is named
 				// twice, and therefore whether the hoist local is needed at all.
-				const std::string writeBack = elementWriteBack(line, flow, bound, sourceName, keyText);
-				const std::string receiver = writeBack.empty() ? sourceText : sourceName;
+				const oc::string writeBack = elementWriteBack(line, flow, bound, sourceName, keyText);
+				const oc::string receiver = writeBack.empty() ? sourceText : sourceName;
 				if (!writeBack.empty())
 					emitLine("const auto " + sourceName + " = " + sourceText + ";");
-				const std::string testText = (container != nullptr && container->lookupEmit != nullptr)
+				const oc::string testText = (container != nullptr && container->lookupEmit != nullptr)
 					? substituteEmit(container->lookupEmit, { receiver, { keyText }, {}, {}, bound.name })
-					: std::string("false");
-				emitLine("if (" + std::string(cppTypeName(elemType)) + " " + bound.name + " = "
+					: oc::string("false");
+				emitLine("if (" + oc::string(cppTypeName(elemType)) + " " + bound.name + " = "
 					+ defaultValueText(elemType, bindings) + "; " + testText + ")");
 				openBlock();
 				openScopes.push_back({ line.scopeLevel, writeBack });
@@ -652,7 +652,7 @@ namespace
 
 }
 
-std::string Transpiler::transpile(const DSL& document, const ScriptBindings& bindings)
+oc::string Transpiler::transpile(const DSL& document, const ScriptBindings& bindings)
 {
 	Emitter emitter{ document, bindings };
 
@@ -675,8 +675,8 @@ std::string Transpiler::transpile(const DSL& document, const ScriptBindings& bin
 	// and writing sequential pointer-sized slots from the FRONT of the block -- this struct's field order must
 	// match that scan order exactly, or the host writes the right pointers into the wrong fields.
 	{
-		std::vector<DSLType> requiredSorted = document.requiredComponents;
-		std::sort(requiredSorted.begin(), requiredSorted.end(), [&](DSLType a, DSLType b)
+		oc::vector<DSLType> requiredSorted = document.requiredComponents;
+		oc::sort(requiredSorted.begin(), requiredSorted.end(), [&](DSLType a, DSLType b)
 			{ return bindings.componentBit(a) < bindings.componentBit(b); });
 
 		emitter.emitLine("");
@@ -687,10 +687,10 @@ std::string Transpiler::transpile(const DSL& document, const ScriptBindings& bin
 		{
 			const char* typeName = bindings.componentTypeName(componentType);
 			const BindingObject* object = bindings.objectFor(componentType);
-			emitter.emitLine(std::string(typeName != nullptr ? typeName : "void") + "* " + (object != nullptr ? object->name : "?") + ";");
+			emitter.emitLine(oc::string(typeName != nullptr ? typeName : "void") + "* " + (object != nullptr ? object->name : "?") + ";");
 		}
 		for (const DSLDataField& field : document.dataFields)
-			emitter.emitLine(std::string(cppTypeName(field.type)) + " " + field.name + " = " + defaultValueText(field.type, bindings) + ";");
+			emitter.emitLine(oc::string(cppTypeName(field.type)) + " " + field.name + " = " + defaultValueText(field.type, bindings) + ";");
 		--emitter.indent;
 		emitter.emitLine("};");
 
@@ -703,7 +703,7 @@ std::string Transpiler::transpile(const DSL& document, const ScriptBindings& bin
 			// ScriptDataLayoutIdFn). Required components are part of it -- they occupy the block's leading slots.
 			{
 				uint32 layoutHash = 2166136261u; // FNV-1a over "<type>:<name>;" per field, in layout order
-				const auto hashText = [&layoutHash](const std::string& text)
+				const auto hashText = [&layoutHash](const oc::string& text)
 				{
 					for (char ch : text)
 					{
@@ -712,11 +712,11 @@ std::string Transpiler::transpile(const DSL& document, const ScriptBindings& bin
 					}
 				};
 				for (DSLType componentType : requiredSorted)
-					hashText(std::string(bindings.componentTypeName(componentType) ? bindings.componentTypeName(componentType) : "?") + ":*;");
+					hashText(oc::string(bindings.componentTypeName(componentType) ? bindings.componentTypeName(componentType) : "?") + ":*;");
 				for (const DSLDataField& field : document.dataFields)
-					hashText(std::string(dslTypeName(field.type)) + ":" + field.name + ";");
+					hashText(oc::string(dslTypeName(field.type)) + ":" + field.name + ";");
 				emitter.emitLine("SCRIPT_EXPORT unsigned int ScriptDataLayoutId(void) { return "
-					+ std::to_string(layoutHash) + "u; }");
+					+ oc::to_string(layoutHash) + "u; }");
 			}
 			emitter.emitLine("REGISTER_SCRIPT_DATA_SIZE()");
 
@@ -725,7 +725,7 @@ std::string Transpiler::transpile(const DSL& document, const ScriptBindings& bin
 			// than being computed here, so the table cannot drift from the struct the compiler actually laid
 			// out. Hidden fields -- the default -- are absent, so a script that exposes nothing emits nothing.
 			{
-				std::vector<const DSLDataField*> exposed;
+				oc::vector<const DSLDataField*> exposed;
 				for (const DSLDataField& field : document.dataFields)
 					if (field.visibility != DSLFieldVisibility::Hidden && dslCanExposeFieldType(field.type))
 						exposed.push_back(&field);
@@ -747,10 +747,10 @@ std::string Transpiler::transpile(const DSL& document, const ScriptBindings& bin
 							// A struct: matched by its registered DSL name, so a new one only needs a code here
 							// once it is actually exposable.
 							const char* name = dslTypeName(field->type);
-							if (std::string_view(name) == "vec2")      typeCode = "OC_FIELD_VEC2";
-							else if (std::string_view(name) == "vec3") typeCode = "OC_FIELD_VEC3";
-							else if (std::string_view(name) == "vec4") typeCode = "OC_FIELD_VEC4";
-							else if (std::string_view(name) == "quat") typeCode = "OC_FIELD_QUAT";
+							if (oc::string_view(name) == "vec2")      typeCode = "OC_FIELD_VEC2";
+							else if (oc::string_view(name) == "vec3") typeCode = "OC_FIELD_VEC3";
+							else if (oc::string_view(name) == "vec4") typeCode = "OC_FIELD_VEC4";
+							else if (oc::string_view(name) == "quat") typeCode = "OC_FIELD_QUAT";
 							else                                      typeCode = nullptr; // not representable -- skipped
 							break;
 						}
@@ -770,9 +770,9 @@ std::string Transpiler::transpile(const DSL& document, const ScriptBindings& bin
 
 			if (!requiredSorted.empty())
 			{
-				std::string bitmask;
+				oc::string bitmask;
 				for (DSLType componentType : requiredSorted)
-					bitmask += (bitmask.empty() ? "" : " | ") + std::string("(1u << ") + std::to_string(bindings.componentBit(componentType)) + ")";
+					bitmask += (bitmask.empty() ? "" : " | ") + oc::string("(1u << ") + oc::to_string(bindings.componentBit(componentType)) + ")";
 				emitter.emitLine("");
 				emitter.emitLine("SCRIPT_EXPORT unsigned int ScriptRequiredComponents(void) { return " + bitmask + "; }");
 				emitter.emitLine("REGISTER_SCRIPT_REQUIRED_COMPONENTS()");

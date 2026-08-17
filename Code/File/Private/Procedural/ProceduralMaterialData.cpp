@@ -36,7 +36,7 @@ float ProceduralMaterialData::getAlphaCutoff()       const { return m_alphaCutof
 float ProceduralMaterialData::getEmissiveIntensity()  const { return m_emissiveIntensity; }
 float ProceduralMaterialData::getRefractiveIndex()    const { return m_refractiveIndex; }
 
-std::string ProceduralMaterialData::getTexturePath(ETextureType /*type*/) const
+oc::string ProceduralMaterialData::getTexturePath(ETextureType /*type*/) const
 {
 	return {};
 }

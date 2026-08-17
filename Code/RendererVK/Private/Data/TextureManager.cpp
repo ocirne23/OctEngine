@@ -16,7 +16,7 @@ TextureManager::~TextureManager()
 }
 
 /*
-uint16 TextureManager::upload(const std::vector<ITextureData*>& textureData, bool generateMips)
+uint16 TextureManager::upload(const oc::vector<ITextureData*>& textureData, bool generateMips)
 {
     if (m_textures.size() + textureData.size() > UINT16_MAX)
     {
@@ -43,7 +43,7 @@ uint16 TextureManager::upload(const std::vector<ITextureData*>& textureData, boo
 uint32 TextureManager::getDescriptorCap() const
 {
 	const uint32 deviceLimit = Globals::device.getPhysicalDevice().getProperties().limits.maxPerStageDescriptorSampledImages;
-	return std::min({ deviceLimit - 16u, (uint32)UINT16_MAX - 1u, 16u * 1024u });
+	return oc::min({ deviceLimit - 16u, (uint32)UINT16_MAX - 1u, 16u * 1024u });
 }
 
 uint16 TextureManager::upload(const ITextureData& textureData, bool generateMips, bool sRGB)
@@ -56,7 +56,7 @@ uint16 TextureManager::upload(const char* filePath, bool generateMips, bool sRGB
 	return uploadImpl([&](Texture& texture) { return texture.initialize(filePath, generateMips, sRGB); });
 }
 
-uint16 TextureManager::uploadImpl(const std::function<bool(Texture&)>& initialize)
+uint16 TextureManager::uploadImpl(const oc::function<bool(Texture&)>& initialize)
 {
 	uint16 idx;
 	if (!m_freeSlots.empty()) // slot freed by a destroyed ObjectContainer
@@ -72,7 +72,7 @@ uint16 TextureManager::uploadImpl(const std::function<bool(Texture&)>& initializ
 			const uint32 maxCapacity = getDescriptorCap();
 			if (m_maxTextures < maxCapacity)
 			{
-				m_maxTextures = std::min(m_maxTextures * 2u, maxCapacity);
+				m_maxTextures = oc::min(m_maxTextures * 2u, maxCapacity);
 				m_generation++;
 				printf("TextureManager: grew texture capacity to %u\n", m_maxTextures);
 			}
@@ -94,8 +94,8 @@ uint16 TextureManager::uploadImpl(const std::function<bool(Texture&)>& initializ
 		return UINT16_MAX;
 	}
 	const uint64 allocatedBytes = m_textures[idx].getAllocatedBytes();
-	if (std::unique_ptr<StreamedTextureMeta> pMeta = m_textures[idx].takeStreamingMeta())
-		Globals::textureStreamer.registerTexture(idx, std::move(*pMeta), allocatedBytes);
+	if (oc::unique_ptr<StreamedTextureMeta> pMeta = m_textures[idx].takeStreamingMeta())
+		Globals::textureStreamer.registerTexture(idx, oc::move(*pMeta), allocatedBytes);
 	else
 		Globals::textureStreamer.notePinned(allocatedBytes);
 	// Refresh the slot's bindless entries in every frame slot (recycled slots point at the fallback or a

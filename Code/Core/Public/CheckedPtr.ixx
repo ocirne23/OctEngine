@@ -12,7 +12,7 @@ private:
 	struct Bucket
 	{
 		std::shared_mutex mutex;
-		std::vector<uint64> data;
+		oc::vector<uint64> data;
 	};
 	Bucket m_buckets[Size];
 
@@ -21,7 +21,7 @@ public:
 	void incrementRefCount(const void* obj)
 	{
 		const size_t key = reinterpret_cast<size_t>(obj) & 0x0000'FFFF'FFFF'FFFF;
-		const size_t h = std::hash<size_t>{}(key);
+		const size_t h = oc::hash<size_t>{}(key);
 		const size_t bucketIdx = h % Size;
 		Bucket& bucket = m_buckets[bucketIdx];
 		std::shared_lock readLock(bucket.mutex);
@@ -40,7 +40,7 @@ public:
 	void decrementRefCount(const void* obj)
 	{
 		const size_t key = reinterpret_cast<size_t>(obj) & 0x0000'FFFF'FFFF'FFFF;
-		const size_t h = std::hash<size_t>{}(key);
+		const size_t h = oc::hash<size_t>{}(key);
 		const size_t bucketIdx = h % Size;
 		Bucket& bucket = m_buckets[bucketIdx];
 		std::shared_lock readLock(bucket.mutex);
@@ -59,7 +59,7 @@ public:
 	void insert(const void* obj)
 	{
 		const size_t key = reinterpret_cast<size_t>(obj) & 0x0000'FFFF'FFFF'FFFF;
-		const size_t h = std::hash<size_t>{}(key);
+		const size_t h = oc::hash<size_t>{}(key);
 		const size_t bucketIdx = h % Size;
 		Bucket& bucket = m_buckets[bucketIdx];
 		{
@@ -73,7 +73,7 @@ public:
 	void remove(const void* obj)
 	{
 		const size_t key = reinterpret_cast<size_t>(obj) & 0x0000'FFFF'FFFF'FFFF;
-		const size_t h = std::hash<size_t>{}(key);
+		const size_t h = oc::hash<size_t>{}(key);
 		const size_t bucketIdx = h % Size;
 		Bucket& bucket = m_buckets[bucketIdx];
 		{
@@ -98,7 +98,7 @@ public:
 	uint16 getRefCount(const void* obj)
 	{
 		const size_t key = reinterpret_cast<size_t>(obj) & 0x0000'FFFF'FFFF'FFFF;
-		const size_t h = std::hash<size_t>{}(key);
+		const size_t h = oc::hash<size_t>{}(key);
 		const size_t bucketIdx = h % Size;
 		Bucket& bucket = m_buckets[bucketIdx];
 		std::shared_lock readLock(bucket.mutex);
@@ -226,11 +226,11 @@ export void testCheckedPtr()
 			}
 		}
 		{
-			Test t3 = std::move(t2);
+			Test t3 = oc::move(t2);
 			{
 				CheckedPtr<Test> ref3(t3);
 				assert(getRefCount(&t3) == 1);
-				CheckedPtr<Test> ref4 = std::move(ref3);
+				CheckedPtr<Test> ref4 = oc::move(ref3);
 				assert(getRefCount(&t3) == 1);
 			}
 			assert(getRefCount(&t3) == 0);

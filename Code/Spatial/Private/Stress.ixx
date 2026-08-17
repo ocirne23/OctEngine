@@ -31,10 +31,10 @@ private:
     float randomUnit() { return float(nextRandom() >> 40) * (1.0f / 16777216.0f); }
     double randomSym() { return double(nextRandom() >> 11) * (2.0 / 4503599627370496.0) - 1.0; }
 
-    std::vector<SpatialHandle> m_handles;
-    std::vector<glm::dvec3> m_positions;
-    std::vector<float> m_radii;
-    std::vector<uint64> m_queryResults;
+    oc::vector<SpatialHandle> m_handles;
+    oc::vector<glm::dvec3> m_positions;
+    oc::vector<float> m_radii;
+    oc::vector<uint64> m_queryResults;
     uint64 m_rngState = 0x9e37'79b9'7f4a'7c15ull;
     int m_count = 100000;
     float m_extent = 2000.0f;

@@ -55,7 +55,7 @@ public:
     virtual float getEmissiveIntensity() const = 0;
     virtual float getRefractiveIndex() const = 0;
 
-    virtual std::string getTexturePath(ETextureType type) const = 0;
+    virtual oc::string getTexturePath(ETextureType type) const = 0;
 
     virtual uint32 getDiffuseTexIdx() const = 0;
     virtual uint32 getNormalTexIdx() const = 0;

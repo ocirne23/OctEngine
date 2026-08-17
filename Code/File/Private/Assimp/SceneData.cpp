@@ -83,7 +83,7 @@ namespace
     // the graph walk multiply them reconstructs the correct composed pose. Skinned bones are unaffected:
     // this runs after buildSkeleton() (which already captured the bind pose) and skinned meshes are driven
     // by the animation palette, not by mTransformation.
-    void bakeFirstFrameRecursive(aiNode* pNode, const std::unordered_map<std::string, const aiNodeAnim*>& channels)
+    void bakeFirstFrameRecursive(aiNode* pNode, const oc::unordered_map<oc::string, const aiNodeAnim*>& channels)
     {
         if (auto it = channels.find(pNode->mName.C_Str()); it != channels.end())
         {
@@ -101,19 +101,19 @@ namespace
     }
 
     // Adds a clip to a set under a unique name (suffixes _N on collision).
-    void addClipToSet(AnimationSet& set, AnimationClip&& clip, const std::string& desiredName)
+    void addClipToSet(AnimationSet& set, AnimationClip&& clip, const oc::string& desiredName)
     {
-        std::string name = !desiredName.empty() ? desiredName : (clip.name.empty() ? "anim" : clip.name);
+        oc::string name = !desiredName.empty() ? desiredName : (clip.name.empty() ? "anim" : clip.name);
         if (set.nameToIndex.count(name))
         {
             uint32 n = 1;
-            std::string unique;
-            do { unique = name + "_" + std::to_string(n++); } while (set.nameToIndex.count(unique));
+            oc::string unique;
+            do { unique = name + "_" + oc::to_string(n++); } while (set.nameToIndex.count(unique));
             name = unique;
         }
         clip.name = name;
         set.nameToIndex[name] = (uint32)set.clips.size();
-        set.clips.push_back(std::move(clip));
+        set.clips.push_back(oc::move(clip));
     }
 }
 
@@ -176,9 +176,9 @@ bool SceneData::initialize(const char* filePath, bool mergeNodes, bool preTransf
 
     // Build a path -> index map seeded with embedded textures.
     // Embedded texture paths use Assimp's "*N" convention.
-    std::unordered_map<std::string, uint32> texRegistry;
+    oc::unordered_map<oc::string, uint32> texRegistry;
     for (uint32 i = 0; i < (uint32)m_textures.size(); ++i)
-        texRegistry[std::string("*") + std::to_string(i)] = i;
+        texRegistry[oc::string("*") + oc::to_string(i)] = i;
 
     // Resolves one texture slot for a material.
     // Embedded textures are looked up in the registry by "*N" key.
@@ -190,7 +190,7 @@ bool SceneData::initialize(const char* filePath, bool mergeNodes, bool preTransf
         if (pMat->GetTexture(type, 0, &path) != aiReturn_SUCCESS || path.length == 0)
             return UINT32_MAX;
 
-        const std::string pathStr = path.C_Str();
+        const oc::string pathStr = path.C_Str();
         auto it = texRegistry.find(pathStr);
         if (it != texRegistry.end())
             return it->second;
@@ -229,7 +229,7 @@ bool SceneData::initialize(const char* filePath, bool mergeNodes, bool preTransf
     // Must run after buildSkeleton() so skinned bind poses stay intact, and before the node graph is read.
     if (m_pScene->mNumAnimations > 0)
     {
-        std::unordered_map<std::string, const aiNodeAnim*> firstFrameChannels;
+        oc::unordered_map<oc::string, const aiNodeAnim*> firstFrameChannels;
         for (uint32 a = 0; a < m_pScene->mNumAnimations; ++a)
         {
             const aiAnimation* pAnim = m_pScene->mAnimations[a];
@@ -317,10 +317,10 @@ bool ISceneData::loadAnimations(const char* filePath, const Skeleton& targetSkel
     const bool hasSkip = skipName && *skipName;
     const bool hasTrack = trackName && *trackName;
     auto included = [&](const aiAnimation* pAnim) {
-        const std::string name = pAnim->mName.C_Str();
-        if (hasSkip && name.find(skipName) != std::string::npos)
+        const oc::string name = pAnim->mName.C_Str();
+        if (hasSkip && name.find(skipName) != oc::string::npos)
             return false;
-        if (hasTrack && name.find(trackName) == std::string::npos)
+        if (hasTrack && name.find(trackName) == oc::string::npos)
             return false;
         return true;
     };
@@ -330,8 +330,8 @@ bool ISceneData::loadAnimations(const char* filePath, const Skeleton& targetSkel
         if (included(pScene->mAnimations[a]))
             ++keptCount;
 
-    const std::string stem = std::filesystem::path(filePath).stem().string();
-    const std::string baseName = (clipNameOverride && *clipNameOverride) ? clipNameOverride : stem;
+    const oc::string stem = std::filesystem::path(filePath).stem().string();
+    const oc::string baseName = (clipNameOverride && *clipNameOverride) ? clipNameOverride : stem;
     const bool multiple = keptCount > 1;
     uint32 added = 0;
     for (uint32 a = 0; a < pScene->mNumAnimations; ++a)
@@ -340,7 +340,7 @@ bool ISceneData::loadAnimations(const char* filePath, const Skeleton& targetSkel
         if (!included(pAnim))
             continue;
         // One clip per file is the common case (Mixamo etc.); suffix only when a file keeps several.
-        const std::string name = multiple ? baseName + "_" + std::to_string(added) : baseName;
+        const oc::string name = multiple ? baseName + "_" + oc::to_string(added) : baseName;
         addClipToSet(outSet, buildClip(pAnim, targetSkeleton), name);
         ++added;
     }
@@ -351,7 +351,7 @@ const IMeshData* SceneData::getMesh(const char* pMeshName) const
 {
     for (const MeshData& mesh : m_meshes)
     {
-        if (std::string(mesh.getName()) == pMeshName)
+        if (oc::string(mesh.getName()) == pMeshName)
         {
             return &mesh;
         }

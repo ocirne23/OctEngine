@@ -17,15 +17,15 @@ EntityArchetype makeEntityArchetype(uint16 typeBits)
     return EntityArchetype{ uint16(getEntityAllocSize(typeBits)), typeBits };
 }
 
-void Entity::setName(std::string_view name)
+void Entity::setName(oc::string_view name)
 {
     if (name.empty())
     {
         displayName.reset();
         return;
     }
-    displayName = std::make_unique<char[]>(name.size() + 1);
-    std::char_traits<char>::copy(displayName.get(), name.data(), name.size());
+    displayName = oc::make_unique<char[]>(name.size() + 1);
+    oc::char_traits<char>::copy(displayName.get(), name.data(), name.size());
     displayName[name.size()] = '\0';
 }
 
@@ -37,7 +37,7 @@ void Entity::setFrozen(bool on)
             child->setFrozen(on);
 }
 
-void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform& parentWorld, std::vector<EntityUpdateNode>& outChildren)
+void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform& parentWorld, oc::vector<EntityUpdateNode>& outChildren)
 {
     SceneComponent* sc = getComponent<SceneComponent>(this);
     if (!isEnabled())
@@ -133,7 +133,7 @@ void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform&
 
 void Entity::update(Renderer& renderer, float deltaSeconds, const Transform& parentWorld)
 {
-    std::vector<EntityUpdateNode> children;
+    oc::vector<EntityUpdateNode> children;
     updateSelf(renderer, deltaSeconds, parentWorld, children);
     for (const EntityUpdateNode& child : children)
         child.entity->update(renderer, deltaSeconds, child.parentWorld);
@@ -143,7 +143,7 @@ void Entity::update(Renderer& renderer, float deltaSeconds, const Transform& par
 // the template (idempotent, so the racy relaxed store is benign — every writer stores the same value).
 static uint32 getTreeAllocSize(const EntitySpawnTemplate& tmpl)
 {
-    const uint32 cached = std::atomic_ref<uint32>(tmpl.treeAllocSize).load(std::memory_order_relaxed);
+    const uint32 cached = oc::atomic_ref<uint32>(tmpl.treeAllocSize).load(oc::memory_order_relaxed);
     if (cached)
         return cached;
 
@@ -155,7 +155,7 @@ static uint32 getTreeAllocSize(const EntitySpawnTemplate& tmpl)
             if (child.tmpl)
                 size += getTreeAllocSize(*child.tmpl);
     }
-    std::atomic_ref<uint32>(tmpl.treeAllocSize).store(size, std::memory_order_relaxed);
+    oc::atomic_ref<uint32>(tmpl.treeAllocSize).store(size, oc::memory_order_relaxed);
     return size;
 }
 
@@ -467,15 +467,15 @@ void Entity::reparentEntity(Entity* newParent)
         // LOUD refusal: the detach above already ran, so the entity is now parentless — if the
         // caller drops its EntityPtr believing the parent holds one, the entity silently dies
         // (this exact failure shipped once: walls parented under a Scene-less ground vanished).
-        Log::warning("Entity: cannot parent '" + std::string(getName()) + "' under '"
-            + std::string(newParent->getName()) + "' — the parent has no SceneComponent (add "
+        Log::warning("Entity: cannot parent '" + oc::string(getName()) + "' under '"
+            + oc::string(newParent->getName()) + "' — the parent has no SceneComponent (add "
             "'Component Scene' to its prefab); the entity is now UNPARENTED");
         return;
     }
     if (newParent && isSelfOrDescendant(newParent, this))
     {
-        Log::warning("Entity: cannot parent '" + std::string(getName()) + "' under its own "
-            "descendant '" + std::string(newParent->getName()) + "' (cycle); the entity is now UNPARENTED");
+        Log::warning("Entity: cannot parent '" + oc::string(getName()) + "' under its own "
+            "descendant '" + oc::string(newParent->getName()) + "' (cycle); the entity is now UNPARENTED");
         return;
     }
 
@@ -483,7 +483,7 @@ void Entity::reparentEntity(Entity* newParent)
 
     if (newParent)
     {
-        getComponent<SceneComponent>(newParent)->children.emplace_back(std::move(keepAlive));
+        getComponent<SceneComponent>(newParent)->children.emplace_back(oc::move(keepAlive));
         // The arrival was never part of any ancestor's suspend walk, so those latches are now stale.
         for (Entity* p = newParent; p; p = p->parent)
             p->setPhysicsSuspended(false);
@@ -510,14 +510,14 @@ bool Entity::isPrefabLocked() const
     return false;
 }
 
-const std::string& Entity::getPrefabName() const
+const oc::string& Entity::getPrefabName() const
 {
-    static const std::string empty;
+    static const oc::string empty;
     return spawnTemplate ? spawnTemplate->prefabName : empty;
 }
 
-const std::string& Entity::getSourceFile() const
+const oc::string& Entity::getSourceFile() const
 {
-    static const std::string empty;
+    static const oc::string empty;
     return spawnTemplate ? spawnTemplate->sourceFile : empty;
 }

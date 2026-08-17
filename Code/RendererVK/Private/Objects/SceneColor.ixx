@@ -22,7 +22,7 @@ public:
     // prepassDepthViews = the G-buffer's per-eye depth views: the REUSE pass variant binds them directly
     // as a read-only depth attachment ("Depth prepass reuse" — the forward early-Z tests the prepass
     // depth with no copy and writes none of its own).
-    bool initialize(vk::Format colorFormat, uint32 width, uint32 height, uint32 viewCount, const std::array<vk::ImageView, 2>& prepassDepthViews);
+    bool initialize(vk::Format colorFormat, uint32 width, uint32 height, uint32 viewCount, const oc::array<vk::ImageView, 2>& prepassDepthViews);
     void destroy();
 
     vk::RenderPass  getRenderPass() const  { return m_renderPass; }
@@ -47,15 +47,15 @@ private:
 
     vk::Image m_colorImage;
     VmaAllocation m_colorMemory = nullptr;
-    std::array<vk::ImageView, 2> m_colorLayerViews{}; // per-eye 2D colour views (layer i); [0] also used for sampling
+    oc::array<vk::ImageView, 2> m_colorLayerViews{}; // per-eye 2D colour views (layer i); [0] also used for sampling
 
     vk::Image m_depthImage;
     VmaAllocation m_depthMemory = nullptr;
-    std::array<vk::ImageView, 2> m_depthLayerViews{}; // per-eye 2D depth views (layer i)
+    oc::array<vk::ImageView, 2> m_depthLayerViews{}; // per-eye 2D depth views (layer i)
 
     vk::RenderPass m_renderPass;
-    std::array<vk::Framebuffer, 2> m_framebuffers{}; // one single-layer framebuffer per eye
+    oc::array<vk::Framebuffer, 2> m_framebuffers{}; // one single-layer framebuffer per eye
     vk::RenderPass m_reuseRenderPass;
-    std::array<vk::Framebuffer, 2> m_reuseFramebuffers{}; // per eye, depth = the G-buffer depth (read-only)
+    oc::array<vk::Framebuffer, 2> m_reuseFramebuffers{}; // per eye, depth = the G-buffer depth (read-only)
     vk::Sampler m_sampler;
 };

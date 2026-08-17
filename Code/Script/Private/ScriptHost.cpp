@@ -17,24 +17,24 @@ import File; // ALL disk access goes through FileSystem (Core no longer exports 
 // instead of invoking cl / LoadLibrary.
 struct StaticScriptFns { void* fns[OC_SCRIPT_ENTRY_COUNT] = {}; };
 
-static std::unordered_map<std::string, StaticScriptFns>& staticScriptRegistry()
+static oc::unordered_map<oc::string, StaticScriptFns>& staticScriptRegistry()
 {
-    static std::unordered_map<std::string, StaticScriptFns> reg;
+    static oc::unordered_map<oc::string, StaticScriptFns> reg;
     return reg;
 }
 
-static const StaticScriptFns* findStaticEntries(const std::string& path)
+static const StaticScriptFns* findStaticEntries(const oc::string& path)
 {
     auto& reg = staticScriptRegistry();
     if (auto it = reg.find(path); it != reg.end())
         return &it->second;
     // Lenient match: prefabs spell the path "Scripts/X.scr"; the aggregate registered whatever OC_CURRENT_SCRIPT
     // held. Compare on forward-slash-normalized paths, allowing one to be a tail of the other (rel vs abs).
-    std::string norm = path;
+    oc::string norm = path;
     for (char& c : norm) if (c == '\\') c = '/';
     for (auto& [k, v] : reg)
     {
-        std::string nk = k;
+        oc::string nk = k;
         for (char& c : nk) if (c == '\\') c = '/';
         if (norm == nk || norm.ends_with(nk) || nk.ends_with(norm))
             return &v;
@@ -55,11 +55,11 @@ namespace
 {
 
     // Runs a full command line synchronously, no console window. Returns the child exit code, or -1.
-    int runProcess(const std::string& cmdLine)
+    int runProcess(const oc::string& cmdLine)
     {
         STARTUPINFOA si{}; si.cb = sizeof(si);
         PROCESS_INFORMATION pi{};
-        std::vector<char> buffer(cmdLine.begin(), cmdLine.end());
+        oc::vector<char> buffer(cmdLine.begin(), cmdLine.end());
         buffer.push_back('\0');
         if (!CreateProcessA(nullptr, buffer.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
             return -1;
@@ -71,7 +71,7 @@ namespace
         return (int)code;
     }
 
-    std::string readTextFile(const std::string& path)
+    oc::string readTextFile(const oc::string& path)
     {
         // Compiling a script is an explicit, blocking user action (F6 / editor save / a spawn that
         // needs its module), so the whole path is main-thread by design.
@@ -82,36 +82,36 @@ namespace
     // stores a relative "Scripts/Foo.scr", the asset browser hands over an absolute backslash path — so key
     // by the resolved absolute path. Otherwise a panel reload and the owning entity land in different slots
     // and the entity never sees the recompile (hot reload silently no-ops).
-    std::string cacheKey(const std::string& path)
+    oc::string cacheKey(const oc::string& path)
     {
-        const std::string resolved = FileSystem::weaklyCanonicalPath(FileSystem::absolutePath(path, true), true);
+        const oc::string resolved = FileSystem::weaklyCanonicalPath(FileSystem::absolutePath(path, true), true);
         return resolved.empty() ? FileSystem::absolutePath(path, true) : resolved;
     }
 
     struct PdbScan
     {
         int                   maxSerial = -1; // highest serial found on disk (-1 if none)
-        std::vector<std::string> files;      // every "<stem>.<serial>.pdb" in the directory
+        oc::vector<oc::string> files;      // every "<stem>.<serial>.pdb" in the directory
     };
 
     // Finds every program PDB named "<stem>.<serial>.pdb" (serial = decimal digits) in `dir`. The compiler
     // PDB "<stem>.building.pdb" is skipped (its middle segment isn't all digits), as is any other script's.
-    PdbScan scanPdbs(const std::string& dir, const std::string& stem)
+    PdbScan scanPdbs(const oc::string& dir, const oc::string& stem)
     {
         PdbScan out;
-        const std::string prefix = stem + ".";
-        std::vector<FileSystem::DirEntry> entries;
+        const oc::string prefix = stem + ".";
+        oc::vector<FileSystem::DirEntry> entries;
         FileSystem::listDirectory(dir, entries, /*allowMainThread*/ true);
         for (const FileSystem::DirEntry& entry : entries)
         {
             if (entry.isDirectory || entry.extension != ".pdb")
                 continue;
-            const std::string& name = entry.name;
+            const oc::string& name = entry.name;
             if (name.size() < prefix.size() + 5)                         // need at least "<prefix>0.pdb"
                 continue;
             if (name.compare(0, prefix.size(), prefix) != 0)
                 continue;
-            const std::string mid = name.substr(prefix.size(), name.size() - prefix.size() - 4); // strip ".pdb"
+            const oc::string mid = name.substr(prefix.size(), name.size() - prefix.size() - 4); // strip ".pdb"
             int serial = 0;
             bool digits = !mid.empty();
             for (char c : mid) { if (c < '0' || c > '9') { digits = false; break; } serial = serial * 10 + (c - '0'); }
@@ -129,8 +129,8 @@ struct ScriptHost::CachedScript
 {
     ScriptModule entries;
     void*        module = nullptr; // HMODULE
-    std::string  dllPath;
-    std::string  pdbPath;          // program PDB of the loaded build
+    oc::string  dllPath;
+    oc::string  pdbPath;          // program PDB of the loaded build
     int          pdbSerial = -1;   // monotonic build counter; next build uses pdbSerial+1 for a fresh PDB name
 };
 
@@ -139,7 +139,7 @@ struct ScriptHost::CachedScript
 // module unloads, so a just-superseded PDB often can't be deleted until a later build/shutdown.
 void ScriptHost::sweepPendingPdbs()
 {
-    std::erase_if(pendingPdbDeletes, [](const std::string& p)
+    oc::erase_if(pendingPdbDeletes, [](const oc::string& p)
     {
         FileSystem::remove(p, /*allowMainThread*/ true);
         return !FileSystem::exists(p, true); // removed (or already gone) -> stop tracking it
@@ -149,10 +149,10 @@ void ScriptHost::sweepPendingPdbs()
 // Best-effort deletion of every "<stem>.<serial>.pdb" in `dir` except `keep` (the live PDB, matched by
 // filename). Includes orphans from earlier runs at any index. Files still locked (typically by the VS
 // debugger) are queued in pendingPdbDeletes for a later sweep.
-void ScriptHost::retirePdbs(const std::string& dir, const std::string& stem, const std::string& keep)
+void ScriptHost::retirePdbs(const oc::string& dir, const oc::string& stem, const oc::string& keep)
 {
-    const std::string keepName = FileSystem::filename(keep);
-    for (const std::string& p : scanPdbs(dir, stem).files)
+    const oc::string keepName = FileSystem::filename(keep);
+    for (const oc::string& p : scanPdbs(dir, stem).files)
     {
         if (FileSystem::filename(p) == keepName)
             continue;
@@ -160,37 +160,37 @@ void ScriptHost::retirePdbs(const std::string& dir, const std::string& stem, con
         if (FileSystem::exists(p, true))
         {
             bool tracked = false;
-            for (const std::string& q : pendingPdbDeletes) if (q == p) { tracked = true; break; }
+            for (const oc::string& q : pendingPdbDeletes) if (q == p) { tracked = true; break; }
             if (!tracked) pendingPdbDeletes.push_back(p);
         }
     }
 }
 
 // Locates vcvars64.bat via vswhere (once, then cached). Empty string on failure.
-const std::string& ScriptHost::findVcvars()
+const oc::string& ScriptHost::findVcvars()
 {
     if (!vcvarsPath.empty()) return vcvarsPath;
 
     char pfBuffer[512];
     const DWORD len = GetEnvironmentVariableA("ProgramFiles(x86)", pfBuffer, sizeof(pfBuffer));
-    const std::string programFiles = (len > 0 && len < sizeof(pfBuffer)) ? std::string(pfBuffer, len) : std::string("C:\\Program Files (x86)");
-    const std::string vswhere = programFiles + "\\Microsoft Visual Studio\\Installer\\vswhere.exe";
+    const oc::string programFiles = (len > 0 && len < sizeof(pfBuffer)) ? oc::string(pfBuffer, len) : oc::string("C:\\Program Files (x86)");
+    const oc::string vswhere = programFiles + "\\Microsoft Visual Studio\\Installer\\vswhere.exe";
     if (FileSystem::exists(vswhere, /*allowMainThread*/ true))
     {
-        const std::string outDir = FileSystem::join(FileSystem::currentPath(true), "Local/Scripts");
+        const oc::string outDir = FileSystem::join(FileSystem::currentPath(true), "Local/Scripts");
         FileSystem::createDirectories(outDir, true);
-        const std::string outFile = FileSystem::join(outDir, "vswhere.out");
+        const oc::string outFile = FileSystem::join(outDir, "vswhere.out");
 
-        const std::string inner = "\"" + vswhere + "\" -latest -prerelease -products * -property installationPath > \"" + outFile + "\"";
+        const oc::string inner = "\"" + vswhere + "\" -latest -prerelease -products * -property installationPath > \"" + outFile + "\"";
         runProcess("cmd.exe /c \"" + inner + "\"");
 
-        std::string installPath = readTextFile(outFile);
+        oc::string installPath = readTextFile(outFile);
         while (!installPath.empty() && (installPath.back() == '\r' || installPath.back() == '\n' || installPath.back() == ' ' || installPath.back() == '\t'))
             installPath.pop_back();
 
         if (!installPath.empty())
         {
-            const std::string vcvars = installPath + "\\VC\\Auxiliary\\Build\\vcvars64.bat";
+            const oc::string vcvars = installPath + "\\VC\\Auxiliary\\Build\\vcvars64.bat";
             if (FileSystem::exists(vcvars, true)) { vcvarsPath = vcvars; return vcvarsPath; }
         }
     }
@@ -208,18 +208,18 @@ const std::string& ScriptHost::findVcvars()
     return vcvarsPath;
 }
 
-bool ScriptHost::compile(const std::string& sourcePath, const std::string& pdbPath, std::string& outDll, std::string& outErrors)
+bool ScriptHost::compile(const oc::string& sourcePath, const oc::string& pdbPath, oc::string& outDll, oc::string& outErrors)
 {
-    const std::string& vcvars = findVcvars();
+    const oc::string& vcvars = findVcvars();
     if (vcvars.empty()) { outErrors = "MSVC toolchain not found (see log)"; return false; }
 
     // Compiling blocks the main thread by design (F6 / editor save / a spawn needing its module).
     const FileSystem::AllowMainThreadIO allowIo;
-    const std::string assetsDir = FileSystem::currentPath();
-    const std::string outDir = FileSystem::join(assetsDir, "Local/Scripts");
-    const std::string repoDir = FileSystem::parentPath(assetsDir);
-    const std::string includeDir = FileSystem::join(repoDir, "Code/Script/Public"); // the one ScriptAPI.h (ABI source of truth)
-    const std::string glmInclude = FileSystem::join(repoDir, "Dependencies/Include"); // header-only glm for Vec3 math
+    const oc::string assetsDir = FileSystem::currentPath();
+    const oc::string outDir = FileSystem::join(assetsDir, "Local/Scripts");
+    const oc::string repoDir = FileSystem::parentPath(assetsDir);
+    const oc::string includeDir = FileSystem::join(repoDir, "Code/Script/Public"); // the one ScriptAPI.h (ABI source of truth)
+    const oc::string glmInclude = FileSystem::join(repoDir, "Dependencies/Include"); // header-only glm for Vec3 math
     FileSystem::createDirectories(outDir);
 
     if (!FileSystem::exists(sourcePath)) { outErrors = "Script source not found: " + sourcePath; return false; }
@@ -227,20 +227,20 @@ bool ScriptHost::compile(const std::string& sourcePath, const std::string& pdbPa
     // Build to a temp "<stem>.building.dll": the live "<stem>.dll" is file-locked while loaded, so we
     // can't overwrite it directly. getOrLoad frees the old module then renames this temp over it on
     // success, leaving exactly one DLL per script.
-    const std::string stem = FileSystem::stem(sourcePath);
-    const std::string base = stem + ".building";
-    const std::string dllPath = FileSystem::join(outDir, base + ".dll");
-    const std::string objPath = FileSystem::join(outDir, base + ".obj");
-    const std::string compPdb = FileSystem::join(outDir, base + ".pdb");  // compiler PDB (temp, discarded)
-    const std::string logPath = FileSystem::join(outDir, "build.log");
-    const std::string batPath = FileSystem::join(outDir, "_build.bat");
-    const std::string srcAbs = FileSystem::absolutePath(sourcePath);
+    const oc::string stem = FileSystem::stem(sourcePath);
+    const oc::string base = stem + ".building";
+    const oc::string dllPath = FileSystem::join(outDir, base + ".dll");
+    const oc::string objPath = FileSystem::join(outDir, base + ".obj");
+    const oc::string compPdb = FileSystem::join(outDir, base + ".pdb");  // compiler PDB (temp, discarded)
+    const oc::string logPath = FileSystem::join(outDir, "build.log");
+    const oc::string batPath = FileSystem::join(outDir, "_build.bat");
+    const oc::string srcAbs = FileSystem::absolutePath(sourcePath);
 
     // /Zi + /Od + /link /DEBUG produce a usable PDB (set breakpoints in the .scr, step, inspect locals).
     // /Od (no optimization) is deliberate: scripts are tiny, and it keeps locals/line info intact. The
     // linker writes the PDB to the caller-chosen ping-pong name (absolute path embedded in the DLL), so
     // a rebuild never targets the PDB the debugger is currently holding open (avoids LNK1201).
-    std::string bat;
+    oc::string bat;
     bat += "@echo off\r\n";
     bat += "call \"" + vcvars + "\" >nul 2>&1\r\n";
     bat += "cl /nologo /LD /std:c++20 /Zc:preprocessor /MD /Od /Zi /EHsc /arch:AVX2 /wd4100 /DSCRIPT_BUILD"; // /wd4100: unused params; /DSCRIPT_BUILD: Entity is the layout mirror; /Zc:preprocessor: the conformant preprocessor ScriptCtxMacros.h's variadic-arity dispatch needs (the main engine build gets it implicitly via the VS project settings, this standalone cl invocation does not)
@@ -270,8 +270,8 @@ bool ScriptHost::compile(const std::string& sourcePath, const std::string& pdbPa
 
     if (code != 0)
     {
-        const std::string log = readTextFile(logPath);
-        outErrors = log.empty() ? ("compiler exited with code " + std::to_string(code)) : log;
+        const oc::string log = readTextFile(logPath);
+        outErrors = log.empty() ? ("compiler exited with code " + oc::to_string(code)) : log;
         FileSystem::remove(dllPath); // drop any half-written temp DLL
         return false;
     }
@@ -279,14 +279,14 @@ bool ScriptHost::compile(const std::string& sourcePath, const std::string& pdbPa
     return true;
 }
 
-std::string ScriptHost::scriptDllPath(const std::string& sourcePath) const
+oc::string ScriptHost::scriptDllPath(const oc::string& sourcePath) const
 {
     return FileSystem::join(FileSystem::join(FileSystem::currentPath(/*allowMainThread*/ true), "Local/Scripts"),
         FileSystem::stem(sourcePath) + ".dll");
 }
 
 // LoadLibrary `dll` and resolve the entry points into `slot`, freeing any module it previously held.
-bool ScriptHost::loadDll(CachedScript& slot, const std::string& dll)
+bool ScriptHost::loadDll(CachedScript& slot, const oc::string& dll)
 {
     HMODULE m = LoadLibraryA(dll.c_str());
 
@@ -325,7 +325,7 @@ bool ScriptHost::loadDll(CachedScript& slot, const std::string& dll)
     if (auto reqFn = (uint32(*)())GetProcAddress(m, "ScriptRequiredComponents"))
         slot.entries.requiredComponents = reqFn();
 
-    const auto oldEventNames = std::move(slot.entries.eventNames);
+    const auto oldEventNames = oc::move(slot.entries.eventNames);
 
     // Resolve On Event entry names once at load, indexed the same way OnEvent(eventIdx) expects, so the
     // host maps a fired event name to its index without the script ever seeing a string.
@@ -349,9 +349,9 @@ bool ScriptHost::loadDll(CachedScript& slot, const std::string& dll)
     return true;
 }
 
-const ScriptModule* ScriptHost::getOrLoad(const std::string& path, bool forceRecompile)
+const ScriptModule* ScriptHost::getOrLoad(const oc::string& path, bool forceRecompile)
 {
-    const std::string key = cacheKey(path);
+    const oc::string key = cacheKey(path);
     auto it = scripts.find(key);
     if (it != scripts.end() && !forceRecompile)
         return &it->second.entries;
@@ -398,7 +398,7 @@ const ScriptModule* ScriptHost::getOrLoad(const std::string& path, bool forceRec
     // it to match after each compile), the source is unchanged since it was built — load it, skip cl.
     if (!forceRecompile && it == scripts.end())
     {
-        const std::string dll = scriptDllPath(path);
+        const oc::string dll = scriptDllPath(path);
         const int64 srcTime = FileSystem::lastWriteTimeSec(path, /*allowMainThread*/ true);
         const int64 dllTime = FileSystem::lastWriteTimeSec(dll, true);
         if (srcTime != 0 && srcTime == dllTime)
@@ -422,14 +422,14 @@ const ScriptModule* ScriptHost::getOrLoad(const std::string& path, bool forceRec
     // on disk — not just the last one this session made: a prior run (or a build whose PDB the debugger
     // still holds) can leave orphans at any index, and picking max+1 guarantees the linker never targets
     // a name still open, so a delete that failed earlier can never block this build.
-    const std::string outDir = FileSystem::parentPath(scriptDllPath(path));
-    const std::string stem = FileSystem::stem(path);
+    const oc::string outDir = FileSystem::parentPath(scriptDllPath(path));
+    const oc::string stem = FileSystem::stem(path);
     int serial = scanPdbs(outDir, stem).maxSerial + 1;
     if (it != scripts.end() && it->second.pdbSerial + 1 > serial)
         serial = it->second.pdbSerial + 1;
-    const std::string pdbPath = FileSystem::join(outDir, stem + "." + std::to_string(serial) + ".pdb");
+    const oc::string pdbPath = FileSystem::join(outDir, stem + "." + oc::to_string(serial) + ".pdb");
 
-    std::string tempDll, errors;
+    oc::string tempDll, errors;
     if (!compile(path, pdbPath, tempDll, errors))
     {
         Log::error("Script compile failed (" + path + "):\n" + errors);
@@ -445,7 +445,7 @@ const ScriptModule* ScriptHost::getOrLoad(const std::string& path, bool forceRec
     slot.entries.scriptPath = path;
     if (slot.module) { FreeLibrary((HMODULE)slot.module); slot.module = nullptr; }
 
-    const std::string finalDll = scriptDllPath(path);
+    const oc::string finalDll = scriptDllPath(path);
     FileSystem::remove(finalDll, /*allowMainThread*/ true); // the old build is freed, so this unlinks cleanly
     if (!FileSystem::rename(tempDll, finalDll, true))
     {
@@ -483,13 +483,13 @@ const ScriptModule* ScriptHost::getOrLoad(const std::string& path, bool forceRec
 
 void ScriptHost::unloadAll()
 {
-    const std::string outDir = FileSystem::join(FileSystem::currentPath(/*allowMainThread*/ true), "Local/Scripts");
+    const oc::string outDir = FileSystem::join(FileSystem::currentPath(/*allowMainThread*/ true), "Local/Scripts");
     for (auto& [path, script] : scripts)
     {
         if (script.module) FreeLibrary((HMODULE)script.module);
         if (!script.dllPath.empty()) FileSystem::remove(script.dllPath, /*allowMainThread*/ true);
         // Delete this script's PDBs — the live one plus any orphans on disk (keep nothing).
-        retirePdbs(outDir, FileSystem::stem(path), std::string());
+        retirePdbs(outDir, FileSystem::stem(path), oc::string());
     }
     scripts.clear();
     sweepPendingPdbs();

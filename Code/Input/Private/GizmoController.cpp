@@ -37,7 +37,7 @@ namespace
     {
         if (SceneComponent* sc = getComponent<SceneComponent>(parent))
             for (const EntityPtr& c : sc->children)
-                if (std::string_view(c->getName()) == name)
+                if (oc::string_view(c->getName()) == name)
                     return c.get();
         return nullptr;
     }
@@ -389,7 +389,7 @@ void GizmoController::setChildEnabled(const char* name, bool enabled)
     if (!root)
         return;
     for (const EntityPtr& child : root->children)
-        if (std::string_view(child->getName()) == name)
+        if (oc::string_view(child->getName()) == name)
         {
             child->setEnabled(enabled);
             return;

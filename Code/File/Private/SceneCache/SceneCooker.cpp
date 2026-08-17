@@ -72,7 +72,7 @@ namespace
 
     // Mirror of ObjectContainer's LodN_ chain parsing: the cooker must not meshopt-generate chains for
     // meshes an artist already authored levels for.
-    bool parseLodName(std::string_view name, uint32& outLevel, std::string_view& outLogicalName)
+    bool parseLodName(oc::string_view name, uint32& outLevel, oc::string_view& outLogicalName)
     {
         if (name.size() < 5 || (name[0] != 'L' && name[0] != 'l') || (name[1] != 'O' && name[1] != 'o') || (name[2] != 'D' && name[2] != 'd'))
             return false;
@@ -91,7 +91,7 @@ namespace
 
     struct Blob
     {
-        std::vector<uint8> data;
+        oc::vector<uint8> data;
 
         uint64 align16()
         {
@@ -113,8 +113,8 @@ namespace
 
     struct StringBlob
     {
-        std::vector<char> data;
-        uint32 add(std::string_view str)
+        oc::vector<char> data;
+        uint32 add(oc::string_view str)
         {
             const uint32 offset = (uint32)data.size();
             data.insert(data.end(), str.begin(), str.end());
@@ -129,11 +129,11 @@ namespace
 
     struct DecodedImage
     {
-        std::unique_ptr<uint8, void(*)(uint8*)> pixels{ nullptr, [](uint8*) {} };
+        oc::unique_ptr<uint8, void(*)(uint8*)> pixels{ nullptr, [](uint8*) {} };
         uint32 width = 0, height = 0;
     };
 
-    DecodedImage decodeTexture(const ITextureData& texData, const std::string& resolvedFile)
+    DecodedImage decodeTexture(const ITextureData& texData, const oc::string& resolvedFile)
     {
         DecodedImage img;
         int w = 0, h = 0, comp = 0;
@@ -170,7 +170,7 @@ namespace
     }
 
     // Compress one RGBA8 mip into BC1/BC3/BC5 blocks (edge-clamped 4x4 fetch handles non-multiple-of-4 dims).
-    void compressMip(const uint8* pRgba, uint32 width, uint32 height, dds::DXGI_FORMAT format, std::vector<uint8>& out)
+    void compressMip(const uint8* pRgba, uint32 width, uint32 height, dds::DXGI_FORMAT format, oc::vector<uint8>& out)
     {
         const uint32 blocksX = (width + 3) / 4;
         const uint32 blocksY = (height + 3) / 4;
@@ -187,10 +187,10 @@ namespace
             {
                 for (uint32 y = 0; y < 4; ++y)
                 {
-                    const uint32 sy = std::min(by * 4 + y, height - 1);
+                    const uint32 sy = oc::min(by * 4 + y, height - 1);
                     for (uint32 x = 0; x < 4; ++x)
                     {
-                        const uint32 sx = std::min(bx * 4 + x, width - 1);
+                        const uint32 sx = oc::min(bx * 4 + x, width - 1);
                         const uint8* pSrc = pRgba + ((size_t)sy * width + sx) * 4;
                         memcpy(&blockRgba[(y * 4 + x) * 4], pSrc, 4);
                         blockRg[(y * 4 + x) * 2 + 0] = pSrc[0];
@@ -213,7 +213,7 @@ namespace
         size_t covered = 0;
         const uint8* pA = pRgba + 3;
         for (size_t i = 0; i < numPixels; ++i, pA += 4)
-            covered += std::min(255.0f, (float)*pA * alphaScale) >= (float)cutoff;
+            covered += oc::min(255.0f, (float)*pA * alphaScale) >= (float)cutoff;
         return (float)covered / (float)numPixels;
     }
 
@@ -238,12 +238,12 @@ namespace
             return;
         uint8* pA = pRgba + 3;
         for (size_t i = 0; i < numPixels; ++i, pA += 4)
-            *pA = (uint8)std::min(255.0f, (float)*pA * scale + 0.5f);
+            *pA = (uint8)oc::min(255.0f, (float)*pA * scale + 0.5f);
     }
 
     // coverageCutoff: alpha-test cutoff of the masked material(s) using this texture, or < 0 when the
     // texture is never alpha-tested (no coverage preservation).
-    bool convertTextureToDds(const ITextureData& texData, const std::string& resolvedFile, ETexUsage usage, float coverageCutoff, const std::string& outPath)
+    bool convertTextureToDds(const ITextureData& texData, const oc::string& resolvedFile, ETexUsage usage, float coverageCutoff, const oc::string& outPath)
     {
         const DecodedImage img = decodeTexture(texData, resolvedFile);
         if (!img.pixels || img.width == 0 || img.height == 0)
@@ -267,21 +267,21 @@ namespace
         if (usage == ETexUsage::Color && coverageCutoff > 0.0f && coverageCutoff < 1.0f
             && format == dds::DXGI_FORMAT::DXGI_FORMAT_BC3_UNORM)
         {
-            cutoff255 = (uint8)std::clamp((int)(coverageCutoff * 255.0f + 0.5f), 1, 255);
+            cutoff255 = (uint8)oc::clamp((int)(coverageCutoff * 255.0f + 0.5f), 1, 255);
             refCoverage = alphaCoverage(img.pixels.get(), (size_t)img.width * img.height, 1.0f, cutoff255);
             if (refCoverage <= 0.0f || refCoverage >= 1.0f)
                 refCoverage = -1.0f;
         }
 
-        const uint32 numMips = 1 + (uint32)std::floor(std::log2((float)std::max(img.width, img.height)));
-        std::vector<uint8> fileData(sizeof(dds::Header));
+        const uint32 numMips = 1 + (uint32)std::floor(std::log2((float)oc::max(img.width, img.height)));
+        oc::vector<uint8> fileData(sizeof(dds::Header));
         dds::write_header(fileData.data(), format, img.width, img.height, numMips);
 
-        std::vector<uint8> mipPixels;
+        oc::vector<uint8> mipPixels;
         for (uint32 mip = 0; mip < numMips; ++mip)
         {
-            const uint32 mipW = std::max(1u, img.width >> mip);
-            const uint32 mipH = std::max(1u, img.height >> mip);
+            const uint32 mipW = oc::max(1u, img.width >> mip);
+            const uint32 mipH = oc::max(1u, img.height >> mip);
             const uint8* pSrc = img.pixels.get();
             if (mip > 0)
             {
@@ -322,15 +322,15 @@ namespace
                 if (*pA < 250) { format = dds::DXGI_FORMAT::DXGI_FORMAT_BC3_UNORM; break; }
         }
 
-        const uint32 numMips = 1 + (uint32)std::floor(std::log2((float)std::max(width, height)));
-        std::vector<uint8> fileData(sizeof(dds::Header));
+        const uint32 numMips = 1 + (uint32)std::floor(std::log2((float)oc::max(width, height)));
+        oc::vector<uint8> fileData(sizeof(dds::Header));
         dds::write_header(fileData.data(), format, width, height, numMips);
 
-        std::vector<uint8> mipPixels;
+        oc::vector<uint8> mipPixels;
         for (uint32 mip = 0; mip < numMips; ++mip)
         {
-            const uint32 mipW = std::max(1u, width >> mip);
-            const uint32 mipH = std::max(1u, height >> mip);
+            const uint32 mipW = oc::max(1u, width >> mip);
+            const uint32 mipH = oc::max(1u, height >> mip);
             const uint8* pSrc = pRgba;
             if (mip > 0)
             {
@@ -359,12 +359,12 @@ namespace
     {
         Blob blob;
         StringBlob strings;
-        std::vector<CookedMesh> meshes;
-        std::vector<CookedMaterial> materials;
-        std::vector<CookedTexture> textures;
-        std::vector<CookedNode> nodes;
-        std::vector<uint32> meshRefs;
-        std::vector<CookedTexStamp> texStamps;
+        oc::vector<CookedMesh> meshes;
+        oc::vector<CookedMaterial> materials;
+        oc::vector<CookedTexture> textures;
+        oc::vector<CookedNode> nodes;
+        oc::vector<uint32> meshRefs;
+        oc::vector<CookedTexStamp> texStamps;
     };
 
     void cookMeshes(const ISceneData& scene, const SceneCookOptions& options, CookContext& ctx)
@@ -373,36 +373,36 @@ namespace
 
         // Meshes that belong to an authored LodN_ chain (any level, or a plain "X" acting as level 0 of
         // an existing "LodN_X" chain) never get generated chains — mirror of ObjectContainer's pre-scan.
-        std::vector<bool> inAuthoredChain(numMeshes, false);
+        oc::vector<bool> inAuthoredChain(numMeshes, false);
         {
-            std::unordered_map<std::string_view, uint32> meshIdxByName;
-            std::vector<std::string_view> chainLogicalNames;
+            oc::unordered_map<oc::string_view, uint32> meshIdxByName;
+            oc::vector<oc::string_view> chainLogicalNames;
             for (uint32 i = 0; i < numMeshes; ++i)
                 meshIdxByName.try_emplace(scene.getMesh(i)->getName(), i);
             for (uint32 i = 0; i < numMeshes; ++i)
             {
                 uint32 level;
-                std::string_view logicalName;
+                oc::string_view logicalName;
                 if (parseLodName(scene.getMesh(i)->getName(), level, logicalName))
                 {
                     inAuthoredChain[i] = true;
                     chainLogicalNames.push_back(logicalName);
                 }
             }
-            for (std::string_view logicalName : chainLogicalNames)
+            for (oc::string_view logicalName : chainLogicalNames)
                 if (auto it = meshIdxByName.find(logicalName); it != meshIdxByName.end())
                     inAuthoredChain[it->second] = true;
         }
 
-        const float reduction = std::clamp(options.lodReduction, 0.05f, 0.75f);
-        const int maxLevels = std::min(options.lodLevels, (int)MAX_COOKED_LOD_LEVELS);
-        const float decimation = std::clamp(options.decimationFactor, 0.0f, 1.0f);
+        const float reduction = oc::clamp(options.lodReduction, 0.05f, 0.75f);
+        const int maxLevels = oc::min(options.lodLevels, (int)MAX_COOKED_LOD_LEVELS);
+        const float decimation = oc::clamp(options.decimationFactor, 0.0f, 1.0f);
 
         ctx.meshes.resize(numMeshes);
-        std::vector<glm::vec3> zeroes;
-        std::vector<uint32> lodIndices;
-        std::vector<uint32> decimatedIndices, vertexRemap;
-        std::vector<glm::vec3> decimatedAttributes[5];
+        oc::vector<glm::vec3> zeroes;
+        oc::vector<uint32> lodIndices;
+        oc::vector<uint32> decimatedIndices, vertexRemap;
+        oc::vector<glm::vec3> decimatedAttributes[5];
         for (uint32 meshIdx = 0; meshIdx < numMeshes; ++meshIdx)
         {
             const IMeshData& meshData = *scene.getMesh(meshIdx);
@@ -412,7 +412,7 @@ namespace
             const uint32* pIndices = meshData.getIndices();
             const glm::vec3* attributes[5] = { meshData.getVertices(), meshData.getNormals(),
                 meshData.getTangents(), meshData.getBitangents(), meshData.getTexCoords() };
-            const bool isColMesh = std::string_view(meshData.getName()).starts_with("Col_");
+            const bool isColMesh = oc::string_view(meshData.getName()).starts_with("Col_");
 
             // Decimation simplifies the base geometry itself (error-unbounded, target count wins) and
             // drops the vertices that fall out of use — everything downstream (LOD chains, collision
@@ -420,7 +420,7 @@ namespace
             // collision shapes and keep their exact geometry.
             if (decimation < 1.0f && !meshData.isSkinned() && !isColMesh && numIndices >= 12)
             {
-                const size_t targetIndexCount = std::max<size_t>(12, ((size_t)((float)numIndices * decimation)) / 3 * 3);
+                const size_t targetIndexCount = oc::max<size_t>(12, ((size_t)((float)numIndices * decimation)) / 3 * 3);
                 decimatedIndices.resize(numIndices);
                 float resultError = 0.0f;
                 const size_t resultCount = meshopt_simplify(decimatedIndices.data(), pIndices, numIndices,
@@ -480,7 +480,7 @@ namespace
             for (int level = 1; level <= maxLevels; ++level)
             {
                 targetF *= reduction;
-                const size_t targetIndexCount = std::max<size_t>(12, ((size_t)targetF) / 3 * 3);
+                const size_t targetIndexCount = oc::max<size_t>(12, ((size_t)targetF) / 3 * 3);
                 if (targetIndexCount >= prevIndexCount)
                     break;
                 const float targetError = 0.01f * (float)(1u << (level - 1));
@@ -498,8 +498,8 @@ namespace
         }
     }
 
-    void cookTextures(const ISceneData& scene, const SceneCookOptions& options, const std::string& sourcePath,
-        const std::string& texFolder, CookContext& ctx)
+    void cookTextures(const ISceneData& scene, const SceneCookOptions& options, const oc::string& sourcePath,
+        const oc::string& texFolder, CookContext& ctx)
     {
         const uint32 numTextures = scene.getNumTextures();
         ctx.textures.resize(numTextures);
@@ -507,8 +507,8 @@ namespace
         // Usage per texture from the material slots the renderer actually samples (first mark wins).
         // Diffuse textures of alpha-MASKED materials also record the cutoff, so their mips can keep the
         // full-res alpha coverage (Blend materials want the true averaged alpha, so they don't).
-        std::vector<uint8> usage(numTextures, 0xFF);
-        std::vector<float> coverageCutoff(numTextures, -1.0f);
+        oc::vector<uint8> usage(numTextures, 0xFF);
+        oc::vector<float> coverageCutoff(numTextures, -1.0f);
         auto markUsage = [&](uint32 texIdx, ETexUsage use) {
             if (texIdx < numTextures && usage[texIdx] == 0xFF)
                 usage[texIdx] = (uint8)use;
@@ -527,7 +527,7 @@ namespace
             }
         }
 
-        const std::string modelFolder = std::filesystem::path(sourcePath).parent_path().string();
+        const oc::string modelFolder = std::filesystem::path(sourcePath).parent_path().string();
         // A recook regenerates every conversion, so clear out the previous set first — otherwise .dds
         // files of textures the scene no longer references would pile up.
         std::error_code ecPurge;
@@ -536,13 +536,13 @@ namespace
         for (uint32 texIdx = 0; texIdx < numTextures; ++texIdx)
         {
             const ITextureData& texData = *scene.getTexture(texIdx);
-            const std::string originalPath = texData.getFileName();
+            const oc::string originalPath = texData.getFileName();
             ctx.textures[texIdx].pathOffset = ctx.strings.add(originalPath);
             if (!options.convertTextures || usage[texIdx] == 0xFF)
                 continue;
 
             // Loose files resolve like Texture.cpp: next to the model first, then Assets-root-relative.
-            std::string resolvedFile;
+            oc::string resolvedFile;
             const bool isEmbedded = texData.getPixels() != nullptr;
             if (!isEmbedded)
             {
@@ -560,13 +560,13 @@ namespace
                 }
             }
 
-            std::string stem = std::filesystem::path(originalPath).stem().string();
+            oc::string stem = std::filesystem::path(originalPath).stem().string();
             if (stem.empty() || stem[0] == '*')
                 stem = "embedded";
             for (char& c : stem)
                 if (!isalnum((uint8)c) && c != '_' && c != '-')
                     c = '_';
-            const std::string cookedPath = texFolder + std::to_string(texIdx) + "_" + stem + ".dds";
+            const oc::string cookedPath = texFolder + oc::to_string(texIdx) + "_" + stem + ".dds";
 
             if (!texFolderCreated)
             {
@@ -625,8 +625,8 @@ namespace
     void cookNodes(const ISceneData& scene, CookContext& ctx)
     {
         // BFS so each node's children are contiguous; parent indices tracked to fill the recursive counts.
-        std::vector<uint32> parentIdx;
-        std::deque<std::pair<std::unique_ptr<INodeData>, uint32>> queue; // node -> its cooked index
+        oc::vector<uint32> parentIdx;
+        oc::deque<oc::pair<oc::unique_ptr<INodeData>, uint32>> queue; // node -> its cooked index
 
         auto appendNode = [&](const INodeData& node, uint32 parent) {
             const uint32 idx = (uint32)ctx.nodes.size();
@@ -650,16 +650,16 @@ namespace
         queue.emplace_back(scene.getRootNode().clone(), rootIdx);
         while (!queue.empty())
         {
-            auto [pNode, cookedIdx] = std::move(queue.front());
+            auto [pNode, cookedIdx] = oc::move(queue.front());
             queue.pop_front();
             const uint32 numChildren = pNode->getNumChildren();
             ctx.nodes[cookedIdx].firstChild = (uint32)ctx.nodes.size();
             ctx.nodes[cookedIdx].numChildren = numChildren;
             for (uint32 i = 0; i < numChildren; ++i)
             {
-                std::unique_ptr<INodeData> pChild = pNode->getChild(i);
+                oc::unique_ptr<INodeData> pChild = pNode->getChild(i);
                 const uint32 childIdx = appendNode(*pChild, cookedIdx);
-                queue.emplace_back(std::move(pChild), childIdx);
+                queue.emplace_back(oc::move(pChild), childIdx);
             }
         }
 
@@ -687,7 +687,7 @@ namespace
                 fopen_s(&pFile, entry.path().string().c_str(), "rb");
                 if (!pFile)
                     continue;
-                std::unique_ptr<FILE, void(*)(FILE*)> file(pFile, [](FILE* p) { fclose(p); });
+                oc::unique_ptr<FILE, void(*)(FILE*)> file(pFile, [](FILE* p) { fclose(p); });
                 CookedHeader header{};
                 if (fread(&header, 1, sizeof(header), pFile) != sizeof(header) || header.magic != SCENE_CACHE_MAGIC)
                     continue; // not one of ours (or unreadable): leave it alone
@@ -713,8 +713,8 @@ namespace
         }
     }
 
-    bool cookScene(const ISceneData& scene, const std::string& sourcePath, const std::string& cachePath,
-        const std::string& texFolder, const SceneCookOptions& options,
+    bool cookScene(const ISceneData& scene, const oc::string& sourcePath, const oc::string& cachePath,
+        const oc::string& texFolder, const SceneCookOptions& options,
         uint64 sourceMTime, uint64 sourceSize, uint64 optionsHash)
     {
         CookContext ctx;
@@ -763,7 +763,7 @@ namespace
     }
 }
 
-std::unique_ptr<ISceneData> ISceneData::loadCached(const char* filePath, bool mergeNodes, bool preTransformVertices, const SceneCookOptions& options)
+oc::unique_ptr<ISceneData> ISceneData::loadCached(const char* filePath, bool mergeNodes, bool preTransformVertices, const SceneCookOptions& options)
 {
     // Scene import/cook: main thread at spawn (cached afterwards) and on the terrain jobs.
     FileSystem::assertIoThread(/*allowMainThread*/ true);
@@ -774,7 +774,7 @@ std::unique_ptr<ISceneData> ISceneData::loadCached(const char* filePath, bool me
     optionsHash = fnv1a(mergeNodes, optionsHash);
     optionsHash = fnv1a(preTransformVertices, optionsHash);
     const uint64 nameHash = optionsHash;
-    optionsHash = fnv1a(std::clamp(options.decimationFactor, 0.0f, 1.0f), optionsHash);
+    optionsHash = fnv1a(oc::clamp(options.decimationFactor, 0.0f, 1.0f), optionsHash);
     optionsHash = fnv1a(options.convertTextures, optionsHash);
     optionsHash = fnv1a(options.generateLods, optionsHash);
     optionsHash = fnv1a(options.lodLevels, optionsHash);
@@ -788,17 +788,17 @@ std::unique_ptr<ISceneData> ISceneData::loadCached(const char* filePath, bool me
         sourceMTime = fileMTimeTicks(filePath, ec);
     const bool cacheUsable = options.enableCache && !ec;
 
-    std::string stem = std::filesystem::path(filePath).stem().string();
+    oc::string stem = std::filesystem::path(filePath).stem().string();
     for (char& c : stem)
         if (!isalnum((uint8)c) && c != '_' && c != '-')
             c = '_';
-    const std::string cacheTag = std::format("{}_{:08x}", stem, (uint32)(nameHash ^ (nameHash >> 32)));
-    const std::string cachePath = "Local/Cooked/" + cacheTag + ".vsc";
-    const std::string texFolder = "Local/Cooked/" + cacheTag + "_tex/";
+    const oc::string cacheTag = std::format("{}_{:08x}", stem, (uint32)(nameHash ^ (nameHash >> 32)));
+    const oc::string cachePath = "Local/Cooked/" + cacheTag + ".vsc";
+    const oc::string texFolder = "Local/Cooked/" + cacheTag + "_tex/";
 
     if (cacheUsable)
     {
-        auto cooked = std::make_unique<CookedSceneData>();
+        auto cooked = oc::make_unique<CookedSceneData>();
         if (cooked->load(cachePath, filePath, sourceMTime, sourceSize, optionsHash))
         {
             Log::info(std::format("SceneCache: '{}' served from '{}'", filePath, cachePath));
@@ -806,7 +806,7 @@ std::unique_ptr<ISceneData> ISceneData::loadCached(const char* filePath, bool me
         }
     }
 
-    std::unique_ptr<ISceneData> imported = createAssimpLoader();
+    oc::unique_ptr<ISceneData> imported = createAssimpLoader();
     if (!imported->initialize(filePath, mergeNodes, preTransformVertices) || !imported->isValid())
         return nullptr;
 
@@ -818,7 +818,7 @@ std::unique_ptr<ISceneData> ISceneData::loadCached(const char* filePath, bool me
         const auto cookStart = std::chrono::steady_clock::now();
         if (cookScene(*imported, filePath, cachePath, texFolder, options, sourceMTime, sourceSize, optionsHash))
         {
-            auto cooked = std::make_unique<CookedSceneData>();
+            auto cooked = oc::make_unique<CookedSceneData>();
             if (cooked->load(cachePath, filePath, sourceMTime, sourceSize, optionsHash))
             {
                 const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - cookStart).count();
@@ -848,7 +848,7 @@ bool TextureConvert::convertToDds(const char* srcPath, EUsage usage, const char*
 bool TextureConvert::convertPackedToDds(const char* srcPathR, const char* srcPathG, const char* srcPathB, const char* outPath)
 {
     const char* srcPaths[3] = { srcPathR, srcPathG, srcPathB };
-    std::vector<uint8> rgba;
+    oc::vector<uint8> rgba;
     uint32 width = 0, height = 0;
     for (int channel = 0; channel < 3; ++channel)
     {

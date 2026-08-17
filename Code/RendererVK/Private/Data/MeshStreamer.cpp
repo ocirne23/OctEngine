@@ -14,10 +14,10 @@ import :Renderer;
 import :Layout;
 
 // StreamInRequest carries an owned, null-terminated copy of the cache path (unique_ptr<const char[]>)
-// instead of referencing m_files' std::string across the worker thread.
-static std::unique_ptr<const char[]> copyPathString(const std::string& path)
+// instead of referencing m_files' oc::string across the worker thread.
+static oc::unique_ptr<const char[]> copyPathString(const oc::string& path)
 {
-    std::unique_ptr<char[]> buffer = std::make_unique<char[]>(path.size() + 1);
+    oc::unique_ptr<char[]> buffer = oc::make_unique<char[]>(path.size() + 1);
     memcpy(buffer.get(), path.c_str(), path.size() + 1);
     return buffer;
 }
@@ -61,7 +61,7 @@ void MeshStreamer::registerTweaks()
     Tweak::intVar("Mesh Streaming", "Mesh max MB/frame", &m_maxStreamMBPerFrame, 4, 256);
 }
 
-uint16 MeshStreamer::getFileId(std::string_view path)
+uint16 MeshStreamer::getFileId(oc::string_view path)
 {
     for (uint32 i = 0; i < (uint32)m_files.size(); ++i)
         if (m_files[i] == path)
@@ -148,7 +148,7 @@ void MeshStreamer::workerRun(std::stop_token stopToken)
     Globals::profiler.registerThread("MeshStreamer", Profiler::SORT_KEY_BACKGROUND + 1);
 
     ProfileScope dumb("MeshStreamer::workerRun", EProfileCategory::Renderer); // just for attributes[5] debug iterator allocator..
-    std::vector<glm::vec3> attributes[5];
+    oc::vector<glm::vec3> attributes[5];
     for (;;)
     {
         StreamInRequest request;
@@ -156,7 +156,7 @@ void MeshStreamer::workerRun(std::stop_token stopToken)
             std::unique_lock lock(m_requestMutex);
             if (!m_requestCv.wait(lock, stopToken, [&] { return !m_requests.empty(); }))
                 return; // stop requested
-            request = std::move(m_requests.front());
+            request = oc::move(m_requests.front());
             m_requests.pop_front();
         }
         ProfileScope profileScope("Mesh re-stream", EProfileCategory::Renderer); // after the cv wait: measure the work, not the idle
@@ -179,7 +179,7 @@ void MeshStreamer::workerRun(std::stop_token stopToken)
             for (uint32 k = 0; k < request.numLevels && ok; ++k)
             {
                 const size_t byteSize = (size_t)request.levels[k].indexCount * sizeof(uint32);
-                completion.indexData[k] = std::unique_ptr<uint8[]>(new uint8[byteSize]);
+                completion.indexData[k] = oc::unique_ptr<uint8[]>(new uint8[byteSize]);
                 ok = _fseeki64(pFile, (int64)request.levels[k].srcIndicesOffset, SEEK_SET) == 0
                     && fread(completion.indexData[k].get(), 1, byteSize, pFile) == byteSize;
             }
@@ -187,7 +187,7 @@ void MeshStreamer::workerRun(std::stop_token stopToken)
 
             if (ok)
             {
-                completion.vertexData = std::unique_ptr<uint8[]>(new uint8[(size_t)numVertices * sizeof(RendererVKLayout::MeshVertex)]);
+                completion.vertexData = oc::unique_ptr<uint8[]>(new uint8[(size_t)numVertices * sizeof(RendererVKLayout::MeshVertex)]);
                 RendererVKLayout::MeshVertex* pVertices = (RendererVKLayout::MeshVertex*)completion.vertexData.get();
                 const glm::vec3* pPositions = attributes[0].data();
                 const glm::vec3* pNormals = attributes[1].data();
@@ -208,14 +208,14 @@ void MeshStreamer::workerRun(std::stop_token stopToken)
 
         {
             std::scoped_lock lock(m_completionMutex);
-            m_completions.push_back(std::move(completion));
+            m_completions.push_back(oc::move(completion));
         }
     }
 }
 
 void MeshStreamer::drainCompletions()
 {
-    std::deque<StreamInCompletion> completed;
+    oc::deque<StreamInCompletion> completed;
     {
         std::scoped_lock lock(m_completionMutex);
         completed.swap(m_completions);
@@ -306,7 +306,7 @@ void MeshStreamer::issueStreamIns()
         issuedBytes += set.totalBytes;
         {
             std::scoped_lock lock(m_requestMutex);
-            m_requests.push_back(std::move(request));
+            m_requests.push_back(oc::move(request));
         }
         m_requestCv.notify_one();
     }
@@ -337,11 +337,11 @@ void MeshStreamer::solveEvictions()
 
     // Evict least-recently-seen first, cold sets only — an over-budget scene where everything is
     // actively referenced stays over budget rather than flickering meshes in and out.
-    std::vector<uint32> candidates;
+    oc::vector<uint32> candidates;
     for (uint32 i = 0; i < (uint32)m_sets.size(); ++i)
         if (m_sets[i].state == EState::Resident && m_frameCounter - m_sets[i].lastSeenFrame >= (uint32)m_coldFrames)
             candidates.push_back(i);
-    std::sort(candidates.begin(), candidates.end(),
+    oc::sort(candidates.begin(), candidates.end(),
         [&](uint32 a, uint32 b) { return m_sets[a].lastSeenFrame < m_sets[b].lastSeenFrame; });
 
     uint64 residentBytes = m_stats.residentBytes;
@@ -351,7 +351,7 @@ void MeshStreamer::solveEvictions()
             break;
         evictSet(setIdx);
         residentBytes -= m_sets[setIdx].totalBytes;
-        m_stats.coldBytes -= std::min(m_stats.coldBytes, m_sets[setIdx].totalBytes);
+        m_stats.coldBytes -= oc::min(m_stats.coldBytes, m_sets[setIdx].totalBytes);
     }
     m_stats.residentBytes = residentBytes;
     m_stats.numEvictedSets = 0;

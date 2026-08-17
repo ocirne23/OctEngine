@@ -55,7 +55,7 @@ void UI::prepare()
         Globals::jobSystem.submit([this] { m_assetBrowser.prepare(); }, EJobPriority::High, &m_prepareCounter, "uiContentPrepare");
 }
 
-void UI::update(const std::vector<EntityPtr>& rootEntities, const Camera& camera, double deltaSec)
+void UI::update(const oc::vector<EntityPtr>& rootEntities, const Camera& camera, double deltaSec)
 {
     ProfileScope profileScope("UI update", EProfileCategory::UI);
     {
@@ -156,7 +156,7 @@ void UI::update(const std::vector<EntityPtr>& rootEntities, const Camera& camera
                     const char* droppedPath = static_cast<const char*>(payload->Data);
                     const ImVec2 mouse = ImGui::GetMousePos();
                     m_viewportChanges.push_back({ EntityChange::CreateViewport{
-                        glm::ivec2(int(mouse.x), int(mouse.y)), std::string(droppedPath) } });
+                        glm::ivec2(int(mouse.x), int(mouse.y)), oc::string(droppedPath) } });
                 }
                 ImGui::EndDragDropTarget();
             }
@@ -206,7 +206,7 @@ void UI::update(const std::vector<EntityPtr>& rootEntities, const Camera& camera
             if (ScriptComponent* script = getComponent<ScriptComponent>(selected))
                 if (script->scriptModule)
                 {
-                    const std::string& path = script->scriptModule->scriptPath;
+                    const oc::string& path = script->scriptModule->scriptPath;
                     if (FileSystem::extension(path) == ".dsl")
                         m_scriptEditor.requestOpen(path);
                 }
@@ -290,7 +290,7 @@ void UI::update(const std::vector<EntityPtr>& rootEntities, const Camera& camera
         // Route script file actions from the asset browser (double-click / "New Script") into the Script
         // Editor. Only .dsl raises this request now -- a .scr reads as a plain text file (the node editor and
         // its whole integration are gone; the NodeEditor/ sources remain for reference only).
-        if (std::string openPath = m_assetBrowser.takeScriptOpenRequest(); !openPath.empty())
+        if (oc::string openPath = m_assetBrowser.takeScriptOpenRequest(); !openPath.empty())
         {
             m_scriptEditor.requestOpen(openPath);
             // ...and surface the tab: an explicit "open this script" gesture should end with the editor in
@@ -301,11 +301,11 @@ void UI::update(const std::vector<EntityPtr>& rootEntities, const Camera& camera
         }
 
         // Route the asset browser's "Edit Entity" action into the Entity Editor.
-        if (std::string editPath = m_assetBrowser.takeEntityEditRequest(); !editPath.empty())
+        if (oc::string editPath = m_assetBrowser.takeEntityEditRequest(); !editPath.empty())
             m_entityEditor.requestOpen(editPath);
 
         // Route the asset browser's "Open Text File" action into the Text Editor.
-        if (std::string textPath = m_assetBrowser.takeTextOpenRequest(); !textPath.empty())
+        if (oc::string textPath = m_assetBrowser.takeTextOpenRequest(); !textPath.empty())
             m_textEditor.requestOpen(textPath);
     }
 
@@ -336,7 +336,7 @@ void UI::update(const std::vector<EntityPtr>& rootEntities, const Camera& camera
         ImGui::End();
 
         // Route the entity editor's "Select Prefab" action into the asset browser.
-        if (std::string revealPath = m_entityEditor.takeRevealRequest(); !revealPath.empty())
+        if (oc::string revealPath = m_entityEditor.takeRevealRequest(); !revealPath.empty())
             m_assetBrowser.selectFile(revealPath);
     }
 

@@ -64,12 +64,12 @@ void NetKeyPair::destroy()
     handle = 0;
 }
 
-bool cryptoRandom(std::span<uint8> out)
+bool cryptoRandom(oc::span<uint8> out)
 {
     return ntOk(BCryptGenRandom(nullptr, out.data(), (ULONG)out.size(), BCRYPT_USE_SYSTEM_PREFERRED_RNG));
 }
 
-uint64 cryptoStatelessMac(std::span<const uint8> secret, std::span<const uint8> data)
+uint64 cryptoStatelessMac(oc::span<const uint8> secret, oc::span<const uint8> data)
 {
     uint8 digest[32] = {};
     BCryptHash(algHmacSha256(), (PUCHAR)secret.data(), (ULONG)secret.size(), (PUCHAR)data.data(), (ULONG)data.size(), digest, sizeof(digest));
@@ -99,7 +99,7 @@ bool cryptoGenerateKeyPair(NetKeyPair& out)
     return true;
 }
 
-bool cryptoDeriveAead(const NetKeyPair& local, std::span<const uint8> peerPublicKey, std::span<const uint8> context, NetAeadKey& out)
+bool cryptoDeriveAead(const NetKeyPair& local, oc::span<const uint8> peerPublicKey, oc::span<const uint8> context, NetAeadKey& out)
 {
     out.destroy();
     if (!local.isValid() || peerPublicKey.size() != NetCryptoPublicKeySize)
@@ -141,7 +141,7 @@ bool cryptoDeriveAead(const NetKeyPair& local, std::span<const uint8> peerPublic
     return true;
 }
 
-bool cryptoSeal(const NetAeadKey& key, const uint8 nonce[12], std::span<const uint8> aad, std::span<const uint8> plain, std::span<uint8> out)
+bool cryptoSeal(const NetAeadKey& key, const uint8 nonce[12], oc::span<const uint8> aad, oc::span<const uint8> plain, oc::span<uint8> out)
 {
     if (!key.isValid() || out.size() != plain.size() + NetCryptoTagSize)
         return false;
@@ -158,7 +158,7 @@ bool cryptoSeal(const NetAeadKey& key, const uint8 nonce[12], std::span<const ui
         nullptr, 0, out.data(), (ULONG)plain.size(), &written, 0)) && written == plain.size();
 }
 
-bool cryptoOpen(const NetAeadKey& key, const uint8 nonce[12], std::span<const uint8> aad, std::span<const uint8> cipherAndTag, std::span<uint8> outPlain)
+bool cryptoOpen(const NetAeadKey& key, const uint8 nonce[12], oc::span<const uint8> aad, oc::span<const uint8> cipherAndTag, oc::span<uint8> outPlain)
 {
     if (!key.isValid() || cipherAndTag.size() < NetCryptoTagSize || outPlain.size() != cipherAndTag.size() - NetCryptoTagSize)
         return false;

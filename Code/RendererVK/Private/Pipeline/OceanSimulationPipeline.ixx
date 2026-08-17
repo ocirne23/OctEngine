@@ -61,9 +61,9 @@ public:
     // READBACK_RES^2 per cascade, cascades packed consecutively.
     static constexpr uint32 READBACK_MIP = 2;
     static constexpr uint32 READBACK_RES = RendererVKLayout::OCEAN_FFT_SIZE >> READBACK_MIP;
-    std::span<const uint16> getDisplacementReadback(uint32 frameIdx) const
+    oc::span<const uint16> getDisplacementReadback(uint32 frameIdx) const
     {
-        const std::span<uint8> mapped = m_readbackMapped[frameIdx];
+        const oc::span<uint8> mapped = m_readbackMapped[frameIdx];
         return { reinterpret_cast<const uint16*>(mapped.data()), mapped.size() / sizeof(uint16) };
     }
 
@@ -90,11 +90,11 @@ private:
 
     // All sets are per frame slot: the spectrum binds that frame's UBO, and the others must not be
     // host-updated (cmdUpdateDescriptorSets is immediate) while the other slot's cached CB is in flight.
-    std::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_spectrumSets;
-    std::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_fftHorizontalSets; // ping -> pong
-    std::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_fftVerticalSets;   // pong -> ping
-    std::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_assembleSets;      // ping -> maps mip 0
-    std::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_foamSets;          // maps mip 0 + foam accum
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_spectrumSets;
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_fftHorizontalSets; // ping -> pong
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_fftVerticalSets;   // pong -> ping
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_assembleSets;      // ping -> maps mip 0
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_foamSets;          // maps mip 0 + foam accum
 
     // Ping/pong complex spectra (RGBA32F = 2 complex values), kept in GENERAL for their whole life.
     vk::Image m_spectrumImage[2]{};
@@ -114,8 +114,8 @@ private:
     vk::ImageView m_foamView{};
 
     // Displacement readback (see getDisplacementReadback). Host-visible + coherent, persistently mapped.
-    std::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_readbackBuffers;
-    std::array<std::span<uint8>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_readbackMapped;
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_readbackBuffers;
+    oc::array<oc::span<uint8>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_readbackMapped;
 
     Sampler m_mapsSampler; // repeat + trilinear + aniso (the default engine sampler)
 };

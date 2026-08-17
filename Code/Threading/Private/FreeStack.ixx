@@ -16,33 +16,33 @@ public:
 
     void initialize(uint32 capacity)
     {
-        m_next = std::make_unique<std::atomic<uint32>[]>(capacity);
-        m_head.store(uint64(Invalid), std::memory_order_relaxed);
+        m_next = oc::make_unique<oc::atomic<uint32>[]>(capacity);
+        m_head.store(uint64(Invalid), oc::memory_order_relaxed);
     }
 
     void push(uint32 index)
     {
-        uint64 head = m_head.load(std::memory_order_relaxed);
+        uint64 head = m_head.load(oc::memory_order_relaxed);
         for (;;)
         {
-            m_next[index].store(uint32(head), std::memory_order_relaxed);
+            m_next[index].store(uint32(head), oc::memory_order_relaxed);
             const uint64 newHead = ((head + 0x1'0000'0000ull) & 0xffffffff'00000000ull) | index;
-            if (m_head.compare_exchange_weak(head, newHead, std::memory_order_release, std::memory_order_relaxed))
+            if (m_head.compare_exchange_weak(head, newHead, oc::memory_order_release, oc::memory_order_relaxed))
                 return;
         }
     }
 
     bool pop(uint32& outIndex)
     {
-        uint64 head = m_head.load(std::memory_order_acquire);
+        uint64 head = m_head.load(oc::memory_order_acquire);
         for (;;)
         {
             const uint32 index = uint32(head);
             if (index == Invalid)
                 return false;
-            const uint32 next = m_next[index].load(std::memory_order_relaxed);
+            const uint32 next = m_next[index].load(oc::memory_order_relaxed);
             const uint64 newHead = ((head + 0x1'0000'0000ull) & 0xffffffff'00000000ull) | next;
-            if (m_head.compare_exchange_weak(head, newHead, std::memory_order_acquire, std::memory_order_acquire))
+            if (m_head.compare_exchange_weak(head, newHead, oc::memory_order_acquire, oc::memory_order_acquire))
             {
                 outIndex = index;
                 return true;
@@ -50,10 +50,10 @@ public:
         }
     }
 
-    bool wasEmpty() const { return uint32(m_head.load(std::memory_order_relaxed)) == Invalid; }
+    bool wasEmpty() const { return uint32(m_head.load(oc::memory_order_relaxed)) == Invalid; }
 
 private:
 
-    std::unique_ptr<std::atomic<uint32>[]> m_next;
-    alignas(64) std::atomic<uint64> m_head = uint64(Invalid);
+    oc::unique_ptr<oc::atomic<uint32>[]> m_next;
+    alignas(64) oc::atomic<uint64> m_head = uint64(Invalid);
 };

@@ -36,7 +36,7 @@ public:
 
     // Units inside the view frustum — the overhead labels only draw what is on screen, so they
     // never ask for more than that.
-    static void queryVisibleUnits(const Camera& camera, std::vector<Entity*>& out);
+    static void queryVisibleUnits(const Camera& camera, oc::vector<Entity*>& out);
 
     // SAVE/LOAD (server): every live unit into/from an AssetNode tree (projectiles are transient —
     // a load clears them). loadUnits despawns the live units first.
@@ -51,10 +51,10 @@ private:
 
     // Spawn cooldowns and alive counts live ON the barracks (GameStructureComponent::barracks) —
     // no rosters, no id-keyed maps, and the state dies with its structure.
-    std::vector<GameUnitComponent::FireRequest> m_fireScratch; // drained queues (reused buffers)
-    std::vector<uint32> m_deathScratch;
-    std::vector<uint32> m_spawnScratch;
-    std::vector<GameStructureComponent::TurretFireRequest> m_turretFireScratch;
+    oc::vector<GameUnitComponent::FireRequest> m_fireScratch; // drained queues (reused buffers)
+    oc::vector<uint32> m_deathScratch;
+    oc::vector<uint32> m_spawnScratch;
+    oc::vector<GameStructureComponent::TurretFireRequest> m_turretFireScratch;
 
     // Tweaks (unit stats are prefab-authored; the shared sim baselines live on the components'
     // params — barracks/turret production tuning now registers from StructureSystem. What remains

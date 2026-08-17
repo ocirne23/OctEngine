@@ -6,12 +6,12 @@ import :Shader;
 
 export struct ComputePipelineLayout
 {
-    std::string computeShaderText;
-    std::string computeShaderDebugFilePath;
-    std::vector<ShaderDefine> defines;
-    std::vector<vk::DescriptorSetLayoutBinding> descriptorSetLayoutBindings;
-    std::vector<vk::DescriptorBindingFlags> descriptorBindingFlags; // parallel to descriptorSetLayoutBindings (optional)
-    std::vector<vk::PushConstantRange> pushConstantRanges;
+    oc::string computeShaderText;
+    oc::string computeShaderDebugFilePath;
+    oc::vector<ShaderDefine> defines;
+    oc::vector<vk::DescriptorSetLayoutBinding> descriptorSetLayoutBindings;
+    oc::vector<vk::DescriptorBindingFlags> descriptorBindingFlags; // parallel to descriptorSetLayoutBindings (optional)
+    oc::vector<vk::PushConstantRange> pushConstantRanges;
 };
 
 export class ComputePipeline final

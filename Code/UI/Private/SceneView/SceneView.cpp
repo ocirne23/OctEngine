@@ -26,7 +26,7 @@ static const char* displayLabel(Entity* entity)
 static bool containsCI(const char* haystack, const char* needle)
 {
 	const char* end = haystack + std::strlen(haystack);
-	auto it = std::search(haystack, end, needle, needle + std::strlen(needle),
+	auto it = oc::search(haystack, end, needle, needle + std::strlen(needle),
 		[](char a, char b) { return std::tolower((unsigned char)a) == std::tolower((unsigned char)b); });
 	return it != end;
 }
@@ -88,7 +88,7 @@ void SceneView::acceptAssetSpawnPayload(Entity* parent)
 {
 	if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ASSET_FILE"))
 		m_changes.push_back({ EntityChange::CreateHierarchy{
-			std::string(static_cast<const char*>(payload->Data)), EntityPtr(parent) } });
+			oc::string(static_cast<const char*>(payload->Data)), EntityPtr(parent) } });
 }
 
 void SceneView::renderEntityNode(Entity* entity, bool ancestorLocked)
@@ -254,14 +254,14 @@ void SceneView::renderContextMenu(Entity* entity, bool locked)
 // panel (a script, the debug light keys, another editor) is gone from the world while the handle keeps it
 // alive. Drop it as soon as its tree is no longer rooted in the world, so the gizmo stops following a
 // detached entity and the entity itself is actually freed.
-void SceneView::pruneSelection(const std::vector<EntityPtr>& rootEntities)
+void SceneView::pruneSelection(const oc::vector<EntityPtr>& rootEntities)
 {
 	if (!m_selected)
 		return;
 	const Entity* root = m_selected.get();
 	while (root->parent)
 		root = root->parent;
-	const bool inWorld = std::any_of(rootEntities.begin(), rootEntities.end(),
+	const bool inWorld = oc::any_of(rootEntities.begin(), rootEntities.end(),
 		[root](const EntityPtr& e) { return e.get() == root; });
 	if (!inWorld)
 		m_selected.release();
@@ -294,7 +294,7 @@ void SceneView::applyPendingMutations()
 	}
 }
 
-void SceneView::render(const std::vector<EntityPtr>& rootEntities)
+void SceneView::render(const oc::vector<EntityPtr>& rootEntities)
 {
 	// Keyboard shortcuts (F2 rename, Delete) must only act when this panel owns focus — otherwise pressing
 	// Delete while editing a script in the Node editor would still delete the hierarchy selection. Capture it

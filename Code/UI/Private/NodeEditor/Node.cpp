@@ -8,7 +8,7 @@ import :Node;
 
 using namespace NodeEditor;
 
-Node& Node::initialize(ImVec2 initialPos, std::string name, ENodeStyle style, uint32 color)
+Node& Node::initialize(ImVec2 initialPos, oc::string name, ENodeStyle style, uint32 color)
 {
     m_initialPos = initialPos;
     m_name = name;
@@ -48,26 +48,26 @@ static EPinShape shapeForDataType(EDataType type)
     return type == EDataType::Exec ? EPinShape_Flow : EPinShape_Circle;
 }
 
-Node& Node::addInput(EDataType dataType, const std::string& name, const std::string& defaultValue)
+Node& Node::addInput(EDataType dataType, const oc::string& name, const oc::string& defaultValue)
 {
-    auto pin = std::make_unique<Pin>(name, this, EPinType_Input, shapeForDataType(dataType), dataTypeColor(dataType));
+    auto pin = oc::make_unique<Pin>(name, this, EPinType_Input, shapeForDataType(dataType), dataTypeColor(dataType));
     pin->dataType = dataType;
     pin->defaultValue = defaultValue;
-    m_inputPins.emplace_back(std::move(pin));
+    m_inputPins.emplace_back(oc::move(pin));
     return *this;
 }
 
-Node& Node::addOutput(EDataType dataType, const std::string& name)
+Node& Node::addOutput(EDataType dataType, const oc::string& name)
 {
-    auto pin = std::make_unique<Pin>(name, this, EPinType_Output, shapeForDataType(dataType), dataTypeColor(dataType));
+    auto pin = oc::make_unique<Pin>(name, this, EPinType_Output, shapeForDataType(dataType), dataTypeColor(dataType));
     pin->dataType = dataType;
-    m_outputPins.emplace_back(std::move(pin));
+    m_outputPins.emplace_back(oc::move(pin));
     return *this;
 }
 
 // A Script Data member is a writable (square), concretely-typed output pin — writable so a Set node can
 // store into the persistent field, and readable so any node can read it.
-Node& Node::addMember(EDataType type, const std::string& name)
+Node& Node::addMember(EDataType type, const oc::string& name)
 {
     addOutput(type, name);
     Pin& pin = *m_outputPins.back();
@@ -83,7 +83,7 @@ void Node::eraseOutputPin(int index)
 }
 
 // An On Event entry is a plain (unconnected-source) Exec output: something else fires it by name at runtime.
-Node& Node::addEventEntry(const std::string& name)
+Node& Node::addEventEntry(const oc::string& name)
 {
     addOutput(EDataType::Exec, name);
     return *this;
@@ -91,13 +91,13 @@ Node& Node::addEventEntry(const std::string& name)
 
 // A Trigger Audio alias entry is an exec INPUT pin: flow entering it plays that sound. Alias pins sit in
 // front of the node's data inputs (Entity/Position/Volume/Pitch), in AudioComponent order.
-Node& Node::addAudioEntry(const std::string& name)
+Node& Node::addAudioEntry(const oc::string& name)
 {
     addInput(EDataType::Exec, name, "");
     size_t pos = 0;
     while (pos < m_inputPins.size() - 1 && m_inputPins[pos]->dataType == EDataType::Exec)
         ++pos;
-    std::rotate(m_inputPins.begin() + pos, m_inputPins.end() - 1, m_inputPins.end());
+    oc::rotate(m_inputPins.begin() + pos, m_inputPins.end() - 1, m_inputPins.end());
     return *this;
 }
 
@@ -111,7 +111,7 @@ Node& Node::makeReroute(EDataType type)
 
 // A function parameter is a plain readable data OUTPUT pin on the Function Input node: the body reads it, and
 // codegen resolves it to the C++ parameter of the generated function.
-Node& Node::addParam(EDataType type, const std::string& name)
+Node& Node::addParam(EDataType type, const oc::string& name)
 {
     addOutput(type, name);
     return *this;
@@ -119,7 +119,7 @@ Node& Node::addParam(EDataType type, const std::string& name)
 
 // A function return is a data INPUT pin on the Function Output node: whatever feeds it is assigned to the
 // generated function's out-parameter when the body reaches the Function Output.
-Node& Node::addReturn(EDataType type, const std::string& name)
+Node& Node::addReturn(EDataType type, const oc::string& name)
 {
     addInput(type, name, defaultValueForType(type));
     return *this;
@@ -131,8 +131,8 @@ void Node::eraseInputPin(int index)
         m_inputPins.erase(m_inputPins.begin() + index);
 }
 
-Node& Node::makeFunctionCall(const std::vector<std::pair<EDataType, std::string>>& params,
-                             const std::vector<std::pair<EDataType, std::string>>& returns)
+Node& Node::makeFunctionCall(const oc::vector<oc::pair<EDataType, oc::string>>& params,
+                             const oc::vector<oc::pair<EDataType, oc::string>>& returns)
 {
     addInput(EDataType::Exec, "", "");            // pin 0: exec in
     for (const auto& [type, name] : params)
@@ -236,7 +236,7 @@ namespace
         if (hasInlineDefault(pin) && pin.dataType == EDataType::Vec3)
         {
             sameLine();
-            std::array<float, 3> v = parseVec3Literal(pin.defaultValue);
+            oc::array<float, 3> v = parseVec3Literal(pin.defaultValue);
             ImGui::PushID(&pin);
             ImGui::SetNextItemWidth(defaultFieldWidth(pin));
             if (ImGui::DragFloat3("##v3", v.data(), 0.05f, 0.0f, 0.0f, "%.2f"))
@@ -247,7 +247,7 @@ namespace
         {
             sameLine();
             char buf[96];
-            const std::string& value = pin.defaultValue;
+            const oc::string& value = pin.defaultValue;
             for (size_t k = 0; k < sizeof(buf); ++k)
                 buf[k] = (k + 1 < sizeof(buf) && k < value.size()) ? value[k] : '\0';
             ImGui::PushID(&pin);
@@ -300,9 +300,9 @@ namespace
     // Keep member names valid C++ identifiers as the user types: strip anything but [A-Za-z0-9_] and don't
     // let a digit lead. Empty stays empty (the row still renders; codegen just yields a broken field the
     // compiler flags, which surfaces in the log).
-    std::string sanitizeIdentifier(const char* text)
+    oc::string sanitizeIdentifier(const char* text)
     {
-        std::string out;
+        oc::string out;
         for (const char* p = text; *p; ++p)
         {
             const char c = *p;
@@ -788,7 +788,7 @@ void Node::update(double /*deltaSec*/, bool firstFrame)
     const bool titleInputExecAllowed = execInputCount == 1 && !isTriggerAudio();
 
     Pin* inputExec = nullptr;
-    std::vector<Pin*> bodyInputs;
+    oc::vector<Pin*> bodyInputs;
     for (const auto& pinPtr : m_inputPins)
     {
         if (titleInputExecAllowed && pinPtr->dataType == EDataType::Exec && !inputExec)
@@ -803,7 +803,7 @@ void Node::update(double /*deltaSec*/, bool firstFrame)
             ++execOutputCount;
 
     Pin* titleOutputExec = nullptr;
-    std::vector<Pin*> bodyOutputs;
+    oc::vector<Pin*> bodyOutputs;
     for (const auto& pinPtr : m_outputPins)
     {
         if (execOutputCount == 1 && pinPtr->dataType == EDataType::Exec && !titleOutputExec)
@@ -826,7 +826,7 @@ void Node::update(double /*deltaSec*/, bool firstFrame)
     float propW = 0.0f;
     if (hasProperty)
     {
-        for (const std::string& option : def->enumOptions)
+        for (const oc::string& option : def->enumOptions)
             propW = fmaxf(propW, ImGui::CalcTextSize(option.c_str()).x);
         propW += ImGui::GetStyle().FramePadding.x * 2.0f + 8.0f;
         if (m_enumSelection < 0 || m_enumSelection >= (int)def->enumOptions.size())

@@ -57,12 +57,12 @@ public:
     bool initialize(const ISceneData& sceneData, const MaterialOverrides* pOverrides = nullptr);
     bool isValid() const { return !m_nodeInfos.empty(); }
 
-    NodeSpawnIdx getSpawnIdxForPath(const std::string& nodePath) const;
+    NodeSpawnIdx getSpawnIdxForPath(const oc::string& nodePath) const;
 
     // All node paths this container knows about — for editor tooling (Entity Editor) to offer a picker
     // scoped to a single container instead of every spawnable registered engine-wide.
-    std::vector<std::string> getNodePaths() const;
-    RenderNode spawnNodeForPath(const std::string& nodePath, const Transform& transform);
+    oc::vector<oc::string> getNodePaths() const;
+    RenderNode spawnNodeForPath(const oc::string& nodePath, const Transform& transform);
     RenderNode spawnRootNode(const Transform& transform);
     RenderNode spawnNodeForIdx(NodeSpawnIdx idx, const Transform& transform);
     void getRootTransformForIdx(NodeSpawnIdx idx, Transform& transform);
@@ -77,7 +77,7 @@ public:
     // clips against this by bone name.
     const Skeleton* getSkeleton() const { return m_skeleton.get(); }
 
-	const std::string& getFilePath() const { return m_filePath; }
+	const oc::string& getFilePath() const { return m_filePath; }
 
 private:
 
@@ -102,22 +102,22 @@ private:
         uint16 startIdx = UINT16_MAX;
         uint16 numNodes = UINT16_MAX;
     };
-    std::string m_filePath;
+    oc::string m_filePath;
 
-    std::vector<NodeInfo> m_nodeInfos;
-    std::vector<NodeMeshRange> m_nodeMeshRanges;
-    std::unordered_map<std::string, uint16> m_nodePathIdxLookup;
+    oc::vector<NodeInfo> m_nodeInfos;
+    oc::vector<NodeMeshRange> m_nodeMeshRanges;
+    oc::unordered_map<oc::string, uint16> m_nodePathIdxLookup;
 
-    std::vector<RendererVKLayout::MeshInstanceOffset> m_meshInstanceOffsets;
-    std::vector<Sphere> m_nodeBounds;
-    std::vector<Sphere> m_boundsForMeshIdx;
+    oc::vector<RendererVKLayout::MeshInstanceOffset> m_meshInstanceOffsets;
+    oc::vector<Sphere> m_nodeBounds;
+    oc::vector<Sphere> m_boundsForMeshIdx;
     // Each node's own world transform relative to the container root, indexed by NodeSpawnIdx. Used by
     // spawnNodeForIdx to rebase a sub-node's baked (root-relative) offsets into the node's own space.
-    std::vector<Transform> m_nodeRootTransforms;
+    oc::vector<Transform> m_nodeRootTransforms;
     // Instance-offset base per NodeSpawnIdx for rebased sub-node spawns (UINT32_MAX = not yet uploaded).
     // The rebased offsets are immutable and independent of the spawn transform (placement comes from the
     // per-node transform at cull time), so they're uploaded once and shared by every instance of the idx.
-    std::vector<uint32> m_rebasedOffsetBaseForIdx;
+    oc::vector<uint32> m_rebasedOffsetBaseForIdx;
 
     uint32 m_baseMeshInstanceOffsetsIdx = 0;
     uint16 m_baseMeshInfoIdx = 0;
@@ -135,9 +135,9 @@ private:
     // Mega-buffer uploads this container owns — everything EXCEPT ranges owned by a registered mesh
     // stream set (re-streams relocate those; the MeshStreamer frees their current ranges at
     // unregisterSets) and skinned per-instance output regions (owned by the skinned bundles).
-    std::vector<OwnedDataRange> m_ownedDataRanges;
-    std::vector<uint16> m_ownedTextures;  // texture slots uploaded by initializeMaterials
-    std::vector<uint32> m_ownedLodGroups; // static-mesh LOD groups (bundle groups are freed with their bundle)
+    oc::vector<OwnedDataRange> m_ownedDataRanges;
+    oc::vector<uint16> m_ownedTextures;  // texture slots uploaded by initializeMaterials
+    oc::vector<uint32> m_ownedLodGroups; // static-mesh LOD groups (bundle groups are freed with their bundle)
 
     // Skinned-mesh source data is captured in initializeMeshes() but owned by the Renderer (like MeshInfo);
     // this container just keeps the base index + count of its entries there. spawnSkinnedNode() reads them
@@ -146,9 +146,9 @@ private:
     uint32 m_numSkinnedMeshes = 0;
     bool m_isSkinned = false;
     uint32 m_numSkeletonBones = 0;
-    std::unique_ptr<Skeleton> m_skeleton; // copy of the source skeleton (retained for animator retargeting)
+    oc::unique_ptr<Skeleton> m_skeleton; // copy of the source skeleton (retained for animator retargeting)
     uint32 m_skinnedIdentityOffsetIdx = UINT32_MAX; // shared identity per-mesh offset for skinned instances
 
-    std::vector<std::string> m_meshNames;
-    std::vector<std::string> m_materialNames;
+    oc::vector<oc::string> m_meshNames;
+    oc::vector<oc::string> m_materialNames;
 };

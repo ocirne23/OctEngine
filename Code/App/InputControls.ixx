@@ -30,14 +30,14 @@ private:
     IGizmo& gizmo; // owned by the UI; only the mode hotkeys touch it from here
     FreeFlyCameraController& cameraController;
     World& world; // spawns go through the world's API; it owns the root entity lifetimes
-    std::vector<ForceEmitter> spawnedForceEmitters; // test forcefields (keys N/M/H/B); RAII, cleared before globals die
-    std::vector<ForceQuery> spawnedForceQueries;    // territory-query test grid (key J)
+    oc::vector<ForceEmitter> spawnedForceEmitters; // test forcefields (keys N/M/H/B); RAII, cleared before globals die
+    oc::vector<ForceQuery> spawnedForceQueries;    // territory-query test grid (key J)
     struct ForceBall // physics body carrying a forcefield: enemy bubbles knock it back (key F)
     {
         EntityPtr entity;
         ForceEmitter emitter;
     };
-    std::vector<ForceBall> forceBalls;
+    oc::vector<ForceBall> forceBalls;
     KeyboardListenerHandle pKeyboardListener; // unregisters itself on destruction
     
     float output = 1.0f;          // must exceed the iso threshold (default 0.15) or no bubble exists
@@ -66,7 +66,7 @@ private:
     float playerThirdDistance = 3.5f;
     float playerSprintMult = 2.0f;   // LShift multiplier on Move speed
 
-    std::shared_ptr<EntitySpawnTemplate> lightTmpl; // built once, see lightTemplate()
+    oc::shared_ptr<EntitySpawnTemplate> lightTmpl; // built once, see lightTemplate()
 
     // ONE template for every test light: they all share an archetype (a lone Light component), and the
     // per-light values live on the component, which owns a mutable copy of the SpawnInfo. Built lazily
@@ -76,12 +76,12 @@ private:
     {
         if (!lightTmpl)
         {
-            auto info = std::make_shared<LightComponent::SpawnInfo>();
+            auto info = oc::make_shared<LightComponent::SpawnInfo>();
             info->lights.emplace_back(); // placeholder; spawnLight overwrites it on the live component
             info->debugDraw = true;
-            lightTmpl = std::make_shared<EntitySpawnTemplate>();
+            lightTmpl = oc::make_shared<EntitySpawnTemplate>();
             lightTmpl->archetype = makeEntityArchetype(uint16(1 << EComponentID_Light));
-            lightTmpl->spawnInfos.push_back(std::move(info));
+            lightTmpl->spawnInfos.push_back(oc::move(info));
             world.keepTemplateAlive(lightTmpl);
         }
         return *lightTmpl;
@@ -445,7 +445,7 @@ public:
                 EntityPtr cube = world.spawnAssetFile("Entities/Debug/netPhysCube.pre", Transform(cameraController.getPosition() + dir), true);
                 if (PhysicsComponent* pc = getComponent<PhysicsComponent>(cube.get()))
                     pc->body.setLinearVelocity(dir * 12.0f);
-                world.addRootEntity(std::move(cube));
+                world.addRootEntity(oc::move(cube));
             }
         }
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_P && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN)
@@ -517,7 +517,7 @@ public:
             {
                 if (PhysicsComponent* pc = getComponent<PhysicsComponent>(e))
                     pc->body.setLinearVelocity(dir * 12.0f);
-                world.addRootEntity(std::move(e));
+                world.addRootEntity(oc::move(e));
             }
         }
         if ((evt.scancode == SDL_Scancode::SDL_SCANCODE_N)
@@ -526,7 +526,7 @@ public:
             const glm::vec3 dir = cameraController.getDirection();
             const glm::vec3 pos = cameraController.getPosition() - (dir * reach * 0.5f);
             ForceEmitter emitter = Globals::forceSystem.createEmitter(team, pos, dir, output, reach, focus, distribution, width);
-            spawnedForceEmitters.push_back(std::move(emitter));
+            spawnedForceEmitters.push_back(oc::move(emitter));
         }
         if ((evt.scancode == SDL_Scancode::SDL_SCANCODE_M)
             && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN && !evt.repeat)
@@ -576,8 +576,8 @@ public:
                 // Sphere spanning pos .. pos + dir * reach: offset the emitter down so it CENTERS on the ball.
                 ball.emitter = Globals::forceSystem.createEmitter(1u, spawnAt.pos - glm::vec3(0, 1, 0), glm::vec3(0, 1, 0), 1.0f, 2.0f);
                 ball.entity = e;
-                forceBalls.push_back(std::move(ball));
-                world.addRootEntity(std::move(e));
+                forceBalls.push_back(oc::move(ball));
+                world.addRootEntity(oc::move(e));
             }
         }
         // J: drop an 11x11 territory-query grid at the camera's height in front of it ("Force/Debug/

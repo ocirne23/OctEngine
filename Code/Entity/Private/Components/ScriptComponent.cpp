@@ -167,12 +167,12 @@ void ScriptComponent::spawn(Entity& entity, const SpawnInfo& info, const Transfo
         // it would outlive the edit that fixes it -- a hot-reload never re-runs spawn.
         if (const uint32 missing = loaded->requiredComponents & ~uint32(entity.typeBits))
         {
-            std::string names;
+            oc::string names;
             for (uint16 i = 0; i < MaxInlineComponentTypes; ++i)
                 if (missing & (1u << i))
-                    names += (names.empty() ? "" : ", ") + std::string(componentTypeName(EComponentID(i)));
+                    names += (names.empty() ? "" : ", ") + oc::string(componentTypeName(EComponentID(i)));
             Log::error("Script '" + info.scriptPath + "' requires " + names + " -- entity '"
-                + std::string(entity.getName()) + "' has none of that; it will not run until the entity gains"
+                + oc::string(entity.getName()) + "' has none of that; it will not run until the entity gains"
                 " those components or the script stops requiring them");
         }
         scriptModule = loaded;
@@ -206,7 +206,7 @@ bool ScriptComponent::syncScriptData(Entity& entity)
     releaseScriptArrays(*this);
     scriptDataSize = scriptModule->dataSize;
     scriptDataLayoutId = scriptModule->dataLayoutId;
-    scriptData = scriptDataSize ? std::make_unique<uint8[]>(scriptDataSize) : nullptr;
+    scriptData = scriptDataSize ? oc::make_unique<uint8[]>(scriptDataSize) : nullptr;
     onSpawnRan = false;
 
     // Required-component pointers (//@@require) occupy the FRONT of ScriptData, one 8-byte slot per set bit in
@@ -249,7 +249,7 @@ void ScriptComponent::applyInitialValues()
 
     // Comma-separated floats for the vector/quat kinds, so an authored value reads the way every other vector
     // in the .pre format does ("1, 2, 3"). A short or unparseable list leaves the field alone.
-    const auto parseFloats = [](const std::string& text, float* out, int count)
+    const auto parseFloats = [](const oc::string& text, float* out, int count)
     {
         int parsed = 0;
         const char* p = text.c_str();
@@ -339,7 +339,7 @@ void ScriptComponent::update(Entity& entity, float deltaSeconds)
     invokeScriptUpdate(scriptModule, entity, deltaSeconds, scriptData.get());
 }
 
-void ScriptComponent::fireEvent(Entity& entity, const std::string& eventName)
+void ScriptComponent::fireEvent(Entity& entity, const oc::string& eventName)
 {
     if (!enabled || !scriptModule)
         return;

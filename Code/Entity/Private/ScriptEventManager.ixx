@@ -16,7 +16,7 @@ public:
 
     void initialize();
 
-    EventKey getEventKeyForName(const std::string& eventName)
+    EventKey getEventKeyForName(const oc::string& eventName)
     {
         {
             const std::shared_lock<std::shared_mutex> read(m_eventKeyMutex);
@@ -30,7 +30,7 @@ public:
         return it->second;
     }
 
-    EventKey findEventKey(const std::string& eventName) const
+    EventKey findEventKey(const oc::string& eventName) const
     {
         const std::shared_lock<std::shared_mutex> read(m_eventKeyMutex);
         const auto it = m_eventNameKeyLookup.find(eventName);
@@ -39,15 +39,15 @@ public:
 
     void fireEvent(EventKey key);
 
-	void fireEvent(const std::string& eventName)
+	void fireEvent(const oc::string& eventName)
 	{
 		if (const EventKey key = findEventKey(eventName))
 			fireEvent(key);
 	}
 
-    std::vector<EntityChange> takeEntityChanges()
+    oc::vector<EntityChange> takeEntityChanges()
     {
-		std::vector<EntityChange> changes;
+		oc::vector<EntityChange> changes;
 		const std::lock_guard<std::mutex> lock(m_entityChangeMutex);
 		changes.swap(m_entityChanges);
 		return changes;
@@ -56,24 +56,24 @@ public:
 	inline void addDestroyRequest(EntityPtr&& entity)
 	{
 		const std::lock_guard<std::mutex> lock(m_entityChangeMutex);
-		m_entityChanges.emplace_back(EntityChange::Delete{ std::move(entity) });
+		m_entityChanges.emplace_back(EntityChange::Delete{ oc::move(entity) });
 	}
 
 	inline void addReparentRequest(EntityPtr&& entity, EntityPtr&& newParent)
 	{
 		const std::lock_guard<std::mutex> lock(m_entityChangeMutex);
-		m_entityChanges.emplace_back(EntityChange::Reparent{ std::move(entity), std::move(newParent) });
+		m_entityChanges.emplace_back(EntityChange::Reparent{ oc::move(entity), oc::move(newParent) });
 	}
 
-	inline void addSpawnRequest(std::string path, const glm::vec3& position)
+	inline void addSpawnRequest(oc::string path, const glm::vec3& position)
 	{
 		const std::lock_guard<std::mutex> lock(m_entityChangeMutex);
-		m_entityChanges.emplace_back(EntityChange::SpawnAtPosition{ std::move(path), position });
+		m_entityChanges.emplace_back(EntityChange::SpawnAtPosition{ oc::move(path), position });
 	}
 
 private:
 
-    void onScriptLoadedCallback(const ScriptModule* script, const std::vector<std::string>& oldNames);
+    void onScriptLoadedCallback(const ScriptModule* script, const oc::vector<oc::string>& oldNames);
 
 	friend class ScriptComponent;
     void registerListener(const ScriptModule* script, Entity* entity, void* scriptData)
@@ -98,7 +98,7 @@ private:
 
 private:
 
-    std::vector<EntityChange> m_entityChanges;
+    oc::vector<EntityChange> m_entityChanges;
     std::mutex m_entityChangeMutex;
 
     struct Entry
@@ -107,11 +107,11 @@ private:
 		void* scriptData = nullptr;
     };
 
-	std::unordered_map<std::string, EventKey> m_eventNameKeyLookup;
+	oc::unordered_map<oc::string, EventKey> m_eventNameKeyLookup;
 	EventKey m_nextEventKey = 1;
 	mutable std::shared_mutex m_eventKeyMutex; // both guarded by this; only script load ever writes
 
-	std::unordered_map<EventKey, std::vector<const ScriptModule*>> m_listenersByEvent;
+	oc::unordered_map<EventKey, oc::vector<const ScriptModule*>> m_listenersByEvent;
 	LPMultiMap<const ScriptModule*, Entry> m_listenersByScript;
 };
 
@@ -125,5 +125,5 @@ OC_INIT_SEG(OC_SEG_SCRIPT_EVENTS)
 
 inline void ScriptEventManager::initialize()
 {
-    Globals::scriptHost.m_scriptLoadedCallback = [](const ScriptModule* script, const std::vector<std::string>& oldNames) { Globals::scriptEvents.onScriptLoadedCallback(script, oldNames); };
+    Globals::scriptHost.m_scriptLoadedCallback = [](const ScriptModule* script, const oc::vector<oc::string>& oldNames) { Globals::scriptEvents.onScriptLoadedCallback(script, oldNames); };
 }

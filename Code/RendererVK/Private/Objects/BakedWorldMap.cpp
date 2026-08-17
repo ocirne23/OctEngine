@@ -77,7 +77,7 @@ void BakedWorldMap::initialize(uint32 resolution, uint32 numLayers, uint32 chann
     CommandBuffer init;
     init.initialize(vk::CommandBufferLevel::ePrimary);
     vk::CommandBuffer cmd = init.begin(true);
-    std::array<vk::ImageMemoryBarrier2, 2> bars;
+    oc::array<vk::ImageMemoryBarrier2, 2> bars;
     for (uint32 i = 0; i < 2; ++i)
         bars[i] = vk::ImageMemoryBarrier2{
             .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
@@ -94,7 +94,7 @@ void BakedWorldMap::initialize(uint32 resolution, uint32 numLayers, uint32 chann
     (void)Globals::device.getGraphicsQueue().waitIdle();
 }
 
-void BakedWorldMap::upload(std::span<const float> texels, const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam, uint32 frameIdx)
+void BakedWorldMap::upload(oc::span<const float> texels, const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam, uint32 frameIdx)
 {
     assert(texels.size() == (size_t)m_numLayers * m_resolution * m_resolution * m_channels);
     memcpy(m_stagingMapped[frameIdx].data(), texels.data(), texels.size_bytes());

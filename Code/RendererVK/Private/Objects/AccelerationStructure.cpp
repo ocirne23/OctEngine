@@ -52,7 +52,7 @@ void AccelerationStructure::resizeBlasAddressBuffer(uint32 maxUniqueMeshes)
 {
     for (uint32 f = 0; f < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++f)
     {
-        const std::vector<uint64> oldAddresses(m_mappedBlasAddresses[f].begin(), m_mappedBlasAddresses[f].end());
+        const oc::vector<uint64> oldAddresses(m_mappedBlasAddresses[f].begin(), m_mappedBlasAddresses[f].end());
         m_blasAddressBuffers[f].initialize(maxUniqueMeshes * sizeof(uint64),
             vk::BufferUsageFlagBits2::eStorageBuffer,
             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCached, false, "AS.blasAddresses");
@@ -65,7 +65,7 @@ void AccelerationStructure::resizeBlasAddressBuffer(uint32 maxUniqueMeshes)
         m_staticBlasAddr.resize(maxUniqueMeshes, 0);
         m_staticAddrDirtyBits.resize(maxUniqueMeshes, 0);
     }
-    const std::vector<uint32> oldAliases(m_mappedMeshAlias.begin(), m_mappedMeshAlias.end());
+    const oc::vector<uint32> oldAliases(m_mappedMeshAlias.begin(), m_mappedMeshAlias.end());
     m_meshAliasBuffer.initialize(maxUniqueMeshes * sizeof(uint32),
         vk::BufferUsageFlagBits2::eStorageBuffer,
         vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCached, false, "AS.meshAlias");
@@ -112,10 +112,10 @@ void AccelerationStructure::markStaticBlasAddr(uint32 meshIdx, uint64 addr)
 
 void AccelerationStructure::syncFrameAddresses(uint32 frameIdx)
 {
-    std::vector<uint32>& list = m_staticAddrDirtyLists[frameIdx];
+    oc::vector<uint32>& list = m_staticAddrDirtyLists[frameIdx];
     if (list.empty())
         return;
-    const std::span<uint64> mapped = m_mappedBlasAddresses[frameIdx];
+    const oc::span<uint64> mapped = m_mappedBlasAddresses[frameIdx];
     for (const uint32 meshIdx : list)
     {
         mapped[meshIdx] = m_staticBlasAddr[meshIdx];
@@ -150,7 +150,7 @@ void AccelerationStructure::onMeshRangeFreed(uint32 firstMeshIdx, uint32 count)
         markStaticBlasAddr(meshIdx, 0);
         if (m_mappedMeshAlias[meshIdx] == meshIdx && meshIdx < m_blasList.size() && m_blasList[meshIdx].handle)
         {
-            m_retiredBlas.push_back(RetiredBlas{ m_blasList[meshIdx].handle, std::move(m_blasList[meshIdx].buffer), m_compactionFrame });
+            m_retiredBlas.push_back(RetiredBlas{ m_blasList[meshIdx].handle, oc::move(m_blasList[meshIdx].buffer), m_compactionFrame });
             m_blasList[meshIdx].handle = nullptr;
             m_blasList[meshIdx].compacted = false;
         }
@@ -169,7 +169,7 @@ void AccelerationStructure::freeSkinnedJobSlots(uint32 firstJob, uint32 count)
         {
             if (slot[i].handle)
             {
-                m_retiredBlas.push_back(RetiredBlas{ slot[i].handle, std::move(slot[i].buffer), m_compactionFrame });
+                m_retiredBlas.push_back(RetiredBlas{ slot[i].handle, oc::move(slot[i].buffer), m_compactionFrame });
                 slot[i].handle = nullptr;
             }
         }
@@ -191,23 +191,23 @@ void AccelerationStructure::ensureScratch(Buffer& scratch, vk::DeviceAddress& ou
 }
 
 void AccelerationStructure::recordBuildBlas(uint32 frameIdx, vk::CommandBuffer cmd, Buffer& vertexBuffer, Buffer& indexBuffer,
-    const RendererVKLayout::MeshInfo* meshInfos, const uint32* vertexCounts, std::span<const uint32> meshIndices,
+    const RendererVKLayout::MeshInfo* meshInfos, const uint32* vertexCounts, oc::span<const uint32> meshIndices,
     bool allowCompaction)
 {
     // Only self-aliased meshes with live geometry build a BLAS: LOD-chain levels share their RT level's,
     // and streamed-out meshes (indexCount 0) wait for their re-stream rebuild.
-    std::vector<uint32> toBuild;
+    oc::vector<uint32> toBuild;
     toBuild.reserve(meshIndices.size());
     uint32 maxMeshIdx = 0;
     for (const uint32 meshIdx : meshIndices)
     {
-        maxMeshIdx = std::max(maxMeshIdx, meshIdx);
+        maxMeshIdx = oc::max(maxMeshIdx, meshIdx);
         if (getMeshAlias(meshIdx) == meshIdx && meshInfos[meshIdx].indexCount > 0 && vertexCounts[meshIdx] > 0)
             toBuild.push_back(meshIdx);
     }
     if (m_blasList.size() < (size_t)maxMeshIdx + 1)
         m_blasList.resize((size_t)maxMeshIdx + 1);
-    m_numBlas = std::max(m_numBlas, maxMeshIdx + (meshIndices.empty() ? 0u : 1u));
+    m_numBlas = oc::max(m_numBlas, maxMeshIdx + (meshIndices.empty() ? 0u : 1u));
 
     vk::Device dev = Globals::device.getDevice();
     const vk::DeviceAddress vbAddr = vertexBuffer.getDeviceAddress();
@@ -215,11 +215,11 @@ void AccelerationStructure::recordBuildBlas(uint32 frameIdx, vk::CommandBuffer c
 
     // Pass 1: assemble geometry + build infos, query sizes, find the total scratch requirement.
     const uint32 count = (uint32)toBuild.size();
-    std::vector<vk::AccelerationStructureGeometryKHR> geoms(count);
-    std::vector<vk::AccelerationStructureBuildGeometryInfoKHR> buildInfos(count);
-    std::vector<vk::AccelerationStructureBuildRangeInfoKHR> ranges(count);
-    std::vector<vk::AccelerationStructureBuildSizesInfoKHR> sizes(count);
-    std::vector<vk::DeviceSize> scratchOffsets(count);
+    oc::vector<vk::AccelerationStructureGeometryKHR> geoms(count);
+    oc::vector<vk::AccelerationStructureBuildGeometryInfoKHR> buildInfos(count);
+    oc::vector<vk::AccelerationStructureBuildRangeInfoKHR> ranges(count);
+    oc::vector<vk::AccelerationStructureBuildSizesInfoKHR> sizes(count);
+    oc::vector<vk::DeviceSize> scratchOffsets(count);
     vk::DeviceSize totalScratch = 0;
     const vk::DeviceSize align = m_scratchAlignment;
     for (uint32 i = 0; i < count; i++)
@@ -345,7 +345,7 @@ void AccelerationStructure::recordBuildBlas(uint32 frameIdx, vk::CommandBuffer c
             cmd.resetQueryPool(batch.queryPool, 0, count);
             cmd.writeAccelerationStructuresPropertiesKHR((uint32)batch.handles.size(), batch.handles.data(),
                 vk::QueryType::eAccelerationStructureCompactedSizeKHR, batch.queryPool, 0);
-            m_compactionBatches.push_back(std::move(batch));
+            m_compactionBatches.push_back(oc::move(batch));
         }
     }
 
@@ -372,7 +372,7 @@ void AccelerationStructure::recordCompaction(uint32 frameIdx, vk::CommandBuffer 
     {
         if (m_compactionFrame - retired.frameStamp < RendererVKLayout::NUM_FRAMES_IN_FLIGHT)
         {
-            m_retiredBlas[kept++] = std::move(retired);
+            m_retiredBlas[kept++] = oc::move(retired);
             continue;
         }
         dev.destroyAccelerationStructureKHR(retired.handle);
@@ -387,7 +387,7 @@ void AccelerationStructure::recordCompaction(uint32 frameIdx, vk::CommandBuffer 
         && m_compactionFrame - m_compactionBatches.front().frameStamp > RendererVKLayout::NUM_FRAMES_IN_FLIGHT)
     {
         CompactionBatch& batch = m_compactionBatches.front();
-        std::vector<uint64> compactedSizes(batch.meshIndices.size());
+        oc::vector<uint64> compactedSizes(batch.meshIndices.size());
         // eWait is a formality: the batch's command buffer completed behind the frame-slot fence.
         const vk::Result queryResult = dev.getQueryPoolResults(batch.queryPool, 0, (uint32)compactedSizes.size(),
             compactedSizes.size() * sizeof(uint64), compactedSizes.data(), sizeof(uint64),
@@ -423,9 +423,9 @@ void AccelerationStructure::recordCompaction(uint32 frameIdx, vk::CommandBuffer 
                     .src = blas.handle, .dst = res.value, .mode = vk::CopyAccelerationStructureModeKHR::eCompact });
 
                 m_compactionSavedBytes += blas.buffer.getSize() - compactedSize;
-                m_retiredBlas.push_back(RetiredBlas{ blas.handle, std::move(blas.buffer), m_compactionFrame });
+                m_retiredBlas.push_back(RetiredBlas{ blas.handle, oc::move(blas.buffer), m_compactionFrame });
                 blas.handle = res.value;
-                blas.buffer = std::move(compactBuffer);
+                blas.buffer = oc::move(compactBuffer);
                 blas.compacted = true;
 
                 vk::AccelerationStructureDeviceAddressInfoKHR ai{ .accelerationStructure = blas.handle };
@@ -474,7 +474,7 @@ uint64 AccelerationStructure::getBlasTotalBytes() const
 }
 
 void AccelerationStructure::recordBuildSkinnedBlas(vk::CommandBuffer cmd, uint32 frameIdx, Buffer& vertexBuffer, Buffer& indexBuffer,
-    std::span<const SkinnedBlasBuild> builds)
+    oc::span<const SkinnedBlasBuild> builds)
 {
     if (builds.empty())
         return;
@@ -482,15 +482,15 @@ void AccelerationStructure::recordBuildSkinnedBlas(vk::CommandBuffer cmd, uint32
     vk::Device dev = Globals::device.getDevice();
     const vk::DeviceAddress vbAddr = vertexBuffer.getDeviceAddress();
     const vk::DeviceAddress ibAddr = indexBuffer.getDeviceAddress();
-    std::vector<Blas>& slot = m_skinnedBlas[frameIdx];
+    oc::vector<Blas>& slot = m_skinnedBlas[frameIdx];
     bool wroteAddresses = false;
 
     // Pass 1: build geometry + sizes, find total scratch, (re)allocate BLAS buffers for new entries.
     const uint32 count = (uint32)builds.size();
-    std::vector<vk::AccelerationStructureGeometryKHR> geoms(count);
-    std::vector<vk::AccelerationStructureBuildGeometryInfoKHR> buildInfos(count);
-    std::vector<vk::AccelerationStructureBuildRangeInfoKHR> ranges(count);
-    std::vector<vk::DeviceSize> scratchOffsets(count);
+    oc::vector<vk::AccelerationStructureGeometryKHR> geoms(count);
+    oc::vector<vk::AccelerationStructureBuildGeometryInfoKHR> buildInfos(count);
+    oc::vector<vk::AccelerationStructureBuildRangeInfoKHR> ranges(count);
+    oc::vector<vk::DeviceSize> scratchOffsets(count);
     vk::DeviceSize totalScratch = 0;
     const vk::DeviceSize align = m_scratchAlignment;
     slot.resize(count);

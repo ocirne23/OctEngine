@@ -23,10 +23,10 @@ static SceneComponent* sceneComponentOf(Entity* entity)
 	return getComponent<SceneComponent>(entity);
 }
 
-// Copies a std::string into a fixed InputText buffer each frame and writes edits back immediately (same
+// Copies a oc::string into a fixed InputText buffer each frame and writes edits back immediately (same
 // pattern PropertiesPanel uses for displayName) — the caller decides when to actually commit/respawn via
 // ImGui::IsItemDeactivatedAfterEdit() right after this call.
-static void inputTextStd(const char* label, std::string& value)
+static void inputTextStd(const char* label, oc::string& value)
 {
 	char buf[256];
 	strncpy_s(buf, sizeof(buf), value.c_str(), sizeof(buf) - 1);
@@ -35,18 +35,18 @@ static void inputTextStd(const char* label, std::string& value)
 		value = buf;
 }
 
-static bool containsCI(const std::string& haystack, const char* needle)
+static bool containsCI(const oc::string& haystack, const char* needle)
 {
 	if (needle[0] == '\0')
 		return true;
-	std::string h = haystack, n = needle;
+	oc::string h = haystack, n = needle;
 	for (char& c : h) c = (char)std::tolower((unsigned char)c);
 	for (char& c : n) c = (char)std::tolower((unsigned char)c);
-	return h.find(n) != std::string::npos;
+	return h.find(n) != oc::string::npos;
 }
 
 template <typename Map>
-static bool namePickerButton(const char* popupId, std::string& value, const Map& items, char* searchBuf, size_t searchBufSize)
+static bool namePickerButton(const char* popupId, oc::string& value, const Map& items, char* searchBuf, size_t searchBufSize)
 {
 	bool changed = false;
 	if (ImGui::Button("Pick..."))
@@ -62,7 +62,7 @@ static bool namePickerButton(const char* popupId, std::string& value, const Map&
 		ImGui::BeginChild("##list", ImVec2(220.0f, 200.0f));
 		for (const auto& kv : items)
 		{
-			const std::string& name = kv.first;
+			const oc::string& name = kv.first;
 			if (!containsCI(name, searchBuf))
 				continue;
 			if (ImGui::Selectable(name.c_str()))
@@ -80,7 +80,7 @@ static bool namePickerButton(const char* popupId, std::string& value, const Map&
 
 // Same idea as namePickerButton, for a plain list of names rather than a name->desc map (e.g. a single
 // container's node paths, scoped down instead of every spawnable registered engine-wide).
-static bool nodePickerButton(const char* popupId, std::string& value, const std::vector<std::string>& items, char* searchBuf, size_t searchBufSize)
+static bool nodePickerButton(const char* popupId, oc::string& value, const oc::vector<oc::string>& items, char* searchBuf, size_t searchBufSize)
 {
 	bool changed = false;
 	if (ImGui::Button("Pick Node..."))
@@ -94,7 +94,7 @@ static bool nodePickerButton(const char* popupId, std::string& value, const std:
 		ImGui::InputTextWithHint("##search", "Search...", searchBuf, searchBufSize);
 		ImGui::Separator();
 		ImGui::BeginChild("##list", ImVec2(220.0f, 200.0f));
-		for (const std::string& name : items)
+		for (const oc::string& name : items)
 		{
 			if (!containsCI(name, searchBuf))
 				continue;
@@ -111,9 +111,9 @@ static bool nodePickerButton(const char* popupId, std::string& value, const std:
 	return changed;
 }
 
-static std::string joinComma(const std::vector<std::string>& v)
+static oc::string joinComma(const oc::vector<oc::string>& v)
 {
-	std::string out;
+	oc::string out;
 	for (size_t i = 0; i < v.size(); ++i)
 	{
 		if (i) out += ", ";
@@ -122,20 +122,20 @@ static std::string joinComma(const std::vector<std::string>& v)
 	return out;
 }
 
-static std::vector<std::string> splitComma(const std::string& s)
+static oc::vector<oc::string> splitComma(const oc::string& s)
 {
-	std::vector<std::string> out;
+	oc::vector<oc::string> out;
 	size_t start = 0;
 	while (start <= s.size())
 	{
 		size_t comma = s.find(',', start);
-		size_t end = (comma == std::string::npos) ? s.size() : comma;
+		size_t end = (comma == oc::string::npos) ? s.size() : comma;
 		size_t a = start, b = end;
 		while (a < b && std::isspace((unsigned char)s[a])) ++a;
 		while (b > a && std::isspace((unsigned char)s[b - 1])) --b;
 		if (b > a)
 			out.push_back(s.substr(a, b - a));
-		if (comma == std::string::npos)
+		if (comma == oc::string::npos)
 			break;
 		start = comma + 1;
 	}
@@ -146,31 +146,31 @@ static std::vector<std::string> splitComma(const std::string& s)
 // ScriptComponent::scriptPath uses. .scr is not offered: the node editor is gone, so nothing can author one —
 // though ScriptHost itself would still compile an existing path if a .pre carried it. Assets/Local holds
 // generated script build output, not sources.
-static void gatherScriptFiles(std::vector<std::string>& out)
+static void gatherScriptFiles(oc::vector<oc::string>& out)
 {
 	out.clear();
 	std::error_code ec;
-	const std::string root = FileSystem::currentPath(/*allowMainThread*/ true);
-	std::vector<FileSystem::DirEntry> entries;
+	const oc::string root = FileSystem::currentPath(/*allowMainThread*/ true);
+	oc::vector<FileSystem::DirEntry> entries;
 	FileSystem::listDirectoryRecursive(root, entries, /*allowMainThread*/ true);
 	for (const FileSystem::DirEntry& entry : entries)
 	{
 		if (entry.isDirectory || entry.extension != ".dsl")
 			continue;
-		const std::string relative = FileSystem::relativePath(entry.path, root, /*allowMainThread*/ true);
+		const oc::string relative = FileSystem::relativePath(entry.path, root, /*allowMainThread*/ true);
 		if (relative.starts_with("Local/")) // generated output, not authorable scripts
 			continue;
 		out.push_back(relative.empty() ? entry.path : relative);
 	}
-	std::sort(out.begin(), out.end());
+	oc::sort(out.begin(), out.end());
 }
 
 // Reads the root transform stored in a .pre file, so the editor's transform draft starts from what the
 // file says rather than wherever the live entity happens to sit in the world.
-static bool readPrefabFileTransform(const std::string& path, Transform& out)
+static bool readPrefabFileTransform(const oc::string& path, Transform& out)
 {
 	AssetNode doc;
-	std::string error;
+	oc::string error;
 	if (path.empty() || !loadAssetFile(path, doc, error))
 		return false;
 	const AssetNode* prefab = doc.find("Prefab");
@@ -185,16 +185,16 @@ static bool readPrefabFileTransform(const std::string& path, Transform& out)
 	return true;
 }
 
-std::string EntityEditor::currentId() const
+oc::string EntityEditor::currentId() const
 {
 	if (!m_path.empty())
 		return FileSystem::stem(m_path);
-	return (m_editRoot && m_editRoot->hasName()) ? std::string(m_editRoot->getName()) : std::string("NewEntity");
+	return (m_editRoot && m_editRoot->hasName()) ? oc::string(m_editRoot->getName()) : oc::string("NewEntity");
 }
 
 // Serializes the document. With Sync off, the selected node's live transform (which the gizmo/world may
 // have moved) is swapped for the editor's detached draft, so the file keeps what the Transform floats show.
-std::string EntityEditor::serializeDocText() const
+oc::string EntityEditor::serializeDocText() const
 {
 	if (!m_editRoot)
 		return {};
@@ -208,7 +208,7 @@ std::string EntityEditor::serializeDocText() const
 	sel->pos = m_transformDraft.pos;
 	sel->scale = m_transformDraft.scale;
 	sel->rot = m_transformDraft.quat;
-	std::string text = serializePrefabText(m_editRoot.get(), currentId());
+	oc::string text = serializePrefabText(m_editRoot.get(), currentId());
 	sel->pos = livePos;
 	sel->scale = liveScale;
 	sel->rot = liveRot;
@@ -271,7 +271,7 @@ void EntityEditor::refreshDraftsFromEntity()
 			m_scriptDraft.enabled = sc->enabled;
 }
 
-void EntityEditor::onOpened(EntityPtr root, const std::string& path)
+void EntityEditor::onOpened(EntityPtr root, const oc::string& path)
 {
 	m_editRoot = root;
 	m_selected = root;
@@ -279,9 +279,9 @@ void EntityEditor::onOpened(EntityPtr root, const std::string& path)
 	if (root)
 		root->setFrozen(true); // freeze scripts/physics/animation while the document is open
 
-	std::string suggested = path;
+	oc::string suggested = path;
 	if (suggested.empty() && root)
-		suggested = "Entities/" + (root->hasName() ? std::string(root->getName()) : std::string("NewEntity")) + ".pre";
+		suggested = "Entities/" + (root->hasName() ? oc::string(root->getName()) : oc::string("NewEntity")) + ".pre";
 	strncpy_s(m_pathBuf, sizeof(m_pathBuf), suggested.c_str(), sizeof(m_pathBuf) - 1);
 	m_pathBuf[sizeof(m_pathBuf) - 1] = '\0';
 
@@ -313,7 +313,7 @@ void EntityEditor::addChild()
 {
 	if (!m_selected || !m_hasScene)
 		return;
-	const std::string name = m_newChildNameBuf[0] ? m_newChildNameBuf : "Entity";
+	const oc::string name = m_newChildNameBuf[0] ? m_newChildNameBuf : "Entity";
 	m_changes.push_back({ EntityChange::AddSceneEntity{ name, m_selected } });
 }
 
@@ -347,13 +347,13 @@ void EntityEditor::closeCurrent()
 	m_wasPacked = false;
 }
 
-void EntityEditor::doSwitchOpen(const std::string& path)
+void EntityEditor::doSwitchOpen(const oc::string& path)
 {
 	closeCurrent();
 	m_changes.push_back({ EntityChange::OpenPrefabForEdit{ path } });
 }
 
-void EntityEditor::doSwitchNew(const std::string& name)
+void EntityEditor::doSwitchNew(const oc::string& name)
 {
 	closeCurrent();
 	m_changes.push_back({ EntityChange::NewPrefab{ name } });
@@ -374,9 +374,9 @@ void EntityEditor::doSwitchOpenSelected(EntityPtr entity)
 	m_selected = entity;
 
 	m_path.clear();
-	if (const std::string* path = Globals::assetRegistry.findPrefab(entity->getPrefabName()))
+	if (const oc::string* path = Globals::assetRegistry.findPrefab(entity->getPrefabName()))
 		m_path = *path;
-	const std::string suggested = m_path.empty() ? ("Entities/" + entity->getPrefabName() + ".pre") : m_path;
+	const oc::string suggested = m_path.empty() ? ("Entities/" + entity->getPrefabName() + ".pre") : m_path;
 	strncpy_s(m_pathBuf, sizeof(m_pathBuf), suggested.c_str(), sizeof(m_pathBuf) - 1);
 	m_pathBuf[sizeof(m_pathBuf) - 1] = '\0';
 
@@ -389,7 +389,7 @@ void EntityEditor::doClose()
 	closeCurrent();
 }
 
-void EntityEditor::requestOpen(const std::string& path)
+void EntityEditor::requestOpen(const oc::string& path)
 {
 	if (path.empty())
 		return;
@@ -403,7 +403,7 @@ void EntityEditor::requestOpen(const std::string& path)
 	doSwitchOpen(path);
 }
 
-void EntityEditor::requestNew(const std::string& name)
+void EntityEditor::requestNew(const oc::string& name)
 {
 	if (m_editRoot && isDirty())
 	{
@@ -442,7 +442,7 @@ void EntityEditor::requestClose()
 	doClose();
 }
 
-void EntityEditor::queueSave(const std::string& path)
+void EntityEditor::queueSave(const oc::string& path)
 {
 	m_changes.push_back({ EntityChange::SavePrefab{ m_editRoot, path, serializeDocText() } });
 	m_path = path;
@@ -462,7 +462,7 @@ void EntityEditor::queueSave(const std::string& path)
 	}
 }
 
-void EntityEditor::trySave(const std::string& path)
+void EntityEditor::trySave(const oc::string& path)
 {
 	if (!m_editRoot || path.empty())
 		return;
@@ -599,7 +599,7 @@ void EntityEditor::renderTreeNode(Entity* node)
 	if (!hasChildren) flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
 	if (m_selected.get() == node) flags |= ImGuiTreeNodeFlags_Selected;
 
-	const std::string label = node->hasName() ? std::string(node->getName()) : std::string("Entity");
+	const oc::string label = node->hasName() ? oc::string(node->getName()) : oc::string("Entity");
 
 	if (isLocked)
 		ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.62f, 0.95f, 1.0f));
@@ -617,7 +617,7 @@ void EntityEditor::renderTreeNode(Entity* node)
 		{
 			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("ASSET_FILE"))
 				m_changes.push_back({ EntityChange::CreateHierarchy{
-					std::string(static_cast<const char*>(payload->Data)), EntityPtr(node) } });
+					oc::string(static_cast<const char*>(payload->Data)), EntityPtr(node) } });
 			ImGui::EndDragDropTarget();
 		}
 
@@ -658,7 +658,7 @@ void EntityEditor::renderTree()
 	if (ImGui::IsItemHovered() || ImGui::IsItemActive())
 		ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
 	if (ImGui::IsItemActive())
-		m_treeHeight = std::clamp(m_treeHeight + ImGui::GetIO().MouseDelta.y, 60.0f, 600.0f);
+		m_treeHeight = oc::clamp(m_treeHeight + ImGui::GetIO().MouseDelta.y, 60.0f, 600.0f);
 
 	if (m_pendingRemoveChild)
 	{
@@ -781,7 +781,7 @@ void EntityEditor::renderRenderSection()
 	// Node list is scoped to whichever container is currently named above — load it (cheap: cached after
 	// the first time) only once we know the name resolves to something real, so a half-typed name doesn't
 	// spam load-failure warnings every frame.
-	std::vector<std::string> nodePaths;
+	oc::vector<oc::string> nodePaths;
 	if (!m_renderDraft.containerName.empty() && Globals::assetRegistry.findObjectContainer(m_renderDraft.containerName))
 		if (ObjectContainer* container = Globals::world.getOrLoadContainer(m_renderDraft.containerName))
 			nodePaths = container->getNodePaths();
@@ -1096,8 +1096,8 @@ void EntityEditor::renderAudioSection()
 	if (ImGui::Button("+ Add Sound"))
 	{
 		AudioComponent::SoundDesc sound;
-		sound.alias = "Sound" + std::to_string(m_audioDraft.sounds.size() + 1);
-		m_audioDraft.sounds.push_back(std::move(sound));
+		sound.alias = "Sound" + oc::to_string(m_audioDraft.sounds.size() + 1);
+		m_audioDraft.sounds.push_back(oc::move(sound));
 		commitRespawn();
 	}
 	ImGui::SameLine();
@@ -1285,12 +1285,12 @@ void EntityEditor::renderLightSection()
 		LightComponent::LightDesc& desc = m_lightDraft.lights[i];
 		ImGui::PushID(int(i));
 
-		const std::string label = std::to_string(i) + ": " + lightTypeToken(desc.type);
+		const oc::string label = oc::to_string(i) + ": " + lightTypeToken(desc.type);
 		if (ImGui::TreeNodeEx("##light", ImGuiTreeNodeFlags_DefaultOpen, "%s", label.c_str()))
 		{
 			static const char* typeNames[] = { "Point", "Spot", "Area", "Tube" };
 			int type = int(desc.type);
-			if (ImGui::Combo("Type", &type, typeNames, int(std::size(typeNames))))
+			if (ImGui::Combo("Type", &type, typeNames, int(oc::size(typeNames))))
 			{
 				desc.type = ELightType(type);
 				commitRespawn();
@@ -1397,7 +1397,7 @@ void EntityEditor::renderScriptSection()
 	ImGui::AlignTextToFramePadding();
 	ImGui::Text("Path");
 	ImGui::SameLine(60.0f);
-	const std::string btnLabel = (m_scriptDraft.scriptPath.empty() ? std::string("<pick a script>") : m_scriptDraft.scriptPath) + "##scriptpick";
+	const oc::string btnLabel = (m_scriptDraft.scriptPath.empty() ? oc::string("<pick a script>") : m_scriptDraft.scriptPath) + "##scriptpick";
 	if (ImGui::Button(btnLabel.c_str(), ImVec2(-1.0f, 0.0f)))
 	{
 		ImGui::OpenPopup("##scriptpicker");
@@ -1419,7 +1419,7 @@ void EntityEditor::renderScriptSection()
 		ImGui::InputTextWithHint("##search", "Search...", m_scriptPickerSearch, sizeof(m_scriptPickerSearch));
 		ImGui::Separator();
 		ImGui::BeginChild("##list", ImVec2(280.0f, 200.0f));
-		for (const std::string& path : m_scriptPickerFiles)
+		for (const oc::string& path : m_scriptPickerFiles)
 		{
 			if (!containsCI(path, m_scriptPickerSearch))
 				continue;
@@ -1469,7 +1469,7 @@ void EntityEditor::renderScriptDataSection()
 
 		// The authored entry for this field, or a fresh one -- a field the .pre says nothing about shows its
 		// type's zero, and only starts being serialized once actually edited.
-		std::string* authored = nullptr;
+		oc::string* authored = nullptr;
 		for (ScriptComponent::InitialFieldValue& value : m_scriptDraft.initialValues)
 			if (value.name == field.name)
 				authored = &value.value;
@@ -1482,8 +1482,8 @@ void EntityEditor::renderScriptDataSection()
 
 		// Edited through the TEXT form the .pre stores, parsed into a widget-shaped value and printed back --
 		// one representation, so what is shown is exactly what will be written and later applied.
-		const std::string current = (authored != nullptr) ? *authored : std::string();
-		std::string edited;
+		const oc::string current = (authored != nullptr) ? *authored : oc::string();
+		oc::string edited;
 		bool changed = false;
 		switch (field.type)
 		{
@@ -1492,7 +1492,7 @@ void EntityEditor::renderScriptDataSection()
 			int value = std::atoi(current.c_str());
 			if (ImGui::DragInt("##v", &value))
 			{
-				edited = std::to_string(value);
+				edited = oc::to_string(value);
 				changed = true;
 			}
 			break;
@@ -1555,9 +1555,9 @@ void EntityEditor::renderScriptDataSection()
 		if (!changed)
 			continue;
 		if (authored != nullptr)
-			*authored = std::move(edited);
+			*authored = oc::move(edited);
 		else
-			m_scriptDraft.initialValues.push_back({ field.name, std::move(edited) });
+			m_scriptDraft.initialValues.push_back({ field.name, oc::move(edited) });
 		// Respawns like every other draft edit here: the initial value is applied AT spawn, so seeing it take
 		// effect means running the script again from the start.
 		commitRespawn();
@@ -1629,9 +1629,9 @@ void EntityEditor::commitRespawn()
 	if (!m_selected)
 		return;
 
-	auto tmpl = std::make_shared<EntitySpawnTemplate>();
+	auto tmpl = oc::make_shared<EntitySpawnTemplate>();
 	uint16 typeBits = 0;
-	std::vector<std::shared_ptr<void>> infos;
+	oc::vector<oc::shared_ptr<void>> infos;
 
 	// Scene (bit 0) — driven by the m_hasScene draft flag (toggled by Add/Remove Scene), not the live
 	// entity's current state. main.cpp splices any existing children from the old entity onto the
@@ -1639,12 +1639,12 @@ void EntityEditor::commitRespawn()
 	if (m_hasScene)
 	{
 		typeBits |= uint16(1 << EComponentID_Scene);
-		infos.push_back(std::make_shared<SceneComponent::SpawnInfo>());
+		infos.push_back(oc::make_shared<SceneComponent::SpawnInfo>());
 	}
 
-	const std::string ownerName = m_selected->hasName() ? std::string(m_selected->getName()) : currentId();
+	const oc::string ownerName = m_selected->hasName() ? oc::string(m_selected->getName()) : currentId();
 
-	std::string renderContainerName, renderNodePath;
+	oc::string renderContainerName, renderNodePath;
 	if (m_hasRender)
 	{
 		AssetNode holder;
@@ -1671,7 +1671,7 @@ void EntityEditor::commitRespawn()
 			renderContainerName = info->containerName;
 			renderNodePath = info->nodePath;
 			typeBits |= uint16(1 << EComponentID_Render);
-			infos.push_back(std::move(info));
+			infos.push_back(oc::move(info));
 		}
 	}
 
@@ -1684,7 +1684,7 @@ void EntityEditor::commitRespawn()
 		if (auto info = Globals::world.buildAnimatorSpawnInfo(node, renderContainerName, ownerName))
 		{
 			typeBits |= uint16(1 << EComponentID_Animator);
-			infos.push_back(std::move(info));
+			infos.push_back(oc::move(info));
 		}
 	}
 
@@ -1714,7 +1714,7 @@ void EntityEditor::commitRespawn()
 			break;
 		case EPhysicsShapeType::Hull:
 			node.set("Shape", "Hull");
-			node.addChild("MaxHullVertices").values.emplace_back(std::to_string(m_physicsDraft.shape.maxHullVertices));
+			node.addChild("MaxHullVertices").values.emplace_back(oc::to_string(m_physicsDraft.shape.maxHullVertices));
 			break;
 		case EPhysicsShapeType::Mesh:
 			node.set("Shape", "Mesh");
@@ -1737,12 +1737,12 @@ void EntityEditor::commitRespawn()
 			cw.values = m_physicsDraft.collidesWith;
 		}
 		if (m_physicsDraft.shape.groupIndex != 0)
-			node.addChild("Group").values.emplace_back(std::to_string(m_physicsDraft.shape.groupIndex));
+			node.addChild("Group").values.emplace_back(oc::to_string(m_physicsDraft.shape.groupIndex));
 
 		if (auto info = Globals::world.buildPhysicsSpawnInfo(node, renderContainerName, renderNodePath, ownerName))
 		{
 			typeBits |= uint16(1 << EComponentID_Physics);
-			infos.push_back(std::move(info));
+			infos.push_back(oc::move(info));
 		}
 	}
 
@@ -1773,49 +1773,49 @@ void EntityEditor::commitRespawn()
 		if (auto info = Globals::world.buildAudioSpawnInfo(node, ownerName))
 		{
 			typeBits |= uint16(1 << EComponentID_Audio);
-			infos.push_back(std::move(info));
+			infos.push_back(oc::move(info));
 		}
 	}
 
 	if (m_hasParticle && !m_particleDraft.effectPath.empty())
 	{
-		auto info = std::make_shared<ParticleComponent::SpawnInfo>(m_particleDraft);
+		auto info = oc::make_shared<ParticleComponent::SpawnInfo>(m_particleDraft);
 		typeBits |= uint16(1 << EComponentID_Particle);
-		infos.push_back(std::move(info));
+		infos.push_back(oc::move(info));
 	}
 
 	if (m_hasForce)
 	{
-		auto info = std::make_shared<ForceComponent::SpawnInfo>(m_forceDraft);
+		auto info = oc::make_shared<ForceComponent::SpawnInfo>(m_forceDraft);
 		typeBits |= uint16(1 << EComponentID_Force);
-		infos.push_back(std::move(info));
+		infos.push_back(oc::move(info));
 	}
 
 	if (m_hasLight && !m_lightDraft.lights.empty())
 	{
-		auto info = std::make_shared<LightComponent::SpawnInfo>(m_lightDraft);
+		auto info = oc::make_shared<LightComponent::SpawnInfo>(m_lightDraft);
 		typeBits |= uint16(1 << EComponentID_Light);
-		infos.push_back(std::move(info));
+		infos.push_back(oc::move(info));
 	}
 
 	if (m_hasNetwork)
 	{
-		auto info = std::make_shared<NetworkComponent::SpawnInfo>(m_networkDraft);
+		auto info = oc::make_shared<NetworkComponent::SpawnInfo>(m_networkDraft);
 		typeBits |= uint16(1 << EComponentID_Network);
-		infos.push_back(std::move(info));
+		infos.push_back(oc::move(info));
 	}
 
 	if (m_hasScript)
 	{
 		// Copied WHOLE, like the particle/force drafts above -- rebuilding it field by field silently dropped
 		// anything the struct gained later (which is exactly what happened to the authored initial values).
-		auto info = std::make_shared<ScriptComponent::SpawnInfo>(m_scriptDraft);
+		auto info = oc::make_shared<ScriptComponent::SpawnInfo>(m_scriptDraft);
 		typeBits |= uint16(1 << EComponentID_Script);
-		infos.push_back(std::move(info));
+		infos.push_back(oc::move(info));
 	}
 
 	tmpl->archetype = makeEntityArchetype(typeBits);
-	tmpl->spawnInfos = std::move(infos);
+	tmpl->spawnInfos = oc::move(infos);
 	tmpl->displayName = m_selected->getName();
 	tmpl->enabled = m_selected->isEnabled(); // carry the live enable state onto the respawned entity
 	tmpl->sourceFile = m_path; // every node in the document belongs to the open .pre (empty until first save)

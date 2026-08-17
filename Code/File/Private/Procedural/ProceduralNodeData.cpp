@@ -5,16 +5,16 @@ import Core.glm;
 
 import :ProceduralNodeData;
 
-bool ProceduralNodeData::initialize(const char* name, std::vector<uint32> meshIndices)
+bool ProceduralNodeData::initialize(const char* name, oc::vector<uint32> meshIndices)
 {
 	m_name        = name ? name : "ProceduralNode";
-	m_meshIndices = std::move(meshIndices);
+	m_meshIndices = oc::move(meshIndices);
 	return true;
 }
 
-std::unique_ptr<INodeData> ProceduralNodeData::clone() const
+oc::unique_ptr<INodeData> ProceduralNodeData::clone() const
 {
-	auto node = std::make_unique<ProceduralNodeData>();
+	auto node = oc::make_unique<ProceduralNodeData>();
 	node->initialize(m_name.c_str(), m_meshIndices);
 	return node;
 }

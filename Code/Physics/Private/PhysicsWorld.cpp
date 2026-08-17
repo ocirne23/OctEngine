@@ -24,16 +24,16 @@ import :Convert;
 // is exactly the lifetime destroyDebugShape delimits.
 namespace
 {
-std::vector<std::unique_ptr<b3DebugShape>> g_debugShapes;
+oc::vector<oc::unique_ptr<b3DebugShape>> g_debugShapes;
 
 void* createDebugShapeFcn(const b3DebugShape* debugShape, void*)
 {
-    return g_debugShapes.emplace_back(std::make_unique<b3DebugShape>(*debugShape)).get();
+    return g_debugShapes.emplace_back(oc::make_unique<b3DebugShape>(*debugShape)).get();
 }
 
 void destroyDebugShapeFcn(void* userShape, void*)
 {
-    std::erase_if(g_debugShapes, [userShape](const std::unique_ptr<b3DebugShape>& shape) { return shape.get() == userShape; });
+    oc::erase_if(g_debugShapes, [userShape](const oc::unique_ptr<b3DebugShape>& shape) { return shape.get() == userShape; });
 }
 } // namespace
 
@@ -90,7 +90,7 @@ void PhysicsWorld::shutdown()
 // Appends the step's buffered contact/sensor begin/end events (box3d clears them on the next step,
 // so they are drained after every step, not once per frame). End events may reference destroyed
 // shapes and are validated first.
-static void dispatchContactEvents(b3WorldId world, std::function<void(const PhysicsWorld::ContactEvent&)> contactCallback)
+static void dispatchContactEvents(b3WorldId world, oc::function<void(const PhysicsWorld::ContactEvent&)> contactCallback)
 {
     auto userDataOf = [](b3ShapeId shape) { return b3Body_GetUserData(b3Shape_GetBody(shape)); };
 
@@ -123,7 +123,7 @@ static void dispatchContactEvents(b3WorldId world, std::function<void(const Phys
     }
 }
 
-void PhysicsWorld::update(double deltaSec, std::function<void(const ContactEvent&)> contactCallback)
+void PhysicsWorld::update(double deltaSec, oc::function<void(const ContactEvent&)> contactCallback)
 {
     if (!m_initialized)
         return;
@@ -143,7 +143,7 @@ void PhysicsWorld::update(double deltaSec, std::function<void(const ContactEvent
     }
 }
 
-void PhysicsWorld::stepSimulation(double deltaSec, const std::function<void(const ContactEvent&)>& contactCallback)
+void PhysicsWorld::stepSimulation(double deltaSec, const oc::function<void(const ContactEvent&)>& contactCallback)
 {
     m_accumulator += float(deltaSec) * m_timeScale;
     const float step = 1.0f / float(m_stepHz);
@@ -258,7 +258,7 @@ void PhysicsWorld::applyBuoyancy()
     const b3AABB everything{ { -B, -B, -B }, { B, B, B } };
     b3World_OverlapAABB(world, everything, b3DefaultQueryFilter(),
         [](b3ShapeId shape, void* context) {
-            static_cast<std::vector<uint64>*>(context)->push_back(b3StoreShapeId(shape));
+            static_cast<oc::vector<uint64>*>(context)->push_back(b3StoreShapeId(shape));
             return true;
         }, &m_buoyancyShapes);
 
@@ -307,7 +307,7 @@ float PhysicsWorld::getInterpolationAlpha() const
     return glm::clamp(m_accumulator * float(m_stepHz), 0.0f, 1.0f);
 }
 
-PhysicsBody PhysicsWorld::createBody(const PhysicsBodyDesc& desc, std::span<const PhysicsShape> shapes)
+PhysicsBody PhysicsWorld::createBody(const PhysicsBodyDesc& desc, oc::span<const PhysicsShape> shapes)
 {
     assert(m_initialized);
 
@@ -374,7 +374,7 @@ PhysicsBody PhysicsWorld::createBody(const PhysicsBodyDesc& desc, std::span<cons
                 Log::warning("Physics: hull shape needs at least 4 points");
                 break;
             }
-            std::vector<b3Vec3> points;
+            oc::vector<b3Vec3> points;
             points.reserve(shape.hullPoints.size());
             for (const glm::vec3& p : shape.hullPoints)
                 points.push_back(toB3(p * scale + offset));
@@ -405,7 +405,7 @@ PhysicsBody PhysicsWorld::createBody(const PhysicsBodyDesc& desc, std::span<cons
     return PhysicsBody(std::bit_cast<uint64>(body));
 }
 
-PhysicsMesh PhysicsWorld::createCollisionMesh(std::span<const glm::vec3> vertices, std::span<const uint32> indices)
+PhysicsMesh PhysicsWorld::createCollisionMesh(oc::span<const glm::vec3> vertices, oc::span<const uint32> indices)
 {
     PhysicsMesh outMesh;
     if (vertices.size() < 3 || indices.size() < 3)

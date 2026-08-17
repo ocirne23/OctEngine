@@ -43,7 +43,7 @@ void CompositePipeline::reloadShaders(const RenderPass& renderPass)
 void CompositePipeline::record(CommandBuffer& commandBuffer, const RecordParams& params)
 {
     vk::DescriptorSet descriptorSet = params.descriptorSet.getDescriptorSet();
-    std::array<DescriptorSetUpdateInfo, 2> updates{
+    oc::array<DescriptorSetUpdateInfo, 2> updates{
         DescriptorSetUpdateInfo{
             .binding = 0,
             .type = vk::DescriptorType::eCombinedImageSampler,

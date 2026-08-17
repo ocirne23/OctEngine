@@ -63,12 +63,12 @@ private:
 	void buildSkySphere(uint32 stacks = 24, uint32 slices = 48);
 	void buildTerrain(const TerrainParams& params);
 
-	std::string              m_name;
-	std::vector<glm::vec3>   m_vertices;
-	std::vector<glm::vec3>   m_normals;
-	std::vector<glm::vec3>   m_tangents;
-	std::vector<glm::vec3>   m_bitangents;
-	std::vector<glm::vec3>   m_texCoords; // xy = UV, z = 0
-	std::vector<uint32>      m_indices;
+	oc::string              m_name;
+	oc::vector<glm::vec3>   m_vertices;
+	oc::vector<glm::vec3>   m_normals;
+	oc::vector<glm::vec3>   m_tangents;
+	oc::vector<glm::vec3>   m_bitangents;
+	oc::vector<glm::vec3>   m_texCoords; // xy = UV, z = 0
+	oc::vector<uint32>      m_indices;
 	AABB                     m_aabb;
 };

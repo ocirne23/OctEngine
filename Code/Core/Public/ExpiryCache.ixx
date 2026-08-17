@@ -30,7 +30,7 @@ class ExpiryCache
 {
 public:
 
-    using Entry = std::pair<float, eastl::vector<Value*>>;
+    using Entry = oc::pair<float, eastl::vector<Value*>>;
     eastl::ring_buffer<Entry> data;
 
     size_t insert(float expiry, Value* val)

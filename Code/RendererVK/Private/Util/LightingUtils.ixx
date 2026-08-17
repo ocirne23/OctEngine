@@ -35,8 +35,8 @@ float radicalInverse(uint32 i, uint32 base)
 float sunVisibleFraction(const glm::vec3& sunDir, const glm::vec3& moonDir,
     float cosSunRadius, float cosMoonRadius, float sunGlow)
 {
-    const float rs = sqrtf(std::max(2.0f - 2.0f * cosSunRadius, 0.0f)) + sunGlow * 0.02f;
-    const float rm = sqrtf(std::max(2.0f - 2.0f * cosMoonRadius, 0.0f));
+    const float rs = sqrtf(oc::max(2.0f - 2.0f * cosSunRadius, 0.0f)) + sunGlow * 0.02f;
+    const float rm = sqrtf(oc::max(2.0f - 2.0f * cosMoonRadius, 0.0f));
     const float d = glm::distance(sunDir, moonDir);
     const float contained = rm >= rs ? 0.0f : 1.0f - (rm * rm) / (rs * rs);
     return glm::mix(contained, 1.0f, glm::smoothstep(fabsf(rs - rm), rs + rm, d));

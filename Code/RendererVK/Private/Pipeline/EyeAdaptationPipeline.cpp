@@ -74,7 +74,7 @@ void EyeAdaptationPipeline::reloadShaders()
 
 void EyeAdaptationPipeline::updateParams(uint32 frameIdx, const PostParams& post, float deltaSeconds)
 {
-    const float logLumRange = std::max(post.adaptMaxLogLum - post.adaptMinLogLum, 1e-3f);
+    const float logLumRange = oc::max(post.adaptMaxLogLum - post.adaptMinLogLum, 1e-3f);
     m_mappedParams[frameIdx][0] = GpuParams{
         .minLogLum = post.adaptMinLogLum,
         .invLogLumRange = 1.0f / logLumRange,
@@ -90,7 +90,7 @@ void EyeAdaptationPipeline::updateParams(uint32 frameIdx, const PostParams& post
 void EyeAdaptationPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, const RecordParams& params)
 {
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
-    const uint32 pixelCount = (uint32)std::max(params.viewportSize.x * params.viewportSize.y, 1);
+    const uint32 pixelCount = (uint32)oc::max(params.viewportSize.x * params.viewportSize.y, 1);
     auto paramsInfo = vk::DescriptorBufferInfo{ .buffer = m_paramsBuffer[frameIdx].getBuffer(), .range = vk::WholeSize };
 
     // Clear the histogram, then make the clear visible to the build pass.
@@ -107,7 +107,7 @@ void EyeAdaptationPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx
         DescriptorSet& set = m_histogramSets[frameIdx];
         vk::DescriptorSet vkSet = set.getDescriptorSet();
         auto histInfo = vk::DescriptorBufferInfo{ .buffer = m_histogramBuffer.getBuffer(), .range = vk::WholeSize };
-        std::array<DescriptorSetUpdateInfo, 3> updates{
+        oc::array<DescriptorSetUpdateInfo, 3> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.sampler, .imageView = params.resolvedView, .imageLayout = params.resolvedLayout } } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { histInfo } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { paramsInfo } },
@@ -136,7 +136,7 @@ void EyeAdaptationPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx
         vk::DescriptorSet vkSet = set.getDescriptorSet();
         auto histInfo = vk::DescriptorBufferInfo{ .buffer = m_histogramBuffer.getBuffer(), .range = vk::WholeSize };
         auto adaptInfo = vk::DescriptorBufferInfo{ .buffer = m_adaptBuffer.getBuffer(), .range = vk::WholeSize };
-        std::array<DescriptorSetUpdateInfo, 3> updates{
+        oc::array<DescriptorSetUpdateInfo, 3> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { histInfo } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { adaptInfo } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { paramsInfo } },

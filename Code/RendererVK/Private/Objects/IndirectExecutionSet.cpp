@@ -37,7 +37,7 @@ bool IndirectExecutionSet::initialize(const GraphicsPipeline& pipeline)
     }
     m_indirectExecutionSet = createResult.value;
 
-    std::vector<vk::WriteIndirectExecutionSetPipelineEXT> writes;
+    oc::vector<vk::WriteIndirectExecutionSetPipelineEXT> writes;
     writes.reserve(variantCount);
     for (uint32 i = 0; i < variantCount; i++)
     {

@@ -24,6 +24,6 @@ public:
 
 private:
 
-	std::string      m_filePath;            // always set: embedded filename or loose file path
+	oc::string      m_filePath;            // always set: embedded filename or loose file path
 	const aiTexture* m_pTexture = nullptr;  // non-null only for embedded textures
 };

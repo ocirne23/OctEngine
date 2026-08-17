@@ -9,9 +9,9 @@ import :ProceduralTextureData;
 import :ProceduralMaterialData;
 import :ProceduralNodeData;
 
-std::unique_ptr<ISceneData> createProceduralLoader()
+oc::unique_ptr<ISceneData> createProceduralLoader()
 {
-	return std::make_unique<ProceduralSceneData>();
+	return oc::make_unique<ProceduralSceneData>();
 }
 
 ProceduralSceneData::ProceduralSceneData()
@@ -128,7 +128,7 @@ const IMeshData* ProceduralSceneData::getMesh(const char* pMeshName) const
 {
 	for (const ProceduralMeshData& mesh : m_meshes)
 	{
-		if (std::string(mesh.getName()) == pMeshName)
+		if (oc::string(mesh.getName()) == pMeshName)
 			return &mesh;
 	}
 	return nullptr;

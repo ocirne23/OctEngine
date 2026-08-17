@@ -14,15 +14,15 @@ import Core;
 export template<
 	typename Key,
 	typename Value,
-	typename Hash = std::hash<Key>,
-	typename KeyEqual = std::equal_to<Key>>
+	typename Hash = oc::hash<Key>,
+	typename KeyEqual = oc::equal_to<Key>>
 class LPMultiMap final
 {
 public:
 
 	using KeyType   = Key;
 	using ValueType = Value;
-	using EntryType = std::pair<const Key, Value>;
+	using EntryType = oc::pair<const Key, Value>;
 
 private:
 
@@ -176,14 +176,14 @@ public:
 
 	LPMultiMap() = default;
 	explicit LPMultiMap(size_t initialCapacity) { reserve(initialCapacity); }
-	LPMultiMap(std::initializer_list<EntryType> init)
+	LPMultiMap(oc::initializer_list<EntryType> init)
 	{
 		reserve(init.size());
 		for (const EntryType& kv : init)
 			insert(kv.first, kv.second);
 	}
 	LPMultiMap(const LPMultiMap& other) { *this = other; }
-	LPMultiMap(LPMultiMap&& other) noexcept { *this = std::move(other); }
+	LPMultiMap(LPMultiMap&& other) noexcept { *this = oc::move(other); }
 	~LPMultiMap() { clear(); }
 
 	LPMultiMap& operator=(const LPMultiMap& other)
@@ -191,7 +191,7 @@ public:
 		if (this == &other)
 			return *this;
 		clear();
-		m_slots = std::vector<Slot>(other.m_slots.size());
+		m_slots = oc::vector<Slot>(other.m_slots.size());
 		const size_t mask = m_slots.size() - 1;
 		for (const Slot& srcSlot : other.m_slots) // reinsert (rather than positionally copy) so tombstones in 'other' are dropped for free
 		{
@@ -212,7 +212,7 @@ public:
 		if (this == &other)
 			return *this;
 		clear();
-		m_slots = std::move(other.m_slots);
+		m_slots = oc::move(other.m_slots);
 		m_size = other.m_size;
 		m_tombstones = other.m_tombstones;
 		other.m_size = 0;
@@ -262,13 +262,13 @@ public:
 	// unlike insertOrAssign()/operator[] this never looks for (or overwrites) an existing match.
 	// Use equalRange()/find() afterwards to look up or enumerate entries sharing a key.
 	iterator insert(const Key& key, const Value& value) { return emplace(key, value); }
-	iterator insert(const Key& key, Value&& value)      { return emplace(key, std::move(value)); }
+	iterator insert(const Key& key, Value&& value)      { return emplace(key, oc::move(value)); }
 
 	template<typename... Args>
 	iterator emplace(const Key& key, Args&&... args)
 	{
 		Slot* pSlot = prepareSlotForInsert(key);
-		new (pSlot->storage) EntryType(key, Value(std::forward<Args>(args)...));
+		new (pSlot->storage) EntryType(key, Value(oc::forward<Args>(args)...));
 		pSlot->state = ESlotState::Occupied;
 		++m_size;
 		return iterator(pSlot, endSlot());
@@ -277,15 +277,15 @@ public:
 	// Assigns to the first existing entry matching 'key', or inserts a new one if there is no
 	// match; never creates a second entry for a key that is already present.
 	template<typename... Args>
-	std::pair<iterator, bool> insertOrAssign(const Key& key, Args&&... args)
+	oc::pair<iterator, bool> insertOrAssign(const Key& key, Args&&... args)
 	{
 		auto [pSlot, found] = prepareSlotForUpsert(key);
 		if (found)
 		{
-			pSlot->entry()->second = Value(std::forward<Args>(args)...);
+			pSlot->entry()->second = Value(oc::forward<Args>(args)...);
 			return { iterator(pSlot, endSlot()), false };
 		}
-		new (pSlot->storage) EntryType(key, Value(std::forward<Args>(args)...));
+		new (pSlot->storage) EntryType(key, Value(oc::forward<Args>(args)...));
 		pSlot->state = ESlotState::Occupied;
 		++m_size;
 		return { iterator(pSlot, endSlot()), true };
@@ -359,9 +359,9 @@ public:
 
 	void swap(LPMultiMap& other) noexcept
 	{
-		std::swap(m_slots, other.m_slots);
-		std::swap(m_size, other.m_size);
-		std::swap(m_tombstones, other.m_tombstones);
+		oc::swap(m_slots, other.m_slots);
+		oc::swap(m_size, other.m_size);
+		oc::swap(m_tombstones, other.m_tombstones);
 	}
 
 	// ---- Lookup -----------------------------------------------------------------------------
@@ -497,7 +497,7 @@ private:
 	// Returns { index, found }: if found, index names the slot holding the first existing entry
 	// matching 'key'; otherwise it names the first empty/tombstone slot along the probe sequence
 	// (reusing the earliest tombstone seen, if any).
-	std::pair<size_t, bool> findSlotForUpsert(const Key& key) const
+	oc::pair<size_t, bool> findSlotForUpsert(const Key& key) const
 	{
 		const size_t mask = m_slots.size() - 1;
 		size_t index = slotIndexForHash(m_hasher(key));
@@ -537,7 +537,7 @@ private:
 	// Grows the table if needed, then locates the slot 'key' belongs in for an upsert: an
 	// existing matching entry if one exists, otherwise a free slot. Used by insertOrAssign() and
 	// operator[], which only ever touch a single entry per key.
-	std::pair<Slot*, bool> prepareSlotForUpsert(const Key& key)
+	oc::pair<Slot*, bool> prepareSlotForUpsert(const Key& key)
 	{
 		growIfNeeded();
 		const auto [index, found] = findSlotForUpsert(key);
@@ -574,8 +574,8 @@ private:
 
 	void rehash(size_t newCapacity)
 	{
-		std::vector<Slot> oldSlots = std::move(m_slots);
-		m_slots = std::vector<Slot>(newCapacity);
+		oc::vector<Slot> oldSlots = oc::move(m_slots);
+		m_slots = oc::vector<Slot>(newCapacity);
 		m_tombstones = 0;
 		const size_t mask = newCapacity - 1;
 		for (Slot& oldSlot : oldSlots)
@@ -585,13 +585,13 @@ private:
 			size_t index = slotIndexForHash(m_hasher(oldSlot.entry()->first));
 			while (m_slots[index].state == ESlotState::Occupied)
 				index = (index + 1) & mask;
-			new (m_slots[index].storage) EntryType(std::move(*oldSlot.entry()));
+			new (m_slots[index].storage) EntryType(oc::move(*oldSlot.entry()));
 			m_slots[index].state = ESlotState::Occupied;
 			oldSlot.entry()->~EntryType();
 		}
 	}
 
-	std::vector<Slot> m_slots;
+	oc::vector<Slot> m_slots;
 	size_t m_size = 0;
 	size_t m_tombstones = 0;
 	Hash m_hasher;

@@ -39,14 +39,14 @@ private:
     struct FrameSlot
     {
         vk::QueryPool queryPool;
-        std::array<ScopeMeta, MAX_SCOPES> scopes;
+        oc::array<ScopeMeta, MAX_SCOPES> scopes;
         uint32 numScopes = 0;
         uint64 cpuSubmitTick = 0;
         bool pending = false;
     };
 
-    std::array<FrameSlot, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_slots;
-    std::array<uint32, MAX_SCOPES> m_openStack = {};
+    oc::array<FrameSlot, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_slots;
+    oc::array<uint32, MAX_SCOPES> m_openStack = {};
     uint32 m_openDepth = 0;
     uint32 m_recordSlot = 0;
     double m_timestampPeriodNs = 0.0;

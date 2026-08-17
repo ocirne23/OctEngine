@@ -29,7 +29,7 @@ public:
     void reloadShaders(vk::RenderPass sceneRenderPass);
 
     // The current frame slot's mapped decal array; Renderer::addDecal writes claimed slots directly.
-    std::span<RendererVKLayout::DecalInfo> getMapped(uint32 frameIdx) { return m_mappedDecals[frameIdx]; }
+    oc::span<RendererVKLayout::DecalInfo> getMapped(uint32 frameIdx) { return m_mappedDecals[frameIdx]; }
     // Publishes this frame's decal count (call from present(), after the slot's fence wait).
     void upload(uint32 frameIdx, uint32 decalCount);
 
@@ -56,12 +56,12 @@ private:
 
     GraphicsPipeline m_pipeline;
     Sampler m_textureSampler;
-    std::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_decalBuffers;
-    std::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_indirectBuffers;
-    std::array<std::span<RendererVKLayout::DecalInfo>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedDecals;
-    std::array<std::span<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedIndirect; // vk::DrawIndirectCommand as 4 uints
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_decalBuffers;
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_indirectBuffers;
+    oc::array<oc::span<RendererVKLayout::DecalInfo>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedDecals;
+    oc::array<oc::span<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedIndirect; // vk::DrawIndirectCommand as 4 uints
     static constexpr uint32 MAX_VIEWS = 2;
     static uint32 drawSlot(uint32 frameIdx, uint32 eye) { return frameIdx * MAX_VIEWS + eye; }
-    std::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT * MAX_VIEWS> m_sets;
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT * MAX_VIEWS> m_sets;
     uint32 m_viewCount = 1;
 };

@@ -22,7 +22,7 @@ void SceneComponent::spawn(Entity& entity, const SpawnInfo& info, const Transfor
             childEntity->setName(child.name);
         if (!child.enabled)
             childEntity->setEnabled(false); // the reference site can disable, never re-enable a template's own default
-        children.emplace_back(std::move(childEntity)); // attach the owning handle directly — reparentEntity would break the fresh allocation
+        children.emplace_back(oc::move(childEntity)); // attach the owning handle directly — reparentEntity would break the fresh allocation
     }
 }
 

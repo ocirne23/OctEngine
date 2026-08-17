@@ -39,14 +39,14 @@ void JobSystem::initialize(const JobSystemDesc& desc)
     ProfileScope scope("JobSystem::initialize", EProfileCategory::Threading);
 
     assert(!isInitialized());
-    const uint32 hardware = std::max(2u, std::thread::hardware_concurrency());
-    m_numWorkers = desc.numWorkers ? desc.numWorkers : std::max(1u, hardware - 2);
+    const uint32 hardware = oc::max(2u, std::thread::hardware_concurrency());
+    m_numWorkers = desc.numWorkers ? desc.numWorkers : oc::max(1u, hardware - 2);
     m_numContexts = m_numWorkers + 1;
     m_numFibers = desc.numFibers;
     m_jobPoolCapacity = std::bit_ceil(desc.jobPoolCapacity);
-    m_targetChunkNs = std::max(1000u, desc.parallelForTargetChunkNs);
+    m_targetChunkNs = oc::max(1000u, desc.parallelForTargetChunkNs);
 
-    m_jobPool = std::make_unique<Job[]>(m_jobPoolCapacity);
+    m_jobPool = oc::make_unique<Job[]>(m_jobPoolCapacity);
     m_freeJobs.initialize(m_jobPoolCapacity);
     for (uint32 i = 0; i < m_jobPoolCapacity; ++i)
         m_freeJobs.push(i);
@@ -54,7 +54,7 @@ void JobSystem::initialize(const JobSystemDesc& desc)
     for (uint32 p = 0; p < NumJobPriorities; ++p)
         m_readyQueues[p].initialize(desc.queueCapacity);
 
-    m_fibers = std::make_unique<Fiber[]>(m_numFibers);
+    m_fibers = oc::make_unique<Fiber[]>(m_numFibers);
     m_freeFibers.initialize(m_numFibers);
     m_resumeQueue.initialize(m_numFibers * 2); // 2x: a ring "full" can be transient, keep it unreachable
     for (uint32 i = 0; i < m_numFibers; ++i)
@@ -64,7 +64,7 @@ void JobSystem::initialize(const JobSystemDesc& desc)
         m_freeFibers.push(i);
     }
 
-    m_contexts = std::make_unique<WorkerContext[]>(m_numContexts);
+    m_contexts = oc::make_unique<WorkerContext[]>(m_numContexts);
     for (uint32 i = 0; i < m_numContexts; ++i)
     {
         m_contexts[i].index = i;
@@ -103,7 +103,7 @@ void JobSystem::shutdown()
         std::lock_guard lock(m_timedMutex); // a sleeping timer thread must observe m_running == false
     }
     m_timedCv.notify_all();
-    m_wakeEpoch.fetch_add(1, std::memory_order_release);
+    m_wakeEpoch.fetch_add(1, oc::memory_order_release);
     m_wakeEpoch.notify_all();
     for (std::thread& thread : m_threads)
         thread.join();
@@ -142,8 +142,8 @@ JobSystemStats JobSystem::getStats() const
     JobSystemStats stats;
     stats.numWorkers = m_numWorkers;
     stats.numFibers = m_numFibers;
-    stats.numPooledInFlight = m_pooledInFlight.load(std::memory_order_relaxed);
-    stats.numInlineFallbacks = m_numInlineFallbacks.load(std::memory_order_relaxed);
+    stats.numPooledInFlight = m_pooledInFlight.load(oc::memory_order_relaxed);
+    stats.numInlineFallbacks = m_numInlineFallbacks.load(oc::memory_order_relaxed);
     for (uint32 i = 0; i < m_numContexts; ++i)
     {
         const WorkerContext& ctx = m_contexts[i];
@@ -175,7 +175,7 @@ void JobSystem::fiberMain(Fiber& fiber)
 
 void JobSystem::runFiber(WorkerContext& ctx, Fiber* fiber)
 {
-    assert(fiber->debugRunning.exchange(1, std::memory_order_acq_rel) == 0 && "fiber running on two workers");
+    assert(fiber->debugRunning.exchange(1, oc::memory_order_acq_rel) == 0 && "fiber running on two workers");
     fiber->returnFiber = ctx.schedulerFiber;
     // Profile scopes ride the fiber: a resumed park replays the scopes it suspended (possibly onto
     // a different thread's track), a fresh job starts with none. profileBase remembers THIS
@@ -193,13 +193,13 @@ void JobSystem::runFiber(WorkerContext& ctx, Fiber* fiber)
     ctx.currentFiber = fiber;
     SwitchToFiber(fiber->handle);
     ctx.currentFiber = nullptr;
-    assert((fiber->debugRunning.store(0, std::memory_order_release), true));
+    assert((fiber->debugRunning.store(0, oc::memory_order_release), true));
     // read the state BEFORE publishing switchDone: the instant a parked fiber is resumable it can
     // be picked up, finish elsewhere, and have every field here rewritten for a new job
     const Fiber::EState state = fiber->state;
     if (state == Fiber::EState::Parked)
     {
-        fiber->switchDone.store(1, std::memory_order_release);
+        fiber->switchDone.store(1, oc::memory_order_release);
     }
     else
     {
@@ -233,7 +233,7 @@ void JobSystem::workerMain(uint32 contextIndex)
             runFiber(ctx, fiber);
             continue;
         }
-        if (!m_running.load(std::memory_order_relaxed))
+        if (!m_running.load(oc::memory_order_relaxed))
             break;
         uint32 fiberIndex;
         if (m_freeFibers.pop(fiberIndex))
@@ -256,7 +256,7 @@ void JobSystem::workerMain(uint32 contextIndex)
 void JobSystem::execute(Job& job)
 {
     // pooled jobs never use their dependency counter - repurpose it as a double-run tripwire
-    assert(!(job.flags & EJobFlag_Pooled) || job.pending.fetch_add(1, std::memory_order_acq_rel) == 0);
+    assert(!(job.flags & EJobFlag_Pooled) || job.pending.fetch_add(1, oc::memory_order_acq_rel) == 0);
     if (WorkerContext* ctx = t_worker)
         ctx->numExecuted++;
     const bool timed = (job.flags & EJobFlag_Untimed) == 0;
@@ -268,9 +268,9 @@ void JobSystem::execute(Job& job)
         // the critical path), and all-cheap graphs degrade to chain-depth ranking. The same graph
         // node never runs concurrently with itself, so a plain EMA is race-free.
         const uint64 elapsedNs = uint64(std::chrono::nanoseconds(Clock::now() - timedStart).count());
-        const uint64 us = std::max<uint64>(1, elapsedNs / 1000);
+        const uint64 us = oc::max<uint64>(1, elapsedNs / 1000);
         const uint32 old = job.costEmaUs;
-        job.costEmaUs = old ? uint32(std::min<uint64>((uint64(old) * 3 + us) / 4, UINT32_MAX)) : uint32(std::min<uint64>(us, UINT32_MAX));
+        job.costEmaUs = old ? uint32(oc::min<uint64>((uint64(old) * 3 + us) / 4, UINT32_MAX)) : uint32(oc::min<uint64>(us, UINT32_MAX));
         if (WorkerContext* ctx = t_worker) // re-read: the job may have parked and migrated
             ctx->busyNs += elapsedNs;
     }
@@ -285,7 +285,7 @@ void JobSystem::execute(Job& job)
     }
     uint32 numReady = 0;
     for (uint32 i = 0; i < numSuccessors; ++i)
-        if (successors[i]->pending.fetch_sub(1, std::memory_order_acq_rel) == 1)
+        if (successors[i]->pending.fetch_sub(1, oc::memory_order_acq_rel) == 1)
         {
             pushReadyJob(successors[i]);
             ++numReady;
@@ -345,7 +345,7 @@ void JobSystem::pushReadyJob(Job* job)
     if (m_readyQueues[uint32(job->effectivePriority)].push(job))
         return;
     // full (or transiently full behind a preempted popper): run it here rather than lose it
-    m_numInlineFallbacks.fetch_add(1, std::memory_order_relaxed);
+    m_numInlineFallbacks.fetch_add(1, oc::memory_order_relaxed);
     execute(*job);
 }
 
@@ -356,7 +356,7 @@ void JobSystem::submitReady(Job* job)
     wakeOne();
 }
 
-void JobSystem::submitReadyBatch(std::span<Job* const> jobs)
+void JobSystem::submitReadyBatch(oc::span<Job* const> jobs)
 {
     assert(isInitialized());
     for (Job* job : jobs)
@@ -365,7 +365,7 @@ void JobSystem::submitReadyBatch(std::span<Job* const> jobs)
         // start behind one steal per job
         if (!m_readyQueues[uint32(job->effectivePriority)].push(job))
         {
-            m_numInlineFallbacks.fetch_add(1, std::memory_order_relaxed);
+            m_numInlineFallbacks.fetch_add(1, oc::memory_order_relaxed);
             execute(*job);
         }
     }
@@ -379,18 +379,18 @@ Job* JobSystem::allocatePooledJob()
     {
         char buf[160];
         sprintf_s(buf, "JobSystem: pool exhausted, inFlight=%d executed=%llu",
-            m_pooledInFlight.load(std::memory_order_relaxed), getStats().numExecuted);
+            m_pooledInFlight.load(oc::memory_order_relaxed), getStats().numExecuted);
         Log::error(buf);
         return nullptr;
     }
-    m_pooledInFlight.fetch_add(1, std::memory_order_relaxed);
+    m_pooledInFlight.fetch_add(1, oc::memory_order_relaxed);
     Job* job = &m_jobPool[index];
     job->invoke = nullptr;
     job->destroy = nullptr;
     job->signal = nullptr;
     job->successors = nullptr;
     job->numSuccessors = 0;
-    job->pending.store(0, std::memory_order_relaxed);
+    job->pending.store(0, oc::memory_order_relaxed);
     job->initialPending = 0;
     job->costEmaUs = 0;
     job->rankUs = 0;
@@ -403,7 +403,7 @@ Job* JobSystem::allocatePooledJob()
 
 void JobSystem::releasePooledJob(Job* job)
 {
-    m_pooledInFlight.fetch_sub(1, std::memory_order_relaxed);
+    m_pooledInFlight.fetch_sub(1, oc::memory_order_relaxed);
     m_freeJobs.push(uint32(job - m_jobPool.get()));
 }
 
@@ -430,23 +430,23 @@ void JobSystem::idle(WorkerContext& ctx)
         if (anyWorkForWorker())
             return;
     }
-    const uint32 epoch = m_wakeEpoch.load(std::memory_order_acquire);
-    m_numSleepers.fetch_add(1, std::memory_order_seq_cst);
+    const uint32 epoch = m_wakeEpoch.load(oc::memory_order_acquire);
+    m_numSleepers.fetch_add(1, oc::memory_order_seq_cst);
     // recheck AFTER announcing the sleep (Dekker with wakeMany): either we see the work here or
     // the submitter sees us and bumps the epoch
     if (anyWorkForWorker())
     {
-        m_numSleepers.fetch_sub(1, std::memory_order_relaxed);
+        m_numSleepers.fetch_sub(1, oc::memory_order_relaxed);
         return;
     }
     ctx.numSleeps++;
-    m_wakeEpoch.wait(epoch, std::memory_order_acquire);
-    m_numSleepers.fetch_sub(1, std::memory_order_relaxed);
+    m_wakeEpoch.wait(epoch, oc::memory_order_acquire);
+    m_numSleepers.fetch_sub(1, oc::memory_order_relaxed);
 }
 
 bool JobSystem::anyWorkForWorker() const
 {
-    if (!m_running.load(std::memory_order_relaxed))
+    if (!m_running.load(oc::memory_order_relaxed))
         return true; // wake to exit
     if (!m_resumeQueue.wasEmpty())
         return true;
@@ -463,11 +463,11 @@ bool JobSystem::anyWorkForWorker() const
 void JobSystem::wakeMany(uint32 count)
 {
     // pairs with the sleeper's seq_cst announce + recheck: at least one side sees the other
-    std::atomic_thread_fence(std::memory_order_seq_cst);
-    const uint32 sleepers = m_numSleepers.load(std::memory_order_relaxed);
+    oc::atomic_thread_fence(oc::memory_order_seq_cst);
+    const uint32 sleepers = m_numSleepers.load(oc::memory_order_relaxed);
     if (!sleepers)
         return;
-    m_wakeEpoch.fetch_add(1, std::memory_order_release);
+    m_wakeEpoch.fetch_add(1, oc::memory_order_release);
     if (count >= sleepers)
         m_wakeEpoch.notify_all();
     else
@@ -492,8 +492,8 @@ void JobSystem::wait(JobCounter& counter)
     }
     // unregistered external thread: block on the atomic (notified on the zero transition)
     uint32 count;
-    while ((count = counter.m_count.load(std::memory_order_acquire)) != 0)
-        counter.m_count.wait(count, std::memory_order_acquire);
+    while ((count = counter.m_count.load(oc::memory_order_acquire)) != 0)
+        counter.m_count.wait(count, oc::memory_order_acquire);
 }
 
 bool JobSystem::tryRunOneJob()
@@ -544,20 +544,20 @@ void JobSystem::fiberWait(JobCounter& counter, WorkerContext& ctx)
     // if we managed to push one) or never touches counter memory again. Our registration bit
     // keeps the full value nonzero - nobody can observe completion and free the counter - until
     // whoever owns it (the transition for pushed nodes, us when backing out) removes it.
-    const uint32 registered = counter.m_count.fetch_add(JobCounter::WaiterInc, std::memory_order_acq_rel);
+    const uint32 registered = counter.m_count.fetch_add(JobCounter::WaiterInc, oc::memory_order_acq_rel);
     assert(registered < 0xff000000u);
     Fiber* fiber = ctx.currentFiber;
     FiberWaitNode node{ fiber, nullptr };
     bool pushed = false;
     if ((registered & JobCounter::CountMask) != 0)
     {
-        fiber->switchDone.store(0, std::memory_order_relaxed); // ordered before the push's release
+        fiber->switchDone.store(0, oc::memory_order_relaxed); // ordered before the push's release
         fiber->state = Fiber::EState::Parked;
-        FiberWaitNode* head = counter.m_waiterHead.load(std::memory_order_acquire);
+        FiberWaitNode* head = counter.m_waiterHead.load(oc::memory_order_acquire);
         while (head != JobCounter::takenSentinel())
         {
             node.next = head;
-            if (counter.m_waiterHead.compare_exchange_weak(head, &node, std::memory_order_release, std::memory_order_acquire))
+            if (counter.m_waiterHead.compare_exchange_weak(head, &node, oc::memory_order_release, oc::memory_order_acquire))
             {
                 pushed = true;
                 break;
@@ -570,7 +570,7 @@ void JobSystem::fiberWait(JobCounter& counter, WorkerContext& ctx)
         // (it saw a taken sentinel). Either way it will never see our node - take the
         // registration back out ourselves, waking anyone who saw its transient nonzero value.
         fiber->state = Fiber::EState::Running;
-        if (counter.m_count.fetch_sub(JobCounter::WaiterInc, std::memory_order_acq_rel) == JobCounter::WaiterInc)
+        if (counter.m_count.fetch_sub(JobCounter::WaiterInc, oc::memory_order_acq_rel) == JobCounter::WaiterInc)
             counter.m_count.notify_all();
         return;
     }
@@ -584,7 +584,7 @@ void JobSystem::fiberWait(JobCounter& counter, WorkerContext& ctx)
 
 void JobSystem::signalCounter(JobCounter& counter)
 {
-    const uint32 old = counter.m_count.fetch_sub(1, std::memory_order_acq_rel);
+    const uint32 old = counter.m_count.fetch_sub(1, oc::memory_order_acq_rel);
     assert((old & JobCounter::CountMask) != 0);
     if ((old & JobCounter::CountMask) != 1)
         return;
@@ -600,20 +600,20 @@ void JobSystem::signalCounter(JobCounter& counter)
     // the counter stays alive at least until our fetch_sub below. Claim the whole wait list with
     // one exchange; registrants who see the sentinel back their own bit out (strictly after this
     // exchange, so the head access is covered too).
-    FiberWaitNode* waiters = counter.m_waiterHead.exchange(JobCounter::takenSentinel(), std::memory_order_acq_rel);
+    FiberWaitNode* waiters = counter.m_waiterHead.exchange(JobCounter::takenSentinel(), oc::memory_order_acq_rel);
     assert(waiters != JobCounter::takenSentinel());
     uint32 numTaken = 0;
     for (FiberWaitNode* node = waiters; node; node = node->next)
         ++numTaken; // nodes live on parked fiber stacks, valid until we resume them below
     if (numTaken)
-        counter.m_count.fetch_sub(numTaken * JobCounter::WaiterInc, std::memory_order_acq_rel); // last memory access
+        counter.m_count.fetch_sub(numTaken * JobCounter::WaiterInc, oc::memory_order_acq_rel); // last memory access
     counter.m_count.notify_all();
     uint32 numResumed = 0;
     while (waiters)
     {
         Fiber* fiber = waiters->fiber;
         waiters = waiters->next; // the node dies with the fiber's resume - read next first
-        while (fiber->switchDone.load(std::memory_order_acquire) == 0)
+        while (fiber->switchDone.load(oc::memory_order_acquire) == 0)
             _mm_pause(); // the fiber is still switching out on its old worker
         pushMust(m_resumeQueue, fiber);
         ++numResumed;
@@ -643,19 +643,19 @@ void JobSystem::lockJobMutexSlow(JobMutex& mutex)
         {
             Fiber* fiber = ctx->currentFiber;
             FiberWaitNode node{ fiber, nullptr };
-            while (mutex.m_listLock.exchange(1, std::memory_order_acquire) != 0)
+            while (mutex.m_listLock.exchange(1, oc::memory_order_acquire) != 0)
                 _mm_pause();
-            if (!(mutex.m_state.load(std::memory_order_relaxed) & JobMutex::LockedBit))
+            if (!(mutex.m_state.load(oc::memory_order_relaxed) & JobMutex::LockedBit))
             {
-                mutex.m_listLock.store(0, std::memory_order_release);
+                mutex.m_listLock.store(0, oc::memory_order_release);
                 continue; // freed while we queued up - race for it again
             }
-            mutex.m_state.fetch_or(JobMutex::WaitersBit, std::memory_order_relaxed);
-            fiber->switchDone.store(0, std::memory_order_relaxed);
+            mutex.m_state.fetch_or(JobMutex::WaitersBit, oc::memory_order_relaxed);
+            fiber->switchDone.store(0, oc::memory_order_relaxed);
             fiber->state = Fiber::EState::Parked;
             node.next = mutex.m_waiters;
             mutex.m_waiters = &node;
-            mutex.m_listLock.store(0, std::memory_order_release);
+            mutex.m_listLock.store(0, oc::memory_order_release);
             ctx->numParked++;
             // Same scope migration as fiberWait: publication rides switchDone
             Globals::profiler.suspendScopes(fiber->profileScopes, fiber->profileBase);
@@ -671,11 +671,11 @@ void JobSystem::lockJobMutexSlow(JobMutex& mutex)
         else
         {
             // unregistered thread: block on the state word (announce first - Dekker with unlock)
-            mutex.m_numBlockedThreads.fetch_add(1, std::memory_order_seq_cst);
-            const uint32 state = mutex.m_state.load(std::memory_order_seq_cst);
+            mutex.m_numBlockedThreads.fetch_add(1, oc::memory_order_seq_cst);
+            const uint32 state = mutex.m_state.load(oc::memory_order_seq_cst);
             if (state & JobMutex::LockedBit)
-                mutex.m_state.wait(state, std::memory_order_relaxed);
-            mutex.m_numBlockedThreads.fetch_sub(1, std::memory_order_relaxed);
+                mutex.m_state.wait(state, oc::memory_order_relaxed);
+            mutex.m_numBlockedThreads.fetch_sub(1, oc::memory_order_relaxed);
         }
     }
 }
@@ -683,20 +683,20 @@ void JobSystem::lockJobMutexSlow(JobMutex& mutex)
 void JobSystem::unlockJobMutexSlow(JobMutex& mutex)
 {
     // pop ONE parked fiber and resume it; it re-races fresh lockers (barging)
-    while (mutex.m_listLock.exchange(1, std::memory_order_acquire) != 0)
+    while (mutex.m_listLock.exchange(1, oc::memory_order_acquire) != 0)
         _mm_pause();
     FiberWaitNode* node = mutex.m_waiters;
     if (node)
         mutex.m_waiters = node->next;
     if (!mutex.m_waiters)
-        mutex.m_state.fetch_and(~JobMutex::WaitersBit, std::memory_order_relaxed);
-    mutex.m_listLock.store(0, std::memory_order_release);
-    if (mutex.m_numBlockedThreads.load(std::memory_order_relaxed) != 0)
+        mutex.m_state.fetch_and(~JobMutex::WaitersBit, oc::memory_order_relaxed);
+    mutex.m_listLock.store(0, oc::memory_order_release);
+    if (mutex.m_numBlockedThreads.load(oc::memory_order_relaxed) != 0)
         mutex.m_state.notify_all();
     if (node)
     {
         Fiber* fiber = node->fiber; // the node dies when the fiber resumes - read first
-        while (fiber->switchDone.load(std::memory_order_acquire) == 0)
+        while (fiber->switchDone.load(oc::memory_order_acquire) == 0)
             _mm_pause();
         pushMust(m_resumeQueue, fiber);
         wakeOne();
@@ -705,7 +705,7 @@ void JobSystem::unlockJobMutexSlow(JobMutex& mutex)
 
 void JobSystem::queueTimed(Job* job, double delaySec)
 {
-    const Clock::time_point due = Clock::now() + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(std::max(delaySec, 0.0)));
+    const Clock::time_point due = Clock::now() + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(oc::max(delaySec, 0.0)));
     {
         std::lock_guard lock(m_timedMutex);
         m_timedJobs.push({ due, job });
@@ -717,7 +717,7 @@ void JobSystem::timerMain()
 {
     Globals::profiler.registerThread("JobTimer", Profiler::SORT_KEY_BACKGROUND + 3);
     std::unique_lock lock(m_timedMutex);
-    while (m_running.load(std::memory_order_relaxed))
+    while (m_running.load(oc::memory_order_relaxed))
     {
         if (m_timedJobs.empty())
         {

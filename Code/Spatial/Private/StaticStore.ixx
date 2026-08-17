@@ -16,12 +16,12 @@ struct StaticStore
         uint32 gen;
     };
 
-    std::vector<float> posX, posY, posZ; // cell-relative, like the pool
-    std::vector<float> radius;           // negative = tombstone, dropped on rebuild
-    std::vector<uint32> layer;
-    std::vector<uint32> poolIdx;         // owning RecordPool slot (visibility stamps, userData)
-    std::vector<uint64> cellKey;         // key at this level; kept sorted, drives rebuild merges
-    std::vector<Pending> pendingPromotions;
+    oc::vector<float> posX, posY, posZ; // cell-relative, like the pool
+    oc::vector<float> radius;           // negative = tombstone, dropped on rebuild
+    oc::vector<uint32> layer;
+    oc::vector<uint32> poolIdx;         // owning RecordPool slot (visibility stamps, userData)
+    oc::vector<uint64> cellKey;         // key at this level; kept sorted, drives rebuild merges
+    oc::vector<Pending> pendingPromotions;
     uint32 numTombstones = 0;
 
     uint32 size() const { return uint32(poolIdx.size()); }

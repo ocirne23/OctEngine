@@ -30,7 +30,7 @@ public:
     float getEmissiveIntensity() const override;
     float getRefractiveIndex() const override;
 
-    std::string getTexturePath(ETextureType type) const override;
+    oc::string getTexturePath(ETextureType type) const override;
 
     uint32 getDiffuseTexIdx() const override;
     uint32 getNormalTexIdx()  const override;

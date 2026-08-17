@@ -125,7 +125,7 @@ void ShadowMapGraphicsPipeline::reloadShaders(uint32 maxTextures)
 
 void ShadowMapGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params)
 {
-    std::array<DescriptorSetUpdateInfo, 3> updates{
+    oc::array<DescriptorSetUpdateInfo, 3> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = params.ubo.getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer,

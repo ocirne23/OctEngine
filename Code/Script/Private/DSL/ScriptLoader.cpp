@@ -32,7 +32,7 @@ namespace
 	{
 		enum class Kind { Identifier, Number, String, Symbol };
 		Kind kind;
-		std::string text; // String: the literal's CONTENT, quotes already stripped
+		oc::string text; // String: the literal's CONTENT, quotes already stripped
 	};
 
 	bool isIdentChar(char c)
@@ -42,7 +42,7 @@ namespace
 
 	// One source line (indentation already stripped, never a '#' comment) -> tokens. False = a character that
 	// can't appear in rendered DSL text, with `error` set.
-	bool tokenizeLine(const std::string& text, std::vector<Token>& out, std::string& error)
+	bool tokenizeLine(const oc::string& text, oc::vector<Token>& out, oc::string& error)
 	{
 		static const char* const kMultiChar[] = { "->", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=" };
 
@@ -85,7 +85,7 @@ namespace
 			if (c == '"')
 			{
 				const size_t close = text.find('"', i + 1);
-				if (close == std::string::npos)
+				if (close == oc::string::npos)
 				{
 					error = "unterminated string literal";
 					return false;
@@ -105,13 +105,13 @@ namespace
 				}
 			if (matchedMulti)
 				continue;
-			if (std::string_view("()=<>+-*/%,.").find(c) != std::string_view::npos)
+			if (oc::string_view("()=<>+-*/%,.").find(c) != oc::string_view::npos)
 			{
-				out.push_back({ Token::Kind::Symbol, std::string(1, c) });
+				out.push_back({ Token::Kind::Symbol, oc::string(1, c) });
 				++i;
 				continue;
 			}
-			error = std::string("unexpected character '") + c + "'";
+			error = oc::string("unexpected character '") + c + "'";
 			return false;
 		}
 		return true;
@@ -119,7 +119,7 @@ namespace
 
 	// ---- vocabulary lookups (single source of truth: dslTypeName / dslOperatorText) ----
 
-	bool typeFromKeyword(const std::string& word, DSLType& out)
+	bool typeFromKeyword(const oc::string& word, DSLType& out)
 	{
 		// "int[]" and friends: an ARRAY of whatever precedes the brackets. Written as one word rather than
 		// three tokens so nothing else in the grammar has to know about brackets (they aren't tokenized at all).
@@ -151,7 +151,7 @@ namespace
 		return false;
 	}
 
-	bool operatorFromText(const std::string& text, DSLOperator& out)
+	bool operatorFromText(const oc::string& text, DSLOperator& out)
 	{
 		for (DSLOperator op : { DSLOperator::Assign, DSLOperator::AssignAdd, DSLOperator::AssignSubtract, DSLOperator::AssignMultiply,
 			DSLOperator::AssignDivide, DSLOperator::AssignModulus, DSLOperator::Add, DSLOperator::Subtract, DSLOperator::Multiply,
@@ -175,7 +175,7 @@ namespace
 	}
 
 	// Index of the ')' matching the '(' at `open`, or -1.
-	int matchParen(std::span<const Token> t, int open)
+	int matchParen(oc::span<const Token> t, int open)
 	{
 		int depth = 0;
 		for (int i = open; i < static_cast<int>(t.size()); ++i)
@@ -191,9 +191,9 @@ namespace
 	}
 
 	// Depth-0 positions of operator tokens matching `accept`, in BINARY position (a term ended just before).
-	std::vector<int> operatorSplits(std::span<const Token> t, auto&& accept)
+	oc::vector<int> operatorSplits(oc::span<const Token> t, auto&& accept)
 	{
-		std::vector<int> out;
+		oc::vector<int> out;
 		int depth = 0;
 		for (int i = 0; i < static_cast<int>(t.size()); ++i)
 		{
@@ -209,9 +209,9 @@ namespace
 
 	// Depth-0 comma splits -- call-argument and for-clause separators. Always yields at least one (possibly
 	// empty) part; callers that mean "no parts at all" check for an empty input span first.
-	std::vector<std::span<const Token>> splitAtCommas(std::span<const Token> t)
+	oc::vector<oc::span<const Token>> splitAtCommas(oc::span<const Token> t)
 	{
-		std::vector<std::span<const Token>> out;
+		oc::vector<oc::span<const Token>> out;
 		int depth = 0;
 		size_t start = 0;
 		for (size_t i = 0; i < t.size(); ++i)
@@ -236,37 +236,37 @@ namespace
 
 	struct Parser
 	{
-		const std::vector<std::unique_ptr<DSLSymbol>>& sidebar;
-		const std::vector<std::unique_ptr<DSLSymbol>>& builtins;
+		const oc::vector<oc::unique_ptr<DSLSymbol>>& sidebar;
+		const oc::vector<oc::unique_ptr<DSLSymbol>>& builtins;
 		const ScriptBindings& bindings;
-		const std::vector<DSLType>& requiredComponents; // the FILE's "//@@require" set, parsed before any line
-		const std::vector<DSLDataField>& dataFields;             // the FILE's "//@@data" fields, parsed before any line
-		const std::vector<std::string>& eventNames;              // the FILE's "//@@event" names, parsed before any line
+		const oc::vector<DSLType>& requiredComponents; // the FILE's "//@@require" set, parsed before any line
+		const oc::vector<DSLDataField>& dataFields;             // the FILE's "//@@data" fields, parsed before any line
+		const oc::vector<oc::string>& eventNames;              // the FILE's "//@@event" names, parsed before any line
 
-		std::vector<std::unique_ptr<DSLCodeLine>> outLines;
-		std::vector<DSLSymbol*> userFunctions;  // pass-1 FunctionDeclaration heads, document order
-		std::vector<DSLSymbol*> scopeVars;      // the current function's parameters + locals so far (reset per function)
+		oc::vector<oc::unique_ptr<DSLCodeLine>> outLines;
+		oc::vector<DSLSymbol*> userFunctions;  // pass-1 FunctionDeclaration heads, document order
+		oc::vector<DSLSymbol*> scopeVars;      // the current function's parameters + locals so far (reset per function)
 		// Names bound by an enclosing `ifexist` that are no longer READABLE (an else branch pruned them
 		// from scopeVars) but must still not be redeclared: the generated C++ scopes the condition
 		// declaration across the whole if/else, so a redeclaration there would silently shadow it.
-		std::vector<std::string> reservedNames;
+		oc::vector<oc::string> reservedNames;
 		// The open block headers enclosing the line being parsed -- owned here (not by the load driver) so
 		// statement parsers can ask what they're nested inside; see checkContainerNotIterated.
-		std::vector<DSLSymbol*> openBlocks;
+		oc::vector<DSLSymbol*> openBlocks;
 
 		DSLType currentReturnType = DSLType::Void;
-		std::string error;                      // first failure -- everything bails out through fail()/failValue()
+		oc::string error;                      // first failure -- everything bails out through fail()/failValue()
 
-		bool fail(std::string what)
+		bool fail(oc::string what)
 		{
 			if (error.empty())
-				error = std::move(what);
+				error = oc::move(what);
 			return false;
 		}
 
-		DSLSymbol* failValue(std::string what)
+		DSLSymbol* failValue(oc::string what)
 		{
-			fail(std::move(what));
+			fail(oc::move(what));
 			return nullptr;
 		}
 
@@ -274,71 +274,71 @@ namespace
 		// order -- children before parents, which is exactly the post-order convention (see DSL.ixx).
 		DSLSymbol* push(DSLCodeLine& line, ST type, DSLSymbol::Data data)
 		{
-			auto symbol = std::make_unique<DSLSymbol>();
+			auto symbol = oc::make_unique<DSLSymbol>();
 			symbol->type = type;
-			symbol->data = std::move(data);
+			symbol->data = oc::move(data);
 			symbol->line = &line;
 			DSLSymbol* ptr = symbol.get();
-			line.symbols.push_back(std::move(symbol));
+			line.symbols.push_back(oc::move(symbol));
 			return ptr;
 		}
 
-		bool isReservedInChain(const std::string& name) const
+		bool isReservedInChain(const oc::string& name) const
 		{
-			for (const std::string& reserved : reservedNames)
+			for (const oc::string& reserved : reservedNames)
 				if (reserved == name)
 					return true;
 			return false;
 		}
 
-		DSLSymbol* findVariable(const std::string& name) const
+		DSLSymbol* findVariable(const oc::string& name) const
 		{
 			for (auto it = scopeVars.rbegin(); it != scopeVars.rend(); ++it)
-				if (std::get<DSLSymbol::VariableDeclaration>((*it)->data).name == name)
+				if (oc::get<DSLSymbol::VariableDeclaration>((*it)->data).name == name)
 					return *it;
-			for (const std::unique_ptr<DSLSymbol>& s : sidebar)
-				if (s->type == ST::VariableDeclaration && std::get<DSLSymbol::VariableDeclaration>(s->data).name == name)
+			for (const oc::unique_ptr<DSLSymbol>& s : sidebar)
+				if (s->type == ST::VariableDeclaration && oc::get<DSLSymbol::VariableDeclaration>(s->data).name == name)
 					return s.get();
 			return nullptr;
 		}
 
-		const DSLDataField* findDataField(const std::string& name) const { return dslFindDataField(dataFields, name); }
-		int findEventIndex(const std::string& name) const { return dslFindEventIndex(eventNames, name); }
+		const DSLDataField* findDataField(const oc::string& name) const { return dslFindDataField(dataFields, name); }
+		int findEventIndex(const oc::string& name) const { return dslFindEventIndex(eventNames, name); }
 
-		DSLSymbol* findFunction(const std::string& name, bool requiresReceiver) const
+		DSLSymbol* findFunction(const oc::string& name, bool requiresReceiver) const
 		{
 			if (!requiresReceiver) // user functions are never receiver-based
 				for (DSLSymbol* func : userFunctions)
-					if (std::get<DSLSymbol::FunctionDeclaration>(func->data).name == name)
+					if (oc::get<DSLSymbol::FunctionDeclaration>(func->data).name == name)
 						return func;
-			for (const std::unique_ptr<DSLSymbol>& s : builtins)
+			for (const oc::unique_ptr<DSLSymbol>& s : builtins)
 				if (s->type == ST::FunctionDeclaration
-					&& std::get<DSLSymbol::FunctionDeclaration>(s->data).requiresReceiver == requiresReceiver
-					&& std::get<DSLSymbol::FunctionDeclaration>(s->data).name == name)
+					&& oc::get<DSLSymbol::FunctionDeclaration>(s->data).requiresReceiver == requiresReceiver
+					&& oc::get<DSLSymbol::FunctionDeclaration>(s->data).name == name)
 					return s.get();
 			return nullptr;
 		}
 
 		static DSLType declaredType(const DSLSymbol* varDecl)
 		{
-			const DSLSymbol::VariableDeclaration& decl = std::get<DSLSymbol::VariableDeclaration>(varDecl->data);
-			return std::get<DSLSymbol::TypeDeclaration>(decl.typeSymbol->data).type;
+			const DSLSymbol::VariableDeclaration& decl = oc::get<DSLSymbol::VariableDeclaration>(varDecl->data);
+			return oc::get<DSLSymbol::TypeDeclaration>(decl.typeSymbol->data).type;
 		}
 
 		// A dotted call's callee, resolved against the RECEIVER's own registry side -- a binding object's
 		// functions or a struct type's member functions -- never a global name scan.
-		DSLSymbol* findReceiverFunction(DSLType receiverType, const std::string& name) const
+		DSLSymbol* findReceiverFunction(DSLType receiverType, const oc::string& name) const
 		{
 			if (const BindingObject* object = bindings.objectFor(receiverType); object != nullptr)
 			{
-				const std::span<DSLSymbol* const> symbols = bindings.functionSymbols(*object);
+				const oc::span<DSLSymbol* const> symbols = bindings.functionSymbols(*object);
 				for (size_t i = 0; i < object->functions.size(); ++i)
 					if (name == object->functions[i].name)
 						return symbols[i];
 			}
 			if (const BindingStruct* structDef = bindings.structFor(receiverType); structDef != nullptr)
 			{
-				const std::span<DSLSymbol* const> symbols = bindings.structFunctionSymbols(receiverType);
+				const oc::span<DSLSymbol* const> symbols = bindings.structFunctionSymbols(receiverType);
 				for (size_t i = 0; i < structDef->functions.size(); ++i)
 					if (name == structDef->functions[i].name)
 						return symbols[i];
@@ -351,7 +351,7 @@ namespace
 		// path walked -- `self.parent.physics` and `e.physics` are other entities and would silently read self's
 		// component instead), and only when the file's "//@@require" set names it. The loader-side twin of
 		// receiverCandidates' editor gating; `ifexist` is how another entity's component is reached.
-		bool checkMemberUsable(const std::string& ownerName, const std::string& memberName, const BindingMember& member,
+		bool checkMemberUsable(const oc::string& ownerName, const oc::string& memberName, const BindingMember& member,
 			const DSLSymbol* rootDecl, bool receiverIsRoot)
 		{
 			// A self-only member (see BindingMember::selfOnly) belongs to the SCRIPT, not to whichever entity it
@@ -360,20 +360,20 @@ namespace
 			if (member.selfOnly && (rootDecl == nullptr || rootDecl->line != nullptr || !receiverIsRoot))
 				return fail("'" + ownerName + "." + memberName + "' belongs to this script's own entity"
 					+ (member.requiredComponent != DSLType::Void
-						? std::string(" -- use 'ifexist' to reach another entity's") : std::string()));
+						? oc::string(" -- use 'ifexist' to reach another entity's") : oc::string()));
 			if (member.requiredComponent != DSLType::Void
-				&& std::find(requiredComponents.begin(), requiredComponents.end(), member.requiredComponent) == requiredComponents.end())
+				&& oc::find(requiredComponents.begin(), requiredComponents.end(), member.requiredComponent) == requiredComponents.end())
 				return fail("'" + ownerName + "." + memberName + "' is used but its component isn't in the //@@require line");
 			return true;
 		}
 
 		// A numeric literal adopts the slot's expected type when it IS numeric -- the same Constant the editor's
 		// compose flow would have produced there ("force = 1" makes a Float "1") -- else its own shape decides.
-		DSLSymbol* buildNumberConstant(const std::string& text, DSLType expected, DSLCodeLine& line)
+		DSLSymbol* buildNumberConstant(const oc::string& text, DSLType expected, DSLCodeLine& line)
 		{
 			const DSLType type = (expected == DSLType::Int || expected == DSLType::Float)
 				? expected
-				: (text.find('.') != std::string::npos ? DSLType::Float : DSLType::Int);
+				: (text.find('.') != oc::string::npos ? DSLType::Float : DSLType::Int);
 			if (!AutoCompleteRules::isValidLiteralText(type, text))
 				return failValue("'" + text + "' is not a valid " + dslTypeName(type) + " literal");
 			return push(line, ST::Constant, DSLSymbol::Constant{ type, text });
@@ -383,16 +383,16 @@ namespace
 		// comment): parseExpression = logical level, parseComparison = at most one comparison, parseArithmetic =
 		// one flat chain, parseTerm = a single value (literal/variable/call/member/parenthesized group).
 
-		DSLSymbol* parseExpression(std::span<const Token> t, DSLCodeLine& line, DSLType expected)
+		DSLSymbol* parseExpression(oc::span<const Token> t, DSLCodeLine& line, DSLType expected)
 		{
 			if (t.empty())
 				return failValue("expected a value");
-			const std::vector<int> splits = operatorSplits(t, [](const std::string& s) { return s == "&&" || s == "||"; });
+			const oc::vector<int> splits = operatorSplits(t, [](const oc::string& s) { return s == "&&" || s == "||"; });
 			if (splits.empty())
 				return parseComparison(t, line, expected);
 
-			std::vector<DSLSymbol*> operands;
-			std::vector<DSLOperator> ops;
+			oc::vector<DSLSymbol*> operands;
+			oc::vector<DSLOperator> ops;
 			int start = 0;
 			for (size_t i = 0; i <= splits.size(); ++i)
 			{
@@ -407,12 +407,12 @@ namespace
 					start = splits[i] + 1;
 				}
 			}
-			return push(line, ST::Expression, DSLSymbol::Expression{ std::move(operands), std::move(ops) });
+			return push(line, ST::Expression, DSLSymbol::Expression{ oc::move(operands), oc::move(ops) });
 		}
 
-		DSLSymbol* parseComparison(std::span<const Token> t, DSLCodeLine& line, DSLType expected)
+		DSLSymbol* parseComparison(oc::span<const Token> t, DSLCodeLine& line, DSLType expected)
 		{
-			const std::vector<int> splits = operatorSplits(t, [](const std::string& s)
+			const oc::vector<int> splits = operatorSplits(t, [](const oc::string& s)
 				{ return s == "==" || s == "!=" || s == "<" || s == ">" || s == "<=" || s == ">="; });
 			if (splits.empty())
 				return parseArithmetic(t, line, expected);
@@ -433,19 +433,19 @@ namespace
 			// Engine objects compare by identity / against null only -- the loader-side twin of the editor
 			// narrowing its comparison-operator list (AutoCompleteRules::isEqualityOnlyType).
 			if (AutoCompleteRules::isEqualityOnlyType(leftType) && op != DSLOperator::Equal && op != DSLOperator::NotEqual)
-				return failValue("'" + std::string(dslOperatorText(op)) + "' can't compare " + std::string(dslTypeName(leftType)) + " values");
+				return failValue("'" + oc::string(dslOperatorText(op)) + "' can't compare " + oc::string(dslTypeName(leftType)) + " values");
 			return push(line, ST::Expression, DSLSymbol::Expression{ { left, right }, { op } });
 		}
 
-		DSLSymbol* parseArithmetic(std::span<const Token> t, DSLCodeLine& line, DSLType expected)
+		DSLSymbol* parseArithmetic(oc::span<const Token> t, DSLCodeLine& line, DSLType expected)
 		{
-			const std::vector<int> splits = operatorSplits(t, [](const std::string& s)
+			const oc::vector<int> splits = operatorSplits(t, [](const oc::string& s)
 				{ return s == "+" || s == "-" || s == "*" || s == "/" || s == "%"; });
 			if (splits.empty())
 				return parseTerm(t, line, expected);
 
-			std::vector<DSLSymbol*> operands;
-			std::vector<DSLOperator> ops;
+			oc::vector<DSLSymbol*> operands;
+			oc::vector<DSLOperator> ops;
 			DSLType elementType = expected;
 			int start = 0;
 			for (size_t i = 0; i <= splits.size(); ++i)
@@ -465,10 +465,10 @@ namespace
 					start = splits[i] + 1;
 				}
 			}
-			return push(line, ST::Expression, DSLSymbol::Expression{ std::move(operands), std::move(ops) });
+			return push(line, ST::Expression, DSLSymbol::Expression{ oc::move(operands), oc::move(ops) });
 		}
 
-		DSLSymbol* parseTerm(std::span<const Token> t, DSLCodeLine& line, DSLType expected)
+		DSLSymbol* parseTerm(oc::span<const Token> t, DSLCodeLine& line, DSLType expected)
 		{
 			if (t.empty())
 				return failValue("expected a value");
@@ -483,9 +483,9 @@ namespace
 				DSLSymbol* inner = parseExpression(t.subspan(1, t.size() - 2), line, expected);
 				if (inner == nullptr)
 					return nullptr;
-				if (inner->type == ST::Expression && !std::get<DSLSymbol::Expression>(inner->data).grouped)
+				if (inner->type == ST::Expression && !oc::get<DSLSymbol::Expression>(inner->data).grouped)
 				{
-					std::get<DSLSymbol::Expression>(inner->data).grouped = true;
+					oc::get<DSLSymbol::Expression>(inner->data).grouped = true;
 					return inner;
 				}
 				return push(line, ST::Expression, DSLSymbol::Expression{ { inner }, {}, /*grouped*/ true });
@@ -532,13 +532,13 @@ namespace
 					return failValue("unknown identifier '" + first.text + "'");
 				DSLType receiverType = declaredType(receiverDecl);
 				DSLSymbol* receiver = push(line, ST::VariableReference, DSLSymbol::VariableReference{ receiverDecl });
-				std::string ownerName = first.text;
+				oc::string ownerName = first.text;
 				size_t i = 1; // at each loop head t[i] is the '.'
 				while (true)
 				{
 					if (i + 1 >= t.size() || t[i + 1].kind != Token::Kind::Identifier)
 						return failValue("expected a member name after '" + ownerName + ".'");
-					const std::string memberName = t[i + 1].text;
+					const oc::string memberName = t[i + 1].text;
 					// "name(" terminates the chain as a method call on everything walked so far.
 					if (i + 2 < t.size() && t[i + 2].kind == Token::Kind::Symbol && t[i + 2].text == "(")
 					{
@@ -602,17 +602,17 @@ namespace
 		// `args` is the token span BETWEEN the call's parens. Each argument is positional ("vec3(0, 1, 0)") or
 		// named ("[ref] [type] name = value" -- the expanded view always writes the type; the callee's matching
 		// parameter is resolved by NAME, order-independent, exactly like DSLSymbol::CallArgument documents).
-		DSLSymbol* parseCall(std::span<const Token> args, DSLCodeLine& line, DSLSymbol* funcSymbol, DSLSymbol* receiverRef)
+		DSLSymbol* parseCall(oc::span<const Token> args, DSLCodeLine& line, DSLSymbol* funcSymbol, DSLSymbol* receiverRef)
 		{
-			const DSLSymbol::FunctionDeclaration& callee = std::get<DSLSymbol::FunctionDeclaration>(funcSymbol->data);
-			std::vector<DSLSymbol::CallArgument> built;
+			const DSLSymbol::FunctionDeclaration& callee = oc::get<DSLSymbol::FunctionDeclaration>(funcSymbol->data);
+			oc::vector<DSLSymbol::CallArgument> built;
 
 			if (!args.empty())
 			{
-				const std::vector<std::span<const Token>> parts = splitAtCommas(args);
+				const oc::vector<oc::span<const Token>> parts = splitAtCommas(args);
 				for (size_t argIndex = 0; argIndex < parts.size(); ++argIndex)
 				{
-					std::span<const Token> arg = parts[argIndex];
+					oc::span<const Token> arg = parts[argIndex];
 					if (arg.empty())
 						return failValue("empty argument in call to '" + callee.name + "'");
 
@@ -629,12 +629,12 @@ namespace
 						nameAt = 1;
 
 					DSLSymbol* param = nullptr;
-					std::span<const Token> valueSpan = arg;
+					oc::span<const Token> valueSpan = arg;
 					if (arg.size() >= nameAt + 2 && arg[nameAt].kind == Token::Kind::Identifier
 						&& arg[nameAt + 1].kind == Token::Kind::Symbol && arg[nameAt + 1].text == "=")
 					{
 						for (DSLSymbol* p : callee.parameterVarDeclarations)
-							if (std::get<DSLSymbol::VariableDeclaration>(p->data).name == arg[nameAt].text)
+							if (oc::get<DSLSymbol::VariableDeclaration>(p->data).name == arg[nameAt].text)
 								param = p;
 						if (param == nullptr)
 							return failValue("'" + callee.name + "' has no parameter named '" + arg[nameAt].text + "'");
@@ -649,8 +649,8 @@ namespace
 						typeSource = callee.parameterVarDeclarations[argIndex];
 					DSLType expected = DSLType::Void;
 					if (typeSource != nullptr)
-						expected = std::get<DSLSymbol::TypeDeclaration>(
-							std::get<DSLSymbol::VariableDeclaration>(typeSource->data).typeSymbol->data).type;
+						expected = oc::get<DSLSymbol::TypeDeclaration>(
+							oc::get<DSLSymbol::VariableDeclaration>(typeSource->data).typeSymbol->data).type;
 
 					DSLSymbol* value = parseExpression(valueSpan, line, expected);
 					if (value == nullptr)
@@ -659,9 +659,9 @@ namespace
 					// confirm): a `ref` parameter takes the callee's OUTPUT, so only a bare existing variable
 					// can stand there. Without this a hand-edited file reaches the transpiler and fails in cl
 					// with a reference-binding error instead of a DSL diagnostic.
-					if (typeSource != nullptr && std::get<DSLSymbol::VariableDeclaration>(typeSource->data).isRef
+					if (typeSource != nullptr && oc::get<DSLSymbol::VariableDeclaration>(typeSource->data).isRef
 						&& value->type != ST::VariableReference)
-						return failValue("argument " + std::to_string(argIndex + 1) + " of '" + callee.name
+						return failValue("argument " + oc::to_string(argIndex + 1) + " of '" + callee.name
 							+ "' is a 'ref' parameter -- it needs a variable, not an expression");
 					built.push_back(DSLSymbol::CallArgument{ param, value });
 				}
@@ -669,7 +669,7 @@ namespace
 
 			if (!checkContainerNotIterated(funcSymbol, receiverRef))
 				return nullptr;
-			return push(line, ST::FunctionCall, DSLSymbol::FunctionCall{ funcSymbol, receiverRef, std::move(built) });
+			return push(line, ST::FunctionCall, DSLSymbol::FunctionCall{ funcSymbol, receiverRef, oc::move(built) });
 		}
 
 		// Refuses an array push/clear authored directly inside a foreach/ifexist over that same container --
@@ -680,14 +680,14 @@ namespace
 		{
 			if (funcSymbol == nullptr || receiver == nullptr)
 				return true;
-			const DSLSymbol::FunctionDeclaration& callee = std::get<DSLSymbol::FunctionDeclaration>(funcSymbol->data);
+			const DSLSymbol::FunctionDeclaration& callee = oc::get<DSLSymbol::FunctionDeclaration>(funcSymbol->data);
 			if (!callee.mutatesContainer)
 				return true;
 			for (const DSLSymbol* open : openBlocks)
 			{
 				if (open == nullptr || open->type != ST::FlowControl)
 					continue;
-				const DSLSymbol::FlowControl& fc = std::get<DSLSymbol::FlowControl>(open->data);
+				const DSLSymbol::FlowControl& fc = oc::get<DSLSymbol::FlowControl>(open->data);
 				if (fc.control != DSLFlowControl::ForEach && fc.control != DSLFlowControl::IfExist)
 					continue;
 				if (dslSameStorage(fc.condition, receiver))
@@ -699,36 +699,36 @@ namespace
 
 		// "type name [= value]" -> a VariableDeclaration head, registered into scopeVars. Locals and the
 		// for-loop's first clause alike.
-		DSLSymbol* parseDeclaration(std::span<const Token> t, DSLCodeLine& line)
+		DSLSymbol* parseDeclaration(oc::span<const Token> t, DSLCodeLine& line)
 		{
 			DSLType type = DSLType::Void;
 			if (!(t[0].kind == Token::Kind::Identifier && typeFromKeyword(t[0].text, type)))
 				return failValue("expected a type keyword");
 			if (t.size() < 2 || t[1].kind != Token::Kind::Identifier)
 				return failValue("expected a variable name after '" + t[0].text + "'");
-			const std::string& name = t[1].text;
+			const oc::string& name = t[1].text;
 			// The loader-side twin of the editor's isNameInScope gate -- keywords/"ctx" are reserved exactly
 			// like an actual collision (see AutoCompleteRules::isReservedWord).
 			if (AutoCompleteRules::isReservedWord(name))
 				return failValue("'" + name + "' is reserved");
 			for (DSLSymbol* var : scopeVars)
-				if (std::get<DSLSymbol::VariableDeclaration>(var->data).name == name)
+				if (oc::get<DSLSymbol::VariableDeclaration>(var->data).name == name)
 					return failValue("'" + name + "' is already declared in this function");
 			if (isReservedInChain(name))
 				return failValue("'" + name + "' is bound by the enclosing 'ifexist'");
-			for (const std::unique_ptr<DSLSymbol>& s : sidebar)
-				if (s->type == ST::VariableDeclaration && std::get<DSLSymbol::VariableDeclaration>(s->data).name == name)
+			for (const oc::unique_ptr<DSLSymbol>& s : sidebar)
+				if (s->type == ST::VariableDeclaration && oc::get<DSLSymbol::VariableDeclaration>(s->data).name == name)
 					return failValue("'" + name + "' is a sidebar binding");
 			// A variable can't shadow a function name either (see isNameInScope's own comment for why this is
 			// more than a style rule -- it'd make the function uncallable in the transpiled C++). Receiver-based
 			// builtins are exempt: `dot`/`length`/`push` are only reachable through a receiver, so nothing about
 			// them is shadowable (see isFunctionNameTaken).
-			for (const std::unique_ptr<DSLSymbol>& s : builtins)
-				if (s->type == ST::FunctionDeclaration && !std::get<DSLSymbol::FunctionDeclaration>(s->data).requiresReceiver
-					&& std::get<DSLSymbol::FunctionDeclaration>(s->data).name == name)
+			for (const oc::unique_ptr<DSLSymbol>& s : builtins)
+				if (s->type == ST::FunctionDeclaration && !oc::get<DSLSymbol::FunctionDeclaration>(s->data).requiresReceiver
+					&& oc::get<DSLSymbol::FunctionDeclaration>(s->data).name == name)
 					return failValue("'" + name + "' is already a function name");
 			for (DSLSymbol* func : userFunctions)
-				if (std::get<DSLSymbol::FunctionDeclaration>(func->data).name == name)
+				if (oc::get<DSLSymbol::FunctionDeclaration>(func->data).name == name)
 					return failValue("'" + name + "' is already a function name");
 
 			DSLSymbol* typeSymbol = push(line, ST::TypeDeclaration, DSLSymbol::TypeDeclaration{ type });
@@ -748,7 +748,7 @@ namespace
 
 		// Index of the assignment operator following a (possibly dotted) target at the statement's start
 		// ("self.pos.x += ..." -> the '+=' index), or 0 when the line doesn't read as an assignment.
-		static size_t assignmentOpPosition(std::span<const Token> t)
+		static size_t assignmentOpPosition(oc::span<const Token> t)
 		{
 			size_t i = (t.size() > 1 && t[0].kind == Token::Kind::Identifier && t[0].text == "ref") ? 1 : 0;
 			if (i >= t.size() || t[i].kind != Token::Kind::Identifier)
@@ -766,7 +766,7 @@ namespace
 		// "[ref] name(.member)* <assign-op> value" -> the binary assign-class Expression head (see DSL.ixx:
 		// assignments stay exactly [target, value]); a dotted target is a member-assign statement, every hop
 		// registry-validated and the written member required writable.
-		DSLSymbol* parseAssignment(std::span<const Token> t, DSLCodeLine& line)
+		DSLSymbol* parseAssignment(oc::span<const Token> t, DSLCodeLine& line)
 		{
 			if (t[0].kind == Token::Kind::Identifier && t[0].text == "ref" && t.size() > 1)
 				t = t.subspan(1); // rendering artifact of assigning into a ref parameter -- the target's decl carries the flag
@@ -784,15 +784,15 @@ namespace
 			// element is a COPY, so a write to it (or to one of its members) would be silently discarded at the
 			// end of the block. Entity elements are handles, not copies, so they stay writable.
 			if (!dslIsEngineObjectType(targetType)
-				&& !std::get<DSLSymbol::VariableDeclaration>(rootDecl->data).isRef
+				&& !oc::get<DSLSymbol::VariableDeclaration>(rootDecl->data).isRef
 				&& dslIsElementBinding(rootDecl))
 				return failValue("'" + t[0].text + "' binds a copy -- declare it 'ref' to write through it");
 
 			DSLSymbol* target = push(line, ST::VariableReference, DSLSymbol::VariableReference{ rootDecl });
-			std::string ownerName = t[0].text;
+			oc::string ownerName = t[0].text;
 			for (size_t i = 2; i < opAt; i += 2) // member hops sit at 2, 4, ... opAt-1
 			{
-				const std::string& memberName = t[i].text;
+				const oc::string& memberName = t[i].text;
 				DSLType memberType;
 				if (targetType == DSLType::ScriptData)
 				{
@@ -840,9 +840,9 @@ namespace
 
 		// "for" already consumed; `t` holds the three comma-separated clauses. The loop variable registers into
 		// scope BEFORE the condition/increment parse, since both reference it on the same line.
-		DSLSymbol* parseFor(std::span<const Token> t, DSLCodeLine& line)
+		DSLSymbol* parseFor(oc::span<const Token> t, DSLCodeLine& line)
 		{
-			const std::vector<std::span<const Token>> clauses = splitAtCommas(t);
+			const oc::vector<oc::span<const Token>> clauses = splitAtCommas(t);
 			if (clauses.size() != 3)
 				return failValue("'for' takes exactly three comma-separated clauses");
 			DSLSymbol* loopVar = parseDeclaration(clauses[0], line);
@@ -860,7 +860,7 @@ namespace
 		// "foreach" already consumed; `t` holds "<type> <name> in <sequence>". The element declaration registers
 		// into scope for the body but is NOT a value slot of its own -- the loop supplies each value, so unlike
 		// a for-loop's counter it carries no initializer.
-		DSLSymbol* parseForEach(std::span<const Token> t, DSLCodeLine& line)
+		DSLSymbol* parseForEach(oc::span<const Token> t, DSLCodeLine& line)
 		{
 			bool isRef = false;
 			if (!t.empty() && t[0].kind == Token::Kind::Identifier && t[0].text == "ref")
@@ -874,11 +874,11 @@ namespace
 				return failValue("expected \"foreach [ref] <type> <name> in <sequence>\"");
 			if (t[2].kind != Token::Kind::Identifier || t[2].text != "in")
 				return failValue("expected 'in' after the foreach element name");
-			const std::string elementName = t[1].text;
+			const oc::string elementName = t[1].text;
 			if (AutoCompleteRules::isReservedWord(elementName))
 				return failValue("'" + elementName + "' is reserved");
 			for (DSLSymbol* var : scopeVars)
-				if (std::get<DSLSymbol::VariableDeclaration>(var->data).name == elementName)
+				if (oc::get<DSLSymbol::VariableDeclaration>(var->data).name == elementName)
 					return failValue("'" + elementName + "' is already declared in this function");
 			if (isReservedInChain(elementName))
 				return failValue("'" + elementName + "' is bound by the enclosing 'ifexist'");
@@ -890,9 +890,9 @@ namespace
 			const DSLType sequenceType = dslValueType(sequence);
 			const BindingObject* object = bindings.objectFor(sequenceType);
 			if (object == nullptr || object->sequenceElementType == DSLType::Void)
-				return failValue("'" + std::string(dslTypeName(sequenceType)) + "' isn't iterable");
+				return failValue("'" + oc::string(dslTypeName(sequenceType)) + "' isn't iterable");
 			if (object->sequenceElementType != elementType)
-				return failValue("'" + std::string(dslTypeName(sequenceType)) + "' yields "
+				return failValue("'" + oc::string(dslTypeName(sequenceType)) + "' yields "
 					+ dslTypeName(object->sequenceElementType) + ", not " + dslTypeName(elementType));
 
 			if (!checkRefBinding(isRef, elementType, object, "foreach"))
@@ -908,7 +908,7 @@ namespace
 		// "ifexist" already consumed; `t` holds "[ref] <type> <name> in <container> [at <key>]". The container's
 		// own registration decides everything: whether it can be looked up at all, what type the key is, what
 		// the element yields, and whether `ref` is allowed -- see BindingObject's lookup fields.
-		DSLSymbol* parseIfExist(std::span<const Token> t, DSLCodeLine& line)
+		DSLSymbol* parseIfExist(oc::span<const Token> t, DSLCodeLine& line)
 		{
 			bool isRef = false;
 			if (!t.empty() && t[0].kind == Token::Kind::Identifier && t[0].text == "ref")
@@ -925,11 +925,11 @@ namespace
 				return failValue("expected \"ifexist [ref] <type> <name> in <source> [at <key>]\"");
 			if (t[2].kind != Token::Kind::Identifier || t[2].text != "in")
 				return failValue("expected 'in' after the ifexist variable name");
-			const std::string boundName = t[1].text;
+			const oc::string boundName = t[1].text;
 			if (AutoCompleteRules::isReservedWord(boundName))
 				return failValue("'" + boundName + "' is reserved");
 			for (DSLSymbol* var : scopeVars)
-				if (std::get<DSLSymbol::VariableDeclaration>(var->data).name == boundName)
+				if (oc::get<DSLSymbol::VariableDeclaration>(var->data).name == boundName)
 					return failValue("'" + boundName + "' is already declared in this function");
 			if (isReservedInChain(boundName))
 				return failValue("'" + boundName + "' is bound by the enclosing 'ifexist'");
@@ -963,11 +963,11 @@ namespace
 			}
 			else if (object == nullptr || object->lookupValueType == DSLType::Void || object->lookupEmit == nullptr)
 			{
-				return failValue("'" + std::string(dslTypeName(containerType)) + "' can't be looked up");
+				return failValue("'" + oc::string(dslTypeName(containerType)) + "' can't be looked up");
 			}
 			else if (object->lookupValueType != elementType)
 			{
-				return failValue("'" + std::string(dslTypeName(containerType)) + "' holds "
+				return failValue("'" + oc::string(dslTypeName(containerType)) + "' holds "
 					+ dslTypeName(object->lookupValueType) + ", not " + dslTypeName(elementType));
 			}
 
@@ -976,16 +976,16 @@ namespace
 			if (keyType != DSLType::Void)
 			{
 				if (atPos >= t.size())
-					return failValue("'" + std::string(dslTypeName(containerType)) + "' needs an 'at <key>'");
+					return failValue("'" + oc::string(dslTypeName(containerType)) + "' needs an 'at <key>'");
 				key = parseExpression(t.subspan(atPos + 1), line, keyType);
 				if (key == nullptr)
 					return nullptr;
 				if (dslValueType(key) != keyType)
-					return failValue("the 'at' key must be " + std::string(dslTypeName(keyType)));
+					return failValue("the 'at' key must be " + oc::string(dslTypeName(keyType)));
 			}
 			else if (atPos < t.size())
 			{
-				return failValue("'" + std::string(dslTypeName(containerType)) + "' takes no 'at <key>'");
+				return failValue("'" + oc::string(dslTypeName(containerType)) + "' takes no 'at <key>'");
 			}
 
 			// A component handle is an engine object, so checkRefBinding refuses `ref` on it regardless -- but
@@ -1010,7 +1010,7 @@ namespace
 			if (!isRef)
 				return true;
 			if (dslIsEngineObjectType(elementType))
-				return fail(std::string("'") + keyword + " ref' isn't allowed on " + dslTypeName(elementType)
+				return fail(oc::string("'") + keyword + " ref' isn't allowed on " + dslTypeName(elementType)
 					+ " -- it's already a handle, writes through it reach the real object");
 			if (container == nullptr || !container->elementWritable)
 				return fail("this container's elements can't be modified");
@@ -1019,7 +1019,7 @@ namespace
 
 		// One body/statement line. Never a function header, else/elseif, end, comment, or blank -- the load
 		// driver handles those (they need block-stack context). Returns the line's new head symbol, or null.
-		DSLSymbol* parseStatement(std::span<const Token> t, DSLCodeLine& line)
+		DSLSymbol* parseStatement(oc::span<const Token> t, DSLCodeLine& line)
 		{
 			const Token& first = t[0];
 			if (first.kind != Token::Kind::Identifier)
@@ -1071,9 +1071,9 @@ namespace
 
 		// Pass 1: "function name([ref] type name, ...) [-> type]" -> a complete scope-0 header line, its
 		// FunctionDeclaration registered for pass 2's call resolution (which is what makes forward calls work).
-		std::unique_ptr<DSLCodeLine> parseFunctionHeader(std::span<const Token> t)
+		oc::unique_ptr<DSLCodeLine> parseFunctionHeader(oc::span<const Token> t)
 		{
-			auto line = std::make_unique<DSLCodeLine>();
+			auto line = oc::make_unique<DSLCodeLine>();
 			line->scopeLevel = 0;
 
 			if (t.size() < 4 || t[1].kind != Token::Kind::Identifier
@@ -1082,7 +1082,7 @@ namespace
 				fail("malformed function declaration");
 				return nullptr;
 			}
-			const std::string& name = t[1].text;
+			const oc::string& name = t[1].text;
 			// The loader-side twin of the editor's isFunctionNameTaken gate -- keywords/"ctx" are reserved
 			// exactly like an actual collision (see AutoCompleteRules::isReservedWord).
 			if (AutoCompleteRules::isReservedWord(name))
@@ -1091,15 +1091,15 @@ namespace
 				return nullptr;
 			}
 			for (DSLSymbol* func : userFunctions)
-				if (std::get<DSLSymbol::FunctionDeclaration>(func->data).name == name)
+				if (oc::get<DSLSymbol::FunctionDeclaration>(func->data).name == name)
 				{
 					fail("function '" + name + "' is declared twice");
 					return nullptr;
 				}
 			// Receiver-based builtins are exempt, same as for variable names above (see isFunctionNameTaken).
-			for (const std::unique_ptr<DSLSymbol>& s : builtins)
-				if (s->type == ST::FunctionDeclaration && !std::get<DSLSymbol::FunctionDeclaration>(s->data).requiresReceiver
-					&& std::get<DSLSymbol::FunctionDeclaration>(s->data).name == name)
+			for (const oc::unique_ptr<DSLSymbol>& s : builtins)
+				if (s->type == ST::FunctionDeclaration && !oc::get<DSLSymbol::FunctionDeclaration>(s->data).requiresReceiver
+					&& oc::get<DSLSymbol::FunctionDeclaration>(s->data).name == name)
 				{
 					fail("'" + name + "' is a builtin function");
 					return nullptr;
@@ -1112,10 +1112,10 @@ namespace
 				return nullptr;
 			}
 
-			std::vector<DSLSymbol*> params;
+			oc::vector<DSLSymbol*> params;
 			if (close > 3)
 			{
-				for (std::span<const Token> part : splitAtCommas(t.subspan(3, close - 3)))
+				for (oc::span<const Token> part : splitAtCommas(t.subspan(3, close - 3)))
 				{
 					bool isRef = false;
 					if (!part.empty() && part[0].kind == Token::Kind::Identifier && part[0].text == "ref")
@@ -1136,7 +1136,7 @@ namespace
 						return nullptr;
 					}
 					for (DSLSymbol* prev : params)
-						if (std::get<DSLSymbol::VariableDeclaration>(prev->data).name == part[1].text)
+						if (oc::get<DSLSymbol::VariableDeclaration>(prev->data).name == part[1].text)
 						{
 							fail("'function " + name + "' declares parameter '" + part[1].text + "' twice");
 							return nullptr;
@@ -1160,7 +1160,7 @@ namespace
 			}
 
 			DSLSymbol* head = push(*line, ST::FunctionDeclaration,
-				DSLSymbol::FunctionDeclaration{ name, std::move(params), returnType });
+				DSLSymbol::FunctionDeclaration{ name, oc::move(params), returnType });
 			userFunctions.push_back(head);
 			return line;
 		}
@@ -1172,9 +1172,9 @@ namespace
 		enum class Kind { Blank, Comment, Code };
 		Kind kind = Kind::Blank;
 		int fileLineNo = 0;      // 1-based line in the .dsl file, for error messages
-		std::string text;        // the whole line as saved (minus "//") -- what the round-trip check compares against
-		std::string commentText; // Comment only
-		std::vector<Token> tokens; // Code only
+		oc::string text;        // the whole line as saved (minus "//") -- what the round-trip check compares against
+		oc::string commentText; // Comment only
+		oc::vector<Token> tokens; // Code only
 	};
 }
 
@@ -1184,43 +1184,43 @@ namespace
 // collected, the call graph is closed, then every call made from inside a loop is re-checked. A mutation
 // through a PARAMETER makes the array the caller's choice, so it poisons that function for every caller
 // instead of being matched argument-by-argument.
-bool ScriptLoader::checkContainerMutations(const DSL& document, std::string& outError, int& outLineIndex)
+bool ScriptLoader::checkContainerMutations(const DSL& document, oc::string& outError, int& outLineIndex)
 {
 	struct Key
 	{
 		const DSLSymbol* root = nullptr;
-		std::string path;
+		oc::string path;
 		bool operator==(const Key& other) const { return root == other.root && path == other.path; }
 	};
 	struct Mutation
 	{
-		std::vector<Key> paths;
-		std::vector<const DSLSymbol*> calls;
+		oc::vector<Key> paths;
+		oc::vector<const DSLSymbol*> calls;
 		bool unknown = false;
 	};
 	struct Site
 	{
 		const DSLSymbol* callee = nullptr;
-		std::vector<Key> iterated;
-		std::string calleeName;
-		std::string blockWord;
+		oc::vector<Key> iterated;
+		oc::string calleeName;
+		oc::string blockWord;
 		int lineIndex = 0;
 	};
 
 	const auto storageOf = [](const DSLSymbol* value, Key& out)
 		{
 			const DSLSymbol* root = nullptr;
-			std::string path;
+			oc::string path;
 			if (!dslChainToRoot(value, root, path))
 				return false;
 			out.root = root;
-			out.path = std::move(path);
+			out.path = oc::move(path);
 			return true;
 		};
 
-	const std::vector<std::unique_ptr<DSLCodeLine>>& lines = document.file.lines;
-	std::unordered_map<const DSLSymbol*, Mutation> mutations;
-	std::vector<Site> sites;
+	const oc::vector<oc::unique_ptr<DSLCodeLine>>& lines = document.file.lines;
+	oc::unordered_map<const DSLSymbol*, Mutation> mutations;
+	oc::vector<Site> sites;
 	const DSLSymbol* currentFunction = nullptr;
 
 	for (int i = 0; i < static_cast<int>(lines.size()); ++i)
@@ -1234,33 +1234,33 @@ bool ScriptLoader::checkContainerMutations(const DSL& document, std::string& out
 		}
 
 		// Storage every enclosing foreach/ifexist is reading, innermost first.
-		std::vector<Key> iterated;
-		std::string blockWord;
+		oc::vector<Key> iterated;
+		oc::string blockWord;
 		for (int enclosing = dslEnclosingBlockHeader(document.file, i); enclosing >= 0;
 			enclosing = dslEnclosingBlockHeader(document.file, enclosing))
 		{
 			const DSLSymbol* openHead = lines[enclosing]->head();
 			if (openHead == nullptr || openHead->type != DSLSymbol::SymbolType::FlowControl)
 				continue;
-			const DSLSymbol::FlowControl& fc = std::get<DSLSymbol::FlowControl>(openHead->data);
+			const DSLSymbol::FlowControl& fc = oc::get<DSLSymbol::FlowControl>(openHead->data);
 			if (fc.control != DSLFlowControl::ForEach && fc.control != DSLFlowControl::IfExist)
 				continue;
 			if (Key key; storageOf(fc.condition, key))
 			{
-				iterated.push_back(std::move(key));
+				iterated.push_back(oc::move(key));
 				if (blockWord.empty())
 					blockWord = fc.control == DSLFlowControl::ForEach ? "foreach" : "ifexist";
 			}
 		}
 
-		for (const std::unique_ptr<DSLSymbol>& symbol : lines[i]->symbols)
+		for (const oc::unique_ptr<DSLSymbol>& symbol : lines[i]->symbols)
 		{
 			if (symbol->type != DSLSymbol::SymbolType::FunctionCall)
 				continue;
-			const DSLSymbol::FunctionCall& call = std::get<DSLSymbol::FunctionCall>(symbol->data);
+			const DSLSymbol::FunctionCall& call = oc::get<DSLSymbol::FunctionCall>(symbol->data);
 			if (call.functionSymbol == nullptr)
 				continue;
-			const DSLSymbol::FunctionDeclaration& callee = std::get<DSLSymbol::FunctionDeclaration>(call.functionSymbol->data);
+			const DSLSymbol::FunctionDeclaration& callee = oc::get<DSLSymbol::FunctionDeclaration>(call.functionSymbol->data);
 
 			if (callee.mutatesContainer && call.receiver != nullptr)
 			{
@@ -1271,7 +1271,7 @@ bool ScriptLoader::checkContainerMutations(const DSL& document, std::string& out
 						if (open == key)
 						{
 							outError = "'" + callee.name + "' changes this container while a '"
-								+ (blockWord.empty() ? std::string("foreach") : blockWord) + "' is reading it";
+								+ (blockWord.empty() ? oc::string("foreach") : blockWord) + "' is reading it";
 							outLineIndex = i;
 							return false;
 						}
@@ -1281,12 +1281,12 @@ bool ScriptLoader::checkContainerMutations(const DSL& document, std::string& out
 					bool throughParameter = false;
 					if (resolved)
 						for (const DSLSymbol* param :
-							std::get<DSLSymbol::FunctionDeclaration>(currentFunction->data).parameterVarDeclarations)
+							oc::get<DSLSymbol::FunctionDeclaration>(currentFunction->data).parameterVarDeclarations)
 							throughParameter = throughParameter || (param == key.root);
 					if (!resolved || throughParameter)
 						mutation.unknown = true;
-					else if (std::find(mutation.paths.begin(), mutation.paths.end(), key) == mutation.paths.end())
-						mutation.paths.push_back(std::move(key));
+					else if (oc::find(mutation.paths.begin(), mutation.paths.end(), key) == mutation.paths.end())
+						mutation.paths.push_back(oc::move(key));
 				}
 			}
 			else if (!callee.requiresReceiver && call.receiver == nullptr)
@@ -1294,14 +1294,14 @@ bool ScriptLoader::checkContainerMutations(const DSL& document, std::string& out
 				// A bare-name call: a user function if this document declares it (builtins are receiver-based
 				// or resolve to no declaration line of their own).
 				bool isUser = false;
-				for (const std::unique_ptr<DSLCodeLine>& other : lines)
+				for (const oc::unique_ptr<DSLCodeLine>& other : lines)
 					isUser = isUser || (other->head() == call.functionSymbol);
 				if (!isUser)
 					continue;
 				if (currentFunction != nullptr)
 				{
 					Mutation& mutation = mutations[currentFunction];
-					if (std::find(mutation.calls.begin(), mutation.calls.end(), call.functionSymbol) == mutation.calls.end())
+					if (oc::find(mutation.calls.begin(), mutation.calls.end(), call.functionSymbol) == mutation.calls.end())
 						mutation.calls.push_back(call.functionSymbol);
 				}
 				if (!iterated.empty())
@@ -1315,7 +1315,7 @@ bool ScriptLoader::checkContainerMutations(const DSL& document, std::string& out
 		changed = false;
 		for (auto& [function, mutation] : mutations)
 		{
-			const std::vector<const DSLSymbol*> callees = mutation.calls;
+			const oc::vector<const DSLSymbol*> callees = mutation.calls;
 			for (const DSLSymbol* callee : callees)
 			{
 				const auto calleeIt = mutations.find(callee);
@@ -1329,13 +1329,13 @@ bool ScriptLoader::checkContainerMutations(const DSL& document, std::string& out
 					changed = true;
 				}
 				for (const Key& key : inherited.paths)
-					if (std::find(caller.paths.begin(), caller.paths.end(), key) == caller.paths.end())
+					if (oc::find(caller.paths.begin(), caller.paths.end(), key) == caller.paths.end())
 					{
 						caller.paths.push_back(key);
 						changed = true;
 					}
 				for (const DSLSymbol* nested : inherited.calls)
-					if (std::find(caller.calls.begin(), caller.calls.end(), nested) == caller.calls.end())
+					if (oc::find(caller.calls.begin(), caller.calls.end(), nested) == caller.calls.end())
 					{
 						caller.calls.push_back(nested);
 						changed = true;
@@ -1349,7 +1349,7 @@ bool ScriptLoader::checkContainerMutations(const DSL& document, std::string& out
 		const auto it = mutations.find(site.callee);
 		if (it == mutations.end())
 			continue;
-		const std::string word = site.blockWord.empty() ? std::string("foreach") : site.blockWord;
+		const oc::string word = site.blockWord.empty() ? oc::string("foreach") : site.blockWord;
 		if (it->second.unknown)
 		{
 			outError = "'" + site.calleeName + "' changes a container it is given while a '" + word + "' is reading one";
@@ -1357,7 +1357,7 @@ bool ScriptLoader::checkContainerMutations(const DSL& document, std::string& out
 			return false;
 		}
 		for (const Key& mutated : it->second.paths)
-			if (std::find(site.iterated.begin(), site.iterated.end(), mutated) != site.iterated.end())
+			if (oc::find(site.iterated.begin(), site.iterated.end(), mutated) != site.iterated.end())
 			{
 				outError = "'" + site.calleeName + "' changes this container while a '" + word + "' is reading it";
 				outLineIndex = site.lineIndex;
@@ -1367,15 +1367,15 @@ bool ScriptLoader::checkContainerMutations(const DSL& document, std::string& out
 	return true;
 }
 
-bool ScriptLoader::save(DSL& document, const std::string& path, const std::string& generatedCode)
+bool ScriptLoader::save(DSL& document, const oc::string& path, const oc::string& generatedCode)
 {
 	// Nothing that would produce dangling-span C++ gets written. The editor never parses on this path, so this
 	// is the only place the rule can be enforced for an authored document.
-	std::string error;
+	oc::string error;
 	int lineIndex = 0;
 	if (!checkContainerMutations(document, error, lineIndex))
 	{
-		Log::error("ScriptLoader: refusing to save '" + path + "' -- line " + std::to_string(lineIndex + 1) + ": " + error);
+		Log::error("ScriptLoader: refusing to save '" + path + "' -- line " + oc::to_string(lineIndex + 1) + ": " + error);
 		return false;
 	}
 
@@ -1402,7 +1402,7 @@ bool ScriptLoader::save(DSL& document, const std::string& path, const std::strin
 	return FileSystem::writeFileStr(path, file.str(), /*allowMainThread*/ true);
 }
 
-std::string ScriptLoader::directiveText(const DSL& document)
+oc::string ScriptLoader::directiveText(const DSL& document)
 {
 	std::ostringstream out;
 	if (!document.requiredComponents.empty())
@@ -1424,12 +1424,12 @@ std::string ScriptLoader::directiveText(const DSL& document)
 			out << dslFieldVisibilityName(field.visibility) << ' ';
 		out << dslTypeName(field.type) << ' ' << field.name << '\n';
 	}
-	for (const std::string& eventName : document.eventNames)
+	for (const oc::string& eventName : document.eventNames)
 		out << "//@@event " << eventName << '\n';
 	return out.str();
 }
 
-ScriptLoader::LoadResult ScriptLoader::load(DSL& document, const std::string& path, const std::vector<std::unique_ptr<DSLSymbol>>& builtins,
+ScriptLoader::LoadResult ScriptLoader::load(DSL& document, const oc::string& path, const oc::vector<oc::unique_ptr<DSLSymbol>>& builtins,
 	const ScriptBindings& bindings)
 {
 	// Loading a script document is an explicit editor/compile action (main thread by design).
@@ -1442,13 +1442,13 @@ ScriptLoader::LoadResult ScriptLoader::load(DSL& document, const std::string& pa
 	return loadFromText(document, FileSystem::readFileStr(path, /*allowMainThread*/ true), path, builtins, bindings);
 }
 
-ScriptLoader::LoadResult ScriptLoader::loadFromText(DSL& document, const std::string& text, const std::string& originName,
-	const std::vector<std::unique_ptr<DSLSymbol>>& builtins, const ScriptBindings& bindings)
+ScriptLoader::LoadResult ScriptLoader::loadFromText(DSL& document, const oc::string& text, const oc::string& originName,
+	const oc::vector<oc::unique_ptr<DSLSymbol>>& builtins, const ScriptBindings& bindings)
 {
 	LoadResult result;
-	const auto failAt = [&](int lineNo, const std::string& what) -> LoadResult
+	const auto failAt = [&](int lineNo, const oc::string& what) -> LoadResult
 	{
-		result.error = originName + "(" + std::to_string(lineNo) + "): " + what;
+		result.error = originName + "(" + oc::to_string(lineNo) + "): " + what;
 		return result;
 	};
 
@@ -1458,12 +1458,12 @@ ScriptLoader::LoadResult ScriptLoader::loadFromText(DSL& document, const std::st
 	// unprefixed line/EOF), prefixes stripped; "//@@require" directive lines carry the file's required
 	// components. Anything outside the block -- the future transpiled C++, ordinary "//" comments included --
 	// is ignored entirely.
-	std::vector<BlockLine> blockLines;
-	std::vector<DSLType> requiredComponents;
-	std::vector<DSLDataField> dataFields;
-	std::vector<std::string> eventNames;
+	oc::vector<BlockLine> blockLines;
+	oc::vector<DSLType> requiredComponents;
+	oc::vector<DSLDataField> dataFields;
+	oc::vector<oc::string> eventNames;
 	{
-		std::string raw;
+		oc::string raw;
 		int lineNo = 0;
 		bool inBlock = false, done = false;
 		while (!done && std::getline(file, raw))
@@ -1475,7 +1475,7 @@ ScriptLoader::LoadResult ScriptLoader::loadFromText(DSL& document, const std::st
 			{
 				if (raw.rfind("//@@dsl", 0) == 0)
 				{
-					std::string version = raw.substr(7);
+					oc::string version = raw.substr(7);
 					version.erase(0, version.find_first_not_of(" \t"));
 					if (version != "1")
 						return failAt(lineNo, "unsupported format version '" + version + "' (this build reads version 1)");
@@ -1488,14 +1488,14 @@ ScriptLoader::LoadResult ScriptLoader::loadFromText(DSL& document, const std::st
 				// Comma-separated component type names, matched against every registered component's own name
 				// (ScriptBindings::componentTypeByName) -- never a struct name, even though one might otherwise
 				// spell the same word, see its own comment.
-				std::string rest = raw.substr(11);
+				oc::string rest = raw.substr(11);
 				size_t start = 0;
 				while (start <= rest.size())
 				{
 					size_t comma = rest.find(',', start);
-					if (comma == std::string::npos)
+					if (comma == oc::string::npos)
 						comma = rest.size();
-					std::string name = rest.substr(start, comma - start);
+					oc::string name = rest.substr(start, comma - start);
 					name.erase(0, name.find_first_not_of(" \t"));
 					name.erase(name.find_last_not_of(" \t") + 1);
 					start = comma + 1;
@@ -1513,13 +1513,13 @@ ScriptLoader::LoadResult ScriptLoader::loadFromText(DSL& document, const std::st
 				// "//@@data [private|public] <type> <name>" -- one persistent self.data field, the "type name"
 				// part in the exact shape a real declaration line uses, so it reuses the same tokenizer and
 				// typeFromKeyword machinery. The visibility keyword is optional; absent means Hidden.
-				std::string rest = raw.substr(8);
+				oc::string rest = raw.substr(8);
 				rest.erase(0, rest.find_first_not_of(" \t"));
-				std::vector<Token> tokens;
-				std::string tokenError;
+				oc::vector<Token> tokens;
+				oc::string tokenError;
 				if (!tokenizeLine(rest, tokens, tokenError))
 					return failAt(lineNo, tokenError);
-				std::span<const Token> fieldTokens(tokens);
+				oc::span<const Token> fieldTokens(tokens);
 				DSLFieldVisibility visibility = DSLFieldVisibility::Hidden;
 				if (!fieldTokens.empty() && fieldTokens[0].kind == Token::Kind::Identifier)
 				{
@@ -1532,16 +1532,16 @@ ScriptLoader::LoadResult ScriptLoader::loadFromText(DSL& document, const std::st
 				if (fieldTokens.size() != 2 || fieldTokens[0].kind != Token::Kind::Identifier
 					|| !typeFromKeyword(fieldTokens[0].text, type) || fieldTokens[1].kind != Token::Kind::Identifier)
 					return failAt(lineNo, "malformed //@@data line (expected \"//@@data [private|public] <type> <name>\")");
-				const std::string& fieldName = fieldTokens[1].text;
+				const oc::string& fieldName = fieldTokens[1].text;
 				// The loader twin of the SCRIPT DATA panel's rule: an array is a handle into engine-side storage,
 				// so there is nothing for an inspector to show or set.
 				if (visibility != DSLFieldVisibility::Hidden && !dslCanExposeFieldType(type))
-					return failAt(lineNo, "'" + std::string(dslTypeName(type)) + "' can't be "
+					return failAt(lineNo, "'" + oc::string(dslTypeName(type)) + "' can't be "
 						+ dslFieldVisibilityName(visibility) + " -- only scalar and struct fields can be exposed");
 				// Entity isn't storable in either form -- see DSLDataField. The loader-side twin of the SCRIPT
 				// DATA panel simply not offering it.
 				if (type == DSLType::Entity || dslArrayElementType(type) == DSLType::Entity)
-					return failAt(lineNo, "'" + std::string(dslTypeName(type)) + "' can't be stored in script data");
+					return failAt(lineNo, "'" + oc::string(dslTypeName(type)) + "' can't be stored in script data");
 				if (AutoCompleteRules::isReservedWord(fieldName))
 					return failAt(lineNo, "'" + fieldName + "' is reserved");
 				for (const DSLDataField& existing : dataFields)
@@ -1553,18 +1553,18 @@ ScriptLoader::LoadResult ScriptLoader::loadFromText(DSL& document, const std::st
 			if (raw.rfind("//@@event", 0) == 0)
 			{
 				// "//@@event <name>" -- one named On Event entry (self.events.<name>), index = position in this list.
-				std::string rest = raw.substr(9);
+				oc::string rest = raw.substr(9);
 				rest.erase(0, rest.find_first_not_of(" \t"));
-				std::vector<Token> tokens;
-				std::string tokenError;
+				oc::vector<Token> tokens;
+				oc::string tokenError;
 				if (!tokenizeLine(rest, tokens, tokenError))
 					return failAt(lineNo, tokenError);
 				if (tokens.size() != 1 || tokens[0].kind != Token::Kind::Identifier)
 					return failAt(lineNo, "malformed //@@event line (expected \"//@@event <name>\")");
-				const std::string& eventName = tokens[0].text;
+				const oc::string& eventName = tokens[0].text;
 				if (AutoCompleteRules::isReservedWord(eventName))
 					return failAt(lineNo, "'" + eventName + "' is reserved");
-				for (const std::string& existing : eventNames)
+				for (const oc::string& existing : eventNames)
 					if (existing == eventName)
 						return failAt(lineNo, "'" + eventName + "' is declared twice in //@@event");
 				eventNames.push_back(eventName);
@@ -1593,7 +1593,7 @@ ScriptLoader::LoadResult ScriptLoader::loadFromText(DSL& document, const std::st
 		size_t i = 0;
 		while (i < line.text.size() && line.text[i] == '\t')
 			++i;
-		const std::string body = line.text.substr(i);
+		const oc::string body = line.text.substr(i);
 		if (body.empty())
 			continue; // Kind::Blank
 		if (body[0] == '#')
@@ -1602,7 +1602,7 @@ ScriptLoader::LoadResult ScriptLoader::loadFromText(DSL& document, const std::st
 			line.commentText = body.substr(body.size() >= 2 && body[1] == ' ' ? 2 : 1);
 			continue;
 		}
-		std::string tokenError;
+		oc::string tokenError;
 		if (!tokenizeLine(body, line.tokens, tokenError))
 			return failAt(line.fileLineNo, tokenError);
 		line.kind = line.tokens.empty() ? BlockLine::Kind::Blank : BlockLine::Kind::Code;
@@ -1611,7 +1611,7 @@ ScriptLoader::LoadResult ScriptLoader::loadFromText(DSL& document, const std::st
 	Parser parser{ document.sidebar, builtins, bindings, requiredComponents, dataFields, eventNames };
 
 	// Pass 1: function headers, so pass 2's body statements resolve forward calls.
-	std::vector<std::unique_ptr<DSLCodeLine>> headers(blockLines.size());
+	oc::vector<oc::unique_ptr<DSLCodeLine>> headers(blockLines.size());
 	for (size_t i = 0; i < blockLines.size(); ++i)
 	{
 		const BlockLine& line = blockLines[i];
@@ -1625,13 +1625,13 @@ ScriptLoader::LoadResult ScriptLoader::loadFromText(DSL& document, const std::st
 
 	// Pass 2: everything in order. The block-keyword structure (function/if/while/for open, elseif/else
 	// continue, end closes) drives every line's scopeLevel -- DSL.ixx's scope-only nesting model rebuilt.
-	std::vector<DSLSymbol*>& openBlocks = parser.openBlocks; // each entry = the open block's CURRENT header symbol
+	oc::vector<DSLSymbol*>& openBlocks = parser.openBlocks; // each entry = the open block's CURRENT header symbol
 	// Parallel to openBlocks: parser.scopeVars.size() from JUST BEFORE that block's own header ran (so a
 	// for-loop's counter, declared as part of parsing its header line, is included in what gets pruned) --
 	// the editor-side twin of ScriptLang.cpp's inScopeVariables scope-walk, restored on 'end'/branch-switch so
 	// a name declared inside a block (the loop counter included) can't resolve once the block's done with.
-	std::vector<size_t> openBlockScopeDepth;
-	std::vector<size_t> openBlockReservedDepth; // parallel: reservedNames size when that block opened
+	oc::vector<size_t> openBlockScopeDepth;
+	oc::vector<size_t> openBlockReservedDepth; // parallel: reservedNames size when that block opened
 	for (size_t i = 0; i < blockLines.size(); ++i)
 	{
 		const BlockLine& src = blockLines[i];
@@ -1639,17 +1639,17 @@ ScriptLoader::LoadResult ScriptLoader::loadFromText(DSL& document, const std::st
 
 		if (src.kind == BlockLine::Kind::Blank || src.kind == BlockLine::Kind::Comment)
 		{
-			auto line = std::make_unique<DSLCodeLine>();
+			auto line = oc::make_unique<DSLCodeLine>();
 			line->scopeLevel = depth;
 			if (src.kind == BlockLine::Kind::Blank)
 				parser.push(*line, ST::Placeholder, DSLSymbol::Placeholder{ DSLType::Void });
 			else
 				parser.push(*line, ST::Comment, DSLSymbol::Comment{ src.commentText });
-			parser.outLines.push_back(std::move(line));
+			parser.outLines.push_back(oc::move(line));
 			continue;
 		}
 
-		const std::string word = (src.tokens[0].kind == Token::Kind::Identifier) ? src.tokens[0].text : std::string();
+		const oc::string word = (src.tokens[0].kind == Token::Kind::Identifier) ? src.tokens[0].text : oc::string();
 
 		if (word == "end" && src.tokens.size() == 1)
 		{
@@ -1667,20 +1667,20 @@ ScriptLoader::LoadResult ScriptLoader::loadFromText(DSL& document, const std::st
 			if (!openBlocks.empty())
 				return failAt(src.fileLineNo, "functions can't nest -- missing 'end'?");
 			DSLSymbol* head = headers[i]->head();
-			const DSLSymbol::FunctionDeclaration& func = std::get<DSLSymbol::FunctionDeclaration>(head->data);
+			const DSLSymbol::FunctionDeclaration& func = oc::get<DSLSymbol::FunctionDeclaration>(head->data);
 			parser.scopeVars = func.parameterVarDeclarations; // fresh function scope: its own parameters
 			parser.currentReturnType = func.returnType;
 			openBlocks.push_back(head);
 			openBlockScopeDepth.push_back(parser.scopeVars.size());
 			openBlockReservedDepth.push_back(parser.reservedNames.size());
-			parser.outLines.push_back(std::move(headers[i]));
+			parser.outLines.push_back(oc::move(headers[i]));
 			continue;
 		}
 		if ((word == "else" && src.tokens.size() == 1) || word == "elseif")
 		{
 			const DSLSymbol* top = openBlocks.empty() ? nullptr : openBlocks.back();
 			const DSLSymbol::FlowControl* topFlow = (top != nullptr && top->type == ST::FlowControl)
-				? &std::get<DSLSymbol::FlowControl>(top->data) : nullptr;
+				? &oc::get<DSLSymbol::FlowControl>(top->data) : nullptr;
 			// ifexist chains an else but never an elseif -- nothing bool to continue from a lookup.
 			const bool boundHeader = topFlow != nullptr && topFlow->control == DSLFlowControl::IfExist;
 			const bool chainable = topFlow != nullptr
@@ -1694,26 +1694,26 @@ ScriptLoader::LoadResult ScriptLoader::loadFromText(DSL& document, const std::st
 			// An ifexist's binding stops being READABLE here but stays reserved for the rest of
 			// the chain -- redeclaring it in the else would shadow the condition declaration in the emitted C++.
 			if (boundHeader && topFlow->forLoopVar != nullptr)
-				parser.reservedNames.push_back(std::get<DSLSymbol::VariableDeclaration>(topFlow->forLoopVar->data).name);
+				parser.reservedNames.push_back(oc::get<DSLSymbol::VariableDeclaration>(topFlow->forLoopVar->data).name);
 			parser.scopeVars.resize(openBlockScopeDepth.back());
-			auto line = std::make_unique<DSLCodeLine>();
+			auto line = oc::make_unique<DSLCodeLine>();
 			line->scopeLevel = depth - 1; // continues the chain at its own header's level (see Syntax::format)
 			DSLSymbol* head = nullptr;
 			if (word == "else")
 				head = parser.push(*line, ST::FlowControl, DSLSymbol::FlowControl{ DSLFlowControl::Else, nullptr });
 			else
 			{
-				DSLSymbol* condition = parser.parseExpression(std::span<const Token>(src.tokens).subspan(1), *line, DSLType::Bool);
+				DSLSymbol* condition = parser.parseExpression(oc::span<const Token>(src.tokens).subspan(1), *line, DSLType::Bool);
 				if (condition == nullptr)
 					return failAt(src.fileLineNo, parser.error);
 				head = parser.push(*line, ST::FlowControl, DSLSymbol::FlowControl{ DSLFlowControl::ElseIf, condition });
 			}
 			openBlocks.back() = head; // the chain's single 'end' now closes from this branch
-			parser.outLines.push_back(std::move(line));
+			parser.outLines.push_back(oc::move(line));
 			continue;
 		}
 
-		auto line = std::make_unique<DSLCodeLine>();
+		auto line = oc::make_unique<DSLCodeLine>();
 		line->scopeLevel = depth;
 		const size_t scopeDepthBeforeHeader = parser.scopeVars.size(); // captured before parseStatement, so a
 		                                                                // block opener's OWN declaration (a for-
@@ -1727,7 +1727,7 @@ ScriptLoader::LoadResult ScriptLoader::loadFromText(DSL& document, const std::st
 			openBlockScopeDepth.push_back(scopeDepthBeforeHeader);
 			openBlockReservedDepth.push_back(parser.reservedNames.size());
 		}
-		parser.outLines.push_back(std::move(line));
+		parser.outLines.push_back(oc::move(line));
 	}
 
 	if (!openBlocks.empty())
@@ -1738,27 +1738,27 @@ ScriptLoader::LoadResult ScriptLoader::loadFromText(DSL& document, const std::st
 	// still loads (the structure is valid; the usual cause is hand-edited formatting, normalized on the next
 	// save) but every differing line is logged, so a loader bug can never hide.
 	DSLScriptFile rebuilt;
-	rebuilt.lines = std::move(parser.outLines);
-	const std::vector<SyntaxLine> rendered = Syntax::format(rebuilt, /*compact*/ false);
+	rebuilt.lines = oc::move(parser.outLines);
+	const oc::vector<SyntaxLine> rendered = Syntax::format(rebuilt, /*compact*/ false);
 	if (rendered.size() != blockLines.size())
-		Log::warning("ScriptLoader: '" + originName + "' re-renders to " + std::to_string(rendered.size())
-			+ " lines where the file has " + std::to_string(blockLines.size()));
+		Log::warning("ScriptLoader: '" + originName + "' re-renders to " + oc::to_string(rendered.size())
+			+ " lines where the file has " + oc::to_string(blockLines.size()));
 	for (size_t i = 0; i < rendered.size() && i < blockLines.size(); ++i)
 	{
-		std::string expected(static_cast<size_t>(rendered[i].scopeLevel), '\t');
+		oc::string expected(static_cast<size_t>(rendered[i].scopeLevel), '\t');
 		expected += rendered[i].text;
 		if (expected != blockLines[i].text)
-			Log::warning("ScriptLoader: '" + originName + "' line " + std::to_string(blockLines[i].fileLineNo)
+			Log::warning("ScriptLoader: '" + originName + "' line " + oc::to_string(blockLines[i].fileLineNo)
 				+ " re-renders as \"" + expected + "\" (file has \"" + blockLines[i].text + "\")");
 	}
 
-	document.file.lines = std::move(rebuilt.lines);
-	document.requiredComponents = std::move(requiredComponents);
-	document.dataFields = std::move(dataFields);
-	document.eventNames = std::move(eventNames);
+	document.file.lines = oc::move(rebuilt.lines);
+	document.requiredComponents = oc::move(requiredComponents);
+	document.dataFields = oc::move(dataFields);
+	document.eventNames = oc::move(eventNames);
 
 	// The same rule save() enforces, so a hand-edited file can't smuggle in what the editor won't write.
-	std::string mutationError;
+	oc::string mutationError;
 	int badLine = 0;
 	if (!checkContainerMutations(document, mutationError, badLine))
 	{

@@ -9,7 +9,7 @@ import File;
 
 static void writeSceneChild(Entity* child, AssetNode& sceneComp);
 
-static void writeOverrides(Entity* entity, AssetNode& node, const std::string& tokenName)
+static void writeOverrides(Entity* entity, AssetNode& node, const oc::string& tokenName)
 {
     if (entity->hasName() && entity->getName() != tokenName)
         node.set("Name", entity->getName());
@@ -20,7 +20,7 @@ static void writeOverrides(Entity* entity, AssetNode& node, const std::string& t
     node.set("Scale", entity->scale);
 }
 
-static void writeEntityBody(Entity* entity, AssetNode& node, const std::string& tokenName)
+static void writeEntityBody(Entity* entity, AssetNode& node, const oc::string& tokenName)
 {
     writeOverrides(entity, node, tokenName);
 
@@ -115,13 +115,13 @@ static void writeEntityBody(Entity* entity, AssetNode& node, const std::string& 
         // children, and Network is pure presence (netIds are code-assigned, nothing to serialize).
         if (comp.children.empty() && id != EComponentID_Scene && id != EComponentID_Network)
             continue;
-        node.children.push_back(std::move(comp));
+        node.children.push_back(oc::move(comp));
     }
 }
 
 static void writeSceneChild(Entity* child, AssetNode& sceneComp)
 {
-    const std::string& source = child->getPrefabName(); // the prefab name it spawned from, or empty if inline
+    const oc::string& source = child->getPrefabName(); // the prefab name it spawned from, or empty if inline
     if (child->isPrefabInstance() && !source.empty() && Globals::assetRegistry.findPrefab(source))
     {
         AssetNode& node = sceneComp.addChild("Prefab");
@@ -130,14 +130,14 @@ static void writeSceneChild(Entity* child, AssetNode& sceneComp)
     }
     else
     {
-        const std::string token = child->hasName() ? std::string(child->getName()) : std::string("Entity");
+        const oc::string token = child->hasName() ? oc::string(child->getName()) : oc::string("Entity");
         AssetNode& node = sceneComp.addChild("Entity");
         node.values.emplace_back(token);
         writeEntityBody(child, node, token);
     }
 }
 
-static bool keyEq(const std::string& a, std::string_view b)
+static bool keyEq(const oc::string& a, oc::string_view b)
 {
     if (a.size() != b.size())
         return false;
@@ -149,7 +149,7 @@ static bool keyEq(const std::string& a, std::string_view b)
 
 // Gather every prefab reference (`Prefab <name>`) nested anywhere under `node`. References carry only
 // overrides, never nested declarations, so we don't descend into a reference node itself.
-static void collectAssetPrefabRefs(const AssetNode& node, std::vector<std::string>& out)
+static void collectAssetPrefabRefs(const AssetNode& node, oc::vector<oc::string>& out)
 {
     for (const AssetNode& child : node.children)
     {
@@ -161,28 +161,28 @@ static void collectAssetPrefabRefs(const AssetNode& node, std::vector<std::strin
 }
 
 // Does prefab `name` (transitively, via its on-disk file) reach `target`?
-static bool prefabFileReaches(const std::string& name, const std::string& target, std::unordered_set<std::string>& visited)
+static bool prefabFileReaches(const oc::string& name, const oc::string& target, oc::unordered_set<oc::string>& visited)
 {
     if (name == target)
         return true;
     if (!visited.insert(name).second)
         return false; // already explored (guards against a pre-existing cyclic graph on disk)
 
-    const std::string* path = Globals::assetRegistry.findPrefab(name);
+    const oc::string* path = Globals::assetRegistry.findPrefab(name);
     if (!path)
         return false;
 
     AssetNode doc;
-    std::string error;
+    oc::string error;
     if (!loadAssetFile(*path, doc, error))
         return false;
 
-    std::vector<std::string> refs;
+    oc::vector<oc::string> refs;
     for (const AssetNode& decl : doc.children)
         if (keyEq(decl.key, "Prefab"))
             collectAssetPrefabRefs(decl, refs);
 
-    for (const std::string& ref : refs)
+    for (const oc::string& ref : refs)
         if (prefabFileReaches(ref, target, visited))
             return true;
     return false;
@@ -190,7 +190,7 @@ static bool prefabFileReaches(const std::string& name, const std::string& target
 
 // Prefab instances serialize as a bare reference (not their subtree), so collect the names they spawn;
 // descend only through inline entities, whose bodies are written out in full.
-static void collectLivePrefabRefs(Entity* entity, std::vector<std::string>& out)
+static void collectLivePrefabRefs(Entity* entity, oc::vector<oc::string>& out)
 {
     SceneComponent* sc = getComponent<SceneComponent>(entity);
     if (!sc)
@@ -204,19 +204,19 @@ static void collectLivePrefabRefs(Entity* entity, std::vector<std::string>& out)
     }
 }
 
-bool prefabWouldCycle(Entity* root, const std::string& id)
+bool prefabWouldCycle(Entity* root, const oc::string& id)
 {
-    std::vector<std::string> refs;
+    oc::vector<oc::string> refs;
     collectLivePrefabRefs(root, refs);
 
-    std::unordered_set<std::string> visited;
-    for (const std::string& ref : refs)
+    oc::unordered_set<oc::string> visited;
+    for (const oc::string& ref : refs)
         if (prefabFileReaches(ref, id, visited)) // direct (ref == id) or transitive through ref's file
             return true;
     return false;
 }
 
-std::string serializePrefabText(Entity* root, const std::string& id)
+oc::string serializePrefabText(Entity* root, const oc::string& id)
 {
     if (!root)
         return {};
@@ -229,11 +229,11 @@ std::string serializePrefabText(Entity* root, const std::string& id)
     return writeAssetText(doc);
 }
 
-bool savePrefab(Entity* root, const std::string& path, const std::string& text)
+bool savePrefab(Entity* root, const oc::string& path, const oc::string& text)
 {
     if (!root)
         return false;
-    const std::string id = FileSystem::stem(path);
+    const oc::string id = FileSystem::stem(path);
     if (prefabWouldCycle(root, id))
     {
         Log::warning("Prefab: refusing to save '" + id + "' â€” it contains a prefab instance of itself (cycle)");

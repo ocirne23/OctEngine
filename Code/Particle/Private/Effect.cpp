@@ -75,7 +75,7 @@ static void parseEmitter(const AssetNode& node, ParticleEmitterDesc& e)
     if (const AssetNode* n = node.find("SoftFade"))      e.softFadeDistance = n->asFloat(0, e.softFadeDistance);
 }
 
-bool loadParticleEffect(const std::string& path, ParticleEffectDesc& outDesc, std::string& outError)
+bool loadParticleEffect(const oc::string& path, ParticleEffectDesc& outDesc, oc::string& outError)
 {
     AssetNode root;
     if (!loadAssetFile(path, root, outError))

@@ -185,7 +185,7 @@ Allocator::MemoryUsage Allocator::getMemoryUsage() const
     vmaGetMemoryProperties(m_allocator, &memProps);
 
     // One budget entry per memory heap (cheap; backed by VK_EXT_memory_budget where available).
-    std::vector<VmaBudget> budgets(memProps->memoryHeapCount);
+    oc::vector<VmaBudget> budgets(memProps->memoryHeapCount);
     vmaGetHeapBudgets(m_allocator, budgets.data());
     for (uint32 i = 0; i < memProps->memoryHeapCount; i++)
     {

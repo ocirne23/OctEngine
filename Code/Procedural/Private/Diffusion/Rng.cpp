@@ -86,7 +86,7 @@ namespace Procedural::Diffusion
 		const int32 tx1 = floorDiv(x0 + w - 1, tileW);
 
 		const size_t tileLen = (size_t)channels * tileH * tileW;
-		std::vector<float> tile(tileLen);
+		oc::vector<float> tile(tileLen);
 
 		for (int32 ty = ty0; ty <= ty1; ty++)
 		{

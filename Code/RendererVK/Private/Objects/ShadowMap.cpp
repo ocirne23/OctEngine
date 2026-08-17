@@ -74,7 +74,7 @@ bool ShadowMap::initialize(uint32 resolution, uint32 numCascades)
         .colorAttachmentCount = 0,
         .pDepthStencilAttachment = &depthRef,
     };
-    std::array<vk::SubpassDependency2, 2> dependencies{
+    oc::array<vk::SubpassDependency2, 2> dependencies{
         // Wait for prior shader reads of this layer to finish before we overwrite the depth.
         // Compute included: GI probe trace and volumetric fog sample the cascades from compute.
         vk::SubpassDependency2{

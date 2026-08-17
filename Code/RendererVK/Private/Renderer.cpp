@@ -450,7 +450,7 @@ void Renderer::setWindowMinimized(bool minimized)
     m_windowMinimized = minimized;
 }
 
-void Renderer::setTerrainSplatMaterials(std::span<const TerrainSplatMaterial> mats, const TerrainSplatCounts& counts)
+void Renderer::setTerrainSplatMaterials(oc::span<const TerrainSplatMaterial> mats, const TerrainSplatCounts& counts)
 {
     assert(mats.size() <= RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS);
     assert((size_t)counts.numGround + counts.numRock + (counts.hasBeach ? 1 : 0) + (counts.hasSnow ? 1 : 0) == mats.size()
@@ -461,7 +461,7 @@ void Renderer::setTerrainSplatMaterials(std::span<const TerrainSplatMaterial> ma
     m_pendingTextureFrees.insert(m_pendingTextureFrees.end(), m_terrainSplatTextures.begin(), m_terrainSplatTextures.end());
     m_terrainSplatTextures.clear();
 
-    std::vector<RendererVKLayout::MaterialInfo> materialInfos;
+    oc::vector<RendererVKLayout::MaterialInfo> materialInfos;
     materialInfos.reserve(mats.size());
     for (size_t i = 0; i < mats.size(); ++i)
     {
@@ -474,7 +474,7 @@ void Renderer::setTerrainSplatMaterials(std::span<const TerrainSplatMaterial> ma
         info.normalTexIdx = RendererVKLayout::FALLBACK_NORMAL_TEX_IDX;
         info.metalRoughnessTexIdx = UINT16_MAX;
 
-        const auto upload = [&](const std::string& path, bool sRGB) -> uint16 {
+        const auto upload = [&](const oc::string& path, bool sRGB) -> uint16 {
             if (path.empty())
                 return UINT16_MAX;
             const uint16 idx = Globals::textureManager.upload(path.c_str(), true, sRGB);
@@ -500,7 +500,7 @@ void Renderer::setTerrainSplatMaterials(std::span<const TerrainSplatMaterial> ma
     m_terrainSplatCounts = counts;
 }
 
-void Renderer::setTerrainSplatClimate(std::span<const glm::vec4> boxes)
+void Renderer::setTerrainSplatClimate(oc::span<const glm::vec4> boxes)
 {
     assert(boxes.size() <= RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS);
     memcpy(m_terrainSplatClimate, boxes.data(), boxes.size() * sizeof(glm::vec4));
@@ -606,7 +606,7 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
     PerFrameData& frameData = m_perFrameData[frameIdx];
 
     m_cameraPos = camera.position; // drives the GI probe region each frame
-    m_mipPixelScale = (float)std::max(1, viewportSize.y) / std::max(1e-3f, std::tan(glm::radians(camera.fovDeg) * 0.5f));
+    m_mipPixelScale = (float)oc::max(1, viewportSize.y) / oc::max(1e-3f, std::tan(glm::radians(camera.fovDeg) * 0.5f));
 
     // This slot's fence was waited above, so its last submitted cull's LOD stats have landed: snapshot
     // them for getStats (the mapped buffer is zeroed here for the frame about to record).
@@ -618,7 +618,7 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
     static RendererVKLayout::Ubo ubo;
 
     ubo.lodParams0 = glm::vec4(
-        std::max(0.01f, m_lodParams.maxErrorPixels) * std::exp2((float)m_lodParams.bias),
+        oc::max(0.01f, m_lodParams.maxErrorPixels) * std::exp2((float)m_lodParams.bias),
         m_lodParams.hysteresis, m_lodParams.fullResPixels, m_mipPixelScale);
     ubo.lodParams1 = glm::vec4((float)m_lodParams.forceLod, (float)m_lodParams.bias,
         m_lodParams.enabled ? 1.0f : 0.0f, 0.0f);
@@ -846,7 +846,7 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
     // always display roughly a screen's worth of texels.
     if (m_terrainSplatBaseMaterial >= 0)
     {
-        const float log2Screen = std::log2((float)std::max(m_windowSize.x, m_windowSize.y) * 2.0f);
+        const float log2Screen = std::log2((float)oc::max(m_windowSize.x, m_windowSize.y) * 2.0f);
         for (const uint16 texIdx : m_terrainSplatTextures)
             Globals::textureStreamer.noteUse(texIdx, log2Screen);
     }
@@ -863,7 +863,7 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
 void Renderer::renderNode(const RenderNode& node, uint32 passMask)
 {
     const uint32 numInstances = (uint32)node.m_meshInstances.size();
-    const uint32 startIdx = std::atomic_ref<uint32>(m_meshInstanceCounter).fetch_add(numInstances);
+    const uint32 startIdx = oc::atomic_ref<uint32>(m_meshInstanceCounter).fetch_add(numInstances);
     if (startIdx + numInstances > m_maxInstanceData)
     {
         // Doesn't fit this frame: drop the node and grow at the next beginFrame. NO rollback -
@@ -871,17 +871,17 @@ void Renderer::renderNode(const RenderNode& node, uint32 passMask)
         // counter or leave unwritten gaps below it). The cursor is monotonic, so no claim after
         // this one can fit either: successful claims stay one contiguous prefix, and present()
         // clamps the counter to the smallest failed claim recorded here.
-        std::atomic_ref<uint32> overflow(m_instanceOverflowStart);
-        uint32 curOverflow = overflow.load(std::memory_order_relaxed);
+        oc::atomic_ref<uint32> overflow(m_instanceOverflowStart);
+        uint32 curOverflow = overflow.load(oc::memory_order_relaxed);
         while (startIdx < curOverflow && !overflow.compare_exchange_weak(curOverflow, startIdx)) {}
-        std::atomic_ref<uint32> pending(m_pendingMaxInstanceData);
-        uint32 cur = pending.load(std::memory_order_relaxed);
+        oc::atomic_ref<uint32> pending(m_pendingMaxInstanceData);
+        uint32 cur = pending.load(oc::memory_order_relaxed);
         while (cur < startIdx + numInstances && !pending.compare_exchange_weak(cur, startIdx + numInstances)) {}
         return;
     }
 
     for (auto& pair : node.m_numInstancesPerMesh)
-        std::atomic_ref<uint32>(m_numInstancesPerMesh[pair.first]) += pair.second;
+        oc::atomic_ref<uint32>(m_numInstancesPerMesh[pair.first]) += pair.second;
 
     noteTextureUse(node, passMask);
     for (const RendererVKLayout::InMeshInstance& instance : node.m_meshInstances)
@@ -899,13 +899,13 @@ void Renderer::noteTextureUse(const RenderNode& node, uint32 passMask)
     if (!Globals::textureStreamer.isStreamingEnabled())
         return;
     const Sphere bounds = node.getWorldBounds();
-    const float dist = std::max(0.01f, glm::length(bounds.pos - m_cameraPos) - bounds.radius);
+    const float dist = oc::max(0.01f, glm::length(bounds.pos - m_cameraPos) - bounds.radius);
     const float projPixels = bounds.radius * m_mipPixelScale / dist;
-    float log2P = std::log2(std::max(1.0f, projPixels));
+    float log2P = std::log2(oc::max(1.0f, projPixels));
     if (!(passMask & RendererVKLayout::PASS_MAIN))
         log2P -= 2.0f; // off-screen (shadow/GI-only) nodes tolerate two mips coarser
 
-    const std::span<const RendererVKLayout::MaterialInfo> materials =
+    const oc::span<const RendererVKLayout::MaterialInfo> materials =
         m_materialInfosBuffer.getBackingStoreAs<RendererVKLayout::MaterialInfo>();
     for (const RendererVKLayout::InMeshInstance& instance : node.m_meshInstances)
     {
@@ -926,9 +926,9 @@ void Renderer::noteLodChainUse(const RenderNode& node, uint32 startIdx, PerFrame
     for (const RenderNode::LodInstance& lod : node.m_lodInstances)
     {
         MeshLodGroup& group = m_meshLodGroups[lod.lodGroupIdx];
-        if (group.errors[1] == 0.0f && std::atomic_ref<uint32>(group.lastUseFrame).load(std::memory_order_relaxed) != m_frameCounter)
+        if (group.errors[1] == 0.0f && oc::atomic_ref<uint32>(group.lastUseFrame).load(oc::memory_order_relaxed) != m_frameCounter)
         {
-            std::atomic_ref<uint32>(group.lastUseFrame).store(m_frameCounter, std::memory_order_relaxed);
+            oc::atomic_ref<uint32>(group.lastUseFrame).store(m_frameCounter, oc::memory_order_relaxed);
             for (uint8 k = 1; k < group.numLods; ++k)
                 Globals::meshStreamer.noteUse(group.meshIdx[k]);
         }
@@ -971,7 +971,7 @@ uint32 Renderer::allocateLodStateRange(uint32 count)
 void Renderer::addLightInfo(const RendererVKLayout::LightInfo& light)
 {
     // lock-free bump; claims beyond MAX_LIGHTS are dropped (present clamps the flush count)
-    const uint32 idx = std::atomic_ref<uint32>(m_lightCounter).fetch_add(1);
+    const uint32 idx = oc::atomic_ref<uint32>(m_lightCounter).fetch_add(1);
     if (idx < RendererVKLayout::MAX_LIGHTS)
     {
         PerFrameData& frameData = m_perFrameData[m_swapChain.getCurrentFrameIndex()];
@@ -981,7 +981,7 @@ void Renderer::addLightInfo(const RendererVKLayout::LightInfo& light)
 
 void Renderer::addFogVolume(const RendererVKLayout::FogVolumeInfo& fogVolume)
 {
-    const uint32 idx = std::atomic_ref<uint32>(m_fogVolumeCounter).fetch_add(1);
+    const uint32 idx = oc::atomic_ref<uint32>(m_fogVolumeCounter).fetch_add(1);
     if (idx < RendererVKLayout::MAX_FOG_VOLUMES)
     {
         PerFrameData& frameData = m_perFrameData[m_swapChain.getCurrentFrameIndex()];
@@ -996,7 +996,7 @@ void Renderer::addSpotLight(const SpotLight& spotLight) { addLightInfo(spotLight
 void Renderer::addDecal(const RendererVKLayout::DecalInfo& decal)
 {
     // lock-free bump like addLightInfo; claims beyond MAX_DECALS are dropped (present clamps the count)
-    const uint32 idx = std::atomic_ref<uint32>(m_decalCounter).fetch_add(1);
+    const uint32 idx = oc::atomic_ref<uint32>(m_decalCounter).fetch_add(1);
     if (idx < RendererVKLayout::MAX_DECALS)
         m_decalPipeline.getMapped(m_swapChain.getCurrentFrameIndex())[idx] = decal;
 }
@@ -1042,7 +1042,7 @@ void Renderer::emitParticles(uint32 slot, uint32 count)
 {
     assert(slot < m_particleEmitters.size());
     if (count > 0)
-        m_particleSpawnRequests.emplace_back((uint16)slot, (uint16)std::min(count, 0xFFFFu));
+        m_particleSpawnRequests.emplace_back((uint16)slot, (uint16)oc::min(count, 0xFFFFu));
 }
 
 void Renderer::destroyParticleEmitter(uint32 slot)
@@ -1141,13 +1141,13 @@ void Renderer::destroyForceQuerySlot(uint32 slot)
 
 glm::vec4 Renderer::getForceEmitterReadback(uint32 slot) const
 {
-    const std::span<const glm::vec4> forces = m_forceFieldPipeline.getForceReadback(m_swapChain.getCurrentFrameIndex());
+    const oc::span<const glm::vec4> forces = m_forceFieldPipeline.getForceReadback(m_swapChain.getCurrentFrameIndex());
     return slot < forces.size() ? forces[slot] : glm::vec4(0.0f);
 }
 
 RendererVKLayout::ForceQueryResult Renderer::getForceQueryReadback(uint32 slot) const
 {
-    const std::span<const RendererVKLayout::ForceQueryResult> results = m_forceFieldPipeline.getQueryReadback(m_swapChain.getCurrentFrameIndex());
+    const oc::span<const RendererVKLayout::ForceQueryResult> results = m_forceFieldPipeline.getQueryReadback(m_swapChain.getCurrentFrameIndex());
     return slot < results.size() ? results[slot] : RendererVKLayout::ForceQueryResult{ RendererVKLayout::MAX_FORCE_TEAMS, 0.0f, 0.0f, 0u };
 }
 
@@ -1243,7 +1243,7 @@ void Renderer::present()
     ProfileScope presentScope("Present", EProfileCategory::Renderer);
     if(m_windowMinimized)
     {
-        m_debugLineVerts.forEach([](std::vector<DebugLinePipeline::LineVertex>& verts) { verts.clear(); });
+        m_debugLineVerts.forEach([](oc::vector<DebugLinePipeline::LineVertex>& verts) { verts.clear(); });
         Globals::openXR.endFrame(nullptr, nullptr, {}, vk::ImageLayout::eUndefined); // balance the begun XR frame
         return;
     }
@@ -1251,10 +1251,10 @@ void Renderer::present()
     // Single-threaded again: settle the lock-free frame counters. Instance claims past capacity
     // never wrote (renderNode's monotonic-cursor overflow path), so the valid prefix ends at the
     // smallest failed claim; light/fog claims past their fixed maxima were dropped the same way.
-    m_meshInstanceCounter = std::min(m_meshInstanceCounter, m_instanceOverflowStart);
-    m_lightCounter = std::min(m_lightCounter, uint32(RendererVKLayout::MAX_LIGHTS));
-    m_fogVolumeCounter = std::min(m_fogVolumeCounter, uint32(RendererVKLayout::MAX_FOG_VOLUMES));
-    m_decalCounter = std::min(m_decalCounter, uint32(RendererVKLayout::MAX_DECALS));
+    m_meshInstanceCounter = oc::min(m_meshInstanceCounter, m_instanceOverflowStart);
+    m_lightCounter = oc::min(m_lightCounter, uint32(RendererVKLayout::MAX_LIGHTS));
+    m_fogVolumeCounter = oc::min(m_fogVolumeCounter, uint32(RendererVKLayout::MAX_FOG_VOLUMES));
+    m_decalCounter = oc::min(m_decalCounter, uint32(RendererVKLayout::MAX_DECALS));
 
     const uint32 frameIdx = m_swapChain.getCurrentFrameIndex();
     PerFrameData& frameData = m_perFrameData[frameIdx];
@@ -1267,9 +1267,9 @@ void Renderer::present()
     ProfileScope uploadScope("Per-frame uploads", EProfileCategory::Renderer);
     // Sparse transform upload: only slots that changed since this frame-in-flight last consumed
     // them, gathered from every worker's dirty list.
-    Globals::renderNodeDirtyLists.forEach([&](std::array<std::vector<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT>& lists)
+    Globals::renderNodeDirtyLists.forEach([&](oc::array<oc::vector<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT>& lists)
         {
-            std::vector<uint32>& transformDirtyList = lists[frameIdx];
+            oc::vector<uint32>& transformDirtyList = lists[frameIdx];
             for (const uint32 idx : transformDirtyList)
             {
                 memcpy(&frameData.mappedRenderNodeTransforms[idx], &m_renderNodeTransforms[idx], sizeof(Transform));
@@ -1310,7 +1310,7 @@ void Renderer::present()
     // Debug overlay lines accumulated since the last present (safe here: this slot's fence was waited
     // in beginFrame). First use lazily creates the GPU buffers -> re-record to pick up the new pass.
     m_debugLineMergedVerts.clear();
-    m_debugLineVerts.forEach([this](std::vector<DebugLinePipeline::LineVertex>& verts)
+    m_debugLineVerts.forEach([this](oc::vector<DebugLinePipeline::LineVertex>& verts)
         {
             m_debugLineMergedVerts.insert(m_debugLineMergedVerts.end(), verts.begin(), verts.end());
             verts.clear();
@@ -1324,7 +1324,7 @@ void Renderer::present()
     { // Particle emitter table + spawn map + decals into this slot's mapped buffers (fence waited).
         static Clock::time_point s_lastParticleTime = Clock::now();
         const Clock::time_point now = Clock::now();
-        const float dt = std::min(std::chrono::duration<float>(now - s_lastParticleTime).count(), 0.25f);
+        const float dt = oc::min(std::chrono::duration<float>(now - s_lastParticleTime).count(), 0.25f);
         s_lastParticleTime = now;
         uint32 spawnRequestTotal = 0;
         for (const auto& [slot, count] : m_particleSpawnRequests)
@@ -1521,7 +1521,7 @@ uint32 Renderer::acquireSkinnedBundle(uint32 sourceKey)
 
     const SkinnedInstanceBundle& bundle = m_skinnedBundles[bundleHandle];
     const SkinningPaletteRegion& region = m_skinningPaletteRegions[bundle.paletteHandle];
-    std::fill_n(m_skinningPalettes.begin() + region.offset, region.boneCount, glm::mat4(1.0f)); // bind pose until the first setSkinningPalette
+    oc::fill_n(m_skinningPalettes.begin() + region.offset, region.boneCount, glm::mat4(1.0f)); // bind pose until the first setSkinningPalette
     for (uint32 k = 0; k < bundle.numMeshes; ++k)
     {
         const RendererVKLayout::SkinnedMeshSource& src = m_skinnedMeshSources[bundle.sourceKey + k];
@@ -1541,7 +1541,7 @@ namespace
         while (capacity < needed)
             capacity *= 2;
         assert(needed <= limit);
-        return (uint32)std::min<uint64>(capacity, limit);
+        return (uint32)oc::min<uint64>(capacity, limit);
     }
 }
 
@@ -1590,12 +1590,12 @@ void Renderer::growRenderNodeCapacity(uint32 needed)
         perFrame.mappedNodeLodStateBias = perFrame.inNodeLodStateBiasBuffer.mapMemory<int32>();
     }
     // Fresh (empty) GPU buffers: every live slot has to upload again.
-    Globals::renderNodeDirtyLists.forEach([](std::array<std::vector<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT>& lists)
+    Globals::renderNodeDirtyLists.forEach([](oc::array<oc::vector<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT>& lists)
         {
-            for (std::vector<uint32>& dirtyList : lists)
+            for (oc::vector<uint32>& dirtyList : lists)
                 dirtyList.clear();
         });
-    std::fill(Globals::renderNodeDirtyBits.begin(), Globals::renderNodeDirtyBits.end(), uint8(0));
+    oc::fill(Globals::renderNodeDirtyBits.begin(), Globals::renderNodeDirtyBits.end(), uint8(0));
     for (uint32 idx = 0; idx < (uint32)m_renderNodeTransforms.size(); ++idx)
         markRenderNodeTransformDirty(idx);
     setHaveToRecordCommandBuffers();
@@ -1611,7 +1611,7 @@ void Renderer::growMeshInstanceCapacity(uint32 needed)
     // mapped buffer this frame must survive the reallocation. (At the beginFrame call site the counter
     // holds last frame's count and the copy is redundant but harmless.)
     PerFrameData& currentFrameData = m_perFrameData[m_swapChain.getCurrentFrameIndex()];
-    std::vector<RendererVKLayout::InMeshInstance> writtenInstances(currentFrameData.mappedMeshInstances.begin(), currentFrameData.mappedMeshInstances.begin() + m_meshInstanceCounter);
+    oc::vector<RendererVKLayout::InMeshInstance> writtenInstances(currentFrameData.mappedMeshInstances.begin(), currentFrameData.mappedMeshInstances.begin() + m_meshInstanceCounter);
 
     for (PerFrameData& perFrame : m_perFrameData)
     {
@@ -1649,7 +1649,7 @@ void Renderer::growUniqueMeshCapacity(uint32 needed)
         vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
         vk::MemoryPropertyFlagBits::eDeviceLocal, false, "MeshLodGroupIdx");
     {
-        std::vector<uint32> mapping(m_maxUniqueMeshes, UINT32_MAX);
+        oc::vector<uint32> mapping(m_maxUniqueMeshes, UINT32_MAX);
         memcpy(mapping.data(), m_meshToLodGroup.data(), m_meshToLodGroup.size() * sizeof(uint32));
         uploadToSharedBuffer(m_meshLodGroupIdxBuffer, mapping.size() * sizeof(uint32), mapping.data(), 0);
     }
@@ -1687,7 +1687,7 @@ void Renderer::createLightGridBuffers()
 
         // Zero the readback header so the capacity check / stats never see uninitialized counters
         // before the first recorded frame fills them in.
-        std::span<uint32> header = perFrame.lightTableBuffer.mapMemory<uint32>(0, 3 * sizeof(uint32));
+        oc::span<uint32> header = perFrame.lightTableBuffer.mapMemory<uint32>(0, 3 * sizeof(uint32));
         memset(header.data(), 0, 3 * sizeof(uint32));
         perFrame.lightTableBuffer.flushMappedMemory(3 * sizeof(uint32));
         perFrame.lightTableBuffer.unmapMemory();
@@ -1716,7 +1716,7 @@ void Renderer::checkLightGridCapacity()
     // readback measures the true demand of an overflowed frame.
     PerFrameData& lastFrameData = m_perFrameData[(m_swapChain.getCurrentFrameIndex() + m_perFrameData.size() - 1) % m_perFrameData.size()];
     struct LightGridInfo { uint32 numGrids; uint32 gridDataCounter; };
-    std::span<LightGridInfo> infoSpan = lastFrameData.lightTableBuffer.mapMemory<LightGridInfo>(0, sizeof(LightGridInfo));
+    oc::span<LightGridInfo> infoSpan = lastFrameData.lightTableBuffer.mapMemory<LightGridInfo>(0, sizeof(LightGridInfo));
     const LightGridInfo info = *infoSpan.data();
     lastFrameData.lightTableBuffer.unmapMemory();
 
@@ -1799,7 +1799,7 @@ uint32 Renderer::allocateSkinningPalette(uint32 boneCount)
         {
             m_freeSkinningPaletteHandles[i] = m_freeSkinningPaletteHandles.back();
             m_freeSkinningPaletteHandles.pop_back();
-            std::fill_n(m_skinningPalettes.begin() + region.offset, boneCount, glm::mat4(1.0f));
+            oc::fill_n(m_skinningPalettes.begin() + region.offset, boneCount, glm::mat4(1.0f));
             return handle;
         }
     }
@@ -1812,11 +1812,11 @@ uint32 Renderer::allocateSkinningPalette(uint32 boneCount)
     return handle;
 }
 
-void Renderer::setSkinningPalette(uint32 paletteHandle, std::span<const glm::mat4> palette)
+void Renderer::setSkinningPalette(uint32 paletteHandle, oc::span<const glm::mat4> palette)
 {
     assert(paletteHandle < m_skinningPaletteRegions.size());
     const SkinningPaletteRegion& region = m_skinningPaletteRegions[paletteHandle];
-    const uint32 count = std::min((uint32)palette.size(), region.boneCount);
+    const uint32 count = oc::min((uint32)palette.size(), region.boneCount);
     if (count > 0)
         memcpy(m_skinningPalettes.data() + region.offset, palette.data(), count * sizeof(glm::mat4));
 }
@@ -2511,7 +2511,7 @@ void Renderer::createEyeCompositeTargets()
         vk::ImageViewCreateInfo colorViewInfo{ .image = m_eyeColorImage[i], .viewType = vk::ImageViewType::e2D, .format = colorFormat,
             .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 } };
         m_eyeColorView[i] = vkDevice.createImageView(colorViewInfo).value;
-        std::array<vk::ImageView, 2> atts{ m_eyeColorView[i], m_eyeDepthView };
+        oc::array<vk::ImageView, 2> atts{ m_eyeColorView[i], m_eyeDepthView };
         vk::FramebufferCreateInfo fbInfo{ .renderPass = m_renderPass.getRenderPass(), .attachmentCount = (uint32)atts.size(), .pAttachments = atts.data(),
             .width = ext.width, .height = ext.height, .layers = 1 };
         m_eyeFramebuffer[i] = vkDevice.createFramebuffer(fbInfo).value;
@@ -2564,7 +2564,7 @@ bool Renderer::recordGlobalIllum(uint32 frameIdx)
     // chain's RT-level BLAS and build nothing) plus any re-streamed meshes queued for a rebuild.
     if (m_blasBuiltCount < m_meshInfoCounter || !m_pendingBlasRebuilds.empty())
     {
-        std::vector<uint32> buildList = std::move(m_pendingBlasRebuilds);
+        oc::vector<uint32> buildList = oc::move(m_pendingBlasRebuilds);
         m_pendingBlasRebuilds.clear();
         for (uint32 meshIdx = m_blasBuiltCount; meshIdx < m_meshInfoCounter; ++meshIdx)
         {
@@ -2622,7 +2622,7 @@ bool Renderer::recordGlobalIllum(uint32 frameIdx)
         vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eShaderSampledRead);
 
     // 3. Write the per-instance TLAS records on the GPU.
-    const uint32 numInstances = std::min(m_meshInstanceCounter, m_maxGiTlasInstances);
+    const uint32 numInstances = oc::min(m_meshInstanceCounter, m_maxGiTlasInstances);
     GIProbePipeline::TlasInstanceParams tlasParams{
         .renderNodeTransforms = frameData.inRenderNodeTransformsBuffer,
         .meshInstances = frameData.inMeshInstancesBuffer,
@@ -2691,7 +2691,7 @@ void Renderer::applyPendingTextureDescriptorWrites(uint32 frameIdx)
         for (uint16 i = 0; i < (uint16)Globals::textureManager.getNumTextures(); ++i)
             Globals::textureStreamer.queueDescriptorWrite(i);
 
-    std::span<const uint16> writes = Globals::textureStreamer.getPendingDescriptorWrites(frameIdx);
+    oc::span<const uint16> writes = Globals::textureStreamer.getPendingDescriptorWrites(frameIdx);
     if (writes.empty())
         return;
     PerFrameData& frameData = m_perFrameData[frameIdx];
@@ -2789,7 +2789,7 @@ void Renderer::recordCommandBuffers()
     {
         static Clock::time_point lastTime = Clock::now();
         const Clock::time_point now = Clock::now();
-        const float deltaSeconds = std::min(std::chrono::duration<float>(now - lastTime).count(), 0.25f);
+        const float deltaSeconds = oc::min(std::chrono::duration<float>(now - lastTime).count(), 0.25f);
         lastTime = now;
         m_eyeAdaptationPipeline.updateParams(frameIdx, m_postParams, deltaSeconds);
     }
@@ -2907,9 +2907,9 @@ void Renderer::recordCommandBuffers()
         SceneColor& sceneColor = frameData.sceneColor;
         GBuffer& gbuffer = frameData.gbuffer;
         // Reversed-Z: the far plane / "no geometry" depth is 0.0 (shadow maps stay standard, cleared 1.0).
-        std::array<vk::ClearValue, 2> gbufferClears{ vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, vk::ClearDepthStencilValue{ 0.0f, 0 } };
+        oc::array<vk::ClearValue, 2> gbufferClears{ vk::ClearColorValue{ oc::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, vk::ClearDepthStencilValue{ 0.0f, 0 } };
         const vk::Rect2D gbufferArea{ .offset = vk::Offset2D{ 0, 0 }, .extent = vk::Extent2D{ gbuffer.getWidth(), gbuffer.getHeight() } };
-        std::array<vk::ClearValue, 2> sceneClears{ vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } }, vk::ClearDepthStencilValue{ 0.0f, 0 } };
+        oc::array<vk::ClearValue, 2> sceneClears{ vk::ClearColorValue{ oc::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } }, vk::ClearDepthStencilValue{ 0.0f, 0 } };
         const vk::Rect2D sceneArea{ .offset = vk::Offset2D{ m_viewportRect.min.x, m_viewportRect.min.y }, .extent = vk::Extent2D{ sceneColor.getWidth() - m_viewportRect.min.x, sceneColor.getHeight() - m_viewportRect.min.y } };
         const vk::AccelerationStructureKHR tlas = m_accelStructure.getTlas(frameIdx);
 
@@ -3006,7 +3006,7 @@ void Renderer::recordCommandBuffers()
             const vk::Extent2D ext = m_swapChain.getLayout().extent;
             for (uint32 eye = 0; eye < 2; ++eye)
             {
-                std::array<vk::ClearValue, 2> eyeClears{ vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } }, vk::ClearDepthStencilValue{ 0.0f, 0 } };
+                oc::array<vk::ClearValue, 2> eyeClears{ vk::ClearColorValue{ oc::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } }, vk::ClearDepthStencilValue{ 0.0f, 0 } };
                 const vk::RenderPassBeginInfo eyeCompositeBegin{
                     .renderPass = m_renderPass.getRenderPass(),
                     .framebuffer = m_eyeFramebuffer[eye],
@@ -3151,7 +3151,7 @@ void Renderer::recordCommandBuffers()
     }
 
     // Swapchain render pass: composite the resolved scene into the swapchain, then ImGui on top.
-    constexpr std::array<vk::ClearValue, 2> clearValues{ vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, vk::ClearDepthStencilValue{ 0.0f, 0 } };
+    constexpr oc::array<vk::ClearValue, 2> clearValues{ vk::ClearColorValue{ oc::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, vk::ClearDepthStencilValue{ 0.0f, 0 } };
     const vk::RenderPassBeginInfo renderPassBeginInfo{
         .renderPass = m_renderPass.getRenderPass(),
         .framebuffer = m_framebuffers.getFramebuffer(m_swapChain.getCurrentImageIdx()),
@@ -3207,7 +3207,7 @@ void Renderer::addObjectContainer(ObjectContainer* pObjectContainer)
 
 void Renderer::removeObjectContainer(ObjectContainer* pObjectContainer)
 {
-    std::erase(m_objectContainers, pObjectContainer);
+    oc::erase(m_objectContainers, pObjectContainer);
     ObjectContainer& container = *pObjectContainer;
 
     // Parked skinned bundles first (they free MeshInfos/output regions that reference the sources).
@@ -3265,7 +3265,7 @@ void Renderer::freeMeshInfoRange(uint32 baseMeshInfoIdx, uint32 count)
     // Neutralize the slots: zero indexCount makes the cull's DGC draws, the shadow pass and the TLAS
     // writer no-ops for any instance still referencing them this frame (a node pushed before the
     // container died), exactly like streamed-out meshes.
-    const std::span<RendererVKLayout::MeshInfo> infos = m_meshInfosBuffer.getBackingStoreAs<RendererVKLayout::MeshInfo>();
+    const oc::span<RendererVKLayout::MeshInfo> infos = m_meshInfosBuffer.getBackingStoreAs<RendererVKLayout::MeshInfo>();
     for (uint32 i = baseMeshInfoIdx; i < baseMeshInfoIdx + count; ++i)
     {
         infos[i] = RendererVKLayout::MeshInfo{};
@@ -3275,7 +3275,7 @@ void Renderer::freeMeshInfoRange(uint32 baseMeshInfoIdx, uint32 count)
     uploadToSharedBuffer(m_meshInfosBuffer, count * sizeof(RendererVKLayout::MeshInfo), infos.data() + baseMeshInfoIdx,
         (size_t)baseMeshInfoIdx * sizeof(RendererVKLayout::MeshInfo));
     m_accelStructure.onMeshRangeFreed(baseMeshInfoIdx, count);
-    std::erase_if(m_pendingBlasRebuilds, [&](uint32 meshIdx) { return meshIdx >= baseMeshInfoIdx && meshIdx < baseMeshInfoIdx + count; });
+    oc::erase_if(m_pendingBlasRebuilds, [&](uint32 meshIdx) { return meshIdx >= baseMeshInfoIdx && meshIdx < baseMeshInfoIdx + count; });
     m_freeMeshInfoSlots.release(baseMeshInfoIdx, count);
 }
 
@@ -3337,7 +3337,7 @@ void Renderer::setMeshStreamedIn(uint16 meshInfoIdx, int32 vertexOffset, uint32 
         m_pendingBlasRebuilds.push_back(meshInfoIdx); // built by the next recordGlobalIllum
 }
 
-uint32 Renderer::addMeshInfos(const std::vector<RendererVKLayout::MeshInfo>& meshInfos, std::span<const uint32> vertexCounts, bool skinnedOutputs)
+uint32 Renderer::addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>& meshInfos, oc::span<const uint32> vertexCounts, bool skinnedOutputs)
 {
     assert(vertexCounts.size() == meshInfos.size() && "one exact vertex count per MeshInfo");
     if (meshInfos.empty())
@@ -3346,7 +3346,7 @@ uint32 Renderer::addMeshInfos(const std::vector<RendererVKLayout::MeshInfo>& mes
     // Reuse a range freed by a destroyed container before growing the counter (holes are never compacted).
     if (const uint32 reusedBase = m_freeMeshInfoSlots.allocate((uint32)meshInfos.size()); reusedBase != UINT32_MAX)
     {
-        const std::span<RendererVKLayout::MeshInfo> infos = m_meshInfosBuffer.getBackingStoreAs<RendererVKLayout::MeshInfo>();
+        const oc::span<RendererVKLayout::MeshInfo> infos = m_meshInfosBuffer.getBackingStoreAs<RendererVKLayout::MeshInfo>();
         memcpy(infos.data() + reusedBase, meshInfos.data(), meshInfos.size() * sizeof(RendererVKLayout::MeshInfo));
         for (uint32 i = 0; i < (uint32)meshInfos.size(); ++i)
         {
@@ -3394,11 +3394,11 @@ uint32 Renderer::addMeshInfos(const std::vector<RendererVKLayout::MeshInfo>& mes
     return baseMeshInfoIdx;
 }
 
-uint32 Renderer::addSkinnedMeshSources(const std::vector<RendererVKLayout::SkinnedMeshSource>& sources)
+uint32 Renderer::addSkinnedMeshSources(const oc::vector<RendererVKLayout::SkinnedMeshSource>& sources)
 {
     if (const uint32 reusedBase = m_freeSkinnedSourceSlots.allocate((uint32)sources.size()); reusedBase != UINT32_MAX)
     {
-        std::copy(sources.begin(), sources.end(), m_skinnedMeshSources.begin() + reusedBase);
+        oc::copy(sources.begin(), sources.end(), m_skinnedMeshSources.begin() + reusedBase);
         return reusedBase;
     }
     const uint32 baseIdx = (uint32)m_skinnedMeshSources.size();
@@ -3406,14 +3406,14 @@ uint32 Renderer::addSkinnedMeshSources(const std::vector<RendererVKLayout::Skinn
     return baseIdx;
 }
 
-uint32 Renderer::addMaterialInfos(const std::vector<RendererVKLayout::MaterialInfo>& materialInfos)
+uint32 Renderer::addMaterialInfos(const oc::vector<RendererVKLayout::MaterialInfo>& materialInfos)
 {
     if (materialInfos.empty())
         return m_materialInfoCounter;
 
     if (const uint32 reusedBase = m_freeMaterialSlots.allocate((uint32)materialInfos.size()); reusedBase != UINT32_MAX)
     {
-        const std::span<RendererVKLayout::MaterialInfo> materials = m_materialInfosBuffer.getBackingStoreAs<RendererVKLayout::MaterialInfo>();
+        const oc::span<RendererVKLayout::MaterialInfo> materials = m_materialInfosBuffer.getBackingStoreAs<RendererVKLayout::MaterialInfo>();
         memcpy(materials.data() + reusedBase, materialInfos.data(), materialInfos.size() * sizeof(RendererVKLayout::MaterialInfo));
         uploadToSharedBuffer(m_materialInfosBuffer, materialInfos.size() * sizeof(RendererVKLayout::MaterialInfo),
             materialInfos.data(), (size_t)reusedBase * sizeof(RendererVKLayout::MaterialInfo));
@@ -3437,14 +3437,14 @@ uint32 Renderer::addMaterialInfos(const std::vector<RendererVKLayout::MaterialIn
     return baseMaterialInfoIdx;
 }
 
-uint32 Renderer::addMeshInstanceOffsets(const std::vector<RendererVKLayout::MeshInstanceOffset>& meshInstanceOffsets)
+uint32 Renderer::addMeshInstanceOffsets(const oc::vector<RendererVKLayout::MeshInstanceOffset>& meshInstanceOffsets)
 {
     if (meshInstanceOffsets.empty())
         return m_instanceOffsetCounter;
 
     if (const uint32 reusedBase = m_freeInstanceOffsetSlots.allocate((uint32)meshInstanceOffsets.size()); reusedBase != UINT32_MAX)
     {
-        const std::span<RendererVKLayout::MeshInstanceOffset> offsets = m_instanceOffsetsBuffer.getBackingStoreAs<RendererVKLayout::MeshInstanceOffset>();
+        const oc::span<RendererVKLayout::MeshInstanceOffset> offsets = m_instanceOffsetsBuffer.getBackingStoreAs<RendererVKLayout::MeshInstanceOffset>();
         memcpy(offsets.data() + reusedBase, meshInstanceOffsets.data(), meshInstanceOffsets.size() * sizeof(RendererVKLayout::MeshInstanceOffset));
         uploadToSharedBuffer(m_instanceOffsetsBuffer, meshInstanceOffsets.size() * sizeof(RendererVKLayout::MeshInstanceOffset),
             meshInstanceOffsets.data(), (size_t)reusedBase * sizeof(RendererVKLayout::MeshInstanceOffset));
@@ -3540,7 +3540,7 @@ Stats Renderer::getStats()
         uint32 inout_numGrids;
         uint32 inout_gridDataCounter;
     } info;
-    std::span<LightGridInfo> infoSpan = lastFrameData.lightTableBuffer.mapMemory<LightGridInfo>(0, sizeof(LightGridInfo));
+    oc::span<LightGridInfo> infoSpan = lastFrameData.lightTableBuffer.mapMemory<LightGridInfo>(0, sizeof(LightGridInfo));
     //lastFrameData.lightTableBuffer.flushMappedMemory(sizeof(LightGridInfo));
     info = *infoSpan.data();
     lastFrameData.lightTableBuffer.unmapMemory();

@@ -40,8 +40,8 @@ namespace Procedural
 		// One cached rectangle of the field. Both detail levels share this shape; `width` says which.
 		struct FieldTile
 		{
-			std::vector<float> elev;    // metres in the MODEL's frame, SIGNED (seabed stays negative)
-			std::vector<float> macro;   // the COARSE stage's surface (7.68 km/px), resampled to this tile: the
+			oc::vector<float> elev;    // metres in the MODEL's frame, SIGNED (seabed stays negative)
+			oc::vector<float> macro;   // the COARSE stage's surface (7.68 km/px), resampled to this tile: the
 			                            // reference the shader measures crag relief against. Identical in
 			                            // meaning on both detail levels, which is the point.
 			// Degrees C AT SEA LEVEL — the same baseline everything else in the engine carries (the baked
@@ -50,11 +50,11 @@ namespace Procedural
 			// temperature-at-elevation and its per-region regressed rate are DERIVATION inputs, undone at
 			// tile build (the model constructed temp as tSea + beta*elev, so tSea is recovered exactly);
 			// carrying them here just made every sample redo that subtraction and cost a whole extra plane.
-			std::vector<float> tempSea;
-			std::vector<float> precip;  // mm/yr
+			oc::vector<float> tempSea;
+			oc::vector<float> precip;  // mm/yr
 			int32 width = 0;            // TILE_W or CTILE_W
 		};
-		using FieldTilePtr = std::shared_ptr<const FieldTile>;
+		using FieldTilePtr = oc::shared_ptr<const FieldTile>;
 
 		uint64 tileKey(int32 ti, int32 tj)
 		{
@@ -152,7 +152,7 @@ namespace Procedural
 			uint32 pad = 0;
 		};
 
-		std::string tileCachePath(uint64 seed, bool fp16, bool coarse, int32 ti, int32 tj)
+		oc::string tileCachePath(uint64 seed, bool fp16, bool coarse, int32 ti, int32 tj)
 		{
 			// j <-> x, i <-> z: the same axis convention sampleFromBlock documents.
 			return FileSystem::join(FileSystem::join("Local/Diffusion",
@@ -164,7 +164,7 @@ namespace Procedural
 		// WHOLE through FileSystem (one syscall instead of a dozen small ones) and parsed from memory.
 		struct ByteReader
 		{
-			const std::vector<uint8>& data;
+			const oc::vector<uint8>& data;
 			size_t cursor = 0;
 			bool ok = true;
 			bool read(void* dst, size_t bytes)
@@ -179,7 +179,7 @@ namespace Procedural
 		};
 		struct ByteWriter
 		{
-			std::vector<uint8> data;
+			oc::vector<uint8> data;
 			void write(const void* src, size_t bytes)
 			{
 				const uint8* p = (const uint8*)src;
@@ -197,7 +197,7 @@ namespace Procedural
 		// is a TILE_CACHE_VERSION bump.
 		struct PlaneSchema
 		{
-			std::vector<float> FieldTile::* plane;
+			oc::vector<float> FieldTile::* plane;
 			bool eightBit;
 		};
 		constexpr PlaneSchema TILE_PLANES[] = {
@@ -207,11 +207,11 @@ namespace Procedural
 			{ &FieldTile::precip,  true  }, // humidity is 8-bit anyway
 		};
 
-		FieldTilePtr loadTileFromDisk(const std::string& path, uint64 seed, int32 ti, int32 tj,
+		FieldTilePtr loadTileFromDisk(const oc::string& path, uint64 seed, int32 ti, int32 tj,
 		                              int32 expectWidth)
 		{
 			// Tile IO runs on the diffusion job (never the main thread) — the FileSystem assert covers it.
-			std::vector<uint8> bytes;
+			oc::vector<uint8> bytes;
 			if (!FileSystem::readFileBytes(path, bytes) || bytes.empty())
 				return nullptr;
 			ByteReader f{ bytes };
@@ -225,10 +225,10 @@ namespace Procedural
 				return nullptr;
 
 			const size_t plane = (size_t)h.width * h.width;
-			auto t = std::make_shared<FieldTile>();
+			auto t = oc::make_shared<FieldTile>();
 			t->width = h.width;
-			std::vector<uint16> q16(plane);
-			std::vector<uint8> q8(plane), raw(plane * 2), comp;
+			oc::vector<uint16> q16(plane);
+			oc::vector<uint8> q8(plane), raw(plane * 2), comp;
 			for (const PlaneSchema& ps : TILE_PLANES)
 			{
 				const size_t rawBytes = ps.eightBit ? plane : plane * 2;
@@ -270,7 +270,7 @@ namespace Procedural
 				// operations) — bit-identical dequantization is what the crack-free guarantee rests on.
 				const float maxQ = ps.eightBit ? 255.0f : 65535.0f;
 				const float step = (ph.maxV - ph.minV) / maxQ;
-				std::vector<float>& v = (*t).*ps.plane;
+				oc::vector<float>& v = (*t).*ps.plane;
 				v.resize(plane);
 				for (size_t i = 0; i < plane; i++)
 					v[i] = ph.minV + (float)(ps.eightBit ? q8[i] : q16[i]) * step;
@@ -283,7 +283,7 @@ namespace Procedural
 
 		// NOT const: every plane is roundtripped through its quantized form in place, so the tile the RAM
 		// cache ends up holding is exactly what a later load returns.
-		void saveTileToDisk(const std::string& path, FieldTile& t, uint64 seed,
+		void saveTileToDisk(const oc::string& path, FieldTile& t, uint64 seed,
 		                    int32 ti, int32 tj)
 		{
 			FileSystem::createDirectories(FileSystem::parentPath(path));
@@ -299,17 +299,17 @@ namespace Procedural
 			f.write(&h, sizeof(h));
 
 			const size_t plane = (size_t)t.width * t.width;
-			std::vector<uint16> q16(plane);
-			std::vector<uint8> q8(plane), raw(plane * 2);
-			std::vector<uint8> comp(ZSTD_compressBound(plane * 2));
+			oc::vector<uint16> q16(plane);
+			oc::vector<uint8> q8(plane), raw(plane * 2);
+			oc::vector<uint8> comp(ZSTD_compressBound(plane * 2));
 			for (const PlaneSchema& ps : TILE_PLANES)
 			{
-				std::vector<float>& v = t.*ps.plane;
+				oc::vector<float>& v = t.*ps.plane;
 				float lo = v[0], hi = v[0];
 				for (float x : v)
 				{
-					lo = std::min(lo, x);
-					hi = std::max(hi, x);
+					lo = oc::min(lo, x);
+					hi = oc::max(hi, x);
 				}
 				const PlaneHeader ph{ lo, hi };
 				f.write(&ph, sizeof(ph));
@@ -319,7 +319,7 @@ namespace Procedural
 				const float step = range / maxQ; // the loader's expression, reused for the roundtrip
 				for (size_t i = 0; i < plane; i++)
 				{
-					const uint32 qi = (uint32)std::min(maxQ, std::round((v[i] - lo) * scale));
+					const uint32 qi = (uint32)oc::min(maxQ, std::round((v[i] - lo) * scale));
 					if (ps.eightBit)
 						q8[i] = (uint8)qi;
 					else
@@ -385,19 +385,19 @@ namespace Procedural
 				m_loader = std::thread([this]() { loadWorker(); });
 			}
 
-			bool isReady() const { return m_ready.load(std::memory_order_acquire); }
-			bool hasFailed() const { return m_failed.load(std::memory_order_acquire); }
+			bool isReady() const { return m_ready.load(oc::memory_order_acquire); }
+			bool hasFailed() const { return m_failed.load(oc::memory_order_acquire); }
 			// The model's own resolution, in metres per pixel (30 in the shipped config).
-			float nativeResolution() const { return m_nativeResolution.load(std::memory_order_relaxed); }
+			float nativeResolution() const { return m_nativeResolution.load(oc::memory_order_relaxed); }
 			// Native pixels per coarse pixel (256 in the shipped config).
-			int32 nativePerCoarsePixel() const { return m_nativePerCoarse.load(std::memory_order_relaxed); }
+			int32 nativePerCoarsePixel() const { return m_nativePerCoarse.load(oc::memory_order_relaxed); }
 
-			std::string statusText() const
+			oc::string statusText() const
 			{
-				if (m_ready.load(std::memory_order_acquire))
+				if (m_ready.load(oc::memory_order_acquire))
 					return "Ready";
 				std::lock_guard<std::mutex> lk(m_statusMutex);
-				if (m_failed.load(std::memory_order_acquire))
+				if (m_failed.load(oc::memory_order_acquire))
 					return m_assets.error().empty() ? "Failed - see log" : m_assets.error();
 				return m_status;
 			}
@@ -411,7 +411,7 @@ namespace Procedural
 			{
 				// Mirror first, unconditionally (this runs even before isReady): the disk cache builds its
 				// per-seed paths from this without taking the pipeline lock.
-				m_activeSeed.store(seed, std::memory_order_relaxed);
+				m_activeSeed.store(seed, oc::memory_order_relaxed);
 				if (!isReady())
 					return;
 				JobMutex::Scope lk(m_pipelineMutex);
@@ -429,7 +429,7 @@ namespace Procedural
 			void setMaxResidentTiles(int32 n)
 			{
 				std::lock_guard<std::mutex> ck(m_cacheMutex);
-				m_maxTiles = std::max(4, n);
+				m_maxTiles = oc::max(4, n);
 				evictLocked();
 			}
 
@@ -441,7 +441,7 @@ namespace Procedural
 			void setPrecision(EPrecision p)
 			{
 				std::lock_guard<std::mutex> lk(m_loadMutex);
-				m_activeFp16.store(p == EPrecision::Fp16, std::memory_order_relaxed); // disk-cache path mirror
+				m_activeFp16.store(p == EPrecision::Fp16, oc::memory_order_relaxed); // disk-cache path mirror
 				if (p == m_precision)
 					return;
 				if (!m_loadStarted)
@@ -458,8 +458,8 @@ namespace Procedural
 					m_loader.join();
 				m_precision = p;
 
-				m_ready.store(false, std::memory_order_release);
-				m_failed.store(false, std::memory_order_release);
+				m_ready.store(false, oc::memory_order_release);
+				m_failed.store(false, oc::memory_order_release);
 				setStatus("Reloading models...");
 				{
 					// Waits out any inference already running. New fetches then see a null pipeline and
@@ -486,7 +486,7 @@ namespace Procedural
 					m_loader.join();
 			}
 
-			void setStatus(std::string_view s)
+			void setStatus(oc::string_view s)
 			{
 				std::lock_guard<std::mutex> lk(m_statusMutex);
 				m_status.assign(s);
@@ -500,11 +500,11 @@ namespace Procedural
 				setStatus("Locating models...");
 				if (!m_assets.load(EAssetSet::Full))
 				{
-					m_failed.store(true, std::memory_order_release);
+					m_failed.store(true, oc::memory_order_release);
 					return;
 				}
-				m_nativeResolution.store(m_assets.config().nativeResolution, std::memory_order_relaxed);
-				m_nativePerCoarse.store(32 * m_assets.config().latentCompression, std::memory_order_relaxed);
+				m_nativeResolution.store(m_assets.config().nativeResolution, oc::memory_order_relaxed);
+				m_nativePerCoarse.store(32 * m_assets.config().latentCompression, oc::memory_order_relaxed);
 
 				// Read once, without m_loadMutex: setPrecision only ever writes it with no loader running
 				// (it joins first), and starting this thread is the happens-before edge that publishes it.
@@ -515,11 +515,11 @@ namespace Procedural
 					             "regenerate them with Tools/convert_models_fp16.py.");
 
 				setStatus("Loading models onto the GPU...");
-				auto p = std::make_unique<WorldPipeline>();
+				auto p = oc::make_unique<WorldPipeline>();
 				if (!p->initialize(m_seedAtLoad, m_assets.config(), m_assets.data(),
 				                   EInferenceDevice::Gpu, /*coarseOnly*/ false, precision))
 				{
-					m_failed.store(true, std::memory_order_release);
+					m_failed.store(true, oc::memory_order_release);
 					return;
 				}
 				{
@@ -528,14 +528,14 @@ namespace Procedural
 					// (readable wherever m_pipeline is non-null under the lock), never with the request-side
 					// mirror, so a precision flip racing a generation can't file a tile under the wrong folder.
 					m_pipelinePrecision = precision;
-					m_pipeline = std::move(p);
+					m_pipeline = oc::move(p);
 				}
-				m_ready.store(true, std::memory_order_release);
+				m_ready.store(true, oc::memory_order_release);
 				Log::info("[Diffusion] V3 terrain ready");
 			}
 
 			// Access-ordered LRU. Splicing on touch is O(1) and never invalidates the iterators the map
-			// holds. (A deque + std::find was O(residentTiles) per LOOKUP, and lookups happen per sample.)
+			// holds. (A deque + oc::find was O(residentTiles) per LOOKUP, and lookups happen per sample.)
 			struct Lru
 			{
 				struct Entry
@@ -543,8 +543,8 @@ namespace Procedural
 					uint64 key;
 					FieldTilePtr value;
 				};
-				std::list<Entry> order; // front = least recently used
-				std::unordered_map<uint64, std::list<Entry>::iterator> map;
+				oc::list<Entry> order; // front = least recently used
+				oc::unordered_map<uint64, oc::list<Entry>::iterator> map;
 
 				FieldTilePtr get(uint64 key)
 				{
@@ -559,12 +559,12 @@ namespace Procedural
 					auto it = map.find(key);
 					if (it != map.end())
 					{
-						it->second->value = std::move(v);
+						it->second->value = oc::move(v);
 						order.splice(order.end(), order, it->second);
 						return;
 					}
-					order.push_back(Entry{ key, std::move(v) });
-					map[key] = std::prev(order.end());
+					order.push_back(Entry{ key, oc::move(v) });
+					map[key] = oc::prev(order.end());
 				}
 				void trim(size_t maxSize)
 				{
@@ -583,7 +583,7 @@ namespace Procedural
 
 			void evictLocked()
 			{
-				m_cache.trim((size_t)std::max(4, m_maxTiles));
+				m_cache.trim((size_t)oc::max(4, m_maxTiles));
 				// Coarse tiles are ~52 KB and each covers hundreds of km, so a small fixed budget is plenty —
 				// and they must never be evicted by full-detail pressure, since they ARE the cheap fallback.
 				m_coarseCache.trim(64);
@@ -595,26 +595,26 @@ namespace Procedural
 			bool m_loadStarted = false;
 			uint64 m_seedAtLoad = 1337;
 			EPrecision m_precision = EPrecision::Fp32; // guarded by m_loadMutex; see setPrecision
-			std::atomic<bool> m_ready{ false };
-			std::atomic<bool> m_failed{ false };
-			std::atomic<float> m_nativeResolution{ 30.0f };
-			std::atomic<int32> m_nativePerCoarse{ 256 };
+			oc::atomic<bool> m_ready{ false };
+			oc::atomic<bool> m_failed{ false };
+			oc::atomic<float> m_nativeResolution{ 30.0f };
+			oc::atomic<int32> m_nativePerCoarse{ 256 };
 			mutable std::mutex m_statusMutex;
-			std::string m_status;
+			oc::string m_status;
 
 			// The pipeline is single-threaded by construction; this lock IS the inference thread.
 			// A JobMutex so a ~1.5s cold-tile wait from a job parks its FIBER instead of a pooled
 			// worker thread (unregistered threads still just block).
 			JobMutex m_pipelineMutex;
-			std::unique_ptr<WorldPipeline> m_pipeline;
+			oc::unique_ptr<WorldPipeline> m_pipeline;
 			EPrecision m_pipelinePrecision = EPrecision::Fp32; // guarded by m_pipelineMutex; see loadWorker
 
 			// Request-side mirrors for building disk-cache paths WITHOUT the pipeline lock (a disk hit must
 			// not queue behind another tile's inference). Guesses, not authority: a load that raced a
 			// reseed/precision flip just misses (the header validates) and falls through to generation,
 			// which labels its save from the pipeline itself.
-			std::atomic<uint64> m_activeSeed{ 1337 };
-			std::atomic<bool> m_activeFp16{ false };
+			oc::atomic<uint64> m_activeSeed{ 1337 };
+			oc::atomic<bool> m_activeFp16{ false };
 
 			std::mutex m_cacheMutex;
 			Lru m_cache;
@@ -627,7 +627,7 @@ namespace Procedural
 				JobEvent done;
 				FieldTilePtr result;
 			};
-			std::unordered_map<uint64, std::shared_ptr<PendingTile>> m_pending;
+			oc::unordered_map<uint64, oc::shared_ptr<PendingTile>> m_pending;
 			std::mutex m_pendingMutex;
 		};
 
@@ -642,8 +642,8 @@ namespace Procedural
 
 			// Not resident. Claim the generation, or join whoever already claimed it, so N concurrent
 			// callers cause one generation rather than N.
-			std::shared_ptr<PendingTile> pending;
-			std::shared_ptr<std::function<FieldTilePtr()>> ownerTask;
+			oc::shared_ptr<PendingTile> pending;
+			oc::shared_ptr<oc::function<FieldTilePtr()>> ownerTask;
 			bool owner = false;
 			{
 				std::lock_guard<std::mutex> pk(m_pendingMutex);
@@ -654,18 +654,18 @@ namespace Procedural
 				}
 				else
 				{
-					auto task = std::make_shared<std::function<FieldTilePtr()>>([this, ti, tj]() -> FieldTilePtr
+					auto task = oc::make_shared<oc::function<FieldTilePtr()>>([this, ti, tj]() -> FieldTilePtr
 					{
 						// Disk first, WITHOUT the pipeline lock: a cached tile must not queue behind another
 						// tile's ~1.5 s inference. The post-load mirror re-check pins the race where a reseed
 						// lands between path building and here — a changed seed drops the loaded tile and
 						// falls through to generation against the live pipeline.
 						{
-							const uint64 seed = m_activeSeed.load(std::memory_order_relaxed);
-							const bool fp16 = m_activeFp16.load(std::memory_order_relaxed);
+							const uint64 seed = m_activeSeed.load(oc::memory_order_relaxed);
+							const bool fp16 = m_activeFp16.load(oc::memory_order_relaxed);
 							FieldTilePtr t = loadTileFromDisk(tileCachePath(seed, fp16, false, ti, tj),
 							                                  seed, ti, tj, TILE_W);
-							if (t && m_activeSeed.load(std::memory_order_relaxed) == seed)
+							if (t && m_activeSeed.load(oc::memory_order_relaxed) == seed)
 								return t;
 						}
 
@@ -677,15 +677,15 @@ namespace Procedural
 						const int32 i1 = ti * TILE - HALO, i2 = (ti + 1) * TILE + HALO;
 						const int32 j1 = tj * TILE - HALO, j2 = (tj + 1) * TILE + HALO;
 
-						std::vector<float> elev, climate, macro;
+						oc::vector<float> elev, climate, macro;
 						if (!m_pipeline->get(i1, j1, i2, j2, /*withClimate*/ true, elev, climate, &macro))
 							return nullptr;
 
 						const size_t plane = (size_t)TILE_W * TILE_W;
-						auto t = std::make_shared<FieldTile>();
+						auto t = oc::make_shared<FieldTile>();
 						t->width = TILE_W;
-						t->elev = std::move(elev);
-						t->macro = std::move(macro);
+						t->elev = oc::move(elev);
+						t->macro = oc::move(macro);
 						t->precip.assign(climate.begin() + (ptrdiff_t)(2 * plane),
 						                 climate.begin() + (ptrdiff_t)(3 * plane));
 						// Recover the SEA-LEVEL baseline here, once, instead of storing (temp, beta) and
@@ -695,7 +695,7 @@ namespace Procedural
 						const float* temp = climate.data();                     // channel 0
 						const float* beta = climate.data() + (size_t)4 * plane; // channel 4 = lapse rate
 						for (size_t i = 0; i < plane; i++)
-							t->tempSea[i] = temp[i] - beta[i] * std::max(0.0f, t->elev[i]);
+							t->tempSea[i] = temp[i] - beta[i] * oc::max(0.0f, t->elev[i]);
 
 						// Labeled from the pipeline itself — the seed/precision this tile was ACTUALLY built
 						// with — never the mirrors. The write is ~1 MB against ~1.5 s of inference, so holding
@@ -705,7 +705,7 @@ namespace Procedural
 						               *t, seed, ti, tj);
 						return t;
 					});
-					pending = std::make_shared<PendingTile>();
+					pending = oc::make_shared<PendingTile>();
 					m_pending[key] = pending;
 					ownerTask = task;
 					owner = true;
@@ -752,11 +752,11 @@ namespace Procedural
 
 			// Disk before the pipeline lock, same shape as fetchTile's load (including the mirror re-check).
 			{
-				const uint64 seed = m_activeSeed.load(std::memory_order_relaxed);
-				const bool fp16 = m_activeFp16.load(std::memory_order_relaxed);
+				const uint64 seed = m_activeSeed.load(oc::memory_order_relaxed);
+				const bool fp16 = m_activeFp16.load(oc::memory_order_relaxed);
 				FieldTilePtr t = loadTileFromDisk(tileCachePath(seed, fp16, true, ti, tj),
 				                                  seed, ti, tj, CTILE_W);
-				if (t && m_activeSeed.load(std::memory_order_relaxed) == seed)
+				if (t && m_activeSeed.load(oc::memory_order_relaxed) == seed)
 				{
 					std::lock_guard<std::mutex> ck(m_cacheMutex);
 					m_coarseCache.put(key, t);
@@ -801,7 +801,7 @@ namespace Procedural
 				// clamped-to-sea-level copy the regression wants (computeClimate clamps for the same reason
 				// — the lapse is only meaningful over land).
 				Grid pTemp(pw, pw), pElevLand(pw, pw);
-				std::vector<float> pElev(pplane), pPrecip(pplane);
+				oc::vector<float> pElev(pplane), pPrecip(pplane);
 				for (size_t i = 0; i < pplane; i++)
 				{
 					const float w = slice.data[6 * pplane + i];
@@ -813,7 +813,7 @@ namespace Procedural
 					pElev[i] = (e > 0.0f ? 1.0f : (e < 0.0f ? -1.0f : 0.0f)) * e * e;
 					pTemp.data[i] = slice.data[2 * pplane + i] * inv;
 					pPrecip[i] = slice.data[4 * pplane + i] * inv;
-					const float el = std::max(0.0f, e);
+					const float el = oc::max(0.0f, e);
 					pElevLand.data[i] = el * el;
 				}
 
@@ -821,7 +821,7 @@ namespace Procedural
 				localBaselineTemperature(pTemp, pElevLand, CBETA_WIN, 0.02f, tSea, betaG);
 				assert(tSea.h == CTILE_W && tSea.w == CTILE_W);
 
-				auto t = std::make_shared<FieldTile>();
+				auto t = oc::make_shared<FieldTile>();
 				t->width = CTILE_W;
 				t->elev.resize(plane);
 				t->tempSea.resize(plane);
@@ -885,7 +885,7 @@ namespace Procedural
 	// 512x512 bake resolves to a couple of dozen tiles, not a quarter-million lock/unlock pairs.
 	struct TerrainGenV3::TileBlock
 	{
-		std::vector<FieldTilePtr> tiles; // row-major over [ti0, ti0+th) x [tj0, tj0+tw)
+		oc::vector<FieldTilePtr> tiles; // row-major over [ti0, ti0+th) x [tj0, tj0+tw)
 		int32 ti0 = 0, tj0 = 0, tw = 0, th = 0;
 		int32 span = 0;                  // lattice pixels per tile (TILE or CTILE)
 		int32 halo = 0;
@@ -994,7 +994,7 @@ namespace Procedural
 		const int32 lj = j0 - (tj * b.span - b.halo);
 		assert(li >= 0 && li + 1 < w && lj >= 0 && lj + 1 < w);
 
-		auto bilerp = [&](const std::vector<float>& v) -> float
+		auto bilerp = [&](const oc::vector<float>& v) -> float
 		{
 			const float a = v[(size_t)li * w + lj];
 			const float b2 = v[(size_t)li * w + lj + 1];
@@ -1037,7 +1037,7 @@ namespace Procedural
 	// The slope mask: sf^2 * sqrt(sf), so detail ramps in sharply and plains stay perfectly smooth.
 	float TerrainGenV3::slopeMask(float slope) const
 	{
-		const float sf = std::min(1.0f, slope * m_cfg.detailSlopeGain);
+		const float sf = oc::min(1.0f, slope * m_cfg.detailSlopeGain);
 		return sf * sf * std::sqrt(sf);
 	}
 
@@ -1069,14 +1069,14 @@ namespace Procedural
 	{
 		if (m_cfg.climateNoiseAmplitudeC <= 0.0f)
 			return 0.0f;
-		const float f = 1.0f / std::max(1.0f, m_cfg.climateNoiseWavelength * worldScale());
+		const float f = 1.0f / oc::max(1.0f, m_cfg.climateNoiseWavelength * worldScale());
 		return m_climateNoise.fbm((float)(worldX * f), (float)(worldZ * f), m_cfg.climateNoiseOctaves)
 		     * m_cfg.climateNoiseAmplitudeC;
 	}
 
 	// THE lapse rate, C per MODEL metre. One number for the world (see TerrainConfigV3::lapseRate), so
 	// the temperature is an evaluable function of height rather than a field of samples.
-	float TerrainGenV3::lapseOf() const { return std::min(m_cfg.lapseRate, 0.0f); }
+	float TerrainGenV3::lapseOf() const { return oc::min(m_cfg.lapseRate, 0.0f); }
 
 	// The temperature this point would have AT SEA LEVEL: the baseline the lapse rate is applied to.
 	// This — not a temperature — is what the terrain-data map bakes, so consumers can evaluate at their
@@ -1102,14 +1102,14 @@ namespace Procedural
 	// height at all, and the consumer trying to move it off that height was left ~1.5 C short.
 	float TerrainGenV3::temperatureFrom(double worldX, double worldZ, const Sample& s, float detailWorldM) const
 	{
-		const float elevWithDetail = s.elev + detailWorldM / std::max(0.01f, vertScale());
-		return temperatureSeaLevelFrom(worldX, worldZ, s) + lapseOf() * std::max(0.0f, elevWithDetail);
+		const float elevWithDetail = s.elev + detailWorldM / oc::max(0.01f, vertScale());
+		return temperatureSeaLevelFrom(worldX, worldZ, s) + lapseOf() * oc::max(0.0f, elevWithDetail);
 	}
 
 	float TerrainGenV3::humidityOf(const Sample& s) const
 	{
-		const float h = s.precip / std::max(1.0f, m_cfg.precipForFullHumidity) + m_cfg.humidityOffset;
-		return std::clamp(h, 0.0f, 1.0f);
+		const float h = s.precip / oc::max(1.0f, m_cfg.precipForFullHumidity) + m_cfg.humidityOffset;
+		return oc::clamp(h, 0.0f, 1.0f);
 	}
 
 	float TerrainGenV3::fogThicknessOf(const Sample& s) const
@@ -1118,17 +1118,17 @@ namespace Procedural
 		// flat land collects valley fog.
 		const float humidity = humidityOf(s);
 		const float humid = m_cfg.humidFogAmount * humidity * humidity;
-		const float flat = 1.0f - std::min(1.0f, s.slope * 2.0f);
+		const float flat = 1.0f - oc::min(1.0f, s.slope * 2.0f);
 		const float land = s.elev > 0.0f ? 1.0f : 0.0f;
 		const float valley = m_cfg.valleyFogAmount * flat * land * humidity;
-		return std::clamp(std::max(humid, valley), 0.0f, 1.0f);
+		return oc::clamp(oc::max(humid, valley), 0.0f, 1.0f);
 	}
 
 	float TerrainGenV3::fogFalloffOf(float temperature) const
 	{
 		// Cold air hugs the ground; warm humid air lets fog tower.
-		const float t01 = std::clamp((temperature + 10.0f) / 40.0f, 0.0f, 1.0f);
-		return std::clamp(1.8f - 1.2f * t01, 0.0f, FOG_FALLOFF_MUL_MAX);
+		const float t01 = oc::clamp((temperature + 10.0f) / 40.0f, 0.0f, 1.0f);
+		return oc::clamp(1.8f - 1.2f * t01, 0.0f, FOG_FALLOFF_MUL_MAX);
 	}
 
 	// Everything from one field evaluation. `withDetail` is false on the coarse path: sub-model-pixel
@@ -1174,7 +1174,7 @@ namespace Procedural
 		, m_detailB(cfg.seed * 0x85EBCA6Bu + 0xC2B2AE35u)
 		, m_climateNoise(cfg.seed * 0x27220A95u + 0x165667B1u)
 	{
-		m_cfg.metersPerPixel = std::max(0.5f, cfg.metersPerPixel);
+		m_cfg.metersPerPixel = oc::max(0.5f, cfg.metersPerPixel);
 		m_invMpp = 1.0f / m_cfg.metersPerPixel;
 
 		// Before beginLoad: on the first construction this just records the choice, so the initial load
@@ -1197,7 +1197,7 @@ namespace Procedural
 	}
 	bool TerrainGenV3::isReady() { return DiffusionRuntime::get().isReady(); }
 	bool TerrainGenV3::hasFailed() { return DiffusionRuntime::get().hasFailed(); }
-	std::string TerrainGenV3::statusText() { return DiffusionRuntime::get().statusText(); }
+	oc::string TerrainGenV3::statusText() { return DiffusionRuntime::get().statusText(); }
 
 	const TerrainConfigV3& TerrainGenV3::config() const { return m_cfg; }
 	float TerrainGenV3::seaLevel() const { return m_cfg.seaLevel; }
@@ -1281,7 +1281,7 @@ namespace Procedural
 	}
 
 	void TerrainGenV3::sampleGrid(double originX, double originZ, double step, uint32 resX, uint32 resZ,
-	                              std::span<TerrainPoint> out, ESampleDetail detail) const
+	                              oc::span<TerrainPoint> out, ESampleDetail detail) const
 	{
 		assert(out.size() >= (size_t)resX * resZ);
 		if (resX == 0 || resZ == 0)

@@ -13,12 +13,12 @@ export namespace Procedural
 	// terrain shader (computed from height/biome on the GPU), so no per-chunk color texture is baked here.
 	struct TerrainChunkMesh
 	{
-		std::vector<glm::vec3> positions;   // local X/Z, world Y
-		std::vector<glm::vec3> normals;
-		std::vector<glm::vec3> tangents;
-		std::vector<glm::vec3> bitangents;
-		std::vector<glm::vec3> texCoords;   // xy in [0,1] across the chunk, z unused
-		std::vector<uint32>    indices;
+		oc::vector<glm::vec3> positions;   // local X/Z, world Y
+		oc::vector<glm::vec3> normals;
+		oc::vector<glm::vec3> tangents;
+		oc::vector<glm::vec3> bitangents;
+		oc::vector<glm::vec3> texCoords;   // xy in [0,1] across the chunk, z unused
+		oc::vector<uint32>    indices;
 
 		void clear()
 		{

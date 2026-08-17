@@ -72,9 +72,9 @@ public:
 private:
     struct ImageSet
     {
-        std::array<vk::Image, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> image;
-        std::array<VmaAllocation, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> memory{};
-        std::array<vk::ImageView, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> view;
+        oc::array<vk::Image, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> image;
+        oc::array<VmaAllocation, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> memory{};
+        oc::array<vk::ImageView, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> view;
     };
 
     void buildScatterLayout(ComputePipelineLayout& layout);
@@ -90,9 +90,9 @@ private:
     static uint32 applySlot(uint32 frameIdx, uint32 eye) { return frameIdx * MAX_VIEWS + eye; }
     uint32 m_applyViewCount = 1;
 
-    std::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_scatterSets;
-    std::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_integrateSets;
-    std::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT * MAX_VIEWS> m_applySets;
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_scatterSets;
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_integrateSets;
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT * MAX_VIEWS> m_applySets;
 
     ImageSet m_scatter;    // per-froxel in-scatter/extinction; previous frame's image is the temporal history
     ImageSet m_integrated; // accumulated in-scatter + transmittance per slice

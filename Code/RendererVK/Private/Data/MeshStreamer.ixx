@@ -28,7 +28,7 @@ public:
 
     struct MeshSetDesc
     {
-        std::string_view filePath;         // cooked cache file
+        oc::string_view filePath;         // cooked cache file
         uint32 numVertices = 0;
         uint64 vertexByteOffset = 0;       // current allocation in the vertex mega-buffer (all levels share it)
         uint64 srcAttributeOffsets[5] = {};// positions/normals/tangents/bitangents/texCoords (glm::vec3 arrays)
@@ -58,7 +58,7 @@ public:
         {
             const uint32 setIdx = m_setForMeshInfo[meshInfoIdx];
             if (setIdx != UINT32_MAX)
-                std::atomic_ref<uint32>(m_sets[setIdx].lastSeenFrame).store(m_frameCounter, std::memory_order_relaxed);
+                oc::atomic_ref<uint32>(m_sets[setIdx].lastSeenFrame).store(m_frameCounter, oc::memory_order_relaxed);
         }
     }
 
@@ -112,7 +112,7 @@ private:
     struct StreamInRequest
     {
         uint32 setIdx = 0;
-        std::unique_ptr<const char[]> filePath; // owned copy (null-terminated); m_files must not be referenced cross-thread
+        oc::unique_ptr<const char[]> filePath; // owned copy (null-terminated); m_files must not be referenced cross-thread
         uint32 numVertices = 0;
         uint64 srcAttributeOffsets[5] = {};
         uint32 numLevels = 0;
@@ -123,8 +123,8 @@ private:
     {
         uint32 setIdx = 0;
         bool ok = false;
-        std::unique_ptr<uint8[]> vertexData; // interleaved RendererVKLayout::MeshVertex
-        std::unique_ptr<uint8[]> indexData[RendererVKLayout::MAX_MESH_LODS];
+        oc::unique_ptr<uint8[]> vertexData; // interleaved RendererVKLayout::MeshVertex
+        oc::unique_ptr<uint8[]> indexData[RendererVKLayout::MAX_MESH_LODS];
     };
 
     struct DeferredFree
@@ -141,13 +141,13 @@ private:
     void issueStreamIns();
     void evictSet(uint32 setIdx);
     void solveEvictions();
-    uint16 getFileId(std::string_view path);
+    uint16 getFileId(oc::string_view path);
 
-    std::vector<std::string> m_files;
-    std::vector<MeshSet> m_sets;
-    std::vector<uint32> m_setForMeshInfo; // global MeshInfo idx -> set idx (UINT32_MAX = pinned)
-    std::vector<uint32> m_freeSetSlots;   // removed sets, recycled by registerMeshSet
-    std::vector<DeferredFree> m_deferredFrees;
+    oc::vector<oc::string> m_files;
+    oc::vector<MeshSet> m_sets;
+    oc::vector<uint32> m_setForMeshInfo; // global MeshInfo idx -> set idx (UINT32_MAX = pinned)
+    oc::vector<uint32> m_freeSetSlots;   // removed sets, recycled by registerMeshSet
+    oc::vector<DeferredFree> m_deferredFrees;
     uint32 m_frameCounter = 0;
     uint32 m_opsInFlight = 0;
     Stats m_stats = {};
@@ -155,9 +155,9 @@ private:
     std::jthread m_worker;
     std::mutex m_requestMutex;
     std::condition_variable_any m_requestCv;
-    std::deque<StreamInRequest> m_requests;      // guarded by m_requestMutex
+    oc::deque<StreamInRequest> m_requests;      // guarded by m_requestMutex
     std::mutex m_completionMutex;
-    std::deque<StreamInCompletion> m_completions; // guarded by m_completionMutex
+    oc::deque<StreamInCompletion> m_completions; // guarded by m_completionMutex
 
     // Tweaks ("Streaming" category, next to the texture budget)
     int m_budgetMB = 256;

@@ -21,7 +21,7 @@ static constexpr const char* c_npcPrefabs[(int)ENpcType::Count] = {
     "Entities/Game/enemyRunner.pre", "Entities/Game/enemySpitter.pre" };
 static constexpr const char* c_npcNames[(int)ENpcType::Count] = { "Enemy", "Brute", "Runner", "Spitter" };
 
-static void collectUnits(std::span<const uint64> results, std::vector<Entity*>& out)
+static void collectUnits(oc::span<const uint64> results, oc::vector<Entity*>& out)
 {
     out.clear();
     for (const uint64 user : results)
@@ -34,10 +34,10 @@ static void collectUnits(std::span<const uint64> results, std::vector<Entity*>& 
 
 // Units inside the view frustum, for the overhead labels — anything off screen would be projected
 // and thrown away, so it is never fetched. Transient by design: nothing holds the result.
-void NpcSystem::queryVisibleUnits(const Camera& camera, std::vector<Entity*>& out)
+void NpcSystem::queryVisibleUnits(const Camera& camera, oc::vector<Entity*>& out)
 {
     ProfileScope scope("Npc visible units (query)", EProfileCategory::Game);
-    thread_local std::vector<uint64> results;
+    thread_local oc::vector<uint64> results;
     const glm::dvec3 cameraPos(camera.position);
     // The renderer's current view-projection is the frustum this frame is drawn with; the spatial
     // index wants it camera-relative (exact at any world scale).
@@ -48,9 +48,9 @@ void NpcSystem::queryVisibleUnits(const Camera& camera, std::vector<Entity*>& ou
 }
 
 // Every unit in the world — ONLY for save/load, which must persist units the camera cannot see.
-static void queryAllUnits(std::vector<Entity*>& out)
+static void queryAllUnits(oc::vector<Entity*>& out)
 {
-    thread_local std::vector<uint64> results;
+    thread_local oc::vector<uint64> results;
     Globals::spatialIndex.querySphere(glm::dvec3(0.0), 1000.0f, SpatialLayer_Render, results);
     collectUnits(results, out);
 }
@@ -77,7 +77,7 @@ void NpcSystem::registerTweaks()
 void NpcSystem::clear()
 {
     // Teardown: despawn every game actor entity (units + projectiles) — they are world roots.
-    thread_local std::vector<uint64> results;
+    thread_local oc::vector<uint64> results;
     Globals::spatialIndex.querySphere(glm::dvec3(0.0), 1000.0f, SpatialLayer_Render, results);
     for (const uint64 user : results)
     {
@@ -138,7 +138,7 @@ Entity* NpcSystem::spawnUnit(const StructureSystem& structures, const glm::vec3&
     // Copy the barracks route in AT SPAWN (orders tier): the unit marches it before its AI.
     if (const int source = structures.structureIndexById(sourceId); source >= 0)
     {
-        const std::span<const glm::vec3> route = structures.structureRoute(source);
+        const oc::span<const glm::vec3> route = structures.structureRoute(source);
         unit->routeCount = (uint8)glm::min(route.size(), (size_t)GameUnitComponent::MaxRoutePoints);
         for (int i = 0; i < unit->routeCount; ++i)
             unit->route[i] = route[i];
@@ -223,7 +223,7 @@ void NpcSystem::service(StructureSystem& structures)
 
 void NpcSystem::saveUnits(AssetNode& root) const
 {
-    std::vector<Entity*> units;
+    oc::vector<Entity*> units;
     queryAllUnits(units);
     for (Entity* entity : units)
     {
@@ -232,16 +232,16 @@ void NpcSystem::saveUnits(AssetNode& root) const
             continue; // puppets are player capsules — players are never saved
         int type = (int)ENpcType::Grunt; // the prefab variant, recovered from the entity name
         for (int t = 0; t < (int)ENpcType::Count; ++t)
-            if (std::string_view(entity->getName()) == c_npcNames[t])
+            if (oc::string_view(entity->getName()) == c_npcNames[t])
                 type = t;
         AssetNode& n = root.addChild("Unit");
-        n.set("Type", std::to_string(type));
-        n.set("Team", std::to_string((int)u->team));
+        n.set("Type", oc::to_string(type));
+        n.set("Team", oc::to_string((int)u->team));
         n.set("Position", entity->pos);
         n.set("Health", u->health);
         n.set("Energy", u->energy);
-        n.set("Source", std::to_string(u->sourceId));
-        n.set("RouteIndex", std::to_string(u->routeIndex));
+        n.set("Source", oc::to_string(u->sourceId));
+        n.set("RouteIndex", oc::to_string(u->routeIndex));
     }
 }
 

@@ -23,20 +23,20 @@ public:
 
 	// Called (via UI) once main.cpp has fulfilled an OpenPrefabForEdit/NewPrefab EntityChange and the
 	// entity actually exists in the world's root list.
-	void onOpened(EntityPtr root, const std::string& path);
+	void onOpened(EntityPtr root, const oc::string& path);
 
 	// Called once main.cpp has fulfilled a RespawnEntity change (a component was added/removed/edited).
 	void onRespawned(EntityPtr oldEntity, EntityPtr newEntity);
 
 	// Queues an open/new request, going through the unsaved-changes guard first. Safe to call from the
 	// toolbar, a drag-drop of ASSET_FILE onto the panel, or the asset browser's "Edit Entity" action.
-	void requestOpen(const std::string& path);
-	void requestNew(const std::string& name);
+	void requestOpen(const oc::string& path);
+	void requestNew(const oc::string& name);
 
-	std::vector<EntityChange> takeChanges() { return std::move(m_changes); }
+	oc::vector<EntityChange> takeChanges() { return oc::move(m_changes); }
 
 	// "Select Prefab" toolbar button: the UI drains this and selects the .pre in the asset browser.
-	std::string takeRevealRequest() { return std::move(m_revealRequest); }
+	oc::string takeRevealRequest() { return oc::move(m_revealRequest); }
 
 private:
 
@@ -68,17 +68,17 @@ private:
 	void doSwitchOpenSelected(EntityPtr entity);
 	void doClose();
 
-	void doSwitchOpen(const std::string& path);
-	void doSwitchNew(const std::string& name);
+	void doSwitchOpen(const oc::string& path);
+	void doSwitchNew(const oc::string& name);
 	void closeCurrent(); // detaches m_editRoot bookkeeping; deletes it only if this editor owns it
 
-	void trySave(const std::string& path);   // overwrite-confirms if the target file already exists
-	void queueSave(const std::string& path);
+	void trySave(const oc::string& path);   // overwrite-confirms if the target file already exists
+	void queueSave(const oc::string& path);
 
 	bool isDirty() const;
 	void rebaseline();
-	std::string serializeDocText() const; // document text; Sync off swaps in the transform draft for m_selected
-	std::string currentId() const; // filename stem once saved/opened, else the root's display name
+	oc::string serializeDocText() const; // document text; Sync off swaps in the transform draft for m_selected
+	oc::string currentId() const; // filename stem once saved/opened, else the root's display name
 
 	void selectEntity(EntityPtr entity); // switches which entity Name/Transform/Components edits
 	void addChild();                     // creates a blank inline child under m_selected (name box)
@@ -100,32 +100,32 @@ private:
 
 	EntityPtr   m_editRoot; // the document's root entity
 	EntityPtr   m_selected; // entity currently shown in Name/Transform/Components (root or a descendant)
-	std::string m_path; // empty until first save/open
+	oc::string m_path; // empty until first save/open
 
 	Entity* m_sceneSelection = nullptr; // this frame's main Scene panel selection, set at the top of render()
 	bool    m_ownsEntity     = true;    // false when editing an existing scene entity in place ("Open Selected")
 	bool    m_wasPacked      = false;   // was m_editRoot a locked prefab instance before we unpacked it to edit?
 
-	std::string m_baselineText; // serialized text at last load/save, for dirty-tracking
+	oc::string m_baselineText; // serialized text at last load/save, for dirty-tracking
 
 	bool      m_syncTransform = false; // Transform floats mirror/edit the live entity; off = detached draft that saves as-is
 	Transform m_transformDraft;        // m_selected's transform as shown in the panel, refreshed on selection change
 
-	std::vector<EntityChange> m_changes;
-	std::string m_revealRequest; // .pre to select in the asset browser (drained by UI)
+	oc::vector<EntityChange> m_changes;
+	oc::string m_revealRequest; // .pre to select in the asset browser (drained by UI)
 
 	char m_pathBuf[256] = "Entities/NewEntity.pre";
 	char m_nameBuf[256] = {};
 
 	enum class PendingSwitch { None, New, OpenPath, OpenSelected, Close };
 	PendingSwitch m_pendingSwitch = PendingSwitch::None;
-	std::string   m_pendingSwitchPath;
-	std::string   m_pendingSwitchName;
+	oc::string   m_pendingSwitchPath;
+	oc::string   m_pendingSwitchName;
 	EntityPtr     m_pendingSwitchEntity;
 	bool          m_openUnsavedPopup = false;
 
 	bool        m_openOverwritePopup = false;
-	std::string m_pendingSavePath;
+	oc::string m_pendingSavePath;
 
 	// --- Component presence + draft state, for m_selected. Drafts hold the real SpawnInfo types directly
 	// (they're fully visible here since Entity.ixx exports :Component) so widgets bind straight to their
@@ -159,7 +159,7 @@ private:
 	char m_renderNodePickerSearch[128] = {}; // node picker, scoped to the currently chosen container
 	char m_animatorPickerSearch[128]  = {};
 	char m_scriptPickerSearch[128]    = {};
-	std::vector<std::string> m_scriptPickerFiles; // .scr paths relative to Assets/, refreshed when the picker opens
+	oc::vector<oc::string> m_scriptPickerFiles; // .scr paths relative to Assets/, refreshed when the picker opens
 
 	char m_newChildNameBuf[128] = "Entity";
 	Entity* m_pendingRemoveChild = nullptr; // set while walking the tree, applied after (avoids mutating mid-walk)

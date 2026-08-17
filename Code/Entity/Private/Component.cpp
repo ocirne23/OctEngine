@@ -19,7 +19,7 @@ static void detachFromParent(Entity* parent, Entity* child)
     if (!psc)
         return;
     auto& kids = psc->children;
-    auto it = std::find_if(kids.begin(), kids.end(),
+    auto it = oc::find_if(kids.begin(), kids.end(),
         [child](const EntityPtr& p) { return p.get() == child; });
     if (it != kids.end())
         kids.erase(it);
@@ -115,7 +115,7 @@ bool contiguousTreeSolelyOwned(Entity* entity)
         Entity* child = c.get();
         if (!(child->flags & EEntityFlag_ContiguousAllocation) || (child->flags & EEntityFlag_RootAllocation))
             continue; // self-managing (broken member or grafted allocation root) — not part of this block
-        if (std::atomic_ref<uint16>(child->refCount).load(std::memory_order_relaxed) != 1)
+        if (oc::atomic_ref<uint16>(child->refCount).load(oc::memory_order_relaxed) != 1)
             return false; // an external EntityPtr would outlive the tree teardown
         if (!contiguousTreeSolelyOwned(child))
             return false;
@@ -123,7 +123,7 @@ bool contiguousTreeSolelyOwned(Entity* entity)
     return true;
 }
 
-int componentIdFromName(std::string_view name)
+int componentIdFromName(oc::string_view name)
 {
     for (uint16 i = 0; i < MaxInlineComponentTypes; ++i)
         if (name == componentTypeName(EComponentID(i)))

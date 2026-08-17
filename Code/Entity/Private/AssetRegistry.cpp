@@ -9,7 +9,7 @@ import :AnimationDescription;
 
 static char lower(char c) { return (c >= 'A' && c <= 'Z') ? char(c + 32) : c; }
 
-static bool iequals(std::string_view a, std::string_view b)
+static bool iequals(oc::string_view a, oc::string_view b)
 {
     if (a.size() != b.size())
         return false;
@@ -21,23 +21,23 @@ static bool iequals(std::string_view a, std::string_view b)
 
 static constexpr const char* s_assetExtensions[] = { ".oc", ".pre", ".anm", ".apl" };
 
-static bool isAssetFile(const std::string& extension)
+static bool isAssetFile(const oc::string& extension)
 {
-    const std::string& ext = extension;
+    const oc::string& ext = extension;
     for (const char* known : s_assetExtensions)
         if (iequals(ext, known))
             return true;
     return false;
 }
 
-static std::string toLower(std::string s)
+static oc::string toLower(oc::string s)
 {
     for (char& c : s)
         c = lower(c);
     return s;
 }
 
-static std::string fileKey(const std::string& path)
+static oc::string fileKey(const oc::string& path)
 {
     return toLower(FileSystem::normalize(path));
 }
@@ -51,13 +51,13 @@ void AssetRegistry::clear()
     m_fileRoot.clear();
 }
 
-void AssetRegistry::scanDirectory(const std::string& rootDir)
+void AssetRegistry::scanDirectory(const oc::string& rootDir)
 {
     clear();
 
     // Startup asset scan: main thread by design (nothing can spawn before it finishes).
     const FileSystem::AllowMainThreadIO allowIo;
-    std::vector<FileSystem::DirEntry> entries;
+    oc::vector<FileSystem::DirEntry> entries;
     if (!FileSystem::listDirectoryRecursive(rootDir, entries))
     {
         Log::warning("AssetRegistry: could not scan directory: " + rootDir);
@@ -68,22 +68,22 @@ void AssetRegistry::scanDirectory(const std::string& rootDir)
     {
         if (entry.isDirectory || !isAssetFile(entry.extension))
             continue;
-        const std::string relativePath = FileSystem::relativePath(entry.path);
+        const oc::string relativePath = FileSystem::relativePath(entry.path);
         registerFile(relativePath.empty() ? entry.path : relativePath);
     }
 }
 
-void AssetRegistry::registerFile(const std::string& path)
+void AssetRegistry::registerFile(const oc::string& path)
 {
     AssetNode root;
-    std::string error;
+    oc::string error;
     if (!loadAssetFile(path, root, error))
     {
         Log::warning("AssetRegistry: " + error);
         return;
     }
 
-    const std::string fileName = fileKey(path);
+    const oc::string fileName = fileKey(path);
 
     for (const AssetNode& decl : root.children)
     {
@@ -97,7 +97,7 @@ void AssetRegistry::registerFile(const std::string& path)
                 Log::warning("AssetRegistry: unnamed ObjectContainer in " + path);
                 continue;
             }
-            if (!m_objectContainers.try_emplace(desc.name, std::move(desc)).second)
+            if (!m_objectContainers.try_emplace(desc.name, oc::move(desc)).second)
                 Log::warning("AssetRegistry: duplicate ObjectContainer '" + decl.asString(0) + "' (keeping first), in " + path);
         }
         else if (iequals(decl.key, "Animation"))
@@ -110,8 +110,8 @@ void AssetRegistry::registerFile(const std::string& path)
                 Log::warning("AssetRegistry: unnamed Animation in " + path);
                 continue;
             }
-            const std::string clipName = desc.name;
-            if (!m_clips.try_emplace(clipName, std::move(desc)).second)
+            const oc::string clipName = desc.name;
+            if (!m_clips.try_emplace(clipName, oc::move(desc)).second)
                 Log::warning("AssetRegistry: duplicate Animation '" + clipName + "' (keeping first), in " + path);
         }
         else if (iequals(decl.key, "Animator"))
@@ -124,13 +124,13 @@ void AssetRegistry::registerFile(const std::string& path)
                 Log::warning("AssetRegistry: unnamed Animator in " + path);
                 continue;
             }
-            const std::string animatorName = desc.name;
-            if (!m_animators.try_emplace(animatorName, std::move(desc)).second)
+            const oc::string animatorName = desc.name;
+            if (!m_animators.try_emplace(animatorName, oc::move(desc)).second)
                 Log::warning("AssetRegistry: duplicate Animator '" + animatorName + "' (keeping first), in " + path);
         }
         else if (iequals(decl.key, "Prefab"))
         {
-            const std::string name = decl.asString(0);
+            const oc::string name = decl.asString(0);
             if (name.empty())
             {
                 Log::warning("AssetRegistry: unnamed Prefab in " + path);
@@ -152,36 +152,36 @@ void AssetRegistry::registerFile(const std::string& path)
     }
 }
 
-const ObjectContainerDesc* AssetRegistry::findObjectContainer(const std::string& name) const
+const ObjectContainerDesc* AssetRegistry::findObjectContainer(const oc::string& name) const
 {
     const auto it = m_objectContainers.find(name);
     return it != m_objectContainers.end() ? &it->second : nullptr;
 }
 
-const AnimationClipDesc* AssetRegistry::findClip(const std::string& name) const
+const AnimationClipDesc* AssetRegistry::findClip(const oc::string& name) const
 {
     const auto it = m_clips.find(name);
     return it != m_clips.end() ? &it->second : nullptr;
 }
 
-const AnimatorDesc* AssetRegistry::findAnimator(const std::string& name) const
+const AnimatorDesc* AssetRegistry::findAnimator(const oc::string& name) const
 {
     const auto it = m_animators.find(name);
     return it != m_animators.end() ? &it->second : nullptr;
 }
 
-const std::string* AssetRegistry::findPrefab(const std::string& name) const
+const oc::string* AssetRegistry::findPrefab(const oc::string& name) const
 {
     const auto it = m_prefabs.find(name);
     return it != m_prefabs.end() ? &it->second : nullptr;
 }
 
-void AssetRegistry::addPrefab(const std::string& name, const std::string& path)
+void AssetRegistry::addPrefab(const oc::string& name, const oc::string& path)
 {
     m_prefabs.insert_or_assign(name, path);
 }
 
-const std::string* AssetRegistry::findRootForFile(const std::string& fileName) const
+const oc::string* AssetRegistry::findRootForFile(const oc::string& fileName) const
 {
     const auto it = m_fileRoot.find(fileKey(fileName));
     return it != m_fileRoot.end() ? &it->second : nullptr;

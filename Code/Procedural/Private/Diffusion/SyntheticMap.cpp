@@ -68,26 +68,26 @@ namespace Procedural::Diffusion
 
 		// Samples the channel's noise on a 1024x1024 grid at stride 32 over [0, 32768), sorts, and reads off
 		// nQuantiles order statistics. Matches Python's _compute_map_stats (x/y in arange(0, 32*1024, 32)).
-		std::vector<float> buildNoiseQuantiles(const FastNoiseLite& fnl, int32 nQuantiles, float eps)
+		oc::vector<float> buildNoiseQuantiles(const FastNoiseLite& fnl, int32 nQuantiles, float eps)
 		{
-			std::vector<float> values((size_t)1024 * 1024);
+			oc::vector<float> values((size_t)1024 * 1024);
 			size_t k = 0;
 			for (int32 r = 0; r < 1024; r++)
 				for (int32 c = 0; c < 1024; c++)
 					values[k++] = fnl.GetNoise((float)(c * 32), (float)(r * 32));
 
-			// Java's Arrays.sort uses IEEE total order (-0.0 < 0.0, NaN last); std::sort with < does not.
+			// Java's Arrays.sort uses IEEE total order (-0.0 < 0.0, NaN last); oc::sort with < does not.
 			// Perlin fBm produces neither NaN nor -0.0 here, so they agree.
-			std::sort(values.begin(), values.end());
+			oc::sort(values.begin(), values.end());
 
 			const int32 n = (int32)values.size();
-			std::vector<float> q((size_t)nQuantiles);
+			oc::vector<float> q((size_t)nQuantiles);
 			for (int32 i = 0; i < nQuantiles; i++)
 			{
 				const float pct = eps + (float)i * (1.0f - 2.0f * eps) / (float)(nQuantiles - 1);
 				const float idx = pct * (float)(n - 1);
 				const int32 lo = (int32)idx; // idx >= 0, so truncation == floor
-				const int32 hi = std::min(lo + 1, n - 1);
+				const int32 hi = oc::min(lo + 1, n - 1);
 				q[(size_t)i] = values[(size_t)lo] + (idx - (float)lo) * (values[(size_t)hi] - values[(size_t)lo]);
 			}
 
@@ -96,7 +96,7 @@ namespace Procedural::Diffusion
 			float minDiff = FLT_MAX;
 			for (int32 i = 1; i < nQuantiles; i++)
 				if (q[(size_t)i] > q[(size_t)i - 1])
-					minDiff = std::min(minDiff, q[(size_t)i] - q[(size_t)i - 1]);
+					minDiff = oc::min(minDiff, q[(size_t)i] - q[(size_t)i - 1]);
 			if (minDiff == FLT_MAX)
 				minDiff = 1e-10f;
 			for (int32 i = 1; i < nQuantiles; i++)
@@ -110,15 +110,15 @@ namespace Procedural::Diffusion
 	struct SyntheticMapFactory::Impl
 	{
 		FastNoiseLite noises[N_CHANNELS];
-		std::vector<float> noiseQuantiles[N_CHANNELS]; // per seed
+		oc::vector<float> noiseQuantiles[N_CHANNELS]; // per seed
 		const float* dataQuantiles[N_CHANNELS] = {};   // into m_dataStorage
-		std::vector<float> dataStorage;                // copy of PipelineData::dataQuantiles
+		oc::vector<float> dataStorage;                // copy of PipelineData::dataQuantiles
 		int32 nDataQuantiles = 0;
 		float aTempStd = 0.0f, bTempStd = 0.0f, tempStdP1 = 0.0f, tempStdP99 = 0.0f;
 	};
 
 	SyntheticMapFactory::SyntheticMapFactory(uint64 worldSeed, const ModelConfig& cfg, const PipelineData& data)
-		: m_impl(std::make_unique<Impl>())
+		: m_impl(oc::make_unique<Impl>())
 	{
 		Impl& im = *m_impl;
 		im.dataStorage = data.dataQuantiles;
@@ -151,7 +151,7 @@ namespace Procedural::Diffusion
 
 		// Embarrassingly parallel across channels, and the sort makes order irrelevant. Worth it: the
 		// serial cost is ~0.5s in Release and several seconds in Debug, paid on every seed change.
-		std::vector<std::thread> workers;
+		oc::vector<std::thread> workers;
 		workers.reserve(N_CHANNELS);
 		for (int32 ch = 0; ch < N_CHANNELS; ch++)
 			workers.emplace_back([&im, ch]()
@@ -164,7 +164,7 @@ namespace Procedural::Diffusion
 
 	SyntheticMapFactory::~SyntheticMapFactory() = default;
 
-	void SyntheticMapFactory::sample(int32 x1, int32 y1, int32 x2, int32 y2, std::vector<float>& out) const
+	void SyntheticMapFactory::sample(int32 x1, int32 y1, int32 x2, int32 y2, oc::vector<float>& out) const
 	{
 		const Impl& im = *m_impl;
 		const int32 H = y2 - y1;
@@ -217,12 +217,12 @@ namespace Procedural::Diffusion
 			// Temperature seasonality, re-baselined against the corrected temperature.
 			const float baseline = im.aTempStd * temp + im.bTempStd;
 			const float t01 = (tempStd - im.tempStdP1) / (im.tempStdP99 - im.tempStdP1);
-			const float baselineClipped = std::max(im.tempStdP1, -baseline);
+			const float baselineClipped = oc::max(im.tempStdP1, -baseline);
 			tempStd = t01 * (im.tempStdP99 - baselineClipped) + baselineClipped + baseline;
-			tempStd = std::max(tempStd, 20.0f);
+			tempStd = oc::max(tempStd, 20.0f);
 
 			// Precipitation seasonality falls off as precipitation rises.
-			precipStd = precipStd * std::max(0.0f, (185.0f - 0.04111f * precip) / 185.0f);
+			precipStd = precipStd * oc::max(0.0f, (185.0f - 0.04111f * precip) / 185.0f);
 
 			// Elevation is fed to the model signed-sqrt compressed. WorldPipeline inverts this at the end.
 			// float * double -> double -> float, as in Java (Math.sqrt is double).

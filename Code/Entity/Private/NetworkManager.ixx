@@ -117,7 +117,7 @@ public:
 
     bool startServer(uint16 port);
     // Accepts "ip[:port]" or "hostname[:port]" (blocking DNS); defaultPort fills a missing port.
-    bool startClient(const std::string& address, uint16 defaultPort);
+    bool startClient(const oc::string& address, uint16 defaultPort);
     void shutdown(); // idempotent (a never-started host closes as a no-op); also runs from ~NetworkManager
     ~NetworkManager() { shutdown(); } // init_seg XCU6: after ~World's NetworkComponents unregister, before ~JobSystem
 
@@ -132,7 +132,7 @@ public:
     // Client: this frame's positions of locally-owned dynamic bodies, rebuilt in receive() (main
     // thread, before the entity pass) — NetworkComponent::update reads them on job workers to arm
     // the interaction grace. Same publish-then-read-only contract as the snapshot targets.
-    std::span<const glm::vec3> localOwnedBodyPositions() const { return m_localOwnedBodyPositions; }
+    oc::span<const glm::vec3> localOwnedBodyPositions() const { return m_localOwnedBodyPositions; }
 
     // Client: the server's snapshot rate from the Welcome (falls back to our own tweak) — the
     // remote-interpolation playback clock advances in the SERVER's tick units.
@@ -147,8 +147,8 @@ public:
     // Server: fired on the main thread when a client completes the handshake / disconnects — the
     // App's hook for spawning and tearing down per-player entities. joined runs AFTER the Welcome
     // and world replay are queued, so anything spawned inside arrives in the same session stream.
-    void setOnClientJoined(std::function<void(uint32 clientId)> callback) { m_onClientJoined = std::move(callback); }
-    void setOnClientLeft(std::function<void(uint32 clientId)> callback) { m_onClientLeft = std::move(callback); }
+    void setOnClientJoined(oc::function<void(uint32 clientId)> callback) { m_onClientJoined = oc::move(callback); }
+    void setOnClientLeft(oc::function<void(uint32 clientId)> callback) { m_onClientLeft = oc::move(callback); }
 
     // Server: contact-driven ownership STEAL — the last player to collide with an object owns it,
     // even inside the previous owner's transfer bubble. Wired as the primaries' PhysicsComponent
@@ -169,7 +169,7 @@ public:
 
     // `sender` (a script's `self`) travels as a netId so the receiving server can hand it to the
     // filter. Payload is copied — the queue outlives the call.
-    void fireNetworkEvent(std::string_view name, std::span<const uint8> data = {}, Entity* sender = nullptr);
+    void fireNetworkEvent(oc::string_view name, oc::span<const uint8> data = {}, Entity* sender = nullptr);
 
     // Who fired the event currently being dispatched: 0 = the server (or a local single-player
     // fire), else the originating client. Only meaningful INSIDE an event handler. Server-stamped
@@ -178,16 +178,16 @@ public:
 
     // The event's payload, valid for the duration of its dispatch (a view into the receive buffer —
     // copy anything you keep). Empty for events fired without one.
-    std::span<const uint8> currentEventData() const { return m_currentEventData; }
+    oc::span<const uint8> currentEventData() const { return m_currentEventData; }
 
     // Authorizes events arriving FROM clients — identity alone doesn't stop a connected player
     // firing an event it shouldn't. False drops it: neither fired nor relayed. `sender` is the
     // entity that fired it, non-null ONLY when `clientId` really owns it (the netId is
     // client-supplied). Server-originated events bypass. No filter = everything allowed, so install
     // one before any event grants state.
-    using EventFilterFn = std::function<bool(uint32 clientId, std::string_view name,
-        std::span<const uint8> data, Entity* sender)>;
-    void setEventFilter(EventFilterFn callback) { m_eventFilter = std::move(callback); }
+    using EventFilterFn = oc::function<bool(uint32 clientId, oc::string_view name,
+        oc::span<const uint8> data, Entity* sender)>;
+    void setEventFilter(EventFilterFn callback) { m_eventFilter = oc::move(callback); }
 
     // C++ listener for every dispatched network event (locally fired AND received) — the
     // counterpart of the script listeners, for game code that isn't a script. Runs synchronously
@@ -195,7 +195,7 @@ public:
     // duration. Main thread for received events; a locally fired event dispatches on the firing
     // thread (worker script thunks included) — keep the handler cheap and thread-tolerant, or
     // filter to names only the main thread fires.
-    void setOnGameEvent(std::function<void(std::string_view name)> callback) { m_onGameEvent = std::move(callback); }
+    void setOnGameEvent(oc::function<void(oc::string_view name)> callback) { m_onGameEvent = oc::move(callback); }
 
     // Main thread only. Returns the assigned netId, or 0 = LOCAL-INERT for any registration that
     // isn't the server minting one or a client adopting one from a replicated Spawn.
@@ -221,7 +221,7 @@ public:
     void setServerPrimary(Entity& entity, bool primary);
 
     // "SERVER 2 peers | out 12.4 KB/s" — empty when role None or the stats tweak is off
-    std::string getStatusText() const;
+    oc::string getStatusText() const;
 
 private:
 
@@ -229,7 +229,7 @@ private:
 
     void sendHello();
     void handleSessionMessage(NetPeerId peer, NetReader& reader, uint8 msgType);
-    void handleEventMessage(NetPeerId peer, std::span<const uint8> bytes);
+    void handleEventMessage(NetPeerId peer, oc::span<const uint8> bytes);
     void handleSnapshot(NetReader& reader);
     void handleSpawnMessage(NetReader& reader);   // client: execute a replicated spawn with forced ids
     void handleDespawnMessage(NetReader& reader); // client: destroy the replicated root
@@ -245,9 +245,9 @@ private:
     // client-side interaction grace covers second-order contact instead).
     void updateOwnershipTransfers(double deltaSec);
     void sendSnapshotTick();
-    void sendEventTo(NetPeerId peer, std::string_view name, uint32 senderClientId, uint32 senderNetId,
-        std::span<const uint8> data);
-    void fireEventAttributed(std::string_view name, uint32 senderClientId, std::span<const uint8> data);
+    void sendEventTo(NetPeerId peer, oc::string_view name, uint32 senderClientId, uint32 senderNetId,
+        oc::span<const uint8> data);
+    void fireEventAttributed(oc::string_view name, uint32 senderClientId, oc::span<const uint8> data);
     Entity* findOwnedEntity(uint32 netId, uint32 clientId) const; // null unless clientId really owns it
     void sendSpawnTo(NetPeerId peer, const DynamicSpawn& rec); // transform refreshed from the live entity when possible
 
@@ -261,16 +261,16 @@ private:
     NetHost m_host;
     NetPeerId m_serverPeer = InvalidNetPeerId; // client role: the one outgoing connection
     NetAddress m_serverAddress;                // client role: kept for auto-reconnect
-    std::vector<NetPeerId> m_readyPeers;       // server role: peers past Hello (ids recycle — cleared on Disconnected)
+    oc::vector<NetPeerId> m_readyPeers;       // server role: peers past Hello (ids recycle — cleared on Disconnected)
 
-    std::map<uint32, Replicated> m_entities;   // ordered: deterministic round-robin cursor
+    oc::map<uint32, Replicated> m_entities;   // ordered: deterministic round-robin cursor
     mutable std::mutex m_entityMutex;
 
     uint32 m_sentTweakGeneration = 0; // server: last TweakRegistry sync generation broadcast
     // Client: events that arrived before the Welcome was processed (events ride ch1, the Welcome
     // ch2 — no cross-channel ordering), replayed in order once welcomed. Bounded; cleared on
     // disconnect with the rest of the session state.
-    std::vector<std::vector<uint8>> m_preWelcomeEvents;
+    oc::vector<oc::vector<uint8>> m_preWelcomeEvents;
 
     // Server: one record per live replicated spawn — scene load and runtime alike (announced to
     // clients, replayed to late joiners; that replay is how the networked world arrives at connect).
@@ -281,15 +281,15 @@ private:
         uint32 baseId = 0;
         uint32 componentCount = 0;
         uint32 ownerClientId = 0; // whole-tree ownership, applied by the client to every component of the spawn
-        std::string path;      // what the client spawns (template sourceFile, prefab name fallback)
+        oc::string path;      // what the client spawns (template sourceFile, prefab name fallback)
         glm::vec3 spawnPos = glm::vec3(0.0f);
         glm::quat spawnRot = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
         float spawnScale = 1.0f;
     };
-    std::map<uint32, DynamicSpawn> m_dynamicSpawns;              // by baseId (server)
-    std::unordered_map<const Entity*, uint32> m_dynamicRootIds;  // root -> baseId, grouping WITHIN one spawn call; purged every send() (entity pointers may recycle)
-    std::vector<uint32> m_pendingSpawnAnnounce;                  // announced by send(); client duplicate-guard makes replay+announce overlap harmless
-    std::vector<uint32> m_pendingDespawn;
+    oc::map<uint32, DynamicSpawn> m_dynamicSpawns;              // by baseId (server)
+    oc::unordered_map<const Entity*, uint32> m_dynamicRootIds;  // root -> baseId, grouping WITHIN one spawn call; purged every send() (entity pointers may recycle)
+    oc::vector<uint32> m_pendingSpawnAnnounce;                  // announced by send(); client duplicate-guard makes replay+announce overlap harmless
+    oc::vector<uint32> m_pendingDespawn;
     uint32 m_nextNetId = 1;    // server-minted, the only id authority; 0 = local-inert (never registered)
 
     // Client: id assignment scope while executing one replicated Spawn (main thread, synchronous)
@@ -301,13 +301,13 @@ private:
     // clientIds: stable per connection, minted by the server at Hello (peer ids recycle, clientIds don't)
     uint32 m_localClientId = 0; // client: from the Welcome; always 0 on the server
     uint32 m_currentEventSender = 0; // see currentEventSender()
-    std::span<const uint8> m_currentEventData;
+    oc::span<const uint8> m_currentEventData;
     EventFilterFn m_eventFilter; // server, see setEventFilter
-    std::function<void(std::string_view)> m_onGameEvent; // see setOnGameEvent
+    oc::function<void(oc::string_view)> m_onGameEvent; // see setOnGameEvent
     uint32 m_nextClientId = 1;  // server
-    std::unordered_map<NetPeerId, uint32> m_peerClients; // server: ready peer -> clientId (erased on Disconnected)
-    std::function<void(uint32 clientId)> m_onClientJoined; // server, main thread
-    std::function<void(uint32 clientId)> m_onClientLeft;
+    oc::unordered_map<NetPeerId, uint32> m_peerClients; // server: ready peer -> clientId (erased on Disconnected)
+    oc::function<void(uint32 clientId)> m_onClientJoined; // server, main thread
+    oc::function<void(uint32 clientId)> m_onClientLeft;
 
     // Client: recent claim payloads per locally-owned entity — every Claim packet carries the whole
     // ring, so a claim only vanishes if ClaimRedundancy consecutive packets drop
@@ -330,18 +330,18 @@ private:
         // on ownership change, so it would apply them — teleporting the twin to where the object WAS)
         uint32 validCount = 0;
     };
-    std::unordered_map<uint32, ClaimRing> m_claimRings; // by netId, created on demand for owned entities
+    oc::unordered_map<uint32, ClaimRing> m_claimRings; // by netId, created on demand for owned entities
     uint32 m_lastClaimStep = 0; // claims are phase-locked to the physics step; see send()
-    std::vector<glm::vec3> m_localOwnedBodyPositions;   // see localOwnedBodyPositions()
+    oc::vector<glm::vec3> m_localOwnedBodyPositions;   // see localOwnedBodyPositions()
     float m_serverSnapshotHz = 20.0f;                   // see serverSnapshotHz()
     // remote-owned entities' snapshot history for interpolation playback: unique_ptr values keep the
     // rings' addresses stable (components hold raw pointers across map growth)
-    std::map<uint32, std::unique_ptr<NetSnapshotRing>> m_remoteBuffers;
-    std::vector<std::pair<uint32, glm::vec3>> m_transferSources; // server scan scratch: clientId + primary body position
+    oc::map<uint32, oc::unique_ptr<NetSnapshotRing>> m_remoteBuffers;
+    oc::vector<oc::pair<uint32, glm::vec3>> m_transferSources; // server scan scratch: clientId + primary body position
 
     // netId, not Entity*: the sender may be destroyed between the queueing thread and the drain
-    struct PendingEvent { std::string name; std::vector<uint8> data; uint32 senderNetId = 0; };
-    std::vector<PendingEvent> m_pendingOutgoingEvents; // filled from any thread, drained by send()
+    struct PendingEvent { oc::string name; oc::vector<uint8> data; uint32 senderNetId = 0; };
+    oc::vector<PendingEvent> m_pendingOutgoingEvents; // filled from any thread, drained by send()
     std::mutex m_eventMutex;
 
     NetSyncParams m_params;

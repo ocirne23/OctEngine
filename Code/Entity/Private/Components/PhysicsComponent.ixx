@@ -18,7 +18,7 @@ export struct PhysicsComponent
 
     PhysicsBody body;
     SpatialOccluder occluder; // static mesh colliders feed the CPU occlusion buffer (registered at spawn)
-    std::shared_ptr<const OccluderData> occluderData; // shared object-space triangles behind `occluder`
+    oc::shared_ptr<const OccluderData> occluderData; // shared object-space triangles behind `occluder`
     glm::vec3 prevPos, currPos; // body pose at the previous/current physics step (dynamic interpolation)
     glm::quat prevRot, currRot;
     float shapeScale = 1.0f;  // world scale baked into the shape at spawn
@@ -33,16 +33,16 @@ export struct PhysicsComponent
     // Fired by dispatchPhysicsContactEvents for begin/end contact and sensor overlaps involving this
     // body (the shape must set ContactEvents true, or be a Sensor). C++ gameplay hook; scripts get
     // the same events through the "On Physics Event" node.
-    std::function<void(Entity& other, bool begin)> onContact;
+    oc::function<void(Entity& other, bool begin)> onContact;
 
     struct SpawnInfo
     {
         EPhysicsBodyType bodyType = EPhysicsBodyType::Dynamic;
         PhysicsShape shape;                    // filter bits / geometry resolved from the fields below at parse time
-        std::string layer;                     // named collision layer (category), empty = Default
-        std::vector<std::string> collidesWith; // named layers this body collides with ("All"/"None" allowed), empty = all
-        std::shared_ptr<PhysicsMesh> mesh;     // Shape Mesh: keeps the shared collision BVH alive (shape.mesh points at it)
-        std::shared_ptr<const OccluderData> occluders; // Shape Mesh + Static: occlusion-culling occluder triangles
+        oc::string layer;                     // named collision layer (category), empty = Default
+        oc::vector<oc::string> collidesWith; // named layers this body collides with ("All"/"None" allowed), empty = all
+        oc::shared_ptr<PhysicsMesh> mesh;     // Shape Mesh: keeps the shared collision BVH alive (shape.mesh points at it)
+        oc::shared_ptr<const OccluderData> occluders; // Shape Mesh + Static: occlusion-culling occluder triangles
         bool lockRotation = false;             // dynamic body never rotates (upright character capsules)
         bool enabled = true;
     };

@@ -37,7 +37,7 @@ bool Surface::initialize(const Window& window)
 bool Surface::deviceSupportsSurface() const
 {
     vk::PhysicalDevice physicalDevice = Globals::device.getPhysicalDevice();
-    std::vector<vk::QueueFamilyProperties> queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
+    oc::vector<vk::QueueFamilyProperties> queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
     if (physicalDevice.getSurfaceSupportKHR(Globals::device.getGraphicsQueueIndex(), m_surface).result != vk::Result::eSuccess)
     {
         assert(false && "Separate present queue not supported!");

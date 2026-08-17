@@ -15,10 +15,10 @@ import :Texture;
 import :Layout;
 
 // StreamRequest carries an owned, null-terminated copy of the source path (unique_ptr<const char[]>)
-// instead of referencing the meta's std::string across the worker thread.
-static std::unique_ptr<const char[]> copyPathString(const std::string& path)
+// instead of referencing the meta's oc::string across the worker thread.
+static oc::unique_ptr<const char[]> copyPathString(const oc::string& path)
 {
-    std::unique_ptr<char[]> buffer = std::make_unique<char[]>(path.size() + 1);
+    oc::unique_ptr<char[]> buffer = oc::make_unique<char[]>(path.size() + 1);
     memcpy(buffer.get(), path.c_str(), path.size() + 1);
     return buffer;
 }
@@ -88,7 +88,7 @@ void TextureStreamer::workerRun(std::stop_token stopToken)
             std::unique_lock lock(m_requestMutex);
             if (!m_requestCv.wait(lock, stopToken, [&] { return !m_requests.empty(); }))
                 return; // stop requested
-            request = std::move(m_requests.front());
+            request = oc::move(m_requests.front());
             m_requests.pop_front();
         }
         ProfileScope profileScope("Tex mip read", EProfileCategory::Renderer); // after the cv wait: measure the work, not the idle
@@ -99,7 +99,7 @@ void TextureStreamer::workerRun(std::stop_token stopToken)
         completion.dataMipEnd = request.dataMipEnd;
         completion.opId = request.opId;
         completion.byteCount = request.byteCount;
-        completion.data = std::unique_ptr<uint8[]>(new uint8[request.byteCount]);
+        completion.data = oc::unique_ptr<uint8[]>(new uint8[request.byteCount]);
 
         FILE* pFile = nullptr;
         fopen_s(&pFile, request.filePath.get(), "rb");
@@ -112,7 +112,7 @@ void TextureStreamer::workerRun(std::stop_token stopToken)
 
         {
             std::scoped_lock lock(m_completionMutex);
-            m_completions.push_back(std::move(completion));
+            m_completions.push_back(oc::move(completion));
         }
     }
 }
@@ -124,11 +124,11 @@ void TextureStreamer::registerTexture(uint16 texIdx, StreamedTextureMeta&& meta,
 
     StreamState& state = m_states[texIdx];
     assert(state.numMips == 0 && "Texture registered twice");
-    state.meta = std::move(meta);
+    state.meta = oc::move(meta);
     state.numMips = (uint8)state.meta.mips.size();
     state.residentTop = state.meta.initialResidentTop;
     state.residentBytes = residentBytes;
-    state.log2FullDim = std::log2((float)std::max(state.meta.fullWidth, state.meta.fullHeight));
+    state.log2FullDim = std::log2((float)oc::max(state.meta.fullWidth, state.meta.fullHeight));
     state.lastSeenFrame = m_frameCounter;
 
     // The tail = the smallest mips (maxDim <= tailMaxDim), always resident so the texture never
@@ -168,7 +168,7 @@ void TextureStreamer::unregisterTexture(uint16 texIdx, uint64 allocatedBytes)
     }
     else
     {
-        m_pinnedBytes -= std::min(m_pinnedBytes, allocatedBytes);
+        m_pinnedBytes -= oc::min(m_pinnedBytes, allocatedBytes);
     }
 }
 
@@ -180,11 +180,11 @@ void TextureStreamer::noteUse(uint16 texIdx, float log2TexelsAvailable)
     if (state.numMips == 0)
         return;
     const int32 want = (int32)std::ceil(state.log2FullDim - log2TexelsAvailable - std::log2(m_texelRatio) + m_mipBias);
-    const uint8 wantTop = (uint8)std::clamp(want, 0, (int32)state.tailTop);
+    const uint8 wantTop = (uint8)oc::clamp(want, 0, (int32)state.tailTop);
 
-    std::atomic_ref<uint8> accum(state.wantTopThisFrame);
-    uint8 cur = accum.load(std::memory_order_relaxed);
-    while (wantTop < cur && !accum.compare_exchange_weak(cur, wantTop, std::memory_order_relaxed)) {}
+    oc::atomic_ref<uint8> accum(state.wantTopThisFrame);
+    uint8 cur = accum.load(oc::memory_order_relaxed);
+    while (wantTop < cur && !accum.compare_exchange_weak(cur, wantTop, oc::memory_order_relaxed)) {}
 }
 
 void TextureStreamer::applyCompletion(StreamCompletion&& completion)
@@ -224,7 +224,7 @@ bool TextureStreamer::swapResidency(uint16 texIdx, StreamState& state, uint8 tar
     const vk::ImageCreateInfo imageCreateInfo{
         .imageType = vk::ImageType::e2D,
         .format = state.meta.format,
-        .extent = { std::max(1u, (uint32)state.meta.fullWidth >> targetTop), std::max(1u, (uint32)state.meta.fullHeight >> targetTop), 1 },
+        .extent = { oc::max(1u, (uint32)state.meta.fullWidth >> targetTop), oc::max(1u, (uint32)state.meta.fullHeight >> targetTop), 1 },
         .mipLevels = numMips,
         .arrayLayers = 1,
         .samples = vk::SampleCountFlagBits::e1,
@@ -262,7 +262,7 @@ bool TextureStreamer::swapResidency(uint16 texIdx, StreamState& state, uint8 tar
     Texture& texture = Globals::textureManager.getTextureMutable(texIdx);
     if (dataMipEnd < state.numMips)
     {
-        std::vector<vk::ImageCopy> regions;
+        oc::vector<vk::ImageCopy> regions;
         regions.reserve(state.numMips - dataMipEnd);
         for (uint32 i = dataMipEnd; i < state.numMips; i++)
         {
@@ -273,7 +273,7 @@ bool TextureStreamer::swapResidency(uint16 texIdx, StreamState& state, uint8 tar
                 .extent = { mip.width, mip.height, 1 },
             });
         }
-        Globals::stagingManager.copyImageMips(texture.getImage(), image, (uint32)(dataMipEnd - targetTop), std::move(regions));
+        Globals::stagingManager.copyImageMips(texture.getImage(), image, (uint32)(dataMipEnd - targetTop), oc::move(regions));
     }
 
     // Swap into the live Texture; the old image keeps servicing the frames still in flight and is
@@ -304,12 +304,12 @@ void TextureStreamer::issueOps()
     // image via GPU copies (see swapResidency).
     auto tryIssue = [&](uint32 texIdx, StreamState& state, uint8 dataMipEnd) -> bool
     {
-        if (m_numOpsInFlight >= (uint32)std::max(0, m_maxOpsInFlight))
+        if (m_numOpsInFlight >= (uint32)oc::max(0, m_maxOpsInFlight))
             return false;
         const uint64 readBytes = state.bytesFromMip[state.targetTop] - state.bytesFromMip[dataMipEnd];
         if (readBytes > bytesLeft && issuedAny)
             return false; // over this frame's IO volume; the first op of a frame may always go
-        bytesLeft -= std::min(bytesLeft, readBytes);
+        bytesLeft -= oc::min(bytesLeft, readBytes);
         issuedAny = true;
 
         state.opId = ++m_opCounter;
@@ -333,7 +333,7 @@ void TextureStreamer::issueOps()
 
     // Demotions first: they free memory and never need budget headroom. With GPU copies they skip the
     // disk entirely — the surviving mips are copied out of the old image right here, synchronously.
-    uint32 demotionsLeft = (uint32)std::max(0, m_maxOpsInFlight);
+    uint32 demotionsLeft = (uint32)oc::max(0, m_maxOpsInFlight);
     for (uint32 texIdx = 0; texIdx < (uint32)m_states.size() && demotionsLeft > 0; ++texIdx)
     {
         StreamState& state = m_states[texIdx];
@@ -351,14 +351,14 @@ void TextureStreamer::issueOps()
     // Promotions ordered by how much resolution the priority pass wants (lowest desiredTop = biggest on
     // screen sharpens first, cheaper reads breaking ties), and only while the committed ledger (resident
     // + in-flight growth) stays under budget, so a burst of issued reads can't land us above it.
-    std::vector<uint32> promotions;
+    oc::vector<uint32> promotions;
     for (uint32 texIdx = 0; texIdx < (uint32)m_states.size(); ++texIdx)
     {
         const StreamState& state = m_states[texIdx];
         if (state.numMips != 0 && !state.opInFlight && !state.failed && state.targetTop < state.residentTop)
             promotions.push_back(texIdx);
     }
-    std::sort(promotions.begin(), promotions.end(), [&](uint32 a, uint32 b)
+    oc::sort(promotions.begin(), promotions.end(), [&](uint32 a, uint32 b)
     {
         if (m_states[a].desiredTop != m_states[b].desiredTop)
             return m_states[a].desiredTop < m_states[b].desiredTop;
@@ -384,13 +384,13 @@ void TextureStreamer::update()
     // 1. Apply finished disk reads: create + upload the replacement images, swap them into the live
     //    textures, queue their descriptor rewrites, park the old images for deferred destruction.
     {
-        std::deque<StreamCompletion> completions;
+        oc::deque<StreamCompletion> completions;
         {
             std::scoped_lock lock(m_completionMutex);
             completions.swap(m_completions);
         }
         for (StreamCompletion& completion : completions)
-            applyCompletion(std::move(completion));
+            applyCompletion(oc::move(completion));
     }
 
     // 2. Fold this frame's want accumulators into the hysteresis-filtered desired mips: promotions apply
@@ -416,7 +416,7 @@ void TextureStreamer::update()
             }
             else if (want > state.desiredTop)
             {
-                if (++state.demoteCounter >= (uint16)std::max(1, m_demoteHysteresisFrames))
+                if (++state.demoteCounter >= (uint16)oc::max(1, m_demoteHysteresisFrames))
                 {
                     state.desiredTop = want;
                     state.demoteCounter = 0;
@@ -431,7 +431,7 @@ void TextureStreamer::update()
             state.demoteCounter = 0;
         }
         desiredBytes += state.bytesFromMip[state.desiredTop];
-        committedBytes += state.bytesFromMip[state.opInFlight ? std::min(state.opTargetTop, state.residentTop) : state.residentTop];
+        committedBytes += state.bytesFromMip[state.opInFlight ? oc::min(state.opTargetTop, state.residentTop) : state.residentTop];
     }
     m_desiredBytes = desiredBytes;
     m_committedBytes = committedBytes;
@@ -451,7 +451,7 @@ void TextureStreamer::update()
             if (a.cost != b.cost) return a.cost > b.cost;
             return a.texIdx > b.texIdx;
         };
-        std::priority_queue<Grant, std::vector<Grant>, decltype(lowerPriority)> grants(lowerPriority);
+        oc::priority_queue<Grant, oc::vector<Grant>, decltype(lowerPriority)> grants(lowerPriority);
 
         uint64 usedBytes = 0;
         for (uint32 texIdx = 0; texIdx < (uint32)m_states.size(); ++texIdx)
@@ -480,14 +480,14 @@ void TextureStreamer::update()
         // Retention phase: after every need is met, keep already-resident mips that still fit instead of
         // evicting them (a camera spin must not re-stream everything behind you). Most recently seen
         // textures retain first, so under real budget pressure eviction is oldest-first.
-        std::vector<uint32> retainOrder;
+        oc::vector<uint32> retainOrder;
         for (uint32 texIdx = 0; texIdx < (uint32)m_states.size(); ++texIdx)
         {
             const StreamState& state = m_states[texIdx];
             if (state.numMips != 0 && state.residentTop < state.targetTop)
                 retainOrder.push_back(texIdx);
         }
-        std::sort(retainOrder.begin(), retainOrder.end(), [&](uint32 a, uint32 b)
+        oc::sort(retainOrder.begin(), retainOrder.end(), [&](uint32 a, uint32 b)
         {
             if (m_states[a].lastSeenFrame != m_states[b].lastSeenFrame)
                 return m_states[a].lastSeenFrame > m_states[b].lastSeenFrame;
@@ -513,7 +513,7 @@ void TextureStreamer::update()
     // 5. Retire replaced images once no frame in flight can still be sampling them. A swap at streamer
     //    frame N is last sampled by frame N-1 (frame N's sets were rewritten at record time), and frame
     //    N+1's swapchain acquire fence-waits frame N-1, so destruction at N+2 is safe.
-    std::erase_if(m_retiredImages, [&](RetiredImage& retired)
+    oc::erase_if(m_retiredImages, [&](RetiredImage& retired)
     {
         if (m_frameCounter - retired.swapFrame < RendererVKLayout::NUM_FRAMES_IN_FLIGHT)
             return false;
@@ -528,9 +528,9 @@ void TextureStreamer::update()
 
 void TextureStreamer::queueDescriptorWrite(uint16 texIdx)
 {
-    for (std::vector<uint16>& pending : m_pendingDescriptorWrites)
+    for (oc::vector<uint16>& pending : m_pendingDescriptorWrites)
     {
-        if (std::find(pending.begin(), pending.end(), texIdx) == pending.end())
+        if (oc::find(pending.begin(), pending.end(), texIdx) == pending.end())
             pending.push_back(texIdx);
     }
 }

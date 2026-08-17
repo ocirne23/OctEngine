@@ -19,8 +19,8 @@ export struct TextureMipRange
 // one (procedural, embedded, non-DDS, cubemap/array/3D) stay pinned at full residency.
 export struct StreamedTextureMeta
 {
-    std::string filePath;              // resolved source path; mip byte ranges are re-read from it
-    std::vector<TextureMipRange> mips; // [0..numMips), mip 0 = full resolution
+    oc::string filePath;              // resolved source path; mip byte ranges are re-read from it
+    oc::vector<TextureMipRange> mips; // [0..numMips), mip 0 = full resolution
     vk::Format format = vk::Format::eUndefined; // sRGB-resolved, matches the live image
     uint16 fullWidth = 0;
     uint16 fullHeight = 0;
@@ -35,7 +35,7 @@ export inline uint8 computeStreamTailTop(const StreamedTextureMeta& meta, uint32
     while (tailTop > 0)
     {
         const TextureMipRange& mip = meta.mips[tailTop - 1];
-        if ((uint32)std::max(mip.width, mip.height) > tailMaxDim)
+        if ((uint32)oc::max(mip.width, mip.height) > tailMaxDim)
             break;
         tailTop--;
     }
@@ -89,7 +89,7 @@ public:
     // re-allocation (texture capacity growth), shader reloads, and re-swaps of the same texture.
     // The Renderer drains one frame slot per recordCommandBuffers (its fence has been waited there).
     void queueDescriptorWrite(uint16 texIdx);
-    std::span<const uint16> getPendingDescriptorWrites(uint32 frameIdx) const { return m_pendingDescriptorWrites[frameIdx]; }
+    oc::span<const uint16> getPendingDescriptorWrites(uint32 frameIdx) const { return m_pendingDescriptorWrites[frameIdx]; }
     void clearPendingDescriptorWrites(uint32 frameIdx) { m_pendingDescriptorWrites[frameIdx].clear(); }
     bool debugRewriteAllSlots() const { return m_debugRewriteAllSlots; }
 
@@ -110,7 +110,7 @@ private:
     struct StreamState
     {
         StreamedTextureMeta meta;
-        std::vector<uint64> bytesFromMip; // [k] = file bytes of mips [k..numMips); size numMips + 1
+        oc::vector<uint64> bytesFromMip; // [k] = file bytes of mips [k..numMips); size numMips + 1
         float log2FullDim = 0.0f;  // log2(max(fullWidth, fullHeight))
         uint8 numMips = 0;         // 0 = slot not streamable
         uint8 tailTop = 0;         // first mip of the always-resident tail
@@ -141,7 +141,7 @@ private:
         uint32 opId = 0;
         uint64 fileOffset = 0;
         uint32 byteCount = 0;
-        std::unique_ptr<const char[]> filePath; // owned copy (null-terminated); the meta's string must not be referenced cross-thread
+        oc::unique_ptr<const char[]> filePath; // owned copy (null-terminated); the meta's string must not be referenced cross-thread
     };
     struct StreamCompletion
     {
@@ -150,7 +150,7 @@ private:
         uint8 dataMipEnd = 0;
         uint32 opId = 0;
         uint32 byteCount = 0;
-        std::unique_ptr<uint8[]> data;
+        oc::unique_ptr<uint8[]> data;
         bool ok = false;
     };
     struct RetiredImage
@@ -170,20 +170,20 @@ private:
     bool swapResidency(uint16 texIdx, StreamState& state, uint8 targetTop, const uint8* pMipData, uint8 dataMipEnd);
     void issueOps();
 
-    std::vector<StreamState> m_states; // indexed by texture idx; numMips == 0 => not streamed
+    oc::vector<StreamState> m_states; // indexed by texture idx; numMips == 0 => not streamed
 
     std::jthread m_worker;
     std::mutex m_requestMutex;
     std::condition_variable_any m_requestCv;
-    std::deque<StreamRequest> m_requests;      // guarded by m_requestMutex
+    oc::deque<StreamRequest> m_requests;      // guarded by m_requestMutex
     std::mutex m_completionMutex;
-    std::deque<StreamCompletion> m_completions; // guarded by m_completionMutex
+    oc::deque<StreamCompletion> m_completions; // guarded by m_completionMutex
 
-    std::vector<RetiredImage> m_retiredImages;
+    oc::vector<RetiredImage> m_retiredImages;
     uint32 m_opCounter = 0;
     uint32 m_numOpsInFlight = 0;
 
-    std::vector<uint16> m_pendingDescriptorWrites[RendererVKLayout::NUM_FRAMES_IN_FLIGHT];
+    oc::vector<uint16> m_pendingDescriptorWrites[RendererVKLayout::NUM_FRAMES_IN_FLIGHT];
 
     uint64 m_residentBytes = 0;        // streamable textures only (VMA allocation sizes)
     uint64 m_pinnedBytes = 0;

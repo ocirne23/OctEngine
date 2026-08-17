@@ -32,9 +32,9 @@ static constexpr const char* structureNames[] = { "Emitter", "Generator", "Conne
 static constexpr float structureSpawnHeights[] = { 1.0f, 1.0f, 3.0f, 2.0f, 0.5f, 2.0f, 0.5f, 2.0f,
     2.0f, 1.0f, 3.0f, 3.0f, 3.0f, 3.0f, 2.0f, 2.0f, 4.0f, 1.0f, 3.0f };
 static constexpr glm::vec3 c_blueprintColor(0.45f, 0.55f, 0.7f); // ghost tint until built
-static_assert(std::size(structurePrefabs) == (size_t)EStructureType::Count);
-static_assert(std::size(structureNames) == (size_t)EStructureType::Count);
-static_assert(std::size(structureSpawnHeights) == (size_t)EStructureType::Count);
+static_assert(oc::size(structurePrefabs) == (size_t)EStructureType::Count);
+static_assert(oc::size(structureNames) == (size_t)EStructureType::Count);
+static_assert(oc::size(structureSpawnHeights) == (size_t)EStructureType::Count);
 
 const char* structureTypeName(EStructureType type)
 {
@@ -173,7 +173,7 @@ void StructureSystem::refresh()
     ProfileScope scope("Structures refresh (query)", EProfileCategory::Game);
     m_frame.clear();
     m_byId.clear();
-    thread_local std::vector<uint64> results;
+    thread_local oc::vector<uint64> results;
     Globals::spatialIndex.querySphere(glm::dvec3(0.0), 1000.0f, SpatialLayer_Render, results);
     for (const uint64 user : results)
     {
@@ -185,7 +185,7 @@ void StructureSystem::refresh()
         ref.entity = entity;
         ref.state = state;
         // Type from the entity name (set at spawn; unique per type).
-        const std::string_view name = entity->getName();
+        const oc::string_view name = entity->getName();
         ref.type = EStructureType::Emitter;
         for (int t = 0; t < (int)EStructureType::Count; ++t)
             if (name == structureNames[t])
@@ -299,7 +299,7 @@ void StructureSystem::spawnNodes()
             return;
         node.entity->setName(type == ENodeType::Mineral ? "MineralNode" : "FuelNode");
         Globals::world.addRootEntity(node.entity);
-        m_nodes.push_back(std::move(node));
+        m_nodes.push_back(oc::move(node));
     };
     // The CORRIDOR arena (GameMatch::spawnCorridorWalls: x -65..65, z -20..20, bases at
     // x = -55 / +55): every node lives on a SIDE, exactly mirrored (180° symmetry) — the center
@@ -396,7 +396,7 @@ bool StructureSystem::actorInFootprint(EStructureType type, const glm::vec3& p)
     // AND in placeStructure (the MP seam) — actors move between the two.
     constexpr float actorRadius = 0.7f; // capsule/unit body, generous by design
     const float half = footprintCellsOf(type) * GridCellSize * 0.5f + actorRadius;
-    thread_local std::vector<uint64> results;
+    thread_local oc::vector<uint64> results;
     Globals::spatialIndex.querySphere(glm::dvec3(p), half * 1.5f, SpatialLayer_Render, results);
     for (const uint64 user : results)
     {
@@ -427,14 +427,14 @@ void StructureSystem::queueDemolishRequest(uint32 id, uint8 team)
     m_demolishRequests.push_back({ id, team });
 }
 
-void StructureSystem::queueRouteRequest(uint32 id, std::span<const glm::vec3> points, uint8 team)
+void StructureSystem::queueRouteRequest(uint32 id, oc::span<const glm::vec3> points, uint8 team)
 {
     RouteRequest request;
     request.id = id;
     request.team = team;
     const size_t count = glm::min(points.size(), (size_t)MaxRouteWaypoints);
     request.points.assign(points.begin(), points.begin() + count);
-    m_routeRequests.push_back(std::move(request));
+    m_routeRequests.push_back(oc::move(request));
 }
 
 // ---------------------------------------------------------------- spawn/destroy
@@ -449,7 +449,7 @@ int StructureSystem::spawnStructure(uint32 id, EStructureType type, const glm::v
     GameStructureComponent* state = getComponent<GameStructureComponent>(entity.get());
     if (!state)
     {
-        Log::warning(std::string(structurePrefabs[(int)type])
+        Log::warning(oc::string(structurePrefabs[(int)type])
             + " has no GameStructure component — placement refused");
         return -1;
     }
@@ -502,7 +502,7 @@ void StructureSystem::applyDemolishRequest(uint32 id, uint8 team)
         return; // the respawn anchor is not deletable
     if (m_frame[index].state->team != team)
         return; // only the owning team demolishes its structures
-    Log::info(std::string(structureNames[(int)m_frame[index].type]) + " demolished");
+    Log::info(oc::string(structureNames[(int)m_frame[index].type]) + " demolished");
     destroyStructureAt((size_t)index);
 }
 
@@ -827,7 +827,7 @@ float StructureSystem::investMaterials(const Ref& s, float amount)
     {
         s.state->blueprint = false;
         applyStructureTint(s); // back to the authored color
-        Log::info(std::string(structureNames[(int)s.type]) + " constructed");
+        Log::info(oc::string(structureNames[(int)s.type]) + " constructed");
     }
     return heal * materialsPerHp;
 }
@@ -1045,7 +1045,7 @@ void StructureSystem::tickDamage(float)
             ++i;
             continue;
         }
-        Log::info(std::string(structureNames[(int)s.type]) + " destroyed");
+        Log::info(oc::string(structureNames[(int)s.type]) + " destroyed");
         destroyStructureAt(i);
     }
 }
@@ -1121,14 +1121,14 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
             continue; // died, not a barracks, or someone else's — refused (the MP seam)
         GameStructureComponent& s = *m_frame[index].state;
         request.points.resize(glm::min(request.points.size(), (size_t)MaxRouteWaypoints));
-        s.route = std::move(request.points);
+        s.route = oc::move(request.points);
         if (onRouteChanged)
             onRouteChanged(request.id);
         // LIVE ORDERS: units already spawned from this barracks pick the new route up too (a
         // route change is a rare user action — one arena query then is fine). The march index is
         // KEPT and clamped: an appended route continues where the unit was, a unit that had
         // finished marches to the new tail, and a fresh single-waypoint route restarts at 0.
-        thread_local std::vector<uint64> results;
+        thread_local oc::vector<uint64> results;
         Globals::spatialIndex.querySphere(glm::dvec3(0.0), 1000.0f, SpatialLayer_Render, results);
         for (const uint64 user : results)
         {
@@ -1231,7 +1231,7 @@ void StructureSystem::mirrorStructureState(uint32 id, float healthFrac, float ch
     s.powered = powered;
 }
 
-void StructureSystem::mirrorRoute(uint32 id, std::span<const glm::vec3> points)
+void StructureSystem::mirrorRoute(uint32 id, oc::span<const glm::vec3> points)
 {
     const int index = structureIndexById(id);
     if (index < 0)
@@ -1249,14 +1249,14 @@ void StructureSystem::saveTo(AssetNode& root) const
     for (const Ref& s : m_frame)
     {
         AssetNode& n = root.addChild("Structure");
-        n.set("Id", std::to_string(s.state->structureId));
-        n.set("Type", std::to_string((int)s.type));
+        n.set("Id", oc::to_string(s.state->structureId));
+        n.set("Type", oc::to_string((int)s.type));
         n.set("Position", s.entity->pos);
         const glm::vec3 forward = s.type == EStructureType::Lance
             ? s.entity->rot * glm::vec3(0.0f, 0.0f, -1.0f) : glm::vec3(0.0f);
         n.set("Facing", glm::vec3(forward.x, 0.0f, forward.z));
-        n.set("NodeIndex", std::to_string(s.nodeIndex));
-        n.set("Team", std::to_string((int)s.state->team));
+        n.set("NodeIndex", oc::to_string(s.nodeIndex));
+        n.set("Team", oc::to_string((int)s.state->team));
         n.set("Blueprint", s.state->blueprint != 0); // bitfield -> the bool overload
         n.set("Health", s.state->health);
         n.set("Charge", s.state->store[0]);
@@ -1270,7 +1270,7 @@ void StructureSystem::saveTo(AssetNode& root) const
             for (const glm::vec3& wp : s.state->route)
             {
                 AssetNode& p = r.addChild("Point");
-                p.values = { std::to_string(wp.x), std::to_string(wp.z) };
+                p.values = { oc::to_string(wp.x), oc::to_string(wp.z) };
             }
         }
     }
@@ -1281,9 +1281,9 @@ void StructureSystem::saveTo(AssetNode& root) const
         ECableType type;
         cableAt(i, idA, idB, type);
         AssetNode& n = root.addChild("Cable");
-        n.set("A", std::to_string(idA));
-        n.set("B", std::to_string(idB));
-        n.set("Type", std::to_string((int)type));
+        n.set("A", oc::to_string(idA));
+        n.set("B", oc::to_string(idB));
+        n.set("Type", oc::to_string((int)type));
     }
 }
 
@@ -1346,8 +1346,8 @@ void StructureSystem::loadFrom(const AssetNode& root)
             GameStructureComponent::link(*m_frame[a].entity, *m_frame[b].entity,
                 (uint8)cableMedium((ECableType)type), (uint8)type, m_cableThroughput[type]);
     }
-    Log::info("Game state loaded: " + std::to_string(m_frame.size()) + " structures, "
-        + std::to_string(cableTotal()) + " cables");
+    Log::info("Game state loaded: " + oc::to_string(m_frame.size()) + " structures, "
+        + oc::to_string(cableTotal()) + " cables");
 }
 
 // ---------------------------------------------------------------- debug draw

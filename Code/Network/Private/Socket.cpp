@@ -57,7 +57,7 @@ static void setNoDelay(SOCKET s)
     setsockopt(s, IPPROTO_TCP, TCP_NODELAY, (const char*)&on, sizeof(on));
 }
 
-NetAddress netResolveHost(std::string_view hostName, uint16 port)
+NetAddress netResolveHost(oc::string_view hostName, uint16 port)
 {
     if (!ensureWinsock())
         return {};
@@ -65,7 +65,7 @@ NetAddress netResolveHost(std::string_view hostName, uint16 port)
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_DGRAM;
     addrinfo* result = nullptr;
-    const std::string host(hostName);
+    const oc::string host(hostName);
     if (getaddrinfo(host.c_str(), nullptr, &hints, &result) != 0 || !result)
         return {};
     NetAddress out = fromSockAddr(*reinterpret_cast<const sockaddr_in*>(result->ai_addr));
@@ -97,7 +97,7 @@ bool UdpSocket::open(uint16 port, bool allowBroadcast)
     const sockaddr_in addr = toSockAddr(NetAddress::any(port));
     if (::bind(s, (const sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR)
     {
-        Log::error("UdpSocket: bind failed on port " + std::to_string(port) + " (error " + std::to_string(WSAGetLastError()) + ")");
+        Log::error("UdpSocket: bind failed on port " + oc::to_string(port) + " (error " + oc::to_string(WSAGetLastError()) + ")");
         closesocket(s);
         return false;
     }
@@ -113,7 +113,7 @@ void UdpSocket::close()
     m_handle = InvalidSocketHandle;
 }
 
-bool UdpSocket::sendTo(const NetAddress& to, std::span<const uint8> data)
+bool UdpSocket::sendTo(const NetAddress& to, oc::span<const uint8> data)
 {
     if (!isOpen())
         return false;
@@ -121,7 +121,7 @@ bool UdpSocket::sendTo(const NetAddress& to, std::span<const uint8> data)
     return ::sendto(toSocket(m_handle), (const char*)data.data(), (int)data.size(), 0, (const sockaddr*)&addr, sizeof(addr)) == (int)data.size();
 }
 
-int UdpSocket::receiveFrom(std::span<uint8> buffer, NetAddress& outFrom)
+int UdpSocket::receiveFrom(oc::span<uint8> buffer, NetAddress& outFrom)
 {
     if (!isOpen())
         return -1;
@@ -188,7 +188,7 @@ ETcpState TcpSocket::poll()
     return m_state;
 }
 
-int TcpSocket::send(std::span<const uint8> data)
+int TcpSocket::send(oc::span<const uint8> data)
 {
     if (m_state != ETcpState::Connected || !isOpen() || data.empty())
         return m_state == ETcpState::Connected ? 0 : -1;
@@ -203,7 +203,7 @@ int TcpSocket::send(std::span<const uint8> data)
     return result;
 }
 
-int TcpSocket::receive(std::span<uint8> buffer)
+int TcpSocket::receive(oc::span<uint8> buffer)
 {
     if (m_state != ETcpState::Connected || !isOpen())
         return -1;
@@ -254,7 +254,7 @@ bool TcpListener::listen(uint16 port, int backlog)
     const sockaddr_in addr = toSockAddr(NetAddress::any(port));
     if (::bind(s, (const sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR || ::listen(s, backlog) == SOCKET_ERROR)
     {
-        Log::error("TcpListener: listen failed on port " + std::to_string(port) + " (error " + std::to_string(WSAGetLastError()) + ")");
+        Log::error("TcpListener: listen failed on port " + oc::to_string(port) + " (error " + oc::to_string(WSAGetLastError()) + ")");
         closesocket(s);
         return false;
     }

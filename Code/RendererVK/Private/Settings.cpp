@@ -6,7 +6,7 @@ import Core.Tweaks;
 
 namespace
 {
-    constexpr std::string_view s_tonemapperNames[] = { "Off", "Reinhard", "ACES", "AgX" };
+    constexpr oc::string_view s_tonemapperNames[] = { "Off", "Reinhard", "ACES", "AgX" };
 }
 
 void SkyParams::registerTweaks()
@@ -104,7 +104,7 @@ void FogParams::registerTweaks()
     Tweak::boolean("Fog/Quality", "Light Shadows", &lightShadows);
 }
 
-void PostParams::registerTweaks(const std::function<void()>& onReRecord)
+void PostParams::registerTweaks(const oc::function<void()>& onReRecord)
 {
     Tweak::floatVar("Post", "Exposure (EV)", &exposureEV, -8.0f, 8.0f, 0.05f, onReRecord);
     Tweak::enumVar("Post", "Tonemapper", &tonemapper, s_tonemapperNames, onReRecord);
@@ -129,7 +129,7 @@ void RTParams::registerTweaks()
     Tweak::boolean("RT", "BLAS compaction", &blasCompaction);
 }
 
-void RTAOParams::registerTweaks(const std::function<void()>& onReRecord, const std::function<void()>& onReloadShaders)
+void RTAOParams::registerTweaks(const oc::function<void()>& onReRecord, const oc::function<void()>& onReloadShaders)
 {
     Tweak::boolean("RTAO", "Enabled", &enabled, onReRecord);
     Tweak::intVar("RTAO", "Rays Per Pixel", &rays, 1, 32, 1.0f, onReRecord);
@@ -145,7 +145,7 @@ void RTAOParams::registerTweaks(const std::function<void()>& onReRecord, const s
     Tweak::boolean("RTAO", "Alpha Test", &alphaTest, onReloadShaders);
 }
 
-void TAAParams::registerTweaks(const std::function<void()>& onReRecord)
+void TAAParams::registerTweaks(const oc::function<void()>& onReRecord)
 {
     Tweak::boolean("TAA", "Enabled", &taaEnabled, onReRecord);
     Tweak::floatVar("TAA", "History Feedback", &taaFeedback, 0.0f, 0.98f, 0.01f, onReRecord);

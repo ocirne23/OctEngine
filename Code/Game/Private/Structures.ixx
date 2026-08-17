@@ -58,10 +58,10 @@ public:
     // CO-OP hooks: the server runs the real sim and notifies; clients mirror via the mirror* calls
     // + the periodic stat sync (mirrored emitters drive their LOCAL ForceComponent, so client-side
     // fields are real).
-    std::function<void(int index)> onStructurePlaced;                       // server -> send GPl
-    std::function<void(uint32 id)> onStructureRemoved;                      // server -> send GRm
-    std::function<void(uint32, uint32, ECableType, bool removed)> onCableChanged; // server -> GCb
-    std::function<void(uint32 id)> onRouteChanged;                          // server -> send GRt
+    oc::function<void(int index)> onStructurePlaced;                       // server -> send GPl
+    oc::function<void(uint32 id)> onStructureRemoved;                      // server -> send GRm
+    oc::function<void(uint32, uint32, ECableType, bool removed)> onCableChanged; // server -> GCb
+    oc::function<void(uint32 id)> onRouteChanged;                          // server -> send GRt
 
     void mirrorPlace(uint32 id, EStructureType type, const glm::vec3& pos, const glm::vec2& facingXZ,
         int nodeIndex, uint8 team, bool built);
@@ -69,8 +69,8 @@ public:
     void mirrorCable(uint32 idA, uint32 idB, ECableType type, bool removed);
     void mirrorStructureState(uint32 id, float healthFrac, float chargeFrac, float fuelFrac,
         float mineralFrac, float outputFrac, float utilFrac, bool powered, bool blueprint);
-    void mirrorRoute(uint32 id, std::span<const glm::vec3> points);
-    void mirrorTotals(std::span<const float> minerals, std::span<const float> fuel, float energyTotal,
+    void mirrorRoute(uint32 id, oc::span<const glm::vec3> points);
+    void mirrorTotals(oc::span<const float> minerals, oc::span<const float> fuel, float energyTotal,
         float energyCap, float genRate, float useRate)
     {
         for (int t = 0; t < GameMaxTeams; ++t)
@@ -110,19 +110,19 @@ public:
     // top of tickAuthority (server/single player) and tickMirror (clients); placements/removals
     // during the tick maintain it in place.
     void refresh();
-    std::span<const Ref> structures() const { return m_frame; }
+    oc::span<const Ref> structures() const { return m_frame; }
 
     // Client requests / local input (queued; validated + applied in tickAuthority — the MP seam).
     void queuePlaceRequest(EStructureType type, const glm::vec3& groundPos, int nodeIndex,
         const glm::vec3& facing, uint8 team);
     void queueCableRequest(uint32 idA, uint32 idB, ECableType type, uint8 team);
     void queueDemolishRequest(uint32 id, uint8 team);
-    void queueRouteRequest(uint32 id, std::span<const glm::vec3> points, uint8 team);
+    void queueRouteRequest(uint32 id, oc::span<const glm::vec3> points, uint8 team);
     static constexpr int MaxRouteWaypoints = GameStructureComponent::MaxRoutePoints;
-    std::span<const glm::vec3> structureRoute(int index) const // barracks only (empty elsewhere)
+    oc::span<const glm::vec3> structureRoute(int index) const // barracks only (empty elsewhere)
     {
         return isBarracksType(m_frame[index].type) ? m_frame[index].state->route
-                                                   : std::span<const glm::vec3>{};
+                                                   : oc::span<const glm::vec3>{};
     }
     const GameStructureComponent* structureStateById(uint32 id) const
     {
@@ -236,7 +236,7 @@ public:
     float connectorUtilization(int index) const { return m_frame[index].state->flowUtil; }
     int connectorMedium(int index) const // the ONE medium this connector carries (-1 = no links)
     {
-        const std::vector<GameStructureLink>& links = m_frame[index].state->links;
+        const oc::vector<GameStructureLink>& links = m_frame[index].state->links;
         return links.empty() ? -1 : (int)links.front().medium;
     }
     float structureMinerals(int index) const { return m_frame[index].state->store[2]; }
@@ -351,7 +351,7 @@ private:
     struct RouteRequest
     {
         uint32 id = 0;
-        std::vector<glm::vec3> points;
+        oc::vector<glm::vec3> points;
         uint8 team = 0;
     };
 
@@ -386,13 +386,13 @@ private:
              : t == EStructureType::Lance ? m_lanceEnergyPerSec : m_emitterEnergyPerSec;
     }
 
-    std::vector<Ref> m_frame;                 // THIS FRAME's spatial query view (not owned state)
-    std::unordered_map<uint32, int> m_byId;   // stable id -> frame index (rebuilt with it)
-    std::vector<Node> m_nodes;
-    std::vector<PlaceRequest> m_requests;
-    std::vector<CableRequest> m_cableRequests;
-    std::vector<std::pair<uint32, uint8>> m_demolishRequests;
-    std::vector<RouteRequest> m_routeRequests;
+    oc::vector<Ref> m_frame;                 // THIS FRAME's spatial query view (not owned state)
+    oc::unordered_map<uint32, int> m_byId;   // stable id -> frame index (rebuilt with it)
+    oc::vector<Node> m_nodes;
+    oc::vector<PlaceRequest> m_requests;
+    oc::vector<CableRequest> m_cableRequests;
+    oc::vector<oc::pair<uint32, uint8>> m_demolishRequests;
+    oc::vector<RouteRequest> m_routeRequests;
     uint32 m_nextStructureId = 1; // 0 = invalid
     float m_time = 0.0f;
     bool m_wasFuelDry = false;

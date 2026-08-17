@@ -67,7 +67,7 @@ public:
     void updateTextureDescriptor(vk::DescriptorSet descriptorSet, uint32 slotIdx, vk::ImageView view);
     // Points the terrain-data cascade binding (19) at the active ping-pong image (refreshed per frame).
     void updateTerrainHeightDescriptor(vk::DescriptorSet descriptorSet, vk::ImageView terrainView, vk::Sampler terrainSampler);
-    void update(uint32 frameIdx, std::vector<ObjectContainer*>& objectContainers);
+    void update(uint32 frameIdx, oc::vector<ObjectContainer*>& objectContainers);
     // Ocean variant: light refraction/reflection ray hits with the grid lights (OCEAN_HIT_LIGHTS define).
     // Takes effect on the next reloadShaders (the Renderer reloads when the tweak flips).
     void setOceanHitLights(bool enabled) { m_oceanHitLights = enabled; }
@@ -97,8 +97,8 @@ private:
     bool m_depthReadOnly = true;   // depth-prepass reuse: all scene variants depthWrite off (read-only depth attachment)
 
     vk::DeviceSize m_preprocessSize = 0;
-    std::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_preprocessBuffers;            // opaque pass
-    std::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_transparentPreprocessBuffers; // transparent pass
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_preprocessBuffers;            // opaque pass
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_transparentPreprocessBuffers; // transparent pass
 
     void createPreprocessBuffers(uint32 maxUniqueMeshes);
     void recordExecuteGeneratedCommands(vk::CommandBuffer vkCommandBuffer, Buffer& indirectCommandBuffer, Buffer& preprocessBuffer, Buffer& meshCountBuffer);

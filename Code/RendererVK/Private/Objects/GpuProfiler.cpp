@@ -12,7 +12,7 @@ void GpuProfiler::initialize()
 {
     const vk::PhysicalDevice physicalDevice = Globals::device.getPhysicalDevice();
     const vk::PhysicalDeviceProperties properties = physicalDevice.getProperties();
-    const std::vector<vk::QueueFamilyProperties> queueFamilies = physicalDevice.getQueueFamilyProperties();
+    const oc::vector<vk::QueueFamilyProperties> queueFamilies = physicalDevice.getQueueFamilyProperties();
     const uint32 timestampValidBits = queueFamilies[Globals::device.getGraphicsQueueIndex()].timestampValidBits;
     if (timestampValidBits == 0 || properties.limits.timestampPeriod <= 0.0f)
     {
@@ -56,7 +56,7 @@ void GpuProfiler::collect(uint32 frameIdx)
     slot.pending = false;
 
     const vk::Device device = Globals::device.getDevice();
-    std::array<uint64, MAX_SCOPES * 2> queryResults;
+    oc::array<uint64, MAX_SCOPES * 2> queryResults;
     const uint32 numQueries = slot.numScopes * 2;
     const vk::Result result = device.getQueryPoolResults(slot.queryPool, 0, numQueries,
         numQueries * sizeof(uint64), queryResults.data(), sizeof(uint64), vk::QueryResultFlagBits::e64);
@@ -73,11 +73,11 @@ void GpuProfiler::collect(uint32 frameIdx)
     uint64 anchorGpu = queryResults[0] & m_timestampMask;
     if (m_useCalibration)
     {
-        const std::array<vk::CalibratedTimestampInfoKHR, 2> infos{
+        const oc::array<vk::CalibratedTimestampInfoKHR, 2> infos{
             vk::CalibratedTimestampInfoKHR{ .timeDomain = vk::TimeDomainKHR::eDevice },
             vk::CalibratedTimestampInfoKHR{ .timeDomain = vk::TimeDomainKHR::eQueryPerformanceCounter },
         };
-        std::array<uint64, 2> timestamps = {};
+        oc::array<uint64, 2> timestamps = {};
         uint64 maxDeviation = 0;
         const vk::Result calibResult = device.getCalibratedTimestampsKHR(2, infos.data(), timestamps.data(), &maxDeviation);
         if (calibResult == vk::Result::eSuccess)
@@ -109,7 +109,7 @@ void GpuProfiler::collect(uint32 frameIdx)
         return anchorTick + (int64)((double)delta * m_timestampPeriodNs * ticksPerNs);
     };
 
-    std::array<ProfileRecord, MAX_SCOPES> records;
+    oc::array<ProfileRecord, MAX_SCOPES> records;
     for (uint32 i = 0; i < slot.numScopes; ++i)
     {
         records[i].start = toTick(queryResults[i * 2 + 0] & m_timestampMask);
@@ -120,7 +120,7 @@ void GpuProfiler::collect(uint32 frameIdx)
     }
     // The track contract wants pushes ordered by END time (scopes are stored in begin order; a
     // parent ends after its children but was stored first).
-    std::sort(records.begin(), records.begin() + slot.numScopes,
+    oc::sort(records.begin(), records.begin() + slot.numScopes,
         [](const ProfileRecord& a, const ProfileRecord& b) { return a.end < b.end; });
     for (uint32 i = 0; i < slot.numScopes; ++i)
         m_track->push(records[i].start, records[i].end, records[i].name, records[i].depth, EProfileCategory::GPU);

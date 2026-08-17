@@ -105,7 +105,7 @@ NetPeerId NetHost::connect(const NetAddress& address)
         return InvalidNetPeerId;
     NetPeer& peer = m_peers[id];
     peer.state = NetPeer::EState::Connecting;
-    cryptoRandom(std::span(reinterpret_cast<uint8*>(&peer.clientSalt), sizeof(peer.clientSalt)));
+    cryptoRandom(oc::span(reinterpret_cast<uint8*>(&peer.clientSalt), sizeof(peer.clientSalt)));
     sendConnectRequest(peer);
     peer.lastHandshakeSendTime = m_time;
     return id;
@@ -122,7 +122,7 @@ void NetHost::disconnect(NetPeerId id)
     freePeer(id);
 }
 
-bool NetHost::send(NetPeerId id, std::span<const uint8> data, ENetDelivery delivery, uint8 channel)
+bool NetHost::send(NetPeerId id, oc::span<const uint8> data, ENetDelivery delivery, uint8 channel)
 {
     if (id >= m_peers.size() || m_peers[id].state != NetPeer::EState::Connected || channel >= NetMaxChannels)
         return false;
@@ -152,7 +152,7 @@ bool NetHost::send(NetPeerId id, std::span<const uint8> data, ENetDelivery deliv
         writer.writeBytes(data);
         if (writer.overflowed() || writer.size() > bodyBudget)
         {
-            Log::warning("NetHost: unreliable message too large (" + std::to_string(data.size()) + " bytes), dropped");
+            Log::warning("NetHost: unreliable message too large (" + oc::to_string(data.size()) + " bytes), dropped");
             return false;
         }
         peer.unreliableQueue.emplace_back(writer.data().begin(), writer.data().end());
@@ -167,14 +167,14 @@ bool NetHost::send(NetPeerId id, std::span<const uint8> data, ENetDelivery deliv
             peer.sendWindowOverflow = true; // acted on in update(): freeing a peer here would break
                                             // sendToAll's loop
             Log::warning("NetHost: peer " + peer.address.toString() + " reliable backlog over "
-                + std::to_string(m_config.maxQueuedReliablePerChannel) + " on channel "
-                + std::to_string(channel) + ", disconnecting");
+                + oc::to_string(m_config.maxQueuedReliablePerChannel) + " on channel "
+                + oc::to_string(channel) + ", disconnecting");
         }
         return false;
     }
 
     // Reliable: single message when it fits, otherwise a run of fragments on consecutive seqs
-    const auto pushReliable = [&](uint8 kind, uint16 fragIndex, uint16 fragCount, std::span<const uint8> chunk)
+    const auto pushReliable = [&](uint8 kind, uint16 fragIndex, uint16 fragCount, oc::span<const uint8> chunk)
     {
         NetPeer::ReliableMsg msg;
         msg.seq = sendChannel.nextReliableSeq++;
@@ -190,7 +190,7 @@ bool NetHost::send(NetPeerId id, std::span<const uint8> data, ENetDelivery deliv
         writer.writeBytes(chunk);
         assert(!writer.overflowed() && writer.size() <= bodyBudget);
         msg.encoded.assign(writer.data().begin(), writer.data().end());
-        sendChannel.window.push_back(std::move(msg));
+        sendChannel.window.push_back(oc::move(msg));
     };
 
     const uint32 singleMax = bodyBudget - 6;   // kind + seq + varint len
@@ -203,7 +203,7 @@ bool NetHost::send(NetPeerId id, std::span<const uint8> data, ENetDelivery deliv
     const uint64 fragmentCount = (data.size() + fragmentMax - 1) / fragmentMax;
     if (data.size() > m_config.maxMessageSize || fragmentCount > 0xffff)
     {
-        Log::warning("NetHost: reliable message too large (" + std::to_string(data.size()) + " bytes), dropped");
+        Log::warning("NetHost: reliable message too large (" + oc::to_string(data.size()) + " bytes), dropped");
         return false;
     }
     for (uint64 i = 0; i < fragmentCount; ++i)
@@ -215,7 +215,7 @@ bool NetHost::send(NetPeerId id, std::span<const uint8> data, ENetDelivery deliv
     return true;
 }
 
-void NetHost::sendToAll(std::span<const uint8> data, ENetDelivery delivery, uint8 channel)
+void NetHost::sendToAll(oc::span<const uint8> data, ENetDelivery delivery, uint8 channel)
 {
     for (NetPeerId id = 0; id < m_peers.size(); ++id)
         if (m_peers[id].state == NetPeer::EState::Connected)
@@ -246,7 +246,7 @@ void NetHost::update(double deltaSec)
             continue;
         }
         if (size > 0 && rateLimitAllows(from))
-            handlePacket(from, std::span<const uint8>(buffer, size));
+            handlePacket(from, oc::span<const uint8>(buffer, size));
         else if (size > 0)
             ++m_accumPacketsDropped;
     }
@@ -297,7 +297,7 @@ void NetHost::update(double deltaSec)
         {
             m_socket.sendTo(m_delayedSends[i].to, m_delayedSends[i].data);
             if (i != m_delayedSends.size() - 1)
-                m_delayedSends[i] = std::move(m_delayedSends.back());
+                m_delayedSends[i] = oc::move(m_delayedSends.back());
             m_delayedSends.pop_back();
         }
         else
@@ -320,9 +320,9 @@ void NetHost::update(double deltaSec)
     }
 }
 
-std::vector<NetEvent> NetHost::takeEvents()
+oc::vector<NetEvent> NetHost::takeEvents()
 {
-    std::vector<NetEvent> out = std::move(m_events);
+    oc::vector<NetEvent> out = oc::move(m_events);
     m_events.clear();
     return out;
 }
@@ -374,7 +374,7 @@ uint64 NetHost::challengeSaltFor(const NetAddress& address, uint64 clientSalt, u
     return cryptoStatelessMac(m_hostSecret, writer.data());
 }
 
-bool NetHost::derivePeerKey(NetPeer& peer, std::span<const uint8> peerPublicKey)
+bool NetHost::derivePeerKey(NetPeer& peer, oc::span<const uint8> peerPublicKey)
 {
     uint8 context[20];
     NetWriter writer(context);
@@ -480,7 +480,7 @@ void NetHost::handleChallengeResponse(const NetAddress& from, NetPeerId id, NetR
     uint8 peerPublicKey[NetCryptoPublicKeySize];
     if (m_config.encrypt)
     {
-        const std::span<const uint8> key = reader.readBytes(NetCryptoPublicKeySize);
+        const oc::span<const uint8> key = reader.readBytes(NetCryptoPublicKeySize);
         if (!reader.overflowed())
             memcpy(peerPublicKey, key.data(), NetCryptoPublicKeySize);
     }
@@ -548,7 +548,7 @@ bool NetHost::rateLimitAllows(const NetAddress& from)
     hash ^= hash >> 32;
     RateBucket& bucket = m_rateBuckets[hash % RateBucketCount];
 
-    const float burst = float(std::max(1u, m_config.packetBurstPerAddress));
+    const float burst = float(oc::max(1u, m_config.packetBurstPerAddress));
     if (bucket.addressKey != key)
     {
         // unused slots claim immediately (an empty bucket never "refills", so testing it would
@@ -566,7 +566,7 @@ bool NetHost::rateLimitAllows(const NetAddress& from)
     }
     else
     {
-        bucket.tokens = std::min(burst,
+        bucket.tokens = oc::min(burst,
             bucket.tokens + float(m_time - bucket.lastRefill) * float(m_config.maxPacketsPerSecPerAddress));
         bucket.lastRefill = m_time;
     }
@@ -585,7 +585,7 @@ uint32 NetHost::countPeersOnIp(uint32 ip) const
     return count;
 }
 
-void NetHost::handlePacket(const NetAddress& from, std::span<const uint8> bytes)
+void NetHost::handlePacket(const NetAddress& from, oc::span<const uint8> bytes)
 {
     NetReader reader(bytes);
     const uint8 type = reader.read<uint8>() & PktTypeMask;
@@ -635,7 +635,7 @@ void NetHost::handlePacket(const NetAddress& from, std::span<const uint8> bytes)
             return;
         if (m_config.encrypt)
         {
-            const std::span<const uint8> key = reader.readBytes(NetCryptoPublicKeySize);
+            const oc::span<const uint8> key = reader.readBytes(NetCryptoPublicKeySize);
             if (reader.overflowed() || !derivePeerKey(peer, key))
                 return;
         }
@@ -662,7 +662,7 @@ void NetHost::handlePacket(const NetAddress& from, std::span<const uint8> bytes)
 
 // ---- payload ------------------------------------------------------------------------------------
 
-void NetHost::handlePayload(NetPeer& peer, NetPeerId id, std::span<const uint8> bytes)
+void NetHost::handlePayload(NetPeer& peer, NetPeerId id, oc::span<const uint8> bytes)
 {
     if (bytes.size() < NetPacketHeaderSize + NetPacketAckSize + (m_config.encrypt ? NetCryptoTagSize : 0))
         return;
@@ -672,16 +672,16 @@ void NetHost::handlePayload(NetPeer& peer, NetPeerId id, std::span<const uint8> 
     const uint64 seq = reconstructSeq(wireSeq, peer.hasRemoteSeq ? peer.remoteSeq : wireSeq);
 
     uint8 plain[NetMaxRawPacketSize];
-    std::span<const uint8> body;
+    oc::span<const uint8> body;
     if (m_config.encrypt)
     {
         uint8 nonce[12] = {};
         nonce[0] = peer.isServerRole ? 0 : 1; // sender's role
         memcpy(nonce + 4, &seq, sizeof(seq));
         const size_t plainSize = bytes.size() - NetPacketHeaderSize - NetCryptoTagSize;
-        if (!cryptoOpen(peer.key, nonce, bytes.first(NetPacketHeaderSize), bytes.subspan(NetPacketHeaderSize), std::span(plain, plainSize)))
+        if (!cryptoOpen(peer.key, nonce, bytes.first(NetPacketHeaderSize), bytes.subspan(NetPacketHeaderSize), oc::span(plain, plainSize)))
             return; // forged, corrupt, or replayed under the wrong counter
-        body = std::span<const uint8>(plain, plainSize);
+        body = oc::span<const uint8>(plain, plainSize);
     }
     else
     {
@@ -740,7 +740,7 @@ void NetHost::handlePayload(NetPeer& peer, NetPeerId id, std::span<const uint8> 
         {
         case MsgUnreliable:
         {
-            const std::span<const uint8> data = reader.readBytes(size_t(reader.readVarUInt()));
+            const oc::span<const uint8> data = reader.readBytes(size_t(reader.readVarUInt()));
             if (reader.overflowed())
                 return;
             NetEvent& event = m_events.emplace_back();
@@ -754,7 +754,7 @@ void NetHost::handlePayload(NetPeer& peer, NetPeerId id, std::span<const uint8> 
         case MsgUnreliableSeq:
         {
             const uint16 msgSeq = reader.read<uint16>();
-            const std::span<const uint8> data = reader.readBytes(size_t(reader.readVarUInt()));
+            const oc::span<const uint8> data = reader.readBytes(size_t(reader.readVarUInt()));
             if (reader.overflowed())
                 return;
             if (peer.recvChannels.size() <= channel)
@@ -782,7 +782,7 @@ void NetHost::handlePayload(NetPeer& peer, NetPeerId id, std::span<const uint8> 
                 fragIndex = reader.read<uint16>();
                 fragCount = reader.read<uint16>();
             }
-            const std::span<const uint8> data = reader.readBytes(size_t(reader.readVarUInt()));
+            const oc::span<const uint8> data = reader.readBytes(size_t(reader.readVarUInt()));
             if (reader.overflowed())
                 return;
             if (peer.recvChannels.size() <= channel)
@@ -836,7 +836,7 @@ void NetHost::deliverReliable(NetPeer& peer, NetPeerId id, uint8 channel)
             event.peer = id;
             event.delivery = ENetDelivery::Reliable;
             event.channel = channel;
-            event.data = std::move(slot.data);
+            event.data = oc::move(slot.data);
         }
         else
         {
@@ -856,7 +856,7 @@ void NetHost::deliverReliable(NetPeer& peer, NetPeerId id, uint8 channel)
                     event.peer = id;
                     event.delivery = ENetDelivery::Reliable;
                     event.channel = channel;
-                    event.data = std::move(recvChannel.fragmentAssembly);
+                    event.data = oc::move(recvChannel.fragmentAssembly);
                     recvChannel.fragmentAssembly.clear();
                     recvChannel.fragmentsReceived = 0;
                 }
@@ -911,7 +911,7 @@ void NetHost::processAcks(NetPeer& peer, uint16 ackWire, uint32 ackBits)
             sendChannel.window.pop_front();
 }
 
-void NetHost::transmitPayload(NetPeer& peer, std::span<const uint8> body, bool bypassSim)
+void NetHost::transmitPayload(NetPeer& peer, oc::span<const uint8> body, bool bypassSim)
 {
     uint8 packet[NetMaxRawPacketSize];
     packet[0] = uint8(PktPayload | (peer.hasRemoteSeq ? PktFlagHasAck : 0));
@@ -923,8 +923,8 @@ void NetHost::transmitPayload(NetPeer& peer, std::span<const uint8> body, bool b
         uint8 nonce[12] = {};
         nonce[0] = peer.isServerRole ? 1 : 0;
         memcpy(nonce + 4, &peer.localSeq, sizeof(peer.localSeq));
-        if (!cryptoSeal(peer.key, nonce, std::span<const uint8>(packet, NetPacketHeaderSize), body,
-            std::span(packet + NetPacketHeaderSize, body.size() + NetCryptoTagSize)))
+        if (!cryptoSeal(peer.key, nonce, oc::span<const uint8>(packet, NetPacketHeaderSize), body,
+            oc::span(packet + NetPacketHeaderSize, body.size() + NetCryptoTagSize)))
             return;
         packetSize += body.size() + NetCryptoTagSize;
     }
@@ -936,7 +936,7 @@ void NetHost::transmitPayload(NetPeer& peer, std::span<const uint8> body, bool b
     ++peer.localSeq;
     peer.lastSendTime = m_time;
     peer.ackDirty = false;
-    sendRaw(peer.address, std::span<const uint8>(packet, packetSize), bypassSim);
+    sendRaw(peer.address, oc::span<const uint8>(packet, packetSize), bypassSim);
 }
 
 void NetHost::sendDisconnectPackets(NetPeer& peer, bool bypassSim)
@@ -956,12 +956,12 @@ void NetHost::flushPeer(NetPeer& peer)
 {
     const uint32 bodyMax = m_config.maxPacketSize - NetPacketHeaderSize - (m_config.encrypt ? NetCryptoTagSize : 0);
     const double rto = peer.hasRtt
-        ? std::min(std::max(double(peer.smoothedRttSec) * 2.0 + 0.01, m_config.resendMinSec), m_config.resendMaxSec)
+        ? oc::min(oc::max(double(peer.smoothedRttSec) * 2.0 + 0.01, m_config.resendMinSec), m_config.resendMaxSec)
         : 0.2;
 
     uint8 bodyBuffer[NetMaxRawPacketSize];
-    NetWriter body(std::span(bodyBuffer, bodyMax));
-    std::vector<uint32>& reliableIds = m_scratchReliableIds;
+    NetWriter body(oc::span(bodyBuffer, bodyMax));
+    oc::vector<uint32>& reliableIds = m_scratchReliableIds;
     reliableIds.clear();
     bool sentAny = false;
 
@@ -1006,7 +1006,7 @@ void NetHost::flushPeer(NetPeer& peer)
             reliableIds.push_back((uint32(channel) << 16) | msg.seq);
         }
     }
-    for (const std::vector<uint8>& blob : peer.unreliableQueue)
+    for (const oc::vector<uint8>& blob : peer.unreliableQueue)
     {
         if (body.size() + blob.size() > bodyMax)
         {
@@ -1025,7 +1025,7 @@ void NetHost::flushPeer(NetPeer& peer)
 
 // ---- plumbing -----------------------------------------------------------------------------------
 
-void NetHost::sendRaw(const NetAddress& to, std::span<const uint8> bytes, bool bypassSim)
+void NetHost::sendRaw(const NetAddress& to, oc::span<const uint8> bytes, bool bypassSim)
 {
     ++m_accumPacketsSent;
     m_accumBytesSent += bytes.size();

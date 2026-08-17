@@ -28,7 +28,7 @@ void PhysicsComponent::spawn(Entity& entity, const SpawnInfo& info, const Transf
     desc.transform = world;
     desc.userData = &entity;
     desc.lockRotation = info.lockRotation;
-    body = Globals::physics.createBody(desc, std::span(&info.shape, 1));
+    body = Globals::physics.createBody(desc, oc::span(&info.shape, 1));
 
     if (info.bodyType == EPhysicsBodyType::Static)
     {
@@ -145,7 +145,7 @@ void writePhysicsSpawnInfo(const PhysicsComponent::SpawnInfo& info, AssetNode& o
     case EPhysicsShapeType::Hull:
         out.set("Shape", "Hull"); // point cloud re-derived from the render mesh on load
         if (shape.maxHullVertices != defaults.maxHullVertices)
-            out.addChild("MaxHullVertices").values.emplace_back(std::to_string(shape.maxHullVertices));
+            out.addChild("MaxHullVertices").values.emplace_back(oc::to_string(shape.maxHullVertices));
         break;
     case EPhysicsShapeType::Mesh:
         out.set("Shape", "Mesh"); // BVH re-derived from the render mesh on load
@@ -160,6 +160,6 @@ void writePhysicsSpawnInfo(const PhysicsComponent::SpawnInfo& info, AssetNode& o
     if (shape.restitution != defaults.restitution) out.set("Restitution", shape.restitution);
     if (!info.layer.empty())                       out.set("Layer", info.layer);
     if (!info.collidesWith.empty())                out.addChild("CollidesWith").values = info.collidesWith;
-    if (shape.groupIndex != 0)                     out.addChild("Group").values.emplace_back(std::to_string(shape.groupIndex));
+    if (shape.groupIndex != 0)                     out.addChild("Group").values.emplace_back(oc::to_string(shape.groupIndex));
     if (!info.enabled)                             out.set("Enabled", info.enabled);
 }

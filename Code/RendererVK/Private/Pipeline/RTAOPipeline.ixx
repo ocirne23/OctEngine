@@ -70,10 +70,10 @@ private:
 
     struct ImageSet
     {
-        std::array<vk::Image, SLOTS> image{};
-        std::array<VmaAllocation, SLOTS> memory{};
-        std::array<vk::ImageView, SLOTS> view{};
-        std::array<bool, SLOTS> initialized{};
+        oc::array<vk::Image, SLOTS> image{};
+        oc::array<VmaAllocation, SLOTS> memory{};
+        oc::array<vk::ImageView, SLOTS> view{};
+        oc::array<bool, SLOTS> initialized{};
     };
 
     void buildTraceLayout(ComputePipelineLayout& layout, uint32 maxTextures);
@@ -87,9 +87,9 @@ private:
     ComputePipeline m_tracePipeline;
     ComputePipeline m_temporalPipeline;
     ComputePipeline m_spatialPipeline;
-    std::array<DescriptorSet, SLOTS> m_traceSets;
-    std::array<DescriptorSet, SLOTS> m_temporalSets;
-    std::array<DescriptorSet, SLOTS> m_spatialSets;
+    oc::array<DescriptorSet, SLOTS> m_traceSets;
+    oc::array<DescriptorSet, SLOTS> m_temporalSets;
+    oc::array<DescriptorSet, SLOTS> m_spatialSets;
 
     const RTAOParams* m_pParams = nullptr;
     uint32 m_maxTextures = 0; // fixed device-limit cap baked into the trace layout

@@ -9,16 +9,16 @@ import Core.glm;
 // transform chain stays intact; nodes that are not actual skin bones simply keep an identity inverseBind.
 export struct Skeleton
 {
-    std::vector<std::string> boneNames;                   // parent-before-child order
-    std::vector<int32> parentIndices;                     // index into this skeleton, -1 for a root
-    std::vector<glm::mat4> localBind;                     // node-local bind-pose transform
-    std::vector<glm::mat4> inverseBind;                   // mesh space -> bone space (offset matrix); identity if not a skin bone
-    std::unordered_map<std::string, uint32> nameToIndex;
+    oc::vector<oc::string> boneNames;                   // parent-before-child order
+    oc::vector<int32> parentIndices;                     // index into this skeleton, -1 for a root
+    oc::vector<glm::mat4> localBind;                     // node-local bind-pose transform
+    oc::vector<glm::mat4> inverseBind;                   // mesh space -> bone space (offset matrix); identity if not a skin bone
+    oc::unordered_map<oc::string, uint32> nameToIndex;
 
     uint32 numBones() const { return (uint32)boneNames.size(); }
     bool isValid() const { return !boneNames.empty(); }
 
-    int32 findBone(const std::string& name) const
+    int32 findBone(const oc::string& name) const
     {
         const auto it = nameToIndex.find(name);
         return it == nameToIndex.end() ? -1 : (int32)it->second;

@@ -18,7 +18,7 @@ void AudioComponent::destroy(Entity& entity, const SpawnInfo&)
     voices.clear(); // AudioSource RAII stops + releases the playing sounds
 }
 
-int AudioComponent::findSound(std::string_view alias) const
+int AudioComponent::findSound(oc::string_view alias) const
 {
     if (!info)
         return -1;
@@ -41,7 +41,7 @@ const char* audioSelectToken(EAudioSelect select)
     }
 }
 
-EAudioSelect audioSelectFromToken(std::string_view token)
+EAudioSelect audioSelectFromToken(oc::string_view token)
 {
     if (token == "Random")           return EAudioSelect::Random;
     if (token == "RandomNoRepeat")   return EAudioSelect::RandomNoRepeat;
@@ -99,12 +99,12 @@ int AudioComponent::selectClip(const SoundDesc& sound, Voice& voice) const
     }
 }
 
-bool AudioComponent::trigger(Entity& entity, std::string_view alias, const TriggerOverrides& overrides)
+bool AudioComponent::trigger(Entity& entity, oc::string_view alias, const TriggerOverrides& overrides)
 {
     const int idx = findSound(alias);
     if (idx < 0)
     {
-        Log::warning(std::string("Audio: entity '") + entity.getName() + "' has no sound named '" + std::string(alias) + "'");
+        Log::warning(oc::string("Audio: entity '") + entity.getName() + "' has no sound named '" + oc::string(alias) + "'");
         return false;
     }
     const SoundDesc& sound = info->sounds[idx];
@@ -141,7 +141,7 @@ bool AudioComponent::trigger(Entity& entity, std::string_view alias, const Trigg
     return true;
 }
 
-void AudioComponent::stopSound(std::string_view alias)
+void AudioComponent::stopSound(oc::string_view alias)
 {
     for (int i = 0; i < (int)voices.size(); ++i)
         if ((alias.empty() || (info && info->sounds[i].alias == alias)) && voices[i].source.isValid())

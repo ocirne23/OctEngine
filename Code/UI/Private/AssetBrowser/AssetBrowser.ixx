@@ -14,22 +14,22 @@ public:
 	void prepare();
 	void render();
 
-	void selectFile(const std::string& path); // navigate to the file's folder and select it
+	void selectFile(const oc::string& path); // navigate to the file's folder and select it
 
-	const std::string& getSelectedPath() const { return m_selectedPath; }
+	const oc::string& getSelectedPath() const { return m_selectedPath; }
 	bool hasSelection() const { return !m_selectedPath.empty(); }
 
-	std::vector<EntityChange> takeChanges() { return std::move(m_changes); }
+	oc::vector<EntityChange> takeChanges() { return oc::move(m_changes); }
 
 	// Script files: the UI drains this and routes by extension -- .dsl to the Script Editor, .scr to the node
 	// panel. Covers open AND create ("New Script" writes a minimal .dsl and raises this same request).
-	std::string takeScriptOpenRequest()   { return std::move(m_scriptOpenRequest); }
+	oc::string takeScriptOpenRequest()   { return oc::move(m_scriptOpenRequest); }
 
 	// Text (.txt) files: the UI drains this and drives the Text Editor panel.
-	std::string takeTextOpenRequest() { return std::move(m_textOpenRequest); }
+	oc::string takeTextOpenRequest() { return oc::move(m_textOpenRequest); }
 
 	// .pre files: the UI drains this and drives the Entity Editor panel.
-	std::string takeEntityEditRequest() { return std::move(m_entityEditRequest); }
+	oc::string takeEntityEditRequest() { return oc::move(m_entityEditRequest); }
 
 private:
 
@@ -43,32 +43,32 @@ private:
 	// reason to touch the disk at all, and the first interaction re-scans what it draws.
 	struct DirEntryInfo
 	{
-		std::string path;
-		std::string name;      // filename
-		std::string extension;
+		oc::string path;
+		oc::string name;      // filename
+		oc::string extension;
 		bool isDirectory = false;
 		uint64 size = 0;       // files only, cached (list view drew this with a syscall per row)
 		// Grid view's fitted caption: truncateLabel binary-searches ImGui::CalcTextSize with a
 		// substring allocation per probe — far too much to redo per item per frame. Cached against
 		// the width it was fitted to (the icon-size slider changes it).
-		std::string display;
+		oc::string display;
 		float displayWidth = -1.0f;
 	};
 	struct DirListing
 	{
-		std::vector<DirEntryInfo> entries; // directories first, then by name — the draw order
+		oc::vector<DirEntryInfo> entries; // directories first, then by name — the draw order
 		bool hasSubDirs = false;
 		double lastScanSec = -1.0;
 		uint64 touchedFrame = 0; // last frame a render actually read this listing
 	};
 	static constexpr double RescanIntervalSec = 1.0;
 
-	DirListing& listing(const std::string& dir); // cached; scans inline if unseen
-	static void scanDirectory(const std::string& dir, DirListing& out);
+	DirListing& listing(const oc::string& dir); // cached; scans inline if unseen
+	static void scanDirectory(const oc::string& dir, DirListing& out);
 	void invalidateListings(); // after the browser itself creates/renames something
 
 	void renderToolbar();
-	void renderDirectoryTree(const std::string& dir);
+	void renderDirectoryTree(const oc::string& dir);
 	void renderContentGrid();
 	void renderContentList();
 	void acceptPrefabDrop();
@@ -76,32 +76,32 @@ private:
 	void renderCyclePopup();
 	void renderRenamePopup();
 	void renderNewAssetContextMenu();
-	void queueSavePrefab(Entity* root, const std::string& path);
-	void renderContextMenu(const std::string& p);
-	std::string makeUniqueAssetPath(const char* stem, const char* ext) const;
-	void navigateTo(const std::string& path);
+	void queueSavePrefab(Entity* root, const oc::string& path);
+	void renderContextMenu(const oc::string& p);
+	oc::string makeUniqueAssetPath(const char* stem, const char* ext) const;
+	void navigateTo(const oc::string& path);
 	void navigateUp();
 
-	bool isWithinRoot(const std::string& path) const;
+	bool isWithinRoot(const oc::string& path) const;
 
-	std::string m_rootPath;
-	std::string m_currentPath;
-	std::string m_selectedPath;
+	oc::string m_rootPath;
+	oc::string m_currentPath;
+	oc::string m_selectedPath;
 
-	std::vector<EntityChange> m_changes;          // prefab saves queued for the app to drain
-	std::string           m_scriptOpenRequest;     // script the user asked to open/create (drained by UI)
-	std::string           m_textOpenRequest;       // .txt the user asked to open (drained by UI)
-	std::string           m_entityEditRequest;       // .pre the user asked to edit (drained by UI)
+	oc::vector<EntityChange> m_changes;          // prefab saves queued for the app to drain
+	oc::string           m_scriptOpenRequest;     // script the user asked to open/create (drained by UI)
+	oc::string           m_textOpenRequest;       // .txt the user asked to open (drained by UI)
+	oc::string           m_entityEditRequest;       // .pre the user asked to edit (drained by UI)
 	EntityPtr             m_pendingSaveRoot;       // entity awaiting overwrite confirmation (kept alive)
-	std::string m_pendingSavePath;       // target .pre for the pending save
+	oc::string m_pendingSavePath;       // target .pre for the pending save
 	bool                  m_openOverwritePopup = false;
 	bool                  m_openCyclePopup     = false;
 
-	std::string m_renameTarget;          // file/folder awaiting rename
+	oc::string m_renameTarget;          // file/folder awaiting rename
 	bool                  m_openRenamePopup = false;
 	char                  m_renameBuf[256] = {};
 
-	std::unordered_map<std::string, DirListing> m_dirCache; // keyed by path string; node-stable refs
+	oc::unordered_map<oc::string, DirListing> m_dirCache; // keyed by path string; node-stable refs
 	uint64 m_frame = 0;
 	bool m_active = false; // the Content window was focused or hovered last frame (gates rescans)
 

@@ -13,38 +13,38 @@ export struct ScaleKey    { float time; glm::vec3 value; };
 export struct AnimationChannel
 {
     int32 boneIndex = -1;
-    std::vector<PositionKey> positionKeys;
-    std::vector<RotationKey> rotationKeys;
-    std::vector<ScaleKey>    scaleKeys;
+    oc::vector<PositionKey> positionKeys;
+    oc::vector<RotationKey> rotationKeys;
+    oc::vector<ScaleKey>    scaleKeys;
 };
 
 // A notify tagged at a normalized time (0..1) in a clip; fired when playback crosses it (see
 // AnimationPlayer::getFiredEvents). Authored in .anm as `Event <name> <normalizedTime>`.
 export struct AnimationEventKey
 {
-    std::string name;
+    oc::string name;
     float normalizedTime = 0.0f;
 };
 
 export struct AnimationClip
 {
-    std::string name;
+    oc::string name;
     float duration = 0.0f; // seconds
-    std::vector<AnimationChannel> channels;
+    oc::vector<AnimationChannel> channels;
     bool loop = true;                          // false = one-shot: playback clamps + holds the last frame
-    std::vector<AnimationEventKey> events;     // notifies fired as playback crosses them
+    oc::vector<AnimationEventKey> events;     // notifies fired as playback crosses them
 };
 
 // A named collection of clips that share one skeleton (e.g. all of a character's animations). Lets an
 // AnimationPlayer resolve clips by name. Owns the clips.
 export struct AnimationSet
 {
-    std::vector<AnimationClip> clips;
-    std::unordered_map<std::string, uint32> nameToIndex;
+    oc::vector<AnimationClip> clips;
+    oc::unordered_map<oc::string, uint32> nameToIndex;
 
     uint32 numClips() const { return (uint32)clips.size(); }
     const AnimationClip* get(uint32 idx) const { return idx < clips.size() ? &clips[idx] : nullptr; }
-    const AnimationClip* find(const std::string& name) const
+    const AnimationClip* find(const oc::string& name) const
     {
         const auto it = nameToIndex.find(name);
         return it == nameToIndex.end() ? nullptr : &clips[it->second];
@@ -57,7 +57,7 @@ export struct AnimationSet
 export struct BlendSample1D { const AnimationClip* clip = nullptr; float position = 0.0f; };
 export struct BlendSpace1D
 {
-    std::vector<BlendSample1D> samples; // kept sorted ascending by position
+    oc::vector<BlendSample1D> samples; // kept sorted ascending by position
 
     void addSample(const AnimationClip* clip, float position)
     {
@@ -82,7 +82,7 @@ public:
 
     // Crossfade to a source over fadeSeconds (0 = instant). play(name) resolves against the clip library.
     void play(const AnimationClip* pClip, float fadeSeconds = 0.0f);
-    bool play(const std::string& name, float fadeSeconds = 0.0f);
+    bool play(const oc::string& name, float fadeSeconds = 0.0f);
     void playBlendSpace(const BlendSpace1D* pBlendSpace, float fadeSeconds = 0.0f);
     void setClip(const AnimationClip* pClip) { play(pClip, 0.0f); } // instant switch (kept for convenience)
 
@@ -97,12 +97,12 @@ public:
     void tick(float deltaSeconds);
 
     // Events whose normalized time was crossed during the most recent tick(). Valid until the next tick().
-    std::span<const std::string> getFiredEvents() const { return m_firedEvents; }
+    oc::span<const oc::string> getFiredEvents() const { return m_firedEvents; }
 
     void setSpeed(float speed) { m_speed = speed; }
     void setPaused(bool paused) { m_paused = paused; }
 
-    std::span<const glm::mat4> getPalette() const { return m_palette; }
+    oc::span<const glm::mat4> getPalette() const { return m_palette; }
     uint32 getNumBones() const { return (uint32)m_palette.size(); }
 
     // 0..1 progress of the active source (single-clip time/duration, or blend-space phase). Used by the
@@ -114,20 +114,20 @@ public:
     // apply every tick until cleared, and take effect on the next tick() (which the app calls per frame,
     // even while paused). All transforms are the bone's LOCAL (parent-relative) space.
     const Skeleton* getSkeleton() const { return m_pSkeleton; }
-    int32 findBone(const std::string& name) const;
+    int32 findBone(const oc::string& name) const;
 
     // Override: replaces the bone's local transform entirely (ignores the clip/bind for that bone).
-    void setBoneTransform(const std::string& name, const glm::mat4& localTransform);
+    void setBoneTransform(const oc::string& name, const glm::mat4& localTransform);
     void setBoneTransform(uint32 boneIndex, const glm::mat4& localTransform);
-    void setBoneTransform(const std::string& name, const glm::vec3& pos, const glm::quat& rot, const glm::vec3& scale = glm::vec3(1.0f));
+    void setBoneTransform(const oc::string& name, const glm::vec3& pos, const glm::quat& rot, const glm::vec3& scale = glm::vec3(1.0f));
 
     // Additive: layered on top of the clip/bind pose for that bone (post-multiplied, i.e. applied in the
     // bone's local frame). Use the quat overload to simply rotate a bone relative to its animated pose.
-    void setBoneOffset(const std::string& name, const glm::mat4& localOffset);
+    void setBoneOffset(const oc::string& name, const glm::mat4& localOffset);
     void setBoneOffset(uint32 boneIndex, const glm::mat4& localOffset);
-    void setBoneOffset(const std::string& name, const glm::quat& deltaRotation);
+    void setBoneOffset(const oc::string& name, const glm::quat& deltaRotation);
 
-    void clearBoneModifier(const std::string& name);
+    void clearBoneModifier(const oc::string& name);
     void clearBoneModifier(uint32 boneIndex);
     void clearBoneModifiers();
 
@@ -135,9 +135,9 @@ private:
     // Per-bone local transform, decomposed so two poses blend correctly (lerp pos/scale, slerp rot).
     struct Pose
     {
-        std::vector<glm::vec3> pos;
-        std::vector<glm::quat> rot;
-        std::vector<glm::vec3> scale;
+        oc::vector<glm::vec3> pos;
+        oc::vector<glm::quat> rot;
+        oc::vector<glm::vec3> scale;
         void resize(uint32 n) { pos.resize(n); rot.resize(n); scale.resize(n); }
     };
     // The two clips bracketing the current blend parameter (b null when the source is a single clip), and
@@ -170,7 +170,7 @@ private:
     float m_speed = 1.0f;
     bool m_paused = false;
 
-    std::vector<std::string> m_firedEvents; // event notifies fired during the last tick()
+    oc::vector<oc::string> m_firedEvents; // event notifies fired during the last tick()
 
     // Snapshot crossfade: when a new source starts, the outgoing pose is frozen into m_snapshot and the
     // new source is blended in as m_fade ramps 0 -> 1 over m_fadeDuration seconds.
@@ -181,8 +181,8 @@ private:
     Pose m_bind;     // bind-pose local TRS (fallback for bones a clip doesn't animate)
     Pose m_poseA;    // scratch: foreground pose
     Pose m_poseB;    // scratch: second blend-space clip
-    std::vector<glm::mat4> m_globalTransforms; // scratch: per-bone composed global transform
-    std::vector<glm::mat4> m_palette;
-    std::vector<BoneModifier> m_boneModifiers; // per-bone, sized to the skeleton; None unless posed
+    oc::vector<glm::mat4> m_globalTransforms; // scratch: per-bone composed global transform
+    oc::vector<glm::mat4> m_palette;
+    oc::vector<BoneModifier> m_boneModifiers; // per-bone, sized to the skeleton; None unless posed
     bool m_anyBoneModifier = false;            // fast skip in evaluate() when nothing is posed
 };

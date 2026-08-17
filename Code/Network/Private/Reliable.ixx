@@ -70,7 +70,7 @@ export struct NetEvent
     ENetDelivery delivery = ENetDelivery::Unreliable;         // Message events
     uint8 channel = 0;                                        // Message events
     ENetDisconnectReason reason = ENetDisconnectReason::None; // Disconnected events
-    std::vector<uint8> data;                                  // Message events
+    oc::vector<uint8> data;                                  // Message events
 };
 
 export struct NetHostConfig
@@ -167,26 +167,26 @@ struct NetPeer
         bool used = false;
         bool acked = false;
         double sendTime = 0.0;
-        std::vector<uint32> reliableIds; // (channel << 16) | messageSeq carried by this packet
+        oc::vector<uint32> reliableIds; // (channel << 16) | messageSeq carried by this packet
     };
-    std::vector<SentPacket> sentPackets; // ring indexed seq % NetSentPacketRing
+    oc::vector<SentPacket> sentPackets; // ring indexed seq % NetSentPacketRing
 
     struct ReliableMsg
     {
         uint16 seq = 0;
         bool acked = false;
         double lastSendTime = -1.0;
-        std::vector<uint8> encoded; // complete message blob, dropped into packets as-is
+        oc::vector<uint8> encoded; // complete message blob, dropped into packets as-is
     };
     struct SendChannel
     {
         uint16 nextReliableSeq = 0;
         uint16 nextUnreliableSeq = 0;
-        std::deque<ReliableMsg> window; // front = oldest unacked; first NetReliableWindow are eligible
+        oc::deque<ReliableMsg> window; // front = oldest unacked; first NetReliableWindow are eligible
     };
-    std::vector<SendChannel> sendChannels; // grown on first use per channel
+    oc::vector<SendChannel> sendChannels; // grown on first use per channel
 
-    std::vector<std::vector<uint8>> unreliableQueue; // encoded (channel in the kind byte), flushed every update
+    oc::vector<oc::vector<uint8>> unreliableQueue; // encoded (channel in the kind byte), flushed every update
 
     struct RecvSlot
     {
@@ -194,7 +194,7 @@ struct NetPeer
         uint8 kind = 0;
         uint16 fragIndex = 0;
         uint16 fragCount = 0;
-        std::vector<uint8> data;
+        oc::vector<uint8> data;
     };
     struct RecvChannel
     {
@@ -202,10 +202,10 @@ struct NetPeer
         uint16 lastUnreliableSeq = 0;
         bool hasUnreliableSeq = false;
         uint16 fragmentsReceived = 0;
-        std::vector<RecvSlot> slots; // ring indexed seq % NetReliableWindow
-        std::vector<uint8> fragmentAssembly;
+        oc::vector<RecvSlot> slots; // ring indexed seq % NetReliableWindow
+        oc::vector<uint8> fragmentAssembly;
     };
-    std::vector<RecvChannel> recvChannels; // grown on first use per channel
+    oc::vector<RecvChannel> recvChannels; // grown on first use per channel
 };
 
 export class NetHost final
@@ -225,12 +225,12 @@ public:
     NetPeerId connect(const NetAddress& address); // returns the existing peer if already known
     void disconnect(NetPeerId peer);
 
-    bool send(NetPeerId peer, std::span<const uint8> data, ENetDelivery delivery, uint8 channel = 0);
-    void sendToAll(std::span<const uint8> data, ENetDelivery delivery, uint8 channel = 0);
+    bool send(NetPeerId peer, oc::span<const uint8> data, ENetDelivery delivery, uint8 channel = 0);
+    void sendToAll(oc::span<const uint8> data, ENetDelivery delivery, uint8 channel = 0);
 
     // pump the socket, run handshakes/timeouts/retransmits, flush queued messages as packets
     void update(double deltaSec);
-    std::vector<NetEvent> takeEvents();
+    oc::vector<NetEvent> takeEvents();
 
     bool isConnected(NetPeerId peer) const;
     uint32 getConnectedCount() const;
@@ -247,22 +247,22 @@ private:
 
     bool rateLimitAllows(const NetAddress& from); // per-source token bucket, before any parsing
     uint32 countPeersOnIp(uint32 ip) const;
-    void handlePacket(const NetAddress& from, std::span<const uint8> bytes);
+    void handlePacket(const NetAddress& from, oc::span<const uint8> bytes);
     void handleConnectRequest(const NetAddress& from, NetPeerId id, NetReader& reader);
     void handleChallengeResponse(const NetAddress& from, NetPeerId id, NetReader& reader);
-    void handlePayload(NetPeer& peer, NetPeerId id, std::span<const uint8> bytes);
+    void handlePayload(NetPeer& peer, NetPeerId id, oc::span<const uint8> bytes);
     void deliverReliable(NetPeer& peer, NetPeerId id, uint8 channel);
     void processAcks(NetPeer& peer, uint16 ackWire, uint32 ackBits);
     void flushPeer(NetPeer& peer);
-    void transmitPayload(NetPeer& peer, std::span<const uint8> body, bool bypassSim); // header + seal + send, advances localSeq
+    void transmitPayload(NetPeer& peer, oc::span<const uint8> body, bool bypassSim); // header + seal + send, advances localSeq
     void sendDisconnectPackets(NetPeer& peer, bool bypassSim);
     void sendConnectRequest(NetPeer& peer);
     void sendChallengeResponse(NetPeer& peer);
     void sendAccept(NetPeer& peer);
     void sendDeny(const NetAddress& to, uint64 clientSalt);
-    void sendRaw(const NetAddress& to, std::span<const uint8> bytes, bool bypassSim = false);
+    void sendRaw(const NetAddress& to, oc::span<const uint8> bytes, bool bypassSim = false);
     uint64 challengeSaltFor(const NetAddress& address, uint64 clientSalt, uint8 flags) const;
-    bool derivePeerKey(NetPeer& peer, std::span<const uint8> peerPublicKey);
+    bool derivePeerKey(NetPeer& peer, oc::span<const uint8> peerPublicKey);
     void emitConnected(NetPeerId id);
     void emitDisconnected(NetPeerId id, ENetDisconnectReason reason);
     NetPeerId allocPeer(const NetAddress& address);
@@ -272,10 +272,10 @@ private:
     UdpSocket m_socket;
     NetHostConfig m_config;
     double m_time = 0.0;
-    std::vector<NetPeer> m_peers;
-    std::unordered_map<uint64, NetPeerId> m_peerByAddress;
-    std::vector<NetEvent> m_events;
-    std::vector<uint32> m_scratchReliableIds;
+    oc::vector<NetPeer> m_peers;
+    oc::unordered_map<uint64, NetPeerId> m_peerByAddress;
+    oc::vector<NetEvent> m_events;
+    oc::vector<uint32> m_scratchReliableIds;
 
     uint8 m_hostSecret[32] = {}; // keys the stateless challenge HMAC
     NetKeyPair m_keyPair;        // ephemeral ECDH keypair when config.encrypt
@@ -284,9 +284,9 @@ private:
     {
         double releaseTime = 0.0;
         NetAddress to;
-        std::vector<uint8> data;
+        oc::vector<uint8> data;
     };
-    std::vector<DelayedSend> m_delayedSends; // link simulation
+    oc::vector<DelayedSend> m_delayedSends; // link simulation
     uint64 m_rngState = 0;
 
     // Fixed-size rate-limit table: FIXED because the thing being defended against is an attacker

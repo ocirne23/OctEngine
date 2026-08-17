@@ -31,7 +31,7 @@ public:
     // Copies this frame's vertices into the frame slot's mapped buffers (call after the slot's fence
     // wait, i.e. from present()). Returns true when the lazy GPU buffers were just created so the
     // caller re-records its command buffers.
-    bool upload(uint32 frameIdx, std::span<const LineVertex> verts);
+    bool upload(uint32 frameIdx, oc::span<const LineVertex> verts);
 
     bool hasBuffers() const { return m_buffersReady; }
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo);
@@ -41,11 +41,11 @@ private:
 
     GraphicsPipeline m_pipeline;
     vk::RenderPass m_renderPass;
-    std::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_vertexBuffers;
-    std::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_indirectBuffers;
-    std::array<std::span<LineVertex>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedVerts;
-    std::array<std::span<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedIndirect; // vk::DrawIndirectCommand as 4 uints
-    std::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_sets;
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_vertexBuffers;
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_indirectBuffers;
+    oc::array<oc::span<LineVertex>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedVerts;
+    oc::array<oc::span<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedIndirect; // vk::DrawIndirectCommand as 4 uints
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_sets;
     bool m_buffersReady = false;
     bool m_overflowWarned = false;
 };

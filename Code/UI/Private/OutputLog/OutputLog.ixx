@@ -22,6 +22,6 @@ private:
 	char   m_filterBuf[256] = {};
 
 	uint32                   m_cachedRevision = UINT32_MAX;
-	std::vector<Log::Message> m_snapshot;
-	std::vector<uint32>       m_visible; // indices into m_snapshot passing the filters
+	oc::vector<Log::Message> m_snapshot;
+	oc::vector<uint32>       m_visible; // indices into m_snapshot passing the filters
 };

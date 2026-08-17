@@ -62,7 +62,7 @@ void World::update(Renderer& renderer, float deltaSeconds)
     }
 }
 
-static RendererVKLayout::EPipelineIndex parsePipeline(const std::string& name)
+static RendererVKLayout::EPipelineIndex parsePipeline(const oc::string& name)
 {
     using P = RendererVKLayout::EPipelineIndex;
     if (name == "LitTransparent")   return P::LitTransparent;
@@ -90,7 +90,7 @@ static SceneCookOptions makeSceneCookOptions()
     return options;
 }
 
-static std::unique_ptr<ISceneData> loadSceneData(const ObjectContainerDesc& desc)
+static oc::unique_ptr<ISceneData> loadSceneData(const ObjectContainerDesc& desc)
 {
     if (!desc.procedural)
     {
@@ -98,7 +98,7 @@ static std::unique_ptr<ISceneData> loadSceneData(const ObjectContainerDesc& desc
         options.decimationFactor = desc.decimationFactor;
         return ISceneData::loadCached(desc.path.c_str(), desc.mergeNodes, desc.preTransformVertices, options);
     }
-    std::unique_ptr<ISceneData> sceneData = ISceneData::createProceduralLoader();
+    oc::unique_ptr<ISceneData> sceneData = ISceneData::createProceduralLoader();
     if (!sceneData->initialize(desc.path.c_str(), desc.mergeNodes, desc.preTransformVertices))
         sceneData.reset();
     return sceneData;
@@ -109,7 +109,7 @@ ObjectContainer* World::loadContainer(const ObjectContainerDesc& desc, bool capt
     if (auto it = m_containers.find(desc.name); it != m_containers.end())
         return it->second.get();
 
-    std::unique_ptr<ISceneData> sceneData = loadSceneData(desc);
+    oc::unique_ptr<ISceneData> sceneData = loadSceneData(desc);
     if (!sceneData)
     {
         Log::warning("Scene: failed to load '" + desc.path + "' for ObjectContainer '" + desc.name + "'");
@@ -119,7 +119,7 @@ ObjectContainer* World::loadContainer(const ObjectContainerDesc& desc, bool capt
     if (captureCollisionSource)
         m_collision.captureSource(desc.name, *sceneData);
 
-    auto container = std::make_unique<ObjectContainer>();
+    auto container = oc::make_unique<ObjectContainer>();
     if (desc.materialOverrides.present)
     {
         const MaterialOverridesDesc& mo = desc.materialOverrides;
@@ -138,11 +138,11 @@ ObjectContainer* World::loadContainer(const ObjectContainerDesc& desc, bool capt
         container->initialize(*sceneData);
     }
     ObjectContainer* ptr = container.get();
-    m_containers.emplace(desc.name, std::move(container));
+    m_containers.emplace(desc.name, oc::move(container));
     return ptr;
 }
 
-ObjectContainer* World::getOrLoadContainer(const std::string& name, bool captureCollisionSource)
+ObjectContainer* World::getOrLoadContainer(const oc::string& name, bool captureCollisionSource)
 {
     if (auto it = m_containers.find(name); it != m_containers.end())
         return it->second.get(); // already loaded; a late collision request falls back to ensureCollisionSource
@@ -152,9 +152,9 @@ ObjectContainer* World::getOrLoadContainer(const std::string& name, bool capture
     return nullptr;
 }
 
-EntityPtr World::spawn(const std::string& name, const Transform& base)
+EntityPtr World::spawn(const oc::string& name, const Transform& base)
 {
-    if (std::shared_ptr<const EntitySpawnTemplate> tmpl = getOrBuildPrefabTemplate(name))
+    if (oc::shared_ptr<const EntitySpawnTemplate> tmpl = getOrBuildPrefabTemplate(name))
         return Entity::create(*tmpl, base);
     return EntityPtr{};
 }
@@ -162,15 +162,15 @@ EntityPtr World::spawn(const std::string& name, const Transform& base)
 void World::reloadPrefabs()
 {
     for (auto& [name, tmpl] : m_templates)
-        m_retiredTemplates.push_back(std::move(tmpl));
+        m_retiredTemplates.push_back(oc::move(tmpl));
     m_templates.clear();
 }
 
-void World::invalidatePrefab(const std::string& name)
+void World::invalidatePrefab(const oc::string& name)
 {
     if (auto it = m_templates.find(name); it != m_templates.end())
     {
-        m_retiredTemplates.push_back(std::move(it->second)); // kept alive for live entities
+        m_retiredTemplates.push_back(oc::move(it->second)); // kept alive for live entities
         m_templates.erase(it);
     }
 }
@@ -183,7 +183,7 @@ static const AssetNode* findComponentNode(const AssetNode& node, const char* nam
     return nullptr;
 }
 
-static bool keyIs(const AssetNode& node, std::string_view key)
+static bool keyIs(const AssetNode& node, oc::string_view key)
 {
     if (node.key.size() != key.size())
         return false;
@@ -206,13 +206,13 @@ static Transform readNodeTransform(const AssetNode& node)
     return t;
 }
 
-std::shared_ptr<RenderComponent::SpawnInfo> World::buildRenderSpawnInfo(const AssetNode& renderNode, const std::string& ownerName, bool captureCollisionSource)
+oc::shared_ptr<RenderComponent::SpawnInfo> World::buildRenderSpawnInfo(const AssetNode& renderNode, const oc::string& ownerName, bool captureCollisionSource)
 {
     const AssetNode* containerNode = renderNode.find("ObjectContainer");
     if (!containerNode)
         return nullptr;
-    const std::string containerName = containerNode->asString();
-    const std::string nodePath = renderNode.find("Node") ? renderNode.find("Node")->asString() : std::string();
+    const oc::string containerName = containerNode->asString();
+    const oc::string nodePath = renderNode.find("Node") ? renderNode.find("Node")->asString() : oc::string();
 
     ObjectContainer* container = getOrLoadContainer(containerName, captureCollisionSource);
     if (!container)
@@ -221,7 +221,7 @@ std::shared_ptr<RenderComponent::SpawnInfo> World::buildRenderSpawnInfo(const As
     // Type defaults from the container itself (skinned iff its source scene had a skeleton) but can be
     // overridden explicitly — `Type StaticMesh` / `Type SkinnedMesh`, with an optional nested `Rig` token.
     bool skinned = container->isSkinned();
-    std::string rigType;
+    oc::string rigType;
     if (const AssetNode* typeNode = renderNode.find("Type"))
     {
         skinned = typeNode->asString() == "SkinnedMesh";
@@ -229,7 +229,7 @@ std::shared_ptr<RenderComponent::SpawnInfo> World::buildRenderSpawnInfo(const As
             rigType = rigNode->asString();
     }
 
-    auto info = std::make_shared<RenderComponent::SpawnInfo>();
+    auto info = oc::make_shared<RenderComponent::SpawnInfo>();
     info->container = container;
     info->containerName = containerName; // kept so an inline entity re-serializes its mesh
     info->skinned = skinned;
@@ -268,15 +268,15 @@ void writeRenderSpawnInfo(const RenderComponent::SpawnInfo& info, AssetNode& out
 
 const AnimationSet* World::getOrBuildClipSet(const Skeleton* skel, const AnimatorDesc& desc)
 {
-    const std::string key = std::to_string(reinterpret_cast<uintptr_t>(skel)) + "/" + desc.name;
+    const oc::string key = oc::to_string(reinterpret_cast<uintptr_t>(skel)) + "/" + desc.name;
     if (auto it = m_clipSets.find(key); it != m_clipSets.end())
         return it->second.get();
 
-    auto set = std::make_unique<AnimationSet>();
+    auto set = oc::make_unique<AnimationSet>();
     AnimationSet& clips = *set;
 
     // Apply the .anm's loop flag + event notifies onto the clip just loaded under `localName`.
-    auto applyClipMeta = [&](const AnimationClipDesc& anm, const std::string& localName)
+    auto applyClipMeta = [&](const AnimationClipDesc& anm, const oc::string& localName)
     {
         const auto idxIt = clips.nameToIndex.find(localName);
         if (idxIt == clips.nameToIndex.end())
@@ -289,9 +289,9 @@ const AnimationSet* World::getOrBuildClipSet(const Skeleton* skel, const Animato
     };
 
     // Loads one .anm into the set under `localName` (retargeted by bone name to `skel`).
-    auto loadClipDesc = [&](const AnimationClipDesc& anm, const std::string& localName)
+    auto loadClipDesc = [&](const AnimationClipDesc& anm, const oc::string& localName)
     {
-        std::string sourcePath = anm.source;
+        oc::string sourcePath = anm.source;
         if (const ObjectContainerDesc* oc = Globals::assetRegistry.findObjectContainer(anm.source))
             sourcePath = oc->path; // source named a registered container; use its file
         const char* skip = anm.skip.empty() ? nullptr : anm.skip.c_str();
@@ -311,7 +311,7 @@ const AnimationSet* World::getOrBuildClipSet(const Skeleton* skel, const Animato
     }
 
     // Resolve a clip by name, lazily loading it from the .anm registry when it wasn't declared with `Clip`.
-    auto ensureClip = [&](const std::string& name)
+    auto ensureClip = [&](const oc::string& name)
     {
         if (name.empty() || clips.find(name))
             return;
@@ -321,7 +321,7 @@ const AnimationSet* World::getOrBuildClipSet(const Skeleton* skel, const Animato
             Log::warning("Animator '" + desc.name + "': unknown clip '" + name + "'");
     };
 
-    std::unordered_set<std::string> blendNames;
+    oc::unordered_set<oc::string> blendNames;
     for (const AnimatorDesc::BlendSpace& bs : desc.blendSpaces)
         blendNames.insert(bs.name);
     for (const AnimatorDesc::BlendSpace& bs : desc.blendSpaces)
@@ -331,19 +331,19 @@ const AnimationSet* World::getOrBuildClipSet(const Skeleton* skel, const Animato
         if (!blendNames.contains(st.play))
             ensureClip(st.play);
 
-    Log::info("Animator '" + desc.name + "': built clip set (" + std::to_string(clips.numClips()) + " clips)");
+    Log::info("Animator '" + desc.name + "': built clip set (" + oc::to_string(clips.numClips()) + " clips)");
 
     const AnimationSet* ptr = set.get();
-    m_clipSets.emplace(key, std::move(set));
+    m_clipSets.emplace(key, oc::move(set));
     return ptr;
 }
 
-std::shared_ptr<AnimatorComponent::SpawnInfo> World::buildAnimatorSpawnInfo(const AssetNode& animatorNode, const std::string& siblingContainerName, const std::string& ownerName)
+oc::shared_ptr<AnimatorComponent::SpawnInfo> World::buildAnimatorSpawnInfo(const AssetNode& animatorNode, const oc::string& siblingContainerName, const oc::string& ownerName)
 {
     const AssetNode* nameNode = animatorNode.find("Animator");
     if (!nameNode)
         return nullptr;
-    const std::string animatorName = nameNode->asString();
+    const oc::string animatorName = nameNode->asString();
 
     const AnimatorDesc* desc = Globals::assetRegistry.findAnimator(animatorName);
     if (!desc)
@@ -358,7 +358,7 @@ std::shared_ptr<AnimatorComponent::SpawnInfo> World::buildAnimatorSpawnInfo(cons
         return nullptr;
     }
 
-    auto info = std::make_shared<AnimatorComponent::SpawnInfo>();
+    auto info = oc::make_shared<AnimatorComponent::SpawnInfo>();
     info->desc = desc;
     info->skeleton = siblingContainer->getSkeleton();
     info->clipSet = getOrBuildClipSet(info->skeleton, *desc); // shared, imported once per skeleton+animator
@@ -368,13 +368,13 @@ std::shared_ptr<AnimatorComponent::SpawnInfo> World::buildAnimatorSpawnInfo(cons
     return info;
 }
 
-std::shared_ptr<SceneComponent::SpawnInfo> World::buildSceneSpawnInfo(const AssetNode& sceneNode)
+oc::shared_ptr<SceneComponent::SpawnInfo> World::buildSceneSpawnInfo(const AssetNode& sceneNode)
 {
-    auto info = std::make_shared<SceneComponent::SpawnInfo>();
+    auto info = oc::make_shared<SceneComponent::SpawnInfo>();
 
     for (const AssetNode& child : sceneNode.children)
     {
-        std::shared_ptr<const EntitySpawnTemplate> childTmpl;
+        oc::shared_ptr<const EntitySpawnTemplate> childTmpl;
         if (keyIs(child, "Entity"))
             childTmpl = buildInlineTemplate(child);
         else if (keyIs(child, "Prefab"))
@@ -385,11 +385,11 @@ std::shared_ptr<SceneComponent::SpawnInfo> World::buildSceneSpawnInfo(const Asse
             continue;
 
         SceneComponent::SpawnInfo::ChildSpawnInfo ci;
-        ci.tmpl = std::move(childTmpl);
+        ci.tmpl = oc::move(childTmpl);
         ci.localTransform = readNodeTransform(child);
         if (const AssetNode* n = child.find("Name")) ci.name = n->asString();
         if (const AssetNode* n = child.find("Enabled")) ci.enabled = n->asBool();
-        info->children.push_back(std::move(ci));
+        info->children.push_back(oc::move(ci));
     }
     return info;
 }
@@ -397,7 +397,7 @@ std::shared_ptr<SceneComponent::SpawnInfo> World::buildSceneSpawnInfo(const Asse
 // The cache normally gets its snapshot for free while the render container loads. This is the fallback
 // for the other order: the container was already loaded (or isn't loaded at all) when a Hull/Mesh shape
 // asked for geometry, so the source file is imported once more and handed to the cache.
-bool World::ensureCollisionSource(const std::string& containerName)
+bool World::ensureCollisionSource(const oc::string& containerName)
 {
     if (m_collision.hasSource(containerName))
         return true;
@@ -408,7 +408,7 @@ bool World::ensureCollisionSource(const std::string& containerName)
         Log::warning("Physics: unknown ObjectContainer '" + containerName + "' for collision geometry");
         return false;
     }
-    std::unique_ptr<ISceneData> sceneData = loadSceneData(*desc);
+    oc::unique_ptr<ISceneData> sceneData = loadSceneData(*desc);
     if (!sceneData)
     {
         Log::warning("Physics: failed to load '" + desc->path + "' for collision geometry");
@@ -420,20 +420,20 @@ bool World::ensureCollisionSource(const std::string& containerName)
     return true;
 }
 
-std::shared_ptr<PhysicsComponent::SpawnInfo> World::buildPhysicsSpawnInfo(const AssetNode& physicsNode,
-    const std::string& containerName, const std::string& nodePath, const std::string& ownerName)
+oc::shared_ptr<PhysicsComponent::SpawnInfo> World::buildPhysicsSpawnInfo(const AssetNode& physicsNode,
+    const oc::string& containerName, const oc::string& nodePath, const oc::string& ownerName)
 {
-    auto info = std::make_shared<PhysicsComponent::SpawnInfo>();
+    auto info = oc::make_shared<PhysicsComponent::SpawnInfo>();
     if (const AssetNode* n = physicsNode.find("Body"))
     {
-        const std::string& type = n->asString();
+        const oc::string& type = n->asString();
         if (type == "Static")         info->bodyType = EPhysicsBodyType::Static;
         else if (type == "Kinematic") info->bodyType = EPhysicsBodyType::Kinematic;
         else                          info->bodyType = EPhysicsBodyType::Dynamic;
     }
     if (const AssetNode* n = physicsNode.find("Shape"))
     {
-        const std::string& type = n->asString();
+        const oc::string& type = n->asString();
         if (type == "Sphere")       info->shape.type = EPhysicsShapeType::Sphere;
         else if (type == "Capsule") info->shape.type = EPhysicsShapeType::Capsule;
         else if (type == "Hull")    info->shape.type = EPhysicsShapeType::Hull;
@@ -485,7 +485,7 @@ std::shared_ptr<PhysicsComponent::SpawnInfo> World::buildPhysicsSpawnInfo(const 
         uint64 mask = 0;
         for (size_t i = 0; i < n->numValues(); ++i)
         {
-            const std::string& name = n->asString(i);
+            const oc::string& name = n->asString(i);
             if (name == "All")        mask = PhysicsLayers::All;
             else if (name != "None")  mask |= PhysicsLayers::bit(name);
             info->collidesWith.push_back(name);
@@ -501,18 +501,18 @@ std::shared_ptr<PhysicsComponent::SpawnInfo> World::buildPhysicsSpawnInfo(const 
     return info;
 }
 
-std::shared_ptr<AudioBuffer> World::getOrLoadAudioBuffer(const std::string& path)
+oc::shared_ptr<AudioBuffer> World::getOrLoadAudioBuffer(const oc::string& path)
 {
     if (auto it = m_audioBuffers.find(path); it != m_audioBuffers.end())
         return it->second;
-    auto buffer = std::make_shared<AudioBuffer>(Globals::audio.loadSound(path));
+    auto buffer = oc::make_shared<AudioBuffer>(Globals::audio.loadSound(path));
     m_audioBuffers.emplace(path, buffer);
     return buffer;
 }
 
-std::shared_ptr<AudioComponent::SpawnInfo> World::buildAudioSpawnInfo(const AssetNode& audioNode, const std::string& ownerName)
+oc::shared_ptr<AudioComponent::SpawnInfo> World::buildAudioSpawnInfo(const AssetNode& audioNode, const oc::string& ownerName)
 {
-    auto info = std::make_shared<AudioComponent::SpawnInfo>();
+    auto info = oc::make_shared<AudioComponent::SpawnInfo>();
     for (const AssetNode& soundNode : audioNode.children)
     {
         if (!keyIs(soundNode, "Sound"))
@@ -539,14 +539,14 @@ std::shared_ptr<AudioComponent::SpawnInfo> World::buildAudioSpawnInfo(const Asse
             if (const AssetNode* n = pathNode.find("MaxDistance"))       clip.maxDistance = n->asFloat(0, clip.maxDistance);
             if (const AssetNode* n = pathNode.find("Rolloff"))           clip.rolloff = n->asFloat(0, clip.rolloff);
             clip.buffer = getOrLoadAudioBuffer(clip.path); // may be invalid (load failure logged); alias stays triggerable as a no-op
-            sound.clips.push_back(std::move(clip));
+            sound.clips.push_back(oc::move(clip));
         }
         if (sound.alias.empty() || sound.clips.empty())
         {
             Log::warning("Scene: entity '" + ownerName + "' has an audio Sound entry without an alias or Path, skipping");
             continue;
         }
-        info->sounds.push_back(std::move(sound));
+        info->sounds.push_back(oc::move(sound));
     }
     if (info->sounds.empty())
         return nullptr;
@@ -564,10 +564,10 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
 
     static_assert(EComponentID_Scene == 0);
     if (const AssetNode* sceneNode = findComponentNode(node, "Scene"))
-        if (std::shared_ptr<SceneComponent::SpawnInfo> info = buildSceneSpawnInfo(*sceneNode))
+        if (oc::shared_ptr<SceneComponent::SpawnInfo> info = buildSceneSpawnInfo(*sceneNode))
         {
             typeBits |= uint16(1 << EComponentID_Scene);
-            tmpl.spawnInfos.emplace_back(std::move(info));
+            tmpl.spawnInfos.emplace_back(oc::move(info));
         }
 
     // A Hull/Mesh physics shape (parsed below) sources its geometry from the render container, so the
@@ -578,8 +578,8 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         if (const AssetNode* n = physicsNode->find("Shape"))
             wantsCollisionGeometry = n->asString() == "Hull" || n->asString() == "Mesh";
 
-    std::string renderContainerName; // physics hull/mesh shapes (below), and the animator, source from here
-    std::string renderNodePath;
+    oc::string renderContainerName; // physics hull/mesh shapes (below), and the animator, source from here
+    oc::string renderNodePath;
     if (const AssetNode* renderNode = findComponentNode(node, "Render"))
     {
         if (m_headless)
@@ -590,23 +590,23 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
             if (const AssetNode* containerNode = renderNode->find("ObjectContainer"))
             {
                 renderContainerName = containerNode->asString();
-                renderNodePath = renderNode->find("Node") ? renderNode->find("Node")->asString() : std::string();
+                renderNodePath = renderNode->find("Node") ? renderNode->find("Node")->asString() : oc::string();
             }
         }
-        else if (std::shared_ptr<RenderComponent::SpawnInfo> info = buildRenderSpawnInfo(*renderNode, tmpl.displayName, wantsCollisionGeometry))
+        else if (oc::shared_ptr<RenderComponent::SpawnInfo> info = buildRenderSpawnInfo(*renderNode, tmpl.displayName, wantsCollisionGeometry))
         {
             renderContainerName = info->containerName;
             renderNodePath = info->nodePath;
             typeBits |= uint16(1 << EComponentID_Render);
-            tmpl.spawnInfos.emplace_back(std::move(info));
+            tmpl.spawnInfos.emplace_back(oc::move(info));
         }
     }
 
     if (const AssetNode* animatorNode = findComponentNode(node, "Animator"); animatorNode && !m_headless)
-        if (std::shared_ptr<AnimatorComponent::SpawnInfo> info = buildAnimatorSpawnInfo(*animatorNode, renderContainerName, tmpl.displayName))
+        if (oc::shared_ptr<AnimatorComponent::SpawnInfo> info = buildAnimatorSpawnInfo(*animatorNode, renderContainerName, tmpl.displayName))
         {
             typeBits |= uint16(1 << EComponentID_Animator);
-            tmpl.spawnInfos.emplace_back(std::move(info));
+            tmpl.spawnInfos.emplace_back(oc::move(info));
         }
 
     if (physicsNode) // found above, before the render container load
@@ -619,21 +619,21 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
     // uninitialized device, Particle/Force/Light create renderer emitter slots / push to mapped
     // buffers. Scripts reaching an absent component no-op through the null-handle ABI contract.
     if (const AssetNode* audioNode = findComponentNode(node, "Audio"); audioNode && !m_headless)
-        if (std::shared_ptr<AudioComponent::SpawnInfo> info = buildAudioSpawnInfo(*audioNode, tmpl.displayName))
+        if (oc::shared_ptr<AudioComponent::SpawnInfo> info = buildAudioSpawnInfo(*audioNode, tmpl.displayName))
         {
             typeBits |= uint16(1 << EComponentID_Audio);
-            tmpl.spawnInfos.emplace_back(std::move(info));
+            tmpl.spawnInfos.emplace_back(oc::move(info));
         }
 
     if (const AssetNode* particleNode = findComponentNode(node, "Particle"); particleNode && !m_headless)
     {
-        auto info = std::make_shared<ParticleComponent::SpawnInfo>();
+        auto info = oc::make_shared<ParticleComponent::SpawnInfo>();
         if (const AssetNode* n = particleNode->find("Effect"))   info->effectPath = n->asString();
         if (const AssetNode* n = particleNode->find("Emitting")) info->emitting = n->asBool(0, true);
         if (!info->effectPath.empty())
         {
             typeBits |= uint16(1 << EComponentID_Particle);
-            tmpl.spawnInfos.emplace_back(std::move(info));
+            tmpl.spawnInfos.emplace_back(oc::move(info));
         }
         else
             Log::warning("Scene: entity '" + tmpl.displayName + "' has a Particle component without an Effect path, skipping");
@@ -641,7 +641,7 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
 
     if (const AssetNode* forceNode = findComponentNode(node, "Force"); forceNode && !m_headless)
     {
-        auto info = std::make_shared<ForceComponent::SpawnInfo>();
+        auto info = oc::make_shared<ForceComponent::SpawnInfo>();
         if (const AssetNode* n = forceNode->find("Team"))         info->team = uint32(glm::max(n->asInt(), 0));
         if (const AssetNode* n = forceNode->find("Direction"))    info->direction = n->asVec3(info->direction);
         if (const AssetNode* n = forceNode->find("Offset"))       info->offset = n->asVec3(info->offset);
@@ -652,12 +652,12 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         if (const AssetNode* n = forceNode->find("Width"))        info->width = n->asFloat(0, info->width);
         if (const AssetNode* n = forceNode->find("Centered"))     info->centered = n->asBool(0, true);
         typeBits |= uint16(1 << EComponentID_Force);
-        tmpl.spawnInfos.emplace_back(std::move(info));
+        tmpl.spawnInfos.emplace_back(oc::move(info));
     }
 
     if (const AssetNode* lightNode = findComponentNode(node, "Light"); lightNode && !m_headless)
     {
-        auto info = std::make_shared<LightComponent::SpawnInfo>();
+        auto info = oc::make_shared<LightComponent::SpawnInfo>();
         if (const AssetNode* n = lightNode->find("Debug")) info->debugDraw = n->asBool();
         // One "Light <Type>" child per light; a component with none is pointless, so it's skipped below.
         for (const AssetNode& entry : lightNode->children)
@@ -684,7 +684,7 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         if (!info->lights.empty())
         {
             typeBits |= uint16(1 << EComponentID_Light);
-            tmpl.spawnInfos.emplace_back(std::move(info));
+            tmpl.spawnInfos.emplace_back(oc::move(info));
         }
         else
             Log::warning("Scene: entity '" + tmpl.displayName + "' has a Light component without any Light entries, skipping");
@@ -693,14 +693,14 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
     if (findComponentNode(node, "Network")) // pure presence: netIds are assigned in code, never authored
     {
         typeBits |= uint16(1 << EComponentID_Network);
-        tmpl.spawnInfos.emplace_back(std::make_shared<NetworkComponent::SpawnInfo>());
+        tmpl.spawnInfos.emplace_back(oc::make_shared<NetworkComponent::SpawnInfo>());
     }
 
     // GAME components (Components/GameComponents.ixx) — !m_headless like Force: they create Force
     // queries/read readbacks, and --game refuses headless anyway.
     if (const AssetNode* unitNode = findComponentNode(node, "GameUnit"); unitNode && !m_headless)
     {
-        auto info = std::make_shared<GameUnitComponent::SpawnInfo>();
+        auto info = oc::make_shared<GameUnitComponent::SpawnInfo>();
         if (const AssetNode* n = unitNode->find("Team"))          info->team = uint32(glm::max(n->asInt(), 0));
         if (const AssetNode* n = unitNode->find("Puppet"))        info->puppet = n->asBool();
         if (const AssetNode* n = unitNode->find("HealthMax"))     info->healthMax = n->asFloat(0, info->healthMax);
@@ -716,21 +716,21 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         if (const AssetNode* n = unitNode->find("StandoffRange")) info->standoffRange = n->asFloat(0, info->standoffRange);
         if (const AssetNode* n = unitNode->find("FireInterval"))  info->fireInterval = n->asFloat(0, info->fireInterval);
         typeBits |= uint16(1 << EComponentID_GameUnit);
-        tmpl.spawnInfos.emplace_back(std::move(info));
+        tmpl.spawnInfos.emplace_back(oc::move(info));
     }
     if (const AssetNode* structNode = findComponentNode(node, "GameStructure"); structNode && !m_headless)
     {
-        auto info = std::make_shared<GameStructureComponent::SpawnInfo>();
+        auto info = oc::make_shared<GameStructureComponent::SpawnInfo>();
         if (const AssetNode* n = structNode->find("Team"))         info->team = uint32(glm::max(n->asInt(), 0));
         if (const AssetNode* n = structNode->find("HealthMax"))    info->healthMax = n->asFloat(0, info->healthMax);
         if (const AssetNode* n = structNode->find("Invulnerable")) info->invulnerable = n->asBool();
         if (const AssetNode* n = structNode->find("MeleeRadius"))  info->meleeRadius = n->asFloat(0, info->meleeRadius);
         typeBits |= uint16(1 << EComponentID_GameStructure);
-        tmpl.spawnInfos.emplace_back(std::move(info));
+        tmpl.spawnInfos.emplace_back(oc::move(info));
     }
     if (const AssetNode* projNode = findComponentNode(node, "GameProjectile"); projNode && !m_headless)
     {
-        auto info = std::make_shared<GameProjectileComponent::SpawnInfo>();
+        auto info = oc::make_shared<GameProjectileComponent::SpawnInfo>();
         if (const AssetNode* n = projNode->find("Team"))            info->team = uint32(glm::max(n->asInt(), 0));
         if (const AssetNode* n = projNode->find("UnitDamage"))      info->unitDamage = n->asFloat(0, info->unitDamage);
         if (const AssetNode* n = projNode->find("StructureDamage")) info->structureDamage = n->asFloat(0, info->structureDamage);
@@ -738,12 +738,12 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         if (const AssetNode* n = projNode->find("EmitterDrain"))    info->emitterDrain = n->asFloat(0, info->emitterDrain);
         if (const AssetNode* n = projNode->find("EmitterDrainRadius")) info->emitterDrainRadius = n->asFloat(0, info->emitterDrainRadius);
         typeBits |= uint16(1 << EComponentID_GameProjectile);
-        tmpl.spawnInfos.emplace_back(std::move(info));
+        tmpl.spawnInfos.emplace_back(oc::move(info));
     }
 
     if (const AssetNode* scriptNode = findComponentNode(node, "Script"))
     {
-        auto info = std::make_shared<ScriptComponent::SpawnInfo>();
+        auto info = oc::make_shared<ScriptComponent::SpawnInfo>();
         if (const AssetNode* n = scriptNode->find("Path"))    info->scriptPath = n->asString();
         if (const AssetNode* n = scriptNode->find("Enabled")) info->enabled = n->asBool();
         // Authored INITIAL values for the script's exposed fields, one "<name> <value>" child each. Kept as
@@ -754,25 +754,25 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
             {
                 // Re-joined with ", ": the parser splits a vector value into separate entries, and the text form
                 // is what applyInitialValues parses back -- the same spelling the writer produces.
-                std::string text;
-                for (const std::string& value : fieldNode.values)
+                oc::string text;
+                for (const oc::string& value : fieldNode.values)
                     text += (text.empty() ? "" : ", ") + value;
-                info->initialValues.push_back({ fieldNode.key, std::move(text) });
+                info->initialValues.push_back({ fieldNode.key, oc::move(text) });
             }
         typeBits |= uint16(1 << EComponentID_Script);
-        tmpl.spawnInfos.emplace_back(std::move(info));
+        tmpl.spawnInfos.emplace_back(oc::move(info));
     }
 
     tmpl.archetype = makeEntityArchetype(typeBits);
 }
 
-std::shared_ptr<const EntitySpawnTemplate> World::cacheTemplate(const std::string& name, const std::string& sourceFile, const AssetNode& node)
+oc::shared_ptr<const EntitySpawnTemplate> World::cacheTemplate(const oc::string& name, const oc::string& sourceFile, const AssetNode& node)
 {
     if (auto it = m_templates.find(name); it != m_templates.end())
         return it->second;
 
     m_buildingTemplates.insert(name);
-    auto tmpl = std::make_shared<EntitySpawnTemplate>();
+    auto tmpl = oc::make_shared<EntitySpawnTemplate>();
     tmpl->sourceFile = sourceFile;
     tmpl->prefabName = name; // a registered prefab name, so a re-serialized instance writes "Prefab <name>"
     buildTemplate(node, *tmpl);
@@ -782,17 +782,17 @@ std::shared_ptr<const EntitySpawnTemplate> World::cacheTemplate(const std::strin
     return tmpl;
 }
 
-std::shared_ptr<const EntitySpawnTemplate> World::buildInlineTemplate(const AssetNode& node)
+oc::shared_ptr<const EntitySpawnTemplate> World::buildInlineTemplate(const AssetNode& node)
 {
-    auto tmpl = std::make_shared<EntitySpawnTemplate>();
+    auto tmpl = oc::make_shared<EntitySpawnTemplate>();
     buildTemplate(node, *tmpl);
     return tmpl;
 }
 
-std::shared_ptr<const EntitySpawnTemplate> World::buildFileTemplate(const std::string& path)
+oc::shared_ptr<const EntitySpawnTemplate> World::buildFileTemplate(const oc::string& path)
 {
     AssetNode doc;
-    std::string error;
+    oc::string error;
     if (!loadAssetFile(path, doc, error))
     {
         Log::warning("Scene: asset load failed: " + error);
@@ -807,7 +807,7 @@ std::shared_ptr<const EntitySpawnTemplate> World::buildFileTemplate(const std::s
     return nullptr;
 }
 
-std::shared_ptr<const EntitySpawnTemplate> World::getOrBuildPrefabTemplate(const std::string& name)
+oc::shared_ptr<const EntitySpawnTemplate> World::getOrBuildPrefabTemplate(const oc::string& name)
 {
     if (auto it = m_templates.find(name); it != m_templates.end())
         return it->second; // cache hit: no asset file touched
@@ -818,9 +818,9 @@ std::shared_ptr<const EntitySpawnTemplate> World::getOrBuildPrefabTemplate(const
         return nullptr;
     }
 
-    if (const std::string* prefabPath = Globals::assetRegistry.findPrefab(name))
+    if (const oc::string* prefabPath = Globals::assetRegistry.findPrefab(name))
     {
-        if (std::shared_ptr<const EntitySpawnTemplate> tmpl = buildFileTemplate(*prefabPath))
+        if (oc::shared_ptr<const EntitySpawnTemplate> tmpl = buildFileTemplate(*prefabPath))
             return tmpl; // its declared root name == `name`
         Log::warning("Scene: prefab '" + name + "' not declared in '" + *prefabPath + "', skipping");
         return nullptr;
@@ -830,15 +830,15 @@ std::shared_ptr<const EntitySpawnTemplate> World::getOrBuildPrefabTemplate(const
     return nullptr;
 }
 
-EntityPtr World::spawnAssetFile(const std::string& path, const Transform& base, bool overrideDefaultTransform)
+EntityPtr World::spawnAssetFile(const oc::string& path, const Transform& base, bool overrideDefaultTransform)
 {
     // Spawning from a path resolves it against the working directory (Assets/); spawns happen on
     // the main thread and on jobs alike, so the query is allowed either way.
-    const std::string relativePath = FileSystem::relativePath(path, std::string(), /*allowMainThread*/ true);
-    const std::string fileName = relativePath.empty() ? path : relativePath;
+    const oc::string relativePath = FileSystem::relativePath(path, oc::string(), /*allowMainThread*/ true);
+    const oc::string fileName = relativePath.empty() ? path : relativePath;
 
-    const std::string* rootName = Globals::assetRegistry.findRootForFile(fileName);
-    std::shared_ptr<const EntitySpawnTemplate> tmpl = rootName ? getOrBuildPrefabTemplate(*rootName) : buildFileTemplate(fileName);
+    const oc::string* rootName = Globals::assetRegistry.findRootForFile(fileName);
+    oc::shared_ptr<const EntitySpawnTemplate> tmpl = rootName ? getOrBuildPrefabTemplate(*rootName) : buildFileTemplate(fileName);
     if (!tmpl)
         return EntityPtr{};
 
@@ -851,14 +851,14 @@ EntityPtr World::spawnAssetFile(const std::string& path, const Transform& base, 
     return Entity::create(*tmpl, Transform(pos, dt.scale, quat));
 }
 
-EntityPtr World::createEmptyEntity(const std::string& name)
+EntityPtr World::createEmptyEntity(const oc::string& name)
 {
     // A blank Scene-only template with no prefabName: Entity::create leaves prefabInstance false, so the
     // entity is editable and serializes inline. Cached (and kept across reloadPrefabs) so its address
     // stays stable for the entities that point at it.
     if (!m_emptyTemplate)
     {
-        m_emptyTemplate = std::make_shared<EntitySpawnTemplate>();
+        m_emptyTemplate = oc::make_shared<EntitySpawnTemplate>();
         m_emptyTemplate->archetype = makeEntityArchetype(0);
         m_emptyTemplate->displayName = "Entity";
     }
@@ -870,39 +870,39 @@ EntityPtr World::createEmptyEntity(const std::string& name)
 void World::handleEntityChange(EntityChange& change, const Camera& camera, const Rect& viewportRect)
 {
     ProfileScope profileScope("Entity change", EProfileCategory::Entity);
-    if (auto* cv = std::get_if<EntityChange::CreateViewport>(&change.type))
+    if (auto* cv = oc::get_if<EntityChange::CreateViewport>(&change.type))
     {
         const glm::vec3 worldPos = camera.screenToWorld(viewportRect, cv->screenPos);
         addRootEntity(spawnAssetFile(cv->path, Transform(worldPos, 1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f))));
     }
-    else if (auto* ch = std::get_if<EntityChange::CreateHierarchy>(&change.type))
+    else if (auto* ch = oc::get_if<EntityChange::CreateHierarchy>(&change.type))
     {
         EntityPtr e = spawnAssetFile(ch->path, Transform(), false);
         if (ch->parent && hasComponent<SceneComponent>(ch->parent))
             e->reparentEntity(ch->parent);   // parent's SceneComponent takes ownership
         else
-            addRootEntity(std::move(e));
+            addRootEntity(oc::move(e));
     }
-    else if (auto* sap = std::get_if<EntityChange::SpawnAtPosition>(&change.type))
+    else if (auto* sap = oc::get_if<EntityChange::SpawnAtPosition>(&change.type))
         addRootEntity(spawnAssetFile(sap->path, Transform(sap->position, 1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f))));
-    else if (auto* as = std::get_if<EntityChange::AddSceneEntity>(&change.type))
+    else if (auto* as = oc::get_if<EntityChange::AddSceneEntity>(&change.type))
     {
         EntityPtr e = createEmptyEntity(as->displayName);
         if (as->parent && hasComponent<SceneComponent>(as->parent))
             e->reparentEntity(as->parent);
         else
-            addRootEntity(std::move(e));
+            addRootEntity(oc::move(e));
     }
-    else if (auto* del = std::get_if<EntityChange::Delete>(&change.type))
+    else if (auto* del = oc::get_if<EntityChange::Delete>(&change.type))
         removeRootEntity(del->entity.get());
-    else if (auto* rep = std::get_if<EntityChange::Reparent>(&change.type))
-        rep->newParent ? removeRootEntity(rep->entity.get()) : addRootEntity(std::move(rep->entity));
-    else if (auto* sp = std::get_if<EntityChange::SavePrefab>(&change.type))
+    else if (auto* rep = oc::get_if<EntityChange::Reparent>(&change.type))
+        rep->newParent ? removeRootEntity(rep->entity.get()) : addRootEntity(oc::move(rep->entity));
+    else if (auto* sp = oc::get_if<EntityChange::SavePrefab>(&change.type))
     {
         if (savePrefab(sp->root.get(), sp->path, sp->text))
             invalidatePrefab(FileSystem::stem(sp->path));
     }
-    else if (auto* op = std::get_if<EntityChange::OpenPrefabForEdit>(&change.type))
+    else if (auto* op = oc::get_if<EntityChange::OpenPrefabForEdit>(&change.type))
     {
         EntityPtr e = spawnAssetFile(op->path, Transform(), false);
         if (e)
@@ -913,14 +913,14 @@ void World::handleEntityChange(EntityChange& change, const Camera& camera, const
                 m_onPrefabOpened(e, op->path);
         }
     }
-    else if (auto* np = std::get_if<EntityChange::NewPrefab>(&change.type))
+    else if (auto* np = oc::get_if<EntityChange::NewPrefab>(&change.type))
     {
         EntityPtr e = createEmptyEntity(np->displayName);
         addRootEntity(e);
         if (m_onPrefabOpened)
             m_onPrefabOpened(e, "");
     }
-    else if (auto* rs = std::get_if<EntityChange::RespawnEntity>(&change.type))
+    else if (auto* rs = oc::get_if<EntityChange::RespawnEntity>(&change.type))
     {
         // Entity::create() only stores a raw, non-owning pointer to the template — keep it alive for
         // as long as the entity might reference it (World's own template caches do the same for
@@ -939,7 +939,7 @@ void World::handleEntityChange(EntityChange& change, const Camera& camera, const
         if (SceneComponent* oldSc = getComponent<SceneComponent>(rs->oldEntity.get()))
             if (SceneComponent* newSc = getComponent<SceneComponent>(newEntity.get()))
             {
-                newSc->children = std::move(oldSc->children);
+                newSc->children = oc::move(oldSc->children);
                 for (EntityPtr& child : newSc->children)
                     child->parent = newEntity.get();
             }
@@ -959,7 +959,7 @@ void World::handleEntityChange(EntityChange& change, const Camera& camera, const
         }
         else
         {
-            std::erase_if(m_rootEntities, [&](const EntityPtr& e) { return e.get() == rs->oldEntity.get(); });
+            oc::erase_if(m_rootEntities, [&](const EntityPtr& e) { return e.get() == rs->oldEntity.get(); });
             addRootEntity(newEntity);
         }
 

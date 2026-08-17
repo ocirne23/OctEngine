@@ -64,8 +64,8 @@ export struct GameUnitComponent
         glm::vec3 target{ 0.0f };
         uint8 team = 1;
     };
-    static void takeFireRequests(std::vector<FireRequest>& out);
-    static void takeDeaths(std::vector<uint32>& outSourceIds); // spawner ids of units that died
+    static void takeFireRequests(oc::vector<FireRequest>& out);
+    static void takeDeaths(oc::vector<uint32>& outSourceIds); // spawner ids of units that died
     // (There is NO separate shield mirror: this component's state RIDES THE ENTITY SYNC — the
     // engine's snapshot/claim records carry a quantized game blob whenever the entity has a
     // GameUnitComponent. See NetworkManager's packGameStateBlob/applyGameStateBlob.)
@@ -220,13 +220,13 @@ export struct GameStructureComponent
     int8 band[3] = { 0, 0, 0 };// gravity bands per medium: a HIGHER band exports to a lower one at
                                // full throughput, equal bands balance by fill fraction. The game
                                // assigns the values (producer > storage/relay > consumer).
-    std::vector<GameStructureLink> links;
+    oc::vector<GameStructureLink> links;
     float flowUtil = 0.0f;     // EMA of the busiest touching link's utilization (gauges/mirror)
     // BARRACKS spawn waypoints (orders tier — copied onto units at spawn), capped at
     // MaxRoutePoints. OUTSIDE the union on purpose: a union member with a non-trivial type would
     // force manual construct/destruct of the active variant, and the component carries no type
     // tag to pick it by (the game derives the type from the entity).
-    std::vector<glm::vec3> route;
+    oc::vector<glm::vec3> route;
 
     // ---- TYPE-SPECIFIC state: a UNION discriminated by the game's structure type — the game
     // only ever touches the variant matching the entity's prefab (barracks variants use
@@ -259,8 +259,8 @@ export struct GameStructureComponent
         glm::vec3 target{ 0.0f };
         uint8 team = 0;
     };
-    static void takeSpawnRequests(std::vector<uint32>& outStructureIds); // barracks wanting a unit
-    static void takeTurretFireRequests(std::vector<TurretFireRequest>& out);
+    static void takeSpawnRequests(oc::vector<uint32>& outStructureIds); // barracks wanting a unit
+    static void takeTurretFireRequests(oc::vector<TurretFireRequest>& out);
     struct EmitterData
     {
         float outputFrac;       // smoothed output fraction (shrink/grow ramps)

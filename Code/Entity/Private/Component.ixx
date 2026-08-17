@@ -20,7 +20,7 @@ import :Entity;
 import Core;
 import Core.Transform;
 
-export int componentIdFromName(std::string_view name);
+export int componentIdFromName(oc::string_view name);
 export void detachFromOwner(Entity* entity);          // deletion path: breaks the entity's tree allocation (conservative)
 export void detachKeepAllocation(Entity* entity);     // reparentEntity only: break decision already made by the caller
 
@@ -68,7 +68,7 @@ export namespace EntityComponentDetail
 {
     template <typename T>
     constexpr T alignUp(T value, T alignment) { return (value + alignment - 1) & ~(alignment - 1); }
-    inline constexpr std::array<uint16, MaxInlineComponentTypes> inlineSizes {
+    inline constexpr oc::array<uint16, MaxInlineComponentTypes> inlineSizes {
         alignUp(uint16(sizeof(SceneComponent)),   ComponentAlignment),
         alignUp(uint16(sizeof(RenderComponent)),  ComponentAlignment),
         alignUp(uint16(sizeof(AnimatorComponent)), ComponentAlignment),

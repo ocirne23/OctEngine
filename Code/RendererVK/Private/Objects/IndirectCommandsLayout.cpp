@@ -21,7 +21,7 @@ bool IndirectCommandsLayout::initialize(vk::PipelineLayout pipelineLayout, vk::S
     executionSetTokenData.pExecutionSet = &executionSetToken;
 
     // Always present: DRAW_INDEXED carries no token data struct; its buffer payload is a VkDrawIndexedIndirectCommand.
-    std::vector<vk::IndirectCommandsLayoutTokenEXT> tokens;
+    oc::vector<vk::IndirectCommandsLayoutTokenEXT> tokens;
     if (useExecutionSet)
     {
         tokens.push_back(vk::IndirectCommandsLayoutTokenEXT{

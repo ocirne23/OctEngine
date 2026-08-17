@@ -25,7 +25,7 @@ const char* lightTypeToken(ELightType type)
     }
 }
 
-ELightType lightTypeFromToken(std::string_view token)
+ELightType lightTypeFromToken(oc::string_view token)
 {
     if (token == "Spot") return ELightType::Spot;
     if (token == "Area") return ELightType::Area;

@@ -71,11 +71,11 @@ private:
 
     ComputePipeline m_histogramPipeline;
     ComputePipeline m_reducePipeline;
-    std::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_histogramSets;
-    std::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_reduceSets;
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_histogramSets;
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_reduceSets;
 
     Buffer m_histogramBuffer; // 256 * uint32 bins (cleared each frame)
     Buffer m_adaptBuffer;     // persistent { float avgLum; float exposure; }
-    std::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_paramsBuffer; // mapped GpuParams, updated per frame
-    std::array<std::span<GpuParams>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedParams;
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_paramsBuffer; // mapped GpuParams, updated per frame
+    oc::array<oc::span<GpuParams>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedParams;
 };

@@ -1,6 +1,14 @@
 export module Core;
 
 export import Core.Profiler;
+// Core.OcSTL is the ONE std seam: it owns every std header unit the engine imports, hands out the
+// oc:: vocabulary (containers, strings, views, smart pointers, atomics, algorithms) and re-exports
+// only the std facilities that have NO oc:: spelling -- mutex/thread/chrono/iostreams and friends.
+// The container headers are imported there PRIVATELY, but that is tidiness, not a wall: a header
+// unit re-exports its whole include closure, so <iostream> alone still drags std::vector into view.
+// oc:: is a convention the compiler cannot enforce -- code review is what keeps std:: containers out.
+export import Core.OcSTL;
+export import Core.SmallVector; // oc::small_vector / oc::fixed_vector
 
 export typedef signed char        int8;
 export typedef short              int16;
@@ -26,46 +34,6 @@ export constexpr uint64 UINT64_MAX = 0xffffffffffffffffui64;
 export constexpr float FLT_MIN = 1.175494e-38f;
 export constexpr float FLT_MAX = 3.402823e+38f;
 export constexpr float FLT_NAN = NAN;
-
-export import <span>;
-export import <vector>;
-export import <array>;
-export import <list>;
-export import <map>;
-export import <set>;
-export import <unordered_map>;
-export import <unordered_set>;
-export import <string>;
-export import <string_view>;
-export import <variant>;
-export import <tuple>;
-// NO <fstream> / <filesystem> here on purpose: ALL file and directory access goes through the File
-// library's FileSystem (string paths, main-thread assert). Only File itself includes them; a
-// library that needs the disk links File and calls FileSystem.
-export import <iostream>;
-export import <functional>;
-export import <memory>;
-export import <mutex>;
-export import <shared_mutex>;
-export import <condition_variable>;
-export import <deque>;
-export import <queue>;
-export import <thread>;
-export import <future>;
-export import <bitset>;
-export import <coroutine>;
-export import <atomic>;
-export import <type_traits>;
-export import <chrono>;
-export import <initializer_list>;
-export import <execution>;
-export import <charconv>;
-export import <optional>;
-export import <new>;
-export import <bit>;
-export import <cmath>;
-export import <random>;
-export import <sstream>;
 
 export template<typename T, size_t N>
 constexpr size_t ARRAY_SIZE(const T(&)[N]) { return N; }

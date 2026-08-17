@@ -97,11 +97,11 @@ namespace Procedural::Diffusion
 		return cropped;
 	}
 
-	std::vector<float> gaussianKernel1D(float sigma)
+	oc::vector<float> gaussianKernel1D(float sigma)
 	{
 		const int32 ks = ((int32)(sigma * 2.0f) / 2) * 2 + 1; // matches PyTorch gaussian_blur
 		assert(ks > 0);
-		std::vector<float> k((size_t)ks);
+		oc::vector<float> k((size_t)ks);
 		const int32 half = ks / 2;
 		float sum = 0.0f;
 		for (int32 i = 0; i < ks; i++)
@@ -117,7 +117,7 @@ namespace Procedural::Diffusion
 		return k;
 	}
 
-	Grid separableGaussianBlur(const Grid& src, std::span<const float> kernel1D)
+	Grid separableGaussianBlur(const Grid& src, oc::span<const float> kernel1D)
 	{
 		const int32 ks = (int32)kernel1D.size();
 		const int32 pad = ks / 2;
@@ -218,7 +218,7 @@ namespace Procedural::Diffusion
 				double beta = (varE < 1.0 || sumW < (double)(fallbackThreshold * (float)n))
 					? (double)fallbackBeta
 					: (covET / (varE + eps));
-				beta = std::max((double)betaMin, std::min((double)betaMax, beta));
+				beta = oc::max((double)betaMin, oc::min((double)betaMax, beta));
 
 				const float Tc = T.at(r + pad, c + pad);
 				const float ec = e.at(r + pad, c + pad);

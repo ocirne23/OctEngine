@@ -15,13 +15,13 @@ namespace Procedural::Diffusion
 		constexpr float RHO = 7.0f;
 	}
 
-	std::vector<float> EDMScheduler::computeKarrasSigmas(int32 n)
+	oc::vector<float> EDMScheduler::computeKarrasSigmas(int32 n)
 	{
 		assert(n > 1); // n == 1 divides by zero below; the reference is unguarded
 		const float minInvRho = (float)std::pow((double)SIGMA_MIN, 1.0 / (double)RHO);
 		const float maxInvRho = (float)std::pow((double)SIGMA_MAX, 1.0 / (double)RHO);
 
-		std::vector<float> sigmas((size_t)n + 1);
+		oc::vector<float> sigmas((size_t)n + 1);
 		for (int32 i = 0; i < n; i++)
 		{
 			const float t = (float)i / (float)(n - 1); // float division: the cast binds to i first in Java
@@ -45,7 +45,7 @@ namespace Procedural::Diffusion
 		m_prevModelOutput.clear();
 	}
 
-	void EDMScheduler::preconditionInputs(std::span<const float> sample, float sigma, std::span<float> out)
+	void EDMScheduler::preconditionInputs(oc::span<const float> sample, float sigma, oc::span<float> out)
 	{
 		assert(out.size() == sample.size());
 		const float arg = sigma * sigma + SIGMA_DATA * SIGMA_DATA;
@@ -59,8 +59,8 @@ namespace Procedural::Diffusion
 		return (float)std::atan((double)(sigma / SIGMA_DATA));
 	}
 
-	void EDMScheduler::preconditionOutputs(std::span<const float> sample, std::span<const float> modelOut,
-	                                       float sigma, std::span<float> x0Out)
+	void EDMScheduler::preconditionOutputs(oc::span<const float> sample, oc::span<const float> modelOut,
+	                                       float sigma, oc::span<float> x0Out)
 	{
 		const float sd2 = SIGMA_DATA * SIGMA_DATA;
 		const float sig2 = sigma * sigma;
@@ -72,7 +72,7 @@ namespace Procedural::Diffusion
 
 	// alpha == 1 and lambda == -log(sigma) (no VP conversion), so exp(-h) collapses to sigma_t/sigma_s.
 	// At the last step sigma_t == 0 => ratio == 0 => xt == x0Pred exactly.
-	void EDMScheduler::firstOrderUpdate(std::span<const float> x0Pred, std::span<float> sample,
+	void EDMScheduler::firstOrderUpdate(oc::span<const float> x0Pred, oc::span<float> sample,
 	                                    float sigmaS, float sigmaT)
 	{
 		const float ratio = sigmaT / sigmaS;
@@ -80,8 +80,8 @@ namespace Procedural::Diffusion
 			sample[i] = ratio * sample[i] - (ratio - 1.0f) * x0Pred[i];
 	}
 
-	void EDMScheduler::secondOrderUpdate(std::span<const float> m1, std::span<const float> m0,
-	                                     std::span<float> sample, float sigmaS0, float sigmaT, float sigmaS1)
+	void EDMScheduler::secondOrderUpdate(oc::span<const float> m1, oc::span<const float> m0,
+	                                     oc::span<float> sample, float sigmaS0, float sigmaT, float sigmaS1)
 	{
 		// Logs in double, but exp(-h) is deliberately recovered as the FLOAT ratio sigma_t/sigma_s0 rather
 		// than std::exp(-h) — that is what the reference does ("in float32 like Python"). The mix is intentional.
@@ -104,7 +104,7 @@ namespace Procedural::Diffusion
 		}
 	}
 
-	void EDMScheduler::step(std::span<const float> modelOut, std::span<float> sample)
+	void EDMScheduler::step(oc::span<const float> modelOut, oc::span<float> sample)
 	{
 		assert(m_stepIndex < m_numSteps);
 		assert(modelOut.size() == sample.size());

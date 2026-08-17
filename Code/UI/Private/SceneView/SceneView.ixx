@@ -8,12 +8,12 @@ export class SceneView
 {
 public:
 
-	void render(const std::vector<EntityPtr>& rootEntities);
+	void render(const oc::vector<EntityPtr>& rootEntities);
 
 	Entity* getSelected() const          { return m_selected.get(); }
 	void    setSelected(Entity* entity)  { m_selected = EntityPtr(entity); }
 
-	std::vector<EntityChange> takeChanges() { return std::move(m_changes); }
+	oc::vector<EntityChange> takeChanges() { return oc::move(m_changes); }
 
 private:
 
@@ -27,9 +27,9 @@ private:
 	void acceptAssetSpawnPayload(Entity* parent); // queues an "ASSET_FILE" drop to spawn under `parent`
 
 	void applyPendingMutations();
-	void pruneSelection(const std::vector<EntityPtr>& rootEntities); // drops a selection deleted from outside the panel
+	void pruneSelection(const oc::vector<EntityPtr>& rootEntities); // drops a selection deleted from outside the panel
 
-	std::vector<EntityChange> m_changes;                            // panel mutations queued for the app to drain
+	oc::vector<EntityChange> m_changes;                            // panel mutations queued for the app to drain
 
 	// OWNING: the selection outlives whatever deleted the entity (a script, a debug key, another panel),
 	// so nothing downstream - the gizmo above all - can be left holding freed memory. pruneSelection

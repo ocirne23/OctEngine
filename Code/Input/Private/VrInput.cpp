@@ -92,9 +92,9 @@ bool VrInput::initialize(IVrSession* vrSession)
     // (empty = skipped) so one unsupported path doesn't fail the whole profile's suggestion. The runtime
     // activates whichever profile matches the connected device.
     struct Binding { XrAction action; const char* path; };
-    auto suggest = [&](const char* profile, std::initializer_list<Binding> list)
+    auto suggest = [&](const char* profile, oc::initializer_list<Binding> list)
     {
-        std::vector<XrActionSuggestedBinding> binds;
+        oc::vector<XrActionSuggestedBinding> binds;
         for (const Binding& b : list)
         {
             XrPath p = toPath(b.path);

@@ -731,10 +731,10 @@ namespace
 {
     struct ScriptArray
     {
-        std::vector<uint8> bytes;        // elements packed raw; elemSize is fixed at first push
-        std::vector<EntityPtr> entities; // Entity elements instead: refcounted, so a destroyed entity reads back
+        oc::vector<uint8> bytes;        // elements packed raw; elemSize is fixed at first push
+        oc::vector<EntityPtr> entities; // Entity elements instead: refcounted, so a destroyed entity reads back
                                           // as null rather than dangling (bytes stays empty for these)
-        std::vector<std::string> strings; // string elements: copied engine-side, so they don't point into a
+        oc::vector<oc::string> strings; // string elements: copied engine-side, so they don't point into a
                                            // script DLL's .rdata and dangle when it unloads (bytes stays empty)
         int elemSize = 0;
         int elemKind = 0;                // the DSLType value -- decides which of the three stores is in use
@@ -744,7 +744,7 @@ namespace
     };
 
     // Storage is CHUNKED so it never reallocates: a ScriptArray* returned by resolveScriptArray stays valid
-    // while other threads create arrays (a std::vector's growth would dangle every outstanding one). A handle
+    // while other threads create arrays (a oc::vector's growth would dangle every outstanding one). A handle
     // packs its index into 16 bits, so 64 chunks of 1024 cover the entire address space and the chunk table is
     // a fixed, never-moving array. Only allocation and the free list take the lock, both cold (an array is
     // created once per script field, freed when the component dies); the read path is lock-free.
@@ -756,9 +756,9 @@ namespace
     constexpr uint32 kMaxScriptArrays = 1u << 16; // the handle's index field
     constexpr uint32 kArrayChunkCount = kMaxScriptArrays / kArrayChunkSize;
 
-    std::atomic<ScriptArray*> g_arrayChunks[kArrayChunkCount] = {};
-    std::unique_ptr<ScriptArray[]> g_arrayChunkOwners[kArrayChunkCount]; // ownership only; reads go through the atomics
-    std::vector<uint32> g_freeScriptArrays; // guarded by g_scriptArrayMutex
+    oc::atomic<ScriptArray*> g_arrayChunks[kArrayChunkCount] = {};
+    oc::unique_ptr<ScriptArray[]> g_arrayChunkOwners[kArrayChunkCount]; // ownership only; reads go through the atomics
+    oc::vector<uint32> g_freeScriptArrays; // guarded by g_scriptArrayMutex
     uint32 g_scriptArrayCount = 0;          // guarded by g_scriptArrayMutex
     std::mutex g_scriptArrayMutex;
 
@@ -778,7 +778,7 @@ namespace
         const uint32 index = arrayHandleIndex(handle);
         if (index >= kMaxScriptArrays)
             return nullptr; // low 16 bits of 0 underflow the -1; a compare against a constant, not a load
-        ScriptArray* chunk = g_arrayChunks[index >> kArrayChunkShift].load(std::memory_order_acquire);
+        ScriptArray* chunk = g_arrayChunks[index >> kArrayChunkShift].load(oc::memory_order_acquire);
         if (chunk == nullptr)
             return nullptr; // unallocated chunk: the same check the old size() bound was doing
         ScriptArray& array = chunk[index & kArrayChunkMask];
@@ -831,7 +831,7 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
         // the set only ever grows to the number of distinct literals across all loaded scripts.
         // Scripts tick in parallel and this is emitted for every literal USE, so the hit path (all but the
         // first use of each literal) takes the shared lock and the insert re-checks under the exclusive one.
-        static std::unordered_set<std::string> interned;
+        static oc::unordered_set<oc::string> interned;
         static std::shared_mutex mutex;
         {
             const std::shared_lock<std::shared_mutex> read(mutex);
@@ -869,14 +869,14 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
                         return; // registry full: the field keeps handle 0 and every access reads as empty
                     index = g_scriptArrayCount++;
                 }
-                std::atomic<ScriptArray*>& slot = g_arrayChunks[index >> kArrayChunkShift];
-                if (slot.load(std::memory_order_relaxed) == nullptr)
+                oc::atomic<ScriptArray*>& slot = g_arrayChunks[index >> kArrayChunkShift];
+                if (slot.load(oc::memory_order_relaxed) == nullptr)
                 {
-                    g_arrayChunkOwners[index >> kArrayChunkShift] = std::make_unique<ScriptArray[]>(kArrayChunkSize);
-                    slot.store(g_arrayChunkOwners[index >> kArrayChunkShift].get(), std::memory_order_release);
+                    g_arrayChunkOwners[index >> kArrayChunkShift] = oc::make_unique<ScriptArray[]>(kArrayChunkSize);
+                    slot.store(g_arrayChunkOwners[index >> kArrayChunkShift].get(), oc::memory_order_release);
                 }
             }
-            array = &g_arrayChunks[index >> kArrayChunkShift].load(std::memory_order_acquire)[index & kArrayChunkMask];
+            array = &g_arrayChunks[index >> kArrayChunkShift].load(oc::memory_order_acquire)[index & kArrayChunkMask];
             array->live = true;
             array->elemSize = elemSize;
             array->elemKind = elemKind;
@@ -901,7 +901,7 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
     }
 
     // A POD element's own address. Entity and String arrays have no raw element (refcounted EntityPtr /
-    // engine-owned std::string), so they resolve to null and keep the copying accessors below.
+    // engine-owned oc::string), so they resolve to null and keep the copying accessors below.
     static void* scriptArrayElemAt(ScriptArray* array, int index, int elemSize)
     {
         if (array == nullptr || index < 0 || elemSize <= 0 || array->elemSize != elemSize
@@ -912,7 +912,7 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
     }
 
     // ENTITY AND STRING elements only -- neither has a raw element the caller could load through (a refcounted
-    // EntityPtr, an engine-owned std::string), so these hand out the derived Entity*/const char* instead. POD
+    // EntityPtr, an engine-owned oc::string), so these hand out the derived Entity*/const char* instead. POD
     // elements go through arrayElem and are loaded/stored directly by the caller, which is why there is no
     // type-erased copy left in here; a POD array reaching this reads as a miss.
     int thunk_arrayViewGet(void* view, int index, int elemSize, void* outValue)
@@ -1038,7 +1038,7 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
         int size_s = std::snprintf(nullptr, 0, message, args) + 1;
 		if (size_s <= 0) { va_end(args); return; }
 		size_t size = static_cast<size_t>(size_s);
-		std::string formattedString(size, '\0');
+		oc::string formattedString(size, '\0');
 		std::vsnprintf(&formattedString[0], size, message, args);
         Log::info(formattedString);
         va_end(args);
@@ -1050,7 +1050,7 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
         va_list ap2; va_copy(ap2, ap);
         const int n = std::vsnprintf(nullptr, 0, fmt, ap2); va_end(ap2);
         if (n < 0) return;
-        std::string s(static_cast<size_t>(n) + 1, '\0');
+        oc::string s(static_cast<size_t>(n) + 1, '\0');
         std::vsnprintf(&s[0], s.size(), fmt, ap);
         s.resize(static_cast<size_t>(n));
         Log::info(s);
@@ -1156,7 +1156,7 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
     {
         if (!outEntities || maxOut <= 0)
             return 0;
-        thread_local std::vector<uint64> results;
+        thread_local oc::vector<uint64> results;
         Globals::spatialIndex.querySphere(glm::dvec3(position), radius, SpatialLayer_Render, results);
         const int count = glm::min(int(results.size()), maxOut);
         for (int i = 0; i < count; ++i)
@@ -1175,7 +1175,7 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
 
     struct ScriptQueryFrame
     {
-        std::vector<uint64> results;
+        oc::vector<uint64> results;
         uint32 generation = 0;
     };
 
@@ -1387,7 +1387,7 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
         SceneComponent* sc = asScene(p);
         if (!name) return nullptr;
         for (const EntityPtr& child : sc->children)
-            if (std::string_view(child->getName()) == name)
+            if (oc::string_view(child->getName()) == name)
                 return child.get();
         return nullptr;
     }
@@ -1744,8 +1744,8 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
     // the interleaving across threads is not, which parallel script scheduling had already given up.
     std::mt19937& scriptRng()
     {
-        static std::atomic<uint32> nextSeed{ 0x5eed5eedu };
-        thread_local std::mt19937 rng(nextSeed.fetch_add(0x9e3779b9u, std::memory_order_relaxed));
+        static oc::atomic<uint32> nextSeed{ 0x5eed5eedu };
+        thread_local std::mt19937 rng(nextSeed.fetch_add(0x9e3779b9u, oc::memory_order_relaxed));
         return rng;
     }
 
@@ -1781,7 +1781,7 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
         // Linear over the root list: it is short (a scene's top level), and there is no name index to keep in
         // sync. Unnamed entities have a null name, which never matches.
         for (const EntityPtr& root : Globals::world.rootEntities())
-            if (const char* name = root->getName(); name != nullptr && std::string_view(name) == displayName)
+            if (const char* name = root->getName(); name != nullptr && oc::string_view(name) == displayName)
                 return root.get();
         return nullptr;
     }

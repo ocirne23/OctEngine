@@ -30,7 +30,7 @@ JobGraphBuilder& JobGraphBuilder::priority(EJobPriority priority)
 Job& JobGraph::allocateJob()
 {
     if (m_numJobs == uint32(m_chunks.size()) * JobsPerChunk)
-        m_chunks.push_back(std::make_unique<Job[]>(JobsPerChunk));
+        m_chunks.push_back(oc::make_unique<Job[]>(JobsPerChunk));
     return jobAt(m_numJobs++);
 }
 
@@ -75,8 +75,8 @@ void JobGraph::addEdge(uint32 from, uint32 to)
 void JobGraph::compile()
 {
     assert(!isRunning());
-    std::sort(m_edges.begin(), m_edges.end());
-    m_edges.erase(std::unique(m_edges.begin(), m_edges.end()), m_edges.end());
+    oc::sort(m_edges.begin(), m_edges.end());
+    m_edges.erase(oc::unique(m_edges.begin(), m_edges.end()), m_edges.end());
 
     for (uint32 i = 0; i < m_numJobs; ++i)
     {
@@ -125,17 +125,17 @@ void JobGraph::run()
         Job& job = jobAt(i);
         uint32 successorMax = 0;
         for (uint32 s = 0; s < job.numSuccessors; ++s)
-            successorMax = std::max(successorMax, job.successors[s]->rankUs);
-        job.rankUs = uint32(std::min<uint64>(uint64(job.costEmaUs) + successorMax, UINT32_MAX));
-        maxRank = std::max(maxRank, job.rankUs);
+            successorMax = oc::max(successorMax, job.successors[s]->rankUs);
+        job.rankUs = uint32(oc::min<uint64>(uint64(job.costEmaUs) + successorMax, UINT32_MAX));
+        maxRank = oc::max(maxRank, job.rankUs);
         job.effectivePriority = job.priority == EJobPriority::Normal && m_lastMaxRankUs != 0 && job.rankUs >= promoteThreshold
             ? EJobPriority::High : job.priority;
-        job.pending.store(int32(job.initialPending), std::memory_order_relaxed);
+        job.pending.store(int32(job.initialPending), oc::memory_order_relaxed);
     }
     m_lastMaxRankUs = maxRank;
-    std::sort(m_roots.begin(), m_roots.end(), [](const Job* a, const Job* b) { return a->rankUs > b->rankUs; });
+    oc::sort(m_roots.begin(), m_roots.end(), [](const Job* a, const Job* b) { return a->rankUs > b->rankUs; });
     // the queue pushes release these resets to whoever pops a root; successors follow transitively
-    std::atomic_thread_fence(std::memory_order_release);
+    oc::atomic_thread_fence(oc::memory_order_release);
     Globals::jobSystem.submitReadyBatch(m_roots);
 }
 

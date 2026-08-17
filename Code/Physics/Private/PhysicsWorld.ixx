@@ -35,7 +35,7 @@ public:
     // accumulator: steps at stepHz with a bounded number of catch-up steps per frame. Also drains
     // contact/sensor events (see getContactEvents) and advances the step counter. Also emits the
     // collider wireframes, see setDebugDrawCallback.
-    void update(double deltaSec, std::function<void(const ContactEvent&)> contactCallback);
+    void update(double deltaSec, oc::function<void(const ContactEvent&)> contactCallback);
 
     // Thread-safe absolute repositioning: queues the pose, applied at the start of the next update()
     // before any step. The only way to move a body. Requests apply in call order (last one for a body
@@ -65,11 +65,11 @@ public:
     void queueBodyCommand(const PhysicsBody& body, EBodyCommand type, const glm::vec3& a, const glm::vec3& b = glm::vec3(0.0f), const glm::vec3& c = glm::vec3(0.0f));
     void queueSetGravity(const glm::vec3& gravity); // world gravity via the same queue (no body)
 
-    PhysicsBody createBody(const PhysicsBodyDesc& desc, std::span<const PhysicsShape> shapes);
+    PhysicsBody createBody(const PhysicsBodyDesc& desc, oc::span<const PhysicsShape> shapes);
 
     // Builds a shared triangle-mesh BVH from render-style geometry (positions + triangle indices).
     // Standalone data: does not require the world and may be built before initialize().
-    PhysicsMesh createCollisionMesh(std::span<const glm::vec3> vertices, std::span<const uint32> indices);
+    PhysicsMesh createCollisionMesh(oc::span<const glm::vec3> vertices, oc::span<const uint32> indices);
 
     // A shapeless static body owned by the world, for anchoring joints to the world itself.
     PhysicsBody& staticBody() { return m_staticBody; }
@@ -105,8 +105,8 @@ public:
     // torque the body for free). fn(x, z) returns the water surface world Y at that column, or
     // -FLT_MAX where there is no water. Density/drag are Tweaks under Physics/Buoyancy. An empty
     // function disables the pass entirely.
-    using WaterSurfaceFn = std::function<float(float x, float z)>;
-    void setWaterSurface(WaterSurfaceFn fn) { m_waterSurface = std::move(fn); }
+    using WaterSurfaceFn = oc::function<float(float x, float z)>;
+    void setWaterSurface(WaterSurfaceFn fn) { m_waterSurface = oc::move(fn); }
 
     // Resolves a ContactEvent::contactId (from THIS frame, before the next update()) to its first manifold
     // point in world space. Returns false (leaving the outputs untouched) if the contact is stale/gone or
@@ -123,12 +123,12 @@ public:
     // AABBs, is decomposed into world-space segments. Drawing is bounded to "Range" around the view
     // position (mesh triangles are also CPU-culled per triangle, so a huge static mesh collider doesn't
     // emit its whole wireframe). Color is packed RGBA8 with R in the low byte (matches GLSL unpackUnorm4x8).
-    using DebugLineFn = std::function<void(const glm::vec3& a, const glm::vec3& b, uint32 colorRGBA)>;
-    using DebugViewPosFn = std::function<glm::vec3()>;
+    using DebugLineFn = oc::function<void(const glm::vec3& a, const glm::vec3& b, uint32 colorRGBA)>;
+    using DebugViewPosFn = oc::function<glm::vec3()>;
     void setDebugDrawCallback(DebugLineFn line, DebugViewPosFn viewPos)
     {
-        m_debugLine = std::move(line);
-        m_debugViewPos = std::move(viewPos);
+        m_debugLine = oc::move(line);
+        m_debugViewPos = oc::move(viewPos);
     }
     bool isDebugDrawEnabled() const { return m_debugDrawEnabled; }
 
@@ -144,7 +144,7 @@ private:
 
     void applyBuoyancy(); // per fixed step, before b3World_Step (box3d clears forces every step)
     void applyQueuedCommands(); // main thread, start of update
-    void stepSimulation(double deltaSec, const std::function<void(const ContactEvent&)>& contactCallback);
+    void stepSimulation(double deltaSec, const oc::function<void(const ContactEvent&)>& contactCallback);
     void debugDraw(const glm::vec3& viewPos, const DebugLineFn& line); // driven by update(), see setDebugDrawCallback
 
     struct BodyCommand
@@ -157,8 +157,8 @@ private:
         glm::quat rot = glm::quat(1.0f, 0.0f, 0.0f, 0.0f); // Teleport only
     };
     std::mutex m_commandMutex;
-    std::vector<BodyCommand> m_commands;
-    std::vector<BodyCommand> m_commandScratch; // swapped with m_commands at drain, so neither reallocates
+    oc::vector<BodyCommand> m_commands;
+    oc::vector<BodyCommand> m_commandScratch; // swapped with m_commands at drain, so neither reallocates
 
     uint32 m_worldHandle = 0; // b3WorldId bits
     bool m_initialized = false;
@@ -176,7 +176,7 @@ private:
     WaterSurfaceFn m_waterSurface;
     float m_waterDensity = 1000.0f;  // kg/m^3: fresh water; shapes denser than this sink
     float m_waterLinearDrag = 3.0f;  // 1/s: drag on each submerged probe's point velocity
-    std::vector<uint64> m_buoyancyShapes; // per-step overlap scratch (b3StoreShapeId bits)
+    oc::vector<uint64> m_buoyancyShapes; // per-step overlap scratch (b3StoreShapeId bits)
 
     // Debug draw tweaks (Physics/Debug)
     DebugLineFn m_debugLine;       // registered by the App, see setDebugDrawCallback

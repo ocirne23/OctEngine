@@ -110,7 +110,7 @@ void DecalPipeline::updateTextureDescriptor(uint32 frameIdx, uint32 slotIdx, vk:
     const vk::DescriptorImageInfo imageInfo{
         .sampler = m_textureSampler.getSampler(),
         .imageView = view, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal };
-    std::array<vk::WriteDescriptorSet, MAX_VIEWS> writes;
+    oc::array<vk::WriteDescriptorSet, MAX_VIEWS> writes;
     for (uint32 eye = 0; eye < m_viewCount; ++eye)
         writes[eye] = vk::WriteDescriptorSet{ .dstSet = m_sets[drawSlot(frameIdx, eye)].getDescriptorSet(),
             .dstBinding = 20, .dstArrayElement = slotIdx, .descriptorCount = 1,
@@ -125,7 +125,7 @@ void DecalPipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameIdx, ui
     DescriptorSet& set = m_sets[drawSlot(frameIdx, eye)];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
 
-    std::array<DescriptorSetUpdateInfo, 6> updates{
+    oc::array<DescriptorSetUpdateInfo, 6> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(Ubo) } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { decalBufInfo(m_decalBuffers[frameIdx]) } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {

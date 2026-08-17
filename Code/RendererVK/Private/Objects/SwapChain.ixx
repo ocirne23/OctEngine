@@ -50,9 +50,9 @@ private:
 
     vk::SwapchainKHR m_swapChain;
     Layout m_layout;
-    std::vector<vk::Image> m_images; // owned by the swapchain; cached for the VR mirror blit
+    oc::vector<vk::Image> m_images; // owned by the swapchain; cached for the VR mirror blit
 
     uint32 m_currentFrame = 0;
     uint32 m_currentImageIdx = (~0u);
-    std::vector<SyncObjects> m_syncObjects;
+    oc::vector<SyncObjects> m_syncObjects;
 };

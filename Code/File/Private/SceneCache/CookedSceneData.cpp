@@ -63,10 +63,10 @@ uint32 CookedNodeData::getNumChildren() const
     return node().numChildren;
 }
 
-std::unique_ptr<INodeData> CookedNodeData::getChild(uint32 idx) const
+oc::unique_ptr<INodeData> CookedNodeData::getChild(uint32 idx) const
 {
     assert(idx < node().numChildren);
-    return std::make_unique<CookedNodeData>(m_pScene, node().firstChild + idx);
+    return oc::make_unique<CookedNodeData>(m_pScene, node().firstChild + idx);
 }
 
 uint32 CookedNodeData::getNumChildrenRecursive() const
@@ -74,10 +74,10 @@ uint32 CookedNodeData::getNumChildrenRecursive() const
     return node().numChildrenRecursive;
 }
 
-std::vector<std::string> CookedNodeData::getChildrenNames() const
+oc::vector<oc::string> CookedNodeData::getChildrenNames() const
 {
     const CookedNode& n = node();
-    std::vector<std::string> names;
+    oc::vector<oc::string> names;
     names.reserve(n.numChildren);
     for (uint32 i = 0; i < n.numChildren; ++i)
         names.emplace_back(m_pScene->string(m_pScene->m_nodes[n.firstChild + i].nameOffset));
@@ -135,12 +135,12 @@ bool CookedSceneData::getMeshStreamSource(uint32 meshIdx, MeshStreamSource& out)
 const IMeshData* CookedSceneData::getMesh(const char* pMeshName) const
 {
     for (const CookedMeshData& mesh : m_meshes)
-        if (std::string_view(mesh.getName()) == pMeshName)
+        if (oc::string_view(mesh.getName()) == pMeshName)
             return &mesh;
     return nullptr;
 }
 
-bool CookedSceneData::load(const std::string& cachePath, const std::string& sourcePath, uint64 sourceMTime, uint64 sourceSize, uint64 optionsHash)
+bool CookedSceneData::load(const oc::string& cachePath, const oc::string& sourcePath, uint64 sourceMTime, uint64 sourceSize, uint64 optionsHash)
 {
     // Cooked scenes load at SPAWN (main thread, cached afterwards) and on the terrain/mesh-stream
     // jobs — both intended, so the main-thread policy is satisfied explicitly here.
@@ -149,7 +149,7 @@ bool CookedSceneData::load(const std::string& cachePath, const std::string& sour
     fopen_s(&pFile, cachePath.c_str(), "rb");
     if (!pFile)
         return false;
-    std::unique_ptr<FILE, void(*)(FILE*)> file(pFile, [](FILE* p) { fclose(p); });
+    oc::unique_ptr<FILE, void(*)(FILE*)> file(pFile, [](FILE* p) { fclose(p); });
 
     std::error_code ec;
     const uint64 fileSize = std::filesystem::file_size(cachePath, ec);

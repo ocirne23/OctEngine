@@ -77,7 +77,7 @@ public:
     glm::quat rot;
 
     Entity* parent = nullptr;
-    std::unique_ptr<char[]> displayName; // null when unnamed; access via getName()/setName()
+    oc::unique_ptr<char[]> displayName; // null when unnamed; access via getName()/setName()
     const EntitySpawnTemplate* spawnTemplate = nullptr;
 
     uint16 refCount = 0;
@@ -86,10 +86,10 @@ public:
     uint8 _unused[3];
 
     void update(Renderer& renderer, float deltaSeconds, const Transform& parentWorld = Transform());
-    void updateSelf(Renderer& renderer, float deltaSeconds, const Transform& parentWorld, std::vector<EntityUpdateNode>& outChildren);
+    void updateSelf(Renderer& renderer, float deltaSeconds, const Transform& parentWorld, oc::vector<EntityUpdateNode>& outChildren);
     const char* getName() const { return displayName ? displayName.get() : ""; }
     bool hasName() const { return displayName != nullptr; }
-    void setName(std::string_view name);
+    void setName(oc::string_view name);
     void reparentEntity(Entity* newParent);
     bool isPrefabInstance() const { return (flags & EEntityFlag_PrefabInstance) != 0; }
     void setPrefabInstance(bool on) { flags = on ? uint8(flags | EEntityFlag_PrefabInstance) : uint8(flags & ~EEntityFlag_PrefabInstance); }
@@ -102,8 +102,8 @@ public:
     bool isPrefabLocked() const;
     Entity* nearestPrefabInstance();
 
-    const std::string& getPrefabName() const;
-    const std::string& getSourceFile() const;
+    const oc::string& getPrefabName() const;
+    const oc::string& getSourceFile() const;
 
 private:
 	Entity() = default;
@@ -160,7 +160,7 @@ export struct EntityPtr
     {
         if (!m_entity)
             return;
-        if (std::atomic_ref<uint16>(m_entity->refCount).fetch_sub(1) == 1)
+        if (oc::atomic_ref<uint16>(m_entity->refCount).fetch_sub(1) == 1)
             Entity::destroy(m_entity);
         m_entity = nullptr;
     }
@@ -170,7 +170,7 @@ private:
     void addRef()
     {
         if (m_entity)
-            std::atomic_ref<uint16>(m_entity->refCount).fetch_add(1);
+            oc::atomic_ref<uint16>(m_entity->refCount).fetch_add(1);
     }
 
     Entity* m_entity = nullptr;
@@ -188,10 +188,10 @@ export struct EntitySpawnTemplate
 {
     EntityArchetype archetype;
     Transform defaultTransform;
-    std::vector<std::shared_ptr<void>> spawnInfos;
-    std::string sourceFile;
-    std::string prefabName;
-    std::string displayName;
+    oc::vector<oc::shared_ptr<void>> spawnInfos;
+    oc::string sourceFile;
+    oc::string prefabName;
+    oc::string displayName;
     bool enabled = true;             // spawns with EEntityFlag_Enabled set/cleared ("Enabled" in the .pre)
     mutable uint32 treeAllocSize = 0; // lazy cache: entity + recursive SceneComponent children, 0 = uncomputed
 };
@@ -200,17 +200,17 @@ export struct EntityChange
 {
     struct CreateHierarchy
     {
-        std::string path;
+        oc::string path;
         EntityPtr   parent;   // nullptr = World root
     };
     struct CreateViewport
     {
         glm::ivec2  screenPos;
-        std::string path;
+        oc::string path;
     };
     struct AddSceneEntity
     {
-        std::string displayName;
+        oc::string displayName;
         EntityPtr parent;
     };
     // Script spawn (ctx->spawnEntity). Deferred rather than spawned in the thunk: spawning touches the
@@ -218,7 +218,7 @@ export struct EntityChange
     // around them. Lands on the root list, like the thunk's old reparent-to-null did.
     struct SpawnAtPosition
     {
-        std::string path;
+        oc::string path;
         glm::vec3   position = glm::vec3(0.0f);
     };
     struct Delete
@@ -233,21 +233,21 @@ export struct EntityChange
     struct SavePrefab
     {
         EntityPtr   root;
-        std::string path;
-        std::string text; // pre-serialized document (Entity Editor's transform draft); empty → serialize root
+        oc::string path;
+        oc::string text; // pre-serialized document (Entity Editor's transform draft); empty → serialize root
     };
     struct OpenPrefabForEdit
     {
-        std::string path; // .pre to load and unpack for the Prefab Editor
+        oc::string path; // .pre to load and unpack for the Prefab Editor
     };
     struct NewPrefab
     {
-        std::string displayName; // blank editable entity, name only (no source file yet)
+        oc::string displayName; // blank editable entity, name only (no source file yet)
     };
     struct RespawnEntity
     {
         EntityPtr oldEntity;
-        std::shared_ptr<const EntitySpawnTemplate> tmpl; // freshly assembled from the entity's edited component set
+        oc::shared_ptr<const EntitySpawnTemplate> tmpl; // freshly assembled from the entity's edited component set
     };
-    std::variant<CreateHierarchy, CreateViewport, AddSceneEntity, SpawnAtPosition, Delete, Reparent, SavePrefab, OpenPrefabForEdit, NewPrefab, RespawnEntity> type;
+    oc::variant<CreateHierarchy, CreateViewport, AddSceneEntity, SpawnAtPosition, Delete, Reparent, SavePrefab, OpenPrefabForEdit, NewPrefab, RespawnEntity> type;
 };

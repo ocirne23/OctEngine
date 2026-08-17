@@ -10,7 +10,7 @@ export class NetWriter final
 {
 public:
 
-    explicit NetWriter(std::span<uint8> buffer) : m_buffer(buffer) {}
+    explicit NetWriter(oc::span<uint8> buffer) : m_buffer(buffer) {}
 
     template<typename T> requires std::is_trivially_copyable_v<T>
     void write(const T& value)
@@ -28,13 +28,13 @@ public:
             memcpy(m_buffer.data() + offset, &value, sizeof(T));
     }
 
-    void writeBytes(std::span<const uint8> bytes)
+    void writeBytes(oc::span<const uint8> bytes)
     {
         if (uint8* dst = reserve(bytes.size()); dst && !bytes.empty())
             memcpy(dst, bytes.data(), bytes.size());
     }
 
-    void writeString(std::string_view str)
+    void writeString(oc::string_view str)
     {
         writeVarUInt(str.size());
         if (uint8* dst = reserve(str.size()); dst && !str.empty())
@@ -80,7 +80,7 @@ public:
         return ptr;
     }
 
-    std::span<const uint8> data() const { return m_buffer.first(m_pos); }
+    oc::span<const uint8> data() const { return m_buffer.first(m_pos); }
     size_t size() const { return m_pos; }
     size_t capacity() const { return m_buffer.size(); }
     bool overflowed() const { return m_overflowed; }
@@ -88,7 +88,7 @@ public:
 
 private:
 
-    std::span<uint8> m_buffer;
+    oc::span<uint8> m_buffer;
     size_t m_pos = 0;
     bool m_overflowed = false;
 };
@@ -97,7 +97,7 @@ export class NetReader final
 {
 public:
 
-    explicit NetReader(std::span<const uint8> data) : m_data(data) {}
+    explicit NetReader(oc::span<const uint8> data) : m_data(data) {}
 
     template<typename T> requires std::is_trivially_copyable_v<T>
     T read()
@@ -109,18 +109,18 @@ public:
     }
 
     // zero-copy view into the buffer, empty (+overflow) when not enough bytes remain
-    std::span<const uint8> readBytes(size_t numBytes)
+    oc::span<const uint8> readBytes(size_t numBytes)
     {
         const uint8* src = consume(numBytes);
-        return src ? std::span<const uint8>(src, numBytes) : std::span<const uint8>();
+        return src ? oc::span<const uint8>(src, numBytes) : oc::span<const uint8>();
     }
 
     // view into the buffer — only valid while the underlying buffer lives
-    std::string_view readString()
+    oc::string_view readString()
     {
         const size_t size = size_t(readVarUInt());
         const uint8* src = consume(size);
-        return src ? std::string_view(reinterpret_cast<const char*>(src), size) : std::string_view();
+        return src ? oc::string_view(reinterpret_cast<const char*>(src), size) : oc::string_view();
     }
 
     uint64 readVarUInt()
@@ -174,7 +174,7 @@ private:
         return ptr;
     }
 
-    std::span<const uint8> m_data;
+    oc::span<const uint8> m_data;
     size_t m_pos = 0;
     bool m_overflowed = false;
 };

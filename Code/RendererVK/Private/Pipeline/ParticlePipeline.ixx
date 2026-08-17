@@ -58,8 +58,8 @@ public:
     // reset=true was actually SUBMITTED with the sim executing — a reset consumed by a frame that
     // never runs (acquire failure, empty scene) would leave the pool permanently uninitialized
     // (dead stack empty -> every emit drops its spawn).
-    void update(uint32 frameIdx, std::span<const RendererVKLayout::ParticleEmitterGpu> emitters,
-        std::span<const std::pair<uint16, uint16>> spawnRequests, float dt, bool collision, bool reset);
+    void update(uint32 frameIdx, oc::span<const RendererVKLayout::ParticleEmitterGpu> emitters,
+        oc::span<const oc::pair<uint16, uint16>> spawnRequests, float dt, bool collision, bool reset);
 
     struct SimParams
     {
@@ -98,7 +98,7 @@ public:
     };
     DebugCounters getDebugCounters(uint32 frameIdx) const
     {
-        const std::span<const uint32> counters = m_mappedReadback[frameIdx];
+        const oc::span<const uint32> counters = m_mappedReadback[frameIdx];
         return DebugCounters{ counters[0], { counters[4 + 1], counters[8 + 1] }, (int32)counters[12] };
     }
 
@@ -115,30 +115,30 @@ private:
 
     // Persistent GPU state (single copy, see header comment).
     Buffer m_poolBuffer;
-    std::array<Buffer, 2> m_aliveBuffers; // ping-pong by frame parity
+    oc::array<Buffer, 2> m_aliveBuffers; // ping-pong by frame parity
     Buffer m_deadListBuffer;
     Buffer m_countersBuffer; // sim dispatch args + per-parity draw args + dead-stack top
 
     // Per-frame-in-flight CPU-written inputs.
-    std::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_emitterBuffers;
-    std::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_spawnBuffers;
-    std::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_paramsBuffers;
-    std::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_beginDispatchBuffers;
-    std::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_emitDispatchBuffers;
-    std::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_readbackBuffers; // counters snapshot (stats/debug)
-    std::array<std::span<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedReadback;
-    std::array<std::span<RendererVKLayout::ParticleEmitterGpu>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedEmitters;
-    std::array<std::span<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedSpawns;
-    std::array<std::span<FrameParams>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedParams;
-    std::array<std::span<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedBeginDispatch;
-    std::array<std::span<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedEmitDispatch;
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_emitterBuffers;
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_spawnBuffers;
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_paramsBuffers;
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_beginDispatchBuffers;
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_emitDispatchBuffers;
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_readbackBuffers; // counters snapshot (stats/debug)
+    oc::array<oc::span<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedReadback;
+    oc::array<oc::span<RendererVKLayout::ParticleEmitterGpu>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedEmitters;
+    oc::array<oc::span<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedSpawns;
+    oc::array<oc::span<FrameParams>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedParams;
+    oc::array<oc::span<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedBeginDispatch;
+    oc::array<oc::span<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedEmitDispatch;
 
-    std::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_beginSets;
-    std::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_emitSets;
-    std::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_simSets;
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_beginSets;
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_emitSets;
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_simSets;
     static constexpr uint32 MAX_VIEWS = 2;
     static uint32 drawSlot(uint32 frameIdx, uint32 eye) { return frameIdx * MAX_VIEWS + eye; }
-    std::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT * MAX_VIEWS> m_drawSets;
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT * MAX_VIEWS> m_drawSets;
 
     Sampler m_textureSampler;
     uint32 m_viewCount = 1;

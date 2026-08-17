@@ -25,8 +25,8 @@ void OcclusionBuffer::initialize()
     Tweak::floatVar("Spatial/Occlusion", "Raster ms", &m_statRasterMs, 0.0f, FLT_MAX, 0.001f);
 }
 
-std::shared_ptr<const OccluderData> OcclusionBuffer::extractOccluders(std::span<const glm::vec3> vertices,
-                                                                      std::span<const uint32> indices, uint32 maxTriangles)
+oc::shared_ptr<const OccluderData> OcclusionBuffer::extractOccluders(oc::span<const glm::vec3> vertices,
+                                                                      oc::span<const uint32> indices, uint32 maxTriangles)
 {
     struct TriArea
     {
@@ -34,7 +34,7 @@ std::shared_ptr<const OccluderData> OcclusionBuffer::extractOccluders(std::span<
         uint32 tri;
     };
     const uint32 numTris = uint32(indices.size() / 3);
-    std::vector<TriArea> areas;
+    oc::vector<TriArea> areas;
     areas.reserve(numTris);
     for (uint32 t = 0; t < numTris; ++t)
     {
@@ -48,10 +48,10 @@ std::shared_ptr<const OccluderData> OcclusionBuffer::extractOccluders(std::span<
     if (areas.empty())
         return nullptr;
     const uint32 keep = glm::min(uint32(areas.size()), maxTriangles);
-    std::nth_element(areas.begin(), areas.begin() + keep - 1, areas.end(),
+    oc::nth_element(areas.begin(), areas.begin() + keep - 1, areas.end(),
         [](const TriArea& a, const TriArea& b) { return a.area > b.area; });
 
-    auto data = std::make_shared<OccluderData>();
+    auto data = oc::make_shared<OccluderData>();
     data->vertices.reserve(size_t(keep) * 3);
     for (uint32 i = 0; i < keep; ++i)
     {
@@ -63,7 +63,7 @@ std::shared_ptr<const OccluderData> OcclusionBuffer::extractOccluders(std::span<
     return data;
 }
 
-SpatialHandle OcclusionBuffer::addOccluder(const std::shared_ptr<const OccluderData>& data, const Transform& world)
+SpatialHandle OcclusionBuffer::addOccluder(const oc::shared_ptr<const OccluderData>& data, const Transform& world)
 {
     if (!data || data->vertices.empty())
         return {};
@@ -182,7 +182,7 @@ void OcclusionBuffer::rasterizeTriangle(const glm::vec4& c0, const glm::vec4& c1
     float area = (s1.x - s0.x) * (s2.y - s0.y) - (s1.y - s0.y) * (s2.x - s0.x);
     if (area < 0.0f) // rasterize both windings: occluders are solid, min-depth keeps the near face
     {
-        std::swap(s1, s2);
+        oc::swap(s1, s2);
         area = -area;
     }
     if (area < 1e-4f)

@@ -45,10 +45,10 @@ export namespace Procedural::Diffusion
 	class MemoryTileStore;
 
 	// windowIndex -> the tile. args[depIdx] is this window's slice of dependency depIdx.
-	using TensorFn = std::function<FloatTensor(std::span<const int32> windowIndex, std::span<const FloatTensor> args)>;
+	using TensorFn = oc::function<FloatTensor(oc::span<const int32> windowIndex, oc::span<const FloatTensor> args)>;
 	// Batched variant. NOTE args is DEP-MAJOR: args[depIdx][batchIdx], matching the reference.
-	using BatchTensorFn = std::function<std::vector<FloatTensor>(
-		std::span<const WindowKey> windowIndices, std::span<const std::vector<FloatTensor>> args)>;
+	using BatchTensorFn = oc::function<oc::vector<FloatTensor>(
+		oc::span<const WindowKey> windowIndices, oc::span<const oc::vector<FloatTensor>> args)>;
 
 	class InfiniteTensor
 	{
@@ -56,7 +56,7 @@ export namespace Procedural::Diffusion
 		// The one entry point. Returns a tensor of shape (end - start), materialising whatever tiles are
 		// needed (recursively, through this tensor's dependencies) and summing every window that overlaps.
 		// Coordinates are in THIS tensor's own pixel space and may be negative.
-		FloatTensor getSlice(std::span<const int32> start, std::span<const int32> end);
+		FloatTensor getSlice(oc::span<const int32> start, oc::span<const int32> end);
 
 	private:
 		friend class MemoryTileStore;
@@ -65,19 +65,19 @@ export namespace Procedural::Diffusion
 		// Materialise every window of every given pixel range, depth-first through dependencies.
 		// Deps are handed the exact per-window range list, NOT a bounding-box union: a union would compute
 		// windows that intersect nothing. Parity with Python's _apply_f_range.
-		void ensureComputedRanges(const std::vector<std::vector<Range>>& pixelRanges);
+		void ensureComputedRanges(const oc::vector<oc::vector<Range>>& pixelRanges);
 		void computeSingle(const WindowKey& windowIndex);
-		void computeBatched(const std::vector<WindowKey>& pending);
+		void computeBatched(const oc::vector<WindowKey>& pending);
 		void validateOutputShape(const FloatTensor& t) const;
 
-		std::string m_id;
+		oc::string m_id;
 		int32 m_ndim = 0;
 		TensorFn m_fn;
 		BatchTensorFn m_batchFn;
 		int32 m_batchSize = 0;
 		TensorWindow m_outputWindow;
-		std::vector<InfiniteTensor*> m_deps;      // non-owning; the store owns every tensor
-		std::vector<TensorWindow> m_depWindows;
+		oc::vector<InfiniteTensor*> m_deps;      // non-owning; the store owns every tensor
+		oc::vector<TensorWindow> m_depWindows;
 		size_t m_cacheLimitBytes = (size_t)-1;
 		MemoryTileStore* m_store = nullptr;
 	};
@@ -94,12 +94,12 @@ export namespace Procedural::Diffusion
 		MemoryTileStore(const MemoryTileStore&) = delete;
 		MemoryTileStore& operator=(const MemoryTileStore&) = delete;
 
-		InfiniteTensor* getOrCreate(std::string_view id, int32 ndim, TensorFn fn, const TensorWindow& outputWindow,
-		                            std::span<InfiniteTensor* const> deps, std::span<const TensorWindow> depWindows,
+		InfiniteTensor* getOrCreate(oc::string_view id, int32 ndim, TensorFn fn, const TensorWindow& outputWindow,
+		                            oc::span<InfiniteTensor* const> deps, oc::span<const TensorWindow> depWindows,
 		                            size_t cacheLimitBytes);
-		InfiniteTensor* getOrCreateBatched(std::string_view id, int32 ndim, BatchTensorFn fn,
+		InfiniteTensor* getOrCreateBatched(oc::string_view id, int32 ndim, BatchTensorFn fn,
 		                                   const TensorWindow& outputWindow,
-		                                   std::span<InfiniteTensor* const> deps, std::span<const TensorWindow> depWindows,
+		                                   oc::span<InfiniteTensor* const> deps, oc::span<const TensorWindow> depWindows,
 		                                   size_t cacheLimitBytes, int32 batchSize);
 
 		// Monotonic lifetime stat: counts cache INSERTIONS, not tile-function invocations. Survives clearAllCaches.
@@ -119,22 +119,22 @@ export namespace Procedural::Diffusion
 		{
 			// front = least recently used, back = most recent. Splicing on access never invalidates the
 			// iterators held in `map`, which is what makes this safe.
-			std::list<Entry> lru;
-			std::unordered_map<WindowKey, std::list<Entry>::iterator, WindowKeyHash> map;
+			oc::list<Entry> lru;
+			oc::unordered_map<WindowKey, oc::list<Entry>::iterator, WindowKeyHash> map;
 			size_t bytes = 0;
 		};
 
 		// PROMOTES to most-recently-used (the reference's LinkedHashMap.get in access-order mode).
-		const FloatTensor* getCachedWindow(const std::string& id, const WindowKey& key);
+		const FloatTensor* getCachedWindow(const oc::string& id, const WindowKey& key);
 		// Does NOT promote (the reference's containsKey). The asymmetry is deliberate: phase 1 probes with
 		// this, phase 2 reads with getCachedWindow, so a window is promoted exactly once per slice.
-		bool isWindowCached(const std::string& id, const WindowKey& key) const;
-		void cacheWindow(const std::string& id, const WindowKey& key, FloatTensor&& t);
-		void evictIfNeeded(const std::string& id, size_t limitBytes);
+		bool isWindowCached(const oc::string& id, const WindowKey& key) const;
+		void cacheWindow(const oc::string& id, const WindowKey& key, FloatTensor&& t);
+		void evictIfNeeded(const oc::string& id, size_t limitBytes);
 
-		std::unordered_map<std::string, Cache> m_caches;
-		std::vector<std::unique_ptr<InfiniteTensor>> m_tensors;
-		std::unordered_map<std::string, InfiniteTensor*> m_byId;
+		oc::unordered_map<oc::string, Cache> m_caches;
+		oc::vector<oc::unique_ptr<InfiniteTensor>> m_tensors;
+		oc::unordered_map<oc::string, InfiniteTensor*> m_byId;
 		uint64 m_totalComputedWindowCount = 0;
 	};
 }

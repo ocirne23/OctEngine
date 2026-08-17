@@ -21,7 +21,7 @@ public:
     vk::DescriptorPool getDescriptorPool() const { return m_descriptorPool; }
     uint32 getGraphicsQueueIndex() const { return m_graphicsQueueIndex; }
     vk::Queue getGraphicsQueue() const { return m_graphicsQueue; }
-    bool supportsExtensions(std::vector<const char*> extensions);
+    bool supportsExtensions(oc::vector<const char*> extensions);
     bool supportsCalibratedTimestamps() const { return m_supportsCalibratedTimestamps; }
     vk::DeviceSize getNonCoherentAtomSize() const { return m_nonCoherentAtomSize; }
     const vk::PhysicalDeviceDeviceGeneratedCommandsPropertiesEXT& getDeviceGeneratedCommandsProperties() const { return m_deviceGeneratedCommandsProperties; }
@@ -38,7 +38,7 @@ private:
     bool m_supportsCalibratedTimestamps = false;
     vk::PhysicalDeviceDeviceGeneratedCommandsPropertiesEXT m_deviceGeneratedCommandsProperties;
 
-    std::vector<vk::Format> m_supported2DOptimalFormats;
+    oc::vector<vk::Format> m_supported2DOptimalFormats;
 };
 
 export namespace Globals

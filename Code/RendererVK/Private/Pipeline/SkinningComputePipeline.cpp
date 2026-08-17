@@ -76,7 +76,7 @@ void SkinningComputePipeline::buildComputeLayout(ComputePipelineLayout& computeP
         .binding = 3, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
 }
 
-void SkinningComputePipeline::update(uint32 frameIdx, std::span<const glm::mat4> palettes, std::span<const RendererVKLayout::SkinningJob> jobs)
+void SkinningComputePipeline::update(uint32 frameIdx, oc::span<const glm::mat4> palettes, oc::span<const RendererVKLayout::SkinningJob> jobs)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     if (!palettes.empty())
@@ -93,7 +93,7 @@ void SkinningComputePipeline::update(uint32 frameIdx, std::span<const glm::mat4>
         memcpy(frameData.mappedJobs.data(), jobs.data(), jobs.size() * sizeof(RendererVKLayout::SkinningJob));
         frameData.jobBuffer.flushMappedMemory(jobs.size() * sizeof(RendererVKLayout::SkinningJob));
         for (const RendererVKLayout::SkinningJob& job : jobs)
-            maxGroups = std::max(maxGroups, (job.vertexCount + RendererVKLayout::SKINNING_THREADS_PER_GROUP - 1) / RendererVKLayout::SKINNING_THREADS_PER_GROUP);
+            maxGroups = oc::max(maxGroups, (job.vertexCount + RendererVKLayout::SKINNING_THREADS_PER_GROUP - 1) / RendererVKLayout::SKINNING_THREADS_PER_GROUP);
     }
     frameData.mappedDispatchArgs[0] = vk::DispatchIndirectCommand{ .x = maxGroups, .y = (uint32)jobs.size(), .z = 1 };
     frameData.dispatchArgsBuffer.flushMappedMemory(sizeof(vk::DispatchIndirectCommand));
@@ -103,7 +103,7 @@ void SkinningComputePipeline::record(CommandBuffer& commandBuffer, uint32 frameI
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
 
-    std::array<DescriptorSetUpdateInfo, 4> updates
+    oc::array<DescriptorSetUpdateInfo, 4> updates
     {
         DescriptorSetUpdateInfo {
             .binding = 0, .type = vk::DescriptorType::eStorageBuffer,

@@ -25,7 +25,7 @@ public:
     // whose mips are all eShaderReadOnlyOptimal and which nothing samples after this frame's swap; the
     // dst mips [dstBaseMip..dstBaseMip + regions.size()) are freshly created (eUndefined) and end up
     // eShaderReadOnlyOptimal. Executed in update()'s batch alongside the staged uploads.
-    vk::Semaphore copyImageMips(vk::Image srcImage, vk::Image dstImage, uint32 dstBaseMip, std::vector<vk::ImageCopy>&& regions);
+    vk::Semaphore copyImageMips(vk::Image srcImage, vk::Image dstImage, uint32 dstBaseMip, oc::vector<vk::ImageCopy>&& regions);
     vk::Semaphore update();
     // Submits any queued copies now so their destination buffers can be destroyed (capacity growth).
     // The signal semaphore is kept as m_nextUpdateSemaphore so the next update() consumes it.
@@ -49,7 +49,7 @@ private:
 
     static constexpr int NUM_STAGING_BUFFERS = 2;
     Buffer m_stagingBuffers[NUM_STAGING_BUFFERS];
-    std::span<uint8> m_mappedStagingBuffers[NUM_STAGING_BUFFERS];
+    oc::span<uint8> m_mappedStagingBuffers[NUM_STAGING_BUFFERS];
     vk::Fence m_fences[NUM_STAGING_BUFFERS];
     vk::Semaphore m_semaphores[NUM_STAGING_BUFFERS];
     CommandBuffer m_commandBuffers[NUM_STAGING_BUFFERS];
@@ -58,24 +58,24 @@ private:
 
     int m_currentBuffer = 0;
     vk::DeviceSize m_currentBufferOffset = 0;
-    std::vector<std::pair<vk::Buffer, vk::BufferCopy>> m_bufferCopyRegions;
-    std::vector<std::pair<vk::Image, vk::BufferImageCopy>> m_imageCopyRegions;
+    oc::vector<oc::pair<vk::Buffer, vk::BufferCopy>> m_bufferCopyRegions;
+    oc::vector<oc::pair<vk::Image, vk::BufferImageCopy>> m_imageCopyRegions;
     struct UploadAndMip
     {
         vk::Image image;
         vk::BufferImageCopy bufferCopy;
         uint32 width, height, numMips;
     };
-    std::vector<UploadAndMip> m_imageCopyAndMipList;
+    oc::vector<UploadAndMip> m_imageCopyAndMipList;
     struct ImageMipCopy
     {
         vk::Image srcImage;
         vk::Image dstImage;
         uint32 dstBaseMip;
-        std::vector<vk::ImageCopy> regions; // contiguous dst mips starting at dstBaseMip
+        oc::vector<vk::ImageCopy> regions; // contiguous dst mips starting at dstBaseMip
     };
-    std::vector<ImageMipCopy> m_imageMipCopyList;
-    std::span<uint8> m_mappedMemory;
+    oc::vector<ImageMipCopy> m_imageMipCopyList;
+    oc::span<uint8> m_mappedMemory;
 
     bool m_drainedForSharedWrite = false;
 };

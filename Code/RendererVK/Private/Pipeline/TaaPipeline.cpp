@@ -98,7 +98,7 @@ void TaaPipeline::recreateImages(uint32 width, uint32 height)
 
     // One-time UNDEFINED -> GENERAL so a never-yet-written resolved image (sampled as history on the very
     // first frame) is in the layout its descriptor was written with.
-    std::vector<vk::ImageMemoryBarrier2> bars;
+    oc::vector<vk::ImageMemoryBarrier2> bars;
     for (uint32 f = 0; f < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++f)
     for (uint32 e = 0; e < m_viewCount; ++e)
     {
@@ -191,7 +191,7 @@ void TaaPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 e
     auto uboInfo = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) };
     DescriptorSet& set = m_sets[cur];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
-    std::array<DescriptorSetUpdateInfo, 7> updates{
+    oc::array<DescriptorSetUpdateInfo, 7> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { uboInfo } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.currentColorSampler, params.currentColorView) } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledGeneral(m_sampler, m_resolved.view[prevIdx]) } },

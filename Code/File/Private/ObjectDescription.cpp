@@ -7,7 +7,7 @@ import :ObjectDescription;
 
 static char lower(char c) { return (c >= 'A' && c <= 'Z') ? char(c + 32) : c; }
 
-static bool iequals(std::string_view a, std::string_view b)
+static bool iequals(oc::string_view a, oc::string_view b)
 {
     if (a.size() != b.size())
         return false;
@@ -55,7 +55,7 @@ bool toObjectContainerDesc(const AssetNode& node, ObjectContainerDesc& out)
     return true;
 }
 
-bool loadObjectContainerDesc(const std::string& path, ObjectContainerDesc& out, std::string& outError)
+bool loadObjectContainerDesc(const oc::string& path, ObjectContainerDesc& out, oc::string& outError)
 {
     AssetNode root;
     if (!loadAssetFile(path, root, outError))

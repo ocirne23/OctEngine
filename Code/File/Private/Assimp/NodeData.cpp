@@ -6,9 +6,9 @@ import Core.glm;
 import :NodeData;
 import :Assimp;
 
-std::unique_ptr<INodeData> NodeData::clone() const
+oc::unique_ptr<INodeData> NodeData::clone() const
 {
-    return std::make_unique<NodeData>(m_pNode);
+    return oc::make_unique<NodeData>(m_pNode);
 }
 
 bool NodeData::initialize(const aiNode* pNode)
@@ -27,10 +27,10 @@ uint32 NodeData::getNumChildren() const
     return m_pNode->mNumChildren;
 }
 
-std::unique_ptr<INodeData> NodeData::getChild(uint32 idx) const
+oc::unique_ptr<INodeData> NodeData::getChild(uint32 idx) const
 {
     assert(idx < m_pNode->mNumChildren);
-    return std::make_unique<NodeData>(m_pNode->mChildren[idx]);
+    return oc::make_unique<NodeData>(m_pNode->mChildren[idx]);
 }
 
 uint32 NodeData::getNumMeshes() const
@@ -90,7 +90,7 @@ uint32 NodeData::getNumChildrenRecursive() const
     return numChildren;
 }
 /*
-std::unique_ptr<INodeData> NodeData::findChild(std::initializer_list<const char*> hierarchy) const
+oc::unique_ptr<INodeData> NodeData::findChild(oc::initializer_list<const char*> hierarchy) const
 {
     const aiNode* pNode = m_pNode;
     for (const char* name : hierarchy)
@@ -111,12 +111,12 @@ std::unique_ptr<INodeData> NodeData::findChild(std::initializer_list<const char*
         }
     }
 
-    return std::make_unique<NodeData>(pNode);
+    return oc::make_unique<NodeData>(pNode);
 }*/
 
-std::vector<std::string> NodeData::getChildrenNames() const
+oc::vector<oc::string> NodeData::getChildrenNames() const
 {
-    std::vector<std::string> childrenNames;
+    oc::vector<oc::string> childrenNames;
     for (uint32 i = 0; i < m_pNode->mNumChildren; i++)
     {
         childrenNames.push_back(m_pNode->mChildren[i]->mName.C_Str());

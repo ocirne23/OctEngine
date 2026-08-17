@@ -86,7 +86,7 @@ void MeshDataManager::growBuffer(Buffer& buffer, size_t& bufSize, size_t usedSiz
     waitResult = Globals::device.getGraphicsQueue().waitIdle();
     assert(waitResult == vk::Result::eSuccess && "Failed to wait for device idle after staging flush in MeshDataManager::growBuffer");
 
-    Buffer oldBuffer = std::move(buffer);
+    Buffer oldBuffer = oc::move(buffer);
     buffer.initialize(newSize, usage, vk::MemoryPropertyFlagBits::eDeviceLocal, false, oldBuffer.getDebugName());
     if (usedSize > 0)
     {

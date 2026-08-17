@@ -42,7 +42,7 @@ void DebugLinePipeline::reloadShaders(vk::RenderPass renderPass)
         printf("DebugLinePipeline: shader reload failed, keeping previous pipeline\n");
 }
 
-bool DebugLinePipeline::upload(uint32 frameIdx, std::span<const LineVertex> verts)
+bool DebugLinePipeline::upload(uint32 frameIdx, oc::span<const LineVertex> verts)
 {
     bool created = false;
     if (!m_buffersReady)
@@ -95,7 +95,7 @@ void DebugLinePipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, Bu
     DescriptorSet& set = m_sets[frameIdx];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
 
-    std::array<DescriptorSetUpdateInfo, 2> updates{
+    oc::array<DescriptorSetUpdateInfo, 2> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_vertexBuffers[frameIdx].getBuffer(), .range = m_vertexBuffers[frameIdx].getSize() } } },
     };

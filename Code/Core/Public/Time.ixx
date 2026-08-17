@@ -54,7 +54,7 @@ public:
         DONE
     };
 
-    Timer(Clock::duration duration, std::function<OnTrigger(Timer&)> onTimer = nullptr)
+    Timer(Clock::duration duration, oc::function<OnTrigger(Timer&)> onTimer = nullptr)
         : m_onTimer(onTimer)
     {
         m_startTime = Globals::time.getCurrentTime();
@@ -99,6 +99,6 @@ private:
     friend class Time;
     Clock::time_point m_startTime;
     Clock::time_point m_endTime;
-    std::function<OnTrigger(Timer&)> m_onTimer;
+    oc::function<OnTrigger(Timer&)> m_onTimer;
     bool m_hasTriggered = false;
 };

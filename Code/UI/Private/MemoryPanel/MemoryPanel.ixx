@@ -28,7 +28,7 @@ private:
         int64 liveCount = 0;
         uint64 cumBytes = 0;
         uint64 cumCount = 0;
-        std::vector<uint32> children; // indices into m_nodes, sorted desc by inclusiveBytes
+        oc::vector<uint32> children; // indices into m_nodes, sorted desc by inclusiveBytes
     };
 
     uint32 buildSnapshot(const MemScopeNode* node);
@@ -36,7 +36,7 @@ private:
     void drawTreemap();
     void drawNode(uint32 nodeIdx, float x0, float y0, float x1, float y1, uint32 depth);
 
-    std::vector<ViewNode> m_nodes; // snapshot rebuilt every frame; index 0 = tree root
+    oc::vector<ViewNode> m_nodes; // snapshot rebuilt every frame; index 0 = tree root
     bool m_prepared = false;       // prepare() ran for this UI frame (render clears it)
     const MemScopeNode* m_zoom = nullptr; // zoom target (null = root); MemScopeNodes are never freed
     bool m_showCumulative = false;

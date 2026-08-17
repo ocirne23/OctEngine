@@ -10,7 +10,7 @@ namespace Procedural::Diffusion
 		class Parser
 		{
 		public:
-			Parser(std::string_view text) : m_s(text) {}
+			Parser(oc::string_view text) : m_s(text) {}
 
 			bool parseValue(JsonValue& out)
 			{
@@ -27,13 +27,13 @@ namespace Procedural::Diffusion
 				return m_i >= m_s.size();
 			}
 
-			std::string error;
+			oc::string error;
 
 		private:
-			bool fail(std::string_view msg)
+			bool fail(oc::string_view msg)
 			{
 				if (error.empty())
-					error = std::string(msg) + " at offset " + std::to_string(m_i);
+					error = oc::string(msg) + " at offset " + oc::to_string(m_i);
 				return false;
 			}
 
@@ -49,7 +49,7 @@ namespace Procedural::Diffusion
 				}
 			}
 
-			bool literal(std::string_view lit)
+			bool literal(oc::string_view lit)
 			{
 				if (m_s.substr(m_i, lit.size()) != lit)
 					return fail("bad literal");
@@ -57,7 +57,7 @@ namespace Procedural::Diffusion
 				return true;
 			}
 
-			bool parseString(std::string& out)
+			bool parseString(oc::string& out)
 			{
 				if (m_i >= m_s.size() || m_s[m_i] != '"')
 					return fail("expected string");
@@ -187,7 +187,7 @@ namespace Procedural::Diffusion
 						JsonValue v;
 						if (!parseValue(v))
 							return false;
-						out.arr.push_back(std::move(v));
+						out.arr.push_back(oc::move(v));
 						skipWs();
 						if (m_i >= m_s.size())
 							return fail("unterminated array");
@@ -217,7 +217,7 @@ namespace Procedural::Diffusion
 					for (;;)
 					{
 						skipWs();
-						std::string key;
+						oc::string key;
 						if (!parseString(key))
 							return false;
 						skipWs();
@@ -227,7 +227,7 @@ namespace Procedural::Diffusion
 						JsonValue v;
 						if (!parseValue(v))
 							return false;
-						out.obj.emplace_back(std::move(key), std::move(v));
+						out.obj.emplace_back(oc::move(key), oc::move(v));
 						skipWs();
 						if (m_i >= m_s.size())
 							return fail("unterminated object");
@@ -249,13 +249,13 @@ namespace Procedural::Diffusion
 				}
 			}
 
-			std::string_view m_s;
+			oc::string_view m_s;
 			size_t m_i = 0;
 			int32 m_depth = 0;
 		};
 	}
 
-	const JsonValue* JsonValue::find(std::string_view key) const
+	const JsonValue* JsonValue::find(oc::string_view key) const
 	{
 		if (type != EType::Object)
 			return nullptr;
@@ -265,7 +265,7 @@ namespace Procedural::Diffusion
 		return nullptr;
 	}
 
-	bool JsonValue::asFloatArray(std::vector<float>& out, int32 expectedCount) const
+	bool JsonValue::asFloatArray(oc::vector<float>& out, int32 expectedCount) const
 	{
 		if (type != EType::Array)
 			return false;
@@ -282,7 +282,7 @@ namespace Procedural::Diffusion
 		return true;
 	}
 
-	bool JsonValue::asFloatArray2D(std::vector<float>& out, int32 expectedRows, int32 expectedCols) const
+	bool JsonValue::asFloatArray2D(oc::vector<float>& out, int32 expectedRows, int32 expectedCols) const
 	{
 		if (type != EType::Array || (int32)arr.size() != expectedRows)
 			return false;
@@ -290,7 +290,7 @@ namespace Procedural::Diffusion
 		out.reserve((size_t)expectedRows * expectedCols);
 		for (const JsonValue& row : arr)
 		{
-			std::vector<float> r;
+			oc::vector<float> r;
 			if (!row.asFloatArray(r, expectedCols))
 				return false;
 			out.insert(out.end(), r.begin(), r.end());
@@ -298,7 +298,7 @@ namespace Procedural::Diffusion
 		return true;
 	}
 
-	bool JsonValue::parse(std::string_view text, JsonValue& out, std::string& error)
+	bool JsonValue::parse(oc::string_view text, JsonValue& out, oc::string& error)
 	{
 		// Tolerate a UTF-8 BOM: HuggingFace-hosted json can carry one and it isn't whitespace.
 		if (text.size() >= 3 && (uint8)text[0] == 0xEF && (uint8)text[1] == 0xBB && (uint8)text[2] == 0xBF)

@@ -9,7 +9,7 @@ import :Address;
 export constexpr uint64 InvalidSocketHandle = ~0ull;
 
 // blocking DNS lookup (first IPv4 result), invalid address on failure
-export NetAddress netResolveHost(std::string_view hostName, uint16 port);
+export NetAddress netResolveHost(oc::string_view hostName, uint16 port);
 
 export class UdpSocket final
 {
@@ -35,8 +35,8 @@ public:
     void close();
     bool isOpen() const { return m_handle != InvalidSocketHandle; }
 
-    bool sendTo(const NetAddress& to, std::span<const uint8> data);
-    int receiveFrom(std::span<uint8> buffer, NetAddress& outFrom); // datagram size, -1 when none pending
+    bool sendTo(const NetAddress& to, oc::span<const uint8> data);
+    int receiveFrom(oc::span<uint8> buffer, NetAddress& outFrom); // datagram size, -1 when none pending
 
     uint16 getLocalPort() const;
 
@@ -84,8 +84,8 @@ public:
     ETcpState getState() const { return m_state; }
     bool isOpen() const { return m_handle != InvalidSocketHandle; }
 
-    int send(std::span<const uint8> data); // bytes accepted (may be < data.size()), -1 on error
-    int receive(std::span<uint8> buffer);  // bytes read, 0 = nothing pending, -1 = closed or error
+    int send(oc::span<const uint8> data); // bytes accepted (may be < data.size()), -1 on error
+    int receive(oc::span<uint8> buffer);  // bytes read, 0 = nothing pending, -1 = closed or error
 
     void close();
     NetAddress getRemoteAddress() const;
@@ -136,12 +136,12 @@ public:
     static constexpr uint32 MaxMessageSize = 16 * 1024 * 1024;
 
     TcpMessageStream() = default;
-    explicit TcpMessageStream(TcpSocket&& socket) : m_socket(std::move(socket)) {}
+    explicit TcpMessageStream(TcpSocket&& socket) : m_socket(oc::move(socket)) {}
 
     TcpSocket& socket() { return m_socket; }
     bool isConnected() { return m_socket.poll() == ETcpState::Connected; }
 
-    bool sendMessage(std::span<const uint8> data)
+    bool sendMessage(oc::span<const uint8> data)
     {
         if (data.size() > MaxMessageSize)
             return false;
@@ -153,7 +153,7 @@ public:
     }
 
     // moves one complete message into out; false when none is available (yet)
-    bool receiveMessage(std::vector<uint8>& out)
+    bool receiveMessage(oc::vector<uint8>& out)
     {
         pumpReceive();
         if (m_recvBuffer.size() - m_recvOffset < sizeof(uint32))
@@ -189,7 +189,7 @@ public:
         m_socket.poll();
         while (m_sendOffset < m_sendBuffer.size())
         {
-            const int sent = m_socket.send(std::span(m_sendBuffer).subspan(m_sendOffset));
+            const int sent = m_socket.send(oc::span(m_sendBuffer).subspan(m_sendOffset));
             if (sent < 0)
                 return false;
             if (sent == 0)
@@ -219,8 +219,8 @@ private:
     }
 
     TcpSocket m_socket;
-    std::vector<uint8> m_sendBuffer;
+    oc::vector<uint8> m_sendBuffer;
     size_t m_sendOffset = 0;
-    std::vector<uint8> m_recvBuffer;
+    oc::vector<uint8> m_recvBuffer;
     size_t m_recvOffset = 0;
 };

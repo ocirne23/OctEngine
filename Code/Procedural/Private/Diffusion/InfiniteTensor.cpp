@@ -8,7 +8,7 @@ namespace Procedural::Diffusion
 {
 	namespace
 	{
-		WindowKey toKey(std::span<const int32> windowIndex)
+		WindowKey toKey(oc::span<const int32> windowIndex)
 		{
 			assert(windowIndex.size() <= 4);
 			WindowKey k;
@@ -24,27 +24,27 @@ namespace Procedural::Diffusion
 
 	void InfiniteTensor::validateOutputShape(const FloatTensor& t) const
 	{
-		const std::vector<int32>& want = m_outputWindow.size();
+		const oc::vector<int32>& want = m_outputWindow.size();
 		assert(t.ndim() == (int32)want.size());
 		for (size_t d = 0; d < want.size(); d++)
 			assert(t.shape()[d] == want[d]);
 		(void)t;
 	}
 
-	void InfiniteTensor::ensureComputedRanges(const std::vector<std::vector<Range>>& pixelRanges)
+	void InfiniteTensor::ensureComputedRanges(const oc::vector<oc::vector<Range>>& pixelRanges)
 	{
 		// --- Phase 1: collect the windows we still need, deduped but INSERTION-ORDERED.
 		// Order is not cosmetic: it decides how computeBatched groups windows into ONNX batches. A hash set
 		// here would silently reshuffle every batch.
-		std::vector<WindowKey> pending;
-		std::unordered_set<WindowKey, WindowKeyHash> seen;
-		std::vector<int32> lo((size_t)m_ndim), hi((size_t)m_ndim);
+		oc::vector<WindowKey> pending;
+		oc::unordered_set<WindowKey, WindowKeyHash> seen;
+		oc::vector<int32> lo((size_t)m_ndim), hi((size_t)m_ndim);
 
-		for (const std::vector<Range>& range : pixelRanges)
+		for (const oc::vector<Range>& range : pixelRanges)
 		{
 			m_outputWindow.getLowestIntersection(range, lo);
 			m_outputWindow.getHighestIntersection(range, hi);
-			iterateWindows(lo, hi, [&](std::span<const int32> wi)
+			iterateWindows(lo, hi, [&](oc::span<const int32> wi)
 			{
 				const WindowKey key = toKey(wi);
 				if (m_store->isWindowCached(m_id, key)) // probe only: must not promote
@@ -57,14 +57,14 @@ namespace Procedural::Diffusion
 			return;
 
 		// --- Phase 2: recurse into dependencies. Each dep is handed the exact per-window range list.
-		std::vector<Range> depBounds((size_t)m_ndim);
+		oc::vector<Range> depBounds((size_t)m_ndim);
 		for (size_t i = 0; i < m_deps.size(); i++)
 		{
-			std::vector<std::vector<Range>> depRanges;
+			oc::vector<oc::vector<Range>> depRanges;
 			depRanges.reserve(pending.size());
 			for (const WindowKey& wi : pending)
 			{
-				m_depWindows[i].getBounds(std::span<const int32>(wi.v, (size_t)m_ndim), depBounds);
+				m_depWindows[i].getBounds(oc::span<const int32>(wi.v, (size_t)m_ndim), depBounds);
 				depRanges.push_back(depBounds);
 			}
 			m_deps[i]->ensureComputedRanges(depRanges);
@@ -82,12 +82,12 @@ namespace Procedural::Diffusion
 
 	void InfiniteTensor::computeSingle(const WindowKey& windowIndex)
 	{
-		const std::span<const int32> wi(windowIndex.v, (size_t)m_ndim);
+		const oc::span<const int32> wi(windowIndex.v, (size_t)m_ndim);
 
-		std::vector<FloatTensor> args;
+		oc::vector<FloatTensor> args;
 		args.reserve(m_deps.size());
-		std::vector<Range> b((size_t)m_ndim);
-		std::vector<int32> depStart((size_t)m_ndim), depEnd((size_t)m_ndim);
+		oc::vector<Range> b((size_t)m_ndim);
+		oc::vector<int32> depStart((size_t)m_ndim), depEnd((size_t)m_ndim);
 		for (size_t i = 0; i < m_deps.size(); i++)
 		{
 			m_depWindows[i].getBounds(wi, b);
@@ -101,28 +101,28 @@ namespace Procedural::Diffusion
 
 		FloatTensor out = m_fn(wi, args);
 		validateOutputShape(out);
-		m_store->cacheWindow(m_id, windowIndex, std::move(out));
+		m_store->cacheWindow(m_id, windowIndex, oc::move(out));
 	}
 
-	void InfiniteTensor::computeBatched(const std::vector<WindowKey>& pending)
+	void InfiniteTensor::computeBatched(const oc::vector<WindowKey>& pending)
 	{
-		std::vector<Range> b((size_t)m_ndim);
-		std::vector<int32> depStart((size_t)m_ndim), depEnd((size_t)m_ndim);
+		oc::vector<Range> b((size_t)m_ndim);
+		oc::vector<int32> depStart((size_t)m_ndim), depEnd((size_t)m_ndim);
 
 		for (size_t from = 0; from < pending.size(); from += (size_t)m_batchSize)
 		{
-			const size_t to = std::min(from + (size_t)m_batchSize, pending.size());
-			const std::span<const WindowKey> batch(pending.data() + from, to - from);
+			const size_t to = oc::min(from + (size_t)m_batchSize, pending.size());
+			const oc::span<const WindowKey> batch(pending.data() + from, to - from);
 
 			// Dep-major: args[depIdx][batchIdx]. The final batch may be smaller than m_batchSize, which is
 			// why the models need a dynamic batch dimension.
-			std::vector<std::vector<FloatTensor>> args(m_deps.size());
+			oc::vector<oc::vector<FloatTensor>> args(m_deps.size());
 			for (size_t i = 0; i < m_deps.size(); i++)
 			{
 				args[i].reserve(batch.size());
 				for (const WindowKey& wi : batch)
 				{
-					m_depWindows[i].getBounds(std::span<const int32>(wi.v, (size_t)m_ndim), b);
+					m_depWindows[i].getBounds(oc::span<const int32>(wi.v, (size_t)m_ndim), b);
 					for (int32 d = 0; d < m_ndim; d++)
 					{
 						depStart[d] = b[d].start;
@@ -132,22 +132,22 @@ namespace Procedural::Diffusion
 				}
 			}
 
-			std::vector<FloatTensor> outs = m_batchFn(batch, args);
+			oc::vector<FloatTensor> outs = m_batchFn(batch, args);
 			assert(outs.size() == batch.size());
 			for (size_t k = 0; k < batch.size(); k++)
 			{
 				validateOutputShape(outs[k]);
-				m_store->cacheWindow(m_id, batch[k], std::move(outs[k]));
+				m_store->cacheWindow(m_id, batch[k], oc::move(outs[k]));
 			}
 		}
 	}
 
-	FloatTensor InfiniteTensor::getSlice(std::span<const int32> start, std::span<const int32> end)
+	FloatTensor InfiniteTensor::getSlice(oc::span<const int32> start, oc::span<const int32> end)
 	{
 		assert((int32)start.size() == m_ndim && (int32)end.size() == m_ndim);
 
-		std::vector<Range> pixelRange((size_t)m_ndim);
-		std::vector<int32> outShape((size_t)m_ndim);
+		oc::vector<Range> pixelRange((size_t)m_ndim);
+		oc::vector<int32> outShape((size_t)m_ndim);
 		for (int32 d = 0; d < m_ndim; d++)
 		{
 			pixelRange[d] = { start[d], end[d] };
@@ -158,19 +158,19 @@ namespace Procedural::Diffusion
 		ensureComputedRanges({ pixelRange });
 
 		FloatTensor output(outShape);
-		std::vector<int32> lo((size_t)m_ndim), hi((size_t)m_ndim);
+		oc::vector<int32> lo((size_t)m_ndim), hi((size_t)m_ndim);
 		m_outputWindow.getLowestIntersection(pixelRange, lo);
 		m_outputWindow.getHighestIntersection(pixelRange, hi);
 
-		std::vector<Range> wBounds((size_t)m_ndim), srcRegion((size_t)m_ndim), dstRegion((size_t)m_ndim);
-		iterateWindows(lo, hi, [&](std::span<const int32> wi)
+		oc::vector<Range> wBounds((size_t)m_ndim), srcRegion((size_t)m_ndim), dstRegion((size_t)m_ndim);
+		iterateWindows(lo, hi, [&](oc::span<const int32> wi)
 		{
 			m_outputWindow.getBounds(wi, wBounds);
 
 			for (int32 d = 0; d < m_ndim; d++)
 			{
-				const int32 s = std::max(pixelRange[d].start, wBounds[d].start);
-				const int32 e = std::min(pixelRange[d].stop, wBounds[d].stop);
+				const int32 s = oc::max(pixelRange[d].start, wBounds[d].start);
+				const int32 e = oc::min(pixelRange[d].stop, wBounds[d].stop);
 				if (s >= e)
 					return; // this window doesn't actually touch the request
 				srcRegion[d] = { s - wBounds[d].start, e - wBounds[d].start };
@@ -193,30 +193,30 @@ namespace Procedural::Diffusion
 	// MemoryTileStore
 	// =====================================================================================================
 
-	InfiniteTensor* MemoryTileStore::getOrCreate(std::string_view id, int32 ndim, TensorFn fn,
+	InfiniteTensor* MemoryTileStore::getOrCreate(oc::string_view id, int32 ndim, TensorFn fn,
 	                                             const TensorWindow& outputWindow,
-	                                             std::span<InfiniteTensor* const> deps,
-	                                             std::span<const TensorWindow> depWindows,
+	                                             oc::span<InfiniteTensor* const> deps,
+	                                             oc::span<const TensorWindow> depWindows,
 	                                             size_t cacheLimitBytes)
 	{
-		auto it = m_byId.find(std::string(id));
+		auto it = m_byId.find(oc::string(id));
 		if (it != m_byId.end())
 			return it->second;
 
 		// Same construction path as the batched form, then swap in the single-window function.
 		InfiniteTensor* t = getOrCreateBatched(id, ndim, BatchTensorFn{}, outputWindow, deps, depWindows,
 		                                       cacheLimitBytes, 0);
-		t->m_fn = std::move(fn);
+		t->m_fn = oc::move(fn);
 		return t;
 	}
 
-	InfiniteTensor* MemoryTileStore::getOrCreateBatched(std::string_view id, int32 ndim, BatchTensorFn fn,
+	InfiniteTensor* MemoryTileStore::getOrCreateBatched(oc::string_view id, int32 ndim, BatchTensorFn fn,
 	                                                    const TensorWindow& outputWindow,
-	                                                    std::span<InfiniteTensor* const> deps,
-	                                                    std::span<const TensorWindow> depWindows,
+	                                                    oc::span<InfiniteTensor* const> deps,
+	                                                    oc::span<const TensorWindow> depWindows,
 	                                                    size_t cacheLimitBytes, int32 batchSize)
 	{
-		const std::string key(id);
+		const oc::string key(id);
 		auto it = m_byId.find(key);
 		if (it != m_byId.end())
 			return it->second;
@@ -225,11 +225,11 @@ namespace Procedural::Diffusion
 		assert(ndim > 0 && ndim <= 4);
 		assert((int32)outputWindow.size().size() == ndim);
 
-		m_tensors.push_back(std::unique_ptr<InfiniteTensor>(new InfiniteTensor()));
+		m_tensors.push_back(oc::unique_ptr<InfiniteTensor>(new InfiniteTensor()));
 		InfiniteTensor* t = m_tensors.back().get();
 		t->m_id = key;
 		t->m_ndim = ndim;
-		t->m_batchFn = std::move(fn);
+		t->m_batchFn = oc::move(fn);
 		t->m_batchSize = batchSize;
 		t->m_outputWindow = outputWindow;
 		t->m_deps.assign(deps.begin(), deps.end());
@@ -242,7 +242,7 @@ namespace Procedural::Diffusion
 		return t;
 	}
 
-	const FloatTensor* MemoryTileStore::getCachedWindow(const std::string& id, const WindowKey& key)
+	const FloatTensor* MemoryTileStore::getCachedWindow(const oc::string& id, const WindowKey& key)
 	{
 		auto ci = m_caches.find(id);
 		if (ci == m_caches.end())
@@ -255,7 +255,7 @@ namespace Procedural::Diffusion
 		return &mi->second->tensor;
 	}
 
-	bool MemoryTileStore::isWindowCached(const std::string& id, const WindowKey& key) const
+	bool MemoryTileStore::isWindowCached(const oc::string& id, const WindowKey& key) const
 	{
 		auto ci = m_caches.find(id);
 		if (ci == m_caches.end())
@@ -263,7 +263,7 @@ namespace Procedural::Diffusion
 		return ci->second.map.find(key) != ci->second.map.end(); // deliberately does not promote
 	}
 
-	void MemoryTileStore::cacheWindow(const std::string& id, const WindowKey& key, FloatTensor&& t)
+	void MemoryTileStore::cacheWindow(const oc::string& id, const WindowKey& key, FloatTensor&& t)
 	{
 		Cache& c = m_caches[id];
 		auto mi = c.map.find(key);
@@ -275,13 +275,13 @@ namespace Procedural::Diffusion
 			return;
 		}
 		const size_t bytes = t.byteSize();
-		c.lru.push_back(Entry{ key, std::move(t) });
-		c.map[key] = std::prev(c.lru.end());
+		c.lru.push_back(Entry{ key, oc::move(t) });
+		c.map[key] = oc::prev(c.lru.end());
 		c.bytes += bytes;
 		++m_totalComputedWindowCount;
 	}
 
-	void MemoryTileStore::evictIfNeeded(const std::string& id, size_t limitBytes)
+	void MemoryTileStore::evictIfNeeded(const oc::string& id, size_t limitBytes)
 	{
 		if (limitBytes == (size_t)-1)
 			return; // sentinel: unlimited

@@ -53,7 +53,7 @@ public:
     // allowCompaction: builds carry eAllowCompaction and record a compacted-size query for
     // recordCompaction to consume.
     void recordBuildBlas(uint32 frameIdx, vk::CommandBuffer cmd, Buffer& vertexBuffer, Buffer& indexBuffer,
-        const RendererVKLayout::MeshInfo* meshInfos, const uint32* vertexCounts, std::span<const uint32> meshIndices,
+        const RendererVKLayout::MeshInfo* meshInfos, const uint32* vertexCounts, oc::span<const uint32> meshIndices,
         bool allowCompaction);
 
     // BLAS compaction: build-size quotes are conservative worst cases, so freshly built BLASes waste
@@ -89,7 +89,7 @@ public:
     // are written into that frame's BLAS-address buffer. BLAS buffers are allocated once (geometry size is
     // constant) and rebuilt in place each frame. Call after the skinning compute, before the TLAS build.
     void recordBuildSkinnedBlas(vk::CommandBuffer cmd, uint32 frameIdx, Buffer& vertexBuffer, Buffer& indexBuffer,
-        std::span<const SkinnedBlasBuild> builds);
+        oc::span<const SkinnedBlasBuild> builds);
 
     // Records a per-frame TLAS (re)build from numInstances pre-written VkAccelerationStructureInstanceKHR
     // records in instanceBuffer. The TLAS is double-buffered (one per frame-in-flight): it is rebuilt
@@ -118,63 +118,63 @@ private:
         Buffer buffer;
         bool compacted = false; // right-sized already (or not worth it); reset on rebuild
     };
-    std::vector<Blas> m_blasList;
+    oc::vector<Blas> m_blasList;
 
     // Compaction pipeline state: one query batch per build event, matured by recordCompaction-call
     // count (the frame-slot fence guarantees the queries executed by then); originals retire the same way.
     struct CompactionBatch
     {
         vk::QueryPool queryPool;
-        std::vector<uint32> meshIndices;
-        std::vector<vk::AccelerationStructureKHR> handles; // as recorded; mismatch = rebuilt/evicted, skip
+        oc::vector<uint32> meshIndices;
+        oc::vector<vk::AccelerationStructureKHR> handles; // as recorded; mismatch = rebuilt/evicted, skip
         uint32 frameStamp;
     };
-    std::deque<CompactionBatch> m_compactionBatches;
+    oc::deque<CompactionBatch> m_compactionBatches;
     struct RetiredBlas
     {
         vk::AccelerationStructureKHR handle;
         Buffer buffer;
         uint32 frameStamp;
     };
-    std::vector<RetiredBlas> m_retiredBlas;
+    oc::vector<RetiredBlas> m_retiredBlas;
     uint64 m_compactionSavedBytes = 0;
     uint32 m_compactionFrame = 0;
     // Per frame in flight: static BLAS builds run every frame under mesh streaming, so a shared scratch
     // could be reallocated (ensureScratch grows it) while an earlier in-flight frame's build still reads
     // it -> device lost. Per-slot scratch (like the TLAS/skinned scratch below) is fenced by beginFrame.
-    std::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_blasScratch;
-    std::array<vk::DeviceAddress, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_blasScratchAlignedAddr{};
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_blasScratch;
+    oc::array<vk::DeviceAddress, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_blasScratchAlignedAddr{};
     // Per frame in flight (skinned BLAS addresses differ between slots; static addresses are the same, but
     // each slot is written only in its own fenced frame — see the authoritative array below).
-    std::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_blasAddressBuffers;
-    std::array<std::span<uint64>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedBlasAddresses;
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_blasAddressBuffers;
+    oc::array<oc::span<uint64>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedBlasAddresses;
 
     // CPU authoritative static BLAS addresses + per-slot pending sync (mirrors the render-node transform
     // dirty pattern). Writing an in-flight slot's mapped buffer races its TLAS-instance compute AND can
     // publish a compacted address whose copy hasn't executed in that frame -> device lost; so all static
     // address changes land here and each frame drains only its own slot in syncFrameAddresses.
-    std::vector<uint64> m_staticBlasAddr;
-    std::vector<uint8>  m_staticAddrDirtyBits;
-    std::array<std::vector<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_staticAddrDirtyLists;
+    oc::vector<uint64> m_staticBlasAddr;
+    oc::vector<uint8>  m_staticAddrDirtyBits;
+    oc::array<oc::vector<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_staticAddrDirtyLists;
     uint32 m_numBlas = 0;
 
     // mesh idx -> mesh idx whose BLAS it uses (identity = owns one). Single-buffered: entries are static
     // per mesh and written before the mesh can first be instanced.
     Buffer m_meshAliasBuffer;
-    std::span<uint32> m_mappedMeshAlias;
+    oc::span<uint32> m_mappedMeshAlias;
     uint32 m_numAliasMeshes = 0;
 
     // Double-buffered skinned BLASes (rebuilt every frame) + per-frame scratch. Allocated lazily/in place.
-    std::array<std::vector<Blas>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_skinnedBlas;
-    std::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_skinnedBlasScratch;
-    std::array<vk::DeviceAddress, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_skinnedBlasScratchAlignedAddr{};
+    oc::array<oc::vector<Blas>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_skinnedBlas;
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_skinnedBlasScratch;
+    oc::array<vk::DeviceAddress, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_skinnedBlasScratchAlignedAddr{};
 
     // Double-buffered TLAS (one per frame-in-flight) to avoid a cross-frame WAR hazard on the structure.
-    std::array<vk::AccelerationStructureKHR, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_tlas{};
-    std::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_tlasBuffer;
-    std::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_tlasScratch;
-    std::array<vk::DeviceAddress, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_tlasScratchAlignedAddr{};
-    std::array<uint32, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_tlasCapacity{};
+    oc::array<vk::AccelerationStructureKHR, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_tlas{};
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_tlasBuffer;
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_tlasScratch;
+    oc::array<vk::DeviceAddress, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_tlasScratchAlignedAddr{};
+    oc::array<uint32, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_tlasCapacity{};
 
     uint32 m_scratchAlignment = 256;
 };

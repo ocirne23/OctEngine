@@ -12,7 +12,7 @@ export class TextureManager final
 public:
 
     ~TextureManager();
-    //uint16 upload(const std::vector<ITextureData*>& textureData, bool generateMips);
+    //uint16 upload(const oc::vector<ITextureData*>& textureData, bool generateMips);
     uint16 upload(const ITextureData& textureData, bool generateMips, bool sRGB = false);
     // Standalone texture file (e.g. a terrain biome .dds): same slot/streaming/descriptor handling as the
     // ITextureData path, resolved relative to the working directory (Assets/).
@@ -31,7 +31,7 @@ public:
     const Texture& getTexture(uint16 idx) const { assert(idx < m_textures.size()); return m_textures[idx]; }
     // Mutable access for the TextureStreamer's residency swaps (adoptStreamedImage).
     Texture& getTextureMutable(uint16 idx) { assert(idx < m_textures.size()); return m_textures[idx]; }
-    const std::vector<Texture>& getTextures() const { return m_textures; }
+    const oc::vector<Texture>& getTextures() const { return m_textures; }
 	size_t getNumTextures() const { return m_textures.size(); }
 
     // Live texture-array descriptor capacity; grown by upload() (doubling, clamped to getDescriptorCap()).
@@ -46,10 +46,10 @@ public:
 
 private:
 
-    uint16 uploadImpl(const std::function<bool(Texture&)>& initialize);
+    uint16 uploadImpl(const oc::function<bool(Texture&)>& initialize);
 
-    std::vector<Texture> m_textures;
-    std::vector<uint16> m_freeSlots; // freed by ObjectContainer teardown, recycled by upload()
+    oc::vector<Texture> m_textures;
+    oc::vector<uint16> m_freeSlots; // freed by ObjectContainer teardown, recycled by upload()
     uint32 m_maxTextures = RendererVKLayout::INITIAL_TEXTURES;
     uint32 m_generation = 0;
 };

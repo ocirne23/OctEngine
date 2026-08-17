@@ -24,7 +24,7 @@ public:
     // sRGB: the pixel data is sRGB-encoded color (albedo/emissive) — sample through an Srgb format so
     // the hardware linearizes it. Data textures (normals, metal/roughness) must stay Unorm.
     bool initialize(const ITextureData& textureData, bool generateMips, bool sRGB = false);
-    bool initialize(uint32 width, uint32 height, vk::Format format, const std::vector<std::span<uint8>>& imageDataMips, bool generateMips);
+    bool initialize(uint32 width, uint32 height, vk::Format format, const oc::vector<oc::span<uint8>>& imageDataMips, bool generateMips);
 
     vk::ImageView getImageView() const { return m_imageView; }
     vk::Image getImage() const { return m_image; }
@@ -33,7 +33,7 @@ public:
 
     // Streaming metadata built while parsing the DDS header; TextureManager::upload moves it into the
     // TextureStreamer. Null for unstreamable textures (procedural/embedded/non-DDS/cubemap/array/3D).
-    std::unique_ptr<StreamedTextureMeta> takeStreamingMeta() { return std::move(m_pStreamingMeta); }
+    oc::unique_ptr<StreamedTextureMeta> takeStreamingMeta() { return oc::move(m_pStreamingMeta); }
 
     // Residency change by the TextureStreamer: take ownership of a replacement image (a different mip
     // range of the same source) and hand back the old handles, which the streamer destroys once no
@@ -61,5 +61,5 @@ private:
     vk::Image m_image;
     VmaAllocation m_imageMemory = nullptr;
     vk::ImageView m_imageView;
-    std::unique_ptr<StreamedTextureMeta> m_pStreamingMeta;
+    oc::unique_ptr<StreamedTextureMeta> m_pStreamingMeta;
 };

@@ -32,7 +32,7 @@ struct Rng
 };
 
 // pure noise rarely reaches deep parser states: corrupt mostly-valid data instead
-static void fillFuzzed(Rng& rng, std::vector<uint8>& out, size_t size)
+static void fillFuzzed(Rng& rng, oc::vector<uint8>& out, size_t size)
 {
     out.resize(size);
     for (uint8& b : out)
@@ -53,13 +53,13 @@ static int fuzzReader(uint32 iterations, uint64 seed)
 {
     printf("[reader] %u iterations, seed %llu\n", iterations, (unsigned long long)seed);
     Rng rng(seed);
-    std::vector<uint8> buffer;
+    oc::vector<uint8> buffer;
     uint64 overflows = 0;
 
     for (uint32 i = 0; i < iterations; ++i)
     {
         fillFuzzed(rng, buffer, 1 + rng.below(1400));
-        const std::span<const uint8> input(buffer);
+        const oc::span<const uint8> input(buffer);
         NetReader reader(input);
 
         // drive a random sequence of reads until the reader gives up
@@ -78,7 +78,7 @@ static int fuzzReader(uint32 iterations, uint64 seed)
             {
                 // the invariant: a returned view must lie inside the input buffer. Catches a
                 // wrapped bounds check here rather than at a later OOB dereference.
-                const std::string_view text = reader.readString();
+                const oc::string_view text = reader.readString();
                 if (!text.empty())
                 {
                     const uint8* begin = reinterpret_cast<const uint8*>(text.data());
@@ -92,7 +92,7 @@ static int fuzzReader(uint32 iterations, uint64 seed)
             }
             default:
             {
-                const std::span<const uint8> bytes = reader.readBytes(size_t(reader.readVarUInt()));
+                const oc::span<const uint8> bytes = reader.readBytes(size_t(reader.readVarUInt()));
                 if (!bytes.empty()
                     && (bytes.data() < input.data()
                         || bytes.size() > size_t(input.data() + input.size() - bytes.data())))
@@ -134,7 +134,7 @@ namespace Pkt
 // Encryption off — sealed packets would only fail to open. `pump` advances an in-process server
 // between polls (it has no thread of its own); omit it for a real one.
 static bool handshake(UdpSocket& socket, const NetAddress& server, uint32 protocolId, uint64 clientSalt,
-    const std::function<void()>& pump = {})
+    const oc::function<void()>& pump = {})
 {
     // drain: after a fuzz phase this queue holds thousands of replies to earlier garbage (random
     // packets parse as valid ConnectRequests), which would eat the poll budget below
@@ -167,7 +167,7 @@ static bool handshake(UdpSocket& socket, const NetAddress& server, uint32 protoc
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
             continue;
         }
-        NetReader reader(std::span<const uint8>(in, size));
+        NetReader reader(oc::span<const uint8>(in, size));
         const uint8 type = reader.read<uint8>() & 0x7f;
         if (type != Pkt::Challenge || reader.read<uint32>() != protocolId)
             continue;
@@ -204,7 +204,7 @@ static bool handshake(UdpSocket& socket, const NetAddress& server, uint32 protoc
 }
 
 // `seq` must advance or the receiver dedups the packet and the fuzzed bytes are never parsed
-static void sendPayload(UdpSocket& socket, const NetAddress& to, uint16 seq, std::span<const uint8> body)
+static void sendPayload(UdpSocket& socket, const NetAddress& to, uint16 seq, oc::span<const uint8> body)
 {
     uint8 packet[1500];
     NetWriter writer(packet);
@@ -303,7 +303,7 @@ static int fuzzHost(uint32 iterations, uint64 seed)
     server.config().maxPacketsPerUpdate = 100000000;
 
     // phase 1: everything an unauthenticated sender can reach
-    std::vector<uint8> buffer;
+    oc::vector<uint8> buffer;
     for (uint32 i = 0; i < iterations / 2; ++i)
     {
         fillFuzzed(rng, buffer, 1 + rng.below(1400));
@@ -396,7 +396,7 @@ static int fuzzGame(const NetAddress& target, uint32 iterations, uint64 seed)
 
     // Message ids from NetworkManager.cpp's ENetMsg. Hello(1) first so the server mints a client id
     // and the owner-gated handlers (Claim) are reachable at all.
-    std::vector<uint8> body;
+    oc::vector<uint8> body;
     uint16 seq = 1;
     {
         uint8 hello[8];
@@ -441,7 +441,7 @@ static int fuzzGame(const NetAddress& target, uint32 iterations, uint64 seed)
 
 int main(int argc, char* argv[])
 {
-    const std::string mode = argc > 1 ? argv[1] : "all";
+    const oc::string mode = argc > 1 ? argv[1] : "all";
     // fixed default seed: an unreproducible fuzzer finding is nearly worthless
     const uint64 seed = argc > 3 ? strtoull(argv[3], nullptr, 10) : 0x1234;
 

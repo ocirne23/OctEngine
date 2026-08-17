@@ -2,31 +2,31 @@ module Animation;
 
 import Core;
 
-AnimStateMachine::StateId AnimStateMachine::addClipState(const std::string& name, const AnimationClip* pClip)
+AnimStateMachine::StateId AnimStateMachine::addClipState(const oc::string& name, const AnimationClip* pClip)
 {
     const StateId id = (StateId)m_states.size();
     m_states.push_back(State{ name, pClip, nullptr, {} });
     return id;
 }
 
-AnimStateMachine::StateId AnimStateMachine::addBlendState(const std::string& name, const BlendSpace1D* pBlendSpace, const std::string& blendParam)
+AnimStateMachine::StateId AnimStateMachine::addBlendState(const oc::string& name, const BlendSpace1D* pBlendSpace, const oc::string& blendParam)
 {
     const StateId id = (StateId)m_states.size();
     m_states.push_back(State{ name, nullptr, pBlendSpace, blendParam });
     return id;
 }
 
-void AnimStateMachine::addTransition(StateId from, StateId to, std::vector<AnimCondition> conditions, float fadeSeconds, float exitTime)
+void AnimStateMachine::addTransition(StateId from, StateId to, oc::vector<AnimCondition> conditions, float fadeSeconds, float exitTime)
 {
-    m_transitions.push_back(Transition{ from, to, std::move(conditions), fadeSeconds, exitTime, false });
+    m_transitions.push_back(Transition{ from, to, oc::move(conditions), fadeSeconds, exitTime, false });
 }
 
-void AnimStateMachine::addAnyTransition(StateId to, std::vector<AnimCondition> conditions, float fadeSeconds, float exitTime)
+void AnimStateMachine::addAnyTransition(StateId to, oc::vector<AnimCondition> conditions, float fadeSeconds, float exitTime)
 {
-    m_transitions.push_back(Transition{ INVALID_STATE, to, std::move(conditions), fadeSeconds, exitTime, true });
+    m_transitions.push_back(Transition{ INVALID_STATE, to, oc::move(conditions), fadeSeconds, exitTime, true });
 }
 
-bool AnimStateMachine::conditionsMet(const std::vector<AnimCondition>& conds) const
+bool AnimStateMachine::conditionsMet(const oc::vector<AnimCondition>& conds) const
 {
     for (const AnimCondition& c : conds)
     {
@@ -118,8 +118,8 @@ void AnimStateMachine::update(float deltaSeconds)
     }
 }
 
-const std::string& AnimStateMachine::getCurrentStateName() const
+const oc::string& AnimStateMachine::getCurrentStateName() const
 {
-    static const std::string kNone = "<none>";
+    static const oc::string kNone = "<none>";
     return m_current != INVALID_STATE ? m_states[m_current].name : kNone;
 }

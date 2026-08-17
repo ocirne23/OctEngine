@@ -67,7 +67,7 @@ bool Buffer::upload(vk::DeviceSize dataSize, const void* data, vk::DeviceSize ds
     assert(dstOffset + dataSize <= m_size);
     if (m_properties & vk::MemoryPropertyFlagBits::eHostVisible)
     {
-        std::span<uint8> mapped = mapMemory(dstOffset, dataSize);
+        oc::span<uint8> mapped = mapMemory(dstOffset, dataSize);
         if (mapped.empty())
             return false;
         memcpy(mapped.data(), data, (size_t)dataSize);
@@ -99,7 +99,7 @@ bool Buffer::uploadBackingStore()
     assert(m_hasBackingStore && "uploadBackingStore() requires a buffer initialized with useBackingStore = true");
     if (!m_hasBackingStore || m_backingStore.empty())
         return true;
-    return upload(std::min((size_t)m_size, m_backingStore.size()), m_backingStore.data());
+    return upload(oc::min((size_t)m_size, m_backingStore.size()), m_backingStore.data());
 }
 
 vk::DeviceAddress Buffer::getDeviceAddress() const
@@ -107,7 +107,7 @@ vk::DeviceAddress Buffer::getDeviceAddress() const
     return Globals::device.getDevice().getBufferAddress(vk::BufferDeviceAddressInfo{ .buffer = m_buffer });
 }
 
-std::span<uint8> Buffer::mapMemory(uint64 offset, uint64 size)
+oc::span<uint8> Buffer::mapMemory(uint64 offset, uint64 size)
 {
     // Host-visible allocations are persistently mapped by VMA, so this just hands back a view into the
     // existing mapping. Device-local buffers have no mapped pointer.
@@ -116,7 +116,7 @@ std::span<uint8> Buffer::mapMemory(uint64 offset, uint64 size)
         assert(false && "Buffer is not host-visible / not mapped");
         return {};
     }
-    return std::span<uint8>((uint8*)m_mappedData + offset, (size_t)std::min(size, m_size - offset));
+    return oc::span<uint8>((uint8*)m_mappedData + offset, (size_t)oc::min(size, m_size - offset));
 }
 
 void Buffer::unmapMemory()

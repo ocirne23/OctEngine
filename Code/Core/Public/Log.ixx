@@ -15,7 +15,7 @@ export namespace Log
 	struct Message
 	{
 		Level       level;
-		std::string text;
+		oc::string text;
 	};
 
 	constexpr uint32 MaxMessages = 4096;
@@ -25,27 +25,27 @@ export namespace Log
 	namespace detail
 	{
 		inline std::mutex              g_mutex;
-		inline std::deque<Message>     g_messages;
+		inline oc::deque<Message>     g_messages;
 		inline uint32                  g_revision = 0;   // incremented on every add
 	}
 
 	// ---- write API ----------------------------------------------------------
 
-	inline void log(Level level, std::string_view text)
+	inline void log(Level level, oc::string_view text)
 	{
 		std::lock_guard lock(detail::g_mutex);
 		if (detail::g_messages.size() >= MaxMessages)
 			detail::g_messages.pop_front();
-		detail::g_messages.push_back({ level, std::string(text) });
+		detail::g_messages.push_back({ level, oc::string(text) });
 		++detail::g_revision;
 		printf("[%s] %.*s\n", level == Level::Verbose ? "V" : level == Level::Info ? "I" : level == Level::Warning ? "W" : "E",
 			static_cast<int>(text.size()), text.data());
 	}
 
-	inline void verbose(std::string_view text) { log(Level::Verbose, text); }
-	inline void info   (std::string_view text) { log(Level::Info,    text); }
-	inline void warning(std::string_view text) { log(Level::Warning, text); }
-	inline void error  (std::string_view text) { log(Level::Error,   text); }
+	inline void verbose(oc::string_view text) { log(Level::Verbose, text); }
+	inline void info   (oc::string_view text) { log(Level::Info,    text); }
+	inline void warning(oc::string_view text) { log(Level::Warning, text); }
+	inline void error  (oc::string_view text) { log(Level::Error,   text); }
 
 	// ---- read API (call from UI thread only) --------------------------------
 
@@ -56,7 +56,7 @@ export namespace Log
 		return detail::g_revision;
 	}
 
-	inline std::vector<Message> getMessages()
+	inline oc::vector<Message> getMessages()
 	{
 		std::lock_guard lock(detail::g_mutex);
 		return { detail::g_messages.begin(), detail::g_messages.end() };

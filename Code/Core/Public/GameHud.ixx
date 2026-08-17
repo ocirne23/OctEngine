@@ -18,14 +18,14 @@ import Core.glm;
 
 export struct HudSlot
 {
-	std::string label;
+	oc::string label;
 	int         count = 0; // > 0 draws a stack number, Minecraft-style
 	bool        used = false;
 };
 
 export struct HudBar
 {
-	std::string name; // key AND label
+	oc::string name; // key AND label
 	float       value = 0.0f;
 	float       maxValue = 1.0f;
 	glm::vec3   color = glm::vec3(1.0f);
@@ -33,7 +33,7 @@ export struct HudBar
 
 export struct HudCounter
 {
-	std::string name; // key AND label
+	oc::string name; // key AND label
 	float       value = 0.0f;
 	int         decimals = 0; // 0 = integer display
 	glm::vec3   color = glm::vec3(1.0f);
@@ -45,8 +45,8 @@ export struct HudCounter
 export struct HudWorldLabel
 {
 	glm::vec2   screenPos{};      // viewport-space anchor: bar centered on x, stacked down from y
-	std::string title;            // line above the bar (empty = none)
-	std::string info;             // lines below the bar, '\n'-separated (empty = none)
+	oc::string title;            // line above the bar (empty = none)
+	oc::string info;             // lines below the bar, '\n'-separated (empty = none)
 	float       barValue = 0.0f;
 	float       barMax = 0.0f;    // <= 0 = no bar
 	glm::vec3   barColor = glm::vec3(1.0f);
@@ -66,7 +66,7 @@ public:
 
 	// Grid shape + the key label drawn in each slot's corner. columns <= 0 = one row. Labels past
 	// the given span keep their defaults (1..9,0,-,=).
-	void setHotbarLayout(int columns, std::span<const std::string_view> keyLabels)
+	void setHotbarLayout(int columns, oc::span<const oc::string_view> keyLabels)
 	{
 		const std::lock_guard lock(m_mutex);
 		m_columns = glm::clamp(columns, 0, NumSlots);
@@ -76,7 +76,7 @@ public:
 
 	// The overlay reports where it drew each slot (viewport/window pixel space) -- or nothing when
 	// the hotbar was not drawn -- so clicks can be resolved against the hotbar.
-	void setSlotScreenRects(std::span<const glm::vec4> minMax) // per slot: (minX, minY, maxX, maxY)
+	void setSlotScreenRects(oc::span<const glm::vec4> minMax) // per slot: (minX, minY, maxX, maxY)
 	{
 		const std::lock_guard lock(m_mutex);
 		m_slotRectsValid = minMax.size() == (size_t)NumSlots;
@@ -85,7 +85,7 @@ public:
 				m_slotRects[i] = minMax[i];
 	}
 
-	void setSlot(int index, std::string_view label, int count)
+	void setSlot(int index, oc::string_view label, int count)
 	{
 		if (index < 0 || index >= NumSlots)
 			return;
@@ -124,7 +124,7 @@ public:
 		m_hotbarVisible = visible;
 	}
 
-	void setBar(std::string_view name, float value, float maxValue, const glm::vec3& color)
+	void setBar(oc::string_view name, float value, float maxValue, const glm::vec3& color)
 	{
 		const std::lock_guard lock(m_mutex);
 		HudBar& bar = findOrAdd(m_bars, name);
@@ -133,13 +133,13 @@ public:
 		bar.color = glm::clamp(color, 0.0f, 1.0f);
 	}
 
-	void removeBar(std::string_view name)
+	void removeBar(oc::string_view name)
 	{
 		const std::lock_guard lock(m_mutex);
-		std::erase_if(m_bars, [name](const HudBar& b) { return b.name == name; });
+		oc::erase_if(m_bars, [name](const HudBar& b) { return b.name == name; });
 	}
 
-	void setCounter(std::string_view name, float value, int decimals, const glm::vec3& color)
+	void setCounter(oc::string_view name, float value, int decimals, const glm::vec3& color)
 	{
 		const std::lock_guard lock(m_mutex);
 		HudCounter& counter = findOrAdd(m_counters, name);
@@ -148,17 +148,17 @@ public:
 		counter.color = glm::clamp(color, 0.0f, 1.0f);
 	}
 
-	void removeCounter(std::string_view name)
+	void removeCounter(oc::string_view name)
 	{
 		const std::lock_guard lock(m_mutex);
-		std::erase_if(m_counters, [name](const HudCounter& c) { return c.name == name; });
+		oc::erase_if(m_counters, [name](const HudCounter& c) { return c.name == name; });
 	}
 
 	// Replaces the whole world-label list (per-frame rebuild; pass {} to clear).
-	void setWorldLabels(std::vector<HudWorldLabel>&& labels)
+	void setWorldLabels(oc::vector<HudWorldLabel>&& labels)
 	{
 		const std::lock_guard lock(m_mutex);
-		m_worldLabels = std::move(labels);
+		m_worldLabels = oc::move(labels);
 	}
 
 	// Removes every slot, bar and counter (a script's OnDestroy typically calls this).
@@ -208,13 +208,13 @@ public:
 	struct Snapshot
 	{
 		HudSlot slots[NumSlots];
-		std::string keyLabels[NumSlots];
+		oc::string keyLabels[NumSlots];
 		int     columns = 0;
 		int     selectedSlot = 0;
 		bool    hotbarActive = false;
-		std::vector<HudBar> bars;
-		std::vector<HudCounter> counters;
-		std::vector<HudWorldLabel> worldLabels;
+		oc::vector<HudBar> bars;
+		oc::vector<HudCounter> counters;
+		oc::vector<HudWorldLabel> worldLabels;
 	};
 
 	// One copy per frame for the overlay (UI thread).
@@ -248,7 +248,7 @@ private:
 		return false;
 	}
 
-	template<class T> static T& findOrAdd(std::vector<T>& list, std::string_view name)
+	template<class T> static T& findOrAdd(oc::vector<T>& list, oc::string_view name)
 	{
 		for (T& entry : list)
 			if (entry.name == name)
@@ -260,15 +260,15 @@ private:
 
 	mutable std::mutex m_mutex;
 	HudSlot m_slots[NumSlots];
-	std::string m_keyLabels[NumSlots] = { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "=" };
+	oc::string m_keyLabels[NumSlots] = { "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "=" };
 	glm::vec4 m_slotRects[NumSlots] = {};
 	bool m_slotRectsValid = false;
 	int  m_columns = 0; // 0 = single row
 	int  m_selectedSlot = 0;
 	bool m_hotbarVisible = true; // an explicit off-switch; slots being assigned is what shows it
-	std::vector<HudBar> m_bars;
-	std::vector<HudCounter> m_counters;
-	std::vector<HudWorldLabel> m_worldLabels;
+	oc::vector<HudBar> m_bars;
+	oc::vector<HudCounter> m_counters;
+	oc::vector<HudWorldLabel> m_worldLabels;
 };
 
 export namespace Globals

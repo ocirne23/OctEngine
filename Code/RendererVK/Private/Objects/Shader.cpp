@@ -14,9 +14,9 @@ Shader::~Shader()
         Globals::device.getDevice().destroyShaderModule(m_shaderModule);
 }
 
-bool Shader::initializeFromFile(vk::ShaderStageFlagBits stage, const std::string& filePath, const std::vector<ShaderDefine>& defines, bool assertOnFailure)
+bool Shader::initializeFromFile(vk::ShaderStageFlagBits stage, const oc::string& filePath, const oc::vector<ShaderDefine>& defines, bool assertOnFailure)
 {
-    const std::string fileContent = FileSystem::readFileStr(filePath);
+    const oc::string fileContent = FileSystem::readFileStr(filePath);
     if (fileContent.empty())
     {
         assert((!assertOnFailure) && "Failed to open shader file");
@@ -26,9 +26,9 @@ bool Shader::initializeFromFile(vk::ShaderStageFlagBits stage, const std::string
     return initialize(stage, fileContent, filePath, defines, assertOnFailure);
 }
 
-bool Shader::initialize(vk::ShaderStageFlagBits stage, const std::string& shaderStr, const std::string& debugFilePath, const std::vector<ShaderDefine>& defines, bool assertOnFailure)
+bool Shader::initialize(vk::ShaderStageFlagBits stage, const oc::string& shaderStr, const oc::string& debugFilePath, const oc::vector<ShaderDefine>& defines, bool assertOnFailure)
 {
-    std::vector<unsigned int> spirv;
+    oc::vector<unsigned int> spirv;
     if (!GLSLtoSPV(stage, shaderStr, spirv, debugFilePath, defines))
     {
         assert((!assertOnFailure) && "Failed to compile shader SPIRV");
@@ -75,7 +75,7 @@ EShLanguage translateShaderStage(vk::ShaderStageFlagBits stage)
 class ShaderIncluder final : public glslang::TShader::Includer
 {
 public:
-    explicit ShaderIncluder(const std::string& rootFilePath)
+    explicit ShaderIncluder(const oc::string& rootFilePath)
     {
         m_rootDir = FileSystem::parentPath(rootFilePath);
     }
@@ -95,42 +95,42 @@ public:
 private:
     IncludeResult* resolve(const char* headerName, const char* includerName)
     {
-        std::vector<std::string> candidates;
+        oc::vector<oc::string> candidates;
         if (includerName != nullptr && includerName[0] != '\0')
         {
-            const std::string includerDir = FileSystem::parentPath(includerName);
+            const oc::string includerDir = FileSystem::parentPath(includerName);
             if (!includerDir.empty())
                 candidates.push_back(FileSystem::join(includerDir, headerName));
         }
         candidates.push_back(FileSystem::join(m_rootDir, headerName));
 
-        for (const std::string& candidate : candidates)
+        for (const oc::string& candidate : candidates)
         {
-            const std::string resolvedPath = FileSystem::normalize(candidate);
+            const oc::string resolvedPath = FileSystem::normalize(candidate);
             // Shader compiles run at startup and on F5 (an explicit user action) — main thread.
-            std::string content = FileSystem::readFileStr(resolvedPath, /*allowMainThread*/ true);
+            oc::string content = FileSystem::readFileStr(resolvedPath, /*allowMainThread*/ true);
             if (content.empty())
                 continue;
 
-            const std::string& stored = *m_contents.emplace_back(std::make_unique<std::string>(std::move(content)));
-            m_results.push_back(std::make_unique<IncludeResult>(resolvedPath, stored.data(), stored.size(), nullptr));
+            const oc::string& stored = *m_contents.emplace_back(oc::make_unique<oc::string>(oc::move(content)));
+            m_results.push_back(oc::make_unique<IncludeResult>(resolvedPath, stored.data(), stored.size(), nullptr));
             return m_results.back().get();
         }
         return nullptr;
     }
 
-    std::string m_rootDir;
-    std::vector<std::unique_ptr<std::string>> m_contents;
-    std::vector<std::unique_ptr<IncludeResult>> m_results;
+    oc::string m_rootDir;
+    oc::vector<oc::unique_ptr<oc::string>> m_contents;
+    oc::vector<oc::unique_ptr<IncludeResult>> m_results;
 };
 
 // RendererVKLayout constants every shader compile gets, so the GLSL never duplicates Layout.ixx values.
-static std::string buildLayoutPreamble()
+static oc::string buildLayoutPreamble()
 {
     using namespace RendererVKLayout;
-    std::string s;
+    oc::string s;
     const auto def = [&s](const char* name, auto value, const char* suffix = "") {
-        s += "#define "; s += name; s += " " + std::to_string(value) + suffix + "\n";
+        s += "#define "; s += name; s += " " + oc::to_string(value) + suffix + "\n";
     };
     def("NUM_SHADOW_CASCADES", NUM_SHADOW_CASCADES);
     def("GI_SH_STRIDE", GI_SH_STRIDE);
@@ -174,9 +174,9 @@ static std::string buildLayoutPreamble()
     return s;
 }
 
-static std::string buildPreamble(const std::vector<ShaderDefine>& defines)
+static oc::string buildPreamble(const oc::vector<ShaderDefine>& defines)
 {
-    std::string preamble = "#extension GL_ARB_shading_language_include : require\n";
+    oc::string preamble = "#extension GL_ARB_shading_language_include : require\n";
     preamble += buildLayoutPreamble();
     for (const ShaderDefine& define : defines)
     {
@@ -188,22 +188,22 @@ static std::string buildPreamble(const std::vector<ShaderDefine>& defines)
     return preamble;
 }
 
-bool Shader::GLSLtoSPV(const vk::ShaderStageFlagBits type, const std::string& source, std::vector<unsigned int>& spirv, const std::string& debugFilePath, const std::vector<ShaderDefine>& defines)
+bool Shader::GLSLtoSPV(const vk::ShaderStageFlagBits type, const oc::string& source, oc::vector<unsigned int>& spirv, const oc::string& debugFilePath, const oc::vector<ShaderDefine>& defines)
 {
-    std::string debugOutputFolder = "Local/";
+    oc::string debugOutputFolder = "Local/";
 	// make folder if it doesn't exist
 	if (!FileSystem::exists(debugOutputFolder, /*allowMainThread*/ true))
 		FileSystem::createDirectories(debugOutputFolder, true);
-    std::string spvBinPath = debugOutputFolder + debugFilePath + ".spv";
-	std::string preprocessFilePath = debugOutputFolder + debugFilePath;
-    const std::string preprocessFileFolder = FileSystem::parentPath(preprocessFilePath);
+    oc::string spvBinPath = debugOutputFolder + debugFilePath + ".spv";
+	oc::string preprocessFilePath = debugOutputFolder + debugFilePath;
+    const oc::string preprocessFileFolder = FileSystem::parentPath(preprocessFilePath);
     if (!FileSystem::exists(preprocessFileFolder, /*allowMainThread*/ true))
         FileSystem::createDirectories(preprocessFileFolder, true);
 
     // Enable SPIR-V and Vulkan rules when parsing GLSL
     EShMessages messages = (EShMessages)(EShMsgSpvRules | EShMsgVulkanRules);
     EShLanguage stage = translateShaderStage(type);
-    std::string preprocessed;
+    oc::string preprocessed;
     {
         glslang::TShader preprocessShader(stage);
         const char* shaderStrings[1] = { source.data() };
@@ -218,7 +218,7 @@ bool Shader::GLSLtoSPV(const vk::ShaderStageFlagBits type, const std::string& so
         preprocessShader.setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_3);
         preprocessShader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_6);
 
-        const std::string preamble = buildPreamble(defines);
+        const oc::string preamble = buildPreamble(defines);
         if (!preamble.empty())
             preprocessShader.setPreamble(preamble.c_str());
 
@@ -236,12 +236,12 @@ bool Shader::GLSLtoSPV(const vk::ShaderStageFlagBits type, const std::string& so
 
     // swap the line with #version with the top line in preprocessed
     size_t versionPos = preprocessed.find("#version");
-    if (versionPos != std::string::npos)
+    if (versionPos != oc::string::npos)
     {
         size_t lineEnd = preprocessed.find('\n', versionPos);
-        if (lineEnd != std::string::npos)
+        if (lineEnd != oc::string::npos)
         {
-            std::string versionLine = preprocessed.substr(versionPos, lineEnd - versionPos + 1);
+            oc::string versionLine = preprocessed.substr(versionPos, lineEnd - versionPos + 1);
             preprocessed.erase(versionPos, lineEnd - versionPos + 1);
             preprocessed = versionLine + preprocessed;
         }

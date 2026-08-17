@@ -76,7 +76,7 @@ vk::Semaphore StagingManager::upload(vk::Buffer dstBuffer, vk::DeviceSize dataSi
 
     assert(m_currentBufferOffset + dataSize <= m_mappedMemory.size());
     memcpy(m_mappedMemory.data() + m_currentBufferOffset, data, dataSize);
-    m_bufferCopyRegions.emplace_back(std::pair<vk::Buffer, vk::BufferCopy>{ dstBuffer, vk::BufferCopy{ .srcOffset = m_currentBufferOffset, .dstOffset = dstOffset, .size = dataSize } });
+    m_bufferCopyRegions.emplace_back(oc::pair<vk::Buffer, vk::BufferCopy>{ dstBuffer, vk::BufferCopy{ .srcOffset = m_currentBufferOffset, .dstOffset = dstOffset, .size = dataSize } });
     m_currentBufferOffset += dataSize;
 
     return m_semaphores[m_currentBuffer];
@@ -102,7 +102,7 @@ vk::Semaphore StagingManager::uploadImage(vk::Image dstImage, uint32 imageWidth,
 
     assert(m_currentBufferOffset + dataSize <= m_mappedMemory.size());
     memcpy(m_mappedMemory.data() + m_currentBufferOffset, data, dataSize);
-    m_imageCopyRegions.emplace_back(std::pair<vk::Image, vk::BufferImageCopy>{ dstImage, bufferImageCopy });
+    m_imageCopyRegions.emplace_back(oc::pair<vk::Image, vk::BufferImageCopy>{ dstImage, bufferImageCopy });
     m_currentBufferOffset += dataSize;
 
     return m_semaphores[m_currentBuffer];
@@ -134,10 +134,10 @@ vk::Semaphore StagingManager::uploadImageAndGenerateMipMaps(vk::Image image, uin
     return m_semaphores[m_currentBuffer];
 }
 
-vk::Semaphore StagingManager::copyImageMips(vk::Image srcImage, vk::Image dstImage, uint32 dstBaseMip, std::vector<vk::ImageCopy>&& regions)
+vk::Semaphore StagingManager::copyImageMips(vk::Image srcImage, vk::Image dstImage, uint32 dstBaseMip, oc::vector<vk::ImageCopy>&& regions)
 {
     assert(!regions.empty());
-    m_imageMipCopyList.push_back(ImageMipCopy{ srcImage, dstImage, dstBaseMip, std::move(regions) });
+    m_imageMipCopyList.push_back(ImageMipCopy{ srcImage, dstImage, dstBaseMip, oc::move(regions) });
     return m_semaphores[m_currentBuffer];
 }
 
@@ -225,7 +225,7 @@ vk::Semaphore StagingManager::update()
         // this queue (fragment forward/G-buffer/shadow + compute GI/RTAO, incl. their ray queries). It
         // is never transitioned back — nothing samples it after this frame's descriptor swap, and it is
         // deferred-destroyed by the TextureStreamer.
-        std::array<vk::ImageMemoryBarrier2, 2> preCopyBarriers{
+        oc::array<vk::ImageMemoryBarrier2, 2> preCopyBarriers{
             vk::ImageMemoryBarrier2{
                 .srcStageMask = vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader,
                 .srcAccessMask = vk::AccessFlagBits2::eShaderSampledRead,

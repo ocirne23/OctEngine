@@ -120,7 +120,7 @@ export namespace Procedural
 		// and one per tile: a terrain-data cascade is 512x512 texels resolving to a couple of dozen tiles, so
 		// a point-at-a-time loop means a quarter-million lock/unlock pairs contending with the mesh worker.
 		virtual void sampleGrid(double originX, double originZ, double step, uint32 resX, uint32 resZ,
-		                        std::span<TerrainPoint> out, ESampleDetail detail = ESampleDetail::Full) const = 0;
+		                        oc::span<TerrainPoint> out, ESampleDetail detail = ESampleDetail::Full) const = 0;
 
 		// Terrain surface height in world meters (Y).
 		virtual float sampleHeight(double worldX, double worldZ) const = 0;

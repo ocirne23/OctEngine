@@ -8,9 +8,9 @@ export struct DescriptorSetUpdateInfo
     uint32 binding;
     uint32 startIdx = 0;
     vk::DescriptorType type;
-    std::vector<vk::DescriptorBufferInfo> bufferInfos;
-    std::vector<vk::DescriptorImageInfo> imageInfos;
-    //std::variant<vk::DescriptorBufferInfo, vk::DescriptorImageInfo> info;
+    oc::vector<vk::DescriptorBufferInfo> bufferInfos;
+    oc::vector<vk::DescriptorImageInfo> imageInfos;
+    //oc::variant<vk::DescriptorBufferInfo, vk::DescriptorImageInfo> info;
 };
 
 export class CommandBuffer final
@@ -32,17 +32,17 @@ public:
     void submitGraphics(vk::Fence fence = VK_NULL_HANDLE);
     void addWaitSemaphore(vk::Semaphore semaphore, vk::PipelineStageFlags waitStageFlags) { m_waitSemaphores.push_back(semaphore); m_waitStages.push_back(waitStageFlags); }
     void addSignalSemaphore(vk::Semaphore semaphore) { m_signalSemaphores.push_back(semaphore); }
-    const std::vector<vk::Semaphore>& getWaitSemaphores() const { return m_waitSemaphores; }
-    const std::vector<vk::Semaphore>& getSignalSemaphores() const { return m_signalSemaphores; }
+    const oc::vector<vk::Semaphore>& getWaitSemaphores() const { return m_waitSemaphores; }
+    const oc::vector<vk::Semaphore>& getSignalSemaphores() const { return m_signalSemaphores; }
     void setWaitStage(vk::PipelineStageFlags2 stage) { m_waitStage = stage; }
-    void cmdUpdateDescriptorSets(vk::PipelineLayout pipelineLayout, vk::PipelineBindPoint bindPoint, vk::DescriptorSet descriptorSet, const std::span<DescriptorSetUpdateInfo>& updateInfo);
+    void cmdUpdateDescriptorSets(vk::PipelineLayout pipelineLayout, vk::PipelineBindPoint bindPoint, vk::DescriptorSet descriptorSet, const oc::span<DescriptorSetUpdateInfo>& updateInfo);
 
 private:
 
     vk::CommandBuffer m_commandBuffer;
     bool m_hasRecorded = false;
-    std::vector<vk::Semaphore> m_signalSemaphores;
-    std::vector<vk::Semaphore> m_waitSemaphores;
-    std::vector<vk::PipelineStageFlags> m_waitStages;
+    oc::vector<vk::Semaphore> m_signalSemaphores;
+    oc::vector<vk::Semaphore> m_waitSemaphores;
+    oc::vector<vk::PipelineStageFlags> m_waitStages;
     vk::PipelineStageFlags2 m_waitStage = vk::PipelineStageFlagBits2::eNone;
 };

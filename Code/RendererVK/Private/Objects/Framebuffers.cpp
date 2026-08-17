@@ -44,7 +44,7 @@ bool Framebuffers::initialize(const RenderPass& renderPass, const SwapChain& swa
         assert(false && "Failed to get swapchain images");
         return false;
     }
-    std::vector<vk::Image> images = swapchainImagesResult.value;
+    oc::vector<vk::Image> images = swapchainImagesResult.value;
     m_imageViews.reserve(images.size());
     for (const vk::Image& image : images)
     {
@@ -113,7 +113,7 @@ bool Framebuffers::initialize(const RenderPass& renderPass, const SwapChain& swa
         return false;
     }
     m_depthImageView = createDepthImageViewResult.value;
-    std::array<vk::ImageView, 2> attachments;
+    oc::array<vk::ImageView, 2> attachments;
     attachments[1] = createDepthImageViewResult.value;
     m_framebuffers.reserve(m_imageViews.size());
     for (size_t i = 0; i < m_imageViews.size(); i++)

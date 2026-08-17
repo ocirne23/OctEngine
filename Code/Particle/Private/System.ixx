@@ -52,11 +52,11 @@ public:
     void update(Renderer& renderer, float deltaSec);
 
     // Cached .pfx load (path relative to Assets/); nullptr + log on failure.
-    const ParticleEffectDesc* getEffectDesc(const std::string& path);
-    void invalidateEffect(const std::string& path); // next getEffectDesc reloads from disk
+    const ParticleEffectDesc* getEffectDesc(const oc::string& path);
+    void invalidateEffect(const oc::string& path); // next getEffectDesc reloads from disk
 
     // Instantiates an effect (by cached .pfx path or an in-code desc, which is copied).
-    ParticleEffect createEffect(const std::string& pfxPath, const glm::vec3& pos = glm::vec3(0.0f), const glm::quat& rot = glm::quat(1, 0, 0, 0));
+    ParticleEffect createEffect(const oc::string& pfxPath, const glm::vec3& pos = glm::vec3(0.0f), const glm::quat& rot = glm::quat(1, 0, 0, 0));
     ParticleEffect createEffect(const ParticleEffectDesc& desc, const glm::vec3& pos = glm::vec3(0.0f), const glm::quat& rot = glm::quat(1, 0, 0, 0));
 
     // Projects a decal onto a surface (pos = hit point, normal = surface normal). Fire-and-forget:
@@ -87,8 +87,8 @@ private:
         glm::vec3 velocity{ 0.0f };
         bool emitting = true;
         bool pendingBurst = false;
-        std::shared_ptr<const ParticleEffectDesc> desc; // shared so cache invalidation can't dangle
-        std::vector<EmitterInstance> emitters;          // parallel to desc->emitters
+        oc::shared_ptr<const ParticleEffectDesc> desc; // shared so cache invalidation can't dangle
+        oc::vector<EmitterInstance> emitters;          // parallel to desc->emitters
     };
     struct DecalInstance
     {
@@ -99,15 +99,15 @@ private:
         float fadeOutTime = 1.0f;
     };
 
-    ParticleEffect createEffectInstance(std::shared_ptr<const ParticleEffectDesc> desc, const glm::vec3& pos, const glm::quat& rot);
+    ParticleEffect createEffectInstance(oc::shared_ptr<const ParticleEffectDesc> desc, const glm::vec3& pos, const glm::quat& rot);
     EffectInstance* findEffect(uint64 id);
     void destroyEffect(uint64 id);
-    uint16 getTexture(const std::string& path, bool sRGB);
+    uint16 getTexture(const oc::string& path, bool sRGB);
 
-    std::vector<EffectInstance> m_effects;
-    std::vector<DecalInstance> m_decals;
-    std::unordered_map<std::string, std::shared_ptr<const ParticleEffectDesc>> m_effectCache;
-    std::unordered_map<std::string, uint16> m_textureCache;
+    oc::vector<EffectInstance> m_effects;
+    oc::vector<DecalInstance> m_decals;
+    oc::unordered_map<oc::string, oc::shared_ptr<const ParticleEffectDesc>> m_effectCache;
+    oc::unordered_map<oc::string, uint16> m_textureCache;
     uint64 m_nextEffectId = 1;
     uint32 m_nextDecalId = 1;
     uint32 m_rngState = 0x12345678;

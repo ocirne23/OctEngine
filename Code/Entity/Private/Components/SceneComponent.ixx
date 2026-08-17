@@ -14,15 +14,15 @@ export struct SceneComponent
     {
         struct ChildSpawnInfo
         {
-            std::shared_ptr<const EntitySpawnTemplate> tmpl;
+            oc::shared_ptr<const EntitySpawnTemplate> tmpl;
             Transform localTransform;                  // placement composed onto the parent's spawn transform
-            std::string name;                          // name override, empty = use the template's
+            oc::string name;                          // name override, empty = use the template's
             bool enabled = true;                       // reference-site "Enabled false" (a prefab reference has no template of its own to carry it)
         };
-        std::vector<ChildSpawnInfo> children;
+        oc::vector<ChildSpawnInfo> children;
     };
 
-    std::vector<EntityPtr> children;
+    oc::vector<EntityPtr> children;
 
     // treeCursor: children carve their slices from the tree's single spawn allocation (see Entity::create)
     void spawn(Entity& entity, const SpawnInfo& info, const Transform& base, uint8*& treeCursor);

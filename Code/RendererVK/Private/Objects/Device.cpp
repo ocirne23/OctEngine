@@ -44,17 +44,17 @@ bool Device::initialize()
     printf("Device: %s\n", m_physicalDevice.getProperties().deviceName.data());
     m_nonCoherentAtomSize = m_physicalDevice.getProperties().limits.nonCoherentAtomSize;
 
-    std::vector<const char*> deviceExtensions{
+    oc::vector<const char*> deviceExtensions{
         vk::KHRSwapchainExtensionName, vk::KHRPushDescriptorExtensionName, vk::KHRMaintenance5ExtensionName, vk::EXTDeviceGeneratedCommandsExtensionName,
         vk::KHRAccelerationStructureExtensionName, vk::KHRRayQueryExtensionName, vk::KHRDeferredHostOperationsExtensionName, vk::KHRShaderNonSemanticInfoExtensionName,
         vk::EXTShaderViewportIndexLayerExtensionName };
 
     // Device extensions the OpenXR runtime requires (none when VR is disabled). Kept alive for the
     // duration of this call; skip duplicates already in the list above.
-    std::vector<std::string> xrExtensions;
+    oc::vector<oc::string> xrExtensions;
     if (vrEnabled)
         xrExtensions = Globals::openXR.getRequiredVulkanDeviceExtensions();
-    for (const std::string& ext : xrExtensions)
+    for (const oc::string& ext : xrExtensions)
     {
         bool alreadyAdded = false;
         for (const char* have : deviceExtensions)
@@ -78,7 +78,7 @@ bool Device::initialize()
     }
 
     m_graphicsQueueIndex = UINT32_MAX;
-    std::vector<vk::QueueFamilyProperties> queueFamilyProperties = m_physicalDevice.getQueueFamilyProperties();
+    oc::vector<vk::QueueFamilyProperties> queueFamilyProperties = m_physicalDevice.getQueueFamilyProperties();
     for (uint32 i = 0; i < queueFamilyProperties.size(); i++)
     {
         if (queueFamilyProperties[i].queueFlags & vk::QueueFlagBits::eGraphics)
@@ -104,10 +104,10 @@ bool Device::initialize()
     }
 
     const float queuePriorities[] = { 1.0f };
-    std::array<vk::DeviceQueueCreateInfo, 1> deviceQueueCreateInfos{
+    oc::array<vk::DeviceQueueCreateInfo, 1> deviceQueueCreateInfos{
         vk::DeviceQueueCreateInfo {.queueFamilyIndex = m_graphicsQueueIndex, .queueCount = 1, .pQueuePriorities = queuePriorities }
     };
-    //const std::vector<const char*>& enabledLayers = Globals::instance.getEnabledLayers();
+    //const oc::vector<const char*>& enabledLayers = Globals::instance.getEnabledLayers();
 
     vk::PhysicalDeviceFeatures2 deviceFeatures;
     m_physicalDevice.getFeatures2(&deviceFeatures);
@@ -260,7 +260,7 @@ bool Device::initialize()
         return false;
     }
 
-    std::vector<vk::Format> candidates = {
+    oc::vector<vk::Format> candidates = {
          vk::Format::eUndefined                                ,
          vk::Format::eR4G4UnormPack8                           ,
          vk::Format::eR4G4B4A4UnormPack16                      ,
@@ -480,7 +480,7 @@ void Device::destroy()
     m_device = nullptr;
 }
 
-bool Device::supportsExtensions(std::vector<const char*> extensions)
+bool Device::supportsExtensions(oc::vector<const char*> extensions)
 {
     auto enumResult = m_physicalDevice.enumerateDeviceExtensionProperties();
     if (enumResult.result != vk::Result::eSuccess)
@@ -488,7 +488,7 @@ bool Device::supportsExtensions(std::vector<const char*> extensions)
         assert(false && "Could not enumerate device extension properties\n");
         return false;
     }
-    std::vector<vk::ExtensionProperties> extensionProperties = enumResult.value;
+    oc::vector<vk::ExtensionProperties> extensionProperties = enumResult.value;
     for (const char* deviceExtension : extensions)
     {
         bool found = false;

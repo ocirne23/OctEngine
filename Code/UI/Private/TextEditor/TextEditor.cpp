@@ -11,7 +11,7 @@ static int textResizeCallback(ImGuiInputTextCallbackData* data)
 {
 	if (data->EventFlag == ImGuiInputTextFlags_CallbackResize)
 	{
-		std::string* str = static_cast<std::string*>(data->UserData);
+		oc::string* str = static_cast<oc::string*>(data->UserData);
 		assert(data->Buf == str->c_str());
 		str->resize(static_cast<size_t>(data->BufTextLen));
 		data->Buf = str->data();
@@ -19,7 +19,7 @@ static int textResizeCallback(ImGuiInputTextCallbackData* data)
 	return 0;
 }
 
-void TextEditor::requestOpen(const std::string& path)
+void TextEditor::requestOpen(const oc::string& path)
 {
 	if (path.empty() || (m_hasDoc && path == m_path))
 		return; // already the active document
@@ -49,7 +49,7 @@ void TextEditor::requestNew()
 	}
 }
 
-void TextEditor::doOpen(const std::string& path)
+void TextEditor::doOpen(const oc::string& path)
 {
 	m_text         = FileSystem::readFileStr(path);
 	m_baselineText = m_text;
@@ -75,7 +75,7 @@ void TextEditor::save()
 	saveAs(m_path);
 }
 
-void TextEditor::saveAs(const std::string& path)
+void TextEditor::saveAs(const oc::string& path)
 {
 	if (!FileSystem::writeFileStr(path, m_text))
 		return;
@@ -95,9 +95,9 @@ void TextEditor::renderToolbar()
 		ImGui::OpenPopup("Save Text As");
 
 	ImGui::SameLine();
-	const std::string label = m_hasDoc
-		? (m_path.empty() ? std::string("(unsaved)") : FileSystem::filename(m_path))
-		: std::string("(no file open — double-click a .txt in Content)");
+	const oc::string label = m_hasDoc
+		? (m_path.empty() ? oc::string("(unsaved)") : FileSystem::filename(m_path))
+		: oc::string("(no file open — double-click a .txt in Content)");
 	ImGui::TextDisabled("%s%s", label.c_str(), isDirty() ? " *" : "");
 
 	renderSaveAsPopup();
@@ -120,7 +120,7 @@ void TextEditor::renderSaveAsPopup()
 	ImGui::SameLine();
 	if ((ImGui::Button("Save##ted_as") || entered) && m_saveAsBuf[0] != '\0')
 	{
-		std::string name = m_saveAsBuf;
+		oc::string name = m_saveAsBuf;
 		if (!name.ends_with(".txt"))
 			name += ".txt";
 		saveAs(name);
@@ -140,7 +140,7 @@ void TextEditor::renderUnsavedPopup()
 		return;
 
 	ImGui::Text("'%s' has unsaved changes.",
-		(m_path.empty() ? std::string("(unsaved)") : FileSystem::filename(m_path)).c_str());
+		(m_path.empty() ? oc::string("(unsaved)") : FileSystem::filename(m_path)).c_str());
 	if (m_pendingSwitch == PendingSwitch::OpenPath)
 		ImGui::Text("Switch to '%s'?", FileSystem::filename(m_pendingSwitchPath).c_str());
 	else
@@ -208,7 +208,7 @@ void TextEditor::render()
 	const ImVec2 textAreaMax = ImVec2(textAreaMin.x + avail.x, textAreaMin.y + avail.y);
 	if (io.KeyCtrl && io.MouseWheel != 0.0f && ImGui::IsMouseHoveringRect(textAreaMin, textAreaMax))
 	{
-		m_fontScale   = std::clamp(m_fontScale + io.MouseWheel * 0.1f, 0.3f, 4.0f);
+		m_fontScale   = oc::clamp(m_fontScale + io.MouseWheel * 0.1f, 0.3f, 4.0f);
 		io.MouseWheel = 0.0f;
 	}
 

@@ -76,7 +76,7 @@ void ProfilerPanel::prepare()
         const uint64 newest = frameCount - 3;
         if (m_autoPauseChecked < newest)
         {
-            const uint64 first = std::max<uint64>(m_autoPauseChecked + 1, newest > 64 ? newest - 64 : 1);
+            const uint64 first = oc::max<uint64>(m_autoPauseChecked + 1, newest > 64 ? newest - 64 : 1);
             for (uint64 f = first; f <= newest; ++f)
             {
                 if (profiler.isFrameGap(f))
@@ -165,13 +165,13 @@ void ProfilerPanel::refresh()
     double hiMs = (double)(m_windowEnd - m_windowStart) * profiler.getMsPerTick();
     if (m_userView)
     {
-        loMs = std::min(loMs, m_viewMin);
-        hiMs = std::max(hiMs, m_viewMax);
+        loMs = oc::min(loMs, m_viewMin);
+        hiMs = oc::max(hiMs, m_viewMax);
     }
     const double ticksPerMs = profiler.getTicksPerMs();
     const int64 lo = (int64)m_windowStart + (int64)(loMs * ticksPerMs);
-    m_snapshotStart = (uint64)std::max<int64>(lo, 0);
-    m_snapshotEnd = m_windowStart + (uint64)(std::max(hiMs, 0.0) * ticksPerMs);
+    m_snapshotStart = (uint64)oc::max<int64>(lo, 0);
+    m_snapshotEnd = m_windowStart + (uint64)(oc::max(hiMs, 0.0) * ticksPerMs);
     snapshotTracks();
 }
 
@@ -201,7 +201,7 @@ void ProfilerPanel::snapshotTracks()
     for (TrackView& shown : m_tracks)
         if (shown.trackIdx < numTracks)
         {
-            m_trackScratch[shown.trackIdx].records = std::move(shown.records);
+            m_trackScratch[shown.trackIdx].records = oc::move(shown.records);
             m_trackScratch[shown.trackIdx].records.clear();
         }
     m_tracks.clear();
@@ -230,16 +230,16 @@ void ProfilerPanel::snapshotTracks()
 
         // Chronological order (children after their parent at equal start) - the stats pass and the
         // hover hit test rely on it.
-        std::sort(view.records.begin(), view.records.end(), [](const ProfileRecord& a, const ProfileRecord& b)
+        oc::sort(view.records.begin(), view.records.end(), [](const ProfileRecord& a, const ProfileRecord& b)
             { return a.start != b.start ? a.start < b.start : a.depth < b.depth; });
 
         for (const ProfileRecord& record : view.records)
         {
-            view.maxDepth = std::max(view.maxDepth, (uint32)record.depth);
+            view.maxDepth = oc::max(view.maxDepth, (uint32)record.depth);
             if (record.depth == 0)
             {
-                const uint64 clampedStart = std::max(record.start, m_windowStart);
-                const uint64 clampedEnd = std::min(record.end, m_windowEnd);
+                const uint64 clampedStart = oc::max(record.start, m_windowStart);
+                const uint64 clampedEnd = oc::min(record.end, m_windowEnd);
                 if (clampedEnd > clampedStart)
                     view.busyMs += (double)(clampedEnd - clampedStart) * msPerTick;
             }
@@ -257,18 +257,18 @@ void ProfilerPanel::snapshotTracks()
         // vertical offsets between tracks stay constant instead of shifting when one frame nests
         // deeper than its neighbors.
         uint32& cachedMaxDepth = m_trackMaxDepth[view.trackIdx];
-        cachedMaxDepth = std::max(cachedMaxDepth, view.maxDepth);
+        cachedMaxDepth = oc::max(cachedMaxDepth, view.maxDepth);
         view.maxDepth = cachedMaxDepth;
-        m_tracks.push_back(std::move(view));
+        m_tracks.push_back(oc::move(view));
     }
-    std::sort(m_tracks.begin(), m_tracks.end(), [](const TrackView& a, const TrackView& b)
+    oc::sort(m_tracks.begin(), m_tracks.end(), [](const TrackView& a, const TrackView& b)
         { return a.sortKey != b.sortKey ? a.sortKey < b.sortKey : a.trackIdx < b.trackIdx; });
 
     // Uncapped fps inputs: the displayed frame's "main loop" (Main track, depth 0 — the fence wait
     // sits OUTSIDE it, so this is pure CPU work) and "GPU Frame" (GPU track). A scope's record can
     // straddle the frame marks (the GPU frame lands a slot late), so per track take the matching
     // depth-0 record with the largest overlap with the frame window and use its FULL duration.
-    const auto scopeMs = [&](std::string_view scopeName) -> double
+    const auto scopeMs = [&](oc::string_view scopeName) -> double
     {
         uint64 bestOverlap = 0;
         double bestMs = 0.0;
@@ -277,8 +277,8 @@ void ProfilerPanel::snapshotTracks()
             {
                 if (record.depth != 0 || !record.name || scopeName != record.name)
                     continue;
-                const uint64 lo = std::max(record.start, m_windowStart);
-                const uint64 hi = std::min(record.end, m_windowEnd);
+                const uint64 lo = oc::max(record.start, m_windowStart);
+                const uint64 hi = oc::min(record.end, m_windowEnd);
                 const uint64 overlap = hi > lo ? hi - lo : 0;
                 if (overlap > bestOverlap)
                 {
@@ -290,7 +290,7 @@ void ProfilerPanel::snapshotTracks()
     };
     m_uncappedMainMs = scopeMs("main loop");
     m_uncappedGpuMs = scopeMs("GPU Frame");
-    const double uncappedMs = std::max(m_uncappedMainMs, m_uncappedGpuMs);
+    const double uncappedMs = oc::max(m_uncappedMainMs, m_uncappedGpuMs);
     if (m_uncappedEmaFrame != m_displayedFrame) // feed once per displayed frame, not per UI redraw
     {
         m_uncappedEmaFrame = m_displayedFrame;
@@ -325,7 +325,7 @@ void ProfilerPanel::drawToolbar()
     ImGui::SameLine();
     ImGui::Text("%.2f ms (%.0f fps)", frameMs, frameMs > 0.0 ? 1000.0 / frameMs : 0.0);
     // Uncapped: exact for the displayed frame when paused, a short EMA live (per-frame values flicker).
-    const double uncappedMs = m_paused ? std::max(m_uncappedMainMs, m_uncappedGpuMs) : m_uncappedEmaMs;
+    const double uncappedMs = m_paused ? oc::max(m_uncappedMainMs, m_uncappedGpuMs) : m_uncappedEmaMs;
     ImGui::SameLine();
     ImGui::TextColored(m_uncappedMainMs >= m_uncappedGpuMs ? ImVec4(0.75f, 0.85f, 1.0f, 1.0f) : ImVec4(0.6f, 1.0f, 0.6f, 1.0f),
         "|  Uncapped %.0f fps (%.2f ms, %s-bound)", uncappedMs > 0.0 ? 1000.0 / uncappedMs : 0.0, uncappedMs,
@@ -369,7 +369,7 @@ void ProfilerPanel::drawFrameGraph()
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     const ImVec2 canvasPos = ImGui::GetCursorScreenPos();
-    const float width = std::max(ImGui::GetContentRegionAvail().x, 60.0f);
+    const float width = oc::max(ImGui::GetContentRegionAvail().x, 60.0f);
     ImGui::InvisibleButton("##frameGraph", ImVec2(width, kFrameGraphHeight));
     const bool hovered = ImGui::IsItemHovered();
 
@@ -378,14 +378,14 @@ void ProfilerPanel::drawFrameGraph()
     const float barWidth = 3.0f;
     const uint32 numBars = (uint32)(width / barWidth);
     const uint64 historyLimit = Profiler::FRAME_HISTORY - 2;
-    const uint64 oldest = latest > std::min<uint64>(numBars, historyLimit) ? latest - std::min<uint64>(numBars, historyLimit) : 1;
+    const uint64 oldest = latest > oc::min<uint64>(numBars, historyLimit) ? latest - oc::min<uint64>(numBars, historyLimit) : 1;
 
     // Scale to the worst REAL frame in view (min 20ms so a smooth 60fps doesn't fill the graph).
     // Pause-gap pseudo-frames span the whole paused stretch and would compress everything else.
     double maxMs = 20.0;
     for (uint64 f = oldest; f <= latest; ++f)
         if (!profiler.isFrameGap(f))
-            maxMs = std::max(maxMs, (double)(profiler.getFrameMark(f) - profiler.getFrameMark(f - 1)) * msPerTick);
+            maxMs = oc::max(maxMs, (double)(profiler.getFrameMark(f) - profiler.getFrameMark(f - 1)) * msPerTick);
 
     // 60fps reference line
     const float refY = canvasPos.y + kFrameGraphHeight * (1.0f - (float)(16.667 / maxMs));
@@ -404,7 +404,7 @@ void ProfilerPanel::drawFrameGraph()
             continue;
         }
         const double ms = (double)(profiler.getFrameMark(f) - profiler.getFrameMark(f - 1)) * msPerTick;
-        const float h = kFrameGraphHeight * (float)std::min(ms / maxMs, 1.0);
+        const float h = kFrameGraphHeight * (float)oc::min(ms / maxMs, 1.0);
         uint32 color = 0xFF50C878;                    // green
         if (ms > 33.4)      color = 0xFF5060E8;       // red
         else if (ms > 16.9) color = 0xFF50C8E8;       // yellow
@@ -442,12 +442,12 @@ void ProfilerPanel::drawTimeline()
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     const ImVec2 canvasPos = ImGui::GetCursorScreenPos();
     const ImVec2 avail = ImGui::GetContentRegionAvail();
-    const float width = std::max(avail.x, 60.0f);
+    const float width = oc::max(avail.x, 60.0f);
 
     float totalHeight = 14.0f; // time ruler strip
     for (const TrackView& view : m_tracks)
         totalHeight += kTrackHeaderHeight + kTrackPadding + (m_collapsed[view.trackIdx] ? 0.0f : (float)(view.maxDepth + 1) * kRowHeight);
-    const float contentHeight = std::max(totalHeight, avail.y);
+    const float contentHeight = oc::max(totalHeight, avail.y);
 
     ImGui::InvisibleButton("##timelineCanvas", ImVec2(width, contentHeight));
     const bool hovered = ImGui::IsItemHovered();
@@ -482,11 +482,11 @@ void ProfilerPanel::drawTimeline()
     if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
         m_userView = false;
     // clamp: maxSpan equals the full [minView, maxView] range, so the viewMin bounds can never
-    // invert (std::clamp with hi < lo is UB and made wide zoom-outs snap/oscillate)
+    // invert (oc::clamp with hi < lo is UB and made wide zoom-outs snap/oscillate)
     {
         const double maxView = windowMs * 30.0; // +-30 frames of context around the displayed one
-        const double span = std::clamp(m_viewMax - m_viewMin, kMinViewSpanMs, maxView * 2.0);
-        m_viewMin = std::clamp(m_viewMin, -maxView, maxView - span);
+        const double span = oc::clamp(m_viewMax - m_viewMin, kMinViewSpanMs, maxView * 2.0);
+        m_viewMin = oc::clamp(m_viewMin, -maxView, maxView - span);
         m_viewMax = m_viewMin + span;
         pxPerMs = width / span;
     }
@@ -561,9 +561,9 @@ void ProfilerPanel::drawTimeline()
             float x1 = xOfTick(record.end);
             if (x1 < canvasPos.x || x0 > canvasPos.x + width)
                 continue;
-            x0 = std::max(x0, canvasPos.x - 2.0f);
-            x1 = std::min(x1, canvasPos.x + width + 2.0f);
-            const float barWidth = std::max(x1 - x0, 0.75f);
+            x0 = oc::max(x0, canvasPos.x - 2.0f);
+            x1 = oc::min(x1, canvasPos.x + width + 2.0f);
+            const float barWidth = oc::max(x1 - x0, 0.75f);
             const float barY = laneTop + (float)record.depth * kRowHeight;
 
             const uint32 color = profileCategoryColor((EProfileCategory)record.category);
@@ -617,12 +617,12 @@ void ProfilerPanel::aggregateStats()
 
     // ---- aggregate the displayed window ----
     m_statsRows.clear();
-    std::unordered_map<const char*, uint32> rowByName;
+    oc::unordered_map<const char*, uint32> rowByName;
     for (int t = 0; t < (int)m_tracks.size(); ++t)
     {
         if (m_trackFilter >= 0 && m_trackFilter != t)
             continue;
-        const std::vector<ProfileRecord>& records = m_tracks[t].records; // sorted by (start, depth)
+        const oc::vector<ProfileRecord>& records = m_tracks[t].records; // sorted by (start, depth)
         const uint32 numRecords = (uint32)records.size();
         m_childSumScratch.assign(numRecords, 0);
         int32 lastAtDepth[kMaxStatDepth];
@@ -632,7 +632,7 @@ void ProfilerPanel::aggregateStats()
         for (uint32 i = 0; i < numRecords; ++i)
         {
             const ProfileRecord& record = records[i];
-            const uint32 depth = std::min((uint32)record.depth, kMaxStatDepth - 1);
+            const uint32 depth = oc::min((uint32)record.depth, kMaxStatDepth - 1);
             if (depth > 0 && lastAtDepth[depth - 1] >= 0)
             {
                 const ProfileRecord& parent = records[lastAtDepth[depth - 1]];
@@ -665,7 +665,7 @@ void ProfilerPanel::aggregateStats()
             }
             StatsRow& row = m_statsRows[rowIdx];
             const uint64 duration = record.end - record.start;
-            const uint64 childSum = std::min(m_childSumScratch[i], duration);
+            const uint64 childSum = oc::min(m_childSumScratch[i], duration);
             row.calls++;
             row.totalMs += (double)duration * msPerTick;
             row.selfMs += (double)(duration - childSum) * msPerTick;
@@ -694,7 +694,7 @@ void ProfilerPanel::aggregateStats()
     // ---- name filter ----
     if (m_nameFilter[0] != 0)
     {
-        std::erase_if(m_statsRows, [this](const StatsRow& row)
+        oc::erase_if(m_statsRows, [this](const StatsRow& row)
             {
                 // case-insensitive substring
                 const char* haystack = row.name;
@@ -758,7 +758,7 @@ void ProfilerPanel::drawStatsTable()
     {
         const ImGuiTableColumnSortSpecs& spec = sortSpecs->Specs[0];
         const bool ascending = spec.SortDirection == ImGuiSortDirection_Ascending;
-        std::sort(m_statsRows.begin(), m_statsRows.end(), [&](const StatsRow& a, const StatsRow& b)
+        oc::sort(m_statsRows.begin(), m_statsRows.end(), [&](const StatsRow& a, const StatsRow& b)
             {
                 int compare = 0;
                 switch (spec.ColumnIndex)

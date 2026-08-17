@@ -29,9 +29,9 @@ namespace
 
     uint32 scaleColor(uint32 abgr, float scale)
     {
-        const uint32 r = std::min(255u, (uint32)((abgr & 0xFF) * scale));
-        const uint32 g = std::min(255u, (uint32)(((abgr >> 8) & 0xFF) * scale));
-        const uint32 b = std::min(255u, (uint32)(((abgr >> 16) & 0xFF) * scale));
+        const uint32 r = oc::min(255u, (uint32)((abgr & 0xFF) * scale));
+        const uint32 g = oc::min(255u, (uint32)(((abgr >> 8) & 0xFF) * scale));
+        const uint32 b = oc::min(255u, (uint32)(((abgr >> 16) & 0xFF) * scale));
         return (abgr & 0xFF000000) | (b << 16) | (g << 8) | r;
     }
 
@@ -46,22 +46,22 @@ namespace
     // Squarified treemap (Bruls et al.): greedily grow a row while it improves the worst aspect
     // ratio, lay each finished row along the current short side. areas are in px^2 and must sum to
     // at most rect area; outRects parallels areas.
-    double rowWorstAspect(const std::vector<double>& areas, uint32 begin, uint32 end, double shortSide)
+    double rowWorstAspect(const oc::vector<double>& areas, uint32 begin, uint32 end, double shortSide)
     {
         double sum = 0.0, minArea = 1e300, maxArea = 0.0;
         for (uint32 i = begin; i < end; ++i)
         {
             sum += areas[i];
-            minArea = std::min(minArea, areas[i]);
-            maxArea = std::max(maxArea, areas[i]);
+            minArea = oc::min(minArea, areas[i]);
+            maxArea = oc::max(maxArea, areas[i]);
         }
         if (sum <= 0.0)
             return 1e300;
         const double s2 = sum * sum, w2 = shortSide * shortSide;
-        return std::max(w2 * maxArea / s2, s2 / (w2 * minArea));
+        return oc::max(w2 * maxArea / s2, s2 / (w2 * minArea));
     }
 
-    void layoutRow(const std::vector<double>& areas, uint32 begin, uint32 end, FRect& remaining, std::vector<FRect>& outRects)
+    void layoutRow(const oc::vector<double>& areas, uint32 begin, uint32 end, FRect& remaining, oc::vector<FRect>& outRects)
     {
         double rowArea = 0.0;
         for (uint32 i = begin; i < end; ++i)
@@ -74,7 +74,7 @@ namespace
         }
         if (remaining.w >= remaining.h) // row = vertical strip on the left
         {
-            const float stripW = std::min((float)(rowArea / remaining.h), remaining.w);
+            const float stripW = oc::min((float)(rowArea / remaining.h), remaining.w);
             float y = remaining.y;
             for (uint32 i = begin; i < end; ++i)
             {
@@ -87,7 +87,7 @@ namespace
         }
         else // row = horizontal strip on top
         {
-            const float stripH = std::min((float)(rowArea / remaining.w), remaining.h);
+            const float stripH = oc::min((float)(rowArea / remaining.w), remaining.h);
             float x = remaining.x;
             for (uint32 i = begin; i < end; ++i)
             {
@@ -100,14 +100,14 @@ namespace
         }
     }
 
-    void squarify(const std::vector<double>& areas, const FRect& rect, std::vector<FRect>& outRects)
+    void squarify(const oc::vector<double>& areas, const FRect& rect, oc::vector<FRect>& outRects)
     {
         outRects.resize(areas.size());
         FRect remaining = rect;
         uint32 i = 0;
         while (i < (uint32)areas.size())
         {
-            const double shortSide = std::max(1.0, (double)std::min(remaining.w, remaining.h));
+            const double shortSide = oc::max(1.0, (double)oc::min(remaining.w, remaining.h));
             const uint32 rowStart = i;
             double best = rowWorstAspect(areas, rowStart, i + 1, shortSide);
             ++i;
@@ -164,15 +164,15 @@ uint32 MemoryPanel::buildSnapshot(const MemScopeNode* node)
         view.src = node;
         view.name = node->name;
         view.category = node->category;
-        const int64 liveBytes = node->selfBytes.load(std::memory_order_relaxed);
-        view.cumBytes = node->totalAllocBytes.load(std::memory_order_relaxed);
-        view.cumCount = node->totalAllocCount.load(std::memory_order_relaxed);
-        view.liveCount = node->selfCount.load(std::memory_order_relaxed);
-        view.selfBytes = m_showCumulative ? (int64)view.cumBytes : std::max<int64>(liveBytes, 0);
+        const int64 liveBytes = node->selfBytes.load(oc::memory_order_relaxed);
+        view.cumBytes = node->totalAllocBytes.load(oc::memory_order_relaxed);
+        view.cumCount = node->totalAllocCount.load(oc::memory_order_relaxed);
+        view.liveCount = node->selfCount.load(oc::memory_order_relaxed);
+        view.selfBytes = m_showCumulative ? (int64)view.cumBytes : oc::max<int64>(liveBytes, 0);
     }
     int64 inclusive = m_nodes[idx].selfBytes;
-    for (const MemScopeNode* child = node->firstChild.load(std::memory_order_acquire); child != nullptr;
-         child = child->nextSibling.load(std::memory_order_relaxed))
+    for (const MemScopeNode* child = node->firstChild.load(oc::memory_order_acquire); child != nullptr;
+         child = child->nextSibling.load(oc::memory_order_relaxed))
     {
         const uint32 childIdx = buildSnapshot(child); // (m_nodes may reallocate - re-index below)
         m_nodes[idx].children.push_back(childIdx);
@@ -180,7 +180,7 @@ uint32 MemoryPanel::buildSnapshot(const MemScopeNode* node)
     }
     ViewNode& view = m_nodes[idx];
     view.inclusiveBytes = inclusive;
-    std::sort(view.children.begin(), view.children.end(), [this](uint32 a, uint32 b)
+    oc::sort(view.children.begin(), view.children.end(), [this](uint32 a, uint32 b)
         { return m_nodes[a].inclusiveBytes > m_nodes[b].inclusiveBytes; });
     return idx;
 }
@@ -226,7 +226,7 @@ void MemoryPanel::drawHeader()
     }
 
     // Per-category totals (self bytes summed over every path, live metric)
-    std::array<int64, (uint32)EProfileCategory::Count> categoryBytes = {};
+    oc::array<int64, (uint32)EProfileCategory::Count> categoryBytes = {};
     for (const ViewNode& view : m_nodes)
         categoryBytes[view.category] += view.selfBytes;
     bool first = true;
@@ -277,8 +277,8 @@ void MemoryPanel::drawTreemap()
 
     const ImVec2 canvasPos = ImGui::GetCursorScreenPos();
     const ImVec2 avail = ImGui::GetContentRegionAvail();
-    const float width = std::max(avail.x, 60.0f);
-    const float height = std::max(avail.y, 60.0f);
+    const float width = oc::max(avail.x, 60.0f);
+    const float height = oc::max(avail.y, 60.0f);
     ImGui::InvisibleButton("##treemap", ImVec2(width, height));
     m_canvasHovered = ImGui::IsItemHovered();
     m_hoveredNode = UINT32_MAX;
@@ -330,7 +330,7 @@ void MemoryPanel::drawNode(uint32 nodeIdx, float x0, float y0, float x1, float y
 
     ImDrawList* drawList = ImGui::GetWindowDrawList();
     const uint32 baseColor = profileCategoryColor((EProfileCategory)view.category);
-    const uint32 fillColor = scaleColor(baseColor, 1.0f - 0.07f * (float)std::min(depth, 6u));
+    const uint32 fillColor = scaleColor(baseColor, 1.0f - 0.07f * (float)oc::min(depth, 6u));
 
     drawList->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), fillColor);
     drawList->AddRect(ImVec2(x0, y0), ImVec2(x1, y1), 0x66000000);
@@ -369,10 +369,10 @@ void MemoryPanel::drawNode(uint32 nodeIdx, float x0, float y0, float x1, float y
         return;
 
     const double areaScale = (double)(cx1 - cx0) * (double)(cy1 - cy0) / (double)view.inclusiveBytes;
-    std::vector<double> areas(view.children.size());
+    oc::vector<double> areas(view.children.size());
     for (size_t i = 0; i < view.children.size(); ++i)
-        areas[i] = (double)std::max<int64>(m_nodes[view.children[i]].inclusiveBytes, 0) * areaScale;
-    std::vector<FRect> rects;
+        areas[i] = (double)oc::max<int64>(m_nodes[view.children[i]].inclusiveBytes, 0) * areaScale;
+    oc::vector<FRect> rects;
     squarify(areas, FRect{ cx0, cy0, cx1 - cx0, cy1 - cy0 }, rects);
 
     for (size_t i = 0; i < view.children.size(); ++i)

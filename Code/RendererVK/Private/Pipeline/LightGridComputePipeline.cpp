@@ -70,7 +70,7 @@ void LightGridComputePipeline::update(uint32 frameIdx, uint32 numLights)
 
 void LightGridComputePipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& recordParams)
 {
-    std::array<DescriptorSetUpdateInfo, 4> computeDescriptorSetUpdateInfos
+    oc::array<DescriptorSetUpdateInfo, 4> computeDescriptorSetUpdateInfos
     {
         DescriptorSetUpdateInfo { // UBO
             .binding = 0,

@@ -8,9 +8,9 @@ namespace Procedural::Diffusion
 {
 	namespace
 	{
-		std::vector<int32> computeStrides(const std::vector<int32>& shape)
+		oc::vector<int32> computeStrides(const oc::vector<int32>& shape)
 		{
-			std::vector<int32> s(shape.size());
+			oc::vector<int32> s(shape.size());
 			int32 stride = 1;
 			for (int32 i = (int32)shape.size() - 1; i >= 0; i--)
 			{
@@ -21,7 +21,7 @@ namespace Procedural::Diffusion
 		}
 	}
 
-	FloatTensor::FloatTensor(std::span<const int32> shape)
+	FloatTensor::FloatTensor(oc::span<const int32> shape)
 		: m_shape(shape.begin(), shape.end())
 	{
 		m_strides = computeStrides(m_shape);
@@ -34,7 +34,7 @@ namespace Procedural::Diffusion
 		data.assign(total, 0.0f); // zero-init is load-bearing: addFrom accumulates into it
 	}
 
-	void FloatTensor::addFrom(const FloatTensor& src, std::span<const Range> dstRegion, std::span<const Range> srcRegion)
+	void FloatTensor::addFrom(const FloatTensor& src, oc::span<const Range> dstRegion, oc::span<const Range> srcRegion)
 	{
 		const int32 n = ndim();
 		assert((int32)dstRegion.size() == n && (int32)srcRegion.size() == n);
@@ -63,7 +63,7 @@ namespace Procedural::Diffusion
 		const int32 dstInnerStride = m_strides[last];
 		const int32 srcInnerStride = src.strides()[last];
 
-		std::vector<int32> idx((size_t)last, 0);
+		oc::vector<int32> idx((size_t)last, 0);
 		for (;;)
 		{
 			size_t dstOff = dstBase0, srcOff = srcBase0;
@@ -100,18 +100,18 @@ namespace Procedural::Diffusion
 		}
 	}
 
-	TensorWindow::TensorWindow(std::span<const int32> size)
+	TensorWindow::TensorWindow(oc::span<const int32> size)
 		: m_size(size.begin(), size.end()), m_stride(size.begin(), size.end()), m_offset(size.size(), 0)
 	{
 	}
 
-	TensorWindow::TensorWindow(std::span<const int32> size, std::span<const int32> stride)
+	TensorWindow::TensorWindow(oc::span<const int32> size, oc::span<const int32> stride)
 		: m_size(size.begin(), size.end()), m_stride(stride.begin(), stride.end()), m_offset(size.size(), 0)
 	{
 		assert(m_size.size() == m_stride.size());
 	}
 
-	TensorWindow::TensorWindow(std::span<const int32> size, std::span<const int32> stride, std::span<const int32> offset)
+	TensorWindow::TensorWindow(oc::span<const int32> size, oc::span<const int32> stride, oc::span<const int32> offset)
 		: m_size(size.begin(), size.end()), m_stride(stride.begin(), stride.end()), m_offset(offset.begin(), offset.end())
 	{
 		assert(m_size.size() == m_stride.size() && m_size.size() == m_offset.size());
@@ -119,7 +119,7 @@ namespace Procedural::Diffusion
 			assert(s > 0); // the intersection math assumes it; the reference never checks
 	}
 
-	void TensorWindow::getBounds(std::span<const int32> windowIndex, std::span<Range> out) const
+	void TensorWindow::getBounds(oc::span<const int32> windowIndex, oc::span<Range> out) const
 	{
 		const int32 n = ndim();
 		assert((int32)windowIndex.size() == n && (int32)out.size() == n);
@@ -130,7 +130,7 @@ namespace Procedural::Diffusion
 		}
 	}
 
-	void TensorWindow::getHighestIntersection(std::span<const Range> pixelRange, std::span<int32> out) const
+	void TensorWindow::getHighestIntersection(oc::span<const Range> pixelRange, oc::span<int32> out) const
 	{
 		const int32 n = ndim();
 		for (int32 d = 0; d < n; d++)
@@ -141,7 +141,7 @@ namespace Procedural::Diffusion
 		}
 	}
 
-	void TensorWindow::getLowestIntersection(std::span<const Range> pixelRange, std::span<int32> out) const
+	void TensorWindow::getLowestIntersection(oc::span<const Range> pixelRange, oc::span<int32> out) const
 	{
 		const int32 n = ndim();
 		for (int32 d = 0; d < n; d++)
@@ -157,8 +157,8 @@ namespace Procedural::Diffusion
 		}
 	}
 
-	void iterateWindows(std::span<const int32> lo, std::span<const int32> hi,
-	                    const std::function<void(std::span<const int32>)>& fn)
+	void iterateWindows(oc::span<const int32> lo, oc::span<const int32> hi,
+	                    const oc::function<void(oc::span<const int32>)>& fn)
 	{
 		const int32 n = (int32)lo.size();
 		assert((int32)hi.size() == n);
@@ -166,7 +166,7 @@ namespace Procedural::Diffusion
 			if (lo[d] > hi[d])
 				return;
 
-		std::vector<int32> cur(lo.begin(), lo.end());
+		oc::vector<int32> cur(lo.begin(), lo.end());
 		for (;;)
 		{
 			fn(cur);

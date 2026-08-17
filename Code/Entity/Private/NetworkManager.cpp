@@ -16,7 +16,7 @@ constexpr uint16 GameNetVersion = 14;
 // Engine-reserved event: Synced-flagged tweak values, server -> clients (full set at join +
 // re-broadcast on change). Intercepted in fireEventAttributed — never reaches scripts or the
 // game hook, and a client-sent copy is dropped (only clients APPLY it).
-constexpr std::string_view TweakSyncEventName = "OcTweakSync";
+constexpr oc::string_view TweakSyncEventName = "OcTweakSync";
 
 enum class ENetMsg : uint8
 {
@@ -267,16 +267,16 @@ bool NetworkManager::startServer(uint16 port)
     config.encrypt = s_encrypt;
     if (!m_host.open(port, config))
     {
-        Log::error("Network: failed to open server port " + std::to_string(port));
+        Log::error("Network: failed to open server port " + oc::to_string(port));
         return false;
     }
     m_role = ENetRole::Server;
-    Log::info("Network: SERVER listening on port " + std::to_string(m_host.getLocalPort())
+    Log::info("Network: SERVER listening on port " + oc::to_string(m_host.getLocalPort())
         + (s_encrypt ? " (encrypted)" : " (UNENCRYPTED)"));
     return true;
 }
 
-bool NetworkManager::startClient(const std::string& address, uint16 defaultPort)
+bool NetworkManager::startClient(const oc::string& address, uint16 defaultPort)
 {
     assert(m_role == ENetRole::None);
     NetAddress addr = NetAddress::fromString(address);
@@ -284,9 +284,9 @@ bool NetworkManager::startClient(const std::string& address, uint16 defaultPort)
     {
         // not a dotted quad: treat as hostname[:port]
         const size_t colon = address.rfind(':');
-        std::string host = address;
+        oc::string host = address;
         uint16 port = defaultPort;
-        if (colon != std::string::npos)
+        if (colon != oc::string::npos)
         {
             host = address.substr(0, colon);
             port = uint16(std::atoi(address.c_str() + colon + 1));
@@ -380,10 +380,10 @@ void NetworkManager::receive(double deltaSec)
 
         case ENetEventType::Disconnected:
             // NetPeerIds recycle: drop every bit of per-peer state the moment the peer dies
-            std::erase(m_readyPeers, evt.peer);
+            oc::erase(m_readyPeers, evt.peer);
             if (m_role == ENetRole::Client && evt.peer == m_serverPeer)
             {
-                Log::warning(std::string("Network: disconnected from server (") + disconnectReasonName(evt.reason) + ")");
+                Log::warning(oc::string("Network: disconnected from server (") + disconnectReasonName(evt.reason) + ")");
                 m_serverPeer = InvalidNetPeerId;
                 m_localClientId = 0;
                 m_preWelcomeEvents.clear(); // stale parked events must not replay into a new session
@@ -398,7 +398,7 @@ void NetworkManager::receive(double deltaSec)
             }
             else if (m_role == ENetRole::Server)
             {
-                Log::info(std::string("Network: client disconnected (") + disconnectReasonName(evt.reason) + ")");
+                Log::info(oc::string("Network: client disconnected (") + disconnectReasonName(evt.reason) + ")");
                 if (const auto it = m_peerClients.find(evt.peer); it != m_peerClients.end())
                 {
                     const uint32 clientId = it->second;
@@ -422,7 +422,7 @@ void NetworkManager::receive(double deltaSec)
             if (evt.data.empty())
                 break;
             const uint8 msgType = evt.data[0];
-            NetReader reader(std::span<const uint8>(evt.data).subspan(1));
+            NetReader reader(oc::span<const uint8>(evt.data).subspan(1));
             switch (ENetMsg(msgType))
             {
             case ENetMsg::Hello:
@@ -454,7 +454,7 @@ void NetworkManager::receive(double deltaSec)
                     handleOwnerChangeMessage(reader);
                 break;
             default:
-                Log::warning("Network: unknown message type " + std::to_string(msgType));
+                Log::warning("Network: unknown message type " + oc::to_string(msgType));
                 break;
             }
             break;
@@ -486,7 +486,7 @@ void NetworkManager::handleSessionMessage(NetPeerId peer, NetReader& reader, uin
             break;
         if (version != GameNetVersion)
         {
-            Log::warning("Network: denying client with version " + std::to_string(version) + " (ours " + std::to_string(GameNetVersion) + ")");
+            Log::warning("Network: denying client with version " + oc::to_string(version) + " (ours " + oc::to_string(GameNetVersion) + ")");
             uint8 buffer[128];
             NetWriter writer(buffer);
             writer.write<uint8>(uint8(ENetMsg::Deny));
@@ -499,7 +499,7 @@ void NetworkManager::handleSessionMessage(NetPeerId peer, NetReader& reader, uin
         // (a player body), and nothing else bounds how many connections one attacker opens
         if (!m_peerClients.contains(peer) && m_peerClients.size() >= MaxClients)
         {
-            Log::warning("Network: refusing client, server full (" + std::to_string(MaxClients) + ")");
+            Log::warning("Network: refusing client, server full (" + oc::to_string(MaxClients) + ")");
             uint8 fullBuffer[64];
             NetWriter fullWriter(fullBuffer);
             fullWriter.write<uint8>(uint8(ENetMsg::Deny));
@@ -508,7 +508,7 @@ void NetworkManager::handleSessionMessage(NetPeerId peer, NetReader& reader, uin
             m_host.disconnect(peer);
             break;
         }
-        if (std::find(m_readyPeers.begin(), m_readyPeers.end(), peer) == m_readyPeers.end())
+        if (oc::find(m_readyPeers.begin(), m_readyPeers.end(), peer) == m_readyPeers.end())
             m_readyPeers.push_back(peer);
         // duplicate Hello from an already-ready peer (the reliable channel dedups packets, so only a
         // misbehaving client sends two): resend the Welcome with the EXISTING id and do nothing else —
@@ -560,13 +560,13 @@ void NetworkManager::handleSessionMessage(NetPeerId peer, NetReader& reader, uin
         // Synced tweak values ride the same ordered channel: the joiner starts with the server's
         // gameplay configuration instead of its own local defaults.
         {
-            std::vector<std::vector<uint8>> chunks;
+            oc::vector<oc::vector<uint8>> chunks;
             TweakRegistry::get().packSynced(chunks);
-            for (const std::vector<uint8>& chunk : chunks)
+            for (const oc::vector<uint8>& chunk : chunks)
                 sendEventTo(peer, TweakSyncEventName, 0, 0, chunk);
         }
-        Log::info("Network: client " + std::to_string(clientId) + " ready (" + std::to_string(m_readyPeers.size())
-            + " total, " + std::to_string(m_dynamicSpawns.size()) + " spawns replayed)");
+        Log::info("Network: client " + oc::to_string(clientId) + " ready (" + oc::to_string(m_readyPeers.size())
+            + " total, " + oc::to_string(m_dynamicSpawns.size()) + " spawns replayed)");
         if (m_onClientJoined)
             m_onClientJoined(clientId); // after the replay: per-player spawns arrive via this frame's announce
         break;
@@ -587,7 +587,7 @@ void NetworkManager::handleSessionMessage(NetPeerId peer, NetReader& reader, uin
         // snapshots/ownership onto the wrong entities. No-op on the first connect (registry empty).
         // Roots collected under the lock, destroyed outside it (the destroy cascade unregisters).
         {
-            std::vector<Entity*> staleRoots;
+            oc::vector<Entity*> staleRoots;
             {
                 const std::lock_guard<std::mutex> lock(m_entityMutex);
                 for (const auto& [netId, replicated] : m_entities)
@@ -595,29 +595,29 @@ void NetworkManager::handleSessionMessage(NetPeerId peer, NetReader& reader, uin
                     Entity* root = replicated.entity;
                     while (root->parent)
                         root = root->parent;
-                    if (std::find(staleRoots.begin(), staleRoots.end(), root) == staleRoots.end())
+                    if (oc::find(staleRoots.begin(), staleRoots.end(), root) == staleRoots.end())
                         staleRoots.push_back(root);
                 }
             }
             if (!staleRoots.empty())
-                Log::info("Network: dropping " + std::to_string(staleRoots.size()) + " replicated roots from the previous session");
+                Log::info("Network: dropping " + oc::to_string(staleRoots.size()) + " replicated roots from the previous session");
             for (Entity* root : staleRoots)
                 Globals::world.removeRootEntity(root);
             m_claimRings.clear();
         }
         m_localClientId = clientId; // what makes authority() == LocalOwner resolve for our entities
         m_serverSnapshotHz = glm::clamp(snapshotHz, 1.0f, 240.0f); // the interp playback clock runs in the server's tick units
-        Log::info("Network: welcomed by server as client " + std::to_string(clientId) + " (version "
-            + std::to_string(version) + ", " + std::to_string(snapshotHz) + " Hz, tick " + std::to_string(serverTick) + ")");
+        Log::info("Network: welcomed by server as client " + oc::to_string(clientId) + " (version "
+            + oc::to_string(version) + ", " + oc::to_string(snapshotHz) + " Hz, tick " + oc::to_string(serverTick) + ")");
         // Events that raced ahead of this Welcome on their own channel replay now, in arrival order.
-        for (const std::vector<uint8>& pending : std::exchange(m_preWelcomeEvents, {}))
+        for (const oc::vector<uint8>& pending : oc::exchange(m_preWelcomeEvents, {}))
             handleEventMessage(m_serverPeer, pending);
         break;
     }
     case ENetMsg::Deny:
     {
-        const std::string_view reason = reader.readString();
-        Log::warning("Network: server denied us: " + std::string(reason));
+        const oc::string_view reason = reader.readString();
+        Log::warning("Network: server denied us: " + oc::string(reason));
         break;
     }
     default:
@@ -630,7 +630,7 @@ void NetworkManager::handleSpawnMessage(NetReader& reader)
     const uint32 baseId = uint32(reader.readVarUInt());
     const uint32 count = uint32(reader.readVarUInt());
     const uint32 ownerClientId = uint32(reader.readVarUInt());
-    const std::string path(reader.readString()); // copied: the spawn below outlives the packet buffer
+    const oc::string path(reader.readString()); // copied: the spawn below outlives the packet buffer
     const glm::vec3 pos = reader.read<glm::vec3>();
     const glm::quat rot = reader.read<glm::quat>();
     const float scale = reader.read<float>();
@@ -650,7 +650,7 @@ void NetworkManager::handleSpawnMessage(NetReader& reader)
         angVel *= 100.0f / angSpeed;
     // the path goes to the asset loader, so keep it inside Assets/: a hostile server must not be
     // able to aim a client's file reads anywhere on its disk
-    if (path.size() > 256 || path.find("..") != std::string::npos || path.find(':') != std::string::npos
+    if (path.size() > 256 || path.find("..") != oc::string::npos || path.find(':') != oc::string::npos
         || path.front() == '/' || path.front() == '\\')
     {
         Log::warning("Network: rejecting replicated spawn with suspicious path '" + path + "'");
@@ -668,7 +668,7 @@ void NetworkManager::handleSpawnMessage(NetReader& reader)
     m_incomingSpawnCursor = 0;
     m_incomingSpawnOwner = ownerClientId;
     const Transform transform(pos, scale, rot);
-    EntityPtr spawned = path.find('.') != std::string::npos
+    EntityPtr spawned = path.find('.') != oc::string::npos
         ? Globals::world.spawnAssetFile(path, transform, true)
         : Globals::world.spawn(path, transform); // record carried a prefab NAME, not a file path
     const uint32 registered = m_incomingSpawnCursor;
@@ -680,8 +680,8 @@ void NetworkManager::handleSpawnMessage(NetReader& reader)
         return;
     }
     if (registered != count)
-        Log::warning("Network: replicated '" + path + "' registered " + std::to_string(registered)
-            + " NetworkComponents, server announced " + std::to_string(count) + " (asset mismatch?)");
+        Log::warning("Network: replicated '" + path + "' registered " + oc::to_string(registered)
+            + " NetworkComponents, server announced " + oc::to_string(count) + " (asset mismatch?)");
     // The announced launch velocities start the local twin moving like the original (a projectile
     // flies instead of dropping from rest). Main thread pre-physics — direct setters sanctioned.
     if (PhysicsComponent* pc = getComponent<PhysicsComponent>(spawned.get());
@@ -690,7 +690,7 @@ void NetworkManager::handleSpawnMessage(NetReader& reader)
         pc->body.setLinearVelocity(linVel);
         pc->body.setAngularVelocity(angVel);
     }
-    Globals::world.addRootEntity(std::move(spawned));
+    Globals::world.addRootEntity(oc::move(spawned));
 }
 
 void NetworkManager::handleDespawnMessage(NetReader& reader)
@@ -713,7 +713,7 @@ void NetworkManager::setOwner(Entity& root, uint32 clientId)
     if (m_role != ENetRole::Server)
         return;
     // ownership is whole-tree: every NetworkComponent below the root follows the same client
-    const std::function<void(Entity&)> apply = [&](Entity& entity)
+    const oc::function<void(Entity&)> apply = [&](Entity& entity)
     {
         if (NetworkComponent* comp = getComponent<NetworkComponent>(&entity))
         {
@@ -732,7 +732,7 @@ void NetworkManager::setOwner(Entity& root, uint32 clientId)
     if (const auto it = m_dynamicRootIds.find(&root); it != m_dynamicRootIds.end())
         m_dynamicSpawns[it->second].ownerClientId = clientId;
     else
-        Log::warning("Network: setOwner on '" + std::string(root.getName())
+        Log::warning("Network: setOwner on '" + oc::string(root.getName())
             + "' after its spawn was announced - clients will not learn the ownership");
 }
 
@@ -1375,7 +1375,7 @@ void NetworkManager::sendSpawnTo(NetPeerId peer, const DynamicSpawn& record)
     m_host.send(peer, writer.data(), ENetDelivery::Reliable, ChannelSession);
 }
 
-void NetworkManager::handleEventMessage(NetPeerId peer, std::span<const uint8> bytes)
+void NetworkManager::handleEventMessage(NetPeerId peer, oc::span<const uint8> bytes)
 {
     // a transport-connected peer that never completed Hello/Welcome is not a player: ungated, anyone
     // who can open a connection fires arbitrary script events and gets them relayed to every client
@@ -1405,12 +1405,12 @@ void NetworkManager::handleEventMessage(NetPeerId peer, std::span<const uint8> b
     const uint32 senderClientId = m_role == ENetRole::Server ? m_peerClients[peer]
                                                              : uint32(reader.readVarUInt());
     const uint32 senderNetId = uint32(reader.readVarUInt());
-    const std::string_view name = reader.readString();
+    const oc::string_view name = reader.readString();
     const size_t dataSize = size_t(reader.readVarUInt());
     // both are attacker-controlled; the name also reaches the log ring
     if (reader.overflowed() || name.empty() || name.size() > MaxEventNameLength || dataSize > MaxEventDataBytes)
         return;
-    const std::span<const uint8> data = reader.readBytes(dataSize);
+    const oc::span<const uint8> data = reader.readBytes(dataSize);
     if (reader.overflowed())
         return;
 
@@ -1419,8 +1419,8 @@ void NetworkManager::handleEventMessage(NetPeerId peer, std::span<const uint8> b
     if (m_role == ENetRole::Server && m_eventFilter
         && !m_eventFilter(senderClientId, name, data, findOwnedEntity(senderNetId, senderClientId)))
     {
-        Log::warning("Network: event '" + std::string(name) + "' from client "
-            + std::to_string(senderClientId) + " refused by the event filter");
+        Log::warning("Network: event '" + oc::string(name) + "' from client "
+            + oc::to_string(senderClientId) + " refused by the event filter");
         return;
     }
 
@@ -1455,7 +1455,7 @@ Entity* NetworkManager::findOwnedEntity(uint32 netId, uint32 clientId) const
 
 // Fires a named event with `senderClientId` readable for its duration (scripts query it through
 // ctx->networkEventSender). Dispatch is synchronous, so a plain scoped set is enough.
-void NetworkManager::fireEventAttributed(std::string_view name, uint32 senderClientId, std::span<const uint8> data)
+void NetworkManager::fireEventAttributed(oc::string_view name, uint32 senderClientId, oc::span<const uint8> data)
 {
     if (name == TweakSyncEventName)
     {
@@ -1467,10 +1467,10 @@ void NetworkManager::fireEventAttributed(std::string_view name, uint32 senderCli
         return;
     }
     const uint32 previousSender = m_currentEventSender;
-    const std::span<const uint8> previousData = m_currentEventData;
+    const oc::span<const uint8> previousData = m_currentEventData;
     m_currentEventSender = senderClientId;
     m_currentEventData = data;
-    Globals::scriptEvents.fireEvent(std::string(name));
+    Globals::scriptEvents.fireEvent(oc::string(name));
     if (m_onGameEvent)
         m_onGameEvent(name); // C++ listener: sender/data stay readable for the call
     m_currentEventSender = previousSender;
@@ -1487,7 +1487,7 @@ void NetworkManager::handleSnapshot(NetReader& reader)
         if (!m_warnedUnknownRecFlags)
         {
             m_warnedUnknownRecFlags = true;
-            Log::warning("Network: snapshot with unknown flags " + std::to_string(flags) + ", dropping (newer server?)");
+            Log::warning("Network: snapshot with unknown flags " + oc::to_string(flags) + ", dropping (newer server?)");
         }
         return;
     }
@@ -1512,7 +1512,7 @@ void NetworkManager::handleSnapshot(NetReader& reader)
             if (!m_warnedUnknownRecFlags)
             {
                 m_warnedUnknownRecFlags = true;
-                Log::warning("Network: snapshot record with unknown flags " + std::to_string(recFlags) + ", dropping message (newer server?)");
+                Log::warning("Network: snapshot record with unknown flags " + oc::to_string(recFlags) + ", dropping message (newer server?)");
             }
             return; // unknown bits = unknown record size, the rest of the message is unparseable
         }
@@ -1558,9 +1558,9 @@ void NetworkManager::handleSnapshot(NetReader& reader)
             && ((recFlags & NetRecFlag_ServerPlayer)
                 || (comp->ownerClientId != 0 && comp->ownerClientId != m_localClientId)))
         {
-            std::unique_ptr<NetSnapshotRing>& ring = m_remoteBuffers[netId];
+            oc::unique_ptr<NetSnapshotRing>& ring = m_remoteBuffers[netId];
             if (!ring)
-                ring = std::make_unique<NetSnapshotRing>();
+                ring = oc::make_unique<NetSnapshotRing>();
             ring->records[tick % NetSnapshotRing::Capacity] = { tick, pos, sanitizedRot, linVel, angVel };
             ring->newestTick = glm::max(ring->newestTick, tick);
             ring->count = glm::min(ring->count + 1, NetSnapshotRing::Capacity);
@@ -1594,14 +1594,14 @@ void NetworkManager::send(double deltaSec)
     if (m_role == ENetRole::Server && TweakRegistry::get().syncGeneration() != m_sentTweakGeneration)
     {
         m_sentTweakGeneration = TweakRegistry::get().syncGeneration();
-        std::vector<std::vector<uint8>> chunks;
+        oc::vector<oc::vector<uint8>> chunks;
         TweakRegistry::get().packSynced(chunks);
-        for (const std::vector<uint8>& chunk : chunks)
+        for (const oc::vector<uint8>& chunk : chunks)
             fireNetworkEvent(TweakSyncEventName, chunk);
     }
 
     // outgoing events queued this frame (worker-thread script thunks can't touch NetHost themselves)
-    std::vector<PendingEvent> pendingEvents;
+    oc::vector<PendingEvent> pendingEvents;
     {
         const std::lock_guard<std::mutex> lock(m_eventMutex);
         pendingEvents.swap(m_pendingOutgoingEvents);
@@ -1680,7 +1680,7 @@ void NetworkManager::sendSnapshotTick()
 {
     uint8 buffer[1400];
     const size_t capacity = size_t(glm::clamp(s_snapshotMaxBytes, 128, 1400));
-    NetWriter writer(std::span<uint8>(buffer, capacity));
+    NetWriter writer(oc::span<uint8>(buffer, capacity));
     size_t countOffset = 0;
     uint16 count = 0;
 
@@ -1869,16 +1869,16 @@ void NetworkManager::sendSnapshotTick()
     flushMessage();
 }
 
-void NetworkManager::fireNetworkEvent(std::string_view name, std::span<const uint8> data, Entity* sender)
+void NetworkManager::fireNetworkEvent(oc::string_view name, oc::span<const uint8> data, Entity* sender)
 {
     // the same caps the receiver enforces — otherwise an event that is valid to send is rejected on
     // arrival, which is a far more confusing failure than refusing it here
     if (name.empty() || name.size() > MaxEventNameLength || data.size() > MaxEventDataBytes)
     {
         if (!name.empty())
-            Log::warning("Network: event '" + std::string(name.substr(0, MaxEventNameLength))
-                + "' exceeds the name (" + std::to_string(MaxEventNameLength) + "B) or payload ("
-                + std::to_string(MaxEventDataBytes) + "B) cap, dropped");
+            Log::warning("Network: event '" + oc::string(name.substr(0, MaxEventNameLength))
+                + "' exceeds the name (" + oc::to_string(MaxEventNameLength) + "B) or payload ("
+                + oc::to_string(MaxEventDataBytes) + "B) cap, dropped");
         return;
     }
     // locally originated: we are the sender (0 on a server, our clientId on a client)
@@ -1892,14 +1892,14 @@ void NetworkManager::fireNetworkEvent(std::string_view name, std::span<const uin
     // NetHost is single-threaded and this is reachable from worker-thread script thunks during the
     // parallel entity pass — queue, send() drains on the main thread the same frame
     const std::lock_guard<std::mutex> lock(m_eventMutex);
-    m_pendingOutgoingEvents.push_back({ std::string(name), { data.begin(), data.end() }, senderNetId });
+    m_pendingOutgoingEvents.push_back({ oc::string(name), { data.begin(), data.end() }, senderNetId });
 }
 
 // The CLIENT id is server->client only: a client's identity is implied by its connection, and an
 // ignored client-writable identity field is a refactor away from being trusted. The NET id names the
 // firing entity, which no connection implies, so it travels both ways — and is checked for ownership.
-void NetworkManager::sendEventTo(NetPeerId peer, std::string_view name, uint32 senderClientId,
-    uint32 senderNetId, std::span<const uint8> data)
+void NetworkManager::sendEventTo(NetPeerId peer, oc::string_view name, uint32 senderClientId,
+    uint32 senderNetId, oc::span<const uint8> data)
 {
     uint8 buffer[MaxEventMessageBytes];
     NetWriter writer(buffer);
@@ -1912,7 +1912,7 @@ void NetworkManager::sendEventTo(NetPeerId peer, std::string_view name, uint32 s
     writer.writeBytes(data);
     if (writer.overflowed())
     {
-        Log::warning("Network: event name too long, not sent: " + std::string(name.substr(0, 64)));
+        Log::warning("Network: event name too long, not sent: " + oc::string(name.substr(0, 64)));
         return;
     }
     m_host.send(peer, writer.data(), ENetDelivery::Reliable, ChannelEvent);
@@ -1958,11 +1958,11 @@ uint32 NetworkManager::registerEntity(Entity& entity, NetworkComponent* comp)
             record.spawnRot = root->rot;
             record.spawnScale = root->scale;
             if (record.path.empty())
-                Log::warning("Network: networked entity '" + std::string(root->getName())
+                Log::warning("Network: networked entity '" + oc::string(root->getName())
                     + "' has no prefab source, clients cannot spawn it");
             else
                 m_pendingSpawnAnnounce.push_back(netId);
-            m_dynamicSpawns.emplace(netId, std::move(record));
+            m_dynamicSpawns.emplace(netId, oc::move(record));
         }
     }
     else
@@ -1974,7 +1974,7 @@ uint32 NetworkManager::registerEntity(Entity& entity, NetworkComponent* comp)
         // the Entity Editor respawning this entity: the new twin spawns (and re-derives the same
         // name-path hash) while the old one is still registered — replace, pointer-checked unregister
         // keeps the replacement safe when the old entity dies
-        Log::warning("Network: netId " + std::to_string(netId) + " re-registered by entity '"
+        Log::warning("Network: netId " + oc::to_string(netId) + " re-registered by entity '"
             + entity.getName() + "' (editor respawn?)");
     return netId;
 }
@@ -1998,26 +1998,26 @@ void NetworkManager::unregisterEntity(uint32 netId, const NetworkComponent* comp
         if (const auto it = m_dynamicSpawns.find(netId); it != m_dynamicSpawns.end())
         {
             m_dynamicSpawns.erase(it);
-            if (std::erase(m_pendingSpawnAnnounce, netId) == 0) // spawned + destroyed the same frame: announce nothing
+            if (oc::erase(m_pendingSpawnAnnounce, netId) == 0) // spawned + destroyed the same frame: announce nothing
                 m_pendingDespawn.push_back(netId);
         }
 }
 
-std::string NetworkManager::getStatusText() const
+oc::string NetworkManager::getStatusText() const
 {
     if (m_role == ENetRole::None || !s_showStats)
         return {};
     const NetHostStats& stats = m_host.getStats();
-    const auto kbs = [](uint32 bytesPerSec) { return std::to_string((bytesPerSec * 10) / 1024 / 10) + "." + std::to_string((bytesPerSec * 10 / 1024) % 10); };
+    const auto kbs = [](uint32 bytesPerSec) { return oc::to_string((bytesPerSec * 10) / 1024 / 10) + "." + oc::to_string((bytesPerSec * 10 / 1024) % 10); };
     if (m_role == ENetRole::Server)
-        return "SERVER " + std::to_string(m_host.getConnectedCount()) + " peers | out " + kbs(stats.bytesSentPerSec)
+        return "SERVER " + oc::to_string(m_host.getConnectedCount()) + " peers | out " + kbs(stats.bytesSentPerSec)
             + " KB/s in " + kbs(stats.bytesReceivedPerSec) + " KB/s"
             // sustained nonzero = someone is flooding us (or the limits are set too tight for the
             // configured rates) — worth seeing without opening a panel
-            + (stats.packetsDroppedPerSec != 0 ? " | DROPPED " + std::to_string(stats.packetsDroppedPerSec) + "/s" : "");
+            + (stats.packetsDroppedPerSec != 0 ? " | DROPPED " + oc::to_string(stats.packetsDroppedPerSec) + "/s" : "");
     if (m_serverPeer == InvalidNetPeerId || !m_host.isConnected(m_serverPeer))
         return "CLIENT connecting...";
-    return "CLIENT rtt " + std::to_string(int(m_host.getPeerRttMs(m_serverPeer))) + " ms loss "
-        + std::to_string(int(m_host.getPeerPacketLoss(m_serverPeer) * 100.0f)) + "% | in " + kbs(stats.bytesReceivedPerSec)
+    return "CLIENT rtt " + oc::to_string(int(m_host.getPeerRttMs(m_serverPeer))) + " ms loss "
+        + oc::to_string(int(m_host.getPeerPacketLoss(m_serverPeer) * 100.0f)) + "% | in " + kbs(stats.bytesReceivedPerSec)
         + " KB/s out " + kbs(stats.bytesSentPerSec) + " KB/s";
 }

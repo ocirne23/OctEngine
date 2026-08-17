@@ -91,7 +91,7 @@ void GBufferPipeline::reloadShaders(const GBuffer& gbuffer)
 
 void GBufferPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params, uint32 viewIndex)
 {
-    std::vector<DescriptorSetUpdateInfo> updates{
+    oc::vector<DescriptorSetUpdateInfo> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer,
@@ -106,7 +106,7 @@ void GBufferPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, Reco
     for (uint16 texIdx = 0; texIdx < (uint16)Globals::textureManager.getNumTextures(); ++texIdx)
         texUpdate.imageInfos.push_back(vk::DescriptorImageInfo{ .sampler = m_textureSampler.getSampler(), .imageView = Globals::textureManager.getViewForDescriptor(texIdx), .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal });
     if (!texUpdate.imageInfos.empty())
-        updates.push_back(std::move(texUpdate));
+        updates.push_back(oc::move(texUpdate));
 
     vk::CommandBuffer vkCommandBuffer = commandBuffer.getCommandBuffer();
     vk::DescriptorSet descriptorSet = params.descriptorSet.getDescriptorSet();

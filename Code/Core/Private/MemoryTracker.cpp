@@ -21,14 +21,14 @@ namespace
         return h;
     }
 
-    void spinLock(std::atomic<uint32>& lock)
+    void spinLock(oc::atomic<uint32>& lock)
     {
-        while (lock.exchange(1, std::memory_order_acquire) != 0)
+        while (lock.exchange(1, oc::memory_order_acquire) != 0)
             _mm_pause();
     }
-    void spinUnlock(std::atomic<uint32>& lock)
+    void spinUnlock(oc::atomic<uint32>& lock)
     {
-        lock.store(0, std::memory_order_release);
+        lock.store(0, oc::memory_order_release);
     }
 
     void memoryAllocThunk(void* ptr, size_t size) { Globals::memoryTracker.onAlloc(ptr, (uint64)size); }
@@ -52,38 +52,38 @@ void MemoryTracker::initialize()
     m_root = &m_nodePool[0];
     m_root->name = "Total";
     m_root->category = (uint8)EProfileCategory::Other;
-    m_numNodes.store(1, std::memory_order_relaxed);
+    m_numNodes.store(1, oc::memory_order_relaxed);
     m_initialized = true;
 
-    g_memoryAllocHook.store(&memoryAllocThunk, std::memory_order_release);
-    g_memoryFreeHook.store(&memoryFreeThunk, std::memory_order_release);
+    g_memoryAllocHook.store(&memoryAllocThunk, oc::memory_order_release);
+    g_memoryFreeHook.store(&memoryFreeThunk, oc::memory_order_release);
 }
 
 MemoryTracker::~MemoryTracker()
 {
-    g_memoryAllocHook.store(nullptr, std::memory_order_release);
-    g_memoryFreeHook.store(nullptr, std::memory_order_release);
+    g_memoryAllocHook.store(nullptr, oc::memory_order_release);
+    g_memoryFreeHook.store(nullptr, oc::memory_order_release);
 }
 
 void MemoryTracker::onAlloc(void* ptr, uint64 size)
 {
-    if (ptr == nullptr || !m_enabled.load(std::memory_order_relaxed) || t_inMemoryHook)
+    if (ptr == nullptr || !m_enabled.load(oc::memory_order_relaxed) || t_inMemoryHook)
         return;
     t_inMemoryHook = true;
 
     MemScopeNode* node = resolveCurrentNode();
     if (node == nullptr || !mapInsert(ptr, size, node))
     {
-        m_droppedAllocs.fetch_add(1, std::memory_order_relaxed);
+        m_droppedAllocs.fetch_add(1, oc::memory_order_relaxed);
         t_inMemoryHook = false;
         return;
     }
-    node->selfBytes.fetch_add((int64)size, std::memory_order_relaxed);
-    node->selfCount.fetch_add(1, std::memory_order_relaxed);
-    node->totalAllocBytes.fetch_add(size, std::memory_order_relaxed);
-    node->totalAllocCount.fetch_add(1, std::memory_order_relaxed);
-    m_trackedBytes.fetch_add((int64)size, std::memory_order_relaxed);
-    m_trackedCount.fetch_add(1, std::memory_order_relaxed);
+    node->selfBytes.fetch_add((int64)size, oc::memory_order_relaxed);
+    node->selfCount.fetch_add(1, oc::memory_order_relaxed);
+    node->totalAllocBytes.fetch_add(size, oc::memory_order_relaxed);
+    node->totalAllocCount.fetch_add(1, oc::memory_order_relaxed);
+    m_trackedBytes.fetch_add((int64)size, oc::memory_order_relaxed);
+    m_trackedCount.fetch_add(1, oc::memory_order_relaxed);
 
     t_inMemoryHook = false;
 }
@@ -99,10 +99,10 @@ void MemoryTracker::onFree(void* ptr)
     MapEntry entry;
     if (mapErase(ptr, entry)) // miss = allocated before tracking (or dropped) - ignore
     {
-        entry.node->selfBytes.fetch_sub((int64)entry.size, std::memory_order_relaxed);
-        entry.node->selfCount.fetch_sub(1, std::memory_order_relaxed);
-        m_trackedBytes.fetch_sub((int64)entry.size, std::memory_order_relaxed);
-        m_trackedCount.fetch_sub(1, std::memory_order_relaxed);
+        entry.node->selfBytes.fetch_sub((int64)entry.size, oc::memory_order_relaxed);
+        entry.node->selfCount.fetch_sub(1, oc::memory_order_relaxed);
+        m_trackedBytes.fetch_sub((int64)entry.size, oc::memory_order_relaxed);
+        m_trackedCount.fetch_sub(1, oc::memory_order_relaxed);
     }
 
     t_inMemoryHook = false;
@@ -114,7 +114,7 @@ MemScopeNode* MemoryTracker::resolveCurrentNode()
     if (track == nullptr) // unregistered thread (transient helpers, foreign threads using engine new)
         return findOrAddChild(m_root, "<other threads>", (uint8)EProfileCategory::Other);
 
-    const uint32 depth = std::min(track->m_openDepth, ProfileTrack::MAX_OPEN_DEPTH);
+    const uint32 depth = oc::min(track->m_openDepth, ProfileTrack::MAX_OPEN_DEPTH);
     if (depth == 0)
         return findOrAddChild(m_root, "<unscoped>", (uint8)EProfileCategory::Other);
 
@@ -128,14 +128,14 @@ MemScopeNode* MemoryTracker::findOrAddChild(MemScopeNode* parent, const char* na
 {
     // Lock-free fast path: identity is the name LITERAL pointer (the same scope from two TUs can in
     // principle make two nodes; harmless duplicates in the view).
-    for (MemScopeNode* child = parent->firstChild.load(std::memory_order_acquire); child != nullptr;
-         child = child->nextSibling.load(std::memory_order_relaxed))
+    for (MemScopeNode* child = parent->firstChild.load(oc::memory_order_acquire); child != nullptr;
+         child = child->nextSibling.load(oc::memory_order_relaxed))
         if (child->name == name)
             return child;
 
     spinLock(m_nodeLock);
-    for (MemScopeNode* child = parent->firstChild.load(std::memory_order_relaxed); child != nullptr;
-         child = child->nextSibling.load(std::memory_order_relaxed))
+    for (MemScopeNode* child = parent->firstChild.load(oc::memory_order_relaxed); child != nullptr;
+         child = child->nextSibling.load(oc::memory_order_relaxed))
     {
         if (child->name == name)
         {
@@ -143,7 +143,7 @@ MemScopeNode* MemoryTracker::findOrAddChild(MemScopeNode* parent, const char* na
             return child;
         }
     }
-    const uint32 idx = m_numNodes.load(std::memory_order_relaxed);
+    const uint32 idx = m_numNodes.load(oc::memory_order_relaxed);
     if (idx >= MAX_NODES)
     {
         spinUnlock(m_nodeLock);
@@ -153,9 +153,9 @@ MemScopeNode* MemoryTracker::findOrAddChild(MemScopeNode* parent, const char* na
     node->name = name;
     node->parent = parent;
     node->category = category;
-    node->nextSibling.store(parent->firstChild.load(std::memory_order_relaxed), std::memory_order_relaxed);
-    m_numNodes.store(idx + 1, std::memory_order_relaxed);
-    parent->firstChild.store(node, std::memory_order_release); // publish fully-initialized
+    node->nextSibling.store(parent->firstChild.load(oc::memory_order_relaxed), oc::memory_order_relaxed);
+    m_numNodes.store(idx + 1, oc::memory_order_relaxed);
+    parent->firstChild.store(node, oc::memory_order_release); // publish fully-initialized
     spinUnlock(m_nodeLock);
     return node;
 }

@@ -55,7 +55,7 @@ void writeForceSpawnInfo(const ForceComponent::SpawnInfo& info, AssetNode& out)
     const ForceComponent::SpawnInfo defaults;
     out.set("Output", info.output);
     out.set("Reach", info.reach);
-    if (info.team != defaults.team)                 out.addChild("Team").values.emplace_back(std::to_string(info.team));
+    if (info.team != defaults.team)                 out.addChild("Team").values.emplace_back(oc::to_string(info.team));
     if (info.direction != defaults.direction)       out.set("Direction", info.direction);
     if (info.offset != defaults.offset)             out.set("Offset", info.offset);
     if (info.focus != defaults.focus)               out.set("Focus", info.focus);

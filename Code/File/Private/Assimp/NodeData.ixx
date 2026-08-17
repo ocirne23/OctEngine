@@ -21,11 +21,11 @@ public:
     }
     bool isValid() const override { return m_pNode != nullptr; }
 
-    std::unique_ptr<INodeData> clone() const override;
+    oc::unique_ptr<INodeData> clone() const override;
 
     const char* getName() const override;
     uint32 getNumChildren() const override;
-    std::unique_ptr<INodeData> getChild(uint32 idx) const override;
+    oc::unique_ptr<INodeData> getChild(uint32 idx) const override;
     uint32 getNumMeshes() const override;
     uint32 getMeshIndex(uint32 meshIdx) const override;
     void getTransform(glm::vec3& pos, glm::vec3& scale, glm::quat& rot) const override;
@@ -35,8 +35,8 @@ public:
 
     uint32 getNumChildrenRecursive() const override;
 
-    //std::unique_ptr<INodeData> findChild(std::initializer_list<const char*> hierarchy) const override;
-    std::vector<std::string> getChildrenNames() const override;
+    //oc::unique_ptr<INodeData> findChild(oc::initializer_list<const char*> hierarchy) const override;
+    oc::vector<oc::string> getChildrenNames() const override;
 
 private:
 

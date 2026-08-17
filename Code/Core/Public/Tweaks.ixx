@@ -38,8 +38,8 @@ export constexpr bool anyFlag(ETweakFlags a, ETweakFlags b) { return (uint8(a) &
 
 export struct TweakVar
 {
-	std::string_view name;
-	std::string_view category;
+	oc::string_view name;
+	oc::string_view category;
 	ETweakType       type = ETweakType::Float;
 	void*            data = nullptr;     // non-owning, points at the live variable
 
@@ -48,9 +48,9 @@ export struct TweakVar
 	float            speed = 0.01f;      // drag step for unbounded floats
 
 	float*           intensity = nullptr;                 // optional, Color3 only (min/max/speed then bound the intensity drag)
-	std::span<const std::string_view> enumNames;          // Enum only
+	oc::span<const oc::string_view> enumNames;          // Enum only
 
-	std::function<void()> onChange;                       // optional, fired when the value changes
+	oc::function<void()> onChange;                       // optional, fired when the value changes
 
 	ETweakFlags      flags = ETweakFlags::None;
 
@@ -85,7 +85,7 @@ public:
 		m_snapshots.push_back(readValue(stored));
 	}
 
-	const std::vector<TweakVar>& vars() const { return m_vars; }
+	const oc::vector<TweakVar>& vars() const { return m_vars; }
 
 	// ScopedFlags support — the default applied to registrations that pass no explicit flags.
 	ETweakFlags defaultFlags() const { return m_defaultFlags; }
@@ -95,12 +95,12 @@ public:
 	// Core sits BELOW the File library, so it cannot touch the disk itself: main() installs these
 	// two hooks (FileSystem::readFileStr / writeFileStr) before loadSaved(). Without them the
 	// Saved flag is simply inert — the registry keeps working in-memory.
-	using ReadFileFn = std::function<std::string(const std::string& path)>;
-	using WriteFileFn = std::function<bool(const std::string& path, const std::string& content)>;
+	using ReadFileFn = oc::function<oc::string(const oc::string& path)>;
+	using WriteFileFn = oc::function<bool(const oc::string& path, const oc::string& content)>;
 	void setFileIo(ReadFileFn read, WriteFileFn write)
 	{
-		m_readFile = std::move(read);
-		m_writeFile = std::move(write);
+		m_readFile = oc::move(read);
+		m_writeFile = oc::move(write);
 	}
 
 	// Call ONCE from main() right after FileSystem::initialize() (the path is Assets/-relative).
@@ -112,13 +112,13 @@ public:
 		if (!m_readFile)
 			return;
 		std::istringstream file(m_readFile(c_savePath));
-		std::string line;
+		oc::string line;
 		while (std::getline(file, line))
 		{
 			const size_t sep = line.find(" = ");
-			if (sep == std::string::npos || sep == 0 || sep + 3 >= line.size())
+			if (sep == oc::string::npos || sep == 0 || sep + 3 >= line.size())
 				continue;
-			std::vector<float>& values = m_savedValues[line.substr(0, sep)];
+			oc::vector<float>& values = m_savedValues[line.substr(0, sep)];
 			values.clear();
 			const char* cursor = line.c_str() + sep + 3;
 			while (values.size() < 4)
@@ -134,7 +134,7 @@ public:
 		for (size_t i = 0; i < m_vars.size(); ++i)
 			if (anyFlag(m_vars[i].flags, ETweakFlags::Saved) && applySavedValue(m_vars[i]))
 				m_snapshots[i] = readValue(m_vars[i]); // applied values are not "changes"
-		Log::info("Tweaks: loaded " + std::to_string(m_savedValues.size()) + " saved values");
+		Log::info("Tweaks: loaded " + oc::to_string(m_savedValues.size()) + " saved values");
 	}
 
 	// Main loop, once per frame. The panel (and gameplay code) writes through the raw pointers,
@@ -170,21 +170,21 @@ public:
 	// Every Synced var as self-contained records, split into chunks that each fit one network
 	// event. Record: [u8 keyLen]["Category/Name"][u8 type][u8 count][count x f32] (int/bool/enum
 	// travel as floats).
-	void packSynced(std::vector<std::vector<uint8>>& outChunks, size_t maxChunkBytes = 1000) const
+	void packSynced(oc::vector<oc::vector<uint8>>& outChunks, size_t maxChunkBytes = 1000) const
 	{
-		std::vector<uint8> chunk;
+		oc::vector<uint8> chunk;
 		for (const TweakVar& var : m_vars)
 		{
 			if (!anyFlag(var.flags, ETweakFlags::Synced))
 				continue;
-			const std::string key = keyOf(var);
+			const oc::string key = keyOf(var);
 			if (key.size() > 255)
 				continue;
 			const Value value = readValue(var);
 			const size_t recordSize = 1 + key.size() + 2 + value.count * sizeof(float);
 			if (!chunk.empty() && chunk.size() + recordSize > maxChunkBytes)
 			{
-				outChunks.push_back(std::move(chunk));
+				outChunks.push_back(oc::move(chunk));
 				chunk.clear();
 			}
 			chunk.push_back((uint8)key.size());
@@ -195,14 +195,14 @@ public:
 			chunk.insert(chunk.end(), bytes, bytes + value.count * sizeof(float));
 		}
 		if (!chunk.empty())
-			outChunks.push_back(std::move(chunk));
+			outChunks.push_back(oc::move(chunk));
 	}
 
 	// Receive side. Unknown keys, un-Synced vars and type mismatches are IGNORED — the sender
 	// cannot modify anything the receiver did not itself flag as Synced; values clamp to the
 	// receiver's own bounds. Applied values refresh the snapshot, so they neither re-save the
 	// client's file nor bounce a sync generation.
-	void applySyncedBlob(std::span<const uint8> blob)
+	void applySyncedBlob(oc::span<const uint8> blob)
 	{
 		size_t cursor = 0;
 		while (cursor < blob.size())
@@ -210,7 +210,7 @@ public:
 			const uint8 keyLen = blob[cursor++];
 			if (cursor + keyLen + 2 > blob.size())
 				return; // malformed — drop the rest
-			const std::string_view key(reinterpret_cast<const char*>(blob.data() + cursor), keyLen);
+			const oc::string_view key(reinterpret_cast<const char*>(blob.data() + cursor), keyLen);
 			cursor += keyLen;
 			const uint8 type = blob[cursor++];
 			const uint8 count = blob[cursor++];
@@ -241,7 +241,7 @@ private:
 		bool operator==(const Value& o) const { return count == o.count && std::memcmp(v, o.v, count * sizeof(float)) == 0; }
 	};
 
-	static std::string keyOf(const TweakVar& var) { return std::string(var.category) + "/" + std::string(var.name); }
+	static oc::string keyOf(const TweakVar& var) { return oc::string(var.category) + "/" + oc::string(var.name); }
 
 	static int componentCount(const TweakVar& var)
 	{
@@ -358,14 +358,14 @@ private:
 			file << '\n';
 		}
 		if (!m_writeFile(c_savePath, file.str()))
-			Log::warning("Tweaks: cannot write " + std::string(c_savePath));
+			Log::warning("Tweaks: cannot write " + oc::string(c_savePath));
 	}
 
 	static constexpr const char* c_savePath = "Local/tweaks.cfg";
 
-	std::vector<TweakVar> m_vars;
-	std::vector<Value> m_snapshots; // parallel to m_vars — last value seen by update()
-	std::map<std::string, std::vector<float>> m_savedValues; // the file image, unknown keys preserved
+	oc::vector<TweakVar> m_vars;
+	oc::vector<Value> m_snapshots; // parallel to m_vars — last value seen by update()
+	oc::map<oc::string, oc::vector<float>> m_savedValues; // the file image, unknown keys preserved
 	ETweakFlags m_defaultFlags = ETweakFlags::None;
 	uint32 m_syncGeneration = 0;
 	float m_saveTimer = 0.0f;
@@ -398,79 +398,79 @@ export namespace Tweak
 		ETweakFlags m_previous;
 	};
 
-	inline void floatVar(std::string_view category, std::string_view name, float* value, float min = 0.0f, float max = 1.0f, float speed = 0.01f, std::function<void()> onChange = {}, ETweakFlags flags = ETweakFlags::None)
+	inline void floatVar(oc::string_view category, oc::string_view name, float* value, float min = 0.0f, float max = 1.0f, float speed = 0.01f, oc::function<void()> onChange = {}, ETweakFlags flags = ETweakFlags::None)
 	{
 		TweakVar var{ name, category, ETweakType::Float, value, min, max, speed };
-		var.onChange = std::move(onChange);
+		var.onChange = oc::move(onChange);
 		var.flags = flags;
 		TweakRegistry::get().registerVar(var);
 	}
 
-	inline void float2(std::string_view category, std::string_view name, glm::vec2* value, float speed = 0.01f, std::function<void()> onChange = {}, ETweakFlags flags = ETweakFlags::None)
+	inline void float2(oc::string_view category, oc::string_view name, glm::vec2* value, float speed = 0.01f, oc::function<void()> onChange = {}, ETweakFlags flags = ETweakFlags::None)
 	{
 		TweakVar var{ name, category, ETweakType::Float2, value, 0.0f, FLT_MAX, speed };
-		var.onChange = std::move(onChange);
+		var.onChange = oc::move(onChange);
 		var.flags = flags;
 		TweakRegistry::get().registerVar(var);
 	}
 
-	inline void float3(std::string_view category, std::string_view name, glm::vec3* value, float speed = 0.01f, std::function<void()> onChange = {}, ETweakFlags flags = ETweakFlags::None)
+	inline void float3(oc::string_view category, oc::string_view name, glm::vec3* value, float speed = 0.01f, oc::function<void()> onChange = {}, ETweakFlags flags = ETweakFlags::None)
 	{
 		TweakVar var{ name, category, ETweakType::Float3, value, 0.0f, FLT_MAX, speed };
-		var.onChange = std::move(onChange);
+		var.onChange = oc::move(onChange);
 		var.flags = flags;
 		TweakRegistry::get().registerVar(var);
 	}
 
-	inline void float4(std::string_view category, std::string_view name, glm::vec4* value, float speed = 0.01f, std::function<void()> onChange = {}, ETweakFlags flags = ETweakFlags::None)
+	inline void float4(oc::string_view category, oc::string_view name, glm::vec4* value, float speed = 0.01f, oc::function<void()> onChange = {}, ETweakFlags flags = ETweakFlags::None)
 	{
 		TweakVar var{ name, category, ETweakType::Float4, value, 0.0f, FLT_MAX, speed };
-		var.onChange = std::move(onChange);
+		var.onChange = oc::move(onChange);
 		var.flags = flags;
 		TweakRegistry::get().registerVar(var);
 	}
 
 	// intensityMin/Max/Speed only affect the intensity drag (ignored when intensity == nullptr).
-	inline void color3(std::string_view category, std::string_view name, glm::vec3* color, float* intensity = nullptr,
-		float intensityMin = 0.0f, float intensityMax = FLT_MAX, float intensitySpeed = 0.05f, std::function<void()> onChange = {}, ETweakFlags flags = ETweakFlags::None)
+	inline void color3(oc::string_view category, oc::string_view name, glm::vec3* color, float* intensity = nullptr,
+		float intensityMin = 0.0f, float intensityMax = FLT_MAX, float intensitySpeed = 0.05f, oc::function<void()> onChange = {}, ETweakFlags flags = ETweakFlags::None)
 	{
 		TweakVar var{ name, category, ETweakType::Color3, color, intensityMin, intensityMax, intensitySpeed };
 		var.intensity = intensity;
-		var.onChange = std::move(onChange);
+		var.onChange = oc::move(onChange);
 		var.flags = flags;
 		TweakRegistry::get().registerVar(var);
 	}
 
-	inline void color4(std::string_view category, std::string_view name, glm::vec4* color, std::function<void()> onChange = {}, ETweakFlags flags = ETweakFlags::None)
+	inline void color4(oc::string_view category, oc::string_view name, glm::vec4* color, oc::function<void()> onChange = {}, ETweakFlags flags = ETweakFlags::None)
 	{
 		TweakVar var{ name, category, ETweakType::Color4, color };
-		var.onChange = std::move(onChange);
+		var.onChange = oc::move(onChange);
 		var.flags = flags;
 		TweakRegistry::get().registerVar(var);
 	}
 
 	// Integer slider (bounded) or drag (max == FLT_MAX). min/max/speed are stored as floats and cast.
-	inline void intVar(std::string_view category, std::string_view name, int* value, int min = 0, int max = 100, float speed = 1.0f, std::function<void()> onChange = {}, ETweakFlags flags = ETweakFlags::None)
+	inline void intVar(oc::string_view category, oc::string_view name, int* value, int min = 0, int max = 100, float speed = 1.0f, oc::function<void()> onChange = {}, ETweakFlags flags = ETweakFlags::None)
 	{
 		TweakVar var{ name, category, ETweakType::Int, value, float(min), float(max), speed };
-		var.onChange = std::move(onChange);
+		var.onChange = oc::move(onChange);
 		var.flags = flags;
 		TweakRegistry::get().registerVar(var);
 	}
 
-	inline void boolean(std::string_view category, std::string_view name, bool* value, std::function<void()> onChange = {}, ETweakFlags flags = ETweakFlags::None)
+	inline void boolean(oc::string_view category, oc::string_view name, bool* value, oc::function<void()> onChange = {}, ETweakFlags flags = ETweakFlags::None)
 	{
 		TweakVar var{ name, category, ETweakType::Bool, value };
-		var.onChange = std::move(onChange);
+		var.onChange = oc::move(onChange);
 		var.flags = flags;
 		TweakRegistry::get().registerVar(var);
 	}
 
-	inline void enumVar(std::string_view category, std::string_view name, int* value, std::span<const std::string_view> names, std::function<void()> onChange = {}, ETweakFlags flags = ETweakFlags::None)
+	inline void enumVar(oc::string_view category, oc::string_view name, int* value, oc::span<const oc::string_view> names, oc::function<void()> onChange = {}, ETweakFlags flags = ETweakFlags::None)
 	{
 		TweakVar var{ name, category, ETweakType::Enum, value };
 		var.enumNames = names;
-		var.onChange = std::move(onChange);
+		var.onChange = oc::move(onChange);
 		var.flags = flags;
 		TweakRegistry::get().registerVar(var);
 	}

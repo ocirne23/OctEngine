@@ -9,7 +9,7 @@ import :ProceduralTextureData;
 import :ProceduralMaterialData;
 import :ProceduralNodeData;
 
-export std::unique_ptr<ISceneData> createProceduralLoader();
+export oc::unique_ptr<ISceneData> createProceduralLoader();
 
 // Generates a single procedural shape scene from a shape name.
 // Supported values for the 'filePath' parameter of initialize():
@@ -32,7 +32,7 @@ public:
 
 	bool isValid() const override { return m_valid; }
 
-	const std::string& getFilePath() const override { return m_shapeName; }
+	const oc::string& getFilePath() const override { return m_shapeName; }
 	const INodeData&   getRootNode() const override { return m_rootNode; }
 
 	uint32 getNumMeshes()    const override { return (uint32)m_meshes.size(); }
@@ -45,10 +45,10 @@ public:
 	const ITextureData*  getTexture(uint32 idx)         const override;
 
 private:
-	std::string                       m_shapeName;
+	oc::string                       m_shapeName;
 	bool                              m_valid = false;
-	std::vector<ProceduralMeshData>     m_meshes;
-	std::vector<ProceduralTextureData>  m_textures;
-	std::vector<ProceduralMaterialData> m_materials;
+	oc::vector<ProceduralMeshData>     m_meshes;
+	oc::vector<ProceduralTextureData>  m_textures;
+	oc::vector<ProceduralMaterialData> m_materials;
 	ProceduralNodeData                  m_rootNode;
 };

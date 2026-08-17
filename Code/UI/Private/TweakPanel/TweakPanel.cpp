@@ -38,7 +38,7 @@ namespace
 			drawLabel(var);
 			float* v = static_cast<float*>(var.data);
 			int numDecimals = var.speed >= 1.0f ? 1 : static_cast<int>(-std::log10(var.speed));
-			std::string formatStr = ("%." + std::to_string(numDecimals) + "f");
+			oc::string formatStr = ("%." + oc::to_string(numDecimals) + "f");
 			if (var.isUnbounded())
 				changed = ImGui::DragFloat("##v", v, var.speed, var.min, FLT_MAX, formatStr.c_str());
 			else
@@ -103,13 +103,13 @@ namespace
 			drawLabel(var);
 			int* sel = static_cast<int*>(var.data);
 			const int count = static_cast<int>(var.enumNames.size());
-			const std::string_view current = (*sel >= 0 && *sel < count) ? var.enumNames[*sel] : std::string_view{};
-			std::string currentStr(current);
+			const oc::string_view current = (*sel >= 0 && *sel < count) ? var.enumNames[*sel] : oc::string_view{};
+			oc::string currentStr(current);
 			if (ImGui::BeginCombo("##v", currentStr.c_str()))
 			{
 				for (int i = 0; i < count; ++i)
 				{
-					std::string item(var.enumNames[i]);
+					oc::string item(var.enumNames[i]);
 					const bool selected = (i == *sel);
 					if (ImGui::Selectable(item.c_str(), selected) && i != *sel)
 					{
@@ -133,11 +133,11 @@ namespace
 
 	struct CategoryNode
 	{
-		std::string_view          name;
-		std::vector<CategoryNode> children;
-		std::vector<int>          varIndices;
+		oc::string_view          name;
+		oc::vector<CategoryNode> children;
+		oc::vector<int>          varIndices;
 
-		CategoryNode* child(std::string_view segment)
+		CategoryNode* child(oc::string_view segment)
 		{
 			for (CategoryNode& c : children)
 				if (c.name == segment)
@@ -147,16 +147,16 @@ namespace
 		}
 	};
 
-	void renderCategory(CategoryNode& node, int depth, std::string_view parentPath)
+	void renderCategory(CategoryNode& node, int depth, oc::string_view parentPath)
 	{
 		// Visible text is node.name; everything after "##" is the (hidden) ImGui ID.
 		// Use the full category path as the ID so categories that share a display
 		// name in different branches (e.g. Physics/World vs Ocean/World) don't collide.
-		std::string path(parentPath);
+		oc::string path(parentPath);
 		path += '/';
 		path += node.name;
 
-		std::string label(node.name);
+		oc::string label(node.name);
 		label += "##";
 		label += path;
 
@@ -182,7 +182,7 @@ namespace
 
 void TweakPanel::render()
 {
-	const std::vector<TweakVar>& vars = TweakRegistry::get().vars();
+	const oc::vector<TweakVar>& vars = TweakRegistry::get().vars();
 	if (vars.empty())
 	{
 		ImGui::TextDisabled("No tweak variables registered");
@@ -192,18 +192,18 @@ void TweakPanel::render()
 	CategoryNode root;
 	for (int i = 0; i < static_cast<int>(vars.size()); ++i)
 	{
-		std::string_view cat = vars[i].category.empty() ? std::string_view("General") : vars[i].category;
+		oc::string_view cat = vars[i].category.empty() ? oc::string_view("General") : vars[i].category;
 
 		CategoryNode* node = &root;
 		size_t start = 0;
 		while (start <= cat.size())
 		{
 			const size_t slash = cat.find('/', start);
-			const size_t end = (slash == std::string_view::npos) ? cat.size() : slash;
-			const std::string_view segment = cat.substr(start, end - start);
+			const size_t end = (slash == oc::string_view::npos) ? cat.size() : slash;
+			const oc::string_view segment = cat.substr(start, end - start);
 			if (!segment.empty())
 				node = node->child(segment);
-			if (slash == std::string_view::npos)
+			if (slash == oc::string_view::npos)
 				break;
 			start = slash + 1;
 		}

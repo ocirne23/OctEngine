@@ -34,7 +34,7 @@ export namespace Procedural
 
 		// Per frame, after TerrainStreamer::update. maps == nullptr (terrain disabled, models still
 		// loading) clears every collider.
-		void update(const glm::vec3& focusPos, std::shared_ptr<const ITerrainSampler> maps);
+		void update(const glm::vec3& focusPos, oc::shared_ptr<const ITerrainSampler> maps);
 
 	private:
 		struct Tile
@@ -67,7 +67,7 @@ export namespace Procedural
 		bool m_buildInFlight = false;
 		uint32 m_generation = 0;             // bumped on clear; stale in-flight results are dropped
 		const ITerrainSampler* m_mapsIdentity = nullptr; // identity only (never dereferenced)
-		std::unordered_map<uint64, Tile> m_tiles;
+		oc::unordered_map<uint64, Tile> m_tiles;
 		void* m_terrainUserData = nullptr;
 	};
 }

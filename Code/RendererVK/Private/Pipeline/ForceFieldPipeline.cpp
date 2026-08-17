@@ -66,7 +66,7 @@ void ForceFieldPipeline::createGridBuffers()
             vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
             vk::MemoryPropertyFlagBits::eDeviceLocal | vk::MemoryPropertyFlagBits::eHostVisible, false, "ForceGridTable");
         { // zero the demand header: checkForceGridCapacity reads it before the first GPU clear runs
-            std::span<uint32> header = m_gridTableBuffers[i].mapMemory<uint32>(0, 16);
+            oc::span<uint32> header = m_gridTableBuffers[i].mapMemory<uint32>(0, 16);
             memset(header.data(), 0, 16);
             m_gridTableBuffers[i].unmapMemory();
         }
@@ -164,8 +164,8 @@ void ForceFieldPipeline::reloadShaders(vk::RenderPass sceneRenderPass)
         printf("ForceFieldPipeline: query shader reload failed, keeping previous pipeline\n");
 }
 
-void ForceFieldPipeline::upload(uint32 frameIdx, std::span<const ForceEmitterGpu> slots,
-    std::span<const ForceQueryGpu> querySlots, float bigReachThreshold)
+void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu> slots,
+    oc::span<const ForceQueryGpu> querySlots, float bigReachThreshold)
 {
     ForceEmittersGpu* dst = m_mappedEmitters[frameIdx].data();
     uint32 count = 0;
@@ -224,7 +224,7 @@ void ForceFieldPipeline::recordCompute(CommandBuffer& commandBuffer, uint32 fram
     };
     // One set shape for all three passes: 0 = UBO, 1 = emitters, 3/4 = grid table/data, 5/6 = per-pass IO.
     const auto makeUpdates = [&](const Buffer& io5, const Buffer& io6) {
-        return std::array<DescriptorSetUpdateInfo, 6>{
+        return oc::array<DescriptorSetUpdateInfo, 6>{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(Ubo) } } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_emitterBuffers[frameIdx]) } },
             DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_gridTableBuffers[frameIdx]) } },
@@ -286,7 +286,7 @@ void ForceFieldPipeline::recordCompute(CommandBuffer& commandBuffer, uint32 fram
     }
 
     { // grid reads for the shell FS in the scene pass + readback visibility for the CPU
-        std::array<vk::MemoryBarrier2, 2> barriers{
+        oc::array<vk::MemoryBarrier2, 2> barriers{
             vk::MemoryBarrier2{
                 .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
                 .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
@@ -306,7 +306,7 @@ void ForceFieldPipeline::recordCompute(CommandBuffer& commandBuffer, uint32 fram
 
 ForceFieldPipeline::GridDemand ForceFieldPipeline::getGridDemand(uint32 frameIdx)
 {
-    std::span<GridDemand> span = m_gridTableBuffers[frameIdx].mapMemory<GridDemand>(0, sizeof(GridDemand));
+    oc::span<GridDemand> span = m_gridTableBuffers[frameIdx].mapMemory<GridDemand>(0, sizeof(GridDemand));
     const GridDemand demand = *span.data();
     m_gridTableBuffers[frameIdx].unmapMemory();
     return demand;
@@ -329,7 +329,7 @@ void ForceFieldPipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameId
     DescriptorSet& set = m_drawSets[drawSlot(frameIdx, eye)];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
 
-    std::array<DescriptorSetUpdateInfo, 5> updates{
+    oc::array<DescriptorSetUpdateInfo, 5> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(Ubo) } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_emitterBuffers[frameIdx].getBuffer(), .range = m_emitterBuffers[frameIdx].getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {

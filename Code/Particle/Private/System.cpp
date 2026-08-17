@@ -97,7 +97,7 @@ void ParticleSystem::initialize()
 {
 }
 
-uint16 ParticleSystem::getTexture(const std::string& path, bool sRGB)
+uint16 ParticleSystem::getTexture(const oc::string& path, bool sRGB)
 {
     if (path.empty())
         return (uint16)PARTICLE_TEX_NONE;
@@ -108,28 +108,28 @@ uint16 ParticleSystem::getTexture(const std::string& path, bool sRGB)
     return idx;
 }
 
-const ParticleEffectDesc* ParticleSystem::getEffectDesc(const std::string& path)
+const ParticleEffectDesc* ParticleSystem::getEffectDesc(const oc::string& path)
 {
     if (auto it = m_effectCache.find(path); it != m_effectCache.end())
         return it->second.get();
-    auto desc = std::make_shared<ParticleEffectDesc>();
-    std::string error;
+    auto desc = oc::make_shared<ParticleEffectDesc>();
+    oc::string error;
     if (!loadParticleEffect(path, *desc, error))
     {
         printf("ParticleSystem: failed to load %s: %s\n", path.c_str(), error.c_str());
         return nullptr;
     }
     const ParticleEffectDesc* result = desc.get();
-    m_effectCache.emplace(path, std::move(desc));
+    m_effectCache.emplace(path, oc::move(desc));
     return result;
 }
 
-void ParticleSystem::invalidateEffect(const std::string& path)
+void ParticleSystem::invalidateEffect(const oc::string& path)
 {
     m_effectCache.erase(path); // live instances keep their shared_ptr desc
 }
 
-ParticleEffect ParticleSystem::createEffect(const std::string& pfxPath, const glm::vec3& pos, const glm::quat& rot)
+ParticleEffect ParticleSystem::createEffect(const oc::string& pfxPath, const glm::vec3& pos, const glm::quat& rot)
 {
     getEffectDesc(pfxPath); // populate the cache
     if (auto it = m_effectCache.find(pfxPath); it != m_effectCache.end())
@@ -139,15 +139,15 @@ ParticleEffect ParticleSystem::createEffect(const std::string& pfxPath, const gl
 
 ParticleEffect ParticleSystem::createEffect(const ParticleEffectDesc& desc, const glm::vec3& pos, const glm::quat& rot)
 {
-    return createEffectInstance(std::make_shared<const ParticleEffectDesc>(desc), pos, rot);
+    return createEffectInstance(oc::make_shared<const ParticleEffectDesc>(desc), pos, rot);
 }
 
-ParticleEffect ParticleSystem::createEffectInstance(std::shared_ptr<const ParticleEffectDesc> desc, const glm::vec3& pos, const glm::quat& rot)
+ParticleEffect ParticleSystem::createEffectInstance(oc::shared_ptr<const ParticleEffectDesc> desc, const glm::vec3& pos, const glm::quat& rot)
 {
     EffectInstance inst;
     inst.pos = pos;
     inst.rot = rot;
-    inst.desc = std::move(desc);
+    inst.desc = oc::move(desc);
     inst.emitters.reserve(inst.desc->emitters.size());
     for (const ParticleEmitterDesc& e : inst.desc->emitters)
     {
@@ -164,7 +164,7 @@ ParticleEffect ParticleSystem::createEffectInstance(std::shared_ptr<const Partic
     if (inst.emitters.empty())
         return ParticleEffect();
     inst.id = m_nextEffectId++;
-    m_effects.push_back(std::move(inst));
+    m_effects.push_back(oc::move(inst));
     return ParticleEffect(m_effects.back().id);
 }
 
@@ -239,7 +239,7 @@ void ParticleSystem::update(Renderer& renderer, float deltaSec)
                 m_decals.erase(m_decals.begin() + i);
                 continue;
             }
-            opacity = std::min(1.0f, (decal.lifetime - decal.age) / std::max(decal.fadeOutTime, 1e-3f));
+            opacity = oc::min(1.0f, (decal.lifetime - decal.age) / oc::max(decal.fadeOutTime, 1e-3f));
         }
         RendererVKLayout::DecalInfo info = decal.info;
         info.opacity *= opacity;
@@ -278,7 +278,7 @@ uint32 ParticleSystem::spawnDecal(const DecalDesc& desc, const glm::vec3& pos, c
     decal.info.pos = pos;
     decal.info.opacity = 1.0f;
     decal.info.rotation = quatToVec4(rot);
-    decal.info.halfExtents = glm::vec3(desc.size * 0.5f, std::max(desc.depth, 0.01f));
+    decal.info.halfExtents = glm::vec3(desc.size * 0.5f, oc::max(desc.depth, 0.01f));
     decal.info.angleFadeCos = std::cos(glm::radians(desc.angleFadeDeg));
     decal.info.tint = desc.tint;
     decal.info.emissive = desc.emissive;
@@ -296,7 +296,7 @@ void ParticleSystem::removeDecal(uint32 id)
         if (decal.id == id)
         {
             // Turn it finite so it fades out from here.
-            decal.lifetime = decal.age + std::max(decal.fadeOutTime, 1e-3f);
+            decal.lifetime = decal.age + oc::max(decal.fadeOutTime, 1e-3f);
             return;
         }
     }

@@ -40,7 +40,7 @@ private:
 
     const char* m_pName = nullptr;
     const aiMesh* m_pMesh = nullptr;
-    std::vector<uint32> m_indices;
-    std::vector<glm::uvec4> m_boneIndices; // per-vertex, scene-skeleton bone indices (4 influences)
-    std::vector<glm::vec4> m_boneWeights;  // per-vertex, normalized influence weights (sum ~1)
+    oc::vector<uint32> m_indices;
+    oc::vector<glm::uvec4> m_boneIndices; // per-vertex, scene-skeleton bone indices (4 influences)
+    oc::vector<glm::vec4> m_boneWeights;  // per-vertex, normalized influence weights (sum ~1)
 };

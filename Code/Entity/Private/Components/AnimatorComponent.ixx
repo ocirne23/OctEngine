@@ -20,10 +20,10 @@ export struct AnimatorComponent
     AnimationPlayer player;
     AnimStateMachine stateMachine;
     const AnimationSet* clipSet = nullptr;  // shared, World-cached clip library (retargeted to the rig)
-    std::vector<BlendSpace1D> blendSpaces;  // stable storage referenced by the state machine
-    std::vector<AnimatorDesc::SpeedBinding> stateSpeeds; // playback-speed config per StateId
+    oc::vector<BlendSpace1D> blendSpaces;  // stable storage referenced by the state machine
+    oc::vector<AnimatorDesc::SpeedBinding> stateSpeeds; // playback-speed config per StateId
     AnimatorDesc::SpeedBinding defaultSpeed;             // animator-wide playback-speed fallback
-    std::function<void(const std::string&)> onEvent;    // gameplay hook for clip event notifies
+    oc::function<void(const oc::string&)> onEvent;    // gameplay hook for clip event notifies
     bool enabled = true;
     bool hasStateMachine = false;
     bool built = false;
@@ -33,7 +33,7 @@ export struct AnimatorComponent
         const AnimatorDesc* desc = nullptr;     // parsed .apl graph (owned by AssetRegistry)
         const Skeleton* skeleton = nullptr;     // rig skeleton from the sibling render mesh's container
         const AnimationSet* clipSet = nullptr;  // shared clip library (World-cached per skeleton+animator)
-        std::string animatorName;               // kept for re-serialization
+        oc::string animatorName;               // kept for re-serialization
         bool enabled = true;
     };
 

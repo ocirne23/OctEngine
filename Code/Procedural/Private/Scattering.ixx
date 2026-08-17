@@ -21,7 +21,7 @@ export namespace Procedural
 		const char* ocPath = "";           // .oc file relative to Assets/ — the model path and import options
 		                                   // (MergeNodes/PreTransformVertices/DecimationFactor) come from it,
 		                                   // so scatter and World share one cooked .vsc per model
-		std::vector<const char*> nodes;    // spawnable node paths in the model — each placement picks one
+		oc::vector<const char*> nodes;    // spawnable node paths in the model — each placement picks one
 		                                   // at random (variants); empty = spawn the model root
 		float footprintRadius = 1.0f;      // ground exclusion radius (m at scale 1): no other footprinted
 		                                   // instance may overlap it. 0 = never blocks/blocked (cheap grass)
@@ -75,7 +75,7 @@ export namespace Procedural
 		void initialize();  // registers Tweaks, loads the asset table's containers, starts the worker
 		// Per frame, after terrain.update: maps = terrain.activeClimateMaps() — scatter follows the live
 		// terrain field, clears itself while terrain is disabled, and regenerates when the field changes.
-		void update(Renderer& renderer, const Camera& camera, const std::shared_ptr<const ITerrainSampler>& maps);
+		void update(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps);
 
 	private:
 		// One placed instance, produced by the worker (variantIdx indexes ScatterAsset::nodes).
@@ -90,7 +90,7 @@ export namespace Procedural
 		struct GroupResult
 		{
 			uint16 ruleIdx;
-			std::vector<Placed> instances;
+			oc::vector<Placed> instances;
 		};
 
 		// Tweak-backed generation parameters, snapshotted into each request (the worker never reads members).
@@ -107,7 +107,7 @@ export namespace Procedural
 			uint32 generation = 0;
 			glm::ivec2 coord{ 0, 0 };
 			GenParams params;
-			std::shared_ptr<const ITerrainSampler> maps;
+			oc::shared_ptr<const ITerrainSampler> maps;
 		};
 
 		struct Result
@@ -116,7 +116,7 @@ export namespace Procedural
 			uint32 generation = 0;
 			glm::ivec2 coord{ 0, 0 };
 			bool dropped = false;               // stale at dequeue: main thread just releases the pending key
-			std::vector<GroupResult> groups;
+			oc::vector<GroupResult> groups;
 		};
 
 		// A resident cell's instances for one rule: nodes exist only while the cell is inside the rule's
@@ -124,8 +124,8 @@ export namespace Procedural
 		struct RuleGroup
 		{
 			uint16 ruleIdx = 0;
-			std::vector<Placed> instances;
-			std::vector<RenderNode> nodes;
+			oc::vector<Placed> instances;
+			oc::vector<RenderNode> nodes;
 			SpatialEntry spatialEntry;          // culling registration while spawned (SpatialLayer_Terrain)
 		};
 
@@ -133,8 +133,8 @@ export namespace Procedural
 		// once at initialize and their rules drop out).
 		struct AssetRuntime
 		{
-			std::unique_ptr<ObjectContainer> container;
-			std::vector<NodeSpawnIdx> variants;
+			oc::unique_ptr<ObjectContainer> container;
+			oc::vector<NodeSpawnIdx> variants;
 		};
 
 		void pumpJob();                // self-continuing Low-priority generation job
@@ -153,7 +153,7 @@ export namespace Procedural
 		bool  m_configDirty = false;
 
 		// --- Assets (loaded once at initialize; indices match the SCATTER_ASSETS table) ---
-		std::vector<AssetRuntime> m_assets;
+		oc::vector<AssetRuntime> m_assets;
 
 		// --- Per-rule runtime, resolved at initialize (read-only afterwards, shared with the worker):
 		// table asset index (UINT16_MAX = rule dropped), variant count, and the rule attractor's
@@ -165,23 +165,23 @@ export namespace Procedural
 			uint16 numVariants = 1;
 			glm::vec2 climateCoords{ 0.5f, 0.5f };
 		};
-		std::vector<RuleRuntime> m_rules;
-		std::vector<uint16> m_ruleOrder;
+		oc::vector<RuleRuntime> m_rules;
+		oc::vector<uint16> m_ruleOrder;
 		float m_maxViewDistance = 0.0f;
 
 		// The placement function itself — pure, worker-thread; see the definition for the filter chain.
 		static void generateCell(const ITerrainSampler& maps, glm::ivec2 coord, const GenParams& params,
-			std::span<const RuleRuntime> ruleRt, std::span<const uint16> order, std::vector<GroupResult>& outGroups);
+			oc::span<const RuleRuntime> ruleRt, oc::span<const uint16> order, oc::vector<GroupResult>& outGroups);
 
 		// --- Threading (mirrors TerrainStreamer: up to m_maxGenJobs Low-priority pump jobs, lazy
 		// staleness at dequeue against published ring state; same claim/exit-recheck protocol.
 		// generateCell is a pure function of const rule tables, so concurrent pumps are safe) ---
-		std::atomic<int32>      m_numPumps{ 0 };
+		oc::atomic<int32>      m_numPumps{ 0 };
 		int                     m_maxGenJobs = 2;
 		JobCounter              m_pumpCounter;
 		std::mutex              m_mutex;
-		std::deque<Request>     m_requests;
-		std::vector<Result>     m_results;
+		oc::deque<Request>     m_requests;
+		oc::vector<Result>     m_results;
 		glm::ivec2              m_ringCam{ 0, 0 };
 		int                     m_ringR = -1;
 		uint32                  m_generation = 0;
@@ -190,13 +190,13 @@ export namespace Procedural
 		// only needs a coordinate range enumerates coords and hash-probes instead of walking a map. Groups
 		// live in per-rule maps so the spawn scan probes only the cells inside each rule's OWN view-
 		// distance ring — never the full residency ring, which is sized by the largest rule.
-		std::unordered_set<uint64> m_residentCells; // every generated ring cell, incl. placement-less ones
-		std::vector<std::unordered_map<uint64, RuleGroup>> m_ruleGroups; // [ruleIdx][cellKey]
-		std::unordered_set<uint64> m_pending;
+		oc::unordered_set<uint64> m_residentCells; // every generated ring cell, incl. placement-less ones
+		oc::vector<oc::unordered_map<uint64, RuleGroup>> m_ruleGroups; // [ruleIdx][cellKey]
+		oc::unordered_set<uint64> m_pending;
 
 		// Spawned groups only: the per-frame despawn check and render push walk this instead of any map.
 		struct ActiveGroup { uint64 key; uint16 ruleIdx; };
-		std::vector<ActiveGroup> m_active;
+		oc::vector<ActiveGroup> m_active;
 		bool m_ringDirty = true;   // rerun the enqueue scan without ring movement (reset, dropped result)
 		bool m_spawnScan = true;   // rerun the spawn scan (admissions, over-budget deferrals, reset)
 		glm::vec2 m_lastScanPos{ FLT_MAX, FLT_MAX };

@@ -40,7 +40,7 @@ export namespace Procedural
 		// ocean's shore-depth bake). nullptr while terrain rendering is disabled — consumers treat that
 		// as "no terrain" rather than sampling a field that isn't drawn. Thread-safe; the shared_ptr
 		// keeps the maps valid across config rebuilds (workers holding the old maps finish against them).
-		std::shared_ptr<const ITerrainSampler> activeClimateMaps() { return m_enabled ? currentMaps() : nullptr; }
+		oc::shared_ptr<const ITerrainSampler> activeClimateMaps() { return m_enabled ? currentMaps() : nullptr; }
 		// The ocean-reach rule this streamer bakes into the terrain-data map, for anything baking the SAME
 		// fields off the same sampler (the ocean's shore map, which overrides that map inside its range).
 		// Handed out rather than duplicated so the two cannot drift apart — see applyWaterReach.
@@ -62,7 +62,7 @@ export namespace Procedural
 		// to the GPU) — the ocean samples it for buoyancy water depth/level and wind-steering flow votes.
 		// nullptr while no bake has shipped / terrain is disabled; a re-bake swaps in a NEW object, so
 		// consumers holding the old shared_ptr keep a coherent snapshot.
-		std::shared_ptr<const BakedTerrainData> activeTerrainData() const { return m_terrainMapData; }
+		oc::shared_ptr<const BakedTerrainData> activeTerrainData() const { return m_terrainMapData; }
 
 	private:
 		struct Request
@@ -70,7 +70,7 @@ export namespace Procedural
 			uint64 key = 0;
 			uint32 generation = 0;
 			ChunkParams params;
-			std::shared_ptr<const ITerrainSampler> maps;
+			oc::shared_ptr<const ITerrainSampler> maps;
 		};
 
 		struct Result
@@ -82,12 +82,12 @@ export namespace Procedural
 			// Built IN the pump job (createMeshScene is pure per-instance copying - audited): the
 			// main thread only does the GPU-facing ObjectContainer::initialize. null = dropped/failed;
 			// the key is released and the ring scan re-requests it if still wanted.
-			std::unique_ptr<ISceneData> scene;
+			oc::unique_ptr<ISceneData> scene;
 		};
 
 		struct Resident
 		{
-			std::unique_ptr<ObjectContainer> container; // declared first -> destroyed AFTER node
+			oc::unique_ptr<ObjectContainer> container; // declared first -> destroyed AFTER node
 			glm::ivec2 coord{ 0, 0 };
 			uint32 lod = 0;
 			RenderNode node;                            // references container's meshes; destroyed first
@@ -103,10 +103,10 @@ export namespace Procedural
 		// then).
 		void updateTerrainTextures(Renderer& renderer);
 		void registerTerrainTextures(Renderer& renderer); // one-shot, from updateTerrainTextures
-		std::shared_ptr<const ITerrainSampler> currentMaps();
+		oc::shared_ptr<const ITerrainSampler> currentMaps();
 		// Bakes/refreshes the fog terrain height map around the camera (Renderer::setFogTerrainHeightMap);
 		// maps == nullptr means "no terrain" and clears the map. See the .cpp for the bake scheme.
-		void updateFogHeightMap(Renderer& renderer, const Camera& camera, const std::shared_ptr<const ITerrainSampler>& maps, float farRange);
+		void updateFogHeightMap(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps, float farRange);
 
 		// --- Tweak-backed configuration (source of truth; the generator/ChunkParams are built from these) ---
 		bool  m_enabled = false;
@@ -179,19 +179,19 @@ export namespace Procedural
 		bool  m_flowFieldEnabled = true;
 		HeightMapBaker m_terrainMapBaker;
 		bool  m_terrainMapUploaded = false;    // a map is live in the renderer (cleared on disable)
-		std::shared_ptr<const BakedTerrainData> m_terrainMapData; // CPU copy of the active bake (activeTerrainData)
+		oc::shared_ptr<const BakedTerrainData> m_terrainMapData; // CPU copy of the active bake (activeTerrainData)
 
 		// --- Terrain splat textures: source images baked to BC .dds (Assets/Local/TerrainTex) on a
 		// background thread at startup (skipped when the cache is fresh), then registered once ---
 		JobCounter        m_texBakeCounter;         // one Low job (internally a parallelFor over conversions)
-		std::atomic<bool> m_texBakeStop{ false };
-		std::atomic<bool> m_texBakeDone{ false };
+		oc::atomic<bool> m_texBakeStop{ false };
+		oc::atomic<bool> m_texBakeDone{ false };
 		bool              m_texSetRegistered = false;
 		// Climate of each entry that survived the bake, in registered material order. Kept in REAL units
 		// (x,y = temperature C range, z,w = precipitation mm/yr range) and renormalized into m_texClimateBoxes
 		// every frame, because the mm-per-full-humidity divisor is a live tweak.
-		std::vector<glm::vec4> m_texClimateReal;
-		std::vector<glm::vec4> m_texClimateBoxes;
+		oc::vector<glm::vec4> m_texClimateReal;
+		oc::vector<glm::vec4> m_texClimateBoxes;
 
 		// --- Terrain/Textures tweaks: splat shaping, pushed to Renderer::setTerrainTextureParams every
 		// frame from updateTerrainTextures (mirrors Renderer::TerrainTexTweaks) ---
@@ -225,7 +225,7 @@ export namespace Procedural
 		// lands, and warm-tile mesh builds overlap the cold-tile wait). Claim invariant: a pump
 		// leaving decrements m_numPumps BEFORE its empty-recheck and re-claims a slot if requests
 		// remain, and every append is followed by kickPump - so requests never strand. ---
-		std::atomic<int32>      m_numPumps{ 0 };
+		oc::atomic<int32>      m_numPumps{ 0 };
 		int                     m_maxGenJobs = 4; // tweak: concurrent chunk generations
 		JobCounter              m_pumpCounter;
 		std::mutex              m_mutex;
@@ -234,7 +234,7 @@ export namespace Procedural
 		// neither side sorts it. Ordering it would just re-decide, one camera position stale, what the
 		// worker decides correctly at pick time — and FIFO is what made distant chunks generate before the
 		// ground underfoot.
-		std::deque<Request>     m_requests;
+		oc::deque<Request>     m_requests;
 		// Ring state the worker judges queued requests against at DEQUEUE time (guarded by m_mutex): both
 		// which are stale (dropped lazily, in the same pass) and which is nearest. m_ringR = -1 until the
 		// first publish (everything queued before that would drop, but the first publish precedes the
@@ -245,14 +245,14 @@ export namespace Procedural
 		float  m_ringLodStep = 1.0f;
 		float  m_ringFullRes = 0.5f;
 		uint32 m_ringMaxLod = 0;
-		std::vector<Result>     m_results;      // filled by worker, drained on the main thread
-		std::vector<Result>     m_readyBacklog; // main-thread only: generated chunks over the per-frame upload cap
-		std::shared_ptr<const ITerrainSampler> m_maps;
+		oc::vector<Result>     m_results;      // filled by worker, drained on the main thread
+		oc::vector<Result>     m_readyBacklog; // main-thread only: generated chunks over the per-frame upload cap
+		oc::shared_ptr<const ITerrainSampler> m_maps;
 		uint32                  m_generation = 0;
 
 		// --- Main-thread residency state ---
-		std::unordered_map<uint64, Resident> m_residents;
-		std::unordered_set<uint64>           m_pending; // requested/queued, not yet resident
+		oc::unordered_map<uint64, Resident> m_residents;
+		oc::unordered_set<uint64>           m_pending; // requested/queued, not yet resident
 		// Last ring parameters published to the worker (main-thread copies: the publish is skipped —
 		// no lock taken — while none of them changed and there is nothing new to append).
 		int    m_lastRingCX = INT_MIN;

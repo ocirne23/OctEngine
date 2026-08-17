@@ -70,8 +70,8 @@ export struct SyntaxLine
 	DSLCodeLine* sourceLine = nullptr;
 	DSLSymbol*   endOfSymbol = nullptr;
 	int scopeLevel = 0;
-	std::string text;
-	std::vector<SyntaxSpan> spans; // left-to-right, non-overlapping, covers every selectable substring of text
+	oc::string text;
+	oc::vector<SyntaxSpan> spans; // left-to-right, non-overlapping, covers every selectable substring of text
 };
 
 // Turns a DSLScriptFile into rendered text + a symbol-tagged span list per line -- the one place that knows how
@@ -89,7 +89,7 @@ export class Syntax
 public:
 	// Takes a non-const DSLScriptFile so the returned spans/endOfSymbol carry mutable DSLSymbol* -- Syntax
 	// itself never mutates anything, but ScriptEditor's editing operations act directly through these same pointers.
-	static std::vector<SyntaxLine> format(DSLScriptFile& file, bool compact);
+	static oc::vector<SyntaxLine> format(DSLScriptFile& file, bool compact);
 
 	// True if `head` (a line's own top-level symbol) opens a nested block -- i.e. the FOLLOWING lines at
 	// scopeLevel+1 are its body, closed by a synthetic `end`. Shared between format()'s end-insertion algorithm
@@ -102,7 +102,7 @@ export class TabGroup
 {
 public:
 	TabGroup* parent = nullptr;
-	std::vector<TabGroup> children;
+	oc::vector<TabGroup> children;
 };
 
 // One offered completion. `refSymbol` names the existing declaration a Variable/Function/Reassign candidate
@@ -134,14 +134,14 @@ export struct Candidate
 		Member,        // one MEMBER of a binding object ("pos"): refSymbol = the RECEIVER's declaration,
 		               // declareType = the member's value type -- resolves to a MemberAccess
 	};
-	std::string label;
+	oc::string label;
 	Kind kind = Kind::Variable;
 	DSLSymbol* refSymbol = nullptr;
 	DSLType declareType = DSLType::Void;
 	DSLOperator op = DSLOperator::Equal;
 	DSLSymbol* receiver = nullptr; // Function candidates from receiverCandidates: the receiver chain's ROOT
 	                               // declaration (a sidebar binding or a struct-typed variable; null = free call)
-	std::string receiverPath;      // the dotted member path between the root and the call, "" for a direct
+	oc::string receiverPath;      // the dotted member path between the root and the call, "" for a direct
 	                               // dot-call -- "pos" in `self.pos.length()`. For Kind::Member the PATH rides
 	                               // in `label` instead ("pos.x"), always relative to refSymbol as the root
 	bool memberWritable = true;    // Kind::Member only: the underlying BindingMember::writable -- a chainable-
@@ -168,9 +168,9 @@ public:
 	// `offerComparisonLeads` (Bool slots only) additionally offers NUMERIC variables/functions as a
 	// comparison's left operand ("bool b = i < 5") -- passed only by value flows that support the comparator
 	// continuation (the editor refuses such a lead as a direct value; only a typed comparator consumes it).
-	static std::vector<Candidate> candidatesFor(DSLType expectedType, const DSLCodeLine& atLine, const DSLScriptFile& file,
-		const std::vector<std::unique_ptr<DSLSymbol>>& sidebar, const std::vector<std::unique_ptr<DSLSymbol>>& builtins,
-		const std::string& typedPrefix, DSLSymbol* excludeVariable = nullptr, bool offerComparisonLeads = false);
+	static oc::vector<Candidate> candidatesFor(DSLType expectedType, const DSLCodeLine& atLine, const DSLScriptFile& file,
+		const oc::vector<oc::unique_ptr<DSLSymbol>>& sidebar, const oc::vector<oc::unique_ptr<DSLSymbol>>& builtins,
+		const oc::string& typedPrefix, DSLSymbol* excludeVariable = nullptr, bool offerComparisonLeads = false);
 
 	// For an if/while condition's FIRST operand, whose type isn't known yet (it's what FIXES the type the
 	// comparator/second operand must then match) -- every in-scope variable and every non-Void-returning
@@ -183,9 +183,9 @@ public:
 	// literal's type and that's fine: a VARIADIC callee's extra arguments (printf's values), which have no
 	// declared parameter to match against. The typed text picks its own type -- quoted = String, digits = Int,
 	// digits with a '.' = Float -- plus true/false for Bool, exactly what a C vararg can carry.
-	static std::vector<Candidate> candidatesForAnyValue(const DSLCodeLine& atLine, const DSLScriptFile& file,
-		const std::vector<std::unique_ptr<DSLSymbol>>& sidebar, const std::vector<std::unique_ptr<DSLSymbol>>& builtins,
-		const std::string& typedPrefix, DSLSymbol* excludeVariable = nullptr, bool offerLiterals = false);
+	static oc::vector<Candidate> candidatesForAnyValue(const DSLCodeLine& atLine, const DSLScriptFile& file,
+		const oc::vector<oc::unique_ptr<DSLSymbol>>& sidebar, const oc::vector<oc::unique_ptr<DSLSymbol>>& builtins,
+		const oc::string& typedPrefix, DSLSymbol* excludeVariable = nullptr, bool offerLiterals = false);
 
 	// Functions/members reachable by dotting into a receiver of `receiverType` -- a binding object (self) or any
 	// engine-defined STRUCT value (vec3 and friends). `receiverDecl` is the chain's ROOT declaration, carried
@@ -208,35 +208,35 @@ public:
 	// `atLine`/`file`/`receiverPath` locate the receiver in the document, which is what the mutate-while-
 	// iterating refusal needs: a container-mutating function (push/clear) isn't offered while a foreach/ifexist
 	// in an enclosing block is reading that same storage.
-	static std::vector<Candidate> receiverCandidates(const ScriptBindings& bindings, const DSL& document, DSLSymbol* receiverDecl,
+	static oc::vector<Candidate> receiverCandidates(const ScriptBindings& bindings, const DSL& document, DSLSymbol* receiverDecl,
 		DSLType receiverType, DSLType expectedType, bool anyValue, bool receiverWritable, bool receiverIsRoot,
-		const DSLCodeLine* atLine, const DSLScriptFile& file, const std::string& receiverPath,
-		const std::string& typedPrefix);
+		const DSLCodeLine* atLine, const DSLScriptFile& file, const oc::string& receiverPath,
+		const oc::string& typedPrefix);
 
 	// The six comparison operators (==, !=, <, >, <=, >=) offered while building an if/while condition's middle
 	// term, filtered by typedPrefix same as any other candidate list (typing "<" narrows to "<" and "<=").
 	// `equalityOnly` drops the four ORDERING operators, leaving == and != -- what an Entity comparison gets
 	// (identity/null tests are meaningful, "one entity is less than another" isn't).
-	static std::vector<Candidate> comparisonOperatorCandidates(const std::string& typedPrefix, bool equalityOnly = false);
+	static oc::vector<Candidate> comparisonOperatorCandidates(const oc::string& typedPrefix, bool equalityOnly = false);
 	// Whether comparing `type` should be restricted to == / != (see comparisonOperatorCandidates).
 	static bool isEqualityOnlyType(DSLType type);
 
 	// The five compound-assign operators (+=, -=, *=, /=, %=) offered while building a for-loop's increment
 	// clause (`counter += 1`) -- a plain `=` isn't offered here, matching the example program's convention that
 	// a for-loop's increment always compounds the loop variable rather than replacing it outright.
-	static std::vector<Candidate> compoundAssignOperatorCandidates(const std::string& typedPrefix);
+	static oc::vector<Candidate> compoundAssignOperatorCandidates(const oc::string& typedPrefix);
 
 	// The five arithmetic operators (+, -, *, /, %) -- offered when REPLACING an arithmetic operator inside an
 	// existing expression chain in place (see ScriptEditor's ReplaceOperator mode).
-	static std::vector<Candidate> arithmeticOperatorCandidates(const std::string& typedPrefix);
+	static oc::vector<Candidate> arithmeticOperatorCandidates(const oc::string& typedPrefix);
 
 	// The two logical operators (&&, ||) -- offered when replacing one inside an existing logical chain.
-	static std::vector<Candidate> logicalOperatorCandidates(const std::string& typedPrefix);
+	static oc::vector<Candidate> logicalOperatorCandidates(const oc::string& typedPrefix);
 
 	// All six assign-class operators (=, +=, -=, *=, /=, %=) -- offered when replacing an assignment
 	// statement's (or a for-increment's) own operator in place. Superset of compoundAssignOperatorCandidates:
 	// unlike a for-loop being AUTHORED, an existing statement's operator may become a plain `=` too.
-	static std::vector<Candidate> assignOperatorCandidates(const std::string& typedPrefix);
+	static oc::vector<Candidate> assignOperatorCandidates(const oc::string& typedPrefix);
 
 	// What DSLType belongs at `slot` (DSLType::Void = a statement slot). Derived from the slot's STRUCTURAL
 	// position (which field of which parent it is), not from whatever symbol currently occupies it -- so
@@ -256,7 +256,7 @@ public:
 	// trips through ScriptLoader's plain text-based parser (which matches these words literally) -- the ONE
 	// place this list lives, so isNameInScope/isFunctionNameTaken/the editor's parameter check/the loader's own
 	// checks can't drift apart.
-	static bool isReservedWord(const std::string& name);
+	static bool isReservedWord(const oc::string& name);
 
 	// Whether `name` collides with any variable a declaration AT atLine would share scope with (sidebar bindings
 	// always count too), OR with any FUNCTION name (builtin or user-declared, same set isFunctionNameTaken
@@ -274,28 +274,28 @@ public:
 	// to reuse.
 	// `excludeVariable` (optional) ignores one declaration -- e.g. a rename's own prior name shouldn't count
 	// as a collision against itself.
-	static bool isNameInScope(const std::string& name, const DSLCodeLine& atLine, const DSLScriptFile& file,
-		const std::vector<std::unique_ptr<DSLSymbol>>& sidebar, const std::vector<std::unique_ptr<DSLSymbol>>& builtins,
+	static bool isNameInScope(const oc::string& name, const DSLCodeLine& atLine, const DSLScriptFile& file,
+		const oc::vector<oc::unique_ptr<DSLSymbol>>& sidebar, const oc::vector<oc::unique_ptr<DSLSymbol>>& builtins,
 		DSLSymbol* excludeVariable = nullptr);
 
 	// Whether `text` reads as a valid literal of `type` (String: always; Int/Float: must look like a real
 	// number -- see candidatesFor's literal-candidate check). Exported so ScriptEditor can apply the SAME rule
 	// when validating vec2/3/4's comma-separated component list, so both places agree on "a valid number".
-	static bool isValidLiteralText(DSLType type, const std::string& text);
+	static bool isValidLiteralText(DSLType type, const oc::string& text);
 
 	// The same fixed list of primitive type keywords (int/float/bool/string/vec2/vec3/vec4) offered wherever a
 	// TYPE is being picked rather than a value -- declaring a local variable (candidatesFor's Void branch),
 	// declaring a new function's parameter, or setting a function's return type. One shared list so all three
 	// stay in sync; each Candidate carries Kind::DeclareType (picking a type is picking a type, regardless of
 	// what it's for -- the caller decides what to do with `declareType`).
-	static std::vector<Candidate> typeKeywordCandidates(const std::string& typedPrefix);
+	static oc::vector<Candidate> typeKeywordCandidates(const oc::string& typedPrefix);
 
 	// Whether `name` is already used by ANY function -- a builtin (vec2/3/4, print, component methods) or a
 	// user-declared one -- so a newly-declared function can't collide with or shadow an existing name. Unlike
 	// isNameInScope, this is global (function names aren't scoped to where they're declared).
 	// `excludeFunction` (optional) ignores one user declaration -- a re-authored function's own current name
 	// shouldn't count as a collision against itself.
-	static bool isFunctionNameTaken(const std::string& name, const DSLScriptFile& file, const std::vector<std::unique_ptr<DSLSymbol>>& builtins,
+	static bool isFunctionNameTaken(const oc::string& name, const DSLScriptFile& file, const oc::vector<oc::unique_ptr<DSLSymbol>>& builtins,
 		DSLSymbol* excludeFunction = nullptr);
 
 	// Whether `varDecl` (a local variable's own VariableDeclaration) is used by any VariableReference anywhere

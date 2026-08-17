@@ -16,7 +16,7 @@ namespace
 {
     // ---- graph traversal helpers (links store input pin in Id1, output pin in Id2) ----
 
-    Pin* sourceOfInput(const std::vector<std::unique_ptr<Link>>& links, const Pin* inputPin)
+    Pin* sourceOfInput(const oc::vector<oc::unique_ptr<Link>>& links, const Pin* inputPin)
     {
         for (const auto& link : links)
             if (link->getInputId().AsPointer<Pin>() == inputPin)
@@ -24,7 +24,7 @@ namespace
         return nullptr;
     }
 
-    Pin* targetOfOutput(const std::vector<std::unique_ptr<Link>>& links, const Pin* outputPin)
+    Pin* targetOfOutput(const oc::vector<oc::unique_ptr<Link>>& links, const Pin* outputPin)
     {
         for (const auto& link : links)
             if (link->getOutputId().AsPointer<Pin>() == outputPin)
@@ -32,7 +32,7 @@ namespace
         return nullptr;
     }
 
-    int indexOfPin(const std::vector<std::unique_ptr<Pin>>& pins, const Pin* pin)
+    int indexOfPin(const oc::vector<oc::unique_ptr<Pin>>& pins, const Pin* pin)
     {
         for (int i = 0; i < (int)pins.size(); ++i)
             if (pins[i].get() == pin)
@@ -42,7 +42,7 @@ namespace
 
     // Reroute-transparent traversal for codegen: a Reroute is a pure waypoint (one in, one out), so follow
     // straight through it to the real source output / real target input.
-    Pin* realSourceOfInput(const std::vector<std::unique_ptr<Link>>& links, const Pin* inputPin)
+    Pin* realSourceOfInput(const oc::vector<oc::unique_ptr<Link>>& links, const Pin* inputPin)
     {
         Pin* src = sourceOfInput(links, inputPin);
         while (src && isRerouteType(src->node->getTypeId()))
@@ -53,7 +53,7 @@ namespace
         return src;
     }
 
-    Pin* realTargetOfOutput(const std::vector<std::unique_ptr<Link>>& links, const Pin* outputPin)
+    Pin* realTargetOfOutput(const oc::vector<oc::unique_ptr<Link>>& links, const Pin* outputPin)
     {
         Pin* tgt = targetOfOutput(links, outputPin);
         while (tgt && isRerouteType(tgt->node->getTypeId()))
@@ -67,10 +67,10 @@ namespace
     // Like realTargetOfOutput, but also collects every reroute waypoint passed through into `chain` (instead
     // of skipping straight past them) — used by addReroutesBetweenSelected to decide which waypoints belong
     // to a copy/paste. Returns the first non-reroute node reached, or nullptr at a dead end or a cyclic chain.
-    Node* traceForwardThroughReroutes(const std::vector<std::unique_ptr<Link>>& links, Pin* outputPin, std::vector<Node*>& chain)
+    Node* traceForwardThroughReroutes(const oc::vector<oc::unique_ptr<Link>>& links, Pin* outputPin, oc::vector<Node*>& chain)
     {
         Pin* current = outputPin;
-        std::set<Node*> visited;
+        oc::set<Node*> visited;
         for (;;)
         {
             Pin* next = targetOfOutput(links, current);
@@ -94,13 +94,13 @@ namespace
     // is folded into the selection too. A single pass over each originally-selected node's outputs is enough
     // — the destination side of a qualifying chain is always one of those same originally-selected nodes,
     // never a reroute newly added by this function.
-    void addReroutesBetweenSelected(std::set<Node*>& selected, std::vector<Node*>& nodes, const std::vector<std::unique_ptr<Link>>& links)
+    void addReroutesBetweenSelected(oc::set<Node*>& selected, oc::vector<Node*>& nodes, const oc::vector<oc::unique_ptr<Link>>& links)
     {
-        const std::vector<Node*> originalSelection(nodes.begin(), nodes.end());
+        const oc::vector<Node*> originalSelection(nodes.begin(), nodes.end());
         for (Node* node : originalSelection)
             for (const auto& outPin : node->getOutputPins())
             {
-                std::vector<Node*> chain;
+                oc::vector<Node*> chain;
                 Node* landedOn = traceForwardThroughReroutes(links, outPin.get(), chain);
                 if (!landedOn || chain.empty() || !selected.count(landedOn))
                     continue;
@@ -113,10 +113,10 @@ namespace
     // The Function Output that belongs to a given Function Input: the first one reachable by walking exec
     // links forward from the Input (through branches/loops). Function Output carries no name of its own, so
     // this reachability is what pairs it to its Input.
-    Node* reachableFunctionOutput(const std::vector<std::unique_ptr<Link>>& links, Node* inputNode)
+    Node* reachableFunctionOutput(const oc::vector<oc::unique_ptr<Link>>& links, Node* inputNode)
     {
-        std::set<Node*> visited;
-        std::vector<Node*> stack{ inputNode };
+        oc::set<Node*> visited;
+        oc::vector<Node*> stack{ inputNode };
         while (!stack.empty())
         {
             Node* n = stack.back();
@@ -151,7 +151,7 @@ namespace
     }
 
     // Case-insensitive substring test, used to filter the add-node popup's palette/import-function list.
-    bool containsCI(std::string_view haystack, std::string_view needle)
+    bool containsCI(oc::string_view haystack, oc::string_view needle)
     {
         if (needle.empty()) return true;
         if (needle.size() > haystack.size()) return false;
@@ -181,14 +181,14 @@ namespace
     }
 
     // Splits a clipping's text blob into lines, used by both Ctrl+V and node-context-menu Duplicate.
-    std::vector<std::string> splitLines(const std::string& text)
+    oc::vector<oc::string> splitLines(const oc::string& text)
     {
-        std::vector<std::string> lines;
+        oc::vector<oc::string> lines;
         size_t pos = 0;
         while (pos <= text.size())
         {
             const size_t nl = text.find('\n', pos);
-            if (nl == std::string::npos) { lines.push_back(text.substr(pos)); break; }
+            if (nl == oc::string::npos) { lines.push_back(text.substr(pos)); break; }
             lines.push_back(text.substr(pos, nl - pos));
             pos = nl + 1;
         }
@@ -198,9 +198,9 @@ namespace
     // ---- function codegen naming ----
     // A generated C++ function is named <fileStem>_<funcName>, sanitized to a valid identifier. The stem
     // disambiguates same-named functions from different files; codegen dedups by this full name.
-    std::string sanitizeIdent(const std::string& in)
+    oc::string sanitizeIdent(const oc::string& in)
     {
-        std::string out;
+        oc::string out;
         for (char c : in)
         {
             const bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
@@ -211,16 +211,16 @@ namespace
         return out;
     }
 
-    std::string pathStem(const std::string& path)
+    oc::string pathStem(const oc::string& path)
     {
         const size_t slash = path.find_last_of("/\\");
-        const size_t start = (slash == std::string::npos) ? 0 : slash + 1;
+        const size_t start = (slash == oc::string::npos) ? 0 : slash + 1;
         size_t dot = path.find_last_of('.');
-        if (dot == std::string::npos || dot < start) dot = path.size();
+        if (dot == oc::string::npos || dot < start) dot = path.size();
         return path.substr(start, dot - start);
     }
 
-    std::string funcCppName(const std::string& scriptPath, const std::string& funcName)
+    oc::string funcCppName(const oc::string& scriptPath, const oc::string& funcName)
     {
         return sanitizeIdent(pathStem(scriptPath) + "_" + funcName);
     }
@@ -231,23 +231,23 @@ namespace
     //   - the pin has a plain expr AND the node's emit carries a HOIST marker: the node emit supplies a
     //     single declaration shared by all the node's outputs, and the pin expr is the reference into it
     //     (e.g. SplitVec3 declares `glm::vec3 v@` once, then x/y/z read `v@.x` / `v@.y` / `v@.z`).
-    bool hoistParts(const Pin* outPin, std::string& decl, std::string& ref)
+    bool hoistParts(const Pin* outPin, oc::string& decl, oc::string& ref)
     {
         decl.clear(); ref.clear();
         const NodeDef* def = findNodeDef(outPin->node->getTypeId());
         if (!def) return false;
         const int outIdx = indexOfPin(outPin->node->getOutputPins(), outPin);
         if (outIdx < 0 || outIdx >= (int)def->outputs.size()) return false;
-        const std::string& e = def->outputs[outIdx].expr;
+        const oc::string& e = def->outputs[outIdx].expr;
 
-        if (const auto hp = e.find(HOIST); hp != std::string::npos)
+        if (const auto hp = e.find(HOIST); hp != oc::string::npos)
         {
             decl = e.substr(0, hp);
             ref  = e.substr(hp + 1);
             return true;
         }
         if (!e.empty())
-            if (const auto hp = def->emit.find(HOIST); hp != std::string::npos)
+            if (const auto hp = def->emit.find(HOIST); hp != oc::string::npos)
             {
                 decl = def->emit.substr(0, hp);
                 ref  = e;
@@ -282,29 +282,29 @@ namespace
     // Hoisting is explicit only: a data output whose expr carries a HOIST marker (e.g. a Var node) is
     // declared once at function scope and referenced by name; every other data output is expanded inline.
 
-    using HoistMap = std::map<const Pin*, std::string>; // HOIST output pin -> variable name it resolves to
+    using HoistMap = oc::map<const Pin*, oc::string>; // HOIST output pin -> variable name it resolves to
 
     struct Codegen
     {
-        const std::vector<std::unique_ptr<Link>>& links;
-        std::string         globalDecls;    // HOIST variable declarations, emitted once at the top of the function
-        std::set<std::string> globalDeclared; // declaration texts already added to globalDecls (dedups shared decls)
+        const oc::vector<oc::unique_ptr<Link>>& links;
+        oc::string         globalDecls;    // HOIST variable declarations, emitted once at the top of the function
+        oc::set<oc::string> globalDeclared; // declaration texts already added to globalDecls (dedups shared decls)
     };
 
-    std::string emitDataExpr(Codegen& cg, const Pin* inputPin, std::set<const Node*>& dataStack, const HoistMap& hoist);
+    oc::string emitDataExpr(Codegen& cg, const Pin* inputPin, oc::set<const Node*>& dataStack, const HoistMap& hoist);
     // enteredPin = the exec INPUT pin the flow arrived through; only Trigger Audio (whose entry pins select
     // the sound to play) cares, every other node emits the same statement regardless of entry.
-    std::string emitExecChain(Codegen& cg, Node* node, std::set<const Node*>& execStack, const Pin* enteredPin = nullptr);
-    std::string expandOutput(Codegen& cg, const Pin* outPin, std::set<const Node*>& dataStack, const HoistMap& hoist);
+    oc::string emitExecChain(Codegen& cg, Node* node, oc::set<const Node*>& execStack, const Pin* enteredPin = nullptr);
+    oc::string expandOutput(Codegen& cg, const Pin* outPin, oc::set<const Node*>& dataStack, const HoistMap& hoist);
 
     // @ -> unique node idx
-	void appendNodeIdx(Codegen& cg, std::string& out, Node* node)
+	void appendNodeIdx(Codegen& cg, oc::string& out, Node* node)
 	{
-        out += std::to_string(node->getNodeIdx());
+        out += oc::to_string(node->getNodeIdx());
     }
 
     // ENUM_TOKEN -> the node's selected dropdown-property code token.
-    void appendEnumToken(Codegen& cg, std::string& out, Node* node)
+    void appendEnumToken(Codegen& cg, oc::string& out, Node* node)
     {
         const NodeDef* def = findNodeDef(node->getTypeId());
         const int sel = node->getEnumSelection();
@@ -312,16 +312,16 @@ namespace
             out += def->enumTokens[sel];
     }
 
-    std::string inputExpr(Codegen& cg, Node* node, int idx, std::set<const Node*>& dataStack, const HoistMap& hoist)
+    oc::string inputExpr(Codegen& cg, Node* node, int idx, oc::set<const Node*>& dataStack, const HoistMap& hoist)
     {
         const auto& inputs = node->getInputPins();
         return (idx >= 0 && idx < (int)inputs.size()) ? emitDataExpr(cg, inputs[idx].get(), dataStack, hoist) : "0";
     }
 
     // Value-expression template ($k = data input k, ENUM_TOKEN = enum token). Data resolution threads dataStack.
-    std::string substituteData(Codegen& cg, const std::string& tmpl, Node* node, std::set<const Node*>& dataStack, const HoistMap& hoist)
+    oc::string substituteData(Codegen& cg, const oc::string& tmpl, Node* node, oc::set<const Node*>& dataStack, const HoistMap& hoist)
     {
-        std::string out;
+        oc::string out;
         for (size_t i = 0; i < tmpl.size();)
         {
             const char c = tmpl[i];
@@ -340,9 +340,9 @@ namespace
     }
 
     // Statement template ($k = data input k via a fresh data recursion, #k = exec continuation k, ENUM_TOKEN = enum).
-    std::string substituteExec(Codegen& cg, const std::string& tmpl, Node* node, std::set<const Node*>& execStack, const HoistMap& hoist)
+    oc::string substituteExec(Codegen& cg, const oc::string& tmpl, Node* node, oc::set<const Node*>& execStack, const HoistMap& hoist)
     {
-        std::string out;
+        oc::string out;
         for (size_t i = 0; i < tmpl.size();)
         {
             const char c = tmpl[i];
@@ -352,14 +352,14 @@ namespace
                 while (j < tmpl.size() && tmpl[j] >= '0' && tmpl[j] <= '9') { idx = idx * 10 + (tmpl[j] - '0'); ++j; }
                 if (c == '$')
                 {
-                    std::set<const Node*> dataStack; // data resolution is independent of the exec path
+                    oc::set<const Node*> dataStack; // data resolution is independent of the exec path
                     out += inputExpr(cg, node, idx, dataStack, hoist);
                 }
                 else
                 {
                     const auto& outputs = node->getOutputPins();
                     Pin* tgt = (idx >= 0 && idx < (int)outputs.size()) ? realTargetOfOutput(cg.links, outputs[idx].get()) : nullptr;
-                    out += tgt ? emitExecChain(cg, tgt->node, execStack, tgt) : std::string();
+                    out += tgt ? emitExecChain(cg, tgt->node, execStack, tgt) : oc::string();
                 }
                 i = j;
             }
@@ -378,7 +378,7 @@ namespace
                         if (tmpl[k] == '{') ++depth;
                         else if (tmpl[k] == '}') { if (--depth == 0) break; }
                     }
-                    const std::string block = tmpl.substr(j + 1, k - (j + 1));
+                    const oc::string block = tmpl.substr(j + 1, k - (j + 1));
                     const auto& inputs = node->getInputPins();
                     const Pin* in = (idx >= 0 && idx < (int)inputs.size()) ? inputs[idx].get() : nullptr;
                     if (in && realSourceOfInput(cg.links, in))
@@ -393,7 +393,7 @@ namespace
     }
 
     // Picks the value template for an output pin and substitutes it (per-output expr, else the node emit).
-    std::string expandOutput(Codegen& cg, const Pin* outPin, std::set<const Node*>& dataStack, const HoistMap& hoist)
+    oc::string expandOutput(Codegen& cg, const Pin* outPin, oc::set<const Node*>& dataStack, const HoistMap& hoist)
     {
         Node* node = outPin->node;
         // A Script Data member is a field of the persistent struct: read/written directly through `data`.
@@ -404,13 +404,13 @@ namespace
         if (isFunctionInputType(node->getTypeId()))
         {
             const int o = indexOfPin(node->getOutputPins(), outPin); // pin 0 is exec-out; params start at 1
-            return "param" + std::to_string(o - 1);
+            return "param" + oc::to_string(o - 1);
         }
         // A Function Call return resolves to the local the call wrote it into (declared at the call site).
         if (isFunctionCallType(node->getTypeId()))
         {
             const int o = indexOfPin(node->getOutputPins(), outPin);
-            return "fret" + std::to_string(node->getNodeIdx()) + "_" + std::to_string(o - 1);
+            return "fret" + oc::to_string(node->getNodeIdx()) + "_" + oc::to_string(o - 1);
         }
 
         const NodeDef* def = findNodeDef(node->getTypeId());
@@ -418,12 +418,12 @@ namespace
             return "0";
 
         const int outIdx = indexOfPin(node->getOutputPins(), outPin);
-        std::string tmpl;
+        oc::string tmpl;
         if (outIdx >= 0 && outIdx < (int)def->outputs.size() && !def->outputs[outIdx].expr.empty())
         {
-            const std::string& e = def->outputs[outIdx].expr;
+            const oc::string& e = def->outputs[outIdx].expr;
             const auto hp = e.find(HOIST);
-            tmpl = (hp == std::string::npos) ? e : e.substr(hp + 1); // inline-expand only the reference part
+            tmpl = (hp == oc::string::npos) ? e : e.substr(hp + 1); // inline-expand only the reference part
         }
         else
             tmpl = def->emit; // pure data node: emit is the value expression
@@ -431,16 +431,16 @@ namespace
             return "0";
 
         dataStack.insert(node);
-        std::string result = substituteData(cg, tmpl, node, dataStack, hoist);
+        oc::string result = substituteData(cg, tmpl, node, dataStack, hoist);
         dataStack.erase(node);
         return result;
     }
 
     // Wraps a String pin's raw default text (the user edits it without quotes) into a C++ string literal,
     // escaping backslashes and quotes so arbitrary text stays valid source.
-    std::string quoteStringLiteral(const std::string& raw)
+    oc::string quoteStringLiteral(const oc::string& raw)
     {
-        std::string out = "\"";
+        oc::string out = "\"";
         for (char c : raw)
         {
             if (c == '\\' || c == '"') out += '\\';
@@ -450,18 +450,18 @@ namespace
         return out;
     }
 
-    std::string emitDataExpr(Codegen& cg, const Pin* inputPin, std::set<const Node*>& dataStack, const HoistMap& hoist)
+    oc::string emitDataExpr(Codegen& cg, const Pin* inputPin, oc::set<const Node*>& dataStack, const HoistMap& hoist)
     {
         Pin* src = realSourceOfInput(cg.links, inputPin);
         if (!src)
         {
             // "default" resolves to this pin's concrete type's engine default literal at codegen time (see
             // isDefaultToken); otherwise the typed literal is used as-is.
-            const std::string& lit = isDefaultToken(inputPin->defaultValue) ? defaultValueForType(inputPin->dataType) : inputPin->defaultValue;
+            const oc::string& lit = isDefaultToken(inputPin->defaultValue) ? defaultValueForType(inputPin->dataType) : inputPin->defaultValue;
             // A String pin's default is stored as raw text (no quotes in the editor); make it a literal here.
             if (inputPin->dataType == EDataType::String)
                 return quoteStringLiteral(lit);
-            return lit.empty() ? std::string("0") : lit;
+            return lit.empty() ? oc::string("0") : lit;
         }
         if (auto it = hoist.find(src); it != hoist.end())
             return it->second; // already computed into a local
@@ -470,7 +470,7 @@ namespace
 
     // Collects every data output pin reachable (through data nodes) from inputPin, so the HOIST variables a
     // statement reads can be discovered and declared at function scope.
-    void collectDataOutputs(Codegen& cg, const Pin* inputPin, std::set<const Pin*>& out, std::set<const Node*>& path)
+    void collectDataOutputs(Codegen& cg, const Pin* inputPin, oc::set<const Pin*>& out, oc::set<const Node*>& path)
     {
         Pin* src = realSourceOfInput(cg.links, inputPin);
         if (!src) return;
@@ -486,7 +486,7 @@ namespace
     }
 
     // Emits a HOIST variable's declaration once at function scope, after declaring any HOIST deps it reads.
-    void declareHoist(Codegen& cg, const Pin* outPin, const HoistMap& hoist, std::set<const Pin*>& declared)
+    void declareHoist(Codegen& cg, const Pin* outPin, const HoistMap& hoist, oc::set<const Pin*>& declared)
     {
         if (!declared.insert(outPin).second) return;
         for (const auto& pin : outPin->node->getInputPins())
@@ -495,11 +495,11 @@ namespace
             if (Pin* s = realSourceOfInput(cg.links, pin.get()); s && hoist.count(s))
                 declareHoist(cg, s, hoist, declared);
         }
-        std::string decl, ref;
+        oc::string decl, ref;
         if (hoistParts(outPin, decl, ref))
         {
-            std::set<const Node*> dataStack;
-            const std::string text = substituteData(cg, decl, outPin->node, dataStack, hoist);
+            oc::set<const Node*> dataStack;
+            const oc::string text = substituteData(cg, decl, outPin->node, dataStack, hoist);
             if (cg.globalDeclared.insert(text).second) // dedup by text: SplitVec3's x/y/z share one decl
                 cg.globalDecls += text;
         }
@@ -508,25 +508,25 @@ namespace
     // A Function Call statement: declare a local per return value, call the generated C++ function passing the
     // arg expressions plus those locals by reference, then continue the exec flow. Downstream reads of the
     // call's data outputs resolve to these same locals (see expandOutput).
-    std::string emitFunctionCallStmt(Codegen& cg, Node* node, std::set<const Node*>& execStack, const HoistMap& hoist)
+    oc::string emitFunctionCallStmt(Codegen& cg, Node* node, oc::set<const Node*>& execStack, const HoistMap& hoist)
     {
         const auto& inputs = node->getInputPins();
         const auto& outputs = node->getOutputPins();
-        const std::string cpp = funcCppName(node->getFunctionScriptPath(), node->getFunctionName());
-        const std::string idx = std::to_string(node->getNodeIdx());
+        const oc::string cpp = funcCppName(node->getFunctionScriptPath(), node->getFunctionName());
+        const oc::string idx = oc::to_string(node->getNodeIdx());
 
-        std::string out;
+        oc::string out;
         for (size_t o = 1; o < outputs.size(); ++o) // outputs[0] is the exec-out pin
-            out += std::string(memberCppType(outputs[o]->dataType)) + " fret" + idx + "_" + std::to_string(o - 1) + ";\n";
+            out += oc::string(memberCppType(outputs[o]->dataType)) + " fret" + idx + "_" + oc::to_string(o - 1) + ";\n";
 
         out += cpp + "(ctx, self";
         for (size_t k = 1; k < inputs.size(); ++k) // inputs[0] is the exec-in pin; the rest are arguments
         {
-            std::set<const Node*> dataStack;
+            oc::set<const Node*> dataStack;
             out += ", " + emitDataExpr(cg, inputs[k].get(), dataStack, hoist);
         }
         for (size_t o = 1; o < outputs.size(); ++o) // return values passed as out-params (by reference)
-            out += ", fret" + idx + "_" + std::to_string(o - 1);
+            out += ", fret" + idx + "_" + oc::to_string(o - 1);
         out += ");\n";
 
         if (!outputs.empty())
@@ -538,10 +538,10 @@ namespace
     // A Trigger Audio statement: plays the alias whose exec entry pin the flow arrived through. The override
     // mask is settled at CODEGEN time from which override inputs are connected — unconnected ones pass their
     // (ignored) defaults, so the sound keeps its authored settings for those.
-    std::string emitTriggerAudioStmt(Codegen& cg, Node* node, std::set<const Node*>& execStack, const HoistMap& hoist, const Pin* enteredPin)
+    oc::string emitTriggerAudioStmt(Codegen& cg, Node* node, oc::set<const Node*>& execStack, const HoistMap& hoist, const Pin* enteredPin)
     {
         const auto& inputs = node->getInputPins();
-        auto findInput = [&](std::string_view name) -> const Pin*
+        auto findInput = [&](oc::string_view name) -> const Pin*
         {
             for (const auto& pin : inputs)
                 if (pin->dataType != EDataType::Exec && pin->name == name)
@@ -554,7 +554,7 @@ namespace
         const Pin* volumePin = findInput("Volume");
         const Pin* pitchPin = findInput("Pitch");
 
-        std::string alias = enteredPin ? enteredPin->name : std::string();
+        oc::string alias = enteredPin ? enteredPin->name : oc::string();
         if (alias.empty()) // entry-less reach (shouldn't happen): fall back to the first alias pin
             for (const auto& pin : inputs)
                 if (pin->dataType == EDataType::Exec && !pin->name.empty()) { alias = pin->name; break; }
@@ -565,16 +565,16 @@ namespace
         if (volumePin && (!isDefaultToken(volumePin->defaultValue) || realSourceOfInput(cg.links, volumePin)))       overrideMask |= 2;
         if (pitchPin && (!isDefaultToken(pitchPin->defaultValue) || realSourceOfInput(cg.links, pitchPin)))          overrideMask |= 4;
 
-        std::set<const Node*> dataStack;
+        oc::set<const Node*> dataStack;
         auto expr = [&](const Pin* pin, const char* fallback)
         {
-            return (pin && !isDefaultToken(pin->defaultValue)) ? emitDataExpr(cg, pin, dataStack, hoist) : std::string(fallback);
+            return (pin && !isDefaultToken(pin->defaultValue)) ? emitDataExpr(cg, pin, dataStack, hoist) : oc::string(fallback);
         };
         // Component comes from Get Audio Component (a Pointer pin; nullptr default when unconnected). Entity is
         // still passed so a spatial sound can follow it.
-        const std::string componentExpr = componentPin ? emitDataExpr(cg, componentPin, dataStack, hoist) : std::string("nullptr");
-        std::string out = "ctx->audioTrigger(" + componentExpr + ", " + expr(entityPin, "self") + ", " + quoteStringLiteral(alias) + ", " +
-            std::to_string(overrideMask) + ", " + expr(positionPin, "glm::vec3(0,0,0)") + ", " +
+        const oc::string componentExpr = componentPin ? emitDataExpr(cg, componentPin, dataStack, hoist) : oc::string("nullptr");
+        oc::string out = "ctx->audioTrigger(" + componentExpr + ", " + expr(entityPin, "self") + ", " + quoteStringLiteral(alias) + ", " +
+            oc::to_string(overrideMask) + ", " + expr(positionPin, "glm::vec3(0,0,0)") + ", " +
             expr(volumePin, "1.0f") + ", " + expr(pitchPin, "1.0f") + ");\n";
 
         for (const auto& outPin : node->getOutputPins())
@@ -590,31 +590,31 @@ namespace
     // A Function Output statement: assign each connected return input to the generated function's out-param,
     // named by position (ret<k>) — the pin's editable label is display-only. It has no exec continuation
     // (it's the end of the function body).
-    std::string emitFunctionOutputStmt(Codegen& cg, Node* node, const HoistMap& hoist)
+    oc::string emitFunctionOutputStmt(Codegen& cg, Node* node, const HoistMap& hoist)
     {
         const auto& inputs = node->getInputPins();
-        std::string out;
+        oc::string out;
         for (size_t j = 1; j < inputs.size(); ++j) // inputs[0] is the exec-in pin; returns start at 1
         {
-            std::set<const Node*> dataStack;
-            out += "ret" + std::to_string(j - 1) + " = " + emitDataExpr(cg, inputs[j].get(), dataStack, hoist) + ";\n";
+            oc::set<const Node*> dataStack;
+            out += "ret" + oc::to_string(j - 1) + " = " + emitDataExpr(cg, inputs[j].get(), dataStack, hoist) + ";\n";
         }
         return out;
     }
 
-    std::string emitExecChain(Codegen& cg, Node* node, std::set<const Node*>& execStack, const Pin* enteredPin)
+    oc::string emitExecChain(Codegen& cg, Node* node, oc::set<const Node*>& execStack, const Pin* enteredPin)
     {
-        if (!node) return std::string();
+        if (!node) return oc::string();
         const NodeDef* def = findNodeDef(node->getTypeId());
-        if (!def || execStack.count(node)) return std::string();
+        if (!def || execStack.count(node)) return oc::string();
 
         execStack.insert(node);
 
         // Map each HOIST-marked data output this statement reads to its variable name, so uses resolve to it
         // and its declaration is emitted once at function scope (declareHoist). Everything else inlines.
-        std::set<const Pin*> reachable;
+        oc::set<const Pin*> reachable;
         {
-            std::set<const Node*> path;
+            oc::set<const Node*> path;
             for (const auto& pin : node->getInputPins())
                 if (pin->dataType != EDataType::Exec)
                     collectDataOutputs(cg, pin.get(), reachable, path);
@@ -622,20 +622,20 @@ namespace
         HoistMap hoist;
         for (const Pin* pin : reachable)
         {
-            std::string decl, ref;
+            oc::string decl, ref;
             if (hoistParts(pin, decl, ref))
             {
-                std::set<const Node*> ds;
+                oc::set<const Node*> ds;
                 hoist[pin] = substituteData(cg, ref, pin->node, ds, hoist); // reference, e.g. "f3" or "v3.x"
             }
         }
         {
-            std::set<const Pin*> declared;
+            oc::set<const Pin*> declared;
             for (const auto& [pin, name] : hoist)
                 declareHoist(cg, pin, hoist, declared);
         }
 
-        std::string out;
+        oc::string out;
         if (node->isFunctionCall())        out = emitFunctionCallStmt(cg, node, execStack, hoist);
         else if (node->isFunctionOutput()) out = emitFunctionOutputStmt(cg, node, hoist);
         else if (node->isTriggerAudio())   out = emitTriggerAudioStmt(cg, node, execStack, hoist, enteredPin);
@@ -647,9 +647,9 @@ namespace
     // Convert the indent-control markers emitted by block nodes into real leading whitespace: \x01 raises
     // the indent level for subsequent lines, \x02 lowers it (the markers themselves are stripped). Each line
     // is prefixed with one pad per active level, so nested Branch/ForLoop bodies step in correctly.
-    std::string applyIndent(const std::string& body, const char* pad)
+    oc::string applyIndent(const oc::string& body, const char* pad)
     {
-        std::string out;
+        oc::string out;
         int depth = 0;
         bool atLineStart = true;
         for (char c : body)
@@ -667,9 +667,9 @@ namespace
         return out;
     }
 
-    std::string indentLines(const std::string& body, const char* pad)
+    oc::string indentLines(const oc::string& body, const char* pad)
     {
-        std::string out = pad;
+        oc::string out = pad;
         for (char c : body)
         {
             out += c;
@@ -712,10 +712,10 @@ void Scene::initialize()
 
 Node& Scene::createNode()
 {
-    return *m_nodes.emplace_back(std::make_unique<Node>((uint32)m_nodes.size()));
+    return *m_nodes.emplace_back(oc::make_unique<Node>((uint32)m_nodes.size()));
 }
 
-Node& Scene::addNodeOfType(const std::string& typeId, ImVec2 pos)
+Node& Scene::addNodeOfType(const oc::string& typeId, ImVec2 pos)
 {
     Node& node = createNode();
     if (const NodeDef* def = findNodeDef(typeId))
@@ -769,14 +769,14 @@ void Scene::connectNodes(Node* from, int outIdx, Node* to, int inIdx)
     Pin* inPin = inputs[inIdx].get();
     inPin->numConnections++;
     outPin->numConnections++;
-    m_links.emplace_back(std::make_unique<Link>())->initialize(ed::PinId(inPin), ed::PinId(outPin));
+    m_links.emplace_back(oc::make_unique<Link>())->initialize(ed::PinId(inPin), ed::PinId(outPin));
 }
 
 void Scene::resolveNodeTypes(Node* node)
 {
     if (!node) return;
 
-    std::set<int> groups;
+    oc::set<int> groups;
     for (const auto& pin : node->getInputPins())  if (pin->typeGroup != 0) groups.insert(pin->typeGroup);
     for (const auto& pin : node->getOutputPins()) if (pin->typeGroup != 0) groups.insert(pin->typeGroup);
 
@@ -851,8 +851,8 @@ void Scene::removeNode(ed::NodeId nodeId)
     }
 
     // Drop any links touching this node's pins, tracking the neighbours so their wildcard types re-resolve.
-    std::set<Node*> affected;
-    std::erase_if(m_links, [&](const std::unique_ptr<Link>& link)
+    oc::set<Node*> affected;
+    oc::erase_if(m_links, [&](const oc::unique_ptr<Link>& link)
     {
         Pin* in = link->getInputId().AsPointer<Pin>();
         Pin* out = link->getOutputId().AsPointer<Pin>();
@@ -861,7 +861,7 @@ void Scene::removeNode(ed::NodeId nodeId)
         return false;
     });
 
-    std::erase_if(m_nodes, [&](const std::unique_ptr<Node>& n) { return n.get() == node; });
+    oc::erase_if(m_nodes, [&](const oc::unique_ptr<Node>& n) { return n.get() == node; });
 
     // Re-link across the removed reroute (its endpoints survive as they belong to other nodes).
     if (rejoinFromNode && rejoinToNode)
@@ -887,7 +887,7 @@ void Scene::insertReroute(Link* link, ImVec2 canvasPos)
     // Remove the original link.
     out->numConnections--;
     in->numConnections--;
-    std::erase_if(m_links, [&](const std::unique_ptr<Link>& l) { return l.get() == link; });
+    oc::erase_if(m_links, [&](const oc::unique_ptr<Link>& l) { return l.get() == link; });
 
     Node& reroute = addNodeOfType("Reroute", canvasPos);
     reroute.makeReroute(type);
@@ -901,8 +901,8 @@ void Scene::insertReroute(Link* link, ImVec2 canvasPos)
 // touches them, leaving the real source and target disconnected.
 void Scene::deleteRerouteChain(Link* link)
 {
-    std::set<Node*> reroutes;
-    std::vector<Node*> stack;
+    oc::set<Node*> reroutes;
+    oc::vector<Node*> stack;
     auto addIfReroute = [&](Pin* pin)
     {
         if (pin && pin->node->isReroute() && reroutes.insert(pin->node).second)
@@ -924,8 +924,8 @@ void Scene::deleteRerouteChain(Link* link)
 
     // Drop every link touching a reroute in the chain (plus the triggering link), noting non-reroute
     // endpoints so their wildcard types can re-resolve once disconnected.
-    std::set<Node*> affected;
-    std::erase_if(m_links, [&](const std::unique_ptr<Link>& l)
+    oc::set<Node*> affected;
+    oc::erase_if(m_links, [&](const oc::unique_ptr<Link>& l)
     {
         Pin* in = l->getInputId().AsPointer<Pin>();
         Pin* out = l->getOutputId().AsPointer<Pin>();
@@ -938,7 +938,7 @@ void Scene::deleteRerouteChain(Link* link)
         return true;
     });
 
-    std::erase_if(m_nodes, [&](const std::unique_ptr<Node>& n) { return reroutes.count(n.get()) != 0; });
+    oc::erase_if(m_nodes, [&](const oc::unique_ptr<Node>& n) { return reroutes.count(n.get()) != 0; });
 
     for (Node* nb : affected)
         resolveNodeTypes(nb);
@@ -951,8 +951,8 @@ void Scene::removeMemberPin(Node* node, int index)
         return;
     Pin* pin = outs[index].get();
 
-    std::set<Node*> affected;
-    std::erase_if(m_links, [&](const std::unique_ptr<Link>& link)
+    oc::set<Node*> affected;
+    oc::erase_if(m_links, [&](const oc::unique_ptr<Link>& link)
     {
         Pin* out = link->getOutputId().AsPointer<Pin>();
         Pin* in = link->getInputId().AsPointer<Pin>();
@@ -970,7 +970,7 @@ void Scene::removeMemberPin(Node* node, int index)
 // each. Remove and Retype can invalidate links, which are pruned per node.
 void Scene::applyMemberEdit(const MemberEdit& edit)
 {
-    std::vector<Node*> nodes;
+    oc::vector<Node*> nodes;
     for (const auto& n : m_nodes)
         if (n->isDynamic())
             nodes.push_back(n.get());
@@ -981,7 +981,7 @@ void Scene::applyMemberEdit(const MemberEdit& edit)
         {
             // All nodes are in sync, so their counts match — derive one shared name from the first.
             const size_t count = nodes.empty() ? 0 : nodes[0]->getOutputPins().size();
-            const std::string name = "member" + std::to_string(count);
+            const oc::string name = "member" + oc::to_string(count);
             for (Node* n : nodes)
                 n->addMember(edit.type, name);
             break;
@@ -1028,7 +1028,7 @@ void Scene::syncNewMemberNode(Node& newNode)
 // applyMemberEdit; entries have no type to retype, only Add/Remove/Rename.
 void Scene::applyEventEdit(const MemberEdit& edit)
 {
-    std::vector<Node*> nodes;
+    oc::vector<Node*> nodes;
     for (const auto& n : m_nodes)
         if (n->isEventNode())
             nodes.push_back(n.get());
@@ -1038,7 +1038,7 @@ void Scene::applyEventEdit(const MemberEdit& edit)
         case EMemberOp::Add:
         {
             const size_t count = nodes.empty() ? 0 : nodes[0]->getOutputPins().size();
-            const std::string name = "Event" + std::to_string(count);
+            const oc::string name = "Event" + oc::to_string(count);
             for (Node* n : nodes)
                 n->addEventEntry(name);
             break;
@@ -1072,7 +1072,7 @@ void Scene::syncNewEventNode(Node& newNode)
 // The UI feeds this every frame with the sound aliases of the entity that owns the open script (null while
 // no owning entity is selected, so a standalone-edited script keeps the pins its file declared). Known
 // aliases are reconciled onto every Trigger Audio node immediately; the sync is idempotent and cheap.
-void Scene::setAudioAliases(const std::vector<std::string>* aliases)
+void Scene::setAudioAliases(const oc::vector<oc::string>* aliases)
 {
     m_audioAliasesKnown = aliases != nullptr;
     if (aliases)
@@ -1094,10 +1094,10 @@ void Scene::syncTriggerAudioPins(Node& node)
         const Pin* pin = inputs[i].get();
         if (pin->dataType != EDataType::Exec)
             continue;
-        if (std::find(m_audioAliases.begin(), m_audioAliases.end(), pin->name) == m_audioAliases.end())
+        if (oc::find(m_audioAliases.begin(), m_audioAliases.end(), pin->name) == m_audioAliases.end())
             removeInputPin(&node, i);
     }
-    for (const std::string& alias : m_audioAliases)
+    for (const oc::string& alias : m_audioAliases)
     {
         bool present = false;
         for (const auto& pin : node.getInputPins())
@@ -1176,8 +1176,8 @@ void Scene::removeInputPin(Node* node, int index)
         return;
     Pin* pin = ins[index].get();
 
-    std::set<Node*> affected;
-    std::erase_if(m_links, [&](const std::unique_ptr<Link>& link)
+    oc::set<Node*> affected;
+    oc::erase_if(m_links, [&](const oc::unique_ptr<Link>& link)
     {
         Pin* in = link->getInputId().AsPointer<Pin>();
         Pin* out = link->getOutputId().AsPointer<Pin>();
@@ -1203,7 +1203,7 @@ void Scene::applyFunctionEdit(Node* node, const MemberEdit& edit)
         case EMemberOp::Add:
         {
             const int count = (int)pins.size() - 1; // minus the exec pin
-            const std::string name = (inputSide ? "ret" : "arg") + std::to_string(count < 0 ? 0 : count);
+            const oc::string name = (inputSide ? "ret" : "arg") + oc::to_string(count < 0 ? 0 : count);
             if (inputSide) node->addReturn(edit.type, name);
             else           node->addParam(edit.type, name);
             break;
@@ -1224,8 +1224,8 @@ void Scene::applyFunctionEdit(Node* node, const MemberEdit& edit)
                 pin->color = dataTypeColor(edit.type);
                 pin->defaultValue = defaultValueForType(edit.type);
                 // Drop a now-incompatible link on this pin (source->return input, or param output->consumer).
-                std::set<Node*> affected;
-                std::erase_if(m_links, [&](const std::unique_ptr<Link>& link)
+                oc::set<Node*> affected;
+                oc::erase_if(m_links, [&](const oc::unique_ptr<Link>& link)
                 {
                     Pin* in = link->getInputId().AsPointer<Pin>();
                     Pin* out = link->getOutputId().AsPointer<Pin>();
@@ -1249,7 +1249,7 @@ void Scene::applyFunctionEdit(Node* node, const MemberEdit& edit)
 // Loads `path` into a throwaway headless Scene and reads the (Function Input, Function Output) pair named
 // `funcName`: params come from the Input node's output pins (after the exec pin), returns from the Output
 // node's input pins. Returns false if the file has no such function.
-bool Scene::readFunctionSignature(const std::string& path, const std::string& funcName,
+bool Scene::readFunctionSignature(const oc::string& path, const oc::string& funcName,
                                   PinSig& params, PinSig& returns) const
 {
     Scene tmp;
@@ -1278,11 +1278,11 @@ bool Scene::readFunctionSignature(const std::string& path, const std::string& fu
 
 // Scans Assets/Scripts for every function defined in any .scr (except the file being edited) so the add-node
 // popup can offer them for import. A function is any Function Input node's name.
-std::vector<Scene::FunctionRef> Scene::scanImportableFunctions() const
+oc::vector<Scene::FunctionRef> Scene::scanImportableFunctions() const
 {
-    std::vector<FunctionRef> refs;
-    const std::string dir = "Scripts";
-    std::vector<FileSystem::DirEntry> entries;
+    oc::vector<FunctionRef> refs;
+    const oc::string dir = "Scripts";
+    oc::vector<FileSystem::DirEntry> entries;
     if (!FileSystem::listDirectory(dir, entries, /*allowMainThread*/ true))
         return refs;
 
@@ -1290,14 +1290,14 @@ std::vector<Scene::FunctionRef> Scene::scanImportableFunctions() const
     {
         if (entry.isDirectory || entry.extension != ".scr")
             continue;
-        const std::string rel = "Scripts/" + entry.name;
+        const oc::string rel = "Scripts/" + entry.name;
         if (rel == m_scriptPath)
             continue; // don't import yourself
 
         Scene tmp;
         if (!tmp.loadFromFile(rel))
             continue;
-        const std::string stem = FileSystem::stem(entry.name);
+        const oc::string stem = FileSystem::stem(entry.name);
         for (const auto& node : tmp.m_nodes)
             if (node->isFunctionInput() && !node->getFunctionName().empty())
                 refs.push_back({ rel, node->getFunctionName(), stem + ": " + node->getFunctionName() });
@@ -1321,8 +1321,8 @@ Node& Scene::importFunction(const FunctionRef& ref, ImVec2 pos)
 
 void Scene::pruneIncompatibleLinks(Node* node)
 {
-    std::set<Node*> affected;
-    std::erase_if(m_links, [&](const std::unique_ptr<Link>& link)
+    oc::set<Node*> affected;
+    oc::erase_if(m_links, [&](const oc::unique_ptr<Link>& link)
     {
         Pin* out = link->getOutputId().AsPointer<Pin>();
         Pin* in = link->getInputId().AsPointer<Pin>();
@@ -1362,23 +1362,23 @@ bool Scene::isFunctionScript() const
 // for every function reachable through Function Call nodes, transitively across files. Forward declarations
 // are emitted first so ordering and recursion don't matter. A function's body is the exec chain from its
 // Function Input node; its Function Output assigns the return out-params.
-void Scene::emitFunctions(std::string& code)
+void Scene::emitFunctions(oc::string& code)
 {
     // Owning graph for a referenced path: this Scene for the current file, else a lazily-loaded headless copy.
-    std::map<std::string, std::unique_ptr<Scene>> loaded;
-    auto sceneForPath = [&](const std::string& path) -> Scene*
+    oc::map<oc::string, oc::unique_ptr<Scene>> loaded;
+    auto sceneForPath = [&](const oc::string& path) -> Scene*
     {
         if (path.empty() || path == m_scriptPath) return this;
         if (auto it = loaded.find(path); it != loaded.end()) return it->second.get();
-        auto s = std::make_unique<Scene>();
+        auto s = oc::make_unique<Scene>();
         Scene* p = s->loadFromFile(path) ? s.get() : nullptr;
-        loaded[path] = p ? std::move(s) : nullptr;
+        loaded[path] = p ? oc::move(s) : nullptr;
         return p;
     };
 
-    struct Discovered { Scene* scene = nullptr; std::string funcName; PinSig params, returns; Node* inputNode = nullptr; };
-    std::map<std::string, Discovered> byCpp; // cppName -> resolved info (inputNode null = couldn't resolve)
-    std::vector<std::pair<std::string, std::string>> worklist; // (scriptPath, funcName) still to resolve
+    struct Discovered { Scene* scene = nullptr; oc::string funcName; PinSig params, returns; Node* inputNode = nullptr; };
+    oc::map<oc::string, Discovered> byCpp; // cppName -> resolved info (inputNode null = couldn't resolve)
+    oc::vector<oc::pair<oc::string, oc::string>> worklist; // (scriptPath, funcName) still to resolve
 
     if (isFunctionScript())
         for (const auto& node : m_nodes)
@@ -1392,7 +1392,7 @@ void Scene::emitFunctions(std::string& code)
     {
         const auto [path, name] = worklist.back();
         worklist.pop_back();
-        const std::string cpp = funcCppName(path, name);
+        const oc::string cpp = funcCppName(path, name);
         if (byCpp.count(cpp)) continue;
 
         Discovered d;
@@ -1414,17 +1414,17 @@ void Scene::emitFunctions(std::string& code)
                 if (n->isFunctionCall())
                     worklist.push_back({ n->getFunctionScriptPath(), n->getFunctionName() });
         }
-        byCpp[cpp] = std::move(d);
+        byCpp[cpp] = oc::move(d);
     }
 
     // Parameters/returns are named by position (param<k> / ret<k>), matching how the body reads them
     // (expandOutput / emitFunctionOutputStmt) and how a call passes them (positionally). The pins' editable
     // labels are purely a node-editor display and deliberately don't reach the generated code.
-    auto signature = [](const Discovered& d, const std::string& cpp)
+    auto signature = [](const Discovered& d, const oc::string& cpp)
     {
-        std::string s = "void " + cpp + "(const ScriptContext* ctx, Entity* self";
-        for (size_t i = 0; i < d.params.size(); ++i)  s += std::string(", ") + memberCppType(d.params[i].first) + " param" + std::to_string(i);
-        for (size_t i = 0; i < d.returns.size(); ++i) s += std::string(", ") + memberCppType(d.returns[i].first) + "& ret" + std::to_string(i);
+        oc::string s = "void " + cpp + "(const ScriptContext* ctx, Entity* self";
+        for (size_t i = 0; i < d.params.size(); ++i)  s += oc::string(", ") + memberCppType(d.params[i].first) + " param" + oc::to_string(i);
+        for (size_t i = 0; i < d.returns.size(); ++i) s += oc::string(", ") + memberCppType(d.returns[i].first) + "& ret" + oc::to_string(i);
         s += ")";
         return s;
     };
@@ -1440,26 +1440,26 @@ void Scene::emitFunctions(std::string& code)
         code += "static " + signature(d, cpp) + "\n{\n";
 
         Codegen cg{ d.scene->m_links };
-        std::set<const Node*> execStack;
-        std::string chain;
+        oc::set<const Node*> execStack;
+        oc::string chain;
         Pin* execOut = d.inputNode->getOutputPins().empty() ? nullptr : d.inputNode->getOutputPins()[0].get();
         if (execOut)
             if (Pin* tgt = realTargetOfOutput(cg.links, execOut))
                 chain = emitExecChain(cg, tgt->node, execStack, tgt);
 
-        const std::string body = applyIndent(cg.globalDecls + chain, "    ");
+        const oc::string body = applyIndent(cg.globalDecls + chain, "    ");
         if (!body.empty())
             code += indentLines(body, "    ");
         code += "}\n\n";
     }
 }
 
-std::string Scene::generateCpp()
+oc::string Scene::generateCpp()
 {
     if (m_nodeEditorContext)
         ed::SetCurrentEditor(m_nodeEditorContext);
 
-    std::string code;
+    oc::string code;
     // The .scr holds ONLY namespace-body-safe code: an optional Script Data struct, helper functions, and the
     // SCRIPT_EXPORT entry-point functions, followed by the //@graph metadata (all comments). It does NOT
     // #include ScriptAPI.h or pick a build mode — the compiler wrapper supplies those, so the same file serves
@@ -1477,7 +1477,7 @@ std::string Scene::generateCpp()
         code += "struct ScriptData\n{\n";
         for (const auto& pin : dataNode->getOutputPins())
             if (!pin->name.empty())
-                code += std::string("    ") + memberCppType(pin->dataType) + " " + pin->name + ";\n";
+                code += oc::string("    ") + memberCppType(pin->dataType) + " " + pin->name + ";\n";
         code += "};\n";
         code += "SCRIPT_EXPORT unsigned int ScriptDataSize() { return (unsigned int)sizeof(ScriptData); }\n";
     }
@@ -1491,13 +1491,13 @@ std::string Scene::generateCpp()
         code += "SCRIPT_EXPORT void OnSpawn(const ScriptContext* ctx, Entity* self, void* scriptData)\n{\n";
 
         Codegen cg{ m_links };
-        std::set<const Node*> execStack;
-        const std::string chain = emitExecChain(cg, entry, execStack); // also collects cg.globalDecls
-        std::string bodyRaw;
+        oc::set<const Node*> execStack;
+        const oc::string chain = emitExecChain(cg, entry, execStack); // also collects cg.globalDecls
+        oc::string bodyRaw;
         if (dataNode)
             bodyRaw += "ScriptData* data = (ScriptData*)scriptData;\n"; // members resolve to data->field
         bodyRaw += cg.globalDecls + chain;                             // variable decls first, at function scope
-        const std::string body = applyIndent(bodyRaw, "    ");
+        const oc::string body = applyIndent(bodyRaw, "    ");
         if (!body.empty())
             code += indentLines(body, "    ");
 
@@ -1509,13 +1509,13 @@ std::string Scene::generateCpp()
         code += "SCRIPT_EXPORT void OnDestroy(const ScriptContext* ctx, Entity* self, void* scriptData)\n{\n";
 
         Codegen cg{ m_links };
-        std::set<const Node*> execStack;
-        const std::string chain = emitExecChain(cg, entry, execStack); // also collects cg.globalDecls
-        std::string bodyRaw;
+        oc::set<const Node*> execStack;
+        const oc::string chain = emitExecChain(cg, entry, execStack); // also collects cg.globalDecls
+        oc::string bodyRaw;
         if (dataNode)
             bodyRaw += "ScriptData* data = (ScriptData*)scriptData;\n"; // members resolve to data->field
         bodyRaw += cg.globalDecls + chain;                             // variable decls first, at function scope
-        const std::string body = applyIndent(bodyRaw, "    ");
+        const oc::string body = applyIndent(bodyRaw, "    ");
         if (!body.empty())
             code += indentLines(body, "    ");
 
@@ -1530,13 +1530,13 @@ std::string Scene::generateCpp()
                 "int physBegin, int physSensor, long long physContactId, void* scriptData)\n{\n";
 
         Codegen cg{ m_links };
-        std::set<const Node*> execStack;
-        const std::string chain = emitExecChain(cg, entry, execStack); // also collects cg.globalDecls
-        std::string bodyRaw;
+        oc::set<const Node*> execStack;
+        const oc::string chain = emitExecChain(cg, entry, execStack); // also collects cg.globalDecls
+        oc::string bodyRaw;
         if (dataNode)
             bodyRaw += "ScriptData* data = (ScriptData*)scriptData;\n"; // members resolve to data->field
         bodyRaw += cg.globalDecls + chain;                             // variable decls first, at function scope
-        const std::string body = applyIndent(bodyRaw, "    ");
+        const oc::string body = applyIndent(bodyRaw, "    ");
         if (!body.empty())
             code += indentLines(body, "    ");
 
@@ -1550,33 +1550,33 @@ std::string Scene::generateCpp()
     {
         const auto& entries = eventNode->getOutputPins();
 
-        code += "SCRIPT_EXPORT int ScriptEventCount() { return " + std::to_string(entries.size()) + "; }\n";
+        code += "SCRIPT_EXPORT int ScriptEventCount() { return " + oc::to_string(entries.size()) + "; }\n";
         code += "SCRIPT_EXPORT const char* ScriptEventName(int eventIdx)\n{\n    switch (eventIdx)\n    {\n";
         for (int i = 0; i < (int)entries.size(); ++i)
-            code += "    case " + std::to_string(i) + ": return \"" + entries[i]->name + "\";\n";
+            code += "    case " + oc::to_string(i) + ": return \"" + entries[i]->name + "\";\n";
         code += "    default: return \"\";\n    }\n}\n";
 
         code += "SCRIPT_EXPORT void OnEvent(const ScriptContext* ctx, Entity* self, int eventIdx, void* scriptData)\n{\n";
 
         Codegen cg{ m_links };
-        std::string dispatch;
+        oc::string dispatch;
         dispatch += "switch (eventIdx) {\n";
         for (int i = 0; i < (int)entries.size(); ++i)
         {
             Pin* tgt = realTargetOfOutput(m_links, entries[i].get());
             if (!tgt) continue;
-            std::set<const Node*> execStack;
-            const std::string chain = emitExecChain(cg, tgt->node, execStack, tgt); // also collects cg.globalDecls
-            dispatch += "case " + std::to_string(i) + ":\n{\n" +
-                std::string(1, INDENT_UP) + chain + std::string(1, INDENT_DOWN) + "} break;\n";
+            oc::set<const Node*> execStack;
+            const oc::string chain = emitExecChain(cg, tgt->node, execStack, tgt); // also collects cg.globalDecls
+            dispatch += "case " + oc::to_string(i) + ":\n{\n" +
+                oc::string(1, INDENT_UP) + chain + oc::string(1, INDENT_DOWN) + "} break;\n";
         }
         dispatch += "}\n";
 
-        std::string bodyRaw;
+        oc::string bodyRaw;
         if (dataNode)
             bodyRaw += "ScriptData* data = (ScriptData*)scriptData;\n";
         bodyRaw += cg.globalDecls + dispatch;
-        const std::string body = applyIndent(bodyRaw, "    ");
+        const oc::string body = applyIndent(bodyRaw, "    ");
         if (!body.empty())
             code += indentLines(body, "    ");
 
@@ -1588,13 +1588,13 @@ std::string Scene::generateCpp()
         code += "SCRIPT_EXPORT void Update(const ScriptContext* ctx, Entity* self, float dt, void* scriptData)\n{\n";
 
         Codegen cg{ m_links };
-        std::set<const Node*> execStack;
-        const std::string chain = emitExecChain(cg, entry, execStack); // also collects cg.globalDecls
-        std::string bodyRaw;
+        oc::set<const Node*> execStack;
+        const oc::string chain = emitExecChain(cg, entry, execStack); // also collects cg.globalDecls
+        oc::string bodyRaw;
         if (dataNode)
             bodyRaw += "ScriptData* data = (ScriptData*)scriptData;\n"; // members resolve to data->field
         bodyRaw += cg.globalDecls + chain;                             // variable decls first, at function scope
-        const std::string body = applyIndent(bodyRaw, "    ");
+        const oc::string body = applyIndent(bodyRaw, "    ");
         if (!body.empty())
             code += indentLines(body, "    ");
 
@@ -1617,16 +1617,16 @@ std::string Scene::generateCpp()
     return code;
 }
 
-std::string Scene::serializeGraph()
+oc::string Scene::serializeGraph()
 {
-    std::string s = "//@graph 1\n";
+    oc::string s = "//@graph 1\n";
 
     for (int i = 0; i < (int)m_nodes.size(); ++i)
     {
         const Node* node = m_nodes[i].get();
         const ImVec2 pos = m_nodeEditorContext ? ed::GetNodePosition(node->getId()) : ImVec2(0.0f, 0.0f);
-        s += "//@node " + std::to_string(i) + " " + node->getTypeId() + " " +
-             std::to_string((int)pos.x) + " " + std::to_string((int)pos.y) + "\n";
+        s += "//@node " + oc::to_string(i) + " " + node->getTypeId() + " " +
+             oc::to_string((int)pos.x) + " " + oc::to_string((int)pos.y) + "\n";
     }
 
     // Label boxes: their size and caption (caption is rest-of-line, so it may contain spaces).
@@ -1634,34 +1634,34 @@ std::string Scene::serializeGraph()
         if (m_nodes[i]->isLabel())
         {
             const ImVec2 size = m_nodes[i]->getLabelSize();
-            s += "//@labelsize " + std::to_string(i) + " " + std::to_string((int)size.x) + " " + std::to_string((int)size.y) + "\n";
-            s += "//@labeltext " + std::to_string(i) + " " + m_nodes[i]->getLabelText() + "\n";
+            s += "//@labelsize " + oc::to_string(i) + " " + oc::to_string((int)size.x) + " " + oc::to_string((int)size.y) + "\n";
+            s += "//@labeltext " + oc::to_string(i) + " " + m_nodes[i]->getLabelText() + "\n";
         }
 
     // Reroute waypoints: their carried type, so their pins can be rebuilt before links are restored.
     for (int i = 0; i < (int)m_nodes.size(); ++i)
         if (m_nodes[i]->isReroute() && !m_nodes[i]->getInputPins().empty())
-            s += "//@reroute " + std::to_string(i) + " " + dataTypeToken(m_nodes[i]->getInputPins()[0]->dataType) + "\n";
+            s += "//@reroute " + oc::to_string(i) + " " + dataTypeToken(m_nodes[i]->getInputPins()[0]->dataType) + "\n";
 
     // Script Data members (a dynamic node's output pins). Emitted before links so a load recreates them
     // first — links reference these output pins by index.
     for (int i = 0; i < (int)m_nodes.size(); ++i)
         if (m_nodes[i]->isDynamic())
             for (const auto& pin : m_nodes[i]->getOutputPins())
-                s += "//@member " + std::to_string(i) + " " + memberTypeToken(pin->dataType) + " " + pin->name + "\n";
+                s += "//@member " + oc::to_string(i) + " " + memberTypeToken(pin->dataType) + " " + pin->name + "\n";
 
     // On Event entries (a dynamic node's output pins). Emitted before links for the same reason as members.
     for (int i = 0; i < (int)m_nodes.size(); ++i)
         if (m_nodes[i]->isEventNode())
             for (const auto& pin : m_nodes[i]->getOutputPins())
-                s += "//@event " + std::to_string(i) + " " + pin->name + "\n";
+                s += "//@event " + oc::to_string(i) + " " + pin->name + "\n";
 
     // Trigger Audio alias entries (dynamic exec input pins). Emitted before links for the same reason.
     for (int i = 0; i < (int)m_nodes.size(); ++i)
         if (m_nodes[i]->isTriggerAudio())
             for (const auto& pin : m_nodes[i]->getInputPins())
                 if (pin->dataType == EDataType::Exec)
-                    s += "//@audioentry " + std::to_string(i) + " " + pin->name + "\n";
+                    s += "//@audioentry " + oc::to_string(i) + " " + pin->name + "\n";
 
     // Function boundary + call nodes. All pins are emitted before links so a load recreates them first.
     // Function Input params are its output pins after the exec pin; Function Output returns are its input
@@ -1671,27 +1671,27 @@ std::string Scene::serializeGraph()
         const Node* node = m_nodes[i].get();
         if (node->isFunctionInput())
         {
-            s += "//@funcname " + std::to_string(i) + " " + node->getFunctionName() + "\n";
+            s += "//@funcname " + oc::to_string(i) + " " + node->getFunctionName() + "\n";
             const auto& outs = node->getOutputPins();
             for (size_t j = 1; j < outs.size(); ++j)
-                s += "//@param " + std::to_string(i) + " " + memberTypeToken(outs[j]->dataType) + " " + outs[j]->name + "\n";
+                s += "//@param " + oc::to_string(i) + " " + memberTypeToken(outs[j]->dataType) + " " + outs[j]->name + "\n";
         }
         else if (node->isFunctionOutput())
         {
             // No //@funcname: a Function Output has no name — codegen pairs it to its Input by exec reachability.
             const auto& ins = node->getInputPins();
             for (size_t j = 1; j < ins.size(); ++j)
-                s += "//@return " + std::to_string(i) + " " + memberTypeToken(ins[j]->dataType) + " " + ins[j]->name + "\n";
+                s += "//@return " + oc::to_string(i) + " " + memberTypeToken(ins[j]->dataType) + " " + ins[j]->name + "\n";
         }
         else if (node->isFunctionCall())
         {
-            s += "//@funccall " + std::to_string(i) + " " + node->getFunctionScriptPath() + " " + node->getFunctionName() + "\n";
+            s += "//@funccall " + oc::to_string(i) + " " + node->getFunctionScriptPath() + " " + node->getFunctionName() + "\n";
             const auto& ins = node->getInputPins();
             for (size_t j = 1; j < ins.size(); ++j)
-                s += "//@callparam " + std::to_string(i) + " " + memberTypeToken(ins[j]->dataType) + " " + ins[j]->name + "\n";
+                s += "//@callparam " + oc::to_string(i) + " " + memberTypeToken(ins[j]->dataType) + " " + ins[j]->name + "\n";
             const auto& outs = node->getOutputPins();
             for (size_t j = 1; j < outs.size(); ++j)
-                s += "//@callret " + std::to_string(i) + " " + memberTypeToken(outs[j]->dataType) + " " + outs[j]->name + "\n";
+                s += "//@callret " + oc::to_string(i) + " " + memberTypeToken(outs[j]->dataType) + " " + outs[j]->name + "\n";
         }
     }
 
@@ -1700,12 +1700,12 @@ std::string Scene::serializeGraph()
         const auto& inputs = m_nodes[i]->getInputPins();
         for (int j = 0; j < (int)inputs.size(); ++j)
             if (inputs[j]->dataType != EDataType::Exec)
-                s += "//@pin " + std::to_string(i) + " " + std::to_string(j) + " " + inputs[j]->defaultValue + "\n";
+                s += "//@pin " + oc::to_string(i) + " " + oc::to_string(j) + " " + inputs[j]->defaultValue + "\n";
     }
 
     for (int i = 0; i < (int)m_nodes.size(); ++i)
         if (m_nodes[i]->getEnumSelection() != 0)
-            s += "//@enum " + std::to_string(i) + " " + std::to_string(m_nodes[i]->getEnumSelection()) + "\n";
+            s += "//@enum " + oc::to_string(i) + " " + oc::to_string(m_nodes[i]->getEnumSelection()) + "\n";
 
     for (const auto& link : m_links)
     {
@@ -1717,16 +1717,16 @@ std::string Scene::serializeGraph()
         const int fo = indexOfPin(out->node->getOutputPins(), out);
         const int ti = indexOfPin(in->node->getInputPins(), in);
         if (fromIdx < 0 || toIdx < 0 || fo < 0 || ti < 0) continue;
-        s += "//@link " + std::to_string(fromIdx) + " " + std::to_string(fo) + " " +
-             std::to_string(toIdx) + " " + std::to_string(ti) + "\n";
+        s += "//@link " + oc::to_string(fromIdx) + " " + oc::to_string(fo) + " " +
+             oc::to_string(toIdx) + " " + oc::to_string(ti) + "\n";
     }
 
     return s;
 }
 
-bool Scene::saveToFile(const std::string& path)
+bool Scene::saveToFile(const oc::string& path)
 {
-    const std::string code = generateCpp();
+    const oc::string code = generateCpp();
     // Editor save: an explicit user action on the main thread.
     if (!FileSystem::writeFileStr(path, code, /*allowMainThread*/ true))
         return false;
@@ -1738,14 +1738,14 @@ namespace
 {
     struct LineReader
     {
-        const std::string& s;
+        const oc::string& s;
         size_t pos = 0;
         void skipWs() { while (pos < s.size() && (s[pos] == ' ' || s[pos] == '\t')) ++pos; }
-        std::string token() { skipWs(); size_t start = pos; while (pos < s.size() && s[pos] != ' ' && s[pos] != '\t') ++pos; return s.substr(start, pos - start); }
-        std::string rest() { skipWs(); std::string r = s.substr(pos); while (!r.empty() && (r.back() == '\r' || r.back() == '\n')) r.pop_back(); return r; }
+        oc::string token() { skipWs(); size_t start = pos; while (pos < s.size() && s[pos] != ' ' && s[pos] != '\t') ++pos; return s.substr(start, pos - start); }
+        oc::string rest() { skipWs(); oc::string r = s.substr(pos); while (!r.empty() && (r.back() == '\r' || r.back() == '\n')) r.pop_back(); return r; }
     };
 
-    int toInt(const std::string& s)
+    int toInt(const oc::string& s)
     {
         int sign = 1; size_t i = 0;
         if (i < s.size() && (s[i] == '-' || s[i] == '+')) { sign = s[i] == '-' ? -1 : 1; ++i; }
@@ -1760,15 +1760,15 @@ namespace
 // existing graph or touch first-frame/baseline bookkeeping — callers own that. `byIndex` is filled in,
 // indexed by the snippet's own local //@node indices (0..N-1 for a clipboard paste, whatever a file uses
 // for a full load), so callers can find the newly created nodes afterward (e.g. to select them).
-void Scene::loadLinesIntoGraph(const std::vector<std::string>& lines, ImVec2 offset, std::vector<Node*>& byIndex)
+void Scene::loadLinesIntoGraph(const oc::vector<oc::string>& lines, ImVec2 offset, oc::vector<Node*>& byIndex)
 {
     // pass 1: nodes
-    for (const std::string& ln : lines)
+    for (const oc::string& ln : lines)
     {
         LineReader r{ ln };
         if (r.token() != "//@node") continue;
         const int idx = toInt(r.token());
-        const std::string typeId = r.token();
+        const oc::string typeId = r.token();
         const int x = toInt(r.token());
         const int y = toInt(r.token());
         if (!findNodeDef(typeId)) continue;
@@ -1778,108 +1778,108 @@ void Scene::loadLinesIntoGraph(const std::vector<std::string>& lines, ImVec2 off
     }
 
     // pass 1a: Reroute pins (before links, which reference these pins by index)
-    for (const std::string& ln : lines)
+    for (const oc::string& ln : lines)
     {
         LineReader r{ ln };
         if (r.token() != "//@reroute") continue;
         const int ni = toInt(r.token());
-        const std::string typeTok = r.token();
+        const oc::string typeTok = r.token();
         if (ni >= 0 && ni < (int)byIndex.size() && byIndex[ni] && byIndex[ni]->isReroute())
             byIndex[ni]->makeReroute(dataTypeFromToken(typeTok));
     }
 
     // pass 1b: Script Data members (before links, which reference these output pins by index)
-    for (const std::string& ln : lines)
+    for (const oc::string& ln : lines)
     {
         LineReader r{ ln };
         if (r.token() != "//@member") continue;
         const int ni = toInt(r.token());
-        const std::string typeTok = r.token();
-        const std::string name = r.token();
+        const oc::string typeTok = r.token();
+        const oc::string name = r.token();
         if (ni < 0 || ni >= (int)byIndex.size() || !byIndex[ni] || !byIndex[ni]->isDynamic()) continue;
         byIndex[ni]->addMember(memberTypeFromToken(typeTok), name);
     }
 
     // pass 1b2: On Event entries (before links, which reference these output pins by index)
-    for (const std::string& ln : lines)
+    for (const oc::string& ln : lines)
     {
         LineReader r{ ln };
         if (r.token() != "//@event") continue;
         const int ni = toInt(r.token());
-        const std::string name = r.rest();
+        const oc::string name = r.rest();
         if (ni < 0 || ni >= (int)byIndex.size() || !byIndex[ni] || !byIndex[ni]->isEventNode()) continue;
         byIndex[ni]->addEventEntry(name);
     }
 
     // pass 1b2b: Trigger Audio alias entries (before links, which reference these input pins by index)
-    for (const std::string& ln : lines)
+    for (const oc::string& ln : lines)
     {
         LineReader r{ ln };
         if (r.token() != "//@audioentry") continue;
         const int ni = toInt(r.token());
-        const std::string name = r.rest();
+        const oc::string name = r.rest();
         if (ni < 0 || ni >= (int)byIndex.size() || !byIndex[ni] || !byIndex[ni]->isTriggerAudio()) continue;
         byIndex[ni]->addAudioEntry(name);
     }
 
     // pass 1b3: Function boundary + call nodes (before links, which reference these pins by index)
-    for (const std::string& ln : lines) // function names first (pairs Input/Output, titles Call)
+    for (const oc::string& ln : lines) // function names first (pairs Input/Output, titles Call)
     {
         LineReader r{ ln };
         if (r.token() != "//@funcname") continue;
         const int ni = toInt(r.token());
-        const std::string name = r.token();
+        const oc::string name = r.token();
         if (ni >= 0 && ni < (int)byIndex.size() && byIndex[ni])
             byIndex[ni]->setFunctionName(name);
     }
-    for (const std::string& ln : lines) // Function Input parameters (its output pins)
+    for (const oc::string& ln : lines) // Function Input parameters (its output pins)
     {
         LineReader r{ ln };
         if (r.token() != "//@param") continue;
         const int ni = toInt(r.token());
-        const std::string typeTok = r.token();
-        const std::string name = r.token();
+        const oc::string typeTok = r.token();
+        const oc::string name = r.token();
         if (ni >= 0 && ni < (int)byIndex.size() && byIndex[ni] && byIndex[ni]->isFunctionInput())
             byIndex[ni]->addParam(memberTypeFromToken(typeTok), name);
     }
-    for (const std::string& ln : lines) // Function Output returns (its input pins)
+    for (const oc::string& ln : lines) // Function Output returns (its input pins)
     {
         LineReader r{ ln };
         if (r.token() != "//@return") continue;
         const int ni = toInt(r.token());
-        const std::string typeTok = r.token();
-        const std::string name = r.token();
+        const oc::string typeTok = r.token();
+        const oc::string name = r.token();
         if (ni >= 0 && ni < (int)byIndex.size() && byIndex[ni] && byIndex[ni]->isFunctionOutput())
             byIndex[ni]->addReturn(memberTypeFromToken(typeTok), name);
     }
     {
         // Function Call: gather each call's signature (file order) then rebuild its pins in one shot. The
         // signature is stored inline (not re-read from the referenced file) so a load is self-contained.
-        std::map<int, PinSig> callParams, callReturns;
-        std::map<int, std::pair<std::string, std::string>> callTargets; // node -> (scriptPath, funcName)
-        for (const std::string& ln : lines)
+        oc::map<int, PinSig> callParams, callReturns;
+        oc::map<int, oc::pair<oc::string, oc::string>> callTargets; // node -> (scriptPath, funcName)
+        for (const oc::string& ln : lines)
         {
             LineReader r{ ln };
-            const std::string tag = r.token();
+            const oc::string tag = r.token();
             if (tag == "//@funccall")
             {
                 const int ni = toInt(r.token());
-                const std::string path2 = r.token();
-                const std::string name = r.token();
+                const oc::string path2 = r.token();
+                const oc::string name = r.token();
                 callTargets[ni] = { path2, name };
             }
             else if (tag == "//@callparam")
             {
                 const int ni = toInt(r.token());
-                const std::string typeTok = r.token();
-                const std::string name = r.token();
+                const oc::string typeTok = r.token();
+                const oc::string name = r.token();
                 callParams[ni].push_back({ memberTypeFromToken(typeTok), name });
             }
             else if (tag == "//@callret")
             {
                 const int ni = toInt(r.token());
-                const std::string typeTok = r.token();
-                const std::string name = r.token();
+                const oc::string typeTok = r.token();
+                const oc::string name = r.token();
                 callReturns[ni].push_back({ memberTypeFromToken(typeTok), name });
             }
         }
@@ -1894,10 +1894,10 @@ void Scene::loadLinesIntoGraph(const std::vector<std::string>& lines, ImVec2 off
     }
 
     // pass 1c: Label box size + caption
-    for (const std::string& ln : lines)
+    for (const oc::string& ln : lines)
     {
         LineReader r{ ln };
-        const std::string tag = r.token();
+        const oc::string tag = r.token();
         if (tag == "//@labelsize")
         {
             const int ni = toInt(r.token());
@@ -1909,14 +1909,14 @@ void Scene::loadLinesIntoGraph(const std::vector<std::string>& lines, ImVec2 off
         else if (tag == "//@labeltext")
         {
             const int ni = toInt(r.token());
-            const std::string text = r.rest();
+            const oc::string text = r.rest();
             if (ni >= 0 && ni < (int)byIndex.size() && byIndex[ni] && byIndex[ni]->isLabel())
                 byIndex[ni]->setLabelText(text);
         }
     }
 
     // pass 2: links (before defaults, so wildcard groups can resolve from them first)
-    for (const std::string& ln : lines)
+    for (const oc::string& ln : lines)
     {
         LineReader r{ ln };
         if (r.token() != "//@link") continue;
@@ -1934,13 +1934,13 @@ void Scene::loadLinesIntoGraph(const std::vector<std::string>& lines, ImVec2 off
         resolveNodeTypes(node);
 
     // pass 4: input pin defaults (after resolution, so saved literals win over type defaults)
-    for (const std::string& ln : lines)
+    for (const oc::string& ln : lines)
     {
         LineReader r{ ln };
         if (r.token() != "//@pin") continue;
         const int ni = toInt(r.token());
         const int pi = toInt(r.token());
-        const std::string lit = r.rest();
+        const oc::string lit = r.rest();
         if (ni < 0 || ni >= (int)byIndex.size() || !byIndex[ni]) continue;
         const auto& inputs = byIndex[ni]->getInputPins();
         if (pi >= 0 && pi < (int)inputs.size())
@@ -1948,7 +1948,7 @@ void Scene::loadLinesIntoGraph(const std::vector<std::string>& lines, ImVec2 off
     }
 
     // pass 5: dropdown-property selections
-    for (const std::string& ln : lines)
+    for (const oc::string& ln : lines)
     {
         LineReader r{ ln };
         if (r.token() != "//@enum") continue;
@@ -1965,7 +1965,7 @@ void Scene::loadLinesIntoGraph(const std::vector<std::string>& lines, ImVec2 off
 // dots. removeNode's own reroute-rejoin logic only fires when BOTH sides are still connected, so this can't
 // accidentally reconnect something that shouldn't be. Nulls out the pruned entries in byIndex so a caller's
 // later "select every pasted node" loop (which already checks for null) skips them.
-void Scene::pruneDanglingReroutes(std::vector<Node*>& byIndex)
+void Scene::pruneDanglingReroutes(oc::vector<Node*>& byIndex)
 {
     for (Node*& n : byIndex)
     {
@@ -1983,20 +1983,20 @@ void Scene::pruneDanglingReroutes(std::vector<Node*>& byIndex)
     }
 }
 
-bool Scene::loadFromFile(const std::string& path)
+bool Scene::loadFromFile(const oc::string& path)
 {
     if (!FileSystem::exists(path, /*allowMainThread*/ true))
         return false;
     std::istringstream file(FileSystem::readFileStr(path, /*allowMainThread*/ true));
 
-    std::vector<std::string> lines;
-    std::string line;
+    oc::vector<oc::string> lines;
+    oc::string line;
     while (std::getline(file, line))
         lines.push_back(line);
 
     m_links.clear();
     m_nodes.clear();
-    std::vector<Node*> byIndex;
+    oc::vector<Node*> byIndex;
     loadLinesIntoGraph(lines, ImVec2(0.0f, 0.0f), byIndex);
 
     m_firstFrame = true;
@@ -2008,75 +2008,75 @@ bool Scene::loadFromFile(const std::string& path)
 // live m_nodes) and only `links` (the caller is expected to have already filtered these to ones internal to
 // the selection — see copySelectedToClipboard). Mirrors serializeGraph's per-node-type sections exactly, just
 // keyed by local index instead of indexOfNode, so a paste elsewhere reconstructs the same nodes/links/data.
-std::string Scene::serializeSubset(const std::vector<Node*>& nodes, const std::vector<Link*>& links)
+oc::string Scene::serializeSubset(const oc::vector<Node*>& nodes, const oc::vector<Link*>& links)
 {
-    std::map<const Node*, int> localIndex;
+    oc::map<const Node*, int> localIndex;
     for (int i = 0; i < (int)nodes.size(); ++i)
         localIndex[nodes[i]] = i;
 
-    std::string s = "//@nodeclip 1\n";
+    oc::string s = "//@nodeclip 1\n";
 
     for (int i = 0; i < (int)nodes.size(); ++i)
     {
         const Node* node = nodes[i];
         const ImVec2 pos = m_nodeEditorContext ? ed::GetNodePosition(node->getId()) : ImVec2(0.0f, 0.0f);
-        s += "//@node " + std::to_string(i) + " " + node->getTypeId() + " " +
-             std::to_string((int)pos.x) + " " + std::to_string((int)pos.y) + "\n";
+        s += "//@node " + oc::to_string(i) + " " + node->getTypeId() + " " +
+             oc::to_string((int)pos.x) + " " + oc::to_string((int)pos.y) + "\n";
     }
 
     for (int i = 0; i < (int)nodes.size(); ++i)
         if (nodes[i]->isLabel())
         {
             const ImVec2 size = nodes[i]->getLabelSize();
-            s += "//@labelsize " + std::to_string(i) + " " + std::to_string((int)size.x) + " " + std::to_string((int)size.y) + "\n";
-            s += "//@labeltext " + std::to_string(i) + " " + nodes[i]->getLabelText() + "\n";
+            s += "//@labelsize " + oc::to_string(i) + " " + oc::to_string((int)size.x) + " " + oc::to_string((int)size.y) + "\n";
+            s += "//@labeltext " + oc::to_string(i) + " " + nodes[i]->getLabelText() + "\n";
         }
 
     for (int i = 0; i < (int)nodes.size(); ++i)
         if (nodes[i]->isReroute() && !nodes[i]->getInputPins().empty())
-            s += "//@reroute " + std::to_string(i) + " " + dataTypeToken(nodes[i]->getInputPins()[0]->dataType) + "\n";
+            s += "//@reroute " + oc::to_string(i) + " " + dataTypeToken(nodes[i]->getInputPins()[0]->dataType) + "\n";
 
     for (int i = 0; i < (int)nodes.size(); ++i)
         if (nodes[i]->isDynamic())
             for (const auto& pin : nodes[i]->getOutputPins())
-                s += "//@member " + std::to_string(i) + " " + memberTypeToken(pin->dataType) + " " + pin->name + "\n";
+                s += "//@member " + oc::to_string(i) + " " + memberTypeToken(pin->dataType) + " " + pin->name + "\n";
 
     for (int i = 0; i < (int)nodes.size(); ++i)
         if (nodes[i]->isEventNode())
             for (const auto& pin : nodes[i]->getOutputPins())
-                s += "//@event " + std::to_string(i) + " " + pin->name + "\n";
+                s += "//@event " + oc::to_string(i) + " " + pin->name + "\n";
 
     for (int i = 0; i < (int)nodes.size(); ++i)
         if (nodes[i]->isTriggerAudio())
             for (const auto& pin : nodes[i]->getInputPins())
                 if (pin->dataType == EDataType::Exec)
-                    s += "//@audioentry " + std::to_string(i) + " " + pin->name + "\n";
+                    s += "//@audioentry " + oc::to_string(i) + " " + pin->name + "\n";
 
     for (int i = 0; i < (int)nodes.size(); ++i)
     {
         const Node* node = nodes[i];
         if (node->isFunctionInput())
         {
-            s += "//@funcname " + std::to_string(i) + " " + node->getFunctionName() + "\n";
+            s += "//@funcname " + oc::to_string(i) + " " + node->getFunctionName() + "\n";
             const auto& outs = node->getOutputPins();
             for (size_t j = 1; j < outs.size(); ++j)
-                s += "//@param " + std::to_string(i) + " " + memberTypeToken(outs[j]->dataType) + " " + outs[j]->name + "\n";
+                s += "//@param " + oc::to_string(i) + " " + memberTypeToken(outs[j]->dataType) + " " + outs[j]->name + "\n";
         }
         else if (node->isFunctionOutput())
         {
             const auto& ins = node->getInputPins();
             for (size_t j = 1; j < ins.size(); ++j)
-                s += "//@return " + std::to_string(i) + " " + memberTypeToken(ins[j]->dataType) + " " + ins[j]->name + "\n";
+                s += "//@return " + oc::to_string(i) + " " + memberTypeToken(ins[j]->dataType) + " " + ins[j]->name + "\n";
         }
         else if (node->isFunctionCall())
         {
-            s += "//@funccall " + std::to_string(i) + " " + node->getFunctionScriptPath() + " " + node->getFunctionName() + "\n";
+            s += "//@funccall " + oc::to_string(i) + " " + node->getFunctionScriptPath() + " " + node->getFunctionName() + "\n";
             const auto& ins = node->getInputPins();
             for (size_t j = 1; j < ins.size(); ++j)
-                s += "//@callparam " + std::to_string(i) + " " + memberTypeToken(ins[j]->dataType) + " " + ins[j]->name + "\n";
+                s += "//@callparam " + oc::to_string(i) + " " + memberTypeToken(ins[j]->dataType) + " " + ins[j]->name + "\n";
             const auto& outs = node->getOutputPins();
             for (size_t j = 1; j < outs.size(); ++j)
-                s += "//@callret " + std::to_string(i) + " " + memberTypeToken(outs[j]->dataType) + " " + outs[j]->name + "\n";
+                s += "//@callret " + oc::to_string(i) + " " + memberTypeToken(outs[j]->dataType) + " " + outs[j]->name + "\n";
         }
     }
 
@@ -2085,12 +2085,12 @@ std::string Scene::serializeSubset(const std::vector<Node*>& nodes, const std::v
         const auto& inputs = nodes[i]->getInputPins();
         for (int j = 0; j < (int)inputs.size(); ++j)
             if (inputs[j]->dataType != EDataType::Exec)
-                s += "//@pin " + std::to_string(i) + " " + std::to_string(j) + " " + inputs[j]->defaultValue + "\n";
+                s += "//@pin " + oc::to_string(i) + " " + oc::to_string(j) + " " + inputs[j]->defaultValue + "\n";
     }
 
     for (int i = 0; i < (int)nodes.size(); ++i)
         if (nodes[i]->getEnumSelection() != 0)
-            s += "//@enum " + std::to_string(i) + " " + std::to_string(nodes[i]->getEnumSelection()) + "\n";
+            s += "//@enum " + oc::to_string(i) + " " + oc::to_string(nodes[i]->getEnumSelection()) + "\n";
 
     for (const Link* link : links)
     {
@@ -2103,8 +2103,8 @@ std::string Scene::serializeSubset(const std::vector<Node*>& nodes, const std::v
         const int fo = indexOfPin(out->node->getOutputPins(), out);
         const int ti = indexOfPin(in->node->getInputPins(), in);
         if (fo < 0 || ti < 0) continue;
-        s += "//@link " + std::to_string(fromIt->second) + " " + std::to_string(fo) + " " +
-             std::to_string(toIt->second) + " " + std::to_string(ti) + "\n";
+        s += "//@link " + oc::to_string(fromIt->second) + " " + oc::to_string(fo) + " " +
+             oc::to_string(toIt->second) + " " + oc::to_string(ti) + "\n";
     }
 
     return s;
@@ -2113,15 +2113,15 @@ std::string Scene::serializeSubset(const std::vector<Node*>& nodes, const std::v
 // Gathers every currently-selected node (plus any reroute waypoint that sits between two selected nodes —
 // see addReroutesBetweenSelected), and every link where both endpoints are in that set — the same subset
 // copySelectedToClipboard and duplicateSelection each turn into a serialized clipping.
-void Scene::collectSelection(std::vector<Node*>& nodes, std::vector<Link*>& links) const
+void Scene::collectSelection(oc::vector<Node*>& nodes, oc::vector<Link*>& links) const
 {
     const int selCount = ed::GetSelectedObjectCount();
     if (selCount <= 0)
         return;
-    std::vector<ed::NodeId> nodeIds(selCount);
+    oc::vector<ed::NodeId> nodeIds(selCount);
     const int nodeCount = ed::GetSelectedNodes(nodeIds.data(), selCount);
 
-    std::set<Node*> selected;
+    oc::set<Node*> selected;
     for (int i = 0; i < nodeCount; ++i)
         if (Node* n = nodeIds[i].AsPointer<Node>())
             if (selected.insert(n).second)
@@ -2144,8 +2144,8 @@ void Scene::collectSelection(std::vector<Node*>& nodes, std::vector<Link*>& link
 // elsewhere reconstructs the same nodes/links/relative layout via loadLinesIntoGraph.
 void Scene::copySelectedToClipboard()
 {
-    std::vector<Node*> nodes;
-    std::vector<Link*> links;
+    oc::vector<Node*> nodes;
+    oc::vector<Link*> links;
     collectSelection(nodes, links);
     if (nodes.empty())
         return;
@@ -2161,17 +2161,17 @@ void Scene::pasteFromClipboard(ImVec2 canvasPos)
     const char* clip = ImGui::GetClipboardText();
     if (!clip)
         return;
-    const std::string text(clip);
+    const oc::string text(clip);
     if (text.rfind("//@nodeclip", 0) != 0)
         return;
 
-    std::vector<std::string> lines = splitLines(text);
+    oc::vector<oc::string> lines = splitLines(text);
 
     // Offset so the pasted selection's centroid (average node position) lands at the cursor — every node
     // keeps its position relative to that centroid, so the layout copied is preserved exactly, just recentered.
     float sumX = 0.0f, sumY = 0.0f;
     int nodeCount = 0;
-    for (const std::string& ln : lines)
+    for (const oc::string& ln : lines)
     {
         LineReader r{ ln };
         if (r.token() != "//@node") continue;
@@ -2185,7 +2185,7 @@ void Scene::pasteFromClipboard(ImVec2 canvasPos)
 
     const ImVec2 offset = ImVec2(canvasPos.x - sumX / nodeCount, canvasPos.y - sumY / nodeCount);
 
-    std::vector<Node*> byIndex;
+    oc::vector<Node*> byIndex;
     loadLinesIntoGraph(lines, offset, byIndex);
     pruneDanglingReroutes(byIndex);
 
@@ -2202,16 +2202,16 @@ void Scene::duplicateSelection(ed::NodeId clickedId)
 {
     ed::SelectNode(clickedId, true); // fold the right-clicked node into whatever's already selected
 
-    std::vector<Node*> nodes;
-    std::vector<Link*> links;
+    oc::vector<Node*> nodes;
+    oc::vector<Link*> links;
     collectSelection(nodes, links);
     if (nodes.empty())
         return;
 
-    const std::vector<std::string> lines = splitLines(serializeSubset(nodes, links));
+    const oc::vector<oc::string> lines = splitLines(serializeSubset(nodes, links));
     constexpr ImVec2 kDuplicateOffset(30.0f, 30.0f);
 
-    std::vector<Node*> byIndex;
+    oc::vector<Node*> byIndex;
     loadLinesIntoGraph(lines, kDuplicateOffset, byIndex);
     pruneDanglingReroutes(byIndex);
 
@@ -2457,13 +2457,13 @@ void Scene::update(double deltaSec)
             ImGui::CloseCurrentPopup();
         };
 
-        const std::string_view search(m_addNodeSearchBuf);
+        const oc::string_view search(m_addNodeSearchBuf);
         if (!search.empty())
         {
             // A flat, filtered list across every category + importable function. Up/Down move the highlight,
             // Enter places it; hovering or clicking with the mouse still works too.
-            struct Result { std::string label; const NodeDef* def; const FunctionRef* funcRef; };
-            std::vector<Result> results;
+            struct Result { oc::string label; const NodeDef* def; const FunctionRef* funcRef; };
+            oc::vector<Result> results;
             for (const NodeDef& def : nodeRegistry())
             {
                 if (isRerouteType(def.typeId) || isFunctionCallType(def.typeId)) // created by dbl-click / import, not the palette
@@ -2511,8 +2511,8 @@ void Scene::update(double deltaSec)
             // Group node defs by category (first-seen order); each category folds into its own submenu (opens
             // on hover, standard ImGui BeginMenu behavior) so the top-level list stays one line per category
             // instead of growing into one very tall flat list.
-            struct Category { std::string name; std::vector<const NodeDef*> defs; };
-            std::vector<Category> categories;
+            struct Category { oc::string name; oc::vector<const NodeDef*> defs; };
+            oc::vector<Category> categories;
             for (const NodeDef& def : nodeRegistry())
             {
                 if (isRerouteType(def.typeId) || isFunctionCallType(def.typeId)) // created by dbl-click / import, not the palette
@@ -2625,7 +2625,7 @@ void Scene::processInteractions()
         if (anchor->type != EPinType_Input) return anchor;
         Pin* source = sourceOfInput(m_links, anchor);
         if (!source) return anchor;
-        std::erase_if(m_links, [&](const std::unique_ptr<Link>& link)
+        oc::erase_if(m_links, [&](const oc::unique_ptr<Link>& link)
         {
             if (link->getInputId().AsPointer<Pin>() != anchor) return false;
             source->numConnections--;
@@ -2650,7 +2650,7 @@ void Scene::processInteractions()
                 Pin* pin2 = pin2Id.AsPointer<Pin>();
 
                 if (pin1->type == EPinType_Output)
-                    std::swap(pin1, pin2);
+                    oc::swap(pin1, pin2);
 
                 if (pin1->type == EPinType_Input && pin2->type == EPinType_Output &&
                     pin1->numConnections == 0 && pinsCompatible(pin1, pin2))
@@ -2659,7 +2659,7 @@ void Scene::processInteractions()
                     {
                         pin1->numConnections++;
                         pin2->numConnections++;
-                        m_links.emplace_back(std::make_unique<Link>())->initialize(ed::PinId(pin1), ed::PinId(pin2));
+                        m_links.emplace_back(oc::make_unique<Link>())->initialize(ed::PinId(pin1), ed::PinId(pin2));
                         resolveNodeTypes(pin1->node); // a new connection may resolve a wildcard group
                         resolveNodeTypes(pin2->node);
                     }
@@ -2715,12 +2715,12 @@ void Scene::processInteractions()
         const int selCount = ed::GetSelectedObjectCount();
         if (selCount > 0)
         {
-            std::vector<ed::NodeId> nodeIds(selCount);
+            oc::vector<ed::NodeId> nodeIds(selCount);
             const int nodeCount = ed::GetSelectedNodes(nodeIds.data(), selCount);
             for (int i = 0; i < nodeCount; ++i)
                 ed::DeleteNode(nodeIds[i]);
 
-            std::vector<ed::LinkId> linkIds(selCount);
+            oc::vector<ed::LinkId> linkIds(selCount);
             const int linkCount = ed::GetSelectedLinks(linkIds.data(), selCount);
             for (int i = 0; i < linkCount; ++i)
                 ed::DeleteLink(linkIds[i]);
@@ -2753,7 +2753,7 @@ void Scene::processInteractions()
                 if (pin2) pin2->numConnections--;
                 Node* node1 = pin1 ? pin1->node : nullptr;
                 Node* node2 = pin2 ? pin2->node : nullptr;
-                std::erase_if(m_links, [&](const std::unique_ptr<Link>& l) { return l.get() == link; });
+                oc::erase_if(m_links, [&](const oc::unique_ptr<Link>& l) { return l.get() == link; });
                 resolveNodeTypes(node1); // a removed connection may revert a wildcard group
                 resolveNodeTypes(node2);
             }

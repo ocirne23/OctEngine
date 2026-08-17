@@ -13,7 +13,7 @@ Window::~Window()
     //SDL_Quit();
 }
 
-bool Window::initialize(std::string_view windowTitle, glm::ivec2 pos, glm::ivec2 size)
+bool Window::initialize(oc::string_view windowTitle, glm::ivec2 pos, glm::ivec2 size)
 {
     // initialize sdl and create a window
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS))
@@ -32,7 +32,7 @@ bool Window::initialize(std::string_view windowTitle, glm::ivec2 pos, glm::ivec2
     return true;
 }
 
-void Window::setTitle(std::string_view title)
+void Window::setTitle(oc::string_view title)
 {
     SDL_SetWindowTitle((SDL_Window*)m_windowHandle, title.data());
 }

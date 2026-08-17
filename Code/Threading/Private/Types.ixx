@@ -46,20 +46,20 @@ public:
     ~JobCounter()
     {
         assert(isDone());
-        [[maybe_unused]] FiberWaitNode* head = m_waiterHead.load(std::memory_order_relaxed);
+        [[maybe_unused]] FiberWaitNode* head = m_waiterHead.load(oc::memory_order_relaxed);
         assert(!head || head == takenSentinel());
     }
 
     void add(uint32 count = 1)
     {
         // a consumed wait list stays claimed until the counter is reused for a new batch
-        if (m_waiterHead.load(std::memory_order_relaxed) == takenSentinel())
-            m_waiterHead.store(nullptr, std::memory_order_relaxed);
-        [[maybe_unused]] const uint32 old = m_count.fetch_add(count, std::memory_order_relaxed);
+        if (m_waiterHead.load(oc::memory_order_relaxed) == takenSentinel())
+            m_waiterHead.store(nullptr, oc::memory_order_relaxed);
+        [[maybe_unused]] const uint32 old = m_count.fetch_add(count, oc::memory_order_relaxed);
         assert((old & CountMask) + count <= CountMask);
     }
-    bool isDone() const { return m_count.load(std::memory_order_acquire) == 0; }
-    uint32 pending() const { return m_count.load(std::memory_order_relaxed) & CountMask; }
+    bool isDone() const { return m_count.load(oc::memory_order_acquire) == 0; }
+    uint32 pending() const { return m_count.load(oc::memory_order_relaxed) & CountMask; }
 
 private:
 
@@ -70,8 +70,8 @@ private:
         return &sentinel;
     }
 
-    std::atomic<uint32> m_count = 0;
-    std::atomic<FiberWaitNode*> m_waiterHead = nullptr;
+    oc::atomic<uint32> m_count = 0;
+    oc::atomic<FiberWaitNode*> m_waiterHead = nullptr;
 };
 
 export using JobFunc = void(*)(void*);
@@ -94,7 +94,7 @@ export struct alignas(64) Job
     JobCounter* signal = nullptr;
     Job* const* successors = nullptr;
     uint32 numSuccessors = 0;
-    std::atomic<int32> pending = 0;     // unsatisfied predecessors; last one to decrement pushes us
+    oc::atomic<int32> pending = 0;     // unsatisfied predecessors; last one to decrement pushes us
     uint32 initialPending = 0;          // reset value for re-running graphs
     uint32 costEmaUs = 0;               // EMA of measured wall time (Timed jobs; min 1us per run)
     uint32 rankUs = 0;                  // critical path: costEmaUs + longest successor chain (graph)
@@ -114,7 +114,7 @@ void setJobCallable(Job& job, F&& func)
     using Func = std::decay_t<F>;
     static_assert(sizeof(Func) <= Job::StorageSize, "capture list exceeds inline job storage - capture a pointer to bigger state instead");
     static_assert(alignof(Func) <= 8, "over-aligned captures not supported by inline job storage");
-    new (static_cast<void*>(job.storage)) Func(std::forward<F>(func));
+    new (static_cast<void*>(job.storage)) Func(oc::forward<F>(func));
     job.invoke = [](void* storage) { (*static_cast<Func*>(storage))(); };
     if constexpr (std::is_trivially_destructible_v<Func>)
         job.destroy = nullptr;
@@ -129,7 +129,7 @@ export class JobResource final
 {
 public:
 
-    explicit JobResource(const char* name = nullptr) : m_id(s_nextId.fetch_add(1, std::memory_order_relaxed)), m_name(name) {}
+    explicit JobResource(const char* name = nullptr) : m_id(s_nextId.fetch_add(1, oc::memory_order_relaxed)), m_name(name) {}
     JobResource(const JobResource&) = delete;
     JobResource& operator=(const JobResource&) = delete;
 
@@ -138,7 +138,7 @@ public:
 
 private:
 
-    static inline std::atomic<uint32> s_nextId = 0;
+    static inline oc::atomic<uint32> s_nextId = 0;
     uint32 m_id;
     const char* m_name;
 };
@@ -153,25 +153,25 @@ export class JobCost final
 public:
 
     explicit JobCost(uint32 initialNsPerItem = 250, const char* name = nullptr)
-        : m_nsPerItem(std::max(1u, initialNsPerItem)), m_name(name) {}
+        : m_nsPerItem(oc::max(1u, initialNsPerItem)), m_name(name) {}
     JobCost(const JobCost&) = delete;
     JobCost& operator=(const JobCost&) = delete;
 
-    uint64 nsPerItem() const { return m_nsPerItem.load(std::memory_order_relaxed); }
+    uint64 nsPerItem() const { return m_nsPerItem.load(oc::memory_order_relaxed); }
     const char* name() const { return m_name; }
 
     void addSample(uint64 totalNs, uint32 numItems)
     {
         if (numItems == 0)
             return;
-        const uint64 sample = std::max<uint64>(1, totalNs / numItems);
-        const uint64 old = m_nsPerItem.load(std::memory_order_relaxed);
-        m_nsPerItem.store((old * 7 + sample) / 8, std::memory_order_relaxed);
+        const uint64 sample = oc::max<uint64>(1, totalNs / numItems);
+        const uint64 old = m_nsPerItem.load(oc::memory_order_relaxed);
+        m_nsPerItem.store((old * 7 + sample) / 8, oc::memory_order_relaxed);
     }
 
 private:
 
-    std::atomic<uint64> m_nsPerItem;
+    oc::atomic<uint64> m_nsPerItem;
     const char* m_name;
 };
 

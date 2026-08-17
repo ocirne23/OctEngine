@@ -52,14 +52,14 @@ bool SwapChain::initialize(const Surface& surface, uint32 swapChainSize, bool vs
         assert(false && "Failed to get surface present modes");
         return false;
     }
-    std::vector<vk::PresentModeKHR> presentModes = presentModesResult.value;
+    oc::vector<vk::PresentModeKHR> presentModes = presentModesResult.value;
     auto surfaceFormatsResult = vkPhysicalDevice.getSurfaceFormatsKHR(vkSurface);
     if (surfaceFormatsResult.result != vk::Result::eSuccess)
     {
         assert(false && "Failed to get surface formats");
         return false;
     }
-    std::vector<vk::SurfaceFormatKHR> surfaceFormats = surfaceFormatsResult.value;
+    oc::vector<vk::SurfaceFormatKHR> surfaceFormats = surfaceFormatsResult.value;
 
     vk::SurfaceFormatKHR surfaceFormat = surfaceFormats[0];
     for (const auto& availableFormat : surfaceFormats)
@@ -72,7 +72,7 @@ bool SwapChain::initialize(const Surface& surface, uint32 swapChainSize, bool vs
     }
     vk::CompositeAlphaFlagBitsKHR compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque;
 
-    const uint32 imageCount = std::max(capabilities.minImageCount, std::min(swapChainSize, capabilities.maxImageCount));
+    const uint32 imageCount = oc::max(capabilities.minImageCount, oc::min(swapChainSize, capabilities.maxImageCount));
     m_syncObjects.resize(imageCount);
     m_syncObjects.shrink_to_fit();
 

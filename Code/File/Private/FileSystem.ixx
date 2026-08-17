@@ -14,7 +14,7 @@ import Core;
 // action in the editor, save/load) must say so by declaring a scope:
 //
 //     const FileSystem::AllowMainThreadIO allowIo;   // RAII, nestable, thread-local
-//     const std::string text = FileSystem::readFileStr(path);
+//     const oc::string text = FileSystem::readFileStr(path);
 //
 // or per call with the trailing `allowMainThread` flag where a scope would be noise. Worker
 // threads are never restricted. NOTE (/GT fiber-safe TLS): the scope is thread_local, so a fiber
@@ -50,65 +50,65 @@ public:
 
     // ---- reads / writes -----------------------------------------------------------------------
 
-    static std::string readFileStr(const std::string& path, bool allowMainThread = false);
-    static bool readFileBytes(const std::string& path, std::vector<uint8>& out, bool allowMainThread = false);
+    static oc::string readFileStr(const oc::string& path, bool allowMainThread = false);
+    static bool readFileBytes(const oc::string& path, oc::vector<uint8>& out, bool allowMainThread = false);
     // Writes (creating/truncating). Returns false if the file could not be opened/written.
-    static bool writeFileStr(const std::string& path, const std::string& content, bool allowMainThread = false);
-    static bool writeFileBytes(const std::string& path, std::span<const uint8> data, bool allowMainThread = false);
+    static bool writeFileStr(const oc::string& path, const oc::string& content, bool allowMainThread = false);
+    static bool writeFileBytes(const oc::string& path, oc::span<const uint8> data, bool allowMainThread = false);
 
     // ---- queries + mutations (all touch the disk) ---------------------------------------------
 
-    static bool exists(const std::string& path, bool allowMainThread = false);
-    static bool isDirectory(const std::string& path, bool allowMainThread = false);
-    static bool isRegularFile(const std::string& path, bool allowMainThread = false);
-    static uint64 fileSize(const std::string& path, bool allowMainThread = false); // 0 when missing
+    static bool exists(const oc::string& path, bool allowMainThread = false);
+    static bool isDirectory(const oc::string& path, bool allowMainThread = false);
+    static bool isRegularFile(const oc::string& path, bool allowMainThread = false);
+    static uint64 fileSize(const oc::string& path, bool allowMainThread = false); // 0 when missing
     // Seconds since the file clock's epoch — only ever compared/stored, never formatted.
-    static int64 lastWriteTimeSec(const std::string& path, bool allowMainThread = false);
-    static bool createDirectories(const std::string& path, bool allowMainThread = false);
-    static bool remove(const std::string& path, bool allowMainThread = false);
-    static uint64 removeAll(const std::string& path, bool allowMainThread = false);
-    static bool rename(const std::string& from, const std::string& to, bool allowMainThread = false);
+    static int64 lastWriteTimeSec(const oc::string& path, bool allowMainThread = false);
+    static bool createDirectories(const oc::string& path, bool allowMainThread = false);
+    static bool remove(const oc::string& path, bool allowMainThread = false);
+    static uint64 removeAll(const oc::string& path, bool allowMainThread = false);
+    static bool rename(const oc::string& from, const oc::string& to, bool allowMainThread = false);
     // Stamps `to` with `from`'s modification time (ScriptHost marks a built DLL as up-to-date
     // with its source this way).
-    static bool copyLastWriteTime(const std::string& from, const std::string& to, bool allowMainThread = false);
-    static bool copyFile(const std::string& from, const std::string& to, bool overwrite, bool allowMainThread = false);
+    static bool copyLastWriteTime(const oc::string& from, const oc::string& to, bool allowMainThread = false);
+    static bool copyFile(const oc::string& from, const oc::string& to, bool overwrite, bool allowMainThread = false);
 
     struct DirEntry
     {
-        std::string path;      // full path as listed
-        std::string name;      // filename component
-        std::string extension; // ".ext", empty for directories without one
+        oc::string path;      // full path as listed
+        oc::string name;      // filename component
+        oc::string extension; // ".ext", empty for directories without one
         bool isDirectory = false;
         uint64 size = 0;       // files only
     };
     // Unsorted; false when the directory could not be read (out is cleared either way).
-    static bool listDirectory(const std::string& dir, std::vector<DirEntry>& out, bool allowMainThread = false);
-    static bool listDirectoryRecursive(const std::string& dir, std::vector<DirEntry>& out, bool allowMainThread = false);
+    static bool listDirectory(const oc::string& dir, oc::vector<DirEntry>& out, bool allowMainThread = false);
+    static bool listDirectoryRecursive(const oc::string& dir, oc::vector<DirEntry>& out, bool allowMainThread = false);
 
-    static std::string currentPath(bool allowMainThread = false);
-    static bool setCurrentPath(const std::string& path, bool allowMainThread = false);
+    static oc::string currentPath(bool allowMainThread = false);
+    static bool setCurrentPath(const oc::string& path, bool allowMainThread = false);
     // Resolve against the working directory / symlinks (canonical requires the path to exist).
-    static std::string absolutePath(const std::string& path, bool allowMainThread = false);
-    static std::string canonicalPath(const std::string& path, bool allowMainThread = false);
-    static std::string weaklyCanonicalPath(const std::string& path, bool allowMainThread = false);
-    static std::string relativePath(const std::string& path, const std::string& base = std::string(),
+    static oc::string absolutePath(const oc::string& path, bool allowMainThread = false);
+    static oc::string canonicalPath(const oc::string& path, bool allowMainThread = false);
+    static oc::string weaklyCanonicalPath(const oc::string& path, bool allowMainThread = false);
+    static oc::string relativePath(const oc::string& path, const oc::string& base = oc::string(),
         bool allowMainThread = false);
 
     // ---- pure PATH math (no disk access, callable anywhere) -----------------------------------
 
-    static std::string join(std::string_view a, std::string_view b);
-    static std::string parentPath(std::string_view path);
-    static std::string filename(std::string_view path);
-    static std::string stem(std::string_view path);
-    static std::string extension(std::string_view path);      // ".ext" (with the dot), lowercase-preserving
-    static std::string replaceExtension(std::string_view path, std::string_view ext);
-    static std::string normalize(std::string_view path);      // lexically normal, forward slashes
+    static oc::string join(oc::string_view a, oc::string_view b);
+    static oc::string parentPath(oc::string_view path);
+    static oc::string filename(oc::string_view path);
+    static oc::string stem(oc::string_view path);
+    static oc::string extension(oc::string_view path);      // ".ext" (with the dot), lowercase-preserving
+    static oc::string replaceExtension(oc::string_view path, oc::string_view ext);
+    static oc::string normalize(oc::string_view path);      // lexically normal, forward slashes
     // Relative path computed PURELY from the strings — no disk access, unlike relativePath() which
     // resolves both sides through weakly_canonical. Correct when both are already absolute+canonical
     // (which is what the asset browser holds), and the right choice for anything per-frame.
-    static std::string lexicallyRelative(std::string_view path, std::string_view base);
-    static bool isAbsolute(std::string_view path);
-    static bool pathEquals(std::string_view a, std::string_view b); // separator- and case-insensitive (Windows)
+    static oc::string lexicallyRelative(oc::string_view path, oc::string_view base);
+    static bool isAbsolute(oc::string_view path);
+    static bool pathEquals(oc::string_view a, oc::string_view b); // separator- and case-insensitive (Windows)
 
 private:
     FileSystem() {};

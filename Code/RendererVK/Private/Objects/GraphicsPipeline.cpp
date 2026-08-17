@@ -86,7 +86,7 @@ bool GraphicsPipeline::reloadShaders(vk::RenderPass renderPass, GraphicsPipeline
 {
     vk::Device vkDevice = Globals::device.getDevice();
 
-    std::vector<vk::Pipeline> newPipelines;
+    oc::vector<vk::Pipeline> newPipelines;
     if (!createPipelines(renderPass, layout, newPipelines, false))
     {
         for (vk::Pipeline pipeline : newPipelines)
@@ -97,11 +97,11 @@ bool GraphicsPipeline::reloadShaders(vk::RenderPass renderPass, GraphicsPipeline
 
     for (vk::Pipeline pipeline : m_pipelines)
         vkDevice.destroyPipeline(pipeline);
-    m_pipelines = std::move(newPipelines);
+    m_pipelines = oc::move(newPipelines);
     return true;
 }
 
-bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipelineLayout& layout, std::vector<vk::Pipeline>& outPipelines, bool assertOnFailure)
+bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipelineLayout& layout, oc::vector<vk::Pipeline>& outPipelines, bool assertOnFailure)
 {
     vk::Device vkDevice = Globals::device.getDevice();
 
@@ -195,14 +195,14 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
         .pAttachments = layout.depthOnly ? nullptr : &pipelineColorBlendAttachmentState,
         .blendConstants = { { 1.0f, 1.0f, 1.0f, 1.0f } },
     };
-    std::array<vk::DynamicState, 2> dynamicStates = { vk::DynamicState::eViewport, vk::DynamicState::eScissor };
+    oc::array<vk::DynamicState, 2> dynamicStates = { vk::DynamicState::eViewport, vk::DynamicState::eScissor };
     vk::PipelineDynamicStateCreateInfo pipelineDynamicStateCreateInfo
     {
         .flags = {},
         .dynamicStateCount = static_cast<uint32>(dynamicStates.size()),
         .pDynamicStates = dynamicStates.data(),
     };
-    std::array<vk::PipelineShaderStageCreateInfo, 2> pipelineShaderStageCreateInfos =
+    oc::array<vk::PipelineShaderStageCreateInfo, 2> pipelineShaderStageCreateInfos =
     {
         vk::PipelineShaderStageCreateInfo {.stage = vk::ShaderStageFlagBits::eVertex,   .pName = "main", },
         vk::PipelineShaderStageCreateInfo {.stage = vk::ShaderStageFlagBits::eFragment, .pName = "main", },
@@ -241,8 +241,8 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
 
     // Compile per-variant shader overrides; entries with no override keep a null module.
     const size_t additionalCount = layout.additionalVariants.size();
-    std::vector<Shader> overrideVS(additionalCount);
-    std::vector<Shader> overrideFS(additionalCount);
+    oc::vector<Shader> overrideVS(additionalCount);
+    oc::vector<Shader> overrideFS(additionalCount);
     for (size_t i = 0; i < additionalCount; i++)
     {
         const PipelineVariant& v = layout.additionalVariants[i];
@@ -261,7 +261,7 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
     {
         vk::Result   result;
         vk::Pipeline pipeline;
-        std::tie(result, pipeline) = vkDevice.createGraphicsPipeline(m_pipelineCache, graphicsPipelineCreateInfo);
+        oc::tie(result, pipeline) = vkDevice.createGraphicsPipeline(m_pipelineCache, graphicsPipelineCreateInfo);
         if (result != vk::Result::eSuccess)
         {
             assert((!assertOnFailure) && "Failed to create graphics pipeline");
@@ -295,7 +295,7 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
 
         vk::Result   result;
         vk::Pipeline pipeline;
-        std::tie(result, pipeline) = vkDevice.createGraphicsPipeline(m_pipelineCache, graphicsPipelineCreateInfo);
+        oc::tie(result, pipeline) = vkDevice.createGraphicsPipeline(m_pipelineCache, graphicsPipelineCreateInfo);
         if (result != vk::Result::eSuccess)
         {
             assert((!assertOnFailure) && "Failed to create graphics pipeline");

@@ -201,7 +201,7 @@ export struct PostParams
 
     // onReRecord is invoked when a tweak that's baked into the composite push constants changes, so the
     // command buffers can be re-recorded.
-    void registerTweaks(const std::function<void()>& onReRecord);
+    void registerTweaks(const oc::function<void()>& onReRecord);
 };
 
 export struct RTParams
@@ -239,7 +239,7 @@ export struct RTAOParams
     int   blurRadius = 2; //0;
     bool  alphaTest = false; // ray-test alpha-masked geometry (vegetation) instead of treating it as solid
 
-    void registerTweaks(const std::function<void()>& onReRecord, const std::function<void()>& onReloadShaders);
+    void registerTweaks(const oc::function<void()>& onReRecord, const oc::function<void()>& onReloadShaders);
 };
 
 export struct TAAParams
@@ -250,7 +250,7 @@ export struct TAAParams
     // vectors), so full-weight history blurs the specular sparkle away. Lower = crisper, shimmerier water.
     float taaOceanFeedback = 0.2f;
 
-    void registerTweaks(const std::function<void()>& onReRecord);
+    void registerTweaks(const oc::function<void()>& onReRecord);
 };
 
 // Mesh LOD chains (authored "LodN_*" meshes and/or meshopt-generated) — the TweakPanel's "LOD" category.

@@ -36,7 +36,7 @@ public:
 
     // worldSizes = world meters covered per layer; userParam = one baked value carried with the flip
     // (the fog map's terrain sea level). texels are layer-major, resolution^2 * channels floats each.
-    void upload(std::span<const float> texels, const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam, uint32 frameIdx);
+    void upload(oc::span<const float> texels, const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam, uint32 frameIdx);
     void recordUpload(CommandBuffer& commandBuffer); // no-op unless an upload is pending
     void flipIfPending();
     void clear() { m_worldSizes = glm::vec2(0.0f); } // consumers' 1/size params drop to 0; images sit unused
@@ -55,8 +55,8 @@ private:
     vk::Image m_image[2]{};
     VmaAllocation m_memory[2]{};
     vk::ImageView m_view[2]{};
-    std::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_staging; // host-visible, mapped
-    std::array<std::span<uint8>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_stagingMapped;
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_staging; // host-visible, mapped
+    oc::array<oc::span<uint8>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_stagingMapped;
     Sampler m_sampler;
 
     int m_uploadSlot = -1; // staging slot holding a not-yet-recorded upload (-1 = none)

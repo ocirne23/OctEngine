@@ -52,7 +52,7 @@ export namespace Procedural
 		// floats its surface on it, and the swash gate compares the two — so a fork between them switches
 		// the swash off everywhere rather than just looking off.
 		void update(Renderer& renderer, const Camera& camera,
-		            std::shared_ptr<const BakedTerrainData> terrainData = nullptr, float seaLevel = 0.0f);
+		            oc::shared_ptr<const BakedTerrainData> terrainData = nullptr, float seaLevel = 0.0f);
 
 		// Water surface world Y at (x, z), CPU-evaluated from the GPU displacement readback (a full mirror
 		// of the clipmap vertex shader: cascade sum, shoaling fade, swash run-up and the waterline
@@ -188,12 +188,12 @@ export namespace Procedural
 		// The streamer's active baked terrain-data map (adopted each update()); the shared_ptr keeps this
 		// snapshot alive across the frame even while the streamer ships a replacement bake — buoyancy
 		// queries (physics, before the next update) and wind steering read it.
-		std::shared_ptr<const BakedTerrainData> m_terrainData;
+		oc::shared_ptr<const BakedTerrainData> m_terrainData;
 
 		// CPU copy of the GPU displacement readback tile, refreshed every update() inside the frame's
 		// fence-safe window — sampleWaterHeight can then run at ANY point in the frame (physics updates
 		// before beginFrame) without racing the GPU rewriting the slot's readback buffer.
-		std::vector<uint16> m_dispTile;                  // RGBA16F texels, res^2 per cascade
+		oc::vector<uint16> m_dispTile;                  // RGBA16F texels, res^2 per cascade
 		uint32 m_dispTileRes = 0;
 		float m_waveTrough = 0.0f;      // deepest current trough below the calm level (m; see estimateWaveTrough)
 		int   m_waveTroughCooldown = 0; // sparse re-scan counter (the patch minimum is near-stationary)
@@ -205,7 +205,7 @@ export namespace Procedural
 		// re-centers them on the snapped node position every frame, so they stay in the dynamic tier.
 		struct Sector
 		{
-			std::unique_ptr<ObjectContainer> container; // declared first -> destroyed AFTER the node
+			oc::unique_ptr<ObjectContainer> container; // declared first -> destroyed AFTER the node
 			RenderNode node;
 			SpatialEntry spatialEntry;
 			glm::vec3 localCenter = glm::vec3(0.0f); // mesh-local bounds center (the node snap adds on top)
@@ -214,7 +214,7 @@ export namespace Procedural
 			float radius = 0.0f; // bounds sphere radius; the XZ half-diagonal dominates, so it also covers
 			                     // the vertical wave/swash displacement the flat mesh knows nothing about
 		};
-		std::vector<Sector> m_sectors;
+		oc::vector<Sector> m_sectors;
 
 		// Dry-sector cull: sectors whose whole footprint is buried under land per the baked terrain data
 		// are skipped before anything reaches the GPU (a camera deep inland then renders no water at all).
@@ -224,7 +224,7 @@ export namespace Procedural
 		// always count as wet (unknown terrain = open-ocean fallback in the shaders).
 		bool  m_drySectorCull = true;
 		static constexpr uint32 DRY_BLOCKS = 32;
-		std::array<float, DRY_BLOCKS * DRY_BLOCKS> m_blockMaxDepth{};
+		oc::array<float, DRY_BLOCKS * DRY_BLOCKS> m_blockMaxDepth{};
 		bool  m_dryGridValid = false;
 		const BakedTerrainData* m_dryGridSource = nullptr; // bake identity the block grid was built from
 		glm::vec2 m_dryGridCenter = glm::vec2(0.0f);

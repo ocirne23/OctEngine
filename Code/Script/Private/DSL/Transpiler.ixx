@@ -35,5 +35,5 @@ import :ScriptBindings;
 export class Transpiler
 {
 public:
-	static std::string transpile(const DSL& document, const ScriptBindings& bindings);
+	static oc::string transpile(const DSL& document, const ScriptBindings& bindings);
 };

@@ -73,13 +73,13 @@ export namespace Procedural::Diffusion
 		//                 4 lapse rate beta (C/m)
 		// Returns false if the pipeline is coarse-only or inference failed.
 		bool get(int32 i1, int32 j1, int32 i2, int32 j2, bool withClimate,
-		         std::vector<float>& outElev, std::vector<float>& outClimate,
-		         std::vector<float>* outMacro = nullptr);
+		         oc::vector<float>& outElev, oc::vector<float>& outClimate,
+		         oc::vector<float>* outMacro = nullptr);
 
 		uint64 totalComputedWindowCount() const;
 		size_t residentCacheBytes() const;
 		// "coarse 180 calls/180 items 372ms | base ..." — which stage actually dominates.
-		std::string inferenceStatsText() const;
+		oc::string inferenceStatsText() const;
 		void resetInferenceStats();
 
 	private:
@@ -90,23 +90,23 @@ export namespace Procedural::Diffusion
 		// Runs the 20-step sampler for a whole batch of coarse tiles in lockstep (they share one sigma
 		// schedule, so step k of every tile can go in one dispatch). The reference does one tile at a time;
 		// the coarse model is dispatch-bound at 64x64, so batching is close to free throughput.
-		std::vector<FloatTensor> coarseBatch(std::span<const WindowKey> windowIndices);
+		oc::vector<FloatTensor> coarseBatch(oc::span<const WindowKey> windowIndices);
 		// One batched flow-matching step of the latent stage. prevSamples is null for the first (init) step.
-		std::vector<FloatTensor> latentBatch(std::span<const WindowKey> windowIndices,
-		                                     const std::vector<FloatTensor>* prevSamples,
-		                                     const std::vector<FloatTensor>& coarseSlices,
+		oc::vector<FloatTensor> latentBatch(oc::span<const WindowKey> windowIndices,
+		                                     const oc::vector<FloatTensor>* prevSamples,
+		                                     const oc::vector<FloatTensor>& coarseSlices,
 		                                     float t, uint64 seedOffset);
 		// The 58-dim mp_concat conditioning vector built from a (7,4,4) coarse patch.
 		void buildLatentConditioning(const FloatTensor& coarseSlice, float* out58) const;
-		FloatTensor decoderTile(std::span<const int32> windowIndex, const FloatTensor& latentSlice, float t);
+		FloatTensor decoderTile(oc::span<const int32> windowIndex, const FloatTensor& latentSlice, float t);
 
-		void computeElev(int32 i1, int32 j1, int32 i2, int32 j2, std::vector<float>& outElev,
-		                 std::vector<float>* outMacro);
+		void computeElev(int32 i1, int32 j1, int32 i2, int32 j2, oc::vector<float>& outElev,
+		                 oc::vector<float>* outMacro);
 		// The coarse stage's surface over a native window — the macro elevation BOTH terrain-data cascades
 		// can agree on. See the .cpp for why it is this and not the finer Laplacian low band.
-		void computeCoarseSurface(int32 i1, int32 j1, int32 i2, int32 j2, std::vector<float>& out);
-		void computeClimate(int32 i1, int32 j1, int32 i2, int32 j2, std::span<const float> elev,
-		                    int32 H, int32 W, std::vector<float>& outClimate);
+		void computeCoarseSurface(int32 i1, int32 j1, int32 i2, int32 j2, oc::vector<float>& out);
+		void computeClimate(int32 i1, int32 j1, int32 i2, int32 j2, oc::span<const float> elev,
+		                    int32 H, int32 W, oc::vector<float>& outClimate);
 
 		uint64 m_seed = 0;
 		ModelConfig m_config;
@@ -116,8 +116,8 @@ export namespace Procedural::Diffusion
 		OnnxModel m_coarseModel;
 		OnnxModel m_baseModel;
 		OnnxModel m_decoderModel;
-		std::unique_ptr<SyntheticMapFactory> m_syntheticMap;
-		std::unique_ptr<MemoryTileStore> m_tileStore;
+		oc::unique_ptr<SyntheticMapFactory> m_syntheticMap;
+		oc::unique_ptr<MemoryTileStore> m_tileStore;
 
 		// All owned by m_tileStore. The latent stage is a 2-step chain: init -> step0.
 		InfiniteTensor* m_coarse = nullptr;
@@ -125,10 +125,10 @@ export namespace Procedural::Diffusion
 		InfiniteTensor* m_latents = nullptr;
 		InfiniteTensor* m_residual = nullptr;
 
-		std::vector<float> m_ww64;     // tent window for the 64x64 coarse/latent tiles
-		std::vector<float> m_ww256;    // tent window for the 256x256 decoder tiles
-		std::vector<float> m_condVals; // log(condSnr[i] / 8)
-		std::vector<float> m_mpConcatScales;
+		oc::vector<float> m_ww64;     // tent window for the 64x64 coarse/latent tiles
+		oc::vector<float> m_ww256;    // tent window for the 256x256 decoder tiles
+		oc::vector<float> m_condVals; // log(condSnr[i] / 8)
+		oc::vector<float> m_mpConcatScales;
 		bool m_inferenceFailed = false; // sticky: a failed tile must not be silently cached as terrain
 		bool m_valid = false;
 	};

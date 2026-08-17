@@ -7,7 +7,7 @@ export template <typename T>
 class LockedList final
 {
 public:
-    std::list<T> m_list;
+    oc::list<T> m_list;
     std::mutex m_mutex;
     ~LockedList()
     {
@@ -26,7 +26,7 @@ public:
         m_list.push_front(entry);
     }
 
-    void push_list_back(std::list<T*>& list)
+    void push_list_back(oc::list<T*>& list)
     {
         std::unique_lock<std::mutex> lock(m_mutex);
         if (!list.empty())
@@ -36,7 +36,7 @@ public:
         }
     }
 
-    void push_list_front(std::list<T>& list)
+    void push_list_front(oc::list<T>& list)
     {
         std::unique_lock<std::mutex> lock(m_mutex);
         if (!list.empty())
@@ -233,7 +233,7 @@ public:
         }
     }
 
-    void push_list_front(std::list<T*, Allocator::toStd<T*>>& list)
+    void push_list_front(oc::list<T*, Allocator::toStd<T*>>& list)
     {
         for (T* pEntry : list)
         {

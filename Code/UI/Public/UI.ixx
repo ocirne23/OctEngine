@@ -41,7 +41,7 @@ public:
     // them first thing. Only panels that were OPEN last frame prepare, and every panel prepares
     // inline in its render if nothing ran ahead, so prepare() is an optimization, never required.
     void prepare();
-    void update(const std::vector<EntityPtr>& rootEntities, const Camera& camera, double deltaSec);
+    void update(const oc::vector<EntityPtr>& rootEntities, const Camera& camera, double deltaSec);
     void render();
 	void setRenderStats(const Stats& stats) { m_renderStats = stats; }
 
@@ -65,30 +65,30 @@ public:
     bool hasViewportGainedFocused() const { return m_hasViewportGainedFocus; }
     const Rect& getViewportRect() const { return m_viewportRect; }
 
-    std::vector<EntityChange> takeEntityChanges()
+    oc::vector<EntityChange> takeEntityChanges()
     {
-        std::vector<EntityChange> changes = m_sceneView.takeChanges();
-        changes.insert(changes.end(), std::make_move_iterator(m_viewportChanges.begin()),
-                                      std::make_move_iterator(m_viewportChanges.end()));
+        oc::vector<EntityChange> changes = m_sceneView.takeChanges();
+        changes.insert(changes.end(), oc::make_move_iterator(m_viewportChanges.begin()),
+                                      oc::make_move_iterator(m_viewportChanges.end()));
         m_viewportChanges.clear();
 
-        std::vector<EntityChange> assetChanges = m_assetBrowser.takeChanges();
-        changes.insert(changes.end(), std::make_move_iterator(assetChanges.begin()),
-                                      std::make_move_iterator(assetChanges.end()));
+        oc::vector<EntityChange> assetChanges = m_assetBrowser.takeChanges();
+        changes.insert(changes.end(), oc::make_move_iterator(assetChanges.begin()),
+                                      oc::make_move_iterator(assetChanges.end()));
 
-        std::vector<EntityChange> entityEditorChanges = m_entityEditor.takeChanges();
-        changes.insert(changes.end(), std::make_move_iterator(entityEditorChanges.begin()),
-                                      std::make_move_iterator(entityEditorChanges.end()));
+        oc::vector<EntityChange> entityEditorChanges = m_entityEditor.takeChanges();
+        changes.insert(changes.end(), oc::make_move_iterator(entityEditorChanges.begin()),
+                                      oc::make_move_iterator(entityEditorChanges.end()));
         return changes;
     }
 
     // Forwards the entity main.cpp just spawned/respawned for an EntityEditor request into the panel.
-    void onOpened(EntityPtr root, const std::string& path) { m_entityEditor.onOpened(root, path); }
+    void onOpened(EntityPtr root, const oc::string& path) { m_entityEditor.onOpened(root, path); }
     void onEntityRespawned(EntityPtr oldEntity, EntityPtr newEntity) { m_entityEditor.onRespawned(oldEntity, newEntity); }
 
     // Script paths the DSL Script Editor asked the host to (re)compile + hot-reload this frame -- every path it
     // just saved (a save always writes fresh generated C++, so it's ready to (re)compile the moment it lands).
-    std::vector<std::string> takeScriptReloadRequests()
+    oc::vector<oc::string> takeScriptReloadRequests()
     {
         return m_scriptEditor.takeReloadRequests();
     }
@@ -109,7 +109,7 @@ private:
     bool m_contentOpen = false;
     JobCounter m_prepareCounter;
     Rect m_viewportRect = Rect();
-    std::vector<EntityChange> m_viewportChanges;   // assets dropped onto the viewport, drained via takeEntityChanges
+    oc::vector<EntityChange> m_viewportChanges;   // assets dropped onto the viewport, drained via takeEntityChanges
 
     // Follow the hierarchy selection into the Script Editor: when a selected entity carries a .dsl script, open
     // it. Only ever acts on selection CHANGES, hence the tracking pointer.

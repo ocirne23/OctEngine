@@ -10,20 +10,20 @@ public:
 	ProceduralNodeData() = default;
 	~ProceduralNodeData() = default;
 
-	bool initialize(const char* name, std::vector<uint32> meshIndices = {});
+	bool initialize(const char* name, oc::vector<uint32> meshIndices = {});
 
 	operator bool()                          const override { return !m_name.empty(); }
 	bool operator==(const INodeData& other)  const override { return m_name == other.getName(); }
 	bool isValid()                           const override { return !m_name.empty(); }
 
-	std::unique_ptr<INodeData> clone() const override;
+	oc::unique_ptr<INodeData> clone() const override;
 
 	const char* getName() const override { return m_name.c_str(); }
 
 	uint32                     getNumChildren()          const override { return 0; }
-	std::unique_ptr<INodeData> getChild(uint32 idx)      const override { (void)idx; return nullptr; }
+	oc::unique_ptr<INodeData> getChild(uint32 idx)      const override { (void)idx; return nullptr; }
 	uint32                     getNumChildrenRecursive() const override { return 0; }
-	std::vector<std::string>   getChildrenNames()        const override { return {}; }
+	oc::vector<oc::string>   getChildrenNames()        const override { return {}; }
 
 	uint32 getNumMeshes()              const override { return (uint32)m_meshIndices.size(); }
 	uint32 getMeshIndex(uint32 meshIdx) const override;
@@ -34,6 +34,6 @@ public:
 	glm::quat getRotation() const override { return glm::quat(1.0f, 0.0f, 0.0f, 0.0f); }
 
 private:
-	std::string          m_name;
-	std::vector<uint32>  m_meshIndices;
+	oc::string          m_name;
+	oc::vector<uint32>  m_meshIndices;
 };

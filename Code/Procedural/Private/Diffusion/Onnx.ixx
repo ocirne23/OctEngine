@@ -22,8 +22,8 @@ export namespace Procedural::Diffusion
 	struct OnnxInput
 	{
 		const char* name = nullptr;
-		std::span<const float> data;
-		std::span<const int64> shape;
+		oc::span<const float> data;
+		oc::span<const int64> shape;
 	};
 
 	class OnnxModel
@@ -36,13 +36,13 @@ export namespace Procedural::Diffusion
 
 		// Creates the session. Returns false (and logs) on failure, leaving the model unusable.
 		// `name` is only for diagnostics.
-		bool load(const std::string& modelPath, std::string_view name, EInferenceDevice device);
+		bool load(const oc::string& modelPath, oc::string_view name, EInferenceDevice device);
 		bool isValid() const;
 
 		// Runs the model and copies OUTPUT 0 into `out` (resized to the element count). Any further outputs
 		// are ignored, as in the reference — these models have exactly one.
 		// Safe to call concurrently on one instance (ORT sessions are), but the pipeline serialises anyway.
-		bool run(std::span<const OnnxInput> inputs, std::vector<float>& out);
+		bool run(oc::span<const OnnxInput> inputs, oc::vector<float>& out);
 
 		// Accumulated inference cost, for working out which stage actually dominates. `batchItems` counts
 		// the leading dimension of input "x", so calls/batchItems shows how well a stage is batching.
@@ -56,10 +56,10 @@ export namespace Procedural::Diffusion
 		void resetStats();
 
 		// "DirectML" / "CPU" / "" before any model has loaded. Reported once per process.
-		static std::string_view resolvedProvider();
+		static oc::string_view resolvedProvider();
 
 	private:
 		struct Impl;
-		std::unique_ptr<Impl> m_impl;
+		oc::unique_ptr<Impl> m_impl;
 	};
 }

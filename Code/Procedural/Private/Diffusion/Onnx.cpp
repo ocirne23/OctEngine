@@ -35,9 +35,9 @@ namespace Procedural::Diffusion
 		}
 
 		std::mutex g_providerMutex;
-		std::string g_resolvedProvider;
+		oc::string g_resolvedProvider;
 
-		void setResolvedProviderOnce(std::string_view p)
+		void setResolvedProviderOnce(oc::string_view p)
 		{
 			std::lock_guard<std::mutex> lk(g_providerMutex);
 			if (!g_resolvedProvider.empty())
@@ -47,10 +47,10 @@ namespace Procedural::Diffusion
 		}
 
 		// ORT's Windows API takes a wide path; the engine speaks UTF-8 strings everywhere.
-		std::wstring widenPath(const std::string& p)
+		oc::wstring widenPath(const oc::string& p)
 		{
 			const int len = MultiByteToWideChar(CP_UTF8, 0, p.c_str(), (int)p.size(), nullptr, 0);
-			std::wstring wide((size_t)std::max(len, 0), L' ');
+			oc::wstring wide((size_t)oc::max(len, 0), L' ');
 			if (len > 0)
 				MultiByteToWideChar(CP_UTF8, 0, p.c_str(), (int)p.size(), wide.data(), len);
 			return wide;
@@ -59,32 +59,32 @@ namespace Procedural::Diffusion
 
 	struct OnnxModel::Impl
 	{
-		std::optional<Ort::Session> session;
-		std::string name;
-		std::vector<std::string> outputNames; // owned: GetOutputNameAllocated's buffer is transient
+		oc::optional<Ort::Session> session;
+		oc::string name;
+		oc::vector<oc::string> outputNames; // owned: GetOutputNameAllocated's buffer is transient
 
-		std::atomic<uint64> calls{ 0 };
-		std::atomic<uint64> batchItems{ 0 };
-		std::atomic<uint64> totalNs{ 0 };
+		oc::atomic<uint64> calls{ 0 };
+		oc::atomic<uint64> batchItems{ 0 };
+		oc::atomic<uint64> totalNs{ 0 };
 	};
 
 	OnnxModel::RunStats OnnxModel::stats() const
 	{
 		RunStats s;
-		s.calls = m_impl->calls.load(std::memory_order_relaxed);
-		s.batchItems = m_impl->batchItems.load(std::memory_order_relaxed);
-		s.totalMs = (double)m_impl->totalNs.load(std::memory_order_relaxed) / 1e6;
+		s.calls = m_impl->calls.load(oc::memory_order_relaxed);
+		s.batchItems = m_impl->batchItems.load(oc::memory_order_relaxed);
+		s.totalMs = (double)m_impl->totalNs.load(oc::memory_order_relaxed) / 1e6;
 		return s;
 	}
 
 	void OnnxModel::resetStats()
 	{
-		m_impl->calls.store(0, std::memory_order_relaxed);
-		m_impl->batchItems.store(0, std::memory_order_relaxed);
-		m_impl->totalNs.store(0, std::memory_order_relaxed);
+		m_impl->calls.store(0, oc::memory_order_relaxed);
+		m_impl->batchItems.store(0, oc::memory_order_relaxed);
+		m_impl->totalNs.store(0, oc::memory_order_relaxed);
 	}
 
-	OnnxModel::OnnxModel() : m_impl(std::make_unique<Impl>()) {}
+	OnnxModel::OnnxModel() : m_impl(oc::make_unique<Impl>()) {}
 	OnnxModel::~OnnxModel() = default;
 
 	bool OnnxModel::isValid() const
@@ -92,13 +92,13 @@ namespace Procedural::Diffusion
 		return m_impl && m_impl->session.has_value();
 	}
 
-	std::string_view OnnxModel::resolvedProvider()
+	oc::string_view OnnxModel::resolvedProvider()
 	{
 		std::lock_guard<std::mutex> lk(g_providerMutex);
 		return g_resolvedProvider;
 	}
 
-	bool OnnxModel::load(const std::string& modelPath, std::string_view name, EInferenceDevice device)
+	bool OnnxModel::load(const oc::string& modelPath, oc::string_view name, EInferenceDevice device)
 	{
 		m_impl->name.assign(name);
 
@@ -162,7 +162,7 @@ namespace Procedural::Diffusion
 		}
 	}
 
-	bool OnnxModel::run(std::span<const OnnxInput> inputs, std::vector<float>& out)
+	bool OnnxModel::run(oc::span<const OnnxInput> inputs, oc::vector<float>& out)
 	{
 		if (!isValid())
 			return false;
@@ -172,8 +172,8 @@ namespace Procedural::Diffusion
 		{
 			const Ort::MemoryInfo mem = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPU);
 
-			std::vector<const char*> names;
-			std::vector<Ort::Value> values;
+			oc::vector<const char*> names;
+			oc::vector<Ort::Value> values;
 			names.reserve(inputs.size());
 			values.reserve(inputs.size());
 			for (const OnnxInput& in : inputs)
@@ -186,7 +186,7 @@ namespace Procedural::Diffusion
 			}
 
 			const char* outName = m_impl->outputNames[0].c_str();
-			std::vector<Ort::Value> results = m_impl->session->Run(
+			oc::vector<Ort::Value> results = m_impl->session->Run(
 				Ort::RunOptions{ nullptr }, names.data(), values.data(), values.size(), &outName, 1);
 
 			const Ort::Value& r = results[0];
@@ -195,13 +195,13 @@ namespace Procedural::Diffusion
 			// Copy out before `results` dies: the buffer belongs to the Ort::Value.
 			out.assign(src, src + count);
 
-			m_impl->calls.fetch_add(1, std::memory_order_relaxed);
+			m_impl->calls.fetch_add(1, oc::memory_order_relaxed);
 			// Leading dim of "x" == the batch, so calls vs batchItems shows how well a stage batches.
 			if (!inputs.empty() && !inputs[0].shape.empty())
-				m_impl->batchItems.fetch_add((uint64)inputs[0].shape[0], std::memory_order_relaxed);
+				m_impl->batchItems.fetch_add((uint64)inputs[0].shape[0], oc::memory_order_relaxed);
 			m_impl->totalNs.fetch_add(
 				(uint64)std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - t0).count(),
-				std::memory_order_relaxed);
+				oc::memory_order_relaxed);
 			return true;
 		}
 		catch (const Ort::Exception& e)

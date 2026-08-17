@@ -19,17 +19,17 @@ GameProjectileParams GameProjectileComponent::params;
 // Worker-side reports, drained by the game (see the queues' declarations). The mutex only ever
 // guards two small append-only vectors touched on the rare tick where a unit fires or dies.
 static std::mutex g_unitEventMutex;
-static std::vector<GameUnitComponent::FireRequest> g_fireRequests;
-static std::vector<uint32> g_deaths;
+static oc::vector<GameUnitComponent::FireRequest> g_fireRequests;
+static oc::vector<uint32> g_deaths;
 
-void GameUnitComponent::takeFireRequests(std::vector<FireRequest>& out)
+void GameUnitComponent::takeFireRequests(oc::vector<FireRequest>& out)
 {
     const std::lock_guard<std::mutex> lock(g_unitEventMutex);
     out.swap(g_fireRequests);
     g_fireRequests.clear();
 }
 
-void GameUnitComponent::takeDeaths(std::vector<uint32>& outSourceIds)
+void GameUnitComponent::takeDeaths(oc::vector<uint32>& outSourceIds)
 {
     const std::lock_guard<std::mutex> lock(g_unitEventMutex);
     outSourceIds.swap(g_deaths);
@@ -43,16 +43,16 @@ static bool isAuthority()
 
 static void atomicSubClamped(float& value, float amount)
 {
-    std::atomic_ref<float> ref(value);
-    float cur = ref.load(std::memory_order_relaxed);
+    oc::atomic_ref<float> ref(value);
+    float cur = ref.load(oc::memory_order_relaxed);
     float next;
     do { next = glm::max(cur - amount, 0.0f); } while (!ref.compare_exchange_weak(cur, next));
 }
 
 static void atomicAdd(float& value, float amount)
 {
-    std::atomic_ref<float> ref(value);
-    float cur = ref.load(std::memory_order_relaxed);
+    oc::atomic_ref<float> ref(value);
+    float cur = ref.load(oc::memory_order_relaxed);
     while (!ref.compare_exchange_weak(cur, cur + amount)) {}
 }
 
@@ -137,7 +137,7 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             // Random pick among the 4 NEAREST enemy structures (spatial query — local harassment
             // with some unpredictability); fallback: the nearest enemy player body.
             m_retargetTimer = params.retargetInterval * (0.7f + 0.6f * unitRand01(m_rng));
-            thread_local std::vector<uint64> results;
+            thread_local oc::vector<uint64> results;
             Globals::spatialIndex.querySphere(glm::dvec3(pos), params.targetSearchRadius,
                 SpatialLayer_Render, results);
             struct Candidate { float distSq; glm::vec3 pos; };
@@ -200,7 +200,7 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
     float stopRange = attackRange;
     if (!routing)
     {
-        thread_local std::vector<uint64> nearby;
+        thread_local oc::vector<uint64> nearby;
         Globals::spatialIndex.querySphere(glm::dvec3(pos), attackRange + 6.0f,
             SpatialLayer_Render, nearby);
         GameStructureComponent* bite = nullptr;
@@ -361,7 +361,7 @@ void GameUnitComponent::damage(float amount)
 
 float GameUnitComponent::takePendingDamage()
 {
-    std::atomic_ref<float> ref(pendingDamage);
+    oc::atomic_ref<float> ref(pendingDamage);
     return ref.exchange(0.0f);
 }
 
@@ -369,17 +369,17 @@ float GameUnitComponent::takePendingDamage()
 
 // Machine event queues (rare, tiny — same discipline as the unit events above).
 static std::mutex g_structureEventMutex;
-static std::vector<uint32> g_spawnRequests;
-static std::vector<GameStructureComponent::TurretFireRequest> g_turretFire;
+static oc::vector<uint32> g_spawnRequests;
+static oc::vector<GameStructureComponent::TurretFireRequest> g_turretFire;
 
-void GameStructureComponent::takeSpawnRequests(std::vector<uint32>& outStructureIds)
+void GameStructureComponent::takeSpawnRequests(oc::vector<uint32>& outStructureIds)
 {
     const std::lock_guard<std::mutex> lock(g_structureEventMutex);
     outStructureIds.swap(g_spawnRequests);
     g_spawnRequests.clear();
 }
 
-void GameStructureComponent::takeTurretFireRequests(std::vector<TurretFireRequest>& out)
+void GameStructureComponent::takeTurretFireRequests(oc::vector<TurretFireRequest>& out)
 {
     const std::lock_guard<std::mutex> lock(g_structureEventMutex);
     out.swap(g_turretFire);
@@ -403,17 +403,17 @@ static float atomicTransfer(float& source, float& dest, float destCap, float amo
 {
     if (amount <= 0.0f)
         return 0.0f;
-    std::atomic_ref<float> src(source);
-    float cur = src.load(std::memory_order_relaxed), take;
+    oc::atomic_ref<float> src(source);
+    float cur = src.load(oc::memory_order_relaxed), take;
     do { take = glm::min(amount, glm::max(cur, 0.0f)); } while (!src.compare_exchange_weak(cur, cur - take));
     if (take <= 0.0f)
         return 0.0f;
-    std::atomic_ref<float> dst(dest);
-    float dcur = dst.load(std::memory_order_relaxed), put;
+    oc::atomic_ref<float> dst(dest);
+    float dcur = dst.load(oc::memory_order_relaxed), put;
     do { put = glm::min(take, glm::max(destCap - dcur, 0.0f)); } while (!dst.compare_exchange_weak(dcur, dcur + put));
     if (const float leftover = take - put; leftover > 0.0f)
     {
-        float scur = src.load(std::memory_order_relaxed);
+        float scur = src.load(oc::memory_order_relaxed);
         while (!src.compare_exchange_weak(scur, scur + leftover)) {}
     }
     return put;
@@ -475,7 +475,7 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
         }
         return headroom / (float)glm::max(feeders, 1);
     };
-    thread_local std::vector<Outflow> outs;
+    thread_local oc::vector<Outflow> outs;
     outs.clear();
     float totalDesired[3] = {};
     for (GameStructureLink& l : links)
@@ -550,7 +550,7 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
         if (turret.fireTimer <= 0.0f && store[0] >= params.turretShotEnergy)
         {
             const glm::vec3 pos = entity.pos;
-            thread_local std::vector<uint64> nearby;
+            thread_local oc::vector<uint64> nearby;
             Globals::spatialIndex.querySphere(glm::dvec3(pos), params.turretRange,
                 SpatialLayer_Render, nearby);
             Entity* target = nullptr;
@@ -616,7 +616,7 @@ void GameStructureComponent::unlinkAll(Entity& self)
     for (GameStructureLink& l : links)
         if (l.other)
             if (GameStructureComponent* far = getComponent<GameStructureComponent>(l.other.get()))
-                std::erase_if(far->links, [&](const GameStructureLink& fl) { return fl.other.get() == &self; });
+                oc::erase_if(far->links, [&](const GameStructureLink& fl) { return fl.other.get() == &self; });
     links.clear();
 }
 
@@ -634,10 +634,10 @@ void GameStructureComponent::link(Entity& a, Entity& b, uint8 medium, uint8 cabl
 void GameStructureComponent::unlink(Entity& a, Entity& b, int medium)
 {
     if (GameStructureComponent* ca = getComponent<GameStructureComponent>(&a))
-        std::erase_if(ca->links, [&](const GameStructureLink& l) {
+        oc::erase_if(ca->links, [&](const GameStructureLink& l) {
             return l.other.get() == &b && (medium < 0 || (int)l.medium == medium); });
     if (GameStructureComponent* cb = getComponent<GameStructureComponent>(&b))
-        std::erase_if(cb->links, [&](const GameStructureLink& l) {
+        oc::erase_if(cb->links, [&](const GameStructureLink& l) {
             return l.other.get() == &a && (medium < 0 || (int)l.medium == medium); });
 }
 
@@ -696,7 +696,7 @@ void GameProjectileComponent::update(Entity& entity, float deltaSec)
     }
     if (emitterDrain > 0.0f)
     {
-        thread_local std::vector<uint64> nearby;
+        thread_local oc::vector<uint64> nearby;
         Globals::spatialIndex.querySphere(glm::dvec3(pos), emitterDrainRadius, SpatialLayer_Render, nearby);
         GameStructureComponent* strain = nullptr;
         float best = emitterDrainRadius;
@@ -757,7 +757,7 @@ const GameProjectileComponent::SpawnInfo* getGameProjectileSpawnInfo(const Entit
 void writeGameUnitSpawnInfo(const GameUnitComponent::SpawnInfo& info, AssetNode& out)
 {
     const GameUnitComponent::SpawnInfo d;
-    if (info.team != d.team)                 out.set("Team", std::to_string(info.team));
+    if (info.team != d.team)                 out.set("Team", oc::to_string(info.team));
     if (info.puppet != d.puppet)             out.set("Puppet", info.puppet);
     if (info.healthMax != d.healthMax)       out.set("HealthMax", info.healthMax);
     if (info.energyMax != d.energyMax)       out.set("EnergyMax", info.energyMax);
@@ -776,7 +776,7 @@ void writeGameUnitSpawnInfo(const GameUnitComponent::SpawnInfo& info, AssetNode&
 void writeGameStructureSpawnInfo(const GameStructureComponent::SpawnInfo& info, AssetNode& out)
 {
     const GameStructureComponent::SpawnInfo d;
-    if (info.team != d.team)                 out.set("Team", std::to_string(info.team));
+    if (info.team != d.team)                 out.set("Team", oc::to_string(info.team));
     if (info.healthMax != d.healthMax)       out.set("HealthMax", info.healthMax);
     if (info.invulnerable != d.invulnerable) out.set("Invulnerable", info.invulnerable);
     if (info.meleeRadius != d.meleeRadius)   out.set("MeleeRadius", info.meleeRadius);
@@ -785,7 +785,7 @@ void writeGameStructureSpawnInfo(const GameStructureComponent::SpawnInfo& info, 
 void writeGameProjectileSpawnInfo(const GameProjectileComponent::SpawnInfo& info, AssetNode& out)
 {
     const GameProjectileComponent::SpawnInfo d;
-    if (info.team != d.team)                         out.set("Team", std::to_string(info.team));
+    if (info.team != d.team)                         out.set("Team", oc::to_string(info.team));
     if (info.unitDamage != d.unitDamage)             out.set("UnitDamage", info.unitDamage);
     if (info.structureDamage != d.structureDamage)   out.set("StructureDamage", info.structureDamage);
     if (info.lifetime != d.lifetime)                 out.set("Lifetime", info.lifetime);

@@ -13,7 +13,7 @@ import :Types;
 
 export struct OccluderData // triangle list (3 verts per triangle), container-local space
 {
-    std::vector<glm::vec3> vertices;
+    oc::vector<glm::vec3> vertices;
 };
 
 // RAII registration of one occluder set, move-only like SpatialEntry.
@@ -53,10 +53,10 @@ public:
     void initialize(); // registers the Spatial/Occlusion tweaks
 
     // The largest maxTriangles triangles by area of an indexed mesh (degenerates dropped).
-    static std::shared_ptr<const OccluderData> extractOccluders(std::span<const glm::vec3> vertices,
-                                                                std::span<const uint32> indices, uint32 maxTriangles);
+    static oc::shared_ptr<const OccluderData> extractOccluders(oc::span<const glm::vec3> vertices,
+                                                                oc::span<const uint32> indices, uint32 maxTriangles);
 
-    SpatialHandle addOccluder(const std::shared_ptr<const OccluderData>& data, const Transform& world);
+    SpatialHandle addOccluder(const oc::shared_ptr<const OccluderData>& data, const Transform& world);
     void removeOccluder(SpatialHandle handle);
 
     bool isEnabled() const { return m_enabled; }
@@ -82,15 +82,15 @@ private:
 
     struct Occluder
     {
-        std::vector<glm::vec3> worldVertices; // world space, transform baked at add
+        oc::vector<glm::vec3> worldVertices; // world space, transform baked at add
         uint32 gen = 0;
         bool used = false;
     };
 
-    std::vector<Occluder> m_occluders;
-    std::vector<uint32> m_freeOccluders;
-    std::vector<float> m_depth;    // Width * Height, NDC z, 1e30 = no occluder
-    std::vector<float> m_blockMax; // BlocksX * BlocksY, farthest depth per block
+    oc::vector<Occluder> m_occluders;
+    oc::vector<uint32> m_freeOccluders;
+    oc::vector<float> m_depth;    // Width * Height, NDC z, 1e30 = no occluder
+    oc::vector<float> m_blockMax; // BlocksX * BlocksY, farthest depth per block
     glm::mat4 m_viewProjRel = glm::mat4(1.0f);
     bool m_enabled = false;
     bool m_rendered = false; // valid depth data for the current frame

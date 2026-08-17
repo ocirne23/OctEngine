@@ -8,6 +8,6 @@ import Core;
 // never collide, positive = always).
 export namespace PhysicsLayers
 {
-    uint64 bit(std::string_view name);
+    uint64 bit(oc::string_view name);
     constexpr uint64 All = ~0ull;
 }

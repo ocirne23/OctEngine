@@ -6,7 +6,7 @@ import :AssetParser;
 export struct MaterialOverridesDesc
 {
     bool present = false;
-    std::string pipeline;                // "LitOpaque" / "UnlitOpaque" / "Sky" / ... (empty = default)
+    oc::string pipeline;                // "LitOpaque" / "UnlitOpaque" / "Sky" / ... (empty = default)
     bool excludeFromRayTracing = false;
     bool useSceneTextures = true;
     int diffuseTexIdx = -1;              // -1 leaves the override default in place
@@ -16,8 +16,8 @@ export struct MaterialOverridesDesc
 
 export struct ObjectContainerDesc
 {
-    std::string name;
-    std::string path;                    // model file path, or procedural shape name
+    oc::string name;
+    oc::string path;                    // model file path, or procedural shape name
     bool procedural = false;             // Loader: Procedural vs Assimp (default)
     bool mergeNodes = false;
     bool preTransformVertices = false;
@@ -27,4 +27,4 @@ export struct ObjectContainerDesc
 
 export bool toObjectContainerDesc(const AssetNode& node, ObjectContainerDesc& out);
 
-export bool loadObjectContainerDesc(const std::string& path, ObjectContainerDesc& out, std::string& outError);
+export bool loadObjectContainerDesc(const oc::string& path, ObjectContainerDesc& out, oc::string& outError);

@@ -14,33 +14,33 @@ struct CollisionSource
 {
     struct Mesh
     {
-        std::string name;
-        std::vector<glm::vec3> vertices;
-        std::vector<uint32> indices;
+        oc::string name;
+        oc::vector<glm::vec3> vertices;
+        oc::vector<uint32> indices;
     };
     struct Node
     {
-        std::string name;
+        oc::string name;
         glm::mat4 localTransform = glm::mat4(1.0f);
-        std::vector<uint32> meshIndices;
-        std::vector<Node> children;
+        oc::vector<uint32> meshIndices;
+        oc::vector<Node> children;
     };
-    std::vector<Mesh> meshes;
+    oc::vector<Mesh> meshes;
     Node root;
-    std::unordered_set<std::string> proxiedNames; // names that have a "Col_" proxy (prefix stripped)
+    oc::unordered_set<oc::string> proxiedNames; // names that have a "Col_" proxy (prefix stripped)
 };
 
 // Flattened collision geometry for one spawnable node (positions + triangle indices, node transforms
 // applied), built transiently from a CollisionSource for hull/mesh physics shapes.
 struct PhysicsGeometry
 {
-    std::vector<glm::vec3> vertices;
-    std::vector<uint32> indices;
+    oc::vector<glm::vec3> vertices;
+    oc::vector<uint32> indices;
 };
 
-static constexpr std::string_view COLLISION_MESH_PREFIX = "Col_";
+static constexpr oc::string_view COLLISION_MESH_PREFIX = "Col_";
 
-static bool isCollisionName(std::string_view name) { return name.starts_with(COLLISION_MESH_PREFIX); }
+static bool isCollisionName(oc::string_view name) { return name.starts_with(COLLISION_MESH_PREFIX); }
 
 static glm::mat4 nodeLocalTransform(const INodeData& node)
 {
@@ -63,7 +63,7 @@ static void buildCollisionSourceNode(const INodeData& node, CollisionSource::Nod
         buildCollisionSourceNode(*node.getChild(c), out.children[c]);
 }
 
-static void gatherProxiedNames(const CollisionSource::Node& node, std::unordered_set<std::string>& outNames)
+static void gatherProxiedNames(const CollisionSource::Node& node, oc::unordered_set<oc::string>& outNames)
 {
     if (isCollisionName(node.name))
         outNames.insert(node.name.substr(COLLISION_MESH_PREFIX.size()));
@@ -97,7 +97,7 @@ static void appendNodeGeometry(const CollisionSource& source, const CollisionSou
         appendNodeGeometry(source, child, transform, false, outGeometry);
 }
 
-static const CollisionSource::Node* findNodeByName(const CollisionSource::Node& node, std::string_view name)
+static const CollisionSource::Node* findNodeByName(const CollisionSource::Node& node, oc::string_view name)
 {
     for (const CollisionSource::Node& child : node.children)
     {
@@ -109,7 +109,7 @@ static const CollisionSource::Node* findNodeByName(const CollisionSource::Node& 
     return nullptr;
 }
 
-static PhysicsGeometry buildCollisionGeometry(const CollisionSource& source, const std::string& containerName, const std::string& nodePath)
+static PhysicsGeometry buildCollisionGeometry(const CollisionSource& source, const oc::string& containerName, const oc::string& nodePath)
 {
     const CollisionSource::Node* startNode = &source.root;
     if (!nodePath.empty() && nodePath != "ROOT")
@@ -124,12 +124,12 @@ static PhysicsGeometry buildCollisionGeometry(const CollisionSource& source, con
     return geometry;
 }
 
-void CollisionCache::captureSource(const std::string& containerName, const ISceneData& sceneData)
+void CollisionCache::captureSource(const oc::string& containerName, const ISceneData& sceneData)
 {
     if (m_sources.contains(containerName))
         return;
 
-    auto source = std::make_shared<CollisionSource>();
+    auto source = oc::make_shared<CollisionSource>();
     source->meshes.resize(sceneData.getNumMeshes());
     for (uint32 i = 0; i < sceneData.getNumMeshes(); ++i)
     {
@@ -145,10 +145,10 @@ void CollisionCache::captureSource(const std::string& containerName, const IScen
     }
     buildCollisionSourceNode(sceneData.getRootNode(), source->root);
     gatherProxiedNames(source->root, source->proxiedNames);
-    m_sources.emplace(containerName, std::move(source));
+    m_sources.emplace(containerName, oc::move(source));
 }
 
-std::vector<glm::vec3> CollisionCache::buildHullPoints(const std::string& containerName, const std::string& nodePath) const
+oc::vector<glm::vec3> CollisionCache::buildHullPoints(const oc::string& containerName, const oc::string& nodePath) const
 {
     auto it = m_sources.find(containerName);
     if (it == m_sources.end())
@@ -156,9 +156,9 @@ std::vector<glm::vec3> CollisionCache::buildHullPoints(const std::string& contai
     return buildCollisionGeometry(*it->second, containerName, nodePath).vertices;
 }
 
-std::shared_ptr<PhysicsMesh> CollisionCache::getOrBuildMesh(const std::string& containerName, const std::string& nodePath)
+oc::shared_ptr<PhysicsMesh> CollisionCache::getOrBuildMesh(const oc::string& containerName, const oc::string& nodePath)
 {
-    const std::string key = meshKey(containerName, nodePath);
+    const oc::string key = meshKey(containerName, nodePath);
     if (auto it = m_meshes.find(key); it != m_meshes.end())
         return it->second;
     auto sourceIt = m_sources.find(containerName);
@@ -177,7 +177,7 @@ std::shared_ptr<PhysicsMesh> CollisionCache::getOrBuildMesh(const std::string& c
     Log::info(std::format("Physics: collision mesh '{}': {} verts, {} tris, bounds ({:.2f}, {:.2f}, {:.2f}) - ({:.2f}, {:.2f}, {:.2f})",
         key, geometry.vertices.size(), geometry.indices.size() / 3,
         boundsMin.x, boundsMin.y, boundsMin.z, boundsMax.x, boundsMax.y, boundsMax.z));
-    auto mesh = std::make_shared<PhysicsMesh>(Globals::physics.createCollisionMesh(geometry.vertices, geometry.indices));
+    auto mesh = oc::make_shared<PhysicsMesh>(Globals::physics.createCollisionMesh(geometry.vertices, geometry.indices));
     if (!mesh->isValid())
         return nullptr;
     m_meshes.emplace(key, mesh);
@@ -187,7 +187,7 @@ std::shared_ptr<PhysicsMesh> CollisionCache::getOrBuildMesh(const std::string& c
     return mesh;
 }
 
-std::shared_ptr<const OccluderData> CollisionCache::getOccluders(const std::string& containerName, const std::string& nodePath) const
+oc::shared_ptr<const OccluderData> CollisionCache::getOccluders(const oc::string& containerName, const oc::string& nodePath) const
 {
     auto it = m_occluders.find(meshKey(containerName, nodePath));
     return it != m_occluders.end() ? it->second : nullptr;

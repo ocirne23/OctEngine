@@ -52,7 +52,7 @@ export struct BindingFunc
 {
 	const char* name;
 	DSLType returnType;
-	std::vector<BindingParam> params;
+	oc::vector<BindingParam> params;
 	const char* emit;               // "$r" = the receiver's own emitted expression (empty for a free/Engine call),
 	                                 // "$1..$9" = args, "$*" = the variadic tail (see isVariadic)
 	bool isPositionalCall = false;  // terse constructors (vec2/3/4): call sites render positionally
@@ -72,9 +72,9 @@ export struct BindingMember
 {
 	const char* name;
 	DSLType type;
-	std::string emit;     // e.g. "$r->pos" (a real field) or "scriptData->physics" (a host-cached pointer, see
+	oc::string emit;     // e.g. "$r->pos" (a real field) or "scriptData->physics" (a host-cached pointer, see
 	                       // registerComponentType) -- "$r" is the receiver's own emitted expression; a
-	                       // std::string (not a literal-only const char*) since registerComponentType computes
+	                       // oc::string (not a literal-only const char*) since registerComponentType computes
 	                       // this one from the member name rather than taking it from the caller
 	bool writable = true; // false = read-only in the DSL (no `x.member = ...` statements)
 	// This member belongs to the SCRIPT, not to the entity it's read through: its emit ignores "$r" (self.data
@@ -97,10 +97,10 @@ export struct BindingStruct
 {
 	const char* name;    // DSL spelling ("vec3") -- also the constructor's callable name
 	const char* cppName; // transpiled type ("glm::vec3")
-	std::vector<BindingParam> constructorParams;
+	oc::vector<BindingParam> constructorParams;
 	const char* constructorEmit;        // "glm::vec3($1, $2, $3)"
-	std::vector<BindingMember> members; // { "x", Float, "$r.x" }
-	std::vector<BindingFunc> functions; // emit may wrap free functions: { "length", Float, {}, "glm::length($r)" }
+	oc::vector<BindingMember> members; // { "x", Float, "$r.x" }
+	oc::vector<BindingFunc> functions; // emit may wrap free functions: { "length", Float, {}, "glm::length($r)" }
 };
 
 export struct EntryPointParam
@@ -124,7 +124,7 @@ export struct EntryPointParam
 export struct EntryPointDef
 {
 	const char* name; // the exported C symbol AND the DSL function's own name, e.g. "Update"
-	std::vector<EntryPointParam> dslParams;
+	oc::vector<EntryPointParam> dslParams;
 	const char* cppSuffix;
 	const char* registerMacro;
 };
@@ -140,8 +140,8 @@ export struct BindingObject
 	DSLType type;                    // the object's engine-object DSLType (Void for the Engine section)
 	bool sidebarTopLevel = true;     // false = no root-level sidebar VariableDeclaration/candidate of its own
 	                                  // (see ScriptBindings::build) -- reachable only via another binding's member
-	std::vector<BindingFunc> functions;
-	std::vector<BindingMember> members;
+	oc::vector<BindingFunc> functions;
+	oc::vector<BindingMember> members;
 	// Makes this object ITERABLE: "foreach Entity child in self.scene" walks it without the author ever seeing
 	// an index, which is what makes an out-of-range access unauthorable. Void elementType = not a sequence.
 	// The two emits are ordinary templates ("$r" = the receiver's expression, plus "$i" for the index in
@@ -271,20 +271,20 @@ public:
 	// how a NEW registerStruct/registerObject/registerComponentType call, from this library or any other,
 	// references an EXISTING struct/component type (e.g. "vec3", "PhysicsComponent") as one of its own
 	// parameter/return/member types, without needing that earlier call's DSLType handed to it directly.
-	DSLType typeByName(const std::string& name) const;
+	DSLType typeByName(const oc::string& name) const;
 	// Same lookup, but ONLY among registered component types (Void if `name` isn't one, including when it's a
 	// struct name instead) -- what DSL::requiredComponents / the .dsl "//@@require" line resolves a name
 	// against, where a struct match would be meaningless.
-	DSLType componentTypeByName(const std::string& name) const;
+	DSLType componentTypeByName(const oc::string& name) const;
 
 	// Constructs the sidebar/builtin symbol vectors from every struct/object registered SO FAR -- call ONCE (ScriptEditor currently),
 	// after every registration whose symbols should exist (symbol identity must be stable for the lifetime of
 	// every document that references them); a registration made after this call exists in the registry but
 	// never gets symbols built for it.
-	void build(std::vector<std::unique_ptr<DSLSymbol>>& sidebarOut, std::vector<std::unique_ptr<DSLSymbol>>& builtinsOut);
+	void build(oc::vector<oc::unique_ptr<DSLSymbol>>& sidebarOut, oc::vector<oc::unique_ptr<DSLSymbol>>& builtinsOut);
 
 	// The full table, in registration order (built-ins first; the Engine section last among them).
-	std::span<const BindingObject> objects() const;
+	oc::span<const BindingObject> objects() const;
 
 	// The BindingObject a receiver's engine-object type belongs to (nullptr for non-object types).
 	const BindingObject* objectFor(DSLType type) const;
@@ -294,11 +294,11 @@ public:
 	const BindingObject* objectForDecl(const DSLSymbol* sidebarDecl) const;
 
 	// The built FunctionDeclaration symbols of one object, parallel to its `functions` vector.
-	std::span<DSLSymbol* const> functionSymbols(const BindingObject& object) const;
+	oc::span<DSLSymbol* const> functionSymbols(const BindingObject& object) const;
 
 	// The member definition behind a receiver-type + name pair (nullptr = no such member) -- binding objects
 	// AND struct types alike; what stamps MemberAccess::type at author/load time.
-	const BindingMember* findMember(DSLType receiverType, const std::string& name) const;
+	const BindingMember* findMember(DSLType receiverType, const oc::string& name) const;
 
 	// `type`'s registered name (nullptr if `type` isn't a registered component type) -- the reverse of
 	// registerComponentType/typeByName, what dslTypeName renders a component-type DSLType as.
@@ -320,10 +320,10 @@ public:
 	const char* cppTypeName(DSLType type) const;
 
 	// ---- structs ----
-	std::span<const BindingStruct> structs() const; // every struct registered so far, in registration order
+	oc::span<const BindingStruct> structs() const; // every struct registered so far, in registration order
 	const BindingStruct* structFor(DSLType type) const; // nullptr for non-struct types
 	// The struct's own member functions' built symbols, parallel to structFor(type)->functions.
-	std::span<DSLSymbol* const> structFunctionSymbols(DSLType type) const;
+	oc::span<DSLSymbol* const> structFunctionSymbols(DSLType type) const;
 
 	// The emit template a built function symbol was declared with (nullptr if not a registry symbol) -- what
 	// Transpiler's callText substitutes against.
@@ -332,42 +332,42 @@ public:
 	// The toggleable ScriptAPI entry points registered so far (the 5 built-in ones -- OnSpawn/OnDestroy/Update/
 	// OnEvent/OnPhysicsEvent -- plus any registerEntryPoint addition), in registration order. Doesn't need
 	// `build()`, unlike objects()/structs()' BUILT symbols.
-	std::span<const EntryPointDef> entryPoints() const;
+	oc::span<const EntryPointDef> entryPoints() const;
 	// `name`'s matching EntryPointDef (nullptr if `name` isn't registered).
-	const EntryPointDef* entryPointFor(const std::string& name) const;
+	const EntryPointDef* entryPointFor(const oc::string& name) const;
 
 private:
 	struct BuiltObject
 	{
 		const BindingObject* def = nullptr;
 		DSLSymbol* decl = nullptr;              // the sidebar VariableDeclaration (null for the Engine section)
-		std::vector<DSLSymbol*> functionSymbols; // parallel to def->functions
+		oc::vector<DSLSymbol*> functionSymbols; // parallel to def->functions
 	};
 	struct BuiltStruct
 	{
 		const BindingStruct* def = nullptr;
 		DSLSymbol* constructorFunc = nullptr;    // the positional constructor builtin ("vec3(...)")
-		std::vector<DSLSymbol*> functionSymbols; // parallel to def->functions
+		oc::vector<DSLSymbol*> functionSymbols; // parallel to def->functions
 	};
 
 	// Registered defs (registerStruct/registerObject/registerComponentType/registerEntryPoint).
-	std::vector<BindingStruct> m_structDefs;
-	std::vector<BindingObject> m_objectDefs;
-	std::vector<const char*> m_componentTypeNames; // index N = DSLType dslComponentType(N)
-	std::vector<int> m_componentBits;              // parallel to m_componentTypeNames -- the EComponentID bit
-	std::vector<const char*> m_componentFetchEmits; // parallel too -- see componentFetchEmit
-	std::vector<const char*> m_sequenceTypeNames;  // index N = DSLType dslSequenceType(N)
-	std::vector<EntryPointDef> m_entryPointDefs;
+	oc::vector<BindingStruct> m_structDefs;
+	oc::vector<BindingObject> m_objectDefs;
+	oc::vector<const char*> m_componentTypeNames; // index N = DSLType dslComponentType(N)
+	oc::vector<int> m_componentBits;              // parallel to m_componentTypeNames -- the EComponentID bit
+	oc::vector<const char*> m_componentFetchEmits; // parallel too -- see componentFetchEmit
+	oc::vector<const char*> m_sequenceTypeNames;  // index N = DSLType dslSequenceType(N)
+	oc::vector<EntryPointDef> m_entryPointDefs;
 
 	// Symbols built from the above by build() -- called once, well after every registration that should be
 	// included.
-	std::vector<BuiltObject> m_built;
-	std::vector<BuiltStruct> m_builtStructs;     // index N = DSLType dslStructType(N)
-	std::vector<std::pair<const DSLSymbol*, const char*>> m_emits; // function symbol -> emit template
+	oc::vector<BuiltObject> m_built;
+	oc::vector<BuiltStruct> m_builtStructs;     // index N = DSLType dslStructType(N)
+	oc::vector<oc::pair<const DSLSymbol*, const char*>> m_emits; // function symbol -> emit template
 	// Backing storage for the array types' generated emit templates (see build()). Everything else's emits are
 	// string literals owned by the caller; these are composed per element type, so they need an owner with a
 	// stable address -- unique_ptr, since the vector itself reallocates as more are added.
-	std::vector<std::unique_ptr<std::string>> m_arrayEmits;
+	oc::vector<oc::unique_ptr<oc::string>> m_arrayEmits;
 };
 
 // The one registry instance (house singleton pattern) -- registrations (built-in and external alike) accumulate

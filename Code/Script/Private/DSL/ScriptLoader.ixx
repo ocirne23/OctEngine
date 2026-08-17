@@ -29,7 +29,7 @@ public:
 	struct LoadResult
 	{
 		bool success = false;
-		std::string error; // human-readable, "<path>(<line>): <what>" -- empty on success
+		oc::string error; // human-readable, "<path>(<line>): <what>" -- empty on success
 	};
 
 	// Writes `generatedCode` (the Transpiler's C++ output -- may be empty) followed by document.file as a
@@ -44,25 +44,25 @@ public:
 	// Document-level rather than part of the parse, because the editor's save path never parses -- both save()
 	// and load() run it, so no authoring route can produce a script that breaks the rule.
 	// outLineIndex indexes document.file.lines.
-	static bool checkContainerMutations(const DSL& document, std::string& outError, int& outLineIndex);
+	static bool checkContainerMutations(const DSL& document, oc::string& outError, int& outLineIndex);
 
-	static bool save(DSL& document, const std::string& path, const std::string& generatedCode);
+	static bool save(DSL& document, const oc::string& path, const oc::string& generatedCode);
 
 	// The "//@@require"/"//@@data"/"//@@event" directive lines, exactly as save() writes them -- shared with
 	// the editor's PASTE path, which rebuilds a candidate document as text and reparses it via loadFromText.
-	static std::string directiveText(const DSL& document);
+	static oc::string directiveText(const DSL& document);
 
 	// load() minus the file: parses any text containing a "//@@dsl 1" ... "//@@end" block. `originName` only
 	// labels error messages. Same transactional contract as load: on failure the document is untouched -- which
 	// is what lets the editor's paste offer the WHOLE candidate and simply cancel when it doesn't resolve.
-	static LoadResult loadFromText(DSL& document, const std::string& text, const std::string& originName,
-		const std::vector<std::unique_ptr<DSLSymbol>>& builtins, const ScriptBindings& bindings);
+	static LoadResult loadFromText(DSL& document, const oc::string& text, const oc::string& originName,
+		const oc::vector<oc::unique_ptr<DSLSymbol>>& builtins, const ScriptBindings& bindings);
 
 	// Parses a file save() wrote and REPLACES document.file.lines (+ requiredComponents, from the file's
 	// "//@@require" line) on success; on failure the document is left untouched. document.sidebar, `builtins`
 	// and `bindings` are the name-resolution context (the same fixed sets the editor composes against --
 	// binding members stamp their types from the registry, dot-calls resolve per receiver type, and a
 	// reference to an un-required component's binding is a load error).
-	static LoadResult load(DSL& document, const std::string& path, const std::vector<std::unique_ptr<DSLSymbol>>& builtins,
+	static LoadResult load(DSL& document, const oc::string& path, const oc::vector<oc::unique_ptr<DSLSymbol>>& builtins,
 		const ScriptBindings& bindings);
 };

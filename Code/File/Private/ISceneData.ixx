@@ -55,20 +55,20 @@ export class ISceneData
 {
 public:
 
-	static std::unique_ptr<ISceneData> createAssimpLoader();
-	static std::unique_ptr<ISceneData> createProceduralLoader();
+	static oc::unique_ptr<ISceneData> createAssimpLoader();
+	static oc::unique_ptr<ISceneData> createProceduralLoader();
 
 	// Wraps caller-supplied geometry as a single-mesh, single-material scene ready for ObjectContainer.
 	// colorRGBA (optional, RGBA8, colorWidth*colorHeight*4 bytes) becomes the material's diffuse texture;
 	// pass null for a fallback checkerboard. Used to turn generated terrain chunks into renderable meshes.
-	static std::unique_ptr<ISceneData> createMeshScene(const MeshGeometryDesc& geometry,
+	static oc::unique_ptr<ISceneData> createMeshScene(const MeshGeometryDesc& geometry,
 		const uint8* colorRGBA = nullptr, uint32 colorWidth = 0, uint32 colorHeight = 0);
 
 	// Cache-aware load: serves a cooked binary snapshot from Assets/Local/Cooked when it matches the
 	// source file (mtime + size) and options, otherwise imports via Assimp, cooks, and writes it for
 	// next time. Skinned/animated scenes always import directly (never cooked). Returns an initialized
 	// scene, or null on import failure.
-	static std::unique_ptr<ISceneData> loadCached(const char* filePath, bool mergeNodes, bool preTransformVertices, const SceneCookOptions& options);
+	static oc::unique_ptr<ISceneData> loadCached(const char* filePath, bool mergeNodes, bool preTransformVertices, const SceneCookOptions& options);
 
 	// Loads animation clips from a separate file (rig in one file, animations in others) and appends them
 	// to outSet, resolving each channel against targetSkeleton BY BONE NAME (retargeting across files that
@@ -84,7 +84,7 @@ public:
 	virtual bool initialize(const char* filePath, bool mergeNodes, bool preTransformVertices) = 0;
 	virtual bool isValid() const = 0;
 
-	virtual const std::string& getFilePath() const = 0;
+	virtual const oc::string& getFilePath() const = 0;
 	virtual const INodeData& getRootNode() const = 0;
 
 	virtual uint32 getNumMeshes() const = 0;

@@ -9,15 +9,15 @@ class RenderPass;
 
 export struct VertexLayoutInfo
 {
-    std::vector<vk::VertexInputBindingDescription> bindingDescriptions;
-    std::vector<vk::VertexInputAttributeDescription> attributeDescriptions;
+    oc::vector<vk::VertexInputBindingDescription> bindingDescriptions;
+    oc::vector<vk::VertexInputAttributeDescription> attributeDescriptions;
 };
 
 export struct ShaderSource
 {
-    std::string text;
-    std::string debugFilePath;
-    std::vector<ShaderDefine> defines;
+    oc::string text;
+    oc::string debugFilePath;
+    oc::vector<ShaderDefine> defines;
 };
 
 export struct PipelineVariant
@@ -44,12 +44,12 @@ export struct GraphicsPipelineLayout
     ShaderSource vertexShader;
     ShaderSource fragmentShader;
     VertexLayoutInfo vertexLayoutInfo;
-    std::vector<vk::DescriptorSetLayoutBinding> descriptorSetLayoutBindings;
+    oc::vector<vk::DescriptorSetLayoutBinding> descriptorSetLayoutBindings;
     // Optional, parallel to descriptorSetLayoutBindings. If non-empty, the set layout is created
     // UPDATE_AFTER_BIND-capable and each binding gets the corresponding flags (e.g. eUpdateAfterBind for
     // a descriptor that's refreshed after the command buffer is recorded, like a per-frame TLAS).
-    std::vector<vk::DescriptorBindingFlags> descriptorBindingFlags;
-    std::vector<vk::PushConstantRange> pushConstantRanges;
+    oc::vector<vk::DescriptorBindingFlags> descriptorBindingFlags;
+    oc::vector<vk::PushConstantRange> pushConstantRanges;
 
     // Depth-only passes (e.g. shadow maps) bind no fragment shader and write to a render pass with
     // no color attachments. depthBias is slope-scaled to fight shadow acne, and a configurable cull
@@ -79,7 +79,7 @@ export struct GraphicsPipelineLayout
 
     // Additional pipeline variants for DGC Indirect Execution Set selection. Variant 0 always
     // uses both layout defaults; each extra entry can independently override either shader stage.
-    std::vector<PipelineVariant> additionalVariants;
+    oc::vector<PipelineVariant> additionalVariants;
 };
 
 export class GraphicsPipeline final
@@ -103,9 +103,9 @@ public:
 
 private:
 
-    bool createPipelines(vk::RenderPass renderPass, GraphicsPipelineLayout& layout, std::vector<vk::Pipeline>& outPipelines, bool assertOnFailure);
+    bool createPipelines(vk::RenderPass renderPass, GraphicsPipelineLayout& layout, oc::vector<vk::Pipeline>& outPipelines, bool assertOnFailure);
 
-    std::vector<vk::Pipeline> m_pipelines;
+    oc::vector<vk::Pipeline> m_pipelines;
     vk::PipelineCache m_pipelineCache;
     vk::PipelineLayout m_pipelineLayout;
     vk::DescriptorSetLayout m_descriptorSetLayout;

@@ -18,7 +18,7 @@ export module Core.Allocator;
 
 import Core;
 
-std::atomic<size_t> g_alignedAllocMemory = 0;
+oc::atomic<size_t> g_alignedAllocMemory = 0;
 export size_t getAlignedAllocatedSize() { return g_alignedAllocMemory.load(); }
 
 // Allocation tracking hooks (installed by the Memory library's MemoryTracker; Core stays
@@ -29,8 +29,8 @@ export size_t getAlignedAllocatedSize() { return g_alignedAllocMemory.load(); }
 // implementations must never allocate through these paths themselves.
 export using MemoryAllocHook = void(*)(void* ptr, size_t size);
 export using MemoryFreeHook = void(*)(void* ptr);
-export std::atomic<MemoryAllocHook> g_memoryAllocHook = nullptr;
-export std::atomic<MemoryFreeHook> g_memoryFreeHook = nullptr;
+export oc::atomic<MemoryAllocHook> g_memoryAllocHook = nullptr;
+export oc::atomic<MemoryFreeHook> g_memoryFreeHook = nullptr;
 
 // Per-thread hook suppression for tracking INFRASTRUCTURE allocations (a profiler track + its
 // ring is allocated on a freshly registered thread BEFORE that thread's TLS track pointer exists,
@@ -46,13 +46,13 @@ export struct MemoryHookSuppress final
 
 export inline void callMemoryAllocHook(void* ptr, size_t size)
 {
-    if (MemoryAllocHook hook = g_memoryAllocHook.load(std::memory_order_relaxed)) [[unlikely]]
+    if (MemoryAllocHook hook = g_memoryAllocHook.load(oc::memory_order_relaxed)) [[unlikely]]
         if (g_memoryHookSuppress == 0)
             hook(ptr, size);
 }
 export inline void callMemoryFreeHook(void* ptr)
 {
-    if (MemoryFreeHook hook = g_memoryFreeHook.load(std::memory_order_relaxed)) [[unlikely]]
+    if (MemoryFreeHook hook = g_memoryFreeHook.load(oc::memory_order_relaxed)) [[unlikely]]
         if (g_memoryHookSuppress == 0)
             hook(ptr);
 }
@@ -188,7 +188,7 @@ public:
     inline size_t getUsedSize() const { return m_usedSize; }
     inline size_t getMaxUsedSize() const { return m_maxUsedSize; }
 
-    std::atomic<size_t> m_usedSize = 0;
+    oc::atomic<size_t> m_usedSize = 0;
     size_t m_maxUsedSize = 0;
 };
 
@@ -228,7 +228,7 @@ public:
         {
             pAllocation = reinterpret_cast<AllocationHeader*>(m_buffer + start * BucketSize);
 #ifdef TRACK_ALLOCATION_SIZE
-            if constexpr (ThreadSafe) m_usedStackSize.fetch_add(sizeWithHeader, std::memory_order_relaxed);
+            if constexpr (ThreadSafe) m_usedStackSize.fetch_add(sizeWithHeader, oc::memory_order_relaxed);
             else                      m_usedStackSize += sizeWithHeader;
             m_maxUsedStackSize = m_usedStackSize > m_maxUsedStackSize ? (size_t)m_usedStackSize : (size_t)m_maxUsedStackSize;
 #endif
@@ -237,7 +237,7 @@ public:
         {
             pAllocation = reinterpret_cast<AllocationHeader*>(std::malloc(sizeWithHeader));
 #ifdef TRACK_ALLOCATION_SIZE
-            if constexpr (ThreadSafe) m_usedFallbackSize.fetch_add(sizeWithHeader, std::memory_order_relaxed);
+            if constexpr (ThreadSafe) m_usedFallbackSize.fetch_add(sizeWithHeader, oc::memory_order_relaxed);
             else                      m_usedFallbackSize += sizeWithHeader;
             m_maxUsedFallbackSize = m_usedFallbackSize > m_maxUsedFallbackSize ? (size_t)m_usedFallbackSize : (size_t)m_maxUsedFallbackSize;
 #endif
@@ -288,7 +288,7 @@ public:
         {
             assert(pMem + size <= m_buffer + Capacity);
 #ifdef TRACK_ALLOCATION_SIZE
-            if constexpr (ThreadSafe) m_usedStackSize.fetch_sub(size, std::memory_order_relaxed);
+            if constexpr (ThreadSafe) m_usedStackSize.fetch_sub(size, oc::memory_order_relaxed);
             else                      m_usedStackSize -= size;
 #endif
             releaseRange(pMem, size);
@@ -296,7 +296,7 @@ public:
         else
         {
 #ifdef TRACK_ALLOCATION_SIZE
-            if constexpr (ThreadSafe) m_usedFallbackSize.fetch_sub(size, std::memory_order_relaxed);
+            if constexpr (ThreadSafe) m_usedFallbackSize.fetch_sub(size, oc::memory_order_relaxed);
             else                      m_usedFallbackSize -= size;
 #endif
             std::free(pMem);
@@ -328,7 +328,7 @@ public:
     void printUsedBits() const
     {
         for (int i = 0; i < NUM_BUCKET_INTS; ++i)
-            printf("%s\n", std::bitset<64>(m_usedBits[i]).to_string().c_str());
+            printf("%s\n", oc::bitset<64>(m_usedBits[i]).to_string().c_str());
     }
 
 private:
@@ -353,13 +353,13 @@ private:
 
         if constexpr (ThreadSafe)
         {	// In a multithreaded environment we spread out different thread allocations to minimize contention
-            const int lastUsed = m_lastUsedIdx.load(std::memory_order_relaxed);
+            const int lastUsed = m_lastUsedIdx.load(oc::memory_order_relaxed);
             int emptiestSlotBits = 64;
             startSlot = 0;
             for (int i = 0; i < NUM_BUCKET_INTS; ++i)
             {
                 const int intIdx = (i + lastUsed + 1) % (NUM_BUCKET_INTS);
-                const int numSetBits = (int)__popcnt64(m_usedBits[intIdx].load(std::memory_order_relaxed));
+                const int numSetBits = (int)__popcnt64(m_usedBits[intIdx].load(oc::memory_order_relaxed));
                 if (numSetBits + numBucketsWanted * 2 < 64) // If we find a slot that can comfortably fit the allocation try to use it
                 {
                     startSlot = intIdx;
@@ -371,7 +371,7 @@ private:
                     emptiestSlotBits = numSetBits;
                 }
             }
-            m_lastUsedIdx.store(startSlot, std::memory_order_relaxed);
+            m_lastUsedIdx.store(startSlot, oc::memory_order_relaxed);
         }
         else
         {
@@ -387,7 +387,7 @@ private:
                 numWantedBucketsRemaining = numBucketsWanted;
             }
             uint64_t usedBits;
-            if constexpr (ThreadSafe) usedBits = m_usedBits[intIdx].load(std::memory_order_relaxed);
+            if constexpr (ThreadSafe) usedBits = m_usedBits[intIdx].load(oc::memory_order_relaxed);
             else                      usedBits = m_usedBits[intIdx];
 
             const int numSetBits = (int)__popcnt64(usedBits);
@@ -458,7 +458,7 @@ private:
         uint64_t bitMasks[NUM_BUCKET_INTS];
         for (int i = intStart; i < intEnd; ++i)
         {
-            const int bitEnd = std::min(bitStart + remaining, 64);
+            const int bitEnd = oc::min(bitStart + remaining, 64);
             const int bitRange = bitEnd - bitStart;
             remaining -= bitRange;
             bitMasks[i] = bitRange == 64 ? uint64_t(~0) : ((1ull << bitRange) - 1) << bitStart;
@@ -470,14 +470,14 @@ private:
             for (int i = intStart; i < intEnd; ++i)
             {
                 // With extremely high contention a compare_exchange_weak loop can be slightly faster than fetch_or
-                const uint64_t old = m_usedBits[i].fetch_or(bitMasks[i], std::memory_order_relaxed);
+                const uint64_t old = m_usedBits[i].fetch_or(bitMasks[i], oc::memory_order_relaxed);
                 const uint64_t oldBitMask = old & bitMasks[i];
                 if (oldBitMask != 0)
                 {	// Undo bit sets because someone else has set bits in the range
                     if (oldBitMask != bitMasks[i]) // if we set any incorrectly in the current int, undo
-                        m_usedBits[i].fetch_and(~(bitMasks[i] & ~oldBitMask), std::memory_order_relaxed);
+                        m_usedBits[i].fetch_and(~(bitMasks[i] & ~oldBitMask), oc::memory_order_relaxed);
                     for (int j = i - 1; j >= intStart; --j) // if we set any previous ints, undo those also
-                        m_usedBits[j].fetch_and(~bitMasks[j], std::memory_order_relaxed);
+                        m_usedBits[j].fetch_and(~bitMasks[j], oc::memory_order_relaxed);
                     return false;
                 }
             }
@@ -503,7 +503,7 @@ private:
         uint64_t bitMasks[NUM_BUCKET_INTS];
         for (int i = intStart; i < intEnd; ++i)
         {
-            const int bitEnd = std::min(bitStart + remaining, 64);
+            const int bitEnd = oc::min(bitStart + remaining, 64);
             const int bitRange = bitEnd - bitStart;
             remaining -= bitRange;
             bitMasks[i] = bitRange == 64 ? uint64_t(~0) : ((1ull << bitRange) - 1) << bitStart;
@@ -513,7 +513,7 @@ private:
         {
             if constexpr (ThreadSafe)
             {
-                uint64_t old = m_usedBits[i].fetch_and(~bitMasks[i], std::memory_order_relaxed);
+                uint64_t old = m_usedBits[i].fetch_and(~bitMasks[i], oc::memory_order_relaxed);
                 assert((old & bitMasks[i]) == bitMasks[i]);
             }
             else
@@ -544,25 +544,25 @@ private:
     static constexpr int NUM_BUCKET_INTS = NUM_BUCKETS / 64 + (NUM_BUCKETS % 64 != 0);
 
     uint8_t m_buffer[Capacity];
-    std::conditional<ThreadSafe, std::atomic<uint64_t>, uint64_t>::type m_usedBits[NUM_BUCKET_INTS] = {};
-    std::conditional<ThreadSafe, std::atomic<int>, int>::type m_lastUsedIdx = 0;
+    std::conditional<ThreadSafe, oc::atomic<uint64_t>, uint64_t>::type m_usedBits[NUM_BUCKET_INTS] = {};
+    std::conditional<ThreadSafe, oc::atomic<int>, int>::type m_lastUsedIdx = 0;
     std::thread::id m_lastThreadId;
 #ifdef TRACK_ALLOCATION_SIZE
-    std::conditional<ThreadSafe, std::atomic<size_t>, size_t>::type m_usedStackSize = 0;
-    std::conditional<ThreadSafe, std::atomic<size_t>, size_t>::type m_usedFallbackSize = 0;
+    std::conditional<ThreadSafe, oc::atomic<size_t>, size_t>::type m_usedStackSize = 0;
+    std::conditional<ThreadSafe, oc::atomic<size_t>, size_t>::type m_usedFallbackSize = 0;
     size_t m_maxUsedStackSize = 0;
     size_t m_maxUsedFallbackSize = 0;
 #endif
 };
 
 /* for extremely high contention this is slightly faster than fetch_or
-uint64_t expected = m_usedBits[i].load(std::memory_order_relaxed) & ~bitMasks[i];
-while (!m_usedBits[i].compare_exchange_weak(expected, expected | bitMasks[i], std::memory_order_relaxed, std::memory_order_relaxed))
+uint64_t expected = m_usedBits[i].load(oc::memory_order_relaxed) & ~bitMasks[i];
+while (!m_usedBits[i].compare_exchange_weak(expected, expected | bitMasks[i], oc::memory_order_relaxed, oc::memory_order_relaxed))
 {
     if ((expected & bitMasks[i]) != 0)
     {   // Undo bit sets because someone else has set bits in the range
         for (int j = i - 1; j >= intStart; --j)
-            m_usedBits[j].fetch_and(~bitMasks[j], std::memory_order_relaxed);
+            m_usedBits[j].fetch_and(~bitMasks[j], oc::memory_order_relaxed);
         return false;
     }
     expected &= ~bitMasks[i];

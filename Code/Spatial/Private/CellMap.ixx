@@ -124,8 +124,8 @@ private:
 
     void grow()
     {
-        std::vector<uint64> oldKeys = std::move(m_keys);
-        std::vector<CellRecord> oldRecords = std::move(m_records);
+        oc::vector<uint64> oldKeys = oc::move(m_keys);
+        oc::vector<CellRecord> oldRecords = oc::move(m_records);
         const uint32 oldCapacity = m_capacity;
         m_capacity *= 2;
         m_keys.assign(m_capacity, Morton::InvalidKey);
@@ -143,8 +143,8 @@ private:
         }
     }
 
-    std::vector<uint64> m_keys;
-    std::vector<CellRecord> m_records;
+    oc::vector<uint64> m_keys;
+    oc::vector<CellRecord> m_records;
     uint32 m_capacity = 0;
     uint32 m_size = 0;
 };

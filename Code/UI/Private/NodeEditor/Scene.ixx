@@ -20,16 +20,16 @@ public:
 
     void processInteractions();
     Node& createNode();
-    Node& addNodeOfType(const std::string& typeId, ImVec2 pos);
+    Node& addNodeOfType(const oc::string& typeId, ImVec2 pos);
 
     void newGraph();                                  // reset to a minimal default graph
-    bool loadFromFile(const std::string& path);       // rebuild graph from the //@graph metadata
-    bool saveToFile(const std::string& path);         // write generated source (code + metadata)
-    std::string generateCpp();                        // node graph -> C++ source
+    bool loadFromFile(const oc::string& path);       // rebuild graph from the //@graph metadata
+    bool saveToFile(const oc::string& path);         // write generated source (code + metadata)
+    oc::string generateCpp();                        // node graph -> C++ source
 
-    const std::string& scriptPath() const { return m_scriptPath; }
-    void setScriptPath(const std::string& path) { m_scriptPath = path; }
-    bool open(const std::string& path) { setScriptPath(path); return loadFromFile(path); } // load + make current
+    const oc::string& scriptPath() const { return m_scriptPath; }
+    void setScriptPath(const oc::string& path) { m_scriptPath = path; }
+    bool open(const oc::string& path) { setScriptPath(path); return loadFromFile(path); } // load + make current
     bool save() { return saveToFile(m_scriptPath); }                                       // write the current file
 
     bool isDirty(); // graph changed since it was last loaded/saved (nodes/links/pins/positions differ)
@@ -43,7 +43,7 @@ public:
     // The sound aliases of the entity that owns the open script (its AudioComponent). Trigger Audio nodes
     // sync their exec entry pins to this list. null = unknown (no owning entity selected): pins stay as
     // loaded from the file, so editing a script standalone never strips them.
-    void setAudioAliases(const std::vector<std::string>* aliases);
+    void setAudioAliases(const oc::vector<oc::string>* aliases);
 
 private:
 
@@ -66,32 +66,32 @@ private:
     void pruneOrphanedReroute(Pin* pin);               // walk + delete a reroute chain left with no downstream link
 
     // ---- functions (imported reusable subgraphs) ----
-    using PinSig = std::vector<std::pair<EDataType, std::string>>; // ordered (type, name) list
+    using PinSig = oc::vector<oc::pair<EDataType, oc::string>>; // ordered (type, name) list
 
     struct FunctionRef
     {
-        std::string scriptPath;   // .scr the function is defined in (relative, e.g. "Scripts/Math.scr")
-        std::string funcName;     // the function's name (its Function Input/Output pair share it)
-        std::string displayLabel; // "<file>: <func>" shown in the import menu
+        oc::string scriptPath;   // .scr the function is defined in (relative, e.g. "Scripts/Math.scr")
+        oc::string funcName;     // the function's name (its Function Input/Output pair share it)
+        oc::string displayLabel; // "<file>: <func>" shown in the import menu
     };
 
     void applyFunctionEdit(Node* node, const MemberEdit& edit); // add/remove/rename/retype one param/return
     void removeInputPin(Node* node, int index);                 // drop an input pin + its links
-    bool readFunctionSignature(const std::string& path, const std::string& funcName,
+    bool readFunctionSignature(const oc::string& path, const oc::string& funcName,
                                PinSig& params, PinSig& returns) const; // read a function's I/O from its file
-    std::vector<FunctionRef> scanImportableFunctions() const;   // every function defined in Assets/Scripts/*.scr
+    oc::vector<FunctionRef> scanImportableFunctions() const;   // every function defined in Assets/Scripts/*.scr
     Node& importFunction(const FunctionRef& ref, ImVec2 pos);   // create a Function Call node for a function
-    void emitFunctions(std::string& code);                      // emit C++ defs for every function used/defined here
+    void emitFunctions(oc::string& code);                      // emit C++ defs for every function used/defined here
     bool isFunctionScript() const;                              // true if this graph defines a function (Function Input)
 
     int  indexOfNode(const Node* node) const;
-    std::string serializeGraph();
+    oc::string serializeGraph();
 
     // ---- copy/paste (Ctrl+C/Ctrl+V), via the OS clipboard so it also works across different open scripts ----
-    std::string serializeSubset(const std::vector<Node*>& nodes, const std::vector<Link*>& links);
-    void loadLinesIntoGraph(const std::vector<std::string>& lines, ImVec2 offset, std::vector<Node*>& byIndex);
-    void collectSelection(std::vector<Node*>& nodes, std::vector<Link*>& links) const; // every selected node + fully-selected link
-    void pruneDanglingReroutes(std::vector<Node*>& byIndex); // drop a pasted/duplicated reroute missing either link
+    oc::string serializeSubset(const oc::vector<Node*>& nodes, const oc::vector<Link*>& links);
+    void loadLinesIntoGraph(const oc::vector<oc::string>& lines, ImVec2 offset, oc::vector<Node*>& byIndex);
+    void collectSelection(oc::vector<Node*>& nodes, oc::vector<Link*>& links) const; // every selected node + fully-selected link
+    void pruneDanglingReroutes(oc::vector<Node*>& byIndex); // drop a pasted/duplicated reroute missing either link
     void copySelectedToClipboard();
     void pasteFromClipboard(ImVec2 canvasPos);
 
@@ -101,12 +101,12 @@ private:
 
     ed::EditorContext* m_nodeEditorContext = nullptr;
 
-    std::vector<std::unique_ptr<Node>> m_nodes;
-    std::vector<std::unique_ptr<Link>> m_links;
+    oc::vector<oc::unique_ptr<Node>> m_nodes;
+    oc::vector<oc::unique_ptr<Link>> m_links;
 
     bool m_firstFrame = true;
     uint64_t m_idCounter = 1;
-    std::string m_scriptPath = "Scripts/Graph.scr";
+    oc::string m_scriptPath = "Scripts/Graph.scr";
     ImVec2 m_pendingAddPos = ImVec2(0.0f, 0.0f);
     ImVec2 m_pendingAddScreenPos = ImVec2(0.0f, 0.0f); // screen-space click pos, so the popup can offset from it
     Pin* m_pendingLinkPin = nullptr; // dangling end of a link dropped on canvas, to auto-connect to the spawned node
@@ -119,17 +119,17 @@ private:
     // Dirty tracking: the serialized graph captured right after a load/save, compared against the live
     // graph to detect unsaved edits. Captured lazily (once the graph has rendered a frame so node
     // positions are valid) — m_hasBaseline gates that.
-    std::string m_baselineState;
+    oc::string m_baselineState;
     bool m_hasBaseline = false;
 
-    std::vector<FunctionRef> m_importFunctions; // cached function list, refreshed when the add-node popup opens
+    oc::vector<FunctionRef> m_importFunctions; // cached function list, refreshed when the add-node popup opens
 
     // ---- add-node popup search box ----
     char m_addNodeSearchBuf[64] = {}; // cleared + focused each time the popup opens (see IsWindowAppearing)
     int  m_addNodeSearchSelected = 0; // highlighted index into that frame's filtered results list
     bool m_addNodeSearchWasActive = false; // IsItemActive(), captured after last frame's InputText call
 
-    std::vector<std::string> m_audioAliases; // Trigger Audio entry pins sync to this (see setAudioAliases)
+    oc::vector<oc::string> m_audioAliases; // Trigger Audio entry pins sync to this (see setAudioAliases)
     bool m_audioAliasesKnown = false;
 };
 

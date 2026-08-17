@@ -58,11 +58,11 @@ public:
         assert(!isRunning());
         m_compiled = false;
         Job& job = allocateJob();
-        setJobCallable(job, std::forward<Func>(func));
+        setJobCallable(job, oc::forward<Func>(func));
         job.signal = &m_counter;
         job.successors = nullptr;
         job.numSuccessors = 0;
-        job.pending.store(0, std::memory_order_relaxed);
+        job.pending.store(0, oc::memory_order_relaxed);
         job.initialPending = 0;
         job.costEmaUs = 0;
         job.rankUs = 0;
@@ -79,7 +79,7 @@ public:
     template<typename CountFunc, typename Func>
     JobGraphBuilder addParallelJob(const char* name, CountFunc&& countFunc, uint32 grainSize, Func&& func, EJobPriority priority = EJobPriority::Normal)
     {
-        return addJob(name, [countFunc = std::forward<CountFunc>(countFunc), grainSize, func = std::forward<Func>(func)]
+        return addJob(name, [countFunc = oc::forward<CountFunc>(countFunc), grainSize, func = oc::forward<Func>(func)]
             {
                 Globals::jobSystem.parallelFor(0u, countFunc(), grainSize, func);
             }, priority);
@@ -122,15 +122,15 @@ private:
     struct ResourceState
     {
         int32 lastWriter = -1;
-        std::vector<uint32> readersSinceWrite;
+        oc::vector<uint32> readersSinceWrite;
     };
 
-    std::vector<std::unique_ptr<Job[]>> m_chunks;
+    oc::vector<oc::unique_ptr<Job[]>> m_chunks;
     uint32 m_numJobs = 0;
-    std::vector<std::pair<uint32, uint32>> m_edges;
-    std::vector<ResourceState> m_resources; // indexed by JobResource::id, build-time only
-    std::vector<Job*> m_successorStorage;   // CSR edge array the jobs' successor spans point into
-    std::vector<Job*> m_roots;
+    oc::vector<oc::pair<uint32, uint32>> m_edges;
+    oc::vector<ResourceState> m_resources; // indexed by JobResource::id, build-time only
+    oc::vector<Job*> m_successorStorage;   // CSR edge array the jobs' successor spans point into
+    oc::vector<Job*> m_roots;
     JobCounter m_counter;
     uint32 m_lastMaxRankUs = 0; // previous run's critical-path length; this run's promotion threshold
     bool m_compiled = false;

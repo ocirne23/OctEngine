@@ -12,7 +12,7 @@ struct TimerCompare
     }
 };
 
-static std::unordered_map<uint64, std::vector<Timer*>> m_timerBuckets;
+static oc::unordered_map<uint64, oc::vector<Timer*>> m_timerBuckets;
 static uint64 m_lastCheckedBucket = 0;
 
 void Time::addTimer(Timer* pTimer)
@@ -52,12 +52,12 @@ void Time::removeTimer(Timer* pTimer)
     auto it = m_timerBuckets.find(bucket);
     if (it != m_timerBuckets.end())
     {
-        std::vector<Timer*>& timers = it->second; // REFERENCE: a copy here silently discarded the removal
+        oc::vector<Timer*>& timers = it->second; // REFERENCE: a copy here silently discarded the removal
         // swap and pop
-        auto itTimer = std::find(timers.begin(), timers.end(), pTimer);
+        auto itTimer = oc::find(timers.begin(), timers.end(), pTimer);
         if (itTimer != timers.end())
         {
-            std::swap(*itTimer, timers.back());
+            oc::swap(*itTimer, timers.back());
             timers.pop_back();
             std::make_heap(timers.begin(), timers.end(), TimerCompare());
             if (timers.empty())

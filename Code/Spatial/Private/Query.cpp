@@ -233,7 +233,7 @@ void SpatialIndex::traverseCell(const Tester& tester, const glm::dvec3& refPos, 
     const float halfCell = float(Morton::cellSize(level) * 0.5);
     const glm::vec3 cellMin = glm::vec3(Morton::cellMinWorld(key, level) - refPos);
     float loose = halfCell;
-    const float topLevelMaxRadius = m_topLevelMaxRadius.load(std::memory_order_relaxed);
+    const float topLevelMaxRadius = m_topLevelMaxRadius.load(oc::memory_order_relaxed);
     if (level == m_numLevels - 1 && topLevelMaxRadius > halfCell)
         loose = topLevelMaxRadius; // clamped-oversize entries can stick out further
     if (!fullyInside)
@@ -335,7 +335,7 @@ void SpatialIndex::traverse(const Tester& tester, const glm::dvec3& refPos, uint
     });
 }
 
-uint32 SpatialIndex::querySphere(const glm::dvec3& center, float radius, uint32 layerMask, std::vector<uint64>& outUserData) const
+uint32 SpatialIndex::querySphere(const glm::dvec3& center, float radius, uint32 layerMask, oc::vector<uint64>& outUserData) const
 {
     outUserData.clear();
     traverse(SphereTester{ radius }, center, layerMask,
@@ -343,7 +343,7 @@ uint32 SpatialIndex::querySphere(const glm::dvec3& center, float radius, uint32 
     return uint32(outUserData.size());
 }
 
-uint32 SpatialIndex::queryAABB(const glm::dvec3& boxMin, const glm::dvec3& boxMax, uint32 layerMask, std::vector<uint64>& outUserData) const
+uint32 SpatialIndex::queryAABB(const glm::dvec3& boxMin, const glm::dvec3& boxMax, uint32 layerMask, oc::vector<uint64>& outUserData) const
 {
     outUserData.clear();
     const glm::dvec3 center = (boxMin + boxMax) * 0.5;
@@ -353,7 +353,7 @@ uint32 SpatialIndex::queryAABB(const glm::dvec3& boxMin, const glm::dvec3& boxMa
 }
 
 uint32 SpatialIndex::queryFrustum(const Frustum& frustumRelCamera, const glm::dvec3& cameraPos, float maxDist, uint32 layerMask,
-                                  std::vector<uint64>& outUserData, IOcclusionTester* occlusion) const
+                                  oc::vector<uint64>& outUserData, IOcclusionTester* occlusion) const
 {
     outUserData.clear();
     traverse(FrustumTester{ frustumRelCamera, occlusion, maxDist }, cameraPos, layerMask,
@@ -362,7 +362,7 @@ uint32 SpatialIndex::queryFrustum(const Frustum& frustumRelCamera, const glm::dv
 }
 
 uint32 SpatialIndex::queryRay(const glm::dvec3& origin, const glm::dvec3& dir, double maxDist, uint32 layerMask,
-                              std::vector<uint64>& outUserData) const
+                              oc::vector<uint64>& outUserData) const
 {
     outUserData.clear();
     const glm::dvec3 normalized = glm::normalize(dir);

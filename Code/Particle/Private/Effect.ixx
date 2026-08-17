@@ -11,11 +11,11 @@ import RendererVK;
 
 export struct ParticleEmitterDesc
 {
-    std::string name;
+    oc::string name;
 
     // Appearance. An empty texturePath renders a procedural soft round sprite. A flipbook atlas plays
     // cols x rows frames at fps (0 = no flipbook).
-    std::string texturePath;
+    oc::string texturePath;
     bool textureSRGB = true;
     uint32 flipbookCols = 0;
     uint32 flipbookRows = 0;
@@ -68,14 +68,14 @@ export struct ParticleEmitterDesc
 
 export struct ParticleEffectDesc
 {
-    std::string name;
-    std::vector<ParticleEmitterDesc> emitters;
+    oc::string name;
+    oc::vector<ParticleEmitterDesc> emitters;
 };
 
 // Projected box decal spawned onto a surface (ParticleSystem::spawnDecal).
 export struct DecalDesc
 {
-    std::string texturePath; // empty = solid tint
+    oc::string texturePath; // empty = solid tint
     bool textureSRGB = true;
     glm::vec2 size{ 1.0f, 1.0f };  // world extent across the surface (m)
     float depth = 0.25f;           // projection half-depth along the normal (m)
@@ -107,4 +107,4 @@ export struct DecalDesc
 //           VelocityStretch 0.05      Spin 3                RandomRotation false
 //           FadeIn 0.1                FadeOutStart 0.6      SoftFade 0.5
 // Returns false (with the error in outError) on parse failure.
-export bool loadParticleEffect(const std::string& path, ParticleEffectDesc& outDesc, std::string& outError);
+export bool loadParticleEffect(const oc::string& path, ParticleEffectDesc& outDesc, oc::string& outError);

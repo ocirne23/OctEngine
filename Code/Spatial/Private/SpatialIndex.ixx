@@ -39,12 +39,12 @@ public:
     void setLayerMask(SpatialHandle handle, uint32 layerMask);
     void commitFrame();
 
-    uint32 querySphere(const glm::dvec3& center, float radius, uint32 layerMask, std::vector<uint64>& outUserData) const;
-    uint32 queryAABB(const glm::dvec3& boxMin, const glm::dvec3& boxMax, uint32 layerMask, std::vector<uint64>& outUserData) const;
+    uint32 querySphere(const glm::dvec3& center, float radius, uint32 layerMask, oc::vector<uint64>& outUserData) const;
+    uint32 queryAABB(const glm::dvec3& boxMin, const glm::dvec3& boxMax, uint32 layerMask, oc::vector<uint64>& outUserData) const;
     uint32 queryFrustum(const Frustum& frustumRelCamera, const glm::dvec3& cameraPos, float maxDist, uint32 layerMask,
-                        std::vector<uint64>& outUserData, IOcclusionTester* occlusion = nullptr) const;
+                        oc::vector<uint64>& outUserData, IOcclusionTester* occlusion = nullptr) const;
     uint32 queryRay(const glm::dvec3& origin, const glm::dvec3& dir, double maxDist, uint32 layerMask,
-                    std::vector<uint64>& outUserData) const; // broadphase: entries whose bounds cross the segment
+                    oc::vector<uint64>& outUserData) const; // broadphase: entries whose bounds cross the segment
     uint64 queryNearest(const glm::dvec3& pos, float maxRadius, uint32 layerMask, uint64 excludeUserData = 0) const;
 
     // Per-pass visibility stamps consumed by the render gate; each call invalidates that pass's
@@ -134,11 +134,11 @@ private:
     void traverseCell(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask,
                       uint64 key, uint32 level, const CellRecord& rec, bool fullyInside, const EmitFunc& emit) const;
 
-    std::array<CellMap, Morton::MaxLevels> m_levels;
-    std::array<StaticStore, Morton::MaxLevels> m_static;
+    oc::array<CellMap, Morton::MaxLevels> m_levels;
+    oc::array<StaticStore, Morton::MaxLevels> m_static;
     RecordPool m_pool;
-    PerWorker<std::vector<PendingOp>> m_pendingOps; // staged per scheduler context, drained FIFO per slot in commitFrame
-    std::vector<EmptyCandidate> m_emptyCandidates;
+    PerWorker<oc::vector<PendingOp>> m_pendingOps; // staged per scheduler context, drained FIFO per slot in commitFrame
+    oc::vector<EmptyCandidate> m_emptyCandidates;
     uint32 m_levelEntityCount[Morton::MaxLevels] = {};
     uint32 m_numLevels = Morton::MaxLevels;
     uint32 m_frameId = 1;
@@ -148,7 +148,7 @@ private:
     int m_promoteAfterFrames = 60;
     int m_staticScanBudget = 65536;  // pool slots inspected per commit
     int m_staticRebuildBatch = 1024; // pending promotions that force a level rebuild
-    std::atomic<float> m_topLevelMaxRadius = 0.0f; // largest clamped-oversize radius, inflates top-level tests (CAS-max: updateEntry runs on jobs)
+    oc::atomic<float> m_topLevelMaxRadius = 0.0f; // largest clamped-oversize radius, inflates top-level tests (CAS-max: updateEntry runs on jobs)
     SpatialCullingConfig m_culling;
     mutable SpatialStats m_stats;
 

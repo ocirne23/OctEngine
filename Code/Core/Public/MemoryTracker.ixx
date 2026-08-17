@@ -11,12 +11,12 @@ export struct MemScopeNode
 {
     const char* name = nullptr;                 // scope name literal ("<unscoped>" / "<other threads>" at the root)
     MemScopeNode* parent = nullptr;
-    std::atomic<MemScopeNode*> firstChild = nullptr;
-    std::atomic<MemScopeNode*> nextSibling = nullptr;
-    std::atomic<int64> selfBytes = 0;           // live bytes allocated at exactly this path
-    std::atomic<int64> selfCount = 0;           // live allocations at exactly this path
-    std::atomic<uint64> totalAllocBytes = 0;    // cumulative since tracking started (churn)
-    std::atomic<uint64> totalAllocCount = 0;
+    oc::atomic<MemScopeNode*> firstChild = nullptr;
+    oc::atomic<MemScopeNode*> nextSibling = nullptr;
+    oc::atomic<int64> selfBytes = 0;           // live bytes allocated at exactly this path
+    oc::atomic<int64> selfCount = 0;           // live allocations at exactly this path
+    oc::atomic<uint64> totalAllocBytes = 0;    // cumulative since tracking started (churn)
+    oc::atomic<uint64> totalAllocCount = 0;
     uint8 category = 0;                         // EProfileCategory of the innermost scope
 };
 
@@ -41,17 +41,17 @@ public:
 
     // New allocations are only attributed while enabled; frees of already-tracked blocks always
     // untrack regardless, so toggling can never corrupt the counts.
-    void setEnabled(bool enabled) { m_enabled.store(enabled, std::memory_order_relaxed); }
-    bool isEnabled() const { return m_enabled.load(std::memory_order_relaxed); }
+    void setEnabled(bool enabled) { m_enabled.store(enabled, oc::memory_order_relaxed); }
+    bool isEnabled() const { return m_enabled.load(oc::memory_order_relaxed); }
 
     // ---- reading (any thread; the panel uses main) ----
     const MemScopeNode* getRoot() const { return m_root; }
-    uint64 getTrackedBytes() const { return (uint64)m_trackedBytes.load(std::memory_order_relaxed); }
-    uint32 getTrackedCount() const { return (uint32)m_trackedCount.load(std::memory_order_relaxed); }
-    uint32 getNumNodes() const { return m_numNodes.load(std::memory_order_relaxed); }
+    uint64 getTrackedBytes() const { return (uint64)m_trackedBytes.load(oc::memory_order_relaxed); }
+    uint32 getTrackedCount() const { return (uint32)m_trackedCount.load(oc::memory_order_relaxed); }
+    uint32 getNumNodes() const { return m_numNodes.load(oc::memory_order_relaxed); }
     // Allocations dropped because a map shard or the node pool was full - nonzero means the
     // treemap under-reports by whatever those allocations held.
-    uint64 getDroppedAllocs() const { return m_droppedAllocs.load(std::memory_order_relaxed); }
+    uint64 getDroppedAllocs() const { return m_droppedAllocs.load(oc::memory_order_relaxed); }
 
     void onAlloc(void* ptr, uint64 size); // hook bodies (public for the free-function thunks)
     void onFree(void* ptr);
@@ -68,7 +68,7 @@ private:
     };
     struct alignas(64) MapShard
     {
-        std::atomic<uint32> lock = 0;
+        oc::atomic<uint32> lock = 0;
         uint32 count = 0;
         MapEntry* entries = nullptr; // SHARD_CAPACITY, allocated at initialize, never freed
     };
@@ -80,15 +80,15 @@ private:
 
     MemScopeNode* m_nodePool = nullptr; // MAX_NODES, bump-allocated under m_nodeLock, never freed
     MemScopeNode* m_root = nullptr;
-    std::atomic<uint32> m_numNodes = 0;
-    std::atomic<uint32> m_nodeLock = 0;
+    oc::atomic<uint32> m_numNodes = 0;
+    oc::atomic<uint32> m_nodeLock = 0;
 
     MapShard m_shards[NUM_SHARDS];
 
-    std::atomic<int64> m_trackedBytes = 0;
-    std::atomic<int64> m_trackedCount = 0;
-    std::atomic<uint64> m_droppedAllocs = 0;
-    std::atomic<bool> m_enabled = true;
+    oc::atomic<int64> m_trackedBytes = 0;
+    oc::atomic<int64> m_trackedCount = 0;
+    oc::atomic<uint64> m_droppedAllocs = 0;
+    oc::atomic<bool> m_enabled = true;
     bool m_initialized = false;
 };
 

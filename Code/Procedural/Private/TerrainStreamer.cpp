@@ -126,13 +126,13 @@ namespace
 		{ .kind = ESourceKind::Snow,  .stem = "snow_02" },
 	};
 
-	static_assert(std::size(TERRAIN_TEX_SOURCES) <= RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS,
+	static_assert(oc::size(TERRAIN_TEX_SOURCES) <= RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS,
 		"the splat table outgrew the UBO's climate array - raise MAX_TERRAIN_SPLAT_MATERIALS");
 
 	constexpr const char* TERRAIN_TEX_CACHE_DIR = "Local/TerrainTex/";
 
 	// Poly Haven layout; the two ambientCG sets override it per map.
-	std::string terrainTexSrcPath(const TerrainTexSource& src, const char* map)
+	oc::string terrainTexSrcPath(const TerrainTexSource& src, const char* map)
 	{
 		const char* const overrides[] = { src.diffSrc, src.norSrc, src.armSrc };
 		const int slot = map[0] == 'd' ? 0 : (map[0] == 'n' ? 1 : 2);
@@ -141,7 +141,7 @@ namespace
 		return std::format("Textures/Terrain/{}/{}_{}_2k.jpg", src.stem, src.stem, map);
 	}
 
-	std::string terrainTexCachePath(const TerrainTexSource& src, const char* map)
+	oc::string terrainTexCachePath(const TerrainTexSource& src, const char* map)
 	{
 		return std::format("{}{}_{}.dds", TERRAIN_TEX_CACHE_DIR, src.stem, map);
 	}
@@ -166,7 +166,7 @@ namespace
 	}
 
 	// True when outPath exists and is newer than its source (a missing source doesn't invalidate a bake).
-	bool terrainTexCacheFresh(const std::string& outPath, const std::string& source)
+	bool terrainTexCacheFresh(const oc::string& outPath, const oc::string& source)
 	{
 		// Runs on the startup bake thread (never the main thread).
 		const int64 outTime = FileSystem::lastWriteTimeSec(outPath);
@@ -179,12 +179,12 @@ namespace
 	// Bakes every stale terrain texture into the DDS cache. Runs on a background jthread at startup;
 	// one conversion is seconds of CPU (mips + BC compression), so stale entries fan out over a small
 	// thread pool and the stop token is checked between files (app shutdown mid-first-bake).
-	void bakeTerrainTexCache(const std::atomic<bool>& stopRequested)
+	void bakeTerrainTexCache(const oc::atomic<bool>& stopRequested)
 	{
 		FileSystem::createDirectories(TERRAIN_TEX_CACHE_DIR);
 
 		struct BakeTask { const TerrainTexSource* src; int map; }; // map: 0 = diff, 1 = nor, 2 = arm
-		std::vector<BakeTask> tasks;
+		oc::vector<BakeTask> tasks;
 		for (const TerrainTexSource& src : TERRAIN_TEX_SOURCES)
 		{
 			if (!terrainTexCacheFresh(terrainTexCachePath(src, "diff"), terrainTexSrcPath(src, "diff")))
@@ -203,7 +203,7 @@ namespace
 		{
 			for (uint32 i = begin; i < end; ++i)
 			{
-				if (stopRequested.load(std::memory_order_relaxed))
+				if (stopRequested.load(oc::memory_order_relaxed))
 					return;
 				const TerrainTexSource& src = *tasks[i].src;
 				bool ok = false;
@@ -231,7 +231,7 @@ namespace Procedural
 			std::lock_guard<std::mutex> lk(m_mutex);
 			m_requests.clear();
 		}
-		m_texBakeStop.store(true, std::memory_order_relaxed);
+		m_texBakeStop.store(true, oc::memory_order_relaxed);
 		Globals::jobSystem.wait(m_pumpCounter);   // main thread helps while waiting
 		Globals::jobSystem.wait(m_texBakeCounter);
 		clearResidents(); // main thread: free RenderNodes/containers while the renderer is still alive
@@ -409,7 +409,7 @@ namespace Procedural
 		{
 			ProfileScope profileScope("TerrainStreamer::bakeTerrainTexCache", EProfileCategory::Procedural);
 			bakeTerrainTexCache(m_texBakeStop);
-			m_texBakeDone.store(!m_texBakeStop.load(std::memory_order_relaxed), std::memory_order_release);
+			m_texBakeDone.store(!m_texBakeStop.load(oc::memory_order_relaxed), oc::memory_order_release);
 		}, EJobPriority::Low, &m_texBakeCounter, "terrainTexBake");
 	}
 
@@ -444,7 +444,7 @@ namespace Procedural
 
 		if (!m_texSetRegistered)
 		{
-			if (!m_texBakeDone.load(std::memory_order_acquire))
+			if (!m_texBakeDone.load(oc::memory_order_acquire))
 				return; // still baking: chunks draw with the flat-color fallback
 			registerTerrainTextures(renderer);
 			if (!m_texSetRegistered)
@@ -465,7 +465,7 @@ namespace Procedural
 	// rather than trusting its declaration order, so entries stay grouped however reads best there.
 	void TerrainStreamer::registerTerrainTextures(Renderer& renderer)
 	{
-		auto tryBuildMat = [](const TerrainTexSource& src) -> std::optional<Renderer::TerrainSplatMaterial>
+		auto tryBuildMat = [](const TerrainTexSource& src) -> oc::optional<Renderer::TerrainSplatMaterial>
 		{
 			Renderer::TerrainSplatMaterial mat;
 			mat.diffuseDds = terrainTexCachePath(src, "diff");
@@ -479,12 +479,12 @@ namespace Procedural
 				// overlay outright, which is worth saying out loud — a world with no snow layer looks like
 				// a climate bug rather than a missing file.
 				Log::warning(std::format("Terrain: splat set '{}' incomplete, skipping", src.stem));
-				return std::nullopt;
+				return oc::nullopt;
 			}
 			return mat;
 		};
 
-		std::vector<Renderer::TerrainSplatMaterial> mats;
+		oc::vector<Renderer::TerrainSplatMaterial> mats;
 		Renderer::TerrainSplatCounts counts;
 		m_texClimateReal.clear();
 		const auto append = [&](ESourceKind kind, uint32* count)
@@ -495,7 +495,7 @@ namespace Procedural
 					continue;
 				if (auto mat = tryBuildMat(src))
 				{
-					mats.push_back(std::move(*mat));
+					mats.push_back(oc::move(*mat));
 					// Parallel to mats, INCLUDING the overlays (whose climate is never read): the shader
 					// indexes climate boxes by material slot, so a skipped entry has to drop out of both
 					// or every box after it describes the wrong texture.
@@ -574,10 +574,10 @@ namespace Procedural
 		// world into the resident cache and never be revisited.
 		TerrainGenV3::setPrecision(m_v3Fp16);
 
-		std::shared_ptr<const ITerrainSampler> maps;
+		oc::shared_ptr<const ITerrainSampler> maps;
 		if (TerrainGenV3::isReady())
 		{
-			maps = std::make_shared<const TerrainGenV3>(cfg);
+			maps = oc::make_shared<const TerrainGenV3>(cfg);
 			m_v3AwaitingModels = false;
 		}
 		else
@@ -590,12 +590,12 @@ namespace Procedural
 		}
 
 		std::lock_guard<std::mutex> lk(m_mutex);
-		m_maps = std::move(maps);
+		m_maps = oc::move(maps);
 		++m_generation;
 		m_requests.clear(); // drop queued work built against the old config
 	}
 
-	std::shared_ptr<const ITerrainSampler> TerrainStreamer::currentMaps()
+	oc::shared_ptr<const ITerrainSampler> TerrainStreamer::currentMaps()
 	{
 		std::lock_guard<std::mutex> lk(m_mutex);
 		return m_maps;
@@ -617,10 +617,10 @@ namespace Procedural
 		const int32 cap = glm::clamp(m_maxGenJobs, 1, 16);
 		for (size_t spawned = 0; spawned < numNew; )
 		{
-			int32 cur = m_numPumps.load(std::memory_order_relaxed);
+			int32 cur = m_numPumps.load(oc::memory_order_relaxed);
 			if (cur >= cap)
 				return;
-			if (m_numPumps.compare_exchange_weak(cur, cur + 1, std::memory_order_acq_rel))
+			if (m_numPumps.compare_exchange_weak(cur, cur + 1, oc::memory_order_acq_rel))
 			{
 				Globals::jobSystem.submit([this] { pumpJob(); }, EJobPriority::Low, &m_pumpCounter, "terrainChunkPump");
 				++spawned;
@@ -669,7 +669,7 @@ namespace Procedural
 						drop.generation = r.generation;
 						drop.coord = r.params.coord;
 						drop.lod = r.params.lod;
-						m_results.push_back(std::move(drop)); // empty mesh = dropped
+						m_results.push_back(oc::move(drop)); // empty mesh = dropped
 						continue;                             // not carried into the kept prefix
 					}
 					// Euclidean, not the ring's Chebyshev: "nearest" should mean nearest, not same-ring.
@@ -680,7 +680,7 @@ namespace Procedural
 						best = keep;
 					}
 					if (keep != i)
-						m_requests[keep] = std::move(r);
+						m_requests[keep] = oc::move(r);
 					++keep;
 				}
 				m_requests.resize(keep);
@@ -689,8 +689,8 @@ namespace Procedural
 					// Queue ORDER carries no meaning now (every dequeue rescans the lot), so the winner can
 					// come out in O(1) by swapping it to the front rather than erasing from the middle.
 					if (best != 0)
-						std::swap(m_requests[best], m_requests[0]);
-					req = std::move(m_requests.front());
+						oc::swap(m_requests[best], m_requests[0]);
+					req = oc::move(m_requests.front());
 					m_requests.pop_front();
 					haveWork = true;
 				}
@@ -700,19 +700,19 @@ namespace Procedural
 				// The pool drained (or held only stale entries, dropped above). Release the slot,
 				// then re-check: an append racing between our scan and the release either sees the
 				// slot still held (we re-claim below) or its kick spawns a fresh pump itself.
-				m_numPumps.fetch_sub(1, std::memory_order_release);
+				m_numPumps.fetch_sub(1, oc::memory_order_release);
 				{
 					std::lock_guard<std::mutex> lk(m_mutex);
 					if (m_requests.empty())
 						return;
 				}
 				const int32 cap = glm::clamp(m_maxGenJobs, 1, 16);
-				int32 cur = m_numPumps.load(std::memory_order_relaxed);
+				int32 cur = m_numPumps.load(oc::memory_order_relaxed);
 				for (;;)
 				{
 					if (cur >= cap)
 						return; // an appender's kicks refilled the pool; those jobs take over
-					if (m_numPumps.compare_exchange_weak(cur, cur + 1, std::memory_order_acq_rel))
+					if (m_numPumps.compare_exchange_weak(cur, cur + 1, oc::memory_order_acq_rel))
 						break;
 				}
 				continue;
@@ -750,7 +750,7 @@ namespace Procedural
 
 			{
 				std::lock_guard<std::mutex> lk(m_mutex);
-				m_results.push_back(std::move(res));
+				m_results.push_back(oc::move(res));
 			}
 		}
 	}
@@ -762,7 +762,7 @@ namespace Procedural
 	// packed fog|falloff|temp|hum, macro altitude. Consumers: the volumetric fog's terrain follow + regional
 	// thickness, the ocean's shore-map fallback, and the TERRAIN pipeline's coloring. (The renderer-side
 	// API keeps the historical "FogTerrainHeightMap" name — fog was its first consumer.)
-	void TerrainStreamer::updateFogHeightMap(Renderer& renderer, const Camera& camera, const std::shared_ptr<const ITerrainSampler>& maps, float farRange)
+	void TerrainStreamer::updateFogHeightMap(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps, float farRange)
 	{
 		const bool active = m_terrainMapEnabled && maps != nullptr;
 		HeightMapBaker::Baked baked;
@@ -802,8 +802,8 @@ namespace Procedural
 			renderer.setFogTerrainHeightMap(baked.texels, baked.center, baked.ranges, maps->seaLevel());
 			// Keep the shipped texels as the CPU copy (activeTerrainData): the ocean samples them for
 			// buoyancy and wind steering. A NEW object per bake — consumers' shared_ptrs stay coherent.
-			m_terrainMapData = std::make_shared<const BakedTerrainData>(BakedTerrainData{
-				std::move(baked.texels), baked.center, baked.ranges,
+			m_terrainMapData = oc::make_shared<const BakedTerrainData>(BakedTerrainData{
+				oc::move(baked.texels), baked.center, baked.ranges,
 				RendererVKLayout::FOG_TERRAIN_RES, RendererVKLayout::FOG_TERRAIN_CASCADES });
 			m_terrainMapUploaded = true;
 		}
@@ -874,7 +874,7 @@ namespace Procedural
 		// Chunk mesh coverage: chunks span +-R around the camera's chunk, so a disk of R*chunkSize around
 		// the camera is guaranteed resident whatever its position within its own chunk — the fence for
 		// the ocean's buried-under-land vertex cull. Also carries the live sea level (terrain coloring).
-		std::shared_ptr<const ITerrainSampler> maps;
+		oc::shared_ptr<const ITerrainSampler> maps;
 		uint32 generation;
 		{
 			std::lock_guard<std::mutex> lk(m_mutex);
@@ -918,7 +918,7 @@ namespace Procedural
 
 		// --- Enqueue any ring chunk that is neither resident nor already in flight. The scan is a
 		// pure function of (ring, residents, pending), so it only re-runs when one of them changed.
-		std::vector<Request> newRequests;
+		oc::vector<Request> newRequests;
 		if (ringMoved || m_ringScanNeeded)
 		{
 			m_ringScanNeeded = false;
@@ -941,7 +941,7 @@ namespace Procedural
 					req.params.chunkSize = chunkSize;
 					req.params.lod0Res = (uint32)glm::max(1, m_lod0Res);
 					req.params.skirtDepth = m_skirtDepth;
-					newRequests.push_back(std::move(req));
+					newRequests.push_back(oc::move(req));
 					m_pending.insert(key);
 				}
 			}
@@ -966,18 +966,18 @@ namespace Procedural
 			m_ringFullRes = fullRes;
 			m_ringMaxLod = maxLod;
 			for (Request& r : newRequests)
-				m_requests.push_back(std::move(r));
+				m_requests.push_back(oc::move(r));
 		}
 		if (!newRequests.empty())
 			kickPump(newRequests.size());
 
 		// --- Drain generated chunks (backlog first, then whatever the worker finished), budget-limited.
-		std::vector<Result> ready = std::move(m_readyBacklog);
+		oc::vector<Result> ready = oc::move(m_readyBacklog);
 		m_readyBacklog.clear();
 		{
 			std::lock_guard<std::mutex> lk(m_mutex);
 			for (Result& r : m_results)
-				ready.push_back(std::move(r));
+				ready.push_back(oc::move(r));
 			m_results.clear();
 		}
 
@@ -999,7 +999,7 @@ namespace Procedural
 			}
 			if (uploads >= m_maxUploadsPerFrame)
 			{
-				m_readyBacklog.push_back(std::move(res)); // stays "pending" so it isn't re-requested
+				m_readyBacklog.push_back(oc::move(res)); // stays "pending" so it isn't re-requested
 				continue;
 			}
 
@@ -1016,7 +1016,7 @@ namespace Procedural
 			// groups and BLAS-alias sharing, all recreated on every re-LOD. Disable them so each chunk is a
 			// single mesh with one identity-aliased BLAS — far less churn through the mesh/RT free lists.
 			overrides.disableGeneratedLods = true;
-			auto container = std::make_unique<ObjectContainer>();
+			auto container = oc::make_unique<ObjectContainer>();
 			if (!container->initialize(*res.scene, &overrides))
 				continue;
 
@@ -1026,10 +1026,10 @@ namespace Procedural
 			RenderNode node = container->spawnRootNode(transform);
 
 			Resident resident;
-			resident.container = std::move(container);
+			resident.container = oc::move(container);
 			resident.coord = res.coord;
 			resident.lod = res.lod;
-			resident.node = std::move(node);
+			resident.node = oc::move(node);
 			// Culling registration: chunks live in the SpatialIndex like entity render components, but on
 			// their own layer (no Entity* behind userData — gameplay queries must not see them),
 			// registered ONCE (chunks never move, so they promote straight into the static tier), and
@@ -1038,7 +1038,7 @@ namespace Procedural
 			const Sphere bounds = resident.node.getWorldBounds();
 			resident.spatialEntry = SpatialEntry(Globals::spatialIndex.registerEntry(
 				glm::dvec3(bounds.pos), bounds.radius, 0ull, SpatialLayer_Terrain, false));
-			m_residents.emplace(res.key, std::move(resident));
+			m_residents.emplace(res.key, oc::move(resident));
 			++uploads;
 		}
 

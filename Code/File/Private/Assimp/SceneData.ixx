@@ -11,7 +11,7 @@ import :TextureData;
 import :MaterialData;
 import :NodeData;
 
-export std::unique_ptr<ISceneData> createAssimpLoader();
+export oc::unique_ptr<ISceneData> createAssimpLoader();
 
 export class SceneData final : public ISceneData
 {
@@ -24,7 +24,7 @@ public:
 	bool initialize(const char* filePath, bool mergeNodes, bool preTransformVertices) override;
 	bool isValid() const override { return m_pScene != nullptr; }
 
-	const std::string& getFilePath() const override { return m_filePath; }
+	const oc::string& getFilePath() const override { return m_filePath; }
 	const INodeData& getRootNode() const override { return m_rootNode; }
 
 	const IMeshData* getMesh(const char* pMeshName) const override;
@@ -48,12 +48,12 @@ private:
 	void addBoneRecursive(const aiNode* pNode, int32 parentIdx);
 	void buildAnimations();
 
-	std::string m_filePath;
+	oc::string m_filePath;
 	Assimp::Importer m_importer;
 	const aiScene* m_pScene = nullptr;
-	std::vector<MeshData> m_meshes;
-	std::vector<TextureData> m_textures;
-	std::vector<MaterialData> m_materials;
+	oc::vector<MeshData> m_meshes;
+	oc::vector<TextureData> m_textures;
+	oc::vector<MaterialData> m_materials;
 	NodeData m_rootNode;
 	Skeleton m_skeleton;
 	AnimationSet m_animationSet;

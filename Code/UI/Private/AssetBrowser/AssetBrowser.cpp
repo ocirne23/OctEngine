@@ -8,17 +8,17 @@ import File;
 import :AssetBrowser;
 
 // Splits a relative path into its components ("a/b/c" -> {a, b, c}) — the breadcrumb walks these.
-static std::vector<std::string> splitPathComponents(const std::string& path)
+static oc::vector<oc::string> splitPathComponents(const oc::string& path)
 {
-	std::vector<std::string> parts;
+	oc::vector<oc::string> parts;
 	size_t start = 0;
 	while (start <= path.size())
 	{
 		const size_t sep = path.find_first_of("/\\", start);
-		const std::string part = path.substr(start, sep == std::string::npos ? std::string::npos : sep - start);
+		const oc::string part = path.substr(start, sep == oc::string::npos ? oc::string::npos : sep - start);
 		if (!part.empty())
 			parts.push_back(part);
-		if (sep == std::string::npos)
+		if (sep == oc::string::npos)
 			break;
 		start = sep + 1;
 	}
@@ -26,47 +26,47 @@ static std::vector<std::string> splitPathComponents(const std::string& path)
 }
 
 // Case-insensitive substring match against the search box (empty filter passes everything).
-static bool passesFilter(const std::string& name, const char* filter)
+static bool passesFilter(const oc::string& name, const char* filter)
 {
 	if (filter == nullptr || filter[0] == '\0')
 		return true;
-	const std::string_view needle(filter);
-	const auto it = std::search(name.begin(), name.end(), needle.begin(), needle.end(),
+	const oc::string_view needle(filter);
+	const auto it = oc::search(name.begin(), name.end(), needle.begin(), needle.end(),
 		[](char a, char b) { return std::tolower((unsigned char)a) == std::tolower((unsigned char)b); });
 	return it != name.end();
 }
 
-static bool isImageFile(const std::string& ext)
+static bool isImageFile(const oc::string& ext)
 {
 	return ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" || ext == ".tga" || ext == ".hdr";
 }
 
-static bool isMeshFile(const std::string& ext)
+static bool isMeshFile(const oc::string& ext)
 {
 	return ext == ".obj" || ext == ".fbx" || ext == ".gltf" || ext == ".glb" || ext == ".dae";
 }
 
-static bool isShaderFile(const std::string& ext)
+static bool isShaderFile(const oc::string& ext)
 {
 	return ext == ".glsl" || ext == ".hlsl" || ext == ".vert" || ext == ".frag" || ext == ".comp" || ext == ".spv";
 }
 
-static bool isPrefabFile(const std::string& ext)
+static bool isPrefabFile(const oc::string& ext)
 {
 	return ext == ".pre";
 }
 
-static bool isObjectContainer(const std::string& ext)
+static bool isObjectContainer(const oc::string& ext)
 {
 	return ext == ".oc";
 }
 
-static bool isScriptFile(const std::string& ext)
+static bool isScriptFile(const oc::string& ext)
 {
 	return ext == ".dsl"; // the one authorable script format -- .scr (the removed node editor's) reads as plain text now
 }
 
-static bool isTextFile(const std::string& ext)
+static bool isTextFile(const oc::string& ext)
 {
 	// .scr: the removed node editor's format -- kept viewable as the generated C++ it is, no longer a script.
 	return ext == ".txt" || ext == ".scr";
@@ -74,7 +74,7 @@ static bool isTextFile(const std::string& ext)
 
 // NOTE: isDirectory + ext come from the cached listing — these used to call
 // std::filesystem::is_directory() PER ITEM PER FRAME (a syscall each).
-static const char* fileIcon(bool isDirectory, const std::string& ext)
+static const char* fileIcon(bool isDirectory, const oc::string& ext)
 {
 	if (isDirectory) return "[Dir]";
 	if (isImageFile(ext))                  return "[Img]";
@@ -87,7 +87,7 @@ static const char* fileIcon(bool isDirectory, const std::string& ext)
 	return "[Fil]";
 }
 
-static ImVec4 fileColor(bool isDirectory, const std::string& ext)
+static ImVec4 fileColor(bool isDirectory, const oc::string& ext)
 {
 	if (isDirectory) return ImVec4(1.0f, 0.85f, 0.4f, 1.0f);   // yellow
 	if (isImageFile(ext))                   return ImVec4(0.4f, 0.8f,  1.0f, 1.0f);   // cyan
@@ -100,7 +100,7 @@ static ImVec4 fileColor(bool isDirectory, const std::string& ext)
 	return ImVec4(0.85f, 0.85f, 0.85f, 1.0f);                                         // grey
 }
 
-static void assetDragSource(const std::string& p, bool isDirectory, const std::string& ext)
+static void assetDragSource(const oc::string& p, bool isDirectory, const oc::string& ext)
 {
 	if (isDirectory)
 		return; // dragging a folder isn't meaningful to any current drop target
@@ -109,7 +109,7 @@ static void assetDragSource(const std::string& p, bool isDirectory, const std::s
 	const bool script = isScriptFile(ext);
 	if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None))
 	{
-		const std::string path = p;
+		const oc::string path = p;
 		// Every file is draggable: spawnable/script (.scr or .dsl) keep their dedicated payload (viewport
 		// spawn / script assign), anything else falls back to TEXT_FILE so it can be dropped onto the Script
 		// Editor and viewed/edited as plain text.
@@ -120,7 +120,7 @@ static void assetDragSource(const std::string& p, bool isDirectory, const std::s
 	}
 }
 
-static std::string truncateLabel(const std::string& name, float maxWidth)
+static oc::string truncateLabel(const oc::string& name, float maxWidth)
 {
 	if (ImGui::CalcTextSize(name.c_str()).x <= maxWidth)
 		return name;
@@ -144,24 +144,24 @@ void AssetBrowser::initialize()
 	m_currentPath = m_rootPath;
 }
 
-bool AssetBrowser::isWithinRoot(const std::string& path) const
+bool AssetBrowser::isWithinRoot(const oc::string& path) const
 {
-	const std::string canonical = FileSystem::weaklyCanonicalPath(path, /*allowMainThread*/ true);
+	const oc::string canonical = FileSystem::weaklyCanonicalPath(path, /*allowMainThread*/ true);
 	if (canonical.empty())
 		return false;
-	const std::string rel = FileSystem::relativePath(canonical, m_rootPath, /*allowMainThread*/ true);
+	const oc::string rel = FileSystem::relativePath(canonical, m_rootPath, /*allowMainThread*/ true);
 	// anything starting with ".." escapes the root upward
 	return !rel.empty() && !rel.starts_with("..");
 }
 
-void AssetBrowser::scanDirectory(const std::string& dir, DirListing& out)
+void AssetBrowser::scanDirectory(const oc::string& dir, DirListing& out)
 {
 	ProfileScope scope("Asset dir scan", EProfileCategory::File);
 	out.entries.clear();
 	out.hasSubDirs = false;
 	// The rescan poll runs on the prepare JOB; the first scan of a folder happens inline on the
 	// main thread (there is nothing to draw otherwise), so the listing itself is allowed either way.
-	std::vector<FileSystem::DirEntry> listed;
+	oc::vector<FileSystem::DirEntry> listed;
 	FileSystem::listDirectory(dir, listed, /*allowMainThread*/ true);
 	out.entries.reserve(listed.size());
 	for (const FileSystem::DirEntry& e : listed)
@@ -174,14 +174,14 @@ void AssetBrowser::scanDirectory(const std::string& dir, DirListing& out)
 		info.size = e.size;
 		if (info.isDirectory)
 			out.hasSubDirs = true;
-		out.entries.push_back(std::move(info));
+		out.entries.push_back(oc::move(info));
 	}
-	std::sort(out.entries.begin(), out.entries.end(), [](const DirEntryInfo& a, const DirEntryInfo& b)
+	oc::sort(out.entries.begin(), out.entries.end(), [](const DirEntryInfo& a, const DirEntryInfo& b)
 		{ return a.isDirectory != b.isDirectory ? a.isDirectory : a.name < b.name; });
 	out.lastScanSec = Globals::time.getElapsedSec();
 }
 
-AssetBrowser::DirListing& AssetBrowser::listing(const std::string& dir)
+AssetBrowser::DirListing& AssetBrowser::listing(const oc::string& dir)
 {
 	DirListing& cached = m_dirCache[dir];
 	if (cached.lastScanSec < 0.0)
@@ -238,7 +238,7 @@ void AssetBrowser::render()
 	if (ImGui::IsItemActive())
 	{
 		m_leftPaneWidth += ImGui::GetIO().MouseDelta.x;
-		m_leftPaneWidth  = std::clamp(m_leftPaneWidth, 80.0f, 600.0f);
+		m_leftPaneWidth  = oc::clamp(m_leftPaneWidth, 80.0f, 600.0f);
 	}
 	if (ImGui::IsItemHovered())
 		ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
@@ -266,12 +266,12 @@ void AssetBrowser::render()
 	}
 }
 
-void AssetBrowser::queueSavePrefab(Entity* root, const std::string& path)
+void AssetBrowser::queueSavePrefab(Entity* root, const oc::string& path)
 {
 	invalidateListings(); // the app writes the .pre this frame — show it on the next draw
 	std::error_code ec;
-	const std::string rel = FileSystem::relativePath(path, std::string(), /*allowMainThread*/ true);
-	const std::string savePath = (ec || rel.empty()) ? path : rel;
+	const oc::string rel = FileSystem::relativePath(path, oc::string(), /*allowMainThread*/ true);
+	const oc::string savePath = (ec || rel.empty()) ? path : rel;
 	m_changes.push_back({ EntityChange::SavePrefab{ EntityPtr(root), savePath } });
 	m_selectedPath = path; // absolute, to match the directory listing for highlight
 }
@@ -285,8 +285,8 @@ void AssetBrowser::acceptPrefabDrop()
 	if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("SV_ENTITY"))
 	{
 		Entity* entity = *static_cast<Entity**>(payload->Data);
-		const std::string name = entity->hasName() ? std::string(entity->getName()) : std::string("Prefab");
-		const std::string out = FileSystem::join(m_currentPath, name + ".pre");
+		const oc::string name = entity->hasName() ? oc::string(entity->getName()) : oc::string("Prefab");
+		const oc::string out = FileSystem::join(m_currentPath, name + ".pre");
 		std::error_code ec;
 		if (prefabWouldCycle(entity, name))
 		{
@@ -379,7 +379,7 @@ void AssetBrowser::renderToolbar()
 	ImGui::SameLine();
 
 	{
-		const std::string rootLabel = FileSystem::filename(m_rootPath).empty()
+		const oc::string rootLabel = FileSystem::filename(m_rootPath).empty()
 			? m_rootPath
 			: FileSystem::filename(m_rootPath);
 		ImGui::PushID("##ab_crumb_root");
@@ -389,12 +389,12 @@ void AssetBrowser::renderToolbar()
 
 		// LEXICAL, not relativePath(): this runs every frame and std::filesystem::relative resolves
 		// both sides through weakly_canonical (real syscalls). Both paths are already canonical.
-		const std::string rel = FileSystem::lexicallyRelative(m_currentPath, m_rootPath);
-		std::string accumulated = m_rootPath;
+		const oc::string rel = FileSystem::lexicallyRelative(m_currentPath, m_rootPath);
+		oc::string accumulated = m_rootPath;
 		if (!rel.empty() && rel != ".")
 		{
 			int i = 0;
-			for (const std::string& part : splitPathComponents(rel))
+			for (const oc::string& part : splitPathComponents(rel))
 			{
 				accumulated = FileSystem::join(accumulated, part);
 				ImGui::SameLine(0.0f, 2.0f);
@@ -437,7 +437,7 @@ void AssetBrowser::renderToolbar()
 	}
 }
 
-void AssetBrowser::renderDirectoryTree(const std::string& dir)
+void AssetBrowser::renderDirectoryTree(const oc::string& dir)
 {
 	// NO is_directory() probe here: it ran per node PER FRAME (a stat syscall each). The caller only
 	// ever recurses into entries the cached listing already marked as directories, and a folder that
@@ -453,7 +453,7 @@ void AssetBrowser::renderDirectoryTree(const std::string& dir)
 	if (!hasSubDirs) flags |= ImGuiTreeNodeFlags_Leaf;
 	if (dir == m_rootPath) flags |= ImGuiTreeNodeFlags_DefaultOpen;
 
-	const std::string label = FileSystem::filename(dir).empty()
+	const oc::string label = FileSystem::filename(dir).empty()
 		? dir
 		: FileSystem::filename(dir);
 
@@ -469,11 +469,11 @@ void AssetBrowser::renderDirectoryTree(const std::string& dir)
 		// The listing is sorted directories-first by name, so this is the same order as before.
 		// Copy the paths: the recursion inserts into m_dirCache, and while unordered_map keeps
 		// references stable, the vector inside THIS listing must not be read across those inserts.
-		std::vector<std::string> subDirs;
+		oc::vector<oc::string> subDirs;
 		for (const DirEntryInfo& entry : dirListing.entries)
 			if (entry.isDirectory)
 				subDirs.push_back(entry.path);
-		for (const std::string& sub : subDirs)
+		for (const oc::string& sub : subDirs)
 			renderDirectoryTree(sub);
 		ImGui::TreePop();
 	}
@@ -484,7 +484,7 @@ void AssetBrowser::renderContentGrid()
 	ProfileScope scope("AB grid", EProfileCategory::UI);
 	const float cellSize    = m_iconSize + 20.0f;
 	const float panelWidth  = ImGui::GetContentRegionAvail().x;
-	const int   columnCount = std::max(1, static_cast<int>(panelWidth / cellSize));
+	const int   columnCount = oc::max(1, static_cast<int>(panelWidth / cellSize));
 	DirListing& dirListing = listing(m_currentPath); // cached + pre-sorted
 
 	if (ImGui::BeginTable("##ab_grid", columnCount, ImGuiTableFlags_None))
@@ -494,8 +494,8 @@ void AssetBrowser::renderContentGrid()
 			if (!passesFilter(entry.name, m_searchBuf))
 				continue;
 			ImGui::TableNextColumn();
-			const std::string& p = entry.path;
-			const std::string& name = entry.name;
+			const oc::string& p = entry.path;
+			const oc::string& name = entry.name;
 			const bool isSelected  = (p == m_selectedPath);
 
 			ImGui::PushID(name.c_str());
@@ -532,7 +532,7 @@ void AssetBrowser::renderContentGrid()
 				entry.display = truncateLabel(name, labelWidth);
 				entry.displayWidth = labelWidth;
 			}
-			const std::string& display = entry.display;
+			const oc::string& display = entry.display;
 			ImGui::TextUnformatted(display.c_str());
 			if (display != name && ImGui::IsItemHovered())
 				ImGui::SetTooltip("%s", name.c_str());
@@ -568,8 +568,8 @@ void AssetBrowser::renderContentList()
 		{
 			if (!passesFilter(entry.name, m_searchBuf))
 				continue;
-			const std::string& p = entry.path;
-			const std::string& name        = entry.name;
+			const oc::string& p = entry.path;
+			const oc::string& name        = entry.name;
 			const bool isSelected          = (p == m_selectedPath);
 
 			ImGui::TableNextRow();
@@ -629,7 +629,7 @@ void AssetBrowser::renderContentList()
 	}
 }
 
-void AssetBrowser::renderContextMenu(const std::string& p)
+void AssetBrowser::renderContextMenu(const oc::string& p)
 {
 	// (no ProfileScope: this runs PER ITEM — hundreds of records per frame would flood the ring.
 	// The early-out below means an unopened popup costs one ImGui call.)
@@ -647,8 +647,8 @@ void AssetBrowser::renderContextMenu(const std::string& p)
 	if (ImGui::MenuItem("Rename"))
 	{
 		m_renameTarget = p;
-		const std::string fname = FileSystem::filename(p);
-		const size_t n = std::min(fname.size(), sizeof(m_renameBuf) - 1);
+		const oc::string fname = FileSystem::filename(p);
+		const size_t n = oc::min(fname.size(), sizeof(m_renameBuf) - 1);
 		for (size_t i = 0; i < sizeof(m_renameBuf); ++i) m_renameBuf[i] = i < n ? fname[i] : '\0';
 		m_openRenamePopup = true;
 	}
@@ -658,7 +658,7 @@ void AssetBrowser::renderContextMenu(const std::string& p)
 #if defined(_WIN32)
 	if (ImGui::MenuItem("Show in Explorer"))
 	{
-		const std::string cmd = "explorer /select,\"" + p + "\"";
+		const oc::string cmd = "explorer /select,\"" + p + "\"";
 		std::system(cmd.c_str());
 	}
 #endif
@@ -694,7 +694,7 @@ void AssetBrowser::renderContextMenu(const std::string& p)
 	ImGui::EndPopup();
 }
 
-void AssetBrowser::navigateTo(const std::string& path)
+void AssetBrowser::navigateTo(const oc::string& path)
 {
 	std::error_code ec;
 	if (FileSystem::isDirectory(path, /*allowMainThread*/ true) && isWithinRoot(path))
@@ -708,9 +708,9 @@ void AssetBrowser::navigateTo(const std::string& path)
 	}
 }
 
-void AssetBrowser::selectFile(const std::string& path)
+void AssetBrowser::selectFile(const oc::string& path)
 {
-	const std::string abs = FileSystem::canonicalPath(path, /*allowMainThread*/ true);
+	const oc::string abs = FileSystem::canonicalPath(path, /*allowMainThread*/ true);
 	if (abs.empty() || FileSystem::parentPath(abs).empty())
 		return;
 	navigateTo(FileSystem::parentPath(abs));
@@ -732,7 +732,7 @@ void AssetBrowser::renderNewAssetContextMenu()
 		// A .dsl, not a .scr -- the node system is deprecated for new scripts. The file written is the SMALLEST
 		// loadable document (an empty version-1 block); it opens in the Script Editor immediately through the
 		// same request a double-click raises, and that editor's own Save writes the full form from then on.
-		const std::string path = makeUniqueAssetPath("NewScript", ".dsl");
+		const oc::string path = makeUniqueAssetPath("NewScript", ".dsl");
 		if (FileSystem::writeFileStr(path, "//@@dsl 1\n//@@end\n"))
 		{
 			m_scriptOpenRequest = path;
@@ -741,7 +741,7 @@ void AssetBrowser::renderNewAssetContextMenu()
 	}
 	if (ImGui::MenuItem("New Text File"))
 	{
-		const std::string path = makeUniqueAssetPath("NewText", ".txt");
+		const oc::string path = makeUniqueAssetPath("NewText", ".txt");
 		if (FileSystem::writeFileStr(path, ""))
 		{
 			m_textOpenRequest = path;
@@ -750,8 +750,8 @@ void AssetBrowser::renderNewAssetContextMenu()
 	}
 	if (ImGui::MenuItem("New Prefab"))
 	{
-		const std::string path = makeUniqueAssetPath("NewPrefab", ".pre");
-		const std::string id = FileSystem::stem(path);
+		const oc::string path = makeUniqueAssetPath("NewPrefab", ".pre");
+		const oc::string id = FileSystem::stem(path);
 		if (FileSystem::writeFileStr(path, "Prefab " + id + "\n"))
 		{
 			Globals::assetRegistry.addPrefab(id, path);
@@ -762,14 +762,14 @@ void AssetBrowser::renderNewAssetContextMenu()
 	ImGui::EndPopup();
 }
 
-std::string AssetBrowser::makeUniqueAssetPath(const char* stem, const char* ext) const
+oc::string AssetBrowser::makeUniqueAssetPath(const char* stem, const char* ext) const
 {
-	std::string candidate = FileSystem::join(m_currentPath, std::string(stem) + ext);
+	oc::string candidate = FileSystem::join(m_currentPath, oc::string(stem) + ext);
 	if (!FileSystem::exists(candidate, /*allowMainThread*/ true))
 		return candidate;
 	for (int i = 1; i < 1000; ++i)
 	{
-		candidate = FileSystem::join(m_currentPath, stem + std::to_string(i) + ext);
+		candidate = FileSystem::join(m_currentPath, stem + oc::to_string(i) + ext);
 		if (!FileSystem::exists(candidate, /*allowMainThread*/ true))
 			return candidate;
 	}
@@ -797,7 +797,7 @@ void AssetBrowser::renderRenamePopup()
 
 	const bool hasName = m_renameBuf[0] != '\0';
 	std::error_code ec;
-	std::string dest;
+	oc::string dest;
 	bool conflict = false;
 	if (hasName)
 	{

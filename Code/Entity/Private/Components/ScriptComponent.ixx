@@ -29,7 +29,7 @@ export struct ScriptComponent
     static constexpr EComponentID getId() { return EComponentID_Script; }
 
     const ScriptModule* scriptModule = nullptr;
-    std::unique_ptr<uint8[]> scriptData;
+    oc::unique_ptr<uint8[]> scriptData;
     uint32 scriptDataSize = 0;
     uint32 scriptDataLayoutId = 0; // what the block was allocated against -- a reload with a different layout
                                     // can't reuse it (see ScriptDataLayoutIdFn in ScriptAPI.h)
@@ -38,7 +38,7 @@ export struct ScriptComponent
     // Every engine-owned array (the DSL's `T[]`) this script created, by handle -- the ScriptData block only
     // holds the ids, so this is what actually owns the storage and frees it when the component dies or its
     // data block is discarded. See the array registry in ScriptContext.cpp.
-    std::vector<uint32> ownedArrays;
+    oc::vector<uint32> ownedArrays;
 
     ~ScriptComponent();
 
@@ -62,21 +62,21 @@ export struct ScriptComponent
     // and is deliberately never serialized.
     struct InitialFieldValue
     {
-        std::string name;
-        std::string value;
+        oc::string name;
+        oc::string value;
     };
 
     struct SpawnInfo
     {
-        std::string scriptPath;
+        oc::string scriptPath;
         bool enabled = true;
-        std::vector<InitialFieldValue> initialValues;
+        oc::vector<InitialFieldValue> initialValues;
     };
 
     // A COPY of the SpawnInfo's initial values, so they survive template retirement and -- the reason this
     // exists -- a hot-reload: syncScriptData reallocates and ZEROES the block whenever the layout changes, which
     // would otherwise silently reset every authored value to zero.
-    std::vector<InitialFieldValue> initialValues;
+    oc::vector<InitialFieldValue> initialValues;
 
     // Writes the authored values into the (freshly allocated) block, matching names against the module's
     // exposed-field table and parsing each text by that field's type. Unknown names and unparseable text are
@@ -91,7 +91,7 @@ export struct ScriptComponent
     void update(Entity& entity, float deltaSeconds);
 
     // Fires a named On Event entry (e.g. an animation notify). No-ops if the script declares no such entry.
-    void fireEvent(Entity& entity, const std::string& eventName);
+    void fireEvent(Entity& entity, const oc::string& eventName);
     void fireEvent(Entity& entity, uint32 eventKey); // Globals::scriptEvents.getEventKeyForName
 
     // Fires the On Physics Event entry point (see dispatchPhysicsContactEvents). No-ops if the script

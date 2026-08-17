@@ -4,11 +4,11 @@ import Core;
 import Core.glm;
 import Core.Tweaks;
 
-static constexpr std::string_view levelCellNames[Morton::MaxLevels] = {
+static constexpr oc::string_view levelCellNames[Morton::MaxLevels] = {
     "L0 cells", "L1 cells", "L2 cells", "L3 cells", "L4 cells", "L5 cells",
     "L6 cells", "L7 cells", "L8 cells", "L9 cells", "L10 cells",
 };
-static constexpr std::string_view levelEntryNames[Morton::MaxLevels] = {
+static constexpr oc::string_view levelEntryNames[Morton::MaxLevels] = {
     "L0 entries", "L1 entries", "L2 entries", "L3 entries", "L4 entries", "L5 entries",
     "L6 entries", "L7 entries", "L8 entries", "L9 entries", "L10 entries",
 };
@@ -23,10 +23,10 @@ void SpatialEntry::reset()
 }
 
 // Lock-free max for the clamped-oversize radius (updateEntry runs concurrently on jobs).
-static void atomicFloatMax(std::atomic<float>& target, float value)
+static void atomicFloatMax(oc::atomic<float>& target, float value)
 {
-    float current = target.load(std::memory_order_relaxed);
-    while (value > current && !target.compare_exchange_weak(current, value, std::memory_order_relaxed)) {}
+    float current = target.load(oc::memory_order_relaxed);
+    while (value > current && !target.compare_exchange_weak(current, value, oc::memory_order_relaxed)) {}
 }
 
 void SpatialIndex::initialize(const SpatialIndexDesc& desc)
@@ -37,7 +37,7 @@ void SpatialIndex::initialize(const SpatialIndexDesc& desc)
         m_levels[i].initialize(desc.initialCellCapacity);
     m_pool.initialize(desc.initialEntryCapacity);
     m_pendingOps.initialize(); // requires the JobSystem (sized by scheduler context count)
-    m_pendingOps.forEach([](std::vector<PendingOp>& ops) { ops.reserve(1024); });
+    m_pendingOps.forEach([](oc::vector<PendingOp>& ops) { ops.reserve(1024); });
     m_initialized = true;
 
     Tweak::intVar("Spatial/Stats", "Entries", &m_stats.numEntries, 0, INT32_MAX);
@@ -63,7 +63,7 @@ void SpatialIndex::initialize(const SpatialIndexDesc& desc)
     Tweak::intVar("Spatial/Stats", "Static rebuilds", &m_stats.staticRebuilds, 0, INT32_MAX);
     Tweak::floatVar("Spatial/Stats", "Rebuild ms", &m_stats.rebuildMs, 0.0f, FLT_MAX, 0.001f);
 
-    static constexpr std::string_view cullModeNames[] = { "Off", "Stats only", "Cull", "Main only (debug)" };
+    static constexpr oc::string_view cullModeNames[] = { "Off", "Stats only", "Cull", "Main only (debug)" };
     Tweak::enumVar("Spatial/Culling", "Mode", &m_culling.mode, cullModeNames);
     Tweak::boolean("Spatial/Culling", "Freeze", &m_culling.freeze);
     Tweak::floatVar("Spatial/Culling", "Margin", &m_culling.margin, 0.0f, 64.0f, 0.1f);
@@ -175,7 +175,7 @@ void SpatialIndex::commitFrame()
     // Moves for one entry in one slot). The lone cross-slot case - Link (main) + first Move (worker)
     // in the same frame - self-heals: a Move that lands before its Link skips on RecordFlag_Unlinked
     // and leaves PendingMove set, which forces the next updateEntry to re-queue it.
-    m_pendingOps.forEach([&](std::vector<PendingOp>& ops)
+    m_pendingOps.forEach([&](oc::vector<PendingOp>& ops)
     {
     for (const PendingOp& op : ops)
     {
@@ -370,7 +370,7 @@ void SpatialIndex::rebuildStaticLevel(uint32 level)
     StaticStore& store = m_static[level];
 
     struct Add { uint64 key; uint32 poolIdx; };
-    std::vector<Add> adds;
+    oc::vector<Add> adds;
     adds.reserve(store.pendingPromotions.size());
     for (const StaticStore::Pending& pending : store.pendingPromotions)
     {
@@ -387,14 +387,14 @@ void SpatialIndex::rebuildStaticLevel(uint32 level)
         adds.push_back({ m_pool.cellKey[pending.idx], pending.idx });
     }
     store.pendingPromotions.clear();
-    std::sort(adds.begin(), adds.end(), [](const Add& a, const Add& b) { return a.key < b.key; });
+    oc::sort(adds.begin(), adds.end(), [](const Add& a, const Add& b) { return a.key < b.key; });
 
     // merge the (sorted) surviving store with the sorted additions into fresh arrays
     const uint32 oldSize = store.size();
     const uint32 newCapacity = oldSize - store.numTombstones + uint32(adds.size());
-    std::vector<float> posX, posY, posZ, radius;
-    std::vector<uint32> layer, poolIdx;
-    std::vector<uint64> cellKey;
+    oc::vector<float> posX, posY, posZ, radius;
+    oc::vector<uint32> layer, poolIdx;
+    oc::vector<uint64> cellKey;
     posX.reserve(newCapacity); posY.reserve(newCapacity); posZ.reserve(newCapacity);
     radius.reserve(newCapacity); layer.reserve(newCapacity); poolIdx.reserve(newCapacity);
     cellKey.reserve(newCapacity);

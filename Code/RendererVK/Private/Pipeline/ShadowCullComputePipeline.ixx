@@ -57,5 +57,5 @@ private:
         Buffer outMeshInstanceIndexesBuffer; // 7
         Buffer outIndirectCommandBuffer;     // 8 - single opaque region
     };
-    std::array<PerFrameData, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_perFrameData;
+    oc::array<PerFrameData, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_perFrameData;
 };

@@ -27,7 +27,7 @@ public:
 	float      getEmissiveIntensity() const override;
 	float      getRefractiveIndex()   const override;
 
-	std::string getTexturePath(ETextureType type) const override;
+	oc::string getTexturePath(ETextureType type) const override;
 
 	uint32 getDiffuseTexIdx() const override;
 	uint32 getNormalTexIdx()  const override;
@@ -40,7 +40,7 @@ public:
 	void setMetalRoughnessTexIdx(uint32 idx) { m_metalRoughnessTexIdx = idx; }
 
 private:
-	std::string m_name;
+	oc::string m_name;
 	glm::vec3   m_baseColor         = { 1.0f, 1.0f, 1.0f };
 	glm::vec3   m_emissiveColor     = { 0.0f, 0.0f, 0.0f };
 	glm::vec3   m_specularColor     = { 0.0f, 0.0f, 0.0f };

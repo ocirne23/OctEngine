@@ -21,8 +21,8 @@ public:
     // HRTF direction, distance attenuation and doppler. Master volume is a Tweak under Audio/System.
 	void update(const Camera& camera, const glm::vec3& listenerVelocity = glm::vec3(0.0f));
 
-    AudioBuffer createBuffer(EAudioFormat format, std::span<const std::byte> pcmData, uint32 sampleRate);
-    AudioBuffer loadSound(std::string_view path); // WAV/FLAC/MP3, relative to Assets/
+    AudioBuffer createBuffer(EAudioFormat format, oc::span<const std::byte> pcmData, uint32 sampleRate);
+    AudioBuffer loadSound(oc::string_view path); // WAV/FLAC/MP3, relative to Assets/
 
     AudioSource createSource();
 
@@ -44,7 +44,7 @@ private:
     bool m_initialized = false;
     float m_masterVolume = 1.0f;
     uint32 m_oneShotSteal = 0;
-    std::vector<AudioSource> m_oneShotPool;
+    oc::vector<AudioSource> m_oneShotPool;
 };
 
 export namespace Globals

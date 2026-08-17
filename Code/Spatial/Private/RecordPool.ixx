@@ -68,18 +68,18 @@ public:
     uint32 capacity() const { return m_capacity; }
     uint32 numAlive() const { return m_numAlive; }
 
-    std::vector<float> posX, posY, posZ; // relative to the owning cell's min corner
-    std::vector<float> radius;           // negative = neutralized (pending free), fails every test
-    std::vector<uint64> cellKey;         // current cell Morton key at `level`
-    std::vector<uint64> userData;
-    std::vector<uint32> next, prev;      // intrusive per-cell doubly-linked list
-    std::vector<uint32> layerMask;
-    std::vector<uint32> gen;
-    std::array<std::vector<uint32>, NumSpatialPasses> lastVisible; // stamp generation per pass
-    std::vector<uint32> lastMoveFrame;
-    std::vector<uint32> storeIdx; // StaticTier: slot in the level's StaticStore, UINT32_MAX = pending
-    std::vector<uint8> level;
-    std::vector<uint8> flags;
+    oc::vector<float> posX, posY, posZ; // relative to the owning cell's min corner
+    oc::vector<float> radius;           // negative = neutralized (pending free), fails every test
+    oc::vector<uint64> cellKey;         // current cell Morton key at `level`
+    oc::vector<uint64> userData;
+    oc::vector<uint32> next, prev;      // intrusive per-cell doubly-linked list
+    oc::vector<uint32> layerMask;
+    oc::vector<uint32> gen;
+    oc::array<oc::vector<uint32>, NumSpatialPasses> lastVisible; // stamp generation per pass
+    oc::vector<uint32> lastMoveFrame;
+    oc::vector<uint32> storeIdx; // StaticTier: slot in the level's StaticStore, UINT32_MAX = pending
+    oc::vector<uint8> level;
+    oc::vector<uint8> flags;
 
 private:
 
@@ -92,7 +92,7 @@ private:
         next.resize(m_capacity); prev.resize(m_capacity);
         layerMask.resize(m_capacity);
         gen.resize(m_capacity);
-        for (std::vector<uint32>& pass : lastVisible)
+        for (oc::vector<uint32>& pass : lastVisible)
             pass.resize(m_capacity);
         lastMoveFrame.resize(m_capacity);
         storeIdx.resize(m_capacity);
