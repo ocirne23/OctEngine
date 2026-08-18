@@ -19,6 +19,7 @@ add_definitions(/FI"${ROOT_DIR}/Code/Core/Private/forceinclude.h"
 	/wd5260 # the constant variable 'ai_epsilon' has internal linkage in an included header file context, but external linkage in imported header unit context
 	/wd5105 # macro expansion producing 'defined' has undefined behavior
 	/wd4324 # structure was padded due to alignment specifier - deliberate cache-line alignment in Threading, re-fires in every importer
+	/wd5311 # deprecated literal-operator-id form in EASTL's string.h (third-party), re-fires in every importer of Core
 )
 
 # Cooked/shipping build: compile the visual scripts straight INTO the engine (the App-Scripts target) so their

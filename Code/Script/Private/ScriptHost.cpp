@@ -36,7 +36,7 @@ static const StaticScriptFns* findStaticEntries(const oc::string& path)
     {
         oc::string nk = k;
         for (char& c : nk) if (c == '\\') c = '/';
-        if (norm == nk || norm.ends_with(nk) || nk.ends_with(norm))
+        if (norm == nk || oc::endsWith(norm, nk) || oc::endsWith(nk, norm))
             return &v;
     }
     return nullptr;
