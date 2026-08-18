@@ -7,7 +7,3 @@ Prefab gameFuelNode
 		Type StaticMesh
 		Color 1 0.55 0.15
 		Scale 0.8
-	Component Physics
-		Body Static
-		Shape Box
-		HalfExtents 0.6 0.8 0.6

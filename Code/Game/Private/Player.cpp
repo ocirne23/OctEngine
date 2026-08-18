@@ -14,7 +14,7 @@ import Force;
 import Nav;
 import :Player;
 
-static constexpr uint32 c_navGoalSlot = 0; // the local player's move-order goal field
+static constexpr uint64 c_navGoalSlot = Nav::NavSystem::GoalKeyPlayer; // the local player's move-order goal field
 
 void GamePlayer::registerTweaks()
 {

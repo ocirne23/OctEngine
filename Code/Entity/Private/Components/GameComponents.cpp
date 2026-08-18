@@ -79,6 +79,18 @@ void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
         h = shieldOutput;
     m_rng = uint32(uintptr_t(this) >> 4) * 2654435761u + 1u; // worker-safe per-unit stream
     m_retargetTimer = 0.0f; // pick a target on the first authority tick
+    if (const PhysicsComponent::SpawnInfo* si = getPhysicsSpawnInfo(&entity))
+    {
+        float r = 0.5f;
+        switch (si->shape.type)
+        {
+        case EPhysicsShapeType::Box:     r = glm::max(si->shape.halfExtents.x, si->shape.halfExtents.z); break;
+        case EPhysicsShapeType::Sphere:
+        case EPhysicsShapeType::Capsule: r = si->shape.radius; break;
+        default: break;
+        }
+        bodyRadius = r * entity.scale;
+    }
 }
 
 // Tiny LCG: units roll targets/jitters on WORKERS — the engine script RNG is fine but this keeps
@@ -98,9 +110,11 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
     if (!pc || !pc->body.isValid())
         return;
     const glm::vec3 pos = pc->body.getPosition();
-    // Crowd presence for the anti-clumping gradient (players count as crowd too).
-    if (params.navEnabled && Globals::navSystem.isEnabled())
-        Globals::navSystem.density(team).splat(glm::vec2(pos.x, pos.z), 1);
+    // Crowd PRESENCE = a weak continuous pressure source (players count as crowd too): the
+    // diffused pressure field doubles as a smoothed crowd density, and the pressure term of the
+    // context steering keeps units spaced. The stall injection below is ~40x stronger.
+    if (params.navEnabled && Globals::navSystem.isEnabled() && params.presencePressure > 0.0f)
+        Globals::navSystem.pressure(team).inject(glm::vec2(pos.x, pos.z), params.presencePressure * deltaSec * 60.0f);
     if (puppet)
         return; // puppets are state carriers (GamePlayer writes them) — no sim
     if (health <= 0.0f || pos.y < params.voidY)
@@ -120,6 +134,9 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
     }
 
     // ---- where to walk: route first, then the locked order, then auto-targeting ----
+    if (targetLocked && moveOrder && glm::distance(glm::vec2(pos.x, pos.z),
+        glm::vec2(targetPos.x, targetPos.z)) < params.waypointRadius)
+        targetLocked = moveOrder = false; // arrived: back to the AI
     bool routing = false;
     glm::vec3 walkTarget = pos;
     bool haveWalkTarget = false;
@@ -301,24 +318,44 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
         // targeting needed, standing in the swarm hurts. Found in the SAME short probe as the
         // structure bite; same damage() call as every other victim (the puppet component banks it
         // in pendingDamage; the game routes that to the owner).
-        if (playerDps > 0.0f)
-            for (const uint64 user : nearby)
+        // ... and enemy UNITS the same way (unit-vs-unit melee: attackDps against the victim's body
+        // ring). Ranged units do not melee.
+        for (const uint64 user : nearby)
+        {
+            Entity* other = reinterpret_cast<Entity*>(user);
+            GameUnitComponent* pu = getComponent<GameUnitComponent>(other);
+            if (!pu || pu == this || pu->team == team || !pu->alive())
+                continue;
+            const glm::vec2 toOther(other->pos.x - pos.x, other->pos.z - pos.z);
+            if (glm::abs(other->pos.y - pos.y) >= 3.0f)
+                continue;
+            if (pu->puppet)
             {
-                Entity* other = reinterpret_cast<Entity*>(user);
-                GameUnitComponent* pu = getComponent<GameUnitComponent>(other);
-                if (!pu || !pu->puppet || pu->team == team)
-                    continue;
-                const glm::vec2 toPlayer(other->pos.x - pos.x, other->pos.z - pos.z);
                 const float reach = attackRange + 0.8f; // capsule body allowance
-                if (glm::dot(toPlayer, toPlayer) < reach * reach
-                    && glm::abs(other->pos.y - pos.y) < 3.0f)
+                if (playerDps > 0.0f && glm::dot(toOther, toOther) < reach * reach)
                     pu->damage(playerDps * deltaSec);
             }
+            else if (!ranged)
+            {
+                const float reach = attackRange + pu->bodyRadius;
+                if (glm::dot(toOther, toOther) < reach * reach)
+                {
+                    pu->damage(attackDps * deltaSec);
+                    stopRange = glm::max(stopRange, reach); // hold at the ring, no shoving through
+                }
+            }
+        }
     }
 
-    // ---- steering: planar velocity along the flow-field descent (or straight at the walk target
-    // where no field covers us), minus the own-crowd density gradient, stuck-sidestep as the last
-    // resort. Writes are QUEUED (workers) — one frame of latency, the queue's normal contract.
+    // ---- steering: CONTEXT STEERING over the fields. Each tick the unit scores a fan of candidate
+    // headings and takes the best: goal alignment (the enemy field's descent where one covers us,
+    // else straight at the walk target), how far the raster is open along the candidate (a body-
+    // radius whisker), the own-crowd FLOW (join the lane), persistence (keep the last heading),
+    // minus the PRESSURE gradient (crowd presence + jams, diffused). While STALLED the weights shift toward the fields
+    // and away from goal/persistence, so the fields become the preference exactly when the unit
+    // has problems. No search, no per-unit path state beyond the last heading. Every moving unit
+    // contributes back: measured velocity into the flow, presence + jam pressure into the pressure
+    // field. Writes are QUEUED (workers) — one frame of latency, the queue's normal contract.
     glm::vec3 vel = pc->body.getLinearVelocity();
     if (haveWalkTarget)
     {
@@ -326,34 +363,98 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
         const float dist = glm::length(toTarget);
         if (dist > stopRange)
         {
-            glm::vec2 dir = navSteer ? navDir : toTarget / glm::max(dist, 1e-3f);
-            if (params.navEnabled && params.spreadGain > 0.0f && Globals::navSystem.isEnabled())
+            const glm::vec2 here(pos.x, pos.z);
+            glm::vec2 goalDir = navSteer ? navDir : toTarget / glm::max(dist, 1e-3f);
+            glm::vec2 dir = goalDir;
+            const bool fields = params.navEnabled && Globals::navSystem.isEnabled();
+            const Nav::TeamField* raster = fields ? Globals::navSystem.raster() : nullptr;
+            // STUCK DETECTION by DISPLACEMENT, not by per-tick progress (a jittering unit's heading
+            // changes every tick, so progress-along-heading never accumulates): every 0.75 s the
+            // position is checkpointed; moved less than 0.6 m since the last checkpoint = stalled
+            // time accrues, else it resets. m_pressureTimer IS that stalled time.
+            m_stuckCheckTimer -= deltaSec;
+            if (m_stuckCheckTimer <= 0.0f)
             {
-                // Down the crowd gradient: a unit shifts away from where its own team is thickest.
-                // Bounded so a wall of allies never overrides the destination entirely.
-                const glm::vec2 g = Globals::navSystem.density(team).gradient(glm::vec2(pos.x, pos.z));
-                const float gl = glm::length(g);
-                if (gl > 1e-4f)
-                    dir = glm::normalize(dir - g / gl * glm::min(gl * params.spreadGain, 0.9f));
+                const float moved = m_hasStuckAnchor ? glm::distance(here, m_stuckAnchor) : 10.0f;
+                m_pressureTimer = moved < 0.6f ? m_pressureTimer + 0.75f : 0.0f;
+                m_stuckAnchor = here;
+                m_hasStuckAnchor = true;
+                m_stuckCheckTimer = 0.75f;
             }
-            const glm::vec2 planarVel(vel.x, vel.z);
-            if (glm::dot(planarVel, planarVel) < 0.09f * moveSpeed * moveSpeed)
-                m_stuckTimer += deltaSec;
-            else
-                m_stuckTimer = 0.0f;
-            // With a field steering, the sidestep only fires after a longer stall (bodies blocking
-            // each other) — the field already routes around geometry.
-            if (m_stuckTimer > (navSteer ? 1.5f : 0.7f) && m_avoidTimer <= 0.0f)
+            if (raster)
             {
-                m_avoidTimer = 0.6f + 0.6f * unitRand01(m_rng);
-                m_avoidSign = unitRand01(m_rng) < 0.5f ? -1.0f : 1.0f;
-                m_stuckTimer = 0.0f;
+                const bool stalled = m_pressureTimer > 0.4f;
+                // REALLY stuck (past "Unstick after"): forget the real goal and the last heading.
+                // The ESCAPE goal is where the crowd around us is going (mean flow over the open
+                // 5x5 neighbourhood), or failing that the open neighbouring cell with the LOWEST
+                // pressure within 3 cells — a corner's own gradient is muddy, a target cell is not.
+                // A small per-unit random rotation breaks symmetric locks between two units.
+                const bool unstick = m_pressureTimer > params.unstickAfter;
+                float wGoal = unstick ? 0.0f : params.steerGoal * (stalled ? 0.3f : 1.0f);
+                if (unstick)
+                {
+                    const glm::vec2 around = Globals::navSystem.flow(team).sampleArea(here, 2, raster);
+                    glm::vec2 escape;
+                    if (glm::length(around) > 0.3f)
+                        goalDir = glm::normalize(around);
+                    else if (Globals::navSystem.pressure(team).lowestNearby(here, 3, raster, escape)
+                        && glm::length(escape - here) > 0.2f)
+                        goalDir = glm::normalize(escape - here);
+                    wGoal = 1.5f;
+                }
+                m_ignoreFlowTimer = glm::max(0.0f, m_ignoreFlowTimer - deltaSec);
+                const float wFlow = m_ignoreFlowTimer > 0.0f ? 0.0f
+                    : params.steerFlow * (unstick ? 0.5f : stalled ? 2.0f : 1.0f);
+                const float wPersist = unstick ? 0.0f : params.steerPersist * (stalled ? 0.2f : 1.0f);
+                const float wFree = params.steerFree * (unstick ? 3.0f : stalled ? 2.0f : 1.0f);
+                const float wPressure = params.steerPressure * (unstick ? 3.0f : 1.0f);
+                const float look = glm::max(params.steerLook, moveSpeed * 1.0f);
+                const float radius = bodyRadius + 0.15f;
+                // Field reads once (cell-local, cheap).
+                glm::vec2 lane = Globals::navSystem.flow(team).sample(here);
+                const float laneLen = glm::length(lane);
+                const float laneW = laneLen > 0.3f ? glm::min(laneLen / glm::max(moveSpeed, 0.1f), 1.0f) : 0.0f;
+                if (laneLen > 1e-4f) lane /= laneLen;
+                glm::vec2 gp = Globals::navSystem.pressure(team).gradient(here);
+                const float gpLen = glm::length(gp);
+                const float gpW = glm::min(gpLen, 1.0f);
+                if (gpLen > 1e-4f) gp /= gpLen;
+                // Candidate fan: 16 headings, phase-rotated per unit so a crowd does not quantize
+                // onto the same 16 directions.
+                constexpr int c_candidates = 16;
+                const float phase = float(m_rng & 0xFFFF) / 65536.0f * (glm::two_pi<float>() / c_candidates);
+                float bestScore = -FLT_MAX;
+                glm::vec2 best = goalDir;
+                for (int k = 0; k < c_candidates; ++k)
+                {
+                    const float a = phase + float(k) * (glm::two_pi<float>() / c_candidates);
+                    const glm::vec2 d(std::cos(a), std::sin(a));
+                    const float freeLen = raster->freeDistance(here, d, look, radius);
+                    if (freeLen < radius + 0.1f)
+                        continue; // blocked right at the body: not a heading
+                    const float free = freeLen / look;
+                    float score = free * (wGoal * glm::dot(d, goalDir)
+                        + wFlow * laneW * glm::dot(d, lane)
+                        + (m_hasLastDir ? wPersist * glm::dot(d, m_lastDir) : 0.0f)
+                        + wFree);
+                    score -= wPressure * gpW * glm::dot(d, gp);
+                    if (score > bestScore)
+                    {
+                        bestScore = score;
+                        best = d;
+                    }
+                }
+                dir = best;
+                if (unstick)
+                {
+                    const float jitter = (unitRand01(m_rng) - 0.5f) * glm::radians(60.0f);
+                    const float c = std::cos(jitter), sn = std::sin(jitter);
+                    dir = glm::vec2(dir.x * c - dir.y * sn, dir.x * sn + dir.y * c);
+                }
+                m_lastDir = dir;
+                m_hasLastDir = true;
             }
-            if (m_avoidTimer > 0.0f)
-            {
-                m_avoidTimer -= deltaSec;
-                dir = glm::normalize(glm::vec2(-dir.y, dir.x) * m_avoidSign + dir * 0.25f);
-            }
+            const glm::vec2 measured(vel.x, vel.z); // the body's REAL planar velocity (pre-command)
             glm::vec3 dv(dir.x * moveSpeed - vel.x, 0.0f, dir.y * moveSpeed - vel.z);
             const float maxDv = accel * deltaSec;
             const float dvLen = glm::length(dv);
@@ -362,6 +463,19 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             Globals::physics.queueBodyCommand(pc->body, PhysicsWorld::EBodyCommand::SetLinearVelocity,
                 vel + glm::vec3(dv.x, 0.0f, dv.z));
             vel += glm::vec3(dv.x, 0.0f, dv.z);
+            if (fields)
+            {
+                // Splat what the body actually DID last step, not what we just commanded — a
+                // unit pinned against a wall must not write "moving into the wall" into the lane.
+                Globals::navSystem.flow(team).splat(glm::vec2(pos.x, pos.z), measured);
+                // BACK-PRESSURE: stalled (see the displacement checkpoints above) -> inject into
+                // the team PRESSURE field, growing with the stall; it diffuses outward each frame.
+                if (m_pressureTimer > 0.4f && params.stuckPressure > 0.0f)
+                {
+                    const float strength = glm::min(m_pressureTimer - 0.4f, 1.5f) * params.stuckPressure;
+                    Globals::navSystem.pressure(team).inject(glm::vec2(pos.x, pos.z), strength * deltaSec * 60.0f);
+                }
+            }
         }
     }
 

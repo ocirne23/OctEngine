@@ -330,6 +330,139 @@ bool TeamField::steerPoint(const glm::vec2& xz, int maxSteps, float radius, glm:
     return true;
 }
 
+glm::vec2 TeamField::avoid(const glm::vec2& xz, const glm::vec2& dir, float lookAhead, float radius, int& side) const
+{
+    const float len = glm::length(dir);
+    if (len < 1e-4f)
+        return dir;
+    const glm::vec2 d = dir / len;
+    if (lineOfSight(xz, xz + d * lookAhead, radius))
+    {
+        side = 0;
+        return d;
+    }
+    static constexpr float c_angles[4] = { 30.0f, 60.0f, 90.0f, 120.0f };
+    for (const float deg : c_angles)
+    {
+        const float a = glm::radians(deg);
+        const float c = std::cos(a), sn = std::sin(a);
+        const glm::vec2 l(d.x * c - d.y * sn, d.x * sn + d.y * c);
+        const glm::vec2 r(d.x * c + d.y * sn, -d.x * sn + d.y * c);
+        // Shorter whiskers on the wide angles: a sidestep, not a detour.
+        const float reach = lookAhead * (deg <= 60.0f ? 1.0f : 0.6f);
+        const bool lOk = lineOfSight(xz, xz + l * reach, radius);
+        const bool rOk = lineOfSight(xz, xz + r * reach, radius);
+        if (lOk && rOk)
+        {
+            if (side == 0)
+            {
+                // First choice: the side whose wider probe survives; else position parity so a
+                // crowd splits. Latched into `side` — the walker keeps it until the way is clear.
+                const bool lFar = lineOfSight(xz, xz + l * (reach * 1.5f), radius);
+                const bool rFar = lineOfSight(xz, xz + r * (reach * 1.5f), radius);
+                if (lFar != rFar)
+                    side = lFar ? 1 : -1;
+                else
+                    side = ((int(std::floor(xz.x)) + int(std::floor(xz.y))) & 1) ? 1 : -1;
+            }
+            return side > 0 ? l : r;
+        }
+        if (lOk)
+        {
+            side = 1;
+            return l;
+        }
+        if (rOk)
+        {
+            side = -1;
+            return r;
+        }
+    }
+    // Boxed in: back off along the reverse whisker if it is open, else hold.
+    return lineOfSight(xz, xz - d * lookAhead * 0.5f, radius) ? -d : glm::vec2(0.0f);
+}
+
+int TeamField::chooseSide(const glm::vec2& xz, const glm::vec2& dir, const glm::vec2& target, float radius, float maxProbe) const
+{
+    const float len = glm::length(dir);
+    if (len < 1e-4f)
+        return 0;
+    const glm::vec2 d = dir / len;
+    const glm::vec2 left(-d.y, d.x);
+    bool leftOpen = true, rightOpen = true;
+    for (float s = CellSize; s <= maxProbe; s += CellSize)
+    {
+        // Probe points slightly FORWARD as well, so a wall we stand against still lets the
+        // sideways walk pass along it.
+        const glm::vec2 pl = xz + left * s + d * 0.5f;
+        const glm::vec2 pr = xz - left * s + d * 0.5f;
+        if (leftOpen && !lineOfSight(xz, pl, radius))
+            leftOpen = false;
+        if (rightOpen && !lineOfSight(xz, pr, radius))
+            rightOpen = false;
+        if (!leftOpen && !rightOpen)
+            return 0;
+        const bool lSees = leftOpen && lineOfSight(pl, target, radius);
+        const bool rSees = rightOpen && lineOfSight(pr, target, radius);
+        if (lSees != rSees)
+            return lSees ? 1 : -1;
+        if (lSees && rSees)
+            return glm::distance(pl, target) <= glm::distance(pr, target) ? 1 : -1;
+    }
+    // Neither probe sees the target within reach: prefer the side still open, else the side
+    // the target lies on.
+    if (leftOpen != rightOpen)
+        return leftOpen ? 1 : -1;
+    const glm::vec2 to = target - xz;
+    return (left.x * to.x + left.y * to.y) >= 0.0f ? 1 : -1;
+}
+
+float TeamField::freeDistance(const glm::vec2& a, const glm::vec2& dir, float maxLen, float radius) const
+{
+    // Grid DDA along dir; returns the parametric distance to the first blocked cell.
+    const auto march = [&](const glm::vec2& start) -> float
+    {
+        glm::ivec2 cell = cellOf(start);
+        const glm::vec2 d = dir * maxLen;
+        const glm::ivec2 step(d.x > 0.0f ? 1 : -1, d.y > 0.0f ? 1 : -1);
+        const glm::vec2 invAbs(glm::abs(d.x) > 1e-6f ? 1.0f / glm::abs(d.x) : FLT_MAX,
+                               glm::abs(d.y) > 1e-6f ? 1.0f / glm::abs(d.y) : FLT_MAX);
+        const glm::vec2 cellMin = glm::vec2(cell) * CellSize;
+        glm::vec2 tMax(
+            (d.x > 0.0f ? cellMin.x + CellSize - start.x : start.x - cellMin.x) * invAbs.x,
+            (d.y > 0.0f ? cellMin.y + CellSize - start.y : start.y - cellMin.y) * invAbs.y);
+        const glm::vec2 tDelta = CellSize * invAbs;
+        float t = 0.0f;
+        for (int guard = 0; guard < 4096; ++guard)
+        {
+            if (costAt(cell) == Blocked)
+                return t * maxLen;
+            if (tMax.x < tMax.y)
+            {
+                if (tMax.x > 1.0f) return maxLen;
+                t = tMax.x;
+                cell.x += step.x;
+                tMax.x += tDelta.x;
+            }
+            else
+            {
+                if (tMax.y > 1.0f) return maxLen;
+                t = tMax.y;
+                cell.y += step.y;
+                tMax.y += tDelta.y;
+            }
+        }
+        return maxLen;
+    };
+    float best = march(a);
+    if (radius > 0.0f)
+    {
+        const glm::vec2 side(-dir.y * radius, dir.x * radius);
+        best = glm::min(best, glm::min(march(a + side), march(a - side)));
+    }
+    return best;
+}
+
 bool TeamField::lineOfSight(const glm::vec2& a, const glm::vec2& b, float radius) const
 {
     if (radius > 0.0f)
@@ -357,10 +490,10 @@ bool TeamField::lineOfSight(const glm::vec2& a, const glm::vec2& b, float radius
     const glm::vec2 tDelta = CellSize * invAbs;
     for (int guard = 0; guard < 4096; ++guard)
     {
+        if (cell == end)
+            return true; // the END cell may be blocked (a structure target): visible if all before it are open
         if (costAt(cell) == Blocked)
             return false;
-        if (cell == end)
-            return true;
         if (tMax.x < tMax.y)
         {
             if (tMax.x > 1.0f) return true;

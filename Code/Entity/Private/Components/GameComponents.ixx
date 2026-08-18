@@ -36,8 +36,20 @@ export struct GameUnitParams
     float maxSpeedMult = 3.0f;     // field shoves never launch: speed clamp = moveSpeed * this
     float waypointRadius = 3.0f;   // a route waypoint counts as reached inside this
     float voidY = -20.0f;          // fell out of the world -> despawn
-    bool navEnabled = true;        // steer by the Nav flow fields when one covers the unit
-    float spreadGain = 0.5f;       // anti-clumping: weight of the own-team density gradient
+    bool navEnabled = true;        // steer by the Nav fields when they exist
+    // Context steering weights (see GameComponents.cpp): each candidate heading scores
+    //   free * (Goal*dot(goal) + Flow*dot(lane)*|lane|/speed + Persist*dot(last) + Free)
+    //   - Pressure*dot(gradP)     (pressure = diffused crowd presence + jams)
+    float steerGoal = 0.7f;
+    float steerFree = 0.5f;        // reward for open run along the candidate
+    float steerFlow = 0.8f;        // join the crowd lane
+    float steerPersist = 0.8f;     // keep the last heading (no dithering / reversals)
+    float steerPressure = 0.5f;    // away from diffused pressure (crowd presence + jams)
+    float orderFlowBlind = 1.5f;   // s a freshly ordered unit ignores the crowd lane (so it can turn around)
+    float unstickAfter = 2.0f;     // s of stall after which goal/persistence are dropped: open, lowest-pressure direction + jitter
+    float presencePressure = 0.025f; // pressure every unit injects per tick (x60/s) just by being there
+    float steerLook = 8.0f;        // metres of whisker (min; scales with speed)
+    float stuckPressure = 2.0f;    // pressure a stalled unit injects per second (x stall, <= 1.5)
 };
 
 // A combat unit: team bubble on player-shield rules minus regen (pressure drains the battery,
@@ -104,6 +116,8 @@ export struct GameUnitComponent
     float emitterDrain = 5.0f;
     bool ranged = false;
     float standoffRange = 16.0f, fireInterval = 3.0f;
+    float bodyRadius = 0.5f;    // planar collider radius (from the physics shape at spawn) — the
+                                // nav line-of-sight tests are run for the BODY, not a point
 
     // PUPPET (player capsules author `Puppet true`): the component is a pure state CARRIER —
     // update() runs no sim at all. The owning GamePlayer writes health/energy/collapsed/materials
@@ -124,7 +138,17 @@ export struct GameUnitComponent
     // Orders: an explicit DSL/game target overrides auto-targeting until cleared or reached+dry.
     bool targetLocked = false;
     bool hasTarget = false;
+    bool moveOrder = false;   // the locked target is a PLAYER MOVE ORDER (RTS right-click): walk
+                              // there, then unlock and resume the AI (a DSL attack lock never clears)
     glm::vec3 targetPos{ 0.0f };
+    void orderMove(const glm::vec3& worldPos, bool fresh = true) // main thread (game input): drops any route too
+    {
+        targetPos = worldPos;
+        hasTarget = targetLocked = moveOrder = true;
+        routeIndex = routeCount;
+        if (fresh)
+            m_ignoreFlowTimer = params.orderFlowBlind; // a fresh order: ignore the old lane for a moment
+    }
     // Route: waypoints copied in AT SPAWN (the barracks route); marched before combat targeting.
     static constexpr int MaxRoutePoints = 6;
     glm::vec3 route[MaxRoutePoints]{};
@@ -142,10 +166,14 @@ export struct GameUnitComponent
 private:
     float m_retargetTimer = 0.0f;
     float m_fireTimer = 0.0f;
-    float m_stuckTimer = 0.0f;  // "wants to move but barely moves" — arms a sidestep detour
-    float m_avoidTimer = 0.0f;
-    float m_avoidSign = 1.0f;
     uint32 m_rng = 0;           // tiny per-unit LCG — worker-safe, seeded from the entity address
+    float m_pressureTimer = 0.0f; // stalled time (displacement checkpoints) -> weights + pressure
+    float m_ignoreFlowTimer = 0.0f; // > 0: the lane term is skipped (fresh move order)
+    glm::vec2 m_stuckAnchor{ 0.0f };
+    float m_stuckCheckTimer = 0.0f;
+    bool m_hasStuckAnchor = false;
+    glm::vec2 m_lastDir{ 0.0f };  // context steering persistence
+    bool m_hasLastDir = false;
     float m_outputHistory[3] = { 0.8f, 0.8f, 0.8f }; // push normalizes by the ~2-frame-old output
 };
 

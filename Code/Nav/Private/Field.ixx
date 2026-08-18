@@ -72,14 +72,29 @@ export namespace Nav
         // (equidistant between two sources) does not stall a whole crowd on one line.
         Sample sample(const glm::vec2& xz, uint32 seed) const;
         bool hasData(const glm::vec2& xz) const;
+        bool isBlocked(const glm::ivec2& cell) const { return costAt(cell) == Blocked; } // raster read (any thread)
         // Raster line of sight: no BLOCKED cell between a and b (clearance cells pass). Lets a
         // walker go straight when the goal is visible instead of following cell-centre steps.
         // `radius` > 0 also tests the two parallel lines offset by it (a body, not a point).
         bool lineOfSight(const glm::vec2& a, const glm::vec2& b, float radius = 0.0f) const;
+        // Distance along `dir` (unit vector) from `a` to the first BLOCKED cell, capped at maxLen
+        // (returns maxLen when open); `radius` > 0 takes the min over the two offset lines too.
+        float freeDistance(const glm::vec2& a, const glm::vec2& dir, float maxLen, float radius = 0.0f) const;
         // String pulling for a single walker (main thread — O(steps * LOS)): greedily walk the
         // descent from xz up to maxSteps cells, return the farthest path point visible from xz
         // (the source position itself when the walk reaches it). false = no field data here.
         bool steerPoint(const glm::vec2& xz, int maxSteps, float radius, glm::vec2& outPoint) const;
+        // Reactive avoidance on the raster alone (no distance data needed — any field's raster is
+        // the same obstacle set): keeps `dir` if the whisker ahead is clear, else the nearest clear
+        // whisker (±30/60/90/120°, side closest to the wanted direction first), else the wall
+        // slide. Worker-safe, O(whiskers * cells).
+        // `side` is the walker's hysteresis (in/out): -1 right, +1 left, 0 none — a chosen side is
+        // kept while both are open (else a slide along a long wall flip-flops), reset when clear.
+        glm::vec2 avoid(const glm::vec2& xz, const glm::vec2& dir, float lookAhead, float radius, int& side) const;
+        // Which way round: probe sideways (±90° of dir) in steps up to maxProbe and return the
+        // side (+1 left / -1 right) whose first open probe point sees `target`; 0 = undecided.
+        // Deterministic from geometry, so a whole group agrees.
+        int chooseSide(const glm::vec2& xz, const glm::vec2& dir, const glm::vec2& target, float radius, float maxProbe) const;
         oc::span<const NavSource> sources() const { return m_sources; }
         const NavSource& sourceAt(uint32 index) const { return m_sources[index]; }
         const ChunkMap<Chunk>& chunks() const { return m_chunks; }

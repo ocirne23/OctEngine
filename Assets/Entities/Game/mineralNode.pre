@@ -7,7 +7,3 @@ Prefab gameMineralNode
 		Type StaticMesh
 		Color 0.25 0.45 1
 		Scale 0.8
-	Component Physics
-		Body Static
-		Shape Sphere
-		Radius 0.8

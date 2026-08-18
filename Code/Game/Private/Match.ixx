@@ -139,6 +139,15 @@ private:
     EPlayerMode m_mode = EPlayerMode::Select; // Select IS the neutral mode (player combat removed)
     EBuildTool m_linkTool = EBuildTool::Connect; // which tool Link mode runs (root slot E, D or F)
     uint32 m_selectedId = 0;     // Select mode: highlighted structure (stable id; 0 = none)
+    // UNIT SELECTION (RTS box drag in Select mode): owning handles to own-team units; RMB move
+    // orders go to them together with the player. Authority only (units simulate on the server).
+    oc::vector<EntityPtr> m_selectedUnits;
+    glm::vec2 m_lmbDownPos{ 0.0f };
+    bool m_lmbDown = false;
+    bool m_lmbReleased = false;  // release edge (consumed by updateWindowed)
+    void updateUnitSelection(const Camera& camera);
+    void orderSelectedUnits(const glm::vec3& target, bool freshOrder);
+    void pruneSelectedUnits();
     bool m_modeKeyWasDown[1] = {}; // Esc/Tab edge
     bool m_saveKeyWasDown = false; // F9/F10 edges (save/load game state)
     bool m_loadKeyWasDown = false;

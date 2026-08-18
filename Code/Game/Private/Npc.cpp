@@ -69,7 +69,16 @@ void NpcSystem::registerTweaks()
     Tweak::floatVar("Game/Enemies", "Retarget interval", &up.retargetInterval, 1.0f, 60.0f, 0.5f);
     Tweak::floatVar("Game/Enemies", "Target search radius", &up.targetSearchRadius, 5.0f, 400.0f, 1.0f);
     Tweak::boolean("Game/Enemies", "Nav fields", &up.navEnabled);
-    Tweak::floatVar("Game/Enemies", "Spread gain", &up.spreadGain, 0.0f, 3.0f, 0.05f);
+    Tweak::floatVar("Game/Enemies/Steer", "Goal", &up.steerGoal, 0.0f, 3.0f, 0.05f);
+    Tweak::floatVar("Game/Enemies/Steer", "Free run", &up.steerFree, 0.0f, 3.0f, 0.05f);
+    Tweak::floatVar("Game/Enemies/Steer", "Flow", &up.steerFlow, 0.0f, 3.0f, 0.05f);
+    Tweak::floatVar("Game/Enemies/Steer", "Persist", &up.steerPersist, 0.0f, 3.0f, 0.05f);
+    Tweak::floatVar("Game/Enemies/Steer", "Pressure", &up.steerPressure, 0.0f, 3.0f, 0.05f);
+    Tweak::floatVar("Game/Enemies/Steer", "Presence pressure", &up.presencePressure, 0.0f, 1.0f, 0.005f);
+    Tweak::floatVar("Game/Enemies/Steer", "Look-ahead", &up.steerLook, 2.0f, 30.0f, 0.5f);
+    Tweak::floatVar("Game/Enemies/Steer", "Stuck pressure", &up.stuckPressure, 0.0f, 10.0f, 0.1f);
+    Tweak::floatVar("Game/Enemies/Steer", "Unstick after (s)", &up.unstickAfter, 0.5f, 10.0f, 0.1f);
+    Tweak::floatVar("Game/Enemies/Steer", "Order flow blind (s)", &up.orderFlowBlind, 0.0f, 10.0f, 0.1f);
     // Shot speeds, applied when the fire queues are serviced here (the rest of the production
     // tuning registers from StructureSystem onto the component params).
     Tweak::floatVar("Game/Friendlies", "Turret shot speed", &m_turretShotSpeed, 5.0f, 100.0f, 0.5f);

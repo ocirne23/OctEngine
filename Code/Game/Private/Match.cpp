@@ -17,6 +17,7 @@ import Force;
 import RendererVK;
 import Network;
 import Nav;
+import Spatial;
 import File; // AssetNode + loadAssetFile/writeAssetText (game save/load)
 import :Match;
 import :GameCamera;
@@ -187,7 +188,11 @@ GameMatch::GameMatch(bool enabled) : m_enabled(enabled)
                 m_rmbClicked = true;
         }
         if (evt.button == 1 && inViewport)
+        {
             m_placeClicked = true;
+            m_lmbDown = true;
+            m_lmbDownPos = glm::vec2(float(evt.x), float(evt.y));
+        }
     };
     m_mouse->onMouseReleased = [this](const SDL_MouseButtonEvent& evt)
     {
@@ -195,6 +200,11 @@ GameMatch::GameMatch(bool enabled) : m_enabled(enabled)
             m_mmbDown = false;
         if (evt.button == 3)
             m_rmbDown = false;
+        if (evt.button == 1 && m_lmbDown)
+        {
+            m_lmbDown = false;
+            m_lmbReleased = true;
+        }
     };
     m_mouse->onMouseWheelMoved = [this](const SDL_MouseWheelEvent& evt)
     {
@@ -864,6 +874,21 @@ void GameMatch::feedNav(float deltaSec)
         m_navSources[s.state->team].push_back(Nav::NavSource{
             s.entity->pos, glm::max(s.state->meleeRadius, half), s.state->structureId, 0 });
     }
+    // Enemy UNITS are targets too (unit-vs-unit combat): one arena-wide spatial sweep for
+    // GameUnitComponents (the same query refresh() runs for structures).
+    if (!m_isClient)
+    {
+        thread_local oc::vector<uint64> results;
+        Globals::spatialIndex.querySphere(glm::dvec3(0.0), 1000.0f, SpatialLayer_Render, results);
+        for (const uint64 user : results)
+        {
+            Entity* e = reinterpret_cast<Entity*>(user);
+            const GameUnitComponent* u = getComponent<GameUnitComponent>(e);
+            if (!u || u->puppet || !u->alive() || u->team >= Nav::MaxTeams)
+                continue;
+            m_navSources[u->team].push_back(Nav::NavSource{ e->pos, glm::max(u->bodyRadius, 0.25f), 0, 3 });
+        }
+    }
     // Player bodies (puppets) are targets too: our capsule + every client twin.
     const auto addPlayer = [&](Entity* e, uint8 team)
     {
@@ -1409,6 +1434,95 @@ void GameMatch::updateSelectMode(const Camera& camera, bool confirmEdge, bool rm
 {
     updateRightClickActions(camera, rmbEdge);
     updateSelectionClick(camera, confirmEdge, /*allowPick*/ true);
+    updateUnitSelection(camera);
+}
+
+// BOX SELECTION of own-team units (Select mode): LMB drag draws the box on the ground; on
+// release every visible own unit whose screen position falls inside it is selected (SHIFT adds).
+// A plain click (no drag) clears the unit selection. Selected units carry a ring; RMB orders send
+// them along with the player (see the move-order block in updateWindowed).
+void GameMatch::updateUnitSelection(const Camera& camera)
+{
+    static constexpr float c_dragPx = 8.0f;
+    const Rect viewport = Globals::ui.getViewportRect();
+    const auto groundOf = [&](const glm::vec2& screen, glm::vec3& out)
+    {
+        const Ray ray = camera.screenToRay(viewport, screen);
+        if (ray.dir.y > -1e-4f)
+            return false;
+        out = ray.origin + ray.dir * (-ray.origin.y / ray.dir.y);
+        return true;
+    };
+    if (m_lmbDown && glm::distance(m_lmbDownPos, m_mousePos) > c_dragPx)
+    {
+        // Live box: the four screen corners projected onto the ground.
+        const glm::vec2 a = m_lmbDownPos, b = m_mousePos;
+        const glm::vec2 corners[4] = { a, glm::vec2(b.x, a.y), b, glm::vec2(a.x, b.y) };
+        glm::vec3 g[4];
+        bool ok = true;
+        for (int i = 0; i < 4 && ok; ++i)
+            ok = groundOf(corners[i], g[i]);
+        if (ok)
+        {
+            const uint32 col = packColor(glm::vec3(0.4f, 1.0f, 0.5f));
+            for (int i = 0; i < 4; ++i)
+                Globals::rendererVK.addDebugLine(g[i] + glm::vec3(0.0f, 0.2f, 0.0f), g[(i + 1) % 4] + glm::vec3(0.0f, 0.2f, 0.0f), col);
+        }
+    }
+    if (m_lmbReleased)
+    {
+        m_lmbReleased = false;
+        const bool drag = glm::distance(m_lmbDownPos, m_mousePos) > c_dragPx;
+        if (!Globals::input.isKeyDown(SDL_Scancode::SDL_SCANCODE_LSHIFT))
+            m_selectedUnits.clear();
+        if (drag && !m_isClient)
+        {
+            const glm::vec2 lo = glm::min(m_lmbDownPos, m_mousePos), hi = glm::max(m_lmbDownPos, m_mousePos);
+            oc::vector<Entity*> units;
+            NpcSystem::queryVisibleUnits(camera, units);
+            for (Entity* e : units)
+            {
+                const GameUnitComponent* u = getComponent<GameUnitComponent>(e);
+                if (!u || u->puppet || !u->alive() || u->team != (uint32)m_team)
+                    continue;
+                glm::vec2 sp;
+                if (!camera.worldToScreen(viewport, e->pos, sp))
+                    continue;
+                if (sp.x < lo.x || sp.x > hi.x || sp.y < lo.y || sp.y > hi.y)
+                    continue;
+                bool already = false;
+                for (const EntityPtr& p : m_selectedUnits)
+                    already |= p.get() == e;
+                if (!already)
+                    m_selectedUnits.push_back(EntityPtr(e));
+            }
+        }
+    }
+    pruneSelectedUnits();
+    for (const EntityPtr& p : m_selectedUnits)
+        drawCircle(p->pos * glm::vec3(1, 0, 1) + glm::vec3(0.0f, 0.15f, 0.0f), 0.9f,
+            packColor(glm::vec3(0.4f, 1.0f, 0.5f)), 16);
+}
+
+void GameMatch::pruneSelectedUnits()
+{
+    for (size_t i = 0; i < m_selectedUnits.size();)
+    {
+        const GameUnitComponent* u = getComponent<GameUnitComponent>(m_selectedUnits[i].get());
+        if (!u || !u->alive())
+            m_selectedUnits.erase(m_selectedUnits.begin() + i);
+        else
+            ++i;
+    }
+}
+
+void GameMatch::orderSelectedUnits(const glm::vec3& target, bool freshOrder)
+{
+    for (const EntityPtr& p : m_selectedUnits)
+        if (GameUnitComponent* u = getComponent<GameUnitComponent>(p.get()))
+        {
+            u->orderMove(glm::vec3(target.x, 0.0f, target.z), freshOrder);
+        }
 }
 
 // RIGHT-CLICK actions with a selection, shared by Select AND Build mode: on a structure = SMART
@@ -1704,6 +1818,7 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
         break;
     case EPlayerMode::Select: updateSelectMode(camera, confirmEdge, rmbEdge); break;
     }
+    m_lmbReleased = false; // a release the active mode did not consume (box select is Select-only)
 
     // MOVE ORDER (RTS right-click): RMB ALWAYS moves the player. Cancelling rides along on the
     // same press — disarming a ghost, dropping a Lance/Wall anchor or a picked link endpoint, or
@@ -1735,6 +1850,7 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
                 d = scale > 1e-3f ? d * (half / scale) : glm::vec2(half, 0.0f);
             }
             m_player.setMoveTarget(glm::vec3(center.x + d.x, 0.0f, center.z + d.y));
+            orderSelectedUnits(glm::vec3(center.x + d.x, 0.0f, center.z + d.y), true);
             m_rmbMoveDrag = false; // a building order is one-shot: dragging off it must not re-aim
         }
         else if (hover < 0)
@@ -1742,7 +1858,10 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     }
     glm::vec3 moveGround;
     if (m_rmbMoveDrag && aimGroundPoint(camera, moveGround))
+    {
         m_player.setMoveTarget(glm::vec3(moveGround.x, 0.0f, moveGround.z));
+        orderSelectedUnits(moveGround, rmbEdge); // the selected units follow the same order (re-aimed while held; the lane wipe only on the press)
+    }
     if (m_player.hasMoveTarget()) // destination marker until the capsule arrives
         drawCircle(m_player.moveTarget() + glm::vec3(0.0f, 0.15f, 0.0f), 0.6f,
             packColor(glm::vec3(0.3f, 0.95f, 0.6f)), 16);

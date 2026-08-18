@@ -76,38 +76,39 @@ void Time::processTimers()
     const uint64 currentBucket = (uint64)std::chrono::duration_cast<std::chrono::seconds>(currentTime.time_since_epoch()).count();
     for (uint64 bucket = m_lastCheckedBucket; bucket <= currentBucket; ++bucket)
     {
-        auto it = m_timerBuckets.find(bucket);
-        if (it != m_timerBuckets.end())
+        // Re-find the bucket EVERY iteration: a timer callback may add/remove timers (addTimer
+        // inserts into the map — a rehash invalidates iterators and the vector reference), so
+        // nothing map-related survives across the callback. An emptied bucket is erased BEFORE
+        // the callback runs for the same reason.
+        while (true)
         {
-            auto& timers = it->second;
-            while (!timers.empty())
+            auto it = m_timerBuckets.find(bucket);
+            if (it == m_timerBuckets.end())
+                break;
+            oc::vector<Timer*>& timers = it->second;
+            if (timers.empty())
             {
-                Timer* pTimer = timers.front();
-                if (pTimer->m_endTime <= currentTime)
+                m_timerBuckets.erase(it);
+                break;
+            }
+            Timer* pTimer = timers.front();
+            if (!(pTimer->m_endTime <= currentTime))
+                break;
+            std::pop_heap(timers.begin(), timers.end(), TimerCompare());
+            timers.pop_back();
+            if (timers.empty())
+                m_timerBuckets.erase(it);
+            if (pTimer->m_onTimer)
+            {
+                if (pTimer->m_onTimer(*pTimer) == Timer::REPEAT)
                 {
-                    std::pop_heap(timers.begin(), timers.end(), TimerCompare());
-                    timers.pop_back();
-                    if (pTimer->m_onTimer)
-                    {
-                        if (pTimer->m_onTimer(*pTimer) == Timer::REPEAT)
-                        {
-                            pTimer->m_endTime = currentTime + (pTimer->m_endTime - pTimer->m_startTime);
-                            pTimer->m_startTime = currentTime;
-                            assert(pTimer->m_startTime < pTimer->m_endTime);
-                            addTimer(pTimer);
-                        }
-                    }
-                    pTimer->m_hasTriggered = true;
-                    if (timers.empty())
-                    {
-                        m_timerBuckets.erase(it);
-                    }
-                }
-                else
-                {
-                    break;
+                    pTimer->m_endTime = currentTime + (pTimer->m_endTime - pTimer->m_startTime);
+                    pTimer->m_startTime = currentTime;
+                    assert(pTimer->m_startTime < pTimer->m_endTime);
+                    addTimer(pTimer);
                 }
             }
+            pTimer->m_hasTriggered = true;
         }
         m_lastCheckedBucket = currentBucket;
     }
