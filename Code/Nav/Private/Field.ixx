@@ -78,8 +78,10 @@ export namespace Nav
         // `radius` > 0 also tests the two parallel lines offset by it (a body, not a point).
         bool lineOfSight(const glm::vec2& a, const glm::vec2& b, float radius = 0.0f) const;
         // Distance along `dir` (unit vector) from `a` to the first BLOCKED cell, capped at maxLen
-        // (returns maxLen when open); `radius` > 0 takes the min over the two offset lines too.
+        // (returns maxLen when open); `radius` > 0 takes the min over the two parallel offset lines.
         float freeDistance(const glm::vec2& a, const glm::vec2& dir, float maxLen, float radius = 0.0f) const;
+        // Sum of proximity-weighted unit vectors AWAY from blocked cells within `range` of xz.
+        glm::vec2 wallPush(const glm::vec2& xz, float range) const;
         // String pulling for a single walker (main thread — O(steps * LOS)): greedily walk the
         // descent from xz up to maxSteps cells, return the farthest path point visible from xz
         // (the source position itself when the walk reaches it). false = no field data here.

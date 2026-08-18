@@ -409,7 +409,14 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                 const float wFree = params.steerFree * (unstick ? 3.0f : stalled ? 2.0f : 1.0f);
                 const float wPressure = params.steerPressure * (unstick ? 3.0f : 1.0f);
                 const float look = glm::max(params.steerLook, moveSpeed * 1.0f);
-                const float radius = bodyRadius + 0.15f;
+                // Wall distance: the run is a CENTRE-LINE march (a 1-tile gap reads as open), and
+                // corners are handled by a push away from nearby walls instead of side whiskers —
+                // in a gap both walls cancel and the unit centres itself, at a corner it swings wide.
+                const glm::vec2 wallAway = raster->wallPush(here, bodyRadius + params.wallKeep);
+                const float wallLen = glm::length(wallAway);
+                const glm::vec2 wallDir = wallLen > 1e-4f ? wallAway / wallLen : glm::vec2(0.0f);
+                const float wallW = glm::min(wallLen, 1.0f) * params.steerWall;
+                const glm::vec2 bodyProbe(bodyRadius + 0.1f, 0.0f);
                 // Field reads once (cell-local, cheap).
                 glm::vec2 lane = Globals::navSystem.flow(team).sample(here);
                 const float laneLen = glm::length(lane);
@@ -429,15 +436,15 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                 {
                     const float a = phase + float(k) * (glm::two_pi<float>() / c_candidates);
                     const glm::vec2 d(std::cos(a), std::sin(a));
-                    const float freeLen = raster->freeDistance(here, d, look, radius);
-                    if (freeLen < radius + 0.1f)
+                    if (raster->isBlocked(Nav::cellOf(here + d * bodyProbe.x)))
                         continue; // blocked right at the body: not a heading
-                    const float free = freeLen / look;
+                    const float free = raster->freeDistance(here, d, look, 0.0f) / look;
                     float score = free * (wGoal * glm::dot(d, goalDir)
                         + wFlow * laneW * glm::dot(d, lane)
                         + (m_hasLastDir ? wPersist * glm::dot(d, m_lastDir) : 0.0f)
                         + wFree);
                     score -= wPressure * gpW * glm::dot(d, gp);
+                    score += wallW * glm::dot(d, wallDir);
                     if (score > bestScore)
                     {
                         bestScore = score;

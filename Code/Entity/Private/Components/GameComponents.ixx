@@ -49,6 +49,8 @@ export struct GameUnitParams
     float unstickAfter = 2.0f;     // s of stall after which goal/persistence are dropped: open, lowest-pressure direction + jitter
     float presencePressure = 0.025f; // pressure every unit injects per tick (x60/s) just by being there
     float steerLook = 8.0f;        // metres of whisker (min; scales with speed)
+    float steerWall = 1.0f;        // push away from walls within wallKeep of the body (corner rounding)
+    float wallKeep = 0.6f;         // metres beyond the body radius the wall push reaches
     float stuckPressure = 2.0f;    // pressure a stalled unit injects per second (x stall, <= 1.5)
 };
 

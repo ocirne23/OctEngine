@@ -76,6 +76,8 @@ void NpcSystem::registerTweaks()
     Tweak::floatVar("Game/Enemies/Steer", "Pressure", &up.steerPressure, 0.0f, 3.0f, 0.05f);
     Tweak::floatVar("Game/Enemies/Steer", "Presence pressure", &up.presencePressure, 0.0f, 1.0f, 0.005f);
     Tweak::floatVar("Game/Enemies/Steer", "Look-ahead", &up.steerLook, 2.0f, 30.0f, 0.5f);
+    Tweak::floatVar("Game/Enemies/Steer", "Wall push", &up.steerWall, 0.0f, 3.0f, 0.05f);
+    Tweak::floatVar("Game/Enemies/Steer", "Wall keep (m)", &up.wallKeep, 0.0f, 3.0f, 0.05f);
     Tweak::floatVar("Game/Enemies/Steer", "Stuck pressure", &up.stuckPressure, 0.0f, 10.0f, 0.1f);
     Tweak::floatVar("Game/Enemies/Steer", "Unstick after (s)", &up.unstickAfter, 0.5f, 10.0f, 0.1f);
     Tweak::floatVar("Game/Enemies/Steer", "Order flow blind (s)", &up.orderFlowBlind, 0.0f, 10.0f, 0.1f);

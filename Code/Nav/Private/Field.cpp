@@ -419,48 +419,74 @@ int TeamField::chooseSide(const glm::vec2& xz, const glm::vec2& dir, const glm::
 
 float TeamField::freeDistance(const glm::vec2& a, const glm::vec2& dir, float maxLen, float radius) const
 {
-    // Grid DDA along dir; returns the parametric distance to the first blocked cell.
-    const auto march = [&](const glm::vec2& start) -> float
+    // Grid DDA along a direction; returns the parametric distance to the first blocked cell.
+    const auto march = [&](const glm::vec2& start, const glm::vec2& d, float len) -> float
     {
         glm::ivec2 cell = cellOf(start);
-        const glm::vec2 d = dir * maxLen;
-        const glm::ivec2 step(d.x > 0.0f ? 1 : -1, d.y > 0.0f ? 1 : -1);
-        const glm::vec2 invAbs(glm::abs(d.x) > 1e-6f ? 1.0f / glm::abs(d.x) : FLT_MAX,
-                               glm::abs(d.y) > 1e-6f ? 1.0f / glm::abs(d.y) : FLT_MAX);
+        const glm::vec2 dl = d * len;
+        const glm::ivec2 step(dl.x > 0.0f ? 1 : -1, dl.y > 0.0f ? 1 : -1);
+        const glm::vec2 invAbs(glm::abs(dl.x) > 1e-6f ? 1.0f / glm::abs(dl.x) : FLT_MAX,
+                               glm::abs(dl.y) > 1e-6f ? 1.0f / glm::abs(dl.y) : FLT_MAX);
         const glm::vec2 cellMin = glm::vec2(cell) * CellSize;
         glm::vec2 tMax(
-            (d.x > 0.0f ? cellMin.x + CellSize - start.x : start.x - cellMin.x) * invAbs.x,
-            (d.y > 0.0f ? cellMin.y + CellSize - start.y : start.y - cellMin.y) * invAbs.y);
+            (dl.x > 0.0f ? cellMin.x + CellSize - start.x : start.x - cellMin.x) * invAbs.x,
+            (dl.y > 0.0f ? cellMin.y + CellSize - start.y : start.y - cellMin.y) * invAbs.y);
         const glm::vec2 tDelta = CellSize * invAbs;
         float t = 0.0f;
         for (int guard = 0; guard < 4096; ++guard)
         {
             if (costAt(cell) == Blocked)
-                return t * maxLen;
+                return t * len;
             if (tMax.x < tMax.y)
             {
-                if (tMax.x > 1.0f) return maxLen;
+                if (tMax.x > 1.0f) return len;
                 t = tMax.x;
                 cell.x += step.x;
                 tMax.x += tDelta.x;
             }
             else
             {
-                if (tMax.y > 1.0f) return maxLen;
+                if (tMax.y > 1.0f) return len;
                 t = tMax.y;
                 cell.y += step.y;
                 tMax.y += tDelta.y;
             }
         }
-        return maxLen;
+        return len;
     };
-    float best = march(a);
+    float best = march(a, dir, maxLen);
     if (radius > 0.0f)
     {
         const glm::vec2 side(-dir.y * radius, dir.x * radius);
-        best = glm::min(best, glm::min(march(a + side), march(a - side)));
+        best = glm::min(best, glm::min(march(a + side, dir, maxLen), march(a - side, dir, maxLen)));
     }
     return best;
+}
+
+// Push AWAY from every blocked cell whose nearest point lies within `range` of xz, weighted by
+// proximity (1 at contact, 0 at range) — the raster-side "keep your distance from walls" term. In
+// a one-cell gap the two side walls cancel (the walker centres itself); at a corner the single
+// wall swings it wide.
+glm::vec2 TeamField::wallPush(const glm::vec2& xz, float range) const
+{
+    const glm::ivec2 c = cellOf(xz);
+    const int r = int(std::ceil(range / CellSize)) + 1;
+    glm::vec2 push(0.0f);
+    for (int dz = -r; dz <= r; ++dz)
+        for (int dx = -r; dx <= r; ++dx)
+        {
+            const glm::ivec2 n = c + glm::ivec2(dx, dz);
+            if (costAt(n) != Blocked)
+                continue;
+            const glm::vec2 mn = glm::vec2(n) * CellSize, mx = mn + CellSize;
+            const glm::vec2 closest = glm::clamp(xz, mn, mx);
+            const glm::vec2 away = xz - closest;
+            const float d = glm::length(away);
+            if (d >= range || d < 1e-4f)
+                continue;
+            push += away / d * (1.0f - d / range);
+        }
+    return push;
 }
 
 bool TeamField::lineOfSight(const glm::vec2& a, const glm::vec2& b, float radius) const
