@@ -16,6 +16,7 @@ import :Mesh;
 import :Types;
 import :Layers;
 import :Convert;
+import :TaskScheduler;
 
 // box3d hands DrawShapeFcn a *user* shape handle, created on demand the first time each shape is
 // drawn and destroyed when that shape is modified or removed. Without these callbacks there is no
@@ -46,6 +47,13 @@ bool PhysicsWorld::initialize()
     def.gravity = toB3(m_gravity);
     def.createDebugShape = createDebugShapeFcn;
     def.destroyDebugShape = destroyDebugShapeFcn;
+    // Solver fork/join rides the engine job system instead of the private thread pool box3d spawns
+    // for itself when workerCount > 1 without task callbacks -- see :TaskScheduler.
+    m_workerCount = PhysicsTaskScheduler::defaultWorkerCount();
+    def.workerCount = uint32(m_workerCount);
+    def.enqueueTask = PhysicsTaskScheduler::enqueue;
+    def.finishTask = PhysicsTaskScheduler::finish;
+    def.userTaskContext = &m_taskScheduler;
     const b3WorldId world = b3CreateWorld(&def);
     if (B3_IS_NULL(world))
     {
@@ -65,6 +73,10 @@ bool PhysicsWorld::initialize()
     Tweak::floatVar("Physics/World", "Time Scale", &m_timeScale, 0.0f, 4.0f);
     Tweak::intVar("Physics/World", "Sub Steps", &m_subSteps, 1, 16);
     Tweak::intVar("Physics/World", "Step Hz", &m_stepHz, 5, 120);
+    // Live: box3d re-slices the step from this on the next b3World_Step. 1 = single threaded, which
+    // is also the A/B toggle for measuring what the fan-out actually buys on a given scene.
+    Tweak::intVar("Physics/World", "Worker count", &m_workerCount, 1, B3_MAX_WORKERS, 1.0f,
+        [this] { b3World_SetWorkerCount(std::bit_cast<b3WorldId>(m_worldHandle), m_workerCount); });
 
     Tweak::floatVar("Physics/Buoyancy", "Density (kg/m3)", &m_waterDensity, 0.0f, 3000.0f, 10.0f);
     Tweak::floatVar("Physics/Buoyancy", "Linear drag", &m_waterLinearDrag, 0.0f, 20.0f, 0.1f);

@@ -8,6 +8,7 @@ import :Joint;
 import :Mesh;
 import :Types;
 import :Layers;
+import :TaskScheduler;
 
 export class PhysicsWorld final
 {
@@ -168,6 +169,10 @@ private:
     float m_timeScale = 1.0f;
     int m_subSteps = 4;
     int m_stepHz = 20;
+    int m_workerCount = 1; // box3d parallelism, driven onto the engine job system (see :TaskScheduler)
+    // Handed to box3d as b3WorldDef::userTaskContext and returned through both task callbacks, so
+    // the solver's fork/join state is owned by this world rather than by file statics.
+    PhysicsTaskScheduler m_taskScheduler;
     uint32 m_stepCount = 0;
     glm::vec3 m_gravity = glm::vec3(0.0f, -9.81f, 0.0f);
     PhysicsBody m_staticBody;
