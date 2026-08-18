@@ -22,12 +22,20 @@ GameProjectileParams GameProjectileComponent::params;
 static std::mutex g_unitEventMutex;
 static oc::vector<GameUnitComponent::FireRequest> g_fireRequests;
 static oc::vector<uint32> g_deaths;
+static oc::vector<GameUnitComponent::SeedRequest> g_seedRequests;
 
 void GameUnitComponent::takeFireRequests(oc::vector<FireRequest>& out)
 {
     const std::lock_guard<std::mutex> lock(g_unitEventMutex);
     out.swap(g_fireRequests);
     g_fireRequests.clear();
+}
+
+void GameUnitComponent::takeSeedRequests(oc::vector<SeedRequest>& out)
+{
+    const std::lock_guard<std::mutex> lock(g_unitEventMutex);
+    out.swap(g_seedRequests);
+    g_seedRequests.clear();
 }
 
 void GameUnitComponent::takeDeaths(oc::vector<uint32>& outSourceIds)
@@ -59,6 +67,8 @@ static void atomicAdd(float& value, float amount)
 
 // ---------------------------------------------------------------- GameUnitComponent
 
+static float unitRand01(uint32& state); // tiny per-unit LCG, defined below
+
 void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Transform&)
 {
     puppet = info.puppet;
@@ -79,6 +89,10 @@ void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
         h = shieldOutput;
     m_rng = uint32(uintptr_t(this) >> 4) * 2654435761u + 1u; // worker-safe per-unit stream
     m_retargetTimer = 0.0f; // pick a target on the first authority tick
+    // Random PHASE on the periodic timers: a barracks batch spawns in one frame, and without this
+    // every unit of it would ask for a plan (and checkpoint its progress) on the same tick forever.
+    m_seedTimer = params.seedRequestInterval * unitRand01(m_rng);
+    m_stuckCheckTimer = 0.75f * unitRand01(m_rng);
     if (const PhysicsComponent::SpawnInfo* si = getPhysicsSpawnInfo(&entity))
     {
         float r = 0.5f;
@@ -368,6 +382,18 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             glm::vec2 dir = goalDir;
             const bool fields = params.navEnabled && Globals::navSystem.isEnabled();
             const Nav::TeamField* raster = fields ? Globals::navSystem.raster() : nullptr;
+            // PLAN REQUEST: every unit with somewhere to be asks for a lane to its destination on
+            // its own (jittered) timer — while walking, not only while stuck. Nav refuses anything
+            // a nearby recent plan already covers, so a crowd going the same way costs ONE plan and
+            // the group's lane keeps up with the group as it advances.
+            m_seedTimer -= deltaSec;
+            if (m_seedTimer <= 0.0f)
+            {
+                m_seedTimer = params.seedRequestInterval * (0.75f + 0.5f * unitRand01(m_rng));
+                const std::lock_guard<std::mutex> lock(g_unitEventMutex);
+                g_seedRequests.push_back(SeedRequest{ pos, walkTarget, (uint8)team,
+                    m_pressureTimer > params.unstickAfter });
+            }
             // STUCK DETECTION by DISPLACEMENT, not by per-tick progress (a jittering unit's heading
             // changes every tick, so progress-along-heading never accumulates): every 0.75 s the
             // position is checkpointed; moved less than 0.6 m since the last checkpoint = stalled
@@ -418,26 +444,26 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                 const float wallW = glm::min(wallLen, 1.0f) * params.steerWall;
                 const glm::vec2 bodyProbe(bodyRadius + 0.1f, 0.0f);
                 // Field reads once (cell-local, cheap).
-                glm::vec2 lane = Globals::navSystem.flow(team).sample(here);
+                glm::vec2 lane = Globals::navSystem.flow(team).sample(here, raster);
+                // COMPRESSIVE response (x / (x + knee)) instead of a hard clamp: the curve is
+                // steep at low values — ONE stuck unit already registers — and flattens toward 1,
+                // so a hundred of them do not saturate every cell into the same weight. The knee
+                // is the value that scores 0.5.
+                const auto knee = [](float x, float k) { return x / (x + glm::max(k, 1e-4f)); };
                 const float laneLen = glm::length(lane);
-                const float laneW = laneLen > 0.3f ? glm::min(laneLen / glm::max(moveSpeed, 0.1f), 1.0f) : 0.0f;
+                const float laneW = knee(laneLen, params.flowKnee * glm::max(moveSpeed, 0.1f));
                 if (laneLen > 1e-4f) lane /= laneLen;
-                glm::vec2 gp = Globals::navSystem.pressure(team).gradient(here);
+                glm::vec2 gp = Globals::navSystem.pressure(team).gradient(here, raster);
                 const float gpLen = glm::length(gp);
-                const float gpW = glm::min(gpLen, 1.0f);
+                const float gpW = knee(gpLen, params.pressureKnee);
                 if (gpLen > 1e-4f) gp /= gpLen;
-                // Candidate fan: 16 headings, phase-rotated per unit so a crowd does not quantize
-                // onto the same 16 directions.
-                constexpr int c_candidates = 16;
-                const float phase = float(m_rng & 0xFFFF) / 65536.0f * (glm::two_pi<float>() / c_candidates);
                 float bestScore = -FLT_MAX;
                 glm::vec2 best = goalDir;
-                for (int k = 0; k < c_candidates; ++k)
+                const auto consider = [&](const glm::vec2& d)
                 {
-                    const float a = phase + float(k) * (glm::two_pi<float>() / c_candidates);
-                    const glm::vec2 d(std::cos(a), std::sin(a));
-                    if (raster->isBlocked(Nav::cellOf(here + d * bodyProbe.x)))
-                        continue; // blocked right at the body: not a heading
+                    const glm::vec2 probe = here + d * bodyProbe.x;
+                    if (raster->isBlocked(Nav::cellOf(probe)))
+                        return; // blocked right at the body: not a heading
                     const float free = raster->freeDistance(here, d, look, 0.0f) / look;
                     float score = free * (wGoal * glm::dot(d, goalDir)
                         + wFlow * laneW * glm::dot(d, lane)
@@ -445,12 +471,43 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                         + wFree);
                     score -= wPressure * gpW * glm::dot(d, gp);
                     score += wallW * glm::dot(d, wallDir);
+                    // CORNER CLIP: the run is measured on the centre line (so a one-cell gap stays
+                    // usable), which means a heading can be "open" while the BODY would catch the
+                    // corner. Two lateral samples one body radius ahead PENALIZE that instead of
+                    // forbidding it — brushing past is allowed when nothing better exists, but a
+                    // heading that clears the corner properly always outscores it.
+                    const glm::vec2 probeSide(-d.y * bodyRadius, d.x * bodyRadius);
+                    const int clipped = int(raster->isBlocked(Nav::cellOf(probe + probeSide)))
+                        + int(raster->isBlocked(Nav::cellOf(probe - probeSide)));
+                    score -= float(clipped) * params.steerCornerClip;
                     if (score > bestScore)
                     {
                         bestScore = score;
                         best = d;
                     }
+                };
+                // Candidate fan: 16 headings ANCHORED ON THE GOAL — k = 0 is exactly goalDir and
+                // the rest are symmetric around it, so "straight at where I want to go" is always
+                // on the menu and the deviations are measured from it. (The fan used to sit on a
+                // per-unit random phase, which meant the goal heading itself was up to 11 deg away
+                // from every candidate — enough to miss a one-cell gap, which subtends about one
+                // slot from a few metres out.)
+                constexpr int c_candidates = 16;
+                constexpr float c_step = glm::two_pi<float>() / c_candidates;
+                const float refAngle = std::atan2(goalDir.y, goalDir.x);
+                // k = 0 is EXACTLY the goal; the deviations carry a per-unit offset (< half a slot)
+                // so a crowd sharing one goal heading does not all deviate onto the same sixteen
+                // world directions and walk in visible columns.
+                const float spread = (float(m_rng >> 8 & 0xFFFF) / 65536.0f - 0.5f) * c_step;
+                consider(goalDir);
+                for (int k = 1; k < c_candidates; ++k)
+                {
+                    const float a = refAngle + float(k) * c_step + spread;
+                    consider(glm::vec2(std::cos(a), std::sin(a)));
                 }
+                // The lane is generally NOT on that grid, so its exact heading is offered too.
+                if (laneW > 0.0f)
+                    consider(lane);
                 dir = best;
                 if (unstick)
                 {
@@ -474,7 +531,14 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             {
                 // Splat what the body actually DID last step, not what we just commanded — a
                 // unit pinned against a wall must not write "moving into the wall" into the lane.
-                Globals::navSystem.flow(team).splat(glm::vec2(pos.x, pos.z), measured);
+                // The splat lands one cell BEHIND, in the cell just left: a unit samples its own
+                // cell with double weight, so writing there fed its current heading straight back
+                // to itself next tick and units drifted into going straight. A trail belongs
+                // behind the walker anyway; below walking pace there is nothing to contribute.
+                const float measuredLen = glm::length(measured);
+                if (measuredLen > 0.1f)
+                    Globals::navSystem.flow(team).splat(
+                        glm::vec2(pos.x, pos.z) - measured / measuredLen * Nav::CellSize, measured);
                 // BACK-PRESSURE: stalled (see the displacement checkpoints above) -> inject into
                 // the team PRESSURE field, growing with the stall; it diffuses outward each frame.
                 if (m_pressureTimer > 0.4f && params.stuckPressure > 0.0f)

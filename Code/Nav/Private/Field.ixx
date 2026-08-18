@@ -82,6 +82,12 @@ export namespace Nav
         float freeDistance(const glm::vec2& a, const glm::vec2& dir, float maxLen, float radius = 0.0f) const;
         // Sum of proximity-weighted unit vectors AWAY from blocked cells within `range` of xz.
         glm::vec2 wallPush(const glm::vec2& xz, float range) const;
+        // A* over the raster from `from` to `to`, string-pulled into a minimal polyline (first
+        // point = from, last = to). `radius` is the body clearance used by the string pull.
+        // Expansion is capped at maxExpand cells; false = no path inside that budget. NOT for
+        // per-unit use (see the unit steering) — this is the one-shot planner behind seedPath.
+        bool findPath(const glm::vec2& from, const glm::vec2& to, uint32 maxExpand, float radius,
+            oc::vector<glm::vec2>& outPath) const;
         // String pulling for a single walker (main thread — O(steps * LOS)): greedily walk the
         // descent from xz up to maxSteps cells, return the farthest path point visible from xz
         // (the source position itself when the walk reaches it). false = no field data here.

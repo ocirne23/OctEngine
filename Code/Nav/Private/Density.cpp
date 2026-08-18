@@ -42,17 +42,22 @@ void FlowField::splat(const glm::vec2& xz, const glm::vec2& velocity)
     oc::atomic_ref<uint32>(chunk->touchedFrame).store(m_frame, oc::memory_order_relaxed);
 }
 
-glm::vec2 FlowField::sample(const glm::vec2& xz) const
+glm::vec2 FlowField::sample(const glm::vec2& xz, const TeamField* raster) const
 {
     const glm::ivec2 c = cellOf(xz);
     const uint32 buffer = readBuffer();
     glm::ivec2 cachedCoord = chunkOf(c);
     const Chunk* cached = m_chunks.find(chunkKey(cachedCoord));
     glm::vec2 sum(0.0f);
+    float weight = 0.0f;
     for (int dz = -1; dz <= 1; ++dz)
         for (int dx = -1; dx <= 1; ++dx)
         {
             const glm::ivec2 n = c + glm::ivec2(dx, dz);
+            if (raster && raster->isBlocked(n))
+                continue; // a wall is not "no flow here", it is not part of the neighbourhood
+            const float w = (dx | dz) ? 0.5f : 1.0f; // centre weighs double
+            weight += w;                             // an OPEN cell counts even with no chunk yet
             const glm::ivec2 nc = chunkOf(n);
             if (nc != cachedCoord)
             {
@@ -62,10 +67,9 @@ glm::vec2 FlowField::sample(const glm::vec2& xz) const
             if (!cached)
                 continue;
             const uint32 i = cellIndex(n);
-            const float w = (dx | dz) ? 0.5f : 1.0f; // centre weighs double
             sum += glm::vec2(cached->vx[buffer][i], cached->vz[buffer][i]) * w;
         }
-    return sum / (Scale * 5.0f); // 1 + 8*0.5 weights
+    return weight > 0.0f ? sum / (Scale * weight) : glm::vec2(0.0f);
 }
 
 glm::vec2 FlowField::sampleArea(const glm::vec2& xz, int radiusCells, const TeamField* raster) const
@@ -97,10 +101,21 @@ glm::vec2 FlowField::sampleArea(const glm::vec2& xz, int radiusCells, const Team
     return count > 0 ? sum / (Scale * float(count)) : glm::vec2(0.0f);
 }
 
-void FlowField::update(uint32 keepFrames, float decay, const TeamField* raster, float wallBounce)
+// Per-step multiplier for a half-life: 0.5^(dt/halfLife) — the frame-rate-independent form of a
+// "x% per frame" decay.
+static float fadeStep(float deltaSec, float halfLifeSec)
 {
+    return std::exp2(-deltaSec / glm::max(halfLifeSec, 1e-3f));
+}
+
+void FlowField::update(float deltaSec, uint32 keepFrames, float halfLifeSec, const TeamField* raster,
+    float wallBounce, float viscosity, float maxSpeed, float viscosityFloor, float viscosityBackflow)
+{
+    const float viscFloorSq = viscosityFloor * Scale * viscosityFloor * Scale;
     ++m_frame;
+    const float decay = fadeStep(deltaSec, halfLifeSec);
     m_splatGain = glm::max(1.0f - decay, 0.0005f);
+    viscosity = glm::clamp(viscosity * deltaSec * 60.0f, 0.0f, 0.25f); // Jacobi stability
     if (m_touch.isInitialized())
         m_touch.forEach([&](oc::vector<uint64>& keys)
         {
@@ -119,9 +134,60 @@ void FlowField::update(uint32 keepFrames, float decay, const TeamField* raster, 
         if (chunk.touchedFrame < cutoff)
             return true;
         const glm::ivec2 base = chunkFromKey(key) * ChunkCells;
+        // Neighbour read out of the READ buffer (the write buffer is what we are filling, so
+        // there is no read-after-write hazard); a blocked neighbour contributes the cell's own
+        // value, which makes walls no-slip-free boundaries instead of momentum sinks.
+        glm::ivec2 cachedCoord(INT32_MAX, INT32_MAX);
+        const Chunk* cached = nullptr;
+        const auto readAt = [&](const glm::ivec2 c) -> glm::vec2
+        {
+            const glm::ivec2 cc = chunkOf(c);
+            if (cc != cachedCoord)
+            {
+                cachedCoord = cc;
+                cached = m_chunks.find(chunkKey(cc));
+            }
+            if (!cached)
+                return glm::vec2(0.0f);
+            const uint32 i = cellIndex(c);
+            return glm::vec2(cached->vx[read][i], cached->vz[read][i]);
+        };
         for (int i = 0; i < ChunkArea; ++i)
         {
             glm::vec2 v(chunk.vx[read][i], chunk.vz[read][i]);
+            if (raster && raster->isBlocked(base + glm::ivec2(i & (ChunkCells - 1), i >> ChunkBits)))
+            {
+                // A wall cell holds NOTHING: whatever landed there before the cell was built over
+                // is dropped, so viscosity can never diffuse momentum back out of a wall. (The
+                // no-flux boundary below keeps open cells from feeding into one either way.)
+                chunk.vx[m_write][i] = 0;
+                chunk.vz[m_write][i] = 0;
+                continue;
+            }
+            if (viscosity > 0.0f)
+            {
+                // Viscous drag, ASYMMETRIC: a STRONGER neighbour pulls at full weight, a weaker one
+                // only at `viscosityBackflow`. Fully symmetric diffusion averaged a seeded lane
+                // against the weak haze beside it, which straightened the lane and walked it off its
+                // corners; at 0 the lane keeps its exact shape but nothing ever softens it either,
+                // so the backflow term buys some of that mixing back under control. Stability is
+                // unchanged (weights are <= 1 per neighbour, the step is clamped to 0.25).
+                const glm::ivec2 c = base + glm::ivec2(i & (ChunkCells - 1), i >> ChunkBits);
+                const float ownSq = glm::dot(v, v);
+                glm::vec2 lap(0.0f);
+                for (const glm::ivec2& o : c_n4)
+                {
+                    const glm::ivec2 n = c + o;
+                    if (raster && raster->isBlocked(n))
+                        continue; // no-flux wall boundary
+                    const glm::vec2 vn = readAt(n);
+                    const float vnSq = glm::dot(vn, vn);
+                    if (vnSq < viscFloorSq)
+                        continue; // below the floor: not a lane, nothing worth spreading
+                    lap += (vn - v) * (vnSq > ownSq ? 1.0f : viscosityBackflow);
+                }
+                v += lap * viscosity;
+            }
             if (raster && (v.x != 0.0f || v.y != 0.0f))
             {
                 const glm::ivec2 c = base + glm::ivec2(i & (ChunkCells - 1), i >> ChunkBits);
@@ -135,8 +201,16 @@ void FlowField::update(uint32 keepFrames, float decay, const TeamField* raster, 
                         v -= n * (into * (1.0f + wallBounce));
                 }
             }
-            chunk.vx[m_write][i] = int16(glm::clamp(v.x * decay, -32767.0f, 32767.0f));
-            chunk.vz[m_write][i] = int16(glm::clamp(v.y * decay, -32767.0f, 32767.0f));
+            v *= decay;
+            if (maxSpeed > 0.0f) // a milling crowd must not out-shout a seeded lane
+            {
+                const float cap = maxSpeed * Scale;
+                const float len = glm::length(v);
+                if (len > cap)
+                    v *= cap / len;
+            }
+            chunk.vx[m_write][i] = int16(glm::clamp(v.x, -32767.0f, 32767.0f));
+            chunk.vz[m_write][i] = int16(glm::clamp(v.y, -32767.0f, 32767.0f));
         }
         return false;
     });
@@ -160,6 +234,99 @@ void FlowField::clearArea(const glm::vec2& xz, float radius)
             chunk->vx[0][i] = chunk->vz[0][i] = 0;
             chunk->vx[1][i] = chunk->vz[1][i] = 0;
         }
+}
+
+void FlowField::seedPath(oc::span<const glm::vec2> path, float speed, float radius, const TeamField* raster)
+{
+    if (path.size() < 2 || speed <= 0.0f)
+        return;
+    const auto write = [&](const glm::vec2& p, const glm::vec2& v)
+    {
+        const glm::ivec2 c = cellOf(p);
+        if (raster && raster->isBlocked(c))
+            return; // never seed flow into a wall — nothing can stand there to follow it
+        Chunk& chunk = m_chunks.getOrCreate(chunkKey(chunkOf(c)));
+        chunk.touchedFrame = m_frame;
+        const uint32 i = cellIndex(c);
+        // Max magnitude, EXCEPT when the plan disagrees with what is there: re-seeding the same
+        // route is idempotent and a strong live lane is never weakened, but a re-plan that goes a
+        // DIFFERENT way must win even where a milling crowd's own splats sum higher than the lane
+        // speed — otherwise a group's periodic re-seed silently writes nothing exactly where the
+        // group is standing.
+        for (uint32 b = 0; b < 2; ++b)
+        {
+            const glm::vec2 cur(chunk.vx[b][i], chunk.vz[b][i]);
+            const glm::vec2 next = v * Scale;
+            const float curLen = glm::length(cur);
+            const bool stronger = glm::dot(next, next) > glm::dot(cur, cur);
+            const bool disagrees = curLen > 1e-3f && glm::dot(next, cur) < 0.5f * glm::length(next) * curLen;
+            if (stronger || disagrees) // 0.5 = more than 60 deg apart
+            {
+                chunk.vx[b][i] = int16(glm::clamp(next.x, -32767.0f, 32767.0f));
+                chunk.vz[b][i] = int16(glm::clamp(next.y, -32767.0f, 32767.0f));
+            }
+        }
+    };
+    // Segment directions up front: the WRITTEN vector near a junction is a blend of the two
+    // segments meeting there, easing over c_turnBlend metres on each side. The polyline itself is
+    // untouched (a rounded path could cut a wall corner) — only the flow VECTORS turn gradually,
+    // so a 90 deg corner in the route reads as an arc to anything following it.
+    static constexpr float c_turnBlend = 2.0f;
+    oc::fixed_vector<glm::vec2, 64> dirs;
+    oc::fixed_vector<float, 64> lens;
+    for (size_t s = 0; s + 1 < path.size(); ++s)
+    {
+        const glm::vec2 seg = path[s + 1] - path[s];
+        const float len = glm::length(seg);
+        dirs.push_back(len > 1e-3f ? seg / len : glm::vec2(0.0f));
+        lens.push_back(len);
+    }
+    const int lateral = int(glm::max(radius, 0.0f) / CellSize);
+    for (size_t s = 0; s + 1 < path.size() && s < dirs.size(); ++s)
+    {
+        const float len = lens[s];
+        if (len < 1e-3f)
+            continue;
+        const glm::vec2 a = path[s], dir = dirs[s];
+        for (float t = 0.0f; t <= len; t += CellSize * 0.5f)
+        {
+            // Half-weight toward the neighbouring segment AT the junction, fading to none
+            // c_turnBlend metres away — the two sides of a corner meet at the bisector.
+            glm::vec2 v = dir;
+            if (s > 0 && t < c_turnBlend)
+                v += dirs[s - 1] * (0.5f * (1.0f - t / c_turnBlend));
+            if (s + 2 < path.size() && len - t < c_turnBlend)
+                v += dirs[s + 1] * (0.5f * (1.0f - (len - t) / c_turnBlend));
+            const float vl = glm::length(v);
+            v = vl > 1e-3f ? v / vl : dir;
+            const glm::vec2 p = a + dir * t;
+            // NEVER write a vector that aims at a wall. At a one-cell gap the junction blend points
+            // diagonally, i.e. at the wall BESIDE the opening, and the flow term is strong enough
+            // that units then follow it into that wall instead of through the gap. Fall back to the
+            // pure segment direction, then to the straight line to the segment's end.
+            if (raster && raster->isBlocked(cellOf(p + v * CellSize)))
+            {
+                if (!raster->isBlocked(cellOf(p + dir * CellSize)))
+                    v = dir;
+                else
+                {
+                    const glm::vec2 toEnd = path[s + 1] - p;
+                    const float el = glm::length(toEnd);
+                    if (el > 1e-3f && !raster->isBlocked(cellOf(p + toEnd / el * CellSize)))
+                        v = toEnd / el;
+                }
+            }
+            const glm::vec2 side(-v.y, v.x);
+            // CONSTRICTION BOOST: where the lane squeezes between walls the surrounding cells hold
+            // no flow to support it and a crowd waiting at the mouth is splatting its own, so the
+            // one cell that matters is written harder than the open stretches.
+            const bool squeeze = raster && (raster->isBlocked(cellOf(p + side * CellSize))
+                || raster->isBlocked(cellOf(p - side * CellSize)));
+            const float write_speed = speed * (squeeze ? 1.6f : 1.0f);
+            for (int l = -lateral; l <= lateral; ++l)
+                write(p + side * (float(l) * CellSize), v * write_speed);
+        }
+    }
 }
 
 void FlowField::clear()
@@ -215,16 +382,20 @@ float PressureField::value(const glm::vec2& xz) const
     return chunk ? chunk->p[m_write][cellIndex(c)] : 0.0f;
 }
 
-glm::vec2 PressureField::gradient(const glm::vec2& xz) const
+glm::vec2 PressureField::gradient(const glm::vec2& xz, const TeamField* raster) const
 {
     const glm::ivec2 c = cellOf(xz);
     const uint32 buffer = m_write;
     glm::ivec2 cachedCoord = chunkOf(c);
     const Chunk* cached = m_chunks.find(chunkKey(cachedCoord));
-    const float xp = cellValue(c + glm::ivec2(1, 0), buffer, cached, cachedCoord);
-    const float xm = cellValue(c - glm::ivec2(1, 0), buffer, cached, cachedCoord);
-    const float zp = cellValue(c + glm::ivec2(0, 1), buffer, cached, cachedCoord);
-    const float zm = cellValue(c - glm::ivec2(0, 1), buffer, cached, cachedCoord);
+    const float here = cellValue(c, buffer, cached, cachedCoord);
+    const auto at = [&](const glm::ivec2& o)
+    {
+        const glm::ivec2 n = c + o;
+        return (raster && raster->isBlocked(n)) ? here : cellValue(n, buffer, cached, cachedCoord);
+    };
+    const float xp = at(glm::ivec2(1, 0)), xm = at(glm::ivec2(-1, 0));
+    const float zp = at(glm::ivec2(0, 1)), zm = at(glm::ivec2(0, -1));
     return glm::vec2(xp - xm, zp - zm) / (2.0f * CellSize);
 }
 
@@ -262,9 +433,12 @@ bool PressureField::lowestNearby(const glm::vec2& xz, int radiusCells, const Tea
     return found;
 }
 
-void PressureField::update(const TeamField* raster, float diffusion, float decay, uint32 keepFrames)
+void PressureField::update(float deltaSec, const TeamField* raster, float diffusionPerSec,
+    float halfLifeSec, uint32 keepFrames, float propagationFloor, const CellVisit* onActiveCell)
 {
     ++m_frame;
+    const float decay = fadeStep(deltaSec, halfLifeSec);
+    const float diffusion = glm::clamp(diffusionPerSec * deltaSec * 60.0f, 0.0f, 0.25f); // Jacobi stability
     if (m_touch.isInitialized())
         m_touch.forEach([&](oc::vector<uint64>& keys)
         {
@@ -278,42 +452,92 @@ void PressureField::update(const TeamField* raster, float diffusion, float decay
     const uint32 src = m_write;
     const uint32 dst = m_write ^ 1u;
     static constexpr float c_eps = 0.02f;
+    static constexpr glm::ivec2 c_n4[4] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
     oc::vector<uint64> grow;
     m_chunks.forEachMutable([&](uint64 key, Chunk& chunk)
     {
-        const glm::ivec2 base = chunkFromKey(key) * ChunkCells;
+        const glm::ivec2 coord = chunkFromKey(key);
+        const glm::ivec2 base = coord * ChunkCells;
+        // Everything this chunk can touch, resolved ONCE: its four neighbour chunks and the five
+        // matching raster chunks (the raster uses the same cell/chunk lattice, so a cell's cost is
+        // a plain array index). The old inner loop did five hash lookups PER CELL for the raster
+        // alone — 1280 per chunk, every chunk, every team, every frame.
+        Chunk* nbr[4];
+        const TeamField::Chunk* rasterNbr[4];
+        for (int d = 0; d < 4; ++d)
+        {
+            const uint64 nKey = chunkKey(coord + c_n4[d]);
+            nbr[d] = m_chunks.find(nKey);
+            rasterNbr[d] = raster ? raster->chunks().find(nKey) : nullptr;
+        }
+        const TeamField::Chunk* rasterSelf = raster ? raster->chunks().find(key) : nullptr;
+
+        // QUIET SKIP: a chunk that held nothing last step, took no injection this frame and has no
+        // active neighbour cannot produce anything — zero its output and move on. Most chunks of a
+        // large field are quiet most of the time, which is what makes the whole pass cheap.
+        bool quiet = chunk.peak <= 0.0f && chunk.touchedFrame != m_frame;
+        for (int d = 0; d < 4 && quiet; ++d)
+            if (nbr[d] && (nbr[d]->peak > 0.0f || nbr[d]->touchedFrame == m_frame))
+                quiet = false;
+        if (quiet)
+        {
+            memset(chunk.p[dst], 0, sizeof(chunk.p[dst]));
+            chunk.peak = 0.0f;
+            return;
+        }
+
+        // Neighbour resolution by INDEX: inside the chunk it is i+-1 / i+-16, only the border
+        // steps into the neighbour chunk fetched above.
+        struct Neighbour { const Chunk* p; const TeamField::Chunk* r; int i; };
+        const auto neighbourAt = [&](int d, int i, int cx, int cz) -> Neighbour
+        {
+            switch (d)
+            {
+            case 0: return cx < ChunkCells - 1 ? Neighbour{ &chunk, rasterSelf, i + 1 }
+                                               : Neighbour{ nbr[0], rasterNbr[0], cz << ChunkBits };
+            case 1: return cx > 0 ? Neighbour{ &chunk, rasterSelf, i - 1 }
+                                  : Neighbour{ nbr[1], rasterNbr[1], (cz << ChunkBits) | (ChunkCells - 1) };
+            case 2: return cz < ChunkCells - 1 ? Neighbour{ &chunk, rasterSelf, i + ChunkCells }
+                                               : Neighbour{ nbr[2], rasterNbr[2], cx };
+            default: return cz > 0 ? Neighbour{ &chunk, rasterSelf, i - ChunkCells }
+                                   : Neighbour{ nbr[3], rasterNbr[3], ((ChunkCells - 1) << ChunkBits) | cx };
+            }
+        };
+
         float peak = 0.0f;
         for (int i = 0; i < ChunkArea; ++i)
         {
-            const glm::ivec2 c = base + glm::ivec2(i & (ChunkCells - 1), i >> ChunkBits);
+            const int cx = i & (ChunkCells - 1), cz = i >> ChunkBits;
             const float here = chunk.p[src][i];
-            if (raster && raster->isBlocked(c))
+            if (rasterSelf && rasterSelf->cost[i] == TeamField::Blocked)
             {
                 chunk.p[dst][i] = 0.0f; // walls hold no pressure (and reflect it: neighbours read
                 continue;               // their own value where the neighbour is a wall)
             }
+            float nv[4];
             float lap = 0.0f;
-            glm::ivec2 cachedCoord = chunkOf(c);
-            const Chunk* cached = &chunk;
-            static constexpr glm::ivec2 c_n4[4] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } };
-            for (const glm::ivec2& o : c_n4)
+            for (int d = 0; d < 4; ++d)
             {
-                const glm::ivec2 n = c + o;
-                const bool wall = raster && raster->isBlocked(n);
-                lap += (wall ? here : cellValue(n, src, cached, cachedCoord)) - here;
+                const Neighbour n = neighbourAt(d, i, cx, cz);
+                const bool wall = n.r && n.r->cost[n.i] == TeamField::Blocked;
+                nv[d] = wall ? here : (n.p ? n.p->p[src][n.i] : 0.0f); // no-flux: a wall reads as us
+                if (wall || glm::abs(nv[d]) < propagationFloor)
+                    continue; // below the floor: too faint to propagate, and it may not drain us
+                lap += nv[d] - here;
             }
             const float v = (here + diffusion * lap) * decay;
-            chunk.p[dst][i] = v < c_eps * 0.1f ? 0.0f : v;
-            peak = glm::max(peak, v);
+            chunk.p[dst][i] = glm::abs(v) < c_eps * 0.1f ? 0.0f : v; // abs: troughs are negative
+            peak = glm::max(peak, glm::abs(v));
+            if (glm::abs(v) <= c_eps)
+                continue;
+            if (onActiveCell) // the gradient is already in hand — see the header
+                (*onActiveCell)(cellCenter(base + glm::ivec2(cx, cz)),
+                    glm::vec2(nv[0] - nv[1], nv[2] - nv[3]) / (2.0f * CellSize));
             // Growth: pressure at a border cell wants to cross into a chunk that may not exist.
-            if (v > c_eps)
-            {
-                const int cx = i & (ChunkCells - 1), cz = i >> ChunkBits;
-                if (cx == 0) grow.push_back(chunkKey(chunkOf(c) + glm::ivec2(-1, 0)));
-                if (cx == ChunkCells - 1) grow.push_back(chunkKey(chunkOf(c) + glm::ivec2(1, 0)));
-                if (cz == 0) grow.push_back(chunkKey(chunkOf(c) + glm::ivec2(0, -1)));
-                if (cz == ChunkCells - 1) grow.push_back(chunkKey(chunkOf(c) + glm::ivec2(0, 1)));
-            }
+            if (cx == 0 && !nbr[1]) grow.push_back(chunkKey(coord + c_n4[1]));
+            if (cx == ChunkCells - 1 && !nbr[0]) grow.push_back(chunkKey(coord + c_n4[0]));
+            if (cz == 0 && !nbr[3]) grow.push_back(chunkKey(coord + c_n4[3]));
+            if (cz == ChunkCells - 1 && !nbr[2]) grow.push_back(chunkKey(coord + c_n4[2]));
         }
         chunk.peak = peak;
         if (peak > c_eps)
@@ -324,6 +548,53 @@ void PressureField::update(const TeamField* raster, float diffusion, float decay
     m_write = dst; // ONE current buffer: units read it AND inject into it next pass
     const uint32 cutoff = m_frame > keepFrames ? m_frame - keepFrames : 0;
     m_chunks.eraseIf([&](uint64, Chunk& chunk) { return chunk.touchedFrame < cutoff; });
+}
+
+void PressureField::seedPath(oc::span<const glm::vec2> path, float amount, float radius, const TeamField* raster,
+    float squeezeGain)
+{
+    if (path.size() < 2 || amount <= 0.0f)
+        return;
+    // A GAP is walls on BOTH sides ACROSS the lane; a lane merely running along one wall is open
+    // ground and gets the plain depth. Probing out to c_gapProbe cells each way also grades it: the
+    // tighter the channel, the deeper the trough (a one-cell gap is the deepest point of a route).
+    static constexpr int c_gapProbe = 2;
+    const auto dig = [&](const glm::vec2& p, const glm::vec2& along)
+    {
+        const glm::ivec2 c = cellOf(p);
+        if (raster && raster->isBlocked(c))
+            return;
+        float depth = amount;
+        if (raster && squeezeGain > 0.0f)
+        {
+            const glm::ivec2 sideCell = glm::abs(along.x) > glm::abs(along.y) ? glm::ivec2(0, 1) : glm::ivec2(1, 0);
+            int left = 0, right = 0; // open cells before hitting a wall, each capped at c_gapProbe
+            while (left < c_gapProbe && !raster->isBlocked(c + sideCell * (left + 1)))
+                ++left;
+            while (right < c_gapProbe && !raster->isBlocked(c - sideCell * (right + 1)))
+                ++right;
+            if (left < c_gapProbe && right < c_gapProbe) // walls on BOTH sides: a channel
+                depth *= 1.0f + squeezeGain * float(2 * c_gapProbe - left - right);
+        }
+        Chunk& chunk = m_chunks.getOrCreate(chunkKey(chunkOf(c)));
+        chunk.touchedFrame = m_frame;
+        float& cell = chunk.p[m_write][cellIndex(c)];
+        cell = glm::min(cell, -depth);
+    };
+    for (size_t s = 0; s + 1 < path.size(); ++s)
+    {
+        const glm::vec2 a = path[s], b = path[s + 1];
+        const glm::vec2 seg = b - a;
+        const float len = glm::length(seg);
+        if (len < 1e-3f)
+            continue;
+        const glm::vec2 dir = seg / len;
+        const glm::vec2 side(-dir.y, dir.x);
+        const int lateral = int(glm::max(radius, 0.0f) / CellSize);
+        for (float t = 0.0f; t <= len; t += CellSize * 0.5f)
+            for (int l = -lateral; l <= lateral; ++l)
+                dig(a + dir * t + side * (float(l) * CellSize), dir);
+    }
 }
 
 void PressureField::clear()

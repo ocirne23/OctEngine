@@ -158,6 +158,7 @@ GameMatch::GameMatch(bool enabled) : m_enabled(enabled)
         Tweak::floatVar("Game/Construction", "Player build rate", &m_playerBuildRate, 0.5f, 100.0f, 0.5f);
         Tweak::floatVar("Game/Player", "Base heal radius", &m_baseHealRadius, 0.0f, 60.0f, 0.5f);
         Tweak::floatVar("Game/Player", "Base heal/s", &m_baseHealRate, 0.0f, 100.0f, 0.5f);
+        Tweak::floatVar("Game/Enemies/Steer", "Group cluster radius", &m_selectionClusterRadius, 2.0f, 60.0f, 0.5f);
     }
     m_camera.registerTweaks();
     m_player.registerTweaks();
@@ -257,6 +258,7 @@ void GameMatch::spawnWorld()
         };
         m_structures.onRouteChanged = [this](uint32 id)
         {
+            seedRouteLane(id);
             if (const int index = m_structures.structureIndexById(id); index >= 0)
                 sendRoute(index);
         };
@@ -266,6 +268,8 @@ void GameMatch::spawnWorld()
         });
     }
 
+    if (!m_isServer && !m_isClient) // single player: the server binding above did not run
+        m_structures.onRouteChanged = [this](uint32 id) { seedRouteLane(id); };
     m_structures.spawnNodes(); // deterministic on every instance (no sync needed)
     spawnCorridorWalls();      // deterministic local scenery too — every role builds its own copy
     // Placement stays INSIDE the arena (footprints may not clip the border wall ring).
@@ -1516,13 +1520,98 @@ void GameMatch::pruneSelectedUnits()
     }
 }
 
+// A barracks route becomes a LANE in the team's flow field: one A* per leg (barracks -> wp1 ->
+// ...), written as flow the marching units simply follow — no unit plans anything. The lane decays
+// like any other ("Nav/Flow decay"), and the units walking it keep it alive.
+void GameMatch::seedRouteLane(uint32 structureId)
+{
+    if (m_isClient)
+        return;
+    const int index = m_structures.structureIndexById(structureId);
+    if (index < 0 || !isBarracksType(m_structures.structureType(index)))
+        return;
+    const oc::span<const glm::vec3> route = m_structures.structureRoute(index);
+    const uint8 team = m_structures.structureTeam(index);
+    glm::vec3 from = m_structures.structurePos(index);
+    for (const glm::vec3& wp : route)
+    {
+        Globals::navSystem.seedPath(team, from, wp, laneSeedSpeed(), laneSeedWidth());
+        from = wp;
+    }
+}
+
+// Centroid of the LARGEST CLUSTER of the selected units (single-linkage flood fill with
+// `linkRadius`): the lane a move order seeds must start where the BULK of the group is, and a plain
+// average would be dragged off by one straggler across the map. Selections are small, so O(n^2) is
+// the right amount of machinery here.
+static bool largestClusterCentroid(oc::span<const EntityPtr> units, float linkRadius, glm::vec3& out)
+{
+    const size_t n = units.size();
+    if (n == 0)
+        return false;
+    oc::small_vector<int, 64> cluster;   // -1 = unassigned
+    oc::small_vector<int, 64> stack;
+    for (size_t i = 0; i < n; ++i)
+        cluster.push_back(-1);
+    const float r2 = linkRadius * linkRadius;
+    int best = -1, bestCount = 0;
+    glm::vec3 bestSum(0.0f);
+    int clusters = 0;
+    for (size_t seed = 0; seed < n; ++seed)
+    {
+        if (cluster[seed] >= 0)
+            continue;
+        const int id = clusters++;
+        int count = 0;
+        glm::vec3 sum(0.0f);
+        cluster[seed] = id;
+        stack.push_back(int(seed));
+        while (!stack.empty())
+        {
+            const int i = stack.back();
+            stack.pop_back();
+            sum += units[i]->pos;
+            ++count;
+            for (size_t j = 0; j < n; ++j)
+            {
+                if (cluster[j] >= 0)
+                    continue;
+                const glm::vec2 d(units[j]->pos.x - units[i]->pos.x, units[j]->pos.z - units[i]->pos.z);
+                if (glm::dot(d, d) <= r2)
+                {
+                    cluster[j] = id;
+                    stack.push_back(int(j));
+                }
+            }
+        }
+        if (count > bestCount)
+        {
+            bestCount = count;
+            bestSum = sum;
+            best = id;
+        }
+    }
+    if (best < 0)
+        return false;
+    out = bestSum / float(bestCount);
+    return true;
+}
+
 void GameMatch::orderSelectedUnits(const glm::vec3& target, bool freshOrder)
 {
     for (const EntityPtr& p : m_selectedUnits)
         if (GameUnitComponent* u = getComponent<GameUnitComponent>(p.get()))
-        {
             u->orderMove(glm::vec3(target.x, 0.0f, target.z), freshOrder);
-        }
+    // A FRESH order seeds a planned LANE from the group to the destination: one A* (main thread),
+    // written into the team flow, and the units follow it as crowd flow — the group routes around
+    // buildings without any of them planning. The start is the largest cluster's centre, so a lone
+    // straggler cannot pull the lane's origin away from the bulk of the group.
+    glm::vec3 groupPos;
+    if (freshOrder && largestClusterCentroid(m_selectedUnits, m_selectionClusterRadius, groupPos))
+        Globals::navSystem.seedPath(uint32(m_team), groupPos, target, laneSeedSpeed(), laneSeedWidth());
+    // (No group re-seed timer: while they walk, the units themselves ask for a lane on their own
+    // timers and Nav's proximity dedup turns the whole group's requests into one plan — see
+    // GameUnitComponent's plan request and NavSystem::requestSeedPath.)
 }
 
 // RIGHT-CLICK actions with a selection, shared by Select AND Build mode: on a structure = SMART

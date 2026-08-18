@@ -12,6 +12,7 @@ import Entity;
 import Physics;
 import Force;
 import Spatial;
+import Nav;
 import :Npc;
 import :Structures;
 
@@ -74,12 +75,19 @@ void NpcSystem::registerTweaks()
     Tweak::floatVar("Game/Enemies/Steer", "Flow", &up.steerFlow, 0.0f, 3.0f, 0.05f);
     Tweak::floatVar("Game/Enemies/Steer", "Persist", &up.steerPersist, 0.0f, 3.0f, 0.05f);
     Tweak::floatVar("Game/Enemies/Steer", "Pressure", &up.steerPressure, 0.0f, 3.0f, 0.05f);
+    Tweak::floatVar("Game/Enemies/Steer", "Pressure knee", &up.pressureKnee, 0.01f, 3.0f, 0.01f);
+    Tweak::floatVar("Game/Enemies/Steer", "Flow knee", &up.flowKnee, 0.01f, 2.0f, 0.01f);
     Tweak::floatVar("Game/Enemies/Steer", "Presence pressure", &up.presencePressure, 0.0f, 1.0f, 0.005f);
     Tweak::floatVar("Game/Enemies/Steer", "Look-ahead", &up.steerLook, 2.0f, 30.0f, 0.5f);
     Tweak::floatVar("Game/Enemies/Steer", "Wall push", &up.steerWall, 0.0f, 3.0f, 0.05f);
     Tweak::floatVar("Game/Enemies/Steer", "Wall keep (m)", &up.wallKeep, 0.0f, 3.0f, 0.05f);
+    Tweak::floatVar("Game/Enemies/Steer", "Corner clip penalty", &up.steerCornerClip, 0.0f, 3.0f, 0.05f);
     Tweak::floatVar("Game/Enemies/Steer", "Stuck pressure", &up.stuckPressure, 0.0f, 10.0f, 0.1f);
     Tweak::floatVar("Game/Enemies/Steer", "Unstick after (s)", &up.unstickAfter, 0.5f, 10.0f, 0.1f);
+    Tweak::floatVar("Game/Enemies/Steer", "Seed request interval (s)", &up.seedRequestInterval, 0.5f, 30.0f, 0.5f);
+    Tweak::floatVar("Game/Enemies/Steer", "Order lane speed", &m_orderLaneSpeed, 0.0f, 20.0f, 0.5f);
+    Tweak::floatVar("Game/Enemies/Steer", "Stuck lane speed", &m_stuckLaneSpeed, 0.0f, 20.0f, 0.5f);
+    Tweak::floatVar("Game/Enemies/Steer", "Lane width (m)", &m_laneWidth, 0.0f, 12.0f, 0.5f);
     Tweak::floatVar("Game/Enemies/Steer", "Order flow blind (s)", &up.orderFlowBlind, 0.0f, 10.0f, 0.1f);
     // Shot speeds, applied when the fire queues are serviced here (the rest of the production
     // tuning registers from StructureSystem onto the component params).
@@ -103,8 +111,10 @@ void NpcSystem::clear()
     // decrement (or stale requests spawn into) a world that has been reset (load/teardown paths).
     GameUnitComponent::takeFireRequests(m_fireScratch);
     GameUnitComponent::takeDeaths(m_deathScratch);
+    GameUnitComponent::takeSeedRequests(m_seedScratch);
     GameStructureComponent::takeSpawnRequests(m_spawnScratch);
     GameStructureComponent::takeTurretFireRequests(m_turretFireScratch);
+    m_seedScratch.clear();
     m_fireScratch.clear();
     m_deathScratch.clear();
     m_spawnScratch.clear();
@@ -181,6 +191,13 @@ void NpcSystem::fireShot(const char* prefabPath, const char* name, const glm::ve
 void NpcSystem::service(StructureSystem& structures)
 {
     ProfileScope scope("Npc service", EProfileCategory::Game);
+    // STUCK units asking for a planned lane to their destination. The area limiter inside
+    // requestSeedPath collapses a jammed group into ONE plan (and caps plans per frame), so this
+    // loop is safe to feed with every request that arrived during the pass.
+    GameUnitComponent::takeSeedRequests(m_seedScratch);
+    for (const GameUnitComponent::SeedRequest& r : m_seedScratch)
+        Globals::navSystem.requestSeedPath(r.team, r.from, r.to,
+            r.stuck ? m_stuckLaneSpeed : m_orderLaneSpeed, m_laneWidth);
     // Units the BARRACKS decided to produce during the pass (their component paid the minerals,
     // claimed the roster slot and set the cooldown — this only performs the entity spawn). A
     // failed spawn refunds the cost and the slot.

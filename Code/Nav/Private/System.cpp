@@ -45,11 +45,22 @@ void NavSystem::initialize()
     for (PressureField& p : m_pressure)
         p.initialize();
     Tweak::boolean("Nav", "Enabled", &m_enabled);
-    Tweak::floatVar("Nav", "Flow decay", &m_flowDecay, 0.5f, 0.9999f, 0.0005f);
+    Tweak::floatVar("Nav", "Flow half-life (s)", &m_flowHalfLife, 0.05f, 60.0f, 0.05f);
     Tweak::floatVar("Nav", "Pressure diffusion", &m_pressureDiffusion, 0.0f, 0.25f, 0.005f);
-    Tweak::floatVar("Nav", "Pressure decay", &m_pressureDecay, 0.5f, 0.9999f, 0.001f);
-    Tweak::floatVar("Nav", "Pressure flow gain", &m_pressureFlowGain, 0.0f, 20.0f, 0.1f);
+    Tweak::floatVar("Nav", "Pressure half-life (s)", &m_pressureHalfLife, 0.02f, 30.0f, 0.02f);
+    Tweak::floatVar("Nav", "Pressure floor", &m_pressureFloor, 0.0f, 5.0f, 0.02f);
+    Tweak::floatVar("Nav", "Pressure flow gain 10^x", &m_pressureFlowGainExp, -2.0f, 3.0f, 0.02f);
     Tweak::floatVar("Nav", "Wall bounce", &m_wallBounce, 0.0f, 1.0f, 0.05f);
+    Tweak::floatVar("Nav", "Flow viscosity", &m_flowViscosity, 0.0f, 0.25f, 0.005f);
+    Tweak::floatVar("Nav", "Flow max (m/s)", &m_flowMaxSpeed, 0.0f, 40.0f, 0.5f);
+    Tweak::floatVar("Nav", "Viscosity floor (m/s)", &m_flowViscosityFloor, 0.0f, 8.0f, 0.05f);
+    Tweak::floatVar("Nav", "Viscosity backflow", &m_flowViscosityBackflow, 0.0f, 1.0f, 0.02f);
+    Tweak::floatVar("Nav", "Seed area (m)", &m_seedArea, 2.0f, 64.0f, 1.0f);
+    Tweak::floatVar("Nav", "Seed cooldown (s)", &m_seedCooldown, 0.0f, 30.0f, 0.25f);
+    Tweak::intVar("Nav", "Seed max/frame", &m_seedMaxPerFrame, 0, 16);
+    Tweak::floatVar("Nav", "Seed trough", &m_seedTrough, 0.0f, 20.0f, 0.05f);
+    Tweak::floatVar("Nav", "Seed trough squeeze", &m_seedSqueeze, 0.0f, 10.0f, 0.05f);
+    Tweak::floatVar("Nav", "Seed range (m)", &m_seedRange, 0.0f, 400.0f, 2.0f); // 0 = the whole path
     Tweak::floatVar("Nav", "Field radius", &m_fieldRadius, 10.0f, 2000.0f, 5.0f);
     Tweak::floatVar("Nav", "Rebuild interval", &m_rebuildInterval, 0.05f, 5.0f, 0.05f);
     Tweak::intVar("Nav", "Clearance cost", &m_clearanceCost, 0, 32);
@@ -57,6 +68,7 @@ void NavSystem::initialize()
     Tweak::intVar("Nav", "Debug draw", &m_debugMode, 0, 2); // 1 = chunks + team field, 2 = flow + pressure
     Tweak::intVar("Nav", "Debug team", &m_debugTeam, 0, int(MaxTeams)); // 8 = the player's goal field
     Tweak::floatVar("Nav", "Debug radius", &m_debugRadius, 5.0f, 400.0f, 1.0f);
+    Tweak::floatVar("Nav", "Debug flow min (m/s)", &m_debugFlowMin, 0.0f, 8.0f, 0.05f);
 }
 
 static uint64 hashBytes(const void* data, size_t size)
@@ -144,6 +156,82 @@ const TeamField* NavSystem::goalField(uint64 key) const
     return it != m_goals.end() ? it->second->published.get() : nullptr;
 }
 
+bool NavSystem::seedPath(uint32 team, const glm::vec3& from, const glm::vec3& to, float speed,
+    float laneWidth, float clearance, oc::vector<glm::vec2>* outPath)
+{
+    ProfileScope scope("Nav seed path", EProfileCategory::Game);
+    const TeamField* raster = m_raster.published.get();
+    if (!raster || team >= MaxTeams)
+        return false;
+    oc::vector<glm::vec2> path;
+    if (!raster->findPath(glm::vec2(from.x, from.z), glm::vec2(to.x, to.z), 8192, clearance * 0.5f, path))
+        return false;
+    // The A* runs to the real destination (a truncated SEARCH would pick the wrong way round an
+    // obstacle), but only the first "Seed range" metres are WRITTEN: a lane far ahead of the group
+    // is stale by the time anyone gets there, and the group re-seeds from where it actually is.
+    if (m_seedRange > 0.0f)
+    {
+        float remaining = m_seedRange;
+        for (size_t i = 0; i + 1 < path.size(); ++i)
+        {
+            const float len = glm::distance(path[i], path[i + 1]);
+            if (len >= remaining)
+            {
+                path[i + 1] = path[i] + (path[i + 1] - path[i]) * (remaining / glm::max(len, 1e-4f));
+                path.resize(i + 2);
+                break;
+            }
+            remaining -= len;
+        }
+    }
+    m_flow[team].seedPath(path, speed, laneWidth * 0.5f, raster);
+    // ... and carve a pressure TROUGH along the same route: pressure is where "attraction" lives
+    // (the steering reads -grad p and the flow is pushed by -grad p), so the lane pulls units and
+    // surrounding flow into itself instead of only existing where it was drawn.
+    if (m_seedTrough > 0.0f)
+        m_pressure[team].seedPath(path, m_seedTrough, laneWidth * 0.5f, raster, m_seedSqueeze);
+    if (outPath)
+        *outPath = path;
+    return true;
+}
+
+bool NavSystem::requestSeedPath(uint32 team, const glm::vec3& from, const glm::vec3& to, float speed,
+    float laneWidth, float clearance)
+{
+    if (team >= MaxTeams || m_seedsThisFrame >= m_seedMaxPerFrame)
+        return false;
+    const glm::vec2 f(from.x, from.z), t(to.x, to.z);
+    const float area = glm::max(m_seedArea, 0.5f);
+    const float areaSq = area * area;
+    const glm::ivec2 home(int32(glm::floor(f.x / area)), int32(glm::floor(f.y / area)));
+    // Suppressed when a recent plan of this team started within `area` of here AND went to within
+    // `area` of the same destination: a crowd walking the same way is one plan, a unit heading
+    // somewhere else is not blocked by it. The test is a DISTANCE (a bucket border used to let two
+    // plans through), but the candidates come from the 3x3 buckets around the start — bucket size
+    // IS the radius, so nothing within range can sit outside that neighbourhood, and the cost per
+    // request is constant no matter how many plans are alive.
+    for (int dz = -1; dz <= 1; ++dz)
+        for (int dx = -1; dx <= 1; ++dx)
+        {
+            const auto it = m_seedBuckets.find(seedBucketKey(team, home + glm::ivec2(dx, dz)));
+            if (it == m_seedBuckets.end())
+                continue;
+            // Read-only: retiring is the expiry queue's job (removing here would break the
+            // append-only order it relies on). A stamp that expired since the last update is
+            // simply skipped — at most one frame's worth ever sits here.
+            for (const SeedStamp& stamp : it->second)
+                if (m_time - stamp.time < m_seedCooldown
+                    && glm::dot(stamp.from - f, stamp.from - f) < areaSq
+                    && glm::dot(stamp.to - t, stamp.to - t) < areaSq)
+                    return false;
+        }
+    const uint64 key = seedBucketKey(team, home);
+    m_seedBuckets[key].push_back(SeedStamp{ f, t, m_time }); // stamped even when the plan below
+    m_seedExpiry.push_back(oc::pair<float, uint64>(m_time, key)); // fails: a hopeless pair must
+    ++m_seedsThisFrame;                                          // not retry every frame
+    return seedPath(team, from, to, speed, laneWidth, clearance);
+}
+
 void NavSystem::kickBuild(TeamSlot& slot)
 {
     slot.buildSources = slot.sources;
@@ -194,6 +282,21 @@ void NavSystem::update(float deltaSec)
         }
     };
     ++m_frame;
+    m_time += deltaSec;
+    m_seedsThisFrame = 0;
+    // Retire expired seed stamps: the queue is in time order and each bucket is append-only, so
+    // the front of the queue always names the oldest stamp of that bucket. Nothing is scanned.
+    while (!m_seedExpiry.empty() && m_time - m_seedExpiry.front().first >= m_seedCooldown)
+    {
+        const auto it = m_seedBuckets.find(m_seedExpiry.front().second);
+        if (it != m_seedBuckets.end())
+        {
+            it->second.erase(it->second.begin()); // the oldest stamp in that bucket
+            if (it->second.empty())
+                m_seedBuckets.erase(it);
+        }
+        m_seedExpiry.pop_front();
+    }
     for (TeamSlot& slot : m_teams)
         publish(slot);
     publish(m_raster);
@@ -239,36 +342,28 @@ void NavSystem::update(float deltaSec)
 
     // 3. Flow + pressure steps.
     for (FlowField& f : m_flow)
-        f.update(uint32(glm::max(m_keepFrames, 1)), m_flowDecay, m_raster.published.get(), m_wallBounce);
+        f.update(deltaSec, uint32(glm::max(m_keepFrames, 1)), m_flowHalfLife, m_raster.published.get(),
+            m_wallBounce, m_flowViscosity, m_flowMaxSpeed, m_flowViscosityFloor, m_flowViscosityBackflow);
     {
         ProfileScope pscope("Nav pressure diffuse", EProfileCategory::Game);
-        for (PressureField& p : m_pressure)
-            p.update(m_raster.published.get(), m_pressureDiffusion, m_pressureDecay, uint32(glm::max(m_keepFrames, 1)));
-        // Pressure PUSHES the flow (v += -grad p): every pressurized cell splats the negative
-        // gradient into the team's lanes, so a jam bends the stream upstream of it and units
-        // following the lane are diverted before they arrive.
-        if (m_pressureFlowGain > 0.0f)
-            for (uint32 t = 0; t < MaxTeams; ++t)
+        // Pressure PUSHES the flow (v += -grad p): a jam bends the stream upstream of it and a
+        // seeded trough sucks the surrounding lanes in. The push rides the diffusion step itself —
+        // it hands us the gradient it already computed, instead of a second pass that re-resolved
+        // eight neighbours per cell through the chunk hash.
+        const float pressureFlowGain = this->pressureFlowGain();
+        const TeamField* raster = m_raster.published.get();
+        for (uint32 t = 0; t < MaxTeams; ++t)
+        {
+            FlowField& flow = m_flow[t];
+            const PressureField::CellVisit push = [&flow, pressureFlowGain](const glm::vec2& centre, const glm::vec2& g)
             {
-                const PressureField& p = m_pressure[t];
-                FlowField& flow = m_flow[t];
-                const uint32 buffer = p.readBuffer();
-                p.chunks().forEach([&](uint64 key, const PressureField::Chunk& chunk)
-                {
-                    if (chunk.peak < 0.02f)
-                        return;
-                    const glm::ivec2 base = chunkFromKey(key) * ChunkCells;
-                    for (int i = 0; i < ChunkArea; ++i)
-                    {
-                        if (chunk.p[buffer][i] < 0.02f)
-                            continue;
-                        const glm::vec2 centre = cellCenter(base + glm::ivec2(i & (ChunkCells - 1), i >> ChunkBits));
-                        const glm::vec2 g = p.gradient(centre);
-                        if (glm::dot(g, g) > 1e-6f)
-                            flow.splat(centre, -g * m_pressureFlowGain);
-                    }
-                });
-            }
+                if (glm::dot(g, g) > 1e-6f)
+                    flow.splat(centre, -g * pressureFlowGain);
+            };
+            m_pressure[t].update(deltaSec, raster, m_pressureDiffusion, m_pressureHalfLife,
+                uint32(glm::max(m_keepFrames, 1)), m_pressureFloor,
+                pressureFlowGain > 0.0f ? &push : nullptr);
+        }
     }
 }
 
@@ -294,6 +389,8 @@ void NavSystem::clear()
     m_buildObstacles.clear();
     m_obstacleHash = 0;
     m_obstaclesDirty = false;
+    m_seedBuckets.clear();
+    m_seedExpiry.clear();
     m_publishedCount = 0;
 }
 
@@ -336,14 +433,17 @@ void NavSystem::drawDebug(const glm::vec3& focus,
             for (int i = 0; i < ChunkArea; ++i)
             {
                 const float v = chunk.p[pbuf][i];
-                if (v < 0.02f)
+                if (glm::abs(v) < 0.02f)
                     continue;
                 const glm::vec2 c = cellCenter(base + glm::ivec2(i & (ChunkCells - 1), i >> ChunkBits));
                 if (glm::dot(c - f, c - f) > r2)
                     continue;
-                const float t = glm::clamp(v / 2.0f, 0.0f, 1.0f);
-                const uint32 col = packColor(1.0f, 1.0f - 0.8f * t, 0.1f);
-                const float h = 0.3f + 4.0f * t;
+                // Log scale so a jam does not flatten the map; SIGNED: jams rise yellow->red,
+                // seeded troughs hang below in cyan->blue.
+                const float t = glm::clamp(std::log1p(glm::abs(v)) / std::log1p(20.0f), 0.0f, 1.0f);
+                const uint32 col = v >= 0.0f ? packColor(1.0f, 1.0f - 0.8f * t, 0.1f)   // jam: yellow -> red
+                                             : packColor(0.25f, 0.45f - 0.35f * t, 1.0f); // trough: light -> deep blue
+                const float h = (0.3f + 4.0f * t) * (v >= 0.0f ? 1.0f : -0.35f); // troughs dip
                 const float e = 0.3f + 0.6f * t; // diamond half-size grows with pressure
                 // Diamond on the ground + a bar + a diamond at the top: reads as a column.
                 const glm::vec3 g0(c.x - e, y, c.y), g1(c.x, y, c.y - e), g2(c.x + e, y, c.y), g3(c.x, y, c.y + e);
@@ -355,7 +455,10 @@ void NavSystem::drawDebug(const glm::vec3& focus,
         });
         const FlowField& flow = m_flow[team];
         const uint32 fbuf = flow.readBuffer();
-        const uint32 foutline = packColor(0.2f, 0.5f, 0.6f);
+        const uint32 foutline = packColor(0.15f, 0.45f, 0.2f); // flow chunks: dim green
+        // Yardstick = the per-cell cap the field itself enforces ("Nav/Flow max"), so arrow length
+        // and colour mean the same thing from frame to frame and place to place.
+        const float flowScale = 1.0f / glm::max(m_flowMaxSpeed, 0.1f);
         flow.chunks().forEach([&](uint64 key, const FlowField::Chunk& chunk)
         {
             const glm::vec2 mn = chunkMinWorld(chunkFromKey(key));
@@ -369,21 +472,41 @@ void NavSystem::drawDebug(const glm::vec3& focus,
             {
                 const glm::vec2 v = glm::vec2(chunk.vx[fbuf][i], chunk.vz[fbuf][i]) / FlowField::Scale;
                 const float mag = glm::length(v);
-                if (mag < 0.05f)
+                if (mag < m_debugFlowMin) // a haze of near-zero arrows hides the lanes
                     continue;
                 const glm::vec2 centre = cellCenter(base + glm::ivec2(i & (ChunkCells - 1), i >> ChunkBits));
                 if (glm::dot(centre - f, centre - f) > r2)
                     continue;
-                const float t = glm::clamp(mag / 8.0f, 0.0f, 1.0f);
-                const uint32 col = packColor(t, 1.0f - t, 1.0f);
+                const float t = glm::clamp(mag * flowScale, 0.0f, 1.0f); // 1 = the strongest on screen
+                const uint32 col = packColor(0.15f + 0.85f * t, 1.0f, 0.2f + 0.6f * t); // flow: green -> white
                 const glm::vec2 dir = v / mag;
-                const float len = 0.3f + 0.6f * t;
-                const glm::vec2 tip = centre + dir * len;
                 const glm::vec2 side(-dir.y, dir.x);
-                const float ya = y + 0.05f;
-                line(glm::vec3(centre.x, ya, centre.y), glm::vec3(tip.x, ya, tip.y), col);
-                line(glm::vec3(tip.x, ya, tip.y), glm::vec3(tip.x - dir.x * 0.25f + side.x * 0.15f, ya, tip.y - dir.y * 0.25f + side.y * 0.15f), col);
-                line(glm::vec3(tip.x, ya, tip.y), glm::vec3(tip.x - dir.x * 0.25f - side.x * 0.15f, ya, tip.y - dir.y * 0.25f - side.y * 0.15f), col);
+                const float len = 0.5f + 1.1f * t;
+                const float ya = y + 0.06f;
+                const glm::vec2 tail = centre - dir * len * 0.4f;
+                const glm::vec2 tip = centre + dir * len * 0.6f;
+                // A line-list arrow is nearly invisible at RTS camera distance, so the shaft is
+                // drawn as a THICK bar (parallel offsets) and the head as a filled triangle of
+                // stacked chords — same primitive, an order of magnitude more readable.
+                const float halfW = 0.05f + 0.05f * t;
+                for (int o = -1; o <= 1; ++o)
+                {
+                    const glm::vec2 off = side * (float(o) * halfW);
+                    line(glm::vec3(tail.x + off.x, ya, tail.y + off.y), glm::vec3(tip.x + off.x, ya, tip.y + off.y), col);
+                }
+                const float headLen = 0.28f + 0.22f * t;
+                const float headHalf = 0.16f + 0.12f * t;
+                const glm::vec2 baseL = tip - dir * headLen + side * headHalf;
+                const glm::vec2 baseR = tip - dir * headLen - side * headHalf;
+                line(glm::vec3(tip.x, ya, tip.y), glm::vec3(baseL.x, ya, baseL.y), col);
+                line(glm::vec3(tip.x, ya, tip.y), glm::vec3(baseR.x, ya, baseR.y), col);
+                line(glm::vec3(baseL.x, ya, baseL.y), glm::vec3(baseR.x, ya, baseR.y), col);
+                for (int k = 1; k < 4; ++k) // chords across the head = a solid-looking triangle
+                {
+                    const float f2 = float(k) / 4.0f;
+                    const glm::vec2 l = glm::mix(tip, baseL, f2), r = glm::mix(tip, baseR, f2);
+                    line(glm::vec3(l.x, ya, l.y), glm::vec3(r.x, ya, r.y), col);
+                }
             }
         });
         return;

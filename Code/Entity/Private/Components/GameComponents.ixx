@@ -40,18 +40,29 @@ export struct GameUnitParams
     // Context steering weights (see GameComponents.cpp): each candidate heading scores
     //   free * (Goal*dot(goal) + Flow*dot(lane)*|lane|/speed + Persist*dot(last) + Free)
     //   - Pressure*dot(gradP)     (pressure = diffused crowd presence + jams)
-    float steerGoal = 0.7f;
-    float steerFree = 0.5f;        // reward for open run along the candidate
-    float steerFlow = 0.8f;        // join the crowd lane
+    float steerGoal = 0.5f;
+    float steerFree = 0.25f;        // reward for open run along the candidate
+    float steerFlow = 1.0f;        // FOLLOW the crowd lane — a lane is a seeded/proven route, so
+                                   // where one exists it should outweigh walking straight at the goal
     float steerPersist = 0.8f;     // keep the last heading (no dithering / reversals)
     float steerPressure = 0.5f;    // away from diffused pressure (crowd presence + jams)
-    float orderFlowBlind = 1.5f;   // s a freshly ordered unit ignores the crowd lane (so it can turn around)
-    float unstickAfter = 2.0f;     // s of stall after which goal/persistence are dropped: open, lowest-pressure direction + jitter
-    float presencePressure = 0.025f; // pressure every unit injects per tick (x60/s) just by being there
-    float steerLook = 8.0f;        // metres of whisker (min; scales with speed)
-    float steerWall = 1.0f;        // push away from walls within wallKeep of the body (corner rounding)
-    float wallKeep = 0.6f;         // metres beyond the body radius the wall push reaches
-    float stuckPressure = 2.0f;    // pressure a stalled unit injects per second (x stall, <= 1.5)
+    float pressureKnee = 0.23;     // pressure gradient scoring 0.5 (compressive: x/(x+knee), no saturation)
+    float flowKnee = 0.15f;        // lane speed scoring 0.5, as a fraction of moveSpeed (low: even
+                                   // a half-faded lane still counts as "there is a lane here")
+    float orderFlowBlind = 0.0f;   // s a freshly ordered unit ignores the crowd lane (so it can turn around)
+    float seedRequestInterval = 1.0f; // s between a unit's own "plan me a lane" requests
+    float unstickAfter = 1.0f;     // s of stall after which goal/persistence are dropped: open, lowest-pressure direction + jitter
+    float presencePressure = 0.01f; // pressure every unit injects per tick (x60/s) just by being
+                                   // there. OFF: the pressure field now carries the seeded lane
+                                   // TROUGHS, and a crowd's own positive haze only muddied them
+    float steerLook = 6.0f;        // metres of whisker (min; scales with speed)
+    float steerCornerClip = 0.7f;  // penalty per lateral body sample that hits a wall (corner clip)
+    float steerWall = 1.5f;        // push away from walls within wallKeep of the body (corner rounding)
+    float wallKeep = 1.0f;         // metres beyond the body radius the wall push reaches
+    float stuckPressure = 0.0f;    // pressure a stalled unit injects per second (x stall, <= 1.5).
+                                   // OFF: being stuck now REQUESTS A PLANNED PATH (see
+                                   // seedRequestInterval), which is a real answer instead of a
+                                   // repulsion field that only told the crowd to spread out
 };
 
 // A combat unit: team bubble on player-shield rules minus regen (pressure drains the battery,
@@ -85,6 +96,19 @@ export struct GameUnitComponent
         uint8 team = 1;
     };
     static void takeFireRequests(oc::vector<FireRequest>& out);
+    // EVERY unit with somewhere to be asks for a planned lane on its own timer (Nav path seeding
+    // is main-thread work). The game drains these and forwards them to NavSystem::requestSeedPath,
+    // whose PROXIMITY dedup collapses a whole crowd walking the same way into ONE plan — that is
+    // what makes a per-unit request affordable, and it keeps a group's lane refreshed as the group
+    // advances without anyone tracking the group.
+    struct SeedRequest
+    {
+        glm::vec3 from{ 0.0f };
+        glm::vec3 to{ 0.0f };
+        uint8 team = 1;
+        bool stuck = false; // stalled unit: the game seeds it as the weaker "stuck" lane
+    };
+    static void takeSeedRequests(oc::vector<SeedRequest>& out);
     static void takeDeaths(oc::vector<uint32>& outSourceIds); // spawner ids of units that died
     // (There is NO separate shield mirror: this component's state RIDES THE ENTITY SYNC — the
     // engine's snapshot/claim records carry a quantized game blob whenever the entity has a
@@ -170,6 +194,7 @@ private:
     float m_fireTimer = 0.0f;
     uint32 m_rng = 0;           // tiny per-unit LCG — worker-safe, seeded from the entity address
     float m_pressureTimer = 0.0f; // stalled time (displacement checkpoints) -> weights + pressure
+    float m_seedTimer = 0.0f;       // per-unit cooldown on lane requests (the area limiter is global)
     float m_ignoreFlowTimer = 0.0f; // > 0: the lane term is skipped (fresh move order)
     glm::vec2 m_stuckAnchor{ 0.0f };
     float m_stuckCheckTimer = 0.0f;

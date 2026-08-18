@@ -45,6 +45,24 @@ export namespace Nav
         // Any published field — every field shares the obstacle raster, so this is THE raster for
         // lineOfSight/avoid when a walker has no distance field of its own (routes, locked orders).
         const TeamField* raster() const { return m_raster.published.get(); }
+        // SEED PATH (main thread): plan a route from -> to with A* over the obstacle raster
+        // (string-pulled) and WRITE it into `team`'s flow field as a lane of `speed` m/s, `width`
+        // metres wide. Units following the crowd flow then take that route without any of them
+        // planning; the lane decays like any other ("Nav/Flow decay"). false = no raster yet or no
+        // path within the budget. `outPath` (optional) receives the planned polyline for debug draw.
+        // `laneWidth` is how wide the lane is PAINTED (0 = one cell; the flow viscosity spreads it
+        // further either way); `clearance` is the planning width — how much room the planned route
+        // keeps from walls.
+        bool seedPath(uint32 team, const glm::vec3& from, const glm::vec3& to, float speed,
+            float laneWidth = 0.0f, float clearance = 2.0f, oc::vector<glm::vec2>* outPath = nullptr);
+        // The RATE-LIMITED entry point (main thread) — EVERY unit asks on its own timer, this is
+        // what makes that affordable: a request is refused when a plan of the same team was already
+        // made within "Seed area" metres of BOTH its start and its destination inside the last
+        // "Seed cooldown" seconds, and at most "Seed max/frame" plans run in a frame. A crowd
+        // heading the same way therefore produces ONE path and the rest ride the lane it writes.
+        // Proximity, not buckets: two units either side of a bucket border are one request.
+        bool requestSeedPath(uint32 team, const glm::vec3& from, const glm::vec3& to, float speed,
+            float laneWidth = 0.0f, float clearance = 2.0f);
 
         // GOAL fields: a single-destination field per KEY (the local player's move order, each
         // barracks route waypoint), the same TeamField with ONE source. Rebuilt when the
@@ -100,6 +118,23 @@ export namespace Nav
         oc::vector<NavObstacle> m_buildObstacles; // snapshot shared by every in-flight job
         uint64 m_obstacleHash = 0;
         bool m_obstaclesDirty = false;
+        // Recent plans, BUCKETED BY THEIR START at exactly the dedup radius: a request only has to
+        // look at the 3x3 bucket neighbourhood around its own start, so the check costs the same
+        // whether ten units or a thousand are asking every second (a flat list was O(plans) per
+        // request, and every unit now requests on its own timer).
+        struct SeedStamp { glm::vec2 from{ 0.0f }, to{ 0.0f }; float time = 0.0f; };
+        static uint64 seedBucketKey(uint32 team, const glm::ivec2& bucket)
+        {
+            return (uint64(team) << 56) | ((uint64(uint32(bucket.x)) & 0xFFF'FFFFull) << 28)
+                | (uint64(uint32(bucket.y)) & 0xFFF'FFFFull);
+        }
+        oc::unordered_map<uint64, oc::vector<SeedStamp>> m_seedBuckets;
+        // EXPIRY QUEUE: stamps are made in time order and each bucket is append-only at the back,
+        // so one global FIFO of (time, bucket) retires them without ever walking the map — update()
+        // pops only what has actually expired, which is nothing at all on most frames.
+        oc::deque<oc::pair<float, uint64>> m_seedExpiry;
+        float m_time = 0.0f;
+        int m_seedsThisFrame = 0;
         uint32 m_publishedCount = 0;
         bool m_initialized = false;
 
@@ -109,14 +144,34 @@ export namespace Nav
         float m_rebuildInterval = 0.25f;
         int m_clearanceCost = 1; // 2x on wall-adjacent cells: nudge off walls, no wide detours
         int m_keepFrames = 120;
-        float m_flowDecay = 0.995f; // per frame: ~10 s trail at 60 Hz (lanes outlive the group)
-        float m_pressureDiffusion = 0.2f; // Jacobi step weight (stable <= 0.25)
-        float m_pressureDecay = 0.97f;    // per frame
-        float m_wallBounce = 1.0f;        // flow into a wall: 1 = reflect, 0 = slip
-        float m_pressureFlowGain = 2.0f;  // m/s of flow per unit of pressure gradient (pressure PUSHES the lanes)
+        // Fade rates are HALF-LIVES in seconds (frame-rate independent), not per-frame factors.
+        float m_flowHalfLife = 5.0f;     // seconds for a lane to lose half its speed (a seeded
+                                          // order lane is still ~50% after 10 s, ~25% after 20 s)
+        float m_pressureDiffusion = 0.1f; // Jacobi step weight at 60 Hz (dt-scaled, clamped to 0.25)
+        float m_pressureFloor = 1.6f;      // magnitude a neighbour needs before it diffuses (0 = off)
+        float m_pressureHalfLife = 1.0f;  // seconds for pressure to halve — the seeded TROUGH has
+                                          // to outlive the walk it was planned for, and jams stay
+                                          // felt after the crowd that made them moved on
+        float m_wallBounce = 0.0f;        // flow into a wall: 1 = reflect, 0 = slip
+        float m_flowViscosity = 0.00f;    // momentum diffusion: a lane drags its neighbours along
+        float m_flowMaxSpeed = 20.0f;      // per-cell magnitude cap (splats SUM — see FlowField::update)
+        float m_flowViscosityFloor = 3.0; // m/s a neighbour needs before viscosity may spread it
+        float m_flowViscosityBackflow = 0.5f; // how much a WEAKER neighbour may pull a lane (0..1)
+        float m_seedArea = 20.0f;         // metres: requests from/to the same area are ONE lane
+        float m_seedCooldown = 1.0f;      // seconds that area pair stays suppressed
+        int m_seedMaxPerFrame = 2;        // hard cap on plans per frame (A* is main-thread work)
+        float m_seedTrough = 20.0f;        // NEGATIVE pressure a seeded lane carves (0 = flow only)
+        float m_seedSqueeze = 10.0f;       // extra trough depth per blocked neighbour of a lane cell
+        float m_seedRange = 20.0f;        // metres of the plan actually written (0 = all of it)
+        // LOG-SCALED tweak: the slider is the EXPONENT, the gain is 10^x — one slider covers
+        // 0.01 .. 1000 m/s of flow per unit of pressure gradient, with fine control at the low end
+        // (a linear 0..20 range could neither reach "pressure dominates" nor resolve small values).
+        float m_pressureFlowGainExp = 0.3f;
+        float pressureFlowGain() const { return std::pow(10.0f, m_pressureFlowGainExp); }
         int m_debugMode = 2;
         int m_debugTeam = 0;
         float m_debugRadius = 60.0f;
+        float m_debugFlowMin = 0.1f; // hide flow arrows below this (the haze buries the lanes)
     };
 }
 

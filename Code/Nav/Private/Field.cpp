@@ -489,6 +489,129 @@ glm::vec2 TeamField::wallPush(const glm::vec2& xz, float range) const
     return push;
 }
 
+namespace
+{
+    struct AStarNode
+    {
+        glm::ivec2 cell;
+        uint32 parent;
+        uint32 g;
+        uint32 h;
+        bool closed;
+    };
+    struct AStarOpen
+    {
+        uint32 f;
+        uint32 index;
+        bool operator>(const AStarOpen& o) const { return f > o.f; }
+    };
+    inline uint64 packCell(const glm::ivec2& c) { return (uint64(uint32(c.x)) << 32) | uint64(uint32(c.y)); }
+    inline uint32 octile(const glm::ivec2& a, const glm::ivec2& b)
+    {
+        const uint32 dx = uint32(glm::abs(a.x - b.x)), dz = uint32(glm::abs(a.y - b.y));
+        const uint32 mn = glm::min(dx, dz), mx = glm::max(dx, dz);
+        return mn * 23 + (mx - mn) * 16; // same 1/8 m units as the field build
+    }
+}
+
+bool TeamField::findPath(const glm::vec2& from, const glm::vec2& to, uint32 maxExpand, float radius,
+    oc::vector<glm::vec2>& outPath) const
+{
+    outPath.clear();
+    const glm::ivec2 start = cellOf(from), goal = cellOf(to);
+    if (start == goal)
+    {
+        outPath.push_back(from);
+        outPath.push_back(to);
+        return true;
+    }
+    // Straight shot first: most orders need no search at all.
+    if (lineOfSight(from, to, radius))
+    {
+        outPath.push_back(from);
+        outPath.push_back(to);
+        return true;
+    }
+    thread_local oc::vector<AStarNode> nodes;
+    thread_local oc::unordered_map<uint64, uint32> index;
+    thread_local oc::priority_queue<AStarOpen, oc::vector<AStarOpen>, oc::greater<AStarOpen>> open;
+    nodes.clear();
+    index.clear();
+    while (!open.empty())
+        open.pop();
+
+    static constexpr glm::ivec2 c_offsets[8] = {
+        { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 } };
+    static constexpr uint32 c_stepCost[8] = { 16, 16, 16, 16, 23, 23, 23, 23 };
+    nodes.push_back(AStarNode{ start, UINT32_MAX, 0, octile(start, goal), false });
+    index[packCell(start)] = 0;
+    open.push(AStarOpen{ nodes[0].h, 0 });
+    uint32 reached = UINT32_MAX;
+    uint32 expanded = 0;
+    while (!open.empty() && expanded < maxExpand)
+    {
+        const AStarOpen top = open.top();
+        open.pop();
+        if (nodes[top.index].closed)
+            continue;
+        nodes[top.index].closed = true;
+        ++expanded;
+        if (nodes[top.index].cell == goal)
+        {
+            reached = top.index;
+            break;
+        }
+        for (int k = 0; k < 8; ++k)
+        {
+            const glm::ivec2 n = nodes[top.index].cell + c_offsets[k];
+            const uint8 cost = costAt(n);
+            if (cost == Blocked && n != goal) // the goal cell may be a structure: enterable as the end
+                continue;
+            if (k >= 4 && (costAt(nodes[top.index].cell + glm::ivec2(c_offsets[k].x, 0)) == Blocked
+                || costAt(nodes[top.index].cell + glm::ivec2(0, c_offsets[k].y)) == Blocked))
+                continue; // no corner cutting
+            const uint32 g = nodes[top.index].g + c_stepCost[k] * (1u + (cost == Blocked ? 0u : cost));
+            const uint64 key = packCell(n);
+            const auto it = index.find(key);
+            if (it == index.end())
+            {
+                const uint32 idx = uint32(nodes.size());
+                nodes.push_back(AStarNode{ n, top.index, g, octile(n, goal), false });
+                index[key] = idx;
+                open.push(AStarOpen{ g + nodes[idx].h, idx });
+            }
+            else if (!nodes[it->second].closed && g < nodes[it->second].g)
+            {
+                nodes[it->second].g = g;
+                nodes[it->second].parent = top.index;
+                open.push(AStarOpen{ g + nodes[it->second].h, it->second });
+            }
+        }
+    }
+    if (reached == UINT32_MAX)
+        return false;
+
+    // Reconstruct start -> goal, then STRING PULL: keep a point only where the line from the last
+    // kept point to the one after it would clip the raster.
+    thread_local oc::vector<glm::vec2> cells;
+    cells.clear();
+    for (uint32 i = reached; i != UINT32_MAX; i = nodes[i].parent)
+        cells.push_back(cellCenter(nodes[i].cell));
+    oc::reverse(cells.begin(), cells.end());
+    cells.front() = from;
+    cells.back() = to;
+    outPath.push_back(cells.front());
+    size_t anchor = 0;
+    for (size_t i = 1; i + 1 < cells.size(); ++i)
+        if (!lineOfSight(cells[anchor], cells[i + 1], radius))
+        {
+            outPath.push_back(cells[i]);
+            anchor = i;
+        }
+    outPath.push_back(cells.back());
+    return true;
+}
+
 bool TeamField::lineOfSight(const glm::vec2& a, const glm::vec2& b, float radius) const
 {
     if (radius > 0.0f)

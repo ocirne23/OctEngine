@@ -122,6 +122,10 @@ private:
     oc::vector<Nav::NavObstacle> m_wallObstacles; // border collider footprints (static)
     oc::vector<Nav::NavObstacle> m_navObstacles;  // per-frame scratch: walls + structures
     oc::vector<Nav::NavSource> m_navSources[Nav::MaxTeams];
+    // Lane seeding parameters live on NpcSystem (one set of tweaks); Match reads them for its own
+    // route/order seeding.
+    float laneSeedSpeed() const { return m_npcs.orderLaneSpeed(); }
+    float laneSeedWidth() const { return m_npcs.laneWidth(); }
 
     MouseListenerHandle m_mouse; // caches window-space mouse pos, wheel + RMB drag accumulation
     glm::vec2 m_mousePos{ 0.0f };
@@ -147,6 +151,11 @@ private:
     bool m_lmbReleased = false;  // release edge (consumed by updateWindowed)
     void updateUnitSelection(const Camera& camera);
     void orderSelectedUnits(const glm::vec3& target, bool freshOrder);
+    void seedRouteLane(uint32 structureId); // barracks route -> a planned lane in the flow field
+    // (While an ordered group walks, its lane is kept fresh by the UNITS' own periodic plan
+    // requests — Nav's proximity dedup makes the whole group cost one plan. See
+    // GameUnitComponent's SeedRequest and NavSystem::requestSeedPath.)
+    float m_selectionClusterRadius = 12.0f; // link radius of the selection's cluster centroid
     void pruneSelectedUnits();
     bool m_modeKeyWasDown[1] = {}; // Esc/Tab edge
     bool m_saveKeyWasDown = false; // F9/F10 edges (save/load game state)

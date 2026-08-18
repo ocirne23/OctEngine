@@ -53,6 +53,19 @@ private:
     // no rosters, no id-keyed maps, and the state dies with its structure.
     oc::vector<GameUnitComponent::FireRequest> m_fireScratch; // drained queues (reused buffers)
     oc::vector<uint32> m_deathScratch;
+    oc::vector<GameUnitComponent::SeedRequest> m_seedScratch;
+    // Seeded-lane strength, split by WHO asked for it: a player ORDER (move command, barracks
+    // route) writes a strong, wide lane the whole group should commit to, while a STUCK unit's
+    // request is a hint — weak and narrow enough that it bends the crowd around the jam without
+    // overriding what everyone else is doing.
+    float m_orderLaneSpeed = 10.0f;
+    float m_stuckLaneSpeed = 10.0f;
+    float m_laneWidth = 2.0f; // metres PAINTED (0 = one cell); viscosity widens it further
+public:
+    float orderLaneSpeed() const { return m_orderLaneSpeed; }
+    float stuckLaneSpeed() const { return m_stuckLaneSpeed; }
+    float laneWidth() const { return m_laneWidth; }
+private:
     oc::vector<uint32> m_spawnScratch;
     oc::vector<GameStructureComponent::TurretFireRequest> m_turretFireScratch;
 
