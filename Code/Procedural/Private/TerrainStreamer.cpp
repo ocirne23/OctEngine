@@ -201,6 +201,9 @@ namespace
 		// grain 1: each conversion is a whole image load + BC compress, seconds apart in cost
 		Globals::jobSystem.parallelFor(0, (uint32)tasks.size(), 1, [&](uint32 begin, uint32 end)
 		{
+			// One scope per task (grain 1): each is a whole image load + BC compress — seconds of
+			// worker time that would otherwise be invisible on the profiler's worker tracks.
+			ProfileScope scope("Terrain tex bake", EProfileCategory::Procedural);
 			for (uint32 i = begin; i < end; ++i)
 			{
 				if (stopRequested.load(oc::memory_order_relaxed))

@@ -59,7 +59,7 @@ export struct GameUnitParams
     float steerCornerClip = 0.7f;  // penalty per lateral body sample that hits a wall (corner clip)
     float steerWall = 1.5f;        // push away from walls within wallKeep of the body (corner rounding)
     float wallKeep = 1.0f;         // metres beyond the body radius the wall push reaches
-    float stuckPressure = 0.0f;    // pressure a stalled unit injects per second (x stall, <= 1.5).
+    float stuckPressure = 0.5f;    // pressure a stalled unit injects per second (x stall, <= 1.5).
                                    // OFF: being stuck now REQUESTS A PLANNED PATH (see
                                    // seedRequestInterval), which is a real answer instead of a
                                    // repulsion field that only told the crowd to spread out

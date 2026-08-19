@@ -2,6 +2,7 @@ module Nav;
 
 import Core;
 import Core.glm;
+import Threading;
 
 namespace Nav
 {
@@ -16,40 +17,85 @@ void TeamField::rasterizeObstacles(oc::span<const NavObstacle> obstacles, uint8 
 {
     // Blocked cells first, then a clearance ring: cells touching a blocked one cost extra so the
     // descent hugs the middle of a gap instead of scraping the wall (units have a body radius).
+    // MULTITHREADED (this runs inside the navFieldBuild jobs): every chunk any obstacle (inflated
+    // by the one-cell ring) can touch is created SERIALLY first, so the parallel phases below never
+    // mutate the map — their writes are single bytes where every racing writer writes the SAME
+    // value (Blocked in phase 2, clearanceCost in phase 3), which is the sanctioned kind of race.
     for (const NavObstacle& o : obstacles)
     {
-        const glm::ivec2 lo = cellOf(o.min + 1e-3f);
-        const glm::ivec2 hi = cellOf(o.max - 1e-3f);
+        const glm::ivec2 lo = chunkOf(cellOf(o.min - CellSize + 1e-3f));
+        const glm::ivec2 hi = chunkOf(cellOf(o.max + CellSize - 1e-3f));
         for (int z = lo.y; z <= hi.y; ++z)
             for (int x = lo.x; x <= hi.x; ++x)
-            {
-                const glm::ivec2 c(x, z);
-                chunkAt(c).cost[cellIndex(c)] = Blocked;
-            }
+                m_chunks.getOrCreate(chunkKey(glm::ivec2(x, z)));
     }
-    if (clearanceCost == 0)
-        return;
-    oc::vector<glm::ivec2> ring;
-    m_chunks.forEach([&](uint64 key, const Chunk& chunk)
+
+    // Phase 2: stamp the blocked footprints, one obstacle per work item.
+    struct Ctx { TeamField* self; oc::span<const NavObstacle> obstacles; uint8 clearanceCost; };
+    Ctx ctx{ this, obstacles, clearanceCost };
+    Globals::jobSystem.parallelFor(0u, uint32(obstacles.size()), 8u, [c = &ctx](uint32 begin, uint32 end)
     {
-        const glm::ivec2 base = chunkFromKey(key) * ChunkCells;
-        for (int i = 0; i < ChunkArea; ++i)
+        ProfileScope scope("Nav raster blocked", EProfileCategory::Game);
+        for (uint32 idx = begin; idx < end; ++idx)
         {
-            if (chunk.cost[i] != Blocked)
-                continue;
-            const glm::ivec2 c = base + glm::ivec2(i & (ChunkCells - 1), i >> ChunkBits);
-            for (int dz = -1; dz <= 1; ++dz)
-                for (int dx = -1; dx <= 1; ++dx)
-                    if (dx | dz)
-                        ring.push_back(c + glm::ivec2(dx, dz));
+            const NavObstacle& o = c->obstacles[idx];
+            const glm::ivec2 lo = cellOf(o.min + 1e-3f);
+            const glm::ivec2 hi = cellOf(o.max - 1e-3f);
+            for (int z = lo.y; z <= hi.y; ++z)
+                for (int x = lo.x; x <= hi.x; ++x)
+                {
+                    const glm::ivec2 cell(x, z);
+                    if (Chunk* chunk = c->self->m_chunks.find(chunkKey(chunkOf(cell)))) // pre-created
+                        chunk->cost[cellIndex(cell)] = Blocked;
+                }
         }
     });
-    for (const glm::ivec2& c : ring)
+    if (clearanceCost == 0)
+        return;
+
+    // Phase 3: the clearance ring, one chunk per work item; ring cells crossing into a neighbour
+    // chunk write through find() — the inflated pre-creation guarantees it exists. The Blocked set
+    // is FINAL after phase 2's barrier, so the != Blocked filter cannot race with a Blocked write.
+    oc::vector<Chunk*> chunks;      // stack, not thread_local: this runs inside a build job and
+    oc::vector<uint64> chunkKeys;   // the parallelFor parks the fiber (see FlowField::update)
+    chunks.reserve(m_chunks.size());
+    chunkKeys.reserve(m_chunks.size());
+    for (uint32 slot = 0; slot < m_chunks.capacity(); ++slot)
+        if (m_chunks.slotKey(slot) != InvalidChunkKey)
+        {
+            chunks.push_back(m_chunks.slotValue(slot));
+            chunkKeys.push_back(m_chunks.slotKey(slot));
+        }
+    struct RingCtx { TeamField* self; oc::vector<Chunk*>* chunks; oc::vector<uint64>* keys; uint8 clearanceCost; };
+    RingCtx ringCtx{ this, &chunks, &chunkKeys, clearanceCost };
+    Globals::jobSystem.parallelFor(0u, uint32(chunks.size()), 1u, [c = &ringCtx](uint32 begin, uint32 end)
     {
-        uint8& cost = chunkAt(c).cost[cellIndex(c)];
-        if (cost != Blocked)
-            cost = glm::max(cost, clearanceCost);
-    }
+        ProfileScope scope("Nav raster clearance", EProfileCategory::Game);
+        for (uint32 idx = begin; idx < end; ++idx)
+        {
+            const Chunk& chunk = *(*c->chunks)[idx];
+            const glm::ivec2 base = chunkFromKey((*c->keys)[idx]) * ChunkCells;
+            for (int i = 0; i < ChunkArea; ++i)
+            {
+                if (chunk.cost[i] != Blocked)
+                    continue;
+                const glm::ivec2 cell = base + glm::ivec2(i & (ChunkCells - 1), i >> ChunkBits);
+                for (int dz = -1; dz <= 1; ++dz)
+                    for (int dx = -1; dx <= 1; ++dx)
+                    {
+                        if (!(dx | dz))
+                            continue;
+                        const glm::ivec2 n = cell + glm::ivec2(dx, dz);
+                        Chunk* nc = c->self->m_chunks.find(chunkKey(chunkOf(n)));
+                        if (!nc)
+                            continue;
+                        uint8& cost = nc->cost[cellIndex(n)];
+                        if (cost != Blocked)
+                            cost = glm::max(cost, c->clearanceCost);
+                    }
+            }
+        }
+    });
 }
 
 namespace

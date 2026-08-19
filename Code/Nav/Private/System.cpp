@@ -340,30 +340,67 @@ void NavSystem::update(float deltaSec)
     for (const TeamSlot& slot : m_teams)
         m_publishedCount += slot.published ? 1u : 0u;
 
-    // 3. Flow + pressure steps.
-    for (FlowField& f : m_flow)
-        f.update(deltaSec, uint32(glm::max(m_keepFrames, 1)), m_flowHalfLife, m_raster.published.get(),
-            m_wallBounce, m_flowViscosity, m_flowMaxSpeed, m_flowViscosityFloor, m_flowViscosityBackflow);
+    // 3. Flow + pressure steps, PER-CHUNK parallel across ALL teams: each field's serial
+    // pre-work (drain/flip/evict/gather/snapshot) runs here on main, then every team's chunks go
+    // into ONE fan-out per phase — two barriers total instead of one per field, and one team's
+    // lone big field no longer serializes behind the empty ones. The flow phase must fully settle
+    // before the pressure phase: the pressure push splats ATOMICALLY into the flow write buffers,
+    // which the flow tasks write plainly. Pressure PUSHES the flow (v += -grad p): a jam bends the
+    // stream upstream of it and a seeded trough sucks the surrounding lanes in; the push rides the
+    // diffusion step itself, which hands each active cell's gradient to the callback instead of a
+    // second pass re-resolving neighbours.
     {
-        ProfileScope pscope("Nav pressure diffuse", EProfileCategory::Game);
-        // Pressure PUSHES the flow (v += -grad p): a jam bends the stream upstream of it and a
-        // seeded trough sucks the surrounding lanes in. The push rides the diffusion step itself —
-        // it hands us the gradient it already computed, instead of a second pass that re-resolved
-        // eight neighbours per cell through the chunk hash.
-        const float pressureFlowGain = this->pressureFlowGain();
+        ProfileScope pscope("Nav field steps", EProfileCategory::Game);
+        const uint32 keepFrames = uint32(glm::max(m_keepFrames, 1));
         const TeamField* raster = m_raster.published.get();
+        const float gain = pressureFlowGain();
+        oc::vector<FlowField::StepItem> flowItems;
+        oc::vector<PressureField::StepItem> pressureItems;
+        PressureField::CellVisit pushes[MaxTeams];
         for (uint32 t = 0; t < MaxTeams; ++t)
         {
+            m_flow[t].beginStep(deltaSec, keepFrames, m_flowHalfLife, raster, m_wallBounce,
+                m_flowViscosity, m_flowMaxSpeed, m_flowViscosityFloor, m_flowViscosityBackflow,
+                flowItems);
             FlowField& flow = m_flow[t];
-            const PressureField::CellVisit push = [&flow, pressureFlowGain](const glm::vec2& centre, const glm::vec2& g)
+            pushes[t] = [&flow, gain](const glm::vec2& centre, const glm::vec2& g)
             {
                 if (glm::dot(g, g) > 1e-6f)
-                    flow.splat(centre, -g * pressureFlowGain);
+                    flow.splat(centre, -g * gain);
             };
-            m_pressure[t].update(deltaSec, raster, m_pressureDiffusion, m_pressureHalfLife,
-                uint32(glm::max(m_keepFrames, 1)), m_pressureFloor,
-                pressureFlowGain > 0.0f ? &push : nullptr);
+            const size_t first = pressureItems.size();
+            m_pressure[t].beginStep(deltaSec, raster, m_pressureDiffusion, m_pressureHalfLife,
+                keepFrames, m_pressureFloor, pressureItems);
+            if (gain > 0.0f)
+                for (size_t i = first; i < pressureItems.size(); ++i)
+                    pressureItems[i].push = &pushes[t];
         }
+        struct Ctx
+        {
+            oc::vector<FlowField::StepItem>* flow;
+            oc::vector<PressureField::StepItem>* pressure;
+        };
+        Ctx ctx{ &flowItems, &pressureItems };
+        Globals::jobSystem.parallelFor(0u, uint32(flowItems.size()), 2u, [c = &ctx](uint32 begin, uint32 end)
+        {
+            ProfileScope scope("Nav flow step", EProfileCategory::Game);
+            for (uint32 i = begin; i < end; ++i)
+            {
+                FlowField::StepItem& item = (*c->flow)[i];
+                item.field->stepChunk(item.key, *item.chunk);
+            }
+        });
+        Globals::jobSystem.parallelFor(0u, uint32(pressureItems.size()), 2u, [c = &ctx](uint32 begin, uint32 end)
+        {
+            ProfileScope scope("Nav pressure step", EProfileCategory::Game);
+            for (uint32 i = begin; i < end; ++i)
+            {
+                PressureField::StepItem& item = (*c->pressure)[i];
+                item.field->stepChunk(item.key, *item.chunk, item.push);
+            }
+        });
+        for (PressureField& p : m_pressure)
+            p.endStep();
     }
 }
 
