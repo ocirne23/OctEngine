@@ -246,7 +246,7 @@ void NavSystem::kickBuild(TeamSlot& slot)
     Globals::jobSystem.submit([self, slotPtr, params]
     {
         slotPtr->pending->build(self->m_buildObstacles, slotPtr->buildSources, params);
-    }, EJobPriority::Low, &slot.counter, "navFieldBuild");
+    }, { "Nav build", EProfileCategory::Game }, EJobPriority::Low, &slot.counter);
 }
 
 void NavSystem::tickSlot(TeamSlot& slot, float deltaSec)
@@ -381,18 +381,18 @@ void NavSystem::update(float deltaSec)
             oc::vector<PressureField::StepItem>* pressure;
         };
         Ctx ctx{ &flowItems, &pressureItems };
-        Globals::jobSystem.parallelFor(0u, uint32(flowItems.size()), 2u, [c = &ctx](uint32 begin, uint32 end)
+        Globals::jobSystem.parallelFor(0u, uint32(flowItems.size()), 2u, { "Nav flow step", EProfileCategory::Game },
+            [c = &ctx](uint32 begin, uint32 end)
         {
-            ProfileScope scope("Nav flow step", EProfileCategory::Game);
             for (uint32 i = begin; i < end; ++i)
             {
                 FlowField::StepItem& item = (*c->flow)[i];
                 item.field->stepChunk(item.key, *item.chunk);
             }
         });
-        Globals::jobSystem.parallelFor(0u, uint32(pressureItems.size()), 2u, [c = &ctx](uint32 begin, uint32 end)
+        Globals::jobSystem.parallelFor(0u, uint32(pressureItems.size()), 2u, { "Nav pressure step", EProfileCategory::Game },
+            [c = &ctx](uint32 begin, uint32 end)
         {
-            ProfileScope scope("Nav pressure step", EProfileCategory::Game);
             for (uint32 i = begin; i < end; ++i)
             {
                 PressureField::StepItem& item = (*c->pressure)[i];

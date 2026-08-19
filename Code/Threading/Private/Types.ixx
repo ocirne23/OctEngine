@@ -5,6 +5,15 @@ import Core;
 export class JobSystem;
 struct Fiber;
 
+// REQUIRED on every submit/submitDelayed/parallelFor: the scheduler opens a ProfileScope with this
+// name and category around the job's execution, so a worker can never run something that does not
+// show up on the profiler's tracks. `name` must be a string LITERAL (records store it by pointer).
+export struct JobProfile
+{
+    const char* name = nullptr;
+    EProfileCategory category = EProfileCategory::Threading;
+};
+
 export enum class EJobPriority : uint8
 {
     High = 0,
@@ -101,6 +110,7 @@ export struct alignas(64) Job
     EJobPriority priority = EJobPriority::Normal;          // what the user asked for
     EJobPriority effectivePriority = EJobPriority::Normal; // what the queues use (rank promotion)
     uint8 flags = 0;
+    EProfileCategory profileCategory = EProfileCategory::Threading; // execute() opens name+this
     const char* name = nullptr;
 
     static constexpr uint32 StorageSize = 64;

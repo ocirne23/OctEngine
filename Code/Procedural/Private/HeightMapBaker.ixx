@@ -481,7 +481,6 @@ export namespace Procedural
 				reachNow, reachOnNow, flowNow, flowOnNow, {} });
 			m_bakeInFlight = true;
 			Globals::jobSystem.submit([bake = m_bake]() {
-				ProfileScope profileScope("HeightMapBaker::update", EProfileCategory::Procedural);
 
 				const oc::shared_ptr<const ITerrainSampler>& maps = bake->maps;
 				const glm::vec2 center = bake->center, ranges = bake->ranges;
@@ -561,7 +560,7 @@ export namespace Procedural
 						applyFlowField(dst, res, channels, texelSize, maps->seaLevel(), flow);
 				}
 				bake->result = oc::move(heights);
-			}, EJobPriority::Low, &m_bakeCounter, "heightMapBake");
+			}, { "HeightMapBaker::update", EProfileCategory::Procedural }, EJobPriority::Low, &m_bakeCounter);
 			return shipped;
 		}
 

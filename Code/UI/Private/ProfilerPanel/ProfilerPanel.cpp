@@ -206,11 +206,9 @@ void ProfilerPanel::snapshotTracks()
         }
     m_tracks.clear();
     const double msPerTick = profiler.getMsPerTick();
-    Globals::jobSystem.parallelFor(0u, numTracks, 1u, [&](uint32 begin, uint32 end)
+    Globals::jobSystem.parallelFor(0u, numTracks, 1u, { "Profiler track snapshot", EProfileCategory::UI },
+        [&](uint32 begin, uint32 end)
     {
-    // Per chunk (~one track each): the fan-out lands on whichever workers pick it up, so each
-    // piece carries its own marker on that worker's track.
-    ProfileScope chunkScope("Profiler track snapshot", EProfileCategory::UI);
     for (uint32 i = begin; i < end; ++i)
     {
         TrackView& view = m_trackScratch[i];

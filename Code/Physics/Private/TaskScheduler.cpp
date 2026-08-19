@@ -22,7 +22,7 @@ import :TaskScheduler;
 // history per thread, against a 512-frame panel window.
 void PhysicsTaskScheduler::runSlot(TaskSlot& slot)
 {
-    ProfileScope scope("Physics Job", EProfileCategory::Physics);
+    // (The "Physics Job" scope is opened by the JobSystem itself from the submit's JobProfile.)
     slot.task(slot.context);
 }
 
@@ -50,7 +50,8 @@ void* PhysicsTaskScheduler::enqueue(TaskFn task, void* taskContext, void* userCo
     slot.context = taskContext;
     // High: the step blocks in finish() until these land, so they sit on the frame's critical path.
     // Same literal as the job name, so JobGraph/stats diagnostics agree with the profiler tracks.
-    Globals::jobSystem.submit([&slot] { runSlot(slot); }, EJobPriority::High, &slot.counter, "Physics Job");
+    Globals::jobSystem.submit([&slot] { runSlot(slot); }, { "Physics Job", EProfileCategory::Physics },
+        EJobPriority::High, &slot.counter);
     return &slot;
 }
 

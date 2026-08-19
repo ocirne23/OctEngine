@@ -42,11 +42,15 @@ export namespace Nav
             uint8 cost[ChunkArea];  // 0 free, Blocked, else an extra step multiplier (1 + cost)
             uint16 dist[ChunkArea]; // fixed-point geodesic distance to the nearest source
             uint16 src[ChunkArea];  // index into sources()
+            uint8 waveDirty;        // build-time only: already queued for the next wave
+            uint8 borderImproved;   // build-time only: dirs (c_offsets bit k) whose neighbour must re-solve
             Chunk()
             {
                 memset(cost, 0, sizeof(cost));
                 memset(dist, 0xFF, sizeof(dist));
                 memset(src, 0xFF, sizeof(src));
+                waveDirty = 0;
+                borderImproved = 0;
             }
         };
 
@@ -115,6 +119,13 @@ export namespace Nav
             Chunk* chunk;
             uint32 index;
         };
+        // One CHUNK-WAVE solve: run this chunk's cells to their local Dijkstra fixpoint against the
+        // current (possibly mid-wave) neighbour values, writing ONLY this chunk; sets borderImproved
+        // bits for every neighbour that must re-solve. Worker-safe: cross-chunk reads race benignly
+        // (aligned u16, monotone-decreasing min), and the fixpoint the waves converge to is exactly
+        // the serial Dijkstra's.
+        void floodSolveChunk(uint64 key, Chunk& chunk, uint32 maxDist);
+
         Chunk& chunkAt(const glm::ivec2& cell) { return m_chunks.getOrCreate(chunkKey(chunkOf(cell))); }
         const Chunk* findChunk(const glm::ivec2& cell) const { return m_chunks.find(chunkKey(chunkOf(cell))); }
         uint8 costAt(const glm::ivec2& cell) const;

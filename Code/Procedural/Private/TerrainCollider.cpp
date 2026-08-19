@@ -141,7 +141,6 @@ namespace Procedural
 		m_buildInFlight = true;
 		Globals::jobSystem.submit([this, maps, coord = bestCoord, key, generation, tileSize, res]()
 		{
-			ProfileScope profileScope("TerrainCollider::update", EProfileCategory::Procedural);
 
 			BuildResult out;
 			out.key = key;
@@ -182,6 +181,6 @@ namespace Procedural
 			// Standalone BVH build (no world touched), safe off the main thread.
 			out.mesh = Globals::physics.createCollisionMesh(positions, indices);
 			m_buildResult = oc::move(out); // single producer; read only after the counter completes
-		}, EJobPriority::Low, &m_buildCounter, "terrainColliderTile");
+		}, { "TerrainCollider::update", EProfileCategory::Procedural }, EJobPriority::Low, &m_buildCounter);
 	}
 }

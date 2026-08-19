@@ -199,11 +199,9 @@ namespace
 
 		const auto bakeStart = std::chrono::steady_clock::now();
 		// grain 1: each conversion is a whole image load + BC compress, seconds apart in cost
-		Globals::jobSystem.parallelFor(0, (uint32)tasks.size(), 1, [&](uint32 begin, uint32 end)
+		Globals::jobSystem.parallelFor(0, (uint32)tasks.size(), 1, { "Terrain tex bake", EProfileCategory::Procedural },
+			[&](uint32 begin, uint32 end)
 		{
-			// One scope per task (grain 1): each is a whole image load + BC compress — seconds of
-			// worker time that would otherwise be invisible on the profiler's worker tracks.
-			ProfileScope scope("Terrain tex bake", EProfileCategory::Procedural);
 			for (uint32 i = begin; i < end; ++i)
 			{
 				if (stopRequested.load(oc::memory_order_relaxed))
@@ -410,10 +408,9 @@ namespace Procedural
 		// render with the flat-color fallback until updateTerrainTextures registers the finished set.
 		Globals::jobSystem.submit([this]
 		{
-			ProfileScope profileScope("TerrainStreamer::bakeTerrainTexCache", EProfileCategory::Procedural);
 			bakeTerrainTexCache(m_texBakeStop);
 			m_texBakeDone.store(!m_texBakeStop.load(oc::memory_order_relaxed), oc::memory_order_release);
-		}, EJobPriority::Low, &m_texBakeCounter, "terrainTexBake");
+		}, { "TerrainStreamer::bakeTerrainTexCache", EProfileCategory::Procedural }, EJobPriority::Low, &m_texBakeCounter);
 	}
 
 	void TerrainStreamer::updateTerrainTextures(Renderer& renderer)
@@ -625,7 +622,7 @@ namespace Procedural
 				return;
 			if (m_numPumps.compare_exchange_weak(cur, cur + 1, oc::memory_order_acq_rel))
 			{
-				Globals::jobSystem.submit([this] { pumpJob(); }, EJobPriority::Low, &m_pumpCounter, "terrainChunkPump");
+				Globals::jobSystem.submit([this] { pumpJob(); }, { "terrainChunkPump", EProfileCategory::Procedural }, EJobPriority::Low, &m_pumpCounter);
 				++spawned;
 			}
 		}

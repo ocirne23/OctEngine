@@ -46,13 +46,13 @@ void UI::prepare()
     // tracker's atomic tree, the log under its mutex). update() waits on the counter before
     // ImGui::NewFrame, so nothing here ever overlaps the widget pass that reads the results.
     if (m_profilerOpen)
-        Globals::jobSystem.submit([this] { m_profilerPanel.prepare(); }, EJobPriority::High, &m_prepareCounter, "uiProfilerPrepare");
+        Globals::jobSystem.submit([this] { m_profilerPanel.prepare(); }, { "uiProfilerPrepare", EProfileCategory::UI }, EJobPriority::High, &m_prepareCounter);
     if (m_memoryOpen)
-        Globals::jobSystem.submit([this] { m_memoryPanel.prepare(); }, EJobPriority::High, &m_prepareCounter, "uiMemoryPrepare");
+        Globals::jobSystem.submit([this] { m_memoryPanel.prepare(); }, { "uiMemoryPrepare", EProfileCategory::UI }, EJobPriority::High, &m_prepareCounter);
     if (m_logOpen)
-        Globals::jobSystem.submit([this] { m_outputLog.prepare(); }, EJobPriority::High, &m_prepareCounter, "uiLogPrepare");
+        Globals::jobSystem.submit([this] { m_outputLog.prepare(); }, { "uiLogPrepare", EProfileCategory::UI }, EJobPriority::High, &m_prepareCounter);
     if (m_contentOpen) // the asset browser's filesystem rescans (it gates itself on focus/hover)
-        Globals::jobSystem.submit([this] { m_assetBrowser.prepare(); }, EJobPriority::High, &m_prepareCounter, "uiContentPrepare");
+        Globals::jobSystem.submit([this] { m_assetBrowser.prepare(); }, { "uiContentPrepare", EProfileCategory::UI }, EJobPriority::High, &m_prepareCounter);
 }
 
 void UI::update(const oc::vector<EntityPtr>& rootEntities, const Camera& camera, double deltaSec)

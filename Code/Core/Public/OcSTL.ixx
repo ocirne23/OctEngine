@@ -54,7 +54,8 @@ export import <EASTL/map.h>;
 export import <EASTL/memory.h>;
 export import <EASTL/numeric_limits.h>;
 export import <EASTL/optional.h>;
-export import <EASTL/priority_queue.h>;
+export import <EASTL/priority_queue.h>; // also carries eastl::push_heap/pop_heap/make_heap
+                                        // (<EASTL/heap.h> itself is not header-unit-importable)
 export import <EASTL/queue.h>;
 export import <EASTL/set.h>;
 export import <EASTL/shared_ptr.h>;
@@ -421,6 +422,9 @@ export namespace oc
     using ocstl::unique;
     using ocstl::reverse;
     using ocstl::rotate;
+    using ocstl::push_heap;
+    using ocstl::pop_heap;
+    using ocstl::make_heap;
     using ocstl::lower_bound;
     using ocstl::upper_bound;
     using ocstl::binary_search;

@@ -36,12 +36,11 @@ void World::update(Renderer& renderer, float deltaSeconds)
     while (!m_updateLevel.empty())
     {
         Globals::jobSystem.parallelFor(0, uint32(m_updateLevel.size()), m_updateCost,
-            [this, &renderer, deltaSeconds](uint32 begin, uint32 end)
-            {
-                // Per-chunk (not per-entity: thousands of ~us records would flood the rings); safe
-                // because updateSelf never fiber-waits - everything it touches is the audited
+            { "Entity Update", EProfileCategory::Entity }, // scope per PARTICIPANT (not per entity:
+            [this, &renderer, deltaSeconds](uint32 begin, uint32 end) // thousands of ~us records
+            {                                                         // would flood the rings)
+                // Safe because updateSelf never fiber-waits - everything it touches is the audited
                 // thread-safe inline set.
-                ProfileScope profileScope("Entity Update", EProfileCategory::Entity);
                 EntityUpdateStaging& staging = m_updateStaging.local();
                 for (uint32 i = begin; i < end; ++i)
                 {

@@ -261,7 +261,13 @@ void JobSystem::execute(Job& job)
         ctx->numExecuted++;
     const bool timed = (job.flags & EJobFlag_Untimed) == 0;
     const Clock::time_point timedStart = timed ? Clock::now() : Clock::time_point{};
-    job.invoke(job.storage);
+    if (job.name) // REQUIRED for submitted jobs; graph jobs carry their node name. The scope
+    {             // migrates with the fiber if the body parks, like any other ProfileScope.
+        ProfileScope profileScope(job.name, job.profileCategory);
+        job.invoke(job.storage);
+    }
+    else
+        job.invoke(job.storage);
     if (timed)
     {
         // wall time, min 1us: parked waits inside the job count (they occupy dependency-time on
@@ -397,6 +403,7 @@ Job* JobSystem::allocatePooledJob()
     job->priority = EJobPriority::Normal;
     job->effectivePriority = EJobPriority::Normal;
     job->flags = EJobFlag_Pooled;
+    job->profileCategory = EProfileCategory::Threading;
     job->name = nullptr;
     return job;
 }

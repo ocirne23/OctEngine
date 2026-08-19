@@ -33,9 +33,9 @@ void TeamField::rasterizeObstacles(oc::span<const NavObstacle> obstacles, uint8 
     // Phase 2: stamp the blocked footprints, one obstacle per work item.
     struct Ctx { TeamField* self; oc::span<const NavObstacle> obstacles; uint8 clearanceCost; };
     Ctx ctx{ this, obstacles, clearanceCost };
-    Globals::jobSystem.parallelFor(0u, uint32(obstacles.size()), 8u, [c = &ctx](uint32 begin, uint32 end)
+    Globals::jobSystem.parallelFor(0u, uint32(obstacles.size()), 8u, { "Nav raster blocked", EProfileCategory::Game },
+        [c = &ctx](uint32 begin, uint32 end)
     {
-        ProfileScope scope("Nav raster blocked", EProfileCategory::Game);
         for (uint32 idx = begin; idx < end; ++idx)
         {
             const NavObstacle& o = c->obstacles[idx];
@@ -68,9 +68,9 @@ void TeamField::rasterizeObstacles(oc::span<const NavObstacle> obstacles, uint8 
         }
     struct RingCtx { TeamField* self; oc::vector<Chunk*>* chunks; oc::vector<uint64>* keys; uint8 clearanceCost; };
     RingCtx ringCtx{ this, &chunks, &chunkKeys, clearanceCost };
-    Globals::jobSystem.parallelFor(0u, uint32(chunks.size()), 1u, [c = &ringCtx](uint32 begin, uint32 end)
+    Globals::jobSystem.parallelFor(0u, uint32(chunks.size()), 1u, { "Nav raster clearance", EProfileCategory::Game },
+        [c = &ringCtx](uint32 begin, uint32 end)
     {
-        ProfileScope scope("Nav raster clearance", EProfileCategory::Game);
         for (uint32 idx = begin; idx < end; ++idx)
         {
             const Chunk& chunk = *(*c->chunks)[idx];
@@ -98,31 +98,34 @@ void TeamField::rasterizeObstacles(oc::span<const NavObstacle> obstacles, uint8 
     });
 }
 
-namespace
-{
-    struct HeapNode
-    {
-        uint32 dist;
-        glm::ivec2 cell;
-        uint16 src;
-        bool operator>(const HeapNode& o) const { return dist > o.dist; }
-    };
-}
-
 void TeamField::build(oc::span<const NavObstacle> obstacles, oc::span<const NavSource> sources,
     const BuildParams& params)
 {
-    ProfileScope scope("Nav build", EProfileCategory::Game);
+    // (The "Nav build" scope is opened by the JobSystem from the navFieldBuild submit's profile.)
     m_chunks.reset(64);
     m_sources.assign(sources.begin(), sources.end());
     m_cellsReached = 0;
     rasterizeObstacles(obstacles, params.clearanceCost);
 
-    // Multi-source Dijkstra, 8-connected, lazy deletion. Distances in 1/8 m: an orthogonal step
-    // is 16, a diagonal 23 (2.83 m); a cell's cost multiplies the step INTO it. Seeds cover each
-    // source's footprint (blocked or not — the front leaves them into free neighbours only).
+    // CHUNK-WAVE multi-source Dijkstra: instead of one global heap, each WAVE solves every dirty
+    // chunk to its LOCAL fixpoint in parallel (floodSolveChunk — a 256-cell mini-Dijkstra against
+    // the neighbours' current values), then a serial step turns the solves' borderImproved masks
+    // into the next wave, creating chunks the front wants to enter. Distances only ever decrease
+    // and the relaxation equations have one fixpoint, so the waves converge to EXACTLY the serial
+    // result — a chunk just re-solves when a later wave improves its boundary. Distances in 1/8 m:
+    // an orthogonal step is 16, a diagonal 23; a cell's cost multiplies the step INTO it. Seeds
+    // cover each source's footprint (blocked or not — the front leaves them into free cells only).
     const uint32 maxDist = uint32(glm::clamp(params.radius, 1.0f, 8000.0f) * DistScale);
-    oc::priority_queue<HeapNode, oc::vector<HeapNode>, oc::greater<HeapNode>> heap;
+    struct Item { uint64 key; Chunk* chunk; };
+    oc::vector<Item> wave, nextWave; // stack, never thread_local: this runs inside a build job
+    const auto queueChunk = [&](uint64 key, Chunk& chunk)
+    {
+        if (!chunk.waveDirty)
+        {
+            chunk.waveDirty = 1;
+            nextWave.push_back(Item{ key, &chunk });
+        }
+    };
     for (uint32 s = 0; s < uint32(m_sources.size()) && s < NoSource; ++s)
     {
         const NavSource& src = m_sources[s];
@@ -133,52 +136,180 @@ void TeamField::build(oc::span<const NavObstacle> obstacles, oc::span<const NavS
             for (int x = lo.x; x <= hi.x; ++x)
             {
                 const glm::ivec2 c(x, z);
-                Chunk& chunk = chunkAt(c);
+                const uint64 key = chunkKey(chunkOf(c));
+                Chunk& chunk = m_chunks.getOrCreate(key);
                 const uint32 i = cellIndex(c);
                 chunk.dist[i] = 0;
                 chunk.src[i] = uint16(s);
-                heap.push(HeapNode{ 0, c, uint16(s) });
+                queueChunk(key, chunk);
             }
     }
 
+    struct Ctx { TeamField* self; oc::vector<Item>* wave; uint32 maxDist; };
+    Ctx ctx{ this, &wave, maxDist };
+    static constexpr glm::ivec2 c_offsets[8] = {
+        { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 } };
+    for (int iteration = 0; iteration < 4096 && !nextWave.empty(); ++iteration)
+    {
+        wave.swap(nextWave);
+        nextWave.clear();
+        for (const Item& item : wave)
+            item.chunk->waveDirty = 0;
+        Globals::jobSystem.parallelFor(0u, uint32(wave.size()), 1u, { "Nav build wave", EProfileCategory::Game },
+            [c = &ctx](uint32 begin, uint32 end)
+        {
+            for (uint32 i = begin; i < end; ++i)
+                c->self->floodSolveChunk((*c->wave)[i].key, *(*c->wave)[i].chunk, c->maxDist);
+        });
+        // Serial: turn the solves' border masks into the next wave (chunk creation lives here —
+        // the map must never mutate while tasks read across it).
+        for (const Item& item : wave)
+        {
+            uint8 mask = item.chunk->borderImproved;
+            item.chunk->borderImproved = 0;
+            const glm::ivec2 coord = chunkFromKey(item.key);
+            for (int k = 0; k < 8 && mask; ++k, mask >>= 1)
+                if (mask & 1)
+                {
+                    const uint64 nKey = chunkKey(coord + c_offsets[k]);
+                    queueChunk(nKey, m_chunks.getOrCreate(nKey));
+                }
+        }
+    }
+}
+
+void TeamField::floodSolveChunk(uint64 key, Chunk& chunk, uint32 maxDist)
+{
     static constexpr glm::ivec2 c_offsets[8] = {
         { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 } };
     static constexpr uint32 c_stepCost[8] = { 16, 16, 16, 16, 23, 23, 23, 23 };
-    while (!heap.empty())
+    const glm::ivec2 coord = chunkFromKey(key);
+    // The 3x3 chunk neighbourhood, resolved ONCE — every cell access below is index math, never a
+    // hash lookup (the serial flood paid a find() per neighbour per pop).
+    Chunk* grid[9];
+    for (int gz = -1; gz <= 1; ++gz)
+        for (int gx = -1; gx <= 1; ++gx)
+            grid[(gz + 1) * 3 + (gx + 1)] = (gx | gz)
+                ? m_chunks.find(chunkKey(coord + glm::ivec2(gx, gz))) : &chunk;
+    // rel = cell coords relative to this chunk's base, in [-16, 31].
+    const auto chunkOfRel = [&](const glm::ivec2& rel) -> Chunk*
     {
-        const HeapNode node = heap.top();
-        heap.pop();
-        {
-            const Chunk* chunk = findChunk(node.cell);
-            if (!chunk || chunk->dist[cellIndex(node.cell)] != node.dist)
-                continue; // stale entry
-        }
-        ++m_cellsReached;
+        return grid[((rel.y >> ChunkBits) + 1) * 3 + ((rel.x >> ChunkBits) + 1)];
+    };
+    const auto idxOfRel = [](const glm::ivec2& rel)
+    {
+        return uint32((rel.y & (ChunkCells - 1)) << ChunkBits) | uint32(rel.x & (ChunkCells - 1));
+    };
+    const auto costRel = [&](const glm::ivec2& rel) -> uint8
+    {
+        const Chunk* c = chunkOfRel(rel);
+        return c ? c->cost[idxOfRel(rel)] : 0; // no chunk = open ground, matches costAt()
+    };
+    const auto distRel = [&](const glm::ivec2& rel) -> uint32
+    {
+        const Chunk* c = chunkOfRel(rel);
+        return c ? c->dist[idxOfRel(rel)] : Unreached;
+    };
+
+    // Local lazy-deletion heap over THIS chunk's cells: packed (dist << 16) | cellIndex.
+    oc::vector<uint32> heap;
+    heap.reserve(ChunkArea);
+    const auto push = [&](uint32 dist, uint32 idx)
+    {
+        heap.push_back((dist << 16) | idx);
+        oc::push_heap(heap.begin(), heap.end(), oc::greater<uint32>());
+    };
+    uint8 borderMask = 0;
+    const auto borderBits = [](int lx, int lz) -> uint8
+    {
+        uint8 bits = 0;
+        if (lx == ChunkCells - 1) bits |= 1 << 0;                          // +x
+        if (lx == 0) bits |= 1 << 1;                                       // -x
+        if (lz == ChunkCells - 1) bits |= 1 << 2;                          // +z
+        if (lz == 0) bits |= 1 << 3;                                       // -z
+        if (lx == ChunkCells - 1 && lz == ChunkCells - 1) bits |= 1 << 4;  // +x+z
+        if (lx == ChunkCells - 1 && lz == 0) bits |= 1 << 5;               // +x-z
+        if (lx == 0 && lz == ChunkCells - 1) bits |= 1 << 6;               // -x+z
+        if (lx == 0 && lz == 0) bits |= 1 << 7;                           // -x-z
+        return bits;
+    };
+    uint32 newlyReached = 0;
+    const auto tryImprove = [&](uint32 idx, uint32 dist, uint16 src)
+    {
+        if (dist >= chunk.dist[idx])
+            return;
+        if (chunk.dist[idx] == Unreached)
+            ++newlyReached;
+        chunk.dist[idx] = uint16(dist);
+        chunk.src[idx] = src;
+        push(dist, idx);
+        borderMask |= borderBits(int(idx & (ChunkCells - 1)), int(idx >> ChunkBits));
+    };
+
+    // Seed the heap: every already-finite cell (idempotent), plus boundary IMPORTS — an external
+    // neighbour's value relaxed into our border cells.
+    for (uint32 i = 0; i < ChunkArea; ++i)
+    {
+        if (chunk.dist[i] != Unreached)
+            push(chunk.dist[i], i);
+        const int lx = int(i & (ChunkCells - 1)), lz = int(i >> ChunkBits);
+        if (lx != 0 && lx != ChunkCells - 1 && lz != 0 && lz != ChunkCells - 1)
+            continue; // interior: no external neighbours
+        const uint8 ownCost = chunk.cost[i];
+        if (ownCost == Blocked)
+            continue;
+        const glm::ivec2 rel(lx, lz);
         for (int k = 0; k < 8; ++k)
         {
-            const glm::ivec2 n = node.cell + c_offsets[k];
-            const uint8 cost = costAt(n);
-            if (cost == Blocked)
+            const glm::ivec2 n = rel + c_offsets[k];
+            if (uint32(n.x) < ChunkCells && uint32(n.y) < ChunkCells)
+                continue; // internal edge: the pop loop handles it
+            const uint32 extDist = distRel(n);
+            if (extDist >= Unreached)
                 continue;
-            if (k >= 4) // no corner cutting: both orthogonal neighbours must be open too
-            {
-                if (costAt(node.cell + glm::ivec2(c_offsets[k].x, 0)) == Blocked
-                    || costAt(node.cell + glm::ivec2(0, c_offsets[k].y)) == Blocked)
-                    continue;
-            }
-            const uint32 d = node.dist + c_stepCost[k] * (1u + cost);
-            if (d > maxDist || d >= Unreached)
-                continue;
-            Chunk& chunk = chunkAt(n);
-            const uint32 i = cellIndex(n);
-            if (d < chunk.dist[i])
-            {
-                chunk.dist[i] = uint16(d);
-                chunk.src[i] = node.src;
-                heap.push(HeapNode{ d, n, node.src });
-            }
+            if (k >= 4 && (costRel(rel + glm::ivec2(c_offsets[k].x, 0)) == Blocked
+                || costRel(rel + glm::ivec2(0, c_offsets[k].y)) == Blocked))
+                continue; // no corner cutting
+            const uint32 d = extDist + c_stepCost[k] * (1u + ownCost);
+            if (d <= maxDist && d < Unreached)
+                tryImprove(i, d, chunkOfRel(n)->src[idxOfRel(n)]);
         }
     }
+
+    // The mini-Dijkstra: pops relax INTERNAL edges (writes stay inside this chunk); edges leaving
+    // the chunk only test whether the neighbour WOULD improve and set its wave bit if so.
+    while (!heap.empty())
+    {
+        oc::pop_heap(heap.begin(), heap.end(), oc::greater<uint32>());
+        const uint32 packed = heap.back();
+        heap.pop_back();
+        const uint32 idx = packed & 0xFFFF;
+        const uint32 dist = packed >> 16;
+        if (dist != chunk.dist[idx])
+            continue; // stale entry
+        const uint16 src = chunk.src[idx];
+        const glm::ivec2 rel(int(idx & (ChunkCells - 1)), int(idx >> ChunkBits));
+        for (int k = 0; k < 8; ++k)
+        {
+            const glm::ivec2 n = rel + c_offsets[k];
+            const uint8 cost = costRel(n);
+            if (cost == Blocked)
+                continue;
+            if (k >= 4 && (costRel(rel + glm::ivec2(c_offsets[k].x, 0)) == Blocked
+                || costRel(rel + glm::ivec2(0, c_offsets[k].y)) == Blocked))
+                continue; // no corner cutting
+            const uint32 d = dist + c_stepCost[k] * (1u + cost);
+            if (d > maxDist || d >= Unreached)
+                continue;
+            if (uint32(n.x) < ChunkCells && uint32(n.y) < ChunkCells)
+                tryImprove(idxOfRel(n), d, src);
+            else if (d < distRel(n))
+                borderMask |= uint8(1 << k); // the neighbour chunk must re-solve from our border
+        }
+    }
+    chunk.borderImproved |= borderMask;
+    if (newlyReached)
+        oc::atomic_ref<uint32>(m_cellsReached).fetch_add(newlyReached, oc::memory_order_relaxed);
 }
 
 bool TeamField::hasData(const glm::vec2& xz) const

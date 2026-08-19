@@ -65,7 +65,7 @@ void JobSystemStress::benchEmptyJobs()
     const Clock::time_point start = Clock::now();
     JobCounter counter;
     for (uint32 i = 0; i < count; ++i)
-        jobSystem.submit([] {}, EJobPriority::Normal, &counter, "stressEmpty");
+        jobSystem.submit([] {}, { "stressEmpty" }, EJobPriority::Normal, &counter);
     jobSystem.wait(counter);
     m_lastMs = float(std::chrono::duration<double, std::milli>(Clock::now() - start).count());
     m_jobsPerMs = m_lastMs > 0.0f ? int(float(count) / m_lastMs) : 0;
@@ -77,7 +77,7 @@ void JobSystemStress::benchParallelFor()
     m_parallelData.resize(count);
     float* data = m_parallelData.data();
     const Clock::time_point start = Clock::now();
-    Globals::jobSystem.parallelFor(0, count, uint32(m_grainSize), [data](uint32 begin, uint32 end)
+    Globals::jobSystem.parallelFor(0, count, uint32(m_grainSize), { "stressParallelFor" }, [data](uint32 begin, uint32 end)
         {
             for (uint32 i = begin; i < end; ++i)
                 data[i] = std::sqrt(float(i) * 1.618f) + float(i) * 0.001f;
@@ -161,11 +161,11 @@ void JobSystemStress::benchFiberWait()
                 oc::atomic<uint32> innerDone = 0;
                 JobCounter inner;
                 for (uint32 k = 0; k < 16; ++k)
-                    js.submit([&innerDone] { innerDone.fetch_add(1, oc::memory_order_relaxed); }, EJobPriority::Normal, &inner, "stressInner");
+                    js.submit([&innerDone] { innerDone.fetch_add(1, oc::memory_order_relaxed); }, { "stressInner" }, EJobPriority::Normal, &inner);
                 js.wait(inner); // parks this fiber; the counter + flag live on its stack
                 if (innerDone.load(oc::memory_order_relaxed) != 16)
                     m_violations.fetch_add(1, oc::memory_order_relaxed);
-            }, EJobPriority::Normal, &outer, "stressOuter");
+            }, { "stressOuter" }, EJobPriority::Normal, &outer);
     jobSystem.wait(outer);
     m_lastMs = float(std::chrono::duration<double, std::milli>(Clock::now() - start).count());
     m_jobsPerMs = m_lastMs > 0.0f ? int((64.0f * 17.0f) / m_lastMs) : 0;
@@ -203,7 +203,7 @@ void JobSystemStress::selfTest()
         oc::atomic<uint64> sum = 0;
         JobCounter counter;
         for (uint32 i = 0; i < 4096; ++i)
-            jobSystem.submit([&sum, i] { sum.fetch_add(i, oc::memory_order_relaxed); }, EJobPriority::Normal, &counter, "testSum");
+            jobSystem.submit([&sum, i] { sum.fetch_add(i, oc::memory_order_relaxed); }, { "testSum" }, EJobPriority::Normal, &counter);
         jobSystem.wait(counter);
         const bool pass = sum.load() == 4096ull * 4095ull / 2ull;
         numFailed += !pass;
@@ -214,7 +214,7 @@ void JobSystemStress::selfTest()
     { // parallelFor covers every index exactly once
         oc::vector<uint32> values(100000, 0);
         uint32* data = values.data();
-        jobSystem.parallelFor(0, uint32(values.size()), 1024, [data](uint32 begin, uint32 end)
+        jobSystem.parallelFor(0, uint32(values.size()), 1024, { "testParallelFor" }, [data](uint32 begin, uint32 end)
             {
                 for (uint32 i = begin; i < end; ++i)
                     data[i] += i * 3u;
@@ -232,7 +232,7 @@ void JobSystemStress::selfTest()
         oc::vector<uint32> values(200000, 0);
         uint32* data = values.data();
         for (uint32 run = 0; run < 8; ++run)
-            jobSystem.parallelFor(0, uint32(values.size()), cost, [data](uint32 begin, uint32 end)
+            jobSystem.parallelFor(0, uint32(values.size()), cost, { "testAutoGrain" }, [data](uint32 begin, uint32 end)
                 {
                     for (uint32 i = begin; i < end; ++i)
                         data[i] += 1;
@@ -304,7 +304,7 @@ void JobSystemStress::selfTest()
                     shared += 1;
                     for (volatile int spin = 0; spin < 50; ++spin) {}
                     inside.fetch_sub(1, oc::memory_order_relaxed);
-                }, EJobPriority::Normal, &counter, "testMutex");
+                }, { "testMutex" }, EJobPriority::Normal, &counter);
         std::thread external([&mutex, &shared, &inside, this]
             {
                 for (uint32 i = 0; i < 64; ++i)
@@ -333,8 +333,8 @@ void JobSystemStress::selfTest()
                 {
                     event.wait();
                     released.fetch_add(1, oc::memory_order_relaxed);
-                }, EJobPriority::Normal, &counter, "testEventWait");
-        jobSystem.submitDelayed(0.02, [&event] { event.signal(); });
+                }, { "testEventWait" }, EJobPriority::Normal, &counter);
+        jobSystem.submitDelayed(0.02, [&event] { event.signal(); }, { "testEventSignal" });
         jobSystem.wait(counter);
         const bool pass = released.load() == 64 && event.isSignaled();
         numFailed += !pass;
@@ -366,7 +366,7 @@ void JobSystemStress::selfTest()
             {
                 m_delayedMicros.store(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - start).count(), oc::memory_order_relaxed);
                 m_delayedFlag.store(1, oc::memory_order_relaxed);
-            }, EJobPriority::Normal, nullptr, "testDelayed");
+            }, { "testDelayed" }, EJobPriority::Normal, nullptr);
         Log::info("JobSystem self test: delayed job submitted (250 ms), result follows...");
     }
 

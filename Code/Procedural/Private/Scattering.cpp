@@ -399,7 +399,7 @@ namespace Procedural
 				return;
 			if (m_numPumps.compare_exchange_weak(cur, cur + 1, oc::memory_order_acq_rel))
 			{
-				Globals::jobSystem.submit([this] { pumpJob(); }, EJobPriority::Low, &m_pumpCounter, "scatterCellPump");
+				Globals::jobSystem.submit([this] { pumpJob(); }, { "scatterCellPump", EProfileCategory::Procedural }, EJobPriority::Low, &m_pumpCounter);
 				++spawned;
 			}
 		}

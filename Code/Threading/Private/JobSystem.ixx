@@ -81,22 +81,27 @@ public:
 
     // Fire-and-forget or counter-tracked async execution. The callable must fit Job::StorageSize.
     // counter (optional) is incremented now and decremented when the job finishes: submit
-    // everything, then wait once.
+    // everything, then wait once. `profile` is REQUIRED: execute() opens that scope around the
+    // job's body, so nothing a worker runs is ever invisible on the profiler (a job body may still
+    // open finer scopes of its own inside it).
     template<typename Func>
-    void submit(Func&& func, EJobPriority priority = EJobPriority::Normal, JobCounter* counter = nullptr, const char* name = nullptr)
+    void submit(Func&& func, JobProfile profile, EJobPriority priority = EJobPriority::Normal, JobCounter* counter = nullptr)
     {
+        assert(profile.name && "every job must carry a JobProfile name (a string literal)");
         Job* job = allocatePooledJob();
         if (!job) // pool exhausted: run it here rather than lose it
         {
             m_numInlineFallbacks.fetch_add(1, oc::memory_order_relaxed);
             assert(false && "job pool exhausted - raise JobSystemDesc::jobPoolCapacity");
+            ProfileScope scope(profile.name, profile.category);
             func();
             return;
         }
         setJobCallable(*job, oc::forward<Func>(func));
         job->priority = priority;
         job->effectivePriority = priority;
-        job->name = name;
+        job->name = profile.name;
+        job->profileCategory = profile.category;
         if (counter)
         {
             counter->add(1);
@@ -106,20 +111,23 @@ public:
     }
 
     template<typename Func>
-    void submitDelayed(double delaySec, Func&& func, EJobPriority priority = EJobPriority::Normal, JobCounter* counter = nullptr, const char* name = nullptr)
+    void submitDelayed(double delaySec, Func&& func, JobProfile profile, EJobPriority priority = EJobPriority::Normal, JobCounter* counter = nullptr)
     {
+        assert(profile.name && "every job must carry a JobProfile name (a string literal)");
         Job* job = allocatePooledJob();
         if (!job)
         {
             m_numInlineFallbacks.fetch_add(1, oc::memory_order_relaxed);
             assert(false && "job pool exhausted - raise JobSystemDesc::jobPoolCapacity");
+            ProfileScope scope(profile.name, profile.category);
             func();
             return;
         }
         setJobCallable(*job, oc::forward<Func>(func));
         job->priority = priority;
         job->effectivePriority = priority;
-        job->name = name;
+        job->name = profile.name;
+        job->profileCategory = profile.category;
         if (counter)
         {
             counter->add(1);
@@ -138,20 +146,22 @@ public:
 
     // Splits [begin, end) into grainSize chunks pulled from a shared atomic cursor by
     // getNumWorkers() helper jobs plus the calling thread. func(chunkBegin, chunkEnd) must be
-    // safe to run concurrently with itself. Returns when the whole range is done.
+    // safe to run concurrently with itself. Returns when the whole range is done. `profile` is
+    // REQUIRED and covers each participant's WHOLE run (helper jobs through execute(), the calling
+    // thread wrapped here) — one span per participant, not per chunk.
     template<typename Func>
-    void parallelFor(uint32 begin, uint32 end, uint32 grainSize, Func&& func, EJobPriority priority = EJobPriority::Normal)
+    void parallelFor(uint32 begin, uint32 end, uint32 grainSize, JobProfile profile, Func&& func, EJobPriority priority = EJobPriority::Normal)
     {
-        parallelForImpl(begin, end, grainSize, nullptr, oc::forward<Func>(func), priority);
+        parallelForImpl(begin, end, grainSize, nullptr, profile, oc::forward<Func>(func), priority);
     }
 
     // Auto-grain: the chunk size is derived from the tracker's measured ns/item to hit
     // JobSystemDesc::parallelForTargetChunkNs, and this run's timings feed back into it.
     template<typename Func>
-    void parallelFor(uint32 begin, uint32 end, JobCost& cost, Func&& func, EJobPriority priority = EJobPriority::Normal)
+    void parallelFor(uint32 begin, uint32 end, JobCost& cost, JobProfile profile, Func&& func, EJobPriority priority = EJobPriority::Normal)
     {
         const uint64 grain = oc::max<uint64>(1, m_targetChunkNs / cost.nsPerItem());
-        parallelForImpl(begin, end, uint32(oc::min<uint64>(grain, UINT32_MAX)), &cost, oc::forward<Func>(func), priority);
+        parallelForImpl(begin, end, uint32(oc::min<uint64>(grain, UINT32_MAX)), &cost, profile, oc::forward<Func>(func), priority);
     }
 
     // Scheduler plumbing shared with JobGraph - not for gameplay code.
@@ -162,14 +172,16 @@ public:
 private:
 
     template<typename Func>
-    void parallelForImpl(uint32 begin, uint32 end, uint32 grainSize, JobCost* cost, Func&& func, EJobPriority priority)
+    void parallelForImpl(uint32 begin, uint32 end, uint32 grainSize, JobCost* cost, JobProfile profile, Func&& func, EJobPriority priority)
     {
+        assert(profile.name && "every parallelFor must carry a JobProfile name (a string literal)");
         if (end <= begin)
             return;
         const uint32 count = end - begin;
         grainSize = oc::max(grainSize, 1u);
         if (count <= grainSize || m_numWorkers == 0)
         {
+            ProfileScope scope(profile.name, profile.category);
             const Clock::time_point start = cost ? Clock::now() : Clock::time_point{};
             func(begin, end);
             if (cost)
@@ -205,8 +217,11 @@ private:
         const uint32 numHelpers = oc::min(m_numWorkers, numChunks - 1);
         JobCounter counter;
         for (uint32 i = 0; i < numHelpers; ++i)
-            submit(runner, priority, &counter, "parallelFor");
-        runner();
+            submit(runner, profile, priority, &counter); // helpers scoped by execute()
+        {
+            ProfileScope scope(profile.name, profile.category); // the calling thread's share
+            runner();
+        }
         wait(counter);
     }
 

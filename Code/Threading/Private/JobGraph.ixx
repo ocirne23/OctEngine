@@ -79,9 +79,9 @@ public:
     template<typename CountFunc, typename Func>
     JobGraphBuilder addParallelJob(const char* name, CountFunc&& countFunc, uint32 grainSize, Func&& func, EJobPriority priority = EJobPriority::Normal)
     {
-        return addJob(name, [countFunc = oc::forward<CountFunc>(countFunc), grainSize, func = oc::forward<Func>(func)]
+        return addJob(name, [name, countFunc = oc::forward<CountFunc>(countFunc), grainSize, func = oc::forward<Func>(func)]
             {
-                Globals::jobSystem.parallelFor(0u, countFunc(), grainSize, func);
+                Globals::jobSystem.parallelFor(0u, countFunc(), grainSize, JobProfile{ name }, func);
             }, priority);
     }
 
