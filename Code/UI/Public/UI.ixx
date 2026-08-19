@@ -41,7 +41,20 @@ public:
     // them first thing. Only panels that were OPEN last frame prepare, and every panel prepares
     // inline in its render if nothing ran ahead, so prepare() is an optimization, never required.
     void prepare();
+    // The SDL backend half of the ImGui frame. MAIN THREAD ONLY, before the update() job is
+    // kicked: ImGui_ImplSDL3_NewFrame talks to SDL (window size, cursor, mouse capture), and those
+    // calls keep their affinity to the thread that owns the window and its message pump.
+    void beginImGuiFrame();
+    // The widget pass. Runs as ONE JOB off the main thread, kicked at the END of the frame (right
+    // after present) and joined at the TOP of the next - it runs during profiler.endFrame and the
+    // fence/vsync wait, when main mutates nothing the panels read and the workers are otherwise
+    // idle. Everything it produces is consumed after the join: the draw-data snapshot by that
+    // frame's present, the EntityChange/reload queues by the drains, the deferred work below by
+    // flushMainThreadWork.
     void update(const oc::vector<EntityPtr>& rootEntities, const Camera& camera, double deltaSec);
+    // Main thread, after the update() job joined: work panels collected but must not run on a
+    // worker - tweak onChange callbacks and the Entity Editor's container imports.
+    void flushMainThreadWork();
     void render();
 	void setRenderStats(const Stats& stats) { m_renderStats = stats; }
 
@@ -79,6 +92,10 @@ public:
         oc::vector<EntityChange> entityEditorChanges = m_entityEditor.takeChanges();
         changes.insert(changes.end(), oc::make_move_iterator(entityEditorChanges.begin()),
                                       oc::make_move_iterator(entityEditorChanges.end()));
+
+        oc::vector<EntityChange> propertyChanges = m_propertiesPanel.takeChanges();
+        changes.insert(changes.end(), oc::make_move_iterator(propertyChanges.begin()),
+                                      oc::make_move_iterator(propertyChanges.end()));
         return changes;
     }
 

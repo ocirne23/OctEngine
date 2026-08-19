@@ -26,108 +26,133 @@ bool World::initialize()
     return true;
 }
 
+// CONTINUATION BATCHES, no level barrier: the tree used to be walked breadth-first with a
+// parallelFor + merge per depth, which made every level wait for the SLOWEST batch of the previous
+// one ("Level merge" stalls). The only real dependency is parent-before-CHILD - a child reads its
+// parent solely through the parentWorld baked into its node - so a batch job now slices the
+// children it just emitted into new batch jobs and submits them immediately: subtrees descend
+// independently, and a worker's own continuations run LIFO from its local deque (cache-warm,
+// DFS-ish). One JobCounter spans the whole pass; submits happen before the submitting job
+// finishes, so the counter can never transiently hit zero early.
 void World::update(Renderer& renderer, float deltaSeconds)
 {
     ProfileScope updateScope("World update", EProfileCategory::Entity);
     ++m_updateFrame;
+
+    // Arena sizing happens BETWEEN passes only (jobs hold pointers into it): last frame's use plus
+    // any overflow, doubled for slack.
+    const uint32 lastUse = m_updateArenaCursor.load(oc::memory_order_relaxed)
+        + m_updateArenaOverflow.load(oc::memory_order_relaxed);
+    if (uint32(m_updateArena.size()) < glm::max(4096u, lastUse * 2))
+        m_updateArena.resize(glm::max(4096u, lastUse * 2));
+    m_updateArenaCursor.store(0, oc::memory_order_relaxed);
+    m_updateArenaOverflow.store(0, oc::memory_order_relaxed);
+
+    m_updateRenderer = &renderer;
+    m_updateDelta = deltaSeconds;
+    // COST-BUDGETED batches instead of a uniform grain: every entity carries a measured updateCost
+    // (unmeasured counts as 1 so it still partitions), and a batch fills until the summed cost
+    // reaches ~25us of measured time (m_updateCost's EMA is fed COST UNITS as its item count, so
+    // nsPerItem() self-calibrates to "ns per cost unit"). No even-split term anymore: parallelism
+    // now comes from the fan-out itself - children spawn jobs the moment their parent's batch ends.
+    m_updateBudget = uint32(glm::clamp<uint64>(25000 / glm::max<uint64>(m_updateCost.nsPerItem(), 1), 1, 4096));
+
     m_updateLevel.clear();
     for (const EntityPtr& root : m_rootEntities)
         m_updateLevel.push_back({ root.get(), Transform() });
+    submitEntityBatches(m_updateLevel.data(), uint32(m_updateLevel.size()));
 
-    while (!m_updateLevel.empty())
+    // Helps: main runs batch jobs alongside the workers until the whole tree is done.
+    Globals::jobSystem.wait(m_updateCounter);
+}
+
+// Copies the nodes into the frame arena in ONE claim, then slices the arena range into
+// cost-budgeted batch jobs. The single up-front copy is load-bearing, not an optimization: `nodes`
+// is the caller's per-worker staging vector, and a submit can execute its job INLINE on queue
+// exhaustion - an inline child batch reuses that same staging slot, so nothing may read `nodes`
+// once the first submit goes out. Called from the main thread for the roots and from batch jobs
+// for their children.
+void World::submitEntityBatches(const EntityUpdateNode* nodes, uint32 count)
+{
+    static_assert(std::is_trivially_copyable_v<EntityUpdateNode>);
+    if (count == 0)
+        return;
+    const uint32 slot = m_updateArenaCursor.fetch_add(count, oc::memory_order_relaxed);
+    if (slot + count > uint32(m_updateArena.size()))
     {
-        // COST-BUDGETED batches instead of a uniform grain: every entity carries a measured
-        // updateCost (unmeasured counts as 1 so it still partitions), and a batch fills until the
-        // summed cost reaches the budget — so one batch holds hundreds of static props or a
-        // handful of units, and the fan-out's chunks come out roughly equal in TIME. The budget
-        // is the SMALLER of two limits:
-        //  - the ~25us chunk target (m_updateCost's EMA is fed COST UNITS as its item count, so
-        //    nsPerItem() self-calibrates to "ns per cost unit"), and
-        //  - an even split across every scheduler context ×4 over-partition — without this a
-        //    level of cheap props collapses into fewer batches than there are workers and most of
-        //    the pool idles; over-partitioning leaves the shared cursor slack to absorb batches
-        //    that run long, since equal COST is still only an estimate of equal TIME.
-        uint64 totalCost = 0;
-        for (const EntityUpdateNode& node : m_updateLevel)
-            totalCost += glm::max<uint32>(node.entity->updateCost, 1);
-        const uint32 timeBudget = uint32(glm::clamp<uint64>(25000 / glm::max<uint64>(m_updateCost.nsPerItem(), 1),
-            1, 4096));
-        constexpr uint32 c_overPartition = 4; // target batches per context
-        const uint32 balanceBudget = uint32(glm::max<uint64>(
-            totalCost / (uint64(Globals::jobSystem.getNumContexts()) * c_overPartition), 1));
-        const uint32 budget = glm::min(timeBudget, balanceBudget);
-        m_updateBatches.clear();
-        uint32 batchBegin = 0, batchCost = 0;
-        for (uint32 i = 0; i < uint32(m_updateLevel.size()); ++i)
+        // Arena exhausted (the claim is never rolled back): run these subtrees serially via the
+        // recursive path - correct, just not parallel; the overflow grows the arena next frame so
+        // this stays a one-frame hiccup. Reads `nodes` directly, which is fine: the serial path
+        // never touches the staging slots.
+        m_updateArenaOverflow.fetch_add(count, oc::memory_order_relaxed);
+        for (uint32 i = 0; i < count; ++i)
+            nodes[i].entity->update(*m_updateRenderer, m_updateDelta, nodes[i].parentWorld);
+        return;
+    }
+    std::memcpy(&m_updateArena[slot], nodes, count * sizeof(EntityUpdateNode));
+
+    uint32 begin = 0;
+    while (begin < count)
+    {
+        uint32 cost = 0, end = begin;
+        while (end < count && cost < m_updateBudget)
+            cost += glm::max<uint32>(m_updateArena[slot + end++].entity->updateCost, 1);
+        const uint32 batchSlot = slot + begin;
+        const uint32 n = end - begin;
+        Globals::jobSystem.submit([this, batchSlot, n] { updateBatchJob(batchSlot, n); },
+            { "Entity Update", EProfileCategory::Entity }, EJobPriority::Normal, &m_updateCounter);
+        begin = end;
+    }
+}
+
+void World::updateBatchJob(uint32 begin, uint32 count)
+{
+    // Safe because updateSelf never fiber-waits (and neither does this job - submits don't wait):
+    // everything it touches is the audited thread-safe inline set, and the per-worker staging slot
+    // stays exclusively ours for the job's whole body.
+    EntityUpdateStaging& staging = m_updateStaging.local();
+    staging.children.clear();
+    const Clock::time_point batchStart = Clock::now();
+    uint32 batchCost = 0;
+    for (uint32 i = begin; i < begin + count; ++i)
+    {
+        const EntityUpdateNode& node = m_updateArena[i];
+        Entity* entity = node.entity;
+        batchCost += glm::max<uint32>(entity->updateCost, 1);
+        // MEASURED cost: an entity's FIRST update is timed and becomes its updateCost
+        // (250ns units — no guessed initial value), then a ~1/1024-per-frame random
+        // re-measure keeps it honest as behaviour changes (a unit that starts fighting,
+        // a script that goes idle). Two clock reads only on measured updates.
+        const uint32 mix = uint32((uintptr_t(entity) >> 4) * 2654435761u)
+            ^ uint32(m_updateFrame * 0x9E3779B9u);
+        const bool measure = entity->updateCost == 0 || (mix & 1023) == 0;
+        const Clock::time_point measureStart = measure ? Clock::now() : Clock::time_point{};
+        // Per-entity scope for OPT-IN entities only (EEntityFlag_Profiled: simulated
+        // things — animators, scripts, units, machine structures; static scenery stays
+        // scope-free so it cannot flood the rings). NAMED by the interned entity name,
+        // which stays valid in the ring after the entity dies.
+        if (entity->isProfiled())
         {
-            batchCost += glm::max<uint32>(m_updateLevel[i].entity->updateCost, 1);
-            if (batchCost >= budget)
-            {
-                m_updateBatches.push_back(EntityUpdateBatch{ batchBegin, i + 1, batchCost });
-                batchBegin = i + 1;
-                batchCost = 0;
-            }
+            ProfileScope entityScope(entity->name ? entity->name
+                : "Entity", EProfileCategory::Entity);
+            entity->updateSelf(*m_updateRenderer, m_updateDelta, node.parentWorld, staging.children);
         }
-        if (batchBegin < uint32(m_updateLevel.size()))
-            m_updateBatches.push_back(EntityUpdateBatch{ batchBegin, uint32(m_updateLevel.size()), batchCost });
-
-        Globals::jobSystem.parallelFor(0, uint32(m_updateBatches.size()), 1,
-            { "Entity Update", EProfileCategory::Entity }, // participant-level scope; per-entity below
-            [this, &renderer, deltaSeconds](uint32 batchBegin2, uint32 batchEnd2)
-            {
-                // Safe because updateSelf never fiber-waits - everything it touches is the audited
-                // thread-safe inline set.
-                EntityUpdateStaging& staging = m_updateStaging.local();
-                for (uint32 b = batchBegin2; b < batchEnd2; ++b)
-                {
-                const EntityUpdateBatch& batch = m_updateBatches[b];
-                const Clock::time_point batchStart = Clock::now();
-                for (uint32 i = batch.begin; i < batch.end; ++i)
-                {
-                    const EntityUpdateNode& node = m_updateLevel[i];
-                    Entity* entity = node.entity;
-                    // MEASURED cost: an entity's FIRST update is timed and becomes its updateCost
-                    // (250ns units — no guessed initial value), then a ~1/1024-per-frame random
-                    // re-measure keeps it honest as behaviour changes (a unit that starts fighting,
-                    // a script that goes idle). Two clock reads only on measured updates.
-                    const uint32 mix = uint32((uintptr_t(entity) >> 4) * 2654435761u)
-                        ^ uint32(m_updateFrame * 0x9E3779B9u);
-                    const bool measure = entity->updateCost == 0 || (mix & 1023) == 0;
-                    const Clock::time_point measureStart = measure ? Clock::now() : Clock::time_point{};
-                    // Per-entity scope for OPT-IN entities only (EEntityFlag_Profiled: simulated
-                    // things — animators, scripts, units, machine structures; static scenery stays
-                    // scope-free so it cannot flood the rings). NAMED by the interned entity name,
-                    // which stays valid in the ring after the entity dies.
-                    if (entity->isProfiled())
-                    {
-                        ProfileScope entityScope(entity->name ? entity->name
-                            : "Entity", EProfileCategory::Entity);
-                        entity->updateSelf(renderer, deltaSeconds, node.parentWorld, staging.children);
-                    }
-                    else
-                        entity->updateSelf(renderer, deltaSeconds, node.parentWorld, staging.children);
-                    if (measure)
-                    {
-                        const uint64 ns = uint64(std::chrono::nanoseconds(Clock::now() - measureStart).count());
-                        entity->updateCost = uint8(glm::clamp<uint64>(ns / 250, 1, 255));
-                    }
-                }
-                // Calibrate: ns per COST UNIT, so the budget above tracks real update costs.
-                m_updateCost.addSample(uint64(std::chrono::nanoseconds(Clock::now() - batchStart).count()),
-                    batch.cost);
-                }
-            });
-
+        else
+            entity->updateSelf(*m_updateRenderer, m_updateDelta, node.parentWorld, staging.children);
+        if (measure)
         {
-            ProfileScope profileScope("Level merge", EProfileCategory::Entity);
-            m_updateLevel.clear();
-            m_updateStaging.forEach([this](EntityUpdateStaging& staging)
-                {
-                    m_updateLevel.insert(m_updateLevel.end(), staging.children.begin(), staging.children.end());
-                    staging.children.clear();
-                });
+            const uint64 ns = uint64(std::chrono::nanoseconds(Clock::now() - measureStart).count());
+            entity->updateCost = uint8(glm::clamp<uint64>(ns / 250, 1, 255));
         }
     }
+    // Calibrate: ns per COST UNIT, so the batch budget tracks real update costs.
+    m_updateCost.addSample(uint64(std::chrono::nanoseconds(Clock::now() - batchStart).count()), batchCost);
+
+    // The continuation: this batch's children become new batch jobs RIGHT NOW - no level barrier.
+    // Submitted from a worker they land on its local deque (LIFO), so a lone deep subtree descends
+    // on one warm core while wide fan-outs get stolen.
+    if (!staging.children.empty())
+        submitEntityBatches(staging.children.data(), uint32(staging.children.size()));
 }
 
 static RendererVKLayout::EPipelineIndex parsePipeline(const oc::string& name)
@@ -218,6 +243,12 @@ ObjectContainer* World::getOrLoadContainer(const oc::string& name, bool captureC
         return loadContainer(*desc, captureCollisionSource);
     Log::warning("Scene: unknown ObjectContainer reference '" + name + "'");
     return nullptr;
+}
+
+ObjectContainer* World::findLoadedContainer(const oc::string& name)
+{
+    const auto it = m_containers.find(name);
+    return it != m_containers.end() ? it->second.get() : nullptr;
 }
 
 EntityPtr World::spawn(const oc::string& name, const Transform& base)
@@ -950,6 +981,11 @@ void World::handleEntityChange(EntityChange& change, const Camera& camera, const
             e->reparentEntity(ch->parent);   // parent's SceneComponent takes ownership
         else
             addRootEntity(oc::move(e));
+    }
+    else if (auto* se = oc::get_if<EntityChange::SetEnabled>(&change.type))
+    {
+        if (se->entity)
+            se->entity->setEnabled(se->enabled);
     }
     else if (auto* sap = oc::get_if<EntityChange::SpawnAtPosition>(&change.type))
         addRootEntity(spawnAssetFile(sap->path, Transform(sap->position, 1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f))));

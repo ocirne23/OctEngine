@@ -25,7 +25,7 @@ namespace
 			ImGui::SetKeyboardFocusHere(-1);
 	}
 
-	void drawVar(const TweakVar& var, int index)
+	void drawVar(const TweakVar& var, int index, oc::vector<const TweakVar*>& deferredCallbacks)
 	{
 		ImGui::PushID(index);
 
@@ -125,8 +125,10 @@ namespace
 		}
 		}
 
+		// Deferred to TweakPanel::flushDeferredCallbacks on the main thread - the widget pass runs
+		// on a worker and the callbacks are main-thread work (renderer, physics world, ...).
 		if (changed && var.onChange)
-			var.onChange();
+			deferredCallbacks.push_back(&var);
 
 		ImGui::PopID();
 	}
@@ -147,7 +149,7 @@ namespace
 		}
 	};
 
-	void renderCategory(CategoryNode& node, int depth, oc::string_view parentPath)
+	void renderCategory(CategoryNode& node, int depth, oc::string_view parentPath, oc::vector<const TweakVar*>& deferredCallbacks)
 	{
 		// Visible text is node.name; everything after "##" is the (hidden) ImGui ID.
 		// Use the full category path as the ID so categories that share a display
@@ -169,10 +171,10 @@ namespace
 		if (open)
 		{
 			for (int i : node.varIndices)
-				drawVar(TweakRegistry::get().vars()[i], i);
+				drawVar(TweakRegistry::get().vars()[i], i, deferredCallbacks);
 
 			for (CategoryNode& child : node.children)
-				renderCategory(child, depth + 1, path);
+				renderCategory(child, depth + 1, path, deferredCallbacks);
 
 			if (depth != 0)
 				ImGui::TreePop();
@@ -211,5 +213,12 @@ void TweakPanel::render()
 	}
 
 	for (CategoryNode& child : root.children)
-		renderCategory(child, 0, {});
+		renderCategory(child, 0, {}, m_deferredCallbacks);
+}
+
+void TweakPanel::flushDeferredCallbacks()
+{
+	for (const TweakVar* var : m_deferredCallbacks)
+		var->onChange();
+	m_deferredCallbacks.clear();
 }

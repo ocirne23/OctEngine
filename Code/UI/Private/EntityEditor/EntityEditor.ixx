@@ -37,6 +37,11 @@ public:
 
 	// "Select Prefab" toolbar button: the UI drains this and selects the .pre in the asset browser.
 	oc::string takeRevealRequest() { return oc::move(m_revealRequest); }
+	// Containers the render section needed but that were not loaded yet: the widget pass runs off
+	// the main thread and an import creates renderer resources (main-thread work), so render()
+	// only queues the name and UI::flushMainThreadWork calls this on main - the node list fills in
+	// a frame later.
+	void flushContainerLoads();
 
 private:
 
@@ -113,6 +118,7 @@ private:
 
 	oc::vector<EntityChange> m_changes;
 	oc::string m_revealRequest; // .pre to select in the asset browser (drained by UI)
+	oc::vector<oc::string> m_containerLoadRequests; // see takeContainerLoadRequests
 
 	char m_pathBuf[256] = "Entities/NewEntity.pre";
 	char m_nameBuf[256] = {};

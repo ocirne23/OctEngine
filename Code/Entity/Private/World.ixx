@@ -19,7 +19,9 @@ import Spatial;
 import Threading;
 import :AnimationDescription;
 
-// Per-worker scratch for the depth-parallel entity update: the next level's nodes this worker found.
+// Per-worker scratch for the parallel entity update: the children the batch currently running on
+// this worker emitted. Consumed (sliced into new batch jobs) before the batch job returns, so one
+// slot per worker suffices - a batch job never fiber-waits.
 export struct EntityUpdateStaging
 {
     oc::vector<EntityUpdateNode> children;
@@ -64,6 +66,9 @@ public:
 
     // captureCollisionSource keeps a CPU snapshot of the scene geometry for physics
     ObjectContainer* getOrLoadContainer(const oc::string& name, bool captureCollisionSource = false);
+    // Lookup only, never imports: safe from the off-main UI pass (an import creates renderer
+    // resources, which is main-thread work - see EntityEditor's container load requests).
+    ObjectContainer* findLoadedContainer(const oc::string& name);
     size_t getNumContainers() const { return m_containers.size(); }
 
     // Keep old instances of edited templates alive (for pre-existing entities)
@@ -133,10 +138,25 @@ private:
     oc::vector<oc::shared_ptr<const EntitySpawnTemplate>> m_editorTemplates; // ad-hoc templates kept alive via keepTemplateAlive()
     oc::vector<EntityPtr> m_rootEntities;
     bool m_headless = false;
-    struct EntityUpdateBatch { uint32 begin, end, cost; };
+    // CONTINUATION-BATCH entity update (see update()): one batch job processes a node range from
+    // the arena and immediately slices the children it emitted into new batch jobs - no level
+    // barrier, a child's only dependency is its own parent, which just finished.
+    void updateBatchJob(uint32 begin, uint32 count);
+    void submitEntityBatches(const EntityUpdateNode* nodes, uint32 count);
+
     uint64 m_updateFrame = 0; // salts the per-entity random re-measure below
-    oc::vector<EntityUpdateNode> m_updateLevel;
-    oc::vector<EntityUpdateBatch> m_updateBatches; // cost-budgeted slices of m_updateLevel
+    oc::vector<EntityUpdateNode> m_updateLevel; // root gather scratch
+    // Frame arena for in-flight batch nodes: claimed with an atomic bump (NEVER rolled back),
+    // pointer-stable during the pass (resized only between frames, from last frame's use +
+    // overflow). A claim past the end runs that batch's subtrees serially instead (correct, just
+    // not parallel) and grows the arena next frame.
+    oc::vector<EntityUpdateNode> m_updateArena;
+    oc::atomic<uint32> m_updateArenaCursor = 0;
+    oc::atomic<uint32> m_updateArenaOverflow = 0;
+    Renderer* m_updateRenderer = nullptr; // pass-scoped: shrinks every batch job's capture to 16 bytes
+    float m_updateDelta = 0.0f;
+    uint32 m_updateBudget = 1;            // cost units per batch (~25us), computed once per pass
+    JobCounter m_updateCounter;           // every batch job in the pass, incl. ones batches spawn
     PerWorker<EntityUpdateStaging> m_updateStaging;
     JobCost m_updateCost{ 2000 };
     oc::function<void(const EntityPtr&, const oc::string&)> m_onPrefabOpened;

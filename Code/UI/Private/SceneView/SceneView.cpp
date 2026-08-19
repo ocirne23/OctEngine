@@ -199,8 +199,8 @@ void SceneView::renderEntityNode(Entity* entity, bool ancestorLocked)
 		ImGui::PushStyleColor(ImGuiCol_Text, entity->isEnabled()
 			? ImGui::GetStyleColorVec4(ImGuiCol_Text)
 			: ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-		if (ImGui::SmallButton(entity->isEnabled() ? "o" : "-"))
-			entity->setEnabled(!entity->isEnabled());
+		if (ImGui::SmallButton(entity->isEnabled() ? "o" : "-")) // queued: setEnabled is main-thread work (physics walk)
+			m_changes.push_back({ EntityChange::SetEnabled{ EntityPtr(entity), !entity->isEnabled() } });
 		ImGui::PopStyleColor(2);
 		ImGui::PopID();
 	}

@@ -268,5 +268,13 @@ export struct EntityChange
         EntityPtr oldEntity;
         oc::shared_ptr<const EntitySpawnTemplate> tmpl; // freshly assembled from the entity's edited component set
     };
-    oc::variant<CreateHierarchy, CreateViewport, AddSceneEntity, SpawnAtPosition, Delete, Reparent, SavePrefab, OpenPrefabForEdit, NewPrefab, RespawnEntity> type;
+    // Panel enable-toggles ride the queue rather than calling Entity::setEnabled directly: the
+    // widget pass runs OFF the main thread and setEnabled walks the subtree suspending/resuming
+    // physics bodies - box3d writes, main-thread-only.
+    struct SetEnabled
+    {
+        EntityPtr entity;
+        bool enabled;
+    };
+    oc::variant<CreateHierarchy, CreateViewport, AddSceneEntity, SpawnAtPosition, Delete, Reparent, SavePrefab, OpenPrefabForEdit, NewPrefab, RespawnEntity, SetEnabled> type;
 };

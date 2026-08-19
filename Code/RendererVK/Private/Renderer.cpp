@@ -2813,7 +2813,11 @@ void Renderer::recordCommandBuffers()
 
     vk::CommandBufferInheritanceInfo inheritance{ .renderPass = m_renderPass.getRenderPass() };
     vk::CommandBuffer vkImguiCommandBuffer = frameData.imguiCommandBuffer.begin(true, &inheritance);
-    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), vkImguiCommandBuffer, nullptr);
+    // From the UI's deep-copied snapshot, never ImGui::GetDrawData(): the next widget pass (a job)
+    // calls ImGui::NewFrame mid-frame, which invalidates the live draw lists. Null until the first
+    // UI::render (frame 0) - the empty secondary CB still executes fine.
+    if (m_imguiDrawData)
+        ImGui_ImplVulkan_RenderDrawData(static_cast<ImDrawData*>(const_cast<void*>(m_imguiDrawData)), vkImguiCommandBuffer, nullptr);
     frameData.imguiCommandBuffer.end();
 
     CommandBuffer& commandBuffer = frameData.primaryCommandBuffer;

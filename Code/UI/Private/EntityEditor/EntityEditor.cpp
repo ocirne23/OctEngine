@@ -389,6 +389,13 @@ void EntityEditor::doClose()
 	closeCurrent();
 }
 
+void EntityEditor::flushContainerLoads()
+{
+	for (const oc::string& name : m_containerLoadRequests)
+		Globals::world.getOrLoadContainer(name);
+	m_containerLoadRequests.clear();
+}
+
 void EntityEditor::requestOpen(const oc::string& path)
 {
 	if (path.empty())
@@ -783,8 +790,14 @@ void EntityEditor::renderRenderSection()
 	// spam load-failure warnings every frame.
 	oc::vector<oc::string> nodePaths;
 	if (!m_renderDraft.containerName.empty() && Globals::assetRegistry.findObjectContainer(m_renderDraft.containerName))
-		if (ObjectContainer* container = Globals::world.getOrLoadContainer(m_renderDraft.containerName))
+	{
+		// Lookup only - this runs on the UI worker, and an import is main-thread renderer work.
+		// A not-yet-loaded container is queued for UI::flushMainThreadWork; the list fills in next frame.
+		if (ObjectContainer* container = Globals::world.findLoadedContainer(m_renderDraft.containerName))
 			nodePaths = container->getNodePaths();
+		else if (oc::find(m_containerLoadRequests.begin(), m_containerLoadRequests.end(), m_renderDraft.containerName) == m_containerLoadRequests.end())
+			m_containerLoadRequests.push_back(m_renderDraft.containerName);
+	}
 
 	ImGui::AlignTextToFramePadding();
 	ImGui::Text("Node");

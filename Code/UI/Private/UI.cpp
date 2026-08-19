@@ -7,6 +7,7 @@ import Core.Log;
 import Core.glm;
 import Core.SDL;
 import Entity;
+import RendererVK; // hands the snapshotted ImGui draw data to the renderer (see UI::render)
 import Threading;
 
 import :AssetBrowser;
@@ -55,6 +56,23 @@ void UI::prepare()
         Globals::jobSystem.submit([this] { m_assetBrowser.prepare(); }, { "uiContentPrepare", EProfileCategory::UI }, EJobPriority::High, &m_prepareCounter);
 }
 
+void UI::beginImGuiFrame()
+{
+    // Main thread, before the update() job: the SDL3 backend queries the window and sets the OS
+    // cursor / mouse capture - thread-affine to the window's owner. ImGui::NewFrame itself only
+    // consumes the io state this writes, so it can run on the job (sequenced by the submit).
+    ProfileScope scope("ImGui backend new frame", EProfileCategory::UI);
+    ImGui_ImplSDL3_NewFrame();
+}
+
+void UI::flushMainThreadWork()
+{
+    // After the update() job joined: callbacks and imports the panels deferred because they are
+    // main-thread work (renderer/physics onChange effects, container imports creating GPU meshes).
+    m_tweakPanel.flushDeferredCallbacks();
+    m_entityEditor.flushContainerLoads();
+}
+
 void UI::update(const oc::vector<EntityPtr>& rootEntities, const Camera& camera, double deltaSec)
 {
     ProfileScope profileScope("UI update", EProfileCategory::UI);
@@ -66,7 +84,6 @@ void UI::update(const oc::vector<EntityPtr>& rootEntities, const Camera& camera,
     }
     {
         ProfileScope scope("ImGui new frame", EProfileCategory::UI);
-        ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
     }
 
@@ -362,8 +379,33 @@ void UI::handleKeyEvent(SDL_Event evt)
         m_scriptEditor.handleKeyEvent(evt);
 }
 
+// ImGui::GetDrawData() is only valid until the NEXT ImGui::NewFrame - and the next widget pass is
+// a job that starts mid-frame, while present() still records THIS data at the frame's end. So the
+// lists are deep-copied (CloneOutput) into storage the job can't touch, and the renderer records
+// from the snapshot. Frame-pipelined: render() runs at the TOP of the frame for LAST frame's
+// widget pass; the previous snapshot was consumed by last frame's present, so freeing it here is safe.
+namespace
+{
+ImDrawData g_imguiSnapshot;
+oc::vector<ImDrawList*> g_imguiSnapshotLists;
+} // namespace
+
 void UI::render()
 {
     ProfileScope profileScope("UI render", EProfileCategory::UI);
     ImGui::Render();
+
+    for (ImDrawList* list : g_imguiSnapshotLists)
+        IM_DELETE(list);
+    g_imguiSnapshotLists.clear();
+
+    const ImDrawData* src = ImGui::GetDrawData();
+    g_imguiSnapshot = *src; // scalar fields + the CmdLists vector (entries replaced with clones below)
+    for (int i = 0; i < g_imguiSnapshot.CmdLists.Size; ++i)
+    {
+        ImDrawList* clone = src->CmdLists[i]->CloneOutput();
+        g_imguiSnapshot.CmdLists[i] = clone;
+        g_imguiSnapshotLists.push_back(clone);
+    }
+    Globals::rendererVK.setImGuiDrawData(&g_imguiSnapshot);
 }

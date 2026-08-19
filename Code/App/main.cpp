@@ -268,6 +268,9 @@ int main(int argc, char* argv[])
     initScope.stop();
     startupIo.reset(); // from here on, main-thread IO asserts (see FileSystem)
 
+    JobCounter uiCounter;      // the in-flight UI widget pass, joined at the TOP of the next frame
+    bool uiJobKicked = false;  // no ImGui::Render / draw data until the first pass ran
+
     while (g_running)
     {
         // The vsync/GPU throttle: block on this frame slot's fence FIRST, before the loop scope opens
@@ -278,6 +281,23 @@ int main(int argc, char* argv[])
             Globals::rendererVK.waitFrameSlot();
 
         ProfileScope mainLoopScope("main loop", EProfileCategory::App);
+
+        if (!headlessServer)
+        {
+            {
+                // LAST frame's widget pass (kicked right after present): it ran during endFrame and
+                // the fence/vsync wait above, so this is near-zero unless the widget pass outlasted
+                // the whole stall. Joined before anything that mutates state the panels read and
+                // before the input pump touches the ImGui context.
+                ProfileScope uiJoinScope("UI join", EProfileCategory::Wait);
+                Globals::jobSystem.wait(uiCounter);
+            }
+            if (uiJobKicked)
+            {
+                Globals::ui.flushMainThreadWork(); // deferred tweak onChange callbacks + container imports
+                Globals::ui.render(); // ImGui::Render + snapshot for LAST frame's widgets -> THIS frame's present
+            }
+        }
 
         Globals::time.update();
         const double deltaSec = Globals::time.getDeltaSec();
@@ -302,8 +322,8 @@ int main(int argc, char* argv[])
                 controls.applyPlayerCamera(camera); // possessed capsule view (first/third person), see InputControls
                 game.updateWindowed(camera, (float)deltaSec); // game mode: follow-camera overwrite + aim/HUD/debug draw
             }
-            Globals::ui.update(Globals::world.rootEntities(), camera, deltaSec); // also drives the gizmo it owns
-
+            // LAST frame's widget-pass outputs: the UI runs off the main thread now, so its queues
+            // drain one frame latent by design (a UI response was never sim-critical).
             for (const oc::string& reloadPath : Globals::ui.takeScriptReloadRequests()) Globals::scriptHost.getOrLoad(reloadPath, true);
             for (EntityChange& change : Globals::ui.takeEntityChanges()) Globals::world.handleEntityChange(change, camera, Globals::ui.getViewportRect());
         }
@@ -312,12 +332,13 @@ int main(int argc, char* argv[])
         Globals::networkManager.receive(deltaSec); // snapshot targets + events land before the sim/entity updates read them
         game.update((float)deltaSec); // authority tick, pre-physics (direct body setters sanctioned); becomes the server tick in MP
         Globals::scriptContext.update(camera, (float)deltaSec, (float)Globals::time.getElapsedSec());
+
         Globals::physics.update(deltaSec, [](const PhysicsWorld::ContactEvent& evt) { Globals::world.handleContactEvent(evt); });
 
         if (!headlessServer)
         {
             Globals::audio.update(camera);
-            const Frustum& frustum = Globals::rendererVK.beginFrame(camera, Globals::ui.getViewportRect());
+            const Frustum& frustum = Globals::rendererVK.beginFrame(camera, Globals::ui.getViewportRect()); // stable: the widget pass joined at the top of the frame
             Globals::spatialIndex.update(camera, frustum, Globals::rendererVK.getCenterViewProj() * glm::translate(glm::mat4(1.0f), camera.position)); // translate corrects the reverse-z renderer proj matrix
         }
         Globals::world.update(Globals::rendererVK, (float)deltaSec); // serial script prepass + parallel component/tree pass + sink flush; headless: renderer passed through but never dereferenced (headless archetypes)
@@ -333,8 +354,19 @@ int main(int argc, char* argv[])
             Globals::forceSystem.update(Globals::rendererVK, (float)deltaSec);
 
             Globals::ui.drawGizmoEntity(Globals::rendererVK, (float)deltaSec);
-            Globals::ui.render();
-            Globals::rendererVK.present();
+            Globals::rendererVK.present(); // ImGui pass records from the PREVIOUS widget pass's snapshot
+
+            // KICK NEXT FRAME'S WIDGET PASS, off the main thread and a full frame deep: from here it
+            // overlaps only profiler.endFrame and the next frame's fence/vsync wait - main mutates
+            // NOTHING the panels read in that window, and the workers are otherwise idle during the
+            // stall, so the UI is effectively free instead of stealing a worker from the sim's
+            // parallel phases. Joined at the top of the next frame ("UI join"); it reads this
+            // frame's post-sim state and its draw data reaches the screen one present later. The
+            // SDL half of the ImGui frame stays on this thread (beginImGuiFrame).
+            Globals::ui.beginImGuiFrame();
+            Globals::jobSystem.submit([&] { Globals::ui.update(Globals::world.rootEntities(), camera, deltaSec); },
+                { "UI widget pass", EProfileCategory::UI }, EJobPriority::Normal, &uiCounter);
+            uiJobKicked = true;
         }
 
         mainLoopScope.stop(); // before the frame mark, so the record stays inside this frame's window
@@ -345,6 +377,8 @@ int main(int argc, char* argv[])
             while (g_running && Clock::now() < Globals::time.getCurrentTime() + Clock::duration(std::chrono::seconds(1)) / tickHz)
                 Sleep(1);
     }
+
+    Globals::jobSystem.wait(uiCounter); // the final frame's widget pass may still be in flight
 
     return 0;
 }

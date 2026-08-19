@@ -333,6 +333,9 @@ public:
         return m_oceanSimPipeline.getDisplacementReadback(m_swapChain.getCurrentFrameIndex());
     }
     void setPostParams(const PostParams& post) { m_postParams = post; setHaveToRecordCommandBuffers(); }
+    // The UI's snapshotted ImGui draw data (an ImDrawData*, opaque here); present() records the
+    // ImGui pass from it. Null until the first UI::render - the pass is skipped.
+    void setImGuiDrawData(const void* drawData) { m_imguiDrawData = drawData; }
 
     uint32 getNumMeshInstances() const { return m_meshInstanceCounter; }
     uint32 getNumMeshTypes() const { return m_meshInfoCounter; }
@@ -659,6 +662,7 @@ private:
     float  m_giProbeDebugRadius = 0.12f;
 
     glm::ivec2 m_windowSize;
+    const void* m_imguiDrawData = nullptr; // see setImGuiDrawData
     Rect m_viewportRect = Rect();
     bool m_initialized = false;
     bool m_frameSlotWaited = false; // waitFrameSlot() ran for the current slot (cleared by present)

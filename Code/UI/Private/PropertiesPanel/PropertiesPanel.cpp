@@ -49,8 +49,8 @@ void PropertiesPanel::render(Entity* selected)
 			ImGui::Text("Enabled");
 			ImGui::SameLine(80.0f);
 			bool enabled = selected->isEnabled();
-			if (ImGui::Checkbox("##pp_enabled", &enabled))
-				selected->setEnabled(enabled);
+			if (ImGui::Checkbox("##pp_enabled", &enabled)) // queued: setEnabled is main-thread work (physics walk)
+				m_changes.push_back({ EntityChange::SetEnabled{ EntityPtr(selected), enabled } });
 		}
 	}
 
