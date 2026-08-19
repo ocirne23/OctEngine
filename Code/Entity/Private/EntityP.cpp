@@ -17,16 +17,12 @@ EntityArchetype makeEntityArchetype(uint16 typeBits)
     return EntityArchetype{ uint16(getEntityAllocSize(typeBits)), typeBits };
 }
 
-void Entity::setName(oc::string_view name)
+void Entity::setName(oc::string_view newName)
 {
-    if (name.empty())
-    {
-        displayName.reset();
-        return;
-    }
-    displayName = oc::make_unique<char[]>(name.size() + 1);
-    oc::char_traits<char>::copy(displayName.get(), name.data(), name.size());
-    displayName[name.size()] = '\0';
+    // The entity owns NO name storage: the interned copy (permanent, deduped) is the name. Names
+    // repeat heavily (every "Enemy", every "Border"), so the pool stays tiny, and this runs only
+    // at spawn/rename time - never in the update path.
+    name = newName.empty() ? nullptr : Globals::profiler.internName(newName);
 }
 
 void Entity::setFrozen(bool on)

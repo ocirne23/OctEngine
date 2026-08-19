@@ -23,6 +23,7 @@ static AnimCondition toAnimCondition(const AnimatorDesc::Condition& c)
 
 void AnimatorComponent::spawn(Entity& entity, const SpawnInfo& info, const Transform& base)
 {
+    entity.setProfiled(); // animated entities carry a per-entity profile scope
     enabled = info.enabled;
     if (!info.desc || !info.skeleton || !info.clipSet)
         return;

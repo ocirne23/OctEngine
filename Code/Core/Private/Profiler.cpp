@@ -4,6 +4,23 @@ import Core;
 import Core.Allocator;
 import Core.Windows;
 
+const char* Profiler::internName(oc::string_view name)
+{
+    if (name.empty())
+        return "";
+    const std::lock_guard<std::mutex> lock(m_internMutex);
+    const auto it = m_internedNames.find(name);
+    if (it != m_internedNames.end())
+        return it->data();
+    oc::unique_ptr<char[]> copy = oc::make_unique<char[]>(name.size() + 1);
+    oc::char_traits<char>::copy(copy.get(), name.data(), name.size());
+    copy[name.size()] = '\0';
+    const char* stable = copy.get();
+    m_internedStorage.push_back(oc::move(copy));
+    m_internedNames.insert(oc::string_view(stable, name.size()));
+    return stable;
+}
+
 // The calling thread's track, set only by registerThread (registration is always explicit). Safe
 // under /GT because every access re-reads it through the accessor in the same call; the one hazard
 // (a ProfileScope spanning a fiber wait) is asserted in the scope destructor instead.

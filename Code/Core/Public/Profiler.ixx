@@ -245,10 +245,20 @@ public:
     // Returns false (out cleared) if the writer lapped the ring mid-copy - retry next frame.
     bool snapshotTrack(uint32_t trackIdx, uint64_t tMin, uint64_t tMax, oc::vector<ProfileRecord>& out) const;
 
+    // A PERMANENT deduplicated copy of `name`, safe to hand to ProfileScope (records store names
+    // BY POINTER and the panel reads them frames later, so a dynamic string must be interned —
+    // the box3d taskName lesson). Mutexed and hash-deduped: call at spawn/rename time, never per
+    // frame. The pool is never freed (like the tracker's pools, later dtors may still read it).
+    const char* internName(oc::string_view name);
+
 private:
 
     void initialize();
     ProfileTrack* registerTrack(const char* name, uint32_t threadId, uint32_t sortKey);
+
+    std::mutex m_internMutex;
+    oc::unordered_set<oc::string_view> m_internedNames; // views into the leaked copies below
+    oc::vector<oc::unique_ptr<char[]>> m_internedStorage;
 
     oc::array<oc::unique_ptr<ProfileTrack>, MAX_TRACKS> m_tracks;
     oc::atomic<uint32_t> m_numTracks = 0;

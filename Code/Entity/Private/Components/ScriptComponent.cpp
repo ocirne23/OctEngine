@@ -153,6 +153,7 @@ bool invokeScriptOnPhysicsEvent(const ScriptModule* module, Entity& entity, Enti
 
 void ScriptComponent::spawn(Entity& entity, const SpawnInfo& info, const Transform& base)
 {
+	entity.setProfiled(); // scripted entities carry a per-entity profile scope
 	enabled = info.enabled;
 	initialValues = info.initialValues; // kept for re-application after any later reallocation
 

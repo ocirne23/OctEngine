@@ -29,23 +29,92 @@ bool World::initialize()
 void World::update(Renderer& renderer, float deltaSeconds)
 {
     ProfileScope updateScope("World update", EProfileCategory::Entity);
+    ++m_updateFrame;
     m_updateLevel.clear();
     for (const EntityPtr& root : m_rootEntities)
         m_updateLevel.push_back({ root.get(), Transform() });
 
     while (!m_updateLevel.empty())
     {
-        Globals::jobSystem.parallelFor(0, uint32(m_updateLevel.size()), m_updateCost,
-            { "Entity Update", EProfileCategory::Entity }, // scope per PARTICIPANT (not per entity:
-            [this, &renderer, deltaSeconds](uint32 begin, uint32 end) // thousands of ~us records
-            {                                                         // would flood the rings)
+        // COST-BUDGETED batches instead of a uniform grain: every entity carries a measured
+        // updateCost (unmeasured counts as 1 so it still partitions), and a batch fills until the
+        // summed cost reaches the budget — so one batch holds hundreds of static props or a
+        // handful of units, and the fan-out's chunks come out roughly equal in TIME. The budget
+        // is the SMALLER of two limits:
+        //  - the ~25us chunk target (m_updateCost's EMA is fed COST UNITS as its item count, so
+        //    nsPerItem() self-calibrates to "ns per cost unit"), and
+        //  - an even split across every scheduler context ×4 over-partition — without this a
+        //    level of cheap props collapses into fewer batches than there are workers and most of
+        //    the pool idles; over-partitioning leaves the shared cursor slack to absorb batches
+        //    that run long, since equal COST is still only an estimate of equal TIME.
+        uint64 totalCost = 0;
+        for (const EntityUpdateNode& node : m_updateLevel)
+            totalCost += glm::max<uint32>(node.entity->updateCost, 1);
+        const uint32 timeBudget = uint32(glm::clamp<uint64>(25000 / glm::max<uint64>(m_updateCost.nsPerItem(), 1),
+            1, 4096));
+        constexpr uint32 c_overPartition = 4; // target batches per context
+        const uint32 balanceBudget = uint32(glm::max<uint64>(
+            totalCost / (uint64(Globals::jobSystem.getNumContexts()) * c_overPartition), 1));
+        const uint32 budget = glm::min(timeBudget, balanceBudget);
+        m_updateBatches.clear();
+        uint32 batchBegin = 0, batchCost = 0;
+        for (uint32 i = 0; i < uint32(m_updateLevel.size()); ++i)
+        {
+            batchCost += glm::max<uint32>(m_updateLevel[i].entity->updateCost, 1);
+            if (batchCost >= budget)
+            {
+                m_updateBatches.push_back(EntityUpdateBatch{ batchBegin, i + 1, batchCost });
+                batchBegin = i + 1;
+                batchCost = 0;
+            }
+        }
+        if (batchBegin < uint32(m_updateLevel.size()))
+            m_updateBatches.push_back(EntityUpdateBatch{ batchBegin, uint32(m_updateLevel.size()), batchCost });
+
+        Globals::jobSystem.parallelFor(0, uint32(m_updateBatches.size()), 1,
+            { "Entity Update", EProfileCategory::Entity }, // participant-level scope; per-entity below
+            [this, &renderer, deltaSeconds](uint32 batchBegin2, uint32 batchEnd2)
+            {
                 // Safe because updateSelf never fiber-waits - everything it touches is the audited
                 // thread-safe inline set.
                 EntityUpdateStaging& staging = m_updateStaging.local();
-                for (uint32 i = begin; i < end; ++i)
+                for (uint32 b = batchBegin2; b < batchEnd2; ++b)
+                {
+                const EntityUpdateBatch& batch = m_updateBatches[b];
+                const Clock::time_point batchStart = Clock::now();
+                for (uint32 i = batch.begin; i < batch.end; ++i)
                 {
                     const EntityUpdateNode& node = m_updateLevel[i];
-                    node.entity->updateSelf(renderer, deltaSeconds, node.parentWorld, staging.children);
+                    Entity* entity = node.entity;
+                    // MEASURED cost: an entity's FIRST update is timed and becomes its updateCost
+                    // (250ns units — no guessed initial value), then a ~1/1024-per-frame random
+                    // re-measure keeps it honest as behaviour changes (a unit that starts fighting,
+                    // a script that goes idle). Two clock reads only on measured updates.
+                    const uint32 mix = uint32((uintptr_t(entity) >> 4) * 2654435761u)
+                        ^ uint32(m_updateFrame * 0x9E3779B9u);
+                    const bool measure = entity->updateCost == 0 || (mix & 1023) == 0;
+                    const Clock::time_point measureStart = measure ? Clock::now() : Clock::time_point{};
+                    // Per-entity scope for OPT-IN entities only (EEntityFlag_Profiled: simulated
+                    // things — animators, scripts, units, machine structures; static scenery stays
+                    // scope-free so it cannot flood the rings). NAMED by the interned entity name,
+                    // which stays valid in the ring after the entity dies.
+                    if (entity->isProfiled())
+                    {
+                        ProfileScope entityScope(entity->name ? entity->name
+                            : "Entity", EProfileCategory::Entity);
+                        entity->updateSelf(renderer, deltaSeconds, node.parentWorld, staging.children);
+                    }
+                    else
+                        entity->updateSelf(renderer, deltaSeconds, node.parentWorld, staging.children);
+                    if (measure)
+                    {
+                        const uint64 ns = uint64(std::chrono::nanoseconds(Clock::now() - measureStart).count());
+                        entity->updateCost = uint8(glm::clamp<uint64>(ns / 250, 1, 255));
+                    }
+                }
+                // Calibrate: ns per COST UNIT, so the budget above tracks real update costs.
+                m_updateCost.addSample(uint64(std::chrono::nanoseconds(Clock::now() - batchStart).count()),
+                    batch.cost);
                 }
             });
 

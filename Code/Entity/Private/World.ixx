@@ -133,7 +133,10 @@ private:
     oc::vector<oc::shared_ptr<const EntitySpawnTemplate>> m_editorTemplates; // ad-hoc templates kept alive via keepTemplateAlive()
     oc::vector<EntityPtr> m_rootEntities;
     bool m_headless = false;
+    struct EntityUpdateBatch { uint32 begin, end, cost; };
+    uint64 m_updateFrame = 0; // salts the per-entity random re-measure below
     oc::vector<EntityUpdateNode> m_updateLevel;
+    oc::vector<EntityUpdateBatch> m_updateBatches; // cost-budgeted slices of m_updateLevel
     PerWorker<EntityUpdateStaging> m_updateStaging;
     JobCost m_updateCost{ 2000 };
     oc::function<void(const EntityPtr&, const oc::string&)> m_onPrefabOpened;

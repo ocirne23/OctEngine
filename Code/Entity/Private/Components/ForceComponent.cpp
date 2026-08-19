@@ -8,6 +8,7 @@ import Force;
 
 void ForceComponent::spawn(Entity& entity, const SpawnInfo& info, const Transform& base)
 {
+    entity.setProfiled(); // field emitters carry a per-entity profile scope
     const float dirLen2 = glm::dot(info.direction, info.direction);
     localDirection = dirLen2 > 1e-12f ? info.direction * glm::inversesqrt(dirLen2) : glm::vec3(0.0f, 0.0f, -1.0f);
     localOffset = info.offset;

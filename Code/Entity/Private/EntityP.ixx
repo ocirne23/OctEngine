@@ -34,6 +34,12 @@ export enum EEntityFlags : uint8
     // disabled, so the walk is not repeated every frame. Anything joining the subtree afterwards would
     // miss that walk, so reparentEntity clears it up the new ancestor chain.
     EEntityFlag_PhysicsSuspended     = 1 << 5,
+
+    // OPT-IN per-entity ProfileScope in the parallel entity pass (named by the interned `name`):
+    // the interesting components set it at spawn (Animator/Force/Script/GameUnit), machine
+    // structures (barracks/turret) latch it in their update — plain static scenery stays scope-
+    // free so it cannot flood the profiler rings.
+    EEntityFlag_Profiled             = 1 << 6,
 };
 
 export enum EComponentID : uint16
@@ -77,18 +83,26 @@ public:
     glm::quat rot;
 
     Entity* parent = nullptr;
-    oc::unique_ptr<char[]> displayName; // null when unnamed; access via getName()/setName()
+    const char* name = nullptr; // null when unnamed; access via getName()/setName(). INTERNED
+                                // (Profiler::internName): the pointer is permanent and deduped, so
+                                // it doubles as the entity's ProfileScope name and stays valid in
+                                // the profiler ring after the entity dies. Interning is why the
+                                // entity needs no owned name storage at all.
     const EntitySpawnTemplate* spawnTemplate = nullptr;
 
     uint16 refCount = 0;
     uint16 typeBits = 0;
     uint8 flags = 0; // EEntityFlags bitmask
-    uint8 _unused[3];
+    uint8 updateCost = 0; // MEASURED updateSelf weight in 250ns units (0 = not yet measured): the
+                          // World measures the entity's first update, re-measures at a random low
+                          // chance, and fills each fan-out batch until the summed cost reaches its
+                          // time budget — no guessed initial value, the first update IS the guess
+    uint8 _unused[2];
 
     void update(Renderer& renderer, float deltaSeconds, const Transform& parentWorld = Transform());
     void updateSelf(Renderer& renderer, float deltaSeconds, const Transform& parentWorld, oc::vector<EntityUpdateNode>& outChildren);
-    const char* getName() const { return displayName ? displayName.get() : ""; }
-    bool hasName() const { return displayName != nullptr; }
+    const char* getName() const { return name ? name : ""; }
+    bool hasName() const { return name != nullptr; }
     void setName(oc::string_view name);
     void reparentEntity(Entity* newParent);
     bool isPrefabInstance() const { return (flags & EEntityFlag_PrefabInstance) != 0; }
@@ -97,6 +111,8 @@ public:
     void setEnabled(bool on) { flags = on ? uint8(flags | EEntityFlag_Enabled) : uint8(flags & ~EEntityFlag_Enabled); }
     bool isPhysicsSuspended() const { return (flags & EEntityFlag_PhysicsSuspended) != 0; }
     void setPhysicsSuspended(bool on) { flags = on ? uint8(flags | EEntityFlag_PhysicsSuspended) : uint8(flags & ~EEntityFlag_PhysicsSuspended); }
+    bool isProfiled() const { return (flags & EEntityFlag_Profiled) != 0; }
+    void setProfiled() { flags |= EEntityFlag_Profiled; } // one-way: only ever latched on
     bool isFrozen() const { return (flags & EEntityFlag_Frozen) != 0; }
     void setFrozen(bool on); // Applies to the whole subtree
     bool isPrefabLocked() const;
@@ -104,6 +120,7 @@ public:
 
     const oc::string& getPrefabName() const;
     const oc::string& getSourceFile() const;
+
 
 private:
 	Entity() = default;
@@ -118,6 +135,8 @@ private:
     friend class SceneComponent;
     friend class World;
 };
+// One cache line exactly: components append at alignUp(sizeof(Entity), 16) = 64 with no gap.
+static_assert(sizeof(Entity) == 64);
 
 export struct EntityPtr
 {

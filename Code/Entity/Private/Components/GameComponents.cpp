@@ -71,6 +71,7 @@ static float unitRand01(uint32& state); // tiny per-unit LCG, defined below
 
 void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Transform&)
 {
+    entity.setProfiled(); // units carry a per-entity profile scope
     puppet = info.puppet;
     team = info.team;
     health = healthMax = info.healthMax;
@@ -776,6 +777,8 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
     // because spawning is main-thread only.
     if (machineKind == EMachineKind::Barracks && !blueprint)
     {
+        entity.setProfiled(); // machine structures earn a per-entity profile scope (latched here —
+                              // machineKind is stamped by the game AFTER spawn, so spawn can't know)
         BarracksData& b = barracks;
         // idle Constructors in range accelerate the spawn clock (boost 1 = double speed)
         b.spawnTimer = glm::max(0.0f, b.spawnTimer - deltaSec * (1.0f + b.boost));
@@ -790,6 +793,7 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
     }
     else if (machineKind == EMachineKind::Turret && !blueprint)
     {
+        entity.setProfiled();
         turret.fireTimer = glm::max(0.0f, turret.fireTimer - deltaSec);
         // No target = no cooldown reset: it fires the moment one appears.
         if (turret.fireTimer <= 0.0f && store[0] >= params.turretShotEnergy)
