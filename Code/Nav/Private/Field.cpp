@@ -13,6 +13,93 @@ uint8 TeamField::costAt(const glm::ivec2& cell) const
     return chunk ? chunk->cost[cellIndex(cell)] : 0; // no chunk yet = open ground
 }
 
+void TeamField::snapshotCosts(const glm::vec2& center, int radiusCells, CostWindow& out) const
+{
+    radiusCells = glm::clamp(radiusCells, 1, CostWindow::MaxRadius);
+    const glm::ivec2 centerCell = cellOf(center);
+    out.origin = centerCell - radiusCells;
+    out.size = radiusCells * 2 + 1;
+    memset(out.cost, 0, size_t(out.size) * size_t(out.size)); // absent chunks stay "open"
+    // Chunk-wise row copies: the window spans at most 2x2 (up to 3x3 at MaxRadius) chunks — a few
+    // hash lookups total instead of one per cell.
+    const glm::ivec2 lo = out.origin, hi = out.origin + (out.size - 1);
+    const glm::ivec2 chunkLo = chunkOf(lo), chunkHi = chunkOf(hi);
+    for (int cz = chunkLo.y; cz <= chunkHi.y; ++cz)
+        for (int cx = chunkLo.x; cx <= chunkHi.x; ++cx)
+        {
+            const Chunk* chunk = m_chunks.find(chunkKey(glm::ivec2(cx, cz)));
+            if (!chunk)
+                continue;
+            const glm::ivec2 chunkBase(cx * ChunkCells, cz * ChunkCells);
+            const int x0 = glm::max(lo.x, chunkBase.x), x1 = glm::min(hi.x, chunkBase.x + ChunkCells - 1);
+            const int z0 = glm::max(lo.y, chunkBase.y), z1 = glm::min(hi.y, chunkBase.y + ChunkCells - 1);
+            for (int z = z0; z <= z1; ++z)
+                memcpy(&out.cost[(z - out.origin.y) * out.size + (x0 - out.origin.x)],
+                    &chunk->cost[(z - chunkBase.y) * ChunkCells + (x0 - chunkBase.x)],
+                    size_t(x1 - x0 + 1));
+        }
+}
+
+float TeamField::CostWindow::freeDistance(const glm::vec2& a, const glm::vec2& dir, float maxLen) const
+{
+    // The same grid DDA as TeamField::freeDistance's centre line, reading the window (plain array)
+    // instead of the chunk hash.
+    glm::ivec2 cell = cellOf(a);
+    const glm::vec2 dl = dir * maxLen;
+    const glm::ivec2 step(dl.x > 0.0f ? 1 : -1, dl.y > 0.0f ? 1 : -1);
+    const glm::vec2 invAbs(glm::abs(dl.x) > 1e-6f ? 1.0f / glm::abs(dl.x) : FLT_MAX,
+                           glm::abs(dl.y) > 1e-6f ? 1.0f / glm::abs(dl.y) : FLT_MAX);
+    const glm::vec2 cellMin = glm::vec2(cell) * CellSize;
+    glm::vec2 tMax(
+        (dl.x > 0.0f ? cellMin.x + CellSize - a.x : a.x - cellMin.x) * invAbs.x,
+        (dl.y > 0.0f ? cellMin.y + CellSize - a.y : a.y - cellMin.y) * invAbs.y);
+    const glm::vec2 tDelta = CellSize * invAbs;
+    float t = 0.0f;
+    for (int guard = 0; guard < 4096; ++guard)
+    {
+        if (at(cell) == Blocked)
+            return t * maxLen;
+        if (tMax.x < tMax.y)
+        {
+            if (tMax.x > 1.0f) return maxLen;
+            t = tMax.x;
+            cell.x += step.x;
+            tMax.x += tDelta.x;
+        }
+        else
+        {
+            if (tMax.y > 1.0f) return maxLen;
+            t = tMax.y;
+            cell.y += step.y;
+            tMax.y += tDelta.y;
+        }
+    }
+    return maxLen;
+}
+
+glm::vec2 TeamField::CostWindow::wallPush(const glm::vec2& xz, float range) const
+{
+    // TeamField::wallPush against the window instead of the chunk hash.
+    const glm::ivec2 c = cellOf(xz);
+    const int r = int(std::ceil(range / CellSize)) + 1;
+    glm::vec2 push(0.0f);
+    for (int dz = -r; dz <= r; ++dz)
+        for (int dx = -r; dx <= r; ++dx)
+        {
+            const glm::ivec2 n = c + glm::ivec2(dx, dz);
+            if (at(n) != Blocked)
+                continue;
+            const glm::vec2 mn = glm::vec2(n) * CellSize, mx = mn + CellSize;
+            const glm::vec2 closest = glm::clamp(xz, mn, mx);
+            const glm::vec2 away = xz - closest;
+            const float d = glm::length(away);
+            if (d >= range || d < 1e-4f)
+                continue;
+            push += away / d * (1.0f - d / range);
+        }
+    return push;
+}
+
 void TeamField::rasterizeObstacles(oc::span<const NavObstacle> obstacles, uint8 clearanceCost)
 {
     // Blocked cells first, then a clearance ring: cells touching a blocked one cost extra so the

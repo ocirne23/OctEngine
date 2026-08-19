@@ -72,6 +72,33 @@ export namespace Nav
         void build(oc::span<const NavObstacle> obstacles, oc::span<const NavSource> sources,
             const BuildParams& params);
 
+        // A stack-local SNAPSHOT of the raster around one walker: snapshotCosts fills it with a
+        // handful of chunk lookups and row copies, and every probe after that (whisker march,
+        // body/corner samples, wall push) is a plain array read. The chunk-hash helpers below pay
+        // a find() PER CELL — a steering unit makes 100+ such reads per tick, so it snapshots once
+        // and reads the window instead. Cells outside the window read as OPEN, the same rule
+        // costAt() has for absent chunks — size the radius to cover the longest probe.
+        struct CostWindow
+        {
+            static constexpr int MaxRadius = 15; // 31x31 = 961 bytes, meant for the caller's stack
+            static constexpr int MaxSize = MaxRadius * 2 + 1;
+            glm::ivec2 origin{ 0 }; // cell coord of window [0][0]
+            int size = 0;
+            uint8 cost[MaxSize * MaxSize];
+
+            uint8 at(const glm::ivec2& cell) const
+            {
+                const glm::ivec2 rel = cell - origin;
+                if (uint32(rel.x) >= uint32(size) || uint32(rel.y) >= uint32(size))
+                    return 0; // outside the window = open ground (the absent-chunk rule)
+                return cost[rel.y * size + rel.x];
+            }
+            bool isBlocked(const glm::ivec2& cell) const { return at(cell) == Blocked; }
+            float freeDistance(const glm::vec2& a, const glm::vec2& dir, float maxLen) const; // centre-line DDA
+            glm::vec2 wallPush(const glm::vec2& xz, float range) const;
+        };
+        void snapshotCosts(const glm::vec2& center, int radiusCells, CostWindow& out) const;
+
         // Worker-safe reads. `seed` breaks ties between equidistant neighbours so a plateau
         // (equidistant between two sources) does not stall a whole crowd on one line.
         Sample sample(const glm::vec2& xz, uint32 seed) const;

@@ -435,10 +435,17 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                 const float wFree = params.steerFree * (unstick ? 3.0f : stalled ? 2.0f : 1.0f);
                 const float wPressure = params.steerPressure * (unstick ? 3.0f : 1.0f);
                 const float look = glm::max(params.steerLook, moveSpeed * 1.0f);
+                // ONE raster snapshot for everything this tick reads (whisker marches, body and
+                // corner samples, wall push): the chunk-hash helpers pay a find() per CELL, which
+                // was 100+ hash lookups per unit per tick — the window is a handful of chunk
+                // lookups + row copies, then plain array reads.
+                Nav::TeamField::CostWindow window;
+                raster->snapshotCosts(here, int(std::ceil((look + bodyRadius + params.wallKeep)
+                    / Nav::CellSize)) + 1, window);
                 // Wall distance: the run is a CENTRE-LINE march (a 1-tile gap reads as open), and
                 // corners are handled by a push away from nearby walls instead of side whiskers —
                 // in a gap both walls cancel and the unit centres itself, at a corner it swings wide.
-                const glm::vec2 wallAway = raster->wallPush(here, bodyRadius + params.wallKeep);
+                const glm::vec2 wallAway = window.wallPush(here, bodyRadius + params.wallKeep);
                 const float wallLen = glm::length(wallAway);
                 const glm::vec2 wallDir = wallLen > 1e-4f ? wallAway / wallLen : glm::vec2(0.0f);
                 const float wallW = glm::min(wallLen, 1.0f) * params.steerWall;
@@ -462,9 +469,9 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                 const auto consider = [&](const glm::vec2& d)
                 {
                     const glm::vec2 probe = here + d * bodyProbe.x;
-                    if (raster->isBlocked(Nav::cellOf(probe)))
+                    if (window.isBlocked(Nav::cellOf(probe)))
                         return; // blocked right at the body: not a heading
-                    const float free = raster->freeDistance(here, d, look, 0.0f) / look;
+                    const float free = window.freeDistance(here, d, look) / look;
                     float score = free * (wGoal * glm::dot(d, goalDir)
                         + wFlow * laneW * glm::dot(d, lane)
                         + (m_hasLastDir ? wPersist * glm::dot(d, m_lastDir) : 0.0f)
@@ -477,8 +484,8 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                     // forbidding it — brushing past is allowed when nothing better exists, but a
                     // heading that clears the corner properly always outscores it.
                     const glm::vec2 probeSide(-d.y * bodyRadius, d.x * bodyRadius);
-                    const int clipped = int(raster->isBlocked(Nav::cellOf(probe + probeSide)))
-                        + int(raster->isBlocked(Nav::cellOf(probe - probeSide)));
+                    const int clipped = int(window.isBlocked(Nav::cellOf(probe + probeSide)))
+                        + int(window.isBlocked(Nav::cellOf(probe - probeSide)));
                     score -= float(clipped) * params.steerCornerClip;
                     if (score > bestScore)
                     {
