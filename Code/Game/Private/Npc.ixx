@@ -60,7 +60,7 @@ private:
     // overriding what everyone else is doing.
     float m_orderLaneSpeed = 10.0f;
     float m_stuckLaneSpeed = 10.0f;
-    float m_laneWidth = 2.0f; // metres PAINTED (0 = one cell); viscosity widens it further
+    float m_laneWidth = 3.0f; // metres PAINTED (0 = one cell)
 public:
     float orderLaneSpeed() const { return m_orderLaneSpeed; }
     float stuckLaneSpeed() const { return m_stuckLaneSpeed; }

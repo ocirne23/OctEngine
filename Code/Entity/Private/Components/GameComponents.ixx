@@ -38,31 +38,27 @@ export struct GameUnitParams
     float voidY = -20.0f;          // fell out of the world -> despawn
     bool navEnabled = true;        // steer by the Nav fields when they exist
     // Context steering weights (see GameComponents.cpp): each candidate heading scores
-    //   free * (Goal*dot(goal) + Flow*dot(lane)*|lane|/speed + Persist*dot(last) + Free)
-    //   - Pressure*dot(gradP)     (pressure = diffused crowd presence + jams)
-    float steerGoal = 0.5f;
-    float steerFree = 0.25f;        // reward for open run along the candidate
+    //   free * (Goal*dot(goal) + Flow*laneW*dot(lane) + Persist*dot(last))
+    //   - Pressure*gpW*dot(gradP) + Wall*dot(wallAway) - clipped*CornerClip
+    float steerGoal = 0.3f;
     float steerFlow = 1.0f;        // FOLLOW the crowd lane — a lane is a seeded/proven route, so
                                    // where one exists it should outweigh walking straight at the goal
-    float steerPersist = 0.8f;     // keep the last heading (no dithering / reversals)
+    float steerPersist = 0.4f;     // keep the last heading (no dithering / reversals)
     float steerPressure = 0.5f;    // away from diffused pressure (crowd presence + jams)
-    float pressureKnee = 0.23;     // pressure gradient scoring 0.5 (compressive: x/(x+knee), no saturation)
+    float pressureKnee = 0.23f;    // pressure gradient scoring 0.5 (compressive: x/(x+knee), no saturation)
     float flowKnee = 0.15f;        // lane speed scoring 0.5, as a fraction of moveSpeed (low: even
                                    // a half-faded lane still counts as "there is a lane here")
     float orderFlowBlind = 0.0f;   // s a freshly ordered unit ignores the crowd lane (so it can turn around)
     float seedRequestInterval = 1.0f; // s between a unit's own "plan me a lane" requests
     float unstickAfter = 1.0f;     // s of stall after which goal/persistence are dropped: open, lowest-pressure direction + jitter
     float presencePressure = 0.01f; // pressure every unit injects per tick (x60/s) just by being
-                                   // there. OFF: the pressure field now carries the seeded lane
-                                   // TROUGHS, and a crowd's own positive haze only muddied them
+                                   // there — a weak spacing term next to the seeded lane troughs
     float steerLook = 6.0f;        // metres of whisker (min; scales with speed)
     float steerCornerClip = 0.7f;  // penalty per lateral body sample that hits a wall (corner clip)
-    float steerWall = 1.5f;        // push away from walls within wallKeep of the body (corner rounding)
-    float wallKeep = 1.0f;         // metres beyond the body radius the wall push reaches
-    float stuckPressure = 0.5f;    // pressure a stalled unit injects per second (x stall, <= 1.5).
-                                   // OFF: being stuck now REQUESTS A PLANNED PATH (see
-                                   // seedRequestInterval), which is a real answer instead of a
-                                   // repulsion field that only told the crowd to spread out
+    float steerWall = 1.0f;        // push away from walls within wallKeep of the body (corner rounding)
+    float wallKeep = 0.9f;         // metres beyond the body radius the wall push reaches
+    float stuckPressure = 0.5f;    // pressure a stalled unit injects per second (x stall, <= 1.5),
+                                   // on top of the planned-path request a stuck unit also makes
 };
 
 // A combat unit: team bubble on player-shield rules minus regen (pressure drains the battery,
@@ -71,11 +67,11 @@ export struct GameUnitParams
 // and ask for a shot — spawning is main-thread only).
 // TARGETING + PATHING: the Nav flow fields first — every OTHER team's field is sampled at the
 // unit's cell and the geodesically nearest enemy (structure or player) wins; its descent
-// direction routes around walls, and the own-team density gradient spreads the crowd. Where no
+// direction routes around walls, and the pressure gradient spreads the crowd. Where no
 // field covers the unit (far from every source, Nav disabled) the old local search runs: random
 // pick among the 4 nearest enemy structures via spatial query, nearest enemy player fallback —
-// puppets found in the SAME query, nothing publishes a player list — with the stuck-sidestep as
-// the only obstacle handling. The DSL may LOCK an explicit target (setTarget), which steers
+// puppets found in the SAME query, nothing publishes a player list. The DSL may LOCK an
+// explicit target (setTarget), which steers
 // straight — orders come from scripts, the walking/fighting is here.
 export struct GameUnitComponent
 {

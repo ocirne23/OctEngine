@@ -50,11 +50,7 @@ void NavSystem::initialize()
     Tweak::floatVar("Nav", "Pressure half-life (s)", &m_pressureHalfLife, 0.02f, 30.0f, 0.02f);
     Tweak::floatVar("Nav", "Pressure floor", &m_pressureFloor, 0.0f, 5.0f, 0.02f);
     Tweak::floatVar("Nav", "Pressure flow gain 10^x", &m_pressureFlowGainExp, -2.0f, 3.0f, 0.02f);
-    Tweak::floatVar("Nav", "Wall bounce", &m_wallBounce, 0.0f, 1.0f, 0.05f);
-    Tweak::floatVar("Nav", "Flow viscosity", &m_flowViscosity, 0.0f, 0.25f, 0.005f);
     Tweak::floatVar("Nav", "Flow max (m/s)", &m_flowMaxSpeed, 0.0f, 40.0f, 0.5f);
-    Tweak::floatVar("Nav", "Viscosity floor (m/s)", &m_flowViscosityFloor, 0.0f, 8.0f, 0.05f);
-    Tweak::floatVar("Nav", "Viscosity backflow", &m_flowViscosityBackflow, 0.0f, 1.0f, 0.02f);
     Tweak::floatVar("Nav", "Seed area (m)", &m_seedArea, 2.0f, 64.0f, 1.0f);
     Tweak::floatVar("Nav", "Seed cooldown (s)", &m_seedCooldown, 0.0f, 30.0f, 0.25f);
     Tweak::intVar("Nav", "Seed max/frame", &m_seedMaxPerFrame, 0, 16);
@@ -359,8 +355,7 @@ void NavSystem::update(float deltaSec)
         PressureField::CellVisit pushes[MaxTeams];
         for (uint32 t = 0; t < MaxTeams; ++t)
         {
-            m_flow[t].beginStep(deltaSec, keepFrames, m_flowHalfLife, raster, m_wallBounce,
-                m_flowViscosity, m_flowMaxSpeed, m_flowViscosityFloor, m_flowViscosityBackflow,
+            m_flow[t].beginStep(deltaSec, keepFrames, m_flowHalfLife, raster, m_flowMaxSpeed,
                 flowItems);
             FlowField& flow = m_flow[t];
             pushes[t] = [&flow, gain](const glm::vec2& centre, const glm::vec2& g)

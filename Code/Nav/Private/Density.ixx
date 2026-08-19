@@ -49,12 +49,9 @@ export namespace Nav
         // its own chunk's write buffer and reads neighbours' READ buffers, so items of any mix of
         // fields never conflict, and no map mutates during the fan-out).
         // Fading is FRAME-RATE INDEPENDENT: `halfLifeSec` is how long a lane takes to lose half its
-        // speed, and the splat gain that feeds the EMA is derived from the same step. `wallBounce`:
-        // flow aimed INTO a blocked cell is reflected (1) or slipped (0); a wall cell itself holds
-        // nothing. `viscosity` (<= 0.25 after dt-scaling) diffuses momentum toward STRONGER open
-        // neighbours at full weight and weaker ones at `viscosityBackflow`, ignoring neighbours
-        // under `viscosityFloor` m/s. `maxSpeed` caps a cell's magnitude (splats SUM — a milling
-        // crowd must not out-shout a seeded lane).
+        // speed, and the splat gain that feeds the EMA is derived from the same step. A wall cell
+        // holds nothing. `maxSpeed` caps a cell's magnitude (splats SUM — a milling crowd must not
+        // out-shout a seeded lane).
         struct StepItem
         {
             FlowField* field;
@@ -62,8 +59,7 @@ export namespace Nav
             Chunk* chunk;
         };
         void beginStep(float deltaSec, uint32 keepFrames, float halfLifeSec, const TeamField* raster,
-            float wallBounce, float viscosity, float maxSpeed, float viscosityFloor,
-            float viscosityBackflow, oc::vector<StepItem>& outItems);
+            float maxSpeed, oc::vector<StepItem>& outItems);
         void stepChunk(uint64 key, Chunk& chunk); // worker-safe between beginStep and the barrier
         void clear();
         // Main thread: zero both buffers within `radius` of xz — a fresh order wipes the old lane
@@ -88,8 +84,7 @@ export namespace Nav
                                    // velocities (steady state = the velocity itself, not a sum)
         // This step's parameters, stashed by beginStep so a StepItem stays 24 bytes.
         const TeamField* m_stepRaster = nullptr;
-        float m_stepDecay = 1.0f, m_stepWallBounce = 1.0f, m_stepViscosity = 0.0f;
-        float m_stepMaxSpeed = 0.0f, m_stepViscFloorSq = 0.0f, m_stepBackflow = 0.0f;
+        float m_stepDecay = 1.0f, m_stepMaxSpeed = 0.0f;
     };
 
     // Per-team PRESSURE: a SIGNED scalar field jammed units INJECT into, that DIFFUSES outward every frame

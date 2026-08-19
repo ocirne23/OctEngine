@@ -50,7 +50,7 @@ export namespace Nav
         // metres wide. Units following the crowd flow then take that route without any of them
         // planning; the lane decays like any other ("Nav/Flow decay"). false = no raster yet or no
         // path within the budget. `outPath` (optional) receives the planned polyline for debug draw.
-        // `laneWidth` is how wide the lane is PAINTED (0 = one cell; the flow viscosity spreads it
+        // `laneWidth` is how wide the lane is PAINTED (0 = one cell; the pressure push spreads it
         // further either way); `clearance` is the planning width — how much room the planned route
         // keeps from walls.
         bool seedPath(uint32 team, const glm::vec3& from, const glm::vec3& to, float speed,
@@ -152,13 +152,9 @@ export namespace Nav
         float m_pressureHalfLife = 1.0f;  // seconds for pressure to halve — the seeded TROUGH has
                                           // to outlive the walk it was planned for, and jams stay
                                           // felt after the crowd that made them moved on
-        float m_wallBounce = 0.0f;        // flow into a wall: 1 = reflect, 0 = slip
-        float m_flowViscosity = 0.00f;    // momentum diffusion: a lane drags its neighbours along
         float m_flowMaxSpeed = 20.0f;      // per-cell magnitude cap (splats SUM — see FlowField::update)
-        float m_flowViscosityFloor = 3.0; // m/s a neighbour needs before viscosity may spread it
-        float m_flowViscosityBackflow = 0.5f; // how much a WEAKER neighbour may pull a lane (0..1)
-        float m_seedArea = 20.0f;         // metres: requests from/to the same area are ONE lane
-        float m_seedCooldown = 1.0f;      // seconds that area pair stays suppressed
+        float m_seedArea = 10.0f;         // metres: requests from/to the same area are ONE lane
+        float m_seedCooldown = 3.0f;      // seconds that area pair stays suppressed
         int m_seedMaxPerFrame = 2;        // hard cap on plans per frame (A* is main-thread work)
         float m_seedTrough = 20.0f;        // NEGATIVE pressure a seeded lane carves (0 = flow only)
         float m_seedSqueeze = 10.0f;       // extra trough depth per blocked neighbour of a lane cell

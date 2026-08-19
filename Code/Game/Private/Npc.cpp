@@ -71,7 +71,6 @@ void NpcSystem::registerTweaks()
     Tweak::floatVar("Game/Enemies", "Target search radius", &up.targetSearchRadius, 5.0f, 400.0f, 1.0f);
     Tweak::boolean("Game/Enemies", "Nav fields", &up.navEnabled);
     Tweak::floatVar("Game/Enemies/Steer", "Goal", &up.steerGoal, 0.0f, 3.0f, 0.05f);
-    Tweak::floatVar("Game/Enemies/Steer", "Free run", &up.steerFree, 0.0f, 3.0f, 0.05f);
     Tweak::floatVar("Game/Enemies/Steer", "Flow", &up.steerFlow, 0.0f, 3.0f, 0.05f);
     Tweak::floatVar("Game/Enemies/Steer", "Persist", &up.steerPersist, 0.0f, 3.0f, 0.05f);
     Tweak::floatVar("Game/Enemies/Steer", "Pressure", &up.steerPressure, 0.0f, 3.0f, 0.05f);

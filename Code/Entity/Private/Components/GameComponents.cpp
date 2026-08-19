@@ -119,26 +119,28 @@ static float unitRand01(uint32& state)
 void GameUnitComponent::update(Entity& entity, float deltaSec)
 {
     if (!isAuthority())
-        return; // clients mirror via the entity sync's game blob — no sim here
+        return; // clients mirror via the entity sync's game blob
     PhysicsComponent* pc = getComponent<PhysicsComponent>(&entity);
     ForceComponent* fc = getComponent<ForceComponent>(&entity);
     if (!pc || !pc->body.isValid())
         return;
     const glm::vec3 pos = pc->body.getPosition();
-    // Crowd PRESENCE = a weak continuous pressure source (players count as crowd too): the
-    // diffused pressure field doubles as a smoothed crowd density, and the pressure term of the
-    // context steering keeps units spaced. The stall injection below is ~40x stronger.
-    if (params.navEnabled && Globals::navSystem.isEnabled() && params.presencePressure > 0.0f)
-        Globals::navSystem.pressure(team).inject(glm::vec2(pos.x, pos.z), params.presencePressure * deltaSec * 60.0f);
+    const glm::vec2 here(pos.x, pos.z);
+    const bool fields = params.navEnabled && Globals::navSystem.isEnabled();
+
+    // Crowd presence: a weak pressure source (players too) — the diffused field is a smoothed
+    // crowd density that keeps units spaced. The stall injection below is far stronger.
+    if (fields && params.presencePressure > 0.0f)
+        Globals::navSystem.pressure(team).inject(here, params.presencePressure * deltaSec * 60.0f);
     if (puppet)
-        return; // puppets are state carriers (GamePlayer writes them) — no sim
+        return; // state carrier: GamePlayer writes it
     if (health <= 0.0f || pos.y < params.voidY)
     {
         health = 0.0f;
-        if (!deathReported) // report ONCE — the destroy is queued, so a tick may still run
+        if (!deathReported) // once — the queued destroy may take a tick to drain
         {
             deathReported = true;
-            Globals::scriptEvents.addDestroyRequest(EntityPtr(&entity)); // drained by the main loop
+            Globals::scriptEvents.addDestroyRequest(EntityPtr(&entity));
             if (sourceId != 0)
             {
                 const std::lock_guard<std::mutex> lock(g_unitEventMutex);
@@ -148,17 +150,16 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
         return;
     }
 
-    // ---- where to walk: route first, then the locked order, then auto-targeting ----
-    if (targetLocked && moveOrder && glm::distance(glm::vec2(pos.x, pos.z),
-        glm::vec2(targetPos.x, targetPos.z)) < params.waypointRadius)
-        targetLocked = moveOrder = false; // arrived: back to the AI
+    // ---- where to walk: route, then the locked order, then nav fields, then local search ----
+    if (targetLocked && moveOrder
+        && glm::distance(here, glm::vec2(targetPos.x, targetPos.z)) < params.waypointRadius)
+        targetLocked = moveOrder = false; // move order arrived: back to the AI
     bool routing = false;
     glm::vec3 walkTarget = pos;
     bool haveWalkTarget = false;
     if (routeIndex < routeCount)
     {
-        if (glm::distance(glm::vec2(pos.x, pos.z),
-            glm::vec2(route[routeIndex].x, route[routeIndex].z)) < params.waypointRadius)
+        if (glm::distance(here, glm::vec2(route[routeIndex].x, route[routeIndex].z)) < params.waypointRadius)
             ++routeIndex;
         if (routeIndex < routeCount)
         {
@@ -166,13 +167,12 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             routing = haveWalkTarget = true;
         }
     }
-    // NAV: sample every other team's flow field at our cell; the geodesically nearest enemy wins
-    // and its descent direction is the walk direction (routes around walls). Falls through to the
-    // local search when no field covers us.
-    bool navResolved = false; // a field named our target (steer by it, skip the local search)
-    bool navSteer = false;    // ... and gave a usable direction (zero AT the source)
+    // NAV: the geodesically nearest enemy across every other team's field; its descent direction
+    // already routes around walls. Falls through to the local search where no field covers us.
+    bool navResolved = false;
+    bool navSteer = false; // navResolved AND the descent is usable (it is zero AT a source)
     glm::vec2 navDir(0.0f);
-    if (!routing && !targetLocked && params.navEnabled && Globals::navSystem.anyFieldPublished())
+    if (!routing && !targetLocked && fields && Globals::navSystem.anyFieldPublished())
     {
         Nav::TeamField::Sample best;
         const Nav::TeamField* bestField = nullptr;
@@ -183,7 +183,7 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             const Nav::TeamField* field = Globals::navSystem.teamField(t);
             if (!field)
                 continue;
-            const Nav::TeamField::Sample s = field->sample(glm::vec2(pos.x, pos.z), m_rng);
+            const Nav::TeamField::Sample s = field->sample(here, m_rng);
             if (s.valid && (!best.valid || s.dist < best.dist))
             {
                 best = s;
@@ -192,8 +192,7 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
         }
         if (best.valid)
         {
-            const Nav::NavSource& src = bestField->sourceAt(best.srcIndex);
-            targetPos = src.pos;
+            targetPos = bestField->sourceAt(best.srcIndex).pos;
             hasTarget = true;
             walkTarget = targetPos;
             haveWalkTarget = true;
@@ -207,8 +206,8 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
         m_retargetTimer -= deltaSec;
         if (!targetLocked && (m_retargetTimer <= 0.0f || !hasTarget))
         {
-            // Random pick among the 4 NEAREST enemy structures (spatial query — local harassment
-            // with some unpredictability); fallback: the nearest enemy player body.
+            // Random pick among the 4 nearest enemy structures; nearest enemy player (a puppet in
+            // the same query) as the fallback.
             m_retargetTimer = params.retargetInterval * (0.7f + 0.6f * unitRand01(m_rng));
             thread_local oc::vector<uint64> results;
             Globals::spatialIndex.querySphere(glm::dvec3(pos), params.targetSearchRadius,
@@ -216,8 +215,6 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             struct Candidate { float distSq; glm::vec3 pos; };
             Candidate best[4];
             int count = 0;
-            // The nearest enemy PLAYER rides the same query: capsules carry puppet
-            // GameUnitComponents and sit in the spatial index like everything else.
             float bestPlayerDistSq = FLT_MAX;
             glm::vec3 bestPlayerPos(0.0f);
             for (const uint64 user : results)
@@ -226,7 +223,7 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                 if (const GameUnitComponent* pu = getComponent<GameUnitComponent>(other);
                     pu && pu->puppet && pu->team != team && pu->alive())
                 {
-                    const glm::vec2 d = glm::vec2(other->pos.x, other->pos.z) - glm::vec2(pos.x, pos.z);
+                    const glm::vec2 d = glm::vec2(other->pos.x, other->pos.z) - here;
                     if (glm::dot(d, d) < bestPlayerDistSq)
                     {
                         bestPlayerDistSq = glm::dot(d, d);
@@ -237,7 +234,7 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                 const GameStructureComponent* sc = getComponent<GameStructureComponent>(other);
                 if (!sc || sc->invulnerable || sc->team == team || !sc->alive())
                     continue;
-                const glm::vec2 d = glm::vec2(other->pos.x, other->pos.z) - glm::vec2(pos.x, pos.z);
+                const glm::vec2 d = glm::vec2(other->pos.x, other->pos.z) - here;
                 const Candidate c{ glm::dot(d, d), other->pos };
                 if (count < 4)
                     best[count++] = c;
@@ -268,38 +265,67 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
         haveWalkTarget = hasTarget;
     }
 
-    // ---- melee/ranged combat: hit whatever ENEMY structure is actually in reach (small spatial
-    // ---- probe — decoupled from the walk target, so a wall in the way gets chewed too) ----
+    // ---- combat: ONE short probe serves the structure bite, the emitter strain and the melee
+    // sweep over enemy players/units (decoupled from the walk target: a wall in the way gets
+    // chewed too). The strain reach must fit inside the query radius.
     float stopRange = attackRange;
     if (!routing)
     {
+        constexpr float c_strainRange = 12.0f; // emitter siege-drain reach
         thread_local oc::vector<uint64> nearby;
-        Globals::spatialIndex.querySphere(glm::dvec3(pos), attackRange + 6.0f,
+        Globals::spatialIndex.querySphere(glm::dvec3(pos), glm::max(attackRange + 6.0f, c_strainRange),
             SpatialLayer_Render, nearby);
         GameStructureComponent* bite = nullptr;
-        float biteDist = FLT_MAX;
+        GameStructureComponent* strain = nullptr;
+        float biteDist = FLT_MAX, strainDist = c_strainRange;
         for (const uint64 user : nearby)
         {
             Entity* other = reinterpret_cast<Entity*>(user);
-            GameStructureComponent* sc = getComponent<GameStructureComponent>(other);
-            if (!sc || sc->invulnerable || sc->team == team || !sc->alive())
-                continue;
-            const float d = glm::distance(glm::vec2(pos.x, pos.z), glm::vec2(other->pos.x, other->pos.z))
-                - sc->meleeRadius;
-            if (d < biteDist)
+            if (GameStructureComponent* sc = getComponent<GameStructureComponent>(other);
+                sc && sc->team != team)
             {
-                biteDist = d;
-                bite = sc;
+                const float d = glm::distance(here, glm::vec2(other->pos.x, other->pos.z));
+                if (sc->strainable && d < strainDist) // shield-state-independent siege drain
+                {
+                    strainDist = d;
+                    strain = sc;
+                }
+                if (!sc->invulnerable && sc->alive() && d - sc->meleeRadius < biteDist)
+                {
+                    biteDist = d - sc->meleeRadius;
+                    bite = sc;
+                }
+                continue;
+            }
+            GameUnitComponent* pu = getComponent<GameUnitComponent>(other);
+            if (!pu || pu == this || pu->team == team || !pu->alive()
+                || glm::abs(other->pos.y - pos.y) >= 3.0f)
+                continue;
+            const glm::vec2 to(other->pos.x - pos.x, other->pos.z - pos.z);
+            if (pu->puppet) // standing in the swarm hurts — no targeting needed
+            {
+                const float reach = attackRange + 0.8f; // capsule allowance
+                if (playerDps > 0.0f && glm::dot(to, to) < reach * reach)
+                    pu->damage(playerDps * deltaSec); // atomic: banks into the puppet inbox
+            }
+            else if (!ranged) // unit-vs-unit melee at the victim's body ring
+            {
+                const float reach = attackRange + pu->bodyRadius;
+                if (glm::dot(to, to) < reach * reach)
+                {
+                    pu->damage(attackDps * deltaSec);
+                    stopRange = glm::max(stopRange, reach); // hold at the ring
+                }
             }
         }
         if (ranged)
         {
             stopRange = standoffRange;
             m_fireTimer -= deltaSec;
-            if (haveWalkTarget && m_fireTimer <= 0.0f && glm::distance(glm::vec2(pos.x, pos.z),
-                glm::vec2(walkTarget.x, walkTarget.z)) <= standoffRange)
+            if (haveWalkTarget && m_fireTimer <= 0.0f
+                && glm::distance(here, glm::vec2(walkTarget.x, walkTarget.z)) <= standoffRange)
             {
-                // Spawning is main-thread only: ASK for the shot, the game services the queue.
+                // Spawning is main-thread only: queue the shot for the game to service.
                 const std::lock_guard<std::mutex> lock(g_unitEventMutex);
                 g_fireRequests.push_back(FireRequest{ pos, walkTarget, (uint8)team });
                 m_fireTimer = fireInterval * (0.8f + 0.4f * unitRand01(m_rng));
@@ -310,67 +336,13 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             bite->damage(attackDps * deltaSec); // atomic — workers bite concurrently
             stopRange = attackRange + bite->meleeRadius;
         }
-        // Lean on the nearest ACTIVE enemy bubble: emitter siege drain, shield-state-independent.
-        GameStructureComponent* strain = nullptr;
-        float strainDist = 12.0f;
-        for (const uint64 user : nearby)
-        {
-            Entity* other = reinterpret_cast<Entity*>(user);
-            GameStructureComponent* sc = getComponent<GameStructureComponent>(other);
-            if (!sc || !sc->strainable || sc->team == team)
-                continue;
-            const float d = glm::distance(glm::vec2(pos.x, pos.z), glm::vec2(other->pos.x, other->pos.z));
-            if (d < strainDist)
-            {
-                strainDist = d;
-                strain = sc;
-            }
-        }
         if (strain)
             strain->addLoad(emitterDrain);
-
-        // DIRECT player damage: any enemy-team player inside melee reach gets chewed — no
-        // targeting needed, standing in the swarm hurts. Found in the SAME short probe as the
-        // structure bite; same damage() call as every other victim (the puppet component banks it
-        // in pendingDamage; the game routes that to the owner).
-        // ... and enemy UNITS the same way (unit-vs-unit melee: attackDps against the victim's body
-        // ring). Ranged units do not melee.
-        for (const uint64 user : nearby)
-        {
-            Entity* other = reinterpret_cast<Entity*>(user);
-            GameUnitComponent* pu = getComponent<GameUnitComponent>(other);
-            if (!pu || pu == this || pu->team == team || !pu->alive())
-                continue;
-            const glm::vec2 toOther(other->pos.x - pos.x, other->pos.z - pos.z);
-            if (glm::abs(other->pos.y - pos.y) >= 3.0f)
-                continue;
-            if (pu->puppet)
-            {
-                const float reach = attackRange + 0.8f; // capsule body allowance
-                if (playerDps > 0.0f && glm::dot(toOther, toOther) < reach * reach)
-                    pu->damage(playerDps * deltaSec);
-            }
-            else if (!ranged)
-            {
-                const float reach = attackRange + pu->bodyRadius;
-                if (glm::dot(toOther, toOther) < reach * reach)
-                {
-                    pu->damage(attackDps * deltaSec);
-                    stopRange = glm::max(stopRange, reach); // hold at the ring, no shoving through
-                }
-            }
-        }
     }
 
-    // ---- steering: CONTEXT STEERING over the fields. Each tick the unit scores a fan of candidate
-    // headings and takes the best: goal alignment (the enemy field's descent where one covers us,
-    // else straight at the walk target), how far the raster is open along the candidate (a body-
-    // radius whisker), the own-crowd FLOW (join the lane), persistence (keep the last heading),
-    // minus the PRESSURE gradient (crowd presence + jams, diffused). While STALLED the weights shift toward the fields
-    // and away from goal/persistence, so the fields become the preference exactly when the unit
-    // has problems. No search, no per-unit path state beyond the last heading. Every moving unit
-    // contributes back: measured velocity into the flow, presence + jam pressure into the pressure
-    // field. Writes are QUEUED (workers) — one frame of latency, the queue's normal contract.
+    // ---- steering: CONTEXT STEERING over the nav fields — score a fan of headings by goal
+    // alignment, open run, crowd lane, persistence, minus the pressure gradient; stalls shift the
+    // weights toward the fields. Physics writes are QUEUED (workers): one frame of latency.
     glm::vec3 vel = pc->body.getLinearVelocity();
     if (haveWalkTarget)
     {
@@ -378,15 +350,12 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
         const float dist = glm::length(toTarget);
         if (dist > stopRange)
         {
-            const glm::vec2 here(pos.x, pos.z);
             glm::vec2 goalDir = navSteer ? navDir : toTarget / glm::max(dist, 1e-3f);
             glm::vec2 dir = goalDir;
-            const bool fields = params.navEnabled && Globals::navSystem.isEnabled();
             const Nav::TeamField* raster = fields ? Globals::navSystem.raster() : nullptr;
-            // PLAN REQUEST: every unit with somewhere to be asks for a lane to its destination on
-            // its own (jittered) timer — while walking, not only while stuck. Nav refuses anything
-            // a nearby recent plan already covers, so a crowd going the same way costs ONE plan and
-            // the group's lane keeps up with the group as it advances.
+            // PLAN REQUEST on a jittered per-unit timer, while walking (not only while stuck): Nav
+            // dedups by proximity, so a crowd going the same way costs one plan and the lane keeps
+            // up with the group.
             m_seedTimer -= deltaSec;
             if (m_seedTimer <= 0.0f)
             {
@@ -395,10 +364,8 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                 g_seedRequests.push_back(SeedRequest{ pos, walkTarget, (uint8)team,
                     m_pressureTimer > params.unstickAfter });
             }
-            // STUCK DETECTION by DISPLACEMENT, not by per-tick progress (a jittering unit's heading
-            // changes every tick, so progress-along-heading never accumulates): every 0.75 s the
-            // position is checkpointed; moved less than 0.6 m since the last checkpoint = stalled
-            // time accrues, else it resets. m_pressureTimer IS that stalled time.
+            // STUCK DETECTION by displacement checkpoints (per-tick progress never accumulates on
+            // a jittering heading): < 0.6 m per 0.75 s accrues stalled time into m_pressureTimer.
             m_stuckCheckTimer -= deltaSec;
             if (m_stuckCheckTimer <= 0.0f)
             {
@@ -411,53 +378,64 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             if (raster)
             {
                 const bool stalled = m_pressureTimer > 0.4f;
-                // REALLY stuck (past "Unstick after"): forget the real goal and the last heading.
-                // The ESCAPE goal is where the crowd around us is going (mean flow over the open
-                // 5x5 neighbourhood), or failing that the open neighbouring cell with the LOWEST
-                // pressure within 3 cells — a corner's own gradient is muddy, a target cell is not.
-                // A small per-unit random rotation breaks symmetric locks between two units.
                 const bool unstick = m_pressureTimer > params.unstickAfter;
                 float wGoal = unstick ? 0.0f : params.steerGoal * (stalled ? 0.3f : 1.0f);
+                const float look = glm::max(params.steerLook, moveSpeed * 1.0f);
+                // ONE raster snapshot for every probe this tick (the chunk-hash helpers pay a
+                // find() per cell — 100+ per unit per tick without it).
+                Nav::TeamField::CostWindow window;
+                raster->snapshotCosts(here, int(std::ceil((look + bodyRadius + params.wallKeep)
+                    / Nav::CellSize)) + 1, window);
+                // Wall keep-away: in a gap both walls cancel (the unit centres itself), at a
+                // corner the single push swings it wide. The run itself is a centre-line march so
+                // a 1-tile gap reads as open.
+                const glm::vec2 wallAway = window.wallPush(here, bodyRadius + params.wallKeep);
+                const float wallLen = glm::length(wallAway);
+                const glm::vec2 wallDir = wallLen > 1e-4f ? wallAway / wallLen : glm::vec2(0.0f);
+                const float wallW = glm::min(wallLen, 1.0f) * params.steerWall;
                 if (unstick)
                 {
-                    const glm::vec2 around = Globals::navSystem.flow(team).sampleArea(here, 2, raster);
-                    glm::vec2 escape;
-                    if (glm::length(around) > 0.3f)
-                        goalDir = glm::normalize(around);
-                    else if (Globals::navSystem.pressure(team).lowestNearby(here, 3, raster, escape)
-                        && glm::length(escape - here) > 0.2f)
-                        goalDir = glm::normalize(escape - here);
+                    // Really stuck: replace the goal with an ESCAPE, backing away from whatever
+                    // pins us — a nearby wall first (the wall push already points away from it),
+                    // else the nearest unit/structure/player from a small spatial query, else
+                    // simply the opposite of where we were trying to go.
+                    if (wallLen > 1e-3f)
+                        goalDir = wallDir;
+                    else
+                    {
+                        thread_local oc::vector<uint64> crowd;
+                        Globals::spatialIndex.querySphere(glm::dvec3(pos), 4.0,
+                            SpatialLayer_Render, crowd);
+                        float bestSq = FLT_MAX;
+                        glm::vec2 away(0.0f);
+                        for (const uint64 user : crowd)
+                        {
+                            Entity* other = reinterpret_cast<Entity*>(user);
+                            if (other == &entity || (!getComponent<GameUnitComponent>(other)
+                                && !getComponent<GameStructureComponent>(other)))
+                                continue; // only the things that can pin us, never scenery
+                            const glm::vec2 d = here - glm::vec2(other->pos.x, other->pos.z);
+                            const float dSq = glm::dot(d, d);
+                            if (dSq > 1e-6f && dSq < bestSq)
+                            {
+                                bestSq = dSq;
+                                away = d;
+                            }
+                        }
+                        goalDir = bestSq < FLT_MAX ? away / std::sqrt(bestSq) : -goalDir;
+                    }
                     wGoal = 1.5f;
                 }
                 m_ignoreFlowTimer = glm::max(0.0f, m_ignoreFlowTimer - deltaSec);
                 const float wFlow = m_ignoreFlowTimer > 0.0f ? 0.0f
                     : params.steerFlow * (unstick ? 0.5f : stalled ? 2.0f : 1.0f);
                 const float wPersist = unstick ? 0.0f : params.steerPersist * (stalled ? 0.2f : 1.0f);
-                const float wFree = params.steerFree * (unstick ? 3.0f : stalled ? 2.0f : 1.0f);
                 const float wPressure = params.steerPressure * (unstick ? 3.0f : 1.0f);
-                const float look = glm::max(params.steerLook, moveSpeed * 1.0f);
-                // ONE raster snapshot for everything this tick reads (whisker marches, body and
-                // corner samples, wall push): the chunk-hash helpers pay a find() per CELL, which
-                // was 100+ hash lookups per unit per tick — the window is a handful of chunk
-                // lookups + row copies, then plain array reads.
-                Nav::TeamField::CostWindow window;
-                raster->snapshotCosts(here, int(std::ceil((look + bodyRadius + params.wallKeep)
-                    / Nav::CellSize)) + 1, window);
-                // Wall distance: the run is a CENTRE-LINE march (a 1-tile gap reads as open), and
-                // corners are handled by a push away from nearby walls instead of side whiskers —
-                // in a gap both walls cancel and the unit centres itself, at a corner it swings wide.
-                const glm::vec2 wallAway = window.wallPush(here, bodyRadius + params.wallKeep);
-                const float wallLen = glm::length(wallAway);
-                const glm::vec2 wallDir = wallLen > 1e-4f ? wallAway / wallLen : glm::vec2(0.0f);
-                const float wallW = glm::min(wallLen, 1.0f) * params.steerWall;
-                const glm::vec2 bodyProbe(bodyRadius + 0.1f, 0.0f);
-                // Field reads once (cell-local, cheap).
-                glm::vec2 lane = Globals::navSystem.flow(team).sample(here, raster);
-                // COMPRESSIVE response (x / (x + knee)) instead of a hard clamp: the curve is
-                // steep at low values — ONE stuck unit already registers — and flattens toward 1,
-                // so a hundred of them do not saturate every cell into the same weight. The knee
-                // is the value that scores 0.5.
+                const float bodyProbe = bodyRadius + 0.1f;
+                // Compressive response x/(x+knee): one stuck unit registers, a hundred never
+                // saturate. The knee is the value scoring 0.5.
                 const auto knee = [](float x, float k) { return x / (x + glm::max(k, 1e-4f)); };
+                glm::vec2 lane = Globals::navSystem.flow(team).sample(here, raster);
                 const float laneLen = glm::length(lane);
                 const float laneW = knee(laneLen, params.flowKnee * glm::max(moveSpeed, 0.1f));
                 if (laneLen > 1e-4f) lane /= laneLen;
@@ -469,21 +447,17 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                 glm::vec2 best = goalDir;
                 const auto consider = [&](const glm::vec2& d)
                 {
-                    const glm::vec2 probe = here + d * bodyProbe.x;
+                    const glm::vec2 probe = here + d * bodyProbe;
                     if (window.isBlocked(Nav::cellOf(probe)))
-                        return; // blocked right at the body: not a heading
+                        return; // blocked at the body: not a heading
                     const float free = window.freeDistance(here, d, look) / look;
                     float score = free * (wGoal * glm::dot(d, goalDir)
                         + wFlow * laneW * glm::dot(d, lane)
-                        + (m_hasLastDir ? wPersist * glm::dot(d, m_lastDir) : 0.0f)
-                        + wFree);
+                        + (m_hasLastDir ? wPersist * glm::dot(d, m_lastDir) : 0.0f));
                     score -= wPressure * gpW * glm::dot(d, gp);
                     score += wallW * glm::dot(d, wallDir);
-                    // CORNER CLIP: the run is measured on the centre line (so a one-cell gap stays
-                    // usable), which means a heading can be "open" while the BODY would catch the
-                    // corner. Two lateral samples one body radius ahead PENALIZE that instead of
-                    // forbidding it — brushing past is allowed when nothing better exists, but a
-                    // heading that clears the corner properly always outscores it.
+                    // Corner clip: two lateral body samples PENALIZE (not forbid) brushing a
+                    // corner the centre-line run cannot see.
                     const glm::vec2 probeSide(-d.y * bodyRadius, d.x * bodyRadius);
                     const int clipped = int(window.isBlocked(Nav::cellOf(probe + probeSide)))
                         + int(window.isBlocked(Nav::cellOf(probe - probeSide)));
@@ -494,18 +468,12 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                         best = d;
                     }
                 };
-                // Candidate fan: 16 headings ANCHORED ON THE GOAL — k = 0 is exactly goalDir and
-                // the rest are symmetric around it, so "straight at where I want to go" is always
-                // on the menu and the deviations are measured from it. (The fan used to sit on a
-                // per-unit random phase, which meant the goal heading itself was up to 11 deg away
-                // from every candidate — enough to miss a one-cell gap, which subtends about one
-                // slot from a few metres out.)
+                // Fan of 16 anchored ON the goal (k = 0 IS goalDir — a free-floating fan often had
+                // no candidate through a one-cell gap, which subtends about one 22.5 deg slot); the
+                // other 15 carry a per-unit offset so a crowd does not walk in columns.
                 constexpr int c_candidates = 16;
                 constexpr float c_step = glm::two_pi<float>() / c_candidates;
                 const float refAngle = std::atan2(goalDir.y, goalDir.x);
-                // k = 0 is EXACTLY the goal; the deviations carry a per-unit offset (< half a slot)
-                // so a crowd sharing one goal heading does not all deviate onto the same sixteen
-                // world directions and walk in visible columns.
                 const float spread = (float(m_rng >> 8 & 0xFFFF) / 65536.0f - 0.5f) * c_step;
                 consider(goalDir);
                 for (int k = 1; k < c_candidates; ++k)
@@ -513,11 +481,10 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                     const float a = refAngle + float(k) * c_step + spread;
                     consider(glm::vec2(std::cos(a), std::sin(a)));
                 }
-                // The lane is generally NOT on that grid, so its exact heading is offered too.
-                if (laneW > 0.0f)
+                if (laneW > 0.0f) // the lane is generally not on the fan's grid
                     consider(lane);
                 dir = best;
-                if (unstick)
+                if (unstick) // break symmetric two-unit locks
                 {
                     const float jitter = (unitRand01(m_rng) - 0.5f) * glm::radians(60.0f);
                     const float c = std::cos(jitter), sn = std::sin(jitter);
@@ -537,22 +504,17 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             vel += glm::vec3(dv.x, 0.0f, dv.z);
             if (fields)
             {
-                // Splat what the body actually DID last step, not what we just commanded — a
-                // unit pinned against a wall must not write "moving into the wall" into the lane.
-                // The splat lands one cell BEHIND, in the cell just left: a unit samples its own
-                // cell with double weight, so writing there fed its current heading straight back
-                // to itself next tick and units drifted into going straight. A trail belongs
-                // behind the walker anyway; below walking pace there is nothing to contribute.
+                // Contribute the MEASURED velocity (never the command — a pinned unit must not
+                // write "into the wall"), one cell BEHIND (a trail belongs behind the walker, and
+                // splatting the own cell fed the heading back to itself).
                 const float measuredLen = glm::length(measured);
                 if (measuredLen > 0.1f)
-                    Globals::navSystem.flow(team).splat(
-                        glm::vec2(pos.x, pos.z) - measured / measuredLen * Nav::CellSize, measured);
-                // BACK-PRESSURE: stalled (see the displacement checkpoints above) -> inject into
-                // the team PRESSURE field, growing with the stall; it diffuses outward each frame.
+                    Globals::navSystem.flow(team).splat(here - measured / measuredLen * Nav::CellSize, measured);
+                // Back-pressure: stalled time injects pressure that diffuses outward each frame.
                 if (m_pressureTimer > 0.4f && params.stuckPressure > 0.0f)
                 {
                     const float strength = glm::min(m_pressureTimer - 0.4f, 1.5f) * params.stuckPressure;
-                    Globals::navSystem.pressure(team).inject(glm::vec2(pos.x, pos.z), strength * deltaSec * 60.0f);
+                    Globals::navSystem.pressure(team).inject(here, strength * deltaSec * 60.0f);
                 }
             }
         }
@@ -592,7 +554,6 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
         m_outputHistory[1] = m_outputHistory[2];
         m_outputHistory[2] = energy > 0.0f ? shieldOutput : 0.01f;
     }
-
 }
 
 void GameUnitComponent::damage(float amount)
