@@ -34,13 +34,40 @@ static void pushMust(MPMCQueue<T>& queue, const T& value)
         _mm_pause();
 }
 
+// PHYSICAL cores via RelationProcessorCore (one record per core, however many logical CPUs it
+// carries). 0 on failure — the caller falls back to a logical-count guess.
+static uint32 physicalCoreCount()
+{
+    DWORD bytes = 0;
+    GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &bytes);
+    if (bytes == 0)
+        return 0;
+    oc::vector<uint8> buffer(bytes);
+    if (!GetLogicalProcessorInformationEx(RelationProcessorCore,
+        reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buffer.data()), &bytes))
+        return 0;
+    uint32 cores = 0;
+    for (DWORD offset = 0; offset < bytes;)
+    {
+        const auto* info = reinterpret_cast<const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buffer.data() + offset);
+        cores += info->Relationship == RelationProcessorCore;
+        offset += info->Size;
+    }
+    return cores;
+}
+
 void JobSystem::initialize(const JobSystemDesc& desc)
 {
     ProfileScope scope("JobSystem::initialize", EProfileCategory::Threading);
 
     assert(!isInitialized());
-    const uint32 hardware = oc::max(2u, std::thread::hardware_concurrency());
-    m_numWorkers = desc.numWorkers ? desc.numWorkers : oc::max(1u, hardware - 2);
+    // Workers are sized by PHYSICAL cores, not logical processors: two hyper-threads share one
+    // core's execution units, so a worker per logical CPU mostly buys scheduling pressure and
+    // cache contention for compute-bound jobs. Fallback halves the logical count (SMT is 2-way
+    // everywhere we run) if the topology query fails.
+    const uint32 physical = physicalCoreCount();
+    const uint32 cores = physical ? physical : oc::max(2u, std::thread::hardware_concurrency() / 2);
+    m_numWorkers = desc.numWorkers ? desc.numWorkers : oc::max(1u, cores - 2);
     m_numContexts = m_numWorkers + 1;
     m_numFibers = desc.numFibers;
     m_jobPoolCapacity = std::bit_ceil(desc.jobPoolCapacity);

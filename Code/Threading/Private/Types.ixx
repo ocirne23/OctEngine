@@ -187,7 +187,7 @@ private:
 
 export struct JobSystemDesc
 {
-    uint32 numWorkers = 0;                  // 0 = hardware threads - 2 (main + headroom), min 1
+    uint32 numWorkers = 0;                  // 0 = PHYSICAL cores - 2 (main + headroom), min 1
     uint32 numFibers = 128;                 // max concurrently started-but-unfinished jobs (parked waits hold one)
     uint32 fiberStackCommit = 64 * 1024;
     uint32 fiberStackReserve = 512 * 1024;
