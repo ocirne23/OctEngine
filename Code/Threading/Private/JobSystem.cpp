@@ -34,6 +34,11 @@ static void pushMust(MPMCQueue<T>& queue, const T& value)
         _mm_pause();
 }
 
+// At or below this many PHYSICAL cores the worker count is taken from the LOGICAL processor count
+// instead (see initialize): a narrow machine needs its hyper-threads to have enough workers at all,
+// a wide one does not and pays cache contention for them.
+static constexpr uint32 c_logicalWorkerCoreMax = 16;
+
 // PHYSICAL cores via RelationProcessorCore (one record per core, however many logical CPUs it
 // carries). 0 on failure — the caller falls back to a logical-count guess.
 static uint32 physicalCoreCount()
@@ -61,13 +66,23 @@ void JobSystem::initialize(const JobSystemDesc& desc)
     ProfileScope scope("JobSystem::initialize", EProfileCategory::Threading);
 
     assert(!isInitialized());
-    // Workers are sized by PHYSICAL cores, not logical processors: two hyper-threads share one
-    // core's execution units, so a worker per logical CPU mostly buys scheduling pressure and
-    // cache contention for compute-bound jobs. Fallback halves the logical count (SMT is 2-way
-    // everywhere we run) if the topology query fails.
-    const uint32 physical = physicalCoreCount();
-    const uint32 cores = physical ? physical : oc::max(2u, std::thread::hardware_concurrency() / 2);
-    m_numWorkers = desc.numWorkers ? desc.numWorkers : oc::max(1u, cores - 2);
+    // Workers are sized from CPU topology, and which count to use FLIPS with machine size. Two
+    // hyper-threads share one core's execution units, so on a wide machine a worker per logical CPU
+    // buys scheduling pressure and cache contention rather than throughput -- there are already
+    // enough cores to hold the frame's parallel work. On a narrow one the trade reverses: physical
+    // cores alone leave too few workers to fill a parallelFor at all, and the second thread per core
+    // is worth having even at half efficiency. The threshold is PHYSICAL cores: at or below
+    // c_logicalWorkerCoreMax take every hardware thread, above it take physical only.
+    //
+    // The -1 is the MAIN THREAD, which is a scheduler context of its own (it registers as a helper
+    // and runs jobs inside wait()), so workers + main exactly covers the count. A 6c/12t part gets
+    // 12 - 1 = 11 workers, a 12c/24t part 24 - 1 = 23, a 24c/48t part 24 - 1 = 23.
+    const uint32 logical = oc::max(1u, std::thread::hardware_concurrency());
+    const uint32 queried = physicalCoreCount();
+    // 0 = the topology query failed; SMT is 2-way everywhere we run, so halving estimates physical.
+    const uint32 physical = queried ? queried : oc::max(1u, logical / 2);
+    const uint32 cores = physical <= c_logicalWorkerCoreMax ? oc::max(logical, physical) : physical;
+    m_numWorkers = desc.numWorkers ? desc.numWorkers : oc::max(1u, cores - 1);
     m_numContexts = m_numWorkers + 1;
     m_numFibers = desc.numFibers;
     m_jobPoolCapacity = std::bit_ceil(desc.jobPoolCapacity);

@@ -525,10 +525,9 @@ void PressureField::seedPath(oc::span<const glm::vec2> path, float amount, float
 {
     if (path.size() < 2 || amount <= 0.0f)
         return;
-    // A GAP is walls on BOTH sides ACROSS the lane; a lane merely running along one wall is open
-    // ground and gets the plain depth. Probing out to c_gapProbe cells each way also grades it: the
-    // tighter the channel, the deeper the trough (a one-cell gap is the deepest point of a route).
-    static constexpr int c_gapProbe = 2;
+    // A GAP is a strictly ONE-CELL opening: both IMMEDIATE lateral neighbours blocked. A wider
+    // probe also fired on 2-wide gaps and on diagonal wall staircases (walls near both sides but
+    // no real constriction), deepening troughs all over such layouts.
     const auto dig = [&](const glm::vec2& p, const glm::vec2& along)
     {
         const glm::ivec2 c = cellOf(p);
@@ -538,13 +537,8 @@ void PressureField::seedPath(oc::span<const glm::vec2> path, float amount, float
         if (raster && squeezeGain > 0.0f)
         {
             const glm::ivec2 sideCell = glm::abs(along.x) > glm::abs(along.y) ? glm::ivec2(0, 1) : glm::ivec2(1, 0);
-            int left = 0, right = 0; // open cells before hitting a wall, each capped at c_gapProbe
-            while (left < c_gapProbe && !raster->isBlocked(c + sideCell * (left + 1)))
-                ++left;
-            while (right < c_gapProbe && !raster->isBlocked(c - sideCell * (right + 1)))
-                ++right;
-            if (left < c_gapProbe && right < c_gapProbe) // walls on BOTH sides: a channel
-                depth *= 1.0f + squeezeGain * float(2 * c_gapProbe - left - right);
+            if (raster->isBlocked(c + sideCell) && raster->isBlocked(c - sideCell))
+                depth *= 1.0f + squeezeGain * 4.0f; // the depth the old probe gave a one-cell gap
         }
         Chunk& chunk = m_chunks.getOrCreate(chunkKey(chunkOf(c)));
         chunk.touchedFrame = m_frame;
