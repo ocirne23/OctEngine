@@ -226,27 +226,33 @@ namespace
     };
 }
 
-template <typename Tester, typename EmitFunc>
-void SpatialIndex::traverseCell(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask,
-                                uint64 key, uint32 level, const CellRecord& rec, bool fullyInside, const EmitFunc& emit) const
+template <typename Tester>
+bool SpatialIndex::testCell(const Tester& tester, const glm::vec3& cellMin, float halfCell, uint32 level,
+                            bool& fullyInside, TraverseStats& stats) const
 {
-    const float halfCell = float(Morton::cellSize(level) * 0.5);
-    const glm::vec3 cellMin = glm::vec3(Morton::cellMinWorld(key, level) - refPos);
     float loose = halfCell;
     const float topLevelMaxRadius = m_topLevelMaxRadius.load(oc::memory_order_relaxed);
     if (level == m_numLevels - 1 && topLevelMaxRadius > halfCell)
         loose = topLevelMaxRadius; // clamped-oversize entries can stick out further
     if (!fullyInside)
     {
-        ++m_stats.cellsTested;
+        ++stats.cellsTested;
         const EIntersect result = tester.classify(cellMin + glm::vec3(halfCell), glm::vec3(halfCell + loose));
         if (result == EIntersect::Outside)
-            return;
+            return false;
         fullyInside = result == EIntersect::Inside;
-        m_stats.cellsFullyInside += fullyInside ? 1 : 0;
+        stats.cellsFullyInside += fullyInside ? 1 : 0;
     }
     else if (!tester.acceptCell(cellMin + glm::vec3(halfCell), glm::vec3(halfCell + loose)))
-        return; // occlusion still prunes inside fully-contained subtrees
+        return false; // occlusion still prunes inside fully-contained subtrees
+    return true;
+}
+
+template <typename Tester, typename EmitFunc>
+void SpatialIndex::emitCellEntries(const Tester& tester, const glm::vec3& cellMin, uint32 layerMask,
+                                   const CellRecord& rec, uint32 level, bool fullyInside,
+                                   TraverseStats& stats, const EmitFunc& emit) const
+{
     for (uint32 idx = rec.dynHead; idx != UINT32_MAX; idx = m_pool.next[idx])
     {
         if (!(m_pool.layerMask[idx] & layerMask))
@@ -257,10 +263,11 @@ void SpatialIndex::traverseCell(const Tester& tester, const glm::dvec3& refPos, 
         const glm::vec3 pos = cellMin + glm::vec3(m_pool.posX[idx], m_pool.posY[idx], m_pool.posZ[idx]);
         if (!fullyInside)
         {
-            ++m_stats.entityTests;
+            ++stats.entityTests;
             if (!tester.testEntity(pos, entityRadius))
                 continue;
         }
+        ++stats.emitted;
         emit(idx, pos);
     }
     if (rec.staticCount)
@@ -272,10 +279,13 @@ void SpatialIndex::traverseCell(const Tester& tester, const glm::dvec3& refPos, 
         {
             if (store.radius[i] < 0.0f || !(store.layer[i] & layerMask))
                 return;
-            ++m_stats.entityTests;
+            ++stats.entityTests;
             const glm::vec3 pos = cellMin + glm::vec3(store.posX[i], store.posY[i], store.posZ[i]);
             if (tester.testEntity(pos, store.radius[i]))
+            {
+                ++stats.emitted;
                 emit(store.poolIdx[i], pos);
+            }
         };
         if (fullyInside)
         {
@@ -283,6 +293,7 @@ void SpatialIndex::traverseCell(const Tester& tester, const glm::dvec3& refPos, 
             {
                 if (store.radius[i] < 0.0f || !(store.layer[i] & layerMask))
                     continue;
+                ++stats.emitted;
                 emit(store.poolIdx[i], cellMin + glm::vec3(store.posX[i], store.posY[i], store.posZ[i]));
             }
         }
@@ -291,7 +302,7 @@ void SpatialIndex::traverseCell(const Tester& tester, const glm::dvec3& refPos, 
             uint32 i = first;
             for (; i + 8 <= last; i += 8)
             {
-                m_stats.entityTests += 8;
+                stats.entityTests += 8;
                 uint32 hits = tester.test8(cellMin, &store.posX[i], &store.posY[i], &store.posZ[i],
                                            &store.radius[i], &store.layer[i], layerMask);
                 while (hits)
@@ -299,6 +310,7 @@ void SpatialIndex::traverseCell(const Tester& tester, const glm::dvec3& refPos, 
                     const uint32 lane = uint32(_tzcnt_u32(hits));
                     hits &= hits - 1;
                     const uint32 s = i + lane;
+                    ++stats.emitted;
                     emit(store.poolIdx[s], cellMin + glm::vec3(store.posX[s], store.posY[s], store.posZ[s]));
                 }
             }
@@ -311,6 +323,18 @@ void SpatialIndex::traverseCell(const Tester& tester, const glm::dvec3& refPos, 
                 testStaticScalar(i);
         }
     }
+}
+
+template <typename Tester, typename EmitFunc>
+void SpatialIndex::traverseCell(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask,
+                                uint64 key, uint32 level, const CellRecord& rec, bool fullyInside,
+                                TraverseStats& stats, const EmitFunc& emit) const
+{
+    const float halfCell = float(Morton::cellSize(level) * 0.5);
+    const glm::vec3 cellMin = glm::vec3(Morton::cellMinWorld(key, level) - refPos);
+    if (!testCell(tester, cellMin, halfCell, level, fullyInside, stats))
+        return;
+    emitCellEntries(tester, cellMin, layerMask, rec, level, fullyInside, stats, emit);
     if (level == 0)
         return;
     uint64 childMask = rec.childMask;
@@ -321,18 +345,103 @@ void SpatialIndex::traverseCell(const Tester& tester, const glm::dvec3& refPos, 
         childMask &= childMask - 1;
         const uint64 childKey = (key << 6) | bit;
         if (const CellRecord* child = childLevel.find(childKey))
-            traverseCell(tester, refPos, layerMask, childKey, level - 1, *child, fullyInside, emit);
+            traverseCell(tester, refPos, layerMask, childKey, level - 1, *child, fullyInside, stats, emit);
     }
 }
 
 template <typename Tester, typename EmitFunc>
 void SpatialIndex::traverse(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask, const EmitFunc& emit) const
 {
+    // Local counters merged once at the end: traversals run concurrently (script queries on worker
+    // threads), so per-test increments on the shared stats would race on the hottest path.
+    TraverseStats stats;
     const uint32 top = m_numLevels - 1;
     m_levels[top].forEachCell([&](uint64 key, const CellRecord& rec)
     {
-        traverseCell(tester, refPos, layerMask, key, top, rec, false, emit);
+        traverseCell(tester, refPos, layerMask, key, top, rec, false, stats, emit);
     });
+    m_stats.cellsTested += stats.cellsTested;
+    m_stats.cellsFullyInside += stats.cellsFullyInside;
+    m_stats.entityTests += stats.entityTests;
+}
+
+// The markVisible* fan-out. The hierarchy root is a handful of huge top-level cells, so
+// parallelizing over THEM is no parallelism at all - instead the frontier expansion walks the top
+// of the tree serially (classifying cells, emitting the upper cells' own few entries, collecting
+// child cells) until it holds enough independent subtree roots to feed every worker, then
+// parallelFors traverseCell over the roots. Each root's subtree is disjoint, an entry lives in
+// exactly one cell, and the cell maps only mutate in commitFrame - so the only shared writes are
+// the emit itself (thread-safe stamps) and the stats, which accumulate per chunk and merge once.
+template <typename Tester, typename EmitFunc>
+void SpatialIndex::traverseParallel(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask,
+                                    TraverseStats& stats, const EmitFunc& emit)
+{
+    const uint32 top = m_numLevels - 1;
+    m_frontier.clear();
+    m_levels[top].forEachCell([&](uint64 key, const CellRecord& rec)
+    {
+        m_frontier.push_back(FrontierCell{ key, &rec, top, false });
+    });
+
+    // 4x over-partitioned so the shared parallelFor cursor can rebalance around expensive roots
+    // (the cells around the camera hold most of the visible world).
+    const uint32 target = Globals::jobSystem.getNumWorkers() * 4;
+    while (!m_frontier.empty() && uint32(m_frontier.size()) < target)
+    {
+        m_frontierNext.clear();
+        bool anySplit = false;
+        for (const FrontierCell& fc : m_frontier)
+        {
+            const float halfCell = float(Morton::cellSize(fc.level) * 0.5);
+            const glm::vec3 cellMin = glm::vec3(Morton::cellMinWorld(fc.key, fc.level) - refPos);
+            bool fullyInside = fc.fullyInside;
+            if (!testCell(tester, cellMin, halfCell, fc.level, fullyInside, stats))
+                continue;
+            emitCellEntries(tester, cellMin, layerMask, *fc.rec, fc.level, fullyInside, stats, emit);
+            if (fc.level == 0)
+                continue; // no children: fully consumed by the expansion
+            uint64 childMask = fc.rec->childMask;
+            const CellMap& childLevel = m_levels[fc.level - 1];
+            while (childMask)
+            {
+                const uint32 bit = uint32(_tzcnt_u64(childMask));
+                childMask &= childMask - 1;
+                const uint64 childKey = (fc.key << 6) | bit;
+                if (const CellRecord* child = childLevel.find(childKey))
+                {
+                    m_frontierNext.push_back(FrontierCell{ childKey, child, fc.level - 1, fullyInside });
+                    anySplit = true;
+                }
+            }
+        }
+        m_frontier.swap(m_frontierNext);
+        if (!anySplit)
+            break; // every surviving cell was a leaf: nothing left for the parallel phase
+    }
+    if (m_frontier.empty())
+        return;
+
+    oc::atomic<int> cellsTested = 0, cellsFullyInside = 0, entityTests = 0, emitted = 0;
+    Globals::jobSystem.parallelFor(0, uint32(m_frontier.size()), 1,
+        JobProfile{ "Spatial mark visible", EProfileCategory::Spatial },
+        [&](uint32 begin, uint32 end)
+    {
+        TraverseStats local;
+        for (uint32 i = begin; i < end; ++i)
+        {
+            const FrontierCell& fc = m_frontier[i];
+            traverseCell(tester, refPos, layerMask, fc.key, fc.level, *fc.rec, fc.fullyInside, local, emit);
+        }
+        cellsTested.fetch_add(local.cellsTested, oc::memory_order_relaxed);
+        cellsFullyInside.fetch_add(local.cellsFullyInside, oc::memory_order_relaxed);
+        entityTests.fetch_add(local.entityTests, oc::memory_order_relaxed);
+        emitted.fetch_add(local.emitted, oc::memory_order_relaxed);
+    }, EJobPriority::High); // pre-frame critical path: the render gate waits on these stamps
+
+    stats.cellsTested += cellsTested.load(oc::memory_order_relaxed);
+    stats.cellsFullyInside += cellsFullyInside.load(oc::memory_order_relaxed);
+    stats.entityTests += entityTests.load(oc::memory_order_relaxed);
+    stats.emitted += emitted.load(oc::memory_order_relaxed);
 }
 
 uint32 SpatialIndex::querySphere(const glm::dvec3& center, float radius, uint32 layerMask, oc::vector<uint64>& outUserData) const
@@ -405,6 +514,10 @@ uint64 SpatialIndex::queryNearest(const glm::dvec3& pos, float maxRadius, uint32
     return found ? best : 0;
 }
 
+// Both markVisible* run the parallel fan-out (traverseParallel). The stamp is a PURE STORE and
+// thread-safe by structure: an entry lives in exactly one cell, so no two subtree roots ever write
+// the same slot. The visible count rides TraverseStats::emitted - accumulated per chunk and merged
+// once, never a shared per-entry atomic on the emit path.
 void SpatialIndex::markVisibleSet(ESpatialPass pass, const Frustum& frustumRelCamera, const glm::dvec3& cameraPos, float maxDist,
                                   uint32 layerMask, IOcclusionTester* occlusion)
 {
@@ -412,14 +525,15 @@ void SpatialIndex::markVisibleSet(ESpatialPass pass, const Frustum& frustumRelCa
     const uint32 passIdx = uint32(pass);
     if (++m_visibleQueryId[passIdx] == 0) // 0 is reserved for never-stamped entries
         ++m_visibleQueryId[passIdx];
-    uint32 count = 0;
-    const auto stamp = [&](uint32 idx, const glm::vec3&)
-    {
-        m_pool.lastVisible[passIdx][idx] = m_visibleQueryId[passIdx];
-        ++count;
-    };
-    traverse(FrustumTester{ frustumRelCamera, occlusion, maxDist }, cameraPos, layerMask, stamp);
-    m_stats.visiblePerPass[passIdx] = int(count);
+    const uint32 stampId = m_visibleQueryId[passIdx];
+    uint32* lastVisible = m_pool.lastVisible[passIdx].data();
+    const auto stamp = [lastVisible, stampId](uint32 idx, const glm::vec3&) { lastVisible[idx] = stampId; };
+    TraverseStats stats;
+    traverseParallel(FrustumTester{ frustumRelCamera, occlusion, maxDist }, cameraPos, layerMask, stats, stamp);
+    m_stats.cellsTested += stats.cellsTested;
+    m_stats.cellsFullyInside += stats.cellsFullyInside;
+    m_stats.entityTests += stats.entityTests;
+    m_stats.visiblePerPass[passIdx] = stats.emitted;
     m_stats.markVisibleMs += std::chrono::duration<float, std::milli>(Clock::now() - start).count();
 }
 
@@ -429,13 +543,15 @@ void SpatialIndex::markVisibleSphere(ESpatialPass pass, const glm::dvec3& center
     const uint32 passIdx = uint32(pass);
     if (++m_visibleQueryId[passIdx] == 0)
         ++m_visibleQueryId[passIdx];
-    uint32 count = 0;
-    traverse(SphereTester{ radius }, center, layerMask, [&](uint32 idx, const glm::vec3&)
-    {
-        m_pool.lastVisible[passIdx][idx] = m_visibleQueryId[passIdx];
-        ++count;
-    });
-    m_stats.visiblePerPass[passIdx] = int(count);
+    const uint32 stampId = m_visibleQueryId[passIdx];
+    uint32* lastVisible = m_pool.lastVisible[passIdx].data();
+    const auto stamp = [lastVisible, stampId](uint32 idx, const glm::vec3&) { lastVisible[idx] = stampId; };
+    TraverseStats stats;
+    traverseParallel(SphereTester{ radius }, center, layerMask, stats, stamp);
+    m_stats.cellsTested += stats.cellsTested;
+    m_stats.cellsFullyInside += stats.cellsFullyInside;
+    m_stats.entityTests += stats.entityTests;
+    m_stats.visiblePerPass[passIdx] = stats.emitted;
     m_stats.markVisibleMs += std::chrono::duration<float, std::milli>(Clock::now() - start).count();
 }
 

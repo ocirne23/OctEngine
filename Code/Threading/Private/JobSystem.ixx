@@ -65,7 +65,6 @@ public:
     void shutdown(); // idempotent; joins workers, drops leftovers. Runs from ~JobSystem via init_seg ordering
     ~JobSystem() { shutdown(); } // atexit runs on the main thread, so the helper-context teardown is valid
 
-    bool isInitialized() const { return m_numContexts != 0; }
     uint32 getNumWorkers() const { return m_numWorkers; }
     JobSystemStats getStats() const;
 

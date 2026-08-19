@@ -54,7 +54,7 @@ bool Renderer::initialize(Window& window, EValidation validation, EVSync vsync, 
     _putenv("DISABLE_VULKAN_OBS_CAPTURE=True");
 
     // Per-worker staging for the lock-free submission surface (requires the JobSystem first).
-    assert(Globals::jobSystem.isInitialized() && "initialize the JobSystem before the Renderer");
+    assert(Globals::jobSystem.getNumContexts() != 0 && "initialize the JobSystem before the Renderer");
     Globals::renderNodeDirtyLists.initialize();
     m_debugLineVerts.initialize();
 

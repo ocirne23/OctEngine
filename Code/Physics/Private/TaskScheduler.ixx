@@ -29,8 +29,8 @@ public:
     using TaskFn = void (*)(void* taskContext);
 
     // -> b3WorldDef::enqueueTask / ::finishTask. userContext is the scheduler the world was built
-    // with. enqueue returns nullptr -- box3d's "this task is already complete, do not call
-    // finishTask" signal -- when there is no job system to fan out to.
+    // with. The job system is assumed live for the world's whole life -- Globals::physics sits in
+    // init_seg OC_SEG_PHYSICS, destructing (and so b3DestroyWorld-ing) BEFORE ~JobSystem.
     static void* enqueue(TaskFn task, void* taskContext, void* userContext, const char* taskName);
     static void finish(void* userTask, void* userContext);
 

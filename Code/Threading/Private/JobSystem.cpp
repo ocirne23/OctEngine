@@ -65,7 +65,7 @@ void JobSystem::initialize(const JobSystemDesc& desc)
 {
     ProfileScope scope("JobSystem::initialize", EProfileCategory::Threading);
 
-    assert(!isInitialized());
+    assert(m_numContexts == 0 && "JobSystem initialized twice");
     // Workers are sized from CPU topology, and which count to use FLIPS with machine size. Two
     // hyper-threads share one core's execution units, so on a wide machine a worker per logical CPU
     // buys scheduling pressure and cache contention rather than throughput -- there are already
@@ -139,7 +139,7 @@ void JobSystem::shutdown()
 {
     ProfileScope scope("JobSystem::shutdown", EProfileCategory::Threading);
 
-    if (!isInitialized() || !m_running.exchange(false))
+    if (!m_running.exchange(false)) // false since construction OR a previous shutdown: idempotent
         return;
     {
         std::lock_guard lock(m_timedMutex); // a sleeping timer thread must observe m_running == false
@@ -399,14 +399,14 @@ void JobSystem::pushReadyJob(Job* job)
 
 void JobSystem::submitReady(Job* job)
 {
-    assert(isInitialized());
+    assert(m_numContexts != 0 && "JobSystem used before initialize()");
     pushReadyJob(job);
     wakeOne();
 }
 
 void JobSystem::submitReadyBatch(oc::span<Job* const> jobs)
 {
-    assert(isInitialized());
+    assert(m_numContexts != 0 && "JobSystem used before initialize()");
     for (Job* job : jobs)
     {
         // straight to the shared queues: batches are fan-out, a local deque would serialize the

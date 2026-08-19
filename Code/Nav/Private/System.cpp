@@ -15,8 +15,6 @@ NavSystem::~NavSystem()
 
 void NavSystem::waitAll()
 {
-    if (!Globals::jobSystem.isInitialized())
-        return;
     const auto waitSlot = [](TeamSlot& slot)
     {
         if (slot.building)

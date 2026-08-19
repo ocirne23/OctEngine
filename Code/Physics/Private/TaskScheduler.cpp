@@ -33,16 +33,9 @@ void* PhysicsTaskScheduler::enqueue(TaskFn task, void* taskContext, void* userCo
     static_assert(c_maxTasks == B3_MAX_TASKS, "the task ring must match box3d's per-step enqueue cap");
     static_assert((c_maxTasks & (c_maxTasks - 1)) == 0, "the task ring masks the cursor, so it must be a power of two");
 
-    // No job system to fan out to: the tooling builds that never initialize one, and the window at
-    // teardown where ~JobSystem (init_seg XCU5) has already run but the plain-XCU physics global has
-    // not, so b3DestroyWorld still reaches here.
-    if (!Globals::jobSystem.isInitialized())
-    {
-        ProfileScope scope("Physics Job", EProfileCategory::Physics);
-        task(taskContext);
-        return nullptr;
-    }
-
+    // The job system is ALWAYS live here: PhysicsWorld::initialize runs after jobSystem.initialize
+    // in main, and Globals::physics sits in init_seg OC_SEG_PHYSICS, which destructs BEFORE
+    // ~JobSystem - so even b3DestroyWorld's tasks land on live workers.
     PhysicsTaskScheduler& scheduler = *static_cast<PhysicsTaskScheduler*>(userContext);
     TaskSlot& slot = scheduler.m_slots[scheduler.m_cursor.fetch_add(1, oc::memory_order_relaxed) & (c_maxTasks - 1)];
     assert(slot.counter.isDone() && "box3d enqueued more than B3_MAX_TASKS in one step - the ring wrapped onto a live task");
@@ -68,8 +61,6 @@ void PhysicsTaskScheduler::finish(void* userTask, void*)
 
 int PhysicsTaskScheduler::defaultWorkerCount()
 {
-    if (!Globals::jobSystem.isInitialized())
-        return 1;
     // +1: box3d treats the thread driving the step as a worker and slices for it too.
     return int(oc::clamp<uint32>(Globals::jobSystem.getNumWorkers() + 1, 1u, uint32(B3_MAX_WORKERS)));
 }

@@ -119,6 +119,26 @@ private:
         uint32 level;
     };
 
+    // Per-traversal query counters, accumulated locally and merged into m_stats once at the end:
+    // traversals run concurrently (script queries on workers, the parallel markVisible* fan-out),
+    // and racing increments on the shared stats would lose counts on the hottest path.
+    struct TraverseStats
+    {
+        int cellsTested = 0;
+        int cellsFullyInside = 0;
+        int entityTests = 0;
+        int emitted = 0; // emit() calls = accepted entries; the markVisible* visible counts
+    };
+
+    // A subtree root the parallel markVisible* fan-out hands to a worker (see traverseParallel).
+    struct FrontierCell
+    {
+        uint64 key;
+        const CellRecord* rec; // stable: the cell maps only mutate in commitFrame
+        uint32 level;
+        bool fullyInside;
+    };
+
     void linkIntoCell(uint32 idx);
     void unlinkFromCell(uint32 idx);
     void setOccupancyBits(uint32 level, uint64 key);
@@ -132,7 +152,30 @@ private:
 
     template <typename Tester, typename EmitFunc>
     void traverseCell(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask,
-                      uint64 key, uint32 level, const CellRecord& rec, bool fullyInside, const EmitFunc& emit) const;
+                      uint64 key, uint32 level, const CellRecord& rec, bool fullyInside,
+                      TraverseStats& stats, const EmitFunc& emit) const;
+
+    // The cell-level classification split out of traverseCell so the parallel frontier expansion
+    // shares it. Returns false when the cell is culled; flips fullyInside when the tester contains
+    // the cell's loose bounds outright.
+    template <typename Tester>
+    bool testCell(const Tester& tester, const glm::vec3& cellMin, float halfCell, uint32 level,
+                  bool& fullyInside, TraverseStats& stats) const;
+
+    // The cell's own entry emission (dynamic list + static ranges) split out of traverseCell,
+    // shared by the frontier expansion for the upper-level cells it consumes while splitting.
+    template <typename Tester, typename EmitFunc>
+    void emitCellEntries(const Tester& tester, const glm::vec3& cellMin, uint32 layerMask,
+                         const CellRecord& rec, uint32 level, bool fullyInside,
+                         TraverseStats& stats, const EmitFunc& emit) const;
+
+    // Multithreaded traversal for the markVisible* stamps: expands a frontier of subtree roots
+    // serially (emitting the upper cells' own entries as it goes), then parallelFors traverseCell
+    // over the roots. emit must be thread-safe; the stamps are (each entry lives in exactly ONE
+    // cell, so no two roots ever emit the same index).
+    template <typename Tester, typename EmitFunc>
+    void traverseParallel(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask,
+                          TraverseStats& stats, const EmitFunc& emit);
 
     oc::array<CellMap, Morton::MaxLevels> m_levels;
     oc::array<StaticStore, Morton::MaxLevels> m_static;
@@ -151,6 +194,8 @@ private:
     oc::atomic<float> m_topLevelMaxRadius = 0.0f; // largest clamped-oversize radius, inflates top-level tests (CAS-max: updateEntry runs on jobs)
     SpatialCullingConfig m_culling;
     mutable SpatialStats m_stats;
+    oc::vector<FrontierCell> m_frontier;     // traverseParallel scratch (main thread only)
+    oc::vector<FrontierCell> m_frontierNext;
 
     // Near-ball requery hysteresis, see update.
     glm::dvec3 m_lastNearQueryPos = glm::dvec3(1e30);

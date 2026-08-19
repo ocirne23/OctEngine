@@ -97,7 +97,10 @@ private:
     float m_depthBias = 0.001f;
     int m_maxTriangles = 2048;
     int m_statTriangles = 0;
-    int m_statHiddenCells = 0;
+    // isVisible runs concurrently from the parallel markVisible* tasks, so it counts atomically;
+    // the plain int mirrors it once per render() for the tweak panel (which binds a raw int*).
+    oc::atomic<int> m_statHiddenCells = 0;
+    int m_statHiddenCellsDisplay = 0;
     float m_statRasterMs = 0.0f;
 };
 

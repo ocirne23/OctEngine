@@ -28,9 +28,6 @@ void JobSystemStress::initialize()
 
 void JobSystemStress::update()
 {
-    if (!Globals::jobSystem.isInitialized())
-        return;
-
     if (m_runSelfTest)
     {
         m_runSelfTest = false;

@@ -21,7 +21,7 @@ void OcclusionBuffer::initialize()
     Tweak::floatVar("Spatial/Occlusion", "Depth bias", &m_depthBias, 0.0f, 0.05f, 0.0001f);
     Tweak::intVar("Spatial/Occlusion", "Max occluder tris", &m_maxTriangles, 64, 16384);
     Tweak::intVar("Spatial/Occlusion", "Triangles", &m_statTriangles, 0, INT32_MAX);
-    Tweak::intVar("Spatial/Occlusion", "Hidden cells", &m_statHiddenCells, 0, INT32_MAX);
+    Tweak::intVar("Spatial/Occlusion", "Hidden cells", &m_statHiddenCellsDisplay, 0, INT32_MAX);
     Tweak::floatVar("Spatial/Occlusion", "Raster ms", &m_statRasterMs, 0.0f, FLT_MAX, 0.001f);
 }
 
@@ -101,7 +101,7 @@ void OcclusionBuffer::removeOccluder(SpatialHandle handle)
 void OcclusionBuffer::render(const glm::mat4& viewProjRelCamera, const glm::dvec3& cameraPos)
 {
     m_rendered = false;
-    m_statHiddenCells = 0;
+    m_statHiddenCellsDisplay = m_statHiddenCells.exchange(0, oc::memory_order_relaxed); // last frame's count
     if (!m_enabled)
         return;
     const auto start = Clock::now();
@@ -263,6 +263,6 @@ bool OcclusionBuffer::isVisible(const glm::vec3& centerRelCamera, const glm::vec
         for (int bx = bx0; bx <= bx1; ++bx)
             if (m_blockMax[by * BlocksX + bx] >= minZ)
                 return true; // some pixel in this block is not covered nearer than the cell
-    ++m_statHiddenCells;
+    m_statHiddenCells.fetch_add(1, oc::memory_order_relaxed);
     return false;
 }

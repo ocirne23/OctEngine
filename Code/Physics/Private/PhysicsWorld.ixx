@@ -193,6 +193,10 @@ private:
     float m_debugDrawRange = 64.0f; // draw distance around viewPos (world units)
 };
 
+// OC_SEG_PHYSICS: ~PhysicsWorld (b3DestroyWorld) fans its teardown tasks onto the job system, so it
+// must destruct BEFORE ~JobSystem (XCU5) - and after ~World (XCU8), whose entities free their bodies
+// into this still-live world. This is what lets the task scheduler assume the job system is always up.
+OC_INIT_SEG(OC_SEG_PHYSICS)
 export namespace Globals
 {
     PhysicsWorld physics;
