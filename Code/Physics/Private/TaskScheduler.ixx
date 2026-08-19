@@ -43,8 +43,7 @@ public:
 
 private:
 
-    static constexpr uint32 c_maxTasks = 256;  // B3_MAX_TASKS, static_asserted against it in the .cpp
-    static constexpr uint32 c_maxNameLen = 48; // box3d task names are short; longer ones truncate
+    static constexpr uint32 c_maxTasks = 256; // B3_MAX_TASKS, static_asserted against it in the .cpp
 
     // One slot per in-flight box3d task. box3d never enqueues more than B3_MAX_TASKS per world step
     // and finishes every one of them inside that same step, so a monotonic cursor masked into a
@@ -56,17 +55,9 @@ private:
         TaskFn task = nullptr;
         void* context = nullptr;
         JobCounter counter;
-        // A COPY of box3d's taskName, not the pointer. box3d builds the name into a TRANSIENT buffer
-        // (measured: the same name comes back at a different address with different trailing bytes),
-        // while ProfileRecord stores names BY POINTER and the panel reads them back frames later --
-        // holding box3d's pointer rendered every physics scope as garbage. The slot lives as long as
-        // the world, so a copy here is a permanently valid name. Distinct slots holding the same text
-        // are separate pointers, which the stats table already merges by content.
-        char name[c_maxNameLen] = {};
     };
 
     static void runSlot(TaskSlot& slot);
-    static void copyName(char (&dst)[c_maxNameLen], const char* src);
 
     TaskSlot m_slots[c_maxTasks];
     oc::atomic<uint32> m_cursor = 0;
