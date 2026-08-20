@@ -405,6 +405,10 @@ export namespace Procedural
 		// patterns possible) — shaders decode texels via floatBitsToUint (terrainClimateAt); altitude is
 		// a plain float (bilinear-safe). The flow bits carry the generator's authored angle where it has
 		// one, the computed toward-land/downhill field where flowField is non-null (applyFlowField).
+		// A bake job is outstanding — keep polling update() (active or not) until it drains, so its
+		// result is consumed the frame it lands and a disabled consumer knows when it can stop calling.
+		bool inFlight() const { return m_bakeInFlight; }
+
 		bool update(Baked& out, bool active, const oc::shared_ptr<const ITerrainSampler>& maps,
 			const glm::vec2& camXZ, glm::vec2 ranges, uint32 res, uint32 numCascades, uint32 channels = 1,
 			const WaterReach* waterReach = nullptr, const FlowField* flowField = nullptr)

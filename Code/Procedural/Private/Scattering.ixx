@@ -151,6 +151,7 @@ export namespace Procedural
 		float m_viewScale = 1.0f;      // global multiplier on every rule's view distance
 		int   m_maxSpawnsPerFrame = 768; // instance node spawns per frame (group activations spread out)
 		bool  m_configDirty = false;
+		bool  m_inactiveIdle = false; // inactive AND drained: update() is a branch and a return
 
 		// --- Assets (loaded once at initialize; indices match the SCATTER_ASSETS table) ---
 		oc::vector<AssetRuntime> m_assets;

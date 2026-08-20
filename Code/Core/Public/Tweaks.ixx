@@ -143,6 +143,8 @@ public:
 	// generation the NetworkManager broadcasts on.
 	void update(float deltaSec)
 	{
+		ProfileScope profileScope("Tweak Update", EProfileCategory::Core);
+
 		for (size_t i = 0; i < m_vars.size(); ++i)
 		{
 			const TweakVar& var = m_vars[i];
@@ -172,6 +174,8 @@ public:
 	// travel as floats).
 	void packSynced(oc::vector<oc::vector<uint8>>& outChunks, size_t maxChunkBytes = 1000) const
 	{
+		ProfileScope profileScope("Tweak Sync", EProfileCategory::Core);
+
 		oc::vector<uint8> chunk;
 		for (const TweakVar& var : m_vars)
 		{
@@ -204,6 +208,8 @@ public:
 	// client's file nor bounce a sync generation.
 	void applySyncedBlob(oc::span<const uint8> blob)
 	{
+		ProfileScope profileScope("Tweak Sync", EProfileCategory::Core);
+
 		size_t cursor = 0;
 		while (cursor < blob.size())
 		{

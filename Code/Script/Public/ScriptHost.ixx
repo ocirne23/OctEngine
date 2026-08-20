@@ -68,6 +68,12 @@ public:
     // keeps the previous build on failure; first-time failures are cached so they aren't retried each frame.
     // The returned pointer is stable until shutdown().
     const ScriptModule* getOrLoad(const oc::string& path, bool forceRecompile = false);
+    void handleScriptReloadRequests(const oc::vector<oc::string>& paths)
+    {
+        ProfileScope profileScope("Script Reloads", EProfileCategory::Script);
+		for (const oc::string& path : paths)
+			getOrLoad(path, true);
+    }
 
 	void setCurrentScriptPath(const oc::string& path) { m_currentScriptPath = path; }
 	void reloadCurrentScript() { if (!m_currentScriptPath.empty()) getOrLoad(m_currentScriptPath, true); }

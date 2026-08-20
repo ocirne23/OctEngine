@@ -32,6 +32,29 @@ namespace Procedural
 
 	void TerrainCollider::update(const glm::vec3& focusPos, oc::shared_ptr<const ITerrainSampler> maps)
 	{
+		const bool active = m_enabled && maps != nullptr && Globals::physics.isInitialized();
+		if (!active)
+		{
+			// Inactive (disabled / terrain off): no profile scope. Clear once on the transition, then
+			// only poll the in-flight build until it lands (stale by generation, dropped) — after that
+			// every frame is two branches and a return.
+			if (!m_inactiveIdle)
+			{
+				m_inactiveIdle = true;
+				m_tiles.clear();
+				++m_generation; // in-flight/finished results built against the old world are stale now
+				m_configDirty = false;
+				m_mapsIdentity = nullptr;
+			}
+			if (m_buildInFlight && m_buildCounter.isDone())
+			{
+				m_buildResult = BuildResult{}; // free the stale mesh
+				m_buildInFlight = false;
+			}
+			return;
+		}
+		m_inactiveIdle = false;
+
 		ProfileScope profileScope("Terrain collider", EProfileCategory::Procedural);
 		// Drain the in-flight build FIRST: even on a reset frame the result must be consumed, and a
 		// completed tile should land the same frame it finishes.
@@ -44,15 +67,12 @@ namespace Procedural
 			haveDone = true;
 		}
 
-		const bool active = m_enabled && maps != nullptr && Globals::physics.isInitialized();
-		if (!active || maps.get() != m_mapsIdentity || m_configDirty)
+		if (maps.get() != m_mapsIdentity || m_configDirty)
 		{
 			m_tiles.clear();
 			++m_generation; // in-flight/finished results built against the old world are stale now
 			m_configDirty = false;
-			m_mapsIdentity = active ? maps.get() : nullptr;
-			if (!active)
-				return;
+			m_mapsIdentity = maps.get();
 		}
 
 		const float tileSize = glm::clamp(m_tileSize, 8.0f, 128.0f);

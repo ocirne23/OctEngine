@@ -22,8 +22,8 @@ import :Layout;
 //                      (fences order the CPU, not the GPU).
 //   3. flipIfPending() called where the UBO is written: activates the new image together with its
 //                      center/sizes, so the shader params and the image contents stay coherent.
-// Consumers bind getView() through UPDATE_AFTER_BIND bindings refreshed every frame, so the flip never
-// re-records cached command buffers.
+// Consumers bind getView() through UPDATE_AFTER_BIND bindings rewritten per frame slot when
+// getGeneration() changed, so the flip never re-records cached command buffers.
 export class BakedWorldMap final
 {
 public:
@@ -42,6 +42,9 @@ public:
     void clear() { m_worldSizes = glm::vec2(0.0f); } // consumers' 1/size params drop to 0; images sit unused
 
     vk::ImageView getView() const { return m_view[m_active]; }
+    // Bumped on every flip; starts at 1 so a zero-initialized per-slot mirror always writes once.
+    // Lets consumers change-detect getView() instead of rewriting descriptors every frame.
+    uint32 getGeneration() const { return m_generation; }
     vk::Sampler getSampler() const { return m_sampler.getSampler(); } // clamp-to-edge (region snapshot, never tile)
     glm::vec2 getCenter() const { return m_center; }
     glm::vec2 getWorldSizes() const { return m_worldSizes; } // .x == 0 = no map
@@ -61,6 +64,7 @@ private:
 
     int m_uploadSlot = -1; // staging slot holding a not-yet-recorded upload (-1 = none)
     uint32 m_active = 0;
+    uint32 m_generation = 1;
     bool m_flipPending = false;
     glm::vec2 m_center = glm::vec2(0.0f);     // ACTIVE region (UBO writers read these)
     glm::vec2 m_worldSizes = glm::vec2(0.0f);

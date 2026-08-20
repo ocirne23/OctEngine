@@ -379,51 +379,8 @@ namespace Procedural
 		return m_steeredWindAngle;
 	}
 
-	void OceanGenerator::update(Renderer& renderer, const Camera& camera,
-	                           oc::shared_ptr<const BakedTerrainData> terrainData, float seaLevel)
+	void OceanGenerator::pushOceanParams(Renderer& renderer, const Camera& camera)
 	{
-		ProfileScope profileScope("Ocean", EProfileCategory::Procedural);
-		// ONE sea level, owned by the terrain (see the header). Adopted here every frame rather than
-		// tweaked separately: this used to be its own slider, and the two silently forked — the water plane
-		// moved while the terrain kept reporting its water at the old datum, which does not merely look
-		// wrong. The swash gate fades on |baked water level - sea level|, so a metre of disagreement turned
-		// the swash off planet-wide.
-		m_seaLevel = seaLevel;
-		// Adopt the streamer's active bake (the GPU passes read the same one): buoyancy and wind steering
-		// sample this snapshot until the next update.
-		m_terrainData = oc::move(terrainData);
-
-		// A new bake rebuilds the dry-sector block grid: per-block MAX of (water level - height) over the
-		// COARSEST cascade (largest coverage; its max is at least as wet as any finer view of the same
-		// ground). One ~quarter-ms pass per shipped bake — every ~range/4 of camera travel.
-		if (m_terrainData.get() != m_dryGridSource)
-		{
-			m_dryGridSource = m_terrainData.get();
-			m_dryGridValid = false;
-			if (m_terrainData && m_terrainData->cascades > 0 && m_terrainData->res > 0)
-			{
-				const uint32 res = m_terrainData->res;
-				const uint32 farCascade = m_terrainData->cascades - 1;
-				const float* texels = m_terrainData->texels.data() + (size_t)farCascade * res * res * 4;
-				m_blockMaxDepth.fill(-FLT_MAX);
-				const uint32 blockTexels = (res + DRY_BLOCKS - 1) / DRY_BLOCKS;
-				for (uint32 j = 0; j < res; ++j)
-				{
-					float* row = &m_blockMaxDepth[(size_t)(j / blockTexels) * DRY_BLOCKS];
-					for (uint32 i = 0; i < res; ++i)
-					{
-						const float* t = &texels[((size_t)j * res + i) * 4];
-						float& blockMax = row[i / blockTexels];
-						blockMax = glm::max(blockMax, t[1] - t[0]); // water level - terrain height
-					}
-				}
-				m_dryGridCenter = m_terrainData->center;
-				m_dryGridRange = m_terrainData->ranges[(int)glm::min(farCascade, 1u)];
-				m_dryGridValid = m_dryGridRange > 1.0f;
-			}
-		}
-
-		// Push the spectrum/shading params every frame; `enabled` also gates the GPU FFT simulation.
 		const float windAngle = steeredWindAngle(camera); // base wind, turned toward the local shore flow
 		OceanParams params;
 		params.enabled = m_enabled;
@@ -472,12 +429,77 @@ namespace Procedural
 		params.rtReflectionMaxRough = m_rtReflectionMaxRough;
 		params.rtRayCutoffDist = m_rtRayCutoffDist;
 		renderer.setOceanParams(params);
+	}
 
+	void OceanGenerator::update(Renderer& renderer, const Camera& camera,
+	                           oc::shared_ptr<const BakedTerrainData> terrainData, float seaLevel)
+	{
 		if (!m_enabled)
 		{
-			renderer.setOceanWaveTrough(0.0f); // no waves: the underwater-fog boundary sits at the calm level
+			if (m_disabledIdle)
+				return; // parked: no profile scope, no per-frame params churn
+			m_disabledIdle = true;
+			m_seaLevel = seaLevel;
+			// Release the clipmap (nodes before their containers, like the dtor); rebuildGrid()
+			// restores it on re-enable (m_sectors.empty()). Drop the CPU snapshots: hasWater() is
+			// false either way so the buoyancy pass keeps skipping, and the dry grid rebuilds off
+			// the next adopted bake.
+			m_sectors.clear();
+			m_terrainData = nullptr;
+			m_dryGridSource = nullptr;
+			m_dryGridValid = false;
+			m_dispTile.clear();
+			m_dispTileRes = 0;
+			m_waveTrough = 0.0f;
+			pushOceanParams(renderer, camera);  // enabled=false gates the GPU FFT + the ocean draw
+			renderer.setOceanWaveTrough(0.0f);  // no waves: the underwater-fog boundary sits at the calm level
 			return;
 		}
+		m_disabledIdle = false;
+
+		ProfileScope profileScope("Ocean", EProfileCategory::Procedural);
+		// ONE sea level, owned by the terrain (see the header). Adopted here every frame rather than
+		// tweaked separately: this used to be its own slider, and the two silently forked — the water plane
+		// moved while the terrain kept reporting its water at the old datum, which does not merely look
+		// wrong. The swash gate fades on |baked water level - sea level|, so a metre of disagreement turned
+		// the swash off planet-wide.
+		m_seaLevel = seaLevel;
+		// Adopt the streamer's active bake (the GPU passes read the same one): buoyancy and wind steering
+		// sample this snapshot until the next update.
+		m_terrainData = oc::move(terrainData);
+
+		// A new bake rebuilds the dry-sector block grid: per-block MAX of (water level - height) over the
+		// COARSEST cascade (largest coverage; its max is at least as wet as any finer view of the same
+		// ground). One ~quarter-ms pass per shipped bake — every ~range/4 of camera travel.
+		if (m_terrainData.get() != m_dryGridSource)
+		{
+			m_dryGridSource = m_terrainData.get();
+			m_dryGridValid = false;
+			if (m_terrainData && m_terrainData->cascades > 0 && m_terrainData->res > 0)
+			{
+				const uint32 res = m_terrainData->res;
+				const uint32 farCascade = m_terrainData->cascades - 1;
+				const float* texels = m_terrainData->texels.data() + (size_t)farCascade * res * res * 4;
+				m_blockMaxDepth.fill(-FLT_MAX);
+				const uint32 blockTexels = (res + DRY_BLOCKS - 1) / DRY_BLOCKS;
+				for (uint32 j = 0; j < res; ++j)
+				{
+					float* row = &m_blockMaxDepth[(size_t)(j / blockTexels) * DRY_BLOCKS];
+					for (uint32 i = 0; i < res; ++i)
+					{
+						const float* t = &texels[((size_t)j * res + i) * 4];
+						float& blockMax = row[i / blockTexels];
+						blockMax = glm::max(blockMax, t[1] - t[0]); // water level - terrain height
+					}
+				}
+				m_dryGridCenter = m_terrainData->center;
+				m_dryGridRange = m_terrainData->ranges[(int)glm::min(farCascade, 1u)];
+				m_dryGridValid = m_dryGridRange > 1.0f;
+			}
+		}
+
+		// Push the spectrum/shading params every frame; `enabled` also gates the GPU FFT simulation.
+		pushOceanParams(renderer, camera);
 
 		// The horizon band is sized to the camera far plane; a far change (rare — settings, VR) rebuilds.
 		if (camera.far != m_lastFar)
@@ -489,7 +511,6 @@ namespace Procedural
 			rebuildGrid();
 		if (m_sectors.empty())
 			return;
-
 		// Follow the camera, snapped to a multiple of the ring lattices so vertices re-land on the exact
 		// same world positions (a clipmap's whole point: each world point keeps its sample position and
 		// ring-fixed mip, so waves are rock-stable under camera motion). 8*cell aligns rings 0-2 perfectly;

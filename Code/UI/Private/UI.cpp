@@ -42,6 +42,7 @@ void UI::drawGizmoEntity(Renderer& renderer, float deltaSec)
 
 void UI::prepare()
 {
+    ProfileScope profileScope("UI prepare", EProfileCategory::UI);
     // One job per data-heavy panel that was open last frame; each panel's prepare() is worker-safe
     // (no ImGui, reads only its own state + reader-safe engine sources: profiler rings, the memory
     // tracker's atomic tree, the log under its mutex). update() waits on the counter before
@@ -371,6 +372,11 @@ void UI::update(const oc::vector<EntityPtr>& rootEntities, const Camera& camera,
         ProfileScope scope("Gizmo update", EProfileCategory::UI);
         m_gizmo->update(camera, m_viewportRect, m_sceneView.getSelected(), deltaSec);
     }
+
+    // The widget pass ends by producing its own draw data: ImGui::Render + the renderer-facing
+    // snapshot run right here on the job (the context is ours until the join), so main's frame top
+    // is just the join + flushMainThreadWork.
+    renderImGuiToSnapshot();
 }
 
 void UI::handleKeyEvent(SDL_Event evt)
@@ -379,33 +385,41 @@ void UI::handleKeyEvent(SDL_Event evt)
         m_scriptEditor.handleKeyEvent(evt);
 }
 
-// ImGui::GetDrawData() is only valid until the NEXT ImGui::NewFrame - and the next widget pass is
-// a job that starts mid-frame, while present() still records THIS data at the frame's end. So the
-// lists are deep-copied (CloneOutput) into storage the job can't touch, and the renderer records
-// from the snapshot. Frame-pipelined: render() runs at the TOP of the frame for LAST frame's
-// widget pass; the previous snapshot was consumed by last frame's present, so freeing it here is safe.
+// ImGui::GetDrawData() is only valid until the NEXT ImGui::NewFrame, so the widget-pass job ends
+// by deep-copying the lists (CloneOutput) into a snapshot the context can't touch and pointing the
+// renderer at it (read by the NEXT frame's present, sequenced by the UI join). DOUBLE-BUFFERED:
+// the job for frame N runs concurrently with present N, which is still recording from snapshot
+// N-1 - so the job writes slot N&1 and frees only what that slot held from N-2, which present N-1
+// finished with before this job was even kicked.
 namespace
 {
-ImDrawData g_imguiSnapshot;
-oc::vector<ImDrawList*> g_imguiSnapshotLists;
+struct ImGuiSnapshot
+{
+    ImDrawData data;
+    oc::vector<ImDrawList*> lists;
+};
+ImGuiSnapshot g_imguiSnapshots[2];
+uint32 g_imguiSnapshotFlip = 0;
 } // namespace
 
-void UI::render()
+void UI::renderImGuiToSnapshot()
 {
     ProfileScope profileScope("UI render", EProfileCategory::UI);
     ImGui::Render();
 
-    for (ImDrawList* list : g_imguiSnapshotLists)
+    ImGuiSnapshot& snapshot = g_imguiSnapshots[g_imguiSnapshotFlip & 1];
+    ++g_imguiSnapshotFlip;
+    for (ImDrawList* list : snapshot.lists)
         IM_DELETE(list);
-    g_imguiSnapshotLists.clear();
+    snapshot.lists.clear();
 
     const ImDrawData* src = ImGui::GetDrawData();
-    g_imguiSnapshot = *src; // scalar fields + the CmdLists vector (entries replaced with clones below)
-    for (int i = 0; i < g_imguiSnapshot.CmdLists.Size; ++i)
+    snapshot.data = *src; // scalar fields + the CmdLists vector (entries replaced with clones below)
+    for (int i = 0; i < snapshot.data.CmdLists.Size; ++i)
     {
         ImDrawList* clone = src->CmdLists[i]->CloneOutput();
-        g_imguiSnapshot.CmdLists[i] = clone;
-        g_imguiSnapshotLists.push_back(clone);
+        snapshot.data.CmdLists[i] = clone;
+        snapshot.lists.push_back(clone);
     }
-    Globals::rendererVK.setImGuiDrawData(&g_imguiSnapshot);
+    Globals::rendererVK.setImGuiDrawData(&snapshot.data);
 }

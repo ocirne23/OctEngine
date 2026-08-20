@@ -313,10 +313,7 @@ int main(int argc, char* argv[])
                 Globals::jobSystem.wait(uiCounter);
             }
             if (uiJobKicked)
-            {
-                Globals::ui.flushMainThreadWork(); // deferred tweak onChange callbacks + container imports
-                Globals::ui.render(); // ImGui::Render + snapshot for LAST frame's widgets -> THIS frame's present
-            }
+                Globals::ui.flushMainThreadWork(); // deferred tweak onChange callbacks + container imports (the job produced its own draw-data snapshot)
         }
 
         Globals::time.update();
@@ -330,7 +327,12 @@ int main(int argc, char* argv[])
             Globals::input.update(deltaSec);
             Globals::ui.prepare(); // panel data jobs (profiler snapshot etc.) — overlap everything below until ui.update
             controls.update((float)deltaSec);
-            if (Globals::rendererVK.isVrEnabled())
+
+            if (game.enabled())
+            {
+                game.updateWindowed(camera, (float)deltaSec); // game mode: follow-camera overwrite + aim/HUD/debug draw
+            }
+            else if (Globals::rendererVK.isVrEnabled())
             {
                 vrCameraController.update(deltaSec); // thumbstick locomotion; pulls Globals::vrInput
                 camera = vrCameraController.getCamera();
@@ -340,14 +342,11 @@ int main(int argc, char* argv[])
                 cameraController.update(deltaSec);
                 camera = cameraController.getCamera();
                 controls.applyPlayerCamera(camera); // possessed capsule view (first/third person), see InputControls
-                game.updateWindowed(camera, (float)deltaSec); // game mode: follow-camera overwrite + aim/HUD/debug draw
             }
-            // LAST frame's widget-pass outputs: the UI runs off the main thread now, so its queues
-            // drain one frame latent by design (a UI response was never sim-critical).
-            for (const oc::string& reloadPath : Globals::ui.takeScriptReloadRequests()) Globals::scriptHost.getOrLoad(reloadPath, true);
-            for (EntityChange& change : Globals::ui.takeEntityChanges()) Globals::world.handleEntityChange(change, camera, Globals::ui.getViewportRect());
+            Globals::scriptHost.handleScriptReloadRequests(Globals::ui.takeScriptReloadRequests());
+            Globals::world.handleEntityChanges(Globals::ui.takeEntityChanges(), camera, Globals::ui.getViewportRect());
         }
-        for (EntityChange& change : Globals::scriptEvents.takeEntityChanges()) Globals::world.handleEntityChange(change, camera, Globals::ui.getViewportRect());
+        Globals::world.handleEntityChanges(Globals::scriptEvents.takeEntityChanges(), camera, Globals::ui.getViewportRect());
 
         Globals::networkManager.receive(deltaSec); // snapshot targets + events land before the sim/entity updates read them
         game.update((float)deltaSec); // authority tick, pre-physics (direct body setters sanctioned); becomes the server tick in MP
@@ -378,14 +377,7 @@ int main(int argc, char* argv[])
             Globals::ui.drawGizmoEntity(Globals::rendererVK, (float)deltaSec);
             Globals::rendererVK.present(); // ImGui pass records from the PREVIOUS widget pass's snapshot
 
-            // KICK NEXT FRAME'S WIDGET PASS, off the main thread and a full frame deep: from here it
-            // overlaps only profiler.endFrame and the next frame's fence/vsync wait - main mutates
-            // NOTHING the panels read in that window, and the workers are otherwise idle during the
-            // stall, so the UI is effectively free instead of stealing a worker from the sim's
-            // parallel phases. Joined at the top of the next frame ("UI join"); it reads this
-            // frame's post-sim state and its draw data reaches the screen one present later. The
-            // SDL half of the ImGui frame stays on this thread (beginImGuiFrame).
-            Globals::ui.beginImGuiFrame();
+            Globals::ui.beginImGuiFrame(); // kick next frame's ui update job
             Globals::jobSystem.submit([&] { Globals::ui.update(Globals::world.rootEntities(), camera, deltaSec); },
                 { "UI widget pass", EProfileCategory::UI }, EJobPriority::Normal, &uiCounter);
             uiJobKicked = true;

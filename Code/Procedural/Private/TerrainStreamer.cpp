@@ -815,8 +815,49 @@ namespace Procedural
 		}
 	}
 
+	void TerrainStreamer::updateDisabled(Renderer& renderer, const Camera& camera)
+	{
+		if (m_configDirty)
+		{
+			m_configDirty = false;
+			rebuildMaps();    // disabled: null maps, ++generation, drop queued requests, stop the model wait
+			clearResidents();
+		}
+		if (!m_residents.empty() || !m_pending.empty())
+			clearResidents();
+
+		// Starve the pumps and drop late results (a V3 chunk is seconds of work, so chunks keep landing
+		// for a while after the disable). Read the pump count BEFORE the drain: a pump only pushes while
+		// it holds its slot, so "no pumps, then results drained" is final — nothing can appear after.
+		const bool pumpsIdle = m_numPumps.load(oc::memory_order_acquire) == 0;
+		{
+			std::lock_guard<std::mutex> lk(m_mutex);
+			m_requests.clear();
+			m_results.clear();
+		}
+
+		// Polls/drops the in-flight terrain-data bake and clears the renderer-side map once (active=false).
+		updateFogHeightMap(renderer, camera, nullptr, m_terrainMapFarRange); // no terrain -> no terrain-following fog
+		renderer.setTerrainParams(0.0f, m_seaLevel);   // no mesh up: disables the ocean land cull
+
+		m_disabledIdle = pumpsIdle && !m_terrainMapBaker.inFlight() && !m_terrainMapUploaded;
+	}
+
 	void TerrainStreamer::update(Renderer& renderer, const Camera& camera)
 	{
+		if (!m_enabled)
+		{
+			// Disabled: no profile scope, no per-frame work. The transition (and any tweak that
+			// re-dirties the config while parked, e.g. sea level) drains through updateDisabled
+			// until nothing is left in flight.
+			if (m_configDirty)
+				m_disabledIdle = false;
+			if (!m_disabledIdle)
+				updateDisabled(renderer, camera);
+			return;
+		}
+		m_disabledIdle = false;
+
 		ProfileScope profileScope("Terrain", EProfileCategory::Procedural);
 		//m_terrainMapFarRange = camera.far;
 		if (m_configDirty)
@@ -845,15 +886,6 @@ namespace Procedural
 					Log::info(oc::format("[Terrain] V3: {}", TerrainGenV3::statusText()));
 				}
 			}
-		}
-
-		if (!m_enabled)
-		{
-			if (!m_residents.empty() || !m_pending.empty())
-				clearResidents();
-			updateFogHeightMap(renderer, camera, nullptr, m_terrainMapFarRange); // no terrain -> no terrain-following fog
-			renderer.setTerrainParams(0.0f, m_seaLevel);   // no mesh up: disables the ocean land cull
-			return;
 		}
 
 		updateTerrainTextures(renderer);

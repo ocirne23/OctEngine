@@ -7,7 +7,12 @@ export class PropertiesPanel
 {
 public:
 	void render(Entity* selected);
-	oc::vector<EntityChange> takeChanges() { return oc::move(m_changes); }
+	// Appends into the frame's merged drain (UI::takeEntityChanges); clear() keeps this panel's capacity.
+	void takeChanges(oc::vector<EntityChange>& out)
+	{
+		out.insert(out.end(), oc::make_move_iterator(m_changes.begin()), oc::make_move_iterator(m_changes.end()));
+		m_changes.clear();
+	}
 
 private:
 	oc::vector<EntityChange> m_changes; // enable-toggles: main-thread work, drained via UI::takeEntityChanges

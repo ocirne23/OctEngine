@@ -5,6 +5,7 @@ import Core.Allocator;
 import Core.imgui;
 import Core.Windows;
 import Core.MemoryTracker;
+import Core.Time;
 import :MemoryPanel;
 
 namespace
@@ -13,6 +14,8 @@ namespace
     constexpr float kBoxPadding = 2.0f;
     constexpr float kMinBoxSize = 3.0f;    // below this a box draws as a filled sliver, no recursion
     constexpr uint32 kMaxDrawDepth = 12;
+    constexpr double kRateHalfLifeSec = 0.5;   // churn-rate EMA half-life (per-frame deltas are bursty)
+    constexpr double kRateMaxGapSec = 1.0;     // sample gap past this (panel closed) = reseed, no fold
 
     void formatBytes(char* buf, size_t bufSize, double bytes)
     {
@@ -129,6 +132,21 @@ void MemoryPanel::prepare()
     ProfileScope scope("Memory panel prepare", EProfileCategory::UI);
     m_prepared = true;
     m_nodes.clear();
+
+    // Churn-rate sample window for this frame: the delta of each node's cumulative counters since
+    // the previous prepare, folded into the EMA. A long gap (panel just opened) only reseeds the
+    // baselines, else the whole gap's churn would read as one giant frame. Tracking disabled =
+    // the counters stand still, so folding would decay every rate to zero - freeze instead.
+    const double now = Globals::time.getElapsedSec();
+    const double gap = m_lastRateSampleSec >= 0.0 ? now - m_lastRateSampleSec : -1.0;
+    m_lastRateSampleSec = now;
+    m_rateFold = gap > 0.0 && gap < kRateMaxGapSec && Globals::memoryTracker.isEnabled();
+    if (m_rateFold)
+    {
+        m_rateDt = gap;
+        m_rateAlpha = (float)(1.0 - std::pow(0.5, gap / kRateHalfLifeSec));
+    }
+
     if (const MemScopeNode* root = Globals::memoryTracker.getRoot())
         buildSnapshot(root);
 }
@@ -168,7 +186,27 @@ uint32 MemoryPanel::buildSnapshot(const MemScopeNode* node)
         view.cumBytes = node->totalAllocBytes.load(oc::memory_order_relaxed);
         view.cumCount = node->totalAllocCount.load(oc::memory_order_relaxed);
         view.liveCount = node->selfCount.load(oc::memory_order_relaxed);
-        view.selfBytes = m_showCumulative ? (int64)view.cumBytes : oc::max<int64>(liveBytes, 0);
+
+        RateState& rate = m_rates[node];
+        if (rate.seeded && m_rateFold)
+        {
+            const float instBytes = (float)((double)(view.cumBytes - rate.lastBytes) / m_rateDt);
+            const float instAllocs = (float)((double)(view.cumCount - rate.lastCount) / m_rateDt);
+            rate.bytesPerSec += m_rateAlpha * (instBytes - rate.bytesPerSec);
+            rate.allocsPerSec += m_rateAlpha * (instAllocs - rate.allocsPerSec);
+        }
+        rate.lastBytes = view.cumBytes;
+        rate.lastCount = view.cumCount;
+        rate.seeded = true;
+        view.rateBytes = rate.bytesPerSec;
+        view.rateAllocs = rate.allocsPerSec;
+
+        switch (m_metric)
+        {
+        case EMetric::Live:       view.selfBytes = oc::max<int64>(liveBytes, 0); break;
+        case EMetric::Cumulative: view.selfBytes = (int64)view.cumBytes; break;
+        case EMetric::Churn:      view.selfBytes = (int64)oc::max(view.rateBytes, 0.0f); break;
+        }
     }
     int64 inclusive = m_nodes[idx].selfBytes;
     for (const MemScopeNode* child = node->firstChild.load(oc::memory_order_acquire); child != nullptr;
@@ -194,10 +232,23 @@ void MemoryPanel::drawHeader()
     if (ImGui::Checkbox("Track", &enabled))
         tracker.setEnabled(enabled);
     ImGui::SameLine();
-    if (ImGui::Checkbox("Cumulative", &m_showCumulative))
-        m_zoom = nullptr; // metric switch: restart from the top
+    int metric = (int)m_metric;
+    bool metricChanged = ImGui::RadioButton("Live", &metric, (int)EMetric::Live);
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Box sizes from CUMULATIVE allocated bytes (churn since startup)\ninstead of live bytes");
+        ImGui::SetTooltip("Box sizes from LIVE bytes (currently allocated)");
+    ImGui::SameLine();
+    metricChanged |= ImGui::RadioButton("Cumulative", &metric, (int)EMetric::Cumulative);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Box sizes from CUMULATIVE allocated bytes (total churn since startup)");
+    ImGui::SameLine();
+    metricChanged |= ImGui::RadioButton("Churn/s", &metric, (int)EMetric::Churn);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Box sizes from ALLOCATOR BANDWIDTH: bytes allocated per second at each path,\nsmoothed - shows what code churns memory every frame");
+    if (metricChanged)
+    {
+        m_metric = (EMetric)metric;
+        m_zoom = nullptr; // metric switch: restart from the top
+    }
 
     formatBytes(bytesBuf, sizeof(bytesBuf), (double)(Globals::allocator.getUsedSize() + getAlignedAllocatedSize()));
     formatBytes(bytesBuf2, sizeof(bytesBuf2), (double)tracker.getTrackedBytes());
@@ -225,7 +276,18 @@ void MemoryPanel::drawHeader()
             ImGui::SetTooltip("Allocations the tracker could not record (pointer map shard or node pool full) -\nthe view under-reports by whatever those hold");
     }
 
-    // Per-category totals (self bytes summed over every path, live metric)
+    // Total allocator bandwidth (root inclusive = every path) while the churn metric is up
+    const char* suffix = m_metric == EMetric::Churn ? "/s" : "";
+    if (m_metric == EMetric::Churn && !m_nodes.empty())
+    {
+        formatBytes(bytesBuf, sizeof(bytesBuf), (double)m_nodes[0].inclusiveBytes);
+        formatBytes(bytesBuf2, sizeof(bytesBuf2), (double)m_nodes[0].inclusiveBytes * m_rateDt);
+        ImGui::Text("bandwidth: %s/s  (~%s per frame)", bytesBuf, bytesBuf2);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Bytes allocated per second across every tracked path (EMA-smoothed);\nthe per-frame figure is that rate over the last sample interval");
+    }
+
+    // Per-category totals (self metric summed over every path)
     oc::array<int64, (uint32)EProfileCategory::Count> categoryBytes = {};
     for (const ViewNode& view : m_nodes)
         categoryBytes[view.category] += view.selfBytes;
@@ -239,7 +301,7 @@ void MemoryPanel::drawHeader()
         first = false;
         formatBytes(bytesBuf, sizeof(bytesBuf), (double)categoryBytes[category]);
         ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(profileCategoryColor((EProfileCategory)category)),
-            "%s %s", profileCategoryName((EProfileCategory)category), bytesBuf);
+            "%s %s%s", profileCategoryName((EProfileCategory)category), bytesBuf, suffix);
     }
     if (first)
         ImGui::TextDisabled("no attributed allocations yet");
@@ -306,12 +368,23 @@ void MemoryPanel::drawTreemap()
             pathOffset += (size_t)sprintf_s(pathBuf + pathOffset, sizeof(pathBuf) - pathOffset, i == pathLen - 1 ? "%s" : " > %s", path[i]->name);
         ImGui::TextDisabled("%s", pathBuf);
 
+        const char* metricLabel = m_metric == EMetric::Live ? "Live"
+            : m_metric == EMetric::Cumulative ? "Cumulative" : "Churn";
+        const char* suffix = m_metric == EMetric::Churn ? "/s" : "";
         formatBytes(bytesBuf, sizeof(bytesBuf), (double)view.inclusiveBytes);
-        ImGui::Text("%s: %s", m_showCumulative ? "Cumulative" : "Live", bytesBuf);
+        ImGui::Text("%s: %s%s", metricLabel, bytesBuf, suffix);
         formatBytes(bytesBuf, sizeof(bytesBuf), (double)view.selfBytes);
-        ImGui::Text("Self: %s in %lld allocs", bytesBuf, (long long)view.liveCount);
+        if (m_metric == EMetric::Churn)
+            ImGui::Text("Self: %s/s, %.0f allocs/s", bytesBuf, (double)view.rateAllocs);
+        else
+            ImGui::Text("Self: %s in %lld allocs", bytesBuf, (long long)view.liveCount);
         formatBytes(bytesBuf, sizeof(bytesBuf), (double)view.cumBytes);
         ImGui::Text("Churn: %s in %llu allocs total", bytesBuf, (unsigned long long)view.cumCount);
+        if (m_metric != EMetric::Churn)
+        {
+            formatBytes(bytesBuf, sizeof(bytesBuf), (double)view.rateBytes);
+            ImGui::Text("Rate: %s/s, %.0f allocs/s", bytesBuf, (double)view.rateAllocs);
+        }
         ImGui::Text("Category: %s", profileCategoryName((EProfileCategory)view.category));
         if (!view.children.empty())
             ImGui::TextDisabled("click to zoom");
@@ -350,7 +423,8 @@ void MemoryPanel::drawNode(uint32 nodeIdx, float x0, float y0, float x1, float y
     {
         char bytesBuf[64], labelBuf[160];
         formatBytes(bytesBuf, sizeof(bytesBuf), (double)view.inclusiveBytes);
-        sprintf_s(labelBuf, sizeof(labelBuf), "%s  %s", view.name, bytesBuf);
+        sprintf_s(labelBuf, sizeof(labelBuf), "%s  %s%s", view.name, bytesBuf,
+            m_metric == EMetric::Churn ? "/s" : "");
         drawList->PushClipRect(ImVec2(x0 + 2.0f, y0), ImVec2(x1 - 2.0f, y0 + kTitleHeight), true);
         drawList->AddText(ImVec2(x0 + 4.0f, y0 + 1.0f), boxTextColor(fillColor), labelBuf);
         drawList->PopClipRect();

@@ -41,6 +41,7 @@ public:
     // them first thing. Only panels that were OPEN last frame prepare, and every panel prepares
     // inline in its render if nothing ran ahead, so prepare() is an optimization, never required.
     void prepare();
+    void renderImGuiToSnapshot(); // end of the widget-pass job: ImGui::Render + double-buffered snapshot
     // The SDL backend half of the ImGui frame. MAIN THREAD ONLY, before the update() job is
     // kicked: ImGui_ImplSDL3_NewFrame talks to SDL (window size, cursor, mouse capture), and those
     // calls keep their affinity to the thread that owns the window and its message pump.
@@ -55,7 +56,6 @@ public:
     // Main thread, after the update() job joined: work panels collected but must not run on a
     // worker - tweak onChange callbacks and the Entity Editor's container imports.
     void flushMainThreadWork();
-    void render();
 	void setRenderStats(const Stats& stats) { m_renderStats = stats; }
 
     Entity* getSelectedEntity() const { return m_sceneView.getSelected(); }
@@ -78,24 +78,19 @@ public:
     bool hasViewportGainedFocused() const { return m_hasViewportGainedFocus; }
     const Rect& getViewportRect() const { return m_viewportRect; }
 
+    // Merged drain of every panel's queued changes into ONE vector: each source appends and keeps its
+    // own capacity (see the panels' takeChanges). The steady-state all-empty frame builds nothing —
+    // empty-range inserts touch no storage, and the returned vector never allocates.
     oc::vector<EntityChange> takeEntityChanges()
     {
-        oc::vector<EntityChange> changes = m_sceneView.takeChanges();
+        oc::vector<EntityChange> changes;
+        m_sceneView.takeChanges(changes);
         changes.insert(changes.end(), oc::make_move_iterator(m_viewportChanges.begin()),
                                       oc::make_move_iterator(m_viewportChanges.end()));
         m_viewportChanges.clear();
-
-        oc::vector<EntityChange> assetChanges = m_assetBrowser.takeChanges();
-        changes.insert(changes.end(), oc::make_move_iterator(assetChanges.begin()),
-                                      oc::make_move_iterator(assetChanges.end()));
-
-        oc::vector<EntityChange> entityEditorChanges = m_entityEditor.takeChanges();
-        changes.insert(changes.end(), oc::make_move_iterator(entityEditorChanges.begin()),
-                                      oc::make_move_iterator(entityEditorChanges.end()));
-
-        oc::vector<EntityChange> propertyChanges = m_propertiesPanel.takeChanges();
-        changes.insert(changes.end(), oc::make_move_iterator(propertyChanges.begin()),
-                                      oc::make_move_iterator(propertyChanges.end()));
+        m_assetBrowser.takeChanges(changes);
+        m_entityEditor.takeChanges(changes);
+        m_propertiesPanel.takeChanges(changes);
         return changes;
     }
 

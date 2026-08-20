@@ -19,7 +19,12 @@ public:
 	const oc::string& getSelectedPath() const { return m_selectedPath; }
 	bool hasSelection() const { return !m_selectedPath.empty(); }
 
-	oc::vector<EntityChange> takeChanges() { return oc::move(m_changes); }
+	// Appends into the frame's merged drain (UI::takeEntityChanges); clear() keeps this panel's capacity.
+	void takeChanges(oc::vector<EntityChange>& out)
+	{
+		out.insert(out.end(), oc::make_move_iterator(m_changes.begin()), oc::make_move_iterator(m_changes.end()));
+		m_changes.clear();
+	}
 
 	// Script files: the UI drains this and routes by extension -- .dsl to the Script Editor, .scr to the node
 	// panel. Covers open AND create ("New Script" writes a minimal .dsl and raises this same request).

@@ -161,6 +161,7 @@ void BakedWorldMap::flipIfPending()
     if (!m_flipPending)
         return;
     m_active ^= 1u;
+    ++m_generation;
     m_center = m_pendingCenter;
     m_worldSizes = m_pendingSizes;
     m_userParam = m_pendingUserParam;

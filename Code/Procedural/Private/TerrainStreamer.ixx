@@ -96,6 +96,10 @@ export namespace Procedural
 
 		void pumpJob();                 // self-continuing Low-priority generation job
 		void kickPump(size_t numNew);  // top pumps up to min(cap, new work) after appending requests
+		// Disabled-path drain (no profile scope): runs the enable->disable transition, then keeps
+		// dropping what is still in flight (late pump results, the terrain-data bake) until nothing is
+		// left and m_disabledIdle parks update() entirely.
+		void updateDisabled(Renderer& renderer, const Camera& camera);
 		void rebuildMaps();                             // (re)builds the active generator from the tweak-backed config
 		void clearResidents();
 		// Pushes the splat shaping params + the live climate boxes every frame, and registers the texture
@@ -159,6 +163,7 @@ export namespace Procedural
 		double m_v3LastStatusLog = 0.0; // rate-limits the download/load progress log
 
 		bool m_configDirty = false; // set by Tweak onChange; consumed at the top of update()
+		bool m_disabledIdle = false; // disabled AND fully drained: update() is a branch and a return
 
 		// --- Shared terrain-data map (fog terrain-following + regional thickness, ocean shore fallback,
 		// terrain coloring; height / water level / fog|falloff|temp|hum / altitude per texel) ---

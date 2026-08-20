@@ -2751,21 +2751,28 @@ void Renderer::recordCommandBuffers()
     ProfileScope descriptorScope("Bindless descriptor writes", EProfileCategory::Renderer);
     applyPendingTextureDescriptorWrites(frameIdx);
 
+    const bool recordScene = !frameData.updated && m_meshInstanceCounter > 0;
+
     // Baked terrain-data cascades: point this slot's sets at the active ping-pong image
     // (UPDATE_AFTER_BIND, like the AO/TLAS bindings — a re-bake swaps images without re-recording
     // anything). The ocean passes read them for water depth/level (shoaling, surf, swash, land cull).
-    for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)
+    // Rewritten only when this slot's sets re-record (recreated sets always come with a
+    // setHaveToRecordCommandBuffers) or the ping-pong flipped since this slot last wrote (generation).
+    if (recordScene || m_fogTerrainDescGen[frameIdx] != m_fogTerrainMap.getGeneration())
     {
-        m_staticMeshGraphicsPipeline.updateTerrainHeightDescriptor(frameData.staticMeshPipelineDescriptorSet[eye].getDescriptorSet(),
-            m_fogTerrainMap.getView(), m_fogTerrainMap.getSampler());
-        m_gbufferPipeline.updateTerrainHeightDescriptor(frameData.gbufferDescriptorSet[eye].getDescriptorSet(),
-            m_fogTerrainMap.getView(), m_fogTerrainMap.getSampler());
+        m_fogTerrainDescGen[frameIdx] = m_fogTerrainMap.getGeneration();
+        for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)
+        {
+            m_staticMeshGraphicsPipeline.updateTerrainHeightDescriptor(frameData.staticMeshPipelineDescriptorSet[eye].getDescriptorSet(),
+                m_fogTerrainMap.getView(), m_fogTerrainMap.getSampler());
+            m_gbufferPipeline.updateTerrainHeightDescriptor(frameData.gbufferDescriptorSet[eye].getDescriptorSet(),
+                m_fogTerrainMap.getView(), m_fogTerrainMap.getSampler());
+        }
+        m_volumetricFogPipeline.updateTerrainDescriptor(frameIdx, m_fogTerrainMap.getView(), m_fogTerrainMap.getSampler());
     }
-    m_volumetricFogPipeline.updateTerrainDescriptor(frameIdx, m_fogTerrainMap.getView(), m_fogTerrainMap.getSampler());
 
     descriptorScope.stop();
 
-    const bool recordScene = !frameData.updated && m_meshInstanceCounter > 0;
     if (recordScene)
     {
         // Only on invalidation frames (setHaveToRecordCommandBuffers) - the secondaries are cached.
@@ -2785,6 +2792,17 @@ void Renderer::recordCommandBuffers()
         // Composite secondary draws into the desktop swapchain (the left eye / TAA-resolved colour); in VR
         // it's the desktop-window mirror, so it's recorded in both modes.
         recordComposite(frameIdx);
+        // Per-eye forward set: this slot's AO view + TLAS (UPDATE_AFTER_BIND). Both are stable per slot
+        // between re-records: every RTAO recreateImages site (and the blur-radius tweak, which switches
+        // the returned view) forces a re-record, and a TLAS handle change (first build / capacity growth)
+        // is reported by recordGlobalIllum below, whose changed-branch rewrites the TLAS binding.
+        for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)
+        {
+            m_staticMeshGraphicsPipeline.updateAODescriptor(frameData.staticMeshPipelineDescriptorSet[eye].getDescriptorSet(),
+                m_rtaoPipeline.getAOView(frameIdx, eye), m_rtaoPipeline.getAOSampler());
+            if (const vk::AccelerationStructureKHR tlas = m_accelStructure.getTlas(frameIdx))
+                m_staticMeshGraphicsPipeline.updateTlasDescriptor(frameData.staticMeshPipelineDescriptorSet[eye].getDescriptorSet(), tlas);
+        }
         // The remaining per-eye screen-space passes (gbuffer, AO, forward, fog apply, TAA) are recorded
         // inline in the primary below in VR; on desktop they stay cached secondaries (one eye).
         if (m_sceneViewCount == 1)
@@ -2809,6 +2827,10 @@ void Renderer::recordCommandBuffers()
         ProfileScope giScope("Record GI", EProfileCategory::Renderer);
         if (m_meshInstanceCounter > 0 && recordGlobalIllum(frameIdx))
         {
+            // TLAS handle changed: the forward sets written at the last scene record hold the old
+            // (now destroyed) handle — rewrite them alongside the re-record of the passes that bake it.
+            for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)
+                m_staticMeshGraphicsPipeline.updateTlasDescriptor(frameData.staticMeshPipelineDescriptorSet[eye].getDescriptorSet(), m_accelStructure.getTlas(frameIdx));
             if (m_sceneViewCount == 1)
                 recordAO(frameIdx);
             recordVolumetricFog(frameIdx);
@@ -2952,7 +2974,6 @@ void Renderer::recordCommandBuffers()
         const vk::Rect2D gbufferArea{ .offset = vk::Offset2D{ 0, 0 }, .extent = vk::Extent2D{ gbuffer.getWidth(), gbuffer.getHeight() } };
         oc::array<vk::ClearValue, 2> sceneClears{ vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } }, vk::ClearDepthStencilValue{ 0.0f, 0 } };
         const vk::Rect2D sceneArea{ .offset = vk::Offset2D{ m_viewportRect.min.x, m_viewportRect.min.y }, .extent = vk::Extent2D{ sceneColor.getWidth() - m_viewportRect.min.x, sceneColor.getHeight() - m_viewportRect.min.y } };
-        const vk::AccelerationStructureKHR tlas = m_accelStructure.getTlas(frameIdx);
 
         if (m_sceneViewCount > 1)
         {
@@ -2988,11 +3009,8 @@ void Renderer::recordCommandBuffers()
                 if (m_rtaoParams.enabled)
                     recordAOInto(commandBuffer, frameIdx, eye); // compute AO for this eye
 
-                // This eye's forward descriptor set takes this eye's AO + the (per-frame) TLAS.
-                m_staticMeshGraphicsPipeline.updateAODescriptor(frameData.staticMeshPipelineDescriptorSet[eye].getDescriptorSet(), m_rtaoPipeline.getAOView(frameIdx, eye), m_rtaoPipeline.getAOSampler());
-                if (tlas)
-                    m_staticMeshGraphicsPipeline.updateTlasDescriptor(frameData.staticMeshPipelineDescriptorSet[eye].getDescriptorSet(), tlas);
-
+                // This eye's forward set (AO view + TLAS) is written at scene-record time and on TLAS
+                // handle changes — see recordCommandBuffers' recordScene / GI-changed blocks.
                 { // Forward (+ fog apply) into this eye's SceneColor layer; depth = prepass depth read-only when reusing
                     if (m_depthPrepassReuse)
                         recordReuseDepthBarrier(vkCommandBuffer, gbuffer.getDepthImage(), eye, true);
@@ -3108,9 +3126,8 @@ void Renderer::recordCommandBuffers()
                 vkCommandBuffer.executeCommands(1, &vkVolumetricFogCommandBuffer);
                 m_gpuProfiler.endScope(vkCommandBuffer);
             }
-            m_staticMeshGraphicsPipeline.updateAODescriptor(frameData.staticMeshPipelineDescriptorSet[0].getDescriptorSet(), m_rtaoPipeline.getAOView(frameIdx, 0), m_rtaoPipeline.getAOSampler());
-            if (tlas)
-                m_staticMeshGraphicsPipeline.updateTlasDescriptor(frameData.staticMeshPipelineDescriptorSet[0].getDescriptorSet(), tlas);
+            // The forward set's AO view + TLAS are written at scene-record time and on TLAS handle
+            // changes — see the recordScene / GI-changed blocks above.
 
             // Depth-prepass reuse: the scene pass binds the G-buffer depth READ-ONLY; the explicit
             // barriers do the sampled<->attachment layout round-trip. Off = own cleared depth, rebuilt.

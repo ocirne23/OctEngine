@@ -500,23 +500,34 @@ namespace Procedural
 
 	void ScatterSystem::update(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps)
 	{
+		if (!m_enabled || !maps || m_ruleOrder.empty())
+		{
+			// Inactive (disabled / terrain off / no rules): no profile scope. Clear once, starve the
+			// pumps (the dtor pattern) and drop late results until they exit — then every frame is a
+			// branch and a return. Reading the pump count BEFORE the drain makes "no pumps + drained"
+			// final: a pump only pushes results while it holds its slot.
+			if (m_inactiveIdle)
+				return;
+			if (!m_residentCells.empty() || !m_pending.empty())
+				clearResidents();
+			const bool pumpsIdle = m_numPumps.load(oc::memory_order_acquire) == 0;
+			{
+				std::lock_guard<std::mutex> lk(m_mutex);
+				++m_generation;
+				m_requests.clear();
+				m_results.clear();
+			}
+			m_inactiveIdle = pumpsIdle;
+			return;
+		}
+		m_inactiveIdle = false;
+
 		ProfileScope profileScope("Scatter", EProfileCategory::Procedural);
 		// The sampler's identity doubles as the terrain's config generation: a rebuilt field (or terrain
 		// toggling off -> nullptr) invalidates every placement.
 		const bool mapsChanged = maps.get() != m_lastMaps;
 		m_lastMaps = maps.get();
 
-		if (!m_enabled || !maps || m_ruleOrder.empty())
-		{
-			if (!m_residentCells.empty() || !m_pending.empty())
-			{
-				clearResidents();
-				std::lock_guard<std::mutex> lk(m_mutex);
-				++m_generation;
-				m_requests.clear();
-			}
-			return;
-		}
 		if (m_configDirty || mapsChanged)
 		{
 			m_configDirty = false;

@@ -57,7 +57,15 @@ public:
 
     // Applies one EntityChange event
     void handleEntityChange(EntityChange& change, const Camera& camera, const Rect& viewportRect);
-
+    // Takes the drained queue by rvalue (callers pass takeEntityChanges() temporaries).
+    void handleEntityChanges(oc::vector<EntityChange>&& changes, const Camera& camera, const Rect& viewportRect)
+    {
+        if (changes.empty())
+            return;
+        ProfileScope profileScope("World EntityChanges", EProfileCategory::Entity);
+		for (EntityChange& change : changes)
+			handleEntityChange(change, camera, viewportRect);
+    }
     // Editor prefab editing
     void setOnPrefabOpened(oc::function<void(const EntityPtr&, const oc::string&)> callback) { m_onPrefabOpened = oc::move(callback); }
     void setOnEntityRespawned(oc::function<void(const EntityPtr&, const EntityPtr&)> callback) { m_onEntityRespawned = oc::move(callback); }

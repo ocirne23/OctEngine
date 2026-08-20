@@ -125,13 +125,6 @@ void Window::waitPumpDone()
     }
 }
 
-void Window::takeEvents(oc::vector<SDL_Event>& out)
-{
-    out.clear();
-    const std::lock_guard<std::mutex> lock(m_eventMutex);
-    out.swap(m_events);
-}
-
 void Window::runOnWindowThread(oc::function<void()> op, bool wait)
 {
     uint32 doneTarget;

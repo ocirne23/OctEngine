@@ -591,6 +591,8 @@ private:
     // map drives the ocean's shoaling/surf/waterline; the fog terrain map (2 cascades) drives the fog's
     // terrain-following height base AND is the ocean's coarse fallback outside the shore map's range.
     BakedWorldMap m_fogTerrainMap;
+    // Last fog-terrain-map flip generation written into each frame slot's descriptor sets (0 = never).
+    oc::array<uint32, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_fogTerrainDescGen{};
     TaaPipeline m_taaPipeline;
     ShadowCullComputePipeline m_shadowCullComputePipeline;
     ShadowMapGraphicsPipeline m_shadowMapGraphicsPipeline;

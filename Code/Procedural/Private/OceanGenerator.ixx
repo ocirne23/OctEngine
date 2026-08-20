@@ -83,6 +83,10 @@ export namespace Procedural
 		// Turns the SIMULATION wind toward the baked shore flow around the camera — how the waves actually
 		// travel inland at the coast. See the .cpp.
 		float steeredWindAngle(const Camera& camera);
+		// Fills OceanParams from the tweak-backed members and pushes it (Renderer::setOceanParams);
+		// `enabled` rides along and gates the GPU FFT + the ocean draw, so the disabled transition
+		// pushes exactly once through the same path.
+		void pushOceanParams(Renderer& renderer, const Camera& camera);
 		void rebuildGrid();
 		glm::vec2 sampleShoreData(float x, float z) const;          // (water depth, water level) from the terrain-data CPU copy
 		float swashReach() const;                                   // run-up band height; mirrors the UBO's estimate
@@ -204,6 +208,7 @@ export namespace Procedural
 		int   m_waveTroughCooldown = 0; // sparse re-scan counter (the patch minimum is near-stationary)
 
 		bool m_gridDirty = true;
+		bool m_disabledIdle = false; // disabled AND cleared: update() is a branch and a return
 
 		// One clipmap sector per draw (see the class comment). Registered in the SpatialIndex like
 		// terrain chunks (SpatialLayer_Terrain, no spawn guard); unlike chunks they MOVE — updateEntry

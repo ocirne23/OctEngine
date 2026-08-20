@@ -20,13 +20,6 @@ bool Input::isKeyDownByName(const char* keyName) const
     return m_pKeyStates != nullptr && m_pKeyStates[scancodeFromName(keyName)];
 }
 
-
-
-namespace
-{
-oc::vector<SDL_Event> g_frameEvents; // this frame's pumped events (Input is a singleton)
-} // namespace
-
 void Input::update(double deltaSec)
 {
     ProfileScope profileScope("Input", EProfileCategory::Input);
@@ -36,9 +29,14 @@ void Input::update(double deltaSec)
     // top); this waits out the rare case where it is still mid-pump, then drains the buffer.
     // Everything below (ImGui event processing, the listeners) runs on MAIN, exactly as before -
     // the window thread never touches the ImGui context or engine state.
-    m_window->waitPumpDone();
-    m_window->takeEvents(g_frameEvents);
-    for (SDL_Event& evt : g_frameEvents)
+    {
+        ProfileScope waitScope("Input wait pump", EProfileCategory::Wait);
+        m_window->waitPumpDone();
+    }
+    // Dispatch straight out of the window's buffer, held under its lock: the window thread only
+    // appends mid-pump, and the next pump is a whole frame away, so the hold is uncontended.
+    oc::vector<SDL_Event>& events = m_window->lockEvents();
+    for (SDL_Event& evt : events)
     {
         ImGui_ImplSDL3_ProcessEvent(&evt);
         if (evt.type == SDL_EVENT_KEY_DOWN) // the Script Editor's raw-key path ignores everything else
@@ -118,4 +116,6 @@ void Input::update(double deltaSec)
             break;
         }
     }
+    events.clear();
+    m_window->unlockEvents();
 }

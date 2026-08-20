@@ -59,6 +59,7 @@ export namespace Procedural
 		float m_spacing = 1.0f;   // m between height samples (render LOD0 is chunkSize/lod0Res = 1 m)
 		float m_friction = 0.8f;
 		bool  m_configDirty = false; // geometry-affecting tweak changed: rebuild everything
+		bool  m_inactiveIdle = false; // inactive AND cleared: update() only polls the in-flight build
 
 		// ONE build in flight, submitted to the job system; the counter is the "future", the job
 		// writes m_buildResult before signaling (single producer, consumed only after isDone).

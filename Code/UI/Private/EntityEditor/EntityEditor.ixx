@@ -33,7 +33,12 @@ public:
 	void requestOpen(const oc::string& path);
 	void requestNew(const oc::string& name);
 
-	oc::vector<EntityChange> takeChanges() { return oc::move(m_changes); }
+	// Appends into the frame's merged drain (UI::takeEntityChanges); clear() keeps this panel's capacity.
+	void takeChanges(oc::vector<EntityChange>& out)
+	{
+		out.insert(out.end(), oc::make_move_iterator(m_changes.begin()), oc::make_move_iterator(m_changes.end()));
+		m_changes.clear();
+	}
 
 	// "Select Prefab" toolbar button: the UI drains this and selects the .pre in the asset browser.
 	oc::string takeRevealRequest() { return oc::move(m_revealRequest); }

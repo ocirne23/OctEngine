@@ -39,7 +39,10 @@ public:
     // -- engine main thread, once per frame --
     void requestPump();                          // kick a pump; the fence wait runs while it happens
     void waitPumpDone();                         // events for this frame are in the buffer after this
-    void takeEvents(oc::vector<SDL_Event>& out); // swap-drain of the pumped events
+    // Direct access to the pumped event buffer, bracketed by the lock (the window thread appends
+    // during a pump). Clear it before unlocking once processed - lockEvents() does not drain.
+    oc::vector<SDL_Event>& lockEvents() { m_eventMutex.lock(); return m_events; }
+    void unlockEvents() { m_eventMutex.unlock(); }
 
     // Marshal a window-affine SDL call onto the window thread. Runs at the next pump (async), or
     // immediately woken + waited when wait = true (init-time only - a wait can stall behind a
