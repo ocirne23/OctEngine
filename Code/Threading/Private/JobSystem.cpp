@@ -74,16 +74,19 @@ void JobSystem::initialize(const JobSystemDesc& desc)
     // is worth having even at half efficiency. The threshold is PHYSICAL cores: at or below
     // c_logicalWorkerCoreMax take every hardware thread, above it take physical only.
     //
-    // The -1 is the MAIN THREAD, which is a scheduler context of its own (it registers as a helper
-    // and runs jobs inside wait()), so workers + main exactly covers the count. A 6c/12t part gets
-    // 12 - 1 = 11 workers, a 12c/24t part 24 - 1 = 23, a 24c/48t part 24 - 1 = 23.
+    // The -2 is the MAIN THREAD and the WINDOW THREAD, both scheduler contexts of their own (main
+    // helps inside wait(), the window thread runs High jobs between event pumps - see Core.Window),
+    // so workers + main + window exactly covers the count. A 6c/12t part gets 12 - 2 = 10 workers,
+    // a 12c/24t part 24 - 2 = 22, a 24c/48t part 24 - 2 = 22.
     const uint32 logical = oc::max(1u, std::thread::hardware_concurrency());
     const uint32 queried = physicalCoreCount();
     // 0 = the topology query failed; SMT is 2-way everywhere we run, so halving estimates physical.
     const uint32 physical = queried ? queried : oc::max(1u, logical / 2);
     const uint32 cores = physical <= c_logicalWorkerCoreMax ? oc::max(logical, physical) : physical;
-    m_numWorkers = desc.numWorkers ? desc.numWorkers : oc::max(1u, cores - 1);
-    m_numContexts = m_numWorkers + 1;
+    m_numWorkers = desc.numWorkers ? desc.numWorkers : oc::max(1u, cores - 2);
+    // +2: the main thread (helper context 0) and one EXTERNAL helper slot the window thread claims
+    // via registerExternalHelper() - it runs High jobs between event pumps.
+    m_numContexts = m_numWorkers + 2;
     m_numFibers = desc.numFibers;
     m_jobPoolCapacity = std::bit_ceil(desc.jobPoolCapacity);
     m_targetChunkNs = oc::max(1000u, desc.parallelForTargetChunkNs);
@@ -111,7 +114,7 @@ void JobSystem::initialize(const JobSystemDesc& desc)
     {
         m_contexts[i].index = i;
         m_contexts[i].stealSeed = (0x9e3779b9u * (i + 1)) | 1u;
-        m_contexts[i].isWorker = i != 0;
+        m_contexts[i].isWorker = i != 0 && i <= m_numWorkers; // 0 = main, last = external helper: both help, never own continuations
         m_contexts[i].deque.initialize(desc.dequeCapacity);
     }
     t_worker = &m_contexts[0]; // the calling (main) thread becomes the helper context
@@ -550,6 +553,26 @@ void JobSystem::wait(JobCounter& counter)
     uint32 count;
     while ((count = counter.m_count.load(oc::memory_order_acquire)) != 0)
         counter.m_count.wait(count, oc::memory_order_acquire);
+}
+
+void JobSystem::registerExternalHelper()
+{
+    assert(m_numContexts != 0 && !t_worker && "registerExternalHelper: before initialize(), or thread already registered");
+    t_worker = &m_contexts[m_numWorkers + 1];
+}
+
+bool JobSystem::tryRunOneHighJob()
+{
+    WorkerContext* ctx = t_worker;
+    if (!ctx || ctx->currentFiber)
+        return false;
+    Job* job;
+    if (!m_readyQueues[uint32(EJobPriority::High)].pop(job))
+        return false;
+    ++t_helpDepth;
+    execute(*job);
+    --t_helpDepth;
+    return true;
 }
 
 bool JobSystem::tryRunOneJob()

@@ -143,6 +143,15 @@ public:
     // Registered non-worker threads (main) can pump one ready job manually, e.g. to burn a stall.
     bool tryRunOneJob();
 
+    // The window thread's integration (see Core.Window): claims the reserved external helper
+    // context so PerWorker::local()/profiling work there. Call once, on that thread.
+    void registerExternalHelper();
+    // High-priority ring ONLY - the window thread must never pick up a job that can run long
+    // (Normal/Low carry the multi-second ones: V3 tiles, nav builds), or the next frame's event
+    // pump stalls behind it. High jobs are short by convention (physics tasks, spatial chunks,
+    // panel prepares).
+    bool tryRunOneHighJob();
+
     // Splits [begin, end) into grainSize chunks pulled from a shared atomic cursor by
     // getNumWorkers() helper jobs plus the calling thread. func(chunkBegin, chunkEnd) must be
     // safe to run concurrently with itself. Returns when the whole range is done. `profile` is

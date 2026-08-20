@@ -1,6 +1,7 @@
 export module Input:Input;
 
 import Core;
+import Core.fwd; // Window (the event-source pointer below)
 
 export struct SDL_MouseWheelEvent;
 export struct SDL_MouseMotionEvent;
@@ -101,7 +102,8 @@ public:
 
     bool initialize();
 
-    void update_MT(double deltaSec);
+    // The window thread owns the OS pump (see Core.Window); update() drains its event buffer.
+    void setEventSource(Window* window) { m_window = window; }
     void update(double deltaSec);
 
     void setMouseInWindow(bool inWindow)       { m_mouseInWindow = inWindow; }
@@ -130,6 +132,7 @@ private:
     void removeListener(const SystemEventListener* listener) { oc::erase_if(m_systemEventListeners, [listener](const auto& l) { return l.get() == listener; }); }
 
     const bool* m_pKeyStates = nullptr;
+    Window* m_window = nullptr; // event source: the window thread's pumped buffer (see Core.Window)
     oc::vector<oc::unique_ptr<MouseListener>>    m_mouseListeners;
     oc::vector<oc::unique_ptr<KeyboardListener>> m_keyboardListeners;
     oc::vector<oc::unique_ptr<SystemEventListener>> m_systemEventListeners;

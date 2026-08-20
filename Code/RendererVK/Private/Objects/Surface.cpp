@@ -16,15 +16,21 @@ Surface::~Surface()
     }
 }
 
-bool Surface::initialize(const Window& window)
+bool Surface::initialize(Window& window)
 {
     if (m_surface)
     {
         Globals::instance.getInstance().destroySurfaceKHR(m_surface);
     }
+    // Window-affine SDL call: runs ON the window thread (init-time blocking marshal - see Core.Window).
     VkSurfaceKHR vkSurface = nullptr;
-    if (SDL_Vulkan_CreateSurface((SDL_Window*)window.getWindowHandle(), Globals::instance.getInstance(), nullptr, &vkSurface) != 1
-        || vkSurface == nullptr)
+    bool created = false;
+    window.runOnWindowThread([&]
+    {
+        created = SDL_Vulkan_CreateSurface((SDL_Window*)window.getWindowHandle(),
+            Globals::instance.getInstance(), nullptr, &vkSurface) == 1;
+    }, /*wait*/ true);
+    if (!created || vkSurface == nullptr)
     {
         printf("Failed to create Vulkan surface: %s\n", SDL_GetError());
         assert(false);

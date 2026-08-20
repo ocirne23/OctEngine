@@ -541,8 +541,12 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
     waitFrameSlot();
 
     // This slot's fence is waited, so its previous submission's GPU timestamps have landed.
-    m_gpuProfiler.collect(m_swapChain.getCurrentFrameIndex());
+    {
+        ProfileScope scope("GPU timestamps collect", EProfileCategory::Renderer);
+        m_gpuProfiler.collect(m_swapChain.getCurrentFrameIndex());
+    }
 
+    ProfileScope xrScope("XR poll + begin", EProfileCategory::Renderer);
     Globals::openXR.pollEvents();
 
     Camera camera = cameraIn;
@@ -556,6 +560,9 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
         camera.position = headPos;
     }
 
+    xrScope.stop();
+
+    ProfileScope capacityScope("Capacity checks", EProfileCategory::Renderer);
     // Mesh instances overflowed mid-frame last frame
     if (m_pendingMaxInstanceData > m_maxInstanceData)
         growMeshInstanceCapacity(m_pendingMaxInstanceData);
@@ -579,7 +586,9 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
 
     checkLightGridCapacity();
     checkForceGridCapacity();
+    capacityScope.stop();
 
+    ProfileScope resetScope("Counters + projection", EProfileCategory::Renderer); // resets, proj/jitter math, LOD-stat snapshot
     m_meshInstanceCounter = 0;
     m_instanceOverflowStart = UINT32_MAX;
     memset(m_numInstancesPerMesh.data(), 0, m_numInstancesPerMesh.size() * sizeof(m_numInstancesPerMesh[0]));
@@ -614,7 +623,11 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
         m_lodInstanceCounts[i] = frameData.mappedLodStats[i];
     memset(frameData.mappedLodStats.data(), 0, frameData.mappedLodStats.size_bytes());
     frameData.lodStatsBuffer.flushMappedMemory(vk::WholeSize);
+    resetScope.stop();
 
+    // Everything below assembles the frame UBO (matrices, sky/fog/ocean/force/terrain params) and
+    // hands it to staging - pure CPU math, live-tweak driven.
+    ProfileScope uboScope("UBO build", EProfileCategory::Renderer);
     static RendererVKLayout::Ubo ubo;
 
     ubo.lodParams0 = glm::vec4(
@@ -3503,7 +3516,8 @@ void Renderer::initImgui(Window& window)
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.ConfigWindowsMoveFromTitleBarOnly = true;
 
-    ImGui_ImplSDL3_InitForVulkan((SDL_Window*)window.getWindowHandle());
+    // Creates the SDL system cursors among other window-affine work: on the window thread.
+    window.runOnWindowThread([&] { ImGui_ImplSDL3_InitForVulkan((SDL_Window*)window.getWindowHandle()); }, /*wait*/ true);
     ImGui_ImplVulkan_InitInfo init_info = {};
     init_info.ApiVersion = Globals::instance.getApiVersion();
     init_info.Instance = Globals::instance.getInstance();

@@ -2,6 +2,7 @@ module Input;
 
 import Core;
 import Core.SDL;
+import Core.Window;
 import Core.imgui;
 
 import UI;
@@ -19,21 +20,29 @@ bool Input::isKeyDownByName(const char* keyName) const
     return m_pKeyStates != nullptr && m_pKeyStates[scancodeFromName(keyName)];
 }
 
-void Input::update_MT(double deltaSec)
+
+
+namespace
 {
-    SDL_PumpEvents();
-}
+oc::vector<SDL_Event> g_frameEvents; // this frame's pumped events (Input is a singleton)
+} // namespace
 
 void Input::update(double deltaSec)
 {
     ProfileScope profileScope("Input", EProfileCategory::Input);
     ImGuiIO& imguiIO = ImGui::GetIO();
 
-    SDL_Event evt;
-    while (SDL_PollEvent(&evt))
+    // The window thread pumped while main blocked on the frame fence (requestPump at the loop
+    // top); this waits out the rare case where it is still mid-pump, then drains the buffer.
+    // Everything below (ImGui event processing, the listeners) runs on MAIN, exactly as before -
+    // the window thread never touches the ImGui context or engine state.
+    m_window->waitPumpDone();
+    m_window->takeEvents(g_frameEvents);
+    for (SDL_Event& evt : g_frameEvents)
     {
         ImGui_ImplSDL3_ProcessEvent(&evt);
-        Globals::ui.handleKeyEvent(evt);
+        if (evt.type == SDL_EVENT_KEY_DOWN) // the Script Editor's raw-key path ignores everything else
+            Globals::ui.handleKeyEvent(evt);
 
         // The DSL Script Editor handles its own raw key events (see ScriptEditor's class comment) rather than
         // through a normal ImGui widget, so it never sets WantCaptureKeyboard/WantTextInput on its own --
@@ -74,16 +83,25 @@ void Input::update(double deltaSec)
                 if (listener->onMouseWheelMoved) listener->onMouseWheelMoved(evt.wheel);
             break;
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        {
+            ProfileScope scope("Mouse button dispatch", EProfileCategory::Input);
             for (auto& listener : m_mouseListeners)
                 if (listener->onMousePressed) listener->onMousePressed(evt.button);
             break;
+        }
         case SDL_EVENT_MOUSE_BUTTON_UP:
+        {
+            ProfileScope scope("Mouse button dispatch", EProfileCategory::Input);
             for (auto& listener : m_mouseListeners)
                 if (listener->onMouseReleased) listener->onMouseReleased(evt.button);
             break;
+        }
         case SDL_EVENT_KEY_DOWN:
             if (evt.key.repeat == 0)
             {
+                // The heavy one-shot handlers live here: F5 shader reload, F6 script recompile,
+                // the spawn/possess keys - a fat "Input" frame is almost always one of these.
+                ProfileScope scope("Key dispatch", EProfileCategory::Input);
                 for (auto& listener : m_keyboardListeners)
                     if (listener->onKeyPressed) listener->onKeyPressed(evt.key);
             }
@@ -91,6 +109,7 @@ void Input::update(double deltaSec)
         case SDL_EVENT_KEY_UP:
             if (evt.key.repeat == 0)
             {
+                ProfileScope scope("Key dispatch", EProfileCategory::Input);
                 for (auto& listener : m_keyboardListeners)
                     if (listener->onKeyReleased) listener->onKeyReleased(evt.key);
             }

@@ -10,7 +10,7 @@ public:
     ~Surface();
     Surface(const Surface&) = delete;
 
-    bool initialize(const Window& window);
+    bool initialize(Window& window); // non-const: surface creation is marshaled onto the window thread
 
     bool deviceSupportsSurface() const;
     vk::SurfaceKHR getSurface() const { return m_surface; }

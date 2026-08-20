@@ -90,10 +90,18 @@ int main(int argc, char* argv[])
 
     if (!headlessServer)
     {
-        window.initialize("Vulkan", glm::ivec2(5, 35), glm::ivec2(1920, 1080));
+        window.initialize("Vulkan", glm::ivec2(5, 35), glm::ivec2(1920, 1080)); // spawns the WINDOW THREAD (owns SDL + the pump)
+        Globals::input.setEventSource(&window);
         Globals::input.initialize();
     }
     Globals::jobSystem.initialize();
+    if (!headlessServer)
+    {
+        // Between event pumps the window thread helps the job system - HIGH priority only, so it
+        // can never sit in a multi-second Low job (V3 tile, nav build) when the next pump is due.
+        window.runOnWindowThread([] { Globals::jobSystem.registerExternalHelper(); }, /*wait*/ true);
+        window.setIdleWork([] { return Globals::jobSystem.tryRunOneHighJob(); });
+    }
     if (!headlessServer)
     {
         cameraController.initialize(glm::vec3(-1.5f, 14.0f, -7.1f), glm::vec3(0.0f, 4.0f, 0.0f));
@@ -281,7 +289,14 @@ int main(int argc, char* argv[])
         // "main loop" scope measures only real work) and input -> sim -> present stays tight instead
         // of the sampled input going stale during the wait.
         if (!headlessServer)
+        {
             Globals::rendererVK.waitFrameSlot();
+            // Pump AFTER the fence, not before it: events pumped at wait-start would be a whole
+            // vsync stale by the time Input samples them. The window thread pumps while main runs
+            // the UI join/render and the time/tweak updates below - by Input::update the buffer is
+            // both fresh AND ready.
+            window.requestPump();
+        }
 
         ProfileScope mainLoopScope("main loop", EProfileCategory::App);
 
