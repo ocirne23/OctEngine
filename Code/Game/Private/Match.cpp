@@ -1876,6 +1876,7 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     // validated/applied in the authority tick. Whatever RMB the mode does NOT consume becomes a
     // player MOVE ORDER below. The HOTBAR eats clicks over it: LMB on a slot activates it (same
     // path as its key), and neither button reaches the world through the hotbar.
+    ProfileScope modeScope("Game mode input", EProfileCategory::Game);
     updateModeSwitching();
     m_rmbConsumed = false;
     bool lmbEdge = m_placeClicked;
@@ -1959,14 +1960,19 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     const float shieldR = m_player.shieldRadius();
     if (shieldR > 0.05f)
         drawCircle(m_player.interpolatedPos(), shieldR, packColor(glm::vec3(0.3f, 0.8f, 1.0f)), 32);
+    modeScope.stop();
 
     m_structures.drawDebug();
     if (Globals::navSystem.debugMode() > 0)
+    {
+        ProfileScope navDrawScope("Nav debug draw", EProfileCategory::Game);
         Globals::navSystem.drawDebug(m_player.interpolatedPos(),
             [](const glm::vec3& a, const glm::vec3& b, uint32 color) { Globals::rendererVK.addDebugLine(a, b, color); });
+    }
 
     // Barracks unit routes (own team): line chain from the barracks through its waypoints, each
     // with its destination circle — bright for the selected barracks, dim otherwise.
+    ProfileScope routesScope("Barracks routes", EProfileCategory::Game);
     for (int i = 0; i < m_structures.structureCount(); ++i)
     {
         const oc::span<const glm::vec3> route = m_structures.structureRoute(i);
@@ -1984,6 +1990,11 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
         }
     }
 
+    routesScope.stop();
+
     buildWorldLabels(camera);
-    updateHud();
+    {
+        ProfileScope hudScope("Game HUD update", EProfileCategory::Game);
+        updateHud();
+    }
 }

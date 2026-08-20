@@ -1265,6 +1265,7 @@ void Renderer::present()
     assert(m_renderNodeTransforms.size() == 0 || Globals::textureManager.getNumTextures() > 0 && "Attempting to render object without any textures loaded!");
 
     ProfileScope uploadScope("Per-frame uploads", EProfileCategory::Renderer);
+    ProfileScope transformScope("Transforms upload", EProfileCategory::Renderer);
     // Sparse transform upload: only slots that changed since this frame-in-flight last consumed
     // them, gathered from every worker's dirty list.
     Globals::renderNodeDirtyLists.forEach([&](oc::array<oc::vector<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT>& lists)
@@ -1277,6 +1278,8 @@ void Renderer::present()
             }
             transformDirtyList.clear();
         });
+    transformScope.stop();
+    ProfileScope bucketScope("Instance buckets + flushes", EProfileCategory::Renderer);
     // Bucket layout for the GPU culls: instances are pushed referencing LOD0, and the cull redirects
     // each one to its selected level — so every member of a LOD chain gets a bucket sized to the
     // CHAIN's instance count (any split of the instances across levels fits). Non-chain meshes keep
@@ -1307,8 +1310,10 @@ void Renderer::present()
     frameData.mappedFogVolumes.data()->count = m_fogVolumeCounter;
     frameData.fogVolumesBuffer.flushMappedMemory(RendererVKLayout::FOG_VOLUME_HEADER_SIZE + m_fogVolumeCounter * sizeof(RendererVKLayout::FogVolumeInfo));
 
+    bucketScope.stop();
     // Debug overlay lines accumulated since the last present (safe here: this slot's fence was waited
     // in beginFrame). First use lazily creates the GPU buffers -> re-record to pick up the new pass.
+    ProfileScope debugLineScope("Debug lines upload", EProfileCategory::Renderer);
     m_debugLineMergedVerts.clear();
     m_debugLineVerts.forEach([this](oc::vector<DebugLinePipeline::LineVertex>& verts)
         {
@@ -1317,11 +1322,13 @@ void Renderer::present()
         });
     if (m_debugLinePipeline.upload(frameIdx, m_debugLineMergedVerts))
         setHaveToRecordCommandBuffers();
+    debugLineScope.stop();
 
     // Only spend the pool reset on a frame that will actually execute the sim (see
     // m_particleResetPending); the flag is cleared after this frame's successful submit below.
     const bool particleResetCarried = m_particleResetPending && m_particlesEnabled && m_meshInstanceCounter > 0;
     { // Particle emitter table + spawn map + decals into this slot's mapped buffers (fence waited).
+        ProfileScope effectsScope("Effects upload", EProfileCategory::Renderer);
         static Clock::time_point s_lastParticleTime = Clock::now();
         const Clock::time_point now = Clock::now();
         const float dt = oc::min(std::chrono::duration<float>(now - s_lastParticleTime).count(), 0.25f);
@@ -1345,9 +1352,12 @@ void Renderer::present()
         }
     }
 
-    m_indirectCullComputePipeline.update(frameIdx, m_meshInstanceCounter);
-    m_skinningComputePipeline.update(frameIdx, m_skinningPalettes, m_skinningJobs);
-    m_lightGridComputePipeline.update(frameIdx, m_lightCounter);
+    {
+        ProfileScope computeScope("Cull/skin/light update", EProfileCategory::Renderer);
+        m_indirectCullComputePipeline.update(frameIdx, m_meshInstanceCounter);
+        m_skinningComputePipeline.update(frameIdx, m_skinningPalettes, m_skinningJobs);
+        m_lightGridComputePipeline.update(frameIdx, m_lightCounter);
+    }
     uploadScope.stop();
 
     {
@@ -2725,6 +2735,7 @@ void Renderer::recordCommandBuffers()
     // Streamed textures: refresh swapped bindless slots in this frame slot's sets before anything
     // records against them (safe here: acquireNextImage waited this slot's fence, and the texture
     // arrays are UPDATE_AFTER_BIND for the cached CBs).
+    ProfileScope descriptorScope("Bindless descriptor writes", EProfileCategory::Renderer);
     applyPendingTextureDescriptorWrites(frameIdx);
 
     // Baked terrain-data cascades: point this slot's sets at the active ping-pong image
@@ -2739,9 +2750,13 @@ void Renderer::recordCommandBuffers()
     }
     m_volumetricFogPipeline.updateTerrainDescriptor(frameIdx, m_fogTerrainMap.getView(), m_fogTerrainMap.getSampler());
 
+    descriptorScope.stop();
+
     const bool recordScene = !frameData.updated && m_meshInstanceCounter > 0;
     if (recordScene)
     {
+        // Only on invalidation frames (setHaveToRecordCommandBuffers) - the secondaries are cached.
+        ProfileScope sceneScope("Record scene secondaries", EProfileCategory::Renderer);
         // Recorded even with no jobs: the dispatch is indirect (CPU-written dims per frame), so skinned
         // instances spawned later run without a re-record.
         recordSkinning(frameIdx);
@@ -2777,11 +2792,14 @@ void Renderer::recordCommandBuffers()
         frameData.updated = true;
     }
 
-    if (m_meshInstanceCounter > 0 && recordGlobalIllum(frameIdx))
     {
-        if (m_sceneViewCount == 1)
-            recordAO(frameIdx);
-        recordVolumetricFog(frameIdx);
+        ProfileScope giScope("Record GI", EProfileCategory::Renderer);
+        if (m_meshInstanceCounter > 0 && recordGlobalIllum(frameIdx))
+        {
+            if (m_sceneViewCount == 1)
+                recordAO(frameIdx);
+            recordVolumetricFog(frameIdx);
+        }
     }
 
     // Live tunables + delta time into the mapped params buffer (no command-buffer re-record needed).
@@ -2812,6 +2830,7 @@ void Renderer::recordCommandBuffers()
     vk::CommandBuffer vkCompositeCommandBuffer = frameData.compositeCommandBuffer.getCommandBuffer();
 
     vk::CommandBufferInheritanceInfo inheritance{ .renderPass = m_renderPass.getRenderPass() };
+    ProfileScope imguiScope("Record ImGui", EProfileCategory::Renderer); // RenderDrawData copies every UI vertex
     vk::CommandBuffer vkImguiCommandBuffer = frameData.imguiCommandBuffer.begin(true, &inheritance);
     // From the UI's deep-copied snapshot, never ImGui::GetDrawData(): the next widget pass (a job)
     // calls ImGui::NewFrame mid-frame, which invalidates the live draw lists. Null until the first
@@ -2820,6 +2839,11 @@ void Renderer::recordCommandBuffers()
         ImGui_ImplVulkan_RenderDrawData(static_cast<ImDrawData*>(const_cast<void*>(m_imguiDrawData)), vkImguiCommandBuffer, nullptr);
     frameData.imguiCommandBuffer.end();
 
+    imguiScope.stop();
+
+    // The primary is re-recorded EVERY frame (timestamps, per-frame barriers, executeCommands of the
+    // cached secondaries) - the steady-state cost of this function lives here.
+    ProfileScope primaryScope("Record primary", EProfileCategory::Renderer);
     CommandBuffer& commandBuffer = frameData.primaryCommandBuffer;
     vk::CommandBuffer vkCommandBuffer = commandBuffer.begin(true);
     // GPU pass timings: timestamps live in the primary (re-recorded every frame) and OUTSIDE render

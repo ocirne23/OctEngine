@@ -65,6 +65,11 @@ export namespace Procedural
 		// swell through it.
 		float sampleWaterHeight(float x, float z) const;
 
+		// True when sampleWaterHeight can return water AT ALL (enabled + displacement readback
+		// primed) - the App wires this as the buoyancy pass's global gate, so a disabled ocean
+		// costs physics nothing (the pass otherwise sweeps the whole broadphase every step).
+		bool hasWater() const { return m_enabled && !m_dispTile.empty() && m_dispTileRes != 0; }
+
 		// The heading the swell actually TRAVELS in open water (radians, XZ) — the terrain streamer's baked
 		// flow field eases back to this offshore so the encoded directions meet the wind-driven open sea
 		// without a turn. NOTE the sim's convention: the spectrum's dominant term is h0(k) e^{i(k.x + wt)},

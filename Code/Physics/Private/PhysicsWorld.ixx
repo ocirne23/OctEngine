@@ -106,8 +106,17 @@ public:
     // torque the body for free). fn(x, z) returns the water surface world Y at that column, or
     // -FLT_MAX where there is no water. Density/drag are Tweaks under Physics/Buoyancy. An empty
     // function disables the pass entirely.
+    // `active` is the cheap global gate: the buoyancy pass iterates bodies via a WHOLE-WORLD
+    // broadphase overlap every step (box3d has no body-list API), which is pure waste while no
+    // water exists anywhere - when `active` returns false the pass is skipped outright. Empty =
+    // always active (a supplied fn is assumed to have water somewhere).
     using WaterSurfaceFn = oc::function<float(float x, float z)>;
-    void setWaterSurface(WaterSurfaceFn fn) { m_waterSurface = oc::move(fn); }
+    using WaterActiveFn = oc::function<bool()>;
+    void setWaterSurface(WaterSurfaceFn fn, WaterActiveFn active = {})
+    {
+        m_waterSurface = oc::move(fn);
+        m_waterActive = oc::move(active);
+    }
 
     // Resolves a ContactEvent::contactId (from THIS frame, before the next update()) to its first manifold
     // point in world space. Returns false (leaving the outputs untouched) if the contact is stale/gone or
@@ -179,6 +188,7 @@ private:
 
     // Buoyancy (see setWaterSurface)
     WaterSurfaceFn m_waterSurface;
+    WaterActiveFn m_waterActive; // global gate; empty = always on
     float m_waterDensity = 1000.0f;  // kg/m^3: fresh water; shapes denser than this sink
     float m_waterLinearDrag = 3.0f;  // 1/s: drag on each submerged probe's point velocity
     oc::vector<uint64> m_buoyancyShapes; // per-step overlap scratch (b3StoreShapeId bits)

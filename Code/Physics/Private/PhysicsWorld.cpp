@@ -166,7 +166,7 @@ void PhysicsWorld::stepSimulation(double deltaSec, const oc::function<void(const
     while (m_accumulator >= step && steps < maxCatchUpSteps)
     {
         ProfileScope profileScope("Physics step", EProfileCategory::Physics);
-        if (m_waterSurface)
+        if (m_waterSurface && (!m_waterActive || m_waterActive()))
         {
             ProfileScope buoyancyScope("Buoyancy", EProfileCategory::Physics);
             applyBuoyancy(); // box3d clears applied forces every step, so this runs per step

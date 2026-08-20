@@ -31,7 +31,10 @@ export namespace Nav
 
         void setObstacles(oc::span<const NavObstacle> obstacles);         // main; change-detected
         void setTeamSources(uint32 team, oc::span<const NavSource> sources); // main; every frame
-        void update(float deltaSec);                                        // main; publish + kick + density flip
+        void update(float deltaSec);                                        // main; publish + kick; the flow/pressure steps go to a JOB
+        // Joins the flow/pressure step job update() kicked. Main, BEFORE the entity pass (units
+        // sample the fields there); near-free when the job already finished. No-op without a kick.
+        void finishSteps() { Globals::jobSystem.wait(m_stepCounter); }
 
         const TeamField* teamField(uint32 team) const // may be null (no sources / not built yet)
         {
@@ -107,10 +110,13 @@ export namespace Nav
         void kickBuild(TeamSlot& slot);
         void tickSlot(TeamSlot& slot, float deltaSec);
         void waitAll();
+        void runFieldSteps(); // the step job's body: per-field begins + the two per-chunk fan-outs
 
         TeamSlot m_teams[MaxTeams];
         TeamSlot m_raster; // obstacle raster only (rebuilt on obstacle change) — for avoid()/lineOfSight
         oc::unordered_map<uint64, oc::unique_ptr<TeamSlot>> m_goals; // JobCounter is immovable
+        JobCounter m_stepCounter; // the in-flight flow/pressure step job (see update/finishSteps)
+        float m_stepDelta = 0.0f; // dt for the step job (a member: the job outlives update()'s stack)
         uint32 m_frame = 0;
         FlowField m_flow[MaxTeams];
         PressureField m_pressure[MaxTeams];

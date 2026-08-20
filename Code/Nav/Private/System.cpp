@@ -15,6 +15,7 @@ NavSystem::~NavSystem()
 
 void NavSystem::waitAll()
 {
+    Globals::jobSystem.wait(m_stepCounter); // the flow/pressure step job may still be in flight
     const auto waitSlot = [](TeamSlot& slot)
     {
         if (slot.building)
@@ -150,10 +151,14 @@ const TeamField* NavSystem::goalField(uint64 key) const
     return it != m_goals.end() ? it->second->published.get() : nullptr;
 }
 
+// Both seed entry points join the step job first: they write the same flow/pressure chunk buffers
+// the step tasks are writing. On the server every seed runs before feedNav's kick anyway, so the
+// wait is free - this makes the ordering a guarantee instead of a call-order convention.
 bool NavSystem::seedPath(uint32 team, const glm::vec3& from, const glm::vec3& to, float speed,
     float laneWidth, float clearance, oc::vector<glm::vec2>* outPath)
 {
     ProfileScope scope("Nav seed path", EProfileCategory::Game);
+    Globals::jobSystem.wait(m_stepCounter); // see the comment above; free when the step job is done
     const TeamField* raster = m_raster.published.get();
     if (!raster || team >= MaxTeams)
         return false;
@@ -334,17 +339,32 @@ void NavSystem::update(float deltaSec)
     for (const TeamSlot& slot : m_teams)
         m_publishedCount += slot.published ? 1u : 0u;
 
-    // 3. Flow + pressure steps, PER-CHUNK parallel across ALL teams: each field's serial
-    // pre-work (drain/flip/evict/gather/snapshot) runs here on main, then every team's chunks go
-    // into ONE fan-out per phase — two barriers total instead of one per field, and one team's
-    // lone big field no longer serializes behind the empty ones. The flow phase must fully settle
-    // before the pressure phase: the pressure push splats ATOMICALLY into the flow write buffers,
-    // which the flow tasks write plainly. Pressure PUSHES the flow (v += -grad p): a jam bends the
-    // stream upstream of it and a seeded trough sucks the surrounding lanes in; the push rides the
-    // diffusion step itself, which hands each active cell's gradient to the callback instead of a
-    // second pass re-resolving neighbours.
+    // 3. Flow + pressure steps: the whole block runs as ONE JOB, kicked here and joined by
+    // finishSteps() right before the entity pass (units are the only readers, and every writer -
+    // seedPath, the unit splats - is either ordered before this kick or joins the counter first).
+    // It overlaps whatever main does between feedNav and world.update: scriptContext, the physics
+    // step, beginFrame, the spatial stamps.
+    assert(m_stepCounter.isDone() && "previous frame's step job not joined - finishSteps() missing before world.update");
+    m_stepDelta = deltaSec;
+    Globals::jobSystem.submit([this] { runFieldSteps(); },
+        { "Nav field steps", EProfileCategory::Game }, EJobPriority::Normal, &m_stepCounter);
+}
+
+// PER-CHUNK parallel across ALL teams: each field's serial pre-work (drain/flip/evict/gather/
+// snapshot) runs first, then every team's chunks go into ONE fan-out per phase — two barriers
+// total instead of one per field, and one team's lone big field no longer serializes behind the
+// empty ones. The flow phase must fully settle before the pressure phase: the pressure push splats
+// ATOMICALLY into the flow write buffers, which the flow tasks write plainly. Pressure PUSHES the
+// flow (v += -grad p): a jam bends the stream upstream of it and a seeded trough sucks the
+// surrounding lanes in; the push rides the diffusion step itself, which hands each active cell's
+// gradient to the callback instead of a second pass re-resolving neighbours.
+// Runs on a JOB FIBER: the nested parallelFors park it, so everything here is STACK locals (the
+// fiber stack stays alive across the parks; a thread_local would be shared with whatever job the
+// worker picks up meanwhile - the standing Nav rule).
+void NavSystem::runFieldSteps()
+{
+    const float deltaSec = m_stepDelta;
     {
-        ProfileScope pscope("Nav field steps", EProfileCategory::Game);
         const uint32 keepFrames = uint32(glm::max(m_keepFrames, 1));
         const TeamField* raster = m_raster.published.get();
         const float gain = pressureFlowGain();

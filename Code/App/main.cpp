@@ -26,6 +26,8 @@ import Audio;
 import Spatial;
 import Threading;
 import Procedural;
+import Nav;
+import Nav;
 import Particle;
 import Force;
 
@@ -163,7 +165,8 @@ int main(int argc, char* argv[])
         Globals::scatter.initialize();
         Globals::ocean.initialize();
         Globals::terrain.setFlowWindAngle(Globals::ocean.swellTravelAngle());
-        Globals::physics.setWaterSurface([](float x, float z) { return Globals::ocean.sampleWaterHeight(x, z); });
+        Globals::physics.setWaterSurface([](float x, float z) { return Globals::ocean.sampleWaterHeight(x, z); },
+            [] { return Globals::ocean.hasWater(); }); // no ocean = the whole buoyancy pass skips (it sweeps the broadphase per step)
         if (Globals::rendererVK.isVrEnabled())
         {
             Globals::vrInput.initialize(Globals::rendererVK.getVrSession());
@@ -341,6 +344,8 @@ int main(int argc, char* argv[])
             const Frustum& frustum = Globals::rendererVK.beginFrame(camera, Globals::ui.getViewportRect()); // stable: the widget pass joined at the top of the frame
             Globals::spatialIndex.update(camera, frustum, Globals::rendererVK.getCenterViewProj() * glm::translate(glm::mat4(1.0f), camera.position)); // translate corrects the reverse-z renderer proj matrix
         }
+        Globals::navSystem.finishSteps(); // the flow/pressure step job feedNav kicked; units sample the fields in the entity pass
+        Globals::navSystem.finishSteps(); // the flow/pressure step job feedNav kicked; units sample the fields in the entity pass
         Globals::world.update(Globals::rendererVK, (float)deltaSec); // serial script prepass + parallel component/tree pass + sink flush; headless: renderer passed through but never dereferenced (headless archetypes)
         Globals::networkManager.send(deltaSec); // server: snapshot entities at their post-update poses; both roles: flush queued packets
 

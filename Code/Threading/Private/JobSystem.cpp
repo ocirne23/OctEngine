@@ -526,20 +526,27 @@ void JobSystem::wakeMany(uint32 count)
 
 void JobSystem::wait(JobCounter& counter)
 {
-    if (counter.isDone())
+    if (counter.isDone()) // fast path stays marker-free: most waits return immediately
         return;
     WorkerContext* ctx = t_worker;
     if (ctx && ctx->currentFiber)
     {
+        // Migrates with the fiber across the park (suspendScopes/resumeScopes), so the span is the
+        // true dependency time wherever the fiber resumes.
+        ProfileScope scope("Job wait", EProfileCategory::Wait);
         fiberWait(counter, *ctx);
         return;
     }
     if (ctx)
     {
+        // Helping wait: jobs this thread picks up to burn the stall nest inside with their own
+        // markers - honest-but-broad attribution, like every other named wait scope.
+        ProfileScope scope("Job wait", EProfileCategory::Wait);
         helpWait(counter, *ctx);
         return;
     }
-    // unregistered external thread: block on the atomic (notified on the zero transition)
+    // unregistered external thread (no profiler track, so no marker): block on the atomic
+    // (notified on the zero transition)
     uint32 count;
     while ((count = counter.m_count.load(oc::memory_order_acquire)) != 0)
         counter.m_count.wait(count, oc::memory_order_acquire);
