@@ -405,6 +405,11 @@ void JobSystem::submitReady(Job* job)
     assert(m_numContexts != 0 && "JobSystem used before initialize()");
     pushReadyJob(job);
     wakeOne();
+    // High jobs also ping the sleeping window-thread helper (it only serves the High ring, so
+    // Normal/Low submits skip the check entirely). wakeOne's seq_cst fence already ran, pairing
+    // with the helper's announce+recheck.
+    if (job->effectivePriority == EJobPriority::High && m_helperSleeping.load(oc::memory_order_relaxed))
+        wakeExternalHelper();
 }
 
 void JobSystem::submitReadyBatch(oc::span<Job* const> jobs)
@@ -421,6 +426,9 @@ void JobSystem::submitReadyBatch(oc::span<Job* const> jobs)
         }
     }
     wakeMany(uint32(jobs.size()));
+    if (!jobs.empty() && jobs[0]->effectivePriority == EJobPriority::High
+        && m_helperSleeping.load(oc::memory_order_relaxed))
+        wakeExternalHelper(); // batches share one priority; see submitReady
 }
 
 Job* JobSystem::allocatePooledJob()
@@ -559,6 +567,27 @@ void JobSystem::registerExternalHelper()
 {
     assert(m_numContexts != 0 && !t_worker && "registerExternalHelper: before initialize(), or thread already registered");
     t_worker = &m_contexts[m_numWorkers + 1];
+}
+
+void JobSystem::externalHelperWait()
+{
+    const uint32 epoch = m_helperEpoch.load(oc::memory_order_acquire);
+    m_helperSleeping.store(1, oc::memory_order_relaxed);
+    // pairs with the seq_cst fence on the submit side: at least one of us sees the other
+    oc::atomic_thread_fence(oc::memory_order_seq_cst);
+    if (!m_readyQueues[uint32(EJobPriority::High)].wasEmpty() || !m_running.load(oc::memory_order_relaxed))
+    {
+        m_helperSleeping.store(0, oc::memory_order_relaxed);
+        return;
+    }
+    m_helperEpoch.wait(epoch, oc::memory_order_acquire);
+    m_helperSleeping.store(0, oc::memory_order_relaxed);
+}
+
+void JobSystem::wakeExternalHelper()
+{
+    m_helperEpoch.fetch_add(1, oc::memory_order_release);
+    m_helperEpoch.notify_one();
 }
 
 bool JobSystem::tryRunOneHighJob()

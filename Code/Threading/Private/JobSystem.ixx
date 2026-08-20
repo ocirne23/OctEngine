@@ -147,10 +147,17 @@ public:
     // context so PerWorker::local()/profiling work there. Call once, on that thread.
     void registerExternalHelper();
     // High-priority ring ONLY - the window thread must never pick up a job that can run long
-    // (Normal/Low carry the multi-second ones: V3 tiles, nav builds), or the next frame's event
-    // pump stalls behind it. High jobs are short by convention (physics tasks, spatial chunks,
-    // panel prepares).
+    // (Normal/Low carry the multi-second ones: V3 tiles, nav builds, the UI widget pass), or the
+    // next frame's event pump stalls behind it. High jobs are short by convention (physics tasks,
+    // spatial chunks, panel prepares).
     bool tryRunOneHighJob();
+    // The external helper's sleep: parks until a HIGH job is submitted (submitReady pings it via
+    // m_helperSleeping - only High submits pay the check) or wakeExternalHelper() fires (the
+    // window's requestPump wires this so a pump request always outranks the nap). Deliberately NOT
+    // the workers' eventcount: the helper waking for a job it cannot take (Normal/Low) would eat a
+    // wake a real worker needed.
+    void externalHelperWait();
+    void wakeExternalHelper();
 
     // Splits [begin, end) into grainSize chunks pulled from a shared atomic cursor by
     // getNumWorkers() helper jobs plus the calling thread. func(chunkBegin, chunkEnd) must be
@@ -288,6 +295,8 @@ private:
 
     alignas(64) oc::atomic<uint32> m_wakeEpoch = 0;
     oc::atomic<uint32> m_numSleepers = 0;
+    oc::atomic<uint32> m_helperEpoch = 0;    // external helper (window thread) eventcount
+    oc::atomic<uint32> m_helperSleeping = 0; // announce/recheck pattern, like the worker sleep
 
     std::thread m_timerThread;
     std::mutex m_timedMutex;

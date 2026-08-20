@@ -41,24 +41,30 @@ void Window::threadMain(oc::string title, glm::ivec2 size)
     m_ready.store(true, oc::memory_order_release);
     m_ready.notify_all();
 
-    uint32 seen = m_pumpRequested.load(oc::memory_order_acquire);
     while (m_running.load(oc::memory_order_acquire))
     {
-        servePump();
-
-        // Between pumps: help the job system until the queue runs dry, then park on the epoch.
-        // High-priority only (see the idle-work wiring) - a long job here would delay the NEXT
-        // frame's pump, which is exactly the stall this thread exists to remove.
-        while (m_running.load(oc::memory_order_acquire)
-            && m_pumpRequested.load(oc::memory_order_acquire) == seen)
+        if (int32(m_pumpRequested.load(oc::memory_order_acquire) - m_pumpServed.load(oc::memory_order_relaxed)) > 0)
         {
-            if (!m_idleWork || !m_idleWork())
-            {
-                m_pumpRequested.wait(seen, oc::memory_order_acquire);
-                break;
-            }
+            servePump();
+            continue;
         }
-        seen = m_pumpRequested.load(oc::memory_order_acquire);
+        // Between pumps: help the job system. High-priority only (see the idle-work wiring) - a
+        // long job here would delay the NEXT frame's pump, which is exactly the stall this thread
+        // exists to remove.
+        if (m_idleWork && m_idleWork())
+            continue; // ran a job; a pump request may have arrived meanwhile
+        if (m_idleWait)
+        {
+            // Parks in the job system's helper eventcount: woken by High submissions (physics
+            // fan-outs, spatial stamps) AND by requestPump via the wake hook.
+            m_idleWait();
+            continue;
+        }
+        // No hooks wired yet (pre-jobSystem init): park on the pump epoch alone.
+        const uint32 seen = m_pumpRequested.load(oc::memory_order_acquire);
+        if (int32(seen - m_pumpServed.load(oc::memory_order_relaxed)) > 0)
+            continue;
+        m_pumpRequested.wait(seen, oc::memory_order_acquire);
     }
 
     if (m_windowHandle != nullptr)
@@ -104,6 +110,8 @@ void Window::requestPump()
 {
     m_pumpRequested.fetch_add(1, oc::memory_order_release);
     m_pumpRequested.notify_all();
+    if (m_wakeIdle)
+        m_wakeIdle(); // the thread may be napping in the job system's helper wait
 }
 
 void Window::waitPumpDone()
@@ -143,10 +151,15 @@ void Window::runOnWindowThread(oc::function<void()> op, bool wait)
     }
 }
 
-void Window::setIdleWork(oc::function<bool()> idleWork)
+void Window::setIdleWork(oc::function<bool()> work, oc::function<void()> wait, oc::function<void()> wake)
 {
-    // Installed on the window thread itself so m_idleWork is never raced.
-    runOnWindowThread([this, work = oc::move(idleWork)]() mutable { m_idleWork = oc::move(work); }, true);
+    m_wakeIdle = oc::move(wake); // main-side: requestPump (main) is its only reader
+    // work/wait are installed on the window thread itself so they are never raced.
+    runOnWindowThread([this, w = oc::move(work), p = oc::move(wait)]() mutable
+    {
+        m_idleWork = oc::move(w);
+        m_idleWait = oc::move(p);
+    }, true);
 }
 
 void Window::setTitle(oc::string_view title)

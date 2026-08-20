@@ -100,7 +100,9 @@ int main(int argc, char* argv[])
         // Between event pumps the window thread helps the job system - HIGH priority only, so it
         // can never sit in a multi-second Low job (V3 tile, nav build) when the next pump is due.
         window.runOnWindowThread([] { Globals::jobSystem.registerExternalHelper(); }, /*wait*/ true);
-        window.setIdleWork([] { return Globals::jobSystem.tryRunOneHighJob(); });
+        window.setIdleWork([] { return Globals::jobSystem.tryRunOneHighJob(); },
+                           [] { Globals::jobSystem.externalHelperWait(); },
+                           [] { Globals::jobSystem.wakeExternalHelper(); });
     }
     if (!headlessServer)
     {

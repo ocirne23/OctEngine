@@ -46,9 +46,12 @@ public:
     // helped job, so never call it per frame).
     void runOnWindowThread(oc::function<void()> op, bool wait = false);
 
-    // Idle work between pumps (App wires the job system's High-priority helper). Installed via the
-    // op queue so the hook only ever runs on the window thread.
-    void setIdleWork(oc::function<bool()> idleWork);
+    // Idle behaviour between pumps (App wires the job system's High-priority helper):
+    // work() runs one job (false = ring empty), wait() parks until work MIGHT exist (the job
+    // system's helper eventcount), wake() unparks it (called from requestPump on MAIN, so a pump
+    // request always interrupts the nap - it is stored main-side and never raced). work/wait are
+    // installed via the op queue so they only ever run on the window thread.
+    void setIdleWork(oc::function<bool()> work, oc::function<void()> wait, oc::function<void()> wake);
 
     void* getWindowHandle() const { return m_windowHandle; }
     void setTitle(oc::string_view title); // queued op
@@ -71,4 +74,6 @@ private:
     oc::vector<oc::function<void()>> m_ops; // marshaled window ops, run at pump time
     oc::atomic<uint32> m_opsDone = 0;       // epoch for runOnWindowThread(wait = true)
     oc::function<bool()> m_idleWork;        // window-thread-only (installed via the op queue)
+    oc::function<void()> m_idleWait;        // window-thread-only: park until work might exist
+    oc::function<void()> m_wakeIdle;        // MAIN-thread-only: requestPump interrupts the park
 };

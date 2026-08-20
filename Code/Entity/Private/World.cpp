@@ -99,8 +99,10 @@ void World::submitEntityBatches(const EntityUpdateNode* nodes, uint32 count)
             cost += glm::max<uint32>(m_updateArena[slot + end++].entity->updateCost, 1);
         const uint32 batchSlot = slot + begin;
         const uint32 n = end - begin;
+        // High: the pass is the frame's critical path (main waits on it), every batch is bounded
+        // (~25us budget), and High is what the window-thread helper serves between pumps.
         Globals::jobSystem.submit([this, batchSlot, n] { updateBatchJob(batchSlot, n); },
-            { "Entity Update", EProfileCategory::Entity }, EJobPriority::Normal, &m_updateCounter);
+            { "Entity Update", EProfileCategory::Entity }, EJobPriority::High, &m_updateCounter);
         begin = end;
     }
 }
