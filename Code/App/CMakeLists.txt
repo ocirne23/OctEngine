@@ -73,5 +73,5 @@ set_target_properties(run-scenario PROPERTIES
 	FOLDER Apps
 	EXCLUDE_FROM_ALL TRUE
 	VS_DEBUGGER_COMMAND "$<TARGET_FILE:App>"
-	VS_DEBUGGER_COMMAND_ARGUMENTS "--game --server --scenario Scenarios/march-64-units.txt"
+	VS_DEBUGGER_COMMAND_ARGUMENTS "--game --server --scenario Scenarios/march-64-units.txt --tweaks Scenarios/cpu-profile.tweaks" 
 	VS_DEBUGGER_WORKING_DIRECTORY "${ROOT_DIR}")

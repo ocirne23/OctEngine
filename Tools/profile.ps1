@@ -29,6 +29,7 @@ param(
     [int]$TimeoutSec = 300,
     [int]$Show = 80,
     [string[]]$Tweak = @(),  # "Category/Name=value" overrides, applied on top of Time/Max FPS=0
+    [string]$Tweaks = "",    # a FILE of overrides (tweaks.cfg format, Assets/-relative), e.g. "Scenarios/cpu-profile.tweaks" = graphics features off
     [string]$AppArgs = ""
 )
 
@@ -56,6 +57,7 @@ if ($Workers) { $argList += "--profile-workers" }
 if ($Game -and $Scenario -ne "") { $argList += @("--scenario", $Scenario, "--scenario-at", $ScenarioAt.ToString($culture)) }
 if ($Game) { $argList += "--game" }
 if ($Server) { $argList += @("--server", "--port", $Port) }
+if ($Tweaks -ne "") { $argList += @("--tweaks", "`"$Tweaks`"") } # file first: single --tweak values win over it
 foreach ($t in (@("Time/Max FPS=0") + $Tweak)) { $argList += "--tweak"; $argList += "`"$t`"" } # quoted: tweak keys contain spaces
 if ($AppArgs -ne "") { $argList += $AppArgs.Split(" ", [System.StringSplitOptions]::RemoveEmptyEntries) }
 

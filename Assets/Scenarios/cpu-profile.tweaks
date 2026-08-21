@@ -1,0 +1,18 @@
+# Tweak overrides for CPU-focused profiling runs: the heavy GPU features off so the frame is
+# CPU-bound and the report shows the sim, not the fence wait.
+#   Tools\profile.ps1 -Game -Server -Tweaks Scenarios/cpu-profile.tweaks
+# Format = Local/tweaks.cfg: "Category/Name = value [v v v]"; applied as overrides, never saved back.
+# (Force/Enabled stays on: the game's bubbles ARE the sim.)
+RT/Enable RT = 0
+RTAO/Enabled = 0
+Fog/Enabled = 0
+TAA/Enabled = 0
+Particles/Enabled = 0
+Decals/Enabled = 0
+Terrain/Enabled = 0
+Ocean/Enabled = 0
+Scatter/Enabled = 0
+Nav/Debug draw = 0
+Physics/Debug/Draw colliders = 0
+Force/Debug/Draw emitters = 0
+Force/Debug/Draw queries = 0

@@ -94,6 +94,15 @@ int main(int argc, char* argv[])
         else if (arg == "--scenario-at" && i + 1 < argc)  scenarioAtSec = oc::max(std::atof(argv[++i]), 0.0);
         // "Category/Name=v" (up to 4 values): wins over Local/tweaks.cfg, never written back
         else if (arg == "--tweak" && i + 1 < argc)        { if (!TweakRegistry::get().setOverride(argv[++i])) Log::warning("--tweak: cannot parse " + oc::string(argv[i])); }
+        // a whole file of them (tweaks.cfg format, Assets/-relative; e.g. Scenarios/cpu-profile.tweaks)
+        else if (arg == "--tweaks" && i + 1 < argc)
+        {
+            const oc::string path = argv[++i];
+            if (!FileSystem::exists(path, /*allowMainThread*/ true))
+                Log::warning("--tweaks: no such file " + path);
+            else
+                Log::info("--tweaks: " + oc::to_string(TweakRegistry::get().loadOverrides(FileSystem::readFileStr(path, /*allowMainThread*/ true), path)) + " overrides from " + path);
+        }
         else if (arg == "--server")                       launchMode = ELaunchMode::Server;
         else if (arg == "--connect" && i + 1 < argc)      { launchMode = ELaunchMode::Client; connectAddress = argv[++i]; }
         else if (arg == "--port" && i + 1 < argc)         netPort = uint16(std::atoi(argv[++i]));

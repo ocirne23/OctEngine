@@ -85,6 +85,38 @@ public:
 		m_snapshots.push_back(readValue(stored)); // taken AFTER the override/saved apply: not a "change", so nothing saves back
 	}
 
+	// A whole FILE of overrides (`--tweaks <path>`, read by main through FileSystem): the
+	// tweaks.cfg format — one `Category/Name = v [v v v]` per line, `#`/`//` comments, blank lines
+	// ignored — each line applied through setOverride (wins over the saved file, never written
+	// back). How an automated run pins a whole configuration, e.g. graphics features off for a
+	// CPU-focused profile. Returns the number of lines applied; unparsable lines are logged.
+	uint32 loadOverrides(oc::string_view content, oc::string_view sourceName)
+	{
+		uint32 applied = 0;
+		size_t pos = 0;
+		uint32 lineNo = 0;
+		while (pos < content.size())
+		{
+			size_t end = content.find('\n', pos);
+			if (end == oc::string_view::npos)
+				end = content.size();
+			oc::string_view line = content.substr(pos, end - pos);
+			pos = end + 1;
+			++lineNo;
+			while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
+				line.remove_suffix(1);
+			while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
+				line.remove_prefix(1);
+			if (line.empty() || line.front() == '#' || oc::startsWith(line, "//"))
+				continue;
+			if (setOverride(line))
+				++applied;
+			else
+				Log::warning(oc::format("Tweaks: {}({}): cannot parse '{}'", sourceName, lineNo, line));
+		}
+		return applied;
+	}
+
 	// Command-line override (`--tweak "Category/Name=v"`, up to 4 values space-separated): applies
 	// to the variable now if registered, else at its registration; wins over the saved file and is
 	// NEVER written back (an unattended profiling run must leave Local/tweaks.cfg alone). Works on
