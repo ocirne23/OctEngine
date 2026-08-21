@@ -142,7 +142,11 @@ public:
     // sampled: nothing else may write the slot's host-visible per-frame buffers before it, and
     // waiting at the top keeps input -> sim -> present tight instead of letting the sampled input
     // go stale during the stall. beginFrame asserts it ran; present() re-arms it.
-    void waitFrameSlot();
+    // Returns true once the slot's fence is signaled (or was already waited this frame), false on
+    // timeout. The default is the blocking wait; Time::beginFrame passes a bounded timeout to wake
+    // a lead before the predicted frame start and kick the window thread's event pump, then calls
+    // again blocking. A device error recreates the swapchain and reports signaled.
+    bool waitFrameSlot(uint64 timeoutNs = UINT64_MAX);
     // viewportRect is the editor's viewport sub-rect within the swapchain (ignored in VR, which renders
     // full-extent); a change to it re-records the command buffers.
     const Frustum& beginFrame(const Camera& camera, const Rect& viewportRect); // [Concurrency: SERIAL-OWNER of the render chain]
@@ -354,6 +358,7 @@ public:
     const glm::mat4& getCenterViewProj() const { return m_centerViewProj; }
 
     bool isVrEnabled() const { return Globals::openXR.isEnabled(); }
+    bool isVSyncEnabled() const { return m_vsyncEnabled; } // FIFO present: frames land on whole refresh periods (Time's stable-dt snap relies on it)
     bool isVrStageSpace() const { return Globals::openXR.isStageSpace(); }
     IVrSession* getVrSession() { return Globals::openXR.isEnabled() ? &Globals::openXR : nullptr; }
 

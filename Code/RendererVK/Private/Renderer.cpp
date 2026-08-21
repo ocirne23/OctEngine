@@ -506,7 +506,7 @@ void Renderer::setTerrainSplatClimate(oc::span<const glm::vec4> boxes)
     memcpy(m_terrainSplatClimate, boxes.data(), boxes.size() * sizeof(glm::vec4));
 }
 
-void Renderer::waitFrameSlot()
+bool Renderer::waitFrameSlot(uint64 timeoutNs)
 {
     // This frame slot's fence must be waited BEFORE anything writes its host-visible per-frame buffers
     // (renderNode instance memcpys, LOD meshIdx redirects, firstInstance prefix sums, sparse transform
@@ -519,15 +519,28 @@ void Renderer::waitFrameSlot()
     // before input sampling rather than between input and the sim; the slot index only advances in
     // present(), so it is the same fence either way.
     if (m_frameSlotWaited)
-        return; // idempotent within a frame
+        return true; // idempotent within a frame
+    if (timeoutNs == 0)
+    {
+        // Status poll (Time::beginFrame polls every ~ms while timing the pump kick): no marker,
+        // it would flood the ring; a signaled poll still claims the slot like a real wait.
+        if (m_swapChain.waitForFrame(m_swapChain.getCurrentFrameIndex(), 0) != SwapChain::EFenceWait::Signaled)
+            return false;
+        m_frameSlotWaited = true;
+        return true;
+    }
     // GPU-bound (or vsync-throttled) frames show up here: the CPU waiting for the frame slot's fence.
     ProfileScope profileScope("Frame wait", EProfileCategory::Wait);
-    if (!m_swapChain.waitForFrame(m_swapChain.getCurrentFrameIndex()))
+    const SwapChain::EFenceWait result = m_swapChain.waitForFrame(m_swapChain.getCurrentFrameIndex(), timeoutNs);
+    if (result == SwapChain::EFenceWait::Timeout)
+        return false;
+    if (result == SwapChain::EFenceWait::Error)
     {
         Log::error("Renderer: failed to wait for frame, recreating swapchain");
         recreateSwapchain();
     }
     m_frameSlotWaited = true;
+    return true;
 }
 
 const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewportRect)

@@ -32,6 +32,7 @@ import Particle;
 import Force;
 
 static oc::atomic<bool> g_running = true; // cleared by the window's onQuit (windowed) or the console ctrl handler (headless)
+
 static BOOL __stdcall consoleCtrlHandler(DWORD) { g_running = false; return TRUE; } // any console ctrl event = clean shutdown
 
 int main(int argc, char* argv[])
@@ -281,6 +282,8 @@ int main(int argc, char* argv[])
     initScope.stop();
     startupIo.reset(); // from here on, main-thread IO asserts (see FileSystem)
 
+    Globals::time.registerTweaks(); // frame pacing + event-pump lead (see Time::beginFrame)
+
     JobCounter uiCounter;      // the in-flight UI widget pass, joined at the TOP of the next frame
     bool uiJobKicked = false;  // no ImGui::Render / draw data until the first pass ran
 
@@ -292,13 +295,14 @@ int main(int argc, char* argv[])
         // of the sampled input going stale during the wait.
         if (!headlessServer)
         {
-            Globals::rendererVK.waitFrameSlot();
-            // Pump AFTER the fence, not before it: events pumped at wait-start would be a whole
-            // vsync stale by the time Input samples them. The window thread pumps while main runs
-            // the UI join/render and the time/tweak updates below - by Input::update the buffer is
-            // both fresh AND ready.
-            window.requestPump();
+            // The whole frame boundary: fence wait, frame-rate limit, event-pump kick, next frame's
+            // clock (Time::beginFrame - see its comment for the pacing and pump-timing rules).
+            Globals::time.beginFrame(Globals::input.isWindowHasFocus(), Globals::rendererVK.isVrEnabled(),
+                Globals::rendererVK.isVSyncEnabled(), window.getDisplayRefreshHz(), &window,
+                [](uint64 timeoutNs) { return Globals::rendererVK.waitFrameSlot(timeoutNs); });
         }
+        else
+            Globals::time.update();
 
         ProfileScope mainLoopScope("main loop", EProfileCategory::App);
 
@@ -316,8 +320,7 @@ int main(int argc, char* argv[])
                 Globals::ui.flushMainThreadWork(); // deferred tweak onChange callbacks + container imports (the job produced its own draw-data snapshot)
         }
 
-        Globals::time.update();
-        const double deltaSec = Globals::time.getDeltaSec();
+        const double deltaSec = Globals::time.getDeltaSec(); // clock advanced by limitFrameRate / update above
         TweakRegistry::get().update((float)deltaSec); // Saved/Synced change detection
 
 

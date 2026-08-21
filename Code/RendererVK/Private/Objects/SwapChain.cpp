@@ -173,18 +173,16 @@ bool SwapChain::acquireNextImage()
     return true;
 }
 
-bool SwapChain::waitForFrame(uint32 frameIdx)
+SwapChain::EFenceWait SwapChain::waitForFrame(uint32 frameIdx, uint64 timeoutNs)
 {
-    vk::Device vkDevice = Globals::device.getDevice();
-    SyncObjects& syncObjects = m_syncObjects[frameIdx];
-
-    vk::Result result = vkDevice.waitForFences(1, &syncObjects.inFlight, vk::True, UINT64_MAX);
-    if (result != vk::Result::eSuccess)
-    {
-        assert(false && "Failed to wait for fence");
-        return false;
-    }
-    return true;
+    const vk::Result result = Globals::device.getDevice().waitForFences(
+        1, &m_syncObjects[frameIdx].inFlight, vk::True, timeoutNs);
+    if (result == vk::Result::eSuccess)
+        return EFenceWait::Signaled;
+    if (result == vk::Result::eTimeout)
+        return EFenceWait::Timeout;
+    assert(false && "Failed to wait for fence");
+    return EFenceWait::Error;
 }
 
 void SwapChain::submitCommandBuffer(CommandBuffer& commandBuffer)

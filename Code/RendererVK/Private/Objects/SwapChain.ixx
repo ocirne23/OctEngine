@@ -43,7 +43,8 @@ public:
     bool acquireNextImage();
     bool present();
 
-    bool waitForFrame(uint32 frameIdx);
+    enum class EFenceWait : uint8 { Signaled, Timeout, Error };
+    EFenceWait waitForFrame(uint32 frameIdx, uint64 timeoutNs = UINT64_MAX);
     void submitCommandBuffer(CommandBuffer& commandBuffer);
 
 private:

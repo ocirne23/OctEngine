@@ -1,16 +1,20 @@
+module;
+
+#include <intrin.h> // _mm_pause for waitPumpDone's spin
+
 module Core.Window;
 
 import Core;
 import Core.SDL;
 import Core.Profiler;
+import Core.Windows; // timeBeginPeriod (real 1 ms sleeps for the frame limiter)
 
 Window::~Window()
 {
     if (!m_running.load(oc::memory_order_relaxed))
         return;
     m_running.store(false, oc::memory_order_release);
-    m_pumpRequested.fetch_add(1, oc::memory_order_release); // wake the parked thread
-    m_pumpRequested.notify_all();
+    requestPump(); // wakes every park site (epoch, job-system helper wait)
     m_thread.join();
     m_windowHandle = nullptr;
 }
@@ -28,6 +32,7 @@ void Window::threadMain(oc::string title, glm::ivec2 size)
 {
     // ProfileScopes run here (the pump marker, helped jobs), so register first thing.
     Globals::profiler.registerThread("Window", Profiler::SORT_KEY_BACKGROUND);
+    timeBeginPeriod(1); // process-wide: the frame limiter's Sleep(1) steps (Time::limitFrameRate) are real milliseconds
 
     // SDL3's "main thread" is the one that calls SDL_Init(SDL_INIT_VIDEO): initializing HERE makes
     // this thread the legal owner of the pump, the window, and every window-affine SDL call.
@@ -37,7 +42,10 @@ void Window::threadMain(oc::string title, glm::ivec2 size)
     if (m_windowHandle == nullptr)
         printf("SDL_CreateWindow Error: %s\n", SDL_GetError());
     else
+    {
         SDL_SetWindowMinimumSize((SDL_Window*)m_windowHandle, 480, 360);
+        queryDisplayRefresh();
+    }
     m_ready.store(true, oc::memory_order_release);
     m_ready.notify_all();
 
@@ -69,6 +77,7 @@ void Window::threadMain(oc::string title, glm::ivec2 size)
 
     if (m_windowHandle != nullptr)
         SDL_DestroyWindow((SDL_Window*)m_windowHandle); // destroyed on its owning thread
+    timeEndPeriod(1);
 }
 
 void Window::servePump()
@@ -100,10 +109,22 @@ void Window::servePump()
         SDL_Event evt;
         const std::lock_guard<std::mutex> lock(m_eventMutex);
         while (SDL_PollEvent(&evt))
+        {
+            if (evt.type == SDL_EVENT_WINDOW_DISPLAY_CHANGED || evt.type == SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED)
+                queryDisplayRefresh(); // moved to another monitor / refresh rate changed
             m_events.push_back(evt);
+        }
     }
-    m_pumpServed.store(target, oc::memory_order_release);
-    m_pumpServed.notify_all();
+    m_pumpServed.store(target, oc::memory_order_release); // no notify: waitPumpDone spins (main's critical path)
+}
+
+void Window::queryDisplayRefresh()
+{
+    float hz = 0.0f;
+    if (const SDL_DisplayID display = SDL_GetDisplayForWindow((SDL_Window*)m_windowHandle))
+        if (const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(display))
+            hz = mode->refresh_rate; // 0 when the platform does not report it
+    m_displayRefreshHz.store(hz, oc::memory_order_relaxed);
 }
 
 void Window::requestPump()
@@ -116,13 +137,12 @@ void Window::requestPump()
 
 void Window::waitPumpDone()
 {
+    // BUSY wait, deliberately: this sits on the main thread's critical path at frame start, and the
+    // pump is normally already done or within tens of microseconds of it - a kernel wait
+    // (WaitOnAddress) would add a wake-up latency of the same order as the thing being waited for.
     const uint32 target = m_pumpRequested.load(oc::memory_order_acquire);
-    uint32 served = m_pumpServed.load(oc::memory_order_acquire);
-    while (int32(target - served) > 0) // epoch compare, wrap-safe
-    {
-        m_pumpServed.wait(served, oc::memory_order_acquire);
-        served = m_pumpServed.load(oc::memory_order_acquire);
-    }
+    while (int32(target - m_pumpServed.load(oc::memory_order_acquire)) > 0) // epoch compare, wrap-safe
+        _mm_pause();
 }
 
 void Window::runOnWindowThread(oc::function<void()> op, bool wait)

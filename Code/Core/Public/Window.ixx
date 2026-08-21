@@ -14,7 +14,7 @@ export import Core.fwd;
 // thread again.
 //
 // Per frame the ENGINE main thread calls requestPump() (loop top, before the frame fence wait);
-// the window thread pumps + drains every SDL event into a buffer takeEvents() hands back after
+// the window thread pumps + drains every SDL event into a buffer lockEvents() exposes after
 // waitPumpDone(). Between pumps the thread is NOT spinning on the OS queue: it runs queued window
 // ops, then HELPS THE JOB SYSTEM (the idle-work hook - App wires jobSystem.tryRunOneHighJob, High
 // only: Normal/Low carry multi-second jobs that would stall the next frame's pump) until the next
@@ -37,7 +37,7 @@ public:
     bool initialize(oc::string_view windowTitle, glm::ivec2 pos, glm::ivec2 size); // spawns the thread, blocks until the window exists
 
     // -- engine main thread, once per frame --
-    void requestPump();                          // kick a pump; the fence wait runs while it happens
+    void requestPump();                          // kick a pump (timed by the caller: ~a lead before the frame starts)
     void waitPumpDone();                         // events for this frame are in the buffer after this
     // Direct access to the pumped event buffer, bracketed by the lock (the window thread appends
     // during a pump). Clear it before unlocking once processed - lockEvents() does not drain.
@@ -59,20 +59,26 @@ public:
     void* getWindowHandle() const { return m_windowHandle; }
     void setTitle(oc::string_view title); // queued op
     void getWindowSize(glm::ivec2& size) const;
+    // The display's current refresh rate (Hz), queried on the window thread at creation and on
+    // display/mode-change events; 0 = unknown. Time's stable-dt snap uses it as the exact vsync
+    // period instead of a measured estimate.
+    float getDisplayRefreshHz() const { return m_displayRefreshHz.load(oc::memory_order_relaxed); }
 
 private:
 
     void threadMain(oc::string title, glm::ivec2 size);
     void servePump();
+    void queryDisplayRefresh(); // window thread only
 
     void* m_windowHandle = nullptr;
     std::thread m_thread;
     oc::atomic<uint32> m_pumpRequested = 0; // epochs: requested > served = a pump is due
     oc::atomic<uint32> m_pumpServed = 0;
     oc::atomic<bool> m_running = false;
+    oc::atomic<float> m_displayRefreshHz = 0.0f;
     oc::atomic<bool> m_ready = false;       // window created (or failed); initialize() waits on it
     std::mutex m_eventMutex;
-    oc::vector<SDL_Event> m_events;         // pumped events, drained by takeEvents
+    oc::vector<SDL_Event> m_events;         // pumped events, dispatched + cleared by Input under lockEvents()
     std::mutex m_opMutex;
     oc::vector<oc::function<void()>> m_ops; // marshaled window ops, run at pump time
     oc::atomic<uint32> m_opsDone = 0;       // epoch for runOnWindowThread(wait = true)
