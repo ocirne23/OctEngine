@@ -80,9 +80,45 @@ public:
 		TweakVar& stored = m_vars.back();
 		if (stored.flags == ETweakFlags::None)
 			stored.flags = m_defaultFlags; // ScopedFlags block default; explicit flags win
-		if (m_savedLoaded && anyFlag(stored.flags, ETweakFlags::Saved))
+		if (!applyOverride(stored) && m_savedLoaded && anyFlag(stored.flags, ETweakFlags::Saved))
 			applySavedValue(stored);
-		m_snapshots.push_back(readValue(stored));
+		m_snapshots.push_back(readValue(stored)); // taken AFTER the override/saved apply: not a "change", so nothing saves back
+	}
+
+	// Command-line override (`--tweak "Category/Name=v"`, up to 4 values space-separated): applies
+	// to the variable now if registered, else at its registration; wins over the saved file and is
+	// NEVER written back (an unattended profiling run must leave Local/tweaks.cfg alone). Works on
+	// any variable, Saved or not. Returns false when the spec does not parse.
+	bool setOverride(oc::string_view spec)
+	{
+		const size_t sep = spec.find('=');
+		if (sep == oc::string_view::npos || sep == 0 || sep + 1 >= spec.size())
+			return false;
+		oc::string key(spec.substr(0, sep));
+		while (!key.empty() && key.back() == ' ')
+			key.pop_back();
+		const oc::string valueText(spec.substr(sep + 1));
+		oc::vector<float> values;
+		const char* cursor = valueText.c_str();
+		while (values.size() < 4)
+		{
+			char* end = nullptr;
+			const float v = std::strtof(cursor, &end);
+			if (end == cursor)
+				break;
+			values.push_back(v);
+			cursor = end;
+		}
+		if (values.empty())
+			return false;
+		m_overrides[key] = oc::move(values);
+		for (size_t i = 0; i < m_vars.size(); ++i)
+			if (keyOf(m_vars[i]) == key)
+			{
+				applyOverride(m_vars[i]);
+				m_snapshots[i] = readValue(m_vars[i]);
+			}
+		return true;
 	}
 
 	const oc::vector<TweakVar>& vars() const { return m_vars; }
@@ -340,12 +376,26 @@ private:
 		return true;
 	}
 
+	bool applyOverride(TweakVar& var)
+	{
+		if (m_overrides.empty())
+			return false;
+		const auto it = m_overrides.find(keyOf(var));
+		if (it == m_overrides.end())
+			return false;
+		Value value;
+		value.count = glm::min(int(it->second.size()), 4);
+		std::memcpy(value.v, it->second.data(), size_t(value.count) * sizeof(float));
+		writeValue(var, value);
+		return true;
+	}
+
 	void saveFile()
 	{
 		m_saveDirty = false;
 		m_saveTimer = 0.0f;
 		for (const TweakVar& var : m_vars)
-			if (anyFlag(var.flags, ETweakFlags::Saved))
+			if (anyFlag(var.flags, ETweakFlags::Saved) && (m_overrides.empty() || m_overrides.find(keyOf(var)) == m_overrides.end())) // overridden: the file keeps its own value
 			{
 				const Value value = readValue(var);
 				m_savedValues[keyOf(var)].assign(value.v, value.v + value.count);
@@ -372,6 +422,7 @@ private:
 	oc::vector<TweakVar> m_vars;
 	oc::vector<Value> m_snapshots; // parallel to m_vars — last value seen by update()
 	oc::map<oc::string, oc::vector<float>> m_savedValues; // the file image, unknown keys preserved
+	oc::map<oc::string, oc::vector<float>> m_overrides;   // --tweak command-line overrides: win over the file, never saved
 	ETweakFlags m_defaultFlags = ETweakFlags::None;
 	uint32 m_syncGeneration = 0;
 	float m_saveTimer = 0.0f;

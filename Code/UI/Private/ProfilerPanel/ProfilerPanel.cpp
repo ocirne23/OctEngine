@@ -2,7 +2,9 @@ module UI;
 
 import Core;
 import Core.imgui;
+import Core.Log;
 import Threading;
+import File;
 import :ProfilerPanel;
 
 namespace
@@ -317,6 +319,18 @@ void ProfilerPanel::drawToolbar()
             Globals::profiler.setPaused(true); // freezes ring writes + frame marks: the whole frame history stays inspectable
         }
     }
+    ImGui::SameLine();
+    if (ImGui::Button("Dump"))
+    {
+        // The widget pass is a job (not main), so FileSystem's main-thread IO assert does not apply.
+        const oc::string path = "Local/profile.txt";
+        if (FileSystem::writeFileStr(path, profiler.buildReport()))
+            Log::info("Profile report written to " + path);
+        else
+            Log::error("Profile report: could not write " + path);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Write a text report of the last 256 frames to Assets/Local/profile.txt (F7 does the same)");
     // Layout: the two fps readouts sit right after Pause (the numbers you actually watch), then the
     // frame identity, then the auto-pause controls last — they are a setting, not a live number.
     const double frameMs = (double)(m_windowEnd - m_windowStart) * profiler.getMsPerTick();

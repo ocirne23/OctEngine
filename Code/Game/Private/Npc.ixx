@@ -37,6 +37,7 @@ public:
     // Units inside the view frustum — the overhead labels only draw what is on screen, so they
     // never ask for more than that.
     static void queryVisibleUnits(const Camera& camera, oc::vector<Entity*>& out);
+    static void queryAllUnits(oc::vector<Entity*>& out); // world-wide: save/load + the profiling scenario
 
     // SAVE/LOAD (server): every live unit into/from an AssetNode tree (projectiles are transient —
     // a load clears them). loadUnits despawns the live units first.

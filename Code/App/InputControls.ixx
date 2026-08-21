@@ -22,10 +22,14 @@ import Script;
 import Physics;
 import Audio;
 import Force;
+import App.ProfileDump;
 
 export class InputControls
 {
 private:
+
+    oc::string profileDumpPath = "Local/profile.txt"; // F7 target (main's --profile-out overrides)
+    ProfileReportOptions profileDumpOptions;
 
     IGizmo& gizmo; // owned by the UI; only the mode hotkeys touch it from here
     FreeFlyCameraController& cameraController;
@@ -135,6 +139,7 @@ public:
     // GPU-read-back applied force (opposing bubbles pressing on it) feeds back as a physics impulse.
     // Call after world.update (body poses synced), before forceSystem.update pushes emitter state.
     void setGameMode(bool enabled) { gameMode = enabled; }
+    void setProfileDump(const oc::string& path, const ProfileReportOptions& options) { profileDumpPath = path; profileDumpOptions = options; } // what F7 writes
 
     void update(float deltaSec)
     {
@@ -403,6 +408,8 @@ public:
             renderer.reloadShaders();
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_F6 && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN)
 			Globals::scriptHost.reloadCurrentScript(); // F6: recompile + hot-reload the script the Script panel is editing
+        if (evt.scancode == SDL_Scancode::SDL_SCANCODE_F7 && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN)
+            writeProfileReport(profileDumpPath, profileDumpOptions); // F7: text report of the last frames (same as --profile-after)
         if (gameMode)
             return; // game mode: everything below is testbed spawns/possession — the Game library owns those keys
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_K && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN)

@@ -200,6 +200,343 @@ ProfileTrack* Profiler::registerTrack(const char* name, uint32 threadId, uint32 
     return track;
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Text report (Profiler::buildReport)
+// ---------------------------------------------------------------------------------------------------
+namespace
+{
+    struct ReportNode
+    {
+        const char* name = nullptr;
+        uint8 category = 0;
+        uint64 incl = 0;       // ticks, clipped to the window
+        uint64 childTicks = 0; // sum of direct children's incl (self = incl - childTicks)
+        uint64 maxTicks = 0;   // longest single segment
+        uint64 calls = 0;
+        oc::vector<uint32> children;
+    };
+
+    // An aggregated call tree: one node per (parent, name CONTENT) - the same literal from two TUs is
+    // two pointers, so children are keyed by text, not pointer.
+    struct ReportTree
+    {
+        oc::vector<ReportNode> nodes;                                  // [0] = root
+        oc::vector<oc::unordered_map<oc::string_view, uint32>> lookup; // parallel to nodes
+
+        ReportTree() { nodes.emplace_back(); lookup.emplace_back(); }
+
+        uint32 child(uint32 parent, const char* name, uint8 category)
+        {
+            const oc::string_view key(name);
+            auto& map = lookup[parent];
+            if (const auto it = map.find(key); it != map.end())
+                return it->second;
+            const uint32 idx = (uint32)nodes.size();
+            nodes.push_back(ReportNode{ .name = name, .category = category });
+            lookup.emplace_back();
+            lookup[parent][key] = idx; // after the emplace: lookup may have reallocated
+            nodes[parent].children.push_back(idx);
+            return idx;
+        }
+
+        // records sorted by (start, depth). Parent = the last record one level up that CONTAINS this
+        // one; a record whose parent is missing (ring lapped, scope still open) hangs off the root.
+        void accumulate(const oc::vector<ProfileRecord>& records, uint64 tMin, uint64 tMax)
+        {
+            constexpr uint32 MaxDepth = 64;
+            int32 lastRec[MaxDepth];
+            uint32 lastNode[MaxDepth];
+            for (uint32 i = 0; i < MaxDepth; ++i) { lastRec[i] = -1; lastNode[i] = 0; }
+            for (uint32 i = 0; i < (uint32)records.size(); ++i)
+            {
+                const ProfileRecord& record = records[i];
+                const uint32 depth = oc::min((uint32)record.depth, MaxDepth - 1);
+                uint32 parent = 0;
+                if (depth > 0 && lastRec[depth - 1] >= 0)
+                {
+                    const ProfileRecord& parentRecord = records[lastRec[depth - 1]];
+                    if (parentRecord.start <= record.start && parentRecord.end >= record.end)
+                        parent = lastNode[depth - 1];
+                }
+                const uint32 idx = child(parent, record.name, record.category);
+                const uint64 s = oc::max(record.start, tMin);
+                const uint64 e = oc::min(record.end, tMax);
+                const uint64 dur = e > s ? e - s : 0;
+                ReportNode& node = nodes[idx];
+                node.incl += dur;
+                node.calls++;
+                node.maxTicks = oc::max(node.maxTicks, dur);
+                nodes[parent].childTicks += dur;
+                lastRec[depth] = (int32)i;
+                lastNode[depth] = idx;
+            }
+        }
+    };
+
+    struct FlatRow
+    {
+        const char* name = nullptr;
+        uint8 category = 0;
+        double inclMs = 0.0, selfMs = 0.0, maxMs = 0.0;
+        uint64 calls = 0;
+        uint32 tracks = 0; // distinct tracks that ran it (global table)
+    };
+
+    void appendLine(oc::string& out, const char* text) { out += text; out += '\n'; }
+
+    template<typename... Args>
+    void appendf(oc::string& out, const char* fmt, Args... args)
+    {
+        char buf[1024];
+        snprintf(buf, sizeof(buf), fmt, args...);
+        out += buf;
+    }
+
+    void printTree(oc::string& out, const ReportTree& tree, uint32 nodeIdx, uint32 level, double msPerTick, double invFrames,
+        const ProfileReportOptions& options)
+    {
+        const ReportNode& node = tree.nodes[nodeIdx];
+        oc::vector<uint32> order(node.children.begin(), node.children.end());
+        oc::sort(order.begin(), order.end(), [&](uint32 a, uint32 b) { return tree.nodes[a].incl > tree.nodes[b].incl; });
+        uint32 printed = 0;
+        uint32 folded = 0;
+        uint64 foldedTicks = 0;
+        for (const uint32 childIdx : order)
+        {
+            const ReportNode& child = tree.nodes[childIdx];
+            const double inclMs = (double)child.incl * msPerTick * invFrames;
+            if (printed >= options.maxChildren || inclMs < options.minMsPerFrame)
+            {
+                folded++;
+                foldedTicks += child.incl;
+                continue;
+            }
+            const uint64 selfTicks = child.incl > child.childTicks ? child.incl - child.childTicks : 0;
+            appendf(out, "%9.3f %9.3f %9.2f %9.3f  %*s%s\n", inclMs, (double)selfTicks * msPerTick * invFrames,
+                (double)child.calls * invFrames, (double)child.maxTicks * msPerTick, (int)(level * 2), "", child.name);
+            printed++;
+            if (level + 1 < options.maxDepth)
+                printTree(out, tree, childIdx, level + 1, msPerTick, invFrames, options);
+        }
+        if (folded > 0)
+            appendf(out, "%9.3f %9s %9s %9s  %*s(+%u more)\n", (double)foldedTicks * msPerTick * invFrames, "", "", "", (int)(level * 2), "", folded);
+    }
+
+    void collectFlat(const ReportTree& tree, oc::unordered_map<oc::string_view, uint32>& index, oc::vector<FlatRow>& rows, double msPerTick, double invFrames,
+        oc::unordered_set<oc::string_view>* seenThisTrack)
+    {
+        for (uint32 i = 1; i < (uint32)tree.nodes.size(); ++i)
+        {
+            const ReportNode& node = tree.nodes[i];
+            const oc::string_view key(node.name);
+            uint32 rowIdx;
+            if (const auto it = index.find(key); it != index.end())
+                rowIdx = it->second;
+            else
+            {
+                rowIdx = (uint32)rows.size();
+                rows.push_back(FlatRow{ .name = node.name, .category = node.category });
+                index[key] = rowIdx;
+            }
+            FlatRow& row = rows[rowIdx];
+            const uint64 selfTicks = node.incl > node.childTicks ? node.incl - node.childTicks : 0;
+            row.inclMs += (double)node.incl * msPerTick * invFrames;
+            row.selfMs += (double)selfTicks * msPerTick * invFrames;
+            row.maxMs = oc::max(row.maxMs, (double)node.maxTicks * msPerTick);
+            row.calls += node.calls;
+            if (seenThisTrack != nullptr && seenThisTrack->insert(key).second)
+                row.tracks++;
+        }
+    }
+
+    void printFlat(oc::string& out, oc::vector<FlatRow>& rows, uint32 maxRows, double minMs, double invFrames, bool showTracks)
+    {
+        oc::sort(rows.begin(), rows.end(), [](const FlatRow& a, const FlatRow& b) { return a.selfMs > b.selfMs; });
+        if (showTracks)
+            appendLine(out, "     self      incl  calls/fr    max ms  thr  category    name");
+        else
+            appendLine(out, "     self      incl  calls/fr    max ms  category    name");
+        uint32 printed = 0;
+        uint32 folded = 0;
+        double foldedSelf = 0.0;
+        for (const FlatRow& row : rows)
+        {
+            if (printed >= maxRows || row.selfMs < minMs)
+            {
+                folded++;
+                foldedSelf += row.selfMs;
+                continue;
+            }
+            if (showTracks)
+                appendf(out, "%9.3f %9.3f %9.2f %9.3f  %3u  %-10s  %s\n", row.selfMs, row.inclMs, (double)row.calls * invFrames, row.maxMs,
+                    row.tracks, profileCategoryName((EProfileCategory)row.category), row.name);
+            else
+                appendf(out, "%9.3f %9.3f %9.2f %9.3f  %-10s  %s\n", row.selfMs, row.inclMs, (double)row.calls * invFrames, row.maxMs,
+                    profileCategoryName((EProfileCategory)row.category), row.name);
+            printed++;
+        }
+        if (folded > 0)
+            appendf(out, "%9.3f %9s %9s %9s  (+%u more)\n", foldedSelf, "", "", "", folded);
+    }
+}
+
+oc::string Profiler::buildReport(const ProfileReportOptions& options) const
+{
+    oc::string out;
+    if (m_frameCount < 3)
+    {
+        appendLine(out, "profiler report: fewer than 3 frames recorded");
+        return out;
+    }
+
+    // ---- frame window: the last N completed frames, never across a pause gap or past the mark ring ----
+    const uint64 lastFrame = m_frameCount - 1;
+    uint64 firstFrame = lastFrame + 1 > (uint64)oc::max(options.frames, 1u) ? lastFrame + 1 - oc::max(options.frames, 1u) : 1;
+    firstFrame = oc::max<uint64>(firstFrame, m_frameCount > FRAME_HISTORY - 1 ? m_frameCount - (FRAME_HISTORY - 1) : 1);
+    for (uint64 f = lastFrame; f >= firstFrame; --f)
+        if (isFrameGap(f)) { firstFrame = f + 1; break; }
+    if (firstFrame > lastFrame)
+    {
+        appendLine(out, "profiler report: no complete frames since the last pause");
+        return out;
+    }
+    const uint64 numFrames = lastFrame - firstFrame + 1;
+    const double invFrames = 1.0 / (double)numFrames;
+    const uint64 tMin = getFrameMark(firstFrame - 1);
+    const uint64 tMax = getFrameMark(lastFrame);
+    const double msPerTick = m_msPerTick;
+    const double windowMs = (double)(tMax - tMin) * msPerTick;
+
+    oc::vector<double> frameMs;
+    frameMs.reserve(numFrames);
+    for (uint64 f = firstFrame; f <= lastFrame; ++f)
+        frameMs.push_back((double)(getFrameMark(f) - getFrameMark(f - 1)) * msPerTick);
+    oc::sort(frameMs.begin(), frameMs.end());
+    const auto percentile = [&](double p) { return frameMs[oc::min((size_t)(p * (double)(frameMs.size() - 1) + 0.5), frameMs.size() - 1)]; };
+
+    appendLine(out, "OctEngine profiler report");
+    appendLine(out, "columns: ms/frame = total time in the window / frames; self = minus direct children; calls/fr = segments per frame (a fiber-parked scope counts once per resume)");
+    appendf(out, "frames %llu..%llu (%llu frames), window %.1f ms\n", (unsigned long long)firstFrame, (unsigned long long)lastFrame, (unsigned long long)numFrames, windowMs);
+    appendf(out, "frame ms: avg %.2f  min %.2f  p50 %.2f  p95 %.2f  p99 %.2f  max %.2f   (%.1f fps avg)\n",
+        windowMs * invFrames, frameMs.front(), percentile(0.5), percentile(0.95), percentile(0.99), frameMs.back(), 1000.0 * numFrames / windowMs);
+
+    // ---- snapshot + sort every track ----
+    struct TrackData
+    {
+        uint32 idx = 0;
+        const char* name = nullptr;
+        uint32 sortKey = 0;
+        bool worker = false;
+        bool gpu = false;
+        double busyMs = 0.0;   // depth-0 scopes, Wait category excluded
+        double waitMs = 0.0;   // depth-0 Wait scopes (fence/vsync, frame limit, joins)
+        double coverage = 1.0; // fraction of the window the ring still held (1 = complete)
+        oc::vector<ProfileRecord> records;
+    };
+    const uint32 numTracks = getNumTracks();
+    oc::vector<TrackData> tracks;
+    tracks.reserve(numTracks);
+    for (uint32 i = 0; i < numTracks; ++i)
+    {
+        const ProfileTrack& track = getTrack(i);
+        if (track.getCursor() == 0)
+            continue;
+        TrackData data;
+        data.idx = i;
+        data.name = track.getName();
+        data.sortKey = track.getSortKey();
+        data.worker = data.sortKey >= SORT_KEY_WORKER && data.sortKey < SORT_KEY_BACKGROUND;
+        data.gpu = oc::string_view(data.name) == "GPU";
+        snapshotTrack(i, tMin, tMax, data.records);
+        oc::sort(data.records.begin(), data.records.end(), [](const ProfileRecord& a, const ProfileRecord& b)
+            { return a.start != b.start ? a.start < b.start : a.depth < b.depth; });
+        for (const ProfileRecord& record : data.records)
+            if (record.depth == 0)
+            {
+                const uint64 s = oc::max(record.start, tMin), e = oc::min(record.end, tMax);
+                if (e > s)
+                    ((EProfileCategory)record.category == EProfileCategory::Wait ? data.waitMs : data.busyMs) += (double)(e - s) * msPerTick;
+            }
+        const uint64 cursor = track.getCursor();
+        if (cursor >= ProfileTrack::CAPACITY)
+        {
+            // the writer may be overwriting this slot right now - a diagnostic read, not data
+            const uint64 oldestEnd = track.getRecord(cursor - ProfileTrack::CAPACITY + 1).end;
+            if (oldestEnd > tMin && tMax > tMin)
+                data.coverage = oldestEnd >= tMax ? 0.0 : (double)(tMax - oldestEnd) / (double)(tMax - tMin);
+        }
+        tracks.push_back(oc::move(data));
+    }
+    oc::sort(tracks.begin(), tracks.end(), [](const TrackData& a, const TrackData& b) { return a.sortKey != b.sortKey ? a.sortKey < b.sortKey : a.idx < b.idx; });
+
+    // ---- thread busy % (depth-0 scopes clipped to the window) ----
+    appendLine(out, "");
+    appendLine(out, "thread busy (% of window, depth-0 scopes; wait = Wait-category top-level scopes: fence/vsync, frame limit, joins):");
+    uint32 numWorkers = 0;
+    double workerBusy = 0.0;
+    for (const TrackData& track : tracks)
+    {
+        if (track.worker) { numWorkers++; workerBusy += track.busyMs; }
+        appendf(out, "  %-16s busy %5.1f%% (%.2f ms/frame)  wait %5.1f%% (%.2f ms/frame)  %u records%s\n", track.name,
+            track.busyMs / windowMs * 100.0, track.busyMs * invFrames, track.waitMs / windowMs * 100.0, track.waitMs * invFrames,
+            (uint32)track.records.size(), track.coverage < 0.999 ? oc::format(", RING LAPPED: covers {:.0f}% of the window", track.coverage * 100.0).c_str() : "");
+    }
+    if (numWorkers > 0)
+        appendf(out, "  workers average %.1f%% over %u tracks (%.2f worker-ms/frame)\n", workerBusy / (windowMs * numWorkers) * 100.0, numWorkers, workerBusy * invFrames);
+
+    // ---- trees: one per track, workers merged unless asked otherwise ----
+    struct TreeEntry { oc::string title; ReportTree tree; bool gpu = false; };
+    oc::vector<TreeEntry> trees;
+    trees.reserve(tracks.size() + 1); // never reallocates below, so the merged-workers pointer stays valid
+    ReportTree* mergedWorkers = nullptr;
+    for (TrackData& track : tracks)
+    {
+        if (track.worker && !options.perWorkerTrees)
+        {
+            if (mergedWorkers == nullptr)
+            {
+                trees.push_back(TreeEntry{ .title = oc::format("Workers (merged, {} tracks)", numWorkers) });
+                mergedWorkers = &trees.back().tree;
+            }
+            mergedWorkers->accumulate(track.records, tMin, tMax);
+            continue;
+        }
+        trees.push_back(TreeEntry{ .title = oc::string(track.name), .gpu = track.gpu });
+        trees.back().tree.accumulate(track.records, tMin, tMax);
+    }
+
+    // ---- global top self time across CPU tracks ----
+    {
+        oc::vector<FlatRow> rows;
+        oc::unordered_map<oc::string_view, uint32> index;
+        for (TreeEntry& entry : trees)
+        {
+            if (entry.gpu)
+                continue;
+            oc::unordered_set<oc::string_view> seen;
+            collectFlat(entry.tree, index, rows, msPerTick, invFrames, &seen);
+        }
+        appendLine(out, "");
+        appendLine(out, "== top self time, all CPU tracks (ms/frame summed across threads; thr = tracks/trees it ran on) ==");
+        printFlat(out, rows, options.topRows, options.minMsPerFrame, invFrames, true);
+    }
+
+    // ---- per track: tree + flat ----
+    for (TreeEntry& entry : trees)
+    {
+        appendLine(out, "");
+        appendf(out, "== %s ==\n", entry.title.c_str());
+        appendLine(out, " ms/frame      self  calls/fr    max ms  tree");
+        printTree(out, entry.tree, 0, 0, msPerTick, invFrames, options);
+        oc::vector<FlatRow> rows;
+        oc::unordered_map<oc::string_view, uint32> index;
+        collectFlat(entry.tree, index, rows, msPerTick, invFrames, nullptr);
+        appendf(out, "-- %s: flat by self --\n", entry.title.c_str());
+        printFlat(out, rows, options.flatRows, options.minMsPerFrame, invFrames, false);
+    }
+    return out;
+}
+
 bool Profiler::snapshotTrack(uint32 trackIdx, uint64 tMin, uint64 tMax, oc::vector<ProfileRecord>& out) const
 {
     out.clear();

@@ -157,6 +157,20 @@ export struct ProfileScopeStack
     uint32_t depth = 0;
 };
 
+// What Profiler::buildReport aggregates and how much of it to print (see the report's own header
+// for the format). Frames are the LAST completed frames; the window is clamped to FRAME_HISTORY and
+// to the stretch since the last pause gap.
+export struct ProfileReportOptions
+{
+    uint32_t frames = 256;         // frames to aggregate (per-frame figures divide by the count actually covered)
+    double minMsPerFrame = 0.02;   // tree/flat rows below this fold into a "(+N more)" line
+    uint32_t maxChildren = 24;     // tree: children printed per node (the rest fold)
+    uint32_t maxDepth = 14;        // tree: deepest level printed
+    uint32_t flatRows = 30;        // flat per-track table rows
+    uint32_t topRows = 40;         // global "top self time" rows
+    bool perWorkerTrees = false;   // false: all JobWorker tracks merge into one "Workers (merged)" tree
+};
+
 // Global CPU (+GPU track) profiler. Scope markers record into per-thread lock-free rings; the clock
 // is __rdtsc (invariant TSC), calibrated against QPC every endFrame so GPU timestamps (which
 // calibrate against QPC) and millisecond conversions stay accurate. Recording is ALWAYS on (a
@@ -244,6 +258,14 @@ public:
     // Copies every record overlapping [tMin, tMax] into out (unspecified order: newest-first).
     // Returns false (out cleared) if the writer lapped the ring mid-copy - retry next frame.
     bool snapshotTrack(uint32_t trackIdx, uint64_t tMin, uint64_t tMax, oc::vector<ProfileRecord>& out) const;
+
+    // A plain-text performance report over the last N completed frames (main thread; one-shot, not
+    // per-frame cheap): frame-time percentiles, per-thread busy %, a global top-self-time table,
+    // then per track an aggregated call TREE (ms/frame inclusive + self, calls/frame, max call) and
+    // a flat by-self table. Core does no IO - the caller writes the string (App: --profile-after /
+    // F7 -> Local/profile.txt). Records are per on-thread SEGMENT, so a scope that parked across a
+    // fiber wait counts once per resume on whichever track ran it.
+    oc::string buildReport(const ProfileReportOptions& options = {}) const;
 
     // A PERMANENT deduplicated copy of `name`, safe to hand to ProfileScope (records store names
     // BY POINTER and the panel reads them frames later, so a dynamic string must be interned —

@@ -48,8 +48,9 @@ void NpcSystem::queryVisibleUnits(const Camera& camera, oc::vector<Entity*>& out
     collectUnits(results, out);
 }
 
-// Every unit in the world — ONLY for save/load, which must persist units the camera cannot see.
-static void queryAllUnits(oc::vector<Entity*>& out)
+// Every unit in the world — for save/load (which must persist units the camera cannot see) and
+// the profiling scenario's select-all.
+void NpcSystem::queryAllUnits(oc::vector<Entity*>& out)
 {
     thread_local oc::vector<uint64> results;
     Globals::spatialIndex.querySphere(glm::dvec3(0.0), 1000.0f, SpatialLayer_Render, results);

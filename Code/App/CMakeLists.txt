@@ -66,3 +66,12 @@ set_target_properties(run-game PROPERTIES
 	VS_DEBUGGER_COMMAND "$<TARGET_FILE:App>"
 	VS_DEBUGGER_COMMAND_ARGUMENTS "--game"
 	VS_DEBUGGER_WORKING_DIRECTORY "${ROOT_DIR}")
+
+add_custom_target(run-scenario COMMAND ${CMAKE_COMMAND} -E true VERBATIM)
+add_dependencies(run-scenario App)
+set_target_properties(run-scenario PROPERTIES
+	FOLDER Apps
+	EXCLUDE_FROM_ALL TRUE
+	VS_DEBUGGER_COMMAND "$<TARGET_FILE:App>"
+	VS_DEBUGGER_COMMAND_ARGUMENTS "--game --server --scenario default"
+	VS_DEBUGGER_WORKING_DIRECTORY "${ROOT_DIR}")

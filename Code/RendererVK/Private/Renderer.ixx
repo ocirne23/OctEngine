@@ -389,7 +389,10 @@ private:
 
     // Applied by beginFrame from its viewportRect argument, which is the only way to set it. VR renders
     // full-extent (no editor panel sub-rect), so the rect is ignored there.
-    void setViewportRect(const Rect& rect) { if (Globals::openXR.isEnabled()) return; if (rect != m_viewportRect) { m_viewportRect = rect; setHaveToRecordCommandBuffers(); } }
+    // An EMPTY rect is ignored (keeps the previous one): the UI widget pass runs a frame behind, so
+    // frame 0 arrives with the default Rect() — the swapchain-sized rect from initialize() stands
+    // in, instead of a 0/0 aspect reaching glm::perspective (asserted in Debug).
+    void setViewportRect(const Rect& rect) { if (Globals::openXR.isEnabled()) return; if (rect.getSize().x <= 0 || rect.getSize().y <= 0) return; if (rect != m_viewportRect) { m_viewportRect = rect; setHaveToRecordCommandBuffers(); } }
 
     CommandBuffer& getCurrentCommandBuffer() { return m_perFrameData[m_swapChain.getCurrentFrameIndex()].primaryCommandBuffer; }
 

@@ -46,6 +46,13 @@ public:
 
     bool enabled() const { return m_enabled; }
 
+    // PROFILING SCENARIO (`--scenario <save>`, main calls it once at `--scenario-frame`): loads the
+    // save (F10's path when empty), selects EVERY live own-team unit and orders them all to the
+    // other team's Base — a repeatable crowd-pathing load without anyone at the keyboard.
+    // Authority only (units simulate on the server). The load happens now; the select + order run
+    // from the next update() (the loaded units' spatial entries link at the next commitFrame).
+    bool runScenario(oc::string_view savePath);
+
     // MULTIPLAYER (windowed listen server + clients). The SERVER runs the whole sim; player-
     // structure state mirrors to clients over game events (GPl/GRm/GCb + periodic GSt stats);
     // units and shots replicate as network entities (Component Network in their prefabs); each
@@ -111,7 +118,7 @@ private:
     // all teams to Assets/Local/gamesave.txt (players are NOT saved). Loading clears the current
     // set (removal hooks -> GRm prune connected clients) and re-broadcasts the loaded state.
     void saveGame();
-    void loadGame();
+    void loadGame(oc::string_view path = {}); // empty = the F10 path (Local/gamesave.txt)
 
     GamePlayer m_player;
     GameCamera m_camera;
@@ -150,7 +157,12 @@ private:
     bool m_lmbDown = false;
     bool m_lmbReleased = false;  // release edge (consumed by updateWindowed)
     void updateUnitSelection(const Camera& camera);
-    void orderSelectedUnits(const glm::vec3& target, bool freshOrder);
+    bool orderSelectedUnits(const glm::vec3& target, bool freshOrder); // true = a lane was seeded (fresh order + A* found a route)
+    bool moveOrderAt(const glm::vec3& worldPos); // THE RMB move order: player + selected units walk there (fresh order, lane seeded); returns orderSelectedUnits'
+    glm::vec3 pointOutsideFootprint(const glm::vec3& clicked, int structure) const; // a click on a building -> the reachable point at its face
+    bool m_scenarioOrderPending = false; // runScenario loaded; issueScenarioOrder retries each update until units are queryable
+    uint32 m_scenarioOrderTries = 0;
+    void issueScenarioOrder();           // select ALL own units + move order on the other Base
     void seedRouteLane(uint32 structureId); // barracks route -> a planned lane in the flow field
     // (While an ordered group walks, its lane is kept fresh by the UNITS' own periodic plan
     // requests — Nav's proximity dedup makes the whole group cost one plan. See

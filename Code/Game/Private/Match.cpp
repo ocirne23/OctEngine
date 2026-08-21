@@ -499,7 +499,7 @@ void GameMatch::saveGame()
     Log::info(oc::string("Game saved to ") + c_gameSavePath);
 }
 
-void GameMatch::loadGame()
+void GameMatch::loadGame(oc::string_view path)
 {
     if (m_isClient)
     {
@@ -508,7 +508,7 @@ void GameMatch::loadGame()
     }
     AssetNode root;
     oc::string error;
-    if (!loadAssetFile(c_gameSavePath, root, error))
+    if (!loadAssetFile(path.empty() ? oc::string(c_gameSavePath) : oc::string(path), root, error))
     {
         Log::warning("Load game: " + error);
         return;
@@ -741,6 +741,8 @@ void GameMatch::update(float deltaSec)
     if (!m_enabled)
         return;
     ProfileScope scope("Game update", EProfileCategory::Game);
+    if (m_scenarioOrderPending && !m_isClient)
+        issueScenarioOrder(); // the frame after runScenario's load: the units' spatial entries are linked now
 
     if (m_isClient)
     {
@@ -1597,21 +1599,107 @@ static bool largestClusterCentroid(oc::span<const EntityPtr> units, float linkRa
     return true;
 }
 
-void GameMatch::orderSelectedUnits(const glm::vec3& target, bool freshOrder)
+bool GameMatch::runScenario(oc::string_view savePath)
+{
+    if (!m_enabled || m_isClient)
+    {
+        Log::warning("Scenario: needs --game on the authority (single player or server)");
+        return false;
+    }
+    loadGame(savePath);
+    Log::info(oc::format("Scenario: loaded '{}'", savePath.empty() ? oc::string_view(c_gameSavePath) : savePath));
+    // The loaded units' spatial entries link at the next commitFrame — the select-all query runs
+    // from the next update() (issueScenarioOrder).
+    m_scenarioOrderPending = true;
+    m_scenarioOrderTries = 0;
+    return true;
+}
+
+void GameMatch::issueScenarioOrder()
+{
+    // Select ALL live own-team units (not just the visible ones — the box select's query is a
+    // frustum), then the same order the RMB press gives: locked move target + one seeded lane.
+    // The loaded units' spatial entries link at SpatialIndex::commitFrame, which runs AFTER
+    // game.update in the frame — so the first update after the load still sees none: retry each
+    // update until the query returns units (bounded, in case the save held none).
+    m_selectedUnits.clear();
+    oc::vector<Entity*> units;
+    NpcSystem::queryAllUnits(units);
+    for (Entity* e : units)
+        if (const GameUnitComponent* u = getComponent<GameUnitComponent>(e); u && !u->puppet && u->alive() && u->team == (uint32)m_team)
+            m_selectedUnits.push_back(EntityPtr(e));
+    // The same order a right-click on the other team's Base gives: clicked at its centre, so the
+    // destination lands on the face toward the player (pushed out of the footprint — the centre
+    // itself is blocked cells and the A* would fail). The structure view (m_frame) is a per-frame
+    // spatial query refreshed AFTER this point in update, so the loaded Base shows up a frame
+    // after the units do: wait for it as well.
+    int enemyBase = -1;
+    for (int i = 0; i < m_structures.structureCount() && enemyBase < 0; ++i)
+        if (m_structures.structureType(i) == EStructureType::Base && m_structures.structureTeam(i) != (uint8)m_team)
+            enemyBase = i;
+    // Also wait for the Nav obstacle raster: the order's lane is an A* over it, and a unit's own
+    // plan requests need it too — an order before it is published walks straight into the walls.
+    const bool ready = !m_selectedUnits.empty() && enemyBase >= 0 && Globals::navSystem.raster() != nullptr;
+    if (!ready && ++m_scenarioOrderTries < 600)
+        return; // try again next update (bounded: ~10 s, in case the save holds no units / Nav is off)
+    if (!ready)
+        Log::warning(oc::format("Scenario: giving up after {} frames ({} units, enemy Base {}, raster {})", m_scenarioOrderTries,
+            (uint32)m_selectedUnits.size(), enemyBase >= 0 ? "found" : "missing", Globals::navSystem.raster() != nullptr ? "published" : "missing"));
+    m_scenarioOrderPending = false;
+    const glm::vec3 target = enemyBase >= 0 ? pointOutsideFootprint(m_structures.structurePos(enemyBase), enemyBase)
+                                            : (m_team == 0 ? m_enemyBasePos : m_basePos);
+    const bool laneSeeded = moveOrderAt(target);
+    Log::info(oc::format("Scenario: {} units ordered to ({:.0f}, {:.0f}) after {} frames, lane {}", (uint32)m_selectedUnits.size(),
+        m_player.moveTarget().x, m_player.moveTarget().z, m_scenarioOrderTries, laneSeeded ? "seeded" : "NOT seeded (A* failed)"));
+}
+
+// THE right-click move order, shared by the RMB handler and the profiling scenario: the player and
+// the selected units walk to a world position (a fresh order: the lane is seeded from the group).
+bool GameMatch::moveOrderAt(const glm::vec3& worldPos)
+{
+    const glm::vec3 dest(worldPos.x, 0.0f, worldPos.z);
+    m_player.setMoveTarget(dest);
+    return orderSelectedUnits(dest, true);
+}
+
+// A clicked ground point on a structure, pushed just OUTSIDE its footprint along the side it fell
+// on: the capsule ends up at that face instead of grinding into the wall, and the Nav A* has a
+// reachable goal (a point inside the footprint is blocked cells — no lane, and every unit's own
+// plan request to it fails too).
+glm::vec3 GameMatch::pointOutsideFootprint(const glm::vec3& clicked, int structure) const
+{
+    const glm::vec3 center = m_structures.structurePos(structure);
+    const float half = StructureSystem::footprintCellsOf(m_structures.structureType(structure))
+        * StructureSystem::GridCellSize * 0.5f + 1.2f; // + capsule and a gap
+    glm::vec2 d(clicked.x - center.x, clicked.z - center.z);
+    const float deepest = glm::max(glm::abs(d.x), glm::abs(d.y));
+    if (deepest < half) // inside the inflated footprint: push out to the nearest face
+    {
+        if (deepest < 1e-3f) // dead center: come from the player's side
+            d = glm::vec2(m_player.bodyPos().x - center.x, m_player.bodyPos().z - center.z);
+        const float scale = glm::max(glm::abs(d.x), glm::abs(d.y));
+        d = scale > 1e-3f ? d * (half / scale) : glm::vec2(half, 0.0f);
+    }
+    return glm::vec3(center.x + d.x, 0.0f, center.z + d.y);
+}
+
+bool GameMatch::orderSelectedUnits(const glm::vec3& target, bool freshOrder)
 {
     for (const EntityPtr& p : m_selectedUnits)
         if (GameUnitComponent* u = getComponent<GameUnitComponent>(p.get()))
             u->orderMove(glm::vec3(target.x, 0.0f, target.z), freshOrder);
+    bool laneSeeded = false;
     // A FRESH order seeds a planned LANE from the group to the destination: one A* (main thread),
     // written into the team flow, and the units follow it as crowd flow — the group routes around
     // buildings without any of them planning. The start is the largest cluster's centre, so a lone
     // straggler cannot pull the lane's origin away from the bulk of the group.
     glm::vec3 groupPos;
     if (freshOrder && largestClusterCentroid(m_selectedUnits, m_selectionClusterRadius, groupPos))
-        Globals::navSystem.seedPath(uint32(m_team), groupPos, target, laneSeedSpeed(), laneSeedWidth());
+        laneSeeded = Globals::navSystem.seedPath(uint32(m_team), groupPos, target, laneSeedSpeed(), laneSeedWidth());
     // (No group re-seed timer: while they walk, the units themselves ask for a lane on their own
     // timers and Nav's proximity dedup turns the whole group's requests into one plan — see
     // GameUnitComponent's plan request and NavSystem::requestSeedPath.)
+    return laneSeeded;
 }
 
 // RIGHT-CLICK actions with a selection, shared by Select AND Build mode: on a structure = SMART
@@ -1924,23 +2012,7 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
         glm::vec3 clicked;
         if (hover >= 0 && aimGroundPoint(camera, clicked))
         {
-            // Walk to WHERE you clicked, not to the building's middle: the cursor's ground point
-            // is the destination, pushed just outside the footprint along the side it fell on, so
-            // the capsule ends up standing at that face instead of grinding into the wall.
-            const glm::vec3 center = m_structures.structurePos(hover);
-            const float half = StructureSystem::footprintCellsOf(m_structures.structureType(hover))
-                * StructureSystem::GridCellSize * 0.5f + 1.2f; // + capsule and a gap
-            glm::vec2 d(clicked.x - center.x, clicked.z - center.z);
-            const float deepest = glm::max(glm::abs(d.x), glm::abs(d.y));
-            if (deepest < half) // inside the inflated footprint: push out to the nearest face
-            {
-                if (deepest < 1e-3f) // dead center: come from the player's side
-                    d = glm::vec2(m_player.bodyPos().x - center.x, m_player.bodyPos().z - center.z);
-                const float scale = glm::max(glm::abs(d.x), glm::abs(d.y));
-                d = scale > 1e-3f ? d * (half / scale) : glm::vec2(half, 0.0f);
-            }
-            m_player.setMoveTarget(glm::vec3(center.x + d.x, 0.0f, center.z + d.y));
-            orderSelectedUnits(glm::vec3(center.x + d.x, 0.0f, center.z + d.y), true);
+            moveOrderAt(pointOutsideFootprint(clicked, hover));
             m_rmbMoveDrag = false; // a building order is one-shot: dragging off it must not re-aim
         }
         else if (hover < 0)

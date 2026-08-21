@@ -11,6 +11,7 @@ import Core.Tweaks;
 import Core.Windows;
 
 import App.InputControls;
+import App.ProfileDump;
 
 import Game;
 
@@ -63,10 +64,35 @@ int main(int argc, char* argv[])
     oc::string connectAddress;
     bool headless = false;
     bool gameMode = false;
+    // AUTOMATED PROFILING (Tools/profile.ps1 drives it): --profile-after N writes a text report of
+    // the last --profile-frames frames at frame N (to --profile-out, default Local/profile.txt; F7
+    // writes the same on demand), --quit-after N exits cleanly at frame N, --no-vsync removes the
+    // present throttle so CPU scopes run back to back. Either frame flag marks the run UNATTENDED:
+    // the window counts as focused (else the "Inactive max FPS" cap would be what gets measured).
+    uint32 profileAfterFrame = 0;
+    uint32 quitAfterFrame = 0;
+    oc::string profileOutPath = "Local/profile.txt";
+    ProfileReportOptions profileOptions;
+    EVSync vsync = EVSync::ENABLED;
+    bool scenario = false;
+    oc::string scenarioSave; // "" = the F10 path
+    uint32 scenarioFrame = 30;
     for (int i = 1; i < argc; ++i)
     {
         const oc::string_view arg = argv[i];
-        if (arg == "--server")                            launchMode = ELaunchMode::Server;
+        if (arg == "--profile-after" && i + 1 < argc)     profileAfterFrame = (uint32)oc::max(std::atoi(argv[++i]), 1);
+        else if (arg == "--profile-frames" && i + 1 < argc) profileOptions.frames = (uint32)glm::clamp(std::atoi(argv[++i]), 1, (int)Profiler::FRAME_HISTORY - 1);
+        else if (arg == "--profile-out" && i + 1 < argc)  profileOutPath = argv[++i];
+        else if (arg == "--profile-workers")              profileOptions.perWorkerTrees = true; // one tree per worker instead of the merged one
+        else if (arg == "--quit-after" && i + 1 < argc)   quitAfterFrame = (uint32)oc::max(std::atoi(argv[++i]), 1);
+        else if (arg == "--no-vsync")                     vsync = EVSync::DISABLED;
+        // --game scenario: load a save ("default" = F10's Local/gamesave.txt), select every own unit
+        // and order them to the other Base at --scenario-frame (default 30, after the world settled)
+        else if (arg == "--scenario" && i + 1 < argc)     { scenarioSave = argv[++i]; scenario = true; }
+        else if (arg == "--scenario-frame" && i + 1 < argc) scenarioFrame = (uint32)oc::max(std::atoi(argv[++i]), 1);
+        // "Category/Name=v" (up to 4 values): wins over Local/tweaks.cfg, never written back
+        else if (arg == "--tweak" && i + 1 < argc)        { if (!TweakRegistry::get().setOverride(argv[++i])) Log::warning("--tweak: cannot parse " + oc::string(argv[i])); }
+        else if (arg == "--server")                       launchMode = ELaunchMode::Server;
         else if (arg == "--connect" && i + 1 < argc)      { launchMode = ELaunchMode::Client; connectAddress = argv[++i]; }
         else if (arg == "--port" && i + 1 < argc)         netPort = uint16(std::atoi(argv[++i]));
         else if (arg == "--tickrate" && i + 1 < argc)     tickHz = glm::clamp(std::atoi(argv[++i]), 10, 240);
@@ -84,6 +110,7 @@ int main(int argc, char* argv[])
         gameMode = false; // co-op = a WINDOWED listen server (--game --server) + clients (--game --connect)
     }
     const bool headlessServer = headless && launchMode == ELaunchMode::Server;
+    const bool unattendedRun = profileAfterFrame > 0 || quitAfterFrame > 0;
 
     Window window;
     FreeFlyCameraController cameraController;
@@ -108,7 +135,7 @@ int main(int argc, char* argv[])
     if (!headlessServer)
     {
         cameraController.initialize(glm::vec3(-1.5f, 14.0f, -7.1f), glm::vec3(0.0f, 4.0f, 0.0f));
-        Globals::rendererVK.initialize(window, EValidation::DISABLED, EVSync::ENABLED, EVr::DISABLED); // ENABLED DISABLED
+        Globals::rendererVK.initialize(window, EValidation::DISABLED, vsync, EVr::DISABLED); // ENABLED DISABLED
         Globals::ui.initialize();
     }
     Globals::world.initialize();
@@ -217,6 +244,7 @@ int main(int argc, char* argv[])
 
     GizmoController gizmo;
     InputControls controls(gizmo, cameraController, Globals::world); // headless-inert: update/key handling never run
+    controls.setProfileDump(profileOutPath, profileOptions); // F7 writes where --profile-out points
     GameMatch game(gameMode); // stack local: holds EntityPtrs/Force handles, destructs before the globals
     if (game.enabled())
     {
@@ -297,7 +325,7 @@ int main(int argc, char* argv[])
         {
             // The whole frame boundary: fence wait, frame-rate limit, event-pump kick, next frame's
             // clock (Time::beginFrame - see its comment for the pacing and pump-timing rules).
-            Globals::time.beginFrame(Globals::input.isWindowHasFocus(), Globals::rendererVK.isVrEnabled(),
+            Globals::time.beginFrame(Globals::input.isWindowHasFocus() || unattendedRun, Globals::rendererVK.isVrEnabled(),
                 Globals::rendererVK.isVSyncEnabled(), window.getDisplayRefreshHz(), &window,
                 [](uint64 timeoutNs) { return Globals::rendererVK.waitFrameSlot(timeoutNs); });
         }
@@ -389,6 +417,24 @@ int main(int argc, char* argv[])
         mainLoopScope.stop(); // before the frame mark, so the record stays inside this frame's window
         Globals::profiler.endFrame();
         frameCount++;
+
+        // Unattended profiling: the report covers completed frames only, so it is written right
+        // after the frame mark; --quit-after alone (no dump) is a plain timed exit.
+        const uint64 completedFrames = Globals::profiler.getFrameCount();
+        if (scenario && completedFrames == scenarioFrame)
+        {
+            if (!game.enabled())
+                Log::warning("--scenario needs --game");
+            else
+            {
+                FileSystem::AllowMainThreadIO scenarioIo; // one-shot load, like F10
+                game.runScenario(scenarioSave == "default" ? oc::string_view() : oc::string_view(scenarioSave));
+            }
+        }
+        if (profileAfterFrame > 0 && completedFrames == profileAfterFrame)
+            writeProfileReport(profileOutPath, profileOptions);
+        if (quitAfterFrame > 0 && completedFrames >= quitAfterFrame)
+            g_running = false;
 
         if (headlessServer)
             while (g_running && Clock::now() < Globals::time.getCurrentTime() + Clock::duration(std::chrono::seconds(1)) / tickHz)
