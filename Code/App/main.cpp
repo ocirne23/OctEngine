@@ -64,32 +64,34 @@ int main(int argc, char* argv[])
     oc::string connectAddress;
     bool headless = false;
     bool gameMode = false;
-    // AUTOMATED PROFILING (Tools/profile.ps1 drives it): --profile-after N writes a text report of
-    // the last --profile-frames frames at frame N (to --profile-out, default Local/profile.txt; F7
-    // writes the same on demand), --quit-after N exits cleanly at frame N, --no-vsync removes the
-    // present throttle so CPU scopes run back to back. Either frame flag marks the run UNATTENDED:
-    // the window counts as focused (else the "Inactive max FPS" cap would be what gets measured).
-    uint32 profileAfterFrame = 0;
-    uint32 quitAfterFrame = 0;
+    // AUTOMATED PROFILING (Tools/profile.ps1 drives it): --profile-after S writes a text report of
+    // the last --profile-frames frames S seconds into the run (to --profile-out, default
+    // Local/profile.txt; F7 writes the same on demand), --quit-after S exits cleanly at S seconds,
+    // --no-vsync removes the present throttle so CPU scopes run back to back. Times are seconds of
+    // engine time since the loop started (frame counts would shift with the frame rate). Either
+    // timed flag marks the run UNATTENDED: the window counts as focused (else the "Inactive max
+    // FPS" cap would be what gets measured).
+    double profileAfterSec = 0.0;
+    double quitAfterSec = 0.0;
     oc::string profileOutPath = "Local/profile.txt";
     ProfileReportOptions profileOptions;
     EVSync vsync = EVSync::ENABLED;
     bool scenario = false;
     oc::string scenarioSave; // "" = the F10 path
-    uint32 scenarioFrame = 30;
+    double scenarioAtSec = 1.0;
     for (int i = 1; i < argc; ++i)
     {
         const oc::string_view arg = argv[i];
-        if (arg == "--profile-after" && i + 1 < argc)     profileAfterFrame = (uint32)oc::max(std::atoi(argv[++i]), 1);
+        if (arg == "--profile-after" && i + 1 < argc)     profileAfterSec = oc::max(std::atof(argv[++i]), 0.01);
         else if (arg == "--profile-frames" && i + 1 < argc) profileOptions.frames = (uint32)glm::clamp(std::atoi(argv[++i]), 1, (int)Profiler::FRAME_HISTORY - 1);
         else if (arg == "--profile-out" && i + 1 < argc)  profileOutPath = argv[++i];
         else if (arg == "--profile-workers")              profileOptions.perWorkerTrees = true; // one tree per worker instead of the merged one
-        else if (arg == "--quit-after" && i + 1 < argc)   quitAfterFrame = (uint32)oc::max(std::atoi(argv[++i]), 1);
+        else if (arg == "--quit-after" && i + 1 < argc)   quitAfterSec = oc::max(std::atof(argv[++i]), 0.01);
         else if (arg == "--no-vsync")                     vsync = EVSync::DISABLED;
         // --game scenario: load a save ("default" = F10's Local/gamesave.txt), select every own unit
-        // and order them to the other Base at --scenario-frame (default 30, after the world settled)
+        // and order them to the other Base at --scenario-at seconds (default 1, after the world settled)
         else if (arg == "--scenario" && i + 1 < argc)     { scenarioSave = argv[++i]; scenario = true; }
-        else if (arg == "--scenario-frame" && i + 1 < argc) scenarioFrame = (uint32)oc::max(std::atoi(argv[++i]), 1);
+        else if (arg == "--scenario-at" && i + 1 < argc)  scenarioAtSec = oc::max(std::atof(argv[++i]), 0.0);
         // "Category/Name=v" (up to 4 values): wins over Local/tweaks.cfg, never written back
         else if (arg == "--tweak" && i + 1 < argc)        { if (!TweakRegistry::get().setOverride(argv[++i])) Log::warning("--tweak: cannot parse " + oc::string(argv[i])); }
         else if (arg == "--server")                       launchMode = ELaunchMode::Server;
@@ -110,7 +112,7 @@ int main(int argc, char* argv[])
         gameMode = false; // co-op = a WINDOWED listen server (--game --server) + clients (--game --connect)
     }
     const bool headlessServer = headless && launchMode == ELaunchMode::Server;
-    const bool unattendedRun = profileAfterFrame > 0 || quitAfterFrame > 0;
+    const bool unattendedRun = profileAfterSec > 0.0 || quitAfterSec > 0.0;
 
     Window window;
     FreeFlyCameraController cameraController;
@@ -419,10 +421,12 @@ int main(int argc, char* argv[])
         frameCount++;
 
         // Unattended profiling: the report covers completed frames only, so it is written right
-        // after the frame mark; --quit-after alone (no dump) is a plain timed exit.
-        const uint64 completedFrames = Globals::profiler.getFrameCount();
-        if (scenario && completedFrames == scenarioFrame)
+        // after the frame mark; --quit-after alone (no dump) is a plain timed exit. Each trigger
+        // fires once, on the first frame past its time.
+        const double elapsedSec = Globals::time.getElapsedSec();
+        if (scenario && elapsedSec >= scenarioAtSec)
         {
+            scenario = false;
             if (!game.enabled())
                 Log::warning("--scenario needs --game");
             else
@@ -431,9 +435,12 @@ int main(int argc, char* argv[])
                 game.runScenario(scenarioSave == "default" ? oc::string_view() : oc::string_view(scenarioSave));
             }
         }
-        if (profileAfterFrame > 0 && completedFrames == profileAfterFrame)
+        if (profileAfterSec > 0.0 && elapsedSec >= profileAfterSec)
+        {
+            profileAfterSec = 0.0;
             writeProfileReport(profileOutPath, profileOptions);
-        if (quitAfterFrame > 0 && completedFrames >= quitAfterFrame)
+        }
+        if (quitAfterSec > 0.0 && elapsedSec >= quitAfterSec)
             g_running = false;
 
         if (headlessServer)
