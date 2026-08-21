@@ -3,7 +3,8 @@
 #   Tools\profile.ps1                         # RelWithDebInfo, dump at frame 600 over the last 256 frames, quit
 #   Tools\profile.ps1 -Config Debug -NoBuild  # reuse the last build
 #   Tools\profile.ps1 -Game -After 1200 -Frames 300 -Show 120
-#   Tools\profile.ps1 -Scenario default -Server -After 900   # --game --server: load Local/gamesave.txt at frame 30, every own unit marches on the enemy Base (THE standard perf run)
+#   Tools\profile.ps1 -Game -Server -After 900   # THE standard perf run: --game --server, loads Assets/Scenarios/march-64-units.txt at frame 30,
+#                                                # every own unit marches on the enemy Base (-Scenario <path> for another save, -Scenario "" for none)
 #   Tools\profile.ps1 -Tweak "Time/Max FPS=0","Spatial/Culling/Mode=0"   # tweak overrides (never saved)
 #   Tools\profile.ps1 -AppArgs "--server"     # extra App.exe arguments
 #
@@ -17,8 +18,8 @@ param(
     [int]$QuitAfter = 0,    # default: After + 2
     [string]$Out = "Local/profile.txt",
     [switch]$Game,
-    [string]$Scenario = "",   # --game scenario: a save path (Assets/-relative) or "default" (= F10's Local/gamesave.txt);
-                              # loads it, selects every own unit and orders them to the other Base. Implies -Game
+    [string]$Scenario = "Scenarios/march-64-units.txt", # --game scenario save (Assets/-relative; "default" = F10's Local/gamesave.txt):
+                              # loads it, selects every own unit and orders them to the other Base. Runs only with -Game; "" = no scenario
     [int]$ScenarioFrame = 30,
     [switch]$Server,          # windowed listen server (--server --port $Port): the networking code is live
     [int]$Port = 27999,       # not the default 27888, so a manually running instance keeps its port
@@ -51,7 +52,7 @@ if (Test-Path $reportPath) { Remove-Item $reportPath -Force }
 $argList = @("--profile-after", $After, "--profile-frames", $Frames, "--profile-out", $Out, "--quit-after", $QuitAfter)
 if (-not $VSync) { $argList += "--no-vsync" }
 if ($Workers) { $argList += "--profile-workers" }
-if ($Scenario -ne "") { $Game = $true; $argList += @("--scenario", $Scenario, "--scenario-frame", $ScenarioFrame) }
+if ($Game -and $Scenario -ne "") { $argList += @("--scenario", $Scenario, "--scenario-frame", $ScenarioFrame) }
 if ($Game) { $argList += "--game" }
 if ($Server) { $argList += @("--server", "--port", $Port) }
 foreach ($t in (@("Time/Max FPS=0") + $Tweak)) { $argList += "--tweak"; $argList += "`"$t`"" } # quoted: tweak keys contain spaces

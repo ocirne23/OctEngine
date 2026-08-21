@@ -1,0 +1,1640 @@
+Structure
+	Id 1
+	Type 18
+	Position -55 3 0
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 100
+Structure
+	Id 122
+	Type 14
+	Position -31 2 5
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 123
+	Type 14
+	Position -31 2 3
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 124
+	Type 14
+	Position -31 2 1
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 159
+	Type 14
+	Position -19 2 1
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 158
+	Type 14
+	Position -19 2 3
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 157
+	Type 14
+	Position -19 2 5
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 156
+	Type 14
+	Position -19 2 7
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 120
+	Type 14
+	Position -31 2 9
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 119
+	Type 14
+	Position -31 2 11
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 118
+	Type 14
+	Position -31 2 13
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 117
+	Type 14
+	Position -31 2 15
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 155
+	Type 14
+	Position -19 2 9
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 154
+	Type 14
+	Position -19 2 11
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 153
+	Type 14
+	Position -17 2 13
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 152
+	Type 14
+	Position -17 2 15
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 196
+	Type 14
+	Position -3 2 3
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 195
+	Type 14
+	Position -1 2 1
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 193
+	Type 14
+	Position -5 2 7
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 192
+	Type 14
+	Position -7 2 7
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 191
+	Type 14
+	Position -9 2 9
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 190
+	Type 14
+	Position -11 2 9
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 189
+	Type 14
+	Position -13 2 9
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 116
+	Type 14
+	Position -31 2 17
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 115
+	Type 14
+	Position -31 2 19
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 150
+	Type 14
+	Position -17 2 19
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 151
+	Type 14
+	Position -17 2 17
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 134
+	Type 14
+	Position -31 2 -19
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 133
+	Type 14
+	Position -31 2 -17
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 168
+	Type 14
+	Position -21 2 -19
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 167
+	Type 14
+	Position -21 2 -17
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 176
+	Type 14
+	Position -1 2 -17
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 175
+	Type 14
+	Position -1 2 -19
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 132
+	Type 14
+	Position -31 2 -15
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 131
+	Type 14
+	Position -31 2 -13
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 130
+	Type 14
+	Position -31 2 -11
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 129
+	Type 14
+	Position -31 2 -9
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 166
+	Type 14
+	Position -21 2 -15
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 165
+	Type 14
+	Position -21 2 -11
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 164
+	Type 14
+	Position -21 2 -9
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 128
+	Type 14
+	Position -31 2 -7
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 127
+	Type 14
+	Position -31 2 -5
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 126
+	Type 14
+	Position -31 2 -3
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 125
+	Type 14
+	Position -31 2 -1
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 169
+	Type 14
+	Position -17 2 -5
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 163
+	Type 14
+	Position -21 2 -7
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 162
+	Type 14
+	Position -21 2 -5
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 161
+	Type 14
+	Position -19 2 -3
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 160
+	Type 14
+	Position -19 2 -1
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 173
+	Type 14
+	Position -9 2 -11
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 172
+	Type 14
+	Position -11 2 -9
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 174
+	Type 14
+	Position -7 2 -13
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 177
+	Type 14
+	Position -1 2 -15
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 178
+	Type 14
+	Position -1 2 -13
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 179
+	Type 14
+	Position -1 2 -11
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 180
+	Type 14
+	Position -1 2 -9
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 170
+	Type 14
+	Position -15 2 -7
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 171
+	Type 14
+	Position -13 2 -7
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 187
+	Type 14
+	Position -9 2 -1
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 188
+	Type 14
+	Position -11 2 -1
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 181
+	Type 14
+	Position -1 2 -7
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 182
+	Type 14
+	Position -1 2 -5
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 183
+	Type 14
+	Position -1 2 -3
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 184
+	Type 14
+	Position -3 2 -3
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 185
+	Type 14
+	Position -5 2 -3
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 186
+	Type 14
+	Position -7 2 -3
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 194
+	Type 14
+	Position -1 2 -1
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 221
+	Type 14
+	Position 7 2 -13
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 222
+	Type 14
+	Position 5 2 -15
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 218
+	Type 14
+	Position 11 2 -9
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 219
+	Type 14
+	Position 9 2 -9
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 220
+	Type 14
+	Position 9 2 -11
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 215
+	Type 14
+	Position 15 2 -3
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 216
+	Type 14
+	Position 13 2 -5
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 217
+	Type 14
+	Position 13 2 -7
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 213
+	Type 14
+	Position 17 2 -1
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 214
+	Type 14
+	Position 17 2 -3
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 203
+	Type 14
+	Position 7 2 7
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 204
+	Type 14
+	Position 7 2 5
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 205
+	Type 14
+	Position 7 2 3
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 206
+	Type 14
+	Position 9 2 3
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 207
+	Type 14
+	Position 11 2 3
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 208
+	Type 14
+	Position 13 2 3
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 209
+	Type 14
+	Position 15 2 3
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 199
+	Type 14
+	Position 5 2 15
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 200
+	Type 14
+	Position 5 2 13
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 201
+	Type 14
+	Position 5 2 11
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 202
+	Type 14
+	Position 7 2 9
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 210
+	Type 14
+	Position 17 2 3
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 211
+	Type 14
+	Position 19 2 3
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 212
+	Type 14
+	Position 19 2 1
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 197
+	Type 14
+	Position 5 2 19
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 198
+	Type 14
+	Position 5 2 17
+	Facing 0 0 0
+	NodeIndex -1
+	Team 0
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 0
+Structure
+	Id 2
+	Type 18
+	Position 55 3 0
+	Facing 0 0 0
+	NodeIndex -1
+	Team 1
+	Blueprint false
+	Health 100
+	Charge 0
+	Fuel 0
+	Minerals 100
+Unit
+	Type 2
+	Team 0
+	Position -42.335083 0.54937875 7.1529484
+	Health 30
+	Energy 16
+	Source 227
+	RouteIndex 1
+Unit
+	Type 2
+	Team 0
+	Position -39.611034 0.54937875 0.882254
+	Health 30
+	Energy 16
+	Source 227
+	RouteIndex 1
+Unit
+	Type 2
+	Team 0
+	Position -37.088383 0.54937875 0.46252102
+	Health 30
+	Energy 16
+	Source 227
+	RouteIndex 1
+Unit
+	Type 2
+	Team 0
+	Position -34.761433 0.54937875 0.21362302
+	Health 30
+	Energy 16
+	Source 227
+	RouteIndex 1
+Unit
+	Type 2
+	Team 0
+	Position -37.04848 0.54937875 6.033337
+	Health 30
+	Energy 16
+	Source 227
+	RouteIndex 1
+Unit
+	Type 2
+	Team 0
+	Position -32.7145 0.54937875 4.0105267
+	Health 30
+	Energy 16
+	Source 227
+	RouteIndex 1
+Unit
+	Type 0
+	Team 0
+	Position -40.31711 0.79937875 11.869961
+	Health 60
+	Energy 40
+	Source 230
+	RouteIndex 1
+Unit
+	Type 0
+	Team 0
+	Position -41.09842 0.79937875 12.503471
+	Health 60
+	Energy 40
+	Source 230
+	RouteIndex 1
+Unit
+	Type 0
+	Team 0
+	Position -40.36082 0.79937875 13.167079
+	Health 60
+	Energy 40
+	Source 230
+	RouteIndex 1
+Unit
+	Type 0
+	Team 0
+	Position -41.482582 0.79937875 13.56118
+	Health 60
+	Energy 40
+	Source 230
+	RouteIndex 1
+Unit
+	Type 0
+	Team 0
+	Position -40.651913 0.79937875 14.122245
+	Health 60
+	Energy 40
+	Source 230
+	RouteIndex 1
+Unit
+	Type 0
+	Team 0
+	Position -39.34873 0.79937875 11.52498
+	Health 60
+	Energy 40
+	Source 230
+	RouteIndex 1
+Unit
+	Type 0
+	Team 0
+	Position -39.060703 0.79937875 12.483248
+	Health 60
+	Energy 40
+	Source 230
+	RouteIndex 1
+Unit
+	Type 0
+	Team 0
+	Position -38.057896 0.79937875 12.354895
+	Health 60
+	Energy 40
+	Source 230
+	RouteIndex 1
+Unit
+	Type 0
+	Team 0
+	Position -39.4031 0.79937875 13.446546
+	Health 60
+	Energy 40
+	Source 230
+	RouteIndex 1
+Unit
+	Type 0
+	Team 0
+	Position -38.418896 0.79937875 13.286933
+	Health 60
+	Energy 40
+	Source 230
+	RouteIndex 1
+Unit
+	Type 0
+	Team 0
+	Position -36.759567 0.79937875 12.042561
+	Health 60
+	Energy 40
+	Source 230
+	RouteIndex 1
+Unit
+	Type 0
+	Team 0
+	Position -37.414295 0.79937875 13.152814
+	Health 60
+	Energy 40
+	Source 230
+	RouteIndex 1
+Unit
+	Type 0
+	Team 0
+	Position -39.050777 0.79937875 14.416022
+	Health 60
+	Energy 40
+	Source 230
+	RouteIndex 1
+Unit
+	Type 0
+	Team 0
+	Position -39.963814 0.79937875 14.846921
+	Health 60
+	Energy 40
+	Source 230
+	RouteIndex 1
+Unit
+	Type 0
+	Team 0
+	Position -37.996666 0.79937875 14.19353
+	Health 60
+	Energy 40
+	Source 230
+	RouteIndex 1
+Unit
+	Type 0
+	Team 0
+	Position -36.759586 0.7993788 14.934103
+	Health 60
+	Energy 40
+	Source 23
+	RouteIndex 0
+Unit
+	Type 0
+	Team 0
+	Position -34.514145 0.79937875 13.024033
+	Health 60
+	Energy 40
+	Source 23
+	RouteIndex 0
+Unit
+	Type 0
+	Team 0
+	Position -35.394184 0.7993788 13.497043
+	Health 60
+	Energy 40
+	Source 23
+	RouteIndex 0
+Unit
+	Type 0
+	Team 0
+	Position -35.98384 0.79937875 12.6963825
+	Health 60
+	Energy 40
+	Source 230
+	RouteIndex 1
+Unit
+	Type 0
+	Team 0
+	Position -34.398323 0.7993788 14.268795
+	Health 60
+	Energy 40
+	Source 23
+	RouteIndex 0
+Unit
+	Type 0
+	Team 0
+	Position -35.98574 0.7993788 14.300696
+	Health 60
+	Energy 40
+	Source 23
+	RouteIndex 0
+Unit
+	Type 0
+	Team 0
+	Position -35.22846 0.7993788 14.952263
+	Health 60
+	Energy 40
+	Source 23
+	RouteIndex 0
+Unit
+	Type 0
+	Team 0
+	Position -35.985214 0.7993788 15.683317
+	Health 60
+	Energy 40
+	Source 23
+	RouteIndex 0
+Unit
+	Type 0
+	Team 0
+	Position -45.534126 0.7993788 17.61976
+	Health 60
+	Energy 40
+	Source 23
+	RouteIndex 0
+Unit
+	Type 0
+	Team 0
+	Position -44.180717 0.7993788 17.949966
+	Health 60
+	Energy 40
+	Source 23
+	RouteIndex 0
+Unit
+	Type 0
+	Team 0
+	Position -43.76489 0.7993788 16.79579
+	Health 60
+	Energy 40
+	Source 23
+	RouteIndex 0
+Unit
+	Type 0
+	Team 0
+	Position -42.064415 0.7993788 17.680397
+	Health 60
+	Energy 40
+	Source 23
+	RouteIndex 0
+Unit
+	Type 0
+	Team 0
+	Position -41.08693 0.7993788 17.89016
+	Health 60
+	Energy 40
+	Source 23
+	RouteIndex 0
+Unit
+	Type 0
+	Team 0
+	Position -42.887794 0.7993788 18.54865
+	Health 60
+	Energy 40
+	Source 23
+	RouteIndex 0
+Unit
+	Type 0
+	Team 0
+	Position -43.828842 0.7993788 18.8869
+	Health 60
+	Energy 40
+	Source 23
+	RouteIndex 0
+Unit
+	Type 0
+	Team 0
+	Position -40.919487 0.7993788 18.923182
+	Health 60
+	Energy 40
+	Source 23
+	RouteIndex 0
+Unit
+	Type 0
+	Team 0
+	Position -41.896126 0.7993788 18.677248
+	Health 60
+	Energy 40
+	Source 23
+	RouteIndex 0
+Unit
+	Type 1
+	Team 0
+	Position -44.044975 1.2993788 -10.579428
+	Health 180
+	Energy 80
+	Source 226
+	RouteIndex 1
+Unit
+	Type 1
+	Team 0
+	Position -44.486244 1.299379 -9.041818
+	Health 180
+	Energy 80
+	Source 226
+	RouteIndex 1
+Unit
+	Type 1
+	Team 0
+	Position -42.8964 1.2993786 -9.465683
+	Health 180
+	Energy 80
+	Source 226
+	RouteIndex 1
+Unit
+	Type 1
+	Team 0
+	Position -43.624973 1.2993788 -12.157777
+	Health 180
+	Energy 80
+	Source 226
+	RouteIndex 1
+Unit
+	Type 1
+	Team 0
+	Position -45.800545 1.2993786 -9.951776
+	Health 180
+	Energy 80
+	Source 226
+	RouteIndex 1
+Unit
+	Type 1
+	Team 0
+	Position -40.097973 1.299377 -9.727165
+	Health 180
+	Energy 80
+	Source 226
+	RouteIndex 1
+Unit
+	Type 1
+	Team 0
+	Position -42.492218 1.2993789 -11.013285
+	Health 180
+	Energy 80
+	Source 226
+	RouteIndex 1
+Unit
+	Type 1
+	Team 0
+	Position -41.441776 1.2993789 -8.801171
+	Health 180
+	Energy 80
+	Source 226
+	RouteIndex 1
+Unit
+	Type 1
+	Team 0
+	Position -38.22643 1.299379 -9.514876
+	Health 180
+	Energy 80
+	Source 226
+	RouteIndex 1
+Unit
+	Type 1
+	Team 0
+	Position -39.986816 1.2993932 -8.132084
+	Health 180
+	Energy 80
+	Source 226
+	RouteIndex 1
+Unit
+	Type 2
+	Team 0
+	Position -38.08525 0.5493639 -8.377721
+	Health 30
+	Energy 16
+	Source 227
+	RouteIndex 1
+Unit
+	Type 2
+	Team 0
+	Position -33.434906 0.54937875 -8.63722
+	Health 30
+	Energy 16
+	Source 227
+	RouteIndex 1
+Unit
+	Type 1
+	Team 0
+	Position -40.06818 1.2993875 -6.535692
+	Health 180
+	Energy 80
+	Source 226
+	RouteIndex 1
+Unit
+	Type 1
+	Team 0
+	Position -43.702015 1.2993786 -6.3662477
+	Health 180
+	Energy 80
+	Source 226
+	RouteIndex 1
+Unit
+	Type 1
+	Team 0
+	Position -45.252155 1.2993788 -7.6308584
+	Health 180
+	Energy 80
+	Source 226
+	RouteIndex 1
+Unit
+	Type 1
+	Team 0
+	Position -41.883602 1.2993928 -7.2637334
+	Health 180
+	Energy 80
+	Source 226
+	RouteIndex 1
+Unit
+	Type 1
+	Team 0
+	Position -43.33816 1.299379 -7.928329
+	Health 180
+	Energy 80
+	Source 226
+	RouteIndex 1
+Unit
+	Type 2
+	Team 0
+	Position -40.79849 0.54771817 -7.3749933
+	Health 30
+	Energy 16
+	Source 227
+	RouteIndex 1
+Unit
+	Type 2
+	Team 0
+	Position -42.36883 0.54937875 -3.2052913
+	Health 30
+	Energy 16
+	Source 227
+	RouteIndex 1
+Unit
+	Type 2
+	Team 0
+	Position -42.037197 0.54937875 -2.4971077
+	Health 30
+	Energy 16
+	Source 227
+	RouteIndex 1
+Unit
+	Type 1
+	Team 0
+	Position -37.5554 1.2993791 -7.123294
+	Health 180
+	Energy 80
+	Source 226
+	RouteIndex 1
+Unit
+	Type 2
+	Team 0
+	Position -38.485943 0.54935974 -7.790236
+	Health 30
+	Energy 16
+	Source 227
+	RouteIndex 1
+Unit
+	Type 2
+	Team 0
+	Position -39.101334 0.54937863 -7.3939514
+	Health 30
+	Energy 16
+	Source 227
+	RouteIndex 1
+Unit
+	Type 2
+	Team 0
+	Position -36.42875 0.5493778 -6.902607
+	Health 30
+	Energy 16
+	Source 227
+	RouteIndex 1
+Unit
+	Type 2
+	Team 0
+	Position -36.41595 0.54937875 -3.415366
+	Health 30
+	Energy 16
+	Source 227
+	RouteIndex 1
+Unit
+	Type 2
+	Team 0
+	Position -33.640366 0.54937875 -2.9330876
+	Health 30
+	Energy 16
+	Source 227
+	RouteIndex 1
