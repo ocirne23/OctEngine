@@ -58,7 +58,6 @@ static_assert(oc::size(ForceFieldParams{}.teamColors) == RendererVKLayout::MAX_F
     "ForceFieldParams::teamColors must cover MAX_FORCE_TEAMS (Settings.ixx doesn't import :Layout)");
 
 export enum class EValidation { ENABLED, DISABLED };
-export enum class EVSync { ENABLED, DISABLED };
 export enum class EVr { ENABLED, DISABLED };
 
 // Recycles contiguous slot ranges freed by destroyed ObjectContainers (mesh infos, materials, instance
@@ -132,7 +131,7 @@ public:
     Renderer() {}
     ~Renderer();
 
-    bool initialize(Window& window, EValidation validation, EVSync vsync, EVr vr = EVr::DISABLED);
+    bool initialize(Window& window, EValidation validation, EVr vr = EVr::DISABLED);
     // False in headless server mode (the global exists — static init_seg — but initialize never ran).
     // Anything that may run headless and would touch GPU/mapped state must gate on this.
     bool isInitialized() const { return m_initialized; }
@@ -677,7 +676,7 @@ private:
     bool m_initialized = false;
     bool m_frameSlotWaited = false; // waitFrameSlot() ran for the current slot (cleared by present)
     bool m_windowMinimized = false;
-    bool m_vsyncEnabled = true;
+    bool m_vsyncEnabled = true; // "Time/VSync" tweak (Saved; --no-vsync overrides it): FIFO vs Immediate, applied by a swapchain recreate
     bool m_wireframe = false; // "Renderer/Wireframe" tweak: forward scene variants rasterize as lines
     bool m_depthPrepassReuse = true; // "Depth prepass reuse" tweak: forward pass reuses the G-buffer prepass depth for early-Z
     glm::vec2 m_prevTaaJitter{ 0.0f }; // last frame's TAA jitter (ubo.taaJitter.zw): consumers of the PREV depth image compensate with it

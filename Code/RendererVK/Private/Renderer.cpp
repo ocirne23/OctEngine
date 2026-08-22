@@ -43,7 +43,7 @@ Renderer::~Renderer()
     ImGui_ImplVulkan_Shutdown();
 }
 
-bool Renderer::initialize(Window& window, EValidation validation, EVSync vsync, EVr vr)
+bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
 {
     ProfileScope scope("Renderer::initialize", EProfileCategory::Renderer);
 
@@ -94,6 +94,12 @@ bool Renderer::initialize(Window& window, EValidation validation, EVSync vsync, 
     Tweak::floatVar("Particles", "Time scale", &m_particleTimeScale, 0.0f, 4.0f);
     Tweak::boolean("Particles", "Log stats", &m_particleLogStats);
     Tweak::boolean("Decals", "Enabled", &m_decalsEnabled);
+    // Present mode is swapchain creation state (FIFO vs Immediate), so a change recreates the
+    // swapchain (device idle + re-init, same path as a lost acquire). A saved/override value fires
+    // onChange at registration, before the swapchain exists — the first creation below reads the
+    // variable directly, so the callback only acts once initialized. Main-thread: the panel's
+    // onChange runs in UI::flushMainThreadWork, between the frame-slot wait and present.
+    Tweak::boolean("Time", "VSync", &m_vsyncEnabled, [this]() { if (m_initialized) recreateSwapchain(); }, ETweakFlags::Saved);
     Globals::meshStreamer.initialize();
 
     glslang::InitializeProcess();
@@ -104,8 +110,6 @@ bool Renderer::initialize(Window& window, EValidation validation, EVSync vsync, 
         _putenv("VK_LAYER_PRINTF_TO_STDOUT=0");
         //_putenv("VK_LAYER_PRINTF_BUFFER_SIZE=16777216");
     }
-    m_vsyncEnabled = (vsync == EVSync::ENABLED);
-
     if (vr == EVr::ENABLED)
     {
         m_taaParams.taaFeedback *= 0.5f; // Reduce blur for VR

@@ -67,7 +67,8 @@ int main(int argc, char* argv[])
     // AUTOMATED PROFILING (Tools/profile.ps1 drives it): --profile-after S writes a text report of
     // the last --profile-frames frames S seconds into the run (to --profile-out, default
     // Local/profile.txt; F7 writes the same on demand), --quit-after S exits cleanly at S seconds,
-    // --no-vsync removes the present throttle so CPU scopes run back to back. Times are seconds of
+    // --no-vsync removes the present throttle so CPU scopes run back to back (it is the "Time/VSync"
+    // tweak override: pinned for the run, never written back). Times are seconds of
     // engine time since the loop started (frame counts would shift with the frame rate). Either
     // timed flag marks the run UNATTENDED: the window counts as focused (else the "Inactive max
     // FPS" cap would be what gets measured).
@@ -75,7 +76,6 @@ int main(int argc, char* argv[])
     double quitAfterSec = 0.0;
     oc::string profileOutPath = "Local/profile.txt";
     ProfileReportOptions profileOptions;
-    EVSync vsync = EVSync::ENABLED;
     bool scenario = false;
     oc::string scenarioSave; // "" = the F10 path
     double scenarioAtSec = 1.0;
@@ -87,7 +87,7 @@ int main(int argc, char* argv[])
         else if (arg == "--profile-out" && i + 1 < argc)  profileOutPath = argv[++i];
         else if (arg == "--profile-workers")              profileOptions.perWorkerTrees = true; // one tree per worker instead of the merged one
         else if (arg == "--quit-after" && i + 1 < argc)   quitAfterSec = oc::max(std::atof(argv[++i]), 0.01);
-        else if (arg == "--no-vsync")                     vsync = EVSync::DISABLED;
+        else if (arg == "--no-vsync")                     TweakRegistry::get().setOverride("Time/VSync=0");
         // --game scenario: load a save ("default" = F10's Local/gamesave.txt), select every own unit
         // and order them to the other Base at --scenario-at seconds (default 1, after the world settled)
         else if (arg == "--scenario" && i + 1 < argc)     { scenarioSave = argv[++i]; scenario = true; }
@@ -146,7 +146,7 @@ int main(int argc, char* argv[])
     if (!headlessServer)
     {
         cameraController.initialize(glm::vec3(-1.5f, 14.0f, -7.1f), glm::vec3(0.0f, 4.0f, 0.0f));
-        Globals::rendererVK.initialize(window, EValidation::DISABLED, vsync, EVr::DISABLED); // ENABLED DISABLED
+        Globals::rendererVK.initialize(window, EValidation::DISABLED, EVr::DISABLED); // ENABLED DISABLED
         Globals::ui.initialize();
     }
     Globals::world.initialize();
