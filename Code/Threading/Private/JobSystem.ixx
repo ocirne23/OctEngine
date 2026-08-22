@@ -231,10 +231,13 @@ private:
         const uint32 numChunks = (count + grainSize - 1) / grainSize;
         const uint32 numHelpers = oc::min(m_numWorkers, numChunks - 1);
         JobCounter counter;
-        for (uint32 i = 0; i < numHelpers; ++i)
-            submit(runner, profile, priority, &counter); // helpers scoped by execute()
         {
-            ProfileScope scope(profile.name, profile.category); // the calling thread's share
+            // The calling thread's span covers the helper submits (+ wakes) AND its own share, so
+            // a parallelFor has no unscoped head on the caller's track; the join that follows
+            // carries wait()'s own "Job wait" scope as a sibling.
+            ProfileScope scope(profile.name, profile.category);
+            for (uint32 i = 0; i < numHelpers; ++i)
+                submit(runner, profile, priority, &counter); // helpers scoped by execute()
             runner();
         }
         wait(counter);

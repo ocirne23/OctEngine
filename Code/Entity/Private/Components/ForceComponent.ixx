@@ -37,6 +37,8 @@ export struct ForceComponent
         float distribution = 0.5f; // where the density sits along the line (0 = emitter end, 1 = target end)
         float width = 1.0f;        // lateral scale, reach untouched
         bool centered = true;      // pull the emitter back Reach/2 so a zero offset centres the bubble on the entity
+        bool mergeable = true;     // the Force library's bubble MERGING (same-team overlapping mergeable
+                                   // bubbles ride one GPU emitter; see "Force/Merge" tweaks); false opts out
     };
 
     void spawn(Entity& entity, const SpawnInfo& info, const Transform& base);

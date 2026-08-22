@@ -101,6 +101,7 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
         m_mappedEmitters[i] = m_emitterBuffers[i].mapMemory<ForceEmittersGpu>();
         m_mappedEmitters[i].data()->count = 0;
         m_mappedEmitters[i].data()->bigCount = 0;
+        m_mappedEmitters[i].data()->evalCount = 0;
         m_emitterBuffers[i].flushMappedMemory(FORCE_EMITTER_HEADER_SIZE);
 
         m_queryBuffers[i].initialize(sizeof(ForceQueriesGpu),
@@ -170,7 +171,7 @@ void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu>
     ForceEmittersGpu* dst = m_mappedEmitters[frameIdx].data();
     uint32 count = 0;
     uint32 bigCount = 0;
-    const auto compact = [&](const ForceEmitterGpu& e, uint32 slot)
+    const auto compact = [&](const ForceEmitterGpu& e, uint32 slot, bool allowBig)
     {
         ForceEmitterGpu& out = dst->emitters[count];
         out = e;
@@ -178,7 +179,7 @@ void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu>
         // Big emitters bypass the grid into the globally-scanned list; when the list is full the
         // overflow inserts into the grid anyway (large footprint, but never a hole in the field).
         const float maxReach = e.posReach.w; // Reach IS the max extent (the bubble spans the output line)
-        if (maxReach > bigReachThreshold && bigCount < MAX_FORCE_BIG_EMITTERS)
+        if (allowBig && maxReach > bigReachThreshold && bigCount < MAX_FORCE_BIG_EMITTERS)
         {
             out.teamFlags.y |= FORCE_FLAG_BIG;
             dst->bigIndices[bigCount++] = count;
@@ -187,18 +188,27 @@ void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu>
             out.teamFlags.y &= ~FORCE_FLAG_BIG;
         ++count;
     };
-    // Two-pass partition: drawable shells first so the shell draw's instanceCount can stop before
+    // Three-pass partition: drawable shells first so the shell draw's instanceCount can stop before
     // the shellAlpha-0 emitters — an invisible world-scale emitter still contributes field (grid/
-    // force/query dispatches use the FULL count) but never costs its full-screen ray march.
+    // field evaluations use `count`) but never costs its full-screen ray march — then the PASSIVE
+    // tail past `count`: merge-group members that only want their own slot-indexed force/pressure
+    // readback, seen by force_emitter.cs alone (`evalCount`).
+    const auto isActive = [&](uint32 slot) { return (slots[slot].teamFlags.y & FORCE_FLAG_ACTIVE) != 0u; };
+    const auto isPassive = [&](uint32 slot) { return (slots[slot].teamFlags.y & FORCE_FLAG_PASSIVE) != 0u; };
     for (uint32 slot = 0; slot < (uint32)slots.size(); ++slot)
-        if ((slots[slot].teamFlags.y & FORCE_FLAG_ACTIVE) && slots[slot].outputParams.y > 0.0f)
-            compact(slots[slot], slot);
+        if (isActive(slot) && !isPassive(slot) && slots[slot].outputParams.y > 0.0f)
+            compact(slots[slot], slot, true);
     const uint32 drawCount = count;
     for (uint32 slot = 0; slot < (uint32)slots.size(); ++slot)
-        if ((slots[slot].teamFlags.y & FORCE_FLAG_ACTIVE) && slots[slot].outputParams.y <= 0.0f)
-            compact(slots[slot], slot);
-    dst->count = count;
+        if (isActive(slot) && !isPassive(slot) && slots[slot].outputParams.y <= 0.0f)
+            compact(slots[slot], slot, true);
+    const uint32 fieldCount = count;
+    for (uint32 slot = 0; slot < (uint32)slots.size(); ++slot)
+        if (isActive(slot) && isPassive(slot))
+            compact(slots[slot], slot, false); // not a field: never in the big list either
+    dst->count = fieldCount;
     dst->bigCount = bigCount;
+    dst->evalCount = count;
     m_emitterBuffers[frameIdx].flushMappedMemory(FORCE_EMITTER_HEADER_SIZE + count * sizeof(ForceEmitterGpu));
 
     ForceQueriesGpu* q = m_mappedQueries[frameIdx].data();
@@ -210,8 +220,8 @@ void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu>
 
     uint32* ind = m_mappedIndirect[frameIdx].data();
     ind[DRAW_CMD_OFFSET + 1] = drawCount; // instanceCount: drawable shells only (see partition above)
-    ind[GRID_DISPATCH_OFFSET] = count; // single-thread workgroups (see force_grid.cs.glsl)
-    ind[EMITTER_DISPATCH_OFFSET] = (count + FORCE_SIM_GROUP_SIZE - 1) / FORCE_SIM_GROUP_SIZE;
+    ind[GRID_DISPATCH_OFFSET] = fieldCount; // single-thread workgroups (see force_grid.cs.glsl)
+    ind[EMITTER_DISPATCH_OFFSET] = (count + FORCE_SIM_GROUP_SIZE - 1) / FORCE_SIM_GROUP_SIZE; // + passive tail
     ind[QUERY_DISPATCH_OFFSET] = (numQueries + FORCE_SIM_GROUP_SIZE - 1) / FORCE_SIM_GROUP_SIZE;
     m_indirectBuffers[frameIdx].flushMappedMemory(vk::WholeSize);
 }

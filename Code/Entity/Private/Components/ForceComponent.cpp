@@ -19,6 +19,7 @@ void ForceComponent::spawn(Entity& entity, const SpawnInfo& info, const Transfor
         pos -= worldDir * (info.reach * 0.5f); // half a reach back so a zero offset sits the bubble on the entity
     emitter = Globals::forceSystem.createEmitter(info.team, pos, worldDir,
         info.output, info.reach, info.focus, info.distribution, info.width);
+    emitter.setMergeable(info.mergeable);
 }
 
 void ForceComponent::destroy(Entity& entity, const SpawnInfo&)
@@ -63,4 +64,5 @@ void writeForceSpawnInfo(const ForceComponent::SpawnInfo& info, AssetNode& out)
     if (info.distribution != defaults.distribution) out.set("Distribution", info.distribution);
     if (info.width != defaults.width)               out.set("Width", info.width);
     if (info.centered != defaults.centered)         out.set("Centered", info.centered);
+    if (info.mergeable != defaults.mergeable)       out.set("Mergeable", info.mergeable);
 }

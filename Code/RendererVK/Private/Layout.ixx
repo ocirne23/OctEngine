@@ -108,6 +108,10 @@ export namespace RendererVKLayout
     // ForceEmitterGpu::teamFlags.y bits.
     constexpr uint32 FORCE_FLAG_ACTIVE = 1u << 0;   // clear = destroyed/free slot: skipped everywhere
     constexpr uint32 FORCE_FLAG_BIG = 1u << 1;      // reach above the threshold: global list, not the grid
+    // Evaluated by force_emitter.cs for its OWN slot-indexed readback but contributes NO field: a
+    // member of a merge group (Force library) whose field the group's emitter carries. Compacted
+    // past fe_count (so every field evaluation and the grid insert never see it) and never drawn.
+    constexpr uint32 FORCE_FLAG_PASSIVE = 1u << 2;
 
     // Force emitter hash grid (uniform 32 m cells, NOT camera-adaptive — gameplay queries happen
     // anywhere). Fixed per-cell emitter capacity; cells bump-allocate from the data buffer with the
@@ -138,9 +142,10 @@ export namespace RendererVKLayout
     // list linearly with a sphere reject, so a 300 m dome doesn't flood thousands of cells.
     struct alignas(16) ForceEmittersGpu
     {
-        uint32 count;
+        uint32 count;     // field-contributing emitters (grid insert, every field evaluation)
         uint32 bigCount;
-        uint32 _pad0, _pad1;
+        uint32 evalCount; // count + the PASSIVE tail: what force_emitter.cs evaluates
+        uint32 _pad1;
         uint32 bigIndices[MAX_FORCE_BIG_EMITTERS]; // compact indices of grid-bypassing emitters
         ForceEmitterGpu emitters[MAX_FORCE_EMITTERS];
     };

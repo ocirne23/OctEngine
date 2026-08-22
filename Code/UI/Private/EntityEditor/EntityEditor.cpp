@@ -1214,6 +1214,11 @@ void EntityEditor::renderForceSection()
 	if (ImGui::IsItemHovered())
 		ImGui::SetTooltip("Pull the emitter back half a reach so a zero Offset centres the bubble on the entity");
 
+	if (ImGui::Checkbox("Mergeable", &m_forceDraft.mergeable))
+		commitRespawn();
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("Overlapping same-team mergeable bubbles share one GPU emitter (Force/Merge tweaks)");
+
 	if (ImGui::Button("Remove Force"))
 	{
 		m_hasForce = false;
@@ -1618,6 +1623,7 @@ void EntityEditor::applyDraftsLive()
 				fc->emitter.setFocus(m_forceDraft.focus);
 				fc->emitter.setDistribution(m_forceDraft.distribution);
 				fc->emitter.setWidth(m_forceDraft.width);
+				fc->emitter.setMergeable(m_forceDraft.mergeable);
 			}
 		}
 

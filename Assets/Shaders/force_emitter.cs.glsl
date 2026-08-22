@@ -28,7 +28,7 @@ const vec3 c_icoDirs[12] = vec3[12](
 void main()
 {
     const uint i = gl_GlobalInvocationID.x;
-    if (i >= fe_count)
+    if (i >= fe_evalCount) // includes the PASSIVE tail: merged members read their own pressure
         return;
     const ForceEmitterData e = fe_emitters[i];
     const uint team = e.teamFlags.x;

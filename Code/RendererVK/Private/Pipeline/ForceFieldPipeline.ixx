@@ -44,8 +44,9 @@ public:
     bool getUseGrid() const { return m_useGrid; }
 
     // Compacts the ACTIVE emitter slots (building the big-emitter list against bigReachThreshold and
-    // stamping each record's source slot for the readback), uploads the query slots, and patches the
-    // draw/dispatch counts. Call from present(), after the slot's fence wait.
+    // stamping each record's source slot for the readback; FORCE_FLAG_PASSIVE slots land in a tail
+    // past the field count that only the force compute evaluates), uploads the query slots, and
+    // patches the draw/dispatch counts. Call from present(), after the slot's fence wait.
     void upload(uint32 frameIdx, oc::span<const RendererVKLayout::ForceEmitterGpu> slots,
         oc::span<const RendererVKLayout::ForceQueryGpu> querySlots, float bigReachThreshold);
 

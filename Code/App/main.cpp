@@ -357,6 +357,7 @@ int main(int argc, char* argv[])
             }
             if (uiJobKicked)
                 Globals::ui.flushMainThreadWork(); // deferred tweak onChange callbacks + container imports (the job produced its own draw-data snapshot)
+            Globals::forceSystem.joinMerge(); // last frame's merge job (kicked after the force upload, ran during present + the stall); before input/drains can touch emitters
         }
 
         const double deltaSec = Globals::time.getDeltaSec(); // clock advanced by limitFrameRate / update above
@@ -458,6 +459,7 @@ int main(int argc, char* argv[])
     }
 
     Globals::jobSystem.wait(uiCounter); // the final frame's widget pass may still be in flight
+    Globals::forceSystem.joinMerge();   // and the final frame's merge job
 
     return 0;
 }

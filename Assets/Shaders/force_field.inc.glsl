@@ -44,7 +44,10 @@ struct ForceEmitterData
 // Matches RendererVKLayout::ForceEmittersGpu (header + big-emitter index list + compacted live emitters).
 layout (binding = FORCE_EMITTERS_BINDING, std430) readonly buffer ForceEmitters
 {
-    uint fe_count; uint fe_bigCount; uint fe_pad0; uint fe_pad1;
+    // fe_count = field-contributing emitters; fe_evalCount = fe_count + the FORCE_FLAG_PASSIVE tail
+    // (merge-group members that only want their own force/pressure readback — force_emitter.cs
+    // evaluates them, nothing else ever sees them).
+    uint fe_count; uint fe_bigCount; uint fe_evalCount; uint fe_pad1;
     uint fe_bigIndices[MAX_FORCE_BIG_EMITTERS];
     ForceEmitterData fe_emitters[];
 };
