@@ -61,6 +61,5 @@ void PhysicsTaskScheduler::finish(void* userTask, void*)
 
 int PhysicsTaskScheduler::defaultWorkerCount()
 {
-    // +1: box3d treats the thread driving the step as a worker and slices for it too.
-    return int(oc::clamp<uint32>(Globals::jobSystem.getNumWorkers() + 1, 1u, uint32(B3_MAX_WORKERS)));
+    return int(oc::clamp<uint32>(Globals::jobSystem.getNumWorkers(), 1u, uint32(B3_MAX_WORKERS)));
 }
