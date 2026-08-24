@@ -45,7 +45,7 @@ void UI::prepare()
     ProfileScope profileScope("UI prepare", EProfileCategory::UI);
     // One job per data-heavy panel that was open last frame; each panel's prepare() is worker-safe
     // (no ImGui, reads only its own state + reader-safe engine sources: profiler rings, the memory
-    // tracker's atomic tree, the log under its mutex). update() waits on the counter before
+    // tracker's atomic tree, the log under its mutex). updateJob() waits on the counter before
     // ImGui::NewFrame, so nothing here ever overlaps the widget pass that reads the results.
     if (m_profilerOpen)
         Globals::jobSystem.submit([this] { m_profilerPanel.prepare(); }, { "uiProfilerPrepare", EProfileCategory::UI }, EJobPriority::High, &m_prepareCounter);
@@ -57,24 +57,31 @@ void UI::prepare()
         Globals::jobSystem.submit([this] { m_assetBrowser.prepare(); }, { "uiContentPrepare", EProfileCategory::UI }, EJobPriority::High, &m_prepareCounter);
 }
 
-void UI::beginImGuiFrame()
+void UI::update(const oc::vector<EntityPtr>& rootEntities, const Camera& camera, double deltaSec)
 {
-    // Main thread, before the update() job: the SDL3 backend queries the window and sets the OS
-    // cursor / mouse capture - thread-affine to the window's owner. ImGui::NewFrame itself only
-    // consumes the io state this writes, so it can run on the job (sequenced by the submit).
-    ProfileScope scope("ImGui backend new frame", EProfileCategory::UI);
-    ImGui_ImplSDL3_NewFrame();
+    {
+        // Main thread, before the widget pass: the SDL3 backend queries the window and sets the OS
+        // cursor / mouse capture - thread-affine to the window's owner. ImGui::NewFrame itself only
+        // consumes the io state this writes, so it can run on the job (sequenced by the submit).
+        ProfileScope scope("ImGui backend new frame", EProfileCategory::UI);
+        ImGui_ImplSDL3_NewFrame();
+    }
+    // The widget pass rides the frame's POST-UPDATE batch: main kicks it right before present and
+    // joins it at the top of the next frame, so it fills the present + fence-wait window. The two
+    // references outlive that join (the world's root list, main's camera); deltaSec is copied.
+    Globals::jobSystem.submitPostUpdate([this, &rootEntities, &camera, deltaSec] { updateJob(rootEntities, camera, deltaSec); },
+        { "UI widget pass", EProfileCategory::UI });
 }
 
 void UI::flushMainThreadWork()
 {
-    // After the update() job joined: callbacks and imports the panels deferred because they are
+    // After the widget pass joined: callbacks and imports the panels deferred because they are
     // main-thread work (renderer/physics onChange effects, container imports creating GPU meshes).
     m_tweakPanel.flushDeferredCallbacks();
     m_entityEditor.flushContainerLoads();
 }
 
-void UI::update(const oc::vector<EntityPtr>& rootEntities, const Camera& camera, double deltaSec)
+void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& camera, double deltaSec)
 {
     ProfileScope profileScope("UI update", EProfileCategory::UI);
     {
@@ -387,7 +394,8 @@ void UI::handleKeyEvent(SDL_Event evt)
 
 // ImGui::GetDrawData() is only valid until the NEXT ImGui::NewFrame, so the widget-pass job ends
 // by deep-copying the lists (CloneOutput) into a snapshot the context can't touch and pointing the
-// renderer at it (read by the NEXT frame's present, sequenced by the UI join). DOUBLE-BUFFERED:
+// renderer at it (read by the NEXT frame's present, sequenced by the post-update join). The atlas
+// is NOT part of the copy - see the Textures line below. DOUBLE-BUFFERED:
 // the job for frame N runs concurrently with present N, which is still recording from snapshot
 // N-1 - so the job writes slot N&1 and frees only what that slot held from N-2, which present N-1
 // finished with before this job was even kicked.
@@ -415,6 +423,11 @@ void UI::renderImGuiToSnapshot()
 
     const ImDrawData* src = ImGui::GetDrawData();
     snapshot.data = *src; // scalar fields + the CmdLists vector (entries replaced with clones below)
+    // The one field a copy must NOT carry over: Textures points into the LIVE context
+    // (ImGui::GetPlatformIO().Textures), which this pass keeps mutating while present records from
+    // the snapshot. Null tells the backend to skip texture work entirely - main does the uploads via
+    // Renderer::updateImGuiTextures() at the top of the next frame (see its comment).
+    snapshot.data.Textures = nullptr;
     for (int i = 0; i < snapshot.data.CmdLists.Size; ++i)
     {
         ImDrawList* clone = src->CmdLists[i]->CloneOutput();

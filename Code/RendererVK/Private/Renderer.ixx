@@ -339,6 +339,10 @@ public:
     // The UI's snapshotted ImGui draw data (an ImDrawData*, opaque here); present() records the
     // ImGui pass from it. Null until the first UI::render - the pass is skipped.
     void setImGuiDrawData(const void* drawData) { m_imguiDrawData = drawData; }
+    // MAIN THREAD, between the widget pass's join and the next UI::update - see the comment on the
+    // implementation. Uploads the font-atlas changes ImGui queued, which RenderDrawData would
+    // otherwise do from inside present() while the widget pass mutates the same atlas.
+    void updateImGuiTextures();
 
     uint32 getNumMeshInstances() const { return m_meshInstanceCounter; }
     uint32 getNumMeshTypes() const { return m_meshInfoCounter; }

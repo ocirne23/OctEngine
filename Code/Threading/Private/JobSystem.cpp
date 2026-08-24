@@ -98,6 +98,7 @@ void JobSystem::initialize(const JobSystemDesc& desc)
 
     for (uint32 p = 0; p < NumJobPriorities; ++p)
         m_readyQueues[p].initialize(desc.queueCapacity);
+    m_postUpdateQueue.initialize(desc.postUpdateQueueCapacity);
 
     m_fibers = oc::make_unique<Fiber[]>(m_numFibers);
     m_freeFibers.initialize(m_numFibers);
@@ -164,6 +165,11 @@ void JobSystem::shutdown()
     for (uint32 i = 0; i < m_numContexts; ++i)
         while (Job* job = m_contexts[i].deque.steal())
             dropJob(job);
+    {
+        Job* job; // post-update jobs whose kick never came
+        while (m_postUpdateQueue.pop(job))
+            dropJob(job);
+    }
     for (uint32 i = 0; i < m_numFibers; ++i)
     {
         assert(m_fibers[i].state != Fiber::EState::Parked && "fiber parked across shutdown - a wait never completed");
@@ -410,6 +416,39 @@ void JobSystem::submitReady(Job* job)
     // with the helper's announce+recheck.
     if (job->effectivePriority == EJobPriority::High && m_helperSleeping.load(oc::memory_order_relaxed))
         wakeExternalHelper();
+}
+
+void JobSystem::kickPostUpdateJobs()
+{
+    // SNAPSHOT FIRST, then submit: a job queued from inside one of these bodies (they run while the
+    // batch is still in flight) must land in the NEXT batch, never in the counter already being
+    // signaled - add() racing the zero transition is exactly what JobCounter forbids. The counter is
+    // only ever add()ed here, on the main thread, after joinPostUpdateJobs() emptied it.
+    oc::small_vector<Job*, 64> batch;
+    Job* job;
+    while (m_postUpdateQueue.pop(job))
+        batch.push_back(job);
+    if (batch.empty())
+        return;
+
+    ProfileScope scope("Post-update kick", EProfileCategory::Threading);
+    assert(m_postUpdateCounter.isDone() && "kicked twice without a joinPostUpdateJobs() between");
+    m_postUpdateCounter.add(uint32(batch.size())); // whole batch up front: a job may finish before the last push
+    for (Job* batchJob : batch)
+        batchJob->signal = &m_postUpdateCounter;
+    submitReadyBatch(oc::span<Job* const>(batch.data(), batch.size()));
+}
+
+void JobSystem::joinPostUpdateJobs()
+{
+    // Nothing in flight is the common case (no post-update jobs submitted at all): skip the scope
+    // too, so an unused feature leaves no per-frame record. Only the kick add()s, and it is
+    // main-thread, so nothing can appear between the check and the wait.
+    if (m_postUpdateCounter.isDone())
+        return;
+
+    ProfileScope scope("Post-update join", EProfileCategory::Wait);
+    wait(m_postUpdateCounter); // main helps, so a batch still running gets finished here
 }
 
 void JobSystem::submitReadyBatch(oc::span<Job* const> jobs)

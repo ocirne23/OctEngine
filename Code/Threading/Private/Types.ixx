@@ -194,6 +194,7 @@ export struct JobSystemDesc
     uint32 jobPoolCapacity = 16384;         // ad-hoc jobs in flight (rounded up to a power of two)
     uint32 queueCapacity = 16384;           // per priority class (rounded up to a power of two)
     uint32 dequeCapacity = 4096;            // per worker (rounded up to a power of two)
+    uint32 postUpdateQueueCapacity = 1024;  // submitPostUpdate jobs awaiting the frame's kick
     uint32 parallelForTargetChunkNs = 25000; // auto-grain (JobCost overload) aims chunks at this duration
 };
 

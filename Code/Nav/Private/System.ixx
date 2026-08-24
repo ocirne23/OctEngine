@@ -31,10 +31,13 @@ export namespace Nav
 
         void setObstacles(oc::span<const NavObstacle> obstacles);         // main; change-detected
         void setTeamSources(uint32 team, oc::span<const NavSource> sources); // main; every frame
-        void update(float deltaSec);                                        // main; publish + kick; the flow/pressure steps go to a JOB
-        // Joins the flow/pressure step job update() kicked. Main, BEFORE the entity pass (units
-        // sample the fields there); near-free when the job already finished. No-op without a kick.
-        void finishSteps() { Globals::jobSystem.wait(m_stepCounter); }
+        // Main; publish + kick the per-team builds, and QUEUE the flow/pressure steps as a
+        // POST-UPDATE job (see JobSystem): main kicks it just before present and joins it at the top
+        // of the next frame, so the steps fill the present/fence window and the entity pass samples
+        // fields that are one frame old - which is what pays for them costing nothing on the
+        // critical path. Nothing waits on that job during a frame: it can only run in the present
+        // window, where no game code executes.
+        void update(float deltaSec);
 
         const TeamField* teamField(uint32 team) const // may be null (no sources / not built yet)
         {
@@ -115,7 +118,6 @@ export namespace Nav
         TeamSlot m_teams[MaxTeams];
         TeamSlot m_raster; // obstacle raster only (rebuilt on obstacle change) — for avoid()/lineOfSight
         oc::unordered_map<uint64, oc::unique_ptr<TeamSlot>> m_goals; // JobCounter is immovable
-        JobCounter m_stepCounter; // the in-flight flow/pressure step job (see update/finishSteps)
         float m_stepDelta = 0.0f; // dt for the step job (a member: the job outlives update()'s stack)
         uint32 m_frame = 0;
         FlowField m_flow[MaxTeams];

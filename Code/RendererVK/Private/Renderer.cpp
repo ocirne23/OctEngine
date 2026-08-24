@@ -1268,6 +1268,28 @@ void Renderer::setSunLight(const glm::vec3& direction, const glm::vec3& color, f
     m_skyParams.sunIntensity = intensity;
 }
 
+// ImGui 1.92 bakes glyphs ON DEMAND: NewFrame/Render queue create/update/destroy requests on the
+// shared ImTextureData objects of ImGui::GetPlatformIO().Textures, and the backend normally services
+// them from inside ImGui_ImplVulkan_RenderDrawData. That would run on MAIN inside present() while
+// the widget pass - a post-update job kicked just before present - is inside NewFrame mutating those
+// same objects and growing that same vector: a torn upload at best, a freed atlas read at worst. So
+// the UI points its snapshot's ImDrawData::Textures at null (the documented "control the timing of
+// texture updates yourself" path) and the uploads happen HERE instead, on the main thread in the
+// window between the widget pass's join and the next UI::update, when the context is quiescent. A
+// glyph baked by pass N uploads at the top of frame N+1, before the present that draws it.
+void Renderer::updateImGuiTextures()
+{
+    if (!ImGui::GetCurrentContext())
+        return;
+    ImGuiPlatformIO& platformIo = ImGui::GetPlatformIO();
+    for (ImTextureData* texture : platformIo.Textures)
+        if (texture->Status != ImTextureStatus_OK)
+        {
+            ProfileScope scope("ImGui texture update", EProfileCategory::Renderer);
+            ImGui_ImplVulkan_UpdateTexture(texture);
+        }
+}
+
 void Renderer::present()
 {
     ProfileScope presentScope("Present", EProfileCategory::Renderer);

@@ -13,9 +13,12 @@ NavSystem::~NavSystem()
     waitAll();
 }
 
+// The per-team BUILD jobs only: the flow/pressure step job is a post-update job, so by the time any
+// caller gets here (clear() from ~GameMatch, or this system's own dtor) main has left its loop and
+// already run the final joinPostUpdateJobs - and a batch still sitting unkicked in the queue is
+// dropped by JobSystem::shutdown without ever being invoked.
 void NavSystem::waitAll()
 {
-    Globals::jobSystem.wait(m_stepCounter); // the flow/pressure step job may still be in flight
     const auto waitSlot = [](TeamSlot& slot)
     {
         if (slot.building)
@@ -151,14 +154,13 @@ const TeamField* NavSystem::goalField(uint64 key) const
     return it != m_goals.end() ? it->second->published.get() : nullptr;
 }
 
-// Both seed entry points join the step job first: they write the same flow/pressure chunk buffers
-// the step tasks are writing. On the server every seed runs before feedNav's kick anyway, so the
-// wait is free - this makes the ordering a guarantee instead of a call-order convention.
+// Seeds write the same flow/pressure chunk buffers the step job writes, and need no fence against
+// it: the step job only ever runs in the present window (queued by update(), kicked before present,
+// joined at the top of the next frame), and no game code - this included - runs on main there.
 bool NavSystem::seedPath(uint32 team, const glm::vec3& from, const glm::vec3& to, float speed,
     float laneWidth, float clearance, oc::vector<glm::vec2>* outPath)
 {
     ProfileScope scope("Nav seed path", EProfileCategory::Game);
-    Globals::jobSystem.wait(m_stepCounter); // see the comment above; free when the step job is done
     const TeamField* raster = m_raster.published.get();
     if (!raster || team >= MaxTeams)
         return false;
@@ -339,15 +341,15 @@ void NavSystem::update(float deltaSec)
     for (const TeamSlot& slot : m_teams)
         m_publishedCount += slot.published ? 1u : 0u;
 
-    // 3. Flow + pressure steps: the whole block runs as ONE JOB, kicked here and joined by
-    // finishSteps() right before the entity pass (units are the only readers, and every writer -
-    // seedPath, the unit splats - is either ordered before this kick or joins the counter first).
-    // It overlaps whatever main does between feedNav and world.update: scriptContext, the physics
-    // step, beginFrame, the spatial stamps.
-    assert(m_stepCounter.isDone() && "previous frame's step job not joined - finishSteps() missing before world.update");
+    // 3. Flow + pressure steps: the whole block runs as ONE POST-UPDATE JOB - queued here, kicked by
+    // main just before present, joined at the top of the next frame. That window (present, the frame
+    // mark, the fence/vsync wait) is the one stretch where no game code runs on main, so the job has
+    // the fields to itself: NOTHING waits on it and no writer can overlap it, where the old
+    // same-frame kick had to be fenced by finishSteps() before the entity pass and by a counter wait
+    // inside seedPath. The entity pass therefore samples fields built from the PREVIOUS frame's
+    // splats and seeds - a frame of staleness bought for a step that costs main nothing.
     m_stepDelta = deltaSec;
-    Globals::jobSystem.submit([this] { runFieldSteps(); },
-        { "Nav field steps", EProfileCategory::Game }, EJobPriority::Normal, &m_stepCounter);
+    Globals::jobSystem.submitPostUpdate([this] { runFieldSteps(); }, { "Nav field steps", EProfileCategory::Game });
 }
 
 // PER-CHUNK parallel across ALL teams: each field's serial pre-work (drain/flip/evict/gather/
@@ -402,7 +404,7 @@ void NavSystem::runFieldSteps()
                 FlowField::StepItem& item = (*c->flow)[i];
                 item.field->stepChunk(item.key, *item.chunk);
             }
-        });
+        }, EJobPriority::Low);
         Globals::jobSystem.parallelFor(0u, uint32(pressureItems.size()), 2u, { "Nav pressure step", EProfileCategory::Game },
             [c = &ctx](uint32 begin, uint32 end)
         {
@@ -411,7 +413,7 @@ void NavSystem::runFieldSteps()
                 PressureField::StepItem& item = (*c->pressure)[i];
                 item.field->stepChunk(item.key, *item.chunk, item.push);
             }
-        });
+        }, EJobPriority::Low);
         for (PressureField& p : m_pressure)
             p.endStep();
     }

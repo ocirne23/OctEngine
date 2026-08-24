@@ -135,6 +135,30 @@ public:
         queueTimed(job, delaySec);
     }
 
+    // POST-UPDATE JOBS: queued now, KICKED at a fixed point of the frame instead of running
+    // immediately. The main loop kicks the batch right BEFORE Renderer::present() and JOINS IT AT
+    // THE TOP OF THE NEXT FRAME (kickPostUpdateJobs / joinPostUpdateJobs) - the UI widget pass's
+    // pipelining: the batch runs during present, the frame mark and the fence/vsync wait, where the
+    // workers are otherwise idle, so it costs nothing on the frame's critical path.
+    // WHAT THAT COSTS THE CALLER: the job OVERLAPS present() and everything after it, so it must not
+    // touch state present() reads or the next frame mutates - it is "somewhere in the present
+    // window", not "before present". It IS guaranteed complete before the next frame does any work,
+    // so anything the next frame consumes is safe. Queue from ANY thread (a worker inside the entity
+    // pass, the window thread, main); one submit = one run, at the next kick; a job queued after the
+    // kick simply rides the next frame's batch.
+    template<typename Func>
+    void submitPostUpdate(Func&& func, JobProfile profile, EJobPriority priority = EJobPriority::Normal)
+    {
+        submitPostUpdateImpl(oc::forward<Func>(func), profile, priority);
+    }
+
+    // Main loop only. The kick submits everything queued since the last one and returns (no wait);
+    // nothing queued costs one queue pop. The join runs first thing in the next frame, and once more
+    // after the loop so the final batch is done before anything it captured goes down. A queue that
+    // is never kicked just fills up, so headless kicks at the same point (it has no present()).
+    void kickPostUpdateJobs();
+    void joinPostUpdateJobs();
+
     // Waits until the counter reaches zero. On a job fiber this parks the fiber (the worker keeps
     // running other jobs); on the main thread it runs jobs while waiting; on any other thread it
     // blocks on the atomic.
@@ -185,6 +209,33 @@ public:
     void submitReadyBatch(oc::span<Job* const> jobs); // fan-out path: straight to the shared queues
 
 private:
+
+    template<typename Func>
+    void submitPostUpdateImpl(Func&& func, JobProfile profile, EJobPriority priority)
+    {
+        assert(profile.name && "every job must carry a JobProfile name (a string literal)");
+        Job* job = allocatePooledJob();
+        if (!job) // pool exhausted: run it here rather than lose it
+        {
+            m_numInlineFallbacks.fetch_add(1, oc::memory_order_relaxed);
+            assert(false && "job pool exhausted - raise JobSystemDesc::jobPoolCapacity");
+            ProfileScope scope(profile.name, profile.category);
+            func();
+            return;
+        }
+        setJobCallable(*job, oc::forward<Func>(func));
+        job->priority = priority;
+        job->effectivePriority = priority;
+        job->name = profile.name;
+        job->profileCategory = profile.category;
+        if (!m_postUpdateQueue.push(job))
+        {
+            // full: nothing will ever kick this one, so run it OUT OF PHASE rather than lose it
+            m_numInlineFallbacks.fetch_add(1, oc::memory_order_relaxed);
+            assert(false && "post-update queue full - raise JobSystemDesc::postUpdateQueueCapacity");
+            execute(*job);
+        }
+    }
 
     template<typename Func>
     void parallelForImpl(uint32 begin, uint32 end, uint32 grainSize, JobCost* cost, JobProfile profile, Func&& func, EJobPriority priority)
@@ -287,6 +338,8 @@ private:
     TaggedIndexStack m_freeFibers;
     MPMCQueue<Fiber*> m_resumeQueue;
     MPMCQueue<Job*> m_readyQueues[NumJobPriorities];
+    MPMCQueue<Job*> m_postUpdateQueue; // jobs parked until the frame's post-update kick
+    JobCounter m_postUpdateCounter;    // the in-flight batch, joined at the top of the next frame
     uint32 m_numWorkers = 0;
     uint32 m_numContexts = 0;
     uint32 m_numFibers = 0;

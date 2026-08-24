@@ -42,18 +42,21 @@ public:
     // inline in its render if nothing ran ahead, so prepare() is an optimization, never required.
     void prepare();
     void renderImGuiToSnapshot(); // end of the widget-pass job: ImGui::Render + double-buffered snapshot
-    // The SDL backend half of the ImGui frame. MAIN THREAD ONLY, before the update() job is
-    // kicked: ImGui_ImplSDL3_NewFrame talks to SDL (window size, cursor, mouse capture), and those
-    // calls keep their affinity to the thread that owns the window and its message pump.
-    void beginImGuiFrame();
-    // The widget pass. Runs as ONE JOB off the main thread, kicked at the END of the frame (right
-    // after present) and joined at the TOP of the next - it runs during profiler.endFrame and the
-    // fence/vsync wait, when main mutates nothing the panels read and the workers are otherwise
-    // idle. Everything it produces is consumed after the join: the draw-data snapshot by that
-    // frame's present, the EntityChange/reload queues by the drains, the deferred work below by
-    // flushMainThreadWork.
+    // MAIN THREAD ONLY, once per frame, right before JobSystem::kickPostUpdateJobs(): does the SDL
+    // backend half of the ImGui frame here (ImGui_ImplSDL3_NewFrame talks to SDL - window size,
+    // cursor, mouse capture - and those calls keep their affinity to the thread that owns the window
+    // and its message pump), then QUEUES the widget pass as a post-update job. The arguments are
+    // captured for it: rootEntities and camera BY REFERENCE, so they must outlive the join.
     void update(const oc::vector<EntityPtr>& rootEntities, const Camera& camera, double deltaSec);
-    // Main thread, after the update() job joined: work panels collected but must not run on a
+    // The widget pass itself - the body of the job update() queues, not called directly. Kicked
+    // just before present and joined at the TOP of the next frame, so it runs during present,
+    // profiler.endFrame and the fence/vsync wait, when main mutates nothing the panels read and the
+    // workers are otherwise idle. Everything it produces is consumed after the join: the draw-data
+    // snapshot by the next frame's present (double-buffered, so present may overlap the job writing
+    // the other slot), the EntityChange/reload queues by the drains, the deferred work below by
+    // flushMainThreadWork.
+    void updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& camera, double deltaSec);
+    // Main thread, after the widget pass joined: work panels collected but must not run on a
     // worker - tweak onChange callbacks and the Entity Editor's container imports.
     void flushMainThreadWork();
 	void setRenderStats(const Stats& stats) { m_renderStats = stats; }

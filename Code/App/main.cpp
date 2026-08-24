@@ -36,6 +36,9 @@ static oc::atomic<bool> g_running = true; // cleared by the window's onQuit (win
 
 static BOOL __stdcall consoleCtrlHandler(DWORD) { g_running = false; return TRUE; } // any console ctrl event = clean shutdown
 
+// Command-line seconds -> Clock::duration for the one-shot Timers below (Timer asserts under 1 ms)
+static Clock::duration timerDelay(double sec) { return std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(oc::max(sec, 0.001))); }
+
 int main(int argc, char* argv[])
 {
     Globals::profiler.endStaticInit(); // closes the "Static init" scope opened at the profiler's static-init construction; must precede any main() scope
@@ -323,8 +326,43 @@ int main(int argc, char* argv[])
 
     Globals::time.registerTweaks(); // frame pacing + event-pump lead (see Time::beginFrame)
 
-    JobCounter uiCounter;      // the in-flight UI widget pass, joined at the TOP of the next frame
-    bool uiJobKicked = false;  // no ImGui::Render / draw data until the first pass ran
+    // The clock stood at static-init time all through init (nothing calls update() before the loop),
+    // so re-base it here: the one-shot Timers below and the first frame's delta must measure the RUN,
+    // not the init phase (a long init used to fire every timed trigger on frame 1).
+    Globals::time.update();
+
+    // Unattended-run triggers. They are Timers, so they fire from Time::update() at the frame
+    // boundary - after the previous frame's mark and before the "main loop" scope opens, so a report
+    // still covers completed frames only and its IO lands outside the frame window. Each is armed
+    // only when its flag was given and returns DONE, i.e. fires exactly once.
+    oc::optional<Timer> scenarioTimer;
+    if (scenario)
+        scenarioTimer.emplace(timerDelay(scenarioAtSec), [&](Timer&) {
+                if (!game.enabled())
+                    Log::warning("--scenario needs --game");
+                else
+                {
+                    FileSystem::AllowMainThreadIO scenarioIo; // one-shot load, like F10
+                    game.runScenario(scenarioSave == "default" ? oc::string_view() : oc::string_view(scenarioSave));
+                }
+                return Timer::DONE;
+            });
+
+    oc::optional<Timer> profileDumpTimer;
+    if (profileAfterSec > 0.0)
+        profileDumpTimer.emplace(timerDelay(profileAfterSec), [&](Timer&) {
+                writeProfileReport(profileOutPath, profileOptions);
+                return Timer::DONE;
+            });
+
+    oc::optional<Timer> quitTimer;
+    if (quitAfterSec > 0.0)
+        quitTimer.emplace(timerDelay(quitAfterSec), [](Timer&) {
+                g_running = false; // the loop condition is checked next, so this frame still completes
+                return Timer::DONE;
+            });
+
+    bool uiJobKicked = false;  // no ImGui::Render / draw data until the first widget pass ran
 
     while (g_running)
     {
@@ -345,18 +383,20 @@ int main(int argc, char* argv[])
 
         ProfileScope mainLoopScope("main loop", EProfileCategory::App);
 
+        // The previous frame's post-update batch, the UI widget pass among it, kicked just before
+        // its present: it ran during present, the frame mark and the fence/vsync wait above, so
+        // this is near-zero unless the batch outlasted the whole stall. Joined before anything that
+        // mutates state the panels read and before the input pump touches the ImGui context.
+        // Windowed and headless alike.
+        Globals::jobSystem.joinPostUpdateJobs();
+
         if (!headlessServer)
         {
-            {
-                // LAST frame's widget pass (kicked right after present): it ran during endFrame and
-                // the fence/vsync wait above, so this is near-zero unless the widget pass outlasted
-                // the whole stall. Joined before anything that mutates state the panels read and
-                // before the input pump touches the ImGui context.
-                ProfileScope uiJoinScope("UI join", EProfileCategory::Wait);
-                Globals::jobSystem.wait(uiCounter);
-            }
             if (uiJobKicked)
-                Globals::ui.flushMainThreadWork(); // deferred tweak onChange callbacks + container imports (the job produced its own draw-data snapshot)
+            {
+                Globals::ui.flushMainThreadWork();       // deferred tweak onChange callbacks + container imports (the job produced its own draw-data snapshot)
+                Globals::rendererVK.updateImGuiTextures(); // glyphs the pass baked; the ImGui context is quiescent from the join until ui.update()
+            }
             Globals::forceSystem.joinMerge(); // last frame's merge job (kicked after the force upload, ran during present + the stall); before input/drains can touch emitters
         }
 
@@ -403,8 +443,8 @@ int main(int argc, char* argv[])
             const Frustum& frustum = Globals::rendererVK.beginFrame(camera, Globals::ui.getViewportRect()); // stable: the widget pass joined at the top of the frame
             Globals::spatialIndex.update(camera, frustum, Globals::rendererVK.getCenterViewProj() * glm::translate(glm::mat4(1.0f), camera.position)); // translate corrects the reverse-z renderer proj matrix
         }
-        Globals::navSystem.finishSteps(); // the flow/pressure step job feedNav kicked; units sample the fields in the entity pass
-        Globals::navSystem.finishSteps(); // the flow/pressure step job feedNav kicked; units sample the fields in the entity pass
+        // (the nav flow/pressure steps feedNav queued are a post-update job now: last frame's ran
+        // during present and joined at the top of this one, so the entity pass reads settled fields)
         Globals::world.update(Globals::rendererVK, (float)deltaSec); // serial script prepass + parallel component/tree pass + sink flush; headless: renderer passed through but never dereferenced (headless archetypes)
         Globals::networkManager.send(deltaSec); // server: snapshot entities at their post-update poses; both roles: flush queued packets
 
@@ -418,48 +458,26 @@ int main(int argc, char* argv[])
             Globals::forceSystem.update(Globals::rendererVK, (float)deltaSec);
 
             Globals::ui.drawGizmoEntity(Globals::rendererVK, (float)deltaSec);
-            Globals::rendererVK.present(); // ImGui pass records from the PREVIOUS widget pass's snapshot
-
-            Globals::ui.beginImGuiFrame(); // kick next frame's ui update job
-            Globals::jobSystem.submit([&] { Globals::ui.update(Globals::world.rootEntities(), camera, deltaSec); },
-                { "UI widget pass", EProfileCategory::UI }, EJobPriority::Normal, &uiCounter);
+            Globals::ui.update(Globals::world.rootEntities(), camera, deltaSec); // ImGui backend new frame (main thread) + queues the widget pass
             uiJobKicked = true;
+
+            Globals::jobSystem.kickPostUpdateJobs(); // the widget pass + any other post-update work: runs THROUGH present, joined at the top of the next frame
+            Globals::rendererVK.present();           // ImGui pass records from the PREVIOUS widget pass's snapshot
         }
+        else
+            Globals::jobSystem.kickPostUpdateJobs(); // no present() here, but the queue must still kick once a tick or it fills up
 
         mainLoopScope.stop(); // before the frame mark, so the record stays inside this frame's window
         Globals::profiler.endFrame();
         frameCount++;
-
-        // Unattended profiling: the report covers completed frames only, so it is written right
-        // after the frame mark; --quit-after alone (no dump) is a plain timed exit. Each trigger
-        // fires once, on the first frame past its time.
-        const double elapsedSec = Globals::time.getElapsedSec();
-        if (scenario && elapsedSec >= scenarioAtSec)
-        {
-            scenario = false;
-            if (!game.enabled())
-                Log::warning("--scenario needs --game");
-            else
-            {
-                FileSystem::AllowMainThreadIO scenarioIo; // one-shot load, like F10
-                game.runScenario(scenarioSave == "default" ? oc::string_view() : oc::string_view(scenarioSave));
-            }
-        }
-        if (profileAfterSec > 0.0 && elapsedSec >= profileAfterSec)
-        {
-            profileAfterSec = 0.0;
-            writeProfileReport(profileOutPath, profileOptions);
-        }
-        if (quitAfterSec > 0.0 && elapsedSec >= quitAfterSec)
-            g_running = false;
 
         if (headlessServer)
             while (g_running && Clock::now() < Globals::time.getCurrentTime() + Clock::duration(std::chrono::seconds(1)) / tickHz)
                 Sleep(1);
     }
 
-    Globals::jobSystem.wait(uiCounter); // the final frame's widget pass may still be in flight
-    Globals::forceSystem.joinMerge();   // and the final frame's merge job
+    Globals::jobSystem.joinPostUpdateJobs(); // the final frame's post-update batch (the widget pass among it) may still be in flight
+    Globals::forceSystem.joinMerge();        // and the final frame's merge job
 
     return 0;
 }
