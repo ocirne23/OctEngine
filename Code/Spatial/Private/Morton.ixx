@@ -47,12 +47,12 @@ export namespace Morton
 
     inline uint64 encode(const CellCoord& c)
     {
-        return _pdep_u64(c.x, xMask) | _pdep_u64(c.y, yMask) | _pdep_u64(c.z, zMask);
+        return oc::pdep(c.x, xMask) | oc::pdep(c.y, yMask) | oc::pdep(c.z, zMask);
     }
 
     inline CellCoord decode(uint64 key)
     {
-        return { _pext_u64(key, xMask), _pext_u64(key, yMask), _pext_u64(key, zMask) };
+        return { oc::pext(key, xMask), oc::pext(key, yMask), oc::pext(key, zMask) };
     }
 
     inline uint64 fineKey(const glm::dvec3& pos) { return encode(quantize(pos)); }
@@ -81,7 +81,7 @@ export namespace Morton
     inline uint32 levelForRadius(float radius)
     {
         const uint64 q = uint64(glm::ceil(double(radius) * (2.0 * InvFineCellSize)));
-        const uint32 level = q <= 1 ? 0u : uint32(std::bit_width(q - 1) + 1) / 2u;
+        const uint32 level = q <= 1 ? 0u : uint32(oc::bitWidth(q - 1) + 1) / 2u;
         return level < MaxLevels ? level : MaxLevels - 1;
     }
 }

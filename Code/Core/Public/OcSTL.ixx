@@ -11,6 +11,11 @@
 // container surface, and no replacement library ships them -- code keeps saying std:: for them, and
 // this file re-exports them so Core.ixx has no std import of its own.
 //
+// <bit> is NOT re-exported at all: its functions are written for any x86 baseline, so they carry a
+// runtime CPU-support dispatch or a portable BSF/BSR fixup around what is one instruction under the
+// engine's /arch:AVX2. Core.OcBit names those instructions directly and owns the whole vocabulary
+// (oc::popcnt / oc::tzcnt / oc::lzcnt / oc::bitWidth / oc::bitCeil / oc::bitCast / ...).
+//
 // Alias templates cannot be specialized: a std::hash specialization is still written as
 // `namespace std { template<> struct hash<X> ... }`, and is picked up through oc::hash.
 //
@@ -129,7 +134,6 @@ export import <execution>;
 export import <charconv>;
 export import <type_traits>;
 export import <new>;
-export import <bit>;
 export import <cmath>;
 export import <random>;
 

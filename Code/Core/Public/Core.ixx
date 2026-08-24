@@ -9,6 +9,10 @@ export import Core.Profiler;
 // oc:: is a convention the compiler cannot enforce -- code review is what keeps std:: containers out.
 export import Core.OcSTL;
 export import Core.SmallVector; // oc::small_vector / oc::fixed_vector
+// The bit vocabulary, in place of <bit> (which OcSTL does not export): oc::popcnt / tzcnt / lzcnt /
+// bitWidth / bitCeil / bitCast / pdep / ... straight onto the /arch:AVX2 baseline instructions,
+// with none of the runtime CPU-support dispatch the std spellings carry.
+export import Core.OcBit;
 
 export typedef signed char        int8;
 export typedef short              int16;

@@ -16,7 +16,7 @@ public:
 
     void initialize(uint32 capacity)
     {
-        capacity = std::bit_ceil(capacity);
+        capacity = oc::bitCeil(capacity);
         m_capacity = capacity;
         m_mask = capacity - 1;
         m_buffer = oc::make_unique<oc::atomic<Job*>[]>(capacity);

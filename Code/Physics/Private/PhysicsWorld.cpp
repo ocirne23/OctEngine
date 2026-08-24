@@ -60,7 +60,7 @@ bool PhysicsWorld::initialize()
         Log::warning("Physics: failed to create box3d world");
         return false;
     }
-    m_worldHandle = std::bit_cast<uint32>(world);
+    m_worldHandle = oc::bitCast<uint32>(world);
     m_initialized = true;
 
     PhysicsBodyDesc staticDesc;
@@ -76,7 +76,7 @@ bool PhysicsWorld::initialize()
     // Live: box3d re-slices the step from this on the next b3World_Step. 1 = single threaded, which
     // is also the A/B toggle for measuring what the fan-out actually buys on a given scene.
     Tweak::intVar("Physics/World", "Worker count", &m_workerCount, 1, B3_MAX_WORKERS, 1.0f,
-        [this] { b3World_SetWorkerCount(std::bit_cast<b3WorldId>(m_worldHandle), m_workerCount); });
+        [this] { b3World_SetWorkerCount(oc::bitCast<b3WorldId>(m_worldHandle), m_workerCount); });
 
     Tweak::floatVar("Physics/Buoyancy", "Density (kg/m3)", &m_waterDensity, 0.0f, 3000.0f, 10.0f);
     Tweak::floatVar("Physics/Buoyancy", "Linear drag", &m_waterLinearDrag, 0.0f, 20.0f, 0.1f);
@@ -94,7 +94,7 @@ void PhysicsWorld::shutdown()
     if (!m_initialized)
         return;
     m_staticBody.destroy();
-    b3DestroyWorld(std::bit_cast<b3WorldId>(m_worldHandle));
+    b3DestroyWorld(oc::bitCast<b3WorldId>(m_worldHandle));
     m_worldHandle = 0;
     m_initialized = false;
 }
@@ -159,7 +159,7 @@ void PhysicsWorld::stepSimulation(double deltaSec, const oc::function<void(const
 {
     m_accumulator += float(deltaSec) * m_timeScale;
     const float step = 1.0f / float(m_stepHz);
-    const b3WorldId world = std::bit_cast<b3WorldId>(m_worldHandle);
+    const b3WorldId world = oc::bitCast<b3WorldId>(m_worldHandle);
 
     constexpr int maxCatchUpSteps = 4;
     int steps = 0;
@@ -263,7 +263,7 @@ void PhysicsWorld::applyBuoyancy()
     // force against the probe's point velocity (which damps rotation the same way). Broadphase does the
     // body iteration (box3d has no body-list API): one whole-world AABB overlap, dynamics filtered, and
     // a one-sample early out per shape keeps dry bodies at a single water query.
-    const b3WorldId world = std::bit_cast<b3WorldId>(m_worldHandle);
+    const b3WorldId world = oc::bitCast<b3WorldId>(m_worldHandle);
 
     m_buoyancyShapes.clear();
     constexpr float B = 1e9f;
@@ -338,7 +338,7 @@ PhysicsBody PhysicsWorld::createBody(const PhysicsBodyDesc& desc, oc::span<const
     bodyDef.motionLocks.angularY = desc.lockRotation;
     bodyDef.motionLocks.angularZ = desc.lockRotation;
 
-    const b3BodyId body = b3CreateBody(std::bit_cast<b3WorldId>(m_worldHandle), &bodyDef);
+    const b3BodyId body = b3CreateBody(oc::bitCast<b3WorldId>(m_worldHandle), &bodyDef);
     if (B3_IS_NULL(body))
         return PhysicsBody();
 
@@ -414,7 +414,7 @@ PhysicsBody PhysicsWorld::createBody(const PhysicsBodyDesc& desc, oc::span<const
         }
         }
     }
-    return PhysicsBody(std::bit_cast<uint64>(body));
+    return PhysicsBody(oc::bitCast<uint64>(body));
 }
 
 PhysicsMesh PhysicsWorld::createCollisionMesh(oc::span<const glm::vec3> vertices, oc::span<const uint32> indices)
@@ -483,7 +483,7 @@ PhysicsJoint PhysicsWorld::createDistanceJoint(const PhysicsBody& a, const Physi
     def.enableLimit = true;
     def.minLength = glm::min(minLength, maxLength);
     def.maxLength = glm::max(minLength, maxLength);
-    return PhysicsJoint(std::bit_cast<uint64>(b3CreateDistanceJoint(std::bit_cast<b3WorldId>(m_worldHandle), &def)));
+    return PhysicsJoint(oc::bitCast<uint64>(b3CreateDistanceJoint(oc::bitCast<b3WorldId>(m_worldHandle), &def)));
 }
 
 PhysicsJoint PhysicsWorld::createRevoluteJoint(const PhysicsBody& a, const PhysicsBody& b,
@@ -498,7 +498,7 @@ PhysicsJoint PhysicsWorld::createRevoluteJoint(const PhysicsBody& a, const Physi
         def.lowerAngle = glm::radians(glm::max(lowerDeg, -178.0f));
         def.upperAngle = glm::radians(glm::min(upperDeg, 178.0f));
     }
-    return PhysicsJoint(std::bit_cast<uint64>(b3CreateRevoluteJoint(std::bit_cast<b3WorldId>(m_worldHandle), &def)));
+    return PhysicsJoint(oc::bitCast<uint64>(b3CreateRevoluteJoint(oc::bitCast<b3WorldId>(m_worldHandle), &def)));
 }
 
 PhysicsJoint PhysicsWorld::createSphericalJoint(const PhysicsBody& a, const PhysicsBody& b,
@@ -512,7 +512,7 @@ PhysicsJoint PhysicsWorld::createSphericalJoint(const PhysicsBody& a, const Phys
         def.enableConeLimit = true;
         def.coneAngle = glm::radians(glm::clamp(coneAngleDeg, 0.0f, 180.0f));
     }
-    return PhysicsJoint(std::bit_cast<uint64>(b3CreateSphericalJoint(std::bit_cast<b3WorldId>(m_worldHandle), &def)));
+    return PhysicsJoint(oc::bitCast<uint64>(b3CreateSphericalJoint(oc::bitCast<b3WorldId>(m_worldHandle), &def)));
 }
 
 PhysicsJoint PhysicsWorld::createWeldJoint(const PhysicsBody& a, const PhysicsBody& b, const glm::vec3& anchor)
@@ -520,7 +520,7 @@ PhysicsJoint PhysicsWorld::createWeldJoint(const PhysicsBody& a, const PhysicsBo
     assert(m_initialized && a.isValid() && b.isValid());
     b3WeldJointDef def = b3DefaultWeldJointDef();
     fillJointBase(def.base, a, b, a.m_handle, b.m_handle, anchor, anchor, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
-    return PhysicsJoint(std::bit_cast<uint64>(b3CreateWeldJoint(std::bit_cast<b3WorldId>(m_worldHandle), &def)));
+    return PhysicsJoint(oc::bitCast<uint64>(b3CreateWeldJoint(oc::bitCast<b3WorldId>(m_worldHandle), &def)));
 }
 
 namespace
@@ -537,7 +537,7 @@ namespace
     {
         FilteredRayContext* ctx = static_cast<FilteredRayContext*>(context);
         const b3BodyId body = b3Shape_GetBody(shapeId);
-        if (std::bit_cast<uint64>(body) == ctx->ignoreBodyBits)
+        if (oc::bitCast<uint64>(body) == ctx->ignoreBodyBits)
             return -1.0f;
         if (ctx->staticOnly && b3Body_GetType(body) != b3_staticBody)
             return -1.0f;
@@ -561,11 +561,11 @@ PhysicsWorld::RayHit PhysicsWorld::castRayClosest(const glm::vec3& origin, const
     if ((ignoreBody != nullptr && ignoreBody->isValid()) || staticOnly)
     {
         FilteredRayContext context{ .ignoreBodyBits = ignoreBody && ignoreBody->isValid() ? ignoreBody->m_handle : 0, .staticOnly = staticOnly };
-        b3World_CastRay(std::bit_cast<b3WorldId>(m_worldHandle), toB3(origin), toB3(translation), filter,
+        b3World_CastRay(oc::bitCast<b3WorldId>(m_worldHandle), toB3(origin), toB3(translation), filter,
             &filteredClosestRayFcn, &context);
         return context.hit;
     }
-    const b3RayResult result = b3World_CastRayClosest(std::bit_cast<b3WorldId>(m_worldHandle),
+    const b3RayResult result = b3World_CastRayClosest(oc::bitCast<b3WorldId>(m_worldHandle),
         toB3(origin), toB3(translation), filter);
     outHit.hit = result.hit;
     outHit.fraction = result.fraction;
@@ -581,7 +581,7 @@ bool PhysicsWorld::getContactPoint(int64 contactId, glm::vec3& outPoint, glm::ve
 
     b3ContactId id{};
     id.index1 = (int32)((uint64)contactId >> 32);
-    id.world0 = std::bit_cast<b3WorldId>(m_worldHandle).index1;
+    id.world0 = oc::bitCast<b3WorldId>(m_worldHandle).index1;
     id.padding = 0;
     id.generation = (uint32)((uint64)contactId & 0xffffffffu);
     if (!b3Contact_IsValid(id))
@@ -859,12 +859,12 @@ void PhysicsWorld::debugDraw(const glm::vec3& viewPos, const DebugLineFn& line)
     draw.drawBounds = m_debugDrawBounds;
     draw.context = &ctx;
 
-    b3World_Draw(std::bit_cast<b3WorldId>(m_worldHandle), &draw, PhysicsLayers::All);
+    b3World_Draw(oc::bitCast<b3WorldId>(m_worldHandle), &draw, PhysicsLayers::All);
 }
 
 void PhysicsWorld::setGravity(const glm::vec3& gravity)
 {
     m_gravity = gravity;
     if (m_initialized)
-        b3World_SetGravity(std::bit_cast<b3WorldId>(m_worldHandle), toB3(m_gravity));
+        b3World_SetGravity(oc::bitCast<b3WorldId>(m_worldHandle), toB3(m_gravity));
 }

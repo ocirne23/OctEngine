@@ -786,7 +786,7 @@ namespace Procedural
 					for (size_t i = 0; i < perCascade; i += 4)
 					{
 						const float* t = baked.texels.data() + (size_t)c * perCascade + i;
-						const uint32 packed = std::bit_cast<uint32>(t[2]);
+						const uint32 packed = oc::bitCast<uint32>(t[2]);
 						const float temp = float((packed >> 16) & 255u) * (75.0f / 255.0f) - 25.0f;
 						const float hum = float((packed >> 24) & 255u) * (1.0f / 255.0f);
 						tMin = glm::min(tMin, temp); tMax = glm::max(tMax, temp);

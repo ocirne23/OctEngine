@@ -118,8 +118,12 @@ void AnimStateMachine::update(float deltaSeconds)
     }
 }
 
+// Namespace scope, not a function-local static: the build is /Zc:threadSafeInit-, so a local static
+// first reached from two threads at once is a race — and this one is reachable from the script
+// animator thunk, which runs on job workers in the parallel entity pass.
+static const oc::string g_noStateName = "<none>";
+
 const oc::string& AnimStateMachine::getCurrentStateName() const
 {
-    static const oc::string kNone = "<none>";
-    return m_current != INVALID_STATE ? m_states[m_current].name : kNone;
+    return m_current != INVALID_STATE ? m_states[m_current].name : g_noStateName;
 }

@@ -207,11 +207,11 @@ export namespace Procedural
 		// value may form NaN patterns, so no float arithmetic may ever touch it).
 		const auto readEnc = [](const float* t) -> uint32
 		{
-			return (std::bit_cast<uint32>(t[2]) >> 8) & 255u;
+			return (oc::bitCast<uint32>(t[2]) >> 8) & 255u;
 		};
 		const auto writeEnc = [](float* t, uint32 enc)
 		{
-			t[2] = std::bit_cast<float>((std::bit_cast<uint32>(t[2]) & ~0x0000FF00u) | (enc << 8));
+			t[2] = oc::bitCast<float>((oc::bitCast<uint32>(t[2]) & ~0x0000FF00u) | (enc << 8));
 		};
 
 		// Nearest-land feature transform, dead-reckoning style: the two chamfer sweeps of applyWaterReach,
@@ -527,7 +527,7 @@ export namespace Procedural
 								// encodeFlowAngle01; the sampler's authored angle, applyFlowField fills the
 								// computed field where it has none) | SEA-LEVEL TEMPERATURE | humidity [0,1].
 								// 32 bits exceed float32's exact-integer range, so the bits are BIT-CAST into
-								// the texel (std::bit_cast here, floatBitsToUint in terrain_height.inc.glsl).
+								// the texel (oc::bitCast here, floatBitsToUint in terrain_height.inc.glsl).
 								// The whole path — vector moves, staging memcpy, copyBufferToImage, texelFetch
 								// — carries raw bits with NO float arithmetic; some packs form NaN bit
 								// patterns, which any arithmetic would corrupt. Keep it bit-exact end to end.
@@ -543,7 +543,7 @@ export namespace Procedural
 									| (encodeFlowAngle01(p.flowAngle01) << 8)
 									| (q8(temperatureTo01(p.temperatureSeaLevel)) << 16)
 									| (q8(p.humidity) << 24);
-								texel[2] = std::bit_cast<float>(packed);
+								texel[2] = oc::bitCast<float>(packed);
 								texel[3] = p.altitude; // macro elevation (terrain coloring)
 							}
 						}

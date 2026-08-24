@@ -307,7 +307,7 @@ void SpatialIndex::emitCellEntries(const Tester& tester, const glm::vec3& cellMi
                                            &store.radius[i], &store.layer[i], layerMask);
                 while (hits)
                 {
-                    const uint32 lane = uint32(_tzcnt_u32(hits));
+                    const uint32 lane = uint32(oc::tzcnt(hits));
                     hits &= hits - 1;
                     const uint32 s = i + lane;
                     ++stats.emitted;
@@ -341,7 +341,7 @@ void SpatialIndex::traverseCell(const Tester& tester, const glm::dvec3& refPos, 
     const CellMap& childLevel = m_levels[level - 1];
     while (childMask)
     {
-        const uint32 bit = uint32(_tzcnt_u64(childMask));
+        const uint32 bit = uint32(oc::tzcnt(childMask));
         childMask &= childMask - 1;
         const uint64 childKey = (key << 6) | bit;
         if (const CellRecord* child = childLevel.find(childKey))
@@ -404,7 +404,7 @@ void SpatialIndex::traverseParallel(const Tester& tester, const glm::dvec3& refP
             const CellMap& childLevel = m_levels[fc.level - 1];
             while (childMask)
             {
-                const uint32 bit = uint32(_tzcnt_u64(childMask));
+                const uint32 bit = uint32(oc::tzcnt(childMask));
                 childMask &= childMask - 1;
                 const uint64 childKey = (fc.key << 6) | bit;
                 if (const CellRecord* child = childLevel.find(childKey))

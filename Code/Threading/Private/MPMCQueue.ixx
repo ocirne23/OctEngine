@@ -13,7 +13,7 @@ public:
 
     void initialize(uint32 capacity)
     {
-        capacity = std::bit_ceil(capacity);
+        capacity = oc::bitCeil(capacity);
         m_mask = capacity - 1;
         m_cells = oc::make_unique<Cell[]>(capacity);
         for (uint32 i = 0; i < capacity; ++i)

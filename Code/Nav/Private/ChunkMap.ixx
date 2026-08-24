@@ -19,7 +19,7 @@ export namespace Nav
 
         void reset(uint32 capacity)
         {
-            m_capacity = std::bit_ceil(capacity < 64 ? 64u : capacity);
+            m_capacity = oc::bitCeil(capacity < 64 ? 64u : capacity);
             m_keys.assign(m_capacity, InvalidChunkKey);
             m_values.clear();
             m_values.resize(m_capacity);

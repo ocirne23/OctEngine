@@ -18,7 +18,7 @@ export b3Quat toB3(const glm::quat& q) { return b3Quat{ { q.x, q.y, q.z }, q.w }
 export glm::vec3 toGlm(const b3Vec3& v) { return glm::vec3(v.x, v.y, v.z); }
 export glm::quat toGlm(const b3Quat& q) { return glm::quat(q.s, q.v.x, q.v.y, q.v.z); }
 
-export b3BodyId toBodyId(uint64 handle) { return std::bit_cast<b3BodyId>(handle); }
+export b3BodyId toBodyId(uint64 handle) { return oc::bitCast<b3BodyId>(handle); }
 
 // b3ContactId is 3 fields (index1/world0/generation) and doesn't fit a single bit_cast-able integer; world0
 // is always this process's one physics world, so it's dropped here and re-supplied from the world handle when

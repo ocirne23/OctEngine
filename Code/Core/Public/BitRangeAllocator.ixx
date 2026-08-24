@@ -47,7 +47,7 @@ public:
             {
 #pragma warning(disable: 4102) // unreferenced label
             retry:
-                const int bitIdx = (int)_tzcnt_u64(~usedBits);
+                const int bitIdx = (int)oc::tzcnt(~usedBits);
                 const int idx = intIdx * 64 + bitIdx;
                 if constexpr (ThreadSafe)
                 {
@@ -111,7 +111,7 @@ public:
             for (int i = 0; i < numInts; ++i)
             {
                 const int intIdx = (i + lastUsed + 1) % numInts;
-                const int numSetBits = (int)__popcnt64(m_pBits[intIdx].load(oc::memory_order_relaxed));
+                const int numSetBits = (int)oc::popcnt(m_pBits[intIdx].load(oc::memory_order_relaxed));
                 if (numSetBits + numBucketsWanted * 2 < 64) // If we find a slot that can comfortably fit the allocation try to use it
                 {
                     startSlot = intIdx;
@@ -142,7 +142,7 @@ public:
             if constexpr (ThreadSafe) usedBits = oc::atomic_ref<uint64>(m_pBits[i]).load(oc::memory_order_relaxed);
             else                      usedBits = m_pBits[intIdx];
 
-            const int numSetBits = (int)__popcnt64(usedBits);
+            const int numSetBits = (int)oc::popcnt(usedBits);
             if (numSetBits == 0) // optimize for empty buckets
             {
                 continuousBitStart = continuousBitStart == -1 ? intIdx * 64 : continuousBitStart;
@@ -150,7 +150,7 @@ public:
             }
             else
             {
-                int startBitIdx = (int)_tzcnt_u64(~usedBits); // std::countr_xxx functions have bad performance
+                int startBitIdx = (int)oc::tzcnt(~usedBits); // oc::tzcnt, not std::countr_zero: no CPU dispatch
                 if (startBitIdx != 0)
                 {
                     continuousBitStart = -1;
@@ -159,7 +159,7 @@ public:
                 while (startBitIdx < 64)
                 {
                     const uint64_t ignoreMask = startBitIdx ? ~((1ull << (64 - startBitIdx)) - 1) : 0;
-                    const int numZeroes = (int)_tzcnt_u64((usedBits >> startBitIdx) | ignoreMask);
+                    const int numZeroes = (int)oc::tzcnt((usedBits >> startBitIdx) | ignoreMask);
                     numWantedBucketsRemaining -= numZeroes;
                     if (numWantedBucketsRemaining <= 0 || startBitIdx + numZeroes == 64) // Fits completely or to the end
                     {
@@ -168,7 +168,7 @@ public:
                     }
                     else // Does not fit to the end, find next start pos
                     {
-                        startBitIdx += (int)_tzcnt_u64(~(usedBits >> (startBitIdx + numZeroes))) + numZeroes;
+                        startBitIdx += (int)oc::tzcnt(~(usedBits >> (startBitIdx + numZeroes))) + numZeroes;
                         continuousBitStart = -1;
                         numWantedBucketsRemaining = numBucketsWanted;
                     }

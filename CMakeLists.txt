@@ -11,7 +11,23 @@ set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "_Build")
 
 # /GT (fiber-safe TLS): Threading's job fibers migrate between worker threads across a wait, so
 # thread_local addresses must never be cached across calls anywhere job code can run.
-list(APPEND COMPILE_OPTIONS "/std:c++latest" "/Zc:__cplusplus" "/fp:fast" "/arch:AVX2" "/GT" "/MP" "$<$<NOT:$<CONFIG:DEBUG>>:/GL>" "/Oi" "/Ot" "/W4" "$<$<NOT:$<CONFIG:DEBUG>>:/Ob2>" "$<$<CONFIG:DEBUG>:/JMC>" "$<$<CONFIG:Debug>:/ZI>")
+#
+# The next four trade away checks the engine's shape does not need. /GT is why the two /Zc: ones
+# matter more here than in a normal build: it stops the TLS address from being cached across calls,
+# so every guard those checks read is a fresh TLS lookup rather than a register.
+#   /Gw                    one COMDAT per global, so /OPT:REF can drop unreferenced data (pairs with /GL)
+#   /GS-                   no stack-cookie prologue/epilogue; a deliberate mitigation trade
+#   /Zc:tlsGuards-         no per-ACCESS on-demand-init check on dynamically initialized thread_locals
+#                          (the ~20 hot `thread_local oc::vector` scratch buffers in the entity pass,
+#                          Npc/Structures and the Nav A*). Safe because all of it is static TLS in
+#                          App.exe, which every thread initializes at creation; the runtime-compiled
+#                          script DLLs are built by ScriptHost's own command line and keep their guards.
+#   /Zc:threadSafeInit-    no epoch guard around function-local statics. THE ONE WITH TEETH: a local
+#                          static first reached from two workers at once is now a race (half-built
+#                          object, or the initializer running twice). A local static that job code can
+#                          reach must be constant-initialized, or hoisted to namespace scope where
+#                          InitSeg.h orders it and no per-access guard exists at all.
+list(APPEND COMPILE_OPTIONS "/std:c++latest" "/Zc:__cplusplus" "/fp:fast" "/arch:AVX2" "/GT" "/MP" "$<$<NOT:$<CONFIG:DEBUG>>:/GL>" "/Oi" "/Ot" "/W4" "$<$<NOT:$<CONFIG:DEBUG>>:/Ob2>" "$<$<CONFIG:DEBUG>:/JMC>" "$<$<CONFIG:Debug>:/ZI>" "/Gw" "/GS-" "/Zc:tlsGuards-" "/Zc:threadSafeInit-")
 list(APPEND LINK_OPTIONS "$<$<NOT:$<CONFIG:DEBUG>>:/LTCG>" "$<$<NOT:$<CONFIG:DEBUG>>:/INCREMENTAL:NO>" "$<$<CONFIG:Debug>:/INCREMENTAL>")
 
 add_definitions(/FI"${ROOT_DIR}/Code/Core/Private/forceinclude.h"

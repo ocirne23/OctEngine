@@ -88,7 +88,7 @@ void JobSystem::initialize(const JobSystemDesc& desc)
     // via registerExternalHelper() - it runs High jobs between event pumps.
     m_numContexts = m_numWorkers + 2;
     m_numFibers = desc.numFibers;
-    m_jobPoolCapacity = std::bit_ceil(desc.jobPoolCapacity);
+    m_jobPoolCapacity = oc::bitCeil(desc.jobPoolCapacity);
     m_targetChunkNs = oc::max(1000u, desc.parallelForTargetChunkNs);
 
     m_jobPool = oc::make_unique<Job[]>(m_jobPoolCapacity);

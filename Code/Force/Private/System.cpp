@@ -39,20 +39,22 @@ static float forceShapeBudget(float focus, float D)
 // Reference: the plain gain-free sphere (focus 0.5, width 1) — an emitter with any focus/
 // distribution/width carries exactly this shape's total, so Output is a balance-able budget and
 // narrowing/pinching visibly DENSIFIES the field instead of shedding power.
-static float forceReferenceBudget()
-{
-    static const float ref = [] {
-        double sum = 0.0;
-        constexpr int NUM_SAMPLES = 64;
-        for (int i = 0; i < NUM_SAMPLES; ++i)
-        {
-            const float X = -1.0f + (i + 0.5f) * (2.0f / NUM_SAMPLES);
-            sum += std::pow(1.0 - (double)X * X, 3.0);
-        }
-        return (float)sum;
-    }();
-    return ref;
-}
+// NAMESPACE scope, not a function-local static: the build is /Zc:threadSafeInit-, so a local static
+// first reached from two threads at once is a race, and the merge job's parallelFors reach this one
+// through refreshDistributionScale / sphereReach. A namespace-scope constant is built during static
+// init and carries no per-access guard at all. Pure constant math, so nothing orders against it.
+static const float g_forceReferenceBudget = [] {
+    double sum = 0.0;
+    constexpr int NUM_SAMPLES = 64;
+    for (int i = 0; i < NUM_SAMPLES; ++i)
+    {
+        const float X = -1.0f + (i + 0.5f) * (2.0f / NUM_SAMPLES);
+        sum += std::pow(1.0 - (double)X * X, 3.0);
+    }
+    return (float)sum;
+}();
+
+static float forceReferenceBudget() { return g_forceReferenceBudget; }
 
 float ForceSystem::refreshDistributionScale(EmitterInstance& inst) const
 {
@@ -507,11 +509,11 @@ void ForceSystem::destroyQuery(uint64 handle)
 
 // The plain sphere's budget fold (focus 0.5 / distribution 0.5 / width 1) — group and transition
 // spheres all use it; constants only, so computed once.
-static float forceSphereFold()
-{
-    static const float fold = forceReferenceBudget() / forceShapeBudget(0.5f, 0.5f);
-    return fold;
-}
+// Namespace scope for the same reason as g_forceReferenceBudget (sphereReach runs in the merge
+// job's parallelFors). Declared BELOW that one, so within-TU static init order supplies it first.
+static const float g_forceSphereFold = forceReferenceBudget() / forceShapeBudget(0.5f, 0.5f);
+
+static float forceSphereFold() { return g_forceSphereFold; }
 
 float ForceSystem::sphereReach(float radius, float output) const
 {
@@ -813,7 +815,7 @@ void ForceSystem::refreshBubbleBounds(EmitterInstance& inst)
     {
         m_candidateStaging.local().push_back((uint32)(&inst - m_emitters.data()));
         const float joinRadius = glm::max(m_merge.joinDistance, 0.0f) * inst.bubbleRadius;
-        const uint32 bits = std::bit_cast<uint32>(joinRadius);
+        const uint32 bits = oc::bitCast<uint32>(joinRadius);
         uint32 seen = m_maxJoinRadiusBits.load(oc::memory_order_relaxed);
         while (bits > seen && !m_maxJoinRadiusBits.compare_exchange_weak(seen, bits, oc::memory_order_relaxed)) {}
     }
@@ -1094,7 +1096,7 @@ void ForceSystem::updateMerging(float deltaSec)
     {
         ProfileScope cellsScope("Force merge cells", EProfileCategory::Force);
         m_cells.clear();
-        const float cell = glm::max(2.0f * std::bit_cast<float>(m_maxJoinRadiusBits.load(oc::memory_order_relaxed)), 0.5f);
+        const float cell = glm::max(2.0f * oc::bitCast<float>(m_maxJoinRadiusBits.load(oc::memory_order_relaxed)), 0.5f);
         const float invCell = 1.0f / cell;
         m_candidateStaging.forEach([&](const oc::vector<uint32>& list) {
             for (const uint32 idx : list)

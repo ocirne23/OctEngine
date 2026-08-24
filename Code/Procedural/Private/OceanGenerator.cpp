@@ -359,7 +359,7 @@ namespace Procedural
 				for (int32 x = glm::max(cx - radius, 0); x <= glm::min(cx + radius, res - 1); x += step)
 				{
 					const float* t = &m_terrainData->texels[((size_t)y * res + x) * 4];
-					const uint32 enc = (std::bit_cast<uint32>(t[2]) >> 8) & 255u;
+					const uint32 enc = (oc::bitCast<uint32>(t[2]) >> 8) & 255u;
 					if (enc == 0u || t[0] >= t[1]) // undirected or dry ground: abstains
 						continue;
 					const float a = (float)(enc - 1u) * (6.283185307f / 254.0f);
@@ -601,10 +601,10 @@ namespace Procedural
 		else if (exp == 0)
 		{
 			o += 1u << 23;
-			o = std::bit_cast<uint32>(std::bit_cast<float>(o) - std::bit_cast<float>((113u << 23)));
+			o = oc::bitCast<uint32>(oc::bitCast<float>(o) - oc::bitCast<float>((113u << 23)));
 		}
 		o |= (uint32)(h & 0x8000u) << 16;
-		return std::bit_cast<float>(o);
+		return oc::bitCast<float>(o);
 	}
 
 	// (water depth, water surface level) at (x, z) from the terrain-data map's CPU copy (near cascade) —
