@@ -79,8 +79,8 @@ export inline oc::atomic<bool> g_profilerPaused = false;
 // A single-writer/many-reader ring of ProfileRecords: one per registered thread, plus named tracks
 // (the renderer's GPU track). The owner writes records + a monotonic release cursor; readers
 // (Profiler::snapshotTrack, main thread) copy behind the cursor and detect being lapped. NEVER
-// written by two threads at once - a thread track is written only by its thread, a named track only
-// by whoever created it (the GPU track: the main thread, at collect time).
+// written by two threads at once - a thread track is written only by its thread, a named track by
+// ONE writer at a time (the GPU track: the collect job, one in flight, sequenced by its counter).
 export class ProfileTrack final
 {
 public:
@@ -163,7 +163,7 @@ export struct ProfileScopeStack
 export struct ProfileReportOptions
 {
     uint32_t frames = 256;         // frames to aggregate (per-frame figures divide by the count actually covered)
-    double minMsPerFrame = 0.02;   // tree/flat rows below this fold into a "(+N more)" line
+    double minMsPerFrame = 0.0025;   // tree/flat rows below this fold into a "(+N more)" line
     uint32_t maxChildren = 24;     // tree: children printed per node (the rest fold)
     uint32_t maxDepth = 14;        // tree: deepest level printed
     uint32_t flatRows = 30;        // flat per-track table rows

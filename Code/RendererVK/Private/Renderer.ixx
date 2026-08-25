@@ -149,6 +149,13 @@ public:
     // viewportRect is the editor's viewport sub-rect within the swapchain (ignored in VR, which renders
     // full-extent); a change to it re-records the command buffers.
     const Frustum& beginFrame(const Camera& camera, const Rect& viewportRect); // [Concurrency: SERIAL-OWNER of the render chain]
+    // Desktop only (asserts !VR): the exact culling frustum beginFrame will build this frame,
+    // computable BEFORE beginFrame — the camera and viewport are final by then and TAA jitter is
+    // never baked into the mvp — so the main loop can kick the spatial cull while beginFrame still
+    // runs. Applies the viewport rect (idempotent with beginFrame's own apply) and publishes
+    // m_centerViewProj, so getCenterViewProj() serves this frame's matrix from here on. In VR the
+    // head pose only exists after openXR.beginFrame() inside beginFrame — VR culls synchronously.
+    Frustum computeCullFrustum(const Camera& camera, const Rect& viewportRect);
     // passMask (RendererVKLayout::PASS_* bits) selects which culled passes may draw/trace the node
     // this frame: main view, sun shadows, ray tracing (GI/RTAO/RT shadows).
     // [Concurrency: LOCK-FREE - callable from any job between beginFrame and present; on an
@@ -410,6 +417,20 @@ private:
     // Per-frame CPU side of GPU LOD selection: stamps the node's chains as used (keeps every level's
     // mesh set warm in the mesh streamer) and publishes the node's state-slot bias for the cull shader.
     void noteLodChainUse(const RenderNode& node, uint32 startIdx, PerFrameData& frameData);
+
+    // beginFrame helpers, in call order (all main thread; see each definition in Renderer.cpp).
+    glm::mat4 computeCenterViewProj(const Camera& camera) const; // pure: projection (VR: combined eyes) * view, from m_viewportRect
+    void applyVrHeadPose(const Camera& cameraIn, Camera& camera, glm::quat& vrBaseOrientation);
+    void checkFrameCapacities();
+    void snapshotLodStats(PerFrameData& frameData);
+    void buildFrameUbo(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation, PerFrameData& frameData);
+    void buildUboViews(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation);
+    void buildUboSky();
+    void buildUboSunShadow(const Camera& camera);
+    void buildUboFog();
+    void buildUboOcean();
+    void buildUboForce();
+    void buildUboTerrain();
     void recordSkinning(uint32 frameIdx);
     void recordOceanSim(uint32 frameIdx);
     void recordIndirectCull(uint32 frameIdx);
@@ -586,6 +607,7 @@ private:
     Surface m_surface;
     SwapChain m_swapChain;
     GpuProfiler m_gpuProfiler;
+    JobCounter m_gpuCollectCounter; // the in-flight timestamp-collect job (beginFrame kicks -> recordCommandBuffers joins)
     RenderPass m_renderPass;
     Framebuffers m_framebuffers;
 	GpuCrashTracker m_gpuCrashTracker;
@@ -669,6 +691,11 @@ private:
     glm::mat4 m_sunCascadeViewProj[RendererVKLayout::NUM_SHADOW_CASCADES];
     uint32 m_numSunCascades = 0;
     glm::mat4 m_centerViewProj = glm::mat4(1.0f);
+
+    // The frame UBO, assembled by buildFrameUbo each beginFrame (main thread only). Persists across
+    // frames: buildUboViews reads last frame's mvps out of it for reprojection before overwriting.
+    RendererVKLayout::Ubo m_ubo;
+    const Clock::time_point m_timeStart = Clock::now(); // ubo.timeSeconds origin (shader animation time)
 
     bool   m_giProbeDebugEnabled = false;
     uint32 m_giProbeDebugMode = 0;

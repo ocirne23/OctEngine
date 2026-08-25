@@ -19,7 +19,8 @@ public:
     void initialize(); // after Device; also requires Globals::profiler.initialize() to have run (main.cpp does it first)
 
     // After the slot's fence wait, before anything re-records into it: reads the slot's previous
-    // results and pushes them to the profiler GPU track.
+    // results and pushes them to the profiler GPU track. Runs as a job (kicked in beginFrame, joined
+    // in recordCommandBuffers before beginRecord) - host-side Vulkan calls only, no CB access.
     void collect(uint32 frameIdx);
 
     // At primary command buffer begin (outside any render pass): resets the slot's pool + scope list.

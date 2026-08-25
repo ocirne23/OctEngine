@@ -439,9 +439,34 @@ int main(int argc, char* argv[])
 
         if (!headlessServer)
         {
+            // The spatial index is QUIESCENT from here until world.update: physics.update's contact
+            // scripts were the frame's last queriers, and the entity-change drains / net receive /
+            // game.update above were its last registers (register/commit may not overlap queries or
+            // traversals — commit relinks cells and pool growth reallocates the SoA the traversals
+            // read). The culling frustum is computable before beginFrame (camera + viewport are
+            // final, TAA jitter is never baked into the mvp), so the whole spatial update — commit,
+            // occlusion raster, Main/Near stamps — runs as a job overlapping audio.update +
+            // beginFrame, joined before the entity pass reads pass masks. Anything new between the
+            // kick and the join must not touch the index. VR: the head pose only exists after
+            // openXR.beginFrame inside beginFrame, so VR keeps the synchronous order.
+            JobCounter spatialCounter;
+            Frustum cullFrustum;
+            glm::mat4 spatialViewProj;
+            const bool vr = Globals::rendererVK.isVrEnabled();
+            if (!vr)
+            {
+                cullFrustum = Globals::rendererVK.computeCullFrustum(camera, Globals::ui.getViewportRect()); // stable: the widget pass joined at the top of the frame
+                spatialViewProj = Globals::rendererVK.getCenterViewProj() * glm::translate(glm::mat4(1.0f), camera.position); // translate corrects the reverse-z renderer proj matrix
+                Globals::jobSystem.submit([&camera, &cullFrustum, &spatialViewProj]
+                    { Globals::spatialIndex.update(camera, cullFrustum, spatialViewProj); },
+                    { "Spatial cull", EProfileCategory::Spatial }, EJobPriority::High, &spatialCounter);
+            }
             Globals::audio.update(camera);
-            const Frustum& frustum = Globals::rendererVK.beginFrame(camera, Globals::ui.getViewportRect()); // stable: the widget pass joined at the top of the frame
-            Globals::spatialIndex.update(camera, frustum, Globals::rendererVK.getCenterViewProj() * glm::translate(glm::mat4(1.0f), camera.position)); // translate corrects the reverse-z renderer proj matrix
+            const Frustum& frustum = Globals::rendererVK.beginFrame(camera, Globals::ui.getViewportRect());
+            if (vr)
+                Globals::spatialIndex.update(camera, frustum, Globals::rendererVK.getCenterViewProj() * glm::translate(glm::mat4(1.0f), camera.position));
+            else
+                Globals::jobSystem.wait(spatialCounter); // helps; near-zero when audio + beginFrame covered the job
         }
         // (the nav flow/pressure steps feedNav queued are a post-update job now: last frame's ran
         // during present and joined at the top of this one, so the entity pass reads settled fields)

@@ -547,6 +547,31 @@ bool Renderer::waitFrameSlot(uint64 timeoutNs)
     return true;
 }
 
+// The one place the culling/center view-projection is built — beginFrame (via buildUboViews) and
+// computeCullFrustum must agree bit-exactly, or the spatial cull and the GPU cull would disagree.
+glm::mat4 Renderer::computeCenterViewProj(const Camera& camera) const
+{
+    const glm::ivec2 viewportSize = m_viewportRect.getSize();
+    // In VR the "centre view" (used for culling, GI region, shadow cascade fit, and the shared screen-space
+    // froxel fog volume) uses a head-centred projection spanning the union of both eyes' FOV, so it covers
+    // everything either eye renders. Desktop uses the plain camera perspective.
+    const glm::mat4x4 projection = reverseZProjection(Globals::openXR.isEnabled()
+        ? Globals::openXR.getCombinedProjection(camera.near, camera.far)
+        : glm::perspective(glm::radians(camera.fovDeg), (float)viewportSize.x / (float)viewportSize.y, camera.near, camera.far),
+        camera.near, camera.far);
+    return projection * camera.viewMatrix;
+}
+
+Frustum Renderer::computeCullFrustum(const Camera& camera, const Rect& viewportRect)
+{
+    assert(!Globals::openXR.isEnabled() && "VR: the culling view needs the head pose, only known inside beginFrame");
+    setViewportRect(viewportRect); // same apply beginFrame does (idempotent there)
+    m_centerViewProj = computeCenterViewProj(camera);
+    Frustum frustum;
+    frustum.fromMatrixZO(m_centerViewProj);
+    return frustum;
+}
+
 const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewportRect)
 {
     ProfileScope beginFrameScope("Begin frame", EProfileCategory::Renderer);
@@ -557,17 +582,53 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
     assert(m_frameSlotWaited && "Renderer::waitFrameSlot() must run at the top of the frame, before any per-slot writes");
     waitFrameSlot();
 
-    // This slot's fence is waited, so its previous submission's GPU timestamps have landed.
+    // This slot's fence is waited, so its previous submission's GPU timestamps have landed. The
+    // readback (two driver calls + the track pushes) needs nothing from this frame, so it runs as a
+    // job across the sim; recordCommandBuffers joins it before beginRecord resets the slot's scope
+    // list + query pool. One job in flight at a time keeps the GPU track single-writer — the wait
+    // here only ever spins if the last present() bailed before recording (acquire failure).
+    Globals::jobSystem.wait(m_gpuCollectCounter);
+    Globals::jobSystem.submit([this, collectFrameIdx = m_swapChain.getCurrentFrameIndex()] { m_gpuProfiler.collect(collectFrameIdx); },
+        { "GPU timestamps collect", EProfileCategory::Renderer }, EJobPriority::Normal, &m_gpuCollectCounter);
+
+    Camera camera = cameraIn;
+    glm::quat vrBaseOrientation;
+    applyVrHeadPose(cameraIn, camera, vrBaseOrientation);
+
+    checkFrameCapacities();
+
+    PerFrameData& frameData = m_perFrameData[m_swapChain.getCurrentFrameIndex()];
     {
-        ProfileScope scope("GPU timestamps collect", EProfileCategory::Renderer);
-        m_gpuProfiler.collect(m_swapChain.getCurrentFrameIndex());
+        ProfileScope resetScope("Counters + LOD stats", EProfileCategory::Renderer);
+        m_meshInstanceCounter = 0;
+        m_instanceOverflowStart = UINT32_MAX;
+        memset(m_numInstancesPerMesh.data(), 0, m_numInstancesPerMesh.size() * sizeof(m_numInstancesPerMesh[0]));
+        // Both read from any job during the entity pass (noteTextureUse), so set before returning.
+        m_cameraPos = camera.position; // also drives the GI probe region each frame
+        m_mipPixelScale = (float)oc::max(1, m_viewportRect.getSize().y) / oc::max(1e-3f, std::tan(glm::radians(camera.fovDeg) * 0.5f));
+        snapshotLodStats(frameData);
     }
 
+    buildFrameUbo(cameraIn, camera, vrBaseOrientation, frameData);
+
+    m_lightCounter = 0;
+    m_fogVolumeCounter = 0;
+    m_decalCounter = 0;
+    m_frameCounter++;
+    return m_ubo.frustum;
+}
+
+// VR: poll OpenXR + begin the XR frame, then swap the camera's view for the tracked head pose.
+// vrBaseOrientation (play-space anchor derived from the incoming camera) also feeds the per-eye
+// views in buildUboViews. No-op on desktop.
+void Renderer::applyVrHeadPose(const Camera& cameraIn, Camera& camera, glm::quat& vrBaseOrientation)
+{
+    if (!Globals::openXR.isEnabled())
+        return;
     ProfileScope xrScope("XR poll + begin", EProfileCategory::Renderer);
     Globals::openXR.pollEvents();
 
-    Camera camera = cameraIn;
-    const glm::quat vrBaseOrientation = glm::quat_cast(glm::inverse(cameraIn.viewMatrix)) * cameraIn.playSpaceOrientation;
+    vrBaseOrientation = glm::quat_cast(glm::inverse(cameraIn.viewMatrix)) * cameraIn.playSpaceOrientation;
     if (Globals::openXR.beginFrame())
     {
         glm::mat4 headView;
@@ -576,9 +637,12 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
         camera.viewMatrix = headView;
         camera.position = headPos;
     }
+}
 
-    xrScope.stop();
-
+// Reacts to LAST frame's overflows/generation bumps before this frame writes anything: capacity
+// grows, descriptor sizing, and re-record triggers.
+void Renderer::checkFrameCapacities()
+{
     ProfileScope capacityScope("Capacity checks", EProfileCategory::Renderer);
     // Mesh instances overflowed mid-frame last frame
     if (m_pendingMaxInstanceData > m_maxInstanceData)
@@ -603,22 +667,63 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
 
     checkLightGridCapacity();
     checkForceGridCapacity();
-    capacityScope.stop();
+}
 
-    ProfileScope resetScope("Counters + projection", EProfileCategory::Renderer); // resets, proj/jitter math, LOD-stat snapshot
-    m_meshInstanceCounter = 0;
-    m_instanceOverflowStart = UINT32_MAX;
-    memset(m_numInstancesPerMesh.data(), 0, m_numInstancesPerMesh.size() * sizeof(m_numInstancesPerMesh[0]));
+// This slot's fence was waited at the loop top, so its last submitted cull's LOD stats have landed:
+// snapshot them for getStats (the mapped buffer is zeroed here for the frame about to record).
+void Renderer::snapshotLodStats(PerFrameData& frameData)
+{
+    for (uint32 i = 0; i < RendererVKLayout::MAX_MESH_LODS; ++i)
+        m_lodInstanceCounts[i] = frameData.mappedLodStats[i];
+    memset(frameData.mappedLodStats.data(), 0, frameData.mappedLodStats.size_bytes());
+    frameData.lodStatsBuffer.flushMappedMemory(vk::WholeSize);
+}
 
+// Assembles the frame UBO (matrices, sky/fog/ocean/force/terrain params) into m_ubo and hands it to
+// staging - pure CPU math, live-tweak driven, split by subject into the buildUbo* helpers below.
+// m_ubo persists across frames: buildUboViews reads last frame's mvps out of it for reprojection
+// before overwriting them. Main thread only; the outputs consumers read directly (m_centerViewProj,
+// m_sunCascadeViewProj, the returned frustum) are contractually valid the moment beginFrame returns.
+void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation, PerFrameData& frameData)
+{
+    ProfileScope uboScope("UBO build", EProfileCategory::Renderer);
+    RendererVKLayout::Ubo& ubo = m_ubo;
+
+    ubo.lodParams0 = glm::vec4(
+        oc::max(0.01f, m_lodParams.maxErrorPixels) * std::exp2((float)m_lodParams.bias),
+        m_lodParams.hysteresis, m_lodParams.fullResPixels, m_mipPixelScale);
+    ubo.lodParams1 = glm::vec4((float)m_lodParams.forceLod, (float)m_lodParams.bias,
+        m_lodParams.enabled ? 1.0f : 0.0f, 0.0f);
+
+    buildUboViews(cameraIn, camera, vrBaseOrientation);
+
+    // RTAO and the GI probe contribution both need the acceleration structures, so both fold in the RT
+    // master toggle; GI additionally gates on its own switch.
+    // z = the RTAO max distance: past it the trace writes exactly (N, 1.0) (rtao.cs.glsl early-out), so
+    // the forward pass skips its depth-aware AO upsample there and uses those values directly.
+    ubo.aoParams = glm::vec4((m_rtParams.enabled && m_rtaoParams.enabled) ? 1.0f : 0.0f,
+        (m_rtParams.enabled && m_rtParams.giEnabled) ? m_giProbePipeline.getStrength() : 0.0f,
+        m_rtaoParams.maxDistance, 0.0f);
+    ubo.giVisParams = m_giProbePipeline.getVisibilityParams();
+    ubo.frameIndex = m_frameCounter;
+    ubo.timeSeconds = std::chrono::duration<float>(Clock::now() - m_timeStart).count();
+
+    buildUboSky();
+    buildUboSunShadow(camera);
+    buildUboFog();
+    buildUboOcean();
+    buildUboForce();
+    buildUboTerrain();
+
+    Globals::stagingManager.upload(frameData.ubo.getBuffer(), sizeof(RendererVKLayout::Ubo), &m_ubo);
+}
+
+// View matrices, frustum, and TAA jitter: the center (culling) view, the VR eye views, and the
+// screen/viewport constants. Sets m_centerViewProj + m_prevTaaJitter.
+void Renderer::buildUboViews(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation)
+{
+    RendererVKLayout::Ubo& ubo = m_ubo;
     const glm::ivec2 viewportSize = m_viewportRect.getSize();
-    // In VR the "centre view" (used for culling, GI region, shadow cascade fit, and the shared screen-space
-    // froxel fog volume) uses a head-centred projection spanning the union of both eyes' FOV, so it covers
-    // everything either eye renders. Desktop uses the plain camera perspective.
-    const glm::mat4x4 projection = reverseZProjection(Globals::openXR.isEnabled()
-        ? Globals::openXR.getCombinedProjection(camera.near, camera.far)
-        : glm::perspective(glm::radians(camera.fovDeg), (float)viewportSize.x / (float)viewportSize.y, camera.near, camera.far),
-        camera.near, camera.far);
-    glm::mat4 viewMatrix = camera.viewMatrix;
 
     glm::vec2 taaJitterNdc(0.0f);
     if (m_taaParams.taaEnabled && viewportSize.x > 0 && viewportSize.y > 0)
@@ -628,31 +733,6 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
         taaJitterNdc.y = (radicalInverse(sampleIdx, 3u) - 0.5f) * 2.0f / (float)viewportSize.y;
     }
 
-    const uint32 frameIdx = m_swapChain.getCurrentFrameIndex();
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-
-    m_cameraPos = camera.position; // drives the GI probe region each frame
-    m_mipPixelScale = (float)oc::max(1, viewportSize.y) / oc::max(1e-3f, std::tan(glm::radians(camera.fovDeg) * 0.5f));
-
-    // This slot's fence was waited above, so its last submitted cull's LOD stats have landed: snapshot
-    // them for getStats (the mapped buffer is zeroed here for the frame about to record).
-    for (uint32 i = 0; i < RendererVKLayout::MAX_MESH_LODS; ++i)
-        m_lodInstanceCounts[i] = frameData.mappedLodStats[i];
-    memset(frameData.mappedLodStats.data(), 0, frameData.mappedLodStats.size_bytes());
-    frameData.lodStatsBuffer.flushMappedMemory(vk::WholeSize);
-    resetScope.stop();
-
-    // Everything below assembles the frame UBO (matrices, sky/fog/ocean/force/terrain params) and
-    // hands it to staging - pure CPU math, live-tweak driven.
-    ProfileScope uboScope("UBO build", EProfileCategory::Renderer);
-    static RendererVKLayout::Ubo ubo;
-
-    ubo.lodParams0 = glm::vec4(
-        oc::max(0.01f, m_lodParams.maxErrorPixels) * std::exp2((float)m_lodParams.bias),
-        m_lodParams.hysteresis, m_lodParams.fullResPixels, m_mipPixelScale);
-    ubo.lodParams1 = glm::vec4((float)m_lodParams.forceLod, (float)m_lodParams.bias,
-        m_lodParams.enabled ? 1.0f : 0.0f, 0.0f);
-
     const uint32 numViews = Globals::openXR.isEnabled() ? RendererVKLayout::NUM_UBO_VIEWS : 1;
     for (uint32 v = 0; v < numViews; ++v)
     {
@@ -661,7 +741,7 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
     }
 
     RendererVKLayout::ViewData& centerView = ubo.views[RendererVKLayout::VIEW_CENTER];
-    centerView.mvp = projection * viewMatrix;
+    centerView.mvp = computeCenterViewProj(camera);
     // Invert in double precision: a float32 inverse of a perspective mvp is ill-conditioned and its
     // error grows with the camera translation, which shows up as per-frame reconstruction jitter
     // (sky ray, TAA reprojection, RTAO, fog) away from the world origin.
@@ -705,18 +785,13 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
     // reprojection (all raster passes jitter, the prepass included — see taaJitterUv in shared.inc.glsl).
     ubo.taaJitter = glm::vec4(taaJitterNdc, m_prevTaaJitter);
     m_prevTaaJitter = taaJitterNdc;
-    // RTAO and the GI probe contribution both need the acceleration structures, so both fold in the RT
-    // master toggle; GI additionally gates on its own switch.
-    // z = the RTAO max distance: past it the trace writes exactly (N, 1.0) (rtao.cs.glsl early-out), so
-    // the forward pass skips its depth-aware AO upsample there and uses those values directly.
-    ubo.aoParams = glm::vec4((m_rtParams.enabled && m_rtaoParams.enabled) ? 1.0f : 0.0f,
-        (m_rtParams.enabled && m_rtParams.giEnabled) ? m_giProbePipeline.getStrength() : 0.0f,
-        m_rtaoParams.maxDistance, 0.0f);
-    ubo.giVisParams = m_giProbePipeline.getVisibilityParams();
-    ubo.frameIndex = m_frameCounter;
+}
 
+// Sky atmosphere, sun + eclipse, clouds, stars/moon/nebula, and ground params.
+void Renderer::buildUboSky()
+{
+    RendererVKLayout::Ubo& ubo = m_ubo;
     const SkyParams& sky = m_skyParams;
-    const FogParams& fog = m_fogParams;
 
     // Earth sea-level scattering coefficients, scaled by the atmosphere tweaks.
     ubo.betaRayleigh = glm::vec3(5.802e-6f, 13.558e-6f, 33.1e-6f) * sky.rayleighScatter;
@@ -735,13 +810,35 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
     ubo.rtSkyRadiance = (m_rtParams.enabled && m_rtParams.rtSkyRadiance) ? 1.0f : 0.0f;
     ubo.ambientColor = sky.ambientColor * sky.ambientIntensity;
     ubo.skyUp = sky.up;
+
+    ubo.cloudCoverage = sky.cloudCoverage;
+    ubo.cloudThickness = sky.cloudThickness * sky.cloudThickness;
+    ubo.cloudParams0 = glm::vec4(sky.cloudHeight, 0.00012f * sky.cloudScale, 0.0043f * sky.cloudWindSpeed, sky.cloudWindAngle);
+    ubo.cloudParams1 = glm::vec4(sky.cloudSoftness, sky.cloudShading, 0.0f, 0.0f);
+    ubo.cloudParams2 = glm::vec4(sky.cloudDensity, sky.cloudSharpness, sky.cloudBaseVar, sky.moonBrightness);
+    ubo.skySunParams = glm::vec4(sky.scatterBoost, sky.mieG, sky.sunRolloff, sky.starDensity);
+
+    ubo.moonParams = glm::vec4(glm::normalize(sky.moonDirection), cosf(glm::radians(sky.moonSizeDeg)));
+    ubo.starParams = glm::vec4(sky.starSize, sky.starSizeVar, sky.starBrightness, sky.starColorVar);
+    ubo.nebulaParams = glm::vec4(sky.nebulaIntensity, sky.nebulaScale, sky.nebulaBandWidth, sky.nebulaDust);
+    ubo.nebulaAxis = glm::vec4(glm::normalize(sky.nebulaAxis), 0.0f);
+    ubo.atmosParams = glm::vec4(sky.rayleighHeight, sky.mieHeight, sky.mieExtinction, sky.ozone);
+    ubo.groundParams = glm::vec4(sky.groundColor * sky.groundIntensity, glm::clamp(sky.groundHorizon, 0.0f, 1.0f));
+}
+
+// Sun shadow route: the RT-sun toggle, else the PCSS cascade matrices (also consumed CPU-side via
+// getSunCascadeViewProj), plus the long-range terrain shadow march params.
+void Renderer::buildUboSunShadow(const Camera& camera)
+{
+    RendererVKLayout::Ubo& ubo = m_ubo;
     ubo.rtSunShadow = (m_rtParams.enabled && m_rtParams.rtSunShadow) ? 1.0f : 0.0f;
 
     // Use the effective flag: with RT off (or RT-sun off) the PCSS cascades supply the sun shadow.
     if (ubo.rtSunShadow < 0.5f)
     {
+        const glm::ivec2 viewportSize = m_viewportRect.getSize();
         const float aspect = (float)viewportSize.x / (float)viewportSize.y;
-        computeSunCascades(camera, aspect, sky.sunDirection,
+        computeSunCascades(camera, aspect, m_skyParams.sunDirection,
             m_shadowParams.maxDistance, m_shadowParams.splitLambda, m_shadowParams.casterPad, m_sunCascadeViewProj);
         m_numSunCascades = RendererVKLayout::NUM_SHADOW_CASCADES;
         for (uint32 c = 0; c < RendererVKLayout::NUM_SHADOW_CASCADES; ++c)
@@ -753,14 +850,15 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
 
     ubo.sunShadowRays = (float)m_rtParams.sunShadowRays;
     ubo.rtLightShadows = (m_rtParams.enabled && m_rtParams.rtLightShadows) ? 1.0f : 0.0f;
-    static const Clock::time_point timeStart = Clock::now();
-    ubo.timeSeconds = std::chrono::duration<float>(Clock::now() - timeStart).count();
-    ubo.cloudCoverage = sky.cloudCoverage;
-    ubo.cloudThickness = sky.cloudThickness * sky.cloudThickness;
-    ubo.cloudParams0 = glm::vec4(sky.cloudHeight, 0.00012f * sky.cloudScale, 0.0043f * sky.cloudWindSpeed, sky.cloudWindAngle);
-    ubo.cloudParams1 = glm::vec4(sky.cloudSoftness, sky.cloudShading, 0.0f, 0.0f);
-    ubo.cloudParams2 = glm::vec4(sky.cloudDensity, sky.cloudSharpness, sky.cloudBaseVar, sky.moonBrightness);
-    ubo.skySunParams = glm::vec4(sky.scatterBoost, sky.mieG, sky.sunRolloff, sky.starDensity);
+    ubo.terrainShadowParams = glm::vec4(glm::max(m_shadowParams.terrainMarchStart, 0.0f),
+        glm::max(m_shadowParams.terrainMarchBias, 1.0f), glm::max(m_shadowParams.terrainMarchSpread, 0.002f), 0.0f);
+}
+
+// Volumetric fog params + the fog terrain height cascades (also the ocean's shore-map fallback).
+void Renderer::buildUboFog()
+{
+    RendererVKLayout::Ubo& ubo = m_ubo;
+    const FogParams& fog = m_fogParams;
 
     // A freshly uploaded fog terrain height map activates here, in the same frame slot as the UBO that
     // carries its world center/sizes — descriptors (refreshed per frame in recordCommandBuffers) and
@@ -795,14 +893,12 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
     // z: thickness scale inverted into a falloff multiplier on fogParams0.z. w: far-field ground samples.
     ubo.fogParams9 = glm::vec4(fog.farField ? 1.0f : 0.0f, glm::max(fog.farFieldDensity, 0.0f),
         1.0f / glm::clamp(fog.farFieldThickness, 0.01f, 100.0f), (float)glm::max(fog.farFieldSteps, 1));
+}
 
-    ubo.moonParams = glm::vec4(glm::normalize(sky.moonDirection), cosf(glm::radians(sky.moonSizeDeg)));
-    ubo.starParams = glm::vec4(sky.starSize, sky.starSizeVar, sky.starBrightness, sky.starColorVar);
-    ubo.nebulaParams = glm::vec4(sky.nebulaIntensity, sky.nebulaScale, sky.nebulaBandWidth, sky.nebulaDust);
-    ubo.nebulaAxis = glm::vec4(glm::normalize(sky.nebulaAxis), 0.0f);
-    ubo.atmosParams = glm::vec4(sky.rayleighHeight, sky.mieHeight, sky.mieExtinction, sky.ozone);
-    ubo.groundParams = glm::vec4(sky.groundColor * sky.groundIntensity, glm::clamp(sky.groundHorizon, 0.0f, 1.0f));
-
+// FFT ocean simulation + shading params.
+void Renderer::buildUboOcean()
+{
+    RendererVKLayout::Ubo& ubo = m_ubo;
     const OceanParams& ocean = m_oceanParams;
     const glm::vec2 windDir = glm::length(ocean.windDirection) > 1e-4f ? glm::normalize(ocean.windDirection) : glm::vec2(1.0f, 0.0f);
     ubo.oceanParams0 = glm::vec4(windDir, ocean.amplitude, ocean.choppiness);
@@ -830,29 +926,35 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
     ubo.oceanParams9 = glm::vec4(glm::max(ocean.troughMargin, 0.0f), glm::max(ocean.rtRefractionRange, 10.0f),
         glm::max(ocean.rtReflectionRange, 50.0f), glm::clamp(ocean.rtReflectionMaxRough, 0.0f, 1.0f));
     ubo.oceanParams10 = glm::vec4(glm::max(ocean.waveHeightLimit, 0.0f), 0.0f, 0.0f, 0.0f);
+}
 
+// Forcefield bubbles (Force library pushes m_forceFieldParams every frame; all UBO-driven = live).
+void Renderer::buildUboForce()
+{
+    RendererVKLayout::Ubo& ubo = m_ubo;
+    const ForceFieldParams& force = m_forceFieldParams;
+    for (uint32 i = 0; i < RendererVKLayout::MAX_FORCE_TEAMS; ++i)
+        ubo.forceTeamColors[i] = glm::vec4(force.teamColors[i], 0.0f);
+    ubo.forceParams0 = glm::vec4(glm::max(force.isoThreshold, 1e-3f), glm::max(force.rimPower, 0.1f),
+        glm::max(force.rimIntensity, 0.0f), glm::clamp(force.shellAlpha, 0.0f, 1.0f));
+    ubo.forceParams1 = glm::vec4(glm::max(force.contactGlowIntensity, 0.0f), glm::max(force.contactGlowWidth, 1e-3f),
+        glm::max(force.geoGlowDistance, 0.0f), (float)glm::clamp(force.marchSteps, 8, 256));
+    ubo.forceParams2 = glm::vec4(glm::max(force.patternScale, 0.0f), force.patternSpeed,
+        glm::max(force.patternIntensity, 0.0f), 0.0f); // w unused (force gain is CPU-side)
+    ubo.forceParams3 = glm::vec4(glm::clamp(force.interiorAlpha, 0.0f, 1.0f),
+        glm::clamp(force.backfaceAlpha, 0.0f, 1.0f), glm::clamp(force.contactWallAlpha, 0.0f, 1.0f),
+        glm::clamp(force.junctionSmoothing, 0.0f, 2.0f));
+    ubo.forceParams4 = glm::vec4(force.densityView ? 1.0f : 0.0f, glm::max(force.densityRange, 1e-3f),
+        force.ambientSlope, (float)glm::min(force.ambientTeam, RendererVKLayout::MAX_FORCE_TEAMS - 1));
+    ubo.forceParams5 = glm::vec4(force.ambientCenter, glm::max(force.ambientSafeRadius, 0.0f),
+        glm::max(force.ambientMaxStrength, 0.0f));
+}
+
+// Terrain rendering + splat texture params; also reports the splat textures to the mip streamer.
+void Renderer::buildUboTerrain()
+{
+    RendererVKLayout::Ubo& ubo = m_ubo;
     ubo.terrainParams = m_terrainParams;
-    ubo.terrainShadowParams = glm::vec4(glm::max(m_shadowParams.terrainMarchStart, 0.0f),
-        glm::max(m_shadowParams.terrainMarchBias, 1.0f), glm::max(m_shadowParams.terrainMarchSpread, 0.002f), 0.0f);
-
-    { // Forcefield bubbles (Force library pushes m_forceFieldParams every frame; all UBO-driven = live)
-        const ForceFieldParams& force = m_forceFieldParams;
-        for (uint32 i = 0; i < RendererVKLayout::MAX_FORCE_TEAMS; ++i)
-            ubo.forceTeamColors[i] = glm::vec4(force.teamColors[i], 0.0f);
-        ubo.forceParams0 = glm::vec4(glm::max(force.isoThreshold, 1e-3f), glm::max(force.rimPower, 0.1f),
-            glm::max(force.rimIntensity, 0.0f), glm::clamp(force.shellAlpha, 0.0f, 1.0f));
-        ubo.forceParams1 = glm::vec4(glm::max(force.contactGlowIntensity, 0.0f), glm::max(force.contactGlowWidth, 1e-3f),
-            glm::max(force.geoGlowDistance, 0.0f), (float)glm::clamp(force.marchSteps, 8, 256));
-        ubo.forceParams2 = glm::vec4(glm::max(force.patternScale, 0.0f), force.patternSpeed,
-            glm::max(force.patternIntensity, 0.0f), 0.0f); // w unused (force gain is CPU-side)
-        ubo.forceParams3 = glm::vec4(glm::clamp(force.interiorAlpha, 0.0f, 1.0f),
-            glm::clamp(force.backfaceAlpha, 0.0f, 1.0f), glm::clamp(force.contactWallAlpha, 0.0f, 1.0f),
-            glm::clamp(force.junctionSmoothing, 0.0f, 2.0f));
-        ubo.forceParams4 = glm::vec4(force.densityView ? 1.0f : 0.0f, glm::max(force.densityRange, 1e-3f),
-            force.ambientSlope, (float)glm::min(force.ambientTeam, RendererVKLayout::MAX_FORCE_TEAMS - 1));
-        ubo.forceParams5 = glm::vec4(force.ambientCenter, glm::max(force.ambientSafeRadius, 0.0f),
-            glm::max(force.ambientMaxStrength, 0.0f));
-    }
 
     const TerrainTexTweaks& tex = m_terrainTexTweaks;
     // Every start/full pair is ordered here rather than in the shader: an inverted pair from the tweak
@@ -880,14 +982,6 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
         for (const uint16 texIdx : m_terrainSplatTextures)
             Globals::textureStreamer.noteUse(texIdx, log2Screen);
     }
-
-    Globals::stagingManager.upload(frameData.ubo.getBuffer(), sizeof(RendererVKLayout::Ubo), &ubo);
-
-    m_lightCounter = 0;
-    m_fogVolumeCounter = 0;
-    m_decalCounter = 0;
-    m_frameCounter++;
-    return ubo.frustum;
 }
 
 void Renderer::renderNode(const RenderNode& node, uint32 passMask)
@@ -2921,7 +3015,9 @@ void Renderer::recordCommandBuffers()
     CommandBuffer& commandBuffer = frameData.primaryCommandBuffer;
     vk::CommandBuffer vkCommandBuffer = commandBuffer.begin(true);
     // GPU pass timings: timestamps live in the primary (re-recorded every frame) and OUTSIDE render
-    // passes only; results are collected in beginFrame when this slot's fence is next waited.
+    // passes only; results are collected by a job kicked in beginFrame when this slot's fence is next
+    // waited — join it before beginRecord resets the slot's scope list + query pool it reads.
+    Globals::jobSystem.wait(m_gpuCollectCounter);
     m_gpuProfiler.beginRecord(vkCommandBuffer, frameIdx);
     m_gpuProfiler.beginScope(vkCommandBuffer, "GPU Frame");
     // Pending baked-map uploads (fog terrain cascades): copied here in the primary (re-recorded
