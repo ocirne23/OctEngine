@@ -70,6 +70,8 @@ public:
     const ScriptModule* getOrLoad(const oc::string& path, bool forceRecompile = false);
     void handleScriptReloadRequests(const oc::vector<oc::string>& paths)
     {
+        if (paths.empty())
+            return;
         ProfileScope profileScope("Script Reloads", EProfileCategory::Script);
 		for (const oc::string& path : paths)
 			getOrLoad(path, true);

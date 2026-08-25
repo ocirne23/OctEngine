@@ -41,6 +41,16 @@ public:
     ~GameMatch();
 
     void spawnWorld();
+    // The PLAYER/CAMERA hot path, and nothing else: capsule adoption (client) + velocity steering +
+    // the shield's body push — the direct body setters that must land BEFORE this frame's physics
+    // step. Deliberately minimal so main reaches the spatial/begin-frame kicks as early as possible.
+    void updatePlayer(float deltaSec);
+    // The REST of the game tick, called AFTER the spatial/begin-frame joins (spawns/destroys and
+    // spatial queries are legal again there; still before contact dispatch + the entity pass):
+    // structures authority/mirror, materials, unit production, base healing, nav staging, net
+    // flushes. Consequences of the placement: freshly spawned actors link into the spatial index
+    // at the NEXT commit (the spawn guard keeps them visible), new bodies' velocities integrate on
+    // the NEXT step, and feedNav's staging feeds the NEXT frame's NavSystem::update.
     void update(float deltaSec);
     void updateWindowed(Camera& camera, float deltaSec);
 

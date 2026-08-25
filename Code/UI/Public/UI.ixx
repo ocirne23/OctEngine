@@ -88,9 +88,11 @@ public:
     {
         oc::vector<EntityChange> changes;
         m_sceneView.takeChanges(changes);
-        changes.insert(changes.end(), oc::make_move_iterator(m_viewportChanges.begin()),
-                                      oc::make_move_iterator(m_viewportChanges.end()));
-        m_viewportChanges.clear();
+        if (!m_viewportChanges.empty())
+        {
+            changes.insert(changes.end(), oc::make_move_iterator(m_viewportChanges.begin()), oc::make_move_iterator(m_viewportChanges.end()));
+            m_viewportChanges.clear();
+        }
         m_assetBrowser.takeChanges(changes);
         m_entityEditor.takeChanges(changes);
         m_propertiesPanel.takeChanges(changes);

@@ -10,6 +10,8 @@ public:
 	// Appends into the frame's merged drain (UI::takeEntityChanges); clear() keeps this panel's capacity.
 	void takeChanges(oc::vector<EntityChange>& out)
 	{
+		if (m_changes.empty())
+			return;
 		out.insert(out.end(), oc::make_move_iterator(m_changes.begin()), oc::make_move_iterator(m_changes.end()));
 		m_changes.clear();
 	}

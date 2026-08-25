@@ -760,19 +760,33 @@ void GameMatch::handleNetEvent(oc::string_view name)
     // Unknown Gq* names from stale builds simply fall through here.)
 }
 
+// Pre-physics, before the spatial/begin-frame kicks — ONLY the player body writes (see Match.ixx).
+void GameMatch::updatePlayer(float deltaSec)
+{
+    if (!m_enabled)
+        return;
+    ProfileScope scope("Game player", EProfileCategory::Game);
+    if (m_isClient)
+    {
+        // CLIENT: adopt + drive our own capsule (the owner simulates; claims stream the state);
+        // shield/health run on LOCAL readbacks against the mirrored fields. World sim is remote.
+        m_player.clientAdopt(teamStartPos((uint8)m_team));
+    }
+    m_player.tickMovement(m_camera.forwardPlanar(), deltaSec);
+    m_player.tickShieldAndHealth(deltaSec); // body writes too: the shield push impulse, the death stop
+}
+
+// Post-join (see Match.ixx for the placement + its consequences).
 void GameMatch::update(float deltaSec)
 {
     if (!m_enabled)
         return;
     ProfileScope scope("Game update", EProfileCategory::Game);
     if (m_scenarioOrderPending && !m_isClient)
-        issueScenarioOrder(); // the frame after runScenario's load: the units' spatial entries are linked now
+        issueScenarioOrder(); // after runScenario's load: units come from the roster, the Base/raster from the ticks below
 
     if (m_isClient)
     {
-        // CLIENT: adopt + drive our own capsule (the owner simulates; claims stream the state);
-        // shield/health run on LOCAL readbacks against the mirrored fields. World sim is remote.
-        m_player.clientAdopt(teamStartPos((uint8)m_team));
         // Our team is the SERVER's assignment, carried on our capsule's puppet component by the
         // snapshot game blob (never derived from the clientId — see allocateClientTeam). It lands
         // a snapshot or two after adoption; follow it whenever it changes.
@@ -782,8 +796,6 @@ void GameMatch::update(float deltaSec)
             m_player.setRespawnPos(teamStartPos((uint8)m_team));
             Log::info("We are team " + oc::to_string(m_team));
         }
-        m_player.tickMovement(m_camera.forwardPlanar(), deltaSec);
-        m_player.tickShieldAndHealth(deltaSec);
         tickBaseHealing(deltaSec);
         m_structures.tickMirror(deltaSec);
         feedNav(); // obstacles only: the local player's move-order goal field
@@ -792,8 +804,6 @@ void GameMatch::update(float deltaSec)
 
     const glm::vec3 playerPos = m_player.bodyPos();
     m_structures.tickAuthority(playerPos, deltaSec);
-    m_player.tickMovement(m_camera.forwardPlanar(), deltaSec);
-    m_player.tickShieldAndHealth(deltaSec);
     tickBaseHealing(deltaSec);
 
     // (No player-target publish step: units find enemy players — puppet GameUnitComponents —
@@ -834,8 +844,9 @@ void GameMatch::update(float deltaSec)
     // (shots to spawn, deaths) and runs production.
     m_npcs.service(m_structures);
 
-    // Flow fields for the units' next pass: obstacles + per-team sources in (NavSystem::update
-    // publishes them later this frame, from main.cpp's kick/join window — see feedNav).
+    // Flow fields: obstacles + per-team sources staged for the NEXT frame's NavSystem::update
+    // (which runs in main.cpp's kick/join window, BEFORE this bulk tick — one frame of source
+    // latency, well inside nav's own async tolerances).
     feedNav();
 
     if (m_isServer)

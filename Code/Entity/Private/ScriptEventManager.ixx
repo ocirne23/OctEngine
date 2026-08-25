@@ -47,6 +47,9 @@ public:
 
     oc::vector<EntityChange> takeEntityChanges()
     {
+        if (m_entityChanges.empty())
+            return {};
+
 		oc::vector<EntityChange> changes;
 		const std::lock_guard<std::mutex> lock(m_entityChangeMutex);
 		changes.swap(m_entityChanges);

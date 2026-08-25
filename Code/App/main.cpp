@@ -430,7 +430,7 @@ int main(int argc, char* argv[])
         Globals::world.handleEntityChanges(Globals::scriptEvents.takeEntityChanges(), camera, Globals::ui.getViewportRect());
 
         Globals::networkManager.receive(deltaSec); // snapshot targets + events land before the sim/entity updates read them
-        game.update((float)deltaSec); // authority tick, pre-physics (direct body setters sanctioned); becomes the server tick in MP
+        game.updatePlayer((float)deltaSec); // ONLY the player-body writes (camera hot path, pre-physics); the rest of the game tick runs after the joins below
         Globals::scriptContext.update(camera, (float)deltaSec, (float)Globals::time.getElapsedSec());
 
         // The spatial index + renderer frame state are QUIESCENT from here until world.update: the
@@ -440,9 +440,21 @@ int main(int argc, char* argv[])
         // Nothing between the kicks and the joins may touch the index or renderer frame state.
         if (!headlessServer)
         {
+            ProfileScope kickScope("Frame kicks", EProfileCategory::App); // attributes the submit + wake cost that used to read as a gap
             const Rect viewportRect = Globals::ui.getViewportRect(); // stable: the widget pass joined at the top of the frame
-            Globals::spatialIndex.kickUpdateJob(Globals::rendererVK.getCullView(camera, viewportRect));
-            Globals::rendererVK.kickBeginFrameJob(camera, viewportRect);
+            CullView cullView;
+            {
+                ProfileScope scope("Cull view", EProfileCategory::Renderer);
+                cullView = Globals::rendererVK.getCullView(camera, viewportRect);
+            }
+            {
+                ProfileScope scope("Spatial kick", EProfileCategory::Spatial);
+                Globals::spatialIndex.kickUpdateJob(cullView);
+            }
+            {
+                ProfileScope scope("Begin frame kick", EProfileCategory::Renderer);
+                Globals::rendererVK.kickBeginFrameJob(camera, viewportRect);
+            }
         }
         Globals::physics.update(deltaSec); // ≤1 step; contact events stay buffered until the dispatch below
         if (!headlessServer)
@@ -452,6 +464,12 @@ int main(int argc, char* argv[])
             Globals::rendererVK.joinBeginFrameJob(); // VR: beginFrame runs synchronously here
             Globals::spatialIndex.joinUpdateJob();
         }
+        // The game tick's bulk (structures/production/materials/nav staging — everything but the
+        // player-body writes in game.updatePlayer above): spawns, destroys and spatial queries are
+        // legal again after the joins, and mid-frame container loads after beginFrame are a
+        // supported path (present() re-checks texture/mesh generations). Becomes the server tick
+        // in MP. See GameMatch::update's declaration for the one-frame latencies this placement buys.
+        game.update((float)deltaSec);
         // Contact scripts (OnPhysicsEvent) query the spatial index and can touch renderer state
         // (light/sun thunks), so they fire AFTER the joins — still before the entity pass, as before.
         Globals::physics.dispatchContactEvents([](const PhysicsWorld::ContactEvent& evt) { Globals::world.handleContactEvent(evt); });
