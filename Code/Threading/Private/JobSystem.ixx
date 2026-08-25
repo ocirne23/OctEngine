@@ -84,7 +84,7 @@ public:
     // job's body, so nothing a worker runs is ever invisible on the profiler (a job body may still
     // open finer scopes of its own inside it).
     template<typename Func>
-    void submit(Func&& func, JobProfile profile, EJobPriority priority = EJobPriority::Normal, JobCounter* counter = nullptr)
+    void submit(Func&& func, JobProfile profile, EJobPriority priority = EJobPriority::Normal, JobCounter* counter = nullptr, uint8 flags = 0)
     {
         assert(profile.name && "every job must carry a JobProfile name (a string literal)");
         Job* job = allocatePooledJob();
@@ -99,6 +99,7 @@ public:
         setJobCallable(*job, oc::forward<Func>(func));
         job->priority = priority;
         job->effectivePriority = priority;
+        job->flags |= flags; // EJobFlag_ForeignWait when the body waits on a counter it did not create
         job->name = profile.name;
         job->profileCategory = profile.category;
         if (counter)
@@ -147,9 +148,9 @@ public:
     // pass, the window thread, main); one submit = one run, at the next kick; a job queued after the
     // kick simply rides the next frame's batch.
     template<typename Func>
-    void submitPostUpdate(Func&& func, JobProfile profile, EJobPriority priority = EJobPriority::Normal)
+    void submitPostUpdate(Func&& func, JobProfile profile, EJobPriority priority = EJobPriority::Normal, uint8 flags = 0)
     {
-        submitPostUpdateImpl(oc::forward<Func>(func), profile, priority);
+        submitPostUpdateImpl(oc::forward<Func>(func), profile, priority, flags);
     }
 
     // Main loop only. The kick submits everything queued since the last one and returns (no wait);
@@ -211,7 +212,7 @@ public:
 private:
 
     template<typename Func>
-    void submitPostUpdateImpl(Func&& func, JobProfile profile, EJobPriority priority)
+    void submitPostUpdateImpl(Func&& func, JobProfile profile, EJobPriority priority, uint8 flags)
     {
         assert(profile.name && "every job must carry a JobProfile name (a string literal)");
         Job* job = allocatePooledJob();
@@ -226,6 +227,7 @@ private:
         setJobCallable(*job, oc::forward<Func>(func));
         job->priority = priority;
         job->effectivePriority = priority;
+        job->flags |= flags; // EJobFlag_ForeignWait when the body waits on a counter it did not create
         job->name = profile.name;
         job->profileCategory = profile.category;
         if (!m_postUpdateQueue.push(job))

@@ -52,7 +52,12 @@ void CommandBuffer::submitGraphics(vk::Fence fence)
         .signalSemaphoreCount = (uint32)m_signalSemaphores.size(),
         .pSignalSemaphores = m_signalSemaphores.data(),
     };
-    auto result = Globals::device.getGraphicsQueue().submit(submitInfo, fence);
+    vk::Result result;
+    {
+        // Queue calls need external synchronization; staging overflow submits can come from workers.
+        std::lock_guard<std::mutex> lock(Globals::device.getGraphicsQueueMutex());
+        result = Globals::device.getGraphicsQueue().submit(submitInfo, fence);
+    }
     if (result != vk::Result::eSuccess)
     {
         assert(false && "Failed to submit command buffer");

@@ -201,7 +201,7 @@ bool GBuffer::initialize(uint32 width, uint32 height, uint32 viewCount)
         cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = (uint32)bars.size(), .pImageMemoryBarriers = bars.data() });
         init.end();
         init.submitGraphics();
-        (void)Globals::device.getGraphicsQueue().waitIdle();
+        (void)Globals::device.graphicsQueueWaitIdle();
     }
 
     return true;

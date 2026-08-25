@@ -99,10 +99,10 @@ void PhysicsWorld::shutdown()
     m_initialized = false;
 }
 
-// Appends the step's buffered contact/sensor begin/end events (box3d clears them on the next step,
-// so they are drained after every step, not once per frame). End events may reference destroyed
-// shapes and are validated first.
-static void dispatchContactEvents(b3WorldId world, oc::function<void(const PhysicsWorld::ContactEvent&)> contactCallback)
+// Fires the step's buffered contact/sensor begin/end events (box3d clears them on the NEXT step —
+// with at most one step per update they stay valid until then, which is what lets the dispatch
+// defer to later in the frame). End events may reference destroyed shapes and are validated first.
+static void drainContactEvents(b3WorldId world, const oc::function<void(const PhysicsWorld::ContactEvent&)>& contactCallback)
 {
     auto userDataOf = [](b3ShapeId shape) { return b3Body_GetUserData(b3Shape_GetBody(shape)); };
 
@@ -135,7 +135,7 @@ static void dispatchContactEvents(b3WorldId world, oc::function<void(const Physi
     }
 }
 
-void PhysicsWorld::update(double deltaSec, oc::function<void(const ContactEvent&)> contactCallback)
+void PhysicsWorld::update(double deltaSec)
 {
     if (!m_initialized)
         return;
@@ -144,7 +144,7 @@ void PhysicsWorld::update(double deltaSec, oc::function<void(const ContactEvent&
     applyQueuedCommands(); // before the paused check: placing a body / setting its state is authoring, not simulation
 
     if (!m_paused)
-        stepSimulation(deltaSec, contactCallback);
+        stepSimulation(deltaSec);
 
     // After the steps, so the wireframes match the poses the entities will render from this frame -- and
     // deliberately NOT gated on paused, since inspecting colliders with the simulation stopped is the point.
@@ -155,15 +155,17 @@ void PhysicsWorld::update(double deltaSec, oc::function<void(const ContactEvent&
     }
 }
 
-void PhysicsWorld::stepSimulation(double deltaSec, const oc::function<void(const ContactEvent&)>& contactCallback)
+void PhysicsWorld::stepSimulation(double deltaSec)
 {
     m_accumulator += float(deltaSec) * m_timeScale;
     const float step = 1.0f / float(m_stepHz);
     const b3WorldId world = oc::bitCast<b3WorldId>(m_worldHandle);
 
-    constexpr int maxCatchUpSteps = 4;
-    int steps = 0;
-    while (m_accumulator >= step && steps < maxCatchUpSteps)
+    // AT MOST ONE step per update — deliberate (see the header): it keeps box3d's contact buffers
+    // valid until the deferred dispatchContactEvents, and it bounds the step cost per frame. Below
+    // stepHz the sim runs SLOWER than real time instead of catching up; the residual is clamped to
+    // one owed step so a hitch never spirals.
+    if (m_accumulator >= step)
     {
         ProfileScope profileScope("Physics step", EProfileCategory::Physics);
         if (m_waterSurface && (!m_waterActive || m_waterActive()))
@@ -173,12 +175,17 @@ void PhysicsWorld::stepSimulation(double deltaSec, const oc::function<void(const
         }
         b3World_Step(world, step, m_subSteps);
         ++m_stepCount;
-        dispatchContactEvents(world, contactCallback);
-        m_accumulator -= step;
-        ++steps;
+        m_accumulator = oc::min(m_accumulator - step, step);
     }
-    if (m_accumulator >= step)
-        m_accumulator = 0.0f; // drop the remainder after a hitch instead of spiraling
+}
+
+void PhysicsWorld::dispatchContactEvents(const oc::function<void(const ContactEvent&)>& contactCallback)
+{
+    if (!m_initialized || m_stepCount == m_lastDispatchedStep)
+        return; // no step since the last dispatch: box3d still buffers the OLD events
+    m_lastDispatchedStep = m_stepCount;
+    ProfileScope scope("Physics contacts", EProfileCategory::Physics);
+    drainContactEvents(oc::bitCast<b3WorldId>(m_worldHandle), contactCallback);
 }
 
 void PhysicsWorld::teleportBody(const PhysicsBody& body, const glm::vec3& pos, const glm::quat& rot)

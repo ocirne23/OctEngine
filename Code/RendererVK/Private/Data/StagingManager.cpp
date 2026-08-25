@@ -70,9 +70,10 @@ bool StagingManager::initialize()
 
 vk::Semaphore StagingManager::upload(vk::Buffer dstBuffer, vk::DeviceSize dataSize, const void* data, vk::DeviceSize dstOffset)
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
     assert(dataSize <= m_mappedMemory.size());
     if (m_currentBufferOffset + dataSize > m_mappedMemory.size())
-        m_nextUpdateSemaphore = update();
+        m_nextUpdateSemaphore = updateNoLock();
 
     assert(m_currentBufferOffset + dataSize <= m_mappedMemory.size());
     memcpy(m_mappedMemory.data() + m_currentBufferOffset, data, dataSize);
@@ -84,10 +85,11 @@ vk::Semaphore StagingManager::upload(vk::Buffer dstBuffer, vk::DeviceSize dataSi
 
 vk::Semaphore StagingManager::uploadImage(vk::Image dstImage, uint32 imageWidth, uint32 imageHeight, vk::DeviceSize dataSize, const void* data, uint32 mipLevel, vk::DeviceSize dstOffset)
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
     assert(dataSize <= m_mappedMemory.size());
     m_currentBufferOffset = alignUp(m_currentBufferOffset, IMAGE_COPY_OFFSET_ALIGNMENT);
     if (m_currentBufferOffset + dataSize > m_mappedMemory.size())
-        m_nextUpdateSemaphore = update();
+        m_nextUpdateSemaphore = updateNoLock();
 
     vk::BufferImageCopy bufferImageCopy{
         .bufferOffset = m_currentBufferOffset,
@@ -110,10 +112,11 @@ vk::Semaphore StagingManager::uploadImage(vk::Image dstImage, uint32 imageWidth,
 
 vk::Semaphore StagingManager::uploadImageAndGenerateMipMaps(vk::Image image, uint32 imageWidth, uint32 imageHeight, uint32 numMipLevels, vk::DeviceSize dataSize, const void* data, vk::DeviceSize dstOffset)
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
     assert(dataSize <= m_mappedMemory.size());
     m_currentBufferOffset = alignUp(m_currentBufferOffset, IMAGE_COPY_OFFSET_ALIGNMENT);
     if (m_currentBufferOffset + dataSize > m_mappedMemory.size())
-        m_nextUpdateSemaphore = update();
+        m_nextUpdateSemaphore = updateNoLock();
 
     vk::BufferImageCopy bufferImageCopy{
         .bufferOffset = m_currentBufferOffset,
@@ -136,6 +139,7 @@ vk::Semaphore StagingManager::uploadImageAndGenerateMipMaps(vk::Image image, uin
 
 vk::Semaphore StagingManager::copyImageMips(vk::Image srcImage, vk::Image dstImage, uint32 dstBaseMip, oc::vector<vk::ImageCopy>&& regions)
 {
+    std::lock_guard<std::mutex> lock(m_mutex);
     assert(!regions.empty());
     m_imageMipCopyList.push_back(ImageMipCopy{ srcImage, dstImage, dstBaseMip, oc::move(regions) });
     return m_semaphores[m_currentBuffer];
@@ -143,14 +147,38 @@ vk::Semaphore StagingManager::copyImageMips(vk::Image srcImage, vk::Image dstIma
 
 void StagingManager::ensureDrainedForSharedWrite()
 {
-    if (m_drainedForSharedWrite)
+    if (m_drainedForSharedWrite.load(oc::memory_order_acquire))
         return;
-    auto waitResult = Globals::device.getGraphicsQueue().waitIdle();
+    std::lock_guard<std::mutex> lock(m_mutex); // serialize concurrent first-drains; staging -> queue lock order
+    if (m_drainedForSharedWrite.load(oc::memory_order_relaxed))
+        return;
+    auto waitResult = Globals::device.graphicsQueueWaitIdle();
     assert(waitResult == vk::Result::eSuccess && "Failed to wait for device idle before shared buffer write");
-    m_drainedForSharedWrite = true;
+    m_drainedForSharedWrite.store(true, oc::memory_order_release); // only after the idle completed
 }
 
 vk::Semaphore StagingManager::update()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return updateNoLock();
+}
+
+void StagingManager::flushPending()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_nextUpdateSemaphore = updateNoLock();
+}
+
+void StagingManager::restoreChainSemaphore(vk::Semaphore semaphore)
+{
+    if (semaphore == VK_NULL_HANDLE)
+        return;
+    std::lock_guard<std::mutex> lock(m_mutex);
+    assert(m_nextUpdateSemaphore == VK_NULL_HANDLE && "a flush slipped in between present()'s update and the acquire failure");
+    m_nextUpdateSemaphore = semaphore;
+}
+
+vk::Semaphore StagingManager::updateNoLock()
 {
     if (m_bufferCopyRegions.empty() && m_imageCopyRegions.empty() && m_imageCopyAndMipList.empty() && m_imageMipCopyList.empty())
     {

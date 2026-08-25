@@ -228,7 +228,7 @@ void OceanSimulationPipeline::createImages()
         cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &foamToGeneral });
         init.end();
         init.submitGraphics();
-        (void)Globals::device.getGraphicsQueue().waitIdle();
+        (void)Globals::device.graphicsQueueWaitIdle();
     }
 }
 

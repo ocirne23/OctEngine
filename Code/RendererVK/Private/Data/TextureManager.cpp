@@ -8,7 +8,7 @@ import :Layout;
 
 TextureManager::~TextureManager()
 {
-    auto waitResult = Globals::device.getGraphicsQueue().waitIdle();
+    auto waitResult = Globals::device.graphicsQueueWaitIdle();
     if (waitResult != vk::Result::eSuccess)
     {
         assert(false && "Failed to wait for device idle in TextureManager::~TextureManager");

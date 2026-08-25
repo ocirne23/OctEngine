@@ -37,7 +37,7 @@ MeshDataManager::MeshDataManager()
 
 MeshDataManager::~MeshDataManager()
 {
-    auto waitResult = Globals::device.getGraphicsQueue().waitIdle();
+    auto waitResult = Globals::device.graphicsQueueWaitIdle();
     if (waitResult != vk::Result::eSuccess)
     {
         assert(false && "Failed to wait for device idle in MeshDataManager::~MeshDataManager");
@@ -77,13 +77,13 @@ void MeshDataManager::growBuffer(Buffer& buffer, size_t& bufSize, size_t usedSiz
     // probe trace / RTAO / BLAS builds, so an already-submitted dispatch may still be reading it while a
     // queued staging copy (from an unrelated uploadVertexData/uploadIndexData earlier this frame) is about
     // to write into it - WRITE_AFTER_READ, same as Renderer::waitForGpuAndFlushStaging.
-    auto waitResult = Globals::device.getGraphicsQueue().waitIdle();
+    auto waitResult = Globals::device.graphicsQueueWaitIdle();
     assert(waitResult == vk::Result::eSuccess && "Failed to wait for device idle in MeshDataManager::growBuffer");
     // Now safe to submit those queued copies (they target the buffer about to be moved-from/destroyed
     // below) - then drain again so that submission itself completes before the destroy, avoiding
     // "buffer currently in use by command buffer" at vkDestroyBuffer.
     Globals::stagingManager.flushPending();
-    waitResult = Globals::device.getGraphicsQueue().waitIdle();
+    waitResult = Globals::device.graphicsQueueWaitIdle();
     assert(waitResult == vk::Result::eSuccess && "Failed to wait for device idle after staging flush in MeshDataManager::growBuffer");
 
     Buffer oldBuffer = oc::move(buffer);
@@ -97,7 +97,7 @@ void MeshDataManager::growBuffer(Buffer& buffer, size_t& bufSize, size_t usedSiz
         vkCmd.copyBuffer(oldBuffer.getBuffer(), buffer.getBuffer(), 1, &region);
         copyCommandBuffer.end();
         copyCommandBuffer.submitGraphics();
-        auto copyWaitResult = Globals::device.getGraphicsQueue().waitIdle();
+        auto copyWaitResult = Globals::device.graphicsQueueWaitIdle();
         assert(copyWaitResult == vk::Result::eSuccess && "Failed to wait for grow copy in MeshDataManager::growBuffer");
     }
     bufSize = newSize;

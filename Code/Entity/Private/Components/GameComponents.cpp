@@ -930,7 +930,7 @@ void GameProjectileComponent::update(Entity& entity, float deltaSec)
 
 void GameProjectileComponent::onContact(Entity& self, Entity& other, bool begin)
 {
-    // Main thread, inside physics.update's contact dispatch. First contact spends the shot:
+    // Main thread, inside physics.dispatchContactEvents. First contact spends the shot:
     // enemy-team victims take the hit, everything else (ground, own team) just stops it.
     if (!begin || spent || !isAuthority())
         return;

@@ -206,7 +206,12 @@ bool SwapChain::present()
         .pImageIndices = &m_currentImageIdx,
     };
 
-    vk::Result result = Globals::device.getGraphicsQueue().presentKHR(presentInfo);
+    vk::Result result;
+    {
+        // Queue calls need external synchronization; staging overflow submits can come from workers.
+        std::lock_guard<std::mutex> lock(Globals::device.getGraphicsQueueMutex());
+        result = Globals::device.getGraphicsQueue().presentKHR(presentInfo);
+    }
     switch (result)
     {
     case vk::Result::eSuccess:

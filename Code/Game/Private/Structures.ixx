@@ -45,14 +45,18 @@ export const char* structureTypeName(EStructureType type);
 export class StructureSystem final
 {
 public:
-    // A per-frame view of one structure (index positions are valid for THIS frame only; anything
-    // persistent goes by the stable id on the component).
+    // One ROSTER entry (index positions are valid for THIS frame only — removals reindex; anything
+    // persistent goes by the stable id on the component). `owner` is an OWNING ref: the raw
+    // pointers can never dangle, and every way an entity leaves the world funnels through
+    // World::removeRootEntity, whose callback deregisters the entry (see onWorldRootRemoved) — so
+    // no per-frame world query is needed to revalidate the roster.
     struct Ref
     {
+        EntityPtr owner;
         Entity* entity = nullptr;
         GameStructureComponent* state = nullptr;
         EStructureType type = EStructureType::Emitter;
-        int nodeIndex = -1; // Extractor: the node under it (derived from position)
+        int nodeIndex = -1; // Extractor: the node under it
     };
 
     // CO-OP hooks: the server runs the real sim and notifies; clients mirror via the mirror* calls
@@ -62,6 +66,9 @@ public:
     oc::function<void(uint32 id)> onStructureRemoved;                      // server -> send GRm
     oc::function<void(uint32, uint32, ECableType, bool removed)> onCableChanged; // server -> GCb
     oc::function<void(uint32 id)> onRouteChanged;                          // server -> send GRt
+    // Authority: re-push a changed route onto the barracks' live units. The unit roster lives in
+    // NpcSystem (this partition cannot import it), so GameMatch wires the walk in.
+    oc::function<void(uint32 id, oc::span<const glm::vec3> route)> onRouteLiveUnits;
 
     void mirrorPlace(uint32 id, EStructureType type, const glm::vec3& pos, const glm::vec2& facingXZ,
         int nodeIndex, uint8 team, bool built);
@@ -106,10 +113,15 @@ public:
     void spawnBase(const glm::vec3& groundPos, uint8 team = 0);
     void clear(); // drops every structure entity + node (before world teardown)
 
-    // The per-frame REFRESH: one spatial query rebuilds the frame view + the id index. Runs at the
-    // top of tickAuthority (server/single player) and tickMirror (clients); placements/removals
-    // during the tick maintain it in place.
+    // The per-frame REFRESH: re-stamps live tuning (capacities/bands/throughputs) onto every roster
+    // entry. The roster itself is maintained at the spawn/remove seams (spawnStructure,
+    // destroyStructureAt, onWorldRootRemoved) — no world query. Runs at the top of tickAuthority
+    // (server/single player) and tickMirror (clients).
     void refresh();
+    // World::removeRootEntity notification (wired by GameMatch): deregisters the entry with full
+    // bookkeeping (unlink, node free, GRm hook) for ANY removal path — editor delete, script
+    // destroy — not just the game's own. Must NOT call removeRootEntity (see World.ixx).
+    void onWorldRootRemoved(const Entity* entity);
     oc::span<const Ref> structures() const { return m_frame; }
 
     // Client requests / local input (queued; validated + applied in tickAuthority — the MP seam).
@@ -367,7 +379,8 @@ private:
     // Returns the frame index or -1. rot = authored orientation (Lance facing).
     int spawnStructure(uint32 id, EStructureType type, const glm::vec3& pos, const glm::quat& rot,
         uint8 team, bool built, int nodeIndex);
-    void destroyStructureAt(size_t index); // unlink, free the node, remove the entity, fire GRm
+    void destroyStructureAt(size_t index); // deregister (removeStructureBookkeeping) + drop the world's ref
+    void removeStructureBookkeeping(size_t index); // unlink, free the node, erase + reindex, fire GRm
     void applyStructureTint(const Ref& s);
     void applyCableRequest(uint32 idA, uint32 idB, ECableType type, uint8 team);
     void applyDemolishRequest(uint32 id, uint8 team);
@@ -386,8 +399,8 @@ private:
              : t == EStructureType::Lance ? m_lanceEnergyPerSec : m_emitterEnergyPerSec;
     }
 
-    oc::vector<Ref> m_frame;                 // THIS FRAME's spatial query view (not owned state)
-    oc::unordered_map<uint32, int> m_byId;   // stable id -> frame index (rebuilt with it)
+    oc::vector<Ref> m_frame;                 // the persistent roster (owning refs — see Ref)
+    oc::unordered_map<uint32, int> m_byId;   // stable id -> roster index (maintained with it)
     oc::vector<Node> m_nodes;
     oc::vector<PlaceRequest> m_requests;
     oc::vector<CableRequest> m_cableRequests;

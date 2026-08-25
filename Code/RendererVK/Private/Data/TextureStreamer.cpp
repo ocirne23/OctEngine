@@ -59,7 +59,7 @@ void TextureStreamer::shutdown()
     if (!m_retiredImages.empty())
     {
         // Fallback path (Renderer teardown normally calls shutdown after its own waitIdle).
-        (void)Globals::device.getGraphicsQueue().waitIdle();
+        (void)Globals::device.graphicsQueueWaitIdle();
         onGpuIdle();
     }
 }

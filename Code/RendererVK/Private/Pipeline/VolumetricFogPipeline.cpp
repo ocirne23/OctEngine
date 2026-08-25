@@ -178,7 +178,7 @@ void VolumetricFogPipeline::initialize()
     cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &clearToRead });
     init.end();
     init.submitGraphics();
-    (void)Globals::device.getGraphicsQueue().waitIdle();
+    (void)Globals::device.graphicsQueueWaitIdle();
 
     vk::SamplerCreateInfo samplerInfo{
         .magFilter = vk::Filter::eLinear,

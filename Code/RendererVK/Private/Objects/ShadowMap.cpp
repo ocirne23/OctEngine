@@ -178,7 +178,7 @@ bool ShadowMap::initialize(uint32 resolution, uint32 numCascades)
     cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &initBarrier });
     initCmd.end();
     initCmd.submitGraphics();
-    (void)Globals::device.getGraphicsQueue().waitIdle();
+    (void)Globals::device.graphicsQueueWaitIdle();
 
     return true;
 }

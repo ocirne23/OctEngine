@@ -3,6 +3,7 @@ export module Core.Frustum;
 import Core;
 import Core.glm;
 import Core.Sphere;
+import Core.Camera;
 
 export enum class EFrustumTest : uint8
 {
@@ -107,4 +108,17 @@ export struct Frustum
         }
         return result;
     }
+};
+
+// A culling-view snapshot handed from the renderer to the spatial index (the two libraries do not
+// link each other, so Core carries the type — the Core.VrSession pattern): the culling camera, its
+// frustum, and the camera-relative reversed-z view-projection for the CPU occlusion rasterizer.
+// valid=false = no view exists yet (the first VR frame — the head pose arrives only inside
+// Renderer::beginFrame, so VR culls one frame latent on the previous head view).
+export struct CullView
+{
+    Camera camera;
+    Frustum frustum;
+    glm::mat4 viewProjRelCamera = glm::mat4(1.0f);
+    bool valid = false;
 };

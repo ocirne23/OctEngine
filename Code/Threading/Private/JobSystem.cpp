@@ -660,17 +660,32 @@ bool JobSystem::tryRunOneJob()
 void JobSystem::helpWait(JobCounter& counter, WorkerContext& ctx)
 {
     const bool mayExecute = t_helpDepth < MaxHelpDepth;
+    // With a job frame already OPEN on this non-fiber stack (depth >= 1), a ForeignWait job may
+    // wait on exactly that suspended job's counter — executing it here wedges the whole stack
+    // (the suspended job can only finish when the frames above it return, and the frame above
+    // would be waiting on it). Observed live: the window thread ran a UI prepare job, its
+    // parallelFor wait helped into UI::updateJob, whose first act waits on the prepare counter.
+    // Such jobs go back to the queues for a fiber context (which parks instead of nesting).
+    const bool refuseForeignWait = t_helpDepth >= 1;
     uint32 spins = 0;
     while (!counter.isDone())
     {
         if (mayExecute)
             if (Job* job = getWork(ctx))
             {
-                ++t_helpDepth;
-                execute(*job);
-                --t_helpDepth;
-                spins = 0;
-                continue;
+                if (refuseForeignWait && (job->flags & EJobFlag_ForeignWait))
+                {
+                    submitReady(job); // requeue + wake; fall through to the backoff so a lone
+                                      // requeued job isn't pop/pushed in a tight loop
+                }
+                else
+                {
+                    ++t_helpDepth;
+                    execute(*job);
+                    --t_helpDepth;
+                    spins = 0;
+                    continue;
+                }
             }
         if (++spins < 64)
         {

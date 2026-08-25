@@ -279,7 +279,7 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
         cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &bar });
         init.end();
         init.submitGraphics();
-        (void)Globals::device.getGraphicsQueue().waitIdle();
+        (void)Globals::device.graphicsQueueWaitIdle();
     }
 
     return true;

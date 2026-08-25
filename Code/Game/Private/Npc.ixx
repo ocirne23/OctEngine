@@ -15,10 +15,12 @@ export enum class ENpcType : uint8 { Grunt, Brute, Runner, Spitter, Count };
 // The unit/projectile PRODUCTION layer. The per-entity simulation itself (steering, shields,
 // melee, lifetimes, contact damage) is GameUnitComponent/GameProjectileComponent inside the
 // engine's entity pass, and a unit REPORTS what the game needs (shots to spawn, its death, player
-// damage) through the component's event queues. This system only spawns actors and drains those
-// queues. It holds NO unit state of any kind: unit shield/health state syncs through the entity
-// snapshot's game blob, the overhead labels run a frustum query at the point of need, and barracks
-// roster counts ride the spawn/death events.
+// damage) through the component's event queues. This system only spawns actors, drains those
+// queues, and keeps the ROSTERS (owning EntityPtrs of every unit/projectile it spawned — added at
+// spawn, deregistered by World::removeRootEntity's callback via onWorldRootRemoved, so every
+// despawn path is covered and no world-wide query exists anywhere). Unit shield/health state still
+// syncs through the entity snapshot's game blob, the overhead labels run a frustum query at the
+// point of need, and barracks roster COUNTS ride the spawn/death events.
 // All ticks main thread pre-physics (direct body setters sanctioned) — the authority seam.
 export class NpcSystem final
 {
@@ -37,7 +39,13 @@ public:
     // Units inside the view frustum — the overhead labels only draw what is on screen, so they
     // never ask for more than that.
     static void queryVisibleUnits(const Camera& camera, oc::vector<Entity*>& out);
-    static void queryAllUnits(oc::vector<Entity*>& out); // world-wide: save/load + the profiling scenario
+    void queryAllUnits(oc::vector<Entity*>& out) const; // roster walk: save/load + the profiling scenario
+
+    // World::removeRootEntity notification (wired by GameMatch): drops the unit/projectile roster
+    // entry for ANY despawn path (death destroy request, network despawn, editor delete). Must NOT
+    // call removeRootEntity (see World.ixx).
+    void onWorldRootRemoved(const Entity* entity);
+    oc::span<const EntityPtr> units() const { return m_units; } // feedNav's per-team sources
 
     // SAVE/LOAD (server): every live unit into/from an AssetNode tree (projectiles are transient —
     // a load clears them). loadUnits despawns the live units first.
@@ -51,7 +59,10 @@ private:
         const glm::vec3& velocity, uint8 team); // projectile spawn (main thread, pre-physics)
 
     // Spawn cooldowns and alive counts live ON the barracks (GameStructureComponent::barracks) —
-    // no rosters, no id-keyed maps, and the state dies with its structure.
+    // no id-keyed maps, and the state dies with its structure.
+    // The rosters: owning refs, maintained by spawn + onWorldRootRemoved (never queried).
+    oc::vector<EntityPtr> m_units;
+    oc::vector<EntityPtr> m_shots;
     oc::vector<GameUnitComponent::FireRequest> m_fireScratch; // drained queues (reused buffers)
     oc::vector<uint32> m_deathScratch;
     oc::vector<GameUnitComponent::SeedRequest> m_seedScratch;

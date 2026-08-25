@@ -148,7 +148,24 @@ public:
     bool waitFrameSlot(uint64 timeoutNs = UINT64_MAX);
     // viewportRect is the editor's viewport sub-rect within the swapchain (ignored in VR, which renders
     // full-extent); a change to it re-records the command buffers.
-    const Frustum& beginFrame(const Camera& camera, const Rect& viewportRect); // [Concurrency: SERIAL-OWNER of the render chain]
+    // [Concurrency: SERIAL-OWNER of the render chain — ONE call in flight. Desktop runs it as the
+    // "Begin frame job" in the physics->world.update quiescent window (main.cpp), overlapping
+    // audio.update; nothing may touch renderer frame state until the join, and its outputs
+    // (m_centerViewProj, m_sunCascadeViewProj, the returned frustum, counter resets) are valid only
+    // after it. VR calls it on main (OpenXR poll/beginFrame + head pose live inside).]
+    const Frustum& beginFrame(const Camera& camera, const Rect& viewportRect);
+    // beginFrame as the High "Begin frame job": kick copies camera + rect into members (the job
+    // outlives the caller's stack) and submits; join waits, helping. In VR the kick only stores and
+    // DEFERS — join then runs beginFrame synchronously on the calling (main) thread, because
+    // xrWaitFrame owns VR pacing and would pin a worker. Renderer frame state must stay untouched
+    // between kick and join (see main.cpp's window comment).
+    void kickBeginFrameJob(const Camera& camera, const Rect& viewportRect);
+    void joinBeginFrameJob();
+    // The culling view for this frame's spatial cull, computable BEFORE beginFrame. Desktop: the
+    // exact frustum beginFrame will build (bit-identical via computeCenterViewProj). VR: LAST
+    // frame's head view — one frame of cull latency, absorbed by the culling margin — invalid on
+    // the first VR frame (the head pose arrives only inside beginFrame).
+    CullView getCullView(const Camera& camera, const Rect& viewportRect);
     // Desktop only (asserts !VR): the exact culling frustum beginFrame will build this frame,
     // computable BEFORE beginFrame — the camera and viewport are final by then and TAA jitter is
     // never baked into the mvp — so the main loop can kick the spatial cull while beginFrame still
@@ -418,7 +435,8 @@ private:
     // mesh set warm in the mesh streamer) and publishes the node's state-slot bias for the cull shader.
     void noteLodChainUse(const RenderNode& node, uint32 startIdx, PerFrameData& frameData);
 
-    // beginFrame helpers, in call order (all main thread; see each definition in Renderer.cpp).
+    // beginFrame helpers, in call order (run wherever beginFrame runs — the desktop job or main in
+    // VR; see each definition in Renderer.cpp).
     glm::mat4 computeCenterViewProj(const Camera& camera) const; // pure: projection (VR: combined eyes) * view, from m_viewportRect
     void applyVrHeadPose(const Camera& cameraIn, Camera& camera, glm::quat& vrBaseOrientation);
     void checkFrameCapacities();
@@ -608,6 +626,14 @@ private:
     SwapChain m_swapChain;
     GpuProfiler m_gpuProfiler;
     JobCounter m_gpuCollectCounter; // the in-flight timestamp-collect job (beginFrame kicks -> recordCommandBuffers joins)
+    // kickBeginFrameJob storage: the job reads these, so they only change while no job is in flight.
+    Camera m_beginFrameJobCamera;
+    Rect m_beginFrameJobRect;
+    JobCounter m_beginFrameJobCounter;
+    bool m_beginFrameDeferred = false; // VR: kick stored, join runs beginFrame synchronously
+    // VR one-frame-latent cull view (see getCullView); written at the end of beginFrame, VR only.
+    Camera m_lastCullCamera;
+    bool m_hasCullView = false;
     RenderPass m_renderPass;
     Framebuffers m_framebuffers;
 	GpuCrashTracker m_gpuCrashTracker;
@@ -692,8 +718,9 @@ private:
     uint32 m_numSunCascades = 0;
     glm::mat4 m_centerViewProj = glm::mat4(1.0f);
 
-    // The frame UBO, assembled by buildFrameUbo each beginFrame (main thread only). Persists across
-    // frames: buildUboViews reads last frame's mvps out of it for reprojection before overwriting.
+    // The frame UBO, assembled by buildFrameUbo each beginFrame (one call in flight — see beginFrame's
+    // concurrency note). Persists across frames: buildUboViews reads last frame's mvps out of it for
+    // reprojection before overwriting.
     RendererVKLayout::Ubo m_ubo;
     const Clock::time_point m_timeStart = Clock::now(); // ubo.timeSeconds origin (shader animation time)
 

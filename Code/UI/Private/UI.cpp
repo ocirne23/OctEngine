@@ -70,7 +70,8 @@ void UI::update(const oc::vector<EntityPtr>& rootEntities, const Camera& camera,
     // joins it at the top of the next frame, so it fills the present + fence-wait window. The two
     // references outlive that join (the world's root list, main's camera); deltaSec is copied.
     Globals::jobSystem.submitPostUpdate([this, &rootEntities, &camera, deltaSec] { updateJob(rootEntities, camera, deltaSec); },
-        { "UI widget pass", EProfileCategory::UI });
+        { "UI widget pass", EProfileCategory::UI }, EJobPriority::Normal,
+        EJobFlag_ForeignWait); // updateJob's first act waits on m_prepareCounter — see the flag's comment
 }
 
 void UI::flushMainThreadWork()

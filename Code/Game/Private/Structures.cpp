@@ -170,50 +170,11 @@ void StructureSystem::registerTweaks()
 
 void StructureSystem::refresh()
 {
-    ProfileScope scope("Structures refresh (query)", EProfileCategory::Game);
-    m_frame.clear();
-    m_byId.clear();
-    thread_local oc::vector<uint64> results;
-    Globals::spatialIndex.querySphere(glm::dvec3(0.0), 1000.0f, SpatialLayer_Render, results);
-    for (const uint64 user : results)
-    {
-        Entity* entity = reinterpret_cast<Entity*>(user);
-        GameStructureComponent* state = getComponent<GameStructureComponent>(entity);
-        if (!state || state->structureId == 0)
-            continue; // not a placed structure (id 0 = never registered)
-        Ref ref;
-        ref.entity = entity;
-        ref.state = state;
-        // Type from the entity name (set at spawn; unique per type).
-        const oc::string_view name = entity->getName();
-        ref.type = EStructureType::Emitter;
-        for (int t = 0; t < (int)EStructureType::Count; ++t)
-            if (name == structureNames[t])
-            {
-                ref.type = (EStructureType)t;
-                break;
-            }
-        // Extractors: derive the node association by NEAREST node. The placement grid-snaps the
-        // node's ground position (odd-coordinate nodes shift up to ~1.4 m), so an exact-position
-        // match fails — take the closest node within the snap displacement bound.
-        if (ref.type == EStructureType::Extractor)
-        {
-            float bestDistSq = 2.0f * 2.0f;
-            for (int n = 0; n < (int)m_nodes.size(); ++n)
-            {
-                const glm::vec2 d = glm::vec2(m_nodes[n].pos.x, m_nodes[n].pos.z)
-                    - glm::vec2(entity->pos.x, entity->pos.z);
-                if (glm::dot(d, d) < bestDistSq)
-                {
-                    bestDistSq = glm::dot(d, d);
-                    ref.nodeIndex = n;
-                }
-            }
-        }
-        m_byId[state->structureId] = (int)m_frame.size();
-        m_frame.push_back(ref);
-        stampTuning(ref); // capacities/bands per tick — tweaks stay live for the engine's flow
-    }
+    ProfileScope scope("Structures refresh", EProfileCategory::Game);
+    // The roster is maintained at the spawn/remove seams (no world query — type, node and id index
+    // were recorded at spawnStructure); only the live tuning re-stamps per frame so tweaks apply.
+    for (const Ref& s : m_frame)
+        stampTuning(s);
 }
 
 void StructureSystem::stampTuning(const Ref& s)
@@ -266,7 +227,12 @@ void StructureSystem::stampTuning(const Ref& s)
 
 void StructureSystem::clear()
 {
-    for (const Ref& s : m_frame)
+    // Teardown: silent (no GRm hooks). Deregister the whole roster FIRST — removeRootEntity's
+    // onWorldRootRemoved callback then no-ops instead of mutating m_frame under the loop.
+    oc::vector<Ref> roster = oc::move(m_frame);
+    m_frame.clear();
+    m_byId.clear();
+    for (const Ref& s : roster)
     {
         s.state->unlinkAll(*s.entity);
         Globals::world.removeRootEntity(s.entity);
@@ -274,8 +240,6 @@ void StructureSystem::clear()
     for (Node& n : m_nodes)
         if (n.entity)
             Globals::world.removeRootEntity(n.entity.get());
-    m_frame.clear();
-    m_byId.clear();
     m_nodes.clear();
     m_requests.clear();
     m_cableRequests.clear();
@@ -463,6 +427,7 @@ int StructureSystem::spawnStructure(uint32 id, EStructureType type, const glm::v
     if (ForceComponent* fc = getComponent<ForceComponent>(entity.get()))
         fc->emitter.setTeam(team); // prefabs author team 0 — the builder's team owns the field
     Ref ref;
+    ref.owner = entity; // owning: the roster's raw pointers can never dangle
     ref.entity = entity.get();
     ref.state = state;
     ref.type = type;
@@ -477,20 +442,38 @@ int StructureSystem::spawnStructure(uint32 id, EStructureType type, const glm::v
     return (int)m_frame.size() - 1;
 }
 
-void StructureSystem::destroyStructureAt(size_t index)
+// Deregister + full bookkeeping, WITHOUT touching the world's root list — shared by the game's own
+// removal (destroyStructureAt) and by onWorldRootRemoved for out-of-band deletions.
+void StructureSystem::removeStructureBookkeeping(size_t index)
 {
-    const Ref s = m_frame[index];
+    const Ref s = m_frame[index]; // owning copy: the entity stays alive through the bookkeeping
     const uint32 id = s.state->structureId;
     if (s.nodeIndex >= 0 && s.nodeIndex < (int)m_nodes.size())
         m_nodes[s.nodeIndex].extracted = false; // a removed extractor frees its node
     s.state->unlinkAll(*s.entity); // neighbors' link entries drop BEFORE the entity dies
-    Globals::world.removeRootEntity(s.entity);
     m_frame.erase(m_frame.begin() + index);
     m_byId.clear();
     for (int i = 0; i < (int)m_frame.size(); ++i)
         m_byId[m_frame[i].state->structureId] = i;
     if (onStructureRemoved)
         onStructureRemoved(id);
+}
+
+void StructureSystem::destroyStructureAt(size_t index)
+{
+    Entity* entity = m_frame[index].entity;
+    const EntityPtr keepAlive = m_frame[index].owner; // outlive the roster erase below
+    removeStructureBookkeeping(index); // deregister FIRST: removeRootEntity's callback then no-ops
+    Globals::world.removeRootEntity(entity);
+}
+
+// Any root leaving the world (editor delete, script destroy request — paths that never reach
+// destroyStructureAt). Ours are deregistered by then, so this only fires for out-of-band removals.
+void StructureSystem::onWorldRootRemoved(const Entity* entity)
+{
+    const int index = structureIndexByEntity(entity);
+    if (index >= 0)
+        removeStructureBookkeeping((size_t)index);
 }
 
 void StructureSystem::applyDemolishRequest(uint32 id, uint8 team)
@@ -1124,23 +1107,10 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
         s.route = oc::move(request.points);
         if (onRouteChanged)
             onRouteChanged(request.id);
-        // LIVE ORDERS: units already spawned from this barracks pick the new route up too (a
-        // route change is a rare user action — one arena query then is fine). The march index is
-        // KEPT and clamped: an appended route continues where the unit was, a unit that had
-        // finished marches to the new tail, and a fresh single-waypoint route restarts at 0.
-        thread_local oc::vector<uint64> results;
-        Globals::spatialIndex.querySphere(glm::dvec3(0.0), 1000.0f, SpatialLayer_Render, results);
-        for (const uint64 user : results)
-        {
-            Entity* unitEntity = reinterpret_cast<Entity*>(user);
-            GameUnitComponent* u = getComponent<GameUnitComponent>(unitEntity);
-            if (!u || u->sourceId != request.id)
-                continue;
-            u->routeCount = (uint8)glm::min((int)s.route.size(), (int)GameUnitComponent::MaxRoutePoints);
-            for (int i = 0; i < u->routeCount; ++i)
-                u->route[i] = s.route[i];
-            u->routeIndex = (uint8)glm::min((int)u->routeIndex, glm::max((int)u->routeCount - 1, 0));
-        }
+        // LIVE ORDERS: units already spawned from this barracks pick the new route up too — a
+        // roster walk via the GameMatch-wired hook (no world query; the unit roster is NpcSystem's).
+        if (onRouteLiveUnits)
+            onRouteLiveUnits(request.id, oc::span<const glm::vec3>(s.route.data(), s.route.size()));
     }
     m_routeRequests.clear();
     requestScope.stop();

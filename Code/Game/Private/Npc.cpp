@@ -49,12 +49,29 @@ void NpcSystem::queryVisibleUnits(const Camera& camera, oc::vector<Entity*>& out
 }
 
 // Every unit in the world — for save/load (which must persist units the camera cannot see) and
-// the profiling scenario's select-all.
-void NpcSystem::queryAllUnits(oc::vector<Entity*>& out)
+// the profiling scenario's select-all. A roster walk, not a query.
+void NpcSystem::queryAllUnits(oc::vector<Entity*>& out) const
 {
-    thread_local oc::vector<uint64> results;
-    Globals::spatialIndex.querySphere(glm::dvec3(0.0), 1000.0f, SpatialLayer_Render, results);
-    collectUnits(results, out);
+    out.clear();
+    for (const EntityPtr& u : m_units)
+        out.push_back(u.get());
+}
+
+void NpcSystem::onWorldRootRemoved(const Entity* entity)
+{
+    const auto drop = [entity](oc::vector<EntityPtr>& roster)
+    {
+        for (size_t i = 0; i < roster.size(); ++i)
+            if (roster[i].get() == entity)
+            {
+                roster[i] = oc::move(roster.back());
+                roster.pop_back();
+                return true;
+            }
+        return false;
+    };
+    if (!drop(m_units))
+        drop(m_shots);
 }
 
 void NpcSystem::registerTweaks()
@@ -97,16 +114,18 @@ void NpcSystem::registerTweaks()
 
 void NpcSystem::clear()
 {
-    // Teardown: despawn every game actor entity (units + projectiles) — they are world roots.
-    thread_local oc::vector<uint64> results;
-    Globals::spatialIndex.querySphere(glm::dvec3(0.0), 1000.0f, SpatialLayer_Render, results);
-    for (const uint64 user : results)
+    // Teardown: despawn every actor we spawned — the rosters ARE the world-wide answer, no query.
+    // Deregister first (move-out), so removeRootEntity's onWorldRootRemoved callback no-ops
+    // instead of mutating the roster under the loop. Puppets are never in the rosters.
+    const auto despawnAll = [](oc::vector<EntityPtr>& roster)
     {
-        Entity* entity = reinterpret_cast<Entity*>(user);
-        const GameUnitComponent* unit = getComponent<GameUnitComponent>(entity);
-        if ((unit && !unit->puppet) || hasComponent<GameProjectileComponent>(entity))
-            Globals::world.removeRootEntity(entity); // puppets are player capsules — never ours to despawn
-    }
+        oc::vector<EntityPtr> actors = oc::move(roster);
+        roster.clear();
+        for (const EntityPtr& e : actors)
+            Globals::world.removeRootEntity(e.get());
+    };
+    despawnAll(m_units);
+    despawnAll(m_shots);
     // Drop any queued reports/requests the removed actors left behind, so stale deaths cannot
     // decrement (or stale requests spawn into) a world that has been reset (load/teardown paths).
     GameUnitComponent::takeFireRequests(m_fireScratch);
@@ -167,6 +186,7 @@ Entity* NpcSystem::spawnUnit(const StructureSystem& structures, const glm::vec3&
             unit->route[i] = route[i];
         unit->routeIndex = 0;
     }
+    m_units.push_back(entity); // roster: deregistered by onWorldRootRemoved on any despawn path
     return entity.get();
 }
 
@@ -186,6 +206,7 @@ void NpcSystem::fireShot(const char* prefabPath, const char* name, const glm::ve
     }
     if (PhysicsComponent* pc = getComponent<PhysicsComponent>(shot.get()))
         pc->body.setLinearVelocity(velocity); // main thread pre-physics: direct setter sanctioned
+    m_shots.push_back(shot); // roster: deregistered by onWorldRootRemoved on any despawn path
 }
 
 void NpcSystem::service(StructureSystem& structures)

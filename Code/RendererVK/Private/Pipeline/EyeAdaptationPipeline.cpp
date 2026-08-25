@@ -63,7 +63,7 @@ void EyeAdaptationPipeline::initialize()
     cmd.fillBuffer(m_adaptBuffer.getBuffer(), 0, vk::WholeSize, 0u);
     init.end();
     init.submitGraphics();
-    (void)Globals::device.getGraphicsQueue().waitIdle();
+    (void)Globals::device.graphicsQueueWaitIdle();
 }
 
 void EyeAdaptationPipeline::reloadShaders()

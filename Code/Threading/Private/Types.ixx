@@ -91,6 +91,18 @@ export enum EJobFlags : uint8
     EJobFlag_Untimed = 2, // OPT-OUT of wall-time measurement (costEmaUs + worker busy-time stats).
                           // Timing is on by default; clear it only for nanosecond-scale spam jobs
                           // where two clock reads (~40-60ns) would dominate the job itself
+    EJobFlag_ForeignWait = 4, // the body waits on a counter OTHER than ones its own execution
+                          // creates (UI::updateJob -> the UI prepare counter; the renderer's begin-
+                          // frame job -> the GPU-collect counter). Inline helping on a NON-FIBER
+                          // stack (main, the window-thread helper) refuses these once a job frame
+                          // is already open (t_helpDepth >= 1): the foreign counter's job can be
+                          // exactly the frame SUSPENDED below on that stack, and waiting on it
+                          // there deadlocks the thread (hit in practice: the window thread ran a
+                          // UI prepare job, its parallelFor wait helped into UI::updateJob, which
+                          // waits on the prepare counter). Fiber contexts park instead and never
+                          // need this; jobs that only wait on their own parallelFor children are
+                          // always safe unflagged. REQUIRED on any job whose body waits on a
+                          // counter it did not create.
 };
 
 // One schedulable unit: two cache lines, callable stored inline (no heap). Graph jobs live in

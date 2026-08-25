@@ -403,8 +403,6 @@ int main(int argc, char* argv[])
         const double deltaSec = Globals::time.getDeltaSec(); // clock advanced by limitFrameRate / update above
         TweakRegistry::get().update((float)deltaSec); // Saved/Synced change detection
 
-
-
         if (!headlessServer)
         {
             Globals::input.update(deltaSec);
@@ -435,41 +433,29 @@ int main(int argc, char* argv[])
         game.update((float)deltaSec); // authority tick, pre-physics (direct body setters sanctioned); becomes the server tick in MP
         Globals::scriptContext.update(camera, (float)deltaSec, (float)Globals::time.getElapsedSec());
 
-        Globals::physics.update(deltaSec, [](const PhysicsWorld::ContactEvent& evt) { Globals::world.handleContactEvent(evt); });
-
+        // The spatial index + renderer frame state are QUIESCENT from here until world.update: the
+        // drains / net receive / game.update above were the last registers and container loads, and
+        // physics.update no longer fires contact scripts (deferred below) — so the "Spatial cull" +
+        // "Begin frame" jobs kick BEFORE physics and overlap the step, audio and the nav publish.
+        // Nothing between the kicks and the joins may touch the index or renderer frame state.
         if (!headlessServer)
         {
-            // The spatial index is QUIESCENT from here until world.update: physics.update's contact
-            // scripts were the frame's last queriers, and the entity-change drains / net receive /
-            // game.update above were its last registers (register/commit may not overlap queries or
-            // traversals — commit relinks cells and pool growth reallocates the SoA the traversals
-            // read). The culling frustum is computable before beginFrame (camera + viewport are
-            // final, TAA jitter is never baked into the mvp), so the whole spatial update — commit,
-            // occlusion raster, Main/Near stamps — runs as a job overlapping audio.update +
-            // beginFrame, joined before the entity pass reads pass masks. Anything new between the
-            // kick and the join must not touch the index. VR: the head pose only exists after
-            // openXR.beginFrame inside beginFrame, so VR keeps the synchronous order.
-            JobCounter spatialCounter;
-            Frustum cullFrustum;
-            glm::mat4 spatialViewProj;
-            const bool vr = Globals::rendererVK.isVrEnabled();
-            if (!vr)
-            {
-                cullFrustum = Globals::rendererVK.computeCullFrustum(camera, Globals::ui.getViewportRect()); // stable: the widget pass joined at the top of the frame
-                spatialViewProj = Globals::rendererVK.getCenterViewProj() * glm::translate(glm::mat4(1.0f), camera.position); // translate corrects the reverse-z renderer proj matrix
-                Globals::jobSystem.submit([&camera, &cullFrustum, &spatialViewProj]
-                    { Globals::spatialIndex.update(camera, cullFrustum, spatialViewProj); },
-                    { "Spatial cull", EProfileCategory::Spatial }, EJobPriority::High, &spatialCounter);
-            }
-            Globals::audio.update(camera);
-            const Frustum& frustum = Globals::rendererVK.beginFrame(camera, Globals::ui.getViewportRect());
-            if (vr)
-                Globals::spatialIndex.update(camera, frustum, Globals::rendererVK.getCenterViewProj() * glm::translate(glm::mat4(1.0f), camera.position));
-            else
-                Globals::jobSystem.wait(spatialCounter); // helps; near-zero when audio + beginFrame covered the job
+            const Rect viewportRect = Globals::ui.getViewportRect(); // stable: the widget pass joined at the top of the frame
+            Globals::spatialIndex.kickUpdateJob(Globals::rendererVK.getCullView(camera, viewportRect));
+            Globals::rendererVK.kickBeginFrameJob(camera, viewportRect);
         }
-        // (the nav flow/pressure steps feedNav queued are a post-update job now: last frame's ran
-        // during present and joined at the top of this one, so the entity pass reads settled fields)
+        Globals::physics.update(deltaSec); // ≤1 step; contact events stay buffered until the dispatch below
+        if (!headlessServer)
+        {
+            Globals::audio.update(camera);
+            Globals::navSystem.update((float)deltaSec);
+            Globals::rendererVK.joinBeginFrameJob(); // VR: beginFrame runs synchronously here
+            Globals::spatialIndex.joinUpdateJob();
+        }
+        // Contact scripts (OnPhysicsEvent) query the spatial index and can touch renderer state
+        // (light/sun thunks), so they fire AFTER the joins — still before the entity pass, as before.
+        Globals::physics.dispatchContactEvents([](const PhysicsWorld::ContactEvent& evt) { Globals::world.handleContactEvent(evt); });
+
         Globals::world.update(Globals::rendererVK, (float)deltaSec); // serial script prepass + parallel component/tree pass + sink flush; headless: renderer passed through but never dereferenced (headless archetypes)
         Globals::networkManager.send(deltaSec); // server: snapshot entities at their post-update poses; both roles: flush queued packets
 

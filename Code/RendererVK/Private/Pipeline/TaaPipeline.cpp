@@ -120,7 +120,7 @@ void TaaPipeline::recreateImages(uint32 width, uint32 height)
     cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = (uint32)bars.size(), .pImageMemoryBarriers = bars.data() });
     init.end();
     init.submitGraphics();
-    (void)Globals::device.getGraphicsQueue().waitIdle();
+    (void)Globals::device.graphicsQueueWaitIdle();
 }
 
 void TaaPipeline::initialize(uint32 width, uint32 height, uint32 viewCount)

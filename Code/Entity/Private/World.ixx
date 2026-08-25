@@ -51,7 +51,17 @@ public:
     // Entity Ownership
     void addRootEntity(EntityPtr entity) { if (entity) m_rootEntities.push_back(oc::move(entity)); }
     // Drops the World's ownership of a root entity (it dies here unless something else still holds it).
-    void removeRootEntity(const Entity* entity) { oc::erase_if(m_rootEntities, [entity](const EntityPtr& e) { return e.get() == entity; }); }
+    // Notifies m_onRootEntityRemoved FIRST (the entity is still alive during the callback) — the Game
+    // layer's rosters deregister through it, so EVERY removal path (editor delete, script destroy
+    // request, network despawn) reaches them without any world-wide query. The callback must not call
+    // removeRootEntity itself (reentrant erase_if); a remover that already deregistered just sees a
+    // no-op callback.
+    void removeRootEntity(const Entity* entity)
+    {
+        if (m_onRootEntityRemoved)
+            m_onRootEntityRemoved(entity);
+        oc::erase_if(m_rootEntities, [entity](const EntityPtr& e) { return e.get() == entity; });
+    }
     const oc::vector<EntityPtr>& rootEntities() const { return m_rootEntities; }
     void clearRootEntities() { m_rootEntities.clear(); }
 
@@ -69,6 +79,8 @@ public:
     // Editor prefab editing
     void setOnPrefabOpened(oc::function<void(const EntityPtr&, const oc::string&)> callback) { m_onPrefabOpened = oc::move(callback); }
     void setOnEntityRespawned(oc::function<void(const EntityPtr&, const EntityPtr&)> callback) { m_onEntityRespawned = oc::move(callback); }
+    // See removeRootEntity. Registered by the Game layer (GameMatch); cleared at its shutdown.
+    void setOnRootEntityRemoved(oc::function<void(const Entity*)> callback) { m_onRootEntityRemoved = oc::move(callback); }
     void reloadPrefabs();
     void invalidatePrefab(const oc::string& name);
 
@@ -169,6 +181,7 @@ private:
     JobCost m_updateCost{ 2000 };
     oc::function<void(const EntityPtr&, const oc::string&)> m_onPrefabOpened;
     oc::function<void(const EntityPtr&, const EntityPtr&)> m_onEntityRespawned;
+    oc::function<void(const Entity*)> m_onRootEntityRemoved;
 };
 
 export namespace Globals

@@ -64,6 +64,15 @@ public:
     // convention; it is flipped back to standard z here, for the occlusion rasterizer only.
     void update(const Camera& camera, const Frustum& frustum, const glm::mat4& viewProjRelCamera);
 
+    // update() as the High "Spatial cull" job: kick copies the view into members (the job outlives
+    // the caller's stack) and submits; join waits, helping. An INVALID view (the first VR frame — see
+    // Renderer::getCullView) skips the whole update for that frame: stamps stay a frame stale (the
+    // spawn guard keeps fresh entries visible) and the commit's pending ops just wait one frame. The
+    // index must stay QUIESCENT between kick and join — no registers, commits, queries or traversals
+    // (see main.cpp's window comment).
+    void kickUpdateJob(const CullView& view);
+    void joinUpdateJob();
+
     // Main pass; a never-stamped entry counts as visible unless it registered with spawnVisible = false
     // (see registerEntry).
     bool isVisible(SpatialHandle handle) const
@@ -100,6 +109,13 @@ public:
     void setCullMaxDist(float maxDist) { m_culling.maxDist = maxDist; }
 
 private:
+
+    // kickUpdateJob storage: the job reads these, so they only change while no job is in flight.
+    Camera m_updateJobCamera;
+    Frustum m_updateJobFrustum;
+    glm::mat4 m_updateJobViewProj = glm::mat4(1.0f);
+    JobCounter m_updateJobCounter;
+    bool m_updateJobKicked = false; // false = the view was invalid, join has nothing to wait on
 
     struct PendingOp
     {

@@ -153,7 +153,7 @@ public:
     // Server: contact-driven ownership STEAL — the last player to collide with an object owns it,
     // even inside the previous owner's transfer bubble. Wired as the primaries' PhysicsComponent
     // onContact hook (main.cpp); steals from the server AND from other clients, but never another
-    // client's PRIMARY (their player). Main thread (contact dispatch runs inside physics.update).
+    // client's PRIMARY (their player). Main thread (physics.dispatchContactEvents).
     void stealOwnershipOnContact(Entity& object, uint32 byClientId);
 
     void receive(double deltaSec); // main thread, before script/physics/world updates

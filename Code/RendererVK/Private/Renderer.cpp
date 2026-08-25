@@ -30,7 +30,7 @@ import :LightingUtils;
 
 Renderer::~Renderer()
 {
-    auto waitResult = Globals::device.getGraphicsQueue().waitIdle();
+    auto waitResult = Globals::device.graphicsQueueWaitIdle();
     if (waitResult != vk::Result::eSuccess)
     {
         assert(false && "Failed to wait for device idle in RendererVK::~RendererVK");
@@ -63,14 +63,14 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     m_shadowParams.registerTweaks();
     m_fogParams.registerTweaks();
     m_rtParams.registerTweaks();
-    m_rtaoParams.registerTweaks(rerecordCallback, [this]() { if (Globals::device.getGraphicsQueue().waitIdle() != vk::Result::eSuccess) return; m_rtaoPipeline.reloadShaders(); setHaveToRecordCommandBuffers(); });
+    m_rtaoParams.registerTweaks(rerecordCallback, [this]() { if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess) return; m_rtaoPipeline.reloadShaders(); setHaveToRecordCommandBuffers(); });
     m_taaParams.registerTweaks(rerecordCallback);
     m_postParams.registerTweaks(rerecordCallback);
     m_lodParams.registerTweaks();
     // Wireframe is baked pipeline state (polygonMode), so flipping it rebuilds the static mesh pipeline —
     // same GPU-idle + reload pattern as the RTAO alpha-test and ocean hit-lighting tweaks.
     Tweak::boolean("Editor", "Wireframe", &m_wireframe, [this]() {
-        if (Globals::device.getGraphicsQueue().waitIdle() != vk::Result::eSuccess)
+        if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
             return;
         m_staticMeshGraphicsPipeline.setWireframe(m_wireframe);
         m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_maxTextures);
@@ -80,7 +80,7 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     // flipping it swaps the scene render pass AND every scene pipeline's depthWrite, so rebuild like the
     // wireframe toggle.
     Tweak::boolean("Spatial", "Depth prepass reuse", &m_depthPrepassReuse, [this]() {
-        if (Globals::device.getGraphicsQueue().waitIdle() != vk::Result::eSuccess)
+        if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
             return;
         m_staticMeshGraphicsPipeline.setDepthReadOnly(m_depthPrepassReuse);
         m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_maxTextures);
@@ -334,7 +334,7 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
 
 void Renderer::recreateWindowSurface(Window& window)
 {
-    auto waitResult = Globals::device.getGraphicsQueue().waitIdle();
+    auto waitResult = Globals::device.graphicsQueueWaitIdle();
     if (waitResult != vk::Result::eSuccess)
     {
         assert(false && "Failed to wait for device idle in RendererVK::recreateWindowSurface");
@@ -363,7 +363,7 @@ void Renderer::recreateWindowSurface(Window& window)
     // The cached scene command buffers embed the (now-recreated) scene-colour render pass in their
     // inheritance info, so force them to re-record against the new handle.
     setHaveToRecordCommandBuffers();
-    auto waitResult2 = Globals::device.getGraphicsQueue().waitIdle();
+    auto waitResult2 = Globals::device.graphicsQueueWaitIdle();
     if (waitResult2 != vk::Result::eSuccess)
     {
         assert(false && "Failed to wait for device idle in RendererVK::recreateWindowSurface");
@@ -372,7 +372,7 @@ void Renderer::recreateWindowSurface(Window& window)
 
 void Renderer::recreateSwapchain()
 {
-    auto waitResult = Globals::device.getGraphicsQueue().waitIdle();
+    auto waitResult = Globals::device.graphicsQueueWaitIdle();
     if (waitResult != vk::Result::eSuccess)
     {
         assert(false && "Failed to wait for device idle in RendererVK::recreateSwapchain");
@@ -399,7 +399,7 @@ void Renderer::recreateSwapchain()
 
 void Renderer::reloadShaders()
 {
-    auto waitResult = Globals::device.getGraphicsQueue().waitIdle();
+    auto waitResult = Globals::device.graphicsQueueWaitIdle();
     if (waitResult != vk::Result::eSuccess)
     {
         assert(false && "Failed to wait for device idle in RendererVK::reloadShaders");
@@ -441,7 +441,7 @@ void Renderer::setOceanParams(const OceanParams& ocean)
     m_oceanParams = ocean;
     if (rebuildOceanVariant)
     {
-        if (Globals::device.getGraphicsQueue().waitIdle() != vk::Result::eSuccess)
+        if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
             return;
         m_staticMeshGraphicsPipeline.setOceanHitLights(ocean.hitLighting);
         m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_maxTextures);
@@ -615,7 +615,58 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
     m_fogVolumeCounter = 0;
     m_decalCounter = 0;
     m_frameCounter++;
+    if (Globals::openXR.isEnabled())
+    {
+        m_lastCullCamera = camera; // head-swapped: next frame's spatial cull runs on this view (see hasCullView)
+        m_hasCullView = true;
+    }
     return m_ubo.frustum;
+}
+
+void Renderer::kickBeginFrameJob(const Camera& camera, const Rect& viewportRect)
+{
+    m_beginFrameJobCamera = camera;
+    m_beginFrameJobRect = viewportRect;
+    if (Globals::openXR.isEnabled())
+    {
+        m_beginFrameDeferred = true; // xrWaitFrame owns VR pacing and would pin a worker — run at the join instead
+        return;
+    }
+    Globals::jobSystem.submit([this] { beginFrame(m_beginFrameJobCamera, m_beginFrameJobRect); },
+        { "Begin frame job", EProfileCategory::Renderer }, EJobPriority::High, &m_beginFrameJobCounter,
+        EJobFlag_ForeignWait); // the body waits on m_gpuCollectCounter
+}
+
+void Renderer::joinBeginFrameJob()
+{
+    if (m_beginFrameDeferred)
+    {
+        m_beginFrameDeferred = false;
+        beginFrame(m_beginFrameJobCamera, m_beginFrameJobRect); // VR: synchronous, on the caller's (main) thread
+        return;
+    }
+    Globals::jobSystem.wait(m_beginFrameJobCounter); // helps; near-zero when the kick-to-join work covered it
+}
+
+CullView Renderer::getCullView(const Camera& camera, const Rect& viewportRect)
+{
+    CullView view;
+    if (!Globals::openXR.isEnabled())
+    {
+        view.camera = camera;
+        view.frustum = computeCullFrustum(camera, viewportRect); // publishes m_centerViewProj — read below
+        view.valid = true;
+    }
+    else
+    {
+        view.camera = m_lastCullCamera;
+        view.frustum = m_ubo.frustum; // last frame's, matching m_lastCullCamera
+        view.valid = m_hasCullView;
+    }
+    // The occlusion rasterizer takes camera-relative positions: the translate re-bases the reversed-z
+    // center view-projection onto the cull camera.
+    view.viewProjRelCamera = m_centerViewProj * glm::translate(glm::mat4(1.0f), view.camera.position);
+    return view;
 }
 
 // VR: poll OpenXR + begin the XR frame, then swap the camera's view for the tracked head pose.
@@ -682,8 +733,10 @@ void Renderer::snapshotLodStats(PerFrameData& frameData)
 // Assembles the frame UBO (matrices, sky/fog/ocean/force/terrain params) into m_ubo and hands it to
 // staging - pure CPU math, live-tweak driven, split by subject into the buildUbo* helpers below.
 // m_ubo persists across frames: buildUboViews reads last frame's mvps out of it for reprojection
-// before overwriting them. Main thread only; the outputs consumers read directly (m_centerViewProj,
-// m_sunCascadeViewProj, the returned frustum) are contractually valid the moment beginFrame returns.
+// before overwriting them. Runs wherever beginFrame runs (the desktop "Begin frame job" or main in
+// VR); every param it reads (tweak-bound floats, force/terrain params) is written only outside the
+// quiescent window. The outputs consumers read directly (m_centerViewProj, m_sunCascadeViewProj, the
+// returned frustum) are contractually valid once beginFrame's job is joined.
 void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation, PerFrameData& frameData)
 {
     ProfileScope uboScope("UBO build", EProfileCategory::Renderer);
@@ -1281,7 +1334,7 @@ void Renderer::setForceFieldParams(const ForceFieldParams& params)
     // same GPU-idle + reload pattern as the ocean hit-lighting tweak.
     if (params.useGrid != m_forceFieldPipeline.getUseGrid())
     {
-        if (Globals::device.getGraphicsQueue().waitIdle() == vk::Result::eSuccess)
+        if (Globals::device.graphicsQueueWaitIdle() == vk::Result::eSuccess)
         {
             m_forceFieldPipeline.setUseGrid(params.useGrid);
             m_forceFieldPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
@@ -1535,7 +1588,7 @@ void Renderer::present()
         // so drain before freeing them. Their bindless slots rewrite to the fallback in recordCommandBuffers
         // below, before anything is submitted.
         ProfileScope profileScope("Texture free drain", EProfileCategory::Wait);
-        auto waitResult = Globals::device.getGraphicsQueue().waitIdle();
+        auto waitResult = Globals::device.graphicsQueueWaitIdle();
         assert(waitResult == vk::Result::eSuccess && "Failed to wait for device idle before freeing textures");
         processPendingTextureFrees();
     }
@@ -1545,19 +1598,23 @@ void Renderer::present()
         ProfileScope profileScope("Staging", EProfileCategory::Renderer);
         waitSemaphore = Globals::stagingManager.update();
     }
-    if (waitSemaphore != VK_NULL_HANDLE)
-		frameData.primaryCommandBuffer.addWaitSemaphore(waitSemaphore, vk::PipelineStageFlagBits::eAllCommands); // eAllCommands (not just transfer) for GI BLAS
-
     {
         // Can block on the presentation engine (vsync backpressure lands here or in the fence wait).
         ProfileScope profileScope("Acquire image", EProfileCategory::Wait);
         if (!m_swapChain.acquireNextImage())
         {
+            // The primary CB will not be submitted this frame, so registering the staging semaphore on
+            // it would leave the signal without a waiter — and the next flush that cycles back to that
+            // semaphore would re-signal it while still signaled (invalid for a binary semaphore). Hand
+            // it back to the chain instead: the next flush waits it.
+            Globals::stagingManager.restoreChainSemaphore(waitSemaphore);
             Globals::openXR.endFrame(nullptr, nullptr, {}, vk::ImageLayout::eUndefined); // balance the begun XR frame
             recreateSwapchain();
             return;
         }
     }
+    if (waitSemaphore != VK_NULL_HANDLE)
+        frameData.primaryCommandBuffer.addWaitSemaphore(waitSemaphore, vk::PipelineStageFlagBits::eAllCommands); // eAllCommands (not just transfer) for GI BLAS
     {
         ProfileScope profileScope("Record command buffers", EProfileCategory::Renderer);
         recordCommandBuffers();
@@ -1708,13 +1765,13 @@ void Renderer::waitForGpuAndFlushStaging()
     // to write into it (WRITE_AFTER_READ - no fence/semaphore otherwise orders a fresh copy submission
     // against earlier submissions on the same queue). Flushing pending copies only after this first wait
     // means their vkCmdCopyBuffer/Image writes always land on an idle GPU.
-    auto waitResult = Globals::device.getGraphicsQueue().waitIdle();
+    auto waitResult = Globals::device.graphicsQueueWaitIdle();
     assert(waitResult == vk::Result::eSuccess && "Failed to wait for device idle during capacity growth");
     Globals::stagingManager.flushPending();
     // Drain again: flushPending() just submitted those copies (targeting the buffer the caller is about to
     // destroy/recreate) as new GPU work. Without this second wait, destroy() below would race that
     // submission - "buffer currently in use by command buffer" at vkDestroyBuffer.
-    waitResult = Globals::device.getGraphicsQueue().waitIdle();
+    waitResult = Globals::device.graphicsQueueWaitIdle();
     assert(waitResult == vk::Result::eSuccess && "Failed to wait for device idle after staging flush");
     Globals::textureStreamer.onGpuIdle();
     Globals::meshStreamer.onGpuIdle();

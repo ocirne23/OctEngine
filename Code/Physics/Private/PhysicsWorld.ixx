@@ -19,8 +19,8 @@ public:
     bool initialize();
     void shutdown();
 
-    // Contact/sensor begin/end events fired during update() (this frame's steps), userData is Entity*
-	// Do not store the returned ContactEvent references.
+    // Contact/sensor begin/end events from the frame's step, fired by dispatchContactEvents(),
+    // userData is Entity*. Do not store the returned ContactEvent references.
     struct ContactEvent
     {
         void* userDataA = nullptr;
@@ -33,10 +33,19 @@ public:
     };
 
     // Applies queued body commands (teleports, velocities, impulses, ...), then runs the fixed-step
-    // accumulator: steps at stepHz with a bounded number of catch-up steps per frame. Also drains
-    // contact/sensor events (see getContactEvents) and advances the step counter. Also emits the
-    // collider wireframes, see setDebugDrawCallback.
-    void update(double deltaSec, oc::function<void(const ContactEvent&)> contactCallback);
+    // accumulator — AT MOST ONE step per update (deliberate: box3d buffers each step's contact/
+    // sensor events until the NEXT step, so a single step keeps them valid for the deferred
+    // dispatchContactEvents below; under stepHz the sim runs slower than real time instead of
+    // catching up). Contact events are NOT fired here — nothing in update() touches the spatial
+    // index or renderer state, so the main loop overlaps it with the spatial-cull/begin-frame
+    // jobs. Also emits the collider wireframes, see setDebugDrawCallback.
+    void update(double deltaSec);
+    // Fires the step's contact/sensor events (reads box3d's buffers — no copy). Main thread, after
+    // update() and before the next one; no-op unless a step ran since the last dispatch (the
+    // buffers still hold the OLD events until the next step — refiring would duplicate). Deferred
+    // out of update() because contact scripts query the spatial index and can touch renderer state
+    // (light/sun thunks): the main loop calls this AFTER joining the spatial/begin-frame jobs.
+    void dispatchContactEvents(const oc::function<void(const ContactEvent&)>& contactCallback);
 
     // Thread-safe absolute repositioning: queues the pose, applied at the start of the next update()
     // before any step. The only way to move a body. Requests apply in call order (last one for a body
@@ -154,7 +163,7 @@ private:
 
     void applyBuoyancy(); // per fixed step, before b3World_Step (box3d clears forces every step)
     void applyQueuedCommands(); // main thread, start of update
-    void stepSimulation(double deltaSec, const oc::function<void(const ContactEvent&)>& contactCallback);
+    void stepSimulation(double deltaSec);
     void debugDraw(const glm::vec3& viewPos, const DebugLineFn& line); // driven by update(), see setDebugDrawCallback
 
     struct BodyCommand
@@ -183,6 +192,7 @@ private:
     // the solver's fork/join state is owned by this world rather than by file statics.
     PhysicsTaskScheduler m_taskScheduler;
     uint32 m_stepCount = 0;
+    uint32 m_lastDispatchedStep = 0; // dispatchContactEvents' double-fire guard
     glm::vec3 m_gravity = glm::vec3(0.0f, -9.81f, 0.0f);
     PhysicsBody m_staticBody;
 

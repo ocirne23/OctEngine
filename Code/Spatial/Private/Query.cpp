@@ -603,3 +603,21 @@ void SpatialIndex::update(const Camera& camera, const Frustum& frustum, const gl
         m_framesSinceNearQuery = 0;
     }
 }
+
+void SpatialIndex::kickUpdateJob(const CullView& view)
+{
+    m_updateJobKicked = view.valid;
+    if (!view.valid) // first VR frame: no head view yet — skip this frame's cull (see the declaration)
+        return;
+    m_updateJobCamera = view.camera;
+    m_updateJobFrustum = view.frustum;
+    m_updateJobViewProj = view.viewProjRelCamera;
+    Globals::jobSystem.submit([this] { update(m_updateJobCamera, m_updateJobFrustum, m_updateJobViewProj); },
+        { "Spatial cull", EProfileCategory::Spatial }, EJobPriority::High, &m_updateJobCounter);
+}
+
+void SpatialIndex::joinUpdateJob()
+{
+    if (m_updateJobKicked)
+        Globals::jobSystem.wait(m_updateJobCounter); // helps; near-zero when the kick-to-join work covered it
+}

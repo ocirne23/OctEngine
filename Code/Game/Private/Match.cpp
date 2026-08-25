@@ -166,6 +166,29 @@ GameMatch::GameMatch(bool enabled) : m_enabled(enabled)
     m_npcs.registerTweaks();
     Globals::navSystem.initialize(); // "Nav" tweaks + density staging (job system is up by now)
 
+    // The game rosters (structures + units/projectiles) replace every world-wide spatial query:
+    // they deregister through this ONE notification, which every removal path funnels into
+    // (destroy requests, editor deletes, network despawns). Cleared in ~GameMatch — the world
+    // outlives this object.
+    Globals::world.setOnRootEntityRemoved([this](const Entity* entity)
+    {
+        m_structures.onWorldRootRemoved(entity);
+        m_npcs.onWorldRootRemoved(entity);
+    });
+    // Route change -> the barracks' live units (the march index is KEPT and clamped: an appended
+    // route continues where the unit was, a finished unit marches to the new tail).
+    m_structures.onRouteLiveUnits = [this](uint32 sourceId, oc::span<const glm::vec3> route)
+    {
+        for (const EntityPtr& e : m_npcs.units())
+            if (GameUnitComponent* u = getComponent<GameUnitComponent>(e.get()); u && u->sourceId == sourceId)
+            {
+                u->routeCount = (uint8)glm::min((int)route.size(), (int)GameUnitComponent::MaxRoutePoints);
+                for (int i = 0; i < u->routeCount; ++i)
+                    u->route[i] = route[i];
+                u->routeIndex = (uint8)glm::min((int)u->routeIndex, glm::max((int)u->routeCount - 1, 0));
+            }
+    };
+
     m_mouse = Globals::input.addMouseListener();
     // MIDDLE-drag yaws the camera. RMB cannot: holding it steers the player (RTS move order), and
     // a held button cannot mean two things at once — Q/E remain the keyboard yaw.
@@ -223,6 +246,7 @@ GameMatch::~GameMatch()
     m_player.despawn();
     if (m_ground)
         Globals::world.removeRootEntity(m_ground.get()); // corridor walls are its children — they go with it
+    Globals::world.setOnRootEntityRemoved(nullptr); // last: the callback captures this object
 }
 
 void GameMatch::spawnWorld()
@@ -762,7 +786,7 @@ void GameMatch::update(float deltaSec)
         m_player.tickShieldAndHealth(deltaSec);
         tickBaseHealing(deltaSec);
         m_structures.tickMirror(deltaSec);
-        feedNav(deltaSec); // obstacles only: the local player's move-order goal field
+        feedNav(); // obstacles only: the local player's move-order goal field
         return;
     }
 
@@ -810,8 +834,9 @@ void GameMatch::update(float deltaSec)
     // (shots to spawn, deaths) and runs production.
     m_npcs.service(m_structures);
 
-    // Flow fields for the units' next pass: obstacles + per-team sources in, published fields out.
-    feedNav(deltaSec);
+    // Flow fields for the units' next pass: obstacles + per-team sources in (NavSystem::update
+    // publishes them later this frame, from main.cpp's kick/join window — see feedNav).
+    feedNav();
 
     if (m_isServer)
     {
@@ -859,7 +884,7 @@ void GameMatch::update(float deltaSec)
     }
 }
 
-void GameMatch::feedNav(float deltaSec)
+void GameMatch::feedNav()
 {
     ProfileScope scope("Game nav feed", EProfileCategory::Game);
     // Obstacles: every structure footprint (the same half-extent math as cellsFree) over the static
@@ -880,21 +905,16 @@ void GameMatch::feedNav(float deltaSec)
         m_navSources[s.state->team].push_back(Nav::NavSource{
             s.entity->pos, glm::max(s.state->meleeRadius, half), s.state->structureId, 0 });
     }
-    // Enemy UNITS are targets too (unit-vs-unit combat): one arena-wide spatial sweep for
-    // GameUnitComponents (the same query refresh() runs for structures).
+    // Enemy UNITS are targets too (unit-vs-unit combat): the NpcSystem roster IS the world-wide
+    // unit list — no spatial sweep (rosters are maintained at the spawn/despawn seams).
     if (!m_isClient)
-    {
-        thread_local oc::vector<uint64> results;
-        Globals::spatialIndex.querySphere(glm::dvec3(0.0), 1000.0f, SpatialLayer_Render, results);
-        for (const uint64 user : results)
+        for (const EntityPtr& e : m_npcs.units())
         {
-            Entity* e = reinterpret_cast<Entity*>(user);
-            const GameUnitComponent* u = getComponent<GameUnitComponent>(e);
+            const GameUnitComponent* u = getComponent<GameUnitComponent>(e.get());
             if (!u || u->puppet || !u->alive() || u->team >= Nav::MaxTeams)
                 continue;
             m_navSources[u->team].push_back(Nav::NavSource{ e->pos, glm::max(u->bodyRadius, 0.25f), 0, 3 });
         }
-    }
     // Player bodies (puppets) are targets too: our capsule + every client twin.
     const auto addPlayer = [&](Entity* e, uint8 team)
     {
@@ -915,7 +935,10 @@ void GameMatch::feedNav(float deltaSec)
     Globals::navSystem.setObstacles(m_navObstacles);
     for (uint32 t = 0; t < Nav::MaxTeams; ++t)
         Globals::navSystem.setTeamSources(t, m_navSources[t]);
-    Globals::navSystem.update(deltaSec);
+    // NavSystem::update (publish + build kicks) runs from main.cpp's kick/join window after
+    // physics.update — it touches neither the spatial index nor the renderer, so it fills the
+    // stretch where main otherwise only waits on the "Spatial cull"/"Begin frame" jobs. The
+    // gathering above stays HERE: the unit sweep is a spatial query, illegal in that window.
 }
 
 // Build/delete/cable intents: local queue on the authority, Gq* request events from a client —
@@ -1619,12 +1642,12 @@ void GameMatch::issueScenarioOrder()
 {
     // Select ALL live own-team units (not just the visible ones — the box select's query is a
     // frustum), then the same order the RMB press gives: locked move target + one seeded lane.
-    // The loaded units' spatial entries link at SpatialIndex::commitFrame, which runs AFTER
-    // game.update in the frame — so the first update after the load still sees none: retry each
-    // update until the query returns units (bounded, in case the save held none).
+    // The unit roster serves loaded units immediately (no spatial-link latency any more), but the
+    // enemy Base view and the published nav raster still arrive frames later — the retry loop
+    // stays (bounded, in case the save held none).
     m_selectedUnits.clear();
     oc::vector<Entity*> units;
-    NpcSystem::queryAllUnits(units);
+    m_npcs.queryAllUnits(units);
     for (Entity* e : units)
         if (const GameUnitComponent* u = getComponent<GameUnitComponent>(e); u && !u->puppet && u->alive() && u->team == (uint32)m_team)
             m_selectedUnits.push_back(EntityPtr(e));

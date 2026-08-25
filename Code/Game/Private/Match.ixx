@@ -113,7 +113,7 @@ private:
     // NAV: feed the flow-field service (authority only) — obstacles = border walls + every
     // structure footprint (change-detected inside Nav), sources = per team its structures + player
     // bodies (every frame). Units read the fields inside the entity pass.
-    void feedNav(float deltaSec);
+    void feedNav();
     // SAVE/LOAD (F9/F10, server/single player only — clients refuse): structures/cables/units for
     // all teams to Assets/Local/gamesave.txt (players are NOT saved). Loading clears the current
     // set (removal hooks -> GRm prune connected clients) and re-broadcasts the loaded state.

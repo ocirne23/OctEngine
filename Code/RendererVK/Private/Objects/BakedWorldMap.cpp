@@ -91,7 +91,7 @@ void BakedWorldMap::initialize(uint32 resolution, uint32 numLayers, uint32 chann
     cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = (uint32)bars.size(), .pImageMemoryBarriers = bars.data() });
     init.end();
     init.submitGraphics();
-    (void)Globals::device.getGraphicsQueue().waitIdle();
+    (void)Globals::device.graphicsQueueWaitIdle();
 }
 
 void BakedWorldMap::upload(oc::span<const float> texels, const glm::vec2& centerXZ, const glm::vec2& worldSizes, float userParam, uint32 frameIdx)

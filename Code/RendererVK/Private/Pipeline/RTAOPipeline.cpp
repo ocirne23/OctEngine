@@ -206,7 +206,7 @@ void RTAOPipeline::recreateImages(uint32 fullWidth, uint32 fullHeight)
     cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = (uint32)bars.size(), .pImageMemoryBarriers = bars.data() });
     init.end();
     init.submitGraphics();
-    (void)Globals::device.getGraphicsQueue().waitIdle();
+    (void)Globals::device.graphicsQueueWaitIdle();
 }
 
 void RTAOPipeline::initialize(const RTAOParams* pParams, uint32 fullWidth, uint32 fullHeight, uint32 maxTextures, uint32 numTextureDescriptors, uint32 viewCount)
