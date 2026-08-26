@@ -483,7 +483,8 @@ private:
     void recordDecals(uint32 frameIdx);
     void recordDecalsInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
     void recordForceField(uint32 frameIdx);
-    void recordForceFieldInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
+    void recordForceFieldInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex,
+        ForceFieldPipeline::EDrawPart part = ForceFieldPipeline::EDrawPart::Both);
     void recordForceCompute(uint32 frameIdx);
     void checkForceGridCapacity();
     void recordAO(uint32 frameIdx);
@@ -881,6 +882,7 @@ private:
         CommandBuffer particleCommandBuffer;
         CommandBuffer decalCommandBuffer;
         CommandBuffer forceFieldCommandBuffer;
+        CommandBuffer forceUnionCommandBuffer; // the union-march fullscreen draw, its own scene stage for the GPU profiler
         CommandBuffer forceComputeCommandBuffer;
         CommandBuffer taaCommandBuffer;
         CommandBuffer eyeAdaptCommandBuffer;

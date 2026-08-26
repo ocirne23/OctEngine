@@ -230,6 +230,7 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
         perFrame.particleCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
         perFrame.decalCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
         perFrame.forceFieldCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
+        perFrame.forceUnionCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
         perFrame.forceComputeCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
         perFrame.taaCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
         perFrame.eyeAdaptCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
@@ -2572,8 +2573,10 @@ void Renderer::recordDecals(uint32 frameIdx)
 }
 
 // Forcefield shell draw for one eye, inside the eye's scene-colour render pass after the debug
-// overlays (so particles/fog layer on top of the bubbles).
-void Renderer::recordForceFieldInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
+// overlays (so particles/fog layer on top of the bubbles). part splits the proxy draw and the
+// union march into their own scene stages on desktop (see recordForceField); VR records Both.
+void Renderer::recordForceFieldInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex,
+    ForceFieldPipeline::EDrawPart part)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     vk::CommandBuffer vkCb = cb.getCommandBuffer();
@@ -2591,17 +2594,23 @@ void Renderer::recordForceFieldInto(CommandBuffer& cb, uint32 frameIdx, uint32 e
         .gbufferDepthLayout = m_depthPrepassReuse ? vk::ImageLayout::eDepthStencilReadOnlyOptimal : vk::ImageLayout::eShaderReadOnlyOptimal,
         .gbufferSampler = frameData.gbuffer.getSampler(),
     };
-    m_forceFieldPipeline.recordDraw(cb, frameIdx, eyeIndex, drawParams);
+    m_forceFieldPipeline.recordDraw(cb, frameIdx, eyeIndex, drawParams, part);
 }
 
 void Renderer::recordForceField(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     vk::CommandBufferInheritanceInfo inheritance{ .renderPass = frameData.sceneColor.getRenderPass() };
+    // Two secondaries so the GPU profiler splits the proxy ray-march and the union march into
+    // their own scene stages ("Force shells" / "Force union march").
     CommandBuffer& cb = frameData.forceFieldCommandBuffer;
     cb.begin(false, &inheritance);
-    recordForceFieldInto(cb, frameIdx, 0);
+    recordForceFieldInto(cb, frameIdx, 0, ForceFieldPipeline::EDrawPart::Proxies);
     cb.end();
+    CommandBuffer& unionCb = frameData.forceUnionCommandBuffer;
+    unionCb.begin(false, &inheritance);
+    recordForceFieldInto(unionCb, frameIdx, 0, ForceFieldPipeline::EDrawPart::UnionMarch);
+    unionCb.end();
 }
 
 // Force grid build + per-emitter force / point-query dispatches (outside any render pass, after the
@@ -3422,12 +3431,13 @@ void Renderer::recordCommandBuffers()
             if (m_depthPrepassReuse)
                 recordReuseDepthBarrier(vkCommandBuffer, gbuffer.getDepthImage(), 0, true);
             struct SceneStage { const char* name; vk::CommandBuffer cb; bool enabled; };
-            const oc::array<SceneStage, 7> sceneStages{
+            const oc::array<SceneStage, 8> sceneStages{
                 SceneStage{ "Static meshes", vkStaticMeshCommandBuffer, true },
                 SceneStage{ "Decals", frameData.decalCommandBuffer.getCommandBuffer(), m_decalsEnabled },
                 SceneStage{ "GI probe debug", vkGiProbeDebugCommandBuffer, m_giProbeDebugEnabled },
                 SceneStage{ "Debug lines", frameData.debugLineCommandBuffer.getCommandBuffer(), m_debugLinePipeline.hasBuffers() },
                 SceneStage{ "Force shells", frameData.forceFieldCommandBuffer.getCommandBuffer(), m_forceFieldParams.enabled },
+                SceneStage{ "Force union march", frameData.forceUnionCommandBuffer.getCommandBuffer(), m_forceFieldParams.enabled },
                 SceneStage{ "Particles", frameData.particleCommandBuffer.getCommandBuffer(), m_particlesEnabled },
                 SceneStage{ "Fog apply", vkFogApplyCommandBuffer, m_fogParams.enabled },
             };

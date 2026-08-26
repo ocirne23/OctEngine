@@ -820,10 +820,16 @@ void ForceFieldPipeline::growGridBuffers(size_t neededDataBytes, uint32 neededTa
     printf("ForceFieldPipeline: grew grid buffers to %zu bytes / %u table entries\n", m_gridDataSize, m_tableEntries);
 }
 
-void ForceFieldPipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 eye, const DrawParams& params)
+void ForceFieldPipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 eye, const DrawParams& params,
+    EDrawPart part)
 {
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
     const uint32 viewIndex = eyeToViewIndex(eye, m_viewCount);
+    if (part == EDrawPart::UnionMarch)
+    {
+        recordUnionDraw(commandBuffer, frameIdx, viewIndex, params);
+        return;
+    }
     DescriptorSet& set = m_drawSets[drawSlot(frameIdx, eye)];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
 
@@ -845,8 +851,15 @@ void ForceFieldPipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameId
     cmd.pushConstants(m_pipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, sizeof(uint32), &viewIndex);
     cmd.drawIndirect(m_indirectBuffers[frameIdx].getBuffer(), 0, 1, sizeof(vk::DrawIndirectCommand));
 
-    // The UNION MARCH fullscreen draw (analytic tier, one march per pixel): vertexCount is 0
-    // whenever the pass is off (VR, tweak, density view), so recording it is always safe.
+    if (part == EDrawPart::Both)
+        recordUnionDraw(commandBuffer, frameIdx, viewIndex, params);
+}
+
+// The UNION MARCH fullscreen draw (analytic tier, one march per pixel): vertexCount is 0
+// whenever the pass is off (VR, tweak, density view), so recording it is always safe.
+void ForceFieldPipeline::recordUnionDraw(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 viewIndex, const DrawParams& params)
+{
+    vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
     DescriptorSet& unionSet = m_unionSets[frameIdx];
     vk::DescriptorSet vkUnionSet = unionSet.getDescriptorSet();
     oc::array<DescriptorSetUpdateInfo, 6> unionUpdates{

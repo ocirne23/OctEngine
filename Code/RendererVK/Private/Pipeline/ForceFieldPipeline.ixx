@@ -93,11 +93,17 @@ public:
         vk::ImageLayout gbufferDepthLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
         vk::Sampler gbufferSampler;
     };
+    // Which half of the shell rendering to record — the desktop primary gives each its own
+    // scene-stage secondary so the GPU profiler splits "Force shells" / "Force union march";
+    // VR records Both into the one per-eye pass.
+    enum class EDrawPart { Proxies, UnionMarch, Both };
+
     // Records the indirect instanced box draw (sampled-tier proxies — or every drawable when the
-    // union pass is off) PLUS the union-march fullscreen draw (vertexCount 0 when inactive); the
+    // union pass is off) and/or the union-march fullscreen draw (vertexCount 0 when inactive); the
     // caller has begun a command buffer inside the scene-color render pass and set the
     // viewport/scissor. eye selects the per-eye set/views.
-    void recordDraw(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 eye, const DrawParams& params);
+    void recordDraw(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 eye, const DrawParams& params,
+        EDrawPart part = EDrawPart::Both);
 
     // The union march's INTERVAL pass: its own tiny render pass (RG16F, cleared to fp16-max,
     // MIN-blended (tEntry, -tExit) per analytic proxy), recorded in the PRIMARY (re-recorded every
@@ -142,6 +148,7 @@ private:
     void createShellVolume();
     void destroyShellVolume();
     void createBakeReadbackBuffers(); // team-sized stride (see Layout's bake comment)
+    void recordUnionDraw(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 viewIndex, const DrawParams& params);
     uint32 bakeVec4PerSample() const { return (m_numTeams + 3u) / 4u; }
     void buildIntervalLayout(GraphicsPipelineLayout& layout); // shell VS + interval FS, MIN blend
     void buildUnionLayout(GraphicsPipelineLayout& layout);    // fullscreen VS + union-march FS
