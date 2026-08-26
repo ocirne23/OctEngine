@@ -71,7 +71,10 @@ static float unitRand01(uint32& state); // tiny per-unit LCG, defined below
 
 void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Transform&)
 {
-    entity.setProfiled(); // units carry a per-entity profile scope
+    if (const ForceComponent::SpawnInfo* si = getForceSpawnInfo(&entity))
+    {
+        entity.setProfiled(); // units with shields carry a per-entity profile scope
+    }
     puppet = info.puppet;
     team = info.team;
     health = healthMax = info.healthMax;
