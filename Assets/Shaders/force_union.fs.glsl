@@ -145,10 +145,15 @@ void main()
     for (uint k = 0u; k < numBigsHoisted; ++k)
         bigEntry[k] = forceBigSupportEntry(rayOrigin, rayDir, fe_emitters[fe_bigIndices[k]]);
 #endif
-    // Static per-pixel phase jitter breaks the march's step-count banding into spatial noise —
-    // larger "Union step (m)" settings stay presentable. Purely spatial (no frame term), so shells
-    // never shimmer with TAA off; crossings still bisect to the exact surface either way.
+    // Static per-pixel phase jitter (FORCE_UNION_JITTER — "Force/Shell/Union jitter", compiled
+    // out when off) breaks the march's step-count banding into spatial noise — larger "Union
+    // step (m)" settings stay presentable. Purely spatial (no frame term), so shells never
+    // shimmer with TAA off; crossings still bisect to the exact surface either way.
+#ifdef FORCE_UNION_JITTER
     const float stepJitter = forceHash(vec3(gl_FragCoord.xy, 0.0));
+#else
+    const float stepJitter = 0.0; // constant-folds out of the loop below
+#endif
     for (int i = 1; i <= steps && numShaded < 3 && accumAlpha < 0.98; ++i) // saturated: nothing behind shows
     {
         const float t = t0 + dt * (float(i) - stepJitter);

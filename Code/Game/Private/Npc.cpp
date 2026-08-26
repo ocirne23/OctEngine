@@ -300,6 +300,8 @@ void NpcSystem::saveUnits(AssetNode& root) const
         n.set("Energy", u->energy);
         n.set("Source", oc::to_string(u->sourceId));
         n.set("RouteIndex", oc::to_string(u->routeIndex));
+        if (u->ambient)
+            n.set("Ambient", "true"); // co-op scatter: keeps holding its patch after a load
     }
 }
 
@@ -326,6 +328,7 @@ void NpcSystem::loadUnits(const AssetNode& root, StructureSystem& structures)
         u->health = glm::clamp(n->find("Health") ? n->find("Health")->asFloat() : u->health, 1.0f, u->healthMax);
         u->energy = glm::clamp(n->find("Energy") ? n->find("Energy")->asFloat() : u->energy, 0.0f, u->energyMax);
         u->routeIndex = (uint8)glm::clamp(n->find("RouteIndex") ? n->find("RouteIndex")->asInt() : 0, 0, 255);
+        u->ambient = n->find("Ambient") ? n->find("Ambient")->asBool() : false;
         if (GameStructureComponent* barracks = structures.structureStateById(source))
             ++barracks->barracks.aliveUnits;
     }

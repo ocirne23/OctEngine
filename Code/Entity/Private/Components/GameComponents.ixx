@@ -165,6 +165,11 @@ export struct GameUnitComponent
     // Orders: an explicit DSL/game target overrides auto-targeting until cleared or reached+dry.
     bool targetLocked = false;
     bool hasTarget = false;
+    // AMBIENT unit (co-op scatter): never targets through the Nav team fields — those cover the
+    // whole map and walked every scattered unit to the base. Only the LOCAL spatial search
+    // ("Target search radius") aggroes it, so it holds its area until something comes near.
+    // Orders/routes/locks are unaffected (they already bypass the field block).
+    bool ambient = false;
     bool moveOrder = false;   // the locked target is a PLAYER MOVE ORDER (RTS right-click): walk
                               // there, then unlock and resume the AI (a DSL attack lock never clears)
     glm::vec3 targetPos{ 0.0f };

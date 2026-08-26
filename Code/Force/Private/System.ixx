@@ -378,7 +378,7 @@ private:
     uint32 m_numLiveEmitters = 0;
     uint32 m_generationCounter = 1;
 
-    float m_visibleBoundsIsoFrac = 0.5f; // draw-box shrink (packVisibleBounds); 0 = full boxes
+    float m_visibleBoundsIsoFrac = 1.0f; // draw-box shrink (packVisibleBounds); 0 = full boxes
 
     // Baked pressure field state (see sampleBakedField): scratch this frame, published last copy.
     bool m_bakeEnabled = true;

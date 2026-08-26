@@ -456,8 +456,10 @@ void GameMatch::tickCoopSpawns()
     {
         --budget;
         --m_ambientPending;
-        // Uniform-AREA scatter outside the safe radius (sqrt(t) = even density). NOT leashed and
-        // not ordered anywhere: whatever their AI finds (fields, local search) is what they do.
+        // Uniform-AREA scatter outside the safe radius (sqrt(t) = even density). AMBIENT: the Nav
+        // team fields never pull them (they cover the whole map, which marched every scattered
+        // unit to the base) — only the local search aggroes them, so they hold their patch until
+        // players expand near it. Wave units above stay field-driven after their order releases.
         const float a = glm::linearRand(0.0f, glm::two_pi<float>());
         const float r = glm::mix(m_ambientSafeRadius, c_coopHalfSize - 5.0f,
             std::sqrt(glm::linearRand(0.0f, 1.0f)));
@@ -465,8 +467,11 @@ void GameMatch::tickCoopSpawns()
         const ENpcType type = roll < 0.6f ? ENpcType::Swarm
             : roll < 0.75f ? ENpcType::Grunt
             : roll < 0.9f ? ENpcType::Runner : ENpcType::Spitter;
-        m_npcs.spawnLooseUnit(m_structures,
+        Entity* unit = m_npcs.spawnLooseUnit(m_structures,
             glm::vec3(std::cos(a) * r, 1.0f, std::sin(a) * r), CoopAiTeam, type);
+        if (unit)
+            if (GameUnitComponent* u = getComponent<GameUnitComponent>(unit))
+                u->ambient = true;
     }
 }
 

@@ -1438,18 +1438,20 @@ void Renderer::setForceFieldParams(const ForceFieldParams& params)
     const uint32 numTeams = glm::clamp(params.numTeams, 2u, RendererVKLayout::MAX_FORCE_TEAMS);
     if (params.useGrid != m_forceFieldPipeline.getUseGrid()
         || numTeams != m_forceFieldPipeline.getNumTeams()
-        || params.unionHalfRes != m_forceFieldPipeline.getUnionHalfRes())
+        || params.unionHalfRes != m_forceFieldPipeline.getUnionHalfRes()
+        || params.unionJitter != m_forceFieldPipeline.getUnionJitter())
     {
         if (Globals::device.graphicsQueueWaitIdle() == vk::Result::eSuccess)
         {
-            printf("ForceFieldPipeline: rebuilding force pipelines (grid %d, %u teams, union %s)\n",
+            printf("ForceFieldPipeline: rebuilding force pipelines (grid %d, %u teams, union %s%s)\n",
                 params.useGrid ? 1 : 0, numTeams, // loud: a silent skip here strands stale binaries
-                params.unionHalfRes ? "half-res" : "full-res");
+                params.unionHalfRes ? "half-res" : "full-res", params.unionJitter ? "" : ", no jitter");
             // Shader source reads from the frame loop: intentional, rare main-thread IO (a game-
             // mode switch or the grid tweak), declared so FileSystem's assert stays meaningful.
             const FileSystem::AllowMainThreadIO allowIo;
             m_forceFieldPipeline.setUseGrid(params.useGrid);
             m_forceFieldPipeline.setNumTeams(numTeams);
+            m_forceFieldPipeline.setUnionJitter(params.unionJitter);
             if (params.unionHalfRes != m_forceFieldPipeline.getUnionHalfRes())
             {
                 // The targets change size (and the march target existence) with the mode.

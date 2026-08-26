@@ -175,7 +175,7 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
     bool navResolved = false;
     bool navSteer = false; // navResolved AND the descent is usable (it is zero AT a source)
     glm::vec2 navDir(0.0f);
-    if (!routing && !targetLocked && fields && Globals::navSystem.anyFieldPublished())
+    if (!routing && !targetLocked && !ambient && fields && Globals::navSystem.anyFieldPublished())
     {
         Nav::TeamField::Sample best;
         const Nav::TeamField* bestField = nullptr;

@@ -328,6 +328,7 @@ void ForceSystem::initialize()
     Tweak::floatVar("Force/Shell", "Sampled tier reach (m)", &m_params.sampledShellReach, 0.0f, 100.0f, 1.0f);
     Tweak::boolean("Force/Shell", "Union march", &m_params.unionMarch);
     Tweak::boolean("Force/Shell", "Union half res", &m_params.unionHalfRes); // rebuild-class (device idle)
+    Tweak::boolean("Force/Shell", "Union jitter", &m_params.unionJitter);    // rebuild-class (shader define)
     Tweak::floatVar("Force/Shell", "Union step (m)", &m_params.unionStepSize, 0.05f, 4.0f, 0.05f);
     Tweak::intVar("Force/Shell", "Union max steps", &m_params.unionMaxSteps, 8, 512, 8);
     // The draw-box shrink's iso reduction (see packVisibleBounds): 0 = full support boxes.
@@ -377,9 +378,9 @@ static float forceIsoLateral(float t, float R, float m, float W, float D, float 
 
 // VISIBLE-BOUNDS pack (teamFlags.w, decoded by forceVisibleBounds in force_field.inc.glsl): the
 // emitter's own iso-surface extent from the closed-form profile, evaluated at iso x "Visible
-// bounds iso frac" (default 0.5 — a surface can exist where two sub-iso fields SUM past iso, and
-// the halved threshold covers an equal pair; same-team crowds beyond that are what the merge
-// system replaces with one group sphere). The proxy/interval draws shrink to this box so the
+// bounds iso frac" (default 1.0 — tightest boxes; a surface can exist where two sub-iso fields
+// SUM past iso, so lower the frac toward 0.5 for merge slack if a merged bulge ever clips at a
+// box edge; same-team crowds are what the merge system replaces with one group sphere anyway). The proxy/interval draws shrink to this box so the
 // marches skip the empty support space around a bubble far below its reach box (a drained shield
 // in a full-size box); the FIELD keeps the full support everywhere (grid insert, bake fits, CPU
 // mirrors). 0 = nothing clears the reduced iso (or the tweak is 0): the full support box stands.

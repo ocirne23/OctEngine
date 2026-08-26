@@ -112,8 +112,8 @@ void forceEmitterBounds(ForceEmitterData e, out float side, out float forward, o
 // (teamFlags.w — CPU packVisibleBounds in Force/System.cpp: axial lo/hi in R units as two unorm8,
 // lateral fraction of `side` as unorm16; 0 = feature off or nothing above the reduced iso, keep
 // the full support box). The pack is the OWN-iso extent at iso x "Visible bounds iso frac"
-// (default 0.5 — the reduction is the merge slack: two equal sub-iso fields can SUM to a surface
-// outside either's own iso extent, and evaluating at iso/2 covers that pair). Consumers: the
+// (default 1.0 = tightest; lowering it adds merge slack — two sub-iso fields can SUM to a
+// surface outside either's own iso extent, and iso/2 covers an equal pair). Consumers: the
 // proxy VS, the interval FS and the shell FS's march interval — the GRID insert, the bake fits
 // and every CPU mirror keep the FULL support box (the FIELD is unchanged, only the draw shrinks).
 void forceVisibleBounds(ForceEmitterData e, out float side, out float forward, out float back)

@@ -172,7 +172,7 @@ export namespace Nav
         // (a linear 0..20 range could neither reach "pressure dominates" nor resolve small values).
         float m_pressureFlowGainExp = 0.3f;
         float pressureFlowGain() const { return std::pow(10.0f, m_pressureFlowGainExp); }
-        int m_debugMode = 2;
+        int m_debugMode = 0;
         int m_debugTeam = 0;
         float m_debugRadius = 60.0f;
         float m_debugFlowMin = 0.1f; // hide flow arrows below this (the haze buries the lanes)

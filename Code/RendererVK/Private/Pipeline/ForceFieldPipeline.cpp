@@ -460,6 +460,8 @@ void ForceFieldPipeline::buildUnionLayout(GraphicsPipelineLayout& layout)
     if (m_useGrid)
         layout.fragmentShader.defines.push_back({ "FORCE_GRID", "" });
     layout.fragmentShader.defines.push_back(numTeamsDefine(m_numTeams));
+    if (m_unionJitter)
+        layout.fragmentShader.defines.push_back({ "FORCE_UNION_JITTER", "" });
     if (m_unionHalfRes)
     {
         layout.fragmentShader.defines.push_back({ "FORCE_UNION_UV_SCALE", "2.0" });

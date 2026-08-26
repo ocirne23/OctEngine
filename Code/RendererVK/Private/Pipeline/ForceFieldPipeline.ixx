@@ -55,6 +55,10 @@ public:
     // with reloadShaders + resizeIntervalTarget (the targets change size/existence).
     void setUnionHalfRes(bool halfRes) { m_unionHalfRes = halfRes; }
     bool getUnionHalfRes() const { return m_unionHalfRes; }
+    // March-phase jitter (FORCE_UNION_JITTER define in force_union.fs) — rebuild-class, no
+    // resource changes: caller is GPU-idle and follows with reloadShaders.
+    void setUnionJitter(bool jitter) { m_unionJitter = jitter; }
+    bool getUnionJitter() const { return m_unionJitter; }
 
     // SHELL DRAW CULLING (upload-time, CPU): a drawable shell outside the view frustum, or whose
     // projected proxy radius is under minPixels, is compacted into the NON-drawn field partition
@@ -184,6 +188,7 @@ private:
     GraphicsPipeline m_upsamplePipeline; // the scene-color depth-aware blend (half-res mode only)
     bool m_useGrid = true;
     bool m_unionHalfRes = true;
+    bool m_unionJitter = true;
     uint32 m_numTeams = RendererVKLayout::MAX_FORCE_TEAMS;
 
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_emitterBuffers;

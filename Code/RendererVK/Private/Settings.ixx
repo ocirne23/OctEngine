@@ -412,6 +412,9 @@ export struct ForceFieldParams
     // targets run at swapchain/2 and a depth-aware upsample blends into scene color; OFF = the
     // march draws directly into scene color at full res and NO march target exists.
     bool unionHalfRes = true;
+    // Static per-pixel march-phase jitter (rebuild-class: compiled out of force_union.fs when
+    // off): turns step banding into spatial noise so larger "Union step (m)" stays presentable.
+    bool unionJitter = false;
     float isoThreshold = 0.15f;      // field strength where an uncontested bubble surface sits
     int marchSteps = 10;             // ray-march steps through a shell proxy's ray interval
     float bigReachThreshold = 48.0f; // max directional reach (m) above which an emitter bypasses the
@@ -420,10 +423,10 @@ export struct ForceFieldParams
                                      // emitter per evaluation (small scenes / A-B correctness check).
                                      // Toggling rebuilds the force pipelines (FORCE_GRID define)
     float forceGain = 5.0f;          // scale on the read-back per-emitter applied forces
-    float shellAlpha = 0.33f;        // base shell opacity (rim-weighted in the shader)
-    float interiorAlpha = 0.0f;     // shell opacity floor when seen from INSIDE the bubble (the rim
+    float shellAlpha = 0.5f;         // base shell opacity (rim-weighted in the shader)
+    float interiorAlpha = 0.0f;      // shell opacity floor when seen from INSIDE the bubble (the rim
                                      // math reads near-zero head-on from within; this keeps the dome visible)
-    float backfaceAlpha = 1.0f;     // visibility of the far/inner shell surface seen from OUTSIDE,
+    float backfaceAlpha = 1.0f;      // visibility of the far/inner shell surface seen from OUTSIDE,
                                      // composited behind the front surface (0 = single-surface shell)
     float rimPower = 3.0f;           // fresnel rim exponent
     float rimIntensity = 1.5f;       // rim emissive gain
@@ -463,8 +466,8 @@ export struct ForceFieldParams
     // only rasterize their ray intervals (MIN-blend), a fullscreen pass marches the per-pixel
     // union once. Kills the overdraw term where small bubbles stack. Off = per-proxy marches (A/B).
     bool unionMarch = true;
-    float unionStepSize = 1.0f;        // world metres per union-march step
-    int unionMaxSteps = 32;           // hard cap on union steps per pixel
+    float unionStepSize = 1.5f;        // world metres per union-march step
+    int unionMaxSteps = 8;            // hard cap on union steps per pixel
     float patternScale = 0.6f;       // animated surface pattern frequency (1/m)
     float patternSpeed = 0.3f;       // pattern scroll speed
     float patternIntensity = 0.5f;

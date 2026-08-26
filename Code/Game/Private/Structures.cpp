@@ -266,6 +266,10 @@ void StructureSystem::spawnNode(float x, float z, ENodeType type)
 
 void StructureSystem::spawnNodesCoop(float minRadius, float maxRadius, int count)
 {
+    // STARTER PAIR beside the central Base (3x3 footprint at the origin): one mineral + one fuel
+    // node in extractor reach of the start, so the first economy loop needs no expedition.
+    spawnNode(10.0f, 4.0f, ENodeType::Mineral);
+    spawnNode(-4.0f, 10.0f, ENodeType::Fuel);
     // Golden-angle spiral over the open map: even radial coverage with no clumps, the base area
     // kept clear, and pure math — every instance (server AND clients) builds the identical set
     // locally, the same contract as the corridor table. sqrt(t) makes the AREAL density uniform.
@@ -506,7 +510,10 @@ void StructureSystem::applyDemolishRequest(uint32 id, uint8 team)
 
 void StructureSystem::spawnBase(const glm::vec3& groundPos, uint8 team)
 {
-    const glm::vec3 pos = groundPos + glm::vec3(0.0f, structureSpawnHeights[(int)EStructureType::Base], 0.0f);
+    // Same grid snap every placement gets (3x3 = odd footprint -> centered on a CELL): an
+    // unsnapped Base sat half a cell off, so nothing placed next to it could line up flush.
+    const glm::vec3 pos = snapToGrid(EStructureType::Base, groundPos)
+        + glm::vec3(0.0f, structureSpawnHeights[(int)EStructureType::Base], 0.0f);
     const int index = spawnStructure(m_nextStructureId++, EStructureType::Base, pos,
         glm::quat(1.0f, 0.0f, 0.0f, 0.0f), team, /*built*/ true, -1);
     if (index >= 0) // the starting war chest (the Base stores ONLY minerals — no energy, no fuel)
