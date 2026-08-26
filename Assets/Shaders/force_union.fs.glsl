@@ -30,6 +30,58 @@ bool forceSampledTierOwns(vec3 hitPos, uint team, out uint ownerIdx)
     return u_forceBake1.w > 0.5 && fe_emitters[ownerIdx].posReach.w >= u_forceBake0.w;
 }
 
+#ifdef FORCE_GRID
+// The EMPTY-CELL sample: a cell with no candidates holds NO SMALL emitters (big ones bypass the
+// grid), so the field there is exactly the big list + the ambient term — a loop over fe_bigCount
+// (typically 0-2) instead of nothing at all. This keeps the empty-cell fast path alive in scenes
+// WITH big emitters, where it used to be disabled outright.
+void forceSampleFieldBigOnly(vec3 x, float iso, uint fallbackTeam,
+    out uint bestTeam, out float bestPhi, out float secondPhi, out float F)
+{
+    float phi[NUM_FORCE_TEAMS];
+    for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
+        phi[t] = 0.0;
+    for (uint k = 0u; k < fe_bigCount; ++k)
+    {
+        const ForceEmitterData e = fe_emitters[fe_bigIndices[k]];
+        const float c = forceContribution(x, e);
+        for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t) // predicated adds (see forceAccumulate)
+            phi[t] += e.teamFlags.x == t ? c : 0.0;
+    }
+    const uint ambientTeam = min(uint(u_forceParams4.w), NUM_FORCE_TEAMS - 1u);
+    const float ambient = forceAmbientField(x);
+    for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
+        phi[t] += t == ambientTeam ? ambient : 0.0;
+    bestTeam = 0u;
+    bestPhi = phi[0];
+    for (uint t = 1u; t < NUM_FORCE_TEAMS; ++t)
+        if (phi[t] > bestPhi) { bestPhi = phi[t]; bestTeam = t; }
+    secondPhi = 0.0;
+    for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
+        if (t != bestTeam)
+            secondPhi = max(secondPhi, phi[t]);
+    F = bestPhi - forceOpposingBound(iso, secondPhi);
+    if (bestPhi <= 0.0)
+        bestTeam = fallbackTeam; // zero field: never a spurious team flip through empty space
+}
+
+// Conservative bounding sphere of a big emitter's support (mirrors the CPU ShellCull sphere):
+// the ray-entry distance into it bounds where that emitter's field can begin along the ray.
+float forceBigSupportEntry(vec3 rayOrigin, vec3 rayDir, ForceEmitterData e)
+{
+    float side, forward, back;
+    forceEmitterBounds(e, side, forward, back);
+    const vec3 center = e.posReach.xyz + e.dirFocus.xyz * ((forward - back) * 0.5);
+    const float radius = length(vec3(side, side, (forward + back) * 0.5));
+    const vec3 oc = rayOrigin - center;
+    const float b = dot(oc, rayDir);
+    const float disc = b * b - (dot(oc, oc) - radius * radius);
+    if (disc <= 0.0)
+        return 1e30; // the ray never reaches this emitter's support
+    return -b - sqrt(disc); // may be negative (inside/behind): caller clamps against t
+}
+#endif
+
 void main()
 {
     g_viewIndex = int(u_viewIndex);
@@ -66,14 +118,9 @@ void main()
     uint bestTeam;
     float bestPhi, secondPhi, F;
     forceSampleField(rayOrigin + rayDir * t0, iso, bestTeam, bestPhi, secondPhi, F);
-    bool cameraInsideField = F > 0.0;
-    if (t0 > 0.0 && cameraInsideField)
-    {
-        uint originTeam;
-        float originBest, originSecond, originF;
-        forceSampleField(rayOrigin, iso, originTeam, originBest, originSecond, originF);
-        cameraInsideField = originF > 0.0;
-    }
+    // Camera-inside is ONE point per frame, evaluated on the CPU (buildUboForce forceBake2.w) —
+    // never re-sampled per fragment.
+    const bool cameraInsideField = t0 > 0.0 ? u_forceBake2.w > 0.5 : F > 0.0;
     uint prevTeam = bestTeam;
     float tPrev = t0;
     float fPrev = F;
@@ -85,21 +132,17 @@ void main()
         const float t = t0 + dt * float(i);
         bool sampledEmpty = false;
 #ifdef FORCE_GRID
-        // EMPTY-SPACE SKIP: a cell with NO candidates is EXACTLY zero field (the grid insert
-        // covers every support) — provable, not heuristic — so the sample's result is known
-        // without accumulating, and after the crossing logic below the index jumps past the
-        // cell's exit. Disabled with big emitters live (they bypass the grid) or an ambient
-        // field on (it exists everywhere).
-        if (fe_bigCount == 0u && u_forceParams4.z <= 0.0)
+        // EMPTY-CELL FAST PATH: a cell with NO candidates holds no SMALL emitters (the grid
+        // insert covers every support) — provable, not heuristic — so the sample reduces to the
+        // big list + ambient (forceSampleFieldBigOnly, typically 0-2 emitters). After the
+        // crossing logic below the index also JUMPS past the empty stretch where that is safe.
         {
             const uint cell = forceCandidateCell(rayOrigin + rayDir * t);
             if (cell == FORCE_INVALID_CELL || forceCellCount(cell) == 0u)
             {
                 sampledEmpty = true;
-                bestTeam = prevTeam; // never a spurious team flip through empty space
-                bestPhi = 0.0;
-                secondPhi = 0.0;
-                F = -forceOpposingBound(iso, 0.0);
+                forceSampleFieldBigOnly(rayOrigin + rayDir * t, iso, prevTeam,
+                    bestTeam, bestPhi, secondPhi, F);
             }
         }
 #endif
@@ -116,7 +159,10 @@ void main()
             {
                 hitTeam = entryCrossing ? bestTeam : prevTeam;
                 float lo = tPrev, hi = t;
-                for (int b = 0; b < 6; ++b)
+                // 5 refinements (not the shell FS's 6): this is the pixel's ONLY march, so there
+                // is no cross-proxy hit-error matching to satisfy — bracket/32 stays under the
+                // normal's finite-difference step at the union tier's step sizes.
+                for (int b = 0; b < 5; ++b)
                 {
                     const float mid = (lo + hi) * 0.5;
                     const float fm = forceSurfaceForTeam(rayOrigin + rayDir * mid, hitTeam, iso);
@@ -130,7 +176,7 @@ void main()
             if (teamFlip)
             {
                 float lo = tPrev, hi = t;
-                for (int b = 0; b < 6; ++b)
+                for (int b = 0; b < 5; ++b)
                 {
                     const float mid = (lo + hi) * 0.5;
                     if (forceTeamDiff(rayOrigin + rayDir * mid, prevTeam, bestTeam) > 0.0) lo = mid; else hi = mid;
@@ -171,9 +217,13 @@ void main()
                     uint ownerIdx;
                     if (!forceSampledTierOwns(rayOrigin + rayDir * tWall, ownTeam, ownerIdx))
                     {
+                        const float h = forceShadeNormalH(ownerIdx);
+                        const vec3 wallPos = rayOrigin + rayDir * tWall;
                         const vec4 layer = asSkin
-                            ? forceShadeHit(rayOrigin, rayDir, tWall, wallSkinTeam, cameraInsideField, sceneDist, ownerIdx)
-                            : forceShadeWall(rayOrigin, rayDir, tWall, prevTeam, bestTeam, wallFade, ownerIdx);
+                            ? forceShadeHit(rayOrigin, rayDir, tWall, wallSkinTeam, cameraInsideField, sceneDist, ownerIdx,
+                                forceSurfaceNormal(wallPos, wallSkinTeam, iso, h))
+                            : forceShadeWall(rayOrigin, rayDir, tWall, prevTeam, bestTeam, wallFade, ownerIdx,
+                                forceWallNormal(wallPos, prevTeam, bestTeam, h));
                         accumColor += (1.0 - accumAlpha) * layer.rgb;
                         accumAlpha += (1.0 - accumAlpha) * layer.a;
                         ++numShaded;
@@ -185,7 +235,8 @@ void main()
                     uint ownerIdx;
                     if (!forceSampledTierOwns(rayOrigin + rayDir * tHit, hitTeam, ownerIdx))
                     {
-                        const vec4 layer = forceShadeHit(rayOrigin, rayDir, tHit, hitTeam, cameraInsideField, sceneDist, ownerIdx);
+                        const vec4 layer = forceShadeHit(rayOrigin, rayDir, tHit, hitTeam, cameraInsideField, sceneDist, ownerIdx,
+                            forceSurfaceNormal(rayOrigin + rayDir * tHit, hitTeam, iso, forceShadeNormalH(ownerIdx)));
                         accumColor += (1.0 - accumAlpha) * layer.rgb;
                         accumAlpha += (1.0 - accumAlpha) * layer.a;
                         ++numShaded;
@@ -200,22 +251,27 @@ void main()
         tPrev = t;
         fPrev = F;
 #ifdef FORCE_GRID
-        if (sampledEmpty)
+        // JUMP the INDEX past the empty cell's exit (uniform dt preserved, so the refinement
+        // brackets stay one step wide), and move the bracket's start to the exit — the skipped
+        // stretch is provably zero, and a bracket spanning it would cost the bisection its
+        // accuracy at the next bubble's entry. Valid only with the ambient field off (it varies
+        // everywhere), and the target additionally clamps to each big emitter's support ENTRY
+        // (bounding sphere, conservative) — a big field beginning mid-cell must still be sampled.
+        // Many bigs make the per-step clamp loop cost more than the jump saves: then just no jump.
+        if (sampledEmpty && u_forceParams4.z <= 0.0 && fe_bigCount <= 8u)
         {
-            // Jump the INDEX past the empty cell's exit (uniform dt preserved, so the refinement
-            // brackets stay one step wide), and move the bracket's start to the exit — the whole
-            // cell is provably zero, and a bracket spanning the skipped stretch would cost the
-            // 6-step bisection its accuracy at the next bubble's entry.
             const vec3 p = rayOrigin + rayDir * t;
             const vec3 farBound = (floor(p / FORCE_GRID_CELL_SIZE)
                 + step(vec3(0.0), rayDir)) * FORCE_GRID_CELL_SIZE;
             const vec3 safeDir = rayDir + vec3(equal(rayDir, vec3(0.0))) * 1e-8;
             const vec3 tBounds = (farBound - rayOrigin) / safeDir;
-            const float tExit = min(min(min(tBounds.x, tBounds.y), tBounds.z), t1);
+            float tExit = min(min(min(tBounds.x, tBounds.y), tBounds.z), t1);
+            for (uint k = 0u; k < fe_bigCount && tExit > t; ++k)
+                tExit = min(tExit, forceBigSupportEntry(rayOrigin, rayDir, fe_emitters[fe_bigIndices[k]]));
             if (tExit > t)
             {
                 i = max(i, int((tExit - t0) / dt)); // ++i lands on the first sample past the exit
-                tPrev = tExit; // still inside the empty cell: F there is the same known negative
+                tPrev = tExit; // still inside the empty zero-field stretch: F there is the same known negative
             }
         }
 #endif

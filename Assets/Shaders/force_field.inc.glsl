@@ -87,7 +87,8 @@ float forceContribution(vec3 x, ForceEmitterData e)
     const float Y2 = lat2 * (4.0 / (R * R)) * (invW * invW); // lateral, in (width*R/2)^2 units
     const float m = 1.0 - 2.0 * e.dirFocus.w;   // focus 0.5 -> 0 (sphere); 0/1 -> +-1 (cones)
     const float q = clamp((1.0 - X) / (1.0 + X), 1e-4, 1e4);
-    const float u2 = X * X + Y2 * pow(q, m);
+    // Focus 0.5 (m exactly 0 — every merge-group sphere and most shields) skips the pow (exp+log).
+    const float u2 = X * X + Y2 * (m == 0.0 ? 1.0 : pow(q, m));
     if (u2 >= 1.0)
         return 0.0;
     const float qq = 1.0 - u2;

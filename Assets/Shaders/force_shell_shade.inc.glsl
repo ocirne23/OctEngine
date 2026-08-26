@@ -44,11 +44,15 @@ float forcePattern(vec3 worldPos, vec3 n)
     const float t = u_timeSeconds * u_forceParams2.y;
     const vec3 p = worldPos * scale;
     // Low-frequency warp fields drifting at different rates: these bend the wave bands into
-    // meandering, non-repeating swirls instead of straight noise bands.
-    const vec3 warp = vec3(
-        forceValueNoise(p * 0.8 + vec3(0.0, t * 0.55, 0.0)),
-        forceValueNoise(p * 0.8 + vec3(5.2, 1.3, -t * 0.45)),
-        forceValueNoise(p * 0.8 + vec3(9.7, 4.1, t * 0.35))) - 0.5;
+    // meandering, non-repeating swirls instead of straight noise bands. LOD: past ~60 m the warp's
+    // meander is sub-pixel, so its 3 noise octaves (24 hashes) fade out and are skipped entirely.
+    const float warpFade = 1.0 - smoothstep(60.0, 100.0, distance(worldPos, u_viewPos));
+    vec3 warp = vec3(0.0);
+    if (warpFade > 0.0)
+        warp = (vec3(
+            forceValueNoise(p * 0.8 + vec3(0.0, t * 0.55, 0.0)),
+            forceValueNoise(p * 0.8 + vec3(5.2, 1.3, -t * 0.45)),
+            forceValueNoise(p * 0.8 + vec3(9.7, 4.1, t * 0.35))) - 0.5) * warpFade;
     // Main wave crests: ridged shaping of a warped mid-frequency field (bright meandering bands).
     const float f1 = forceValueNoise(p * 1.7 + warp * 3.0 + vec3(0.0, 0.0, t * 0.25));
     float crest = 1.0 - abs(f1 * 2.0 - 1.0);
@@ -62,8 +66,14 @@ float forcePattern(vec3 worldPos, vec3 n)
 // front-to-back. Layer styling: front surfaces (outward normal toward the camera) are the standard
 // shell; surfaces seen from their inside are the interior dome (camera within a bubble, "Interior
 // alpha" floor) or the far/inner backface seen through the front ("Backface alpha" scale).
+// The OUTWARD surface normal is the CALLER's (`normal`, unflipped): the shell FS supplies the
+// baked-volume gradient on the sampled tier and the analytic gradient otherwise, the union FS
+// always the analytic one — so the 4-tap finite difference pays the caller's cheapest field.
+// forceShadeNormalH is the shared finite-difference step for computing it.
+float forceShadeNormalH(uint ownerIdx) { return max(0.005 * fe_emitters[ownerIdx].posReach.w, 0.01); }
+
 vec4 forceShadeHit(vec3 rayOrigin, vec3 rayDir, float tHit, uint hitTeam, bool cameraInsideField,
-    float sceneDist, uint ownerIdx)
+    float sceneDist, uint ownerIdx, vec3 normal)
 {
     const vec3 hitPos = rayOrigin + rayDir * tHit;
     float phi[NUM_FORCE_TEAMS];
@@ -78,8 +88,7 @@ vec4 forceShadeHit(vec3 rayOrigin, vec3 rayDir, float tHit, uint hitTeam, bool c
             opposingPhiVis = max(opposingPhiVis, phiVis[t]);
 
     const float iso = u_forceParams0.x;
-    const float h = max(0.005 * fe_emitters[ownerIdx].posReach.w, 0.01);
-    vec3 n = forceSurfaceNormal(hitPos, hitTeam, iso, h);
+    vec3 n = normal;
     const bool viewedFromInside = dot(n, rayDir) > 0.0;
     if (viewedFromInside)
         n = -n;
@@ -159,11 +168,10 @@ vec3 forceHeatColor(float t)
 // alpha". fade in [0,1] dissolves the pane at its rim (where min(phi_A, phi_B) approaches iso), so
 // the edge is analytic instead of stair-stepping with the march sampling. Premultiplied rgb + alpha.
 vec4 forceShadeWall(vec3 rayOrigin, vec3 rayDir, float tWall, uint teamA, uint teamB, float fade,
-    uint ownerIdx)
+    uint ownerIdx, vec3 normal) // normal from the caller — see forceShadeHit
 {
     const vec3 pos = rayOrigin + rayDir * tWall;
-    const float h = max(0.005 * fe_emitters[ownerIdx].posReach.w, 0.01);
-    vec3 n = forceWallNormal(pos, teamA, teamB, h);
+    vec3 n = normal;
     if (dot(n, rayDir) > 0.0)
         n = -n;
     const float fresnel = pow(1.0 - clamp(dot(n, -rayDir), 0.0, 1.0), u_forceParams0.y);

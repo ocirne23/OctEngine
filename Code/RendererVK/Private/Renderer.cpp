@@ -986,6 +986,30 @@ void Renderer::buildUboOcean()
     ubo.oceanParams10 = glm::vec4(glm::max(ocean.waveHeightLimit, 0.0f), 0.0f, 0.0f, 0.0f);
 }
 
+// CPU mirror of the shader's forceContribution (force_field.inc.glsl) — evaluated ONCE per frame
+// at the camera for the "camera inside a bubble" bit, so the shell/union marches skip their
+// per-fragment origin re-sample. Must stay in sync with the shader.
+static float forceContributionCpu(const glm::vec3& x, const RendererVKLayout::ForceEmitterGpu& e)
+{
+    const glm::vec3 d = x - glm::vec3(e.posReach);
+    const float R = e.posReach.w;
+    const float z = glm::dot(d, glm::vec3(e.dirFocus));
+    if (z <= 0.0f || z >= R)
+        return 0.0f;
+    const float lat2 = glm::max(glm::dot(d, d) - z * z, 0.0f);
+    const float X = z * (2.0f / R) - 1.0f;
+    const float invW = 1.0f / e.outputParams.w;
+    const float Y2 = lat2 * (4.0f / (R * R)) * (invW * invW);
+    const float m = 1.0f - 2.0f * e.dirFocus.w;
+    const float q = glm::clamp((1.0f - X) / (1.0f + X), 1e-4f, 1e4f);
+    const float u2 = X * X + Y2 * (m == 0.0f ? 1.0f : std::pow(q, m));
+    if (u2 >= 1.0f)
+        return 0.0f;
+    const float qq = 1.0f - u2;
+    const float b = (z / R - e.outputParams.z) * 2.2222223f;
+    return e.outputParams.x * qq * qq * (0.15f + std::exp(-b * b));
+}
+
 // Forcefield bubbles (Force library pushes m_forceFieldParams every frame; all UBO-driven = live).
 void Renderer::buildUboForce()
 {
@@ -1044,9 +1068,35 @@ void Renderer::buildUboForce()
         ubo.forceBake0 = glm::vec4(0.0f, 0.0f, 0.0f, FLT_MAX); // no emitter reaches the threshold
         ubo.forceBake1 = glm::vec4(0.0f);
     }
+    // CAMERA-INSIDE bit (forceBake2.w): the marches' "camera inside a bubble" test is a property of
+    // ONE point per frame, so evaluate the full field at the camera here (CPU mirror) instead of a
+    // per-fragment field re-sample at the ray origin in both fragment shaders.
+    float phiCam[RendererVKLayout::MAX_FORCE_TEAMS] = {};
+    for (const RendererVKLayout::ForceEmitterGpu& e : m_forceEmitters)
+    {
+        if ((e.teamFlags.y & RendererVKLayout::FORCE_FLAG_ACTIVE) == 0u
+            || (e.teamFlags.y & RendererVKLayout::FORCE_FLAG_PASSIVE) != 0u)
+            continue;
+        phiCam[glm::min(e.teamFlags.x, RendererVKLayout::MAX_FORCE_TEAMS - 1u)] += forceContributionCpu(m_cameraPos, e);
+    }
+    if (force.ambientSlope > 0.0f) // forceAmbientField mirror
+    {
+        const float d = glm::distance(glm::vec2(m_cameraPos.x, m_cameraPos.z), force.ambientCenter);
+        phiCam[glm::min(force.ambientTeam, RendererVKLayout::MAX_FORCE_TEAMS - 1u)] +=
+            glm::clamp((d - force.ambientSafeRadius) * force.ambientSlope, 0.0f, force.ambientMaxStrength);
+    }
+    float bestCam = 0.0f, secondCam = 0.0f;
+    for (float p : phiCam)
+    {
+        if (p > bestCam) { secondCam = bestCam; bestCam = p; }
+        else secondCam = glm::max(secondCam, p);
+    }
+    const bool cameraInside = bestCam - glm::max(glm::max(force.isoThreshold, 1e-3f), secondCam) > 0.0f;
+
     ubo.forceBake2 = glm::vec4(glm::max(force.unionStepSize, 0.05f),
         (float)glm::clamp(force.unionMaxSteps, 8, 512),
-        m_mipPixelScale * 0.5f, 0.0f); // z: px per (radius/dist) — the union march's distance LOD
+        m_mipPixelScale * 0.5f,                // z: px per (radius/dist) — the union march's distance LOD
+        cameraInside ? 1.0f : 0.0f);           // w: the camera-inside bit
 }
 
 // Terrain rendering + splat texture params; also reports the splat textures to the mip streamer.

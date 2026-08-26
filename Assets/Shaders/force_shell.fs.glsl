@@ -38,21 +38,29 @@ layout (binding = 6) uniform sampler3D u_shellVolumeB; // phi[4..7]
 // forceSampleField's semantics from the BAKED volume: one or two trilinear taps instead of the
 // analytic candidate loop — the sampled tier's per-step cost is flat no matter how many emitters
 // overlap. Only large emitters march this (their surfaces are far larger than a texel, so the
-// trilinear reconstruction error is centimetres); hit refinement, normals and shading stay ANALYTIC.
-void forceSampleFieldBaked(vec3 x, float iso, out uint bestTeam, out float bestPhi, out float secondPhi, out float F)
+// trilinear reconstruction error is centimetres). The sampled tier's crossing REFINEMENT and
+// NORMALS read the volume too (the surface being refined IS the trilinear field, so the baked
+// gradient matches it exactly); only shading's color/ownership stay analytic — they need
+// per-emitter identity and shell alpha, which the volume does not carry.
+void forceReadBakedPhi(vec3 x, out float phi[NUM_FORCE_TEAMS])
 {
     const vec3 uvw = (x - u_forceBake0.xyz) * u_forceBake1.xyz;
     const vec4 a = texture(u_shellVolumeA, uvw);
 #if NUM_FORCE_TEAMS > 4
     const vec4 b = texture(u_shellVolumeB, uvw);
 #endif
-    float phi[NUM_FORCE_TEAMS];
     for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
 #if NUM_FORCE_TEAMS > 4
         phi[t] = t < 4u ? a[t] : b[t - 4u];
 #else
         phi[t] = a[t];
 #endif
+}
+
+void forceSampleFieldBaked(vec3 x, float iso, out uint bestTeam, out float bestPhi, out float secondPhi, out float F)
+{
+    float phi[NUM_FORCE_TEAMS];
+    forceReadBakedPhi(x, phi);
     bestTeam = 0u;
     bestPhi = phi[0];
     for (uint t = 1u; t < NUM_FORCE_TEAMS; ++t)
@@ -62,6 +70,66 @@ void forceSampleFieldBaked(vec3 x, float iso, out uint bestTeam, out float bestP
         if (t != bestTeam)
             secondPhi = max(secondPhi, phi[t]);
     F = bestPhi - forceOpposingBound(iso, secondPhi);
+}
+
+// The tier-dispatched primitives the crossing logic runs on: bisection F, wall diff, the wall-fade
+// team sample, and the two finite-difference normals. Baked = 1-2 texture taps per evaluation.
+float shellSurfaceF(vec3 x, uint team, float iso, bool sampledTier)
+{
+    if (!sampledTier)
+        return forceSurfaceForTeam(x, team, iso);
+    float phi[NUM_FORCE_TEAMS];
+    forceReadBakedPhi(x, phi);
+    float opposing = 0.0;
+    for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
+        if (t != team)
+            opposing = max(opposing, phi[t]);
+    return phi[team] - forceOpposingBound(iso, opposing);
+}
+
+float shellTeamDiff(vec3 x, uint teamA, uint teamB, bool sampledTier)
+{
+    if (!sampledTier)
+        return forceTeamDiff(x, teamA, teamB);
+    float phi[NUM_FORCE_TEAMS];
+    forceReadBakedPhi(x, phi);
+    return phi[teamA] - phi[teamB];
+}
+
+void shellTeamSample(vec3 x, uint team, bool sampledTier, out float own, out float opposing)
+{
+    if (!sampledTier)
+    {
+        forceTeamSample(x, team, own, opposing);
+        return;
+    }
+    float phi[NUM_FORCE_TEAMS];
+    forceReadBakedPhi(x, phi);
+    own = phi[team];
+    opposing = 0.0;
+    for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
+        if (t != team)
+            opposing = max(opposing, phi[t]);
+}
+
+vec3 shellSurfaceNormal(vec3 x, uint team, float iso, float h, bool sampledTier)
+{
+    const vec2 k = vec2(1.0, -1.0);
+    vec3 grad = k.xyy * shellSurfaceF(x + k.xyy * h, team, iso, sampledTier)
+              + k.yyx * shellSurfaceF(x + k.yyx * h, team, iso, sampledTier)
+              + k.yxy * shellSurfaceF(x + k.yxy * h, team, iso, sampledTier)
+              + k.xxx * shellSurfaceF(x + k.xxx * h, team, iso, sampledTier);
+    return -normalize(grad + vec3(0.0, 1e-6, 0.0));
+}
+
+vec3 shellWallNormal(vec3 x, uint teamA, uint teamB, float h, bool sampledTier)
+{
+    const vec2 k = vec2(1.0, -1.0);
+    vec3 grad = k.xyy * shellTeamDiff(x + k.xyy * h, teamA, teamB, sampledTier)
+              + k.yyx * shellTeamDiff(x + k.yyx * h, teamA, teamB, sampledTier)
+              + k.yxy * shellTeamDiff(x + k.yxy * h, teamA, teamB, sampledTier)
+              + k.xxx * shellTeamDiff(x + k.xxx * h, teamA, teamB, sampledTier);
+    return normalize(grad + vec3(0.0, 1e-6, 0.0));
 }
 
 // The march's field sample: the sampled tier reads the baked volume, everything else accumulates
@@ -167,14 +235,8 @@ void main()
     forceMarchSample(sampledTier, rayOrigin + rayDir * t0, iso, bestTeam, bestPhi, secondPhi, F);
     // "Inside a bubble" is a property of the CAMERA, not of this box's entry point: a proxy whose
     // box begins inside the merged field must style the exit it finds as a backface, not a dome.
-    bool cameraInsideField = F > 0.0;
-    if (t0 > 0.0 && cameraInsideField)
-    {
-        uint originTeam;
-        float originBest, originSecond, originF;
-        forceMarchSample(sampledTier, rayOrigin, iso, originTeam, originBest, originSecond, originF);
-        cameraInsideField = originF > 0.0;
-    }
+    // The camera is ONE point per frame, evaluated on the CPU (buildUboForce) — never re-sampled here.
+    const bool cameraInsideField = t0 > 0.0 ? u_forceBake2.w > 0.5 : F > 0.0;
     uint prevTeam = bestTeam;
     float tPrev = t0;
     float fPrev = F;
@@ -208,7 +270,7 @@ void main()
                 for (int b = 0; b < 6; ++b)
                 {
                     const float mid = (lo + hi) * 0.5;
-                    const float fm = forceSurfaceForTeam(rayOrigin + rayDir * mid, hitTeam, iso);
+                    const float fm = shellSurfaceF(rayOrigin + rayDir * mid, hitTeam, iso, sampledTier);
                     if ((fm > 0.0) == entryCrossing) hi = mid; else lo = mid;
                 }
                 tHit = (lo + hi) * 0.5;
@@ -222,13 +284,13 @@ void main()
                 for (int b = 0; b < 6; ++b)
                 {
                     const float mid = (lo + hi) * 0.5;
-                    if (forceTeamDiff(rayOrigin + rayDir * mid, prevTeam, bestTeam) > 0.0) lo = mid; else hi = mid;
+                    if (shellTeamDiff(rayOrigin + rayDir * mid, prevTeam, bestTeam, sampledTier) > 0.0) lo = mid; else hi = mid;
                 }
                 tWall = (lo + hi) * 0.5;
                 // The pane exists where BOTH pressed fields are above iso; fade it out toward the
                 // rim analytically (also rejects spurious flips between weak far-apart fields).
                 float wallOwn, wallOpposing;
-                forceTeamSample(rayOrigin + rayDir * tWall, prevTeam, wallOwn, wallOpposing);
+                shellTeamSample(rayOrigin + rayDir * tWall, prevTeam, sampledTier, wallOwn, wallOpposing);
                 wallFade = smoothstep(iso, iso * 1.3, min(wallOwn, wallOpposing));
                 if (wallFade <= 0.001)
                     tWall = -1.0;
@@ -266,9 +328,13 @@ void main()
                     const uint ownTeam = asSkin ? wallSkinTeam : prevTeam;
                     if (forceDominantEmitter(rayOrigin + rayDir * tWall, ownTeam) == v_emitterIdx)
                     {
+                        const float h = forceShadeNormalH(v_emitterIdx);
+                        const vec3 wallPos = rayOrigin + rayDir * tWall;
                         const vec4 layer = asSkin
-                            ? forceShadeHit(rayOrigin, rayDir, tWall, wallSkinTeam, cameraInsideField, sceneDist, v_emitterIdx)
-                            : forceShadeWall(rayOrigin, rayDir, tWall, prevTeam, bestTeam, wallFade, v_emitterIdx);
+                            ? forceShadeHit(rayOrigin, rayDir, tWall, wallSkinTeam, cameraInsideField, sceneDist, v_emitterIdx,
+                                shellSurfaceNormal(wallPos, wallSkinTeam, iso, h, sampledTier))
+                            : forceShadeWall(rayOrigin, rayDir, tWall, prevTeam, bestTeam, wallFade, v_emitterIdx,
+                                shellWallNormal(wallPos, prevTeam, bestTeam, h, sampledTier));
                         accumColor += (1.0 - accumAlpha) * layer.rgb;
                         accumAlpha += (1.0 - accumAlpha) * layer.a;
                         ++numShaded;
@@ -279,7 +345,8 @@ void main()
                 {
                     if (forceDominantEmitter(rayOrigin + rayDir * tHit, hitTeam) == v_emitterIdx)
                     {
-                        const vec4 layer = forceShadeHit(rayOrigin, rayDir, tHit, hitTeam, cameraInsideField, sceneDist, v_emitterIdx);
+                        const vec4 layer = forceShadeHit(rayOrigin, rayDir, tHit, hitTeam, cameraInsideField, sceneDist, v_emitterIdx,
+                            shellSurfaceNormal(rayOrigin + rayDir * tHit, hitTeam, iso, forceShadeNormalH(v_emitterIdx), sampledTier));
                         accumColor += (1.0 - accumAlpha) * layer.rgb;
                         accumAlpha += (1.0 - accumAlpha) * layer.a;
                         ++numShaded;
