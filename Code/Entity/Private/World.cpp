@@ -934,10 +934,17 @@ oc::shared_ptr<const EntitySpawnTemplate> World::getOrBuildPrefabTemplate(const 
 
 EntityPtr World::spawnAssetFile(const oc::string& path, const Transform& base, bool overrideDefaultTransform)
 {
-    // Spawning from a path resolves it against the working directory (Assets/); spawns happen on
-    // the main thread and on jobs alike, so the query is allowed either way.
-    const oc::string relativePath = FileSystem::relativePath(path, oc::string(), /*allowMainThread*/ true);
-    const oc::string fileName = relativePath.empty() ? path : relativePath;
+    // Runtime callers pass Assets/-relative names ("Entities/Game/x.pre") — pure LEXICAL
+    // normalization, no filesystem hit: this runs PER SPAWN (the co-op wave trickle spawns dozens
+    // of units per frame through NpcSystem::service, and relativePath() resolves both sides
+    // through weakly_canonical — a per-spawn syscall on the main thread). Only an ABSOLUTE path
+    // (editor drag/drop) still resolves against the working directory; the registry lookup below
+    // normalizes its keys, so the lexical form matches it.
+    oc::string fileName = FileSystem::isAbsolute(path)
+        ? FileSystem::relativePath(path, oc::string(), /*allowMainThread*/ true)
+        : FileSystem::normalize(path);
+    if (fileName.empty())
+        fileName = path;
 
     const oc::string* rootName = Globals::assetRegistry.findRootForFile(fileName);
     oc::shared_ptr<const EntitySpawnTemplate> tmpl = rootName ? getOrBuildPrefabTemplate(*rootName) : buildFileTemplate(fileName);
