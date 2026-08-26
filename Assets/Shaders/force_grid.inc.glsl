@@ -1,5 +1,5 @@
 // Forcefield emitter hash grid — a third user of hash_grid.inc.glsl (after the light grid and the
-// GI probe grid), UNIFORM world-space 32 m cells (NOT camera-adaptive: gameplay force/query
+// GI probe grid), UNIFORM world-space FORCE_GRID_CELL_SIZE (16 m) cells (NOT camera-adaptive: gameplay force/query
 // evaluation happens anywhere in the world, not just near the camera). Each occupied cell stores a
 // fixed-capacity list of compact emitter indices; an emitter is inserted into every cell its reach
 // bounds overlap, so a point's containing cell lists every emitter whose compact support can reach
@@ -18,6 +18,14 @@
 #define FORCE_GRID_INC_GLSL
 
 #include "hash_grid.inc.glsl"
+
+// The FORCE grid's OWN cell size — finer than the shared GRID_SIZE (32) the light grid keeps:
+// every evaluation's gather cost scales with how many small emitters one cell collects, and a
+// swarm battle packs dozens of unit bubbles into a 32 m cell. 16 m quarters the gathered set;
+// the insert side (an emitter touches ~8x the cells) is a single-thread-per-emitter pass that
+// stays trivial next to any evaluation. Also the union march's empty-space skip granularity.
+#define FORCE_GRID_CELL_SIZE 16.0
+ivec3 forceGridPos(vec3 pos) { return ivec3(floor(pos / FORCE_GRID_CELL_SIZE)); }
 
 #ifndef FORCE_TABLE_BINDING
 #define FORCE_TABLE_BINDING 3

@@ -1,7 +1,7 @@
 #version 460
 
 // Forcefield grid insert: one thread per compacted live emitter, inserting its index into every
-// uniform 32 m hash-grid cell its directional reach bounds overlap. Big emitters (FORCE_FLAG_BIG,
+// uniform FORCE_GRID_CELL_SIZE (16 m) hash-grid cell its directional reach bounds overlap. Big emitters (FORCE_FLAG_BIG,
 // flagged by the CPU compaction against the big-reach threshold) ride the emitter buffer header's
 // global list instead and are skipped here. The table/data buffers were fill-cleared earlier in
 // this command buffer; the read side (shell FS, force/query compute) runs after the barrier.
@@ -35,8 +35,8 @@ void main()
     const vec3 halfExtents = vec3(side, side, (forward + back) * 0.5);
     const vec3 worldExtent = abs(basis[0]) * halfExtents.x + abs(basis[1]) * halfExtents.y + abs(basis[2]) * halfExtents.z;
 
-    const ivec3 minCell = getGridPos(center - worldExtent);
-    const ivec3 maxCell = getGridPos(center + worldExtent);
+    const ivec3 minCell = forceGridPos(center - worldExtent);
+    const ivec3 maxCell = forceGridPos(center + worldExtent);
     for (int x = minCell.x; x <= maxCell.x; ++x)
     for (int y = minCell.y; y <= maxCell.y; ++y)
     for (int z = minCell.z; z <= maxCell.z; ++z)

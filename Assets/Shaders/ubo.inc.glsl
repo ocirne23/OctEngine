@@ -208,7 +208,8 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec4 u_forceParams5; // ambient field: xy = planar world center, z = safe radius (m), w = max strength
     vec4 u_forceBake0;   // sampled shell tier: xyz = bake volume world min, w = tier reach threshold
     vec4 u_forceBake1;   // xyz = 1 / bake volume world size, w = tier enabled (0/1)
-    vec4 u_forceBake2;   // x = union march step size (m), y = union march max steps, zw unused
+    vec4 u_forceBake2;   // x = union march step size (m), y = union march max steps,
+                         // z = px per (radius/dist) — the union march's distance LOD, w unused
 };
 
 // View index selecting which u_views[] entry the convenience macros / reconstruction helpers read. Defaults

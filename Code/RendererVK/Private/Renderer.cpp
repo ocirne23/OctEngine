@@ -1043,7 +1043,8 @@ void Renderer::buildUboForce()
         ubo.forceBake1 = glm::vec4(0.0f);
     }
     ubo.forceBake2 = glm::vec4(glm::max(force.unionStepSize, 0.05f),
-        (float)glm::clamp(force.unionMaxSteps, 8, 512), 0.0f, 0.0f);
+        (float)glm::clamp(force.unionMaxSteps, 8, 512),
+        m_mipPixelScale * 0.5f, 0.0f); // z: px per (radius/dist) — the union march's distance LOD
 }
 
 // Terrain rendering + splat texture params; also reports the splat textures to the mip streamer.

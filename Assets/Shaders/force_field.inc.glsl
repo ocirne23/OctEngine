@@ -116,7 +116,7 @@ mat3 forceEmitterBasis(vec3 dir)
 //   for (uint k = 0u; k < n; ++k) { e = fe_emitters[forceCandidateIdx(cell, k)]; ... }
 
 #ifdef FORCE_GRID
-uint forceCandidateCell(vec3 x) { return forceFindCell(getGridPos(x)); }
+uint forceCandidateCell(vec3 x) { return forceFindCell(forceGridPos(x)); }
 uint forceNumCandidates(uint cell)
 {
     return fe_bigCount + (cell != FORCE_INVALID_CELL ? forceCellCount(cell) : 0u);

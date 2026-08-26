@@ -56,10 +56,12 @@ void main()
     if (t1 <= t0)
         discard;
 
-    // World-space step size (u_forceBake2.x), hard-capped (u_forceBake2.y): the union interval can
-    // span several disjoint bubbles, so the step count follows its LENGTH instead of being a fixed
-    // budget squeezed over it.
-    const int steps = clamp(int((t1 - t0) / u_forceBake2.x), 4, int(u_forceBake2.y));
+    // World-space step size (u_forceBake2.x), growing with DISTANCE so a far pixel never marches
+    // finer than ~2 px of world size (u_forceBake2.z = px per radius/dist), hard-capped
+    // (u_forceBake2.y): the union interval can span several disjoint bubbles, so the step count
+    // follows its LENGTH instead of being a fixed budget squeezed over it.
+    const float stepSize = max(u_forceBake2.x, 2.0 * t0 / max(u_forceBake2.z, 1.0));
+    const int steps = clamp(int((t1 - t0) / stepSize), 4, int(u_forceBake2.y));
     const float dt = (t1 - t0) / float(steps);
     uint bestTeam;
     float bestPhi, secondPhi, F;
@@ -81,7 +83,28 @@ void main()
     for (int i = 1; i <= steps && numShaded < 3; ++i)
     {
         const float t = t0 + dt * float(i);
-        forceSampleField(rayOrigin + rayDir * t, iso, bestTeam, bestPhi, secondPhi, F);
+        bool sampledEmpty = false;
+#ifdef FORCE_GRID
+        // EMPTY-SPACE SKIP: a cell with NO candidates is EXACTLY zero field (the grid insert
+        // covers every support) — provable, not heuristic — so the sample's result is known
+        // without accumulating, and after the crossing logic below the index jumps past the
+        // cell's exit. Disabled with big emitters live (they bypass the grid) or an ambient
+        // field on (it exists everywhere).
+        if (fe_bigCount == 0u && u_forceParams4.z <= 0.0)
+        {
+            const uint cell = forceCandidateCell(rayOrigin + rayDir * t);
+            if (cell == FORCE_INVALID_CELL || forceCellCount(cell) == 0u)
+            {
+                sampledEmpty = true;
+                bestTeam = prevTeam; // never a spurious team flip through empty space
+                bestPhi = 0.0;
+                secondPhi = 0.0;
+                F = -forceOpposingBound(iso, 0.0);
+            }
+        }
+#endif
+        if (!sampledEmpty)
+            forceSampleField(rayOrigin + rayDir * t, iso, bestTeam, bestPhi, secondPhi, F);
         const bool entryCrossing = F > 0.0;
         const bool surfaceCrossing = entryCrossing != (fPrev > 0.0);
         const bool teamFlip = bestTeam != prevTeam && (entryCrossing || fPrev > 0.0);
@@ -176,6 +199,26 @@ void main()
         prevTeam = bestTeam;
         tPrev = t;
         fPrev = F;
+#ifdef FORCE_GRID
+        if (sampledEmpty)
+        {
+            // Jump the INDEX past the empty cell's exit (uniform dt preserved, so the refinement
+            // brackets stay one step wide), and move the bracket's start to the exit — the whole
+            // cell is provably zero, and a bracket spanning the skipped stretch would cost the
+            // 6-step bisection its accuracy at the next bubble's entry.
+            const vec3 p = rayOrigin + rayDir * t;
+            const vec3 farBound = (floor(p / FORCE_GRID_CELL_SIZE)
+                + step(vec3(0.0), rayDir)) * FORCE_GRID_CELL_SIZE;
+            const vec3 safeDir = rayDir + vec3(equal(rayDir, vec3(0.0))) * 1e-8;
+            const vec3 tBounds = (farBound - rayOrigin) / safeDir;
+            const float tExit = min(min(min(tBounds.x, tBounds.y), tBounds.z), t1);
+            if (tExit > t)
+            {
+                i = max(i, int((tExit - t0) / dt)); // ++i lands on the first sample past the exit
+                tPrev = tExit; // still inside the empty cell: F there is the same known negative
+            }
+        }
+#endif
     }
     if (accumAlpha <= 0.002 && dot(accumColor, accumColor) < 1e-6)
         discard;
