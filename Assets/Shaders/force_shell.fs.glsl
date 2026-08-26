@@ -16,6 +16,10 @@
 #include "force_field.inc.glsl" // declares the emitter buffer at FORCE_EMITTERS_BINDING (1)
 
 layout (binding = 2) uniform sampler2D u_gbufferDepth;
+// The SAMPLED SHELL TIER's field volumes (force_shellbake.cs.glsl): every team's phi, baked over
+// the fitted u_forceBake0/1 box. Clamp-to-border transparent black = zero field outside.
+layout (binding = 5) uniform sampler3D u_shellVolumeA; // phi[0..3]
+layout (binding = 6) uniform sampler3D u_shellVolumeB; // phi[4..7]
 
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 
@@ -152,6 +156,39 @@ vec4 forceShadeHit(vec3 rayOrigin, vec3 rayDir, float tHit, uint hitTeam, bool c
     return vec4(color * alpha + color * 0.15 * layerScale, alpha);
 }
 
+// forceSampleField's semantics from the BAKED volume: two trilinear taps instead of the analytic
+// candidate loop — the sampled tier's per-step cost is flat no matter how many emitters overlap.
+// Only large emitters march this (their surfaces are far larger than a texel, so the trilinear
+// reconstruction error is centimetres); hit refinement, normals and shading stay ANALYTIC.
+void forceSampleFieldBaked(vec3 x, float iso, out uint bestTeam, out float bestPhi, out float secondPhi, out float F)
+{
+    const vec3 uvw = (x - u_forceBake0.xyz) * u_forceBake1.xyz;
+    const vec4 a = texture(u_shellVolumeA, uvw);
+    const vec4 b = texture(u_shellVolumeB, uvw);
+    float phi[MAX_FORCE_TEAMS];
+    phi[0] = a.x; phi[1] = a.y; phi[2] = a.z; phi[3] = a.w;
+    phi[4] = b.x; phi[5] = b.y; phi[6] = b.z; phi[7] = b.w;
+    bestTeam = 0u;
+    bestPhi = phi[0];
+    for (uint t = 1u; t < MAX_FORCE_TEAMS; ++t)
+        if (phi[t] > bestPhi) { bestPhi = phi[t]; bestTeam = t; }
+    secondPhi = 0.0;
+    for (uint t = 0u; t < MAX_FORCE_TEAMS; ++t)
+        if (t != bestTeam)
+            secondPhi = max(secondPhi, phi[t]);
+    F = bestPhi - forceOpposingBound(iso, secondPhi);
+}
+
+// The march's field sample: the sampled tier reads the baked volume, everything else accumulates
+// analytically. Per-instance uniform branch (the whole fragment wave takes one side).
+void forceMarchSample(bool sampledTier, vec3 x, float iso, out uint bestTeam, out float bestPhi, out float secondPhi, out float F)
+{
+    if (sampledTier)
+        forceSampleFieldBaked(x, iso, bestTeam, bestPhi, secondPhi, F);
+    else
+        forceSampleField(x, iso, bestTeam, bestPhi, secondPhi, F);
+}
+
 // Heat gradient for the density debug view: blue -> cyan -> green -> yellow -> red -> white.
 vec3 forceHeatColor(float t)
 {
@@ -258,12 +295,25 @@ void main()
         return;
     }
 
-    // Fixed-step march compositing up to two crossings of F (front shell + the surface behind it).
-    const int steps = int(u_forceParams1.w);
+    // SAMPLED TIER: large emitters march the baked field volume — two trilinear taps per sample
+    // instead of the analytic candidate loop, so their cost stops scaling with emitter density.
+    // Refinement/normals/shading below remain analytic (crisp rims, exact ownership).
+    const bool sampledTier = u_forceBake1.w > 0.5 && e.posReach.w >= u_forceBake0.w;
+
+    // March compositing up to two crossings of F (front shell + the surface behind it). The step
+    // COUNT tapers with the proxy's projected size (u_forceParams2.w — see buildUboForce): a small
+    // or distant bubble pays a handful of steps instead of the full budget; the floor of 8 keeps
+    // thin shells from being stepped over entirely.
+    int steps = int(u_forceParams1.w);
+    if (u_forceParams2.w > 0.0)
+    {
+        const float lod = halfExtents.x / max(distance(rayOrigin, center), 1e-3) * u_forceParams2.w;
+        steps = clamp(int(float(steps) * min(lod, 1.0)), 8, steps);
+    }
     const float dt = (t1 - t0) / float(steps);
     uint bestTeam;
     float bestPhi, secondPhi, F;
-    forceSampleField(rayOrigin + rayDir * t0, iso, bestTeam, bestPhi, secondPhi, F);
+    forceMarchSample(sampledTier, rayOrigin + rayDir * t0, iso, bestTeam, bestPhi, secondPhi, F);
     // "Inside a bubble" is a property of the CAMERA, not of this box's entry point: a proxy whose
     // box begins inside the merged field must style the exit it finds as a backface, not a dome.
     bool cameraInsideField = F > 0.0;
@@ -271,7 +321,7 @@ void main()
     {
         uint originTeam;
         float originBest, originSecond, originF;
-        forceSampleField(rayOrigin, iso, originTeam, originBest, originSecond, originF);
+        forceMarchSample(sampledTier, rayOrigin, iso, originTeam, originBest, originSecond, originF);
         cameraInsideField = originF > 0.0;
     }
     uint prevTeam = bestTeam;
@@ -283,7 +333,7 @@ void main()
     for (int i = 1; i <= steps && numShaded < 3; ++i)
     {
         const float t = t0 + dt * float(i);
-        forceSampleField(rayOrigin + rayDir * t, iso, bestTeam, bestPhi, secondPhi, F);
+        forceMarchSample(sampledTier, rayOrigin + rayDir * t, iso, bestTeam, bestPhi, secondPhi, F);
         const bool entryCrossing = F > 0.0;
         const bool surfaceCrossing = entryCrossing != (fPrev > 0.0);
         // Winning team flipped with at least one endpoint inside: the ray crossed the equilibrium

@@ -699,6 +699,8 @@ private:
     oc::vector<oc::pair<uint32, uint32>> m_retiredForceQuerySlots;
     oc::vector<glm::ivec4> m_forceBakeBricks; // this frame's baked-field brick set (main-thread)
     float m_forceBakeSampleY = 1.0f;
+    bool m_forceShellBakeActive = false; // a large emitter qualified for the sampled shell tier
+                                         // this frame (buildUboForce fit the volume)
     ForceFieldParams m_forceFieldParams;
     PerWorker<oc::vector<DebugLinePipeline::LineVertex>> m_debugLineVerts; // per-worker CPU staging, merged in present()
     oc::vector<DebugLinePipeline::LineVertex> m_debugLineMergedVerts;

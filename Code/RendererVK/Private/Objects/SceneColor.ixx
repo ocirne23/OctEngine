@@ -31,6 +31,19 @@ public:
     // Depth-prepass-reuse variant: same colour attachment, depth = the G-BUFFER depth bound READ-ONLY.
     vk::RenderPass  getReuseRenderPass() const { return m_reuseRenderPass; }
     vk::Framebuffer getReuseFramebuffer(uint32 eye) const { return m_reuseFramebuffers[eye]; }
+    // SPLIT-instance variants: the Renderer records the forward pass as one instance PER STAGE so
+    // the GPU profiler can bracket each stage (timestamps are illegal inside a secondaries
+    // subpass). stage 0 = first (clears, STORES the depth for the followers), 1 = middle (loads,
+    // stores), 2 = last (loads, hands colour to TAA via SHADER_READ_ONLY, drops the depth) — all
+    // COMPATIBLE with the main/reuse pass (identical dependency arrays, only load/store ops and
+    // layouts differ), so the cached secondaries, the pipelines and the framebuffers serve every
+    // variant. A frame with a single active stage uses the original pass instead (clear + final
+    // transition in one instance). Inter-instance attachment hazards are explicit barriers in the
+    // primary (the deps must stay identical for compatibility, so they cannot carry them).
+    vk::RenderPass getSplitRenderPass(int stage, bool reuse) const
+    {
+        return reuse ? m_reuseSplitPasses[stage] : m_splitPasses[stage];
+    }
     vk::ImageView   getColorView() const   { return m_colorLayerViews[0]; } // 2D, layer 0 (sampling)
     vk::ImageView   getColorLayerView(uint32 layer) const { return m_colorLayerViews[layer]; }
     vk::Image       getColorImage() const  { return m_colorImage; }
@@ -57,5 +70,7 @@ private:
     oc::array<vk::Framebuffer, 2> m_framebuffers{}; // one single-layer framebuffer per eye
     vk::RenderPass m_reuseRenderPass;
     oc::array<vk::Framebuffer, 2> m_reuseFramebuffers{}; // per eye, depth = the G-buffer depth (read-only)
+    oc::array<vk::RenderPass, 3> m_splitPasses{};      // first/middle/last (see getSplitRenderPass)
+    oc::array<vk::RenderPass, 3> m_reuseSplitPasses{};
     vk::Sampler m_sampler;
 };

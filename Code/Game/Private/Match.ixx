@@ -222,9 +222,9 @@ private:
     glm::vec3 m_waveOrigin{ 0.0f }; // the wave's cluster center on the spawn ring
     glm::vec3 m_waveDest{ 0.0f };   // the Base's near face on the incoming side
     // Tweaks ("Game/Coop", Synced):
-    float m_waveFirstDelay = 90.0f;
-    float m_waveInterval = 120.0f;
-    int m_waveSize = 80;          // units in wave 1 (mostly swarm bodies — see rollWaveType)
+    float m_waveFirstDelay = 10.0f;
+    float m_waveInterval = 40.0f;
+    int m_waveSize = 400;          // units in wave 1 (mostly swarm bodies — see rollWaveType)
     float m_waveGrowth = 40.0f;   // extra units per subsequent wave
     int m_waveMaxAlive = 3000;    // total AI units cap (ambient + waves)
     int m_ambientUnits = 400;     // units scattered over the map at world start

@@ -7,9 +7,110 @@ import :ForceFieldPipeline;
 import :GraphicsPipeline;
 import :ComputePipeline;
 import :Device;
+import :Allocator;
 import :Layout;
 
 using namespace RendererVKLayout;
+
+ForceFieldPipeline::~ForceFieldPipeline()
+{
+    destroyShellVolume();
+}
+
+// The sampled shell tier's two field volumes (phi[0..3]/phi[4..7], RGBA16F) + the sampler the
+// shell FS reads them with. One set for all frames in flight: the bake's acquire barrier
+// serializes prev-frame fragment reads against this frame's compute writes on the queue.
+void ForceFieldPipeline::createShellVolume()
+{
+    vk::Device vkDevice = Globals::device.getDevice();
+    for (int i = 0; i < 2; ++i)
+    {
+        const vk::ImageCreateInfo info{
+            .imageType = vk::ImageType::e3D,
+            .format = vk::Format::eR16G16B16A16Sfloat,
+            .extent = { FORCE_SHELL_VOLUME_X, FORCE_SHELL_VOLUME_Y, FORCE_SHELL_VOLUME_Z },
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = vk::SampleCountFlagBits::e1,
+            .tiling = vk::ImageTiling::eOptimal,
+            .usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled,
+            .sharingMode = vk::SharingMode::eExclusive,
+            .initialLayout = vk::ImageLayout::eUndefined,
+        };
+        if (!Globals::gpuAllocator.createImage(info, m_shellVolumeImage[i], m_shellVolumeMemory[i],
+            i == 0 ? "ForceShellVolumeA" : "ForceShellVolumeB"))
+        {
+            assert(false && "force shell volume image");
+            return;
+        }
+        const vk::ImageViewCreateInfo viewInfo{
+            .image = m_shellVolumeImage[i],
+            .viewType = vk::ImageViewType::e3D,
+            .format = vk::Format::eR16G16B16A16Sfloat,
+            .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 },
+        };
+        auto viewResult = vkDevice.createImageView(viewInfo);
+        if (viewResult.result != vk::Result::eSuccess) { assert(false && "force shell volume view"); return; }
+        m_shellVolumeView[i] = viewResult.value;
+    }
+    const vk::SamplerCreateInfo samplerInfo{
+        .magFilter = vk::Filter::eLinear,
+        .minFilter = vk::Filter::eLinear,
+        .mipmapMode = vk::SamplerMipmapMode::eNearest,
+        // Outside the fitted volume = ZERO field (transparent black border) — correct by
+        // construction: the volume covers every sampled-tier emitter's support.
+        .addressModeU = vk::SamplerAddressMode::eClampToBorder,
+        .addressModeV = vk::SamplerAddressMode::eClampToBorder,
+        .addressModeW = vk::SamplerAddressMode::eClampToBorder,
+        .borderColor = vk::BorderColor::eFloatTransparentBlack,
+    };
+    auto samplerResult = vkDevice.createSampler(samplerInfo);
+    if (samplerResult.result != vk::Result::eSuccess) { assert(false && "force shell volume sampler"); return; }
+    m_shellVolumeSampler = samplerResult.value;
+
+    // One-time GENERAL transition + zero-clear (the images stay GENERAL for life: compute writes
+    // and fragment samples both use it, so the per-frame reuse needs no layout traffic) — a
+    // never-yet-baked read decodes as zero field.
+    CommandBuffer init;
+    init.initialize(vk::CommandBufferLevel::ePrimary);
+    vk::CommandBuffer cmd = init.begin(true);
+    for (int i = 0; i < 2; ++i)
+    {
+        vk::ImageMemoryBarrier2 toGeneral{
+            .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
+            .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+            .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+            .oldLayout = vk::ImageLayout::eUndefined,
+            .newLayout = vk::ImageLayout::eGeneral,
+            .image = m_shellVolumeImage[i],
+            .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 },
+        };
+        cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &toGeneral });
+        const vk::ClearColorValue zero{};
+        const vk::ImageSubresourceRange range{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
+        cmd.clearColorImage(m_shellVolumeImage[i], vk::ImageLayout::eGeneral, &zero, 1, &range);
+    }
+    init.end();
+    init.submitGraphics();
+    (void)Globals::device.graphicsQueueWaitIdle();
+}
+
+void ForceFieldPipeline::destroyShellVolume()
+{
+    vk::Device vkDevice = Globals::device.getDevice();
+    if (m_shellVolumeSampler)
+        vkDevice.destroySampler(m_shellVolumeSampler);
+    m_shellVolumeSampler = nullptr;
+    for (int i = 0; i < 2; ++i)
+    {
+        if (m_shellVolumeView[i])
+            vkDevice.destroyImageView(m_shellVolumeView[i]);
+        m_shellVolumeView[i] = nullptr;
+        Globals::gpuAllocator.destroyImage(m_shellVolumeImage[i], m_shellVolumeMemory[i]);
+        m_shellVolumeImage[i] = nullptr;
+        m_shellVolumeMemory[i] = nullptr;
+    }
+}
 
 void ForceFieldPipeline::buildDrawLayout(GraphicsPipelineLayout& layout)
 {
@@ -38,6 +139,9 @@ void ForceFieldPipeline::buildDrawLayout(GraphicsPipelineLayout& layout)
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 2, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 3, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 4, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
+    // 5/6: the sampled shell tier's field volumes (see force_shellbake.cs.glsl).
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 5, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 6, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
 
     layout.pushConstantRanges.push_back(vk::PushConstantRange{
         .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, .offset = 0, .size = sizeof(uint32) });
@@ -54,6 +158,22 @@ void ForceFieldPipeline::buildComputeLayout(ComputePipelineLayout& layout, const
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     for (uint32 binding : { 1u, 3u, 4u, 5u, 6u })
         b.push_back(vk::DescriptorSetLayoutBinding{ .binding = binding, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
+}
+
+// The shell-volume bake's set shape: the common compute layout with STORAGE IMAGES at 5/6 (the
+// two field volumes) instead of buffers.
+void ForceFieldPipeline::buildShellBakeLayout(ComputePipelineLayout& layout)
+{
+    layout.computeShaderDebugFilePath = "Shaders/force_shellbake.cs.glsl";
+    layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
+    if (m_useGrid)
+        layout.defines.push_back({ "FORCE_GRID", "" });
+    auto& b = layout.descriptorSetLayoutBindings;
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
+    for (uint32 binding : { 1u, 3u, 4u })
+        b.push_back(vk::DescriptorSetLayoutBinding{ .binding = binding, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
+    for (uint32 binding : { 5u, 6u })
+        b.push_back(vk::DescriptorSetLayoutBinding{ .binding = binding, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
 }
 
 void ForceFieldPipeline::createGridBuffers()
@@ -83,17 +203,20 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
     buildDrawLayout(drawLayout);
     m_pipeline.initialize(sceneRenderPass, drawLayout);
 
-    ComputePipelineLayout gridLayout, forceLayout, queryLayout, bakeLayout;
+    ComputePipelineLayout gridLayout, forceLayout, queryLayout, bakeLayout, shellBakeLayout;
     buildComputeLayout(gridLayout, "Shaders/force_grid.cs.glsl");
     buildComputeLayout(forceLayout, "Shaders/force_emitter.cs.glsl");
     buildComputeLayout(queryLayout, "Shaders/force_query.cs.glsl");
     buildComputeLayout(bakeLayout, "Shaders/force_bake.cs.glsl");
+    buildShellBakeLayout(shellBakeLayout);
     m_gridPipeline.initialize(gridLayout);
     m_emitterForcePipeline.initialize(forceLayout);
     m_queryPipeline.initialize(queryLayout);
     m_bakePipeline.initialize(bakeLayout);
+    m_shellBakePipeline.initialize(shellBakeLayout);
 
     createGridBuffers();
+    createShellVolume();
 
     for (uint32 i = 0; i < NUM_FRAMES_IN_FLIGHT; ++i)
     {
@@ -135,6 +258,10 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
         m_mappedIndirect[i][QUERY_DISPATCH_OFFSET + 2] = 1;
         m_mappedIndirect[i][BAKE_DISPATCH_OFFSET + 1] = 1;
         m_mappedIndirect[i][BAKE_DISPATCH_OFFSET + 2] = 1;
+        // Shell-volume bake: y/z group counts are the fixed volume dims; x toggles per frame in
+        // upload (0 = tier inactive — the cached CB's dispatch becomes a no-op).
+        m_mappedIndirect[i][SHELLBAKE_DISPATCH_OFFSET + 1] = FORCE_SHELL_VOLUME_Y / FORCE_SHELL_VOLUME_GROUP;
+        m_mappedIndirect[i][SHELLBAKE_DISPATCH_OFFSET + 2] = FORCE_SHELL_VOLUME_Z / FORCE_SHELL_VOLUME_GROUP;
         m_indirectBuffers[i].flushMappedMemory(vk::WholeSize);
 
         // GPU-written, CPU-read ~2 frames later; zeroed so pre-first-frame reads decode as "no force
@@ -164,6 +291,7 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
         m_emitterForceSets[i].initialize(m_emitterForcePipeline.getDescriptorSetLayout());
         m_querySets[i].initialize(m_queryPipeline.getDescriptorSetLayout());
         m_bakeSets[i].initialize(m_bakePipeline.getDescriptorSetLayout());
+        m_shellBakeSets[i].initialize(m_shellBakePipeline.getDescriptorSetLayout());
     }
 }
 
@@ -173,11 +301,12 @@ void ForceFieldPipeline::reloadShaders(vk::RenderPass sceneRenderPass)
     buildDrawLayout(drawLayout);
     if (!m_pipeline.reloadShaders(sceneRenderPass, drawLayout))
         printf("ForceFieldPipeline: shell shader reload failed, keeping previous pipeline\n");
-    ComputePipelineLayout gridLayout, forceLayout, queryLayout, bakeLayout;
+    ComputePipelineLayout gridLayout, forceLayout, queryLayout, bakeLayout, shellBakeLayout;
     buildComputeLayout(gridLayout, "Shaders/force_grid.cs.glsl");
     buildComputeLayout(forceLayout, "Shaders/force_emitter.cs.glsl");
     buildComputeLayout(queryLayout, "Shaders/force_query.cs.glsl");
     buildComputeLayout(bakeLayout, "Shaders/force_bake.cs.glsl");
+    buildShellBakeLayout(shellBakeLayout);
     if (!m_gridPipeline.reloadShaders(gridLayout))
         printf("ForceFieldPipeline: grid shader reload failed, keeping previous pipeline\n");
     if (!m_emitterForcePipeline.reloadShaders(forceLayout))
@@ -186,12 +315,36 @@ void ForceFieldPipeline::reloadShaders(vk::RenderPass sceneRenderPass)
         printf("ForceFieldPipeline: query shader reload failed, keeping previous pipeline\n");
     if (!m_bakePipeline.reloadShaders(bakeLayout))
         printf("ForceFieldPipeline: bake shader reload failed, keeping previous pipeline\n");
+    if (!m_shellBakePipeline.reloadShaders(shellBakeLayout))
+        printf("ForceFieldPipeline: shell-volume bake shader reload failed, keeping previous pipeline\n");
 }
 
 void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu> slots,
     oc::span<const ForceQueryGpu> querySlots, oc::span<const glm::ivec4> bakeBricks,
-    float bakeSampleY, float bigReachThreshold)
+    float bakeSampleY, float bigReachThreshold, const ShellCull& shellCull)
 {
+    // Would this shell's ray-march draw be visible? Mirrors forceEmitterBounds (the proxy's
+    // bounding sphere): frustum test + projected-size floor. A culled shell still contributes
+    // its FIELD — it only moves into the non-drawn partition below.
+    const auto shellVisible = [&](const ForceEmitterGpu& e)
+    {
+        if (!shellCull.enabled)
+            return true;
+        const float R = e.posReach.w;
+        const float m = glm::abs(1.0f - 2.0f * e.dirFocus.w);
+        const float side = 0.5f * R * (1.0f + m) * e.outputParams.w * 1.03f;
+        const float forward = R * 1.02f, back = R * 0.02f;
+        const glm::vec3 center = glm::vec3(e.posReach) + glm::vec3(e.dirFocus) * ((forward - back) * 0.5f);
+        const float radius = glm::length(glm::vec3(side, side, (forward + back) * 0.5f));
+        if (!shellCull.frustum.sphereInFrustum(center, radius))
+            return false;
+        if (shellCull.minPixels <= 0.0f)
+            return true;
+        const float dist = glm::distance(center, shellCull.cameraPos);
+        if (dist <= radius)
+            return true; // the camera is inside the proxy: never size-cull
+        return radius * shellCull.pixelScale >= shellCull.minPixels * dist;
+    };
     ForceEmittersGpu* dst = m_mappedEmitters[frameIdx].data();
     uint32 count = 0;
     uint32 bigCount = 0;
@@ -220,11 +373,12 @@ void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu>
     const auto isActive = [&](uint32 slot) { return (slots[slot].teamFlags.y & FORCE_FLAG_ACTIVE) != 0u; };
     const auto isPassive = [&](uint32 slot) { return (slots[slot].teamFlags.y & FORCE_FLAG_PASSIVE) != 0u; };
     for (uint32 slot = 0; slot < (uint32)slots.size(); ++slot)
-        if (isActive(slot) && !isPassive(slot) && slots[slot].outputParams.y > 0.0f)
+        if (isActive(slot) && !isPassive(slot) && slots[slot].outputParams.y > 0.0f && shellVisible(slots[slot]))
             compact(slots[slot], slot, true);
     const uint32 drawCount = count;
     for (uint32 slot = 0; slot < (uint32)slots.size(); ++slot)
-        if (isActive(slot) && !isPassive(slot) && slots[slot].outputParams.y <= 0.0f)
+        if (isActive(slot) && !isPassive(slot)
+            && (slots[slot].outputParams.y <= 0.0f || !shellVisible(slots[slot])))
             compact(slots[slot], slot, true);
     const uint32 fieldCount = count;
     for (uint32 slot = 0; slot < (uint32)slots.size(); ++slot)
@@ -259,6 +413,8 @@ void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu>
     ind[EMITTER_DISPATCH_OFFSET] = (count + FORCE_SIM_GROUP_SIZE - 1) / FORCE_SIM_GROUP_SIZE; // + passive tail
     ind[QUERY_DISPATCH_OFFSET] = (numQueries + FORCE_SIM_GROUP_SIZE - 1) / FORCE_SIM_GROUP_SIZE;
     ind[BAKE_DISPATCH_OFFSET] = numBricks; // one 16x16 workgroup per brick
+    ind[SHELLBAKE_DISPATCH_OFFSET] = shellCull.bakeVolume
+        ? FORCE_SHELL_VOLUME_X / FORCE_SHELL_VOLUME_GROUP : 0; // 0 = tier inactive this frame
     m_indirectBuffers[frameIdx].flushMappedMemory(vk::WholeSize);
 }
 
@@ -338,6 +494,36 @@ void ForceFieldPipeline::recordCompute(CommandBuffer& commandBuffer, uint32 fram
         vkCb.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_bakePipeline.getPipelineLayout(), 0, 1, &bakeSet, 0, nullptr);
         vkCb.dispatchIndirect(m_indirectBuffers[frameIdx].getBuffer(), BAKE_DISPATCH_OFFSET * sizeof(uint32));
     }
+    { // the SAMPLED SHELL TIER's volume bake: one thread per voxel into the two field volumes.
+      // Acquire: the PREVIOUS frame's shell-fragment reads of the (single-set) volumes must finish
+      // before this frame's writes — an execution+layout-preserving image barrier on the queue.
+        oc::array<vk::ImageMemoryBarrier2, 2> acquire;
+        for (int i = 0; i < 2; ++i)
+            acquire[i] = vk::ImageMemoryBarrier2{
+                .srcStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
+                .srcAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
+                .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                .dstAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+                .oldLayout = vk::ImageLayout::eGeneral,
+                .newLayout = vk::ImageLayout::eGeneral,
+                .image = m_shellVolumeImage[i],
+                .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 },
+            };
+        vkCb.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = (uint32)acquire.size(), .pImageMemoryBarriers = acquire.data() });
+        vk::DescriptorSet shellBakeSet = m_shellBakeSets[frameIdx].getDescriptorSet();
+        oc::array<DescriptorSetUpdateInfo, 6> shellBakeUpdates{
+            DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(Ubo) } } },
+            DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_emitterBuffers[frameIdx]) } },
+            DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_gridTableBuffers[frameIdx]) } },
+            DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_gridDataBuffers[frameIdx]) } },
+            DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageImage, .imageInfos = { vk::DescriptorImageInfo{ .imageView = m_shellVolumeView[0], .imageLayout = vk::ImageLayout::eGeneral } } },
+            DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eStorageImage, .imageInfos = { vk::DescriptorImageInfo{ .imageView = m_shellVolumeView[1], .imageLayout = vk::ImageLayout::eGeneral } } },
+        };
+        vkCb.bindPipeline(vk::PipelineBindPoint::eCompute, m_shellBakePipeline.getPipeline());
+        commandBuffer.cmdUpdateDescriptorSets(m_shellBakePipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, shellBakeSet, shellBakeUpdates);
+        vkCb.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_shellBakePipeline.getPipelineLayout(), 0, 1, &shellBakeSet, 0, nullptr);
+        vkCb.dispatchIndirect(m_indirectBuffers[frameIdx].getBuffer(), SHELLBAKE_DISPATCH_OFFSET * sizeof(uint32));
+    }
 
     { // grid reads for the shell FS in the scene pass + readback visibility for the CPU
         oc::array<vk::MemoryBarrier2, 2> barriers{
@@ -383,13 +569,17 @@ void ForceFieldPipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameId
     DescriptorSet& set = m_drawSets[drawSlot(frameIdx, eye)];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
 
-    oc::array<DescriptorSetUpdateInfo, 5> updates{
+    oc::array<DescriptorSetUpdateInfo, 7> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(Ubo) } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_emitterBuffers[frameIdx].getBuffer(), .range = m_emitterBuffers[frameIdx].getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
             vk::DescriptorImageInfo{ .sampler = params.gbufferSampler, .imageView = params.gbufferDepthView, .imageLayout = params.gbufferDepthLayout } } },
         DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_gridTableBuffers[frameIdx].getBuffer(), .range = m_gridTableBuffers[frameIdx].getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_gridDataBuffers[frameIdx].getBuffer(), .range = m_gridDataBuffers[frameIdx].getSize() } } },
+        DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
+            vk::DescriptorImageInfo{ .sampler = m_shellVolumeSampler, .imageView = m_shellVolumeView[0], .imageLayout = vk::ImageLayout::eGeneral } } },
+        DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
+            vk::DescriptorImageInfo{ .sampler = m_shellVolumeSampler, .imageView = m_shellVolumeView[1], .imageLayout = vk::ImageLayout::eGeneral } } },
     };
     commandBuffer.cmdUpdateDescriptorSets(m_pipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, vkSet, updates);
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline.getPipeline());

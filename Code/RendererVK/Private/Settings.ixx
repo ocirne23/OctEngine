@@ -439,6 +439,16 @@ export struct ForceFieldParams
                                        // jaggies; 0 = hard crease. Queries use the same function, so
                                        // the gameplay inside-test always matches the drawn surface
     float geoGlowDistance = 0.5f;      // glow band where the shell intersects scene geometry (m)
+    // SHELL CULLING/LOD (desktop; VR skips the cull — the center frustum is the wrong eye's):
+    float minShellPixels = 3.0f;       // a shell whose projected proxy radius is under this skips
+                                       // the DRAW entirely (its field/readbacks stay live); 0 = off
+    float shellFullResPixels = 160.0f; // projected radius at/above which the march runs the full
+                                       // "March steps"; smaller shells taper linearly (floor 8)
+    float sampledShellReach = 12.0f;   // emitters with reach >= this march the BAKED shell volume
+                                       // (two trilinear taps/sample) instead of the analytic
+                                       // candidate loop — hits/normals/shading stay analytic.
+                                       // 0 = tier off. Small bubbles stay analytic: the fixed-size
+                                       // volume's resolution cannot resolve them
     float patternScale = 0.6f;       // animated surface pattern frequency (1/m)
     float patternSpeed = 0.3f;       // pattern scroll speed
     float patternIntensity = 0.5f;

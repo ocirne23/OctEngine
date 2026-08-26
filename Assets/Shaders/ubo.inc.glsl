@@ -206,6 +206,8 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                          // y = density range (field value mapping to white),
                          // z = ambient field slope (strength/m; <= 0 disables), w = ambient team
     vec4 u_forceParams5; // ambient field: xy = planar world center, z = safe radius (m), w = max strength
+    vec4 u_forceBake0;   // sampled shell tier: xyz = bake volume world min, w = tier reach threshold
+    vec4 u_forceBake1;   // xyz = 1 / bake volume world size, w = tier enabled (0/1)
 };
 
 // View index selecting which u_views[] entry the convenience macros / reconstruction helpers read. Defaults

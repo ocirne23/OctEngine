@@ -993,7 +993,10 @@ void Renderer::buildUboForce()
     ubo.forceParams1 = glm::vec4(glm::max(force.contactGlowIntensity, 0.0f), glm::max(force.contactGlowWidth, 1e-3f),
         glm::max(force.geoGlowDistance, 0.0f), (float)glm::clamp(force.marchSteps, 8, 256));
     ubo.forceParams2 = glm::vec4(glm::max(force.patternScale, 0.0f), force.patternSpeed,
-        glm::max(force.patternIntensity, 0.0f), 0.0f); // w unused (force gain is CPU-side)
+        glm::max(force.patternIntensity, 0.0f),
+        // w: the shell march's LOD scale — (px per radius/dist) / full-detail radius, so the FS's
+        // steps taper as side/dist * this (clamped <= 1); 0 disables the taper.
+        m_mipPixelScale * 0.5f / glm::max(force.shellFullResPixels, 1.0f));
     ubo.forceParams3 = glm::vec4(glm::clamp(force.interiorAlpha, 0.0f, 1.0f),
         glm::clamp(force.backfaceAlpha, 0.0f, 1.0f), glm::clamp(force.contactWallAlpha, 0.0f, 1.0f),
         glm::clamp(force.junctionSmoothing, 0.0f, 2.0f));
@@ -1001,6 +1004,41 @@ void Renderer::buildUboForce()
         force.ambientSlope, (float)glm::min(force.ambientTeam, RendererVKLayout::MAX_FORCE_TEAMS - 1));
     ubo.forceParams5 = glm::vec4(force.ambientCenter, glm::max(force.ambientSafeRadius, 0.0f),
         glm::max(force.ambientMaxStrength, 0.0f));
+
+    // SAMPLED SHELL TIER: fit the bake volume over the union of the LARGE drawable emitters'
+    // support boxes (+ margin) — the FIXED texel grid's resolution then self-adjusts to the active
+    // spread. No qualifying emitter (or tier off) = no bake dispatch and the FS branch stays cold.
+    glm::vec3 bakeLo(FLT_MAX), bakeHi(-FLT_MAX);
+    if (force.sampledShellReach > 0.0f)
+        for (const RendererVKLayout::ForceEmitterGpu& e : m_forceEmitters)
+        {
+            if ((e.teamFlags.y & RendererVKLayout::FORCE_FLAG_ACTIVE) == 0u
+                || (e.teamFlags.y & RendererVKLayout::FORCE_FLAG_PASSIVE) != 0u
+                || e.outputParams.y <= 0.0f || e.posReach.w < force.sampledShellReach)
+                continue;
+            // The proxy's support AABB (the forceEmitterBounds rule): the output line +- side.
+            const float R = e.posReach.w;
+            const float m = glm::abs(1.0f - 2.0f * e.dirFocus.w);
+            const float side = 0.5f * R * (1.0f + m) * e.outputParams.w * 1.03f;
+            const glm::vec3 a = glm::vec3(e.posReach);
+            const glm::vec3 b = a + glm::vec3(e.dirFocus) * R;
+            bakeLo = glm::min(bakeLo, glm::min(a, b) - side);
+            bakeHi = glm::max(bakeHi, glm::max(a, b) + side);
+        }
+    m_forceShellBakeActive = bakeLo.x <= bakeHi.x;
+    if (m_forceShellBakeActive)
+    {
+        const glm::vec3 margin = (bakeHi - bakeLo) * 0.02f + 1.0f; // ~2 filter texels of slack
+        bakeLo -= margin;
+        bakeHi += margin;
+        ubo.forceBake0 = glm::vec4(bakeLo, force.sampledShellReach);
+        ubo.forceBake1 = glm::vec4(1.0f / glm::max(bakeHi - bakeLo, glm::vec3(1e-3f)), 1.0f);
+    }
+    else
+    {
+        ubo.forceBake0 = glm::vec4(0.0f, 0.0f, 0.0f, FLT_MAX); // no emitter reaches the threshold
+        ubo.forceBake1 = glm::vec4(0.0f);
+    }
 }
 
 // Terrain rendering + splat texture params; also reports the splat textures to the mip streamer.
@@ -1545,8 +1583,18 @@ void Renderer::present()
         m_particleSpawnRequests.clear();
         m_decalPipeline.upload(frameIdx, m_decalCounter);
         // Compacts the ACTIVE emitter slots + uploads query positions (fence-safe here).
+        ForceFieldPipeline::ShellCull shellCull;
+        if (!isVrEnabled()) // one center frustum cannot serve both VR eyes
+        {
+            shellCull.enabled = true;
+            shellCull.frustum = Frustum(getCenterViewProj());
+            shellCull.cameraPos = m_cameraPos;
+            shellCull.pixelScale = m_mipPixelScale * 0.5f; // viewportH/2 / tan(fov/2)
+            shellCull.minPixels = m_forceFieldParams.minShellPixels;
+        }
+        shellCull.bakeVolume = m_forceShellBakeActive; // set by buildUboForce (this frame's fit)
         m_forceFieldPipeline.upload(frameIdx, m_forceEmitters, m_forceQueries, m_forceBakeBricks,
-            m_forceBakeSampleY, m_forceFieldParams.bigReachThreshold);
+            m_forceBakeSampleY, m_forceFieldParams.bigReachThreshold, shellCull);
 
         if (m_particleLogStats && m_frameCounter % 120 == 0)
         {
@@ -3329,43 +3377,67 @@ void Renderer::recordCommandBuffers()
 
             // Depth-prepass reuse: the scene pass binds the G-buffer depth READ-ONLY; the explicit
             // barriers do the sampled<->attachment layout round-trip. Off = own cleared depth, rebuilt.
+            // SPLIT for the GPU profiler: timestamps are illegal inside a SECONDARY_COMMAND_BUFFERS
+            // subpass, so each stage runs in its OWN render-pass instance (SceneColor's split
+            // variants: first clears, middles load/store, the last hands colour to TAA — compatible
+            // with the pass the secondaries/pipelines were built against, since only load/store ops
+            // and layouts differ). The deps must stay identical for that compatibility, so the
+            // inter-instance attachment hazards get an explicit barrier between the instances.
             m_gpuProfiler.beginScope(vkCommandBuffer, "Scene forward");
             if (m_depthPrepassReuse)
                 recordReuseDepthBarrier(vkCommandBuffer, gbuffer.getDepthImage(), 0, true);
-            const vk::RenderPassBeginInfo sceneRpBegin{
-                .renderPass = m_depthPrepassReuse ? sceneColor.getReuseRenderPass() : sceneColor.getRenderPass(),
-                .framebuffer = m_depthPrepassReuse ? sceneColor.getReuseFramebuffer(0) : sceneColor.getFramebuffer(),
-                .renderArea = sceneArea,
-                .clearValueCount = (uint32)sceneClears.size(),
-                .pClearValues = sceneClears.data(),
+            struct SceneStage { const char* name; vk::CommandBuffer cb; bool enabled; };
+            const oc::array<SceneStage, 7> sceneStages{
+                SceneStage{ "Static meshes", vkStaticMeshCommandBuffer, true },
+                SceneStage{ "Decals", frameData.decalCommandBuffer.getCommandBuffer(), m_decalsEnabled },
+                SceneStage{ "GI probe debug", vkGiProbeDebugCommandBuffer, m_giProbeDebugEnabled },
+                SceneStage{ "Debug lines", frameData.debugLineCommandBuffer.getCommandBuffer(), m_debugLinePipeline.hasBuffers() },
+                SceneStage{ "Force shells", frameData.forceFieldCommandBuffer.getCommandBuffer(), m_forceFieldParams.enabled },
+                SceneStage{ "Particles", frameData.particleCommandBuffer.getCommandBuffer(), m_particlesEnabled },
+                SceneStage{ "Fog apply", vkFogApplyCommandBuffer, m_fogParams.enabled },
             };
-            vkCommandBuffer.beginRenderPass(sceneRpBegin, vk::SubpassContents::eSecondaryCommandBuffers);
-            vkCommandBuffer.executeCommands(1, &vkStaticMeshCommandBuffer);
-            if (m_decalsEnabled) // right after opaque: particles/debug/fog layer on top
+            int lastActive = 0; // static meshes are always on
+            for (int s = 1; s < (int)sceneStages.size(); ++s)
+                if (sceneStages[s].enabled)
+                    lastActive = s;
+            bool firstInstance = true;
+            for (int s = 0; s < (int)sceneStages.size(); ++s)
             {
-                vk::CommandBuffer vkDecalCommandBuffer = frameData.decalCommandBuffer.getCommandBuffer();
-                vkCommandBuffer.executeCommands(1, &vkDecalCommandBuffer);
+                if (!sceneStages[s].enabled)
+                    continue;
+                if (!firstInstance)
+                { // previous instance's attachment writes -> this instance's loadOp reads + writes
+                    const vk::PipelineStageFlags2 attStages = vk::PipelineStageFlagBits2::eColorAttachmentOutput
+                        | vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests;
+                    vk::MemoryBarrier2 barrier{
+                        .srcStageMask = attStages,
+                        .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+                        .dstStageMask = attStages,
+                        .dstAccessMask = vk::AccessFlagBits2::eColorAttachmentRead | vk::AccessFlagBits2::eColorAttachmentWrite
+                            | vk::AccessFlagBits2::eDepthStencilAttachmentRead | vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+                    };
+                    vkCommandBuffer.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &barrier });
+                }
+                // Variant: only stage / only clears+transitions in one = the ORIGINAL pass; else
+                // first clears, the last does the colour->TAA transition, middles load/store.
+                const bool lastInstance = s == lastActive;
+                const vk::RenderPass renderPass = firstInstance && lastInstance
+                    ? (m_depthPrepassReuse ? sceneColor.getReuseRenderPass() : sceneColor.getRenderPass())
+                    : sceneColor.getSplitRenderPass(firstInstance ? 0 : lastInstance ? 2 : 1, m_depthPrepassReuse);
+                const vk::RenderPassBeginInfo sceneRpBegin{
+                    .renderPass = renderPass,
+                    .framebuffer = m_depthPrepassReuse ? sceneColor.getReuseFramebuffer(0) : sceneColor.getFramebuffer(),
+                    .renderArea = sceneArea,
+                    .clearValueCount = (uint32)sceneClears.size(), // ignored by the loadOp LOAD variants
+                    .pClearValues = sceneClears.data(),
+                };
+                m_gpuProfiler.beginScope(vkCommandBuffer, sceneStages[s].name);
+                vkCommandBuffer.beginRenderPass(sceneRpBegin, vk::SubpassContents::eSecondaryCommandBuffers);
+                vkCommandBuffer.executeCommands(1, &sceneStages[s].cb);
+                vkCommandBuffer.endRenderPass();
+                m_gpuProfiler.endScope(vkCommandBuffer);
+                firstInstance = false;
             }
-            if (m_giProbeDebugEnabled)
-                vkCommandBuffer.executeCommands(1, &vkGiProbeDebugCommandBuffer);
-            if (m_debugLinePipeline.hasBuffers())
-            {
-                vk::CommandBuffer vkDebugLineCommandBuffer = frameData.debugLineCommandBuffer.getCommandBuffer();
-                vkCommandBuffer.executeCommands(1, &vkDebugLineCommandBuffer);
-            }
-            if (m_forceFieldParams.enabled) // after debug lines, before particles/fog (those layer on top)
-            {
-                vk::CommandBuffer vkForceFieldCommandBuffer = frameData.forceFieldCommandBuffer.getCommandBuffer();
-                vkCommandBuffer.executeCommands(1, &vkForceFieldCommandBuffer);
-            }
-            if (m_particlesEnabled)
-            {
-                vk::CommandBuffer vkParticleCommandBuffer = frameData.particleCommandBuffer.getCommandBuffer();
-                vkCommandBuffer.executeCommands(1, &vkParticleCommandBuffer);
-            }
-            if (m_fogParams.enabled)
-                vkCommandBuffer.executeCommands(1, &vkFogApplyCommandBuffer);
-            vkCommandBuffer.endRenderPass();
             if (m_depthPrepassReuse) // prepass depth back to sampled for TAA/fog/next-frame consumers
                 recordReuseDepthBarrier(vkCommandBuffer, gbuffer.getDepthImage(), 0, false);
             m_gpuProfiler.endScope(vkCommandBuffer); // Scene forward

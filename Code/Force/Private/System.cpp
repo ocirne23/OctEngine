@@ -314,6 +314,10 @@ void ForceSystem::initialize()
     Tweak::intVar("Force/Bake", "Bricks (stat)", &m_statBakeBricks, 0, 100000);
     Tweak::floatVar("Force", "Force gain", &m_params.forceGain, 0.0f, 10.0f);
     Tweak::floatVar("Force/Shell", "Alpha", &m_params.shellAlpha, 0.0f, 1.0f);
+    // Draw culling/LOD (the field/readbacks of a culled shell stay live; desktop only):
+    Tweak::floatVar("Force/Shell", "Min screen radius (px)", &m_params.minShellPixels, 0.0f, 50.0f, 0.5f);
+    Tweak::floatVar("Force/Shell", "Full-detail radius (px)", &m_params.shellFullResPixels, 8.0f, 1024.0f, 4.0f);
+    Tweak::floatVar("Force/Shell", "Sampled tier reach (m)", &m_params.sampledShellReach, 0.0f, 100.0f, 1.0f);
     Tweak::floatVar("Force/Shell", "Interior alpha", &m_params.interiorAlpha, 0.0f, 1.0f);
     Tweak::floatVar("Force/Shell", "Backface alpha", &m_params.backfaceAlpha, 0.0f, 1.0f);
     Tweak::floatVar("Force/Shell", "Rim power", &m_params.rimPower, 0.5f, 8.0f);

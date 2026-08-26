@@ -2,8 +2,10 @@ export module RendererVK:ForceFieldPipeline;
 
 import Core;
 import Core.glm;
+import Core.Frustum;
 
 import :VK;
+import :Allocator;
 import :Buffer;
 import :CommandBuffer;
 import :GraphicsPipeline;
@@ -35,7 +37,7 @@ export class ForceFieldPipeline final
 {
 public:
     ForceFieldPipeline() = default;
-    ~ForceFieldPipeline() = default;
+    ~ForceFieldPipeline(); // frees the shell-volume images (buffers/pipelines are RAII members)
     ForceFieldPipeline(const ForceFieldPipeline&) = delete;
 
     void initialize(vk::RenderPass sceneRenderPass, uint32 viewCount);
@@ -43,13 +45,30 @@ public:
     void setUseGrid(bool useGrid) { m_useGrid = useGrid; } // takes effect on the next reloadShaders
     bool getUseGrid() const { return m_useGrid; }
 
+    // SHELL DRAW CULLING (upload-time, CPU): a drawable shell outside the view frustum, or whose
+    // projected proxy radius is under minPixels, is compacted into the NON-drawn field partition
+    // instead — its field, grid presence and readbacks are untouched, only the ray-march draw is
+    // skipped. Frustum + camera come from the CENTER view (TAA jitter never bakes into it);
+    // disabled in VR (one center frustum cannot serve both eyes).
+    struct ShellCull
+    {
+        bool enabled = false;
+        Frustum frustum;
+        glm::vec3 cameraPos{ 0.0f };
+        float pixelScale = 0.0f; // px per unit of (radius / distance): viewportH/2 / tan(fov/2)
+        float minPixels = 0.0f;  // projected proxy radius below this skips the draw (0 = size cull off)
+        bool bakeVolume = false; // a large emitter qualified this frame: dispatch the shell-volume
+                                 // bake (the UBO's forceBake0/1 carry the fitted mapping)
+    };
+
     // Compacts the ACTIVE emitter slots (building the big-emitter list against bigReachThreshold and
     // stamping each record's source slot for the readback; FORCE_FLAG_PASSIVE slots land in a tail
     // past the field count that only the force compute evaluates), uploads the query slots, and
     // patches the draw/dispatch counts. Call from present(), after the slot's fence wait.
     void upload(uint32 frameIdx, oc::span<const RendererVKLayout::ForceEmitterGpu> slots,
         oc::span<const RendererVKLayout::ForceQueryGpu> querySlots,
-        oc::span<const glm::ivec4> bakeBricks, float bakeSampleY, float bigReachThreshold);
+        oc::span<const glm::ivec4> bakeBricks, float bakeSampleY, float bigReachThreshold,
+        const ShellCull& shellCull);
 
     // Records grid clear + insert + force/query dispatches + readback barriers (outside any render
     // pass; ubo is the frame's UBO). All dispatches ride mapped indirect buffers, so emitter/query
@@ -94,11 +113,16 @@ private:
     void buildComputeLayout(ComputePipelineLayout& layout, const char* shaderPath);
     void createGridBuffers();
 
+    void buildShellBakeLayout(ComputePipelineLayout& layout); // storage IMAGES at 5/6, unlike the rest
+    void createShellVolume(); // the two 3D field textures + sampler (one set: barrier-serialized)
+    void destroyShellVolume();
+
     GraphicsPipeline m_pipeline;
     ComputePipeline m_gridPipeline;
     ComputePipeline m_emitterForcePipeline;
     ComputePipeline m_queryPipeline;
     ComputePipeline m_bakePipeline;
+    ComputePipeline m_shellBakePipeline;
     bool m_useGrid = true;
 
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_emitterBuffers;
@@ -119,6 +143,13 @@ private:
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_bakeReadbackBuffers;
     oc::array<oc::span<glm::vec4>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedBakeReadback;
     oc::array<oc::vector<glm::ivec4>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_bakeBrickLists; // per-slot pairing (see getBakeReadback)
+    // The sampled shell tier's field volumes (RendererVKLayout::FORCE_SHELL_VOLUME_*): ONE set,
+    // not per frame slot — the bake's acquire barrier (prev fragment reads -> compute writes)
+    // serializes reuse on the queue. GENERAL layout for life.
+    vk::Image m_shellVolumeImage[2]{};
+    VmaAllocation m_shellVolumeMemory[2]{};
+    vk::ImageView m_shellVolumeView[2]{};
+    vk::Sampler m_shellVolumeSampler; // linear, clamp-to-border transparent black (outside = zero field)
 
     uint32 m_tableEntries = RendererVKLayout::INITIAL_FORCE_TABLE_ENTRIES;
     size_t m_gridDataSize = RendererVKLayout::INITIAL_FORCE_GRID_DATA_SIZE;
@@ -130,15 +161,18 @@ private:
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_emitterForceSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_querySets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_bakeSets;
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_shellBakeSets;
     uint32 m_viewCount = 1;
 
     // Offsets into the per-frame indirect buffer (uints): [0..3] draw, [4..6] grid insert groups
     // (x = emitter COUNT — the insert runs single-thread workgroups, see force_grid.cs.glsl),
-    // [8..10] force groups, [12..14] query groups, [16..18] bake groups (x = brick count).
+    // [8..10] force groups, [12..14] query groups, [16..18] bake groups (x = brick count),
+    // [20..22] shell-volume bake groups (x = 0 disables — the CB is cached, so the toggle rides here).
     static constexpr uint32 DRAW_CMD_OFFSET = 0;
     static constexpr uint32 GRID_DISPATCH_OFFSET = 4;
     static constexpr uint32 EMITTER_DISPATCH_OFFSET = 8;
     static constexpr uint32 QUERY_DISPATCH_OFFSET = 12;
     static constexpr uint32 BAKE_DISPATCH_OFFSET = 16;
-    static constexpr uint32 INDIRECT_UINTS = 20;
+    static constexpr uint32 SHELLBAKE_DISPATCH_OFFSET = 20;
+    static constexpr uint32 INDIRECT_UINTS = 24;
 };

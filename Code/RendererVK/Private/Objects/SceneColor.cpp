@@ -55,6 +55,8 @@ void SceneColor::destroy()
     for (vk::Framebuffer& fb : m_reuseFramebuffers) { if (fb) vkDevice.destroyFramebuffer(fb); fb = nullptr; }
     if (m_renderPass)   vkDevice.destroyRenderPass(m_renderPass);
     if (m_reuseRenderPass) vkDevice.destroyRenderPass(m_reuseRenderPass);
+    for (vk::RenderPass& rp : m_splitPasses) { if (rp) vkDevice.destroyRenderPass(rp); rp = nullptr; }
+    for (vk::RenderPass& rp : m_reuseSplitPasses) { if (rp) vkDevice.destroyRenderPass(rp); rp = nullptr; }
     for (vk::ImageView& v : m_colorLayerViews) { if (v) vkDevice.destroyImageView(v); v = nullptr; }
     for (vk::ImageView& v : m_depthLayerViews) { if (v) vkDevice.destroyImageView(v); v = nullptr; }
     Globals::gpuAllocator.destroyImage(m_colorImage, m_colorMemory);
@@ -239,6 +241,81 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
             auto reuseFbResult = vkDevice.createFramebuffer(reuseFbInfo);
             if (reuseFbResult.result != vk::Result::eSuccess) { assert(false && "scenecolor reuse framebuffer"); return false; }
             m_reuseFramebuffers[i] = reuseFbResult.value;
+        }
+    }
+
+    // ---- SPLIT-instance variants (see getSplitRenderPass): first/middle/last x own-depth/reuse.
+    // Compatibility with the main/reuse pass (and the swapchain pass the pipelines are built
+    // against) allows differences ONLY in load/store ops and layouts — the dependency array is
+    // carried VERBATIM in every variant (it is part of render-pass compatibility), which is also
+    // why it cannot express the inter-instance attachment hazards: the Renderer emits explicit
+    // barriers between the instances instead.
+    {
+        const auto makePass = [&](const oc::array<vk::AttachmentDescription2, 2>& atts,
+            const vk::SubpassDescription2& sp, vk::RenderPass& out)
+        {
+            const vk::RenderPassCreateInfo2 info{
+                .attachmentCount = (uint32)atts.size(),
+                .pAttachments = atts.data(),
+                .subpassCount = 1,
+                .pSubpasses = &sp,
+                .dependencyCount = (uint32)dependencies.size(),
+                .pDependencies = dependencies.data(),
+            };
+            auto result = vkDevice.createRenderPass2(info);
+            if (result.result != vk::Result::eSuccess) { assert(false && "scenecolor split renderpass"); return false; }
+            out = result.value;
+            return true;
+        };
+        const auto colorDesc = [&](vk::AttachmentLoadOp load, vk::ImageLayout initial, vk::ImageLayout final)
+        {
+            return vk::AttachmentDescription2{
+                .format = colorFormat,
+                .samples = vk::SampleCountFlagBits::e1,
+                .loadOp = load,
+                .storeOp = vk::AttachmentStoreOp::eStore,
+                .initialLayout = initial,
+                .finalLayout = final,
+            };
+        };
+        const auto depthDesc = [&](vk::AttachmentLoadOp load, vk::AttachmentStoreOp store,
+            vk::ImageLayout initial, vk::ImageLayout final)
+        {
+            return vk::AttachmentDescription2{
+                .format = SCENE_DEPTH_FORMAT,
+                .samples = vk::SampleCountFlagBits::e1,
+                .loadOp = load,
+                .storeOp = store,
+                .initialLayout = initial,
+                .finalLayout = final,
+            };
+        };
+        constexpr vk::ImageLayout colorAtt = vk::ImageLayout::eColorAttachmentOptimal;
+        constexpr vk::ImageLayout depthAtt = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+        constexpr vk::ImageLayout depthRo = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+        const oc::array<vk::AttachmentDescription2, 3> colorVariant{
+            colorDesc(vk::AttachmentLoadOp::eClear, vk::ImageLayout::eUndefined, colorAtt), // first
+            colorDesc(vk::AttachmentLoadOp::eLoad, colorAtt, colorAtt),                     // middle
+            colorDesc(vk::AttachmentLoadOp::eLoad, colorAtt, vk::ImageLayout::eShaderReadOnlyOptimal), // last -> TAA
+        };
+        const oc::array<vk::AttachmentDescription2, 3> ownDepthVariant{
+            depthDesc(vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore, vk::ImageLayout::eUndefined, depthAtt),
+            depthDesc(vk::AttachmentLoadOp::eLoad, vk::AttachmentStoreOp::eStore, depthAtt, depthAtt),
+            depthDesc(vk::AttachmentLoadOp::eLoad, vk::AttachmentStoreOp::eDontCare, depthAtt, depthAtt),
+        };
+        const vk::AttachmentDescription2 reuseDepth = // read-only prepass depth, all three variants
+            depthDesc(vk::AttachmentLoadOp::eLoad, vk::AttachmentStoreOp::eStore, depthRo, depthRo);
+        const vk::AttachmentReference2 splitReuseDepthRef{ .attachment = 1, .layout = depthRo, .aspectMask = vk::ImageAspectFlagBits::eDepth };
+        const vk::SubpassDescription2 splitReuseSubpass{
+            .pipelineBindPoint = vk::PipelineBindPoint::eGraphics,
+            .colorAttachmentCount = 1,
+            .pColorAttachments = &colorRef,
+            .pDepthStencilAttachment = &splitReuseDepthRef,
+        };
+        for (int s = 0; s < 3; ++s)
+        {
+            if (!makePass({ colorVariant[s], ownDepthVariant[s] }, subpass, m_splitPasses[s])) return false;
+            if (!makePass({ colorVariant[s], reuseDepth }, splitReuseSubpass, m_reuseSplitPasses[s])) return false;
         }
     }
 

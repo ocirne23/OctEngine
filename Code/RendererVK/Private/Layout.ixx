@@ -183,6 +183,17 @@ export namespace RendererVKLayout
         oc::span<const glm::vec4> data;
     };
 
+    // SAMPLED SHELL TIER: a device-local 3D bake of EVERY team's field (two RGBA16F volumes =
+    // phi[0..3]/phi[4..7]), refit each frame over the union of the LARGE drawable emitters'
+    // support boxes (Ubo::forceBake0/1 carry the mapping, so the FIXED texel grid's resolution
+    // self-adjusts to the active spread). Shell proxies whose reach exceeds the threshold march
+    // these textures (two trilinear taps per sample) instead of the analytic candidate loop —
+    // hits, normals and shading stay analytic. Written by force_shellbake.cs each frame.
+    constexpr uint32 FORCE_SHELL_VOLUME_X = 128;
+    constexpr uint32 FORCE_SHELL_VOLUME_Y = 48;
+    constexpr uint32 FORCE_SHELL_VOLUME_Z = 128;
+    constexpr uint32 FORCE_SHELL_VOLUME_GROUP = 8; // local_size per axis (dims are multiples)
+
     // One registered point query (mapped per frame) and its GPU-written result (read back).
     struct alignas(16) ForceQueryGpu
     {
@@ -518,7 +529,7 @@ export namespace RendererVKLayout
         glm::vec4 forceParams1; // x = contact glow intensity, y = contact glow width (opposing/own ratio band),
                                 // z = geometry glow distance (m), w = march steps
         glm::vec4 forceParams2; // x = pattern scale (1/m), y = pattern scroll speed, z = pattern intensity,
-                                // w = unused (the force-gain readback scale moved CPU-side)
+                                // w = shell march LOD scale ((px per radius/dist) / full-detail px; 0 = off)
         glm::vec4 forceParams3; // x = interior alpha (shell opacity floor seen from inside),
                                 // y = backface alpha (far/inner surface visibility from outside),
                                 // z = contact wall alpha (interior equilibrium pane),
@@ -528,6 +539,9 @@ export namespace RendererVKLayout
                                 // z = ambient field slope (strength/m; <= 0 disables), w = ambient team
         glm::vec4 forceParams5; // ambient field: xy = planar world center, z = safe radius (m),
                                 // w = max strength
+        glm::vec4 forceBake0;   // sampled shell tier: xyz = bake volume world min, w = the reach
+                                // threshold an emitter marches the volume at (see ForceFieldPipeline)
+        glm::vec4 forceBake1;   // xyz = 1 / bake volume world size, w = tier enabled (0/1)
     };
 
     struct alignas(16) RenderNodeTransform : Transform {};
