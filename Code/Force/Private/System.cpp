@@ -329,6 +329,8 @@ void ForceSystem::initialize()
     Tweak::boolean("Force/Shell", "Union march", &m_params.unionMarch);
     Tweak::floatVar("Force/Shell", "Union step (m)", &m_params.unionStepSize, 0.05f, 4.0f, 0.05f);
     Tweak::intVar("Force/Shell", "Union max steps", &m_params.unionMaxSteps, 8, 512, 8);
+    // The draw-box shrink's iso reduction (see packVisibleBounds): 0 = full support boxes.
+    Tweak::floatVar("Force/Shell", "Visible bounds iso frac", &m_visibleBoundsIsoFrac, 0.0f, 1.0f, 0.05f);
     Tweak::floatVar("Force/Shell", "Interior alpha", &m_params.interiorAlpha, 0.0f, 1.0f);
     Tweak::floatVar("Force/Shell", "Backface alpha", &m_params.backfaceAlpha, 0.0f, 1.0f);
     Tweak::floatVar("Force/Shell", "Rim power", &m_params.rimPower, 0.5f, 8.0f);
@@ -370,6 +372,43 @@ void ForceSystem::initialize()
     Tweak::floatVar("Force/Debug", "Density range", &m_params.densityRange, 0.1f, 10.0f, 0.05f);
 }
 
+static float forceIsoLateral(float t, float R, float m, float W, float D, float foldedOutput, float iso);
+
+// VISIBLE-BOUNDS pack (teamFlags.w, decoded by forceVisibleBounds in force_field.inc.glsl): the
+// emitter's own iso-surface extent from the closed-form profile, evaluated at iso x "Visible
+// bounds iso frac" (default 0.5 — a surface can exist where two sub-iso fields SUM past iso, and
+// the halved threshold covers an equal pair; same-team crowds beyond that are what the merge
+// system replaces with one group sphere). The proxy/interval draws shrink to this box so the
+// marches skip the empty support space around a bubble far below its reach box (a drained shield
+// in a full-size box); the FIELD keeps the full support everywhere (grid insert, bake fits, CPU
+// mirrors). 0 = nothing clears the reduced iso (or the tweak is 0): the full support box stands.
+static uint32 packVisibleBounds(float R, float m, float W, float D, float foldedOutput, float isoEff, float fullSide)
+{
+    if (isoEff <= 0.0f)
+        return 0u;
+    float lo = 1.0f, hi = 0.0f, lat = 0.0f;
+    for (int i = 0; i <= 16; ++i)
+    {
+        const float t = (float)i * (1.0f / 16.0f);
+        const float l = forceIsoLateral(t, R, m, W, D, foldedOutput, isoEff);
+        if (l > 0.0f)
+        {
+            lo = glm::min(lo, t);
+            hi = glm::max(hi, t);
+            lat = glm::max(lat, l);
+        }
+    }
+    if (hi < lo)
+        return 0u;
+    lo = glm::max(lo - 1.0f / 16.0f, 0.0f); // one-station slack for curvature between stations
+    hi = glm::min(hi + 1.0f / 16.0f, 1.0f);
+    const float latFrac = glm::clamp(lat * 1.1f / glm::max(fullSide, 1e-6f), 0.0f, 1.0f);
+    const uint32 loQ = (uint32)(lo * 255.0f);           // floor/ceil: always conservative outward
+    const uint32 hiQ = (uint32)glm::ceil(hi * 255.0f);
+    const uint32 latQ = glm::max((uint32)glm::ceil(latFrac * 65535.0f), 1u);
+    return loQ | (hiQ << 8) | (latQ << 16);
+}
+
 // outputScale = the distribution budget fold (refreshDistributionScale): the GPU sees Output
 // pre-divided by the gain's field-weighted mean, so total emitted field stays exactly conserved.
 // flags: FORCE_FLAG_ACTIVE for a live field, | FORCE_FLAG_PASSIVE for a merged member that only
@@ -386,6 +425,12 @@ static ForceEmitterGpu buildEmitterGpu(const glm::vec3& pos, const glm::vec3& di
         glm::clamp(distribution, 0.0f, 1.0f), glm::clamp(width, 0.05f, 4.0f));
     // Clamp below the LIVE team count: the shaders' phi arrays are sized NUM_FORCE_TEAMS.
     gpu.teamFlags = glm::uvec4(glm::min(team, Globals::forceSystem.numTeams() - 1), flags, 0u, 0u);
+    const float mFold = 1.0f - 2.0f * gpu.dirFocus.w;
+    const float fullSide = 0.5f * gpu.posReach.w * (1.0f + glm::abs(mFold)) * gpu.outputParams.w * 1.03f;
+    const float isoEff = glm::max(Globals::forceSystem.getParams().isoThreshold, 1e-3f)
+        * Globals::forceSystem.visibleBoundsIsoFrac();
+    gpu.teamFlags.w = packVisibleBounds(gpu.posReach.w, mFold, gpu.outputParams.w, gpu.outputParams.z,
+        gpu.outputParams.x, isoEff, fullSide);
     return gpu;
 }
 

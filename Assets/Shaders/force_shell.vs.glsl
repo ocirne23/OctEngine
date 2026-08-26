@@ -29,7 +29,7 @@ void main()
     const vec3 local = vec3(float(corner & 1u), float((corner >> 1u) & 1u), float(corner >> 2u)) * 2.0 - 1.0;
 
     float side, forward, back;
-    forceEmitterBounds(e, side, forward, back);
+    forceVisibleBounds(e, side, forward, back); // the support box shrunk to the visible-surface extent
     const mat3 basis = forceEmitterBasis(e.dirFocus.xyz); // columns: right, up, dir
     const vec3 center = e.posReach.xyz + e.dirFocus.xyz * (forward - back) * 0.5;
     const vec3 halfExtents = vec3(side, side, (forward + back) * 0.5);

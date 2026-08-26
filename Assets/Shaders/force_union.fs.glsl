@@ -127,27 +127,47 @@ void main()
     vec3 accumColor = vec3(0.0);
     float accumAlpha = 0.0;
     int numShaded = 0;
-    for (int i = 1; i <= steps && numShaded < 3; ++i)
+#ifdef FORCE_GRID
+    // Per-fragment hoists: the current cell's hash probe re-runs only when a step crosses a 16 m
+    // cell boundary, and each big emitter's support-sphere ray ENTRY (for the empty-stretch jump
+    // clamp) is a constant of the ray — computed once, not per empty sample.
+    ivec3 cachedGridPos = ivec3(0x7FFFFFFF);
+    uint cachedCell = FORCE_INVALID_CELL;
+    float bigEntry[8];
+    const uint numBigsHoisted = min(fe_bigCount, 8u);
+    for (uint k = 0u; k < numBigsHoisted; ++k)
+        bigEntry[k] = forceBigSupportEntry(rayOrigin, rayDir, fe_emitters[fe_bigIndices[k]]);
+#endif
+    // Static per-pixel phase jitter breaks the march's step-count banding into spatial noise —
+    // larger "Union step (m)" settings stay presentable. Purely spatial (no frame term), so shells
+    // never shimmer with TAA off; crossings still bisect to the exact surface either way.
+    const float stepJitter = forceHash(vec3(gl_FragCoord.xy, 0.0));
+    for (int i = 1; i <= steps && numShaded < 3 && accumAlpha < 0.98; ++i) // saturated: nothing behind shows
     {
-        const float t = t0 + dt * float(i);
+        const float t = t0 + dt * (float(i) - stepJitter);
         bool sampledEmpty = false;
 #ifdef FORCE_GRID
         // EMPTY-CELL FAST PATH: a cell with NO candidates holds no SMALL emitters (the grid
         // insert covers every support) — provable, not heuristic — so the sample reduces to the
         // big list + ambient (forceSampleFieldBigOnly, typically 0-2 emitters). After the
         // crossing logic below the index also JUMPS past the empty stretch where that is safe.
+        const vec3 samplePos = rayOrigin + rayDir * t;
+        const ivec3 gridPos = forceGridPos(samplePos);
+        if (any(notEqual(gridPos, cachedGridPos)))
         {
-            const uint cell = forceCandidateCell(rayOrigin + rayDir * t);
-            if (cell == FORCE_INVALID_CELL || forceCellCount(cell) == 0u)
-            {
-                sampledEmpty = true;
-                forceSampleFieldBigOnly(rayOrigin + rayDir * t, iso, prevTeam,
-                    bestTeam, bestPhi, secondPhi, F);
-            }
+            cachedGridPos = gridPos;
+            cachedCell = forceFindCell(gridPos);
         }
+        if (cachedCell == FORCE_INVALID_CELL || forceCellCount(cachedCell) == 0u)
+        {
+            sampledEmpty = true;
+            forceSampleFieldBigOnly(samplePos, iso, prevTeam, bestTeam, bestPhi, secondPhi, F);
+        }
+        else
+            forceSampleFieldCell(samplePos, cachedCell, iso, bestTeam, bestPhi, secondPhi, F);
+#else
+        forceSampleField(rayOrigin + rayDir * t, iso, bestTeam, bestPhi, secondPhi, F);
 #endif
-        if (!sampledEmpty)
-            forceSampleField(rayOrigin + rayDir * t, iso, bestTeam, bestPhi, secondPhi, F);
         const bool entryCrossing = F > 0.0;
         const bool surfaceCrossing = entryCrossing != (fPrev > 0.0);
         const bool teamFlip = bestTeam != prevTeam && (entryCrossing || fPrev > 0.0);
@@ -266,11 +286,12 @@ void main()
             const vec3 safeDir = rayDir + vec3(equal(rayDir, vec3(0.0))) * 1e-8;
             const vec3 tBounds = (farBound - rayOrigin) / safeDir;
             float tExit = min(min(min(tBounds.x, tBounds.y), tBounds.z), t1);
-            for (uint k = 0u; k < fe_bigCount && tExit > t; ++k)
-                tExit = min(tExit, forceBigSupportEntry(rayOrigin, rayDir, fe_emitters[fe_bigIndices[k]]));
+            for (uint k = 0u; k < numBigsHoisted && tExit > t; ++k)
+                tExit = min(tExit, bigEntry[k]); // hoisted ray-constant support entries
             if (tExit > t)
             {
-                i = max(i, int((tExit - t0) / dt)); // ++i lands on the first sample past the exit
+                // ++i lands on the first (jittered) sample past the exit.
+                i = max(i, int((tExit - t0) / dt + stepJitter));
                 tPrev = tExit; // still inside the empty zero-field stretch: F there is the same known negative
             }
         }

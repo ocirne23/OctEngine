@@ -185,6 +185,9 @@ public:
     // below it. Call before the mode's world spawns (main thread).
     void setNumTeams(uint32 numTeams);
     uint32 numTeams() const { return m_params.numTeams; }
+    // The proxy/interval draw-box shrink's iso reduction (packVisibleBounds in System.cpp; read
+    // from the upload workers, written only by the tweak panel between passes). 0 = off.
+    float visibleBoundsIsoFrac() const { return m_visibleBoundsIsoFrac; }
 
     // The GLOBAL AMBIENT FIELD: an analytic distance-based term one team projects everywhere —
     // zero within safeRadius of the planar center, +slope per metre beyond it, capped at
@@ -374,6 +377,8 @@ private:
     oc::vector<uint32> m_retiredGroupSlots; // dissolved on the job; destroyed on main in update()
     uint32 m_numLiveEmitters = 0;
     uint32 m_generationCounter = 1;
+
+    float m_visibleBoundsIsoFrac = 0.5f; // draw-box shrink (packVisibleBounds); 0 = full boxes
 
     // Baked pressure field state (see sampleBakedField): scratch this frame, published last copy.
     bool m_bakeEnabled = true;

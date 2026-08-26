@@ -154,9 +154,9 @@ void main()
     const vec3 rayOrigin = u_viewPos;
     const vec3 rayDir = normalize(worldPosFromDepth(uv, 0.0) - rayOrigin);
 
-    // Intersect the same oriented reach box the VS rasterized.
+    // Intersect the same oriented (visible-extent) box the VS rasterized.
     float side, forward, back;
-    forceEmitterBounds(e, side, forward, back);
+    forceVisibleBounds(e, side, forward, back);
     const mat3 basis = forceEmitterBasis(e.dirFocus.xyz);
     const vec3 center = e.posReach.xyz + e.dirFocus.xyz * (forward - back) * 0.5;
     const vec3 halfExtents = vec3(side, side, (forward + back) * 0.5);
@@ -243,7 +243,7 @@ void main()
     vec3 accumColor = vec3(0.0);
     float accumAlpha = 0.0;
     int numShaded = 0;
-    for (int i = 1; i <= steps && numShaded < 3; ++i)
+    for (int i = 1; i <= steps && numShaded < 3 && accumAlpha < 0.98; ++i) // saturated: nothing behind shows
     {
         const float t = t0 + dt * float(i);
         forceMarchSample(sampledTier, rayOrigin + rayDir * t, iso, bestTeam, bestPhi, secondPhi, F);

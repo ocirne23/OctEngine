@@ -26,7 +26,7 @@ void main()
     const vec3 rayDir = normalize(worldPosFromDepth(uv, 0.0) - rayOrigin);
 
     float side, forward, back;
-    forceEmitterBounds(e, side, forward, back);
+    forceVisibleBounds(e, side, forward, back); // matches the VS: the shrunk visible-extent box
     const mat3 basis = forceEmitterBasis(e.dirFocus.xyz);
     const vec3 center = e.posReach.xyz + e.dirFocus.xyz * (forward - back) * 0.5;
     const vec3 halfExtents = vec3(side, side, (forward + back) * 0.5);

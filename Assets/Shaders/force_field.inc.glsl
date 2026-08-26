@@ -108,6 +108,28 @@ void forceEmitterBounds(ForceEmitterData e, out float side, out float forward, o
     back = R * 0.02;
 }
 
+// The DRAWN box: forceEmitterBounds shrunk to the emitter's packed visible-surface extent
+// (teamFlags.w — CPU packVisibleBounds in Force/System.cpp: axial lo/hi in R units as two unorm8,
+// lateral fraction of `side` as unorm16; 0 = feature off or nothing above the reduced iso, keep
+// the full support box). The pack is the OWN-iso extent at iso x "Visible bounds iso frac"
+// (default 0.5 — the reduction is the merge slack: two equal sub-iso fields can SUM to a surface
+// outside either's own iso extent, and evaluating at iso/2 covers that pair). Consumers: the
+// proxy VS, the interval FS and the shell FS's march interval — the GRID insert, the bake fits
+// and every CPU mirror keep the FULL support box (the FIELD is unchanged, only the draw shrinks).
+void forceVisibleBounds(ForceEmitterData e, out float side, out float forward, out float back)
+{
+    forceEmitterBounds(e, side, forward, back);
+    const uint p = e.teamFlags.w;
+    if (p == 0u)
+        return;
+    const float R = e.posReach.w;
+    const float lo = float(p & 0xFFu) * (1.0 / 255.0);
+    const float hi = float((p >> 8u) & 0xFFu) * (1.0 / 255.0);
+    side *= float(p >> 16u) * (1.0 / 65535.0);
+    forward = R * min(hi + 0.02, 1.02);
+    back = R * (0.02 - lo); // lo > 0.02: negative back — the box starts in FRONT of the emitter
+}
+
 // Orthonormal RIGHT-HANDED frame with +Z = dir (right x up == dir). Handedness is load-bearing: a
 // mirrored basis flips the proxy cube's winding, so front-face culling keeps the NEAR faces instead
 // of the far ones and the shell stops rasterizing entirely with the camera inside the box.
@@ -155,11 +177,12 @@ float forceAmbientField(vec3 x)
 
 // Per-team field accumulation at x, over the LIVE team count (NUM_FORCE_TEAMS). Team indices are
 // CPU-clamped below the live count at upload; the ambient team is clamped here (it is a raw tweak).
-void forceAccumulate(vec3 x, out float phi[NUM_FORCE_TEAMS])
+// The Cell variant takes the point's grid cell PRE-RESOLVED: a march whose consecutive samples sit
+// in the same 16 m cell (the union march) pays the hash probe once per cell instead of per sample.
+void forceAccumulateCell(vec3 x, uint cell, out float phi[NUM_FORCE_TEAMS])
 {
     for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
         phi[t] = 0.0;
-    const uint cell = forceCandidateCell(x);
     const uint n = forceNumCandidates(cell);
     for (uint k = 0u; k < n; ++k)
     {
@@ -176,6 +199,11 @@ void forceAccumulate(vec3 x, out float phi[NUM_FORCE_TEAMS])
     const float ambient = forceAmbientField(x);
     for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
         phi[t] += t == ambientTeam ? ambient : 0.0;
+}
+
+void forceAccumulate(vec3 x, out float phi[NUM_FORCE_TEAMS])
+{
+    forceAccumulateCell(x, forceCandidateCell(x), phi);
 }
 
 // forceAccumulate plus a SHELL-VISIBLE variant of each team's field: every contribution also
@@ -253,10 +281,10 @@ void forceTeamSample(vec3 x, uint team, out float own, out float opposing)
 
 // Full sample: strongest team, its field, and the best opposing field. F > 0 means x is inside
 // bestTeam's bubble.
-void forceSampleField(vec3 x, float iso, out uint bestTeam, out float bestPhi, out float secondPhi, out float F)
+void forceSampleFieldCell(vec3 x, uint cell, float iso, out uint bestTeam, out float bestPhi, out float secondPhi, out float F)
 {
     float phi[NUM_FORCE_TEAMS];
-    forceAccumulate(x, phi);
+    forceAccumulateCell(x, cell, phi);
     bestTeam = 0u;
     bestPhi = phi[0];
     for (uint t = 1u; t < NUM_FORCE_TEAMS; ++t)
@@ -266,6 +294,11 @@ void forceSampleField(vec3 x, float iso, out uint bestTeam, out float bestPhi, o
         if (t != bestTeam)
             secondPhi = max(secondPhi, phi[t]);
     F = bestPhi - forceOpposingBound(iso, secondPhi);
+}
+
+void forceSampleField(vec3 x, float iso, out uint bestTeam, out float bestPhi, out float secondPhi, out float F)
+{
+    forceSampleFieldCell(x, forceCandidateCell(x), iso, bestTeam, bestPhi, secondPhi, F);
 }
 
 // The strongest single contributor of `team` at x — the OWNER of a shell surface point. Every proxy
