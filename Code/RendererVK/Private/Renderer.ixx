@@ -230,7 +230,7 @@ public:
     // deliberately NOT a lock-free per-frame push). Same main-thread + retirement contract as the
     // emitter slots. Returns UINT32_MAX when all MAX_FORCE_QUERIES slots are taken.
     uint32 createForceQuerySlot();
-    void setForceQuery(uint32 slot, const glm::vec3& pos, uint32 team);
+    void setForceQuery(uint32 slot, const glm::vec3& pos);
     // The baked pressure field's brick set for this frame (main-thread, with the emitter push):
     // uploaded at present, evaluated by force_bake.cs, read back ~2 frames later.
     void setForceBakeBricks(oc::span<const glm::ivec4> bricks, float sampleY)

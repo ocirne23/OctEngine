@@ -1303,12 +1303,10 @@ uint32 Renderer::createForceQuerySlot()
     return slot;
 }
 
-void Renderer::setForceQuery(uint32 slot, const glm::vec3& pos, uint32 team)
+void Renderer::setForceQuery(uint32 slot, const glm::vec3& pos)
 {
     assert(slot < m_forceQueries.size());
-    // w = 1 + team: nonzero marks the slot active, and the shader recovers the query's own team
-    // for the opposing-gradient evaluation (see force_query.cs.glsl).
-    m_forceQueries[slot].posActive = glm::vec4(pos, 1.0f + (float)glm::min(team, RendererVKLayout::MAX_FORCE_TEAMS - 1u));
+    m_forceQueries[slot].posActive = glm::vec4(pos, 1.0f);
 }
 
 void Renderer::destroyForceQuerySlot(uint32 slot)
@@ -1332,8 +1330,7 @@ RendererVKLayout::ForceBakeReadback Renderer::getForceBakeReadback() const
 RendererVKLayout::ForceQueryResult Renderer::getForceQueryReadback(uint32 slot) const
 {
     const oc::span<const RendererVKLayout::ForceQueryResult> results = m_forceFieldPipeline.getQueryReadback(m_swapChain.getCurrentFrameIndex());
-    return slot < results.size() ? results[slot]
-        : RendererVKLayout::ForceQueryResult{ RendererVKLayout::MAX_FORCE_TEAMS, 0.0f, 0.0f, 0u, glm::vec4(0.0f) };
+    return slot < results.size() ? results[slot] : RendererVKLayout::ForceQueryResult{ RendererVKLayout::MAX_FORCE_TEAMS, 0.0f, 0.0f, 0u };
 }
 
 void Renderer::setForceFieldParams(const ForceFieldParams& params)

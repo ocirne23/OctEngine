@@ -436,7 +436,7 @@ ForceEmitter ForceSystem::createEmitter(uint32 team, const glm::vec3& pos, const
     return ForceEmitter(((uint64)inst.generation << 32) | idx);
 }
 
-ForceQuery ForceSystem::createQuery(const glm::vec3& pos, uint32 team)
+ForceQuery ForceSystem::createQuery(const glm::vec3& pos)
 {
     const uint32 slot = Globals::rendererVK.createForceQuerySlot();
     if (slot == UINT32_MAX)
@@ -461,7 +461,6 @@ ForceQuery ForceSystem::createQuery(const glm::vec3& pos, uint32 team)
     if (m_generationCounter == 0)
         m_generationCounter = 1;
     inst.rendererSlot = slot;
-    inst.team = glm::min(team, (uint32)MAX_FORCE_TEAMS - 1u);
     inst.pos = pos;
     return ForceQuery(((uint64)inst.generation << 32) | idx);
 }
@@ -675,15 +674,13 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
     {
         if (query.generation == 0)
             continue;
-        renderer.setForceQuery(query.rendererSlot, query.pos, query.team);
+        renderer.setForceQuery(query.rendererSlot, query.pos);
         const RendererVKLayout::ForceQueryResult result = renderer.getForceQueryReadback(query.rendererSlot);
         query.result.valid = result.frameStamp != 0u;
         query.result.inside = result.owningTeam < MAX_FORCE_TEAMS;
         query.result.owningTeam = query.result.inside ? result.owningTeam : 0u;
         query.result.ownField = result.ownField;
         query.result.opposingField = result.bestOpposingField;
-        query.result.opposingGradient = glm::vec3(result.opposingGrad);
-        query.result.opposingPressure = result.opposingGrad.w;
         if (m_debugDrawQueries)
         {
             const uint32 color = query.result.inside

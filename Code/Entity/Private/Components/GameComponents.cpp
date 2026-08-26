@@ -639,7 +639,7 @@ void GameStructureComponent::spawn(Entity& entity, const SpawnInfo& info, const 
     invulnerable = info.invulnerable ? 1 : 0;
     meleeRadius = info.meleeRadius;
     if (isAuthority()) // clients never damage-sim, so they never spend a query slot
-        query = Globals::forceSystem.createQuery(base.pos, info.team);
+        query = Globals::forceSystem.createQuery(base.pos);
 }
 
 // Atomically move `amount` from one store float to another, clamped by the source's content and

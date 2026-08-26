@@ -186,8 +186,7 @@ export namespace RendererVKLayout
     // One registered point query (mapped per frame) and its GPU-written result (read back).
     struct alignas(16) ForceQueryGpu
     {
-        glm::vec4 posActive{ 0.0f }; // xyz = world position, w = 0 inactive / 1 + queryTeam active
-                                     // (the team the OPPOSING gradient is computed against)
+        glm::vec4 posActive{ 0.0f }; // xyz = world position, w = 1 active / 0 inactive slot
     };
     // Per-frame mapped query input buffer (count header + slot array; matches force_query.cs.glsl).
     struct alignas(16) ForceQueriesGpu
@@ -203,11 +202,8 @@ export namespace RendererVKLayout
         float ownField;          // that team's field at the point
         float bestOpposingField; // strongest other team's field
         uint32 frameStamp;       // m_frameCounter when computed (0 = never: slot not yet evaluated)
-        glm::vec4 opposingGrad;  // xyz = gradient of the strongest field OPPOSING the query's team
-                                 // (zero outside every such field), w = that field's VALUE at the
-                                 // point (the local pressure analog). Push = down-gradient.
     };
-    static_assert(sizeof(ForceQueryResult) == 32);
+    static_assert(sizeof(ForceQueryResult) == 16);
 
     // Mesh/material indices are stored as uint16 in InMeshInstance, so growth clamps to this.
     constexpr uint32 MESH_MATERIAL_INDEX_LIMIT = USHRT_MAX

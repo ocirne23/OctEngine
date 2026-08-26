@@ -117,14 +117,6 @@ public:
                                     // not inside any bubble (below iso), so it doubles as the
                                     // density readout; the debug density view heat-maps this value
         float opposingField = 0.0f; // best opposing team's field strength
-        // Gradient of the strongest field OPPOSING the query's registered team (zero outside every
-        // such field). A shield-less body pushes DOWN this gradient — away from the emitter — the
-        // point-query stand-in for the emitter force readback it does not have.
-        glm::vec3 opposingGradient{ 0.0f };
-        // That opposing field's VALUE at the point — the local analog of the emitter pressure
-        // readback (the emitter's is the mean over its bubble). Drives the same
-        // pushGain * pressure * tension chain the shielded units use.
-        float opposingPressure = 0.0f;
         bool valid = false;         // false until the first readback for this slot lands
 
         // The field density at the point (the "Density" debug view's value): the strongest team's
@@ -161,9 +153,7 @@ public:
     // (the visible bubble is smaller: r = reach * sqrt(1 - sqrt(iso/output))).
     ForceEmitter createEmitter(uint32 team, const glm::vec3& pos, const glm::vec3& direction,
         float output, float reach, float focus = 0.5f, float distribution = 0.5f, float width = 1.0f);
-    // team = whose side the query rides: Result::opposingGradient is computed against every OTHER
-    // team's field (the scalar results are team-independent).
-    ForceQuery createQuery(const glm::vec3& pos, uint32 team = 0);
+    ForceQuery createQuery(const glm::vec3& pos);
 
     // ---- THE BAKED PRESSURE FIELD ("Force/Bake" tweaks) ------------------------------------
     // A sparse CPU-side sampling of EVERY team's field: update() selects 16 m XZ bricks from the
@@ -302,7 +292,6 @@ private:
     {
         uint32 generation = 0; // 0 = free slot
         uint32 rendererSlot = UINT32_MAX;
-        uint32 team = 0;       // the opposing-gradient reference team (see createQuery)
         glm::vec3 pos{ 0.0f };
         ForceQuery::Result result;
     };
