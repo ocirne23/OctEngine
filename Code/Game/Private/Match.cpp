@@ -178,6 +178,8 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
     m_structures.registerTweaks();
     m_npcs.registerTweaks();
     Globals::navSystem.initialize(); // "Nav" tweaks + density staging (job system is up by now)
+    if (m_coop) // players share team 0, the AI is team 1: the force shaders/bakes shrink to fit
+        Globals::forceSystem.setNumTeams(2);
 
     // The game rosters (structures + units/projectiles) replace every world-wide spatial query:
     // they deregister through this ONE notification, which every removal path funnels into

@@ -40,6 +40,7 @@ Renderer::~Renderer()
     Globals::textureStreamer.shutdown(); // stop the disk worker + retire swapped-out images while the device is idle
     Globals::meshStreamer.shutdown();
     destroyEyeCompositeTargets();
+    m_gpuProfiler.destroy();
     ImGui_ImplVulkan_Shutdown();
 }
 
@@ -1379,13 +1380,23 @@ RendererVKLayout::ForceQueryResult Renderer::getForceQueryReadback(uint32 slot) 
 
 void Renderer::setForceFieldParams(const ForceFieldParams& params)
 {
-    // The grid toggle is a compile-time shader define (FORCE_GRID): rebuild the force pipelines,
-    // same GPU-idle + reload pattern as the ocean hit-lighting tweak.
-    if (params.useGrid != m_forceFieldPipeline.getUseGrid())
+    // The grid toggle and the LIVE team count are compile-time shader defines (FORCE_GRID /
+    // NUM_FORCE_TEAMS): rebuild the force pipelines, same GPU-idle + reload pattern as the ocean
+    // hit-lighting tweak. A team-count change additionally remakes the team-sized bake
+    // volume/buffers (setNumTeams) — a game-mode event, never per-frame.
+    const uint32 numTeams = glm::clamp(params.numTeams, 2u, RendererVKLayout::MAX_FORCE_TEAMS);
+    if (params.useGrid != m_forceFieldPipeline.getUseGrid()
+        || numTeams != m_forceFieldPipeline.getNumTeams())
     {
         if (Globals::device.graphicsQueueWaitIdle() == vk::Result::eSuccess)
         {
+            printf("ForceFieldPipeline: rebuilding force pipelines (grid %d, %u teams)\n",
+                params.useGrid ? 1 : 0, numTeams); // loud: a silent skip here strands stale binaries
+            // Shader source reads from the frame loop: intentional, rare main-thread IO (a game-
+            // mode switch or the grid tweak), declared so FileSystem's assert stays meaningful.
+            const FileSystem::AllowMainThreadIO allowIo;
             m_forceFieldPipeline.setUseGrid(params.useGrid);
+            m_forceFieldPipeline.setNumTeams(numTeams);
             m_forceFieldPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
             setHaveToRecordCommandBuffers();
         }

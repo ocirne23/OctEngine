@@ -12,6 +12,27 @@ import :Layout;
 
 using namespace RendererVKLayout;
 
+// The LIVE team count as the NUM_FORCE_TEAMS define every force shader loops/sizes by (the
+// injected MAX_FORCE_TEAMS stays the cap/sentinel + the UBO color array size).
+static ShaderDefine numTeamsDefine(uint32 numTeams)
+{
+    // PLAIN integer literal: the macro is also compared in preprocessor #if lines, where a "u"
+    // suffix is shaky ground for glslang's preprocessor.
+    return ShaderDefine{ "NUM_FORCE_TEAMS", oc::to_string(numTeams) };
+}
+
+void ForceFieldPipeline::setNumTeams(uint32 numTeams)
+{
+    numTeams = glm::clamp(numTeams, 2u, MAX_FORCE_TEAMS);
+    if (numTeams == m_numTeams)
+        return;
+    m_numTeams = numTeams;
+    // Team-sized resources follow (caller is GPU-idle and reloads the shaders right after).
+    destroyShellVolume();
+    createShellVolume();
+    createBakeReadbackBuffers();
+}
+
 ForceFieldPipeline::~ForceFieldPipeline()
 {
     destroyShellVolume();
@@ -145,17 +166,26 @@ void ForceFieldPipeline::resizeIntervalTarget(uint32 width, uint32 height)
 void ForceFieldPipeline::createShellVolume()
 {
     vk::Device vkDevice = Globals::device.getDevice();
-    for (int i = 0; i < 2; ++i)
+    // TEAM-SIZED: <= 4 teams fit ONE RGBA16F volume (half the 8-team footprint), only 5+ need the
+    // second texture. Deliberately NOT RG16F for the 2-team case: rg16f image STORES need the
+    // shaderStorageImageExtendedFormats device feature, which the engine does not enable — rgba16f
+    // is in the always-supported storage set. The unused second view slot stays null — bindings
+    // fall back to view A, which those shader variants never statically use.
+    const int numVolumes = m_numTeams > 4 ? 2 : 1;
+    const vk::Format format = vk::Format::eR16G16B16A16Sfloat;
+    for (int i = 0; i < numVolumes; ++i)
     {
         const vk::ImageCreateInfo info{
             .imageType = vk::ImageType::e3D,
-            .format = vk::Format::eR16G16B16A16Sfloat,
+            .format = format,
             .extent = { FORCE_SHELL_VOLUME_X, FORCE_SHELL_VOLUME_Y, FORCE_SHELL_VOLUME_Z },
             .mipLevels = 1,
             .arrayLayers = 1,
             .samples = vk::SampleCountFlagBits::e1,
             .tiling = vk::ImageTiling::eOptimal,
-            .usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled,
+            // TRANSFER_DST: the one-time zero-clear below goes through vkCmdClearColorImage.
+            .usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled
+                | vk::ImageUsageFlagBits::eTransferDst,
             .sharingMode = vk::SharingMode::eExclusive,
             .initialLayout = vk::ImageLayout::eUndefined,
         };
@@ -168,7 +198,7 @@ void ForceFieldPipeline::createShellVolume()
         const vk::ImageViewCreateInfo viewInfo{
             .image = m_shellVolumeImage[i],
             .viewType = vk::ImageViewType::e3D,
-            .format = vk::Format::eR16G16B16A16Sfloat,
+            .format = format,
             .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 },
         };
         auto viewResult = vkDevice.createImageView(viewInfo);
@@ -196,7 +226,7 @@ void ForceFieldPipeline::createShellVolume()
     CommandBuffer init;
     init.initialize(vk::CommandBufferLevel::ePrimary);
     vk::CommandBuffer cmd = init.begin(true);
-    for (int i = 0; i < 2; ++i)
+    for (int i = 0; i < numVolumes; ++i)
     {
         vk::ImageMemoryBarrier2 toGeneral{
             .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
@@ -245,6 +275,8 @@ void ForceFieldPipeline::buildDrawLayout(GraphicsPipelineLayout& layout)
         layout.vertexShader.defines.push_back({ "FORCE_GRID", "" });
         layout.fragmentShader.defines.push_back({ "FORCE_GRID", "" });
     }
+    layout.vertexShader.defines.push_back(numTeamsDefine(m_numTeams));
+    layout.fragmentShader.defines.push_back(numTeamsDefine(m_numTeams));
     // Cull FRONT faces and skip the fixed-function depth test: the box's far/inside faces rasterize
     // exactly once per covered pixel even with the camera inside the volume; the fragment shader
     // marches within the box and depth-tests against the G-buffer depth itself.
@@ -276,6 +308,7 @@ void ForceFieldPipeline::buildComputeLayout(ComputePipelineLayout& layout, const
     // force_grid.cs defines FORCE_GRID itself (it IS the grid pass); the others follow the toggle.
     if (m_useGrid)
         layout.defines.push_back({ "FORCE_GRID", "" });
+    layout.defines.push_back(numTeamsDefine(m_numTeams));
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     for (uint32 binding : { 1u, 3u, 4u, 5u, 6u })
@@ -295,6 +328,8 @@ void ForceFieldPipeline::buildIntervalLayout(GraphicsPipelineLayout& layout)
         layout.vertexShader.defines.push_back({ "FORCE_GRID", "" });
         layout.fragmentShader.defines.push_back({ "FORCE_GRID", "" });
     }
+    layout.vertexShader.defines.push_back(numTeamsDefine(m_numTeams));
+    layout.fragmentShader.defines.push_back(numTeamsDefine(m_numTeams));
     layout.cullMode = vk::CullModeFlagBits::eFront; // camera inside a box still rasterizes (shell rule)
     layout.blendEnable = true;
     layout.colorBlendOp = vk::BlendOp::eMin; // (tEntry, -tExit) union accumulate; factors ignored
@@ -317,6 +352,7 @@ void ForceFieldPipeline::buildUnionLayout(GraphicsPipelineLayout& layout)
     layout.fragmentShader.text = FileSystem::readFileStr(layout.fragmentShader.debugFilePath);
     if (m_useGrid)
         layout.fragmentShader.defines.push_back({ "FORCE_GRID", "" });
+    layout.fragmentShader.defines.push_back(numTeamsDefine(m_numTeams));
     layout.cullMode = vk::CullModeFlagBits::eNone;
     layout.blendEnable = true; // premultiplied over the lit scene, exactly like the shell draw
     layout.srcColorBlendFactor = vk::BlendFactor::eOne;
@@ -342,6 +378,7 @@ void ForceFieldPipeline::buildShellBakeLayout(ComputePipelineLayout& layout)
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     if (m_useGrid)
         layout.defines.push_back({ "FORCE_GRID", "" });
+    layout.defines.push_back(numTeamsDefine(m_numTeams));
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     for (uint32 binding : { 1u, 3u, 4u })
@@ -461,13 +498,6 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
         m_mappedQueryReadback[i] = m_queryReadbackBuffers[i].mapMemory<ForceQueryResult>();
         memset(m_mappedQueryReadback[i].data(), 0, m_mappedQueryReadback[i].size_bytes());
 
-        m_bakeReadbackBuffers[i].initialize(
-            (size_t)MAX_FORCE_BAKE_BRICKS * FORCE_BAKE_SAMPLES_PER_BRICK * 2 * sizeof(glm::vec4),
-            vk::BufferUsageFlagBits2::eStorageBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, false, "ForceBakeReadback");
-        m_mappedBakeReadback[i] = m_bakeReadbackBuffers[i].mapMemory<glm::vec4>();
-        memset(m_mappedBakeReadback[i].data(), 0, m_mappedBakeReadback[i].size_bytes());
-
         for (uint32 eye = 0; eye < m_viewCount; ++eye)
             m_drawSets[drawSlot(i, eye)].initialize(m_pipeline.getDescriptorSetLayout());
         m_gridSets[i].initialize(m_gridPipeline.getDescriptorSetLayout());
@@ -477,6 +507,23 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
         m_shellBakeSets[i].initialize(m_shellBakePipeline.getDescriptorSetLayout());
         m_intervalSets[i].initialize(m_intervalPipeline.getDescriptorSetLayout());
         m_unionSets[i].initialize(m_unionPipeline.getDescriptorSetLayout());
+    }
+    createBakeReadbackBuffers();
+}
+
+// The CPU-readback bake's buffers — TEAM-SIZED stride ((numTeams + 3) / 4 vec4s per sample: 2
+// teams halve the readback and the CPU copy). Re-run by setNumTeams (Buffer::initialize
+// self-destroys the previous allocation).
+void ForceFieldPipeline::createBakeReadbackBuffers()
+{
+    for (uint32 i = 0; i < NUM_FRAMES_IN_FLIGHT; ++i)
+    {
+        m_bakeReadbackBuffers[i].initialize(
+            (size_t)MAX_FORCE_BAKE_BRICKS * FORCE_BAKE_SAMPLES_PER_BRICK * bakeVec4PerSample() * sizeof(glm::vec4),
+            vk::BufferUsageFlagBits2::eStorageBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, false, "ForceBakeReadback");
+        m_mappedBakeReadback[i] = m_bakeReadbackBuffers[i].mapMemory<glm::vec4>();
+        memset(m_mappedBakeReadback[i].data(), 0, m_mappedBakeReadback[i].size_bytes());
     }
 }
 
@@ -707,7 +754,8 @@ void ForceFieldPipeline::recordCompute(CommandBuffer& commandBuffer, uint32 fram
       // Acquire: the PREVIOUS frame's shell-fragment reads of the (single-set) volumes must finish
       // before this frame's writes — an execution+layout-preserving image barrier on the queue.
         oc::array<vk::ImageMemoryBarrier2, 2> acquire;
-        for (int i = 0; i < 2; ++i)
+        const uint32 numVolumes = m_shellVolumeImage[1] ? 2u : 1u; // team-sized (see createShellVolume)
+        for (uint32 i = 0; i < numVolumes; ++i)
             acquire[i] = vk::ImageMemoryBarrier2{
                 .srcStageMask = vk::PipelineStageFlagBits2::eFragmentShader,
                 .srcAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
@@ -718,7 +766,7 @@ void ForceFieldPipeline::recordCompute(CommandBuffer& commandBuffer, uint32 fram
                 .image = m_shellVolumeImage[i],
                 .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 },
             };
-        vkCb.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = (uint32)acquire.size(), .pImageMemoryBarriers = acquire.data() });
+        vkCb.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = numVolumes, .pImageMemoryBarriers = acquire.data() });
         vk::DescriptorSet shellBakeSet = m_shellBakeSets[frameIdx].getDescriptorSet();
         oc::array<DescriptorSetUpdateInfo, 6> shellBakeUpdates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(Ubo) } } },
@@ -726,7 +774,8 @@ void ForceFieldPipeline::recordCompute(CommandBuffer& commandBuffer, uint32 fram
             DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_gridTableBuffers[frameIdx]) } },
             DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_gridDataBuffers[frameIdx]) } },
             DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageImage, .imageInfos = { vk::DescriptorImageInfo{ .imageView = m_shellVolumeView[0], .imageLayout = vk::ImageLayout::eGeneral } } },
-            DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eStorageImage, .imageInfos = { vk::DescriptorImageInfo{ .imageView = m_shellVolumeView[1], .imageLayout = vk::ImageLayout::eGeneral } } },
+            // <= 4 teams: no second volume — bind A (never statically used by those shader variants)
+            DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eStorageImage, .imageInfos = { vk::DescriptorImageInfo{ .imageView = m_shellVolumeView[1] ? m_shellVolumeView[1] : m_shellVolumeView[0], .imageLayout = vk::ImageLayout::eGeneral } } },
         };
         vkCb.bindPipeline(vk::PipelineBindPoint::eCompute, m_shellBakePipeline.getPipeline());
         commandBuffer.cmdUpdateDescriptorSets(m_shellBakePipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, shellBakeSet, shellBakeUpdates);
@@ -788,7 +837,7 @@ void ForceFieldPipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameId
         DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
             vk::DescriptorImageInfo{ .sampler = m_shellVolumeSampler, .imageView = m_shellVolumeView[0], .imageLayout = vk::ImageLayout::eGeneral } } },
         DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
-            vk::DescriptorImageInfo{ .sampler = m_shellVolumeSampler, .imageView = m_shellVolumeView[1], .imageLayout = vk::ImageLayout::eGeneral } } },
+            vk::DescriptorImageInfo{ .sampler = m_shellVolumeSampler, .imageView = m_shellVolumeView[1] ? m_shellVolumeView[1] : m_shellVolumeView[0], .imageLayout = vk::ImageLayout::eGeneral } } },
     };
     commandBuffer.cmdUpdateDescriptorSets(m_pipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, vkSet, updates);
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline.getPipeline());

@@ -40,7 +40,7 @@ void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform&
     {
         if (!isPhysicsSuspended())
         {
-            suspendPhysicsTree(*this);
+            suspendPhysicsTree(*this, sc);
             setPhysicsSuspended(true);
         }
         return;

@@ -44,6 +44,11 @@ public:
     void reloadShaders(vk::RenderPass sceneRenderPass);
     void setUseGrid(bool useGrid) { m_useGrid = useGrid; } // takes effect on the next reloadShaders
     bool getUseGrid() const { return m_useGrid; }
+    // LIVE team count (the NUM_FORCE_TEAMS shader define): remakes the team-sized resources (shell
+    // volume: ONE RGBA16F texture at <= 4 teams instead of two; bake readback stride) — caller
+    // guarantees GPU idle and follows with reloadShaders (the useGrid toggle pattern).
+    void setNumTeams(uint32 numTeams);
+    uint32 getNumTeams() const { return m_numTeams; }
 
     // SHELL DRAW CULLING (upload-time, CPU): a drawable shell outside the view frustum, or whose
     // projected proxy radius is under minPixels, is compacted into the NON-drawn field partition
@@ -131,8 +136,13 @@ private:
     void createGridBuffers();
 
     void buildShellBakeLayout(ComputePipelineLayout& layout); // storage IMAGES at 5/6, unlike the rest
-    void createShellVolume(); // the two 3D field textures + sampler (one set: barrier-serialized)
+    // The shell-volume field textures + sampler (one set: barrier-serialized). TEAM-SIZED: ONE
+    // RGBA16F volume at <= 4 teams, two at 5-8 (the second view slot stays null and binding 6
+    // falls back to view A — never statically used by those shaders).
+    void createShellVolume();
     void destroyShellVolume();
+    void createBakeReadbackBuffers(); // team-sized stride (see Layout's bake comment)
+    uint32 bakeVec4PerSample() const { return (m_numTeams + 3u) / 4u; }
     void buildIntervalLayout(GraphicsPipelineLayout& layout); // shell VS + interval FS, MIN blend
     void buildUnionLayout(GraphicsPipelineLayout& layout);    // fullscreen VS + union-march FS
     void createIntervalRenderPass(); // format-fixed, made once at initialize
@@ -147,6 +157,7 @@ private:
     GraphicsPipeline m_intervalPipeline;
     GraphicsPipeline m_unionPipeline;
     bool m_useGrid = true;
+    uint32 m_numTeams = RendererVKLayout::MAX_FORCE_TEAMS;
 
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_emitterBuffers;
     oc::array<oc::span<RendererVKLayout::ForceEmittersGpu>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedEmitters;

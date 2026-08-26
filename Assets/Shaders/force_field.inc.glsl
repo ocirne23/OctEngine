@@ -27,6 +27,14 @@
 #ifndef FORCE_FIELD_INC_GLSL
 #define FORCE_FIELD_INC_GLSL
 
+// The LIVE team count (2..MAX_FORCE_TEAMS), injected per force pipeline from the game mode
+// (co-op = 2): every per-team loop and phi array is sized by it, so a 2-team mode pays a quarter
+// of the 8-team accumulation. MAX_FORCE_TEAMS stays the CAP — the UBO color array's size and the
+// "outside every bubble" sentinel (never an index).
+#ifndef NUM_FORCE_TEAMS
+#define NUM_FORCE_TEAMS 8 // = MAX_FORCE_TEAMS, as a PLAIN literal (this macro is used in #if)
+#endif
+
 #ifndef FORCE_EMITTERS_BINDING
 #define FORCE_EMITTERS_BINDING 1
 #endif
@@ -144,19 +152,29 @@ float forceAmbientField(vec3 x)
     return clamp((d - u_forceParams5.z) * slope, 0.0, u_forceParams5.w);
 }
 
-// Per-team field accumulation at x. MAX_FORCE_TEAMS is injected from Layout.ixx (= 8).
-void forceAccumulate(vec3 x, out float phi[MAX_FORCE_TEAMS])
+// Per-team field accumulation at x, over the LIVE team count (NUM_FORCE_TEAMS). Team indices are
+// CPU-clamped below the live count at upload; the ambient team is clamped here (it is a raw tweak).
+void forceAccumulate(vec3 x, out float phi[NUM_FORCE_TEAMS])
 {
-    for (uint t = 0u; t < MAX_FORCE_TEAMS; ++t)
+    for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
         phi[t] = 0.0;
     const uint cell = forceCandidateCell(x);
     const uint n = forceNumCandidates(cell);
     for (uint k = 0u; k < n; ++k)
     {
         const ForceEmitterData e = fe_emitters[forceCandidateIdx(cell, k)];
-        phi[e.teamFlags.x] += forceContribution(x, e);
+        const float c = forceContribution(x, e);
+        // NEVER a dynamic-index store (phi[e.teamFlags.x] += c): the NVIDIA compiler miscompiles
+        // that on a 2-element private array (the add lands in BOTH elements for index 1 and in
+        // NEITHER for index 0 — φ0 == φ1 everywhere at NUM_FORCE_TEAMS 2). The compare inside the
+        // unrolled per-team loop compiles to predicated adds and is correct at every team count.
+        for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
+            phi[t] += e.teamFlags.x == t ? c : 0.0;
     }
-    phi[uint(u_forceParams4.w)] += forceAmbientField(x);
+    const uint ambientTeam = min(uint(u_forceParams4.w), NUM_FORCE_TEAMS - 1u);
+    const float ambient = forceAmbientField(x);
+    for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
+        phi[t] += t == ambientTeam ? ambient : 0.0;
 }
 
 // forceAccumulate plus a SHELL-VISIBLE variant of each team's field: every contribution also
@@ -164,9 +182,9 @@ void forceAccumulate(vec3 x, out float phi[MAX_FORCE_TEAMS])
 // contact glow by the VISIBLE fields, so an invisible emitter (alpha 0 — e.g. a map-scale gameplay
 // field) still deforms bubble geometry but neither tints the junction color mix nor lights the
 // whole rim as a contested seam.
-void forceAccumulateVisible(vec3 x, out float phi[MAX_FORCE_TEAMS], out float phiVis[MAX_FORCE_TEAMS])
+void forceAccumulateVisible(vec3 x, out float phi[NUM_FORCE_TEAMS], out float phiVis[NUM_FORCE_TEAMS])
 {
-    for (uint t = 0u; t < MAX_FORCE_TEAMS; ++t)
+    for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
     {
         phi[t] = 0.0;
         phiVis[t] = 0.0;
@@ -177,10 +195,16 @@ void forceAccumulateVisible(vec3 x, out float phi[MAX_FORCE_TEAMS], out float ph
     {
         const ForceEmitterData e = fe_emitters[forceCandidateIdx(cell, k)];
         const float c = forceContribution(x, e);
-        phi[e.teamFlags.x] += c;
-        phiVis[e.teamFlags.x] += c * e.outputParams.y;
+        for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t) // predicated adds, never a dynamic-index store (see forceAccumulate)
+        {
+            phi[t] += e.teamFlags.x == t ? c : 0.0;
+            phiVis[t] += e.teamFlags.x == t ? c * e.outputParams.y : 0.0;
+        }
     }
-    phi[uint(u_forceParams4.w)] += forceAmbientField(x); // invisible: shapes, never tints
+    const uint ambientTeam = min(uint(u_forceParams4.w), NUM_FORCE_TEAMS - 1u);
+    const float ambient = forceAmbientField(x); // invisible: shapes, never tints
+    for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
+        phi[t] += t == ambientTeam ? ambient : 0.0;
 }
 
 // C1 smooth max (k = blend width; 0 = hard max). Used for the surface's opposing bound so the
@@ -205,10 +229,10 @@ float forceOpposingBound(float iso, float opposing)
 // team constant): positive inside t's bubble, zero on its surface.
 float forceSurfaceForTeam(vec3 x, uint team, float iso)
 {
-    float phi[MAX_FORCE_TEAMS];
+    float phi[NUM_FORCE_TEAMS];
     forceAccumulate(x, phi);
     float opposing = 0.0;
-    for (uint t = 0u; t < MAX_FORCE_TEAMS; ++t)
+    for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
         if (t != team)
             opposing = max(opposing, phi[t]);
     return phi[team] - forceOpposingBound(iso, opposing);
@@ -217,11 +241,11 @@ float forceSurfaceForTeam(vec3 x, uint team, float iso)
 // A fixed team's own field and its best opposing field at x.
 void forceTeamSample(vec3 x, uint team, out float own, out float opposing)
 {
-    float phi[MAX_FORCE_TEAMS];
+    float phi[NUM_FORCE_TEAMS];
     forceAccumulate(x, phi);
     own = phi[team];
     opposing = 0.0;
-    for (uint t = 0u; t < MAX_FORCE_TEAMS; ++t)
+    for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
         if (t != team)
             opposing = max(opposing, phi[t]);
 }
@@ -230,14 +254,14 @@ void forceTeamSample(vec3 x, uint team, out float own, out float opposing)
 // bestTeam's bubble.
 void forceSampleField(vec3 x, float iso, out uint bestTeam, out float bestPhi, out float secondPhi, out float F)
 {
-    float phi[MAX_FORCE_TEAMS];
+    float phi[NUM_FORCE_TEAMS];
     forceAccumulate(x, phi);
     bestTeam = 0u;
     bestPhi = phi[0];
-    for (uint t = 1u; t < MAX_FORCE_TEAMS; ++t)
+    for (uint t = 1u; t < NUM_FORCE_TEAMS; ++t)
         if (phi[t] > bestPhi) { bestPhi = phi[t]; bestTeam = t; }
     secondPhi = 0.0;
-    for (uint t = 0u; t < MAX_FORCE_TEAMS; ++t)
+    for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
         if (t != bestTeam)
             secondPhi = max(secondPhi, phi[t]);
     F = bestPhi - forceOpposingBound(iso, secondPhi);
@@ -274,7 +298,7 @@ uint forceDominantEmitter(vec3 x, uint team)
 // sign (best/second swap), so the interior wall must be detected and refined on THIS function.
 float forceTeamDiff(vec3 x, uint teamA, uint teamB)
 {
-    float phi[MAX_FORCE_TEAMS];
+    float phi[NUM_FORCE_TEAMS];
     forceAccumulate(x, phi);
     return phi[teamA] - phi[teamB];
 }

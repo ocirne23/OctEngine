@@ -402,6 +402,12 @@ export struct OceanParams
 export struct ForceFieldParams
 {
     bool enabled = true;             // gates the shell draw + force compute passes
+    // LIVE team count (2..MAX_FORCE_TEAMS), a GAME-MODE setting (ForceSystem::setNumTeams — co-op
+    // runs 2), not a tweak: changing it recompiles the force shaders (NUM_FORCE_TEAMS define) and
+    // remakes the team-sized bake volume/buffers, so per-sample cost and memory fit the mode
+    // instead of always paying for 8 teams. MAX_FORCE_TEAMS stays the CAP: the UBO color array
+    // size and the "outside every bubble" sentinel.
+    uint32 numTeams = 8;
     float isoThreshold = 0.15f;      // field strength where an uncontested bubble surface sits
     int marchSteps = 10;             // ray-march steps through a shell proxy's ray interval
     float bigReachThreshold = 48.0f; // max directional reach (m) above which an emitter bypasses the

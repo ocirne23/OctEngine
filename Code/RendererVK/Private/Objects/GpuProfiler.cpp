@@ -43,6 +43,18 @@ void GpuProfiler::initialize()
     m_supported = m_track != nullptr;
 }
 
+void GpuProfiler::destroy()
+{
+    const vk::Device device = Globals::device.getDevice();
+    for (FrameSlot& slot : m_slots)
+    {
+        if (slot.queryPool)
+            device.destroyQueryPool(slot.queryPool);
+        slot.queryPool = nullptr;
+    }
+    m_supported = false;
+}
+
 void GpuProfiler::collect(uint32 frameIdx)
 {
     if (!m_supported)

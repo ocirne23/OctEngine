@@ -145,8 +145,8 @@ void main()
                 {
                     // Same invisible-field reclassification as the shell FS: a wall against a
                     // shell-alpha-0 field IS the visible side's pressed-flat surface.
-                    float phiW[MAX_FORCE_TEAMS];
-                    float phiVisW[MAX_FORCE_TEAMS];
+                    float phiW[NUM_FORCE_TEAMS];
+                    float phiVisW[NUM_FORCE_TEAMS];
                     forceAccumulateVisible(rayOrigin + rayDir * tWall, phiW, phiVisW);
                     const float visPrev = phiVisW[prevTeam] / max(phiW[prevTeam], 1e-6);
                     const float visBest = phiVisW[bestTeam] / max(phiW[bestTeam], 1e-6);

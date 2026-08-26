@@ -1,6 +1,7 @@
 export module Entity:PhysicsComponent;
 
 import :Entity;
+import :SceneComponent;
 import Core;
 import Core.glm;
 import Core.Transform;
@@ -58,7 +59,7 @@ export struct PhysicsComponent
 
 // Suspends every PhysicsComponent body in this entity's subtree (used when the entity is disabled —
 // updateTree stops reaching it, so the bodies would otherwise keep colliding invisibly).
-export void suspendPhysicsTree(Entity& entity);
+export void suspendPhysicsTree(Entity& entity, SceneComponent* sc);
 
 export const PhysicsComponent::SpawnInfo* getPhysicsSpawnInfo(const Entity* entity);
 

@@ -100,7 +100,11 @@ export namespace RendererVKLayout
     // compact-uploaded per frame; per-emitter applied forces and point queries are GPU-computed and
     // read back slot-indexed ~2 frames latent. Sizing constants are injected into every shader compile.
     constexpr uint32 MAX_FORCE_EMITTERS = 8192;     // live emitter slots (64 B each)
-    constexpr uint32 MAX_FORCE_TEAMS = 8;           // fixed team count (per-point field accumulators)
+    constexpr uint32 MAX_FORCE_TEAMS = 8;           // team CAP: sizes the UBO color array and is the
+                                                    // "outside every bubble" sentinel. The LIVE count
+                                                    // is ForceFieldParams::numTeams (shader define
+                                                    // NUM_FORCE_TEAMS, 2 in co-op) — the force
+                                                    // pipelines/bakes rebuild to fit it
     constexpr uint32 MAX_FORCE_QUERIES = 1024;      // persistent gameplay point-query slots
                                                     // (structures; units read the baked field)
     constexpr uint32 MAX_FORCE_BIG_EMITTERS = 64;   // reach above the tweak threshold bypasses the grid
@@ -172,9 +176,10 @@ export namespace RendererVKLayout
         glm::ivec4 bricks[MAX_FORCE_BAKE_BRICKS]; // xy = brick coord (floor(world / 32 m)), zw unused
     };
     constexpr size_t FORCE_BAKE_HEADER_SIZE = sizeof(ForceBakeBricksGpu) - sizeof(glm::ivec4) * MAX_FORCE_BAKE_BRICKS;
-    // Output/readback: per sample TWO vec4 = phi[0..3] / phi[4..7] (every team's field value),
-    // brick-major: (brick * 256 + localZ * 16 + localX) * 2.
-    static_assert(MAX_FORCE_TEAMS == 8); // the two-vec4 sample layout encodes exactly 8 teams
+    // Output/readback: per sample (numTeams + 3) / 4 vec4s (every LIVE team's field value —
+    // ONE vec4 with <= 4 teams, halving the readback + the CPU copy), brick-major:
+    // (brick * 256 + localZ * 16 + localX) * vec4PerSample. The stride is the live team count's,
+    // so the buffers are remade on a numTeams change (ForceFieldPipeline::setNumTeams).
     // The paired view of one frame slot's baked field: the data is ~2 frames old, so it comes WITH
     // the brick list it was evaluated for (bricks.size() bricks x 512 vec4s, brick-major).
     struct ForceBakeReadback

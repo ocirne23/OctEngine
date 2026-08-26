@@ -31,11 +31,22 @@ void main()
         bk_sampleY,
         float(bc.y * int(FORCE_BAKE_BRICK_SAMPLES) + int(gl_LocalInvocationID.y)) * spacing);
 
-    float phi[MAX_FORCE_TEAMS];
+    float phi[NUM_FORCE_TEAMS];
     forceAccumulate(pos, phi);
 
+    // TEAM-SIZED stride: (NUM_FORCE_TEAMS + 3) / 4 vec4s per sample (one with <= 4 live teams —
+    // half the readback). The CPU sampler mirrors the stride (ForceSystem::sampleBakedField).
+    const uint vec4PerSample = (NUM_FORCE_TEAMS + 3u) / 4u;
     const uint idx = (brick * FORCE_BAKE_BRICK_SAMPLES * FORCE_BAKE_BRICK_SAMPLES
-        + gl_LocalInvocationID.y * FORCE_BAKE_BRICK_SAMPLES + gl_LocalInvocationID.x) * 2u;
-    out_field[idx] = vec4(phi[0], phi[1], phi[2], phi[3]);
-    out_field[idx + 1u] = vec4(phi[4], phi[5], phi[6], phi[7]);
+        + gl_LocalInvocationID.y * FORCE_BAKE_BRICK_SAMPLES + gl_LocalInvocationID.x) * vec4PerSample;
+    vec4 outA = vec4(0.0);
+    for (uint t = 0u; t < min(uint(NUM_FORCE_TEAMS), 4u); ++t)
+        outA[t] = phi[t];
+    out_field[idx] = outA;
+#if NUM_FORCE_TEAMS > 4
+    vec4 outB = vec4(0.0);
+    for (uint t = 4u; t < NUM_FORCE_TEAMS; ++t)
+        outB[t - 4u] = phi[t];
+    out_field[idx + 1u] = outB;
+#endif
 }

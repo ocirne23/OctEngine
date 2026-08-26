@@ -66,14 +66,14 @@ vec4 forceShadeHit(vec3 rayOrigin, vec3 rayDir, float tHit, uint hitTeam, bool c
     float sceneDist, uint ownerIdx)
 {
     const vec3 hitPos = rayOrigin + rayDir * tHit;
-    float phi[MAX_FORCE_TEAMS];
-    float phiVis[MAX_FORCE_TEAMS]; // shell-alpha-weighted: invisible fields shape, never tint
+    float phi[NUM_FORCE_TEAMS];
+    float phiVis[NUM_FORCE_TEAMS]; // shell-alpha-weighted: invisible fields shape, never tint
     forceAccumulateVisible(hitPos, phi, phiVis);
     const float ownPhi = phi[hitTeam];
     if (ownPhi <= 0.0)
         return vec4(0.0);
     float opposingPhiVis = 0.0;
-    for (uint t = 0u; t < MAX_FORCE_TEAMS; ++t)
+    for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
         if (t != hitTeam)
             opposingPhiVis = max(opposingPhiVis, phiVis[t]);
 
@@ -92,7 +92,7 @@ vec4 forceShadeHit(vec3 rayOrigin, vec3 rayDir, float tHit, uint hitTeam, bool c
     // by one keeps its pure team color instead of going junction-purple.
     vec3 teamColor = vec3(0.0);
     float weightSum = 0.0;
-    for (uint t = 0u; t < MAX_FORCE_TEAMS; ++t)
+    for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
     {
         float w = phiVis[t] * phiVis[t];
         w *= w;

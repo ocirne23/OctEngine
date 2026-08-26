@@ -146,7 +146,7 @@ void ForceEmitter::setWidth(float width)
 void ForceEmitter::setTeam(uint32 team)
 {
     if (ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
-        inst->team = glm::min(team, MAX_FORCE_TEAMS - 1);
+        inst->team = glm::min(team, Globals::forceSystem.numTeams() - 1);
 }
 
 void ForceEmitter::setShellAlpha(float alpha)
@@ -302,6 +302,14 @@ ForceQuery::Result ForceQuery::getResult() const
 
 // ---- ForceSystem ----
 
+void ForceSystem::setNumTeams(uint32 numTeams)
+{
+    // Takes effect through the per-frame params push: the renderer detects the change, idles the
+    // device once, recompiles the force shaders (NUM_FORCE_TEAMS) and remakes the team-sized
+    // bake volume/buffers.
+    m_params.numTeams = glm::clamp(numTeams, 2u, (uint32)MAX_FORCE_TEAMS);
+}
+
 void ForceSystem::initialize()
 {
     Tweak::boolean("Force", "Enabled", &m_params.enabled);
@@ -376,7 +384,8 @@ static ForceEmitterGpu buildEmitterGpu(const glm::vec3& pos, const glm::vec3& di
     gpu.dirFocus = glm::vec4(d, glm::clamp(focus, 0.0f, 1.0f));
     gpu.outputParams = glm::vec4(glm::max(output, 0.0f) * outputScale, glm::clamp(shellAlpha, 0.0f, 1.0f),
         glm::clamp(distribution, 0.0f, 1.0f), glm::clamp(width, 0.05f, 4.0f));
-    gpu.teamFlags = glm::uvec4(glm::min(team, MAX_FORCE_TEAMS - 1), flags, 0u, 0u);
+    // Clamp below the LIVE team count: the shaders' phi arrays are sized NUM_FORCE_TEAMS.
+    gpu.teamFlags = glm::uvec4(glm::min(team, Globals::forceSystem.numTeams() - 1), flags, 0u, 0u);
     return gpu;
 }
 
@@ -428,7 +437,7 @@ ForceEmitter ForceSystem::createEmitter(uint32 team, const glm::vec3& pos, const
     if (m_generationCounter == 0)
         m_generationCounter = 1;
     inst.rendererSlot = slot;
-    inst.team = glm::min(team, MAX_FORCE_TEAMS - 1);
+    inst.team = glm::min(team, m_params.numTeams - 1);
     inst.output = output;
     inst.reach = reach;
     inst.focus = focus;
@@ -1090,10 +1099,11 @@ void ForceSystem::publishBake(Renderer& renderer)
     // CPU storage: the mapped buffer is only safe until present re-submits the slot, while the
     // published copy is read by next frame's entity pass.
     const ForceBakeReadback bake = renderer.getForceBakeReadback();
-    constexpr size_t c_vec4PerBrick = (size_t)FORCE_BAKE_SAMPLES_PER_BRICK * 2;
+    // TEAM-SIZED stride, mirroring force_bake.cs: one vec4 per sample with <= 4 live teams.
+    const size_t vec4PerBrick = (size_t)FORCE_BAKE_SAMPLES_PER_BRICK * ((m_params.numTeams + 3u) / 4u);
     m_bakeIndex.clear();
-    const size_t numBricks = glm::min(bake.bricks.size(), bake.data.size() / c_vec4PerBrick);
-    m_bakeData.assign(bake.data.begin(), bake.data.begin() + numBricks * c_vec4PerBrick);
+    const size_t numBricks = glm::min(bake.bricks.size(), bake.data.size() / vec4PerBrick);
+    m_bakeData.assign(bake.data.begin(), bake.data.begin() + numBricks * vec4PerBrick);
     for (size_t b = 0; b < numBricks; ++b)
         m_bakeIndex[bakeBrickKey(bake.bricks[b].x, bake.bricks[b].y)] = (uint32)b;
     m_bakePublished = m_bakeEnabled; // disabled: samplers report invalid, callers fall back
@@ -1107,6 +1117,8 @@ ForceSystem::FieldSample ForceSystem::sampleBakedField(const glm::vec3& pos, uin
     s.valid = true;
     constexpr int N = (int)FORCE_BAKE_BRICK_SAMPLES;
     constexpr float c_invSpacing = 1.0f / FORCE_BAKE_SAMPLE_SPACING;
+    const uint32 numTeams = m_params.numTeams;
+    const size_t vec4PerSample = (numTeams + 3u) / 4u; // mirrors force_bake.cs's team-sized stride
     const float gxf = pos.x * c_invSpacing;
     const float gzf = pos.z * c_invSpacing;
     const int gx0 = (int)std::floor(gxf), gz0 = (int)std::floor(gzf);
@@ -1125,25 +1137,22 @@ ForceSystem::FieldSample ForceSystem::sampleBakedField(const glm::vec3& pos, uin
             continue;
         any = true;
         const int lx = gx - bx * N, lz = gz - bz * N;
-        const glm::vec4* v = &m_bakeData[((size_t)it->second * (N * N) + (size_t)(lz * N + lx)) * 2];
-        for (int t = 0; t < 4; ++t)
-        {
-            corner[c][t] = v[0][t];
-            corner[c][t + 4] = v[1][t];
-        }
+        const glm::vec4* v = &m_bakeData[((size_t)it->second * (N * N) + (size_t)(lz * N + lx)) * vec4PerSample];
+        for (uint32 t = 0; t < numTeams; ++t)
+            corner[c][t] = v[t >> 2][t & 3];
     }
     if (!any)
         return s; // zero field here: valid, no force, not inside anything
     const float w[4] = { (1.0f - fx) * (1.0f - fz), fx * (1.0f - fz), (1.0f - fx) * fz, fx * fz };
     float phi[MAX_FORCE_TEAMS];
-    for (uint32 t = 0; t < MAX_FORCE_TEAMS; ++t)
+    for (uint32 t = 0; t < numTeams; ++t)
         phi[t] = corner[0][t] * w[0] + corner[1][t] * w[1] + corner[2][t] * w[2] + corner[3][t] * w[3];
     uint32 best = 0;
-    for (uint32 t = 1; t < MAX_FORCE_TEAMS; ++t)
+    for (uint32 t = 1; t < numTeams; ++t)
         if (phi[t] > phi[best])
             best = t;
     float second = 0.0f;
-    for (uint32 t = 0; t < MAX_FORCE_TEAMS; ++t)
+    for (uint32 t = 0; t < numTeams; ++t)
         if (t != best)
             second = glm::max(second, phi[t]);
     s.owningTeam = best;
@@ -1155,7 +1164,7 @@ ForceSystem::FieldSample ForceSystem::sampleBakedField(const glm::vec3& pos, uin
     for (int c = 0; c < 4; ++c)
     {
         o[c] = 0.0f;
-        for (uint32 t = 0; t < MAX_FORCE_TEAMS; ++t)
+        for (uint32 t = 0; t < numTeams; ++t)
             if (t != team)
                 o[c] = glm::max(o[c], corner[c][t]);
     }

@@ -94,13 +94,13 @@ void PhysicsComponent::update(Entity& entity, const Transform& parentWorld)
     }
 }
 
-void suspendPhysicsTree(Entity& entity)
+void suspendPhysicsTree(Entity& entity, SceneComponent* sc)
 {
     if (PhysicsComponent* pc = getComponent<PhysicsComponent>(&entity))
         pc->suspendBody();
-    if (SceneComponent* sc = getComponent<SceneComponent>(&entity))
+    if (sc)
         for (const EntityPtr& child : sc->children)
-            suspendPhysicsTree(*child);
+            suspendPhysicsTree(*child, getComponent<SceneComponent>(child));
 }
 
 const PhysicsComponent::SpawnInfo* getPhysicsSpawnInfo(const Entity* entity)

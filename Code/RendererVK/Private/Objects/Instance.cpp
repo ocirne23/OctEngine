@@ -77,6 +77,7 @@ static vk::Bool32 debugCallback(
     bool* pBreakOnValidationLayerError = reinterpret_cast<bool*>(pUserData);
     if (*pBreakOnValidationLayerError && (messageSeverity & vk::DebugUtilsMessageSeverityFlagBitsEXT::eError))
     {
+        fflush(nullptr); // the break kills the process under a script runner — don't eat the message
         __debugbreak();
     }
     return vk::False;

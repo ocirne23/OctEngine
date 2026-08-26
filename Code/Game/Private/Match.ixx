@@ -209,7 +209,10 @@ private:
     glm::vec3 teamStartPos(uint8 team) const; // spawn/respawn anchor beside that team's Base
 
     // ---- CO-OP (see the constructor comment) ----
-    static constexpr uint8 CoopAiTeam = GameMaxTeams - 1; // the ambient/wave team (< Nav::MaxTeams)
+    // The ambient/wave team. Team 1, NOT a high slot: co-op runs the Force system at TWO live
+    // teams (setNumTeams(2) — the renderer's per-team costs shrink to fit), so every team index
+    // must stay below 2. (< Nav::MaxTeams as well.)
+    static constexpr uint8 CoopAiTeam = 1;
     void tickWaves(float deltaSec);  // authority: the wave clock
     void queueWave();                // pick a compass direction, size the swarm, seed its lane
     void tickCoopSpawns();           // trickle: wave + ambient spawns on a per-frame budget

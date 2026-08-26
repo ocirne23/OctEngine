@@ -17,6 +17,7 @@ public:
     static constexpr uint32 MAX_SCOPES = 128; // per frame slot; 2 timestamps each
 
     void initialize(); // after Device; also requires Globals::profiler.initialize() to have run (main.cpp does it first)
+    void destroy();    // device-idle: frees the per-slot query pools (~Renderer calls it)
 
     // After the slot's fence wait, before anything re-records into it: reads the slot's previous
     // results and pushes them to the profiler GPU track. Runs as a job (kicked in beginFrame, joined

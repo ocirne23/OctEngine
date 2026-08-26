@@ -16,10 +16,6 @@
 #include "force_field.inc.glsl" // declares the emitter buffer at FORCE_EMITTERS_BINDING (1)
 
 layout (binding = 2) uniform sampler2D u_gbufferDepth;
-// The SAMPLED SHELL TIER's field volumes (force_shellbake.cs.glsl): every team's phi, baked over
-// the fitted u_forceBake0/1 box. Clamp-to-border transparent black = zero field outside.
-layout (binding = 5) uniform sampler3D u_shellVolumeA; // phi[0..3]
-layout (binding = 6) uniform sampler3D u_shellVolumeB; // phi[4..7]
 
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 
@@ -31,24 +27,38 @@ layout (location = 0) out vec4 out_color;
 // FS (force_union.fs.glsl) — everything the instance identity provided rides their ownerIdx param.
 #include "force_shell_shade.inc.glsl"
 
-// forceSampleField's semantics from the BAKED volume: two trilinear taps instead of the analytic
-// candidate loop — the sampled tier's per-step cost is flat no matter how many emitters overlap.
-// Only large emitters march this (their surfaces are far larger than a texel, so the trilinear
-// reconstruction error is centimetres); hit refinement, normals and shading stay ANALYTIC.
+// The SAMPLED SHELL TIER's field volumes (force_shellbake.cs.glsl): every LIVE team's phi, baked
+// over the fitted u_forceBake0/1 box, TEAM-SIZED (one texture holds up to 4 teams; the second
+// exists only for 5+). Clamp-to-border transparent black = zero field outside.
+layout (binding = 5) uniform sampler3D u_shellVolumeA; // phi[0..3]
+#if NUM_FORCE_TEAMS > 4
+layout (binding = 6) uniform sampler3D u_shellVolumeB; // phi[4..7]
+#endif
+
+// forceSampleField's semantics from the BAKED volume: one or two trilinear taps instead of the
+// analytic candidate loop — the sampled tier's per-step cost is flat no matter how many emitters
+// overlap. Only large emitters march this (their surfaces are far larger than a texel, so the
+// trilinear reconstruction error is centimetres); hit refinement, normals and shading stay ANALYTIC.
 void forceSampleFieldBaked(vec3 x, float iso, out uint bestTeam, out float bestPhi, out float secondPhi, out float F)
 {
     const vec3 uvw = (x - u_forceBake0.xyz) * u_forceBake1.xyz;
     const vec4 a = texture(u_shellVolumeA, uvw);
+#if NUM_FORCE_TEAMS > 4
     const vec4 b = texture(u_shellVolumeB, uvw);
-    float phi[MAX_FORCE_TEAMS];
-    phi[0] = a.x; phi[1] = a.y; phi[2] = a.z; phi[3] = a.w;
-    phi[4] = b.x; phi[5] = b.y; phi[6] = b.z; phi[7] = b.w;
+#endif
+    float phi[NUM_FORCE_TEAMS];
+    for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
+#if NUM_FORCE_TEAMS > 4
+        phi[t] = t < 4u ? a[t] : b[t - 4u];
+#else
+        phi[t] = a[t];
+#endif
     bestTeam = 0u;
     bestPhi = phi[0];
-    for (uint t = 1u; t < MAX_FORCE_TEAMS; ++t)
+    for (uint t = 1u; t < NUM_FORCE_TEAMS; ++t)
         if (phi[t] > bestPhi) { bestPhi = phi[t]; bestTeam = t; }
     secondPhi = 0.0;
-    for (uint t = 0u; t < MAX_FORCE_TEAMS; ++t)
+    for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
         if (t != bestTeam)
             secondPhi = max(secondPhi, phi[t]);
     F = bestPhi - forceOpposingBound(iso, secondPhi);
@@ -230,8 +240,8 @@ void main()
                     // look (phiVis already keeps the color pure) and, critically, is OWNED by the
                     // visible team's dominant emitter — the invisible side's proxy never
                     // rasterizes, which silently dropped the entry-side wall entirely.
-                    float phiW[MAX_FORCE_TEAMS];
-                    float phiVisW[MAX_FORCE_TEAMS];
+                    float phiW[NUM_FORCE_TEAMS];
+                    float phiVisW[NUM_FORCE_TEAMS];
                     forceAccumulateVisible(rayOrigin + rayDir * tWall, phiW, phiVisW);
                     const float visPrev = phiVisW[prevTeam] / max(phiW[prevTeam], 1e-6);
                     const float visBest = phiVisW[bestTeam] / max(phiW[bestTeam], 1e-6);

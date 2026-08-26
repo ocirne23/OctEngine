@@ -179,6 +179,13 @@ public:
     uint32 getNumMergedEmitters() const { return (uint32)m_statMerged; }
     const ForceFieldParams& getParams() const { return m_params; }
 
+    // The LIVE team count (2..MAX_FORCE_TEAMS) — a GAME-MODE setting, not a tweak (co-op = 2):
+    // the renderer recompiles the force shaders and remakes the team-sized bake volume/buffers
+    // when the pushed params change (one device idle). Team values on emitters/queries clamp
+    // below it. Call before the mode's world spawns (main thread).
+    void setNumTeams(uint32 numTeams);
+    uint32 numTeams() const { return m_params.numTeams; }
+
     // The GLOBAL AMBIENT FIELD: an analytic distance-based term one team projects everywhere —
     // zero within safeRadius of the planar center, +slope per metre beyond it, capped at
     // maxStrength. No emitter, never drawn; deforms bubbles and feeds every readback like any
