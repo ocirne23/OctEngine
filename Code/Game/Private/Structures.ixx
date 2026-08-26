@@ -110,6 +110,9 @@ public:
 
     void registerTweaks();
     void spawnNodes(); // the corridor arena's symmetric node set (deterministic on every instance)
+    // CO-OP: nodes scattered over the big open map on a golden-angle spiral — pure math, so every
+    // instance builds the identical set locally (the corridor-set contract).
+    void spawnNodesCoop(float minRadius, float maxRadius, int count);
     void spawnBase(const glm::vec3& groundPos, uint8 team = 0);
     void clear(); // drops every structure entity + node (before world teardown)
 
@@ -372,6 +375,7 @@ private:
         const int index = structureIndexById(id);
         return index >= 0 ? m_frame[index].state : nullptr;
     }
+    void spawnNode(float x, float z, ENodeType type); // one resource node entity + roster entry
     void placeStructure(EStructureType type, const glm::vec3& groundPos, int nodeIndex,
         const glm::vec3& facing, uint8 team);
     void spendMinerals(uint8 team, float amount); // drains the team's Silos first, the Base last

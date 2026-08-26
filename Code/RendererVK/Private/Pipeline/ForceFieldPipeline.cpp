@@ -83,13 +83,15 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
     buildDrawLayout(drawLayout);
     m_pipeline.initialize(sceneRenderPass, drawLayout);
 
-    ComputePipelineLayout gridLayout, forceLayout, queryLayout;
+    ComputePipelineLayout gridLayout, forceLayout, queryLayout, bakeLayout;
     buildComputeLayout(gridLayout, "Shaders/force_grid.cs.glsl");
     buildComputeLayout(forceLayout, "Shaders/force_emitter.cs.glsl");
     buildComputeLayout(queryLayout, "Shaders/force_query.cs.glsl");
+    buildComputeLayout(bakeLayout, "Shaders/force_bake.cs.glsl");
     m_gridPipeline.initialize(gridLayout);
     m_emitterForcePipeline.initialize(forceLayout);
     m_queryPipeline.initialize(queryLayout);
+    m_bakePipeline.initialize(bakeLayout);
 
     createGridBuffers();
 
@@ -111,6 +113,14 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
         m_mappedQueries[i].data()->count = 0;
         m_queryBuffers[i].flushMappedMemory(FORCE_QUERY_HEADER_SIZE);
 
+        m_bakeBrickBuffers[i].initialize(sizeof(ForceBakeBricksGpu),
+            vk::BufferUsageFlagBits2::eStorageBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible, false, "ForceBakeBricks", BufferHostAccess::eSequentialWrite);
+        m_mappedBakeBricks[i] = m_bakeBrickBuffers[i].mapMemory<ForceBakeBricksGpu>();
+        m_mappedBakeBricks[i].data()->count = 0;
+        m_mappedBakeBricks[i].data()->sampleY = 0.0f;
+        m_bakeBrickBuffers[i].flushMappedMemory(FORCE_BAKE_HEADER_SIZE);
+
         m_indirectBuffers[i].initialize(INDIRECT_UINTS * sizeof(uint32),
             vk::BufferUsageFlagBits2::eIndirectBuffer,
             vk::MemoryPropertyFlagBits::eHostVisible, false, "ForceIndirect", BufferHostAccess::eSequentialWrite);
@@ -123,6 +133,8 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
         m_mappedIndirect[i][EMITTER_DISPATCH_OFFSET + 2] = 1;
         m_mappedIndirect[i][QUERY_DISPATCH_OFFSET + 1] = 1;
         m_mappedIndirect[i][QUERY_DISPATCH_OFFSET + 2] = 1;
+        m_mappedIndirect[i][BAKE_DISPATCH_OFFSET + 1] = 1;
+        m_mappedIndirect[i][BAKE_DISPATCH_OFFSET + 2] = 1;
         m_indirectBuffers[i].flushMappedMemory(vk::WholeSize);
 
         // GPU-written, CPU-read ~2 frames later; zeroed so pre-first-frame reads decode as "no force
@@ -139,11 +151,19 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
         m_mappedQueryReadback[i] = m_queryReadbackBuffers[i].mapMemory<ForceQueryResult>();
         memset(m_mappedQueryReadback[i].data(), 0, m_mappedQueryReadback[i].size_bytes());
 
+        m_bakeReadbackBuffers[i].initialize(
+            (size_t)MAX_FORCE_BAKE_BRICKS * FORCE_BAKE_SAMPLES_PER_BRICK * 2 * sizeof(glm::vec4),
+            vk::BufferUsageFlagBits2::eStorageBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, false, "ForceBakeReadback");
+        m_mappedBakeReadback[i] = m_bakeReadbackBuffers[i].mapMemory<glm::vec4>();
+        memset(m_mappedBakeReadback[i].data(), 0, m_mappedBakeReadback[i].size_bytes());
+
         for (uint32 eye = 0; eye < m_viewCount; ++eye)
             m_drawSets[drawSlot(i, eye)].initialize(m_pipeline.getDescriptorSetLayout());
         m_gridSets[i].initialize(m_gridPipeline.getDescriptorSetLayout());
         m_emitterForceSets[i].initialize(m_emitterForcePipeline.getDescriptorSetLayout());
         m_querySets[i].initialize(m_queryPipeline.getDescriptorSetLayout());
+        m_bakeSets[i].initialize(m_bakePipeline.getDescriptorSetLayout());
     }
 }
 
@@ -153,20 +173,24 @@ void ForceFieldPipeline::reloadShaders(vk::RenderPass sceneRenderPass)
     buildDrawLayout(drawLayout);
     if (!m_pipeline.reloadShaders(sceneRenderPass, drawLayout))
         printf("ForceFieldPipeline: shell shader reload failed, keeping previous pipeline\n");
-    ComputePipelineLayout gridLayout, forceLayout, queryLayout;
+    ComputePipelineLayout gridLayout, forceLayout, queryLayout, bakeLayout;
     buildComputeLayout(gridLayout, "Shaders/force_grid.cs.glsl");
     buildComputeLayout(forceLayout, "Shaders/force_emitter.cs.glsl");
     buildComputeLayout(queryLayout, "Shaders/force_query.cs.glsl");
+    buildComputeLayout(bakeLayout, "Shaders/force_bake.cs.glsl");
     if (!m_gridPipeline.reloadShaders(gridLayout))
         printf("ForceFieldPipeline: grid shader reload failed, keeping previous pipeline\n");
     if (!m_emitterForcePipeline.reloadShaders(forceLayout))
         printf("ForceFieldPipeline: emitter force shader reload failed, keeping previous pipeline\n");
     if (!m_queryPipeline.reloadShaders(queryLayout))
         printf("ForceFieldPipeline: query shader reload failed, keeping previous pipeline\n");
+    if (!m_bakePipeline.reloadShaders(bakeLayout))
+        printf("ForceFieldPipeline: bake shader reload failed, keeping previous pipeline\n");
 }
 
 void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu> slots,
-    oc::span<const ForceQueryGpu> querySlots, float bigReachThreshold)
+    oc::span<const ForceQueryGpu> querySlots, oc::span<const glm::ivec4> bakeBricks,
+    float bakeSampleY, float bigReachThreshold)
 {
     ForceEmittersGpu* dst = m_mappedEmitters[frameIdx].data();
     uint32 count = 0;
@@ -218,11 +242,23 @@ void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu>
     q->count = numQueries;
     m_queryBuffers[frameIdx].flushMappedMemory(FORCE_QUERY_HEADER_SIZE + numQueries * sizeof(ForceQueryGpu));
 
+    // Bake bricks + the per-slot CPU pairing copy: this slot's readback (~2 frames from now) is
+    // indexed by exactly this list (see getBakeReadback).
+    ForceBakeBricksGpu* bk = m_mappedBakeBricks[frameIdx].data();
+    const uint32 numBricks = (uint32)glm::min(bakeBricks.size(), (size_t)MAX_FORCE_BAKE_BRICKS);
+    if (numBricks > 0)
+        memcpy(bk->bricks, bakeBricks.data(), numBricks * sizeof(glm::ivec4));
+    bk->count = numBricks;
+    bk->sampleY = bakeSampleY;
+    m_bakeBrickBuffers[frameIdx].flushMappedMemory(FORCE_BAKE_HEADER_SIZE + numBricks * sizeof(glm::ivec4));
+    m_bakeBrickLists[frameIdx].assign(bakeBricks.begin(), bakeBricks.begin() + numBricks);
+
     uint32* ind = m_mappedIndirect[frameIdx].data();
     ind[DRAW_CMD_OFFSET + 1] = drawCount; // instanceCount: drawable shells only (see partition above)
     ind[GRID_DISPATCH_OFFSET] = fieldCount; // single-thread workgroups (see force_grid.cs.glsl)
     ind[EMITTER_DISPATCH_OFFSET] = (count + FORCE_SIM_GROUP_SIZE - 1) / FORCE_SIM_GROUP_SIZE; // + passive tail
     ind[QUERY_DISPATCH_OFFSET] = (numQueries + FORCE_SIM_GROUP_SIZE - 1) / FORCE_SIM_GROUP_SIZE;
+    ind[BAKE_DISPATCH_OFFSET] = numBricks; // one 16x16 workgroup per brick
     m_indirectBuffers[frameIdx].flushMappedMemory(vk::WholeSize);
 }
 
@@ -293,6 +329,14 @@ void ForceFieldPipeline::recordCompute(CommandBuffer& commandBuffer, uint32 fram
         commandBuffer.cmdUpdateDescriptorSets(m_queryPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, querySet, queryUpdates);
         vkCb.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_queryPipeline.getPipelineLayout(), 0, 1, &querySet, 0, nullptr);
         vkCb.dispatchIndirect(m_indirectBuffers[frameIdx].getBuffer(), QUERY_DISPATCH_OFFSET * sizeof(uint32));
+    }
+    { // the baked pressure field: one workgroup per brick (reads grid + emitters, own output)
+        vk::DescriptorSet bakeSet = m_bakeSets[frameIdx].getDescriptorSet();
+        auto bakeUpdates = makeUpdates(m_bakeBrickBuffers[frameIdx], m_bakeReadbackBuffers[frameIdx]);
+        vkCb.bindPipeline(vk::PipelineBindPoint::eCompute, m_bakePipeline.getPipeline());
+        commandBuffer.cmdUpdateDescriptorSets(m_bakePipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, bakeSet, bakeUpdates);
+        vkCb.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_bakePipeline.getPipelineLayout(), 0, 1, &bakeSet, 0, nullptr);
+        vkCb.dispatchIndirect(m_indirectBuffers[frameIdx].getBuffer(), BAKE_DISPATCH_OFFSET * sizeof(uint32));
     }
 
     { // grid reads for the shell FS in the scene pass + readback visibility for the CPU

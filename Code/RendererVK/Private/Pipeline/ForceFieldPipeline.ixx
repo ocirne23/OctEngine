@@ -48,7 +48,8 @@ public:
     // past the field count that only the force compute evaluates), uploads the query slots, and
     // patches the draw/dispatch counts. Call from present(), after the slot's fence wait.
     void upload(uint32 frameIdx, oc::span<const RendererVKLayout::ForceEmitterGpu> slots,
-        oc::span<const RendererVKLayout::ForceQueryGpu> querySlots, float bigReachThreshold);
+        oc::span<const RendererVKLayout::ForceQueryGpu> querySlots,
+        oc::span<const glm::ivec4> bakeBricks, float bakeSampleY, float bigReachThreshold);
 
     // Records grid clear + insert + force/query dispatches + readback barriers (outside any render
     // pass; ubo is the frame's UBO). All dispatches ride mapped indirect buffers, so emitter/query
@@ -71,6 +72,13 @@ public:
     // contents are ~2 frames old). Forces: xyz = applied force, w = mean opposing pressure.
     oc::span<const glm::vec4> getForceReadback(uint32 frameIdx) const { return m_mappedForceReadback[frameIdx]; }
     oc::span<const RendererVKLayout::ForceQueryResult> getQueryReadback(uint32 frameIdx) const { return m_mappedQueryReadback[frameIdx]; }
+    // The baked pressure field of THIS frame slot: the data is ~2 frames old, so the brick list it
+    // was evaluated for is returned WITH it (the per-slot copy stored at upload) — the pairing the
+    // CPU-side sampler indexes by.
+    RendererVKLayout::ForceBakeReadback getBakeReadback(uint32 frameIdx) const
+    {
+        return { m_bakeBrickLists[frameIdx], m_mappedBakeReadback[frameIdx] };
+    }
 
     // Grid capacity contract (checkForceGridCapacity): last frame's demand counters, and growth.
     struct GridDemand { uint32 numCells; uint32 dataCounter; };
@@ -90,6 +98,7 @@ private:
     ComputePipeline m_gridPipeline;
     ComputePipeline m_emitterForcePipeline;
     ComputePipeline m_queryPipeline;
+    ComputePipeline m_bakePipeline;
     bool m_useGrid = true;
 
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_emitterBuffers;
@@ -105,6 +114,11 @@ private:
     oc::array<oc::span<glm::vec4>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedForceReadback;
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_queryReadbackBuffers;
     oc::array<oc::span<RendererVKLayout::ForceQueryResult>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedQueryReadback;
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_bakeBrickBuffers;
+    oc::array<oc::span<RendererVKLayout::ForceBakeBricksGpu>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedBakeBricks;
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_bakeReadbackBuffers;
+    oc::array<oc::span<glm::vec4>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedBakeReadback;
+    oc::array<oc::vector<glm::ivec4>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_bakeBrickLists; // per-slot pairing (see getBakeReadback)
 
     uint32 m_tableEntries = RendererVKLayout::INITIAL_FORCE_TABLE_ENTRIES;
     size_t m_gridDataSize = RendererVKLayout::INITIAL_FORCE_GRID_DATA_SIZE;
@@ -115,14 +129,16 @@ private:
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_gridSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_emitterForceSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_querySets;
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_bakeSets;
     uint32 m_viewCount = 1;
 
     // Offsets into the per-frame indirect buffer (uints): [0..3] draw, [4..6] grid insert groups
     // (x = emitter COUNT — the insert runs single-thread workgroups, see force_grid.cs.glsl),
-    // [8..10] force groups, [12..14] query groups.
+    // [8..10] force groups, [12..14] query groups, [16..18] bake groups (x = brick count).
     static constexpr uint32 DRAW_CMD_OFFSET = 0;
     static constexpr uint32 GRID_DISPATCH_OFFSET = 4;
     static constexpr uint32 EMITTER_DISPATCH_OFFSET = 8;
     static constexpr uint32 QUERY_DISPATCH_OFFSET = 12;
-    static constexpr uint32 INDIRECT_UINTS = 16;
+    static constexpr uint32 BAKE_DISPATCH_OFFSET = 16;
+    static constexpr uint32 INDIRECT_UINTS = 20;
 };

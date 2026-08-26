@@ -309,6 +309,9 @@ void ForceSystem::initialize()
     Tweak::intVar("Force", "March steps", &m_params.marchSteps, 8, 128);
     Tweak::floatVar("Force", "Big reach threshold (m)", &m_params.bigReachThreshold, 8.0f, 512.0f, 1.0f);
     Tweak::boolean("Force", "Use grid", &m_params.useGrid); // off = brute force (A-B correctness check)
+    Tweak::boolean("Force/Bake", "Enabled", &m_bakeEnabled);
+    Tweak::floatVar("Force/Bake", "Sample height", &m_bakeSampleHeight, 0.0f, 10.0f, 0.1f);
+    Tweak::intVar("Force/Bake", "Bricks (stat)", &m_statBakeBricks, 0, 100000);
     Tweak::floatVar("Force", "Force gain", &m_params.forceGain, 0.0f, 10.0f);
     Tweak::floatVar("Force/Shell", "Alpha", &m_params.shellAlpha, 0.0f, 1.0f);
     Tweak::floatVar("Force/Shell", "Interior alpha", &m_params.interiorAlpha, 0.0f, 1.0f);
@@ -433,7 +436,7 @@ ForceEmitter ForceSystem::createEmitter(uint32 team, const glm::vec3& pos, const
     return ForceEmitter(((uint64)inst.generation << 32) | idx);
 }
 
-ForceQuery ForceSystem::createQuery(const glm::vec3& pos)
+ForceQuery ForceSystem::createQuery(const glm::vec3& pos, uint32 team)
 {
     const uint32 slot = Globals::rendererVK.createForceQuerySlot();
     if (slot == UINT32_MAX)
@@ -458,6 +461,7 @@ ForceQuery ForceSystem::createQuery(const glm::vec3& pos)
     if (m_generationCounter == 0)
         m_generationCounter = 1;
     inst.rendererSlot = slot;
+    inst.team = glm::min(team, (uint32)MAX_FORCE_TEAMS - 1u);
     inst.pos = pos;
     return ForceQuery(((uint64)inst.generation << 32) | idx);
 }
@@ -671,13 +675,15 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
     {
         if (query.generation == 0)
             continue;
-        renderer.setForceQuery(query.rendererSlot, query.pos);
+        renderer.setForceQuery(query.rendererSlot, query.pos, query.team);
         const RendererVKLayout::ForceQueryResult result = renderer.getForceQueryReadback(query.rendererSlot);
         query.result.valid = result.frameStamp != 0u;
         query.result.inside = result.owningTeam < MAX_FORCE_TEAMS;
         query.result.owningTeam = query.result.inside ? result.owningTeam : 0u;
         query.result.ownField = result.ownField;
         query.result.opposingField = result.bestOpposingField;
+        query.result.opposingGradient = glm::vec3(result.opposingGrad);
+        query.result.opposingPressure = result.opposingGrad.w;
         if (m_debugDrawQueries)
         {
             const uint32 color = query.result.inside
@@ -689,6 +695,11 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
         }
     }
     queriesScope.stop();
+    { // the baked pressure field: this frame's brick set out, the paired readback republished
+        ProfileScope bakeScope("Force bake", EProfileCategory::Force);
+        buildBakeBricks(renderer);
+        publishBake(renderer);
+    }
     // Kick next frame's merge over this frame's state: it runs during present + the fence wait
     // and is joined at the loop top (joinMerge) before anything can create/destroy emitters.
     ProfileScope kickScope("Force merge kick", EProfileCategory::Force);
@@ -995,6 +1006,163 @@ bool ForceSystem::recomputeCover(MergeGroup& group)
 // candidate cells and stages pairs per worker. Only the candidate sort, the pair UNION (group
 // creation / membership moves across groups) and the dissolve sweep are serial — their cost is
 // the number of candidates and join-distance PAIRS, not the emitter count. No renderer access here.
+// ---- the baked pressure field (see System.ixx) ----
+
+static uint64 bakeBrickKey(int bx, int bz)
+{
+    return ((uint64)(uint32)bx << 32) | (uint32)bz;
+}
+
+void ForceSystem::buildBakeBricks(Renderer& renderer)
+{
+    m_bakeBrickScratch.clear();
+    m_bakeSeen.clear();
+    constexpr float c_brickSize = FORCE_BAKE_BRICK_SAMPLES * FORCE_BAKE_SAMPLE_SPACING; // 16 m
+    bool capped = false;
+    const auto addBox = [&](glm::vec2 lo, glm::vec2 hi)
+    {
+        const int bx0 = (int)std::floor(lo.x / c_brickSize), bx1 = (int)std::floor(hi.x / c_brickSize);
+        const int bz0 = (int)std::floor(lo.y / c_brickSize), bz1 = (int)std::floor(hi.y / c_brickSize);
+        for (int bz = bz0; bz <= bz1; ++bz)
+            for (int bx = bx0; bx <= bx1; ++bx)
+            {
+                if (m_bakeBrickScratch.size() >= (size_t)MAX_FORCE_BAKE_BRICKS)
+                {
+                    capped = true;
+                    return;
+                }
+                if (m_bakeSeen.insert(bakeBrickKey(bx, bz)).second)
+                    m_bakeBrickScratch.push_back(glm::ivec4(bx, bz, 0, 0));
+            }
+    };
+    if (m_bakeEnabled)
+    {
+        for (const EmitterInstance& inst : m_emitters)
+        {
+            if (inst.generation == 0 || inst.mergeState == EmitterInstance::EMergeState::Merged
+                || inst.output <= 0.0f)
+                continue; // merged members project no field of their own
+            // Conservative XZ box of the support (the forceEmitterBounds rule): the output line
+            // pos .. pos + dir * reach, expanded by the lateral half-width.
+            const glm::vec3 target = inst.pos + inst.dir * inst.reach;
+            const float side = 0.5f * inst.reach * (1.0f + glm::abs(1.0f - 2.0f * inst.focus))
+                * glm::max(inst.width, 1.0f) * 1.05f;
+            glm::vec2 lo = glm::min(glm::vec2(inst.pos.x, inst.pos.z), glm::vec2(target.x, target.z)) - side;
+            glm::vec2 hi = glm::max(glm::vec2(inst.pos.x, inst.pos.z), glm::vec2(target.x, target.z)) + side;
+            if (inst.mergeState == EmitterInstance::EMergeState::Joining
+                || inst.mergeState == EmitterInstance::EMergeState::Leaving)
+            {
+                // The transition sphere lerps between the own bubble and the group sphere — cover
+                // where it currently stands too (sub-iso fringe past 3x the visible radius is
+                // negligible, so the multiplier is enough).
+                const float r = glm::max(inst.blendRadius * 3.0f, 1.0f);
+                lo = glm::min(lo, glm::vec2(inst.blendCenter.x, inst.blendCenter.z) - r);
+                hi = glm::max(hi, glm::vec2(inst.blendCenter.x, inst.blendCenter.z) + r);
+            }
+            addBox(lo, hi);
+        }
+        for (const MergeGroup& group : m_groups)
+        {
+            if (group.generation == 0 || group.rendererSlot == UINT32_MAX)
+                continue;
+            const float r = group.reach * 0.55f; // the uploaded sphere's lateral half-extent + slack
+            addBox(glm::vec2(group.center.x, group.center.z) - r,
+                   glm::vec2(group.center.x, group.center.z) + r);
+        }
+    }
+    m_statBakeBricks = (int)m_bakeBrickScratch.size();
+    if (capped && !m_bakeCapWarned)
+    {
+        m_bakeCapWarned = true; // once: dropped bricks read as zero field (no push/exposure there)
+        printf("ForceSystem: baked-field brick cap hit (%u) — outermost emitter regions unbaked\n",
+            MAX_FORCE_BAKE_BRICKS);
+    }
+    renderer.setForceBakeBricks(m_bakeBrickScratch, m_bakeSampleHeight);
+}
+
+void ForceSystem::publishBake(Renderer& renderer)
+{
+    // Copy THIS slot's readback (paired with the brick list it was evaluated for) into stable
+    // CPU storage: the mapped buffer is only safe until present re-submits the slot, while the
+    // published copy is read by next frame's entity pass.
+    const ForceBakeReadback bake = renderer.getForceBakeReadback();
+    constexpr size_t c_vec4PerBrick = (size_t)FORCE_BAKE_SAMPLES_PER_BRICK * 2;
+    m_bakeIndex.clear();
+    const size_t numBricks = glm::min(bake.bricks.size(), bake.data.size() / c_vec4PerBrick);
+    m_bakeData.assign(bake.data.begin(), bake.data.begin() + numBricks * c_vec4PerBrick);
+    for (size_t b = 0; b < numBricks; ++b)
+        m_bakeIndex[bakeBrickKey(bake.bricks[b].x, bake.bricks[b].y)] = (uint32)b;
+    m_bakePublished = m_bakeEnabled; // disabled: samplers report invalid, callers fall back
+}
+
+ForceSystem::FieldSample ForceSystem::sampleBakedField(const glm::vec3& pos, uint32 team) const
+{
+    FieldSample s;
+    if (!m_bakePublished)
+        return s;
+    s.valid = true;
+    constexpr int N = (int)FORCE_BAKE_BRICK_SAMPLES;
+    constexpr float c_invSpacing = 1.0f / FORCE_BAKE_SAMPLE_SPACING;
+    const float gxf = pos.x * c_invSpacing;
+    const float gzf = pos.z * c_invSpacing;
+    const int gx0 = (int)std::floor(gxf), gz0 = (int)std::floor(gzf);
+    const float fx = gxf - (float)gx0, fz = gzf - (float)gz0;
+    // The 2x2 lattice corners around the point — ONE fetch serves the bilinear value, the owning
+    // team AND the gradient. A corner in a missing brick is ZERO field (outside every support).
+    float corner[4][MAX_FORCE_TEAMS] = {};
+    bool any = false;
+    for (int c = 0; c < 4; ++c)
+    {
+        const int gx = gx0 + (c & 1), gz = gz0 + (c >> 1);
+        const int bx = gx >= 0 ? gx / N : (gx - (N - 1)) / N; // floor division
+        const int bz = gz >= 0 ? gz / N : (gz - (N - 1)) / N;
+        const auto it = m_bakeIndex.find(bakeBrickKey(bx, bz));
+        if (it == m_bakeIndex.end())
+            continue;
+        any = true;
+        const int lx = gx - bx * N, lz = gz - bz * N;
+        const glm::vec4* v = &m_bakeData[((size_t)it->second * (N * N) + (size_t)(lz * N + lx)) * 2];
+        for (int t = 0; t < 4; ++t)
+        {
+            corner[c][t] = v[0][t];
+            corner[c][t + 4] = v[1][t];
+        }
+    }
+    if (!any)
+        return s; // zero field here: valid, no force, not inside anything
+    const float w[4] = { (1.0f - fx) * (1.0f - fz), fx * (1.0f - fz), (1.0f - fx) * fz, fx * fz };
+    float phi[MAX_FORCE_TEAMS];
+    for (uint32 t = 0; t < MAX_FORCE_TEAMS; ++t)
+        phi[t] = corner[0][t] * w[0] + corner[1][t] * w[1] + corner[2][t] * w[2] + corner[3][t] * w[3];
+    uint32 best = 0;
+    for (uint32 t = 1; t < MAX_FORCE_TEAMS; ++t)
+        if (phi[t] > phi[best])
+            best = t;
+    float second = 0.0f;
+    for (uint32 t = 0; t < MAX_FORCE_TEAMS; ++t)
+        if (t != best)
+            second = glm::max(second, phi[t]);
+    s.owningTeam = best;
+    s.inside = phi[best] > glm::max(m_params.isoThreshold, second); // hard-max bound (no junction
+                                                                   // smoothing — rim-blur scale)
+    // The opposing field (vs the SAMPLED team) per corner: bilinear value + the analytic gradient
+    // of the bilinear patch — continuous inside a cell, gameplay-grade across them.
+    float o[4];
+    for (int c = 0; c < 4; ++c)
+    {
+        o[c] = 0.0f;
+        for (uint32 t = 0; t < MAX_FORCE_TEAMS; ++t)
+            if (t != team)
+                o[c] = glm::max(o[c], corner[c][t]);
+    }
+    s.opposing = o[0] * w[0] + o[1] * w[1] + o[2] * w[2] + o[3] * w[3];
+    s.opposingGradient = glm::vec3(
+        ((o[1] - o[0]) * (1.0f - fz) + (o[3] - o[2]) * fz) * c_invSpacing,
+        0.0f,
+        ((o[2] - o[0]) * (1.0f - fx) + (o[3] - o[1]) * fx) * c_invSpacing);
+    return s;
+}
+
 void ForceSystem::updateMerging(float deltaSec)
 {
     const uint32 numEmitters = (uint32)m_emitters.size();

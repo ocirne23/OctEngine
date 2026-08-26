@@ -19,8 +19,9 @@ import :Structures;
 // Per-type PREFABS: the stats live in each prefab's Component GameUnit block.
 static constexpr const char* c_npcPrefabs[(int)ENpcType::Count] = {
     "Entities/Game/enemyUnit.pre", "Entities/Game/enemyBrute.pre",
-    "Entities/Game/enemyRunner.pre", "Entities/Game/enemySpitter.pre" };
-static constexpr const char* c_npcNames[(int)ENpcType::Count] = { "Enemy", "Brute", "Runner", "Spitter" };
+    "Entities/Game/enemyRunner.pre", "Entities/Game/enemySpitter.pre",
+    "Entities/Game/swarmUnit.pre" };
+static constexpr const char* c_npcNames[(int)ENpcType::Count] = { "Enemy", "Brute", "Runner", "Spitter", "Swarm" };
 
 static void collectUnits(oc::span<const uint64> results, oc::vector<Entity*>& out)
 {
@@ -188,6 +189,12 @@ Entity* NpcSystem::spawnUnit(const StructureSystem& structures, const glm::vec3&
     }
     m_units.push_back(entity); // roster: deregistered by onWorldRootRemoved on any despawn path
     return entity.get();
+}
+
+Entity* NpcSystem::spawnLooseUnit(const StructureSystem& structures, const glm::vec3& pos,
+    uint8 team, ENpcType type)
+{
+    return spawnUnit(structures, pos, /*sourceId*/ 0, team, type);
 }
 
 void NpcSystem::fireShot(const char* prefabPath, const char* name, const glm::vec3& from,

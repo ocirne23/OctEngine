@@ -34,10 +34,15 @@ enum class EBuildTool : uint8 { Connect, Disconnect, Upgrade };
 export class GameMatch final
 {
 public:
-    // PvP only: each client plays on its own Force team (server = 0, client N =
-    // min(N, GameMaxTeams-1)), everything a player builds belongs to their team, and
-    // minerals/fuel are per-team.
-    explicit GameMatch(bool enabled);
+    // PvP (default): each client plays on its own Force team slot, everything a player builds
+    // belongs to their team, and minerals/fuel are per-team.
+    // CO-OP (`--game --coop`, clients pass both too — the world layout is built locally): its own
+    // OPEN world — no corridor, no border walls, a much bigger map. Every player on team 0 around
+    // ONE central Base; the AI team (CoopAiTeam) has unleashed units scattered over the map and
+    // sends periodic SWARM waves (They-are-Billions style: hundreds of cheap shield-less bodies,
+    // trickle-spawned) at the Base from a random compass direction. Authority-simulated; units
+    // reach clients through normal entity replication.
+    explicit GameMatch(bool enabled, bool coop = false);
     ~GameMatch();
 
     void spawnWorld();
@@ -202,6 +207,30 @@ private:
     // senders first (handleNetEvent does) — this clamps rather than failing.
     uint8 requestTeam(uint32 clientId) const { return (uint8)glm::max(clientTeam(clientId), 0); }
     glm::vec3 teamStartPos(uint8 team) const; // spawn/respawn anchor beside that team's Base
+
+    // ---- CO-OP (see the constructor comment) ----
+    static constexpr uint8 CoopAiTeam = GameMaxTeams - 1; // the ambient/wave team (< Nav::MaxTeams)
+    void tickWaves(float deltaSec);  // authority: the wave clock
+    void queueWave();                // pick a compass direction, size the swarm, seed its lane
+    void tickCoopSpawns();           // trickle: wave + ambient spawns on a per-frame budget
+    ENpcType rollWaveType() const;   // composition hardens with the wave index
+    bool m_coop = false;
+    float m_waveTimer = 0.0f;    // seconds to the next wave (armed in spawnWorld)
+    int m_waveIndex = 0;         // waves launched so far
+    int m_wavePending = 0;       // units of the current wave still to spawn (trickled)
+    int m_ambientPending = 0;    // scattered units still to spawn (trickled, at world start)
+    glm::vec3 m_waveOrigin{ 0.0f }; // the wave's cluster center on the spawn ring
+    glm::vec3 m_waveDest{ 0.0f };   // the Base's near face on the incoming side
+    // Tweaks ("Game/Coop", Synced):
+    float m_waveFirstDelay = 90.0f;
+    float m_waveInterval = 120.0f;
+    int m_waveSize = 80;          // units in wave 1 (mostly swarm bodies — see rollWaveType)
+    float m_waveGrowth = 40.0f;   // extra units per subsequent wave
+    int m_waveMaxAlive = 3000;    // total AI units cap (ambient + waves)
+    int m_ambientUnits = 400;     // units scattered over the map at world start
+    float m_ambientSafeRadius = 70.0f; // the scatter keeps clear of the Base
+    float m_waveSpawnDist = 160.0f;    // wave spawn ring radius around the Base
+    int m_spawnsPerFrame = 24;    // trickle budget — a huge wave enters over seconds, not one hitch
 
     bool m_enabled = false;
     uint32 m_team = 0;       // OUR team: 0 on server/single player; on a client it follows the

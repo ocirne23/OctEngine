@@ -117,6 +117,14 @@ public:
                                     // not inside any bubble (below iso), so it doubles as the
                                     // density readout; the debug density view heat-maps this value
         float opposingField = 0.0f; // best opposing team's field strength
+        // Gradient of the strongest field OPPOSING the query's registered team (zero outside every
+        // such field). A shield-less body pushes DOWN this gradient — away from the emitter — the
+        // point-query stand-in for the emitter force readback it does not have.
+        glm::vec3 opposingGradient{ 0.0f };
+        // That opposing field's VALUE at the point — the local analog of the emitter pressure
+        // readback (the emitter's is the mean over its bubble). Drives the same
+        // pushGain * pressure * tension chain the shielded units use.
+        float opposingPressure = 0.0f;
         bool valid = false;         // false until the first readback for this slot lands
 
         // The field density at the point (the "Density" debug view's value): the strongest team's
@@ -153,7 +161,28 @@ public:
     // (the visible bubble is smaller: r = reach * sqrt(1 - sqrt(iso/output))).
     ForceEmitter createEmitter(uint32 team, const glm::vec3& pos, const glm::vec3& direction,
         float output, float reach, float focus = 0.5f, float distribution = 0.5f, float width = 1.0f);
-    ForceQuery createQuery(const glm::vec3& pos);
+    // team = whose side the query rides: Result::opposingGradient is computed against every OTHER
+    // team's field (the scalar results are team-independent).
+    ForceQuery createQuery(const glm::vec3& pos, uint32 team = 0);
+
+    // ---- THE BAKED PRESSURE FIELD ("Force/Bake" tweaks) ------------------------------------
+    // A sparse CPU-side sampling of EVERY team's field: update() selects 16 m XZ bricks from the
+    // live emitters'/groups' support boxes, the GPU evaluates 16x16 samples per brick at "Sample
+    // height" (force_bake.cs), and update() republishes the paired readback copy — so ANY number
+    // of consumers sample field force/exposure with plain bilinear taps and NO per-consumer GPU
+    // slot (the swarm-unit replacement for per-unit ForceQueries).
+    struct FieldSample
+    {
+        bool valid = false;   // false = bake disabled or nothing published yet (callers fall back)
+        bool inside = false;  // inside owningTeam's bubble at the bake height
+        uint32 owningTeam = 0;
+        float opposing = 0.0f;              // strongest field of any team != the sampled team
+        glm::vec3 opposingGradient{ 0.0f }; // planar (XZ) gradient of that field
+    };
+    // Worker-safe between updates (the published containers only mutate in update(), after the
+    // entity pass). A position outside every brick reads as ZERO field — correct by construction,
+    // the bricks cover every support box. ~3 frames latent end to end.
+    FieldSample sampleBakedField(const glm::vec3& pos, uint32 team) const;
 
     uint32 getNumEmitters() const { return m_numLiveEmitters; }
     uint32 getNumMergeGroups() const { return (uint32)m_statGroups; }
@@ -273,6 +302,7 @@ private:
     {
         uint32 generation = 0; // 0 = free slot
         uint32 rendererSlot = UINT32_MAX;
+        uint32 team = 0;       // the opposing-gradient reference team (see createQuery)
         glm::vec3 pos{ 0.0f };
         ForceQuery::Result result;
     };
@@ -314,6 +344,10 @@ private:
     void smoothGroup(MergeGroup& group, float deltaSec); // displayed <- target, floored by the Merged cover
     // Reach of a focus-0.5 sphere whose visible iso radius is `radius` at `output`; 0 = no bubble.
     float sphereReach(float radius, float output) const;
+    // Baked pressure field: brick set from the emitter/group support boxes -> renderer upload,
+    // then the paired readback republished for the samplers. Both main-thread inside update().
+    void buildBakeBricks(Renderer& renderer);
+    void publishBake(Renderer& renderer);
     // Radius a group sphere at `center` needs to cover this member (MergeParams scales, no margin).
     float memberCover(const EmitterInstance& m, const glm::vec3& center) const
     {
@@ -344,6 +378,17 @@ private:
     oc::vector<uint32> m_retiredGroupSlots; // dissolved on the job; destroyed on main in update()
     uint32 m_numLiveEmitters = 0;
     uint32 m_generationCounter = 1;
+
+    // Baked pressure field state (see sampleBakedField): scratch this frame, published last copy.
+    bool m_bakeEnabled = true;
+    float m_bakeSampleHeight = 1.0f; // world y the field is evaluated at (where bodies live)
+    int m_statBakeBricks = 0;
+    bool m_bakePublished = false;
+    bool m_bakeCapWarned = false;
+    oc::vector<glm::ivec4> m_bakeBrickScratch;
+    oc::unordered_set<uint64> m_bakeSeen;          // per-frame dedup of brick coords
+    oc::unordered_map<uint64, uint32> m_bakeIndex; // packed brick coord -> published brick index
+    oc::vector<glm::vec4> m_bakeData;              // published readback copy (512 vec4 per brick)
 
     ForceFieldParams m_params; // owns the "Force" tweaks, pushed to the renderer every update
     MergeParams m_merge;       // the "Force/Merge" tweaks

@@ -8,9 +8,10 @@ import File; // AssetNode (save/load)
 import :Structures;
 
 // Unit types = PREFAB variants: per-type stats are authored in the .pre's Component GameUnit
-// (Entities/Game/enemyUnit/Brute/Runner/Spitter.pre); the shared sim baseline lives in
-// GameUnitComponent::params (tweaked here).
-export enum class ENpcType : uint8 { Grunt, Brute, Runner, Spitter, Count };
+// (Entities/Game/enemyUnit/Brute/Runner/Spitter/swarmUnit.pre); the shared sim baseline lives in
+// GameUnitComponent::params (tweaked here). SWARM is the CHEAP body: health only — no Force
+// emitter, no shield battery (the co-op waves are built from it; see GameMatch's coop block).
+export enum class ENpcType : uint8 { Grunt, Brute, Runner, Spitter, Swarm, Count };
 
 // The unit/projectile PRODUCTION layer. The per-entity simulation itself (steering, shields,
 // melee, lifetimes, contact damage) is GameUnitComponent/GameProjectileComponent inside the
@@ -46,6 +47,11 @@ public:
     // call removeRootEntity (see World.ixx).
     void onWorldRootRemoved(const Entity* entity);
     oc::span<const EntityPtr> units() const { return m_units; } // feedNav's per-team sources
+
+    // A unit with no owning barracks (sourceId 0, no route, no death accounting) — the co-op
+    // ambient scatter + wave director's entry point. Returns null on spawn failure.
+    Entity* spawnLooseUnit(const StructureSystem& structures, const glm::vec3& pos, uint8 team,
+        ENpcType type);
 
     // SAVE/LOAD (server): every live unit into/from an AssetNode tree (projectiles are transient —
     // a load clears them). loadUnits despawns the live units first.

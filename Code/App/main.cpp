@@ -67,6 +67,7 @@ int main(int argc, char* argv[])
     oc::string connectAddress;
     bool headless = false;
     bool gameMode = false;
+    bool coopMode = false; // --coop (with --game): PvE — central Base, AI camps + attack waves
     // AUTOMATED PROFILING (Tools/profile.ps1 drives it): --profile-after S writes a text report of
     // the last --profile-frames frames S seconds into the run (to --profile-out, default
     // Local/profile.txt; F7 writes the same on demand), --quit-after S exits cleanly at S seconds,
@@ -112,6 +113,7 @@ int main(int argc, char* argv[])
         else if (arg == "--tickrate" && i + 1 < argc)     tickHz = glm::clamp(std::atoi(argv[++i]), 10, 240);
         else if (arg == "--headless")                     headless = true;
         else if (arg == "--game")                         gameMode = true; // whitebox game instead of the testbed scene
+        else if (arg == "--coop")                         coopMode = true; // PvE mode (clients pass it too — the layout is local)
         // both ends must agree, or the handshake denies with a clear reason
         else if (arg == "--no-encrypt")                   NetworkManager::setEncryption(false);
         else Log::warning("Unknown command line argument: " + oc::string(arg));
@@ -121,7 +123,12 @@ int main(int argc, char* argv[])
     if (gameMode && headless && launchMode == ELaunchMode::Server)
     {
         Log::warning("--game needs a window (GPU field readbacks drive the authority sim), ignoring --game");
-        gameMode = false; // co-op = a WINDOWED listen server (--game --server) + clients (--game --connect)
+        gameMode = false; // multiplayer = a WINDOWED listen server (--game --server) + clients (--game --connect)
+    }
+    if (coopMode && !gameMode)
+    {
+        Log::warning("--coop needs --game, ignoring --coop");
+        coopMode = false;
     }
     const bool headlessServer = headless && launchMode == ELaunchMode::Server;
     const bool unattendedRun = profileAfterSec > 0.0 || quitAfterSec > 0.0;
@@ -259,7 +266,7 @@ int main(int argc, char* argv[])
     GizmoController gizmo;
     InputControls controls(gizmo, cameraController, Globals::world); // headless-inert: update/key handling never run
     controls.setProfileDump(profileOutPath, profileOptions); // F7 writes where --profile-out points
-    GameMatch game(gameMode); // stack local: holds EntityPtrs/Force handles, destructs before the globals
+    GameMatch game(gameMode, coopMode); // stack local: holds EntityPtrs/Force handles, destructs before the globals
     if (game.enabled())
     {
         game.spawnWorld();

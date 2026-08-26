@@ -139,12 +139,16 @@ static void drawStructureGhost(EStructureType type, const glm::vec3& groundPos, 
     }
 }
 
-// The arena: a walled corridor along X — combat funnels through the middle.
+// The PVP arena: a walled corridor along X — combat funnels through the middle.
 static constexpr float c_corridorHalfLength = 65.0f; // x extent of the play area
 static constexpr float c_corridorHalfWidth = 20.0f;  // z extent
 static constexpr float c_wallStep = 10.0f;           // border block size (borderwall.pre)
+// The CO-OP map: OPEN ground, no walls — a big square centred on the shared Base. The ground
+// plane (ground.pre) is 400 m, so ±200 is the hard edge; placement bounds, node scatter and
+// spawn rings all stay inside this.
+static constexpr float c_coopHalfSize = 180.0f;
 
-GameMatch::GameMatch(bool enabled) : m_enabled(enabled)
+GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
 {
     if (!m_enabled)
         return;
@@ -152,6 +156,15 @@ GameMatch::GameMatch(bool enabled) : m_enabled(enabled)
     {
         // Gameplay tweaks persist between runs and the server's values overrule the clients'.
         const Tweak::ScopedFlags scoped(ETweakFlags::Synced);
+        Tweak::floatVar("Game/Coop", "First wave delay (s)", &m_waveFirstDelay, 5.0f, 600.0f, 5.0f);
+        Tweak::floatVar("Game/Coop", "Wave interval (s)", &m_waveInterval, 10.0f, 600.0f, 5.0f);
+        Tweak::intVar("Game/Coop", "Wave size", &m_waveSize, 1, 2000, 10);
+        Tweak::floatVar("Game/Coop", "Wave size growth", &m_waveGrowth, 0.0f, 500.0f, 5.0f);
+        Tweak::intVar("Game/Coop", "Max enemy units", &m_waveMaxAlive, 1, 20000, 50);
+        Tweak::intVar("Game/Coop", "Ambient units", &m_ambientUnits, 0, 5000, 10);
+        Tweak::floatVar("Game/Coop", "Ambient safe radius", &m_ambientSafeRadius, 10.0f, 200.0f, 1.0f);
+        Tweak::floatVar("Game/Coop", "Wave spawn distance", &m_waveSpawnDist, 40.0f, 250.0f, 1.0f);
+        Tweak::intVar("Game/Coop", "Spawns per frame", &m_spawnsPerFrame, 1, 200, 1);
         Tweak::floatVar("Game/Construction", "Refill radius", &m_refillRadius, 1.0f, 30.0f, 0.25f);
         Tweak::floatVar("Game/Construction", "Refill rate", &m_refillRate, 0.5f, 100.0f, 0.5f);
         Tweak::floatVar("Game/Construction", "Player build radius", &m_buildRadius, 1.0f, 30.0f, 0.25f);
@@ -255,6 +268,14 @@ void GameMatch::spawnWorld()
         return;
     m_isServer = Globals::networkManager.role() == ENetRole::Server;
     m_isClient = Globals::networkManager.role() == ENetRole::Client;
+    if (m_coop)
+    {
+        // CO-OP: its own OPEN world — one shared Base at the center of a big wall-less map (the
+        // corridor and its border ring are PvP-only). Waves come from any compass direction.
+        m_basePos = glm::vec3(0.0f);
+        m_playerStart = glm::vec3(0.0f, 1.0f, -6.0f);
+        m_waveTimer = m_waveFirstDelay;
+    }
 
     m_ground = Globals::world.spawnAssetFile("Entities/Game/ground.pre",
         Transform(glm::vec3(0.0f, -0.5f, 0.0f)), true); // box top = walkable y 0
@@ -294,16 +315,30 @@ void GameMatch::spawnWorld()
 
     if (!m_isServer && !m_isClient) // single player: the server binding above did not run
         m_structures.onRouteChanged = [this](uint32 id) { seedRouteLane(id); };
-    m_structures.spawnNodes(); // deterministic on every instance (no sync needed)
-    spawnCorridorWalls();      // deterministic local scenery too — every role builds its own copy
-    // Placement stays INSIDE the arena (footprints may not clip the border wall ring).
-    m_structures.setPlacementBounds(
-        glm::vec2(-c_corridorHalfLength, -c_corridorHalfWidth),
-        glm::vec2(c_corridorHalfLength, c_corridorHalfWidth));
+    if (m_coop)
+    {
+        // The open co-op map: nodes scattered over the whole square (deterministic — every
+        // instance builds the same set locally, like the corridor table), NO border walls, and
+        // placement bounds = the big square (footprints stay on the ground plane).
+        m_structures.spawnNodesCoop(20.0f, c_coopHalfSize - 15.0f, 48);
+        m_structures.setPlacementBounds(glm::vec2(-c_coopHalfSize), glm::vec2(c_coopHalfSize));
+    }
+    else
+    {
+        m_structures.spawnNodes(); // deterministic on every instance (no sync needed)
+        spawnCorridorWalls();      // deterministic local scenery too — every role builds its own copy
+        // Placement stays INSIDE the arena (footprints may not clip the border wall ring).
+        m_structures.setPlacementBounds(
+            glm::vec2(-c_corridorHalfLength, -c_corridorHalfWidth),
+            glm::vec2(c_corridorHalfLength, c_corridorHalfWidth));
+    }
     if (!m_isClient)
     {
         m_structures.spawnBase(m_basePos); // clients get it through the GPl mirror stream
-        m_structures.spawnBase(m_enemyBasePos, 1); // the opposing team's anchor + income
+        if (!m_coop)
+            m_structures.spawnBase(m_enemyBasePos, 1); // the opposing team's anchor + income
+        else
+            m_ambientPending = m_ambientUnits; // the scattered AI units, trickled in (tickCoopSpawns)
         m_player.spawn(m_playerStart);     // clients ADOPT the capsule the server spawns for them
         // The server's own capsule is a PRIMARY: never handed to a client by the proximity
         // transfer, and it re-claims transferred objects it walks up to (the client symmetric).
@@ -312,8 +347,8 @@ void GameMatch::spawnWorld()
     }
 
     // Spawn view faces the MAP CENTER from wherever this instance's player starts (each end of
-    // the corridor looks inward at the other team).
-    const glm::vec3 cameraAnchor = m_isClient
+    // the corridor looks inward at the other team; co-op starts everyone at the central Base).
+    const glm::vec3 cameraAnchor = m_isClient && !m_coop
         ? m_enemyBasePos + glm::vec3(0.0f, 1.0f, -6.0f) : m_playerStart;
     m_camera.setYawToward(glm::vec3(0.0f) - cameraAnchor);
 
@@ -328,6 +363,109 @@ void GameMatch::spawnWorld()
               "/ moves the player). Grid hotkeys QWER/ASDF/ZXCV or click the slots: Q/W = build "
               "categories, D/F = disconnect/upgrade, X = delete, C = cancel. Build powered Emitters "
               "to hold ground");
+    if (m_coop)
+        Log::info("CO-OP: defend the central Base — swarm waves attack periodically, and the map "
+                  "is crawling with scattered enemies to clear as you expand");
+}
+
+// ---- CO-OP director -------------------------------------------------------------------------
+
+// Wave composition: cheap shield-less SWARM bodies are the mass; the heavier prefab units mix in
+// as the waves escalate.
+ENpcType GameMatch::rollWaveType() const
+{
+    const float roll = glm::linearRand(0.0f, 1.0f);
+    if (m_waveIndex >= 4 && roll < 0.06f) return ENpcType::Brute;
+    if (m_waveIndex >= 3 && roll < 0.14f) return ENpcType::Spitter;
+    if (m_waveIndex >= 2 && roll < 0.25f) return ENpcType::Runner;
+    return ENpcType::Swarm;
+}
+
+// The wave clock (authority, co-op only). The actual entity spawns are TRICKLED by tickCoopSpawns
+// — a They-are-Billions-sized wave materialized in one frame would be a multi-hundred-spawn hitch.
+void GameMatch::tickWaves(float deltaSec)
+{
+    m_waveTimer -= deltaSec;
+    if (m_waveTimer > 0.0f)
+        return;
+    m_waveTimer = m_waveInterval;
+    queueWave();
+}
+
+void GameMatch::queueWave()
+{
+    int aiAlive = 0; // ambient + previous waves both count against the cap
+    for (const EntityPtr& e : m_npcs.units())
+        if (const GameUnitComponent* u = getComponent<GameUnitComponent>(e.get());
+            u && u->team == (uint32)CoopAiTeam && u->alive())
+            ++aiAlive;
+    const int count = glm::min(m_waveSize + (int)(m_waveGrowth * (float)m_waveIndex),
+        m_waveMaxAlive - aiAlive - m_ambientPending - m_wavePending);
+    ++m_waveIndex;
+    if (count <= 0)
+        return; // at the cap: the clock (and the scaling) still advanced
+    // A random compass direction: the swarm clusters on the spawn ring and pushes at the Base's
+    // near face (a point INSIDE the footprint would fail the A* and the move order alike — the
+    // pointOutsideFootprint rule). The locked order releases on arrival; the AI takes over there.
+    const float angle = glm::linearRand(0.0f, glm::two_pi<float>());
+    const glm::vec3 dir(std::cos(angle), 0.0f, std::sin(angle));
+    m_waveOrigin = dir * glm::min(m_waveSpawnDist, c_coopHalfSize - 10.0f);
+    m_waveDest = dir * 6.0f;
+    m_wavePending += count;
+    // One planned lane from the spawn ring to the Base — the swarm commits to it, and the units'
+    // own periodic seed requests keep it fresh (Nav's proximity dedup makes the wave one plan).
+    Globals::navSystem.seedPath(CoopAiTeam, m_waveOrigin, m_waveDest, laneSeedSpeed(), laneSeedWidth());
+    Log::info(oc::format("Co-op: wave {} incoming — {} units from ({:.0f}, {:.0f})", m_waveIndex,
+        count, m_waveOrigin.x, m_waveOrigin.z));
+    if (m_isServer)
+    {
+        uint8 buffer[4];
+        NetWriter writer(buffer);
+        writer.write<uint16>((uint16)m_waveIndex);
+        Globals::networkManager.fireNetworkEvent("GWv", writer.data());
+    }
+}
+
+// The trickle spawner (authority, per frame): a fixed budget of entity spawns serves the wave
+// first, then the world-start ambient scatter — thousands of units enter the world over a few
+// seconds instead of one giant frame hitch.
+void GameMatch::tickCoopSpawns()
+{
+    int budget = glm::max(m_spawnsPerFrame, 1);
+    while (budget > 0 && m_wavePending > 0)
+    {
+        --budget;
+        --m_wavePending;
+        // Cluster around the ring point — bigger remaining waves spread over a wider blob.
+        const float a = glm::linearRand(0.0f, glm::two_pi<float>());
+        const float r = glm::min(8.0f + (float)m_wavePending * 0.05f, 30.0f)
+            * std::sqrt(glm::linearRand(0.0f, 1.0f));
+        glm::vec3 pos = m_waveOrigin + glm::vec3(std::cos(a) * r, 1.0f, std::sin(a) * r);
+        pos.x = glm::clamp(pos.x, -c_coopHalfSize, c_coopHalfSize);
+        pos.z = glm::clamp(pos.z, -c_coopHalfSize, c_coopHalfSize);
+        Entity* unit = m_npcs.spawnLooseUnit(m_structures, pos, CoopAiTeam, rollWaveType());
+        if (!unit)
+            continue;
+        if (GameUnitComponent* u = getComponent<GameUnitComponent>(unit))
+            u->orderMove(m_waveDest + glm::vec3(glm::linearRand(-4.0f, 4.0f), 0.0f,
+                glm::linearRand(-4.0f, 4.0f)));
+    }
+    while (budget > 0 && m_ambientPending > 0)
+    {
+        --budget;
+        --m_ambientPending;
+        // Uniform-AREA scatter outside the safe radius (sqrt(t) = even density). NOT leashed and
+        // not ordered anywhere: whatever their AI finds (fields, local search) is what they do.
+        const float a = glm::linearRand(0.0f, glm::two_pi<float>());
+        const float r = glm::mix(m_ambientSafeRadius, c_coopHalfSize - 5.0f,
+            std::sqrt(glm::linearRand(0.0f, 1.0f)));
+        const float roll = glm::linearRand(0.0f, 1.0f);
+        const ENpcType type = roll < 0.6f ? ENpcType::Swarm
+            : roll < 0.75f ? ENpcType::Grunt
+            : roll < 0.9f ? ENpcType::Runner : ENpcType::Spitter;
+        m_npcs.spawnLooseUnit(m_structures,
+            glm::vec3(std::cos(a) * r, 1.0f, std::sin(a) * r), CoopAiTeam, type);
+    }
 }
 
 void GameMatch::spawnCorridorWalls()
@@ -374,6 +512,8 @@ void GameMatch::spawnCorridorWalls()
 
 uint8 GameMatch::allocateClientTeam() const
 {
+    if (m_coop)
+        return 0; // co-op: everyone plays on the server's team
     // Lowest free playable slot. The server holds m_team (0); each connected client's team lives
     // on its capsule's puppet component, so the live set needs no separate bookkeeping. With every
     // slot taken the extras double up on the last one — sharing a team beats having no Base.
@@ -403,6 +543,8 @@ int GameMatch::clientTeam(uint32 clientId) const
 
 glm::vec3 GameMatch::teamStartPos(uint8 team) const
 {
+    if (m_coop)
+        return m_playerStart; // one shared Base — everyone spawns/respawns beside it
     // One Base per playable team; the spawn sits just beside it (same offset the host uses).
     return team == 0 ? m_playerStart : m_enemyBasePos + glm::vec3(0.0f, 1.0f, -6.0f);
 }
@@ -707,6 +849,13 @@ void GameMatch::handleNetEvent(oc::string_view name)
             if (!reader.overflowed())
                 m_structures.mirrorRoute(id, oc::span<const glm::vec3>(points, used));
         }
+        else if (name == "GWv")
+        {
+            // Co-op wave announcement (the wave itself arrives as replicated unit entities).
+            const uint16 wave = reader.read<uint16>();
+            if (!reader.overflowed())
+                Log::info(oc::format("Co-op: wave {} incoming", (int)wave));
+        }
         // (shield/materials state rides the entity snapshot's game blob now — no GSh event)
         return;
     }
@@ -843,6 +992,11 @@ void GameMatch::update(float deltaSec)
     // The unit SIM runs inside the entity pass (GameUnitComponent); this drains what it queued
     // (shots to spawn, deaths) and runs production.
     m_npcs.service(m_structures);
+    if (m_coop)
+    {
+        tickWaves(deltaSec);
+        tickCoopSpawns();
+    }
 
     // Flow fields: obstacles + per-team sources staged for the NEXT frame's NavSystem::update
     // (which runs in main.cpp's kick/join window, BEFORE this bulk tick — one frame of source
@@ -1925,6 +2079,9 @@ void GameMatch::buildWorldLabels(const Camera& camera)
         const GameUnitComponent* u = getComponent<GameUnitComponent>(unitEntity);
         if (!u || unitEntity == ownPlayer)
             continue;
+        if (!u->puppet && u->shieldOutput <= 0.0f)
+            continue; // SWARM bodies (shield-less) carry no overhead bars — thousands can be on
+                      // screen, and the label pass + HUD would drown in them
         HudWorldLabel label;
         const float height = u->puppet ? 2.0f : 1.6f;
         if (!camera.worldToScreen(viewport, unitEntity->pos + glm::vec3(0.0f, height, 0.0f), label.screenPos))
@@ -1978,6 +2135,8 @@ void GameMatch::updateHud()
         glm::vec3(1.0f, 0.9f, 0.3f));
     hud.setCounter("Energy gen/s", m_structures.energyGenPerSec(), 1, glm::vec3(1.0f, 0.9f, 0.3f));
     hud.setCounter("Energy use/s", m_structures.energyUsePerSec(), 1, glm::vec3(1.0f, 0.9f, 0.3f));
+    if (m_coop && !m_isClient) // the wave clock is authority state (clients get the GWv log)
+        hud.setCounter("Next wave (s)", glm::max(m_waveTimer, 0.0f), 0, glm::vec3(1.0f, 0.45f, 0.3f));
 }
 
 void GameMatch::updateWindowed(Camera& camera, float deltaSec)

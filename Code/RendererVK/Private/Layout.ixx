@@ -102,6 +102,7 @@ export namespace RendererVKLayout
     constexpr uint32 MAX_FORCE_EMITTERS = 8192;     // live emitter slots (64 B each)
     constexpr uint32 MAX_FORCE_TEAMS = 8;           // fixed team count (per-point field accumulators)
     constexpr uint32 MAX_FORCE_QUERIES = 1024;      // persistent gameplay point-query slots
+                                                    // (structures; units read the baked field)
     constexpr uint32 MAX_FORCE_BIG_EMITTERS = 64;   // reach above the tweak threshold bypasses the grid
     constexpr uint32 FORCE_SIM_GROUP_SIZE = 64;
 
@@ -151,10 +152,42 @@ export namespace RendererVKLayout
     };
     constexpr size_t FORCE_EMITTER_HEADER_SIZE = sizeof(ForceEmittersGpu) - sizeof(ForceEmitterGpu) * MAX_FORCE_EMITTERS;
 
+    // BAKED PRESSURE FIELD ("force bake"): a sparse set of XZ BRICKS the CPU selects each frame
+    // from the live emitters' support boxes, evaluated by force_bake.cs.glsl at ONE fixed gameplay
+    // height (ALL team field values per sample) and read back host-visible — the CPU-side field
+    // any number of consumers samples for force/exposure with NO per-consumer GPU slot. A brick is
+    // a 16 m square: 16x16 samples at 1 m spacing (unit-shield bubbles, reach 3, stay resolved),
+    // CORNER-aligned to the world lattice (sample (i,j) of brick (bx,bz) sits at (bx*16+i, bz*16+j)),
+    // so bilinear taps cross brick borders seamlessly and a missing brick reads as zero field
+    // (= outside every support).
+    constexpr uint32 FORCE_BAKE_BRICK_SAMPLES = 16;   // per axis (workgroup = one brick, 16x16)
+    constexpr float FORCE_BAKE_SAMPLE_SPACING = 1.0f; // m — also spelled in force_bake.cs.glsl
+    constexpr uint32 MAX_FORCE_BAKE_BRICKS = 512;     // 16 m bricks: 512 covers ~131k m^2 of field
+    constexpr uint32 FORCE_BAKE_SAMPLES_PER_BRICK = FORCE_BAKE_BRICK_SAMPLES * FORCE_BAKE_BRICK_SAMPLES;
+    struct alignas(16) ForceBakeBricksGpu
+    {
+        uint32 count;
+        float sampleY;    // the bake height (world y): where gameplay bodies live
+        uint32 _pad0, _pad1;
+        glm::ivec4 bricks[MAX_FORCE_BAKE_BRICKS]; // xy = brick coord (floor(world / 32 m)), zw unused
+    };
+    constexpr size_t FORCE_BAKE_HEADER_SIZE = sizeof(ForceBakeBricksGpu) - sizeof(glm::ivec4) * MAX_FORCE_BAKE_BRICKS;
+    // Output/readback: per sample TWO vec4 = phi[0..3] / phi[4..7] (every team's field value),
+    // brick-major: (brick * 256 + localZ * 16 + localX) * 2.
+    static_assert(MAX_FORCE_TEAMS == 8); // the two-vec4 sample layout encodes exactly 8 teams
+    // The paired view of one frame slot's baked field: the data is ~2 frames old, so it comes WITH
+    // the brick list it was evaluated for (bricks.size() bricks x 512 vec4s, brick-major).
+    struct ForceBakeReadback
+    {
+        oc::span<const glm::ivec4> bricks;
+        oc::span<const glm::vec4> data;
+    };
+
     // One registered point query (mapped per frame) and its GPU-written result (read back).
     struct alignas(16) ForceQueryGpu
     {
-        glm::vec4 posActive{ 0.0f }; // xyz = world position, w = 1 active / 0 inactive slot
+        glm::vec4 posActive{ 0.0f }; // xyz = world position, w = 0 inactive / 1 + queryTeam active
+                                     // (the team the OPPOSING gradient is computed against)
     };
     // Per-frame mapped query input buffer (count header + slot array; matches force_query.cs.glsl).
     struct alignas(16) ForceQueriesGpu
@@ -170,8 +203,11 @@ export namespace RendererVKLayout
         float ownField;          // that team's field at the point
         float bestOpposingField; // strongest other team's field
         uint32 frameStamp;       // m_frameCounter when computed (0 = never: slot not yet evaluated)
+        glm::vec4 opposingGrad;  // xyz = gradient of the strongest field OPPOSING the query's team
+                                 // (zero outside every such field), w = that field's VALUE at the
+                                 // point (the local pressure analog). Push = down-gradient.
     };
-    static_assert(sizeof(ForceQueryResult) == 16);
+    static_assert(sizeof(ForceQueryResult) == 32);
 
     // Mesh/material indices are stored as uint16 in InMeshInstance, so growth clamps to this.
     constexpr uint32 MESH_MATERIAL_INDEX_LIMIT = USHRT_MAX

@@ -230,7 +230,16 @@ public:
     // deliberately NOT a lock-free per-frame push). Same main-thread + retirement contract as the
     // emitter slots. Returns UINT32_MAX when all MAX_FORCE_QUERIES slots are taken.
     uint32 createForceQuerySlot();
-    void setForceQuery(uint32 slot, const glm::vec3& pos);
+    void setForceQuery(uint32 slot, const glm::vec3& pos, uint32 team);
+    // The baked pressure field's brick set for this frame (main-thread, with the emitter push):
+    // uploaded at present, evaluated by force_bake.cs, read back ~2 frames later.
+    void setForceBakeBricks(oc::span<const glm::ivec4> bricks, float sampleY)
+    {
+        m_forceBakeBricks.assign(bricks.begin(), bricks.end());
+        m_forceBakeSampleY = sampleY;
+    }
+    // This frame slot's baked field + the brick list it was evaluated for (~2 frames old).
+    RendererVKLayout::ForceBakeReadback getForceBakeReadback() const;
     void destroyForceQuerySlot(uint32 slot);
     // GPU readbacks, slot-indexed, ~2 frames old; valid to read between beginFrame and present.
     // Force: xyz = applied force (opposing-field pressure integral), w = mean opposing pressure.
@@ -688,6 +697,8 @@ private:
     oc::vector<RendererVKLayout::ForceQueryGpu> m_forceQueries;   // persistent query slots (same contract)
     oc::vector<uint32> m_freeForceQuerySlots;
     oc::vector<oc::pair<uint32, uint32>> m_retiredForceQuerySlots;
+    oc::vector<glm::ivec4> m_forceBakeBricks; // this frame's baked-field brick set (main-thread)
+    float m_forceBakeSampleY = 1.0f;
     ForceFieldParams m_forceFieldParams;
     PerWorker<oc::vector<DebugLinePipeline::LineVertex>> m_debugLineVerts; // per-worker CPU staging, merged in present()
     oc::vector<DebugLinePipeline::LineVertex> m_debugLineMergedVerts;

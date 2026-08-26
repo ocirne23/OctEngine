@@ -1303,10 +1303,12 @@ uint32 Renderer::createForceQuerySlot()
     return slot;
 }
 
-void Renderer::setForceQuery(uint32 slot, const glm::vec3& pos)
+void Renderer::setForceQuery(uint32 slot, const glm::vec3& pos, uint32 team)
 {
     assert(slot < m_forceQueries.size());
-    m_forceQueries[slot].posActive = glm::vec4(pos, 1.0f);
+    // w = 1 + team: nonzero marks the slot active, and the shader recovers the query's own team
+    // for the opposing-gradient evaluation (see force_query.cs.glsl).
+    m_forceQueries[slot].posActive = glm::vec4(pos, 1.0f + (float)glm::min(team, RendererVKLayout::MAX_FORCE_TEAMS - 1u));
 }
 
 void Renderer::destroyForceQuerySlot(uint32 slot)
@@ -1322,10 +1324,16 @@ glm::vec4 Renderer::getForceEmitterReadback(uint32 slot) const
     return slot < forces.size() ? forces[slot] : glm::vec4(0.0f);
 }
 
+RendererVKLayout::ForceBakeReadback Renderer::getForceBakeReadback() const
+{
+    return m_forceFieldPipeline.getBakeReadback(m_swapChain.getCurrentFrameIndex());
+}
+
 RendererVKLayout::ForceQueryResult Renderer::getForceQueryReadback(uint32 slot) const
 {
     const oc::span<const RendererVKLayout::ForceQueryResult> results = m_forceFieldPipeline.getQueryReadback(m_swapChain.getCurrentFrameIndex());
-    return slot < results.size() ? results[slot] : RendererVKLayout::ForceQueryResult{ RendererVKLayout::MAX_FORCE_TEAMS, 0.0f, 0.0f, 0u };
+    return slot < results.size() ? results[slot]
+        : RendererVKLayout::ForceQueryResult{ RendererVKLayout::MAX_FORCE_TEAMS, 0.0f, 0.0f, 0u, glm::vec4(0.0f) };
 }
 
 void Renderer::setForceFieldParams(const ForceFieldParams& params)
@@ -1540,7 +1548,8 @@ void Renderer::present()
         m_particleSpawnRequests.clear();
         m_decalPipeline.upload(frameIdx, m_decalCounter);
         // Compacts the ACTIVE emitter slots + uploads query positions (fence-safe here).
-        m_forceFieldPipeline.upload(frameIdx, m_forceEmitters, m_forceQueries, m_forceFieldParams.bigReachThreshold);
+        m_forceFieldPipeline.upload(frameIdx, m_forceEmitters, m_forceQueries, m_forceBakeBricks,
+            m_forceBakeSampleY, m_forceFieldParams.bigReachThreshold);
 
         if (m_particleLogStats && m_frameCounter % 120 == 0)
         {

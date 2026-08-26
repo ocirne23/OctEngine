@@ -75,3 +75,12 @@ set_target_properties(run-scenario PROPERTIES
 	VS_DEBUGGER_COMMAND "$<TARGET_FILE:App>"
 	VS_DEBUGGER_COMMAND_ARGUMENTS "--game --server --scenario Scenarios/march-64-units.txt --tweaks Scenarios/cpu-profile.tweaks" 
 	VS_DEBUGGER_WORKING_DIRECTORY "${ROOT_DIR}")
+
+add_custom_target(run-coopserver COMMAND ${CMAKE_COMMAND} -E true VERBATIM)
+add_dependencies(run-coopserver App)
+set_target_properties(run-coopserver PROPERTIES
+	FOLDER Apps
+	EXCLUDE_FROM_ALL TRUE
+	VS_DEBUGGER_COMMAND "$<TARGET_FILE:App>"
+	VS_DEBUGGER_COMMAND_ARGUMENTS "--game --coop --server" 
+	VS_DEBUGGER_WORKING_DIRECTORY "${ROOT_DIR}")

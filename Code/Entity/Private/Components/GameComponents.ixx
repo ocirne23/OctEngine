@@ -27,7 +27,9 @@ export struct GameUnitParams
     float tension = 1.5f;          // surface tension: drain + push scale by (1 + tension*pressure)
     float fieldDps = 10.0f;        // health/s while squished below damageRadius under pressure
     float damageRadius = 0.6f;     // equilibrium radius below this + pressure = exposure damage
-    float pushGain = 20000.0f;     // enemy fields shoving the body (force-ball scale)
+    float pushGain = 20000.0f;     // enemy fields shoving the body (force-ball scale) — shared by
+                                   // the emitter readback path AND the shield-less query path,
+                                   // which reproduces the same formula from the point readback
     float retargetInterval = 8.0f; // auto-target re-roll cadence (jittered per unit)
     float targetSearchRadius = 50.0f; // spatial radius of the auto-target search (structures +
                                       // player fallback) — LOCAL harassment: the barracks route
@@ -140,6 +142,9 @@ export struct GameUnitComponent
     float standoffRange = 16.0f, fireInterval = 3.0f;
     float bodyRadius = 0.5f;    // planar collider radius (from the physics shape at spawn) — the
                                 // nav line-of-sight tests are run for the BODY, not a point
+    // (SHIELD-LESS bodies — the swarm types, no ForceComponent — read the BAKED pressure field
+    // instead of carrying anything: ForceSystem::sampleBakedField in update(), worker-safe, no
+    // per-unit GPU slot. See the field-push block at the end of update().)
 
     // PUPPET (player capsules author `Puppet true`): the component is a pure state CARRIER —
     // update() runs no sim at all. The owning GamePlayer writes health/energy/collapsed/materials
@@ -270,6 +275,11 @@ export struct GameStructureComponent
     uint8 powered : 1 = 0;        // consumers: last production tick's draw was paid
     float health = 100.0f, healthMax = 100.0f;
     float meleeRadius = 1.0f;
+    float bubbleRadius = 0.0f; // ACTIVE emitters: the current visible bubble radius, stamped by
+                               // the game next to `strainable` (main-write, worker-read — a gauge
+                               // like flowUtil). SHIELD-LESS units (no ForceComponent — the swarm
+                               // types) take field exposure damage inside it: without an emitter
+                               // of their own, the GPU pressure/push readback path does not exist.
     ForceQuery query;          // territory at the structure (authority instances only)
     // ---- the flow-network node (game stamps capacity/band per tick so tweaks stay live) ----
     float store[3] = {};       // energy, fuel, minerals

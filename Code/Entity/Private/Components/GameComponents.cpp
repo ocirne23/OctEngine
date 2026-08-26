@@ -269,6 +269,8 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
     // sweep over enemy players/units (decoupled from the walk target: a wall in the way gets
     // chewed too). The strain reach must fit inside the query radius.
     float stopRange = attackRange;
+    bool inEnemyBubble = false; // stamped-radius signal — the shield-less FALLBACK when the baked
+                                // field is off (see the field block at the end)
     if (!routing)
     {
         constexpr float c_strainRange = 12.0f; // emitter siege-drain reach
@@ -290,6 +292,7 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                     strainDist = d;
                     strain = sc;
                 }
+                inEnemyBubble |= sc->strainable && d < sc->bubbleRadius;
                 if (!sc->invulnerable && sc->alive() && d - sc->meleeRadius < biteDist)
                 {
                     biteDist = d - sc->meleeRadius;
@@ -554,6 +557,42 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
         m_outputHistory[1] = m_outputHistory[2];
         m_outputHistory[2] = energy > 0.0f ? shieldOutput : 0.01f;
     }
+    else
+    {
+        // ---- SHIELD-LESS body: the BAKED pressure field stands in for the emitter readbacks
+        // (ForceSystem::sampleBakedField — a CPU bilinear tap, no per-unit GPU slot) ----
+        const ForceSystem::FieldSample fs = Globals::forceSystem.sampleBakedField(pos, team);
+        if (fs.valid)
+        {
+            // Exposure: an enemy bubble owning the point burns health (the structures' territory
+            // rule) — an emitter wall grinds a swarm down as it wades through.
+            if (fs.inside && fs.owningTeam != team)
+                health = glm::max(0.0f, health - params.fieldDps * deltaSec);
+            // Push with the SAME chain the shielded units land on. Their force is
+            // appliedForce / outputHistory = forceGain x (self-weighted mean of -grad over the
+            // unit's bubble) — the 13-sample integral's mean self-weight is ~0.35 — times
+            // pushGain * pressure * tension. Reproduce it from the field sample so ONE
+            // "Field push gain" tweak rules both paths and a swarm body shoves like any unit.
+            constexpr float c_bubbleSelfWeight = 0.35f;
+            const glm::vec3 grad = fs.opposingGradient;
+            const float pressure = fs.opposing;
+            if (pressure > 0.0f && glm::dot(grad, grad) > 1e-8f)
+            {
+                const float tension = 1.0f + params.tension * pressure;
+                const glm::vec3 force = -grad
+                    * (c_bubbleSelfWeight * Globals::forceSystem.getParams().forceGain);
+                Globals::physics.queueBodyCommand(pc->body, PhysicsWorld::EBodyCommand::ApplyImpulse,
+                    force * (deltaSec * params.pushGain * pressure * tension));
+                const float speed = glm::length(vel);
+                const float maxSpeed = moveSpeed * params.maxSpeedMult;
+                if (speed > maxSpeed)
+                    Globals::physics.queueBodyCommand(pc->body, PhysicsWorld::EBodyCommand::SetLinearVelocity,
+                        vel * (maxSpeed / speed));
+            }
+        }
+        else if (inEnemyBubble) // bake disabled: the stamped-radius fallback (damage only, no push)
+            health = glm::max(0.0f, health - params.fieldDps * deltaSec);
+    }
 }
 
 void GameUnitComponent::damage(float amount)
@@ -600,7 +639,7 @@ void GameStructureComponent::spawn(Entity& entity, const SpawnInfo& info, const 
     invulnerable = info.invulnerable ? 1 : 0;
     meleeRadius = info.meleeRadius;
     if (isAuthority()) // clients never damage-sim, so they never spend a query slot
-        query = Globals::forceSystem.createQuery(base.pos);
+        query = Globals::forceSystem.createQuery(base.pos, info.team);
 }
 
 // Atomically move `amount` from one store float to another, clamped by the source's content and

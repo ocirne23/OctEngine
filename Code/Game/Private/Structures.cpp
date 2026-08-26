@@ -249,22 +249,37 @@ void StructureSystem::clear()
 
 // ---------------------------------------------------------------- nodes + world
 
+void StructureSystem::spawnNode(float x, float z, ENodeType type)
+{
+    Node node;
+    node.type = type;
+    node.pos = glm::vec3(x, 0.8f, z);
+    node.entity = Globals::world.spawnAssetFile(
+        type == ENodeType::Mineral ? "Entities/Game/mineralNode.pre" : "Entities/Game/fuelNode.pre",
+        Transform(node.pos), true);
+    if (!node.entity)
+        return;
+    node.entity->setName(type == ENodeType::Mineral ? "MineralNode" : "FuelNode");
+    Globals::world.addRootEntity(node.entity);
+    m_nodes.push_back(oc::move(node));
+}
+
+void StructureSystem::spawnNodesCoop(float minRadius, float maxRadius, int count)
+{
+    // Golden-angle spiral over the open map: even radial coverage with no clumps, the base area
+    // kept clear, and pure math — every instance (server AND clients) builds the identical set
+    // locally, the same contract as the corridor table. sqrt(t) makes the AREAL density uniform.
+    for (int i = 0; i < count; ++i)
+    {
+        const float t = (float(i) + 0.5f) / float(count);
+        const float r = glm::mix(minRadius, maxRadius, std::sqrt(t));
+        const float a = float(i) * 2.3999632f; // the golden angle
+        spawnNode(std::cos(a) * r, std::sin(a) * r, (i % 3) == 1 ? ENodeType::Fuel : ENodeType::Mineral);
+    }
+}
+
 void StructureSystem::spawnNodes()
 {
-    const auto spawnNode = [this](float x, float z, ENodeType type)
-    {
-        Node node;
-        node.type = type;
-        node.pos = glm::vec3(x, 0.8f, z);
-        node.entity = Globals::world.spawnAssetFile(
-            type == ENodeType::Mineral ? "Entities/Game/mineralNode.pre" : "Entities/Game/fuelNode.pre",
-            Transform(node.pos), true);
-        if (!node.entity)
-            return;
-        node.entity->setName(type == ENodeType::Mineral ? "MineralNode" : "FuelNode");
-        Globals::world.addRootEntity(node.entity);
-        m_nodes.push_back(oc::move(node));
-    };
     // The CORRIDOR arena (GameMatch::spawnCorridorWalls: x -65..65, z -20..20, bases at
     // x = -55 / +55): every node lives on a SIDE, exactly mirrored (180° symmetry) — the center
     // stays EMPTY; each side's FORWARD fuel node (±14) is the exposed prize near the middle.
@@ -1023,6 +1038,10 @@ void StructureSystem::tickDamage(float)
         const Ref& s = m_frame[i];
         s.state->strainable = isEmitterType(s.type) && !s.state->blueprint
             && s.state->emitter.outputFrac > 0.05f;
+        // The CPU bubble-radius stand-in shield-less units test against (see GameComponents.ixx):
+        // the visible sphere radius is ~half the reach, scaled by the live output ramp.
+        s.state->bubbleRadius = s.state->strainable
+            ? emitterReachOf(s.type) * 0.5f * s.state->emitter.outputFrac : 0.0f;
         if (s.state->invulnerable || s.state->alive())
         {
             ++i;
