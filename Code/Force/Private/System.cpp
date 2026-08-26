@@ -327,6 +327,7 @@ void ForceSystem::initialize()
     Tweak::floatVar("Force/Shell", "Full-detail radius (px)", &m_params.shellFullResPixels, 8.0f, 1024.0f, 4.0f);
     Tweak::floatVar("Force/Shell", "Sampled tier reach (m)", &m_params.sampledShellReach, 0.0f, 100.0f, 1.0f);
     Tweak::boolean("Force/Shell", "Union march", &m_params.unionMarch);
+    Tweak::boolean("Force/Shell", "Union half res", &m_params.unionHalfRes); // rebuild-class (device idle)
     Tweak::floatVar("Force/Shell", "Union step (m)", &m_params.unionStepSize, 0.05f, 4.0f, 0.05f);
     Tweak::intVar("Force/Shell", "Union max steps", &m_params.unionMaxSteps, 8, 512, 8);
     // The draw-box shrink's iso reduction (see packVisibleBounds): 0 = full support boxes.

@@ -10,6 +10,10 @@
 #include "shared.inc.glsl"
 #include "force_field.inc.glsl" // declares the emitter buffer at FORCE_EMITTERS_BINDING (1)
 
+#ifndef FORCE_UNION_UV_SCALE
+#define FORCE_UNION_UV_SCALE 1.0 // injected 2.0 when the union march runs at half res
+#endif
+
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 
 layout (location = 0) in flat uint v_emitterIdx;
@@ -21,7 +25,7 @@ void main()
     g_viewIndex = int(u_viewIndex);
     const ForceEmitterData e = fe_emitters[v_emitterIdx];
 
-    const vec2 uv = gl_FragCoord.xy * u_screenSize.zw;
+    const vec2 uv = gl_FragCoord.xy * u_screenSize.zw * FORCE_UNION_UV_SCALE; // see force_union.fs
     const vec3 rayOrigin = u_viewPos;
     const vec3 rayDir = normalize(worldPosFromDepth(uv, 0.0) - rayOrigin);
 

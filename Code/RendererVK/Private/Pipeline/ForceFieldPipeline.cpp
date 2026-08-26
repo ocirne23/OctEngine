@@ -41,6 +41,9 @@ ForceFieldPipeline::~ForceFieldPipeline()
     if (m_intervalRenderPass)
         vkDevice.destroyRenderPass(m_intervalRenderPass);
     m_intervalRenderPass = nullptr;
+    if (m_marchRenderPass)
+        vkDevice.destroyRenderPass(m_marchRenderPass);
+    m_marchRenderPass = nullptr;
     if (m_intervalSampler)
         vkDevice.destroySampler(m_intervalSampler);
     m_intervalSampler = nullptr;
@@ -87,6 +90,46 @@ void ForceFieldPipeline::createIntervalRenderPass()
     m_intervalRenderPass = result.value;
 }
 
+// The half-res march target's pass: RGBA16F premultiplied output, cleared to 0 (uncovered pixels
+// blend nothing at the upsample), ends SHADER_READ_ONLY for the scene-color blend stage. Same
+// structure as the interval pass.
+void ForceFieldPipeline::createMarchRenderPass()
+{
+    const vk::AttachmentDescription2 attachment{
+        .format = vk::Format::eR16G16B16A16Sfloat,
+        .samples = vk::SampleCountFlagBits::e1,
+        .loadOp = vk::AttachmentLoadOp::eClear,
+        .storeOp = vk::AttachmentStoreOp::eStore,
+        .initialLayout = vk::ImageLayout::eUndefined,
+        .finalLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+    };
+    const vk::AttachmentReference2 colorRef{ .attachment = 0, .layout = vk::ImageLayout::eColorAttachmentOptimal, .aspectMask = vk::ImageAspectFlagBits::eColor };
+    const vk::SubpassDescription2 subpass{
+        .pipelineBindPoint = vk::PipelineBindPoint::eGraphics,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &colorRef,
+    };
+    const vk::SubpassDependency2 dependency{ // march writes -> the upsample FS's sampled read
+        .srcSubpass = 0,
+        .dstSubpass = vk::SubpassExternal,
+        .srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput,
+        .dstStageMask = vk::PipelineStageFlagBits::eFragmentShader,
+        .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
+        .dstAccessMask = vk::AccessFlagBits::eShaderRead,
+    };
+    const vk::RenderPassCreateInfo2 info{
+        .attachmentCount = 1,
+        .pAttachments = &attachment,
+        .subpassCount = 1,
+        .pSubpasses = &subpass,
+        .dependencyCount = 1,
+        .pDependencies = &dependency,
+    };
+    auto result = Globals::device.getDevice().createRenderPass2(info);
+    if (result.result != vk::Result::eSuccess) { assert(false && "force march renderpass"); return; }
+    m_marchRenderPass = result.value;
+}
+
 void ForceFieldPipeline::destroyIntervalTarget()
 {
     vk::Device vkDevice = Globals::device.getDevice();
@@ -99,12 +142,31 @@ void ForceFieldPipeline::destroyIntervalTarget()
     Globals::gpuAllocator.destroyImage(m_intervalImage, m_intervalMemory);
     m_intervalImage = nullptr;
     m_intervalMemory = nullptr;
+    if (m_marchFramebuffer)
+        vkDevice.destroyFramebuffer(m_marchFramebuffer);
+    m_marchFramebuffer = nullptr;
+    if (m_marchView)
+        vkDevice.destroyImageView(m_marchView);
+    m_marchView = nullptr;
+    Globals::gpuAllocator.destroyImage(m_marchImage, m_marchMemory);
+    m_marchImage = nullptr;
+    m_marchMemory = nullptr;
 }
 
 void ForceFieldPipeline::resizeIntervalTarget(uint32 width, uint32 height)
 {
     vk::Device vkDevice = Globals::device.getDevice();
     destroyIntervalTarget();
+    // HALF RESOLUTION (m_unionHalfRes): the union march (and the interval bounds that feed it)
+    // run at half the swapchain extent — 4x fewer marched pixels; the upsample blend restores
+    // full res depth-aware. Both FS map their gl_FragCoord back to full-res uv with the injected
+    // FORCE_UNION_UV_SCALE. Full-res mode keeps the old direct scene-color draw and creates NO
+    // march target at all.
+    if (m_unionHalfRes)
+    {
+        width = glm::max(width / 2u, 1u);
+        height = glm::max(height / 2u, 1u);
+    }
     m_intervalWidth = width;
     m_intervalHeight = height;
     const vk::ImageCreateInfo info{
@@ -158,6 +220,48 @@ void ForceFieldPipeline::resizeIntervalTarget(uint32 width, uint32 height)
         if (samplerResult.result != vk::Result::eSuccess) { assert(false && "force interval sampler"); return; }
         m_intervalSampler = samplerResult.value;
     }
+
+    if (!m_unionHalfRes)
+        return; // full-res mode: the march draws into scene color directly — no separate target
+
+    // The half-res march target (same extent as the interval target).
+    const vk::ImageCreateInfo marchInfo{
+        .imageType = vk::ImageType::e2D,
+        .format = vk::Format::eR16G16B16A16Sfloat,
+        .extent = { width, height, 1 },
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = vk::SampleCountFlagBits::e1,
+        .tiling = vk::ImageTiling::eOptimal,
+        .usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
+        .sharingMode = vk::SharingMode::eExclusive,
+        .initialLayout = vk::ImageLayout::eUndefined,
+    };
+    if (!Globals::gpuAllocator.createImage(marchInfo, m_marchImage, m_marchMemory, "ForceUnionMarch"))
+    {
+        assert(false && "force march image");
+        return;
+    }
+    const vk::ImageViewCreateInfo marchViewInfo{
+        .image = m_marchImage,
+        .viewType = vk::ImageViewType::e2D,
+        .format = vk::Format::eR16G16B16A16Sfloat,
+        .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 },
+    };
+    auto marchViewResult = vkDevice.createImageView(marchViewInfo);
+    if (marchViewResult.result != vk::Result::eSuccess) { assert(false && "force march view"); return; }
+    m_marchView = marchViewResult.value;
+    const vk::FramebufferCreateInfo marchFbInfo{
+        .renderPass = m_marchRenderPass,
+        .attachmentCount = 1,
+        .pAttachments = &m_marchView,
+        .width = width,
+        .height = height,
+        .layers = 1,
+    };
+    auto marchFbResult = vkDevice.createFramebuffer(marchFbInfo);
+    if (marchFbResult.result != vk::Result::eSuccess) { assert(false && "force march framebuffer"); return; }
+    m_marchFramebuffer = marchFbResult.value;
 }
 
 // The sampled shell tier's two field volumes (phi[0..3]/phi[4..7], RGBA16F) + the sampler the
@@ -330,6 +434,8 @@ void ForceFieldPipeline::buildIntervalLayout(GraphicsPipelineLayout& layout)
     }
     layout.vertexShader.defines.push_back(numTeamsDefine(m_numTeams));
     layout.fragmentShader.defines.push_back(numTeamsDefine(m_numTeams));
+    if (m_unionHalfRes) // the FS maps its half-res gl_FragCoord back to full-res uv
+        layout.fragmentShader.defines.push_back({ "FORCE_UNION_UV_SCALE", "2.0" });
     layout.cullMode = vk::CullModeFlagBits::eFront; // camera inside a box still rasterizes (shell rule)
     layout.blendEnable = true;
     layout.colorBlendOp = vk::BlendOp::eMin; // (tEntry, -tExit) union accumulate; factors ignored
@@ -343,7 +449,8 @@ void ForceFieldPipeline::buildIntervalLayout(GraphicsPipelineLayout& layout)
 }
 
 // The union march: a fullscreen triangle whose FS marches each covered pixel's interval once
-// (force_union.fs.glsl) — the analytic tier's one-march-per-pixel path.
+// (force_union.fs.glsl) — the analytic tier's one-march-per-pixel path, at HALF RES into the
+// march target (no blending: single draw over a zero clear).
 void ForceFieldPipeline::buildUnionLayout(GraphicsPipelineLayout& layout)
 {
     layout.vertexShader.debugFilePath = "Shaders/composite.vs.glsl"; // the engine's fullscreen triangle
@@ -353,10 +460,18 @@ void ForceFieldPipeline::buildUnionLayout(GraphicsPipelineLayout& layout)
     if (m_useGrid)
         layout.fragmentShader.defines.push_back({ "FORCE_GRID", "" });
     layout.fragmentShader.defines.push_back(numTeamsDefine(m_numTeams));
+    if (m_unionHalfRes)
+    {
+        layout.fragmentShader.defines.push_back({ "FORCE_UNION_UV_SCALE", "2.0" });
+        layout.blendEnable = false; // premultiplied result stored raw; the upsample stage blends it
+    }
+    else
+    {
+        layout.blendEnable = true; // full-res mode: premultiplied directly over the lit scene
+        layout.srcColorBlendFactor = vk::BlendFactor::eOne;
+        layout.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
+    }
     layout.cullMode = vk::CullModeFlagBits::eNone;
-    layout.blendEnable = true; // premultiplied over the lit scene, exactly like the shell draw
-    layout.srcColorBlendFactor = vk::BlendFactor::eOne;
-    layout.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
     layout.depthTestEnable = false;
     layout.depthWriteEnable = false;
     auto& b = layout.descriptorSetLayoutBindings;
@@ -366,6 +481,30 @@ void ForceFieldPipeline::buildUnionLayout(GraphicsPipelineLayout& layout)
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 3, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 4, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 5, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
+    layout.pushConstantRanges.push_back(vk::PushConstantRange{
+        .stageFlags = vk::ShaderStageFlagBits::eFragment, .offset = 0, .size = sizeof(uint32) });
+}
+
+// The upsample blend: a fullscreen triangle in scene color that composites the half-res march
+// target depth-aware (force_union_upsample.fs.glsl) — bilinear weights x depth similarity so
+// shells never bleed across geometry silhouettes. Premultiplied over the lit scene, exactly the
+// blend the full-res union draw used.
+void ForceFieldPipeline::buildUpsampleLayout(GraphicsPipelineLayout& layout)
+{
+    layout.vertexShader.debugFilePath = "Shaders/composite.vs.glsl";
+    layout.fragmentShader.debugFilePath = "Shaders/force_union_upsample.fs.glsl";
+    layout.vertexShader.text = FileSystem::readFileStr(layout.vertexShader.debugFilePath);
+    layout.fragmentShader.text = FileSystem::readFileStr(layout.fragmentShader.debugFilePath);
+    layout.cullMode = vk::CullModeFlagBits::eNone;
+    layout.blendEnable = true;
+    layout.srcColorBlendFactor = vk::BlendFactor::eOne;
+    layout.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
+    layout.depthTestEnable = false;
+    layout.depthWriteEnable = false;
+    auto& b = layout.descriptorSetLayoutBindings;
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 2, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
     layout.pushConstantRanges.push_back(vk::PushConstantRange{
         .stageFlags = vk::ShaderStageFlagBits::eFragment, .offset = 0, .size = sizeof(uint32) });
 }
@@ -427,11 +566,14 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
     m_shellBakePipeline.initialize(shellBakeLayout);
 
     createIntervalRenderPass();
-    GraphicsPipelineLayout intervalLayout, unionLayout;
+    createMarchRenderPass();
+    GraphicsPipelineLayout intervalLayout, unionLayout, upsampleLayout;
     buildIntervalLayout(intervalLayout);
     buildUnionLayout(unionLayout);
+    buildUpsampleLayout(upsampleLayout);
     m_intervalPipeline.initialize(m_intervalRenderPass, intervalLayout);
-    m_unionPipeline.initialize(sceneRenderPass, unionLayout);
+    m_unionPipeline.initialize(m_unionHalfRes ? m_marchRenderPass : sceneRenderPass, unionLayout);
+    m_upsamplePipeline.initialize(sceneRenderPass, upsampleLayout);
 
     createGridBuffers();
     createShellVolume();
@@ -507,6 +649,7 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
         m_shellBakeSets[i].initialize(m_shellBakePipeline.getDescriptorSetLayout());
         m_intervalSets[i].initialize(m_intervalPipeline.getDescriptorSetLayout());
         m_unionSets[i].initialize(m_unionPipeline.getDescriptorSetLayout());
+        m_upsampleSets[i].initialize(m_upsamplePipeline.getDescriptorSetLayout());
     }
     createBakeReadbackBuffers();
 }
@@ -549,13 +692,16 @@ void ForceFieldPipeline::reloadShaders(vk::RenderPass sceneRenderPass)
         printf("ForceFieldPipeline: bake shader reload failed, keeping previous pipeline\n");
     if (!m_shellBakePipeline.reloadShaders(shellBakeLayout))
         printf("ForceFieldPipeline: shell-volume bake shader reload failed, keeping previous pipeline\n");
-    GraphicsPipelineLayout intervalLayout, unionLayout;
+    GraphicsPipelineLayout intervalLayout, unionLayout, upsampleLayout;
     buildIntervalLayout(intervalLayout);
     buildUnionLayout(unionLayout);
+    buildUpsampleLayout(upsampleLayout);
     if (!m_intervalPipeline.reloadShaders(m_intervalRenderPass, intervalLayout))
         printf("ForceFieldPipeline: interval shader reload failed, keeping previous pipeline\n");
-    if (!m_unionPipeline.reloadShaders(sceneRenderPass, unionLayout))
+    if (!m_unionPipeline.reloadShaders(m_unionHalfRes ? m_marchRenderPass : sceneRenderPass, unionLayout))
         printf("ForceFieldPipeline: union march shader reload failed, keeping previous pipeline\n");
+    if (!m_upsamplePipeline.reloadShaders(sceneRenderPass, upsampleLayout))
+        printf("ForceFieldPipeline: union upsample shader reload failed, keeping previous pipeline\n");
 }
 
 void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu> slots,
@@ -855,18 +1001,34 @@ void ForceFieldPipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameId
         recordUnionDraw(commandBuffer, frameIdx, viewIndex, params);
 }
 
-// The UNION MARCH fullscreen draw (analytic tier, one march per pixel): vertexCount is 0
-// whenever the pass is off (VR, tweak, density view), so recording it is always safe.
-void ForceFieldPipeline::recordUnionDraw(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 viewIndex, const DrawParams& params)
+// The UNION MARCH at half res (analytic tier, one march per covered pixel), in its own render
+// pass: vertexCount is 0 whenever the pass is off (VR, tweak, density view), so recording it is
+// always safe — a clear + no draw. gbuffer depth is SHADER_READ_ONLY here (pre scene stages).
+void ForceFieldPipeline::recordUnionMarchPass(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo,
+    const vk::Viewport& viewport, const vk::Rect2D& scissor,
+    vk::ImageView gbufferDepthView, vk::Sampler gbufferSampler)
 {
+    if (!m_unionHalfRes)
+        return; // full-res mode: no march target — the scene stage draws the march directly
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
+    const vk::ClearValue clear{ vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } } };
+    const vk::RenderPassBeginInfo begin{
+        .renderPass = m_marchRenderPass,
+        .framebuffer = m_marchFramebuffer,
+        .renderArea = { vk::Offset2D{ 0, 0 }, vk::Extent2D{ m_intervalWidth, m_intervalHeight } },
+        .clearValueCount = 1,
+        .pClearValues = &clear,
+    };
+    cmd.beginRenderPass(begin, vk::SubpassContents::eInline);
+    cmd.setViewport(0, { viewport });
+    cmd.setScissor(0, { scissor });
     DescriptorSet& unionSet = m_unionSets[frameIdx];
     vk::DescriptorSet vkUnionSet = unionSet.getDescriptorSet();
     oc::array<DescriptorSetUpdateInfo, 6> unionUpdates{
-        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(Ubo) } } },
+        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(Ubo) } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_emitterBuffers[frameIdx].getBuffer(), .range = m_emitterBuffers[frameIdx].getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
-            vk::DescriptorImageInfo{ .sampler = params.gbufferSampler, .imageView = params.gbufferDepthView, .imageLayout = params.gbufferDepthLayout } } },
+            vk::DescriptorImageInfo{ .sampler = gbufferSampler, .imageView = gbufferDepthView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
         DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_gridTableBuffers[frameIdx].getBuffer(), .range = m_gridTableBuffers[frameIdx].getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_gridDataBuffers[frameIdx].getBuffer(), .range = m_gridDataBuffers[frameIdx].getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
@@ -875,7 +1037,52 @@ void ForceFieldPipeline::recordUnionDraw(CommandBuffer& commandBuffer, uint32 fr
     commandBuffer.cmdUpdateDescriptorSets(m_unionPipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, vkUnionSet, unionUpdates);
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_unionPipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_unionPipeline.getPipelineLayout(), 0, 1, &vkUnionSet, 0, nullptr);
+    const uint32 viewIndex = 0; // desktop only (VR keeps per-proxy shells; its indirect is 0)
     cmd.pushConstants(m_unionPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eFragment, 0, sizeof(uint32), &viewIndex);
+    cmd.drawIndirect(m_indirectBuffers[frameIdx].getBuffer(), UNION_DRAW_OFFSET * sizeof(uint32), 1, sizeof(vk::DrawIndirectCommand));
+    cmd.endRenderPass();
+}
+
+// The scene-color half of the union path (the "Force union blend" scene stage): half-res mode =
+// the depth-aware upsample blend of the march target; full-res mode = the direct march draw over
+// the lit scene (the pre-half-res path). Same indirect command either way — 0 vertices = no-op.
+void ForceFieldPipeline::recordUnionDraw(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 viewIndex, const DrawParams& params)
+{
+    vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
+    if (!m_unionHalfRes)
+    {
+        DescriptorSet& unionSet = m_unionSets[frameIdx];
+        vk::DescriptorSet vkUnionSet = unionSet.getDescriptorSet();
+        oc::array<DescriptorSetUpdateInfo, 6> unionUpdates{
+            DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(Ubo) } } },
+            DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_emitterBuffers[frameIdx].getBuffer(), .range = m_emitterBuffers[frameIdx].getSize() } } },
+            DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
+                vk::DescriptorImageInfo{ .sampler = params.gbufferSampler, .imageView = params.gbufferDepthView, .imageLayout = params.gbufferDepthLayout } } },
+            DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_gridTableBuffers[frameIdx].getBuffer(), .range = m_gridTableBuffers[frameIdx].getSize() } } },
+            DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_gridDataBuffers[frameIdx].getBuffer(), .range = m_gridDataBuffers[frameIdx].getSize() } } },
+            DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
+                vk::DescriptorImageInfo{ .sampler = m_intervalSampler, .imageView = m_intervalView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
+        };
+        commandBuffer.cmdUpdateDescriptorSets(m_unionPipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, vkUnionSet, unionUpdates);
+        cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_unionPipeline.getPipeline());
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_unionPipeline.getPipelineLayout(), 0, 1, &vkUnionSet, 0, nullptr);
+        cmd.pushConstants(m_unionPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eFragment, 0, sizeof(uint32), &viewIndex);
+        cmd.drawIndirect(m_indirectBuffers[frameIdx].getBuffer(), UNION_DRAW_OFFSET * sizeof(uint32), 1, sizeof(vk::DrawIndirectCommand));
+        return;
+    }
+    DescriptorSet& set = m_upsampleSets[frameIdx];
+    vk::DescriptorSet vkSet = set.getDescriptorSet();
+    oc::array<DescriptorSetUpdateInfo, 3> updates{
+        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(Ubo) } } },
+        DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
+            vk::DescriptorImageInfo{ .sampler = m_intervalSampler, .imageView = m_marchView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
+        DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
+            vk::DescriptorImageInfo{ .sampler = params.gbufferSampler, .imageView = params.gbufferDepthView, .imageLayout = params.gbufferDepthLayout } } },
+    };
+    commandBuffer.cmdUpdateDescriptorSets(m_upsamplePipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, vkSet, updates);
+    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_upsamplePipeline.getPipeline());
+    cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_upsamplePipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
+    cmd.pushConstants(m_upsamplePipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eFragment, 0, sizeof(uint32), &viewIndex);
     cmd.drawIndirect(m_indirectBuffers[frameIdx].getBuffer(), UNION_DRAW_OFFSET * sizeof(uint32), 1, sizeof(vk::DrawIndirectCommand));
 }
 

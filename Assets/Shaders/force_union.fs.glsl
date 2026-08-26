@@ -12,6 +12,10 @@
 #include "shared.inc.glsl"
 #include "force_field.inc.glsl" // declares the emitter buffer at FORCE_EMITTERS_BINDING (1)
 
+#ifndef FORCE_UNION_UV_SCALE
+#define FORCE_UNION_UV_SCALE 1.0 // injected 2.0 when the march runs at half res
+#endif
+
 layout (binding = 2) uniform sampler2D u_gbufferDepth;
 layout (binding = 5) uniform sampler2D u_shellInterval; // (tEntry, -tExit) per pixel, RG16F
 
@@ -93,7 +97,10 @@ void main()
     if (t0 > 6.0e4 || t1 <= t0)
         discard; // cleared (no analytic shell covers this pixel)
 
-    const vec2 uv = gl_FragCoord.xy * u_screenSize.zw;
+    // FORCE_UNION_UV_SCALE (injected, 2.0 in the half-res mode; absent = full res): maps this
+    // pass's gl_FragCoord back to full-res uv (the interval texelFetch below stays in this pass's
+    // own texels — its target always matches this resolution).
+    const vec2 uv = gl_FragCoord.xy * u_screenSize.zw * FORCE_UNION_UV_SCALE;
     const vec3 rayOrigin = u_viewPos;
     const vec3 rayDir = normalize(worldPosFromDepth(uv, 0.0) - rayOrigin);
 

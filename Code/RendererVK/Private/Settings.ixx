@@ -408,6 +408,10 @@ export struct ForceFieldParams
     // instead of always paying for 8 teams. MAX_FORCE_TEAMS stays the CAP: the UBO color array
     // size and the "outside every bubble" sentinel.
     uint32 numTeams = 8;
+    // HALF-RES union march (rebuild-class toggle, the useGrid pattern): the march + interval
+    // targets run at swapchain/2 and a depth-aware upsample blends into scene color; OFF = the
+    // march draws directly into scene color at full res and NO march target exists.
+    bool unionHalfRes = true;
     float isoThreshold = 0.15f;      // field strength where an uncontested bubble surface sits
     int marchSteps = 10;             // ray-march steps through a shell proxy's ray interval
     float bigReachThreshold = 48.0f; // max directional reach (m) above which an emitter bypasses the

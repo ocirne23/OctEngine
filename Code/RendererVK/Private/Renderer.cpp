@@ -1437,17 +1437,26 @@ void Renderer::setForceFieldParams(const ForceFieldParams& params)
     // volume/buffers (setNumTeams) — a game-mode event, never per-frame.
     const uint32 numTeams = glm::clamp(params.numTeams, 2u, RendererVKLayout::MAX_FORCE_TEAMS);
     if (params.useGrid != m_forceFieldPipeline.getUseGrid()
-        || numTeams != m_forceFieldPipeline.getNumTeams())
+        || numTeams != m_forceFieldPipeline.getNumTeams()
+        || params.unionHalfRes != m_forceFieldPipeline.getUnionHalfRes())
     {
         if (Globals::device.graphicsQueueWaitIdle() == vk::Result::eSuccess)
         {
-            printf("ForceFieldPipeline: rebuilding force pipelines (grid %d, %u teams)\n",
-                params.useGrid ? 1 : 0, numTeams); // loud: a silent skip here strands stale binaries
+            printf("ForceFieldPipeline: rebuilding force pipelines (grid %d, %u teams, union %s)\n",
+                params.useGrid ? 1 : 0, numTeams, // loud: a silent skip here strands stale binaries
+                params.unionHalfRes ? "half-res" : "full-res");
             // Shader source reads from the frame loop: intentional, rare main-thread IO (a game-
             // mode switch or the grid tweak), declared so FileSystem's assert stays meaningful.
             const FileSystem::AllowMainThreadIO allowIo;
             m_forceFieldPipeline.setUseGrid(params.useGrid);
             m_forceFieldPipeline.setNumTeams(numTeams);
+            if (params.unionHalfRes != m_forceFieldPipeline.getUnionHalfRes())
+            {
+                // The targets change size (and the march target existence) with the mode.
+                m_forceFieldPipeline.setUnionHalfRes(params.unionHalfRes);
+                const vk::Extent2D ext = m_swapChain.getLayout().extent;
+                m_forceFieldPipeline.resizeIntervalTarget(ext.width, ext.height);
+            }
             m_forceFieldPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
             setHaveToRecordCommandBuffers();
         }
@@ -3456,17 +3465,31 @@ void Renderer::recordCommandBuffers()
             // The forward set's AO view + TLAS are written at scene-record time and on TLAS handle
             // changes — see the recordScene / GI-changed blocks above.
 
-            { // The union march's interval pass (its own tiny render pass, before the scene
-              // stages): the analytic-tier proxies MIN-blend their ray intervals; the "Force
-              // shells" stage's fullscreen union draw then marches each covered pixel once.
-                m_gpuProfiler.beginScope(vkCommandBuffer, "Force intervals");
+            { // The union march's interval pass + the HALF-RES march itself (each its own render
+              // pass, before the scene stages): the analytic-tier proxies MIN-blend their ray
+              // intervals at half res, the march walks each covered half-res pixel once, and the
+              // "Force union blend" scene stage upsamples the result depth-aware into scene color.
+              // Viewport/scissor are HALVED to match the targets (the FS maps uv back with x2);
+              // gbuffer depth is still SHADER_READ_ONLY here (the prepass-reuse barrier is below).
+                const bool halfRes = m_forceFieldPipeline.getUnionHalfRes();
+                const float vpScale = halfRes ? 0.5f : 1.0f;
                 const glm::ivec2 vpSize = m_viewportRect.getSize();
-                const vk::Viewport intervalViewport{ .x = (float)m_viewportRect.min.x, .y = (float)m_viewportRect.max.y,
-                    .width = (float)vpSize.x, .height = -((float)vpSize.y), .minDepth = 0.0f, .maxDepth = 1.0f };
-                const vk::Rect2D intervalScissor{ .offset = vk::Offset2D{ 0, 0 }, .extent = m_swapChain.getLayout().extent };
+                const vk::Viewport marchViewport{ .x = (float)m_viewportRect.min.x * vpScale, .y = (float)m_viewportRect.max.y * vpScale,
+                    .width = (float)vpSize.x * vpScale, .height = -((float)vpSize.y * vpScale), .minDepth = 0.0f, .maxDepth = 1.0f };
+                const vk::Extent2D fullExtent = m_swapChain.getLayout().extent;
+                const vk::Rect2D marchScissor{ .offset = vk::Offset2D{ 0, 0 },
+                    .extent = halfRes ? vk::Extent2D{ glm::max(fullExtent.width / 2u, 1u), glm::max(fullExtent.height / 2u, 1u) } : fullExtent };
+                m_gpuProfiler.beginScope(vkCommandBuffer, "Force intervals");
                 m_forceFieldPipeline.recordIntervalPass(commandBuffer, frameIdx, frameData.ubo,
-                    intervalViewport, intervalScissor);
+                    marchViewport, marchScissor);
                 m_gpuProfiler.endScope(vkCommandBuffer);
+                if (halfRes)
+                {
+                    m_gpuProfiler.beginScope(vkCommandBuffer, "Force union march");
+                    m_forceFieldPipeline.recordUnionMarchPass(commandBuffer, frameIdx, frameData.ubo,
+                        marchViewport, marchScissor, gbuffer.getDepthView(0), gbuffer.getSampler());
+                    m_gpuProfiler.endScope(vkCommandBuffer);
+                }
             }
 
             // Depth-prepass reuse: the scene pass binds the G-buffer depth READ-ONLY; the explicit
@@ -3487,7 +3510,7 @@ void Renderer::recordCommandBuffers()
                 SceneStage{ "GI probe debug", vkGiProbeDebugCommandBuffer, m_giProbeDebugEnabled },
                 SceneStage{ "Debug lines", frameData.debugLineCommandBuffer.getCommandBuffer(), m_debugLinePipeline.hasBuffers() },
                 SceneStage{ "Force shells", frameData.forceFieldCommandBuffer.getCommandBuffer(), m_forceFieldParams.enabled },
-                SceneStage{ "Force union march", frameData.forceUnionCommandBuffer.getCommandBuffer(), m_forceFieldParams.enabled },
+                SceneStage{ "Force union blend", frameData.forceUnionCommandBuffer.getCommandBuffer(), m_forceFieldParams.enabled },
                 SceneStage{ "Particles", frameData.particleCommandBuffer.getCommandBuffer(), m_particlesEnabled },
                 SceneStage{ "Fog apply", vkFogApplyCommandBuffer, m_fogParams.enabled },
             };

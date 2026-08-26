@@ -49,6 +49,12 @@ public:
     // guarantees GPU idle and follows with reloadShaders (the useGrid toggle pattern).
     void setNumTeams(uint32 numTeams);
     uint32 getNumTeams() const { return m_numTeams; }
+    // HALF-RES union march toggle (rebuild-class, like useGrid): ON = the march runs in its own
+    // half-res pass and the scene stage upsamples; OFF = the march draws directly into scene
+    // color at full res (no march framebuffer exists at all). Caller is GPU-idle and follows
+    // with reloadShaders + resizeIntervalTarget (the targets change size/existence).
+    void setUnionHalfRes(bool halfRes) { m_unionHalfRes = halfRes; }
+    bool getUnionHalfRes() const { return m_unionHalfRes; }
 
     // SHELL DRAW CULLING (upload-time, CPU): a drawable shell outside the view frustum, or whose
     // projected proxy radius is under minPixels, is compacted into the NON-drawn field partition
@@ -112,7 +118,17 @@ public:
     // union pass is off, so recording it unconditionally is a clear + no draws).
     void recordIntervalPass(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo,
         const vk::Viewport& viewport, const vk::Rect2D& scissor);
-    // (Re)creates the interval target at the swapchain extent — call at init + on resize.
+    // The union MARCH at HALF RESOLUTION: its own render pass (RGBA16F premultiplied, cleared to
+    // 0, ends SHADER_READ_ONLY), recorded in the PRIMARY right after the interval pass. Each
+    // covered pixel marches once at half res; the "Force union blend" scene stage (recordDraw
+    // UnionMarch) then upsamples depth-aware into scene color. The viewport/scissor are the HALF
+    // ones (the caller halves the full-res viewport — same 0.5 factor the march FS's uv applies).
+    // gbufferDepth is SHADER_READ_ONLY at this point in the frame (before the prepass-reuse barrier).
+    void recordUnionMarchPass(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo,
+        const vk::Viewport& viewport, const vk::Rect2D& scissor,
+        vk::ImageView gbufferDepthView, vk::Sampler gbufferSampler);
+    // (Re)creates the interval + march targets at HALF the given (swapchain) extent — call at
+    // init + on resize.
     void resizeIntervalTarget(uint32 width, uint32 height);
 
     // This frame slot's readbacks, slot-indexed (safe between beginFrame's fence wait and present;
@@ -151,8 +167,10 @@ private:
     void recordUnionDraw(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 viewIndex, const DrawParams& params);
     uint32 bakeVec4PerSample() const { return (m_numTeams + 3u) / 4u; }
     void buildIntervalLayout(GraphicsPipelineLayout& layout); // shell VS + interval FS, MIN blend
-    void buildUnionLayout(GraphicsPipelineLayout& layout);    // fullscreen VS + union-march FS
+    void buildUnionLayout(GraphicsPipelineLayout& layout);    // fullscreen VS + union-march FS (half-res pass)
+    void buildUpsampleLayout(GraphicsPipelineLayout& layout); // fullscreen VS + depth-aware upsample FS (scene color)
     void createIntervalRenderPass(); // format-fixed, made once at initialize
+    void createMarchRenderPass();    // the half-res march target's pass, same lifetime
     void destroyIntervalTarget();
 
     GraphicsPipeline m_pipeline;
@@ -162,8 +180,10 @@ private:
     ComputePipeline m_bakePipeline;
     ComputePipeline m_shellBakePipeline;
     GraphicsPipeline m_intervalPipeline;
-    GraphicsPipeline m_unionPipeline;
+    GraphicsPipeline m_unionPipeline;    // half-res: m_marchRenderPass; full-res: the scene pass
+    GraphicsPipeline m_upsamplePipeline; // the scene-color depth-aware blend (half-res mode only)
     bool m_useGrid = true;
+    bool m_unionHalfRes = true;
     uint32 m_numTeams = RendererVKLayout::MAX_FORCE_TEAMS;
 
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_emitterBuffers;
@@ -198,8 +218,14 @@ private:
     vk::ImageView m_intervalView;
     vk::RenderPass m_intervalRenderPass;
     vk::Framebuffer m_intervalFramebuffer;
-    vk::Sampler m_intervalSampler; // nearest (the union FS texelFetches its own pixel)
-    uint32 m_intervalWidth = 0, m_intervalHeight = 0;
+    vk::Sampler m_intervalSampler; // nearest (the union FS texelFetches its own pixel; upsample too)
+    uint32 m_intervalWidth = 0, m_intervalHeight = 0; // HALF the swapchain extent (march resolution)
+    // The half-res union march target (RGBA16F premultiplied; same extent as the interval target).
+    vk::Image m_marchImage;
+    VmaAllocation m_marchMemory = nullptr;
+    vk::ImageView m_marchView;
+    vk::RenderPass m_marchRenderPass;
+    vk::Framebuffer m_marchFramebuffer;
 
     uint32 m_tableEntries = RendererVKLayout::INITIAL_FORCE_TABLE_ENTRIES;
     size_t m_gridDataSize = RendererVKLayout::INITIAL_FORCE_GRID_DATA_SIZE;
@@ -214,6 +240,7 @@ private:
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_shellBakeSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_intervalSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_unionSets;
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_upsampleSets;
     uint32 m_viewCount = 1;
 
     // Offsets into the per-frame indirect buffer (uints): [0..3] draw (sampled-tier proxies — or
