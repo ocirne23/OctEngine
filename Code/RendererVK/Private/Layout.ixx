@@ -542,6 +542,7 @@ export namespace RendererVKLayout
         glm::vec4 forceBake0;   // sampled shell tier: xyz = bake volume world min, w = the reach
                                 // threshold an emitter marches the volume at (see ForceFieldPipeline)
         glm::vec4 forceBake1;   // xyz = 1 / bake volume world size, w = tier enabled (0/1)
+        glm::vec4 forceBake2;   // x = union march step size (m), y = union march max steps, zw unused
     };
 
     struct alignas(16) RenderNodeTransform : Transform {};

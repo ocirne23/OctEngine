@@ -59,6 +59,11 @@ public:
         float minPixels = 0.0f;  // projected proxy radius below this skips the draw (0 = size cull off)
         bool bakeVolume = false; // a large emitter qualified this frame: dispatch the shell-volume
                                  // bake (the UBO's forceBake0/1 carry the fitted mapping)
+        // The UNION MARCH (one analytic march per pixel): the analytic-tier drawables rasterize
+        // only their ray intervals; the fullscreen union pass marches each covered pixel once.
+        // Off (VR, "Union march" tweak, density debug view) = the analytic tier draws per-proxy.
+        bool unionPass = false;
+        float sampledReach = 3.4e38f; // the tier partition threshold (FLT_MAX = all analytic)
     };
 
     // Compacts the ACTIVE emitter slots (building the big-emitter list against bigReachThreshold and
@@ -83,9 +88,21 @@ public:
         vk::ImageLayout gbufferDepthLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
         vk::Sampler gbufferSampler;
     };
-    // Records the indirect instanced box draw; the caller has begun a command buffer inside the
-    // scene-color render pass and set the viewport/scissor. eye selects the per-eye set/views.
+    // Records the indirect instanced box draw (sampled-tier proxies — or every drawable when the
+    // union pass is off) PLUS the union-march fullscreen draw (vertexCount 0 when inactive); the
+    // caller has begun a command buffer inside the scene-color render pass and set the
+    // viewport/scissor. eye selects the per-eye set/views.
     void recordDraw(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 eye, const DrawParams& params);
+
+    // The union march's INTERVAL pass: its own tiny render pass (RG16F, cleared to fp16-max,
+    // MIN-blended (tEntry, -tExit) per analytic proxy), recorded in the PRIMARY (re-recorded every
+    // frame) right before the scene stages; the target ends SHADER_READ_ONLY for the union FS.
+    // Cheap: rasterization only, no marching. Instance count rides the indirect buffer (0 when the
+    // union pass is off, so recording it unconditionally is a clear + no draws).
+    void recordIntervalPass(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo,
+        const vk::Viewport& viewport, const vk::Rect2D& scissor);
+    // (Re)creates the interval target at the swapchain extent — call at init + on resize.
+    void resizeIntervalTarget(uint32 width, uint32 height);
 
     // This frame slot's readbacks, slot-indexed (safe between beginFrame's fence wait and present;
     // contents are ~2 frames old). Forces: xyz = applied force, w = mean opposing pressure.
@@ -116,6 +133,10 @@ private:
     void buildShellBakeLayout(ComputePipelineLayout& layout); // storage IMAGES at 5/6, unlike the rest
     void createShellVolume(); // the two 3D field textures + sampler (one set: barrier-serialized)
     void destroyShellVolume();
+    void buildIntervalLayout(GraphicsPipelineLayout& layout); // shell VS + interval FS, MIN blend
+    void buildUnionLayout(GraphicsPipelineLayout& layout);    // fullscreen VS + union-march FS
+    void createIntervalRenderPass(); // format-fixed, made once at initialize
+    void destroyIntervalTarget();
 
     GraphicsPipeline m_pipeline;
     ComputePipeline m_gridPipeline;
@@ -123,6 +144,8 @@ private:
     ComputePipeline m_queryPipeline;
     ComputePipeline m_bakePipeline;
     ComputePipeline m_shellBakePipeline;
+    GraphicsPipeline m_intervalPipeline;
+    GraphicsPipeline m_unionPipeline;
     bool m_useGrid = true;
 
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_emitterBuffers;
@@ -150,6 +173,15 @@ private:
     VmaAllocation m_shellVolumeMemory[2]{};
     vk::ImageView m_shellVolumeView[2]{};
     vk::Sampler m_shellVolumeSampler; // linear, clamp-to-border transparent black (outside = zero field)
+    // The union march's per-pixel interval target (RG16F, swapchain extent; single image — written
+    // and read within the frame, re-cleared every frame by its render pass).
+    vk::Image m_intervalImage;
+    VmaAllocation m_intervalMemory = nullptr;
+    vk::ImageView m_intervalView;
+    vk::RenderPass m_intervalRenderPass;
+    vk::Framebuffer m_intervalFramebuffer;
+    vk::Sampler m_intervalSampler; // nearest (the union FS texelFetches its own pixel)
+    uint32 m_intervalWidth = 0, m_intervalHeight = 0;
 
     uint32 m_tableEntries = RendererVKLayout::INITIAL_FORCE_TABLE_ENTRIES;
     size_t m_gridDataSize = RendererVKLayout::INITIAL_FORCE_GRID_DATA_SIZE;
@@ -162,17 +194,24 @@ private:
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_querySets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_bakeSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_shellBakeSets;
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_intervalSets;
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_unionSets;
     uint32 m_viewCount = 1;
 
-    // Offsets into the per-frame indirect buffer (uints): [0..3] draw, [4..6] grid insert groups
-    // (x = emitter COUNT — the insert runs single-thread workgroups, see force_grid.cs.glsl),
-    // [8..10] force groups, [12..14] query groups, [16..18] bake groups (x = brick count),
-    // [20..22] shell-volume bake groups (x = 0 disables — the CB is cached, so the toggle rides here).
+    // Offsets into the per-frame indirect buffer (uints): [0..3] draw (sampled-tier proxies — or
+    // ALL drawables with the union pass off), [4..6] grid insert groups (x = emitter COUNT — the
+    // insert runs single-thread workgroups, see force_grid.cs.glsl), [8..10] force groups,
+    // [12..14] query groups, [16..18] bake groups (x = brick count), [20..22] shell-volume bake
+    // groups (x = 0 disables — the CB is cached, so the toggle rides here), [24..27] the interval
+    // pass draw (analytic drawables, firstInstance = the partition split), [28..31] the union
+    // fullscreen draw (vertexCount 3 or 0).
     static constexpr uint32 DRAW_CMD_OFFSET = 0;
     static constexpr uint32 GRID_DISPATCH_OFFSET = 4;
     static constexpr uint32 EMITTER_DISPATCH_OFFSET = 8;
     static constexpr uint32 QUERY_DISPATCH_OFFSET = 12;
     static constexpr uint32 BAKE_DISPATCH_OFFSET = 16;
     static constexpr uint32 SHELLBAKE_DISPATCH_OFFSET = 20;
-    static constexpr uint32 INDIRECT_UINTS = 24;
+    static constexpr uint32 INTERVAL_DRAW_OFFSET = 24;
+    static constexpr uint32 UNION_DRAW_OFFSET = 28;
+    static constexpr uint32 INDIRECT_UINTS = 32;
 };

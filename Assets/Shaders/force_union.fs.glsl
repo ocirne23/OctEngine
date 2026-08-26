@@ -1,0 +1,184 @@
+#version 460
+
+// The ANALYTIC tier's UNION MARCH: one fullscreen march per covered pixel over the interval the
+// small-emitter proxies rasterized (force_interval.fs.glsl) — where N small bubbles stack on a
+// pixel, the field is marched ONCE instead of once per proxy, killing the overdraw term of the
+// old per-proxy path. Marching and shading match force_shell.fs.glsl exactly (same crossing/wall
+// machinery, same analytic refinement, shared shading include); the ownership discard is gone
+// because ONE march owns every crossing — the only skip is a crossing whose dominant contributor
+// is a SAMPLED-tier (large) emitter, which that emitter's own proxy draws. Premultiplied blend,
+// manual reversed-Z depth clamp, no depth write.
+
+#include "shared.inc.glsl"
+#include "force_field.inc.glsl" // declares the emitter buffer at FORCE_EMITTERS_BINDING (1)
+
+layout (binding = 2) uniform sampler2D u_gbufferDepth;
+layout (binding = 5) uniform sampler2D u_shellInterval; // (tEntry, -tExit) per pixel, RG16F
+
+layout (push_constant) uniform ViewPC { uint u_viewIndex; };
+
+layout (location = 0) out vec4 out_color;
+
+#include "force_shell_shade.inc.glsl"
+
+// A crossing dominated by a SAMPLED-tier emitter belongs to that emitter's own proxy draw.
+bool forceSampledTierOwns(vec3 hitPos, uint team, out uint ownerIdx)
+{
+    ownerIdx = forceDominantEmitter(hitPos, team);
+    if (ownerIdx == 0xFFFFFFFFu)
+        return true; // no contributor (numerical fringe): draw nothing either way
+    return u_forceBake1.w > 0.5 && fe_emitters[ownerIdx].posReach.w >= u_forceBake0.w;
+}
+
+void main()
+{
+    g_viewIndex = int(u_viewIndex);
+    const float iso = u_forceParams0.x;
+
+    const vec2 interval = texelFetch(u_shellInterval, ivec2(gl_FragCoord.xy), 0).xy;
+    float t0 = interval.x;
+    float t1 = -interval.y;
+    if (t0 > 6.0e4 || t1 <= t0)
+        discard; // cleared (no analytic shell covers this pixel)
+
+    const vec2 uv = gl_FragCoord.xy * u_screenSize.zw;
+    const vec3 rayOrigin = u_viewPos;
+    const vec3 rayDir = normalize(worldPosFromDepth(uv, 0.0) - rayOrigin);
+
+    // Manual depth test: clamp the march to the opaque scene (once — not per proxy).
+    const float sceneDepth = texture(u_gbufferDepth, uv).r;
+    float sceneDist = 1e30;
+    if (sceneDepth > 0.0) // reversed-Z: 0 = sky/far
+    {
+        sceneDist = distance(rayOrigin, worldPosFromDepth(uv, sceneDepth));
+        t1 = min(t1, sceneDist);
+    }
+    if (t1 <= t0)
+        discard;
+
+    // World-space step size (u_forceBake2.x), hard-capped (u_forceBake2.y): the union interval can
+    // span several disjoint bubbles, so the step count follows its LENGTH instead of being a fixed
+    // budget squeezed over it.
+    const int steps = clamp(int((t1 - t0) / u_forceBake2.x), 4, int(u_forceBake2.y));
+    const float dt = (t1 - t0) / float(steps);
+    uint bestTeam;
+    float bestPhi, secondPhi, F;
+    forceSampleField(rayOrigin + rayDir * t0, iso, bestTeam, bestPhi, secondPhi, F);
+    bool cameraInsideField = F > 0.0;
+    if (t0 > 0.0 && cameraInsideField)
+    {
+        uint originTeam;
+        float originBest, originSecond, originF;
+        forceSampleField(rayOrigin, iso, originTeam, originBest, originSecond, originF);
+        cameraInsideField = originF > 0.0;
+    }
+    uint prevTeam = bestTeam;
+    float tPrev = t0;
+    float fPrev = F;
+    vec3 accumColor = vec3(0.0);
+    float accumAlpha = 0.0;
+    int numShaded = 0;
+    for (int i = 1; i <= steps && numShaded < 3; ++i)
+    {
+        const float t = t0 + dt * float(i);
+        forceSampleField(rayOrigin + rayDir * t, iso, bestTeam, bestPhi, secondPhi, F);
+        const bool entryCrossing = F > 0.0;
+        const bool surfaceCrossing = entryCrossing != (fPrev > 0.0);
+        const bool teamFlip = bestTeam != prevTeam && (entryCrossing || fPrev > 0.0);
+        if (surfaceCrossing || teamFlip)
+        {
+            float tHit = -1.0;
+            uint hitTeam = 0u;
+            if (surfaceCrossing)
+            {
+                hitTeam = entryCrossing ? bestTeam : prevTeam;
+                float lo = tPrev, hi = t;
+                for (int b = 0; b < 6; ++b)
+                {
+                    const float mid = (lo + hi) * 0.5;
+                    const float fm = forceSurfaceForTeam(rayOrigin + rayDir * mid, hitTeam, iso);
+                    if ((fm > 0.0) == entryCrossing) hi = mid; else lo = mid;
+                }
+                tHit = (lo + hi) * 0.5;
+            }
+            float tWall = -1.0;
+            float wallFade = 0.0;
+            uint wallSkinTeam = MAX_FORCE_TEAMS; // < MAX: wall shades as this team's SKIN, not a pane
+            if (teamFlip)
+            {
+                float lo = tPrev, hi = t;
+                for (int b = 0; b < 6; ++b)
+                {
+                    const float mid = (lo + hi) * 0.5;
+                    if (forceTeamDiff(rayOrigin + rayDir * mid, prevTeam, bestTeam) > 0.0) lo = mid; else hi = mid;
+                }
+                tWall = (lo + hi) * 0.5;
+                float wallOwn, wallOpposing;
+                forceTeamSample(rayOrigin + rayDir * tWall, prevTeam, wallOwn, wallOpposing);
+                wallFade = smoothstep(iso, iso * 1.3, min(wallOwn, wallOpposing));
+                if (wallFade <= 0.001)
+                    tWall = -1.0;
+                if (tWall >= 0.0)
+                {
+                    // Same invisible-field reclassification as the shell FS: a wall against a
+                    // shell-alpha-0 field IS the visible side's pressed-flat surface.
+                    float phiW[MAX_FORCE_TEAMS];
+                    float phiVisW[MAX_FORCE_TEAMS];
+                    forceAccumulateVisible(rayOrigin + rayDir * tWall, phiW, phiVisW);
+                    const float visPrev = phiVisW[prevTeam] / max(phiW[prevTeam], 1e-6);
+                    const float visBest = phiVisW[bestTeam] / max(phiW[bestTeam], 1e-6);
+                    if (min(visPrev, visBest) < 0.05)
+                    {
+                        wallSkinTeam = visPrev > visBest ? prevTeam : bestTeam;
+                        if (tHit >= 0.0)
+                            tWall = -1.0;
+                    }
+                }
+            }
+            // Composite the step's events in ray order. The only skip: a crossing owned by a
+            // sampled-tier emitter (its own proxy draws it) — everything else is ours, exactly
+            // once, because this is the pixel's ONLY analytic march.
+            for (int ev = 0; ev < 2 && numShaded < 3; ++ev)
+            {
+                const bool wallFirst = tWall >= 0.0 && (tHit < 0.0 || tWall < tHit);
+                if (wallFirst)
+                {
+                    const bool asSkin = wallSkinTeam != MAX_FORCE_TEAMS;
+                    const uint ownTeam = asSkin ? wallSkinTeam : prevTeam;
+                    uint ownerIdx;
+                    if (!forceSampledTierOwns(rayOrigin + rayDir * tWall, ownTeam, ownerIdx))
+                    {
+                        const vec4 layer = asSkin
+                            ? forceShadeHit(rayOrigin, rayDir, tWall, wallSkinTeam, cameraInsideField, sceneDist, ownerIdx)
+                            : forceShadeWall(rayOrigin, rayDir, tWall, prevTeam, bestTeam, wallFade, ownerIdx);
+                        accumColor += (1.0 - accumAlpha) * layer.rgb;
+                        accumAlpha += (1.0 - accumAlpha) * layer.a;
+                        ++numShaded;
+                    }
+                    tWall = -1.0;
+                }
+                else if (tHit >= 0.0)
+                {
+                    uint ownerIdx;
+                    if (!forceSampledTierOwns(rayOrigin + rayDir * tHit, hitTeam, ownerIdx))
+                    {
+                        const vec4 layer = forceShadeHit(rayOrigin, rayDir, tHit, hitTeam, cameraInsideField, sceneDist, ownerIdx);
+                        accumColor += (1.0 - accumAlpha) * layer.rgb;
+                        accumAlpha += (1.0 - accumAlpha) * layer.a;
+                        ++numShaded;
+                    }
+                    tHit = -1.0;
+                }
+                else
+                    break;
+            }
+        }
+        prevTeam = bestTeam;
+        tPrev = t;
+        fPrev = F;
+    }
+    if (accumAlpha <= 0.002 && dot(accumColor, accumColor) < 1e-6)
+        discard;
+
+    out_color = vec4(accumColor, accumAlpha);
+}

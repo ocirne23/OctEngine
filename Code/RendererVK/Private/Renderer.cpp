@@ -183,6 +183,7 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     m_particlePipeline.initialize(sceneRenderPass, m_maxTextures, m_numTextureDescriptors, m_sceneViewCount);
     m_decalPipeline.initialize(sceneRenderPass, m_maxTextures, m_numTextureDescriptors, m_sceneViewCount);
     m_forceFieldPipeline.initialize(sceneRenderPass, m_sceneViewCount);
+    m_forceFieldPipeline.resizeIntervalTarget(ext.width, ext.height); // the union march's target
 
 
     m_shadowCullComputePipeline.initialize(m_maxInstanceData, m_maxUniqueMeshes);
@@ -359,6 +360,7 @@ void Renderer::recreateWindowSurface(Window& window)
             { perFrame.gbuffer.getDepthView(0), perFrame.gbuffer.getDepthView(m_sceneViewCount > 1 ? 1 : 0) });
     }
     createEyeCompositeTargets(); // VR: resize the per-eye LDR composite targets
+    m_forceFieldPipeline.resizeIntervalTarget(ext.width, ext.height);
 
     // The cached scene command buffers embed the (now-recreated) scene-colour render pass in their
     // inheritance info, so force them to re-record against the new handle.
@@ -392,6 +394,7 @@ void Renderer::recreateSwapchain()
             { perFrame.gbuffer.getDepthView(0), perFrame.gbuffer.getDepthView(m_sceneViewCount > 1 ? 1 : 0) });
     }
     createEyeCompositeTargets(); // VR: resize the per-eye LDR composite targets
+    m_forceFieldPipeline.resizeIntervalTarget(ext.width, ext.height);
 
     // Cached scene command buffers reference the recreated scene-colour render pass; re-record them.
     setHaveToRecordCommandBuffers();
@@ -1039,6 +1042,8 @@ void Renderer::buildUboForce()
         ubo.forceBake0 = glm::vec4(0.0f, 0.0f, 0.0f, FLT_MAX); // no emitter reaches the threshold
         ubo.forceBake1 = glm::vec4(0.0f);
     }
+    ubo.forceBake2 = glm::vec4(glm::max(force.unionStepSize, 0.05f),
+        (float)glm::clamp(force.unionMaxSteps, 8, 512), 0.0f, 0.0f);
 }
 
 // Terrain rendering + splat texture params; also reports the splat textures to the mip streamer.
@@ -1584,6 +1589,8 @@ void Renderer::present()
         m_decalPipeline.upload(frameIdx, m_decalCounter);
         // Compacts the ACTIVE emitter slots + uploads query positions (fence-safe here).
         ForceFieldPipeline::ShellCull shellCull;
+        shellCull.sampledReach = m_forceFieldParams.sampledShellReach > 0.0f
+            ? m_forceFieldParams.sampledShellReach : FLT_MAX;
         if (!isVrEnabled()) // one center frustum cannot serve both VR eyes
         {
             shellCull.enabled = true;
@@ -1591,6 +1598,9 @@ void Renderer::present()
             shellCull.cameraPos = m_cameraPos;
             shellCull.pixelScale = m_mipPixelScale * 0.5f; // viewportH/2 / tan(fov/2)
             shellCull.minPixels = m_forceFieldParams.minShellPixels;
+            // One analytic march per pixel; the density DEBUG view stays per-proxy (the union FS
+            // does not implement it), so it forces the old path while on.
+            shellCull.unionPass = m_forceFieldParams.unionMarch && !m_forceFieldParams.densityView;
         }
         shellCull.bakeVolume = m_forceShellBakeActive; // set by buildUboForce (this frame's fit)
         m_forceFieldPipeline.upload(frameIdx, m_forceEmitters, m_forceQueries, m_forceBakeBricks,
@@ -3374,6 +3384,19 @@ void Renderer::recordCommandBuffers()
             }
             // The forward set's AO view + TLAS are written at scene-record time and on TLAS handle
             // changes — see the recordScene / GI-changed blocks above.
+
+            { // The union march's interval pass (its own tiny render pass, before the scene
+              // stages): the analytic-tier proxies MIN-blend their ray intervals; the "Force
+              // shells" stage's fullscreen union draw then marches each covered pixel once.
+                m_gpuProfiler.beginScope(vkCommandBuffer, "Force intervals");
+                const glm::ivec2 vpSize = m_viewportRect.getSize();
+                const vk::Viewport intervalViewport{ .x = (float)m_viewportRect.min.x, .y = (float)m_viewportRect.max.y,
+                    .width = (float)vpSize.x, .height = -((float)vpSize.y), .minDepth = 0.0f, .maxDepth = 1.0f };
+                const vk::Rect2D intervalScissor{ .offset = vk::Offset2D{ 0, 0 }, .extent = m_swapChain.getLayout().extent };
+                m_forceFieldPipeline.recordIntervalPass(commandBuffer, frameIdx, frameData.ubo,
+                    intervalViewport, intervalScissor);
+                m_gpuProfiler.endScope(vkCommandBuffer);
+            }
 
             // Depth-prepass reuse: the scene pass binds the G-buffer depth READ-ONLY; the explicit
             // barriers do the sampled<->attachment layout round-trip. Off = own cleared depth, rebuilt.

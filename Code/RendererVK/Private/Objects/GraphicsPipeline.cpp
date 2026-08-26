@@ -180,10 +180,10 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
         .blendEnable = layout.blendEnable ? vk::True : vk::False,
         .srcColorBlendFactor = layout.srcColorBlendFactor,
         .dstColorBlendFactor = layout.dstColorBlendFactor,
-        .colorBlendOp = vk::BlendOp::eAdd,
+        .colorBlendOp = layout.colorBlendOp,
         .srcAlphaBlendFactor = vk::BlendFactor::eOne,
         .dstAlphaBlendFactor = vk::BlendFactor::eZero,
-        .alphaBlendOp = vk::BlendOp::eAdd,
+        .alphaBlendOp = layout.colorBlendOp == vk::BlendOp::eAdd ? vk::BlendOp::eAdd : layout.colorBlendOp,
         .colorWriteMask = colorComponentFlags,
     };
     vk::PipelineColorBlendStateCreateInfo pipelineColorBlendStateCreateInfo

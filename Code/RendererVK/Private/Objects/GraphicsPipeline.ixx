@@ -71,6 +71,8 @@ export struct GraphicsPipelineLayout
     bool blendEnable = false;
     vk::BlendFactor srcColorBlendFactor = vk::BlendFactor::eSrcAlpha;
     vk::BlendFactor dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
+    // eMin/eMax ignore the factors (the force-shell interval pass MIN-blends its ray interval).
+    vk::BlendOp colorBlendOp = vk::BlendOp::eAdd;
     bool depthTestEnable = true;
     bool depthWriteEnable = true;
     // The main view renders REVERSED-Z (near = 1, far = 0, cleared to 0) for far-field depth precision,

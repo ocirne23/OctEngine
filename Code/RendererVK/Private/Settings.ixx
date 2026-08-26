@@ -449,6 +449,12 @@ export struct ForceFieldParams
                                        // candidate loop — hits/normals/shading stay analytic.
                                        // 0 = tier off. Small bubbles stay analytic: the fixed-size
                                        // volume's resolution cannot resolve them
+    // UNION MARCH (desktop): the ANALYTIC tier renders as ONE march per pixel — the small proxies
+    // only rasterize their ray intervals (MIN-blend), a fullscreen pass marches the per-pixel
+    // union once. Kills the overdraw term where small bubbles stack. Off = per-proxy marches (A/B).
+    bool unionMarch = true;
+    float unionStepSize = 0.4f;        // world metres per union-march step
+    int unionMaxSteps = 128;           // hard cap on union steps per pixel
     float patternScale = 0.6f;       // animated surface pattern frequency (1/m)
     float patternSpeed = 0.3f;       // pattern scroll speed
     float patternIntensity = 0.5f;

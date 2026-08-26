@@ -15,6 +15,128 @@ using namespace RendererVKLayout;
 ForceFieldPipeline::~ForceFieldPipeline()
 {
     destroyShellVolume();
+    destroyIntervalTarget();
+    vk::Device vkDevice = Globals::device.getDevice();
+    if (m_intervalRenderPass)
+        vkDevice.destroyRenderPass(m_intervalRenderPass);
+    m_intervalRenderPass = nullptr;
+    if (m_intervalSampler)
+        vkDevice.destroySampler(m_intervalSampler);
+    m_intervalSampler = nullptr;
+}
+
+// ---- the union march's interval target ----
+
+void ForceFieldPipeline::createIntervalRenderPass()
+{
+    // RG16F (fp16 range holds any gameplay march distance; ~6 cm quantization at 100 m only seeds
+    // the march): cleared to fp16-max, MIN-blend accumulated, handed to the union FS SHADER_READ.
+    const vk::AttachmentDescription2 attachment{
+        .format = vk::Format::eR16G16Sfloat,
+        .samples = vk::SampleCountFlagBits::e1,
+        .loadOp = vk::AttachmentLoadOp::eClear,
+        .storeOp = vk::AttachmentStoreOp::eStore,
+        .initialLayout = vk::ImageLayout::eUndefined,
+        .finalLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+    };
+    const vk::AttachmentReference2 colorRef{ .attachment = 0, .layout = vk::ImageLayout::eColorAttachmentOptimal, .aspectMask = vk::ImageAspectFlagBits::eColor };
+    const vk::SubpassDescription2 subpass{
+        .pipelineBindPoint = vk::PipelineBindPoint::eGraphics,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &colorRef,
+    };
+    const vk::SubpassDependency2 dependency{ // interval writes -> the union FS's sampled read
+        .srcSubpass = 0,
+        .dstSubpass = vk::SubpassExternal,
+        .srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput,
+        .dstStageMask = vk::PipelineStageFlagBits::eFragmentShader,
+        .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
+        .dstAccessMask = vk::AccessFlagBits::eShaderRead,
+    };
+    const vk::RenderPassCreateInfo2 info{
+        .attachmentCount = 1,
+        .pAttachments = &attachment,
+        .subpassCount = 1,
+        .pSubpasses = &subpass,
+        .dependencyCount = 1,
+        .pDependencies = &dependency,
+    };
+    auto result = Globals::device.getDevice().createRenderPass2(info);
+    if (result.result != vk::Result::eSuccess) { assert(false && "force interval renderpass"); return; }
+    m_intervalRenderPass = result.value;
+}
+
+void ForceFieldPipeline::destroyIntervalTarget()
+{
+    vk::Device vkDevice = Globals::device.getDevice();
+    if (m_intervalFramebuffer)
+        vkDevice.destroyFramebuffer(m_intervalFramebuffer);
+    m_intervalFramebuffer = nullptr;
+    if (m_intervalView)
+        vkDevice.destroyImageView(m_intervalView);
+    m_intervalView = nullptr;
+    Globals::gpuAllocator.destroyImage(m_intervalImage, m_intervalMemory);
+    m_intervalImage = nullptr;
+    m_intervalMemory = nullptr;
+}
+
+void ForceFieldPipeline::resizeIntervalTarget(uint32 width, uint32 height)
+{
+    vk::Device vkDevice = Globals::device.getDevice();
+    destroyIntervalTarget();
+    m_intervalWidth = width;
+    m_intervalHeight = height;
+    const vk::ImageCreateInfo info{
+        .imageType = vk::ImageType::e2D,
+        .format = vk::Format::eR16G16Sfloat,
+        .extent = { width, height, 1 },
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = vk::SampleCountFlagBits::e1,
+        .tiling = vk::ImageTiling::eOptimal,
+        .usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
+        .sharingMode = vk::SharingMode::eExclusive,
+        .initialLayout = vk::ImageLayout::eUndefined,
+    };
+    if (!Globals::gpuAllocator.createImage(info, m_intervalImage, m_intervalMemory, "ForceShellInterval"))
+    {
+        assert(false && "force interval image");
+        return;
+    }
+    const vk::ImageViewCreateInfo viewInfo{
+        .image = m_intervalImage,
+        .viewType = vk::ImageViewType::e2D,
+        .format = vk::Format::eR16G16Sfloat,
+        .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 },
+    };
+    auto viewResult = vkDevice.createImageView(viewInfo);
+    if (viewResult.result != vk::Result::eSuccess) { assert(false && "force interval view"); return; }
+    m_intervalView = viewResult.value;
+    const vk::FramebufferCreateInfo fbInfo{
+        .renderPass = m_intervalRenderPass,
+        .attachmentCount = 1,
+        .pAttachments = &m_intervalView,
+        .width = width,
+        .height = height,
+        .layers = 1,
+    };
+    auto fbResult = vkDevice.createFramebuffer(fbInfo);
+    if (fbResult.result != vk::Result::eSuccess) { assert(false && "force interval framebuffer"); return; }
+    m_intervalFramebuffer = fbResult.value;
+    if (!m_intervalSampler)
+    {
+        const vk::SamplerCreateInfo samplerInfo{
+            .magFilter = vk::Filter::eNearest,
+            .minFilter = vk::Filter::eNearest,
+            .mipmapMode = vk::SamplerMipmapMode::eNearest,
+            .addressModeU = vk::SamplerAddressMode::eClampToEdge,
+            .addressModeV = vk::SamplerAddressMode::eClampToEdge,
+            .addressModeW = vk::SamplerAddressMode::eClampToEdge,
+        };
+        auto samplerResult = vkDevice.createSampler(samplerInfo);
+        if (samplerResult.result != vk::Result::eSuccess) { assert(false && "force interval sampler"); return; }
+        m_intervalSampler = samplerResult.value;
+    }
 }
 
 // The sampled shell tier's two field volumes (phi[0..3]/phi[4..7], RGBA16F) + the sampler the
@@ -160,6 +282,58 @@ void ForceFieldPipeline::buildComputeLayout(ComputePipelineLayout& layout, const
         b.push_back(vk::DescriptorSetLayoutBinding{ .binding = binding, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
 }
 
+// The interval pass: the shell VS's proxy boxes with a rasterization-only FS MIN-blending each
+// box's ray interval into the RG16F target (see recordIntervalPass).
+void ForceFieldPipeline::buildIntervalLayout(GraphicsPipelineLayout& layout)
+{
+    layout.vertexShader.debugFilePath = "Shaders/force_shell.vs.glsl"; // the same proxy boxes
+    layout.fragmentShader.debugFilePath = "Shaders/force_interval.fs.glsl";
+    layout.vertexShader.text = FileSystem::readFileStr(layout.vertexShader.debugFilePath);
+    layout.fragmentShader.text = FileSystem::readFileStr(layout.fragmentShader.debugFilePath);
+    if (m_useGrid)
+    {
+        layout.vertexShader.defines.push_back({ "FORCE_GRID", "" });
+        layout.fragmentShader.defines.push_back({ "FORCE_GRID", "" });
+    }
+    layout.cullMode = vk::CullModeFlagBits::eFront; // camera inside a box still rasterizes (shell rule)
+    layout.blendEnable = true;
+    layout.colorBlendOp = vk::BlendOp::eMin; // (tEntry, -tExit) union accumulate; factors ignored
+    layout.depthTestEnable = false;
+    layout.depthWriteEnable = false;
+    auto& b = layout.descriptorSetLayoutBindings;
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment });
+    layout.pushConstantRanges.push_back(vk::PushConstantRange{
+        .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, .offset = 0, .size = sizeof(uint32) });
+}
+
+// The union march: a fullscreen triangle whose FS marches each covered pixel's interval once
+// (force_union.fs.glsl) — the analytic tier's one-march-per-pixel path.
+void ForceFieldPipeline::buildUnionLayout(GraphicsPipelineLayout& layout)
+{
+    layout.vertexShader.debugFilePath = "Shaders/composite.vs.glsl"; // the engine's fullscreen triangle
+    layout.fragmentShader.debugFilePath = "Shaders/force_union.fs.glsl";
+    layout.vertexShader.text = FileSystem::readFileStr(layout.vertexShader.debugFilePath);
+    layout.fragmentShader.text = FileSystem::readFileStr(layout.fragmentShader.debugFilePath);
+    if (m_useGrid)
+        layout.fragmentShader.defines.push_back({ "FORCE_GRID", "" });
+    layout.cullMode = vk::CullModeFlagBits::eNone;
+    layout.blendEnable = true; // premultiplied over the lit scene, exactly like the shell draw
+    layout.srcColorBlendFactor = vk::BlendFactor::eOne;
+    layout.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
+    layout.depthTestEnable = false;
+    layout.depthWriteEnable = false;
+    auto& b = layout.descriptorSetLayoutBindings;
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 2, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 3, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 4, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 5, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
+    layout.pushConstantRanges.push_back(vk::PushConstantRange{
+        .stageFlags = vk::ShaderStageFlagBits::eFragment, .offset = 0, .size = sizeof(uint32) });
+}
+
 // The shell-volume bake's set shape: the common compute layout with STORAGE IMAGES at 5/6 (the
 // two field volumes) instead of buffers.
 void ForceFieldPipeline::buildShellBakeLayout(ComputePipelineLayout& layout)
@@ -215,6 +389,13 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
     m_bakePipeline.initialize(bakeLayout);
     m_shellBakePipeline.initialize(shellBakeLayout);
 
+    createIntervalRenderPass();
+    GraphicsPipelineLayout intervalLayout, unionLayout;
+    buildIntervalLayout(intervalLayout);
+    buildUnionLayout(unionLayout);
+    m_intervalPipeline.initialize(m_intervalRenderPass, intervalLayout);
+    m_unionPipeline.initialize(sceneRenderPass, unionLayout);
+
     createGridBuffers();
     createShellVolume();
 
@@ -262,6 +443,8 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
         // upload (0 = tier inactive — the cached CB's dispatch becomes a no-op).
         m_mappedIndirect[i][SHELLBAKE_DISPATCH_OFFSET + 1] = FORCE_SHELL_VOLUME_Y / FORCE_SHELL_VOLUME_GROUP;
         m_mappedIndirect[i][SHELLBAKE_DISPATCH_OFFSET + 2] = FORCE_SHELL_VOLUME_Z / FORCE_SHELL_VOLUME_GROUP;
+        m_mappedIndirect[i][INTERVAL_DRAW_OFFSET] = 36;  // instanceCount + firstInstance per frame
+        m_mappedIndirect[i][UNION_DRAW_OFFSET + 1] = 1;  // one fullscreen instance; vertexCount 3/0
         m_indirectBuffers[i].flushMappedMemory(vk::WholeSize);
 
         // GPU-written, CPU-read ~2 frames later; zeroed so pre-first-frame reads decode as "no force
@@ -292,6 +475,8 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
         m_querySets[i].initialize(m_queryPipeline.getDescriptorSetLayout());
         m_bakeSets[i].initialize(m_bakePipeline.getDescriptorSetLayout());
         m_shellBakeSets[i].initialize(m_shellBakePipeline.getDescriptorSetLayout());
+        m_intervalSets[i].initialize(m_intervalPipeline.getDescriptorSetLayout());
+        m_unionSets[i].initialize(m_unionPipeline.getDescriptorSetLayout());
     }
 }
 
@@ -317,6 +502,13 @@ void ForceFieldPipeline::reloadShaders(vk::RenderPass sceneRenderPass)
         printf("ForceFieldPipeline: bake shader reload failed, keeping previous pipeline\n");
     if (!m_shellBakePipeline.reloadShaders(shellBakeLayout))
         printf("ForceFieldPipeline: shell-volume bake shader reload failed, keeping previous pipeline\n");
+    GraphicsPipelineLayout intervalLayout, unionLayout;
+    buildIntervalLayout(intervalLayout);
+    buildUnionLayout(unionLayout);
+    if (!m_intervalPipeline.reloadShaders(m_intervalRenderPass, intervalLayout))
+        printf("ForceFieldPipeline: interval shader reload failed, keeping previous pipeline\n");
+    if (!m_unionPipeline.reloadShaders(sceneRenderPass, unionLayout))
+        printf("ForceFieldPipeline: union march shader reload failed, keeping previous pipeline\n");
 }
 
 void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu> slots,
@@ -372,8 +564,18 @@ void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu>
     // readback, seen by force_emitter.cs alone (`evalCount`).
     const auto isActive = [&](uint32 slot) { return (slots[slot].teamFlags.y & FORCE_FLAG_ACTIVE) != 0u; };
     const auto isPassive = [&](uint32 slot) { return (slots[slot].teamFlags.y & FORCE_FLAG_PASSIVE) != 0u; };
+    const auto isSampledTier = [&](const ForceEmitterGpu& e) { return e.posReach.w >= shellCull.sampledReach; };
+    // Drawable partition: SAMPLED-tier proxies first, ANALYTIC drawables second — the union pass's
+    // interval draw covers exactly the second range via firstInstance, and with the union pass OFF
+    // the proxy draw simply spans both.
     for (uint32 slot = 0; slot < (uint32)slots.size(); ++slot)
-        if (isActive(slot) && !isPassive(slot) && slots[slot].outputParams.y > 0.0f && shellVisible(slots[slot]))
+        if (isActive(slot) && !isPassive(slot) && slots[slot].outputParams.y > 0.0f
+            && shellVisible(slots[slot]) && isSampledTier(slots[slot]))
+            compact(slots[slot], slot, true);
+    const uint32 sampledDrawCount = count;
+    for (uint32 slot = 0; slot < (uint32)slots.size(); ++slot)
+        if (isActive(slot) && !isPassive(slot) && slots[slot].outputParams.y > 0.0f
+            && shellVisible(slots[slot]) && !isSampledTier(slots[slot]))
             compact(slots[slot], slot, true);
     const uint32 drawCount = count;
     for (uint32 slot = 0; slot < (uint32)slots.size(); ++slot)
@@ -408,7 +610,14 @@ void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu>
     m_bakeBrickLists[frameIdx].assign(bakeBricks.begin(), bakeBricks.begin() + numBricks);
 
     uint32* ind = m_mappedIndirect[frameIdx].data();
-    ind[DRAW_CMD_OFFSET + 1] = drawCount; // instanceCount: drawable shells only (see partition above)
+    // UNION MARCH routing: with the pass on, the proxy draw keeps only the sampled tier — the
+    // analytic drawables rasterize their intervals instead and the fullscreen march shades them.
+    const uint32 analyticDrawCount = drawCount - sampledDrawCount;
+    const bool unionActive = shellCull.unionPass && analyticDrawCount > 0;
+    ind[DRAW_CMD_OFFSET + 1] = unionActive ? sampledDrawCount : drawCount;
+    ind[INTERVAL_DRAW_OFFSET + 1] = unionActive ? analyticDrawCount : 0;
+    ind[INTERVAL_DRAW_OFFSET + 3] = sampledDrawCount; // firstInstance: the analytic partition
+    ind[UNION_DRAW_OFFSET] = unionActive ? 3u : 0u;   // the fullscreen triangle
     ind[GRID_DISPATCH_OFFSET] = fieldCount; // single-thread workgroups (see force_grid.cs.glsl)
     ind[EMITTER_DISPATCH_OFFSET] = (count + FORCE_SIM_GROUP_SIZE - 1) / FORCE_SIM_GROUP_SIZE; // + passive tail
     ind[QUERY_DISPATCH_OFFSET] = (numQueries + FORCE_SIM_GROUP_SIZE - 1) / FORCE_SIM_GROUP_SIZE;
@@ -586,4 +795,55 @@ void ForceFieldPipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameId
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
     cmd.pushConstants(m_pipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, sizeof(uint32), &viewIndex);
     cmd.drawIndirect(m_indirectBuffers[frameIdx].getBuffer(), 0, 1, sizeof(vk::DrawIndirectCommand));
+
+    // The UNION MARCH fullscreen draw (analytic tier, one march per pixel): vertexCount is 0
+    // whenever the pass is off (VR, tweak, density view), so recording it is always safe.
+    DescriptorSet& unionSet = m_unionSets[frameIdx];
+    vk::DescriptorSet vkUnionSet = unionSet.getDescriptorSet();
+    oc::array<DescriptorSetUpdateInfo, 6> unionUpdates{
+        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(Ubo) } } },
+        DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_emitterBuffers[frameIdx].getBuffer(), .range = m_emitterBuffers[frameIdx].getSize() } } },
+        DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
+            vk::DescriptorImageInfo{ .sampler = params.gbufferSampler, .imageView = params.gbufferDepthView, .imageLayout = params.gbufferDepthLayout } } },
+        DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_gridTableBuffers[frameIdx].getBuffer(), .range = m_gridTableBuffers[frameIdx].getSize() } } },
+        DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_gridDataBuffers[frameIdx].getBuffer(), .range = m_gridDataBuffers[frameIdx].getSize() } } },
+        DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
+            vk::DescriptorImageInfo{ .sampler = m_intervalSampler, .imageView = m_intervalView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
+    };
+    commandBuffer.cmdUpdateDescriptorSets(m_unionPipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, vkUnionSet, unionUpdates);
+    cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_unionPipeline.getPipeline());
+    cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_unionPipeline.getPipelineLayout(), 0, 1, &vkUnionSet, 0, nullptr);
+    cmd.pushConstants(m_unionPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eFragment, 0, sizeof(uint32), &viewIndex);
+    cmd.drawIndirect(m_indirectBuffers[frameIdx].getBuffer(), UNION_DRAW_OFFSET * sizeof(uint32), 1, sizeof(vk::DrawIndirectCommand));
+}
+
+// The interval pass: see the header comment. Recorded in the PRIMARY right before the scene
+// stages; unconditional (clear + indirect draws that are 0 instances when the union pass is off).
+void ForceFieldPipeline::recordIntervalPass(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo,
+    const vk::Viewport& viewport, const vk::Rect2D& scissor)
+{
+    vk::CommandBuffer vkCb = commandBuffer.getCommandBuffer();
+    const vk::ClearValue clear{ vk::ClearColorValue{ std::array<float, 4>{ 65504.0f, 65504.0f, 0.0f, 0.0f } } };
+    const vk::RenderPassBeginInfo begin{
+        .renderPass = m_intervalRenderPass,
+        .framebuffer = m_intervalFramebuffer,
+        .renderArea = { vk::Offset2D{ 0, 0 }, vk::Extent2D{ m_intervalWidth, m_intervalHeight } },
+        .clearValueCount = 1,
+        .pClearValues = &clear,
+    };
+    vkCb.beginRenderPass(begin, vk::SubpassContents::eInline);
+    vkCb.setViewport(0, { viewport });
+    vkCb.setScissor(0, { scissor });
+    vk::DescriptorSet set = m_intervalSets[frameIdx].getDescriptorSet();
+    oc::array<DescriptorSetUpdateInfo, 2> updates{
+        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(Ubo) } } },
+        DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_emitterBuffers[frameIdx].getBuffer(), .range = m_emitterBuffers[frameIdx].getSize() } } },
+    };
+    commandBuffer.cmdUpdateDescriptorSets(m_intervalPipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, set, updates);
+    vkCb.bindPipeline(vk::PipelineBindPoint::eGraphics, m_intervalPipeline.getPipeline());
+    vkCb.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_intervalPipeline.getPipelineLayout(), 0, 1, &set, 0, nullptr);
+    const uint32 viewIndex = 0; // desktop only (VR keeps per-proxy shells)
+    vkCb.pushConstants(m_intervalPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, sizeof(uint32), &viewIndex);
+    vkCb.drawIndirect(m_indirectBuffers[frameIdx].getBuffer(), INTERVAL_DRAW_OFFSET * sizeof(uint32), 1, sizeof(vk::DrawIndirectCommand));
+    vkCb.endRenderPass();
 }
