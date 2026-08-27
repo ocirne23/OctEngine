@@ -1677,7 +1677,7 @@ void Renderer::present()
             shellCull.unionPass = m_forceFieldParams.unionMarch && !m_forceFieldParams.densityView;
         }
         shellCull.bakeVolume = m_forceShellBakeActive; // set by buildUboForce (this frame's fit)
-        m_forceFieldPipeline.upload(frameIdx, m_forceEmitters, m_forceQueries, m_forceBakeBricks,
+        m_forceFieldPipeline.upload(frameIdx, m_forceEmitters, m_forceQueries, m_forceBakeChunks,
             m_forceBakeSampleY, m_forceFieldParams.bigReachThreshold, shellCull);
 
         if (m_particleLogStats && m_frameCounter % 120 == 0)

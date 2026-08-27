@@ -87,7 +87,7 @@ public:
     // patches the draw/dispatch counts. Call from present(), after the slot's fence wait.
     void upload(uint32 frameIdx, oc::span<const RendererVKLayout::ForceEmitterGpu> slots,
         oc::span<const RendererVKLayout::ForceQueryGpu> querySlots,
-        oc::span<const glm::ivec4> bakeBricks, float bakeSampleY, float bigReachThreshold,
+        oc::span<const glm::ivec4> bakeChunks, float bakeSampleY, float bigReachThreshold,
         const ShellCull& shellCull);
 
     // Records grid clear + insert + force/query dispatches + readback barriers (outside any render
@@ -139,12 +139,12 @@ public:
     // contents are ~2 frames old). Forces: xyz = applied force, w = mean opposing pressure.
     oc::span<const glm::vec4> getForceReadback(uint32 frameIdx) const { return m_mappedForceReadback[frameIdx]; }
     oc::span<const RendererVKLayout::ForceQueryResult> getQueryReadback(uint32 frameIdx) const { return m_mappedQueryReadback[frameIdx]; }
-    // The baked pressure field of THIS frame slot: the data is ~2 frames old, so the brick list it
+    // The baked pressure field of THIS frame slot: the data is ~2 frames old, so the chunk list it
     // was evaluated for is returned WITH it (the per-slot copy stored at upload) — the pairing the
     // CPU-side sampler indexes by.
     RendererVKLayout::ForceBakeReadback getBakeReadback(uint32 frameIdx) const
     {
-        return { m_bakeBrickLists[frameIdx], m_mappedBakeReadback[frameIdx] };
+        return { m_bakeChunkLists[frameIdx], m_mappedBakeReadback[frameIdx] };
     }
 
     // Grid capacity contract (checkForceGridCapacity): last frame's demand counters, and growth.
@@ -204,11 +204,11 @@ private:
     oc::array<oc::span<glm::vec4>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedForceReadback;
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_queryReadbackBuffers;
     oc::array<oc::span<RendererVKLayout::ForceQueryResult>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedQueryReadback;
-    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_bakeBrickBuffers;
-    oc::array<oc::span<RendererVKLayout::ForceBakeBricksGpu>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedBakeBricks;
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_bakeChunkBuffers;
+    oc::array<oc::span<RendererVKLayout::ForceBakeChunksGpu>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedBakeChunks;
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_bakeReadbackBuffers;
     oc::array<oc::span<glm::vec4>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedBakeReadback;
-    oc::array<oc::vector<glm::ivec4>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_bakeBrickLists; // per-slot pairing (see getBakeReadback)
+    oc::array<oc::vector<glm::ivec4>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_bakeChunkLists; // per-slot pairing (see getBakeReadback)
     // The sampled shell tier's field volumes (RendererVKLayout::FORCE_SHELL_VOLUME_*): ONE set,
     // not per frame slot — the bake's acquire barrier (prev fragment reads -> compute writes)
     // serializes reuse on the queue. GENERAL layout for life.
@@ -251,7 +251,7 @@ private:
     // Offsets into the per-frame indirect buffer (uints): [0..3] draw (sampled-tier proxies — or
     // ALL drawables with the union pass off), [4..6] grid insert groups (x = emitter COUNT — the
     // insert runs single-thread workgroups, see force_grid.cs.glsl), [8..10] force groups,
-    // [12..14] query groups, [16..18] bake groups (x = brick count), [20..22] shell-volume bake
+    // [12..14] query groups, [16..18] bake groups (x = chunk count), [20..22] shell-volume bake
     // groups (x = 0 disables — the CB is cached, so the toggle rides here), [24..27] the interval
     // pass draw (analytic drawables, firstInstance = the partition split), [28..31] the union
     // fullscreen draw (vertexCount 3 or 0).

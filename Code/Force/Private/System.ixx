@@ -156,8 +156,8 @@ public:
     ForceQuery createQuery(const glm::vec3& pos);
 
     // ---- THE BAKED PRESSURE FIELD ("Force/Bake" tweaks) ------------------------------------
-    // A sparse CPU-side sampling of EVERY team's field: update() selects 16 m XZ bricks from the
-    // live emitters'/groups' support boxes, the GPU evaluates 16x16 samples per brick at "Sample
+    // A sparse CPU-side sampling of EVERY team's field: update() selects 16 m XZ chunks from the
+    // live emitters'/groups' support boxes, the GPU evaluates 16x16 samples per chunk at "Sample
     // height" (force_bake.cs), and update() republishes the paired readback copy — so ANY number
     // of consumers sample field force/exposure with plain bilinear taps and NO per-consumer GPU
     // slot (the swarm-unit replacement for per-unit ForceQueries).
@@ -170,8 +170,8 @@ public:
         glm::vec3 opposingGradient{ 0.0f }; // planar (XZ) gradient of that field
     };
     // Worker-safe between updates (the published containers only mutate in update(), after the
-    // entity pass). A position outside every brick reads as ZERO field — correct by construction,
-    // the bricks cover every support box. ~3 frames latent end to end.
+    // entity pass). A position outside every chunk reads as ZERO field — correct by construction,
+    // the chunks cover every support box. ~3 frames latent end to end.
     FieldSample sampleBakedField(const glm::vec3& pos, uint32 team) const;
 
     uint32 getNumEmitters() const { return m_numLiveEmitters; }
@@ -343,9 +343,9 @@ private:
     void smoothGroup(MergeGroup& group, float deltaSec); // displayed <- target, floored by the Merged cover
     // Reach of a focus-0.5 sphere whose visible iso radius is `radius` at `output`; 0 = no bubble.
     float sphereReach(float radius, float output) const;
-    // Baked pressure field: brick set from the emitter/group support boxes -> renderer upload,
+    // Baked pressure field: chunk set from the emitter/group support boxes -> renderer upload,
     // then the paired readback republished for the samplers. Both main-thread inside update().
-    void buildBakeBricks(Renderer& renderer);
+    void buildBakeChunks(Renderer& renderer);
     void publishBake(Renderer& renderer);
     // Radius a group sphere at `center` needs to cover this member (MergeParams scales, no margin).
     float memberCover(const EmitterInstance& m, const glm::vec3& center) const
@@ -383,13 +383,13 @@ private:
     // Baked pressure field state (see sampleBakedField): scratch this frame, published last copy.
     bool m_bakeEnabled = true;
     float m_bakeSampleHeight = 1.0f; // world y the field is evaluated at (where bodies live)
-    int m_statBakeBricks = 0;
+    int m_statBakeChunks = 0;
     bool m_bakePublished = false;
     bool m_bakeCapWarned = false;
-    oc::vector<glm::ivec4> m_bakeBrickScratch;
-    oc::unordered_set<uint64> m_bakeSeen;          // per-frame dedup of brick coords
-    oc::unordered_map<uint64, uint32> m_bakeIndex; // packed brick coord -> published brick index
-    oc::vector<glm::vec4> m_bakeData;              // published readback copy (512 vec4 per brick)
+    oc::vector<glm::ivec4> m_bakeChunkScratch;
+    oc::unordered_set<uint64> m_bakeSeen;          // per-frame dedup of chunk coords
+    oc::unordered_map<uint64, uint32> m_bakeIndex; // packed chunk coord -> published chunk index
+    oc::vector<glm::vec4> m_bakeData;              // published readback copy (512 vec4 per chunk)
 
     ForceFieldParams m_params; // owns the "Force" tweaks, pushed to the renderer every update
     MergeParams m_merge;       // the "Force/Merge" tweaks

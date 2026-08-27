@@ -156,35 +156,35 @@ export namespace RendererVKLayout
     };
     constexpr size_t FORCE_EMITTER_HEADER_SIZE = sizeof(ForceEmittersGpu) - sizeof(ForceEmitterGpu) * MAX_FORCE_EMITTERS;
 
-    // BAKED PRESSURE FIELD ("force bake"): a sparse set of XZ BRICKS the CPU selects each frame
+    // BAKED PRESSURE FIELD ("force bake"): a sparse set of XZ CHUNKS the CPU selects each frame
     // from the live emitters' support boxes, evaluated by force_bake.cs.glsl at ONE fixed gameplay
     // height (ALL team field values per sample) and read back host-visible — the CPU-side field
-    // any number of consumers samples for force/exposure with NO per-consumer GPU slot. A brick is
+    // any number of consumers samples for force/exposure with NO per-consumer GPU slot. A chunk is
     // a 16 m square: 16x16 samples at 1 m spacing (unit-shield bubbles, reach 3, stay resolved),
-    // CORNER-aligned to the world lattice (sample (i,j) of brick (bx,bz) sits at (bx*16+i, bz*16+j)),
-    // so bilinear taps cross brick borders seamlessly and a missing brick reads as zero field
+    // CORNER-aligned to the world lattice (sample (i,j) of chunk (bx,bz) sits at (bx*16+i, bz*16+j)),
+    // so bilinear taps cross chunk borders seamlessly and a missing chunk reads as zero field
     // (= outside every support).
-    constexpr uint32 FORCE_BAKE_BRICK_SAMPLES = 16;   // per axis (workgroup = one brick, 16x16)
+    constexpr uint32 FORCE_BAKE_CHUNK_SAMPLES = 16;   // per axis (workgroup = one chunk, 16x16)
     constexpr float FORCE_BAKE_SAMPLE_SPACING = 1.0f; // m — also spelled in force_bake.cs.glsl
-    constexpr uint32 MAX_FORCE_BAKE_BRICKS = 512;     // 16 m bricks: 512 covers ~131k m^2 of field
-    constexpr uint32 FORCE_BAKE_SAMPLES_PER_BRICK = FORCE_BAKE_BRICK_SAMPLES * FORCE_BAKE_BRICK_SAMPLES;
-    struct alignas(16) ForceBakeBricksGpu
+    constexpr uint32 MAX_FORCE_BAKE_CHUNKS = 512;     // 16 m chunks: 512 covers ~131k m^2 of field
+    constexpr uint32 FORCE_BAKE_SAMPLES_PER_CHUNK = FORCE_BAKE_CHUNK_SAMPLES * FORCE_BAKE_CHUNK_SAMPLES;
+    struct alignas(16) ForceBakeChunksGpu
     {
         uint32 count;
         float sampleY;    // the bake height (world y): where gameplay bodies live
         uint32 _pad0, _pad1;
-        glm::ivec4 bricks[MAX_FORCE_BAKE_BRICKS]; // xy = brick coord (floor(world / 32 m)), zw unused
+        glm::ivec4 chunks[MAX_FORCE_BAKE_CHUNKS]; // xy = chunk coord (floor(world / 16 m)), zw unused
     };
-    constexpr size_t FORCE_BAKE_HEADER_SIZE = sizeof(ForceBakeBricksGpu) - sizeof(glm::ivec4) * MAX_FORCE_BAKE_BRICKS;
+    constexpr size_t FORCE_BAKE_HEADER_SIZE = sizeof(ForceBakeChunksGpu) - sizeof(glm::ivec4) * MAX_FORCE_BAKE_CHUNKS;
     // Output/readback: per sample (numTeams + 3) / 4 vec4s (every LIVE team's field value —
-    // ONE vec4 with <= 4 teams, halving the readback + the CPU copy), brick-major:
-    // (brick * 256 + localZ * 16 + localX) * vec4PerSample. The stride is the live team count's,
+    // ONE vec4 with <= 4 teams, halving the readback + the CPU copy), chunk-major:
+    // (chunk * 256 + localZ * 16 + localX) * vec4PerSample. The stride is the live team count's,
     // so the buffers are remade on a numTeams change (ForceFieldPipeline::setNumTeams).
     // The paired view of one frame slot's baked field: the data is ~2 frames old, so it comes WITH
-    // the brick list it was evaluated for (bricks.size() bricks x 512 vec4s, brick-major).
+    // the chunk list it was evaluated for (chunks.size() chunks x 512 vec4s, chunk-major).
     struct ForceBakeReadback
     {
-        oc::span<const glm::ivec4> bricks;
+        oc::span<const glm::ivec4> chunks;
         oc::span<const glm::vec4> data;
     };
 

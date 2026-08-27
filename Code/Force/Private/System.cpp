@@ -319,7 +319,7 @@ void ForceSystem::initialize()
     Tweak::boolean("Force", "Use grid", &m_params.useGrid); // off = brute force (A-B correctness check)
     Tweak::boolean("Force/Bake", "Enabled", &m_bakeEnabled);
     Tweak::floatVar("Force/Bake", "Sample height", &m_bakeSampleHeight, 0.0f, 10.0f, 0.1f);
-    Tweak::intVar("Force/Bake", "Bricks (stat)", &m_statBakeBricks, 0, 100000);
+    Tweak::intVar("Force/Bake", "Chunks (stat)", &m_statBakeChunks, 0, 100000);
     Tweak::floatVar("Force", "Force gain", &m_params.forceGain, 0.0f, 10.0f);
     Tweak::floatVar("Force/Shell", "Alpha", &m_params.shellAlpha, 0.0f, 1.0f);
     // Draw culling/LOD (the field/readbacks of a culled shell stay live; desktop only):
@@ -755,9 +755,9 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
         }
     }
     queriesScope.stop();
-    { // the baked pressure field: this frame's brick set out, the paired readback republished
+    { // the baked pressure field: this frame's chunk set out, the paired readback republished
         ProfileScope bakeScope("Force bake", EProfileCategory::Force);
-        buildBakeBricks(renderer);
+        buildBakeChunks(renderer);
         publishBake(renderer);
     }
     // Kick next frame's merge over this frame's state: it runs during present + the fence wait
@@ -1068,31 +1068,31 @@ bool ForceSystem::recomputeCover(MergeGroup& group)
 // the number of candidates and join-distance PAIRS, not the emitter count. No renderer access here.
 // ---- the baked pressure field (see System.ixx) ----
 
-static uint64 bakeBrickKey(int bx, int bz)
+static uint64 bakeChunkKey(int bx, int bz)
 {
     return ((uint64)(uint32)bx << 32) | (uint32)bz;
 }
 
-void ForceSystem::buildBakeBricks(Renderer& renderer)
+void ForceSystem::buildBakeChunks(Renderer& renderer)
 {
-    m_bakeBrickScratch.clear();
+    m_bakeChunkScratch.clear();
     m_bakeSeen.clear();
-    constexpr float c_brickSize = FORCE_BAKE_BRICK_SAMPLES * FORCE_BAKE_SAMPLE_SPACING; // 16 m
+    constexpr float c_chunkSize = FORCE_BAKE_CHUNK_SAMPLES * FORCE_BAKE_SAMPLE_SPACING; // 16 m
     bool capped = false;
     const auto addBox = [&](glm::vec2 lo, glm::vec2 hi)
     {
-        const int bx0 = (int)std::floor(lo.x / c_brickSize), bx1 = (int)std::floor(hi.x / c_brickSize);
-        const int bz0 = (int)std::floor(lo.y / c_brickSize), bz1 = (int)std::floor(hi.y / c_brickSize);
+        const int bx0 = (int)std::floor(lo.x / c_chunkSize), bx1 = (int)std::floor(hi.x / c_chunkSize);
+        const int bz0 = (int)std::floor(lo.y / c_chunkSize), bz1 = (int)std::floor(hi.y / c_chunkSize);
         for (int bz = bz0; bz <= bz1; ++bz)
             for (int bx = bx0; bx <= bx1; ++bx)
             {
-                if (m_bakeBrickScratch.size() >= (size_t)MAX_FORCE_BAKE_BRICKS)
+                if (m_bakeChunkScratch.size() >= (size_t)MAX_FORCE_BAKE_CHUNKS)
                 {
                     capped = true;
                     return;
                 }
-                if (m_bakeSeen.insert(bakeBrickKey(bx, bz)).second)
-                    m_bakeBrickScratch.push_back(glm::ivec4(bx, bz, 0, 0));
+                if (m_bakeSeen.insert(bakeChunkKey(bx, bz)).second)
+                    m_bakeChunkScratch.push_back(glm::ivec4(bx, bz, 0, 0));
             }
     };
     if (m_bakeEnabled)
@@ -1130,29 +1130,29 @@ void ForceSystem::buildBakeBricks(Renderer& renderer)
                    glm::vec2(group.center.x, group.center.z) + r);
         }
     }
-    m_statBakeBricks = (int)m_bakeBrickScratch.size();
+    m_statBakeChunks = (int)m_bakeChunkScratch.size();
     if (capped && !m_bakeCapWarned)
     {
-        m_bakeCapWarned = true; // once: dropped bricks read as zero field (no push/exposure there)
-        printf("ForceSystem: baked-field brick cap hit (%u) — outermost emitter regions unbaked\n",
-            MAX_FORCE_BAKE_BRICKS);
+        m_bakeCapWarned = true; // once: dropped chunks read as zero field (no push/exposure there)
+        printf("ForceSystem: baked-field chunk cap hit (%u) — outermost emitter regions unbaked\n",
+            MAX_FORCE_BAKE_CHUNKS);
     }
-    renderer.setForceBakeBricks(m_bakeBrickScratch, m_bakeSampleHeight);
+    renderer.setForceBakeChunks(m_bakeChunkScratch, m_bakeSampleHeight);
 }
 
 void ForceSystem::publishBake(Renderer& renderer)
 {
-    // Copy THIS slot's readback (paired with the brick list it was evaluated for) into stable
+    // Copy THIS slot's readback (paired with the chunk list it was evaluated for) into stable
     // CPU storage: the mapped buffer is only safe until present re-submits the slot, while the
     // published copy is read by next frame's entity pass.
     const ForceBakeReadback bake = renderer.getForceBakeReadback();
     // TEAM-SIZED stride, mirroring force_bake.cs: one vec4 per sample with <= 4 live teams.
-    const size_t vec4PerBrick = (size_t)FORCE_BAKE_SAMPLES_PER_BRICK * ((m_params.numTeams + 3u) / 4u);
+    const size_t vec4PerChunk = (size_t)FORCE_BAKE_SAMPLES_PER_CHUNK * ((m_params.numTeams + 3u) / 4u);
     m_bakeIndex.clear();
-    const size_t numBricks = glm::min(bake.bricks.size(), bake.data.size() / vec4PerBrick);
-    m_bakeData.assign(bake.data.begin(), bake.data.begin() + numBricks * vec4PerBrick);
-    for (size_t b = 0; b < numBricks; ++b)
-        m_bakeIndex[bakeBrickKey(bake.bricks[b].x, bake.bricks[b].y)] = (uint32)b;
+    const size_t numChunks = glm::min(bake.chunks.size(), bake.data.size() / vec4PerChunk);
+    m_bakeData.assign(bake.data.begin(), bake.data.begin() + numChunks * vec4PerChunk);
+    for (size_t b = 0; b < numChunks; ++b)
+        m_bakeIndex[bakeChunkKey(bake.chunks[b].x, bake.chunks[b].y)] = (uint32)b;
     m_bakePublished = m_bakeEnabled; // disabled: samplers report invalid, callers fall back
 }
 
@@ -1162,7 +1162,7 @@ ForceSystem::FieldSample ForceSystem::sampleBakedField(const glm::vec3& pos, uin
     if (!m_bakePublished)
         return s;
     s.valid = true;
-    constexpr int N = (int)FORCE_BAKE_BRICK_SAMPLES;
+    constexpr int N = (int)FORCE_BAKE_CHUNK_SAMPLES;
     constexpr float c_invSpacing = 1.0f / FORCE_BAKE_SAMPLE_SPACING;
     const uint32 numTeams = m_params.numTeams;
     const size_t vec4PerSample = (numTeams + 3u) / 4u; // mirrors force_bake.cs's team-sized stride
@@ -1171,7 +1171,7 @@ ForceSystem::FieldSample ForceSystem::sampleBakedField(const glm::vec3& pos, uin
     const int gx0 = (int)std::floor(gxf), gz0 = (int)std::floor(gzf);
     const float fx = gxf - (float)gx0, fz = gzf - (float)gz0;
     // The 2x2 lattice corners around the point — ONE fetch serves the bilinear value, the owning
-    // team AND the gradient. A corner in a missing brick is ZERO field (outside every support).
+    // team AND the gradient. A corner in a missing chunk is ZERO field (outside every support).
     float corner[4][MAX_FORCE_TEAMS] = {};
     bool any = false;
     for (int c = 0; c < 4; ++c)
@@ -1179,7 +1179,7 @@ ForceSystem::FieldSample ForceSystem::sampleBakedField(const glm::vec3& pos, uin
         const int gx = gx0 + (c & 1), gz = gz0 + (c >> 1);
         const int bx = gx >= 0 ? gx / N : (gx - (N - 1)) / N; // floor division
         const int bz = gz >= 0 ? gz / N : (gz - (N - 1)) / N;
-        const auto it = m_bakeIndex.find(bakeBrickKey(bx, bz));
+        const auto it = m_bakeIndex.find(bakeChunkKey(bx, bz));
         if (it == m_bakeIndex.end())
             continue;
         any = true;

@@ -598,13 +598,13 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
         m_mappedQueries[i].data()->count = 0;
         m_queryBuffers[i].flushMappedMemory(FORCE_QUERY_HEADER_SIZE);
 
-        m_bakeBrickBuffers[i].initialize(sizeof(ForceBakeBricksGpu),
+        m_bakeChunkBuffers[i].initialize(sizeof(ForceBakeChunksGpu),
             vk::BufferUsageFlagBits2::eStorageBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible, false, "ForceBakeBricks", BufferHostAccess::eSequentialWrite);
-        m_mappedBakeBricks[i] = m_bakeBrickBuffers[i].mapMemory<ForceBakeBricksGpu>();
-        m_mappedBakeBricks[i].data()->count = 0;
-        m_mappedBakeBricks[i].data()->sampleY = 0.0f;
-        m_bakeBrickBuffers[i].flushMappedMemory(FORCE_BAKE_HEADER_SIZE);
+            vk::MemoryPropertyFlagBits::eHostVisible, false, "ForceBakeChunks", BufferHostAccess::eSequentialWrite);
+        m_mappedBakeChunks[i] = m_bakeChunkBuffers[i].mapMemory<ForceBakeChunksGpu>();
+        m_mappedBakeChunks[i].data()->count = 0;
+        m_mappedBakeChunks[i].data()->sampleY = 0.0f;
+        m_bakeChunkBuffers[i].flushMappedMemory(FORCE_BAKE_HEADER_SIZE);
 
         m_indirectBuffers[i].initialize(INDIRECT_UINTS * sizeof(uint32),
             vk::BufferUsageFlagBits2::eIndirectBuffer,
@@ -664,7 +664,7 @@ void ForceFieldPipeline::createBakeReadbackBuffers()
     for (uint32 i = 0; i < NUM_FRAMES_IN_FLIGHT; ++i)
     {
         m_bakeReadbackBuffers[i].initialize(
-            (size_t)MAX_FORCE_BAKE_BRICKS * FORCE_BAKE_SAMPLES_PER_BRICK * bakeVec4PerSample() * sizeof(glm::vec4),
+            (size_t)MAX_FORCE_BAKE_CHUNKS * FORCE_BAKE_SAMPLES_PER_CHUNK * bakeVec4PerSample() * sizeof(glm::vec4),
             vk::BufferUsageFlagBits2::eStorageBuffer,
             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, false, "ForceBakeReadback");
         m_mappedBakeReadback[i] = m_bakeReadbackBuffers[i].mapMemory<glm::vec4>();
@@ -707,7 +707,7 @@ void ForceFieldPipeline::reloadShaders(vk::RenderPass sceneRenderPass)
 }
 
 void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu> slots,
-    oc::span<const ForceQueryGpu> querySlots, oc::span<const glm::ivec4> bakeBricks,
+    oc::span<const ForceQueryGpu> querySlots, oc::span<const glm::ivec4> bakeChunks,
     float bakeSampleY, float bigReachThreshold, const ShellCull& shellCull)
 {
     // Would this shell's ray-march draw be visible? Mirrors forceEmitterBounds (the proxy's
@@ -793,16 +793,16 @@ void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu>
     q->count = numQueries;
     m_queryBuffers[frameIdx].flushMappedMemory(FORCE_QUERY_HEADER_SIZE + numQueries * sizeof(ForceQueryGpu));
 
-    // Bake bricks + the per-slot CPU pairing copy: this slot's readback (~2 frames from now) is
+    // Bake chunks + the per-slot CPU pairing copy: this slot's readback (~2 frames from now) is
     // indexed by exactly this list (see getBakeReadback).
-    ForceBakeBricksGpu* bk = m_mappedBakeBricks[frameIdx].data();
-    const uint32 numBricks = (uint32)glm::min(bakeBricks.size(), (size_t)MAX_FORCE_BAKE_BRICKS);
-    if (numBricks > 0)
-        memcpy(bk->bricks, bakeBricks.data(), numBricks * sizeof(glm::ivec4));
-    bk->count = numBricks;
+    ForceBakeChunksGpu* bk = m_mappedBakeChunks[frameIdx].data();
+    const uint32 numChunks = (uint32)glm::min(bakeChunks.size(), (size_t)MAX_FORCE_BAKE_CHUNKS);
+    if (numChunks > 0)
+        memcpy(bk->chunks, bakeChunks.data(), numChunks * sizeof(glm::ivec4));
+    bk->count = numChunks;
     bk->sampleY = bakeSampleY;
-    m_bakeBrickBuffers[frameIdx].flushMappedMemory(FORCE_BAKE_HEADER_SIZE + numBricks * sizeof(glm::ivec4));
-    m_bakeBrickLists[frameIdx].assign(bakeBricks.begin(), bakeBricks.begin() + numBricks);
+    m_bakeChunkBuffers[frameIdx].flushMappedMemory(FORCE_BAKE_HEADER_SIZE + numChunks * sizeof(glm::ivec4));
+    m_bakeChunkLists[frameIdx].assign(bakeChunks.begin(), bakeChunks.begin() + numChunks);
 
     uint32* ind = m_mappedIndirect[frameIdx].data();
     // UNION MARCH routing: with the pass on, the proxy draw keeps only the sampled tier — the
@@ -816,7 +816,7 @@ void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu>
     ind[GRID_DISPATCH_OFFSET] = fieldCount; // single-thread workgroups (see force_grid.cs.glsl)
     ind[EMITTER_DISPATCH_OFFSET] = (count + FORCE_SIM_GROUP_SIZE - 1) / FORCE_SIM_GROUP_SIZE; // + passive tail
     ind[QUERY_DISPATCH_OFFSET] = (numQueries + FORCE_SIM_GROUP_SIZE - 1) / FORCE_SIM_GROUP_SIZE;
-    ind[BAKE_DISPATCH_OFFSET] = numBricks; // one 16x16 workgroup per brick
+    ind[BAKE_DISPATCH_OFFSET] = numChunks; // one 16x16 workgroup per chunk
     ind[SHELLBAKE_DISPATCH_OFFSET] = shellCull.bakeVolume
         ? FORCE_SHELL_VOLUME_X / FORCE_SHELL_VOLUME_GROUP : 0; // 0 = tier inactive this frame
     m_indirectBuffers[frameIdx].flushMappedMemory(vk::WholeSize);
@@ -890,9 +890,9 @@ void ForceFieldPipeline::recordCompute(CommandBuffer& commandBuffer, uint32 fram
         vkCb.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_queryPipeline.getPipelineLayout(), 0, 1, &querySet, 0, nullptr);
         vkCb.dispatchIndirect(m_indirectBuffers[frameIdx].getBuffer(), QUERY_DISPATCH_OFFSET * sizeof(uint32));
     }
-    { // the baked pressure field: one workgroup per brick (reads grid + emitters, own output)
+    { // the baked pressure field: one workgroup per chunk (reads grid + emitters, own output)
         vk::DescriptorSet bakeSet = m_bakeSets[frameIdx].getDescriptorSet();
-        auto bakeUpdates = makeUpdates(m_bakeBrickBuffers[frameIdx], m_bakeReadbackBuffers[frameIdx]);
+        auto bakeUpdates = makeUpdates(m_bakeChunkBuffers[frameIdx], m_bakeReadbackBuffers[frameIdx]);
         vkCb.bindPipeline(vk::PipelineBindPoint::eCompute, m_bakePipeline.getPipeline());
         commandBuffer.cmdUpdateDescriptorSets(m_bakePipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, bakeSet, bakeUpdates);
         vkCb.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_bakePipeline.getPipelineLayout(), 0, 1, &bakeSet, 0, nullptr);
