@@ -104,6 +104,9 @@ private:
     float m_accel = 30.0f; // deliberately soft: steering force must lose against bubble push
     float m_jumpSpeed = 6.0f;
     float m_sprintMult = 2.0f;
+    float m_sprintEnergyPerSec = 15.0f; // sprint burns the shield battery; emptying it COLLAPSES
+                                        // the shield, and sprint stays locked out until the
+                                        // battery refills to "Reboot energy" (the collapse latch)
     float m_healthMax = 100.0f;
     float m_healthDrainRate = 15.0f;    // health/s while unshielded in enemy territory
     float m_shieldMaxOutput = 1.5f;     // field output while the battery holds ANY charge

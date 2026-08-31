@@ -1,0 +1,61 @@
+# Crossing: a 1x3-cell bridge that lets a perpendicular cable pass UNDER its raised middle cell.
+# Its medium is GENERIC — it conducts whichever ONE medium its two END cells resolve to (see
+# StructureSystem::rebuildDerivedLinks). Oriented at placement (entity -Z = the long axis); the
+# collider is a low 3-cell box in LOCAL space, rotated with the entity. Walk-through like cables
+# (Layer Cable, collides only with Projectile). Spawned origin 0.25 above ground.
+Prefab gameCrossing
+	Component Render
+		ObjectContainer baseshapes
+		Node CubeHalf
+		Type StaticMesh
+		Color 0.7 0.7 0.75
+		Position 0 0.55 0
+		Scale 0.5
+	Component Physics
+		Body Static
+		ContactEvents true
+		Layer Cable
+		CollidesWith Projectile
+		Shape Box
+		HalfExtents 1 0.25 3
+	Component GameStructure
+		MeleeRadius 1
+	Component Scene
+		Entity
+			Name EndA
+			Position 0 0 -2
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeHalf
+				Type StaticMesh
+				Color 0.7 0.7 0.75
+				Scale 0.5
+		Entity
+			Name EndB
+			Position 0 0 2
+			Component Render
+				ObjectContainer baseshapes
+				Node CubeHalf
+				Type StaticMesh
+				Color 0.7 0.7 0.75
+				Scale 0.5
+		Entity
+			Name RampA
+			Position 0 0.3 -1
+			Rotation -35 0 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Cylinder2
+				Type StaticMesh
+				Color 0.7 0.7 0.75
+				Scale 0.35
+		Entity
+			Name RampB
+			Position 0 0.3 1
+			Rotation 35 0 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Cylinder2
+				Type StaticMesh
+				Color 0.7 0.7 0.75
+				Scale 0.35

@@ -12,14 +12,6 @@ import :Player;
 import :Structures;
 import :Npc;
 
-// One entry of the RTS grid hotbar (Build mode): the top level shows the CATEGORIES (keys 1..3);
-// picking one repopulates the hotbar with its items (keys 1..N arm the ghost/tool, key 0 = Back).
-// Partition-scope so Match.cpp's category tables can be plain file statics.
-// The two-click LINK tools, armed straight off the root hotbar page (Link mode): click one
-// structure, then the other. Connect creates (medium inferred by smartLinkTypeFor), Disconnect
-// removes, Upgrade retypes Basic -> Heavy.
-enum class EBuildTool : uint8 { Connect, Disconnect, Upgrade };
-
 // The match orchestrator: owns the whitebox world (ground, objective, world-scale enemy emitter),
 // the player, the structure/economy system and the follow camera. MUST be a stack local in main()
 // (holds EntityPtrs and Force handles — a global would need an InitSeg slot).
@@ -69,7 +61,8 @@ public:
     bool runScenario(oc::string_view savePath);
 
     // MULTIPLAYER (windowed listen server + clients). The SERVER runs the whole sim; player-
-    // structure state mirrors to clients over game events (GPl/GRm/GCb + periodic GSt stats);
+    // structure state mirrors to clients over game events (GPl/GRm + periodic GSt stats; links
+    // derive locally on every instance from the mirrored cable segments — no cable wire);
     // units and shots replicate as network entities (Component Network in their prefabs); each
     // client drives its own server-spawned capsule through the claim system and computes its own
     // shield locally (the mirrored emitter fields exist client-side, so readbacks are real).
@@ -86,14 +79,10 @@ private:
         EStructureType type = EStructureType::Emitter;
         int nodeIndex = -1; // Extractor: the free node the ghost snapped to
     };
-    // Interaction modes: neutral by default — clicking does NOTHING until a mode key is pressed.
-    // B/V/C jump STRAIGHT into Build mode with that category (Emitters/Production/Distribution) —
-    // b->1->LMB, v->3->LMB style; pressing the ACTIVE category's key exits to neutral. X = Delete,
-    // Tab = Select. The hotbar (visible only in Build) always shows the current category's items:
-    // keys 1..N arm, 0 disarms.
-    // Select is the neutral mode. Link = a two-click cable TOOL armed straight off the root
-    // hotbar page (Connect on E, Disconnect on D, Upgrade on F) — no category page involved.
-    enum class EPlayerMode : uint8 { Link, Build, Delete, Select };
+    // Interaction modes: Select is the neutral mode (click inspects, RMB routes/moves); Q/W/E open
+    // the build categories (Combat/Production/Cables), X = Delete. Cables place like any other
+    // item — the old two-click LINK tools are gone (connections derive from cable adjacency).
+    enum class EPlayerMode : uint8 { Build, Delete, Select };
 
     Aim computeAim(const Camera& camera, EStructureType type) const;
     bool aimGroundPoint(const Camera& camera, glm::vec3& outPos) const; // cursor ray vs colliders/ground plane
@@ -103,7 +92,11 @@ private:
     void disarmBuild(); // drop the armed item + any half-finished two-click flow (RMB / Esc)
     void activateSlot(int slot); // grid hotkey OR click on the drawn slot: category / item / Delete / Cancel / Back
     void cancelOneLevel();       // C slot, Esc, Tab: two-click step -> armed item -> page/mode, one per press
-    void updateLinkTool(const Camera& camera, bool confirmEdge, bool cancelEdge, EBuildTool tool);
+    // Cable segments place with BOTH inputs: LMB drag PAINTS cells (L-filled between samples so
+    // the run stays connected), a plain click anchors a two-click auto-bent L-LINE (the second
+    // click places it and chains — the endpoint stays anchored).
+    void updateCablePlacement(const Camera& camera, EStructureType armed, bool confirmEdge);
+    void placeCableLine(EStructureType armed, const glm::vec3& from, const glm::vec3& to, bool preview);
     void updateDeleteMode(const Camera& camera, bool confirmEdge);
     void updateSelectMode(const Camera& camera, bool confirmEdge, bool rmbEdge);
     // Shared click-to-select (Select mode, and Build mode wherever the click can't place).
@@ -118,12 +111,10 @@ private:
     void tickPlayerMelee(float deltaSec); // AUTHORITY: every player capsule grinds adjacent enemy units
     void handleNetEvent(oc::string_view name); // NetworkManager::setOnGameEvent target
     void requestPlace(EStructureType type, const glm::vec3& pos, int nodeIndex, const glm::vec3& facing);
-    void requestCable(uint32 idA, uint32 idB, ECableType type);
     void requestDemolish(uint32 id);
     void requestSetRoute(uint32 id, oc::span<const glm::vec3> points); // barracks waypoints
     void sendRoute(int index); // server: GRt broadcast (mirror + join replay)
     void sendStructurePlaced(int index);
-    void sendCableChanged(uint32 idA, uint32 idB, ECableType type, bool removed);
     void sendStats();
     void spawnCorridorWalls(); // arena border (deterministic local spawn on every instance)
     // NAV: feed the flow-field service (authority only) — obstacles = border walls + every
@@ -162,9 +153,7 @@ private:
                                  // cursor until the button comes up
     bool m_placeClicked = false; // LMB edge inside the viewport (consumed by the active mode)
     bool m_rmbClicked = false;   // RMB edge inside the viewport (route waypoint / move order)
-    uint32 m_cablePendingId = 0; // cable tool: first selected endpoint (stable id; 0 = none)
     EPlayerMode m_mode = EPlayerMode::Select; // Select IS the neutral mode (player combat removed)
-    EBuildTool m_linkTool = EBuildTool::Connect; // which tool Link mode runs (root slot E, D or F)
     uint32 m_selectedId = 0;     // Select mode: highlighted structure (stable id; 0 = none)
     // UNIT SELECTION (RTS box drag in Select mode): owning handles to own-team units; RMB move
     // orders go to them together with the player. Authority only (units simulate on the server).
@@ -195,6 +184,14 @@ private:
     glm::vec3 m_lancePendingPos{ 0.0f };
     bool m_wallPlacing = false;  // Wall two-click placement: first click anchored the line start
     glm::vec3 m_wallStart{ 0.0f };
+    // Crossing orientation: the long axis follows the CAMERA facing (quantized to ±X/±Z);
+    // pressing/clicking the armed CRSS slot again rotates it 90°.
+    bool m_crossingRotated = false;
+    bool m_cablePainting = false;  // LMB held: paint cells as the cursor crosses them
+    bool m_cablePaintMoved = false;
+    glm::vec3 m_cablePaintLast{ 0.0f };
+    bool m_cableLinePending = false; // a plain click anchored the L-line's start
+    glm::vec3 m_cableLineStart{ 0.0f };
 
     // TEAMS are SLOTS, never derived from the clientId: ids are minted monotonically and never
     // recycled (a reconnect or a failed first attempt burns one), so the second connection of the
@@ -240,12 +237,12 @@ private:
     float m_waveInterval = 90.0f;
     // Waves are sized in BUDGET POINTS, not unit counts: each type has a cost (tweaks), so a
     // brute-heavy archetype fields far fewer bodies than a swarm flood of the same budget.
-    int m_waveBudget = 4;           // points in wave 1 (swarm costs 1 = the old unit count)
-    float m_waveBudgetGrowth = 20.0f; // extra points per subsequent wave
+    int m_waveBudget = 20;           // points in wave 1 (swarm costs 1 = the old unit count)
+    float m_waveBudgetGrowth = 60.0f; // extra points per subsequent wave
     float m_waveCost[(int)ENpcType::Count] = { 3.0f, 10.0f, 2.0f, 5.0f, 1.0f }; // Grunt, Brute, Runner, Spitter, Swarm
     float waveCostOf(ENpcType t) const { return glm::max(m_waveCost[(int)t], 0.1f); }
-    int m_waveMaxAlive = 5000;    // total AI units cap (ambient + waves)
-    int m_ambientBudget = 500;    // POINTS of world-start scatter (same per-type costs as waves)
+    int m_waveMaxAlive = 15000;    // total AI units cap (ambient + waves)
+    int m_ambientBudget = 20000;    // POINTS of world-start scatter (same per-type costs as waves)
     float m_ambientSafeRadius = 70.0f; // the scatter keeps clear of the Base
     float m_waveSpawnDist = 160.0f;    // wave spawn ring radius around the Base
     int m_spawnsPerFrame = 24;    // trickle budget — a huge wave enters over seconds, not one hitch

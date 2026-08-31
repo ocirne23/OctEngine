@@ -1,10 +1,9 @@
 #version 460
 
 // Forcefield grid insert: one thread per compacted live emitter, inserting its index into every
-// uniform FORCE_GRID_CELL_SIZE (16 m) hash-grid cell its directional reach bounds overlap. Big emitters (FORCE_FLAG_BIG,
-// flagged by the CPU compaction against the big-reach threshold) ride the emitter buffer header's
-// global list instead and are skipped here. The table/data buffers were fill-cleared earlier in
-// this command buffer; the read side (shell FS, force/query compute) runs after the barrier.
+// uniform FORCE_GRID_CELL_SIZE (16 m) hash-grid cell its directional reach bounds overlap. The
+// table/data buffers were fill-cleared earlier in this command buffer; the read side (shell FS,
+// force/query compute) runs after the barrier.
 
 // ONE thread per workgroup, like light_grid.cs.glsl — NOT FORCE_SIM_GROUP_SIZE. The cell-claim
 // protocol (forceGetOrInsertCell) spins on a CAS loser until the winner publishes; with contending
@@ -24,8 +23,6 @@ void main()
     if (i >= fe_count)
         return;
     const ForceEmitterData e = fe_emitters[i];
-    if ((e.teamFlags.y & FORCE_FLAG_BIG) != 0u)
-        return;
 
     // World-space AABB of the oriented reach box (|basis| * halfExtents around the box center).
     float side, forward, back;

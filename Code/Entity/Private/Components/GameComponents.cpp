@@ -173,9 +173,10 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
     // NAV: the geodesically nearest enemy across every other team's field; its descent direction
     // already routes around walls. Falls through to the local search where no field covers us.
     bool navResolved = false;
-    bool navSteer = false; // navResolved AND the descent is usable (it is zero AT a source)
+    bool navSteer = false;    // navResolved AND the descent is usable (it is zero AT a source)
+    bool navTracking = false; // target within targetTrackRadius: field-tracking gets steering priority
     glm::vec2 navDir(0.0f);
-    if (!routing && !targetLocked && !ambient && fields && Globals::navSystem.anyFieldPublished())
+    if (!routing && !targetLocked && fields && Globals::navSystem.anyFieldPublished())
     {
         Nav::TeamField::Sample best;
         const Nav::TeamField* bestField = nullptr;
@@ -193,7 +194,11 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                 bestField = field;
             }
         }
-        if (best.valid)
+        // RANGE-GATED: only a source within targetSearchRadius (geodesic metres) counts. The field
+        // rebuilds every ~0.25 s and its sources are LIVE positions, so this tracks a moving
+        // player far tighter than the local search's retarget-interval snapshots — and the gate is
+        // what keeps distant units holding their patch instead of marching across the map.
+        if (best.valid && best.dist <= params.targetSearchRadius)
         {
             targetPos = bestField->sourceAt(best.srcIndex).pos;
             hasTarget = true;
@@ -201,7 +206,28 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             haveWalkTarget = true;
             navDir = best.descentDir;
             navResolved = true;
+            navTracking = best.dist <= params.targetTrackRadius;
             navSteer = glm::dot(navDir, navDir) > 0.5f;
+        }
+        else if (best.valid && best.dist <= params.navFollowRadius)
+        {
+            // NAV FOLLOW band: too far to TARGET (the player sprinted out of the search radius),
+            // but still near the action — if the crowd FLOW field holds a lane here, walk it (no
+            // target, no combat lock). The chasers' own trail + the seeded lane keep pulling the
+            // pack along until the target is back in range or the lane decays.
+            if (const Nav::TeamField* raster = Globals::navSystem.raster())
+            {
+                const glm::vec2 lane = Globals::navSystem.flow(team).sample(here, raster);
+                const float laneLen = glm::length(lane);
+                if (laneLen > params.flowKnee * moveSpeed)
+                {
+                    navDir = lane / laneLen;
+                    navSteer = true;
+                    navResolved = true; // following, not hunting: the local re-search stays off
+                    walkTarget = pos + glm::vec3(navDir.x, 0.0f, navDir.y) * 8.0f;
+                    haveWalkTarget = true;
+                }
+            }
         }
     }
     if (!routing && !navResolved)
@@ -433,8 +459,16 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                     wGoal = 1.5f;
                 }
                 m_ignoreFlowTimer = glm::max(0.0f, m_ignoreFlowTimer - deltaSec);
+                // LIVE TARGET WITHIN THE TRACK RADIUS: the goal is the team field's descent at the
+                // target's LIVE position (~0.25 s fresh) — floor the goal weight up and near-mute
+                // the seeded lane, whose periodic re-plans lag a moving player badly. Farther (but
+                // inside the search radius) the unit marches lane-friendly toward the target.
+                const bool tracking = navTracking && !unstick;
+                if (tracking)
+                    wGoal = glm::max(wGoal, params.steerTrackGoal * (stalled ? 0.3f : 1.0f));
                 const float wFlow = m_ignoreFlowTimer > 0.0f ? 0.0f
-                    : params.steerFlow * (unstick ? 0.5f : stalled ? 2.0f : 1.0f);
+                    : params.steerFlow * (unstick ? 0.5f : stalled ? 2.0f : 1.0f)
+                    * (tracking ? params.trackFlowMult : 1.0f);
                 const float wPersist = unstick ? 0.0f : params.steerPersist * (stalled ? 0.2f : 1.0f);
                 const float wPressure = params.steerPressure * (unstick ? 3.0f : 1.0f);
                 const float bodyProbe = bodyRadius + 0.1f;
@@ -884,15 +918,15 @@ void GameStructureComponent::unlinkAll(Entity& self)
     links.clear();
 }
 
-void GameStructureComponent::link(Entity& a, Entity& b, uint8 medium, uint8 cableTier, float throughput)
+void GameStructureComponent::link(Entity& a, Entity& b, uint8 medium, float throughput)
 {
     GameStructureComponent* ca = getComponent<GameStructureComponent>(&a);
     GameStructureComponent* cb = getComponent<GameStructureComponent>(&b);
     if (!ca || !cb || &a == &b)
         return;
-    unlink(a, b, medium); // the pair's SAME-medium link re-links in place (retype); others stay
-    ca->links.push_back(GameStructureLink{ EntityPtr(&b), medium, cableTier, throughput, /*owner*/ true });
-    cb->links.push_back(GameStructureLink{ EntityPtr(&a), medium, cableTier, throughput, /*owner*/ false });
+    unlink(a, b, medium); // the pair's SAME-medium link re-links in place; others stay
+    ca->links.push_back(GameStructureLink{ EntityPtr(&b), medium, throughput, /*owner*/ true });
+    cb->links.push_back(GameStructureLink{ EntityPtr(&a), medium, throughput, /*owner*/ false });
 }
 
 void GameStructureComponent::unlink(Entity& a, Entity& b, int medium)

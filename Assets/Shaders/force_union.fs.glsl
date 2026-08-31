@@ -31,60 +31,8 @@ bool forceSampledTierOwns(vec3 hitPos, uint team, out uint ownerIdx)
     ownerIdx = forceDominantEmitter(hitPos, team);
     if (ownerIdx == 0xFFFFFFFFu)
         return true; // no contributor (numerical fringe): draw nothing either way
-    return u_forceBake1.w > 0.5 && fe_emitters[ownerIdx].posReach.w >= u_forceBake0.w;
+    return u_forceBake1.w > 0.5 && forceVisibleRadius(fe_emitters[ownerIdx]) >= u_forceBake0.w;
 }
-
-#ifdef FORCE_GRID
-// The EMPTY-CELL sample: a cell with no candidates holds NO SMALL emitters (big ones bypass the
-// grid), so the field there is exactly the big list + the ambient term — a loop over fe_bigCount
-// (typically 0-2) instead of nothing at all. This keeps the empty-cell fast path alive in scenes
-// WITH big emitters, where it used to be disabled outright.
-void forceSampleFieldBigOnly(vec3 x, float iso, uint fallbackTeam,
-    out uint bestTeam, out float bestPhi, out float secondPhi, out float F)
-{
-    float phi[NUM_FORCE_TEAMS];
-    for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
-        phi[t] = 0.0;
-    for (uint k = 0u; k < fe_bigCount; ++k)
-    {
-        const ForceEmitterData e = fe_emitters[fe_bigIndices[k]];
-        const float c = forceContribution(x, e);
-        for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t) // predicated adds (see forceAccumulate)
-            phi[t] += e.teamFlags.x == t ? c : 0.0;
-    }
-    const uint ambientTeam = min(uint(u_forceParams4.w), NUM_FORCE_TEAMS - 1u);
-    const float ambient = forceAmbientField(x);
-    for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
-        phi[t] += t == ambientTeam ? ambient : 0.0;
-    bestTeam = 0u;
-    bestPhi = phi[0];
-    for (uint t = 1u; t < NUM_FORCE_TEAMS; ++t)
-        if (phi[t] > bestPhi) { bestPhi = phi[t]; bestTeam = t; }
-    secondPhi = 0.0;
-    for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
-        if (t != bestTeam)
-            secondPhi = max(secondPhi, phi[t]);
-    F = bestPhi - forceOpposingBound(iso, secondPhi);
-    if (bestPhi <= 0.0)
-        bestTeam = fallbackTeam; // zero field: never a spurious team flip through empty space
-}
-
-// Conservative bounding sphere of a big emitter's support (mirrors the CPU ShellCull sphere):
-// the ray-entry distance into it bounds where that emitter's field can begin along the ray.
-float forceBigSupportEntry(vec3 rayOrigin, vec3 rayDir, ForceEmitterData e)
-{
-    float side, forward, back;
-    forceEmitterBounds(e, side, forward, back);
-    const vec3 center = e.posReach.xyz + e.dirFocus.xyz * ((forward - back) * 0.5);
-    const float radius = length(vec3(side, side, (forward + back) * 0.5));
-    const vec3 oc = rayOrigin - center;
-    const float b = dot(oc, rayDir);
-    const float disc = b * b - (dot(oc, oc) - radius * radius);
-    if (disc <= 0.0)
-        return 1e30; // the ray never reaches this emitter's support
-    return -b - sqrt(disc); // may be negative (inside/behind): caller clamps against t
-}
-#endif
 
 void main()
 {
@@ -135,15 +83,10 @@ void main()
     float accumAlpha = 0.0;
     int numShaded = 0;
 #ifdef FORCE_GRID
-    // Per-fragment hoists: the current cell's hash probe re-runs only when a step crosses a 16 m
-    // cell boundary, and each big emitter's support-sphere ray ENTRY (for the empty-stretch jump
-    // clamp) is a constant of the ray — computed once, not per empty sample.
+    // Per-fragment hoist: the current cell's hash probe re-runs only when a step crosses a 16 m
+    // cell boundary.
     ivec3 cachedGridPos = ivec3(0x7FFFFFFF);
     uint cachedCell = FORCE_INVALID_CELL;
-    float bigEntry[8];
-    const uint numBigsHoisted = min(fe_bigCount, 8u);
-    for (uint k = 0u; k < numBigsHoisted; ++k)
-        bigEntry[k] = forceBigSupportEntry(rayOrigin, rayDir, fe_emitters[fe_bigIndices[k]]);
 #endif
     // Static per-pixel phase jitter (FORCE_UNION_JITTER — "Force/Shell/Union jitter", compiled
     // out when off) breaks the march's step-count banding into spatial noise — larger "Union
@@ -159,10 +102,9 @@ void main()
         const float t = t0 + dt * (float(i) - stepJitter);
         bool sampledEmpty = false;
 #ifdef FORCE_GRID
-        // EMPTY-CELL FAST PATH: a cell with NO candidates holds no SMALL emitters (the grid
-        // insert covers every support) — provable, not heuristic — so the sample reduces to the
-        // big list + ambient (forceSampleFieldBigOnly, typically 0-2 emitters). After the
-        // crossing logic below the index also JUMPS past the empty stretch where that is safe.
+        // EMPTY-CELL FAST PATH: a cell with NO candidates holds no emitters at all (the grid
+        // insert covers every support) — provable, not heuristic — so the field there is exactly
+        // zero. After the crossing logic below the index also JUMPS past the empty stretch.
         const vec3 samplePos = rayOrigin + rayDir * t;
         const ivec3 gridPos = forceGridPos(samplePos);
         if (any(notEqual(gridPos, cachedGridPos)))
@@ -173,7 +115,10 @@ void main()
         if (cachedCell == FORCE_INVALID_CELL || forceCellCount(cachedCell) == 0u)
         {
             sampledEmpty = true;
-            forceSampleFieldBigOnly(samplePos, iso, prevTeam, bestTeam, bestPhi, secondPhi, F);
+            bestTeam = prevTeam; // zero field: never a spurious team flip through empty space
+            bestPhi = 0.0;
+            secondPhi = 0.0;
+            F = -forceOpposingBound(iso, 0.0);
         }
         else
             forceSampleFieldCell(samplePos, cachedCell, iso, bestTeam, bestPhi, secondPhi, F);
@@ -286,20 +231,15 @@ void main()
         // JUMP the INDEX past the empty cell's exit (uniform dt preserved, so the refinement
         // brackets stay one step wide), and move the bracket's start to the exit — the skipped
         // stretch is provably zero, and a bracket spanning it would cost the bisection its
-        // accuracy at the next bubble's entry. Valid only with the ambient field off (it varies
-        // everywhere), and the target additionally clamps to each big emitter's support ENTRY
-        // (bounding sphere, conservative) — a big field beginning mid-cell must still be sampled.
-        // Many bigs make the per-step clamp loop cost more than the jump saves: then just no jump.
-        if (sampledEmpty && u_forceParams4.z <= 0.0 && fe_bigCount <= 8u)
+        // accuracy at the next bubble's entry.
+        if (sampledEmpty)
         {
             const vec3 p = rayOrigin + rayDir * t;
             const vec3 farBound = (floor(p / FORCE_GRID_CELL_SIZE)
                 + step(vec3(0.0), rayDir)) * FORCE_GRID_CELL_SIZE;
             const vec3 safeDir = rayDir + vec3(equal(rayDir, vec3(0.0))) * 1e-8;
             const vec3 tBounds = (farBound - rayOrigin) / safeDir;
-            float tExit = min(min(min(tBounds.x, tBounds.y), tBounds.z), t1);
-            for (uint k = 0u; k < numBigsHoisted && tExit > t; ++k)
-                tExit = min(tExit, bigEntry[k]); // hoisted ray-constant support entries
+            const float tExit = min(min(min(tBounds.x, tBounds.y), tBounds.z), t1);
             if (tExit > t)
             {
                 // ++i lands on the first (jittered) sample past the exit.

@@ -189,18 +189,6 @@ public:
     // from the upload workers, written only by the tweak panel between passes). 0 = off.
     float visibleBoundsIsoFrac() const { return m_visibleBoundsIsoFrac; }
 
-    // The GLOBAL AMBIENT FIELD: an analytic distance-based term one team projects everywhere —
-    // zero within safeRadius of the planar center, +slope per metre beyond it, capped at
-    // maxStrength. No emitter, never drawn; deforms bubbles and feeds every readback like any
-    // field. slope <= 0 disables. Main thread (params push with update()).
-    void setAmbientField(uint32 team, const glm::vec2& centerXZ, float safeRadius, float slope, float maxStrength)
-    {
-        m_params.ambientTeam = team;
-        m_params.ambientCenter = centerXZ;
-        m_params.ambientSafeRadius = safeRadius;
-        m_params.ambientSlope = slope;
-        m_params.ambientMaxStrength = maxStrength;
-    }
 
 private:
     friend class ForceEmitter;
@@ -287,7 +275,7 @@ private:
         float radiusScale = 1.0f;
         float coverScale = 0.85f;
         float coverMargin = 0.2f;    // metres added around the members' cover
-        float maxRadius = 4.0f;      // a group whose cover would exceed this refuses the member
+        float maxRadius = 8.0f;      // a group whose cover would exceed this refuses the member
         int maxMembers = 255;
         int minMembers = 2;          // smaller groups dissolve
         float sumFraction = 0.5f;    // group output = max(largest member, sum * fraction)

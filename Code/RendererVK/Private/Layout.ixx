@@ -107,16 +107,14 @@ export namespace RendererVKLayout
                                                     // pipelines/bakes rebuild to fit it
     constexpr uint32 MAX_FORCE_QUERIES = 1024;      // persistent gameplay point-query slots
                                                     // (structures; units read the baked field)
-    constexpr uint32 MAX_FORCE_BIG_EMITTERS = 64;   // reach above the tweak threshold bypasses the grid
     constexpr uint32 FORCE_SIM_GROUP_SIZE = 64;
 
     // ForceEmitterGpu::teamFlags.y bits.
     constexpr uint32 FORCE_FLAG_ACTIVE = 1u << 0;   // clear = destroyed/free slot: skipped everywhere
-    constexpr uint32 FORCE_FLAG_BIG = 1u << 1;      // reach above the threshold: global list, not the grid
     // Evaluated by force_emitter.cs for its OWN slot-indexed readback but contributes NO field: a
     // member of a merge group (Force library) whose field the group's emitter carries. Compacted
     // past fe_count (so every field evaluation and the grid insert never see it) and never drawn.
-    constexpr uint32 FORCE_FLAG_PASSIVE = 1u << 2;
+    constexpr uint32 FORCE_FLAG_PASSIVE = 1u << 1;
 
     // Force emitter hash grid (uniform 32 m cells, NOT camera-adaptive — gameplay queries happen
     // anywhere). Fixed per-cell emitter capacity; cells bump-allocate from the data buffer with the
@@ -141,17 +139,37 @@ export namespace RendererVKLayout
     };
     static_assert(sizeof(ForceEmitterGpu) == 64);
 
-    // GPU layout of the per-frame compacted emitter buffer: count header + big-emitter index list +
-    // live emitters (matches the buffer block force_field.inc.glsl declares). Big emitters (max
-    // directional reach above the tweak threshold) bypass the grid — every evaluation scans the big
-    // list linearly with a sphere reject, so a 300 m dome doesn't flood thousands of cells.
+    // The emitter's VISIBLE size: the bounding half-extent of its drawn (iso-shrunk) box — the
+    // actual bubble radius, not the authored Reach. CPU mirror of the shader's forceVisibleRadius
+    // (forceVisibleBounds + the teamFlags.w pack, force_field.inc.glsl — keep in sync). THE
+    // sampled-tier metric: the upload partition and the bake-volume fit classify with it, matching
+    // the shell FS / union ownership tests against u_forceBake0.w.
+    inline float forceEmitterVisibleRadius(const ForceEmitterGpu& e)
+    {
+        const float R = e.posReach.w;
+        const float m = glm::abs(1.0f - 2.0f * e.dirFocus.w);
+        float side = 0.5f * R * (1.0f + m) * e.outputParams.w * 1.03f;
+        float forward = R * 1.02f;
+        float back = R * 0.02f;
+        const uint32 p = e.teamFlags.w;
+        if (p != 0u)
+        {
+            const float lo = float(p & 0xFFu) * (1.0f / 255.0f);
+            const float hi = float((p >> 8u) & 0xFFu) * (1.0f / 255.0f);
+            side *= float(p >> 16u) * (1.0f / 65535.0f);
+            forward = R * glm::min(hi + 0.02f, 1.02f);
+            back = R * (0.02f - lo);
+        }
+        return glm::max(side, (forward + back) * 0.5f);
+    }
+
+    // GPU layout of the per-frame compacted emitter buffer: count header + live emitters (matches
+    // the buffer block force_field.inc.glsl declares).
     struct alignas(16) ForceEmittersGpu
     {
         uint32 count;     // field-contributing emitters (grid insert, every field evaluation)
-        uint32 bigCount;
         uint32 evalCount; // count + the PASSIVE tail: what force_emitter.cs evaluates
-        uint32 _pad1;
-        uint32 bigIndices[MAX_FORCE_BIG_EMITTERS]; // compact indices of grid-bypassing emitters
+        uint32 _pad0, _pad1;
         ForceEmitterGpu emitters[MAX_FORCE_EMITTERS];
     };
     constexpr size_t FORCE_EMITTER_HEADER_SIZE = sizeof(ForceEmittersGpu) - sizeof(ForceEmitterGpu) * MAX_FORCE_EMITTERS;
@@ -540,10 +558,7 @@ export namespace RendererVKLayout
                                 // z = contact wall alpha (interior equilibrium pane),
                                 // w = junction smoothing (smooth-max width as a fraction of iso)
         glm::vec4 forceParams4; // x = density debug view (0/1: heatmap of peak field along the ray),
-                                // y = density range (field value mapping to white),
-                                // z = ambient field slope (strength/m; <= 0 disables), w = ambient team
-        glm::vec4 forceParams5; // ambient field: xy = planar world center, z = safe radius (m),
-                                // w = max strength
+                                // y = density range (field value mapping to white), zw = unused
         glm::vec4 forceBake0;   // sampled shell tier: xyz = bake volume world min, w = the reach
                                 // threshold an emitter marches the volume at (see ForceFieldPipeline)
         glm::vec4 forceBake1;   // xyz = 1 / bake volume world size, w = tier enabled (0/1)

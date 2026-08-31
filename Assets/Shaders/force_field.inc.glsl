@@ -49,14 +49,13 @@ struct ForceEmitterData
     uvec4 teamFlags;   // x = team [0, MAX_FORCE_TEAMS), y = FORCE_FLAG_* bits, z = source slot (readback), w unused
 };
 
-// Matches RendererVKLayout::ForceEmittersGpu (header + big-emitter index list + compacted live emitters).
+// Matches RendererVKLayout::ForceEmittersGpu (header + compacted live emitters).
 layout (binding = FORCE_EMITTERS_BINDING, std430) readonly buffer ForceEmitters
 {
     // fe_count = field-contributing emitters; fe_evalCount = fe_count + the FORCE_FLAG_PASSIVE tail
     // (merge-group members that only want their own force/pressure readback — force_emitter.cs
     // evaluates them, nothing else ever sees them).
-    uint fe_count; uint fe_bigCount; uint fe_evalCount; uint fe_pad1;
-    uint fe_bigIndices[MAX_FORCE_BIG_EMITTERS];
+    uint fe_count; uint fe_evalCount; uint fe_pad0; uint fe_pad1;
     ForceEmitterData fe_emitters[];
 };
 
@@ -130,6 +129,18 @@ void forceVisibleBounds(ForceEmitterData e, out float side, out float forward, o
     back = R * (0.02 - lo); // lo > 0.02: negative back — the box starts in FRONT of the emitter
 }
 
+// The emitter's VISIBLE size: the bounding half-extent of its drawn (iso-shrunk) box — the actual
+// bubble radius, not the authored Reach (a drained or narrow emitter is much smaller than its
+// support; a merged group sphere's reach is ~2x its bubble). THE sampled-tier metric: the shell FS
+// and the union ownership test compare this against u_forceBake0.w, and the CPU mirrors it
+// (RendererVKLayout::forceEmitterVisibleRadius) for the upload partition + the bake-volume fit.
+float forceVisibleRadius(ForceEmitterData e)
+{
+    float side, forward, back;
+    forceVisibleBounds(e, side, forward, back);
+    return max(side, (forward + back) * 0.5);
+}
+
 // Orthonormal RIGHT-HANDED frame with +Z = dir (right x up == dir). Handedness is load-bearing: a
 // mirrored basis flips the proxy cube's winding, so front-face culling keeps the NEAR faces instead
 // of the far ones and the shell stops rasterizing entirely with the camera inside the box.
@@ -148,35 +159,16 @@ mat3 forceEmitterBasis(vec3 dir)
 
 #ifdef FORCE_GRID
 uint forceCandidateCell(vec3 x) { return forceFindCell(forceGridPos(x)); }
-uint forceNumCandidates(uint cell)
-{
-    return fe_bigCount + (cell != FORCE_INVALID_CELL ? forceCellCount(cell) : 0u);
-}
-uint forceCandidateIdx(uint cell, uint k)
-{
-    return k < fe_bigCount ? fe_bigIndices[k] : forceCellEmitter(cell, k - fe_bigCount);
-}
+uint forceNumCandidates(uint cell) { return cell != FORCE_INVALID_CELL ? forceCellCount(cell) : 0u; }
+uint forceCandidateIdx(uint cell, uint k) { return forceCellEmitter(cell, k); }
 #else
 uint forceCandidateCell(vec3 x) { return 0u; }
 uint forceNumCandidates(uint cell) { return fe_count; }
 uint forceCandidateIdx(uint cell, uint k) { return k; }
 #endif
 
-// GLOBAL AMBIENT FIELD (u_forceParams4.zw + u_forceParams5): an analytic distance-based term added
-// to one team everywhere — zero within the safe radius of the planar center, growing per metre,
-// capped. No emitter, no proxy, never drawn (the visible-field shading path sees it at zero
-// visibility); it deforms bubbles and feeds every readback like any other field. slope <= 0 = off.
-float forceAmbientField(vec3 x)
-{
-    const float slope = u_forceParams4.z;
-    if (slope <= 0.0)
-        return 0.0;
-    const float d = distance(x.xz, u_forceParams5.xy);
-    return clamp((d - u_forceParams5.z) * slope, 0.0, u_forceParams5.w);
-}
-
 // Per-team field accumulation at x, over the LIVE team count (NUM_FORCE_TEAMS). Team indices are
-// CPU-clamped below the live count at upload; the ambient team is clamped here (it is a raw tweak).
+// CPU-clamped below the live count at upload.
 // The Cell variant takes the point's grid cell PRE-RESOLVED: a march whose consecutive samples sit
 // in the same 16 m cell (the union march) pays the hash probe once per cell instead of per sample.
 void forceAccumulateCell(vec3 x, uint cell, out float phi[NUM_FORCE_TEAMS])
@@ -195,10 +187,6 @@ void forceAccumulateCell(vec3 x, uint cell, out float phi[NUM_FORCE_TEAMS])
         for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
             phi[t] += e.teamFlags.x == t ? c : 0.0;
     }
-    const uint ambientTeam = min(uint(u_forceParams4.w), NUM_FORCE_TEAMS - 1u);
-    const float ambient = forceAmbientField(x);
-    for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
-        phi[t] += t == ambientTeam ? ambient : 0.0;
 }
 
 void forceAccumulate(vec3 x, out float phi[NUM_FORCE_TEAMS])
@@ -230,10 +218,6 @@ void forceAccumulateVisible(vec3 x, out float phi[NUM_FORCE_TEAMS], out float ph
             phiVis[t] += e.teamFlags.x == t ? c * e.outputParams.y : 0.0;
         }
     }
-    const uint ambientTeam = min(uint(u_forceParams4.w), NUM_FORCE_TEAMS - 1u);
-    const float ambient = forceAmbientField(x); // invisible: shapes, never tints
-    for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
-        phi[t] += t == ambientTeam ? ambient : 0.0;
 }
 
 // C1 smooth max (k = blend width; 0 = hard max). Used for the surface's opposing bound so the

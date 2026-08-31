@@ -315,7 +315,6 @@ void ForceSystem::initialize()
     Tweak::boolean("Force", "Enabled", &m_params.enabled);
     Tweak::floatVar("Force", "Iso threshold", &m_params.isoThreshold, 0.01f, 2.0f);
     Tweak::intVar("Force", "March steps", &m_params.marchSteps, 8, 128);
-    Tweak::floatVar("Force", "Big reach threshold (m)", &m_params.bigReachThreshold, 8.0f, 512.0f, 1.0f);
     Tweak::boolean("Force", "Use grid", &m_params.useGrid); // off = brute force (A-B correctness check)
     Tweak::boolean("Force/Bake", "Enabled", &m_bakeEnabled);
     Tweak::floatVar("Force/Bake", "Sample height", &m_bakeSampleHeight, 0.0f, 10.0f, 0.1f);
@@ -325,7 +324,7 @@ void ForceSystem::initialize()
     // Draw culling/LOD (the field/readbacks of a culled shell stay live; desktop only):
     Tweak::floatVar("Force/Shell", "Min screen radius (px)", &m_params.minShellPixels, 0.0f, 50.0f, 0.5f);
     Tweak::floatVar("Force/Shell", "Full-detail radius (px)", &m_params.shellFullResPixels, 8.0f, 1024.0f, 4.0f);
-    Tweak::floatVar("Force/Shell", "Sampled tier reach (m)", &m_params.sampledShellReach, 0.0f, 100.0f, 1.0f);
+    Tweak::floatVar("Force/Shell", "Sampled tier radius (m)", &m_params.sampledShellRadius, 0.0f, 100.0f, 1.0f);
     Tweak::boolean("Force/Shell", "Union march", &m_params.unionMarch);
     Tweak::boolean("Force/Shell", "Union half res", &m_params.unionHalfRes); // rebuild-class (device idle)
     Tweak::boolean("Force/Shell", "Union jitter", &m_params.unionJitter);    // rebuild-class (shader define)
@@ -371,6 +370,7 @@ void ForceSystem::initialize()
     Tweak::boolean("Force/Debug", "Draw merge groups", &m_debugDrawGroups);
     Tweak::boolean("Force/Debug", "Draw queries", &m_debugDrawQueries);
     Tweak::boolean("Force/Debug", "Density view", &m_params.densityView);
+    Tweak::boolean("Force/Debug", "Log tier classification", &m_params.logTierDebug);
     Tweak::floatVar("Force/Debug", "Density range", &m_params.densityRange, 0.1f, 10.0f, 0.05f);
 }
 

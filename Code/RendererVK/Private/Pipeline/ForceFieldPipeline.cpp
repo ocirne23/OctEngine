@@ -2,6 +2,7 @@ module RendererVK;
 
 import Core;
 import Core.glm;
+import Core.Log;
 import File;
 import :ForceFieldPipeline;
 import :GraphicsPipeline;
@@ -587,7 +588,6 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
             vk::MemoryPropertyFlagBits::eHostVisible, false, "ForceEmitters", BufferHostAccess::eSequentialWrite);
         m_mappedEmitters[i] = m_emitterBuffers[i].mapMemory<ForceEmittersGpu>();
         m_mappedEmitters[i].data()->count = 0;
-        m_mappedEmitters[i].data()->bigCount = 0;
         m_mappedEmitters[i].data()->evalCount = 0;
         m_emitterBuffers[i].flushMappedMemory(FORCE_EMITTER_HEADER_SIZE);
 
@@ -708,7 +708,7 @@ void ForceFieldPipeline::reloadShaders(vk::RenderPass sceneRenderPass)
 
 void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu> slots,
     oc::span<const ForceQueryGpu> querySlots, oc::span<const glm::ivec4> bakeChunks,
-    float bakeSampleY, float bigReachThreshold, const ShellCull& shellCull)
+    float bakeSampleY, const ShellCull& shellCull)
 {
     // Would this shell's ray-march draw be visible? Mirrors forceEmitterBounds (the proxy's
     // bounding sphere): frustum test + projected-size floor. A culled shell still contributes
@@ -733,56 +733,60 @@ void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu>
         return radius * shellCull.pixelScale >= shellCull.minPixels * dist;
     };
     ForceEmittersGpu* dst = m_mappedEmitters[frameIdx].data();
-    uint32 count = 0;
-    uint32 bigCount = 0;
-    const auto compact = [&](const ForceEmitterGpu& e, uint32 slot, bool allowBig)
+    // ONE classification sweep: each ACTIVE slot is tested once (shellVisible once) and its index
+    // lands in a bucket; the compact buffer is then written bucket by bucket in partition order
+    // [SAMPLED-tier drawable | ANALYTIC drawable | non-drawn field | PASSIVE tail] — the union
+    // pass's interval draw covers exactly the analytic range via firstInstance (with the union
+    // OFF the proxy draw simply spans both drawable buckets), a culled/invisible shell still
+    // contributes field (`count`), and the PASSIVE tail (merge-group members that only want their
+    // own slot-indexed force/pressure readback) is seen by force_emitter.cs alone (`evalCount`).
+    for (oc::vector<uint32>& bucket : m_uploadBuckets)
+        bucket.clear();
+    for (uint32 slot = 0; slot < (uint32)slots.size(); ++slot)
     {
-        ForceEmitterGpu& out = dst->emitters[count];
-        out = e;
-        out.teamFlags.z = slot; // slot-indexed readback target
-        // Big emitters bypass the grid into the globally-scanned list; when the list is full the
-        // overflow inserts into the grid anyway (large footprint, but never a hole in the field).
-        const float maxReach = e.posReach.w; // Reach IS the max extent (the bubble spans the output line)
-        if (allowBig && maxReach > bigReachThreshold && bigCount < MAX_FORCE_BIG_EMITTERS)
-        {
-            out.teamFlags.y |= FORCE_FLAG_BIG;
-            dst->bigIndices[bigCount++] = count;
-        }
+        const ForceEmitterGpu& e = slots[slot];
+        if ((e.teamFlags.y & FORCE_FLAG_ACTIVE) == 0u)
+            continue;
+        uint32 bucket;
+        if ((e.teamFlags.y & FORCE_FLAG_PASSIVE) != 0u)
+            bucket = 3;
+        else if (e.outputParams.y > 0.0f && shellVisible(e))
+            bucket = forceEmitterVisibleRadius(e) >= shellCull.sampledRadius ? 0 : 1;
         else
-            out.teamFlags.y &= ~FORCE_FLAG_BIG;
-        ++count;
-    };
-    // Three-pass partition: drawable shells first so the shell draw's instanceCount can stop before
-    // the shellAlpha-0 emitters — an invisible world-scale emitter still contributes field (grid/
-    // field evaluations use `count`) but never costs its full-screen ray march — then the PASSIVE
-    // tail past `count`: merge-group members that only want their own slot-indexed force/pressure
-    // readback, seen by force_emitter.cs alone (`evalCount`).
-    const auto isActive = [&](uint32 slot) { return (slots[slot].teamFlags.y & FORCE_FLAG_ACTIVE) != 0u; };
-    const auto isPassive = [&](uint32 slot) { return (slots[slot].teamFlags.y & FORCE_FLAG_PASSIVE) != 0u; };
-    const auto isSampledTier = [&](const ForceEmitterGpu& e) { return e.posReach.w >= shellCull.sampledReach; };
-    // Drawable partition: SAMPLED-tier proxies first, ANALYTIC drawables second — the union pass's
-    // interval draw covers exactly the second range via firstInstance, and with the union pass OFF
-    // the proxy draw simply spans both.
-    for (uint32 slot = 0; slot < (uint32)slots.size(); ++slot)
-        if (isActive(slot) && !isPassive(slot) && slots[slot].outputParams.y > 0.0f
-            && shellVisible(slots[slot]) && isSampledTier(slots[slot]))
-            compact(slots[slot], slot, true);
-    const uint32 sampledDrawCount = count;
-    for (uint32 slot = 0; slot < (uint32)slots.size(); ++slot)
-        if (isActive(slot) && !isPassive(slot) && slots[slot].outputParams.y > 0.0f
-            && shellVisible(slots[slot]) && !isSampledTier(slots[slot]))
-            compact(slots[slot], slot, true);
-    const uint32 drawCount = count;
-    for (uint32 slot = 0; slot < (uint32)slots.size(); ++slot)
-        if (isActive(slot) && !isPassive(slot)
-            && (slots[slot].outputParams.y <= 0.0f || !shellVisible(slots[slot])))
-            compact(slots[slot], slot, true);
-    const uint32 fieldCount = count;
-    for (uint32 slot = 0; slot < (uint32)slots.size(); ++slot)
-        if (isActive(slot) && isPassive(slot))
-            compact(slots[slot], slot, false); // not a field: never in the big list either
+            bucket = 2;
+        m_uploadBuckets[bucket].push_back(slot);
+    }
+    uint32 count = 0;
+    for (const oc::vector<uint32>& bucket : m_uploadBuckets)
+        for (const uint32 slot : bucket)
+        {
+            ForceEmitterGpu& out = dst->emitters[count++];
+            out = slots[slot];
+            out.teamFlags.z = slot; // slot-indexed readback target
+        }
+    const uint32 sampledDrawCount = (uint32)m_uploadBuckets[0].size();
+    const uint32 drawCount = sampledDrawCount + (uint32)m_uploadBuckets[1].size();
+    const uint32 fieldCount = drawCount + (uint32)m_uploadBuckets[2].size();
+    if (shellCull.logTierDebug)
+    {
+        static uint32 s_logFrame = 0;
+        if (++s_logFrame % 60 == 0)
+        {
+            oc::string line = oc::format("Force tier (threshold {:.2f}): {} sampled / {} analytic",
+                shellCull.sampledRadius, sampledDrawCount, drawCount - sampledDrawCount);
+            uint32 listed = 0;
+            for (uint32 b = 0; b < 2; ++b)
+                for (const uint32 slot : m_uploadBuckets[b])
+                {
+                    if (++listed > 12)
+                        break;
+                    line += oc::format(" | reach {:.1f} r {:.2f} {}", slots[slot].posReach.w,
+                        forceEmitterVisibleRadius(slots[slot]), b == 0 ? "SMP" : "ANA");
+                }
+            Log::info(line);
+        }
+    }
     dst->count = fieldCount;
-    dst->bigCount = bigCount;
     dst->evalCount = count;
     m_emitterBuffers[frameIdx].flushMappedMemory(FORCE_EMITTER_HEADER_SIZE + count * sizeof(ForceEmitterGpu));
 

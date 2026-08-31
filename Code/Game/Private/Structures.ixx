@@ -13,8 +13,37 @@ import Force;
 // them: placement (grid/nodes/requests — the MP validation point), link management, production
 // (income, fuel burn, consumer drain, emitter ramps — iterating a PER-FRAME spatial query, the
 // same no-lists pattern the units use), the death sweep, per-team totals, mirrors and save/load.
-export enum class EStructureType : uint8 { Emitter, Generator, Connector, Extractor, Battery, FuelTank, Solar, Fabricator, Bastion, Lance, Barracks, BarracksBrute, BarracksRunner, BarracksSpitter, Wall, Turret, MineralSilo, Constructor, Base, Count };
-export constexpr int NumPlaceableStructures = 18; // everything but the Base (spawned, never placed)
+// SAVE FILES STORE Type AS AN INT: never remove or reorder values — new types APPEND before Count.
+// Connector is a RETIRED slot (range links are gone; cables are physical now): its table entries
+// remain, placement refuses it and loadFrom skips it.
+export enum class EStructureType : uint8 { Emitter, Generator, Connector, Extractor, Battery, FuelTank, Solar, Fabricator, Bastion, Lance, Barracks, BarracksBrute, BarracksRunner, BarracksSpitter, Wall, Turret, MineralSilo, Constructor, Base, CablePower, CablePipe, CableConveyor, Crossing, Count };
+
+// Placeable = anything a player may build. The Base only enters through spawnBase; the Connector
+// is retired.
+export constexpr bool isPlaceableType(EStructureType t)
+{
+    return (int)t < (int)EStructureType::Count
+        && t != EStructureType::Base && t != EStructureType::Connector;
+}
+// PHYSICAL CABLES: 1-cell grid segments, one type per medium. A contiguous same-medium run of
+// BUILT segments touching two buildings derives a GameStructureLink between them (see
+// rebuildDerivedLinks). The Crossing is a 1x3 oriented bridge: a perpendicular cable passes UNDER
+// its middle cell; it conducts whichever ONE medium its two ENDS resolve to.
+export constexpr bool isCableType(EStructureType t)
+{
+    return t == EStructureType::CablePower || t == EStructureType::CablePipe
+        || t == EStructureType::CableConveyor;
+}
+export constexpr bool isCableOrCrossing(EStructureType t)
+{
+    return isCableType(t) || t == EStructureType::Crossing;
+}
+export constexpr int cableMediumOf(EStructureType t) // 0 energy, 1 fuel, 2 minerals; -1 = not a cable
+{
+    return t == EStructureType::CablePower ? 0
+         : t == EStructureType::CablePipe ? 1
+         : t == EStructureType::CableConveyor ? 2 : -1;
+}
 
 export constexpr bool isBarracksType(EStructureType t)
 {
@@ -37,13 +66,6 @@ export constexpr bool hasShieldEmitter(EStructureType t)
 }
 
 export enum class ENodeType : uint8 { Mineral, Fuel };
-// Basic/Heavy carry ENERGY, Pipe carries FUEL, Conveyor carries MINERALS. The tier rides
-// GameStructureLink::cableTier; a link's medium decides which store pair it moves.
-export enum class ECableType : uint8 { Basic, Heavy, Pipe, Conveyor, Count };
-export constexpr int cableMedium(ECableType t) // 0 = energy, 1 = fuel, 2 = minerals
-{
-    return t == ECableType::Pipe ? 1 : t == ECableType::Conveyor ? 2 : 0;
-}
 
 export constexpr int GameMaxTeams = 8;
 
@@ -64,6 +86,13 @@ public:
         GameStructureComponent* state = nullptr;
         EStructureType type = EStructureType::Emitter;
         int nodeIndex = -1; // Extractor: the node under it
+        // Cable segments: the four render-only arm child entities (+X, -X, +Z, -Z), cached at
+        // spawn; rebuildDerivedLinks enables the ones pointing at a connected neighbour. The owning
+        // EntityPtr keeps the whole tree alive, so the raw pointers cannot dangle.
+        Entity* arms[4] = {};
+        // Crossing: the medium it currently conducts (-1 = inert), stamped by rebuildDerivedLinks;
+        // drives the tint (power/pipe/conveyor hue, authored gray while inert).
+        int8 conductMedium = -1;
     };
 
     // CO-OP hooks: the server runs the real sim and notifies; clients mirror via the mirror* calls
@@ -71,7 +100,9 @@ public:
     // fields are real).
     oc::function<void(int index)> onStructurePlaced;                       // server -> send GPl
     oc::function<void(uint32 id)> onStructureRemoved;                      // server -> send GRm
-    oc::function<void(uint32, uint32, ECableType, bool removed)> onCableChanged; // server -> GCb
+    // A blueprint completed (investMaterials): the server re-fires GPl for it — cable segments are
+    // excluded from GSt, so this is the only way a client learns a cable finished building.
+    oc::function<void(uint32 id)> onStructureBuilt;
     oc::function<void(uint32 id)> onRouteChanged;                          // server -> send GRt
     // Authority: re-push a changed route onto the barracks' live units. The unit roster lives in
     // NpcSystem (this partition cannot import it), so GameMatch wires the walk in.
@@ -80,7 +111,6 @@ public:
     void mirrorPlace(uint32 id, EStructureType type, const glm::vec3& pos, const glm::vec2& facingXZ,
         int nodeIndex, uint8 team, bool built);
     void mirrorRemove(uint32 id);
-    void mirrorCable(uint32 idA, uint32 idB, ECableType type, bool removed);
     void mirrorStructureState(uint32 id, float healthFrac, float chargeFrac, float fuelFrac,
         float mineralFrac, float outputFrac, float utilFrac, bool powered, bool blueprint);
     void mirrorRoute(uint32 id, oc::span<const glm::vec3> points);
@@ -99,10 +129,7 @@ public:
     }
     void tickMirror(float deltaSec); // client per-frame: refresh + ease emitter outputs
 
-    // Join replay iteration (server): every OWNED link as an id pair.
-    int cableTotal() const;
-    void cableAt(int i, uint32& idA, uint32& idB, ECableType& type) const;
-    glm::vec2 structureFacing(int index) const; // from the entity's rotation (Lance replay)
+    glm::vec2 structureFacing(int index) const; // from the entity's rotation (Lance/Crossing replay)
     int structureNodeIndex(int index) const { return m_frame[index].nodeIndex; }
     float structureOutputFrac(int index) const // union: the emitter variant (Base included)
     {
@@ -137,7 +164,6 @@ public:
     // Client requests / local input (queued; validated + applied in tickAuthority — the MP seam).
     void queuePlaceRequest(EStructureType type, const glm::vec3& groundPos, int nodeIndex,
         const glm::vec3& facing, uint8 team);
-    void queueCableRequest(uint32 idA, uint32 idB, ECableType type, uint8 team);
     void queueDemolishRequest(uint32 id, uint8 team);
     void queueRouteRequest(uint32 id, oc::span<const glm::vec3> points, uint8 team);
     static constexpr int MaxRouteWaypoints = GameStructureComponent::MaxRoutePoints;
@@ -180,15 +206,6 @@ public:
     uint8 structureTeam(int index) const { return (uint8)m_frame[index].state->team; }
     bool structureBlueprint(int index) const { return m_frame[index].state->blueprint; }
     bool structurePowered(int index) const { return m_frame[index].state->powered; }
-    // A pair may hold ONE LINK PER MEDIUM (power + pipe + conveyor side by side); medium -1 = any.
-    bool cableExists(uint32 idA, uint32 idB, int medium = -1) const;
-    ECableType cableTypeBetween(uint32 idA, uint32 idB) const;
-    // Valid NEW link of `type`: capacity in the medium on BOTH ends, within range (Connector ends
-    // reach "Connector link range"), and a Connector carries exactly ONE medium across its links.
-    bool cableAllowed(int indexA, int indexB, ECableType type, bool ignoreExisting = false) const;
-    // Smart connect: the medium to auto-link a pair with (Count = none valid) — connector's
-    // carried medium > the selected building's output > the first medium both hold.
-    ECableType smartLinkTypeFor(int indexA, int indexB) const;
 
     uint32 randomTargetStructureId(const glm::vec3& nearPos, uint8 attackerTeam) const;
     void damageStructure(uint32 id, float amount);
@@ -242,7 +259,6 @@ public:
         case EStructureType::Bastion:
         case EStructureType::Lance:
         case EStructureType::Extractor:
-        case EStructureType::Connector:
         case EStructureType::Solar:
         case EStructureType::Fabricator:
         case EStructureType::Constructor:
@@ -256,12 +272,7 @@ public:
     }
     float structureFuel(int index) const { return m_frame[index].state->store[1]; }
     float structureFuelCapacity(int index) const { return fuelCapacityOf(m_frame[index].type); }
-    float connectorUtilization(int index) const { return m_frame[index].state->flowUtil; }
-    int connectorMedium(int index) const // the ONE medium this connector carries (-1 = no links)
-    {
-        const oc::vector<GameStructureLink>& links = m_frame[index].state->links;
-        return links.empty() ? -1 : (int)links.front().medium;
-    }
+    float structureFlowUtil(int index) const { return m_frame[index].state->flowUtil; }
     float structureMinerals(int index) const { return m_frame[index].state->store[2]; }
     float structureMineralCapacity(int index) const { return mineralCapacityOf(m_frame[index].type); }
     float fuelCapacityOf(EStructureType t) const
@@ -271,8 +282,7 @@ public:
         case EStructureType::Generator:  return m_generatorFuelTank;
         case EStructureType::FuelTank:   return m_fuelTankCapacity;
         case EStructureType::Extractor:
-        case EStructureType::Fabricator:
-        case EStructureType::Connector:  return m_internalBuffer;
+        case EStructureType::Fabricator: return m_internalBuffer;
         default:                         return 0.0f;
         }
     }
@@ -282,7 +292,6 @@ public:
         {
         case EStructureType::Extractor:
         case EStructureType::Fabricator:
-        case EStructureType::Connector:
         case EStructureType::Constructor:  return m_internalBuffer;
         case EStructureType::Barracks:     // conveyor-fed: units are SPAWNED from materials
         case EStructureType::BarracksBrute:
@@ -305,7 +314,6 @@ public:
              : t == EStructureType::Lance ? m_lanceReach
              : t == EStructureType::Base ? m_baseShieldReach : m_emitterReach;
     }
-    float cableRange() const { return m_cableRange; }
     float placeRange() const { return m_placeRange; }
 
     // ---- GRID PLACEMENT --------------------------------------------------------------------
@@ -326,11 +334,17 @@ public:
         case EStructureType::BarracksRunner:
         case EStructureType::BarracksSpitter:
         case EStructureType::Base:        return 3;
-        default:                          return 1;
-        }
+        default:                          return 1; // cables/crossing included (Crossing extends
+        }                                           // along its facing — see footprintExtent)
     }
+    // Cells covered along X and Z. Everything is square except the Crossing: 3x1 along its facing
+    // (the entity rotation, quantized to an axis at placement).
+    static glm::ivec2 footprintExtent(EStructureType t, const glm::quat& rot);
     static glm::vec3 snapToGrid(EStructureType type, const glm::vec3& groundPos);
-    bool cellsFree(EStructureType type, const glm::vec3& snappedGroundPos) const;
+    // ignoreCables: the unit-spawn probe — cables are walk-through, so a conveyor ring around a
+    // barracks must not block its spawn points.
+    bool cellsFree(EStructureType type, const glm::vec3& snappedGroundPos,
+        const glm::quat& rot = glm::quat(1.0f, 0.0f, 0.0f, 0.0f), bool ignoreCables = false) const;
     static float spawnHeightOf(EStructureType type); // the prefab box's HALF height (ghost preview)
     // A player capsule or unit standing on the footprint (spatial query — no rosters). Separate
     // from cellsFree on purpose: that one also probes unit SPAWN points, which must not refuse a
@@ -366,12 +380,6 @@ private:
         int nodeIndex = -1;
         uint8 team = 0;
     };
-    struct CableRequest
-    {
-        uint32 idA = 0, idB = 0;
-        ECableType type = ECableType::Basic;
-        uint8 team = 0;
-    };
     struct RouteRequest
     {
         uint32 id = 0;
@@ -395,12 +403,54 @@ private:
     void destroyStructureAt(size_t index); // deregister (removeStructureBookkeeping) + drop the world's ref
     void removeStructureBookkeeping(size_t index); // unlink, free the node, erase + reindex, fire GRm
     void applyStructureTint(const Ref& s);
-    void applyCableRequest(uint32 idA, uint32 idB, ECableType type, uint8 team);
     void applyDemolishRequest(uint32 id, uint8 team);
     void stampTuning(const Ref& s); // capacity/band per medium (per tick — tweaks stay live)
     void tickProduction(float deltaSec); // income, fuel burn, consumer drain, emitter ramps
     void tickDamage(float deltaSec);     // death sweep + strainable marks
     void tickConstructors(float deltaSec);
+
+    // ---- CELL OCCUPANCY + DERIVED LINKS ----------------------------------------------------
+    // One entry per occupied grid cell. `id` is the primary occupant; `underId` is set only on a
+    // Crossing's MIDDLE cell — the perpendicular cable passing under it.
+    struct CellEntry
+    {
+        uint32 id = 0;
+        uint32 underId = 0;
+    };
+    static uint64 cellKey(int cx, int cz) { return (uint64)(uint32)cx << 32 | (uint32)cz; }
+    // Visit every (cx, cz) cell of a footprint at the snapped position.
+    template <typename Fn>
+    static void forEachFootprintCell(EStructureType type, const glm::vec3& pos, const glm::quat& rot,
+        Fn&& fn)
+    {
+        const glm::ivec2 ext = footprintExtent(type, rot);
+        const int bx = (int)std::lround(pos.x / GridCellSize - (float)ext.x * 0.5f);
+        const int bz = (int)std::lround(pos.z / GridCellSize - (float)ext.y * 0.5f);
+        for (int dz = 0; dz < ext.y; ++dz)
+            for (int dx = 0; dx < ext.x; ++dx)
+                fn(bx + dx, bz + dz);
+    }
+    void insertCells(const Ref& s);   // spawn seam (also demotes an under-cable below a crossing)
+    void eraseCells(const Ref& s);    // remove seam (promotes the under-cable back to primary)
+    // The BUILT cable segment occupying a cell: the primary occupant, or the under-cable when a
+    // crossing sits on top (which is what keeps a crossing from unioning with the cable under it).
+    int cableSegmentAt(int cx, int cz, bool builtOnly = true) const;
+    // Rebuild every GameStructureLink from cable adjacency (dirty-gated; main thread, game tick):
+    // union-find over built segments, crossing conduction, building attachment, then a diff
+    // against the live links (owner = lower structureId, so a rebuild never flips flow state).
+    // Also refreshes the run table (draw) and the segments' arm visuals.
+    void rebuildDerivedLinks();
+    void updateArms(const Ref& s); // enable the arm children pointing at connected neighbours
+
+    struct CableRun // persistent between rebuilds for drawDebug (ids — indices go stale)
+    {
+        uint8 medium = 0;
+        oc::vector<uint32> segmentIds;  // cable segments + conducting crossings of the run
+        oc::vector<uint32> buildingIds; // attached structures (capacity in the medium)
+    };
+    oc::unordered_map<uint64, CellEntry> m_cells;
+    oc::vector<CableRun> m_runs;
+    bool m_linksDirty = true;
     float emitterOutputOf(EStructureType t) const
     {
         return t == EStructureType::Bastion ? m_bastionOutput
@@ -418,7 +468,6 @@ private:
     oc::unordered_map<uint32, int> m_byId;   // stable id -> roster index (maintained with it)
     oc::vector<Node> m_nodes;
     oc::vector<PlaceRequest> m_requests;
-    oc::vector<CableRequest> m_cableRequests;
     oc::vector<oc::pair<uint32, uint8>> m_demolishRequests;
     oc::vector<RouteRequest> m_routeRequests;
     uint32 m_nextStructureId = 1; // 0 = invalid
@@ -435,11 +484,11 @@ private:
     float m_useRateTotal = 0.0f;
 
     // Tweaks (all Synced — the server's values rule)
-    float m_costs[18] = { // indexed by EStructureType (the 18 placeables; the Base is free)
+    float m_costs[(int)EStructureType::Count] = { // indexed by EStructureType (Base/Connector free)
         30.0f, // Emitter
-        50.0f, // Generator
-        20.0f, // Connector
-        30.0f, // Extractor
+        40.0f, // Generator
+        0.0f,  // Connector (retired)
+        25.0f, // Extractor
         40.0f, // Battery
         30.0f, // FuelTank
         20.0f, // Solar
@@ -452,23 +501,26 @@ private:
         200.0f, // BarracksSpitter
         5.0f,  // Wall (per segment)
         75.0f, // Turret
-        30.0f, // MineralSilo
+        25.0f, // MineralSilo
         50.0f, // Constructor
+        0.0f,  // Base (spawned, never placed)
+        2.0f,  // CablePower (per segment)
+        2.0f,  // CablePipe
+        2.0f,  // CableConveyor
+        6.0f,  // Crossing
     };
     float m_startMinerals = 100.0f;
     float m_extractorSnapRadius = 6.0f;
     float m_mineralRate = 2.0f;
     float m_fuelRate = 1.5f;
     float m_baseIncomeMult = 0.25f;
-    float m_cableRange = 18.0f;
-    float m_connectorRange = 32.0f;
     float m_placeRange = 30.0f;
-    float m_cableThroughput[(int)ECableType::Count] = { 
-        5.0f,  // Basic
-        20.0f, // Heavy
-        4.0f,  // Pipe
-        4.0f   // Conveyor
+    float m_cableThroughput[3] = { // by MEDIUM (no tiers any more)
+        10.0f,  // energy
+        4.0f,  // fuel
+        4.0f   // minerals
     };
+    float m_cableHealthMax = 40.0f; // segments/crossings are softer than buildings
     float m_internalBuffer = 10.0f;
     float m_generatorBuffer = 10.0f;
     float m_batteryCapacity = 100.0f;
@@ -511,7 +563,7 @@ private:
     float m_emitterRestartCharge = 6.0f;
 
     float m_structureHealthMax = 100.0f;
-    float m_constructorRange = 18.0f;
+    float m_constructorRange = 27.0f;
     float m_constructorBuildRate = 4.0f;
     float m_constructorBoostRate = 0.5f;
     float m_constructorBoostMaterials = 1.0f;

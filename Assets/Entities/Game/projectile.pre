@@ -10,6 +10,7 @@ Prefab gameProjectile
 		Scale 0.2
 	Component Physics
 		Body Dynamic
+		Layer Projectile
 		Shape Sphere
 		Radius 0.2
 		Density 400

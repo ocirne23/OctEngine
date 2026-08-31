@@ -1,0 +1,66 @@
+# Conveyor segment: one 2 m grid cell of the MINERAL medium. Physical + damageable, but
+# players/units walk OVER it: Layer Cable collides only with Projectile. The hub renders always;
+# the four arm children are enabled by StructureSystem::updateArms toward connected neighbours.
+# Cylinder2 = a 2-high cylinder with the origin at its center; arm scale 0.28 keeps the pieces
+# slim. Spawned origin 0.25 above ground.
+Prefab gameCableConveyor
+	Component Render
+		ObjectContainer baseshapes
+		Node Cylinder2
+		Type StaticMesh
+		Color 0.35 0.5 1
+		Scale 0.3
+	Component Physics
+		Body Static
+		ContactEvents true
+		Layer Cable
+		CollidesWith Projectile
+		Shape Box
+		HalfExtents 1 0.25 1
+	Component GameStructure
+		MeleeRadius 1
+	Component Scene
+		Entity
+			Name ArmPX
+			Enabled false
+			Position 0.5 0 0
+			Rotation 0 0 90
+			Component Render
+				ObjectContainer baseshapes
+				Node Cylinder2
+				Type StaticMesh
+				Color 0.35 0.5 1
+				Scale 0.28
+		Entity
+			Name ArmNX
+			Enabled false
+			Position -0.5 0 0
+			Rotation 0 0 90
+			Component Render
+				ObjectContainer baseshapes
+				Node Cylinder2
+				Type StaticMesh
+				Color 0.35 0.5 1
+				Scale 0.28
+		Entity
+			Name ArmPZ
+			Enabled false
+			Position 0 0 0.5
+			Rotation 90 0 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Cylinder2
+				Type StaticMesh
+				Color 0.35 0.5 1
+				Scale 0.28
+		Entity
+			Name ArmNZ
+			Enabled false
+			Position 0 0 -0.5
+			Rotation 90 0 0
+			Component Render
+				ObjectContainer baseshapes
+				Node Cylinder2
+				Type StaticMesh
+				Color 0.35 0.5 1
+				Scale 0.28

@@ -36,25 +36,21 @@ static constexpr SDL_Scancode c_gridKeys[c_gridSlots] = {
     SDL_Scancode::SDL_SCANCODE_Z, SDL_Scancode::SDL_SCANCODE_X, SDL_Scancode::SDL_SCANCODE_C, SDL_Scancode::SDL_SCANCODE_V,
 };
 static constexpr oc::string_view c_gridKeyLabels[c_gridSlots] = { "Q", "W", "E", "R", "A", "S", "D", "F", "Z", "X", "C", "V" };
-// Root page slots: the two category pages, the two LINK TOOLS (armed directly — they need no
-// page of their own), Delete.
-static constexpr int c_rootConnectSlot = 2;    // E
-static constexpr int c_rootDisconnectSlot = 6; // D
-static constexpr int c_rootUpgradeSlot = 7;    // F
+// Root page slots: the three category pages (Q/W/E) and Delete.
 static constexpr int c_rootDeleteSlot = 9;     // X
 static constexpr int c_cancelSlot = 10;        // C: one level back (armed item -> disarm; else -> Select), like Esc
 static constexpr int c_pageBackSlot = 11;      // V: straight back to Select
-static constexpr int c_numCategories = 2;
-static constexpr const char* c_buildCategories[c_numCategories] = { "CMBT", "PROD" };      // slot captions
-static constexpr const char* c_buildCategoryNames[c_numCategories] = { "Combat", "Production" }; // log prose
+static constexpr int c_numCategories = 3;
+static constexpr const char* c_buildCategories[c_numCategories] = { "CMBT", "PROD", "CBLE" };      // slot captions
+static constexpr const char* c_buildCategoryNames[c_numCategories] = { "Combat", "Production", "Cables" }; // log prose
 // 3-5 char shorthands, indexed by EStructureType — the SAME vocabulary the world tag over a
 // building uses, so a hotbar slot and the thing it builds read identically.
 static constexpr const char* c_structureShortNames[] = { "EMIT", "GEN", "CON", "EXTR", "BATT",
     "FUEL", "SOL", "FAB", "BSTN", "LNC", "BRK", "BRK-B", "BRK-R", "BRK-S", "WALL", "TRT", "SILO",
-    "CNST", "BASE" };
+    "CNST", "BASE", "CBL-P", "CBL-F", "CBL-M", "CRSS" };
 static_assert(oc::size(c_structureShortNames) == (size_t)EStructureType::Count);
 // A category page is just its list of placeable types — the shorthand table above IS each slot's
-// caption, and the two link TOOLS live on the root page (Link mode), not inside a page.
+// caption.
 static constexpr EStructureType c_combatItems[] = {
     EStructureType::Emitter,
     EStructureType::Bastion,
@@ -68,19 +64,25 @@ static constexpr EStructureType c_combatItems[] = {
 };
 static constexpr float c_wallSegmentSpacing = 2.0f; // one segment per box width along the line
 static constexpr int c_wallMaxSegments = 16;
-// Everything that is not a weapon: generation, extraction and the distribution buildings (the old
-// separate Distribution page is gone — the three link TOOLS, creation included, sit on the root
-// page as two-click tools).
+static constexpr int c_cableMaxSegments = 32; // one L-line / paint-fill placement burst cap
+// Everything that is not a weapon: generation, extraction and the distribution buildings.
 static constexpr EStructureType c_productionItems[] = {
     EStructureType::Generator,
     EStructureType::Solar,
     EStructureType::Extractor,
     EStructureType::Fabricator,
     EStructureType::Constructor,
-    EStructureType::Connector,
     EStructureType::Battery,
     EStructureType::FuelTank,
     EStructureType::MineralSilo,
+};
+// PHYSICAL cables: one segment type per medium + the 1x3 crossing bridge. Placement paints or
+// draws L-lines (see updateCablePlacement); connections derive from cell adjacency.
+static constexpr EStructureType c_cableItems[] = {
+    EStructureType::CablePower,
+    EStructureType::CablePipe,
+    EStructureType::CableConveyor,
+    EStructureType::Crossing,
 };
 static oc::span<const EStructureType> buildCategoryItems(int category)
 {
@@ -88,6 +90,7 @@ static oc::span<const EStructureType> buildCategoryItems(int category)
     {
     case 0: return c_combatItems;
     case 1: return c_productionItems;
+    case 2: return c_cableItems;
     default: return {};
     }
 }
@@ -113,15 +116,16 @@ static void drawCircle(const glm::vec3& center, float radius, uint32 color, int 
 // GHOST: the exact box the structure will occupy — footprint square × the prefab's height, drawn
 // as a wireframe at the snapped position (every whitebox building IS a box, so this is the real
 // shape, not an approximation), plus the interior cell lines so the grid it takes is unambiguous.
-static void drawStructureGhost(EStructureType type, const glm::vec3& groundPos, uint32 color)
+static void drawStructureGhostExtent(EStructureType type, const glm::vec3& groundPos, uint32 color,
+    const glm::ivec2& ext)
 {
-    const int cells = StructureSystem::footprintCellsOf(type);
-    const float half = cells * StructureSystem::GridCellSize * 0.5f;
+    const glm::vec2 half(ext.x * StructureSystem::GridCellSize * 0.5f,
+                         ext.y * StructureSystem::GridCellSize * 0.5f);
     const float height = StructureSystem::spawnHeightOf(type) * 2.0f;
     const glm::vec3 c(groundPos.x, 0.0f, groundPos.z);
     const glm::vec3 corner[4] = {
-        c + glm::vec3(-half, 0.0f, -half), c + glm::vec3(half, 0.0f, -half),
-        c + glm::vec3(half, 0.0f, half),   c + glm::vec3(-half, 0.0f, half) };
+        c + glm::vec3(-half.x, 0.0f, -half.y), c + glm::vec3(half.x, 0.0f, -half.y),
+        c + glm::vec3(half.x, 0.0f, half.y),   c + glm::vec3(-half.x, 0.0f, half.y) };
     const glm::vec3 up(0.0f, height, 0.0f);
     for (int i = 0; i < 4; ++i)
     {
@@ -131,12 +135,22 @@ static void drawStructureGhost(EStructureType type, const glm::vec3& groundPos, 
         Globals::rendererVK.addDebugLine(a + up, b + up, color);       // top
         Globals::rendererVK.addDebugLine(a, a + up, color);            // riser
     }
-    for (int i = 1; i < cells; ++i) // interior grid: which cells are taken
+    for (int i = 1; i < ext.x; ++i) // interior grid: which cells are taken
     {
-        const float o = -half + i * StructureSystem::GridCellSize;
-        Globals::rendererVK.addDebugLine(c + glm::vec3(o, 0.0f, -half), c + glm::vec3(o, 0.0f, half), color);
-        Globals::rendererVK.addDebugLine(c + glm::vec3(-half, 0.0f, o), c + glm::vec3(half, 0.0f, o), color);
+        const float o = -half.x + i * StructureSystem::GridCellSize;
+        Globals::rendererVK.addDebugLine(c + glm::vec3(o, 0.0f, -half.y), c + glm::vec3(o, 0.0f, half.y), color);
     }
+    for (int i = 1; i < ext.y; ++i)
+    {
+        const float o = -half.y + i * StructureSystem::GridCellSize;
+        Globals::rendererVK.addDebugLine(c + glm::vec3(-half.x, 0.0f, o), c + glm::vec3(half.x, 0.0f, o), color);
+    }
+}
+
+static void drawStructureGhost(EStructureType type, const glm::vec3& groundPos, uint32 color)
+{
+    drawStructureGhostExtent(type, groundPos, color,
+        glm::ivec2(StructureSystem::footprintCellsOf(type)));
 }
 
 // The PVP arena: a walled corridor along X — combat funnels through the middle.
@@ -306,9 +320,12 @@ void GameMatch::spawnWorld()
             writer.write<uint32>(id);
             Globals::networkManager.fireNetworkEvent("GRm", writer.data());
         };
-        m_structures.onCableChanged = [this](uint32 a, uint32 b, ECableType t, bool removed)
+        // A completed blueprint re-fires GPl: cables sit outside the GSt stat sync, so this is the
+        // only way a client learns a segment finished building (mirrorPlace applies it idempotently).
+        m_structures.onStructureBuilt = [this](uint32 id)
         {
-            sendCableChanged(a, b, t, removed);
+            if (const int index = m_structures.structureIndexById(id); index >= 0)
+                sendStructurePlaced(index);
         };
         m_structures.onRouteChanged = [this](uint32 id)
         {
@@ -368,10 +385,10 @@ void GameMatch::spawnWorld()
     m_buildCategory = -1;
     refreshBuildHotbar();
 
-    Log::info("Game mode: SELECT by default (click inspects, RMB smart-connects / sets barracks routes "
-              "/ moves the player). Grid hotkeys QWER/ASDF/ZXCV or click the slots: Q/W = build "
-              "categories, D/F = disconnect/upgrade, X = delete, C = cancel. Build powered Emitters "
-              "to hold ground");
+    Log::info("Game mode: SELECT by default (click inspects, RMB sets barracks routes / moves the "
+              "player). Grid hotkeys QWER/ASDF/ZXCV or click the slots: Q/W/E = build categories "
+              "(Combat/Production/Cables), X = delete, C = cancel. Cables are physical: paint or "
+              "two-click a run between buildings to connect them");
     if (m_coop)
         Log::info("CO-OP: defend the central Base — swarm waves attack periodically, and the map "
                   "is crawling with scattered enemies to clear as you expand");
@@ -588,11 +605,8 @@ void GameMatch::tickCoopSpawns()
             }
         }
         m_ambientPendingBudget -= waveCostOf(type);
-        Entity* unit = m_npcs.spawnLooseUnit(m_structures,
+        m_npcs.spawnLooseUnit(m_structures,
             glm::vec3(std::cos(a) * r, 1.0f, std::sin(a) * r), CoopAiTeam, type);
-        if (unit)
-            if (GameUnitComponent* u = getComponent<GameUnitComponent>(unit))
-                u->ambient = true;
     }
 }
 
@@ -700,17 +714,11 @@ void GameMatch::onClientJoined(uint32 clientId)
         m_clientPlayers[clientId] = oc::move(player);
         Log::info("Game: client " + oc::to_string(clientId) + " assigned team " + oc::to_string(team));
     }
-    // World-state replay for the late joiner: every structure + cable, broadcast (mirrorPlace/
-    // mirrorCable are idempotent, so already-connected clients shrug the duplicates off).
+    // World-state replay for the late joiner: every structure, broadcast (mirrorPlace is
+    // idempotent, so already-connected clients shrug the duplicates off). Links need no replay —
+    // each client derives them locally from the mirrored cable segments.
     for (int i = 0; i < m_structures.structureCount(); ++i)
         sendStructurePlaced(i);
-    uint32 idA, idB;
-    ECableType type;
-    for (int i = 0; i < m_structures.cableTotal(); ++i)
-    {
-        m_structures.cableAt(i, idA, idB, type);
-        sendCableChanged(idA, idB, type, false);
-    }
     for (int i = 0; i < m_structures.structureCount(); ++i)
         if (!m_structures.structureRoute(i).empty())
             sendRoute(i); // barracks waypoint routes replay too
@@ -744,17 +752,6 @@ void GameMatch::sendStructurePlaced(int index)
     writer.write<uint8>(m_structures.structureTeam(index));
     writer.write<uint8>(m_structures.structureBlueprint(index) ? 0u : 1u); // built flag (Base replay)
     Globals::networkManager.fireNetworkEvent("GPl", writer.data());
-}
-
-void GameMatch::sendCableChanged(uint32 idA, uint32 idB, ECableType type, bool removed)
-{
-    uint8 buffer[16];
-    NetWriter writer(buffer);
-    writer.write<uint32>(idA);
-    writer.write<uint32>(idB);
-    writer.write<uint8>((uint8)type);
-    writer.write<uint8>(removed ? 1u : 0u);
-    Globals::networkManager.fireNetworkEvent("GCb", writer.data());
 }
 
 void GameMatch::sendRoute(int index)
@@ -813,7 +810,6 @@ void GameMatch::loadGame(oc::string_view path)
     m_structures.loadFrom(root);
     m_npcs.loadUnits(root, m_structures);
     m_selectedId = 0;
-    m_cablePendingId = 0;
     if (m_isServer)
     {
         for (int i = 0; i < m_structures.structureCount(); ++i)
@@ -822,13 +818,7 @@ void GameMatch::loadGame(oc::string_view path)
             if (!m_structures.structureRoute(i).empty())
                 sendRoute(i);
         }
-        for (int c = 0; c < m_structures.cableTotal(); ++c)
-        {
-            uint32 idA, idB;
-            ECableType type;
-            m_structures.cableAt(c, idA, idB, type);
-            sendCableChanged(idA, idB, type, false);
-        }
+        // (No cable replay: clients re-derive links from the mirrored segments.)
     }
 }
 
@@ -866,20 +856,27 @@ void GameMatch::sendStats()
     writer.write<float>(m_structures.gridEnergyCapacity());
     writer.write<float>(m_structures.energyGenPerSec());
     writer.write<float>(m_structures.energyUsePerSec());
-    const int count = glm::min(m_structures.structureCount(), 79); // 11B each + the 146B header
-                                                                   // stays under the 1024B event cap
+    // CABLE SEGMENTS are excluded: they carry no stores, hundreds of them would blow the 79-record
+    // cap, and their built flip mirrors through the GPl re-send instead (onStructureBuilt).
+    constexpr int c_maxRecords = 79; // 11B each + the 146B header stays under the 1024B event cap
+    int indices[c_maxRecords];
+    int count = 0;
+    for (int i = 0; i < m_structures.structureCount() && count < c_maxRecords; ++i)
+        if (!isCableOrCrossing(m_structures.structureType(i)))
+            indices[count++] = i;
     writer.write<uint16>((uint16)count);
     const auto frac8 = [](float v, float max) {
         return (uint8)glm::clamp(max > 0.0f ? v / max * 255.0f : 0.0f, 0.0f, 255.0f); };
-    for (int i = 0; i < count; ++i)
+    for (int k = 0; k < count; ++k)
     {
+        const int i = indices[k];
         writer.write<uint32>(m_structures.structureId(i));
         writer.write<uint8>(frac8(m_structures.structureHealth(i), m_structures.structureHealthMax()));
         writer.write<uint8>(frac8(m_structures.structureCharge(i), m_structures.structureCapacity(i)));
         writer.write<uint8>(frac8(m_structures.structureFuel(i), m_structures.structureFuelCapacity(i)));
         writer.write<uint8>(frac8(m_structures.structureMinerals(i), m_structures.structureMineralCapacity(i)));
         writer.write<uint8>(frac8(m_structures.structureOutputFrac(i), 1.0f));
-        writer.write<uint8>(frac8(m_structures.connectorUtilization(i), 1.0f));
+        writer.write<uint8>(frac8(m_structures.structureFlowUtil(i), 1.0f));
         writer.write<uint8>((uint8)((m_structures.structurePowered(i) ? 1u : 0u)
             | (m_structures.structureBlueprint(i) ? 2u : 0u))); // status bits (health IS progress)
     }
@@ -914,15 +911,6 @@ void GameMatch::handleNetEvent(oc::string_view name)
             const uint32 id = reader.read<uint32>();
             if (!reader.overflowed())
                 m_structures.mirrorRemove(id);
-        }
-        else if (name == "GCb")
-        {
-            const uint32 idA = reader.read<uint32>();
-            const uint32 idB = reader.read<uint32>();
-            const uint8 type = reader.read<uint8>();
-            const uint8 removed = reader.read<uint8>();
-            if (!reader.overflowed() && type < (uint8)ECableType::Count)
-                m_structures.mirrorCable(idA, idB, (ECableType)type, removed != 0);
         }
         else if (name == "GSt")
         {
@@ -1000,17 +988,9 @@ void GameMatch::handleNetEvent(oc::string_view name)
         const float x = reader.read<float>(), z = reader.read<float>();
         const int16 nodeIndex = reader.read<int16>();
         const float fx = reader.read<float>(), fz = reader.read<float>();
-        if (!reader.overflowed() && type < NumPlaceableStructures)
+        if (!reader.overflowed() && isPlaceableType((EStructureType)type))
             m_structures.queuePlaceRequest((EStructureType)type, glm::vec3(x, 0.0f, z), nodeIndex,
                 glm::vec3(fx, 0.0f, fz), requestTeam(sender));
-    }
-    else if (name == "GqC")
-    {
-        const uint32 idA = reader.read<uint32>();
-        const uint32 idB = reader.read<uint32>();
-        const uint8 type = reader.read<uint8>();
-        if (!reader.overflowed() && type < (uint8)ECableType::Count)
-            m_structures.queueCableRequest(idA, idB, (ECableType)type, requestTeam(sender));
     }
     else if (name == "GqD")
     {
@@ -1188,6 +1168,10 @@ void GameMatch::feedNav()
         v.clear();
     for (const StructureSystem::Ref& s : m_structures.structures())
     {
+        // Cables/crossings are WALK-THROUGH: no nav obstacle (units path straight over them) and
+        // never a NavSource (enemies do not march at power lines).
+        if (isCableOrCrossing(s.type))
+            continue;
         const float half = StructureSystem::footprintCellsOf(s.type) * StructureSystem::GridCellSize * 0.5f;
         const glm::vec2 c(s.entity->pos.x, s.entity->pos.z);
         m_navObstacles.push_back(Nav::NavObstacle{ c - half, c + half });
@@ -1253,21 +1237,6 @@ void GameMatch::requestPlace(EStructureType type, const glm::vec3& pos, int node
     writer.write<float>(facing.x);
     writer.write<float>(facing.z);
     Globals::networkManager.fireNetworkEvent("GqP", writer.data());
-}
-
-void GameMatch::requestCable(uint32 idA, uint32 idB, ECableType type)
-{
-    if (!m_isClient)
-    {
-        m_structures.queueCableRequest(idA, idB, type, (uint8)m_team);
-        return;
-    }
-    uint8 buffer[16];
-    NetWriter writer(buffer);
-    writer.write<uint32>(idA);
-    writer.write<uint32>(idB);
-    writer.write<uint8>((uint8)type);
-    Globals::networkManager.fireNetworkEvent("GqC", writer.data());
 }
 
 void GameMatch::requestDemolish(uint32 id)
@@ -1351,15 +1320,8 @@ void GameMatch::refreshBuildHotbar()
     {
         for (int i = 0; i < c_numCategories; ++i)
             hud.setSlot(i, c_buildCategories[i], 0);
-        hud.setSlot(c_rootConnectSlot, "CONN", 0);
-        hud.setSlot(c_rootDisconnectSlot, "DISC", 0);
-        hud.setSlot(c_rootUpgradeSlot, "UPGR", 0);
         hud.setSlot(c_rootDeleteSlot, "DEL", 0);
-        hud.selectSlot(m_mode == EPlayerMode::Delete ? c_rootDeleteSlot
-            : m_mode == EPlayerMode::Link
-                ? (m_linkTool == EBuildTool::Connect ? c_rootConnectSlot
-                    : m_linkTool == EBuildTool::Disconnect ? c_rootDisconnectSlot : c_rootUpgradeSlot)
-                : -1);
+        hud.selectSlot(m_mode == EPlayerMode::Delete ? c_rootDeleteSlot : -1);
         return;
     }
     const oc::span<const EStructureType> items = buildCategoryItems(m_buildCategory);
@@ -1376,10 +1338,11 @@ void GameMatch::setMode(EPlayerMode mode)
     if (m_mode == mode)
         return;
     m_mode = mode;
-    m_cablePendingId = 0;
     m_selectedId = 0;
     m_lanceAiming = false;
     m_wallPlacing = false;
+    m_cablePainting = false;
+    m_cableLinePending = false;
     m_buildSelection = -1;
     if (mode != EPlayerMode::Build)
         m_buildCategory = -1; // back to the root page
@@ -1388,12 +1351,7 @@ void GameMatch::setMode(EPlayerMode mode)
     {
     case EPlayerMode::Build:  break; // the category entry logs its own line (activateSlot)
     case EPlayerMode::Delete: Log::info("Delete mode (X): click a structure to demolish — X returns to Select"); break;
-    case EPlayerMode::Link:   Log::info(m_linkTool == EBuildTool::Connect
-        ? "Connect (E): click one structure, then the other — the medium is inferred; same key/Esc exits"
-        : m_linkTool == EBuildTool::Disconnect
-        ? "Disconnect (D): click the two ends of a link to remove it — same key/Esc exits"
-        : "Upgrade (F): click the two ends of a Basic cable to make it Heavy — same key/Esc exits"); break;
-    case EPlayerMode::Select: Log::info("Select mode: click inspects, RMB routes / moves — Q/W build, E/D/F link tools, X delete"); break;
+    case EPlayerMode::Select: Log::info("Select mode: click inspects, RMB routes / moves — Q/W/E build, X delete"); break;
     }
 }
 
@@ -1401,14 +1359,14 @@ void GameMatch::setMode(EPlayerMode mode)
 // the category page (or Delete mode) returns to Select. Esc/Tab and the C "Cancel" slot.
 void GameMatch::cancelOneLevel()
 {
-    if (m_mode == EPlayerMode::Link && m_cablePendingId != 0)
-        m_cablePendingId = 0; // drop the picked endpoint, keep the tool
-    else if (m_mode == EPlayerMode::Build && m_buildSelection >= 0)
+    if (m_mode == EPlayerMode::Build && m_buildSelection >= 0)
     {
-        if (m_lanceAiming || m_wallPlacing)
+        if (m_lanceAiming || m_wallPlacing || m_cableLinePending || m_cablePainting)
         {
             m_lanceAiming = false;
             m_wallPlacing = false;
+            m_cablePainting = false;
+            m_cableLinePending = false;
         }
         else
             disarmBuild();
@@ -1434,26 +1392,10 @@ void GameMatch::activateSlot(int slot)
             Log::info(oc::string("Build: ") + c_buildCategoryNames[slot]
                 + " — grid keys arm an item, LMB places, RMB cancels, V/Esc back");
         }
-        else if (slot == c_rootConnectSlot || slot == c_rootDisconnectSlot || slot == c_rootUpgradeSlot)
-        {
-            // Link TOOLS arm straight off the root page (no category page of their own): the same
-            // key toggles back to Select, another switches tool in place.
-            const EBuildTool tool = slot == c_rootConnectSlot ? EBuildTool::Connect
-                : slot == c_rootDisconnectSlot ? EBuildTool::Disconnect : EBuildTool::Upgrade;
-            if (m_mode == EPlayerMode::Link && m_linkTool == tool)
-                setMode(EPlayerMode::Select);
-            else
-            {
-                m_linkTool = tool;
-                setMode(EPlayerMode::Link);
-                m_cablePendingId = 0;
-                refreshBuildHotbar();
-            }
-        }
         else if (slot == c_rootDeleteSlot)
             setMode(m_mode == EPlayerMode::Delete ? EPlayerMode::Select : EPlayerMode::Delete);
         else if (slot == c_cancelSlot)
-            setMode(EPlayerMode::Select); // cancels Delete/Link mode; a no-op in Select
+            setMode(EPlayerMode::Select); // cancels Delete mode; a no-op in Select
         return;
     }
     // CATEGORY page
@@ -1469,9 +1411,16 @@ void GameMatch::activateSlot(int slot)
     }
     if (slot >= (int)buildCategoryItems(m_buildCategory).size() || slot >= c_cancelSlot)
         return; // empty slot
-    m_cablePendingId = 0; // switching tools drops a half-made connection (and half-done aims)
-    m_lanceAiming = false;
+    if (slot == m_buildSelection
+        && buildCategoryItems(m_buildCategory)[slot] == EStructureType::Crossing)
+    {
+        m_crossingRotated = !m_crossingRotated; // re-press of the armed CRSS slot rotates 90°
+        return;
+    }
+    m_lanceAiming = false; // switching items drops half-done aims/flows
     m_wallPlacing = false;
+    m_cablePainting = false;
+    m_cableLinePending = false;
     m_buildSelection = slot;
     refreshBuildHotbar();
 }
@@ -1505,98 +1454,108 @@ void GameMatch::updateModeSwitching()
     m_loadKeyWasDown = loadDown;
 }
 
-// The Disconnect/Upgrade tools: first click selects an endpoint, second click the other — acts on
-// the EXISTING link between them (Disconnect removes it; Upgrade retypes a Basic cable to Heavy,
-// the only tiered medium); Connect CREATES one, inferring the medium.
-// Clicking empty ground, the selected structure, or RIGHT-clicking clears the selection; it
-// persists by stable id.
 void GameMatch::disarmBuild()
 {
     m_buildSelection = -1;
     m_lanceAiming = false;
     m_wallPlacing = false;
-    m_cablePendingId = 0;
+    m_cablePainting = false;
+    m_cableLinePending = false;
     refreshBuildHotbar(); // the slot highlight follows in the same frame
 }
 
-void GameMatch::updateLinkTool(const Camera& camera, bool confirmEdge, bool cancelEdge, EBuildTool tool)
+// Fill the auto-bent L between two snapped 1-cell positions — the dominant leg first, then the
+// perpendicular one — requesting a placement per FREE cell (occupied cells are skipped, so a line
+// across an existing run just fills the gaps). preview = draw ghosts instead of placing.
+void GameMatch::placeCableLine(EStructureType armed, const glm::vec3& from, const glm::vec3& to, bool preview)
 {
-    if (cancelEdge && m_cablePendingId != 0)
-        m_cablePendingId = 0; // RIGHT-click drops the selected endpoint (and still moves — see below)
-
-    const int hover = hoveredStructure(camera);
-
-    int pendingIdx = -1;
-    if (m_cablePendingId != 0)
+    constexpr float step = StructureSystem::GridCellSize;
+    glm::vec3 points[c_cableMaxSegments];
+    int count = 0;
+    glm::vec3 p = from;
+    const auto push = [&] { if (count < c_cableMaxSegments) points[count++] = p; };
+    push();
+    const glm::vec2 d(to.x - from.x, to.z - from.z);
+    const bool xFirst = glm::abs(d.x) >= glm::abs(d.y);
+    for (int leg = 0; leg < 2; ++leg)
     {
-        pendingIdx = m_structures.structureIndexById(m_cablePendingId);
-        if (pendingIdx < 0)
-            m_cablePendingId = 0; // the selected endpoint died
-    }
-
-    const glm::vec3 up(0.0f, 0.3f, 0.0f);
-    if (hover >= 0)
-        drawCircle(m_structures.structurePos(hover) * glm::vec3(1, 0, 1) + up, 1.6f,
-            packColor(glm::vec3(0.9f, 0.9f, 0.9f)), 20);
-    if (pendingIdx >= 0)
-        drawCircle(m_structures.structurePos(pendingIdx) * glm::vec3(1, 0, 1) + up, 1.9f,
-            packColor(glm::vec3(0.3f, 1.0f, 0.4f)), 20);
-    if (pendingIdx >= 0 && hover >= 0 && hover != pendingIdx)
-    {
-        // Preview: green = Connect will create (the inferred medium), white = Disconnect will
-        // remove, cyan = Upgrade applies (Basic -> Heavy), red = the pair refuses this action.
-        const ECableType existing = m_structures.cableTypeBetween(m_cablePendingId, m_structures.structureId(hover));
-        bool actionable = false;
-        if (tool == EBuildTool::Connect)
-            actionable = m_structures.smartLinkTypeFor(pendingIdx, hover) != ECableType::Count;
-        else
-            actionable = existing != ECableType::Count
-                && (tool == EBuildTool::Disconnect || existing == ECableType::Basic);
-        const glm::vec3 previewColor = !actionable ? glm::vec3(1.0f, 0.3f, 0.2f)
-            : tool == EBuildTool::Connect ? glm::vec3(0.3f, 1.0f, 0.4f)
-            : tool == EBuildTool::Disconnect ? glm::vec3(0.9f, 0.9f, 0.9f) : glm::vec3(0.3f, 0.9f, 1.0f);
-        Globals::rendererVK.addDebugLine(m_structures.structurePos(pendingIdx),
-            m_structures.structurePos(hover), packColor(previewColor));
-    }
-
-    if (!confirmEdge)
-        return;
-    if (hover < 0)
-    {
-        m_cablePendingId = 0; // clicked empty ground
-        return;
-    }
-    const uint32 hoverId = m_structures.structureId(hover);
-    if (m_cablePendingId == 0)
-        m_cablePendingId = hoverId;
-    else if (m_cablePendingId == hoverId)
-        m_cablePendingId = 0;
-    else
-    {
-        const ECableType existing = m_structures.cableTypeBetween(m_cablePendingId, hoverId);
-        if (tool == EBuildTool::Connect)
+        const bool alongX = xFirst == (leg == 0);
+        const float target = alongX ? to.x : to.z;
+        float& axis = alongX ? p.x : p.z;
+        while (glm::abs(target - axis) > step * 0.5f && count < c_cableMaxSegments)
         {
-            // Medium inference (smartLinkTypeFor): the connector's
-            // carried medium > the source's output > the first medium both endpoints hold. A pair
-            // that already has every medium it can carry (or cannot reach) simply refuses.
-            const ECableType type = m_structures.smartLinkTypeFor(pendingIdx, hover);
-            if (type == ECableType::Count)
-                Log::info("Those two cannot be linked (range, capacity, or already connected)");
-            else
-                requestCable(m_cablePendingId, hoverId, type);
-            m_cablePendingId = hoverId; // CHAIN: the new endpoint stays picked for the next click
-            return;
+            axis += target > axis ? step : -step;
+            push();
         }
-        if (existing == ECableType::Count)
-            Log::info("No link between those structures");
-        else if (tool == EBuildTool::Disconnect)
-            requestCable(m_cablePendingId, hoverId, existing); // same pair + same type = remove
-        else if (existing == ECableType::Basic)
-            requestCable(m_cablePendingId, hoverId, ECableType::Heavy); // retype in place
-        else
-            Log::info("Only Basic cables upgrade (to Heavy)");
-        m_cablePendingId = 0;
     }
+    for (int i = 0; i < count; ++i)
+    {
+        const bool free = m_structures.cellsFree(armed, points[i]);
+        if (preview)
+            drawStructureGhost(armed, points[i],
+                packColor(free ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.3f, 0.2f)));
+        else if (free)
+            requestPlace(armed, points[i], -1, glm::vec3(0.0f));
+    }
+}
+
+// Cable segments place with BOTH inputs (see Match.ixx): a press paints its cell and keeps
+// painting cells the cursor crosses (L-filled between samples so the run never breaks); a plain
+// click (no drag) anchors the two-click L-line, whose second click places it and CHAINS.
+void GameMatch::updateCablePlacement(const Camera& camera, EStructureType armed, bool confirmEdge)
+{
+    const Aim aim = computeAim(camera, armed);
+    if (m_cablePainting)
+    {
+        if (!m_lmbDown)
+        {
+            // Release: a plain click (never left its cell) arms the L-line from that cell.
+            m_cablePainting = false;
+            m_cableLinePending = !m_cablePaintMoved;
+            m_cableLineStart = m_cablePaintLast;
+        }
+        else if (aim.valid && glm::distance(glm::vec2(aim.pos.x, aim.pos.z),
+            glm::vec2(m_cablePaintLast.x, m_cablePaintLast.z)) > 0.1f)
+        {
+            placeCableLine(armed, m_cablePaintLast, aim.pos, /*preview*/ false);
+            m_cablePaintLast = aim.pos;
+            m_cablePaintMoved = true;
+        }
+        if (aim.valid)
+            drawStructureGhost(armed, aim.pos, packColor(glm::vec3(0.3f, 1.0f, 0.4f)));
+        return;
+    }
+    if (!aim.valid)
+    {
+        updateSelectionClick(camera, confirmEdge, /*allowPick*/ true);
+        return;
+    }
+    if (m_cableLinePending)
+    {
+        placeCableLine(armed, m_cableLineStart, aim.pos, /*preview*/ true);
+        if (confirmEdge)
+        {
+            if (glm::distance(glm::vec2(aim.pos.x, aim.pos.z),
+                glm::vec2(m_cableLineStart.x, m_cableLineStart.z)) < 0.1f)
+                m_cableLinePending = false; // clicking the anchor again drops it
+            else
+            {
+                placeCableLine(armed, m_cableLineStart, aim.pos, /*preview*/ false);
+                m_cableLineStart = aim.pos; // CHAIN: the endpoint anchors the next line
+            }
+        }
+        return;
+    }
+    const uint32 color = packColor(aim.affordable ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.3f, 0.2f));
+    drawStructureGhost(armed, aim.pos, color);
+    if (confirmEdge && aim.affordable)
+    {
+        requestPlace(armed, aim.pos, -1, glm::vec3(0.0f));
+        m_cablePainting = true; // hold + drag paints from here; a plain click arms the L-line
+        m_cablePaintMoved = false;
+        m_cablePaintLast = aim.pos;
+    }
+    updateSelectionClick(camera, confirmEdge, /*allowPick*/ !aim.affordable);
 }
 
 void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool cancelEdge)
@@ -1611,11 +1570,62 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         updateSelectionClick(camera, confirmEdge, /*allowPick*/ true);
         return;
     }
-    // RMB CANCELS, one step at a time: a half-finished two-click flow (Lance aim, Wall line) drops
-    // first, and the next RMB disarms the item itself. Only once nothing is armed does RMB go back
-    // to its Select-mode meaning (barracks route / move order) above.
+    // RMB CANCELS, one step at a time: a half-finished two-click flow (Lance aim, Wall line, cable
+    // line, Crossing aim) drops first, and the next RMB disarms the item itself. Only once nothing
+    // is armed does RMB go back to its Select-mode meaning (barracks route / move order) above.
     const EStructureType armed = buildCategoryItems(m_buildCategory)[m_buildSelection];
-    m_cablePendingId = 0;
+
+    // Cable segments have their own paint/L-line input (drag + two-click both).
+    if (isCableType(armed))
+    {
+        if (cancelEdge)
+        {
+            if (m_cableLinePending || m_cablePainting)
+            {
+                m_cableLinePending = false;
+                m_cablePainting = false;
+            }
+            else
+                disarmBuild();
+            return; // NOT consumed: the same press also walks the player
+        }
+        updateCablePlacement(camera, armed, confirmEdge);
+        return;
+    }
+
+    // Crossing: single-click placement — the long axis follows the CAMERA facing (quantized to
+    // ±X/±Z), and re-pressing the armed CRSS slot rotates it 90° (activateSlot).
+    if (armed == EStructureType::Crossing)
+    {
+        if (cancelEdge)
+        {
+            disarmBuild();
+            return; // NOT consumed: the same press also walks the player
+        }
+        const Aim aim = computeAim(camera, armed);
+        if (!aim.valid)
+        {
+            updateSelectionClick(camera, confirmEdge, /*allowPick*/ true);
+            return;
+        }
+        const glm::vec3 fwd = m_camera.forwardPlanar();
+        glm::vec2 dir = glm::abs(fwd.x) >= glm::abs(fwd.z)
+            ? glm::vec2(fwd.x >= 0.0f ? 1.0f : -1.0f, 0.0f)
+            : glm::vec2(0.0f, fwd.z >= 0.0f ? 1.0f : -1.0f);
+        if (m_crossingRotated)
+            dir = glm::vec2(-dir.y, dir.x);
+        const glm::quat rot = glm::angleAxis(std::atan2(-dir.x, -dir.y), glm::vec3(0.0f, 1.0f, 0.0f));
+        // computeAim validated with the identity axis — redo the footprint checks with the real one.
+        const bool free = m_structures.cellsFree(EStructureType::Crossing, aim.pos, rot)
+            && !StructureSystem::actorInFootprint(EStructureType::Crossing, aim.pos);
+        drawStructureGhostExtent(EStructureType::Crossing, aim.pos,
+            packColor(free ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.3f, 0.2f)),
+            StructureSystem::footprintExtent(EStructureType::Crossing, rot));
+        if (confirmEdge && free)
+            requestPlace(EStructureType::Crossing, aim.pos, -1, glm::vec3(dir.x, 0.0f, dir.y));
+        updateSelectionClick(camera, confirmEdge, /*allowPick*/ !free);
+        return;
+    }
 
     // Lance second click: the position is anchored — the cursor now aims the cone's facing
     // (relative to the anchor); confirm places, too-close clicks just keep waiting. RIGHT-click
@@ -1717,10 +1727,11 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
     }
     const uint32 color = packColor(aim.affordable ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.3f, 0.2f));
     drawStructureGhost(aim.type, aim.pos, color); // the exact box that will be built
+                                                  // (the Crossing has its own branch above)
     if (isEmitterType(aim.type)) // show the field footprint the powered variant would get
         drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.emitterReachOf(aim.type) * 0.5f, color, 32);
-    drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.cableRange(),
-        packColor(glm::vec3(0.4f, 0.4f, 0.45f)), 40); // cable reach from this spot
+    if (aim.type == EStructureType::Constructor) // show the build/repair reach it would cover
+        drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.constructorRange(), color, 40);
     if (confirmEdge && aim.affordable)
     {
         if (aim.type == EStructureType::Lance)
@@ -2026,9 +2037,9 @@ void GameMatch::updateRightClickActions(const Camera& camera, bool rmbEdge)
 {
     if (!rmbEdge || m_selectedId == 0)
         return;
-    // (Linking moved to the two-click CONN tool on the root page — RMB no longer creates cables.)
-    if (hoveredStructure(camera) >= 0)
-        return; // on a building: the caller turns it into a MOVE order
+    if (const int hover = hoveredStructure(camera);
+        hover >= 0 && !isCableOrCrossing(m_structures.structureType(hover)))
+        return; // on a building: the caller turns it into a MOVE order (cables are ground)
     const int sel = m_structures.structureIndexById(m_selectedId);
     glm::vec3 ground;
     if (sel < 0 || !isBarracksType(m_structures.structureType(sel))
@@ -2099,15 +2110,23 @@ void GameMatch::buildWorldLabels(const Camera& camera)
     const int selected = m_selectedId != 0 ? m_structures.structureIndexById(m_selectedId) : -1;
     for (int i = 0; i < m_structures.structureCount(); ++i)
     {
+        const EStructureType type = m_structures.structureType(i);
+        // Cable segments: no label unless there is something to show — a blueprint's build
+        // progress or damage, AUTHORITY only (cable health is not mirrored, so a client's copy
+        // would read full). Hundreds of full-health segments would drown the HUD.
+        const float healthMax = m_structures.structures()[i].state->healthMax;
+        if (isCableOrCrossing(type) && i != selected
+            && (m_isClient || (!m_structures.structureBlueprint(i)
+                && m_structures.structureHealth(i) >= healthMax - 1e-3f)))
+            continue;
         HudWorldLabel label;
         if (!camera.worldToScreen(viewport, m_structures.structureLabelAnchor(i), label.screenPos))
             continue;
-        const EStructureType type = m_structures.structureType(i);
         label.title = c_structureShortNames[(int)type]; // the selected one overrides w/ full name
         const bool consumer = hasShieldEmitter(type) || type == EStructureType::Extractor
             || type == EStructureType::Fabricator;
         label.barValue = m_structures.structureHealth(i);
-        label.barMax = m_structures.structureHealthMax();
+        label.barMax = healthMax; // per-type: cables are softer than buildings
         {
             const float frac = label.barValue / label.barMax;
             // Blueprint: health IS the construction progress — the bar reads blue while building.
@@ -2125,18 +2144,6 @@ void GameMatch::buildWorldLabels(const Camera& camera)
         if (m_structures.structureBlueprint(i))
         {
         } // blueprint: no second bar — the (blue) health bar IS the build progress
-        else if (type == EStructureType::Connector)
-        {
-            // THROUGHPUT gauge, not the relay buffer: how hard the busiest attached link runs,
-            // colored by the medium the connector carries. No links = no bar.
-            if (const int medium = m_structures.connectorMedium(i); medium >= 0)
-            {
-                label.bar2Value = m_structures.connectorUtilization(i);
-                label.bar2Max = 1.0f;
-                label.bar2Color = medium == 1 ? glm::vec3(1.0f, 0.6f, 0.2f)
-                    : medium == 2 ? glm::vec3(0.35f, 0.5f, 1.0f) : glm::vec3(1.0f, 0.9f, 0.3f);
-            }
-        }
         else if (fuelBar)
         {
             label.bar2Value = m_structures.structureFuel(i);
@@ -2167,31 +2174,15 @@ void GameMatch::buildWorldLabels(const Camera& camera)
             label.title = structureTypeName(type);
             char info[192];
             int len = snprintf(info, sizeof(info), "HP %.0f / %.0f", label.barValue, label.barMax);
-            if (type == EStructureType::Connector)
-            {
-                // A Connector holds capacity in every medium but carries exactly ONE — report
-                // that one (and how hard its busiest link runs), not three idle relay buffers.
-                const int medium = m_structures.connectorMedium(i);
-                if (len > 0 && len < (int)sizeof(info))
-                    len += snprintf(info + len, sizeof(info) - len, "\n%s",
-                        medium < 0 ? "No links" : medium == 1 ? "Fuel line"
-                        : medium == 2 ? "Conveyor" : "Power line");
-                if (medium >= 0 && len > 0 && len < (int)sizeof(info))
-                    len += snprintf(info + len, sizeof(info) - len, "\nThroughput %.0f%%",
-                        m_structures.connectorUtilization(i) * 100.0f);
-            }
-            else
-            {
-                if (energyCap > 0.0f && len > 0 && len < (int)sizeof(info))
-                    len += snprintf(info + len, sizeof(info) - len, "\nEnergy %.0f / %.0f",
-                        m_structures.structureCharge(i), energyCap);
-                if (fuelCap > 0.0f && len > 0 && len < (int)sizeof(info))
-                    len += snprintf(info + len, sizeof(info) - len, "\nFuel %.0f / %.0f",
-                        m_structures.structureFuel(i), fuelCap);
-                if (mineralCap > 0.0f && len > 0 && len < (int)sizeof(info))
-                    len += snprintf(info + len, sizeof(info) - len, "\nMinerals %.0f / %.0f",
-                        m_structures.structureMinerals(i), mineralCap);
-            }
+            if (energyCap > 0.0f && len > 0 && len < (int)sizeof(info))
+                len += snprintf(info + len, sizeof(info) - len, "\nEnergy %.0f / %.0f",
+                    m_structures.structureCharge(i), energyCap);
+            if (fuelCap > 0.0f && len > 0 && len < (int)sizeof(info))
+                len += snprintf(info + len, sizeof(info) - len, "\nFuel %.0f / %.0f",
+                    m_structures.structureFuel(i), fuelCap);
+            if (mineralCap > 0.0f && len > 0 && len < (int)sizeof(info))
+                len += snprintf(info + len, sizeof(info) - len, "\nMinerals %.0f / %.0f",
+                    m_structures.structureMinerals(i), mineralCap);
             if (consumer && len > 0 && len < (int)sizeof(info))
                 snprintf(info + len, sizeof(info) - len, "\n%s",
                     m_structures.structurePowered(i) ? "Powered" : "No power");
@@ -2358,14 +2349,6 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     {
     case EPlayerMode::Build:  updateBuildMode(camera, confirmEdge, rmbEdge); break;
     case EPlayerMode::Delete: updateDeleteMode(camera, confirmEdge); break;
-    case EPlayerMode::Link:
-        // RMB drops the picked endpoint, then exits the tool — the same one-step-at-a-time cancel
-        // Build mode uses (and neither becomes a move order).
-        if (rmbEdge && m_cablePendingId == 0)
-            setMode(EPlayerMode::Select); // NOT consumed: the press also becomes a move order
-        else
-            updateLinkTool(camera, confirmEdge, rmbEdge, m_linkTool);
-        break;
     case EPlayerMode::Select: updateSelectMode(camera, confirmEdge, rmbEdge); break;
     }
     m_lmbReleased = false; // a release the active mode did not consume (box select is Select-only)
@@ -2380,7 +2363,11 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
         m_rmbMoveDrag = false;
     if (rmbEdge && !m_rmbConsumed)
     {
-        const int hover = hoveredStructure(camera);
+        // Cables/crossings are WALK-THROUGH — an RMB near one is a plain ground order, never a
+        // walk-to-its-face building order.
+        int hover = hoveredStructure(camera);
+        if (hover >= 0 && isCableOrCrossing(m_structures.structureType(hover)))
+            hover = -1;
         glm::vec3 clicked;
         if (hover >= 0 && aimGroundPoint(camera, clicked))
         {

@@ -1029,21 +1029,19 @@ void Renderer::buildUboForce()
     ubo.forceParams3 = glm::vec4(glm::clamp(force.interiorAlpha, 0.0f, 1.0f),
         glm::clamp(force.backfaceAlpha, 0.0f, 1.0f), glm::clamp(force.contactWallAlpha, 0.0f, 1.0f),
         glm::clamp(force.junctionSmoothing, 0.0f, 2.0f));
-    ubo.forceParams4 = glm::vec4(force.densityView ? 1.0f : 0.0f, glm::max(force.densityRange, 1e-3f),
-        force.ambientSlope, (float)glm::min(force.ambientTeam, RendererVKLayout::MAX_FORCE_TEAMS - 1));
-    ubo.forceParams5 = glm::vec4(force.ambientCenter, glm::max(force.ambientSafeRadius, 0.0f),
-        glm::max(force.ambientMaxStrength, 0.0f));
+    ubo.forceParams4 = glm::vec4(force.densityView ? 1.0f : 0.0f, glm::max(force.densityRange, 1e-3f), 0.0f, 0.0f);
 
     // SAMPLED SHELL TIER: fit the bake volume over the union of the LARGE drawable emitters'
     // support boxes (+ margin) — the FIXED texel grid's resolution then self-adjusts to the active
     // spread. No qualifying emitter (or tier off) = no bake dispatch and the FS branch stays cold.
     glm::vec3 bakeLo(FLT_MAX), bakeHi(-FLT_MAX);
-    if (force.sampledShellReach > 0.0f)
+    if (force.sampledShellRadius > 0.0f)
         for (const RendererVKLayout::ForceEmitterGpu& e : m_forceEmitters)
         {
             if ((e.teamFlags.y & RendererVKLayout::FORCE_FLAG_ACTIVE) == 0u
                 || (e.teamFlags.y & RendererVKLayout::FORCE_FLAG_PASSIVE) != 0u
-                || e.outputParams.y <= 0.0f || e.posReach.w < force.sampledShellReach)
+                || e.outputParams.y <= 0.0f
+                || RendererVKLayout::forceEmitterVisibleRadius(e) < force.sampledShellRadius)
                 continue;
             // The proxy's support AABB (the forceEmitterBounds rule): the output line +- side.
             const float R = e.posReach.w;
@@ -1060,7 +1058,7 @@ void Renderer::buildUboForce()
         const glm::vec3 margin = (bakeHi - bakeLo) * 0.02f + 1.0f; // ~2 filter texels of slack
         bakeLo -= margin;
         bakeHi += margin;
-        ubo.forceBake0 = glm::vec4(bakeLo, force.sampledShellReach);
+        ubo.forceBake0 = glm::vec4(bakeLo, force.sampledShellRadius); // w = the VISIBLE-radius tier threshold
         ubo.forceBake1 = glm::vec4(1.0f / glm::max(bakeHi - bakeLo, glm::vec3(1e-3f)), 1.0f);
     }
     else
@@ -1078,12 +1076,6 @@ void Renderer::buildUboForce()
             || (e.teamFlags.y & RendererVKLayout::FORCE_FLAG_PASSIVE) != 0u)
             continue;
         phiCam[glm::min(e.teamFlags.x, RendererVKLayout::MAX_FORCE_TEAMS - 1u)] += forceContributionCpu(m_cameraPos, e);
-    }
-    if (force.ambientSlope > 0.0f) // forceAmbientField mirror
-    {
-        const float d = glm::distance(glm::vec2(m_cameraPos.x, m_cameraPos.z), force.ambientCenter);
-        phiCam[glm::min(force.ambientTeam, RendererVKLayout::MAX_FORCE_TEAMS - 1u)] +=
-            glm::clamp((d - force.ambientSafeRadius) * force.ambientSlope, 0.0f, force.ambientMaxStrength);
     }
     float bestCam = 0.0f, secondCam = 0.0f;
     for (float p : phiCam)
@@ -1663,8 +1655,8 @@ void Renderer::present()
         m_decalPipeline.upload(frameIdx, m_decalCounter);
         // Compacts the ACTIVE emitter slots + uploads query positions (fence-safe here).
         ForceFieldPipeline::ShellCull shellCull;
-        shellCull.sampledReach = m_forceFieldParams.sampledShellReach > 0.0f
-            ? m_forceFieldParams.sampledShellReach : FLT_MAX;
+        shellCull.sampledRadius = m_forceFieldParams.sampledShellRadius > 0.0f
+            ? m_forceFieldParams.sampledShellRadius : FLT_MAX;
         if (!isVrEnabled()) // one center frustum cannot serve both VR eyes
         {
             shellCull.enabled = true;
@@ -1677,8 +1669,9 @@ void Renderer::present()
             shellCull.unionPass = m_forceFieldParams.unionMarch && !m_forceFieldParams.densityView;
         }
         shellCull.bakeVolume = m_forceShellBakeActive; // set by buildUboForce (this frame's fit)
+        shellCull.logTierDebug = m_forceFieldParams.logTierDebug;
         m_forceFieldPipeline.upload(frameIdx, m_forceEmitters, m_forceQueries, m_forceBakeChunks,
-            m_forceBakeSampleY, m_forceFieldParams.bigReachThreshold, shellCull);
+            m_forceBakeSampleY, shellCull);
 
         if (m_particleLogStats && m_frameCounter % 120 == 0)
         {

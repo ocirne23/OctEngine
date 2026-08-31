@@ -24,13 +24,15 @@ static constexpr const char* structurePrefabs[] = {
     "Entities/Game/lance.pre", "Entities/Game/barracks.pre", "Entities/Game/barracksBrute.pre",
     "Entities/Game/barracksRunner.pre", "Entities/Game/barracksSpitter.pre", "Entities/Game/wall.pre",
     "Entities/Game/turret.pre", "Entities/Game/mineralstorage.pre", "Entities/Game/constructor.pre",
-    "Entities/Game/base.pre" };
+    "Entities/Game/base.pre", "Entities/Game/cablePower.pre", "Entities/Game/cablePipe.pre",
+    "Entities/Game/cableConveyor.pre", "Entities/Game/crossing.pre" };
 static constexpr const char* structureNames[] = { "Emitter", "Generator", "Connector", "Extractor",
     "Battery", "Fuel tank", "Solar", "Fabricator", "Bastion", "Lance", "Barracks", "Brute barracks",
-    "Runner barracks", "Spitter barracks", "Wall", "Turret", "Mineral silo", "Constructor", "Base" };
+    "Runner barracks", "Spitter barracks", "Wall", "Turret", "Mineral silo", "Constructor", "Base",
+    "Power cable", "Pipeline", "Conveyor", "Crossing" };
 // Spawn height = each prefab's box HALF height, so every shape sits flush (see the prefabs).
 static constexpr float structureSpawnHeights[] = { 1.0f, 1.0f, 3.0f, 2.0f, 0.5f, 2.0f, 0.5f, 2.0f,
-    2.0f, 1.0f, 3.0f, 3.0f, 3.0f, 3.0f, 2.0f, 2.0f, 4.0f, 1.0f, 3.0f };
+    2.0f, 1.0f, 3.0f, 3.0f, 3.0f, 3.0f, 2.0f, 2.0f, 4.0f, 1.0f, 3.0f, 0.25f, 0.25f, 0.25f, 0.25f };
 static constexpr glm::vec3 c_blueprintColor(0.45f, 0.55f, 0.7f); // ghost tint until built
 static_assert(oc::size(structurePrefabs) == (size_t)EStructureType::Count);
 static_assert(oc::size(structureNames) == (size_t)EStructureType::Count);
@@ -49,8 +51,10 @@ glm::vec3 StructureSystem::structureLabelAnchor(int index) const
 
 glm::vec2 StructureSystem::structureFacing(int index) const
 {
-    if (m_frame[index].type != EStructureType::Lance)
-        return glm::vec2(0.0f); // only the Lance carries an authored facing (join replay)
+    // Lance + Crossing carry an authored facing (join replay + save); the Crossing's decides which
+    // cells its 1x3 footprint covers, so it MUST survive the wire or client derivation diverges.
+    if (m_frame[index].type != EStructureType::Lance && m_frame[index].type != EStructureType::Crossing)
+        return glm::vec2(0.0f);
     const glm::vec3 forward = m_frame[index].entity->rot * glm::vec3(0.0f, 0.0f, -1.0f);
     return glm::vec2(forward.x, forward.z);
 }
@@ -73,9 +77,6 @@ static void drawCircle(const glm::vec3& center, float radius, uint32 color, int 
     }
 }
 
-// tier <-> throughput lookup for the engine links (tweak-live: refresh() re-stamps per frame).
-static ECableType tierOf(const GameStructureLink& l) { return (ECableType)l.cableTier; }
-
 void StructureSystem::registerTweaks()
 {
     // Gameplay tweaks persist between runs and the server's values overrule the clients'.
@@ -89,7 +90,6 @@ void StructureSystem::registerTweaks()
     Tweak::floatVar("Game/Economy", "Base income mult", &m_baseIncomeMult, 0.0f, 2.0f, 0.05f);
     Tweak::floatVar("Game/Economy", "Emitter cost", &m_costs[0], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Generator cost", &m_costs[1], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Connector cost", &m_costs[2], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Extractor cost", &m_costs[3], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Battery cost", &m_costs[4], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Fuel tank cost", &m_costs[5], 0.0f, 500.0f, 1.0f);
@@ -103,6 +103,11 @@ void StructureSystem::registerTweaks()
     Tweak::floatVar("Game/Economy", "Spitter barracks cost", &m_costs[13], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Mineral silo cost", &m_costs[16], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Constructor cost", &m_costs[17], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Power cable cost", &m_costs[(int)EStructureType::CablePower], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Economy", "Pipeline cost", &m_costs[(int)EStructureType::CablePipe], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Economy", "Conveyor cost", &m_costs[(int)EStructureType::CableConveyor], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Economy", "Crossing cost", &m_costs[(int)EStructureType::Crossing], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Structures", "Cable health max", &m_cableHealthMax, 1.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Structures", "Constructor range", &m_constructorRange, 2.0f, 50.0f, 0.5f);
     Tweak::floatVar("Game/Structures", "Constructor build rate", &m_constructorBuildRate, 0.5f, 50.0f, 0.25f);
     Tweak::floatVar("Game/Structures", "Constructor boost rate", &m_constructorBoostRate, 0.0f, 5.0f, 0.05f);
@@ -135,12 +140,9 @@ void StructureSystem::registerTweaks()
     Tweak::floatVar("Game/Economy", "Internal buffer", &m_internalBuffer, 1.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Economy", "Generator buffer", &m_generatorBuffer, 1.0f, 200.0f, 0.5f);
     Tweak::floatVar("Game/Economy", "Cable throughput", &m_cableThroughput[0], 0.5f, 100.0f, 0.25f);
-    Tweak::floatVar("Game/Economy", "Heavy cable throughput", &m_cableThroughput[1], 0.5f, 200.0f, 0.25f);
-    Tweak::floatVar("Game/Economy", "Pipeline throughput", &m_cableThroughput[2], 0.5f, 100.0f, 0.25f);
-    Tweak::floatVar("Game/Economy", "Conveyor throughput", &m_cableThroughput[3], 0.5f, 100.0f, 0.25f);
-    Tweak::floatVar("Game/Economy", "Connector link range", &m_connectorRange, 5.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Economy", "Pipeline throughput", &m_cableThroughput[1], 0.5f, 100.0f, 0.25f);
+    Tweak::floatVar("Game/Economy", "Conveyor throughput", &m_cableThroughput[2], 0.5f, 100.0f, 0.25f);
     Tweak::floatVar("Game/Economy", "Generator fuel tank", &m_generatorFuelTank, 5.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Cable max length", &m_cableRange, 4.0f, 60.0f, 0.5f);
     Tweak::floatVar("Game/Economy", "Place range", &m_placeRange, 4.0f, 60.0f, 0.5f);
     Tweak::floatVar("Game/Structures", "Emitter output", &m_emitterOutput, 0.2f, 5.0f, 0.05f);
     Tweak::floatVar("Game/Structures", "Emitter reach", &m_emitterReach, 2.0f, 46.0f, 0.5f);
@@ -185,7 +187,7 @@ void StructureSystem::refresh()
 void StructureSystem::stampTuning(const Ref& s)
 {
     GameStructureComponent& c = *s.state;
-    c.healthMax = m_structureHealthMax;
+    c.healthMax = isCableOrCrossing(s.type) ? m_cableHealthMax : m_structureHealthMax;
     c.capacity[0] = energyCapacityOf(s.type);
     c.capacity[1] = fuelCapacityOf(s.type);
     c.capacity[2] = mineralCapacityOf(s.type);
@@ -196,24 +198,18 @@ void StructureSystem::stampTuning(const Ref& s)
     // except MINERALS, where the Base sits on its own band 2 BETWEEN the producers (3) and the
     // silos (1): extractors still dump into it at full rate, but its own trickle PREFERS flowing
     // out (to silos and to whatever spends minerals) over sitting in the bank — it only keeps
-    // what its receivers cannot take.
-    if (s.type == EStructureType::Connector)
-    {
-        c.band[0] = c.band[1] = c.band[2] = 1;
-    }
-    else
-    {
-        c.band[0] = s.type == EStructureType::Generator || s.type == EStructureType::Solar ? 2
-                  : s.type == EStructureType::Battery ? 1 : 0;
-        c.band[1] = s.type == EStructureType::Extractor ? 2
-                  : s.type == EStructureType::FuelTank ? 1 : 0;
-        c.band[2] = s.type == EStructureType::Extractor || s.type == EStructureType::Fabricator ? 3
-                  : s.type == EStructureType::Base ? 2
-                  : s.type == EStructureType::MineralSilo ? 1 : 0;
-    }
-    // Link throughputs follow the live tweaks.
+    // what its receivers cannot take. Cables hold NO stores (capacity 0 everywhere): they are
+    // never link endpoints — links derive between the BUILDINGS their runs touch.
+    c.band[0] = s.type == EStructureType::Generator || s.type == EStructureType::Solar ? 2
+              : s.type == EStructureType::Battery ? 1 : 0;
+    c.band[1] = s.type == EStructureType::Extractor ? 2
+              : s.type == EStructureType::FuelTank ? 1 : 0;
+    c.band[2] = s.type == EStructureType::Extractor || s.type == EStructureType::Fabricator ? 3
+              : s.type == EStructureType::Base ? 2
+              : s.type == EStructureType::MineralSilo ? 1 : 0;
+    // Link throughputs follow the live tweaks (medium-indexed — tiers are gone).
     for (GameStructureLink& l : c.links)
-        l.throughput = m_cableThroughput[l.cableTier];
+        l.throughput = m_cableThroughput[glm::min((int)l.medium, 2)];
     // The union's machine variant (barracks spawn / turret fire logic runs per-entity in the
     // component update; the per-TYPE spawn cost is stamped here so the tweak stays live).
     if (isBarracksType(s.type))
@@ -247,9 +243,11 @@ void StructureSystem::clear()
             Globals::world.removeRootEntity(n.entity.get());
     m_nodes.clear();
     m_requests.clear();
-    m_cableRequests.clear();
     m_demolishRequests.clear();
     m_routeRequests.clear();
+    m_cells.clear();
+    m_runs.clear();
+    m_linksDirty = true;
 }
 
 // ---------------------------------------------------------------- nodes + world
@@ -348,28 +346,79 @@ glm::vec3 StructureSystem::snapToGrid(EStructureType type, const glm::vec3& grou
     return glm::vec3(snap(groundPos.x), 0.0f, snap(groundPos.z));
 }
 
-bool StructureSystem::cellsFree(EStructureType type, const glm::vec3& p) const
+glm::ivec2 StructureSystem::footprintExtent(EStructureType t, const glm::quat& rot)
 {
-    const float half = footprintCellsOf(type) * GridCellSize * 0.5f;
-    if (m_hasBounds && (p.x - half < m_boundsMin.x - 1e-3f || p.x + half > m_boundsMax.x + 1e-3f
-        || p.z - half < m_boundsMin.y - 1e-3f || p.z + half > m_boundsMax.y + 1e-3f))
+    if (t != EStructureType::Crossing)
+        return glm::ivec2(footprintCellsOf(t));
+    // 1x3 along the facing, quantized to an axis at placement (entity -Z = forward).
+    const glm::vec3 forward = rot * glm::vec3(0.0f, 0.0f, -1.0f);
+    return glm::abs(forward.x) >= glm::abs(forward.z) ? glm::ivec2(3, 1) : glm::ivec2(1, 3);
+}
+
+bool StructureSystem::cellsFree(EStructureType type, const glm::vec3& p, const glm::quat& rot,
+    bool ignoreCables) const
+{
+    const glm::ivec2 ext = footprintExtent(type, rot);
+    const glm::vec2 half(ext.x * GridCellSize * 0.5f, ext.y * GridCellSize * 0.5f);
+    if (m_hasBounds && (p.x - half.x < m_boundsMin.x - 1e-3f || p.x + half.x > m_boundsMax.x + 1e-3f
+        || p.z - half.y < m_boundsMin.y - 1e-3f || p.z + half.y > m_boundsMax.y + 1e-3f))
         return false; // footprints stay fully inside the arena
-    const auto overlaps = [&](const glm::vec3& q, float halfB) {
-        return glm::abs(p.x - q.x) < half + halfB - 1e-3f && glm::abs(p.z - q.z) < half + halfB - 1e-3f; };
-    for (const Ref& s : m_frame)
-        if (overlaps(s.entity->pos, footprintCellsOf(s.type) * GridCellSize * 0.5f))
-            return false;
     // FREE nodes reserve their future extractor's footprint (buildings can't block extraction);
     // extracted nodes rely on the standing extractor's own cells.
     if (type != EStructureType::Extractor)
     {
+        const auto overlaps = [&](const glm::vec3& q, float halfB) {
+            return glm::abs(p.x - q.x) < half.x + halfB - 1e-3f
+                && glm::abs(p.z - q.z) < half.y + halfB - 1e-3f; };
         const float exHalf = footprintCellsOf(EStructureType::Extractor) * GridCellSize * 0.5f;
         for (const Node& n : m_nodes)
             if (!n.extracted
                 && overlaps(snapToGrid(EStructureType::Extractor, glm::vec3(n.pos.x, 0.0f, n.pos.z)), exHalf))
                 return false;
     }
-    return true;
+    // PER-CELL occupancy (the hash the derived links run on): buildings refuse ANY occupied cell,
+    // a cable may slot UNDER a crossing's free middle cell, a crossing may bridge OVER exactly one
+    // cable in its middle cell. ignoreCables treats cable cells as open (unit-spawn probe).
+    bool free = true;
+    int cellIdx = -1;
+    forEachFootprintCell(type, p, rot, [&](int cx, int cz)
+    {
+        ++cellIdx;
+        if (!free)
+            return;
+        const auto it = m_cells.find(cellKey(cx, cz));
+        if (it == m_cells.end())
+            return; // empty cell
+        const CellEntry& entry = it->second;
+        const int occIdx = structureIndexById(entry.id);
+        const EStructureType occ = occIdx >= 0 ? m_frame[occIdx].type : EStructureType::Emitter;
+        if (ignoreCables && isCableOrCrossing(occ))
+            return; // walk-through pieces do not block a unit spawn point
+        if (isCableType(type))
+        {
+            // A cable may enter an existing crossing's MIDDLE cell (its center) while it is free.
+            if (occIdx >= 0 && occ == EStructureType::Crossing && entry.underId == 0)
+            {
+                const glm::vec3 cpos = m_frame[occIdx].entity->pos;
+                if ((int)std::lround(cpos.x / GridCellSize - 0.5f) == cx
+                    && (int)std::lround(cpos.z / GridCellSize - 0.5f) == cz)
+                    return;
+            }
+            free = false;
+            return;
+        }
+        if (type == EStructureType::Crossing)
+        {
+            // The MIDDLE cell (index 1 of the 3) may hold exactly one plain cable; ends must be free.
+            const bool middle = cellIdx == 1;
+            if (middle && occIdx >= 0 && isCableType(occ) && entry.underId == 0)
+                return;
+            free = false;
+            return;
+        }
+        free = false; // buildings refuse any occupied cell (cables included — no building on a cable)
+    });
+    return free;
 }
 
 float StructureSystem::spawnHeightOf(EStructureType type)
@@ -382,6 +431,10 @@ bool StructureSystem::actorInFootprint(EStructureType type, const glm::vec3& p)
     // A player capsule or a unit standing on the cells blocks the placement: the structure would
     // spawn inside them and the solver would fling whatever it engulfs. Checked at aim (red ghost)
     // AND in placeStructure (the MP seam) — actors move between the two.
+    // Cables/crossings are WALK-THROUGH (their collider ignores bodies), so standing on the cells
+    // never blocks them.
+    if (isCableOrCrossing(type))
+        return false;
     constexpr float actorRadius = 0.7f; // capsule/unit body, generous by design
     const float half = footprintCellsOf(type) * GridCellSize * 0.5f + actorRadius;
     thread_local oc::vector<uint64> results;
@@ -403,11 +456,6 @@ void StructureSystem::queuePlaceRequest(EStructureType type, const glm::vec3& gr
     const glm::vec3& facing, uint8 team)
 {
     m_requests.push_back(PlaceRequest{ type, groundPos, facing, nodeIndex, team });
-}
-
-void StructureSystem::queueCableRequest(uint32 idA, uint32 idB, ECableType type, uint8 team)
-{
-    m_cableRequests.push_back(CableRequest{ idA, idB, type, team });
 }
 
 void StructureSystem::queueDemolishRequest(uint32 id, uint8 team)
@@ -445,9 +493,10 @@ int StructureSystem::spawnStructure(uint32 id, EStructureType type, const glm::v
     Globals::world.addRootEntity(entity);
     state->structureId = id;
     state->team = team;
-    state->healthMax = m_structureHealthMax;
+    const float healthMax = isCableOrCrossing(type) ? m_cableHealthMax : m_structureHealthMax;
+    state->healthMax = healthMax;
     state->blueprint = !built;
-    state->health = built ? m_structureHealthMax : 1.0f; // health IS the build progress
+    state->health = built ? healthMax : 1.0f; // health IS the build progress
     if (ForceComponent* fc = getComponent<ForceComponent>(entity.get()))
         fc->emitter.setTeam(team); // prefabs author team 0 — the builder's team owns the field
     Ref ref;
@@ -458,11 +507,22 @@ int StructureSystem::spawnStructure(uint32 id, EStructureType type, const glm::v
     ref.nodeIndex = type == EStructureType::Extractor ? nodeIndex : -1;
     if (ref.nodeIndex >= 0 && ref.nodeIndex < (int)m_nodes.size())
         m_nodes[ref.nodeIndex].extracted = true;
+    if (isCableType(type)) // cache the 4 render-only arm children (see updateArms)
+    {
+        static constexpr const char* armNames[4] = { "ArmPX", "ArmNX", "ArmPZ", "ArmNZ" };
+        if (const SceneComponent* sc = getComponent<SceneComponent>(entity.get()))
+            for (const EntityPtr& child : sc->children)
+                for (int a = 0; a < 4; ++a)
+                    if (oc::string_view(child->getName()) == armNames[a])
+                        ref.arms[a] = child.get();
+    }
     stampTuning(ref);
     applyStructureTint(ref); // blueprint gray until built
     m_nextStructureId = glm::max(m_nextStructureId, id + 1);
     m_byId[id] = (int)m_frame.size();
     m_frame.push_back(ref);
+    insertCells(m_frame.back()); // the occupancy hash the derived links + placement run on
+    m_linksDirty = true;
     return (int)m_frame.size() - 1;
 }
 
@@ -474,6 +534,8 @@ void StructureSystem::removeStructureBookkeeping(size_t index)
     const uint32 id = s.state->structureId;
     if (s.nodeIndex >= 0 && s.nodeIndex < (int)m_nodes.size())
         m_nodes[s.nodeIndex].extracted = false; // a removed extractor frees its node
+    eraseCells(s); // promotes an under-cable back to primary occupant
+    m_linksDirty = true;
     s.state->unlinkAll(*s.entity); // neighbors' link entries drop BEFORE the entity dies
     m_frame.erase(m_frame.begin() + index);
     m_byId.clear();
@@ -531,12 +593,25 @@ void StructureSystem::spawnBase(const glm::vec3& groundPos, uint8 team)
 void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groundPos, int nodeIndex,
     const glm::vec3& facing, uint8 team)
 {
-    if ((int)type >= NumPlaceableStructures || (int)team >= GameMaxTeams)
-        return; // the Base only enters through spawnBase
+    if (!isPlaceableType(type) || (int)team >= GameMaxTeams)
+        return; // the Base only enters through spawnBase; the Connector is retired
+    // Orientation FIRST (the Crossing's footprint depends on it), then the grid validation.
+    // Lance: the AIMED facing from the two-click placement when given, else auto — away from the
+    // own Base. Crossing: the facing quantized to an axis (default +X).
+    glm::quat rot(1.0f, 0.0f, 0.0f, 0.0f);
+    if (type == EStructureType::Crossing)
+    {
+        glm::vec2 dir(1.0f, 0.0f);
+        if (glm::abs(facing.x) >= glm::abs(facing.z) && glm::abs(facing.x) > 1e-4f)
+            dir = glm::vec2(facing.x > 0.0f ? 1.0f : -1.0f, 0.0f);
+        else if (glm::abs(facing.z) > 1e-4f)
+            dir = glm::vec2(0.0f, facing.z > 0.0f ? 1.0f : -1.0f);
+        rot = glm::angleAxis(std::atan2(-dir.x, -dir.y), glm::vec3(0.0f, 1.0f, 0.0f));
+    }
     // GRID: every placement snaps (extractors snap the node's position too) and occupied cells
     // refuse — validated HERE, the MP seam, not just at aim time.
     const glm::vec3 snappedGround = snapToGrid(type, groundPos);
-    if (!cellsFree(type, snappedGround) || actorInFootprint(type, snappedGround))
+    if (!cellsFree(type, snappedGround, rot) || actorInFootprint(type, snappedGround))
         return; // overlap raced the ghost — silently refused (it already showed red)
     if (type == EStructureType::Extractor)
     {
@@ -544,9 +619,6 @@ void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groun
             return; // two same-frame requests for one node race — validated at apply
     }
     const glm::vec3 pos = snappedGround + glm::vec3(0.0f, structureSpawnHeights[(int)type], 0.0f);
-    // Lance orientation (its prefab's Force axis is entity -Z): the AIMED facing from the
-    // two-click placement when given, else auto — away from the own Base.
-    glm::quat rot(1.0f, 0.0f, 0.0f, 0.0f);
     if (type == EStructureType::Lance)
     {
         glm::vec2 dir(0.0f);
@@ -572,186 +644,417 @@ void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groun
         onStructurePlaced(index);
 }
 
-// ---------------------------------------------------------------- links (cables)
+// ---------------------------------------------------------------- cells + derived links
 
-bool StructureSystem::cableExists(uint32 idA, uint32 idB, int medium) const
+void StructureSystem::insertCells(const Ref& s)
 {
-    const int a = structureIndexById(idA), b = structureIndexById(idB);
-    if (a < 0 || b < 0)
-        return false;
-    for (const GameStructureLink& l : m_frame[a].state->links)
-        if (l.other.get() == m_frame[b].entity && (medium < 0 || (int)l.medium == medium))
-            return true;
-    return false;
-}
-
-ECableType StructureSystem::cableTypeBetween(uint32 idA, uint32 idB) const
-{
-    const int a = structureIndexById(idA), b = structureIndexById(idB);
-    if (a < 0 || b < 0)
-        return ECableType::Count;
-    for (const GameStructureLink& l : m_frame[a].state->links)
-        if (l.other.get() == m_frame[b].entity)
-            return tierOf(l);
-    return ECableType::Count;
-}
-
-int StructureSystem::cableTotal() const
-{
-    int n = 0;
-    for (const Ref& s : m_frame)
-        for (const GameStructureLink& l : s.state->links)
-            if (l.owner)
-                ++n;
-    return n;
-}
-
-void StructureSystem::cableAt(int i, uint32& idA, uint32& idB, ECableType& type) const
-{
-    int n = 0;
-    for (const Ref& s : m_frame)
-        for (const GameStructureLink& l : s.state->links)
+    const uint32 id = s.state->structureId;
+    forEachFootprintCell(s.type, s.entity->pos, s.entity->rot, [&](int cx, int cz)
+    {
+        CellEntry& entry = m_cells[cellKey(cx, cz)];
+        if (entry.id == 0)
         {
-            if (!l.owner)
-                continue;
-            if (n++ != i)
-                continue;
-            idA = s.state->structureId;
-            const GameStructureComponent* far = getComponent<GameStructureComponent>(l.other.get());
-            idB = far ? far->structureId : 0;
-            type = tierOf(l);
+            entry.id = id;
             return;
         }
-    idA = idB = 0;
-    type = ECableType::Count;
-}
-
-bool StructureSystem::cableAllowed(int indexA, int indexB, ECableType type, bool ignoreExisting) const
-{
-    if (indexA < 0 || indexB < 0 || indexA == indexB)
-        return false;
-    const int medium = cableMedium(type);
-    // BOTH endpoints must actually USE the medium (capacity > 0) — a link that could never flow
-    // is refused instead of dangling dead.
-    const auto capOf = [&](EStructureType t) {
-        return medium == 1 ? fuelCapacityOf(t) : medium == 2 ? mineralCapacityOf(t) : energyCapacityOf(t); };
-    if (capOf(m_frame[indexA].type) <= 0.0f || capOf(m_frame[indexB].type) <= 0.0f)
-        return false;
-    // Range: links touching a Connector reach further — they are the long-haul relays.
-    const bool viaConnector = m_frame[indexA].type == EStructureType::Connector
-        || m_frame[indexB].type == EStructureType::Connector;
-    const float range = viaConnector ? m_connectorRange : m_cableRange;
-    const glm::vec3 d = m_frame[indexA].entity->pos - m_frame[indexB].entity->pos;
-    if (glm::dot(d, d) > range * range)
-        return false;
-    // A Connector carries exactly ONE medium: every other link touching it must match the new
-    // link's medium. ignoreExisting skips the A<->B pair itself (the retype-in-place path).
-    for (const int endpoint : { indexA, indexB })
-    {
-        if (m_frame[endpoint].type != EStructureType::Connector)
-            continue;
-        const int otherEnd = endpoint == indexA ? indexB : indexA;
-        for (const GameStructureLink& l : m_frame[endpoint].state->links)
+        // Sharing is only ever crossing-over-cable (cellsFree enforced it). Whichever arrives
+        // second, the CROSSING is the primary occupant and the cable rides underId.
+        if (s.type == EStructureType::Crossing)
         {
-            // The retype path replaces the pair's SAME-medium link — only that one is exempt.
-            if (ignoreExisting && l.other.get() == m_frame[otherEnd].entity && (int)l.medium == medium)
-                continue;
-            if ((int)l.medium != medium)
-                return false;
+            entry.underId = entry.id;
+            entry.id = id;
         }
-    }
-    return true;
+        else
+            entry.underId = id;
+    });
 }
 
-ECableType StructureSystem::smartLinkTypeFor(int indexA, int indexB) const
+void StructureSystem::eraseCells(const Ref& s)
 {
-    if (indexA < 0 || indexB < 0 || indexA == indexB)
-        return ECableType::Count;
+    const uint32 id = s.state->structureId;
+    forEachFootprintCell(s.type, s.entity->pos, s.entity->rot, [&](int cx, int cz)
+    {
+        const auto it = m_cells.find(cellKey(cx, cz));
+        if (it == m_cells.end())
+            return;
+        CellEntry& entry = it->second;
+        if (entry.id == id)
+        {
+            if (entry.underId != 0) // the under-cable becomes the primary occupant again
+            {
+                entry.id = entry.underId;
+                entry.underId = 0;
+            }
+            else
+                m_cells.erase(it);
+        }
+        else if (entry.underId == id)
+            entry.underId = 0;
+    });
+}
+
+int StructureSystem::cableSegmentAt(int cx, int cz, bool builtOnly) const
+{
+    const auto it = m_cells.find(cellKey(cx, cz));
+    if (it == m_cells.end())
+        return -1;
+    // The under-cable stands in when a crossing bridges the cell — which is also what keeps a
+    // crossing from unioning with the cable passing under it (the crossing itself is not a cable).
+    for (const uint32 id : { it->second.id, it->second.underId })
+    {
+        if (id == 0)
+            continue;
+        const int index = structureIndexById(id);
+        if (index >= 0 && isCableType(m_frame[index].type)
+            && (!builtOnly || !m_frame[index].state->blueprint))
+            return index;
+    }
+    return -1;
+}
+
+void StructureSystem::rebuildDerivedLinks()
+{
+    if (!m_linksDirty)
+        return;
+    m_linksDirty = false;
+    ProfileScope scope("Structures link rebuild", EProfileCategory::Game);
     const auto capacityIn = [&](EStructureType t, int medium) {
         return medium == 1 ? fuelCapacityOf(t) : medium == 2 ? mineralCapacityOf(t) : energyCapacityOf(t); };
-    // A candidate medium must be held by BOTH ends and NOT already linked between this pair —
-    // a second right-click adds the pair's NEXT medium (e.g. extractor->generator pipe first,
-    // then generator->extractor power cable).
-    const auto bothHold = [&](int medium) {
-        return capacityIn(m_frame[indexA].type, medium) > 0.0f
-            && capacityIn(m_frame[indexB].type, medium) > 0.0f
-            && !cableExists(m_frame[indexA].state->structureId,
-                m_frame[indexB].state->structureId, medium); };
-    // 1) A Connector endpoint that already carries a medium FORCES it. Two connectors with
-    //    different media = no link.
-    int medium = -1;
-    for (const int endpoint : { indexA, indexB })
-        if (m_frame[endpoint].type == EStructureType::Connector)
-            if (const int carried = connectorMedium(endpoint); carried >= 0)
-                medium = (medium < 0 || medium == carried) ? carried : -2;
-    if (medium == -2)
-        return ECableType::Count;
-    // 2) The selected building's resource OUTPUT (A first, then B).
-    const auto outputMedium = [&](const Ref& s) -> int {
-        switch (s.type)
-        {
-        case EStructureType::Generator:
-        case EStructureType::Solar:
-        case EStructureType::Battery:     return 0;
-        case EStructureType::FuelTank:    return 1;
-        case EStructureType::MineralSilo:
-        case EStructureType::Fabricator:  return 2;
-        case EStructureType::Extractor:
-            return s.nodeIndex >= 0 && s.nodeIndex < (int)m_nodes.size()
-                && m_nodes[s.nodeIndex].type == ENodeType::Fuel ? 1 : 2;
-        default:                          return -1;
-        }
+    const auto cellOf = [](const glm::vec3& p) {
+        return glm::ivec2((int)std::lround(p.x / GridCellSize - 0.5f),
+                          (int)std::lround(p.z / GridCellSize - 0.5f)); };
+
+    // 1) Collect the BUILT cable segments and union-find them over 4-neighbour adjacency of equal
+    //    medium (blueprint segments are non-conductive: the path is broken until they finish).
+    struct Seg { int frameIdx; glm::ivec2 cell; uint8 medium; };
+    oc::vector<Seg> segs;
+    oc::unordered_map<uint64, int> segAtCell; // the segment's OWN cell (under-cables included)
+    for (int i = 0; i < (int)m_frame.size(); ++i)
+    {
+        if (!isCableType(m_frame[i].type) || m_frame[i].state->blueprint)
+            continue;
+        const glm::ivec2 cell = cellOf(m_frame[i].entity->pos);
+        segAtCell[cellKey(cell.x, cell.y)] = (int)segs.size();
+        segs.push_back(Seg{ i, cell, (uint8)cableMediumOf(m_frame[i].type) });
+    }
+    oc::vector<int> parent(segs.size());
+    for (int i = 0; i < (int)parent.size(); ++i)
+        parent[i] = i;
+    const auto find = [&](int i) { while (parent[i] != i) i = parent[i] = parent[parent[i]]; return i; };
+    const auto unite = [&](int a, int b) { parent[find(a)] = find(b); };
+    const auto segAt = [&](int cx, int cz) -> int {
+        const auto it = segAtCell.find(cellKey(cx, cz));
+        return it != segAtCell.end() ? it->second : -1; };
+    for (int i = 0; i < (int)segs.size(); ++i)
+        for (const glm::ivec2 d : { glm::ivec2(1, 0), glm::ivec2(0, 1) })
+            if (const int n = segAt(segs[i].cell.x + d.x, segs[i].cell.y + d.y);
+                n >= 0 && segs[n].medium == segs[i].medium)
+                unite(i, n);
+
+    // 2) CROSSINGS conduct: each BUILT crossing resolves what sits just beyond its two END cells
+    //    along its axis — a cable run, an already-conducting crossing, or a building. Two runs of
+    //    the SAME medium union through it; a run on one end and a capacity-holding building on the
+    //    other attaches the building. A fixpoint loop serves crossing chains.
+    // Each END accepts connections from THREE sides: straight out along the axis plus the two
+    // laterals (only the raised MIDDLE cell is pass-through-only). Candidate scan order is fixed
+    // (outward, +lateral, -lateral) so every instance resolves identically.
+    struct Cross { int frameIdx; glm::ivec2 end[2]; glm::ivec2 axis; int seg = -1; }; // seg = a run member it joined
+    oc::vector<Cross> crossings;
+    for (int i = 0; i < (int)m_frame.size(); ++i)
+    {
+        if (m_frame[i].type != EStructureType::Crossing || m_frame[i].state->blueprint)
+            continue;
+        const glm::ivec2 center = cellOf(m_frame[i].entity->pos);
+        const glm::ivec2 ext = footprintExtent(EStructureType::Crossing, m_frame[i].entity->rot);
+        const glm::ivec2 axis = ext.x == 3 ? glm::ivec2(1, 0) : glm::ivec2(0, 1);
+        crossings.push_back(Cross{ i, { center - axis, center + axis }, axis });
+    }
+    // The three cells an end connects through: outward continues the axis, the laterals let a
+    // perpendicular cable enter at the side.
+    const auto endCandidates = [](const Cross& c, int e, glm::ivec2 out[3])
+    {
+        const glm::ivec2 outward = e == 0 ? -c.axis : c.axis;
+        const glm::ivec2 lateral(c.axis.y, c.axis.x);
+        out[0] = c.end[e] + outward;
+        out[1] = c.end[e] + lateral;
+        out[2] = c.end[e] - lateral;
     };
-    if (medium < 0)
-        if (const int out = outputMedium(m_frame[indexA]); out >= 0 && bothHold(out))
-            medium = out;
-    if (medium < 0)
-        if (const int out = outputMedium(m_frame[indexB]); out >= 0 && bothHold(out))
-            medium = out;
-    // 3) Fall back to the first medium both endpoints hold.
-    for (int m = 0; medium < 0 && m < 3; ++m)
-        if (bothHold(m))
-            medium = m;
-    if (medium < 0 || !bothHold(medium))
-        return ECableType::Count;
-    const ECableType type = medium == 1 ? ECableType::Pipe
-                          : medium == 2 ? ECableType::Conveyor : ECableType::Basic;
-    return cableAllowed(indexA, indexB, type) ? type : ECableType::Count;
+    const auto crossAtOut = [&](const glm::ivec2& cell) -> int { // a conducting crossing whose END
+        for (int c = 0; c < (int)crossings.size(); ++c)          // touches this candidate cell
+        {
+            if (crossings[c].seg < 0)
+                continue;
+            if (cell == crossings[c].end[0] || cell == crossings[c].end[1])
+                return c;
+        }
+        return -1; };
+    oc::vector<oc::pair<int, int>> crossAttach; // (seg slot, building frameIdx) via a crossing end
+    for (bool changed = true; changed;)
+    {
+        changed = false;
+        for (Cross& c : crossings)
+        {
+            if (c.seg >= 0)
+                continue;
+            oc::fixed_vector<int, 3> endRuns[2]; // cable run members reachable at each end
+            int building[2] = { -1, -1 };        // first building reachable at each end
+            for (int e = 0; e < 2; ++e)
+            {
+                glm::ivec2 cand[3];
+                endCandidates(c, e, cand);
+                for (const glm::ivec2& cell : cand)
+                {
+                    if (const int seg = segAt(cell.x, cell.y); seg >= 0)
+                        endRuns[e].push_back(seg);
+                    else if (const int cc = crossAtOut(cell); cc >= 0)
+                        endRuns[e].push_back(crossings[cc].seg);
+                    else if (const auto it = m_cells.find(cellKey(cell.x, cell.y));
+                        it != m_cells.end() && building[e] < 0)
+                    {
+                        const int idx = structureIndexById(it->second.id);
+                        if (idx >= 0 && !isCableOrCrossing(m_frame[idx].type))
+                            building[e] = idx;
+                    }
+                }
+            }
+            // A same-medium run pair across the two ends conducts (first in scan order); every
+            // OTHER run of that medium touching either end joins the same union.
+            int chosen = -1;
+            for (const int a : endRuns[0])
+            {
+                for (const int b : endRuns[1])
+                    if (segs[a].medium == segs[b].medium)
+                    {
+                        unite(a, b);
+                        chosen = a;
+                        break;
+                    }
+                if (chosen >= 0)
+                    break;
+            }
+            // Fallback: run(s) on one side only + a building holding that medium on the other.
+            if (chosen < 0)
+            {
+                const int e = endRuns[0].empty() ? 1 : 0;
+                const int far = building[1 - e];
+                if (!endRuns[e].empty() && far >= 0
+                    && capacityIn(m_frame[far].type, segs[endRuns[e].front()].medium) > 0.0f)
+                {
+                    chosen = endRuns[e].front();
+                    crossAttach.push_back({ chosen, far });
+                }
+            }
+            if (chosen >= 0)
+            {
+                for (int e = 0; e < 2; ++e)
+                    for (const int r : endRuns[e])
+                        if (segs[r].medium == segs[chosen].medium)
+                            unite(r, chosen);
+                c.seg = chosen;
+                changed = true;
+            }
+        }
+    }
+
+    // Crossing TINT: stamp the conducted medium onto the roster entry — the mesh takes the
+    // medium's hue (yellow/orange/blue), authored gray while inert; re-tint only on change.
+    for (int i = 0; i < (int)m_frame.size(); ++i)
+    {
+        if (m_frame[i].type != EStructureType::Crossing)
+            continue;
+        int8 medium = -1;
+        for (const Cross& c : crossings)
+            if (c.frameIdx == i && c.seg >= 0)
+                medium = (int8)segs[c.seg].medium;
+        if (m_frame[i].conductMedium != medium)
+        {
+            m_frame[i].conductMedium = medium;
+            applyStructureTint(m_frame[i]);
+        }
+    }
+
+    // 3) Building attachment: every run cell's 4-neighbours that hold a building with capacity in
+    //    the run's medium (blueprint buildings pre-wire — the flow already gates on their flag).
+    //    Collected as raw (seg slot, building) pairs first: the bridge step below still unions.
+    oc::vector<oc::pair<int, int>> attachPairs; // (seg slot, building frame index)
+    for (int i = 0; i < (int)segs.size(); ++i)
+        for (const glm::ivec2 d : { glm::ivec2(1, 0), glm::ivec2(-1, 0), glm::ivec2(0, 1), glm::ivec2(0, -1) })
+        {
+            const auto it = m_cells.find(cellKey(segs[i].cell.x + d.x, segs[i].cell.y + d.y));
+            if (it == m_cells.end())
+                continue;
+            const int idx = structureIndexById(it->second.id);
+            if (idx >= 0 && !isCableOrCrossing(m_frame[idx].type)
+                && capacityIn(m_frame[idx].type, segs[i].medium) > 0.0f)
+                attachPairs.push_back({ i, idx });
+        }
+    for (const auto& [segSlot, buildingIdx] : crossAttach)
+        attachPairs.push_back({ segSlot, buildingIdx });
+
+    // 3b) BUILDINGS BRIDGE: a BUILT building conducts every medium it holds — two same-medium runs
+    //     touching it merge into one (a power line with an emitter cut into the middle carries
+    //     through), exactly like a cable cell would. Buildings still never connect DIRECTLY to
+    //     each other (adjacency alone derives nothing — a link always needs cable in between), and
+    //     a BLUEPRINT building does not bridge (consistent with blueprint cables breaking the
+    //     path), though it still attaches to each run for the pre-wire.
+    {
+        oc::unordered_map<uint64, int> firstSlot; // (building << 2 | medium) -> first seg slot seen
+        for (const auto& [segSlot, buildingIdx] : attachPairs)
+        {
+            if (m_frame[buildingIdx].state->blueprint)
+                continue;
+            const uint64 key = (uint64)buildingIdx << 2 | segs[segSlot].medium;
+            const auto [it, inserted] = firstSlot.insert({ key, segSlot });
+            if (!inserted)
+                unite(segSlot, it->second);
+        }
+    }
+
+    // 3c) Bucket the attachments by the FINAL union roots (dedup — several pairs can name the same
+    //     building through different segments).
+    oc::unordered_map<int, oc::vector<int>> runBuildings; // union root -> building frame indices
+    for (const auto& [segSlot, buildingIdx] : attachPairs)
+    {
+        oc::vector<int>& list = runBuildings[find(segSlot)];
+        bool known = false;
+        for (const int existing : list)
+            known |= existing == buildingIdx;
+        if (!known)
+            list.push_back(buildingIdx);
+    }
+
+    // 4) The DESIRED link set: per run all attached pairs (the band model equalizes multi-way) up
+    //    to a clique cap; past it a STAR from a ROLE-PICKED hub — storage band first (a band-1 hub
+    //    relays both directions: producers pour in downhill, it balances with other storage and
+    //    exports to consumers — the old Connector's role), else a producer, NEVER a consumer when
+    //    a better role exists (a band-0 hub can never send energy UP to a battery, which starved
+    //    batteries on big runs), lowest id as the deterministic tie-break (bands come from
+    //    stampTuning — same types/ids on every instance, so clients derive the same star).
+    //    Key = (minId << 32 | maxId), value = medium mask.
+    constexpr size_t c_runCliqueCap = 16; // 16 buildings = 120 links; past that the star bounds it
+    oc::unordered_map<uint64, uint8> desired;
+    const auto pairKey = [](uint32 a, uint32 b) {
+        return (uint64)glm::min(a, b) << 32 | glm::max(a, b); };
+    for (auto& [root, buildings] : runBuildings)
+    {
+        if (buildings.size() < 2)
+            continue;
+        oc::sort(buildings.begin(), buildings.end(), [&](int a, int b) {
+            return m_frame[a].state->structureId < m_frame[b].state->structureId; });
+        const int m = (int)segs[root].medium;
+        const uint8 mediumBit = (uint8)(1u << m);
+        const size_t count = buildings.size();
+        if (count <= c_runCliqueCap)
+        {
+            for (size_t a = 0; a < count; ++a)
+                for (size_t b = a + 1; b < count; ++b)
+                    desired[pairKey(m_frame[buildings[a]].state->structureId,
+                        m_frame[buildings[b]].state->structureId)] |= mediumBit;
+        }
+        else
+        {
+            const auto hubScore = [&](size_t i) {
+                const int band = m_frame[buildings[i]].state->band[m];
+                return band == 1 ? 2 : band > 1 ? 1 : 0; }; // storage > producer > consumer
+            size_t hub = 0;
+            for (size_t i = 1; i < count; ++i)
+                if (hubScore(i) > hubScore(hub)) // ties keep the earlier = lower id
+                    hub = i;
+            for (size_t b = 0; b < count; ++b)
+                if (b != hub)
+                    desired[pairKey(m_frame[buildings[hub]].state->structureId,
+                        m_frame[buildings[b]].state->structureId)] |= mediumBit;
+        }
+    }
+
+    // 5) Diff against the live links: unlink stale, link missing (owner = the lower-id side, so a
+    //    rebuild never flips ownership and flowAvg survives on untouched links). The create loop
+    //    walks the desired map itself, so the topology above is spelled exactly once.
+    struct Stale { Entity* a; Entity* b; int medium; };
+    oc::vector<Stale> stale;
+    for (const Ref& s : m_frame)
+        for (const GameStructureLink& l : s.state->links)
+        {
+            if (!l.owner || !l.other)
+                continue;
+            const GameStructureComponent* far = getComponent<GameStructureComponent>(l.other.get());
+            const auto it = far ? desired.find(pairKey(s.state->structureId, far->structureId))
+                                : desired.end();
+            if (it == desired.end() || (it->second & (1u << l.medium)) == 0)
+                stale.push_back({ s.entity, l.other.get(), (int)l.medium });
+        }
+    for (const Stale& st : stale)
+        GameStructureComponent::unlink(*st.a, *st.b, st.medium);
+    for (const auto& [key, mask] : desired)
+    {
+        const int a = structureIndexById((uint32)(key >> 32)); // the LOWER id = the owner side
+        const int b = structureIndexById((uint32)key);
+        if (a < 0 || b < 0)
+            continue;
+        for (int m = 0; m < 3; ++m)
+            if ((mask & (1u << m)) && !m_frame[a].state->findLink(m_frame[b].entity, m))
+                GameStructureComponent::link(*m_frame[a].entity, *m_frame[b].entity, (uint8)m,
+                    m_cableThroughput[m]);
+    }
+
+    // 6) The run table (draw) + arm visuals.
+    m_runs.clear();
+    oc::unordered_map<int, int> runIndex; // union root -> m_runs index
+    for (int i = 0; i < (int)segs.size(); ++i)
+    {
+        const int root = find(i);
+        auto [it, inserted] = runIndex.insert({ root, (int)m_runs.size() });
+        if (inserted)
+        {
+            CableRun run;
+            run.medium = segs[root].medium;
+            if (const auto rb = runBuildings.find(root); rb != runBuildings.end())
+                for (const int building : rb->second)
+                    run.buildingIds.push_back(m_frame[building].state->structureId);
+            m_runs.push_back(oc::move(run));
+        }
+        m_runs[it->second].segmentIds.push_back(m_frame[segs[i].frameIdx].state->structureId);
+    }
+    for (const Cross& c : crossings)
+        if (c.seg >= 0)
+            if (const auto it = runIndex.find(find(c.seg)); it != runIndex.end())
+                m_runs[it->second].segmentIds.push_back(m_frame[c.frameIdx].state->structureId);
+    for (const Ref& s : m_frame)
+        updateArms(s);
 }
 
-void StructureSystem::applyCableRequest(uint32 idA, uint32 idB, ECableType type, uint8 team)
+void StructureSystem::updateArms(const Ref& s)
 {
-    // Validated at APPLY time (the MP seam): endpoints may have died, or a same-frame duplicate
-    // may already have toggled the pair. Both endpoints must be the requester's team.
-    const int a = structureIndexById(idA);
-    const int b = structureIndexById(idB);
-    if (a < 0 || b < 0 || m_frame[a].state->team != team || m_frame[b].state->team != team)
+    if (!isCableType(s.type))
         return;
-    // Per-MEDIUM pair rules: same medium + same tier toggles OFF, same medium + other tier retypes
-    // in place, an unlinked medium ADDS alongside the pair's other links.
-    const int medium = cableMedium(type);
-    const GameStructureLink* existing = m_frame[a].state->findLink(m_frame[b].entity, medium);
-    if (existing && (ECableType)existing->cableTier == type)
+    const int medium = cableMediumOf(s.type);
+    const int cx = (int)std::lround(s.entity->pos.x / GridCellSize - 0.5f);
+    const int cz = (int)std::lround(s.entity->pos.z / GridCellSize - 0.5f);
+    static constexpr glm::ivec2 dirs[4] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }; // PX NX PZ NZ
+    for (int a = 0; a < 4; ++a)
     {
-        GameStructureComponent::unlink(*m_frame[a].entity, *m_frame[b].entity, medium);
-        Log::info("Cable removed");
-        if (onCableChanged)
-            onCableChanged(idA, idB, type, true);
-        return;
+        if (!s.arms[a])
+            continue;
+        // An arm shows toward anything the segment VISUALLY joins: a same-medium cable (blueprint
+        // included — adjacency, not conduction), a crossing, or a building holding the medium.
+        bool on = false;
+        const int nx = cx + dirs[a].x, nz = cz + dirs[a].y;
+        if (const int seg = cableSegmentAt(nx, nz, /*builtOnly*/ false);
+            seg >= 0 && cableMediumOf(m_frame[seg].type) == medium)
+            on = true;
+        else if (const auto it = m_cells.find(cellKey(nx, nz)); it != m_cells.end())
+        {
+            const int idx = structureIndexById(it->second.id);
+            if (idx >= 0)
+            {
+                const EStructureType t = m_frame[idx].type;
+                const float cap = medium == 1 ? fuelCapacityOf(t)
+                                : medium == 2 ? mineralCapacityOf(t) : energyCapacityOf(t);
+                on = t == EStructureType::Crossing || (!isCableOrCrossing(t) && cap > 0.0f);
+            }
+        }
+        s.arms[a]->setEnabled(on);
     }
-    if (!cableAllowed(a, b, type, /*ignoreExisting*/ existing != nullptr))
-        return;
-    GameStructureComponent::link(*m_frame[a].entity, *m_frame[b].entity,
-        (uint8)medium, (uint8)type, m_cableThroughput[(int)type]);
-    Log::info(existing != nullptr
-        ? (type == ECableType::Pipe ? "Retyped to pipeline"
-            : type == ECableType::Conveyor ? "Retyped to conveyor"
-            : type == ECableType::Heavy ? "Retyped to heavy cable" : "Retyped to basic cable")
-        : (type == ECableType::Pipe ? "Pipeline connected"
-            : type == ECableType::Conveyor ? "Conveyor connected"
-            : type == ECableType::Heavy ? "Heavy cable connected" : "Cable connected"));
-    if (onCableChanged)
-        onCableChanged(idA, idB, type, false);
 }
 
 // ---------------------------------------------------------------- combat/economy helpers
@@ -810,6 +1113,13 @@ void StructureSystem::spendMinerals(uint8 team, float amount)
         }
 }
 
+// The medium hues the cable prefabs/flow rings use: power yellow, fuel orange, minerals blue.
+static glm::vec3 mediumHue(int medium)
+{
+    return medium == 1 ? glm::vec3(1.0f, 0.55f, 0.15f)
+         : medium == 2 ? glm::vec3(0.35f, 0.5f, 1.0f) : glm::vec3(0.9f, 0.9f, 0.3f);
+}
+
 void StructureSystem::applyStructureTint(const Ref& s)
 {
     RenderComponent* rc = getComponent<RenderComponent>(s.entity);
@@ -821,39 +1131,61 @@ void StructureSystem::applyStructureTint(const Ref& s)
         color = glm::vec3(1.0f); // fallback: authored tint missing
         if (const RenderComponent::SpawnInfo* info = getRenderSpawnInfo(s.entity); info && info->color.x >= 0.0f)
             color = info->color;
+        // A conducting Crossing shows the medium flowing through it (authored gray while inert).
+        if (s.type == EStructureType::Crossing && s.conductMedium >= 0)
+            color = mediumHue(s.conductMedium);
     }
-    rc->node.setMaterialOverride(Globals::rendererVK.createSolidColorMaterial(color));
+    const auto material = Globals::rendererVK.createSolidColorMaterial(color);
+    rc->node.setMaterialOverride(material);
+    // Cables/crossings are COMPOSITES (arm/end/ramp child entities): tint the child pieces along —
+    // this is also what turns them blueprint-gray and back.
+    if (isCableOrCrossing(s.type))
+        if (const SceneComponent* sc = getComponent<SceneComponent>(s.entity))
+            for (const EntityPtr& child : sc->children)
+                if (RenderComponent* crc = getComponent<RenderComponent>(child.get());
+                    crc && crc->node.isValid())
+                    crc->node.setMaterialOverride(material);
 }
 
 float StructureSystem::investMaterials(const Ref& s, float amount)
 {
     // HEALTH IS THE PROGRESS: materials heal at cost/healthMax per hp — the same price builds a
-    // blueprint and repairs a damaged structure. A full-health blueprint flips to BUILT.
-    if (amount <= 0.0f || (int)s.type >= NumPlaceableStructures)
+    // blueprint and repairs a damaged structure. A full-health blueprint flips to BUILT. Heals
+    // against the COMPONENT's healthMax (cables are softer than buildings).
+    if (amount <= 0.0f || !isPlaceableType(s.type))
         return 0.0f;
-    const float materialsPerHp = glm::max(m_costs[(int)s.type], 0.01f) / glm::max(m_structureHealthMax, 1e-3f);
-    const float heal = glm::min(amount / materialsPerHp, m_structureHealthMax - s.state->health);
+    const float healthMax = glm::max(s.state->healthMax, 1e-3f);
+    const float materialsPerHp = glm::max(m_costs[(int)s.type], 0.01f) / healthMax;
+    const float heal = glm::min(amount / materialsPerHp, healthMax - s.state->health);
     if (heal <= 0.0f)
         return 0.0f;
     s.state->health += heal;
-    if (s.state->blueprint && s.state->health >= m_structureHealthMax - 1e-3f)
+    if (s.state->blueprint && s.state->health >= healthMax - 1e-3f)
     {
         s.state->blueprint = false;
         applyStructureTint(s); // back to the authored color
+        m_linksDirty = true;   // a finished cable segment starts conducting
         Log::info(oc::string(structureNames[(int)s.type]) + " constructed");
+        if (onStructureBuilt) // server: re-fire GPl — cables are outside GSt, so this IS the
+            onStructureBuilt(s.state->structureId); // client's only built notification
     }
     return heal * materialsPerHp;
 }
 
 float StructureSystem::takeStoredMinerals(const glm::vec3& pos, float radius, uint8 team, float amount)
 {
+    // Silos, the Base, AND mineral extractors: a player standing at a fresh dig site can courier
+    // its buffer by hand before any conveyor exists (a fuel extractor's mineral store stays 0, so
+    // including the type unconditionally is safe).
+    const auto holdsMinerals = [](EStructureType t) {
+        return t == EStructureType::MineralSilo || t == EStructureType::Base
+            || t == EStructureType::Extractor; };
     float taken = 0.0f;
     for (const Ref& s : m_frame)
     {
         if (amount - taken <= 0.0f)
             break;
-        if (s.state->blueprint || s.state->team != team
-            || (s.type != EStructureType::MineralSilo && s.type != EStructureType::Base))
+        if (s.state->blueprint || s.state->team != team || !holdsMinerals(s.type))
             continue;
         if (glm::distance(glm::vec2(s.entity->pos.x, s.entity->pos.z), glm::vec2(pos.x, pos.z)) > radius)
             continue;
@@ -877,7 +1209,7 @@ float StructureSystem::fundNearbyBlueprint(const glm::vec3& pos, float radius, u
         if (s.state->team != team || s.type == EStructureType::Base)
             continue;
         const bool wantsMaterials = s.state->blueprint
-            || (includeRepairs && s.state->health < m_structureHealthMax - 1e-3f);
+            || (includeRepairs && s.state->health < s.state->healthMax - 1e-3f);
         if (!wantsMaterials)
             continue;
         const float dist = glm::distance(glm::vec2(s.entity->pos.x, s.entity->pos.z), glm::vec2(pos.x, pos.z));
@@ -1134,9 +1466,6 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
     for (const PlaceRequest& req : m_requests)
         placeStructure(req.type, req.pos, req.nodeIndex, req.facing, req.team);
     m_requests.clear();
-    for (const CableRequest& req : m_cableRequests)
-        applyCableRequest(req.idA, req.idB, req.type, req.team);
-    m_cableRequests.clear();
     for (const auto& [id, team] : m_demolishRequests)
         applyDemolishRequest(id, team);
     m_demolishRequests.clear();
@@ -1159,6 +1488,9 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
     m_routeRequests.clear();
     requestScope.stop();
 
+    // Same-tick links for fresh placements (each placeStructure above set the dirty flag); a death
+    // in tickDamage below re-dirties and rebuilds on the NEXT tick.
+    rebuildDerivedLinks();
     tickProduction(deltaSec); // flows themselves run per-entity in the engine's pass
     tickConstructors(deltaSec);
     tickDamage(deltaSec);
@@ -1168,6 +1500,8 @@ void StructureSystem::tickMirror(float deltaSec)
 {
     ProfileScope scope("Structures mirror", EProfileCategory::Game);
     refresh();
+    rebuildDerivedLinks(); // clients derive locally from the mirrored structures — same code,
+                           // same deterministic inputs, so both sides agree without a cable wire
     // Ease each emitter's fraction toward the synced target at ramp-like speed, then drive the
     // LOCAL field from it — the bubble animates as smoothly as the server's own.
     for (const Ref& ref : m_frame)
@@ -1191,9 +1525,21 @@ void StructureSystem::tickMirror(float deltaSec)
 void StructureSystem::mirrorPlace(uint32 id, EStructureType type, const glm::vec3& pos,
     const glm::vec2& facingXZ, int nodeIndex, uint8 team, bool built)
 {
-    if (structureIndexById(id) >= 0 || (int)type >= (int)EStructureType::Count
-        || (int)team >= GameMaxTeams)
-        return; // duplicate replay / garbage
+    if ((int)type >= (int)EStructureType::Count || (int)team >= GameMaxTeams)
+        return; // garbage
+    if (const int existing = structureIndexById(id); existing >= 0)
+    {
+        // Duplicate replay — or the server's blueprint-completed re-send (see onStructureBuilt):
+        // apply the built flag idempotently so the client's derivation starts conducting too.
+        if (built && m_frame[existing].state->blueprint)
+        {
+            m_frame[existing].state->blueprint = false;
+            m_frame[existing].state->health = m_frame[existing].state->healthMax;
+            applyStructureTint(m_frame[existing]);
+            m_linksDirty = true;
+        }
+        return;
+    }
     glm::quat rot(1.0f, 0.0f, 0.0f, 0.0f);
     if (glm::dot(facingXZ, facingXZ) > 1e-4f)
     {
@@ -1210,18 +1556,6 @@ void StructureSystem::mirrorRemove(uint32 id)
         destroyStructureAt((size_t)index);
 }
 
-void StructureSystem::mirrorCable(uint32 idA, uint32 idB, ECableType type, bool removed)
-{
-    const int a = structureIndexById(idA), b = structureIndexById(idB);
-    if (a < 0 || b < 0)
-        return;
-    if (removed)
-        GameStructureComponent::unlink(*m_frame[a].entity, *m_frame[b].entity, cableMedium(type));
-    else
-        GameStructureComponent::link(*m_frame[a].entity, *m_frame[b].entity,
-            (uint8)cableMedium(type), (uint8)type, m_cableThroughput[(int)type]);
-}
-
 void StructureSystem::mirrorStructureState(uint32 id, float healthFrac, float chargeFrac,
     float fuelFrac, float mineralFrac, float outputFrac, float utilFrac, bool powered, bool blueprint)
 {
@@ -1234,8 +1568,9 @@ void StructureSystem::mirrorStructureState(uint32 id, float healthFrac, float ch
     {
         s.blueprint = blueprint; // completion (or a fresh ghost) — swap the tint to match
         applyStructureTint(ref);
+        m_linksDirty = true;     // built buildings attach to runs; ghosts detach
     }
-    s.health = healthFrac * m_structureHealthMax;
+    s.health = healthFrac * s.healthMax;
     s.store[0] = chargeFrac * energyCapacityOf(ref.type);
     s.store[1] = fuelFrac * fuelCapacityOf(ref.type);
     s.store[2] = mineralFrac * mineralCapacityOf(ref.type);
@@ -1266,7 +1601,7 @@ void StructureSystem::saveTo(AssetNode& root) const
         n.set("Id", oc::to_string(s.state->structureId));
         n.set("Type", oc::to_string((int)s.type));
         n.set("Position", s.entity->pos);
-        const glm::vec3 forward = s.type == EStructureType::Lance
+        const glm::vec3 forward = s.type == EStructureType::Lance || s.type == EStructureType::Crossing
             ? s.entity->rot * glm::vec3(0.0f, 0.0f, -1.0f) : glm::vec3(0.0f);
         n.set("Facing", glm::vec3(forward.x, 0.0f, forward.z));
         n.set("NodeIndex", oc::to_string(s.nodeIndex));
@@ -1288,17 +1623,8 @@ void StructureSystem::saveTo(AssetNode& root) const
             }
         }
     }
-    const int cables = cableTotal();
-    for (int i = 0; i < cables; ++i)
-    {
-        uint32 idA, idB;
-        ECableType type;
-        cableAt(i, idA, idB, type);
-        AssetNode& n = root.addChild("Cable");
-        n.set("A", oc::to_string(idA));
-        n.set("B", oc::to_string(idB));
-        n.set("Type", oc::to_string((int)type));
-    }
+    // (No Cable nodes any more: cable segments save as ordinary Structure entries and the links
+    // re-derive on load. Old saves' Cable nodes are simply ignored by loadFrom.)
 }
 
 void StructureSystem::clearAllStructures()
@@ -1306,9 +1632,11 @@ void StructureSystem::clearAllStructures()
     while (!m_frame.empty())
         destroyStructureAt(m_frame.size() - 1); // fires onStructureRemoved — clients prune
     m_requests.clear();
-    m_cableRequests.clear();
     m_demolishRequests.clear();
     m_routeRequests.clear();
+    m_cells.clear();
+    m_runs.clear();
+    m_linksDirty = true;
 }
 
 void StructureSystem::loadFrom(const AssetNode& root)
@@ -1321,6 +1649,11 @@ void StructureSystem::loadFrom(const AssetNode& root)
         const uint32 id = n->find("Id") ? (uint32)n->find("Id")->asInt() : 0;
         if (typeInt < 0 || typeInt >= (int)EStructureType::Count || id == 0 || structureIndexById(id) >= 0)
             continue; // garbage / duplicate entry
+        if (typeInt == (int)EStructureType::Connector)
+        {
+            Log::warning("Load game: Connector is retired — entry skipped (old save)");
+            continue;
+        }
         const glm::vec3 pos = n->find("Position") ? n->find("Position")->asVec3() : glm::vec3(0.0f);
         const glm::vec3 facing = n->find("Facing") ? n->find("Facing")->asVec3() : glm::vec3(0.0f);
         glm::quat rot(1.0f, 0.0f, 0.0f, 0.0f);
@@ -1336,8 +1669,8 @@ void StructureSystem::loadFrom(const AssetNode& root)
         if (index < 0)
             continue;
         GameStructureComponent& s = *m_frame[index].state;
-        s.health = glm::clamp(n->find("Health") ? n->find("Health")->asFloat() : m_structureHealthMax,
-            1.0f, m_structureHealthMax);
+        s.health = glm::clamp(n->find("Health") ? n->find("Health")->asFloat() : s.healthMax,
+            1.0f, s.healthMax);
         s.store[0] = glm::clamp(n->find("Charge") ? n->find("Charge")->asFloat() : 0.0f, 0.0f, s.capacity[0]);
         s.store[1] = glm::clamp(n->find("Fuel") ? n->find("Fuel")->asFloat() : 0.0f, 0.0f, s.capacity[1]);
         s.store[2] = glm::clamp(n->find("Minerals") ? n->find("Minerals")->asFloat() : 0.0f, 0.0f, s.capacity[2]);
@@ -1349,19 +1682,10 @@ void StructureSystem::loadFrom(const AssetNode& root)
                 if ((int)s.route.size() < MaxRouteWaypoints)
                     s.route.push_back(glm::vec3(p->asFloat(0), 0.0f, p->asFloat(1)));
     }
-    for (const AssetNode* n : root.findAll("Cable"))
-    {
-        const uint32 idA = n->find("A") ? (uint32)n->find("A")->asInt() : 0;
-        const uint32 idB = n->find("B") ? (uint32)n->find("B")->asInt() : 0;
-        const int type = n->find("Type") ? n->find("Type")->asInt() : -1;
-        const int a = structureIndexById(idA), b = structureIndexById(idB);
-        if (type >= 0 && type < (int)ECableType::Count && a >= 0 && b >= 0
-            && !cableExists(idA, idB, cableMedium((ECableType)type)))
-            GameStructureComponent::link(*m_frame[a].entity, *m_frame[b].entity,
-                (uint8)cableMedium((ECableType)type), (uint8)type, m_cableThroughput[type]);
-    }
+    // (Old saves' Cable nodes are ignored: links derive from the cable segments' cell adjacency.)
+    rebuildDerivedLinks(); // every spawnStructure above set the dirty flag
     Log::info("Game state loaded: " + oc::to_string(m_frame.size()) + " structures, "
-        + oc::to_string(cableTotal()) + " cables");
+        + oc::to_string(m_runs.size()) + " cable runs");
 }
 
 // ---------------------------------------------------------------- debug draw
@@ -1369,72 +1693,28 @@ void StructureSystem::loadFrom(const AssetNode& root)
 void StructureSystem::drawDebug() const
 {
     ProfileScope scope("Structures debug draw", EProfileCategory::Game);
-    // Links: base hue by TIER, brightness by UTILIZATION, plus a pulse mark travelling in the
-    // flow direction. Iterates each structure's OWNED links — no cable list anywhere.
-    for (const Ref& s : m_frame)
-        for (const GameStructureLink& l : s.state->links)
-        {
-            if (!l.owner || !l.other)
-                continue;
-            const ECableType type = tierOf(l);
-            // Fixed height per TYPE so parallel links of one pair never overlap: power on top,
-            // pipes in the middle, conveyors at the bottom.
-            const float lift = l.medium == 0 ? 0.5f : l.medium == 1 ? 0.0f : -0.5f;
-            const glm::vec3 posA = s.entity->pos + glm::vec3(0.0f, lift, 0.0f);
-            const glm::vec3 posB = l.other->pos + glm::vec3(0.0f, lift, 0.0f);
-            // SMOOTHED rate (flowAvg, ~0.25 s EMA on the component): raw per-tick transfers are
-            // bursty and made the brightness/pulse strobe. Clients never run the flow sim, so
-            // they fall back to the endpoints' GSt-synced utilization gauge.
-            float util = glm::abs(l.flowAvg) / glm::max(l.throughput, 1e-3f);
-            if (Globals::networkManager.role() == ENetRole::Client)
-            {
-                const GameStructureComponent* far = getComponent<GameStructureComponent>(l.other.get());
-                util = glm::max(s.state->flowUtil, far ? far->flowUtil : 0.0f);
-            }
-            util = glm::clamp(util, 0.0f, 1.0f);
-            const glm::vec3 hue = type == ECableType::Pipe ? glm::vec3(1.0f, 0.55f, 0.15f)
-                : type == ECableType::Conveyor ? glm::vec3(0.35f, 0.5f, 1.0f)
-                : type == ECableType::Heavy ? glm::vec3(0.3f, 0.9f, 1.0f) : glm::vec3(0.9f, 0.9f, 0.3f);
-            const uint32 bodyColor = packColor(hue * (0.25f + 0.75f * util));
-            const float radius = type == ECableType::Heavy ? 0.14f
-                               : type == ECableType::Conveyor ? 0.12f
-                               : type == ECableType::Pipe ? 0.11f : 0.07f;
-            const glm::vec3 axis = posB - posA;
-            const float len = glm::length(axis);
-            if (len < 1e-3f)
-                continue;
-            const glm::vec3 dir = axis / len;
-            const glm::vec3 side = glm::normalize(glm::abs(dir.y) < 0.99f
-                ? glm::cross(dir, glm::vec3(0.0f, 1.0f, 0.0f)) : glm::vec3(1.0f, 0.0f, 0.0f));
-            const glm::vec3 up = glm::cross(dir, side);
-            constexpr int TubeSides = 6;
-            glm::vec3 prevOffset = side * radius;
-            for (int k = 1; k <= TubeSides; ++k)
-            {
-                const float a = float(k) / TubeSides * glm::two_pi<float>();
-                const glm::vec3 offset = (side * std::cos(a) + up * std::sin(a)) * radius;
-                Globals::rendererVK.addDebugLine(posA + offset, posB + offset, bodyColor);
-                Globals::rendererVK.addDebugLine(posA + prevOffset, posA + offset, bodyColor);
-                Globals::rendererVK.addDebugLine(posB + prevOffset, posB + offset, bodyColor);
-                prevOffset = offset;
-            }
-            // Speed is in link lengths per second: ~4 s end to end idling, ~2 s at full load.
-            if (util > 0.02f)
-            {
-                float t = glm::fract(m_time * (0.25f + 0.25f * util));
-                if (l.flowAvg < 0.0f)
-                    t = 1.0f - t; // pulse travels WITH the flow (self -> other positive)
-                const glm::vec3 p = glm::mix(posA, posB, t);
-                glm::vec3 prevRing = side * (radius * 1.8f);
-                for (int k = 1; k <= TubeSides; ++k)
-                {
-                    const float a = float(k) / TubeSides * glm::two_pi<float>();
-                    const glm::vec3 offset = (side * std::cos(a) + up * std::sin(a)) * (radius * 1.8f);
-                    Globals::rendererVK.addDebugLine(p + prevRing, p + offset, packColor(hue));
-                    prevRing = offset;
-                }
-            }
-        }
+    // Cable RUNS: the segments themselves are real meshes now — this pass only adds the FLOW
+    // feedback: a pulsing ring over every segment of a working run, brightness/size by the run's
+    // utilization. Util = the busiest attached building's flowUtil gauge, which the server computes
+    // and clients receive through GSt — the same reading on every instance.
+    for (const CableRun& run : m_runs)
+    {
+        float util = 0.0f;
+        for (const uint32 id : run.buildingIds)
+            if (const int index = structureIndexById(id); index >= 0)
+                util = glm::max(util, m_frame[index].state->flowUtil);
+        util = glm::clamp(util, 0.0f, 1.0f);
+        if (util <= 0.02f || run.buildingIds.size() < 2)
+            continue;
+        const glm::vec3 hue = run.medium == 1 ? glm::vec3(1.0f, 0.55f, 0.15f)
+            : run.medium == 2 ? glm::vec3(0.35f, 0.5f, 1.0f) : glm::vec3(0.9f, 0.9f, 0.3f);
+        const float pulse = 0.5f + 0.5f * std::sin(m_time * (2.0f + 6.0f * util));
+        const uint32 color = packColor(hue * (0.3f + 0.7f * util) * (0.5f + 0.5f * pulse));
+        const float radius = 0.25f + 0.15f * pulse;
+        for (const uint32 id : run.segmentIds)
+            if (const int index = structureIndexById(id); index >= 0)
+                drawCircle(m_frame[index].entity->pos + glm::vec3(0.0f, 0.45f, 0.0f), radius, color, 10);
+    }
 
     // Node rings: blue = mineral, orange = fuel.
     for (const Node& node : m_nodes)

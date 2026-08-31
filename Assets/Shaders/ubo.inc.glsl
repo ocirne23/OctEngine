@@ -203,9 +203,7 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                          // z = contact wall alpha (interior equilibrium pane),
                          // w = junction smoothing (smooth-max width as a fraction of iso)
     vec4 u_forceParams4; // x = density debug view (0/1: heatmap of peak field along the ray),
-                         // y = density range (field value mapping to white),
-                         // z = ambient field slope (strength/m; <= 0 disables), w = ambient team
-    vec4 u_forceParams5; // ambient field: xy = planar world center, z = safe radius (m), w = max strength
+                         // y = density range (field value mapping to white), zw = unused
     vec4 u_forceBake0;   // sampled shell tier: xyz = bake volume world min, w = tier reach threshold
     vec4 u_forceBake1;   // xyz = 1 / bake volume world size, w = tier enabled (0/1)
     vec4 u_forceBake2;   // x = union march step size (m), y = union march max steps,

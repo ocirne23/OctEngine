@@ -39,8 +39,8 @@ export struct GameUnitParams
     float pushGain = 20000.0f;     // enemy fields shoving the body (force-ball scale) — shared by
                                    // the emitter readback path AND the shield-less query path,
                                    // which reproduces the same formula from the point readback
-    float retargetInterval = 8.0f; // auto-target re-roll cadence (jittered per unit)
-    float targetSearchRadius = 50.0f; // spatial radius of the auto-target search (structures +
+    float retargetInterval = 5.0f; // auto-target re-roll cadence (jittered per unit)
+    float targetSearchRadius = 15.0f; // spatial radius of the auto-target search (structures +
                                       // player fallback) — LOCAL harassment: the barracks route
                                       // does the long-distance delivery, this only picks fights
                                       // around wherever the unit ends up
@@ -55,6 +55,18 @@ export struct GameUnitParams
     float steerFlow = 1.0f;        // FOLLOW the crowd lane — a lane is a seeded/proven route, so
                                    // where one exists it should outweigh walking straight at the goal
     float steerPersist = 0.4f;     // keep the last heading (no dithering / reversals)
+    // LIVE-TARGET TRACKING: within targetTrackRadius of a team-field target the goal direction
+    // refreshes at the field rate (~0.25 s) against the target's LIVE position, so it must beat
+    // the seeded lane — the lane's periodic re-plans lag a moving player badly. Between track and
+    // search radius the unit still has the target but marches lane-friendly (seeded paths rule).
+    float targetTrackRadius = 5.0f; // geodesic metres: closer than this = field-tracking priority
+    float steerTrackGoal = 1.5f;   // goal weight floor while tracking (overrides steerGoal)
+    float trackFlowMult = 0.15f;   // lane weight multiplier while tracking (near-mute)
+    // NAV FOLLOW band (search radius .. this): too far to TARGET, but if the crowd FLOW field
+    // holds a lane at the unit it walks the lane — pursuit survives a player sprinting out of the
+    // search radius (the chase trail + seeded lane keep pulling the pack until the target is back
+    // in range or the lane decays).
+    float navFollowRadius = 30.0f; // geodesic metres to the nearest enemy source
     float steerPressure = 0.5f;    // away from diffused pressure (crowd presence + jams)
     float pressureKnee = 0.23f;    // pressure gradient scoring 0.5 (compressive: x/(x+knee), no saturation)
     float flowKnee = 0.15f;        // lane speed scoring 0.5, as a fraction of moveSpeed (low: even
@@ -77,9 +89,11 @@ export struct GameUnitParams
 // a target, melee gnaw on any enemy structure in reach, and an optional RANGED stance (stand off
 // and ask for a shot — spawning is main-thread only).
 // TARGETING + PATHING: the Nav flow fields first — every OTHER team's field is sampled at the
-// unit's cell and the geodesically nearest enemy (structure or player) wins; its descent
-// direction routes around walls, and the pressure gradient spreads the crowd. Where no
-// field covers the unit (far from every source, Nav disabled) the old local search runs: random
+// unit's cell and the geodesically nearest enemy (structure or player) wins, RANGE-GATED by
+// targetSearchRadius (a source farther than that geodesically is ignored: units hold their patch
+// instead of marching across the map, and in-range units track LIVE positions at the field's
+// ~0.25 s rebuild rate); its descent direction routes around walls, and the pressure gradient
+// spreads the crowd. Where no field covers the unit (out of range, Nav disabled) the local search runs: random
 // pick among the 4 nearest enemy structures via spatial query, nearest enemy player fallback —
 // puppets found in the SAME query, nothing publishes a player list. The DSL may LOCK an
 // explicit target (setTarget), which steers
@@ -174,11 +188,6 @@ export struct GameUnitComponent
     // Orders: an explicit DSL/game target overrides auto-targeting until cleared or reached+dry.
     bool targetLocked = false;
     bool hasTarget = false;
-    // AMBIENT unit (co-op scatter): never targets through the Nav team fields — those cover the
-    // whole map and walked every scattered unit to the base. Only the LOCAL spatial search
-    // ("Target search radius") aggroes it, so it holds its area until something comes near.
-    // Orders/routes/locks are unaffected (they already bypass the field block).
-    bool ambient = false;
     bool moveOrder = false;   // the locked target is a PLAYER MOVE ORDER (RTS right-click): walk
                               // there, then unlock and resume the AI (a DSL attack lock never clears)
     glm::vec3 targetPos{ 0.0f };
@@ -240,7 +249,6 @@ export struct GameStructureLink
 {
     EntityPtr other;
     uint8 medium = 0;     // 0 energy, 1 fuel, 2 minerals — which store pair it equalizes
-    uint8 cableTier = 0;  // the game's ECableType (Basic/Heavy/Pipe/Conveyor) for draw/retype
     float throughput = 5.0f; // units/s cap
     bool owner = false;
     float lastFlow = 0.0f;   // signed, THIS side -> other (owner side only)
@@ -372,7 +380,7 @@ export struct GameStructureComponent
     // link() replaces the pair's existing link of the SAME medium (retype in place).
     GameStructureLink* findLink(const Entity* otherEntity, int medium = -1); // -1 = any medium
     void unlinkAll(Entity& self);                           // removes the mirror entries too
-    static void link(Entity& a, Entity& b, uint8 medium, uint8 cableTier, float throughput);
+    static void link(Entity& a, Entity& b, uint8 medium, float throughput); // a = the OWNER side
     static void unlink(Entity& a, Entity& b, int medium = -1); // -1 = every link of the pair
 };
 

@@ -92,10 +92,14 @@ void NpcSystem::registerTweaks()
     Tweak::floatVar("Game/Enemies", "Field push gain", &up.pushGain, 0.0f, 100000.0f, 100.0f);
     Tweak::floatVar("Game/Enemies", "Retarget interval", &up.retargetInterval, 1.0f, 60.0f, 0.5f);
     Tweak::floatVar("Game/Enemies", "Target search radius", &up.targetSearchRadius, 5.0f, 400.0f, 1.0f);
+    Tweak::floatVar("Game/Enemies", "Target track radius", &up.targetTrackRadius, 0.0f, 400.0f, 1.0f);
+    Tweak::floatVar("Game/Enemies", "Nav follow radius", &up.navFollowRadius, 0.0f, 400.0f, 1.0f);
     Tweak::boolean("Game/Enemies", "Nav fields", &up.navEnabled);
     Tweak::floatVar("Game/Enemies/Steer", "Goal", &up.steerGoal, 0.0f, 3.0f, 0.05f);
     Tweak::floatVar("Game/Enemies/Steer", "Flow", &up.steerFlow, 0.0f, 3.0f, 0.05f);
     Tweak::floatVar("Game/Enemies/Steer", "Persist", &up.steerPersist, 0.0f, 3.0f, 0.05f);
+    Tweak::floatVar("Game/Enemies/Steer", "Track goal", &up.steerTrackGoal, 0.0f, 3.0f, 0.05f);
+    Tweak::floatVar("Game/Enemies/Steer", "Track flow mult", &up.trackFlowMult, 0.0f, 1.0f, 0.05f);
     Tweak::floatVar("Game/Enemies/Steer", "Pressure", &up.steerPressure, 0.0f, 3.0f, 0.05f);
     Tweak::floatVar("Game/Enemies/Steer", "Pressure knee", &up.pressureKnee, 0.01f, 3.0f, 0.01f);
     Tweak::floatVar("Game/Enemies/Steer", "Flow knee", &up.flowKnee, 0.01f, 2.0f, 0.01f);
@@ -155,7 +159,8 @@ static glm::vec3 freeSpawnPointAround(const StructureSystem& structures, const g
     {
         const float a = start + (float)k * glm::two_pi<float>() / 8.0f;
         const glm::vec3 p(center.x + std::cos(a) * ringRadius, 1.0f, center.z + std::sin(a) * ringRadius);
-        if (structures.cellsFree(EStructureType::Emitter, p)) // 1x1 probe
+        if (structures.cellsFree(EStructureType::Emitter, p,
+            glm::quat(1.0f, 0.0f, 0.0f, 0.0f), /*ignoreCables*/ true)) // 1x1 probe; cables are walk-through
             return p;
     }
     return glm::vec3(center.x + std::cos(start) * ringRadius, 1.0f, center.z + std::sin(start) * ringRadius);
@@ -316,8 +321,6 @@ void NpcSystem::saveUnits(AssetNode& root) const
         n.set("Energy", u->energy);
         n.set("Source", oc::to_string(u->sourceId));
         n.set("RouteIndex", oc::to_string(u->routeIndex));
-        if (u->ambient)
-            n.set("Ambient", "true"); // co-op scatter: keeps holding its patch after a load
     }
 }
 
@@ -344,7 +347,6 @@ void NpcSystem::loadUnits(const AssetNode& root, StructureSystem& structures)
         u->health = glm::clamp(n->find("Health") ? n->find("Health")->asFloat() : u->health, 1.0f, u->healthMax);
         u->energy = glm::clamp(n->find("Energy") ? n->find("Energy")->asFloat() : u->energy, 0.0f, u->energyMax);
         u->routeIndex = (uint8)glm::clamp(n->find("RouteIndex") ? n->find("RouteIndex")->asInt() : 0, 0, 255);
-        u->ambient = n->find("Ambient") ? n->find("Ambient")->asBool() : false;
         if (GameStructureComponent* barracks = structures.structureStateById(source))
             ++barracks->barracks.aliveUnits;
     }

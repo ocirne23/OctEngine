@@ -24,6 +24,7 @@ void GamePlayer::registerTweaks()
     Tweak::floatVar("Game/Player", "Accel", &m_accel, 1.0f, 200.0f, 0.5f);
     Tweak::floatVar("Game/Player", "Jump speed", &m_jumpSpeed, 0.5f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Player", "Sprint mult", &m_sprintMult, 1.0f, 5.0f, 0.1f);
+    Tweak::floatVar("Game/Player", "Sprint energy/s", &m_sprintEnergyPerSec, 0.0f, 50.0f, 0.5f);
     Tweak::floatVar("Game/Player", "Health max", &m_healthMax, 10.0f, 1000.0f, 1.0f);
     Tweak::floatVar("Game/Player", "Health drain/s", &m_healthDrainRate, 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Shield", "Max output", &m_shieldMaxOutput, 0.2f, 5.0f, 0.05f);
@@ -174,7 +175,19 @@ void GamePlayer::tickMovement(const glm::vec3& cameraForwardPlanar, float deltaS
     }
     else
         Globals::navSystem.clearGoal(c_navGoalSlot);
-    const float speed = m_moveSpeed * (input.isKeyDown(SDL_Scancode::SDL_SCANCODE_LSHIFT) ? m_sprintMult : 1.0f);
+    // SPRINT burns the shield battery, gated on the COLLAPSE LATCH (a plain energy > 0 test never
+    // bit — tickShieldAndHealth's regen runs right after this and lifts the battery off zero
+    // before its own latch check ever sees it): emptying the battery collapses the shield HERE,
+    // and both the bubble and the boost stay down until the battery refills to "Reboot energy".
+    const bool sprinting = input.isKeyDown(SDL_Scancode::SDL_SCANCODE_LSHIFT)
+        && glm::dot(move, move) > 1e-4f && !m_shieldCollapsed;
+    if (sprinting)
+    {
+        m_energy = glm::max(m_energy - m_sprintEnergyPerSec * deltaSec, 0.0f);
+        if (m_energy <= 0.0f)
+            m_shieldCollapsed = true; // the same latch applyDamage trips
+    }
+    const float speed = m_moveSpeed * (sprinting ? m_sprintMult : 1.0f);
 
     glm::vec3 vel = pc->body.getLinearVelocity();
     glm::vec3 dv = glm::vec3(move.x * speed - vel.x, 0.0f, move.z * speed - vel.z);

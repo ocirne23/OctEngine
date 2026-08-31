@@ -10,7 +10,7 @@ import Physics;
 // Bump on ANY wire format change: the transport handshake denies mismatched protocol ids, so old
 // builds fail to connect instead of misparsing. GameNetVersion rides in Hello/Welcome purely so the
 // mismatch produces a readable log line when the protocolId was forgotten.
-constexpr uint32 GameProtocolId = 0x4F435346; // snapshot/claim records may carry the GAME blob (NetRecFlag_Game)
+constexpr uint32 GameProtocolId = 0x4F435347; // physical cables: GCb/GqC removed, GPl re-sent on built
 constexpr uint16 GameNetVersion = 14;
 
 // Engine-reserved event: Synced-flagged tweak values, server -> clients (full set at join +

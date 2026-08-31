@@ -417,8 +417,6 @@ export struct ForceFieldParams
     bool unionJitter = false;
     float isoThreshold = 0.15f;      // field strength where an uncontested bubble surface sits
     int marchSteps = 10;             // ray-march steps through a shell proxy's ray interval
-    float bigReachThreshold = 48.0f; // max directional reach (m) above which an emitter bypasses the
-                                     // grid into the globally-scanned big-emitter list
     bool useGrid = true;             // hash-grid candidate gathering; off = brute-force scan of every
                                      // emitter per evaluation (small scenes / A-B correctness check).
                                      // Toggling rebuilds the force pipelines (FORCE_GRID define)
@@ -434,19 +432,11 @@ export struct ForceFieldParams
     float contactGlowWidth = 0.15f;    // opposing/own field ratio band that reads as contact
     float contactWallAlpha = 0.5f;     // visibility of the interior equilibrium WALL between two
                                        // pressed opposing bubbles (0 = only the outer seam glows)
+    bool logTierDebug = false;         // DEBUG: log each drawable's reach/visible radius/tier once a second
     bool densityView = false;          // DEBUG: draw bubbles as a heatmap of the strongest field along
                                        // the view ray instead of the shell (tip power/merging readout);
                                        // white contour marks the iso threshold
     float densityRange = 2.0f;         // field value that maps to the heatmap's white end
-    // GLOBAL AMBIENT FIELD: an analytic distance-based field term added to one team everywhere —
-    // zero within safeRadius of the planar center, growing at `slope` per metre, capped at
-    // maxStrength. Never drawn (no proxy; shading treats it as an invisible field), but it deforms
-    // bubbles and feeds pressure/query readbacks like any field. slope <= 0 disables.
-    uint32 ambientTeam = 1;
-    glm::vec2 ambientCenter = glm::vec2(0.0f); // world XZ
-    float ambientSafeRadius = 30.0f;
-    float ambientSlope = 0.0f;         // field strength per metre beyond the safe radius
-    float ambientMaxStrength = 2.0f;
     float junctionSmoothing = 0.5f;    // smooth-max width (fraction of iso) rounding the crease where
                                        // shells meet the wall: continuous normals kill the junction
                                        // jaggies; 0 = hard crease. Queries use the same function, so
@@ -457,7 +447,8 @@ export struct ForceFieldParams
                                        // the DRAW entirely (its field/readbacks stay live); 0 = off
     float shellFullResPixels = 160.0f; // projected radius at/above which the march runs the full
                                        // "March steps"; smaller shells taper linearly (floor 8)
-    float sampledShellReach = 12.0f;   // emitters with reach >= this march the BAKED shell volume
+    float sampledShellRadius = 5.0f;   // emitters whose VISIBLE bubble radius (forceEmitterVisibleRadius,
+                                       // not authored reach) is >= this march the BAKED shell volume
                                        // (two trilinear taps/sample) instead of the analytic
                                        // candidate loop — hits/normals/shading stay analytic.
                                        // 0 = tier off. Small bubbles stay analytic: the fixed-size

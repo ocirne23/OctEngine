@@ -78,17 +78,19 @@ public:
         // only their ray intervals; the fullscreen union pass marches each covered pixel once.
         // Off (VR, "Union march" tweak, density debug view) = the analytic tier draws per-proxy.
         bool unionPass = false;
-        float sampledReach = 3.4e38f; // the tier partition threshold (FLT_MAX = all analytic)
+        // The tier partition threshold, in VISIBLE bubble radius (forceEmitterVisibleRadius) —
+        // NOT authored reach. FLT_MAX = all analytic.
+        float sampledRadius = 3.4e38f;
+        bool logTierDebug = false; // "Force/Debug/Log tier classification": drawables' radii/tiers, 1/s
     };
 
-    // Compacts the ACTIVE emitter slots (building the big-emitter list against bigReachThreshold and
-    // stamping each record's source slot for the readback; FORCE_FLAG_PASSIVE slots land in a tail
-    // past the field count that only the force compute evaluates), uploads the query slots, and
-    // patches the draw/dispatch counts. Call from present(), after the slot's fence wait.
+    // Compacts the ACTIVE emitter slots (one classification sweep into the partition
+    // [sampled-tier drawable | analytic drawable | non-drawn field | PASSIVE tail], stamping each
+    // record's source slot for the readback), uploads the query slots, and patches the
+    // draw/dispatch counts. Call from present(), after the slot's fence wait.
     void upload(uint32 frameIdx, oc::span<const RendererVKLayout::ForceEmitterGpu> slots,
         oc::span<const RendererVKLayout::ForceQueryGpu> querySlots,
-        oc::span<const glm::ivec4> bakeChunks, float bakeSampleY, float bigReachThreshold,
-        const ShellCull& shellCull);
+        oc::span<const glm::ivec4> bakeChunks, float bakeSampleY, const ShellCull& shellCull);
 
     // Records grid clear + insert + force/query dispatches + readback barriers (outside any render
     // pass; ubo is the frame's UBO). All dispatches ride mapped indirect buffers, so emitter/query
@@ -232,6 +234,7 @@ private:
     vk::RenderPass m_marchRenderPass;
     vk::Framebuffer m_marchFramebuffer;
 
+    oc::array<oc::vector<uint32>, 4> m_uploadBuckets; // upload scratch: slot indices per partition
     uint32 m_tableEntries = RendererVKLayout::INITIAL_FORCE_TABLE_ENTRIES;
     size_t m_gridDataSize = RendererVKLayout::INITIAL_FORCE_GRID_DATA_SIZE;
 

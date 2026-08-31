@@ -3,8 +3,7 @@
 // evaluation happens anywhere in the world, not just near the camera). Each occupied cell stores a
 // fixed-capacity list of compact emitter indices; an emitter is inserted into every cell its reach
 // bounds overlap, so a point's containing cell lists every emitter whose compact support can reach
-// it. Emitters above the big-reach threshold bypass the grid entirely (fe_bigIndices in the emitter
-// buffer header) and are scanned linearly by every evaluation.
+// it — an EMPTY cell therefore provably has zero field (the union march's skip relies on this).
 //
 // TABLE BUFFER: { uint numCells; uint dataCounter; uint tableSize; uint pad; uint table[]; }
 //   (numCells/dataCounter are the CPU capacity readback — on overflow the counter keeps

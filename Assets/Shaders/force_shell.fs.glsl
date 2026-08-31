@@ -217,7 +217,7 @@ void main()
     // SAMPLED TIER: large emitters march the baked field volume — two trilinear taps per sample
     // instead of the analytic candidate loop, so their cost stops scaling with emitter density.
     // Refinement/normals/shading below remain analytic (crisp rims, exact ownership).
-    const bool sampledTier = u_forceBake1.w > 0.5 && e.posReach.w >= u_forceBake0.w;
+    const bool sampledTier = u_forceBake1.w > 0.5 && forceVisibleRadius(e) >= u_forceBake0.w;
 
     // March compositing up to two crossings of F (front shell + the surface behind it). The step
     // COUNT tapers with the proxy's projected size (u_forceParams2.w — see buildUboForce): a small

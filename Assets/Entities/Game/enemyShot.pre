@@ -10,6 +10,7 @@ Prefab gameEnemyShot
 		Scale 0.25
 	Component Physics
 		Body Dynamic
+		Layer Projectile
 		Shape Sphere
 		Radius 0.25
 		Density 400
