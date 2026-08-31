@@ -125,6 +125,11 @@ void StructureSystem::registerTweaks()
     Tweak::floatVar("Game/Economy", "Energy gen/s per generator", &m_genEnergyPerSec, 0.5f, 50.0f, 0.25f);
     Tweak::floatVar("Game/Economy", "Emitter energy/s", &m_emitterEnergyPerSec, 0.1f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Economy", "Emitter energy/s @ pressure 1", &m_emitterPressureDraw, 0.0f, 50.0f, 0.1f);
+    Tweak::floatVar("Game/Economy", "Base energy capacity", &m_baseEnergyCapacity, 10.0f, 1000.0f, 5.0f);
+    Tweak::floatVar("Game/Economy", "Base energy gen/s", &m_baseEnergyGenPerSec, 0.0f, 20.0f, 0.1f);
+    Tweak::floatVar("Game/Economy", "Base shield energy/s", &m_baseShieldEnergyPerSec, 0.0f, 20.0f, 0.1f);
+    Tweak::floatVar("Game/Structures", "Base shield output", &m_baseShieldOutput, 0.1f, 8.0f, 0.1f);
+    Tweak::floatVar("Game/Structures", "Base shield reach", &m_baseShieldReach, 2.0f, 46.0f, 0.5f);
     Tweak::floatVar("Game/Economy", "Extractor energy/s", &m_extractorEnergyPerSec, 0.1f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Economy", "Battery capacity", &m_batteryCapacity, 10.0f, 1000.0f, 5.0f);
     Tweak::floatVar("Game/Economy", "Internal buffer", &m_internalBuffer, 1.0f, 100.0f, 0.5f);
@@ -516,8 +521,11 @@ void StructureSystem::spawnBase(const glm::vec3& groundPos, uint8 team)
         + glm::vec3(0.0f, structureSpawnHeights[(int)EStructureType::Base], 0.0f);
     const int index = spawnStructure(m_nextStructureId++, EStructureType::Base, pos,
         glm::quat(1.0f, 0.0f, 0.0f, 0.0f), team, /*built*/ true, -1);
-    if (index >= 0) // the starting war chest (the Base stores ONLY minerals — no energy, no fuel)
+    if (index >= 0) // the starting war chest + a FULL shield battery (it drains like any emitter)
+    {
         m_frame[index].state->store[2] = glm::min(m_startMinerals, m_mineralBaseCapacity);
+        m_frame[index].state->store[0] = m_frame[index].state->capacity[0];
+    }
 }
 
 void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groundPos, int nodeIndex,
@@ -904,7 +912,7 @@ void StructureSystem::tickProduction(float deltaSec)
         if (s.blueprint)
         {
             s.powered = false;
-            if (isEmitterType(ref.type))
+            if (hasShieldEmitter(ref.type))
             {
                 s.emitter.outputFrac = 0.0f;
                 if (ForceComponent* fc = getComponent<ForceComponent>(ref.entity))
@@ -928,8 +936,15 @@ void StructureSystem::tickProduction(float deltaSec)
             s.store[2] = glm::min(s.store[2] + m_mineralRate * m_baseIncomeMult * dt, s.capacity[2]);
 
         // ---- producers: generators burn their OWN tank into their OWN buffer (full buffer =
-        // export-limited = no fuel burn), solar trickles for free.
-        if (ref.type == EStructureType::Solar)
+        // export-limited = no fuel burn), solar trickles for free. The Base self-generates the
+        // same way into its own store — a baseline its shield draw eats from; sieges outpace it.
+        if (ref.type == EStructureType::Base && m_baseEnergyGenPerSec > 0.0f)
+        {
+            const float add = glm::min(m_baseEnergyGenPerSec * dt, glm::max(s.capacity[0] - s.store[0], 0.0f));
+            s.store[0] += add;
+            m_genRateTotal += add / dt;
+        }
+        else if (ref.type == EStructureType::Solar)
         {
             const float add = glm::min(m_solarEnergyPerSec * dt, glm::max(s.capacity[0] - s.store[0], 0.0f));
             s.store[0] += add;
@@ -952,9 +967,10 @@ void StructureSystem::tickProduction(float deltaSec)
             }
         }
 
-        // ---- consumers drain their internal battery. Emitters pay EXTRA per unit of pressure,
-        // LATCH OFF at empty until "Emitter restart charge" and ramp their bubble smoothly.
-        if (isEmitterType(ref.type))
+        // ---- consumers drain their internal battery. Emitters (the Base's shield included) pay
+        // EXTRA per unit of pressure, LATCH OFF at empty until "Emitter restart charge" and ramp
+        // their bubble smoothly.
+        if (hasShieldEmitter(ref.type))
         {
             ForceComponent* fc = getComponent<ForceComponent>(ref.entity);
             const float pressure = fc ? fc->emitter.getPressure() : 0.0f;
@@ -1043,13 +1059,15 @@ void StructureSystem::tickDamage(float)
     for (size_t i = 0; i < m_frame.size();)
     {
         const Ref& s = m_frame[i];
-        s.state->strainable = isEmitterType(s.type) && !s.state->blueprint
+        s.state->strainable = hasShieldEmitter(s.type) && !s.state->blueprint
             && s.state->emitter.outputFrac > 0.05f;
         // The CPU bubble-radius stand-in shield-less units test against (see GameComponents.ixx):
         // the visible sphere radius is ~half the reach, scaled by the live output ramp.
         s.state->bubbleRadius = s.state->strainable
             ? emitterReachOf(s.type) * 0.5f * s.state->emitter.outputFrac : 0.0f;
-        if (s.state->invulnerable || s.state->alive())
+        // The Base takes damage but is NEVER destroyed (no lose condition yet): it survives at
+        // 0 hp — dead but standing, until players repair it back up.
+        if (s.state->invulnerable || s.type == EStructureType::Base || s.state->alive())
         {
             ++i;
             continue;
@@ -1154,7 +1172,7 @@ void StructureSystem::tickMirror(float deltaSec)
     // LOCAL field from it — the bubble animates as smoothly as the server's own.
     for (const Ref& ref : m_frame)
     {
-        if (!isEmitterType(ref.type))
+        if (!hasShieldEmitter(ref.type))
             continue;
         GameStructureComponent& s = *ref.state;
         const float step = glm::clamp(s.emitter.outputFracTarget - s.emitter.outputFrac,
@@ -1222,7 +1240,7 @@ void StructureSystem::mirrorStructureState(uint32 id, float healthFrac, float ch
     s.store[1] = fuelFrac * fuelCapacityOf(ref.type);
     s.store[2] = mineralFrac * mineralCapacityOf(ref.type);
     s.flowUtil = utilFrac; // already server-smoothed
-    if (isEmitterType(ref.type)) // union: emitter variant only
+    if (hasShieldEmitter(ref.type)) // union: emitter variant (Base included)
         s.emitter.outputFracTarget = outputFrac; // tickMirror eases the live field toward this
     s.powered = powered;
 }
@@ -1258,7 +1276,7 @@ void StructureSystem::saveTo(AssetNode& root) const
         n.set("Charge", s.state->store[0]);
         n.set("Fuel", s.state->store[1]);
         n.set("Minerals", s.state->store[2]);
-        if (isEmitterType(s.type)) // union variants: only the active one is meaningful
+        if (hasShieldEmitter(s.type)) // union variants: only the active one is meaningful
             n.set("OutputFrac", s.state->emitter.outputFrac);
         if (isBarracksType(s.type) && !s.state->route.empty())
         {
@@ -1323,7 +1341,7 @@ void StructureSystem::loadFrom(const AssetNode& root)
         s.store[0] = glm::clamp(n->find("Charge") ? n->find("Charge")->asFloat() : 0.0f, 0.0f, s.capacity[0]);
         s.store[1] = glm::clamp(n->find("Fuel") ? n->find("Fuel")->asFloat() : 0.0f, 0.0f, s.capacity[1]);
         s.store[2] = glm::clamp(n->find("Minerals") ? n->find("Minerals")->asFloat() : 0.0f, 0.0f, s.capacity[2]);
-        if (isEmitterType((EStructureType)typeInt)) // union variants: write only the active one
+        if (hasShieldEmitter((EStructureType)typeInt)) // union variants: write only the active one
             s.emitter.outputFrac = glm::clamp(n->find("OutputFrac") ? n->find("OutputFrac")->asFloat() : 0.0f,
                 0.0f, 1.0f);
         if (const AssetNode* r = n->find("Route"); r && isBarracksType((EStructureType)typeInt))
@@ -1433,7 +1451,7 @@ void StructureSystem::drawDebug() const
     {
         if (s.type == EStructureType::Constructor && !s.state->blueprint)
             drawCircle(glm::vec3(s.entity->pos.x, 0.4f, s.entity->pos.z), m_constructorRange, constructorRing, 40);
-        if ((isEmitterType(s.type) || s.type == EStructureType::Extractor
+        if ((hasShieldEmitter(s.type) || s.type == EStructureType::Extractor
             || s.type == EStructureType::Constructor
             || s.type == EStructureType::Fabricator) && !s.state->powered && !s.state->blueprint)
             drawCircle(glm::vec3(s.entity->pos.x, 0.3f, s.entity->pos.z), 1.0f, unpoweredColor, 16);

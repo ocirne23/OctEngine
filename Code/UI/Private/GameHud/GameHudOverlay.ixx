@@ -131,6 +131,8 @@ public:
 				miniBar(label.barValue, label.barMax, label.barColor);
 			if (label.bar2Max > 0.0f)
 				miniBar(label.bar2Value, label.bar2Max, label.bar2Color);
+			if (label.bar3Max > 0.0f)
+				miniBar(label.bar3Value, label.bar3Max, label.bar3Color);
 			// info: '\n'-separated lines, centered under the bar
 			const char* line = label.info.c_str();
 			while (*line)

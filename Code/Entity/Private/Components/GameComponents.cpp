@@ -343,7 +343,7 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             stopRange = attackRange + bite->meleeRadius;
         }
         if (strain)
-            strain->addLoad(emitterDrain);
+            strain->addLoad(emitterDrain * params.emitterDrainMult);
     }
 
     // ---- steering: CONTEXT STEERING over the nav fields — score a fan of headings by goal
@@ -540,16 +540,19 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
 
         const float iso = Globals::forceSystem.getParams().isoThreshold;
         if (fc->emitter.getEquilibriumRadius() < params.damageRadius && pressure > iso)
-            health = glm::max(0.0f, health - params.fieldDps * deltaSec);
+            health = glm::max(0.0f, health - params.fieldDps * params.fieldDpsMult * deltaSec);
 
         // Push normalized by the output that PRODUCED the ~2-frame-latent readback, so a collapsed
         // shield is shoved exactly like a live one. Speed clamp rides the same queue (approximate
         // by one frame — the queue itself is one frame latent anyway).
         const glm::vec3 force = fc->emitter.getAppliedForce() / glm::max(m_outputHistory[0], 1e-3f);
-        if (glm::dot(force, force) > 1e-8f)
+        // Push ramps in NEAR THE SURFACE only (pressure ~ iso): pushing everywhere in the support
+        // stopped units out in the weak fringe, before the damage band could ever reach them.
+        const float pushRamp = glm::smoothstep(iso * params.fieldPushStart, iso, pressure);
+        if (glm::dot(force, force) > 1e-8f && pushRamp > 0.0f)
         {
             Globals::physics.queueBodyCommand(pc->body, PhysicsWorld::EBodyCommand::ApplyImpulse,
-                force * deltaSec * params.pushGain * pressure * tension);
+                force * (deltaSec * params.pushGain * pressure * tension * pushRamp));
             const float speed = glm::length(vel);
             const float maxSpeed = moveSpeed * params.maxSpeedMult;
             if (speed > maxSpeed)
@@ -567,10 +570,16 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
         const ForceSystem::FieldSample fs = Globals::forceSystem.sampleBakedField(pos, team);
         if (fs.valid)
         {
-            // Exposure: an enemy bubble owning the point burns health (the structures' territory
-            // rule) — an emitter wall grinds a swarm down as it wades through.
-            if (fs.inside && fs.owningTeam != team)
-                health = glm::max(0.0f, health - params.fieldDps * deltaSec);
+            // GRADED exposure: the push equilibrium parks a pressing unit AT the shell surface
+            // (opposing φ ~ iso), where a binary `inside` test read false most frames — units
+            // ground against bubbles taking no damage. Damage now ramps with field DEPTH: zero
+            // below iso x "Field damage starts (x iso)", full at the surface and beyond.
+            // (fs.opposing is already the strongest NON-own field, so no owningTeam gate needed.)
+            const float iso = glm::max(Globals::forceSystem.getParams().isoThreshold, 1e-3f);
+            const float exposure = glm::smoothstep(iso * params.fieldDamageStart, iso, fs.opposing);
+            if (exposure > 0.0f)
+                health = glm::max(0.0f,
+                    health - params.fieldDps * params.fieldDpsMult * exposure * deltaSec);
             // Push with the SAME chain the shielded units land on. Their force is
             // appliedForce / outputHistory = forceGain x (self-weighted mean of -grad over the
             // unit's bubble) — the 13-sample integral's mean self-weight is ~0.35 — times
@@ -579,13 +588,16 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             constexpr float c_bubbleSelfWeight = 0.35f;
             const glm::vec3 grad = fs.opposingGradient;
             const float pressure = fs.opposing;
-            if (pressure > 0.0f && glm::dot(grad, grad) > 1e-8f)
+            // Same near-surface push ramp as the shielded path: no shove in the weak fringe, so
+            // bodies reach the damage band before the field starts holding them out.
+            const float pushRamp = glm::smoothstep(iso * params.fieldPushStart, iso, pressure);
+            if (pressure > 0.0f && pushRamp > 0.0f && glm::dot(grad, grad) > 1e-8f)
             {
                 const float tension = 1.0f + params.tension * pressure;
                 const glm::vec3 force = -grad
                     * (c_bubbleSelfWeight * Globals::forceSystem.getParams().forceGain);
                 Globals::physics.queueBodyCommand(pc->body, PhysicsWorld::EBodyCommand::ApplyImpulse,
-                    force * (deltaSec * params.pushGain * pressure * tension));
+                    force * (deltaSec * params.pushGain * pressure * tension * pushRamp));
                 const float speed = glm::length(vel);
                 const float maxSpeed = moveSpeed * params.maxSpeedMult;
                 if (speed > maxSpeed)
@@ -594,7 +606,7 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             }
         }
         else if (inEnemyBubble) // bake disabled: the stamped-radius fallback (damage only, no push)
-            health = glm::max(0.0f, health - params.fieldDps * deltaSec);
+            health = glm::max(0.0f, health - params.fieldDps * params.fieldDpsMult * deltaSec);
     }
 }
 

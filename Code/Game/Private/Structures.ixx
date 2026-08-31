@@ -28,6 +28,13 @@ export constexpr bool isEmitterType(EStructureType t)
 {
     return t == EStructureType::Emitter || t == EStructureType::Bastion || t == EStructureType::Lance;
 }
+// The Base's always-on bubble now runs on the SAME shield rules as the placeable emitters (energy
+// draw + pressure surcharge + unit siege drain, ramp/latch, outputFrac sync) — every emitter-union
+// code path (tickPower, strainable, mirror, save/load) tests THIS, not isEmitterType.
+export constexpr bool hasShieldEmitter(EStructureType t)
+{
+    return isEmitterType(t) || t == EStructureType::Base;
+}
 
 export enum class ENodeType : uint8 { Mineral, Fuel };
 // Basic/Heavy carry ENERGY, Pipe carries FUEL, Conveyor carries MINERALS. The tier rides
@@ -97,9 +104,9 @@ public:
     void cableAt(int i, uint32& idA, uint32& idB, ECableType& type) const;
     glm::vec2 structureFacing(int index) const; // from the entity's rotation (Lance replay)
     int structureNodeIndex(int index) const { return m_frame[index].nodeIndex; }
-    float structureOutputFrac(int index) const // union: the emitter variant only
+    float structureOutputFrac(int index) const // union: the emitter variant (Base included)
     {
-        return isEmitterType(m_frame[index].type) ? m_frame[index].state->emitter.outputFrac : 0.0f;
+        return hasShieldEmitter(m_frame[index].type) ? m_frame[index].state->emitter.outputFrac : 0.0f;
     }
 
     // SAVE/LOAD (server): every structure + link into/from an AssetNode tree. loadFrom CLEARS the
@@ -242,7 +249,8 @@ public:
         case EStructureType::Turret:      return m_internalBuffer;
         // Barracks hold NO energy: they run purely on conveyor-fed minerals.
         case EStructureType::Generator:   return m_generatorBuffer;
-        case EStructureType::Battery:     return m_batteryCapacity; // the Base stores NO energy
+        case EStructureType::Battery:     return m_batteryCapacity;
+        case EStructureType::Base:        return m_baseEnergyCapacity; // feeds its always-on shield
         default:                          return 0.0f;
         }
     }
@@ -294,7 +302,8 @@ public:
     float emitterReachOf(EStructureType t) const
     {
         return t == EStructureType::Bastion ? m_bastionReach
-             : t == EStructureType::Lance ? m_lanceReach : m_emitterReach;
+             : t == EStructureType::Lance ? m_lanceReach
+             : t == EStructureType::Base ? m_baseShieldReach : m_emitterReach;
     }
     float cableRange() const { return m_cableRange; }
     float placeRange() const { return m_placeRange; }
@@ -395,12 +404,14 @@ private:
     float emitterOutputOf(EStructureType t) const
     {
         return t == EStructureType::Bastion ? m_bastionOutput
-             : t == EStructureType::Lance ? m_lanceOutput : m_emitterOutput;
+             : t == EStructureType::Lance ? m_lanceOutput
+             : t == EStructureType::Base ? m_baseShieldOutput : m_emitterOutput;
     }
     float emitterDrawOf(EStructureType t) const
     {
         return t == EStructureType::Bastion ? m_bastionEnergyPerSec
-             : t == EStructureType::Lance ? m_lanceEnergyPerSec : m_emitterEnergyPerSec;
+             : t == EStructureType::Lance ? m_lanceEnergyPerSec
+             : t == EStructureType::Base ? m_baseShieldEnergyPerSec : m_emitterEnergyPerSec;
     }
 
     oc::vector<Ref> m_frame;                 // the persistent roster (owning refs — see Ref)
@@ -477,11 +488,18 @@ private:
 
     float m_emitterEnergyPerSec = 1.5f;
     float m_emitterOutput = 1.2f;
-    float m_emitterReach = 20.0f;
+    float m_emitterReach = 27.0f;
+    // The Base's shield (the values base.pre used to author; the shield now pays for itself from
+    // the Base's own energy store — feed it power cables or it goes dark like any emitter).
+    float m_baseEnergyCapacity = 100.0f;
+    float m_baseEnergyGenPerSec = 2.0f; // free self-generation (solar-style trickle into its own store)
+    float m_baseShieldEnergyPerSec = 1.5f;
+    float m_baseShieldOutput = 2.4f;
+    float m_baseShieldReach = 27.0f;
 
     float m_bastionEnergyPerSec = 5.0f;
     float m_bastionOutput = 2.6f;
-    float m_bastionReach = 30.0f;
+    float m_bastionReach = 45.0f;
 
     float m_lanceEnergyPerSec = 3.0f;
     float m_lanceOutput = 0.08f;

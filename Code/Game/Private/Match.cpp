@@ -158,10 +158,15 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
         const Tweak::ScopedFlags scoped(ETweakFlags::Synced);
         Tweak::floatVar("Game/Coop", "First wave delay (s)", &m_waveFirstDelay, 5.0f, 600.0f, 5.0f);
         Tweak::floatVar("Game/Coop", "Wave interval (s)", &m_waveInterval, 10.0f, 600.0f, 5.0f);
-        Tweak::intVar("Game/Coop", "Wave size", &m_waveSize, 1, 2000, 10);
-        Tweak::floatVar("Game/Coop", "Wave size growth", &m_waveGrowth, 0.0f, 500.0f, 5.0f);
+        Tweak::intVar("Game/Coop", "Wave budget", &m_waveBudget, 1, 5000, 10);
+        Tweak::floatVar("Game/Coop", "Wave budget growth", &m_waveBudgetGrowth, 0.0f, 1000.0f, 5.0f);
+        Tweak::floatVar("Game/Coop", "Cost grunt", &m_waveCost[(int)ENpcType::Grunt], 0.1f, 100.0f, 0.5f);
+        Tweak::floatVar("Game/Coop", "Cost brute", &m_waveCost[(int)ENpcType::Brute], 0.1f, 100.0f, 0.5f);
+        Tweak::floatVar("Game/Coop", "Cost runner", &m_waveCost[(int)ENpcType::Runner], 0.1f, 100.0f, 0.5f);
+        Tweak::floatVar("Game/Coop", "Cost spitter", &m_waveCost[(int)ENpcType::Spitter], 0.1f, 100.0f, 0.5f);
+        Tweak::floatVar("Game/Coop", "Cost swarm", &m_waveCost[(int)ENpcType::Swarm], 0.1f, 100.0f, 0.5f);
         Tweak::intVar("Game/Coop", "Max enemy units", &m_waveMaxAlive, 1, 20000, 50);
-        Tweak::intVar("Game/Coop", "Ambient units", &m_ambientUnits, 0, 5000, 10);
+        Tweak::intVar("Game/Coop", "Ambient budget", &m_ambientBudget, 0, 20000, 10);
         Tweak::floatVar("Game/Coop", "Ambient safe radius", &m_ambientSafeRadius, 10.0f, 200.0f, 1.0f);
         Tweak::floatVar("Game/Coop", "Wave spawn distance", &m_waveSpawnDist, 40.0f, 250.0f, 1.0f);
         Tweak::intVar("Game/Coop", "Spawns per frame", &m_spawnsPerFrame, 1, 200, 1);
@@ -171,6 +176,8 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
         Tweak::floatVar("Game/Construction", "Player build rate", &m_playerBuildRate, 0.5f, 100.0f, 0.5f);
         Tweak::floatVar("Game/Player", "Base heal radius", &m_baseHealRadius, 0.0f, 60.0f, 0.5f);
         Tweak::floatVar("Game/Player", "Base heal/s", &m_baseHealRate, 0.0f, 100.0f, 0.5f);
+        Tweak::floatVar("Game/Player", "Melee damage/s", &m_meleeDps, 0.0f, 200.0f, 0.5f);
+        Tweak::floatVar("Game/Player", "Melee radius", &m_meleeRadius, 0.0f, 12.0f, 0.25f);
         Tweak::floatVar("Game/Enemies/Steer", "Group cluster radius", &m_selectionClusterRadius, 2.0f, 60.0f, 0.5f);
     }
     m_camera.registerTweaks();
@@ -340,7 +347,7 @@ void GameMatch::spawnWorld()
         if (!m_coop)
             m_structures.spawnBase(m_enemyBasePos, 1); // the opposing team's anchor + income
         else
-            m_ambientPending = m_ambientUnits; // the scattered AI units, trickled in (tickCoopSpawns)
+            m_ambientPendingBudget = (float)m_ambientBudget; // the scatter's points, trickled in (tickCoopSpawns)
         m_player.spawn(m_playerStart);     // clients ADOPT the capsule the server spawns for them
         // The server's own capsule is a PRIMARY: never handed to a client by the proximity
         // transfer, and it re-claims transferred objects it walks up to (the client symmetric).
@@ -372,15 +379,72 @@ void GameMatch::spawnWorld()
 
 // ---- CO-OP director -------------------------------------------------------------------------
 
-// Wave composition: cheap shield-less SWARM bodies are the mass; the heavier prefab units mix in
-// as the waves escalate.
-ENpcType GameMatch::rollWaveType() const
+// Wave ARCHETYPES: every wave rolls ONE recipe — a named mix of up to 4 unit types — gated by the
+// wave index so early waves stay simple and the heavy stuff unlocks over time. Single-type rushes
+// and combined-arms mixes both happen, but never every type in every wave; queueWave jitters the
+// picked recipe's weights so two waves of the same archetype still differ.
+namespace
 {
-    const float roll = glm::linearRand(0.0f, 1.0f);
-    if (m_waveIndex >= 4 && roll < 0.06f) return ENpcType::Brute;
-    if (m_waveIndex >= 3 && roll < 0.14f) return ENpcType::Spitter;
-    if (m_waveIndex >= 2 && roll < 0.25f) return ENpcType::Runner;
-    return ENpcType::Swarm;
+    struct WaveArchetype
+    {
+        const char* name;
+        int minWave; // first wave index this recipe can roll (m_waveIndex is 1-based at roll time)
+        struct { ENpcType type; float weight; } mix[4]; // weight 0 = unused slot
+    };
+    constexpr WaveArchetype c_waveArchetypes[] = {
+        { "swarm",           1, { { ENpcType::Swarm, 1.0f } } },
+        { "swarm + runners", 2, { { ENpcType::Swarm, 0.75f }, { ENpcType::Runner, 0.25f } } },
+        { "grunt push",      2, { { ENpcType::Grunt, 0.65f }, { ENpcType::Swarm, 0.35f } } },
+        { "runner rush",     3, { { ENpcType::Runner, 1.0f } } },
+        { "spitter siege",   4, { { ENpcType::Spitter, 0.3f }, { ENpcType::Swarm, 0.7f } } },
+        { "brute hammer",    5, { { ENpcType::Brute, 0.25f }, { ENpcType::Swarm, 0.75f } } },
+        { "combined arms",   6, { { ENpcType::Grunt, 0.3f }, { ENpcType::Runner, 0.25f },
+                                  { ENpcType::Spitter, 0.2f }, { ENpcType::Swarm, 0.25f } } },
+        { "brute wall",      7, { { ENpcType::Brute, 0.85f }, { ENpcType::Spitter, 0.15f } } },
+        { "the works",       8, { { ENpcType::Swarm, 0.4f }, { ENpcType::Runner, 0.25f },
+                                  { ENpcType::Spitter, 0.15f }, { ENpcType::Brute, 0.2f } } },
+    };
+    constexpr int c_numWaveArchetypes = (int)(sizeof(c_waveArchetypes) / sizeof(c_waveArchetypes[0]));
+    constexpr int c_maxArchetypeMinWave = [] {
+        int m = 1;
+        for (const WaveArchetype& a : c_waveArchetypes)
+            m = a.minWave > m ? a.minWave : m;
+        return m;
+    }();
+
+    // One unit from an archetype's authored mix (the ambient scatter's per-spawn roll — the wave
+    // path samples its stored, jittered copy instead).
+    ENpcType sampleArchetype(const WaveArchetype& arch)
+    {
+        float total = 0.0f;
+        for (const auto& e : arch.mix)
+            total += e.weight;
+        float r = glm::linearRand(0.0f, glm::max(total, 1e-3f));
+        for (const auto& e : arch.mix)
+        {
+            r -= e.weight;
+            if (e.weight > 0.0f && r <= 0.0f)
+                return e.type;
+        }
+        return ENpcType::Swarm;
+    }
+}
+
+ENpcType GameMatch::sampleMix(const oc::fixed_vector<WaveMixEntry, 4>& mix) const
+{
+    float total = 0.0f;
+    for (const WaveMixEntry& e : mix)
+        total += e.weight;
+    if (total <= 0.0f)
+        return ENpcType::Swarm; // no rolled mix (shouldn't happen): the classic mass
+    float r = glm::linearRand(0.0f, total);
+    for (const WaveMixEntry& e : mix)
+    {
+        r -= e.weight;
+        if (r <= 0.0f)
+            return e.type;
+    }
+    return mix.back().type;
 }
 
 // The wave clock (authority, co-op only). The actual entity spawns are TRICKLED by tickCoopSpawns
@@ -401,10 +465,15 @@ void GameMatch::queueWave()
         if (const GameUnitComponent* u = getComponent<GameUnitComponent>(e.get());
             u && u->team == (uint32)CoopAiTeam && u->alive())
             ++aiAlive;
-    const int count = glm::min(m_waveSize + (int)(m_waveGrowth * (float)m_waveIndex),
-        m_waveMaxAlive - aiAlive - m_ambientPending - m_wavePending);
+    // BUDGET points, not a unit count: the alive cap converts conservatively at the CHEAPEST cost
+    // (the worst-case body count a budget could buy).
+    float cheapest = FLT_MAX;
+    for (int t = 0; t < (int)ENpcType::Count; ++t)
+        cheapest = glm::min(cheapest, waveCostOf((ENpcType)t));
+    const float budget = glm::min((float)m_waveBudget + m_waveBudgetGrowth * (float)m_waveIndex,
+        (float)(m_waveMaxAlive - aiAlive) * cheapest - m_ambientPendingBudget - m_wavePendingBudget);
     ++m_waveIndex;
-    if (count <= 0)
+    if (budget <= 0.0f)
         return; // at the cap: the clock (and the scaling) still advanced
     // A random compass direction: the swarm clusters on the spawn ring and pushes at the Base's
     // near face (a point INSIDE the footprint would fail the A* and the move order alike — the
@@ -413,12 +482,31 @@ void GameMatch::queueWave()
     const glm::vec3 dir(std::cos(angle), 0.0f, std::sin(angle));
     m_waveOrigin = dir * glm::min(m_waveSpawnDist, c_coopHalfSize - 10.0f);
     m_waveDest = dir * 6.0f;
-    m_wavePending += count;
+    m_wavePendingBudget += budget;
+    // Roll this wave's COMPOSITION among the archetypes the index has unlocked — never the same
+    // recipe twice in a row when a choice exists — then jitter its weights so repeats still vary.
+    int eligible[c_numWaveArchetypes];
+    int numEligible = 0;
+    for (int i = 0; i < c_numWaveArchetypes; ++i)
+        if (m_waveIndex >= c_waveArchetypes[i].minWave && (i != m_lastArchetype || numEligible == 0))
+            eligible[numEligible++] = i;
+    if (numEligible > 1 && eligible[0] == m_lastArchetype) // slot 0 was only a can't-be-empty seed
+    {
+        eligible[0] = eligible[numEligible - 1];
+        --numEligible;
+    }
+    const int pick = eligible[glm::clamp((int)(glm::linearRand(0.0f, 1.0f) * (float)numEligible),
+        0, numEligible - 1)];
+    m_lastArchetype = pick;
+    m_waveMix.clear();
+    for (const auto& entry : c_waveArchetypes[pick].mix)
+        if (entry.weight > 0.0f)
+            m_waveMix.push_back({ entry.type, entry.weight * glm::linearRand(0.6f, 1.4f) });
     // One planned lane from the spawn ring to the Base — the swarm commits to it, and the units'
     // own periodic seed requests keep it fresh (Nav's proximity dedup makes the wave one plan).
     Globals::navSystem.seedPath(CoopAiTeam, m_waveOrigin, m_waveDest, laneSeedSpeed(), laneSeedWidth());
-    Log::info(oc::format("Co-op: wave {} incoming — {} units from ({:.0f}, {:.0f})", m_waveIndex,
-        count, m_waveOrigin.x, m_waveOrigin.z));
+    Log::info(oc::format("Co-op: wave {} incoming — budget {:.0f} ({}) from ({:.0f}, {:.0f})", m_waveIndex,
+        budget, c_waveArchetypes[pick].name, m_waveOrigin.x, m_waveOrigin.z));
     if (m_isServer)
     {
         uint8 buffer[4];
@@ -434,39 +522,72 @@ void GameMatch::queueWave()
 void GameMatch::tickCoopSpawns()
 {
     int budget = glm::max(m_spawnsPerFrame, 1);
-    while (budget > 0 && m_wavePending > 0)
+    while (budget > 0 && m_wavePendingBudget > 0.0f)
     {
         --budget;
-        --m_wavePending;
+        // Roll the type from the wave's mix, then SPEND its cost. A roll the remaining budget
+        // can't afford downgrades to the cheapest type in the mix; if even that doesn't fit, the
+        // wave is done (the tail rounds down instead of overspending into the next wave's points).
+        ENpcType type = sampleMix(m_waveMix);
+        if (waveCostOf(type) > m_wavePendingBudget)
+        {
+            for (const WaveMixEntry& e : m_waveMix)
+                if (waveCostOf(e.type) < waveCostOf(type))
+                    type = e.type;
+            if (waveCostOf(type) > m_wavePendingBudget)
+            {
+                m_wavePendingBudget = 0.0f;
+                break;
+            }
+        }
+        m_wavePendingBudget -= waveCostOf(type);
         // Cluster around the ring point — bigger remaining waves spread over a wider blob.
         const float a = glm::linearRand(0.0f, glm::two_pi<float>());
-        const float r = glm::min(8.0f + (float)m_wavePending * 0.05f, 30.0f)
+        const float r = glm::min(8.0f + m_wavePendingBudget * 0.05f, 30.0f)
             * std::sqrt(glm::linearRand(0.0f, 1.0f));
         glm::vec3 pos = m_waveOrigin + glm::vec3(std::cos(a) * r, 1.0f, std::sin(a) * r);
         pos.x = glm::clamp(pos.x, -c_coopHalfSize, c_coopHalfSize);
         pos.z = glm::clamp(pos.z, -c_coopHalfSize, c_coopHalfSize);
-        Entity* unit = m_npcs.spawnLooseUnit(m_structures, pos, CoopAiTeam, rollWaveType());
+        Entity* unit = m_npcs.spawnLooseUnit(m_structures, pos, CoopAiTeam, type);
         if (!unit)
             continue;
         if (GameUnitComponent* u = getComponent<GameUnitComponent>(unit))
             u->orderMove(m_waveDest + glm::vec3(glm::linearRand(-4.0f, 4.0f), 0.0f,
                 glm::linearRand(-4.0f, 4.0f)));
     }
-    while (budget > 0 && m_ambientPending > 0)
+    while (budget > 0 && m_ambientPendingBudget > 0.0f)
     {
         --budget;
-        --m_ambientPending;
         // Uniform-AREA scatter outside the safe radius (sqrt(t) = even density). AMBIENT: the Nav
         // team fields never pull them (they cover the whole map, which marched every scattered
         // unit to the base) — only the local search aggroes them, so they hold their patch until
         // players expand near it. Wave units above stay field-driven after their order releases.
         const float a = glm::linearRand(0.0f, glm::two_pi<float>());
-        const float r = glm::mix(m_ambientSafeRadius, c_coopHalfSize - 5.0f,
-            std::sqrt(glm::linearRand(0.0f, 1.0f)));
-        const float roll = glm::linearRand(0.0f, 1.0f);
-        const ENpcType type = roll < 0.6f ? ENpcType::Swarm
-            : roll < 0.75f ? ENpcType::Grunt
-            : roll < 0.9f ? ENpcType::Runner : ENpcType::Spitter;
+        const float depth = std::sqrt(glm::linearRand(0.0f, 1.0f)); // 0 = safe ring, 1 = map edge
+        const float r = glm::mix(m_ambientSafeRadius, c_coopHalfSize - 5.0f, depth);
+        // DISTANCE = DIFFICULTY: the archetype roll is gated by depth exactly like waves gate by
+        // index — the near ring only rolls the early recipes (swarm-grade), the deep map unlocks
+        // the whole table (brute walls, combined arms). Costs then make far patches FEWER, TOUGHER
+        // bodies for the same points.
+        const int band = 1 + (int)(depth * (float)(c_maxArchetypeMinWave - 1) + 0.5f);
+        int eligible[c_numWaveArchetypes];
+        int numEligible = 0;
+        for (int i = 0; i < c_numWaveArchetypes; ++i)
+            if (c_waveArchetypes[i].minWave <= band)
+                eligible[numEligible++] = i;
+        const WaveArchetype& arch = c_waveArchetypes[eligible[glm::clamp(
+            (int)(glm::linearRand(0.0f, 1.0f) * (float)numEligible), 0, numEligible - 1)]];
+        ENpcType type = sampleArchetype(arch);
+        if (waveCostOf(type) > m_ambientPendingBudget)
+        {
+            type = ENpcType::Swarm; // the tail rounds down to the cheapest body
+            if (waveCostOf(type) > m_ambientPendingBudget)
+            {
+                m_ambientPendingBudget = 0.0f;
+                break;
+            }
+        }
+        m_ambientPendingBudget -= waveCostOf(type);
         Entity* unit = m_npcs.spawnLooseUnit(m_structures,
             glm::vec3(std::cos(a) * r, 1.0f, std::sin(a) * r), CoopAiTeam, type);
         if (unit)
@@ -961,6 +1082,7 @@ void GameMatch::update(float deltaSec)
     const glm::vec3 playerPos = m_player.bodyPos();
     m_structures.tickAuthority(playerPos, deltaSec);
     tickBaseHealing(deltaSec);
+    tickPlayerMelee(deltaSec);
 
     // (No player-target publish step: units find enemy players — puppet GameUnitComponents —
     // through the same spatial queries as structures, and damage them through the same damage().)
@@ -1982,12 +2104,11 @@ void GameMatch::buildWorldLabels(const Camera& camera)
             continue;
         const EStructureType type = m_structures.structureType(i);
         label.title = c_structureShortNames[(int)type]; // the selected one overrides w/ full name
-        const bool consumer = isEmitterType(type) || type == EStructureType::Extractor
+        const bool consumer = hasShieldEmitter(type) || type == EStructureType::Extractor
             || type == EStructureType::Fabricator;
-        if (type != EStructureType::Base) // the Base is invulnerable — no health bar
+        label.barValue = m_structures.structureHealth(i);
+        label.barMax = m_structures.structureHealthMax();
         {
-            label.barValue = m_structures.structureHealth(i);
-            label.barMax = m_structures.structureHealthMax();
             const float frac = label.barValue / label.barMax;
             // Blueprint: health IS the construction progress — the bar reads blue while building.
             label.barColor = m_structures.structureBlueprint(i) ? glm::vec3(0.5f, 0.7f, 1.0f)
@@ -2033,15 +2154,19 @@ void GameMatch::buildWorldLabels(const Camera& camera)
             label.bar2Value = m_structures.structureCharge(i);
             label.bar2Max = energyCap;
             label.bar2Color = glm::vec3(1.0f, 0.9f, 0.3f);
+            if (mineralCap > 0.0f) // the Base: energy AND its spendable mineral bank
+            {
+                label.bar3Value = m_structures.structureMinerals(i);
+                label.bar3Max = mineralCap;
+                label.bar3Color = glm::vec3(0.35f, 0.5f, 1.0f);
+            }
         }
         if (i == selected)
         {
             label.emphasized = true;
             label.title = structureTypeName(type);
             char info[192];
-            int len = type == EStructureType::Base
-                ? snprintf(info, sizeof(info), "Invulnerable")
-                : snprintf(info, sizeof(info), "HP %.0f / %.0f", label.barValue, label.barMax);
+            int len = snprintf(info, sizeof(info), "HP %.0f / %.0f", label.barValue, label.barMax);
             if (type == EStructureType::Connector)
             {
                 // A Connector holds capacity in every medium but carries exactly ONE — report
@@ -2094,16 +2219,63 @@ void GameMatch::buildWorldLabels(const Camera& camera)
         if (!camera.worldToScreen(viewport, unitEntity->pos + glm::vec3(0.0f, height, 0.0f), label.screenPos))
             continue;
         label.title = remoteShortName(unitEntity->getName(), u->puppet ? 2 : 0);
-        label.barValue = u->health;
-        label.barMax = glm::max(u->healthMax, 1e-3f); // per-type: Brutes triple, Runners half
-        label.barColor = u->team == (uint32)m_team
-            ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.25f, 0.2f);
-        label.bar2Value = u->energy; // shield battery under the health bar
-        label.bar2Max = glm::max(u->energyMax, 1e-3f);
-        label.bar2Color = glm::vec3(1.0f, 0.9f, 0.3f);
+        if (!u->puppet && !u->collapsed && u->energy > 0.0f)
+        {
+            // UNIT with a live shield: ONE bar — the shield IS the unit's front line, so the bar
+            // shows it (shield color) until it collapses; only then does the health bar take over.
+            label.barValue = u->energy;
+            label.barMax = glm::max(u->energyMax, 1e-3f);
+            label.barColor = glm::vec3(1.0f, 0.9f, 0.3f);
+        }
+        else
+        {
+            label.barValue = u->health;
+            label.barMax = glm::max(u->healthMax, 1e-3f); // per-type: Brutes triple, Runners half
+            label.barColor = u->team == (uint32)m_team
+                ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.25f, 0.2f);
+            if (u->puppet)
+            {
+                label.bar2Value = u->energy; // players keep both bars: shield under health
+                label.bar2Max = glm::max(u->energyMax, 1e-3f);
+                label.bar2Color = glm::vec3(1.0f, 0.9f, 0.3f);
+            }
+        }
         labels.push_back(oc::move(label));
     }
     Globals::gameHud.setWorldLabels(oc::move(labels));
+}
+
+void GameMatch::tickPlayerMelee(float deltaSec)
+{
+    // AUTHORITY ONLY (called from the authority branch): units simulate here, so a client-side
+    // hit would be stomped by the next snapshot blob. Every player capsule — the server's own AND
+    // each client twin — grinds adjacent enemy UNITS (never puppets: players fighting players is
+    // not a melee aura's job) through the unified GameUnitComponent::damage().
+    if (m_meleeDps <= 0.0f || m_meleeRadius <= 0.0f)
+        return;
+    ProfileScope scope("Player melee", EProfileCategory::Game);
+    thread_local oc::vector<uint64> nearby;
+    const auto meleeAround = [&](const glm::vec3& pos, uint8 team)
+    {
+        Globals::spatialIndex.querySphere(glm::dvec3(pos), m_meleeRadius, SpatialLayer_Render, nearby);
+        for (const uint64 user : nearby)
+        {
+            Entity* other = reinterpret_cast<Entity*>(user);
+            GameUnitComponent* u = getComponent<GameUnitComponent>(other);
+            if (!u || u->puppet || u->team == team || !u->alive())
+                continue;
+            // The query matches bounding spheres — the melee rule is the CENTER distance (XZ,
+            // the same measure the units' own melee probes use).
+            const glm::vec2 d = glm::vec2(other->pos.x, other->pos.z) - glm::vec2(pos.x, pos.z);
+            if (glm::dot(d, d) <= m_meleeRadius * m_meleeRadius)
+                u->damage(m_meleeDps * deltaSec);
+        }
+    };
+    meleeAround(m_player.bodyPos(), (uint8)m_team);
+    for (const auto& [id, p] : m_clientPlayers)
+        if (p)
+            if (const PhysicsComponent* pc = getComponent<PhysicsComponent>(p.get()); pc && pc->body.isValid())
+                meleeAround(pc->body.getPosition(), requestTeam(id));
 }
 
 void GameMatch::tickBaseHealing(float deltaSec)

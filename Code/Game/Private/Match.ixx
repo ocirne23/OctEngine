@@ -115,6 +115,7 @@ private:
     void buildWorldLabels(const Camera& camera); // health bars + selected info over structures
     void updateHud();
     void tickBaseHealing(float deltaSec); // own player only — the owner computes its own health
+    void tickPlayerMelee(float deltaSec); // AUTHORITY: every player capsule grinds adjacent enemy units
     void handleNetEvent(oc::string_view name); // NetworkManager::setOnGameEvent target
     void requestPlace(EStructureType type, const glm::vec3& pos, int nodeIndex, const glm::vec3& facing);
     void requestCable(uint32 idA, uint32 idB, ECableType type);
@@ -216,21 +217,35 @@ private:
     void tickWaves(float deltaSec);  // authority: the wave clock
     void queueWave();                // pick a compass direction, size the swarm, seed its lane
     void tickCoopSpawns();           // trickle: wave + ambient spawns on a per-frame budget
-    ENpcType rollWaveType() const;   // composition hardens with the wave index
+    // COMPOSITION recipes, sampled per spawned unit. The wave's is rolled once per wave in
+    // queueWave: an ARCHETYPE (single-type rush, screened siege, combined arms, ... — gated by the
+    // wave index so early waves stay simple) with its weights jittered. The AMBIENT scatter picks
+    // its spawn position FIRST and gates the archetype roll by DISTANCE from the Base — the same
+    // minWave gate, driven by depth instead of time, so the deep map holds the heavy recipes and
+    // the near ring stays swarm-grade. Authority-only (clients never spawn).
+    struct WaveMixEntry { ENpcType type; float weight; };
+    ENpcType sampleMix(const oc::fixed_vector<WaveMixEntry, 4>& mix) const; // weighted type roll
+    oc::fixed_vector<WaveMixEntry, 4> m_waveMix;
+    int m_lastArchetype = -1;    // never the same recipe twice in a row (when a choice exists)
     bool m_coop = false;
     float m_waveTimer = 0.0f;    // seconds to the next wave (armed in spawnWorld)
     int m_waveIndex = 0;         // waves launched so far
-    int m_wavePending = 0;       // units of the current wave still to spawn (trickled)
-    int m_ambientPending = 0;    // scattered units still to spawn (trickled, at world start)
+    float m_wavePendingBudget = 0.0f;    // POINTS of the current wave still to spawn (trickled):
+                                         // each spawned unit spends its type's cost (m_waveCost)
+    float m_ambientPendingBudget = 0.0f; // POINTS of world-start scatter still to spawn (same costs)
     glm::vec3 m_waveOrigin{ 0.0f }; // the wave's cluster center on the spawn ring
     glm::vec3 m_waveDest{ 0.0f };   // the Base's near face on the incoming side
     // Tweaks ("Game/Coop", Synced):
-    float m_waveFirstDelay = 10.0f;
-    float m_waveInterval = 30.0f;
-    int m_waveSize = 500;          // units in wave 1 (mostly swarm bodies — see rollWaveType)
-    float m_waveGrowth = 40.0f;   // extra units per subsequent wave
-    int m_waveMaxAlive = 3000;    // total AI units cap (ambient + waves)
-    int m_ambientUnits = 400;     // units scattered over the map at world start
+    float m_waveFirstDelay = 30.0f;
+    float m_waveInterval = 90.0f;
+    // Waves are sized in BUDGET POINTS, not unit counts: each type has a cost (tweaks), so a
+    // brute-heavy archetype fields far fewer bodies than a swarm flood of the same budget.
+    int m_waveBudget = 4;           // points in wave 1 (swarm costs 1 = the old unit count)
+    float m_waveBudgetGrowth = 20.0f; // extra points per subsequent wave
+    float m_waveCost[(int)ENpcType::Count] = { 3.0f, 10.0f, 2.0f, 5.0f, 1.0f }; // Grunt, Brute, Runner, Spitter, Swarm
+    float waveCostOf(ENpcType t) const { return glm::max(m_waveCost[(int)t], 0.1f); }
+    int m_waveMaxAlive = 5000;    // total AI units cap (ambient + waves)
+    int m_ambientBudget = 500;    // POINTS of world-start scatter (same per-type costs as waves)
     float m_ambientSafeRadius = 70.0f; // the scatter keeps clear of the Base
     float m_waveSpawnDist = 160.0f;    // wave spawn ring radius around the Base
     int m_spawnsPerFrame = 24;    // trickle budget — a huge wave enters over seconds, not one hitch
@@ -261,4 +276,6 @@ private:
     // player's OWNER (health is owner-computed) against its local structure mirror — no sync.
     float m_baseHealRadius = 10.0f;
     float m_baseHealRate = 15.0f;   // health/s inside the radius
+    float m_meleeDps = 10.0f;       // player melee aura: health/s to enemy units in melee range
+    float m_meleeRadius = 2.5f;     // melee range (m, XZ from the capsule)
 };

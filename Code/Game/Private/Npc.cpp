@@ -84,6 +84,10 @@ void NpcSystem::registerTweaks()
     Tweak::floatVar("Game/Enemies", "Unit energy drain/s @ pressure 1", &up.energyDrainRate, 0.0f, 200.0f, 0.5f);
     Tweak::floatVar("Game/Enemies", "Push tension", &up.tension, 0.0f, 10.0f, 0.05f);
     Tweak::floatVar("Game/Enemies", "Field damage/s", &up.fieldDps, 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Enemies", "Field damage mult", &up.fieldDpsMult, 0.0f, 10.0f, 0.05f);
+    Tweak::floatVar("Game/Enemies", "Field damage starts (x iso)", &up.fieldDamageStart, 0.0f, 0.95f, 0.05f);
+    Tweak::floatVar("Game/Enemies", "Field push starts (x iso)", &up.fieldPushStart, 0.0f, 0.95f, 0.05f);
+    Tweak::floatVar("Game/Enemies", "Emitter drain mult", &up.emitterDrainMult, 0.0f, 10.0f, 0.05f);
     Tweak::floatVar("Game/Enemies", "Unit damage radius", &up.damageRadius, 0.0f, 3.0f, 0.05f);
     Tweak::floatVar("Game/Enemies", "Field push gain", &up.pushGain, 0.0f, 100000.0f, 100.0f);
     Tweak::floatVar("Game/Enemies", "Retarget interval", &up.retargetInterval, 1.0f, 60.0f, 0.5f);
@@ -256,7 +260,19 @@ void NpcSystem::service(StructureSystem& structures)
         if (len < 1e-3f)
             continue;
         dir /= len;
-        fireShot("Entities/Game/projectile.pre", "Projectile", request.from + dir * 1.0f,
+        // Spawn just OUTSIDE the turret's own collider along the shot: the request origin sits
+        // INSIDE the box (turret pos + 1 up; turret.pre HalfExtents 2), and a projectile's FIRST
+        // contact spends it — a 1 m offset left every shot dying on its own turret. Ray-exit the
+        // (margin-inflated) box from the muzzle and start the shot there.
+        const glm::vec3 muzzleRel(0.0f, 1.0f, 0.0f); // the component's request.from offset
+        const glm::vec3 half(2.0f + 0.35f);          // collider half extents + shot clearance
+        float tExit = 1e9f;
+        for (int a = 0; a < 3; ++a)
+            if (glm::abs(dir[a]) > 1e-5f)
+                tExit = glm::min(tExit, ((dir[a] > 0.0f ? half[a] : -half[a]) - muzzleRel[a]) / dir[a]);
+        if (tExit > 1e8f || tExit + 0.1f >= len)
+            continue; // degenerate aim, or the target stands inside the clearance: no shot
+        fireShot("Entities/Game/projectile.pre", "Projectile", request.from + dir * (tExit + 0.05f),
             dir * m_turretShotSpeed, request.team);
     }
 

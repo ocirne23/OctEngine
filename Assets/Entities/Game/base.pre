@@ -1,7 +1,8 @@
-# Base: exists from game start (never placeable, never damaged). Respawn anchor, always-on team-0
-# bubble (self-powered - tickPower never touches non-Emitter types, so the authored Output stands),
-# and passive income equal to one extractor of EACH type. Conducts grid links like any structure.
-# Spawned origin 1.5 above ground.
+# Base: exists from game start (never placeable). Respawn anchor + passive mineral income; conducts
+# grid links like any structure. Its shield runs on EMITTER RULES (tickPower's hasShieldEmitter
+# path): it drains the Base's own energy store (feed it power cables) and goes dark when starved;
+# output/reach come from the "Base shield" tweaks, not this file. DAMAGEABLE - health drops to
+# enemy territory/melee/projectiles - but the death sweep never destroys it (no lose condition yet).
 Prefab gameBase
 	Component Render
 		ObjectContainer baseshapes
@@ -19,5 +20,4 @@ Prefab gameBase
 		Reach 24
 		Centered true
 	Component GameStructure
-		Invulnerable true
 		MeleeRadius 3

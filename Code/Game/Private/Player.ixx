@@ -120,7 +120,7 @@ private:
     float m_spawnGraceSec = 1.0f;        // no energy/health drain this long after (re)spawn — the
                                          // GPU readbacks still carry the death position for ~2 frames
     float m_arriveRadius = 0.8f;         // metres: a move order completes inside this ring
-    float m_damageRadius = 0.8f;        // metres: health drains once the equilibrium shield radius
+    float m_damageRadius = 1.0f;        // metres: health drains once the equilibrium shield radius
                                         // squishes below this (capsule half-height is 0.8 world)
     float m_shieldPushGain = 10000.0f;  // applied-force -> impulse scale (testbed force-ball precedent)
     float m_shieldTension = 1.5f;       // SURFACE TENSION: push AND energy drain scale by

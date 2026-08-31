@@ -53,6 +53,9 @@ export struct HudWorldLabel
 	float       bar2Value = 0.0f; // optional second bar stacked under the first (e.g. stored energy)
 	float       bar2Max = 0.0f;   // <= 0 = no second bar
 	glm::vec3   bar2Color = glm::vec3(1.0f);
+	float       bar3Value = 0.0f; // optional third bar (the Base: health + energy + minerals)
+	float       bar3Max = 0.0f;   // <= 0 = no third bar
+	glm::vec3   bar3Color = glm::vec3(1.0f);
 	bool        emphasized = false; // selected: drawn larger
 };
 
