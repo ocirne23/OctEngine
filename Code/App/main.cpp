@@ -11,6 +11,7 @@ import Core.Tweaks;
 import Core.Windows;
 
 import App.InputControls;
+import App.Lobby;
 import App.ProfileDump;
 
 import Game;
@@ -31,6 +32,7 @@ import Nav;
 import Nav;
 import Particle;
 import Force;
+import Network; // netGetLocalAddress — the main menu shows the host endpoint other clients dial
 
 static oc::atomic<bool> g_running = true; // cleared by the window's onQuit (windowed) or the console ctrl handler (headless)
 
@@ -132,6 +134,10 @@ int main(int argc, char* argv[])
     }
     const bool headlessServer = headless && launchMode == ELaunchMode::Server;
     const bool unattendedRun = profileAfterSec > 0.0 || quitAfterSec > 0.0;
+    // No mode chosen on the command line and not an automated run: boot into the MAIN MENU. The
+    // engine runs fully underneath (renderer/UI/world, terrain as background); nothing
+    // mode-specific starts until a selection arrives — see startNetworkFor/startWorldAndGame below.
+    const bool mainMenu = !headlessServer && launchMode == ELaunchMode::Single && !gameMode && !unattendedRun && !scenario;
 
     Window window;
     FreeFlyCameraController cameraController;
@@ -176,45 +182,6 @@ int main(int argc, char* argv[])
     Globals::scriptEvents.initialize();
     registerScriptDslBindings(); // must run before anything touches Globals::scriptBindings (ScriptEditor's build() included)
 
-    if (launchMode != ELaunchMode::Single)
-    {
-        const bool started = launchMode == ELaunchMode::Server
-            ? Globals::networkManager.startServer(netPort)
-            : Globals::networkManager.startClient(connectAddress, netPort);
-        if (!started)
-            return 1;
-        if (launchMode == ELaunchMode::Server)
-        {
-            Globals::networkManager.setOnClientJoined([](uint32 clientId)
-            {
-                EntityPtr player = Globals::world.spawnAssetFile("Entities/Debug/netPlayerCapsule.pre",
-                    Transform(glm::vec3(0, 10.0f, 0)), true);
-                if (!player)
-                    return;
-                player->setName("Player " + oc::to_string(clientId));
-                Globals::networkManager.setOwner(*player, clientId);
-                // ownership STEALING: whatever this player's body collides with becomes theirs (last
-                // collider wins, other players' primaries excluded) — needs ContactEvents on the shapes
-                if (PhysicsComponent* pc = getComponent<PhysicsComponent>(player.get()))
-                    pc->onContact = [clientId](Entity& other, bool begin)
-                    {
-                        if (begin)
-                            Globals::networkManager.stealOwnershipOnContact(other, clientId);
-                    };
-                Globals::world.addRootEntity(oc::move(player));
-            });
-            Globals::networkManager.setOnClientLeft([](uint32 clientId)
-            {
-                oc::vector<Entity*> owned; // collected first: removeRootEntity mutates the list being walked
-                for (const EntityPtr& root : Globals::world.rootEntities())
-                    if (const NetworkComponent* comp = getComponent<NetworkComponent>(root.get()); comp && comp->ownerClientId == clientId)
-                        owned.push_back(root.get());
-                for (Entity* entity : owned)
-                    Globals::world.removeRootEntity(entity);
-            });
-        }
-    }
-
     EntityPtr terrainEntity;
     if (!headlessServer)
     {
@@ -251,34 +218,191 @@ int main(int argc, char* argv[])
         };
     }
 
-    if (!gameMode)
-        Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/sponza.pre", Transform(), true));
-    //Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/skysphere.pre", Transform(spawnOffset), true));
-    //Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/character.pre", Transform(spawnOffset), true));
-    //Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/particle.pre", Transform(spawnOffset), true));
-    //Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/SphereField.pre", Transform(spawnOffset), true));
-
-    if (!gameMode && launchMode == ELaunchMode::Server)
-    {
-        Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/Debug/networkTest.pre", Transform(glm::vec3(0, 0, 0)), true));
-    }
-
     GizmoController gizmo;
     InputControls controls(gizmo, cameraController, Globals::world); // headless-inert: update/key handling never run
     controls.setProfileDump(profileOutPath, profileOptions); // F7 writes where --profile-out points
-    GameMatch game(gameMode, coopMode); // stack local: holds EntityPtrs/Force handles, destructs before the globals
-    if (game.enabled())
+    // Stack local like GameMatch always was (holds EntityPtrs/Force handles, destructs before the
+    // globals) — optional because it now constructs at GAME START: immediately below on the
+    // command-line path, at countdown end on a lobby host, or inside the event dispatch on a
+    // lobby client.
+    oc::optional<GameMatch> game;
+    // The multiplayer pre-game LOBBY (ready checks + start countdown, menu flow only). Plain
+    // state, no entity handles; command-line game servers mark it "started" so menu clients
+    // joining them still get the go signal.
+    LobbySystem lobby;
+
+    // The GAME/WORLD half of a mode start: testbed content, or GameMatch + its world. Runs before
+    // the loop on the command-line path, at countdown end on the lobby host, and INSIDE the event
+    // dispatch on a lobby client (see the dispatcher below) — all on the main thread in the
+    // pre-kick window, where spawns are legal.
+    const auto startWorldAndGame = [&](bool startGame, bool startCoop)
     {
-        game.spawnWorld();
-        controls.setGameMode(true);                  // mutes the testbed spawn/possess keys
-        cameraController.setMovementEnabled(false);  // WASD belongs to the game player
-        if (Globals::networkManager.role() == ENetRole::Server)
+        FileSystem::AllowMainThreadIO modeIo; // one-shot prefab/scene loads on selection (the F10 pattern)
+        if (!startGame)
         {
-            // Co-op: the game owns per-client lifecycles (player spawn + world-state replay),
-            // replacing the testbed's netPlayerCapsule hooks registered above.
-            Globals::networkManager.setOnClientJoined([&game](uint32 clientId) { game.onClientJoined(clientId); });
-            Globals::networkManager.setOnClientLeft([&game](uint32 clientId) { game.onClientLeft(clientId); });
+            Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/sponza.pre", Transform(), true));
+            //Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/skysphere.pre", Transform(spawnOffset), true));
+            //Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/character.pre", Transform(spawnOffset), true));
+            //Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/particle.pre", Transform(spawnOffset), true));
+            //Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/SphereField.pre", Transform(spawnOffset), true));
+            if (Globals::networkManager.role() == ENetRole::Server)
+                Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/Debug/networkTest.pre", Transform(glm::vec3(0, 0, 0)), true));
         }
+        controls.setGameMode(startGame);                 // game: mutes the testbed spawn/possess keys
+        cameraController.setMovementEnabled(!startGame); // game: WASD belongs to the game player
+        if (startGame)
+        {
+            game.emplace(true, startCoop);
+            game->spawnWorld();
+        }
+    };
+
+    // The NETWORK half: host/join plus the server-side join hooks. The game flavor wires the
+    // LOBBY roster and the GameMatch lifecycles together — lobby FIRST, so a late joiner's
+    // "game is running" signal precedes the world replay in the reliable stream; GameMatch is
+    // null-guarded because it only exists once the match launched. The sandbox flavor keeps the
+    // testbed's netPlayerCapsule hooks. Returns false when hosting/joining failed.
+    const auto startNetworkFor = [&](ELaunchMode mode, bool startGame, const oc::string& address) -> bool
+    {
+        if (mode == ELaunchMode::Single)
+            return true;
+        const bool started = mode == ELaunchMode::Server
+            ? Globals::networkManager.startServer(netPort)
+            : Globals::networkManager.startClient(address, netPort);
+        if (!started)
+            return false;
+        if (mode == ELaunchMode::Server)
+        {
+            if (startGame)
+            {
+                // Per-client lifecycles: the lobby keeps the roster + go signal, the game (once
+                // it exists) spawns capsules and replays world state.
+                Globals::networkManager.setOnClientJoined([&lobby, &game](uint32 clientId)
+                {
+                    lobby.onClientJoined(clientId);
+                    if (game)
+                        game->onClientJoined(clientId);
+                });
+                Globals::networkManager.setOnClientLeft([&lobby, &game](uint32 clientId)
+                {
+                    lobby.onClientLeft(clientId);
+                    if (game)
+                        game->onClientLeft(clientId);
+                });
+            }
+            else
+            {
+                Globals::networkManager.setOnClientJoined([](uint32 clientId)
+                {
+                    EntityPtr player = Globals::world.spawnAssetFile("Entities/Debug/netPlayerCapsule.pre",
+                        Transform(glm::vec3(0, 10.0f, 0)), true);
+                    if (!player)
+                        return;
+                    player->setName("Player " + oc::to_string(clientId));
+                    Globals::networkManager.setOwner(*player, clientId);
+                    // ownership STEALING: whatever this player's body collides with becomes theirs (last
+                    // collider wins, other players' primaries excluded) — needs ContactEvents on the shapes
+                    if (PhysicsComponent* pc = getComponent<PhysicsComponent>(player.get()))
+                        pc->onContact = [clientId](Entity& other, bool begin)
+                        {
+                            if (begin)
+                                Globals::networkManager.stealOwnershipOnContact(other, clientId);
+                        };
+                    Globals::world.addRootEntity(oc::move(player));
+                });
+                Globals::networkManager.setOnClientLeft([](uint32 clientId)
+                {
+                    oc::vector<Entity*> owned; // collected first: removeRootEntity mutates the list being walked
+                    for (const EntityPtr& root : Globals::world.rootEntities())
+                        if (const NetworkComponent* comp = getComponent<NetworkComponent>(root.get()); comp && comp->ownerClientId == clientId)
+                            owned.push_back(root.get());
+                    for (Entity* entity : owned)
+                        Globals::world.removeRootEntity(entity);
+                });
+            }
+        }
+        return true;
+    };
+
+    // THE game-event dispatcher, installed ONCE and never replaced: "Lb*" routes to the lobby,
+    // everything else to the GameMatch once it exists (GameMatch no longer installs its own hook —
+    // replacing the oc::function from INSIDE a dispatch would destroy the executing lambda). A
+    // lobby CLIENT constructs its GameMatch right here, inside the dispatch of the first lobby
+    // state: that state precedes every game event in the reliable stream, so events later in the
+    // SAME receive batch (a late join's world replay) already reach the fresh GameMatch —
+    // deferring the construction by even one frame would drop them. Game events fired by script
+    // thunks dispatch on workers (as before, straight into handleNetEvent); lobby events are only
+    // ever fired and received on the main thread.
+    Globals::networkManager.setOnGameEvent([&](oc::string_view name)
+    {
+        if (!LobbySystem::handlesEvent(name))
+        {
+            if (game)
+                game->handleNetEvent(name);
+            return;
+        }
+        lobby.handleNetEvent(name);
+        if (lobby.takeClientConstruct() && !game)
+            startWorldAndGame(true, lobby.coop());
+        if (lobby.takeClientStart())
+            Globals::ui.setMainMenuActive(false); // the server declared the match running
+    });
+
+    // ESCAPE-MENU "Exit to menu": tear the running mode (or the lobby) down to the blank
+    // menu-phase engine — entity holders first, then the world's roots, then the network, the same
+    // order the engine's init_seg teardown uses. Main thread, pre-kick window only. The other side
+    // of a live session just sees this end as a disconnect (no goodbye message).
+    const auto exitToMenu = [&]()
+    {
+        controls.resetForMenu();            // possessed capsule / test emitters / force balls released
+        game.reset();                       // ~GameMatch: nav clear, rosters, structures, player, ground (+ its tweak unregistration)
+        Globals::world.clearRootEntities(); // sponza / capsules / leftovers; NetworkComponents unregister through the still-open host
+        Globals::networkManager.shutdown(); // role back to None — hosting/joining again is supported
+        Globals::networkManager.setEventFilter({}); // a stale Gq*/Lb* filter must not gate the next session
+        lobby.reset();
+        controls.setGameMode(true);         // the menu phase mutes testbed keys + pauses free flight again
+        cameraController.setMovementEnabled(false);
+        Globals::ui.setMainMenuActive(true); // reactivation resets to the front page
+    };
+
+    // The menu's host display: seeded with the LAN address, upgraded to the EXTERNAL IP when the
+    // background lookup lands (netGetExternalAddress blocks on DNS + an HTTP round trip, so it runs
+    // on its own detached thread; the shared_ptr keeps the result block alive whichever side
+    // finishes last, and the loop's menu block polls the flag).
+    struct ExternalIpResult
+    {
+        NetAddress address;
+        oc::atomic<bool> done{ false };
+    };
+    oc::shared_ptr<ExternalIpResult> externalIp;
+    oc::string menuLanEndpoint;
+
+    if (!mainMenu)
+    {
+        if (!startNetworkFor(launchMode, gameMode, connectAddress))
+            return 1;
+        if (gameMode && launchMode == ELaunchMode::Server)
+            lobby.markStarted(coopMode); // no lobby ran: menu clients joining late still get the go signal
+        startWorldAndGame(gameMode, coopMode);
+    }
+    else
+    {
+        // Menu phase: testbed spawn keys muted (setGameMode), free flight paused; both are restored
+        // by startWorldAndGame per the selection. The menu shows the endpoint other clients would dial.
+        controls.setGameMode(true);
+        cameraController.setMovementEnabled(false);
+        NetAddress hostEndpoint = netGetLocalAddress();
+        hostEndpoint.port = netPort;
+        menuLanEndpoint = hostEndpoint.toString();
+        Globals::ui.setMainMenuHostEndpoint(menuLanEndpoint);
+        Globals::ui.setMainMenuHostNote("Resolving external IP...");
+        Globals::ui.setMainMenuActive(true);
+        externalIp = oc::make_shared<ExternalIpResult>();
+        std::thread([result = externalIp]
+        {
+            result->address = netGetExternalAddress();
+            result->done.store(true, oc::memory_order_release);
+        }).detach(); // touches only its own shared block; killed harmlessly at process exit if late
     }
 
     Camera camera;
@@ -345,12 +469,12 @@ int main(int argc, char* argv[])
     oc::optional<Timer> scenarioTimer;
     if (scenario)
         scenarioTimer.emplace(timerDelay(scenarioAtSec), [&](Timer&) {
-                if (!game.enabled())
+                if (!game || !game->enabled())
                     Log::warning("--scenario needs --game");
                 else
                 {
                     FileSystem::AllowMainThreadIO scenarioIo; // one-shot load, like F10
-                    game.runScenario(scenarioSave == "default" ? oc::string_view() : oc::string_view(scenarioSave));
+                    game->runScenario(scenarioSave == "default" ? oc::string_view() : oc::string_view(scenarioSave));
                 }
                 return Timer::DONE;
             });
@@ -405,6 +529,74 @@ int main(int argc, char* argv[])
                 Globals::rendererVK.updateImGuiTextures(); // glyphs the pass baked; the ImGui context is quiescent from the join until ui.update()
             }
             Globals::forceSystem.joinMerge(); // last frame's merge job (kicked after the force upload, ran during present + the stall); before input/drains can touch emitters
+
+            // Main menu selection (written by the PREVIOUS frame's widget pass, sequenced by the
+            // join above): start the chosen mode here in the pre-kick window, where main-thread
+            // spawns and the network start are legal. A failed host/join leaves the menu up.
+            if (Globals::ui.isMainMenuActive())
+            {
+                // The external-IP lookup landed: upgrade the host display (the LAN address moves
+                // into the note line), or report the failure and keep the LAN address.
+                if (externalIp && externalIp->done.load(oc::memory_order_acquire))
+                {
+                    NetAddress external = externalIp->address;
+                    externalIp.reset();
+                    if (external.ip != 0)
+                    {
+                        external.port = netPort;
+                        Globals::ui.setMainMenuHostEndpoint(external.toString());
+                        Globals::ui.setMainMenuHostNote("LAN: " + menuLanEndpoint);
+                        Log::info("External IP: " + external.toString());
+                    }
+                    else
+                        Globals::ui.setMainMenuHostNote("External IP lookup failed - this is the LAN address");
+                }
+
+                const MainMenuAction action = Globals::ui.takeMainMenuAction();
+                if (action.type == MainMenuAction::EType::Quit)
+                    g_running = false;
+                else if (action.type != MainMenuAction::EType::None)
+                {
+                    const ELaunchMode mode = action.host ? ELaunchMode::Server
+                        : !action.connectAddress.empty() ? ELaunchMode::Client : ELaunchMode::Single;
+                    const bool startGame = action.type != MainMenuAction::EType::StartSandbox;
+                    const bool startCoop = action.type == MainMenuAction::EType::StartCoop;
+                    if (startNetworkFor(mode, startGame, action.connectAddress))
+                    {
+                        if (startGame && mode != ELaunchMode::Single)
+                        {
+                            // Multiplayer game: gather in the LOBBY first (ready checks + start
+                            // countdown). The world/GameMatch start when the countdown finishes
+                            // (host) or when the server's go signal arrives (client).
+                            lobby.enter(mode == ELaunchMode::Server, startCoop);
+                            Globals::ui.openMainMenuLobby();
+                        }
+                        else
+                        {
+                            startWorldAndGame(startGame, startCoop);
+                            Globals::ui.setMainMenuActive(false);
+                        }
+                    }
+                    // network failure: the menu stays up, the log has the reason
+                }
+
+                // Lobby servicing: the page's button presses, the countdown tick (+ the host's
+                // state broadcasts), then this frame's view snapshot for the widget pass.
+                if (lobby.active())
+                {
+                    lobby.handleAction(Globals::ui.takeMainMenuLobbyAction());
+                    lobby.update((float)Globals::time.getDeltaSec());
+                    Globals::ui.setMainMenuLobbyView(lobby.view());
+                }
+                if (lobby.takeServerStart())
+                {
+                    startWorldAndGame(true, lobby.coop());
+                    if (game)
+                        for (const uint32 clientId : lobby.connectedClientIds())
+                            game->onClientJoined(clientId); // capsules + world replay for everyone already in the lobby
+                    Globals::ui.setMainMenuActive(false);
+                }
+            }
         }
 
         const double deltaSec = Globals::time.getDeltaSec(); // clock advanced by limitFrameRate / update above
@@ -416,9 +608,42 @@ int main(int argc, char* argv[])
             Globals::ui.prepare(); // panel data jobs (profiler snapshot etc.) — overlap everything below until ui.update
             controls.update((float)deltaSec);
 
-            if (game.enabled())
+            // ESCAPE MENU (Esc — every running mode plus the LOBBY page, never over the main
+            // menu's front/settings pages). In game mode the game's own Esc cancel chain (build
+            // steps, hotbar pages) keeps first claim: the overlay only opens once Esc has nothing
+            // left to cancel. The teardown below runs in the pre-kick window, where main-thread
+            // entity destruction and the network shutdown are legal.
             {
-                game.updateWindowed(camera, (float)deltaSec); // game mode: follow-camera overwrite + aim/HUD/debug draw
+                const bool escapeAllowed = !Globals::ui.isMainMenuActive() || Globals::ui.isMainMenuLobbyOpen();
+                if (controls.takeEscapePressed() && escapeAllowed)
+                {
+                    if (Globals::ui.isEscapeMenuOpen())
+                        Globals::ui.setEscapeMenuOpen(false);
+                    else if (!game || !game->enabled() || Globals::ui.isMainMenuActive() || !game->escWouldCancel())
+                        Globals::ui.setEscapeMenuOpen(true);
+                }
+                switch (Globals::ui.takeEscapeMenuAction())
+                {
+                case EscapeMenuAction::Resume:
+                    Globals::ui.setEscapeMenuOpen(false);
+                    break;
+                case EscapeMenuAction::Quit:
+                    g_running = false;
+                    break;
+                case EscapeMenuAction::ExitToMenu:
+                    Globals::ui.setEscapeMenuOpen(false);
+                    exitToMenu();
+                    break;
+                default:
+                    break;
+                }
+            }
+
+            if (game && game->enabled() && !Globals::ui.isMainMenuActive() && !Globals::ui.isEscapeMenuOpen())
+            {
+                // Menu/lobby/escape-menu active = no game input, camera overwrite or HUD (a lobby
+                // client's GameMatch already exists and simulates, but the overlay owns the screen).
+                game->updateWindowed(camera, (float)deltaSec); // game mode: follow-camera overwrite + aim/HUD/debug draw
             }
             else if (Globals::rendererVK.isVrEnabled())
             {
@@ -444,7 +669,8 @@ int main(int argc, char* argv[])
         const double simDeltaSec = Globals::time.getSimDeltaSec();
 
         Globals::networkManager.receive(deltaSec); // snapshot targets + events land before the sim/entity updates read them
-        game.updatePlayer((float)simDeltaSec); // ONLY the player-body writes (camera hot path, pre-physics); the rest of the game tick runs after the joins below
+        if (game)
+            game->updatePlayer((float)simDeltaSec); // ONLY the player-body writes (camera hot path, pre-physics); the rest of the game tick runs after the joins below
         Globals::scriptContext.update(camera, (float)simDeltaSec, (float)Globals::time.getSimElapsedSec());
 
         // The spatial index + renderer frame state are QUIESCENT from here until world.update: the
@@ -483,7 +709,8 @@ int main(int argc, char* argv[])
         // legal again after the joins, and mid-frame container loads after beginFrame are a
         // supported path (present() re-checks texture/mesh generations). Becomes the server tick
         // in MP. See GameMatch::update's declaration for the one-frame latencies this placement buys.
-        game.update((float)simDeltaSec);
+        if (game)
+            game->update((float)simDeltaSec);
         // Contact scripts (OnPhysicsEvent) query the spatial index and can touch renderer state
         // (light/sun thunks), so they fire AFTER the joins — still before the entity pass, as before.
         Globals::physics.dispatchContactEvents([](const PhysicsWorld::ContactEvent& evt) { Globals::world.handleContactEvent(evt); });

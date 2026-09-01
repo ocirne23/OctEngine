@@ -197,27 +197,37 @@ AudioSource AudioSystem::createSource()
     if (!m_initialized)
         return {};
     SystemState& state = audioState();
-    state.sources.push_back(oc::make_unique<SourceState>());
-    return AudioSource(reinterpret_cast<uint64>(state.sources.back().get()));
+    oc::unique_ptr<SourceState> source = oc::make_unique<SourceState>(); // built outside the lock
+    SourceState* raw = source.get();
+    const std::lock_guard lock(m_sourceMutex);
+    state.sources.push_back(oc::move(source));
+    return AudioSource(reinterpret_cast<uint64>(raw));
 }
 
 void AudioSystem::releaseSource(uint64 sourceHandle)
 {
     SystemState& state = audioState();
     SourceState* handleState = toState(sourceHandle);
-    for (size_t i = 0; i < state.sources.size(); ++i)
+    oc::unique_ptr<SourceState> owned; // taken out under the lock, torn down after it
     {
-        if (state.sources[i].get() == handleState)
+        const std::lock_guard lock(m_sourceMutex);
+        for (size_t i = 0; i < state.sources.size(); ++i)
         {
-            destroySourceState(*handleState);
-            state.sources.erase(state.sources.begin() + i);
-            return;
+            if (state.sources[i].get() == handleState)
+            {
+                owned = oc::move(state.sources[i]);
+                state.sources.erase(state.sources.begin() + i);
+                break;
+            }
         }
     }
+    if (owned)
+        destroySourceState(*owned);
 }
 
 void AudioSystem::detachBuffer(uint64 bufferHandle)
 {
+    const std::lock_guard lock(m_sourceMutex);
     SystemState& state = audioState();
     const SoundData* data = reinterpret_cast<const SoundData*>(bufferHandle);
     for (oc::unique_ptr<SourceState>& source : state.sources)

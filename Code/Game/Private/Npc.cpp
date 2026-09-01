@@ -133,6 +133,7 @@ void NpcSystem::clear()
         roster.clear();
         for (const EntityPtr& e : actors)
             Globals::world.removeRootEntity(e.get());
+        Globals::world.releaseBatch(oc::move(actors)); // the teardown itself fans out over the job system
     };
     despawnAll(m_units);
     despawnAll(m_shots);

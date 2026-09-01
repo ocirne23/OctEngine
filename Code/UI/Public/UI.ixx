@@ -10,6 +10,7 @@ import Threading; // JobCounter for the panel prepare jobs
 import UI.Gizmo;
 
 import UI.fwd;
+export import :MainMenu; // MainMenuAction crosses to main(), which performs the mode start
 import :AssetBrowser;
 import :SceneView;
 import :PropertiesPanel;
@@ -112,6 +113,26 @@ public:
 
     void handleKeyEvent(SDL_Event evt);
 
+    // ---- Main menu (game-facing start screen; main performs the mode start) ----
+    // While active, the widget pass draws ONLY the menu (fullscreen viewport, no editor panels).
+    // main() polls takeMainMenuAction() after the post-update join and deactivates on success.
+    void setMainMenuActive(bool active) { m_mainMenu.setActive(active); }
+    bool isMainMenuActive() const { return m_mainMenu.isActive(); }
+    void setMainMenuHostEndpoint(oc::string endpoint) { m_mainMenu.setHostEndpoint(oc::move(endpoint)); }
+    void setMainMenuHostNote(oc::string note) { m_mainMenu.setHostNote(oc::move(note)); }
+    MainMenuAction takeMainMenuAction() { return m_mainMenu.takeAction(); }
+    // Lobby page (App's LobbySystem is the model — main pushes a view snapshot each frame and
+    // polls the button actions, same sequencing as the menu action above)
+    void openMainMenuLobby() { m_mainMenu.openLobby(); }
+    bool isMainMenuLobbyOpen() const { return m_mainMenu.isLobbyOpen(); }
+    void setMainMenuLobbyView(const LobbyView& view) { m_mainMenu.setLobbyView(view); }
+    LobbyAction takeMainMenuLobbyAction() { return m_mainMenu.takeLobbyAction(); }
+    // Escape menu (Esc overlay in every running mode + the lobby; main owns the open state and
+    // applies the polled action — Resume/ExitToMenu/Quit)
+    void setEscapeMenuOpen(bool open) { m_mainMenu.setEscapeOpen(open); }
+    bool isEscapeMenuOpen() const { return m_mainMenu.isEscapeOpen(); }
+    EscapeMenuAction takeEscapeMenuAction() { return m_mainMenu.takeEscapeAction(); }
+
 private:
 
     bool m_isViewportGrabbed = false;
@@ -145,6 +166,7 @@ private:
 	TextEditor      m_textEditor;
 	ScriptEditor    m_scriptEditor;
 	GameHudOverlay  m_gameHudOverlay; // in-game HUD painted over the viewport (Core.GameHud is the model)
+	MainMenu        m_mainMenu;
 };
 
 export namespace Globals

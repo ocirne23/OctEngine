@@ -5,6 +5,7 @@ import Core.glm;
 import Core.SDL;
 import Core.Log;
 import Core.Tweaks;
+import Core.Time; // real clock for the barrier pulse
 import Core.Camera;
 import Core.Rect;
 import Core.Transform;
@@ -157,10 +158,48 @@ static void drawStructureGhost(EStructureType type, const glm::vec3& groundPos, 
 static constexpr float c_corridorHalfLength = 65.0f; // x extent of the play area
 static constexpr float c_corridorHalfWidth = 20.0f;  // z extent
 static constexpr float c_wallStep = 10.0f;           // border block size (borderwall.pre)
-// The CO-OP map: OPEN ground, no walls — a big square centred on the shared Base. The ground
-// plane (ground.pre) is 400 m, so ±200 is the hard edge; placement bounds, node scatter and
-// spawn rings all stay inside this.
+// The CO-OP map: a big square centred on the shared Base, RANDOMLY GENERATED — impassable rock
+// terrain over a coarse cell grid plus a player-blocking barrier ring at ±c_coopHalfSize (see
+// GameMatch::generateCoopGrid). The ground plane (ground.pre) is 400 m, so ±200 is the hard edge;
+// waves spawn in the open ring BETWEEN the barrier and the ground edge and walk in through it
+// (the barrier's collider only matches the Player layer).
 static constexpr float c_coopHalfSize = 180.0f;
+static constexpr float c_coopCellSize = 10.0f; // terrain cell = one rock block (5x the 2 m grid)
+static constexpr int c_coopCells = 36;         // cells per side
+static_assert((float)c_coopCells * c_coopCellSize == c_coopHalfSize * 2.0f);
+static constexpr float c_coopGroundEdge = 196.0f;  // spawn clamp just inside the 400 m ground
+static constexpr float c_coopBaseClearRadius = 26.0f; // rock-free zone around the Base + starters
+static constexpr float c_barrierStep = 20.0f;      // one barrier.pre segment (posts at centers)
+
+// Deterministic map math: every instance must derive the IDENTICAL layout from the seed alone
+// (the corridor-table contract), so the generator uses its own splitmix-style hash/RNG — never
+// glm::linearRand, whose global engine state differs per instance.
+static uint32 mapHash(uint32 x)
+{
+    x += 0x9e3779b9u;
+    x = (x ^ (x >> 16)) * 0x85ebca6bu;
+    x = (x ^ (x >> 13)) * 0xc2b2ae35u;
+    return x ^ (x >> 16);
+}
+struct MapRng
+{
+    uint32 state;
+    uint32 next() { return state = mapHash(state); }
+    float next01() { return (float)(next() >> 8) * (1.0f / 16777216.0f); }
+};
+// Value noise on the cell lattice: hashed corners, bilinear blend. Period in cells.
+static float mapNoise(uint32 seed, float x, float z, float period)
+{
+    const float fx = x / period, fz = z / period;
+    const int ix = (int)std::floor(fx), iz = (int)std::floor(fz);
+    const float tx = fx - (float)ix, tz = fz - (float)iz;
+    const auto corner = [&](int cx, int cz) {
+        return (float)(mapHash(seed ^ mapHash((uint32)(cx * 73856093) ^ (uint32)(cz * 19349663))) >> 8)
+            * (1.0f / 16777216.0f); };
+    const float a = glm::mix(corner(ix, iz), corner(ix + 1, iz), tx);
+    const float b = glm::mix(corner(ix, iz + 1), corner(ix + 1, iz + 1), tx);
+    return glm::mix(a, b, tz);
+}
 
 GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
 {
@@ -182,8 +221,13 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
         Tweak::intVar("Game/Coop", "Max enemy units", &m_waveMaxAlive, 1, 20000, 50);
         Tweak::intVar("Game/Coop", "Ambient budget", &m_ambientBudget, 0, 20000, 10);
         Tweak::floatVar("Game/Coop", "Ambient safe radius", &m_ambientSafeRadius, 10.0f, 200.0f, 1.0f);
-        Tweak::floatVar("Game/Coop", "Wave spawn distance", &m_waveSpawnDist, 40.0f, 250.0f, 1.0f);
         Tweak::intVar("Game/Coop", "Spawns per frame", &m_spawnsPerFrame, 1, 200, 1);
+        // Map generation inputs, read once at generation on the AUTHORITY. Clients never read
+        // them: the values actually used ride the GMp event (and the save) with the seed — a
+        // joiner's tweak sync lands after the world replay, too late to drive generation.
+        Tweak::intVar("Game/Coop", "Map seed", &m_mapSeedTweak, 0, 0x7fffffff, 1);
+        Tweak::floatVar("Game/Coop", "Terrain fill", &m_terrainFill, 0.0f, 0.6f, 0.02f);
+        Tweak::intVar("Game/Coop", "Terrain lanes", &m_terrainLanes, 2, 12, 1);
         Tweak::floatVar("Game/Construction", "Refill radius", &m_refillRadius, 1.0f, 30.0f, 0.25f);
         Tweak::floatVar("Game/Construction", "Refill rate", &m_refillRate, 0.5f, 100.0f, 0.5f);
         Tweak::floatVar("Game/Construction", "Player build radius", &m_buildRadius, 1.0f, 30.0f, 0.25f);
@@ -199,8 +243,10 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
     m_structures.registerTweaks();
     m_npcs.registerTweaks();
     Globals::navSystem.initialize(); // "Nav" tweaks + density staging (job system is up by now)
-    if (m_coop) // players share team 0, the AI is team 1: the force shaders/bakes shrink to fit
-        Globals::forceSystem.setNumTeams(2);
+    // Co-op: players share team 0, the AI is team 1 — the force shaders/bakes shrink to fit. PvP
+    // sets the default cap EXPLICITLY: exit-to-menu can chain a co-op session into a PvP one in
+    // the same process, so the previous mode's count must never linger (a no-op when unchanged).
+    Globals::forceSystem.setNumTeams(m_coop ? 2 : 8);
 
     // The game rosters (structures + units/projectiles) replace every world-wide spatial query:
     // they deregister through this ONE notification, which every removal path funnels into
@@ -276,10 +322,16 @@ GameMatch::~GameMatch()
 {
     if (!m_enabled)
         return;
+    // Exit-to-menu can destroy a GameMatch MID-RUN: every tweak registered on a member (the ctor's
+    // Game/* block + camera/player/structures/npcs) must leave the registry with it, or the
+    // per-frame poll reads freed memory. Statics (component params) stay and re-register in place.
+    TweakRegistry::get().unregisterInRange(this, sizeof(GameMatch));
     Globals::navSystem.clear(); // waits on in-flight builds before the world goes
     m_npcs.clear();
     m_structures.clear();
     m_player.despawn();
+    if (m_terrainRoot)
+        Globals::world.removeRootEntity(m_terrainRoot.get()); // co-op rocks + barrier segments
     if (m_ground)
         Globals::world.removeRootEntity(m_ground.get()); // corridor walls are its children — they go with it
     Globals::world.setOnRootEntityRemoved(nullptr); // last: the callback captures this object
@@ -308,7 +360,7 @@ void GameMatch::spawnWorld()
         Globals::world.addRootEntity(m_ground);
     }
 
-    Globals::networkManager.setOnGameEvent([this](oc::string_view name) { handleNetEvent(name); });
+    // NOTE: no setOnGameEvent here — main.cpp owns the single dispatcher (lobby + game routing)
     if (m_isServer)
     {
         // Structure changes broadcast to the client mirrors; only Gq* requests may come FROM clients.
@@ -343,11 +395,18 @@ void GameMatch::spawnWorld()
         m_structures.onRouteChanged = [this](uint32 id) { seedRouteLane(id); };
     if (m_coop)
     {
-        // The open co-op map: nodes scattered over the whole square (deterministic — every
-        // instance builds the same set locally, like the corridor table), NO border walls, and
-        // placement bounds = the big square (footprints stay on the ground plane).
-        m_structures.spawnNodesCoop(20.0f, c_coopHalfSize - 15.0f, 48);
+        // The generated co-op map (terrain + barrier + nodes): the AUTHORITY rolls the seed and
+        // builds now; a CLIENT builds the identical set locally when the server's GMp event
+        // delivers the seed (first thing in its join replay). Placement bounds = inside the
+        // barrier either way — cellsFree needs them before the map lands.
         m_structures.setPlacementBounds(glm::vec2(-c_coopHalfSize), glm::vec2(c_coopHalfSize));
+        if (!m_isClient)
+        {
+            uint32 seed = (uint32)m_mapSeedTweak;
+            if (seed == 0) // tweak 0 = roll a fresh map every run
+                seed = (std::random_device{}() & 0x7fffffffu) | 1u;
+            rebuildCoopMap(seed, m_terrainFill, m_terrainLanes);
+        }
     }
     else
     {
@@ -492,12 +551,15 @@ void GameMatch::queueWave()
     ++m_waveIndex;
     if (budget <= 0.0f)
         return; // at the cap: the clock (and the scaling) still advanced
-    // A random compass direction: the swarm clusters on the spawn ring and pushes at the Base's
-    // near face (a point INSIDE the footprint would fail the A* and the move order alike — the
-    // pointOutsideFootprint rule). The locked order releases on arrival; the AI takes over there.
+    // A random compass direction, projected onto the barrier square and stepped OUTSIDE it: the
+    // swarm clusters in the open ring beyond the barrier (its collider only matches players) and
+    // pushes at the Base's near face (a point INSIDE the footprint would fail the A* and the move
+    // order alike — the pointOutsideFootprint rule). The locked order releases on arrival; the AI
+    // takes over there. The carved lanes guarantee a route in from any side.
     const float angle = glm::linearRand(0.0f, glm::two_pi<float>());
     const glm::vec3 dir(std::cos(angle), 0.0f, std::sin(angle));
-    m_waveOrigin = dir * glm::min(m_waveSpawnDist, c_coopHalfSize - 10.0f);
+    const float k = (c_coopHalfSize + 8.0f) / glm::max(glm::abs(dir.x), glm::abs(dir.z));
+    m_waveOrigin = dir * k;
     m_waveDest = dir * 6.0f;
     m_wavePendingBudget += budget;
     // Roll this wave's COMPOSITION among the archetypes the index has unlocked — never the same
@@ -562,13 +624,22 @@ void GameMatch::tickCoopSpawns()
             }
         }
         m_wavePendingBudget -= waveCostOf(type);
-        // Cluster around the ring point — bigger remaining waves spread over a wider blob.
+        // Cluster around the ring point — bigger remaining waves spread over a wider blob. The
+        // blob stays in the band OUTSIDE the barrier but inside the ground plane: a point that
+        // drifted through the barrier line pushes back out along the wave's dominant axis.
         const float a = glm::linearRand(0.0f, glm::two_pi<float>());
         const float r = glm::min(8.0f + m_wavePendingBudget * 0.05f, 30.0f)
             * std::sqrt(glm::linearRand(0.0f, 1.0f));
         glm::vec3 pos = m_waveOrigin + glm::vec3(std::cos(a) * r, 1.0f, std::sin(a) * r);
-        pos.x = glm::clamp(pos.x, -c_coopHalfSize, c_coopHalfSize);
-        pos.z = glm::clamp(pos.z, -c_coopHalfSize, c_coopHalfSize);
+        pos.x = glm::clamp(pos.x, -c_coopGroundEdge, c_coopGroundEdge);
+        pos.z = glm::clamp(pos.z, -c_coopGroundEdge, c_coopGroundEdge);
+        if (glm::abs(pos.x) < c_coopHalfSize + 1.5f && glm::abs(pos.z) < c_coopHalfSize + 1.5f)
+        {
+            if (glm::abs(m_waveOrigin.x) >= glm::abs(m_waveOrigin.z))
+                pos.x = glm::sign(m_waveOrigin.x) * (c_coopHalfSize + 2.0f + glm::linearRand(0.0f, 10.0f));
+            else
+                pos.z = glm::sign(m_waveOrigin.z) * (c_coopHalfSize + 2.0f + glm::linearRand(0.0f, 10.0f));
+        }
         spawns.push_back({ .pos = pos,
             .orderDest = m_waveDest + glm::vec3(glm::linearRand(-4.0f, 4.0f), 0.0f,
                 glm::linearRand(-4.0f, 4.0f)),
@@ -577,26 +648,46 @@ void GameMatch::tickCoopSpawns()
     while (budget > 0 && m_ambientPendingBudget > 0.0f)
     {
         --budget;
-        // Uniform-AREA scatter outside the safe radius (sqrt(t) = even density). AMBIENT: the Nav
-        // team fields never pull them (they cover the whole map, which marched every scattered
-        // unit to the base) — only the local search aggroes them, so they hold their patch until
-        // players expand near it. Wave units above stay field-driven after their order releases.
-        const float a = glm::linearRand(0.0f, glm::two_pi<float>());
-        const float depth = std::sqrt(glm::linearRand(0.0f, 1.0f)); // 0 = safe ring, 1 = map edge
-        const float r = glm::mix(m_ambientSafeRadius, c_coopHalfSize - 5.0f, depth);
-        // DISTANCE = DIFFICULTY: the archetype roll is gated by depth exactly like waves gate by
-        // index — the near ring only rolls the early recipes (swarm-grade), the deep map unlocks
-        // the whole table (brute walls, combined arms). Costs then make far patches FEWER, TOUGHER
-        // bodies for the same points.
-        const int band = 1 + (int)(depth * (float)(c_maxArchetypeMinWave - 1) + 0.5f);
-        int eligible[c_numWaveArchetypes];
-        int numEligible = 0;
-        for (int i = 0; i < c_numWaveArchetypes; ++i)
-            if (c_waveArchetypes[i].minWave <= band)
-                eligible[numEligible++] = i;
-        const WaveArchetype& arch = c_waveArchetypes[eligible[glm::clamp(
-            (int)(glm::linearRand(0.0f, 1.0f) * (float)numEligible), 0, numEligible - 1)]];
-        ENpcType type = sampleArchetype(arch);
+        // AMBIENT units come in CAMPS: a cluster anchored on a random REACHABLE open cell of the
+        // generated map (uniform by area, outside the safe ring, reachable from the Base by the
+        // flood fill's guarantee), its bodies scattered in a disc around the anchor and slid off
+        // any rock edge — a loose blob per camp instead of one body per cell, which lined up on
+        // the 10 m lattice. The Nav team fields never pull them (they cover the whole map, which
+        // marched every scattered unit to the base) — only the local search aggroes them, so a
+        // camp holds its patch until players expand near it. Wave units above stay field-driven
+        // after their order releases.
+        if (m_coopMap.reachable.empty())
+            break;
+        if (m_ambientCamp.remaining <= 0)
+        {
+            const int cell = m_coopMap.reachable[glm::clamp(
+                (int)(glm::linearRand(0.0f, 1.0f) * (float)m_coopMap.reachable.size()),
+                0, (int)m_coopMap.reachable.size() - 1)];
+            const glm::vec3 center = coopCellCenter(cell);
+            if (glm::length(glm::vec2(center.x, center.z)) < m_ambientSafeRadius)
+                continue; // safe-ring reject: costs one budget tick, never the points
+            // DISTANCE = DIFFICULTY: the camp's archetype is gated by GEODESIC depth (BFS distance
+            // from the Base over the generated map) exactly like waves gate by index — the near
+            // ring only rolls the early recipes (swarm-grade), the deep map unlocks the whole
+            // table (brute walls, combined arms). Costs then make far camps FEWER, TOUGHER
+            // bodies for the same points. One recipe per camp, so a camp reads as a unit type
+            // holding ground rather than a random assortment.
+            const float depth = (float)m_coopMap.depth[cell] / (float)m_coopMap.maxDepth;
+            const int band = 1 + (int)(depth * (float)(c_maxArchetypeMinWave - 1) + 0.5f);
+            int eligible[c_numWaveArchetypes];
+            int numEligible = 0;
+            for (int i = 0; i < c_numWaveArchetypes; ++i)
+                if (c_waveArchetypes[i].minWave <= band)
+                    eligible[numEligible++] = i;
+            m_ambientCamp.archetype = eligible[glm::clamp(
+                (int)(glm::linearRand(0.0f, 1.0f) * (float)numEligible), 0, numEligible - 1)];
+            m_ambientCamp.center = center + glm::vec3(glm::linearRand(-4.0f, 4.0f), 0.0f,
+                glm::linearRand(-4.0f, 4.0f));
+            m_ambientCamp.radius = glm::linearRand(4.0f, 9.0f);
+            m_ambientCamp.remaining = (int)glm::linearRand(3.0f, 9.99f);
+        }
+        --m_ambientCamp.remaining;
+        ENpcType type = sampleArchetype(c_waveArchetypes[m_ambientCamp.archetype]);
         if (waveCostOf(type) > m_ambientPendingBudget)
         {
             type = ENpcType::Swarm; // the tail rounds down to the cheapest body
@@ -607,7 +698,7 @@ void GameMatch::tickCoopSpawns()
             }
         }
         m_ambientPendingBudget -= waveCostOf(type);
-        spawns.push_back({ .pos = glm::vec3(std::cos(a) * r, 1.0f, std::sin(a) * r),
+        spawns.push_back({ .pos = ambientPointNear(m_ambientCamp.center, m_ambientCamp.radius),
             .type = type, .team = (uint8)CoopAiTeam });
     }
     m_npcs.spawnLooseUnits(oc::span<const NpcSystem::LooseSpawn>(spawns.data(), spawns.size()));
@@ -652,6 +743,396 @@ void GameMatch::spawnCorridorWalls()
     {
         spawnSegment(-c_corridorHalfLength - half, z);
         spawnSegment(c_corridorHalfLength + half, z);
+    }
+}
+
+// ---- CO-OP generated map --------------------------------------------------------------------
+
+glm::vec3 GameMatch::coopCellCenter(int index) const
+{
+    const int x = index % m_coopMap.cells, z = index / m_coopMap.cells;
+    return glm::vec3(-c_coopHalfSize + ((float)x + 0.5f) * c_coopCellSize, 0.0f,
+                     -c_coopHalfSize + ((float)z + 0.5f) * c_coopCellSize);
+}
+
+int GameMatch::coopCellAt(const glm::vec3& pos) const
+{
+    const int x = (int)std::floor((pos.x + c_coopHalfSize) / c_coopCellSize);
+    const int z = (int)std::floor((pos.z + c_coopHalfSize) / c_coopCellSize);
+    if (x < 0 || z < 0 || x >= m_coopMap.cells || z >= m_coopMap.cells)
+        return -1;
+    return z * m_coopMap.cells + x;
+}
+
+// The pure-math half: identical on every instance from (seed, fill, lanes) alone — MapRng only,
+// never glm::linearRand (global engine state). Produces blocked cells, the BFS depth/reachable
+// sets and the merged obstacle rects.
+void GameMatch::generateCoopGrid()
+{
+    CoopMap& map = m_coopMap;
+    const int n = c_coopCells;
+    map.cells = n;
+    map.blocked.assign((size_t)n * n, 0);
+    map.depth.assign((size_t)n * n, 0xFFFF);
+    map.reachable.clear();
+    map.maxDepth = 1;
+    MapRng rng{ map.seed ? map.seed : 1u };
+    const uint32 noiseA = rng.next(), noiseB = rng.next();
+
+    // Two-octave value noise per cell, thresholded to EXACTLY the requested fill fraction (the
+    // threshold is read off the sorted copy, so "Terrain fill" means what it says at any seed).
+    oc::vector<float> value((size_t)n * n);
+    for (int z = 0; z < n; ++z)
+        for (int x = 0; x < n; ++x)
+            value[(size_t)z * n + x] = 0.65f * mapNoise(noiseA, (float)x + 0.5f, (float)z + 0.5f, 5.5f)
+                                     + 0.35f * mapNoise(noiseB, (float)x + 0.5f, (float)z + 0.5f, 2.5f);
+    const float fill = glm::clamp(map.fill, 0.0f, 0.6f);
+    oc::vector<float> sorted = value;
+    oc::sort(sorted.begin(), sorted.end());
+    const float threshold = sorted[glm::clamp((int)((1.0f - fill) * (float)sorted.size()),
+        0, (int)sorted.size() - 1)];
+    for (size_t i = 0; i < value.size(); ++i)
+        map.blocked[i] = fill > 0.0f && value[i] >= threshold ? 1 : 0;
+
+    // The Base zone stays rock-free (Base footprint + starter node pair + breathing room).
+    for (int i = 0; i < n * n; ++i)
+    {
+        const glm::vec3 c = coopCellCenter(i);
+        if (glm::length(glm::vec2(c.x, c.z)) < c_coopBaseClearRadius)
+            map.blocked[i] = 0;
+    }
+
+    // Carved ATTACK LANES: evenly spread directions (jittered) wobbling from the base ring out
+    // past the barrier — they guarantee the edge ring connects to the Base (waves walk in through
+    // the openings) and give the noise blobs natural chokepoints to defend.
+    const int lanes = glm::clamp(map.lanes, 2, 12);
+    const auto clearAt = [&](const glm::vec2& p) // ~1.5 cells wide: the cell + its 4 neighbours
+    {
+        const int cell = coopCellAt(glm::vec3(p.x, 0.0f, p.y));
+        if (cell < 0)
+            return;
+        map.blocked[cell] = 0;
+        const int x = cell % n, z = cell / n;
+        if (x > 0)     map.blocked[cell - 1] = 0;
+        if (x < n - 1) map.blocked[cell + 1] = 0;
+        if (z > 0)     map.blocked[cell - n] = 0;
+        if (z < n - 1) map.blocked[cell + n] = 0;
+    };
+    for (int i = 0; i < lanes; ++i)
+    {
+        const float a = ((float)i + rng.next01() * 0.7f) / (float)lanes * glm::two_pi<float>();
+        const float phase = rng.next01() * glm::two_pi<float>();
+        const glm::vec2 dir(std::cos(a), std::sin(a));
+        const glm::vec2 perp(-dir.y, dir.x);
+        for (float r = c_coopBaseClearRadius - 6.0f; r < c_coopHalfSize * 1.5f; r += c_coopCellSize * 0.35f)
+        {
+            const glm::vec2 p = dir * r + perp * (std::sin(r * 0.045f + phase) * 10.0f);
+            if (glm::abs(p.x) > c_coopHalfSize || glm::abs(p.y) > c_coopHalfSize)
+                break;
+            clearAt(p);
+        }
+    }
+
+    // Flood fill from the Base (4-connected BFS = geodesic cell distance). Any open cell it never
+    // reaches becomes rock — so EVERY open cell is reachable from the Base by construction, and
+    // everything placed on open ground (nodes, ambient camps, move orders) is reachable too.
+    oc::vector<int> queue;
+    queue.reserve((size_t)n * n);
+    const int c0 = n / 2 - 1, c1 = n / 2;
+    for (const int seedCell : { c0 * n + c0, c0 * n + c1, c1 * n + c0, c1 * n + c1 })
+        if (!map.blocked[seedCell] && map.depth[seedCell] == 0xFFFF)
+        {
+            map.depth[seedCell] = 0;
+            queue.push_back(seedCell);
+        }
+    for (size_t head = 0; head < queue.size(); ++head)
+    {
+        const int cell = queue[head];
+        const int x = cell % n, z = cell / n;
+        const uint16 d = (uint16)(map.depth[cell] + 1);
+        const auto visit = [&](int next)
+        {
+            if (!map.blocked[next] && map.depth[next] == 0xFFFF)
+            {
+                map.depth[next] = d;
+                queue.push_back(next);
+            }
+        };
+        if (x > 0)     visit(cell - 1);
+        if (x < n - 1) visit(cell + 1);
+        if (z > 0)     visit(cell - n);
+        if (z < n - 1) visit(cell + n);
+    }
+    for (int i = 0; i < n * n; ++i)
+    {
+        if (map.blocked[i])
+            continue;
+        if (map.depth[i] == 0xFFFF)
+        {
+            map.blocked[i] = 1; // sealed pocket: fill it in rather than leave unreachable ground
+            continue;
+        }
+        map.reachable.push_back(i);
+        map.maxDepth = map.depth[i] > map.maxDepth ? map.depth[i] : map.maxDepth;
+    }
+
+    // Merged obstacle rects (horizontal runs): one rect serves Nav, placement (cellsFree) and the
+    // spawn probes — a few hundred instead of ~1300 per-cell entries.
+    m_terrainRects.clear();
+    for (int z = 0; z < n; ++z)
+        for (int x = 0; x < n; )
+        {
+            if (!map.blocked[z * n + x])
+            {
+                ++x;
+                continue;
+            }
+            int end = x;
+            while (end < n && map.blocked[z * n + end])
+                ++end;
+            m_terrainRects.push_back(glm::vec4(
+                -c_coopHalfSize + (float)x * c_coopCellSize, -c_coopHalfSize + (float)z * c_coopCellSize,
+                -c_coopHalfSize + (float)end * c_coopCellSize, -c_coopHalfSize + (float)(z + 1) * c_coopCellSize));
+            x = end;
+        }
+}
+
+// Rocks + barrier ring under ONE root entity (removed whole on regeneration), then the resource
+// nodes on reachable open cells. Deterministic: MapRng seeded off the map seed.
+void GameMatch::spawnCoopTerrain()
+{
+    MapRng rng{ mapHash(m_coopMap.seed ^ 0xC0FFEEu) };
+    m_terrainRoot = Globals::world.createEmptyEntity("CoopTerrain");
+    Globals::world.addRootEntity(m_terrainRoot);
+
+    oc::vector<World::SpawnRequest> requests;
+    requests.reserve(m_coopMap.reachable.size() / 2 + 128);
+    for (int i = 0; i < m_coopMap.cells * m_coopMap.cells; ++i)
+    {
+        if (!m_coopMap.blocked[i])
+            continue;
+        // The rock is a 10 m cube sunk a random depth: exposed height 3.5..6 m (always above the
+        // player's jump), tops varying so a field of them reads as terrain, not tiling.
+        const float exposed = 3.5f + rng.next01() * 2.5f;
+        requests.push_back({ "Entities/Game/rock.pre",
+            Transform(coopCellCenter(i) + glm::vec3(0.0f, exposed - 5.0f, 0.0f)) });
+        // + the ground marker: a tinted plane wider than the block outlines the blocked cell
+        requests.push_back({ "Entities/Game/terrainmark.pre", Transform(coopCellCenter(i)) });
+    }
+    const size_t rockCount = requests.size();
+    // The barrier ring: 20 m segments on all four sides (E/W rotated 90° — the prefab's long axis
+    // is X). Collider layer Barrier vs Player only: units and shots pass, capsules do not.
+    const glm::quat yaw90 = glm::angleAxis(glm::half_pi<float>(), glm::vec3(0.0f, 1.0f, 0.0f));
+    for (float o = -c_coopHalfSize + c_barrierStep * 0.5f; o < c_coopHalfSize; o += c_barrierStep)
+    {
+        requests.push_back({ "Entities/Game/barrier.pre", Transform(glm::vec3(o, 10.0f, -c_coopHalfSize)) });
+        requests.push_back({ "Entities/Game/barrier.pre", Transform(glm::vec3(o, 10.0f, c_coopHalfSize)) });
+        requests.push_back({ "Entities/Game/barrier.pre", Transform(glm::vec3(-c_coopHalfSize, 10.0f, o), 1.0f, yaw90) });
+        requests.push_back({ "Entities/Game/barrier.pre", Transform(glm::vec3(c_coopHalfSize, 10.0f, o), 1.0f, yaw90) });
+    }
+    oc::vector<EntityPtr> spawned = Globals::world.spawnBatch(requests, /*addRoots*/ false);
+    for (size_t i = 0; i < spawned.size(); ++i)
+    {
+        if (!spawned[i])
+            continue;
+        spawned[i]->setName(i >= rockCount ? "Barrier" : (i & 1) ? "RockMark" : "Rock");
+        if (m_terrainRoot)
+            spawned[i]->reparentEntity(m_terrainRoot.get()); // root at origin: world pos == local
+        else
+            Globals::world.addRootEntity(oc::move(spawned[i]));
+    }
+
+    // RESOURCE NODES: the starter pair in the cleared Base zone, then a golden-angle spiral of
+    // candidates SNAPPED to reachable open cells (skip when none nearby or too close to another
+    // node) — even coverage that respects whatever the noise carved, and reachable by the flood
+    // fill's guarantee.
+    m_structures.spawnNode(10.0f, 4.0f, ENodeType::Mineral);
+    m_structures.spawnNode(-4.0f, 10.0f, ENodeType::Fuel);
+    oc::vector<glm::vec2> placed = { glm::vec2(10.0f, 4.0f), glm::vec2(-4.0f, 10.0f) };
+    constexpr int c_nodeTarget = 48;
+    int placedCount = 0;
+    for (int i = 0; i < 120 && placedCount < c_nodeTarget; ++i)
+    {
+        const float t = ((float)i + 0.5f) / 120.0f;
+        const float r = glm::mix(34.0f, c_coopHalfSize - 16.0f, std::sqrt(t)); // sqrt = uniform area
+        const float a = (float)i * 2.3999632f; // the golden angle
+        const glm::vec3 want(std::cos(a) * r, 0.0f, std::sin(a) * r);
+        // Snap to the nearest reachable open cell around the candidate (2 rings).
+        int bestCell = -1;
+        float bestDistSq = FLT_MAX;
+        const int wantCell = coopCellAt(want);
+        if (wantCell < 0)
+            continue;
+        const int wx = wantCell % m_coopMap.cells, wz = wantCell / m_coopMap.cells;
+        for (int dz = -2; dz <= 2; ++dz)
+            for (int dx = -2; dx <= 2; ++dx)
+            {
+                const int x = wx + dx, z = wz + dz;
+                if (x < 0 || z < 0 || x >= m_coopMap.cells || z >= m_coopMap.cells)
+                    continue;
+                const int cell = z * m_coopMap.cells + x;
+                if (m_coopMap.blocked[cell]) // post-flood: open == reachable
+                    continue;
+                const glm::vec3 c = coopCellCenter(cell);
+                const float distSq = glm::dot(glm::vec2(c.x - want.x, c.z - want.z),
+                                              glm::vec2(c.x - want.x, c.z - want.z));
+                if (distSq < bestDistSq)
+                {
+                    bestDistSq = distSq;
+                    bestCell = cell;
+                }
+            }
+        if (bestCell < 0)
+            continue;
+        const glm::vec3 center = coopCellCenter(bestCell);
+        const glm::vec2 pos(center.x + (rng.next01() * 4.0f - 2.0f),
+                            center.z + (rng.next01() * 4.0f - 2.0f));
+        bool spaced = true;
+        for (const glm::vec2& q : placed)
+            if (glm::dot(pos - q, pos - q) < 13.0f * 13.0f)
+            {
+                spaced = false;
+                break;
+            }
+        if (!spaced)
+            continue;
+        m_structures.spawnNode(pos.x, pos.y, (placedCount % 3) == 1 ? ENodeType::Fuel : ENodeType::Mineral);
+        placed.push_back(pos);
+        ++placedCount;
+    }
+}
+
+void GameMatch::rebuildCoopMap(uint32 seed, float fill, int lanes)
+{
+    if (m_coopMap.built && m_coopMap.seed == seed && m_coopMap.fill == fill && m_coopMap.lanes == lanes)
+        return; // the join-replay re-broadcast / a duplicate GMp
+    if (m_terrainRoot)
+    {
+        Globals::world.removeRootEntity(m_terrainRoot.get()); // rocks + barrier die with it
+        m_terrainRoot = {};
+    }
+    m_structures.clearNodes();
+    m_coopMap.seed = seed;
+    m_coopMap.fill = fill;
+    m_coopMap.lanes = lanes;
+    m_ambientCamp.remaining = 0; // a camp anchored on the old map is void
+    generateCoopGrid();
+    m_coopMap.built = true;
+    spawnCoopTerrain();
+    // The rock rects are the co-op "walls": Nav obstacles (feedNav re-reads m_wallObstacles every
+    // frame) and placement refusals (cellsFree — ghosts turn red on rock, unit spawns skip it).
+    m_wallObstacles.clear();
+    for (const glm::vec4& r : m_terrainRects)
+        m_wallObstacles.push_back(Nav::NavObstacle{ glm::vec2(r.x, r.y), glm::vec2(r.z, r.w) });
+    m_structures.setTerrainBlocked(m_terrainRects);
+    m_structures.setPlacementBounds(glm::vec2(-c_coopHalfSize), glm::vec2(c_coopHalfSize));
+    Log::info(oc::format("Co-op map: seed {}, {} rock rects, {} reachable cells",
+        seed, m_terrainRects.size(), m_coopMap.reachable.size()));
+}
+
+void GameMatch::sendMapSeed()
+{
+    uint8 buffer[16];
+    NetWriter writer(buffer);
+    writer.write<uint32>(m_coopMap.seed);
+    writer.write<float>(m_coopMap.fill);
+    writer.write<uint8>((uint8)m_coopMap.lanes);
+    Globals::networkManager.fireNetworkEvent("GMp", writer.data());
+}
+
+// A camp body position: a random point in the disc around the camp anchor that lands on OPEN
+// ground (rejection-sampled), then slid at least a body's width off any neighbouring rock edge —
+// continuous coverage across cell borders, so nothing lines up on the lattice.
+glm::vec3 GameMatch::ambientPointNear(const glm::vec3& center, float radius) const
+{
+    glm::vec3 p = center;
+    for (int attempt = 0; attempt < 8; ++attempt)
+    {
+        const float a = glm::linearRand(0.0f, glm::two_pi<float>());
+        const float r = radius * std::sqrt(glm::linearRand(0.0f, 1.0f));
+        const glm::vec3 q = center + glm::vec3(std::cos(a) * r, 0.0f, std::sin(a) * r);
+        const int cell = coopCellAt(q);
+        if (cell >= 0 && !m_coopMap.blocked[cell])
+        {
+            p = q;
+            break;
+        }
+    }
+    const int cell = coopCellAt(p);
+    if (cell >= 0)
+    {
+        constexpr float c_keep = 1.2f; // body radius + a gap from the rock face
+        const int x = cell % m_coopMap.cells, z = cell / m_coopMap.cells;
+        const glm::vec3 c = coopCellCenter(cell);
+        const float half = c_coopCellSize * 0.5f;
+        if (x == 0 || m_coopMap.blocked[cell - 1])
+            p.x = glm::max(p.x, c.x - half + c_keep);
+        if (x == m_coopMap.cells - 1 || m_coopMap.blocked[cell + 1])
+            p.x = glm::min(p.x, c.x + half - c_keep);
+        if (z == 0 || m_coopMap.blocked[cell - m_coopMap.cells])
+            p.z = glm::max(p.z, c.z - half + c_keep);
+        if (z == m_coopMap.cells - 1 || m_coopMap.blocked[cell + m_coopMap.cells])
+            p.z = glm::min(p.z, c.z + half - c_keep);
+    }
+    return glm::vec3(p.x, 1.0f, p.z);
+}
+
+glm::vec3 GameMatch::clampToOpenGround(const glm::vec3& pos) const
+{
+    if (!m_coopMap.built)
+        return pos;
+    const int cell = coopCellAt(pos);
+    if (cell < 0 || !m_coopMap.blocked[cell])
+        return pos;
+    // Inside a rock: the nearest open cell center within 3 rings (post-flood, open == reachable).
+    const int cx = cell % m_coopMap.cells, cz = cell / m_coopMap.cells;
+    int best = -1;
+    float bestDistSq = FLT_MAX;
+    for (int dz = -3; dz <= 3; ++dz)
+        for (int dx = -3; dx <= 3; ++dx)
+        {
+            const int x = cx + dx, z = cz + dz;
+            if (x < 0 || z < 0 || x >= m_coopMap.cells || z >= m_coopMap.cells)
+                continue;
+            const int c = z * m_coopMap.cells + x;
+            if (m_coopMap.blocked[c])
+                continue;
+            const glm::vec3 center = coopCellCenter(c);
+            const glm::vec2 d(center.x - pos.x, center.z - pos.z);
+            if (glm::dot(d, d) < bestDistSq)
+            {
+                bestDistSq = glm::dot(d, d);
+                best = c;
+            }
+        }
+    return best >= 0 ? coopCellCenter(best) : pos;
+}
+
+// The barrier's "energy fence": pulsing lines strung between the posts at three heights, a slow
+// wave running along each side. Cheap (a few hundred debug lines) and unmistakably "do not pass".
+void GameMatch::drawCoopBarrier()
+{
+    const float t = (float)Globals::time.getElapsedSec(); // real clock: the fence hums while paused
+    constexpr float c_heights[3] = { 1.4f, 3.0f, 4.6f };
+    const glm::vec3 base(1.0f, 0.5f, 0.15f);
+    const int segs = (int)(c_coopHalfSize * 2.0f / c_barrierStep);
+    for (int side = 0; side < 4; ++side)
+    {
+        for (int i = 0; i < segs; ++i)
+        {
+            const float a0 = -c_coopHalfSize + (float)i * c_barrierStep;
+            const float a1 = a0 + c_barrierStep;
+            const uint32 color = packColor(base * (0.55f + 0.45f
+                * std::sin(t * 2.2f + (float)(i + side * segs) * 0.7f)));
+            for (const float h : c_heights)
+            {
+                const glm::vec3 p0 = side < 2 ? glm::vec3(a0, h, side == 0 ? -c_coopHalfSize : c_coopHalfSize)
+                                              : glm::vec3(side == 2 ? -c_coopHalfSize : c_coopHalfSize, h, a0);
+                const glm::vec3 p1 = side < 2 ? glm::vec3(a1, h, side == 0 ? -c_coopHalfSize : c_coopHalfSize)
+                                              : glm::vec3(side == 2 ? -c_coopHalfSize : c_coopHalfSize, h, a1);
+                Globals::rendererVK.addDebugLine(p0, p1, color);
+            }
+        }
     }
 }
 
@@ -717,9 +1198,13 @@ void GameMatch::onClientJoined(uint32 clientId)
         m_clientPlayers[clientId] = oc::move(player);
         Log::info("Game: client " + oc::to_string(clientId) + " assigned team " + oc::to_string(team));
     }
-    // World-state replay for the late joiner: every structure, broadcast (mirrorPlace is
-    // idempotent, so already-connected clients shrug the duplicates off). Links need no replay —
-    // each client derives them locally from the mirrored cable segments.
+    // World-state replay for the late joiner: the co-op map seed FIRST (the joiner builds its
+    // terrain + nodes from it before any structure mirror below arrives — reliable ch1 is
+    // ordered), then every structure, broadcast (mirrorPlace is idempotent, so already-connected
+    // clients shrug the duplicates off; rebuildCoopMap no-ops on the repeated seed). Links need
+    // no replay — each client derives them locally from the mirrored cable segments.
+    if (m_coop && m_isServer && m_coopMap.built)
+        sendMapSeed();
     for (int i = 0; i < m_structures.structureCount(); ++i)
         sendStructurePlaced(i);
     for (int i = 0; i < m_structures.structureCount(); ++i)
@@ -782,6 +1267,14 @@ void GameMatch::saveGame()
         return;
     }
     AssetNode root; // unnamed — writeAssetText writes only the children
+    if (m_coop && m_coopMap.built)
+    {
+        // The map's generation inputs: structure/unit positions and node indices only make sense
+        // on the exact map the save was played on — loadGame regenerates it from these.
+        root.set("MapSeed", oc::to_string((int)m_coopMap.seed));
+        root.set("MapFill", m_coopMap.fill);
+        root.set("MapLanes", oc::to_string(m_coopMap.lanes));
+    }
     m_structures.saveTo(root);
     m_npcs.saveUnits(root);
     // F9: an explicit user action, main thread.
@@ -807,6 +1300,19 @@ void GameMatch::loadGame(oc::string_view path)
         Log::warning("Load game: " + error);
         return;
     }
+    // A co-op save carries its map's generation inputs: regenerate the exact map first (clearing
+    // the current structures BEFORE the node set swaps, so no stale extractor outlives its node).
+    // Connected clients rebuild from the GMp broadcast the same way.
+    if (m_coop)
+        if (const AssetNode* seedNode = root.find("MapSeed"); seedNode && seedNode->asInt() != 0)
+        {
+            m_structures.clearAllStructures(); // fires GRm hooks — clients prune ahead of the swap
+            rebuildCoopMap((uint32)seedNode->asInt(),
+                root.find("MapFill") ? root.find("MapFill")->asFloat() : m_coopMap.fill,
+                root.find("MapLanes") ? root.find("MapLanes")->asInt() : m_coopMap.lanes);
+            if (m_isServer)
+                sendMapSeed();
+        }
     // Replace the sim. Structure removal hooks fire during the clear (GRm to clients), then the
     // loaded state re-broadcasts below; unit entities resync through the normal despawn/spawn
     // replication (Component Network in their prefabs).
@@ -974,6 +1480,17 @@ void GameMatch::handleNetEvent(oc::string_view name)
             const uint16 wave = reader.read<uint16>();
             if (!reader.overflowed())
                 Log::info(oc::format("Co-op: wave {} incoming", (int)wave));
+        }
+        else if (name == "GMp")
+        {
+            // The generated co-op map's inputs: build the identical terrain + barrier + nodes
+            // locally (rebuildCoopMap is a no-op on the re-broadcasts later joiners trigger).
+            // Sent FIRST in the join replay, so the map exists before any structure mirror lands.
+            const uint32 seed = reader.read<uint32>();
+            const float fill = reader.read<float>();
+            const uint8 lanes = reader.read<uint8>();
+            if (!reader.overflowed() && m_coop && seed != 0 && fill >= 0.0f && fill <= 1.0f)
+                rebuildCoopMap(seed, fill, (int)lanes);
         }
         // (shield/materials state rides the entity snapshot's game blob now — no GSh event)
         return;
@@ -1994,7 +2511,10 @@ void GameMatch::issueScenarioOrder()
 // the selected units walk to a world position (a fresh order: the lane is seeded from the group).
 bool GameMatch::moveOrderAt(const glm::vec3& worldPos)
 {
-    const glm::vec3 dest(worldPos.x, 0.0f, worldPos.z);
+    // A click that lands inside co-op rock clamps to the nearest open cell — a target on blocked
+    // cells fails the lane A* and every unit's own plan request (the pointOutsideFootprint rule,
+    // applied to terrain).
+    const glm::vec3 dest = clampToOpenGround(glm::vec3(worldPos.x, 0.0f, worldPos.z));
     m_player.setMoveTarget(dest);
     return orderSelectedUnits(dest, true);
 }
@@ -2055,6 +2575,7 @@ void GameMatch::updateRightClickActions(const Camera& camera, bool rmbEdge)
         || m_structures.structureTeam(sel) != (uint8)m_team || !aimGroundPoint(camera, ground))
         return; // not a route click either: the caller turns it into a MOVE order
     ground.y = 0.0f;
+    ground = clampToOpenGround(ground); // a waypoint inside co-op rock would stall every marcher
     m_rmbConsumed = true;
     oc::vector<glm::vec3> route;
     if (Globals::input.isKeyDown(SDL_Scancode::SDL_SCANCODE_LSHIFT))
@@ -2406,8 +2927,9 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     glm::vec3 moveGround;
     if (m_rmbMoveDrag && aimGroundPoint(camera, moveGround))
     {
-        m_player.setMoveTarget(glm::vec3(moveGround.x, 0.0f, moveGround.z));
-        orderSelectedUnits(moveGround, rmbEdge); // the selected units follow the same order (re-aimed while held; the lane wipe only on the press)
+        const glm::vec3 dest = clampToOpenGround(glm::vec3(moveGround.x, 0.0f, moveGround.z));
+        m_player.setMoveTarget(dest);
+        orderSelectedUnits(dest, rmbEdge); // the selected units follow the same order (re-aimed while held; the lane wipe only on the press)
     }
     if (m_player.hasMoveTarget()) // destination marker until the capsule arrives
         drawCircle(m_player.moveTarget() + glm::vec3(0.0f, 0.15f, 0.0f), 0.6f,
@@ -2420,6 +2942,8 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     modeScope.stop();
 
     m_structures.drawDebug();
+    if (m_coop)
+        drawCoopBarrier(); // the edge fence's pulsing energy lines
     if (Globals::navSystem.debugMode() > 0)
     {
         ProfileScope navDrawScope("Nav debug draw", EProfileCategory::Game);

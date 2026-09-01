@@ -20,6 +20,7 @@ import :MemoryPanel;
 import :TextEditor;
 import :ScriptEditor;
 import :GameHudOverlay;
+import :MainMenu;
 
 void UI::initialize()
 {
@@ -94,6 +95,26 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
     {
         ProfileScope scope("ImGui new frame", EProfileCategory::UI);
         ImGui::NewFrame();
+    }
+
+    if (m_mainMenu.isActive())
+    {
+        // Start screen instead of the editor: the 3D world renders into the FULL window (main
+        // passes this rect to the renderer next frame) with the menu drawn over it. No panels run,
+        // so their open flags stay false and no prepare jobs get submitted; the dockspace's
+        // first-time layout runs on the first post-menu frame instead.
+        ProfileScope menuScope("Main menu", EProfileCategory::UI);
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        m_viewportRect = Rect(glm::ivec2((int)viewport->Pos.x, (int)viewport->Pos.y),
+            glm::ivec2(int(viewport->Pos.x + viewport->Size.x), int(viewport->Pos.y + viewport->Size.y)));
+        m_isViewportGrabbed = false;
+        m_isViewportFocused = false;
+        m_hasViewportGainedFocus = false;
+        m_mainMenu.render(m_viewportRect, m_tweakPanel.deferredCallbacks());
+        if (m_mainMenu.isEscapeOpen()) // reachable from the LOBBY page (its only leave mechanism)
+            m_mainMenu.renderEscape();
+        renderImGuiToSnapshot();
+        return;
     }
 
     {
@@ -379,6 +400,13 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
     {
         ProfileScope scope("Gizmo update", EProfileCategory::UI);
         m_gizmo->update(camera, m_viewportRect, m_sceneView.getSelected(), deltaSec);
+    }
+
+    // Escape menu overlay (Esc in any running mode): drawn last, over the docked panels.
+    if (m_mainMenu.isEscapeOpen())
+    {
+        ProfileScope scope("Escape menu", EProfileCategory::UI);
+        m_mainMenu.renderEscape();
     }
 
     // The widget pass ends by producing its own draw data: ImGui::Render + the renderer-facing

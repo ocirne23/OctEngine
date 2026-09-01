@@ -1,0 +1,19 @@
+# Co-op map-edge barrier segment: 20 m long, 1 m thick, 20 m tall collider that blocks ONLY the
+# player capsules — Layer Barrier collides with Player alone, so wave enemies spawned beyond the
+# ring walk straight through (both masks must contain the other's category for a collision). The
+# visible piece is a post at the segment center; GameMatch strings pulsing energy lines between
+# the posts every frame. Long axis = X; the Game layer rotates the E/W sides 90°. Spawn y = 10
+# (collider half height).
+Prefab gameBarrier
+	Component Render
+		ObjectContainer baseshapes
+		Node Pillar3
+		Type StaticMesh
+		Color 1 0.5 0.15
+		Position 0 -7 0
+	Component Physics
+		Body Static
+		Layer Barrier
+		CollidesWith Player
+		Shape Box
+		HalfExtents 10 10 0.5

@@ -316,6 +316,24 @@ oc::vector<EntityPtr> World::spawnBatch(oc::span<const SpawnRequest> requests, b
     return results;
 }
 
+void World::releaseBatch(oc::vector<EntityPtr>&& entities)
+{
+    if (entities.empty())
+        return;
+    ProfileScope profileScope("Destroy batch", EProfileCategory::Entity);
+    // Each release is an atomic decrement; the last one runs Entity::destroy on that worker —
+    // every component teardown seam locks (see the parallel-spawning notes), and a parent and
+    // its child both in the batch compose through the refcounts like any external holder.
+    Globals::jobSystem.parallelFor(0, (uint32)entities.size(), m_destroyBatchCost,
+        { "Destroy batch", EProfileCategory::Entity },
+        [&](uint32 begin, uint32 end)
+        {
+            for (uint32 i = begin; i < end; ++i)
+                entities[i].release();
+        });
+    entities.clear();
+}
+
 void World::reloadPrefabs()
 {
     for (auto& [name, tmpl] : m_templates)

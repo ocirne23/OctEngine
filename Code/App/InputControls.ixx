@@ -55,6 +55,7 @@ private:
 
     bool gameMode = false;           // --game: the Game library owns player/camera/spawn keys — the
                                      // testbed spawn/possess keys are muted (F5/F6/gizmo modes stay)
+    bool escapePressed = false;      // Esc edge, polled by main (takeEscapePressed)
     bool playerControl = false;      // key C: WASD/Space drive the player entity, camera flight paused
     bool playerJumpWasDown = false;  // Space edge detection
     float playerMoveSpeed = 8.0f;    // m/s horizontal target (keep under Network/Validation "Max speed")
@@ -140,6 +141,26 @@ public:
     // Call after world.update (body poses synced), before forceSystem.update pushes emitter state.
     void setGameMode(bool enabled) { gameMode = enabled; }
     void setProfileDump(const oc::string& path, const ProfileReportOptions& options) { profileDumpPath = path; profileDumpOptions = options; } // what F7 writes
+
+    // Esc edge since the last poll (set by the key listener in EVERY mode; main routes it into the
+    // game's cancel chain or the ESCAPE MENU).
+    bool takeEscapePressed()
+    {
+        const bool pressed = escapePressed;
+        escapePressed = false;
+        return pressed;
+    }
+
+    // Exit-to-menu teardown: drop every held entity/force handle so the world can fully clear
+    // (main clears the root list right after) and release the possessed camera.
+    void resetForMenu()
+    {
+        playerControl = false;
+        playerEntity = EntityPtr();
+        forceBalls.clear();
+        spawnedForceEmitters.clear();
+        spawnedForceQueries.clear();
+    }
 
     void update(float deltaSec)
     {
@@ -375,6 +396,11 @@ public:
     {
         ScriptEventManager& scriptEvents = Globals::scriptEvents;
         Renderer& renderer = Globals::rendererVK;
+
+        // Escape: recorded in every mode (game mode included — main gives the game's own cancel
+        // chain first claim before opening the escape menu; see main.cpp)
+        if (evt.scancode == SDL_Scancode::SDL_SCANCODE_ESCAPE && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN && !evt.repeat)
+            escapePressed = true;
 
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_W) scriptEvents.fireEvent(evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN ? "W Down" : "W Up");
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_A) scriptEvents.fireEvent(evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN ? "A Down" : "A Up");

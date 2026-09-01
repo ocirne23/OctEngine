@@ -41,6 +41,12 @@ private:
     void detachBuffer(uint64 bufferHandle);  // a buffer is being destroyed: stop + detach sources playing it
     void releaseSource(uint64 sourceHandle);
 
+    // Parallel entity spawning/destruction: the source list mutates from spawn/despawn jobs (an
+    // AudioComponent's voices die with its entity) and from script triggers on workers — the
+    // list edits serialize here. The miniaudio/Steam Audio teardown of a released source runs
+    // OUTSIDE the lock (ma_sound_uninit is thread-safe against the mixer); update() walks the
+    // list on main in a window no create/release overlaps.
+    std::mutex m_sourceMutex;
     bool m_initialized = false;
     float m_masterVolume = 1.0f;
     uint32 m_oneShotSteal = 0;

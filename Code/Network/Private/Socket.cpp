@@ -74,6 +74,95 @@ NetAddress netResolveHost(oc::string_view hostName, uint16 port)
     return out;
 }
 
+NetAddress netGetLocalAddress()
+{
+    if (!ensureWinsock())
+        return NetAddress::loopback(0);
+    const SOCKET s = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s == INVALID_SOCKET)
+        return NetAddress::loopback(0);
+    // connect() on UDP only selects a route + source address; nothing goes on the wire
+    sockaddr_in remote{};
+    remote.sin_family = AF_INET;
+    remote.sin_port = htons(53);
+    remote.sin_addr.s_addr = htonl(0x08080808); // 8.8.8.8 — any public address works for routing
+    NetAddress out = NetAddress::loopback(0);
+    if (::connect(s, reinterpret_cast<const sockaddr*>(&remote), sizeof(remote)) == 0)
+    {
+        sockaddr_in local{};
+        int len = sizeof(local);
+        if (::getsockname(s, reinterpret_cast<sockaddr*>(&local), &len) == 0)
+            out = fromSockAddr(local);
+    }
+    ::closesocket(s);
+    out.port = 0;
+    return out;
+}
+
+NetAddress netGetExternalAddress(uint32 timeoutMs)
+{
+    // Plain-HTTP IP echo services (no TLS in the engine). HTTP/1.0 keeps the reply un-chunked and
+    // the server closes the connection after the body, so "read until closed" is the framing.
+    constexpr const char* c_hosts[] = { "checkip.amazonaws.com", "api.ipify.org", "icanhazip.com" };
+    const uint64 deadline = GetTickCount64() + timeoutMs;
+    for (const char* host : c_hosts)
+    {
+        if (GetTickCount64() >= deadline)
+            break;
+        const NetAddress server = netResolveHost(host, 80);
+        if (!server.isValid())
+            continue;
+        TcpSocket socket;
+        if (!socket.connect(server))
+            continue;
+        while (socket.poll() == ETcpState::Connecting && GetTickCount64() < deadline)
+            Sleep(5);
+        if (socket.getState() != ETcpState::Connected)
+            continue;
+
+        char request[128];
+        const int requestLen = snprintf(request, sizeof(request), "GET / HTTP/1.0\r\nHost: %s\r\n\r\n", host);
+        oc::span<const uint8> pending(reinterpret_cast<const uint8*>(request), (size_t)requestLen);
+        bool sendFailed = false;
+        while (!pending.empty() && GetTickCount64() < deadline)
+        {
+            const int sent = socket.send(pending);
+            if (sent < 0) { sendFailed = true; break; }
+            if (sent == 0) { Sleep(5); socket.poll(); continue; }
+            pending = pending.subspan((size_t)sent);
+        }
+        if (sendFailed || !pending.empty())
+            continue;
+
+        oc::string response;
+        uint8 chunk[2048];
+        while (GetTickCount64() < deadline && response.size() < 8192)
+        {
+            const int received = socket.receive(chunk);
+            if (received < 0)
+                break; // closed — the whole reply is in
+            if (received == 0) { Sleep(5); socket.poll(); continue; }
+            response.append(reinterpret_cast<const char*>(chunk), (size_t)received);
+        }
+
+        // "HTTP/1.x 200 ..." + blank line + the bare IP as the body
+        if (response.find(" 200 ") == oc::string::npos)
+            continue;
+        const size_t bodyStart = response.find("\r\n\r\n");
+        if (bodyStart == oc::string::npos)
+            continue;
+        oc::string_view body(response.c_str() + bodyStart + 4, response.size() - bodyStart - 4);
+        while (!body.empty() && (body.back() == '\r' || body.back() == '\n' || body.back() == ' '))
+            body.remove_suffix(1);
+        while (!body.empty() && (body.front() == '\r' || body.front() == '\n' || body.front() == ' '))
+            body.remove_prefix(1);
+        const NetAddress external = NetAddress::fromString(body);
+        if (external.ip != 0)
+            return { external.ip, 0 };
+    }
+    return {};
+}
+
 bool UdpSocket::open(uint16 port, bool allowBroadcast)
 {
     close();

@@ -76,13 +76,51 @@ public:
 	void registerVar(const TweakVar& var)
 	{
 		ProfileScope scope("TweakRegistry::registerVar", EProfileCategory::Core);
-		m_vars.push_back(var);
-		TweakVar& stored = m_vars.back();
+		// RE-registration (same "Category/Name") REPLACES in place: mode transitions reconstruct
+		// systems (exit-to-menu -> a fresh GameMatch) whose registerTweaks run again — the fresh
+		// pointers supersede the old ones instead of growing duplicates.
+		const oc::string key = keyOf(var);
+		size_t slot = m_vars.size();
+		for (size_t i = 0; i < m_vars.size(); ++i)
+			if (keyOf(m_vars[i]) == key)
+			{
+				slot = i;
+				break;
+			}
+		if (slot == m_vars.size())
+		{
+			m_vars.push_back(var);
+			m_snapshots.emplace_back();
+		}
+		else
+			m_vars[slot] = var;
+		TweakVar& stored = m_vars[slot];
 		if (stored.flags == ETweakFlags::None)
 			stored.flags = m_defaultFlags; // ScopedFlags block default; explicit flags win
 		if (!applyOverride(stored) && m_savedLoaded && anyFlag(stored.flags, ETweakFlags::Saved))
 			applySavedValue(stored);
-		m_snapshots.push_back(readValue(stored)); // taken AFTER the override/saved apply: not a "change", so nothing saves back
+		m_snapshots[slot] = readValue(stored); // taken AFTER the override/saved apply: not a "change", so nothing saves back
+	}
+
+	// Mode-teardown support: removes every variable whose registered pointer (data or intensity)
+	// lies inside [object, object + size) — a dying stack subsystem (GameMatch) takes its MEMBER
+	// registrations with it, or update()/the panel would read freed memory every frame. Statics
+	// registered by the same code stay, and re-register in place on the next construction.
+	void unregisterInRange(const void* object, size_t size)
+	{
+		const char* begin = static_cast<const char*>(object);
+		const char* end = begin + size;
+		const auto inRange = [&](const void* p)
+		{
+			const char* c = static_cast<const char*>(p);
+			return c >= begin && c < end;
+		};
+		for (size_t i = m_vars.size(); i-- > 0;)
+			if (inRange(m_vars[i].data) || (m_vars[i].intensity && inRange(m_vars[i].intensity)))
+			{
+				m_vars.erase(m_vars.begin() + i);
+				m_snapshots.erase(m_snapshots.begin() + i);
+			}
 	}
 
 	// A whole FILE of overrides (`--tweaks <path>`, read by main through FileSystem): the

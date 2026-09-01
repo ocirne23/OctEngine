@@ -247,6 +247,7 @@ void StructureSystem::clear()
     m_routeRequests.clear();
     m_cells.clear();
     m_runs.clear();
+    m_terrainBlocked.clear();
     m_linksDirty = true;
 }
 
@@ -267,22 +268,15 @@ void StructureSystem::spawnNode(float x, float z, ENodeType type)
     m_nodes.push_back(oc::move(node));
 }
 
-void StructureSystem::spawnNodesCoop(float minRadius, float maxRadius, int count)
+void StructureSystem::clearNodes()
 {
-    // STARTER PAIR beside the central Base (3x3 footprint at the origin): one mineral + one fuel
-    // node in extractor reach of the start, so the first economy loop needs no expedition.
-    spawnNode(10.0f, 4.0f, ENodeType::Mineral);
-    spawnNode(-4.0f, 10.0f, ENodeType::Fuel);
-    // Golden-angle spiral over the open map: even radial coverage with no clumps, the base area
-    // kept clear, and pure math — every instance (server AND clients) builds the identical set
-    // locally, the same contract as the corridor table. sqrt(t) makes the AREAL density uniform.
-    for (int i = 0; i < count; ++i)
-    {
-        const float t = (float(i) + 0.5f) / float(count);
-        const float r = glm::mix(minRadius, maxRadius, std::sqrt(t));
-        const float a = float(i) * 2.3999632f; // the golden angle
-        spawnNode(std::cos(a) * r, std::sin(a) * r, (i % 3) == 1 ? ENodeType::Fuel : ENodeType::Mineral);
-    }
+    // Co-op map regeneration only (a new seed re-places the whole set). Structures referencing a
+    // node by index are cleared by the caller around this — every nodeIndex access elsewhere is
+    // bound-checked, so a brief count mismatch cannot read out of range.
+    for (Node& n : m_nodes)
+        if (n.entity)
+            Globals::world.removeRootEntity(n.entity.get());
+    m_nodes.clear();
 }
 
 void StructureSystem::spawnNodes()
@@ -363,6 +357,10 @@ bool StructureSystem::cellsFree(EStructureType type, const glm::vec3& p, const g
     if (m_hasBounds && (p.x - half.x < m_boundsMin.x - 1e-3f || p.x + half.x > m_boundsMax.x + 1e-3f
         || p.z - half.y < m_boundsMin.y - 1e-3f || p.z + half.y > m_boundsMax.y + 1e-3f))
         return false; // footprints stay fully inside the arena
+    for (const glm::vec4& r : m_terrainBlocked) // co-op rock rects (minX, minZ, maxX, maxZ)
+        if (p.x + half.x > r.x + 1e-3f && p.x - half.x < r.z - 1e-3f
+            && p.z + half.y > r.y + 1e-3f && p.z - half.y < r.w - 1e-3f)
+            return false; // impassable terrain: nothing builds in a rock (unit spawns skip it too)
     // FREE nodes reserve their future extractor's footprint (buildings can't block extraction);
     // extracted nodes rely on the standing extractor's own cells.
     if (type != EStructureType::Extractor)
@@ -1256,7 +1254,8 @@ void StructureSystem::tickProduction(float deltaSec)
 
         // ---- income: powered extractors fill their OWN buffer/tank (full = production stalls),
         // the Base trickles minerals into its bank, fabricators convert (energy+fuel -> minerals).
-        if (ref.type == EStructureType::Extractor && s.powered && ref.nodeIndex >= 0)
+        if (ref.type == EStructureType::Extractor && s.powered && ref.nodeIndex >= 0
+            && ref.nodeIndex < (int)m_nodes.size())
         {
             if (m_nodes[ref.nodeIndex].type == ENodeType::Fuel)
                 s.store[1] = glm::min(s.store[1] + m_fuelRate * dt, s.capacity[1]);

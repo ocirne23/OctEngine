@@ -64,6 +64,14 @@ public:
         Transform transform;
     };
     oc::vector<EntityPtr> spawnBatch(oc::span<const SpawnRequest> requests, bool addRoots = true);
+
+    // PARALLEL ENTITY DESTRUCTION: releases a batch of handles with the resulting Entity::destroy
+    // calls fanned out over the job system (same window/contract as spawnBatch). A handle that is
+    // not the entity's LAST reference just decrements — callers drop every other owner they mean
+    // to (root list, rosters) BEFORE this, on main, so the notifications (removeRootEntity's
+    // callback) stay serial and only the teardown itself runs on workers. The Delete drain in
+    // handleEntityChanges and NpcSystem::clear go through it.
+    void releaseBatch(oc::vector<EntityPtr>&& entities);
     EntityPtr spawnAssetFile(const oc::string& path, const Transform& base, bool overrideDefaultTransform = true);
     EntityPtr createEmptyEntity(const oc::string& name);
 
@@ -94,6 +102,14 @@ public:
         ProfileScope profileScope("World EntityChanges", EProfileCategory::Entity);
 		for (EntityChange& change : changes)
 			handleEntityChange(change, camera, viewportRect);
+        // The Delete changes were detached from the root list above (in order, callbacks fired);
+        // their queue handles are usually the LAST references, so the actual teardown runs as one
+        // parallel batch instead of one by one when `changes` dies.
+        oc::vector<EntityPtr> deletes;
+        for (EntityChange& change : changes)
+            if (auto* del = oc::get_if<EntityChange::Delete>(&change.type); del && del->entity)
+                deletes.push_back(oc::move(del->entity));
+        releaseBatch(oc::move(deletes));
     }
     // Editor prefab editing
     void setOnPrefabOpened(oc::function<void(const EntityPtr&, const oc::string&)> callback) { m_onPrefabOpened = oc::move(callback); }
@@ -199,6 +215,7 @@ private:
     PerWorker<EntityUpdateStaging> m_updateStaging;
     JobCost m_updateCost{ 2000 };
     JobCost m_spawnBatchCost{ 20000 }; // spawnBatch auto-grain seed (~20us/entity until measured)
+    JobCost m_destroyBatchCost{ 10000 }; // releaseBatch auto-grain seed
     oc::function<void(const EntityPtr&, const oc::string&)> m_onPrefabOpened;
     oc::function<void(const EntityPtr&, const EntityPtr&)> m_onEntityRespawned;
     oc::function<void(const Entity*)> m_onRootEntityRemoved;

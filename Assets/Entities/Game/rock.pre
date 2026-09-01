@@ -1,0 +1,17 @@
+# Co-op impassable terrain block: one 10 m map cell of solid rock. The Game layer spawns one per
+# blocked cell of the generated co-op map (seeded noise + carved lanes, see GameMatch), sunk a
+# random depth so the exposed height varies (spawn y = exposed - 5). Blocks everyone (Default
+# layer): players, units and projectiles all collide; also a Nav obstacle and a placement-blocked
+# footprint (StructureSystem terrain rects).
+Prefab gameRock
+	Component Render
+		ObjectContainer baseshapes
+		Node Cube
+		Type StaticMesh
+		Color 0.32 0.3 0.29
+		Scale 5
+	Component Physics
+		Body Static
+		Shape Box
+		HalfExtents 5 5 5
+		Friction 0.8

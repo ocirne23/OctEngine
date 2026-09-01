@@ -15,6 +15,9 @@ Prefab player
 		Animator CharacterAnimator
 	Component Physics
 		Body Dynamic
+		# Own layer (mask stays All) so the co-op edge barrier can block ONLY players: its shapes
+		# collide with the Player category alone, while units/projectiles (Default/Projectile) pass.
+		Layer Player
 		Shape Capsule
 		Radius 1
 		HalfHeight 1

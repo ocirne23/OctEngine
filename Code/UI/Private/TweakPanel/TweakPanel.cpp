@@ -25,8 +25,11 @@ namespace
 			ImGui::SetKeyboardFocusHere(-1);
 	}
 
-	void drawVar(const TweakVar& var, int index, oc::vector<const TweakVar*>& deferredCallbacks)
-	{
+}
+
+// exported from :TweakPanel — the settings menu draws the same rows
+void drawTweakVar(const TweakVar& var, int index, oc::vector<const TweakVar*>& deferredCallbacks)
+{
 		ImGui::PushID(index);
 
 		bool changed = false;
@@ -131,8 +134,10 @@ namespace
 			deferredCallbacks.push_back(&var);
 
 		ImGui::PopID();
-	}
+}
 
+namespace
+{
 	struct CategoryNode
 	{
 		oc::string_view          name;
@@ -171,7 +176,7 @@ namespace
 		if (open)
 		{
 			for (int i : node.varIndices)
-				drawVar(TweakRegistry::get().vars()[i], i, deferredCallbacks);
+				drawTweakVar(TweakRegistry::get().vars()[i], i, deferredCallbacks);
 
 			for (CategoryNode& child : node.children)
 				renderCategory(child, depth + 1, path, deferredCallbacks);

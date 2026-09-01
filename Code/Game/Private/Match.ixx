@@ -29,11 +29,13 @@ public:
     // PvP (default): each client plays on its own Force team slot, everything a player builds
     // belongs to their team, and minerals/fuel are per-team.
     // CO-OP (`--game --coop`, clients pass both too — the world layout is built locally): its own
-    // OPEN world — no corridor, no border walls, a much bigger map. Every player on team 0 around
-    // ONE central Base; the AI team (CoopAiTeam) has unleashed units scattered over the map and
-    // sends periodic SWARM waves (They-are-Billions style: hundreds of cheap shield-less bodies,
-    // trickle-spawned) at the Base from a random compass direction. Authority-simulated; units
-    // reach clients through normal entity replication.
+    // GENERATED world — no corridor, a much bigger square of seeded impassable rock terrain with
+    // carved attack lanes and a player-only barrier ring at the edge (see CoopMap below). Every
+    // player on team 0 around ONE central Base; the AI team (CoopAiTeam) has unleashed units
+    // scattered over the reachable map and sends periodic SWARM waves (They-are-Billions style:
+    // hundreds of cheap shield-less bodies, trickle-spawned) at the Base from beyond the barrier
+    // on a random compass side. Authority-simulated; units reach clients through normal entity
+    // replication.
     explicit GameMatch(bool enabled, bool coop = false);
     ~GameMatch();
 
@@ -69,6 +71,21 @@ public:
     // Client build inputs travel as Gq* requests, validated server-side.
     void onClientJoined(uint32 clientId); // main.cpp routes the manager callbacks here (server)
     void onClientLeft(uint32 clientId);
+
+    // Network game events (GPl/GSt/Gq*/...). main.cpp owns the ONE setOnGameEvent hook (it also
+    // routes the lobby's "Lb*" traffic) and forwards everything else here — GameMatch must NOT
+    // install its own hook: main's dispatcher constructs a lobby client's GameMatch from INSIDE a
+    // dispatch, and replacing the oc::function there would destroy the lambda mid-execution.
+    void handleNetEvent(oc::string_view name);
+
+    // TRUE while Esc still has an in-game meaning (a pending two-click flow, an armed item, an
+    // open hotbar page, or a non-Select mode — cancelOneLevel would consume it). main's ESCAPE
+    // MENU only opens on an Esc press when this is false, so the cancel chain keeps first claim.
+    bool escWouldCancel() const
+    {
+        return m_lanceAiming || m_wallPlacing || m_cableLinePending || m_cablePainting
+            || m_buildSelection >= 0 || m_buildCategory >= 0 || m_mode != EPlayerMode::Select;
+    }
 
 private:
     struct Aim
@@ -109,7 +126,6 @@ private:
     void updateHud();
     void tickBaseHealing(float deltaSec); // own player only — the owner computes its own health
     void tickPlayerMelee(float deltaSec); // AUTHORITY: every player capsule grinds adjacent enemy units
-    void handleNetEvent(oc::string_view name); // NetworkManager::setOnGameEvent target
     void requestPlace(EStructureType type, const glm::vec3& pos, int nodeIndex, const glm::vec3& facing);
     void requestDemolish(uint32 id);
     void requestSetRoute(uint32 id, oc::span<const glm::vec3> points); // barracks waypoints
@@ -211,6 +227,53 @@ private:
     // teams (setNumTeams(2) — the renderer's per-team costs shrink to fit), so every team index
     // must stay below 2. (< Nav::MaxTeams as well.)
     static constexpr uint8 CoopAiTeam = 1;
+    // GENERATED MAP: impassable rock over a coarse cell grid (seeded noise + carved attack lanes),
+    // a player-blocking barrier ring at the edge, and everything placed on it (resource nodes,
+    // ambient spawns) guaranteed reachable from the Base by a flood fill that turns unreachable
+    // open pockets into rock. The SERVER picks the seed (tweak "Map seed", 0 = random) and
+    // broadcasts it as the "GMp" event (first thing in onClientJoined, before the structure
+    // replay; also into F9 saves) — clients defer terrain + nodes until it arrives and build the
+    // identical set locally from pure seeded math.
+    struct CoopMap
+    {
+        oc::vector<uint8> blocked;  // one per cell, row-major z * cells + x (1 = rock)
+        oc::vector<uint16> depth;   // BFS steps from the Base over open cells (0xFFFF unreachable)
+        oc::vector<int> reachable;  // open + reachable cell indices (node/ambient placement pool)
+        int cells = 0;              // cells per side
+        uint16 maxDepth = 1;
+        uint32 seed = 0;
+        float fill = 0.3f;          // generation inputs as USED (ride GMp + the save with the seed:
+        int lanes = 6;              //  a joiner's tweak sync lands after the replay, too late)
+        bool built = false;
+    };
+    // Both roles; no-op when already built from those exact inputs.
+    void rebuildCoopMap(uint32 seed, float fill, int lanes);
+    void generateCoopGrid();             // the pure-math half: blocked cells, flood fill, rects
+    void spawnCoopTerrain();             // rocks + barrier segments under m_terrainRoot, nodes
+    void sendMapSeed();                  // server: the GMp broadcast
+    glm::vec3 coopCellCenter(int index) const;
+    int coopCellAt(const glm::vec3& pos) const; // -1 outside the map square
+    // A move destination inside a rock is unreachable (the A* and every unit plan to it fail):
+    // clamp it to the nearest open cell center. Identity when the map is absent or the cell open.
+    glm::vec3 clampToOpenGround(const glm::vec3& pos) const;
+    glm::vec3 ambientPointNear(const glm::vec3& center, float radius) const; // camp body spot on open ground
+    void drawCoopBarrier(); // pulsing energy lines strung between the barrier posts
+    // The ambient scatter spawns in CAMPS: the trickle fills the current camp (one archetype, a
+    // disc around a reachable anchor) before rolling the next — loose blobs, not a lattice.
+    struct AmbientCamp
+    {
+        glm::vec3 center{ 0.0f };
+        float radius = 6.0f;
+        int remaining = 0;  // bodies still to place in this camp (0 = roll a new one)
+        int archetype = 0;  // index into c_waveArchetypes
+    };
+    AmbientCamp m_ambientCamp;
+    CoopMap m_coopMap;
+    EntityPtr m_terrainRoot; // rocks + barrier segments live under it; removed on regeneration
+    oc::vector<glm::vec4> m_terrainRects; // merged blocked runs (minX, minZ, maxX, maxZ)
+    int m_mapSeedTweak = 0;       // "Game/Coop/Map seed": 0 = random each run (authority only)
+    float m_terrainFill = 0.3f;   // fraction of interior cells turned to rock (before carving)
+    int m_terrainLanes = 6;       // carved attack lanes from the base ring to the map edge
     void tickWaves(float deltaSec);  // authority: the wave clock
     void queueWave();                // pick a compass direction, size the swarm, seed its lane
     void tickCoopSpawns();           // trickle: wave + ambient spawns on a per-frame budget
@@ -244,7 +307,6 @@ private:
     int m_waveMaxAlive = 15000;    // total AI units cap (ambient + waves)
     int m_ambientBudget = 20000;    // POINTS of world-start scatter (same per-type costs as waves)
     float m_ambientSafeRadius = 45.0f; // the scatter keeps clear of the Base
-    float m_waveSpawnDist = 160.0f;    // wave spawn ring radius around the Base
     int m_spawnsPerFrame = 100;    // trickle budget — a huge wave enters over seconds, not one hitch
 
     bool m_enabled = false;

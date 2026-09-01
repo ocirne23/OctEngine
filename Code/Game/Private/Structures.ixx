@@ -144,9 +144,10 @@ public:
 
     void registerTweaks();
     void spawnNodes(); // the corridor arena's symmetric node set (deterministic on every instance)
-    // CO-OP: nodes scattered over the big open map on a golden-angle spiral — pure math, so every
-    // instance builds the identical set locally (the corridor-set contract).
-    void spawnNodesCoop(float minRadius, float maxRadius, int count);
+    // CO-OP: GameMatch places nodes one by one from the generated map (seeded — every instance
+    // derives the identical set from the same seed, the corridor-set contract).
+    void spawnNode(float x, float z, ENodeType type); // one resource node entity + roster entry
+    void clearNodes(); // co-op map regeneration: drop the node entities + roster (nothing else)
     void spawnBase(const glm::vec3& groundPos, uint8 team = 0);
     void clear(); // drops every structure entity + node (before world teardown)
 
@@ -356,6 +357,10 @@ public:
         m_boundsMax = boundsMax;
         m_hasBounds = true;
     }
+    // CO-OP impassable terrain: world-space rects (minX, minZ, maxX, maxZ) no footprint may enter
+    // — checked by cellsFree exactly like the arena bounds (so ghosts turn red and the unit spawn
+    // probe refuses rock cells too). GameMatch rebuilds the list with the map.
+    void setTerrainBlocked(oc::vector<glm::vec4> rects) { m_terrainBlocked = oc::move(rects); }
 
     // ---- CONSTRUCTION (server) -------------------------------------------------------------
     float takeStoredMinerals(const glm::vec3& pos, float radius, uint8 team, float amount);
@@ -392,7 +397,6 @@ private:
         const int index = structureIndexById(id);
         return index >= 0 ? m_frame[index].state : nullptr;
     }
-    void spawnNode(float x, float z, ENodeType type); // one resource node entity + roster entry
     void placeStructure(EStructureType type, const glm::vec3& groundPos, int nodeIndex,
         const glm::vec3& facing, uint8 team);
     void spendMinerals(uint8 team, float amount); // drains the team's Silos first, the Base last
@@ -475,6 +479,7 @@ private:
     bool m_wasFuelDry = false;
     glm::vec2 m_boundsMin{ 0.0f }, m_boundsMax{ 0.0f };
     bool m_hasBounds = false;
+    oc::vector<glm::vec4> m_terrainBlocked; // co-op rock rects (minX, minZ, maxX, maxZ)
 
     float m_minerals[GameMaxTeams] = {};
     float m_fuelTotal[GameMaxTeams] = {};
