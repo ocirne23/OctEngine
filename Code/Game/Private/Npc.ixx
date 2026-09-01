@@ -53,6 +53,20 @@ public:
     Entity* spawnLooseUnit(const StructureSystem& structures, const glm::vec3& pos, uint8 team,
         ENpcType type);
 
+    // BATCHED loose-unit spawn — the co-op trickle's path: one frame's rolled wave + ambient
+    // spawns materialize through World::spawnBatch (entity creation fanned out over the job
+    // system), then team/order/roster fixup runs serially after the join. Main thread, in
+    // game.update (the legal spawn window).
+    struct LooseSpawn
+    {
+        glm::vec3 pos = glm::vec3(0.0f);
+        glm::vec3 orderDest = glm::vec3(0.0f); // marched to when hasOrder (wave units)
+        ENpcType type = ENpcType::Grunt;
+        uint8 team = 0;
+        bool hasOrder = false;
+    };
+    void spawnLooseUnits(oc::span<const LooseSpawn> spawns);
+
     // SAVE/LOAD (server): every live unit into/from an AssetNode tree (projectiles are transient —
     // a load clears them). loadUnits despawns the live units first.
     void saveUnits(AssetNode& root) const;

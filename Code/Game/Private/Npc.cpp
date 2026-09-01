@@ -207,6 +207,39 @@ Entity* NpcSystem::spawnLooseUnit(const StructureSystem& structures, const glm::
     return spawnUnit(structures, pos, /*sourceId*/ 0, team, type);
 }
 
+void NpcSystem::spawnLooseUnits(oc::span<const LooseSpawn> spawns)
+{
+    if (spawns.empty())
+        return;
+    // The entity creations fan out over the job system; everything below the batch is the same
+    // per-unit fixup spawnUnit does, minus the route copy (loose units have no owning barracks) —
+    // cheap component writes, kept serial on main.
+    oc::vector<World::SpawnRequest> requests;
+    requests.reserve(spawns.size());
+    for (const LooseSpawn& s : spawns)
+        requests.push_back({ c_npcPrefabs[(int)s.type], Transform(s.pos) });
+    oc::vector<EntityPtr> spawned = Globals::world.spawnBatch(requests, /*addRoots*/ false);
+    for (size_t i = 0; i < spawned.size(); ++i)
+    {
+        EntityPtr& entity = spawned[i];
+        if (!entity)
+            continue;
+        GameUnitComponent* unit = getComponent<GameUnitComponent>(entity.get());
+        if (!unit)
+            continue; // the prefab must carry Component GameUnit; the stray dies with the batch
+        const LooseSpawn& s = spawns[i];
+        entity->setName(c_npcNames[(int)s.type]);
+        unit->team = s.team;
+        unit->sourceId = 0;
+        if (ForceComponent* fc = getComponent<ForceComponent>(entity.get()))
+            fc->emitter.setTeam(s.team); // prefabs author team 1 — units carry their spawner's team
+        if (s.hasOrder)
+            unit->orderMove(s.orderDest);
+        m_units.push_back(entity); // roster: deregistered by onWorldRootRemoved on any despawn path
+        Globals::world.addRootEntity(oc::move(entity));
+    }
+}
+
 void NpcSystem::fireShot(const char* prefabPath, const char* name, const glm::vec3& from,
     const glm::vec3& velocity, uint8 team)
 {

@@ -538,6 +538,10 @@ void GameMatch::queueWave()
 // seconds instead of one giant frame hitch.
 void GameMatch::tickCoopSpawns()
 {
+    // The frame's spawns are ROLLED first (budget math + RNG stay serial on main — glm's linearRand
+    // is not thread-safe), then materialized in ONE NpcSystem::spawnLooseUnits batch: the entity
+    // creations fan out over the job system instead of running one by one.
+    oc::small_vector<NpcSystem::LooseSpawn, 64> spawns;
     int budget = glm::max(m_spawnsPerFrame, 1);
     while (budget > 0 && m_wavePendingBudget > 0.0f)
     {
@@ -565,12 +569,10 @@ void GameMatch::tickCoopSpawns()
         glm::vec3 pos = m_waveOrigin + glm::vec3(std::cos(a) * r, 1.0f, std::sin(a) * r);
         pos.x = glm::clamp(pos.x, -c_coopHalfSize, c_coopHalfSize);
         pos.z = glm::clamp(pos.z, -c_coopHalfSize, c_coopHalfSize);
-        Entity* unit = m_npcs.spawnLooseUnit(m_structures, pos, CoopAiTeam, type);
-        if (!unit)
-            continue;
-        if (GameUnitComponent* u = getComponent<GameUnitComponent>(unit))
-            u->orderMove(m_waveDest + glm::vec3(glm::linearRand(-4.0f, 4.0f), 0.0f,
-                glm::linearRand(-4.0f, 4.0f)));
+        spawns.push_back({ .pos = pos,
+            .orderDest = m_waveDest + glm::vec3(glm::linearRand(-4.0f, 4.0f), 0.0f,
+                glm::linearRand(-4.0f, 4.0f)),
+            .type = type, .team = (uint8)CoopAiTeam, .hasOrder = true });
     }
     while (budget > 0 && m_ambientPendingBudget > 0.0f)
     {
@@ -605,9 +607,10 @@ void GameMatch::tickCoopSpawns()
             }
         }
         m_ambientPendingBudget -= waveCostOf(type);
-        m_npcs.spawnLooseUnit(m_structures,
-            glm::vec3(std::cos(a) * r, 1.0f, std::sin(a) * r), CoopAiTeam, type);
+        spawns.push_back({ .pos = glm::vec3(std::cos(a) * r, 1.0f, std::sin(a) * r),
+            .type = type, .team = (uint8)CoopAiTeam });
     }
+    m_npcs.spawnLooseUnits(oc::span<const NpcSystem::LooseSpawn>(spawns.data(), spawns.size()));
 }
 
 void GameMatch::spawnCorridorWalls()

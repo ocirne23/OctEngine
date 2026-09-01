@@ -269,8 +269,35 @@ oc::vector<EntityPtr> World::spawnBatch(oc::span<const SpawnRequest> requests, b
     // Template resolution stays on main: the cache builds/loads on a miss (file IO, renderer
     // container imports) and is not job-safe. The jobs below only run Entity::create.
     oc::vector<oc::shared_ptr<const EntitySpawnTemplate>> templates(requests.size());
+    oc::vector<Transform> transforms(requests.size());
     for (size_t i = 0; i < requests.size(); ++i)
-        templates[i] = getOrBuildPrefabTemplate(requests[i].name);
+    {
+        const SpawnRequest& request = requests[i];
+        if (FileSystem::extension(request.name).empty())
+        {
+            // Plain prefab name: the spawn() route, transform used as-is.
+            templates[i] = getOrBuildPrefabTemplate(request.name);
+            transforms[i] = request.transform;
+        }
+        else
+        {
+            // Asset FILE: the spawnAssetFile route — lexical normalize, registry root lookup with
+            // file-template fallback, and the same override composition (caller position, caller
+            // rotation composed onto the authored default, authored scale).
+            oc::string fileName = FileSystem::isAbsolute(request.name)
+                ? FileSystem::relativePath(request.name, oc::string(), /*allowMainThread*/ true)
+                : FileSystem::normalize(request.name);
+            if (fileName.empty())
+                fileName = request.name;
+            const oc::string* rootName = Globals::assetRegistry.findRootForFile(fileName);
+            templates[i] = rootName ? getOrBuildPrefabTemplate(*rootName) : buildFileTemplate(fileName);
+            if (templates[i])
+            {
+                const Transform& dt = templates[i]->defaultTransform;
+                transforms[i] = Transform(request.transform.pos, dt.scale, request.transform.quat * dt.quat);
+            }
+        }
+    }
 
     oc::vector<EntityPtr> results(requests.size());
     Globals::jobSystem.parallelFor(0, (uint32)requests.size(), m_spawnBatchCost,
@@ -279,7 +306,7 @@ oc::vector<EntityPtr> World::spawnBatch(oc::span<const SpawnRequest> requests, b
         {
             for (uint32 i = begin; i < end; ++i)
                 if (templates[i])
-                    results[i] = Entity::create(*templates[i], requests[i].transform);
+                    results[i] = Entity::create(*templates[i], transforms[i]);
         });
 
     if (addRoots)

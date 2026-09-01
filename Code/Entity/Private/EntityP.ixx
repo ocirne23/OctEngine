@@ -213,11 +213,11 @@ export struct EntitySpawnTemplate
     oc::string displayName;
     bool enabled = true;             // spawns with EEntityFlag_Enabled set/cleared ("Enabled" in the .pre)
     mutable uint32 treeAllocSize = 0; // lazy cache: entity + recursive SceneComponent children, 0 = uncomputed
-    // Lazy cache: OR of the whole tree's typeBits, stored | TreeTypeBitsComputed (same benign-race
-    // scheme as treeAllocSize). Entity::create uses it to know whether a tree carries a
-    // NetworkComponent anywhere (server netId contiguity — see the root create overload).
-    static constexpr uint32 TreeTypeBitsComputed = 0x10000;
-    mutable uint32 treeTypeBits = 0;
+    // Lazy cache: NetworkComponents in the whole tree, UINT32_MAX = uncomputed (same benign-race
+    // scheme as treeAllocSize). Entity::create needs it for server netId contiguity: only a tree
+    // that mints MORE THAN ONE id must hold the manager's register lock across the whole spawn —
+    // single-component trees (every unit/projectile prefab) mint atomically and stay parallel.
+    mutable uint32 treeNetworkCount = UINT32_MAX;
 };
 
 export struct EntityChange

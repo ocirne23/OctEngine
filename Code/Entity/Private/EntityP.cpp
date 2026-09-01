@@ -160,24 +160,24 @@ static uint32 getTreeAllocSize(const EntitySpawnTemplate& tmpl)
     return size;
 }
 
-// OR of typeBits over the template's entity + its whole SceneComponent child tree, lazily cached
-// like getTreeAllocSize (idempotent racy relaxed store).
-static uint32 getTreeTypeBits(const EntitySpawnTemplate& tmpl)
+// NetworkComponents over the template's entity + its whole SceneComponent child tree, lazily
+// cached like getTreeAllocSize (idempotent racy relaxed store).
+static uint32 getTreeNetworkCount(const EntitySpawnTemplate& tmpl)
 {
-    const uint32 cached = oc::atomic_ref<uint32>(tmpl.treeTypeBits).load(oc::memory_order_relaxed);
-    if (cached & EntitySpawnTemplate::TreeTypeBitsComputed)
-        return cached & ~EntitySpawnTemplate::TreeTypeBitsComputed;
+    const uint32 cached = oc::atomic_ref<uint32>(tmpl.treeNetworkCount).load(oc::memory_order_relaxed);
+    if (cached != UINT32_MAX)
+        return cached;
 
-    uint32 bits = tmpl.archetype.typeBits;
+    uint32 count = (tmpl.archetype.typeBits >> EComponentID_Network) & 1;
     if (tmpl.archetype.typeBits & (1 << EComponentID_Scene))
     {
         const auto* info = static_cast<const SceneComponent::SpawnInfo*>(tmpl.spawnInfos[0].get());
         for (const SceneComponent::SpawnInfo::ChildSpawnInfo& child : info->children)
             if (child.tmpl)
-                bits |= getTreeTypeBits(*child.tmpl);
+                count += getTreeNetworkCount(*child.tmpl);
     }
-    oc::atomic_ref<uint32>(tmpl.treeTypeBits).store(bits | EntitySpawnTemplate::TreeTypeBitsComputed, oc::memory_order_relaxed);
-    return bits;
+    oc::atomic_ref<uint32>(tmpl.treeNetworkCount).store(count, oc::memory_order_relaxed);
+    return count;
 }
 
 EntityPtr Entity::create(const EntitySpawnTemplate& tmpl, const Transform& transform, uint8 initialFlags)
@@ -187,9 +187,10 @@ EntityPtr Entity::create(const EntitySpawnTemplate& tmpl, const Transform& trans
     // slices free themselves individually on destroy.
     uint8* treeCursor = static_cast<uint8*>(Globals::entityAllocator.allocate(getTreeAllocSize(tmpl)));
     // PARALLEL SPAWNING + server id contiguity: a replicated tree's netIds must mint back-to-back
-    // (the client adopts base + cursor in DFS order), so a server tree that carries a
-    // NetworkComponent anywhere holds the manager's register lock across the whole tree spawn.
-    const bool lockNetIds = (getTreeTypeBits(tmpl) & (1 << EComponentID_Network))
+    // (the client adopts base + cursor in DFS order), so a server tree that mints MORE THAN ONE id
+    // holds the manager's register lock across the whole tree spawn. A single-component tree —
+    // every unit/projectile prefab — mints atomically inside registerEntity and stays parallel.
+    const bool lockNetIds = getTreeNetworkCount(tmpl) > 1
         && Globals::networkManager.role() == ENetRole::Server;
     if (lockNetIds)
         Globals::networkManager.beginTreeRegistration();

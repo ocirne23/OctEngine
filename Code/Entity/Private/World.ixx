@@ -56,7 +56,11 @@ public:
     // every spawned root to the root list serially after the join.
     struct SpawnRequest
     {
-        oc::string name; // prefab name (AssetRegistry), same lookup as spawn()
+        // A plain name resolves like spawn() (prefab registry); a name WITH an extension
+        // ("Entities/Game/swarmUnit.pre") resolves like spawnAssetFile with
+        // overrideDefaultTransform = true (position replaced, rotation composed onto the authored
+        // default, authored scale kept).
+        oc::string name;
         Transform transform;
     };
     oc::vector<EntityPtr> spawnBatch(oc::span<const SpawnRequest> requests, bool addRoots = true);

@@ -245,7 +245,7 @@ private:
     int m_ambientBudget = 20000;    // POINTS of world-start scatter (same per-type costs as waves)
     float m_ambientSafeRadius = 45.0f; // the scatter keeps clear of the Base
     float m_waveSpawnDist = 160.0f;    // wave spawn ring radius around the Base
-    int m_spawnsPerFrame = 24;    // trickle budget — a huge wave enters over seconds, not one hitch
+    int m_spawnsPerFrame = 100;    // trickle budget — a huge wave enters over seconds, not one hitch
 
     bool m_enabled = false;
     uint32 m_team = 0;       // OUR team: 0 on server/single player; on a client it follows the
