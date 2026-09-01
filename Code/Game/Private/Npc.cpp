@@ -18,9 +18,9 @@ import :Structures;
 
 // Per-type PREFABS: the stats live in each prefab's Component GameUnit block.
 static constexpr const char* c_npcPrefabs[(int)ENpcType::Count] = {
-    "Entities/Game/enemyUnit.pre", "Entities/Game/enemyBrute.pre",
+    "Entities/Game/enemyGrunt.pre", "Entities/Game/enemyBrute.pre",
     "Entities/Game/enemyRunner.pre", "Entities/Game/enemySpitter.pre",
-    "Entities/Game/swarmUnit.pre" };
+    "Entities/Game/enemySwarm.pre" };
 static constexpr const char* c_npcNames[(int)ENpcType::Count] = { "Enemy", "Brute", "Runner", "Spitter", "Swarm" };
 
 static void collectUnits(oc::span<const uint64> results, oc::vector<Entity*>& out)
@@ -88,6 +88,7 @@ void NpcSystem::registerTweaks()
     Tweak::floatVar("Game/Enemies", "Field damage starts (x iso)", &up.fieldDamageStart, 0.0f, 0.95f, 0.05f);
     Tweak::floatVar("Game/Enemies", "Field push starts (x iso)", &up.fieldPushStart, 0.0f, 0.95f, 0.05f);
     Tweak::floatVar("Game/Enemies", "Emitter drain mult", &up.emitterDrainMult, 0.0f, 10.0f, 0.05f);
+    Tweak::floatVar("Game/Enemies", "Damage absorb (energy per hp)", &up.damageAbsorb, 0.0f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Enemies", "Unit damage radius", &up.damageRadius, 0.0f, 3.0f, 0.05f);
     Tweak::floatVar("Game/Enemies", "Field push gain", &up.pushGain, 0.0f, 100000.0f, 100.0f);
     Tweak::floatVar("Game/Enemies", "Retarget interval", &up.retargetInterval, 1.0f, 60.0f, 0.5f);

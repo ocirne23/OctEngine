@@ -23,7 +23,7 @@ Prefab gameEnemySpitter
 		Centered true
 	Component Network
 	Component GameUnit
-		HealthMax 48
+		HealthMax 15
 		EnergyMax 32
 		ShieldOutput 0.64
 		MoveSpeed 3.6

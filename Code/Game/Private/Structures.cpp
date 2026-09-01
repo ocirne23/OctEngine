@@ -1152,8 +1152,8 @@ float StructureSystem::investMaterials(const Ref& s, float amount)
     // HEALTH IS THE PROGRESS: materials heal at cost/healthMax per hp — the same price builds a
     // blueprint and repairs a damaged structure. A full-health blueprint flips to BUILT. Heals
     // against the COMPONENT's healthMax (cables are softer than buildings).
-    if (amount <= 0.0f || !isPlaceableType(s.type))
-        return 0.0f;
+    if (amount <= 0.0f || (!isPlaceableType(s.type) && s.type != EStructureType::Base))
+        return 0.0f; // the Base is never placed, but it repairs at its m_costs entry like the rest
     const float healthMax = glm::max(s.state->healthMax, 1e-3f);
     const float materialsPerHp = glm::max(m_costs[(int)s.type], 0.01f) / healthMax;
     const float heal = glm::min(amount / materialsPerHp, healthMax - s.state->health);
@@ -1206,8 +1206,9 @@ float StructureSystem::fundNearbyBlueprint(const glm::vec3& pos, float radius, u
     for (int i = 0; i < (int)m_frame.size(); ++i)
     {
         const Ref& s = m_frame[i];
-        if (s.state->team != team || s.type == EStructureType::Base)
+        if (s.state->team != team)
             continue;
+        // The Base is never a blueprint, but it IS repairable now that it takes damage.
         const bool wantsMaterials = s.state->blueprint
             || (includeRepairs && s.state->health < s.state->healthMax - 1e-3f);
         if (!wantsMaterials)
@@ -1492,8 +1493,13 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
     // in tickDamage below re-dirties and rebuilds on the NEXT tick.
     rebuildDerivedLinks();
     tickProduction(deltaSec); // flows themselves run per-entity in the engine's pass
-    tickConstructors(deltaSec);
+    // Death sweep BEFORE constructors: last frame's damage lands after this tick (contacts +
+    // entity pass), so the sweep must judge it before a repair trickle can resurrect a 0-hp
+    // structure — repairs-first made buildings unkillable inside any constructor's range (the
+    // heal always ran between the killing blow and the sweep). A structure that ends a frame at
+    // EXACTLY 0 now dies; anything above 0 can still be out-healed legitimately.
     tickDamage(deltaSec);
+    tickConstructors(deltaSec);
 }
 
 void StructureSystem::tickMirror(float deltaSec)

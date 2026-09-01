@@ -72,7 +72,7 @@ export namespace Procedural
 		ScatterSystem(const ScatterSystem&) = delete;
 		ScatterSystem& operator=(const ScatterSystem&) = delete;
 
-		void initialize();  // registers Tweaks, loads the asset table's containers, starts the worker
+		void initialize();  // registers Tweaks
 		// Per frame, after terrain.update: maps = terrain.activeClimateMaps() — scatter follows the live
 		// terrain field, clears itself while terrain is disabled, and regenerates when the field changes.
 		void update(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps);
@@ -137,6 +137,7 @@ export namespace Procedural
 			oc::vector<NodeSpawnIdx> variants;
 		};
 
+		void loadAssets();
 		void pumpJob();                // self-continuing Low-priority generation job
 		void kickPump(size_t numNew); // top pumps up to min(cap, new work) after appending requests
 		void clearResidents();
@@ -152,11 +153,12 @@ export namespace Procedural
 		int   m_maxSpawnsPerFrame = 768; // instance node spawns per frame (group activations spread out)
 		bool  m_configDirty = false;
 		bool  m_inactiveIdle = false; // inactive AND drained: update() is a branch and a return
+		bool  m_assetsLoaded = false;
 
-		// --- Assets (loaded once at initialize; indices match the SCATTER_ASSETS table) ---
+		// --- Assets (loaded once by loadAssets; indices match the SCATTER_ASSETS table) ---
 		oc::vector<AssetRuntime> m_assets;
 
-		// --- Per-rule runtime, resolved at initialize (read-only afterwards, shared with the worker):
+		// --- Per-rule runtime, resolved by loadAssets (read-only afterwards, shared with the worker):
 		// table asset index (UINT16_MAX = rule dropped), variant count, and the rule attractor's
 		// coordinates in climate space. m_ruleOrder is the generation order — valid rules sorted by
 		// footprint descending, so large objects claim ground before small ones fill the gaps.

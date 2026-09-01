@@ -78,8 +78,10 @@ void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
     puppet = info.puppet;
     team = info.team;
     health = healthMax = info.healthMax;
-    energy = energyMax = info.energyMax;
     shieldOutput = info.shieldOutput;
+    // No shield = no battery: a shield-less body (swarm) carries zero energy, so nothing —
+    // damage absorb, the label pass's shield-vs-health branch — ever mistakes it for shielded.
+    energy = energyMax = shieldOutput > 0.0f ? info.energyMax : 0.0f;
     moveSpeed = info.moveSpeed;
     accel = info.accel;
     attackRange = info.attackRange;
@@ -89,6 +91,7 @@ void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
     ranged = info.ranged;
     standoffRange = info.standoffRange;
     fireInterval = info.fireInterval;
+    alwaysDisplayHealth = info.alwaysDisplayHealth;
     for (float& h : m_outputHistory)
         h = shieldOutput;
     m_rng = uint32(uintptr_t(this) >> 4) * 2654435761u + 1u; // worker-safe per-unit stream
@@ -137,6 +140,23 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
         Globals::navSystem.pressure(team).inject(here, params.presencePressure * deltaSec * 60.0f);
     if (puppet)
         return; // state carrier: GamePlayer writes it
+    // Direct damage lands via the inbox — the battery eats it FIRST, exactly the player's
+    // applyDamage rule ("Damage absorb" energy per hp, collapse latch on empty), and only the
+    // overflow reaches health. Shield-less bodies (swarm: shieldOutput 0) take it all on health.
+    if (const float dmg = takePendingDamage(); dmg > 0.0f)
+    {
+        float remaining = dmg;
+        if (!collapsed && shieldOutput > 0.0f && params.damageAbsorb > 0.0f && energy > 0.0f)
+        {
+            const float absorbedHp = glm::min(remaining, energy / params.damageAbsorb);
+            energy = glm::max(energy - absorbedHp * params.damageAbsorb, 0.0f);
+            remaining -= absorbedHp;
+            if (energy <= 0.0f)
+                collapsed = true;
+        }
+        if (remaining > 0.0f)
+            health = glm::max(health - remaining, 0.0f);
+    }
     if (health <= 0.0f || pos.y < params.voidY)
     {
         health = 0.0f;
@@ -573,7 +593,9 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
         fc->emitter.setOutput(energy > 0.0f ? shieldOutput : 0.01f);
 
         const float iso = Globals::forceSystem.getParams().isoThreshold;
-        if (fc->emitter.getEquilibriumRadius() < params.damageRadius && pressure > iso)
+        // COLLAPSED gate (the player's rule): while the battery holds, pressure only DRAINS it —
+        // health starts bleeding after the shield is gone, never before.
+        if (collapsed && fc->emitter.getEquilibriumRadius() < params.damageRadius && pressure > iso)
             health = glm::max(0.0f, health - params.fieldDps * params.fieldDpsMult * deltaSec);
 
         // Push normalized by the output that PRODUCED the ~2-frame-latent readback, so a collapsed
@@ -648,10 +670,10 @@ void GameUnitComponent::damage(float amount)
 {
     if (amount <= 0.0f)
         return;
-    if (puppet)
-        atomicAdd(pendingDamage, amount); // player health is owner-computed — bank it for routing
-    else
-        atomicSubClamped(health, amount);
+    // EVERY victim banks into the inbox: puppets for owner routing, units so their OWN tick can
+    // absorb shield-first (GamePlayer::applyDamage's rule) — the old direct health CAS bypassed
+    // the shield entirely, and draining in the owner tick keeps `energy` single-writer.
+    atomicAdd(pendingDamage, amount);
 }
 
 float GameUnitComponent::takePendingDamage()
@@ -686,6 +708,7 @@ void GameStructureComponent::spawn(Entity& entity, const SpawnInfo& info, const 
     team = (uint8)info.team;
     health = healthMax = info.healthMax;
     invulnerable = info.invulnerable ? 1 : 0;
+    alwaysDisplayHealth = info.alwaysDisplayHealth ? 1 : 0;
     meleeRadius = info.meleeRadius;
     if (isAuthority()) // clients never damage-sim, so they never spend a query slot
         query = Globals::forceSystem.createQuery(base.pos);
@@ -1069,6 +1092,7 @@ void writeGameUnitSpawnInfo(const GameUnitComponent::SpawnInfo& info, AssetNode&
     if (info.ranged != d.ranged)             out.set("Ranged", info.ranged);
     if (info.standoffRange != d.standoffRange) out.set("StandoffRange", info.standoffRange);
     if (info.fireInterval != d.fireInterval) out.set("FireInterval", info.fireInterval);
+    if (info.alwaysDisplayHealth != d.alwaysDisplayHealth) out.set("AlwaysDisplayHealth", info.alwaysDisplayHealth);
 }
 
 void writeGameStructureSpawnInfo(const GameStructureComponent::SpawnInfo& info, AssetNode& out)
@@ -1078,6 +1102,7 @@ void writeGameStructureSpawnInfo(const GameStructureComponent::SpawnInfo& info, 
     if (info.healthMax != d.healthMax)       out.set("HealthMax", info.healthMax);
     if (info.invulnerable != d.invulnerable) out.set("Invulnerable", info.invulnerable);
     if (info.meleeRadius != d.meleeRadius)   out.set("MeleeRadius", info.meleeRadius);
+    if (info.alwaysDisplayHealth != d.alwaysDisplayHealth) out.set("AlwaysDisplayHealth", info.alwaysDisplayHealth);
 }
 
 void writeGameProjectileSpawnInfo(const GameProjectileComponent::SpawnInfo& info, AssetNode& out)

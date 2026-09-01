@@ -13,7 +13,7 @@ Prefab gameEnemyShot
 		Layer Projectile
 		Shape Sphere
 		Radius 0.25
-		Density 400
+		Density 100
 		Restitution 0.3
 		ContactEvents true
 	Component Force

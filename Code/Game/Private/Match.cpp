@@ -1325,9 +1325,10 @@ void GameMatch::refreshBuildHotbar()
         return;
     }
     const oc::span<const EStructureType> items = buildCategoryItems(m_buildCategory);
-    for (int i = 0; i < (int)items.size() && i < c_cancelSlot; ++i)
+    for (int i = 0; i < (int)items.size() && i < c_rootDeleteSlot; ++i)
         hud.setSlot(i, c_structureShortNames[(int)items[i]],
             m_structures.affordableCount(items[i], (uint8)m_team));
+    hud.setSlot(c_rootDeleteSlot, "DEL", 0); // Delete stays on X on EVERY page
     hud.setSlot(c_cancelSlot, "CNCL", 0);
     hud.setSlot(c_pageBackSlot, "BACK", 0);
     hud.selectSlot(m_buildSelection);
@@ -1409,7 +1410,12 @@ void GameMatch::activateSlot(int slot)
         cancelOneLevel();
         return;
     }
-    if (slot >= (int)buildCategoryItems(m_buildCategory).size() || slot >= c_cancelSlot)
+    if (slot == c_rootDeleteSlot)
+    {
+        setMode(EPlayerMode::Delete); // X works on every page, not just the root
+        return;
+    }
+    if (slot >= (int)buildCategoryItems(m_buildCategory).size() || slot >= c_rootDeleteSlot)
         return; // empty slot
     if (slot == m_buildSelection
         && buildCategoryItems(m_buildCategory)[slot] == EStructureType::Crossing)
@@ -2133,6 +2139,12 @@ void GameMatch::buildWorldLabels(const Camera& camera)
             label.barColor = m_structures.structureBlueprint(i) ? glm::vec3(0.5f, 0.7f, 1.0f)
                 : glm::mix(glm::vec3(1.0f, 0.25f, 0.2f), glm::vec3(0.3f, 1.0f, 0.4f), frac);
         }
+        // A FULL health bar stays hidden — only damage (or blueprint progress, or selection, or
+        // "AlwaysDisplayHealth true" in the .pre) draws one.
+        if (!m_structures.structureBlueprint(i) && i != selected
+            && !m_structures.structures()[i].state->alwaysDisplayHealth
+            && label.barValue >= label.barMax - 1e-3f)
+            label.barMax = 0.0f; // <= 0 = no bar (the selected-info HP string is selection-only)
         const float energyCap = m_structures.structureCapacity(i);
         const float fuelCap = m_structures.structureFuelCapacity(i);
         const float mineralCap = m_structures.structureMineralCapacity(i);
@@ -2202,35 +2214,46 @@ void GameMatch::buildWorldLabels(const Camera& camera)
         const GameUnitComponent* u = getComponent<GameUnitComponent>(unitEntity);
         if (!u || unitEntity == ownPlayer)
             continue;
-        if (!u->puppet && u->shieldOutput <= 0.0f)
-            continue; // SWARM bodies (shield-less) carry no overhead bars — thousands can be on
-                      // screen, and the label pass + HUD would drown in them
+        // (Swarm bodies included: full bars are hidden, so only the DAMAGED slice of a thousand-
+        // body horde pushes a label — the drown-the-HUD concern the old shieldOutput skip covered.)
         HudWorldLabel label;
         const float height = u->puppet ? 2.0f : 1.6f;
         if (!camera.worldToScreen(viewport, unitEntity->pos + glm::vec3(0.0f, height, 0.0f), label.screenPos))
             continue;
         label.title = remoteShortName(unitEntity->getName(), u->puppet ? 2 : 0);
+        // FULL bars stay hidden ("AlwaysDisplayHealth true" in the .pre opts a prefab back in):
+        // only damage draws attention. An undamaged non-player unit skips its label entirely —
+        // no floating name over a healthy crowd; players always keep their name tag.
+        const bool always = u->alwaysDisplayHealth;
         if (!u->puppet && !u->collapsed && u->energy > 0.0f)
-        {
+        { // shield-less bodies (swarm) spawn with a ZERO battery, so they land in the health branch
             // UNIT with a live shield: ONE bar — the shield IS the unit's front line, so the bar
             // shows it (shield color) until it collapses; only then does the health bar take over.
-            label.barValue = u->energy;
-            label.barMax = glm::max(u->energyMax, 1e-3f);
-            label.barColor = glm::vec3(1.0f, 0.9f, 0.3f);
+            if (always || u->energy < u->energyMax - 1e-3f)
+            {
+                label.barValue = u->energy;
+                label.barMax = glm::max(u->energyMax, 1e-3f);
+                label.barColor = glm::vec3(1.0f, 0.9f, 0.3f);
+            }
         }
         else
         {
-            label.barValue = u->health;
-            label.barMax = glm::max(u->healthMax, 1e-3f); // per-type: Brutes triple, Runners half
-            label.barColor = u->team == (uint32)m_team
-                ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.25f, 0.2f);
-            if (u->puppet)
+            if (always || u->health < u->healthMax - 1e-3f)
+            {
+                label.barValue = u->health;
+                label.barMax = glm::max(u->healthMax, 1e-3f); // per-type: Brutes triple, Runners half
+                label.barColor = u->team == (uint32)m_team
+                    ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.25f, 0.2f);
+            }
+            if (u->puppet && (always || u->energy < u->energyMax - 1e-3f))
             {
                 label.bar2Value = u->energy; // players keep both bars: shield under health
                 label.bar2Max = glm::max(u->energyMax, 1e-3f);
                 label.bar2Color = glm::vec3(1.0f, 0.9f, 0.3f);
             }
         }
+        if (!u->puppet && label.barMax <= 0.0f)
+            continue;
         labels.push_back(oc::move(label));
     }
     Globals::gameHud.setWorldLabels(oc::move(labels));

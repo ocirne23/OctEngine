@@ -243,7 +243,7 @@ private:
     float waveCostOf(ENpcType t) const { return glm::max(m_waveCost[(int)t], 0.1f); }
     int m_waveMaxAlive = 15000;    // total AI units cap (ambient + waves)
     int m_ambientBudget = 20000;    // POINTS of world-start scatter (same per-type costs as waves)
-    float m_ambientSafeRadius = 70.0f; // the scatter keeps clear of the Base
+    float m_ambientSafeRadius = 45.0f; // the scatter keeps clear of the Base
     float m_waveSpawnDist = 160.0f;    // wave spawn ring radius around the Base
     int m_spawnsPerFrame = 24;    // trickle budget — a huge wave enters over seconds, not one hitch
 

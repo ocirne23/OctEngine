@@ -2,7 +2,7 @@
 # physically push it back (applied-force readback), and its bubble presses on the player's shield.
 # Spawned from the objective by NpcSystem; steers toward the nearest structure and gnaws it in
 # attack range. ContactEvents feed projectile hit damage.
-Prefab gameEnemyUnit
+Prefab gameEnemyGrunt
 	Component Render
 		ObjectContainer baseshapes
 		Node Cube

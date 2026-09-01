@@ -503,7 +503,7 @@ private:
         75.0f, // Turret
         25.0f, // MineralSilo
         50.0f, // Constructor
-        0.0f,  // Base (spawned, never placed)
+        100.0f, // Base (spawned, never placed — this entry only prices its REPAIRS)
         2.0f,  // CablePower (per segment)
         2.0f,  // CablePipe
         2.0f,  // CableConveyor

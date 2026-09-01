@@ -3,7 +3,7 @@
 # (GameStructureComponent::bubbleRadius) and it still strains them (EmitterDrain). Spawned in bulk
 # by GameMatch's ambient scatter + wave director (spawnLooseUnit). ContactEvents feed projectile
 # hit damage.
-Prefab gameSwarmUnit
+Prefab gameEnemySwarm
 	Component Render
 		ObjectContainer baseshapes
 		Node Cube
@@ -23,7 +23,7 @@ Prefab gameSwarmUnit
 	Component GameUnit
 		Team 1
 		HealthMax 15
-		EnergyMax 1
+		EnergyMax 0
 		ShieldOutput 0
 		MoveSpeed 4.5
 		Accel 25

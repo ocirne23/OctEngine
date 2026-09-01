@@ -159,10 +159,14 @@ namespace Procedural
 		Tweak::intVar("Scatter", "Gen jobs", &m_maxGenJobs, 1, 16, 1.0f);
 		Tweak::floatVar("Scatter", "View distance scale", &m_viewScale, 0.1f, 4.0f, 0.05f); // live: spawn range only, no regen
 		Tweak::intVar("Scatter", "Spawns/frame", &m_maxSpawnsPerFrame, 32, 8192, 1.0f);
+	}
 
-		// Load every asset's container up front, importing through its .oc so the model path and import
-		// options (incl. DecimationFactor) are shared with World's containers — both serve one cooked
-		// .vsc + converted textures per model. A failed asset drops its rules with a warning.
+	// Load every asset's container, importing through its .oc so the model path and import
+	// options (incl. DecimationFactor) are shared with World's containers — both serve one cooked
+	// .vsc + converted textures per model. A failed asset drops its rules with a warning.
+	void ScatterSystem::loadAssets()
+	{
+		m_assetsLoaded = true;
 		const MeshLodParams& lodParams = Globals::rendererVK.getLodParams();
 		SceneCookOptions cookOptions;
 		cookOptions.generateLods = lodParams.generate;
@@ -500,6 +504,8 @@ namespace Procedural
 
 	void ScatterSystem::update(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps)
 	{
+		if (m_enabled && maps && !m_assetsLoaded)
+			loadAssets();
 		if (!m_enabled || !maps || m_ruleOrder.empty())
 		{
 			// Inactive (disabled / terrain off / no rules): no profile scope. Clear once, starve the

@@ -35,6 +35,8 @@ export struct GameUnitParams
                                    // stopped out in the weak fringe before it (0 = push everywhere)
     float emitterDrainMult = 0.1f; // global scale on the per-type emitterDrain a pressing unit
                                    // deposits on the nearest active enemy emitter (addLoad)
+    float damageAbsorb = 2.0f;     // shield ENERGY per hp of direct damage absorbed BEFORE health
+                                   // (the player's "Damage absorb" rule, applied in the owner tick)
     float damageRadius = 0.6f;     // equilibrium radius below this + pressure = exposure damage
     float pushGain = 20000.0f;     // enemy fields shoving the body (force-ball scale) — shared by
                                    // the emitter readback path AND the shield-less query path,
@@ -151,6 +153,7 @@ export struct GameUnitComponent
         bool ranged = false;          // spitter stance: hold at standoffRange and queue FireRequests
         float standoffRange = 16.0f;
         float fireInterval = 3.0f;
+        bool alwaysDisplayHealth = false; // overhead bars show even at full health/shield
     };
 
     // ---- live state (spawn copies the SpawnInfo; DSL/game may re-tune any of it) ----
@@ -163,6 +166,7 @@ export struct GameUnitComponent
     float emitterDrain = 5.0f;
     bool ranged = false;
     float standoffRange = 16.0f, fireInterval = 3.0f;
+    bool alwaysDisplayHealth = false; // overhead bars even at full health/shield (label pass reads it)
     float bodyRadius = 0.5f;    // planar collider radius (from the physics shape at spawn) — the
                                 // nav line-of-sight tests are run for the BODY, not a point
     // (SHIELD-LESS bodies — the swarm types, no ForceComponent — read the BAKED pressure field
@@ -283,6 +287,7 @@ export struct GameStructureComponent
         float healthMax = 100.0f;
         bool invulnerable = false; // the Base: skipped by every damage path
         float meleeRadius = 1.0f;  // footprint half — units gnaw against this ring, not the center
+        bool alwaysDisplayHealth = false; // overhead health bar shows even at full health
     };
 
     uint32 structureId = 0;    // stable game-minted id (selection, mirror wire, save files)
@@ -295,6 +300,7 @@ export struct GameStructureComponent
     uint8 invulnerable : 1 = 0;   // the Base: skipped by every damage path
     uint8 strainable : 1 = 0;     // game marks ACTIVE emitters; units deposit load on the nearest
     uint8 powered : 1 = 0;        // consumers: last production tick's draw was paid
+    uint8 alwaysDisplayHealth : 1 = 0; // overhead health bar even at full (spawn-copied, main-read)
     float health = 100.0f, healthMax = 100.0f;
     float meleeRadius = 1.0f;
     float bubbleRadius = 0.0f; // ACTIVE emitters: the current visible bubble radius, stamped by

@@ -30,4 +30,5 @@ Prefab player
 		Enabled true
 	Component GameUnit
 		Puppet true
+		AlwaysDisplayHealth true
 	Component Network

@@ -817,6 +817,7 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         if (const AssetNode* n = unitNode->find("Ranged"))        info->ranged = n->asBool();
         if (const AssetNode* n = unitNode->find("StandoffRange")) info->standoffRange = n->asFloat(0, info->standoffRange);
         if (const AssetNode* n = unitNode->find("FireInterval"))  info->fireInterval = n->asFloat(0, info->fireInterval);
+        if (const AssetNode* n = unitNode->find("AlwaysDisplayHealth")) info->alwaysDisplayHealth = n->asBool();
         typeBits |= uint16(1 << EComponentID_GameUnit);
         tmpl.spawnInfos.emplace_back(oc::move(info));
     }
@@ -827,6 +828,7 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         if (const AssetNode* n = structNode->find("HealthMax"))    info->healthMax = n->asFloat(0, info->healthMax);
         if (const AssetNode* n = structNode->find("Invulnerable")) info->invulnerable = n->asBool();
         if (const AssetNode* n = structNode->find("MeleeRadius"))  info->meleeRadius = n->asFloat(0, info->meleeRadius);
+        if (const AssetNode* n = structNode->find("AlwaysDisplayHealth")) info->alwaysDisplayHealth = n->asBool();
         typeBits |= uint16(1 << EComponentID_GameStructure);
         tmpl.spawnInfos.emplace_back(oc::move(info));
     }
