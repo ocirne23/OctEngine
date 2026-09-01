@@ -531,6 +531,14 @@ private:
     // drain here - rather than deferring to a later explicit flush - is what's actually required.
     void uploadToSharedBuffer(Buffer& buffer, vk::DeviceSize dataSize, const void* data, vk::DeviceSize dstOffset);
 
+    // PARALLEL ENTITY SPAWNING: one coarse RECURSIVE mutex over every slot/registry allocator the
+    // spawn/despawn path reaches (transform slots, mesh/material/instance-offset registries, LOD
+    // state, skinned bundles/palettes/job ranges, solid-color materials, force/particle slots).
+    // Recursive because ObjectContainer::spawnNodeForIdx/spawnSkinnedNode hold it across their whole
+    // body while calling the locked leaves below. Uncontended outside the spawn window; the parallel
+    // entity PASS never takes it (renderNode/addLightInfo/setTransform stay lock-free as before).
+    std::recursive_mutex m_spawnMutex;
+
     uint32 addRenderNodeTransform(const Transform& transform);
     // vertexCounts: exact per-MeshInfo vertex count (parallel to meshInfos) — the BLAS builder needs a
     // tight maxVertex per mesh and offsets are no longer monotonic with the mesh streamer's free-list.

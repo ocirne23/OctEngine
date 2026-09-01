@@ -81,11 +81,13 @@ private:
 	friend class ScriptComponent;
     void registerListener(const ScriptModule* script, Entity* entity, void* scriptData)
     {
+        const std::lock_guard lock(m_listenerMutex); // parallel entity spawning
         m_listenersByScript.insert(script, { entity, scriptData });
     }
 
     void unregisterListener(const ScriptModule* script, Entity* entity)
     {
+        const std::lock_guard lock(m_listenerMutex); // parallel entity spawning
         auto range = m_listenersByScript.equalRange(script);
         for (auto it = range.begin(); it != range.end();)
         {
@@ -114,6 +116,11 @@ private:
 	EventKey m_nextEventKey = 1;
 	mutable std::shared_mutex m_eventKeyMutex; // both guarded by this; only script load ever writes
 
+	// Parallel entity spawning: a spawn job's OnSpawn can fire an event while another job's
+	// ScriptComponent::spawn registers a listener — both structures serialize here. Held only for
+	// map reads/writes: fireEvent SNAPSHOTS the dispatch list and invokes the scripts after
+	// releasing, so nested fires / re-registration from inside OnEvent re-lock freshly.
+	std::mutex m_listenerMutex;
 	oc::unordered_map<EventKey, oc::vector<const ScriptModule*>> m_listenersByEvent;
 	LPMultiMap<const ScriptModule*, Entry> m_listenersByScript;
 };

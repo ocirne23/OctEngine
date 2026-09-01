@@ -117,6 +117,26 @@ Texture::Texture(Texture&& move)
     move.m_imageView = VK_NULL_HANDLE;
 }
 
+Texture& Texture::operator=(Texture&& move)
+{
+    if (this != &move)
+    {
+        destroy();
+        m_width = move.m_width;
+        m_height = move.m_height;
+        m_numMipLevels = move.m_numMipLevels;
+        m_format = move.m_format;
+        m_image = move.m_image;
+        m_imageMemory = move.m_imageMemory;
+        m_imageView = move.m_imageView;
+        m_pStreamingMeta = oc::move(move.m_pStreamingMeta);
+        move.m_image = VK_NULL_HANDLE;
+        move.m_imageMemory = VK_NULL_HANDLE;
+        move.m_imageView = VK_NULL_HANDLE;
+    }
+    return *this;
+}
+
 uint64 Texture::getAllocatedBytes() const
 {
     return Globals::gpuAllocator.getAllocationSize(m_imageMemory);

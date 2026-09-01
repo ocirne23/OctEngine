@@ -13,30 +13,51 @@ void ScriptEventManager::fireEvent(EventKey key)
 	if (Globals::time.isPaused())
 		return; // global pause: script events don't fire, matching the Frozen rule per entity
 
-	for (auto it = m_listenersByEvent.find(key); it != m_listenersByEvent.end() && it->first == key; ++it)
+	// SNAPSHOT under the lock, INVOKE outside it: the scripts themselves can run long, fire nested
+	// events (re-entering here on the same thread) or re-register their listener — holding the lock
+	// across the invokes would serialize every event dispatch engine-wide. The snapshot is safe
+	// because listener UNregistration only happens on entity destroy, which never overlaps a
+	// dispatch in the sanctioned windows (destroys drain on main; spawn-window jobs only register).
+	struct Dispatch
 	{
-		for (const ScriptModule* script : it->second)
+		const ScriptModule* script;
+		Entity* entity;
+		void* scriptData;
+		int eventIdx;
+	};
+	oc::small_vector<Dispatch, 16> dispatches;
+	{
+		const std::lock_guard lock(m_listenerMutex); // parallel entity spawning (see the member comment)
+		for (auto it = m_listenersByEvent.find(key); it != m_listenersByEvent.end() && it->first == key; ++it)
 		{
-			auto range = m_listenersByScript.equalRange(script);
-			for (auto sit = range.begin(); sit != range.end(); ++sit)
+			for (const ScriptModule* script : it->second)
 			{
-				auto eventIt = script->eventKeyToIndex.find(key);
+				auto eventIt = script->eventKeyToIndex.find(key); // rebuilt under this lock on reload
 				if (eventIt == script->eventKeyToIndex.end())
 					continue;
-				if (sit->second.entity->isFrozen())
-					continue;
-				// This path calls the script's OnEvent DIRECTLY, bypassing ScriptComponent's own entry points,
-				// so it has to honour //@@require and the fault gate itself (see ScriptComponent::requirementsMet).
-				if (script->faulted || (script->requiredComponents & ~uint32(sit->second.entity->typeBits)))
-					continue;
-				invokeScriptOnEvent(script, *sit->second.entity, eventIt->second, sit->second.scriptData);
+				auto range = m_listenersByScript.equalRange(script);
+				for (auto sit = range.begin(); sit != range.end(); ++sit)
+					dispatches.push_back({ script, sit->second.entity, sit->second.scriptData, eventIt->second });
 			}
 		}
+	}
+	for (const Dispatch& d : dispatches)
+	{
+		if (d.entity->isFrozen())
+			continue;
+		// This path calls the script's OnEvent DIRECTLY, bypassing ScriptComponent's own entry points,
+		// so it has to honour //@@require and the fault gate itself (see ScriptComponent::requirementsMet).
+		if (d.script->faulted || (d.script->requiredComponents & ~uint32(d.entity->typeBits)))
+			continue;
+		invokeScriptOnEvent(d.script, *d.entity, d.eventIdx, d.scriptData);
 	}
 }
 
 void ScriptEventManager::onScriptLoadedCallback(const ScriptModule* script, const oc::vector<oc::string>& oldNames)
 {
+	// Parallel entity spawning: a spawn job's getOrLoad miss lands here while other jobs fire
+	// events / register listeners.
+	const std::lock_guard lock(m_listenerMutex);
 	const oc::vector<oc::string>& newNames = script->eventNames;
 
 	// Drop this script only from buckets for names it no longer has.

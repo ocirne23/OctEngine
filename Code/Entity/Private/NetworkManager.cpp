@@ -1920,6 +1920,8 @@ void NetworkManager::sendEventTo(NetPeerId peer, oc::string_view name, uint32 se
 
 uint32 NetworkManager::registerEntity(Entity& entity, NetworkComponent* comp)
 {
+    // Recursive: a server tree spawn already holds this via beginTreeRegistration (id contiguity).
+    const std::lock_guard registerLock(m_registerMutex);
     uint32 netId = 0;
     if (m_role == ENetRole::Client && m_incomingSpawnCount != 0)
     {
@@ -1983,6 +1985,7 @@ void NetworkManager::unregisterEntity(uint32 netId, const NetworkComponent* comp
 {
     if (netId == 0)
         return; // local-inert component, was never registered
+    const std::lock_guard registerLock(m_registerMutex); // parallel spawn/despawn; BEFORE m_entityMutex
     {
         const std::lock_guard<std::mutex> lock(m_entityMutex);
         const auto it = m_entities.find(netId);

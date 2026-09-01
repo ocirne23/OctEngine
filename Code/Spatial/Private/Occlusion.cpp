@@ -67,6 +67,13 @@ SpatialHandle OcclusionBuffer::addOccluder(const oc::shared_ptr<const OccluderDa
 {
     if (!data || data->vertices.empty())
         return {};
+    // Bake the world-space copy OUTSIDE the lock (can be thousands of vertices); the lock only
+    // covers the slot claim + a vector move.
+    oc::vector<glm::vec3> worldVertices(data->vertices.size());
+    for (size_t i = 0; i < data->vertices.size(); ++i)
+        worldVertices[i] = world.transformPoint(data->vertices[i]);
+
+    const std::lock_guard lock(m_occluderMutex);
     uint32 idx;
     if (!m_freeOccluders.empty())
     {
@@ -80,20 +87,20 @@ SpatialHandle OcclusionBuffer::addOccluder(const oc::shared_ptr<const OccluderDa
     }
     Occluder& occluder = m_occluders[idx];
     occluder.used = true;
-    occluder.worldVertices.resize(data->vertices.size());
-    for (size_t i = 0; i < data->vertices.size(); ++i)
-        occluder.worldVertices[i] = world.transformPoint(data->vertices[i]);
+    occluder.worldVertices = oc::move(worldVertices);
     return { idx, occluder.gen };
 }
 
 void OcclusionBuffer::removeOccluder(SpatialHandle handle)
 {
+    oc::vector<glm::vec3> freeOutsideLock; // the vertex buffer's deallocation runs after the unlock
+    const std::lock_guard lock(m_occluderMutex);
     if (handle.idx >= m_occluders.size() || m_occluders[handle.idx].gen != handle.gen || !m_occluders[handle.idx].used)
         return;
     Occluder& occluder = m_occluders[handle.idx];
     occluder.used = false;
-    occluder.worldVertices.clear();
-    occluder.worldVertices.shrink_to_fit();
+    freeOutsideLock = oc::move(occluder.worldVertices);
+    occluder.worldVertices = {};
     ++occluder.gen;
     m_freeOccluders.push_back(handle.idx);
 }

@@ -75,6 +75,9 @@ void ParticleEffect::setVelocity(const glm::vec3& velocity)
 
 void ParticleEffect::setEmitting(bool emitting)
 {
+    // Locked: called at component spawn, which may run on a spawn job while another job's
+    // createEffect grows m_effects under findEffect (parallel entity spawning).
+    const std::lock_guard lock(Globals::particleSystem.m_effectMutex);
     if (ParticleSystem::EffectInstance* inst = Globals::particleSystem.findEffect(m_id))
         inst->emitting = emitting;
 }
@@ -101,6 +104,11 @@ uint16 ParticleSystem::getTexture(const oc::string& path, bool sRGB)
 {
     if (path.empty())
         return (uint16)PARTICLE_TEX_NONE;
+    // Whole-body lock ON PURPOSE (unlike getEffectDesc's double-check): a racing double-load would
+    // mint an orphan texture slot that cannot be freed without the GPU-idle contract of
+    // TextureManager::free. Texture loads are once per path; concurrent DIFFERENT paths serialize
+    // here, which is acceptable for that rarity.
+    const std::lock_guard lock(m_effectMutex);
     if (auto it = m_textureCache.find(path); it != m_textureCache.end())
         return it->second;
     const uint16 idx = Globals::rendererVK.loadEffectTexture(path.c_str(), sRGB);
@@ -110,8 +118,13 @@ uint16 ParticleSystem::getTexture(const oc::string& path, bool sRGB)
 
 const ParticleEffectDesc* ParticleSystem::getEffectDesc(const oc::string& path)
 {
-    if (auto it = m_effectCache.find(path); it != m_effectCache.end())
-        return it->second.get();
+    {
+        const std::lock_guard lock(m_effectMutex); // parallel entity spawning
+        if (auto it = m_effectCache.find(path); it != m_effectCache.end())
+            return it->second.get();
+    }
+    // The .pfx file load runs OUTSIDE the lock; a rare same-path race loads twice and the second
+    // emplace yields to the first (returns the cached one), which only costs the extra IO.
     auto desc = oc::make_shared<ParticleEffectDesc>();
     oc::string error;
     if (!loadParticleEffect(path, *desc, error))
@@ -119,31 +132,37 @@ const ParticleEffectDesc* ParticleSystem::getEffectDesc(const oc::string& path)
         printf("ParticleSystem: failed to load %s: %s\n", path.c_str(), error.c_str());
         return nullptr;
     }
-    const ParticleEffectDesc* result = desc.get();
-    m_effectCache.emplace(path, oc::move(desc));
-    return result;
+    const std::lock_guard lock(m_effectMutex);
+    return m_effectCache.emplace(path, oc::move(desc)).first->second.get();
 }
 
 void ParticleSystem::invalidateEffect(const oc::string& path)
 {
+    const std::lock_guard lock(m_effectMutex); // parallel entity spawning
     m_effectCache.erase(path); // live instances keep their shared_ptr desc
 }
 
 ParticleEffect ParticleSystem::createEffect(const oc::string& pfxPath, const glm::vec3& pos, const glm::quat& rot)
 {
-    getEffectDesc(pfxPath); // populate the cache
-    if (auto it = m_effectCache.find(pfxPath); it != m_effectCache.end())
-        return createEffectInstance(it->second, pos, rot);
-    return ParticleEffect();
+    getEffectDesc(pfxPath); // populate the cache (locks internally)
+    oc::shared_ptr<const ParticleEffectDesc> desc;
+    {
+        const std::lock_guard lock(m_effectMutex); // parallel entity spawning
+        if (auto it = m_effectCache.find(pfxPath); it != m_effectCache.end())
+            desc = it->second;
+    }
+    return desc ? createEffectInstance(oc::move(desc), pos, rot) : ParticleEffect();
 }
 
 ParticleEffect ParticleSystem::createEffect(const ParticleEffectDesc& desc, const glm::vec3& pos, const glm::quat& rot)
 {
-    return createEffectInstance(oc::make_shared<const ParticleEffectDesc>(desc), pos, rot);
+    return createEffectInstance(oc::make_shared<const ParticleEffectDesc>(desc), pos, rot); // locks internally
 }
 
 ParticleEffect ParticleSystem::createEffectInstance(oc::shared_ptr<const ParticleEffectDesc> desc, const glm::vec3& pos, const glm::quat& rot)
 {
+    // The whole instance is BUILT unlocked (getTexture and the renderer slot API lock internally);
+    // only the id mint + m_effects push takes the effect mutex (parallel entity spawning).
     EffectInstance inst;
     inst.pos = pos;
     inst.rot = rot;
@@ -163,6 +182,7 @@ ParticleEffect ParticleSystem::createEffectInstance(oc::shared_ptr<const Particl
     }
     if (inst.emitters.empty())
         return ParticleEffect();
+    const std::lock_guard lock(m_effectMutex);
     inst.id = m_nextEffectId++;
     m_effects.push_back(oc::move(inst));
     return ParticleEffect(m_effects.back().id);
@@ -178,6 +198,7 @@ ParticleSystem::EffectInstance* ParticleSystem::findEffect(uint64 id)
 
 void ParticleSystem::destroyEffect(uint64 id)
 {
+    const std::lock_guard lock(m_effectMutex); // parallel entity spawning
     for (size_t i = 0; i < m_effects.size(); ++i)
     {
         if (m_effects[i].id == id)

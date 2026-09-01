@@ -20,8 +20,12 @@ import :StaticStore;
 //
 // Threading contract: updateEntry is callable from any job during the parallel entity pass -
 // same-cell updates write only that entry's SoA slots, and cell-changing ops stage into per-worker
-// pending lists. registerEntry/unregisterEntry/setLayerMask/commitFrame stay single-threaded
-// (main, outside the pass), as do queries relative to commits.
+// pending lists. registerEntry/unregisterEntry are callable from any thread in the spawn window
+// (parallel entity spawning): both take m_registerMutex exclusively — pool growth reallocates the
+// SoA the query traversals read, so the query* entry points take it SHARED (a spawning worker's
+// script OnSpawn may query while another worker registers). setLayerMask/commitFrame stay
+// single-threaded (main, outside the pass); the markVisible* traversals stay lock-free (the
+// kick/join window forbids registration by contract).
 export class SpatialIndex final
 {
 public:
@@ -208,6 +212,9 @@ private:
     int m_staticScanBudget = 65536;  // pool slots inspected per commit
     int m_staticRebuildBatch = 1024; // pending promotions that force a level rebuild
     oc::atomic<float> m_topLevelMaxRadius = 0.0f; // largest clamped-oversize radius, inflates top-level tests (CAS-max: updateEntry runs on jobs)
+    // Parallel spawning: exclusive over registerEntry/unregisterEntry (slot acquire/release + SoA
+    // growth), shared over queries — see the threading contract above.
+    mutable std::shared_mutex m_registerMutex;
     SpatialCullingConfig m_culling;
     mutable SpatialStats m_stats;
     oc::vector<FrontierCell> m_frontier;     // traverseParallel scratch (main thread only)

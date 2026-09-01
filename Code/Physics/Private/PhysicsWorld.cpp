@@ -345,13 +345,40 @@ PhysicsBody PhysicsWorld::createBody(const PhysicsBodyDesc& desc, oc::span<const
     bodyDef.motionLocks.angularY = desc.lockRotation;
     bodyDef.motionLocks.angularZ = desc.lockRotation;
 
-    const b3BodyId body = b3CreateBody(oc::bitCast<b3WorldId>(m_worldHandle), &bodyDef);
-    if (B3_IS_NULL(body))
-        return PhysicsBody();
-
+    // Convex hull builds are pure math over the point cloud (no world access) and by far the most
+    // expensive part of a hull body's creation — precomputed HERE so the box3d world lock below
+    // covers only the actual body/shape registration (parallel entity spawning).
     const float scale = desc.transform.scale;
+    oc::small_vector<b3HullData*, 4> prebuiltHulls; // parallel to `shapes`; null for non-hull entries
     for (const PhysicsShape& shape : shapes)
     {
+        b3HullData* hull = nullptr;
+        if (shape.type == EPhysicsShapeType::Hull && shape.hullPoints.size() >= 4)
+        {
+            const glm::vec3 offset = shape.offset * scale;
+            oc::vector<b3Vec3> points;
+            points.reserve(shape.hullPoints.size());
+            for (const glm::vec3& p : shape.hullPoints)
+                points.push_back(toB3(p * scale + offset));
+            hull = b3CreateHull(points.data(), int(points.size()), glm::clamp(shape.maxHullVertices, 4, 64));
+        }
+        prebuiltHulls.push_back(hull);
+    }
+
+    std::unique_lock lock(g_bodyLifecycleMutex); // parallel spawn jobs — see Body.ixx
+    const b3BodyId body = b3CreateBody(oc::bitCast<b3WorldId>(m_worldHandle), &bodyDef);
+    if (B3_IS_NULL(body))
+    {
+        lock.unlock();
+        for (b3HullData* hull : prebuiltHulls)
+            if (hull)
+                b3DestroyHull(hull);
+        return PhysicsBody();
+    }
+
+    for (size_t shapeIdx = 0; shapeIdx < shapes.size(); ++shapeIdx)
+    {
+        const PhysicsShape& shape = shapes[shapeIdx];
         b3ShapeDef shapeDef = b3DefaultShapeDef();
         shapeDef.density = shape.density;
         shapeDef.baseMaterial.friction = shape.friction;
@@ -388,20 +415,10 @@ PhysicsBody PhysicsWorld::createBody(const PhysicsBodyDesc& desc, oc::span<const
         }
         case EPhysicsShapeType::Hull:
         {
-            if (shape.hullPoints.size() < 4)
-            {
+            if (b3HullData* hull = prebuiltHulls[shapeIdx]) // built before the lock, freed after it
+                b3CreateHullShape(body, &shapeDef, hull);   // the shape clones the hull
+            else if (shape.hullPoints.size() < 4)
                 Log::warning("Physics: hull shape needs at least 4 points");
-                break;
-            }
-            oc::vector<b3Vec3> points;
-            points.reserve(shape.hullPoints.size());
-            for (const glm::vec3& p : shape.hullPoints)
-                points.push_back(toB3(p * scale + offset));
-            if (b3HullData* hull = b3CreateHull(points.data(), int(points.size()), glm::clamp(shape.maxHullVertices, 4, 64)))
-            {
-                b3CreateHullShape(body, &shapeDef, hull); // the shape clones the hull
-                b3DestroyHull(hull);
-            }
             else
                 Log::warning("Physics: convex hull creation failed (degenerate point cloud?)");
             break;
@@ -421,6 +438,10 @@ PhysicsBody PhysicsWorld::createBody(const PhysicsBodyDesc& desc, oc::span<const
         }
         }
     }
+    lock.unlock();
+    for (b3HullData* hull : prebuiltHulls) // frees only heap blocks — no world access needed
+        if (hull)
+            b3DestroyHull(hull);
     return PhysicsBody(oc::bitCast<uint64>(body));
 }
 

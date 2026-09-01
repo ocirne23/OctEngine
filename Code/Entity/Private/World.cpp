@@ -260,6 +260,35 @@ EntityPtr World::spawn(const oc::string& name, const Transform& base)
     return EntityPtr{};
 }
 
+oc::vector<EntityPtr> World::spawnBatch(oc::span<const SpawnRequest> requests, bool addRoots)
+{
+    if (requests.empty())
+        return {};
+    ProfileScope profileScope("Spawn batch", EProfileCategory::Entity);
+
+    // Template resolution stays on main: the cache builds/loads on a miss (file IO, renderer
+    // container imports) and is not job-safe. The jobs below only run Entity::create.
+    oc::vector<oc::shared_ptr<const EntitySpawnTemplate>> templates(requests.size());
+    for (size_t i = 0; i < requests.size(); ++i)
+        templates[i] = getOrBuildPrefabTemplate(requests[i].name);
+
+    oc::vector<EntityPtr> results(requests.size());
+    Globals::jobSystem.parallelFor(0, (uint32)requests.size(), m_spawnBatchCost,
+        { "Spawn batch", EProfileCategory::Entity },
+        [&](uint32 begin, uint32 end)
+        {
+            for (uint32 i = begin; i < end; ++i)
+                if (templates[i])
+                    results[i] = Entity::create(*templates[i], requests[i].transform);
+        });
+
+    if (addRoots)
+        for (const EntityPtr& e : results)
+            if (e)
+                addRootEntity(e);
+    return results;
+}
+
 void World::reloadPrefabs()
 {
     for (auto& [name, tmpl] : m_templates)

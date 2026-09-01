@@ -58,6 +58,19 @@ uint16 TextureManager::upload(const char* filePath, bool generateMips, bool sRGB
 
 uint16 TextureManager::uploadImpl(const oc::function<bool(Texture&)>& initialize)
 {
+	// The image build (file load, staging upload) is the expensive part and touches no manager
+	// state — it runs into a LOCAL texture outside the lock; the lock covers only the slot claim,
+	// the move into it, and the streamer bookkeeping (parallel entity spawning).
+	Texture texture;
+	if (!initialize(texture))
+	{
+		assert(false && "Failed to initialize texture");
+		return UINT16_MAX;
+	}
+	const uint64 allocatedBytes = texture.getAllocatedBytes();
+	oc::unique_ptr<StreamedTextureMeta> pMeta = texture.takeStreamingMeta();
+
+	const std::lock_guard lock(m_uploadMutex);
 	uint16 idx;
 	if (!m_freeSlots.empty()) // slot freed by a destroyed ObjectContainer
 	{
@@ -84,17 +97,8 @@ uint16 TextureManager::uploadImpl(const oc::function<bool(Texture&)>& initialize
 		idx = (uint16)m_textures.size();
 		m_textures.emplace_back();
 	}
-	if (!initialize(m_textures[idx]))
-	{
-		assert(false && "Failed to initialize texture");
-		if (idx == (uint16)(m_textures.size() - 1))
-			m_textures.pop_back();
-		else
-			m_freeSlots.push_back(idx);
-		return UINT16_MAX;
-	}
-	const uint64 allocatedBytes = m_textures[idx].getAllocatedBytes();
-	if (oc::unique_ptr<StreamedTextureMeta> pMeta = m_textures[idx].takeStreamingMeta())
+	m_textures[idx] = oc::move(texture);
+	if (pMeta)
 		Globals::textureStreamer.registerTexture(idx, oc::move(*pMeta), allocatedBytes);
 	else
 		Globals::textureStreamer.notePinned(allocatedBytes);
@@ -107,6 +111,7 @@ uint16 TextureManager::uploadImpl(const oc::function<bool(Texture&)>& initialize
 
 void TextureManager::free(uint16 idx)
 {
+	const std::lock_guard lock(m_uploadMutex); // parallel entity spawning
 	assert(idx > RendererVKLayout::FALLBACK_NORMAL_TEX_IDX && idx < m_textures.size() && "freeing a fallback texture");
 	Texture& texture = m_textures[idx];
 	if (!texture.getImageView())

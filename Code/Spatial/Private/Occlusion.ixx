@@ -87,6 +87,9 @@ private:
         bool used = false;
     };
 
+    // Parallel entity spawning: addOccluder/removeOccluder run concurrently from spawn jobs
+    // (PhysicsComponent spawn/resume); render() runs in the cull window where no spawn is legal.
+    std::mutex m_occluderMutex;
     oc::vector<Occluder> m_occluders;
     oc::vector<uint32> m_freeOccluders;
     oc::vector<float> m_depth;    // Width * Height, NDC z, 1e30 = no occluder

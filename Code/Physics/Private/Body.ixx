@@ -3,6 +3,14 @@ export module Physics:Body;
 import Core;
 import Core.glm;
 
+// Parallel entity spawning: box3d's body create/destroy mutate shared world arrays (body pools,
+// broadphase), so concurrent spawn/despawn jobs serialize on this ONE module-wide mutex —
+// PhysicsWorld::createBody and PhysicsBody::destroy both take it. Everything else that writes
+// box3d stays main-thread-only (or rides the body-command queue) per the standing contract, so
+// no other box3d call needs it. Namespace scope per the /Zc:threadSafeInit- rule; a std::mutex
+// is constant-initialized, so static init is safe.
+std::mutex g_bodyLifecycleMutex; // module linkage: visible to Physics units importing :Body, never exported
+
 // RAII handle to a rigid body (movable, like RenderNode). Destroying the handle destroys the body.
 export class PhysicsBody final
 {

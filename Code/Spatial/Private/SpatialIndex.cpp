@@ -76,7 +76,8 @@ void SpatialIndex::initialize(const SpatialIndexDesc& desc)
 SpatialHandle SpatialIndex::registerEntry(const glm::dvec3& pos, float radius, uint64 userData, uint32 layerMask, bool spawnVisible)
 {
     assert(m_initialized && radius >= 0.0f);
-    const uint32 idx = m_pool.acquire();
+    // All the pure math runs before the lock; the exclusive section is only the slot acquire (pool
+    // growth reallocates the SoA a concurrent shared-locked traversal reads) + the SoA writes.
     uint32 level = Morton::levelForRadius(radius);
     if (level >= m_numLevels)
         level = m_numLevels - 1;
@@ -84,41 +85,52 @@ SpatialHandle SpatialIndex::registerEntry(const glm::dvec3& pos, float radius, u
         atomicFloatMax(m_topLevelMaxRadius, radius);
     const uint64 key = Morton::keyAtLevel(Morton::fineKey(pos), level);
     const glm::vec3 rel = glm::vec3(pos - Morton::cellMinWorld(key, level));
-    m_pool.posX[idx] = rel.x;
-    m_pool.posY[idx] = rel.y;
-    m_pool.posZ[idx] = rel.z;
-    m_pool.radius[idx] = radius;
-    m_pool.cellKey[idx] = key;
-    m_pool.userData[idx] = userData;
-    m_pool.next[idx] = UINT32_MAX;
-    m_pool.prev[idx] = UINT32_MAX;
-    m_pool.layerMask[idx] = layerMask;
-    for (uint32 p = 0; p < uint32(ESpatialPass::Count); ++p)
-        m_pool.lastVisible[p][idx] = 0; // never stamped: reports visible until the first query, unless NoSpawnGuard
-    m_pool.lastMoveFrame[idx] = m_frameId;
-    m_pool.storeIdx[idx] = UINT32_MAX;
-    m_pool.level[idx] = uint8(level);
-    m_pool.flags[idx] = uint8(RecordFlag_Alive | RecordFlag_Unlinked | (spawnVisible ? 0 : RecordFlag_NoSpawnGuard));
+    uint32 idx, gen;
+    {
+        const std::unique_lock lock(m_registerMutex);
+        idx = m_pool.acquire();
+        m_pool.posX[idx] = rel.x;
+        m_pool.posY[idx] = rel.y;
+        m_pool.posZ[idx] = rel.z;
+        m_pool.radius[idx] = radius;
+        m_pool.cellKey[idx] = key;
+        m_pool.userData[idx] = userData;
+        m_pool.next[idx] = UINT32_MAX;
+        m_pool.prev[idx] = UINT32_MAX;
+        m_pool.layerMask[idx] = layerMask;
+        for (uint32 p = 0; p < uint32(ESpatialPass::Count); ++p)
+            m_pool.lastVisible[p][idx] = 0; // never stamped: reports visible until the first query, unless NoSpawnGuard
+        m_pool.lastMoveFrame[idx] = m_frameId;
+        m_pool.storeIdx[idx] = UINT32_MAX;
+        m_pool.level[idx] = uint8(level);
+        m_pool.flags[idx] = uint8(RecordFlag_Alive | RecordFlag_Unlinked | (spawnVisible ? 0 : RecordFlag_NoSpawnGuard));
+        gen = m_pool.gen[idx]; // captured under the lock: a later growth may move the array
+    }
+    // Staged per worker — no shared state, so the (possibly allocating) push stays outside the lock.
     m_pendingOps.local().push_back({ .newKey = key, .newRelPos = rel, .newRadius = radius,
-                                     .idx = idx, .gen = m_pool.gen[idx], .type = PendingOp::Link, .newLevel = uint8(level) });
-    return { idx, m_pool.gen[idx] };
+                                     .idx = idx, .gen = gen, .type = PendingOp::Link, .newLevel = uint8(level) });
+    return { idx, gen };
 }
 
 void SpatialIndex::unregisterEntry(SpatialHandle handle)
 {
-    if (!m_pool.isValidAlive(handle))
-        return;
-    const uint32 idx = handle.idx;
-    if ((m_pool.flags[idx] & RecordFlag_StaticTier) && m_pool.storeIdx[idx] != UINT32_MAX)
     {
-        StaticStore& store = m_static[m_pool.level[idx]];
-        store.radius[m_pool.storeIdx[idx]] = -1e30f; // tombstone the stored copy too
-        ++store.numTombstones;
+        const std::unique_lock lock(m_registerMutex); // pairs with registerEntry (parallel spawn/despawn)
+        if (!m_pool.isValidAlive(handle))
+            return;
+        const uint32 idx = handle.idx;
+        if ((m_pool.flags[idx] & RecordFlag_StaticTier) && m_pool.storeIdx[idx] != UINT32_MAX)
+        {
+            StaticStore& store = m_static[m_pool.level[idx]];
+            store.radius[m_pool.storeIdx[idx]] = -1e30f; // tombstone the stored copy too
+            ++store.numTombstones;
+        }
+        m_pool.flags[idx] = uint8((m_pool.flags[idx] & ~RecordFlag_Alive) | RecordFlag_PendingFree);
+        m_pool.radius[idx] = -1e30f; // queries this frame can no longer return the dying entry
     }
-    m_pool.flags[idx] = uint8((m_pool.flags[idx] & ~RecordFlag_Alive) | RecordFlag_PendingFree);
-    m_pool.radius[idx] = -1e30f; // queries this frame can no longer return the dying entry
+    // Per-worker staging: outside the lock (only the handle's own gen is needed).
     m_pendingOps.local().push_back({ .newKey = 0, .newRelPos = glm::vec3(0.0f), .newRadius = 0.0f,
-                                     .idx = idx, .gen = handle.gen, .type = PendingOp::Unlink, .newLevel = 0 });
+                                     .idx = handle.idx, .gen = handle.gen, .type = PendingOp::Unlink, .newLevel = 0 });
 }
 
 void SpatialIndex::updateEntry(SpatialHandle handle, const glm::dvec3& pos, float radius)

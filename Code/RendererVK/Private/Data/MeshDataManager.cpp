@@ -108,6 +108,7 @@ void MeshDataManager::growBuffer(Buffer& buffer, size_t& bufSize, size_t usedSiz
 size_t MeshDataManager::allocRange(BitRangeAllocator<false>& allocator, size_t& bufSize, size_t bucketBytes, size_t size,
     Buffer& buffer, vk::BufferUsageFlags2 usage, size_t& allocatedBytes)
 {
+    const std::lock_guard lock(m_allocMutex); // parallel entity spawning (spawnSkinnedNode reserves on jobs)
     const uint32 numBuckets = uint32((size + bucketBytes - 1) / bucketBytes);
     int bucketStart = allocator.acquireRange(numBuckets);
     if (bucketStart < 0)
@@ -154,6 +155,7 @@ size_t MeshDataManager::reserveVertexData(size_t size)
 
 void MeshDataManager::freeVertexData(size_t offset, size_t size)
 {
+    const std::lock_guard lock(m_allocMutex);
     const uint32 numBuckets = uint32((size + VERTEX_BUCKET_BYTES - 1) / VERTEX_BUCKET_BYTES);
     m_vertexAllocator.releaseRange(int(offset / VERTEX_BUCKET_BYTES), numBuckets);
     m_vertexBytesAllocated -= (size_t)numBuckets * VERTEX_BUCKET_BYTES;
@@ -161,6 +163,7 @@ void MeshDataManager::freeVertexData(size_t offset, size_t size)
 
 void MeshDataManager::freeIndexData(size_t offset, size_t size)
 {
+    const std::lock_guard lock(m_allocMutex);
     const uint32 numBuckets = uint32((size + INDEX_BUCKET_BYTES - 1) / INDEX_BUCKET_BYTES);
     m_indexAllocator.releaseRange(int(offset / INDEX_BUCKET_BYTES), numBuckets);
     m_indexBytesAllocated -= (size_t)numBuckets * INDEX_BUCKET_BYTES;
@@ -177,6 +180,7 @@ size_t MeshDataManager::uploadSkinningData(const void* pData, size_t size)
 
 void MeshDataManager::freeSkinningData(size_t offset, size_t size)
 {
+    const std::lock_guard lock(m_allocMutex);
     const uint32 numBuckets = uint32((size + SKINNING_BUCKET_BYTES - 1) / SKINNING_BUCKET_BYTES);
     m_skinningAllocator.releaseRange(int(offset / SKINNING_BUCKET_BYTES), numBuckets);
     m_skinningBytesAllocated -= (size_t)numBuckets * SKINNING_BUCKET_BYTES;

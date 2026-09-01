@@ -342,7 +342,9 @@ bool ScriptHost::loadDll(CachedScript& slot, const oc::string& dll)
 
 const ScriptModule* ScriptHost::getOrLoad(const oc::string& path, bool forceRecompile)
 {
-    const oc::string key = cacheKey(path);
+    const oc::string key = cacheKey(path); // filesystem canonicalization: stateless, stays outside the lock
+    const std::lock_guard lock(m_loadMutex); // parallel entity spawning
+
     auto it = scripts.find(key);
     if (it != scripts.end() && !forceRecompile)
         return &it->second.entries;

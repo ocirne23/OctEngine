@@ -13,6 +13,7 @@ void PhysicsBody::destroy()
 {
     if (m_handle == 0)
         return;
+    const std::lock_guard lock(g_bodyLifecycleMutex); // parallel spawn/despawn jobs — see Body.ixx
     const b3BodyId id = toBodyId(m_handle);
     if (b3Body_IsValid(id)) // the world may already be gone at shutdown
         b3DestroyBody(id);

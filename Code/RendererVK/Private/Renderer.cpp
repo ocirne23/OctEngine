@@ -1226,6 +1226,7 @@ void Renderer::setMeshLodGroupIdx(uint16 meshIdx, uint32 groupIdx)
 
 uint32 Renderer::allocateLodStateRange(uint32 count)
 {
+    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
     if (const uint32 reusedBase = m_freeLodStateSlots.allocate(count); reusedBase != UINT32_MAX)
         return reusedBase;
     const uint32 base = m_lodStateCounter;
@@ -1271,6 +1272,7 @@ void Renderer::addDecal(const RendererVKLayout::DecalInfo& decal)
 
 uint32 Renderer::createParticleEmitter(const RendererVKLayout::ParticleEmitterGpu& desc)
 {
+    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
     // Recycle retired slots once their KILL flag has drained through the sim (their particles are gone
     // after the flag has been live for a couple of simulated frames).
     for (size_t i = 0; i < m_retiredParticleEmitters.size();)
@@ -1315,6 +1317,7 @@ void Renderer::emitParticles(uint32 slot, uint32 count)
 
 void Renderer::destroyParticleEmitter(uint32 slot)
 {
+    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
     assert(slot < m_particleEmitters.size());
     m_particleEmitters[slot].texFlags.y |= RendererVKLayout::PARTICLE_FLAG_KILL;
     m_retiredParticleEmitters.emplace_back(slot, m_frameCounter);
@@ -1322,6 +1325,7 @@ void Renderer::destroyParticleEmitter(uint32 slot)
 
 uint32 Renderer::createForceEmitter(const RendererVKLayout::ForceEmitterGpu& desc)
 {
+    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
     // Recycle retired slots once every frame that could still deliver their slot-indexed force
     // readback has drained (particle emitter slot pattern).
     for (size_t i = 0; i < m_retiredForceEmitters.size();)
@@ -1360,6 +1364,7 @@ void Renderer::updateForceEmitter(uint32 slot, const RendererVKLayout::ForceEmit
 
 void Renderer::destroyForceEmitter(uint32 slot)
 {
+    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
     assert(slot < m_forceEmitters.size());
     m_forceEmitters[slot].teamFlags.y &= ~RendererVKLayout::FORCE_FLAG_ACTIVE;
     m_retiredForceEmitters.emplace_back(slot, m_frameCounter);
@@ -1367,6 +1372,7 @@ void Renderer::destroyForceEmitter(uint32 slot)
 
 uint32 Renderer::createForceQuerySlot()
 {
+    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
     for (size_t i = 0; i < m_retiredForceQuerySlots.size();)
     {
         if (m_frameCounter - m_retiredForceQuerySlots[i].second > RendererVKLayout::NUM_FRAMES_IN_FLIGHT + 2)
@@ -1402,6 +1408,7 @@ void Renderer::setForceQuery(uint32 slot, const glm::vec3& pos)
 
 void Renderer::destroyForceQuerySlot(uint32 slot)
 {
+    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
     assert(slot < m_forceQueries.size());
     m_forceQueries[slot].posActive = glm::vec4(0.0f);
     m_retiredForceQuerySlots.emplace_back(slot, m_frameCounter);
@@ -1484,6 +1491,7 @@ void Renderer::checkForceGridCapacity()
 
 uint16 Renderer::createSolidColorMaterial(const glm::vec3& color)
 {
+    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning (cache + material registry)
     const glm::vec3 c = glm::clamp(color, 0.0f, 1.0f);
     const uint32 key = uint32(c.x * 255.0f + 0.5f) | (uint32(c.y * 255.0f + 0.5f) << 8)
         | (uint32(c.z * 255.0f + 0.5f) << 16);
@@ -1780,6 +1788,7 @@ void Renderer::present()
 
 uint32 Renderer::addRenderNodeTransform(const Transform& transform)
 {
+    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
     if (!m_freeRenderNodeIndexes.empty())
     {
         const uint32 renderNodeIdx = m_freeRenderNodeIndexes.back();
@@ -1810,6 +1819,7 @@ void RenderNode::destroy()
 // simply never reference the freed slots.
 void Renderer::freeRenderNode(RenderNode& node)
 {
+    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
     if (node.m_transformIdx != UINT32_MAX)
     {
         m_freeRenderNodeIndexes.push_back(node.m_transformIdx);
@@ -1832,6 +1842,7 @@ void Renderer::freeRenderNode(RenderNode& node)
 
 uint32 Renderer::registerSkinnedBundle(const SkinnedInstanceBundle& bundle)
 {
+    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
     if (!m_freeSkinnedBundleSlots.empty())
     {
         const uint32 handle = m_freeSkinnedBundleSlots.back();
@@ -1846,6 +1857,7 @@ uint32 Renderer::registerSkinnedBundle(const SkinnedInstanceBundle& bundle)
 
 void Renderer::releaseSkinnedBundle(uint32 bundleHandle)
 {
+    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
     const SkinnedInstanceBundle& bundle = m_skinnedBundles[bundleHandle];
     // Park in place: a zero vertexCount makes the skinning dispatch skip the job, a zero indexCount makes
     // recordBuildSkinnedBlas skip the rebuild. The entries must keep their positions (see SkinnedInstanceBundle).
@@ -1859,6 +1871,7 @@ void Renderer::releaseSkinnedBundle(uint32 bundleHandle)
 
 uint32 Renderer::acquireSkinnedBundle(uint32 sourceKey)
 {
+    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
     const auto it = m_freeSkinnedBundles.find(sourceKey);
     if (it == m_freeSkinnedBundles.end() || it->second.empty())
         return UINT32_MAX;
@@ -2135,6 +2148,7 @@ void Renderer::recordIndirectCull(uint32 frameIdx)
 
 uint32 Renderer::allocateSkinningPalette(uint32 boneCount)
 {
+    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
     // The palette store is a bump allocator; freed regions (destroyed containers) are recycled on an
     // exact boneCount match — same-skeleton respawns, the common case — instead of tracking sub-ranges.
     for (size_t i = 0; i < m_freeSkinningPaletteHandles.size(); ++i)
@@ -2169,6 +2183,7 @@ void Renderer::setSkinningPalette(uint32 paletteHandle, oc::span<const glm::mat4
 
 uint32 Renderer::allocateSkinningJobRange(uint32 count)
 {
+    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
     uint32 firstJob = m_freeSkinningJobSlots.allocate(count);
     if (firstJob == UINT32_MAX)
     {
@@ -3785,6 +3800,7 @@ uint32 Renderer::addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>& mesh
     assert(vertexCounts.size() == meshInfos.size() && "one exact vertex count per MeshInfo");
     if (meshInfos.empty())
         return m_meshInfoCounter;
+    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
 
     // Reuse a range freed by a destroyed container before growing the counter (holes are never compacted).
     if (const uint32 reusedBase = m_freeMeshInfoSlots.allocate((uint32)meshInfos.size()); reusedBase != UINT32_MAX)
@@ -3853,6 +3869,7 @@ uint32 Renderer::addMaterialInfos(const oc::vector<RendererVKLayout::MaterialInf
 {
     if (materialInfos.empty())
         return m_materialInfoCounter;
+    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
 
     if (const uint32 reusedBase = m_freeMaterialSlots.allocate((uint32)materialInfos.size()); reusedBase != UINT32_MAX)
     {
@@ -3884,6 +3901,7 @@ uint32 Renderer::addMeshInstanceOffsets(const oc::vector<RendererVKLayout::MeshI
 {
     if (meshInstanceOffsets.empty())
         return m_instanceOffsetCounter;
+    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
 
     if (const uint32 reusedBase = m_freeInstanceOffsetSlots.allocate((uint32)meshInstanceOffsets.size()); reusedBase != UINT32_MAX)
     {

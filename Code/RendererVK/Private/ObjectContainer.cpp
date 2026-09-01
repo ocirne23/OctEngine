@@ -776,6 +776,10 @@ void ObjectContainer::initializeNodes(const ISceneData& sceneData, TempInitData&
 RenderNode ObjectContainer::spawnNodeForIdx(NodeSpawnIdx idx, const Transform& transform)
 {
     assert(idx < m_nodeMeshRanges.size() && "Invalid NodeSpawnIdx");
+    // PARALLEL ENTITY SPAWNING: no whole-body lock — everything below reads immutable container
+    // data or calls renderer allocators that lock internally (addRenderNodeTransform,
+    // addMeshInstanceOffsets, allocateLodStateRange). Only the rebased-offset CACHE block takes the
+    // spawn mutex, so two concurrent spawns of the same sub-node fill it once.
     const NodeMeshRange& range = m_nodeMeshRanges[idx];
 
     RenderNode node;
@@ -799,6 +803,9 @@ RenderNode ObjectContainer::spawnNodeForIdx(NodeSpawnIdx idx, const Transform& t
     uint32 rebasedOffsetBase = 0;
     if (rebase)
     {
+        // Recursive spawn mutex: guards the cache slot against a concurrent same-idx spawn (the
+        // nested addMeshInstanceOffsets re-locks it).
+        const std::lock_guard lock(Globals::rendererVK.m_spawnMutex);
         uint32& cachedBase = m_rebasedOffsetBaseForIdx[idx];
         if (cachedBase == UINT32_MAX)
         {
@@ -849,6 +856,12 @@ RenderNode ObjectContainer::spawnSkinnedNode(const Transform& transform)
     assert(m_isSkinned && m_numSkinnedMeshes > 0 && "spawnSkinnedNode on a non-skinned container");
 
     Renderer& renderer = Globals::rendererVK;
+    // PARALLEL ENTITY SPAWNING: unlike spawnNodeForIdx this DOES hold the spawn mutex whole-body
+    // (recursive — the nested allocator calls re-lock): the fresh-bundle build reads registry
+    // tables between those calls (getSkinnedMeshSource, getRtMeshAlias, the inline addMeshLodGroup)
+    // that another spawn's addMeshInfos/addMeshLodGroup growth would reallocate under it. Skinned
+    // spawns are the rare path; the parked-bundle reuse hit stays short regardless.
+    const std::lock_guard lock(renderer.m_spawnMutex);
 
     RenderNode node;
     node.m_transformIdx = renderer.addRenderNodeTransform(transform);

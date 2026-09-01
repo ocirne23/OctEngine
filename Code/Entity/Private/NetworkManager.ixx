@@ -197,7 +197,16 @@ public:
     // filter to names only the main thread fires.
     void setOnGameEvent(oc::function<void(oc::string_view name)> callback) { m_onGameEvent = oc::move(callback); }
 
-    // Main thread only. Returns the assigned netId, or 0 = LOCAL-INERT for any registration that
+    // PARALLEL ENTITY SPAWNING: registration is callable from spawn jobs. A replicated tree's ids
+    // must stay CONTIGUOUS from the base (the client adopts base + cursor in DFS order), so a
+    // server-side tree spawn that carries NetworkComponents holds m_registerMutex ACROSS the whole
+    // tree via begin/endTreeRegistration (Entity::create's root overload) — registerEntity re-locks
+    // recursively from inside it. Client id ADOPTION stays main-thread-sequential by contract
+    // (replicated Spawns execute inside receive()).
+    void beginTreeRegistration() { m_registerMutex.lock(); }
+    void endTreeRegistration() { m_registerMutex.unlock(); }
+
+    // Returns the assigned netId, or 0 = LOCAL-INERT for any registration that
     // isn't the server minting one or a client adopting one from a replicated Spawn.
     // An occupied id is REPLACED with a warning — the Entity Editor respawns before destroying, so a
     // collision there is the stale twin; unregister erases only when the component pointer still
@@ -265,6 +274,10 @@ private:
 
     oc::map<uint32, Replicated> m_entities;   // ordered: deterministic round-robin cursor
     mutable std::mutex m_entityMutex;
+    // Parallel entity spawning: serializes id minting + the spawn-record maps across concurrent
+    // register/unregister calls; held tree-wide by begin/endTreeRegistration for id contiguity.
+    // Lock order: m_registerMutex BEFORE m_entityMutex (registerEntity takes both).
+    std::recursive_mutex m_registerMutex;
 
     uint32 m_sentTweakGeneration = 0; // server: last TweakRegistry sync generation broadcast
     // Client: events that arrived before the Welcome was processed (events ride ch1, the Welcome

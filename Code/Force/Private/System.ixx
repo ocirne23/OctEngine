@@ -342,6 +342,11 @@ private:
     }
     void debugDrawGroup(Renderer& renderer, const MergeGroup& group) const;
 
+    // Parallel entity spawning: create/destroy of emitters and queries run concurrently from spawn
+    // jobs — the free lists and generation counter serialize here. m_emitters/m_queries are RESERVED
+    // to their renderer MAX at initialize(), so growth never reallocates under a concurrent
+    // resolveEmitter/resolveQuery (the setters stay lock-free, same as the parallel-pass contract).
+    std::mutex m_createMutex;
     oc::vector<EmitterInstance> m_emitters; // indexed by handle low 32 bits; slots recycled by generation
     oc::vector<uint32> m_freeEmitters;
     oc::vector<QueryInstance> m_queries;

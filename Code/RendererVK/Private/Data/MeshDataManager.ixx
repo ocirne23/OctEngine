@@ -75,6 +75,10 @@ private:
     size_t m_indexBufSize = 0;
     size_t m_skinningBufSize = 0;
 
+    // Parallel entity spawning: spawnSkinnedNode reserves output regions from spawn jobs, so the
+    // range allocators serialize here (locked in allocRange and every free*).
+    std::mutex m_allocMutex;
+
     BitRangeAllocator<false> m_vertexAllocator{ 0 };
     BitRangeAllocator<false> m_indexAllocator{ 0 };
     BitRangeAllocator<false> m_skinningAllocator{ 0 };

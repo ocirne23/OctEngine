@@ -447,6 +447,9 @@ void SpatialIndex::traverseParallel(const Tester& tester, const glm::dvec3& refP
 uint32 SpatialIndex::querySphere(const glm::dvec3& center, float radius, uint32 layerMask, oc::vector<uint64>& outUserData) const
 {
     outUserData.clear();
+    // Shared vs registerEntry's exclusive: a concurrent registration may grow the pool SoA
+    // (parallel entity spawning; a spawner's script OnSpawn queries while another registers).
+    const std::shared_lock lock(m_registerMutex);
     traverse(SphereTester{ radius }, center, layerMask,
         [&](uint32 idx, const glm::vec3&) { outUserData.push_back(m_pool.userData[idx]); });
     return uint32(outUserData.size());
@@ -455,6 +458,7 @@ uint32 SpatialIndex::querySphere(const glm::dvec3& center, float radius, uint32 
 uint32 SpatialIndex::queryAABB(const glm::dvec3& boxMin, const glm::dvec3& boxMax, uint32 layerMask, oc::vector<uint64>& outUserData) const
 {
     outUserData.clear();
+    const std::shared_lock lock(m_registerMutex); // see querySphere
     const glm::dvec3 center = (boxMin + boxMax) * 0.5;
     traverse(AABBTester{ glm::vec3((boxMax - boxMin) * 0.5) }, center, layerMask,
         [&](uint32 idx, const glm::vec3&) { outUserData.push_back(m_pool.userData[idx]); });
@@ -465,6 +469,7 @@ uint32 SpatialIndex::queryFrustum(const Frustum& frustumRelCamera, const glm::dv
                                   oc::vector<uint64>& outUserData, IOcclusionTester* occlusion) const
 {
     outUserData.clear();
+    const std::shared_lock lock(m_registerMutex); // see querySphere
     traverse(FrustumTester{ frustumRelCamera, occlusion, maxDist }, cameraPos, layerMask,
         [&](uint32 idx, const glm::vec3&) { outUserData.push_back(m_pool.userData[idx]); });
     return uint32(outUserData.size());
@@ -474,6 +479,7 @@ uint32 SpatialIndex::queryRay(const glm::dvec3& origin, const glm::dvec3& dir, d
                               oc::vector<uint64>& outUserData) const
 {
     outUserData.clear();
+    const std::shared_lock lock(m_registerMutex); // see querySphere
     const glm::dvec3 normalized = glm::normalize(dir);
     traverse(RayTester{ glm::vec3(normalized), float(maxDist) }, origin, layerMask,
         [&](uint32 idx, const glm::vec3&) { outUserData.push_back(m_pool.userData[idx]); });
@@ -482,6 +488,7 @@ uint32 SpatialIndex::queryRay(const glm::dvec3& origin, const glm::dvec3& dir, d
 
 uint64 SpatialIndex::queryNearest(const glm::dvec3& pos, float maxRadius, uint32 layerMask, uint64 excludeUserData) const
 {
+    const std::shared_lock lock(m_registerMutex); // see querySphere
     uint64 best = 0;
     float bestDist = FLT_MAX;
     bool found = false;

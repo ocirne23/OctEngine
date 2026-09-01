@@ -45,6 +45,21 @@ public:
 
     // Entity Creation
     EntityPtr spawn(const oc::string& name, const Transform& base);
+
+    // PARALLEL ENTITY SPAWNING: spawns a batch of prefabs with the Entity::create calls fanned out
+    // over the job system (main thread only, called in the window where spawning is legal today —
+    // the entity-change drains / game.update, after the spatial/begin-frame joins and outside the
+    // parallel entity pass). Templates resolve HERE on main (the template cache is not job-safe);
+    // the jobs run only Entity::create, whose resource seams are all safe against concurrent
+    // creates/destroys (spawn locks in Spatial/Physics/RendererVK/Force/Particle/Network/Script).
+    // Results stay index-aligned with requests (unknown prefab = null entry). addRoots attaches
+    // every spawned root to the root list serially after the join.
+    struct SpawnRequest
+    {
+        oc::string name; // prefab name (AssetRegistry), same lookup as spawn()
+        Transform transform;
+    };
+    oc::vector<EntityPtr> spawnBatch(oc::span<const SpawnRequest> requests, bool addRoots = true);
     EntityPtr spawnAssetFile(const oc::string& path, const Transform& base, bool overrideDefaultTransform = true);
     EntityPtr createEmptyEntity(const oc::string& name);
 
@@ -179,6 +194,7 @@ private:
     JobCounter m_updateCounter;           // every batch job in the pass, incl. ones batches spawn
     PerWorker<EntityUpdateStaging> m_updateStaging;
     JobCost m_updateCost{ 2000 };
+    JobCost m_spawnBatchCost{ 20000 }; // spawnBatch auto-grain seed (~20us/entity until measured)
     oc::function<void(const EntityPtr&, const oc::string&)> m_onPrefabOpened;
     oc::function<void(const EntityPtr&, const EntityPtr&)> m_onEntityRespawned;
     oc::function<void(const Entity*)> m_onRootEntityRemoved;

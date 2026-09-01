@@ -15,6 +15,7 @@ public:
     ~Texture();
     Texture(const Texture& copy) = delete;
     Texture(Texture&& move);
+    Texture& operator=(Texture&& move); // destroys the current image, then adopts (slot fill by TextureManager)
 
     // Destroys the vk image/view and resets to the empty state (slot recycling by TextureManager::free;
     // the caller guarantees no frame in flight still samples the image). Safe on an empty texture.

@@ -110,6 +110,10 @@ private:
 
     ScriptLoadedCallback m_scriptLoadedCallback = nullptr;
 
+    // Parallel entity spawning: concurrent ScriptComponent spawns getOrLoad the same or different
+    // scripts — the cache (and a miss's compile/load) serializes here. Module pointers stay stable
+    // (node-based map), so cached callers keep lock-free reads of the returned ScriptModule.
+    std::mutex m_loadMutex;
     oc::string vcvarsPath;                                 // cached after first lookup
     oc::unordered_map<oc::string, CachedScript> scripts;  // keyed by canonical source path
     oc::vector<oc::string> pendingPdbDeletes;             // superseded PDBs the debugger still holds; retried later

@@ -312,6 +312,12 @@ void ForceSystem::setNumTeams(uint32 numTeams)
 
 void ForceSystem::initialize()
 {
+    // Reserved to the renderer caps so createEmitter/createQuery growth NEVER reallocates: a
+    // concurrent spawn job may be resolving its own fresh handle while another creates (see
+    // m_createMutex in System.ixx).
+    m_emitters.reserve(RendererVKLayout::MAX_FORCE_EMITTERS);
+    m_queries.reserve(RendererVKLayout::MAX_FORCE_QUERIES);
+
     Tweak::boolean("Force", "Enabled", &m_params.enabled);
     Tweak::floatVar("Force", "Iso threshold", &m_params.isoThreshold, 0.01f, 2.0f);
     Tweak::intVar("Force", "March steps", &m_params.marchSteps, 8, 128);
@@ -460,6 +466,7 @@ ForceEmitter ForceSystem::createEmitter(uint32 team, const glm::vec3& pos, const
     staged.focus = focus;
     staged.distribution = distribution;
     const float outputScale = refreshDistributionScale(staged);
+    // Renderer slot first (its own internal lock) so this lock covers only the instance claim.
     const uint32 slot = Globals::rendererVK.createForceEmitter(
         buildEmitterGpu(pos, direction, output, reach, focus, team, distribution, width, outputScale, 1.0f));
     if (slot == UINT32_MAX)
@@ -467,6 +474,7 @@ ForceEmitter ForceSystem::createEmitter(uint32 team, const glm::vec3& pos, const
         printf("ForceSystem: out of force emitter slots (%u live)\n", m_numLiveEmitters);
         return ForceEmitter();
     }
+    const std::lock_guard lock(m_createMutex); // parallel entity spawning
     uint32 idx;
     if (!m_freeEmitters.empty())
     {
@@ -501,12 +509,13 @@ ForceEmitter ForceSystem::createEmitter(uint32 team, const glm::vec3& pos, const
 
 ForceQuery ForceSystem::createQuery(const glm::vec3& pos)
 {
-    const uint32 slot = Globals::rendererVK.createForceQuerySlot();
+    const uint32 slot = Globals::rendererVK.createForceQuerySlot(); // own internal lock
     if (slot == UINT32_MAX)
     {
         printf("ForceSystem: out of force query slots\n");
         return ForceQuery();
     }
+    const std::lock_guard lock(m_createMutex); // parallel entity spawning
     uint32 idx;
     if (!m_freeQueries.empty())
     {
@@ -553,24 +562,38 @@ ForceSystem::QueryInstance* ForceSystem::resolveQuery(uint64 handle)
 
 void ForceSystem::destroyEmitter(uint64 handle)
 {
-    if (EmitterInstance* inst = resolveEmitter(handle))
+    uint32 rendererSlot = UINT32_MAX;
     {
-        Globals::rendererVK.destroyForceEmitter(inst->rendererSlot);
-        inst->generation = 0;
-        inst->group = 0; // its group prunes the stale index on the next merge pass
-        m_freeEmitters.push_back((uint32)handle);
-        --m_numLiveEmitters;
+        const std::lock_guard lock(m_createMutex); // parallel entity spawning
+        if (EmitterInstance* inst = resolveEmitter(handle))
+        {
+            rendererSlot = inst->rendererSlot;
+            inst->generation = 0;
+            inst->group = 0; // its group prunes the stale index on the next merge pass
+            m_freeEmitters.push_back((uint32)handle);
+            --m_numLiveEmitters;
+        }
     }
+    // The renderer slot retire (its own lock) runs after: the instance is already invalidated, and
+    // the slot cannot be re-handed out before this call retires it.
+    if (rendererSlot != UINT32_MAX)
+        Globals::rendererVK.destroyForceEmitter(rendererSlot);
 }
 
 void ForceSystem::destroyQuery(uint64 handle)
 {
-    if (QueryInstance* inst = resolveQuery(handle))
+    uint32 rendererSlot = UINT32_MAX;
     {
-        Globals::rendererVK.destroyForceQuerySlot(inst->rendererSlot);
-        inst->generation = 0;
-        m_freeQueries.push_back((uint32)handle);
+        const std::lock_guard lock(m_createMutex); // parallel entity spawning
+        if (QueryInstance* inst = resolveQuery(handle))
+        {
+            rendererSlot = inst->rendererSlot;
+            inst->generation = 0;
+            m_freeQueries.push_back((uint32)handle);
+        }
     }
+    if (rendererSlot != UINT32_MAX)
+        Globals::rendererVK.destroyForceQuerySlot(rendererSlot); // see destroyEmitter
 }
 
 // The plain sphere's budget fold (focus 0.5 / distribution 0.5 / width 1) — group and transition
