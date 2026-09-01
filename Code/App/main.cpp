@@ -436,9 +436,16 @@ int main(int argc, char* argv[])
         }
         Globals::world.handleEntityChanges(Globals::scriptEvents.takeEntityChanges(), camera, Globals::ui.getViewportRect());
 
+        // PAUSE ("Time/Paused" tweak or the Pause/Break key): every simulation consumer below takes
+        // the SIM delta (0 while paused) — camera/input/UI/tweaks above and the network transport
+        // (keepalives, RTT, snapshot cadence) stay on the real delta. The entity pass and script
+        // events additionally gate on Time::isPaused() like Frozen (see Time::setPaused). Read here,
+        // after the input dispatch and tweak poll, so a toggle applies to this very frame.
+        const double simDeltaSec = Globals::time.getSimDeltaSec();
+
         Globals::networkManager.receive(deltaSec); // snapshot targets + events land before the sim/entity updates read them
-        game.updatePlayer((float)deltaSec); // ONLY the player-body writes (camera hot path, pre-physics); the rest of the game tick runs after the joins below
-        Globals::scriptContext.update(camera, (float)deltaSec, (float)Globals::time.getElapsedSec());
+        game.updatePlayer((float)simDeltaSec); // ONLY the player-body writes (camera hot path, pre-physics); the rest of the game tick runs after the joins below
+        Globals::scriptContext.update(camera, (float)simDeltaSec, (float)Globals::time.getSimElapsedSec());
 
         // The spatial index + renderer frame state are QUIESCENT from here until world.update: the
         // drains / net receive / game.update above were the last registers and container loads, and
@@ -463,11 +470,11 @@ int main(int argc, char* argv[])
                 Globals::rendererVK.kickBeginFrameJob(camera, viewportRect);
             }
         }
-        Globals::physics.update(deltaSec); // ≤1 step; contact events stay buffered until the dispatch below
+        Globals::physics.update(simDeltaSec); // ≤1 step; contact events stay buffered until the dispatch below
         if (!headlessServer)
         {
             Globals::audio.update(camera);
-            Globals::navSystem.update((float)deltaSec);
+            Globals::navSystem.update((float)simDeltaSec);
             Globals::rendererVK.joinBeginFrameJob(); // VR: beginFrame runs synchronously here
             Globals::spatialIndex.joinUpdateJob();
         }
@@ -476,12 +483,12 @@ int main(int argc, char* argv[])
         // legal again after the joins, and mid-frame container loads after beginFrame are a
         // supported path (present() re-checks texture/mesh generations). Becomes the server tick
         // in MP. See GameMatch::update's declaration for the one-frame latencies this placement buys.
-        game.update((float)deltaSec);
+        game.update((float)simDeltaSec);
         // Contact scripts (OnPhysicsEvent) query the spatial index and can touch renderer state
         // (light/sun thunks), so they fire AFTER the joins — still before the entity pass, as before.
         Globals::physics.dispatchContactEvents([](const PhysicsWorld::ContactEvent& evt) { Globals::world.handleContactEvent(evt); });
 
-        Globals::world.update(Globals::rendererVK, (float)deltaSec); // serial script prepass + parallel component/tree pass + sink flush; headless: renderer passed through but never dereferenced (headless archetypes)
+        Globals::world.update(Globals::rendererVK, (float)simDeltaSec); // serial script prepass + parallel component/tree pass + sink flush; headless: renderer passed through but never dereferenced (headless archetypes)
         Globals::networkManager.send(deltaSec); // server: snapshot entities at their post-update poses; both roles: flush queued packets
 
         if (!headlessServer)
@@ -490,8 +497,8 @@ int main(int argc, char* argv[])
             Globals::terrainCollider.update(camera.position, Globals::terrain.activeClimateMaps());
             Globals::ocean.update(Globals::rendererVK, camera, Globals::terrain.activeTerrainData(), Globals::terrain.seaLevel());
             Globals::scatter.update(Globals::rendererVK, camera, Globals::terrain.activeClimateMaps());
-            Globals::particleSystem.update(Globals::rendererVK, (float)deltaSec);
-            Globals::forceSystem.update(Globals::rendererVK, (float)deltaSec);
+            Globals::particleSystem.update(Globals::rendererVK, (float)simDeltaSec);
+            Globals::forceSystem.update(Globals::rendererVK, (float)simDeltaSec);
 
             Globals::ui.drawGizmoEntity(Globals::rendererVK, (float)deltaSec);
             Globals::ui.update(Globals::world.rootEntities(), camera, deltaSec); // ImGui backend new frame (main thread) + queues the widget pass

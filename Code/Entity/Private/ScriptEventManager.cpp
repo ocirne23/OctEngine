@@ -4,11 +4,15 @@ module;
 
 module Entity;
 
+import Core.Time;
 import Script;
 import :ScriptComponent; // invokeScriptOnEvent (module-linkage, declared next to the component)
 
 void ScriptEventManager::fireEvent(EventKey key)
 {
+	if (Globals::time.isPaused())
+		return; // global pause: script events don't fire, matching the Frozen rule per entity
+
 	for (auto it = m_listenersByEvent.find(key); it != m_listenersByEvent.end() && it->first == key; ++it)
 	{
 		for (const ScriptModule* script : it->second)

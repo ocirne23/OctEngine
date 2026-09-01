@@ -410,6 +410,8 @@ public:
 			Globals::scriptHost.reloadCurrentScript(); // F6: recompile + hot-reload the script the Script panel is editing
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_F7 && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN)
             writeProfileReport(profileDumpPath, profileDumpOptions); // F7: text report of the last frames (same as --profile-after)
+        if (evt.scancode == SDL_Scancode::SDL_SCANCODE_PAUSE && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN && !evt.repeat)
+            Globals::time.setPaused(!Globals::time.isPaused()); // Pause/Break: freeze all simulation (also the "Time/Paused" tweak; see Time::setPaused)
         if (gameMode)
             return; // game mode: everything below is testbed spawns/possession — the Game library owns those keys
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_K && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN)

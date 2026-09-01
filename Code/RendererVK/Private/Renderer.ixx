@@ -736,7 +736,6 @@ private:
     // concurrency note). Persists across frames: buildUboViews reads last frame's mvps out of it for
     // reprojection before overwriting.
     RendererVKLayout::Ubo m_ubo;
-    const Clock::time_point m_timeStart = Clock::now(); // ubo.timeSeconds origin (shader animation time)
 
     bool   m_giProbeDebugEnabled = false;
     uint32 m_giProbeDebugMode = 0;

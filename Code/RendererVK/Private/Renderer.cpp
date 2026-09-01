@@ -10,6 +10,7 @@ import Core.Frustum;
 import Core.imgui;
 import Core.Camera;
 import Core.Tweaks;
+import Core.Time;
 import Core.Log;
 
 import File;
@@ -764,7 +765,9 @@ void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const
         m_rtaoParams.maxDistance, 0.0f);
     ubo.giVisParams = m_giProbePipeline.getVisibilityParams();
     ubo.frameIndex = m_frameCounter;
-    ubo.timeSeconds = std::chrono::duration<float>(Clock::now() - m_timeStart).count();
+    // SIM clock, not the wall clock: shader animation (ocean waves, force pulses, fog) freezes with
+    // the global pause (see Time::setPaused).
+    ubo.timeSeconds = (float)Globals::time.getSimElapsedSec();
 
     buildUboSky();
     buildUboSunShadow(camera);
@@ -1642,10 +1645,9 @@ void Renderer::present()
     const bool particleResetCarried = m_particleResetPending && m_particlesEnabled && m_meshInstanceCounter > 0;
     { // Particle emitter table + spawn map + decals into this slot's mapped buffers (fence waited).
         ProfileScope effectsScope("Effects upload", EProfileCategory::Renderer);
-        static Clock::time_point s_lastParticleTime = Clock::now();
-        const Clock::time_point now = Clock::now();
-        const float dt = oc::min(std::chrono::duration<float>(now - s_lastParticleTime).count(), 0.25f);
-        s_lastParticleTime = now;
+        // SIM delta, not a wall-clock difference: the GPU particle sim must freeze with the global
+        // pause (present runs once per Time frame, so this is the same interval when unpaused).
+        const float dt = oc::min((float)Globals::time.getSimDeltaSec(), 0.25f);
         uint32 spawnRequestTotal = 0;
         for (const auto& [slot, count] : m_particleSpawnRequests)
             spawnRequestTotal += count;

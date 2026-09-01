@@ -2,6 +2,7 @@ module Entity;
 
 import Core;
 import Core.Log;
+import Core.Time;
 import Core.glm;
 import Core.Sphere;
 import Core.Transform;
@@ -48,7 +49,10 @@ void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform&
     if (isPhysicsSuspended())
         setPhysicsSuspended(false);
 
-    const bool frozen = isFrozen();
+    // The global pause freezes every entity's sim ticks exactly like Frozen (the delta is already 0,
+    // but scripts/components could still act per-call); transform compose, rendering, spatial refresh
+    // and the placement components below keep running so the frozen world stays inspectable.
+    const bool frozen = isFrozen() || Globals::time.isPaused();
 
     if (!frozen)
     {

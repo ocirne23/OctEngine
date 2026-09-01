@@ -22,6 +22,9 @@ void Time::registerTweaks()
     Tweak::intVar("Time", "Inactive max FPS", &m_inactiveMaxFps, 0, 240, 1.0f, {}, ETweakFlags::Saved);
     Tweak::floatVar("Time", "Busy-wait window (ms)", &m_busyWaitMs, 0.0f, 8.0f, 0.1f, {}, ETweakFlags::Saved);
     Tweak::boolean("Time", "Stable frame time", &m_stableFrameTime, {}, ETweakFlags::Saved);
+    // Synced, deliberately NOT Saved: the server's pause freezes clients too, but a pause must
+    // never persist into the next run.
+    Tweak::boolean("Time", "Paused", &m_paused, {}, ETweakFlags::Synced);
     Tweak::floatVar("Time", "Input pump lead (ms)", &m_pumpLeadMs, 0.0f, 8.0f, 0.1f, {}, ETweakFlags::Saved);
 }
 

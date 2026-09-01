@@ -1275,13 +1275,15 @@ void StructureSystem::tickProduction(float deltaSec)
         {
             const float add = glm::min(m_baseEnergyGenPerSec * dt, glm::max(s.capacity[0] - s.store[0], 0.0f));
             s.store[0] += add;
-            m_genRateTotal += add / dt;
+            if (dt > 1e-9f) // paused (sim dt 0): 0/0 would put a NaN into the HUD's gen rate
+                m_genRateTotal += add / dt;
         }
         else if (ref.type == EStructureType::Solar)
         {
             const float add = glm::min(m_solarEnergyPerSec * dt, glm::max(s.capacity[0] - s.store[0], 0.0f));
             s.store[0] += add;
-            m_genRateTotal += add / dt;
+            if (dt > 1e-9f)
+                m_genRateTotal += add / dt;
         }
         else if (ref.type == EStructureType::Generator && m_genEnergyPerSec > 0.0f)
         {
@@ -1296,7 +1298,8 @@ void StructureSystem::tickProduction(float deltaSec)
                     s.store[1] -= fuelTaken;
                 }
                 s.store[0] += want;
-                m_genRateTotal += want / dt;
+                if (dt > 1e-9f)
+                    m_genRateTotal += want / dt;
             }
         }
 

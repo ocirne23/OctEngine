@@ -374,7 +374,8 @@ namespace Procedural
 		const float target = glm::dot(sum, sum) > 1.0f ? std::atan2(-sum.y, -sum.x) : m_windAngle;
 		float d = target - m_steeredWindAngle;
 		d -= std::floor(d * (1.0f / 6.283185307f) + 0.5f) * 6.283185307f; // shortest arc
-		const float maxStep = glm::radians(m_windSteerRate) * (float)glm::min(Globals::time.getDeltaSec(), 0.1);
+		// SIM delta: the steered wind reshapes the spectrum, so it must hold still under the global pause
+		const float maxStep = glm::radians(m_windSteerRate) * (float)glm::min(Globals::time.getSimDeltaSec(), 0.1);
 		m_steeredWindAngle += glm::clamp(d, -maxStep, maxStep);
 		return m_steeredWindAngle;
 	}
