@@ -23,6 +23,7 @@ Prefab gameEnemySpitter
 		Centered true
 	Component Network
 	Component GameUnit
+		ShortName SPIT
 		HealthMax 15
 		EnergyMax 32
 		ShieldOutput 0.64

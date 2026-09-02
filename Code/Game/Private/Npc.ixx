@@ -30,7 +30,7 @@ public:
     void clear();          // despawns every unit/projectile entity (before world teardown)
 
     // Drains everything the per-entity sims queued during the pass: barracks spawn requests (the
-    // BARRACKS decided, paid minerals and claimed its roster slot in its own component update —
+    // BARRACKS decided, paid energy and claimed its roster slot in its own component update —
     // this only performs the main-thread entity spawn, refunding on failure), turret + spitter
     // shots, and unit deaths (freeing the spawner's roster slot). Player damage needs no queue:
     // it lands on the victim's puppet component (GameUnitComponent::pendingDamage) via the same

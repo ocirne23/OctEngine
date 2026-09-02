@@ -361,6 +361,14 @@ float NetHost::getPeerPacketLoss(NetPeerId id) const
     return id < m_peers.size() ? m_peers[id].packetLoss : 0.0f;
 }
 
+uint32 NetHost::getQueuedReliable(NetPeerId id, uint8 channel) const
+{
+    if (id >= m_peers.size() || m_peers[id].state != NetPeer::EState::Connected)
+        return 0;
+    const NetPeer& peer = m_peers[id];
+    return channel < peer.sendChannels.size() ? uint32(peer.sendChannels[channel].window.size()) : 0;
+}
+
 // ---- handshake ----------------------------------------------------------------------------------
 
 uint64 NetHost::challengeSaltFor(const NetAddress& address, uint64 clientSalt, uint8 flags) const

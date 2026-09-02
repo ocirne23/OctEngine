@@ -32,6 +32,7 @@ Prefab player
 		Path Scripts/PlayerBody.dsl
 		Enabled true
 	Component GameUnit
+		ShortName PLR
 		Puppet true
 		AlwaysDisplayHealth true
 	Component Network

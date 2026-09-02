@@ -113,6 +113,9 @@ public:
     void mirrorRemove(uint32 id);
     void mirrorStructureState(uint32 id, float healthFrac, float chargeFrac, float fuelFrac,
         float mineralFrac, float outputFrac, float utilFrac, bool powered, bool blueprint);
+    // Cable/crossing BLUEPRINTS only (GCb): health = build progress, over the segment's own
+    // healthMax. The built flip still arrives through the GPl re-send.
+    void mirrorCableProgress(uint32 id, float healthFrac);
     void mirrorRoute(uint32 id, oc::span<const glm::vec3> points);
     void mirrorTotals(oc::span<const float> minerals, oc::span<const float> fuel, float energyTotal,
         float energyCap, float genRate, float useRate)
@@ -203,6 +206,7 @@ public:
     EStructureType structureType(int index) const { return m_frame[index].type; }
     float structureHealth(int index) const { return m_frame[index].state->health; }
     float structureHealthMax() const { return m_structureHealthMax; }
+    float structureHealthMaxOf(int index) const { return m_frame[index].state->healthMax; } // cables are softer
     uint8 structureTeam(int index) const { return (uint8)m_frame[index].state->team; }
     bool structureBlueprint(int index) const { return m_frame[index].state->blueprint; }
     bool structurePowered(int index) const { return m_frame[index].state->powered; }
@@ -263,7 +267,10 @@ public:
         case EStructureType::Fabricator:
         case EStructureType::Constructor:
         case EStructureType::Turret:      return m_internalBuffer;
-        // Barracks hold NO energy: they run purely on conveyor-fed minerals.
+        case EStructureType::Barracks:    // cable-fed: units are SPAWNED from energy
+        case EStructureType::BarracksBrute:
+        case EStructureType::BarracksRunner:
+        case EStructureType::BarracksSpitter: return m_barracksEnergyCapacity;
         case EStructureType::Generator:   return m_generatorBuffer;
         case EStructureType::Battery:     return m_batteryCapacity;
         case EStructureType::Base:        return m_baseEnergyCapacity; // feeds its always-on shield
@@ -293,10 +300,7 @@ public:
         case EStructureType::Extractor:
         case EStructureType::Fabricator:
         case EStructureType::Constructor:  return m_internalBuffer;
-        case EStructureType::Barracks:     // conveyor-fed: units are SPAWNED from materials
-        case EStructureType::BarracksBrute:
-        case EStructureType::BarracksRunner:
-        case EStructureType::BarracksSpitter: return m_barracksMineralCapacity;
+        // Barracks hold NO minerals: units are paid from their energy store (no conveyor attaches).
         case EStructureType::MineralSilo:  return m_mineralSiloCapacity;
         case EStructureType::Base:         return m_mineralBaseCapacity;
         default:                           return 0.0f;
@@ -532,7 +536,7 @@ private:
     float m_fuelTankCapacity = 100.0f;
     float m_mineralSiloCapacity = 100.0f;
     float m_mineralBaseCapacity = 100.0f;
-    float m_barracksMineralCapacity = 20.0f; // conveyor-fed spawn stock (own buffer, not the shared one)
+    float m_barracksEnergyCapacity = 20.0f; // cable-fed spawn stock (own buffer, filled like any consumer)
     float m_genEnergyPerSec = 7.5f;
     float m_solarEnergyPerSec = 1.0f;
     float m_fuelBurnRate = 1.0f;
@@ -575,7 +579,7 @@ private:
     float m_waypointRadius = 3.0f;
     float m_projectileStructDamage = 20.0f;
     bool m_cheatInstantBuild = false;
-    // MATERIALS a barracks pays per spawned unit, per unit type (Grunt/Brute/Runner/Spitter) —
+    // ENERGY a barracks pays per spawned unit, per unit type (Grunt/Brute/Runner/Spitter) —
     // stamped onto each barracks' component as its spawnCost.
-    float m_spawnMaterials[4] = { 5.0f, 12.0f, 6.0f, 9.0f };
+    float m_spawnEnergy[4] = { 5.0f, 12.0f, 6.0f, 9.0f };
 };

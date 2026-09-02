@@ -41,8 +41,15 @@ import :NetworkComponent; // NetInputState in the claim ring; no cycle — the c
 //   ch2 Reliable:    Hello (client->server) [u8][u16 version]
 //                    Welcome (server->client) [u8][u16 version][varuint serverTick][f32 snapshotHz][varuint yourClientId]
 //                    Deny [u8][string reason]
-//                    Spawn (server->client) [u8][varuint baseId][varuint componentCount][varuint ownerClientId][string path][pos 3xf32][rot 4xf32][f32 scale]
-//                    Despawn (server->client) [u8][varuint baseId]
+//                    Spawn (server->client) [u8][u16 count] + count records, each [varuint baseId]
+//                    [varuint componentCount][varuint ownerClientId][string path][pos 3xf32][rot 4xf32]
+//                    [f32 scale][linVel 3xf32][angVel 3xf32]. BATCHED and FLOW-CONTROLLED: the
+//                    server owes every ready peer a per-peer queue of spawn/despawn ids (the join
+//                    replay + each frame's announces), drained in send() only while the peer's
+//                    session channel holds fewer than "Queue target" reliable messages and at most
+//                    "Records per frame" records — so a 20k-unit world never trips the transport's
+//                    queued-reliable disconnect, and the client spawns at a bounded rate.
+//                    Despawn (server->client) [u8][u16 count][varuint baseId x count]
 //   ch3 Unreliable:  Claim (owner->server) [u8][varuint netId][varuint newestSeq][u8 count]
 //                    [u8 flags bit0=quantized][f32 maxVel][f32 maxAngVel (quantized only — the
 //                    owner's live ranges, so the server decodes with what was encoded)] + count
@@ -69,7 +76,7 @@ export enum class ENetRole : uint8
 // Client-side correction thresholds, shared with NetworkComponent::update (registered as tweaks).
 export struct NetSyncParams
 {
-    float posDeadzone = 0.01f;        // below: local state free-runs
+    float posDeadzone = 0.05f;        // below: local state free-runs
     float posSnapThreshold = 2.0f;    // entering the push's CATCH-UP band (boosted gains/caps)
     float rotDeadzoneDeg = 0.5f;
     float rotSnapThresholdDeg = 45.0f;
@@ -92,11 +99,11 @@ export struct NetSyncParams
     float interactionRadius = 1.5f;
     float interactionLinger = 0.5f;   // seconds the grace persists after leaving the radius
 
-    float pushPosGain = 5.0f;         // corrective velocity per meter of position error (1/s)
+    float pushPosGain = 0.5f;         // corrective velocity per meter of position error (1/s)
     float pushRotGain = 5.0f;         // corrective angular velocity per radian of rotation error (1/s)
     float pushMaxVel = 10.0f;         // cap on the corrective (error-driven) velocity term (m/s)
     float pushMaxAngVel = 10.0f;      // cap on the corrective angular term (rad/s)
-    float pushMaxAccel = 60.0f;       // how hard the push may change the body's velocity (m/s^2; keep > gravity)
+    float pushMaxAccel = 10.0f;       // how hard the push may change the body's velocity (m/s^2; keep > gravity)
     float pushMaxAngAccel = 60.0f;    // (rad/s^2)
     float pushCatchUpBoost = 4.0f;    // gain/cap multiplier in the catch-up band (snap..teleport threshold)
     float posTeleportThreshold = 10.0f; // beyond this the non-physical teleport resync fires after all
@@ -263,7 +270,14 @@ private:
         oc::span<const uint8> data);
     void fireEventAttributed(oc::string_view name, uint32 senderClientId, oc::span<const uint8> data);
     Entity* findOwnedEntity(uint32 netId, uint32 clientId) const; // null unless clientId really owns it
-    void sendSpawnTo(NetPeerId peer, const DynamicSpawn& rec); // transform refreshed from the live entity when possible
+    // Server: encode one spawn record into `out` (transform refreshed from the live entity when
+    // possible). Returns the encoded size, 0 when the record cannot be sent (path too long).
+    // `transferred` collects (netId, owner) pairs of the tree's entities whose ownership diverged
+    // from the record (proximity transfers) — sent as OwnerChange right after the batch.
+    size_t encodeSpawnRecord(const DynamicSpawn& rec, oc::span<uint8> out,
+        oc::vector<oc::pair<uint32, uint32>>& transferred);
+    bool spawnReplicatedRecord(NetReader& reader); // client: one record of a Spawn batch; false = reader exhausted
+    void drainSpawnStreams();                      // server: flow-controlled per-peer spawn/despawn delivery
 
     struct Replicated
     {
@@ -309,6 +323,17 @@ private:
     oc::vector<uint32> m_pendingSpawnAnnounce;                  // announced by send(); client duplicate-guard makes replay+announce overlap harmless
     oc::vector<uint32> m_pendingDespawn;
     uint32 m_nextNetId = 1;    // server-minted, the only id authority; 0 = local-inert (never registered)
+    // Server: what each ready peer is still OWED, drained by drainSpawnStreams() under flow control.
+    // Ids only (never recycled): a spawn whose record is gone by drain time was despawned before
+    // it was ever sent and is skipped; the despawn of a never-sent spawn is harmless client-side.
+    struct PeerStream
+    {
+        oc::deque<uint32> owedSpawns;   // baseIds, in announce order (join replay first)
+        oc::deque<uint32> owedDespawns;
+    };
+    oc::unordered_map<NetPeerId, PeerStream> m_peerStreams; // erased on Disconnected (peer ids recycle)
+    oc::vector<oc::pair<uint32, uint32>> m_spawnTransferScratch;
+    oc::vector<glm::vec3> m_snapshotFocus; // server: per-tick player positions for snapshot relevance
 
     // Client: id assignment scope while executing one replicated Spawn (main thread, synchronous)
     uint32 m_incomingSpawnBase = 0;
@@ -364,7 +389,8 @@ private:
     std::mutex m_eventMutex;
 
     NetSyncParams m_params;
-    uint32 m_roundRobinCursor = 0;
+    uint32 m_roundRobinCursor = 0; // snapshot round robin over NEAR entities (within "Relevance radius" of a player)
+    uint32 m_farCursor = 0;        // ...and the separate, slower rotation over FAR ones
     double m_snapshotAccum = 0.0;
     double m_netTime = 0.0; // seconds since start, advanced in receive() — the WALL CLOCK the claim
                             // displacement budget is measured against (sequence numbers are

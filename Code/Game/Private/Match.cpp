@@ -1588,6 +1588,30 @@ void GameMatch::sendStats()
             | (m_structures.structureBlueprint(i) ? 2u : 0u))); // status bits (health IS progress)
     }
     Globals::networkManager.fireNetworkEvent("GSt", writer.data());
+
+    // GCb: build progress of cable/crossing BLUEPRINTS only (the segments under construction — a
+    // small, changing set; built ones are silent). 5 B per record; a long unbuilt run past the cap
+    // rotates through m_cableSyncCursor over consecutive sends.
+    constexpr int c_maxCableRecords = 190; // 2 + 190 * 5 = 952 B, under the 1024 B event cap
+    uint8 cableBuffer[1000];
+    NetWriter cableWriter(cableBuffer);
+    cableWriter.write<uint16>(0);
+    uint16 cableCount = 0;
+    const int total = m_structures.structureCount();
+    int i = total > 0 ? m_cableSyncCursor % total : 0;
+    for (int visited = 0; visited < total && cableCount < c_maxCableRecords; ++visited, i = (i + 1) % total)
+    {
+        if (!isCableOrCrossing(m_structures.structureType(i)) || !m_structures.structureBlueprint(i))
+            continue;
+        cableWriter.write<uint32>(m_structures.structureId(i));
+        cableWriter.write<uint8>(frac8(m_structures.structureHealth(i), m_structures.structureHealthMaxOf(i)));
+        ++cableCount;
+    }
+    m_cableSyncCursor = i;
+    if (cableCount == 0)
+        return;
+    cableWriter.writeAt(0, cableCount);
+    Globals::networkManager.fireNetworkEvent("GCb", cableWriter.data());
 }
 
 void GameMatch::handleNetEvent(oc::string_view name)
@@ -1644,6 +1668,17 @@ void GameMatch::handleNetEvent(oc::string_view name)
             if (!reader.overflowed())
                 m_structures.mirrorTotals(minerals, fuel, energy, cap, gen, use);
             // (mirrorTotals takes the spans by value into its own arrays — safe past this scope)
+        }
+        else if (name == "GCb")
+        {
+            const uint16 count = reader.read<uint16>();
+            for (uint16 i = 0; i < count && !reader.overflowed(); ++i)
+            {
+                const uint32 id = reader.read<uint32>();
+                const uint8 health = reader.read<uint8>();
+                if (!reader.overflowed())
+                    m_structures.mirrorCableProgress(id, health / 255.0f);
+            }
         }
         else if (name == "GDm")
         {
@@ -2835,21 +2870,6 @@ void GameMatch::updateSelectionClick(const Camera& camera, bool confirmEdge, boo
             packColor(glm::vec3(0.3f, 1.0f, 0.4f)), 24);
 }
 
-// Short 3-5 char tags drawn above every structure/unit bar — the baseshape boxes all look alike,
-// so the tag says what a thing is at a glance. The selected structure shows its full name instead.
-// Remote actors (client side) carry no type on the wire — derive the tag from the replicated
-// entity's prefab-derived name ("gameEnemyBrute", ...).
-static const char* remoteShortName(oc::string_view entityName, uint8 kind)
-{
-    if (kind == 2)
-        return "PLR";
-    if (entityName.find("Brute") != oc::string_view::npos)   return "BRUT";
-    if (entityName.find("Runner") != oc::string_view::npos)  return "RUN";
-    if (entityName.find("Spitter") != oc::string_view::npos) return "SPIT";
-    if (entityName.find("Swarm") != oc::string_view::npos) return   "SWRM";
-    return "GRNT";
-}
-
 // World-anchored UI: a health bar above every damageable structure, plus name/HP/power info on the
 // selected one. Projected here with THIS frame's final camera (worldToScreen), replaced wholesale
 // each frame; the overlay just paints at the given viewport pixels.
@@ -2895,7 +2915,7 @@ void GameMatch::buildWorldLabels(const Camera& camera)
         const float fuelCap = m_structures.structureFuelCapacity(i);
         const float mineralCap = m_structures.structureMineralCapacity(i);
         // Second bar: fuel (orange) on the fuel holders, MINERALS (blue) on the mineral stores and
-        // on anything that runs on minerals alone (barracks), energy (yellow) elsewhere.
+        // on anything that runs on minerals alone, energy (yellow) elsewhere (barracks included).
         const bool fuelBar = type == EStructureType::Generator || type == EStructureType::FuelTank;
         const bool mineralBar = type == EStructureType::MineralSilo
             || (mineralCap > 0.0f && energyCap <= 0.0f);
@@ -2966,7 +2986,7 @@ void GameMatch::buildWorldLabels(const Camera& camera)
         const float height = u->puppet ? 2.0f : 1.6f;
         if (!camera.worldToScreen(viewport, unitEntity->pos + glm::vec3(0.0f, height, 0.0f), label.screenPos))
             continue;
-        label.title = remoteShortName(unitEntity->getName(), u->puppet ? 2 : 0);
+        label.title = u->getShortName(); // the prefab's `ShortName` tag (same on every instance — no wire type needed)
         // FULL bars stay hidden ("AlwaysDisplayHealth true" in the .pre opts a prefab back in):
         // only damage draws attention. An undamaged non-player unit skips its label entirely —
         // no floating name over a healthy crowd; players always keep their name tag.

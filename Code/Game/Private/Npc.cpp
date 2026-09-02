@@ -329,7 +329,7 @@ void NpcSystem::service(StructureSystem& structures)
     for (const GameUnitComponent::SeedRequest& r : m_seedScratch)
         Globals::navSystem.requestSeedPath(r.team, r.from, r.to,
             r.stuck ? m_stuckLaneSpeed : m_orderLaneSpeed, m_laneWidth);
-    // Units the BARRACKS decided to produce during the pass (their component paid the minerals,
+    // Units the BARRACKS decided to produce during the pass (their component paid the energy,
     // claimed the roster slot and set the cooldown — this only performs the entity spawn). A
     // failed spawn refunds the cost and the slot.
     GameStructureComponent::takeSpawnRequests(m_spawnScratch);
@@ -345,8 +345,8 @@ void NpcSystem::service(StructureSystem& structures)
         if (!spawnUnit(structures, freeSpawnPointAround(structures, s.entity->pos, barracksSpawnRadius()),
             barracksId, (uint8)s.state->team, unitType))
         {
-            s.state->store[2] = glm::min(s.state->store[2] + s.state->barracks.spawnCost,
-                s.state->capacity[2]);
+            s.state->store[0] = glm::min(s.state->store[0] + s.state->barracks.spawnCost,
+                s.state->capacity[0]);
             s.state->barracks.aliveUnits = glm::max(s.state->barracks.aliveUnits - 1, 0);
         }
     }

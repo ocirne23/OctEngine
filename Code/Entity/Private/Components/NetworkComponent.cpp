@@ -251,6 +251,21 @@ void NetworkComponent::update(Entity& entity, float deltaSeconds)
                 desiredLin, desiredAng,
                 glm::vec3(params.pushMaxAccel * boost * deltaSeconds, params.pushMaxAngAccel * boost * deltaSeconds, 0.0f));
         }
+        else
+        {
+            // INSIDE the deadzone the pose is left alone, but the VELOCITY still settles onto the
+            // server's: the push above leaves its corrective term in the body, and a frictionless
+            // body (units) keeps it forever — coasting out the far side of the deadzone, pushed
+            // back, out again: the swing. Only when the two differ, so a resting body stays asleep.
+            const glm::vec3 bodyLin = physics->body.getLinearVelocity();
+            const glm::vec3 bodyAng = physics->body.getAngularVelocity();
+            const glm::vec3 dLin = net.targetLinVel - bodyLin;
+            const glm::vec3 dAng = net.targetAngVel - bodyAng;
+            if (glm::dot(dLin, dLin) > 1e-4f || glm::dot(dAng, dAng) > 1e-4f)
+                physicsWorld.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::NudgeVelocity,
+                    net.targetLinVel, net.targetAngVel,
+                    glm::vec3(params.pushMaxAccel * deltaSeconds, params.pushMaxAngAccel * deltaSeconds, 0.0f));
+        }
         if (newSnapshot)
             net.lastAppliedTick = net.serverTick;
         return;

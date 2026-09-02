@@ -1,4 +1,4 @@
-# Runner barracks: spawns RUNNER attack units (PvP) / guards (PvE) from conveyor-fed materials.
+# Runner barracks: spawns RUNNER attack units (PvP) / guards (PvE) from cable-fed energy.
 # 6 m box (3x3 cells).
 Prefab game_barracksRunner
 	Component Render

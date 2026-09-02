@@ -1,4 +1,4 @@
-# Spitter barracks: spawns SPITTER attack units (PvP) / guards (PvE) from conveyor-fed materials.
+# Spitter barracks: spawns SPITTER attack units (PvP) / guards (PvE) from cable-fed energy.
 # 6 m box (3x3 cells).
 Prefab game_barracksSpitter
 	Component Render

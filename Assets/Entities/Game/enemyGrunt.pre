@@ -25,3 +25,4 @@ Prefab gameEnemyGrunt
 		Centered true
 	Component Network
 	Component GameUnit
+		ShortName GRNT

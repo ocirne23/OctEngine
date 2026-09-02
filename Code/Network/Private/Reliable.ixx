@@ -238,6 +238,10 @@ public:
     NetPeerId findPeer(const NetAddress& address) const;
     float getPeerRttMs(NetPeerId peer) const;
     float getPeerPacketLoss(NetPeerId peer) const; // 0..1 over the recent send window
+    // Reliable messages queued (sent-unacked + not yet sent) on one channel of a peer. The caller's
+    // flow control: keep bulk streams under a target so they never reach maxQueuedReliablePerChannel
+    // (which disconnects the peer — a limit for peers that stop acking, not a buffer to fill).
+    uint32 getQueuedReliable(NetPeerId peer, uint8 channel) const;
 
     const NetHostStats& getStats() const { return m_stats; }
     // timeouts and sim* fields may be edited live; protocol/packet sizing/encrypt must not change after open()

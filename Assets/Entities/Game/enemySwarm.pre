@@ -21,6 +21,7 @@ Prefab gameEnemySwarm
 		ContactEvents true
 	Component Network
 	Component GameUnit
+		ShortName SWRM
 		Team 1
 		HealthMax 15
 		EnergyMax 0

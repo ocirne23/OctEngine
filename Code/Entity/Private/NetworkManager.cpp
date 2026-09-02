@@ -6,12 +6,13 @@ import Core.glm;
 import Core.Tweaks;
 import Network;
 import Physics;
+import Spatial;
 
 // Bump on ANY wire format change: the transport handshake denies mismatched protocol ids, so old
 // builds fail to connect instead of misparsing. GameNetVersion rides in Hello/Welcome purely so the
 // mismatch produces a readable log line when the protocolId was forgotten.
-constexpr uint32 GameProtocolId = 0x4F43534A; // PvP arenas: LbS carries the map pick, GMp carries a mode byte (co-op inputs / PvP arena)
-constexpr uint16 GameNetVersion = 14;
+constexpr uint32 GameProtocolId = 0x4F43534B; // batched Spawn/Despawn (u16 count + records)
+constexpr uint16 GameNetVersion = 15;
 
 // Engine-reserved event: Synced-flagged tweak values, server -> clients (full set at join +
 // re-broadcast on change). Intercepted in fireEventAttributed — never reaches scripts or the
@@ -25,8 +26,8 @@ enum class ENetMsg : uint8
     Deny,      // server -> client, ch2
     Snapshot,  // server -> client, ch0
     Event,     // both directions, ch1
-    Spawn,       // server -> client, ch2 (ordered after Welcome)
-    Despawn,     // server -> client, ch2
+    Spawn,       // server -> client, ch2 (ordered after Welcome): [u16 count] + records
+    Despawn,     // server -> client, ch2: [u16 count][varuint baseId x count]
     Claim,       // owner client -> server, ch3
     OwnerChange, // server -> client, ch2: [varuint netId][varuint ownerClientId] (per ENTITY, unlike Spawn's per-tree owner)
 };
@@ -62,6 +63,26 @@ static bool  s_quantize = true;
 static int   s_snapshotMaxBytes = int(netMaxSinglePacketMessage(NetHostConfig{}.maxPacketSize, true)) - 64;
 static int   s_maxEntitiesPerTick = 200;
 static int   s_keyframeEveryTicks = 20;  // unmoved entities refresh on this rotation (drift/late-join repair)
+// RELEVANCE: entities within this radius of any player (client primaries + the server's own) are
+// NEAR and get the full policy above. Everything else is FAR — under the sim LOD it is dormant and
+// does not move, so it only needs the slow keyframe rotation, on its own small budget: 20k parked
+// units must not eat the per-tick budget the units in front of the players need. Default matches
+// the sim LOD's outer tier radius. No players registered = everything is near (the old policy).
+// FAR entities DO move when the Game's far tick walks a wave in from the spawn ring, and the
+// client needs those positions roughly right (it applies them directly while the entity is
+// unselected — see handleSnapshot) so a unit is selected the moment it crosses a player's radius:
+// a moved far entity refreshes every "Far moved every ticks" (4 = 5 Hz at 20 Hz), within the budget.
+static float s_relevanceRadius = 100.0f;
+static int   s_farKeyframeEveryTicks = 200;
+static int   s_farMovedEveryTicks = 4;
+static int   s_farMaxPerTick = 400;
+// SPAWN STREAM flow control (server, per ready peer, per frame): records drained while the peer's
+// session channel holds fewer than "Queue target" reliable messages, at most "Records per frame".
+// The transport disconnects a peer past maxQueuedReliablePerChannel (1024) — the target keeps a
+// bulk stream far below that, and the per-frame cap bounds the receiving client's spawn work
+// (a replicated spawn is a real prefab instantiation on its main thread).
+static int   s_spawnRecordsPerFrame = 128;
+static int   s_spawnQueueTarget = 64;
 static float s_sendPosEpsilon = 0.001f;
 static float s_sendRotEpsilonDeg = 0.1f;
 static float s_maxVel = 50.0f;    // velocity quantization range (m/s); sent per message so both ends agree
@@ -199,6 +220,12 @@ void NetworkManager::initialize()
     Tweak::intVar("Network", "Snapshot max bytes", &s_snapshotMaxBytes, 128, 1400);
     Tweak::intVar("Network", "Max entities per tick", &s_maxEntitiesPerTick, 1, 4096);
     Tweak::intVar("Network", "Keyframe every ticks", &s_keyframeEveryTicks, 1, 255);
+    Tweak::floatVar("Network", "Relevance radius", &s_relevanceRadius, 0.0f, 1000.0f, 5.0f);
+    Tweak::intVar("Network", "Far keyframe every ticks", &s_farKeyframeEveryTicks, 1, 4000);
+    Tweak::intVar("Network", "Far moved every ticks", &s_farMovedEveryTicks, 1, 60);
+    Tweak::intVar("Network", "Far max per tick", &s_farMaxPerTick, 0, 4096);
+    Tweak::intVar("Network/Spawn stream", "Records per frame", &s_spawnRecordsPerFrame, 1, 4096);
+    Tweak::intVar("Network/Spawn stream", "Queue target", &s_spawnQueueTarget, 1, 512);
     Tweak::floatVar("Network", "Send pos epsilon", &s_sendPosEpsilon, 0.0f, 0.1f, 0.0005f);
     Tweak::floatVar("Network", "Send rot epsilon (deg)", &s_sendRotEpsilonDeg, 0.0f, 10.0f, 0.01f);
     Tweak::floatVar("Network", "Max vel (quantize m/s)", &s_maxVel, 1.0f, 500.0f, 1.0f);
@@ -328,6 +355,7 @@ void NetworkManager::shutdown()
     m_dynamicRootIds.clear();
     m_pendingSpawnAnnounce.clear();
     m_pendingDespawn.clear();
+    m_peerStreams.clear();
     m_peerClients.clear();
     m_claimRings.clear();
     m_remoteBuffers.clear();
@@ -381,6 +409,7 @@ void NetworkManager::receive(double deltaSec)
         case ENetEventType::Disconnected:
             // NetPeerIds recycle: drop every bit of per-peer state the moment the peer dies
             oc::erase(m_readyPeers, evt.peer);
+            m_peerStreams.erase(evt.peer);
             if (m_role == ENetRole::Client && evt.peer == m_serverPeer)
             {
                 Log::warning(oc::string("Network: disconnected from server (") + disconnectReasonName(evt.reason) + ")");
@@ -538,26 +567,17 @@ void NetworkManager::handleSessionMessage(NetPeerId peer, NetReader& reader, uin
         writer.writeVarUInt(clientId);
         assert(!writer.overflowed());
         m_host.send(peer, writer.data(), ENetDelivery::Reliable, ChannelSession);
-        // the networked world arrives HERE: every live spawn record replayed, ordered after the
-        // Welcome on the same channel (overlap with this frame's pending announces is harmless —
-        // the client spawn is idempotent)
-        for (const auto& [baseId, record] : m_dynamicSpawns)
-            if (!record.path.empty())
-                sendSpawnTo(peer, record);
-        // per-entity ownership that diverged from the spawn records (proximity transfers) rides the
-        // same ordered channel right after
+        // the networked world arrives HERE: every live spawn record is OWED to the peer, drained
+        // by send() under flow control, ordered after the Welcome on the same channel (overlap with
+        // this frame's pending announces is harmless — the client spawn is idempotent). Ownership
+        // that diverged from a record (proximity transfers) rides as OwnerChange right behind that
+        // record's batch — see drainSpawnStreams.
         {
-            const std::lock_guard<std::mutex> lock(m_entityMutex);
-            for (const auto& [netId, replicated] : m_entities)
-                if (replicated.comp->state->transferredOwnership)
-                {
-                    uint8 ownerBuffer[16];
-                    NetWriter ownerWriter(ownerBuffer);
-                    ownerWriter.write<uint8>(uint8(ENetMsg::OwnerChange));
-                    ownerWriter.writeVarUInt(netId);
-                    ownerWriter.writeVarUInt(replicated.comp->ownerClientId);
-                    m_host.send(peer, ownerWriter.data(), ENetDelivery::Reliable, ChannelSession);
-                }
+            PeerStream& stream = m_peerStreams[peer];
+            stream = {};
+            for (const auto& [baseId, record] : m_dynamicSpawns)
+                if (!record.path.empty())
+                    stream.owedSpawns.push_back(baseId);
         }
         // Synced tweak values ride the same ordered channel: the joiner starts with the server's
         // gameplay configuration instead of its own local defaults.
@@ -568,7 +588,7 @@ void NetworkManager::handleSessionMessage(NetPeerId peer, NetReader& reader, uin
                 sendEventTo(peer, TweakSyncEventName, 0, 0, chunk);
         }
         Log::info("Network: client " + oc::to_string(clientId) + " ready (" + oc::to_string(m_readyPeers.size())
-            + " total, " + oc::to_string(m_dynamicSpawns.size()) + " spawns replayed)");
+            + " total, " + oc::to_string(m_dynamicSpawns.size()) + " spawns queued for replay)");
         if (m_onClientJoined)
             m_onClientJoined(clientId); // after the replay: per-player spawns arrive via this frame's announce
         break;
@@ -629,6 +649,18 @@ void NetworkManager::handleSessionMessage(NetPeerId peer, NetReader& reader, uin
 
 void NetworkManager::handleSpawnMessage(NetReader& reader)
 {
+    const uint16 count = reader.read<uint16>();
+    if (reader.overflowed())
+        return;
+    // a bad record is skipped, not the batch: every field is read before any validation, so the
+    // reader stays aligned on the next record — only exhausting the message ends the loop
+    for (uint16 i = 0; i < count; ++i)
+        if (!spawnReplicatedRecord(reader))
+            break;
+}
+
+bool NetworkManager::spawnReplicatedRecord(NetReader& reader)
+{
     const uint32 baseId = uint32(reader.readVarUInt());
     const uint32 count = uint32(reader.readVarUInt());
     const uint32 ownerClientId = uint32(reader.readVarUInt());
@@ -638,12 +670,14 @@ void NetworkManager::handleSpawnMessage(NetReader& reader)
     const float scale = reader.read<float>();
     glm::vec3 linVel = reader.read<glm::vec3>();
     glm::vec3 angVel = reader.read<glm::vec3>();
-    if (reader.overflowed() || baseId == 0 || count == 0 || path.empty())
-        return;
+    if (reader.overflowed())
+        return false;
+    if (baseId == 0 || count == 0 || path.empty())
+        return true;
     if (!isFinite(pos) || !isFinite(rot) || !isFinite(scale) || scale <= 0.0f)
-        return;
+        return true;
     if (!isFinite(linVel) || !isFinite(angVel))
-        return;
+        return true;
     // wire values, so cap them: a hostile server must not launch bodies at absurd speeds
     const float linSpeed = glm::length(linVel), angSpeed = glm::length(angVel);
     if (linSpeed > 200.0f)
@@ -656,12 +690,12 @@ void NetworkManager::handleSpawnMessage(NetReader& reader)
         || path.front() == '/' || path.front() == '\\')
     {
         Log::warning("Network: rejecting replicated spawn with suspicious path '" + path + "'");
-        return;
+        return true;
     }
     {
         const std::lock_guard<std::mutex> lock(m_entityMutex);
         if (oc::contains(m_entities, baseId))
-            return; // duplicate (late-joiner replay overlapping the frame's announce) — idempotent by design
+            return true; // duplicate (late-joiner replay overlapping the frame's announce) — idempotent by design
     }
     // spawn the same prefab locally with the server's ids forced onto its NetworkComponents in tree
     // order; main thread, before the entity pass, same context handleEntityChange spawns from
@@ -679,7 +713,7 @@ void NetworkManager::handleSpawnMessage(NetReader& reader)
     if (!spawned)
     {
         Log::warning("Network: failed to spawn replicated '" + path + "' (missing asset?)");
-        return;
+        return true;
     }
     if (registered != count)
         Log::warning("Network: replicated '" + path + "' registered " + oc::to_string(registered)
@@ -693,21 +727,30 @@ void NetworkManager::handleSpawnMessage(NetReader& reader)
         pc->body.setAngularVelocity(angVel);
     }
     Globals::world.addRootEntity(oc::move(spawned));
+    return true;
 }
 
 void NetworkManager::handleDespawnMessage(NetReader& reader)
 {
-    const uint32 baseId = uint32(reader.readVarUInt());
-    if (reader.overflowed() || baseId == 0)
+    const uint16 count = reader.read<uint16>();
+    if (reader.overflowed())
         return;
-    Entity* entity = nullptr;
+    for (uint16 i = 0; i < count; ++i)
     {
-        const std::lock_guard<std::mutex> lock(m_entityMutex);
-        if (const auto it = m_entities.find(baseId); it != m_entities.end())
-            entity = it->second.entity;
+        const uint32 baseId = uint32(reader.readVarUInt());
+        if (reader.overflowed())
+            return;
+        if (baseId == 0)
+            continue;
+        Entity* entity = nullptr;
+        {
+            const std::lock_guard<std::mutex> lock(m_entityMutex);
+            if (const auto it = m_entities.find(baseId); it != m_entities.end())
+                entity = it->second.entity;
+        }
+        if (entity)
+            Globals::world.removeRootEntity(entity); // drops the world's ref; the destroy cascade unregisters the ids
     }
-    if (entity)
-        Globals::world.removeRootEntity(entity); // drops the world's ref; the destroy cascade unregisters the ids
 }
 
 void NetworkManager::setOwner(Entity& root, uint32 clientId)
@@ -1326,7 +1369,8 @@ void NetworkManager::handleOwnerChangeMessage(NetReader& reader)
     }
 }
 
-void NetworkManager::sendSpawnTo(NetPeerId peer, const DynamicSpawn& record)
+size_t NetworkManager::encodeSpawnRecord(const DynamicSpawn& record, oc::span<uint8> out,
+    oc::vector<oc::pair<uint32, uint32>>& transferred)
 {
     // transform refreshed from the live ROOT when the base id is still registered, so a late joiner
     // spawns the entity where it IS, not where it was born. The base id's entity is the FIRST
@@ -1356,10 +1400,13 @@ void NetworkManager::sendSpawnTo(NetPeerId peer, const DynamicSpawn& record)
                 angVel = pc->body.getAngularVelocity();
             }
         }
+        // the tree's ids are contiguous from the base: any of them whose ownership diverged from
+        // the record (proximity transfer) needs an OwnerChange right behind the spawn
+        for (uint32 netId = record.baseId; netId < record.baseId + record.componentCount; ++netId)
+            if (const auto it = m_entities.find(netId); it != m_entities.end() && it->second.comp->state->transferredOwnership)
+                transferred.emplace_back(netId, it->second.comp->ownerClientId);
     }
-    uint8 buffer[512];
-    NetWriter writer(buffer);
-    writer.write<uint8>(uint8(ENetMsg::Spawn));
+    NetWriter writer(out);
     writer.writeVarUInt(record.baseId);
     writer.writeVarUInt(record.componentCount);
     writer.writeVarUInt(record.ownerClientId);
@@ -1372,9 +1419,102 @@ void NetworkManager::sendSpawnTo(NetPeerId peer, const DynamicSpawn& record)
     if (writer.overflowed())
     {
         Log::warning("Network: spawn path too long, not replicated: " + record.path);
-        return;
+        return 0;
     }
-    m_host.send(peer, writer.data(), ENetDelivery::Reliable, ChannelSession);
+    return writer.size();
+}
+
+void NetworkManager::drainSpawnStreams()
+{
+    // one message = one reliable window slot, so each is packed to the single-packet size: the
+    // queue target then bounds bytes in flight as well as slots
+    const NetHostConfig& config = m_host.config();
+    const size_t messageCap = size_t(netMaxSinglePacketMessage(config.maxPacketSize, config.encrypt));
+    const uint32 queueTarget = uint32(glm::max(s_spawnQueueTarget, 1));
+    uint8 buffer[1400];
+    uint8 recordBuffer[512];
+    for (const NetPeerId peer : m_readyPeers)
+    {
+        const auto streamIt = m_peerStreams.find(peer);
+        if (streamIt == m_peerStreams.end())
+            continue;
+        PeerStream& stream = streamIt->second;
+        int budget = glm::max(s_spawnRecordsPerFrame, 1);
+        const auto queueOpen = [&] { return m_host.getQueuedReliable(peer, ChannelSession) < queueTarget; };
+
+        // despawns first: one for a spawn still owed is ignored client-side (unknown id), and the
+        // owed spawn then finds its record gone and is skipped — never a spawn AFTER its despawn
+        while (!stream.owedDespawns.empty() && budget > 0 && queueOpen())
+        {
+            NetWriter writer(oc::span<uint8>(buffer, messageCap));
+            writer.write<uint8>(uint8(ENetMsg::Despawn));
+            const size_t countOffset = writer.size();
+            writer.write<uint16>(0);
+            uint16 count = 0;
+            while (!stream.owedDespawns.empty() && budget > 0 && count < 0xffff && writer.size() + 5 <= writer.capacity())
+            {
+                writer.writeVarUInt(stream.owedDespawns.front());
+                stream.owedDespawns.pop_front();
+                ++count;
+                --budget;
+            }
+            writer.writeAt(countOffset, count);
+            assert(!writer.overflowed());
+            m_host.send(peer, writer.data(), ENetDelivery::Reliable, ChannelSession);
+        }
+
+        while (!stream.owedSpawns.empty() && budget > 0 && queueOpen())
+        {
+            NetWriter writer(oc::span<uint8>(buffer, messageCap));
+            writer.write<uint8>(uint8(ENetMsg::Spawn));
+            const size_t countOffset = writer.size();
+            writer.write<uint16>(0);
+            uint16 count = 0;
+            oc::vector<oc::pair<uint32, uint32>>& transferred = m_spawnTransferScratch;
+            transferred.clear();
+            while (!stream.owedSpawns.empty() && budget > 0 && count < 0xffff)
+            {
+                const uint32 baseId = stream.owedSpawns.front();
+                const auto recordIt = m_dynamicSpawns.find(baseId);
+                if (recordIt == m_dynamicSpawns.end())
+                {
+                    stream.owedSpawns.pop_front(); // despawned before it was ever sent
+                    continue;
+                }
+                const size_t transferredBefore = transferred.size();
+                const size_t size = encodeSpawnRecord(recordIt->second, recordBuffer, transferred);
+                if (size == 0)
+                {
+                    transferred.resize(transferredBefore);
+                    stream.owedSpawns.pop_front(); // unsendable (warned): drop, never wedge the stream
+                    continue;
+                }
+                if (writer.size() + size > writer.capacity())
+                {
+                    transferred.resize(transferredBefore);
+                    break; // next message (a lone record always fits: 512 < the single-packet cap)
+                }
+                writer.writeBytes(oc::span<const uint8>(recordBuffer, size));
+                stream.owedSpawns.pop_front();
+                ++count;
+                --budget;
+            }
+            if (count == 0)
+                break;
+            writer.writeAt(countOffset, count);
+            assert(!writer.overflowed());
+            m_host.send(peer, writer.data(), ENetDelivery::Reliable, ChannelSession);
+            for (const auto& [netId, ownerClientId] : transferred)
+            {
+                uint8 ownerBuffer[16];
+                NetWriter ownerWriter(ownerBuffer);
+                ownerWriter.write<uint8>(uint8(ENetMsg::OwnerChange));
+                ownerWriter.writeVarUInt(netId);
+                ownerWriter.writeVarUInt(ownerClientId);
+                m_host.send(peer, ownerWriter.data(), ENetDelivery::Reliable, ChannelSession);
+            }
+        }
+    }
 }
 
 void NetworkManager::handleEventMessage(NetPeerId peer, oc::span<const uint8> bytes)
@@ -1582,6 +1722,38 @@ void NetworkManager::handleSnapshot(NetReader& reader)
             applyGameStateBlob(it->second.entity, gameBlob,
                 /*applyShield*/ comp->ownerClientId != m_localClientId || comp->ownerClientId == 0,
                 /*applyMaterials*/ true, /*applyTeam*/ true);
+
+        // UNSELECTED by the sim LOD (beyond every player's outer radius): the entity pass never
+        // visits it, so NetworkComponent::update never applies this target — and the LOD selects
+        // by the entity's LOCAL position, which would sit at the spawn point forever while the
+        // server's unit walks into range (the client saw a wave only as the few units spawned
+        // near a player). Apply the pose HERE (main thread, pre-pass) under the Game far tick's
+        // teleport contract, so the spatial entry follows and the entity is selected the moment
+        // the server's position crosses a player's radius; the normal correction resumes then.
+        // Roots only (a unit is a root: local == world); never our own claim-driven entities.
+        Entity* entity = it->second.entity;
+        if (comp->ownerClientId != m_localClientId && !entity->parent && !Globals::world.simLodSelected(*entity))
+        {
+            if (PhysicsComponent* pc = getComponent<PhysicsComponent>(entity);
+                pc && pc->bodyType == EPhysicsBodyType::Dynamic && pc->body.isValid())
+            {
+                Globals::physics.teleportBody(pc->body, pos, sanitizedRot);
+                Globals::physics.queueBodyCommand(pc->body, PhysicsWorld::EBodyCommand::SetLinearVelocity, glm::vec3(0.0f));
+                Globals::physics.queueBodyCommand(pc->body, PhysicsWorld::EBodyCommand::SetAngularVelocity, glm::vec3(0.0f));
+                pc->prevPos = pc->currPos = pos;
+                pc->prevRot = pc->currRot = sanitizedRot;
+                pc->lastStep = Globals::physics.getStepCount();
+            }
+            entity->pos = pos;
+            entity->rot = sanitizedRot;
+            if (entity->spatialEntry.isValid())
+            {
+                const RenderComponent* render = getComponent<RenderComponent>(entity);
+                const float radius = render && render->node.isValid() ? render->node.getWorldBounds().radius : 0.0f;
+                Globals::spatialIndex.updateEntry(entity->spatialEntry.handle(), glm::dvec3(pos), radius);
+            }
+            comp->state->client.lastAppliedTick = tick; // applied: the asleep path must not re-teleport on selection
+        }
     }
 }
 
@@ -1624,22 +1796,23 @@ void NetworkManager::send(double deltaSec)
     {
         updateOwnershipTransfers(deltaSec); // proximity handover of touched objects
 
-        // announce this frame's runtime spawns/despawns to every ready client (reliable, session channel)
-        for (const uint32 baseId : m_pendingSpawnAnnounce)
-            if (const auto it = m_dynamicSpawns.find(baseId); it != m_dynamicSpawns.end())
-                for (const NetPeerId peer : m_readyPeers)
-                    sendSpawnTo(peer, it->second);
-        m_pendingSpawnAnnounce.clear();
-        for (const uint32 baseId : m_pendingDespawn)
+        // this frame's runtime spawns/despawns become OWED to every ready client, delivered by the
+        // flow-controlled drain below (reliable, session channel) — never sent directly: a
+        // 100-per-frame wave trickle or a mass death would overflow the transport's reliable queue
+        for (const NetPeerId peer : m_readyPeers)
         {
-            uint8 buffer[16];
-            NetWriter writer(buffer);
-            writer.write<uint8>(uint8(ENetMsg::Despawn));
-            writer.writeVarUInt(baseId);
-            for (const NetPeerId peer : m_readyPeers)
-                m_host.send(peer, writer.data(), ENetDelivery::Reliable, ChannelSession);
+            const auto streamIt = m_peerStreams.find(peer);
+            if (streamIt == m_peerStreams.end())
+                continue;
+            PeerStream& stream = streamIt->second;
+            for (const uint32 baseId : m_pendingSpawnAnnounce)
+                stream.owedSpawns.push_back(baseId);
+            for (const uint32 baseId : m_pendingDespawn)
+                stream.owedDespawns.push_back(baseId);
         }
+        m_pendingSpawnAnnounce.clear();
         m_pendingDespawn.clear();
+        drainSpawnStreams();
         // spawn-call grouping keys are raw entity pointers, only meaningful within this frame's
         // synchronous spawns — purge before the allocator can recycle an address into a false match
         m_dynamicRootIds.clear();
@@ -1717,23 +1890,46 @@ void NetworkManager::sendSnapshotTick()
         return;
     beginMessage();
 
-    const uint32 keyframeTicks = uint32(glm::max(1, s_keyframeEveryTicks));
-    const float posEpsilonSq = s_sendPosEpsilon * s_sendPosEpsilon;
-    auto it = m_entities.lower_bound(m_roundRobinCursor);
-    if (it == m_entities.end())
-        it = m_entities.begin();
-    const size_t total = m_entities.size();
-    int sent = 0;
-    for (size_t visited = 0; visited < total && sent < s_maxEntitiesPerTick; ++visited)
+    // RELEVANCE focus: the players (client primaries + the server's own). Entities within
+    // "Relevance radius" of any of them are NEAR; the rest FAR — see the tweak comment.
+    m_snapshotFocus.clear();
+    for (const auto& [netId, replicated] : m_entities)
     {
-        const uint32 netId = it->first;
-        Entity* entity = it->second.entity;
-        NetworkComponent* comp = it->second.comp;
-        ++it;
-        if (it == m_entities.end())
-            it = m_entities.begin();
+        const NetworkComponent* comp = replicated.comp;
+        const bool primary = comp->state->server.serverPrimary
+            || (comp->ownerClientId != 0 && !comp->state->transferredOwnership);
+        if (!primary)
+            continue;
+        const PhysicsComponent* physics = getComponent<PhysicsComponent>(replicated.entity);
+        if (physics && physics->bodyType == EPhysicsBodyType::Dynamic && physics->body.isValid())
+            m_snapshotFocus.push_back(physics->body.getPosition());
+    }
+    const float relevanceSq = s_relevanceRadius * s_relevanceRadius;
+    const auto isNear = [&](const Entity* entity)
+    {
+        if (m_snapshotFocus.empty())
+            return true;
+        while (entity->parent) // the ROOT's local pos is its world pos (units are roots; children are near with their root)
+            entity = entity->parent;
+        const glm::vec3 pos = entity->pos;
+        for (const glm::vec3& focus : m_snapshotFocus)
+        {
+            const glm::vec3 d = pos - focus;
+            if (glm::dot(d, d) < relevanceSq)
+                return true;
+        }
+        return false;
+    };
 
+    const float posEpsilonSq = s_sendPosEpsilon * s_sendPosEpsilon;
+    // one entity's record, or nothing (unchanged / asleep / off-rotation). Change-detection state is
+    // per entity and shared by every peer (one stream, sendToAll) — that is why relevance is
+    // "near ANY player" rather than per peer.
+    const auto emit = [&](uint32 netId, Entity* entity, NetworkComponent* comp, uint32 keyframeTicks, uint32 movedEvery) -> bool
+    {
         const bool keyframe = (m_serverTick % keyframeTicks) == (netId % keyframeTicks);
+        // movement cadence (1 = every tick): FAR entities refresh their motion at a reduced rate
+        const bool onMoveCadence = movedEvery <= 1 || (m_serverTick % movedEvery) == (netId % movedEvery);
         const PhysicsComponent* physics = getComponent<PhysicsComponent>(entity);
         const bool physicsBody = physics && physics->bodyType == EPhysicsBodyType::Dynamic
             && physics->body.isValid() && !physics->suspended && physics->enabled;
@@ -1767,7 +1963,9 @@ void NetworkManager::sendSnapshotTick()
             else if (comp->state->sleepDirty)
                 comp->state->sleepDirty = false;
             else if (!keyframe && !gameChanged)
-                continue;
+                return false;
+            if (!asleep && !onMoveCadence && !keyframe && !gameChanged)
+                return false;
             recFlags |= NetRecFlag_Physics | (asleep ? NetRecFlag_Asleep : 0)
                 | (comp->state->server.serverPrimary ? NetRecFlag_ServerPlayer : uint8(0));
             pos = physics->body.getPosition();
@@ -1824,8 +2022,8 @@ void NetworkManager::sendSnapshotTick()
             const glm::vec3 posDelta = entity->pos - comp->state->server.lastSentPos;
             const bool moved = glm::dot(posDelta, posDelta) > posEpsilonSq
                 || quatAngleDeg(entity->rot, comp->state->server.lastSentRot) > s_sendRotEpsilonDeg;
-            if (!keyframe && !moved && !gameChanged)
-                continue;
+            if (!keyframe && !gameChanged && (!moved || !onMoveCadence))
+                return false;
             pos = entity->pos;
             rot = entity->rot;
             comp->state->server.lastSentPos = pos;
@@ -1865,9 +2063,38 @@ void NetworkManager::sendSnapshotTick()
             std::memcpy(comp->state->server.lastSentGameBlob, gameBlob, GameBlobBytes);
         }
         ++count;
-        ++sent;
-    }
-    m_roundRobinCursor = it != m_entities.end() ? it->first : 0;
+        return true;
+    };
+
+    // Two round-robin walks with their own cursors and budgets: NEAR entities first (the ones the
+    // players see), then FAR ones on the slow rotation. Skipping a non-matching class costs one
+    // distance test, so both walks may visit every entity; the cursors keep each class fair.
+    const auto walk = [&](uint32& cursor, bool wantNear, int budget, uint32 keyframeTicks, uint32 movedEvery)
+    {
+        if (budget <= 0)
+            return;
+        auto it = m_entities.lower_bound(cursor);
+        if (it == m_entities.end())
+            it = m_entities.begin();
+        const size_t total = m_entities.size();
+        int sent = 0;
+        for (size_t visited = 0; visited < total && sent < budget; ++visited)
+        {
+            const uint32 netId = it->first;
+            Entity* entity = it->second.entity;
+            NetworkComponent* comp = it->second.comp;
+            ++it;
+            if (it == m_entities.end())
+                it = m_entities.begin();
+            if (isNear(entity) != wantNear)
+                continue;
+            if (emit(netId, entity, comp, keyframeTicks, movedEvery))
+                ++sent;
+        }
+        cursor = it != m_entities.end() ? it->first : 0;
+    };
+    walk(m_roundRobinCursor, true, s_maxEntitiesPerTick, uint32(glm::max(1, s_keyframeEveryTicks)), 1);
+    walk(m_farCursor, false, s_farMaxPerTick, uint32(glm::max(1, s_farKeyframeEveryTicks)), uint32(glm::max(1, s_farMovedEveryTicks)));
     flushMessage();
 }
 
@@ -2015,11 +2242,17 @@ oc::string NetworkManager::getStatusText() const
     const NetHostStats& stats = m_host.getStats();
     const auto kbs = [](uint32 bytesPerSec) { return oc::to_string((bytesPerSec * 10) / 1024 / 10) + "." + oc::to_string((bytesPerSec * 10 / 1024) % 10); };
     if (m_role == ENetRole::Server)
+    {
+        size_t owed = 0; // largest spawn backlog over the peers: nonzero for a while after a join or a big wave
+        for (const auto& [peer, stream] : m_peerStreams)
+            owed = glm::max(owed, stream.owedSpawns.size() + stream.owedDespawns.size());
         return "SERVER " + oc::to_string(m_host.getConnectedCount()) + " peers | out " + kbs(stats.bytesSentPerSec)
             + " KB/s in " + kbs(stats.bytesReceivedPerSec) + " KB/s"
+            + (owed != 0 ? " | spawn backlog " + oc::to_string(owed) : "")
             // sustained nonzero = someone is flooding us (or the limits are set too tight for the
             // configured rates) — worth seeing without opening a panel
             + (stats.packetsDroppedPerSec != 0 ? " | DROPPED " + oc::to_string(stats.packetsDroppedPerSec) + "/s" : "");
+    }
     if (m_serverPeer == InvalidNetPeerId || !m_host.isConnected(m_serverPeer))
         return "CLIENT connecting...";
     return "CLIENT rtt " + oc::to_string(int(m_host.getPeerRttMs(m_serverPeer))) + " ms loss "

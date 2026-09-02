@@ -24,6 +24,7 @@ Prefab gameEnemyBrute
 		Centered true
 	Component Network
 	Component GameUnit
+		ShortName BRUT
 		HealthMax 180
 		EnergyMax 80
 		ShieldOutput 1.04

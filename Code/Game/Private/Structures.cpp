@@ -116,7 +116,7 @@ void StructureSystem::registerTweaks()
     Tweak::floatVar("Game/Structures", "Waypoint radius", &m_waypointRadius, 0.5f, 15.0f, 0.25f);
     Tweak::floatVar("Game/Economy", "Mineral base capacity", &m_mineralBaseCapacity, 10.0f, 5000.0f, 5.0f);
     Tweak::floatVar("Game/Economy", "Mineral silo capacity", &m_mineralSiloCapacity, 10.0f, 5000.0f, 5.0f);
-    Tweak::floatVar("Game/Economy", "Barracks mineral capacity", &m_barracksMineralCapacity, 1.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Barracks energy capacity", &m_barracksEnergyCapacity, 1.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Wall cost (per segment)", &m_costs[14], 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Economy", "Turret cost", &m_costs[15], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Bastion energy/s", &m_bastionEnergyPerSec, 0.1f, 30.0f, 0.1f);
@@ -164,10 +164,10 @@ void StructureSystem::registerTweaks()
     GameStructureParams& sp = GameStructureComponent::params;
     Tweak::intVar("Game/Friendlies", "Barracks unit limit", &sp.barracksUnitLimit, 0, 16, 1);
     Tweak::floatVar("Game/Friendlies", "Barracks spawn interval", &sp.barracksSpawnInterval, 1.0f, 60.0f, 0.5f);
-    Tweak::floatVar("Game/Friendlies", "Grunt spawn materials", &m_spawnMaterials[0], 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Friendlies", "Brute spawn materials", &m_spawnMaterials[1], 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Friendlies", "Runner spawn materials", &m_spawnMaterials[2], 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Friendlies", "Spitter spawn materials", &m_spawnMaterials[3], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Friendlies", "Grunt spawn energy", &m_spawnEnergy[0], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Friendlies", "Brute spawn energy", &m_spawnEnergy[1], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Friendlies", "Runner spawn energy", &m_spawnEnergy[2], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Friendlies", "Spitter spawn energy", &m_spawnEnergy[3], 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Friendlies", "Turret range", &sp.turretRange, 4.0f, 60.0f, 0.5f);
     Tweak::floatVar("Game/Friendlies", "Turret fire interval", &sp.turretFireInterval, 0.1f, 10.0f, 0.05f);
     Tweak::floatVar("Game/Friendlies", "Turret shot energy", &sp.turretShotEnergy, 0.0f, 20.0f, 0.1f);
@@ -215,7 +215,7 @@ void StructureSystem::stampTuning(const Ref& s)
     if (isBarracksType(s.type))
     {
         c.machineKind = GameStructureComponent::EMachineKind::Barracks;
-        c.barracks.spawnCost = m_spawnMaterials[
+        c.barracks.spawnCost = m_spawnEnergy[
             s.type == EStructureType::BarracksBrute ? 1
             : s.type == EStructureType::BarracksRunner ? 2
             : s.type == EStructureType::BarracksSpitter ? 3 : 0];
@@ -1571,6 +1571,15 @@ void StructureSystem::mirrorStructureState(uint32 id, float healthFrac, float ch
     if (hasShieldEmitter(ref.type)) // union: emitter variant (Base included)
         s.emitter.outputFracTarget = outputFrac; // tickMirror eases the live field toward this
     s.powered = powered;
+}
+
+void StructureSystem::mirrorCableProgress(uint32 id, float healthFrac)
+{
+    const int index = structureIndexById(id);
+    if (index < 0 || !m_frame[index].state->blueprint)
+        return; // a finished segment's health is authoritative from the built flip (GPl)
+    GameStructureComponent& s = *m_frame[index].state;
+    s.health = glm::clamp(healthFrac * s.healthMax, 1.0f, s.healthMax);
 }
 
 void StructureSystem::mirrorRoute(uint32 id, oc::span<const glm::vec3> points)

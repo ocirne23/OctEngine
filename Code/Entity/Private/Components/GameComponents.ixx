@@ -148,6 +148,7 @@ export struct GameUnitComponent
     {
         uint32 team = 1;
         bool puppet = false; // see the `puppet` field
+        oc::string shortName; // the 3-5 char HUD tag over the unit ("GRNT", "PLR"); empty = "UNIT"
         float healthMax = 60.0f;
         float energyMax = 40.0f;      // shield battery (no regen)
         float shieldOutput = 0.8f;    // bubble output while the battery lives (collapse -> sentinel)
@@ -243,8 +244,13 @@ export struct GameUnitComponent
     void damage(float amount);
     float takePendingDamage(); // main thread: drain the puppet inbox (atomic exchange)
     bool alive() const { return health > 0.0f; }
+    // The HUD tag authored as `ShortName` in the .pre — INTERNED (Profiler::internName), so the
+    // pointer is permanent and the component owns no string. Replicated units carry it too: the
+    // prefab spawns identically on every instance.
+    const char* getShortName() const { return m_shortName; }
 
 private:
+    const char* m_shortName = "UNIT";
     float m_retargetTimer = 0.0f;
     float m_fireTimer = 0.0f;
     uint32 m_rng = 0;           // tiny per-unit LCG — worker-safe, seeded from the entity address
@@ -361,7 +367,7 @@ export struct GameStructureComponent
         float spawnTimer;   // counts down; Constructor boost accelerates it
         float boost;        // extra spawn speed from idle Constructors (rebuilt every tick)
         int aliveUnits;     // ++ here at each spawn decision, -- by the game per death event
-        float spawnCost;    // minerals per unit, stamped per BARRACKS TYPE by the game each tick
+        float spawnCost;    // energy per unit, stamped per BARRACKS TYPE by the game each tick
     };
     struct TurretData
     {
@@ -369,7 +375,7 @@ export struct GameStructureComponent
     };
     // The union's ACTIVE variant, stamped by the game from the structure's type (None for plain
     // buildings). update() runs the matching machine logic: a BARRACKS counts its spawn clock
-    // down, pays minerals from its own store and QUEUES a spawn request; a TURRET picks the
+    // down, pays energy from its own store and QUEUES a spawn request; a TURRET picks the
     // nearest enemy unit via its own spatial query, pays energy and QUEUES a shot — spawning is
     // main-thread only, so the game drains both queues.
     enum class EMachineKind : uint8 { None, Barracks, Turret };

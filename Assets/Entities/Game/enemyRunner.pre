@@ -24,6 +24,7 @@ Prefab gameEnemyRunner
 		Centered true
 	Component Network
 	Component GameUnit
+		ShortName RUN
 		HealthMax 30
 		EnergyMax 16
 		ShieldOutput 0.56

@@ -76,6 +76,8 @@ void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
         entity.setProfiled(); // units with shields carry a per-entity profile scope
     }
     puppet = info.puppet;
+    if (!info.shortName.empty())
+        m_shortName = Globals::profiler.internName(info.shortName);
     team = info.team;
     health = healthMax = info.healthMax;
     shieldOutput = info.shieldOutput;
@@ -978,9 +980,9 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
         BarracksData& b = barracks;
         // idle Constructors in range accelerate the spawn clock (boost 1 = double speed)
         b.spawnTimer = glm::max(0.0f, b.spawnTimer - deltaSec * (1.0f + b.boost));
-        if (b.spawnTimer <= 0.0f && b.aliveUnits < params.barracksUnitLimit && store[2] >= b.spawnCost)
+        if (b.spawnTimer <= 0.0f && b.aliveUnits < params.barracksUnitLimit && store[0] >= b.spawnCost)
         {
-            store[2] -= b.spawnCost; // conveyor-fed minerals pay the unit (refunded on spawn fail)
+            store[0] -= b.spawnCost; // cable-fed energy pays the unit (refunded on spawn fail)
             ++b.aliveUnits;          // the unit's death event decrements it again
             b.spawnTimer = params.barracksSpawnInterval;
             const std::lock_guard<std::mutex> lock(g_structureEventMutex);
@@ -1204,6 +1206,7 @@ void writeGameUnitSpawnInfo(const GameUnitComponent::SpawnInfo& info, AssetNode&
     const GameUnitComponent::SpawnInfo d;
     if (info.team != d.team)                 out.set("Team", oc::to_string(info.team));
     if (info.puppet != d.puppet)             out.set("Puppet", info.puppet);
+    if (!info.shortName.empty())             out.set("ShortName", info.shortName);
     if (info.healthMax != d.healthMax)       out.set("HealthMax", info.healthMax);
     if (info.energyMax != d.energyMax)       out.set("EnergyMax", info.energyMax);
     if (info.shieldOutput != d.shieldOutput) out.set("ShieldOutput", info.shieldOutput);

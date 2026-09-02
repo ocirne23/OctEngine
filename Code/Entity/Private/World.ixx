@@ -88,6 +88,11 @@ public:
     // Whether the last pass selected by spatial query (else everything was visited). The Game's
     // far tick for unselected units keys on it.
     bool simLodActive() const { return m_simLodActive; }
+    // Update SELECTION (see update()): whether a child a visited parent emitted is part of this
+    // frame's pass — its spatial mask carries a tier or Main stamp (a never-stamped fresh entry
+    // counts as stamped). Everything when the LOD is inactive. Public for the NetworkManager: an
+    // unselected client entity gets its snapshot applied directly (the pass never visits it).
+    bool simLodSelected(const Entity& entity) const;
 
     // Headless server mode: set BEFORE any spawn. Templates then carry only Scene/Physics/Script/
     // Network components — everything renderer-touching (Render/Animator/Light/Particle/Force) and
@@ -287,10 +292,6 @@ private:
     SimLodTiers simLodTiers(const Entity& entity) const;
     void simLodTransition(Entity& entity, uint8 tier);
     float simLodCadence(Entity& entity, uint8 tier);
-    // Update SELECTION (see update()): whether a child a visited parent emitted is part of this
-    // frame's pass — its spatial mask carries a tier or Main stamp (a never-stamped fresh entry
-    // counts as stamped). Everything when the LOD is inactive.
-    bool simLodSelected(const Entity& entity) const;
     void selectUpdateRoot(Entity* hit); // walks a query hit up to its root, stamping the ancestors
 
     uint64 m_updateFrame = 0; // salts the per-entity random re-measure below

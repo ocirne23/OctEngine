@@ -378,6 +378,7 @@ private:
     bool m_isServer = false; // co-op roles, latched in spawnWorld
     bool m_isClient = false;
     float m_statTimer = 0.0f; // server: GSt cadence
+    int m_cableSyncCursor = 0; // server: GCb rotation start when more blueprint segments exist than fit one event
     oc::unordered_map<uint32, EntityPtr> m_clientPlayers;    // server: clientId -> their capsule
                                                               // (the ONLY per-client store — carried
                                                               // materials live on the twin's puppet
