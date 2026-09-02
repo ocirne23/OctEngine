@@ -7,7 +7,7 @@ Prefab gameEnemyGrunt
 		ObjectContainer baseshapes
 		Node Cube
 		Type StaticMesh
-		Color 1 0.25 0.2
+		Color 1 0.4 0.15
 		Scale 0.5 0.8 0.5
 	Component Physics
 		Body Dynamic

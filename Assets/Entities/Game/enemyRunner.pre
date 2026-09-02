@@ -6,7 +6,7 @@ Prefab gameEnemyRunner
 		ObjectContainer baseshapes
 		Node Cube
 		Type StaticMesh
-		Color 1 0.4 0.7
+		Color 1 0.25 0.5
 		Scale 0.35 0.5 0.35
 	Component Physics
 		Body Dynamic

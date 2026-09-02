@@ -8,7 +8,7 @@ Prefab gameEnemySwarm
 		ObjectContainer baseshapes
 		Node Cube
 		Type StaticMesh
-		Color 0.75 0.15 0.1
+		Color 1 0.12 0.08
 		Scale 0.35 0.5 0.35
 	Component Physics
 		Body Dynamic

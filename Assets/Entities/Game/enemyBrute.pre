@@ -6,7 +6,7 @@ Prefab gameEnemyBrute
 		ObjectContainer baseshapes
 		Node Cube
 		Type StaticMesh
-		Color 0.7 0.1 0.1
+		Color 0.45 0.02 0.12
 		Scale 0.8 1.1 0.8
 	Component Physics
 		Body Dynamic

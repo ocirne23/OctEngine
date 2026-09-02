@@ -309,18 +309,19 @@ private:
     // A move destination inside a rock is unreachable (the A* and every unit plan to it fail):
     // clamp it to the nearest open cell center. Identity when the map is absent or the cell open.
     glm::vec3 clampToOpenGround(const glm::vec3& pos) const;
-    glm::vec3 ambientPointNear(const glm::vec3& center, float radius) const; // camp body spot on open ground
+    glm::vec3 ambientPointNear(const glm::vec3& center, float radius) const; // ambient body spot on open ground
     void drawCoopBarrier(); // pulsing energy lines strung between the barrier posts
-    // The ambient scatter spawns in CAMPS: the trickle fills the current camp (one archetype, a
-    // disc around a reachable anchor) before rolling the next — loose blobs, not a lattice.
-    struct AmbientCamp
+    // The AMBIENT scatter spawns in small groups: the trickle fills the current group (one
+    // archetype, a disc around a reachable anchor) before rolling the next — loose blobs, not a
+    // lattice.
+    struct AmbientSpawn
     {
         glm::vec3 center{ 0.0f };
         float radius = 6.0f;
-        int remaining = 0;  // bodies still to place in this camp (0 = roll a new one)
+        int remaining = 0;  // bodies still to place in this group (0 = roll a new one)
         int archetype = 0;  // index into c_waveArchetypes
     };
-    AmbientCamp m_ambientCamp;
+    AmbientSpawn m_ambientSpawn;
     CoopMap m_coopMap;
     EntityPtr m_terrainRoot; // rocks + barrier segments live under it; removed on regeneration
     oc::vector<glm::vec4> m_terrainRects; // merged blocked runs (minX, minZ, maxX, maxZ)

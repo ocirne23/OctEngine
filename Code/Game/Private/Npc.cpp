@@ -246,7 +246,7 @@ void NpcSystem::spawnLooseUnits(oc::span<const LooseSpawn> spawns)
             fc->emitter.setTeam(s.team); // prefabs author team 1 — units carry their spawner's team
         if (s.hasOrder)
             unit->orderMove(s.orderDest);
-        // PARKED AT SPAWN while the SIM LOD selects: loose units (waves, camps) spawn far from
+        // PARKED AT SPAWN while the SIM LOD selects: loose units (waves, ambient) spawn far from
         // every player, in blobs that overlap — a live body there took box3d's push-out and, never
         // steered (unselected) and frictionless, coasted away. Disabled from the first step, the
         // far tick walks them by teleport and the World's wake edge enables them (velocities

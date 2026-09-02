@@ -687,17 +687,17 @@ void GameMatch::tickCoopSpawns()
     while (budget > 0 && m_ambientPendingBudget > 0.0f)
     {
         --budget;
-        // AMBIENT units come in CAMPS: a cluster anchored on a random REACHABLE open cell of the
-        // generated map (uniform by area, outside the safe ring, reachable from the Base by the
-        // flood fill's guarantee), its bodies scattered in a disc around the anchor and slid off
-        // any rock edge — a loose blob per camp instead of one body per cell, which lined up on
-        // the 10 m lattice. The Nav team fields never pull them (they cover the whole map, which
-        // marched every scattered unit to the base) — only the local search aggroes them, so a
-        // camp holds its patch until players expand near it. Wave units above stay field-driven
-        // after their order releases.
+        // AMBIENT units come in small GROUPS: a cluster anchored on a random REACHABLE open cell
+        // of the generated map (uniform by area, outside the safe ring, reachable from the Base
+        // by the flood fill's guarantee), its bodies scattered in a disc around the anchor and
+        // slid off any rock edge — a loose blob per group instead of one body per cell, which
+        // lined up on the 10 m lattice. The Nav team fields never pull them (they cover the whole
+        // map, which marched every scattered unit to the base) — only the local search aggroes
+        // them, so an ambient group holds its patch until players expand near it. Wave units
+        // above stay field-driven after their order releases.
         if (m_coopMap.reachable.empty())
             break;
-        if (m_ambientCamp.remaining <= 0)
+        if (m_ambientSpawn.remaining <= 0)
         {
             const int cell = m_coopMap.reachable[glm::clamp(
                 (int)(glm::linearRand(0.0f, 1.0f) * (float)m_coopMap.reachable.size()),
@@ -705,11 +705,11 @@ void GameMatch::tickCoopSpawns()
             const glm::vec3 center = coopCellCenter(cell);
             if (glm::length(glm::vec2(center.x, center.z)) < m_ambientSafeRadius)
                 continue; // safe-ring reject: costs one budget tick, never the points
-            // DISTANCE = DIFFICULTY: the camp's archetype is gated by GEODESIC depth (BFS distance
-            // from the Base over the generated map) exactly like waves gate by index — the near
-            // ring only rolls the early recipes (swarm-grade), the deep map unlocks the whole
-            // table (brute walls, combined arms). Costs then make far camps FEWER, TOUGHER
-            // bodies for the same points. One recipe per camp, so a camp reads as a unit type
+            // DISTANCE = DIFFICULTY: the group's archetype is gated by GEODESIC depth (BFS
+            // distance from the Base over the generated map) exactly like waves gate by index —
+            // the near ring only rolls the early recipes (swarm-grade), the deep map unlocks the
+            // whole table (brute walls, combined arms). Costs then make far groups FEWER, TOUGHER
+            // bodies for the same points. One recipe per group, so it reads as a unit type
             // holding ground rather than a random assortment.
             const float depth = (float)m_coopMap.depth[cell] / (float)m_coopMap.maxDepth;
             const int band = 1 + (int)(depth * (float)(c_maxArchetypeMinWave - 1) + 0.5f);
@@ -718,15 +718,15 @@ void GameMatch::tickCoopSpawns()
             for (int i = 0; i < c_numWaveArchetypes; ++i)
                 if (c_waveArchetypes[i].minWave <= band)
                     eligible[numEligible++] = i;
-            m_ambientCamp.archetype = eligible[glm::clamp(
+            m_ambientSpawn.archetype = eligible[glm::clamp(
                 (int)(glm::linearRand(0.0f, 1.0f) * (float)numEligible), 0, numEligible - 1)];
-            m_ambientCamp.center = center + glm::vec3(glm::linearRand(-4.0f, 4.0f), 0.0f,
+            m_ambientSpawn.center = center + glm::vec3(glm::linearRand(-4.0f, 4.0f), 0.0f,
                 glm::linearRand(-4.0f, 4.0f));
-            m_ambientCamp.radius = glm::linearRand(4.0f, 9.0f);
-            m_ambientCamp.remaining = (int)glm::linearRand(3.0f, 9.99f);
+            m_ambientSpawn.radius = glm::linearRand(4.0f, 9.0f);
+            m_ambientSpawn.remaining = (int)glm::linearRand(3.0f, 9.99f);
         }
-        --m_ambientCamp.remaining;
-        ENpcType type = sampleArchetype(c_waveArchetypes[m_ambientCamp.archetype]);
+        --m_ambientSpawn.remaining;
+        ENpcType type = sampleArchetype(c_waveArchetypes[m_ambientSpawn.archetype]);
         if (waveCostOf(type) > m_ambientPendingBudget)
         {
             type = ENpcType::Swarm; // the tail rounds down to the cheapest body
@@ -737,7 +737,7 @@ void GameMatch::tickCoopSpawns()
             }
         }
         m_ambientPendingBudget -= waveCostOf(type);
-        spawns.push_back({ .pos = ambientPointNear(m_ambientCamp.center, m_ambientCamp.radius),
+        spawns.push_back({ .pos = ambientPointNear(m_ambientSpawn.center, m_ambientSpawn.radius),
             .type = type, .team = (uint8)CoopAiTeam });
     }
     m_npcs.spawnLooseUnits(oc::span<const NpcSystem::LooseSpawn>(spawns.data(), spawns.size()));
@@ -892,7 +892,7 @@ void GameMatch::generateCoopGrid()
 
 // Flood fill from the seed cells (4-connected BFS = geodesic cell distance). Any open cell it
 // never reaches becomes rock — so EVERY open cell is reachable from the Base by construction, and
-// everything placed on open ground (nodes, ambient camps, move orders) is reachable too. Then the
+// everything placed on open ground (nodes, ambient spawns, move orders) is reachable too. Then the
 // merged obstacle rects.
 void GameMatch::finishGrid(oc::span<const int> seedCells)
 {
@@ -1158,7 +1158,7 @@ void GameMatch::rebuildCoopMap(uint32 seed, float fill, int lanes)
     m_coopMap.seed = seed;
     m_coopMap.fill = fill;
     m_coopMap.lanes = lanes;
-    m_ambientCamp.remaining = 0; // a camp anchored on the old map is void
+    m_ambientSpawn.remaining = 0; // an ambient group anchored on the old map is void
     generateCoopGrid();
     m_coopMap.built = true;
     spawnTerrain();
@@ -1190,7 +1190,7 @@ void GameMatch::sendMapSeed()
     Globals::networkManager.fireNetworkEvent("GMp", writer.data());
 }
 
-// A camp body position: a random point in the disc around the camp anchor that lands on OPEN
+// An ambient body position: a random point in the disc around the group anchor that lands on OPEN
 // ground (rejection-sampled), then slid at least a body's width off any neighbouring rock edge —
 // continuous coverage across cell borders, so nothing lines up on the lattice.
 glm::vec3 GameMatch::ambientPointNear(const glm::vec3& center, float radius) const
