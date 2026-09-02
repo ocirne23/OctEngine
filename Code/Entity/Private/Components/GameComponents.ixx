@@ -47,8 +47,12 @@ export struct GameUnitParams
                                       // does the long-distance delivery, this only picks fights
                                       // around wherever the unit ends up
     float maxSpeedMult = 3.0f;     // field shoves never launch: speed clamp = moveSpeed * this
+    float maxSpeed = 10.0f;        // absolute m/s cap on every unit body, every tick, any cause
     float waypointRadius = 3.0f;   // a route waypoint counts as reached inside this
-    float voidY = -20.0f;          // fell out of the world -> despawn
+    float routeEngageRadius = 10.0f; // marching a route: an enemy unit this near is engaged
+                                     // (walk target diverts to it), the route resumes after
+    float voidY = -3.0f;           // fell through the floor (ground is y 0) -> killed, checked
+                                   // by the full sim AND the far tick so no unit escapes it
     // HEIGHT LIMIT (world Y, metres): the physics can launch a body (bubble shoves, stacked
     // bodies, contact impulses); above the ceiling an actor is put back AT the ceiling with its
     // climb cancelled. The shared default for every ground actor — units AND player capsules
@@ -139,7 +143,14 @@ export struct GameUnitComponent
         bool stuck = false; // stalled unit: the game seeds it as the weaker "stuck" lane
     };
     static void takeSeedRequests(oc::vector<SeedRequest>& out);
-    static void takeDeaths(oc::vector<uint32>& outSourceIds); // spawner ids of units that died
+    // A unit died: its spawner's id + the POPULATION it held, so the barracks frees exactly
+    // that much of its cap without anyone tracking units.
+    struct DeathRecord
+    {
+        uint32 sourceId = 0;
+        uint8 popCost = 0;
+    };
+    static void takeDeaths(oc::vector<DeathRecord>& out);
     // (There is NO separate shield mirror: this component's state RIDES THE ENTITY SYNC — the
     // engine's snapshot/claim records carry a quantized game blob whenever the entity has a
     // GameUnitComponent. See NetworkManager's packGameStateBlob/applyGameStateBlob.)
@@ -206,7 +217,8 @@ export struct GameUnitComponent
     bool deathReported = false; // the death event is emitted once, even if a tick runs before the
                                 // queued destroy is drained
     uint32 sourceId = 0;        // the spawner's stable id — rides the death event so the barracks
-                                // can decrement its alive count without anyone tracking units
+                                // can free its population without anyone tracking units
+    uint8 popCost = 0;          // population this unit holds on its barracks (game-stamped at spawn)
 
     // Orders: an explicit DSL/game target overrides auto-targeting until cleared or reached+dry.
     bool targetLocked = false;
@@ -222,7 +234,8 @@ export struct GameUnitComponent
         if (fresh)
             m_ignoreFlowTimer = params.orderFlowBlind; // a fresh order: ignore the old lane for a moment
     }
-    // Route: waypoints copied in AT SPAWN (the barracks route); marched before combat targeting.
+    // Route: waypoints copied in AT SPAWN (the barracks route); marched before combat TARGETING,
+    // but enemy units inside routeEngageRadius are still fought on the way (see update).
     static constexpr int MaxRoutePoints = 6;
     glm::vec3 route[MaxRoutePoints]{};
     uint8 routeCount = 0, routeIndex = 0;
@@ -239,6 +252,9 @@ export struct GameUnitComponent
     // bubble; waypoints advance and the order clears with the full sim's radius rule. A unit with
     // nowhere to go stays parked. Returns true when it moved.
     bool updateFar(Entity& entity, float deltaSec);
+    // Health to 0 + the ONE-SHOT death report (destroy request, the spawner's population freed).
+    // Called by update() at 0 hp or below voidY, and by updateFar() below voidY.
+    void kill(Entity& entity);
     // Atomic (projectile contacts are main-thread, melee is workers). Units: CAS on health.
     // Puppets: accumulates into pendingDamage — ONE damage entry point for every victim kind.
     void damage(float amount);
@@ -270,11 +286,11 @@ export struct GameStructureParams
     float fieldDamageRate = 6.0f; // health/s while an enemy team's bubble owns the query point
     // Shared production tuning (the game's tweaks point here; per-TYPE values are stamped
     // per-instance instead — e.g. BarracksData::spawnCost):
-    float barracksSpawnInterval = 8.0f;
-    int barracksUnitLimit = 5;    // alive units per barracks
+    float barracksSecondsPerEnergy = 0.5f; // a unit's creation time = its energy cost x this
     float turretRange = 18.0f;
     float turretFireInterval = 1.2f;
     float turretShotEnergy = 1.5f; // spent from the turret's own energy store per shot
+    float turretDamage = 25.0f;    // per hitscan lightning strike (never misses)
 };
 
 // One end of a resource link (cable/pipe/conveyor). The SAME link exists mirrored on BOTH
@@ -357,17 +373,26 @@ export struct GameStructureComponent
     oc::vector<glm::vec3> route;
 
     // ---- TYPE-SPECIFIC state: a UNION discriminated by the game's structure type — the game
-    // only ever touches the variant matching the entity's prefab (barracks variants use
-    // `barracks`, turrets `turret`, the three emitter types `emitter`; everything else touches
-    // none). Cross-variant reads are bugs — the NetEntityState role-union pattern. All variants
-    // are trivially destructible; state dies with the structure.
+    // only ever touches the variant matching the entity's prefab (the barracks uses `barracks`,
+    // turrets `turret`, the three emitter types `emitter`; everything else touches none).
+    // Cross-variant reads are bugs — the NetEntityState role-union pattern. All variants are
+    // trivially destructible; state dies with the structure.
     static constexpr int MaxRoutePoints = 6;
     struct BarracksData
     {
-        float spawnTimer;   // counts down; Constructor boost accelerates it
-        float boost;        // extra spawn speed from idle Constructors (rebuilt every tick)
-        int aliveUnits;     // ++ here at each spawn decision, -- by the game per death event
-        float spawnCost;    // energy per unit, stamped per BARRACKS TYPE by the game each tick
+        float spawnTimer;   // counts down to the next spawn decision
+        // POPULATION: the cap is the barracks' own allowance + what its linked houses add (game-
+        // stamped each tick); `population` is what its live units hold — += spawnPop at each
+        // spawn decision, -= the unit's popCost by the game per death event. A spawn only happens
+        // while population + spawnPop <= popCap.
+        int population;
+        int popCap;
+        // The PRODUCED unit type (a player order — synced/saved by the game) and its per-unit
+        // prices, stamped by the game each tick from that type: energy and population.
+        uint8 unitType;
+        uint8 spawnPop;
+        uint8 houses;       // linked houses (game-derived each tick, for the info readout)
+        float spawnCost;
     };
     struct TurretData
     {
@@ -376,12 +401,13 @@ export struct GameStructureComponent
     // The union's ACTIVE variant, stamped by the game from the structure's type (None for plain
     // buildings). update() runs the matching machine logic: a BARRACKS counts its spawn clock
     // down, pays energy from its own store and QUEUES a spawn request; a TURRET picks the
-    // nearest enemy unit via its own spatial query, pays energy and QUEUES a shot — spawning is
-    // main-thread only, so the game drains both queues.
+    // nearest enemy unit via its own spatial query, pays energy, applies its HITSCAN damage on
+    // the spot and QUEUES the beam visual — spawning/drawing is main-thread only, so the game
+    // drains both queues.
     enum class EMachineKind : uint8 { None, Barracks, Turret };
     EMachineKind machineKind = EMachineKind::None;
 
-    struct TurretFireRequest
+    struct TurretFireRequest // a lightning strike that already landed: from the muzzle to the victim
     {
         glm::vec3 from{ 0.0f };
         glm::vec3 target{ 0.0f };

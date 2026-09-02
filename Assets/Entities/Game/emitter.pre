@@ -2,6 +2,7 @@
 # the live output every tick (0 when unpowered); authored Output/Reach are the powered values'
 # defaults only. Spawned with its origin at half height (1.5) above the ground hit.
 Prefab gameEmitter
+	Global true
 	Component Render
 		ObjectContainer baseshapes
 		Node Cube

@@ -2,6 +2,7 @@
 # while its extractor stands. No field, no power use. Spawned origin 0.4 above ground, overlapping
 # the node mesh (static vs static never collides).
 Prefab gameExtractor
+	Global true
 	Component Render
 		ObjectContainer baseshapes
 		Node Cube

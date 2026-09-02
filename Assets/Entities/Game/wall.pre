@@ -2,6 +2,7 @@
 # Placed as a two-click LINE (segments every 2 m along the path). Enemy units gnaw through it or
 # go around; a cheap way to shape their approach. Spawned origin 2.0 above ground.
 Prefab gameWall
+	Global true
 	Component Render
 		ObjectContainer baseshapes
 		Node Pillar2

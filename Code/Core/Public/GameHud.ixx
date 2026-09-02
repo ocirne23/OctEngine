@@ -59,6 +59,24 @@ export struct HudWorldLabel
 	bool        emphasized = false; // selected: drawn larger
 };
 
+// A world-anchored BUTTON ROW (the barracks' unit-type picker): drawn as a box above the anchor,
+// one button per entry. Gameplay rebuilds it every frame like the labels; the overlay reports each
+// button's screen rect back (setPopupButtonRects) so clicks resolve through popupButtonAtScreenPos.
+export struct HudPopupButton
+{
+	oc::string label;          // big caption
+	oc::string sub;            // small line under it (empty = none)
+	bool        selected = false;
+};
+
+export struct HudPopup
+{
+	bool        active = false;
+	glm::vec2   screenPos{};   // viewport-space anchor: the box sits centered above it
+	oc::string title;          // line at the top of the box (empty = none)
+	oc::vector<HudPopupButton> buttons;
+};
+
 export class GameHud final
 {
 public:
@@ -157,6 +175,33 @@ public:
 		oc::erase_if(m_counters, [name](const HudCounter& c) { return name == c.name; });
 	}
 
+	// Replaces the popup (per-frame rebuild; an inactive one clears it).
+	void setPopup(HudPopup&& popup)
+	{
+		const std::lock_guard lock(m_mutex);
+		m_popup = oc::move(popup);
+	}
+
+	// The overlay reports where it drew each popup button (or nothing when no popup was drawn).
+	void setPopupButtonRects(oc::span<const glm::vec4> minMax)
+	{
+		const std::lock_guard lock(m_mutex);
+		m_popupRects.assign(minMax.begin(), minMax.end());
+	}
+
+	// The popup button drawn under a screen position last frame (-1 = none).
+	int popupButtonAtScreenPos(const glm::vec2& pos) const
+	{
+		const std::lock_guard lock(m_mutex);
+		for (int i = 0; i < (int)m_popupRects.size(); ++i)
+		{
+			const glm::vec4& r = m_popupRects[i];
+			if (pos.x >= r.x && pos.y >= r.y && pos.x <= r.z && pos.y <= r.w)
+				return i;
+		}
+		return -1;
+	}
+
 	// Replaces the whole world-label list (per-frame rebuild; pass {} to clear).
 	void setWorldLabels(oc::vector<HudWorldLabel>&& labels)
 	{
@@ -173,6 +218,8 @@ public:
 		m_bars.clear();
 		m_counters.clear();
 		m_worldLabels.clear();
+		m_popup = HudPopup();
+		m_popupRects.clear();
 		m_selectedSlot = 0;
 	}
 
@@ -218,6 +265,7 @@ public:
 		oc::vector<HudBar> bars;
 		oc::vector<HudCounter> counters;
 		oc::vector<HudWorldLabel> worldLabels;
+		HudPopup popup;
 	};
 
 	// One copy per frame for the overlay (UI thread).
@@ -236,6 +284,7 @@ public:
 		out.bars = m_bars;
 		out.counters = m_counters;
 		out.worldLabels = m_worldLabels;
+		out.popup = m_popup;
 		return out;
 	}
 
@@ -272,6 +321,8 @@ private:
 	oc::vector<HudBar> m_bars;
 	oc::vector<HudCounter> m_counters;
 	oc::vector<HudWorldLabel> m_worldLabels;
+	HudPopup m_popup;
+	oc::vector<glm::vec4> m_popupRects; // per button: (minX, minY, maxX, maxY), last frame
 };
 
 export namespace Globals

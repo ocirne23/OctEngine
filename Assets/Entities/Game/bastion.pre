@@ -2,6 +2,7 @@
 # output/reach/energy" tweaks; the live output is driven by the power tick like every emitter).
 # Spawned origin 2.0 above ground.
 Prefab gameBastion
+	Global true
 	Component Render
 		ObjectContainer baseshapes
 		Node Cube

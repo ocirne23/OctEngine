@@ -1,0 +1,19 @@
+# House: raises the POPULATION cap of the nearest built own-team barracks within "House link
+# radius" ("House population" each; one barracks per house, re-derived every tick). No power, no
+# grid role; just population that dies with it. A 4x3x4 m block (2x2 cells).
+# Spawned origin 1.5 above the ground hit.
+Prefab gameHouse
+	Global true
+	Component Render
+		ObjectContainer baseshapes
+		Node Cube
+		Type StaticMesh
+		Color 0.85 0.65 0.35
+		Scale 2 1.5 2
+	Component Physics
+		Body Static
+		ContactEvents true
+		Shape Box
+		HalfExtents 2 1.5 2
+	Component GameStructure
+		MeleeRadius 2

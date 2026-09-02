@@ -4,6 +4,7 @@
 # output/reach come from the "Base shield" tweaks, not this file. DAMAGEABLE - health drops to
 # enemy territory/melee/projectiles - but the death sweep never destroys it (no lose condition yet).
 Prefab gameBase
+	Global true
 	Component Render
 		ObjectContainer baseshapes
 		Node Cube

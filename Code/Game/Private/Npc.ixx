@@ -12,6 +12,8 @@ import :Structures;
 // GameUnitComponent::params (tweaked here). SWARM is the CHEAP body: health only — no Force
 // emitter, no shield battery (the co-op waves are built from it; see GameMatch's coop block).
 export enum class ENpcType : uint8 { Grunt, Brute, Runner, Spitter, Swarm, Count };
+// The barracks' unit-type selection + its per-type price tables index by THIS order.
+static_assert((int)ENpcType::Count == GameNumUnitTypes);
 
 // The unit/projectile PRODUCTION layer. The per-entity simulation itself (steering, shields,
 // melee, lifetimes, contact damage) is GameUnitComponent/GameProjectileComponent inside the
@@ -78,13 +80,28 @@ private:
     void fireShot(const char* prefabPath, const char* name, const glm::vec3& from,
         const glm::vec3& velocity, uint8 team); // projectile spawn (main thread, pre-physics)
 
+public:
+    // TURRET LIGHTNING: hitscan strikes are pure visuals here (the component already landed the
+    // damage). Each lives "Turret beam lifetime" seconds as a jagged debug line. The server
+    // broadcasts this frame's new ones (GLt) so clients add the same beams.
+    struct Beam
+    {
+        glm::vec3 from{ 0.0f };
+        glm::vec3 to{ 0.0f };
+        float ttl = 0.0f;
+    };
+    void addBeam(const glm::vec3& from, const glm::vec3& to);
+    oc::span<const Beam> newBeams() const { return m_newBeams; } // added since the last service()
+    void drawBeams(float deltaSec); // ages + draws (main thread, every windowed frame)
+private:
+
     // Spawn cooldowns and alive counts live ON the barracks (GameStructureComponent::barracks) —
     // no id-keyed maps, and the state dies with its structure.
     // The rosters: owning refs, maintained by spawn + onWorldRootRemoved (never queried).
     oc::vector<EntityPtr> m_units;
     oc::vector<EntityPtr> m_shots;
     oc::vector<GameUnitComponent::FireRequest> m_fireScratch; // drained queues (reused buffers)
-    oc::vector<uint32> m_deathScratch;
+    oc::vector<GameUnitComponent::DeathRecord> m_deathScratch;
     oc::vector<GameUnitComponent::SeedRequest> m_seedScratch;
     // FAR TICK (service): units the SIM LOD left unselected walk their orders by
     // GameUnitComponent::updateFar every m_farInterval seconds of sim time.
@@ -106,9 +123,13 @@ private:
     oc::vector<uint32> m_spawnScratch;
     oc::vector<GameStructureComponent::TurretFireRequest> m_turretFireScratch;
 
+    oc::vector<Beam> m_beams;
+    oc::vector<Beam> m_newBeams;
+
     // Tweaks (unit stats are prefab-authored; the shared sim baselines live on the components'
     // params — barracks/turret production tuning now registers from StructureSystem. What remains
-    // here are the SHOT SPEEDS, applied when this system services the fire queues.)
-    float m_turretShotSpeed = 30.0f;
+    // here is the spitter SHOT SPEED, applied when this system services the fire queue, and the
+    // turret beam visual.)
     float m_spitterShotSpeed = 18.0f;
+    float m_beamLifetime = 0.5f;
 };

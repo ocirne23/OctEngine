@@ -2,6 +2,7 @@
 # "Turret shot energy" from its internal store - defense output rides the supply network.
 # Spawned origin 1.2 above ground.
 Prefab gameTurret
+	Global true
 	Component Render
 		ObjectContainer baseshapes
 		Node Cone

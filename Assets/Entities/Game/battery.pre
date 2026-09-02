@@ -2,6 +2,7 @@
 # the structure - destroying it loses the stored energy. A squat 2x1x2 m block (CubeHalf).
 # Spawned origin 0.5 above ground.
 Prefab gameBattery
+	Global true
 	Component Render
 		ObjectContainer baseshapes
 		Node CubeHalf

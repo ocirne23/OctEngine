@@ -2,6 +2,7 @@
 # out while powered) - build currency without map control, at an energy premium over extractors.
 # Spawned origin 1.0 above ground.
 Prefab gameFabricator
+	Global true
 	Component Render
 		ObjectContainer baseshapes
 		Node Cube

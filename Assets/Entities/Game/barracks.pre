@@ -2,6 +2,7 @@
 # "Barracks spawn energy" from its internal store, so unit production needs a cable feed.
 # Spawned origin 1.2 above ground.
 Prefab gameBarracks
+	Global true
 	Component Render
 		ObjectContainer baseshapes
 		Node Cube

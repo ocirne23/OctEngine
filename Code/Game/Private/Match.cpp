@@ -48,8 +48,14 @@ static constexpr const char* c_buildCategoryNames[c_numCategories] = { "Combat",
 // building uses, so a hotbar slot and the thing it builds read identically.
 static constexpr const char* c_structureShortNames[] = { "EMIT", "GEN", "CON", "EXTR", "BATT",
     "FUEL", "SOL", "FAB", "BSTN", "LNC", "BRK", "BRK-B", "BRK-R", "BRK-S", "WALL", "TRT", "SILO",
-    "CNST", "BASE", "CBL-P", "CBL-F", "CBL-M", "CRSS" };
+    "CNST", "BASE", "CBL-P", "CBL-F", "CBL-M", "CRSS", "HOUS" };
 static_assert(oc::size(c_structureShortNames) == (size_t)EStructureType::Count);
+// The barracks' unit-type popup captions, in ENpcType order (the same order the price tables use).
+static constexpr const char* c_unitTypeNames[] = { "Grunt", "Brute", "Runner", "Spitter", "Swarm" };
+static_assert(oc::size(c_unitTypeNames) == (size_t)ENpcType::Count);
+// The popup's buttons, in order: the producible types (isBarracksUnitType — no Spitter).
+static constexpr uint8 c_barracksMenu[] = { (uint8)ENpcType::Grunt, (uint8)ENpcType::Brute,
+    (uint8)ENpcType::Runner, (uint8)ENpcType::Swarm };
 // A category page is just its list of placeable types — the shorthand table above IS each slot's
 // caption.
 static constexpr EStructureType c_combatItems[] = {
@@ -59,13 +65,11 @@ static constexpr EStructureType c_combatItems[] = {
     EStructureType::Wall,
     EStructureType::Turret,
     EStructureType::Barracks,
-    EStructureType::BarracksBrute,
-    EStructureType::BarracksRunner,
-    EStructureType::BarracksSpitter,
+    EStructureType::House,
 };
 static constexpr float c_wallSegmentSpacing = 2.0f; // one segment per box width along the line
 static constexpr int c_wallMaxSegments = 16;
-static constexpr int c_cableMaxSegments = 32; // one L-line / paint-fill placement burst cap
+static constexpr int c_cableMaxSegments = 32; // one paint-fill placement burst cap
 // Everything that is not a weapon: generation, extraction and the distribution buildings.
 static constexpr EStructureType c_productionItems[] = {
     EStructureType::Generator,
@@ -77,8 +81,8 @@ static constexpr EStructureType c_productionItems[] = {
     EStructureType::FuelTank,
     EStructureType::MineralSilo,
 };
-// PHYSICAL cables: one segment type per medium + the 1x3 crossing bridge. Placement paints or
-// draws L-lines (see updateCablePlacement); connections derive from cell adjacency.
+// PHYSICAL cables: one segment type per medium + the 1x3 crossing bridge. Placement PAINTS
+// (press + drag, see updateCablePlacement); connections derive from cell adjacency.
 static constexpr EStructureType c_cableItems[] = {
     EStructureType::CablePower,
     EStructureType::CablePipe,
@@ -393,6 +397,11 @@ void GameMatch::spawnWorld()
             if (const int index = m_structures.structureIndexById(id); index >= 0)
                 sendRoute(index);
         };
+        m_structures.onUnitTypeChanged = [this](uint32 id)
+        {
+            if (const int index = m_structures.structureIndexById(id); index >= 0)
+                sendUnitType(index);
+        };
         // (+ the App layer's text chat "ChM" — a string up to 256B; App.Chat's c_maxEventBytes)
         Globals::networkManager.setEventFilter([](uint32, oc::string_view name, oc::span<const uint8> data, Entity*)
         {
@@ -470,8 +479,8 @@ void GameMatch::spawnWorld()
 
     Log::info("Game mode: SELECT by default (click inspects, RMB sets barracks routes / moves the "
               "player). Grid hotkeys QWER/ASDF/ZXCV or click the slots: Q/W/E = build categories "
-              "(Combat/Production/Cables), X = delete, C = cancel. Cables are physical: paint or "
-              "two-click a run between buildings to connect them");
+              "(Combat/Production/Cables), X = delete, C = cancel. Cables are physical: paint "
+              "(press + drag) a run between buildings to connect them");
     if (m_coop)
         Log::info("CO-OP: defend the central Base — swarm waves attack periodically, and the map "
                   "is crawling with scattered enemies to clear as you expand");
@@ -1391,8 +1400,12 @@ void GameMatch::onClientJoined(uint32 clientId)
     for (int i = 0; i < m_structures.structureCount(); ++i)
         sendStructurePlaced(i);
     for (int i = 0; i < m_structures.structureCount(); ++i)
+    {
         if (!m_structures.structureRoute(i).empty())
             sendRoute(i); // barracks waypoint routes replay too
+        if (isBarracksType(m_structures.structureType(i)))
+            sendUnitType(i); // and the produced unit type
+    }
     Log::info("Game: client " + oc::to_string(clientId) + " joined, world replayed");
 }
 
@@ -1438,6 +1451,15 @@ void GameMatch::sendRoute(int index)
         writer.write<float>(p.z);
     }
     Globals::networkManager.fireNetworkEvent("GRt", writer.data());
+}
+
+void GameMatch::sendUnitType(int index)
+{
+    uint8 buffer[8];
+    NetWriter writer(buffer);
+    writer.write<uint32>(m_structures.structureId(index));
+    writer.write<uint8>(m_structures.structureUnitType(index));
+    Globals::networkManager.fireNetworkEvent("GBu", writer.data());
 }
 
 static constexpr const char* c_gameSavePath = "Local/gamesave.txt"; // cwd = Assets/
@@ -1524,9 +1546,25 @@ void GameMatch::loadGame(oc::string_view path)
             sendStructurePlaced(i);
             if (!m_structures.structureRoute(i).empty())
                 sendRoute(i);
+            if (isBarracksType(m_structures.structureType(i)))
+                sendUnitType(i);
         }
         // (No cable replay: clients re-derive links from the mirrored segments.)
     }
+}
+
+void GameMatch::requestSetUnitType(uint32 id, uint8 unitType)
+{
+    if (!m_isClient)
+    {
+        m_structures.queueUnitTypeRequest(id, unitType, (uint8)m_team);
+        return;
+    }
+    uint8 buffer[8];
+    NetWriter writer(buffer);
+    writer.write<uint32>(id);
+    writer.write<uint8>(unitType);
+    Globals::networkManager.fireNetworkEvent("GqU", writer.data());
 }
 
 void GameMatch::requestSetRoute(uint32 id, oc::span<const glm::vec3> points)
@@ -1582,7 +1620,10 @@ void GameMatch::sendStats()
         writer.write<uint8>(frac8(m_structures.structureCharge(i), m_structures.structureCapacity(i)));
         writer.write<uint8>(frac8(m_structures.structureFuel(i), m_structures.structureFuelCapacity(i)));
         writer.write<uint8>(frac8(m_structures.structureMinerals(i), m_structures.structureMineralCapacity(i)));
-        writer.write<uint8>(frac8(m_structures.structureOutputFrac(i), 1.0f));
+        // The output byte doubles as the barracks' POPULATION tally (no emitter there).
+        writer.write<uint8>(isBarracksType(m_structures.structureType(i))
+            ? (uint8)glm::clamp(m_structures.structurePopulation(i), 0, 255)
+            : frac8(m_structures.structureOutputFrac(i), 1.0f));
         writer.write<uint8>(frac8(m_structures.structureFlowUtil(i), 1.0f));
         writer.write<uint8>((uint8)((m_structures.structurePowered(i) ? 1u : 0u)
             | (m_structures.structureBlueprint(i) ? 2u : 0u))); // status bits (health IS progress)
@@ -1707,6 +1748,20 @@ void GameMatch::handleNetEvent(oc::string_view name)
             if (!reader.overflowed())
                 m_structures.mirrorRoute(id, oc::span<const glm::vec3>(points, used));
         }
+        else if (name == "GBu")
+        {
+            const uint32 id = reader.read<uint32>();
+            const uint8 unitType = reader.read<uint8>();
+            if (!reader.overflowed())
+                m_structures.mirrorUnitType(id, unitType);
+        }
+        else if (name == "GLt")
+        {
+            const float fx = reader.read<float>(), fy = reader.read<float>(), fz = reader.read<float>();
+            const float tx = reader.read<float>(), ty = reader.read<float>(), tz = reader.read<float>();
+            if (!reader.overflowed())
+                m_npcs.addBeam(glm::vec3(fx, fy, fz), glm::vec3(tx, ty, tz));
+        }
         else if (name == "GWv")
         {
             // Co-op wave announcement (the wave itself arrives as replicated unit entities).
@@ -1775,6 +1830,13 @@ void GameMatch::handleNetEvent(oc::string_view name)
         }
         if (!reader.overflowed()) // team/barracks ownership validated at apply
             m_structures.queueRouteRequest(id, oc::span<const glm::vec3>(points, used), requestTeam(sender));
+    }
+    else if (name == "GqU")
+    {
+        const uint32 id = reader.read<uint32>();
+        const uint8 unitType = reader.read<uint8>();
+        if (!reader.overflowed()) // team/barracks ownership + type range validated at apply
+            m_structures.queueUnitTypeRequest(id, unitType, requestTeam(sender));
     }
     // (GqE — the owner's shield self-report — now rides the claim stream's game blob, applied by
     // NetworkManager to the twin's GameUnitComponent + emitter. GqS/GqM went with player combat.
@@ -1877,6 +1939,15 @@ void GameMatch::update(float deltaSec)
     // The unit SIM runs inside the entity pass (GameUnitComponent); this drains what it queued
     // (shots to spawn, deaths) and runs production.
     m_npcs.service(m_structures);
+    if (m_isServer) // turret lightning is a pure visual on clients: broadcast this frame's strikes
+        for (const NpcSystem::Beam& beam : m_npcs.newBeams())
+        {
+            uint8 buffer[32];
+            NetWriter writer(buffer);
+            writer.write<float>(beam.from.x); writer.write<float>(beam.from.y); writer.write<float>(beam.from.z);
+            writer.write<float>(beam.to.x);   writer.write<float>(beam.to.y);   writer.write<float>(beam.to.z);
+            Globals::networkManager.fireNetworkEvent("GLt", writer.data());
+        }
     if (m_coop)
     {
         tickWaves(deltaSec);
@@ -2119,7 +2190,6 @@ void GameMatch::setMode(EPlayerMode mode)
     m_lanceAiming = false;
     m_wallPlacing = false;
     m_cablePainting = false;
-    m_cableLinePending = false;
     m_buildSelection = -1;
     if (mode != EPlayerMode::Build)
         m_buildCategory = -1; // back to the root page
@@ -2138,12 +2208,11 @@ void GameMatch::cancelOneLevel()
 {
     if (m_mode == EPlayerMode::Build && m_buildSelection >= 0)
     {
-        if (m_lanceAiming || m_wallPlacing || m_cableLinePending || m_cablePainting)
+        if (m_lanceAiming || m_wallPlacing || m_cablePainting)
         {
             m_lanceAiming = false;
             m_wallPlacing = false;
             m_cablePainting = false;
-            m_cableLinePending = false;
         }
         else
             disarmBuild();
@@ -2202,7 +2271,6 @@ void GameMatch::activateSlot(int slot)
     m_lanceAiming = false; // switching items drops half-done aims/flows
     m_wallPlacing = false;
     m_cablePainting = false;
-    m_cableLinePending = false;
     m_buildSelection = slot;
     refreshBuildHotbar();
 }
@@ -2242,7 +2310,6 @@ void GameMatch::disarmBuild()
     m_lanceAiming = false;
     m_wallPlacing = false;
     m_cablePainting = false;
-    m_cableLinePending = false;
     refreshBuildHotbar(); // the slot highlight follows in the same frame
 }
 
@@ -2281,27 +2348,21 @@ void GameMatch::placeCableLine(EStructureType armed, const glm::vec3& from, cons
     }
 }
 
-// Cable segments place with BOTH inputs (see Match.ixx): a press paints its cell and keeps
-// painting cells the cursor crosses (L-filled between samples so the run never breaks); a plain
-// click (no drag) anchors the two-click L-line, whose second click places it and CHAINS.
+// Cable segments place by PAINTING (see Match.ixx): a press places its cell and, while held,
+// keeps placing the cells the cursor crosses (L-filled between samples so the run never breaks).
+// Release ends the stroke; a plain click is a one-cell stroke.
 void GameMatch::updateCablePlacement(const Camera& camera, EStructureType armed, bool confirmEdge)
 {
     const Aim aim = computeAim(camera, armed);
     if (m_cablePainting)
     {
         if (!m_lmbDown)
-        {
-            // Release: a plain click (never left its cell) arms the L-line from that cell.
-            m_cablePainting = false;
-            m_cableLinePending = !m_cablePaintMoved;
-            m_cableLineStart = m_cablePaintLast;
-        }
+            m_cablePainting = false; // release ends the stroke
         else if (aim.valid && glm::distance(glm::vec2(aim.pos.x, aim.pos.z),
             glm::vec2(m_cablePaintLast.x, m_cablePaintLast.z)) > 0.1f)
         {
             placeCableLine(armed, m_cablePaintLast, aim.pos, /*preview*/ false);
             m_cablePaintLast = aim.pos;
-            m_cablePaintMoved = true;
         }
         if (aim.valid)
             drawStructureGhost(armed, aim.pos, packColor(glm::vec3(0.3f, 1.0f, 0.4f)));
@@ -2312,29 +2373,12 @@ void GameMatch::updateCablePlacement(const Camera& camera, EStructureType armed,
         updateSelectionClick(camera, confirmEdge, /*allowPick*/ true);
         return;
     }
-    if (m_cableLinePending)
-    {
-        placeCableLine(armed, m_cableLineStart, aim.pos, /*preview*/ true);
-        if (confirmEdge)
-        {
-            if (glm::distance(glm::vec2(aim.pos.x, aim.pos.z),
-                glm::vec2(m_cableLineStart.x, m_cableLineStart.z)) < 0.1f)
-                m_cableLinePending = false; // clicking the anchor again drops it
-            else
-            {
-                placeCableLine(armed, m_cableLineStart, aim.pos, /*preview*/ false);
-                m_cableLineStart = aim.pos; // CHAIN: the endpoint anchors the next line
-            }
-        }
-        return;
-    }
     const uint32 color = packColor(aim.affordable ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.3f, 0.2f));
     drawStructureGhost(armed, aim.pos, color);
     if (confirmEdge && aim.affordable)
     {
         requestPlace(armed, aim.pos, -1, glm::vec3(0.0f));
-        m_cablePainting = true; // hold + drag paints from here; a plain click arms the L-line
-        m_cablePaintMoved = false;
+        m_cablePainting = true; // hold + drag paints from here
         m_cablePaintLast = aim.pos;
     }
     updateSelectionClick(camera, confirmEdge, /*allowPick*/ !aim.affordable);
@@ -2346,27 +2390,26 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
     // hotbar click in updateWindowed.)
     if (m_buildCategory < 0 || m_buildSelection < 0)
     {
-        // Nothing armed — browsing the category: clicks inspect and RMB smart-connects / sets
-        // barracks routes, exactly as Select mode.
+        // Nothing armed — browsing the category: clicks inspect, LMB drag box-selects units and
+        // RMB sets barracks routes / orders, exactly as Select mode. Only an ARMED item takes the
+        // clicks away.
         updateRightClickActions(camera, cancelEdge);
         updateSelectionClick(camera, confirmEdge, /*allowPick*/ true);
+        updateUnitSelection(camera);
         return;
     }
-    // RMB CANCELS, one step at a time: a half-finished two-click flow (Lance aim, Wall line, cable
-    // line, Crossing aim) drops first, and the next RMB disarms the item itself. Only once nothing
+    // RMB CANCELS, one step at a time: a half-finished flow (Lance aim, Wall line, cable paint
+    // stroke, Crossing aim) drops first, and the next RMB disarms the item itself. Only once nothing
     // is armed does RMB go back to its Select-mode meaning (barracks route / move order) above.
     const EStructureType armed = buildCategoryItems(m_buildCategory)[m_buildSelection];
 
-    // Cable segments have their own paint/L-line input (drag + two-click both).
+    // Cable segments have their own paint input (press + drag).
     if (isCableType(armed))
     {
         if (cancelEdge)
         {
-            if (m_cableLinePending || m_cablePainting)
-            {
-                m_cableLinePending = false;
+            if (m_cablePainting)
                 m_cablePainting = false;
-            }
             else
                 disarmBuild();
             return; // NOT consumed: the same press also walks the player
@@ -2446,8 +2489,9 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         return;
     }
 
-    // Wall second click: segments preview along the anchored line; confirm queues one placement
-    // per segment. RIGHT-click cancels the anchored line before the confirm.
+    // Wall DRAG: the press anchored the line start; while held, segments preview along the line
+    // to the cursor, and the RELEASE queues one placement per segment. RIGHT-click cancels the
+    // stroke before the release.
     if (m_wallPlacing)
     {
         if (cancelEdge)
@@ -2455,6 +2499,7 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
             m_wallPlacing = false;
             return; // NOT consumed: the same press also walks the player
         }
+        const bool release = !m_lmbDown;
         const Aim end = computeAim(camera, EStructureType::Wall);
         if (end.valid)
         {
@@ -2483,13 +2528,12 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
                 drawStructureGhost(EStructureType::Wall, points[s],
                     packColor(free ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.3f, 0.2f)));
             }
-            if (confirmEdge)
-            {
+            if (release)
                 for (int s = 0; s < count; ++s)
                     requestPlace(EStructureType::Wall, points[s], -1, glm::vec3(0.0f));
-                m_wallPlacing = false;
-            }
         }
+        if (release)
+            m_wallPlacing = false; // a release off the ground (no valid end) just drops the stroke
         return;
     }
 
@@ -2514,6 +2558,8 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.emitterReachOf(aim.type) * 0.5f, color, 32);
     if (aim.type == EStructureType::Constructor) // show the build/repair reach it would cover
         drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.constructorRange(), color, 40);
+    if (aim.type == EStructureType::House) // show how far it links to a barracks
+        drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.houseLinkRadius(), color, 48);
     if (confirmEdge && aim.affordable)
     {
         if (aim.type == EStructureType::Lance)
@@ -2523,7 +2569,7 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         }
         else if (aim.type == EStructureType::Wall)
         {
-            m_wallPlacing = true; // first click anchors the line start; the next click ends it
+            m_wallPlacing = true; // the press anchors the line start; the release ends it
             m_wallStart = aim.pos;
         }
         else
@@ -2878,6 +2924,7 @@ void GameMatch::buildWorldLabels(const Camera& camera)
     ProfileScope scope("Game world labels", EProfileCategory::Game);
     oc::vector<HudWorldLabel> labels;
     labels.reserve(m_structures.structureCount());
+    HudPopup popup; // the selected own barracks' unit-type picker (inactive = none)
     const Rect& viewport = Globals::ui.getViewportRect();
     const int selected = m_selectedId != 0 ? m_structures.structureIndexById(m_selectedId) : -1;
     for (int i = 0; i < m_structures.structureCount(); ++i)
@@ -2961,10 +3008,37 @@ void GameMatch::buildWorldLabels(const Camera& camera)
             if (mineralCap > 0.0f && len > 0 && len < (int)sizeof(info))
                 len += snprintf(info + len, sizeof(info) - len, "\nMinerals %.0f / %.0f",
                     m_structures.structureMinerals(i), mineralCap);
+            if (isBarracksType(type) && len > 0 && len < (int)sizeof(info))
+                len += snprintf(info + len, sizeof(info) - len, "\nPopulation %d / %d (%d houses)",
+                    m_structures.structurePopulation(i), m_structures.structurePopCap(i),
+                    m_structures.structureHouses(i));
+            if (type == EStructureType::House && len > 0 && len < (int)sizeof(info))
+                len += snprintf(info + len, sizeof(info) - len, "\n%s",
+                    m_structures.structureLinkedId(i) != 0 ? "Linked to a barracks" : "No barracks in range");
             if (consumer && len > 0 && len < (int)sizeof(info))
                 snprintf(info + len, sizeof(info) - len, "\n%s",
                     m_structures.structurePowered(i) ? "Powered" : "No power");
             label.info = info;
+            // The unit-type picker floats above an OWN barracks' label: one button per type, the
+            // produced one highlighted. Clicks resolve in updateWindowed (popupButtonAtScreenPos).
+            if (isBarracksType(type) && m_structures.structureTeam(i) == (uint8)m_team)
+            {
+                popup.active = true;
+                popup.screenPos = label.screenPos;
+                popup.title = "Produce";
+                popup.buttons.reserve(oc::size(c_barracksMenu));
+                const uint8 produced = m_structures.structureUnitType(i);
+                for (const uint8 t : c_barracksMenu)
+                {
+                    HudPopupButton& b = popup.buttons.emplace_back();
+                    b.label = c_unitTypeNames[t];
+                    char sub[32];
+                    snprintf(sub, sizeof(sub), "%d pop  %.0f E", m_structures.unitPopulation(t),
+                        m_structures.unitSpawnEnergy(t));
+                    b.sub = sub;
+                    b.selected = t == (int)produced;
+                }
+            }
         }
         labels.push_back(oc::move(label));
     }
@@ -3023,6 +3097,7 @@ void GameMatch::buildWorldLabels(const Camera& camera)
         labels.push_back(oc::move(label));
     }
     Globals::gameHud.setWorldLabels(oc::move(labels));
+    Globals::gameHud.setPopup(oc::move(popup));
 }
 
 void GameMatch::tickPlayerMelee(float deltaSec)
@@ -3123,7 +3198,17 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     bool rmbEdge = m_rmbClicked;
     m_placeClicked = false;
     m_rmbClicked = false;
-    if (const int slot = Globals::gameHud.slotAtScreenPos(m_mousePos); slot >= 0)
+    if (const int button = Globals::gameHud.popupButtonAtScreenPos(m_mousePos); button >= 0)
+    {
+        // The barracks' unit-type picker (drawn last frame over the selected barracks) eats
+        // clicks the same way the hotbar does.
+        if (lmbEdge && m_selectedId != 0)
+            requestSetUnitType(m_selectedId, c_barracksMenu[glm::min(button, (int)oc::size(c_barracksMenu) - 1)]);
+        lmbEdge = false;
+        rmbEdge = false;
+        m_rmbMoveDrag = false;
+    }
+    else if (const int slot = Globals::gameHud.slotAtScreenPos(m_mousePos); slot >= 0)
     {
         if (lmbEdge)
             activateSlot(slot);
@@ -3140,7 +3225,8 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     case EPlayerMode::Delete: updateDeleteMode(camera, confirmEdge); break;
     case EPlayerMode::Select: updateSelectMode(camera, confirmEdge, rmbEdge); break;
     }
-    m_lmbReleased = false; // a release the active mode did not consume (box select is Select-only)
+    m_lmbReleased = false; // a release the active mode did not consume (box select runs in Select
+                           // and in Build with nothing armed)
 
     // MOVE ORDER (RTS right-click): RMB ALWAYS moves the player. Cancelling rides along on the
     // same press — disarming a ghost, dropping a Lance/Wall anchor or a picked link endpoint, or
@@ -3184,6 +3270,7 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     modeScope.stop();
 
     m_structures.drawDebug();
+    m_npcs.drawBeams(deltaSec); // turret lightning strikes
     if (m_coop)
         drawCoopBarrier(); // the edge fence's pulsing energy lines
     if (Globals::navSystem.debugMode() > 0)
@@ -3211,6 +3298,31 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
             drawCircle(p, m_structures.waypointRadius(), routeColor, 24);
             prev = p;
         }
+    }
+    // House links (own team): a line from each linked house to its barracks — bright when either
+    // end is selected; a selected house also shows its link radius, a selected constructor its
+    // build/repair reach.
+    if (const int sel = m_structures.structureIndexById(m_selectedId);
+        sel >= 0 && m_structures.structureType(sel) == EStructureType::Constructor)
+        drawCircle(m_structures.structurePos(sel) * glm::vec3(1, 0, 1) + glm::vec3(0.0f, 0.4f, 0.0f),
+            m_structures.constructorRange(), packColor(glm::vec3(0.9f, 0.7f, 0.3f)), 40);
+    for (int i = 0; i < m_structures.structureCount(); ++i)
+    {
+        if (m_structures.structureType(i) != EStructureType::House
+            || m_structures.structureTeam(i) != (uint8)m_team)
+            continue;
+        const bool houseSelected = m_structures.structureId(i) == m_selectedId;
+        const glm::vec3 housePos = m_structures.structurePos(i) * glm::vec3(1, 0, 1) + glm::vec3(0.0f, 0.4f, 0.0f);
+        if (houseSelected)
+            drawCircle(housePos, m_structures.houseLinkRadius(), packColor(glm::vec3(0.9f, 0.7f, 0.3f)), 48);
+        const uint32 linked = m_structures.structureLinkedId(i);
+        const int barracks = linked != 0 ? m_structures.structureIndexById(linked) : -1;
+        if (barracks < 0)
+            continue;
+        const bool bright = houseSelected || linked == m_selectedId;
+        Globals::rendererVK.addDebugLine(housePos,
+            m_structures.structurePos(barracks) * glm::vec3(1, 0, 1) + glm::vec3(0.0f, 0.4f, 0.0f),
+            packColor(glm::vec3(0.9f, 0.7f, 0.3f) * (bright ? 1.0f : 0.4f)));
     }
 
     routesScope.stop();

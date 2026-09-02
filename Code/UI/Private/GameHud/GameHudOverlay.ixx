@@ -35,7 +35,10 @@ public:
 		const GameHud::Snapshot hud = Globals::gameHud.snapshot();
 		if (!hud.hotbarActive)
 			Globals::gameHud.setSlotScreenRects({}); // nothing drawn = nothing clickable
-		if (!hud.hotbarActive && hud.bars.empty() && hud.counters.empty() && hud.worldLabels.empty())
+		if (!hud.popup.active)
+			Globals::gameHud.setPopupButtonRects({});
+		if (!hud.hotbarActive && hud.bars.empty() && hud.counters.empty() && hud.worldLabels.empty()
+			&& !hud.popup.active)
 			return;
 
 		ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -146,6 +149,62 @@ public:
 				y += ts.y + 1.0f * s;
 				line += len + (end ? 1 : 0);
 			}
+		}
+
+		// ---- world-anchored POPUP (the barracks' unit-type picker): a box centered above the
+		// ---- anchor -- title on top, one button per entry in a row. Button rects are reported
+		// ---- back for click resolution; the selected entry and the hovered one light up. ----
+		if (hud.popup.active && !hud.popup.buttons.empty())
+		{
+			const HudPopup& popup = hud.popup;
+			const int n = (int)popup.buttons.size();
+			const float btnW = 74.0f * s;
+			const float btnH = 40.0f * s;
+			const float pad = 4.0f * s;
+			const float labelFont = fontSize * 0.9f;
+			const float subFont = fontSize * 0.7f;
+			const float titleH = popup.title.empty() ? 0.0f : fontSize + pad;
+			const float boxW = n * btnW + (n + 1) * pad;
+			const float boxH = titleH + btnH + 2.0f * pad;
+			// Clear of the label's title line (the label is drawn under this box's anchor).
+			const float anchorGap = fontSize * 0.95f * 1.3f + 8.0f * s;
+			const ImVec2 bMin(popup.screenPos.x - boxW * 0.5f, popup.screenPos.y - anchorGap - boxH);
+			const ImVec2 bMax(bMin.x + boxW, bMin.y + boxH);
+			dl->AddRectFilled(bMin, bMax, col(0.06f, 0.06f, 0.08f, 0.85f), 5.0f * s);
+			dl->AddRect(bMin, bMax, col(0.5f, 0.5f, 0.55f, 0.8f), 5.0f * s, 0, 1.0f * s);
+			if (!popup.title.empty())
+			{
+				const ImVec2 ts = font->CalcTextSizeA(fontSize, noWrap, 0.0f, popup.title.c_str());
+				text(ImVec2(bMin.x + (boxW - ts.x) * 0.5f, bMin.y + pad * 0.5f), fontSize,
+					col(1.0f, 1.0f, 1.0f, 1.0f), popup.title.c_str());
+			}
+			const ImVec2 mouse = ImGui::GetIO().MousePos;
+			thread_local oc::vector<glm::vec4> rects;
+			rects.resize(n);
+			for (int i = 0; i < n; ++i)
+			{
+				const HudPopupButton& button = popup.buttons[i];
+				const ImVec2 sMin(bMin.x + pad + i * (btnW + pad), bMin.y + titleH + pad);
+				const ImVec2 sMax(sMin.x + btnW, sMin.y + btnH);
+				rects[i] = glm::vec4(sMin.x, sMin.y, sMax.x, sMax.y);
+				const bool hovered = mouse.x >= sMin.x && mouse.x <= sMax.x && mouse.y >= sMin.y && mouse.y <= sMax.y;
+				dl->AddRectFilled(sMin, sMax, button.selected ? col(0.12f, 0.30f, 0.18f, 0.95f)
+					: hovered ? col(0.16f, 0.18f, 0.22f, 0.9f) : col(0.10f, 0.10f, 0.13f, 0.8f), 4.0f * s);
+				dl->AddRect(sMin, sMax, button.selected ? col(0.3f, 1.0f, 0.4f, 0.95f)
+					: hovered ? col(1.0f, 1.0f, 1.0f, 0.8f) : col(0.5f, 0.5f, 0.55f, 0.6f), 4.0f * s, 0,
+					button.selected ? 2.0f * s : 1.0f * s);
+				const ImVec2 ls = font->CalcTextSizeA(labelFont, noWrap, 0.0f, button.label.c_str());
+				const float textBlockH = ls.y + (button.sub.empty() ? 0.0f : subFont + 1.0f * s);
+				float ty = sMin.y + (btnH - textBlockH) * 0.5f;
+				text(ImVec2(sMin.x + (btnW - ls.x) * 0.5f, ty), labelFont, col(1.0f, 1.0f, 1.0f, 1.0f), button.label.c_str());
+				if (!button.sub.empty())
+				{
+					ty += ls.y + 1.0f * s;
+					const ImVec2 ss = font->CalcTextSizeA(subFont, noWrap, 0.0f, button.sub.c_str());
+					text(ImVec2(sMin.x + (btnW - ss.x) * 0.5f, ty), subFont, col(0.8f, 0.8f, 0.8f, 1.0f), button.sub.c_str());
+				}
+			}
+			Globals::gameHud.setPopupButtonRects(rects);
 		}
 
 		// ---- bottom LEFT: the hotbar (one row, or a columns-wide GRID -- the RTS QWER/ASDF/ZXCV

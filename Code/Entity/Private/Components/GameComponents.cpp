@@ -21,7 +21,7 @@ GameProjectileParams GameProjectileComponent::params;
 // guards two small append-only vectors touched on the rare tick where a unit fires or dies.
 static std::mutex g_unitEventMutex;
 static oc::vector<GameUnitComponent::FireRequest> g_fireRequests;
-static oc::vector<uint32> g_deaths;
+static oc::vector<GameUnitComponent::DeathRecord> g_deaths;
 static oc::vector<GameUnitComponent::SeedRequest> g_seedRequests;
 
 void GameUnitComponent::takeFireRequests(oc::vector<FireRequest>& out)
@@ -38,10 +38,10 @@ void GameUnitComponent::takeSeedRequests(oc::vector<SeedRequest>& out)
     g_seedRequests.clear();
 }
 
-void GameUnitComponent::takeDeaths(oc::vector<uint32>& outSourceIds)
+void GameUnitComponent::takeDeaths(oc::vector<DeathRecord>& out)
 {
     const std::lock_guard<std::mutex> lock(g_unitEventMutex);
-    outSourceIds.swap(g_deaths);
+    out.swap(g_deaths);
     g_deaths.clear();
 }
 
@@ -180,17 +180,7 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
     }
     if (health <= 0.0f || pos.y < params.voidY)
     {
-        health = 0.0f;
-        if (!deathReported) // once — the queued destroy may take a tick to drain
-        {
-            deathReported = true;
-            Globals::scriptEvents.addDestroyRequest(EntityPtr(&entity));
-            if (sourceId != 0)
-            {
-                const std::lock_guard<std::mutex> lock(g_unitEventMutex);
-                g_deaths.push_back(sourceId); // its spawner frees a roster slot
-            }
-        }
+        kill(entity);
         return;
     }
 
@@ -344,16 +334,26 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
 
     // ---- combat: ONE short probe serves the structure bite, the emitter strain and the melee
     // sweep over enemy players/units (decoupled from the walk target: a wall in the way gets
-    // chewed too). The strain reach must fit inside the query radius.
+    // chewed too). The strain reach must fit inside the query radius. A unit MARCHING A ROUTE
+    // runs it too: the nearest enemy unit inside routeEngageRadius becomes its walk target for
+    // this tick (melee closes in, ranged fires at it), and the march resumes once it is gone.
     float stopRange = attackRange;
     bool inEnemyBubble = false; // stamped-radius signal — the shield-less FALLBACK when the baked
                                 // field is off (see the field block at the end)
-    if (!routing)
     {
         constexpr float c_strainRange = 12.0f; // emitter siege-drain reach
+        const float engageRadius = routing ? params.routeEngageRadius : 0.0f;
         thread_local oc::vector<uint64> nearby;
-        Globals::spatialIndex.querySphere(glm::dvec3(pos), glm::max(attackRange + 6.0f, c_strainRange),
-            SpatialLayer_Render, nearby);
+        Globals::spatialIndex.querySphere(glm::dvec3(pos),
+            glm::max(glm::max(attackRange + 6.0f, c_strainRange), engageRadius), SpatialLayer_Render, nearby);
+        float engageDistSq = engageRadius * engageRadius;
+        glm::vec3 engagePos(0.0f);
+        bool engage = false;
+        // Unit-vs-unit melee hits ONE victim: the nearest enemy unit inside reach (players in the
+        // swarm still take the area damage from every adjacent unit).
+        GameUnitComponent* meleeVictim = nullptr;
+        float meleeVictimDistSq = FLT_MAX;
+        float meleeVictimReach = 0.0f;
         GameStructureComponent* bite = nullptr;
         GameStructureComponent* strain = nullptr;
         float biteDist = FLT_MAX, strainDist = c_strainRange;
@@ -382,6 +382,12 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                 || glm::abs(other->pos.y - pos.y) >= 3.0f)
                 continue;
             const glm::vec2 to(other->pos.x - pos.x, other->pos.z - pos.z);
+            if (routing && glm::dot(to, to) < engageDistSq) // nearest enemy on the march
+            {
+                engageDistSq = glm::dot(to, to);
+                engagePos = other->pos;
+                engage = true;
+            }
             if (pu->puppet) // standing in the swarm hurts — no targeting needed
             {
                 const float reach = attackRange + 0.8f; // capsule allowance
@@ -391,12 +397,24 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             else if (!ranged) // unit-vs-unit melee at the victim's body ring
             {
                 const float reach = attackRange + pu->bodyRadius;
-                if (glm::dot(to, to) < reach * reach)
+                const float distSq = glm::dot(to, to);
+                if (distSq < reach * reach && distSq < meleeVictimDistSq)
                 {
-                    pu->damage(attackDps * deltaSec);
-                    stopRange = glm::max(stopRange, reach); // hold at the ring
+                    meleeVictim = pu;
+                    meleeVictimDistSq = distSq;
+                    meleeVictimReach = reach;
                 }
             }
+        }
+        if (meleeVictim)
+        {
+            meleeVictim->damage(attackDps * deltaSec);
+            stopRange = glm::max(stopRange, meleeVictimReach); // hold at the ring
+        }
+        if (engage)
+        {
+            walkTarget = engagePos; // the route waypoint waits (routeIndex is untouched)
+            haveWalkTarget = true;
         }
         if (ranged)
         {
@@ -628,6 +646,15 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
     else
         brake(); // nothing to walk to
 
+    // ---- HARD velocity cap, whatever launched the body (a field shove, a box3d push-out, a
+    // wall clip): the queued command applies before the next step, so `vel` stays the frame's
+    // truth for the push clamps below.
+    if (const float speed = glm::length(vel); speed > params.maxSpeed)
+    {
+        vel *= params.maxSpeed / speed;
+        Globals::physics.queueBodyCommand(pc->body, PhysicsWorld::EBodyCommand::SetLinearVelocity, vel);
+    }
+
     // ---- shield battery + push (the player rules, minus regen) ----
     if (fc && fc->emitter.isValid())
     {
@@ -724,10 +751,29 @@ void GameUnitComponent::damage(float amount)
     atomicAdd(pendingDamage, amount);
 }
 
+void GameUnitComponent::kill(Entity& entity)
+{
+    health = 0.0f;
+    if (deathReported) // once — the queued destroy may take a tick to drain
+        return;
+    deathReported = true;
+    Globals::scriptEvents.addDestroyRequest(EntityPtr(&entity));
+    if (sourceId != 0)
+    {
+        const std::lock_guard<std::mutex> lock(g_unitEventMutex);
+        g_deaths.push_back({ sourceId, popCost }); // its spawner frees the population
+    }
+}
+
 bool GameUnitComponent::updateFar(Entity& entity, float deltaSec)
 {
     if (!isAuthority() || puppet || !alive() || deltaSec <= 0.0f)
         return false;
+    if (entity.pos.y < params.voidY) // through the floor while unselected: the full sim never
+    {                                // visits it, so the far tick has to do the killing
+        kill(entity);
+        return false;
+    }
     PhysicsComponent* pc = getComponent<PhysicsComponent>(&entity);
     if (!pc || !pc->body.isValid())
         return false;
@@ -978,13 +1024,12 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
         entity.setProfiled(); // machine structures earn a per-entity profile scope (latched here —
                               // machineKind is stamped by the game AFTER spawn, so spawn can't know)
         BarracksData& b = barracks;
-        // idle Constructors in range accelerate the spawn clock (boost 1 = double speed)
-        b.spawnTimer = glm::max(0.0f, b.spawnTimer - deltaSec * (1.0f + b.boost));
-        if (b.spawnTimer <= 0.0f && b.aliveUnits < params.barracksUnitLimit && store[0] >= b.spawnCost)
+        b.spawnTimer = glm::max(0.0f, b.spawnTimer - deltaSec);
+        if (b.spawnTimer <= 0.0f && b.population + (int)b.spawnPop <= b.popCap && store[0] >= b.spawnCost)
         {
-            store[0] -= b.spawnCost; // cable-fed energy pays the unit (refunded on spawn fail)
-            ++b.aliveUnits;          // the unit's death event decrements it again
-            b.spawnTimer = params.barracksSpawnInterval;
+            store[0] -= b.spawnCost;      // cable-fed energy pays the unit (refunded on spawn fail)
+            b.population += b.spawnPop;   // the unit's death event frees it again
+            b.spawnTimer = b.spawnCost * params.barracksSecondsPerEnergy; // creation time follows the price
             const std::lock_guard<std::mutex> lock(g_structureEventMutex);
             g_spawnRequests.push_back(structureId);
         }
@@ -1019,6 +1064,10 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
             {
                 store[0] -= params.turretShotEnergy;
                 turret.fireTimer = params.turretFireInterval;
+                // HITSCAN lightning: the damage lands right here (damage() is atomic — the melee
+                // sweep uses the same call from workers); only the BEAM visual is queued.
+                if (GameUnitComponent* victim = getComponent<GameUnitComponent>(target))
+                    victim->damage(params.turretDamage);
                 const std::lock_guard<std::mutex> lock(g_structureEventMutex);
                 g_turretFire.push_back(TurretFireRequest{ pos + glm::vec3(0.0f, 1.0f, 0.0f),
                     target->pos, team });

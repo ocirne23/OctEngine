@@ -25,14 +25,14 @@ static constexpr const char* structurePrefabs[] = {
     "Entities/Game/barracksRunner.pre", "Entities/Game/barracksSpitter.pre", "Entities/Game/wall.pre",
     "Entities/Game/turret.pre", "Entities/Game/mineralstorage.pre", "Entities/Game/constructor.pre",
     "Entities/Game/base.pre", "Entities/Game/cablePower.pre", "Entities/Game/cablePipe.pre",
-    "Entities/Game/cableConveyor.pre", "Entities/Game/crossing.pre" };
+    "Entities/Game/cableConveyor.pre", "Entities/Game/crossing.pre", "Entities/Game/house.pre" };
 static constexpr const char* structureNames[] = { "Emitter", "Generator", "Connector", "Extractor",
     "Battery", "Fuel tank", "Solar", "Fabricator", "Bastion", "Lance", "Barracks", "Brute barracks",
     "Runner barracks", "Spitter barracks", "Wall", "Turret", "Mineral silo", "Constructor", "Base",
-    "Power cable", "Pipeline", "Conveyor", "Crossing" };
+    "Power cable", "Pipeline", "Conveyor", "Crossing", "House" };
 // Spawn height = each prefab's box HALF height, so every shape sits flush (see the prefabs).
 static constexpr float structureSpawnHeights[] = { 1.0f, 1.0f, 3.0f, 2.0f, 0.5f, 2.0f, 0.5f, 2.0f,
-    2.0f, 1.0f, 3.0f, 3.0f, 3.0f, 3.0f, 2.0f, 2.0f, 4.0f, 1.0f, 3.0f, 0.25f, 0.25f, 0.25f, 0.25f };
+    2.0f, 1.0f, 3.0f, 3.0f, 3.0f, 3.0f, 2.0f, 2.0f, 4.0f, 1.0f, 3.0f, 0.25f, 0.25f, 0.25f, 0.25f, 1.5f };
 static constexpr glm::vec3 c_blueprintColor(0.45f, 0.55f, 0.7f); // ghost tint until built
 static_assert(oc::size(structurePrefabs) == (size_t)EStructureType::Count);
 static_assert(oc::size(structureNames) == (size_t)EStructureType::Count);
@@ -98,9 +98,7 @@ void StructureSystem::registerTweaks()
     Tweak::floatVar("Game/Economy", "Bastion cost", &m_costs[8], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Lance cost", &m_costs[9], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Barracks cost", &m_costs[10], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Brute barracks cost", &m_costs[11], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Runner barracks cost", &m_costs[12], 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Game/Economy", "Spitter barracks cost", &m_costs[13], 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "House cost", &m_costs[(int)EStructureType::House], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Mineral silo cost", &m_costs[16], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Constructor cost", &m_costs[17], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Power cable cost", &m_costs[(int)EStructureType::CablePower], 0.0f, 100.0f, 0.5f);
@@ -110,9 +108,6 @@ void StructureSystem::registerTweaks()
     Tweak::floatVar("Game/Structures", "Cable health max", &m_cableHealthMax, 1.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Structures", "Constructor range", &m_constructorRange, 2.0f, 50.0f, 0.5f);
     Tweak::floatVar("Game/Structures", "Constructor build rate", &m_constructorBuildRate, 0.5f, 50.0f, 0.25f);
-    Tweak::floatVar("Game/Structures", "Constructor boost rate", &m_constructorBoostRate, 0.0f, 5.0f, 0.05f);
-    Tweak::floatVar("Game/Structures", "Constructor boost materials/s", &m_constructorBoostMaterials, 0.0f, 20.0f, 0.1f);
-    Tweak::floatVar("Game/Structures", "Constructor boost energy/s", &m_constructorBoostEnergy, 0.0f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Structures", "Waypoint radius", &m_waypointRadius, 0.5f, 15.0f, 0.25f);
     Tweak::floatVar("Game/Economy", "Mineral base capacity", &m_mineralBaseCapacity, 10.0f, 5000.0f, 5.0f);
     Tweak::floatVar("Game/Economy", "Mineral silo capacity", &m_mineralSiloCapacity, 10.0f, 5000.0f, 5.0f);
@@ -162,15 +157,24 @@ void StructureSystem::registerTweaks()
     // Production tuning consumed by the component's machine logic (names unchanged — the saved
     // cfg keys keep applying).
     GameStructureParams& sp = GameStructureComponent::params;
-    Tweak::intVar("Game/Friendlies", "Barracks unit limit", &sp.barracksUnitLimit, 0, 16, 1);
-    Tweak::floatVar("Game/Friendlies", "Barracks spawn interval", &sp.barracksSpawnInterval, 1.0f, 60.0f, 0.5f);
+    Tweak::intVar("Game/Friendlies", "Barracks population", &m_barracksPopulation, 0, 200, 1);
+    Tweak::intVar("Game/Friendlies", "House population", &m_housePopulation, 0, 100, 1);
+    Tweak::floatVar("Game/Friendlies", "House link radius", &m_houseLinkRadius, 2.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Friendlies", "Barracks seconds per energy", &sp.barracksSecondsPerEnergy, 0.05f, 5.0f, 0.05f);
     Tweak::floatVar("Game/Friendlies", "Grunt spawn energy", &m_spawnEnergy[0], 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Friendlies", "Brute spawn energy", &m_spawnEnergy[1], 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Friendlies", "Runner spawn energy", &m_spawnEnergy[2], 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Friendlies", "Spitter spawn energy", &m_spawnEnergy[3], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Friendlies", "Swarm spawn energy", &m_spawnEnergy[4], 0.0f, 100.0f, 0.5f);
+    Tweak::intVar("Game/Friendlies", "Grunt population", &m_unitPopulation[0], 0, 50, 1);
+    Tweak::intVar("Game/Friendlies", "Brute population", &m_unitPopulation[1], 0, 50, 1);
+    Tweak::intVar("Game/Friendlies", "Runner population", &m_unitPopulation[2], 0, 50, 1);
+    Tweak::intVar("Game/Friendlies", "Spitter population", &m_unitPopulation[3], 0, 50, 1);
+    Tweak::intVar("Game/Friendlies", "Swarm population", &m_unitPopulation[4], 0, 50, 1);
     Tweak::floatVar("Game/Friendlies", "Turret range", &sp.turretRange, 4.0f, 60.0f, 0.5f);
     Tweak::floatVar("Game/Friendlies", "Turret fire interval", &sp.turretFireInterval, 0.1f, 10.0f, 0.05f);
     Tweak::floatVar("Game/Friendlies", "Turret shot energy", &sp.turretShotEnergy, 0.0f, 20.0f, 0.1f);
+    Tweak::floatVar("Game/Friendlies", "Turret damage", &sp.turretDamage, 0.0f, 500.0f, 1.0f);
 }
 
 // ---------------------------------------------------------------- frame view
@@ -180,8 +184,44 @@ void StructureSystem::refresh()
     ProfileScope scope("Structures refresh", EProfileCategory::Game);
     // The roster is maintained at the spawn/remove seams (no world query — type, node and id index
     // were recorded at spawnStructure); only the live tuning re-stamps per frame so tweaks apply.
+    linkHouses(); // house counts feed the barracks' population cap stamped below
     for (const Ref& s : m_frame)
         stampTuning(s);
+}
+
+void StructureSystem::linkHouses()
+{
+    for (const Ref& s : m_frame)
+        if (isBarracksType(s.type))
+            s.state->barracks.houses = 0;
+    const float radiusSq = m_houseLinkRadius * m_houseLinkRadius;
+    for (Ref& h : m_frame)
+    {
+        if (h.type != EStructureType::House)
+            continue;
+        h.linkedId = 0;
+        if (h.state->blueprint)
+            continue; // a ghost house feeds nothing
+        const glm::vec2 hp(h.entity->pos.x, h.entity->pos.z);
+        float bestSq = radiusSq;
+        const Ref* best = nullptr;
+        for (const Ref& b : m_frame)
+        {
+            if (!isBarracksType(b.type) || b.state->blueprint || b.state->team != h.state->team)
+                continue;
+            const glm::vec2 d = glm::vec2(b.entity->pos.x, b.entity->pos.z) - hp;
+            const float distSq = glm::dot(d, d);
+            if (distSq <= bestSq)
+            {
+                bestSq = distSq;
+                best = &b;
+            }
+        }
+        if (!best)
+            continue;
+        h.linkedId = best->state->structureId;
+        best->state->barracks.houses = (uint8)glm::min((int)best->state->barracks.houses + 1, 255);
+    }
 }
 
 void StructureSystem::stampTuning(const Ref& s)
@@ -211,14 +251,16 @@ void StructureSystem::stampTuning(const Ref& s)
     for (GameStructureLink& l : c.links)
         l.throughput = m_cableThroughput[glm::min((int)l.medium, 2)];
     // The union's machine variant (barracks spawn / turret fire logic runs per-entity in the
-    // component update; the per-TYPE spawn cost is stamped here so the tweak stays live).
+    // component update; the selected unit type's prices + the population cap are stamped here so
+    // the tweaks and the house links stay live).
     if (isBarracksType(s.type))
     {
         c.machineKind = GameStructureComponent::EMachineKind::Barracks;
-        c.barracks.spawnCost = m_spawnEnergy[
-            s.type == EStructureType::BarracksBrute ? 1
-            : s.type == EStructureType::BarracksRunner ? 2
-            : s.type == EStructureType::BarracksSpitter ? 3 : 0];
+        if (!isBarracksUnitType(c.barracks.unitType))
+            c.barracks.unitType = 0;
+        c.barracks.spawnCost = m_spawnEnergy[c.barracks.unitType];
+        c.barracks.spawnPop = (uint8)glm::clamp(m_unitPopulation[c.barracks.unitType], 0, 255);
+        c.barracks.popCap = m_barracksPopulation + (int)c.barracks.houses * m_housePopulation;
     }
     else
         c.machineKind = s.type == EStructureType::Turret
@@ -914,7 +956,7 @@ void StructureSystem::rebuildDerivedLinks()
     //    batteries on big runs), lowest id as the deterministic tie-break (bands come from
     //    stampTuning — same types/ids on every instance, so clients derive the same star).
     //    Key = (minId << 32 | maxId), value = medium mask.
-    constexpr size_t c_runCliqueCap = 16; // 16 buildings = 120 links; past that the star bounds it
+    constexpr size_t c_runCliqueCap = 32; // 32 buildings = 496 links; past that the star bounds it
     oc::unordered_map<uint64, uint8> desired;
     const auto pairKey = [](uint32 a, uint32 b) {
         return (uint64)glm::min(a, b) << 32 | glm::max(a, b); };
@@ -1364,11 +1406,6 @@ void StructureSystem::tickProduction(float deltaSec)
         m_fuelTotal[s.state->team] += s.state->store[1];
         fuelSum += s.state->store[1];
     }
-    // Fuel-collapse tripwire: make the FIRST domino of the death spiral loud.
-    const bool fuelDry = fuelSum <= 0.01f && totalDemand > 0.0f;
-    if (fuelDry && !m_wasFuelDry)
-        Log::warning("FUEL DRY — generators stopped, buffers draining; emitters go dark next");
-    m_wasFuelDry = fuelDry;
 }
 
 void StructureSystem::tickDamage(float)
@@ -1401,47 +1438,14 @@ void StructureSystem::tickConstructors(float deltaSec)
 {
     ProfileScope scope("Structures constructors", EProfileCategory::Game);
     // A powered Constructor invests its conveyor-fed mineral stock into the nearest own-team
-    // blueprint OR damaged structure in range; with nothing to build it SPEEDS UP the nearest
-    // own-team barracks (materials + energy, all-or-nothing per tick). The boost lives ON the
-    // barracks component (rebuilt here every tick — no id-keyed map).
-    for (const Ref& ref : m_frame)
-        if (isBarracksType(ref.type))
-            ref.state->barracks.boost = 0.0f;
+    // blueprint OR damaged structure in range; with nothing to build or repair it idles.
     for (const Ref& ref : m_frame)
     {
         GameStructureComponent& s = *ref.state;
         if (s.blueprint || ref.type != EStructureType::Constructor || !s.powered || s.store[2] <= 0.0f)
             continue;
-        const glm::vec3 pos = ref.entity->pos;
         const float budget = glm::min(m_constructorBuildRate * deltaSec, s.store[2]);
-        const float spent = fundNearbyBlueprint(pos, m_constructorRange, (uint8)s.team, budget, true);
-        s.store[2] -= spent;
-        if (spent > 0.0f)
-            continue; // build/repair takes priority over boosting
-        int barracks = -1;
-        float bestDist = m_constructorRange;
-        for (int i = 0; i < (int)m_frame.size(); ++i)
-        {
-            const Ref& b = m_frame[i];
-            if (!isBarracksType(b.type) || b.state->blueprint || b.state->team != s.team)
-                continue;
-            const float dist = glm::distance(glm::vec2(b.entity->pos.x, b.entity->pos.z),
-                glm::vec2(pos.x, pos.z));
-            if (dist < bestDist)
-            {
-                bestDist = dist;
-                barracks = i;
-            }
-        }
-        if (barracks < 0)
-            continue;
-        const float mats = m_constructorBoostMaterials * deltaSec;
-        const float energy = m_constructorBoostEnergy * deltaSec;
-        if (s.store[2] < mats || s.store[0] < energy)
-            continue; // starved constructors idle
-        s.store[2] -= mats;
-        s.store[0] -= energy;
-        m_frame[barracks].state->barracks.boost += m_constructorBoostRate;
+        s.store[2] -= fundNearbyBlueprint(ref.entity->pos, m_constructorRange, (uint8)s.team, budget, true);
     }
 }
 
@@ -1474,6 +1478,21 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
             onRouteLiveUnits(request.id, oc::span<const glm::vec3>(s.route.data(), s.route.size()));
     }
     m_routeRequests.clear();
+    for (const UnitTypeRequest& request : m_unitTypeRequests)
+    {
+        const int index = structureIndexById(request.id);
+        if (index < 0 || !isBarracksType(m_frame[index].type)
+            || m_frame[index].state->team != request.team || !isBarracksUnitType(request.unitType))
+            continue; // died, not a barracks, someone else's, or garbage — refused (the MP seam)
+        GameStructureComponent& s = *m_frame[index].state;
+        if (s.barracks.unitType == request.unitType)
+            continue;
+        s.barracks.unitType = request.unitType;
+        stampTuning(m_frame[index]); // prices follow the type this same tick
+        if (onUnitTypeChanged)
+            onUnitTypeChanged(request.id);
+    }
+    m_unitTypeRequests.clear();
     requestScope.stop();
 
     // Same-tick links for fresh placements (each placeStructure above set the dirty flag); a death
@@ -1570,7 +1589,23 @@ void StructureSystem::mirrorStructureState(uint32 id, float healthFrac, float ch
     s.flowUtil = utilFrac; // already server-smoothed
     if (hasShieldEmitter(ref.type)) // union: emitter variant (Base included)
         s.emitter.outputFracTarget = outputFrac; // tickMirror eases the live field toward this
+    else if (isBarracksType(ref.type)) // the output byte carries the barracks' POPULATION instead
+        s.barracks.population = (int)glm::round(outputFrac * 255.0f);
     s.powered = powered;
+}
+
+void StructureSystem::mirrorUnitType(uint32 id, uint8 unitType)
+{
+    const int index = structureIndexById(id);
+    if (index < 0 || !isBarracksType(m_frame[index].type) || !isBarracksUnitType(unitType))
+        return;
+    m_frame[index].state->barracks.unitType = unitType;
+    stampTuning(m_frame[index]);
+}
+
+void StructureSystem::queueUnitTypeRequest(uint32 id, uint8 unitType, uint8 team)
+{
+    m_unitTypeRequests.push_back({ id, unitType, team });
 }
 
 void StructureSystem::mirrorCableProgress(uint32 id, float healthFrac)
@@ -1615,6 +1650,8 @@ void StructureSystem::saveTo(AssetNode& root) const
         n.set("Minerals", s.state->store[2]);
         if (hasShieldEmitter(s.type)) // union variants: only the active one is meaningful
             n.set("OutputFrac", s.state->emitter.outputFrac);
+        if (isBarracksType(s.type))
+            n.set("UnitType", oc::to_string((int)s.state->barracks.unitType));
         if (isBarracksType(s.type) && !s.state->route.empty())
         {
             AssetNode& r = n.addChild("Route");
@@ -1647,7 +1684,7 @@ void StructureSystem::loadFrom(const AssetNode& root)
     clearAllStructures();
     for (const AssetNode* n : root.findAll("Structure"))
     {
-        const int typeInt = n->find("Type") ? n->find("Type")->asInt() : -1;
+        int typeInt = n->find("Type") ? n->find("Type")->asInt() : -1;
         const uint32 id = n->find("Id") ? (uint32)n->find("Id")->asInt() : 0;
         if (typeInt < 0 || typeInt >= (int)EStructureType::Count || id == 0 || structureIndexById(id) >= 0)
             continue; // garbage / duplicate entry
@@ -1655,6 +1692,15 @@ void StructureSystem::loadFrom(const AssetNode& root)
         {
             Log::warning("Load game: Connector is retired — entry skipped (old save)");
             continue;
+        }
+        // Old saves' per-type barracks become a Barracks producing that type (Brute 1 / Runner 2 /
+        // Spitter 3 in ENpcType order); a UnitType key from a newer save wins below.
+        int unitType = 0;
+        if (isRetiredBarracksType((EStructureType)typeInt))
+        {
+            unitType = typeInt == (int)EStructureType::BarracksBrute ? 1
+                     : typeInt == (int)EStructureType::BarracksRunner ? 2 : 3;
+            typeInt = (int)EStructureType::Barracks;
         }
         const glm::vec3 pos = n->find("Position") ? n->find("Position")->asVec3() : glm::vec3(0.0f);
         const glm::vec3 facing = n->find("Facing") ? n->find("Facing")->asVec3() : glm::vec3(0.0f);
@@ -1679,6 +1725,13 @@ void StructureSystem::loadFrom(const AssetNode& root)
         if (hasShieldEmitter((EStructureType)typeInt)) // union variants: write only the active one
             s.emitter.outputFrac = glm::clamp(n->find("OutputFrac") ? n->find("OutputFrac")->asFloat() : 0.0f,
                 0.0f, 1.0f);
+        if (isBarracksType((EStructureType)typeInt))
+        {
+            if (const AssetNode* u = n->find("UnitType"))
+                unitType = u->asInt();
+            s.barracks.unitType = (uint8)(isBarracksUnitType(unitType) ? unitType : 0);
+            stampTuning(m_frame[index]);
+        }
         if (const AssetNode* r = n->find("Route"); r && isBarracksType((EStructureType)typeInt))
             for (const AssetNode* p : r->findAll("Point"))
                 if ((int)s.route.size() < MaxRouteWaypoints)

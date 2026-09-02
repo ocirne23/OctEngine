@@ -95,6 +95,8 @@ void NpcSystem::registerTweaks()
     Tweak::floatVar("Game/Enemies", "Field push gain", &up.pushGain, 0.0f, 100000.0f, 100.0f);
     Tweak::floatVar("Game/Enemies", "Retarget interval", &up.retargetInterval, 1.0f, 60.0f, 0.5f);
     Tweak::floatVar("Game/Enemies", "Target search radius", &up.targetSearchRadius, 5.0f, 400.0f, 1.0f);
+    Tweak::floatVar("Game/Enemies", "Route engage radius", &up.routeEngageRadius, 0.0f, 60.0f, 0.5f);
+    Tweak::floatVar("Game/Enemies", "Unit max speed (m/s)", &up.maxSpeed, 1.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Enemies", "Target track radius", &up.targetTrackRadius, 0.0f, 400.0f, 1.0f);
     Tweak::floatVar("Game/Enemies", "Nav follow radius", &up.navFollowRadius, 0.0f, 400.0f, 1.0f);
     Tweak::boolean("Game/Enemies", "Nav fields", &up.navEnabled);
@@ -124,7 +126,7 @@ void NpcSystem::registerTweaks()
     Tweak::floatVar("Game/Enemies/Steer", "Order flow blind (s)", &up.orderFlowBlind, 0.0f, 10.0f, 0.1f);
     // Shot speeds, applied when the fire queues are serviced here (the rest of the production
     // tuning registers from StructureSystem onto the component params).
-    Tweak::floatVar("Game/Friendlies", "Turret shot speed", &m_turretShotSpeed, 5.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Friendlies", "Turret beam lifetime", &m_beamLifetime, 0.02f, 2.0f, 0.01f);
     Tweak::floatVar("Game/Enemies", "Spitter shot speed", &m_spitterShotSpeed, 2.0f, 80.0f, 0.5f);
     // Far tick: neither Saved nor Synced, like the rest of Game/Sim LOD (explicit flags beat the
     // scoped ones above).
@@ -161,21 +163,80 @@ void NpcSystem::clear()
     m_turretFireScratch.clear();
 }
 
+static uint32 packColor(const glm::vec3& c)
+{
+    const glm::vec3 s = glm::clamp(c, 0.0f, 1.0f) * 255.0f;
+    return (uint32)s.x | ((uint32)s.y << 8) | ((uint32)s.z << 16) | 0xFF000000u;
+}
+
 // A unit spawn point on a ring around a building, on the first of 8 probed angles whose cell is
 // free of structures (and inside the arena bounds) — units must never spawn INSIDE the building.
+// With a preferred direction (the barracks' first waypoint) the probe starts THERE and fans out
+// to both sides (+45, -45, +90, ...), so the unit spawns facing its route; without one the start
+// angle is random.
 static glm::vec3 freeSpawnPointAround(const StructureSystem& structures, const glm::vec3& center,
-    float ringRadius)
+    float ringRadius, const glm::vec2* preferDirXZ = nullptr)
 {
-    const float start = glm::linearRand(0.0f, glm::two_pi<float>());
+    const bool directed = preferDirXZ && glm::dot(*preferDirXZ, *preferDirXZ) > 1e-6f;
+    const float start = directed ? std::atan2(preferDirXZ->y, preferDirXZ->x)
+                                 : glm::linearRand(0.0f, glm::two_pi<float>());
     for (int k = 0; k < 8; ++k)
     {
-        const float a = start + (float)k * glm::two_pi<float>() / 8.0f;
+        // k -> 0, +1, -1, +2, -2, +3, -3, +4 steps of 45 degrees from the start angle
+        const int step = (k + 1) / 2 * ((k & 1) ? 1 : -1);
+        const float a = start + (float)step * glm::two_pi<float>() / 8.0f;
         const glm::vec3 p(center.x + std::cos(a) * ringRadius, 1.0f, center.z + std::sin(a) * ringRadius);
         if (structures.cellsFree(EStructureType::Emitter, p,
             glm::quat(1.0f, 0.0f, 0.0f, 0.0f), /*ignoreCables*/ true)) // 1x1 probe; cables are walk-through
             return p;
     }
     return glm::vec3(center.x + std::cos(start) * ringRadius, 1.0f, center.z + std::sin(start) * ringRadius);
+}
+
+void NpcSystem::addBeam(const glm::vec3& from, const glm::vec3& to)
+{
+    m_beams.push_back({ from, to, m_beamLifetime });
+    m_newBeams.push_back({ from, to, m_beamLifetime });
+}
+
+void NpcSystem::drawBeams(float deltaSec)
+{
+    // A BUNDLE of jagged lines per strike (re-jittered every frame = flicker), fading over the
+    // lifetime: a bright dense CORE of tightly packed strands plus wider, dimmer forks around it
+    // — debug lines are 1 px, so thickness comes from count.
+    constexpr int c_segments = 8;
+    constexpr int c_coreStrands = 6;  // spread 0.12 m: reads as one thick bolt
+    constexpr int c_forkStrands = 4;  // spread 0.9 m: the crackle around it
+    for (Beam& b : m_beams)
+    {
+        b.ttl -= deltaSec;
+        const float fade = glm::clamp(b.ttl / glm::max(m_beamLifetime, 1e-3f), 0.0f, 1.0f);
+        const glm::vec3 axis = b.to - b.from;
+        glm::vec3 side = glm::cross(axis, glm::vec3(0.0f, 1.0f, 0.0f));
+        if (glm::dot(side, side) < 1e-4f)
+            side = glm::vec3(1.0f, 0.0f, 0.0f);
+        side = glm::normalize(side);
+        const glm::vec3 up = glm::normalize(glm::cross(side, glm::normalize(axis)));
+        const auto strand = [&](float spread, const glm::vec3& tint)
+        {
+            const uint32 color = packColor(tint * (0.35f + 0.65f * fade));
+            glm::vec3 prev = b.from;
+            for (int i = 1; i <= c_segments; ++i)
+            {
+                const float t = (float)i / c_segments;
+                glm::vec3 p = b.from + axis * t;
+                if (i < c_segments) // the ends stay anchored on the muzzle and the victim
+                    p += side * glm::linearRand(-spread, spread) + up * glm::linearRand(-spread, spread);
+                Globals::rendererVK.addDebugLine(prev, p, color);
+                prev = p;
+            }
+        };
+        for (int k = 0; k < c_coreStrands; ++k)
+            strand(0.12f, glm::vec3(0.8f, 0.95f, 1.0f));
+        for (int k = 0; k < c_forkStrands; ++k)
+            strand(0.9f, glm::vec3(0.45f, 0.75f, 1.0f));
+    }
+    oc::erase_if(m_beams, [](const Beam& b) { return b.ttl <= 0.0f; });
 }
 
 static float barracksSpawnRadius()
@@ -197,9 +258,11 @@ Entity* NpcSystem::spawnUnit(const StructureSystem& structures, const glm::vec3&
     Globals::world.addRootEntity(entity);
     unit->team = team;
     unit->sourceId = sourceId;
+    unit->popCost = (uint8)glm::clamp(structures.unitPopulation((int)type), 0, 255);
     if (ForceComponent* fc = getComponent<ForceComponent>(entity.get()))
         fc->emitter.setTeam(team); // prefabs author team 1 — units carry their builder's team
-    // Copy the barracks route in AT SPAWN (orders tier): the unit marches it before its AI.
+    // Copy the barracks route in AT SPAWN (orders tier): the unit marches it before its AI
+    // (still engaging enemy units that come within "Route engage radius" on the way).
     if (const int source = structures.structureIndexById(sourceId); source >= 0)
     {
         const oc::span<const glm::vec3> route = structures.structureRoute(source);
@@ -339,41 +402,25 @@ void NpcSystem::service(StructureSystem& structures)
         if (index < 0)
             continue; // the barracks died between deciding and servicing — its units died with it
         const StructureSystem::Ref& s = structures.structures()[index];
-        const ENpcType unitType = s.type == EStructureType::BarracksBrute ? ENpcType::Brute
-            : s.type == EStructureType::BarracksRunner ? ENpcType::Runner
-            : s.type == EStructureType::BarracksSpitter ? ENpcType::Spitter : ENpcType::Grunt;
-        if (!spawnUnit(structures, freeSpawnPointAround(structures, s.entity->pos, barracksSpawnRadius()),
-            barracksId, (uint8)s.state->team, unitType))
+        const ENpcType unitType = (ENpcType)glm::min((int)s.state->barracks.unitType, (int)ENpcType::Count - 1);
+        // Spawn on the side facing the route's first waypoint (random side without a route).
+        const oc::span<const glm::vec3> route = structures.structureRoute(index);
+        const glm::vec2 toWaypoint = route.empty() ? glm::vec2(0.0f)
+            : glm::vec2(route[0].x - s.entity->pos.x, route[0].z - s.entity->pos.z);
+        if (!spawnUnit(structures, freeSpawnPointAround(structures, s.entity->pos, barracksSpawnRadius(),
+            route.empty() ? nullptr : &toWaypoint), barracksId, (uint8)s.state->team, unitType))
         {
             s.state->store[0] = glm::min(s.state->store[0] + s.state->barracks.spawnCost,
                 s.state->capacity[0]);
-            s.state->barracks.aliveUnits = glm::max(s.state->barracks.aliveUnits - 1, 0);
+            s.state->barracks.population = glm::max(s.state->barracks.population - (int)s.state->barracks.spawnPop, 0);
         }
     }
-    // Shots the TURRETS asked for (their component paid the energy and set the cooldown).
+    // Lightning the TURRETS fired (their component paid the energy, set the cooldown and landed
+    // the hitscan damage): only the beam visual is left to add.
+    m_newBeams.clear();
     GameStructureComponent::takeTurretFireRequests(m_turretFireScratch);
     for (const GameStructureComponent::TurretFireRequest& request : m_turretFireScratch)
-    {
-        glm::vec3 dir = request.target - request.from;
-        const float len = glm::length(dir);
-        if (len < 1e-3f)
-            continue;
-        dir /= len;
-        // Spawn just OUTSIDE the turret's own collider along the shot: the request origin sits
-        // INSIDE the box (turret pos + 1 up; turret.pre HalfExtents 2), and a projectile's FIRST
-        // contact spends it — a 1 m offset left every shot dying on its own turret. Ray-exit the
-        // (margin-inflated) box from the muzzle and start the shot there.
-        const glm::vec3 muzzleRel(0.0f, 1.0f, 0.0f); // the component's request.from offset
-        const glm::vec3 half(2.0f + 0.35f);          // collider half extents + shot clearance
-        float tExit = 1e9f;
-        for (int a = 0; a < 3; ++a)
-            if (glm::abs(dir[a]) > 1e-5f)
-                tExit = glm::min(tExit, ((dir[a] > 0.0f ? half[a] : -half[a]) - muzzleRel[a]) / dir[a]);
-        if (tExit > 1e8f || tExit + 0.1f >= len)
-            continue; // degenerate aim, or the target stands inside the clearance: no shot
-        fireShot("Entities/Game/projectile.pre", "Projectile", request.from + dir * (tExit + 0.05f),
-            dir * m_turretShotSpeed, request.team);
-    }
+        addBeam(request.from, request.target + glm::vec3(0.0f, 0.8f, 0.0f));
 
     // Shots the RANGED units asked for during the pass (spawning is main-thread only).
     GameUnitComponent::takeFireRequests(m_fireScratch);
@@ -386,12 +433,12 @@ void NpcSystem::service(StructureSystem& structures)
             fireShot("Entities/Game/enemyShot.pre", "EnemyShot", from + dir / len * 1.2f,
                 dir / len * m_spitterShotSpeed, request.team);
     }
-    // Each reported death frees a slot on its spawner — the roster count is maintained by the
+    // Each reported death frees its population on its spawner — the tally is maintained by the
     // spawn/death edges instead of by recounting units every frame.
     GameUnitComponent::takeDeaths(m_deathScratch);
-    for (const uint32 sourceId : m_deathScratch)
-        if (GameStructureComponent* barracks = structures.structureStateById(sourceId))
-            barracks->barracks.aliveUnits = glm::max(barracks->barracks.aliveUnits - 1, 0);
+    for (const GameUnitComponent::DeathRecord& death : m_deathScratch)
+        if (GameStructureComponent* barracks = structures.structureStateById(death.sourceId))
+            barracks->barracks.population = glm::max(barracks->barracks.population - (int)death.popCost, 0);
 }
 
 void NpcSystem::saveUnits(AssetNode& root) const
@@ -421,11 +468,11 @@ void NpcSystem::saveUnits(AssetNode& root) const
 void NpcSystem::loadUnits(const AssetNode& root, StructureSystem& structures)
 {
     clear(); // despawn live units + projectiles (projectiles are transient, not saved)
-    // Roster counts are maintained by the spawn/death edges, so a load has to re-seed them: the
-    // structures were just rebuilt (all zero) and every unit below re-registers as it spawns.
+    // Population tallies are maintained by the spawn/death edges, so a load has to re-seed them:
+    // the structures were just rebuilt (all zero) and every unit below re-registers as it spawns.
     for (const StructureSystem::Ref& s : structures.structures())
         if (isBarracksType(s.type))
-            s.state->barracks.aliveUnits = 0;
+            s.state->barracks.population = 0;
     for (const AssetNode* n : root.findAll("Unit"))
     {
         const int typeInt = glm::clamp(n->find("Type") ? n->find("Type")->asInt() : 0,
@@ -442,6 +489,6 @@ void NpcSystem::loadUnits(const AssetNode& root, StructureSystem& structures)
         u->energy = glm::clamp(n->find("Energy") ? n->find("Energy")->asFloat() : u->energy, 0.0f, u->energyMax);
         u->routeIndex = (uint8)glm::clamp(n->find("RouteIndex") ? n->find("RouteIndex")->asInt() : 0, 0, 255);
         if (GameStructureComponent* barracks = structures.structureStateById(source))
-            ++barracks->barracks.aliveUnits;
+            barracks->barracks.population += u->popCost;
     }
 }

@@ -3,6 +3,7 @@
 # No power, no grid role; just capacity that dies with it. A 4x8x4 m silo tower (Pillar2).
 # Spawned origin 4.0 above the ground hit.
 Prefab gameMineralStorage
+	Global true
 	Component Render
 		ObjectContainer baseshapes
 		Node Pillar2

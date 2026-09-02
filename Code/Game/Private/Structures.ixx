@@ -15,15 +15,22 @@ import Force;
 // same no-lists pattern the units use), the death sweep, per-team totals, mirrors and save/load.
 // SAVE FILES STORE Type AS AN INT: never remove or reorder values — new types APPEND before Count.
 // Connector is a RETIRED slot (range links are gone; cables are physical now): its table entries
-// remain, placement refuses it and loadFrom skips it.
-export enum class EStructureType : uint8 { Emitter, Generator, Connector, Extractor, Battery, FuelTank, Solar, Fabricator, Bastion, Lance, Barracks, BarracksBrute, BarracksRunner, BarracksSpitter, Wall, Turret, MineralSilo, Constructor, Base, CablePower, CablePipe, CableConveyor, Crossing, Count };
+// remain, placement refuses it and loadFrom skips it. BarracksBrute/Runner/Spitter are RETIRED
+// too (ONE barracks type now produces the unit type its owner picks): placement refuses them and
+// loadFrom maps an old-save entry to a Barracks with that unit type preset.
+export enum class EStructureType : uint8 { Emitter, Generator, Connector, Extractor, Battery, FuelTank, Solar, Fabricator, Bastion, Lance, Barracks, BarracksBrute, BarracksRunner, BarracksSpitter, Wall, Turret, MineralSilo, Constructor, Base, CablePower, CablePipe, CableConveyor, Crossing, House, Count };
 
+export constexpr bool isRetiredBarracksType(EStructureType t)
+{
+    return t == EStructureType::BarracksBrute || t == EStructureType::BarracksRunner
+        || t == EStructureType::BarracksSpitter;
+}
 // Placeable = anything a player may build. The Base only enters through spawnBase; the Connector
-// is retired.
+// and the per-type barracks are retired.
 export constexpr bool isPlaceableType(EStructureType t)
 {
     return (int)t < (int)EStructureType::Count
-        && t != EStructureType::Base && t != EStructureType::Connector;
+        && t != EStructureType::Base && t != EStructureType::Connector && !isRetiredBarracksType(t);
 }
 // PHYSICAL CABLES: 1-cell grid segments, one type per medium. A contiguous same-medium run of
 // BUILT segments touching two buildings derives a GameStructureLink between them (see
@@ -45,10 +52,21 @@ export constexpr int cableMediumOf(EStructureType t) // 0 energy, 1 fuel, 2 mine
          : t == EStructureType::CableConveyor ? 2 : -1;
 }
 
+// (No live structure ever carries a retired per-type barracks value — loadFrom converts them.)
 export constexpr bool isBarracksType(EStructureType t)
 {
-    return t == EStructureType::Barracks || t == EStructureType::BarracksBrute
-        || t == EStructureType::BarracksRunner || t == EStructureType::BarracksSpitter;
+    return t == EStructureType::Barracks;
+}
+
+// UNIT TYPES a barracks can produce, indexed like Npc's ENpcType (Grunt, Brute, Runner, Spitter,
+// Swarm — Npc.ixx static_asserts the count). This partition cannot import Npc, so the per-type
+// prices live here as plain arrays.
+export constexpr int GameNumUnitTypes = 5;
+// What a barracks may be SET to produce: everything but the Spitter (index 3 — an enemy-only
+// wave unit). Requests/mirrors/loads for anything else fall back to the Grunt (0).
+export constexpr bool isBarracksUnitType(int t)
+{
+    return t >= 0 && t < GameNumUnitTypes && t != 3;
 }
 
 // The three emitter variants: Emitter = balanced sphere, Bastion = big expensive anchor bubble,
@@ -93,6 +111,9 @@ public:
         // Crossing: the medium it currently conducts (-1 = inert), stamped by rebuildDerivedLinks;
         // drives the tint (power/pipe/conveyor hue, authored gray while inert).
         int8 conductMedium = -1;
+        // House: the barracks it feeds population to (0 = none in range), re-derived every
+        // refresh() — nearest BUILT own-team barracks within "House link radius".
+        uint32 linkedId = 0;
     };
 
     // CO-OP hooks: the server runs the real sim and notifies; clients mirror via the mirror* calls
@@ -104,6 +125,7 @@ public:
     // excluded from GSt, so this is the only way a client learns a cable finished building.
     oc::function<void(uint32 id)> onStructureBuilt;
     oc::function<void(uint32 id)> onRouteChanged;                          // server -> send GRt
+    oc::function<void(uint32 id)> onUnitTypeChanged;                       // server -> send GBu
     // Authority: re-push a changed route onto the barracks' live units. The unit roster lives in
     // NpcSystem (this partition cannot import it), so GameMatch wires the walk in.
     oc::function<void(uint32 id, oc::span<const glm::vec3> route)> onRouteLiveUnits;
@@ -117,6 +139,7 @@ public:
     // healthMax. The built flip still arrives through the GPl re-send.
     void mirrorCableProgress(uint32 id, float healthFrac);
     void mirrorRoute(uint32 id, oc::span<const glm::vec3> points);
+    void mirrorUnitType(uint32 id, uint8 unitType);
     void mirrorTotals(oc::span<const float> minerals, oc::span<const float> fuel, float energyTotal,
         float energyCap, float genRate, float useRate)
     {
@@ -169,7 +192,36 @@ public:
         const glm::vec3& facing, uint8 team);
     void queueDemolishRequest(uint32 id, uint8 team);
     void queueRouteRequest(uint32 id, oc::span<const glm::vec3> points, uint8 team);
+    void queueUnitTypeRequest(uint32 id, uint8 unitType, uint8 team); // barracks: what it produces
     static constexpr int MaxRouteWaypoints = GameStructureComponent::MaxRoutePoints;
+    // BARRACKS readouts (union: barracks variant — 0 elsewhere).
+    uint8 structureUnitType(int index) const
+    {
+        return isBarracksType(m_frame[index].type) ? m_frame[index].state->barracks.unitType : 0;
+    }
+    int structurePopulation(int index) const
+    {
+        return isBarracksType(m_frame[index].type) ? m_frame[index].state->barracks.population : 0;
+    }
+    int structurePopCap(int index) const
+    {
+        return isBarracksType(m_frame[index].type) ? m_frame[index].state->barracks.popCap : 0;
+    }
+    int structureHouses(int index) const
+    {
+        return isBarracksType(m_frame[index].type) ? m_frame[index].state->barracks.houses : 0;
+    }
+    uint32 structureLinkedId(int index) const { return m_frame[index].linkedId; } // House -> barracks
+    int unitPopulation(int unitType) const
+    {
+        return m_unitPopulation[glm::clamp(unitType, 0, GameNumUnitTypes - 1)];
+    }
+    float unitSpawnEnergy(int unitType) const
+    {
+        return m_spawnEnergy[glm::clamp(unitType, 0, GameNumUnitTypes - 1)];
+    }
+    float houseLinkRadius() const { return m_houseLinkRadius; }
+    int housePopulation() const { return m_housePopulation; }
     oc::span<const glm::vec3> structureRoute(int index) const // barracks only (empty elsewhere)
     {
         return isBarracksType(m_frame[index].type) ? m_frame[index].state->route
@@ -267,10 +319,7 @@ public:
         case EStructureType::Fabricator:
         case EStructureType::Constructor:
         case EStructureType::Turret:      return m_internalBuffer;
-        case EStructureType::Barracks:    // cable-fed: units are SPAWNED from energy
-        case EStructureType::BarracksBrute:
-        case EStructureType::BarracksRunner:
-        case EStructureType::BarracksSpitter: return m_barracksEnergyCapacity;
+        case EStructureType::Barracks:    return m_barracksEnergyCapacity; // cable-fed: units are SPAWNED from energy
         case EStructureType::Generator:   return m_generatorBuffer;
         case EStructureType::Battery:     return m_batteryCapacity;
         case EStructureType::Base:        return m_baseEnergyCapacity; // feeds its always-on shield
@@ -332,11 +381,9 @@ public:
         case EStructureType::Solar:
         case EStructureType::Extractor:
         case EStructureType::Fabricator:
+        case EStructureType::House:
         case EStructureType::MineralSilo: return 2;
         case EStructureType::Barracks:
-        case EStructureType::BarracksBrute:
-        case EStructureType::BarracksRunner:
-        case EStructureType::BarracksSpitter:
         case EStructureType::Base:        return 3;
         default:                          return 1; // cables/crossing included (Crossing extends
         }                                           // along its facing — see footprintExtent)
@@ -394,6 +441,17 @@ private:
         oc::vector<glm::vec3> points;
         uint8 team = 0;
     };
+    struct UnitTypeRequest
+    {
+        uint32 id = 0;
+        uint8 unitType = 0;
+        uint8 team = 0;
+    };
+    // HOUSES: each built house links to the nearest built own-team barracks within the link
+    // radius (one barracks per house); a barracks' population cap = its own allowance + its
+    // linked houses' bonus. Derived every refresh() on every instance (clients too — positions
+    // are mirrored, so the same derivation yields the same caps).
+    void linkHouses();
 
     GameStructureComponent* stateById(uint32 id)
     {
@@ -477,9 +535,9 @@ private:
     oc::vector<PlaceRequest> m_requests;
     oc::vector<oc::pair<uint32, uint8>> m_demolishRequests;
     oc::vector<RouteRequest> m_routeRequests;
+    oc::vector<UnitTypeRequest> m_unitTypeRequests;
     uint32 m_nextStructureId = 1; // 0 = invalid
     float m_time = 0.0f;
-    bool m_wasFuelDry = false;
     glm::vec2 m_boundsMin{ 0.0f }, m_boundsMax{ 0.0f };
     bool m_hasBounds = false;
     oc::vector<glm::vec4> m_terrainBlocked; // co-op rock rects (minX, minZ, maxX, maxZ)
@@ -504,9 +562,9 @@ private:
         70.0f, // Bastion
         45.0f, // Lance
         150.0f, // Barracks
-        200.0f, // BarracksBrute
-        175.0f, // BarracksRunner
-        200.0f, // BarracksSpitter
+        0.0f,  // BarracksBrute (retired)
+        0.0f,  // BarracksRunner (retired)
+        0.0f,  // BarracksSpitter (retired)
         5.0f,  // Wall (per segment)
         75.0f, // Turret
         25.0f, // MineralSilo
@@ -516,11 +574,12 @@ private:
         2.0f,  // CablePipe
         2.0f,  // CableConveyor
         6.0f,  // Crossing
+        40.0f, // House
     };
     float m_startMinerals = 100.0f;
     float m_extractorSnapRadius = 6.0f;
     float m_mineralRate = 2.0f;
-    float m_fuelRate = 1.5f;
+    float m_fuelRate = 4.0f;
     float m_baseIncomeMult = 0.25f;
     float m_placeRange = 30.0f;
     float m_cableThroughput[3] = { // by MEDIUM (no tiers any more)
@@ -573,13 +632,15 @@ private:
     float m_structureHealthMax = 100.0f;
     float m_constructorRange = 27.0f;
     float m_constructorBuildRate = 4.0f;
-    float m_constructorBoostRate = 0.5f;
-    float m_constructorBoostMaterials = 1.0f;
-    float m_constructorBoostEnergy = 1.0f;
     float m_waypointRadius = 3.0f;
     float m_projectileStructDamage = 20.0f;
     bool m_cheatInstantBuild = false;
-    // ENERGY a barracks pays per spawned unit, per unit type (Grunt/Brute/Runner/Spitter) —
-    // stamped onto each barracks' component as its spawnCost.
-    float m_spawnEnergy[4] = { 5.0f, 12.0f, 6.0f, 9.0f };
+    // Per UNIT TYPE (Grunt/Brute/Runner/Spitter/Swarm — ENpcType order): the ENERGY a barracks
+    // pays per spawned unit and the POPULATION the unit holds, stamped onto each barracks'
+    // component (spawnCost/spawnPop) from its selected type.
+    float m_spawnEnergy[GameNumUnitTypes] = { 5.0f, 20.0f, 6.0f, 9.0f, 2.0f };
+    int m_unitPopulation[GameNumUnitTypes] = { 2, 5, 2, 4, 1 };
+    int m_barracksPopulation = 20; // a barracks' own population cap
+    int m_housePopulation = 10;    // added per linked house
+    float m_houseLinkRadius = 25.0f;
 };

@@ -123,7 +123,7 @@ public:
     // MENU only opens on an Esc press when this is false, so the cancel chain keeps first claim.
     bool escWouldCancel() const
     {
-        return m_lanceAiming || m_wallPlacing || m_cableLinePending || m_cablePainting
+        return m_lanceAiming || m_wallPlacing || m_cablePainting
             || m_buildSelection >= 0 || m_buildCategory >= 0 || m_mode != EPlayerMode::Select;
     }
 
@@ -149,9 +149,8 @@ private:
     void disarmBuild(); // drop the armed item + any half-finished two-click flow (RMB / Esc)
     void activateSlot(int slot); // grid hotkey OR click on the drawn slot: category / item / Delete / Cancel / Back
     void cancelOneLevel();       // C slot, Esc, Tab: two-click step -> armed item -> page/mode, one per press
-    // Cable segments place with BOTH inputs: LMB drag PAINTS cells (L-filled between samples so
-    // the run stays connected), a plain click anchors a two-click auto-bent L-LINE (the second
-    // click places it and chains — the endpoint stays anchored).
+    // Cable segments place by PAINTING: LMB press places a cell, holding + dragging keeps placing
+    // the cells the cursor crosses (L-filled between samples so the run stays connected).
     void updateCablePlacement(const Camera& camera, EStructureType armed, bool confirmEdge);
     void placeCableLine(EStructureType armed, const glm::vec3& from, const glm::vec3& to, bool preview);
     void updateDeleteMode(const Camera& camera, bool confirmEdge);
@@ -170,6 +169,8 @@ private:
     void requestDemolish(uint32 id);
     void requestSetRoute(uint32 id, oc::span<const glm::vec3> points); // barracks waypoints
     void sendRoute(int index); // server: GRt broadcast (mirror + join replay)
+    void requestSetUnitType(uint32 id, uint8 unitType); // barracks: the produced unit type (popup)
+    void sendUnitType(int index); // server: GBu broadcast (mirror + join replay)
     void sendStructurePlaced(int index);
     void sendStats();
     // NAV: feed the flow-field service (authority only) — obstacles = rock terrain + every
@@ -210,7 +211,7 @@ private:
     bool m_rmbClicked = false;   // RMB edge inside the viewport (route waypoint / move order)
     EPlayerMode m_mode = EPlayerMode::Select; // Select IS the neutral mode (player combat removed)
     uint32 m_selectedId = 0;     // Select mode: highlighted structure (stable id; 0 = none)
-    // UNIT SELECTION (RTS box drag in Select mode): owning handles to own-team units; RMB move
+    // UNIT SELECTION (RTS box drag in Select mode AND in Build with nothing armed): owning handles to own-team units; RMB move
     // orders go to them together with the player. Authority only (units simulate on the server).
     oc::vector<EntityPtr> m_selectedUnits;
     glm::vec2 m_lmbDownPos{ 0.0f };
@@ -237,16 +238,13 @@ private:
     bool m_gridKeyWasDown[12] = {}; // QWER/ASDF/ZXCV edges (polled — one per hotbar slot)
     bool m_lanceAiming = false;  // Lance two-click placement: first click anchored, awaiting facing
     glm::vec3 m_lancePendingPos{ 0.0f };
-    bool m_wallPlacing = false;  // Wall two-click placement: first click anchored the line start
+    bool m_wallPlacing = false;  // Wall drag placement: the press anchored the line start, release places
     glm::vec3 m_wallStart{ 0.0f };
     // Crossing orientation: the long axis follows the CAMERA facing (quantized to ±X/±Z);
     // pressing/clicking the armed CRSS slot again rotates it 90°.
     bool m_crossingRotated = false;
     bool m_cablePainting = false;  // LMB held: paint cells as the cursor crosses them
-    bool m_cablePaintMoved = false;
     glm::vec3 m_cablePaintLast{ 0.0f };
-    bool m_cableLinePending = false; // a plain click anchored the L-line's start
-    glm::vec3 m_cableLineStart{ 0.0f };
 
     // TEAMS are SLOTS, never derived from the clientId: ids are minted monotonically and never
     // recycled (a reconnect or a failed first attempt burns one), so the second connection of the
@@ -363,7 +361,7 @@ private:
     // Waves are sized in BUDGET POINTS, not unit counts: each type has a cost (tweaks), so a
     // brute-heavy archetype fields far fewer bodies than a swarm flood of the same budget.
     int m_waveBudget = 20;           // points in wave 1 (swarm costs 1 = the old unit count)
-    float m_waveBudgetGrowth = 60.0f; // extra points per subsequent wave
+    float m_waveBudgetGrowth = 40.0f; // extra points per subsequent wave
     float m_waveCost[(int)ENpcType::Count] = { 3.0f, 10.0f, 2.0f, 5.0f, 1.0f }; // Grunt, Brute, Runner, Spitter, Swarm
     float waveCostOf(ENpcType t) const { return glm::max(m_waveCost[(int)t], 0.1f); }
     int m_waveMaxAlive = 15000;    // total AI units cap (ambient + waves)

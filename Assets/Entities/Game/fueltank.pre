@@ -2,6 +2,7 @@
 # the structure - destroying it loses the stored fuel. Cone = fuel iconography (fuel nodes are
 # cones). Spawned origin 1.4 above ground.
 Prefab gameFuelTank
+	Global true
 	Component Render
 		ObjectContainer baseshapes
 		Node Cone

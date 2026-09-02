@@ -1,6 +1,7 @@
 # Solar panel: trickles a small amount of energy into its own buffer, no fuel needed. FLAT: a
 # 4x1x4 m slab (CubeQuarter = cube with 0.25x height). Spawned origin 0.5 above ground.
 Prefab gameSolar
+	Global true
 	Component Render
 		ObjectContainer baseshapes
 		Node CubeQuarter
