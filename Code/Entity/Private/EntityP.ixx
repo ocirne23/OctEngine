@@ -108,7 +108,9 @@ public:
                           // time budget — no guessed initial value, the first update IS the guess
     // World SCHEDULING state, like updateCost: written and read only by World's update pass (its
     // SIM LOD — tier + frames since the last visit). The entity itself never looks at these.
-    uint8 schedTier = 0;
+    // A fresh entity starts UNPLACED (tier 3): its first stamped visit is then a WAKE edge, which
+    // is how a body the spawner parked (far wave units) gets enabled once a player is near.
+    uint8 schedTier = 3;
     uint8 schedSkipped = 0;
 
     void update(Renderer& renderer, float deltaSeconds, const Transform& parentWorld = Transform());

@@ -28,16 +28,19 @@ export struct EntityUpdateStaging
     uint32 simLodCount[4] = {}; // entities classified per SIM LOD tier this pass (summed after the join)
 };
 
-// SIM LOD ("Game/Sim LOD" tweaks): how often an entity's SIMULATION components tick, by the
-// distance to the nearest FOCUS point (the players — the Game layer publishes them; the testbed
-// uses the camera). Tier 0 = every frame, tiers 1/2 = every interval[t-1] frames, tier 3 =
-// DORMANT (interval[2] frames, 0 = never): the entity and its subtree are NOT VISITED at all. A
-// VISIBLE entity (in the main camera pass per the spatial index) is clamped to <= visibleMaxTier
-// (never dormant), so "far off screen" is what goes dormant. The decision is PER ENTITY, made
-// by the World's batch job from the entity's component kinds: an entity is throttled when it
-// carries a following kind and no pinning kind (a kind with follow = false pins the whole entity
-// to full rate — a structure with a script stays live while scripts are off). The entity itself
-// only sees the delta it is handed (0 = skipped frame: sync + placement, no sim step).
+// SIM LOD ("Game/Sim LOD" tweaks, not Saved): which entities the update pass visits and how
+// often their SIMULATION components tick, by the distance to the nearest FOCUS point (the
+// players — the Game layer publishes them; the testbed uses the camera). The SpatialIndex stamps
+// three UpdateTier passes (balls at radius[0..2] around every focus point); an entity's own
+// stamps give its DISTANCE tier: 0 = every frame, 1/2 = time-based intervals, 3 = DORMANT
+// (beyond radius[2]: not visited at all — no sim, no render push, subtree skipped). The visit
+// set comes from one sphere query per focus point (radius[2] + queryMargin) plus the Global and
+// freshly added roots; a visited parent emits only stamped children. The decision is PER ENTITY
+// in the World's batch job: an entity is THROTTLED when it carries a following kind and no
+// pinning kind (a kind with follow = false pins the entity to full rate while selected); the
+// bubble gate and the dormant physics edge apply to every selected entity by distance. The
+// entity itself only sees the delta it is handed (0 = skipped frame: sync + placement, no sim
+// step). Full account in Code/Entity/CONTEXT.md.
 export struct SimLodConfig
 {
     bool enabled = true;
@@ -67,7 +70,7 @@ export struct SimLodConfig
     bool structures = false;     // GameStructureComponent (barracks/turret clocks, flows)
     bool projectiles = false;    // GameProjectileComponent (lifetime, deflection)
     bool scripts = false;        // ScriptComponent Update
-    bool animators = true;       // AnimatorComponent (visible ones stay at visibleMaxTier)
+    bool animators = true;       // AnimatorComponent
 };
 
 export class World final
@@ -82,7 +85,9 @@ public:
     // camera in the plain testbed. No focus = no LOD (everything ticks at full rate).
     static constexpr uint32 MaxSimLodFocus = 16;
     void setSimLodFocus(const glm::vec3* points, uint32 count);
-    const SimLodConfig& simLod() const { return m_simLod; }
+    // Whether the last pass selected by spatial query (else everything was visited). The Game's
+    // far tick for unselected units keys on it.
+    bool simLodActive() const { return m_simLodActive; }
 
     // Headless server mode: set BEFORE any spawn. Templates then carry only Scene/Physics/Script/
     // Network components — everything renderer-touching (Render/Animator/Light/Particle/Force) and
@@ -292,7 +297,7 @@ private:
     PerWorker<EntityUpdateStaging> m_updateStaging;
     JobCost m_updateCost{ 2000 };
     SimLodConfig m_simLod;
-    glm::vec3 m_simLodFocus[MaxSimLodFocus];
+    glm::dvec3 m_simLodFocus[MaxSimLodFocus]; // dvec3: the index API's type (query centers, tier stamps)
     uint32 m_simLodFocusCount = 0;
     uint16 m_simLodFollowMask = 0; // per pass: sim kinds that follow the LOD
     uint16 m_simLodPinMask = 0;    // per pass: sim kinds that pin their entity to full rate

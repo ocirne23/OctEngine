@@ -651,19 +651,34 @@ void GameMatch::tickCoopSpawns()
         // Cluster around the ring point — bigger remaining waves spread over a wider blob. The
         // blob stays in the band OUTSIDE the barrier but inside the ground plane: a point that
         // drifted through the barrier line pushes back out along the wave's dominant axis.
-        const float a = glm::linearRand(0.0f, glm::two_pi<float>());
-        const float r = glm::min(8.0f + m_wavePendingBudget * 0.05f, 30.0f)
-            * std::sqrt(glm::linearRand(0.0f, 1.0f));
-        glm::vec3 pos = m_waveOrigin + glm::vec3(std::cos(a) * r, 1.0f, std::sin(a) * r);
-        pos.x = glm::clamp(pos.x, -c_coopGroundEdge, c_coopGroundEdge);
-        pos.z = glm::clamp(pos.z, -c_coopGroundEdge, c_coopGroundEdge);
-        if (glm::abs(pos.x) < c_coopHalfSize + 1.5f && glm::abs(pos.z) < c_coopHalfSize + 1.5f)
+        // A few rolls against the recent spawn points: a spot inside a body placed a moment ago
+        // is rejected (parked bodies never push each other apart until a player is near).
+        constexpr float c_spawnSpacing = 2.0f; // > two grunt radii
+        glm::vec3 pos;
+        for (int attempt = 0; attempt < 6; ++attempt)
         {
-            if (glm::abs(m_waveOrigin.x) >= glm::abs(m_waveOrigin.z))
-                pos.x = glm::sign(m_waveOrigin.x) * (c_coopHalfSize + 2.0f + glm::linearRand(0.0f, 10.0f));
-            else
-                pos.z = glm::sign(m_waveOrigin.z) * (c_coopHalfSize + 2.0f + glm::linearRand(0.0f, 10.0f));
+            const float a = glm::linearRand(0.0f, glm::two_pi<float>());
+            const float r = glm::min(8.0f + m_wavePendingBudget * 0.05f, 30.0f)
+                * std::sqrt(glm::linearRand(0.0f, 1.0f));
+            pos = m_waveOrigin + glm::vec3(std::cos(a) * r, 1.0f, std::sin(a) * r);
+            pos.x = glm::clamp(pos.x, -c_coopGroundEdge, c_coopGroundEdge);
+            pos.z = glm::clamp(pos.z, -c_coopGroundEdge, c_coopGroundEdge);
+            if (glm::abs(pos.x) < c_coopHalfSize + 1.5f && glm::abs(pos.z) < c_coopHalfSize + 1.5f)
+            {
+                if (glm::abs(m_waveOrigin.x) >= glm::abs(m_waveOrigin.z))
+                    pos.x = glm::sign(m_waveOrigin.x) * (c_coopHalfSize + 2.0f + glm::linearRand(0.0f, 10.0f));
+                else
+                    pos.z = glm::sign(m_waveOrigin.z) * (c_coopHalfSize + 2.0f + glm::linearRand(0.0f, 10.0f));
+            }
+            bool clear = true;
+            for (int i = 0; i < m_waveRecentCount && clear; ++i)
+                clear = glm::distance(m_waveRecent[i], glm::vec2(pos.x, pos.z)) >= c_spawnSpacing;
+            if (clear)
+                break;
         }
+        m_waveRecent[m_waveRecentNext] = glm::vec2(pos.x, pos.z);
+        m_waveRecentNext = (m_waveRecentNext + 1) % c_waveRecentSpawns;
+        m_waveRecentCount = glm::min(m_waveRecentCount + 1, c_waveRecentSpawns);
         spawns.push_back({ .pos = pos,
             .orderDest = m_waveDest + glm::vec3(glm::linearRand(-4.0f, 4.0f), 0.0f,
                 glm::linearRand(-4.0f, 4.0f)),

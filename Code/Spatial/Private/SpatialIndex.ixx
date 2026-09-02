@@ -68,8 +68,19 @@ public:
     static constexpr uint32 MaxUpdateLodFocus = 16;
     void setUpdateLod(const glm::dvec3* focus, uint32 count, const float radii[3]);
 
-    // MAIN-THREAD stamp writes for one entry, outside the traversals (the World marks the ancestors
-    // of a selected entity so the tree walk reaches it). Exact compare — no spawn guard.
+    // Exact-compare variants (NO spawn guard: a never-stamped entry reads as in no pass) for the
+    // World's update selection. isStampedCurrent/stampCurrent are its MAIN-THREAD single-entry
+    // accessors (the ancestors of a selected entity get marked between the join and the pass).
+    uint32 getPassMaskExact(SpatialHandle handle) const
+    {
+        if (!m_pool.isValidAlive(handle))
+            return 0;
+        uint32 mask = 0;
+        for (uint32 p = 0; p < uint32(ESpatialPass::Count); ++p)
+            if (m_pool.lastVisible[p][handle.idx] == m_visibleQueryId[p])
+                mask |= 1u << p;
+        return mask;
+    }
     bool isStampedCurrent(SpatialHandle handle, ESpatialPass pass) const
     {
         return m_pool.isValidAlive(handle) && m_pool.lastVisible[uint32(pass)][handle.idx] == m_visibleQueryId[uint32(pass)];

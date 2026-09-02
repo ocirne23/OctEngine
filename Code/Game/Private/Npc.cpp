@@ -4,6 +4,7 @@ import Core;
 import Core.glm;
 import Core.Log;
 import Core.Tweaks;
+import Core.Time;
 import Core.Transform;
 import Core.Camera;
 import Core.Frustum;
@@ -13,6 +14,7 @@ import Physics;
 import Force;
 import Spatial;
 import Nav;
+import Threading;
 import :Npc;
 import :Structures;
 
@@ -124,6 +126,10 @@ void NpcSystem::registerTweaks()
     // tuning registers from StructureSystem onto the component params).
     Tweak::floatVar("Game/Friendlies", "Turret shot speed", &m_turretShotSpeed, 5.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Enemies", "Spitter shot speed", &m_spitterShotSpeed, 2.0f, 80.0f, 0.5f);
+    // Far tick: neither Saved nor Synced, like the rest of Game/Sim LOD (explicit flags beat the
+    // scoped ones above).
+    Tweak::floatVar("Game/Sim LOD", "Far tick interval (s)", &m_farInterval, 0.05f, 5.0f, 0.05f, {}, ETweakFlags::None);
+    Tweak::intVar("Game/Sim LOD/Stats", "Far ticked", &m_farTicked, 0, 1 << 20, 0.0f, {}, ETweakFlags::None);
 }
 
 void NpcSystem::clear()
@@ -240,6 +246,15 @@ void NpcSystem::spawnLooseUnits(oc::span<const LooseSpawn> spawns)
             fc->emitter.setTeam(s.team); // prefabs author team 1 — units carry their spawner's team
         if (s.hasOrder)
             unit->orderMove(s.orderDest);
+        // PARKED AT SPAWN while the SIM LOD selects: loose units (waves, camps) spawn far from
+        // every player, in blobs that overlap — a live body there took box3d's push-out and, never
+        // steered (unselected) and frictionless, coasted away. Disabled from the first step, the
+        // far tick walks them by teleport and the World's wake edge enables them (velocities
+        // zeroed) once a player is near. The queue applies before the next step, so the body
+        // never simulates a single step here.
+        if (Globals::world.simLodActive())
+            if (const PhysicsComponent* pc = getComponent<PhysicsComponent>(entity.get()); pc && pc->body.isValid())
+                Globals::physics.queueBodyCommand(pc->body, PhysicsWorld::EBodyCommand::SetEnabled, glm::vec3(0.0f));
         m_units.push_back(entity); // roster: deregistered by onWorldRootRemoved on any despawn path
         Globals::world.addRootEntity(oc::move(entity));
     }
@@ -267,6 +282,39 @@ void NpcSystem::fireShot(const char* prefabPath, const char* name, const glm::ve
 void NpcSystem::service(StructureSystem& structures)
 {
     ProfileScope scope("Npc service", EProfileCategory::Game);
+    // FAR TICK: units the SIM LOD did not select (no tier stamp on their spatial entry — beyond
+    // the outer radius of every player, body disabled, never visited by the pass) walk their
+    // orders by teleport instead, every m_farInterval of sim time. Runs BEFORE world.update on
+    // main and joins here, so no far-ticked unit is ever touched by the pass in the same window.
+    if (Globals::world.simLodActive())
+    {
+        m_farAccum += float(Globals::time.getSimDeltaSec());
+        if (m_farAccum >= m_farInterval && !m_units.empty())
+        {
+            ProfileScope farScope("Npc far tick", EProfileCategory::Game);
+            const float dt = m_farAccum;
+            m_farAccum = 0.0f;
+            oc::atomic<int> moved = 0;
+            Globals::jobSystem.parallelFor(0u, (uint32)m_units.size(), 64u, JobProfile{ "Npc far tick", EProfileCategory::Game },
+                [&](uint32 begin, uint32 end)
+            {
+                int local = 0;
+                for (uint32 i = begin; i < end; ++i)
+                {
+                    Entity* e = m_units[i].get();
+                    if (!e->spatialEntry.isValid()
+                        || (Globals::spatialIndex.getPassMaskExact(e->spatialEntry.handle()) & SpatialPassBits_UpdateTiers))
+                        continue; // selected: the entity pass owns it
+                    if (GameUnitComponent* unit = getComponent<GameUnitComponent>(e); unit && unit->updateFar(*e, dt))
+                        ++local;
+                }
+                moved.fetch_add(local, oc::memory_order_relaxed);
+            });
+            m_farTicked = moved.load(oc::memory_order_relaxed);
+        }
+    }
+    else
+        m_farAccum = 0.0f;
     // STUCK units asking for a planned lane to their destination. The area limiter inside
     // requestSeedPath collapses a jammed group into ONE plan (and caps plans per frame), so this
     // loop is safe to feed with every request that arrived during the pass.

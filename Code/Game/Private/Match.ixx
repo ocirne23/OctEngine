@@ -349,6 +349,12 @@ private:
                                          // each spawned unit spends its type's cost (m_waveCost)
     float m_ambientPendingBudget = 0.0f; // POINTS of world-start scatter still to spawn (same costs)
     glm::vec3 m_waveOrigin{ 0.0f }; // the wave's cluster center on the spawn ring
+    // Spacing: the last few wave spawn points, so a new roll can reject a spot inside a body that
+    // was just placed (bodies are parked at spawn — an overlap there resolves only when a player
+    // comes near, as a push-out in the player's face)
+    static constexpr int c_waveRecentSpawns = 32;
+    glm::vec2 m_waveRecent[c_waveRecentSpawns]{};
+    int m_waveRecentCount = 0, m_waveRecentNext = 0;
     glm::vec3 m_waveDest{ 0.0f };   // the Base's near face on the incoming side
     // Tweaks ("Game/Coop", Synced):
     float m_waveFirstDelay = 30.0f;

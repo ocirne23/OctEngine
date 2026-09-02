@@ -722,6 +722,84 @@ void GameUnitComponent::damage(float amount)
     atomicAdd(pendingDamage, amount);
 }
 
+bool GameUnitComponent::updateFar(Entity& entity, float deltaSec)
+{
+    if (!isAuthority() || puppet || !alive() || deltaSec <= 0.0f)
+        return false;
+    PhysicsComponent* pc = getComponent<PhysicsComponent>(&entity);
+    if (!pc || !pc->body.isValid())
+        return false;
+    // The ENTITY position is the far truth: the pass never visits this unit, so nothing else
+    // writes it, and the body (disabled) is teleported to match below.
+    const glm::vec3 pos = entity.pos;
+    const glm::vec2 here(pos.x, pos.z);
+
+    // Where to: the route first, then the locked move order. Same arrival rule as update().
+    glm::vec3 target;
+    if (routeIndex < routeCount)
+    {
+        if (glm::distance(here, glm::vec2(route[routeIndex].x, route[routeIndex].z)) < params.waypointRadius)
+            ++routeIndex;
+        if (routeIndex >= routeCount)
+            return false;
+        target = route[routeIndex];
+    }
+    else if (targetLocked && moveOrder)
+    {
+        if (glm::distance(here, glm::vec2(targetPos.x, targetPos.z)) < params.waypointRadius)
+        {
+            targetLocked = moveOrder = false; // arrived: the AI resumes when the unit is selected again
+            return false;
+        }
+        target = targetPos;
+    }
+    else
+        return false;
+
+    // Direction: straight where the raster shows a clear line to the target, else the enemy team
+    // field's descent (geodesic, routes around rocks) — the order points at enemy ground anyway.
+    const glm::vec2 toTarget(target.x - here.x, target.z - here.y);
+    const float dist = glm::length(toTarget);
+    if (dist < 1e-3f)
+        return false;
+    glm::vec2 dir = toTarget / dist;
+    const Nav::TeamField* raster = Globals::navSystem.isEnabled() ? Globals::navSystem.raster() : nullptr;
+    if (raster && !raster->lineOfSight(here, glm::vec2(target.x, target.z), bodyRadius) && Globals::navSystem.anyFieldPublished())
+    {
+        Nav::TeamField::Sample best;
+        for (uint32 t = 0; t < Nav::MaxTeams; ++t)
+        {
+            if (t == team)
+                continue;
+            if (const Nav::TeamField* field = Globals::navSystem.teamField(t))
+            {
+                const Nav::TeamField::Sample s = field->sample(here, m_rng);
+                if (s.valid && (!best.valid || s.dist < best.dist))
+                    best = s;
+            }
+        }
+        if (best.valid && glm::dot(best.descentDir, best.descentDir) > 0.5f)
+            dir = best.descentDir;
+    }
+    const glm::vec2 next = here + dir * glm::min(moveSpeed * deltaSec, dist);
+    if (raster && raster->isBlocked(Nav::cellOf(next)))
+        return false; // into rock: hold until a field covers it or the full sim takes over
+
+    // Teleport contract: body pose + prev/curr stomp + step claim, entity position, spatial entry.
+    const glm::vec3 newPos(next.x, pos.y, next.y);
+    Globals::physics.teleportBody(pc->body, newPos, pc->body.getRotation());
+    pc->prevPos = pc->currPos = newPos;
+    pc->lastStep = Globals::physics.getStepCount();
+    entity.pos = newPos; // a unit is a root: local == world
+    if (entity.spatialEntry.isValid())
+    {
+        const RenderComponent* render = getComponent<RenderComponent>(&entity);
+        const float radius = render && render->node.isValid() ? render->node.getWorldBounds().radius : 0.0f;
+        Globals::spatialIndex.updateEntry(entity.spatialEntry.handle(), glm::dvec3(newPos), radius);
+    }
+    return true;
+}
+
 float GameUnitComponent::takePendingDamage()
 {
     oc::atomic_ref<float> ref(pendingDamage);

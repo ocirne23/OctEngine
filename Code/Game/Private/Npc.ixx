@@ -86,6 +86,11 @@ private:
     oc::vector<GameUnitComponent::FireRequest> m_fireScratch; // drained queues (reused buffers)
     oc::vector<uint32> m_deathScratch;
     oc::vector<GameUnitComponent::SeedRequest> m_seedScratch;
+    // FAR TICK (service): units the SIM LOD left unselected walk their orders by
+    // GameUnitComponent::updateFar every m_farInterval seconds of sim time.
+    float m_farInterval = 0.5f;
+    float m_farAccum = 0.0f;
+    int m_farTicked = 0; // live readout: units moved by the last far tick
     // Seeded-lane strength, split by WHO asked for it: a player ORDER (move command, barracks
     // route) writes a strong, wide lane the whole group should commit to, while a STUCK unit's
     // request is a hint — weak and narrow enough that it bends the crowd around the jam without

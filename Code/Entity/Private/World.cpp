@@ -18,7 +18,6 @@ import File;
 import :AssetRegistry;
 import Spatial;
 import Force;
-import Physics;
 import :AnimationDescription;
 import Animation;
 import Physics;
@@ -68,16 +67,13 @@ bool World::initialize()
 void World::setSimLodFocus(const glm::vec3* points, uint32 count)
 {
     m_simLodFocusCount = glm::min(count, MaxSimLodFocus);
-    glm::dvec3 focus[MaxSimLodFocus];
     for (uint32 i = 0; i < m_simLodFocusCount; ++i)
-    {
-        m_simLodFocus[i] = points[i];
-        focus[i] = glm::dvec3(points[i]);
-    }
-    // The tier stamps ride the NEXT cull job (this runs after this frame's join); the query below
-    // uses the fresh points. One frame of stamp latency is nothing against the tier radii.
+        m_simLodFocus[i] = glm::dvec3(points[i]);
+    // The tier stamps ride the NEXT cull job (this runs after this frame's join); the selection
+    // query in update() uses the fresh points. One frame of stamp latency is nothing against the
+    // tier radii.
     static_assert(MaxSimLodFocus <= SpatialIndex::MaxUpdateLodFocus);
-    Globals::spatialIndex.setUpdateLod(focus, m_simLod.enabled ? m_simLodFocusCount : 0, m_simLod.radius);
+    Globals::spatialIndex.setUpdateLod(m_simLodFocus, m_simLod.enabled ? m_simLodFocusCount : 0, m_simLod.radius);
 }
 
 bool World::simLodSelected(const Entity& entity) const
@@ -114,7 +110,7 @@ float World::simLodDelta(Entity& entity)
 {
     // Bubbles spawn DARK (ForceComponent::spawn); every visit decides their state — on, wherever
     // the tier does not apply (LOD inactive, Global, no entry), else by tier below.
-    ForceComponent* force = (entity.typeBits & (1 << EComponentID_Force)) ? getComponent<ForceComponent>(&entity) : nullptr;
+    ForceComponent* force = getComponent<ForceComponent>(&entity);
     if (force && !force->emitter.isValid())
         force = nullptr;
     if (!m_simLodActive || entity.isGlobal() || !entity.spatialEntry.isValid())
@@ -133,15 +129,13 @@ float World::simLodDelta(Entity& entity)
     // point in the cull job, and Main (in the camera's main pass) clamping to visibleMaxTier. No
     // stamp at all = dormant (a hit in the query margin band, or an entity the stamps have not
     // reached yet).
-    const SpatialIndex& spatialIndex = Globals::spatialIndex;
     const SpatialHandle handle = entity.spatialEntry.handle();
-    const uint32 mask = spatialIndex.getPassMask(handle);
+    const uint32 mask = Globals::spatialIndex.getPassMask(handle);
     // UNSTAMPED (the spawn-frame visit from the pending list: the entry is not linked yet, so the
     // mask is only the spawn GUARD saying "visible everywhere"): the tier is UNKNOWN — full-rate
     // visit, nothing decided (the bubble stays as spawned: dark). The first real stamp places it.
-    if ((mask & SpatialPassBits_UpdateTiers) && !spatialIndex.isStampedCurrent(handle, ESpatialPass::UpdateTier0)
-        && !spatialIndex.isStampedCurrent(handle, ESpatialPass::UpdateTier1)
-        && !spatialIndex.isStampedCurrent(handle, ESpatialPass::UpdateTier2))
+    if ((mask & SpatialPassBits_UpdateTiers)
+        && !(Globals::spatialIndex.getPassMaskExact(handle) & SpatialPassBits_UpdateTiers))
         return m_updateDelta;
     // DISTANCE tier: what the bubble gate and the dormant edge go by. The camera sees the whole
     // tier-1/2 area from above, so visibility must not override distance for those.
@@ -183,13 +177,20 @@ float World::simLodDelta(Entity& entity)
     }
     else if (tier != 3 && prevTier == 3)
     {
-        // WAKE EDGE: re-enable unconditionally (a no-op on an enabled body) so a tweak flipped
-        // during the dormant stretch can never strand a disabled body; the entity's next tick
-        // sets its velocity, which also wakes a merely sleeping one. No catch-up over the stretch.
+        // WAKE EDGE (also the FIRST stamped visit of a fresh entity — schedTier starts at 3):
+        // re-enable unconditionally (a no-op on an enabled body) so a tweak flipped during the
+        // dormant stretch can never strand a disabled body, and zero the velocities first — a
+        // body parked at spawn inside a crowd may hold a contact push-out from its one live step,
+        // and with friction 0 that would carry it off; the entity's next tick sets its own
+        // velocity anyway. No catch-up over the stretch.
         entity.schedSkipped = 0;
         if (PhysicsComponent* physics = getComponent<PhysicsComponent>(&entity); physics && physics->body.isValid()
             && !physics->suspended) // an Enabled-off subtree owns its own disable; never re-enable under it
+        {
+            Globals::physics.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::SetLinearVelocity, glm::vec3(0.0f));
+            Globals::physics.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::SetAngularVelocity, glm::vec3(0.0f));
             Globals::physics.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::SetEnabled, glm::vec3(1.0f));
+        }
     }
 
     if (tier == 0)
@@ -294,7 +295,7 @@ void World::update(Renderer& renderer, float deltaSeconds)
         for (uint32 i = 0; i < m_simLodFocusCount; ++i)
         {
             m_queryScratch.clear();
-            Globals::spatialIndex.querySphere(glm::dvec3(m_simLodFocus[i]), radius, SpatialLayer_Entity, m_queryScratch);
+            Globals::spatialIndex.querySphere(m_simLodFocus[i], radius, SpatialLayer_Entity, m_queryScratch);
             for (const uint64 userData : m_queryScratch)
                 selectUpdateRoot(reinterpret_cast<Entity*>(userData));
         }
@@ -331,36 +332,30 @@ void World::update(Renderer& renderer, float deltaSeconds)
 void World::submitEntityBatches(const EntityUpdateNode* nodes, uint32 count)
 {
     static_assert(std::is_trivially_copyable_v<EntityUpdateNode>);
-    // SELECTION filter: only stamped children ride into the arena (see update()); the root list
-    // from main is pre-selected, so this only ever drops emitted children.
-    uint32 selected = 0;
-    for (uint32 i = 0; i < count; ++i)
-        selected += simLodSelected(*nodes[i].entity) ? 1 : 0;
-    if (selected == 0)
+    if (count == 0)
         return;
-    const uint32 slot = m_updateArenaCursor.fetch_add(selected, oc::memory_order_relaxed);
-    if (slot + selected > uint32(m_updateArena.size()))
+    const uint32 slot = m_updateArenaCursor.fetch_add(count, oc::memory_order_relaxed);
+    if (slot + count > uint32(m_updateArena.size()))
     {
         // Arena exhausted (the claim is never rolled back): run these subtrees serially via the
         // recursive path - correct, just not parallel; the overflow grows the arena next frame so
         // this stays a one-frame hiccup. Reads `nodes` directly, which is fine: the serial path
         // never touches the staging slots.
-        m_updateArenaOverflow.fetch_add(selected, oc::memory_order_relaxed);
+        m_updateArenaOverflow.fetch_add(count, oc::memory_order_relaxed);
         for (uint32 i = 0; i < count; ++i)
             if (simLodSelected(*nodes[i].entity))
                 nodes[i].entity->update(*m_updateRenderer, m_updateDelta, nodes[i].parentWorld);
         return;
     }
-    if (selected == count)
-        std::memcpy(&m_updateArena[slot], nodes, count * sizeof(EntityUpdateNode));
-    else
-    {
-        uint32 out = slot;
-        for (uint32 i = 0; i < count; ++i)
-            if (simLodSelected(*nodes[i].entity))
-                m_updateArena[out++] = nodes[i];
-    }
-    count = selected;
+    // SELECTION filter while copying: only stamped children ride into the arena (see update();
+    // the root list from main is pre-selected, so only emitted children ever drop). The claim
+    // covers all `count` nodes — the few slots a dropped child leaves unused are cheaper than a
+    // second predicate pass, and the arena is sized from last frame's claims anyway.
+    uint32 out = slot;
+    for (uint32 i = 0; i < count; ++i)
+        if (simLodSelected(*nodes[i].entity))
+            m_updateArena[out++] = nodes[i];
+    count = out - slot;
 
     uint32 begin = 0;
     while (begin < count)

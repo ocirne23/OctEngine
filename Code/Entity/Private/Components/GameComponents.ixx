@@ -229,8 +229,15 @@ export struct GameUnitComponent
     void spawn(Entity& entity, const SpawnInfo& info, const Transform& base);
     void destroy(Entity& entity, const SpawnInfo& info) {}
     void update(Entity& entity, float deltaSec); // authority only — see the contract above
-    // (No dormancy hook here: the World's SIM LOD parks/disables the physics body of ANY
-    // throttled entity on its dormant edge — see World::simLodDelta.)
+    // FAR TICK — the stand-in simulation for a unit OUTSIDE the SIM LOD selection (never visited
+    // by the entity pass, body disabled; see World::simLodDelta). Run by NpcSystem over its
+    // roster (authority, worker-safe: writes only this entity + its own spatial entry) every
+    // "Far tick interval": walks the route / move order — straight at the target where the
+    // raster shows a clear line, else along the enemy team field's descent (geodesic, around
+    // rocks) — by TELEPORT (entity pos + body pose + spatial entry), no physics, no combat, no
+    // bubble; waypoints advance and the order clears with the full sim's radius rule. A unit with
+    // nowhere to go stays parked. Returns true when it moved.
+    bool updateFar(Entity& entity, float deltaSec);
     // Atomic (projectile contacts are main-thread, melee is workers). Units: CAS on health.
     // Puppets: accumulates into pendingDamage — ONE damage entry point for every victim kind.
     void damage(float amount);

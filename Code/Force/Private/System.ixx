@@ -40,7 +40,6 @@ public:
     // and the bake), no readback (appliedForce/pressure read zero), evicted from and never a
     // candidate for merging. Pass-safe like setOutput. The World's SIM LOD drives it by tier.
     void setActive(bool active);
-    bool isActive() const;
     void setReach(float reach);   // total extent: the bubble spans pos .. pos + dir * reach
     void setFocus(float focus);   // shape pinch [0,1]: 0.5 = sphere spanning the line, 0 = cone
                                   // pointed at the emitter, 1 = cone pointed at the target

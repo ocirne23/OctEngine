@@ -125,12 +125,6 @@ void ForceEmitter::setActive(bool active)
         inst->active = active;
 }
 
-bool ForceEmitter::isActive() const
-{
-    const ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle);
-    return inst && inst->active;
-}
-
 void ForceEmitter::setReach(float reach)
 {
     if (ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))

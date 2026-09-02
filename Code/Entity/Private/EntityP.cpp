@@ -260,7 +260,9 @@ EntityPtr Entity::create(const EntitySpawnTemplate& tmpl, const Transform& trans
 
     // Spatial registration for EVERY entity (parallel-spawn safe: registerEntry locks). Bounds from
     // the render node when there is one (skinned inflated by the culling config), else a point at
-    // the spawn position. Headless has no render nodes, so every entry there is a point.
+    // the spawn position (for a tree CHILD that is its LOCAL position — the entry links at the
+    // next commit and the child's first visit re-places it in world space before any query can
+    // see it). Headless has no render nodes, so every entry there is a point.
     {
         glm::dvec3 center(transform.pos);
         float radius = 0.0f;
