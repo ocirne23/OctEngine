@@ -24,7 +24,8 @@ import :NetworkComponent; // NetInputState in the claim ring; no cycle — the c
 //
 // Wire protocol (GameProtocolId bumps on ANY format change — the transport handshake denies
 // mismatched ids, which is the version gate):
-//   ch0 Unreliable:  Snapshot [u8][varuint serverTick][u8 flags bit0=quantized]
+//   ch0 Unreliable:  Snapshot — PER PEER: records chosen by the entity's distance to THAT peer's
+//                    player (see sendSnapshotTick). [u8][varuint serverTick][u8 flags bit0=quantized]
 //                    [f32 maxVel][f32 maxAngVel (quantized only — the velocity quantization ranges
 //                    are live tweaks, so the decoder must be told per message)][u16 count] + records
 //                    record: [varuint netId][u8 recFlags (NetRecFlag bits)][pos 3xf32][rot u32 smallest-three | 4xf32]
@@ -106,6 +107,12 @@ export struct NetSyncParams
     float pushMaxAccel = 10.0f;       // how hard the push may change the body's velocity (m/s^2; keep > gravity)
     float pushMaxAngAccel = 60.0f;    // (rad/s^2)
     float pushCatchUpBoost = 4.0f;    // gain/cap multiplier in the catch-up band (snap..teleport threshold)
+    // MASS SCALING: a light body's velocity answers every contact impulse strongly, so in a packed
+    // crowd its correction and its neighbours' pushes compound into swinging. Gains, velocity caps
+    // and acceleration limits scale by clamp(mass / pushMassReference, pushMassScaleMin, 1): a body
+    // at or above the reference corrects at full strength, a lighter one proportionally gentler.
+    float pushMassReference = 30.0f;  // kg; bodies this heavy or heavier get the full correction
+    float pushMassScaleMin = 0.15f;   // floor so a very light body still converges
     float posTeleportThreshold = 10.0f; // beyond this the non-physical teleport resync fires after all
     // ARBITRATED OWNER (player-vs-player contact): the local feel comes from the local contact with
     // the opponent's replica — the server correction only reconciles REAL divergence (you actually
@@ -326,14 +333,28 @@ private:
     // Server: what each ready peer is still OWED, drained by drainSpawnStreams() under flow control.
     // Ids only (never recycled): a spawn whose record is gone by drain time was despawned before
     // it was ever sent and is skipped; the despawn of a never-sent spawn is harmless client-side.
+    // Also the peer's SNAPSHOT stream state: its slot into NetEntityState::ServerState::sentTick
+    // and the round-robin cursors of its three distance tiers (see sendSnapshotTick).
     struct PeerStream
     {
         oc::deque<uint32> owedSpawns;   // baseIds, in announce order (join replay first)
         oc::deque<uint32> owedDespawns;
+        uint32 clientId = 0;
+        uint8 slot = 0;
+        uint32 tierCursor[3] = {};      // indices into m_tickEntities
     };
     oc::unordered_map<NetPeerId, PeerStream> m_peerStreams; // erased on Disconnected (peer ids recycle)
+    uint32 m_peerSlotMask = 0;                              // taken slots (bit = slot)
     oc::vector<oc::pair<uint32, uint32>> m_spawnTransferScratch;
-    oc::vector<glm::vec3> m_snapshotFocus; // server: per-tick player positions for snapshot relevance
+    // Snapshot tick scratch (server): the entity set as a flat array for indexed round robins, the
+    // players' positions by clientId (0 = the server's own), and each entity's tier for one peer.
+    struct TickEntity { uint32 netId; Entity* entity; NetworkComponent* comp; };
+    oc::vector<TickEntity> m_tickEntities;
+    oc::vector<oc::pair<uint32, glm::vec3>> m_playerFocus;
+    oc::vector<glm::vec3> m_peerFocus;
+    oc::vector<uint8> m_tierScratch;
+    void observeSnapshotTick();                            // per entity: sample the record, stamp changedTick
+    void sendSnapshotTo(NetPeerId peer, PeerStream& stream); // per peer: relevance-thinned records under a budget
 
     // Client: id assignment scope while executing one replicated Spawn (main thread, synchronous)
     uint32 m_incomingSpawnBase = 0;
@@ -389,8 +410,6 @@ private:
     std::mutex m_eventMutex;
 
     NetSyncParams m_params;
-    uint32 m_roundRobinCursor = 0; // snapshot round robin over NEAR entities (within "Relevance radius" of a player)
-    uint32 m_farCursor = 0;        // ...and the separate, slower rotation over FAR ones
     double m_snapshotAccum = 0.0;
     double m_netTime = 0.0; // seconds since start, advanced in receive() — the WALL CLOCK the claim
                             // displacement budget is measured against (sequence numbers are

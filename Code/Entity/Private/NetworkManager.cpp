@@ -48,6 +48,7 @@ static_assert(MaxEventMessageBytes <= netMaxSinglePacketMessage(NetHostConfig{}.
     "an event no longer fits one packet: raise maxPacketSize, lower the caps, or accept fragmenting");
 constexpr size_t MaxClients = 32;         // connection-slot cap: each accepted client costs a world
                                           // replay + whatever the app spawns for it in onClientJoined
+static_assert(MaxClients <= NetMaxPeerSlots, "per-entity sentTick slots must cover every client");
 
 constexpr uint8 SnapshotFlag_Quantized = 1 << 0;
 constexpr uint8 ChannelSnapshot = 0;
@@ -61,21 +62,25 @@ static bool  s_quantize = true;
 // Snapshots are UNRELIABLE, so an oversized one is DROPPED, not fragmented — this must stay under
 // the transport's single-packet budget, which is why the cap is derived rather than written down.
 static int   s_snapshotMaxBytes = int(netMaxSinglePacketMessage(NetHostConfig{}.maxPacketSize, true)) - 64;
-static int   s_maxEntitiesPerTick = 200;
-static int   s_keyframeEveryTicks = 20;  // unmoved entities refresh on this rotation (drift/late-join repair)
-// RELEVANCE: entities within this radius of any player (client primaries + the server's own) are
-// NEAR and get the full policy above. Everything else is FAR — under the sim LOD it is dormant and
-// does not move, so it only needs the slow keyframe rotation, on its own small budget: 20k parked
-// units must not eat the per-tick budget the units in front of the players need. Default matches
-// the sim LOD's outer tier radius. No players registered = everything is near (the old policy).
-// FAR entities DO move when the Game's far tick walks a wave in from the spawn ring, and the
-// client needs those positions roughly right (it applies them directly while the entity is
-// unselected — see handleSnapshot) so a unit is selected the moment it crosses a player's radius:
-// a moved far entity refreshes every "Far moved every ticks" (4 = 5 Hz at 20 Hz), within the budget.
-static float s_relevanceRadius = 100.0f;
+// SNAPSHOT POLICY (per PEER — see sendSnapshotTick). An entity is due for a peer when it CHANGED
+// since that peer last received it (awake body, sleep edge, moved transform, flag or game-blob
+// change), thinned by the cadence of its distance TIER to that peer's own player: NEAR (< "Near
+// radius") every tick, MID (< "Mid radius", the sim LOD's outer tier) every "Mid every ticks",
+// FAR every "Far every ticks" — far units do move (the Game's far tick walks a wave in from the
+// spawn ring) and the client applies them directly while unselected (handleSnapshot), so it only
+// needs them roughly right until they cross its player's radius. KEYFRAMES repair lost packets:
+// an entity is re-sent unchanged on its tier's rotation, slowest for a SLEEPING body (nothing
+// moves it, so a lost sleep-edge record is the only thing to repair). A peer without a player
+// yet (joining) sees everything as far. Budget per peer per tick, near first, far capped.
+static int   s_maxEntitiesPerTick = 300;
+static int   s_keyframeEveryTicks = 20;
+static float s_nearRadius = 40.0f;
+static float s_midRadius = 100.0f;
+static int   s_midEveryTicks = 2;
+static int   s_farEveryTicks = 4;
 static int   s_farKeyframeEveryTicks = 200;
-static int   s_farMovedEveryTicks = 4;
-static int   s_farMaxPerTick = 400;
+static int   s_asleepKeyframeEveryTicks = 100;
+static int   s_farMaxPerTick = 100;
 // SPAWN STREAM flow control (server, per ready peer, per frame): records drained while the peer's
 // session channel holds fewer than "Queue target" reliable messages, at most "Records per frame".
 // The transport disconnects a peer past maxQueuedReliablePerChannel (1024) — the target keeps a
@@ -220,10 +225,13 @@ void NetworkManager::initialize()
     Tweak::intVar("Network", "Snapshot max bytes", &s_snapshotMaxBytes, 128, 1400);
     Tweak::intVar("Network", "Max entities per tick", &s_maxEntitiesPerTick, 1, 4096);
     Tweak::intVar("Network", "Keyframe every ticks", &s_keyframeEveryTicks, 1, 255);
-    Tweak::floatVar("Network", "Relevance radius", &s_relevanceRadius, 0.0f, 1000.0f, 5.0f);
-    Tweak::intVar("Network", "Far keyframe every ticks", &s_farKeyframeEveryTicks, 1, 4000);
-    Tweak::intVar("Network", "Far moved every ticks", &s_farMovedEveryTicks, 1, 60);
-    Tweak::intVar("Network", "Far max per tick", &s_farMaxPerTick, 0, 4096);
+    Tweak::floatVar("Network/Relevance", "Near radius", &s_nearRadius, 0.0f, 1000.0f, 5.0f);
+    Tweak::floatVar("Network/Relevance", "Mid radius", &s_midRadius, 0.0f, 1000.0f, 5.0f);
+    Tweak::intVar("Network/Relevance", "Mid every ticks", &s_midEveryTicks, 1, 60);
+    Tweak::intVar("Network/Relevance", "Far every ticks", &s_farEveryTicks, 1, 60);
+    Tweak::intVar("Network/Relevance", "Far keyframe every ticks", &s_farKeyframeEveryTicks, 1, 4000);
+    Tweak::intVar("Network/Relevance", "Asleep keyframe every ticks", &s_asleepKeyframeEveryTicks, 1, 4000);
+    Tweak::intVar("Network/Relevance", "Far max per tick", &s_farMaxPerTick, 0, 4096);
     Tweak::intVar("Network/Spawn stream", "Records per frame", &s_spawnRecordsPerFrame, 1, 4096);
     Tweak::intVar("Network/Spawn stream", "Queue target", &s_spawnQueueTarget, 1, 512);
     Tweak::floatVar("Network", "Send pos epsilon", &s_sendPosEpsilon, 0.0f, 0.1f, 0.0005f);
@@ -248,6 +256,8 @@ void NetworkManager::initialize()
     Tweak::floatVar("Network/Correction", "Push accel limit", &m_params.pushMaxAccel, 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Network/Correction", "Push ang accel limit", &m_params.pushMaxAngAccel, 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Network/Correction", "Push catch-up boost", &m_params.pushCatchUpBoost, 1.0f, 20.0f, 0.1f);
+    Tweak::floatVar("Network/Correction", "Push mass reference (kg)", &m_params.pushMassReference, 0.1f, 1000.0f, 1.0f);
+    Tweak::floatVar("Network/Correction", "Push mass scale min", &m_params.pushMassScaleMin, 0.01f, 1.0f, 0.01f);
     Tweak::floatVar("Network/Correction", "Arbitrate deadzone", &m_params.arbitrateDeadzone, 0.0f, 3.0f, 0.02f);
     Tweak::floatVar("Network/Correction", "Pos teleport threshold", &m_params.posTeleportThreshold, 0.0f, 100.0f, 0.5f);
 
@@ -356,6 +366,7 @@ void NetworkManager::shutdown()
     m_pendingSpawnAnnounce.clear();
     m_pendingDespawn.clear();
     m_peerStreams.clear();
+    m_peerSlotMask = 0;
     m_peerClients.clear();
     m_claimRings.clear();
     m_remoteBuffers.clear();
@@ -409,7 +420,11 @@ void NetworkManager::receive(double deltaSec)
         case ENetEventType::Disconnected:
             // NetPeerIds recycle: drop every bit of per-peer state the moment the peer dies
             oc::erase(m_readyPeers, evt.peer);
-            m_peerStreams.erase(evt.peer);
+            if (const auto streamIt = m_peerStreams.find(evt.peer); streamIt != m_peerStreams.end())
+            {
+                m_peerSlotMask &= ~(1u << streamIt->second.slot);
+                m_peerStreams.erase(streamIt);
+            }
             if (m_role == ENetRole::Client && evt.peer == m_serverPeer)
             {
                 Log::warning(oc::string("Network: disconnected from server (") + disconnectReasonName(evt.reason) + ")");
@@ -575,9 +590,23 @@ void NetworkManager::handleSessionMessage(NetPeerId peer, NetReader& reader, uin
         {
             PeerStream& stream = m_peerStreams[peer];
             stream = {};
+            stream.clientId = clientId;
             for (const auto& [baseId, record] : m_dynamicSpawns)
                 if (!record.path.empty())
                     stream.owedSpawns.push_back(baseId);
+            // snapshot slot: the first free one (MaxClients bounds the ready set, so one exists);
+            // its per-entity sentTick is zeroed so nothing is considered "already sent" to a peer
+            // that reused a departed one's slot
+            uint8 slot = 0;
+            while (slot < NetMaxPeerSlots && (m_peerSlotMask & (1u << slot)))
+                ++slot;
+            assert(slot < NetMaxPeerSlots);
+            slot = uint8(glm::min<uint32>(slot, NetMaxPeerSlots - 1));
+            m_peerSlotMask |= 1u << slot;
+            stream.slot = slot;
+            const std::lock_guard<std::mutex> lock(m_entityMutex);
+            for (const auto& [netId, replicated] : m_entities)
+                replicated.comp->state->server.sentTick[slot] = 0;
         }
         // Synced tweak values ride the same ordered channel: the joiner starts with the server's
         // gameplay configuration instead of its own local defaults.
@@ -1851,85 +1880,22 @@ void NetworkManager::send(double deltaSec)
     m_host.update(0.0); // flush everything queued this frame (send() only queues until the next update)
 }
 
-void NetworkManager::sendSnapshotTick()
+// OBSERVE (once per tick, every entity, m_entityMutex held): sample the record as it would go on
+// the wire and stamp changedTick when it differs from the last observation. Also rebuilds the flat
+// entity array the per-peer round robins index, and the players' positions (the relevance foci).
+void NetworkManager::observeSnapshotTick()
 {
-    uint8 buffer[1400];
-    const size_t capacity = size_t(glm::clamp(s_snapshotMaxBytes, 128, 1400));
-    NetWriter writer(oc::span<uint8>(buffer, capacity));
-    size_t countOffset = 0;
-    uint16 count = 0;
-
-    const float maxVel = glm::max(1.0f, s_maxVel);
-    const float maxAngVel = glm::max(1.0f, s_maxAngVel);
-    const auto beginMessage = [&]
-    {
-        writer.reset();
-        writer.write<uint8>(uint8(ENetMsg::Snapshot));
-        writer.writeVarUInt(m_serverTick);
-        writer.write<uint8>(s_quantize ? SnapshotFlag_Quantized : 0);
-        if (s_quantize) // decode needs the (live-tweakable) velocity quantization ranges
-        {
-            writer.write<float>(maxVel);
-            writer.write<float>(maxAngVel);
-        }
-        countOffset = writer.size();
-        writer.write<uint16>(0); // patched by flushMessage
-        count = 0;
-    };
-    const auto flushMessage = [&]
-    {
-        if (count == 0)
-            return;
-        writer.writeAt(countOffset, count);
-        assert(!writer.overflowed());
-        m_host.sendToAll(writer.data(), ENetDelivery::Unreliable, ChannelSnapshot);
-    };
-
-    const std::lock_guard<std::mutex> lock(m_entityMutex);
-    if (m_entities.empty())
-        return;
-    beginMessage();
-
-    // RELEVANCE focus: the players (client primaries + the server's own). Entities within
-    // "Relevance radius" of any of them are NEAR; the rest FAR — see the tweak comment.
-    m_snapshotFocus.clear();
+    const float posEpsilonSq = s_sendPosEpsilon * s_sendPosEpsilon;
+    m_tickEntities.clear();
+    m_tickEntities.reserve(m_entities.size());
+    m_playerFocus.clear();
     for (const auto& [netId, replicated] : m_entities)
     {
-        const NetworkComponent* comp = replicated.comp;
-        const bool primary = comp->state->server.serverPrimary
-            || (comp->ownerClientId != 0 && !comp->state->transferredOwnership);
-        if (!primary)
-            continue;
-        const PhysicsComponent* physics = getComponent<PhysicsComponent>(replicated.entity);
-        if (physics && physics->bodyType == EPhysicsBodyType::Dynamic && physics->body.isValid())
-            m_snapshotFocus.push_back(physics->body.getPosition());
-    }
-    const float relevanceSq = s_relevanceRadius * s_relevanceRadius;
-    const auto isNear = [&](const Entity* entity)
-    {
-        if (m_snapshotFocus.empty())
-            return true;
-        while (entity->parent) // the ROOT's local pos is its world pos (units are roots; children are near with their root)
-            entity = entity->parent;
-        const glm::vec3 pos = entity->pos;
-        for (const glm::vec3& focus : m_snapshotFocus)
-        {
-            const glm::vec3 d = pos - focus;
-            if (glm::dot(d, d) < relevanceSq)
-                return true;
-        }
-        return false;
-    };
+        Entity* entity = replicated.entity;
+        NetworkComponent* comp = replicated.comp;
+        NetEntityState::ServerState& server = comp->state->server;
+        m_tickEntities.push_back({ netId, entity, comp });
 
-    const float posEpsilonSq = s_sendPosEpsilon * s_sendPosEpsilon;
-    // one entity's record, or nothing (unchanged / asleep / off-rotation). Change-detection state is
-    // per entity and shared by every peer (one stream, sendToAll) — that is why relevance is
-    // "near ANY player" rather than per peer.
-    const auto emit = [&](uint32 netId, Entity* entity, NetworkComponent* comp, uint32 keyframeTicks, uint32 movedEvery) -> bool
-    {
-        const bool keyframe = (m_serverTick % keyframeTicks) == (netId % keyframeTicks);
-        // movement cadence (1 = every tick): FAR entities refresh their motion at a reduced rate
-        const bool onMoveCadence = movedEvery <= 1 || (m_serverTick % movedEvery) == (netId % movedEvery);
         const PhysicsComponent* physics = getComponent<PhysicsComponent>(entity);
         const bool physicsBody = physics && physics->bodyType == EPhysicsBodyType::Dynamic
             && physics->body.isValid() && !physics->suspended && physics->enabled;
@@ -1945,33 +1911,39 @@ void NetworkManager::sendSnapshotTick()
         uint8 gameBlob[GameBlobBytes];
         const bool hasGame = packGameStateBlob(entity, gameBlob);
         const bool gameChanged = hasGame
-            && std::memcmp(gameBlob, comp->state->server.lastSentGameBlob, GameBlobBytes) != 0;
+            && std::memcmp(gameBlob, server.obsGameBlob, GameBlobBytes) != 0;
 
         glm::vec3 pos;
         glm::quat rot;
         uint8 recFlags = forcedFlag | (hasGame ? NetRecFlag_Game : uint8(0));
         glm::vec3 linVel(0.0f);
         glm::vec3 angVel(0.0f);
+        bool changed = gameChanged;
         if (physicsBody)
         {
             // the BODY's world pose is authoritative (and what the client teleports its body to);
-            // awake bodies send every tick, then ONE final record on the awake->asleep edge so the
-            // client hard-syncs and sleeps too — after that only the keyframe rotation refreshes
+            // an awake body changes every tick, then ONE final record on the awake->asleep edge so
+            // the client hard-syncs and sleeps too — after that only the keyframe rotation refreshes
             const bool asleep = !physics->body.isAwake();
             if (!asleep)
+            {
                 comp->state->sleepDirty = true;
+                changed = true;
+            }
             else if (comp->state->sleepDirty)
+            {
                 comp->state->sleepDirty = false;
-            else if (!keyframe && !gameChanged)
-                return false;
-            if (!asleep && !onMoveCadence && !keyframe && !gameChanged)
-                return false;
+                changed = true;
+            }
             recFlags |= NetRecFlag_Physics | (asleep ? NetRecFlag_Asleep : 0)
-                | (comp->state->server.serverPrimary ? NetRecFlag_ServerPlayer : uint8(0));
+                | (server.serverPrimary ? NetRecFlag_ServerPlayer : uint8(0));
             pos = physics->body.getPosition();
             rot = physics->body.getRotation();
             linVel = physics->body.getLinearVelocity();
             angVel = physics->body.getAngularVelocity();
+            // the players (client primaries + the server's own): each peer's relevance focus
+            if (server.serverPrimary || (comp->ownerClientId != 0 && !comp->state->transferredOwnership))
+                m_playerFocus.emplace_back(comp->ownerClientId, pos);
             // CLAIM PASSTHROUGH: re-emit the owner's accepted claim rather than sampling the twin,
             // whose pose age wobbles ±1 tick as the owner/network/server clocks drift (remote
             // clients replay that wobble as speed pulsing). Ticks with no fresh claim extrapolate by
@@ -2018,83 +1990,183 @@ void NetworkManager::sendSnapshotTick()
         }
         else
         {
-            // entity-LOCAL transform: moved-since-last-send + the keyframe rotation for convergence
-            const glm::vec3 posDelta = entity->pos - comp->state->server.lastSentPos;
-            const bool moved = glm::dot(posDelta, posDelta) > posEpsilonSq
-                || quatAngleDeg(entity->rot, comp->state->server.lastSentRot) > s_sendRotEpsilonDeg;
-            if (!keyframe && !gameChanged && (!moved || !onMoveCadence))
-                return false;
+            // entity-LOCAL transform: moved since the last observation
             pos = entity->pos;
             rot = entity->rot;
-            comp->state->server.lastSentPos = pos;
-            comp->state->server.lastSentRot = rot;
+            const glm::vec3 posDelta = pos - server.obsPos;
+            if (glm::dot(posDelta, posDelta) > posEpsilonSq || quatAngleDeg(rot, server.obsRot) > s_sendRotEpsilonDeg)
+                changed = true;
         }
+        if (recFlags != server.obsFlags) // Forced/Arbitrated/Asleep edges must reach the peers too
+            changed = true;
+        if (!changed)
+            continue;
+        server.obsPos = pos;
+        server.obsRot = rot;
+        server.obsLinVel = linVel;
+        server.obsAngVel = angVel;
+        server.obsFlags = recFlags;
+        if (hasGame)
+            std::memcpy(server.obsGameBlob, gameBlob, GameBlobBytes);
+        server.changedTick = m_serverTick;
+    }
+}
 
+void NetworkManager::sendSnapshotTick()
+{
+    const std::lock_guard<std::mutex> lock(m_entityMutex);
+    if (m_entities.empty() || m_readyPeers.empty())
+        return;
+    observeSnapshotTick();
+    for (const NetPeerId peer : m_readyPeers)
+        if (const auto it = m_peerStreams.find(peer); it != m_peerStreams.end())
+            sendSnapshotTo(peer, it->second);
+}
+
+// One peer's records for this tick (m_entityMutex held, after observeSnapshotTick). Every entity
+// is tiered by its distance to THIS peer's own player(s) — near / mid / far — then each tier is
+// walked round-robin from the peer's cursor: an entity is due when it changed since this peer
+// last received it and its tier's cadence tick is up, or on its keyframe rotation (slowest for a
+// sleeping body). Near first under the peer's budget; far additionally capped.
+void NetworkManager::sendSnapshotTo(NetPeerId peer, PeerStream& stream)
+{
+    uint8 buffer[1400];
+    const size_t capacity = size_t(glm::clamp(s_snapshotMaxBytes, 128, 1400));
+    NetWriter writer(oc::span<uint8>(buffer, capacity));
+    size_t countOffset = 0;
+    uint16 count = 0;
+
+    const float maxVel = glm::max(1.0f, s_maxVel);
+    const float maxAngVel = glm::max(1.0f, s_maxAngVel);
+    const auto beginMessage = [&]
+    {
+        writer.reset();
+        writer.write<uint8>(uint8(ENetMsg::Snapshot));
+        writer.writeVarUInt(m_serverTick);
+        writer.write<uint8>(s_quantize ? SnapshotFlag_Quantized : 0);
+        if (s_quantize) // decode needs the (live-tweakable) velocity quantization ranges
+        {
+            writer.write<float>(maxVel);
+            writer.write<float>(maxAngVel);
+        }
+        countOffset = writer.size();
+        writer.write<uint16>(0); // patched by flushMessage
+        count = 0;
+    };
+    const auto flushMessage = [&]
+    {
+        if (count == 0)
+            return;
+        writer.writeAt(countOffset, count);
+        assert(!writer.overflowed());
+        m_host.send(peer, writer.data(), ENetDelivery::Unreliable, ChannelSnapshot);
+    };
+    beginMessage();
+
+    // this peer's players; none (still joining) = everything is far
+    m_peerFocus.clear();
+    for (const auto& [clientId, pos] : m_playerFocus)
+        if (clientId == stream.clientId)
+            m_peerFocus.push_back(pos);
+    const size_t total = m_tickEntities.size();
+    m_tierScratch.resize(total);
+    const float nearSq = s_nearRadius * s_nearRadius;
+    const float midSq = glm::max(s_midRadius, s_nearRadius) * glm::max(s_midRadius, s_nearRadius);
+    for (size_t i = 0; i < total; ++i)
+    {
+        uint8 tier = 2;
+        if (!m_peerFocus.empty())
+        {
+            const Entity* root = m_tickEntities[i].entity;
+            while (root->parent) // the ROOT's local pos is its world pos; children tier with their root
+                root = root->parent;
+            float nearestSq = FLT_MAX;
+            for (const glm::vec3& focus : m_peerFocus)
+            {
+                const glm::vec3 d = root->pos - focus;
+                nearestSq = glm::min(nearestSq, glm::dot(d, d));
+            }
+            tier = nearestSq < nearSq ? 0 : nearestSq < midSq ? 1 : 2;
+        }
+        m_tierScratch[i] = tier;
+    }
+
+    const uint32 tierEvery[3] = { 1, uint32(glm::max(1, s_midEveryTicks)), uint32(glm::max(1, s_farEveryTicks)) };
+    const uint32 nearKeyframe = uint32(glm::max(1, s_keyframeEveryTicks));
+    const uint32 tierKeyframe[3] = { nearKeyframe, nearKeyframe, uint32(glm::max(1, s_farKeyframeEveryTicks)) };
+    const uint32 asleepKeyframe = uint32(glm::max(1, s_asleepKeyframeEveryTicks));
+
+    const auto writeRecord = [&](const TickEntity& te)
+    {
+        const NetEntityState::ServerState& server = te.comp->state->server;
         constexpr size_t MaxRecordBytes = 5 + 1 + 12 + 16 + 24 + GameBlobBytes; // varint id + flags + pos + raw quat + raw velocities + game blob
         if (writer.size() + MaxRecordBytes > writer.capacity())
         {
             flushMessage();
             beginMessage();
         }
-        writer.writeVarUInt(netId);
-        writer.write<uint8>(recFlags);
-        writer.write(pos);
+        writer.writeVarUInt(te.netId);
+        writer.write<uint8>(server.obsFlags);
+        writer.write(server.obsPos);
         if (s_quantize)
-            writer.write<uint32>(packQuat(rot));
+            writer.write<uint32>(packQuat(server.obsRot));
         else
-            writer.write(rot);
-        if (recFlags & NetRecFlag_Physics)
+            writer.write(server.obsRot);
+        if (server.obsFlags & NetRecFlag_Physics)
         {
             if (s_quantize)
             {
-                for (int c = 0; c < 3; ++c) writer.writeQuantized<uint16>(linVel[c], -maxVel, maxVel);
-                for (int c = 0; c < 3; ++c) writer.writeQuantized<uint16>(angVel[c], -maxAngVel, maxAngVel);
+                for (int c = 0; c < 3; ++c) writer.writeQuantized<uint16>(server.obsLinVel[c], -maxVel, maxVel);
+                for (int c = 0; c < 3; ++c) writer.writeQuantized<uint16>(server.obsAngVel[c], -maxAngVel, maxAngVel);
             }
             else
             {
-                writer.write(linVel);
-                writer.write(angVel);
+                writer.write(server.obsLinVel);
+                writer.write(server.obsAngVel);
             }
         }
-        if (recFlags & NetRecFlag_Game)
-        {
+        if (server.obsFlags & NetRecFlag_Game)
             for (size_t c = 0; c < GameBlobBytes; ++c)
-                writer.write<uint8>(gameBlob[c]);
-            std::memcpy(comp->state->server.lastSentGameBlob, gameBlob, GameBlobBytes);
-        }
+                writer.write<uint8>(server.obsGameBlob[c]);
         ++count;
-        return true;
     };
 
-    // Two round-robin walks with their own cursors and budgets: NEAR entities first (the ones the
-    // players see), then FAR ones on the slow rotation. Skipping a non-matching class costs one
-    // distance test, so both walks may visit every entity; the cursors keep each class fair.
-    const auto walk = [&](uint32& cursor, bool wantNear, int budget, uint32 keyframeTicks, uint32 movedEvery)
+    int budget = glm::max(1, s_maxEntitiesPerTick);
+    const auto walk = [&](uint32 tier, int tierBudget)
     {
-        if (budget <= 0)
+        if (tierBudget <= 0 || total == 0)
             return;
-        auto it = m_entities.lower_bound(cursor);
-        if (it == m_entities.end())
-            it = m_entities.begin();
-        const size_t total = m_entities.size();
+        uint32& cursor = stream.tierCursor[tier];
+        if (cursor >= total)
+            cursor = 0;
+        uint32 idx = cursor;
         int sent = 0;
-        for (size_t visited = 0; visited < total && sent < budget; ++visited)
+        for (size_t visited = 0; visited < total && sent < tierBudget; ++visited)
         {
-            const uint32 netId = it->first;
-            Entity* entity = it->second.entity;
-            NetworkComponent* comp = it->second.comp;
-            ++it;
-            if (it == m_entities.end())
-                it = m_entities.begin();
-            if (isNear(entity) != wantNear)
+            const uint32 i = idx;
+            idx = (idx + 1 >= total) ? 0 : idx + 1;
+            if (m_tierScratch[i] != tier)
                 continue;
-            if (emit(netId, entity, comp, keyframeTicks, movedEvery))
-                ++sent;
+            const TickEntity& te = m_tickEntities[i];
+            NetEntityState::ServerState& server = te.comp->state->server;
+            const bool asleep = (server.obsFlags & NetRecFlag_Asleep) != 0;
+            const uint32 keyframeTicks = asleep ? glm::max(tierKeyframe[tier], asleepKeyframe) : tierKeyframe[tier];
+            const bool keyframe = (m_serverTick % keyframeTicks) == (te.netId % keyframeTicks);
+            const uint32 every = tierEvery[tier];
+            const bool onCadence = every <= 1 || (m_serverTick % every) == (te.netId % every);
+            const bool changedSince = server.changedTick > server.sentTick[stream.slot];
+            if (!keyframe && !(changedSince && onCadence))
+                continue;
+            writeRecord(te);
+            server.sentTick[stream.slot] = m_serverTick;
+            ++sent;
         }
-        cursor = it != m_entities.end() ? it->first : 0;
+        cursor = idx;
+        budget -= sent;
     };
-    walk(m_roundRobinCursor, true, s_maxEntitiesPerTick, uint32(glm::max(1, s_keyframeEveryTicks)), 1);
-    walk(m_farCursor, false, s_farMaxPerTick, uint32(glm::max(1, s_farKeyframeEveryTicks)), uint32(glm::max(1, s_farMovedEveryTicks)));
+    walk(0, budget);
+    walk(1, budget);
+    walk(2, glm::min(budget, glm::max(0, s_farMaxPerTick)));
     flushMessage();
 }
 

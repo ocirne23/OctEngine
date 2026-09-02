@@ -220,10 +220,13 @@ void NetworkComponent::update(Entity& entity, float deltaSeconds)
         const float ownerGainScale = arbitratedOwner ? 0.5f : 1.0f;
         const bool pushPos = posErr > posDeadzone;
         const bool pushRot = rotErrDeg > rotDeadzoneDeg;
+        // light bodies (swarm units) get a proportionally gentler correction — see NetSyncParams
+        const float massScale = glm::clamp(physics->body.getMass() / glm::max(params.pushMassReference, 0.01f),
+            glm::clamp(params.pushMassScaleMin, 0.01f, 1.0f), 1.0f);
         if (pushPos || pushRot)
         {
             const bool catchUp = posErr > params.posSnapThreshold || rotErrDeg > params.rotSnapThresholdDeg;
-            const float boost = (catchUp ? glm::max(1.0f, params.pushCatchUpBoost) : 1.0f) * ownerGainScale;
+            const float boost = (catchUp ? glm::max(1.0f, params.pushCatchUpBoost) : 1.0f) * ownerGainScale * massScale;
             glm::vec3 desiredLin = net.targetLinVel;
             if (pushPos)
             {
@@ -264,7 +267,7 @@ void NetworkComponent::update(Entity& entity, float deltaSeconds)
             if (glm::dot(dLin, dLin) > 1e-4f || glm::dot(dAng, dAng) > 1e-4f)
                 physicsWorld.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::NudgeVelocity,
                     net.targetLinVel, net.targetAngVel,
-                    glm::vec3(params.pushMaxAccel * deltaSeconds, params.pushMaxAngAccel * deltaSeconds, 0.0f));
+                    glm::vec3(params.pushMaxAccel * massScale * deltaSeconds, params.pushMaxAngAccel * massScale * deltaSeconds, 0.0f));
         }
         if (newSnapshot)
             net.lastAppliedTick = net.serverTick;

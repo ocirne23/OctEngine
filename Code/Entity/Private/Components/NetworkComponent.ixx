@@ -66,6 +66,9 @@ export struct NetInputState
     glm::vec3 look = glm::vec3(0.0f);
 };
 
+// Connected-peer slots the per-entity send state is indexed by (the manager's MaxClients must fit).
+export constexpr uint32 NetMaxPeerSlots = 32;
+
 // Mutable per-entity sync state, heap-allocated only inside a session so single-player spawns of
 // networked prefabs pay nothing. THREADING: NetworkManager writes it on the main thread (receive()
 // before the parallel entity pass, send() after); NetworkComponent::update reads/writes only its
@@ -132,10 +135,21 @@ export struct NetEntityState
         // handed to a client by the proximity transfer.
         bool serverPrimary = false;
 
-        // change detection against the last sent state (non-physics; physics uses sleepDirty)
-        glm::vec3 lastSentPos = glm::vec3(FLT_MAX); // FLT_MAX forces the first change-detection send
-        glm::quat lastSentRot = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
-        uint8 lastSentGameBlob[5] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF }; // forces the first blob send
+        // ---- SNAPSHOT SEND STATE (see NetworkManager::sendSnapshotTick) ----
+        // OBSERVED once per tick for every entity: the record as it would go on the wire, compared
+        // with the previous observation — any difference (awake body, sleep edge, moved transform,
+        // flag or game-blob change) stamps changedTick. Sending is then PER PEER: a peer receives
+        // the observed record when changedTick > sentTick[its slot], thinned by the cadence of the
+        // entity's distance to THAT peer's player, or on its keyframe rotation; sentTick[slot] then
+        // takes the tick. A slot is zeroed across every entity when a new peer takes it.
+        uint32 changedTick = 0;
+        uint32 sentTick[NetMaxPeerSlots] = {};
+        glm::vec3 obsPos = glm::vec3(FLT_MAX); // FLT_MAX: the first observation always counts as a change
+        glm::quat obsRot = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+        glm::vec3 obsLinVel = glm::vec3(0.0f);
+        glm::vec3 obsAngVel = glm::vec3(0.0f);
+        uint8 obsFlags = 0;                                     // NetRecFlag bits of the observed record
+        uint8 obsGameBlob[5] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF }; // 0xFF: forces the first blob send
     };
 
     struct ClientState
