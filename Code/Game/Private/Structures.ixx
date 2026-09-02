@@ -58,15 +58,16 @@ export constexpr bool isBarracksType(EStructureType t)
     return t == EStructureType::Barracks;
 }
 
-// UNIT TYPES a barracks can produce, indexed like Npc's ENpcType (Grunt, Brute, Runner, Spitter,
-// Swarm — Npc.ixx static_asserts the count). This partition cannot import Npc, so the per-type
-// prices live here as plain arrays.
-export constexpr int GameNumUnitTypes = 5;
-// What a barracks may be SET to produce: everything but the Spitter (index 3 — an enemy-only
-// wave unit). Requests/mirrors/loads for anything else fall back to the Grunt (0).
+// UNIT TYPES, indexed like Npc's ENpcType (Grunt, Brute, Runner, Spitter, Swarm, Elite, Giant,
+// Titan, Lobber — Npc.ixx static_asserts the count). This partition cannot import Npc, so the
+// per-type prices live here as plain arrays.
+export constexpr int GameNumUnitTypes = 10; // (+ Spawner)
+// What a barracks may be SET to produce: Grunt/Brute/Runner/Swarm. The Spitter (3) and the elite
+// tier (5..8) are enemy-only wave units. Requests/mirrors/loads for anything else fall back to
+// the Grunt (0).
 export constexpr bool isBarracksUnitType(int t)
 {
-    return t >= 0 && t < GameNumUnitTypes && t != 3;
+    return t == 0 || t == 1 || t == 2 || t == 4;
 }
 
 // The three emitter variants: Emitter = balanced sphere, Bastion = big expensive anchor bubble,
@@ -238,6 +239,7 @@ public:
         return index >= 0 ? m_frame[index].state : nullptr;
     }
     float waypointRadius() const { return m_waypointRadius; }
+    int wallBreachCost() const { return m_wallBreachCost; } // Nav step multiplier through a built wall
 
     int structureIndexById(uint32 id) const
     {
@@ -633,13 +635,14 @@ private:
     float m_constructorRange = 27.0f;
     float m_constructorBuildRate = 4.0f;
     float m_waypointRadius = 3.0f;
+    int m_wallBreachCost = 10; // a wall cell costs (1 + this) x 2 m of walking in the enemy fields
     float m_projectileStructDamage = 20.0f;
     bool m_cheatInstantBuild = false;
     // Per UNIT TYPE (Grunt/Brute/Runner/Spitter/Swarm — ENpcType order): the ENERGY a barracks
     // pays per spawned unit and the POPULATION the unit holds, stamped onto each barracks'
     // component (spawnCost/spawnPop) from its selected type.
-    float m_spawnEnergy[GameNumUnitTypes] = { 5.0f, 20.0f, 6.0f, 9.0f, 2.0f };
-    int m_unitPopulation[GameNumUnitTypes] = { 2, 5, 2, 4, 1 };
+    float m_spawnEnergy[GameNumUnitTypes] = { 5.0f, 20.0f, 6.0f, 9.0f, 2.0f, 15.0f, 40.0f, 80.0f, 15.0f, 30.0f };
+    int m_unitPopulation[GameNumUnitTypes] = { 2, 5, 2, 4, 1, 4, 8, 16, 4, 8 };
     int m_barracksPopulation = 20; // a barracks' own population cap
     int m_housePopulation = 10;    // added per linked house
     float m_houseLinkRadius = 25.0f;

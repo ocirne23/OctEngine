@@ -362,11 +362,14 @@ private:
     // brute-heavy archetype fields far fewer bodies than a swarm flood of the same budget.
     int m_waveBudget = 20;           // points in wave 1 (swarm costs 1 = the old unit count)
     float m_waveBudgetGrowth = 40.0f; // extra points per subsequent wave
-    float m_waveCost[(int)ENpcType::Count] = { 3.0f, 10.0f, 2.0f, 5.0f, 1.0f }; // Grunt, Brute, Runner, Spitter, Swarm
+    float m_waveCost[(int)ENpcType::Count] = { 3.0f, 10.0f, 2.0f, 5.0f, 1.0f,   // Grunt, Brute, Runner, Spitter, Swarm
+                                               8.0f, 25.0f, 60.0f, 12.0f, 30.0f }; // Elite, Giant, Titan, Lobber, Spawner
     float waveCostOf(ENpcType t) const { return glm::max(m_waveCost[(int)t], 0.1f); }
     int m_waveMaxAlive = 15000;    // total AI units cap (ambient + waves)
     int m_ambientBudget = 20000;    // POINTS of world-start scatter (same per-type costs as waves)
-    float m_ambientSafeRadius = 45.0f; // the scatter keeps clear of the Base
+    float m_ambientSafeRadius = 45.0f; // the scatter keeps clear of the Base (planar)
+    float m_ambientMinDepth = 0.2f;    // ... and of the innermost fraction of the map by WALKING depth
+    int m_ambientRecipeWindow = 3;     // a group rolls recipes gated within this many bands below its depth band
     int m_spawnsPerFrame = 100;    // trickle budget — a huge wave enters over seconds, not one hitch
 
     bool m_enabled = false;

@@ -1,0 +1,33 @@
+# Enemy Elite: the late-wave line infantry (wave 7+) - a grunt with double the health, a bigger
+# battery, a stronger bubble and a faster stride; the escort around giants/titans. Gold tint.
+Prefab gameEnemyElite
+	Component Render
+		ObjectContainer baseshapes
+		Node Cube
+		Type StaticMesh
+		Color 1 0.8 0.2
+		Scale 0.55 0.9 0.55
+	Component Physics
+		Body Dynamic
+		Shape Capsule
+		Radius 0.55
+		HalfHeight 0.35
+		Density 130
+		Friction 0
+		LockRotation true
+		ContactEvents true
+	Component Force
+		Team 1
+		Output 0.9
+		Reach 3.5
+		Centered true
+	Component Network
+	Component GameUnit
+		ShortName ELIT
+		HealthMax 130
+		EnergyMax 70
+		ShieldOutput 0.9
+		MoveSpeed 4.6
+		AttackDps 11
+		PlayerDps 16
+		EmitterDrain 6

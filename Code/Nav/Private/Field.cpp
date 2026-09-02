@@ -117,7 +117,8 @@ void TeamField::rasterizeObstacles(oc::span<const NavObstacle> obstacles, uint8 
                 m_chunks.getOrCreate(chunkKey(glm::ivec2(x, z)));
     }
 
-    // Phase 2: stamp the blocked footprints, one obstacle per work item.
+    // Phase 2: stamp the blocked footprints, one obstacle per work item (breachable obstacles
+    // wait for phase 2b).
     struct Ctx { TeamField* self; oc::span<const NavObstacle> obstacles; uint8 clearanceCost; };
     Ctx ctx{ this, obstacles, clearanceCost };
     Globals::jobSystem.parallelFor(0u, uint32(obstacles.size()), 8u, { "Nav raster blocked", EProfileCategory::Game },
@@ -126,6 +127,8 @@ void TeamField::rasterizeObstacles(oc::span<const NavObstacle> obstacles, uint8 
         for (uint32 idx = begin; idx < end; ++idx)
         {
             const NavObstacle& o = c->obstacles[idx];
+            if (o.cost != 0)
+                continue;
             const glm::ivec2 lo = cellOf(o.min + 1e-3f);
             const glm::ivec2 hi = cellOf(o.max - 1e-3f);
             for (int z = lo.y; z <= hi.y; ++z)
@@ -134,6 +137,33 @@ void TeamField::rasterizeObstacles(oc::span<const NavObstacle> obstacles, uint8 
                     const glm::ivec2 cell(x, z);
                     if (Chunk* chunk = c->self->m_chunks.find(chunkKey(chunkOf(cell)))) // pre-created
                         chunk->cost[cellIndex(cell)] = Blocked;
+                }
+        }
+    });
+    // Phase 2b: BREACHABLE obstacles (cost != 0) after the Blocked barrier — their cells stay
+    // walkable at the (1 + cost) multiplier and never override a Blocked cell. Overlapping
+    // breachable obstacles racing on one cell both write a max, which can only lose the larger
+    // of two costs (game footprints never overlap, so it does not happen in practice).
+    Globals::jobSystem.parallelFor(0u, uint32(obstacles.size()), 8u, { "Nav raster breachable", EProfileCategory::Game },
+        [c = &ctx](uint32 begin, uint32 end)
+    {
+        for (uint32 idx = begin; idx < end; ++idx)
+        {
+            const NavObstacle& o = c->obstacles[idx];
+            if (o.cost == 0)
+                continue;
+            const glm::ivec2 lo = cellOf(o.min + 1e-3f);
+            const glm::ivec2 hi = cellOf(o.max - 1e-3f);
+            for (int z = lo.y; z <= hi.y; ++z)
+                for (int x = lo.x; x <= hi.x; ++x)
+                {
+                    const glm::ivec2 cell(x, z);
+                    if (Chunk* chunk = c->self->m_chunks.find(chunkKey(chunkOf(cell)))) // pre-created
+                    {
+                        uint8& cost = chunk->cost[cellIndex(cell)];
+                        if (cost != Blocked)
+                            cost = glm::max(cost, glm::min(o.cost, uint8(Blocked - 1)));
+                    }
                 }
         }
     });

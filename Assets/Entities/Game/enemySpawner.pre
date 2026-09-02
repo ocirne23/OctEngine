@@ -1,0 +1,40 @@
+# Enemy Spawner: a slow, tough hive body that holds off at StandoffRange from its target and,
+# once in range, CONTINUOUSLY births Swarm bodies next to itself every FireInterval seconds
+# (ShotKind 2: the "shot" is a spawn — NpcSystem::service). Kill it first or drown in swarm.
+# Squat green cylinder.
+Prefab gameEnemySpawner
+	Component Render
+		ObjectContainer baseshapes
+		Node Cylinder2
+		Type StaticMesh
+		Color 0.3 0.9 0.25
+		Scale 1.2 0.7 1.2
+	Component Physics
+		Body Dynamic
+		Shape Capsule
+		Radius 1.2
+		HalfHeight 0.3
+		Density 300
+		Friction 0
+		LockRotation true
+		ContactEvents true
+	Component Force
+		Team 1
+		Output 1.0
+		Reach 4
+		Centered true
+	Component Network
+	Component GameUnit
+		ShortName HIVE
+		HealthMax 320
+		EnergyMax 100
+		ShieldOutput 1.0
+		MoveSpeed 2.2
+		AttackDps 0
+		PlayerDps 0
+		EmitterDrain 6
+		Ranged true
+		StandoffRange 18
+		FireInterval 2.5
+		ShotKind 2
+		AlwaysDisplayHealth true

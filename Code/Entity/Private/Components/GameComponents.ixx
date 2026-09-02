@@ -128,6 +128,7 @@ export struct GameUnitComponent
         glm::vec3 from{ 0.0f };
         glm::vec3 target{ 0.0f };
         uint8 team = 1;
+        uint8 shotKind = 0; // the unit's ShotKind: which shell prefab the game spawns
     };
     static void takeFireRequests(oc::vector<FireRequest>& out);
     // EVERY unit with somewhere to be asks for a planned lane on its own timer (Nav path seeding
@@ -172,6 +173,7 @@ export struct GameUnitComponent
         bool ranged = false;          // spitter stance: hold at standoffRange and queue FireRequests
         float standoffRange = 16.0f;
         float fireInterval = 3.0f;
+        uint8 shotKind = 0;           // ranged: which shell the game fires (0 direct, 1 splash lob)
         bool alwaysDisplayHealth = false; // overhead bars show even at full health/shield
         float heightLimit = 0.0f;     // world-Y ceiling: 0 = the shared params.heightLimit,
                                       // > 0 = this prefab's own ceiling, < 0 = NONE (flying units)
@@ -187,6 +189,7 @@ export struct GameUnitComponent
     float emitterDrain = 5.0f;
     bool ranged = false;
     float standoffRange = 16.0f, fireInterval = 3.0f;
+    uint8 shotKind = 0;
     bool alwaysDisplayHealth = false; // overhead bars even at full health/shield (label pass reads it)
     float heightLimit = 0.0f;   // see SpawnInfo::heightLimit (0 = shared default, < 0 = none)
     // The ceiling this actor is held under (FLT_MAX = unlimited). Read by the unit tick AND by
@@ -474,12 +477,15 @@ export struct GameProjectileComponent
         float lifetime = 6.0f;
         float emitterDrain = 0.0f;     // energy/s sapped from the nearest active enemy emitter
         float emitterDrainRadius = 5.0f;
+        float splashRadius = 0.0f;     // > 0: the contact damages EVERY enemy unit/structure within
+                                       // it (the lobber shell), not just the one it touched
     };
 
     uint32 team = 0;
     float unitDamage = 25.0f, structureDamage = 20.0f;
     float lifetime = 6.0f;
     float emitterDrain = 0.0f, emitterDrainRadius = 5.0f;
+    float splashRadius = 0.0f;
     float age = 0.0f;
     bool spent = false; // hit something — despawn queued, never damage twice
 

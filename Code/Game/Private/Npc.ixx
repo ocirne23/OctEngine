@@ -11,7 +11,11 @@ import :Structures;
 // (Entities/Game/enemyUnit/Brute/Runner/Spitter/swarmUnit.pre); the shared sim baseline lives in
 // GameUnitComponent::params (tweaked here). SWARM is the CHEAP body: health only — no Force
 // emitter, no shield battery (the co-op waves are built from it; see GameMatch's coop block).
-export enum class ENpcType : uint8 { Grunt, Brute, Runner, Spitter, Swarm, Count };
+// SAVE FILES store the type as an int — APPEND only. Elite/Giant/Titan/Lobber are the late-wave
+// ELITE tier (enemy-only: not barracks options — see isBarracksUnitType); the Lobber is the ranged
+// one, firing SPLASH shots (enemyLob.pre, ShotKind 1).
+// The Spawner is a "ranged" unit whose ShotKind 2 "shot" is a SWARM body spawned next to it.
+export enum class ENpcType : uint8 { Grunt, Brute, Runner, Spitter, Swarm, Elite, Giant, Titan, Lobber, Spawner, Count };
 // The barracks' unit-type selection + its per-type price tables index by THIS order.
 static_assert((int)ENpcType::Count == GameNumUnitTypes);
 
@@ -131,5 +135,6 @@ private:
     // here is the spitter SHOT SPEED, applied when this system services the fire queue, and the
     // turret beam visual.)
     float m_spitterShotSpeed = 18.0f;
+    float m_lobberShotSpeed = 14.0f; // ShotKind 1: the slow splash shell
     float m_beamLifetime = 0.5f;
 };

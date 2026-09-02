@@ -26,6 +26,12 @@ export namespace Nav
     {
         glm::vec2 min{ 0.0f };
         glm::vec2 max{ 0.0f };
+        // 0 = impassable (Blocked). Else a BREACHABLE obstacle: its cells stay walkable at a
+        // (1 + cost) step multiplier, so the Dijkstra routes THROUGH it when the detour around is
+        // longer — the game's walls, which units then chew through. Steering/density still treat
+        // only Blocked as a wall, so a unit walks into it and the bite lands.
+        uint8 cost = 0;
+        uint8 pad[3] = {}; // explicit: the obstacle list is change-detected by a byte hash
     };
 
     class TeamField final

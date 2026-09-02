@@ -1,0 +1,31 @@
+# Enemy SPLASH shell (Lobber shot): a big slow sphere with a team-1 mini-field - player emitter
+# fields brake and deflect it in flight. On ANY contact it damages EVERY enemy-team unit and
+# structure within SplashRadius of the impact (GameProjectileComponent::onContact), then despawns.
+Prefab gameEnemyLob
+	Component Render
+		ObjectContainer baseshapes
+		Node Sphere
+		Type StaticMesh
+		Color 0.6 0.2 1
+		Scale 0.45
+	Component Physics
+		Body Dynamic
+		Layer Projectile
+		Shape Sphere
+		Radius 0.45
+		Density 140
+		Restitution 0.1
+		ContactEvents true
+	Component Force
+		Team 1
+		Output 0.5
+		Reach 2
+		Centered true
+	Component Network
+	Component GameProjectile
+		UnitDamage 20
+		StructureDamage 30
+		Lifetime 7
+		EmitterDrain 20
+		EmitterDrainRadius 6
+		SplashRadius 5

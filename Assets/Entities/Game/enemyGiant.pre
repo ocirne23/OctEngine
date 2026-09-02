@@ -1,0 +1,36 @@
+# Enemy Giant: the wave 9+ heavy - a brute scaled up: huge health pool, a wide strong bubble,
+# very high mass (nothing shoves it) and wall-breaking melee. Slow; soaks turret fire for the
+# escort. Dark crimson block.
+Prefab gameEnemyGiant
+	Component Render
+		ObjectContainer baseshapes
+		Node Cube
+		Type StaticMesh
+		Color 0.55 0.05 0.05
+		Scale 1.3 1.8 1.3
+	Component Physics
+		Body Dynamic
+		Shape Capsule
+		Radius 1.3
+		HalfHeight 0.8
+		Density 320
+		Friction 0
+		LockRotation true
+		ContactEvents true
+	Component Force
+		Team 1
+		Output 1.15
+		Reach 5
+		Centered true
+	Component Network
+	Component GameUnit
+		ShortName GIANT
+		HealthMax 600
+		EnergyMax 160
+		ShieldOutput 1.15
+		MoveSpeed 2.0
+		AttackRange 2.2
+		AttackDps 28
+		PlayerDps 30
+		EmitterDrain 14
+		AlwaysDisplayHealth true

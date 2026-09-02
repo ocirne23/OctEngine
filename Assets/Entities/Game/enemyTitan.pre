@@ -1,0 +1,36 @@
+# Enemy Titan: the wave 11+ boss body - a walking siege tower: enormous health and battery, the
+# strongest unit bubble in the game, crushing melee against structures and players, and an
+# emitter drain that blacks out a single emitter it leans on. Very slow. Near-black block.
+Prefab gameEnemyTitan
+	Component Render
+		ObjectContainer baseshapes
+		Node Cube
+		Type StaticMesh
+		Color 0.2 0.02 0.08
+		Scale 2 2.8 2
+	Component Physics
+		Body Dynamic
+		Shape Capsule
+		Radius 2
+		HalfHeight 1.2
+		Density 450
+		Friction 0
+		LockRotation true
+		ContactEvents true
+	Component Force
+		Team 1
+		Output 1.3
+		Reach 7
+		Centered true
+	Component Network
+	Component GameUnit
+		ShortName TITAN
+		HealthMax 2200
+		EnergyMax 450
+		ShieldOutput 1.3
+		MoveSpeed 1.6
+		AttackRange 4
+		AttackDps 55
+		PlayerDps 45
+		EmitterDrain 25
+		AlwaysDisplayHealth true

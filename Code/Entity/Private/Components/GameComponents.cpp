@@ -93,6 +93,7 @@ void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
     ranged = info.ranged;
     standoffRange = info.standoffRange;
     fireInterval = info.fireInterval;
+    shotKind = info.shotKind;
     alwaysDisplayHealth = info.alwaysDisplayHealth;
     heightLimit = info.heightLimit;
     for (float& h : m_outputHistory)
@@ -425,7 +426,7 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             {
                 // Spawning is main-thread only: queue the shot for the game to service.
                 const std::lock_guard<std::mutex> lock(g_unitEventMutex);
-                g_fireRequests.push_back(FireRequest{ pos, walkTarget, (uint8)team });
+                g_fireRequests.push_back(FireRequest{ pos, walkTarget, (uint8)team, shotKind });
                 m_fireTimer = fireInterval * (0.8f + 0.4f * unitRand01(m_rng));
             }
         }
@@ -1162,6 +1163,7 @@ void GameProjectileComponent::spawn(Entity& entity, const SpawnInfo& info, const
     lifetime = info.lifetime;
     emitterDrain = info.emitterDrain;
     emitterDrainRadius = info.emitterDrainRadius;
+    splashRadius = info.splashRadius;
     if (ForceComponent* fc = getComponent<ForceComponent>(&entity))
         fc->emitter.setTeam(team); // the shot's field carries the shooter's team
 }
@@ -1222,7 +1224,27 @@ void GameProjectileComponent::onContact(Entity& self, Entity& other, bool begin)
         return;
     // damage() handles puppets itself (banks into pendingDamage for owner routing), so enemy
     // projectiles hurt players through the exact same call as units.
-    if (GameUnitComponent* unit = getComponent<GameUnitComponent>(&other); unit && unit->team != team)
+    if (splashRadius > 0.0f)
+    {
+        // SPLASH: every enemy-team unit/structure within the radius of the impact point takes the
+        // full hit (the touched victim included — it is inside the radius by definition). The
+        // contact dispatch runs after the frame's spatial commit, so the query is legal here.
+        thread_local oc::vector<uint64> nearby;
+        Globals::spatialIndex.querySphere(glm::dvec3(self.pos), splashRadius, SpatialLayer_Render, nearby);
+        const float r2 = splashRadius * splashRadius;
+        for (const uint64 user : nearby)
+        {
+            Entity* victim = reinterpret_cast<Entity*>(user);
+            const glm::vec3 d = victim->pos - self.pos;
+            if (glm::dot(d, d) > r2)
+                continue;
+            if (GameUnitComponent* unit = getComponent<GameUnitComponent>(victim); unit && unit->team != team)
+                unit->damage(unitDamage);
+            else if (GameStructureComponent* sc = getComponent<GameStructureComponent>(victim); sc && sc->team != team)
+                sc->damage(structureDamage);
+        }
+    }
+    else if (GameUnitComponent* unit = getComponent<GameUnitComponent>(&other); unit && unit->team != team)
         unit->damage(unitDamage);
     else if (GameStructureComponent* sc = getComponent<GameStructureComponent>(&other); sc && sc->team != team)
         sc->damage(structureDamage);
@@ -1268,6 +1290,7 @@ void writeGameUnitSpawnInfo(const GameUnitComponent::SpawnInfo& info, AssetNode&
     if (info.ranged != d.ranged)             out.set("Ranged", info.ranged);
     if (info.standoffRange != d.standoffRange) out.set("StandoffRange", info.standoffRange);
     if (info.fireInterval != d.fireInterval) out.set("FireInterval", info.fireInterval);
+    if (info.shotKind != d.shotKind)         out.set("ShotKind", oc::to_string((int)info.shotKind));
     if (info.alwaysDisplayHealth != d.alwaysDisplayHealth) out.set("AlwaysDisplayHealth", info.alwaysDisplayHealth);
     if (info.heightLimit != d.heightLimit)   out.set("HeightLimit", info.heightLimit);
 }
@@ -1291,4 +1314,5 @@ void writeGameProjectileSpawnInfo(const GameProjectileComponent::SpawnInfo& info
     if (info.lifetime != d.lifetime)                 out.set("Lifetime", info.lifetime);
     if (info.emitterDrain != d.emitterDrain)         out.set("EmitterDrain", info.emitterDrain);
     if (info.emitterDrainRadius != d.emitterDrainRadius) out.set("EmitterDrainRadius", info.emitterDrainRadius);
+    if (info.splashRadius != d.splashRadius)         out.set("SplashRadius", info.splashRadius);
 }

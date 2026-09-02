@@ -51,7 +51,8 @@ static constexpr const char* c_structureShortNames[] = { "EMIT", "GEN", "CON", "
     "CNST", "BASE", "CBL-P", "CBL-F", "CBL-M", "CRSS", "HOUS" };
 static_assert(oc::size(c_structureShortNames) == (size_t)EStructureType::Count);
 // The barracks' unit-type popup captions, in ENpcType order (the same order the price tables use).
-static constexpr const char* c_unitTypeNames[] = { "Grunt", "Brute", "Runner", "Spitter", "Swarm" };
+static constexpr const char* c_unitTypeNames[] = { "Grunt", "Brute", "Runner", "Spitter", "Swarm",
+    "Elite", "Giant", "Titan", "Lobber", "Spawner" };
 static_assert(oc::size(c_unitTypeNames) == (size_t)ENpcType::Count);
 // The popup's buttons, in order: the producible types (isBarracksUnitType — no Spitter).
 static constexpr uint8 c_barracksMenu[] = { (uint8)ENpcType::Grunt, (uint8)ENpcType::Brute,
@@ -230,9 +231,16 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
         Tweak::floatVar("Game/Coop", "Cost runner", &m_waveCost[(int)ENpcType::Runner], 0.1f, 100.0f, 0.5f);
         Tweak::floatVar("Game/Coop", "Cost spitter", &m_waveCost[(int)ENpcType::Spitter], 0.1f, 100.0f, 0.5f);
         Tweak::floatVar("Game/Coop", "Cost swarm", &m_waveCost[(int)ENpcType::Swarm], 0.1f, 100.0f, 0.5f);
+        Tweak::floatVar("Game/Coop", "Cost elite", &m_waveCost[(int)ENpcType::Elite], 0.1f, 500.0f, 0.5f);
+        Tweak::floatVar("Game/Coop", "Cost giant", &m_waveCost[(int)ENpcType::Giant], 0.1f, 500.0f, 0.5f);
+        Tweak::floatVar("Game/Coop", "Cost titan", &m_waveCost[(int)ENpcType::Titan], 0.1f, 500.0f, 0.5f);
+        Tweak::floatVar("Game/Coop", "Cost lobber", &m_waveCost[(int)ENpcType::Lobber], 0.1f, 500.0f, 0.5f);
+        Tweak::floatVar("Game/Coop", "Cost spawner", &m_waveCost[(int)ENpcType::Spawner], 0.1f, 500.0f, 0.5f);
         Tweak::intVar("Game/Coop", "Max enemy units", &m_waveMaxAlive, 1, 20000, 50);
         Tweak::intVar("Game/Coop", "Ambient budget", &m_ambientBudget, 0, 20000, 10);
         Tweak::floatVar("Game/Coop", "Ambient safe radius", &m_ambientSafeRadius, 10.0f, 200.0f, 1.0f);
+        Tweak::floatVar("Game/Coop", "Ambient min depth", &m_ambientMinDepth, 0.0f, 0.9f, 0.05f);
+        Tweak::intVar("Game/Coop", "Ambient recipe window", &m_ambientRecipeWindow, 0, 20, 1);
         Tweak::intVar("Game/Coop", "Spawns per frame", &m_spawnsPerFrame, 1, 200, 1);
         // Map generation inputs, read once at generation on the AUTHORITY. Clients never read
         // them: the values actually used ride the GMp event (and the save) with the seed — a
@@ -498,8 +506,11 @@ namespace
     {
         const char* name;
         int minWave; // first wave index this recipe can roll (m_waveIndex is 1-based at roll time)
-        struct { ENpcType type; float weight; } mix[4]; // weight 0 = unused slot
+        struct { ENpcType type; float weight; } mix[5]; // weight 0 = unused slot
     };
+    // The ELITE tier (Elite/Giant/Titan/Lobber) enters at wave 7 and dominates from ~10 on: the
+    // Lobber's splash shells punish packed defences, the Giant/Titan soak turret fire, and the
+    // budget growth is what lets a late wave afford a Titan next to its escort.
     constexpr WaveArchetype c_waveArchetypes[] = {
         { "swarm",           1, { { ENpcType::Swarm, 1.0f } } },
         { "swarm + runners", 2, { { ENpcType::Swarm, 0.75f }, { ENpcType::Runner, 0.25f } } },
@@ -510,8 +521,25 @@ namespace
         { "combined arms",   6, { { ENpcType::Grunt, 0.3f }, { ENpcType::Runner, 0.25f },
                                   { ENpcType::Spitter, 0.2f }, { ENpcType::Swarm, 0.25f } } },
         { "brute wall",      7, { { ENpcType::Brute, 0.85f }, { ENpcType::Spitter, 0.15f } } },
+        { "elite guard",     7, { { ENpcType::Elite, 0.45f }, { ENpcType::Grunt, 0.25f },
+                                  { ENpcType::Swarm, 0.3f } } },
         { "the works",       8, { { ENpcType::Swarm, 0.4f }, { ENpcType::Runner, 0.25f },
                                   { ENpcType::Spitter, 0.15f }, { ENpcType::Brute, 0.2f } } },
+        { "lobber barrage",  8, { { ENpcType::Lobber, 0.3f }, { ENpcType::Elite, 0.2f },
+                                  { ENpcType::Swarm, 0.5f } } },
+        { "giant push",      9, { { ENpcType::Giant, 0.15f }, { ENpcType::Elite, 0.35f },
+                                  { ENpcType::Swarm, 0.5f } } },
+        { "siege column",   10, { { ENpcType::Giant, 0.2f }, { ENpcType::Lobber, 0.3f },
+                                  { ENpcType::Brute, 0.2f }, { ENpcType::Swarm, 0.3f } } },
+        { "titan",          11, { { ENpcType::Titan, 0.05f }, { ENpcType::Giant, 0.15f },
+                                  { ENpcType::Lobber, 0.2f }, { ENpcType::Swarm, 0.6f } } },
+        { "endgame",        13, { { ENpcType::Titan, 0.1f }, { ENpcType::Giant, 0.2f },
+                                  { ENpcType::Elite, 0.3f }, { ENpcType::Lobber, 0.2f },
+                                  { ENpcType::Swarm, 0.2f } } },
+        { "hive",            9, { { ENpcType::Spawner, 0.1f }, { ENpcType::Elite, 0.3f },
+                                  { ENpcType::Swarm, 0.6f } } },
+        { "hive siege",     12, { { ENpcType::Spawner, 0.15f }, { ENpcType::Giant, 0.15f },
+                                  { ENpcType::Lobber, 0.2f }, { ENpcType::Swarm, 0.5f } } },
     };
     constexpr int c_numWaveArchetypes = (int)(sizeof(c_waveArchetypes) / sizeof(c_waveArchetypes[0]));
     constexpr int c_maxArchetypeMinWave = [] {
@@ -716,17 +744,28 @@ void GameMatch::tickCoopSpawns()
                 continue; // safe-ring reject: costs one budget tick, never the points
             // DISTANCE = DIFFICULTY: the group's archetype is gated by GEODESIC depth (BFS
             // distance from the Base over the generated map) exactly like waves gate by index —
-            // the near ring only rolls the early recipes (swarm-grade), the deep map unlocks the
-            // whole table (brute walls, combined arms). Costs then make far groups FEWER, TOUGHER
-            // bodies for the same points. One recipe per group, so it reads as a unit type
-            // holding ground rather than a random assortment.
+            // the BAND is a window of recipes: a group rolls only recipes whose wave gate sits
+            // within "Ambient recipe window" BELOW its depth band, so the near ring only rolls the
+            // early recipes (swarm-grade) and the deep map rolls ONLY the elite-tier ones (giants,
+            // titans, lobbers never appear near the Base, and the outer map never wastes a group
+            // on a plain swarm). "Ambient min depth" rejects the innermost fraction of the map
+            // outright. Costs then make far groups FEWER, TOUGHER bodies for the same points. One
+            // recipe per group, so it reads as a unit type holding ground rather than a random
+            // assortment.
             const float depth = (float)m_coopMap.depth[cell] / (float)m_coopMap.maxDepth;
+            if (depth < m_ambientMinDepth)
+                continue; // too close to the Base by walking distance: costs one budget tick
             const int band = 1 + (int)(depth * (float)(c_maxArchetypeMinWave - 1) + 0.5f);
             int eligible[c_numWaveArchetypes];
             int numEligible = 0;
             for (int i = 0; i < c_numWaveArchetypes; ++i)
-                if (c_waveArchetypes[i].minWave <= band)
+                if (c_waveArchetypes[i].minWave <= band
+                    && c_waveArchetypes[i].minWave >= band - m_ambientRecipeWindow)
                     eligible[numEligible++] = i;
+            if (numEligible == 0) // a gap in the gate table under the window: fall back to all unlocked
+                for (int i = 0; i < c_numWaveArchetypes; ++i)
+                    if (c_waveArchetypes[i].minWave <= band)
+                        eligible[numEligible++] = i;
             m_ambientSpawn.archetype = eligible[glm::clamp(
                 (int)(glm::linearRand(0.0f, 1.0f) * (float)numEligible), 0, numEligible - 1)];
             m_ambientSpawn.center = center + glm::vec3(glm::linearRand(-4.0f, 4.0f), 0.0f,
@@ -2021,7 +2060,11 @@ void GameMatch::feedNav()
             continue;
         const float half = StructureSystem::footprintCellsOf(s.type) * StructureSystem::GridCellSize * 0.5f;
         const glm::vec2 c(s.entity->pos.x, s.entity->pos.z);
-        m_navObstacles.push_back(Nav::NavObstacle{ c - half, c + half });
+        // WALLS are BREACHABLE obstacles ("Wall breach cost"): the field routes through one where
+        // the detour is longer, the units walk into it and chew it down instead of skirting it.
+        const uint8 breach = s.type == EStructureType::Wall && !s.state->blueprint
+            ? (uint8)glm::clamp(m_structures.wallBreachCost(), 1, 254) : (uint8)0;
+        m_navObstacles.push_back(Nav::NavObstacle{ c - half, c + half, breach });
         // Sources: what units of OTHER teams walk toward — the same filter the local search used
         // (alive, not the invulnerable Base). Clients run no unit sim: obstacles only, for the
         // local player's goal field.

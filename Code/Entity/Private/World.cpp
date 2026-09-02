@@ -1152,6 +1152,7 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         if (const AssetNode* n = unitNode->find("Ranged"))        info->ranged = n->asBool();
         if (const AssetNode* n = unitNode->find("StandoffRange")) info->standoffRange = n->asFloat(0, info->standoffRange);
         if (const AssetNode* n = unitNode->find("FireInterval"))  info->fireInterval = n->asFloat(0, info->fireInterval);
+        if (const AssetNode* n = unitNode->find("ShotKind"))      info->shotKind = (uint8)glm::clamp(n->asInt(), 0, 255);
         if (const AssetNode* n = unitNode->find("AlwaysDisplayHealth")) info->alwaysDisplayHealth = n->asBool();
         if (const AssetNode* n = unitNode->find("HeightLimit"))   info->heightLimit = n->asFloat(0, info->heightLimit);
         typeBits |= uint16(1 << EComponentID_GameUnit);
@@ -1177,6 +1178,7 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         if (const AssetNode* n = projNode->find("Lifetime"))        info->lifetime = n->asFloat(0, info->lifetime);
         if (const AssetNode* n = projNode->find("EmitterDrain"))    info->emitterDrain = n->asFloat(0, info->emitterDrain);
         if (const AssetNode* n = projNode->find("EmitterDrainRadius")) info->emitterDrainRadius = n->asFloat(0, info->emitterDrainRadius);
+        if (const AssetNode* n = projNode->find("SplashRadius"))    info->splashRadius = n->asFloat(0, info->splashRadius);
         typeBits |= uint16(1 << EComponentID_GameProjectile);
         tmpl.spawnInfos.emplace_back(oc::move(info));
     }

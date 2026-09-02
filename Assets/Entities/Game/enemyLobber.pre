@@ -1,0 +1,38 @@
+# Enemy Lobber: the wave 8+ artillery - a tougher, slower spitter that stands further off and
+# fires SPLASH shells (ShotKind 1 -> enemyLob.pre): every friendly unit and structure near the
+# impact takes the hit, so packed defences pay for their density. Wedge silhouette, violet.
+Prefab gameEnemyLobber
+	Component Render
+		ObjectContainer baseshapes
+		Node Wedge
+		Type StaticMesh
+		Color 0.55 0.15 0.9
+		Scale 0.7 0.9 0.7
+	Component Physics
+		Body Dynamic
+		Shape Capsule
+		Radius 0.7
+		HalfHeight 0.4
+		Density 140
+		Friction 0
+		LockRotation true
+		ContactEvents true
+	Component Force
+		Team 1
+		Output 0.85
+		Reach 3.5
+		Centered true
+	Component Network
+	Component GameUnit
+		ShortName LOB
+		HealthMax 70
+		EnergyMax 50
+		ShieldOutput 0.7
+		MoveSpeed 2.8
+		AttackDps 0
+		PlayerDps 0
+		EmitterDrain 4
+		Ranged true
+		StandoffRange 22
+		FireInterval 4.5
+		ShotKind 1

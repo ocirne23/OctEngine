@@ -524,6 +524,6 @@ private:
 	EPvpMap m_pvpMap = EPvpMap::Lane; // PvP: the host's arena pick. Mirrored in LbS.
 	// Co-op map settings (host-authored; defaults = GameMatch's tweak defaults). Mirrored in LbS.
 	uint32 m_mapSeed = 0;
-	float m_mapFill = 0.3f;
+	float m_mapFill = 0.4f;
 	int m_mapLanes = 6;
 };

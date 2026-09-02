@@ -22,8 +22,11 @@ import :Structures;
 static constexpr const char* c_npcPrefabs[(int)ENpcType::Count] = {
     "Entities/Game/enemyGrunt.pre", "Entities/Game/enemyBrute.pre",
     "Entities/Game/enemyRunner.pre", "Entities/Game/enemySpitter.pre",
-    "Entities/Game/enemySwarm.pre" };
-static constexpr const char* c_npcNames[(int)ENpcType::Count] = { "Enemy", "Brute", "Runner", "Spitter", "Swarm" };
+    "Entities/Game/enemySwarm.pre", "Entities/Game/enemyElite.pre",
+    "Entities/Game/enemyGiant.pre", "Entities/Game/enemyTitan.pre",
+    "Entities/Game/enemyLobber.pre", "Entities/Game/enemySpawner.pre" };
+static constexpr const char* c_npcNames[(int)ENpcType::Count] = { "Enemy", "Brute", "Runner", "Spitter", "Swarm",
+    "Elite", "Giant", "Titan", "Lobber", "Spawner" };
 
 static void collectUnits(oc::span<const uint64> results, oc::vector<Entity*>& out)
 {
@@ -127,6 +130,7 @@ void NpcSystem::registerTweaks()
     // Shot speeds, applied when the fire queues are serviced here (the rest of the production
     // tuning registers from StructureSystem onto the component params).
     Tweak::floatVar("Game/Friendlies", "Turret beam lifetime", &m_beamLifetime, 0.02f, 2.0f, 0.01f);
+    Tweak::floatVar("Game/Enemies", "Lobber shot speed", &m_lobberShotSpeed, 2.0f, 80.0f, 0.5f);
     Tweak::floatVar("Game/Enemies", "Spitter shot speed", &m_spitterShotSpeed, 2.0f, 80.0f, 0.5f);
     // Far tick: neither Saved nor Synced, like the rest of Game/Sim LOD (explicit flags beat the
     // scoped ones above).
@@ -429,9 +433,24 @@ void NpcSystem::service(StructureSystem& structures)
         const glm::vec3 from = request.from + glm::vec3(0.0f, 0.8f, 0.0f);
         glm::vec3 dir = (request.target + glm::vec3(0.0f, 1.0f, 0.0f)) - from;
         const float len = glm::length(dir);
-        if (len > 1e-3f)
-            fireShot("Entities/Game/enemyShot.pre", "EnemyShot", from + dir / len * 1.2f,
-                dir / len * m_spitterShotSpeed, request.team);
+        if (len <= 1e-3f)
+            continue;
+        // ShotKind picks the shell: 0 = the spitter's direct shot, 1 = the lobber's slow SPLASH
+        // shell (enemyLob.pre: SplashRadius — the projectile's contact damages everything in it),
+        // 2 = the SPAWNER: no shell at all — a loose Swarm body is born beside it, on the side
+        // facing its target (it holds at StandoffRange like any ranged unit, so "in range" = the
+        // same gate the fire timer uses).
+        if (request.shotKind == 2)
+        {
+            const glm::vec2 toTarget(dir.x, dir.z);
+            spawnLooseUnit(structures, freeSpawnPointAround(structures, request.from, 2.2f, &toTarget),
+                request.team, ENpcType::Swarm);
+            continue;
+        }
+        const bool lob = request.shotKind == 1;
+        fireShot(lob ? "Entities/Game/enemyLob.pre" : "Entities/Game/enemyShot.pre",
+            lob ? "EnemyLob" : "EnemyShot", from + dir / len * 1.2f,
+            dir / len * (lob ? m_lobberShotSpeed : m_spitterShotSpeed), request.team);
     }
     // Each reported death frees its population on its spawner — the tally is maintained by the
     // spawn/death edges instead of by recounting units every frame.
