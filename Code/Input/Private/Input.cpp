@@ -46,9 +46,14 @@ void Input::update(double deltaSec)
         // through a normal ImGui widget, so it never sets WantCaptureKeyboard/WantTextInput on its own --
         // isScriptEditorFocused() is checked alongside those so typing a digit there (e.g. a vector literal's
         // "1.0,2.0,3.0") doesn't ALSO fire whatever global gameplay shortcut that key is bound to below.
+        // Esc always reaches the listeners unless a text field is being edited (ImGui's own
+        // Esc-cancels-edit): with keyboard nav on, ANY focused ImGui window sets WantCaptureKeyboard,
+        // so the escape-menu overlay itself (focused while open) would eat the Esc that closes it.
+        const bool escapeDown = evt.type == SDL_EVENT_KEY_DOWN && evt.key.scancode == SDL_SCANCODE_ESCAPE
+            && !imguiIO.WantTextInput && !Globals::ui.isScriptEditorFocused();
         if (evt.type >= SDL_EVENT_KEY_DOWN && evt.type <= SDL_EVENT_TEXT_INPUT
             && (imguiIO.WantCaptureKeyboard || imguiIO.WantTextInput || Globals::ui.isScriptEditorFocused())
-            && !Globals::ui.isViewportFocused())
+            && !Globals::ui.isViewportFocused() && !escapeDown)
             continue;
         if (!(evt.type == SDL_EVENT_MOUSE_BUTTON_UP && evt.button.button == 1 && Globals::ui.isViewportGrabbed())) // pass through mouse button up when viewport is grabbed to prevent stuck mouse
             if (evt.type >= SDL_EVENT_MOUSE_MOTION && evt.type <= SDL_EVENT_MOUSE_WHEEL && (imguiIO.WantCaptureMouse && (!Globals::ui.isViewportFocused() || Globals::ui.isViewportGrabbed())))

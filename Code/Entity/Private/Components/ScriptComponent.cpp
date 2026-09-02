@@ -393,6 +393,12 @@ void ScriptComponent::destroy(Entity& entity, const SpawnInfo& info)
         Globals::scriptEvents.unregisterListener(scriptModule, &entity);
 }
 
+void ScriptComponent::detachListener(Entity& entity)
+{
+    if (scriptModule && scriptModule->onEvent)
+        Globals::scriptEvents.unregisterListener(scriptModule, &entity, /*waitForDispatches*/ true);
+}
+
 // Arrays are released here rather than in destroy(): destroy() is the SCRIPT's teardown hook (it runs
 // OnDestroy, which may still read them) and isn't reached on every path that frees a component.
 ScriptComponent::~ScriptComponent()

@@ -85,6 +85,10 @@ export struct ScriptComponent
 
     void spawn(Entity&, const SpawnInfo& info, const Transform&);
     void destroy(Entity&, const SpawnInfo&);
+    // FIRST step of Entity::destroy, before any component is torn down: drops the global event
+    // listener and waits for in-flight dispatches to drain (parallel destruction — see
+    // ScriptEventManager::unregisterListener), so no OnEvent ever lands on a half-destroyed entity.
+    void detachListener(Entity& entity);
 
     // Compiles (on demand) and runs the referenced script with `entity` as its `self`. Defined in
     // ScriptRuntime.cpp, which owns the ScriptContext + thunks.

@@ -12,6 +12,7 @@ import Core.Windows;
 
 import App.InputControls;
 import App.Lobby;
+import App.Chat;
 import App.ProfileDump;
 
 import Game;
@@ -230,6 +231,12 @@ int main(int argc, char* argv[])
     // state, no entity handles; command-line game servers mark it "started" so menu clients
     // joining them still get the go signal.
     LobbySystem lobby;
+    // The text CHAT log (lobby page + in-game overlay; the "ChM" event). Plain state like the lobby.
+    ChatSystem chat;
+    uint32 chatViewGeneration = 0; // the log generation the UI last received
+    // Client: the server connection dropped (set inside receive() by the NetworkManager hook,
+    // acted on at the top of the next frame — a menu-launched session returns to the menu).
+    bool serverLost = false;
 
     // The GAME/WORLD half of a mode start: testbed content, or GameMatch + its world. Runs before
     // the loop on the command-line path, at countdown end on the lobby host, and INSIDE the event
@@ -250,9 +257,25 @@ int main(int argc, char* argv[])
         }
         controls.setGameMode(startGame);                 // game: mutes the testbed spawn/possess keys
         cameraController.setMovementEnabled(!startGame); // game: WASD belongs to the game player
+        Globals::ui.setGameLayout(startGame);            // game: viewport-only widget pass (debug side section via the escape menu)
         if (startGame)
         {
             game.emplace(true, startCoop);
+            // A co-op HOST launching from the lobby generates the map the lobby page showed
+            // (seed/fill/lanes); clients ignore this (they generate from the server's GMp event)
+            // and the command-line path keeps the Game/Coop tweak values.
+            uint32 mapSeed;
+            float mapFill;
+            int mapLanes;
+            if (startCoop && lobby.hostMapSettings(mapSeed, mapFill, mapLanes))
+                game->setMapSettings(mapSeed, mapFill, mapLanes);
+            // A PvP HOST seats every lobby player on their picked team and spawns one Base per
+            // team (the lobby's count); clients learn their team from the capsule's puppet
+            // component as before, the command-line path keeps the two-team default.
+            uint8 numTeams;
+            oc::vector<oc::pair<uint32, uint8>> teamPicks;
+            if (!startCoop && lobby.teamSettings(numTeams, teamPicks))
+                game->setLobbyTeams(numTeams, teamPicks);
             game->spawnWorld();
         }
     };
@@ -335,6 +358,11 @@ int main(int argc, char* argv[])
     // ever fired and received on the main thread.
     Globals::networkManager.setOnGameEvent([&](oc::string_view name)
     {
+        if (ChatSystem::handlesEvent(name))
+        {
+            chat.handleNetEvent(); // main thread only: fired from main, received in receive()
+            return;
+        }
         if (!LobbySystem::handlesEvent(name))
         {
             if (game)
@@ -346,6 +374,16 @@ int main(int argc, char* argv[])
             startWorldAndGame(true, lobby.coop());
         if (lobby.takeClientStart())
             Globals::ui.setMainMenuActive(false); // the server declared the match running
+    });
+
+    // A lost server: command-line clients keep the manager's auto-reconnect (server restarts
+    // heal); a MENU-launched client (lobby or match) goes back to the menu with a status line
+    // instead of sitting on a dead session — deferred to the loop top, since the hook runs inside
+    // receive() where the host may not be shut down.
+    Globals::networkManager.setOnServerLost([&]()
+    {
+        if (mainMenu)
+            serverLost = true;
     });
 
     // ESCAPE-MENU "Exit to menu": tear the running mode (or the lobby) down to the blank
@@ -360,8 +398,11 @@ int main(int argc, char* argv[])
         Globals::networkManager.shutdown(); // role back to None — hosting/joining again is supported
         Globals::networkManager.setEventFilter({}); // a stale Gq*/Lb* filter must not gate the next session
         lobby.reset();
+        chat.reset();
+        Globals::ui.clearChat();
         controls.setGameMode(true);         // the menu phase mutes testbed keys + pauses free flight again
         cameraController.setMovementEnabled(false);
+        Globals::ui.setGameLayout(false);   // the editor layout returns if the next pick is the sandbox
         Globals::ui.setMainMenuActive(true); // reactivation resets to the front page
     };
 
@@ -530,6 +571,16 @@ int main(int argc, char* argv[])
             }
             Globals::forceSystem.joinMerge(); // last frame's merge job (kicked after the force upload, ran during present + the stall); before input/drains can touch emitters
 
+            if (serverLost) // client: the host left (or the link died) — back to the menu, pre-kick window
+            {
+                serverLost = false;
+                if (Globals::networkManager.role() == ENetRole::Client)
+                {
+                    exitToMenu();
+                    Globals::ui.setMainMenuStatus("Disconnected from the server");
+                }
+            }
+
             // Main menu selection (written by the PREVIOUS frame's widget pass, sequenced by the
             // join above): start the chosen mode here in the pre-kick window, where main-thread
             // spawns and the network start are legal. A failed host/join leaves the menu up.
@@ -584,9 +635,15 @@ int main(int argc, char* argv[])
                 // state broadcasts), then this frame's view snapshot for the widget pass.
                 if (lobby.active())
                 {
-                    lobby.handleAction(Globals::ui.takeMainMenuLobbyAction());
-                    lobby.update((float)Globals::time.getDeltaSec());
-                    Globals::ui.setMainMenuLobbyView(lobby.view());
+                    const LobbyAction lobbyAction = Globals::ui.takeMainMenuLobbyAction();
+                    if (lobbyAction.type == LobbyAction::EType::Leave)
+                        exitToMenu(); // host: the server closes and every client sees a disconnect; client: just leaves
+                    else
+                    {
+                        lobby.handleAction(lobbyAction);
+                        lobby.update((float)Globals::time.getDeltaSec());
+                        Globals::ui.setMainMenuLobbyView(lobby.view());
+                    }
                 }
                 if (lobby.takeServerStart())
                 {
@@ -596,6 +653,16 @@ int main(int argc, char* argv[])
                             game->onClientJoined(clientId); // capsules + world replay for everyone already in the lobby
                     Globals::ui.setMainMenuActive(false);
                 }
+            }
+
+            // Chat servicing (lobby page + game overlay draw the same widget): the line the
+            // previous widget pass sent, then a fresh log snapshot only when the log changed.
+            if (const oc::string line = Globals::ui.takeChatOutgoing(); !line.empty())
+                chat.send(line);
+            if (chat.generation() != chatViewGeneration)
+            {
+                chatViewGeneration = chat.generation();
+                Globals::ui.setChatView(chat.view());
             }
         }
 
@@ -644,6 +711,12 @@ int main(int argc, char* argv[])
                 // Menu/lobby/escape-menu active = no game input, camera overwrite or HUD (a lobby
                 // client's GameMatch already exists and simulates, but the overlay owns the screen).
                 game->updateWindowed(camera, (float)deltaSec); // game mode: follow-camera overwrite + aim/HUD/debug draw
+            }
+            else if (game && game->enabled() && !Globals::ui.isMainMenuActive())
+            {
+                // Escape menu over a running game: the camera stays where the game left it — the
+                // fly-camera branch below would overwrite it with the testbed camera's own pose
+                // (the view dropped to that pose every time the overlay opened).
             }
             else if (Globals::rendererVK.isVrEnabled())
             {

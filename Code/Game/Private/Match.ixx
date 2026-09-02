@@ -40,6 +40,20 @@ public:
     ~GameMatch();
 
     void spawnWorld();
+    // Co-op map inputs chosen OUTSIDE (the lobby page's host settings): call before spawnWorld on
+    // the authority. Writes the same variables the "Game/Coop" tweaks bind, so the panel shows
+    // what generated; seed 0 still rolls a random map.
+    void setMapSettings(uint32 seed, float fill, int lanes)
+    {
+        m_mapSeedTweak = (int)(seed & 0x7fffffffu);
+        m_terrainFill = fill;
+        m_terrainLanes = lanes;
+    }
+    // PvP team setup chosen OUTSIDE (the lobby): the host's team count (2..GameMaxTeams — one
+    // Base per team, spread along the corridor) and the roster's picks (clientId, team; clientId
+    // 0 = the server's own team). Call before spawnWorld on the authority. A client whose id is
+    // not in the list (a late joiner) is seated on the least-populated team at join.
+    void setLobbyTeams(uint8 numTeams, oc::span<const oc::pair<uint32, uint8>> picks);
     // The PLAYER/CAMERA hot path, and nothing else: capsule adoption (client) + velocity steering +
     // the shield's body push — the direct body setters that must land BEFORE this frame's physics
     // step. Deliberately minimal so main reaches the spatial/begin-frame kicks as early as possible.
@@ -212,10 +226,12 @@ private:
     // TEAMS are SLOTS, never derived from the clientId: ids are minted monotonically and never
     // recycled (a reconnect or a failed first attempt burns one), so the second connection of the
     // same friend used to land on team 2 — a team with no Base. The map spawns one Base per
-    // playable team (see spawnWorld), and a player without a Base has no respawn anchor, no
-    // mineral bank and no healing, so the slot pool is exactly that many.
-    static constexpr uint8 PlayableTeams = 2;
-    uint8 allocateClientTeam() const;      // lowest free slot; extras double up on the last one
+    // playable team (m_numTeams, see spawnWorld), and a player without a Base has no respawn
+    // anchor, no mineral bank and no healing, so the slot pool is exactly that many.
+    uint8 m_numTeams = 2;                                  // PvP playable teams (the lobby's count)
+    oc::vector<oc::pair<uint32, uint8>> m_lobbyTeams;      // the lobby's picks (see setLobbyTeams)
+    glm::vec3 baseGroundPos(uint8 team) const;             // PvP: that team's Base cell on the corridor
+    uint8 allocateClientTeam(uint32 clientId) const;       // the lobby pick, else the least-populated team
     int clientTeam(uint32 clientId) const; // -1 = unknown client (no capsule yet); 0 = the server
     // The team a client's build/demolish/cable request acts as. Callers must reject unknown
     // senders first (handleNetEvent does) — this clamps rather than failing.

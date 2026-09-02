@@ -10,7 +10,7 @@ import Physics;
 // Bump on ANY wire format change: the transport handshake denies mismatched protocol ids, so old
 // builds fail to connect instead of misparsing. GameNetVersion rides in Hello/Welcome purely so the
 // mismatch produces a readable log line when the protocolId was forgotten.
-constexpr uint32 GameProtocolId = 0x4F435347; // physical cables: GCb/GqC removed, GPl re-sent on built
+constexpr uint32 GameProtocolId = 0x4F435349; // PvP lobby teams: LbS carries numTeams + per-player team, LbT pick request
 constexpr uint16 GameNetVersion = 14;
 
 // Engine-reserved event: Synced-flagged tweak values, server -> clients (full set at join +
@@ -387,6 +387,8 @@ void NetworkManager::receive(double deltaSec)
                 m_serverPeer = InvalidNetPeerId;
                 m_localClientId = 0;
                 m_preWelcomeEvents.clear(); // stale parked events must not replay into a new session
+                if (m_onServerLost)
+                    m_onServerLost(); // the App may shut us down NEXT frame — the reconnect below is then moot
                 // auto-reconnect: heals startup-time handshake failures and server restarts alike;
                 // a failed attempt takes connectTimeoutSec to report, which self-paces the retries.
                 // The re-handshake re-runs Hello->Welcome and the world replay is idempotent.

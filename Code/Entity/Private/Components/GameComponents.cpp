@@ -92,6 +92,7 @@ void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
     standoffRange = info.standoffRange;
     fireInterval = info.fireInterval;
     alwaysDisplayHealth = info.alwaysDisplayHealth;
+    heightLimit = info.heightLimit;
     for (float& h : m_outputHistory)
         h = shieldOutput;
     m_rng = uint32(uintptr_t(this) >> 4) * 2654435761u + 1u; // worker-safe per-unit stream
@@ -138,6 +139,24 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
     // crowd density that keeps units spaced. The stall injection below is far stronger.
     if (fields && params.presencePressure > 0.0f)
         Globals::navSystem.pressure(team).inject(here, params.presencePressure * deltaSec * 60.0f);
+    // ---- HEIGHT LIMIT: launched above the ceiling -> put back AT the ceiling, climb cancelled
+    // (the queued velocity keeps the planar part). Teleport contract: stomp the interpolation
+    // poses and claim the step, or PhysicsComponent::update mixes toward the pre-teleport pose on
+    // stepping frames. Runs BEFORE the puppet gate on purpose: the server's twins of client
+    // capsules are held under the same ceiling their owners clamp themselves to in GamePlayer, so
+    // both land at the same height and the owner's next claim re-anchors instead of fighting.
+    // `vel` is read ONCE here and carried into the steering below, so a later SetLinearVelocity
+    // command never re-applies the cancelled climb.
+    glm::vec3 vel = pc->body.getLinearVelocity();
+    if (const float ceiling = effectiveHeightLimit(); pos.y > ceiling)
+    {
+        const glm::vec3 clamped(pos.x, ceiling, pos.z);
+        Globals::physics.teleportBody(pc->body, clamped, pc->body.getRotation());
+        vel.y = glm::min(vel.y, 0.0f);
+        Globals::physics.queueBodyCommand(pc->body, PhysicsWorld::EBodyCommand::SetLinearVelocity, vel);
+        pc->prevPos = pc->currPos = clamped;
+        pc->lastStep = Globals::physics.getStepCount();
+    }
     if (puppet)
         return; // state carrier: GamePlayer writes it
     // Direct damage lands via the inbox — the battery eats it FIRST, exactly the player's
@@ -395,7 +414,7 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
     // ---- steering: CONTEXT STEERING over the nav fields — score a fan of headings by goal
     // alignment, open run, crowd lane, persistence, minus the pressure gradient; stalls shift the
     // weights toward the fields. Physics writes are QUEUED (workers): one frame of latency.
-    glm::vec3 vel = pc->body.getLinearVelocity();
+    // (`vel` was read at the top, next to the height limit.)
     if (haveWalkTarget)
     {
         const glm::vec2 toTarget(walkTarget.x - pos.x, walkTarget.z - pos.z);
@@ -1093,6 +1112,7 @@ void writeGameUnitSpawnInfo(const GameUnitComponent::SpawnInfo& info, AssetNode&
     if (info.standoffRange != d.standoffRange) out.set("StandoffRange", info.standoffRange);
     if (info.fireInterval != d.fireInterval) out.set("FireInterval", info.fireInterval);
     if (info.alwaysDisplayHealth != d.alwaysDisplayHealth) out.set("AlwaysDisplayHealth", info.alwaysDisplayHealth);
+    if (info.heightLimit != d.heightLimit)   out.set("HeightLimit", info.heightLimit);
 }
 
 void writeGameStructureSpawnInfo(const GameStructureComponent::SpawnInfo& info, AssetNode& out)

@@ -385,9 +385,11 @@ void GameMatch::spawnWorld()
             if (const int index = m_structures.structureIndexById(id); index >= 0)
                 sendRoute(index);
         };
+        // (+ the App layer's text chat "ChM" — a string up to 256B; App.Chat's c_maxEventBytes)
         Globals::networkManager.setEventFilter([](uint32, oc::string_view name, oc::span<const uint8> data, Entity*)
         {
-            return name.size() >= 2 && name[0] == 'G' && name[1] == 'q' && data.size() <= 64;
+            return (name.size() >= 2 && name[0] == 'G' && name[1] == 'q' && data.size() <= 64)
+                || (name == "ChM" && data.size() <= 256);
         });
     }
 
@@ -419,11 +421,21 @@ void GameMatch::spawnWorld()
     }
     if (!m_isClient)
     {
-        m_structures.spawnBase(m_basePos); // clients get it through the GPl mirror stream
         if (!m_coop)
-            m_structures.spawnBase(m_enemyBasePos, 1); // the opposing team's anchor + income
+        {
+            // One Base per playable team (clients get them through the GPl mirror stream); the
+            // server's own capsule sits beside ITS lobby-picked team's Base.
+            for (uint8 t = 0; t < m_numTeams; ++t)
+                m_structures.spawnBase(baseGroundPos(t), t);
+            m_team = allocateClientTeam(0);
+            m_player.setTeam(m_team);
+            m_playerStart = teamStartPos((uint8)m_team);
+        }
         else
+        {
+            m_structures.spawnBase(m_basePos);
             m_ambientPendingBudget = (float)m_ambientBudget; // the scatter's points, trickled in (tickCoopSpawns)
+        }
         m_player.spawn(m_playerStart);     // clients ADOPT the capsule the server spawns for them
         // The server's own capsule is a PRIMARY: never handed to a client by the proximity
         // transfer, and it re-claims transferred objects it walks up to (the client symmetric).
@@ -902,8 +914,14 @@ void GameMatch::generateCoopGrid()
 void GameMatch::spawnCoopTerrain()
 {
     MapRng rng{ mapHash(m_coopMap.seed ^ 0xC0FFEEu) };
-    m_terrainRoot = Globals::world.createEmptyEntity("CoopTerrain");
-    Globals::world.addRootEntity(m_terrainRoot);
+    // A Scene-only prefab, NOT createEmptyEntity: that one has no components at all, and an
+    // entity without a SceneComponent refuses children (the pieces would end up unparented).
+    m_terrainRoot = Globals::world.spawnAssetFile("Entities/Game/terrainroot.pre", Transform(), true);
+    if (m_terrainRoot)
+    {
+        m_terrainRoot->setName("CoopTerrain");
+        Globals::world.addRootEntity(m_terrainRoot);
+    }
 
     oc::vector<World::SpawnRequest> requests;
     requests.reserve(m_coopMap.reachable.size() / 2 + 128);
@@ -1136,24 +1154,45 @@ void GameMatch::drawCoopBarrier()
     }
 }
 
-uint8 GameMatch::allocateClientTeam() const
+void GameMatch::setLobbyTeams(uint8 numTeams, oc::span<const oc::pair<uint32, uint8>> picks)
+{
+    m_numTeams = (uint8)glm::clamp((int)numTeams, 2, GameMaxTeams);
+    m_lobbyTeams.assign(picks.begin(), picks.end());
+}
+
+glm::vec3 GameMatch::baseGroundPos(uint8 team) const
+{
+    // Two teams = the corridor's ends (the original layout); more spread EVENLY along the x axis
+    // between them on the corridor's center line, so every team keeps the same node symmetry
+    // and the middle teams sit between two neighbours.
+    if (m_numTeams <= 2)
+        return team == 0 ? m_basePos : m_enemyBasePos;
+    const float t = (float)glm::min((int)team, (int)m_numTeams - 1) / (float)(m_numTeams - 1);
+    return glm::mix(m_basePos, m_enemyBasePos, t);
+}
+
+uint8 GameMatch::allocateClientTeam(uint32 clientId) const
 {
     if (m_coop)
         return 0; // co-op: everyone plays on the server's team
-    // Lowest free playable slot. The server holds m_team (0); each connected client's team lives
-    // on its capsule's puppet component, so the live set needs no separate bookkeeping. With every
-    // slot taken the extras double up on the last one — sharing a team beats having no Base.
-    bool used[PlayableTeams] = {};
-    if (m_team < PlayableTeams)
-        used[m_team] = true;
+    // The lobby pick wins. Otherwise (command-line start, a late joiner) the least-populated
+    // playable team, lowest index on a tie. The server holds m_team; each connected client's team
+    // lives on its capsule's puppet component, so the live set needs no separate bookkeeping.
+    for (const auto& [id, team] : m_lobbyTeams)
+        if (id == clientId && team < m_numTeams)
+            return team;
+    int counts[GameMaxTeams] = {};
+    if (clientId != 0 && m_team < m_numTeams)
+        ++counts[m_team];
     for (const auto& [id, p] : m_clientPlayers)
-        if (p)
-            if (const GameUnitComponent* u = getComponent<GameUnitComponent>(p.get()); u && u->team < PlayableTeams)
-                used[u->team] = true;
-    for (uint8 t = 0; t < PlayableTeams; ++t)
-        if (!used[t])
-            return t;
-    return PlayableTeams - 1;
+        if (p && id != clientId)
+            if (const GameUnitComponent* u = getComponent<GameUnitComponent>(p.get()); u && u->team < m_numTeams)
+                ++counts[u->team];
+    uint8 best = 0;
+    for (uint8 t = 1; t < m_numTeams; ++t)
+        if (counts[t] < counts[best])
+            best = t;
+    return best;
 }
 
 int GameMatch::clientTeam(uint32 clientId) const
@@ -1171,8 +1210,14 @@ glm::vec3 GameMatch::teamStartPos(uint8 team) const
 {
     if (m_coop)
         return m_playerStart; // one shared Base — everyone spawns/respawns beside it
-    // One Base per playable team; the spawn sits just beside it (same offset the host uses).
-    return team == 0 ? m_playerStart : m_enemyBasePos + glm::vec3(0.0f, 1.0f, -6.0f);
+    // One Base per playable team; the spawn sits just beside it. Prefer the LIVE Base of that
+    // team (on a client the mirrored one — it never learned the lobby's team count), else the
+    // layout formula.
+    const glm::vec3 offset(0.0f, 1.0f, -6.0f);
+    for (int i = 0; i < m_structures.structureCount(); ++i)
+        if (m_structures.structureType(i) == EStructureType::Base && m_structures.structureTeam(i) == team)
+            return glm::vec3(m_structures.structurePos(i).x, 0.0f, m_structures.structurePos(i).z) + offset;
+    return baseGroundPos(team) + offset;
 }
 
 void GameMatch::onClientJoined(uint32 clientId)
@@ -1181,7 +1226,7 @@ void GameMatch::onClientJoined(uint32 clientId)
     // setOwner in the SAME frame; the client adopts + drives it through the claim stream.
     // Clients spawn beside THEIR team's Base — the team is a freshly allocated slot, and the
     // capsule's puppet component carries it to the owner through the snapshot game blob.
-    const uint8 team = allocateClientTeam();
+    const uint8 team = allocateClientTeam(clientId);
     const glm::vec3 clientStart = teamStartPos(team);
     EntityPtr player = Globals::world.spawnAssetFile("Entities/Game/player.pre",
         Transform(clientStart + glm::vec3(2.0f * (float)(clientId % 5), 0.0f, 1.5f * (float)(clientId % 3))), true);

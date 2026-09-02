@@ -15,9 +15,9 @@ void ScriptEventManager::fireEvent(EventKey key)
 
 	// SNAPSHOT under the lock, INVOKE outside it: the scripts themselves can run long, fire nested
 	// events (re-entering here on the same thread) or re-register their listener — holding the lock
-	// across the invokes would serialize every event dispatch engine-wide. The snapshot is safe
-	// because listener UNregistration only happens on entity destroy, which never overlaps a
-	// dispatch in the sanctioned windows (destroys drain on main; spawn-window jobs only register).
+	// across the invokes would serialize every event dispatch engine-wide. Safe against a
+	// concurrent (parallel) entity destroy because that path's unregisterListener WAITS for
+	// m_dispatching to drain before any component is torn down.
 	struct Dispatch
 	{
 		const ScriptModule* script;
@@ -26,6 +26,9 @@ void ScriptEventManager::fireEvent(EventKey key)
 		int eventIdx;
 	};
 	oc::small_vector<Dispatch, 16> dispatches;
+	// Counted BEFORE the snapshot: a destroy that erases its listener after this point sees the
+	// count and waits; one that erased before it is simply not in the snapshot.
+	m_dispatching.fetch_add(1, oc::memory_order_acq_rel);
 	{
 		const std::lock_guard lock(m_listenerMutex); // parallel entity spawning (see the member comment)
 		for (auto it = m_listenersByEvent.find(key); it != m_listenersByEvent.end() && it->first == key; ++it)
@@ -51,6 +54,7 @@ void ScriptEventManager::fireEvent(EventKey key)
 			continue;
 		invokeScriptOnEvent(d.script, *d.entity, d.eventIdx, d.scriptData);
 	}
+	m_dispatching.fetch_sub(1, oc::memory_order_acq_rel);
 }
 
 void ScriptEventManager::onScriptLoadedCallback(const ScriptModule* script, const oc::vector<oc::string>& oldNames)

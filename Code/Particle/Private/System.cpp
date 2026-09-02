@@ -198,17 +198,22 @@ ParticleSystem::EffectInstance* ParticleSystem::findEffect(uint64 id)
 
 void ParticleSystem::destroyEffect(uint64 id)
 {
-    const std::lock_guard lock(m_effectMutex); // parallel entity spawning
-    for (size_t i = 0; i < m_effects.size(); ++i)
+    // Take the instance OUT under the lock; its renderer slots retire (renderer lock) and its
+    // desc/emitter storage frees after the unlock (parallel entity destruction).
+    EffectInstance removed;
     {
-        if (m_effects[i].id == id)
-        {
-            for (const EmitterInstance& emitter : m_effects[i].emitters)
-                Globals::rendererVK.destroyParticleEmitter(emitter.rendererSlot);
-            m_effects.erase(m_effects.begin() + i);
+        const std::lock_guard lock(m_effectMutex);
+        size_t i = 0;
+        for (; i < m_effects.size(); ++i)
+            if (m_effects[i].id == id)
+                break;
+        if (i == m_effects.size())
             return;
-        }
+        removed = oc::move(m_effects[i]);
+        m_effects.erase(m_effects.begin() + i);
     }
+    for (const EmitterInstance& emitter : removed.emitters)
+        Globals::rendererVK.destroyParticleEmitter(emitter.rendererSlot);
 }
 
 void ParticleSystem::update(Renderer& renderer, float deltaSec)

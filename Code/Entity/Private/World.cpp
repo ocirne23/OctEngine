@@ -892,6 +892,7 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         if (const AssetNode* n = unitNode->find("StandoffRange")) info->standoffRange = n->asFloat(0, info->standoffRange);
         if (const AssetNode* n = unitNode->find("FireInterval"))  info->fireInterval = n->asFloat(0, info->fireInterval);
         if (const AssetNode* n = unitNode->find("AlwaysDisplayHealth")) info->alwaysDisplayHealth = n->asBool();
+        if (const AssetNode* n = unitNode->find("HeightLimit"))   info->heightLimit = n->asFloat(0, info->heightLimit);
         typeBits |= uint16(1 << EComponentID_GameUnit);
         tmpl.spawnInfos.emplace_back(oc::move(info));
     }
@@ -1038,9 +1039,11 @@ EntityPtr World::spawnAssetFile(const oc::string& path, const Transform& base, b
 
 EntityPtr World::createEmptyEntity(const oc::string& name)
 {
-    // A blank Scene-only template with no prefabName: Entity::create leaves prefabInstance false, so the
-    // entity is editable and serializes inline. Cached (and kept across reloadPrefabs) so its address
-    // stays stable for the entities that point at it.
+    // A blank template with NO components (archetype 0) and no prefabName: Entity::create leaves
+    // prefabInstance false, so the entity is editable and serializes inline. It has no
+    // SceneComponent, so it cannot hold CHILDREN — a group root must come from a prefab with
+    // `Component Scene` (Entities/Game/terrainroot.pre is the pattern). Cached (and kept across
+    // reloadPrefabs) so its address stays stable for the entities that point at it.
     if (!m_emptyTemplate)
     {
         m_emptyTemplate = oc::make_shared<EntitySpawnTemplate>();

@@ -96,6 +96,9 @@ void NpcSystem::registerTweaks()
     Tweak::floatVar("Game/Enemies", "Target track radius", &up.targetTrackRadius, 0.0f, 400.0f, 1.0f);
     Tweak::floatVar("Game/Enemies", "Nav follow radius", &up.navFollowRadius, 0.0f, 400.0f, 1.0f);
     Tweak::boolean("Game/Enemies", "Nav fields", &up.navEnabled);
+    // Shared by units AND player capsules (GamePlayer reads the same param); a prefab's
+    // `HeightLimit` overrides it (< 0 = no ceiling, for flying units).
+    Tweak::floatVar("Game/Actors", "Height limit (m)", &up.heightLimit, 1.0f, 200.0f, 0.5f);
     Tweak::floatVar("Game/Enemies/Steer", "Goal", &up.steerGoal, 0.0f, 3.0f, 0.05f);
     Tweak::floatVar("Game/Enemies/Steer", "Flow", &up.steerFlow, 0.0f, 3.0f, 0.05f);
     Tweak::floatVar("Game/Enemies/Steer", "Persist", &up.steerPersist, 0.0f, 3.0f, 0.05f);

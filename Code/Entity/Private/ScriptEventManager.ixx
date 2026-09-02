@@ -85,20 +85,32 @@ private:
         m_listenersByScript.insert(script, { entity, scriptData });
     }
 
-    void unregisterListener(const ScriptModule* script, Entity* entity)
+    // waitForDispatches: the ENTITY DESTROY path (Entity::destroy calls this before any component
+    // is torn down). fireEvent invokes its snapshot outside the lock, so a dispatch that already
+    // captured this entity may still be running on another worker (parallel destruction): wait
+    // until every in-flight dispatch has drained before the teardown proceeds — the entity is
+    // then either invoked while still fully alive, or never. Never set from inside a dispatch (a
+    // script's re-registration through syncScriptDataLive passes false); destroys are deferred
+    // requests, so no dispatch ever reaches a destroy on its own thread.
+    void unregisterListener(const ScriptModule* script, Entity* entity, bool waitForDispatches = false)
     {
-        const std::lock_guard lock(m_listenerMutex); // parallel entity spawning
-        auto range = m_listenersByScript.equalRange(script);
-        for (auto it = range.begin(); it != range.end();)
         {
-            if (it->second.entity == entity)
+            const std::lock_guard lock(m_listenerMutex); // parallel entity spawning
+            auto range = m_listenersByScript.equalRange(script);
+            for (auto it = range.begin(); it != range.end();)
             {
-                m_listenersByScript.eraseOne(it);
-                break;
+                if (it->second.entity == entity)
+                {
+                    m_listenersByScript.eraseOne(it);
+                    break;
+                }
+                else
+                    ++it;
             }
-            else
-                ++it;
         }
+        if (waitForDispatches)
+            while (m_dispatching.load(oc::memory_order_acquire) != 0)
+                std::this_thread::yield();
     }
 
 private:
@@ -121,6 +133,7 @@ private:
 	// map reads/writes: fireEvent SNAPSHOTS the dispatch list and invokes the scripts after
 	// releasing, so nested fires / re-registration from inside OnEvent re-lock freshly.
 	std::mutex m_listenerMutex;
+	oc::atomic<int> m_dispatching = 0; // fireEvent invocations in flight (see unregisterListener)
 	oc::unordered_map<EventKey, oc::vector<const ScriptModule*>> m_listenersByEvent;
 	LPMultiMap<const ScriptModule*, Entry> m_listenersByScript;
 };

@@ -289,6 +289,27 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
     if (bodyPos.y < -20.0f)
         m_health = 0.0f; // fell out of the world — respawn below
 
+    // HEIGHT LIMIT: the same ceiling the units obey (the capsule's puppet GameUnitComponent
+    // carries the per-prefab override, the shared default is "Game/Actors/Height limit") —
+    // launched above it, the capsule is put back AT the ceiling with its climb cancelled, planar
+    // velocity kept. Owner-side: the server holds its twin under the same ceiling in the puppet's
+    // unit tick, so the two land together and the next claim re-anchors. Teleport contract as the
+    // respawn below (main thread, pre-physics — direct setters are sanctioned here).
+    {
+        const GameUnitComponent* unit = getComponent<GameUnitComponent>(m_entity.get());
+        const float ceiling = unit ? unit->effectiveHeightLimit() : GameUnitComponent::params.heightLimit;
+        if (bodyPos.y > ceiling)
+        {
+            const glm::vec3 clamped(bodyPos.x, ceiling, bodyPos.z);
+            glm::vec3 vel = pc->body.getLinearVelocity();
+            vel.y = glm::min(vel.y, 0.0f);
+            Globals::physics.teleportBody(pc->body, clamped, pc->body.getRotation());
+            pc->body.setLinearVelocity(vel);
+            pc->prevPos = pc->currPos = clamped;
+            pc->lastStep = Globals::physics.getStepCount();
+        }
+    }
+
     if (m_health <= 0.0f)
     {
         // Death: hard respawn at the start position. Teleport contract: stomp the interpolation

@@ -49,6 +49,11 @@ export struct GameUnitParams
     float maxSpeedMult = 3.0f;     // field shoves never launch: speed clamp = moveSpeed * this
     float waypointRadius = 3.0f;   // a route waypoint counts as reached inside this
     float voidY = -20.0f;          // fell out of the world -> despawn
+    // HEIGHT LIMIT (world Y, metres): the physics can launch a body (bubble shoves, stacked
+    // bodies, contact impulses); above the ceiling an actor is put back AT the ceiling with its
+    // climb cancelled. The shared default for every ground actor — units AND player capsules
+    // (GamePlayer applies the same rule on the owner). Per-prefab override: SpawnInfo::heightLimit.
+    float heightLimit = 10.0f;
     bool navEnabled = true;        // steer by the Nav fields when they exist
     // Context steering weights (see GameComponents.cpp): each candidate heading scores
     //   free * (Goal*dot(goal) + Flow*laneW*dot(lane) + Persist*dot(last))
@@ -154,6 +159,8 @@ export struct GameUnitComponent
         float standoffRange = 16.0f;
         float fireInterval = 3.0f;
         bool alwaysDisplayHealth = false; // overhead bars show even at full health/shield
+        float heightLimit = 0.0f;     // world-Y ceiling: 0 = the shared params.heightLimit,
+                                      // > 0 = this prefab's own ceiling, < 0 = NONE (flying units)
     };
 
     // ---- live state (spawn copies the SpawnInfo; DSL/game may re-tune any of it) ----
@@ -167,6 +174,15 @@ export struct GameUnitComponent
     bool ranged = false;
     float standoffRange = 16.0f, fireInterval = 3.0f;
     bool alwaysDisplayHealth = false; // overhead bars even at full health/shield (label pass reads it)
+    float heightLimit = 0.0f;   // see SpawnInfo::heightLimit (0 = shared default, < 0 = none)
+    // The ceiling this actor is held under (FLT_MAX = unlimited). Read by the unit tick AND by
+    // GamePlayer for the capsule's puppet, so both actor kinds obey the same rule.
+    float effectiveHeightLimit() const
+    {
+        if (heightLimit < 0.0f)
+            return FLT_MAX;
+        return heightLimit > 0.0f ? heightLimit : params.heightLimit;
+    }
     float bodyRadius = 0.5f;    // planar collider radius (from the physics shape at spawn) — the
                                 // nav line-of-sight tests are run for the BODY, not a point
     // (SHIELD-LESS bodies — the swarm types, no ForceComponent — read the BAKED pressure field

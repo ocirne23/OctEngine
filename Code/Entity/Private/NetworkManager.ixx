@@ -149,6 +149,11 @@ public:
     // and world replay are queued, so anything spawned inside arrives in the same session stream.
     void setOnClientJoined(oc::function<void(uint32 clientId)> callback) { m_onClientJoined = oc::move(callback); }
     void setOnClientLeft(oc::function<void(uint32 clientId)> callback) { m_onClientLeft = oc::move(callback); }
+    // Client: fired on the main thread (inside receive()) when the connection to the server drops,
+    // BEFORE the automatic reconnect attempt. The App decides what a lost server means (a
+    // menu-launched session returns to the menu; a command-line client keeps reconnecting). Do
+    // not shut the host down from inside the callback — receive() is still walking its events.
+    void setOnServerLost(oc::function<void()> callback) { m_onServerLost = oc::move(callback); }
 
     // Server: contact-driven ownership STEAL — the last player to collide with an object owns it,
     // even inside the previous owner's transfer bubble. Wired as the primaries' PhysicsComponent
@@ -321,6 +326,7 @@ private:
     oc::unordered_map<NetPeerId, uint32> m_peerClients; // server: ready peer -> clientId (erased on Disconnected)
     oc::function<void(uint32 clientId)> m_onClientJoined; // server, main thread
     oc::function<void(uint32 clientId)> m_onClientLeft;
+    oc::function<void()> m_onServerLost; // client, main thread, see setOnServerLost
 
     // Client: recent claim payloads per locally-owned entity — every Claim packet carries the whole
     // ring, so a claim only vanishes if ClaimRedundancy consecutive packets drop

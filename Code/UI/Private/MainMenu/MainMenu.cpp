@@ -98,7 +98,7 @@ void MainMenu::render(const Rect& fullRect, oc::vector<const TweakVar*>& deferre
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(24.0f, 20.0f));
 	if (m_lobbyOpen)
 	{
-		ImGui::SetNextWindowSize(ImVec2(460.0f, 0.0f), ImGuiCond_Always); // height fits content
+		ImGui::SetNextWindowSize(ImVec2(520.0f, 0.0f), ImGuiCond_Always); // height fits content
 		if (ImGui::Begin("##MainMenuLobby", nullptr, flags))
 			renderLobby();
 		ImGui::End();
@@ -123,17 +123,25 @@ void MainMenu::render(const Rect& fullRect, oc::vector<const TweakVar*>& deferre
 
 // The Esc overlay: a fullscreen click-blocking DIM window (a background-draw-list rect would sit
 // UNDER the docked panels, a foreground one OVER the buttons — a window layers correctly), then
-// the button window focused on top of it. Both re-focus every frame, so the pair stays above the
-// editor panels for as long as it is open.
-void MainMenu::renderEscape()
+// the button window on top of it. Both are FOCUSED ONLY ON THE OPENING FRAME (dim first, buttons
+// last, so the pair lands above the editor panels with the buttons in front): a per-frame
+// SetNextWindowFocus re-runs ImGui's focus change every Begin, and that CLEARS THE ACTIVE WIDGET
+// each time — a button press never survived to its release, so clicks did nothing. Afterwards the
+// display order is stable on its own: the dim blocks clicks from reaching the panels, and its
+// NoBringToFrontOnFocus keeps a click on the dim itself from raising it over the buttons.
+void MainMenu::renderEscape(bool offerDebugToggle)
 {
+	const bool focusThisFrame = m_escapeFocusPending;
+	m_escapeFocusPending = false;
+
 	const ImGuiViewport* viewport = ImGui::GetMainViewport();
 	const ImGuiWindowFlags dimFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove
 		| ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav
-		| ImGuiWindowFlags_NoDocking;
+		| ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBringToFrontOnFocus;
 	ImGui::SetNextWindowPos(viewport->Pos);
 	ImGui::SetNextWindowSize(viewport->Size);
-	ImGui::SetNextWindowFocus();
+	if (focusThisFrame)
+		ImGui::SetNextWindowFocus();
 	ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0f, 0.0f, 0.0f, 0.43f));
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
 	ImGui::Begin("##EscapeDim", nullptr, dimFlags);
@@ -144,7 +152,8 @@ void MainMenu::renderEscape()
 	const ImVec2 center(viewport->Pos.x + viewport->Size.x * 0.5f, viewport->Pos.y + viewport->Size.y * 0.5f);
 	ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 	ImGui::SetNextWindowSize(ImVec2(320.0f, 0.0f), ImGuiCond_Always);
-	ImGui::SetNextWindowFocus();
+	if (focusThisFrame)
+		ImGui::SetNextWindowFocus();
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
 	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(24.0f, 20.0f));
 	const ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
@@ -161,6 +170,12 @@ void MainMenu::renderEscape()
 		const ImVec2 buttonSize(ImGui::GetContentRegionAvail().x, 38.0f);
 		if (ImGui::Button("Resume", buttonSize))
 			m_escapeAction = EscapeMenuAction::Resume;
+		if (offerDebugToggle)
+		{
+			ImGui::Spacing();
+			ImGui::Checkbox("Debug panels", &m_debugPanels);
+			ImGui::Spacing();
+		}
 		if (ImGui::Button("Exit to menu", buttonSize))
 			m_escapeAction = EscapeMenuAction::ExitToMenu;
 		if (ImGui::Button("Quit game", buttonSize))
@@ -181,6 +196,7 @@ void MainMenu::renderMain()
 
 	const auto start = [this](MainMenuAction::EType type)
 	{
+		m_status.clear();
 		m_action.type = type;
 		m_action.host = m_host;
 		oc::string_view address(m_address);
@@ -220,6 +236,8 @@ void MainMenu::renderMain()
 		ImGui::SetNextItemWidth(-FLT_MIN);
 		ImGui::InputTextWithHint("##address", "ip[:port] — empty = play offline", m_address, sizeof(m_address));
 	}
+	if (!m_status.empty())
+		ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.4f, 1.0f), "%s", m_status.c_str());
 
 	ImGui::Spacing();
 	ImGui::Separator();
@@ -242,6 +260,9 @@ void MainMenu::renderLobby()
 	if (!m_lobbyView.valid)
 	{
 		centeredText("Connecting to server...");
+		ImGui::Spacing();
+		if (ImGui::Button("Leave", ImVec2(ImGui::GetContentRegionAvail().x, 38.0f)))
+			m_lobbyAction.type = LobbyAction::EType::Leave; // the way out of a dead address
 		return;
 	}
 
@@ -257,19 +278,138 @@ void MainMenu::renderLobby()
 		ImGui::Spacing();
 	}
 
-	ImGui::SeparatorText("Players");
 	const float width = ImGui::GetContentRegionAvail().x;
+	if (m_lobbyView.coop)
+	{
+		ImGui::SeparatorText("Map");
+		if (m_lobbyView.hosting)
+		{
+			// The host edits; every widget commits on RELEASE (one lobby-state broadcast per edit,
+			// not one per drag frame). Between edits the fields track the model's snapshot.
+			if (!m_mapEditActive)
+			{
+				m_mapEditSeed = (int)m_lobbyView.mapSeed;
+				m_mapEditFill = m_lobbyView.terrainFill;
+				m_mapEditLanes = m_lobbyView.terrainLanes;
+			}
+			bool active = false, commit = false;
+			ImGui::SetNextItemWidth(width - 90.0f);
+			ImGui::InputInt("##lobbyMapSeed", &m_mapEditSeed, 0, 0);
+			active |= ImGui::IsItemActive();
+			commit |= ImGui::IsItemDeactivatedAfterEdit();
+			ImGui::SameLine();
+			if (ImGui::Button("Random", ImVec2(82.0f, 0.0f)))
+			{
+				m_mapEditSeed = 0;
+				commit = true;
+			}
+			ImGui::TextDisabled("Map seed (0 = random at start)");
+			ImGui::SetNextItemWidth(-FLT_MIN);
+			ImGui::SliderFloat("##lobbyMapFill", &m_mapEditFill, 0.0f, 0.6f, "Terrain fill %.2f");
+			active |= ImGui::IsItemActive();
+			commit |= ImGui::IsItemDeactivatedAfterEdit();
+			ImGui::SetNextItemWidth(-FLT_MIN);
+			ImGui::SliderInt("##lobbyMapLanes", &m_mapEditLanes, 2, 12, "Attack lanes %d");
+			active |= ImGui::IsItemActive();
+			commit |= ImGui::IsItemDeactivatedAfterEdit();
+			m_mapEditActive = active;
+			if (commit)
+			{
+				m_lobbyAction.type = LobbyAction::EType::SetMapSettings;
+				m_lobbyAction.mapSeed = (uint32)glm::max(m_mapEditSeed, 0);
+				m_lobbyAction.terrainFill = glm::clamp(m_mapEditFill, 0.0f, 0.6f);
+				m_lobbyAction.terrainLanes = glm::clamp(m_mapEditLanes, 2, 12);
+			}
+		}
+		else
+		{
+			char seed[32];
+			if (m_lobbyView.mapSeed == 0)
+				snprintf(seed, sizeof(seed), "random");
+			else
+				snprintf(seed, sizeof(seed), "%u", m_lobbyView.mapSeed);
+			ImGui::Text("Seed %s   |   terrain fill %.0f%%   |   %d attack lanes", seed,
+				m_lobbyView.terrainFill * 100.0f, m_lobbyView.terrainLanes);
+			ImGui::TextDisabled("Chosen by the host");
+		}
+		ImGui::Spacing();
+	}
+	else
+	{
+		ImGui::SeparatorText("Teams");
+		if (m_lobbyView.hosting)
+		{
+			// Same commit-on-release pattern as the map widgets: one broadcast per edit.
+			if (!m_teamsEditActive)
+				m_teamsEdit = m_lobbyView.numTeams;
+			ImGui::SetNextItemWidth(-FLT_MIN);
+			ImGui::SliderInt("##lobbyNumTeams", &m_teamsEdit, 2, 8, "Number of teams %d");
+			m_teamsEditActive = ImGui::IsItemActive();
+			if (ImGui::IsItemDeactivatedAfterEdit())
+			{
+				m_lobbyAction.type = LobbyAction::EType::SetNumTeams;
+				m_lobbyAction.numTeams = glm::clamp(m_teamsEdit, 2, 8);
+			}
+		}
+		else
+		{
+			ImGui::Text("%d teams", m_lobbyView.numTeams);
+			ImGui::TextDisabled("Chosen by the host");
+		}
+		ImGui::TextDisabled("Pick your team in the player list");
+		ImGui::Spacing();
+	}
+
+	ImGui::SeparatorText("Players");
+	const float teamColumn = width - 200.0f;
 	for (const LobbyView::Player& player : m_lobbyView.players)
 	{
 		char name[48];
 		snprintf(name, sizeof(name), "%s %u%s", player.clientId == 0 ? "Host" : "Player",
 			player.clientId, player.isSelf ? "  (you)" : "");
 		ImGui::TextUnformatted(name);
+		if (m_lobbyView.numTeams > 1)
+		{
+			ImGui::SameLine(teamColumn);
+			char team[16];
+			snprintf(team, sizeof(team), "Team %d", (int)player.team + 1);
+			if (player.isSelf)
+			{
+				// Only OUR row is a picker; the host's count bounds it. The pick reaches the
+				// server as an LbT request (or applies at once on the host) and the LbS echo
+				// moves the row — the same round trip the Ready toggle takes.
+				ImGui::SetNextItemWidth(110.0f);
+				char comboId[32];
+				snprintf(comboId, sizeof(comboId), "##lobbyTeam%u", player.clientId);
+				if (ImGui::BeginCombo(comboId, team))
+				{
+					for (int t = 0; t < m_lobbyView.numTeams; ++t)
+					{
+						char option[16];
+						snprintf(option, sizeof(option), "Team %d", t + 1);
+						if (ImGui::Selectable(option, t == (int)player.team) && t != (int)player.team)
+						{
+							m_lobbyAction.type = LobbyAction::EType::SetTeam;
+							m_lobbyAction.team = (uint8)t;
+						}
+					}
+					ImGui::EndCombo();
+				}
+			}
+			else
+				ImGui::TextUnformatted(team);
+		}
 		ImGui::SameLine(width - 60.0f);
 		if (player.ready)
 			ImGui::TextColored(ImVec4(0.35f, 0.9f, 0.4f, 1.0f), "READY");
 		else
 			ImGui::TextDisabled("---");
+	}
+
+	if (m_chat)
+	{
+		ImGui::SeparatorText("Chat");
+		m_chat->renderEmbedded(150.0f);
 	}
 
 	ImGui::Spacing();
@@ -298,6 +438,9 @@ void MainMenu::renderLobby()
 	ImGui::EndDisabled();
 	if (!m_lobbyView.allReady)
 		ImGui::TextDisabled("Start unlocks when every player is ready");
+	ImGui::Spacing();
+	if (ImGui::Button(m_lobbyView.hosting ? "Leave (closes the lobby for everyone)" : "Leave", buttonSize))
+		m_lobbyAction.type = LobbyAction::EType::Leave;
 }
 
 void MainMenu::renderSettings(oc::vector<const TweakVar*>& deferredCallbacks)

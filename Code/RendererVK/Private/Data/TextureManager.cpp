@@ -111,14 +111,20 @@ uint16 TextureManager::uploadImpl(const oc::function<bool(Texture&)>& initialize
 
 void TextureManager::free(uint16 idx)
 {
-	const std::lock_guard lock(m_uploadMutex); // parallel entity spawning
-	assert(idx > RendererVKLayout::FALLBACK_NORMAL_TEX_IDX && idx < m_textures.size() && "freeing a fallback texture");
-	Texture& texture = m_textures[idx];
-	if (!texture.getImageView())
-		return; // already freed
-	Globals::textureStreamer.unregisterTexture(idx, texture.getAllocatedBytes());
-	texture.destroy();
-	m_freeSlots.push_back(idx);
-	// Point the slot's bindless entries at the fallback until an upload recycles it.
-	Globals::textureStreamer.queueDescriptorWrite(idx);
+	// The slot table + streamer bookkeeping under the lock; the vk image/view destruction runs on
+	// the moved-out local after it (parallel entity spawning/destruction).
+	Texture retired;
+	{
+		const std::lock_guard lock(m_uploadMutex);
+		assert(idx > RendererVKLayout::FALLBACK_NORMAL_TEX_IDX && idx < m_textures.size() && "freeing a fallback texture");
+		Texture& texture = m_textures[idx];
+		if (!texture.getImageView())
+			return; // already freed
+		Globals::textureStreamer.unregisterTexture(idx, texture.getAllocatedBytes());
+		retired = oc::move(texture); // the slot reads as empty (null view -> fallback) from here on
+		m_freeSlots.push_back(idx);
+		// Point the slot's bindless entries at the fallback until an upload recycles it.
+		Globals::textureStreamer.queueDescriptorWrite(idx);
+	}
+	retired.destroy();
 }

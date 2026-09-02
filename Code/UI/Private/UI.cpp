@@ -112,7 +112,124 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
         m_hasViewportGainedFocus = false;
         m_mainMenu.render(m_viewportRect, m_tweakPanel.deferredCallbacks());
         if (m_mainMenu.isEscapeOpen()) // reachable from the LOBBY page (its only leave mechanism)
-            m_mainMenu.renderEscape();
+            m_mainMenu.renderEscape(false);
+        renderImGuiToSnapshot();
+        return;
+    }
+
+    if (m_gameLayout)
+    {
+        // GAME LAYOUT: no editor panels. Optional LEFT debug section (escape menu checkbox), then
+        // ONE fullscreen undecorated viewport window over the rest — a real ImGui window so the
+        // HUD paints into its draw list and IsWindowFocused feeds the same viewport-focus gate the
+        // editor's Viewport panel does (clicking into the debug section takes focus off the game,
+        // clicking the world gives it back; the escape overlay takes it while open).
+        ProfileScope layoutScope("Game layout", EProfileCategory::UI);
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        m_logOpen = false;
+        m_contentOpen = false;
+        m_scriptEditorOpen = false;
+        m_profilerOpen = false;
+        m_memoryOpen = false;
+        float viewportLeft = viewport->Pos.x;
+
+        if (m_mainMenu.debugPanelsEnabled())
+        {
+            ProfileScope scope("Panel: Debug", EProfileCategory::UI);
+            // Pinned to the left edge at full height; only the WIDTH is free (edge-drag resize).
+            ImGui::SetNextWindowPos(viewport->Pos, ImGuiCond_Always);
+            ImGui::SetNextWindowSizeConstraints(ImVec2(300.0f, viewport->Size.y), ImVec2(viewport->Size.x * 0.6f, viewport->Size.y));
+            ImGui::SetNextWindowSize(ImVec2(460.0f, viewport->Size.y), ImGuiCond_FirstUseEver);
+            const ImGuiWindowFlags debugFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar
+                | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBringToFrontOnFocus;
+            if (ImGui::Begin("##GameDebug", nullptr, debugFlags))
+            {
+                if (ImGui::BeginTabBar("##GameDebugTabs"))
+                {
+                    if (ImGui::BeginTabItem("Tweaks"))
+                    {
+                        ProfileScope tabScope("Panel: Tweaks", EProfileCategory::UI);
+                        m_tweakPanel.render();
+                        ImGui::EndTabItem();
+                    }
+                    if (ImGui::BeginTabItem("Profiler"))
+                    {
+                        ProfileScope tabScope("Panel: Profiler", EProfileCategory::UI);
+                        m_profilerOpen = true; // prepare job next frame (see prepare())
+                        m_profilerPanel.render();
+                        ImGui::EndTabItem();
+                    }
+                    if (ImGui::BeginTabItem("Memory"))
+                    {
+                        ProfileScope tabScope("Panel: Memory", EProfileCategory::UI);
+                        m_memoryOpen = true;
+                        m_memoryPanel.render();
+                        ImGui::EndTabItem();
+                    }
+                    if (ImGui::BeginTabItem("Log"))
+                    {
+                        ProfileScope tabScope("Panel: Log", EProfileCategory::UI);
+                        m_logOpen = true;
+                        m_outputLog.render();
+                        ImGui::EndTabItem();
+                    }
+                    ImGui::EndTabBar();
+                }
+            }
+            viewportLeft = ImGui::GetWindowPos().x + ImGui::GetWindowSize().x;
+            ImGui::End();
+        }
+
+        {
+            ProfileScope scope("Panel: Viewport", EProfileCategory::UI);
+            const ImVec2 vpPos(viewportLeft, viewport->Pos.y);
+            const ImVec2 vpSize(viewport->Pos.x + viewport->Size.x - viewportLeft, viewport->Size.y);
+            ImGui::SetNextWindowPos(vpPos, ImGuiCond_Always);
+            ImGui::SetNextWindowSize(vpSize, ImGuiCond_Always);
+            if (m_gameLayoutFocusPending)
+            {
+                m_gameLayoutFocusPending = false;
+                ImGui::SetNextWindowFocus();
+            }
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+            const ImGuiWindowFlags vpFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize
+                | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBringToFrontOnFocus
+                | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollWithMouse;
+            const bool viewportOpen = ImGui::Begin("##GameViewport", nullptr, vpFlags);
+            m_isViewportGrabbed = false;
+            const bool isViewportFocused = viewportOpen && ImGui::IsWindowFocused();
+            m_hasViewportGainedFocus = isViewportFocused && !m_isViewportFocused;
+            m_isViewportFocused = isViewportFocused;
+            m_viewportRect = Rect(glm::ivec2((int)vpPos.x, (int)vpPos.y), glm::ivec2(int(vpPos.x + vpSize.x), int(vpPos.y + vpSize.y)));
+            if (viewportOpen)
+            {
+                ProfileScope hudScope("Game HUD overlay", EProfileCategory::UI);
+                m_gameHudOverlay.render(m_viewportRect);
+            }
+            ImGui::End();
+            ImGui::PopStyleVar(2);
+        }
+
+        {
+            // Text chat over the viewport's bottom-right corner (after the viewport window so it
+            // layers above it; the escape overlay below still covers it). Ending a line refocuses
+            // the viewport window, which re-arms the game's viewport-focus hotkey gate.
+            ProfileScope scope("Game chat", EProfileCategory::UI);
+            m_chat.renderOverlay(m_viewportRect, "##GameViewport");
+        }
+
+        if (m_gizmo) // no Scene panel = no selection; keeps the gizmo's own hide/follow logic ticking
+        {
+            ProfileScope scope("Gizmo update", EProfileCategory::UI);
+            m_gizmo->update(camera, m_viewportRect, nullptr, deltaSec);
+        }
+
+        if (m_mainMenu.isEscapeOpen())
+        {
+            ProfileScope scope("Escape menu", EProfileCategory::UI);
+            m_mainMenu.renderEscape(true);
+        }
         renderImGuiToSnapshot();
         return;
     }
@@ -406,7 +523,7 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
     if (m_mainMenu.isEscapeOpen())
     {
         ProfileScope scope("Escape menu", EProfileCategory::UI);
-        m_mainMenu.renderEscape();
+        m_mainMenu.renderEscape(false);
     }
 
     // The widget pass ends by producing its own draw data: ImGui::Render + the renderer-facing

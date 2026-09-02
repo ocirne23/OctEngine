@@ -1,0 +1,6 @@
+# Co-op terrain ROOT: a Scene-only entity every rock, ground marker and barrier segment is
+# parented under, so the scene root stays lean and a map regeneration removes the whole set in
+# one removeRootEntity. (World::createEmptyEntity cannot serve: it carries NO components, and an
+# entity without a SceneComponent refuses children.)
+Prefab gameCoopTerrain
+	Component Scene

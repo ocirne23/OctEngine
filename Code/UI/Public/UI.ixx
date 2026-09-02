@@ -11,6 +11,7 @@ import UI.Gizmo;
 
 import UI.fwd;
 export import :MainMenu; // MainMenuAction crosses to main(), which performs the mode start
+export import :ChatPanel; // ChatView crosses to main() (App.Chat is the model)
 import :AssetBrowser;
 import :SceneView;
 import :PropertiesPanel;
@@ -30,7 +31,7 @@ export class UI final
 {
 public:
 
-    UI() {}
+    UI() { m_mainMenu.setChatPanel(&m_chat); }
     UI(const UI&) = delete;
 
     void initialize();
@@ -120,6 +121,7 @@ public:
     bool isMainMenuActive() const { return m_mainMenu.isActive(); }
     void setMainMenuHostEndpoint(oc::string endpoint) { m_mainMenu.setHostEndpoint(oc::move(endpoint)); }
     void setMainMenuHostNote(oc::string note) { m_mainMenu.setHostNote(oc::move(note)); }
+    void setMainMenuStatus(oc::string status) { m_mainMenu.setStatus(oc::move(status)); } // front-page line (disconnect reasons)
     MainMenuAction takeMainMenuAction() { return m_mainMenu.takeAction(); }
     // Lobby page (App's LobbySystem is the model — main pushes a view snapshot each frame and
     // polls the button actions, same sequencing as the menu action above)
@@ -132,6 +134,24 @@ public:
     void setEscapeMenuOpen(bool open) { m_mainMenu.setEscapeOpen(open); }
     bool isEscapeMenuOpen() const { return m_mainMenu.isEscapeOpen(); }
     EscapeMenuAction takeEscapeMenuAction() { return m_mainMenu.takeEscapeAction(); }
+    // Text chat (App's ChatSystem is the model): drawn inside the lobby page and as an overlay in
+    // the game layout. main pushes the view when the log changed and polls the sent line.
+    void setChatView(ChatView view) { m_chat.setView(oc::move(view)); }
+    oc::string takeChatOutgoing() { return m_chat.takeOutgoing(); }
+    void clearChat() { m_chat.clear(); }
+    // GAME LAYOUT (co-op/PvP): the widget pass draws NO editor panels — one fullscreen viewport
+    // window (HUD painted into it, same focus tracking the editor's Viewport panel has, so the
+    // input gate and the game's viewport-focus checks work unchanged) plus, while the escape
+    // menu's "Debug panels" checkbox is set, a resizable LEFT section with Tweaks / Profiler /
+    // Memory tabs that shrinks the viewport rect. main sets it with the mode start (startWorldAndGame)
+    // and clears it on exit-to-menu — main thread, pre-kick window (the pass reads it on the job).
+    void setGameLayout(bool game)
+    {
+        if (game && !m_gameLayout)
+            m_gameLayoutFocusPending = true; // hand the game viewport ImGui focus on its first frame
+        m_gameLayout = game;
+    }
+    bool isGameLayout() const { return m_gameLayout; }
 
 private:
 
@@ -145,6 +165,8 @@ private:
     bool m_memoryOpen = false;
     bool m_logOpen = false;
     bool m_contentOpen = false;
+    bool m_gameLayout = false;             // see setGameLayout
+    bool m_gameLayoutFocusPending = false; // focus the game viewport window on the layout's first frame
     JobCounter m_prepareCounter;
     Rect m_viewportRect = Rect();
     oc::vector<EntityChange> m_viewportChanges;   // assets dropped onto the viewport, drained via takeEntityChanges
@@ -166,6 +188,7 @@ private:
 	TextEditor      m_textEditor;
 	ScriptEditor    m_scriptEditor;
 	GameHudOverlay  m_gameHudOverlay; // in-game HUD painted over the viewport (Core.GameHud is the model)
+	ChatPanel       m_chat;           // multiplayer text chat (lobby page + game overlay; App.Chat is the model)
 	MainMenu        m_mainMenu;
 };
 

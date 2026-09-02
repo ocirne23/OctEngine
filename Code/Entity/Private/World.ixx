@@ -73,6 +73,8 @@ public:
     // handleEntityChanges and NpcSystem::clear go through it.
     void releaseBatch(oc::vector<EntityPtr>&& entities);
     EntityPtr spawnAssetFile(const oc::string& path, const Transform& base, bool overrideDefaultTransform = true);
+    // NO components (archetype 0): editable, serializes inline — but it cannot hold children.
+    // A grouping root must come from a prefab with `Component Scene`.
     EntityPtr createEmptyEntity(const oc::string& name);
 
     // Entity Ownership

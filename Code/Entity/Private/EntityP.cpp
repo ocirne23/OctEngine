@@ -245,6 +245,11 @@ void Entity::destroy(Entity* entity)
     if ((entity->flags & rootContiguous) == rootContiguous && !contiguousTreeSolelyOwned(entity))
         breakContiguousAllocationFromRoot(entity);
 
+    // PARALLEL DESTRUCTION: stop receiving global script events BEFORE anything is torn down (and
+    // wait for dispatches already in flight on other workers to finish with this entity).
+    if (ScriptComponent* script = getComponent<ScriptComponent>(entity))
+        script->detachListener(*entity);
+
     const uint8 flags = entity->flags;
     const bool freesWholeTree = (flags & rootContiguous) == rootContiguous;
     const bool ownedByTreeBlock = (flags & EEntityFlag_ContiguousAllocation) && !(flags & EEntityFlag_RootAllocation);
