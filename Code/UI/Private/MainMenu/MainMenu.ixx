@@ -47,6 +47,8 @@ export struct LobbyView
 	bool localReady = false;
 	uint8 localTeam = 0;
 	int numTeams = 2;     // PvP: the host's "Number of teams" (2..8); 1 in co-op (no team picking)
+	int pvpMap = 0;       // PvP: the host's arena pick, an index into pvpMapNames
+	oc::vector<const char*> pvpMapNames; // the Game layer's arena names (string literals)
 	bool allReady = false;
 	bool countdownActive = false;
 	float countdownRemaining = 0.0f;
@@ -61,13 +63,14 @@ export struct LobbyAction
 {
 	// Leave: back to the main menu (main tears the session down — the host's leave ends it for
 	// every client, a client's leave is just its disconnect)
-	enum class EType : uint8 { None, ToggleReady, Start, SetMapSettings, SetTeam, SetNumTeams, Leave };
+	enum class EType : uint8 { None, ToggleReady, Start, SetMapSettings, SetTeam, SetNumTeams, SetPvpMap, Leave };
 	EType type = EType::None;
 	uint32 mapSeed = 0; // SetMapSettings (host only): the edited values
 	float terrainFill = 0.3f;
 	int terrainLanes = 6;
 	uint8 team = 0;     // SetTeam: the local player's pick (0-based)
 	int numTeams = 2;   // SetNumTeams (host only)
+	int pvpMap = 0;     // SetPvpMap (host only): index into LobbyView::pvpMapNames
 };
 
 // ---- Escape menu (Esc overlay in every RUNNING mode + the lobby; never over the main menu) ----

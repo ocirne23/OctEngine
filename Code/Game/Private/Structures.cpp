@@ -279,21 +279,6 @@ void StructureSystem::clearNodes()
     m_nodes.clear();
 }
 
-void StructureSystem::spawnNodes()
-{
-    // The CORRIDOR arena (GameMatch::spawnCorridorWalls: x -65..65, z -20..20, bases at
-    // x = -55 / +55): every node lives on a SIDE, exactly mirrored (180° symmetry) — the center
-    // stays EMPTY; each side's FORWARD fuel node (±14) is the exposed prize near the middle.
-    static constexpr struct { float x, z; ENodeType type; } corridor[] = {
-        { -45.0f,   8.0f, ENodeType::Mineral }, {  45.0f,  -8.0f, ENodeType::Mineral },
-        { -37.0f, -10.0f, ENodeType::Fuel },    {  37.0f,  10.0f, ENodeType::Fuel },
-        { -25.0f,  12.0f, ENodeType::Mineral }, {  25.0f, -12.0f, ENodeType::Mineral },
-        { -14.0f, -10.0f, ENodeType::Fuel },    {  14.0f,  10.0f, ENodeType::Fuel },
-    };
-    for (const auto& n : corridor)
-        spawnNode(n.x, n.z, n.type);
-}
-
 int StructureSystem::findFreeNodeNear(const glm::vec3& groundPos, float maxDist) const
 {
     int best = -1;

@@ -10,7 +10,7 @@ import Physics;
 // Bump on ANY wire format change: the transport handshake denies mismatched protocol ids, so old
 // builds fail to connect instead of misparsing. GameNetVersion rides in Hello/Welcome purely so the
 // mismatch produces a readable log line when the protocolId was forgotten.
-constexpr uint32 GameProtocolId = 0x4F435349; // PvP lobby teams: LbS carries numTeams + per-player team, LbT pick request
+constexpr uint32 GameProtocolId = 0x4F43534A; // PvP arenas: LbS carries the map pick, GMp carries a mode byte (co-op inputs / PvP arena)
 constexpr uint16 GameNetVersion = 14;
 
 // Engine-reserved event: Synced-flagged tweak values, server -> clients (full set at join +

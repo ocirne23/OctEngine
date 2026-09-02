@@ -154,10 +154,18 @@ static void drawStructureGhost(EStructureType type, const glm::vec3& groundPos, 
         glm::ivec2(StructureSystem::footprintCellsOf(type)));
 }
 
-// The PVP arena: a walled corridor along X — combat funnels through the middle.
-static constexpr float c_corridorHalfLength = 65.0f; // x extent of the play area
-static constexpr float c_corridorHalfWidth = 20.0f;  // z extent
-static constexpr float c_wallStep = 10.0f;           // border block size (borderwall.pre)
+// The PVP arenas (EPvpMap): rock-terrain layouts on a 5 m cell grid, each ringed by a 10 m rock
+// border (the old borderwall.pre fence is gone). The Lane is the original corridor along X.
+static constexpr float c_corridorHalfLength = 65.0f; // Lane/Wide/Chokepoints x extent of the play area
+static constexpr float c_corridorHalfWidth = 20.0f;  // Lane z extent
+static constexpr float c_pvpWideHalfWidth = 40.0f;   // Wide lane / Chokepoints z extent
+static constexpr float c_pvpChokeWallHalf = 5.0f;    // Chokepoints: the middle wall's x half-width
+static constexpr float c_pvpCircleRadius = 65.0f;    // Circle: the open disc
+static constexpr float c_pvpCircleInner = 28.0f;     // Circle: the central rock column
+static constexpr float c_pvpCircleBaseRadius = 47.0f; // Circle: the Bases sit mid-ring
+static constexpr float c_pvpCellSize = 5.0f;         // rock.pre (a 10 m cube) spawned at half scale
+static constexpr int c_pvpBorderCells = 2;           // 10 m of rock around every arena
+static constexpr float c_pvpBaseClear = 8.0f;        // rock-free radius around every Base cell
 // The CO-OP map: a big square centred on the shared Base, RANDOMLY GENERATED — impassable rock
 // terrain over a coarse cell grid plus a player-blocking barrier ring at ±c_coopHalfSize (see
 // GameMatch::generateCoopGrid). The ground plane (ground.pre) is 400 m, so ±200 is the hard edge;
@@ -412,12 +420,16 @@ void GameMatch::spawnWorld()
     }
     else
     {
-        m_structures.spawnNodes(); // deterministic on every instance (no sync needed)
-        spawnCorridorWalls();      // deterministic local scenery too — every role builds its own copy
-        // Placement stays INSIDE the arena (footprints may not clip the border wall ring).
-        m_structures.setPlacementBounds(
-            glm::vec2(-c_corridorHalfLength, -c_corridorHalfWidth),
-            glm::vec2(c_corridorHalfLength, c_corridorHalfWidth));
+        // PvP ARENA: rock terrain + nodes from the lobby's map pick (setPvpMap). The AUTHORITY
+        // builds now; a CLIENT builds the identical layout when the server's GMp event names the
+        // arena (first in its join replay) — nodes included, so extractor node indices agree.
+        // Until then the Lane's bounds stand in (cellsFree needs some before the map lands).
+        if (!m_isClient)
+            rebuildPvpMap(m_pvpMap);
+        else
+            m_structures.setPlacementBounds(
+                glm::vec2(-c_corridorHalfLength, -c_corridorHalfWidth),
+                glm::vec2(c_corridorHalfLength, c_corridorHalfWidth));
     }
     if (!m_isClient)
     {
@@ -716,64 +728,77 @@ void GameMatch::tickCoopSpawns()
     m_npcs.spawnLooseUnits(oc::span<const NpcSystem::LooseSpawn>(spawns.data(), spawns.size()));
 }
 
-void GameMatch::spawnCorridorWalls()
-{
-    // A ring of border segments (borderwall.pre): the VISIBLE wall is a low 10x5x10 half-cube the
-    // camera sees over, but the COLLIDER is a tall 10x20x10 box — an invisible fence keeps bodies
-    // inside (the prefab offsets the render node down to the ground). Two long sides whose inner
-    // faces sit ON the half-width, and two end caps behind the bases (~52 segments). Parented
-    // under the Ground entity — the scene root stays lean and the whole ring dies with it. The
-    // static body bakes at the WORLD pose at spawn; the pos rewrite below re-expresses it in the
-    // ground's local space for the render.
-    m_wallObstacles.clear();
-    const auto spawnSegment = [this](float x, float z)
-    {
-        const glm::vec3 worldPos(x, c_wallStep, z); // collider center: half of the 20 m tall box
-        const float half = c_wallStep * 0.5f;
-        m_wallObstacles.push_back(Nav::NavObstacle{ glm::vec2(x - half, z - half), glm::vec2(x + half, z + half) });
-        EntityPtr wall = Globals::world.spawnAssetFile("Entities/Game/borderwall.pre",
-            Transform(worldPos), true);
-        if (!wall)
-            return;
-        wall->setName("Border");
-        if (m_ground)
-        {
-            wall->reparentEntity(m_ground.get());
-            wall->pos = worldPos - m_ground->pos; // ground has identity rot/scale
-        }
-        else
-            Globals::world.addRootEntity(wall);
-    };
-    const float half = c_wallStep * 0.5f;
-    for (float x = -c_corridorHalfLength + half; x < c_corridorHalfLength; x += c_wallStep)
-    {
-        spawnSegment(x, -c_corridorHalfWidth - half);
-        spawnSegment(x, c_corridorHalfWidth + half);
-    }
-    for (float z = -c_corridorHalfWidth - c_wallStep + half;
-         z < c_corridorHalfWidth + c_wallStep; z += c_wallStep)
-    {
-        spawnSegment(-c_corridorHalfLength - half, z);
-        spawnSegment(c_corridorHalfLength + half, z);
-    }
-}
-
-// ---- CO-OP generated map --------------------------------------------------------------------
+// ---- Generated terrain (co-op map + PvP arenas) ---------------------------------------------
 
 glm::vec3 GameMatch::coopCellCenter(int index) const
 {
-    const int x = index % m_coopMap.cells, z = index / m_coopMap.cells;
-    return glm::vec3(-c_coopHalfSize + ((float)x + 0.5f) * c_coopCellSize, 0.0f,
-                     -c_coopHalfSize + ((float)z + 0.5f) * c_coopCellSize);
+    const int x = index % m_coopMap.cellsX, z = index / m_coopMap.cellsX;
+    return glm::vec3(m_coopMap.origin.x + ((float)x + 0.5f) * m_coopMap.cellSize, 0.0f,
+                     m_coopMap.origin.y + ((float)z + 0.5f) * m_coopMap.cellSize);
 }
 
 int GameMatch::coopCellAt(const glm::vec3& pos) const
 {
-    const int x = (int)std::floor((pos.x + c_coopHalfSize) / c_coopCellSize);
-    const int z = (int)std::floor((pos.z + c_coopHalfSize) / c_coopCellSize);
-    if (x < 0 || z < 0 || x >= m_coopMap.cells || z >= m_coopMap.cells)
+    const int x = (int)std::floor((pos.x - m_coopMap.origin.x) / m_coopMap.cellSize);
+    const int z = (int)std::floor((pos.z - m_coopMap.origin.y) / m_coopMap.cellSize);
+    if (x < 0 || z < 0 || x >= m_coopMap.cellsX || z >= m_coopMap.cellsZ)
         return -1;
-    return z * m_coopMap.cells + x;
+    return z * m_coopMap.cellsX + x;
+}
+
+// The PvP arena layouts: pure functions of (arena, team count) — identical on every instance.
+// A rock BORDER ring surrounds each open area; the flood fill from team 0's Base seals anything
+// the layout cut off, and every Base cell gets a rock-free disc (a middle team's Base on the
+// Chokepoints wall line carves its own gap).
+void GameMatch::generatePvpGrid()
+{
+    CoopMap& map = m_coopMap;
+    map.pvp = true;
+    map.cellSize = c_pvpCellSize;
+    glm::vec2 half(c_corridorHalfLength, c_corridorHalfWidth);
+    switch (map.pvpMap)
+    {
+    case EPvpMap::WideLane:
+    case EPvpMap::Chokepoints: half.y = c_pvpWideHalfWidth; break;
+    case EPvpMap::Circle:      half = glm::vec2(c_pvpCircleRadius); break;
+    default: break;
+    }
+    m_pvpInterior = half;
+    map.cellsX = (int)std::lround(half.x * 2.0f / c_pvpCellSize) + 2 * c_pvpBorderCells;
+    map.cellsZ = (int)std::lround(half.y * 2.0f / c_pvpCellSize) + 2 * c_pvpBorderCells;
+    map.origin = -half - glm::vec2((float)c_pvpBorderCells * c_pvpCellSize);
+    map.blocked.assign((size_t)map.cellsX * map.cellsZ, 0);
+    for (int i = 0; i < map.cellsX * map.cellsZ; ++i)
+    {
+        const glm::vec3 c = coopCellCenter(i);
+        bool open = glm::abs(c.x) < half.x && glm::abs(c.z) < half.y;
+        if (map.pvpMap == EPvpMap::Circle)
+        {
+            const float r = glm::length(glm::vec2(c.x, c.z));
+            open = r < c_pvpCircleRadius && r > c_pvpCircleInner;
+        }
+        else if (map.pvpMap == EPvpMap::Chokepoints && glm::abs(c.x) < c_pvpChokeWallHalf)
+        {
+            // the middle wall, pierced at the center and near each side: three 10 m openings
+            const float az = glm::abs(c.z);
+            open = az < 5.0f || (az > 20.0f && az < 30.0f);
+        }
+        map.blocked[i] = open ? 0 : 1;
+    }
+    oc::vector<int> seeds;
+    for (uint8 t = 0; t < m_numTeams; ++t)
+    {
+        const glm::vec3 base = baseGroundPos(t);
+        for (int i = 0; i < map.cellsX * map.cellsZ; ++i)
+        {
+            const glm::vec3 c = coopCellCenter(i);
+            if (glm::length(glm::vec2(c.x - base.x, c.z - base.z)) < c_pvpBaseClear)
+                map.blocked[i] = 0;
+        }
+        if (t == 0)
+            seeds.push_back(coopCellAt(base));
+    }
+    finishGrid(seeds);
 }
 
 // The pure-math half: identical on every instance from (seed, fill, lanes) alone — MapRng only,
@@ -783,11 +808,11 @@ void GameMatch::generateCoopGrid()
 {
     CoopMap& map = m_coopMap;
     const int n = c_coopCells;
-    map.cells = n;
+    map.cellsX = map.cellsZ = n;
+    map.cellSize = c_coopCellSize;
+    map.origin = glm::vec2(-c_coopHalfSize);
+    map.pvp = false;
     map.blocked.assign((size_t)n * n, 0);
-    map.depth.assign((size_t)n * n, 0xFFFF);
-    map.reachable.clear();
-    map.maxDepth = 1;
     MapRng rng{ map.seed ? map.seed : 1u };
     const uint32 noiseA = rng.next(), noiseB = rng.next();
 
@@ -845,14 +870,26 @@ void GameMatch::generateCoopGrid()
         }
     }
 
-    // Flood fill from the Base (4-connected BFS = geodesic cell distance). Any open cell it never
-    // reaches becomes rock — so EVERY open cell is reachable from the Base by construction, and
-    // everything placed on open ground (nodes, ambient camps, move orders) is reachable too.
-    oc::vector<int> queue;
-    queue.reserve((size_t)n * n);
     const int c0 = n / 2 - 1, c1 = n / 2;
-    for (const int seedCell : { c0 * n + c0, c0 * n + c1, c1 * n + c0, c1 * n + c1 })
-        if (!map.blocked[seedCell] && map.depth[seedCell] == 0xFFFF)
+    const int seeds[] = { c0 * n + c0, c0 * n + c1, c1 * n + c0, c1 * n + c1 };
+    finishGrid(seeds);
+}
+
+// Flood fill from the seed cells (4-connected BFS = geodesic cell distance). Any open cell it
+// never reaches becomes rock — so EVERY open cell is reachable from the Base by construction, and
+// everything placed on open ground (nodes, ambient camps, move orders) is reachable too. Then the
+// merged obstacle rects.
+void GameMatch::finishGrid(oc::span<const int> seedCells)
+{
+    CoopMap& map = m_coopMap;
+    const int n = map.cellsX, nz = map.cellsZ;
+    map.depth.assign((size_t)n * nz, 0xFFFF);
+    map.reachable.clear();
+    map.maxDepth = 1;
+    oc::vector<int> queue;
+    queue.reserve((size_t)n * nz);
+    for (const int seedCell : seedCells)
+        if (seedCell >= 0 && !map.blocked[seedCell] && map.depth[seedCell] == 0xFFFF)
         {
             map.depth[seedCell] = 0;
             queue.push_back(seedCell);
@@ -873,9 +910,9 @@ void GameMatch::generateCoopGrid()
         if (x > 0)     visit(cell - 1);
         if (x < n - 1) visit(cell + 1);
         if (z > 0)     visit(cell - n);
-        if (z < n - 1) visit(cell + n);
+        if (z < nz - 1) visit(cell + n);
     }
-    for (int i = 0; i < n * n; ++i)
+    for (int i = 0; i < n * nz; ++i)
     {
         if (map.blocked[i])
             continue;
@@ -891,7 +928,7 @@ void GameMatch::generateCoopGrid()
     // Merged obstacle rects (horizontal runs): one rect serves Nav, placement (cellsFree) and the
     // spawn probes — a few hundred instead of ~1300 per-cell entries.
     m_terrainRects.clear();
-    for (int z = 0; z < n; ++z)
+    for (int z = 0; z < nz; ++z)
         for (int x = 0; x < n; )
         {
             if (!map.blocked[z * n + x])
@@ -903,45 +940,50 @@ void GameMatch::generateCoopGrid()
             while (end < n && map.blocked[z * n + end])
                 ++end;
             m_terrainRects.push_back(glm::vec4(
-                -c_coopHalfSize + (float)x * c_coopCellSize, -c_coopHalfSize + (float)z * c_coopCellSize,
-                -c_coopHalfSize + (float)end * c_coopCellSize, -c_coopHalfSize + (float)(z + 1) * c_coopCellSize));
+                map.origin.x + (float)x * map.cellSize, map.origin.y + (float)z * map.cellSize,
+                map.origin.x + (float)end * map.cellSize, map.origin.y + (float)(z + 1) * map.cellSize));
             x = end;
         }
 }
 
-// Rocks + barrier ring under ONE root entity (removed whole on regeneration), then the resource
-// nodes on reachable open cells. Deterministic: MapRng seeded off the map seed.
-void GameMatch::spawnCoopTerrain()
+// Rocks (+ the co-op barrier ring) under ONE root entity (removed whole on regeneration), then
+// the resource nodes on reachable open cells. Deterministic: MapRng seeded off the map seed (a
+// PvP arena has none — its rock heights roll from the arena index).
+void GameMatch::spawnTerrain()
 {
-    MapRng rng{ mapHash(m_coopMap.seed ^ 0xC0FFEEu) };
+    MapRng rng{ mapHash((m_coopMap.pvp ? (uint32)m_coopMap.pvpMap + 17u : m_coopMap.seed) ^ 0xC0FFEEu) };
+    const float rockScale = m_coopMap.cellSize / c_coopCellSize; // rock.pre/terrainmark.pre are 10 m cells
     // A Scene-only prefab, NOT createEmptyEntity: that one has no components at all, and an
     // entity without a SceneComponent refuses children (the pieces would end up unparented).
     m_terrainRoot = Globals::world.spawnAssetFile("Entities/Game/terrainroot.pre", Transform(), true);
     if (m_terrainRoot)
     {
-        m_terrainRoot->setName("CoopTerrain");
+        m_terrainRoot->setName(m_coopMap.pvp ? "ArenaTerrain" : "CoopTerrain");
         Globals::world.addRootEntity(m_terrainRoot);
     }
 
     oc::vector<World::SpawnRequest> requests;
     requests.reserve(m_coopMap.reachable.size() / 2 + 128);
-    for (int i = 0; i < m_coopMap.cells * m_coopMap.cells; ++i)
+    const glm::quat identity(1.0f, 0.0f, 0.0f, 0.0f);
+    for (int i = 0; i < m_coopMap.cellsX * m_coopMap.cellsZ; ++i)
     {
         if (!m_coopMap.blocked[i])
             continue;
-        // The rock is a 10 m cube sunk a random depth: exposed height 3.5..6 m (always above the
-        // player's jump), tops varying so a field of them reads as terrain, not tiling.
-        const float exposed = 3.5f + rng.next01() * 2.5f;
+        // The rock is a cube (10 m × rockScale) sunk a random depth: exposed height 3.5..6 m for
+        // the 10 m co-op block, 3..4.5 m for a 5 m arena block (always above the player's jump,
+        // never floating), tops varying so a field of them reads as terrain, not tiling.
+        const float exposed = m_coopMap.pvp ? 3.0f + rng.next01() * 1.5f : 3.5f + rng.next01() * 2.5f;
         requests.push_back({ "Entities/Game/rock.pre",
-            Transform(coopCellCenter(i) + glm::vec3(0.0f, exposed - 5.0f, 0.0f)) });
+            Transform(coopCellCenter(i) + glm::vec3(0.0f, exposed - 5.0f * rockScale, 0.0f), rockScale, identity) });
         // + the ground marker: a tinted plane wider than the block outlines the blocked cell
-        requests.push_back({ "Entities/Game/terrainmark.pre", Transform(coopCellCenter(i)) });
+        requests.push_back({ "Entities/Game/terrainmark.pre", Transform(coopCellCenter(i), rockScale, identity) });
     }
     const size_t rockCount = requests.size();
-    // The barrier ring: 20 m segments on all four sides (E/W rotated 90° — the prefab's long axis
-    // is X). Collider layer Barrier vs Player only: units and shots pass, capsules do not.
+    // The co-op barrier ring: 20 m segments on all four sides (E/W rotated 90° — the prefab's
+    // long axis is X). Collider layer Barrier vs Player only: units and shots pass, capsules do
+    // not. A PvP arena needs none — its rock border is solid for everyone.
     const glm::quat yaw90 = glm::angleAxis(glm::half_pi<float>(), glm::vec3(0.0f, 1.0f, 0.0f));
-    for (float o = -c_coopHalfSize + c_barrierStep * 0.5f; o < c_coopHalfSize; o += c_barrierStep)
+    for (float o = -c_coopHalfSize + c_barrierStep * 0.5f; !m_coopMap.pvp && o < c_coopHalfSize; o += c_barrierStep)
     {
         requests.push_back({ "Entities/Game/barrier.pre", Transform(glm::vec3(o, 10.0f, -c_coopHalfSize)) });
         requests.push_back({ "Entities/Game/barrier.pre", Transform(glm::vec3(o, 10.0f, c_coopHalfSize)) });
@@ -960,6 +1002,11 @@ void GameMatch::spawnCoopTerrain()
             Globals::world.addRootEntity(oc::move(spawned[i]));
     }
 
+    if (m_coopMap.pvp)
+    {
+        spawnPvpNodes();
+        return;
+    }
     // RESOURCE NODES: the starter pair in the cleared Base zone, then a golden-angle spiral of
     // candidates SNAPPED to reachable open cells (skip when none nearby or too close to another
     // node) — even coverage that respects whatever the noise carved, and reachable by the flood
@@ -981,14 +1028,14 @@ void GameMatch::spawnCoopTerrain()
         const int wantCell = coopCellAt(want);
         if (wantCell < 0)
             continue;
-        const int wx = wantCell % m_coopMap.cells, wz = wantCell / m_coopMap.cells;
+        const int wx = wantCell % m_coopMap.cellsX, wz = wantCell / m_coopMap.cellsX;
         for (int dz = -2; dz <= 2; ++dz)
             for (int dx = -2; dx <= 2; ++dx)
             {
                 const int x = wx + dx, z = wz + dz;
-                if (x < 0 || z < 0 || x >= m_coopMap.cells || z >= m_coopMap.cells)
+                if (x < 0 || z < 0 || x >= m_coopMap.cellsX || z >= m_coopMap.cellsZ)
                     continue;
-                const int cell = z * m_coopMap.cells + x;
+                const int cell = z * m_coopMap.cellsX + x;
                 if (m_coopMap.blocked[cell]) // post-flood: open == reachable
                     continue;
                 const glm::vec3 c = coopCellCenter(cell);
@@ -1020,9 +1067,72 @@ void GameMatch::spawnCoopTerrain()
     }
 }
 
+// The arena node tables: the lane's 180°-symmetric set (every node on a SIDE, the center empty,
+// each side's forward fuel node the exposed prize), widened with an outer band on the wide
+// arenas; the Circle rings its nodes between the Bases. A node whose cell is rock is skipped.
+void GameMatch::spawnPvpNodes()
+{
+    const auto nodeIfOpen = [this](float x, float z, ENodeType type)
+    {
+        const int cell = coopCellAt(glm::vec3(x, 0.0f, z));
+        if (cell >= 0 && !m_coopMap.blocked[cell])
+            m_structures.spawnNode(x, z, type);
+    };
+    if (m_coopMap.pvpMap == EPvpMap::Circle)
+    {
+        for (int k = 0; k < 6; ++k)
+        {
+            const float a = ((float)k + 0.5f) * glm::pi<float>() / 3.0f; // between the two-team Bases
+            nodeIfOpen(std::cos(a) * 38.0f, std::sin(a) * 38.0f, (k & 1) ? ENodeType::Fuel : ENodeType::Mineral);
+            nodeIfOpen(std::cos(a) * 56.0f, std::sin(a) * 56.0f, (k & 1) ? ENodeType::Mineral : ENodeType::Fuel);
+        }
+        return;
+    }
+    static constexpr struct { float x, z; ENodeType type; } c_laneNodes[] = {
+        { -45.0f,   8.0f, ENodeType::Mineral }, {  45.0f,  -8.0f, ENodeType::Mineral },
+        { -37.0f, -10.0f, ENodeType::Fuel },    {  37.0f,  10.0f, ENodeType::Fuel },
+        { -25.0f,  12.0f, ENodeType::Mineral }, {  25.0f, -12.0f, ENodeType::Mineral },
+        { -14.0f, -10.0f, ENodeType::Fuel },    {  14.0f,  10.0f, ENodeType::Fuel },
+    };
+    static constexpr struct { float x, z; ENodeType type; } c_wideNodes[] = {
+        { -40.0f,  30.0f, ENodeType::Fuel },    {  40.0f, -30.0f, ENodeType::Fuel },
+        { -18.0f,  32.0f, ENodeType::Mineral }, {  18.0f, -32.0f, ENodeType::Mineral },
+        { -50.0f, -28.0f, ENodeType::Mineral }, {  50.0f,  28.0f, ENodeType::Mineral },
+    };
+    for (const auto& n : c_laneNodes)
+        nodeIfOpen(n.x, n.z, n.type);
+    if (m_coopMap.pvpMap != EPvpMap::Lane)
+        for (const auto& n : c_wideNodes)
+            nodeIfOpen(n.x, n.z, n.type);
+}
+
+void GameMatch::rebuildPvpMap(EPvpMap map)
+{
+    if (m_coopMap.built && m_coopMap.pvp && m_coopMap.pvpMap == map)
+        return; // the join-replay re-broadcast / a duplicate GMp
+    if (m_terrainRoot)
+    {
+        Globals::world.removeRootEntity(m_terrainRoot.get());
+        m_terrainRoot = {};
+    }
+    m_structures.clearNodes();
+    m_pvpMap = map;
+    m_coopMap.pvpMap = map;
+    generatePvpGrid();
+    m_coopMap.built = true;
+    spawnTerrain();
+    m_wallObstacles.clear();
+    for (const glm::vec4& r : m_terrainRects)
+        m_wallObstacles.push_back(Nav::NavObstacle{ glm::vec2(r.x, r.y), glm::vec2(r.z, r.w) });
+    m_structures.setTerrainBlocked(m_terrainRects);
+    m_structures.setPlacementBounds(-m_pvpInterior, m_pvpInterior); // inside the rock border
+    Log::info(oc::format("PvP arena: {}, {} rock rects, {} open cells",
+        pvpMapName(map), m_terrainRects.size(), m_coopMap.reachable.size()));
+}
+
 void GameMatch::rebuildCoopMap(uint32 seed, float fill, int lanes)
 {
-    if (m_coopMap.built && m_coopMap.seed == seed && m_coopMap.fill == fill && m_coopMap.lanes == lanes)
+    if (m_coopMap.built && !m_coopMap.pvp && m_coopMap.seed == seed && m_coopMap.fill == fill && m_coopMap.lanes == lanes)
         return; // the join-replay re-broadcast / a duplicate GMp
     if (m_terrainRoot)
     {
@@ -1036,7 +1146,7 @@ void GameMatch::rebuildCoopMap(uint32 seed, float fill, int lanes)
     m_ambientCamp.remaining = 0; // a camp anchored on the old map is void
     generateCoopGrid();
     m_coopMap.built = true;
-    spawnCoopTerrain();
+    spawnTerrain();
     // The rock rects are the co-op "walls": Nav obstacles (feedNav re-reads m_wallObstacles every
     // frame) and placement refusals (cellsFree — ghosts turn red on rock, unit spawns skip it).
     m_wallObstacles.clear();
@@ -1050,11 +1160,18 @@ void GameMatch::rebuildCoopMap(uint32 seed, float fill, int lanes)
 
 void GameMatch::sendMapSeed()
 {
+    // [u8 mode: 0 co-op | 1 PvP] then the co-op inputs (seed/fill/lanes) or the PvP arena index.
     uint8 buffer[16];
     NetWriter writer(buffer);
-    writer.write<uint32>(m_coopMap.seed);
-    writer.write<float>(m_coopMap.fill);
-    writer.write<uint8>((uint8)m_coopMap.lanes);
+    writer.write<uint8>(m_coopMap.pvp ? 1 : 0);
+    if (m_coopMap.pvp)
+        writer.write<uint8>((uint8)m_coopMap.pvpMap);
+    else
+    {
+        writer.write<uint32>(m_coopMap.seed);
+        writer.write<float>(m_coopMap.fill);
+        writer.write<uint8>((uint8)m_coopMap.lanes);
+    }
     Globals::networkManager.fireNetworkEvent("GMp", writer.data());
 }
 
@@ -1080,16 +1197,16 @@ glm::vec3 GameMatch::ambientPointNear(const glm::vec3& center, float radius) con
     if (cell >= 0)
     {
         constexpr float c_keep = 1.2f; // body radius + a gap from the rock face
-        const int x = cell % m_coopMap.cells, z = cell / m_coopMap.cells;
+        const int x = cell % m_coopMap.cellsX, z = cell / m_coopMap.cellsX;
         const glm::vec3 c = coopCellCenter(cell);
-        const float half = c_coopCellSize * 0.5f;
+        const float half = m_coopMap.cellSize * 0.5f;
         if (x == 0 || m_coopMap.blocked[cell - 1])
             p.x = glm::max(p.x, c.x - half + c_keep);
-        if (x == m_coopMap.cells - 1 || m_coopMap.blocked[cell + 1])
+        if (x == m_coopMap.cellsX - 1 || m_coopMap.blocked[cell + 1])
             p.x = glm::min(p.x, c.x + half - c_keep);
-        if (z == 0 || m_coopMap.blocked[cell - m_coopMap.cells])
+        if (z == 0 || m_coopMap.blocked[cell - m_coopMap.cellsX])
             p.z = glm::max(p.z, c.z - half + c_keep);
-        if (z == m_coopMap.cells - 1 || m_coopMap.blocked[cell + m_coopMap.cells])
+        if (z == m_coopMap.cellsZ - 1 || m_coopMap.blocked[cell + m_coopMap.cellsX])
             p.z = glm::min(p.z, c.z + half - c_keep);
     }
     return glm::vec3(p.x, 1.0f, p.z);
@@ -1103,16 +1220,16 @@ glm::vec3 GameMatch::clampToOpenGround(const glm::vec3& pos) const
     if (cell < 0 || !m_coopMap.blocked[cell])
         return pos;
     // Inside a rock: the nearest open cell center within 3 rings (post-flood, open == reachable).
-    const int cx = cell % m_coopMap.cells, cz = cell / m_coopMap.cells;
+    const int cx = cell % m_coopMap.cellsX, cz = cell / m_coopMap.cellsX;
     int best = -1;
     float bestDistSq = FLT_MAX;
     for (int dz = -3; dz <= 3; ++dz)
         for (int dx = -3; dx <= 3; ++dx)
         {
             const int x = cx + dx, z = cz + dz;
-            if (x < 0 || z < 0 || x >= m_coopMap.cells || z >= m_coopMap.cells)
+            if (x < 0 || z < 0 || x >= m_coopMap.cellsX || z >= m_coopMap.cellsZ)
                 continue;
-            const int c = z * m_coopMap.cells + x;
+            const int c = z * m_coopMap.cellsX + x;
             if (m_coopMap.blocked[c])
                 continue;
             const glm::vec3 center = coopCellCenter(c);
@@ -1162,9 +1279,15 @@ void GameMatch::setLobbyTeams(uint8 numTeams, oc::span<const oc::pair<uint32, ui
 
 glm::vec3 GameMatch::baseGroundPos(uint8 team) const
 {
-    // Two teams = the corridor's ends (the original layout); more spread EVENLY along the x axis
+    // Circle: the Bases sit evenly around the ring, team 0 at the west. The lane arenas: two
+    // teams = the corridor's ends (the original layout); more spread EVENLY along the x axis
     // between them on the corridor's center line, so every team keeps the same node symmetry
-    // and the middle teams sit between two neighbours.
+    // and the middle teams sit between two neighbours (generatePvpGrid clears rock around each).
+    if (m_pvpMap == EPvpMap::Circle)
+    {
+        const float a = glm::pi<float>() + glm::two_pi<float>() * (float)team / (float)glm::max((int)m_numTeams, 1);
+        return glm::vec3(std::cos(a), 0.0f, std::sin(a)) * c_pvpCircleBaseRadius;
+    }
     if (m_numTeams <= 2)
         return team == 0 ? m_basePos : m_enemyBasePos;
     const float t = (float)glm::min((int)team, (int)m_numTeams - 1) / (float)(m_numTeams - 1);
@@ -1248,8 +1371,8 @@ void GameMatch::onClientJoined(uint32 clientId)
     // ordered), then every structure, broadcast (mirrorPlace is idempotent, so already-connected
     // clients shrug the duplicates off; rebuildCoopMap no-ops on the repeated seed). Links need
     // no replay — each client derives them locally from the mirrored cable segments.
-    if (m_coop && m_isServer && m_coopMap.built)
-        sendMapSeed();
+    if (m_isServer && m_coopMap.built)
+        sendMapSeed(); // co-op inputs or the PvP arena — the joiner's terrain + nodes
     for (int i = 0; i < m_structures.structureCount(); ++i)
         sendStructurePlaced(i);
     for (int i = 0; i < m_structures.structureCount(); ++i)
@@ -1320,6 +1443,8 @@ void GameMatch::saveGame()
         root.set("MapFill", m_coopMap.fill);
         root.set("MapLanes", oc::to_string(m_coopMap.lanes));
     }
+    else if (m_coopMap.built && m_coopMap.pvp)
+        root.set("PvpMap", oc::to_string((int)m_coopMap.pvpMap)); // the arena (EPvpMap index)
     m_structures.saveTo(root);
     m_npcs.saveUnits(root);
     // F9: an explicit user action, main thread.
@@ -1349,6 +1474,7 @@ void GameMatch::loadGame(oc::string_view path)
     // the current structures BEFORE the node set swaps, so no stale extractor outlives its node).
     // Connected clients rebuild from the GMp broadcast the same way.
     if (m_coop)
+    {
         if (const AssetNode* seedNode = root.find("MapSeed"); seedNode && seedNode->asInt() != 0)
         {
             m_structures.clearAllStructures(); // fires GRm hooks — clients prune ahead of the swap
@@ -1358,6 +1484,18 @@ void GameMatch::loadGame(oc::string_view path)
             if (m_isServer)
                 sendMapSeed();
         }
+    }
+    else if (const AssetNode* mapNode = root.find("PvpMap")) // a PvP save names its arena
+    {
+        const EPvpMap map = (EPvpMap)glm::clamp(mapNode->asInt(), 0, (int)EPvpMap::Count - 1);
+        if (!m_coopMap.built || !m_coopMap.pvp || m_coopMap.pvpMap != map)
+        {
+            m_structures.clearAllStructures();
+            rebuildPvpMap(map);
+            if (m_isServer)
+                sendMapSeed();
+        }
+    }
     // Replace the sim. Structure removal hooks fire during the clear (GRm to clients), then the
     // loaded state re-broadcasts below; unit entities resync through the normal despawn/spawn
     // replication (Component Network in their prefabs).
@@ -1528,14 +1666,25 @@ void GameMatch::handleNetEvent(oc::string_view name)
         }
         else if (name == "GMp")
         {
-            // The generated co-op map's inputs: build the identical terrain + barrier + nodes
-            // locally (rebuildCoopMap is a no-op on the re-broadcasts later joiners trigger).
-            // Sent FIRST in the join replay, so the map exists before any structure mirror lands.
-            const uint32 seed = reader.read<uint32>();
-            const float fill = reader.read<float>();
-            const uint8 lanes = reader.read<uint8>();
-            if (!reader.overflowed() && m_coop && seed != 0 && fill >= 0.0f && fill <= 1.0f)
-                rebuildCoopMap(seed, fill, (int)lanes);
+            // The server's terrain: the co-op map's inputs or the PvP arena — build the identical
+            // terrain (+ barrier) + nodes locally (the rebuilds are no-ops on the re-broadcasts
+            // later joiners trigger). Sent FIRST in the join replay, so the map exists before any
+            // structure mirror lands.
+            const uint8 mode = reader.read<uint8>();
+            if (mode == 1)
+            {
+                const uint8 map = reader.read<uint8>();
+                if (!reader.overflowed() && !m_coop && map < (uint8)EPvpMap::Count)
+                    rebuildPvpMap((EPvpMap)map);
+            }
+            else
+            {
+                const uint32 seed = reader.read<uint32>();
+                const float fill = reader.read<float>();
+                const uint8 lanes = reader.read<uint8>();
+                if (!reader.overflowed() && m_coop && seed != 0 && fill >= 0.0f && fill <= 1.0f)
+                    rebuildCoopMap(seed, fill, (int)lanes);
+            }
         }
         // (shield/materials state rides the entity snapshot's game blob now — no GSh event)
         return;

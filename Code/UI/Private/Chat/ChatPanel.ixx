@@ -57,14 +57,18 @@ public:
 		const glm::ivec2 size = viewport.getSize();
 		if (size.x <= 0 || size.y <= 0)
 			return;
-		const float width = glm::min(380.0f, (float)size.x - 16.0f);
-		const float height = glm::min(230.0f, (float)size.y - 16.0f);
+		const float width = glm::min(280.0f, (float)size.x - 16.0f);
+		const float height = glm::min(150.0f, (float)size.y - 16.0f);
 		ImGui::SetNextWindowPos(ImVec2((float)viewport.max.x - 8.0f, (float)viewport.max.y - 8.0f), ImGuiCond_Always, ImVec2(1.0f, 1.0f));
 		ImGui::SetNextWindowSize(ImVec2(width, height), ImGuiCond_Always);
 		const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
 			| ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking
 			| ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoNav;
-		ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0f, 0.0f, 0.0f, m_typing ? 0.6f : 0.3f));
+		// Nearly invisible while idle (the text carries its own shadow-free contrast over the
+		// world); a light tint only while typing so the input line reads as a field.
+		ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0f, 0.0f, 0.0f, m_typing ? 0.2f : 0.05f));
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, m_typing ? 0.15f : 0.0f));
+		ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.0f, 0.0f, 0.0f, m_typing ? 0.35f : 0.05f));
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.0f);
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
 		if (ImGui::Begin("##GameChat", nullptr, flags))
@@ -75,7 +79,7 @@ public:
 		}
 		ImGui::End();
 		ImGui::PopStyleVar(2);
-		ImGui::PopStyleColor();
+		ImGui::PopStyleColor(3);
 	}
 
 private:
@@ -90,7 +94,7 @@ private:
 
 	void renderLog(const char* id, ImVec2 size)
 	{
-		ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.25f));
+		ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.05f));
 		if (ImGui::BeginChild(id, size, ImGuiChildFlags_None, ImGuiWindowFlags_NoNav))
 		{
 			ImGui::PushTextWrapPos(0.0f);

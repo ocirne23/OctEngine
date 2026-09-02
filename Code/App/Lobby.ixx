@@ -7,6 +7,7 @@ import Entity;  // NetworkManager
 import Network; // NetWriter/NetReader
 import UI;      // LobbyView/LobbyAction (the MainMenu's lobby page)
 import App.Chat; // the chat event the lobby-phase filter lets through
+import Game;     // EPvpMap / pvpMapName (the host's arena pick)
 
 // The multiplayer PRE-GAME LOBBY: after the menu hosts or joins, players gather here, toggle
 // Ready, and any player can press Start once everyone is ready — a 3 second countdown runs, any
@@ -18,7 +19,7 @@ import App.Chat; // the chat event the lobby-phase filter lets through
 //   "LbG" client->server              start request (server re-validates all-ready)
 //   "LbS" server->clients [u8 flags: 1 coop | 2 countdown | 4 started][f32 remaining]
 //         [u32 mapSeed][f32 terrainFill][u8 terrainLanes]   — the host's co-op MAP settings
-//         [u8 numTeams]                                     — the host's PvP team count
+//         [u8 numTeams][u8 pvpMap]                          — the host's PvP team count + arena
 //         [u8 count]{[u32 clientId][u8 ready][u8 team]}   — the full state, broadcast on every change
 // PVP TEAMS: the host sets "Number of teams" (2..GameMaxTeams, SetNumTeams action); every player
 // picks their own team on the lobby page (SetTeam action -> LbT on a client). A joiner lands on
@@ -56,6 +57,7 @@ public:
 		m_players.clear();
 		m_haveState = false;
 		m_numTeams = 2;
+		m_pvpMap = EPvpMap::Lane;
 		if (m_host)
 		{
 			m_players.push_back({ 0, false, 0 }); // the server itself is clientId 0
@@ -115,6 +117,7 @@ public:
 			picks.push_back({ player.clientId, player.team });
 		return true;
 	}
+	EPvpMap pvpMap() const { return m_pvpMap; } // the host's arena pick (PvP; mirrored to clients)
 
 	// TRUE once, server: the countdown hit zero — main spawns the game world.
 	bool takeServerStart() { return take(m_serverStart); }
@@ -206,6 +209,7 @@ public:
 			const float mapFill = reader.read<float>();
 			const uint8 mapLanes = reader.read<uint8>();
 			const uint8 numTeams = reader.read<uint8>();
+			const uint8 pvpMap = reader.read<uint8>();
 			const uint8 count = reader.read<uint8>();
 			oc::vector<Player> players;
 			for (uint8 i = 0; i < count && !reader.overflowed(); ++i)
@@ -223,6 +227,7 @@ public:
 			m_mapFill = mapFill;
 			m_mapLanes = mapLanes;
 			m_numTeams = glm::clamp((int)numTeams, 2, c_maxTeams);
+			m_pvpMap = (EPvpMap)glm::min((int)pvpMap, (int)EPvpMap::Count - 1);
 			if ((flags & 4) != 0)
 				clientMarkStarted((flags & 1) != 0);
 			else
@@ -277,6 +282,9 @@ public:
 		v.terrainFill = m_mapFill;
 		v.terrainLanes = m_mapLanes;
 		v.numTeams = m_coop ? 1 : m_numTeams;
+		v.pvpMap = (int)m_pvpMap;
+		for (int i = 0; i < (int)EPvpMap::Count; ++i)
+			v.pvpMapNames.push_back(pvpMapName((EPvpMap)i));
 		const uint32 self = Globals::networkManager.localClientId();
 		bool allReady = !m_players.empty();
 		for (const Player& player : m_players)
@@ -344,6 +352,16 @@ public:
 					player.team = leastPopulatedTeam();
 			if (m_state == EState::Countdown)
 				cancelCountdown();
+			broadcastState();
+		}
+		else if (action.type == LobbyAction::EType::SetPvpMap && m_host && !m_coop)
+		{
+			const EPvpMap map = (EPvpMap)glm::clamp(action.pvpMap, 0, (int)EPvpMap::Count - 1);
+			if (map == m_pvpMap)
+				return;
+			m_pvpMap = map;
+			if (m_state == EState::Countdown)
+				cancelCountdown(); // the arena changed under the countdown
 			broadcastState();
 		}
 		else if (action.type == LobbyAction::EType::SetMapSettings && m_host && m_coop)
@@ -481,6 +499,7 @@ private:
 		writer.write<float>(m_mapFill);
 		writer.write<uint8>((uint8)m_mapLanes);
 		writer.write<uint8>((uint8)m_numTeams);
+		writer.write<uint8>((uint8)m_pvpMap);
 		const uint8 count = (uint8)oc::min(m_players.size(), (size_t)32);
 		writer.write<uint8>(count);
 		for (uint8 i = 0; i < count; ++i)
@@ -502,6 +521,7 @@ private:
 	bool m_clientStart = false;     // see takeClientStart
 	float m_countdown = 0.0f;
 	int m_numTeams = 2; // PvP: the host's team count (2..c_maxTeams). Mirrored in LbS.
+	EPvpMap m_pvpMap = EPvpMap::Lane; // PvP: the host's arena pick. Mirrored in LbS.
 	// Co-op map settings (host-authored; defaults = GameMatch's tweak defaults). Mirrored in LbS.
 	uint32 m_mapSeed = 0;
 	float m_mapFill = 0.3f;

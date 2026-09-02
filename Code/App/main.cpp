@@ -275,7 +275,10 @@ int main(int argc, char* argv[])
             uint8 numTeams;
             oc::vector<oc::pair<uint32, uint8>> teamPicks;
             if (!startCoop && lobby.teamSettings(numTeams, teamPicks))
+            {
                 game->setLobbyTeams(numTeams, teamPicks);
+                game->setPvpMap(lobby.pvpMap()); // the arena; clients build whatever GMp names
+            }
             game->spawnWorld();
         }
     };

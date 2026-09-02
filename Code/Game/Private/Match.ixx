@@ -23,6 +23,29 @@ import :Npc;
 //    the half that becomes the server tick in multiplayer.
 //  - updateWindowed(camera, dt): camera overwrite, aim/placement input, ghost + debug draw, HUD.
 //    Runs right after InputControls::applyPlayerCamera in the windowed block.
+// The PvP ARENAS (the lobby's "Map" pick; the host's choice reaches clients through the GMp event
+// exactly like the co-op seed). Every arena is impassable ROCK terrain on the shared cell grid
+// (GameMatch::generatePvpGrid): a rock border ring replaced the old borderwall.pre fence.
+export enum class EPvpMap : uint8
+{
+    Lane,        // the original corridor (x ±65, z ±20)
+    WideLane,    // twice as wide (z ±40)
+    Chokepoints, // the wide lane with a middle wall pierced by three 10 m openings
+    Circle,      // a ring arena: central rock column inside a 65 m disc (a "0")
+    Count,
+};
+export constexpr const char* pvpMapName(EPvpMap map)
+{
+    switch (map)
+    {
+    case EPvpMap::Lane:        return "Lane";
+    case EPvpMap::WideLane:    return "Wide lane";
+    case EPvpMap::Chokepoints: return "Chokepoints";
+    case EPvpMap::Circle:      return "Circle";
+    default:                   return "?";
+    }
+}
+
 export class GameMatch final
 {
 public:
@@ -54,6 +77,9 @@ public:
     // 0 = the server's own team). Call before spawnWorld on the authority. A client whose id is
     // not in the list (a late joiner) is seated on the least-populated team at join.
     void setLobbyTeams(uint8 numTeams, oc::span<const oc::pair<uint32, uint8>> picks);
+    // The PvP arena (the lobby's "Map" pick): call before spawnWorld on the authority; clients
+    // build whatever the server's GMp event names.
+    void setPvpMap(EPvpMap map) { m_pvpMap = map; }
     // The PLAYER/CAMERA hot path, and nothing else: capsule adoption (client) + velocity steering +
     // the shield's body push — the direct body setters that must land BEFORE this frame's physics
     // step. Deliberately minimal so main reaches the spatial/begin-frame kicks as early as possible.
@@ -146,8 +172,7 @@ private:
     void sendRoute(int index); // server: GRt broadcast (mirror + join replay)
     void sendStructurePlaced(int index);
     void sendStats();
-    void spawnCorridorWalls(); // arena border (deterministic local spawn on every instance)
-    // NAV: feed the flow-field service (authority only) — obstacles = border walls + every
+    // NAV: feed the flow-field service (authority only) — obstacles = rock terrain + every
     // structure footprint (change-detected inside Nav), sources = per team its structures + player
     // bodies (every frame). Units read the fields inside the entity pass.
     void feedNav();
@@ -162,8 +187,8 @@ private:
     StructureSystem m_structures;
     NpcSystem m_npcs;
 
-    EntityPtr m_ground; // the corridor border segments live under it as children
-    oc::vector<Nav::NavObstacle> m_wallObstacles; // border collider footprints (static)
+    EntityPtr m_ground;
+    oc::vector<Nav::NavObstacle> m_wallObstacles; // rock terrain rects (static, both modes)
     oc::vector<Nav::NavObstacle> m_navObstacles;  // per-frame scratch: walls + structures
     oc::vector<Nav::NavSource> m_navSources[Nav::MaxTeams];
     // Lane seeding parameters live on NpcSystem (one set of tweaks); Match reads them for its own
@@ -250,13 +275,21 @@ private:
     // broadcasts it as the "GMp" event (first thing in onClientJoined, before the structure
     // replay; also into F9 saves) — clients defer terrain + nodes until it arrives and build the
     // identical set locally from pure seeded math.
+    // THE TERRAIN GRID serves BOTH modes: the co-op generator fills a 36² grid of 10 m cells, the
+    // PvP arenas (generatePvpGrid) a per-arena rectangle of 5 m cells (rock.pre spawned at half
+    // scale) — everything downstream (cell math, flood fill, rects, rock spawn, clampToOpenGround)
+    // reads the grid's own dimensions.
     struct CoopMap
     {
-        oc::vector<uint8> blocked;  // one per cell, row-major z * cells + x (1 = rock)
+        oc::vector<uint8> blocked;  // one per cell, row-major z * cellsX + x (1 = rock)
         oc::vector<uint16> depth;   // BFS steps from the Base over open cells (0xFFFF unreachable)
         oc::vector<int> reachable;  // open + reachable cell indices (node/ambient placement pool)
-        int cells = 0;              // cells per side
+        int cellsX = 0, cellsZ = 0; // grid size
+        float cellSize = 10.0f;     // one rock block (co-op 10 m, PvP 5 m)
+        glm::vec2 origin{ 0.0f };   // world (x, z) of cell (0, 0)'s min corner
         uint16 maxDepth = 1;
+        bool pvp = false;           // which generator built it (the no-op tests compare per mode)
+        EPvpMap pvpMap = EPvpMap::Lane;
         uint32 seed = 0;
         float fill = 0.3f;          // generation inputs as USED (ride GMp + the save with the seed:
         int lanes = 6;              //  a joiner's tweak sync lands after the replay, too late)
@@ -264,9 +297,13 @@ private:
     };
     // Both roles; no-op when already built from those exact inputs.
     void rebuildCoopMap(uint32 seed, float fill, int lanes);
+    void rebuildPvpMap(EPvpMap map);
     void generateCoopGrid();             // the pure-math half: blocked cells, flood fill, rects
-    void spawnCoopTerrain();             // rocks + barrier segments under m_terrainRoot, nodes
-    void sendMapSeed();                  // server: the GMp broadcast
+    void generatePvpGrid();              // the PvP arena layouts (+ rock border), same outputs
+    void finishGrid(oc::span<const int> seedCells); // BFS from the seeds, seal pockets, merged rects
+    void spawnTerrain();                 // rocks (+ the co-op barrier) under m_terrainRoot, nodes
+    void spawnPvpNodes();                // the arena's node table (skips cells that landed in rock)
+    void sendMapSeed();                  // server: the GMp broadcast (co-op inputs / the PvP arena)
     glm::vec3 coopCellCenter(int index) const;
     int coopCellAt(const glm::vec3& pos) const; // -1 outside the map square
     // A move destination inside a rock is unreachable (the A* and every unit plan to it fail):
@@ -287,6 +324,8 @@ private:
     CoopMap m_coopMap;
     EntityPtr m_terrainRoot; // rocks + barrier segments live under it; removed on regeneration
     oc::vector<glm::vec4> m_terrainRects; // merged blocked runs (minX, minZ, maxX, maxZ)
+    EPvpMap m_pvpMap = EPvpMap::Lane; // PvP arena (setPvpMap; clients follow GMp)
+    glm::vec2 m_pvpInterior{ 65.0f, 20.0f }; // the arena's open half-extents (placement bounds)
     int m_mapSeedTweak = 0;       // "Game/Coop/Map seed": 0 = random each run (authority only)
     float m_terrainFill = 0.3f;   // fraction of interior cells turned to rock (before carving)
     int m_terrainLanes = 6;       // carved attack lanes from the base ring to the map edge

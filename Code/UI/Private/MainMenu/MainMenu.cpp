@@ -336,9 +336,25 @@ void MainMenu::renderLobby()
 	}
 	else
 	{
-		ImGui::SeparatorText("Teams");
+		ImGui::SeparatorText("Match");
+		const int mapCount = (int)m_lobbyView.pvpMapNames.size();
+		const int mapIdx = glm::clamp(m_lobbyView.pvpMap, 0, glm::max(mapCount - 1, 0));
+		const char* mapName = mapCount > 0 ? m_lobbyView.pvpMapNames[mapIdx] : "?";
 		if (m_lobbyView.hosting)
 		{
+			// The arena pick: a combo, applied at once (one broadcast per pick).
+			ImGui::SetNextItemWidth(-FLT_MIN);
+			if (ImGui::BeginCombo("##lobbyPvpMap", mapName))
+			{
+				for (int i = 0; i < mapCount; ++i)
+					if (ImGui::Selectable(m_lobbyView.pvpMapNames[i], i == mapIdx) && i != mapIdx)
+					{
+						m_lobbyAction.type = LobbyAction::EType::SetPvpMap;
+						m_lobbyAction.pvpMap = i;
+					}
+				ImGui::EndCombo();
+			}
+			ImGui::TextDisabled("Map");
 			// Same commit-on-release pattern as the map widgets: one broadcast per edit.
 			if (!m_teamsEditActive)
 				m_teamsEdit = m_lobbyView.numTeams;
@@ -353,7 +369,7 @@ void MainMenu::renderLobby()
 		}
 		else
 		{
-			ImGui::Text("%d teams", m_lobbyView.numTeams);
+			ImGui::Text("Map: %s   |   %d teams", mapName, m_lobbyView.numTeams);
 			ImGui::TextDisabled("Chosen by the host");
 		}
 		ImGui::TextDisabled("Pick your team in the player list");

@@ -143,7 +143,6 @@ public:
     void clearAllStructures();
 
     void registerTweaks();
-    void spawnNodes(); // the corridor arena's symmetric node set (deterministic on every instance)
     // CO-OP: GameMatch places nodes one by one from the generated map (seeded — every instance
     // derives the identical set from the same seed, the corridor-set contract).
     void spawnNode(float x, float z, ENodeType type); // one resource node entity + roster entry
