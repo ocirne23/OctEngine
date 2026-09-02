@@ -16,7 +16,7 @@ Prefab gameEnemySwarm
 		Radius 0.35
 		HalfHeight 0.2
 		Density 100
-		Friction 0.3
+		Friction 0
 		LockRotation true
 		ContactEvents true
 	Component Network

@@ -9,6 +9,7 @@ import Core.Transform;
 import File;
 import :Component;
 import :Allocator;
+import :EntityNames;
 import :NetworkManager;
 
 import RendererVK;
@@ -19,12 +20,22 @@ EntityArchetype makeEntityArchetype(uint16 typeBits)
     return EntityArchetype{ uint16(getEntityAllocSize(typeBits)), typeBits };
 }
 
+// The entity owns NO name storage: Globals::entityNames maps the entity pointer to the interned
+// copy (permanent, deduped), which is the name.
 void Entity::setName(oc::string_view newName)
 {
-    // The entity owns NO name storage: the interned copy (permanent, deduped) is the name. Names
-    // repeat heavily (every "Enemy", every "Border"), so the pool stays tiny, and this runs only
-    // at spawn/rename time - never in the update path.
-    name = newName.empty() ? nullptr : Globals::profiler.internName(newName);
+    Globals::entityNames.set(this, newName);
+}
+
+const char* Entity::getName() const
+{
+    const char* name = Globals::entityNames.get(this);
+    return name ? name : "";
+}
+
+bool Entity::hasName() const
+{
+    return Globals::entityNames.get(this) != nullptr;
 }
 
 void Entity::setFrozen(bool on)
@@ -55,25 +66,34 @@ void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform&
     // and the placement components below keep running so the frozen world stays inspectable.
     const bool frozen = isFrozen() || Globals::time.isPaused();
 
+    // deltaSeconds is whatever the World scheduled for this visit (its SIM LOD hands throttled
+    // entities a 0 on skipped frames and the accumulated catch-up on ticking ones): ZERO = no
+    // simulation step — the sim components are not called at all — while the sync parts (network
+    // correction, physics pose read) and the placement tail below still run every visit.
+    const bool simStep = !frozen && deltaSeconds > 0.0f;
+
     if (!frozen)
     {
-        // Game-layer sim BEFORE the script, so DSL orders/reads see this frame's state. Authority
-        // gating and thread-safety live inside the components (see GameComponents.ixx).
-        if (GameUnitComponent* gameUnit = getComponent<GameUnitComponent>(this))
-            gameUnit->update(*this, deltaSeconds);
-        if (GameStructureComponent* gameStructure = getComponent<GameStructureComponent>(this))
-            gameStructure->update(*this, deltaSeconds);
-        if (GameProjectileComponent* gameProjectile = getComponent<GameProjectileComponent>(this))
-            gameProjectile->update(*this, deltaSeconds);
+        if (simStep)
+        {
+            // Game-layer sim BEFORE the script, so DSL orders/reads see this frame's state. Authority
+            // gating and thread-safety live inside the components (see GameComponents.ixx).
+            if (GameUnitComponent* gameUnit = getComponent<GameUnitComponent>(this))
+                gameUnit->update(*this, deltaSeconds);
+            if (GameStructureComponent* gameStructure = getComponent<GameStructureComponent>(this))
+                gameStructure->update(*this, deltaSeconds);
+            if (GameProjectileComponent* gameProjectile = getComponent<GameProjectileComponent>(this))
+                gameProjectile->update(*this, deltaSeconds);
 
-        if (ScriptComponent* script = getComponent<ScriptComponent>(this))
-            script->update(*this, deltaSeconds);
+            if (ScriptComponent* script = getComponent<ScriptComponent>(this))
+                script->update(*this, deltaSeconds);
+        }
 
         // before Physics/composeTransform: a client-side correction to pos/rot lands this same frame
         if (NetworkComponent* network = getComponent<NetworkComponent>(this))
             network->update(*this, deltaSeconds);
 
-        if (AnimatorComponent* animator = getComponent<AnimatorComponent>(this))
+        if (AnimatorComponent* animator = getComponent<AnimatorComponent>(this); animator && simStep)
             animator->update(*this, renderer, deltaSeconds); // advance animation + refresh skinning palette
 
         if (PhysicsComponent* physics = getComponent<PhysicsComponent>(this))
@@ -81,33 +101,39 @@ void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform&
     }
 
     const Transform world = composeTransform(parentWorld, Transform(pos, scale, rot));
-    if (RenderComponent* render = getComponent<RenderComponent>(this))
+    SpatialIndex& spatialIndex = Globals::spatialIndex;
+    const SpatialCullingConfig& culling = spatialIndex.getCullingConfig();
+    RenderComponent* render = getComponent<RenderComponent>(this);
+    const bool hasNode = render && render->node.isValid(); // empty when spawned without a container, or after destroy()
+    if (hasNode)
+        render->node.setTransform(composeTransform(world, render->localTransform));
+    // The spatial entry follows the render bounds when there are any, else the entity position.
+    if (spatialEntry.isValid())
     {
-        if (render->node.isValid()) // empty when spawned without a container, or after destroy()
+        if (hasNode)
         {
-            render->node.setTransform(composeTransform(world, render->localTransform));
-            SpatialIndex& spatialIndex = Globals::spatialIndex;
-            const SpatialCullingConfig& culling = spatialIndex.getCullingConfig();
-            if (render->spatialEntry.isValid())
-            {
-                const Sphere bounds = render->node.getWorldBounds();
-                const float radius = render->node.isSkinned() ? bounds.radius * culling.skinnedRadiusScale : bounds.radius;
-                spatialIndex.updateEntry(render->spatialEntry.handle(), glm::dvec3(bounds.pos), radius);
-            }
-            if (culling.mode >= int(ESpatialCullMode::Cull) && render->spatialEntry.isValid())
-            {
-                const uint32 spatialMask = spatialIndex.getPassMask(render->spatialEntry.handle());
-                uint32 passMask = 0;
-                if (spatialMask & SpatialPassBit_Main)
-                    passMask = RendererVKLayout::PASS_ALL; // in view: feeds every pass
-                else if ((spatialMask & SpatialPassBit_Near) && culling.mode != int(ESpatialCullMode::MainOnly))
-                    passMask = RendererVKLayout::PASS_SHADOW | RendererVKLayout::PASS_GI; // off-screen but shadow/RT relevant
-                if (passMask != 0)
-                    renderer.renderNode(render->node, passMask);
-            }
-            else
-                renderer.renderNode(render->node);
+            const Sphere bounds = render->node.getWorldBounds();
+            const float radius = render->node.isSkinned() ? bounds.radius * culling.skinnedRadiusScale : bounds.radius;
+            spatialIndex.updateEntry(spatialEntry.handle(), glm::dvec3(bounds.pos), radius);
         }
+        else
+            spatialIndex.updateEntry(spatialEntry.handle(), glm::dvec3(world.pos), 0.0f);
+    }
+    if (hasNode)
+    {
+        if (culling.mode >= int(ESpatialCullMode::Cull) && spatialEntry.isValid())
+        {
+            const uint32 spatialMask = spatialIndex.getPassMask(spatialEntry.handle());
+            uint32 passMask = 0;
+            if (spatialMask & SpatialPassBit_Main)
+                passMask = RendererVKLayout::PASS_ALL; // in view: feeds every pass
+            else if ((spatialMask & SpatialPassBit_Near) && culling.mode != int(ESpatialCullMode::MainOnly))
+                passMask = RendererVKLayout::PASS_SHADOW | RendererVKLayout::PASS_GI; // off-screen but shadow/RT relevant
+            if (passMask != 0)
+                renderer.renderNode(render->node, passMask);
+        }
+        else
+            renderer.renderNode(render->node);
     }
 
     if (AudioComponent* audio = getComponent<AudioComponent>(this))
@@ -194,6 +220,8 @@ EntityPtr Entity::create(const EntitySpawnTemplate& tmpl, const Transform& trans
         && Globals::networkManager.role() == ENetRole::Server;
     if (lockNetIds)
         Globals::networkManager.beginTreeRegistration();
+    if (tmpl.global)
+        initialFlags |= EEntityFlag_Global; // root only: the recursion below never passes it to children
     EntityPtr root = create(tmpl, transform, initialFlags | EEntityFlag_RootAllocation, treeCursor, nullptr);
     if (lockNetIds)
         Globals::networkManager.endTreeRegistration();
@@ -230,6 +258,23 @@ EntityPtr Entity::create(const EntitySpawnTemplate& tmpl, const Transform& trans
             offset += EntityComponentDetail::inlineSizes[i];
         }
 
+    // Spatial registration for EVERY entity (parallel-spawn safe: registerEntry locks). Bounds from
+    // the render node when there is one (skinned inflated by the culling config), else a point at
+    // the spawn position. Headless has no render nodes, so every entry there is a point.
+    {
+        glm::dvec3 center(transform.pos);
+        float radius = 0.0f;
+        uint32 layers = SpatialLayer_Entity;
+        if (const RenderComponent* render = getComponent<RenderComponent>(entity); render && render->node.isValid())
+        {
+            const Sphere bounds = render->node.getWorldBounds();
+            center = glm::dvec3(bounds.pos);
+            radius = render->node.isSkinned() ? bounds.radius * Globals::spatialIndex.getCullingConfig().skinnedRadiusScale : bounds.radius;
+            layers |= SpatialLayer_Render;
+        }
+        entity->spatialEntry = SpatialEntry(Globals::spatialIndex.registerEntry(center, radius, reinterpret_cast<uint64>(entity), layers));
+    }
+
     return EntityPtr(entity);
 }
 
@@ -264,6 +309,7 @@ void Entity::destroy(Entity* entity)
             offset += EntityComponentDetail::inlineSizes[i];
         }
 
+    Globals::entityNames.erase(entity);
     entity->~Entity();
     // Intact tree: members skip their own free (their slices belong to the root's block, reclaimed in
     // the root's one deallocate). Broken/standalone entities free their own exact-size slice.

@@ -58,6 +58,27 @@ public:
     void markVisibleSet(ESpatialPass pass, const Frustum& frustumRelCamera, const glm::dvec3& cameraPos, float maxDist,
                         uint32 layerMask, IOcclusionTester* occlusion = nullptr);
     void markVisibleSphere(ESpatialPass pass, const glm::dvec3& center, float radius, uint32 layerMask);
+    // One stamp generation covering the UNION of several balls (markVisibleSphere per call would
+    // leave only the last ball stamped).
+    void markVisibleSpheres(ESpatialPass pass, const glm::dvec3* centers, uint32 count, float radius, uint32 layerMask);
+
+    // SIM LOD selection (World): the focus points + the three tier radii to stamp the UpdateTier
+    // passes with in the next update(). Runs in every culling mode (it is update logic, not
+    // culling); count 0 = no stamping (the World then visits everything).
+    static constexpr uint32 MaxUpdateLodFocus = 16;
+    void setUpdateLod(const glm::dvec3* focus, uint32 count, const float radii[3]);
+
+    // MAIN-THREAD stamp writes for one entry, outside the traversals (the World marks the ancestors
+    // of a selected entity so the tree walk reaches it). Exact compare — no spawn guard.
+    bool isStampedCurrent(SpatialHandle handle, ESpatialPass pass) const
+    {
+        return m_pool.isValidAlive(handle) && m_pool.lastVisible[uint32(pass)][handle.idx] == m_visibleQueryId[uint32(pass)];
+    }
+    void stampCurrent(SpatialHandle handle, ESpatialPass pass)
+    {
+        if (m_pool.isValidAlive(handle))
+            m_pool.lastVisible[uint32(pass)][handle.idx] = m_visibleQueryId[uint32(pass)];
+    }
 
     // THE per-frame visibility pass, in one call (the App's only spatial step): commits the cell moves
     // queued during last frame's entity updates, tracks the render camera's far plane, then stamps the
@@ -206,6 +227,9 @@ private:
     uint32 m_numLevels = Morton::MaxLevels;
     uint32 m_frameId = 1;
     uint32 m_visibleQueryId[uint32(ESpatialPass::Count)] = {}; // stamp generation per pass, 0 = never stamped
+    glm::dvec3 m_updateLodFocus[MaxUpdateLodFocus];
+    uint32 m_updateLodFocusCount = 0;
+    float m_updateLodRadii[3] = {};
     uint32 m_promoteCursor = 0;  // round-robin pool scan position for static promotion
     bool m_staticEnabled = true;
     int m_promoteAfterFrames = 60;

@@ -1582,12 +1582,24 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
         return rc->node.isValid() ? rc->node.getWorldBounds().pos : glm::vec3(0.0f);
     }
 
+    // The entity that owns a RenderComponent, from the inline layout: only Scene (bit 0) can sit
+    // between the entity header and the Render slot, so there are exactly two candidates.
+    static const Entity* entityOfRender(const RenderComponent* rc)
+    {
+        const uint8* p = reinterpret_cast<const uint8*>(rc);
+        const Entity* noScene = reinterpret_cast<const Entity*>(p - EntityComponentDetail::entityBaseOffset);
+        constexpr uint16 renderBit = 1 << EComponentID_Render, sceneBit = 1 << EComponentID_Scene;
+        if ((noScene->typeBits & (renderBit | sceneBit)) == renderBit)
+            return noScene;
+        return reinterpret_cast<const Entity*>(p - EntityComponentDetail::entityBaseOffset - EntityComponentDetail::inlineSizes[EComponentID_Scene]);
+    }
+
     int thunk_renderIsVisible(void* p)
     {
-        const RenderComponent* rc = static_cast<const RenderComponent*>(p);
-        if (!rc->spatialEntry.isValid())
+        const Entity* entity = entityOfRender(static_cast<const RenderComponent*>(p));
+        if (!entity->spatialEntry.isValid())
             return 0;
-        return Globals::spatialIndex.isVisible(rc->spatialEntry.handle()) ? 1 : 0;
+        return Globals::spatialIndex.isVisible(entity->spatialEntry.handle()) ? 1 : 0;
     }
 
     int thunk_renderIsSkinned(void* p)

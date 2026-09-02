@@ -35,6 +35,12 @@ public:
     void setTransform(const glm::vec3& pos, const glm::vec3& direction);
     void setPosition(const glm::vec3& pos);
     void setOutput(float output);
+    // ACTIVE gate (default on): off = the emitter keeps its slot and every parameter but projects
+    // NO field this frame — uploaded with flags 0 (skipped by the grid, the draw, the compute
+    // and the bake), no readback (appliedForce/pressure read zero), evicted from and never a
+    // candidate for merging. Pass-safe like setOutput. The World's SIM LOD drives it by tier.
+    void setActive(bool active);
+    bool isActive() const;
     void setReach(float reach);   // total extent: the bubble spans pos .. pos + dir * reach
     void setFocus(float focus);   // shape pinch [0,1]: 0.5 = sphere spanning the line, 0 = cone
                                   // pointed at the emitter, 1 = cone pointed at the target
@@ -199,6 +205,7 @@ private:
         uint32 generation = 0; // 0 = free slot
         uint32 rendererSlot = UINT32_MAX;
         uint32 team = 0;
+        bool active = true; // see ForceEmitter::setActive
         float output = 1.0f;
         float reach = 1.0f;
         float focus = 0.0f;

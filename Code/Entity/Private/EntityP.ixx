@@ -5,6 +5,7 @@ import Core.glm;
 import Core.Transform;
 import File.fwd;
 import RendererVK.fwd;
+import Spatial;
 
 export struct EntitySpawnTemplate;
 export struct EntityPtr;
@@ -35,11 +36,18 @@ export enum EEntityFlags : uint8
     // miss that walk, so reparentEntity clears it up the new ancestor chain.
     EEntityFlag_PhysicsSuspended     = 1 << 5,
 
-    // OPT-IN per-entity ProfileScope in the parallel entity pass (named by the interned `name`):
+    // OPT-IN per-entity ProfileScope in the parallel entity pass (named by the interned entity name):
     // the interesting components set it at spawn (Animator/Force/Script/GameUnit), machine
     // structures (barracks/turret) latch it in their update — plain static scenery stays scope-
     // free so it cannot flood the profiler rings.
     EEntityFlag_Profiled             = 1 << 6,
+
+    // GLOBAL root (`Global true` in the .pre, root only): the World visits it every frame from its
+    // own list instead of finding it through the spatial index — for organisational roots whose
+    // children spread across the world (the co-op terrain root). It still registers a spatial
+    // entry (gameplay queries, render culling); its children are selected individually like
+    // everything else. Never inherited by children.
+    EEntityFlag_Global               = 1 << 7,
 };
 
 export enum EComponentID : uint16
@@ -83,12 +91,13 @@ public:
     glm::quat rot;
 
     Entity* parent = nullptr;
-    const char* name = nullptr; // null when unnamed; access via getName()/setName(). INTERNED
-                                // (Profiler::internName): the pointer is permanent and deduped, so
-                                // it doubles as the entity's ProfileScope name and stays valid in
-                                // the profiler ring after the entity dies. Interning is why the
-                                // entity needs no owned name storage at all.
+    // NO name field: the display name lives in Globals::entityNames (EntityNames.ixx), keyed by the
+    // entity pointer and interned via Profiler::internName. getName/setName/hasName forward there.
     const EntitySpawnTemplate* spawnTemplate = nullptr;
+    // EVERY entity's registration in the SpatialIndex (Entity::create; layer Entity, plus Render
+    // when it has a render node): render culling, gameplay queries AND the World's update
+    // selection (its pass mask carries the SIM LOD tier stamps). Refreshed in updateSelf.
+    SpatialEntry spatialEntry;
 
     uint16 refCount = 0;
     uint16 typeBits = 0;
@@ -97,12 +106,15 @@ public:
                           // World measures the entity's first update, re-measures at a random low
                           // chance, and fills each fan-out batch until the summed cost reaches its
                           // time budget — no guessed initial value, the first update IS the guess
-    uint8 _unused[2];
+    // World SCHEDULING state, like updateCost: written and read only by World's update pass (its
+    // SIM LOD — tier + frames since the last visit). The entity itself never looks at these.
+    uint8 schedTier = 0;
+    uint8 schedSkipped = 0;
 
     void update(Renderer& renderer, float deltaSeconds, const Transform& parentWorld = Transform());
     void updateSelf(Renderer& renderer, float deltaSeconds, const Transform& parentWorld, oc::vector<EntityUpdateNode>& outChildren);
-    const char* getName() const { return name ? name : ""; }
-    bool hasName() const { return name != nullptr; }
+    const char* getName() const; // "" when unnamed; interned, permanent (see EntityNames.ixx)
+    bool hasName() const;
     void setName(oc::string_view name);
     void reparentEntity(Entity* newParent);
     bool isPrefabInstance() const { return (flags & EEntityFlag_PrefabInstance) != 0; }
@@ -115,6 +127,7 @@ public:
     void setProfiled() { flags |= EEntityFlag_Profiled; } // one-way: only ever latched on
     bool isFrozen() const { return (flags & EEntityFlag_Frozen) != 0; }
     void setFrozen(bool on); // Applies to the whole subtree
+    bool isGlobal() const { return (flags & EEntityFlag_Global) != 0; }
     bool isPrefabLocked() const;
     Entity* nearestPrefabInstance();
 
@@ -135,8 +148,9 @@ private:
     friend class SceneComponent;
     friend class World;
 };
-// One cache line exactly: components append at alignUp(sizeof(Entity), 16) = 64 with no gap.
-static_assert(sizeof(Entity) == 64);
+// One cache line: components append at alignUp(sizeof(Entity), 16) = 64. The header is full
+// (the 8 bytes freed by moving the name out now hold the SpatialEntry handle).
+static_assert(sizeof(Entity) <= 64);
 
 export struct EntityPtr
 {
@@ -212,6 +226,7 @@ export struct EntitySpawnTemplate
     oc::string prefabName;
     oc::string displayName;
     bool enabled = true;             // spawns with EEntityFlag_Enabled set/cleared ("Enabled" in the .pre)
+    bool global = false;             // root spawns with EEntityFlag_Global ("Global true" in the .pre)
     mutable uint32 treeAllocSize = 0; // lazy cache: entity + recursive SceneComponent children, 0 = uncomputed
     // Lazy cache: NetworkComponents in the whole tree, UINT32_MAX = uncomputed (same benign-race
     // scheme as treeAllocSize). Entity::create needs it for server netId contiguity: only a tree

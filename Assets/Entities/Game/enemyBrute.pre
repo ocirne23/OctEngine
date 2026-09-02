@@ -14,7 +14,7 @@ Prefab gameEnemyBrute
 		Radius 0.8
 		HalfHeight 0.5
 		Density 220
-		Friction 0.3
+		Friction 0
 		LockRotation true
 		ContactEvents true
 	Component Force

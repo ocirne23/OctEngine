@@ -248,23 +248,30 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             navTracking = best.dist <= params.targetTrackRadius;
             navSteer = glm::dot(navDir, navDir) > 0.5f;
         }
-        else if (best.valid && best.dist <= params.navFollowRadius)
+        else
         {
-            // NAV FOLLOW band: too far to TARGET (the player sprinted out of the search radius),
-            // but still near the action — if the crowd FLOW field holds a lane here, walk it (no
-            // target, no combat lock). The chasers' own trail + the seeded lane keep pulling the
-            // pack along until the target is back in range or the lane decays.
-            if (const Nav::TeamField* raster = Globals::navSystem.raster())
+            // OUT OF THE SEARCH RADIUS: a target picked on an earlier tick is STALE — drop it
+            // (targetLocked never gets here). Kept, the unit marched to the last known spot for up
+            // to a whole retarget interval and looked as if it ignored the follow radius entirely.
+            hasTarget = false;
+            if (best.valid && best.dist <= params.navFollowRadius)
             {
-                const glm::vec2 lane = Globals::navSystem.flow(team).sample(here, raster);
-                const float laneLen = glm::length(lane);
-                if (laneLen > params.flowKnee * moveSpeed)
+                // NAV FOLLOW band: too far to TARGET (the player sprinted out of the search
+                // radius), but still near the action — if the crowd FLOW field holds a lane here,
+                // walk it (no target, no combat lock). The chasers' own trail + the seeded lane
+                // keep pulling the pack along until the target is back in range or the lane decays.
+                if (const Nav::TeamField* raster = Globals::navSystem.raster())
                 {
-                    navDir = lane / laneLen;
-                    navSteer = true;
-                    navResolved = true; // following, not hunting: the local re-search stays off
-                    walkTarget = pos + glm::vec3(navDir.x, 0.0f, navDir.y) * 8.0f;
-                    haveWalkTarget = true;
+                    const glm::vec2 lane = Globals::navSystem.flow(team).sample(here, raster);
+                    const float laneLen = glm::length(lane);
+                    if (laneLen > params.flowKnee * moveSpeed)
+                    {
+                        navDir = lane / laneLen;
+                        navSteer = true;
+                        navResolved = true; // following, not hunting: the local re-search stays off
+                        walkTarget = pos + glm::vec3(navDir.x, 0.0f, navDir.y) * 8.0f;
+                        haveWalkTarget = true;
+                    }
                 }
             }
         }
@@ -415,6 +422,22 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
     // alignment, open run, crowd lane, persistence, minus the pressure gradient; stalls shift the
     // weights toward the fields. Physics writes are QUEUED (workers): one frame of latency.
     // (`vel` was read at the top, next to the height limit.)
+    // BRAKE (no target, or arrived): the capsules run FRICTION 0 — the SIM LOD ticks them at up
+    // to 1 s intervals and ground friction between ticks bled the commanded speed away — so
+    // stopping is an explicit command too: planar velocity to zero at the steering accel.
+    // Without it a coasting unit never stops, keeps splatting its velocity into the crowd lane,
+    // and the pack follows the ghost trail. No lane splat while braking (only the walk branch).
+    const auto brake = [&]
+    {
+        const glm::vec3 planar(vel.x, 0.0f, vel.z);
+        const float speed = glm::length(planar);
+        if (speed < 1e-3f)
+            return;
+        const float maxDv = accel * deltaSec;
+        const glm::vec3 dv = speed > maxDv ? -planar * (maxDv / speed) : -planar;
+        Globals::physics.queueBodyCommand(pc->body, PhysicsWorld::EBodyCommand::SetLinearVelocity, vel + dv);
+        vel += dv;
+    };
     if (haveWalkTarget)
     {
         const glm::vec2 toTarget(walkTarget.x - pos.x, walkTarget.z - pos.z);
@@ -587,8 +610,8 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                 // write "into the wall"), one cell BEHIND (a trail belongs behind the walker, and
                 // splatting the own cell fed the heading back to itself).
                 const float measuredLen = glm::length(measured);
-                if (measuredLen > 0.1f)
-                    Globals::navSystem.flow(team).splat(here - measured / measuredLen * Nav::CellSize, measured);
+                if (measuredLen > 0.1f && params.flowSplatGain > 0.0f)
+                    Globals::navSystem.flow(team).splat(here - measured / measuredLen * Nav::CellSize, measured * params.flowSplatGain);
                 // Back-pressure: stalled time injects pressure that diffuses outward each frame.
                 if (m_pressureTimer > 0.4f && params.stuckPressure > 0.0f)
                 {
@@ -597,7 +620,11 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                 }
             }
         }
+        else
+            brake(); // arrived: hold position
     }
+    else
+        brake(); // nothing to walk to
 
     // ---- shield battery + push (the player rules, minus regen) ----
     if (fc && fc->emitter.isValid())

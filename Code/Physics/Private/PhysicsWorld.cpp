@@ -243,6 +243,10 @@ void PhysicsWorld::applyQueuedCommands()
         case EBodyCommand::SetLinearDamping:    b3Body_SetLinearDamping(id, command.a.x); break;
         case EBodyCommand::SetAngularDamping:   b3Body_SetAngularDamping(id, command.a.x); break;
         case EBodyCommand::SetAwake:            b3Body_SetAwake(id, command.a.x != 0.0f); break;
+        case EBodyCommand::SetEnabled:
+            if (command.a.x != 0.0f) { if (!b3Body_IsEnabled(id)) b3Body_Enable(id); }
+            else                     { if (b3Body_IsEnabled(id))  b3Body_Disable(id); }
+            break;
         case EBodyCommand::NudgeVelocity:
         {
             const auto capped = [](const glm::vec3& delta, float maxLen)

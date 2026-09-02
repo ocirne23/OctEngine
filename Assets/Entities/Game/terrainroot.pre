@@ -3,4 +3,5 @@
 # one removeRootEntity. (World::createEmptyEntity cannot serve: it carries NO components, and an
 # entity without a SceneComponent refuses children.)
 Prefab gameCoopTerrain
+	Global true
 	Component Scene

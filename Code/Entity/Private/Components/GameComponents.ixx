@@ -61,6 +61,8 @@ export struct GameUnitParams
     float steerGoal = 0.3f;
     float steerFlow = 1.0f;        // FOLLOW the crowd lane — a lane is a seeded/proven route, so
                                    // where one exists it should outweigh walking straight at the goal
+    float flowSplatGain = 0.5f;    // scale on the MEASURED velocity a walking unit splats into the
+                                   // crowd lane each tick (0 = units leave no trail; seeded lanes only)
     float steerPersist = 0.4f;     // keep the last heading (no dithering / reversals)
     // LIVE-TARGET TRACKING: within targetTrackRadius of a team-field target the goal direction
     // refreshes at the field rate (~0.25 s) against the target's LIVE position, so it must beat
@@ -73,7 +75,7 @@ export struct GameUnitParams
     // holds a lane at the unit it walks the lane — pursuit survives a player sprinting out of the
     // search radius (the chase trail + seeded lane keep pulling the pack until the target is back
     // in range or the lane decays).
-    float navFollowRadius = 30.0f; // geodesic metres to the nearest enemy source
+    float navFollowRadius = 40.0f; // geodesic metres to the nearest enemy source
     float steerPressure = 0.5f;    // away from diffused pressure (crowd presence + jams)
     float pressureKnee = 0.23f;    // pressure gradient scoring 0.5 (compressive: x/(x+knee), no saturation)
     float flowKnee = 0.15f;        // lane speed scoring 0.5, as a fraction of moveSpeed (low: even
@@ -227,6 +229,8 @@ export struct GameUnitComponent
     void spawn(Entity& entity, const SpawnInfo& info, const Transform& base);
     void destroy(Entity& entity, const SpawnInfo& info) {}
     void update(Entity& entity, float deltaSec); // authority only — see the contract above
+    // (No dormancy hook here: the World's SIM LOD parks/disables the physics body of ANY
+    // throttled entity on its dormant edge — see World::simLodDelta.)
     // Atomic (projectile contacts are main-thread, melee is workers). Units: CAS on health.
     // Puppets: accumulates into pendingDamage — ONE damage entry point for every victim kind.
     void damage(float amount);

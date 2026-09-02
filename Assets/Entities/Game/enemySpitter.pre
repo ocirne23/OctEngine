@@ -13,7 +13,7 @@ Prefab gameEnemySpitter
 		Radius 0.5
 		HalfHeight 0.3
 		Density 100
-		Friction 0.3
+		Friction 0
 		LockRotation true
 		ContactEvents true
 	Component Force

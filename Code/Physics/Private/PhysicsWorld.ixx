@@ -64,6 +64,8 @@ public:
         Teleport, SetLinearVelocity, SetAngularVelocity, ApplyImpulse, ApplyImpulseAtPoint,
         ApplyAngularImpulse, ApplyForce, ApplyForceAtPoint, ApplyTorque,
         SetGravityScale, SetLinearDamping, SetAngularDamping, SetAwake, // scalar in a.x
+        SetEnabled, // scalar in a.x: 0 = b3Body_Disable (out of the broadphase + solver entirely,
+                    // pose kept), else b3Body_Enable. The pass-safe form of PhysicsBody::setEnabled
         SetWorldGravity,
         // Bounded velocity steering toward a target (network correction "push"): a = target linear
         // velocity, b = target angular velocity, c.x/c.y = max linear/angular velocity change applied

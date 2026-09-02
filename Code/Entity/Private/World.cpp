@@ -3,6 +3,7 @@
 import Core;
 import Core.glm;
 import Core.Log;
+import Core.Tweaks;
 import Core.Camera;
 import Core.Rect;
 import Core.Transform;
@@ -10,10 +11,14 @@ import Threading;
 
 import RendererVK;
 import :Entity;
+import :EntityNames;
 import :Component;
 import File;
 
 import :AssetRegistry;
+import Spatial;
+import Force;
+import Physics;
 import :AnimationDescription;
 import Animation;
 import Physics;
@@ -23,7 +28,198 @@ bool World::initialize()
 {
     Globals::assetRegistry.scanDirectory();
     m_updateStaging.initialize(); // main calls this after JobSystem::initialize
+
+    // SIM LOD tweaks (see SimLodConfig in World.ixx). Neither Saved nor Synced: the code defaults
+    // rule every run (a stale tweaks.cfg must not override a tuning change), and the LOD is a
+    // per-process performance setting.
+    {
+        SimLodConfig& c = m_simLod;
+        Tweak::boolean("Game/Sim LOD", "Enabled", &c.enabled);
+        Tweak::boolean("Game/Sim LOD", "Horizontal distance", &c.horizontal);
+        Tweak::floatVar("Game/Sim LOD", "Full rate within (m)", &c.radius[0], 0.0f, 2000.0f, 1.0f);
+        Tweak::floatVar("Game/Sim LOD", "Tier 1 within (m)", &c.radius[1], 0.0f, 2000.0f, 1.0f);
+        Tweak::floatVar("Game/Sim LOD", "Tier 1 interval (s)", &c.intervalSec[0], 0.0f, 5.0f, 0.01f);
+        Tweak::intVar("Game/Sim LOD", "Tier 1 min frames", &c.minFrames[0], 1, 60, 1.0f);
+        Tweak::floatVar("Game/Sim LOD", "Tier 2 within (m)", &c.radius[2], 0.0f, 2000.0f, 1.0f);
+        Tweak::floatVar("Game/Sim LOD", "Tier 2 interval (s)", &c.intervalSec[1], 0.0f, 5.0f, 0.01f);
+        Tweak::intVar("Game/Sim LOD", "Tier 2 min frames", &c.minFrames[1], 1, 60, 1.0f);
+        Tweak::floatVar("Game/Sim LOD", "Dormant interval (s, 0 = never)", &c.intervalSec[2], 0.0f, 60.0f, 0.1f);
+        Tweak::intVar("Game/Sim LOD", "Dormant min frames", &c.minFrames[2], 1, 600, 1.0f);
+        Tweak::floatVar("Game/Sim LOD", "Interval jitter", &c.intervalJitter, 0.0f, 0.5f, 0.01f);
+        Tweak::intVar("Game/Sim LOD", "Visible max tier", &c.visibleMaxTier, 0, 2, 1.0f);
+        Tweak::intVar("Game/Sim LOD", "Max catch-up (frames)", &c.maxCatchUp, 1, 60, 1.0f);
+        Tweak::floatVar("Game/Sim LOD", "Query margin (m)", &c.queryMargin, 0.0f, 100.0f, 1.0f);
+        Tweak::intVar("Game/Sim LOD", "Force bubbles max tier (3 = always)", &c.forceMaxTier, 0, 3, 1.0f);
+        Tweak::boolean("Game/Sim LOD", "Dormant disables physics body", &c.dormantDisableBody);
+        Tweak::boolean("Game/Sim LOD/Follows", "Units", &c.units);
+        Tweak::boolean("Game/Sim LOD/Follows", "Structures", &c.structures);
+        Tweak::boolean("Game/Sim LOD/Follows", "Projectiles", &c.projectiles);
+        Tweak::boolean("Game/Sim LOD/Follows", "Scripts", &c.scripts);
+        Tweak::boolean("Game/Sim LOD/Follows", "Animators", &c.animators);
+    }
+    // Live readouts (overwritten every pass; edits are meaningless) — deliberately not Saved.
+    Tweak::intVar("Game/Sim LOD/Stats", "Full rate", &m_simLodStats[0], 0, 1 << 20, 0.0f);
+    Tweak::intVar("Game/Sim LOD/Stats", "Tier 1", &m_simLodStats[1], 0, 1 << 20, 0.0f);
+    Tweak::intVar("Game/Sim LOD/Stats", "Tier 2", &m_simLodStats[2], 0, 1 << 20, 0.0f);
+    Tweak::intVar("Game/Sim LOD/Stats", "Dormant", &m_simLodStats[3], 0, 1 << 20, 0.0f);
     return true;
+}
+
+void World::setSimLodFocus(const glm::vec3* points, uint32 count)
+{
+    m_simLodFocusCount = glm::min(count, MaxSimLodFocus);
+    glm::dvec3 focus[MaxSimLodFocus];
+    for (uint32 i = 0; i < m_simLodFocusCount; ++i)
+    {
+        m_simLodFocus[i] = points[i];
+        focus[i] = glm::dvec3(points[i]);
+    }
+    // The tier stamps ride the NEXT cull job (this runs after this frame's join); the query below
+    // uses the fresh points. One frame of stamp latency is nothing against the tier radii.
+    static_assert(MaxSimLodFocus <= SpatialIndex::MaxUpdateLodFocus);
+    Globals::spatialIndex.setUpdateLod(focus, m_simLod.enabled ? m_simLodFocusCount : 0, m_simLod.radius);
+}
+
+bool World::simLodSelected(const Entity& entity) const
+{
+    if (!m_simLodActive || entity.isGlobal() || !entity.spatialEntry.isValid())
+        return true;
+    return (Globals::spatialIndex.getPassMask(entity.spatialEntry.handle()) & (SpatialPassBits_UpdateTiers | SpatialPassBit_Main)) != 0;
+}
+
+// A query hit at any depth: its ancestors are stamped UpdateTier2 so the descent reaches it (a
+// visited parent emits only selected children — see submitEntityBatches), and its root is queued.
+// A chain that is already stamped was queued by an earlier hit (or is a hit itself); a Global
+// ancestor is visited from the global list anyway.
+void World::selectUpdateRoot(Entity* hit)
+{
+    SpatialIndex& spatialIndex = Globals::spatialIndex;
+    Entity* e = hit;
+    while (Entity* p = e->parent)
+    {
+        if (p->isGlobal())
+            return;
+        if (p->spatialEntry.isValid())
+        {
+            if (spatialIndex.isStampedCurrent(p->spatialEntry.handle(), ESpatialPass::UpdateTier2))
+                return;
+            spatialIndex.stampCurrent(p->spatialEntry.handle(), ESpatialPass::UpdateTier2);
+        }
+        e = p;
+    }
+    m_updateLevel.push_back({ e, Transform() });
+}
+
+float World::simLodDelta(Entity& entity)
+{
+    // Bubbles spawn DARK (ForceComponent::spawn); every visit decides their state — on, wherever
+    // the tier does not apply (LOD inactive, Global, no entry), else by tier below.
+    ForceComponent* force = (entity.typeBits & (1 << EComponentID_Force)) ? getComponent<ForceComponent>(&entity) : nullptr;
+    if (force && !force->emitter.isValid())
+        force = nullptr;
+    if (!m_simLodActive || entity.isGlobal() || !entity.spatialEntry.isValid())
+    {
+        if (force)
+            force->emitter.setActive(true);
+        return m_updateDelta;
+    }
+    // Only entities carrying a following sim kind and no pinning one are THROTTLED; a bubble is
+    // tier-gated on every selected entity regardless.
+    const bool throttled = (entity.typeBits & m_simLodFollowMask) && !(entity.typeBits & m_simLodPinMask);
+    if (!throttled && !force)
+        return m_updateDelta;
+
+    // The tier is the entity's OWN spatial mask: the UpdateTier balls stamped around every focus
+    // point in the cull job, and Main (in the camera's main pass) clamping to visibleMaxTier. No
+    // stamp at all = dormant (a hit in the query margin band, or an entity the stamps have not
+    // reached yet).
+    const SpatialIndex& spatialIndex = Globals::spatialIndex;
+    const SpatialHandle handle = entity.spatialEntry.handle();
+    const uint32 mask = spatialIndex.getPassMask(handle);
+    // UNSTAMPED (the spawn-frame visit from the pending list: the entry is not linked yet, so the
+    // mask is only the spawn GUARD saying "visible everywhere"): the tier is UNKNOWN — full-rate
+    // visit, nothing decided (the bubble stays as spawned: dark). The first real stamp places it.
+    if ((mask & SpatialPassBits_UpdateTiers) && !spatialIndex.isStampedCurrent(handle, ESpatialPass::UpdateTier0)
+        && !spatialIndex.isStampedCurrent(handle, ESpatialPass::UpdateTier1)
+        && !spatialIndex.isStampedCurrent(handle, ESpatialPass::UpdateTier2))
+        return m_updateDelta;
+    // DISTANCE tier: what the bubble gate and the dormant edge go by. The camera sees the whole
+    // tier-1/2 area from above, so visibility must not override distance for those.
+    uint8 distTier = 3;
+    if (mask & SpatialPassBit_UpdateTier0)      distTier = 0;
+    else if (mask & SpatialPassBit_UpdateTier1) distTier = 1;
+    else if (mask & SpatialPassBit_UpdateTier2) distTier = 2;
+    // TICK tier: an in-view entity inside the outer radius ticks at least at "Visible max tier"
+    // (a rate floor for what the player can see); dormant (beyond the outer radius) stays dormant.
+    uint8 tier = distTier;
+    if (tier != 3 && (mask & SpatialPassBit_Main) && tier > uint8(m_simLod.visibleMaxTier))
+        tier = uint8(glm::clamp(m_simLod.visibleMaxTier, 0, 2));
+
+    // FORCE BUBBLE gate: active only within "Force bubbles max tier" by DISTANCE. Set every
+    // visit (a handle resolve + a store, pass-safe) so a tweak change applies without a tier
+    // change; an entity that leaves the selection keeps its last state — the margin-band visit
+    // (distTier 3) sets it off on the way out.
+    if (force)
+        force->emitter.setActive(int(distTier) <= m_simLod.forceMaxTier);
+    if (!throttled)
+        return m_updateDelta;
+    m_updateStaging.local().simLodCount[tier]++;
+
+    const uint8 prevTier = entity.schedTier;
+    entity.schedTier = tier;
+    if (tier == 3 && prevTier != 3)
+    {
+        // DORMANT EDGE: the body would otherwise glide on at its last steering velocity for as
+        // long as nothing ticks it. Zero it and either DISABLE it (out of the broadphase and
+        // solver — a passing body cannot wake it, nothing pushes it) or just park it asleep.
+        // Through the body-command queue: the pass never writes box3d directly.
+        if (PhysicsComponent* physics = getComponent<PhysicsComponent>(&entity); physics && physics->body.isValid())
+        {
+            Globals::physics.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::SetLinearVelocity, glm::vec3(0.0f));
+            Globals::physics.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::SetAngularVelocity, glm::vec3(0.0f));
+            Globals::physics.queueBodyCommand(physics->body,
+                m_simLod.dormantDisableBody ? PhysicsWorld::EBodyCommand::SetEnabled : PhysicsWorld::EBodyCommand::SetAwake, glm::vec3(0.0f));
+        }
+    }
+    else if (tier != 3 && prevTier == 3)
+    {
+        // WAKE EDGE: re-enable unconditionally (a no-op on an enabled body) so a tweak flipped
+        // during the dormant stretch can never strand a disabled body; the entity's next tick
+        // sets its velocity, which also wakes a merely sleeping one. No catch-up over the stretch.
+        entity.schedSkipped = 0;
+        if (PhysicsComponent* physics = getComponent<PhysicsComponent>(&entity); physics && physics->body.isValid()
+            && !physics->suspended) // an Enabled-off subtree owns its own disable; never re-enable under it
+            Globals::physics.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::SetEnabled, glm::vec3(1.0f));
+    }
+
+    if (tier == 0)
+    {
+        entity.schedSkipped = 0;
+        return m_updateDelta;
+    }
+    // TIME-based cadence with a minimum frame gap. The sim time this tick would cover is exact:
+    // the ring holds the cumulative time at the end of every recent pass, so now minus the value
+    // at the pass of the last tick (schedSkipped + 1 passes back) is the covered stretch.
+    const float intervalSec = m_simLod.intervalSec[tier - 1];
+    if (tier == 3 && intervalSec <= 0.0f)
+    {
+        entity.schedSkipped = 254;
+        return -1.0f; // dormant, never ticks
+    }
+    const uint32 skipped = entity.schedSkipped;
+    const float elapsed = m_simTimeAccum - m_frameTimeRing[uint32(m_updateFrame - skipped - 1) & 255];
+    // Per-entity jitter on the interval (+-intervalJitter): a wave that entered the tier on the
+    // same frame drifts apart within a few ticks instead of ticking in lockstep.
+    const float hashFrac = float(uint32((uintptr_t(&entity) >> 6) * 2654435761u) >> 8) * (1.0f / 16777216.0f);
+    const float threshold = intervalSec * (1.0f + m_simLod.intervalJitter * (hashFrac * 2.0f - 1.0f));
+    const bool tick = int(skipped) + 1 >= glm::max(m_simLod.minFrames[tier - 1], 1) && elapsed >= threshold;
+    if (!tick)
+    {
+        entity.schedSkipped = uint8(glm::min<uint32>(skipped + 1, 254)); // 254: the ring reaches 255 passes back
+        return tier == 3 ? -1.0f : 0.0f;
+    }
+    entity.schedSkipped = 0;
+    return glm::min(elapsed, m_updateDelta * float(glm::max(m_simLod.maxCatchUp, 1)));
 }
 
 // CONTINUATION BATCHES, no level barrier: the tree used to be walked breadth-first with a
@@ -50,6 +246,8 @@ void World::update(Renderer& renderer, float deltaSeconds)
 
     m_updateRenderer = &renderer;
     m_updateDelta = deltaSeconds;
+    m_simTimeAccum += deltaSeconds;
+    m_frameTimeRing[uint32(m_updateFrame) & 255] = m_simTimeAccum; // cumulative time at the end of THIS pass
     // COST-BUDGETED batches instead of a uniform grain: every entity carries a measured updateCost
     // (unmeasured counts as 1 so it still partitions), and a batch fills until the summed cost
     // reaches ~25us of measured time (m_updateCost's EMA is fed COST UNITS as its item count, so
@@ -57,13 +255,71 @@ void World::update(Renderer& renderer, float deltaSeconds)
     // now comes from the fan-out itself - children spawn jobs the moment their parent's batch ends.
     m_updateBudget = uint32(glm::clamp<uint64>(25000 / glm::max<uint64>(m_updateCost.nsPerItem(), 1), 1, 4096));
 
+    // SIM LOD: resolve the per-pass constants once (the tweaks are live, the pass reads copies).
+    m_simLodFollowMask = m_simLodPinMask = 0;
+    m_simLodActive = m_simLod.enabled && m_simLodFocusCount > 0 && m_updateDelta > 0.0f;
+    if (m_simLodActive)
+    {
+        const auto kind = [this](bool follows, EComponentID id) { (follows ? m_simLodFollowMask : m_simLodPinMask) |= uint16(1 << id); };
+        kind(m_simLod.units,       EComponentID_GameUnit);
+        kind(m_simLod.structures,  EComponentID_GameStructure);
+        kind(m_simLod.projectiles, EComponentID_GameProjectile);
+        kind(m_simLod.scripts,     EComponentID_Script);
+        kind(m_simLod.animators,   EComponentID_Animator);
+    }
+    m_updateStaging.forEach([](EntityUpdateStaging& s) { for (uint32& n : s.simLodCount) n = 0; });
+
+    // SELECTION. LOD inactive (no focus, paused, disabled): every root, every child — the pass
+    // scales with the entity count. LOD active: the pass is DETACHED from the entity count — the
+    // visit set is the global roots, the roots added since the last pass (unlinked until the next
+    // commit, so a query cannot find them yet) and one sphere query per focus point at the outer
+    // tier radius + margin on the Entity layer, at ANY depth: every hit walks up to its root
+    // (stamping the ancestors so the descent passes through them), and a visited parent emits
+    // only its selected children. An organisational root at the origin therefore neither hides
+    // its far-flung children nor drags all of them in.
     m_updateLevel.clear();
-    for (const EntityPtr& root : m_rootEntities)
-        m_updateLevel.push_back({ root.get(), Transform() });
+    if (!m_simLodActive)
+    {
+        for (const EntityPtr& root : m_rootEntities)
+            m_updateLevel.push_back({ root.get(), Transform() });
+    }
+    else
+    {
+        ProfileScope selectScope("Update selection", EProfileCategory::Entity);
+        for (Entity* e : m_globalRoots)
+            m_updateLevel.push_back({ e, Transform() });
+        for (Entity* e : m_pendingRoots)
+            m_updateLevel.push_back({ e, Transform() });
+        const float radius = m_simLod.radius[2] + m_simLod.queryMargin;
+        for (uint32 i = 0; i < m_simLodFocusCount; ++i)
+        {
+            m_queryScratch.clear();
+            Globals::spatialIndex.querySphere(glm::dvec3(m_simLodFocus[i]), radius, SpatialLayer_Entity, m_queryScratch);
+            for (const uint64 userData : m_queryScratch)
+                selectUpdateRoot(reinterpret_cast<Entity*>(userData));
+        }
+        // Dedupe (overlapping focus balls, a global root that is also a hit, ...).
+        oc::sort(m_updateLevel.begin(), m_updateLevel.end(),
+            [](const EntityUpdateNode& a, const EntityUpdateNode& b) { return a.entity < b.entity; });
+        size_t n = 0;
+        for (size_t i = 0; i < m_updateLevel.size(); ++i)
+            if (i == 0 || m_updateLevel[i].entity != m_updateLevel[i - 1].entity)
+                m_updateLevel[n++] = m_updateLevel[i];
+        m_updateLevel.resize(n);
+    }
+    m_pendingRoots.clear();
     submitEntityBatches(m_updateLevel.data(), uint32(m_updateLevel.size()));
 
     // Helps: main runs batch jobs alongside the workers until the whole tree is done.
     Globals::jobSystem.wait(m_updateCounter);
+
+    for (int& n : m_simLodStats)
+        n = 0;
+    m_updateStaging.forEach([this](const EntityUpdateStaging& s)
+    {
+        for (int t = 0; t < 4; ++t)
+            m_simLodStats[t] += int(s.simLodCount[t]);
+    });
 }
 
 // Copies the nodes into the frame arena in ONE claim, then slices the arena range into
@@ -75,21 +331,36 @@ void World::update(Renderer& renderer, float deltaSeconds)
 void World::submitEntityBatches(const EntityUpdateNode* nodes, uint32 count)
 {
     static_assert(std::is_trivially_copyable_v<EntityUpdateNode>);
-    if (count == 0)
+    // SELECTION filter: only stamped children ride into the arena (see update()); the root list
+    // from main is pre-selected, so this only ever drops emitted children.
+    uint32 selected = 0;
+    for (uint32 i = 0; i < count; ++i)
+        selected += simLodSelected(*nodes[i].entity) ? 1 : 0;
+    if (selected == 0)
         return;
-    const uint32 slot = m_updateArenaCursor.fetch_add(count, oc::memory_order_relaxed);
-    if (slot + count > uint32(m_updateArena.size()))
+    const uint32 slot = m_updateArenaCursor.fetch_add(selected, oc::memory_order_relaxed);
+    if (slot + selected > uint32(m_updateArena.size()))
     {
         // Arena exhausted (the claim is never rolled back): run these subtrees serially via the
         // recursive path - correct, just not parallel; the overflow grows the arena next frame so
         // this stays a one-frame hiccup. Reads `nodes` directly, which is fine: the serial path
         // never touches the staging slots.
-        m_updateArenaOverflow.fetch_add(count, oc::memory_order_relaxed);
+        m_updateArenaOverflow.fetch_add(selected, oc::memory_order_relaxed);
         for (uint32 i = 0; i < count; ++i)
-            nodes[i].entity->update(*m_updateRenderer, m_updateDelta, nodes[i].parentWorld);
+            if (simLodSelected(*nodes[i].entity))
+                nodes[i].entity->update(*m_updateRenderer, m_updateDelta, nodes[i].parentWorld);
         return;
     }
-    std::memcpy(&m_updateArena[slot], nodes, count * sizeof(EntityUpdateNode));
+    if (selected == count)
+        std::memcpy(&m_updateArena[slot], nodes, count * sizeof(EntityUpdateNode));
+    else
+    {
+        uint32 out = slot;
+        for (uint32 i = 0; i < count; ++i)
+            if (simLodSelected(*nodes[i].entity))
+                m_updateArena[out++] = nodes[i];
+    }
+    count = selected;
 
     uint32 begin = 0;
     while (begin < count)
@@ -120,6 +391,11 @@ void World::updateBatchJob(uint32 begin, uint32 count)
     {
         const EntityUpdateNode& node = m_updateArena[i];
         Entity* entity = node.entity;
+        // SIM LOD: the delta this visit gets (0 = sync/placement only), or no visit at all —
+        // a dormant entity's subtree is dropped from the pass here.
+        const float delta = simLodDelta(*entity);
+        if (delta < 0.0f)
+            continue;
         batchCost += glm::max<uint32>(entity->updateCost, 1);
         // MEASURED cost: an entity's FIRST update is timed and becomes its updateCost
         // (250ns units — no guessed initial value), then a ~1/1024-per-frame random
@@ -131,16 +407,16 @@ void World::updateBatchJob(uint32 begin, uint32 count)
         const Clock::time_point measureStart = measure ? Clock::now() : Clock::time_point{};
         // Per-entity scope for OPT-IN entities only (EEntityFlag_Profiled: simulated
         // things — animators, scripts, units, machine structures; static scenery stays
-        // scope-free so it cannot flood the rings). NAMED by the interned entity name,
-        // which stays valid in the ring after the entity dies.
+        // scope-free so it cannot flood the rings). NAMED by the interned entity name from
+        // Globals::entityNames, which stays valid in the ring after the entity dies.
         if (entity->isProfiled())
         {
-            ProfileScope entityScope(entity->name ? entity->name
-                : "Entity", EProfileCategory::Entity);
-            entity->updateSelf(*m_updateRenderer, m_updateDelta, node.parentWorld, staging.children);
+            const char* name = Globals::entityNames.get(entity);
+            ProfileScope entityScope(name ? name : "Entity", EProfileCategory::Entity);
+            entity->updateSelf(*m_updateRenderer, delta, node.parentWorld, staging.children);
         }
         else
-            entity->updateSelf(*m_updateRenderer, m_updateDelta, node.parentWorld, staging.children);
+            entity->updateSelf(*m_updateRenderer, delta, node.parentWorld, staging.children);
         if (measure)
         {
             const uint64 ns = uint64(std::chrono::nanoseconds(Clock::now() - measureStart).count());
@@ -734,6 +1010,7 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
     const AssetNode* nameNode = node.find("Name");
     tmpl.displayName = nameNode ? nameNode->asString() : node.asString();
     if (const AssetNode* n = node.find("Enabled")) tmpl.enabled = n->asBool();
+    if (const AssetNode* n = node.find("Global")) tmpl.global = n->asBool();
 
     uint16 typeBits = 0;
 

@@ -19,13 +19,30 @@
   -->
 
   <Type Name="Entity">
-    <DisplayString Condition="displayName._Mypair._Myval2 == 0">[unnamed] ({typeBits,x})</DisplayString>
-    <DisplayString>{displayName._Mypair._Myval2,sb}</DisplayString>
+    <!-- The name is NOT a member: it lives in Globals::entityNames (EntityNames.ixx), keyed by pointer.
+         A DisplayString cannot loop, so the summary stays name-less; the [name] row below walks the
+         registry: shard = the same pointer hash as EntityNameRegistry::shardFor, then the EASTL
+         hashtable bucket chain (eastl::hash<T*> is the raw pointer value, bucket = hash % count). -->
+    <DisplayString>Entity ({typeBits,x})</DisplayString>
     <Expand>
+      <CustomListItems MaxItemsPerView="1">
+        <Variable Name="shard" InitialValue="&amp;Globals::entityNames.m_shards.mValue[(((unsigned __int64)this &gt;&gt; 4) * 0x9E3779B97F4A7C15ULL) &gt;&gt; 58]" />
+        <Variable Name="node" InitialValue="shard-&gt;names.mpBucketArray[(unsigned __int64)this % shard-&gt;names.mnBucketCount]" />
+        <Variable Name="found" InitialValue="false" />
+        <Loop Condition="node != 0 &amp;&amp; !found">
+          <If Condition="node-&gt;mValue.first == this">
+            <Item Name="[name]">node-&gt;mValue.second,sb</Item>
+            <Exec>found = true</Exec>
+          </If>
+          <Exec>node = node-&gt;mpNext</Exec>
+        </Loop>
+        <If Condition="!found">
+          <Item Name="[name]">"[unnamed]"</Item>
+        </If>
+      </CustomListItems>
       <Item Name="pos">pos</Item>
       <Item Name="rot">rot</Item>
       <Item Name="scale">scale</Item>
-      <Item Name="name">displayName._Mypair._Myval2,sb</Item>
       <Item Name="parent">parent</Item>
       <Item Name="spawnTemplate">spawnTemplate</Item>
       <Item Name="refCount">refCount</Item>

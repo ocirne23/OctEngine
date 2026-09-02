@@ -780,13 +780,17 @@ int main(int argc, char* argv[])
             Globals::rendererVK.joinBeginFrameJob(); // VR: beginFrame runs synchronously here
             Globals::spatialIndex.joinUpdateJob();
         }
+        else
+            Globals::spatialIndex.commitFrame(); // no cull job headless, but every entity registers: link the entries so queries (script radius, unit targeting) see them
         // The game tick's bulk (structures/production/materials/nav staging — everything but the
         // player-body writes in game.updatePlayer above): spawns, destroys and spatial queries are
         // legal again after the joins, and mid-frame container loads after beginFrame are a
         // supported path (present() re-checks texture/mesh generations). Becomes the server tick
         // in MP. See GameMatch::update's declaration for the one-frame latencies this placement buys.
         if (game)
-            game->update((float)simDeltaSec);
+            game->update((float)simDeltaSec); // also publishes the SIM LOD focus (the players)
+        else if (!headlessServer)
+            Globals::world.setSimLodFocus(&camera.position, 1); // testbed: the camera is the focus
         // Contact scripts (OnPhysicsEvent) query the spatial index and can touch renderer state
         // (light/sun thunks), so they fire AFTER the joins — still before the entity pass, as before.
         Globals::physics.dispatchContactEvents([](const PhysicsWorld::ContactEvent& evt) { Globals::world.handleContactEvent(evt); });

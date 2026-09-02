@@ -58,6 +58,9 @@ export constexpr uint32 SpatialLayer_Stress = 1u << 1;  // synthetic stress-test
 export constexpr uint32 SpatialLayer_Terrain = 1u << 2; // procedural terrain chunks (render culling only:
                                                         // NOT entities — their userData is not an Entity*,
                                                         // so gameplay queries must never include this layer)
+export constexpr uint32 SpatialLayer_Entity = 1u << 3;  // EVERY non-global entity (userData = Entity*): the
+                                                        // World's update-selection layer. Render is the
+                                                        // subset with a render node (gameplay queries)
 
 // Rebase a world-space frustum to camera-relative space (in double, so the planes stay exact at
 // planet-scale camera positions): dot(n, p) + w == dot(n, p - camPos) + (w + dot(n, camPos)).
@@ -79,16 +82,27 @@ export inline void inflateFrustum(Frustum& frustum, float margin)
 // occlusion culling can shrink further); Near is a camera ball that keeps off-screen shadow
 // casters and ray-traced geometry pushed — the GPU shadow cull and the TLAS range bound do the
 // per-pass refinement from there.
+// The three UpdateTier passes are the World's SIM LOD selection (not rendering): balls around
+// every focus point (the players) at the tier radii, stamped in the same cull job via
+// setUpdateLod; the World reads an entity's mask to pick its tick rate and to decide which
+// children a visited parent emits.
 export enum class ESpatialPass : uint32
 {
     Main = 0,
     Near,
+    UpdateTier0,
+    UpdateTier1,
+    UpdateTier2,
     Count,
 };
 
 // Pass bits as returned by SpatialIndex::getPassMask, bit p == 1 << uint32(ESpatialPass p).
 export constexpr uint32 SpatialPassBit_Main = 1u << 0;
 export constexpr uint32 SpatialPassBit_Near = 1u << 1;
+export constexpr uint32 SpatialPassBit_UpdateTier0 = 1u << 2;
+export constexpr uint32 SpatialPassBit_UpdateTier1 = 1u << 3;
+export constexpr uint32 SpatialPassBit_UpdateTier2 = 1u << 4;
+export constexpr uint32 SpatialPassBits_UpdateTiers = SpatialPassBit_UpdateTier0 | SpatialPassBit_UpdateTier1 | SpatialPassBit_UpdateTier2;
 
 export enum class ESpatialCullMode : int
 {

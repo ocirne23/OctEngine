@@ -13,8 +13,7 @@ export struct RenderComponent
 
     ~RenderComponent() {}
 
-    RenderNode node;
-    SpatialEntry spatialEntry; // registration in the SpatialIndex, kept in sync by updateTree
+    RenderNode node; // the entity's SpatialEntry (Entity::spatialEntry) takes its bounds from here
     Transform localTransform;
     bool showBounds = false;
 

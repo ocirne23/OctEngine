@@ -1756,6 +1756,18 @@ void GameMatch::update(float deltaSec)
     if (m_scenarioOrderPending && !m_isClient)
         issueScenarioOrder(); // after runScenario's load: units come from the roster, the Base/raster from the ticks below
 
+    // SIM LOD focus = every player: our capsule plus (server) each client's twin, so a unit is
+    // never throttled near ANY player. Published before world.update reads it (main.cpp order).
+    {
+        glm::vec3 focus[World::MaxSimLodFocus];
+        uint32 focusCount = 0;
+        focus[focusCount++] = m_player.bodyPos();
+        for (const auto& [id, p] : m_clientPlayers)
+            if (p && focusCount < World::MaxSimLodFocus)
+                focus[focusCount++] = p->pos;
+        Globals::world.setSimLodFocus(focus, focusCount);
+    }
+
     if (m_isClient)
     {
         // Our team is the SERVER's assignment, carried on our capsule's puppet component by the

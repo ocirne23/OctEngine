@@ -101,6 +101,7 @@ void NpcSystem::registerTweaks()
     Tweak::floatVar("Game/Actors", "Height limit (m)", &up.heightLimit, 1.0f, 200.0f, 0.5f);
     Tweak::floatVar("Game/Enemies/Steer", "Goal", &up.steerGoal, 0.0f, 3.0f, 0.05f);
     Tweak::floatVar("Game/Enemies/Steer", "Flow", &up.steerFlow, 0.0f, 3.0f, 0.05f);
+    Tweak::floatVar("Game/Enemies/Steer", "Flow splat gain", &up.flowSplatGain, 0.0f, 5.0f, 0.05f);
     Tweak::floatVar("Game/Enemies/Steer", "Persist", &up.steerPersist, 0.0f, 3.0f, 0.05f);
     Tweak::floatVar("Game/Enemies/Steer", "Track goal", &up.steerTrackGoal, 0.0f, 3.0f, 0.05f);
     Tweak::floatVar("Game/Enemies/Steer", "Track flow mult", &up.trackFlowMult, 0.0f, 1.0f, 0.05f);

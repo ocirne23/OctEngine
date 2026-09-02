@@ -119,6 +119,18 @@ void ForceEmitter::setOutput(float output)
         inst->output = output;
 }
 
+void ForceEmitter::setActive(bool active)
+{
+    if (ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
+        inst->active = active;
+}
+
+bool ForceEmitter::isActive() const
+{
+    const ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle);
+    return inst && inst->active;
+}
+
 void ForceEmitter::setReach(float reach)
 {
     if (ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
@@ -647,6 +659,21 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
         EmitterInstance& inst = m_emitters[emitterIdx];
         if (inst.generation == 0)
             continue;
+        if (!inst.active)
+        {
+            // Gated off (SIM LOD): no field this frame. Flags 0 = the renderer skips the slot
+            // everywhere (the same upload a Merged member without readback makes); any merge
+            // transition is dropped on the spot (the merge pass already evicted it — no bubble).
+            inst.mergeState = EmitterInstance::EMergeState::Own;
+            inst.group = 0;
+            inst.blend = 0.0f;
+            renderer.updateForceEmitter(inst.rendererSlot,
+                buildEmitterGpu(inst.pos, inst.dir, 0.0f, inst.reach, inst.focus, inst.team,
+                    inst.distribution, inst.width, refreshDistributionScale(inst), inst.shellAlpha, 0u));
+            inst.appliedForce = glm::vec3(0.0f);
+            inst.pressure = 0.0f;
+            continue;
+        }
         // Transition spheres: advance the blend, pick the live target (the group's displayed
         // sphere when Joining, the own bubble when Leaving), resolve the end states.
         if (inst.mergeState == EmitterInstance::EMergeState::Joining && inst.group == 0)
@@ -867,6 +894,15 @@ static float forceDist2(const glm::vec3& a, const glm::vec3& b)
 // Runs on a job (one emitter per call, writes only its own instance + the worker's staging list).
 void ForceSystem::refreshBubbleBounds(EmitterInstance& inst)
 {
+    if (!inst.active)
+    {
+        // No bubble while gated off: evicted from its group by the member sweep (radius 0 =
+        // unfit), never a candidate. The bounds cache is dropped so reactivation recomputes.
+        inst.bubbleRadius = 0.0f;
+        inst.candidate = false;
+        inst.boundsOutput = -1.0f;
+        return;
+    }
     refreshDistributionScale(inst); // distNorm cache fresh before the fold below
     const float R = glm::max(inst.reach, 1e-3f);
     const glm::vec3 dir = glm::dot(inst.dir, inst.dir) > 1e-6f ? glm::normalize(inst.dir) : glm::vec3(0.0f, 1.0f, 0.0f);
@@ -1123,8 +1159,8 @@ void ForceSystem::buildBakeChunks(Renderer& renderer)
         for (const EmitterInstance& inst : m_emitters)
         {
             if (inst.generation == 0 || inst.mergeState == EmitterInstance::EMergeState::Merged
-                || inst.output <= 0.0f)
-                continue; // merged members project no field of their own
+                || inst.output <= 0.0f || !inst.active)
+                continue; // merged members / gated-off emitters project no field of their own
             // Conservative XZ box of the support (the forceEmitterBounds rule): the output line
             // pos .. pos + dir * reach, expanded by the lateral half-width.
             const glm::vec3 target = inst.pos + inst.dir * inst.reach;
