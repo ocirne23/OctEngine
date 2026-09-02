@@ -2846,6 +2846,7 @@ static const char* remoteShortName(oc::string_view entityName, uint8 kind)
     if (entityName.find("Brute") != oc::string_view::npos)   return "BRUT";
     if (entityName.find("Runner") != oc::string_view::npos)  return "RUN";
     if (entityName.find("Spitter") != oc::string_view::npos) return "SPIT";
+    if (entityName.find("Swarm") != oc::string_view::npos) return   "SWRM";
     return "GRNT";
 }
 

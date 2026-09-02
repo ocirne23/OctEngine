@@ -188,26 +188,20 @@ float World::simLodCadence(Entity& entity, uint8 tier)
 
 float World::simLodDelta(Entity& entity)
 {
-    // Bubbles spawn dark (ForceComponent::spawn); every visit decides their state: ON wherever
-    // the tiers do not apply, else by distance tier.
-    ForceComponent* force = getComponent<ForceComponent>(&entity);
     if (!m_simLodActive || entity.isGlobal() || !entity.spatialEntry.isValid())
-    {
-        if (force)
-            force->setActive(true);
         return m_updateDelta;
-    }
     // Only entities carrying a following sim kind and no pinning one are THROTTLED; a bubble is
     // tier-gated on every selected entity regardless.
     const bool throttled = (entity.typeBits & m_simLodFollowMask) && !(entity.typeBits & m_simLodPinMask);
+    ForceComponent* force = getComponent<ForceComponent>(&entity);
     if (!throttled && !force)
         return m_updateDelta;
     const SimLodTiers tiers = simLodTiers(entity);
     if (!tiers.placed)
         return m_updateDelta; // tier unknown: full-rate visit, nothing decided
-    // Set every visit (a handle resolve + a store) so a tweak change applies without a tier
-    // change; an entity leaving the selection keeps its last state — the query-margin visit
-    // (distance tier 3) switches it off on the way out.
+    // The bubble gate, by DISTANCE tier, set every visit (a handle resolve + a store) so a tweak
+    // change applies without a tier change; an entity leaving the selection keeps its last
+    // state — the query-margin visit (distance tier 3) switches it off on the way out.
     if (force)
         force->setActive(int(tiers.dist) <= m_simLod.forceMaxTier);
     if (!throttled)

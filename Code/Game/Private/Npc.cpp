@@ -253,8 +253,15 @@ void NpcSystem::spawnLooseUnits(oc::span<const LooseSpawn> spawns)
         // zeroed) once a player is near. The queue applies before the next step, so the body
         // never simulates a single step here.
         if (Globals::world.simLodActive())
+        {
             if (PhysicsComponent* pc = getComponent<PhysicsComponent>(entity.get()))
                 pc->park(/*disable*/ true);
+            // The bubble too: a far unit is never visited, so nothing would gate it off, and an
+            // active field there would stand until a player came near. The first tiered visit
+            // switches it on when close enough.
+            if (ForceComponent* fc = getComponent<ForceComponent>(entity.get()))
+                fc->setActive(false);
+        }
         m_units.push_back(entity); // roster: deregistered by onWorldRootRemoved on any despawn path
         Globals::world.addRootEntity(oc::move(entity));
     }

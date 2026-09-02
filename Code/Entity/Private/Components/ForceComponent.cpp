@@ -20,10 +20,6 @@ void ForceComponent::spawn(Entity& entity, const SpawnInfo& info, const Transfor
     emitter = Globals::forceSystem.createEmitter(info.team, pos, worldDir,
         info.output, info.reach, info.focus, info.distribution, info.width);
     emitter.setMergeable(info.mergeable);
-    // Spawns DARK: the World's update pass switches the bubble on (by SIM LOD tier, or on every
-    // visit while the LOD is inactive) — so an entity spawned far away and never visited never
-    // projects a field, with no spawn-frame special case anywhere.
-    emitter.setActive(false);
 }
 
 void ForceComponent::destroy(Entity& entity, const SpawnInfo&)

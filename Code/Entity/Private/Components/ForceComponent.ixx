@@ -44,8 +44,9 @@ export struct ForceComponent
     void spawn(Entity& entity, const SpawnInfo& info, const Transform& base);
     void destroy(Entity& entity, const SpawnInfo& info);
     void update(Entity& entity, const Transform& world); // emitter follows the entity (position + axis)
-    // The bubble's ACTIVE gate (spawns off; the World's SIM LOD drives it by distance tier — see
-    // ForceEmitter::setActive). Pass-safe.
+    // The bubble's ACTIVE gate (see ForceEmitter::setActive): spawns ON; the World's SIM LOD
+    // drives it by distance tier on every selected entity, and a spawner that parks a far unit
+    // (NpcSystem::spawnLooseUnits) switches it off alongside the body. Pass-safe.
     void setActive(bool active) { if (emitter.isValid()) emitter.setActive(active); }
 };
 
