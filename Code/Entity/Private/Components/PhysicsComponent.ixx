@@ -55,6 +55,14 @@ export struct PhysicsComponent
     // Pulls the body out of the simulation (and drops its occluder) while the entity is disabled
     // (EEntityFlag_Enabled); the next update() after re-enable re-adds and resyncs it. See updateTree.
     void suspendBody();
+    // PARK / UNPARK — for a body whose entity the World stops simulating (SIM LOD dormancy).
+    // Both ride the body-command queue (pass-safe, applied before the next step). park: zero the
+    // velocities, then DISABLE (out of the broadphase + solver, pose kept — nothing can wake or
+    // push it) or merely put it to sleep. unpark: zero the velocities (a body parked inside a
+    // crowd may still hold a contact push-out) and enable — a no-op on an enabled body; skipped
+    // while `suspended` (an Enabled-off subtree owns its own disable).
+    void park(bool disable);
+    void unpark();
 };
 
 // Suspends every PhysicsComponent body in this entity's subtree (used when the entity is disabled —

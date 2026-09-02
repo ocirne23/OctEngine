@@ -253,8 +253,8 @@ void NpcSystem::spawnLooseUnits(oc::span<const LooseSpawn> spawns)
         // zeroed) once a player is near. The queue applies before the next step, so the body
         // never simulates a single step here.
         if (Globals::world.simLodActive())
-            if (const PhysicsComponent* pc = getComponent<PhysicsComponent>(entity.get()); pc && pc->body.isValid())
-                Globals::physics.queueBodyCommand(pc->body, PhysicsWorld::EBodyCommand::SetEnabled, glm::vec3(0.0f));
+            if (PhysicsComponent* pc = getComponent<PhysicsComponent>(entity.get()))
+                pc->park(/*disable*/ true);
         m_units.push_back(entity); // roster: deregistered by onWorldRootRemoved on any despawn path
         Globals::world.addRootEntity(oc::move(entity));
     }

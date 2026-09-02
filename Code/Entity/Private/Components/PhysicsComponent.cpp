@@ -54,6 +54,25 @@ void PhysicsComponent::suspendBody()
     occluder.reset(); // an invisible entity must not occlude either
 }
 
+void PhysicsComponent::park(bool disable)
+{
+    if (!body.isValid())
+        return;
+    Globals::physics.queueBodyCommand(body, PhysicsWorld::EBodyCommand::SetLinearVelocity, glm::vec3(0.0f));
+    Globals::physics.queueBodyCommand(body, PhysicsWorld::EBodyCommand::SetAngularVelocity, glm::vec3(0.0f));
+    Globals::physics.queueBodyCommand(body,
+        disable ? PhysicsWorld::EBodyCommand::SetEnabled : PhysicsWorld::EBodyCommand::SetAwake, glm::vec3(0.0f));
+}
+
+void PhysicsComponent::unpark()
+{
+    if (!body.isValid() || suspended)
+        return;
+    Globals::physics.queueBodyCommand(body, PhysicsWorld::EBodyCommand::SetLinearVelocity, glm::vec3(0.0f));
+    Globals::physics.queueBodyCommand(body, PhysicsWorld::EBodyCommand::SetAngularVelocity, glm::vec3(0.0f));
+    Globals::physics.queueBodyCommand(body, PhysicsWorld::EBodyCommand::SetEnabled, glm::vec3(1.0f));
+}
+
 void PhysicsComponent::update(Entity& entity, const Transform& parentWorld)
 {
     if (!body.isValid())

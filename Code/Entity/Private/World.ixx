@@ -275,6 +275,18 @@ private:
     // visited for its sync/placement but takes no sim step) or < 0 = DORMANT: do not visit the
     // entity or its subtree at all this frame.
     float simLodDelta(Entity& entity);
+    // Its three pieces: the tiers from the entity's own spatial stamps (placed = a real tier
+    // stamp exists — a fresh unlinked entry only carries the spawn guard), the dormant / wake
+    // transitions (PhysicsComponent park/unpark), and the time-based tick cadence.
+    struct SimLodTiers
+    {
+        uint8 dist;  // 0..2 by the tier balls, 3 = beyond the outer radius (dormant)
+        uint8 tick;  // dist floored by "Visible max tier" for an in-view entity
+        bool placed;
+    };
+    SimLodTiers simLodTiers(const Entity& entity) const;
+    void simLodTransition(Entity& entity, uint8 tier);
+    float simLodCadence(Entity& entity, uint8 tier);
     // Update SELECTION (see update()): whether a child a visited parent emitted is part of this
     // frame's pass — its spatial mask carries a tier or Main stamp (a never-stamped fresh entry
     // counts as stamped). Everything when the LOD is inactive.

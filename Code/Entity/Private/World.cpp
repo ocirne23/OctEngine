@@ -106,101 +106,64 @@ void World::selectUpdateRoot(Entity* hit)
     m_updateLevel.push_back({ e, Transform() });
 }
 
-float World::simLodDelta(Entity& entity)
+// The tiers from the entity's OWN spatial stamps: the UpdateTier balls around every focus point
+// (cull job) and Main (the camera's main pass). DISTANCE tier = what the bubble gate and the
+// dormant transition go by — the camera sees the whole tier-1/2 area from above, so visibility
+// must never override distance for those; TICK tier = the distance tier floored by "Visible max
+// tier" for an in-view entity (a rate floor for what the player can see), dormant stays dormant.
+// NOT placed: the entry carries no real tier stamp — the spawn-frame visit from the pending list
+// (unlinked, the mask is only the spawn GUARD saying "in every pass"), so the tier is unknown.
+World::SimLodTiers World::simLodTiers(const Entity& entity) const
 {
-    // Bubbles spawn DARK (ForceComponent::spawn); every visit decides their state — on, wherever
-    // the tier does not apply (LOD inactive, Global, no entry), else by tier below.
-    ForceComponent* force = getComponent<ForceComponent>(&entity);
-    if (force && !force->emitter.isValid())
-        force = nullptr;
-    if (!m_simLodActive || entity.isGlobal() || !entity.spatialEntry.isValid())
-    {
-        if (force)
-            force->emitter.setActive(true);
-        return m_updateDelta;
-    }
-    // Only entities carrying a following sim kind and no pinning one are THROTTLED; a bubble is
-    // tier-gated on every selected entity regardless.
-    const bool throttled = (entity.typeBits & m_simLodFollowMask) && !(entity.typeBits & m_simLodPinMask);
-    if (!throttled && !force)
-        return m_updateDelta;
-
-    // The tier is the entity's OWN spatial mask: the UpdateTier balls stamped around every focus
-    // point in the cull job, and Main (in the camera's main pass) clamping to visibleMaxTier. No
-    // stamp at all = dormant (a hit in the query margin band, or an entity the stamps have not
-    // reached yet).
     const SpatialHandle handle = entity.spatialEntry.handle();
     const uint32 mask = Globals::spatialIndex.getPassMask(handle);
-    // UNSTAMPED (the spawn-frame visit from the pending list: the entry is not linked yet, so the
-    // mask is only the spawn GUARD saying "visible everywhere"): the tier is UNKNOWN — full-rate
-    // visit, nothing decided (the bubble stays as spawned: dark). The first real stamp places it.
-    if ((mask & SpatialPassBits_UpdateTiers)
-        && !(Globals::spatialIndex.getPassMaskExact(handle) & SpatialPassBits_UpdateTiers))
-        return m_updateDelta;
-    // DISTANCE tier: what the bubble gate and the dormant edge go by. The camera sees the whole
-    // tier-1/2 area from above, so visibility must not override distance for those.
-    uint8 distTier = 3;
-    if (mask & SpatialPassBit_UpdateTier0)      distTier = 0;
-    else if (mask & SpatialPassBit_UpdateTier1) distTier = 1;
-    else if (mask & SpatialPassBit_UpdateTier2) distTier = 2;
-    // TICK tier: an in-view entity inside the outer radius ticks at least at "Visible max tier"
-    // (a rate floor for what the player can see); dormant (beyond the outer radius) stays dormant.
-    uint8 tier = distTier;
-    if (tier != 3 && (mask & SpatialPassBit_Main) && tier > uint8(m_simLod.visibleMaxTier))
-        tier = uint8(glm::clamp(m_simLod.visibleMaxTier, 0, 2));
+    SimLodTiers t{ 3, 3, true };
+    if (mask & SpatialPassBit_UpdateTier0)      t.dist = 0;
+    else if (mask & SpatialPassBit_UpdateTier1) t.dist = 1;
+    else if (mask & SpatialPassBit_UpdateTier2) t.dist = 2;
+    if (t.dist != 3 && !(Globals::spatialIndex.getPassMaskExact(handle) & SpatialPassBits_UpdateTiers))
+        t.placed = false;
+    t.tick = t.dist;
+    if (t.tick != 3 && (mask & SpatialPassBit_Main) && t.tick > uint8(m_simLod.visibleMaxTier))
+        t.tick = uint8(glm::clamp(m_simLod.visibleMaxTier, 0, 2));
+    return t;
+}
 
-    // FORCE BUBBLE gate: active only within "Force bubbles max tier" by DISTANCE. Set every
-    // visit (a handle resolve + a store, pass-safe) so a tweak change applies without a tier
-    // change; an entity that leaves the selection keeps its last state — the margin-band visit
-    // (distTier 3) sets it off on the way out.
-    if (force)
-        force->emitter.setActive(int(distTier) <= m_simLod.forceMaxTier);
-    if (!throttled)
-        return m_updateDelta;
-    m_updateStaging.local().simLodCount[tier]++;
-
+// The dormant / wake transitions on the entity's scheduling state. DORMANT: the body would glide
+// on at its last steering velocity for as long as nothing ticks it — park it (disabled or
+// asleep, per the tweak). WAKE (also the FIRST stamped visit of a fresh entity — schedTier
+// starts at 3): unpark, no catch-up over the stretch.
+void World::simLodTransition(Entity& entity, uint8 tier)
+{
     const uint8 prevTier = entity.schedTier;
+    if (tier == prevTier)
+        return;
     entity.schedTier = tier;
-    if (tier == 3 && prevTier != 3)
+    if (tier == 3)
     {
-        // DORMANT EDGE: the body would otherwise glide on at its last steering velocity for as
-        // long as nothing ticks it. Zero it and either DISABLE it (out of the broadphase and
-        // solver — a passing body cannot wake it, nothing pushes it) or just park it asleep.
-        // Through the body-command queue: the pass never writes box3d directly.
-        if (PhysicsComponent* physics = getComponent<PhysicsComponent>(&entity); physics && physics->body.isValid())
-        {
-            Globals::physics.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::SetLinearVelocity, glm::vec3(0.0f));
-            Globals::physics.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::SetAngularVelocity, glm::vec3(0.0f));
-            Globals::physics.queueBodyCommand(physics->body,
-                m_simLod.dormantDisableBody ? PhysicsWorld::EBodyCommand::SetEnabled : PhysicsWorld::EBodyCommand::SetAwake, glm::vec3(0.0f));
-        }
+        if (PhysicsComponent* physics = getComponent<PhysicsComponent>(&entity))
+            physics->park(m_simLod.dormantDisableBody);
     }
-    else if (tier != 3 && prevTier == 3)
+    else if (prevTier == 3)
     {
-        // WAKE EDGE (also the FIRST stamped visit of a fresh entity — schedTier starts at 3):
-        // re-enable unconditionally (a no-op on an enabled body) so a tweak flipped during the
-        // dormant stretch can never strand a disabled body, and zero the velocities first — a
-        // body parked at spawn inside a crowd may hold a contact push-out from its one live step,
-        // and with friction 0 that would carry it off; the entity's next tick sets its own
-        // velocity anyway. No catch-up over the stretch.
         entity.schedSkipped = 0;
-        if (PhysicsComponent* physics = getComponent<PhysicsComponent>(&entity); physics && physics->body.isValid()
-            && !physics->suspended) // an Enabled-off subtree owns its own disable; never re-enable under it
-        {
-            Globals::physics.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::SetLinearVelocity, glm::vec3(0.0f));
-            Globals::physics.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::SetAngularVelocity, glm::vec3(0.0f));
-            Globals::physics.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::SetEnabled, glm::vec3(1.0f));
-        }
+        if (PhysicsComponent* physics = getComponent<PhysicsComponent>(&entity))
+            physics->unpark();
     }
+}
 
+// TIME-based cadence with a minimum frame gap. The sim time a tick covers is exact: the ring
+// holds the cumulative time at the end of every recent pass, so now minus the value at the pass
+// of the last tick (schedSkipped + 1 passes back) is the covered stretch. Returns the delta for
+// this visit: the frame delta (tier 0), the covered stretch capped by "Max catch-up" (a tick),
+// 0 (skipped frame) or < 0 (dormant: not visited).
+float World::simLodCadence(Entity& entity, uint8 tier)
+{
     if (tier == 0)
     {
         entity.schedSkipped = 0;
         return m_updateDelta;
     }
-    // TIME-based cadence with a minimum frame gap. The sim time this tick would cover is exact:
-    // the ring holds the cumulative time at the end of every recent pass, so now minus the value
-    // at the pass of the last tick (schedSkipped + 1 passes back) is the covered stretch.
     const float intervalSec = m_simLod.intervalSec[tier - 1];
     if (tier == 3 && intervalSec <= 0.0f)
     {
@@ -221,6 +184,37 @@ float World::simLodDelta(Entity& entity)
     }
     entity.schedSkipped = 0;
     return glm::min(elapsed, m_updateDelta * float(glm::max(m_simLod.maxCatchUp, 1)));
+}
+
+float World::simLodDelta(Entity& entity)
+{
+    // Bubbles spawn dark (ForceComponent::spawn); every visit decides their state: ON wherever
+    // the tiers do not apply, else by distance tier.
+    ForceComponent* force = getComponent<ForceComponent>(&entity);
+    if (!m_simLodActive || entity.isGlobal() || !entity.spatialEntry.isValid())
+    {
+        if (force)
+            force->setActive(true);
+        return m_updateDelta;
+    }
+    // Only entities carrying a following sim kind and no pinning one are THROTTLED; a bubble is
+    // tier-gated on every selected entity regardless.
+    const bool throttled = (entity.typeBits & m_simLodFollowMask) && !(entity.typeBits & m_simLodPinMask);
+    if (!throttled && !force)
+        return m_updateDelta;
+    const SimLodTiers tiers = simLodTiers(entity);
+    if (!tiers.placed)
+        return m_updateDelta; // tier unknown: full-rate visit, nothing decided
+    // Set every visit (a handle resolve + a store) so a tweak change applies without a tier
+    // change; an entity leaving the selection keeps its last state — the query-margin visit
+    // (distance tier 3) switches it off on the way out.
+    if (force)
+        force->setActive(int(tiers.dist) <= m_simLod.forceMaxTier);
+    if (!throttled)
+        return m_updateDelta;
+    m_updateStaging.local().simLodCount[tiers.tick]++;
+    simLodTransition(entity, tiers.tick);
+    return simLodCadence(entity, tiers.tick);
 }
 
 // CONTINUATION BATCHES, no level barrier: the tree used to be walked breadth-first with a
