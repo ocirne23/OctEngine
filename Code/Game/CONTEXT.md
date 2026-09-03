@@ -70,10 +70,14 @@ event fires, hotbar routing, F5/F6 and T/R/G stay — and the sponza spawn is sk
 ## SIM LOD focus
 
 `GameMatch::update` publishes the focus every frame through `World::setSimLodFocus`: its own capsule
-plus every client twin, **so no unit throttles near any player.**
+plus every client twin, **so no unit throttles near any player** — **plus FRIENDLY UNIT CLUSTERS**:
+combat only runs inside the selection, so an army fighting far from every player (and the enemies
+around it) would otherwise be dormant. Greedy clusters over the non-AI units, refreshed every
+0.25 s: a unit farther than "Unit cluster focus radius" (40 m) from every focus seeds a new one, up
+to the 16-slot cap (players first, then clusters in roster order).
 
-With the LOD active the World visits ONLY entities within the outer tier radius of a player, plus
-`Global true` roots. A structure beyond that radius **does not tick at all** — no production, no
+With the LOD active the World visits ONLY entities within the outer tier radius of a focus point,
+plus `Global true` roots. A structure beyond that radius **does not tick at all** — no production, no
 flows, no turret fire.
 
 > **EVERY BUILDING prefab authors `Global true`** (emitter, generator, extractor, battery, fuel tank,
@@ -128,7 +132,9 @@ lanes), 1 = the PvP arena index.**
 replay lands — which is also what makes extractor node indices agree by construction. `rebuildCoopMap`
 / `rebuildPvpMap` no-op on repeats.
 
-The same inputs ride the F9 save (`MapSeed` / `MapFill` / `MapLanes`, or `PvpMap`), **because a
+The same inputs ride the F9 save (`MapSeed` / `MapFill` / `MapLanes`, or `PvpMap`; co-op saves also
+carry the wave clock — `WaveIndex` waves launched, which sizes the next one, and `WaveTimer` seconds
+to it — so a load resumes the escalation; a wave mid-trickle is not resumed), **because a
 joiner's tweak sync lands after the replay — too late.** `loadGame` regenerates the exact map after
 clearing structures.
 
@@ -1015,7 +1021,9 @@ it, which changes field values, never rosters or the structure list), and main j
 before `ui.update` queues the widget pass that paints them (`joinWorldLabels`). GameHud writes are
 mutexed; `~GameMatch` joins it too.
 
-**HUD** through `Globals::gameHud`: bars Health / Shield / Materials, counters Minerals / Fuel / Power,
+**HUD** through `Globals::gameHud`: bars Health / Shield / Materials, counters Minerals / Fuel / Power
+(co-op authority adds "Next wave (s)" and "Next wave power" — the coming wave's budget points before
+the alive cap, `nextWaveBudget`),
 and hotbar slot counts = affordable.
 
 ---

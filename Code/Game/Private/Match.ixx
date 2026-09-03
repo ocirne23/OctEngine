@@ -228,6 +228,11 @@ private:
     // Unit sources are culled to units with ANOTHER team's unit/player within this reach (coarse:
     // a cell hash of that size, 3x3 neighbourhood) — see gatherNavFeed. Bucket retained per frame.
     float m_navUnitSourceReach = 64.0f;
+    // Friendly unit CLUSTERS as extra SIM LOD focus points (see the focus block in update): a
+    // non-AI unit farther than this from every focus seeds a new cluster; refreshed every 0.25 s.
+    float m_focusClusterRadius = 40.0f;
+    float m_focusClusterTimer = 0.0f;
+    oc::vector<glm::vec3> m_focusClusters;
     oc::unordered_map<uint64, uint8> m_navCellTeams;     // the hash the current cycle culls against (built by the previous cycle)
     oc::unordered_map<uint64, uint8> m_navCellTeamsNext; // being built by the current cycle's slices
     oc::vector<Nav::NavSource> m_navUnitSources[Nav::MaxTeams]; // the current cycle's accepted unit sources
@@ -405,6 +410,7 @@ private:
     int m_waveBudget = 20;           // points in wave 1 (swarm costs 1 = the old unit count)
     float m_waveBudgetGrowth = 40.0f; // extra points per subsequent wave
     float m_waveGrowthGrowth = 10.0f; // how much that per-wave growth itself climbs every wave
+    float nextWaveBudget() const;     // the coming wave's points before the alive cap (queueWave + the HUD's "Next wave power")
     float m_waveCost[(int)ENpcType::Count] = { 3.0f, 10.0f, 2.0f, 5.0f, 1.0f,   // Grunt, Brute, Runner, Spitter, Swarm
                                                8.0f, 25.0f, 60.0f, 12.0f, 30.0f,  // Elite, Giant, Titan, Lobber, Spawner
                                                5.0f };                             // Warrior

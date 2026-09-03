@@ -256,6 +256,7 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
         Tweak::floatVar("Game/Coop", "Ambient wander base bias", &m_ambientWanderBaseBias, 0.0f, 2.0f, 0.05f);
         Tweak::floatVar("Game/Coop", "Ambient wander timeout (s)", &m_ambientWanderTimeout, 1.0f, 60.0f, 1.0f);
         Tweak::floatVar("Game/Nav", "Nav unit source reach", &m_navUnitSourceReach, 8.0f, 400.0f, 4.0f);
+        Tweak::floatVar("Game/Sim LOD", "Unit cluster focus radius", &m_focusClusterRadius, 5.0f, 200.0f, 1.0f, {}, ETweakFlags::None);
         Tweak::intVar("Game/Coop", "Spawns per frame", &m_spawnsPerFrame, 1, 200, 1);
         // Map generation inputs, read once at generation on the AUTHORITY. Clients never read
         // them: the values actually used ride the GMp event (and the save) with the seed — a
@@ -652,9 +653,7 @@ void GameMatch::queueWave()
         cheapest = glm::min(cheapest, waveCostOf((ENpcType)t));
     // Wave i (0-based) = base + growth per wave so far, where the growth itself climbs by "Wave
     // growth growth" every wave: base + growth*i + growthGrowth * (0 + 1 + ... + (i-1)).
-    const float wave = (float)m_waveIndex;
-    const float budget = glm::min((float)m_waveBudget + m_waveBudgetGrowth * wave
-            + m_waveGrowthGrowth * wave * (wave - 1.0f) * 0.5f,
+    const float budget = glm::min(nextWaveBudget(),
         (float)(m_waveMaxAlive - aiAlive) * cheapest - m_ambientPendingBudget - m_wavePendingBudget);
     ++m_waveIndex;
     if (budget <= 0.0f)
@@ -1572,6 +1571,10 @@ void GameMatch::saveGame()
         root.set("MapSeed", oc::to_string((int)m_coopMap.seed));
         root.set("MapFill", m_coopMap.fill);
         root.set("MapLanes", oc::to_string(m_coopMap.lanes));
+        // The wave clock: how many waves launched (sizes the next one) and the seconds to it, so a
+        // load resumes the escalation instead of restarting at wave 1.
+        root.set("WaveIndex", oc::to_string(m_waveIndex));
+        root.set("WaveTimer", glm::max(m_waveTimer, 0.0f));
     }
     else if (m_coopMap.built && m_coopMap.pvp)
         root.set("PvpMap", oc::to_string((int)m_coopMap.pvpMap)); // the arena (EPvpMap index)
@@ -1632,6 +1635,12 @@ void GameMatch::loadGame(oc::string_view path)
     m_structures.loadFrom(root);
     m_npcs.loadUnits(root, m_structures);
     m_selectedId = 0;
+    // The wave clock (co-op saves; older saves without it keep the current clock).
+    if (const AssetNode* n = root.find("WaveIndex"))
+        m_waveIndex = glm::max(n->asInt(), 0);
+    if (const AssetNode* n = root.find("WaveTimer"))
+        m_waveTimer = glm::max(n->asFloat(), 0.0f);
+    m_wavePendingBudget = 0.0f; // a wave mid-trickle at save time is not resumed: the units that spawned are in the save
     if (m_isServer)
     {
         for (int i = 0; i < m_structures.structureCount(); ++i)
@@ -2005,6 +2014,11 @@ void GameMatch::update(float deltaSec)
 
     // SIM LOD focus = every player: our capsule plus (server) each client's twin, so a unit is
     // never throttled near ANY player. Published before world.update reads it (main.cpp order).
+    // PLUS FRIENDLY UNIT CLUSTERS: combat only runs inside the selection, so an army fighting far
+    // from every player — and the enemies around it — would otherwise be dormant. Greedy clusters
+    // over the non-AI units, refreshed every 0.25 s (the selection tolerates a frame of staleness
+    // anyway): a unit farther than "Unit cluster focus radius" from every focus point seeds a new
+    // one, up to the focus cap; the remaining slots go to the first clusters found in roster order.
     {
         glm::vec3 focus[World::MaxSimLodFocus];
         uint32 focusCount = 0;
@@ -2012,6 +2026,37 @@ void GameMatch::update(float deltaSec)
         for (const auto& [id, p] : m_clientPlayers)
             if (p && focusCount < World::MaxSimLodFocus)
                 focus[focusCount++] = p->pos;
+        m_focusClusterTimer -= deltaSec;
+        if (m_focusClusterTimer <= 0.0f)
+        {
+            m_focusClusterTimer = 0.25f;
+            m_focusClusters.clear();
+            const float r2 = m_focusClusterRadius * m_focusClusterRadius;
+            const auto nearPoint = [&](const glm::vec3& a, const glm::vec3& b) {
+                const glm::vec2 d(a.x - b.x, a.z - b.z);
+                return glm::dot(d, d) < r2; };
+            const auto nearAnyFocus = [&](const glm::vec3& p) {
+                for (uint32 i = 0; i < focusCount; ++i)
+                    if (nearPoint(focus[i], p))
+                        return true;
+                for (const glm::vec3& c : m_focusClusters)
+                    if (nearPoint(c, p))
+                        return true;
+                return false; };
+            for (const EntityPtr& e : m_npcs.units())
+            {
+                if (focusCount + (uint32)m_focusClusters.size() >= World::MaxSimLodFocus)
+                    break;
+                const GameUnitComponent* u = getComponent<GameUnitComponent>(e.get());
+                if (!u || u->puppet || !u->alive() || (m_coop && u->team == CoopAiTeam))
+                    continue;
+                if (!nearAnyFocus(e->pos))
+                    m_focusClusters.push_back(e->pos);
+            }
+        }
+        for (const glm::vec3& c : m_focusClusters)
+            if (focusCount < World::MaxSimLodFocus)
+                focus[focusCount++] = c;
         Globals::world.setSimLodFocus(focus, focusCount);
     }
 
@@ -3538,7 +3583,19 @@ void GameMatch::updateHud()
     hud.setCounter("Energy gen/s", m_structures.energyGenPerSec(), 1, glm::vec3(1.0f, 0.9f, 0.3f));
     hud.setCounter("Energy use/s", m_structures.energyUsePerSec(), 1, glm::vec3(1.0f, 0.9f, 0.3f));
     if (m_coop && !m_isClient) // the wave clock is authority state (clients get the GWv log)
+    {
         hud.setCounter("Next wave (s)", glm::max(m_waveTimer, 0.0f), 0, glm::vec3(1.0f, 0.45f, 0.3f));
+        hud.setCounter("Next wave power", nextWaveBudget(), 0, glm::vec3(1.0f, 0.45f, 0.3f)); // budget points before the alive cap
+    }
+}
+
+// The NEXT wave's budget in points, before the "Max enemy units" cap: base + growth per wave so
+// far, where the growth itself climbs by "Wave growth growth" every wave —
+// base + growth*i + growthGrowth * (0 + 1 + ... + (i-1)) for the 0-based wave index i.
+float GameMatch::nextWaveBudget() const
+{
+    const float wave = (float)m_waveIndex;
+    return (float)m_waveBudget + m_waveBudgetGrowth * wave + m_waveGrowthGrowth * wave * (wave - 1.0f) * 0.5f;
 }
 
 void GameMatch::updateWindowed(Camera& camera, float deltaSec)
