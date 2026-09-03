@@ -284,7 +284,7 @@ private:
         float maxRadius = 8.0f;      // a group whose cover would exceed this refuses the member
         int maxMembers = 255;
         int minMembers = 2;          // smaller groups dissolve
-        float sumFraction = 0.5f;    // group output = max(largest member, sum * fraction)
+        float sumFraction = 0.2f;    // group output = max(largest member, sum * fraction)
         bool memberReadback = true;  // members stay on the GPU as PASSIVE for their own force/pressure
         float smoothTime = 0.3f;     // group sphere easing time constant (s)
         float blendTime = 0.5f;      // member join/leave transition duration (s)

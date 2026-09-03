@@ -87,23 +87,58 @@ bool World::simLodSelected(const Entity& entity) const
 // visited parent emits only selected children — see submitEntityBatches), and its root is queued.
 // A chain that is already stamped was queued by an earlier hit (or is a hit itself); a Global
 // ancestor is visited from the global list anyway.
-void World::selectUpdateRoot(Entity* hit)
+// The selection job: one sphere query per focus point, every hit walked up to its root. Runs
+// between commits (post-update), single-threaded over its own scratch; the root/ancestor dedupe
+// happens here so update() only stamps, checks liveness and submits.
+void World::computeSelection(SelectResult& out)
 {
-    SpatialIndex& spatialIndex = Globals::spatialIndex;
+    ProfileScope scope("Update selection query", EProfileCategory::Entity);
+    out.nodes.clear();
+    out.rootHandles.clear();
+    out.ancestors.clear();
+    out.rootScratch.clear();
+    const float radius = m_simLod.radius[2] + m_simLod.queryMargin;
+    for (uint32 i = 0; i < m_simLodFocusCount; ++i)
+    {
+        m_selectHits.clear();
+        Globals::spatialIndex.querySphere(m_simLodFocus[i], radius, SpatialLayer_Entity, m_selectHits);
+        for (const uint64 userData : m_selectHits)
+            selectUpdateRoot(reinterpret_cast<Entity*>(userData), out);
+    }
+    // Dedupe here (overlapping focus balls, several hits under one root), then emit submit-ready
+    // nodes so update() copies nothing and sorts nothing.
+    oc::sort(out.rootScratch.begin(), out.rootScratch.end());
+    out.rootScratch.erase(oc::unique(out.rootScratch.begin(), out.rootScratch.end()), out.rootScratch.end());
+    for (Entity* root : out.rootScratch)
+    {
+        out.nodes.push_back({ root, Transform() });
+        out.rootHandles.push_back(root->spatialEntry.handle());
+    }
+    const auto handleLess = [](const SpatialHandle& a, const SpatialHandle& b) {
+        return a.idx != b.idx ? a.idx < b.idx : a.gen < b.gen; };
+    const auto handleEq = [](const SpatialHandle& a, const SpatialHandle& b) {
+        return a.idx == b.idx && a.gen == b.gen; };
+    oc::sort(out.ancestors.begin(), out.ancestors.end(), handleLess);
+    out.ancestors.erase(oc::unique(out.ancestors.begin(), out.ancestors.end(), handleEq), out.ancestors.end());
+    out.valid = true;
+}
+
+void World::selectUpdateRoot(Entity* hit, SelectResult& out)
+{
+    // No stamping here (the generation would be stale by the pass): the ancestors are recorded and
+    // update() stamps them. Duplicates from shared ancestors fall to the caller's sort/unique.
     Entity* e = hit;
     while (Entity* p = e->parent)
     {
         if (p->isGlobal())
             return;
         if (p->spatialEntry.isValid())
-        {
-            if (spatialIndex.isStampedCurrent(p->spatialEntry.handle(), ESpatialPass::UpdateTier2))
-                return;
-            spatialIndex.stampCurrent(p->spatialEntry.handle(), ESpatialPass::UpdateTier2);
-        }
+            out.ancestors.push_back(p->spatialEntry.handle());
         e = p;
     }
-    m_updateLevel.push_back({ e, Transform() });
+    if (e->isGlobal())
+        return; // Global roots come from m_globalRoots — skipping them here is what makes the merge dedupe-free
+    out.rootScratch.push_back(e);
 }
 
 // The tiers from the entity's OWN spatial stamps: the UpdateTier balls around every focus point
@@ -223,6 +258,7 @@ void World::update(Renderer& renderer, float deltaSeconds)
 {
     ProfileScope updateScope("World update", EProfileCategory::Entity);
     ++m_updateFrame;
+    ProfileScope setupScope("Update setup", EProfileCategory::Entity); // arena sizing, budget, LOD masks
 
     // Arena sizing happens BETWEEN passes only (jobs hold pointers into it): last frame's use plus
     // any overflow, doubled for slack.
@@ -257,6 +293,7 @@ void World::update(Renderer& renderer, float deltaSeconds)
         kind(m_simLod.animators,   EComponentID_Animator);
     }
     m_updateStaging.forEach([](EntityUpdateStaging& s) { for (uint32& n : s.simLodCount) n = 0; });
+    setupScope.stop();
 
     // SELECTION. LOD inactive (no focus, paused, disabled): every root, every child — the pass
     // scales with the entity count. LOD active: the pass is DETACHED from the entity count — the
@@ -275,33 +312,69 @@ void World::update(Renderer& renderer, float deltaSeconds)
     else
     {
         ProfileScope selectScope("Update selection", EProfileCategory::Entity);
+        // The QUERY already ran as last frame's post-update job (computeSelection, joined at the
+        // top of this frame) and left submit-ready nodes, so the batches kick without waiting on
+        // it. Left here, all O(roots) with no sort: stamp the ancestors with THIS frame's
+        // generation (the cull re-stamped the tiers since the job ran), swap-remove roots that
+        // died in between (the spatial handle proves liveness — a slot reuse fails its
+        // generation), and append the Global and pending roots. NO dedupe is needed: the job skips
+        // Global roots, and a pending root's entry is unlinked until the commit AFTER the job ran,
+        // so the query could not have found it. The first LOD frame has no result: inline.
+        Globals::jobSystem.wait(m_selectCounter); // main already joined before the spatial kick: a no-op guard
+        if (!m_selectResult.valid)
+            computeSelection(m_selectResult);
+        SelectResult& sel = m_selectResult;
+        SpatialIndex& spatialIndex = Globals::spatialIndex;
+        for (const SpatialHandle h : sel.ancestors)
+            spatialIndex.stampCurrent(h, ESpatialPass::UpdateTier2);
+        for (size_t i = 0; i < sel.nodes.size();)
+        {
+            if (spatialIndex.isAlive(sel.rootHandles[i]))
+            {
+                ++i;
+                continue;
+            }
+            sel.nodes[i] = sel.nodes.back();
+            sel.nodes.pop_back();
+            sel.rootHandles[i] = sel.rootHandles.back();
+            sel.rootHandles.pop_back();
+        }
+        m_updateLevel.swap(sel.nodes); // O(1): the job's list becomes the level; it clears its own next run
+        sel.valid = false;
         for (Entity* e : m_globalRoots)
             m_updateLevel.push_back({ e, Transform() });
         for (Entity* e : m_pendingRoots)
             m_updateLevel.push_back({ e, Transform() });
-        const float radius = m_simLod.radius[2] + m_simLod.queryMargin;
-        for (uint32 i = 0; i < m_simLodFocusCount; ++i)
-        {
-            m_queryScratch.clear();
-            Globals::spatialIndex.querySphere(m_simLodFocus[i], radius, SpatialLayer_Entity, m_queryScratch);
-            for (const uint64 userData : m_queryScratch)
-                selectUpdateRoot(reinterpret_cast<Entity*>(userData));
-        }
-        // Dedupe (overlapping focus balls, a global root that is also a hit, ...).
-        oc::sort(m_updateLevel.begin(), m_updateLevel.end(),
-            [](const EntityUpdateNode& a, const EntityUpdateNode& b) { return a.entity < b.entity; });
-        size_t n = 0;
-        for (size_t i = 0; i < m_updateLevel.size(); ++i)
-            if (i == 0 || m_updateLevel[i].entity != m_updateLevel[i - 1].entity)
-                m_updateLevel[n++] = m_updateLevel[i];
-        m_updateLevel.resize(n);
     }
     m_pendingRoots.clear();
-    submitEntityBatches(m_updateLevel.data(), uint32(m_updateLevel.size()));
+    {
+        // The root list's arena copy + the batch job submits (the first workers start inside).
+        ProfileScope submitScope("Update batch submit", EProfileCategory::Entity);
+        submitEntityBatches(m_updateLevel.data(), uint32(m_updateLevel.size()));
+    }
 
-    // Helps: main runs batch jobs alongside the workers until the whole tree is done.
-    Globals::jobSystem.wait(m_updateCounter);
+    {
+        // Helps: main runs batch jobs alongside the workers until the whole tree is done.
+        ProfileScope waitScope("Update job wait", EProfileCategory::Wait);
+        Globals::jobSystem.wait(m_updateCounter);
+    }
 
+    // NEXT frame's selection, FIRE-AND-FORGET the moment the pass is done: it has the whole rest
+    // of the frame (send, procedural updates, UI, present, the fence wait, the next frame's input
+    // and physics) instead of only the present window, and main joins it just before the next
+    // spatial kick (joinSelection — the commit in there would mutate the index under it). Nothing
+    // destroys entities in that stretch (the destroy windows sit after the joins), so the root
+    // walk is safe; registrations take the index's exclusive lock against the query. It sees
+    // positions one commit older than an inline query would; the query margin covers a frame of
+    // motion, and roots spawned meanwhile arrive through m_pendingRoots.
+    if (m_simLodActive)
+    {
+        ProfileScope queueScope("Update selection queue", EProfileCategory::Entity);
+        Globals::jobSystem.submit([this] { computeSelection(m_selectResult); },
+            { "Update selection query", EProfileCategory::Entity }, EJobPriority::Normal, &m_selectCounter);
+    }
+
+    ProfileScope statsScope("Update stats", EProfileCategory::Entity);
     for (int& n : m_simLodStats)
         n = 0;
     m_updateStaging.forEach([this](const EntityUpdateStaging& s)
@@ -309,6 +382,12 @@ void World::update(Renderer& renderer, float deltaSeconds)
         for (int t = 0; t < 4; ++t)
             m_simLodStats[t] += int(s.simLodCount[t]);
     });
+}
+
+void World::joinSelection()
+{
+    ProfileScope scope("Update selection join", EProfileCategory::Wait);
+    Globals::jobSystem.wait(m_selectCounter);
 }
 
 // Copies the nodes into the frame arena in ONE claim, then slices the arena range into

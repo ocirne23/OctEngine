@@ -371,7 +371,11 @@ public:
     void setPostParams(const PostParams& post) { m_postParams = post; setHaveToRecordCommandBuffers(); }
     // The UI's snapshotted ImGui draw data (an ImDrawData*, opaque here); present() records the
     // ImGui pass from it. Null until the first UI::render - the pass is skipped.
-    void setImGuiDrawData(const void* drawData) { m_imguiDrawData = drawData; }
+    // Called by the widget-pass JOB: only PENDING — present must never see a snapshot before main
+    // promoted it in updateImGuiTextures() (after the join, textures uploaded). A fast pass that
+    // finished before present N recorded would otherwise get drawn one frame early, with its
+    // freshly baked atlas texture still a create request (frame 0's atlas, every time).
+    void setImGuiDrawData(const void* drawData) { m_imguiPendingDrawData.store(drawData, oc::memory_order_release); }
     // MAIN THREAD, between the widget pass's join and the next UI::update - see the comment on the
     // implementation. Uploads the font-atlas changes ImGui queued, which RenderDrawData would
     // otherwise do from inside present() while the widget pass mutates the same atlas.
@@ -750,7 +754,8 @@ private:
     float  m_giProbeDebugRadius = 0.12f;
 
     glm::ivec2 m_windowSize;
-    const void* m_imguiDrawData = nullptr; // see setImGuiDrawData
+    const void* m_imguiDrawData = nullptr; // what present records: promoted from the pending slot on main
+    oc::atomic<const void*> m_imguiPendingDrawData = nullptr; // see setImGuiDrawData
     Rect m_viewportRect = Rect();
     bool m_initialized = false;
     bool m_frameSlotWaited = false; // waitFrameSlot() ran for the current slot (cleared by present)

@@ -74,9 +74,30 @@ export namespace Nav
             glm::vec2 descentDir{ 0.0f }; // unit vector toward lower distance (zero AT a source)
         };
 
-        // Build job body (any thread — the field is private until published).
-        void build(oc::span<const NavObstacle> obstacles, oc::span<const NavSource> sources,
+        // The build is STEPPED across frames (any thread — the field is private until published):
+        // beginBuild rasterizes and seeds, then each stepBuild solves up to maxChunks chunks of the
+        // flood — a CONSTANT amount of work per step, cutting a wave mid-way when the budget runs
+        // out (the wave's remainder resumes next step; relaxation order never changes the
+        // fixpoint) — and returns whether the front is exhausted (isBuildDone). NavSystem submits
+        // one step job per frame, so a big field costs the same slice of every frame instead of
+        // one burst of thousands of chunk jobs.
+        void beginBuild(oc::span<const NavObstacle> obstacles, oc::span<const NavSource> sources,
             const BuildParams& params);
+        bool stepBuild(uint32 maxChunks);
+        bool isBuildDone() const { return m_buildDone; }
+        uint32 buildSolvedChunks() const { return m_buildSolved; } // chunk solves so far (NavSystem sizes the next build's steps from the last total)
+
+    private:
+        struct WaveItem { uint64 key; Chunk* chunk; };
+        oc::vector<WaveItem> m_wave, m_nextWave; // the flood front, carried between steps
+        uint32 m_waveCursor = 0;                 // m_wave[0..cursor) solved so far this wave
+        uint32 m_buildSolved = 0;
+        uint32 m_buildMaxDist = 0;
+        int m_buildIteration = 0;
+        bool m_buildDone = true;
+        void queueChunk(uint64 key, Chunk& chunk);
+
+    public:
 
         // A stack-local SNAPSHOT of the raster around one walker: snapshotCosts fills it with a
         // handful of chunk lookups and row copies, and every probe after that (whisker march,

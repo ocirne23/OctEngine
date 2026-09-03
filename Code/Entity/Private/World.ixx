@@ -34,8 +34,9 @@ export struct EntityUpdateStaging
 // three UpdateTier passes (balls at radius[0..2] around every focus point); an entity's own
 // stamps give its DISTANCE tier: 0 = every frame, 1/2 = time-based intervals, 3 = DORMANT
 // (beyond radius[2]: not visited at all — no sim, no render push, subtree skipped). The visit
-// set comes from one sphere query per focus point (radius[2] + queryMargin) plus the Global and
-// freshly added roots; a visited parent emits only stamped children. The decision is PER ENTITY
+// set comes from one sphere query per focus point (radius[2] + queryMargin), run as a POST-UPDATE
+// job for the NEXT pass (see computeSelection), plus the Global and freshly added roots; a visited
+// parent emits only stamped children. The decision is PER ENTITY
 // in the World's batch job: an entity is THROTTLED when it carries a following kind and no
 // pinning kind (a kind with follow = false pins the entity to full rate while selected); the
 // bubble gate and the dormant physics edge apply to every selected entity by distance. The
@@ -45,7 +46,7 @@ export struct SimLodConfig
 {
     bool enabled = true;
     bool horizontal = true;      // XZ distance (top-down game); off = full 3D distance
-    float radius[3] = { 25.0f, 50.0f, 100.0f }; // tier t applies while dist < radius[t]; beyond radius[2] = dormant
+    float radius[3] = { 25.0f, 50.0f, 200.0f }; // tier t applies while dist < radius[t]; beyond radius[2] = dormant
     // Tick cadence for tier 1, tier 2, dormant: TIME-based (seconds between ticks; dormant 0 =
     // never) with a MINIMUM frame gap so a low frame rate still skips frames. The tick receives
     // the exact sim time it covers (World keeps a per-frame time ring; nothing on the entity).
@@ -292,7 +293,32 @@ private:
     SimLodTiers simLodTiers(const Entity& entity) const;
     void simLodTransition(Entity& entity, uint8 tier);
     float simLodCadence(Entity& entity, uint8 tier);
-    void selectUpdateRoot(Entity* hit); // walks a query hit up to its root, stamping the ancestors
+    // THE SELECTION runs as a POST-UPDATE job (computeSelection): it queries the index between
+    // commits and resolves the hits to roots for the NEXT pass, so update() kicks its batches
+    // without waiting on any query. The result carries each root's spatial handle (liveness proof
+    // at use — a root may die in between) and the ancestor entries between a hit and its root,
+    // which update() stamps with the CURRENT generation (the cull re-stamps the tiers every frame,
+    // so a stamp made inside the job would be stale by the time the pass descends).
+    struct SelectResult
+    {
+        oc::vector<EntityUpdateNode> nodes;      // the deduped roots, ready to submit (Global roots skipped)
+        oc::vector<SpatialHandle> rootHandles;   // aligned with nodes
+        oc::vector<SpatialHandle> ancestors;
+        oc::vector<Entity*> rootScratch;         // the walk's raw roots before the dedupe
+        bool valid = false; // set by the job, consumed by the next update() (sequenced by the join)
+    };
+    SelectResult m_selectResult;
+    oc::vector<uint64> m_selectHits; // the job's query scratch (Entity* as userData)
+    JobCounter m_selectCounter;      // the in-flight selection job (submitted at the end of update, see joinSelection)
+public:
+    // The selection job is FIRE-AND-FORGET from the end of update(): it gets the whole rest of the
+    // frame instead of the present window. Main calls this right BEFORE the next frame's spatial
+    // kick (the commit inside it would mutate the index under a still-running query) — normally a
+    // no-op, a real wait only when the job outlasted the frame.
+    void joinSelection();
+private:
+    void computeSelection(SelectResult& out); // the job body (also the first LOD frame's inline fallback)
+    void selectUpdateRoot(Entity* hit, SelectResult& out); // a hit up to its root, ancestors recorded
 
     uint64 m_updateFrame = 0; // salts the per-entity random re-measure below
     oc::vector<EntityUpdateNode> m_updateLevel; // root gather scratch
@@ -322,7 +348,6 @@ private:
     float m_simTimeAccum = 0.0f;
     oc::vector<Entity*> m_globalRoots;  // EEntityFlag_Global roots: always visited
     oc::vector<Entity*> m_pendingRoots; // roots added since the last pass: visited once unconditionally
-    oc::vector<uint64> m_queryScratch;  // selection query hits (Entity* as userData)
     int m_simLodStats[4] = {};     // last pass's per-tier entity counts (live readout tweaks)
     JobCost m_spawnBatchCost{ 20000 }; // spawnBatch auto-grain seed (~20us/entity until measured)
     JobCost m_destroyBatchCost{ 10000 }; // releaseBatch auto-grain seed

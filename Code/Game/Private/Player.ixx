@@ -57,6 +57,9 @@ public:
     // Regeneration (standing near an own-team Base). Never revives past max; dead players are
     // handled by the respawn path, so this is a plain top-up.
     void heal(float amount) { m_health = glm::min(m_health + glm::max(amount, 0.0f), m_healthMax); }
+    // Shield battery top-up (a medic station). The shield tick's reboot latch reopens a collapsed
+    // shield once the battery passes "Reboot energy", so this needs no state of its own.
+    void charge(float amount) { m_energy = glm::min(m_energy + glm::max(amount, 0.0f), m_energyMax); }
 
     Entity* entity() const { return m_entity.get(); }
     glm::vec3 interpolatedPos() const; // render-smooth body pose for the follow camera

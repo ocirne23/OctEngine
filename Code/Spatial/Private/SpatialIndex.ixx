@@ -71,6 +71,9 @@ public:
     // Exact-compare variants (NO spawn guard: a never-stamped entry reads as in no pass) for the
     // World's update selection. isStampedCurrent/stampCurrent are its MAIN-THREAD single-entry
     // accessors (the ancestors of a selected entity get marked between the join and the pass).
+    // isAlive lets the World check that a root its post-update selection job found still exists
+    // when the next pass uses it (the generation in the handle rules out slot reuse).
+    bool isAlive(SpatialHandle handle) const { return m_pool.isValidAlive(handle); }
     uint32 getPassMaskExact(SpatialHandle handle) const
     {
         if (!m_pool.isValidAlive(handle))

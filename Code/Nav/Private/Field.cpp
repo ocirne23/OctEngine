@@ -215,7 +215,16 @@ void TeamField::rasterizeObstacles(oc::span<const NavObstacle> obstacles, uint8 
     });
 }
 
-void TeamField::build(oc::span<const NavObstacle> obstacles, oc::span<const NavSource> sources,
+void TeamField::queueChunk(uint64 key, Chunk& chunk)
+{
+    if (!chunk.waveDirty)
+    {
+        chunk.waveDirty = 1;
+        m_nextWave.push_back(WaveItem{ key, &chunk });
+    }
+}
+
+void TeamField::beginBuild(oc::span<const NavObstacle> obstacles, oc::span<const NavSource> sources,
     const BuildParams& params)
 {
     // (The "Nav build" scope is opened by the JobSystem from the navFieldBuild submit's profile.)
@@ -232,17 +241,14 @@ void TeamField::build(oc::span<const NavObstacle> obstacles, oc::span<const NavS
     // result — a chunk just re-solves when a later wave improves its boundary. Distances in 1/8 m:
     // an orthogonal step is 16, a diagonal 23; a cell's cost multiplies the step INTO it. Seeds
     // cover each source's footprint (blocked or not — the front leaves them into free cells only).
-    const uint32 maxDist = uint32(glm::clamp(params.radius, 1.0f, 8000.0f) * DistScale);
-    struct Item { uint64 key; Chunk* chunk; };
-    oc::vector<Item> wave, nextWave; // stack, never thread_local: this runs inside a build job
-    const auto queueChunk = [&](uint64 key, Chunk& chunk)
-    {
-        if (!chunk.waveDirty)
-        {
-            chunk.waveDirty = 1;
-            nextWave.push_back(Item{ key, &chunk });
-        }
-    };
+    // The front (m_wave/m_nextWave) is a member so the flood can pause between step jobs.
+    m_buildMaxDist = uint32(glm::clamp(params.radius, 1.0f, 8000.0f) * DistScale);
+    m_buildIteration = 0;
+    m_buildDone = false;
+    m_wave.clear();
+    m_nextWave.clear();
+    m_waveCursor = 0;
+    m_buildSolved = 0;
     for (uint32 s = 0; s < uint32(m_sources.size()) && s < NoSource; ++s)
     {
         const NavSource& src = m_sources[s];
@@ -261,27 +267,49 @@ void TeamField::build(oc::span<const NavObstacle> obstacles, oc::span<const NavS
                 queueChunk(key, chunk);
             }
     }
+    if (m_nextWave.empty())
+        m_buildDone = true; // no sources: an obstacle-only raster is complete as is
+}
 
-    struct Ctx { TeamField* self; oc::vector<Item>* wave; uint32 maxDist; };
-    Ctx ctx{ this, &wave, maxDist };
+bool TeamField::stepBuild(uint32 maxChunks)
+{
     static constexpr glm::ivec2 c_offsets[8] = {
         { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 } };
-    for (int iteration = 0; iteration < 4096 && !nextWave.empty(); ++iteration)
+    struct Ctx { TeamField* self; oc::vector<WaveItem>* wave; uint32 maxDist; };
+    Ctx ctx{ this, &m_wave, m_buildMaxDist };
+    // A CHUNK budget, not a wave budget: a wave is cut wherever the budget runs out and its
+    // remainder (m_wave[m_waveCursor..]) resumes next step. The unsolved remainder keeps waveDirty
+    // set, so a neighbour's border improvement cannot double-queue it; it reads the improved
+    // values when its turn comes — relaxation order never changes the fixpoint.
+    uint32 solved = 0;
+    while (solved < maxChunks && m_buildIteration < 4096)
     {
-        wave.swap(nextWave);
-        nextWave.clear();
-        for (const Item& item : wave)
-            item.chunk->waveDirty = 0;
-        Globals::jobSystem.parallelFor(0u, uint32(wave.size()), 1u, { "Nav build wave", EProfileCategory::Game },
-            [c = &ctx](uint32 begin, uint32 end)
+        if (m_waveCursor >= uint32(m_wave.size()))
         {
-            for (uint32 i = begin; i < end; ++i)
+            if (m_nextWave.empty())
+                break; // the front is exhausted
+            m_wave.swap(m_nextWave);
+            m_nextWave.clear();
+            m_waveCursor = 0;
+            ++m_buildIteration;
+        }
+        const uint32 begin = m_waveCursor;
+        const uint32 end = glm::min(uint32(m_wave.size()), begin + (maxChunks - solved));
+        for (uint32 i = begin; i < end; ++i)
+            m_wave[i].chunk->waveDirty = 0;
+        // LOW priority: the chunk solves fill the gaps between entity batches instead of competing
+        // with them for workers.
+        Globals::jobSystem.parallelFor(begin, end, 1u, { "Nav build wave", EProfileCategory::Game },
+            [c = &ctx](uint32 b, uint32 e)
+        {
+            for (uint32 i = b; i < e; ++i)
                 c->self->floodSolveChunk((*c->wave)[i].key, *(*c->wave)[i].chunk, c->maxDist);
-        });
+        }, EJobPriority::Low);
         // Serial: turn the solves' border masks into the next wave (chunk creation lives here —
         // the map must never mutate while tasks read across it).
-        for (const Item& item : wave)
+        for (uint32 i = begin; i < end; ++i)
         {
+            const WaveItem& item = m_wave[i];
             uint8 mask = item.chunk->borderImproved;
             item.chunk->borderImproved = 0;
             const glm::ivec2 coord = chunkFromKey(item.key);
@@ -292,7 +320,18 @@ void TeamField::build(oc::span<const NavObstacle> obstacles, oc::span<const NavS
                     queueChunk(nKey, m_chunks.getOrCreate(nKey));
                 }
         }
+        m_waveCursor = end;
+        solved += end - begin;
+        m_buildSolved += end - begin;
     }
+    if ((m_waveCursor >= uint32(m_wave.size()) && m_nextWave.empty()) || m_buildIteration >= 4096)
+    {
+        m_buildDone = true;
+        m_wave.clear();
+        m_nextWave.clear();
+        m_waveCursor = 0;
+    }
+    return m_buildDone;
 }
 
 void TeamField::floodSolveChunk(uint64 key, Chunk& chunk, uint32 maxDist)

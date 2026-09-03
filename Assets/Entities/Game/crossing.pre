@@ -1,6 +1,8 @@
 # Crossing: a 1x3-cell bridge that lets a perpendicular cable pass UNDER its raised middle cell.
-# Its medium is GENERIC — it conducts whichever ONE medium its two END cells resolve to (see
-# StructureSystem::rebuildDerivedLinks). Oriented at placement (entity -Z = the long axis); the
+# ONE prefab serves the three per-medium crossing types (CrossingPower/Pipe/Conveyor): the gray
+# authored here is replaced by the type's medium hue in StructureSystem::applyStructureTint, and
+# the crossing conducts ONLY its own medium between its two END cells (rebuildDerivedLinks).
+# Oriented at placement (entity -Z = the long axis); the
 # collider is a low 3-cell box in LOCAL space, rotated with the entity. Walk-through like cables
 # (Layer Cable, collides only with Projectile). Spawned origin 0.25 above ground.
 Prefab gameCrossing

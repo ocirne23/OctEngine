@@ -42,6 +42,12 @@ export struct GameUnitParams
                                    // the emitter readback path AND the shield-less query path,
                                    // which reproduces the same formula from the point readback
     float retargetInterval = 5.0f; // auto-target re-roll cadence (jittered per unit)
+    float wanderSpeedMult = 0.25f; // a WANDER order (orderWander) walks at this fraction of moveSpeed...
+    float wanderSpeedMax = 0.75f;   // ...capped at this many m/s (runners stroll like everyone else)
+    int huntSeedTeam = -1;         // the ONE team whose units also request seed paths toward a
+                                   // HUNTED target (nav/local-search/engage); every other team seeds
+                                   // only for routes and move orders. -1 = no team (the game stamps
+                                   // the co-op AI team, so friendly units never carve lanes at enemies)
     float targetSearchRadius = 15.0f; // spatial radius of the auto-target search (structures +
                                       // player fallback) — LOCAL harassment: the barracks route
                                       // does the long-distance delivery, this only picks fights
@@ -60,7 +66,7 @@ export struct GameUnitParams
     // bodies, contact impulses); above the ceiling an actor is put back AT the ceiling with its
     // climb cancelled. The shared default for every ground actor — units AND player capsules
     // (GamePlayer applies the same rule on the owner). Per-prefab override: SpawnInfo::heightLimit.
-    float heightLimit = 10.0f;
+    float heightLimit = 5.0f;
     bool navEnabled = true;        // steer by the Nav fields when they exist
     // Context steering weights (see GameComponents.cpp): each candidate heading scores
     //   free * (Goal*dot(goal) + Flow*laneW*dot(lane) + Persist*dot(last))
@@ -236,9 +242,20 @@ export struct GameUnitComponent
     {
         targetPos = worldPos;
         hasTarget = targetLocked = moveOrder = true;
+        wanderOrder = false;
         routeIndex = routeCount;
         if (fresh)
             m_ignoreFlowTimer = params.orderFlowBlind; // a fresh order: ignore the old lane for a moment
+    }
+    // WANDER: a move order that never seeds a lane and GIVES UP after `seconds` (a target behind
+    // rock must not pin the unit forever) — the ambient enemies' idle stroll (GameMatch).
+    bool wanderOrder = false;
+    float wanderTimeLeft = 0.0f;
+    void orderWander(const glm::vec3& worldPos, float seconds) // main thread
+    {
+        orderMove(worldPos, /*fresh*/ false);
+        wanderOrder = true;
+        wanderTimeLeft = seconds;
     }
     // Route: waypoints copied in AT SPAWN (the barracks route); marched before combat TARGETING,
     // but enemy units inside routeEngageRadius are still fought on the way (see update).
@@ -266,6 +283,11 @@ export struct GameUnitComponent
     void damage(float amount);
     float takePendingDamage(); // main thread: drain the puppet inbox (atomic exchange)
     bool alive() const { return health > 0.0f; }
+    // HEAL inbox (workers — a Medic station's update): banked atomically like damage and applied
+    // in the unit's OWN tick (health and the shield battery both, which keeps `energy`
+    // single-writer); a refilled battery lifts the collapse latch there too.
+    void heal(float amount);
+    float pendingHeal = 0.0f;
     // The HUD tag authored as `ShortName` in the .pre — INTERNED (Profiler::internName), so the
     // pointer is permanent and the component owns no string. Replicated units carry it too: the
     // prefab spawns identically on every instance.
@@ -297,6 +319,8 @@ export struct GameStructureParams
     float turretFireInterval = 1.2f;
     float turretShotEnergy = 1.5f; // spent from the turret's own energy store per shot
     float turretDamage = 25.0f;    // per hitscan lightning strike (never misses)
+    float medicRange = 12.0f;      // a powered Medic station heals own-team units inside this
+    float medicHealRate = 4.0f;    // health/s AND battery energy/s per body (stations stack)
 };
 
 // One end of a resource link (cable/pipe/conveyor). The SAME link exists mirrored on BOTH
@@ -411,7 +435,7 @@ export struct GameStructureComponent
     // nearest enemy unit via its own spatial query, pays energy, applies its HITSCAN damage on
     // the spot and QUEUES the beam visual — spawning/drawing is main-thread only, so the game
     // drains both queues.
-    enum class EMachineKind : uint8 { None, Barracks, Turret };
+    enum class EMachineKind : uint8 { None, Barracks, Turret, Medic };
     EMachineKind machineKind = EMachineKind::None;
 
     struct TurretFireRequest // a lightning strike that already landed: from the muzzle to the victim

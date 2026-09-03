@@ -368,7 +368,24 @@ Unselected units with orders are moved by the Game's FAR TICK instead
   selection where the server has it. `World::simLodSelected` is public for exactly that.
 
 "Game/Sim LOD/Stats" shows live per-tier counts (per-worker staging counters summed after the join);
-`"Update selection"` is the main-thread scope.
+**The selection QUERY is a FIRE-AND-FORGET job** (`computeSelection`, `"Update selection query"`),
+submitted by `update()` for the NEXT pass the moment this pass's wait returns — so it has the whole
+rest of the frame, not just the present window — and joined by main in `World::joinSelection` right
+before the next frame's spatial kick (the commit inside that kick would mutate the index under a
+running query; normally a no-op). **The batches therefore kick without waiting on any query.**
+Nothing destroys entities between the pass and that join (the destroy windows sit after the frame's
+joins), so the root walk is safe, and registrations take the index's exclusive lock against the
+query. The job runs between commits — it sees positions one commit older than an inline query
+would; the query margin covers a frame of motion, and roots spawned meanwhile arrive through the
+pending list. Its `SelectResult` carries SUBMIT-READY nodes (deduped,
+Global roots skipped) WITH their spatial handles and the ancestor entries between each hit and its
+root. What `update()` still does on main (`"Update selection"`), all O(roots) and **no sort, no
+copy**: stamp those ancestors with the CURRENT generation (the cull re-stamps the tiers every
+frame, so a stamp made inside the job would be stale), swap-remove roots whose handle is no longer
+alive (`SpatialIndex::isAlive` — a slot reuse fails its generation), swap the job's list in as the
+level and append the Global and pending roots — **dedupe-free because the job skips Global roots and
+a pending root's entry is unlinked until the commit after the job ran.** The first LOD frame has no
+result and computes inline.
 
 ---
 

@@ -179,6 +179,15 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
         if (remaining > 0.0f)
             health = glm::max(health - remaining, 0.0f);
     }
+    // The HEAL inbox (medic stations): health and the battery both, applied here so `energy` stays
+    // single-writer; a battery holding charge again lifts the permanent collapse latch.
+    if (const float heal = oc::atomic_ref<float>(pendingHeal).exchange(0.0f, oc::memory_order_acq_rel); heal > 0.0f)
+    {
+        health = glm::min(health + heal, healthMax);
+        energy = glm::min(energy + heal, energyMax);
+        if (energy > 0.0f)
+            collapsed = false;
+    }
     if (health <= 0.0f || pos.y < params.voidY)
     {
         kill(entity);
@@ -189,9 +198,16 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
     if (targetLocked && moveOrder
         && glm::distance(here, glm::vec2(targetPos.x, targetPos.z)) < params.waypointRadius)
         targetLocked = moveOrder = false; // move order arrived: back to the AI
+    if (targetLocked && moveOrder && wanderOrder)
+    {
+        wanderTimeLeft -= deltaSec; // a wander that cannot get there just gives up
+        if (wanderTimeLeft <= 0.0f)
+            targetLocked = moveOrder = false;
+    }
     bool routing = false;
     glm::vec3 walkTarget = pos;
     bool haveWalkTarget = false;
+    bool walkIsOrder = false; // the walk target is a route waypoint or a move order, not a hunted enemy
     if (routeIndex < routeCount)
     {
         if (glm::distance(here, glm::vec2(route[routeIndex].x, route[routeIndex].z)) < params.waypointRadius)
@@ -199,7 +215,7 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
         if (routeIndex < routeCount)
         {
             walkTarget = route[routeIndex];
-            routing = haveWalkTarget = true;
+            routing = haveWalkTarget = walkIsOrder = true;
         }
     }
     // NAV: the geodesically nearest enemy across every other team's field; its descent direction
@@ -331,6 +347,7 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
         }
         walkTarget = targetPos;
         haveWalkTarget = hasTarget;
+        walkIsOrder = hasTarget && targetLocked && moveOrder && !wanderOrder; // a wander never seeds
     }
 
     // ---- combat: ONE short probe serves the structure bite, the emitter strain and the melee
@@ -430,6 +447,7 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
         {
             walkTarget = engagePos; // the route waypoint waits (routeIndex is untouched)
             haveWalkTarget = true;
+            walkIsOrder = false;
         }
         if (ordered && bite && biteDist < breakRadius)
         {
@@ -437,6 +455,7 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             hasTarget = false;
             walkTarget = bitePos; // this tick already heads for it
             haveWalkTarget = true;
+            walkIsOrder = false;
         }
         if (ranged)
         {
@@ -491,9 +510,14 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             const Nav::TeamField* raster = fields ? Globals::navSystem.raster() : nullptr;
             // PLAN REQUEST on a jittered per-unit timer, while walking (not only while stuck): Nav
             // dedups by proximity, so a crowd going the same way costs one plan and the lane keeps
-            // up with the group.
+            // up with the group. Only ROUTES and MOVE ORDERS seed — a HUNTED target (nav field,
+            // local search, engage) seeds only for params.huntSeedTeam (the co-op AI): friendly
+            // units chasing an enemy must not carve lanes toward it.
             m_seedTimer -= deltaSec;
-            if (m_seedTimer <= 0.0f)
+            // A WANDER never seeds, hunt-seed team or not (the co-op AI is that team, and its
+            // strolls were carving lanes to random points).
+            const bool wandering = targetLocked && moveOrder && wanderOrder;
+            if (m_seedTimer <= 0.0f && !wandering && (walkIsOrder || (int)team == params.huntSeedTeam))
             {
                 m_seedTimer = params.seedRequestInterval * (0.75f + 0.5f * unitRand01(m_rng));
                 const std::lock_guard<std::mutex> lock(g_unitEventMutex);
@@ -638,7 +662,10 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                 m_hasLastDir = true;
             }
             const glm::vec2 measured(vel.x, vel.z); // the body's REAL planar velocity (pre-command)
-            glm::vec3 dv(dir.x * moveSpeed - vel.x, 0.0f, dir.y * moveSpeed - vel.z);
+            // A wander is a stroll: a fraction of the run speed.
+            const float walkSpeed = targetLocked && moveOrder && wanderOrder
+                ? glm::min(moveSpeed * params.wanderSpeedMult, params.wanderSpeedMax) : moveSpeed;
+            glm::vec3 dv(dir.x * walkSpeed - vel.x, 0.0f, dir.y * walkSpeed - vel.z);
             const float maxDv = accel * deltaSec;
             const float dvLen = glm::length(dv);
             if (dvLen > maxDv && dvLen > 1e-6f)
@@ -773,6 +800,12 @@ void GameUnitComponent::damage(float amount)
     atomicAdd(pendingDamage, amount);
 }
 
+void GameUnitComponent::heal(float amount)
+{
+    if (amount > 0.0f)
+        atomicAdd(pendingHeal, amount);
+}
+
 void GameUnitComponent::kill(Entity& entity)
 {
     health = 0.0f;
@@ -816,6 +849,15 @@ bool GameUnitComponent::updateFar(Entity& entity, float deltaSec)
     }
     else if (targetLocked && moveOrder)
     {
+        if (wanderOrder) // a stroll times out here too — the full sim's clock never runs while far
+        {
+            wanderTimeLeft -= deltaSec;
+            if (wanderTimeLeft <= 0.0f)
+            {
+                targetLocked = moveOrder = false;
+                return false;
+            }
+        }
         if (glm::distance(here, glm::vec2(targetPos.x, targetPos.z)) < params.waypointRadius)
         {
             targetLocked = moveOrder = false; // arrived: the AI resumes when the unit is selected again
@@ -851,7 +893,10 @@ bool GameUnitComponent::updateFar(Entity& entity, float deltaSec)
         if (best.valid && glm::dot(best.descentDir, best.descentDir) > 0.5f)
             dir = best.descentDir;
     }
-    const glm::vec2 next = here + dir * glm::min(moveSpeed * deltaSec, dist);
+    const float walkSpeed = targetLocked && moveOrder && wanderOrder // a stroll (the flag stays set
+        ? glm::min(moveSpeed * params.wanderSpeedMult, params.wanderSpeedMax) // after the order, so
+        : moveSpeed;                                                          // gate on the order)
+    const glm::vec2 next = here + dir * glm::min(walkSpeed * deltaSec, dist);
     if (raster && raster->isBlocked(Nav::cellOf(next)))
         return false; // into rock: hold until a field covers it or the full sim takes over
 
@@ -1056,6 +1101,27 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
             b.population += b.spawnPop;   // the unit's death event frees it again
             const std::lock_guard<std::mutex> lock(g_structureEventMutex);
             g_spawnRequests.push_back(structureId);
+        }
+    }
+    else if (machineKind == EMachineKind::Medic && !blueprint && powered)
+    {
+        // MEDIC: one spatial query of the heal radius per station, own-team units inside get a
+        // heal banked into their inbox (their own tick applies it). Never a roster walk.
+        entity.setProfiled();
+        const glm::vec3 pos = entity.pos;
+        thread_local oc::vector<uint64> nearby;
+        Globals::spatialIndex.querySphere(glm::dvec3(pos), params.medicRange, SpatialLayer_Render, nearby);
+        const float amount = params.medicHealRate * deltaSec;
+        for (const uint64 user : nearby)
+        {
+            Entity* other = reinterpret_cast<Entity*>(user);
+            GameUnitComponent* u = getComponent<GameUnitComponent>(other);
+            if (!u || u->puppet || u->team != team || !u->alive())
+                continue;
+            const glm::vec3 d = other->pos - pos;
+            if (d.x * d.x + d.z * d.z > params.medicRange * params.medicRange)
+                continue; // the sphere query is a broadphase on bounds
+            u->heal(amount);
         }
     }
     else if (machineKind == EMachineKind::Turret && !blueprint)

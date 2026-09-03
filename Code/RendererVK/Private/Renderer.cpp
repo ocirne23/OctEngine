@@ -1548,11 +1548,15 @@ void Renderer::setSunLight(const glm::vec3& direction, const glm::vec3& color, f
 // the UI points its snapshot's ImDrawData::Textures at null (the documented "control the timing of
 // texture updates yourself" path) and the uploads happen HERE instead, on the main thread in the
 // window between the widget pass's join and the next UI::update, when the context is quiescent. A
-// glyph baked by pass N uploads at the top of frame N+1, before the present that draws it.
+// glyph baked by pass N uploads at the top of frame N+1, before the present that draws it — and
+// THIS is also where pass N's snapshot becomes the one present records (the job only parks it as
+// pending): a pass that finished before present N recorded must not be drawn a frame early, with
+// its new textures still unuploaded.
 void Renderer::updateImGuiTextures()
 {
     if (!ImGui::GetCurrentContext())
         return;
+    m_imguiDrawData = m_imguiPendingDrawData.load(oc::memory_order_acquire);
     ImGuiPlatformIO& platformIo = ImGui::GetPlatformIO();
     for (ImTextureData* texture : platformIo.Textures)
         if (texture->Status != ImTextureStatus_OK)

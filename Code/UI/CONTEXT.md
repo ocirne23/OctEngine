@@ -96,6 +96,12 @@ yourself" path — and **`Renderer::updateImGuiTextures()` does the uploads on M
 window between the join and the next `UI::update()`.** A glyph baked by pass N uploads at the top of
 frame N+1, before the present that draws it.
 
+**The snapshot handoff is two-step for the same reason:** `setImGuiDrawData` from the job only parks
+the snapshot as PENDING, and `updateImGuiTextures()` promotes it to what present records. A fast pass
+that finished before present N recorded used to be drawn a frame EARLY, with its textures still
+create requests — on frame 0 the atlas always is, which tripped imgui's `GetTexID` assert at startup
+in Debug every time.
+
 ## Known sharp edge
 
 EntityEditor's `commitRespawn` draft builds (`build*SpawnInfo`) still run on the job and can import a

@@ -447,7 +447,7 @@ export struct ForceFieldParams
                                        // the DRAW entirely (its field/readbacks stay live); 0 = off
     float shellFullResPixels = 160.0f; // projected radius at/above which the march runs the full
                                        // "March steps"; smaller shells taper linearly (floor 8)
-    float sampledShellRadius = 5.0f;   // emitters whose VISIBLE bubble radius (forceEmitterVisibleRadius,
+    float sampledShellRadius = 7.0f;   // emitters whose VISIBLE bubble radius (forceEmitterVisibleRadius,
                                        // not authored reach) is >= this march the BAKED shell volume
                                        // (two trilinear taps/sample) instead of the analytic
                                        // candidate loop — hits/normals/shading stay analytic.

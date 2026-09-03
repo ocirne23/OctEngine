@@ -13,8 +13,10 @@ import :Density;
 // frame (it knows footprints and teams; this library knows nothing about entities); UNITS read
 // teamField(otherTeam)->sample(), flow(ownTeam) and pressure(ownTeam) from the parallel entity pass.
 //
-// Thread contract: setObstacles/setTeamSources/update/drawDebug are MAIN THREAD, called outside
-// the entity pass. teamField()/density() reads are worker-safe during the pass because published
+// Thread contract: update/drawDebug are MAIN THREAD, called outside the entity pass.
+// setObstacles/setTeamSources are main thread OR the game's nav-feed POST-UPDATE job (that batch
+// runs during present, when nothing on main touches Nav, and runFieldSteps in the same batch holds
+// only the fields; the batch joins before the next update). teamField()/density() reads are worker-safe during the pass because published
 // pointers only change inside update(). teamField()/flow()/pressure() reads are worker-safe likewise.
 export namespace Nav
 {
@@ -28,6 +30,7 @@ export namespace Nav
 
         void initialize(); // registers the "Nav" tweaks; JobSystem must be initialized
         bool isEnabled() const { return m_enabled; }
+        float rebuildInterval() const { return m_rebuildInterval; } // the cadence sources are consumed at (the game's feed slices its sweep over it)
 
         void setObstacles(oc::span<const NavObstacle> obstacles);         // main; change-detected
         void setTeamSources(uint32 team, oc::span<const NavSource> sources); // main; every frame
@@ -107,10 +110,16 @@ export namespace Nav
             bool rasterOnly = false; // the obstacle-only raster: builds with NO sources
             bool sourcesDirty = false;
             bool building = false;
+            uint32 lastBuildChunks = 0; // chunk solves of the last completed build: sizes the next build's per-frame steps
         };
 
         bool sourcesChanged(const oc::vector<NavSource>& a, oc::span<const NavSource> b) const;
-        void kickBuild(TeamSlot& slot);
+        void kickBuild(TeamSlot& slot, float deltaSec);       // beginBuild + the first step, as one Low job
+        void submitBuildStep(TeamSlot& slot, float deltaSec); // the next step (update, once the previous step is done)
+        // The per-step chunk budget: the last build's total spread evenly over "Build spread (s)"
+        // at this frame's delta — a build costs the SAME slice of every frame and lands just as
+        // the next rebuild is due. A slot with no history builds in one step.
+        uint32 buildStepBudget(const TeamSlot& slot, float deltaSec) const;
         void tickSlot(TeamSlot& slot, float deltaSec);
         void waitAll();
         void runFieldSteps(); // the step job's body: per-field begins + the two per-chunk fan-outs
@@ -150,6 +159,7 @@ export namespace Nav
         bool m_enabled = true;
         float m_fieldRadius = 400.0f; // covers a whole arena (the 600 m co-op map corner to corner from the Base); a unit outside it falls back to the local search
         float m_rebuildInterval = 0.25f;
+        float m_buildSpread = 0.25f; // seconds a field build is spread over (= the rebuild interval: the next build is due as it lands)
         int m_clearanceCost = 1; // 2x on wall-adjacent cells: nudge off walls, no wide detours
         int m_keepFrames = 120;
         // Fade rates are HALF-LIVES in seconds (frame-rate independent), not per-frame factors.

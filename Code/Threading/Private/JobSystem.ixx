@@ -105,6 +105,7 @@ public:
         if (counter)
         {
             counter->add(1);
+            counter->label = profile.name; // names the wait scope (see JobCounter::label)
             job->signal = counter;
         }
         submitReady(job);
@@ -131,6 +132,7 @@ public:
         if (counter)
         {
             counter->add(1);
+            counter->label = profile.name;
             job->signal = counter;
         }
         queueTimed(job, delaySec);
@@ -147,18 +149,29 @@ public:
     // so anything the next frame consumes is safe. Queue from ANY thread (a worker inside the entity
     // pass, the window thread, main); one submit = one run, at the next kick; a job queued after the
     // kick simply rides the next frame's batch.
+    // TWO BATCHES, kicked together, JOINED AT DIFFERENT POINTS of the next frame — a job picks the
+    // one matching what it touches:
+    //  - Frame: joined FIRST thing in the next frame (the UI widget pass — the ImGui context must
+    //    be quiescent before the main-thread flush and the input pump).
+    //  - Sim: joined just before the frame's ENTITY-CHANGE DRAINS (the first main-thread point that
+    //    destroys entities or mutates rosters), so a job that only reads world/roster state and
+    //    writes its own sim outputs (Nav field steps, the game's nav feed and ambient wander) runs
+    //    through the whole input/camera stretch as well.
+    enum class EPostUpdateBatch : uint8 { Frame, Sim, Count };
     template<typename Func>
-    void submitPostUpdate(Func&& func, JobProfile profile, EJobPriority priority = EJobPriority::Normal, uint8 flags = 0)
+    void submitPostUpdate(Func&& func, JobProfile profile, EJobPriority priority = EJobPriority::Normal, uint8 flags = 0,
+        EPostUpdateBatch batch = EPostUpdateBatch::Frame)
     {
-        submitPostUpdateImpl(oc::forward<Func>(func), profile, priority, flags);
+        submitPostUpdateImpl(oc::forward<Func>(func), profile, priority, flags, batch);
     }
 
-    // Main loop only. The kick submits everything queued since the last one and returns (no wait);
-    // nothing queued costs one queue pop. The join runs first thing in the next frame, and once more
-    // after the loop so the final batch is done before anything it captured goes down. A queue that
-    // is never kicked just fills up, so headless kicks at the same point (it has no present()).
+    // Main loop only. The kick submits everything queued since the last one (both batches) and
+    // returns (no wait); nothing queued costs one queue pop per batch. join(Frame) runs first thing
+    // in the next frame, join(Sim) before its entity-change drains, and both once more after the
+    // loop so the final batches are done before anything they captured goes down. A queue that is
+    // never kicked just fills up, so headless kicks at the same point (it has no present()).
     void kickPostUpdateJobs();
-    void joinPostUpdateJobs();
+    void joinPostUpdateJobs(EPostUpdateBatch batch = EPostUpdateBatch::Frame);
 
     // Waits until the counter reaches zero. On a job fiber this parks the fiber (the worker keeps
     // running other jobs); on the main thread it runs jobs while waiting; on any other thread it
@@ -212,7 +225,7 @@ public:
 private:
 
     template<typename Func>
-    void submitPostUpdateImpl(Func&& func, JobProfile profile, EJobPriority priority, uint8 flags)
+    void submitPostUpdateImpl(Func&& func, JobProfile profile, EJobPriority priority, uint8 flags, EPostUpdateBatch batch)
     {
         assert(profile.name && "every job must carry a JobProfile name (a string literal)");
         Job* job = allocatePooledJob();
@@ -230,7 +243,7 @@ private:
         job->flags |= flags; // EJobFlag_ForeignWait when the body waits on a counter it did not create
         job->name = profile.name;
         job->profileCategory = profile.category;
-        if (!m_postUpdateQueue.push(job))
+        if (!m_postUpdate[uint32(batch)].queue.push(job))
         {
             // full: nothing will ever kick this one, so run it OUT OF PHASE rather than lose it
             m_numInlineFallbacks.fetch_add(1, oc::memory_order_relaxed);
@@ -340,8 +353,12 @@ private:
     TaggedIndexStack m_freeFibers;
     MPMCQueue<Fiber*> m_resumeQueue;
     MPMCQueue<Job*> m_readyQueues[NumJobPriorities];
-    MPMCQueue<Job*> m_postUpdateQueue; // jobs parked until the frame's post-update kick
-    JobCounter m_postUpdateCounter;    // the in-flight batch, joined at the top of the next frame
+    struct PostUpdateBatch
+    {
+        MPMCQueue<Job*> queue; // jobs parked until the frame's post-update kick
+        JobCounter counter;    // the in-flight batch, joined at its point of the next frame
+    };
+    PostUpdateBatch m_postUpdate[uint32(EPostUpdateBatch::Count)];
     uint32 m_numWorkers = 0;
     uint32 m_numContexts = 0;
     uint32 m_numFibers = 0;

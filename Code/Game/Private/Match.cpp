@@ -19,6 +19,7 @@ import RendererVK;
 import Network;
 import Nav;
 import Spatial;
+import Threading; // the ambient wander rides the post-update batch
 import File; // AssetNode + loadAssetFile/writeAssetText (game save/load)
 import :Match;
 import :GameCamera;
@@ -27,9 +28,9 @@ import :Structures;
 import :Npc;
 
 // GRID HOTKEYS (RTS style): the 12 hotbar slots map onto QWER / ASDF / ZXCV, row-major. The ROOT
-// page holds the categories (Q Combat, W Production, E Distribution) and Delete on X; a category
-// page holds its items in order with Back on V (the last slot). The same slot index is reached by
-// its key or by clicking the drawn slot.
+// page holds the categories (Q Combat, W Production), the three cables on A/S/D and Delete on X;
+// a category page holds its items in order with Cancel on C (straight back to Select). The same
+// slot index is reached by its key or by clicking the drawn slot.
 static constexpr int c_gridSlots = 12;
 static constexpr SDL_Scancode c_gridKeys[c_gridSlots] = {
     SDL_Scancode::SDL_SCANCODE_Q, SDL_Scancode::SDL_SCANCODE_W, SDL_Scancode::SDL_SCANCODE_E, SDL_Scancode::SDL_SCANCODE_R,
@@ -39,16 +40,19 @@ static constexpr SDL_Scancode c_gridKeys[c_gridSlots] = {
 static constexpr oc::string_view c_gridKeyLabels[c_gridSlots] = { "Q", "W", "E", "R", "A", "S", "D", "F", "Z", "X", "C", "V" };
 // Root page slots: the three category pages (Q/W/E) and Delete.
 static constexpr int c_rootDeleteSlot = 9;     // X
-static constexpr int c_cancelSlot = 10;        // C: one level back (armed item -> disarm; else -> Select), like Esc
-static constexpr int c_pageBackSlot = 11;      // V: straight back to Select
-static constexpr int c_numCategories = 3;
-static constexpr const char* c_buildCategories[c_numCategories] = { "CMBT", "PROD", "CBLE" };      // slot captions
-static constexpr const char* c_buildCategoryNames[c_numCategories] = { "Combat", "Production", "Cables" }; // log prose
+static constexpr int c_cancelSlot = 10;        // C: straight back to Select (Esc/Tab step back one level instead)
+static constexpr int c_numCategories = 2;
+static constexpr const char* c_buildCategories[c_numCategories] = { "CMBT", "PROD" };      // slot captions
+static constexpr const char* c_buildCategoryNames[c_numCategories] = { "Combat", "Production" }; // log prose
+// The three cables live on the ROOT page (A/S/D) — no page of their own. Arming one enters Build
+// with this HIDDEN category, which draws and behaves as the root page (see isRootPage).
+static constexpr int c_cableCategory = 2;
+static constexpr int c_rootCableSlot = 4;      // A: c_cableItems[0], S, D follow
 // 3-5 char shorthands, indexed by EStructureType — the SAME vocabulary the world tag over a
 // building uses, so a hotbar slot and the thing it builds read identically.
 static constexpr const char* c_structureShortNames[] = { "EMIT", "GEN", "CON", "EXTR", "BATT",
     "FUEL", "SOL", "FAB", "BSTN", "LNC", "BRK", "BRK-B", "BRK-R", "BRK-S", "WALL", "TRT", "SILO",
-    "CNST", "BASE", "CBL-P", "CBL-F", "CBL-M", "CRSS", "HOUS" };
+    "CNST", "BASE", "CBL-P", "CBL-F", "CBL-M", "CRS-P", "CRS-F", "CRS-M", "HOUS", "MEDC" };
 static_assert(oc::size(c_structureShortNames) == (size_t)EStructureType::Count);
 // The barracks' unit-type popup captions, in ENpcType order (the same order the price tables use).
 static constexpr const char* c_unitTypeNames[] = { "Grunt", "Brute", "Runner", "Spitter", "Swarm",
@@ -81,14 +85,15 @@ static constexpr EStructureType c_productionItems[] = {
     EStructureType::Battery,
     EStructureType::FuelTank,
     EStructureType::MineralSilo,
+    EStructureType::MedicStation,
 };
-// PHYSICAL cables: one segment type per medium + the 1x3 crossing bridge. Placement PAINTS
-// (press + drag, see updateCablePlacement); connections derive from cell adjacency.
+// PHYSICAL cables: one segment type per medium, on the root page's A/S/D. Placement PAINTS
+// (press + drag, see updateCablePlacement); connections derive from cell adjacency. The per-medium
+// crossings are NOT on the hotbar: the paint stroke places them itself (placeCableLine).
 static constexpr EStructureType c_cableItems[] = {
     EStructureType::CablePower,
     EStructureType::CablePipe,
     EStructureType::CableConveyor,
-    EStructureType::Crossing,
 };
 static oc::span<const EStructureType> buildCategoryItems(int category)
 {
@@ -218,6 +223,9 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
 {
     if (!m_enabled)
         return;
+    // Only the co-op AI carves seed lanes toward HUNTED targets; player-team units seed for routes
+    // and move orders alone (see GameUnitParams::huntSeedTeam). PvP has no AI team: none.
+    GameUnitComponent::params.huntSeedTeam = coop ? (int)CoopAiTeam : -1;
 
     {
         // Gameplay tweaks persist between runs and the server's values overrule the clients'.
@@ -226,6 +234,7 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
         Tweak::floatVar("Game/Coop", "Wave interval (s)", &m_waveInterval, 10.0f, 600.0f, 5.0f);
         Tweak::intVar("Game/Coop", "Wave budget", &m_waveBudget, 1, 5000, 10);
         Tweak::floatVar("Game/Coop", "Wave budget growth", &m_waveBudgetGrowth, 0.0f, 1000.0f, 5.0f);
+        Tweak::floatVar("Game/Coop", "Wave growth growth", &m_waveGrowthGrowth, 0.0f, 100.0f, 0.5f);
         Tweak::floatVar("Game/Coop", "Cost grunt", &m_waveCost[(int)ENpcType::Grunt], 0.1f, 100.0f, 0.5f);
         Tweak::floatVar("Game/Coop", "Cost brute", &m_waveCost[(int)ENpcType::Brute], 0.1f, 100.0f, 0.5f);
         Tweak::floatVar("Game/Coop", "Cost runner", &m_waveCost[(int)ENpcType::Runner], 0.1f, 100.0f, 0.5f);
@@ -241,6 +250,12 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
         Tweak::intVar("Game/Coop", "Ambient budget", &m_ambientBudget, 0, 60000, 10);
         Tweak::floatVar("Game/Coop", "Ambient safe radius", &m_ambientSafeRadius, 10.0f, 200.0f, 1.0f);
         Tweak::intVar("Game/Coop", "Ambient recipe window", &m_ambientRecipeWindow, 0, 20, 1);
+        Tweak::floatVar("Game/Coop", "Ambient depth scale", &m_ambientDepthScale, 0.5f, 1.0f, 0.01f);
+        Tweak::floatVar("Game/Coop", "Ambient wander interval (s)", &m_ambientWanderInterval, 0.0f, 600.0f, 5.0f);
+        Tweak::floatVar("Game/Coop", "Ambient wander distance", &m_ambientWanderDistance, 2.0f, 60.0f, 1.0f);
+        Tweak::floatVar("Game/Coop", "Ambient wander base bias", &m_ambientWanderBaseBias, 0.0f, 2.0f, 0.05f);
+        Tweak::floatVar("Game/Coop", "Ambient wander timeout (s)", &m_ambientWanderTimeout, 1.0f, 60.0f, 1.0f);
+        Tweak::floatVar("Game/Nav", "Nav unit source reach", &m_navUnitSourceReach, 8.0f, 400.0f, 4.0f);
         Tweak::intVar("Game/Coop", "Spawns per frame", &m_spawnsPerFrame, 1, 200, 1);
         // Map generation inputs, read once at generation on the AUTHORITY. Clients never read
         // them: the values actually used ride the GMp event (and the save) with the seed — a
@@ -342,6 +357,7 @@ GameMatch::~GameMatch()
 {
     if (!m_enabled)
         return;
+    Globals::jobSystem.wait(m_labelsCounter); // the labels job reads this object
     // Exit-to-menu can destroy a GameMatch MID-RUN: every tweak registered on a member (the ctor's
     // Game/* block + camera/player/structures/npcs) must leave the registry with it, or the
     // per-frame poll reads freed memory. Statics (component params) stay and re-register in place.
@@ -634,7 +650,11 @@ void GameMatch::queueWave()
     float cheapest = FLT_MAX;
     for (int t = 0; t < (int)ENpcType::Count; ++t)
         cheapest = glm::min(cheapest, waveCostOf((ENpcType)t));
-    const float budget = glm::min((float)m_waveBudget + m_waveBudgetGrowth * (float)m_waveIndex,
+    // Wave i (0-based) = base + growth per wave so far, where the growth itself climbs by "Wave
+    // growth growth" every wave: base + growth*i + growthGrowth * (0 + 1 + ... + (i-1)).
+    const float wave = (float)m_waveIndex;
+    const float budget = glm::min((float)m_waveBudget + m_waveBudgetGrowth * wave
+            + m_waveGrowthGrowth * wave * (wave - 1.0f) * 0.5f,
         (float)(m_waveMaxAlive - aiAlive) * cheapest - m_ambientPendingBudget - m_wavePendingBudget);
     ++m_waveIndex;
     if (budget <= 0.0f)
@@ -778,7 +798,10 @@ void GameMatch::tickCoopSpawns()
             // on a plain swarm). Costs then make far groups FEWER, TOUGHER bodies for the same
             // points. One recipe per group, so it reads as a unit type holding ground rather than
             // a random assortment.
-            const float depth = (float)m_coopMap.depth[cell] / (float)m_coopMap.maxDepth;
+            // "Ambient depth scale" < 1 reaches the top band before the map's deepest cell, so the
+            // final tier (titans) is not confined to the corners: at 0.9 the mid-edges qualify.
+            const float depth = glm::min((float)m_coopMap.depth[cell]
+                / ((float)m_coopMap.maxDepth * m_ambientDepthScale), 1.0f);
             const int band = 1 + (int)(depth * (float)(c_maxArchetypeMinWave - 1) + 0.5f);
             int eligible[c_numWaveArchetypes];
             int numEligible = 0;
@@ -2004,14 +2027,26 @@ void GameMatch::update(float deltaSec)
             Log::info("We are team " + oc::to_string(m_team));
         }
         tickBaseHealing(deltaSec);
+        tickMedicHealing(deltaSec); // own player only on a client (units heal on the server)
         m_structures.tickMirror(deltaSec);
-        feedNav(); // obstacles only: the local player's move-order goal field
+        submitNavFeed(deltaSec); // obstacles only: the local player's move-order goal field
+        submitWorldLabels();
         return;
     }
 
     const glm::vec3 playerPos = m_player.bodyPos();
     m_structures.tickAuthority(playerPos, deltaSec);
     tickBaseHealing(deltaSec);
+    tickMedicHealing(deltaSec);
+    // The ambient wander is a POST-UPDATE job: it only writes idle units' order fields and reads
+    // the roster + the immutable co-op map, all stable once the entity pass is done, so it runs
+    // during present instead of in front of the batch submit. Its orders land in the next pass.
+    if (m_coop)
+    {
+        ProfileScope queueScope("Ambient wander queue", EProfileCategory::Game);
+        Globals::jobSystem.submitPostUpdate([this, deltaSec] { tickAmbientWander(deltaSec); },
+            { "Ambient wander", EProfileCategory::Game }, EJobPriority::Normal, 0, JobSystem::EPostUpdateBatch::Sim);
+    }
     tickPlayerMelee(deltaSec);
 
     // (No player-target publish step: units find enemy players — puppet GameUnitComponents —
@@ -2068,8 +2103,8 @@ void GameMatch::update(float deltaSec)
 
     // Flow fields: obstacles + per-team sources staged for the NEXT frame's NavSystem::update
     // (which runs in main.cpp's kick/join window, BEFORE this bulk tick — one frame of source
-    // latency, well inside nav's own async tolerances).
-    feedNav();
+    // latency, well inside nav's own async tolerances). The gather is a post-update job.
+    submitNavFeed(deltaSec);
 
     if (m_isServer)
     {
@@ -2115,21 +2150,91 @@ void GameMatch::update(float deltaSec)
             m_damageTimer = 0.1f;
         }
     }
+    submitWorldLabels(); // the tick's mutations are done: the labels job may read the structures now
 }
 
-void GameMatch::feedNav()
+// The nav feed rides the post-update batch: everything it reads is stable once the entity pass is
+// done (rosters change only on main during the tick, positions are the pass's output), and the
+// Nav setters it ends with are legal there too — the batch joins at the top of the next frame,
+// before that frame's NavSystem::update, and nothing on main touches Nav during present (the Nav
+// field-step job in the same batch has only the fields). So the change-detect compare and the
+// source copy run on the job as well. Same one-frame latency as the old inline feed, none of it
+// in front of the entity batch submit.
+void GameMatch::submitNavFeed(float deltaSec)
+{
+    // Sim batch: joined before the next frame's entity-change drains (the first point main mutates
+    // rosters), so the sweep also runs through the input/camera stretch.
+    Globals::jobSystem.submitPostUpdate([this, deltaSec] { gatherNavFeed(deltaSec); }, { "Game nav feed", EProfileCategory::Game },
+        EJobPriority::Normal, 0, JobSystem::EPostUpdateBatch::Sim);
+}
+
+void GameMatch::gatherNavFeed(float deltaSec)
 {
     ProfileScope scope("Game nav feed", EProfileCategory::Game);
+    // THE UNIT SWEEP IS SLICED: Nav consumes sources once per "Rebuild interval", so the roster is
+    // walked over that many frames — ceil(n * dt / interval) units a frame, a constant slice — and
+    // the lists publish when the cursor wraps. Culling (see below) tests each unit against the team
+    // cell hash the PREVIOUS cycle built: one interval stale, a metre or two of motion against
+    // 64 m cells. Clients (no unit sim) have an empty sweep and publish every frame.
+    const float cell = glm::max(m_navUnitSourceReach, 8.0f);
+    const auto cellKey = [&](const glm::vec3& p) {
+        return (uint64)(uint32)(int)glm::floor(p.x / cell) << 32 | (uint32)(int)glm::floor(p.z / cell); };
+    // A unit's field is read only by OTHER teams' units within navFollowRadius of it, so a unit
+    // with no other team's unit or player anywhere near contributes nothing but flood area — and
+    // thousands of ambient enemies as sources tiled the whole map with the AI team's field. A
+    // unit stays a source when the 3x3 cells around it hold another team (reach .. 2x reach).
+    const auto otherTeamNear = [&](const glm::vec3& p, uint8 team) {
+        const int cx = (int)glm::floor(p.x / cell), cz = (int)glm::floor(p.z / cell);
+        const uint8 own = uint8(1u << team);
+        for (int dz = -1; dz <= 1; ++dz)
+            for (int dx = -1; dx <= 1; ++dx)
+                if (const auto it = m_navCellTeams.find((uint64)(uint32)(cx + dx) << 32 | (uint32)(cz + dz));
+                    it != m_navCellTeams.end() && (it->second & ~own))
+                    return true;
+        return false; };
+    const oc::span<const EntityPtr> units = m_npcs.units();
+    const uint32 n = m_isClient ? 0u : (uint32)units.size();
+    if (n > 0)
+    {
+        const float interval = glm::max(Globals::navSystem.rebuildInterval(), 1e-3f);
+        const uint32 slice = glm::max((uint32)glm::ceil((float)n * deltaSec / interval), 1u);
+        const uint32 end = glm::min(n, m_navFeedCursor + slice);
+        for (uint32 i = m_navFeedCursor; i < end; ++i)
+        {
+            Entity* e = units[i].get();
+            const GameUnitComponent* u = getComponent<GameUnitComponent>(e);
+            if (!u || u->puppet || !u->alive() || u->team >= Nav::MaxTeams)
+                continue;
+            m_navCellTeamsNext[cellKey(e->pos)] |= uint8(1u << u->team);
+            if (otherTeamNear(e->pos, (uint8)u->team))
+                m_navUnitSources[u->team].push_back(Nav::NavSource{ e->pos, glm::max(u->bodyRadius, 0.25f), 0, 3 });
+        }
+        m_navFeedCursor = end;
+        if (m_navFeedCursor < n)
+            return; // mid-cycle: nothing publishes this frame
+    }
+
+    // CYCLE END: the cheap parts (players into the hash, obstacles + structure sources, player
+    // sources), then the publish.
+    m_navFeedCursor = 0;
+    const auto markPlayer = [&](Entity* e, uint8 team) {
+        if (e && team < Nav::MaxTeams)
+            m_navCellTeamsNext[cellKey(e->pos)] |= uint8(1u << team); };
+    markPlayer(m_player.entity(), (uint8)m_team);
+    for (const auto& [id, p] : m_clientPlayers)
+        markPlayer(p.get(), (uint8)requestTeam(id));
+    m_navCellTeams.swap(m_navCellTeamsNext);
+    m_navCellTeamsNext.clear();
     // Obstacles: every structure footprint (the same half-extent math as cellsFree) over the static
-    // border ring. Change-detected inside Nav, so rebuilding the list per frame costs a hash.
+    // border ring. Change-detected inside Nav, so rebuilding the list per cycle costs a hash.
     m_navObstacles.assign(m_wallObstacles.begin(), m_wallObstacles.end());
     for (oc::vector<Nav::NavSource>& v : m_navSources)
         v.clear();
     for (const StructureSystem::Ref& s : m_structures.structures())
     {
-        // Cables/crossings are WALK-THROUGH: no nav obstacle (units path straight over them) and
-        // never a NavSource (enemies do not march at power lines).
-        if (isCableOrCrossing(s.type))
+        // Cables/crossings/solars are WALK-THROUGH: no nav obstacle (units path straight over
+        // them) and never a NavSource (enemies do not march at power lines).
+        if (isWalkThrough(s.type))
             continue;
         const float half = StructureSystem::footprintCellsOf(s.type) * StructureSystem::GridCellSize * 0.5f;
         const glm::vec2 c(s.entity->pos.x, s.entity->pos.z);
@@ -2146,16 +2251,13 @@ void GameMatch::feedNav()
         m_navSources[s.state->team].push_back(Nav::NavSource{
             s.entity->pos, glm::max(s.state->meleeRadius, half), s.state->structureId, 0 });
     }
-    // Enemy UNITS are targets too (unit-vs-unit combat): the NpcSystem roster IS the world-wide
-    // unit list — no spatial sweep (rosters are maintained at the spawn/despawn seams).
-    if (!m_isClient)
-        for (const EntityPtr& e : m_npcs.units())
-        {
-            const GameUnitComponent* u = getComponent<GameUnitComponent>(e.get());
-            if (!u || u->puppet || !u->alive() || u->team >= Nav::MaxTeams)
-                continue;
-            m_navSources[u->team].push_back(Nav::NavSource{ e->pos, glm::max(u->bodyRadius, 0.25f), 0, 3 });
-        }
+    // Enemy UNITS are targets too (unit-vs-unit combat): the cycle's sliced sweep above collected
+    // them (the NpcSystem roster IS the world-wide unit list — no spatial sweep).
+    for (uint32 t = 0; t < Nav::MaxTeams; ++t)
+    {
+        m_navSources[t].insert(m_navSources[t].end(), m_navUnitSources[t].begin(), m_navUnitSources[t].end());
+        m_navUnitSources[t].clear();
+    }
     // Player bodies (puppets) are targets too: our capsule + every client twin.
     const auto addPlayer = [&](Entity* e, uint8 team)
     {
@@ -2172,14 +2274,14 @@ void GameMatch::feedNav()
         for (const auto& [id, p] : m_clientPlayers)
             addPlayer(p.get(), requestTeam(id));
     }
-
-    Globals::navSystem.setObstacles(m_navObstacles);
-    for (uint32 t = 0; t < Nav::MaxTeams; ++t)
-        Globals::navSystem.setTeamSources(t, m_navSources[t]);
-    // NavSystem::update (publish + build kicks) runs from main.cpp's kick/join window after
-    // physics.update — it touches neither the spatial index nor the renderer, so it fills the
-    // stretch where main otherwise only waits on the "Spatial cull"/"Begin frame" jobs. The
-    // gathering above stays HERE: the unit sweep is a spatial query, illegal in that window.
+    // The Nav setters (change-detected: a compare per source, a copy on change) — on the job, see
+    // submitNavFeed for why that is legal.
+    {
+        ProfileScope publishScope("Game nav publish", EProfileCategory::Game);
+        Globals::navSystem.setObstacles(m_navObstacles);
+        for (uint32 t = 0; t < Nav::MaxTeams; ++t)
+            Globals::navSystem.setTeamSources(t, m_navSources[t]);
+    }
 }
 
 // Build/delete/cable intents: local queue on the authority, Gq* request events from a client —
@@ -2274,17 +2376,28 @@ int GameMatch::hoveredStructure(const Camera& camera) const
 // The hotbar page for the current state: ROOT (Select/Delete: categories + Delete on X) or the
 // picked category's items (+ Back on V). Called every windowed frame — counts stay live and the
 // highlight always mirrors the real state (the engine's number-key routing may poke selectSlot).
+bool GameMatch::isRootPage() const
+{
+    return m_mode != EPlayerMode::Build || m_buildCategory < 0 || m_buildCategory == c_cableCategory;
+}
+
 void GameMatch::refreshBuildHotbar()
 {
     GameHud& hud = Globals::gameHud;
     for (int i = 0; i < GameHud::NumSlots; ++i)
         hud.clearSlot(i);
-    if (m_mode != EPlayerMode::Build || m_buildCategory < 0)
+    if (isRootPage())
     {
         for (int i = 0; i < c_numCategories; ++i)
             hud.setSlot(i, c_buildCategories[i], 0);
+        for (int i = 0; i < (int)oc::size(c_cableItems); ++i)
+            hud.setSlot(c_rootCableSlot + i, c_structureShortNames[(int)c_cableItems[i]],
+                m_structures.affordableCount(c_cableItems[i], (uint8)m_team));
         hud.setSlot(c_rootDeleteSlot, "DEL", 0);
-        hud.selectSlot(m_mode == EPlayerMode::Delete ? c_rootDeleteSlot : -1);
+        hud.setSlot(c_cancelSlot, "CNCL", 0); // Cancel on C on EVERY page
+        const bool cableArmed = m_mode == EPlayerMode::Build && m_buildSelection >= 0;
+        hud.selectSlot(m_mode == EPlayerMode::Delete ? c_rootDeleteSlot
+                     : cableArmed ? c_rootCableSlot + m_buildSelection : -1);
         return;
     }
     const oc::span<const EStructureType> items = buildCategoryItems(m_buildCategory);
@@ -2292,8 +2405,7 @@ void GameMatch::refreshBuildHotbar()
         hud.setSlot(i, c_structureShortNames[(int)items[i]],
             m_structures.affordableCount(items[i], (uint8)m_team));
     hud.setSlot(c_rootDeleteSlot, "DEL", 0); // Delete stays on X on EVERY page
-    hud.setSlot(c_cancelSlot, "CNCL", 0);
-    hud.setSlot(c_pageBackSlot, "BACK", 0);
+    hud.setSlot(c_cancelSlot, "CNCL", 0); // Cancel on C on EVERY page
     hud.selectSlot(m_buildSelection);
 }
 
@@ -2314,12 +2426,13 @@ void GameMatch::setMode(EPlayerMode mode)
     {
     case EPlayerMode::Build:  break; // the category entry logs its own line (activateSlot)
     case EPlayerMode::Delete: Log::info("Delete mode (X): click a structure to demolish — X returns to Select"); break;
-    case EPlayerMode::Select: Log::info("Select mode: click inspects, RMB routes / moves — Q/W/E build, X delete"); break;
+    case EPlayerMode::Select: Log::info("Select mode: click inspects, RMB routes / moves — Q/W build, A/S/D cables, X delete"); break;
     }
 }
 
 // One level back: a half-finished two-click step drops first, then the armed item disarms, then
-// the category page (or Delete mode) returns to Select. Esc/Tab and the C "Cancel" slot.
+// the category page (or Delete mode) returns to Select. Esc/Tab (the C "Cancel" slot goes straight
+// back to Select).
 void GameMatch::cancelOneLevel()
 {
     if (m_mode == EPlayerMode::Build && m_buildSelection >= 0)
@@ -2342,7 +2455,7 @@ void GameMatch::activateSlot(int slot)
 {
     if (slot < 0 || slot >= c_gridSlots)
         return;
-    if (m_mode != EPlayerMode::Build || m_buildCategory < 0)
+    if (isRootPage())
     {
         // ROOT page
         if (slot < c_numCategories)
@@ -2352,23 +2465,30 @@ void GameMatch::activateSlot(int slot)
             m_buildSelection = -1;
             refreshBuildHotbar();
             Log::info(oc::string("Build: ") + c_buildCategoryNames[slot]
-                + " — grid keys arm an item, LMB places, RMB cancels, V/Esc back");
+                + " — grid keys arm an item, LMB places, RMB cancels, C/Esc back");
+        }
+        else if (slot >= c_rootCableSlot && slot < c_rootCableSlot + (int)oc::size(c_cableItems))
+        {
+            // A cable arms straight from the root page (the hidden cable category).
+            setMode(EPlayerMode::Build);
+            m_buildCategory = c_cableCategory;
+            m_lanceAiming = false;
+            m_wallPlacing = false;
+            m_cablePainting = false;
+            m_cablePendingValid = false;
+            m_buildSelection = slot - c_rootCableSlot;
+            refreshBuildHotbar();
         }
         else if (slot == c_rootDeleteSlot)
             setMode(m_mode == EPlayerMode::Delete ? EPlayerMode::Select : EPlayerMode::Delete);
         else if (slot == c_cancelSlot)
-            setMode(EPlayerMode::Select); // cancels Delete mode; a no-op in Select
+            setMode(EPlayerMode::Select); // cancels Delete mode / an armed cable; a no-op in Select
         return;
     }
     // CATEGORY page
-    if (slot == c_pageBackSlot)
-    {
-        setMode(EPlayerMode::Select);
-        return;
-    }
     if (slot == c_cancelSlot)
     {
-        cancelOneLevel();
+        setMode(EPlayerMode::Select); // straight back, whatever was armed
         return;
     }
     if (slot == c_rootDeleteSlot)
@@ -2378,15 +2498,10 @@ void GameMatch::activateSlot(int slot)
     }
     if (slot >= (int)buildCategoryItems(m_buildCategory).size() || slot >= c_rootDeleteSlot)
         return; // empty slot
-    if (slot == m_buildSelection
-        && buildCategoryItems(m_buildCategory)[slot] == EStructureType::Crossing)
-    {
-        m_crossingRotated = !m_crossingRotated; // re-press of the armed CRSS slot rotates 90°
-        return;
-    }
     m_lanceAiming = false; // switching items drops half-done aims/flows
     m_wallPlacing = false;
     m_cablePainting = false;
+    m_cablePendingValid = false;
     m_buildSelection = slot;
     refreshBuildHotbar();
 }
@@ -2403,7 +2518,7 @@ void GameMatch::updateModeSwitching()
             activateSlot(k);
         m_gridKeyWasDown[k] = down;
     }
-    // Escape/Tab: one level back (same as the C "Cancel" slot).
+    // Escape/Tab: one level back.
     const bool backDown = focused && (input.isKeyDown(SDL_Scancode::SDL_SCANCODE_ESCAPE)
         || input.isKeyDown(SDL_Scancode::SDL_SCANCODE_TAB));
     if (backDown && !m_modeKeyWasDown[0])
@@ -2426,13 +2541,26 @@ void GameMatch::disarmBuild()
     m_lanceAiming = false;
     m_wallPlacing = false;
     m_cablePainting = false;
+    m_cablePendingValid = false;
     refreshBuildHotbar(); // the slot highlight follows in the same frame
+}
+
+// The Crossing's axis rotation for a ±X/±Z facing — the SAME formula placeStructure applies to
+// the request's facing, so a client-side cellsFree probes exactly the cells it will cover.
+static glm::quat crossingRotation(const glm::vec2& dir)
+{
+    return glm::angleAxis(std::atan2(-dir.x, -dir.y), glm::vec3(0.0f, 1.0f, 0.0f));
 }
 
 // Fill the auto-bent L between two snapped 1-cell positions — the dominant leg first, then the
 // perpendicular one — requesting a placement per FREE cell (occupied cells are skipped, so a line
-// across an existing run just fills the gaps). preview = draw ghosts instead of placing.
-void GameMatch::placeCableLine(EStructureType armed, const glm::vec3& from, const glm::vec3& to, bool preview)
+// across an existing run just fills the gaps). The stroke HOLDS its newest cell back until the
+// cell after it is known (m_cablePending): when that next cell holds a plain cable of ANOTHER
+// medium, the stroke's OWN medium's Crossing goes over it with its long axis along the stroke —
+// the held cell and the cell beyond are its two END cells and are never painted — so a stroke
+// across a foreign run bridges it instead of leaving a gap. A crossing the cells refuse falls
+// back to the plain skip.
+void GameMatch::placeCableLine(EStructureType armed, const glm::vec3& from, const glm::vec3& to)
 {
     constexpr float step = StructureSystem::GridCellSize;
     glm::vec3 points[c_cableMaxSegments];
@@ -2453,33 +2581,62 @@ void GameMatch::placeCableLine(EStructureType armed, const glm::vec3& from, cons
             push();
         }
     }
-    for (int i = 0; i < count; ++i)
+    const auto sameCell = [](const glm::vec3& a, const glm::vec3& b) {
+        return glm::abs(a.x - b.x) < step * 0.5f && glm::abs(a.z - b.z) < step * 0.5f; };
+    // points[0] is `from`: the held-back cell when one is pending, else already dealt with.
+    for (int i = m_cablePendingValid ? 0 : 1; i < count; ++i)
     {
-        const bool free = m_structures.cellsFree(armed, points[i]);
-        if (preview)
-            drawStructureGhost(armed, points[i],
-                packColor(free ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.3f, 0.2f)));
-        else if (free)
+        if (i == count - 1)
+        {
+            m_cablePending = points[i]; // held until the next sample or the release
+            m_cablePendingValid = true;
+            m_cablePaintLast = points[i];
+            return;
+        }
+        const glm::vec3& next = points[i + 1];
+        const int foreign = m_structures.bridgeableAt(next);
+        if (foreign >= 0 && conduitMediumOf(m_structures.structureType(foreign)) != cableMediumOf(armed))
+        {
+            const glm::vec2 dir(glm::sign(next.x - points[i].x), glm::sign(next.z - points[i].z));
+            const EStructureType crossing = crossingForMedium(cableMediumOf(armed));
+            if (m_structures.cellsFree(crossing, next, crossingRotation(dir))
+                && !StructureSystem::actorInFootprint(crossing, next))
+            {
+                requestPlace(crossing, next, -1, glm::vec3(dir.x, 0.0f, dir.y));
+                // points[i] and the cell beyond `next` are the crossing's END cells: never cables.
+                const glm::vec3 farEnd = next + glm::vec3(dir.x, 0.0f, dir.y) * step;
+                i += i + 2 < count && sameCell(points[i + 2], farEnd) ? 2 : 1;
+                continue;
+            }
+        }
+        if (m_structures.cellsFree(armed, points[i]))
             requestPlace(armed, points[i], -1, glm::vec3(0.0f));
     }
+    m_cablePendingValid = false;
+    m_cablePaintLast = points[count - 1];
 }
 
-// Cable segments place by PAINTING (see Match.ixx): a press places its cell and, while held,
-// keeps placing the cells the cursor crosses (L-filled between samples so the run never breaks).
-// Release ends the stroke; a plain click is a one-cell stroke.
+void GameMatch::finishCableStroke(EStructureType armed)
+{
+    if (m_cablePendingValid && m_structures.cellsFree(armed, m_cablePending))
+        requestPlace(armed, m_cablePending, -1, glm::vec3(0.0f));
+    m_cablePendingValid = false;
+    m_cablePainting = false;
+}
+
+// Cable segments place by PAINTING (see Match.ixx): a press starts the stroke at its cell and,
+// while held, the stroke places the cells the cursor crosses (L-filled between samples so the run
+// never breaks). Release ends the stroke; a plain click is a one-cell stroke.
 void GameMatch::updateCablePlacement(const Camera& camera, EStructureType armed, bool confirmEdge)
 {
     const Aim aim = computeAim(camera, armed);
     if (m_cablePainting)
     {
         if (!m_lmbDown)
-            m_cablePainting = false; // release ends the stroke
+            finishCableStroke(armed); // release ends the stroke (and lands the held cell)
         else if (aim.valid && glm::distance(glm::vec2(aim.pos.x, aim.pos.z),
             glm::vec2(m_cablePaintLast.x, m_cablePaintLast.z)) > 0.1f)
-        {
-            placeCableLine(armed, m_cablePaintLast, aim.pos, /*preview*/ false);
-            m_cablePaintLast = aim.pos;
-        }
+            placeCableLine(armed, m_cablePaintLast, aim.pos);
         if (aim.valid)
             drawStructureGhost(armed, aim.pos, packColor(glm::vec3(0.3f, 1.0f, 0.4f)));
         return;
@@ -2493,8 +2650,9 @@ void GameMatch::updateCablePlacement(const Camera& camera, EStructureType armed,
     drawStructureGhost(armed, aim.pos, color);
     if (confirmEdge && aim.affordable)
     {
-        requestPlace(armed, aim.pos, -1, glm::vec3(0.0f));
         m_cablePainting = true; // hold + drag paints from here
+        m_cablePending = aim.pos; // the press's cell is held back one step (see placeCableLine)
+        m_cablePendingValid = true;
         m_cablePaintLast = aim.pos;
     }
     updateSelectionClick(camera, confirmEdge, /*allowPick*/ !aim.affordable);
@@ -2525,7 +2683,7 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         if (cancelEdge)
         {
             if (m_cablePainting)
-                m_cablePainting = false;
+                finishCableStroke(armed); // the held cell was already shown painted — it lands
             else
                 disarmBuild();
             return; // NOT consumed: the same press also walks the player
@@ -2534,39 +2692,7 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         return;
     }
 
-    // Crossing: single-click placement — the long axis follows the CAMERA facing (quantized to
-    // ±X/±Z), and re-pressing the armed CRSS slot rotates it 90° (activateSlot).
-    if (armed == EStructureType::Crossing)
-    {
-        if (cancelEdge)
-        {
-            disarmBuild();
-            return; // NOT consumed: the same press also walks the player
-        }
-        const Aim aim = computeAim(camera, armed);
-        if (!aim.valid)
-        {
-            updateSelectionClick(camera, confirmEdge, /*allowPick*/ true);
-            return;
-        }
-        const glm::vec3 fwd = m_camera.forwardPlanar();
-        glm::vec2 dir = glm::abs(fwd.x) >= glm::abs(fwd.z)
-            ? glm::vec2(fwd.x >= 0.0f ? 1.0f : -1.0f, 0.0f)
-            : glm::vec2(0.0f, fwd.z >= 0.0f ? 1.0f : -1.0f);
-        if (m_crossingRotated)
-            dir = glm::vec2(-dir.y, dir.x);
-        const glm::quat rot = glm::angleAxis(std::atan2(-dir.x, -dir.y), glm::vec3(0.0f, 1.0f, 0.0f));
-        // computeAim validated with the identity axis — redo the footprint checks with the real one.
-        const bool free = m_structures.cellsFree(EStructureType::Crossing, aim.pos, rot)
-            && !StructureSystem::actorInFootprint(EStructureType::Crossing, aim.pos);
-        drawStructureGhostExtent(EStructureType::Crossing, aim.pos,
-            packColor(free ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.3f, 0.2f)),
-            StructureSystem::footprintExtent(EStructureType::Crossing, rot));
-        if (confirmEdge && free)
-            requestPlace(EStructureType::Crossing, aim.pos, -1, glm::vec3(dir.x, 0.0f, dir.y));
-        updateSelectionClick(camera, confirmEdge, /*allowPick*/ !free);
-        return;
-    }
+    // (Crossings are never armed: the paint stroke places them — placeCableLine.)
 
     // Lance second click: the position is anchored — the cursor now aims the cone's facing
     // (relative to the anchor); confirm places, too-close clicks just keep waiting. RIGHT-click
@@ -2669,13 +2795,15 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
     }
     const uint32 color = packColor(aim.affordable ? glm::vec3(0.3f, 1.0f, 0.4f) : glm::vec3(1.0f, 0.3f, 0.2f));
     drawStructureGhost(aim.type, aim.pos, color); // the exact box that will be built
-                                                  // (the Crossing has its own branch above)
+                                                  // (crossings are auto-placed by the paint stroke)
     if (isEmitterType(aim.type)) // show the field footprint the powered variant would get
         drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.emitterReachOf(aim.type) * 0.5f, color, 32);
     if (aim.type == EStructureType::Constructor) // show the build/repair reach it would cover
         drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.constructorRange(), color, 40);
     if (aim.type == EStructureType::House) // show how far it links to a barracks
         drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.houseLinkRadius(), color, 48);
+    if (aim.type == EStructureType::MedicStation) // show the heal reach
+        drawCircle(aim.pos + glm::vec3(0.0f, 0.3f, 0.0f), m_structures.medicHealRadius(), color, 48);
     if (confirmEdge && aim.affordable)
     {
         if (aim.type == EStructureType::Lance)
@@ -2927,13 +3055,14 @@ void GameMatch::issueScenarioOrder()
 
 // THE right-click move order, shared by the RMB handler and the profiling scenario: the player and
 // the selected units walk to a world position (a fresh order: the lane is seeded from the group).
-bool GameMatch::moveOrderAt(const glm::vec3& worldPos)
+bool GameMatch::moveOrderAt(const glm::vec3& worldPos, bool includePlayer)
 {
     // A click that lands inside co-op rock clamps to the nearest open cell — a target on blocked
     // cells fails the lane A* and every unit's own plan request (the pointOutsideFootprint rule,
     // applied to terrain).
     const glm::vec3 dest = clampToOpenGround(glm::vec3(worldPos.x, 0.0f, worldPos.z));
-    m_player.setMoveTarget(dest);
+    if (includePlayer)
+        m_player.setMoveTarget(dest);
     return orderSelectedUnits(dest, true);
 }
 
@@ -2985,8 +3114,8 @@ void GameMatch::updateRightClickActions(const Camera& camera, bool rmbEdge)
     if (!rmbEdge || m_selectedId == 0)
         return;
     if (const int hover = hoveredStructure(camera);
-        hover >= 0 && !isCableOrCrossing(m_structures.structureType(hover)))
-        return; // on a building: the caller turns it into a MOVE order (cables are ground)
+        hover >= 0 && !isWalkThrough(m_structures.structureType(hover)))
+        return; // on a building: the caller turns it into a MOVE order (walk-through pieces are ground)
     const int sel = m_structures.structureIndexById(m_selectedId);
     glm::vec3 ground;
     if (sel < 0 || !isBarracksType(m_structures.structureType(sel))
@@ -3033,15 +3162,33 @@ void GameMatch::updateSelectionClick(const Camera& camera, bool confirmEdge, boo
 }
 
 // World-anchored UI: a health bar above every damageable structure, plus name/HP/power info on the
-// selected one. Projected here with THIS frame's final camera (worldToScreen), replaced wholesale
-// each frame; the overlay just paints at the given viewport pixels.
-void GameMatch::buildWorldLabels(const Camera& camera)
+// selected one. Projected with THIS frame's final camera (worldToScreen — captured in
+// updateWindowed), replaced wholesale each frame; the overlay just paints at the given viewport
+// pixels. A JOB: submitted at the END of the game tick (structures settled for the frame; only the
+// entity pass runs alongside, and it changes field values, never the rosters or the structure
+// list — torn float reads are fine for a bar) and joined by main right before the widget pass is
+// queued (joinWorldLabels), which is what consumes the labels. GameHud's writes are mutexed.
+void GameMatch::submitWorldLabels()
+{
+    if (!m_labelsCameraValid)
+        return; // headless / no windowed tick this frame
+    Globals::jobSystem.submit([this] { buildWorldLabels(); }, { "Game world labels", EProfileCategory::Game },
+        EJobPriority::Normal, &m_labelsCounter);
+}
+
+void GameMatch::joinWorldLabels()
+{
+    Globals::jobSystem.wait(m_labelsCounter);
+}
+
+void GameMatch::buildWorldLabels()
 {
     ProfileScope scope("Game world labels", EProfileCategory::Game);
+    const Camera& camera = m_labelsCamera;
     oc::vector<HudWorldLabel> labels;
     labels.reserve(m_structures.structureCount());
     HudPopup popup; // the selected own barracks' unit-type picker (inactive = none)
-    const Rect& viewport = Globals::ui.getViewportRect();
+    const Rect& viewport = m_labelsViewport;
     const int selected = m_selectedId != 0 ? m_structures.structureIndexById(m_selectedId) : -1;
     for (int i = 0; i < m_structures.structureCount(); ++i)
     {
@@ -3059,7 +3206,7 @@ void GameMatch::buildWorldLabels(const Camera& camera)
             continue;
         label.title = c_structureShortNames[(int)type]; // the selected one overrides w/ full name
         const bool consumer = hasShieldEmitter(type) || type == EStructureType::Extractor
-            || type == EStructureType::Fabricator;
+            || type == EStructureType::Fabricator || type == EStructureType::MedicStation;
         label.barValue = m_structures.structureHealth(i);
         label.barMax = healthMax; // per-type: cables are softer than buildings
         {
@@ -3253,6 +3400,7 @@ void GameMatch::tickPlayerMelee(float deltaSec)
 
 void GameMatch::tickBaseHealing(float deltaSec)
 {
+    ProfileScope scope("Base healing", EProfileCategory::Game);
     // Own player only: health is OWNER-computed, so every instance heals its own capsule against
     // its LOCAL structure mirror (clients hold the Bases through the GPl replay) — no sync needed.
     if (m_baseHealRate <= 0.0f || m_baseHealRadius <= 0.0f || !m_player.entity())
@@ -3270,6 +3418,108 @@ void GameMatch::tickBaseHealing(float deltaSec)
             return; // one Base is enough — never stack multiple
         }
     }
+}
+
+// AMBIENT WANDER (co-op authority): an IDLE AI unit now and then takes a short stroll, its heading
+// biased toward the Base. Performance: the EXPECTED number of strolls this frame is roster /
+// "Ambient wander interval" × dt (5000 units at 90 s and 60 fps = ~0.93 a frame), carried as a
+// fractional budget so every frame issues that many on average — a steady trickle instead of a
+// burst — and each stroll costs at most c_wanderScanCap random roster probes to find an idle
+// unit. No per-unit timer. The order is a wander (orderWander): it never seeds a lane and
+// self-expires after "Ambient wander timeout", so a target behind rock cannot pin the unit. Far
+// (LOD-skipped) units walk it through the far tick's teleport like any order. Hunting, locked or
+// routing units are skipped as candidates. Runs on a POST-UPDATE job (see update): its own RNG,
+// since the shared C rand is not a thing to share with main.
+void GameMatch::tickAmbientWander(float deltaSec)
+{
+    if (!m_coop || m_ambientWanderInterval <= 0.0f)
+        return;
+    const oc::span<const EntityPtr> units = m_npcs.units();
+    const int n = (int)units.size();
+    if (n == 0)
+        return;
+    const auto rand01 = [&] { return std::uniform_real_distribution<float>(0.0f, 1.0f)(m_wanderRng); };
+    // The budget is sized from the SELECTED roster, not the whole one: only selected units are
+    // candidates, so a whole-roster budget would land every far unit's strolls on the few near a
+    // player. The selected fraction is estimated from the random probes below (each is a fair
+    // sample of the roster), smoothed — no roster walk.
+    m_wanderBudget += (float)n * m_wanderSelectedFrac * deltaSec / m_ambientWanderInterval;
+    int issue = (int)m_wanderBudget;
+    if (issue <= 0)
+        return;
+    m_wanderBudget -= (float)issue;
+    constexpr int c_wanderScanCap = 32; // random probes per stroll before giving up this frame
+    glm::vec3 basePos(0.0f);
+    for (int i = 0; i < m_structures.structureCount(); ++i)
+        if (m_structures.structureType(i) == EStructureType::Base && m_structures.structureTeam(i) == 0)
+        {
+            basePos = m_structures.structurePos(i);
+            break;
+        }
+    for (; issue > 0; --issue)
+    {
+        GameUnitComponent* u = nullptr;
+        Entity* e = nullptr;
+        for (int scan = 0; scan < c_wanderScanCap && !u; ++scan)
+        {
+            e = units[glm::clamp((int)(rand01() * (float)n), 0, n - 1)].get();
+            u = e ? getComponent<GameUnitComponent>(e) : nullptr;
+            // Only SELECTED units (inside the SIM LOD's outer tier of some player) stroll: a far
+            // unit is invisible and would walk its order by the far tick's teleport, then arrive
+            // in view mid-stroll — a whole patch "starting to wander" the moment a player came
+            // near. Tier 2 and closer all behave alike.
+            const bool selected = e && Globals::world.simLodSelected(*e);
+            m_wanderSelectedFrac += ((selected ? 1.0f : 0.0f) - m_wanderSelectedFrac) * 0.02f;
+            if (u && (u->team != CoopAiTeam || u->puppet || !u->alive() || u->targetLocked || u->hasTarget
+                || u->routeIndex < u->routeCount || !selected))
+                u = nullptr;
+        }
+        if (!u)
+            continue; // no idle unit found in the probe budget: this stroll is simply dropped
+        const float angle = rand01() * 6.2831853f;
+        glm::vec2 dir(glm::cos(angle), glm::sin(angle));
+        const glm::vec2 toBase(basePos.x - e->pos.x, basePos.z - e->pos.z);
+        if (const float len = glm::length(toBase); len > 1e-3f)
+            dir += toBase / len * m_ambientWanderBaseBias; // the bias tilts the stroll toward the Base
+        if (glm::dot(dir, dir) < 1e-4f)
+            continue;
+        dir = glm::normalize(dir);
+        const float dist = (0.4f + 0.6f * rand01()) * m_ambientWanderDistance;
+        const glm::vec3 target = clampToOpenGround(e->pos + glm::vec3(dir.x, 0.0f, dir.y) * dist);
+        u->orderWander(target, m_ambientWanderTimeout);
+    }
+}
+
+// MEDIC STATIONS, the PLAYER half: every BUILT + POWERED own-team medic within "Medic heal radius"
+// heals the own capsule at "Medic heal/s" — HEALTH and the SHIELD BATTERY alike — on EVERY
+// instance against the local mirror (health/energy are owner-computed; `powered` reaches clients
+// through GSt). One heal per tick however many stations overlap. Units are the component's job.
+void GameMatch::tickMedicHealing(float deltaSec)
+{
+    ProfileScope scope("Medic healing", EProfileCategory::Game);
+    const float rate = m_structures.medicHealRate();
+    const float radius = m_structures.medicHealRadius();
+    if (rate <= 0.0f || radius <= 0.0f)
+        return;
+    const auto isActiveMedic = [&](int i) {
+        return m_structures.structureType(i) == EStructureType::MedicStation
+            && !m_structures.structureBlueprint(i) && m_structures.structurePowered(i); };
+    const auto inReach = [&](int i, const glm::vec3& p) {
+        const glm::vec3 m = m_structures.structurePos(i);
+        return glm::distance(glm::vec2(p.x, p.z), glm::vec2(m.x, m.z)) <= radius; };
+    if (m_player.entity())
+    {
+        const glm::vec3 pos = m_player.bodyPos();
+        for (int i = 0; i < m_structures.structureCount(); ++i)
+            if (isActiveMedic(i) && m_structures.structureTeam(i) == (uint8)m_team && inReach(i, pos))
+            {
+                m_player.heal(rate * deltaSec);
+                m_player.charge(rate * deltaSec);
+                break;
+            }
+    }
+    // (UNITS are healed by the station's own component update in the parallel pass — one spatial
+    // query per powered station, banked into the unit's heal inbox. Nothing to do here.)
 }
 
 void GameMatch::updateHud()
@@ -3352,19 +3602,23 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     // ate the movement felt like a dropped input. Only the barracks ROUTE waypoint consumes the
     // press (m_rmbConsumed): it is a positive order, not a cancel, and pairing it with a move
     // would send the player off toward every rally point.
+    // CTRL held on the press = UNITS ONLY: the selected units take the order and the player stays
+    // put (latched for the whole hold, so a held re-aim keeps excluding the capsule).
     if (!m_rmbDown)
         m_rmbMoveDrag = false;
+    if (rmbEdge)
+        m_rmbUnitsOnly = (SDL_GetModState() & SDL_KMOD_CTRL) != 0;
     if (rmbEdge && !m_rmbConsumed)
     {
-        // Cables/crossings are WALK-THROUGH — an RMB near one is a plain ground order, never a
-        // walk-to-its-face building order.
+        // Cables/crossings/solars are WALK-THROUGH — an RMB near one is a plain ground order,
+        // never a walk-to-its-face building order.
         int hover = hoveredStructure(camera);
-        if (hover >= 0 && isCableOrCrossing(m_structures.structureType(hover)))
+        if (hover >= 0 && isWalkThrough(m_structures.structureType(hover)))
             hover = -1;
         glm::vec3 clicked;
         if (hover >= 0 && aimGroundPoint(camera, clicked))
         {
-            moveOrderAt(pointOutsideFootprint(clicked, hover));
+            moveOrderAt(pointOutsideFootprint(clicked, hover), /*includePlayer*/ !m_rmbUnitsOnly);
             m_rmbMoveDrag = false; // a building order is one-shot: dragging off it must not re-aim
         }
         else if (hover < 0)
@@ -3374,7 +3628,8 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     if (m_rmbMoveDrag && aimGroundPoint(camera, moveGround))
     {
         const glm::vec3 dest = clampToOpenGround(glm::vec3(moveGround.x, 0.0f, moveGround.z));
-        m_player.setMoveTarget(dest);
+        if (!m_rmbUnitsOnly)
+            m_player.setMoveTarget(dest);
         orderSelectedUnits(dest, rmbEdge); // the selected units follow the same order (re-aimed while held; the lane wipe only on the press)
     }
     if (m_player.hasMoveTarget()) // destination marker until the capsule arrives
@@ -3445,7 +3700,11 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
 
     routesScope.stop();
 
-    buildWorldLabels(camera);
+    // The world labels are built on a JOB kicked at the end of the game tick (submitWorldLabels):
+    // this frame's final camera and viewport are captured here for it.
+    m_labelsCamera = camera;
+    m_labelsViewport = Globals::ui.getViewportRect();
+    m_labelsCameraValid = true;
     {
         ProfileScope hudScope("Game HUD update", EProfileCategory::Game);
         updateHud();

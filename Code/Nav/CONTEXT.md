@@ -22,15 +22,21 @@ waits on in-flight build jobs.
 
 ### Thread contract
 
-* `setObstacles` / `setTeamSources` / `setGoal` / `clearGoal` / `update` / `drawDebug` / `seedPath` /
-  `requestSeedPath` are **MAIN THREAD**, outside the entity pass.
+* `setGoal` / `clearGoal` / `update` / `drawDebug` / `seedPath` / `requestSeedPath` are **MAIN
+  THREAD**, outside the entity pass.
+* `setObstacles` / `setTeamSources` are main thread OR **the game's nav-feed POST-UPDATE job**: that
+  batch runs during present, when nothing on main touches Nav, and the field-step job in the same
+  batch holds only the fields — so the change-detect compare and the source copy run off main. The
+  batch joins before the next `update`.
 * `teamField()` / `goalField()` / `raster()` / `flow()` / `pressure()` reads are **worker-safe during
   the pass**, because the published pointers and the goal key map only change inside `update()`.
 
 ## Inputs from the game
 
-`GameMatch::feedNav` ([Match.cpp:2047](../Game/Private/Match.cpp#L2047)) rebuilds both lists every
-frame; Nav change-detects them, so the rebuild costs a hash.
+`GameMatch::gatherNavFeed` rebuilds both lists as a POST-UPDATE job (joined at the top of the next
+frame) and calls the setters from that job; Nav change-detects them there. The unit sweep is SLICED
+over the "Rebuild interval" (`rebuildInterval()`), publishing once per cycle — sources are only ever
+consumed at that cadence.
 
 **`NavObstacle`** — an XZ AABB plus a `cost` byte:
 
@@ -45,12 +51,12 @@ target too), `id`, `kind`:
 
 | kind | Fed by |
 |---|---|
-| 0 | structures (alive, not the invulnerable Base; cables and crossings are excluded) |
+| 0 | structures (alive, not the invulnerable Base; walk-through pieces — cables, crossings, solars — are excluded) |
 | 1 | player capsules — our own plus every client twin |
 | 2 | a goal destination (set by `setGoal`) |
-| 3 | units, from `NpcSystem`'s roster — **no spatial sweep** |
+| 3 | units, from `NpcSystem`'s roster — **no spatial sweep**, and **CULLED to units with another team's unit or player within "Nav unit source reach" (64 m, a coarse cell hash: reach .. 2× reach)** — a unit's field is only ever read by other teams within `navFollowRadius`, so far ambient enemies contribute nothing but flood area |
 
-Clients run no unit sim: `feedNav` there stages **obstacles only**, for the local player's goal field.
+Clients run no unit sim: the feed there stages **obstacles only**, for the local player's goal field.
 
 ## Grid
 
@@ -94,6 +100,22 @@ a field is exactly as big as its reach.**
 the serial Dijkstra's result.** Cross-chunk reads race benignly — aligned u16, monotone-decreasing
 min — and a missed improvement just re-queues the chunk.
 
+### The build is STEPPED across frames
+
+`beginBuild` (raster + seeds) runs in the `"Nav build"` job together with the first chunk budget;
+the front (`m_wave`/`m_nextWave` plus `m_waveCursor`) lives in the field, and `NavSystem::update`
+submits one `"Nav build step"` job per frame with a CALCULATED chunk budget (`buildStepBudget`):
+**the last completed build's chunk total × dt / "Build spread (s)" (0.25 = the rebuild interval),
+rounded up** — so a build costs the same slice of every frame and lands just as the next rebuild is
+due; a build that grew runs a few extra frames at that slice, a slot with no history (its first
+build) runs in one step. A wave is cut wherever the budget runs out and its remainder resumes next
+step (the unsolved remainder keeps `waveDirty`, so it cannot be double-queued, and it reads the
+improved neighbours when its turn comes — relaxation order never changes the fixpoint) — until
+`isBuildDone`, then publishes. **The wave parallelFors run at LOW priority**, so the chunk solves
+fill the gaps between entity batches instead of competing for workers. A dirty obstacle set still
+waits for the in-flight builds to finish (bounded: no NEW build kicks while it is dirty), then
+re-kicks all.
+
 > **STANDING RULE for anything inside these jobs: gather buffers must be STACK locals, never
 > `thread_local`.** A parallelFor wait parks the fiber, and the worker may pick up another team's job
 > and clear a shared thread_local mid-use.
@@ -132,10 +154,11 @@ fills the stretch where main otherwise only waits on the "Spatial cull" and "Beg
 2. Retire expired seed stamps and expire idle goals.
 3. **Swap the obstacle snapshot** if dirty — but only while NO build is in flight, since every job
    shares it. A dirty obstacle set waits for the fleet to drain, then marks every field dirty.
-4. **Kick one Low-priority `"Nav build"` job per due slot.** A slot is due when its sources changed
-   (id/kind, or moved more than half a cell), the raster changed, the "Rebuild interval" elapsed, or
-   nothing is published. A team with no sources publishes null and units fall back to the local
-   search.
+4. **Kick one Low-priority `"Nav build"` job per due slot.** A slot is due when nothing is published,
+   or when the "Rebuild interval" has elapsed AND (its sources changed — id/kind, or moved more than
+   half a cell — or the raster changed, or it is periodic). **The interval gates the dirty path too:**
+   thousands of moving unit sources are dirty every frame, which used to chain builds back to back.
+   A team with no sources publishes null and units fall back to the local search.
 5. **Queue the flow and pressure steps as ONE POST-UPDATE JOB.**
 
 ### The field steps are a post-update job
@@ -191,7 +214,7 @@ static constexpr uint32 GoalExpireFrames = 60;
 * `GoalKeyPlayer` is the local player's RMB move order. `GamePlayer::tickMovement` sets it each frame
   while an order stands, steers by the field's descent when it covers the capsule, goes straight line
   until then, and clears on arrival ([Player.cpp:157](../Game/Private/Player.cpp#L157)).
-* **Works on CLIENTS too** — `feedNav` runs there with obstacles only, so the goal field is local.
+* **Works on CLIENTS too** — the nav feed runs there with obstacles only, so the goal field is local.
 
 ## Seed paths
 
@@ -252,7 +275,7 @@ stale by the time anyone gets there.
 | A fresh RMB move order for the selected units, started at the centroid of their LARGEST CLUSTER (single-linkage flood fill at "Group cluster radius" 12 m — a straggler must not drag the lane's origin off the bulk) | [Match.cpp:2900](../Game/Private/Match.cpp#L2900) |
 | Every barracks route change, leg by leg | [Match.cpp:2739](../Game/Private/Match.cpp#L2739) |
 | Each co-op wave, once, at `queueWave` | [Match.cpp:647](../Game/Private/Match.cpp#L647) |
-| **EVERY unit on its own jittered timer**, while it has somewhere to be | [Npc.cpp:397](../Game/Private/Npc.cpp#L397) |
+| **EVERY unit on its own jittered timer**, while it walks a ROUTE or a MOVE ORDER — a unit chasing a HUNTED enemy (nav field / local search / engage) requests one only on `GameUnitParams::huntSeedTeam` (the co-op AI team; -1 = none), so friendly units never carve lanes toward enemies | [Npc.cpp:397](../Game/Private/Npc.cpp#L397) |
 
 The unit path queues a `SeedRequest{from, to, team, stuck}` every "Seed request interval" (×0.75–1.25
 jitter, random phase at spawn), drained on the main thread by `NpcSystem::service` into
@@ -407,6 +430,7 @@ radius the unit marches lane-friendly toward the target.
 | Enabled | on |
 | Field radius | 400 m (the 600 m co-op map, corner to corner from the Base) |
 | Rebuild interval | 0.25 s |
+| Build spread (s) | 0.25 — a field build is spread evenly over this (per-frame chunk budget = last build's total × dt / spread); 0 = one step |
 | Clearance cost | 1 |
 | Chunk keep frames | 120 |
 | Flow half-life | 5 s |

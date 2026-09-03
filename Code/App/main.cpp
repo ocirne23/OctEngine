@@ -723,6 +723,11 @@ int main(int argc, char* argv[])
                 }
             }
 
+            // The SIM post-update batch (Nav field steps, the game's nav feed + ambient wander) ran
+            // through input, prepare and the camera; it must be done before the first main-thread
+            // writes to units/rosters — the game's windowed tick (unit orders) and the entity-change
+            // drains below. Normally already finished: a no-op.
+            Globals::jobSystem.joinPostUpdateJobs(JobSystem::EPostUpdateBatch::Sim);
             if (game && game->enabled() && !Globals::ui.isMainMenuActive() && !Globals::ui.isEscapeMenuOpen())
             {
                 // Menu/lobby/escape-menu active = no game input, camera overwrite or HUD (a lobby
@@ -749,6 +754,7 @@ int main(int argc, char* argv[])
             Globals::scriptHost.handleScriptReloadRequests(Globals::ui.takeScriptReloadRequests());
             Globals::world.handleEntityChanges(Globals::ui.takeEntityChanges(), camera, Globals::ui.getViewportRect());
         }
+        Globals::jobSystem.joinPostUpdateJobs(JobSystem::EPostUpdateBatch::Sim); // headless has no windowed block: its first roster mutation is this drain (a no-op when already joined above)
         Globals::world.handleEntityChanges(Globals::scriptEvents.takeEntityChanges(), camera, Globals::ui.getViewportRect());
 
         // PAUSE ("Time/Paused" tweak or the Pause/Break key): every simulation consumer below takes
@@ -768,6 +774,7 @@ int main(int argc, char* argv[])
         // physics.update no longer fires contact scripts (deferred below) — so the "Spatial cull" +
         // "Begin frame" jobs kick BEFORE physics and overlap the step, audio and the nav publish.
         // Nothing between the kicks and the joins may touch the index or renderer frame state.
+        Globals::world.joinSelection(); // last frame's SIM LOD selection query must be done before the commit inside the spatial kick (headless: commitFrame below)
         if (!headlessServer)
         {
             ProfileScope kickScope("Frame kicks", EProfileCategory::App); // attributes the submit + wake cost that used to read as a gap
@@ -790,7 +797,7 @@ int main(int argc, char* argv[])
         if (!headlessServer)
         {
             Globals::audio.update(camera);
-            Globals::navSystem.update((float)simDeltaSec);
+            Globals::navSystem.update((float)simDeltaSec); // consumes the feed last frame's post-update job set (joined at the frame top)
             Globals::rendererVK.joinBeginFrameJob(); // VR: beginFrame runs synchronously here
             Globals::spatialIndex.joinUpdateJob();
         }
@@ -822,6 +829,8 @@ int main(int argc, char* argv[])
             Globals::forceSystem.update(Globals::rendererVK, (float)simDeltaSec);
 
             Globals::ui.drawGizmoEntity(Globals::rendererVK, (float)deltaSec);
+            if (game)
+                game->joinWorldLabels(); // the labels job (kicked at the end of the game tick) feeds the widget pass's HUD overlay
             Globals::ui.update(Globals::world.rootEntities(), camera, deltaSec); // ImGui backend new frame (main thread) + queues the widget pass
             uiJobKicked = true;
 
@@ -840,7 +849,9 @@ int main(int argc, char* argv[])
                 Sleep(1);
     }
 
-    Globals::jobSystem.joinPostUpdateJobs(); // the final frame's post-update batch (the widget pass among it) may still be in flight
+    Globals::jobSystem.joinPostUpdateJobs(); // the final frame's post-update batches (the widget pass among them) may still be in flight
+    Globals::jobSystem.joinPostUpdateJobs(JobSystem::EPostUpdateBatch::Sim);
+    Globals::world.joinSelection();          // and its fire-and-forget selection query (touches the World, which destructs before the JobSystem)
     Globals::forceSystem.joinMerge();        // and the final frame's merge job
 
     return 0;

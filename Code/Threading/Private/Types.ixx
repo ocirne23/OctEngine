@@ -70,6 +70,11 @@ public:
     bool isDone() const { return m_count.load(oc::memory_order_acquire) == 0; }
     uint32 pending() const { return m_count.load(oc::memory_order_relaxed) & CountMask; }
 
+    // The profile name of the LAST job submitted against this counter (a literal, so permanent):
+    // wait() names its stall scope after it, so the profiler says WHICH job a wait was for
+    // instead of a bare "Job wait". A counter shared by differently named jobs shows the last.
+    const char* label = nullptr;
+
 private:
 
     friend class JobSystem;

@@ -18,7 +18,7 @@ import Force;
 // remain, placement refuses it and loadFrom skips it. BarracksBrute/Runner/Spitter are RETIRED
 // too (ONE barracks type now produces the unit type its owner picks): placement refuses them and
 // loadFrom maps an old-save entry to a Barracks with that unit type preset.
-export enum class EStructureType : uint8 { Emitter, Generator, Connector, Extractor, Battery, FuelTank, Solar, Fabricator, Bastion, Lance, Barracks, BarracksBrute, BarracksRunner, BarracksSpitter, Wall, Turret, MineralSilo, Constructor, Base, CablePower, CablePipe, CableConveyor, Crossing, House, Count };
+export enum class EStructureType : uint8 { Emitter, Generator, Connector, Extractor, Battery, FuelTank, Solar, Fabricator, Bastion, Lance, Barracks, BarracksBrute, BarracksRunner, BarracksSpitter, Wall, Turret, MineralSilo, Constructor, Base, CablePower, CablePipe, CableConveyor, CrossingPower, CrossingPipe, CrossingConveyor, House, MedicStation, Count };
 
 export constexpr bool isRetiredBarracksType(EStructureType t)
 {
@@ -34,22 +34,50 @@ export constexpr bool isPlaceableType(EStructureType t)
 }
 // PHYSICAL CABLES: 1-cell grid segments, one type per medium. A contiguous same-medium run of
 // BUILT segments touching two buildings derives a GameStructureLink between them (see
-// rebuildDerivedLinks). The Crossing is a 1x3 oriented bridge: a perpendicular cable passes UNDER
-// its middle cell; it conducts whichever ONE medium its two ENDS resolve to.
+// rebuildDerivedLinks). A Crossing is a 1x3 oriented bridge OF ONE MEDIUM (one type per medium,
+// like the cables): a perpendicular cable passes UNDER its middle cell, and it conducts only its
+// own medium between its two ENDS — never whatever happens to touch them.
 export constexpr bool isCableType(EStructureType t)
 {
     return t == EStructureType::CablePower || t == EStructureType::CablePipe
         || t == EStructureType::CableConveyor;
 }
+export constexpr bool isCrossingType(EStructureType t)
+{
+    return t == EStructureType::CrossingPower || t == EStructureType::CrossingPipe
+        || t == EStructureType::CrossingConveyor;
+}
 export constexpr bool isCableOrCrossing(EStructureType t)
 {
-    return isCableType(t) || t == EStructureType::Crossing;
+    return isCableType(t) || isCrossingType(t);
+}
+// WALK-THROUGH structures: players and units pass over them (the prefab's collider is Layer Cable,
+// projectiles only), so they are no nav obstacle, never block a placement by a standing actor,
+// and an RMB on one is a plain ground order. Cables, crossings and the flat Solar slab.
+export constexpr bool isWalkThrough(EStructureType t)
+{
+    return isCableOrCrossing(t) || t == EStructureType::Solar;
 }
 export constexpr int cableMediumOf(EStructureType t) // 0 energy, 1 fuel, 2 minerals; -1 = not a cable
 {
     return t == EStructureType::CablePower ? 0
          : t == EStructureType::CablePipe ? 1
          : t == EStructureType::CableConveyor ? 2 : -1;
+}
+export constexpr int crossingMediumOf(EStructureType t) // same scale; -1 = not a crossing
+{
+    return t == EStructureType::CrossingPower ? 0
+         : t == EStructureType::CrossingPipe ? 1
+         : t == EStructureType::CrossingConveyor ? 2 : -1;
+}
+export constexpr EStructureType crossingForMedium(int medium)
+{
+    return medium == 1 ? EStructureType::CrossingPipe
+         : medium == 2 ? EStructureType::CrossingConveyor : EStructureType::CrossingPower;
+}
+export constexpr int conduitMediumOf(EStructureType t) // cable OR crossing medium; -1 = neither
+{
+    return isCableType(t) ? cableMediumOf(t) : crossingMediumOf(t);
 }
 
 // (No live structure ever carries a retired per-type barracks value — loadFrom converts them.)
@@ -109,9 +137,6 @@ public:
         // spawn; rebuildDerivedLinks enables the ones pointing at a connected neighbour. The owning
         // EntityPtr keeps the whole tree alive, so the raw pointers cannot dangle.
         Entity* arms[4] = {};
-        // Crossing: the medium it currently conducts (-1 = inert), stamped by rebuildDerivedLinks;
-        // drives the tint (power/pipe/conveyor hue, authored gray while inert).
-        int8 conductMedium = -1;
         // House: the barracks it feeds population to (0 = none in range), re-derived every
         // refresh() — nearest BUILT own-team barracks within "House link radius".
         uint32 linkedId = 0;
@@ -222,6 +247,10 @@ public:
         return m_spawnEnergy[glm::clamp(unitType, 0, GameNumUnitTypes - 1)];
     }
     float houseLinkRadius() const { return m_houseLinkRadius; }
+    // The medic's reach/rate live in GameStructureParams (the component's machine logic heals
+    // units); these read them for the player heal, the ghost and the ring.
+    float medicHealRadius() const { return GameStructureComponent::params.medicRange; }
+    float medicHealRate() const { return GameStructureComponent::params.medicHealRate; }
     int housePopulation() const { return m_housePopulation; }
     oc::span<const glm::vec3> structureRoute(int index) const // barracks only (empty elsewhere)
     {
@@ -320,6 +349,7 @@ public:
         case EStructureType::Solar:
         case EStructureType::Fabricator:
         case EStructureType::Constructor:
+        case EStructureType::MedicStation:
         case EStructureType::Turret:      return m_internalBuffer;
         case EStructureType::Barracks:    return 1.0f; // > 0 = power cables attach; the REAL capacity is
                                                        // stamped per instance (= its unit's cost, the build bar)
@@ -385,6 +415,7 @@ public:
         case EStructureType::Extractor:
         case EStructureType::Fabricator:
         case EStructureType::House:
+        case EStructureType::MedicStation:
         case EStructureType::MineralSilo: return 2;
         case EStructureType::Barracks:
         case EStructureType::Base:        return 3;
@@ -399,6 +430,11 @@ public:
     // barracks must not block its spawn points.
     bool cellsFree(EStructureType type, const glm::vec3& snappedGroundPos,
         const glm::quat& rot = glm::quat(1.0f, 0.0f, 0.0f, 0.0f), bool ignoreCables = false) const;
+    // The SOLE occupant of a 1-cell snapped position that a crossing's middle may bridge: a plain
+    // cable segment, or another crossing's END cell (-1 = empty, a building, a crossing middle, or
+    // already bridged). The paint stroke's auto-crossing probe: such a cell of another medium gets
+    // the stroke's crossing placed over it.
+    int bridgeableAt(const glm::vec3& snappedGroundPos) const;
     static float spawnHeightOf(EStructureType type); // the prefab box's HALF height (ghost preview)
     // A player capsule or unit standing on the footprint (spatial query — no rosters). Separate
     // from cellsFree on purpose: that one also probes unit SPAWN points, which must not refuse a
@@ -500,6 +536,11 @@ private:
     }
     void insertCells(const Ref& s);   // spawn seam (also demotes an under-cable below a crossing)
     void eraseCells(const Ref& s);    // remove seam (promotes the under-cable back to primary)
+    // (cx, cz) is the raised MIDDLE cell of the crossing at frame index `index`.
+    bool isCrossingCenter(int index, int cx, int cz) const;
+    // The occupant at frame index `index` may pass UNDER a crossing's middle at (cx, cz): a plain
+    // cable, or a crossing whose END cell this is — an end counts as cable for bridging.
+    bool isBridgeable(int index, int cx, int cz) const;
     // The BUILT cable segment occupying a cell: the primary occupant, or the under-cable when a
     // crossing sits on top (which is what keeps a crossing from unioning with the cable under it).
     int cableSegmentAt(int cx, int cz, bool builtOnly = true) const;
@@ -576,8 +617,11 @@ private:
         2.0f,  // CablePower (per segment)
         2.0f,  // CablePipe
         2.0f,  // CableConveyor
-        6.0f,  // Crossing
+        6.0f,  // CrossingPower
+        6.0f,  // CrossingPipe
+        6.0f,  // CrossingConveyor
         40.0f, // House
+        50.0f, // MedicStation
     };
     float m_startMinerals = 100.0f;
     float m_extractorSnapRadius = 6.0f;
@@ -593,11 +637,15 @@ private:
     float m_cableHealthMax = 40.0f; // segments/crossings are softer than buildings
     float m_internalBuffer = 10.0f;
     float m_generatorBuffer = 10.0f;
-    float m_batteryCapacity = 100.0f;
+    float m_batteryCapacity = 200.0f;
     float m_generatorFuelTank = 10.0f;
-    float m_fuelTankCapacity = 100.0f;
-    float m_mineralSiloCapacity = 100.0f;
+    float m_fuelTankCapacity = 200.0f;
+    float m_mineralSiloCapacity = 200.0f;
     float m_mineralBaseCapacity = 100.0f;
+    // MEDIC STATION: a plain powered consumer; while powered its component update heals own-team
+    // units in reach (GameStructureParams::medicRange/medicHealRate) and GameMatch heals the own
+    // player (tickMedicHealing).
+    float m_medicEnergyPerSec = 1.5f;
     float m_barracksEnergyIntake = 2.0f; // energy/s a barracks' power links deliver at most: the BUILD RATE
                                          // (build time = unit cost / this — Grunt 5 -> 2.5 s, Brute 20 -> 10 s)
     float m_genEnergyPerSec = 7.5f;

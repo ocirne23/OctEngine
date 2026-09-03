@@ -3,6 +3,8 @@ export module Game:Match;
 import Core;
 import Core.glm;
 import Core.Camera;
+import Core.Rect;  // the labels job's captured viewport
+import Threading;  // JobCounter (the labels job)
 import Entity;
 import Force;
 import Input;
@@ -146,9 +148,9 @@ private:
         EStructureType type = EStructureType::Emitter;
         int nodeIndex = -1; // Extractor: the free node the ghost snapped to
     };
-    // Interaction modes: Select is the neutral mode (click inspects, RMB routes/moves); Q/W/E open
-    // the build categories (Combat/Production/Cables), X = Delete. Cables place like any other
-    // item — the old two-click LINK tools are gone (connections derive from cable adjacency).
+    // Interaction modes: Select is the neutral mode (click inspects, RMB routes/moves); Q/W open
+    // the build categories (Combat/Production), A/S/D arm a cable straight from the root page,
+    // X = Delete. Connections derive from cable adjacency (the old two-click LINK tools are gone).
     enum class EPlayerMode : uint8 { Build, Delete, Select };
 
     Aim computeAim(const Camera& camera, EStructureType type) const;
@@ -158,11 +160,14 @@ private:
     void updateBuildMode(const Camera& camera, bool confirmEdge, bool cancelEdge);
     void disarmBuild(); // drop the armed item + any half-finished two-click flow (RMB / Esc)
     void activateSlot(int slot); // grid hotkey OR click on the drawn slot: category / item / Delete / Cancel / Back
-    void cancelOneLevel();       // C slot, Esc, Tab: two-click step -> armed item -> page/mode, one per press
-    // Cable segments place by PAINTING: LMB press places a cell, holding + dragging keeps placing
-    // the cells the cursor crosses (L-filled between samples so the run stays connected).
+    void cancelOneLevel();       // Esc, Tab: two-click step -> armed item -> page/mode, one per press
+    // Cable segments place by PAINTING: LMB press starts a stroke, holding + dragging places the
+    // cells the cursor crosses (L-filled between samples so the run stays connected). The newest
+    // cell is HELD BACK one step: a plain cable of another medium ahead turns it into the near end
+    // of a Crossing auto-placed over that cable along the stroke (see placeCableLine).
     void updateCablePlacement(const Camera& camera, EStructureType armed, bool confirmEdge);
-    void placeCableLine(EStructureType armed, const glm::vec3& from, const glm::vec3& to, bool preview);
+    void placeCableLine(EStructureType armed, const glm::vec3& from, const glm::vec3& to);
+    void finishCableStroke(EStructureType armed); // release / RMB cancel: lands the held cell, ends the stroke
     void updateDeleteMode(const Camera& camera, bool confirmEdge);
     void updateSelectMode(const Camera& camera, bool confirmEdge, bool rmbEdge);
     // Shared click-to-select (Select mode, and Build mode wherever the click can't place).
@@ -171,9 +176,24 @@ private:
     void updateRightClickActions(const Camera& camera, bool rmbEdge);
     int hoveredStructure(const Camera& camera) const; // structure index under the cursor, or -1
     void setMode(EPlayerMode mode);
-    void buildWorldLabels(const Camera& camera); // health bars + selected info over structures
+    // Health bars + selected info over structures/units: a JOB (submitWorldLabels at the end of the
+    // game tick, joined by main before the widget pass is queued — see the definition).
+    void buildWorldLabels();
+    void submitWorldLabels();
+    Camera m_labelsCamera;
+    Rect m_labelsViewport;
+    bool m_labelsCameraValid = false;
+    JobCounter m_labelsCounter;
+public:
+    void joinWorldLabels(); // main.cpp, right before ui.update
+private:
     void updateHud();
     void tickBaseHealing(float deltaSec); // own player only — the owner computes its own health
+    void tickMedicHealing(float deltaSec); // medic stations: the own player (every instance); units heal in the station's component update
+    void tickAmbientWander(float deltaSec); // co-op POST-UPDATE job: idle AI units stroll now and then, biased toward the Base (a steady per-frame budget)
+    float m_wanderBudget = 0.0f;           // fractional strolls carried to the next frame
+    float m_wanderSelectedFrac = 0.05f;    // smoothed share of the roster inside the SIM LOD selection (from the probes)
+    std::mt19937 m_wanderRng{ 0x5eedu };   // the job's own generator (never the shared C rand from a worker)
     void tickPlayerMelee(float deltaSec); // AUTHORITY: every player capsule grinds adjacent enemy units
     void requestPlace(EStructureType type, const glm::vec3& pos, int nodeIndex, const glm::vec3& facing);
     void requestDemolish(uint32 id);
@@ -185,8 +205,11 @@ private:
     void sendStats();
     // NAV: feed the flow-field service (authority only) — obstacles = rock terrain + every
     // structure footprint (change-detected inside Nav), sources = per team its structures + player
-    // bodies (every frame). Units read the fields inside the entity pass.
-    void feedNav();
+    // bodies (every frame). Units read the fields inside the entity pass. The whole feed — gather
+    // AND the Nav setters — is a post-update job (submitted by update, joined at the top of the
+    // next frame, ahead of that frame's NavSystem::update).
+    void submitNavFeed(float deltaSec); // queues gatherNavFeed on the post-update batch
+    void gatherNavFeed(float deltaSec); // one SLICE of the unit sweep a frame (a cycle = Nav's rebuild interval); publishes at the cycle end
     // SAVE/LOAD (F9/F10, server/single player only — clients refuse): structures/cables/units for
     // all teams to Assets/Local/gamesave.txt (players are NOT saved). Loading clears the current
     // set (removal hooks -> GRm prune connected clients) and re-broadcasts the loaded state.
@@ -202,6 +225,13 @@ private:
     oc::vector<Nav::NavObstacle> m_wallObstacles; // rock terrain rects (static, both modes)
     oc::vector<Nav::NavObstacle> m_navObstacles;  // per-frame scratch: walls + structures
     oc::vector<Nav::NavSource> m_navSources[Nav::MaxTeams];
+    // Unit sources are culled to units with ANOTHER team's unit/player within this reach (coarse:
+    // a cell hash of that size, 3x3 neighbourhood) — see gatherNavFeed. Bucket retained per frame.
+    float m_navUnitSourceReach = 64.0f;
+    oc::unordered_map<uint64, uint8> m_navCellTeams;     // the hash the current cycle culls against (built by the previous cycle)
+    oc::unordered_map<uint64, uint8> m_navCellTeamsNext; // being built by the current cycle's slices
+    oc::vector<Nav::NavSource> m_navUnitSources[Nav::MaxTeams]; // the current cycle's accepted unit sources
+    uint32 m_navFeedCursor = 0; // roster index the next slice starts at (0 = a cycle just published)
     // Lane seeding parameters live on NpcSystem (one set of tweaks); Match reads them for its own
     // route/order seeding.
     float laneSeedSpeed() const { return m_npcs.orderLaneSpeed(); }
@@ -229,7 +259,7 @@ private:
     bool m_lmbReleased = false;  // release edge (consumed by updateWindowed)
     void updateUnitSelection(const Camera& camera);
     bool orderSelectedUnits(const glm::vec3& target, bool freshOrder); // true = a lane was seeded (fresh order + A* found a route)
-    bool moveOrderAt(const glm::vec3& worldPos); // THE RMB move order: player + selected units walk there (fresh order, lane seeded); returns orderSelectedUnits'
+    bool moveOrderAt(const glm::vec3& worldPos, bool includePlayer = true); // THE RMB move order: player (unless CTRL: units only) + selected units walk there (fresh order, lane seeded); returns orderSelectedUnits'
     glm::vec3 pointOutsideFootprint(const glm::vec3& clicked, int structure) const; // a click on a building -> the reachable point at its face
     bool m_scenarioOrderPending = false; // runScenario loaded; issueScenarioOrder retries each update until units are queryable
     uint32 m_scenarioOrderTries = 0;
@@ -244,17 +274,19 @@ private:
     bool m_saveKeyWasDown = false; // F9/F10 edges (save/load game state)
     bool m_loadKeyWasDown = false;
     int m_buildCategory = -1;    // grid hotbar page: -1 = ROOT (categories), else index into the categories
+                                 // (c_cableCategory = a cable armed FROM the root page — still drawn as root)
+    bool isRootPage() const;     // the hotbar shows the root layout (categories, cables, Delete)
     int m_buildSelection = -1;   // armed item within the category (-1 = nothing armed, no ghost)
     bool m_gridKeyWasDown[12] = {}; // QWER/ASDF/ZXCV edges (polled — one per hotbar slot)
     bool m_lanceAiming = false;  // Lance two-click placement: first click anchored, awaiting facing
     glm::vec3 m_lancePendingPos{ 0.0f };
     bool m_wallPlacing = false;  // Wall drag placement: the press anchored the line start, release places
     glm::vec3 m_wallStart{ 0.0f };
-    // Crossing orientation: the long axis follows the CAMERA facing (quantized to ±X/±Z);
-    // pressing/clicking the armed CRSS slot again rotates it 90°.
-    bool m_crossingRotated = false;
+    bool m_rmbUnitsOnly = false;   // CTRL was held on the RMB press: the move order skips the player
     bool m_cablePainting = false;  // LMB held: paint cells as the cursor crosses them
-    glm::vec3 m_cablePaintLast{ 0.0f };
+    glm::vec3 m_cablePaintLast{ 0.0f }; // the last cell the stroke reached (the next L-fill starts here)
+    bool m_cablePendingValid = false;   // m_cablePending = the stroke's newest cell, held back one step
+    glm::vec3 m_cablePending{ 0.0f };
 
     // TEAMS are SLOTS, never derived from the clientId: ids are minted monotonically and never
     // recycled (a reconnect or a failed first attempt burns one), so the second connection of the
@@ -372,14 +404,20 @@ private:
     // brute-heavy archetype fields far fewer bodies than a swarm flood of the same budget.
     int m_waveBudget = 20;           // points in wave 1 (swarm costs 1 = the old unit count)
     float m_waveBudgetGrowth = 40.0f; // extra points per subsequent wave
+    float m_waveGrowthGrowth = 10.0f; // how much that per-wave growth itself climbs every wave
     float m_waveCost[(int)ENpcType::Count] = { 3.0f, 10.0f, 2.0f, 5.0f, 1.0f,   // Grunt, Brute, Runner, Spitter, Swarm
                                                8.0f, 25.0f, 60.0f, 12.0f, 30.0f,  // Elite, Giant, Titan, Lobber, Spawner
                                                5.0f };                             // Warrior
     float waveCostOf(ENpcType t) const { return glm::max(m_waveCost[(int)t], 0.1f); }
-    int m_waveMaxAlive = 15000;    // total AI units cap (ambient + waves)
-    int m_ambientBudget = 30000;    // POINTS of world-start scatter (same per-type costs as waves)
+    int m_waveMaxAlive = 25000;    // total AI units cap (ambient + waves)
+    int m_ambientBudget = 50000;    // POINTS of world-start scatter (same per-type costs as waves)
     float m_ambientSafeRadius = 45.0f; // the scatter keeps clear of the Base (planar)
     int m_ambientRecipeWindow = 3;     // a group rolls recipes gated within this many bands below its depth band
+    float m_ambientDepthScale = 0.9f;  // the depth fraction that already counts as the deepest band (titans off the corners)
+    float m_ambientWanderInterval = 90.0f; // mean seconds between an idle AI unit's strolls (0 = off)
+    float m_ambientWanderDistance = 12.0f; // stroll length (0.4-1x of it)
+    float m_ambientWanderBaseBias = 0.5f;  // heading = random unit vector + bias * toward the Base
+    float m_ambientWanderTimeout = 12.0f;  // a stroll that does not arrive gives up after this
     int m_spawnsPerFrame = 100;    // trickle budget — a huge wave enters over seconds, not one hitch
 
     bool m_enabled = false;

@@ -56,7 +56,13 @@ Three entry points, all main thread, at three different points of main.cpp's loo
 
 **Consequences of `update`'s placement:** freshly spawned actors link into the spatial index at the
 NEXT commit (the spawn guard keeps them visible), new bodies' velocities integrate on the NEXT step,
-and `feedNav`'s staging feeds the NEXT frame's `NavSystem::update`.
+and the nav feed's staging feeds the NEXT frame's `NavSystem::update` — **the gather
+(`gatherNavFeed`: structure roster, unit roster, player bodies) AND the Nav setter calls are ONE
+POST-UPDATE job** submitted by `update` and joined at the top of the next frame, ahead of that
+frame's `NavSystem::update` (see Nav's thread contract for why the setters are legal there). **The
+unit sweep is SLICED over Nav's "Rebuild interval"** — ceil(roster × dt / interval) units a frame, a
+constant slice, publishing when the cursor wraps — since Nav consumes sources only at that cadence;
+the cull hash a cycle tests against is the previous cycle's (one interval stale).
 
 In game mode `InputControls::setGameMode(true)` mutes the testbed spawn and possess keys — script
 event fires, hotbar routing, F5/F6 and T/R/G stay — and the sponza spawn is skipped.
@@ -72,7 +78,7 @@ flows, no turret fire.
 
 > **EVERY BUILDING prefab authors `Global true`** (emitter, generator, extractor, battery, fuel tank,
 > solar, fabricator, bastion, lance, barracks, wall, turret, silo, constructor, base, house), so
-> player structures are never LOD-culled. **Only the CABLE segments and the Crossing stay
+> player structures are never LOD-culled. **Only the CABLE segments and the crossings stay
 > LOD-selected** — they carry no stores, and hundreds of them would sit in the always-visited list.
 
 `terrainroot.pre` is Global too, so the rocks, markers and barrier children are selected individually
@@ -198,12 +204,34 @@ lines up on the cell lattice.**
 
 **The archetype roll is gated by GEODESIC spawn depth**, the same `minWave` gate driven by depth
 instead of time, as a **WINDOW**: only recipes whose gate lies within "Ambient recipe window" (3)
-bands below the cell's depth band roll.
+bands below the cell's depth band roll. The band is the cell's depth over `maxDepth` × "Ambient depth
+scale" (0.9), clamped to 1 — **so the top band starts before the deepest cell and titans are not
+confined to the corners** (the corners are the geodesic maximum; at 0.9 the mid-edges qualify too).
 
 > So the near ring is swarm-grade and **the deep map holds ONLY the elite tier** — giants, titans and
 > lobbers never sit near the Base.
 
 The scatter keeps clear of the planar "Ambient safe radius" (45 m) around the Base.
+
+**Wander** (`tickAmbientWander`, co-op authority, **a POST-UPDATE job** — it only writes idle units'
+order fields and reads the roster + the immutable map, so it runs during present, never in front of
+the entity batch submit; its orders land in the next pass): an IDLE AI unit — not hunting, locked or routing —
+now and then strolls 0.4–1× "Ambient wander distance" (12 m) with its heading = a random unit vector
++ "Ambient wander base bias" (0.5) × toward the Base, clamped to open ground. **Cheap and SMOOTH by
+design:** the expected strolls per frame = SELECTED roster / "Ambient wander interval" (90 s) × dt
+(the selected fraction is a smoothed estimate from the random probes — sizing from the whole roster
+dumped every far unit's strolls on the few near a player), carried as a fractional budget (`m_wanderBudget`) so every frame
+issues that many on average, each costing at most 32 random roster probes to find an idle unit — a
+steady trickle, no per-unit timer, no burst.
+The order is a **wander order** (`GameUnitComponent::orderWander`): it never seeds a lane (not even
+on the hunt-seed AI team — a stroll is a direction, not a route), **walks at
+"Wander speed mult" (0.25) × the unit's move speed, capped at "Wander speed max" (2 m/s) so runners
+stroll too** (the far tick's teleport as well), and self-expires
+after "Ambient wander timeout" (12 s — ticked by the far tick as well), so a target behind rock cannot pin
+the unit. **Only SELECTED units (inside some player's outer SIM LOD tier) are candidates**: a far
+unit is invisible, would walk the order by the far tick's teleport and then arrive in view
+mid-stroll — a whole patch visibly "starting to wander" as a player approached. Tier 2 and closer
+behave alike.
 
 ## Waves
 
@@ -217,7 +245,8 @@ They-are-Billions style. `tickWaves` arms the clock ("First wave delay" 30 s, th
    player-only barrier.** Cluster points that drift inside push back out along the dominant axis,
    clamped to `c_coopGroundEdge` 296.
 2. **Sizes the wave in BUDGET POINTS**, not unit counts: "Wave budget" (20) plus "Wave budget growth"
-   (40) per wave. Each type spends its "Cost <type>" tweak, **so a brute-heavy archetype fields far
+   (40) per wave, where the growth itself climbs by "Wave growth growth" (10) every wave — wave i =
+   base + growth·i + growthGrowth·i(i−1)/2. Each type spends its "Cost <type>" tweak, **so a brute-heavy archetype fields far
    fewer bodies than a swarm flood of the same budget.** The "Max enemy units" cap (15000) converts at
    the cheapest cost, and an unaffordable roll downgrades to the mix's cheapest type.
 3. Seeds ONE lane and fires "GWv" (u16 index) at clients.
@@ -469,12 +498,14 @@ capped by the MEDIUM's throughput.
 Energy propagates hop by hop, thin lines starve, and a full generator buffer throttles production
 (export-limited = no fuel burn). Consumers drain their internal battery; empty = unpowered.
 
-**Buffers:** emitter and extractor "Internal buffer" 10, generators 20, battery 100, **barracks =
+**Buffers:** emitter and extractor "Internal buffer" 10, generators 20, battery 200, **barracks =
 the selected unit's energy cost** (stamped per instance in `stampTuning`; `energyCapacityOf` returns
 a 1.0 placeholder just so power cables attach) — its store IS the BUILD BAR: its power links are
-capped to "Barracks energy intake/s" 2 on both endpoints' copies, so the store fills at the build
-rate and a unit is born the moment it is full (build time = cost / intake — Grunt 2.5 s, Brute
-10 s; no timer). A barracks needs a power cable and holds no minerals. Powered extractors and fabricators fill their OWN buffer and **stall when full**. Only
+capped to "Barracks energy intake/s" 2 **SHARED across all of them (each link gets intake / its
+energy link count)** on both endpoints' copies, so the store fills at the build rate however many
+feeders the run attaches, and a unit is born the moment it is full (build time = cost / intake —
+Grunt 2.5 s, Brute 10 s; no timer). A per-LINK cap used to let a barracks on a clique run of N
+feeders build N times as fast. A barracks needs a power cable and holds no minerals. Powered extractors and fabricators fill their OWN buffer and **stall when full**. Only
 what sits in Mineral silos and the Base is SPENDABLE (a per-team cache recomputed per tick; spending
 drains silos first, Base last).
 
@@ -484,12 +515,16 @@ The link tools, point-to-point cables and Connector range links are all REMOVED.
 RETIRED enum slot** — its table entries remain, placement refuses it, and `loadFrom` skips it.
 
 Cables are **1-cell GRID STRUCTURES**: `CablePower` / `CablePipe` / `CableConveyor` (one per medium,
-no tiers) plus the **1×3 oriented Crossing** bridge.
+no tiers) plus the **1×3 oriented crossing** bridges — **ALSO one per medium**: `CrossingPower` /
+`CrossingPipe` / `CrossingConveyor` (`isCrossingType`, `crossingMediumOf`, `crossingForMedium`).
+There is no generic crossing. The three share `crossing.pre`; `applyStructureTint` hues it by
+medium.
 
-A perpendicular cable passes UNDER the Crossing's middle cell. It conducts whichever ONE medium its
-two END cells resolve to: **each end accepts from THREE sides** (outward plus the two laterals; only
-the middle is pass-through-only), and a run on one end plus a capacity-holding building on the other
-also counts.
+A perpendicular cable passes UNDER a crossing's middle cell. **A crossing conducts ONLY its own
+medium** between its two END cells — a cable of another medium at an end is just in the way, and
+the crossing never re-types on what touches it. **Each end accepts from THREE sides** (outward plus
+the two laterals; only the middle is pass-through-only), and a run on one end plus a building
+holding the medium on the other also counts.
 
 ### Links are DERIVED, never authored
 
@@ -515,19 +550,28 @@ A pair of buildings may still hold **ONE LINK PER MEDIUM**.
 
 ### The cell hash
 
-`m_cells`: cellKey → `{id, underId}`, maintained at the spawn and remove seams (a crossing demotes its
-under-cable to `underId`; removal promotes it back).
+`m_cells`: cellKey → `{id, underId}`, maintained at the spawn and remove seams (a crossing demotes
+what its middle bridges to `underId`; removal promotes it back).
 
 It backs `cellsFree` — **per cell now: buildings refuse ANY occupied cell (no building on a cable); a
-cable may slot under a free crossing middle; a crossing may bridge exactly one cable** — plus the
-derivation and the arm visuals. `ignoreCables` is the unit-spawn probe, since cables are walk-through.
+cable may slot under a free crossing middle; a crossing's middle may bridge exactly one plain cable
+OR one END cell of another crossing (`isBridgeable` — an end counts as cable for bridging, so
+crossings chain and stack); its ends must be free** — plus the derivation and the arm visuals.
+`ignoreCables` is the unit-spawn probe, since cables are walk-through.
+
+**`isWalkThrough`** = cables, crossings AND the flat **Solar** slab: their prefab collider is `Layer
+Cable, CollidesWith Projectile`, so players and units pass over them, and the code treats them alike
+— no nav obstacle in `feedNav`, `actorInFootprint` never refuses them, `ignoreCables` lets unit
+spawns land on them, and an RMB on one is a plain ground order. (The Solar keeps everything else a
+building has: cells refuse other placements, labels, GSt, links.)
 
 ### Draw and lifecycle
 
 Segments are real meshes with per-medium authored tints (power yellow, pipe orange, conveyor blue;
 blueprint gray rides `applyStructureTint`). Each is a low `Cylinder2` hub with **4 render-only ARM
 child entities** (`ArmPX/NX/PZ/NZ`, `Enabled false` in the `.pre`, cached on `Ref::arms` at spawn,
-toggled by `updateArms`). A conducting Crossing TINTS to its medium's hue (`Ref::conductMedium`).
+toggled by `updateArms` — toward a crossing only when its medium matches). A crossing is tinted to
+its TYPE's medium hue always, conducting or not.
 
 `drawDebug` adds only the FLOW pulse: per conducting run, a pulsing ring over every segment, with
 brightness and speed from the busiest attached building's `flowUtil` — **which the server computes and
@@ -584,9 +628,9 @@ Every placement — **extractors included, since the node's position snaps too**
 | 1×1 (cables included) | most |
 | 2×2 | FuelTank, Bastion, Turret, Solar, Fabricator, MineralSilo, House |
 | 3×3 | Barracks, Base |
-| 3×1 / 1×3 | **Crossing** — the ONE non-square footprint, by its facing |
+| 3×1 / 1×3 | **the three crossings** — the ONE non-square footprint, by its facing |
 
-> The Crossing's facing is quantized to ±X/±Z at `placeStructure` like the Lance, and carried on GPl
+> A crossing's facing is quantized to ±X/±Z at `placeStructure` like the Lance, and carried on GPl
 > and in the save's `Facing` — **otherwise client derivation diverges on which cells it covers.**
 > Prefab `Scale` / `HalfExtents` = footprint half, so boxes fill their cells.
 
@@ -624,13 +668,15 @@ identically.**
 
 | Slot | Root page | Category page |
 |---|---|---|
-| Q / W / E | **CMBT / PROD / CBLE** | the category's items, in order |
+| Q / W | **CMBT / PROD** | the category's items, in order |
+| A / S / D | **CBL-P / CBL-F / CBL-M** — the cables arm straight from the root (a hidden `c_cableCategory`, still drawn as the root page: `isRootPage`) | items 4–6 |
 | X (slot 9) | **DEL** | **DEL** (category pages cap at 9 items so X stays Delete) |
-| C (slot 10) | — | **CNCL** |
-| V (slot 11) | — | **BACK** |
+| C (slot 10) | **CNCL** — leaves Delete mode / disarms a cable, back to Select | **CNCL** — straight back to Select |
+| V (slot 11) | — | — |
 
-**C / Esc / Tab = `cancelOneLevel`**: a two-click step drops → the armed item disarms → the page or
-Delete mode returns to Select, **one per press**. **V = straight back to Select.**
+**Esc / Tab = `cancelOneLevel`**: a two-click step drops → the armed item disarms → the page or
+Delete mode returns to Select, **one per press**. **C = straight back to Select, whatever was
+armed.**
 
 `escWouldCancel()` is true while Esc still has an in-game meaning, and **main's escape MENU only opens
 when it is false — so the cancel chain keeps first claim.**
@@ -667,7 +713,8 @@ hotbar). Options: **Grunt / Brute / Runner / Swarm**.
 `UnitType`.
 
 Each spawn pays the type's "\<Type\> spawn energy" from the energy store, whose capacity IS that
-cost and which fills at the capped "Barracks energy intake/s" — **full store = a unit, so the bar
+cost and which fills at the capped "Barracks energy intake/s" (a TOTAL over all its power links) —
+**full store = a unit, so the bar
 over the barracks is the build progress and the price IS the build time** (cost / intake). The
 spawn check carries a 0.01 epsilon so a fill that lands a rounding step short of the cap still
 counts.
@@ -694,23 +741,46 @@ line chain with circles for the own team.
 
 ## W — Production
 
-**Generator · Solar · Extractor · Fabricator · Constructor · Battery · Fuel tank · Mineral silo**
+**Generator · Solar · Extractor · Fabricator · Constructor · Battery · Fuel tank · Mineral silo ·
+Medic station**
 
 Solar is a free trickle with no fuel (a flat `CubeQuarter` slab); the fabricator turns energy + fuel
 into minerals; the mineral silo is the team's spendable bank.
 
-## E — Cables
+* **Medic station** — 2×2, a plain powered consumer ("Medic energy/s" 1.5 from its internal buffer,
+  band 0, unpowered = red ring). While built AND powered it heals every body inside "Medic heal
+  radius" (12 m, green ring) at "Medic heal/s" (4) — **HEALTH and the SHIELD BATTERY both**, the
+  same rate each. **UNITS: the station's own component update** (`EMachineKind::Medic`, the turret
+  pattern — one spatial query of the radius per powered station inside the parallel pass, banking
+  `GameUnitComponent::heal` into the unit's heal inbox; the unit's own tick applies it to health and
+  battery and clears its permanent `collapsed` latch once the battery holds charge). Stations
+  STACK on units (two radii = two heals). **The own player**: `GameMatch::tickMedicHealing` on every
+  instance (`GamePlayer::heal` + `charge`; health/energy are owner-computed, `powered` arrives
+  through GSt), once per tick however many overlap. The reach/rate tweaks bind
+  `GameStructureParams::medicRange/medicHealRate`. Ghost shows the reach.
 
-**Power cable · Pipeline · Conveyor · Crossing**
+## A / S / D — Cables (root page)
 
-Cable segments place by **PAINTING only** (`updateCablePlacement`): an LMB press places its cell,
-holding and dragging keeps placing the cells the cursor crosses (L-filled between cursor samples by
-`placeCableLine` — dominant leg first, **occupied cells skip so a stroke across an existing run fills
-gaps**, so the run never breaks), and the release ends the stroke. The old two-click L-line is gone.
+**Power cable · Pipeline · Conveyor** (slots `CBL-P/F/M`). **The crossings are NOT on the hotbar** —
+only the paint stroke places them (auto-crossing below).
 
-**The Crossing is single-click**: its long axis follows the CAMERA facing quantized to ±X/±Z, and
-re-pressing or clicking the armed CRSS slot **rotates it 90°**. One placement burst caps at
-`c_cableMaxSegments` 32 GqP events.
+Cable segments place by **PAINTING only** (`updateCablePlacement`): an LMB press starts a stroke at
+its cell, holding and dragging keeps placing the cells the cursor crosses (L-filled between cursor
+samples by `placeCableLine` — dominant leg first, **occupied cells skip so a stroke across an
+existing run fills gaps**, so the run never breaks), and the release ends the stroke. The old
+two-click L-line is gone.
+
+**Auto-crossing.** The stroke HOLDS its newest cell back one step (`m_cablePending`). When the cell
+after it is a bridgeable SOLE occupant of ANOTHER medium (`bridgeableAt` — a plain segment or another
+crossing's end cell, with nothing bridging it), the stroke places **the stroke's OWN medium's crossing over that cell with its long
+axis along the stroke** (`crossingForMedium`): the held cell and the cell beyond become the
+crossing's two end cells and are never painted, so the painted run continues through the
+crossing's outward ends. A crossing the cells refuse (an end cell occupied, an actor on
+it, an L-turn at the foreign cell) falls back to the plain skip. Same-medium cells still just skip —
+the stroke merges into that run. The release AND the RMB cancel both land the held cell (it was
+already shown painted); switching items or disarming drops it.
+
+One placement burst caps at `c_cableMaxSegments` 32 GqP events.
 
 ## The Bases
 
@@ -754,7 +824,8 @@ death, drawn with a green ring.
 
 **EVERY RMB MOVE ORDER** — ground, held re-aim, or building face — **also goes to the selected
 units**: `orderMove` = a LOCKED target with `moveOrder` set (dropping the route), auto-cleared within
-`waypointRadius` so the AI resumes. A DSL `setTarget` lock never clears.
+`waypointRadius` so the AI resumes. A DSL `setTarget` lock never clears. **CTRL + RMB = units ONLY**
+— the player stays put (`m_rmbUnitsOnly`, latched on the press for the whole hold).
 
 A FRESH order can make the unit IGNORE the lane term for "Order flow blind" seconds so an old trail
 cannot pull it back — **0 by default now that a fresh order SEEDS its own lane.**
@@ -764,8 +835,8 @@ cannot pull it back — **0 by default now that a fresh order SEEDS its own lane
 **Neutral / default = SELECT.** Click to inspect (highlight ring plus overhead info); RIGHT-click
 GROUND with an own barracks selected = a waypoint; RIGHT-click a building = a MOVE ORDER to it.
 
-**Q/W/E on the root page = Build** with that category — **the hotbar page doubles as the mode
-indicator.**
+**Q/W on the root page = Build** with that category, **A/S/D = Build with a cable armed** — **the
+hotbar page doubles as the mode indicator.**
 
 **Build mode ALSO click-selects** (`updateSelectionClick`, shared with Select mode): with nothing armed
 every LMB inspects, and **with a ghost armed, a click the placement refuses — occupied cells, i.e. on a
@@ -819,9 +890,10 @@ re-seeded by `loadUnits`).
 
 ## Targets
 
-`GameMatch::feedNav` supplies obstacles (the border ring plus structure footprints) and per-team
-sources (live non-invulnerable structures, player capsules, and **live units from the roster — no
-sweep**).
+`GameMatch::gatherNavFeed` (a post-update job that also calls the Nav setters) supplies obstacles (the border ring plus structure footprints) and per-team sources (live
+non-invulnerable structures, player capsules, and **live units from the roster — no sweep, CULLED
+to units with another team's unit or player within "Nav unit source reach" 64 m** via a coarse cell
+hash, so thousands of far ambient enemies no longer tile the map with the AI team's field).
 
 **UNIT-VS-UNIT COMBAT:** non-ranged units melee ONE enemy unit — the nearest inside
 `attackRange + victim.bodyRadius` — for `attackDps`, holding at that ring. Players in the swarm still
@@ -935,6 +1007,13 @@ bar without regrowing the bubble.
   for ~2 frames.**
 * The player capsule (`player.pre`, also every client twin) authors `Global true` — always visited by the entity pass. It MUST be: the SIM LOD selects roots by their SPATIAL entry, which the pass refreshes from `entity.pos`, which the PhysicsComponent copies from the body — a body teleported far beyond the outer radius (the death respawn from the far map) left the entry at the death spot, so the capsule was never selected again and its entity/spatial state froze there while the body stood at the Base.
 * Death teleport-respawns per the teleport contract — onto a FREE CELL near the anchor: `GamePlayer::setRespawnResolver` (wired in `spawnWorld`) probes 1x1 cells in rings of 2 m out to 16 m via `cellsFree` (cables walk-through), so a building placed on the spawn spot never swallows the capsule; a fully built-over area falls back to the anchor.
+
+**World labels** (`buildWorldLabels`: health/store bars over structures and units, the selected
+info block, the barracks popup) are a JOB: `updateWindowed` captures this frame's final camera +
+viewport, `update` submits the job at ITS END (structures settled; only the entity pass overlaps
+it, which changes field values, never rosters or the structure list), and main joins it right
+before `ui.update` queues the widget pass that paints them (`joinWorldLabels`). GameHud writes are
+mutexed; `~GameMatch` joins it too.
 
 **HUD** through `Globals::gameHud`: bars Health / Shield / Materials, counters Minerals / Fuel / Power,
 and hotbar slot counts = affordable.

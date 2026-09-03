@@ -21,20 +21,20 @@ ONE loop and ONE init sequence for every mode; `headlessServer` branches inside 
 |---|---|---|
 | 1 | **`Time::beginFrame(...)`** | The whole frame boundary: fence wait, frame-rate limit, event-pump kick, next frame's clock. **BEFORE the "main loop" scope opens and before input is sampled** — see RendererVK. Headless calls plain `Time::update()`. |
 | 2 | `ProfileScope("main loop")` opens | |
-| 3 | **`joinPostUpdateJobs()`** | Last frame's widget pass and Nav field steps. Windowed and headless alike. |
-| 4 | `ui.flushMainThreadWork()` + `renderer.updateImGuiTextures()` | Deferred tweak callbacks, container imports, and the glyphs the pass baked — **the ImGui context is quiescent from the join until `ui.update()`.** |
+| 3 | **`joinPostUpdateJobs()`** (the FRAME batch) | Last frame's widget pass only. The SIM batch — Nav field steps, the game's nav feed (gather + the Nav setters) + ambient wander — joins later, at row 10, so it also overlaps input, prepare and the camera. Windowed and headless alike. |
+| 4 | `ui.flushMainThreadWork()` + `renderer.updateImGuiTextures()` | Deferred tweak callbacks, container imports, and the glyphs the pass baked — **the ImGui context is quiescent from the join until `ui.update()`.** Also promotes the pass's PENDING draw-data snapshot to the one present records (never earlier: the pass can finish before present). |
 | 5 | `forceSystem.joinMerge()` | Last frame's merge job — **before input or drains can touch emitters.** |
 | 6 | Menu / lobby / chat servicing | Only while the main menu is active. See below. |
 | 7 | `TweakRegistry::update(dt)` | Saved/Synced change detection. |
 | 8 | `input.update` → **`ui.prepare()`** → `controls.update` | The panel prepare jobs overlap everything down to `ui.update`. |
 | 9 | Escape menu | |
-| 10 | Camera: `game->updateWindowed` **or** VR **or** fly camera + `applyPlayerCamera` | |
+| 10 | **`joinPostUpdateJobs(Sim)`**, then camera: `game->updateWindowed` **or** VR **or** fly camera + `applyPlayerCamera` | The Sim join sits before the frame's first main-thread write to units/rosters (unit orders in the windowed tick, the entity-change drains at row 11); headless joins it before the script drain instead. |
 | 11 | Script reload requests, then the UI and script `EntityChange` drains | |
 | 12 | `simDeltaSec = time.getSimDeltaSec()` | **Read HERE, after the input dispatch and tweak poll, so a pause toggle applies to this very frame.** |
 | 13 | `networkManager.receive(dt)` | Snapshot targets and events land before the sim reads them. |
 | 14 | `game->updatePlayer(simDt)` | ONLY the player-body writes (pre-physics). |
 | 15 | `scriptContext.update(...)` | |
-| 16 | **KICKS: `getCullView` → `spatialIndex.kickUpdateJob` → `renderer.kickBeginFrameJob`** | Under a `"Frame kicks"` scope, **which attributes the submit + wake cost that used to read as a gap.** |
+| 16 | **`world.joinSelection()`**, then **KICKS: `getCullView` → `spatialIndex.kickUpdateJob` → `renderer.kickBeginFrameJob`** | The join: last frame's SIM LOD selection query (fired at the end of `world.update`, it had the whole frame) must be done before the commit inside the spatial kick — normally a no-op. Kicks under a `"Frame kicks"` scope, **which attributes the submit + wake cost that used to read as a gap.** |
 | 17 | `physics.update(simDt)` | ≤ 1 step; contact events stay buffered. |
 | 18 | `audio.update` → `navSystem.update` → **`joinBeginFrameJob` → `joinUpdateJob`** | Headless instead calls `spatialIndex.commitFrame()`. |
 | 19 | `game->update(simDt)` **or** `world.setSimLodFocus(&camera.position, 1)` | The rest of the game tick; also publishes the SIM LOD focus. |
@@ -42,7 +42,7 @@ ONE loop and ONE init sequence for every mode; `headlessServer` branches inside 
 | 21 | **`world.update(renderer, simDt)`** | The parallel entity pass. |
 | 22 | `networkManager.send(dt)` | Server: snapshot entities at their POST-update poses. |
 | 23 | terrain → collider → ocean → scatter → particles → force | |
-| 24 | `ui.drawGizmoEntity` → **`ui.update(...)`** | |
+| 24 | `ui.drawGizmoEntity` → `game->joinWorldLabels()` → **`ui.update(...)`** | The game's world-labels job (kicked at the end of its tick, row 19, overlapping the entity pass) feeds the widget pass's HUD overlay, so it joins right before the pass is queued. |
 | 25 | **`kickPostUpdateJobs()` → `renderer.present()`** | Headless kicks too — **an unkicked queue only fills up.** |
 | 26 | `mainLoopScope.stop()` → `profiler.endFrame()` | **The scope stops BEFORE the frame mark, so the record stays inside this frame's window.** |
 | 27 | Headless: Sleep-based tick limiter | |

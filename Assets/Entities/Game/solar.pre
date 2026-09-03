@@ -1,5 +1,7 @@
 # Solar panel: trickles a small amount of energy into its own buffer, no fuel needed. FLAT: a
 # 4x1x4 m slab (CubeQuarter = cube with 0.25x height). Spawned origin 0.5 above ground.
+# WALK-THROUGH like the cables: Layer Cable collides only with Projectile, so players and units
+# pass over it (StructureSystem::isWalkThrough keeps it out of the nav obstacles too).
 Prefab gameSolar
 	Global true
 	Component Render
@@ -11,6 +13,8 @@ Prefab gameSolar
 	Component Physics
 		Body Static
 		ContactEvents true
+		Layer Cable
+		CollidesWith Projectile
 		Shape Box
 		HalfExtents 2 0.5 2
 	Component GameStructure

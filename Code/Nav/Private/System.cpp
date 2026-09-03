@@ -61,6 +61,7 @@ void NavSystem::initialize()
     Tweak::floatVar("Nav", "Seed range (m)", &m_seedRange, 0.0f, 400.0f, 2.0f); // 0 = the whole path
     Tweak::floatVar("Nav", "Field radius", &m_fieldRadius, 10.0f, 2000.0f, 5.0f);
     Tweak::floatVar("Nav", "Rebuild interval", &m_rebuildInterval, 0.05f, 5.0f, 0.05f);
+    Tweak::floatVar("Nav", "Build spread (s)", &m_buildSpread, 0.0f, 5.0f, 0.05f);
     Tweak::intVar("Nav", "Clearance cost", &m_clearanceCost, 0, 32);
     Tweak::intVar("Nav", "Chunk keep frames", &m_keepFrames, 1, 2000);
     Tweak::intVar("Nav", "Debug draw", &m_debugMode, 0, 2); // 1 = chunks + team field, 2 = flow + pressure
@@ -233,7 +234,7 @@ bool NavSystem::requestSeedPath(uint32 team, const glm::vec3& from, const glm::v
     return seedPath(team, from, to, speed, laneWidth, clearance);
 }
 
-void NavSystem::kickBuild(TeamSlot& slot)
+void NavSystem::kickBuild(TeamSlot& slot, float deltaSec)
 {
     slot.buildSources = slot.sources;
     slot.pending = oc::make_shared<TeamField>();
@@ -244,10 +245,34 @@ void NavSystem::kickBuild(TeamSlot& slot)
         uint8(glm::clamp(m_clearanceCost, 0, 254)) };
     NavSystem* self = this;
     TeamSlot* slotPtr = &slot;
-    Globals::jobSystem.submit([self, slotPtr, params]
+    const uint32 chunks = buildStepBudget(slot, deltaSec);
+    // STEPPED: this job rasterizes, seeds and solves the first chunk budget; update() then submits
+    // one step job per frame (the budget recomputed per frame) until the front is exhausted, and
+    // publishes.
+    Globals::jobSystem.submit([self, slotPtr, params, chunks]
     {
-        slotPtr->pending->build(self->m_buildObstacles, slotPtr->buildSources, params);
+        slotPtr->pending->beginBuild(self->m_buildObstacles, slotPtr->buildSources, params);
+        slotPtr->pending->stepBuild(chunks);
     }, { "Nav build", EProfileCategory::Game }, EJobPriority::Low, &slot.counter);
+}
+
+void NavSystem::submitBuildStep(TeamSlot& slot, float deltaSec)
+{
+    TeamSlot* slotPtr = &slot;
+    const uint32 chunks = buildStepBudget(slot, deltaSec);
+    Globals::jobSystem.submit([slotPtr, chunks] { slotPtr->pending->stepBuild(chunks); },
+        { "Nav build step", EProfileCategory::Game }, EJobPriority::Low, &slot.counter);
+}
+
+uint32 NavSystem::buildStepBudget(const TeamSlot& slot, float deltaSec) const
+{
+    // chunks per frame = last total / (frames in the spread) = last total * dt / spread. Rounded
+    // UP so the build lands within the spread rather than one frame late; a build that grew since
+    // last time just runs a few extra frames at the same slice.
+    if (slot.lastBuildChunks == 0 || m_buildSpread <= 0.0f)
+        return UINT32_MAX / 2; // no history (first build) or spread off: one step
+    const float perFrame = (float)slot.lastBuildChunks * glm::max(deltaSec, 1e-4f) / m_buildSpread;
+    return glm::max(uint32(glm::ceil(perFrame)), 1u);
 }
 
 void NavSystem::tickSlot(TeamSlot& slot, float deltaSec)
@@ -261,9 +286,12 @@ void NavSystem::tickSlot(TeamSlot& slot, float deltaSec)
         slot.sourcesDirty = false;
         return;
     }
-    const bool due = slot.sourcesDirty || (slot.periodic && slot.timer <= 0.0f) || !slot.published;
+    // A dirty source list rebuilds no sooner than the interval either: with thousands of moving
+    // unit sources the list is dirty EVERY frame, which chained builds back to back. Only a slot
+    // with nothing published yet skips the wait.
+    const bool due = ((slot.sourcesDirty || slot.periodic) && slot.timer <= 0.0f) || !slot.published;
     if (due && !m_obstaclesDirty)
-        kickBuild(slot);
+        kickBuild(slot, deltaSec);
 }
 
 void NavSystem::update(float deltaSec)
@@ -273,10 +301,16 @@ void NavSystem::update(float deltaSec)
         return;
 
     // 1. Publish finished builds.
-    const auto publish = [](TeamSlot& slot)
+    const auto publish = [this, deltaSec](TeamSlot& slot)
     {
         if (slot.building && slot.counter.isDone())
         {
+            if (!slot.pending->isBuildDone())
+            {
+                submitBuildStep(slot, deltaSec); // the stepped build: this frame's slice
+                return;
+            }
+            slot.lastBuildChunks = slot.pending->buildSolvedChunks(); // sizes the next build's slices
             slot.building = false;
             slot.published = oc::move(slot.pending);
             slot.pending.reset();
@@ -349,7 +383,8 @@ void NavSystem::update(float deltaSec)
     // inside seedPath. The entity pass therefore samples fields built from the PREVIOUS frame's
     // splats and seeds - a frame of staleness bought for a step that costs main nothing.
     m_stepDelta = deltaSec;
-    Globals::jobSystem.submitPostUpdate([this] { runFieldSteps(); }, { "Nav field steps", EProfileCategory::Game });
+    Globals::jobSystem.submitPostUpdate([this] { runFieldSteps(); }, { "Nav field steps", EProfileCategory::Game },
+        EJobPriority::Normal, 0, JobSystem::EPostUpdateBatch::Sim); // Sim batch: joined before the next frame's entity-change drains, not at its top
 }
 
 // PER-CHUNK parallel across ALL teams: each field's serial pre-work (drain/flip/evict/gather/

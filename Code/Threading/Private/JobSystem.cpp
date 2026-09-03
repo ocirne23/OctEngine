@@ -98,7 +98,8 @@ void JobSystem::initialize(const JobSystemDesc& desc)
 
     for (uint32 p = 0; p < NumJobPriorities; ++p)
         m_readyQueues[p].initialize(desc.queueCapacity);
-    m_postUpdateQueue.initialize(desc.postUpdateQueueCapacity);
+    for (PostUpdateBatch& b : m_postUpdate)
+        b.queue.initialize(desc.postUpdateQueueCapacity);
 
     m_fibers = oc::make_unique<Fiber[]>(m_numFibers);
     m_freeFibers.initialize(m_numFibers);
@@ -165,9 +166,10 @@ void JobSystem::shutdown()
     for (uint32 i = 0; i < m_numContexts; ++i)
         while (Job* job = m_contexts[i].deque.steal())
             dropJob(job);
+    for (PostUpdateBatch& b : m_postUpdate)
     {
         Job* job; // post-update jobs whose kick never came
-        while (m_postUpdateQueue.pop(job))
+        while (b.queue.pop(job))
             dropJob(job);
     }
     for (uint32 i = 0; i < m_numFibers; ++i)
@@ -424,31 +426,36 @@ void JobSystem::kickPostUpdateJobs()
     // batch is still in flight) must land in the NEXT batch, never in the counter already being
     // signaled - add() racing the zero transition is exactly what JobCounter forbids. The counter is
     // only ever add()ed here, on the main thread, after joinPostUpdateJobs() emptied it.
-    oc::small_vector<Job*, 64> batch;
-    Job* job;
-    while (m_postUpdateQueue.pop(job))
-        batch.push_back(job);
-    if (batch.empty())
-        return;
+    for (PostUpdateBatch& b : m_postUpdate)
+    {
+        oc::small_vector<Job*, 64> batch;
+        Job* job;
+        while (b.queue.pop(job))
+            batch.push_back(job);
+        if (batch.empty())
+            continue;
 
-    ProfileScope scope("Post-update kick", EProfileCategory::Threading);
-    assert(m_postUpdateCounter.isDone() && "kicked twice without a joinPostUpdateJobs() between");
-    m_postUpdateCounter.add(uint32(batch.size())); // whole batch up front: a job may finish before the last push
-    for (Job* batchJob : batch)
-        batchJob->signal = &m_postUpdateCounter;
-    submitReadyBatch(oc::span<Job* const>(batch.data(), batch.size()));
+        ProfileScope scope("Post-update kick", EProfileCategory::Threading);
+        assert(b.counter.isDone() && "kicked twice without a joinPostUpdateJobs() between");
+        b.counter.add(uint32(batch.size())); // whole batch up front: a job may finish before the last push
+        b.counter.label = batch.back()->name; // the wait scope names the batch's last-queued job
+        for (Job* batchJob : batch)
+            batchJob->signal = &b.counter;
+        submitReadyBatch(oc::span<Job* const>(batch.data(), batch.size()));
+    }
 }
 
-void JobSystem::joinPostUpdateJobs()
+void JobSystem::joinPostUpdateJobs(EPostUpdateBatch batch)
 {
     // Nothing in flight is the common case (no post-update jobs submitted at all): skip the scope
     // too, so an unused feature leaves no per-frame record. Only the kick add()s, and it is
     // main-thread, so nothing can appear between the check and the wait.
-    if (m_postUpdateCounter.isDone())
+    JobCounter& counter = m_postUpdate[uint32(batch)].counter;
+    if (counter.isDone())
         return;
 
-    ProfileScope scope("Post-update join", EProfileCategory::Wait);
-    wait(m_postUpdateCounter); // main helps, so a batch still running gets finished here
+    ProfileScope scope(batch == EPostUpdateBatch::Frame ? "Post-update join" : "Post-update sim join", EProfileCategory::Wait);
+    wait(counter); // main helps, so a batch still running gets finished here
 }
 
 void JobSystem::submitReadyBatch(oc::span<Job* const> jobs)
@@ -579,11 +586,14 @@ void JobSystem::wait(JobCounter& counter)
     if (counter.isDone()) // fast path stays marker-free: most waits return immediately
         return;
     WorkerContext* ctx = t_worker;
+    // The scope is named after the job the counter last counted (JobCounter::label) — the
+    // profiler then says WHAT was waited for; a counter that never had a job keeps "Job wait".
+    const char* waitName = counter.label ? counter.label : "Job wait";
     if (ctx && ctx->currentFiber)
     {
         // Migrates with the fiber across the park (suspendScopes/resumeScopes), so the span is the
         // true dependency time wherever the fiber resumes.
-        ProfileScope scope("Job wait", EProfileCategory::Wait);
+        ProfileScope scope(waitName, EProfileCategory::Wait);
         fiberWait(counter, *ctx);
         return;
     }
@@ -591,7 +601,7 @@ void JobSystem::wait(JobCounter& counter)
     {
         // Helping wait: jobs this thread picks up to burn the stall nest inside with their own
         // markers - honest-but-broad attribution, like every other named wait scope.
-        ProfileScope scope("Job wait", EProfileCategory::Wait);
+        ProfileScope scope(waitName, EProfileCategory::Wait);
         helpWait(counter, *ctx);
         return;
     }

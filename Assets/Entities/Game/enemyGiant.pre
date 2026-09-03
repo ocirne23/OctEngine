@@ -20,7 +20,7 @@ Prefab gameEnemyGiant
 	Component Force
 		Team 1
 		Output 1.15
-		Reach 5
+		Reach 7
 		Centered true
 	Component Network
 	Component GameUnit

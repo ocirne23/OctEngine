@@ -83,7 +83,7 @@ job's own name.
 
 For `parallelFor` the scope covers **each participant's WHOLE run, not each chunk**. The caller's
 span starts BEFORE it submits the helpers, so the fan-out has no unscoped head; the join that
-follows carries `wait()`'s own `"Job wait"` scope as a sibling
+follows carries `wait()`'s own scope (named after the job, `Wait` category) as a sibling
 ([JobSystem.ixx:291](Private/JobSystem.ixx#L291)).
 
 ### Callables store inline
@@ -100,24 +100,35 @@ nestable.
 
 ## Post-update jobs
 
-`submitPostUpdate(callable, JobProfile, priority = Normal, flags = 0)` does NOT run at submit time.
-The job is built into a pooled `Job` and parked in an MPMC queue until the main loop kicks the batch.
+`submitPostUpdate(callable, JobProfile, priority = Normal, flags = 0, batch = Frame)` does NOT run at
+submit time. The job is built into a pooled `Job` and parked in an MPMC queue until the main loop
+kicks the batches.
+
+**TWO BATCHES (`EPostUpdateBatch`), kicked together, joined at DIFFERENT points of the next frame:**
+
+| Batch | Joined | For |
+|---|---|---|
+| `Frame` | FIRST thing in the next frame | The UI widget pass: the ImGui context must be quiescent before the main-thread flush and the input pump. |
+| `Sim` | Just before the frame's first main-thread write to units/rosters — the game's windowed tick and the entity-change drains (`"Post-update sim join"`) | Jobs that only READ world/roster state and write their own sim outputs: Nav's field steps, the game's nav feed and ambient wander. They run through input, prepare and the camera as well. |
 
 | Call | Where in main.cpp |
 |---|---|
-| `kickPostUpdateJobs()` | Right BEFORE `Renderer::present()` — [main.cpp:814](../App/main.cpp#L814). Headless kicks at the same point ([main.cpp:818](../App/main.cpp#L818)); it has no present, but an unkicked queue only fills up. |
-| `joinPostUpdateJobs()` | FIRST thing in the next frame — [main.cpp:566](../App/main.cpp#L566) — plus once after the loop for the final batch ([main.cpp:829](../App/main.cpp#L829)). |
+| `kickPostUpdateJobs()` | Right BEFORE `Renderer::present()`. Headless kicks at the same point; it has no present, but an unkicked queue only fills up. |
+| `joinPostUpdateJobs()` (= Frame) | FIRST thing in the next frame, plus once after the loop for the final batch. |
+| `joinPostUpdateJobs(Sim)` | Before `game->updateWindowed` (windowed) and before the script entity-change drain (both modes; the second is a no-op), plus once after the loop. |
 
-The batch therefore runs during present, the frame mark and the fence/vsync wait, where the workers
-are otherwise idle, so it costs nothing on the critical path.
+The batches therefore run during present, the frame mark and the fence/vsync wait, where the workers
+are otherwise idle, so they cost nothing on the critical path.
 
 **What that costs the caller.** The job OVERLAPS `present()` and everything after it, so it must not
-touch what `present()` reads or what the next frame mutates — think *"somewhere in the present
-window"*, not *"before present"*. What IS guaranteed is completion before the next frame does any
-work, so anything the next frame consumes is safe.
+touch what `present()` reads or what the next frame mutates before its join — think *"somewhere in
+the present window"*, not *"before present"*. A Sim job additionally overlaps the next frame's
+input, UI prepare and camera work, so it must not read what THOSE mutate (nothing entity-side does).
+What IS guaranteed is completion before its join point.
 
-Users today: the UI widget pass ([UI.cpp:73](../UI/Private/UI.cpp#L73)) and Nav's field steps
-([Nav/System.cpp:352](../Nav/Private/System.cpp#L352)).
+Users today: the UI widget pass ([UI.cpp:73](../UI/Private/UI.cpp#L73)) on Frame; Nav's field steps
+([Nav/System.cpp:352](../Nav/Private/System.cpp#L352)), the game's nav feed and ambient wander on
+Sim. The wait scope of a join is named after the batch's last-queued job (`JobCounter::label`).
 
 **Mechanics.** The kick **snapshots the queue first**, then adds the whole batch to a persistent
 `JobCounter` and submits. Only the main-thread kick ever `add()`s, and always after the join emptied
@@ -137,8 +148,10 @@ one run.
 | Any unregistered thread | Blocks on the count atomic, notified on the zero transition. |
 
 The fast path — an already-done counter — returns without opening a scope at all. Both waiting paths
-open a `"Job wait"` scope in the `Wait` category; on a fiber it migrates with the park, so the span
-is the true dependency time wherever the fiber resumes.
+open a scope in the `Wait` category **named after the job the counter last counted**
+(`JobCounter::label`, set by every submit that takes a counter — so the profiler says WHICH job a
+wait was for; a counter that never had a job reads `"Job wait"`); on a fiber it migrates with the
+park, so the span is the true dependency time wherever the fiber resumes.
 
 `tryRunOneJob()` lets a registered non-worker thread pump one ready job manually, e.g. to burn a
 stall.

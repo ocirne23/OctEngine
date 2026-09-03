@@ -67,7 +67,7 @@ private:
     float m_pitchDeg = 75.0f;
     float m_distance = 18.0f;
     float m_minDistance = 6.0f;
-    float m_maxDistance = 120.0f;
+    float m_maxDistance = 250.0f;
     float m_zoomSpeed = 2.0f;
     float m_yawSpeed = 120.0f;
     float m_dragSensitivity = 0.25f;

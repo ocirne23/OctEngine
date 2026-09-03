@@ -267,11 +267,20 @@ EntityPtr Entity::create(const EntitySpawnTemplate& tmpl, const Transform& trans
         glm::dvec3 center(transform.pos);
         float radius = 0.0f;
         uint32 layers = SpatialLayer_Entity;
+        assert(!glm::any(glm::isnan(transform.pos)) && !glm::any(glm::isinf(transform.pos)) && "spawn at a non-finite position");
         if (const RenderComponent* render = getComponent<RenderComponent>(entity); render && render->node.isValid())
         {
             const Sphere bounds = render->node.getWorldBounds();
-            center = glm::dvec3(bounds.pos);
-            radius = render->node.isSkinned() ? bounds.radius * Globals::spatialIndex.getCullingConfig().skinnedRadiusScale : bounds.radius;
+            // A node whose bounds are not usable yet (no mesh bounds, a degenerate sphere) reports
+            // a negative or non-finite radius: keep the spawn point instead of tripping the
+            // index's `radius >= 0` assert — the first visit re-places the entry from real bounds.
+            const bool usable = bounds.radius >= 0.0f && std::isfinite(bounds.radius)
+                && !glm::any(glm::isnan(bounds.pos)) && !glm::any(glm::isinf(bounds.pos));
+            if (usable)
+            {
+                center = glm::dvec3(bounds.pos);
+                radius = render->node.isSkinned() ? bounds.radius * Globals::spatialIndex.getCullingConfig().skinnedRadiusScale : bounds.radius;
+            }
             layers |= SpatialLayer_Render;
         }
         entity->spatialEntry = SpatialEntry(Globals::spatialIndex.registerEntry(center, radius, reinterpret_cast<uint64>(entity), layers));
