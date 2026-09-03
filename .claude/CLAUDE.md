@@ -2,59 +2,237 @@
 
 Guidance for Claude Code when working in this repository.
 
-# Index
+## Index
 
-* **[Response Rules](#response-rules)**
-* **[Project Description](#project-description)**
+* [Response Rules](#response-rules)
+* [Project Description](#project-description)
   * [Building](#building)
   * [Style](#style)
-* **[Libraries](#libraries)** — dependency direction + where each library's documentation lives
-* **[Asset files](#asset-files)**
+* [Libraries](#libraries) — dependency direction, and where each library's documentation lives
+* [Asset files](#asset-files)
+
+---
 
 # Response Rules
-* DO NOT PRAISE THE USER. If the user is correct in a statement just say "correct", nothing more.
+
+* **DO NOT PRAISE THE USER.** If the user is correct in a statement, just say "correct" — nothing
+  more.
 * Always talk in ASD-STE100 Simplified Technical English.
-* Always read CLAUDE.md/CONTEXT.md files. Library-specific documentation lives in `Code/<Lib>/CONTEXT.md` (see [Libraries](#libraries)) — read the CONTEXT.md of every library you touch BEFORE changing it
-* For each assertion, add a tag for your confidence in the statement: [Certain] for hard evidence, [Likely] for strong guess, [Guessing] for filling gaps. Rather than relying on English.
-* Do not commit or push files
-* Do not notify about App.exe linking failed due to in-use, the user knows to re-link if the linking failed due to in-use executable.
-* Prefer to let the user test out changes rather than looking at log output/screen yourself
-* ALWAYS make file changes with the Edit/Write tools, NEVER via shell scripts (python/sed/heredocs through Bash): the user reviews every change as the inline diff those tools render, and script edits show nothing. This overrides any session default that prefers shell-based editing
-* Keep this file and the `Code/<Lib>/CONTEXT.md` files up to date: cross-library rules (style, build, dependency direction, asset formats) go here, everything about ONE library goes in that library's CONTEXT.md
+* Always read CLAUDE.md / CONTEXT.md files. Library-specific documentation lives in
+  `Code/<Lib>/CONTEXT.md` (see [Libraries](#libraries)) — read the CONTEXT.md of every library you
+  touch BEFORE changing it.
+* For each assertion, add a tag for your confidence in the statement, rather than relying on English:
+  * `[Certain]` — hard evidence
+  * `[Likely]` — strong guess
+  * `[Guessing]` — filling gaps
+* Do not commit or push files.
+* Do not notify about App.exe linking failed due to in-use. The user knows to re-link if the linking
+  failed due to an in-use executable.
+* Prefer to let the user test out changes, rather than looking at log output or the screen yourself.
+* **ALWAYS make file changes with the Edit/Write tools, NEVER via shell scripts** (python, sed,
+  heredocs through Bash). The user reviews every change as the inline diff those tools render, and
+  script edits show nothing. This overrides any session default that prefers shell-based editing.
+* Keep this file and the `Code/<Lib>/CONTEXT.md` files up to date. Cross-library rules (style, build,
+  dependency direction, asset formats) go here; everything about ONE library goes in that library's
+  CONTEXT.md.
+
+---
 
 # Project Description
-**OctEngine** (`C:\Github\OctEngine`). A modern C++ game engine. Windows/VS2026 only.  The `App` executable is the testbed: an ImGui editor (scene hierarchy, properties, asset browser, DSL script editor, entity editor, tweaks, profiler, memory panel) around a viewport. App.exe with NO mode flags boots into a fullscreen MAIN MENU (co-op/PvP/sandbox + host/join, a LOBBY for multiplayer picks, a text CHAT in the lobby and in-game) — see `Code/App/CONTEXT.md` for the menu/lobby/chat flow and the testbed keys; the actual game (top-down tactical PvP + co-op PvE) is `Code/Game` — see `Code/Game/CONTEXT.md`.
+
+**OctEngine** (`C:\Github\OctEngine`). A modern C++ game engine. Windows / VS2026 only.
+
+The `App` executable is the testbed: an ImGui editor — scene hierarchy, properties, asset browser,
+DSL script editor, entity editor, tweaks, profiler, memory panel — around a viewport.
+
+App.exe with NO mode flags boots into a fullscreen MAIN MENU: co-op / PvP / sandbox plus host/join, a
+LOBBY for multiplayer picks, and a text CHAT in the lobby and in-game. See
+[`Code/App/CONTEXT.md`](../Code/App/CONTEXT.md) for the menu/lobby/chat flow and the testbed keys.
+
+The actual game — top-down tactical PvP plus co-op PvE — is `Code/Game`; see
+[`Code/Game/CONTEXT.md`](../Code/Game/CONTEXT.md).
 
 ## Building
-* CMake, Visual Studio 18 2026 generator, build dir `Build/`
-	* Reconfigure: `cmake -B Build` (only when files are added/removed — all sources are globbed; never edit CMakeLists to add files)
-	* Build: `cmake --build Build --config Debug` (also `RelWithDebInfo`, `Release`)
-	* Output: `Build/Code/App/<Config>/App.exe`. Run from anywhere inside the repo; `FileSystem::initialize()` walks up to find `Assets/` and makes it the working directory, so all asset paths are relative to `Assets/`
-	* VS launch targets: `run-headless`, `run-server`, `run-client`, `run-netfuzz`, `run-cooked`. The `cooked` custom target configures+builds a sibling `Build-Cooked/` tree with `SCRIPTS_STATIC=ON`
-	* Unattended performance measurement: `Tools/profile.ps1` (see Profiling in `Code/Core/CONTEXT.md`) — build, run `App.exe --profile-after <sec> --quit-after <sec> --no-vsync --tweak ...`, print the text report. Claude's measure → change → re-measure loop; the user does not need to be at the screen
-	* Global compile flags: `/GT` (fiber-safe TLS — job code must not cache `thread_local` addresses across a `wait()`), `/arch:AVX2` (the baseline `Core.OcBit` names instructions against; do NOT raise it to `/arch:AVX512` — Intel fused AVX-512 off on consumer parts from Alder Lake onward, so it would exclude every recent mainstream Intel CPU while including a 2022 AMD one), `/fp:fast`, `/MP`, `/GL`+`/LTCG`, `/Gw`, `/GS-` (no stack cookies — a deliberate mitigation trade), and the two guard-removal flags `/Zc:tlsGuards-` + `/Zc:threadSafeInit-`, which are worth more here than in a normal build because `/GT` stops the TLS address behind each guard from being cached. `/Zc:tlsGuards-` drops the per-ACCESS on-demand-init check on dynamically initialized `thread_local`s (the ~20 hot `thread_local oc::vector` scratch buffers in the entity pass, Npc/Structures, the Nav A*) — safe because all of it is static TLS in App.exe, which every thread initializes at creation, while the runtime-compiled script DLLs are built by ScriptHost's own command line and keep their guards. **`/Zc:threadSafeInit-` IS A STANDING RULE, not just a flag: a function-local `static` that is not constant-initialized has NO guard any more, so one first reached from two workers at once is a race (half-built object, or the initializer running twice). Anything job code can reach must be constant-initialized or hoisted to namespace scope** (no per-access guard there at all, and `InitSeg.h` orders it if it needs ordering) — that is why `forceReferenceBudget`/`forceSphereFold` (Force/System.cpp, reached from the merge parallelFors), `AnimStateMachine::getCurrentStateName`'s "<none>" (Animation, reached from a script thunk on workers) and `layerNames()` (Physics, reached from the terrain collider's tile-build jobs) hold namespace-scope objects. Known and deliberately left: the two `static PFN_vkSetDebugUtilsObjectNameEXT` in RendererVK/Objects/Allocator.cpp are worker-reachable through the streamers, but a racing reader sees the zero-initialized slot and just skips the debug name — no torn value on an aligned pointer. `Procedural`'s diffusion .cpp TUs override to `/fp:precise /wd5050` (load-bearing — see Code/Procedural/CMakeLists.txt)
-* No test suite, no linter. Verifying = it compiles + the user runs it
-* Dependencies are prebuilt in `Dependencies/` (Include/Lib/Dll): Vulkan-Hpp (no exceptions, no constructors), SDL3, ImGui docking branch, Assimp, glslang/shaderc, OpenXR loader, Nsight Aftermath, box3d, Steam Audio (static; phonon(d).lib bundles pffft/mysofa/zlib), miniaudio (single header), meshoptimizer, zstd. box3d/steam-audio/meshoptimizer/zstd sources stay vendored for rebuilding the prebuilt libs — recipes in `Dependencies/CMakeLists.txt` (otherwise unused; everything links prebuilt `<name>.lib`/`<name>d.lib` pairs)
+
+CMake, the Visual Studio 18 2026 generator, build dir `Build/`.
+
+| Task | Command |
+|---|---|
+| Reconfigure | `cmake -B Build` |
+| Build | `cmake --build Build --config Debug` (also `RelWithDebInfo`, `Release`) |
+
+* Reconfigure ONLY when files are added or removed — all sources are globbed. **Never edit
+  CMakeLists to add files.**
+* Output: `Build/Code/App/<Config>/App.exe`. Run it from anywhere inside the repo:
+  `FileSystem::initialize()` walks up to find `Assets/` and makes it the working directory, so all
+  asset paths are relative to `Assets/`.
+* VS launch targets: `run-headless`, `run-server`, `run-client`, `run-netfuzz`, `run-cooked`. The
+  `cooked` custom target configures and builds a sibling `Build-Cooked/` tree with
+  `SCRIPTS_STATIC=ON`.
+* **Unattended performance measurement:** `Tools/profile.ps1` (see Profiling in
+  [`Code/Core/CONTEXT.md`](../Code/Core/CONTEXT.md)) builds, runs
+  `App.exe --profile-after <sec> --quit-after <sec> --no-vsync --tweak ...`, and prints the text
+  report. This is Claude's measure → change → re-measure loop; the user does not need to be at the
+  screen.
+* No test suite, no linter. Verifying = it compiles, plus the user runs it.
+
+### Global compile flags
+
+| Flag | Why |
+|---|---|
+| `/GT` | Fiber-safe TLS — job code must not cache `thread_local` addresses across a `wait()`. |
+| `/arch:AVX2` | The baseline `Core.OcBit` names instructions against. |
+| `/fp:fast`, `/MP`, `/GL`+`/LTCG`, `/Gw` | Optimization. |
+| `/GS-` | No stack cookies — a deliberate mitigation trade. |
+| `/Zc:tlsGuards-`, `/Zc:threadSafeInit-` | Guard removal. See below. |
+
+* **Do NOT raise `/arch` to `/arch:AVX512`.** Intel fused AVX-512 off on consumer parts from Alder
+  Lake onward, so it would exclude every recent mainstream Intel CPU while including a 2022 AMD one.
+* The two guard-removal flags are worth more here than in a normal build, because `/GT` stops the TLS
+  address behind each guard from being cached.
+* **`/Zc:tlsGuards-`** drops the per-ACCESS on-demand-init check on dynamically initialized
+  `thread_local`s — the ~20 hot `thread_local oc::vector` scratch buffers in the entity pass,
+  Npc/Structures, and the Nav A*. Safe because all of it is static TLS in App.exe, which every thread
+  initializes at creation. The runtime-compiled script DLLs are built by ScriptHost's own command
+  line and keep their guards.
+
+> **`/Zc:threadSafeInit-` IS A STANDING RULE, not just a flag.** A function-local `static` that is
+> not constant-initialized has NO guard any more, so one first reached from two workers at once is a
+> race — a half-built object, or the initializer running twice. **Anything job code can reach must be
+> constant-initialized or hoisted to namespace scope** (no per-access guard there at all, and
+> `InitSeg.h` orders it if it needs ordering).
+
+That is why these hold namespace-scope objects:
+
+* `forceReferenceBudget` / `forceSphereFold` (Force/System.cpp) — reached from the merge parallelFors
+* `AnimStateMachine::getCurrentStateName`'s `"<none>"` (Animation) — reached from a script thunk on
+  workers
+* `layerNames()` (Physics) — reached from the terrain collider's tile-build jobs
+
+Known and deliberately left: the two `static PFN_vkSetDebugUtilsObjectNameEXT` in
+RendererVK/Objects/Allocator.cpp are worker-reachable through the streamers, but a racing reader sees
+the zero-initialized slot and just skips the debug name — no torn value on an aligned pointer.
+
+`Procedural`'s diffusion `.cpp` TUs override to `/fp:precise /wd5050` — load-bearing; see
+`Code/Procedural/CMakeLists.txt`.
+
+### Dependencies
+
+Prebuilt in `Dependencies/` (Include / Lib / Dll):
+
+Vulkan-Hpp (no exceptions, no constructors), SDL3, ImGui docking branch, Assimp, glslang/shaderc,
+OpenXR loader, Nsight Aftermath, box3d, Steam Audio (static; `phonon(d).lib` bundles pffft, mysofa
+and zlib), miniaudio (single header), meshoptimizer, zstd.
+
+box3d, steam-audio, meshoptimizer and zstd sources stay vendored for rebuilding the prebuilt libs —
+recipes in `Dependencies/CMakeLists.txt`. They are otherwise unused; everything links prebuilt
+`<name>.lib` / `<name>d.lib` pairs.
 
 ## Style
-* Exclusively C++20 modules (.ixx), no headers
-	* Most libraries use module partitions: `export module RendererVK:Renderer;` in the interface .ixx, `module RendererVK;` in the implementation .cpp; public surface re-exported from `Public/<Lib>.ixx`
-	* `Core` uses dotted module names (`Core.Tweaks`, one module per .ixx); UI uses partitions (`UI:Scene`, `UI:ProfilerPanel`) except `UI.Gizmo`/`UI.fwd`
-	* `Public/` .ixx's are importable from outside the library; `Private/` is internal
-	* Std headers are re-exported as header units from `Code/Core/Public/OcSTL.ixx` (NOT Core.ixx — Core has no `import <std>` line left; it just `export import Core.OcSTL`). OcSTL owns the container backing (currently EASTL — see Core) and additionally `export import`s the std facilities that have no oc:: spelling: iostream/sstream, format, mutex/shared_mutex/condition_variable, thread/future/coroutine, chrono, execution, charconv, type_traits, atomic, new, cmath, random. Add a missing std header there. `<bit>` is NOT among them — see `Core.OcBit`. DELIBERATE EXCEPTION: `<filesystem>` and `<fstream>` are NOT exported — all file/directory access goes through the File library's `FileSystem` (see File), so a library that needs the disk links File. Core itself therefore cannot do IO: `Core.Tweaks` takes injected read/write hooks (`setFileIo`, installed by main from FileSystem)
-	* `Core.fwd` / `*.fwd.ixx` hold forward declarations
-	* One exception: `Script/Public/ScriptAPI.h` is a plain header — the ABI shared with runtime-compiled script DLLs, `#include`d on both sides
-* CONTAINERS ARE `oc::`, NEVER `std::` — `Core.OcSTL` (`Code/Core/Public/OcSTL.ixx`, `export import`ed by Core.ixx, so every importer of Core has it) is the ONE file that names the std originals; everything else says `oc::vector`/`oc::string`/`oc::span`/`oc::unique_ptr`/`oc::atomic`/`oc::move`/`oc::sort`/`oc::memory_order_relaxed`/... so swapping a backing implementation (EASTL, a hand-rolled one) is an edit THERE instead of at ~6500 call sites. Aliased: containers + adaptors, strings/views, pair/tuple/optional/variant, smart pointers, `function`, `hash`/comparators, atomics + the memory_order enumerators, and the `<algorithm>`/`<utility>` verbs the codebase uses. STILL `std::` on purpose: iostreams/sstream, chrono, mutex/lock_guard/thread/future, type_traits and the C runtime — platform surface, not container surface (formatting is the exception: use `oc::format`, never `std::format`, so the result is an `oc::string`). With the EASTL backing live, `std::vector`/`std::string` in engine code is now a hard COMPILE ERROR at any boundary that meets an oc:: type, not just a convention. Alias templates CANNOT be specialized: a `std::hash` specialization is still written `namespace std { template<> struct hash<X> ... }`, and is read back through `oc::hash`. Deliberate holdouts (leave them std::): `Script/Public/ScriptAPI.h` (plain header, no module access), the vendored `UI/Private/lib/imgui-node-editor`, and the Nsight Aftermath `namespace std` to_string blocks in GpuCrashTracker/ShaderDatabase (their calls resolve by qualified lookup into std, which a using-declaration snapshot cannot serve)
-* No new/delete, only memory-safe types; raw pointers are non-owning
-* Minimal comments — only where intent is genuinely hard to communicate
-* Prioritize performance
-* Engine singletons live in `export namespace Globals` inside the owning .ixx (`Globals::rendererVK`, `device`, `input`, `ui`, `world`, `physics`, `scriptHost`, `scriptEvents`, `assetRegistry`, `time`, `allocator`, ...). Cross-library teardown is ordered ENTIRELY by init_seg — `Code/Core/Private/InitSeg.h` (in every TU via forceinclude.h) is the single authority: `OC_SEG_*` section defines + the `OC_INIT_SEG(seg)` macro (`__pragma`, since `#pragma` doesn't macro-expand). Destruction = reverse construction; teardown order `ui → world → scriptEvents → networkManager → physics → jobSystem → renderer globals → plain ".CRT$XCU" (audio, spatialIndex, entityAllocator, input, ...)`. Every EntityPtr holder destructs before ~JobSystem (which runs shutdown(): entity destruction reaches PerWorker::local(), needing the main thread's live worker context), NetworkComponents unregister before ~NetworkManager closes the host, and world's caches release into the still-live renderer/audio. main() has NO explicit teardown calls — a new global that holds EntityPtrs or whose dtor calls another library's global must slot into InitSeg.h. Globals in *different* libraries otherwise have no defined construction order (see `ScriptEventManager::initialize` for the register-from-main pattern)
-* int8/uint64-style typedefs from `Core`; glm via `Core.glm`; `assert` compiled out in non-debug via forceinclude.h
+
+### Modules
+
+Exclusively C++20 modules (`.ixx`), no headers.
+
+* Most libraries use module partitions: `export module RendererVK:Renderer;` in the interface `.ixx`,
+  `module RendererVK;` in the implementation `.cpp`. The public surface is re-exported from
+  `Public/<Lib>.ixx`.
+* `Core` uses dotted module names (`Core.Tweaks`, one module per `.ixx`). UI uses partitions
+  (`UI:Scene`, `UI:ProfilerPanel`) except `UI.Gizmo` / `UI.fwd`.
+* `Public/` `.ixx`s are importable from outside the library; `Private/` is internal.
+* `Core.fwd` / `*.fwd.ixx` hold forward declarations.
+* **One exception to the no-headers rule:** `Script/Public/ScriptAPI.h` is a plain header — the ABI
+  shared with runtime-compiled script DLLs, `#include`d on both sides.
+
+### Std headers
+
+Std headers are re-exported as header units from `Code/Core/Public/OcSTL.ixx` — NOT Core.ixx, which
+has no `import <std>` line left; it just `export import Core.OcSTL`.
+
+OcSTL owns the container backing (currently EASTL — see Core) and additionally `export import`s the
+std facilities that have no `oc::` spelling: iostream/sstream, format, mutex/shared_mutex/
+condition_variable, thread/future/coroutine, chrono, execution, charconv, type_traits, atomic, new,
+cmath, random. **Add a missing std header there.**
+
+* `<bit>` is NOT among them — see `Core.OcBit`.
+* **DELIBERATE EXCEPTION:** `<filesystem>` and `<fstream>` are NOT exported. All file and directory
+  access goes through the File library's `FileSystem` (see File), so a library that needs the disk
+  links File. Core itself therefore cannot do IO: `Core.Tweaks` takes injected read/write hooks
+  (`setFileIo`, installed by main from FileSystem).
+
+### Containers are `oc::`, never `std::`
+
+`Core.OcSTL` (`Code/Core/Public/OcSTL.ixx`, `export import`ed by Core.ixx, so every importer of Core
+has it) is the ONE file that names the std originals. Everything else says `oc::vector` /
+`oc::string` / `oc::span` / `oc::unique_ptr` / `oc::atomic` / `oc::move` / `oc::sort` /
+`oc::memory_order_relaxed` / ... so swapping a backing implementation (EASTL, a hand-rolled one) is
+an edit THERE instead of at ~6500 call sites.
+
+**Aliased:** containers plus adaptors, strings and views, pair/tuple/optional/variant, smart
+pointers, `function`, `hash` and comparators, atomics plus the memory_order enumerators, and the
+`<algorithm>` / `<utility>` verbs the codebase uses.
+
+**STILL `std::` on purpose:** iostreams/sstream, chrono, mutex/lock_guard/thread/future, type_traits,
+and the C runtime — platform surface, not container surface. Formatting is the exception: use
+`oc::format`, never `std::format`, so the result is an `oc::string`.
+
+With the EASTL backing live, `std::vector` / `std::string` in engine code is now a hard COMPILE ERROR
+at any boundary that meets an `oc::` type, not just a convention.
+
+Alias templates CANNOT be specialized: a `std::hash` specialization is still written
+`namespace std { template<> struct hash<X> ... }`, and is read back through `oc::hash`.
+
+**Deliberate holdouts — leave them `std::`:**
+
+* `Script/Public/ScriptAPI.h` (a plain header, no module access)
+* the vendored `UI/Private/lib/imgui-node-editor`
+* the Nsight Aftermath `namespace std` `to_string` blocks in GpuCrashTracker / ShaderDatabase — their
+  calls resolve by qualified lookup into std, which a using-declaration snapshot cannot serve
+
+### General
+
+* No new/delete, only memory-safe types. Raw pointers are non-owning.
+* Minimal comments — only where intent is genuinely hard to communicate.
+* Prioritize performance.
+* `int8` / `uint64`-style typedefs from `Core`; glm through `Core.glm`; `assert` compiled out in
+  non-debug through forceinclude.h.
+
+### Globals and teardown
+
+Engine singletons live in `export namespace Globals` inside the owning `.ixx`:
+`Globals::rendererVK`, `device`, `input`, `ui`, `world`, `physics`, `scriptHost`, `scriptEvents`,
+`assetRegistry`, `time`, `allocator`, ...
+
+Cross-library teardown is ordered ENTIRELY by init_seg. `Code/Core/Private/InitSeg.h` — in every TU
+through forceinclude.h — is the single authority: the `OC_SEG_*` section defines plus the
+`OC_INIT_SEG(seg)` macro (`__pragma`, since `#pragma` does not macro-expand).
+
+Destruction = reverse construction. Teardown order:
+
+```
+ui → world → scriptEvents → networkManager → physics → jobSystem → renderer globals
+   → plain ".CRT$XCU" (audio, spatialIndex, entityAllocator, input, ...)
+```
+
+* Every EntityPtr holder destructs before `~JobSystem`, which runs `shutdown()`: entity destruction
+  reaches `PerWorker::local()`, needing the main thread's live worker context.
+* NetworkComponents unregister before `~NetworkManager` closes the host.
+* World's caches release into the still-live renderer and audio.
+
+main() has NO explicit teardown calls. **A new global that holds EntityPtrs, or whose dtor calls
+another library's global, must slot into InitSeg.h.** Globals in *different* libraries otherwise have
+no defined construction order — see `ScriptEventManager::initialize` for the register-from-main
+pattern.
+
+---
 
 # Libraries
-DEPENDENCY DIRECTION (`target_link_libraries`, PUBLIC unless noted). Everything imports Core, and a
-library NEVER links one printed above it — read the stack bottom-up, each row may use every row
-below it. Third-party libs in parentheses are PRIVATE (they never leak through a public interface).
+
+## Dependency direction
+
+`target_link_libraries`, PUBLIC unless noted. Everything imports Core, and a library NEVER links one
+printed above it — read the stack bottom-up, where each row may use every row below it. Third-party
+libs in parentheses are PRIVATE: they never leak through a public interface.
 
 ```
    LIBRARY        DEPENDS ON (beyond Core)
@@ -84,35 +262,97 @@ below it. Third-party libs in parentheses are PRIVATE (they never leak through a
    Core           std header units, oc:: containers (OcSTL), math, Profiler + MemoryTracker  -- none
 ```
 
-Each library documents itself in `Code/<Lib>/CONTEXT.md`. One line per library:
-* [App](../Code/App/CONTEXT.md) — the testbed executable: main menu + lobby flow, testbed keys (`InputControls`), profile dump
-* [Core](../Code/Core/CONTEXT.md) — utilities, the two clocks + global pause, `Core.OcSTL` (EASTL backing, `oc::` vocabulary), `Core.OcBit`, SmallVector, Tweaks (Saved/Synced/overrides), plus the **Profiling** (`Core.Profiler`, text report, `Tools/profile.ps1`, scenarios) and **Memory** (`Core.MemoryTracker`) sections
-* [RendererVK](../Code/RendererVK/CONTEXT.md) — the Vulkan renderer: frame pacing/fence wait, begin-frame job, frame order, streaming, LODs, shaders
-* [Entity](../Code/Entity/CONTEXT.md) — the ECS: entity/component layout, parallel update + parallel spawning, World, components (incl. the Game components), script glue, and the **Multiplayer** section (NetworkManager/NetworkComponent: snapshots, claims, validation, ownership, events, headless server)
-* [Script](../Code/Script/CONTEXT.md) — ScriptHost DLL compilation, ScriptAPI ABI, the DSL (containers, require, fault containment); language reference in `Code/DslCompiler/CONTEXT.md`
-* [Physics](../Code/Physics/CONTEXT.md) — box3d wrapper: job-driven solver, body-command queue, PhysicsComponent, contacts, layers
-* [Particle](../Code/Particle/CONTEXT.md) — GPU particles + decals, .pfx effects, ParticleComponent
-* [Force](../Code/Force/CONTEXT.md) — forcefield bubbles: analytic fields, live team count, baked pressure field, shell rendering tiers/union march, emitter merging, ForceComponent
-* [Spatial](../Code/Spatial/CONTEXT.md) — the spatial index: hashed Morton hierarchy, cull job kick/join window, occlusion, static tier
-* [Nav](../Code/Nav/CONTEXT.md) — per-team flow fields: chunked grid, TeamField Dijkstra builds, goal fields, unit context steering, seeded lanes, flow/pressure fields
-* [Threading](../Code/Threading/CONTEXT.md) — the fiber job system: worker sizing, post-update jobs, scheduling, JobSync, JobGraph, invariants
-* [Procedural](../Code/Procedural/CONTEXT.md) — diffusion terrain (V3), TerrainStreamer, HeightMapBaker, ocean, terrain collider, scatter
-* [Network](../Code/Network/CONTEXT.md) — Winsock transport: serialization, sockets, reliable UDP `NetHost`, abuse limits
-* [NetFuzz](../Code/NetFuzz/CONTEXT.md) — the protocol fuzzer (regression gate for wire changes)
-* [Audio](../Code/Audio/CONTEXT.md) — miniaudio + Steam Audio HRTF, buffers/sources
-* [Animation](../Code/Animation/CONTEXT.md) — skeletons, clips, AnimationPlayer, state machine
-* [File](../Code/File/CONTEXT.md) — scene loading + cooked cache, AssetParser, `FileSystem` (THE disk seam, main-thread IO assert)
-* [UI](../Code/UI/CONTEXT.md) — ImGui editor: the pipelined widget-pass job, prepare/render split, panels, game layout, gizmo split
-* [Input](../Code/Input/CONTEXT.md) — the window thread + event pump, ImGui capture gate, listeners, GizmoController, VR input, camera controllers
-* [Game](../Code/Game/CONTEXT.md) — the game: co-op PvE (generated map, waves), PvP corridor, sync layers, teams, economy/cables/construction, hotbar + interaction modes, units, player
-* [DslCompiler](../Code/DslCompiler/CONTEXT.md) — DSL language reference + the DslCompiler tool (how Claude authors .dsl scripts)
+## Where each library documents itself
+
+Each library documents itself in `Code/<Lib>/CONTEXT.md`.
+
+| Library | Covers |
+|---|---|
+| [App](../Code/App/CONTEXT.md) | The testbed executable: main menu + lobby flow, testbed keys (`InputControls`), profile dump |
+| [Core](../Code/Core/CONTEXT.md) | Utilities, the two clocks + global pause, `Core.OcSTL` (EASTL backing, `oc::` vocabulary), `Core.OcBit`, SmallVector, Tweaks (Saved/Synced/overrides), plus the **Profiling** (`Core.Profiler`, text report, `Tools/profile.ps1`, scenarios) and **Memory** (`Core.MemoryTracker`) sections |
+| [RendererVK](../Code/RendererVK/CONTEXT.md) | The Vulkan renderer: frame pacing / fence wait, begin-frame job, frame order, streaming, LODs, shaders |
+| [Entity](../Code/Entity/CONTEXT.md) | The ECS: entity/component layout, parallel update + parallel spawning, World, components (incl. the Game components), script glue, and the **Multiplayer** section (NetworkManager/NetworkComponent: snapshots, claims, validation, ownership, events, headless server) |
+| [Script](../Code/Script/CONTEXT.md) | ScriptHost DLL compilation, ScriptAPI ABI, the DSL (containers, require, fault containment); language reference in `Code/DslCompiler/CONTEXT.md` |
+| [Physics](../Code/Physics/CONTEXT.md) | box3d wrapper: job-driven solver, body-command queue, PhysicsComponent, contacts, layers |
+| [Particle](../Code/Particle/CONTEXT.md) | GPU particles + decals, `.pfx` effects, ParticleComponent |
+| [Force](../Code/Force/CONTEXT.md) | Forcefield bubbles: analytic fields, live team count, baked pressure field, shell rendering tiers / union march, emitter merging, ForceComponent |
+| [Spatial](../Code/Spatial/CONTEXT.md) | The spatial index: hashed Morton hierarchy, cull job kick/join window, occlusion, static tier |
+| [Nav](../Code/Nav/CONTEXT.md) | Per-team flow fields: chunked grid, TeamField Dijkstra builds, goal fields, unit context steering, seeded lanes, flow/pressure fields |
+| [Threading](../Code/Threading/CONTEXT.md) | The fiber job system: worker sizing, post-update jobs, scheduling, JobSync, JobGraph, invariants |
+| [Procedural](../Code/Procedural/CONTEXT.md) | Diffusion terrain (V3), TerrainStreamer, HeightMapBaker, ocean, terrain collider, scatter |
+| [Network](../Code/Network/CONTEXT.md) | Winsock transport: serialization, sockets, reliable UDP `NetHost`, abuse limits |
+| [NetFuzz](../Code/NetFuzz/CONTEXT.md) | The protocol fuzzer (regression gate for wire changes) |
+| [Audio](../Code/Audio/CONTEXT.md) | miniaudio + Steam Audio HRTF, buffers/sources |
+| [Animation](../Code/Animation/CONTEXT.md) | Skeletons, clips, AnimationPlayer, state machine |
+| [File](../Code/File/CONTEXT.md) | Scene loading + cooked cache, AssetParser, `FileSystem` (THE disk seam, main-thread IO assert) |
+| [UI](../Code/UI/CONTEXT.md) | ImGui editor: the pipelined widget-pass job, prepare/render split, panels, game layout, gizmo split |
+| [Input](../Code/Input/CONTEXT.md) | The window thread + event pump, ImGui capture gate, listeners, GizmoController, VR input, camera controllers |
+| [Game](../Code/Game/CONTEXT.md) | The game: co-op PvE (generated map, waves), PvP corridor, sync layers, teams, economy/cables/construction, hotbar + interaction modes, units, player |
+| [DslCompiler](../Code/DslCompiler/CONTEXT.md) | DSL language reference + the DslCompiler tool (how Claude authors `.dsl` scripts) |
+
+---
 
 # Asset files
-All text formats parsed via `AssetParser`, registered by `AssetRegistry`:
-* `.oc` (ObjectContainer): `ObjectContainer <name>` + `Path`, optional `Loader Procedural`, `MergeNodes`, `PreTransformVertices`, `DecimationFactor` (<1 meshopt-simplifies at cook; cache-only, so skinned/procedural containers never decimate), `MaterialOverrides` (per-material `PipelineIdx <pipelineName>`, `ExcludeFromRayTracing`, `UseSceneTextures`, `DiffuseTexIdx`/`NormalTexIdx`/`MetalRoughnessTexIdx`). Skinned containers MUST keep `PreTransformVertices false`
-* `.pre` (Prefab): `Prefab <name>` root with `Component Render/Animator/Script/Physics/Audio/Particle/Force/Light/Network/Scene` children; `Component Scene` nests child `Prefab` references. Render requires `ObjectContainer <name>` + `Node <path>`, `Type StaticMesh|SkinnedMesh` (skinned adds a nested `Rig <name>`), plus `Position/Rotation/Scale`; entity-level `Enabled false` authors the disabled state. Spawn by prefab name (`world.spawn`) or path (`world.spawnAssetFile`)
-* `.anm`: `Animation <name>` clips — source `ObjectContainer`, `Loop`, `Skip` (channels), `Event <name> <normalizedTime>` notifies (fired into the entity's script/animator `onEvent`)
-* `.apl`: `Animator <name>` graph — `Parameter`s (Float/Bool/Trigger), `Clip <name>` + `Anim <clipName>` bindings, `BlendSpace1D` with `Sample`s, `StateMachine` (`Entry <state>`, states with `Play`/`SpeedParam`/`SpeedScale`, `Transition`/`AnyTransition` with `Condition`/`ExitTime`/`Fade`)
-* `.scr`: the removed node editor's format (generated C++ + `//@graph` metadata) — legacy reference only: reads as plain text in Content, never cooked, no editor. Author `.dsl` via DslCompiler instead
-* `Assets/Scenarios/`: checked-in inputs for repeatable runs — `*.txt` game saves (the F9 format: structures — cable segments included — /units) for `--scenario <path>` / `Tools/profile.ps1` (`march-64-units.txt` = the corridor with 64 team-0 units, the standard perf scenario) and `*.tweaks` override files for `--tweaks <path>` (`cpu-profile.tweaks` = GPU features off)
-* `Assets/Local/` is generated output (SPIR-V + shader dumps, compiled script DLLs/PDBs, cooked scenes `Cooked/*.vsc` + converted .dds, `TerrainTex/` splats, `Diffusion/` tile cache) — never hand-edit
+
+All text formats are parsed through `AssetParser` and registered by `AssetRegistry`.
+
+## `.oc` — ObjectContainer
+
+`ObjectContainer <name>` plus `Path`. Optional:
+
+* `Loader Procedural`, `MergeNodes`, `PreTransformVertices`
+* `DecimationFactor` — below 1 it meshopt-simplifies at cook. Cache-only, so skinned and procedural
+  containers never decimate.
+* `MaterialOverrides` — per material: `PipelineIdx <pipelineName>`, `ExcludeFromRayTracing`,
+  `UseSceneTextures`, `DiffuseTexIdx` / `NormalTexIdx` / `MetalRoughnessTexIdx`.
+
+**Skinned containers MUST keep `PreTransformVertices false`.**
+
+## `.pre` — Prefab
+
+A `Prefab <name>` root with `Component Render/Animator/Script/Physics/Audio/Particle/Force/Light/
+Network/Scene` children. `Component Scene` nests child `Prefab` references.
+
+`Component Render` requires `ObjectContainer <name>` plus `Node <path>`,
+`Type StaticMesh|SkinnedMesh` (skinned adds a nested `Rig <name>`), plus `Position` / `Rotation` /
+`Scale`.
+
+Entity-level `Enabled false` authors the disabled state.
+
+Spawn by prefab name (`world.spawn`) or by path (`world.spawnAssetFile`).
+
+## `.anm` — animation clips
+
+`Animation <name>` clips: source `ObjectContainer`, `Loop`, `Skip` (channels), and
+`Event <name> <normalizedTime>` notifies, fired into the entity's script or animator `onEvent`.
+
+## `.apl` — animator graph
+
+`Animator <name>` graph:
+
+* `Parameter`s — Float / Bool / Trigger
+* `Clip <name>` plus `Anim <clipName>` bindings
+* `BlendSpace1D` with `Sample`s
+* `StateMachine` — `Entry <state>`; states with `Play` / `SpeedParam` / `SpeedScale`;
+  `Transition` / `AnyTransition` with `Condition` / `ExitTime` / `Fade`
+
+## `.scr` — legacy
+
+The removed node editor's format: generated C++ plus `//@graph` metadata. Legacy reference only — it
+reads as plain text in Content, is never cooked, and has no editor. **Author `.dsl` through
+DslCompiler instead.**
+
+## `Assets/Scenarios/`
+
+Checked-in inputs for repeatable runs:
+
+* `*.txt` game saves — the F9 format: structures (cable segments included) and units — for
+  `--scenario <path>` and `Tools/profile.ps1`. `march-64-units.txt` is the corridor with 64 team-0
+  units, the standard perf scenario.
+* `*.tweaks` override files for `--tweaks <path>`. `cpu-profile.tweaks` = GPU features off.
+
+## `Assets/Local/`
+
+Generated output — **never hand-edit.** SPIR-V plus shader dumps, compiled script DLLs and PDBs,
+cooked scenes (`Cooked/*.vsc`) plus converted `.dds`, `TerrainTex/` splats, and the `Diffusion/` tile
+cache.

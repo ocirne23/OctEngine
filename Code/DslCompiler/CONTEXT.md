@@ -1,9 +1,25 @@
 # DslCompiler — command-line DSL → .dsl compiler
 
-The way to author `.dsl` scripts WITHOUT hand-writing the transpiled C++. You write only the DSL text; the tool
-validates it with the exact same loader the Script Editor uses, transpiles it, and writes the dual-purpose
-`.dsl` file (generated C++ on top + the `//@`-commented DSL block below) — byte-identical to what the editor's
-Save button produces. The engine then compiles/hot-reloads that `.dsl` like any script (F6, Script panel).
+> Read [`.claude/CLAUDE.md`](../../.claude/CLAUDE.md) first — rules, building, style, dependency direction.
+> The ScriptHost side is in [`Code/Script/CONTEXT.md`](../Script/CONTEXT.md).
+
+The way to author `.dsl` scripts WITHOUT hand-writing the transpiled C++.
+
+You write only the DSL text; the tool validates it with the exact same loader the Script Editor uses,
+transpiles it, and writes the dual-purpose `.dsl` file — generated C++ on top, plus the
+`//@`-commented DSL block below — byte-identical to what the editor's Save button produces. The engine
+then compiles and hot-reloads that `.dsl` like any script (F6, Script panel).
+
+## Contents
+
+* [Usage](#usage) · [Raw input format](#raw-input-format) · [Directives](#directives) ·
+  [Entry points](#entry-points)
+* [Language syntax](#language-syntax) — [functions and expressions](#functions-variables-expressions),
+  [calls](#calls), [control flow](#control-flow), [arrays](#arrays-t)
+* [Binding surface](#binding-surface-what-scripts-can-touch) — [self](#self-entity), [world](#world),
+  [math](#math-all-angles-in-degrees), [hud](#hud), [free functions](#free-functions),
+  [struct methods](#struct-methods)
+* [Using the result](#using-the-result) · [Worked example](#worked-example)
 
 ## Usage
 
