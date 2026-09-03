@@ -1,6 +1,7 @@
-# Enemy Runner: fast fragile harasser - half health, weak shield, retargets twice as often; slips
-# through field gaps on speed and picks at whatever is unguarded. Stat multipliers live in
-# NpcSystem's type table.
+# Enemy Runner: fast fragile harasser - half health, NO shield (health only, like the Swarm: no
+# Component Force, no bubble, no readbacks — enemy fields still shove and burn it through the
+# BAKED pressure field, see enemyGrunt.pre), retargets twice as often; slips through field gaps
+# on speed and picks at whatever is unguarded.
 Prefab gameEnemyRunner
 	Component Render
 		ObjectContainer baseshapes
@@ -17,17 +18,13 @@ Prefab gameEnemyRunner
 		Friction 0
 		LockRotation true
 		ContactEvents true
-	Component Force
-		Team 1
-		Output 0.6
-		Reach 2
-		Centered true
 	Component Network
 	Component GameUnit
 		ShortName RUN
+		Team 1
 		HealthMax 30
-		EnergyMax 16
-		ShieldOutput 0.56
+		EnergyMax 0
+		ShieldOutput 0
 		MoveSpeed 7.6
 		AttackDps 4.2
 		PlayerDps 7

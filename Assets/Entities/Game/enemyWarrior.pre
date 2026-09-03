@@ -1,0 +1,36 @@
+# Enemy Warrior: the SHIELDED grunt - a grunt body WITH a Component Force: a team-1 bubble that
+# presses on player shields and a shield battery that absorbs damage first (the GPU-readback
+# path; shield-less bodies are pushed/burned by the baked field instead), a third more health and
+# harder hits. The early-wave line unit once the shield-less horde stops cutting it. Bigger than
+# the grunt, yellow.
+Prefab gameEnemyWarrior
+	Component Render
+		ObjectContainer baseshapes
+		Node Cube
+		Type StaticMesh
+		Color 0.85 0.75 0.1
+		Scale 0.6 0.95 0.6
+	Component Physics
+		Body Dynamic
+		Shape Capsule
+		Radius 0.6
+		HalfHeight 0.35
+		Density 110
+		Friction 0
+		LockRotation true
+		ContactEvents true
+	Component Force
+		Team 1
+		Output 0.8
+		Reach 3
+		Centered true
+	Component Network
+	Component GameUnit
+		ShortName WARR
+		HealthMax 80
+		EnergyMax 40
+		ShieldOutput 0.8
+		MoveSpeed 4.0
+		AttackDps 8
+		PlayerDps 13
+		EmitterDrain 5

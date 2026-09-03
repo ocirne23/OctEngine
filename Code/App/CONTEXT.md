@@ -214,8 +214,19 @@ settings pages.
 `GameMatch::escWouldCancel()` is false — no pending two-click flow, no armed item, no open hotbar page,
 and the mode is Select.
 
-Actions: Resume / ExitToMenu / Quit. **The teardown runs in the pre-kick window**, where main-thread
-entity destruction and the network shutdown are legal.
+Actions: Resume / Pause / ExitToMenu / Quit (+ Unpause from the paused box). **The teardown runs in
+the pre-kick window**, where main-thread entity destruction and the network shutdown are legal.
+
+**The SHARED GAME PAUSE.** Opening the escape menu does NOT pause the sim (a co-op peer's game must
+keep running under your menu). "Pause game" (offered over a running game only) calls
+`GameMatch::requestPause(true)`: the authority flips `Time::setPaused` and broadcasts **GPz**; a
+client sends a **GqZ** request instead, which the server applies and re-broadcasts — so **any
+player may pause, and any player may resume**. main mirrors `game->isPaused()` into
+`UI::setGamePaused` every frame: while set, `MainMenu::renderPausedBox` draws a centered PAUSED box
+(under the escape menu, no dim) with a Resume button (`EscapeMenuAction::Unpause` →
+`requestPause(false)`). The transport keeps running on the real clock, so the resume event still
+arrives while the sim clock stands still; the join replay sends GPz to a late joiner; `~GameMatch`
+clears the pause so exit-to-menu never strands the clock.
 
 While the overlay is over a RUNNING game **the frame camera is left untouched** — neither the game's
 follow cam nor the fly camera runs, because the fly-camera branch would overwrite it with the testbed

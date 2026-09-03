@@ -1,7 +1,9 @@
-# Enemy NPC unit: upright capsule carrying a small team-1 field bubble - friendly emitter fields
-# physically push it back (applied-force readback), and its bubble presses on the player's shield.
-# Spawned from the objective by NpcSystem; steers toward the nearest structure and gnaws it in
-# attack range. ContactEvents feed projectile hit damage.
+# Enemy NPC unit (also the barracks' Grunt): upright capsule, HEALTH ONLY - like the Swarm it
+# carries NO Component Force: no bubble, no shield battery, no GPU readbacks. Enemy fields still
+# SHOVE it and burn it through the BAKED pressure field (GameUnitComponent's shield-less branch:
+# a CPU tap of the field + its gradient; the bubble-radius check is only the fallback when the
+# bake is off), and it still strains emitters (EmitterDrain). Steers toward the nearest structure
+# and gnaws it in attack range. ContactEvents feed projectile hit damage.
 Prefab gameEnemyGrunt
 	Component Render
 		ObjectContainer baseshapes
@@ -18,11 +20,10 @@ Prefab gameEnemyGrunt
 		Friction 0
 		LockRotation true
 		ContactEvents true
-	Component Force
-		Team 1
-		Output 0.8
-		Reach 3
-		Centered true
 	Component Network
 	Component GameUnit
 		ShortName GRNT
+		Team 1
+		HealthMax 60
+		EnergyMax 0
+		ShieldOutput 0

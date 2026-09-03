@@ -692,10 +692,24 @@ int main(int argc, char* argv[])
                     else if (!game || !game->enabled() || Globals::ui.isMainMenuActive() || !game->escWouldCancel())
                         Globals::ui.setEscapeMenuOpen(true);
                 }
+                // The SHARED GAME PAUSE: the escape menu offers "Pause game" over a running game;
+                // the paused box (any player's Resume) mirrors the game's synced state.
+                const bool gameRunning = game && game->enabled() && !Globals::ui.isMainMenuActive();
+                Globals::ui.setEscapeOffersPause(gameRunning);
+                Globals::ui.setGamePaused(gameRunning && game->isPaused());
                 switch (Globals::ui.takeEscapeMenuAction())
                 {
                 case EscapeMenuAction::Resume:
                     Globals::ui.setEscapeMenuOpen(false);
+                    break;
+                case EscapeMenuAction::Pause:
+                    Globals::ui.setEscapeMenuOpen(false);
+                    if (gameRunning)
+                        game->requestPause(true);
+                    break;
+                case EscapeMenuAction::Unpause:
+                    if (gameRunning)
+                        game->requestPause(false);
                     break;
                 case EscapeMenuAction::Quit:
                     g_running = false;

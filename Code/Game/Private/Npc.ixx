@@ -15,7 +15,8 @@ import :Structures;
 // ELITE tier (enemy-only: not barracks options — see isBarracksUnitType); the Lobber is the ranged
 // one, firing SPLASH shots (enemyLob.pre, ShotKind 1).
 // The Spawner is a "ranged" unit whose ShotKind 2 "shot" is a SWARM body spawned next to it.
-export enum class ENpcType : uint8 { Grunt, Brute, Runner, Spitter, Swarm, Elite, Giant, Titan, Lobber, Spawner, Count };
+// The Warrior is the SHIELDED grunt (the Grunt/Runner/Swarm are health-only bodies).
+export enum class ENpcType : uint8 { Grunt, Brute, Runner, Spitter, Swarm, Elite, Giant, Titan, Lobber, Spawner, Warrior, Count };
 // The barracks' unit-type selection + its per-type price tables index by THIS order.
 static_assert((int)ENpcType::Count == GameNumUnitTypes);
 

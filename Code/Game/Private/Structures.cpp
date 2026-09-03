@@ -112,7 +112,7 @@ void StructureSystem::registerTweaks()
     Tweak::intVar("Game/Structures", "Wall breach cost", &m_wallBreachCost, 1, 254, 1);
     Tweak::floatVar("Game/Economy", "Mineral base capacity", &m_mineralBaseCapacity, 10.0f, 5000.0f, 5.0f);
     Tweak::floatVar("Game/Economy", "Mineral silo capacity", &m_mineralSiloCapacity, 10.0f, 5000.0f, 5.0f);
-    Tweak::floatVar("Game/Economy", "Barracks energy capacity", &m_barracksEnergyCapacity, 1.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Barracks energy intake/s", &m_barracksEnergyIntake, 0.1f, 50.0f, 0.1f);
     Tweak::floatVar("Game/Economy", "Wall cost (per segment)", &m_costs[14], 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Economy", "Turret cost", &m_costs[15], 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Bastion energy/s", &m_bastionEnergyPerSec, 0.1f, 30.0f, 0.1f);
@@ -161,17 +161,18 @@ void StructureSystem::registerTweaks()
     Tweak::intVar("Game/Friendlies", "Barracks population", &m_barracksPopulation, 0, 200, 1);
     Tweak::intVar("Game/Friendlies", "House population", &m_housePopulation, 0, 100, 1);
     Tweak::floatVar("Game/Friendlies", "House link radius", &m_houseLinkRadius, 2.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Friendlies", "Barracks seconds per energy", &sp.barracksSecondsPerEnergy, 0.05f, 5.0f, 0.05f);
     Tweak::floatVar("Game/Friendlies", "Grunt spawn energy", &m_spawnEnergy[0], 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Friendlies", "Brute spawn energy", &m_spawnEnergy[1], 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Friendlies", "Runner spawn energy", &m_spawnEnergy[2], 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Friendlies", "Spitter spawn energy", &m_spawnEnergy[3], 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Friendlies", "Swarm spawn energy", &m_spawnEnergy[4], 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Friendlies", "Warrior spawn energy", &m_spawnEnergy[10], 0.0f, 100.0f, 0.5f);
     Tweak::intVar("Game/Friendlies", "Grunt population", &m_unitPopulation[0], 0, 50, 1);
     Tweak::intVar("Game/Friendlies", "Brute population", &m_unitPopulation[1], 0, 50, 1);
     Tweak::intVar("Game/Friendlies", "Runner population", &m_unitPopulation[2], 0, 50, 1);
     Tweak::intVar("Game/Friendlies", "Spitter population", &m_unitPopulation[3], 0, 50, 1);
     Tweak::intVar("Game/Friendlies", "Swarm population", &m_unitPopulation[4], 0, 50, 1);
+    Tweak::intVar("Game/Friendlies", "Warrior population", &m_unitPopulation[10], 0, 50, 1);
     Tweak::floatVar("Game/Friendlies", "Turret range", &sp.turretRange, 4.0f, 60.0f, 0.5f);
     Tweak::floatVar("Game/Friendlies", "Turret fire interval", &sp.turretFireInterval, 0.1f, 10.0f, 0.05f);
     Tweak::floatVar("Game/Friendlies", "Turret shot energy", &sp.turretShotEnergy, 0.0f, 20.0f, 0.1f);
@@ -232,6 +233,16 @@ void StructureSystem::stampTuning(const Ref& s)
     c.capacity[0] = energyCapacityOf(s.type);
     c.capacity[1] = fuelCapacityOf(s.type);
     c.capacity[2] = mineralCapacityOf(s.type);
+    // A BARRACKS' energy capacity is its selected unit's cost (the build bar) — resolved HERE,
+    // before the store clamp below: energyCapacityOf's 1.0 attach placeholder would otherwise
+    // clamp the store to 1 every tick (the bar sat at 1 forever).
+    if (isBarracksType(s.type))
+    {
+        if (!isBarracksUnitType(c.barracks.unitType))
+            c.barracks.unitType = 0;
+        c.barracks.spawnCost = m_spawnEnergy[c.barracks.unitType];
+        c.capacity[0] = glm::max(c.barracks.spawnCost, 1.0f);
+    }
     for (int m = 0; m < 3; ++m)
         c.store[m] = glm::min(c.store[m], c.capacity[m]);
     // Gravity bands per medium (see GameComponents.ixx): higher exports to lower at full
@@ -241,25 +252,38 @@ void StructureSystem::stampTuning(const Ref& s)
     // out (to silos and to whatever spends minerals) over sitting in the bank — it only keeps
     // what its receivers cannot take. Cables hold NO stores (capacity 0 everywhere): they are
     // never link endpoints — links derive between the BUILDINGS their runs touch.
+    // ENERGY: the Base sits in the STORAGE band with the batteries (it self-generates and banks
+    // 100) — as a plain consumer it only ever EQUALIZED with its consumers by fill fraction, so a
+    // barracks cabled to a 20 %-full Base filled to 20 % of its (tiny) build bar and stalled.
     c.band[0] = s.type == EStructureType::Generator || s.type == EStructureType::Solar ? 2
-              : s.type == EStructureType::Battery ? 1 : 0;
+              : s.type == EStructureType::Battery || s.type == EStructureType::Base ? 1 : 0;
     c.band[1] = s.type == EStructureType::Extractor ? 2
               : s.type == EStructureType::FuelTank ? 1 : 0;
     c.band[2] = s.type == EStructureType::Extractor || s.type == EStructureType::Fabricator ? 3
               : s.type == EStructureType::Base ? 2
               : s.type == EStructureType::MineralSilo ? 1 : 0;
-    // Link throughputs follow the live tweaks (medium-indexed — tiers are gone).
+    // Link throughputs follow the live tweaks (medium-indexed — tiers are gone). A BARRACKS' power
+    // links are capped to "Barracks energy intake/s" on BOTH endpoints' copies (whichever side
+    // owns the flow): that intake is what turns its energy store into a build bar (below).
+    const bool barracks = isBarracksType(s.type);
     for (GameStructureLink& l : c.links)
+    {
         l.throughput = m_cableThroughput[glm::min((int)l.medium, 2)];
+        if (l.medium != 0)
+            continue;
+        const GameStructureComponent* far = getComponent<GameStructureComponent>(l.other.get());
+        if (barracks || (far && far->machineKind == GameStructureComponent::EMachineKind::Barracks))
+            l.throughput = glm::min(l.throughput, m_barracksEnergyIntake);
+    }
     // The union's machine variant (barracks spawn / turret fire logic runs per-entity in the
     // component update; the selected unit type's prices + the population cap are stamped here so
-    // the tweaks and the house links stay live).
-    if (isBarracksType(s.type))
+    // the tweaks and the house links stay live). The barracks' energy CAPACITY is the selected
+    // unit's cost: the store fills at the capped intake and reads as the BUILD BAR, full = spawn
+    // (build time = cost / intake). Switching the type re-clamps the store to the new cost.
+    if (barracks)
     {
         c.machineKind = GameStructureComponent::EMachineKind::Barracks;
-        if (!isBarracksUnitType(c.barracks.unitType))
-            c.barracks.unitType = 0;
-        c.barracks.spawnCost = m_spawnEnergy[c.barracks.unitType];
+        // (unitType/spawnCost/capacity[0] were resolved above, ahead of the store clamp)
         c.barracks.spawnPop = (uint8)glm::clamp(m_unitPopulation[c.barracks.unitType], 0, 255);
         c.barracks.popCap = m_barracksPopulation + (int)c.barracks.houses * m_housePopulation;
     }
@@ -1584,7 +1608,7 @@ void StructureSystem::mirrorStructureState(uint32 id, float healthFrac, float ch
         m_linksDirty = true;     // built buildings attach to runs; ghosts detach
     }
     s.health = healthFrac * s.healthMax;
-    s.store[0] = chargeFrac * energyCapacityOf(ref.type);
+    s.store[0] = chargeFrac * s.capacity[0]; // per-instance (a barracks' capacity = its unit's cost)
     s.store[1] = fuelFrac * fuelCapacityOf(ref.type);
     s.store[2] = mineralFrac * mineralCapacityOf(ref.type);
     s.flowUtil = utilFrac; // already server-smoothed

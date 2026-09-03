@@ -111,6 +111,7 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
         m_isViewportFocused = false;
         m_hasViewportGainedFocus = false;
         m_mainMenu.render(m_viewportRect, m_tweakPanel.deferredCallbacks());
+        m_mainMenu.renderPausedBox(); // (no-op unless the shared pause is on)
         if (m_mainMenu.isEscapeOpen()) // reachable from the LOBBY page (its only leave mechanism)
             m_mainMenu.renderEscape(false);
         renderImGuiToSnapshot();
@@ -225,6 +226,7 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
             m_gizmo->update(camera, m_viewportRect, nullptr, deltaSec);
         }
 
+        m_mainMenu.renderPausedBox(); // the shared pause's box, under the escape menu
         if (m_mainMenu.isEscapeOpen())
         {
             ProfileScope scope("Escape menu", EProfileCategory::UI);
@@ -520,6 +522,7 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
     }
 
     // Escape menu overlay (Esc in any running mode): drawn last, over the docked panels.
+    m_mainMenu.renderPausedBox(); // the shared pause's box, under the escape menu
     if (m_mainMenu.isEscapeOpen())
     {
         ProfileScope scope("Escape menu", EProfileCategory::UI);

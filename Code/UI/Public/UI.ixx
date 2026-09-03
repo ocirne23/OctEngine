@@ -134,6 +134,10 @@ public:
     void setEscapeMenuOpen(bool open) { m_mainMenu.setEscapeOpen(open); }
     bool isEscapeMenuOpen() const { return m_mainMenu.isEscapeOpen(); }
     EscapeMenuAction takeEscapeMenuAction() { return m_mainMenu.takeEscapeAction(); }
+    // The SHARED GAME PAUSE (see MainMenu): main mirrors the game's pause state here every frame
+    // (the PAUSED box + its Resume button) and tells the escape menu whether to offer "Pause game".
+    void setGamePaused(bool paused) { m_mainMenu.setGamePaused(paused); }
+    void setEscapeOffersPause(bool offers) { m_mainMenu.setEscapeOffersPause(offers); }
     // Text chat (App's ChatSystem is the model): drawn inside the lobby page and as an overlay in
     // the game layout. main pushes the view when the log changed and polls the sent line.
     void setChatView(ChatView view) { m_chat.setView(oc::move(view)); }

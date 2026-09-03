@@ -52,11 +52,11 @@ static constexpr const char* c_structureShortNames[] = { "EMIT", "GEN", "CON", "
 static_assert(oc::size(c_structureShortNames) == (size_t)EStructureType::Count);
 // The barracks' unit-type popup captions, in ENpcType order (the same order the price tables use).
 static constexpr const char* c_unitTypeNames[] = { "Grunt", "Brute", "Runner", "Spitter", "Swarm",
-    "Elite", "Giant", "Titan", "Lobber", "Spawner" };
+    "Elite", "Giant", "Titan", "Lobber", "Spawner", "Warrior" };
 static_assert(oc::size(c_unitTypeNames) == (size_t)ENpcType::Count);
 // The popup's buttons, in order: the producible types (isBarracksUnitType — no Spitter).
-static constexpr uint8 c_barracksMenu[] = { (uint8)ENpcType::Grunt, (uint8)ENpcType::Brute,
-    (uint8)ENpcType::Runner, (uint8)ENpcType::Swarm };
+static constexpr uint8 c_barracksMenu[] = { (uint8)ENpcType::Grunt, (uint8)ENpcType::Warrior,
+    (uint8)ENpcType::Brute, (uint8)ENpcType::Runner, (uint8)ENpcType::Swarm };
 // A category page is just its list of placeable types — the shorthand table above IS each slot's
 // caption.
 static constexpr EStructureType c_combatItems[] = {
@@ -173,14 +173,14 @@ static constexpr int c_pvpBorderCells = 2;           // 10 m of rock around ever
 static constexpr float c_pvpBaseClear = 8.0f;        // rock-free radius around every Base cell
 // The CO-OP map: a big square centred on the shared Base, RANDOMLY GENERATED — impassable rock
 // terrain over a coarse cell grid plus a player-blocking barrier ring at ±c_coopHalfSize (see
-// GameMatch::generateCoopGrid). The ground plane (ground.pre) is 400 m, so ±200 is the hard edge;
+// GameMatch::generateCoopGrid). The ground plane (ground.pre) is 600 m, so ±300 is the hard edge;
 // waves spawn in the open ring BETWEEN the barrier and the ground edge and walk in through it
 // (the barrier's collider only matches the Player layer).
-static constexpr float c_coopHalfSize = 180.0f;
+static constexpr float c_coopHalfSize = 270.0f;
 static constexpr float c_coopCellSize = 10.0f; // terrain cell = one rock block (5x the 2 m grid)
-static constexpr int c_coopCells = 36;         // cells per side
+static constexpr int c_coopCells = 54;         // cells per side
 static_assert((float)c_coopCells * c_coopCellSize == c_coopHalfSize * 2.0f);
-static constexpr float c_coopGroundEdge = 196.0f;  // spawn clamp just inside the 400 m ground
+static constexpr float c_coopGroundEdge = 296.0f;  // spawn clamp just inside the 600 m ground
 static constexpr float c_coopBaseClearRadius = 26.0f; // rock-free zone around the Base + starters
 static constexpr float c_barrierStep = 20.0f;      // one barrier.pre segment (posts at centers)
 
@@ -236,10 +236,10 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
         Tweak::floatVar("Game/Coop", "Cost titan", &m_waveCost[(int)ENpcType::Titan], 0.1f, 500.0f, 0.5f);
         Tweak::floatVar("Game/Coop", "Cost lobber", &m_waveCost[(int)ENpcType::Lobber], 0.1f, 500.0f, 0.5f);
         Tweak::floatVar("Game/Coop", "Cost spawner", &m_waveCost[(int)ENpcType::Spawner], 0.1f, 500.0f, 0.5f);
+        Tweak::floatVar("Game/Coop", "Cost warrior", &m_waveCost[(int)ENpcType::Warrior], 0.1f, 500.0f, 0.5f);
         Tweak::intVar("Game/Coop", "Max enemy units", &m_waveMaxAlive, 1, 20000, 50);
-        Tweak::intVar("Game/Coop", "Ambient budget", &m_ambientBudget, 0, 20000, 10);
+        Tweak::intVar("Game/Coop", "Ambient budget", &m_ambientBudget, 0, 60000, 10);
         Tweak::floatVar("Game/Coop", "Ambient safe radius", &m_ambientSafeRadius, 10.0f, 200.0f, 1.0f);
-        Tweak::floatVar("Game/Coop", "Ambient min depth", &m_ambientMinDepth, 0.0f, 0.9f, 0.05f);
         Tweak::intVar("Game/Coop", "Ambient recipe window", &m_ambientRecipeWindow, 0, 20, 1);
         Tweak::intVar("Game/Coop", "Spawns per frame", &m_spawnsPerFrame, 1, 200, 1);
         // Map generation inputs, read once at generation on the AUTHORITY. Clients never read
@@ -346,6 +346,7 @@ GameMatch::~GameMatch()
     // Game/* block + camera/player/structures/npcs) must leave the registry with it, or the
     // per-frame poll reads freed memory. Statics (component params) stay and re-register in place.
     TweakRegistry::get().unregisterInRange(this, sizeof(GameMatch));
+    applyPause(false); // a shared pause must not outlive the match (exit-to-menu mid-pause)
     Globals::navSystem.clear(); // waits on in-flight builds before the world goes
     m_npcs.clear();
     m_structures.clear();
@@ -465,6 +466,28 @@ void GameMatch::spawnWorld()
             m_structures.spawnBase(m_basePos);
             m_ambientPendingBudget = (float)m_ambientBudget; // the scatter's points, trickled in (tickCoopSpawns)
         }
+        // Respawns land on a FREE cell near the anchor: buildings placed on the spawn spot after
+        // the fact (a wall ring around the Base, a house) must not swallow the capsule. Rings of
+        // 1x1 probes outward from the anchor, cables walk-through; a fully built-over area falls
+        // back to the anchor itself.
+        m_player.setRespawnResolver([this](const glm::vec3& anchor)
+        {
+            constexpr float c_step = StructureSystem::GridCellSize;
+            for (int ring = 0; ring <= 8; ++ring)
+            {
+                const int probes = ring == 0 ? 1 : 8 * ring;
+                for (int k = 0; k < probes; ++k)
+                {
+                    const float a = (float)k / (float)probes * glm::two_pi<float>();
+                    const glm::vec3 p = StructureSystem::snapToGrid(EStructureType::Emitter,
+                        anchor + glm::vec3(std::cos(a), 0.0f, std::sin(a)) * (c_step * (float)ring));
+                    if (m_structures.cellsFree(EStructureType::Emitter, p,
+                        glm::quat(1.0f, 0.0f, 0.0f, 0.0f), /*ignoreCables*/ true))
+                        return glm::vec3(p.x, anchor.y, p.z);
+                }
+            }
+            return anchor;
+        });
         m_player.spawn(m_playerStart);     // clients ADOPT the capsule the server spawns for them
         // The server's own capsule is a PRIMARY: never handed to a client by the proximity
         // transfer, and it re-claims transferred objects it walks up to (the client symmetric).
@@ -516,6 +539,10 @@ namespace
         { "swarm + runners", 2, { { ENpcType::Swarm, 0.75f }, { ENpcType::Runner, 0.25f } } },
         { "grunt push",      2, { { ENpcType::Grunt, 0.65f }, { ENpcType::Swarm, 0.35f } } },
         { "runner rush",     3, { { ENpcType::Runner, 1.0f } } },
+        { "warrior line",    4, { { ENpcType::Warrior, 0.4f }, { ENpcType::Grunt, 0.3f },
+                                  { ENpcType::Swarm, 0.3f } } },
+        { "shield wall",     6, { { ENpcType::Warrior, 0.6f }, { ENpcType::Spitter, 0.15f },
+                                  { ENpcType::Swarm, 0.25f } } },
         { "spitter siege",   4, { { ENpcType::Spitter, 0.3f }, { ENpcType::Swarm, 0.7f } } },
         { "brute hammer",    5, { { ENpcType::Brute, 0.25f }, { ENpcType::Swarm, 0.75f } } },
         { "combined arms",   6, { { ENpcType::Grunt, 0.3f }, { ENpcType::Runner, 0.25f },
@@ -748,13 +775,10 @@ void GameMatch::tickCoopSpawns()
             // within "Ambient recipe window" BELOW its depth band, so the near ring only rolls the
             // early recipes (swarm-grade) and the deep map rolls ONLY the elite-tier ones (giants,
             // titans, lobbers never appear near the Base, and the outer map never wastes a group
-            // on a plain swarm). "Ambient min depth" rejects the innermost fraction of the map
-            // outright. Costs then make far groups FEWER, TOUGHER bodies for the same points. One
-            // recipe per group, so it reads as a unit type holding ground rather than a random
-            // assortment.
+            // on a plain swarm). Costs then make far groups FEWER, TOUGHER bodies for the same
+            // points. One recipe per group, so it reads as a unit type holding ground rather than
+            // a random assortment.
             const float depth = (float)m_coopMap.depth[cell] / (float)m_coopMap.maxDepth;
-            if (depth < m_ambientMinDepth)
-                continue; // too close to the Base by walking distance: costs one budget tick
             const int band = 1 + (int)(depth * (float)(c_maxArchetypeMinWave - 1) + 0.5f);
             int eligible[c_numWaveArchetypes];
             int numEligible = 0;
@@ -1445,6 +1469,13 @@ void GameMatch::onClientJoined(uint32 clientId)
         if (isBarracksType(m_structures.structureType(i)))
             sendUnitType(i); // and the produced unit type
     }
+    if (m_paused) // the joiner lands in a paused game: show it the box
+    {
+        uint8 buffer[4];
+        NetWriter writer(buffer);
+        writer.write<uint8>(1);
+        Globals::networkManager.fireNetworkEvent("GPz", writer.data());
+    }
     Log::info("Game: client " + oc::to_string(clientId) + " joined, world replayed");
 }
 
@@ -1694,6 +1725,35 @@ void GameMatch::sendStats()
     Globals::networkManager.fireNetworkEvent("GCb", cableWriter.data());
 }
 
+void GameMatch::applyPause(bool paused)
+{
+    if (m_paused == paused)
+        return;
+    m_paused = paused;
+    Globals::time.setPaused(paused);
+    Log::info(paused ? "Game paused" : "Game resumed");
+}
+
+void GameMatch::requestPause(bool paused)
+{
+    if (m_isClient)
+    {
+        uint8 buffer[4];
+        NetWriter writer(buffer);
+        writer.write<uint8>(paused ? 1 : 0);
+        Globals::networkManager.fireNetworkEvent("GqZ", writer.data());
+        return;
+    }
+    applyPause(paused);
+    if (m_isServer)
+    {
+        uint8 buffer[4];
+        NetWriter writer(buffer);
+        writer.write<uint8>(paused ? 1 : 0);
+        Globals::networkManager.fireNetworkEvent("GPz", writer.data());
+    }
+}
+
 void GameMatch::handleNetEvent(oc::string_view name)
 {
     ProfileScope scope("Game net event", EProfileCategory::Game);
@@ -1801,6 +1861,12 @@ void GameMatch::handleNetEvent(oc::string_view name)
             if (!reader.overflowed())
                 m_npcs.addBeam(glm::vec3(fx, fy, fz), glm::vec3(tx, ty, tz));
         }
+        else if (name == "GPz")
+        {
+            const uint8 paused = reader.read<uint8>();
+            if (!reader.overflowed())
+                applyPause(paused != 0);
+        }
         else if (name == "GWv")
         {
             // Co-op wave announcement (the wave itself arrives as replicated unit entities).
@@ -1840,6 +1906,13 @@ void GameMatch::handleNetEvent(oc::string_view name)
     const uint32 sender = Globals::networkManager.currentEventSender();
     if (clientTeam(sender) < 0)
         return;
+    if (name == "GqZ") // any seated player may pause/resume for everyone
+    {
+        const uint8 paused = reader.read<uint8>();
+        if (!reader.overflowed())
+            requestPause(paused != 0);
+        return;
+    }
     if (name == "GqP")
     {
         const uint8 type = reader.read<uint8>();
@@ -3028,7 +3101,8 @@ void GameMatch::buildWorldLabels(const Camera& camera)
         {
             label.bar2Value = m_structures.structureCharge(i);
             label.bar2Max = energyCap;
-            label.bar2Color = glm::vec3(1.0f, 0.9f, 0.3f);
+            // A barracks' store IS its build bar (capacity = the unit's cost): green, not energy-yellow.
+            label.bar2Color = isBarracksType(type) ? glm::vec3(0.4f, 0.95f, 0.5f) : glm::vec3(1.0f, 0.9f, 0.3f);
             if (mineralCap > 0.0f) // the Base: energy AND its spendable mineral bank
             {
                 label.bar3Value = m_structures.structureMinerals(i);
@@ -3043,7 +3117,8 @@ void GameMatch::buildWorldLabels(const Camera& camera)
             char info[192];
             int len = snprintf(info, sizeof(info), "HP %.0f / %.0f", label.barValue, label.barMax);
             if (energyCap > 0.0f && len > 0 && len < (int)sizeof(info))
-                len += snprintf(info + len, sizeof(info) - len, "\nEnergy %.0f / %.0f",
+                len += snprintf(info + len, sizeof(info) - len,
+                    isBarracksType(type) ? "\nBuild %.0f / %.0f" : "\nEnergy %.0f / %.0f",
                     m_structures.structureCharge(i), energyCap);
             if (fuelCap > 0.0f && len > 0 && len < (int)sizeof(info))
                 len += snprintf(info + len, sizeof(info) - len, "\nFuel %.0f / %.0f",

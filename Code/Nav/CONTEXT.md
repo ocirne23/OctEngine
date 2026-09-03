@@ -405,7 +405,7 @@ radius the unit marches lane-friendly toward the target.
 | Tweak | Default |
 |---|---|
 | Enabled | on |
-| Field radius | 250 m |
+| Field radius | 400 m (the 600 m co-op map, corner to corner from the Base) |
 | Rebuild interval | 0.25 s |
 | Clearance cost | 1 |
 | Chunk keep frames | 120 |

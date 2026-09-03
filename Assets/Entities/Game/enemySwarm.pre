@@ -1,6 +1,7 @@
 # SWARM unit: the cheap co-op horde body — health only. NO Component Force: no bubble, no shield
-# battery, no GPU readbacks; friendly emitters instead burn it via the CPU bubble-radius check
-# (GameStructureComponent::bubbleRadius) and it still strains them (EmitterDrain). Spawned in bulk
+# battery, no GPU readbacks; friendly fields instead shove AND burn it through the BAKED pressure
+# field (a CPU tap + gradient; the bubble-radius check is only the fallback when the bake is off)
+# and it still strains emitters (EmitterDrain). Spawned in bulk
 # by GameMatch's ambient scatter + wave director (spawnLooseUnit). ContactEvents feed projectile
 # hit damage.
 Prefab gameEnemySwarm

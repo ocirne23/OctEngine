@@ -24,9 +24,9 @@ static constexpr const char* c_npcPrefabs[(int)ENpcType::Count] = {
     "Entities/Game/enemyRunner.pre", "Entities/Game/enemySpitter.pre",
     "Entities/Game/enemySwarm.pre", "Entities/Game/enemyElite.pre",
     "Entities/Game/enemyGiant.pre", "Entities/Game/enemyTitan.pre",
-    "Entities/Game/enemyLobber.pre", "Entities/Game/enemySpawner.pre" };
+    "Entities/Game/enemyLobber.pre", "Entities/Game/enemySpawner.pre", "Entities/Game/enemyWarrior.pre" };
 static constexpr const char* c_npcNames[(int)ENpcType::Count] = { "Enemy", "Brute", "Runner", "Spitter", "Swarm",
-    "Elite", "Giant", "Titan", "Lobber", "Spawner" };
+    "Elite", "Giant", "Titan", "Lobber", "Spawner", "Warrior" };
 
 static void collectUnits(oc::span<const uint64> results, oc::vector<Entity*>& out)
 {
@@ -99,6 +99,7 @@ void NpcSystem::registerTweaks()
     Tweak::floatVar("Game/Enemies", "Retarget interval", &up.retargetInterval, 1.0f, 60.0f, 0.5f);
     Tweak::floatVar("Game/Enemies", "Target search radius", &up.targetSearchRadius, 5.0f, 400.0f, 1.0f);
     Tweak::floatVar("Game/Enemies", "Route engage radius", &up.routeEngageRadius, 0.0f, 60.0f, 0.5f);
+    Tweak::floatVar("Game/Enemies", "Order break radius", &up.orderBreakRadius, 0.0f, 60.0f, 0.5f);
     Tweak::floatVar("Game/Enemies", "Unit max speed (m/s)", &up.maxSpeed, 1.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Enemies", "Target track radius", &up.targetTrackRadius, 0.0f, 400.0f, 1.0f);
     Tweak::floatVar("Game/Enemies", "Nav follow radius", &up.navFollowRadius, 0.0f, 400.0f, 1.0f);

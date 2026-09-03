@@ -74,7 +74,9 @@ export struct LobbyAction
 };
 
 // ---- Escape menu (Esc overlay in every RUNNING mode + the lobby; never over the main menu) ----
-export enum class EscapeMenuAction : uint8 { None, Resume, ExitToMenu, Quit };
+// Pause = the escape menu's "Pause game" button (a SHARED game pause — every player sees the paused
+// box); Unpause = the paused box's "Resume" button (any player may press it).
+export enum class EscapeMenuAction : uint8 { None, Resume, ExitToMenu, Quit, Pause, Unpause };
 
 export class MainMenu final
 {
@@ -143,6 +145,13 @@ public:
 	// Widget pass, over the docked panels / the game layout / the lobby page. offerDebugToggle
 	// adds the "Debug panels" checkbox (game layout only — the editor already has every panel).
 	void renderEscape(bool offerDebugToggle);
+	// The SHARED GAME PAUSE (main writes both, every frame): offersPause adds the escape menu's
+	// "Pause game" button (a running game only); paused shows the centered PAUSED box with its
+	// "Resume" button over everything (any player may resume — the game syncs the state).
+	void setEscapeOffersPause(bool offers) { m_escapeOffersPause = offers; }
+	void setGamePaused(bool paused) { m_gamePaused = paused; }
+	bool isGamePaused() const { return m_gamePaused; }
+	void renderPausedBox(); // widget pass; no-op unless paused
 	// The escape menu's "Debug panels" checkbox: while set, the GAME layout shows the left-side
 	// Tweaks/Profiler/Memory section (see UI::updateJob). Written by the widget pass, read by it.
 	bool debugPanelsEnabled() const { return m_debugPanels; }
@@ -182,5 +191,7 @@ private:
 	bool m_escapeOpen = false;
 	bool m_escapeFocusPending = false; // focus the overlay windows on the OPENING frame only
 	bool m_debugPanels = false;        // "Debug panels" checkbox (game layout's left-side section)
+	bool m_escapeOffersPause = false;  // a game runs: the escape menu shows "Pause game"
+	bool m_gamePaused = false;         // the shared pause is on: the PAUSED box shows
 	EscapeMenuAction m_escapeAction = EscapeMenuAction::None;
 };

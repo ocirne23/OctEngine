@@ -49,8 +49,11 @@ export struct GameUnitParams
     float maxSpeedMult = 3.0f;     // field shoves never launch: speed clamp = moveSpeed * this
     float maxSpeed = 10.0f;        // absolute m/s cap on every unit body, every tick, any cause
     float waypointRadius = 3.0f;   // a route waypoint counts as reached inside this
-    float routeEngageRadius = 10.0f; // marching a route: an enemy unit this near is engaged
-                                     // (walk target diverts to it), the route resumes after
+    float routeEngageRadius = 5.0f;  // marching a route: an enemy unit/structure this near is
+                                     // engaged (walk target diverts to it), the route resumes after
+    float orderBreakRadius = 15.0f;  // a MOVE ORDER drops at the first enemy structure this near:
+                                     // the AI then hunts the nearest structure (waves stop marching
+                                     // past everything to the Base)
     float voidY = -3.0f;           // fell through the floor (ground is y 0) -> killed, checked
                                    // by the full sim AND the far tick so no unit escapes it
     // HEIGHT LIMIT (world Y, metres): the physics can launch a body (bubble shoves, stacked
@@ -288,8 +291,8 @@ export struct GameStructureParams
 {
     float fieldDamageRate = 6.0f; // health/s while an enemy team's bubble owns the query point
     // Shared production tuning (the game's tweaks point here; per-TYPE values are stamped
-    // per-instance instead — e.g. BarracksData::spawnCost):
-    float barracksSecondsPerEnergy = 0.5f; // a unit's creation time = its energy cost x this
+    // per-instance instead — e.g. BarracksData::spawnCost). The barracks' build TIME is not a
+    // parameter here: it is cost / the cable intake the game caps its links to.
     float turretRange = 18.0f;
     float turretFireInterval = 1.2f;
     float turretShotEnergy = 1.5f; // spent from the turret's own energy store per shot
@@ -383,7 +386,8 @@ export struct GameStructureComponent
     static constexpr int MaxRoutePoints = 6;
     struct BarracksData
     {
-        float spawnTimer;   // counts down to the next spawn decision
+        // (No spawn timer: the energy store IS the build bar — capacity = spawnCost, filled at
+        // the capped cable intake; full = a unit. See update().)
         // POPULATION: the cap is the barracks' own allowance + what its linked houses add (game-
         // stamped each tick); `population` is what its live units hold — += spawnPop at each
         // spawn decision, -= the unit's popCost by the game per death event. A spawn only happens

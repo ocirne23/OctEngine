@@ -148,7 +148,7 @@ export namespace Nav
 
         // tweaks
         bool m_enabled = true;
-        float m_fieldRadius = 250.0f; // covers a whole arena; a unit outside it falls back to the local search
+        float m_fieldRadius = 400.0f; // covers a whole arena (the 600 m co-op map corner to corner from the Base); a unit outside it falls back to the local search
         float m_rebuildInterval = 0.25f;
         int m_clearanceCost = 1; // 2x on wall-adjacent cells: nudge off walls, no wide detours
         int m_keepFrames = 120;

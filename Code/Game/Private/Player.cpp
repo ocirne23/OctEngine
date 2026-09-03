@@ -315,9 +315,11 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
         // Death: hard respawn at the start position. Teleport contract: stomp the interpolation
         // poses too, or the render mix runs backward on stepping frames.
         Log::info("Player down — respawning");
-        Globals::physics.teleportBody(pc->body, m_spawnPos, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+        // The anchor may sit under a building by now: the resolver walks to the nearest free cell.
+        const glm::vec3 spawnAt = m_respawnResolver ? m_respawnResolver(m_spawnPos) : m_spawnPos;
+        Globals::physics.teleportBody(pc->body, spawnAt, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
         pc->body.setLinearVelocity(glm::vec3(0.0f));
-        pc->prevPos = pc->currPos = m_spawnPos;
+        pc->prevPos = pc->currPos = spawnAt;
         pc->prevRot = pc->currRot = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
         pc->lastStep = Globals::physics.getStepCount();
         m_health = m_healthMax;

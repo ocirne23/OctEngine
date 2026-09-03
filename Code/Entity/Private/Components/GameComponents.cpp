@@ -344,9 +344,17 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
     {
         constexpr float c_strainRange = 12.0f; // emitter siege-drain reach
         const float engageRadius = routing ? params.routeEngageRadius : 0.0f;
+        // A MOVE ORDER (the wave's march on the Base, a player's RMB) breaks off at the first
+        // enemy structure inside orderBreakRadius: the order drops and the AI takes over, which
+        // hunts the NEAREST structure — otherwise the whole wave walked past everything to the
+        // Base and only bit what stood in its way.
+        const bool ordered = targetLocked && moveOrder;
+        const float breakRadius = ordered ? params.orderBreakRadius : 0.0f;
         thread_local oc::vector<uint64> nearby;
         Globals::spatialIndex.querySphere(glm::dvec3(pos),
-            glm::max(glm::max(attackRange + 6.0f, c_strainRange), engageRadius), SpatialLayer_Render, nearby);
+            glm::max(glm::max(glm::max(attackRange + 6.0f, c_strainRange), engageRadius), breakRadius),
+            SpatialLayer_Render, nearby);
+        glm::vec3 bitePos(0.0f);
         float engageDistSq = engageRadius * engageRadius;
         glm::vec3 engagePos(0.0f);
         bool engage = false;
@@ -375,6 +383,7 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                 {
                     biteDist = d - sc->meleeRadius;
                     bite = sc;
+                    bitePos = other->pos;
                 }
                 continue;
             }
@@ -412,9 +421,21 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             meleeVictim->damage(attackDps * deltaSec);
             stopRange = glm::max(stopRange, meleeVictimReach); // hold at the ring
         }
+        if (!engage && routing && bite && biteDist < engageRadius)
+        {
+            engage = true; // a structure on the march is engaged like a unit (units first)
+            engagePos = bitePos;
+        }
         if (engage)
         {
             walkTarget = engagePos; // the route waypoint waits (routeIndex is untouched)
+            haveWalkTarget = true;
+        }
+        if (ordered && bite && biteDist < breakRadius)
+        {
+            targetLocked = moveOrder = false; // the order is done: the AI hunts from here
+            hasTarget = false;
+            walkTarget = bitePos; // this tick already heads for it
             haveWalkTarget = true;
         }
         if (ranged)
@@ -1025,12 +1046,14 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
         entity.setProfiled(); // machine structures earn a per-entity profile scope (latched here —
                               // machineKind is stamped by the game AFTER spawn, so spawn can't know)
         BarracksData& b = barracks;
-        b.spawnTimer = glm::max(0.0f, b.spawnTimer - deltaSec);
-        if (b.spawnTimer <= 0.0f && b.population + (int)b.spawnPop <= b.popCap && store[0] >= b.spawnCost)
+        // THE ENERGY STORE IS THE BUILD BAR: the game stamps capacity = the selected unit's
+        // cost and caps the barracks' cable intake ("Barracks energy intake/s"), so the store
+        // fills at the build rate and a unit is born the moment it is FULL — build time = cost /
+        // intake, no timer. The epsilon covers a fill that lands a rounding step short of the cap.
+        if (b.population + (int)b.spawnPop <= b.popCap && store[0] >= b.spawnCost - 0.01f)
         {
-            store[0] -= b.spawnCost;      // cable-fed energy pays the unit (refunded on spawn fail)
+            store[0] = glm::max(store[0] - b.spawnCost, 0.0f); // the bar restarts (refunded on spawn fail)
             b.population += b.spawnPop;   // the unit's death event frees it again
-            b.spawnTimer = b.spawnCost * params.barracksSecondsPerEnergy; // creation time follows the price
             const std::lock_guard<std::mutex> lock(g_structureEventMutex);
             g_spawnRequests.push_back(structureId);
         }

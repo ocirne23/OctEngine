@@ -61,13 +61,13 @@ export constexpr bool isBarracksType(EStructureType t)
 // UNIT TYPES, indexed like Npc's ENpcType (Grunt, Brute, Runner, Spitter, Swarm, Elite, Giant,
 // Titan, Lobber — Npc.ixx static_asserts the count). This partition cannot import Npc, so the
 // per-type prices live here as plain arrays.
-export constexpr int GameNumUnitTypes = 10; // (+ Spawner)
-// What a barracks may be SET to produce: Grunt/Brute/Runner/Swarm. The Spitter (3) and the elite
-// tier (5..8) are enemy-only wave units. Requests/mirrors/loads for anything else fall back to
-// the Grunt (0).
+export constexpr int GameNumUnitTypes = 11; // (+ Spawner, Warrior)
+// What a barracks may be SET to produce: Grunt/Brute/Runner/Swarm/Warrior (10). The Spitter (3),
+// the elite tier (5..8) and the Spawner (9) are enemy-only wave units. Requests/mirrors/loads for
+// anything else fall back to the Grunt (0).
 export constexpr bool isBarracksUnitType(int t)
 {
-    return t == 0 || t == 1 || t == 2 || t == 4;
+    return t == 0 || t == 1 || t == 2 || t == 4 || t == 10;
 }
 
 // The three emitter variants: Emitter = balanced sphere, Bastion = big expensive anchor bubble,
@@ -308,7 +308,7 @@ public:
     float energyGenPerSec() const { return m_genRateTotal; }
     float energyUsePerSec() const { return m_useRateTotal; }
     float structureCharge(int index) const { return m_frame[index].state->store[0]; }
-    float structureCapacity(int index) const { return energyCapacityOf(m_frame[index].type); }
+    float structureCapacity(int index) const { return m_frame[index].state->capacity[0]; } // per-instance (barracks: its unit's cost)
     float energyCapacityOf(EStructureType t) const
     {
         switch (t)
@@ -321,7 +321,8 @@ public:
         case EStructureType::Fabricator:
         case EStructureType::Constructor:
         case EStructureType::Turret:      return m_internalBuffer;
-        case EStructureType::Barracks:    return m_barracksEnergyCapacity; // cable-fed: units are SPAWNED from energy
+        case EStructureType::Barracks:    return 1.0f; // > 0 = power cables attach; the REAL capacity is
+                                                       // stamped per instance (= its unit's cost, the build bar)
         case EStructureType::Generator:   return m_generatorBuffer;
         case EStructureType::Battery:     return m_batteryCapacity;
         case EStructureType::Base:        return m_baseEnergyCapacity; // feeds its always-on shield
@@ -597,7 +598,8 @@ private:
     float m_fuelTankCapacity = 100.0f;
     float m_mineralSiloCapacity = 100.0f;
     float m_mineralBaseCapacity = 100.0f;
-    float m_barracksEnergyCapacity = 20.0f; // cable-fed spawn stock (own buffer, filled like any consumer)
+    float m_barracksEnergyIntake = 2.0f; // energy/s a barracks' power links deliver at most: the BUILD RATE
+                                         // (build time = unit cost / this — Grunt 5 -> 2.5 s, Brute 20 -> 10 s)
     float m_genEnergyPerSec = 7.5f;
     float m_solarEnergyPerSec = 1.0f;
     float m_fuelBurnRate = 1.0f;
@@ -641,8 +643,8 @@ private:
     // Per UNIT TYPE (Grunt/Brute/Runner/Spitter/Swarm — ENpcType order): the ENERGY a barracks
     // pays per spawned unit and the POPULATION the unit holds, stamped onto each barracks'
     // component (spawnCost/spawnPop) from its selected type.
-    float m_spawnEnergy[GameNumUnitTypes] = { 5.0f, 20.0f, 6.0f, 9.0f, 2.0f, 15.0f, 40.0f, 80.0f, 15.0f, 30.0f };
-    int m_unitPopulation[GameNumUnitTypes] = { 2, 5, 2, 4, 1, 4, 8, 16, 4, 8 };
+    float m_spawnEnergy[GameNumUnitTypes] = { 5.0f, 20.0f, 6.0f, 9.0f, 2.0f, 15.0f, 40.0f, 80.0f, 15.0f, 30.0f, 12.0f };
+    int m_unitPopulation[GameNumUnitTypes] = { 2, 5, 2, 4, 1, 4, 8, 16, 4, 8, 3 };
     int m_barracksPopulation = 20; // a barracks' own population cap
     int m_housePopulation = 10;    // added per linked house
     float m_houseLinkRadius = 25.0f;

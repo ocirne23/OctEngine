@@ -118,9 +118,19 @@ public:
     // dispatch, and replacing the oc::function there would destroy the lambda mid-execution.
     void handleNetEvent(oc::string_view name);
 
+    // SHARED PAUSE (the escape menu's "Pause game" / the paused box's "Resume"): ANY player may
+    // pause or resume. The authority applies it (Time::setPaused — the sim clock stops, the
+    // transport keeps running so the resume still arrives) and broadcasts GPz; a client sends a
+    // GqZ request. Join replay carries the current state.
+    void requestPause(bool paused);
+    bool isPaused() const { return m_paused; }
+
     // TRUE while Esc still has an in-game meaning (a pending two-click flow, an armed item, an
     // open hotbar page, or a non-Select mode — cancelOneLevel would consume it). main's ESCAPE
     // MENU only opens on an Esc press when this is false, so the cancel chain keeps first claim.
+    void applyPause(bool paused); // sets the sim clock + m_paused (authority and mirror alike)
+    bool m_paused = false;
+
     bool escWouldCancel() const
     {
         return m_lanceAiming || m_wallPlacing || m_cablePainting
@@ -363,12 +373,12 @@ private:
     int m_waveBudget = 20;           // points in wave 1 (swarm costs 1 = the old unit count)
     float m_waveBudgetGrowth = 40.0f; // extra points per subsequent wave
     float m_waveCost[(int)ENpcType::Count] = { 3.0f, 10.0f, 2.0f, 5.0f, 1.0f,   // Grunt, Brute, Runner, Spitter, Swarm
-                                               8.0f, 25.0f, 60.0f, 12.0f, 30.0f }; // Elite, Giant, Titan, Lobber, Spawner
+                                               8.0f, 25.0f, 60.0f, 12.0f, 30.0f,  // Elite, Giant, Titan, Lobber, Spawner
+                                               5.0f };                             // Warrior
     float waveCostOf(ENpcType t) const { return glm::max(m_waveCost[(int)t], 0.1f); }
     int m_waveMaxAlive = 15000;    // total AI units cap (ambient + waves)
-    int m_ambientBudget = 20000;    // POINTS of world-start scatter (same per-type costs as waves)
+    int m_ambientBudget = 30000;    // POINTS of world-start scatter (same per-type costs as waves)
     float m_ambientSafeRadius = 45.0f; // the scatter keeps clear of the Base (planar)
-    float m_ambientMinDepth = 0.2f;    // ... and of the innermost fraction of the map by WALKING depth
     int m_ambientRecipeWindow = 3;     // a group rolls recipes gated within this many bands below its depth band
     int m_spawnsPerFrame = 100;    // trickle budget — a huge wave enters over seconds, not one hitch
 

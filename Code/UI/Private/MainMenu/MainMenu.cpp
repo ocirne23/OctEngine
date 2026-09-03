@@ -170,6 +170,8 @@ void MainMenu::renderEscape(bool offerDebugToggle)
 		const ImVec2 buttonSize(ImGui::GetContentRegionAvail().x, 38.0f);
 		if (ImGui::Button("Resume", buttonSize))
 			m_escapeAction = EscapeMenuAction::Resume;
+		if (m_escapeOffersPause && !m_gamePaused && ImGui::Button("Pause game", buttonSize))
+			m_escapeAction = EscapeMenuAction::Pause; // shared: every player sees the paused box
 		if (offerDebugToggle)
 		{
 			ImGui::Spacing();
@@ -180,6 +182,39 @@ void MainMenu::renderEscape(bool offerDebugToggle)
 			m_escapeAction = EscapeMenuAction::ExitToMenu;
 		if (ImGui::Button("Quit game", buttonSize))
 			m_escapeAction = EscapeMenuAction::Quit;
+	}
+	ImGui::End();
+	ImGui::PopStyleVar(2);
+}
+
+void MainMenu::renderPausedBox()
+{
+	if (!m_gamePaused)
+		return;
+	// The SHARED pause: a small centered box over everything (under the escape menu when both
+	// are up), with the one button any player may press. It never dims the screen — the game
+	// view stays readable while everyone waits.
+	const ImGuiViewport* viewport = ImGui::GetMainViewport();
+	const ImVec2 center(viewport->Pos.x + viewport->Size.x * 0.5f, viewport->Pos.y + viewport->Size.y * 0.35f);
+	ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+	ImGui::SetNextWindowSize(ImVec2(280.0f, 0.0f), ImGuiCond_Always);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
+	ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(24.0f, 20.0f));
+	const ImGuiWindowFlags flags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
+		| ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings
+		| ImGuiWindowFlags_NoDocking;
+	if (ImGui::Begin("##PausedBox", nullptr, flags))
+	{
+		ImGui::SetWindowFontScale(1.6f);
+		centeredText("PAUSED");
+		ImGui::SetWindowFontScale(1.0f);
+		ImGui::Spacing();
+		centeredText("Any player can resume");
+		ImGui::Spacing();
+		ImGui::Separator();
+		ImGui::Spacing();
+		if (ImGui::Button("Resume", ImVec2(ImGui::GetContentRegionAvail().x, 38.0f)))
+			m_escapeAction = EscapeMenuAction::Unpause;
 	}
 	ImGui::End();
 	ImGui::PopStyleVar(2);

@@ -82,7 +82,7 @@ by their own position.
 
 # The world
 
-A flat 400 m plane (`Assets/Entities/Game/*.pre`, baseshapes solid meshes with per-prefab `Color`
+A flat 600 m plane (`Assets/Entities/Game/*.pre`, baseshapes solid meshes with per-prefab `Color`
 tints), plus generated rock terrain and per-mode resource nodes.
 
 **NO win condition yet.** The Force AMBIENT FIELD (the old PvE world field) is fully REMOVED.
@@ -95,7 +95,7 @@ those.
 
 | Mode | Grid |
 |---|---|
-| Co-op | `c_coopCells` 36² at 10 m — **exactly `2 × c_coopHalfSize` (180 m)**, static_asserted |
+| Co-op | `c_coopCells` 54² at 10 m — **exactly `2 × c_coopHalfSize` (270 m)**, static_asserted |
 | PvP | a per-arena rectangle at `c_pvpCellSize` 5 m (so `rock.pre`, a 10 m cube, spawns at HALF scale) plus a `c_pvpBorderCells` (2) rock border ring = 10 m |
 
 Shared machinery: `finishGrid(seedCells)` does the BFS from the seeds, **seals cut-off pockets by
@@ -132,7 +132,7 @@ clearing structures.
 
 ## The map
 
-A big square — `c_coopHalfSize` 180 m on the 400 m ground plane — of RANDOM IMPASSABLE TERRAIN.
+A big square — `c_coopHalfSize` 270 m on the 600 m ground plane — of RANDOM IMPASSABLE TERRAIN.
 `rebuildCoopMap(seed, fill, lanes)`:
 
 1. Two-octave value noise thresholded to EXACTLY "Terrain fill" (a sorted-copy threshold).
@@ -141,7 +141,7 @@ A big square — `c_coopHalfSize` 180 m on the 400 m ground plane — of RANDOM 
 4. `finishGrid` flood-fills from the Base. **`CoopMap::depth` is the geodesic BFS distance**, which
    the ambient scatter gates on.
 
-**Edge barrier at ±180:** a `barrier.pre` ring (20 m segments, E/W yaw'd 90°) whose collider is
+**Edge barrier at ±270:** a `barrier.pre` ring (20 m segments, E/W yaw'd 90°) whose collider is
 `Layer Barrier, CollidesWith Player`. **It blocks ONLY player capsules** (`player.pre` carries
 `Layer Player`, mask All) — units and shots walk through. Visuals are a post per segment plus
 `drawCoopBarrier`'s pulsing energy lines on the real clock.
@@ -189,7 +189,7 @@ damaged swarm show health bars like any unit. They still deposit `addLoad` strai
 
 ## Ambient scatter
 
-"Ambient budget" (20000) POINTS of units placed at world start, in small **GROUPS**: `AmbientSpawn`
+"Ambient budget" (30000) POINTS of units placed at world start, in small **GROUPS**: `AmbientSpawn`
 holds one archetype and a remaining count, so the trickle fills the current group — a disc around a
 reachable anchor — before rolling the next. **Loose blobs, not a lattice.**
 
@@ -203,8 +203,7 @@ bands below the cell's depth band roll.
 > So the near ring is swarm-grade and **the deep map holds ONLY the elite tier** — giants, titans and
 > lobbers never sit near the Base.
 
-Cells under "Ambient min depth" (0.2 of the max walking depth) are rejected outright, on top of the
-planar "Ambient safe radius" (45 m).
+The scatter keeps clear of the planar "Ambient safe radius" (45 m) around the Base.
 
 ## Waves
 
@@ -216,7 +215,7 @@ They-are-Billions style. `tickWaves` arms the clock ("First wave delay" 30 s, th
 1. Picks a RANDOM compass direction projected onto the barrier square and stepped OUTSIDE it — **the
    swarm spawns in the open ring between barrier and ground edge and walks in THROUGH the
    player-only barrier.** Cluster points that drift inside push back out along the dominant axis,
-   clamped to `c_coopGroundEdge` 196.
+   clamped to `c_coopGroundEdge` 296.
 2. **Sizes the wave in BUDGET POINTS**, not unit counts: "Wave budget" (20) plus "Wave budget growth"
    (40) per wave. Each type spends its "Cost <type>" tweak, **so a brute-heavy archetype fields far
    fewer bodies than a swarm flood of the same budget.** The "Max enemy units" cap (15000) converts at
@@ -233,17 +232,20 @@ Wave spawn points roll up to 6 times against the last `c_waveRecentSpawns` (32) 
 spacing, **so parked bodies rarely overlap in the first place.**
 
 Each unit is `orderMove`d to the Base's near face on the incoming side; the lock releases on arrival
-and the AI takes over. All spawns go through `spawnLooseUnit` — **sourceId 0: no route, no death
+OR at the first enemy structure inside "Order break radius" (14 m — `GameUnitParams::orderBreakRadius`,
+checked by the unit's combat probe), and the AI takes over, hunting the NEAREST structure — without
+the break the whole wave marched past everything to the Base and only bit what stood in its way. All spawns go through `spawnLooseUnit` — **sourceId 0: no route, no death
 accounting.** The authority HUD shows "Next wave (s)".
 
 ### Unit types and costs
 
-`ENpcType`: Grunt, Brute, Runner, Spitter, Swarm, Elite, Giant, Titan, Lobber, Spawner.
+`ENpcType`: Grunt, Brute, Runner, Spitter, Swarm, Elite, Giant, Titan, Lobber, Spawner, Warrior.
 **SAVE FILES store the type as an int — APPEND only.**
 
 | Type | Cost | Notes |
 |---|---|---|
-| Grunt / Brute / Runner / Spitter / Swarm | 3 / 10 / 2 / 5 / 1 | The barracks tier. Spitter is enemy-only. |
+| Grunt / Brute / Runner / Spitter / Swarm | 3 / 10 / 2 / 5 / 1 | The barracks tier. Spitter is enemy-only. Grunt, Runner and Swarm are HEALTH-ONLY bodies (no Component Force). |
+| Warrior | 5 | `enemyWarrior.pre`: the SHIELDED grunt (bubble + battery, 80 hp, harder hits, a bit bigger and yellow) — a BARRACKS option too (12 energy, 3 pop); "warrior line" from wave 4, "shield wall" from 6. |
 | Elite / Giant / Titan / Lobber / Spawner | 8 / 25 / 60 / 12 / 30 | **Enemy-only elite tier**, `enemyElite/Giant/Titan/Lobber.pre` + `enemySpawner.pre`. |
 
 * **The Lobber** is `Ranged` with `ShotKind 1` = the slow SPLASH shell `enemyLob.pre`
@@ -281,7 +283,7 @@ Out of range a non-locked `hasTarget` from an earlier tick is **DROPPED at once*
 marched to the last known spot for up to a whole retarget interval and looked as if it ignored the
 follow radius. The "Nav follow radius" band may still walk an existing crowd lane.
 
-Wave units stay order-driven until arrival, then the same gated AI takes over.
+Wave units stay order-driven until arrival or the first enemy structure inside "Order break radius", then the same gated AI takes over.
 
 ## Known gaps
 
@@ -375,7 +377,8 @@ LOCAL ForceComponent from the synced outputFrac**, so client-side fields are rea
 player's shield readbacks work.
 
 Other broadcasts: **GRt** routes, **GBu** barracks unit type, **GLt** turret beams, **GWv** wave
-index, **GDm** damage flush, **GMp** map.
+index, **GDm** damage flush, **GMp** map, **GPz** the shared pause state (u8; the client request is
+**GqZ** — any seated player may pause or resume; see the escape menu in `Code/App/CONTEXT.md`).
 
 ### 2 — Units and shots as network entities
 
@@ -448,7 +451,7 @@ capped by the MEDIUM's throughput.
 
 | Network | Bands (high → low) | Throughput tweak |
 |---|---|---|
-| Energy | producers (generator, solar) always exporting → battery storage BALANCING by fill fraction → consumers, outranking everything until FULL | "Cable throughput" 5/s |
+| Energy | producers (generator, solar) always exporting → storage (battery AND **the Base** — it self-generates and banks 100; as a plain consumer it only ever equalized by fill fraction with what it fed, which stalled a barracks' build bar at the Base's fill percentage) BALANCING by fill fraction → consumers, outranking everything until FULL | "Cable throughput" 5/s |
 | Fuel | extractor tanks export → fuel tanks balance → generator/fabricator burners fill first | "Pipeline throughput" |
 | Minerals | extractor/fabricator outputs (3) → **the Base (2)** → silos (1) → constructors (0) | "Conveyor throughput" |
 
@@ -466,9 +469,12 @@ capped by the MEDIUM's throughput.
 Energy propagates hop by hop, thin lines starve, and a full generator buffer throttles production
 (export-limited = no fuel burn). Consumers drain their internal battery; empty = unpowered.
 
-**Buffers:** emitter and extractor "Internal buffer" 10, generators 20, battery 100, **barracks
-"Barracks energy capacity" 20** — units are PAID from it, so a barracks needs a power cable and holds
-no minerals. Powered extractors and fabricators fill their OWN buffer and **stall when full**. Only
+**Buffers:** emitter and extractor "Internal buffer" 10, generators 20, battery 100, **barracks =
+the selected unit's energy cost** (stamped per instance in `stampTuning`; `energyCapacityOf` returns
+a 1.0 placeholder just so power cables attach) — its store IS the BUILD BAR: its power links are
+capped to "Barracks energy intake/s" 2 on both endpoints' copies, so the store fills at the build
+rate and a unit is born the moment it is full (build time = cost / intake — Grunt 2.5 s, Brute
+10 s; no timer). A barracks needs a power cable and holds no minerals. Powered extractors and fabricators fill their OWN buffer and **stall when full**. Only
 what sits in Mineral silos and the Base is SPENDABLE (a per-team cache recomputed per tick; spending
 drains silos first, Base last).
 
@@ -660,8 +666,11 @@ hotbar). Options: **Grunt / Brute / Runner / Swarm**.
 `onUnitTypeChanged` → GBu broadcast plus join replay. Clients request through GqU; saved as
 `UnitType`.
 
-Each spawn pays the type's "\<Type\> spawn energy" from the energy store **and takes that cost ×
-"Barracks seconds per energy" to produce — the price IS the build time.**
+Each spawn pays the type's "\<Type\> spawn energy" from the energy store, whose capacity IS that
+cost and which fills at the capped "Barracks energy intake/s" — **full store = a unit, so the bar
+over the barracks is the build progress and the price IS the build time** (cost / intake). The
+spawn check carries a 0.01 epsilon so a fill that lands a rounding step short of the cap still
+counts.
 
 It holds the type's "\<Type\> population" against the **POPULATION CAP = "Barracks population" +
 "House population" per linked house**. A spawn only happens while `population + cost <= cap`
@@ -924,7 +933,8 @@ bar without regrowing the bubble.
   heals its own capsule against its local structure mirror, with no sync.
 * "Spawn grace" gives post-respawn immunity, **because the GPU readbacks still carry the death position
   for ~2 frames.**
-* Death teleport-respawns per the teleport contract.
+* The player capsule (`player.pre`, also every client twin) authors `Global true` — always visited by the entity pass. It MUST be: the SIM LOD selects roots by their SPATIAL entry, which the pass refreshes from `entity.pos`, which the PhysicsComponent copies from the body — a body teleported far beyond the outer radius (the death respawn from the far map) left the entry at the death spot, so the capsule was never selected again and its entity/spatial state froze there while the body stood at the Base.
+* Death teleport-respawns per the teleport contract — onto a FREE CELL near the anchor: `GamePlayer::setRespawnResolver` (wired in `spawnWorld`) probes 1x1 cells in rings of 2 m out to 16 m via `cellsFree` (cables walk-through), so a building placed on the spawn spot never swallows the capsule; a fully built-over area falls back to the anchor.
 
 **HUD** through `Globals::gameHud`: bars Health / Shield / Materials, counters Minerals / Fuel / Power,
 and hotbar slot counts = affordable.

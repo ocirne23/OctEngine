@@ -26,6 +26,9 @@ public:
     uint32 team() const { return m_team; }
     // Re-anchor the death respawn (a client learns its team — and so its Base — after adopting).
     void setRespawnPos(const glm::vec3& pos) { m_spawnPos = pos; }
+    // The RESOLVER the respawn runs the anchor through (GameMatch wires it): returns a FREE cell
+    // near the anchor, so a player never respawns inside a building placed on the spawn spot.
+    void setRespawnResolver(oc::function<glm::vec3(const glm::vec3&)> resolver) { m_respawnResolver = oc::move(resolver); }
     // CO-OP CLIENT: the server spawned our player (Component Network + setOwner) — poll-adopt the
     // locally-owned capsule instead of spawning one. Movement/shield/health then run on the SAME
     // code paths (the owner simulates; the claim stream carries the body state to the server).
@@ -83,6 +86,7 @@ private:
     EntityPtr m_entity;
     ForceQuery m_query; // point query at the body center — feeds the density readout
     glm::vec3 m_spawnPos{ 0.0f };
+    oc::function<glm::vec3(const glm::vec3&)> m_respawnResolver; // anchor -> free cell (see setRespawnResolver)
     glm::vec3 m_moveTarget{ 0.0f };
     bool m_hasMoveTarget = false;
     bool m_jumpWasDown = false;
