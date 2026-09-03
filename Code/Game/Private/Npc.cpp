@@ -264,6 +264,7 @@ Entity* NpcSystem::spawnUnit(const StructureSystem& structures, const glm::vec3&
     entity->setName(c_npcNames[(int)type]);
     Globals::world.addRootEntity(entity);
     unit->team = team;
+    GameUnitComponent::applyTeamTint(*entity); // own-team units read green
     unit->sourceId = sourceId;
     unit->popCost = (uint8)glm::clamp(structures.unitPopulation((int)type), 0, 255);
     if (ForceComponent* fc = getComponent<ForceComponent>(entity.get()))
@@ -311,6 +312,7 @@ void NpcSystem::spawnLooseUnits(oc::span<const LooseSpawn> spawns)
         const LooseSpawn& s = spawns[i];
         entity->setName(c_npcNames[(int)s.type]);
         unit->team = s.team;
+        GameUnitComponent::applyTeamTint(*entity);
         unit->sourceId = 0;
         if (ForceComponent* fc = getComponent<ForceComponent>(entity.get()))
             fc->emitter.setTeam(s.team); // prefabs author team 1 — units carry their spawner's team

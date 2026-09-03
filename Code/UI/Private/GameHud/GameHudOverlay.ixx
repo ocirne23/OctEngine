@@ -92,10 +92,15 @@ public:
 			}
 			for (const HudCounter& counter : hud.counters)
 			{
-				snprintf(buf, sizeof(buf), "%.*f", counter.decimals, counter.value);
+				// A text counter (the match clock) shows its string instead of the number.
+				const char* value = buf;
+				if (!counter.text.empty())
+					value = counter.text.c_str();
+				else
+					snprintf(buf, sizeof(buf), "%.*f", counter.decimals, counter.value);
 				text(ImVec2(x, y), fontSize, col(0.85f, 0.85f, 0.85f, 1.0f), counter.name.c_str());
-				const ImVec2 valSize = font->CalcTextSizeA(fontSize, noWrap, 0.0f, buf);
-				text(ImVec2(x + rowW - valSize.x, y), fontSize, colV(counter.color, 1.0f), buf);
+				const ImVec2 valSize = font->CalcTextSizeA(fontSize, noWrap, 0.0f, value);
+				text(ImVec2(x + rowW - valSize.x, y), fontSize, colV(counter.color, 1.0f), value);
 				y += fontSize + gap * 0.7f;
 			}
 		}

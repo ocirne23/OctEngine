@@ -226,6 +226,7 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
     // Only the co-op AI carves seed lanes toward HUNTED targets; player-team units seed for routes
     // and move orders alone (see GameUnitParams::huntSeedTeam). PvP has no AI team: none.
     GameUnitComponent::params.huntSeedTeam = coop ? (int)CoopAiTeam : -1;
+    GameUnitComponent::params.localTeam = m_team; // own-team units tint green (re-stamped when the team changes)
 
     {
         // Gameplay tweaks persist between runs and the server's values overrule the clients'.
@@ -475,6 +476,7 @@ void GameMatch::spawnWorld()
             for (uint8 t = 0; t < m_numTeams; ++t)
                 m_structures.spawnBase(baseGroundPos(t), t);
             m_team = allocateClientTeam(0);
+            GameUnitComponent::params.localTeam = m_team;
             m_player.setTeam(m_team);
             m_playerStart = teamStartPos((uint8)m_team);
         }
@@ -1575,6 +1577,7 @@ void GameMatch::saveGame()
         // load resumes the escalation instead of restarting at wave 1.
         root.set("WaveIndex", oc::to_string(m_waveIndex));
         root.set("WaveTimer", glm::max(m_waveTimer, 0.0f));
+        root.set("MatchTime", m_matchTime); // the HUD clock (sim seconds since the world spawned)
     }
     else if (m_coopMap.built && m_coopMap.pvp)
         root.set("PvpMap", oc::to_string((int)m_coopMap.pvpMap)); // the arena (EPvpMap index)
@@ -1640,6 +1643,8 @@ void GameMatch::loadGame(oc::string_view path)
         m_waveIndex = glm::max(n->asInt(), 0);
     if (const AssetNode* n = root.find("WaveTimer"))
         m_waveTimer = glm::max(n->asFloat(), 0.0f);
+    if (const AssetNode* n = root.find("MatchTime"))
+        m_matchTime = glm::max(n->asFloat(), 0.0f);
     m_wavePendingBudget = 0.0f; // a wave mid-trickle at save time is not resumed: the units that spawned are in the save
     if (m_isServer)
     {
@@ -2068,6 +2073,7 @@ void GameMatch::update(float deltaSec)
         if (m_player.team() != m_team)
         {
             m_team = m_player.team();
+            GameUnitComponent::params.localTeam = m_team; // replicated units re-tint as their next snapshot lands
             m_player.setRespawnPos(teamStartPos((uint8)m_team));
             Log::info("We are team " + oc::to_string(m_team));
         }
@@ -2080,6 +2086,7 @@ void GameMatch::update(float deltaSec)
     }
 
     const glm::vec3 playerPos = m_player.bodyPos();
+    m_matchTime += deltaSec; // the HUD clock: authority sim time (a pause stops the sim delta)
     m_structures.tickAuthority(playerPos, deltaSec);
     tickBaseHealing(deltaSec);
     tickMedicHealing(deltaSec);
@@ -3584,6 +3591,11 @@ void GameMatch::updateHud()
     hud.setCounter("Energy use/s", m_structures.energyUsePerSec(), 1, glm::vec3(1.0f, 0.9f, 0.3f));
     if (m_coop && !m_isClient) // the wave clock is authority state (clients get the GWv log)
     {
+        // The match clock as h:mm:ss (sim time since the world spawned; saved and restored).
+        const int total = (int)m_matchTime;
+        char clock[16];
+        snprintf(clock, sizeof(clock), "%d:%02d:%02d", total / 3600, (total / 60) % 60, total % 60);
+        hud.setCounterText("Time", clock, glm::vec3(0.9f, 0.9f, 0.9f));
         hud.setCounter("Next wave (s)", glm::max(m_waveTimer, 0.0f), 0, glm::vec3(1.0f, 0.45f, 0.3f));
         hud.setCounter("Next wave power", nextWaveBudget(), 0, glm::vec3(1.0f, 0.45f, 0.3f)); // budget points before the alive cap
     }

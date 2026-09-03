@@ -134,7 +134,8 @@ replay lands — which is also what makes extractor node indices agree by constr
 
 The same inputs ride the F9 save (`MapSeed` / `MapFill` / `MapLanes`, or `PvpMap`; co-op saves also
 carry the wave clock — `WaveIndex` waves launched, which sizes the next one, and `WaveTimer` seconds
-to it — so a load resumes the escalation; a wave mid-trickle is not resumed), **because a
+to it — so a load resumes the escalation; a wave mid-trickle is not resumed; plus `MatchTime`, the
+HUD clock), **because a
 joiner's tweak sync lands after the replay — too late.** `loadGame` regenerates the exact map after
 clearing structures.
 
@@ -875,6 +876,14 @@ yaw, and the wheel zooms.
 
 `Game:Npc`. **Barracks-produced, plus the co-op loose spawns.**
 
+**Own-team units are TINTED GREEN** (`GameUnitComponent::applyTeamTint`: each render node's own
+authored colour mixed 55 % toward the HUD's own-team green, children included — a tint, so the
+unit types stay told apart): the game stamps the viewer's team into
+`GameUnitParams::localTeam` (ctor, the server's lobby team, a client's adopted team), and the tint
+applies at spawn and whenever the replicated team lands through the network blob — so clients tint
+their own side too, and a team change re-tints as the next snapshot arrives. Other teams keep their
+authored colours (restored per node if a unit ever leaves the local team).
+
 ## The split
 
 * **The SIM is `GameUnitComponent`** in the entity pass: steering by the Nav flow fields (see Nav),
@@ -1022,7 +1031,8 @@ before `ui.update` queues the widget pass that paints them (`joinWorldLabels`). 
 mutexed; `~GameMatch` joins it too.
 
 **HUD** through `Globals::gameHud`: bars Health / Shield / Materials, counters Minerals / Fuel / Power
-(co-op authority adds "Next wave (s)" and "Next wave power" — the coming wave's budget points before
+(co-op authority adds "Time" — the match clock as h:mm:ss of authority sim time, `m_matchTime`, saved
+as `MatchTime` — then "Next wave (s)" and "Next wave power" — the coming wave's budget points before
 the alive cap, `nextWaveBudget`),
 and hotbar slot counts = affordable.
 

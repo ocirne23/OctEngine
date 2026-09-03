@@ -389,6 +389,7 @@ private:
     oc::fixed_vector<WaveMixEntry, 4> m_waveMix;
     int m_lastArchetype = -1;    // never the same recipe twice in a row (when a choice exists)
     bool m_coop = false;
+    float m_matchTime = 0.0f;    // authority sim seconds since the world spawned: the HUD "Time" clock, saved/restored
     float m_waveTimer = 0.0f;    // seconds to the next wave (armed in spawnWorld)
     int m_waveIndex = 0;         // waves launched so far
     float m_wavePendingBudget = 0.0f;    // POINTS of the current wave still to spawn (trickled):

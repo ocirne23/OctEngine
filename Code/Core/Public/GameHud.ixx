@@ -36,6 +36,7 @@ export struct HudCounter
 	oc::string name; // key AND label
 	float       value = 0.0f;
 	int         decimals = 0; // 0 = integer display
+	oc::string  text;         // non-empty = shown INSTEAD of the number (a clock, a state word)
 	glm::vec3   color = glm::vec3(1.0f);
 };
 
@@ -166,6 +167,17 @@ public:
 		HudCounter& counter = findOrAdd(m_counters, name);
 		counter.value = value;
 		counter.decimals = glm::clamp(decimals, 0, 6);
+		counter.text.clear();
+		counter.color = glm::clamp(color, 0.0f, 1.0f);
+	}
+
+	// A counter that shows TEXT instead of a number (the match clock as h:mm:ss). Same key space
+	// and stacking order as the numeric ones.
+	void setCounterText(oc::string_view name, oc::string_view text, const glm::vec3& color)
+	{
+		const std::lock_guard lock(m_mutex);
+		HudCounter& counter = findOrAdd(m_counters, name);
+		counter.text.assign(text.data(), text.size());
 		counter.color = glm::clamp(color, 0.0f, 1.0f);
 	}
 

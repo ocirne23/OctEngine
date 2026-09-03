@@ -8,6 +8,7 @@ import Force;
 import Physics;
 import Spatial;
 import Nav;
+import RendererVK; // applyTeamTint's material override
 
 // See GameComponents.ixx for the design + authority/thread contract. Everything here runs either
 // on the parallel entity pass (update — authority instances only) or on the main thread (spawn,
@@ -179,19 +180,22 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
         if (remaining > 0.0f)
             health = glm::max(health - remaining, 0.0f);
     }
-    // The HEAL inbox (medic stations): health and the battery both, applied here so `energy` stays
-    // single-writer; a battery holding charge again lifts the permanent collapse latch.
+    // The DEATH check runs on the damage alone: a heal that landed the same tick must not revive a
+    // unit the damage just killed (a medic station's radius was making units immortal).
+    if (health <= 0.0f || pos.y < params.voidY)
+    {
+        kill(entity);
+        return;
+    }
+    // The HEAL inbox (medic stations), for the survivors: health and the battery both, applied
+    // here so `energy` stays single-writer; a battery holding charge again lifts the permanent
+    // collapse latch.
     if (const float heal = oc::atomic_ref<float>(pendingHeal).exchange(0.0f, oc::memory_order_acq_rel); heal > 0.0f)
     {
         health = glm::min(health + heal, healthMax);
         energy = glm::min(energy + heal, energyMax);
         if (energy > 0.0f)
             collapsed = false;
-    }
-    if (health <= 0.0f || pos.y < params.voidY)
-    {
-        kill(entity);
-        return;
     }
 
     // ---- where to walk: route, then the locked order, then nav fields, then local search ----
@@ -804,6 +808,38 @@ void GameUnitComponent::heal(float amount)
 {
     if (amount > 0.0f)
         atomicAdd(pendingHeal, amount);
+}
+
+void GameUnitComponent::applyTeamTint(Entity& entity)
+{
+    GameUnitComponent* unit = getComponent<GameUnitComponent>(&entity);
+    if (!unit || unit->puppet)
+        return; // player capsules keep their own look
+    const bool friendly = params.localTeam >= 0 && (int)unit->team == params.localTeam;
+    const uint8 want = friendly ? 1 : 2;
+    if (unit->tintState == want || (!friendly && unit->tintState == 0))
+        return; // already right (an untouched non-friendly unit IS its authored colour)
+    unit->tintState = want;
+    // One node at a time: a friendly node is its OWN authored colour pulled toward green — a TINT,
+    // so the unit types stay told apart — and a non-friendly one is restored to that colour.
+    constexpr glm::vec3 c_friendlyGreen(0.3f, 1.0f, 0.4f); // the HUD's own-team bar colour
+    constexpr float c_tintStrength = 0.55f;
+    const auto tintNode = [&](Entity* node)
+    {
+        RenderComponent* rc = getComponent<RenderComponent>(node);
+        if (!rc || !rc->node.isValid())
+            return;
+        glm::vec3 color(1.0f);
+        if (const RenderComponent::SpawnInfo* info = getRenderSpawnInfo(node); info && info->color.x >= 0.0f)
+            color = info->color;
+        if (friendly)
+            color = glm::mix(color, c_friendlyGreen, c_tintStrength);
+        rc->node.setMaterialOverride(Globals::rendererVK.createSolidColorMaterial(color));
+    };
+    tintNode(&entity);
+    if (const SceneComponent* sc = getComponent<SceneComponent>(&entity))
+        for (const EntityPtr& child : sc->children)
+            tintNode(child.get());
 }
 
 void GameUnitComponent::kill(Entity& entity)

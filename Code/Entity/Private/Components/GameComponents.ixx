@@ -44,6 +44,8 @@ export struct GameUnitParams
     float retargetInterval = 5.0f; // auto-target re-roll cadence (jittered per unit)
     float wanderSpeedMult = 0.25f; // a WANDER order (orderWander) walks at this fraction of moveSpeed...
     float wanderSpeedMax = 0.75f;   // ...capped at this many m/s (runners stroll like everyone else)
+    int localTeam = -1;            // the VIEWER's team (the game stamps it): its units tint green
+                                   // (applyTeamTint) on every instance, server and clients alike
     int huntSeedTeam = -1;         // the ONE team whose units also request seed paths toward a
                                    // HUNTED target (nav/local-search/engage); every other team seeds
                                    // only for routes and move orders. -1 = no team (the game stamps
@@ -288,6 +290,12 @@ export struct GameUnitComponent
     // single-writer); a refilled battery lifts the collapse latch there too.
     void heal(float amount);
     float pendingHeal = 0.0f;
+    // FRIENDLY TINT (main thread): a unit on params.localTeam gets a green material override (its
+    // render children too); any other team keeps its authored colours. Idempotent — called at
+    // spawn (the game) and whenever the replicated team lands (the network blob), so clients
+    // tint their own side as well.
+    static void applyTeamTint(Entity& entity);
+    uint8 tintState = 0; // 0 authored (never touched), 1 friendly green, 2 authored (restored after a re-team)
     // The HUD tag authored as `ShortName` in the .pre — INTERNED (Profiler::internName), so the
     // pointer is permanent and the component owns no string. Replicated units carry it too: the
     // prefab spawns identically on every instance.

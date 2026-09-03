@@ -856,6 +856,7 @@ static void applyGameStateBlob(Entity* entity, const uint8 blob[GameBlobBytes],
         unit->team = (blob[4] >> 4u) & 7u;
         if (hasEmitter)
             fc->emitter.setTeam(unit->team);
+        GameUnitComponent::applyTeamTint(*entity); // idempotent: the client's own side reads green
     }
     if (!applyShield)
         return;

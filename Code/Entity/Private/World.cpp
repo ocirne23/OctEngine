@@ -64,6 +64,7 @@ bool World::initialize()
     return true;
 }
 
+
 void World::setSimLodFocus(const glm::vec3* points, uint32 count)
 {
     m_simLodFocusCount = glm::min(count, MaxSimLodFocus);
