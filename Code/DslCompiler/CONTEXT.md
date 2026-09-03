@@ -76,7 +76,7 @@ Consequences:
 
 | Directive | Meaning |
 |---|---|
-| `@require <Component>[, <Component>...]` | Components this script needs on its entity. Gates `self.<component>` access — using `self.physics` without requiring `PhysicsComponent` is a load error. The script only runs on entities that have every required component (`requirementsMet`). Names: `SceneComponent`, `RenderComponent`, `AnimatorComponent`, `PhysicsComponent`, `AudioComponent`, `ParticleComponent`, `ForceComponent`, `LightComponent`. |
+| `@require <Component>[, <Component>...]` | Components this script needs on its entity. Gates `self.<component>` access — using `self.physics` without requiring `PhysicsComponent` is a load error. The script only runs on entities that have every required component (`requirementsMet`, re-checked at EVERY entry point — hot-reload mutates the module in place). Names: `SceneComponent`, `RenderComponent`, `AnimatorComponent`, `PhysicsComponent`, `AudioComponent`, `ParticleComponent`, `ForceComponent`, `LightComponent`, `GameUnitComponent`, `GameStructureComponent`, `GameProjectileComponent`. |
 | `@data [private\|public] <type> <name>` | One persistent per-instance field, read/written as `self.data.<name>`. Types: `int`, `float`, `bool`, `string`, `vec2/3/4`, `quat`, and arrays (`int[]`, `float[]`, `bool[]`, `string[]`). `Entity`/`Entity[]` are NOT storable. `private`/`public` exposes the field to the editor's Properties panel / Entity Editor (arrays can't be exposed); omitted = hidden. |
 | `@event <Name>` | One named script event. Declares the constant `self.events.<Name>` (its index) and subscribes this script's `OnEvent` to the global event of that name (`fireEvent`/`world.sendEvent`). |
 
@@ -170,6 +170,13 @@ Declared as `@data` fields; storage lives engine-side and survives hot-reload. S
 `.push(value)`, `.clear()`, `.removeAt(index)` (out of range = no-op), member `.count`; read via
 `foreach`/`ifexist ... at <index>`.
 
+**Why storage is engine-side:** the `@data` block holds only a `{index, generation}` handle, so a
+hot-reload that keeps the block (same layout id) keeps the contents with nothing to copy — and a
+script never owns heap memory across a DLL swap. **Freeing bumps the slot's generation, so a stale or
+garbage handle fails lookup and every operation degrades to a no-op or a default.** That, plus each
+accessor's own range check, is the memory-safety guarantee: no value a script can put in a handle
+field can make the engine touch memory it does not own.
+
 ## Binding surface (what scripts can touch)
 
 The AUTHORITATIVE registry is `registerScriptDslBindings()` in `Code/Entity/Private/ScriptContext.cpp` —
@@ -202,12 +209,26 @@ Components (need `@require`; legal only on `self` — reach another entity's via
   `ifexist ref Light l in self.light.lights at i`), member `count`. `Light` struct members: `enabled`,
   `color`, `intensity`, `range`, `offset`, `direction`, `coneAngle`, `edgeSoftness`, `width`, `height`,
   `length`, `rotation`; helpers `setSpotCone`, `setAreaSize`, `setTubeShape`, `tubeRadius`. Edits land via
-  the `ref` write-back
+  the `ref` write-back. The list never grows or shrinks from a script, so there is no push/clear
+* `self.unit` (`GameUnitComponent`) — `setHealth`, `setEnergy`, `damage(amount)`,
+  `setTarget(position)` (**LOCKS the walk target, overriding auto-targeting, until `clearTarget`**),
+  `clearTarget()`, `setMoveSpeed(speed)`; members `health`, `healthMax`, `energy`, `energyMax`, `team`,
+  `collapsed`, `target`, `hasTarget`, `moveSpeed`
+* `self.structure` (`GameStructureComponent`) — `setHealth(health)`, `damage(amount)`; members
+  `health`, `healthMax`, `team`, `blueprint`
+* `self.projectile` (`GameProjectileComponent`) — members only: `team`, `age`
+
+> The game components are the ORDERS/CONFIG tier: a script sets a unit's target or reads its health,
+> while walking and fighting stay in C++ (`GameUnitComponent::update`).
 
 ### world
 `spawn(assetPath, position)` → `Entity?` (returns the miss branch on the spawning frame — spawns are
-deferred), `destroy(entity)`, `findRootEntity(displayName)` → `Entity?`, `entitiesInRadius(position, radius)`
-(foreach-able), `nearestEntity(position, maxRadius, exclude)` → `Entity?`, `rayCast(origin, direction,
+deferred), `destroy(entity)`, `findRootEntity(displayName)` → `Entity?` (**ROOTS only, first match — names
+are not unique**), `entitiesInRadius(position, radius)`
+(foreach-able only, **never `ifexist`** — indexing one result of a query you ran for that purpose is what
+`nearestEntity` is for; nesting is fine, each query takes its own slot in a thread-local ring, but a
+handle held across more than that ring's worth of further queries reads as empty),
+`nearestEntity(position, maxRadius, exclude)` → `Entity?`, `rayCast(origin, direction,
 maxDistance)` → optional `RayHit` (`point`/`normal`/`distance`, via `ifexist RayHit h in ...`),
 `rayCastDistance(...)` → float, `sendEvent(eventName)`, `sendEventTo(entity, eventName)`,
 `sendNetworkEvent(eventName)`, `networkEventSender()`, `setSun(direction, color, intensity)`,
@@ -216,7 +237,7 @@ maxDistance)` → optional `RayHit` (`point`/`normal`/`distance`, via `ifexist R
 `position`, `direction`, `up`, `right`, `fovDeg`, `nearPlane`, `farPlane`).
 
 ### math (ALL ANGLES IN DEGREES)
-`abs sign min max clamp saturate sqrt pow exp log log2 mod`, `floor ceil round trunc fract toInt`,
+`abs sign min max clamp saturate sqrt pow exp log log2 mod`, `floor ceil round trunc fract toInt toFloat`,
 `lerp inverseLerp remap step smoothstep moveTowards`, `sin cos tan asin acos atan atan2 toRadians toDegrees`,
 `wrapAngle deltaAngle lerpAngle moveTowardsAngle`, `randomFloat randomInt randomUnitVector` (engine-side
 stream, hot-reload safe), `quatFromEuler(eulerDeg) quatFromAxisAngle(axis, angleDeg) quatIdentity()

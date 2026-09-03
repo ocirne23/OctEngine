@@ -153,8 +153,7 @@ export namespace Nav
         int m_clearanceCost = 1; // 2x on wall-adjacent cells: nudge off walls, no wide detours
         int m_keepFrames = 120;
         // Fade rates are HALF-LIVES in seconds (frame-rate independent), not per-frame factors.
-        float m_flowHalfLife = 5.0f;     // seconds for a lane to lose half its speed (a seeded
-                                          // order lane is still ~50% after 10 s, ~25% after 20 s)
+        float m_flowHalfLife = 5.0f;
         float m_pressureDiffusion = 0.1f; // Jacobi step weight at 60 Hz (dt-scaled, clamped to 0.25)
         float m_pressureFloor = 1.6f;      // magnitude a neighbour needs before it diffuses (0 = off)
         float m_pressureHalfLife = 1.0f;  // seconds for pressure to halve — the seeded TROUGH has

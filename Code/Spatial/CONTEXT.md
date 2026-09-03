@@ -3,128 +3,254 @@
 > Library documentation for `Code/Spatial`.
 > Read [`.claude/CLAUDE.md`](../../.claude/CLAUDE.md) first — rules, building, style, dependency direction.
 
+The spatial index: culling and position lookup, **independent of the entity parent/child
+hierarchy**. Links Threading only.
+
+## The one call the App makes
+
+`SpatialIndex::update(camera, frustum, viewProjRelCamera)`
+([Query.cpp:597](Private/Query.cpp#L597)) is the whole per-frame spatial step, and it runs **as a
+High job**:
+
+```cpp
+Globals::spatialIndex.kickUpdateJob(Globals::rendererVK.getCullView(camera, viewportRect));
+...
+Globals::spatialIndex.joinUpdateJob();
+```
+
+In order, `update` does:
+
+1. **`commitFrame()`** — applies the cell moves queued during last frame's entity updates.
+2. **SIM LOD tier stamps**, if a focus is set. Deliberately BEFORE the culling-mode gate: update
+   selection is not culling and must not stop with it.
+3. **`setCullMaxDist(camera.far)`** — the main-pass cull distance tracks the render camera's far
+   plane, so terrain and entities stream to exactly the view distance rather than a fixed cap.
+4. Returns early if the mode is `Off` or `freeze` is set.
+5. **Occlusion raster**, when the CPU occlusion buffer is enabled.
+6. **The Main stamp** — the margin-inflated camera frustum over `SpatialLayer_Render |
+   SpatialLayer_Terrain`.
+7. **The Near stamp** — a camera ball over `SpatialLayer_Render` only, behind requery hysteresis.
+
+### The kick/join window
+
+main.cpp kicks right BEFORE `physics.update`, next to the renderer's "Begin frame" job, and joins
+after the physics step, `audio.update` and the nav publish
+([main.cpp:757-782](../App/main.cpp#L757)).
+
+> **The index must stay QUIESCENT between kick and join. NOTHING added there may touch it** — no
+> registers, commits, queries or traversals.
+
+That holds today because the entity-change drains, net receive and `game.update` above the kick are
+the last pre-pass writers, and contact scripts fire only AFTER the join
+(`physics.dispatchContactEvents`). Two reasons it matters: `commitFrame` relinks cells, and
+`registerEntry`'s pool growth reallocates the SoA the traversals read.
+
+**An INVALID view skips the whole update for that frame** — the first VR frame, where no head view
+exists yet. Stamps stay a frame stale (the spawn guard keeps fresh entries visible) and the commit's
+pending ops wait one frame.
+
+**Headless** has no cull job, so main.cpp calls `commitFrame()` directly
+([main.cpp:784](../App/main.cpp#L784)) — every entity still registers, so radius queries (script
+queries, unit targeting) work server-side.
+
 ## Structure
 
-High-performance spatial index for culling and position lookup, independent of the entity hierarchy.
+An implicit 64-ary hierarchy over per-level hashed grids.
 
-* Implicit 64-ary hierarchy over per-level hashed grids: 11 levels, cell size ×4 per level (finest =
-  compile-time `SPATIAL_FINEST_CELL_SIZE`, default 2 m → ±2097 km).
-* BMI2 Morton keys (`Spatial:Morton`). Each `CellRecord` holds a 64-bit child-occupancy mask, so
-  queries descend with bit scans.
-* The API takes `dvec3` (quantized to an int64 lattice); per-entry data is SoA with cell-relative
-  float positions; query math is reference-relative float — exact at planet scale.
+* **An entry lives at exactly ONE level** — the smallest whose cell size fits its bounding sphere
+  (`cellSize >= 2*radius`, `Morton::levelForRadius`). So an entity extends at most half a cell beyond
+  its own, and queries only need half-a-cell loose bounds.
+* **11 levels** (`Morton::MaxLevels`), cell size ×4 per level. The finest is the compile-time
+  `SPATIAL_FINEST_CELL_SIZE`, default 2 m; 21 bits per axis puts the world bound at ±2097 km, with
+  the origin mid-lattice.
+* **BMI2 Morton keys** (`Spatial:Morton`): `pdep` / `pext`. A level-L key is the fine key `>> 6*L`, a
+  parent is `key >> 6`, and the low 6 bits select one of the parent's 4×4×4 children.
+* **Every `CellRecord` holds a 64-bit child-occupancy mask**, so queries descend with bit scans and
+  never visit empty space.
+* The API takes `dvec3`; per-entry data is SoA with **cell-relative float positions**, and query math
+  is reference-relative float — exact at planet scale. Frustums rebase to camera-relative in double
+  (`rebaseFrustum`) so the planes stay exact.
 
-## `Globals::spatialIndex`
+## `Globals::spatialIndex` API
 
-* `initialize()` before world spawns.
-* `registerEntry(pos, radius, userData, layerMask)` → RAII `SpatialHandle` / `SpatialEntry`.
-* `updateEntry` per frame: a same-cell rewrite is ~4 stores; cell changes stage into `PerWorker`
-  lists, so it is callable from any job, one visitor per entry.
-  `register` / `unregister` / `commit` / `setLayerMask` are main-thread.
-* `commitFrame()` once per frame drains and sweeps.
-* Queries are read-only between commits: `querySphere` / `queryAABB` / `queryFrustum` / `queryRay` /
-  `queryNearest`.
+```cpp
+registerEntry(pos, radius, userData, layerMask = 1, spawnVisible = true) -> SpatialHandle
+unregisterEntry(handle)      // neutralized immediately, unlinked at commit
+updateEntry(handle, pos, radius)
+setLayerMask(handle, mask)
+commitFrame()
+```
 
-### Visibility stamps
+`SpatialEntry` ([Types.ixx:18](Private/Types.ixx#L18)) is the move-only RAII wrapper.
 
-Two stamp sets — `markVisibleSet(Main, frustum)` and `markVisibleSphere(Near, ball)`, read back
-through `getPassMask` / `isVisible`. Both are MULTITHREADED (`traverseParallel` in Query.cpp):
+**Queries**, read-only and valid between commits:
+`querySphere` · `queryAABB` · `queryFrustum` · `queryRay` (a **broadphase** — entries whose bounds
+cross the segment) · `queryNearest`.
 
-* The top level is a handful of huge cells, so a serial frontier expansion first splits the tree into
-  at least *workers × 4* subtree roots — classifying cells and emitting the upper cells' own few
-  entries as it goes — then a grain-1 High `parallelFor` runs `traverseCell` per root
-  ("Spatial mark visible" spans on the worker tracks).
-* Thread-safe by structure: an entry lives in exactly ONE cell, so no two roots stamp the same slot;
-  cell maps only mutate in `commitFrame`; per-traversal counters (`TraverseStats`) accumulate locally
-  and merge once — which also fixed the pre-existing stats race from concurrent script-worker
-  queries. `OcclusionBuffer::isVisible`'s hidden-cell counter went atomic with a plain-int mirror for
-  its tweak, since the tweak panel binds a raw `int*`.
+### `spawnVisible` — the spawn guard
 
-### The one driving call
+A never-stamped entry counts as visible **in every pass** until its first real stamp, so a fresh
+spawn does not flash invisible during its link + stamp latency.
 
-The App drives all of it through `SpatialIndex::update(camera, frustum, viewProjRelCamera)` — commit,
-cull distance, mode/freeze gate, margin-inflated Main stamp with occlusion, and the Near ball with
-requery hysteresis — AS A JOB in every mode:
+**Streamed geometry passes `false`** (`RecordFlag_NoSpawnGuard`). Appearing one frame late is
+invisible for something that did not exist before, while the guard would leak never-stamped
+off-screen entries into the main pass — permanently while culling is frozen. Terrain chunks, ocean
+sectors and scatter groups all pass false.
 
-* `kickUpdateJob(Renderer::getCullView(camera, viewportRect))` / `joinUpdateJob()`. The `CullView` is
-  a `Core.Frustum` type, since Spatial and RendererVK do not link each other, and is copied into
-  members. One "Spatial cull" High job.
-* main.cpp kicks right BEFORE `physics.update`, overlapping `audio.update` and the renderer's
-  "Begin frame job" (see RendererVK), and joins before `world.update`.
-* An INVALID view skips that frame's whole update; the spawn guards cover the stale stamps.
+### Threading contract
 
-**The kick/join window is the frame's only index-QUIESCENT stretch.** The entity-change drains, net
-receive and `game.update` are the last pre-pass writers and the last registers; contact scripts fire
-only AFTER the join (`physics.dispatchContactEvents`). Commit relinks cells and register's pool
-growth reallocates the SoA that the traversals read, so neither may overlap a query.
-**NOTHING added between the kick and the join may touch the index.**
+| Operation | Rule |
+|---|---|
+| `updateEntry` | **Callable from any job during the parallel entity pass.** A same-cell update writes only that entry's SoA slots (~4 stores); a cell change stages into a `PerWorker` pending list. One visitor per entry. |
+| `registerEntry` / `unregisterEntry` | Callable from any thread **in the spawn window** (parallel entity spawning). Both take `m_registerMutex` EXCLUSIVE, because pool growth reallocates the SoA. |
+| `query*` | Take `m_registerMutex` SHARED — a spawning worker's script `OnSpawn` may query while another worker registers. |
+| `setLayerMask` / `commitFrame` | Single-threaded, main, outside the pass. |
+| `markVisible*` traversals | Lock-free. Safe only because the kick/join window forbids registration **by contract**. |
 
-### The frustum
+## Layers
 
-Comes from `Renderer::computeCullFrustum(camera, viewportRect)` BEFORE `beginFrame` — camera and
-viewport are final by then, TAA jitter is never baked into the mvp, and it applies the viewport rect
-and publishes `getCenterViewProj` early. It is bit-identical to the UBO's by construction: both go
-through `computeCenterViewProj`, the ONE place the center view-projection is built.
+| Layer | Bit | Contents |
+|---|---|---|
+| `SpatialLayer_Render` | 0 | Entities that have a RenderComponent. **This is the gameplay-query layer.** |
+| `SpatialLayer_Stress` | 1 | Synthetic stress-test entries. |
+| `SpatialLayer_Terrain` | 2 | Procedural terrain chunks, ocean sectors, scatter groups. |
+| `SpatialLayer_Entity` | 3 | EVERY entity. The World's update-selection layer. |
 
-**VR** kicks the SAME job on LAST frame's head view — `getCullView` returns the camera + frustum
-stored at the end of each VR `beginFrame`. That is one frame of cull latency, absorbed by the culling
-margin and the near-ball slack; the fresh pose only exists after `xrWaitFrame` inside `beginFrame`,
-so the job overlaps that stall. The first VR frame's view is invalid, so culling is skipped.
-`computeCullFrustum` still asserts `!VR`.
+> **`SpatialLayer_Terrain` entries carry `userData = 0`, not an `Entity*`. Gameplay queries must
+> never include that layer** ([Types.ixx:58](Private/Types.ixx#L58)).
+
+## Visibility stamps
+
+Five passes (`ESpatialPass`), each with its own stamp generation. **Each `markVisible*` call
+invalidates that pass's previous generation — one consumer per pass by design.**
+
+| Pass | Meaning |
+|---|---|
+| `Main` | The camera frustum, occlusion-testable. |
+| `Near` | A camera ball that keeps off-screen shadow casters and ray-traced geometry alive. |
+| `UpdateTier0/1/2` | The World's SIM LOD selection. **Not rendering.** |
+
+Read back with `getPassMask` / `isVisible` (both apply the spawn guard), or with the exact-compare
+variants below. `SpatialPassBit_*` are the bits; `SpatialPassBits_UpdateTiers` is the tier mask.
+
+### Multithreaded traversal
+
+Both `markVisibleSet` and `markVisibleSphere` run `traverseParallel`
+([Query.cpp:376](Private/Query.cpp#L376)):
+
+1. The top level is a handful of huge cells, so a **serial frontier expansion** splits the tree until
+   it holds `numWorkers * 4` independent subtree roots — **4× over-partitioned so the shared
+   parallelFor cursor can rebalance around expensive roots**, since the cells around the camera hold
+   most of the visible world. It classifies cells and emits the upper cells' own few entries as it
+   goes.
+2. A **grain-1 High `parallelFor`** runs `traverseCell` per root. `"Spatial mark visible"` spans show
+   on the worker tracks. High because the render gate waits on these stamps.
+
+**Thread-safe by structure:** an entry lives in exactly ONE cell, so no two roots ever stamp the same
+slot; the cell maps only mutate in `commitFrame`; and the stamp is a pure store. Per-traversal
+counters (`TraverseStats`) accumulate locally and merge once — which also fixed a pre-existing stats
+race from concurrent script-worker queries. `OcclusionBuffer`'s hidden-cell counter went atomic with
+a plain-int mirror for the tweak panel, which binds a raw `int*`.
+
+### `markVisibleSpheres`
+
+ONE stamp generation over the UNION of several balls. **`markVisibleSphere` per call would leave only
+the last ball stamped**, which is why the SIM LOD uses this. `visiblePerPass` counts overlapping
+balls twice.
+
+### The Near ball's hysteresis
+
+The Near ball barely changes frame to frame, so it is inflated by `nearSlack` (16 m) and requeried
+only once the camera has moved that far — **or every 30 frames**, which keeps off-screen MOVERS from
+staying unstamped: they can enter the ball without the camera moving
+([Query.cpp:646](Private/Query.cpp#L646)).
+
+Terrain rides the Main stamp but **skips the Near ball**: main-culled terrain keeps its shadow and GI
+passes unconditionally.
+
+### Culling config (`Spatial/Culling` tweaks)
+
+| Field | Default | Notes |
+|---|---|---|
+| `mode` | `Cull` | `Off` / `StatsOnly` / `Cull` / `MainOnly` (debug — visibly breaks off-screen shadows and GI). |
+| `freeze` | false | Stop re-stamping and fly around to inspect the culled set. |
+| `margin` | 4 m | Frustum inflation masking the one-frame stamp latency. |
+| `nearRadius` | **0** | Shadow-caster + ray-tracing relevance range. |
+| `nearSlack` | 16 m | Near-ball inflation and requery threshold; 0 = every frame. |
+| `maxDist` | overwritten | Set from the camera far plane every update. |
+| `skinnedRadiusScale` | 1.5 | Animation can exceed the bind-pose bounds sphere. |
 
 ## Entity integration
 
-Every entity registers at the end of `Entity::create` (`Entity::spatialEntry`):
+**Every entity registers at the end of `Entity::create`**
+([EntityP.cpp:261](../Entity/Private/EntityP.cpp#L261)) — parallel-spawn safe, since the index locks.
 
-* Layer `SpatialLayer_Entity` always, plus `SpatialLayer_Render` when it has a render node — bounds
-  from `RenderNode::getWorldBounds`, skinned × "Skinned radius scale"; otherwise a point at the
-  entity position.
-* Gameplay queries stay on the Render layer. The Entity layer is the World's update-selection layer.
-* Update pushes per-pass masks: Main-visible entities push `PASS_ALL`; Near-only entities push
-  `PASS_SHADOW|PASS_GI`, so shadows and GI keep off-screen entities.
+* Layer `SpatialLayer_Entity` always, plus `SpatialLayer_Render` when the entity has a render node.
+* Bounds come from `RenderNode::getWorldBounds`, skinned inflated by `skinnedRadiusScale`; otherwise
+  a point at the spawn position. For a tree CHILD that is its LOCAL position — the entry links at the
+  next commit, and the child's first visit re-places it in world space before any query can see it.
+* Headless has no render nodes, so every entry there is a point.
+* `updateSelf` refreshes it every visit, and the render gate reads its pass mask.
+* Update pushes per-pass masks: Main-visible entities push `PASS_ALL`, Near-only push
+  `PASS_SHADOW|PASS_GI` so shadows and GI keep off-screen entities.
 
-### Update tier passes
+### SIM LOD hooks
 
-`ESpatialPass::UpdateTier0/1/2`, bits `SpatialPassBit_UpdateTier*` / `SpatialPassBits_UpdateTiers`.
-These are the World's SIM LOD, not rendering.
+`setUpdateLod(focus, count, radii[3])` — at most `MaxUpdateLodFocus` = 16 points — records the focus
+points and the three tier radii to stamp in the NEXT `update()`.
 
-* `setUpdateLod(focus, count, radii)` (at most `MaxUpdateLodFocus` 16 points) makes `update()` stamp
-  the three passes with `markVisibleSpheres` — ONE stamp generation over the union of the balls,
-  since `markVisibleSphere` per call would leave only the last ball — BEFORE the culling-mode/freeze
-  gate, so selection never stops with culling. `visiblePerPass` counts overlapping balls twice.
-* `getPassMaskExact` is `getPassMask` WITHOUT the spawn guard: a never-stamped entry reads as in no
-  pass, which is how the World tells a fresh unlinked entry from a placed one.
-* `isStampedCurrent` / `stampCurrent` are MAIN-THREAD single-entry stamp accessors (exact compare),
-  used by the World to mark the ancestors of a selected entity between the join and the pass.
+Three accessors exist purely for the World's selection logic:
+
+| Accessor | Difference from the normal one |
+|---|---|
+| `getPassMaskExact` | **No spawn guard** — a never-stamped entry reads as in no pass. That is how the World tells a fresh unlinked entry from a placed one. |
+| `isStampedCurrent` | Single-entry exact compare. |
+| `stampCurrent` | **Main-thread** single-entry stamp; the World marks the ancestors of a selected entity between the join and the pass. |
 
 See the SIM LOD section in [`Code/Entity/CONTEXT.md`](../Entity/CONTEXT.md).
 
-### Culling mode tweaks
-
-`Spatial/Culling/Mode`: Off / Stats only / Cull (default) / Main only (debug — visibly kills
-off-screen shadows and GI). `Freeze` stops re-stamping so the culled set can be inspected.
-
 ## CPU software occlusion
 
-`Spatial:Occlusion`, `Globals::occlusionBuffer`, Spatial/Occlusion tweaks, default off.
+`Spatial:Occlusion`, `Globals::occlusionBuffer`, Spatial/Occlusion tweaks, **default off**.
 
-The largest triangles of static mesh colliders — from CollisionCache occluder sets, registered by
-PhysicsComponent, RAII `SpatialOccluder` — rasterize camera-relative into a 256×144 CPU depth buffer
-plus 8×8 max-depth blocks. Plugged into the Main stamp as `IOcclusionTester`; occluded cells drop
-from the MAIN pass only. Conservative toward visible.
+The largest triangles by area of static mesh colliders — extracted by
+`OcclusionBuffer::extractOccluders`, registered by PhysicsComponent through the RAII
+`SpatialOccluder` — rasterize camera-relative into a **256×144** CPU depth buffer plus **8×8**
+max-depth blocks. Default budget 2048 triangles.
+
+It plugs into the Main stamp as `IOcclusionTester`, so occluded cells drop from the MAIN pass only.
+
+**Everything is conservative toward "visible":** pixel-center coverage under-rasterizes occluders,
+the block mip keeps the FARTHEST depth, and any near-plane crossing reports visible.
+
+> The renderer's projection is REVERSED-Z, so `update` flips the z row back to standard orientation
+> (`z' = w - z`) before handing the matrix to the rasterizer — for the rasterizer ONLY
+> ([Query.cpp:624](Private/Query.cpp#L624)).
+
+`addOccluder` / `removeOccluder` take a mutex: they run concurrently from spawn jobs
+(PhysicsComponent spawn and resume), while `render()` runs in the cull window where no spawn is
+legal.
 
 ## Static tier
 
-Entries unchanged for N frames (Spatial/Static tweaks) promote into per-level Morton-sorted SoA
-ranges (`StaticStore`), budgeted one level per commit; any change demotes. Sphere, AABB and frustum
-testers all test static ranges 8-wide (AVX2 `test8`).
+Entries unchanged for `promoteAfterFrames` (60) promote into per-level **Morton-key-sorted SoA
+ranges** (`StaticStore`), so queries iterate them linearly and the 8-wide AVX2 testers (`test8`) get
+transpose-free loads.
 
-## Other
+* Promotion is budgeted: `staticScanBudget` (65536) pool slots inspected per commit, and
+  `staticRebuildBatch` (1024) pending promotions force a level rebuild — **one level per commit**.
+* A promoted entry stays in its dynamic list until a rebuild consumes it.
+* **Demotion tombstones** — a negative radius fails every test in place; rebuilds drop tombstones and
+  merge pending promotions back into sorted order.
+* Sphere, AABB and frustum testers all test static ranges 8-wide.
 
-* **Stress harness** (`Globals::spatialStress`, Spatial/Stress tweaks) — synthetic entries on
-  `SpatialLayer_Stress`, churn, timed queries, brute-force verify. Stats under Spatial/Stats.
-* **Scripts** — `ctx->spatialQueryRadius` / `ctx->spatialGetNearestEntity`; NodeEditor
-  "Get Nearest Entity" and "For Each Entity In Radius".
-* **Planned, not yet built** — Threading-parallel QUERIES. The `markVisible*` stamps already fan out
-  (above); the `query*` entry points still traverse serially, because their emit appends to one
-  out-vector, so they need per-task collection before they can ride `traverseParallel`.
+## Stress harness
+
+`Globals::spatialStress`, Spatial/Stress tweaks: synthetic entries on `SpatialLayer_Stress`, churn,
+timed queries, brute-force verification. Stats under Spatial/Stats.
+
+## Not yet built
+
+**Threading-parallel QUERIES.** The `markVisible*` stamps already fan out, but the `query*` entry
+points still traverse serially: their emit appends to one out-vector, so they need per-task
+collection before they can ride `traverseParallel`.

@@ -559,7 +559,7 @@ private:
         25.0f, // Extractor
         40.0f, // Battery
         30.0f, // FuelTank
-        20.0f, // Solar
+        40.0f, // Solar
         60.0f, // Fabricator
         70.0f, // Bastion
         45.0f, // Lance
@@ -601,7 +601,7 @@ private:
     float m_genEnergyPerSec = 7.5f;
     float m_solarEnergyPerSec = 1.0f;
     float m_fuelBurnRate = 1.0f;
-    float m_fabricatorMineralsPerSec = 1.5f;
+    float m_fabricatorMineralsPerSec = 0.5f;
     float m_fabricatorFuelPerSec = 1.0f;
     float m_fabricatorEnergyPerSec = 2.0f;
     float m_extractorEnergyPerSec = 1.5f;

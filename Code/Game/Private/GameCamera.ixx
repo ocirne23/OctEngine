@@ -16,10 +16,10 @@ public:
     {
         // Camera feel is a PERSONAL preference: saved locally, never synced from the server.
         const Tweak::ScopedFlags scoped(ETweakFlags::Saved);
-        Tweak::floatVar("Game/Camera", "Pitch", &m_pitchDeg, 30.0f, 75.0f, 0.5f);
+        Tweak::floatVar("Game/Camera", "Pitch", &m_pitchDeg, 30.0f, 90.0f, 0.5f);
         Tweak::floatVar("Game/Camera", "Distance", &m_distance, 4.0f, 80.0f, 0.5f);
         Tweak::floatVar("Game/Camera", "Min distance", &m_minDistance, 2.0f, 40.0f, 0.5f);
-        Tweak::floatVar("Game/Camera", "Max distance", &m_maxDistance, 10.0f, 120.0f, 0.5f);
+        Tweak::floatVar("Game/Camera", "Max distance", &m_maxDistance, 10.0f, 250.0f, 0.5f);
         Tweak::floatVar("Game/Camera", "Zoom speed", &m_zoomSpeed, 0.5f, 10.0f, 0.1f);
         Tweak::floatVar("Game/Camera", "Yaw speed (deg/s)", &m_yawSpeed, 30.0f, 360.0f, 1.0f);
         Tweak::floatVar("Game/Camera", "Drag sensitivity", &m_dragSensitivity, 0.05f, 1.0f, 0.01f);
@@ -64,10 +64,10 @@ private:
     }
 
     float m_yawDeg = 0.0f;
-    float m_pitchDeg = 55.0f;
+    float m_pitchDeg = 75.0f;
     float m_distance = 18.0f;
     float m_minDistance = 6.0f;
-    float m_maxDistance = 60.0f;
+    float m_maxDistance = 120.0f;
     float m_zoomSpeed = 2.0f;
     float m_yawSpeed = 120.0f;
     float m_dragSensitivity = 0.25f;
