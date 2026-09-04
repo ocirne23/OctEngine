@@ -155,7 +155,11 @@ private:
 
     Aim computeAim(const Camera& camera, EStructureType type) const;
     bool aimGroundPoint(const Camera& camera, glm::vec3& outPos) const; // cursor ray vs colliders/ground plane
-    void refreshBuildHotbar(); // repopulates slot labels/counts for the current grid level
+    void refreshBuildHotbar(); // repopulates slot labels/counts/hover cards for the current grid level
+    // The hotbar hover cards, one per structure type: rebuilt once a REAL second (the tweaks they
+    // quote are live, but nobody drags one 60 times a second) — see refreshBuildHotbar.
+    oc::string m_typeCards[(int)EStructureType::Count];
+    double m_typeCardTime = -1.0; // real-clock stamp of the last rebuild (< 0 = never built)
     void updateModeSwitching();
     void updateBuildMode(const Camera& camera, bool confirmEdge, bool cancelEdge);
     void disarmBuild(); // drop the armed item + any half-finished two-click flow (RMB / Esc)

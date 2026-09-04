@@ -21,6 +21,9 @@ export struct HudSlot
 	oc::string label;
 	int         count = 0; // > 0 draws a stack number, Minecraft-style
 	bool        used = false;
+	// HOVER CARD: '\n'-separated lines the overlay draws in a box beside the slot while the cursor
+	// is on it (the build menu's "what does this do / cost / produce"). Empty = no card.
+	oc::string tooltip;
 };
 
 export struct HudBar
@@ -117,6 +120,21 @@ public:
 		m_slots[index].label = label;
 		m_slots[index].count = glm::max(count, 0);
 		m_slots[index].used = true;
+		// (the hover card is NOT cleared here: gameplay re-states it right after, and dropping it
+		//  first would make every re-state a fresh allocation — clearSlot is what wipes a slot)
+	}
+
+	// The slot's hover card (see HudSlot::tooltip). Unchanged text is a no-op, so a hotbar that
+	// re-states itself every frame allocates nothing.
+	void setSlotTooltip(int index, oc::string_view text)
+	{
+		if (index < 0 || index >= NumSlots)
+			return;
+		const std::lock_guard lock(m_mutex);
+		oc::string& tip = m_slots[index].tooltip;
+		if (tip.size() == text.size() && (text.empty() || memcmp(tip.data(), text.data(), text.size()) == 0))
+			return;
+		tip.assign(text.data(), text.size());
 	}
 
 	void setSlotCount(int index, int count)

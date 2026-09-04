@@ -406,6 +406,9 @@ public:
         }
     }
     float mineralCost(EStructureType type) const { return m_costs[(int)type]; }
+    // The build hotbar's hover card: one sentence + this type's exact per-second flows, one per
+    // line, straight off the live tweaks (see the definition).
+    oc::string describeType(EStructureType type) const;
     int affordableCount(EStructureType type, uint8 team = 0) const
     {
         const float cost = m_costs[(int)type];

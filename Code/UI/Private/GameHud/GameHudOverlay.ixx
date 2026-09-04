@@ -244,6 +244,8 @@ public:
 			const float keyFontSize = fontSize * 0.95f;
 			const ImVec2 mouse = ImGui::GetIO().MousePos;
 			glm::vec4 rects[GameHud::NumSlots];
+			const HudSlot* cardSlot = nullptr; // the hovered slot's hover card, drawn after the grid
+			ImVec2 cardAnchor(0.0f, 0.0f);
 			for (int i = 0; i < GameHud::NumSlots; ++i)
 			{
 				const float x = x0 + (i % columns) * (slot + pad);
@@ -255,6 +257,11 @@ public:
 				// hover: only ASSIGNED slots light up -- an empty cell is not a button
 				const bool hovered = hudSlot.used && mouse.x >= sMin.x && mouse.x <= sMax.x
 					&& mouse.y >= sMin.y && mouse.y <= sMax.y;
+				if (hovered && !hudSlot.tooltip.empty())
+				{
+					cardSlot = &hudSlot;
+					cardAnchor = sMin;
+				}
 				dl->AddRectFilled(sMin, sMax, selected ? col(0.10f, 0.12f, 0.16f, 0.9f)
 					: hovered ? col(0.16f, 0.18f, 0.22f, 0.85f) : col(0.06f, 0.06f, 0.08f, 0.65f), 5.0f * s);
 				if (selected)
@@ -291,6 +298,62 @@ public:
 				}
 			}
 			Globals::gameHud.setSlotScreenRects(rects);
+
+			// ---- HOVER CARD: the hovered slot's '\n'-separated tooltip in a box ABOVE the
+			// ---- hotbar — first line the name, then the description and the metrics.
+			// ---- Drawn after the grid so it sits over the neighbouring slots. The metric lines
+			// ---- share one "<sign> <value> <unit>" column: '+' output (green), '-' input or the
+			// ---- build cost (orange), '=' a capacity it banks (blue), so a card scans at a glance.
+			if (cardSlot)
+			{
+				const float titleFont = fontSize;
+				const float bodyFont = fontSize * 0.85f;
+				const float padC = 7.0f * s;
+				const float lineGap = 2.0f * s;
+				const auto forEachLine = [&](auto&& fn)
+				{
+					const char* line = cardSlot->tooltip.c_str();
+					bool firstLine = true;
+					while (*line)
+					{
+						const char* end = strchr(line, '\n');
+						const size_t len = end ? size_t(end - line) : strlen(line);
+						char lineBuf[192];
+						snprintf(lineBuf, sizeof(lineBuf), "%.*s", (int)len, line);
+						fn(lineBuf, firstLine);
+						firstLine = false;
+						line += len + (end ? 1 : 0);
+					}
+				};
+				float cardW = 0.0f, cardH = 0.0f;
+				forEachLine([&](const char* txt, bool isTitle)
+				{
+					const ImVec2 ts = font->CalcTextSizeA(isTitle ? titleFont : bodyFont, noWrap, 0.0f, txt);
+					cardW = glm::max(cardW, ts.x);
+					cardH += ts.y + lineGap;
+				});
+				const float boxW = cardW + padC * 2.0f;
+				const float boxH = cardH - lineGap + padC * 2.0f;
+				const float bx = glm::clamp(cardAnchor.x, vpMin.x + 4.0f * s,
+					glm::max(vpMax.x - 4.0f * s - boxW, vpMin.x + 4.0f * s));
+				const float by = glm::max(y0 - boxH - 8.0f * s, vpMin.y + 4.0f * s);
+				dl->AddRectFilled(ImVec2(bx, by), ImVec2(bx + boxW, by + boxH),
+					col(0.05f, 0.05f, 0.07f, 0.94f), 5.0f * s);
+				dl->AddRect(ImVec2(bx, by), ImVec2(bx + boxW, by + boxH),
+					col(0.65f, 0.68f, 0.75f, 0.9f), 5.0f * s, 0, 1.0f * s);
+				float ly = by + padC;
+				forEachLine([&](const char* txt, bool isTitle)
+				{
+					const float f = isTitle ? titleFont : bodyFont;
+					const ImU32 c = isTitle ? col(1.0f, 1.0f, 1.0f, 1.0f)
+						: txt[0] == '+' ? col(0.45f, 0.95f, 0.55f, 1.0f)  // output
+						: txt[0] == '-' ? col(1.0f, 0.65f, 0.3f, 1.0f)    // input (the cost too)
+						: txt[0] == '=' ? col(0.45f, 0.72f, 1.0f, 1.0f)   // capacity it banks
+						: col(0.82f, 0.82f, 0.86f, 1.0f);
+					text(ImVec2(bx + padC, ly), f, c, txt);
+					ly += font->CalcTextSizeA(f, noWrap, 0.0f, txt).y + lineGap;
+				});
+			}
 		}
 
 		dl->PopClipRect();

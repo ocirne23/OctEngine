@@ -44,6 +44,9 @@ static constexpr int c_cancelSlot = 10;        // C: straight back to Select (Es
 static constexpr int c_numCategories = 2;
 static constexpr const char* c_buildCategories[c_numCategories] = { "CMBT", "PROD" };      // slot captions
 static constexpr const char* c_buildCategoryNames[c_numCategories] = { "Combat", "Production" }; // log prose
+static constexpr const char* c_buildCategoryCards[c_numCategories] = { // the slots' hover cards
+    "Combat\nShields, walls, turrets and the barracks.",
+    "Production\nPower, extraction, refining and storage." };
 // The three cables live on the ROOT page (A/S/D) — no page of their own. Arming one enters Build
 // with this HIDDEN category, which draws and behaves as the root page (see isRootPage).
 static constexpr int c_cableCategory = 2;
@@ -2436,29 +2439,57 @@ bool GameMatch::isRootPage() const
 void GameMatch::refreshBuildHotbar()
 {
     GameHud& hud = Globals::gameHud;
-    for (int i = 0; i < GameHud::NumSlots; ++i)
-        hud.clearSlot(i);
+    // HOVER CARDS: the full type name + StructureSystem's description (one sentence, then the
+    // exact per-second flows). Formatted from the LIVE tweaks, so they are rebuilt on a slow
+    // cadence instead of per frame — this runs every frame for the counts, and 26 formatted
+    // strings a frame is pure waste for text that only moves when someone drags a tweak. The
+    // cadence is REAL seconds, not a frame count: the rate must not follow the frame rate, and a
+    // paused game still updates its cards. The setters below then early-out on an unchanged
+    // string, so a steady frame allocates nothing.
+    const double now = Globals::time.getElapsedSec(); // real clock: the cards refresh while paused too
+    if (now - m_typeCardTime >= 1.0)
+    {
+        m_typeCardTime = now;
+        for (int t = 0; t < (int)EStructureType::Count; ++t)
+            m_typeCards[t] = oc::string(structureTypeName((EStructureType)t)) + "\n"
+                + m_structures.describeType((EStructureType)t);
+    }
+    uint32 used = 0; // slots this page filled; everything else is cleared at the end
+    const auto itemSlot = [&](int slot, EStructureType type)
+    {
+        hud.setSlot(slot, c_structureShortNames[(int)type],
+            m_structures.affordableCount(type, (uint8)m_team));
+        hud.setSlotTooltip(slot, m_typeCards[(int)type]);
+        used |= 1u << slot;
+    };
+    const auto plainSlot = [&](int slot, const char* label, const char* card)
+    {
+        hud.setSlot(slot, label, 0);
+        hud.setSlotTooltip(slot, card);
+        used |= 1u << slot;
+    };
     if (isRootPage())
     {
         for (int i = 0; i < c_numCategories; ++i)
-            hud.setSlot(i, c_buildCategories[i], 0);
+            plainSlot(i, c_buildCategories[i], c_buildCategoryCards[i]);
         for (int i = 0; i < (int)oc::size(c_cableItems); ++i)
-            hud.setSlot(c_rootCableSlot + i, c_structureShortNames[(int)c_cableItems[i]],
-                m_structures.affordableCount(c_cableItems[i], (uint8)m_team));
-        hud.setSlot(c_rootDeleteSlot, "DEL", 0);
-        hud.setSlot(c_cancelSlot, "CNCL", 0); // Cancel on C on EVERY page
+            itemSlot(c_rootCableSlot + i, c_cableItems[i]);
         const bool cableArmed = m_mode == EPlayerMode::Build && m_buildSelection >= 0;
         hud.selectSlot(m_mode == EPlayerMode::Delete ? c_rootDeleteSlot
                      : cableArmed ? c_rootCableSlot + m_buildSelection : -1);
-        return;
     }
-    const oc::span<const EStructureType> items = buildCategoryItems(m_buildCategory);
-    for (int i = 0; i < (int)items.size() && i < c_rootDeleteSlot; ++i)
-        hud.setSlot(i, c_structureShortNames[(int)items[i]],
-            m_structures.affordableCount(items[i], (uint8)m_team));
-    hud.setSlot(c_rootDeleteSlot, "DEL", 0); // Delete stays on X on EVERY page
-    hud.setSlot(c_cancelSlot, "CNCL", 0); // Cancel on C on EVERY page
-    hud.selectSlot(m_buildSelection);
+    else
+    {
+        const oc::span<const EStructureType> items = buildCategoryItems(m_buildCategory);
+        for (int i = 0; i < (int)items.size() && i < c_rootDeleteSlot; ++i)
+            itemSlot(i, items[i]);
+        hud.selectSlot(m_buildSelection);
+    }
+    plainSlot(c_rootDeleteSlot, "DEL", "Delete\nClick a structure to demolish it."); // X on EVERY page
+    plainSlot(c_cancelSlot, "CNCL", "Cancel\nBack to Select mode.");                 // C on EVERY page
+    for (int i = 0; i < GameHud::NumSlots; ++i)
+        if (!(used & (1u << i)))
+            hud.clearSlot(i);
 }
 
 void GameMatch::setMode(EPlayerMode mode)

@@ -673,6 +673,28 @@ Every caption is a 3–5 char SHORTHAND from `c_structureShortNames`, indexed by
 **the SAME table the world tag over a building uses, so a slot and the thing it builds read
 identically.**
 
+**HOVER CARDS.** Every slot carries a `HudSlot::tooltip` — `'\n'`-separated lines the overlay draws
+in a box above the hotbar while the cursor is on that slot: the full type name, then
+`StructureSystem::describeType` — **one sentence, the BUILD COST right under it, then the type's
+exact flows, one per line.** Every metric shares one `<sign> <value> <unit>[ <note>]` column:
+
+| Sign | Meaning | Colour |
+|---|---|---|
+| `-` | an input — a per-second draw, or the one-off `- 40 minerals to build` | orange |
+| `+` | an output — a per-second yield | green |
+| `=` | a capacity it banks (`= 200 energy`) | blue |
+
+Anything else is a plain grey line, and **every kind of reach is ONE word, `Range N m`** — a
+bubble's, a beam's, a heal radius, a build range, a house's link radius — so a card never makes a
+player wonder whether "Reach" and "Radius" mean different things. **Every number is read off the
+LIVE tweaks**, so a retuned economy retunes the cards; nothing there is a hand-written constant. The
+page and mode slots get a one-liner instead.
+
+> `refreshBuildHotbar` runs EVERY frame (the counts stay live), so the cards are cached per type and
+> rebuilt once a REAL second (`Time::getElapsedSec` — frame-rate independent, and a paused game
+> still refreshes), and `setSlotTooltip` early-outs on unchanged text — **a steady frame allocates
+> nothing.** For the same reason the refresh clears only the slots this page did NOT fill.
+
 | Slot | Root page | Category page |
 |---|---|---|
 | Q / W | **CMBT / PROD** | the category's items, in order |

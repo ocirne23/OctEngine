@@ -47,6 +47,148 @@ const char* structureTypeName(EStructureType type)
     return structureNames[(int)type];
 }
 
+// The build hotbar's HOVER CARD: one sentence, then this type's exact per-second flows (and what it
+// banks or does), one per line. Every number comes straight off the live tweaks, so a retuned
+// economy retunes the card — nothing here is a hand-written constant.
+oc::string StructureSystem::describeType(EStructureType type) const
+{
+    // Every metric line is "<sign> <value> <unit>[ <note>]", so the card scans as one column:
+    //   -  an input (a per-second draw, or the one-off build cost)
+    //   +  an output (a per-second yield)
+    //   =  a capacity it banks
+    // Anything else (reach, damage, a rule of thumb) is a plain grey line.
+    oc::string desc, flows;
+    const auto line = [&](oc::string text) { if (!flows.empty()) flows += '\n'; flows += oc::move(text); };
+    const auto in = [&](float rate, const char* what, const char* note = "") {
+        if (rate > 0.0f) line(oc::format("- {:g} {}/s{}", rate, what, note)); };
+    const auto out_ = [&](float rate, const char* what, const char* note = "") {
+        if (rate > 0.0f) line(oc::format("+ {:g} {}/s{}", rate, what, note)); };
+    const auto banks = [&](float amount, const char* what) {
+        line(oc::format("= {:g} {}", amount, what)); };
+    // ONE word for every kind of reach — a bubble's, a beam's, a heal radius, a build range —
+    // so the cards never make a player wonder whether "Reach" and "Radius" mean different things.
+    const auto range = [&](float metres) { line(oc::format("Range {:g} m", metres)); };
+    const GameStructureParams& p = GameStructureComponent::params;
+
+    switch (type)
+    {
+    case EStructureType::Emitter:
+    case EStructureType::Bastion:
+    case EStructureType::Lance:
+        desc = type == EStructureType::Lance
+            ? "Shield CONE along its aimed facing: pushes enemies out and drains them."
+            : "Shield bubble: pushes enemies out and drains their batteries.";
+        in(emitterDrawOf(type), "energy");
+        in(m_emitterPressureDraw, "energy", " more at full pressure");
+        range(emitterReachOf(type));
+        break;
+    case EStructureType::Generator:
+        desc = "Burns fuel into grid energy.";
+        in(m_fuelBurnRate, "fuel");
+        out_(m_genEnergyPerSec, "energy");
+        break;
+    case EStructureType::Solar:
+        desc = "Free energy trickle. Needs no fuel.";
+        out_(m_solarEnergyPerSec, "energy");
+        break;
+    case EStructureType::Extractor:
+        desc = "Mines the resource node under it.";
+        in(m_extractorEnergyPerSec, "energy");
+        out_(m_mineralRate, "minerals", " on a mineral node");
+        out_(m_fuelRate, "fuel", " on a fuel node");
+        break;
+    case EStructureType::Fabricator:
+        desc = "Converts fuel and power into minerals.";
+        in(m_fabricatorEnergyPerSec, "energy");
+        in(m_fabricatorFuelPerSec, "fuel");
+        out_(m_fabricatorMineralsPerSec, "minerals");
+        break;
+    case EStructureType::Constructor:
+        desc = "Builds and repairs nearby structures from its mineral stock.";
+        in(m_extractorEnergyPerSec, "energy");
+        in(m_constructorBuildRate, "minerals", " while building");
+        range(m_constructorRange);
+        break;
+    case EStructureType::Battery:
+        desc = "Banks grid energy for the peaks.";
+        banks(m_batteryCapacity, "energy");
+        break;
+    case EStructureType::FuelTank:
+        desc = "Banks the fuel the extractors pipe in.";
+        banks(m_fuelTankCapacity, "fuel");
+        break;
+    case EStructureType::MineralSilo:
+        desc = "Banks minerals: only silos and the Base hold SPENDABLE stock.";
+        banks(m_mineralSiloCapacity, "minerals");
+        break;
+    case EStructureType::Barracks:
+        desc = "Trains units. Its power draw IS the build bar.";
+        in(m_barracksEnergyIntake, "energy");
+        line(oc::format("Build time = the unit's energy cost / {:g}", m_barracksEnergyIntake));
+        line(oc::format("Population {} (+{} per linked house)", m_barracksPopulation, m_housePopulation));
+        break;
+    case EStructureType::House:
+        desc = "Raises the population cap of the nearest barracks. Needs no power.";
+        line(oc::format("+ {} population", m_housePopulation));
+        range(m_houseLinkRadius); // how far it reaches for that barracks
+        break;
+    case EStructureType::Turret:
+        desc = "Hitscan lightning at the nearest enemy unit. Never misses.";
+        in(p.turretShotEnergy / glm::max(p.turretFireInterval, 1e-3f), "energy");
+        banks(p.turretShotEnergy, "energy per shot");
+        line(oc::format("{:g} damage every {:g} s", p.turretDamage, p.turretFireInterval));
+        range(p.turretRange);
+        break;
+    case EStructureType::MedicStation:
+        desc = "Heals own units and players standing in its radius.";
+        in(m_medicEnergyPerSec, "energy");
+        out_(medicHealRate(), "health", " and shield, per body");
+        range(medicHealRadius());
+        break;
+    case EStructureType::Wall:
+        desc = "Breachable barrier: enemies chew through it instead of walking around. Needs no power.";
+        break;
+    case EStructureType::CablePower:
+    case EStructureType::CablePipe:
+    case EStructureType::CableConveyor:
+    {
+        static constexpr const char* c_what[3] = { "energy", "fuel", "minerals" };
+        const int medium = cableMediumOf(type);
+        desc = oc::format("Carries {} between the buildings its run touches.", c_what[medium]);
+        out_(m_cableThroughput[medium], c_what[medium], " per link");
+        line("Paint it: hold and drag. Crossings place themselves.");
+        break;
+    }
+    case EStructureType::CrossingPower:
+    case EStructureType::CrossingPipe:
+    case EStructureType::CrossingConveyor:
+    {
+        static constexpr const char* c_what[3] = { "energy", "fuel", "minerals" };
+        desc = oc::format("Bridges {} over a line of another medium.", c_what[crossingMediumOf(type)]);
+        line("Placed automatically by a paint stroke.");
+        break;
+    }
+    default:
+        break;
+    }
+    // Assembled last: the sentence, then the COST right under it (an input like any other), then
+    // the flows.
+    oc::string out = oc::move(desc);
+    if (const float cost = mineralCost(type); cost > 0.0f && isPlaceableType(type))
+    {
+        if (!out.empty())
+            out += '\n';
+        out += oc::format("- {:g} minerals to build", cost);
+    }
+    if (!flows.empty())
+    {
+        if (!out.empty())
+            out += '\n';
+        out += flows;
+    }
+    return out;
+}
+
 glm::vec3 StructureSystem::structureLabelAnchor(int index) const
 {
     return m_frame[index].entity->pos
