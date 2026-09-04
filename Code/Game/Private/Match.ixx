@@ -179,7 +179,10 @@ private:
     // Health bars + selected info over structures/units: a JOB (submitWorldLabels at the end of the
     // game tick, joined by main before the widget pass is queued — see the definition).
     void buildWorldLabels();
-    void submitWorldLabels();
+    void submitWorldLabels(float deltaSec);
+    float m_labelsDelta = 0.0f; // the frame delta the job ages the warning timers by
+    // The problem badge over an own-team structure (nullptr = fine) — see the definition.
+    const char* structureWarning(int index, glm::vec3& color) const;
     Camera m_labelsCamera;
     Rect m_labelsViewport;
     bool m_labelsCameraValid = false;

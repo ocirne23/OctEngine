@@ -22,3 +22,4 @@ Prefab gameBase
 		Centered true
 	Component GameStructure
 		MeleeRadius 3
+		AlwaysShowResources true

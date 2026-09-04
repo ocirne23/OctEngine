@@ -984,6 +984,7 @@ void GameStructureComponent::spawn(Entity& entity, const SpawnInfo& info, const 
     health = healthMax = info.healthMax;
     invulnerable = info.invulnerable ? 1 : 0;
     alwaysDisplayHealth = info.alwaysDisplayHealth ? 1 : 0;
+    alwaysShowResources = info.alwaysShowResources ? 1 : 0;
     meleeRadius = info.meleeRadius;
     if (isAuthority()) // clients never damage-sim, so they never spend a query slot
         query = Globals::forceSystem.createQuery(base.pos);
@@ -1163,9 +1164,11 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
     else if (machineKind == EMachineKind::Turret && !blueprint)
     {
         entity.setProfiled();
-        turret.fireTimer = glm::max(0.0f, turret.fireTimer - deltaSec);
-        // No target = no cooldown reset: it fires the moment one appears.
-        if (turret.fireTimer <= 0.0f && store[0] >= params.turretShotEnergy)
+        // THE ENERGY STORE IS THE RELOAD BAR (the barracks rule): the game stamps capacity = one
+        // shot's energy and caps the turret's cable intake to shotEnergy / fireInterval, so a fed
+        // turret fires at exactly the authored cadence and a starved one simply fires slower —
+        // no timer. A full store with no target holds its charge and fires the moment one appears.
+        if (store[0] >= capacity[0] - 0.01f)
         {
             const glm::vec3 pos = entity.pos;
             thread_local oc::vector<uint64> nearby;
@@ -1188,8 +1191,7 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
             }
             if (target)
             {
-                store[0] -= params.turretShotEnergy;
-                turret.fireTimer = params.turretFireInterval;
+                store[0] = glm::max(store[0] - capacity[0], 0.0f); // the bar restarts
                 // HITSCAN lightning: the damage lands right here (damage() is atomic — the melee
                 // sweep uses the same call from workers); only the BEAM visual is queued.
                 if (GameUnitComponent* victim = getComponent<GameUnitComponent>(target))
@@ -1428,6 +1430,7 @@ void writeGameStructureSpawnInfo(const GameStructureComponent::SpawnInfo& info, 
     if (info.invulnerable != d.invulnerable) out.set("Invulnerable", info.invulnerable);
     if (info.meleeRadius != d.meleeRadius)   out.set("MeleeRadius", info.meleeRadius);
     if (info.alwaysDisplayHealth != d.alwaysDisplayHealth) out.set("AlwaysDisplayHealth", info.alwaysDisplayHealth);
+    if (info.alwaysShowResources != d.alwaysShowResources) out.set("AlwaysShowResources", info.alwaysShowResources);
 }
 
 void writeGameProjectileSpawnInfo(const GameProjectileComponent::SpawnInfo& info, AssetNode& out)

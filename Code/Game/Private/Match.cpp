@@ -83,8 +83,8 @@ static constexpr EStructureType c_productionItems[] = {
     EStructureType::Fabricator,
     EStructureType::Constructor,
     EStructureType::Battery,
-    EStructureType::FuelTank,
     EStructureType::MineralSilo,
+    EStructureType::FuelTank,
     EStructureType::MedicStation,
 };
 // PHYSICAL cables: one segment type per medium, on the root page's A/S/D. Placement PAINTS
@@ -2081,7 +2081,7 @@ void GameMatch::update(float deltaSec)
         tickMedicHealing(deltaSec); // own player only on a client (units heal on the server)
         m_structures.tickMirror(deltaSec);
         submitNavFeed(deltaSec); // obstacles only: the local player's move-order goal field
-        submitWorldLabels();
+        submitWorldLabels(deltaSec);
         return;
     }
 
@@ -2202,7 +2202,7 @@ void GameMatch::update(float deltaSec)
             m_damageTimer = 0.1f;
         }
     }
-    submitWorldLabels(); // the tick's mutations are done: the labels job may read the structures now
+    submitWorldLabels(deltaSec); // the tick's mutations are done: the labels job may read the structures now
 }
 
 // The nav feed rides the post-update batch: everything it reads is stable once the entity pass is
@@ -3220,10 +3220,11 @@ void GameMatch::updateSelectionClick(const Camera& camera, bool confirmEdge, boo
 // entity pass runs alongside, and it changes field values, never the rosters or the structure
 // list — torn float reads are fine for a bar) and joined by main right before the widget pass is
 // queued (joinWorldLabels), which is what consumes the labels. GameHud's writes are mutexed.
-void GameMatch::submitWorldLabels()
+void GameMatch::submitWorldLabels(float deltaSec)
 {
     if (!m_labelsCameraValid)
         return; // headless / no windowed tick this frame
+    m_labelsDelta = deltaSec; // the warning timers age by this inside the job
     Globals::jobSystem.submit([this] { buildWorldLabels(); }, { "Game world labels", EProfileCategory::Game },
         EJobPriority::Normal, &m_labelsCounter);
 }
@@ -3231,6 +3232,73 @@ void GameMatch::submitWorldLabels()
 void GameMatch::joinWorldLabels()
 {
     Globals::jobSystem.wait(m_labelsCounter);
+}
+
+// The most pressing PROBLEM over an own-team structure, as a short badge (nullptr = nothing wrong).
+// These are the states the bars alone do not explain: a consumer with no power, an input that never
+// arrives, an output with nowhere to go, a full store, a capped barracks. Ordered by severity —
+// one badge per structure, the first hit wins. Blueprints are inert BY DESIGN and never warn.
+const char* GameMatch::structureWarning(int index, glm::vec3& color) const
+{
+    const EStructureType type = m_structures.structureType(index);
+    if (isCableOrCrossing(type) || m_structures.structureBlueprint(index)
+        || m_structures.structureTeam(index) != (uint8)m_team)
+        return nullptr;
+    const GameStructureComponent& s = *m_structures.structures()[index].state;
+    const auto linked = [&](uint8 medium) {
+        for (const GameStructureLink& l : s.links)
+            if (l.medium == medium)
+                return true;
+        return false; };
+    constexpr glm::vec3 c_red(1.0f, 0.35f, 0.3f), c_orange(1.0f, 0.62f, 0.25f), c_amber(1.0f, 0.85f, 0.35f);
+
+    // 1) A MEDIUM WITH NO CABLE OF ITS OWN. Whichever media a structure MOVES — one it eats, one it
+    //    makes, one it banks — a missing line of that medium is dead weight: the input can never
+    //    arrive, or the output has nowhere to go. Structural, so it does NOT gate on the current
+    //    stock: a cabled-but-starved or cabled-but-backed-up machine is not a badge (its bars say
+    //    that, and it resolves itself), while an uncabled one never resolves.
+    //    The BASE is exempt: it is the hub, self-generates, and starts every match bare.
+    const int node = m_structures.structureNodeIndex(index);
+    const bool fuelNode = node >= 0 && node < m_structures.nodeCount()
+        && m_structures.nodeType(node) == ENodeType::Fuel; // an extractor makes ONE of the two
+    // ENERGY: burnt by the emitters/machines/turrets, banked by batteries, made by gen + solar.
+    const bool energy = hasShieldEmitter(type) || isBarracksType(type)
+        || type == EStructureType::Extractor || type == EStructureType::Fabricator
+        || type == EStructureType::Constructor || type == EStructureType::MedicStation
+        || type == EStructureType::Turret || type == EStructureType::Generator
+        || type == EStructureType::Solar || type == EStructureType::Battery;
+    // FUEL: burnt by generators and fabricators, banked by tanks, made by a fuel-node extractor.
+    const bool fuel = type == EStructureType::Generator || type == EStructureType::Fabricator
+        || type == EStructureType::FuelTank || (type == EStructureType::Extractor && fuelNode);
+    // MINERALS: spent by constructors, banked by silos, made by fabricators + mineral extractors.
+    const bool minerals = type == EStructureType::Constructor || type == EStructureType::MineralSilo
+        || type == EStructureType::Fabricator || (type == EStructureType::Extractor && !fuelNode);
+    if (type != EStructureType::Base)
+    {
+        if (energy && !linked(0))
+        {
+            color = c_red;
+            return "No power cable";
+        }
+        if (fuel && !linked(1))
+        {
+            color = c_orange;
+            return "No pipeline";
+        }
+        if (minerals && !linked(2))
+        {
+            color = c_amber;
+            return "No conveyor";
+        }
+    }
+    // 2) POPULATION CAPPED: the build bar fills but the unit can never be born (build houses).
+    if (isBarracksType(type)
+        && s.barracks.population + (int)s.barracks.spawnPop > s.barracks.popCap)
+    {
+        color = c_amber;
+        return "Pop full";
+    }
+    return nullptr;
 }
 
 void GameMatch::buildWorldLabels()
@@ -3241,6 +3309,27 @@ void GameMatch::buildWorldLabels()
     labels.reserve(m_structures.structureCount());
     HudPopup popup; // the selected own barracks' unit-type picker (inactive = none)
     const Rect& viewport = m_labelsViewport;
+    // PROBLEM BADGES, on a per-structure JITTERED ~1 s timer: the check scans a structure's links,
+    // and every state it reports changes on the timescale of a player's actions, so re-running it
+    // per structure per frame is waste. The jitter is a STABLE per-id phase (a hash of the
+    // structure id), so a batch placed or loaded together spreads over the interval instead of
+    // re-checking in lockstep forever. The result rides the roster entry (Ref::warning).
+    {
+        constexpr float c_warningInterval = 1.0f;
+        for (int i = 0; i < m_structures.structureCount(); ++i)
+        {
+            float& timer = m_structures.structureWarningTimer(i);
+            timer -= m_labelsDelta;
+            if (timer > 0.0f)
+                continue;
+            const uint32 hash = m_structures.structureId(i) * 2654435761u;
+            const float phase = 0.75f + 0.5f * (float)(hash >> 8) / (float)(1u << 24); // 0.75 .. 1.25
+            timer = c_warningInterval * phase;
+            glm::vec3 color(1.0f);
+            const char* warning = structureWarning(i, color);
+            m_structures.setStructureWarning(i, warning, color);
+        }
+    }
     const int selected = m_selectedId != 0 ? m_structures.structureIndexById(m_selectedId) : -1;
     for (int i = 0; i < m_structures.structureCount(); ++i)
     {
@@ -3257,6 +3346,11 @@ void GameMatch::buildWorldLabels()
         if (!camera.worldToScreen(viewport, m_structures.structureLabelAnchor(i), label.screenPos))
             continue;
         label.title = c_structureShortNames[(int)type]; // the selected one overrides w/ full name
+        if (const char* warning = m_structures.structureWarning(i)) // the cached problem bubble
+        {
+            label.warning = warning;
+            label.warningColor = m_structures.structureWarningColor(i);
+        }
         const bool consumer = hasShieldEmitter(type) || type == EStructureType::Extractor
             || type == EStructureType::Fabricator || type == EStructureType::MedicStation;
         label.barValue = m_structures.structureHealth(i);
@@ -3281,7 +3375,13 @@ void GameMatch::buildWorldLabels()
         const bool fuelBar = type == EStructureType::Generator || type == EStructureType::FuelTank;
         const bool mineralBar = type == EStructureType::MineralSilo
             || (mineralCap > 0.0f && energyCap <= 0.0f);
-        if (m_structures.structureBlueprint(i))
+        // The STORE bars are opt-in when unselected: only the prefabs that author
+        // `AlwaysShowResources true` (storage, emitters, barracks — the stores a player watches at
+        // a glance) carry them around, everything else shows them while SELECTED. The health bar
+        // is unaffected: damage always shows one.
+        const bool showResources = i == selected
+            || m_structures.structures()[i].state->alwaysShowResources;
+        if (m_structures.structureBlueprint(i) || !showResources)
         {
         } // blueprint: no second bar — the (blue) health bar IS the build progress
         else if (fuelBar)
@@ -3300,8 +3400,10 @@ void GameMatch::buildWorldLabels()
         {
             label.bar2Value = m_structures.structureCharge(i);
             label.bar2Max = energyCap;
-            // A barracks' store IS its build bar (capacity = the unit's cost): green, not energy-yellow.
-            label.bar2Color = isBarracksType(type) ? glm::vec3(0.4f, 0.95f, 0.5f) : glm::vec3(1.0f, 0.9f, 0.3f);
+            // A barracks' store IS its build bar (capacity = the unit's cost) and a turret's IS its
+            // reload (capacity = one shot): green progress, not energy-yellow.
+            label.bar2Color = isBarracksType(type) || type == EStructureType::Turret
+                ? glm::vec3(0.4f, 0.95f, 0.5f) : glm::vec3(1.0f, 0.9f, 0.3f);
             if (mineralCap > 0.0f) // the Base: energy AND its spendable mineral bank
             {
                 label.bar3Value = m_structures.structureMinerals(i);

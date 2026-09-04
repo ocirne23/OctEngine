@@ -16,3 +16,4 @@ Prefab gameBarracks
 		HalfExtents 3 3 3
 	Component GameStructure
 		MeleeRadius 3
+		AlwaysShowResources true

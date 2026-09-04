@@ -22,3 +22,4 @@ Prefab gameEmitter
 		Direction 0 1 0
 	Component GameStructure
 		MeleeRadius 1
+		AlwaysShowResources true

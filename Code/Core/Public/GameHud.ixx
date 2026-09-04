@@ -57,6 +57,8 @@ export struct HudWorldLabel
 	float       bar3Value = 0.0f; // optional third bar (the Base: health + energy + minerals)
 	float       bar3Max = 0.0f;   // <= 0 = no third bar
 	glm::vec3   bar3Color = glm::vec3(1.0f);
+	oc::string warning;          // non-empty = a badge BUBBLE above the title (a problem to fix)
+	glm::vec3   warningColor = glm::vec3(1.0f, 0.5f, 0.25f);
 	bool        emphasized = false; // selected: drawn larger
 };
 

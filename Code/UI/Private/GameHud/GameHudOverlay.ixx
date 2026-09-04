@@ -116,11 +116,27 @@ public:
 			const float labelFont = fontSize * 0.78f * e;
 			const float titleFont = fontSize * 0.95f * e; // the type tag reads at a glance
 			float y = label.screenPos.y;
+			float top = y; // the stack grows UPWARD from here: title, then the warning bubble
 			if (!label.title.empty())
 			{
 				const ImVec2 ts = font->CalcTextSizeA(titleFont, noWrap, 0.0f, label.title.c_str());
 				text(ImVec2(label.screenPos.x - ts.x * 0.5f, y - ts.y - 2.0f * s), titleFont,
 					col(1.0f, 1.0f, 1.0f, 1.0f), label.title.c_str());
+				top -= ts.y + 2.0f * s;
+			}
+			// WARNING BUBBLE: a bordered box above everything else, in the problem's own colour.
+			if (!label.warning.empty())
+			{
+				const float padX = 5.0f * s * e;
+				const float padY = 2.0f * s * e;
+				const ImVec2 ws = font->CalcTextSizeA(labelFont, noWrap, 0.0f, label.warning.c_str());
+				const ImVec2 bMin(label.screenPos.x - ws.x * 0.5f - padX,
+					top - ws.y - padY * 2.0f - 3.0f * s);
+				const ImVec2 bMax(bMin.x + ws.x + padX * 2.0f, bMin.y + ws.y + padY * 2.0f);
+				dl->AddRectFilled(bMin, bMax, col(0.07f, 0.07f, 0.09f, 0.88f), 3.0f * s);
+				dl->AddRect(bMin, bMax, colV(label.warningColor, 0.95f), 3.0f * s, 0, 1.0f * s);
+				text(ImVec2(bMin.x + padX, bMin.y + padY), labelFont, colV(label.warningColor, 1.0f),
+					label.warning.c_str());
 			}
 			const auto miniBar = [&](float value, float maxValue, const glm::vec3& color)
 			{

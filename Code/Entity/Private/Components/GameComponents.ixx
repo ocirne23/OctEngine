@@ -375,6 +375,10 @@ export struct GameStructureComponent
         bool invulnerable = false; // the Base: skipped by every damage path
         float meleeRadius = 1.0f;  // footprint half — units gnaw against this ring, not the center
         bool alwaysDisplayHealth = false; // overhead health bar shows even at full health
+        bool alwaysShowResources = false; // overhead STORE bars (energy/fuel/minerals) show even
+                                          // unselected — the stores a player watches at a glance
+                                          // (storage, emitters, barracks); everything else shows
+                                          // them only while selected
     };
 
     uint32 structureId = 0;    // stable game-minted id (selection, mirror wire, save files)
@@ -388,6 +392,7 @@ export struct GameStructureComponent
     uint8 strainable : 1 = 0;     // game marks ACTIVE emitters; units deposit load on the nearest
     uint8 powered : 1 = 0;        // consumers: last production tick's draw was paid
     uint8 alwaysDisplayHealth : 1 = 0; // overhead health bar even at full (spawn-copied, main-read)
+    uint8 alwaysShowResources : 1 = 0; // overhead STORE bars even unselected (spawn-copied, main-read)
     float health = 100.0f, healthMax = 100.0f;
     float meleeRadius = 1.0f;
     float bubbleRadius = 0.0f; // ACTIVE emitters: the current visible bubble radius, stamped by
@@ -435,7 +440,7 @@ export struct GameStructureComponent
     };
     struct TurretData
     {
-        float fireTimer;
+        uint8 unused; // (the fire clock is the ENERGY store now — see the turret block in update)
     };
     // The union's ACTIVE variant, stamped by the game from the structure's type (None for plain
     // buildings). update() runs the matching machine logic: a BARRACKS counts its spawn clock

@@ -21,3 +21,4 @@ Prefab gameBastion
 		Centered true
 	Component GameStructure
 		MeleeRadius 2
+		AlwaysShowResources true

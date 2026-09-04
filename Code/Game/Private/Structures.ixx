@@ -137,6 +137,13 @@ public:
         // spawn; rebuildDerivedLinks enables the ones pointing at a connected neighbour. The owning
         // EntityPtr keeps the whole tree alive, so the raw pointers cannot dangle.
         Entity* arms[4] = {};
+        // PROBLEM BADGE (the world label's bubble): what GameMatch::structureWarning last found,
+        // re-checked on a jittered ~1 s timer instead of every frame — it scans the links, and the
+        // states it reports change on the timescale of a player's actions. Lives HERE, so it dies
+        // with its structure (no id-keyed map).
+        const char* warning = nullptr; // nullptr = nothing wrong
+        glm::vec3 warningColor{ 1.0f };
+        float warningTimer = 0.0f;     // seconds to the next check (0 = check on the next label build)
         // House: the barracks it feeds population to (0 = none in range), re-derived every
         // refresh() — nearest BUILT own-team barracks within "House link radius".
         uint32 linkedId = 0;
@@ -238,6 +245,16 @@ public:
         return isBarracksType(m_frame[index].type) ? m_frame[index].state->barracks.houses : 0;
     }
     uint32 structureLinkedId(int index) const { return m_frame[index].linkedId; } // House -> barracks
+    // The problem badge cached on the roster entry (see Ref::warning): GameMatch's world-labels
+    // job re-checks each structure on its own jittered timer and stamps the result here.
+    const char* structureWarning(int index) const { return m_frame[index].warning; }
+    const glm::vec3& structureWarningColor(int index) const { return m_frame[index].warningColor; }
+    float& structureWarningTimer(int index) { return m_frame[index].warningTimer; }
+    void setStructureWarning(int index, const char* text, const glm::vec3& color)
+    {
+        m_frame[index].warning = text;
+        m_frame[index].warningColor = color;
+    }
     int unitPopulation(int unitType) const
     {
         return m_unitPopulation[glm::clamp(unitType, 0, GameNumUnitTypes - 1)];

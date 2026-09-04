@@ -15,4 +15,5 @@ Prefab gameTurret
 		Shape Box
 		HalfExtents 2 2 2
 	Component GameStructure
+		AlwaysShowResources true
 		MeleeRadius 2

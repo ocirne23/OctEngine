@@ -614,7 +614,9 @@ every instance, **so replicated units need no type on the wire**), then `Team`, 
 > `GamePlayer::tickShieldAndHealth` — both land at the same height, so the owner's next claim
 > re-anchors instead of being rejected.
 
-**`Component GameStructure`** — Team / HealthMax / Invulnerable / MeleeRadius / AlwaysDisplayHealth.
+**`Component GameStructure`** — Team / HealthMax / Invulnerable / MeleeRadius / AlwaysDisplayHealth /
+**AlwaysShowResources** (its overhead STORE bars show even unselected — storage, emitters, barracks;
+everything else shows them only while selected. The health bar is separate: damage always shows one).
 
 **`Component GameProjectile`** — Team / UnitDamage / StructureDamage / Lifetime / EmitterDrain /
 EmitterDrainRadius / SplashRadius (**> 0 damages EVERY enemy unit and structure within that radius of

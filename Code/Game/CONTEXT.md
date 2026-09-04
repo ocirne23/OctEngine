@@ -699,10 +699,15 @@ when it is false — so the cancel chain keeps first claim.**
   > **A BUILT wall is fed to Nav as a BREACHABLE obstacle** at "Wall breach cost" — one 2 m cell costs
   > (1+cost)× the walking distance, so enemies route through a wall rather than take a longer detour,
   > walk into it and bite it down. **Blueprint walls and every other building stay impassable.**
-* **Turret** — HITSCAN lightning. The component picks the nearest enemy unit in "Turret range", pays
-  "Turret shot energy" from its internal store and lands "Turret damage" on the spot; **it never
-  misses.** The strike is a BUNDLE of jagged debug lines fading over "Turret beam lifetime" 0.5 s
-  (`NpcSystem::addBeam` / `drawBeams`), broadcast to clients as GLt.
+* **Turret** — HITSCAN lightning. The component picks the nearest enemy unit in "Turret range" and
+  lands "Turret damage" on the spot; **it never misses.** The strike is a BUNDLE of jagged debug
+  lines fading over "Turret beam lifetime" 0.5 s (`NpcSystem::addBeam` / `drawBeams`), broadcast to
+  clients as GLt.
+  > **THE ENERGY STORE IS THE RELOAD BAR** (the barracks rule, and there is NO fire timer any more):
+  > `stampTuning` sets its energy capacity to "Turret shot energy" and caps its power links to
+  > shotEnergy / "Turret fire interval" SHARED across them, so a fed turret fires at exactly the
+  > authored cadence, a starved one fires slower, and a full turret with no target holds its charge
+  > and fires the instant one appears. Its bar is progress-green and always shown.
 * **Barracks** — ONE type, 3×3, cable-fed. The old Brute/Runner/Spitter variants are RETIRED enum
   slots; `loadFrom` maps them to a Barracks with that unit type. See below.
 * **House** — 2×2, no grid role. Every built house links to the nearest built own-team barracks within
@@ -1022,6 +1027,40 @@ bar without regrowing the bubble.
   for ~2 frames.**
 * The player capsule (`player.pre`, also every client twin) authors `Global true` — always visited by the entity pass. It MUST be: the SIM LOD selects roots by their SPATIAL entry, which the pass refreshes from `entity.pos`, which the PhysicsComponent copies from the body — a body teleported far beyond the outer radius (the death respawn from the far map) left the entry at the death spot, so the capsule was never selected again and its entity/spatial state froze there while the body stood at the Base.
 * Death teleport-respawns per the teleport contract — onto a FREE CELL near the anchor: `GamePlayer::setRespawnResolver` (wired in `spawnWorld`) probes 1x1 cells in rings of 2 m out to 16 m via `cellsFree` (cables walk-through), so a building placed on the spawn spot never swallows the capsule; a fully built-over area falls back to the anchor.
+
+**Problem bubbles.** Every own-team BUILT structure's label can carry a `warning` badge — a bordered
+box above its title, in the problem's colour — from `structureWarning`, the most pressing state the
+bars do not explain. One badge, first hit wins:
+
+| Badge | When | Colour |
+|---|---|---|
+| **No power cable / No pipeline / No conveyor** | a medium the structure MOVES has no link of that medium — an input that can never arrive, an output nothing takes, or a store nothing reaches | red / orange / amber |
+| **Pop full** | a barracks whose next unit would exceed its population cap (build houses) | amber |
+
+The media a structure moves: **energy** for everything that burns, banks or makes it (emitters,
+barracks, extractor, fabricator, constructor, medic, turret, generator, solar, battery), **fuel** for
+generators, fabricators, tanks and a FUEL-node extractor, **minerals** for constructors, silos,
+fabricators and a MINERAL-node extractor (`structureNodeIndex` + `nodeType` pick the extractor's
+side — its buffer capacities do not). **The Base is exempt**: it is the hub, self-generates, and
+starts every match bare.
+
+The check is STRUCTURAL — it does not gate on current stock. A cabled-but-starved or
+cabled-but-backed-up structure gets NO badge (its bars say that, the red unpowered ring in
+`drawDebug` marks it, and it resolves itself); an uncabled one never resolves.
+
+**Blueprints never warn** (inert by design), and other teams' structures never show theirs.
+
+**Checked on a per-structure JITTERED ~1 s timer**, not per frame: the check scans a structure's
+links and every state it reports moves on the timescale of a player's actions. The jitter is a
+STABLE per-id phase (a hash of the structure id, 0.75–1.25×), so a batch placed or loaded together
+spreads over the interval instead of re-checking in lockstep forever. The result rides the roster
+entry (`Ref::warning`), so it dies with its structure — no id-keyed map.
+
+**The STORE bars are opt-in.** A structure's energy/fuel/mineral bars show unselected only when its
+prefab authors **`AlwaysShowResources true`** — the Base, Battery, Fuel tank, Mineral silo, Emitter,
+Bastion, Lance, Barracks and Turret, the stores a player watches at a glance. Every other structure shows
+them while SELECTED. The HEALTH bar is separate and unchanged: damage (or blueprint progress, or
+selection, or `AlwaysDisplayHealth`) always draws one.
 
 **World labels** (`buildWorldLabels`: health/store bars over structures and units, the selected
 info block, the barracks popup) are a JOB: `updateWindowed` captures this frame's final camera +

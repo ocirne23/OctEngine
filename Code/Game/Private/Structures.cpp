@@ -253,6 +253,10 @@ void StructureSystem::stampTuning(const Ref& s)
         c.barracks.spawnCost = m_spawnEnergy[c.barracks.unitType];
         c.capacity[0] = glm::max(c.barracks.spawnCost, 1.0f);
     }
+    // A TURRET's energy capacity is ONE SHOT — the same rule, so its store reads as a RELOAD bar
+    // and a full one fires. Resolved here for the same reason: before the store clamp.
+    else if (s.type == EStructureType::Turret)
+        c.capacity[0] = glm::max(GameStructureComponent::params.turretShotEnergy, 0.01f);
     for (int m = 0; m < 3; ++m)
         c.store[m] = glm::min(c.store[m], c.capacity[m]);
     // Gravity bands per medium (see GameComponents.ixx): higher exports to lower at full
@@ -272,34 +276,50 @@ void StructureSystem::stampTuning(const Ref& s)
     c.band[2] = s.type == EStructureType::Extractor || s.type == EStructureType::Fabricator ? 3
               : s.type == EStructureType::Base ? 2
               : s.type == EStructureType::MineralSilo ? 1 : 0;
-    // Link throughputs follow the live tweaks (medium-indexed — tiers are gone). A BARRACKS' power
-    // links are capped to "Barracks energy intake/s" SHARED ACROSS ALL of them — each link gets
-    // intake / (its energy link count) — on BOTH endpoints' copies (whichever side owns the flow):
-    // that intake is what turns its energy store into a build bar (below). A per-LINK cap let a
-    // barracks on a run with N feeders (a clique attaches every pair) fill N times as fast.
-    const bool barracks = isBarracksType(s.type);
-    const auto intakePerLink = [&](const GameStructureComponent& b) {
+    // Link throughputs follow the live tweaks (medium-indexed — tiers are gone). A METERED machine
+    // — a BARRACKS or a TURRET — has its power links capped to its INTAKE, SHARED ACROSS ALL of
+    // them (each link gets intake / its energy link count), on BOTH endpoints' copies (whichever
+    // side owns the flow): that intake is what turns its energy store into a progress bar. A
+    // per-LINK cap let a machine on a run with N feeders (a clique attaches every pair) fill N
+    // times as fast.
+    // * Barracks: "Barracks energy intake/s" — build time = the unit's cost / intake.
+    // * Turret: DERIVED from the weapon's own tweaks, shot energy / "Turret fire interval", so the
+    //   authored cadence is enforced by the FILL instead of a timer (a starved grid fires slower).
+    const float turretIntake = GameStructureComponent::params.turretShotEnergy
+        / glm::max(GameStructureComponent::params.turretFireInterval, 1e-3f);
+    const float nearIntake = isBarracksType(s.type) ? m_barracksEnergyIntake
+        : s.type == EStructureType::Turret ? turretIntake : 0.0f;
+    const auto intakePerLink = [](const GameStructureComponent& m, float intake) {
         int energyLinks = 0;
-        for (const GameStructureLink& bl : b.links)
-            energyLinks += bl.medium == 0;
-        return m_barracksEnergyIntake / (float)glm::max(energyLinks, 1); };
+        for (const GameStructureLink& ml : m.links)
+            energyLinks += ml.medium == 0;
+        return intake / (float)glm::max(energyLinks, 1); };
     for (GameStructureLink& l : c.links)
     {
         l.throughput = m_cableThroughput[glm::min((int)l.medium, 2)];
         if (l.medium != 0)
             continue;
+        if (nearIntake > 0.0f)
+        {
+            l.throughput = glm::min(l.throughput, intakePerLink(c, nearIntake));
+            continue;
+        }
         const GameStructureComponent* far = getComponent<GameStructureComponent>(l.other.get());
-        if (barracks)
-            l.throughput = glm::min(l.throughput, intakePerLink(c));
-        else if (far && far->machineKind == GameStructureComponent::EMachineKind::Barracks)
-            l.throughput = glm::min(l.throughput, intakePerLink(*far));
+        if (!far)
+            continue;
+        const float farIntake =
+            far->machineKind == GameStructureComponent::EMachineKind::Barracks ? m_barracksEnergyIntake
+            : far->machineKind == GameStructureComponent::EMachineKind::Turret ? turretIntake : 0.0f;
+        if (farIntake > 0.0f)
+            l.throughput = glm::min(l.throughput, intakePerLink(*far, farIntake));
     }
     // The union's machine variant (barracks spawn / turret fire logic runs per-entity in the
     // component update; the selected unit type's prices + the population cap are stamped here so
     // the tweaks and the house links stay live). The barracks' energy CAPACITY is the selected
     // unit's cost: the store fills at the capped intake and reads as the BUILD BAR, full = spawn
-    // (build time = cost / intake). Switching the type re-clamps the store to the new cost.
-    if (barracks)
+    // (build time = cost / intake). Switching the type re-clamps the store to the new cost. A
+    // TURRET works the same way, its capacity being one shot (see the intake block above).
+    if (isBarracksType(s.type))
     {
         c.machineKind = GameStructureComponent::EMachineKind::Barracks;
         // (unitType/spawnCost/capacity[0] were resolved above, ahead of the store clamp)

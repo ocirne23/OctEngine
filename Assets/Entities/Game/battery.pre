@@ -16,3 +16,4 @@ Prefab gameBattery
 		HalfExtents 1 0.5 1
 	Component GameStructure
 		MeleeRadius 1
+		AlwaysShowResources true

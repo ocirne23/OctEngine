@@ -17,3 +17,4 @@ Prefab gameMineralStorage
 		HalfExtents 2 4 2
 	Component GameStructure
 		MeleeRadius 2
+		AlwaysShowResources true

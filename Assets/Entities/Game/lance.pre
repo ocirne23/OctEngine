@@ -26,3 +26,4 @@ Prefab lance
 		Centered false
 	Component GameStructure
 		MeleeRadius 1
+		AlwaysShowResources true

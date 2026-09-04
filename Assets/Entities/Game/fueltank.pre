@@ -16,3 +16,4 @@ Prefab gameFuelTank
 		HalfExtents 2 2 2
 	Component GameStructure
 		MeleeRadius 2
+		AlwaysShowResources true

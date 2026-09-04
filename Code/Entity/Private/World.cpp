@@ -1246,6 +1246,7 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         if (const AssetNode* n = structNode->find("Invulnerable")) info->invulnerable = n->asBool();
         if (const AssetNode* n = structNode->find("MeleeRadius"))  info->meleeRadius = n->asFloat(0, info->meleeRadius);
         if (const AssetNode* n = structNode->find("AlwaysDisplayHealth")) info->alwaysDisplayHealth = n->asBool();
+        if (const AssetNode* n = structNode->find("AlwaysShowResources")) info->alwaysShowResources = n->asBool();
         typeBits |= uint16(1 << EComponentID_GameStructure);
         tmpl.spawnInfos.emplace_back(oc::move(info));
     }
