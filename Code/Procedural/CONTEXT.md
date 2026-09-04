@@ -223,8 +223,10 @@ Baked around the camera and shipped to the GPU through `Renderer::setFogTerrainH
 Consumed by fog terrain-follow, ocean depth/level (GPU through `terrain_height.inc.glsl` plus the CPU
 copy), terrain colouring and the terrain sun march.
 
-It also bakes the splat textures, BC-compressed to `Assets/Local/TerrainTex` at startup; **the TERRAIN
-shader falls back to flat colours until that background bake finishes.**
+It also bakes the splat textures, BC-compressed to `Assets/Local/TerrainTex` — a background job
+kicked ONCE, at startup while the terrain is enabled or from `updateTerrainTextures` when it is
+enabled later (`kickTexBake`; a disabled terrain never reads the source image sets); **the TERRAIN
+shader falls back to flat colours until that bake finishes.**
 
 ---
 

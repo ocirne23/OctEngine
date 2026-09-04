@@ -20,6 +20,8 @@ apply_compile_settings(${PROJECT_NAME})
 
 # onnxruntime.dll imports DirectML.dll by name, so both must sit next to the exe: the AddDllDirectory
 # in FileSystem::initialize only covers LoadLibraryEx(LOAD_LIBRARY_SEARCH_USER_DIRS), not load-time imports.
+# The Aftermath DLL is OPTIONAL: RendererVK LoadLibrary()s it at init and runs without GPU crash dumps
+# when it is absent (see RendererVK:Aftermath). It is copied so the dev build keeps crash dumps.
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/Dependencies/Dll/GFSDK_Aftermath_Lib.x64.dll"

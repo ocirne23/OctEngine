@@ -3962,6 +3962,10 @@ void Renderer::initImgui(Window& window)
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.ConfigWindowsMoveFromTitleBarOnly = true;
+    // Layout persists in Assets/Local (the cwd is Assets/, see FileSystem::initialize), not next to
+    // the checked-in assets. ImGui fopen()s this path itself on its own save timer.
+    FileSystem::createDirectories("Local", /*allowMainThread*/ true);
+    io.IniFilename = "Local/imgui.ini";
 
     // Creates the SDL system cursors among other window-affine work: on the window thread.
     window.runOnWindowThread([&] { ImGui_ImplSDL3_InitForVulkan((SDL_Window*)window.getWindowHandle()); }, /*wait*/ true);

@@ -15,9 +15,8 @@ public:
     void registerTweaks()
     {
         // Camera feel is a PERSONAL preference: saved locally, never synced from the server.
-        const Tweak::ScopedFlags scoped(ETweakFlags::Saved);
         Tweak::floatVar("Game/Camera", "Pitch", &m_pitchDeg, 30.0f, 90.0f, 0.5f);
-        Tweak::floatVar("Game/Camera", "Distance", &m_distance, 4.0f, 80.0f, 0.5f);
+        Tweak::floatVar("Game/Camera", "Distance", &m_distance, 4.0f, 250.0f, 0.5f);
         Tweak::floatVar("Game/Camera", "Min distance", &m_minDistance, 2.0f, 40.0f, 0.5f);
         Tweak::floatVar("Game/Camera", "Max distance", &m_maxDistance, 10.0f, 250.0f, 0.5f);
         Tweak::floatVar("Game/Camera", "Zoom speed", &m_zoomSpeed, 0.5f, 10.0f, 0.1f);
@@ -65,7 +64,7 @@ private:
 
     float m_yawDeg = 0.0f;
     float m_pitchDeg = 75.0f;
-    float m_distance = 18.0f;
+    float m_distance = 100.0f;
     float m_minDistance = 6.0f;
     float m_maxDistance = 250.0f;
     float m_zoomSpeed = 2.0f;

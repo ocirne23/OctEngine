@@ -189,6 +189,8 @@ export namespace Procedural
 		// --- Terrain splat textures: source images baked to BC .dds (Assets/Local/TerrainTex) on a
 		// background thread at startup (skipped when the cache is fresh), then registered once ---
 		JobCounter        m_texBakeCounter;         // one Low job (internally a parallelFor over conversions)
+		bool              m_texBakeKicked = false;  // submitted once, and only while the terrain is enabled
+		void kickTexBake();
 		oc::atomic<bool> m_texBakeStop{ false };
 		oc::atomic<bool> m_texBakeDone{ false };
 		bool              m_texSetRegistered = false;

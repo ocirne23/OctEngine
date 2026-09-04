@@ -13,10 +13,3 @@ set_target_properties(${PROJECT_NAME} PROPERTIES LINK_FLAGS "/ignore:4099")
 target_link_libraries(${PROJECT_NAME} PRIVATE Core Entity Script File)
 
 apply_compile_settings(${PROJECT_NAME})
-
-# RendererVK links the Aftermath import lib (load-time DLL dependency), so the DLL must sit next to the exe --
-# same reason App copies it.
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-	COMMAND ${CMAKE_COMMAND} -E copy_if_different
-		"${CMAKE_SOURCE_DIR}/Dependencies/Dll/GFSDK_Aftermath_Lib.x64.dll"
-		"$<TARGET_FILE_DIR:${PROJECT_NAME}>")

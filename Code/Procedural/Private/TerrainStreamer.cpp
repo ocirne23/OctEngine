@@ -402,10 +402,19 @@ namespace Procedural
 		// bit-identical, so the same seed grows visibly different fine detail.
 		Tweak::boolean("Terrain/V3", "FP16 inference", &m_v3Fp16, dirty);
 
-		rebuildMaps();
+		rebuildMaps();  // (a no-op while disabled: no generator, no model load)
+		kickTexBake();  // (likewise gated: a disabled terrain reads no source images)
+	}
 
-		// Bake the biome splat textures to the DDS cache in the background (no-op when fresh); chunks
-		// render with the flat-color fallback until updateTerrainTextures registers the finished set.
+	// Bake the biome splat textures to the DDS cache in the background (no-op when fresh); chunks
+	// render with the flat-color fallback until updateTerrainTextures registers the finished set.
+	// ONLY while the terrain is enabled — a game whose terrain is off must not touch ~19 source
+	// image sets at startup — and once: enabling later kicks it from updateTerrainTextures.
+	void TerrainStreamer::kickTexBake()
+	{
+		if (!m_enabled || m_texBakeKicked)
+			return;
+		m_texBakeKicked = true;
 		Globals::jobSystem.submit([this]
 		{
 			bakeTerrainTexCache(m_texBakeStop);
@@ -444,6 +453,7 @@ namespace Procedural
 
 		if (!m_texSetRegistered)
 		{
+			kickTexBake(); // terrain enabled after startup: the bake starts here, once
 			if (!m_texBakeDone.load(oc::memory_order_acquire))
 				return; // still baking: chunks draw with the flat-color fallback
 			registerTerrainTextures(renderer);

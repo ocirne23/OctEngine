@@ -30,7 +30,6 @@ target_link_libraries(${PROJECT_NAME} PUBLIC Core Animation File Threading vulka
 	SPIRV-Tools$<$<CONFIG:Debug>:d>
 	SPIRV-Tools-opt$<$<CONFIG:Debug>:d>
 	openxr_loader$<$<CONFIG:Debug>:d>
-	GFSDK_Aftermath_Lib.x64
 	meshoptimizer$<$<CONFIG:Debug>:d>
 )
 

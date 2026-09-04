@@ -151,6 +151,9 @@ void ShaderDatabase::Initialize(bool applicationUsesStrippedShaders)
     m_shaderBinaries.clear();
     m_shaderBinariesWithDebugInfo.clear();
 
+    if (!Aftermath::loaded())
+        return;
+
     if (applicationUsesStrippedShaders)
     {
         assert(false);
@@ -182,6 +185,9 @@ bool ShaderDatabase::ReadFile(const char* filename, oc::vector<uint8_t>& data)
 
 void ShaderDatabase::AddShaderBinary(const char* shaderFilePath)
 {
+    if (!Aftermath::loaded())
+        return;
+
     // Read the shader binary code from the file
     oc::vector<uint8_t> data;
     if (!ReadFile(shaderFilePath, data))
@@ -192,7 +198,7 @@ void ShaderDatabase::AddShaderBinary(const char* shaderFilePath)
     // Create shader hash for the shader
     const GFSDK_Aftermath_SpirvCode shader{ data.data(), uint32_t(data.size()) };
     GFSDK_Aftermath_ShaderBinaryHash shaderHash;
-    AFTERMATH_CHECK_ERROR(GFSDK_Aftermath_GetShaderHashSpirv(
+    AFTERMATH_CHECK_ERROR(Aftermath::GetShaderHashSpirv(
         GFSDK_Aftermath_Version_API,
         &shader,
         &shaderHash));
@@ -204,6 +210,9 @@ void ShaderDatabase::AddShaderBinary(const char* shaderFilePath)
 
 void ShaderDatabase::AddShaderBinaryWithDebugInfo(const char* strippedShaderFilePath, const char* shaderFilePath)
 {
+    if (!Aftermath::loaded())
+        return;
+
     // Read the shader debug data from the file
     oc::vector<uint8_t> data;
     if (!ReadFile(shaderFilePath, data))
@@ -220,7 +229,7 @@ void ShaderDatabase::AddShaderBinaryWithDebugInfo(const char* strippedShaderFile
     GFSDK_Aftermath_ShaderDebugName debugName;
     const GFSDK_Aftermath_SpirvCode shader{ data.data(), uint32_t(data.size()) };
     const GFSDK_Aftermath_SpirvCode strippedShader{ strippedData.data(), uint32_t(strippedData.size()) };
-    AFTERMATH_CHECK_ERROR(GFSDK_Aftermath_GetShaderDebugNameSpirv(
+    AFTERMATH_CHECK_ERROR(Aftermath::GetShaderDebugNameSpirv(
         GFSDK_Aftermath_Version_API,
         &shader,
         &strippedShader,

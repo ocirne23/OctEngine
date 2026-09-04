@@ -158,13 +158,20 @@ GpuCrashTracker::~GpuCrashTracker()
     // If initialized, disable GPU crash dumps
     if (m_initialized)
     {
-        GFSDK_Aftermath_DisableGpuCrashDumps();
+        Aftermath::DisableGpuCrashDumps();
     }
 }
 
 // Initialize the GPU Crash Dump Tracker
 void GpuCrashTracker::Initialize(bool applicationUsesStrippedShaders)
 {
+    // No GFSDK_Aftermath_Lib.x64.dll next to the exe: run without GPU crash dumps.
+    if (!Aftermath::load())
+    {
+        printf("Aftermath: GFSDK_Aftermath_Lib.x64.dll not found, GPU crash dumps disabled\n");
+        return;
+    }
+
     // Initialize the shader database with the application's shader configuration
     m_shaderDatabase.Initialize(applicationUsesStrippedShaders);
 
@@ -177,7 +184,7 @@ void GpuCrashTracker::Initialize(bool applicationUsesStrippedShaders)
     // in memory. If the flag is set, ShaderDebugInfoCallback will be called only
     // in the event of a crash, right before GpuCrashDumpCallback. If the flag is not set,
     // ShaderDebugInfoCallback will be called for every shader that is compiled.
-    AFTERMATH_CHECK_ERROR(GFSDK_Aftermath_EnableGpuCrashDumps(
+    AFTERMATH_CHECK_ERROR(Aftermath::EnableGpuCrashDumps(
         GFSDK_Aftermath_Version_API,
         GFSDK_Aftermath_GpuCrashDumpWatchedApiFlags_Vulkan,
         GFSDK_Aftermath_GpuCrashDumpFeatureFlags_DeferDebugInfoCallbacks, // Let the Nsight Aftermath library cache shader debug information.
@@ -209,7 +216,7 @@ void GpuCrashTracker::OnShaderDebugInfo(const void* pShaderDebugInfo, const uint
 
     // Get shader debug information identifier
     GFSDK_Aftermath_ShaderDebugInfoIdentifier identifier = {};
-    AFTERMATH_CHECK_ERROR(GFSDK_Aftermath_GetShaderDebugInfoIdentifier(
+    AFTERMATH_CHECK_ERROR(Aftermath::GetShaderDebugInfoIdentifier(
         GFSDK_Aftermath_Version_API,
         pShaderDebugInfo,
         shaderDebugInfoSize,
@@ -264,7 +271,7 @@ void GpuCrashTracker::WriteGpuCrashDumpToFile(const void* pGpuCrashDump, const u
 {
     // Create a GPU crash dump decoder object for the GPU crash dump.
     GFSDK_Aftermath_GpuCrashDump_Decoder decoder = {};
-    AFTERMATH_CHECK_ERROR(GFSDK_Aftermath_GpuCrashDump_CreateDecoder(
+    AFTERMATH_CHECK_ERROR(Aftermath::GpuCrashDump_CreateDecoder(
         GFSDK_Aftermath_Version_API,
         pGpuCrashDump,
         gpuCrashDumpSize,
@@ -273,19 +280,19 @@ void GpuCrashTracker::WriteGpuCrashDumpToFile(const void* pGpuCrashDump, const u
     // Use the decoder object to read basic information, like application
     // name, PID, etc. from the GPU crash dump.
     GFSDK_Aftermath_GpuCrashDump_BaseInfo baseInfo = {};
-    AFTERMATH_CHECK_ERROR(GFSDK_Aftermath_GpuCrashDump_GetBaseInfo(decoder, &baseInfo));
+    AFTERMATH_CHECK_ERROR(Aftermath::GpuCrashDump_GetBaseInfo(decoder, &baseInfo));
 
     // Use the decoder object to query the application name that was set
     // in the GPU crash dump description.
     uint32_t applicationNameLength = 0;
-    AFTERMATH_CHECK_ERROR(GFSDK_Aftermath_GpuCrashDump_GetDescriptionSize(
+    AFTERMATH_CHECK_ERROR(Aftermath::GpuCrashDump_GetDescriptionSize(
         decoder,
         GFSDK_Aftermath_GpuCrashDumpDescriptionKey_ApplicationName,
         &applicationNameLength));
 
     oc::vector<char> applicationName(applicationNameLength, '\0');
 
-    AFTERMATH_CHECK_ERROR(GFSDK_Aftermath_GpuCrashDump_GetDescription(
+    AFTERMATH_CHECK_ERROR(Aftermath::GpuCrashDump_GetDescription(
         decoder,
         GFSDK_Aftermath_GpuCrashDumpDescriptionKey_ApplicationName,
         uint32_t(applicationName.size()),
@@ -314,7 +321,7 @@ void GpuCrashTracker::WriteGpuCrashDumpToFile(const void* pGpuCrashDump, const u
     // Decode the crash dump to a JSON string.
     // Step 1: Generate the JSON and get the size.
     uint32_t jsonSize = 0;
-    AFTERMATH_CHECK_ERROR(GFSDK_Aftermath_GpuCrashDump_GenerateJSON(
+    AFTERMATH_CHECK_ERROR(Aftermath::GpuCrashDump_GenerateJSON(
         decoder,
         GFSDK_Aftermath_GpuCrashDumpDecoderFlags_ALL_INFO,
         GFSDK_Aftermath_GpuCrashDumpFormatterFlags_NONE,
@@ -325,7 +332,7 @@ void GpuCrashTracker::WriteGpuCrashDumpToFile(const void* pGpuCrashDump, const u
         &jsonSize));
     // Step 2: Allocate a buffer and fetch the generated JSON.
     oc::vector<char> json(jsonSize);
-    AFTERMATH_CHECK_ERROR(GFSDK_Aftermath_GpuCrashDump_GetJSON(
+    AFTERMATH_CHECK_ERROR(Aftermath::GpuCrashDump_GetJSON(
         decoder,
         uint32_t(json.size()),
         json.data()));
@@ -337,7 +344,7 @@ void GpuCrashTracker::WriteGpuCrashDumpToFile(const void* pGpuCrashDump, const u
         oc::span<const uint8>((const uint8*)json.data(), json.size() - 1), /*allowMainThread*/ true);
 
     // Destroy the GPU crash dump decoder object.
-    AFTERMATH_CHECK_ERROR(GFSDK_Aftermath_GpuCrashDump_DestroyDecoder(decoder));
+    AFTERMATH_CHECK_ERROR(Aftermath::GpuCrashDump_DestroyDecoder(decoder));
 }
 
 // Helper for writing shader debug information to a file

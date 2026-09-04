@@ -284,7 +284,7 @@ libs in parentheses are PRIVATE: they never leak through a public interface.
    Particle       RendererVK, File
    Force          RendererVK, Threading   (the merge passes are parallelFors; neighbour search is a private candidate cell list, NOT the SpatialIndex)
    Procedural     RendererVK, File, Spatial, Physics             (+ onnxruntime, zstd)
-   RendererVK     Animation, File, Threading                     (+ vulkan, glslang, Aftermath)
+   RendererVK     Animation, File, Threading                     (+ vulkan, glslang; Aftermath DLL is LoadLibrary'd, optional)
    ------------------------------------------------------------------------------------------------
    Script         File          (ScriptHost compiles/loads .dsl from disk; disk access is File-only)
    Spatial        Threading
@@ -412,4 +412,5 @@ Checked-in inputs for repeatable runs:
 
 Generated output — **never hand-edit.** SPIR-V plus shader dumps, compiled script DLLs and PDBs
 (`Scripts/`), cooked scenes (`Cooked/*.vsc` plus `<stem>_tex/` converted `.dds`), `TerrainTex/`
-splats, the `Diffusion/<seed>/` tile cache, `tweaks.cfg`, `gamesave.txt` and `profile.txt`.
+splats, the `Diffusion/<seed>/` tile cache, `tweaks.cfg`, `imgui.ini` (the editor layout),
+`gamesave.txt` and `profile.txt`.

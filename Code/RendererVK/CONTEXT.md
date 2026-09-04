@@ -3,7 +3,11 @@
 > Library documentation for `Code/RendererVK`.
 > Read [`.claude/CLAUDE.md`](../../.claude/CLAUDE.md) first — rules, building, style, dependency direction.
 
-Modern Vulkan renderer. Links Animation, File and Threading (+ vulkan, glslang, Aftermath PRIVATE).
+Modern Vulkan renderer. Links Animation, File and Threading (+ vulkan, glslang PRIVATE). Nsight
+Aftermath is NOT linked: `Util/Aftermath.ixx` (`RendererVK:Aftermath`) `LoadLibrary`s
+`GFSDK_Aftermath_Lib.x64.dll` in `GpuCrashTracker::Initialize` and holds one function pointer per
+entry point. **The DLL is optional** — when it is absent, App.exe runs with no GPU crash dumps and
+the ShaderDatabase stays empty (`Aftermath::loaded()` gates every call).
 **Minimum spec RTX 2000.**
 
 * **Device Generated Commands for everything.**
@@ -341,7 +345,7 @@ the TLAS instance `sbtOffset` for hit-shader fetches, and materials stay per-ins
 |---|---|
 | `Objects/` | Thin Vulkan wrappers: Device, SwapChain, Buffer, ComputePipeline / GraphicsPipeline, AccelerationStructure, GBuffer, SceneColor, ShadowMap, GpuProfiler, BakedWorldMap, Texture, Shader, ... |
 | `Pipeline/` | One class per pass or feature: StaticMeshGraphics, GBuffer, GIProbe, RTAO, TAA, VolumetricFog, EyeAdaptation, Composite, Skinning, DebugLine, Particle, Decal, ForceField, OceanSimulation, LightGrid, IndirectCull, ShadowCull, ShadowMapGraphics. **Each registers its own tweaks.** |
-| `Data/` | MeshDataManager, TextureManager, TextureStreamer, MeshStreamer, StagingManager, ShaderDatabase, GpuCrashTracker (Aftermath). |
+| `Data/` | MeshDataManager, TextureManager, TextureStreamer, MeshStreamer, StagingManager, ShaderDatabase, GpuCrashTracker (Aftermath, runtime-loaded, optional). |
 | `Layout.ixx` | `RendererVKLayout` — every GPU struct and `MAX_*` cap. **Must stay in sync with `shared.inc.glsl` / `ubo.inc.glsl`.** |
 | `Settings.ixx` | The tweak-backed param structs the outside pushes in (`SkyParams`, `FogParams`, `OceanParams`, `ForceFieldParams`, LOD, RT, ...). **Deliberately does not import `:Layout`** — the one place both are visible static_asserts that `ForceFieldParams::teamColors` covers `MAX_FORCE_TEAMS`. |
 | `Renderer.ixx` / `.cpp` | Orchestrates everything; per-pass `record*()` methods. |
