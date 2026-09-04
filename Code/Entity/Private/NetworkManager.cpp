@@ -453,9 +453,11 @@ void NetworkManager::receive(double deltaSec)
                         // everything the client held through proximity transfer reverts to the server
                         // (its primaries are torn down by the app's onClientLeft right after)
                         const std::lock_guard<std::mutex> lock(m_entityMutex);
-                        for (const auto& [netId, replicated] : m_entities)
-                            if (replicated.comp->ownerClientId == clientId && replicated.comp->state->transferredOwnership)
-                                transferOwnership(netId, replicated.comp, 0);
+                        m_transferredScratch = m_transferredIds; // transferOwnership edits the list
+                        for (const uint32 netId : m_transferredScratch)
+                            if (const auto eit = m_entities.find(netId); eit != m_entities.end()
+                                && eit->second.comp->ownerClientId == clientId && eit->second.comp->state->transferredOwnership)
+                                transferOwnership(netId, eit->second.comp, 0);
                     }
                     if (m_onClientLeft)
                         m_onClientLeft(clientId); // main thread: teardown of per-player entities is safe here
@@ -794,6 +796,7 @@ void NetworkManager::setOwner(Entity& root, uint32 clientId)
             comp->ownerClientId = clientId;
             comp->state->server.lastAcceptedClaimSeq = 0; // next claim seeds the validation anchor
             comp->state->server.claimStreamSeq = 0;       // don't pass a previous owner's claims through
+            trackPrimary(comp->netId);                    // a transfer source from now on
         }
         if (SceneComponent* scene = getComponent<SceneComponent>(&entity))
             for (const EntityPtr& child : scene->children)
@@ -1203,6 +1206,13 @@ void NetworkManager::transferOwnership(uint32 netId, NetworkComponent* comp, uin
     comp->ownerClientId = newOwnerClientId;
     comp->state->transferredOwnership = newOwnerClientId != 0;
     comp->state->server.releaseTimer = 0.0f;
+    if (newOwnerClientId != 0)
+    {
+        if (oc::find(m_transferredIds.begin(), m_transferredIds.end(), netId) == m_transferredIds.end())
+            m_transferredIds.push_back(netId);
+    }
+    else
+        untrackId(m_transferredIds, netId);
     // the next claim re-seeds against the twin's live state; without the reset the new owner's low
     // sequence numbers would be dropped as duplicates of the previous owner's
     comp->state->server.lastClaimSeq = 0;
@@ -1234,26 +1244,55 @@ void NetworkManager::setServerPrimary(Entity& entity, bool primary)
         return; // single player / client: no session state to mark
     NetworkComponent* comp = getComponent<NetworkComponent>(&entity);
     if (comp && comp->netId != 0 && comp->state)
+    {
         comp->state->server.serverPrimary = primary;
+        if (primary)
+            trackPrimary(comp->netId);
+    }
+}
+
+void NetworkManager::trackPrimary(uint32 netId)
+{
+    if (netId != 0 && oc::find(m_primaryIds.begin(), m_primaryIds.end(), netId) == m_primaryIds.end())
+        m_primaryIds.push_back(netId);
+}
+
+void NetworkManager::untrackId(oc::vector<uint32>& list, uint32 netId)
+{
+    if (const auto it = oc::find(list.begin(), list.end(), netId); it != list.end())
+    {
+        *it = list.back();
+        list.pop_back();
+    }
 }
 
 void NetworkManager::updateOwnershipTransfers(double deltaSec)
 {
     if (!s_transferEnabled)
         return;
+    // No client = nothing to hand over or reclaim (a disconnect already returned its transferred
+    // objects).
+    if (m_host.getConnectedCount() == 0)
+        return;
+    // NO WALK OVER m_entities (every unit on a co-op map): the sources are the tracked primaries,
+    // the hand-over candidates come from a sphere query around each client primary, and the
+    // reclaim/release candidates are the tracked transferred objects. Cost ~ players + held objects.
     const std::lock_guard<std::mutex> lock(m_entityMutex);
 
     // transfer sources: every client's PRIMARY (non-transferred) owned dynamic bodies, plus the
     // SERVER's own primary under clientId 0 (it re-claims, never acquires for a client)
     m_transferSources.clear();
-    for (const auto& [netId, replicated] : m_entities)
+    for (const uint32 netId : m_primaryIds)
     {
-        const NetworkComponent* comp = replicated.comp;
+        const auto it = m_entities.find(netId);
+        if (it == m_entities.end())
+            continue;
+        const NetworkComponent* comp = it->second.comp;
         const bool clientPrimary = comp->ownerClientId != 0 && !comp->state->transferredOwnership;
         const bool serverPrimary = comp->ownerClientId == 0 && comp->state->server.serverPrimary;
         if (!clientPrimary && !serverPrimary)
             continue;
-        const PhysicsComponent* physics = getComponent<PhysicsComponent>(replicated.entity);
+        const PhysicsComponent* physics = getComponent<PhysicsComponent>(it->second.entity);
         if (physics && physics->bodyType == EPhysicsBodyType::Dynamic && physics->body.isValid())
             m_transferSources.emplace_back(comp->ownerClientId, physics->body.getPosition());
     }
@@ -1262,61 +1301,74 @@ void NetworkManager::updateOwnershipTransfers(double deltaSec)
 
     const float transferRadiusSq = s_transferRadius * s_transferRadius;
     const float releaseRadiusSq = s_releaseRadius * s_releaseRadius;
-    for (const auto& [netId, replicated] : m_entities)
-    {
-        NetworkComponent* comp = replicated.comp;
-        // contest-history aging (cheap, every networked entity — the slots are inline)
-        comp->state->server.contestAges[0] += float(deltaSec);
-        comp->state->server.contestAges[1] += float(deltaSec);
-        const PhysicsComponent* physics = getComponent<PhysicsComponent>(replicated.entity);
-        if (!physics || physics->bodyType != EPhysicsBodyType::Dynamic || !physics->body.isValid())
-            continue;
-        const glm::vec3 pos = physics->body.getPosition();
 
-        if (comp->ownerClientId == 0)
+    // HAND-OVER: server-owned, moving bodies around a CLIENT primary — its physics then drives the
+    // object, so pushing it feels local to that player. The SpatialIndex holds every non-global
+    // entity (bounds broadphase; the exact distance is re-tested), and send() runs after the
+    // frame's join, where read-only queries are legal.
+    for (const auto& [clientId, sourcePos] : m_transferSources)
+    {
+        if (clientId == 0)
+            continue;
+        m_transferQuery.clear();
+        Globals::spatialIndex.querySphere(glm::dvec3(sourcePos), s_transferRadius, SpatialLayer_Entity, m_transferQuery);
+        for (const uint64 user : m_transferQuery)
         {
+            Entity* entity = reinterpret_cast<Entity*>(user);
+            NetworkComponent* comp = getComponent<NetworkComponent>(entity);
+            if (!comp || comp->netId == 0 || !comp->state || comp->ownerClientId != 0)
+                continue; // not replicated, or already client-held
             if (comp->state->server.serverPrimary)
                 continue; // the server's own player is never handed to a client
             if (comp->state->server.contestedUntilTick > m_serverTick)
                 continue; // contested: stays server-owned until the window decays
+            const PhysicsComponent* physics = getComponent<PhysicsComponent>(entity);
+            if (!physics || physics->bodyType != EPhysicsBodyType::Dynamic || !physics->body.isValid())
+                continue;
             if (!physics->body.isAwake())
                 continue; // sleeping props stay server-owned (near-zero cost) — the contact steal
                           // takes over the instant a player actually hits one, grace covers the RTT
-            // server-owned AND moving: hand it to the first client whose primary body is close
-            // enough — its physics then drives the object, so pushing it feels local to that player
-            for (const auto& [clientId, sourcePos] : m_transferSources)
-                if (clientId != 0 && glm::dot(sourcePos - pos, sourcePos - pos) < transferRadiusSq)
-                {
-                    transferOwnership(netId, comp, clientId);
-                    break;
-                }
+            const glm::vec3 pos = physics->body.getPosition();
+            if (glm::dot(sourcePos - pos, sourcePos - pos) < transferRadiusSq)
+                transferOwnership(comp->netId, comp, clientId);
         }
-        else if (comp->state->transferredOwnership)
-        {
-            // The SERVER's primary RE-CLAIMS by proximity, exactly like a client acquires — the
-            // server player pushing a client-held object takes its simulation back. Only ever
-            // touches TRANSFERRED objects; a client's own primary is never in this branch.
-            bool reclaimed = false;
-            for (const auto& [clientId, sourcePos] : m_transferSources)
-                if (clientId == 0 && glm::dot(sourcePos - pos, sourcePos - pos) < transferRadiusSq)
-                {
-                    transferOwnership(netId, comp, 0);
-                    reclaimed = true;
-                    break;
-                }
-            if (reclaimed)
-                continue;
-            // release with hysteresis once away from the owner's primaries (an owner's own primary
-            // never releases — it is one of the sources, at distance zero from itself)
-            float nearestSq = FLT_MAX;
-            for (const auto& [clientId, sourcePos] : m_transferSources)
-                if (clientId == comp->ownerClientId)
-                    nearestSq = glm::min(nearestSq, glm::dot(sourcePos - pos, sourcePos - pos));
-            if (nearestSq < releaseRadiusSq)
-                comp->state->server.releaseTimer = 0.0f;
-            else if ((comp->state->server.releaseTimer += float(deltaSec)) > s_releaseDelaySec)
+    }
+
+    // TRANSFERRED objects: the SERVER's primary RE-CLAIMS by proximity, exactly like a client
+    // acquires — the server player pushing a client-held object takes its simulation back; else
+    // release with hysteresis once away from the owner's primaries (an owner's own primary never
+    // releases — it is never in this list).
+    m_transferredScratch = m_transferredIds; // transferOwnership edits the list
+    for (const uint32 netId : m_transferredScratch)
+    {
+        const auto it = m_entities.find(netId);
+        if (it == m_entities.end())
+            continue;
+        NetworkComponent* comp = it->second.comp;
+        if (!comp->state->transferredOwnership)
+            continue;
+        const PhysicsComponent* physics = getComponent<PhysicsComponent>(it->second.entity);
+        if (!physics || physics->bodyType != EPhysicsBodyType::Dynamic || !physics->body.isValid())
+            continue;
+        const glm::vec3 pos = physics->body.getPosition();
+        bool reclaimed = false;
+        for (const auto& [clientId, sourcePos] : m_transferSources)
+            if (clientId == 0 && glm::dot(sourcePos - pos, sourcePos - pos) < transferRadiusSq)
+            {
                 transferOwnership(netId, comp, 0);
-        }
+                reclaimed = true;
+                break;
+            }
+        if (reclaimed)
+            continue;
+        float nearestSq = FLT_MAX;
+        for (const auto& [clientId, sourcePos] : m_transferSources)
+            if (clientId == comp->ownerClientId)
+                nearestSq = glm::min(nearestSq, glm::dot(sourcePos - pos, sourcePos - pos));
+        if (nearestSq < releaseRadiusSq)
+            comp->state->server.releaseTimer = 0.0f;
+        else if ((comp->state->server.releaseTimer += float(deltaSec)) > s_releaseDelaySec)
+            transferOwnership(netId, comp, 0);
     }
 }
 
@@ -1340,25 +1392,26 @@ void NetworkManager::stealOwnershipOnContact(Entity& object, uint32 byClientId)
         const uint32 until = m_serverTick + ticksFromSec(s_arbitrateSec);
         comp->state->server.arbitratedUntilTick = until;
         const std::lock_guard<std::mutex> lock(m_entityMutex);
-        for (const auto& [netId, replicated] : m_entities) // the toucher's own primary arbitrates too
-            if (replicated.comp->ownerClientId == byClientId && !replicated.comp->state->transferredOwnership)
-                replicated.comp->state->server.arbitratedUntilTick = until;
+        for (const uint32 netId : m_primaryIds) // the toucher's own primary arbitrates too
+            if (const auto it = m_entities.find(netId); it != m_entities.end()
+                && it->second.comp->ownerClientId == byClientId && !it->second.comp->state->transferredOwnership)
+                it->second.comp->state->server.arbitratedUntilTick = until;
         return;
     }
 
-    // OBJECT: track the last two DISTINCT clients to touch it (ages ticked in updateOwnershipTransfers)
+    // OBJECT: track the last two DISTINCT clients to touch it, stamped with the net time
     if (comp->state->server.contestClients[0] != byClientId)
     {
         comp->state->server.contestClients[1] = comp->state->server.contestClients[0];
-        comp->state->server.contestAges[1] = comp->state->server.contestAges[0];
+        comp->state->server.contestTimes[1] = comp->state->server.contestTimes[0];
         comp->state->server.contestClients[0] = byClientId;
     }
-    comp->state->server.contestAges[0] = 0.0f;
+    comp->state->server.contestTimes[0] = m_netTime;
 
     // both slots fresh with distinct clients = CONTESTED: the server owns it while the contest lasts
     // (the last-collider ping-pong would re-seed the twin between two clients' versions every hit)
     if (comp->state->server.contestClients[1] != 0 && comp->state->server.contestClients[1] != comp->state->server.contestClients[0]
-        && comp->state->server.contestAges[1] < s_contestSec)
+        && m_netTime - comp->state->server.contestTimes[1] < double(s_contestSec))
     {
         comp->state->server.contestedUntilTick = m_serverTick + ticksFromSec(s_contestSec);
         if (comp->ownerClientId != 0)
@@ -2294,6 +2347,8 @@ void NetworkManager::unregisterEntity(uint32 netId, const NetworkComponent* comp
         if (it == m_entities.end() || it->second.comp != comp) // a replaced (stale) twin must not erase its successor
             return;
         m_entities.erase(it);
+        untrackId(m_primaryIds, netId);
+        untrackId(m_transferredIds, netId);
     }
     m_claimRings.erase(netId);    // owner-side redundancy ring, if this was a locally-owned entity
     m_remoteBuffers.erase(netId); // observer-side interpolation history (component dies with the entity, so no dangling reader)

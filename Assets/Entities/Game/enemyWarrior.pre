@@ -33,4 +33,4 @@ Prefab gameEnemyWarrior
 		MoveSpeed 4.0
 		AttackDps 8
 		PlayerDps 13
-		EmitterDrain 5
+		EmitterDrain 3

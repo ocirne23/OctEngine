@@ -32,5 +32,5 @@ Prefab gameEnemyGiant
 		AttackRange 2.2
 		AttackDps 28
 		PlayerDps 30
-		EmitterDrain 14
+		EmitterDrain 15
 		AlwaysDisplayHealth true

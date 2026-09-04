@@ -285,7 +285,7 @@ accounting.** The authority HUD shows "Next wave (s)".
 | Elite / Giant / Titan / Lobber / Spawner | 8 / 25 / 60 / 12 / 30 | **Enemy-only elite tier**, `enemyElite/Giant/Titan/Lobber.pre` + `enemySpawner.pre`. |
 
 * **The Lobber** is `Ranged` with `ShotKind 1` = the slow SPLASH shell `enemyLob.pre`
-  (`SplashRadius 5`); shot speed 14.
+  (`SplashRadius 3`, 12 unit / 18 structure damage); shot speed 14.
 * **The Spawner** is a tough ranged-stance hive: `ShotKind 2` makes each "shot" a LOOSE Swarm body
   born beside it toward its target every `FireInterval` while it holds at `StandoffRange`. **The
   births are loose units — no wave budget, no roster cap — so the hive itself is the thing to kill.**
@@ -479,40 +479,53 @@ A node produces NOTHING until an **extractor** is built on it — one per node; 
 nearest free node within "Extractor snap radius", validated again at place time — AND that extractor
 is fed energy.
 
-## Three flow networks, one band model
+## The cable transport (three media, one model)
 
-**Energy** (`tickPower`), **fuel** and **minerals** all use the same gravity-fed potential bands.
-Every structure holds LOCAL stores; each tick every derived link moves resource toward consumers,
-capped by the MEDIUM's throughput.
+**Energy, fuel and minerals move over the cables as WHOLE CELLS** (`Transport.cpp`). There are no
+links, bands or per-pair transfers any more: every built cable segment and conducting crossing is a
+NODE with an integer fill and an out-rate, and the flow is a local transport — a stencil over the
+node graph — so **a run's bottleneck is literally its slowest segment**, producers and consumers can
+sit anywhere along a line, loops and junctions need no routing, and the consumer nearest the
+producer is served first (what a conveyor does).
 
-| Network | Bands (high → low) | Throughput tweak |
-|---|---|---|
-| Energy | producers (generator, solar) always exporting → storage (battery AND **the Base** — it self-generates and banks 100; as a plain consumer it only ever equalized by fill fraction with what it fed, which stalled a barracks' build bar at the Base's fill percentage) BALANCING by fill fraction → consumers, outranking everything until FULL | "Cable throughput" 5/s |
-| Fuel | extractor tanks export → fuel tanks balance → generator/fabricator burners fill first | "Pipeline throughput" |
-| Minerals | extractor/fabricator outputs (3) → **the Base (2)** → silos (1) → constructors (0) | "Conveyor throughput" |
+| | |
+|---|---|
+| Node | a segment / crossing: `fill` cells (soft capacity "Cells per segment" 4), out-rate = the medium's "… throughput" (cells/s), `moved` gauge |
+| Junction | one per (BUILT building, medium): the building's port. Every segment touching the building is its neighbour, **so a line through an emitter carries through**; its out-rate scales with its degree so the cable stays the bottleneck |
+| Slot | the building's port on its junction: role by type — **producer** (generator, solar; extractor fuel/minerals; fabricator minerals) pushes whole cells OUT of its float store, **consumer** pulls into its headroom, **storage** (battery and Base; fuel tank; Base and silo for MINERALS) pushes while the CABLE next to its port — the mean fill of its junction's neighbours, never the junction itself, which its own push fills — is at/below "Storage pushes below" (0.25) and pulls while at/above "Storage pulls above" (0.75): the fill is the price signal. **The Base's shield is FREE** (no per-second draw, no pressure surcharge — only the enemy siege load drains it), so the Base is a pure storage building: it banks for the grid and self-generates a trickle |
+| Tick | fixed "Transport tick rate" 10 Hz, runs staggered over "Transport spread" 4 groups so a big base's work lands on several frames |
 
-> **The Base sits BETWEEN producers and silos on purpose**, so extractors still dump into it at full
-> rate while its own trickle PREFERS flowing out over banking, keeping only what receivers cannot
-> take. This replaced the old mineral-sink fiction.
+**Per tick, on main:** `kickTransport` — inject every due slot (a producer RESERVES its cells out of
+the store now; the unused part is refunded at the join; metered machines — barracks "energy
+intake", turret shot energy / fire interval — meter their demand with a carry), then ONE job.
+**The job** runs "Transport substeps" (4) × three owner-only passes: OFFER (a node serves its own
+slots' demand first, then FORWARDS everything it can into neighbours with free space that did not
+feed it last sub-step — the conveyor rule, `inMask`: never back where it came from, so a line runs
+full end to end with no fill gradient, a dead end fills up and stops, and equal neighbours never
+ping-pong — space-weighted with the integer remainder rotated, all inside its out-budget, which
+BANKS while idle, capped at two ticks, so a front crosses a segment per sub-step; then takes slot
+supply into its free space),
+APPLY (fill' = fill − out + the neighbours' out-slots aimed here), CLEAR. No atomics, no entity
+walk, scheduling-independent; a run over 1024 nodes fans its passes out, smaller runs stay inline.
+**At the join** (`joinTransport`, top of the next tick) the cells land in the stores and
+`flowUtil` = the served fraction of what each port asked.
 
-* **Cross-band links run at full throughput downhill**: consumers fill first, and the surplus banks.
-* **Same-band links move a DAMPED fraction** (`c_equalizeDamping` 0.25) of the exact equalizing
-  transfer. Each source sizes its share without seeing the others, **so undamped, N sources feeding
-  one receiver overshoot the balance point together and bounce back next tick** — wasted throughput
-  and a flow direction that keeps reversing. Damping stays stable up to 1/damping simultaneous
-  sources, **and removed the need for any direction hysteresis in the draw.**
+Consumers still drain their internal float battery every production tick; empty = unpowered. A
+full producer buffer still throttles production. Cells in the cables are real: a long run buffers
+`segments × 4`, and a cut line keeps what it held (fills survive rebuilds by structure id, save as
+`Fill`, and mirror to clients by id — `GCf`, rotating, 6 B a segment: the fill plus the ~2 s
+throughput average as a fraction of the rate, so clients draw the same bottleneck rings and label
+numbers).
 
-Energy propagates hop by hop, thin lines starve, and a full generator buffer throttles production
-(export-limited = no fuel burn). Consumers drain their internal battery; empty = unpowered.
-
-**Buffers:** emitter and extractor "Internal buffer" 10, generators 20, battery 200, **barracks =
+**Buffers:** extractor and other consumers "Internal buffer" 10; the shield emitters hold deeper
+stores — "Emitter buffer" 50, "Bastion buffer" 150, "Lance buffer" 100 (the emitter restart charge
+clamps to each) — generators 20, battery 200, **barracks =
 the selected unit's energy cost** (stamped per instance in `stampTuning`; `energyCapacityOf` returns
-a 1.0 placeholder just so power cables attach) — its store IS the BUILD BAR: its power links are
-capped to "Barracks energy intake/s" 2 **SHARED across all of them (each link gets intake / its
-energy link count)** on both endpoints' copies, so the store fills at the build rate however many
-feeders the run attaches, and a unit is born the moment it is full (build time = cost / intake —
-Grunt 2.5 s, Brute 10 s; no timer). A per-LINK cap used to let a barracks on a clique run of N
-feeders build N times as fast. A barracks needs a power cable and holds no minerals. Powered extractors and fabricators fill their OWN buffer and **stall when full**. Only
+a 1.0 placeholder just so power cables attach) — its store IS the BUILD BAR: its transport slot
+meters its demand to "Barracks energy intake/s" 2 whatever feeds its junction, so the store fills
+at the build rate and a unit is born the moment it is full (build time = cost / intake — Grunt
+2.5 s, Brute 10 s; no timer). A barracks needs a power cable and holds no minerals. Powered
+extractors and fabricators fill their OWN buffer and **stall when full**. Only
 what sits in Mineral silos and the Base is SPENDABLE (a per-team cache recomputed per tick; spending
 drains silos first, Base last).
 
@@ -533,27 +546,23 @@ the crossing never re-types on what touches it. **Each end accepts from THREE si
 the two laterals; only the middle is pass-through-only), and a run on one end plus a building
 holding the medium on the other also counts.
 
-### Links are DERIVED, never authored
+### The networks are DERIVED, never authored
 
-`StructureSystem::rebuildDerivedLinks` — dirty-gated, main thread, in `tickAuthority` after the
-request drain and in `tickMirror`. **CLIENTS derive locally from the mirrored segments.**
+`StructureSystem::rebuildNetworks` — dirty-gated, main thread, in `tickAuthority` after the
+request drain and in `tickMirror` (it joins the transport job first: the job indexes the graph).
+**CLIENTS derive the same graph locally from the mirrored segments** and receive only the fills.
 
 1. Union-find the **BUILT** segments over 4-neighbour equal-medium adjacency. **Blueprint segments
    break the path.** The under-cable participates through `CellEntry::underId`, which is also what
    keeps a crossing from unioning with the cable below it.
-2. Attach every adjacent building with capacity > 0 in the run's medium (blueprint buildings
-   pre-wire).
-3. **BRIDGE through built buildings** — a building conducts every medium it holds, so two same-medium
-   runs touching it merge into one. Blueprint buildings do not bridge, and **buildings NEVER connect
-   by direct adjacency: a link always needs cable between them.**
-4. Diff desired-vs-live: all attached pairs per run (a clique up to `c_runCliqueCap` **32 buildings =
-   496 links**). Past that, a **STAR from a ROLE-picked hub** — storage band 1 first (it relays both
-   directions, the old Connector's role), else a producer, lowest id as tie-break.
-   > **NEVER a plain consumer when better exists:** a band-0 hub cannot send energy UP to a battery,
-   > which starved batteries on big runs.
-5. Owner = the lower structureId, **so rebuilds never flip flow state.**
-
-A pair of buildings may still hold **ONE LINK PER MEDIUM**.
+2. Attach every adjacent building with capacity > 0 in the run's medium; a blueprint building only
+   gets `attachedMask` stamped (the "no cable" badge) — no node, no slot.
+3. **BRIDGE through built buildings** — a building conducts every medium it holds: its junction
+   node neighbours every segment touching it, so two same-medium runs touching it are one run and
+   a line through it carries through. **Buildings NEVER connect by direct adjacency: cells always
+   travel over cable.**
+4. Lay the nodes out run-contiguous (segments, crossings, junctions), the edges as CSR with reverse
+   indices, the slots per junction; stamp the rates from the tweaks; carry the old fills over by id.
 
 ### The cell hash
 
@@ -726,10 +735,12 @@ when it is false — so the cancel chain keeps first claim.**
   lines fading over "Turret beam lifetime" 0.5 s (`NpcSystem::addBeam` / `drawBeams`), broadcast to
   clients as GLt.
   > **THE ENERGY STORE IS THE RELOAD BAR** (the barracks rule, and there is NO fire timer any more):
-  > `stampTuning` sets its energy capacity to "Turret shot energy" and caps its power links to
-  > shotEnergy / "Turret fire interval" SHARED across them, so a fed turret fires at exactly the
-  > authored cadence, a starved one fires slower, and a full turret with no target holds its charge
-  > and fires the instant one appears. Its bar is progress-green and always shown.
+  > `stampTuning` sets its energy capacity to "Turret shot energy" (**2 — keep it a WHOLE number:
+  > the transport delivers whole cells and a consumer asks for `floor(capacity − store)`, so 1.5
+  > stalled one cell short**) and its transport slot meters its intake to shotEnergy / "Turret fire
+  > interval", so a fed turret fires at exactly the authored cadence, a starved one fires slower,
+  > and a full turret with no target holds its charge and fires the instant one appears. Its bar
+  > is progress-green and always shown.
 * **Barracks** — ONE type, 3×3, cable-fed. The old Brute/Runner/Spitter variants are RETIRED enum
   slots; `loadFrom` maps them to a Barracks with that unit type. See below.
 * **House** — 2×2, no grid role. Every built house links to the nearest built own-team barracks within
@@ -825,9 +836,12 @@ off placement), one per team.
 * A passive trickle of Minerals at "Base income mult" of an extractor.
 * MINERAL + ENERGY storage, **no fuel**: spawned full, self-generating solar-style; power cables
   attach.
-* **Its SHIELD runs on EMITTER RULES** — `hasShieldEmitter` includes Base in `tickPower`, `strainable`,
-  mirror and save: energy draw, pressure surcharge, unit siege drain, latching dark when starved, with
-  output and reach from the "Base shield" tweaks. `base.pre`'s authored Output no longer stands.
+* **Its SHIELD runs on EMITTER RULES, minus the bill** — `hasShieldEmitter` includes Base in
+  `tickPower`, `strainable`, mirror and save: unit siege drain, latching dark when starved, output and
+  reach from the "Base shield" tweaks — but **no per-second draw and no pressure surcharge** ("Base
+  energy/s" is unused): the Base is a STORAGE building on the energy grid (a transport storage
+  port, self-generating "Base energy gen/s"). Only enemies leaning on it drain it. `base.pre`'s
+  authored Output no longer stands.
 * DAMAGEABLE but **the death sweep never destroys it**: at 0 hp it stands dead until repaired.
   Constructors heal it at its `m_costs` entry — **never placed, so that entry only prices repairs**;
   `investMaterials` admits Base alongside placeables.
@@ -841,12 +855,20 @@ Every structure taps the pressure bake at its position (`sampleBakedField`, no G
 
 Emitters shrink out over "Emitter shrink time" when starved and **latch off until "Emitter restart
 charge"**, pay a pressure surcharge ("Emitter energy/s @ pressure 1") plus a per-unit siege drain
-(`addEmitterLoad`: a flat rate onto the NEAREST ACTIVE bubble; spitter shots deposit too).
+(`addEmitterLoad`: a flat rate onto the NEAREST strainable enemy emitter within "Game/Enemies/Emitter
+drain range" — 20 m, the Bastion's visible bubble radius at reach 45 / output 2.6, planar distance
+to the STRUCTURE, shield state irrelevant; spitter shots deposit too, within their own
+`EmitterDrainRadius`).
 
 **World labels:** a health bar over every damageable structure, plus a second bar for storage (energy
 yellow, fuel orange) and a third on the Base. **FULL health and shield bars stay hidden** — only
 damage, blueprint progress, selection, or a prefab's `AlwaysDisplayHealth true` shows one. Undamaged
-non-player units skip their label entirely; `player.pre` opts in so player tags persist.
+non-player units skip their label entirely; `player.pre` opts in so player tags persist. A SELECTED
+cable segment or crossing adds its transport readout — "Energy 3 / 4 cells, 8.0 / 10.0 per s" plus
+"Run 41 / 96 cells over 24 segments" (`StructureSystem::cableInfo`: the segment's fill, the cells
+leaving it as a ~2 s average against its out-rate — also its second bar, hued by medium — and its
+run's total; clients read both from the mirror). A segment at or above 90 % of its rate draws a
+pulsing RED ring: the bottleneck marker, and the only cable ring.
 
 ## Unit selection
 

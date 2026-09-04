@@ -30,5 +30,5 @@ Prefab gameEnemySpitter
 		MoveSpeed 3.6
 		AttackDps 0
 		PlayerDps 0
-		EmitterDrain 2.5
+		EmitterDrain 2
 		Ranged true

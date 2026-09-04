@@ -24,9 +24,9 @@ Prefab gameEnemyLob
 		AnalyticReadback true
 	Component Network
 	Component GameProjectile
-		UnitDamage 20
-		StructureDamage 30
+		UnitDamage 12
+		StructureDamage 18
 		Lifetime 7
 		EmitterDrain 20
 		EmitterDrainRadius 6
-		SplashRadius 5
+		SplashRadius 3

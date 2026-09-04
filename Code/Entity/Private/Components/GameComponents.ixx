@@ -33,8 +33,12 @@ export struct GameUnitParams
     float fieldPushStart = 0.7f;   // push ramp start as a fraction of iso: below it the field does
                                    // NOT shove, so units walk into the damage band instead of being
                                    // stopped out in the weak fringe before it (0 = push everywhere)
-    float emitterDrainMult = 0.1f; // global scale on the per-type emitterDrain a pressing unit
+    float emitterDrainMult = 0.25f; // global scale on the per-type emitterDrain a pressing unit
                                    // deposits on the nearest active enemy emitter (addLoad)
+    float strainRange = 20.0f;     // planar reach (m) of that siege drain, unit to the emitter
+                                   // structure: the Bastion's visible bubble radius ("Bastion
+                                   // reach" 45 / output 2.6 -> ~19.8 m), so a unit leaning on the
+                                   // largest bubble drains it; shield state does not matter
     float damageAbsorb = 2.0f;     // shield ENERGY per hp of direct damage absorbed BEFORE health
                                    // (the player's "Damage absorb" rule, applied in the owner tick)
     float damageRadius = 0.6f;     // equilibrium radius below this + pressure = exposure damage
@@ -180,7 +184,7 @@ export struct GameUnitComponent
         float attackRange = 1.5f;     // melee reach measured to the victim's meleeRadius ring
         float attackDps = 6.0f;       // structure health/s while in reach
         float playerDps = 10.0f;      // player health/s while in reach (game routes it to the owner)
-        float emitterDrain = 5.0f;    // energy/s this unit costs the nearest active enemy emitter
+        float emitterDrain = 1.0f;    // energy/s this unit costs the nearest active enemy emitter
         bool ranged = false;          // spitter stance: hold at standoffRange and queue FireRequests
         float standoffRange = 16.0f;
         float fireInterval = 3.0f;
@@ -197,7 +201,7 @@ export struct GameUnitComponent
     float shieldOutput = 0.8f;
     float moveSpeed = 4.0f, accel = 15.0f;
     float attackRange = 1.5f, attackDps = 6.0f, playerDps = 10.0f;
-    float emitterDrain = 5.0f;
+    float emitterDrain = 1.0f;
     bool ranged = false;
     float standoffRange = 16.0f, fireInterval = 3.0f;
     uint8 shotKind = 0;
@@ -325,42 +329,24 @@ export struct GameStructureParams
     // parameter here: it is cost / the cable intake the game caps its links to.
     float turretRange = 18.0f;
     float turretFireInterval = 1.2f;
-    float turretShotEnergy = 1.5f; // spent from the turret's own energy store per shot
+    float turretShotEnergy = 2.0f; // spent from the turret's own energy store per shot — a WHOLE
+                                   // number: the cable transport delivers whole cells into a
+                                   // store whose capacity is this, so 1.5 stalled one cell short
     float turretDamage = 25.0f;    // per hitscan lightning strike (never misses)
     float medicRange = 12.0f;      // a powered Medic station heals own-team units inside this
     float medicHealRate = 4.0f;    // health/s AND battery energy/s per body (stations stack)
 };
 
-// One end of a resource link (cable/pipe/conveyor). The SAME link exists mirrored on BOTH
-// endpoints' `links` vectors; exactly ONE side is the `owner`, and only the owner runs the flow
-// (and carries the authoritative lastFlow for the visuals). `other` is an owning EntityPtr — the
-// game UNLINKS a structure from all neighbors BEFORE destroying it, so a link never points at a
-// dead entity.
-export struct GameStructureLink
-{
-    EntityPtr other;
-    uint8 medium = 0;     // 0 energy, 1 fuel, 2 minerals — which store pair it equalizes
-    float throughput = 5.0f; // units/s cap
-    bool owner = false;
-    float lastFlow = 0.0f;   // signed, THIS side -> other (owner side only)
-    float flowAvg = 0.0f;    // EMA of lastFlow — gravity-fed transfers are bursty tick to tick
-                             // (a consumer drains its buffer, then takes a full packet), so the
-                             // VISUALS and gauges read this instead and stop strobing. Its SIGN
-                             // is the flow direction: same-band transfers are damped, so a link
-                             // no longer overshoots and reverses around its balance point.
-};
-
 // A building: team + health (health IS the construction progress while `blueprint`), a territory
 // bake tap that drains health inside enemy-owned field, the melee/emitter-load intake the units'
-// C++ pushes into, AND the resource node of the flow networks: three stores (energy/fuel/minerals)
-// with capacities and gravity-fed BANDS, plus the `links` vector distribution runs over. There is
-// NO global structure list anywhere — each structure moves resources across its OWN owned links in
-// update() (gravity-fed: producers band 2 always export, storage band 1 balances by fill fraction,
-// consumers band 0 outrank everything until FULL; cross-band = full throughput downhill, same-band
-// = exact equalizing transfer). Cross-entity store mutation is atomic (reserve-from-source /
-// clamped-add-to-dest / return-remainder), so concurrent owners on shared endpoints compose.
-// PRODUCTION (income, fuel burn, consumer drain, emitter ramps) stays in the game's
-// StructureSystem, iterating a per-frame spatial query — per-entity state, no roster.
+// C++ pushes into, AND the endpoint of the CABLE TRANSPORT: three FLOAT stores (energy/fuel/
+// minerals) with capacities. Resources move over the cable networks in WHOLE CELLS, owned and
+// ticked by the game's StructureSystem (its transport job: per-segment integer fills, a rate per
+// segment, producers push / consumers pull / storage by fill hysteresis). The component never
+// moves anything itself: the game reserves cells out of / adds cells into these stores at its
+// tick boundary, main-thread, and `flowUtil` is the gauge the game stamps from the served
+// fraction. PRODUCTION (income, fuel burn, consumer drain, emitter ramps) also stays in the game's
+// StructureSystem — per-entity state, no roster here.
 export struct GameStructureComponent
 {
     static constexpr EComponentID getId() { return EComponentID_GameStructure; }
@@ -400,14 +386,13 @@ export struct GameStructureComponent
                                // like flowUtil). SHIELD-LESS units (no ForceComponent — the swarm
                                // types) take field exposure damage inside it: without an emitter
                                // of their own, the GPU pressure/push readback path does not exist.
-    // ---- the flow-network node (game stamps capacity/band per tick so tweaks stay live) ----
+    // ---- the transport endpoint (game stamps capacity per tick so tweaks stay live) ----
     float store[3] = {};       // energy, fuel, minerals
     float capacity[3] = {};    // 0 = this structure does not carry the medium
-    int8 band[3] = { 0, 0, 0 };// gravity bands per medium: a HIGHER band exports to a lower one at
-                               // full throughput, equal bands balance by fill fraction. The game
-                               // assigns the values (producer > storage/relay > consumer).
-    oc::vector<GameStructureLink> links;
-    float flowUtil = 0.0f;     // EMA of the busiest touching link's utilization (gauges/mirror)
+    uint8 attachedMask = 0;    // bit m = a cable network of medium m touches this structure (the
+                               // game stamps it at every network rebuild; the "no cable" badge)
+    float flowUtil = 0.0f;     // EMA of the served fraction of this structure's transport demand /
+                               // supply (gauges/mirror) — the game stamps it per transport tick
     // BARRACKS spawn waypoints (orders tier — copied onto units at spawn), capped at
     // MaxRoutePoints. OUTSIDE the union on purpose: a union member with a non-trivial type would
     // force manual construct/destruct of the active variant, and the component carries no type
@@ -482,14 +467,6 @@ export struct GameStructureComponent
     void fieldDrain(float amount) { damage(amount); }
     void addLoad(float energyPerSec); // atomic unitLoad deposit (workers)
     bool alive() const { return health > 0.0f; }
-
-    // Link bookkeeping (MAIN THREAD — the game's placement/demolish seam). A pair may hold UP TO
-    // ONE LINK PER MEDIUM (a power cable AND a fuel pipe between the same two structures is fine);
-    // link() replaces the pair's existing link of the SAME medium (retype in place).
-    GameStructureLink* findLink(const Entity* otherEntity, int medium = -1); // -1 = any medium
-    void unlinkAll(Entity& self);                           // removes the mirror entries too
-    static void link(Entity& a, Entity& b, uint8 medium, float throughput); // a = the OWNER side
-    static void unlink(Entity& a, Entity& b, int medium = -1); // -1 = every link of the pair
 };
 
 export struct GameProjectileParams

@@ -10,12 +10,14 @@ import File;
 import Force;
 import RendererVK;
 import Spatial;
+import Threading;
 import :Structures;
 
-// See Structures.ixx: there is NO structure roster. Structures are entities; identity, stores and
-// LINKS live on their GameStructureComponent (flows run per-entity in the engine's pass). This
-// file is the seam: placement/requests (MP validation), production, sweeps, mirrors, save/load —
-// all iterating m_frame, a per-frame spatial-query view.
+// See Structures.ixx: structures are entities; identity and the float stores live on their
+// GameStructureComponent. Resources move between them over the CABLE TRANSPORT networks this
+// system owns (Transport.cpp: integer cells per segment, a fixed-rate job). This file is the
+// seam: placement/requests (MP validation), the network rebuild, production, sweeps, mirrors,
+// save/load — all over m_frame, the roster.
 
 static constexpr const char* structurePrefabs[] = {
     "Entities/Game/emitter.pre", "Entities/Game/generator.pre", "Entities/Game/transmitter.pre",
@@ -283,10 +285,22 @@ void StructureSystem::registerTweaks()
     Tweak::floatVar("Game/Economy", "Extractor energy/s", &m_extractorEnergyPerSec, 0.1f, 20.0f, 0.1f);
     Tweak::floatVar("Game/Economy", "Battery capacity", &m_batteryCapacity, 10.0f, 1000.0f, 5.0f);
     Tweak::floatVar("Game/Economy", "Internal buffer", &m_internalBuffer, 1.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Economy", "Emitter buffer", &m_emitterBuffer, 1.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Bastion buffer", &m_bastionBuffer, 1.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Game/Economy", "Lance buffer", &m_lanceBuffer, 1.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Generator buffer", &m_generatorBuffer, 1.0f, 200.0f, 0.5f);
     Tweak::floatVar("Game/Economy", "Cable throughput", &m_cableThroughput[0], 0.5f, 100.0f, 0.25f);
     Tweak::floatVar("Game/Economy", "Pipeline throughput", &m_cableThroughput[1], 0.5f, 100.0f, 0.25f);
     Tweak::floatVar("Game/Economy", "Conveyor throughput", &m_cableThroughput[2], 0.5f, 100.0f, 0.25f);
+    // The transport tick (rates/capacities re-stamp at the next network rebuild).
+    Tweak::floatVar("Game/Economy", "Transport tick rate (Hz)", &m_transportTickHz, 1.0f, 60.0f, 1.0f, [this] { m_linksDirty = true; });
+    Tweak::intVar("Game/Economy", "Transport substeps", &m_transportSubsteps, 1, 16, 1.0f, [this] { m_linksDirty = true; });
+    Tweak::intVar("Game/Economy", "Transport spread (groups)", &m_transportSpread, 1, 8, 1.0f, [this] { m_linksDirty = true; });
+    Tweak::intVar("Game/Economy", "Cells per segment", &m_cellsPerSegment, 1, 64, 1.0f);
+    Tweak::floatVar("Game/Economy", "Storage pushes below (fill)", &m_storageLowMark, 0.0f, 1.0f, 0.05f);
+    Tweak::floatVar("Game/Economy", "Storage pulls above (fill)", &m_storageHighMark, 0.0f, 1.0f, 0.05f);
+    Tweak::intVar("Game/Economy", "Transport nodes (stat)", &m_statTransportNodes, 0, 1000000);
+    Tweak::intVar("Game/Economy", "Transport ticks (stat)", &m_statTransportTicks, 0, 1000000000);
     Tweak::floatVar("Game/Economy", "Generator fuel tank", &m_generatorFuelTank, 5.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Economy", "Place range", &m_placeRange, 4.0f, 60.0f, 0.5f);
     Tweak::floatVar("Game/Structures", "Emitter output", &m_emitterOutput, 0.2f, 5.0f, 0.05f);
@@ -401,60 +415,9 @@ void StructureSystem::stampTuning(const Ref& s)
         c.capacity[0] = glm::max(GameStructureComponent::params.turretShotEnergy, 0.01f);
     for (int m = 0; m < 3; ++m)
         c.store[m] = glm::min(c.store[m], c.capacity[m]);
-    // Gravity bands per medium (see GameComponents.ixx): higher exports to lower at full
-    // throughput, equal bands balance by fill fraction. Producer 2 / storage-relay 1 / consumer 0,
-    // except MINERALS, where the Base sits on its own band 2 BETWEEN the producers (3) and the
-    // silos (1): extractors still dump into it at full rate, but its own trickle PREFERS flowing
-    // out (to silos and to whatever spends minerals) over sitting in the bank — it only keeps
-    // what its receivers cannot take. Cables hold NO stores (capacity 0 everywhere): they are
-    // never link endpoints — links derive between the BUILDINGS their runs touch.
-    // ENERGY: the Base sits in the STORAGE band with the batteries (it self-generates and banks
-    // 100) — as a plain consumer it only ever EQUALIZED with its consumers by fill fraction, so a
-    // barracks cabled to a 20 %-full Base filled to 20 % of its (tiny) build bar and stalled.
-    c.band[0] = s.type == EStructureType::Generator || s.type == EStructureType::Solar ? 2
-              : s.type == EStructureType::Battery || s.type == EStructureType::Base ? 1 : 0;
-    c.band[1] = s.type == EStructureType::Extractor ? 2
-              : s.type == EStructureType::FuelTank ? 1 : 0;
-    c.band[2] = s.type == EStructureType::Extractor || s.type == EStructureType::Fabricator ? 3
-              : s.type == EStructureType::Base ? 2
-              : s.type == EStructureType::MineralSilo ? 1 : 0;
-    // Link throughputs follow the live tweaks (medium-indexed — tiers are gone). A METERED machine
-    // — a BARRACKS or a TURRET — has its power links capped to its INTAKE, SHARED ACROSS ALL of
-    // them (each link gets intake / its energy link count), on BOTH endpoints' copies (whichever
-    // side owns the flow): that intake is what turns its energy store into a progress bar. A
-    // per-LINK cap let a machine on a run with N feeders (a clique attaches every pair) fill N
-    // times as fast.
-    // * Barracks: "Barracks energy intake/s" — build time = the unit's cost / intake.
-    // * Turret: DERIVED from the weapon's own tweaks, shot energy / "Turret fire interval", so the
-    //   authored cadence is enforced by the FILL instead of a timer (a starved grid fires slower).
-    const float turretIntake = GameStructureComponent::params.turretShotEnergy
-        / glm::max(GameStructureComponent::params.turretFireInterval, 1e-3f);
-    const float nearIntake = isBarracksType(s.type) ? m_barracksEnergyIntake
-        : s.type == EStructureType::Turret ? turretIntake : 0.0f;
-    const auto intakePerLink = [](const GameStructureComponent& m, float intake) {
-        int energyLinks = 0;
-        for (const GameStructureLink& ml : m.links)
-            energyLinks += ml.medium == 0;
-        return intake / (float)glm::max(energyLinks, 1); };
-    for (GameStructureLink& l : c.links)
-    {
-        l.throughput = m_cableThroughput[glm::min((int)l.medium, 2)];
-        if (l.medium != 0)
-            continue;
-        if (nearIntake > 0.0f)
-        {
-            l.throughput = glm::min(l.throughput, intakePerLink(c, nearIntake));
-            continue;
-        }
-        const GameStructureComponent* far = getComponent<GameStructureComponent>(l.other.get());
-        if (!far)
-            continue;
-        const float farIntake =
-            far->machineKind == GameStructureComponent::EMachineKind::Barracks ? m_barracksEnergyIntake
-            : far->machineKind == GameStructureComponent::EMachineKind::Turret ? turretIntake : 0.0f;
-        if (farIntake > 0.0f)
-            l.throughput = glm::min(l.throughput, intakePerLink(*far, farIntake));
-    }
+    // (Cables hold NO stores — capacity 0 everywhere: they are transport nodes, never endpoints.
+    // Roles — producer / consumer / storage per medium — and the METERED intakes of the barracks
+    // and turret are resolved by the transport's inject, see transportInject.)
     // The union's machine variant (barracks spawn / turret fire logic runs per-entity in the
     // component update; the selected unit type's prices + the population cap are stamped here so
     // the tweaks and the house links stay live). The barracks' energy CAPACITY is the selected
@@ -481,11 +444,9 @@ void StructureSystem::clear()
     oc::vector<Ref> roster = oc::move(m_frame);
     m_frame.clear();
     m_byId.clear();
+    joinTransport(); // the job holds component pointers: joined before any entity dies
     for (const Ref& s : roster)
-    {
-        s.state->unlinkAll(*s.entity);
         Globals::world.removeRootEntity(s.entity);
-    }
     for (Node& n : m_nodes)
         if (n.entity)
             Globals::world.removeRootEntity(n.entity.get());
@@ -494,7 +455,9 @@ void StructureSystem::clear()
     m_demolishRequests.clear();
     m_routeRequests.clear();
     m_cells.clear();
-    m_runs.clear();
+    joinTransport();
+    m_net = TransportNet{};
+    m_savedFills.clear();
     m_terrainBlocked.clear();
     m_linksDirty = true;
 }
@@ -762,8 +725,7 @@ void StructureSystem::removeStructureBookkeeping(size_t index)
     if (s.nodeIndex >= 0 && s.nodeIndex < (int)m_nodes.size())
         m_nodes[s.nodeIndex].extracted = false; // a removed extractor frees its node
     eraseCells(s); // promotes an under-cable back to primary occupant
-    m_linksDirty = true;
-    s.state->unlinkAll(*s.entity); // neighbors' link entries drop BEFORE the entity dies
+    m_linksDirty = true; // the transport graph rebuilds before its next tick (roster pointers)
     m_frame.erase(m_frame.begin() + index);
     m_byId.clear();
     for (int i = 0; i < (int)m_frame.size(); ++i)
@@ -964,12 +926,13 @@ int StructureSystem::bridgeableAt(const glm::vec3& p) const
     return index >= 0 && isBridgeable(index, cx, cz) ? index : -1;
 }
 
-void StructureSystem::rebuildDerivedLinks()
+void StructureSystem::rebuildNetworks()
 {
     if (!m_linksDirty)
         return;
     m_linksDirty = false;
-    ProfileScope scope("Structures link rebuild", EProfileCategory::Game);
+    joinTransport(); // the graph the job indexes is about to change
+    ProfileScope scope("Structures network rebuild", EProfileCategory::Game);
     const auto capacityIn = [&](EStructureType t, int medium) {
         return medium == 1 ? fuelCapacityOf(t) : medium == 2 ? mineralCapacityOf(t) : energyCapacityOf(t); };
     const auto cellOf = [](const glm::vec3& p) {
@@ -1154,102 +1117,198 @@ void StructureSystem::rebuildDerivedLinks()
             list.push_back(buildingIdx);
     }
 
-    // 4) The DESIRED link set: per run all attached pairs (the band model equalizes multi-way) up
-    //    to a clique cap; past it a STAR from a ROLE-PICKED hub — storage band first (a band-1 hub
-    //    relays both directions: producers pour in downhill, it balances with other storage and
-    //    exports to consumers — the old Connector's role), else a producer, NEVER a consumer when
-    //    a better role exists (a band-0 hub can never send energy UP to a battery, which starved
-    //    batteries on big runs), lowest id as the deterministic tie-break (bands come from
-    //    stampTuning — same types/ids on every instance, so clients derive the same star).
-    //    Key = (minId << 32 | maxId), value = medium mask.
-    constexpr size_t c_runCliqueCap = 32; // 32 buildings = 496 links; past that the star bounds it
-    oc::unordered_map<uint64, uint8> desired;
-    const auto pairKey = [](uint32 a, uint32 b) {
-        return (uint64)glm::min(a, b) << 32 | glm::max(a, b); };
-    for (auto& [root, buildings] : runBuildings)
-    {
-        if (buildings.size() < 2)
-            continue;
-        oc::sort(buildings.begin(), buildings.end(), [&](int a, int b) {
-            return m_frame[a].state->structureId < m_frame[b].state->structureId; });
-        const int m = (int)segs[root].medium;
-        const uint8 mediumBit = (uint8)(1u << m);
-        const size_t count = buildings.size();
-        if (count <= c_runCliqueCap)
-        {
-            for (size_t a = 0; a < count; ++a)
-                for (size_t b = a + 1; b < count; ++b)
-                    desired[pairKey(m_frame[buildings[a]].state->structureId,
-                        m_frame[buildings[b]].state->structureId)] |= mediumBit;
-        }
-        else
-        {
-            const auto hubScore = [&](size_t i) {
-                const int band = m_frame[buildings[i]].state->band[m];
-                return band == 1 ? 2 : band > 1 ? 1 : 0; }; // storage > producer > consumer
-            size_t hub = 0;
-            for (size_t i = 1; i < count; ++i)
-                if (hubScore(i) > hubScore(hub)) // ties keep the earlier = lower id
-                    hub = i;
-            for (size_t b = 0; b < count; ++b)
-                if (b != hub)
-                    desired[pairKey(m_frame[buildings[hub]].state->structureId,
-                        m_frame[buildings[b]].state->structureId)] |= mediumBit;
-        }
-    }
-
-    // 5) Diff against the live links: unlink stale, link missing (owner = the lower-id side, so a
-    //    rebuild never flips ownership and flowAvg survives on untouched links). The create loop
-    //    walks the desired map itself, so the topology above is spelled exactly once.
-    struct Stale { Entity* a; Entity* b; int medium; };
-    oc::vector<Stale> stale;
+    // 4) THE TRANSPORT GRAPH. Nodes, run-contiguous: every built segment, every conducting
+    //    crossing, and one JUNCTION per (built building, medium) that bridges — the building's
+    //    port. Edges: segment 4-adjacency, crossing <-> the run members at its ends, junction <->
+    //    every segment/crossing touching the building. Slots (the ports) hang on the junctions;
+    //    a BLUEPRINT building gets no node and no slot (it flows nothing) but is still stamped
+    //    `attachedMask` for the "no cable" badge. Old fills carry over by structure id.
+    for (const TransportNode& n : m_net.nodes)
+        if (!n.junction && n.fill != 0)
+            m_savedFills[n.structureId] = n.fill;
+    m_net.nodes.clear();
+    m_net.adj.clear();
+    m_net.slots.clear();
+    m_net.runs.clear();
+    m_net.nodeById.clear();
+    m_net.dueRuns.clear();
     for (const Ref& s : m_frame)
-        for (const GameStructureLink& l : s.state->links)
-        {
-            if (!l.owner || !l.other)
-                continue;
-            const GameStructureComponent* far = getComponent<GameStructureComponent>(l.other.get());
-            const auto it = far ? desired.find(pairKey(s.state->structureId, far->structureId))
-                                : desired.end();
-            if (it == desired.end() || (it->second & (1u << l.medium)) == 0)
-                stale.push_back({ s.entity, l.other.get(), (int)l.medium });
-        }
-    for (const Stale& st : stale)
-        GameStructureComponent::unlink(*st.a, *st.b, st.medium);
-    for (const auto& [key, mask] : desired)
-    {
-        const int a = structureIndexById((uint32)(key >> 32)); // the LOWER id = the owner side
-        const int b = structureIndexById((uint32)key);
-        if (a < 0 || b < 0)
-            continue;
-        for (int m = 0; m < 3; ++m)
-            if ((mask & (1u << m)) && !m_frame[a].state->findLink(m_frame[b].entity, m))
-                GameStructureComponent::link(*m_frame[a].entity, *m_frame[b].entity, (uint8)m,
-                    m_cableThroughput[m]);
-    }
+        s.state->attachedMask = 0;
+    for (const auto& [segSlot, buildingIdx] : attachPairs)
+        m_frame[buildingIdx].state->attachedMask |= uint8(1u << segs[segSlot].medium);
 
-    // 6) The run table (draw) + arm visuals.
-    m_runs.clear();
-    oc::unordered_map<int, int> runIndex; // union root -> m_runs index
+    // Node ids per union root, in a stable order: segments, crossings, then junctions. A junction
+    // exists per (building, medium) root; `junctionOf` finds it for the edge pass.
+    oc::unordered_map<int, uint32> runOfRoot;        // union root -> run index
+    oc::vector<int> rootOfSeg(segs.size());
+    for (int i = 0; i < (int)segs.size(); ++i)
+        rootOfSeg[i] = find(i);
+    oc::vector<oc::vector<int>> runSegs;             // per run: seg slots
+    oc::vector<oc::vector<int>> runCross;            // per run: crossing slots
+    oc::vector<oc::vector<int>> runJunctions;        // per run: building frame indices (built)
     for (int i = 0; i < (int)segs.size(); ++i)
     {
-        const int root = find(i);
-        auto [it, inserted] = runIndex.insert({ root, (int)m_runs.size() });
+        auto [it, inserted] = runOfRoot.insert({ rootOfSeg[i], (uint32)m_net.runs.size() });
         if (inserted)
         {
-            CableRun run;
-            run.medium = segs[root].medium;
-            if (const auto rb = runBuildings.find(root); rb != runBuildings.end())
-                for (const int building : rb->second)
-                    run.buildingIds.push_back(m_frame[building].state->structureId);
-            m_runs.push_back(oc::move(run));
+            TransportRun run;
+            run.medium = segs[i].medium;
+            run.group = (uint8)(m_net.runs.size() % (size_t)glm::clamp(m_transportSpread, 1, 8));
+            m_net.runs.push_back(run);
+            runSegs.emplace_back();
+            runCross.emplace_back();
+            runJunctions.emplace_back();
         }
-        m_runs[it->second].segmentIds.push_back(m_frame[segs[i].frameIdx].state->structureId);
+        runSegs[it->second].push_back(i);
     }
-    for (const Cross& c : crossings)
-        if (c.seg >= 0)
-            if (const auto it = runIndex.find(find(c.seg)); it != runIndex.end())
-                m_runs[it->second].segmentIds.push_back(m_frame[c.frameIdx].state->structureId);
+    for (int c = 0; c < (int)crossings.size(); ++c)
+        if (crossings[c].seg >= 0)
+            runCross[runOfRoot[rootOfSeg[crossings[c].seg]]].push_back(c);
+    for (const auto& [root, buildings] : runBuildings)
+        for (const int b : buildings)
+            if (!m_frame[b].state->blueprint)
+                runJunctions[runOfRoot[root]].push_back(b);
+
+    oc::vector<uint32> nodeOfSeg(segs.size(), UINT32_MAX);
+    oc::vector<uint32> nodeOfCross(crossings.size(), UINT32_MAX);
+    oc::unordered_map<uint64, uint32> junctionOf;    // (building << 2 | medium) -> node
+    const int cellsPerSeg = glm::max(m_cellsPerSegment, 1);
+    for (uint32 r = 0; r < (uint32)m_net.runs.size(); ++r)
+    {
+        TransportRun& run = m_net.runs[r];
+        run.firstNode = (uint32)m_net.nodes.size();
+        const auto pushNode = [&](uint32 structureId, bool junction) {
+            TransportNode n;
+            n.structureId = structureId;
+            n.run = (uint16)r;
+            n.medium = run.medium;
+            n.junction = junction ? 1 : 0;
+            if (!junction)
+                if (const auto sf = m_savedFills.find(structureId); sf != m_savedFills.end())
+                {
+                    n.fill = sf->second;
+                    m_savedFills.erase(sf);
+                }
+            m_net.nodes.push_back(n);
+            return (uint32)m_net.nodes.size() - 1; };
+        for (const int i : runSegs[r])
+            nodeOfSeg[i] = pushNode(m_frame[segs[i].frameIdx].state->structureId, false);
+        for (const int c : runCross[r])
+            nodeOfCross[c] = pushNode(m_frame[crossings[c].frameIdx].state->structureId, false);
+        for (const int b : runJunctions[r])
+            junctionOf[(uint64)b << 2 | run.medium] = pushNode(m_frame[b].state->structureId, true);
+        run.numNode = (uint32)m_net.nodes.size() - run.firstNode;
+    }
+    for (uint32 n = 0; n < (uint32)m_net.nodes.size(); ++n)
+        if (!m_net.nodes[n].junction)
+            m_net.nodeById[m_net.nodes[n].structureId] = n;
+
+    // Edges, collected per node then laid out CSR with reverse indices.
+    oc::vector<oc::vector<uint32>> edges(m_net.nodes.size());
+    const auto connect = [&](uint32 a, uint32 b) {
+        if (a == b || a == UINT32_MAX || b == UINT32_MAX)
+            return;
+        for (const uint32 e : edges[a])
+            if (e == b)
+                return;
+        edges[a].push_back(b);
+        edges[b].push_back(a); };
+    for (int i = 0; i < (int)segs.size(); ++i)
+        for (const glm::ivec2 d : { glm::ivec2(1, 0), glm::ivec2(0, 1) })
+            if (const int n = segAt(segs[i].cell.x + d.x, segs[i].cell.y + d.y);
+                n >= 0 && segs[n].medium == segs[i].medium)
+                connect(nodeOfSeg[i], nodeOfSeg[n]);
+    for (int c = 0; c < (int)crossings.size(); ++c)
+    {
+        const Cross& cr = crossings[c];
+        if (cr.seg < 0)
+            continue;
+        for (int e = 0; e < 2; ++e) // the same three cells per end the union step resolved
+        {
+            glm::ivec2 cand[3];
+            endCandidates(cr, e, cand);
+            for (const glm::ivec2& cell : cand)
+            {
+                if (const int seg = segAt(cell.x, cell.y); seg >= 0)
+                {
+                    if (segs[seg].medium == cr.medium)
+                        connect(nodeOfCross[c], nodeOfSeg[seg]);
+                }
+                else if (const int cc = crossAtOut(cell); cc >= 0 && crossings[cc].medium == cr.medium)
+                    connect(nodeOfCross[c], nodeOfCross[cc]);
+            }
+        }
+    }
+    // Junction edges: every attachment pair (segment/crossing end, building) of a BUILT building.
+    for (const auto& [segSlot, buildingIdx] : attachPairs)
+    {
+        if (m_frame[buildingIdx].state->blueprint)
+            continue;
+        const auto it = junctionOf.find((uint64)buildingIdx << 2 | segs[segSlot].medium);
+        if (it != junctionOf.end())
+            connect(it->second, nodeOfSeg[segSlot]);
+    }
+    for (const auto& [segSlot, buildingIdx] : crossAttach)
+    {
+        if (m_frame[buildingIdx].state->blueprint)
+            continue;
+        // The crossing that attached this building: the one whose union member is segSlot and
+        // whose end touches the building — scan is fine, crossings are few.
+        const auto it = junctionOf.find((uint64)buildingIdx << 2 | segs[segSlot].medium);
+        if (it == junctionOf.end())
+            continue;
+        for (int c = 0; c < (int)crossings.size(); ++c)
+            if (crossings[c].seg == segSlot)
+                connect(it->second, nodeOfCross[c]);
+    }
+    for (uint32 n = 0; n < (uint32)m_net.nodes.size(); ++n)
+    {
+        TransportNode& node = m_net.nodes[n];
+        node.adjFirst = (uint32)m_net.adj.size();
+        node.adjCount = (uint32)edges[n].size();
+        for (const uint32 e : edges[n])
+            m_net.adj.push_back({ e, UINT32_MAX });
+        // Out-rate per sub-step: the medium's cells/s over tick x substeps; a junction relays
+        // every direction, so it scales with its degree (the cable stays the bottleneck).
+        const float perSub = m_cableThroughput[glm::min((int)node.medium, 2)]
+            / (glm::max(m_transportTickHz, 1.0f) * (float)glm::max(m_transportSubsteps, 1));
+        node.rateFp = (uint32)glm::max(perSub * 1024.0f * (node.junction ? (float)glm::max(node.adjCount, 1u) : 1.0f), 1.0f);
+    }
+    for (uint32 n = 0; n < (uint32)m_net.nodes.size(); ++n)
+    {
+        const TransportNode& node = m_net.nodes[n];
+        for (uint32 a = 0; a < node.adjCount; ++a)
+        {
+            TransportAdj& adj = m_net.adj[node.adjFirst + a];
+            const TransportNode& other = m_net.nodes[adj.node];
+            for (uint32 b = 0; b < other.adjCount; ++b)
+                if (m_net.adj[other.adjFirst + b].node == n)
+                {
+                    adj.reverse = other.adjFirst + b;
+                    break;
+                }
+        }
+    }
+    // Slots: one per (built building, medium) junction, in node order so a node's slots are
+    // contiguous.
+    for (uint32 n = 0; n < (uint32)m_net.nodes.size(); ++n)
+    {
+        TransportNode& node = m_net.nodes[n];
+        if (!node.junction)
+            continue;
+        node.slotFirst = (uint32)m_net.slots.size();
+        const int idx = structureIndexById(node.structureId);
+        if (idx >= 0)
+            addTransportSlot(idx, node.medium, n);
+        node.slotCount = (uint32)m_net.slots.size() - node.slotFirst;
+    }
+    m_net.fillNext.assign(m_net.nodes.size(), 0);
+    m_net.outAdj.assign(m_net.adj.size(), 0);
+    m_net.outSlot.assign(m_net.slots.size(), 0);
+    m_net.inSlot.assign(m_net.slots.size(), 0);
+    m_statTransportNodes = (int)m_net.nodes.size();
+    (void)cellsPerSeg;
+
     for (const Ref& s : m_frame)
         updateArms(s);
 }
@@ -1549,12 +1608,16 @@ void StructureSystem::tickProduction(float deltaSec)
         {
             ForceComponent* fc = getComponent<ForceComponent>(ref.entity);
             const float pressure = fc ? fc->emitter.getPressure() : 0.0f;
-            const float draw = emitterDrawOf(ref.type)
-                + pressure * (1.0f + m_pressureDrawTension * pressure) * m_emitterPressureDraw
+            // THE BASE'S SHIELD IS FREE — no per-second draw, no pressure surcharge: the Base is a
+            // storage building (it banks energy for the grid and self-generates a trickle). Only
+            // the enemy siege load still drains it, so a pressed Base can still go dark.
+            const bool freeShield = ref.type == EStructureType::Base;
+            const float draw = (freeShield ? 0.0f : emitterDrawOf(ref.type)
+                    + pressure * (1.0f + m_pressureDrawTension * pressure) * m_emitterPressureDraw)
                 + s.emitter.unitLoad; // enemy units/shots leaning on the bubble
             s.emitter.unitLoad = 0.0f;
             totalDemand += draw;
-            if (s.emitter.down && s.store[0] >= glm::min(m_emitterRestartCharge, m_internalBuffer))
+            if (s.emitter.down && s.store[0] >= glm::min(m_emitterRestartCharge, energyCapacityOf(ref.type)))
                 s.emitter.down = false;
             bool paid = false;
             if (!s.emitter.down)
@@ -1629,8 +1692,10 @@ void StructureSystem::tickDamage(float)
     for (size_t i = 0; i < m_frame.size();)
     {
         const Ref& s = m_frame[i];
+        // ACTIVE = powered (paid its draw this tick — not latched down) with a bubble up: a dark
+        // emitter shrinking out is not a drain target, the next powered one is.
         s.state->strainable = hasShieldEmitter(s.type) && !s.state->blueprint
-            && s.state->emitter.outputFrac > 0.05f;
+            && s.state->powered && s.state->emitter.outputFrac > 0.05f;
         // The CPU bubble-radius stand-in shield-less units test against (see GameComponents.ixx):
         // the visible sphere radius is ~half the reach, scaled by the live output ramp.
         s.state->bubbleRadius = s.state->strainable
@@ -1708,10 +1773,12 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
     m_unitTypeRequests.clear();
     requestScope.stop();
 
-    // Same-tick links for fresh placements (each placeStructure above set the dirty flag); a death
-    // in tickDamage below re-dirties and rebuilds on the NEXT tick.
-    rebuildDerivedLinks();
-    tickProduction(deltaSec); // flows themselves run per-entity in the engine's pass
+    // Same-tick networks for fresh placements (each placeStructure above set the dirty flag); a
+    // death in tickDamage below re-dirties and rebuilds on the NEXT tick. The transport job from
+    // last frame joins first (inside the rebuild, or here) and hands its cells to the stores.
+    joinTransport();
+    rebuildNetworks();
+    tickProduction(deltaSec);
     // Death sweep BEFORE constructors: last frame's damage lands after this tick (contacts +
     // entity pass), so the sweep must judge it before a repair trickle can resurrect a 0-hp
     // structure — repairs-first made buildings unkillable inside any constructor's range (the
@@ -1719,14 +1786,18 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
     // EXACTLY 0 now dies; anything above 0 can still be out-healed legitimately.
     tickDamage(deltaSec);
     tickConstructors(deltaSec);
+    // The transport: inject the due runs' supply/demand and kick the job — it overlaps present
+    // and the next frame's front, joined at the top of the next tick.
+    m_transportTime += deltaSec;
+    kickTransport();
 }
 
 void StructureSystem::tickMirror(float deltaSec)
 {
     ProfileScope scope("Structures mirror", EProfileCategory::Game);
     refresh();
-    rebuildDerivedLinks(); // clients derive locally from the mirrored structures — same code,
-                           // same deterministic inputs, so both sides agree without a cable wire
+    rebuildNetworks(); // clients derive the graph locally from the mirrored structures — same
+                       // code, same inputs; the fills arrive by id (GCf), nothing is simulated
     // Ease each emitter's fraction toward the synced target at ramp-like speed, then drive the
     // LOCAL field from it — the bubble animates as smoothly as the server's own.
     for (const Ref& ref : m_frame)
@@ -1861,6 +1932,9 @@ void StructureSystem::saveTo(AssetNode& root) const
         n.set("Charge", s.state->store[0]);
         n.set("Fuel", s.state->store[1]);
         n.set("Minerals", s.state->store[2]);
+        if (isCableOrCrossing(s.type)) // the cells it holds (transport node fill)
+            if (const auto it = m_net.nodeById.find(s.state->structureId); it != m_net.nodeById.end())
+                n.set("Fill", oc::to_string((int)m_net.nodes[it->second].fill));
         if (hasShieldEmitter(s.type)) // union variants: only the active one is meaningful
             n.set("OutputFrac", s.state->emitter.outputFrac);
         if (isBarracksType(s.type))
@@ -1887,7 +1961,9 @@ void StructureSystem::clearAllStructures()
     m_demolishRequests.clear();
     m_routeRequests.clear();
     m_cells.clear();
-    m_runs.clear();
+    joinTransport();
+    m_net = TransportNet{};
+    m_savedFills.clear();
     m_linksDirty = true;
 }
 
@@ -1935,6 +2011,8 @@ void StructureSystem::loadFrom(const AssetNode& root)
         s.store[0] = glm::clamp(n->find("Charge") ? n->find("Charge")->asFloat() : 0.0f, 0.0f, s.capacity[0]);
         s.store[1] = glm::clamp(n->find("Fuel") ? n->find("Fuel")->asFloat() : 0.0f, 0.0f, s.capacity[1]);
         s.store[2] = glm::clamp(n->find("Minerals") ? n->find("Minerals")->asFloat() : 0.0f, 0.0f, s.capacity[2]);
+        if (const AssetNode* f = n->find("Fill"); f && isCableOrCrossing((EStructureType)typeInt))
+            m_savedFills[id] = (uint16)glm::clamp(f->asInt(), 0, 65535); // the rebuild below picks it up
         if (hasShieldEmitter((EStructureType)typeInt)) // union variants: write only the active one
             s.emitter.outputFrac = glm::clamp(n->find("OutputFrac") ? n->find("OutputFrac")->asFloat() : 0.0f,
                 0.0f, 1.0f);
@@ -1950,10 +2028,10 @@ void StructureSystem::loadFrom(const AssetNode& root)
                 if ((int)s.route.size() < MaxRouteWaypoints)
                     s.route.push_back(glm::vec3(p->asFloat(0), 0.0f, p->asFloat(1)));
     }
-    // (Old saves' Cable nodes are ignored: links derive from the cable segments' cell adjacency.)
-    rebuildDerivedLinks(); // every spawnStructure above set the dirty flag
+    // (Old saves' Cable nodes are ignored: the networks derive from the cable segments' cells.)
+    rebuildNetworks(); // every spawnStructure above set the dirty flag
     Log::info("Game state loaded: " + oc::to_string(m_frame.size()) + " structures, "
-        + oc::to_string(m_runs.size()) + " cable runs");
+        + oc::to_string(m_net.runs.size()) + " cable runs");
 }
 
 // ---------------------------------------------------------------- debug draw
@@ -1961,27 +2039,27 @@ void StructureSystem::loadFrom(const AssetNode& root)
 void StructureSystem::drawDebug() const
 {
     ProfileScope scope("Structures debug draw", EProfileCategory::Game);
-    // Cable RUNS: the segments themselves are real meshes now — this pass only adds the FLOW
-    // feedback: a pulsing ring over every segment of a working run, brightness/size by the run's
-    // utilization. Util = the busiest attached building's flowUtil gauge, which the server computes
-    // and clients receive through GSt — the same reading on every instance.
-    for (const CableRun& run : m_runs)
+    // SATURATED segments: a red pulsing ring over every segment whose ~2 s average throughput
+    // sits at or above 90 % of its out-rate — the bottlenecks, and nothing else (the segments
+    // themselves are real meshes; the selected-cable label carries the numbers). Clients read the
+    // mirrored average (GCf), so they see the same rings.
+    for (const TransportNode& node : m_net.nodes)
     {
-        float util = 0.0f;
-        for (const uint32 id : run.buildingIds)
-            if (const int index = structureIndexById(id); index >= 0)
-                util = glm::max(util, m_frame[index].state->flowUtil);
-        util = glm::clamp(util, 0.0f, 1.0f);
-        if (util <= 0.02f || run.buildingIds.size() < 2)
+        if (node.junction || node.movedAvg < 0.9f * m_cableThroughput[glm::min((int)node.medium, 2)])
             continue;
-        const glm::vec3 hue = run.medium == 1 ? glm::vec3(1.0f, 0.55f, 0.15f)
-            : run.medium == 2 ? glm::vec3(0.35f, 0.5f, 1.0f) : glm::vec3(0.9f, 0.9f, 0.3f);
-        const float pulse = 0.5f + 0.5f * std::sin(m_time * (2.0f + 6.0f * util));
-        const uint32 color = packColor(hue * (0.3f + 0.7f * util) * (0.5f + 0.5f * pulse));
-        const float radius = 0.25f + 0.15f * pulse;
-        for (const uint32 id : run.segmentIds)
-            if (const int index = structureIndexById(id); index >= 0)
-                drawCircle(m_frame[index].entity->pos + glm::vec3(0.0f, 0.45f, 0.0f), radius, color, 10);
+        const int index = structureIndexById(node.structureId);
+        if (index < 0)
+            continue;
+        // Loud on purpose: a bright red double ring floating well above the cable, breathing in
+        // size, plus a spike up from the segment so it reads from any camera angle.
+        const float pulse = 0.5f + 0.5f * std::sin(m_time * 5.0f);
+        const uint32 color = packColor(glm::vec3(1.0f, 0.15f, 0.1f) * (0.8f + 0.2f * pulse));
+        const glm::vec3 base = m_frame[index].entity->pos;
+        const glm::vec3 top = base + glm::vec3(0.0f, 0.9f, 0.0f);
+        drawCircle(top, 0.4f + 0.12f * pulse, color, 14);
+        drawCircle(top, 0.32f + 0.12f * pulse, color, 14);
+        drawCircle(top, 0.24f + 0.12f * pulse, color, 12);
+        Globals::rendererVK.addDebugLine(base + glm::vec3(0.0f, 0.3f, 0.0f), top, color);
     }
 
     // Node rings: blue = mineral, orange = fuel.

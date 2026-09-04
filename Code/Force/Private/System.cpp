@@ -1266,22 +1266,22 @@ void ForceSystem::buildBakeChunks(Renderer& renderer)
 {
     m_bakeChunkScratch.clear();
     constexpr float c_chunkSize = FORCE_BAKE_CHUNK_SAMPLES * FORCE_BAKE_SAMPLE_SPACING; // 16 m
-    const auto addBox = [](oc::vector<uint64>& keys, glm::vec2 lo, glm::vec2 hi)
+    const auto addBox = [](BakeKeySet& keys, glm::vec2 lo, glm::vec2 hi)
     {
         const int bx0 = (int)std::floor(lo.x / c_chunkSize), bx1 = (int)std::floor(hi.x / c_chunkSize);
         const int bz0 = (int)std::floor(lo.y / c_chunkSize), bz1 = (int)std::floor(hi.y / c_chunkSize);
         for (int bz = bz0; bz <= bz1; ++bz)
             for (int bx = bx0; bx <= bx1; ++bx)
-                keys.push_back(bakeChunkKey(bx, bz));
+                keys.insert(bakeChunkKey(bx, bz));
     };
     bool capped = false;
     if (m_bakeEnabled)
     {
-        m_bakeKeyStaging.forEach([](oc::vector<uint64>& keys) { keys.clear(); });
+        m_bakeKeyStaging.forEach([](BakeKeySet& keys) { keys.begin(); });
         runPass((uint32)m_emitters.size(), 256u, 512u, JobProfile{ "Force bake boxes", EProfileCategory::Force },
             [&](uint32 begin, uint32 end)
         {
-        oc::vector<uint64>& keys = m_bakeKeyStaging.local(); // no waits inside: the slot stays ours
+        BakeKeySet& keys = m_bakeKeyStaging.local(); // no waits inside: the slot stays ours
         for (uint32 i = begin; i < end; ++i)
         {
             const EmitterInstance& inst = m_emitters[i];
@@ -1310,7 +1310,7 @@ void ForceSystem::buildBakeChunks(Renderer& renderer)
             addBox(keys, lo, hi);
         }
         });
-        oc::vector<uint64>& mainKeys = m_bakeKeyStaging.local(); // main's own slot, after the join
+        BakeKeySet& mainKeys = m_bakeKeyStaging.local(); // main's own slot, after the join
         for (const MergeGroup& group : m_groups)
         {
             if (group.generation == 0 || group.rendererSlot == UINT32_MAX)
@@ -1319,43 +1319,38 @@ void ForceSystem::buildBakeChunks(Renderer& renderer)
             addBox(mainKeys, glm::vec2(group.center.x, group.center.z) - r,
                    glm::vec2(group.center.x, group.center.z) + r);
         }
-        // Per-slot sort + unique on jobs first: a swarm's emitters share most chunks, so the
-        // serial merge below sees a few hundred keys per slot instead of a few thousand.
-        runPass(m_bakeKeyStaging.size(), 1u, 2u, JobProfile{ "Force bake dedup", EProfileCategory::Force },
-            [&](uint32 begin, uint32 end)
+        // Serial merge: the workers' unique lists (a few hundred keys each at most) through one
+        // more stamp table — no concatenate, no sort.
+        m_bakeMerge.begin();
+        m_bakeKeyStaging.forEach([&](const BakeKeySet& keys) {
+            for (const uint64 key : keys.unique)
+                m_bakeMerge.insert(key);
+        });
+        oc::vector<uint64>& uniqueKeys = m_bakeMerge.unique;
+        if (m_bakeMerge.dirty)
         {
-            for (uint32 s = begin; s < end; ++s)
-            {
-                oc::vector<uint64>& keys = m_bakeKeyStaging.at(s);
-                oc::sort(keys.begin(), keys.end());
-                keys.erase(oc::unique(keys.begin(), keys.end()), keys.end());
-            }
-        });
-        m_bakeKeys.clear();
-        m_bakeKeyStaging.forEach([&](const oc::vector<uint64>& keys) {
-            m_bakeKeys.insert(m_bakeKeys.end(), keys.begin(), keys.end());
-        });
-        oc::sort(m_bakeKeys.begin(), m_bakeKeys.end());
-        m_bakeKeys.erase(oc::unique(m_bakeKeys.begin(), m_bakeKeys.end()), m_bakeKeys.end());
-        capped = m_bakeKeys.size() > (size_t)MAX_FORCE_BAKE_CHUNKS;
+            oc::sort(uniqueKeys.begin(), uniqueKeys.end());
+            uniqueKeys.erase(oc::unique(uniqueKeys.begin(), uniqueKeys.end()), uniqueKeys.end());
+        }
+        capped = uniqueKeys.size() > (size_t)MAX_FORCE_BAKE_CHUNKS;
         if (capped)
         {
             // Keep the chunks nearest the covered set's centroid: the OUTERMOST regions go
             // unbaked, never a coherent half-plane (the key packs bx as uint32, so negative X
             // sorts last — cutting the sorted tail would drop every chunk on one side).
             glm::dvec2 centroid(0.0);
-            for (const uint64 key : m_bakeKeys)
+            for (const uint64 key : uniqueKeys)
                 centroid += glm::dvec2((int)(uint32)(key >> 32), (int)(uint32)key);
-            centroid /= (double)m_bakeKeys.size();
+            centroid /= (double)uniqueKeys.size();
             const auto dist2 = [&](uint64 key) {
                 const glm::dvec2 d = glm::dvec2((int)(uint32)(key >> 32), (int)(uint32)key) - centroid;
                 return glm::dot(d, d);
             };
-            oc::sort(m_bakeKeys.begin(), m_bakeKeys.end(), [&](uint64 a, uint64 b) { return dist2(a) < dist2(b); });
-            m_bakeKeys.resize(MAX_FORCE_BAKE_CHUNKS);
+            oc::sort(uniqueKeys.begin(), uniqueKeys.end(), [&](uint64 a, uint64 b) { return dist2(a) < dist2(b); });
+            uniqueKeys.resize(MAX_FORCE_BAKE_CHUNKS);
         }
-        m_bakeChunkScratch.reserve(m_bakeKeys.size());
-        for (const uint64 key : m_bakeKeys)
+        m_bakeChunkScratch.reserve(uniqueKeys.size());
+        for (const uint64 key : uniqueKeys)
             m_bakeChunkScratch.push_back(glm::ivec4((int)(uint32)(key >> 32), (int)(uint32)key, 0, 0));
     }
     m_statBakeChunks = (int)m_bakeChunkScratch.size();
@@ -1376,20 +1371,96 @@ void ForceSystem::publishBake(Renderer& renderer)
     const ForceBakeReadback bake = renderer.getForceBakeReadback();
     // TEAM-SIZED stride, mirroring force_bake.cs: one vec4 per sample with <= 4 live teams.
     const size_t vec4PerChunk = (size_t)FORCE_BAKE_SAMPLES_PER_CHUNK * ((m_params.numTeams + 3u) / 4u);
-    m_bakeIndex.clear();
     const size_t numChunks = glm::min(bake.chunks.size(), bake.data.size() / vec4PerChunk);
+    // Sized ONCE to the cap (a team-count change re-sizes): a per-frame resize would construct
+    // up to the whole 2-4 MB again whenever the chunk count grows back.
+    if (m_bakeData.size() != vec4PerChunk * MAX_FORCE_BAKE_CHUNKS)
+        m_bakeData.resize(vec4PerChunk * MAX_FORCE_BAKE_CHUNKS);
     // The copy (up to 512 chunks x 4 KB per team quad) fans out per chunk: distinct destination
-    // ranges, a read-only mapped source. The index build stays serial (one insert per chunk).
-    m_bakeData.resize(numChunks * vec4PerChunk);
+    // ranges, a read-only mapped source.
     runPass((uint32)numChunks, 16u, 64u, JobProfile{ "Force bake copy", EProfileCategory::Force },
         [&](uint32 begin, uint32 end)
     {
         memcpy(m_bakeData.data() + (size_t)begin * vec4PerChunk, bake.data.data() + (size_t)begin * vec4PerChunk,
             (size_t)(end - begin) * vec4PerChunk * sizeof(glm::vec4));
     });
+    // The lookup: a dense grid over the chunks' bounding box (O(1) per corner) when it fits,
+    // else the sorted key list. Both build in O(numChunks).
+    glm::ivec2 lo(INT32_MAX), hi(INT32_MIN);
     for (size_t b = 0; b < numChunks; ++b)
-        m_bakeIndex[bakeChunkKey(bake.chunks[b].x, bake.chunks[b].y)] = (uint32)b;
+    {
+        lo = glm::min(lo, glm::ivec2(bake.chunks[b]));
+        hi = glm::max(hi, glm::ivec2(bake.chunks[b]));
+    }
+    const glm::ivec2 size = numChunks > 0 ? hi - lo + 1 : glm::ivec2(0);
+    if (numChunks > 0 && (uint64)size.x * (uint64)size.y <= MAX_BAKE_GRID_CELLS)
+    {
+        m_bakeGridLo = lo;
+        m_bakeGridSize = size;
+        m_bakeGrid.assign((size_t)size.x * size.y, UINT16_MAX);
+        for (size_t b = 0; b < numChunks; ++b)
+            m_bakeGrid[(size_t)(bake.chunks[b].y - lo.y) * size.x + (bake.chunks[b].x - lo.x)] = (uint16)b;
+    }
+    else
+    {
+        m_bakeGridSize = glm::ivec2(0);
+        m_bakeSorted.clear();
+        for (size_t b = 0; b < numChunks; ++b)
+            m_bakeSorted.emplace_back(bakeChunkKey(bake.chunks[b].x, bake.chunks[b].y), (uint32)b);
+        oc::sort(m_bakeSorted.begin(), m_bakeSorted.end());
+    }
     m_bakePublished = m_bakeEnabled; // disabled: samplers report invalid, callers fall back
+}
+
+uint32 ForceSystem::findBakeChunk(int bx, int bz) const
+{
+    if (m_bakeGridSize.x > 0)
+    {
+        const int lx = bx - m_bakeGridLo.x, lz = bz - m_bakeGridLo.y;
+        if (lx < 0 || lz < 0 || lx >= m_bakeGridSize.x || lz >= m_bakeGridSize.y)
+            return UINT32_MAX;
+        const uint16 idx = m_bakeGrid[(size_t)lz * m_bakeGridSize.x + lx];
+        return idx == UINT16_MAX ? UINT32_MAX : idx;
+    }
+    const uint64 key = bakeChunkKey(bx, bz);
+    const auto it = oc::lower_bound(m_bakeSorted.begin(), m_bakeSorted.end(), key,
+        [](const oc::pair<uint64, uint32>& e, uint64 k) { return e.first < k; });
+    return it != m_bakeSorted.end() && it->first == key ? it->second : UINT32_MAX;
+}
+
+void ForceSystem::BakeKeySet::begin()
+{
+    if (keys.empty())
+    {
+        keys.resize(SIZE);
+        stamps.assign(SIZE, 0u);
+    }
+    if (++stamp == 0u) // wrapped: every slot would read as this frame's
+    {
+        stamps.assign(SIZE, 0u);
+        stamp = 1u;
+    }
+    unique.clear();
+    dirty = false;
+}
+
+void ForceSystem::BakeKeySet::insert(uint64 key)
+{
+    uint32 i = (uint32)((key * 0x9E3779B97F4A7C15ull) >> 52) & (SIZE - 1); // top bits of a Fibonacci hash
+    for (uint32 probe = 0; probe < 32; ++probe, i = (i + 1) & (SIZE - 1))
+    {
+        if (stamps[i] != stamp)
+        {
+            stamps[i] = stamp;
+            keys[i] = key;
+            unique.push_back(key);
+            return;
+        }
+        if (keys[i] == key)
+            return;
+    }
+    unique.push_back(key); // crowded run: append unchecked, the merge dedups
+    dirty = true;
 }
 
 ForceSystem::FieldSample ForceSystem::sampleBakedField(const glm::vec3& pos, uint32 team) const
@@ -1415,12 +1486,12 @@ ForceSystem::FieldSample ForceSystem::sampleBakedField(const glm::vec3& pos, uin
         const int gx = gx0 + (c & 1), gz = gz0 + (c >> 1);
         const int bx = gx >= 0 ? gx / N : (gx - (N - 1)) / N; // floor division
         const int bz = gz >= 0 ? gz / N : (gz - (N - 1)) / N;
-        const auto it = m_bakeIndex.find(bakeChunkKey(bx, bz));
-        if (it == m_bakeIndex.end())
+        const uint32 chunk = findBakeChunk(bx, bz);
+        if (chunk == UINT32_MAX)
             continue;
         any = true;
         const int lx = gx - bx * N, lz = gz - bz * N;
-        const glm::vec4* v = &m_bakeData[((size_t)it->second * (N * N) + (size_t)(lz * N + lx)) * vec4PerSample];
+        const glm::vec4* v = &m_bakeData[((size_t)chunk * (N * N) + (size_t)(lz * N + lx)) * vec4PerSample];
         for (uint32 t = 0; t < numTeams; ++t)
             corner[c][t] = v[t >> 2][t & 3];
     }

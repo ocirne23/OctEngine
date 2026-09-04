@@ -411,16 +411,16 @@ private:
     int m_waveRecentCount = 0, m_waveRecentNext = 0;
     glm::vec3 m_waveDest{ 0.0f };   // the Base's near face on the incoming side
     // Tweaks ("Game/Coop", Synced):
-    float m_waveFirstDelay = 30.0f;
-    float m_waveInterval = 90.0f;
+    float m_waveFirstDelay = 40.0f;
+    float m_waveInterval = 120.0f;
     // Waves are sized in BUDGET POINTS, not unit counts: each type has a cost (tweaks), so a
     // brute-heavy archetype fields far fewer bodies than a swarm flood of the same budget.
     int m_waveBudget = 20;           // points in wave 1 (swarm costs 1 = the old unit count)
     float m_waveBudgetGrowth = 40.0f; // extra points per subsequent wave
-    float m_waveGrowthGrowth = 10.0f; // how much that per-wave growth itself climbs every wave
+    float m_waveGrowthGrowth = 5.0f;  // how much that per-wave growth itself climbs every wave
     float nextWaveBudget() const;     // the coming wave's points before the alive cap (queueWave + the HUD's "Next wave power")
-    float m_waveCost[(int)ENpcType::Count] = { 3.0f, 10.0f, 2.0f, 5.0f, 1.0f,   // Grunt, Brute, Runner, Spitter, Swarm
-                                               8.0f, 25.0f, 60.0f, 12.0f, 30.0f,  // Elite, Giant, Titan, Lobber, Spawner
+    float m_waveCost[(int)ENpcType::Count] = { 3.0f, 25.0f, 2.0f, 10.0f, 1.0f,   // Grunt, Brute, Runner, Spitter, Swarm
+                                               15.0f, 100.0f, 500.0f, 30.0f, 40.0f,  // Elite, Giant, Titan, Lobber, Spawner
                                                5.0f };                             // Warrior
     float waveCostOf(ENpcType t) const { return glm::max(m_waveCost[(int)t], 0.1f); }
     int m_waveMaxAlive = 25000;    // total AI units cap (ambient + waves)
@@ -442,6 +442,7 @@ private:
     bool m_isClient = false;
     float m_statTimer = 0.0f; // server: GSt cadence
     int m_cableSyncCursor = 0; // server: GCb rotation start when more blueprint segments exist than fit one event
+    uint32 m_cableFillCursor = 0; // server: GCf rotation start over the transport's cable nodes
     oc::unordered_map<uint32, EntityPtr> m_clientPlayers;    // server: clientId -> their capsule
                                                               // (the ONLY per-client store — carried
                                                               // materials live on the twin's puppet

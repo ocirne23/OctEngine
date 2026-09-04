@@ -1763,6 +1763,28 @@ void GameMatch::sendStats()
         return;
     cableWriter.writeAt(0, cableCount);
     Globals::networkManager.fireNetworkEvent("GCb", cableWriter.data());
+
+    // GCf: the cable FILLS + throughput (transport cells per segment, the ~2 s average as a
+    // fraction of the rate), rotating through the cable nodes from m_cableFillCursor — the
+    // clients' cable visuals and the selected-cable label. 6 B each.
+    {
+        constexpr int c_maxFillRecords = 160; // 2 + 160 * 6 = 962 B, under the 1024 B event cap
+        oc::vector<StructureSystem::CableMirror> fills;
+        m_structures.collectCableFills(fills, m_cableFillCursor, c_maxFillRecords);
+        if (!fills.empty())
+        {
+            uint8 fillBuffer[1000];
+            NetWriter fillWriter(fillBuffer);
+            fillWriter.write<uint16>((uint16)fills.size());
+            for (const StructureSystem::CableMirror& f : fills)
+            {
+                fillWriter.write<uint32>(f.id);
+                fillWriter.write<uint8>(f.fill);
+                fillWriter.write<uint8>(f.util);
+            }
+            Globals::networkManager.fireNetworkEvent("GCf", fillWriter.data());
+        }
+    }
 }
 
 void GameMatch::applyPause(bool paused)
@@ -1858,6 +1880,18 @@ void GameMatch::handleNetEvent(oc::string_view name)
                 const uint8 health = reader.read<uint8>();
                 if (!reader.overflowed())
                     m_structures.mirrorCableProgress(id, health / 255.0f);
+            }
+        }
+        else if (name == "GCf")
+        {
+            const uint16 count = reader.read<uint16>();
+            for (uint16 i = 0; i < count && !reader.overflowed(); ++i)
+            {
+                const uint32 id = reader.read<uint32>();
+                const uint8 fill = reader.read<uint8>();
+                const uint8 util = reader.read<uint8>();
+                if (!reader.overflowed())
+                    m_structures.mirrorCableFill(id, fill, util);
             }
         }
         else if (name == "GDm")
@@ -3091,9 +3125,11 @@ bool GameMatch::runScenario(oc::string_view savePath)
     }
     loadGame(savePath);
     Log::info(oc::format("Scenario: loaded '{}'", savePath.empty() ? oc::string_view(c_gameSavePath) : savePath));
-    // The loaded units' spatial entries link at the next commitFrame — the select-all query runs
-    // from the next update() (issueScenarioOrder).
-    m_scenarioOrderPending = true;
+    // PvP: the loaded units' spatial entries link at the next commitFrame — the select-all query
+    // runs from the next update() (issueScenarioOrder), marching everything on the other Base.
+    // CO-OP: no order — there is no enemy Base to march on, and the session is measured as saved
+    // (the player holds position, the AI waves and ambient groups carry on).
+    m_scenarioOrderPending = !m_coop;
     m_scenarioOrderTries = 0;
     return true;
 }
@@ -3276,11 +3312,7 @@ const char* GameMatch::structureWarning(int index, glm::vec3& color) const
         || m_structures.structureTeam(index) != (uint8)m_team)
         return nullptr;
     const GameStructureComponent& s = *m_structures.structures()[index].state;
-    const auto linked = [&](uint8 medium) {
-        for (const GameStructureLink& l : s.links)
-            if (l.medium == medium)
-                return true;
-        return false; };
+    const auto linked = [&](uint8 medium) { return (s.attachedMask & (1u << medium)) != 0; }; // a run touches it
     constexpr glm::vec3 c_red(1.0f, 0.35f, 0.3f), c_orange(1.0f, 0.62f, 0.25f), c_amber(1.0f, 0.85f, 0.35f);
 
     // 1) A MEDIUM WITH NO CABLE OF ITS OWN. Whichever media a structure MOVES — one it eats, one it
@@ -3415,6 +3447,19 @@ void GameMatch::buildWorldLabels()
         if (m_structures.structureBlueprint(i) || !showResources)
         {
         } // blueprint: no second bar — the (blue) health bar IS the build progress
+        else if (isCableOrCrossing(type))
+        {
+            // A conduit's second bar is its THROUGHPUT: the ~2 s average of cells leaving the
+            // segment against its out-rate, hued by medium.
+            StructureSystem::CableInfo ci;
+            if (m_structures.cableInfo(i, ci))
+            {
+                label.bar2Value = ci.movedPerSec;
+                label.bar2Max = ci.ratePerSec;
+                label.bar2Color = ci.medium == 1 ? glm::vec3(1.0f, 0.6f, 0.2f)
+                    : ci.medium == 2 ? glm::vec3(0.35f, 0.5f, 1.0f) : glm::vec3(1.0f, 0.9f, 0.3f);
+            }
+        }
         else if (fuelBar)
         {
             label.bar2Value = m_structures.structureFuel(i);
@@ -3465,6 +3510,19 @@ void GameMatch::buildWorldLabels()
             if (type == EStructureType::House && len > 0 && len < (int)sizeof(info))
                 len += snprintf(info + len, sizeof(info) - len, "\n%s",
                     m_structures.structureLinkedId(i) != 0 ? "Linked to a barracks" : "No barracks in range");
+            if (isCableOrCrossing(type) && len > 0 && len < (int)sizeof(info))
+            {
+                // The segment's transport readout: cells held, cells that left it last tick
+                // against its out-rate, and its run's total (see StructureSystem::cableInfo).
+                static constexpr const char* c_medium[3] = { "Energy", "Fuel", "Minerals" };
+                StructureSystem::CableInfo ci;
+                if (m_structures.cableInfo(i, ci))
+                    len += snprintf(info + len, sizeof(info) - len, "\n%s %d / %d cells, %.1f / %.1f per s\nRun %d / %d cells over %d segments",
+                        c_medium[glm::clamp(ci.medium, 0, 2)], ci.fill, ci.capacity, ci.movedPerSec, ci.ratePerSec,
+                        ci.runFill, ci.runCapacity, ci.runSegments);
+                else
+                    len += snprintf(info + len, sizeof(info) - len, "\nNot conducting");
+            }
             if (consumer && len > 0 && len < (int)sizeof(info))
                 snprintf(info + len, sizeof(info) - len, "\n%s",
                     m_structures.structurePowered(i) ? "Powered" : "No power");

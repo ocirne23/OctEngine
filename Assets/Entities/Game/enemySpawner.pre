@@ -32,9 +32,9 @@ Prefab gameEnemySpawner
 		MoveSpeed 2.2
 		AttackDps 0
 		PlayerDps 0
-		EmitterDrain 6
+		EmitterDrain 4
 		Ranged true
 		StandoffRange 18
-		FireInterval 2.5
+		FireInterval 1.25
 		ShotKind 2
 		AlwaysDisplayHealth true

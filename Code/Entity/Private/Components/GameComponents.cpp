@@ -363,7 +363,7 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
     bool inEnemyBubble = false; // stamped-radius signal — the shield-less FALLBACK when the baked
                                 // field is off (see the field block at the end)
     {
-        constexpr float c_strainRange = 12.0f; // emitter siege-drain reach
+        const float c_strainRange = params.strainRange; // emitter siege-drain reach ("Emitter drain range")
         const float engageRadius = routing ? params.routeEngageRadius : 0.0f;
         // A MOVE ORDER (the wave's march on the Base, a player's RMB) breaks off at the first
         // enemy structure inside orderBreakRadius: the order drops and the AI takes over, which
@@ -988,29 +988,6 @@ void GameStructureComponent::spawn(Entity& entity, const SpawnInfo& info, const 
     meleeRadius = info.meleeRadius;
 }
 
-// Atomically move `amount` from one store float to another, clamped by the source's content and
-// the destination's headroom; returns what actually moved. Reserve-from-source first, clamped add
-// second, remainder returned — concurrent link owners sharing an endpoint compose without loss.
-static float atomicTransfer(float& source, float& dest, float destCap, float amount)
-{
-    if (amount <= 0.0f)
-        return 0.0f;
-    oc::atomic_ref<float> src(source);
-    float cur = src.load(oc::memory_order_relaxed), take;
-    do { take = glm::min(amount, glm::max(cur, 0.0f)); } while (!src.compare_exchange_weak(cur, cur - take));
-    if (take <= 0.0f)
-        return 0.0f;
-    oc::atomic_ref<float> dst(dest);
-    float dcur = dst.load(oc::memory_order_relaxed), put;
-    do { put = glm::min(take, glm::max(destCap - dcur, 0.0f)); } while (!dst.compare_exchange_weak(dcur, dcur + put));
-    if (const float leftover = take - put; leftover > 0.0f)
-    {
-        float scur = src.load(oc::memory_order_relaxed);
-        while (!src.compare_exchange_weak(scur, scur + leftover)) {}
-    }
-    return put;
-}
-
 void GameStructureComponent::update(Entity& entity, float deltaSec)
 {
     if (!isAuthority())
@@ -1025,98 +1002,8 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
             fieldDrain(params.fieldDamageRate * deltaSec);
     }
 
-    // ---- distribution: gravity-fed flows over the links. Each link is processed EXACTLY ONCE per
-    // tick, by its OWNER side, in whichever direction the bands/fills call for (push when this
-    // side is the source, pull when the far side is). Both endpoints running it — which is what
-    // "process on the source side" amounted to, since each side decides independently — moved the
-    // same link twice per frame in opposite directions, so any balancing link visibly sloshed back
-    // and forth no matter how small the steps were.
-    // Bands: higher exports to lower at full throughput; equal bands converge on equal fill
-    // fractions, moving a DAMPED fraction of the balancing transfer (the exact transfer, applied
-    // by several sources that cannot see each other, overshoots and rebounds).
-    // The owner's OUTGOING links are gathered first and share the store fairly (proportional scale
-    // when it cannot cover them all; a full receiver desires ~0, so its share goes to the rest).
-    // Pulls are not budgeted that way — the far side's other links belong to their own owners —
-    // but every transfer is atomically clamped, so nothing is over-drawn or fabricated.
-    struct Outflow
-    {
-        GameStructureComponent* far;
-        GameStructureLink* link;
-        float desired;
-        uint8 medium;
-    };
-    constexpr float c_equalizeDamping = 0.25f;
-    const float invDt = 1.0f / glm::max(deltaSec, 1e-6f);
-    // A receiver's free space, divided by however many links can feed it that medium. Without
-    // this each source independently desires the WHOLE headroom, so a full destination that is
-    // being drained a little every tick hands its scraps to whichever source's worker happens to
-    // run first — the inflow hops between the feeding links tick by tick. A share is steady, and
-    // when a feeder cannot use its share the others simply take it on the following ticks.
-    // Link vectors only change on the main thread, so walking a neighbour's is safe here.
-    const auto headroomShare = [](const GameStructureComponent& dest, int m)
-    {
-        const float headroom = glm::max(dest.capacity[m] - dest.store[m], 0.0f);
-        int feeders = 0;
-        for (const GameStructureLink& dl : dest.links)
-        {
-            if ((int)dl.medium != m || !dl.other)
-                continue;
-            const GameStructureComponent* src = getComponent<GameStructureComponent>(dl.other.get());
-            if (src && src->band[m] >= dest.band[m]) // same band counts: it may be the fuller side
-                ++feeders;
-        }
-        return headroom / (float)glm::max(feeders, 1);
-    };
-    thread_local oc::vector<Outflow> outs;
-    outs.clear();
-    float totalDesired[3] = {};
-    for (GameStructureLink& l : links)
-    {
-        if (!l.owner)
-            continue; // the far side owns it and does the work
-        l.lastFlow = 0.0f;
-        GameStructureComponent* far = l.other ? getComponent<GameStructureComponent>(l.other.get()) : nullptr;
-        if (!far)
-            continue;
-        const int m = l.medium;
-        const float capA = capacity[m], capB = far->capacity[m];
-        if (blueprint || far->blueprint || capA <= 0.0f || capB <= 0.0f)
-            continue; // pre-wired/idle links carry nothing
-        const float fillA = store[m] / capA, fillB = far->store[m] / capB;
-        const float maxT = l.throughput * deltaSec;
-        if (band[m] != far->band[m])
-        {
-            if (band[m] > far->band[m]) // downhill out of this side
-            {
-                const float desired = glm::min(maxT, headroomShare(*far, m));
-                outs.push_back({ far, &l, desired, (uint8)m });
-                totalDesired[m] += desired;
-            }
-            else // downhill INTO this side: pull, clamped by our own headroom
-                l.lastFlow = -atomicTransfer(far->store[m], store[m], capA,
-                    glm::min(maxT, glm::max(capA - store[m], 0.0f))) * invDt;
-        }
-        else if (fillA > fillB) // balancing outward
-        {
-            const float gap = (fillA - fillB) * (capA * capB / (capA + capB)) * c_equalizeDamping;
-            const float desired = glm::min(glm::min(gap, maxT), headroomShare(*far, m));
-            outs.push_back({ far, &l, desired, (uint8)m });
-            totalDesired[m] += desired;
-        }
-        else if (fillB > fillA) // balancing inward
-        {
-            const float gap = (fillB - fillA) * (capA * capB / (capA + capB)) * c_equalizeDamping;
-            l.lastFlow = -atomicTransfer(far->store[m], store[m], capA,
-                glm::min(glm::min(gap, maxT), glm::max(capA - store[m], 0.0f))) * invDt;
-        }
-    }
-    float shareFactor[3];
-    for (int m = 0; m < 3; ++m)
-        shareFactor[m] = totalDesired[m] > glm::max(store[m], 0.0f) && totalDesired[m] > 1e-9f
-            ? glm::max(store[m], 0.0f) / totalDesired[m] : 1.0f;
-    for (const Outflow& o : outs)
-        o.link->lastFlow = atomicTransfer(store[o.medium], o.far->store[o.medium],
-            o.far->capacity[o.medium], o.desired * shareFactor[o.medium]) * invDt;
+    // (Resource transport is the game's cable network job — see StructureSystem: this component
+    // only owns its float stores; cells enter and leave them at the game's tick boundary.)
 
     // ---- machine logic (the union's stamped variant): the DECISION runs here per-entity, worker-
     // side, spending from the structure's OWN stores; the actual entity spawn rides an event queue
@@ -1200,67 +1087,6 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
             }
         }
     }
-    // Smooth each OWNED link's rate for the visuals/gauges (~0.25 s): the raw per-tick transfer is
-    // bursty — a consumer drains its buffer and then takes a full packet, and the fair split
-    // reshuffles shares as receivers fill — which made the cable brightness and flow pulses
-    // strobe. Only the owner entry carries a flow, so only it smooths.
-    const float smoothing = glm::min(deltaSec * 4.0f, 1.0f);
-    for (GameStructureLink& l : links)
-        if (l.owner)
-            l.flowAvg += (l.lastFlow - l.flowAvg) * smoothing;
-
-    // Utilization gauge over ALL touching links: the owner side holds the flow; a mirror entry
-    // reads the owner's value through the far component (benign cross-worker float read — it is
-    // a gauge).
-    float peakUtil = 0.0f;
-    for (const GameStructureLink& l : links)
-    {
-        float flow = l.flowAvg;
-        if (!l.owner && l.other)
-            if (GameStructureComponent* far = getComponent<GameStructureComponent>(l.other.get()))
-                if (const GameStructureLink* mirror = far->findLink(&entity, l.medium))
-                    flow = mirror->flowAvg;
-        peakUtil = glm::max(peakUtil, glm::abs(flow) / glm::max(l.throughput, 1e-3f));
-    }
-    flowUtil += (glm::min(peakUtil, 1.0f) - flowUtil) * smoothing;
-}
-
-GameStructureLink* GameStructureComponent::findLink(const Entity* otherEntity, int medium)
-{
-    for (GameStructureLink& l : links)
-        if (l.other.get() == otherEntity && (medium < 0 || (int)l.medium == medium))
-            return &l;
-    return nullptr;
-}
-
-void GameStructureComponent::unlinkAll(Entity& self)
-{
-    for (GameStructureLink& l : links)
-        if (l.other)
-            if (GameStructureComponent* far = getComponent<GameStructureComponent>(l.other.get()))
-                oc::erase_if(far->links, [&](const GameStructureLink& fl) { return fl.other.get() == &self; });
-    links.clear();
-}
-
-void GameStructureComponent::link(Entity& a, Entity& b, uint8 medium, float throughput)
-{
-    GameStructureComponent* ca = getComponent<GameStructureComponent>(&a);
-    GameStructureComponent* cb = getComponent<GameStructureComponent>(&b);
-    if (!ca || !cb || &a == &b)
-        return;
-    unlink(a, b, medium); // the pair's SAME-medium link re-links in place; others stay
-    ca->links.push_back(GameStructureLink{ EntityPtr(&b), medium, throughput, /*owner*/ true });
-    cb->links.push_back(GameStructureLink{ EntityPtr(&a), medium, throughput, /*owner*/ false });
-}
-
-void GameStructureComponent::unlink(Entity& a, Entity& b, int medium)
-{
-    if (GameStructureComponent* ca = getComponent<GameStructureComponent>(&a))
-        oc::erase_if(ca->links, [&](const GameStructureLink& l) {
-            return l.other.get() == &b && (medium < 0 || (int)l.medium == medium); });
-    if (GameStructureComponent* cb = getComponent<GameStructureComponent>(&b))
-        oc::erase_if(cb->links, [&](const GameStructureLink& l) {
-            return l.other.get() == &a && (medium < 0 || (int)l.medium == medium); });
 }
 
 void GameStructureComponent::damage(float amount)

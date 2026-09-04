@@ -28,4 +28,4 @@ Prefab gameEnemyRunner
 		MoveSpeed 7.6
 		AttackDps 4.2
 		PlayerDps 7
-		EmitterDrain 2.5
+		EmitterDrain 2

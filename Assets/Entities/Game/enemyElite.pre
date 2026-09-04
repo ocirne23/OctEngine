@@ -30,4 +30,4 @@ Prefab gameEnemyElite
 		MoveSpeed 4.6
 		AttackDps 11
 		PlayerDps 16
-		EmitterDrain 6
+		EmitterDrain 4

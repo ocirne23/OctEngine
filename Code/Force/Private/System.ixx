@@ -424,12 +424,34 @@ private:
     bool m_bakePublished = false;
     bool m_bakeCapWarned = false;
     oc::vector<glm::ivec4> m_bakeChunkScratch;
-    // Chunk selection staging: the per-emitter pass appends every chunk key its support box
-    // touches per worker; serially the keys are concatenated, sorted, uniqued and capped.
-    PerWorker<oc::vector<uint64>> m_bakeKeyStaging;
-    oc::vector<uint64> m_bakeKeys;
-    oc::unordered_map<uint64, uint32> m_bakeIndex; // packed chunk coord -> published chunk index
-    oc::vector<glm::vec4> m_bakeData;              // published readback copy (512 vec4 per chunk)
+    // Chunk-key set for the selection: a STAMP-cleared open-addressing table (no per-frame clear,
+    // no sort) whose first-seen keys land in `unique`. One per worker for the boxes pass, one
+    // for the serial merge of the workers' unique lists. Past the probe limit a key is appended
+    // unchecked — the cap step dedups the (rare) survivors.
+    struct BakeKeySet
+    {
+        static constexpr uint32 SIZE = 4096; // power of two; ~8x the chunk cap
+        oc::vector<uint64> keys;
+        oc::vector<uint32> stamps;
+        uint32 stamp = 0;
+        oc::vector<uint64> unique;
+        bool dirty = false; // an over-probed append happened: `unique` may hold duplicates
+        void begin();
+        void insert(uint64 key);
+    };
+    PerWorker<BakeKeySet> m_bakeKeyStaging;
+    BakeKeySet m_bakeMerge;
+    // Published chunk lookup: a DENSE uint16 grid over the chunk coords' bounding box when it fits
+    // (the normal case — O(1), two subtractions and a multiply per corner), else the sorted key
+    // list and a binary search.
+    oc::vector<uint16> m_bakeGrid;                  // chunk index or UINT16_MAX
+    glm::ivec2 m_bakeGridLo{ 0 };
+    glm::ivec2 m_bakeGridSize{ 0 };                 // 0 = the sorted fallback is live
+    oc::vector<oc::pair<uint64, uint32>> m_bakeSorted; // (key, chunk index), by key
+    static constexpr uint32 MAX_BAKE_GRID_CELLS = 32768; // 64 KB of uint16
+    uint32 findBakeChunk(int bx, int bz) const;      // UINT32_MAX = no chunk
+    oc::vector<glm::vec4> m_bakeData;               // published readback copy, sized ONCE to the cap
+                                                    // (vec4PerChunk x MAX_FORCE_BAKE_CHUNKS): never resized
 
     ForceFieldParams m_params; // owns the "Force" tweaks, pushed to the renderer every update
     MergeParams m_merge;       // the "Force/Merge" tweaks

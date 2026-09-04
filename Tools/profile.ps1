@@ -5,6 +5,8 @@
 #   Tools\profile.ps1 -Game -After 20 -Frames 300 -Show 120
 #   Tools\profile.ps1 -Game -Server -After 15   # THE standard perf run: --game --server, loads Assets/Scenarios/march-64-units.txt at 1 s,
 #                                                # every own unit marches on the enemy Base (-Scenario <path> for another save, -Scenario "" for none)
+#   Tools\profile.ps1 -Game -Server -AppArgs "--coop" -Scenario "Scenarios/coop-wave9.txt" -ScenarioAt 2 -After 30
+#                                                # THE co-op perf run: a late session as saved, no move order (co-op has no Base to march on)
 #   Tools\profile.ps1 -Tweak "Time/Max FPS=0","Spatial/Culling/Mode=0"   # tweak overrides (never saved)
 #   Tools\profile.ps1 -AppArgs "--server"     # extra App.exe arguments
 #

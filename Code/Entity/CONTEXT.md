@@ -586,9 +586,10 @@ ID 9/10/11 in one partition, `Components/GameComponents.ixx`.
 
 * **`GameUnitComponent`** — team, health, shield battery, plus C++ steering / targeting / melee /
   ranged stance. DSL sets orders through `self.unit.setTarget`.
-* **`GameStructureComponent`** — team, health, blueprint, invulnerable, meleeRadius, its own
-  ForceQuery territory damage, atomic `damage()` / `addLoad()` intake, the three stores and bands, the
-  derived LINKS, and a machine-state UNION.
+* **`GameStructureComponent`** — team, health, blueprint, invulnerable, meleeRadius, its bake-tap
+  territory damage, atomic `damage()` / `addLoad()` intake, the three float stores (the game's cable
+  transport moves whole cells in and out of them at its tick boundary — see
+  [`Code/Game/CONTEXT.md`](../Game/CONTEXT.md)), and a machine-state UNION.
 * **`GameProjectileComponent`** — team-tagged lifetime, deflection and contact damage.
 
 **Contract:** `update()` simulates only when NOT a network client (mirrors write state on clients).
@@ -629,25 +630,15 @@ the impact** through a spatial query — the lobber shell).
 
 All three are skipped headless.
 
-### Structure links
+### Structure stores and the transport
 
-`GameStructureLink` is mirrored on both endpoints, and **each link is processed EXACTLY ONCE per tick
-by its OWNER side** — pushing when it is the source, pulling when the far side is — in the entity
-pass with atomic reserve/add/return transfers.
-
-> Both endpoints processing, each deciding independently, moved every link **twice per frame in
-> opposite directions**, which made balancing links slosh visibly.
-
-The owner gathers its OUTGOING links first and splits the store as a per-medium **FAIR SHARE** across
-receivers; a full receiver's share flows to the rest. Pulls are unbudgeted — the far side's links
-belong to their own owners — but atomically clamped.
-
-**Fairness runs on the RECEIVING end too:** a push is capped at the destination's headroom DIVIDED by
-the links that can feed it, so a full-but-draining destination trickles in from all its feeders
-steadily instead of handing each tick's scraps to whichever worker ran first.
-
-`link` / `unlink` / `unlinkAll` are main-thread bookkeeping — **a structure is ALWAYS unlinked before
-destruction, so links never dangle.**
+The component holds FLOAT stores only. **It moves nothing in the entity pass**: the game's cable
+transport (StructureSystem, `Transport.cpp`) reserves whole cells out of a producer's store at its
+tick's inject and adds delivered cells at the join — both main-thread, outside the pass — so there
+are no cross-entity store writes and no atomics on stores at all. `attachedMask` (a network of
+medium m touches this structure) and `flowUtil` (the served fraction of the port's ask) are stamped
+by the game. The structure's own consumption (machines, emitters) keeps spending from its store in
+the pass and the production tick as before.
 
 **NO id-keyed maps anywhere** — cooldowns, tallies and boosts die with their structure. Machine state
 lives in a UNION discriminated by the game's structure type (the NetEntityState pattern): only the
@@ -992,6 +983,20 @@ others. That alternation was the remote-entity pulsing.**
   is **CONTESTED → server-owned** until the window decays.
 * Late joiners get OwnerChange replays after the Spawn replay; a disconnect reverts transfers before
   tearing down primaries.
+
+> ### The transfer pass NEVER walks `m_entities`
+>
+> On a co-op map every unit is a networked entity, so a per-frame walk is thousands of map nodes
+> and body reads. `updateOwnershipTransfers` instead works from three small sets: the tracked
+> **primaries** (`m_primaryIds`, every id `setOwner` / `setServerPrimary` touched — the sources),
+> a **SpatialIndex sphere query** of `Transfer radius` around each client primary (the hand-over
+> candidates; `send()` runs after the frame's join, where read-only queries are legal), and the
+> tracked **transferred objects** (`m_transferredIds`, maintained by `transferOwnership` — the
+> reclaim / release candidates). `unregisterEntity` prunes both lists; the disconnect revert and the
+> arbitration of the toucher's primaries use the same lists. Contest history is time-STAMPED
+> (`contestTimes`, net time), not aged per frame. **It also returns at once with no client
+> connected.** Consequence: a `Global` entity (not in the index) can no longer be handed over —
+> none of the transferable props are Global.
 
 `setOnClientJoined` / `Left` (main.cpp) spawn and tear down `Entities/Debug/netPlayerCapsule.pre` per
 client. **`joined` runs AFTER the Welcome and world replay are queued**, so anything spawned inside

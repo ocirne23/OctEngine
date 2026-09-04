@@ -122,11 +122,12 @@ export struct NetEntityState
         // primaries: while serverTick < arbitratedUntilTick (player-vs-player contact, refreshed per
         // contact) the twin's pose is solver-owned — claims apply as bounded velocity nudges and the
         // owner's records carry NetRecFlag_Arbitrated. Objects: the last two DISTINCT clients to
-        // touch, with ages — both fresh = CONTESTED, the object reverts to server ownership until
-        // the window decays (single-owner transfer behavior resumes after).
+        // touch, with the net time of each touch (an age is netTime - stamp: no per-frame aging
+        // walk) — both fresh = CONTESTED, the object reverts to server ownership until the window
+        // decays (single-owner transfer behavior resumes after).
         uint32 arbitratedUntilTick = 0;
         uint32 contestClients[2] = { 0, 0 };
-        float contestAges[2] = { 0.0f, 0.0f };
+        double contestTimes[2] = { -1.0e9, -1.0e9 };
         uint32 contestedUntilTick = 0;
 
         // This entity is the SERVER's own primary (its player body, marked via

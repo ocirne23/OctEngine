@@ -31,4 +31,4 @@ Prefab gameEnemyBrute
 		MoveSpeed 2.4
 		AttackDps 12
 		PlayerDps 20
-		EmitterDrain 7.5
+		EmitterDrain 5

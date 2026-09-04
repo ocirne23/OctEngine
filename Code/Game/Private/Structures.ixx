@@ -5,6 +5,7 @@ import Core.glm;
 import Entity;
 import File; // AssetNode (save/load)
 import Force;
+import Threading; // the transport job
 
 // The build/economy layer WITHOUT a structure roster: every structure is an ENTITY whose
 // GameStructureComponent holds its identity (stable id, team, health, blueprint), its three
@@ -245,6 +246,24 @@ public:
         return isBarracksType(m_frame[index].type) ? m_frame[index].state->barracks.houses : 0;
     }
     uint32 structureLinkedId(int index) const { return m_frame[index].linkedId; } // House -> barracks
+    // A cable segment / crossing's transport readout (the selected-cable label): its own fill
+    // against the segment capacity, the cells leaving it as a rate averaged over ~2 s, the segment's
+    // out-rate, and its run's total fill / capacity / segment count. false = not conducting (a
+    // blueprint, or a segment on no run). Clients read mirrored fills, no rates.
+    struct CableInfo
+    {
+        int medium = 0;
+        int fill = 0, capacity = 0;
+        float movedPerSec = 0.0f, ratePerSec = 0.0f;
+        int runFill = 0, runCapacity = 0, runSegments = 0;
+    };
+    bool cableInfo(int index, CableInfo& out) const;
+    // MIRROR of the cable fills (server -> GCf, rotating through the cable nodes from `cursor`):
+    // one byte per segment; clients apply by id. Junction nodes are never sent.
+    struct CableMirror { uint32 id; uint8 fill; uint8 util; }; // util = the ~2 s throughput / rate, x255
+    void collectCableFills(oc::vector<CableMirror>& out, uint32& cursor, int maxRecords) const;
+    void mirrorCableFill(uint32 id, uint8 fill, uint8 util);
+    float transportTickPeriod() const { return 1.0f / glm::max(m_transportTickHz, 1.0f); }
     // The problem badge cached on the roster entry (see Ref::warning): GameMatch's world-labels
     // job re-checks each structure on its own jittered timer and stamps the result here.
     const char* structureWarning(int index) const { return m_frame[index].warning; }
@@ -359,9 +378,9 @@ public:
     {
         switch (t)
         {
-        case EStructureType::Emitter:
-        case EStructureType::Bastion:
-        case EStructureType::Lance:
+        case EStructureType::Emitter:     return m_emitterBuffer; // shield emitters hold a deeper charge:
+        case EStructureType::Bastion:     return m_bastionBuffer; // pressure draw spikes under a push
+        case EStructureType::Lance:       return m_lanceBuffer;
         case EStructureType::Extractor:
         case EStructureType::Solar:
         case EStructureType::Fabricator:
@@ -564,21 +583,93 @@ private:
     // The BUILT cable segment occupying a cell: the primary occupant, or the under-cable when a
     // crossing sits on top (which is what keeps a crossing from unioning with the cable under it).
     int cableSegmentAt(int cx, int cz, bool builtOnly = true) const;
-    // Rebuild every GameStructureLink from cable adjacency (dirty-gated; main thread, game tick):
-    // union-find over built segments, crossing conduction, building attachment, then a diff
-    // against the live links (owner = lower structureId, so a rebuild never flips flow state).
-    // Also refreshes the run table (draw) and the segments' arm visuals.
-    void rebuildDerivedLinks();
+    // Rebuild the CABLE TRANSPORT NETWORKS from cable adjacency (dirty-gated; main thread, game
+    // tick): union-find over built segments, crossing conduction, building attachment and
+    // bridging, then the flat node graph the transport job runs on (below). Also refreshes the
+    // segments' arm visuals. Cable fills survive a rebuild by structure id.
+    void rebuildNetworks();
     void updateArms(const Ref& s); // enable the arm children pointing at connected neighbours
 
-    struct CableRun // persistent between rebuilds for drawDebug (ids — indices go stale)
+    // ---- THE CABLE TRANSPORT (Transport.cpp) ----------------------------------------------
+    // Resources move over the cables as WHOLE CELLS. Every built cable segment and conducting
+    // crossing is a NODE with an integer fill and an out-rate; a built building that holds a
+    // medium is a JUNCTION node (its port: every segment touching it is a neighbour, so a line
+    // through an emitter carries through), and the building's SLOT hangs on that node. Each
+    // transport tick (fixed rate, runs staggered over frames) the game INJECTS every slot's
+    // supply/demand from the building's float store (reserving pushed cells out of it), a JOB
+    // runs `Substeps` of owner-only stencil passes — OFFER: a node serves its slots' demand
+    // first, then FORWARDS into neighbours with free space that did not feed it last sub-step
+    // (the conveyor rule: cells never turn back, a line runs full end to end, a dead end fills
+    // and stops), then takes slot supply into its free space, all within its out-rate; APPLY: fill' = fill -
+    // out + in — and the join hands the cells to the stores. No atomics, no entity walk, the
+    // result is independent of scheduling, and a run's bottleneck is simply its slowest segment.
+    // Node adjacency is CSR (a junction has any number of neighbours); each adjacency slot knows
+    // the reverse slot so APPLY reads its inflow from the neighbours' own out-slots.
+    struct TransportNode
     {
+        uint32 structureId = 0;    // the cable/crossing this node is — or the bridged building's id
+        uint32 adjFirst = 0, adjCount = 0;
+        uint32 slotFirst = 0, slotCount = 0; // the building slots on this (junction) node
+        uint32 rateFp = 0;         // out budget per SUB-STEP, 1/1024 cell (junctions: x degree)
+        uint32 carryFp = 0;        // fractional budget carried between sub-steps
+        uint16 fill = 0;           // cells held — may transiently exceed the segment capacity (soft)
+        uint16 moved = 0;          // cells that left this node last tick (gauge)
+        float movedAvg = 0.0f;     // cells/s, EMA over ~2 s of `moved` (the label's throughput)
+        uint16 run = 0;
         uint8 medium = 0;
-        oc::vector<uint32> segmentIds;  // cable segments + conducting crossings of the run
-        oc::vector<uint32> buildingIds; // attached structures (capacity in the medium)
+        uint8 junction = 0;        // a building's port node: never saved or mirrored
+        uint8 rotate = 0;          // integer-remainder rotation counter
+        uint32 inMask = 0;         // adjacency slots that fed this node last sub-step (bit per slot,
+                                   // the first 32): never forwarded back into — the conveyor rule
     };
+    struct TransportAdj { uint32 node; uint32 reverse; }; // neighbour + its slot pointing back here
+    enum class ETransportRole : uint8 { Consumer, Producer, Storage };
+    struct TransportSlot // one (building, medium) port
+    {
+        GameStructureComponent* state = nullptr;
+        uint32 structureId = 0;
+        uint32 node = 0;           // the junction it hangs on
+        uint8 medium = 0;
+        ETransportRole role = ETransportRole::Consumer;
+        int32 supply = 0, demand = 0; // cells offered / wanted this tick (inject); served down by the job
+        int32 taken = 0, given = 0;   // cells the network took from / delivered to this port this tick
+        int32 reserved = 0;           // cells reserved OUT of the store at inject (refund = reserved - taken)
+        float intakeCarry = 0.0f;     // metered machines: fractional per-tick intake carry
+        float intakePerSec = 0.0f;    // 0 = unmetered
+    };
+    struct TransportRun { uint32 firstNode = 0, numNode = 0; uint8 medium = 0; uint8 group = 0; };
+    struct TransportNet
+    {
+        oc::vector<TransportNode> nodes;
+        oc::vector<TransportAdj> adj;
+        oc::vector<TransportSlot> slots;
+        oc::vector<TransportRun> runs;
+        oc::unordered_map<uint32, uint32> nodeById; // cable/crossing id -> node (label, mirror, save)
+        // job scratch, owner-only writes
+        oc::vector<uint16> fillNext;
+        oc::vector<uint16> outAdj;  // per adjacency slot: cells sent to that neighbour this sub-step
+        oc::vector<uint16> outSlot; // per port slot: cells delivered this sub-step
+        oc::vector<uint16> inSlot;  // per port slot: cells taken from the port this sub-step
+        oc::vector<uint32> dueRuns; // the runs this job ticks
+    };
+    TransportNet m_net;
+    oc::unordered_map<uint32, uint16> m_savedFills; // fills of cables that left the graph (rebuild carry-over)
+    JobCounter m_transportCounter;
+    bool m_transportKicked = false;
+    float m_transportGroupNext[8] = {};  // sim time each stagger group next ticks
+    float m_transportTime = 0.0f;
+    uint32 m_transportTickIndex = 0;
+    // Inject the due runs' slots + kick the job (end of tickAuthority); join it + hand the cells
+    // to the stores (top of tickAuthority). The job overlaps present and the next frame's front.
+    void kickTransport();
+    void joinTransport();
+    void transportTick(); // the job body: substeps x (offer, apply) over m_net.dueRuns
+    void transportApplyBoundary();
+    void transportInject(const TransportRun& run);
+    void addTransportSlot(int buildingIdx, int medium, uint32 node);
+    static ETransportRole transportRoleOf(EStructureType t, int medium);
+
     oc::unordered_map<uint64, CellEntry> m_cells;
-    oc::vector<CableRun> m_runs;
     bool m_linksDirty = true;
     float emitterOutputOf(EStructureType t) const
     {
@@ -643,41 +734,55 @@ private:
         40.0f, // House
         50.0f, // MedicStation
     };
-    float m_startMinerals = 100.0f;
+    float m_startMinerals = 200.0f;
     float m_extractorSnapRadius = 6.0f;
     float m_mineralRate = 2.0f;
     float m_fuelRate = 4.0f;
     float m_baseIncomeMult = 0.25f;
     float m_placeRange = 30.0f;
-    float m_cableThroughput[3] = { // by MEDIUM (no tiers any more)
-        10.0f,  // energy
+    float m_cableThroughput[3] = { // by MEDIUM: a segment's OUT-RATE in cells/s (the bottleneck unit)
+        20.0f,  // energy
         4.0f,  // fuel
         4.0f   // minerals
     };
+    // The transport tick: fixed rate, `Substeps` stencil passes per tick (an empty line fills at
+    // Substeps segments per tick; a full one moves at the segment rate), runs staggered over
+    // `Spread` groups so a large base's work lands on several frames.
+    float m_transportTickHz = 10.0f;
+    int m_transportSubsteps = 4;
+    int m_transportSpread = 4;
+    int m_cellsPerSegment = 4;        // soft capacity of one segment (a run buffers segments x this)
+    float m_storageLowMark = 0.25f;   // storage pushes while its port node is at/below this fill
+    float m_storageHighMark = 0.75f;  // ... and pulls while at/above this (hysteresis between)
+    int m_statTransportNodes = 0;     // read-only stats under Game/Economy
+    int m_statTransportTicks = 0;
     float m_cableHealthMax = 40.0f; // segments/crossings are softer than buildings
     float m_internalBuffer = 10.0f;
+    float m_emitterBuffer = 50.0f;  // the shield emitters' energy stores (their pressure draw spikes)
+    float m_bastionBuffer = 150.0f;
+    float m_lanceBuffer = 100.0f;
     float m_generatorBuffer = 10.0f;
     float m_batteryCapacity = 200.0f;
     float m_generatorFuelTank = 10.0f;
     float m_fuelTankCapacity = 200.0f;
     float m_mineralSiloCapacity = 200.0f;
-    float m_mineralBaseCapacity = 100.0f;
+    float m_mineralBaseCapacity = 200.0f;
     // MEDIC STATION: a plain powered consumer; while powered its component update heals own-team
     // units in reach (GameStructureParams::medicRange/medicHealRate) and GameMatch heals the own
     // player (tickMedicHealing).
     float m_medicEnergyPerSec = 1.5f;
     float m_barracksEnergyIntake = 2.0f; // energy/s a barracks' power links deliver at most: the BUILD RATE
                                          // (build time = unit cost / this — Grunt 5 -> 2.5 s, Brute 20 -> 10 s)
-    float m_genEnergyPerSec = 7.5f;
+    float m_genEnergyPerSec = 5.0f;
     float m_solarEnergyPerSec = 1.0f;
     float m_fuelBurnRate = 1.0f;
     float m_fabricatorMineralsPerSec = 0.5f;
     float m_fabricatorFuelPerSec = 1.0f;
-    float m_fabricatorEnergyPerSec = 2.0f;
-    float m_extractorEnergyPerSec = 1.5f;
+    float m_fabricatorEnergyPerSec = 1.0f;
+    float m_extractorEnergyPerSec = 1.0f;
     float m_pressureDrawTension = 1.5f;
 
-    float m_emitterEnergyPerSec = 1.5f;
+    float m_emitterEnergyPerSec = 1.0f;
     float m_emitterOutput = 1.2f;
     float m_emitterReach = 27.0f;
     // The Base's shield (the values base.pre used to author; the shield now pays for itself from
@@ -688,7 +793,7 @@ private:
     float m_baseShieldOutput = 2.4f;
     float m_baseShieldReach = 27.0f;
 
-    float m_bastionEnergyPerSec = 5.0f;
+    float m_bastionEnergyPerSec = 2.0f;
     float m_bastionOutput = 2.6f;
     float m_bastionReach = 45.0f;
 

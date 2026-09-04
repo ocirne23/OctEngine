@@ -403,6 +403,17 @@ private:
     // rings' addresses stable (components hold raw pointers across map growth)
     oc::map<uint32, oc::unique_ptr<NetSnapshotRing>> m_remoteBuffers;
     oc::vector<oc::pair<uint32, glm::vec3>> m_transferSources; // server scan scratch: clientId + primary body position
+    // The proximity transfer NEVER walks m_entities: the few entities it can act on are tracked.
+    // m_primaryIds = every netId setOwner / setServerPrimary touched (the transfer SOURCES, filtered
+    // to live dynamic bodies at use); m_transferredIds = objects a client currently holds through
+    // transfer (reclaim / release candidates). Hand-over candidates come from a SpatialIndex sphere
+    // query around each client primary. Both lists are pruned by unregisterEntity.
+    oc::vector<uint32> m_primaryIds;
+    oc::vector<uint32> m_transferredIds;
+    oc::vector<uint32> m_transferredScratch; // iteration copy: transferOwnership edits the list
+    oc::vector<uint64> m_transferQuery;      // spatial query scratch
+    void trackPrimary(uint32 netId);
+    void untrackId(oc::vector<uint32>& list, uint32 netId);
 
     // netId, not Entity*: the sender may be destroyed between the queueing thread and the drain
     struct PendingEvent { oc::string name; oc::vector<uint8> data; uint32 senderNetId = 0; };
