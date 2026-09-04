@@ -87,7 +87,6 @@ public:
 
 private:
     EntityPtr m_entity;
-    ForceQuery m_query; // point query at the body center — feeds the density readout
     glm::vec3 m_spawnPos{ 0.0f };
     oc::function<glm::vec3(const glm::vec3&)> m_respawnResolver; // anchor -> free cell (see setRespawnResolver)
     glm::vec3 m_moveTarget{ 0.0f };

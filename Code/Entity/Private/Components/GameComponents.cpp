@@ -986,8 +986,6 @@ void GameStructureComponent::spawn(Entity& entity, const SpawnInfo& info, const 
     alwaysDisplayHealth = info.alwaysDisplayHealth ? 1 : 0;
     alwaysShowResources = info.alwaysShowResources ? 1 : 0;
     meleeRadius = info.meleeRadius;
-    if (isAuthority()) // clients never damage-sim, so they never spend a query slot
-        query = Globals::forceSystem.createQuery(base.pos);
 }
 
 // Atomically move `amount` from one store float to another, clamped by the source's content and
@@ -1020,10 +1018,10 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
     // ---- territory: HOSTILE = any OTHER team's bubble owns the structure's point (push a field
     // over their base to siege it). Health is the construction progress too, so a blueprint under
     // an enemy bubble literally un-builds.
-    if (!invulnerable && query.isValid())
+    if (!invulnerable) // one bake tap (worker-safe), no GPU query slot
     {
-        const ForceQuery::Result territory = query.getResult();
-        if (territory.valid && territory.inside && territory.owningTeam != (int)team)
+        const ForceSystem::FieldSample territory = Globals::forceSystem.sampleBakedField(entity.pos, team);
+        if (territory.valid && territory.inside && territory.owningTeam != (uint32)team)
             fieldDrain(params.fieldDamageRate * deltaSec);
     }
 

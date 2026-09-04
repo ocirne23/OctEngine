@@ -115,6 +115,10 @@ export namespace RendererVKLayout
     // member of a merge group (Force library) whose field the group's emitter carries. Compacted
     // past fe_count (so every field evaluation and the grid insert never see it) and never drawn.
     constexpr uint32 FORCE_FLAG_PASSIVE = 1u << 1;
+    // force_emitter.cs integrates this slot's applied force / pressure (the ANALYTIC readback).
+    // Clear = the thread exits at once: the Force library serves the readback from its CPU
+    // pressure bake instead, which is the default for every ground consumer.
+    constexpr uint32 FORCE_FLAG_READBACK = 1u << 2;
 
     // Force emitter hash grid (uniform 32 m cells, NOT camera-adaptive — gameplay queries happen
     // anywhere). Fixed per-cell emitter capacity; cells bump-allocate from the data buffer with the
@@ -161,6 +165,31 @@ export namespace RendererVKLayout
             back = R * (0.02f - lo);
         }
         return glm::max(side, (forward + back) * 0.5f);
+    }
+
+    // CPU mirror of the shader's forceContribution (force_field.inc.glsl): this emitter's OWN
+    // field at x. The renderer evaluates it once per frame at the camera ("camera inside a
+    // bubble"); the Force library weights its bake-tap readback with it. Must stay in sync with
+    // the shader.
+    inline float forceContributionCpu(const glm::vec3& x, const ForceEmitterGpu& e)
+    {
+        const glm::vec3 d = x - glm::vec3(e.posReach);
+        const float R = e.posReach.w;
+        const float z = glm::dot(d, glm::vec3(e.dirFocus));
+        if (z <= 0.0f || z >= R)
+            return 0.0f;
+        const float lat2 = glm::max(glm::dot(d, d) - z * z, 0.0f);
+        const float X = z * (2.0f / R) - 1.0f;
+        const float invW = 1.0f / e.outputParams.w;
+        const float Y2 = lat2 * (4.0f / (R * R)) * (invW * invW);
+        const float m = 1.0f - 2.0f * e.dirFocus.w;
+        const float q = glm::clamp((1.0f - X) / (1.0f + X), 1e-4f, 1e4f);
+        const float u2 = X * X + Y2 * (m == 0.0f ? 1.0f : std::pow(q, m));
+        if (u2 >= 1.0f)
+            return 0.0f;
+        const float qq = 1.0f - u2;
+        const float b = (z / R - e.outputParams.z) * 2.2222223f;
+        return e.outputParams.x * qq * qq * (0.15f + std::exp(-b * b));
     }
 
     // GPU layout of the per-frame compacted emitter buffer: count header + live emitters (matches

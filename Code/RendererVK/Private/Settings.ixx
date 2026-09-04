@@ -447,12 +447,16 @@ export struct ForceFieldParams
                                        // the DRAW entirely (its field/readbacks stay live); 0 = off
     float shellFullResPixels = 160.0f; // projected radius at/above which the march runs the full
                                        // "March steps"; smaller shells taper linearly (floor 8)
-    float sampledShellRadius = 7.0f;   // emitters whose VISIBLE bubble radius (forceEmitterVisibleRadius,
+    float sampledShellRadius = 8.0f;   // emitters whose VISIBLE bubble radius (forceEmitterVisibleRadius,
                                        // not authored reach) is >= this march the BAKED shell volume
                                        // (two trilinear taps/sample) instead of the analytic
                                        // candidate loop — hits/normals/shading stay analytic.
                                        // 0 = tier off. Small bubbles stay analytic: the fixed-size
                                        // volume's resolution cannot resolve them
+    float shellVolumeViewMargin = 10.0f; // the sampled-tier volume's fit is CLIPPED to the camera's
+                                       // ground-band view footprint plus this margin (m), so its
+                                       // fixed texel grid follows the zoom, not the spread of every
+                                       // large bubble; 0 = the unbounded union (old behaviour)
     // UNION MARCH (desktop): the ANALYTIC tier renders as ONE march per pixel — the small proxies
     // only rasterize their ray intervals (MIN-blend), a fullscreen pass marches the per-pixel
     // union once. Kills the overdraw term where small bubbles stack. Off = per-proxy marches (A/B).

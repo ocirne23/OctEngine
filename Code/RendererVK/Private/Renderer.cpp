@@ -989,30 +989,6 @@ void Renderer::buildUboOcean()
     ubo.oceanParams10 = glm::vec4(glm::max(ocean.waveHeightLimit, 0.0f), 0.0f, 0.0f, 0.0f);
 }
 
-// CPU mirror of the shader's forceContribution (force_field.inc.glsl) — evaluated ONCE per frame
-// at the camera for the "camera inside a bubble" bit, so the shell/union marches skip their
-// per-fragment origin re-sample. Must stay in sync with the shader.
-static float forceContributionCpu(const glm::vec3& x, const RendererVKLayout::ForceEmitterGpu& e)
-{
-    const glm::vec3 d = x - glm::vec3(e.posReach);
-    const float R = e.posReach.w;
-    const float z = glm::dot(d, glm::vec3(e.dirFocus));
-    if (z <= 0.0f || z >= R)
-        return 0.0f;
-    const float lat2 = glm::max(glm::dot(d, d) - z * z, 0.0f);
-    const float X = z * (2.0f / R) - 1.0f;
-    const float invW = 1.0f / e.outputParams.w;
-    const float Y2 = lat2 * (4.0f / (R * R)) * (invW * invW);
-    const float m = 1.0f - 2.0f * e.dirFocus.w;
-    const float q = glm::clamp((1.0f - X) / (1.0f + X), 1e-4f, 1e4f);
-    const float u2 = X * X + Y2 * (m == 0.0f ? 1.0f : std::pow(q, m));
-    if (u2 >= 1.0f)
-        return 0.0f;
-    const float qq = 1.0f - u2;
-    const float b = (z / R - e.outputParams.z) * 2.2222223f;
-    return e.outputParams.x * qq * qq * (0.15f + std::exp(-b * b));
-}
-
 // Forcefield bubbles (Force library pushes m_forceFieldParams every frame; all UBO-driven = live).
 void Renderer::buildUboForce()
 {
@@ -1055,6 +1031,53 @@ void Renderer::buildUboForce()
             bakeLo = glm::min(bakeLo, glm::min(a, b) - side);
             bakeHi = glm::max(bakeHi, glm::max(a, b) + side);
         }
+    // VIEW FOOTPRINT CLIP (XZ): the volume only has to cover what is on screen. The four corner
+    // rays hit the union's height band at eight points; their XZ box (+ "Volume view margin") clips
+    // the fit, so the fixed texel grid follows the zoom instead of stretching over every large
+    // bubble in the world — a 7 m bubble 100 m off-screen no longer halves a 40 m shell's
+    // resolution. Outside the clipped fit the volume reads border black, but that boundary lies
+    // outside the view by construction. A ray that misses the band (camera looking up: the
+    // free-fly editor camera) leaves the union unclipped.
+    if (bakeLo.x <= bakeHi.x && force.shellVolumeViewMargin > 0.0f && !isVrEnabled())
+    {
+        const glm::mat4 invViewProj = glm::inverse(getCenterViewProj());
+        glm::vec2 footLo(FLT_MAX), footHi(-FLT_MAX);
+        bool valid = true;
+        for (int c = 0; c < 4 && valid; ++c)
+        {
+            const glm::vec2 ndc((c & 1) ? 1.0f : -1.0f, (c & 2) ? 1.0f : -1.0f);
+            glm::vec4 p0 = invViewProj * glm::vec4(ndc, 0.0f, 1.0f);
+            glm::vec4 p1 = invViewProj * glm::vec4(ndc, 1.0f, 1.0f);
+            p0 /= p0.w;
+            p1 /= p1.w;
+            // Reversed-Z or not, the point FARTHER from the camera is on the far side of the ray.
+            const glm::vec3 d0 = glm::vec3(p0) - m_cameraPos, d1 = glm::vec3(p1) - m_cameraPos;
+            const glm::vec3 dir = glm::dot(d1, d1) > glm::dot(d0, d0) ? d1 : d0;
+            for (const float yPlane : { bakeLo.y, bakeHi.y })
+            {
+                const float t = glm::abs(dir.y) > 1e-6f ? (yPlane - m_cameraPos.y) / dir.y : -1.0f;
+                if (t < 0.0f)
+                {
+                    valid = false; // the corner ray never reaches the band
+                    break;
+                }
+                const glm::vec3 hit = m_cameraPos + dir * t;
+                footLo = glm::min(footLo, glm::vec2(hit.x, hit.z));
+                footHi = glm::max(footHi, glm::vec2(hit.x, hit.z));
+            }
+        }
+        if (valid)
+        {
+            footLo -= force.shellVolumeViewMargin;
+            footHi += force.shellVolumeViewMargin;
+            bakeLo.x = glm::max(bakeLo.x, footLo.x);
+            bakeLo.z = glm::max(bakeLo.z, footLo.y);
+            bakeHi.x = glm::min(bakeHi.x, footHi.x);
+            bakeHi.z = glm::min(bakeHi.z, footHi.y);
+            if (bakeLo.x >= bakeHi.x || bakeLo.z >= bakeHi.z)
+                bakeLo = glm::vec3(FLT_MAX); // every large bubble is off-screen: no bake this frame
+        }
+    }
     m_forceShellBakeActive = bakeLo.x <= bakeHi.x;
     if (m_forceShellBakeActive)
     {
@@ -1078,7 +1101,7 @@ void Renderer::buildUboForce()
         if ((e.teamFlags.y & RendererVKLayout::FORCE_FLAG_ACTIVE) == 0u
             || (e.teamFlags.y & RendererVKLayout::FORCE_FLAG_PASSIVE) != 0u)
             continue;
-        phiCam[glm::min(e.teamFlags.x, RendererVKLayout::MAX_FORCE_TEAMS - 1u)] += forceContributionCpu(m_cameraPos, e);
+        phiCam[glm::min(e.teamFlags.x, RendererVKLayout::MAX_FORCE_TEAMS - 1u)] += RendererVKLayout::forceContributionCpu(m_cameraPos, e);
     }
     float bestCam = 0.0f, secondCam = 0.0f;
     for (float p : phiCam)

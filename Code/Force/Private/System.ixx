@@ -18,6 +18,13 @@ import Threading;
 
 export class ForceSystem;
 
+// CPU emitter instances — DELIBERATELY far above the renderer's MAX_FORCE_EMITTERS GPU slots.
+// Every unit in a co-op map carries a bubble (the "Max enemy units" cap is 25000), but only the
+// ones the SIM LOD keeps ACTIVE hold a renderer slot; the rest are instance-only and cost nothing
+// on the GPU. m_emitters is RESERVED to this at initialize(), so it never reallocates under a
+// lock-free resolveEmitter (32768 x ~192 B = ~6 MB).
+export constexpr uint32 MAX_FORCE_INSTANCES = 32768;
+
 // RAII handle to a live emitter. Move-only, like ParticleEffect/PhysicsBody.
 export class ForceEmitter final
 {
@@ -35,10 +42,13 @@ public:
     void setTransform(const glm::vec3& pos, const glm::vec3& direction);
     void setPosition(const glm::vec3& pos);
     void setOutput(float output);
-    // ACTIVE gate (default on): off = the emitter keeps its slot and every parameter but projects
-    // NO field this frame — uploaded with flags 0 (skipped by the grid, the draw, the compute
-    // and the bake), no readback (appliedForce/pressure read zero), evicted from and never a
-    // candidate for merging. Pass-safe like setOutput. The World's SIM LOD drives it by tier.
+    // ACTIVE gate (default on): off = the emitter keeps its instance and every parameter but
+    // projects NO field this frame, and its GPU SLOT GOES BACK — skipped by the grid, the draw,
+    // the compute and the bake, no readback (appliedForce/pressure read zero), evicted from and
+    // never a candidate for merging. The first update() that sees it active again mints a new
+    // slot. So a far unit's bubble costs one of MAX_FORCE_INSTANCES, never one of the much
+    // scarcer MAX_FORCE_EMITTERS renderer slots. Pass-safe like setOutput (the slot churn itself
+    // runs serially in update()). The World's SIM LOD drives it by tier.
     void setActive(bool active);
     void setReach(float reach);   // total extent: the bubble spans pos .. pos + dir * reach
     void setFocus(float focus);   // shape pinch [0,1]: 0.5 = sphere spanning the line, 0 = cone
@@ -54,6 +64,12 @@ public:
     // exists — it deforms other bubbles and produces force/pressure/query results). The intended
     // use is huge invisible fields whose proxy box would otherwise become a full-screen march.
     void setShellAlpha(float alpha);
+    // READBACK SOURCE for getAppliedForce / getPressure. Default OFF = the CPU pressure bake: a
+    // ring of bilinear taps over the bubble at the bake height, no GPU work per emitter (and no
+    // slot needed while merged). ON = the GPU integral (force_emitter.cs, ~2 frames latent) —
+    // for emitters that leave the ground band, since the bake is planar: projectiles, lobs. The
+    // bake being disabled or not yet published falls every emitter back to the GPU path.
+    void setAnalyticReadback(bool analytic);
     // MERGING (on by default; false opts out): same-team mergeable emitters whose bubbles overlap are
     // carried by ONE group emitter on the GPU (see ForceSystem's "Force/Merge" tweaks). While merged
     // this emitter projects no field of its own — the group's covers it entirely — and it rejoins
@@ -171,6 +187,8 @@ public:
         bool valid = false;   // false = bake disabled or nothing published yet (callers fall back)
         bool inside = false;  // inside owningTeam's bubble at the bake height
         uint32 owningTeam = 0;
+        float field = 0.0f;                 // the STRONGEST team's field (owningTeam's), meaningful
+                                            // outside bubbles too — the density readout
         float opposing = 0.0f;              // strongest field of any team != the sampled team
         glm::vec3 opposingGradient{ 0.0f }; // planar (XZ) gradient of that field
     };
@@ -202,9 +220,10 @@ private:
     struct EmitterInstance
     {
         uint32 generation = 0; // 0 = free slot
-        uint32 rendererSlot = UINT32_MAX;
+        uint32 rendererSlot = UINT32_MAX; // ONLY while active: minted/retired by update(), never at create
         uint32 team = 0;
         bool active = true; // see ForceEmitter::setActive
+        bool analyticReadback = false; // see ForceEmitter::setAnalyticReadback
         float output = 1.0f;
         float reach = 1.0f;
         float focus = 0.0f;
@@ -310,6 +329,14 @@ private:
     void destroyEmitter(uint64 handle);
     void destroyQuery(uint64 handle);
     void debugDrawEmitter(Renderer& renderer, const EmitterInstance& inst) const;
+    // One emitter's GPU upload: transition sphere, merge flags, the readback latch and the debug
+    // rings. Runs on the upload jobs (own instance + own renderer slot only) and serially in
+    // update() for an emitter that just took a slot back. The caller guarantees a valid slot.
+    void uploadEmitter(Renderer& renderer, EmitterInstance& inst, float blendStep);
+    // The bake-tap readback (the force_emitter.cs integral mirrored on the CPU): centre + a ring
+    // of taps at 0.35 x reach over the uploaded shape `gpu`, each weighted by the emitter's own
+    // normalized field there, reading the PUBLISHED pressure bake (last frame's). Worker-safe.
+    void bakedReadback(EmitterInstance& inst, const RendererVKLayout::ForceEmitterGpu& gpu) const;
 
     // The merge job body: refresh bubble bounds, leave pass (members that drifted / changed team /
     // lost their bubble), candidate cells + neighbour pairs, union pass (new groups, joins,
@@ -349,9 +376,10 @@ private:
     void debugDrawGroup(Renderer& renderer, const MergeGroup& group) const;
 
     // Parallel entity spawning: create/destroy of emitters and queries run concurrently from spawn
-    // jobs — the free lists and generation counter serialize here. m_emitters/m_queries are RESERVED
-    // to their renderer MAX at initialize(), so growth never reallocates under a concurrent
-    // resolveEmitter/resolveQuery (the setters stay lock-free, same as the parallel-pass contract).
+    // jobs — the free lists and generation counter serialize here. m_emitters is RESERVED to
+    // MAX_FORCE_INSTANCES and m_queries to the renderer's MAX at initialize(), so growth never
+    // reallocates under a concurrent resolveEmitter/resolveQuery (the setters stay lock-free, same
+    // as the parallel-pass contract).
     std::mutex m_createMutex;
     oc::vector<EmitterInstance> m_emitters; // indexed by handle low 32 bits; slots recycled by generation
     oc::vector<uint32> m_freeEmitters;
@@ -368,6 +396,11 @@ private:
     // pass binary-searches the 27 cells — a private structure over the candidates only, instead
     // of the entity SpatialIndex whose finest cells are full of render entries to filter.
     PerWorker<oc::vector<uint32>> m_candidateStaging;
+    // Renderer-slot churn staging: the upload jobs see the ACTIVE gate flip and stage the emitter
+    // index; update() mints/retires the slots SERIALLY right after, since the renderer's
+    // create/destroy grow vectors those same jobs are indexing.
+    PerWorker<oc::vector<uint32>> m_slotAcquire;
+    PerWorker<oc::vector<uint32>> m_slotRelease;
     oc::vector<oc::pair<uint64, uint32>> m_cells;
     oc::atomic<uint32> m_maxJoinRadiusBits = 0; // float bits (positive floats order as uints)
     JobCounter m_mergeCounter; // the in-flight merge job (update kicks -> joinMerge joins next frame)
@@ -375,7 +408,12 @@ private:
     float m_mergeDeltaSec = 0.0f;
     oc::vector<uint32> m_retiredGroupSlots; // dissolved on the job; destroyed on main in update()
     uint32 m_numLiveEmitters = 0;
+    uint32 m_numSlottedEmitters = 0; // of those, the ACTIVE ones holding a renderer slot
     uint32 m_generationCounter = 1;
+    bool m_slotCapWarned = false;     // printed once per starvation stretch, cleared when it ends
+    bool m_instanceCapWarned = false; // once
+    int m_statEmitters = 0;           // read-only stats bound under Force
+    int m_statSlots = 0;
 
     float m_visibleBoundsIsoFrac = 1.0f; // draw-box shrink (packVisibleBounds); 0 = full boxes
 
@@ -386,7 +424,10 @@ private:
     bool m_bakePublished = false;
     bool m_bakeCapWarned = false;
     oc::vector<glm::ivec4> m_bakeChunkScratch;
-    oc::unordered_set<uint64> m_bakeSeen;          // per-frame dedup of chunk coords
+    // Chunk selection staging: the per-emitter pass appends every chunk key its support box
+    // touches per worker; serially the keys are concatenated, sorted, uniqued and capped.
+    PerWorker<oc::vector<uint64>> m_bakeKeyStaging;
+    oc::vector<uint64> m_bakeKeys;
     oc::unordered_map<uint64, uint32> m_bakeIndex; // packed chunk coord -> published chunk index
     oc::vector<glm::vec4> m_bakeData;              // published readback copy (512 vec4 per chunk)
 

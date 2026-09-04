@@ -21,6 +21,7 @@ Prefab gameEnemyLob
 		Output 0.5
 		Reach 2
 		Centered true
+		AnalyticReadback true
 	Component Network
 	Component GameProjectile
 		UnitDamage 20

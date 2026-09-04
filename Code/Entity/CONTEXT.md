@@ -321,6 +321,11 @@ change applies at once.
   switches it off on the way out.**
 * Where the LOD does not apply — inactive, Global, no entry — the World never touches a bubble.
 
+**This gate is what keeps the force system inside its GPU budget.** A gated-off emitter HANDS ITS
+RENDERER SLOT BACK (`MAX_FORCE_EMITTERS` 8192, versus `MAX_FORCE_INSTANCES` 32768 CPU instances), so
+a 25k-unit map only pays GPU slots for the bubbles near a player. See
+[`Code/Force/CONTEXT.md`](../Force/CONTEXT.md).
+
 ## The delta
 
 `updateSelf` gets:

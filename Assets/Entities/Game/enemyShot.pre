@@ -21,6 +21,7 @@ Prefab gameEnemyShot
 		Output 0.4
 		Reach 1.5
 		Centered true
+		AnalyticReadback true
 	Component Network
 	Component GameProjectile
 		UnitDamage 0

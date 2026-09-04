@@ -20,6 +20,7 @@ void ForceComponent::spawn(Entity& entity, const SpawnInfo& info, const Transfor
     emitter = Globals::forceSystem.createEmitter(info.team, pos, worldDir,
         info.output, info.reach, info.focus, info.distribution, info.width);
     emitter.setMergeable(info.mergeable);
+    emitter.setAnalyticReadback(info.analyticReadback);
 }
 
 void ForceComponent::destroy(Entity& entity, const SpawnInfo&)
@@ -65,4 +66,5 @@ void writeForceSpawnInfo(const ForceComponent::SpawnInfo& info, AssetNode& out)
     if (info.width != defaults.width)               out.set("Width", info.width);
     if (info.centered != defaults.centered)         out.set("Centered", info.centered);
     if (info.mergeable != defaults.mergeable)       out.set("Mergeable", info.mergeable);
+    if (info.analyticReadback != defaults.analyticReadback) out.set("AnalyticReadback", info.analyticReadback);
 }

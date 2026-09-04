@@ -57,7 +57,6 @@ void GamePlayer::spawn(const glm::vec3& pos)
         m_entity->setName("Player");
         Globals::world.addRootEntity(m_entity);
     }
-    m_query = Globals::forceSystem.createQuery(pos);
     m_jumpWasDown = true; // swallow a Space held through spawn
     setTeam(m_team);      // re-apply to the fresh capsule's emitter (prefab authors team 0)
 }
@@ -90,8 +89,6 @@ void GamePlayer::clientAdopt(const glm::vec3& respawnPos)
         m_graceTimer = m_spawnGraceSec;
         for (float& h : m_outputHistory)
             h = m_shieldMaxOutput;
-        if (!m_query.isValid())
-            m_query = Globals::forceSystem.createQuery(respawnPos);
         setTeam(m_team); // the replicated prefab authors team 0 — re-team the local twin's field
         Log::info("Adopted our player capsule from the server");
         return;
@@ -103,7 +100,6 @@ void GamePlayer::despawn()
     if (m_entity)
         Globals::world.removeRootEntity(m_entity.get());
     m_entity = EntityPtr();
-    m_query = ForceQuery();
 }
 
 // Distance from the body center to the shape's lowest point, world units (grounds the jump
@@ -242,13 +238,14 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
     m_lastPressure = pressure;
 
     const glm::vec3 bodyPos = pc->body.getPosition();
-    m_query.setPosition(bodyPos);
-    const ForceQuery::Result territory = m_query.getResult();
-    const float density = territory.density() / glm::max(fc->emitter.getCenterDensityFactor(), 1e-3f);
+    // Territory at the body from the CPU pressure bake (no GPU query slot): the strongest team's
+    // field there, normalized to Output units, is the cover density.
+    const ForceSystem::FieldSample territory = Globals::forceSystem.sampleBakedField(bodyPos, m_team);
+    const float density = territory.field / glm::max(fc->emitter.getCenterDensityFactor(), 1e-3f);
     m_lastDensity = density;
 
     const float currentOutput = m_shieldCollapsed ? 0.01f : m_shieldMaxOutput;
-    const float coverSurplus = territory.valid && territory.inside && territory.owningTeam == (int)m_team
+    const float coverSurplus = territory.valid && territory.inside && territory.owningTeam == m_team
         ? glm::max(0.0f, density - currentOutput) : 0.0f;
     float drainMult = glm::clamp(1.0f - coverSurplus * m_coverDrainReduction, 0.0f, 1.0f);
 

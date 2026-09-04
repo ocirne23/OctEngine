@@ -1167,6 +1167,7 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         if (const AssetNode* n = forceNode->find("Width"))        info->width = n->asFloat(0, info->width);
         if (const AssetNode* n = forceNode->find("Centered"))     info->centered = n->asBool(0, true);
         if (const AssetNode* n = forceNode->find("Mergeable"))    info->mergeable = n->asBool(0, true);
+        if (const AssetNode* n = forceNode->find("AnalyticReadback")) info->analyticReadback = n->asBool(0, true);
         typeBits |= uint16(1 << EComponentID_Force);
         tmpl.spawnInfos.emplace_back(oc::move(info));
     }

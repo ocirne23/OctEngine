@@ -170,6 +170,7 @@ static oc::string buildLayoutPreamble()
     def("FORCE_BAKE_CHUNK_SAMPLES", FORCE_BAKE_CHUNK_SAMPLES, "u");
     def("FORCE_SHELL_VOLUME_GROUP", FORCE_SHELL_VOLUME_GROUP, "u");
     def("FORCE_FLAG_ACTIVE", FORCE_FLAG_ACTIVE, "u");
+    def("FORCE_FLAG_READBACK", FORCE_FLAG_READBACK, "u");
     def("FORCE_CELL_MAX_EMITTERS", FORCE_CELL_MAX_EMITTERS, "u");
     return s;
 }

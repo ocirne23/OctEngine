@@ -39,6 +39,9 @@ export struct ForceComponent
         bool centered = true;      // pull the emitter back Reach/2 so a zero offset centres the bubble on the entity
         bool mergeable = true;     // the Force library's bubble MERGING (same-team overlapping mergeable
                                    // bubbles ride one GPU emitter; see "Force/Merge" tweaks); false opts out
+        bool analyticReadback = false; // force/pressure from the GPU integral instead of the planar CPU
+                                       // pressure bake (ForceEmitter::setAnalyticReadback): for bubbles
+                                       // that leave the ground band — projectiles, lobs
     };
 
     void spawn(Entity& entity, const SpawnInfo& info, const Transform& base);

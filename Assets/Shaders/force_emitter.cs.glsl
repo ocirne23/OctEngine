@@ -31,6 +31,8 @@ void main()
     if (i >= fe_evalCount) // includes the PASSIVE tail: merged members read their own pressure
         return;
     const ForceEmitterData e = fe_emitters[i];
+    if ((e.teamFlags.y & FORCE_FLAG_READBACK) == 0u)
+        return; // served from the CPU pressure bake (the default); only flagged slots integrate here
     const uint team = e.teamFlags.x;
     const float R = e.posReach.w;
     const vec3 center = e.posReach.xyz + e.dirFocus.xyz * (R * 0.5); // midpoint of the output line

@@ -836,7 +836,8 @@ off placement), one per team.
 
 ## Structure health and labels
 
-Every structure has a `ForceQuery`; **territory owned by ANY other team's bubble drains health.**
+Every structure taps the pressure bake at its position (`sampleBakedField`, no GPU query slot);
+**territory owned by ANY other team's bubble drains health.**
 
 Emitters shrink out over "Emitter shrink time" when starved and **latch off until "Emitter restart
 charge"**, pay a pressure surcharge ("Emitter energy/s @ pressure 1") plus a per-unit siege drain
@@ -1034,8 +1035,10 @@ bar without regrowing the bubble.
 * **Sprint burns the battery too** ("Sprint energy/s"), and emptying it collapses the shield — **sprint
   stays locked out until the battery refills to "Reboot energy".**
 * The opposing field physically pushes the capsule (applied-force readback → impulse). **The push
-  normalizes by the OUTPUT that produced it** (`m_outputHistory`), since the readback is ~2 frames
-  latent and scales with output.
+  normalizes by the OUTPUT that produced it** (`m_outputHistory`), since the readback is a few
+  frames latent and scales with output. The readback and the territory/density readout both come
+  from the CPU pressure bake (`bakedReadback` / `sampleBakedField`) — the player holds no GPU
+  query slot.
 * **SURFACE TENSION**: push AND drain scale by `(1 + tension × pressure)` on BOTH sides
   ("Game/Shield/Surface tension", "Game/Enemies/Push tension", "Game/Structures/Pressure draw
   tension") — **leaning deep into a bubble stiffens superlinearly and burns both batteries.**
@@ -1045,8 +1048,8 @@ bar without regrowing the bubble.
   pressure is actually present**, and it REGENERATES at "Base heal/s" within "Base heal radius" of an
   own-team Base. `tickBaseHealing` is **own player only** — health is owner-computed, so every instance
   heals its own capsule against its local structure mirror, with no sync.
-* "Spawn grace" gives post-respawn immunity, **because the GPU readbacks still carry the death position
-  for ~2 frames.**
+* "Spawn grace" gives post-respawn immunity, **because the (bake) readbacks still carry the death
+  position for a few frames.**
 * The player capsule (`player.pre`, also every client twin) authors `Global true` — always visited by the entity pass. It MUST be: the SIM LOD selects roots by their SPATIAL entry, which the pass refreshes from `entity.pos`, which the PhysicsComponent copies from the body — a body teleported far beyond the outer radius (the death respawn from the far map) left the entry at the death spot, so the capsule was never selected again and its entity/spatial state froze there while the body stood at the Base.
 * Death teleport-respawns per the teleport contract — onto a FREE CELL near the anchor: `GamePlayer::setRespawnResolver` (wired in `spawnWorld`) probes 1x1 cells in rings of 2 m out to 16 m via `cellsFree` (cables walk-through), so a building placed on the spawn spot never swallows the capsule; a fully built-over area falls back to the anchor.
 

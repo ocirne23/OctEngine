@@ -57,24 +57,48 @@ in System.cpp drives the debug rings and the "camera inside a bubble" test.
 
 Both are move-only RAII, and **their setters are safe from the parallel entity pass** (one writer per
 instance, own slot only). Create and destroy take `m_createMutex`, since they run concurrently from
-spawn jobs; `m_emitters` / `m_queries` are RESERVED to their renderer caps at initialize, so growth
-never reallocates under a concurrent handle resolve.
+spawn jobs; `m_emitters` is RESERVED to `MAX_FORCE_INSTANCES` and `m_queries` to its renderer cap at
+initialize, so growth never reallocates under a concurrent handle resolve.
+
+> ### An INSTANCE is not a GPU SLOT
+>
+> `MAX_FORCE_INSTANCES` (**32768**, System.ixx) caps the CPU instances; `MAX_FORCE_EMITTERS`
+> (**8192**) caps the renderer slots. **`createEmitter` claims only an instance** — a renderer slot
+> is minted by the first `update()` that sees the emitter ACTIVE and handed back the frame it is
+> gated off. Every unit on a 25k-unit co-op map can therefore carry a bubble while only the ones
+> near a player cost a GPU slot; without this the far ambient spawns exhausted the 8192 slots.
+>
+> Hitting either cap prints once (the slot one re-arms when the starvation ends), and the
+> `Emitters` / `GPU slots` stat tweaks under `Force` show both counts live. A starved ACTIVE
+> emitter simply projects no field that frame and retries the next.
 
 **`ForceEmitter`** — `createEmitter(team, pos, dir, output, reach, focus, distribution, width)`.
 
 * Setters: `setTransform` / `setPosition` / `setOutput` / `setReach` / `setFocus` /
-  `setDistribution` / `setWidth` / `setShellAlpha` / `setActive` / `setMergeable`; `setTeam` is
+  `setDistribution` / `setWidth` / `setShellAlpha` / `setActive` / `setMergeable` /
+  `setAnalyticReadback`; `setTeam` is
   main-thread (rare).
 * Authored getters mirror all of them and read the LIVE instance state, valid immediately.
-* GPU readbacks, **~2 frames latent**: `getAppliedForce()` (the opposing teams' field pressure
-  integrated over this emitter's own bubble) and `getPressure()` (the mean opposing field strength).
+* Readbacks: `getAppliedForce()` (the opposing teams' field pressure integrated over this emitter's
+  own bubble) and `getPressure()` (the mean opposing field strength). **The DEFAULT source is the
+  CPU pressure bake** (`bakedReadback`, run inside the upload jobs): the `force_emitter.cs`
+  integral mirrored as a centre tap plus a planar ring of 8 (16 above 20 m reach) bilinear taps at
+  0.35 × reach at the bake height, each weighted by the emitter's own normalized field
+  (`forceContributionCpu`), force = Output × mean(w × −∇), pressure = mean(opposing) — same units,
+  same "Force gain", ~3 frames latent. **No GPU work per emitter, and a merged member needs no
+  upload at all.** `setAnalyticReadback(true)` (`AnalyticReadback true` in a `Component Force`)
+  keeps the GPU integral for bubbles that leave the ground band — the projectile prefabs — by
+  setting `FORCE_FLAG_READBACK`, the only slots `force_emitter.cs` does not exit on at once. The
+  bake being disabled or unpublished falls everyone back to the GPU path.
 * `getEquilibriumRadius()` — the pressure-aware CURRENT bubble radius: the closed-form iso profile at
   the widest station with the threshold raised from iso to `max(iso, pressure)`. **An AVERAGE** — the
   true surface sits closer on the enemy-facing side — and it inherits the readback latency. 0 = no
   bubble survives. The Game player's shield UI and damage logic read it.
 
 **`ForceQuery`** — `createQuery(pos)`, `MAX_FORCE_QUERIES` 1024. `setPosition` is pass-safe, so a
-query can RIDE a moving unit.
+query can RIDE a moving unit. **No game consumer holds one any more** — the player's territory /
+density readout and the structures' territory drain are `sampleBakedField` taps (its `field` is the
+strongest team's φ, the density readout). The testbed's debug query spawner is the remaining user.
 
 `Result{ owningTeam, inside, ownField, opposingField, valid }`. **`ownField` is written even when the
 point is inside no bubble**, so it doubles as the density readout — `density()` returns it, and the
@@ -82,9 +106,11 @@ debug density view heat-maps it.
 
 ### Active gate
 
-`setActive(false)` keeps the slot and every parameter but projects NO field this frame: uploaded with
-flags 0 (skipped by the grid, draw, compute and bake), no readback (force and pressure read zero),
-evicted from merging and never a merge candidate. Pass-safe like `setOutput`.
+`setActive(false)` keeps the INSTANCE and every parameter but projects NO field this frame: **its
+renderer slot goes back** (skipped by the grid, draw, compute and bake), no readback (force and
+pressure read zero), evicted from merging and never a merge candidate. The next `update()` that sees
+it active mints a fresh slot and uploads it in the same frame. Pass-safe like `setOutput` — the
+setter only writes the bool, and the slot churn itself runs serially in `update()`.
 
 **The World's SIM LOD drives it by tier** — "Game/Sim LOD/Force bubbles max tier", default 1. See
 [`Code/Entity/CONTEXT.md`](../Entity/CONTEXT.md).
@@ -113,8 +139,10 @@ Emitter and query team values clamp below the live count.
 
 ## The baked pressure field
 
-"Force/Bake" tweaks. **The swarm-unit replacement for per-unit `ForceQuery`s**: any number of
-consumers sample field force and exposure with a plain bilinear tap and NO per-consumer GPU slot.
+"Force/Bake" tweaks. **THE readback path for every ground consumer**: swarm units, the player's and
+structures' territory, and — through `bakedReadback` — every emitter's own force/pressure. Any
+number of consumers sample field force and exposure with a plain bilinear tap and NO per-consumer
+GPU slot; `force_emitter.cs` only integrates `AnalyticReadback` emitters (projectiles).
 
 1. `buildBakeChunks` selects at most `MAX_FORCE_BAKE_CHUNKS` (512) **16 m XZ chunks** from the live
    emitters' and groups' support boxes — conservative output-line AABBs plus transition and group
@@ -126,7 +154,7 @@ consumers sample field force and exposure with a plain bilinear tap and NO per-c
 3. `publishBake` copies the slot's readback **WITH the chunk list it was evaluated for**
    (`ForceBakeReadback` pairing; per-slot lists are stored at upload).
 
-`sampleBakedField(pos, team)` → `FieldSample{ valid, inside, owningTeam, opposing, opposingGradient }`
+`sampleBakedField(pos, team)` → `FieldSample{ valid, inside, owningTeam, field, opposing, opposingGradient }`
 from ONE 2×2 bilinear fetch. The gradient is the analytic derivative of the bilinear patch, and it is
 planar (XZ).
 
@@ -139,10 +167,11 @@ cover every support box. Worker-safe between updates; ~3 frames latent end to en
 |---|---|
 | `"Force merge join"` (Wait) | Normally already joined at the loop top; a guarantee, not the expected path. |
 | `"Force prepare"` | Params push, plus destroying the merge job's retired group slots. |
-| `"Force upload"` | A per-emitter `parallelFor` (grain 64): distinct renderer slots, read-only readback span, `PerWorker` debug lines. |
-| `"Force groups upload"` | The merge groups' sphere emitters. |
+| `"Force upload"` | A per-emitter `parallelFor` (grain 64): distinct renderer slots, read-only readback span, `PerWorker` debug lines. An emitter whose ACTIVE gate flipped only STAGES its index. |
+| `"Force slots"` | **Serial.** Retires the staged slots, then mints slots for the newly active ones and uploads them, then mints the slots of groups founded on the merge job — the renderer's create/destroy grow vectors the upload jobs index, so they cannot run inside them. |
+| `"Force groups upload"` | A per-group `runPass` (grain 16, inline under 32): own slot, own readback, and in shared-readback mode its OWN members (an emitter belongs to at most one group). The sphere fold is `forceSphereFold()` — a namespace-scope constant, since a function-local static is a race under `/Zc:threadSafeInit-`. |
 | `"Force queries"` | Query positions up, results latched. |
-| `"Force bake"` | Chunk selection and readback publish. |
+| `"Force bake"` | `"Force bake boxes"`: a per-emitter `runPass` (grain 256, inline under 512) rasterizing support boxes to chunk keys `PerWorker`; `"Force bake dedup"` sorts + uniques each slot on jobs (a swarm shares most chunks, so this shrinks the lists ~10×); then a serial concatenate + sort + unique, capped at `MAX_FORCE_BAKE_CHUNKS` by keeping the chunks nearest the covered set's CENTROID (**never the sorted tail: the key packs `bx` as uint32, so negative X sorts last and a tail cut would blank a whole half-plane — units there stopped being pushed**). `"Force bake publish"`: the paired readback copy fans out per chunk (`"Force bake copy"`); the chunk index build stays serial. |
 | `"Force merge kick"` | Submits the merge job. |
 
 > **"Force gain" applies on the CPU here, not on the GPU.** The compute writes the raw integral, so
@@ -150,8 +179,11 @@ cover every support box. Worker-safe between updates; ~3 frames latent end to en
 
 ## Renderer side (`RendererVK:ForceFieldPipeline`)
 
-`MAX_FORCE_EMITTERS` is 8192 (64 B each). Emitter and query slots are main-thread with a free list
-and retirement; readbacks are slot-indexed, so slots never re-pair with stale results.
+`MAX_FORCE_EMITTERS` is 8192 (64 B each) — **held by ACTIVE emitters only**, see the Active gate.
+Emitter and query slots are main-thread with a free list and retirement; readbacks are slot-indexed,
+so slots never re-pair with stale results. **That retirement window is what makes the gate's slot
+recycling safe:** a slot released this frame cannot be re-handed out until every frame that could
+still deliver its readback has drained.
 
 ### The upload partition
 
@@ -195,9 +227,15 @@ analytic candidate loop.
   by an acquire barrier, GENERAL for life.
 * Written by `force_shellbake.cs` each frame — indirect dispatch, x = 0 when no emitter qualifies, so
   the CB is cached — with the FULL analytic field, small-bubble deformation included.
-* Refit each frame in `buildUboForce` over the union of the large DRAWABLE emitters' support boxes.
-  **Fixed texels mean the resolution self-adjusts**, and clamp-to-border black = zero field outside,
-  correct by construction.
+* Refit each frame in `buildUboForce` over the union of the large DRAWABLE emitters' support boxes,
+  **CLIPPED in XZ to the camera's view footprint** — the four corner rays hit the union's height
+  band, their XZ box plus "Volume view margin" (10 m; 0 = unclipped) bounds the fit. **Fixed texels
+  mean the resolution self-adjusts**, and with the clip it follows the ZOOM rather than the spread
+  of every large bubble in the world (one 7 m bubble 100 m off-screen used to halve a 40 m shell's
+  resolution — which is why raising the tier threshold looked like a smoothing control). Outside
+  the fit the volume reads clamp-to-border black = zero field; that boundary lies outside the view
+  by construction. A corner ray that misses the band (free-fly camera at the horizon) or VR leaves
+  the union unclipped.
 * On this tier the hit BISECTION and NORMALS also read the volume — **the surface being refined IS
   the trilinear field, so its gradient matches exactly** — while ownership dedup and the shading
   colour/alpha accumulate stay ANALYTIC, since they need per-emitter identity and shell alpha the
@@ -399,12 +437,14 @@ Groups under `minMembers` dissolve; `Enabled` off dissolves everything.
 
 ### A Merged member projects no field
 
-* With `memberReadback` (default on) it uploads `FORCE_FLAG_PASSIVE`, compacted into a tail past
-  `fe_count` (header `evalCount`) that **only `force_emitter.cs` evaluates** — so its
-  `getAppliedForce` / `getPressure` are its OWN position's truth against the group's field, which is
-  what unit shield logic wants.
-* Off = the member's slot is skipped entirely and the group's readback is split by output share
-  (cheapest).
+* A BAKE-READ member (the default) uploads nothing (flags 0, compacted out): its taps read its own
+  position against the group's field, which is what unit shield logic wants.
+* An ANALYTIC member with `memberReadback` (default on) uploads `FORCE_FLAG_PASSIVE | READBACK`,
+  compacted into a tail past `fe_count` (header `evalCount`) that **only `force_emitter.cs`
+  evaluates**, for the same own-position truth.
+* `memberReadback` off = the group sphere integrates (`FORCE_FLAG_READBACK` on the group) and its
+  readback is split by output share among the ANALYTIC Merged members; bake-read members are
+  untouched.
 * **Every getter and setter keeps working while merged**; `isMerged()` tells.
 
 ## `ForceEmitter::setShellAlpha`
@@ -424,7 +464,8 @@ never rasterizes, so pane-classified walls would silently drop.
 ## `ForceComponent` (lives in Entity)
 
 `Component Force` in a `.pre`: `Team` / `Output` / `Reach` / `Focus` / `Distribution` / `Width` /
-`Centered` / `Mergeable`, plus local `Direction` / `Offset`. Demo: `Entities/SphereField.pre`.
+`Centered` / `Mergeable` / `AnalyticReadback`, plus local `Direction` / `Offset`. Demo:
+`Entities/SphereField.pre`.
 
 * Keeps its emitter on the entity's world transform. **Not frozen-gated** — placement, not
   simulation.
@@ -438,9 +479,9 @@ never rasterizes, so pane-classified walls would silently drop.
 
 | Group | Entries |
 |---|---|
-| `Force` | Enabled, Iso threshold (0.15), March steps (10), Use grid, Force gain (5) |
+| `Force` | Enabled, Iso threshold (0.15), March steps (10), Use grid, Force gain (5), Emitters + GPU slots (stats) |
 | `Force/Bake` | Enabled, Sample height (1 m), Chunks (stat) |
-| `Force/Shell` | Alpha (0.5), Min screen radius (3 px), Full-detail radius (160 px), Sampled tier radius (5 m), Union march, Union half res, Union jitter, Union step (1.5 m), Union max steps (8), Visible bounds iso frac (1.0), Interior alpha, Backface alpha, Rim power (3), Rim intensity (1.5), Junction smoothing (0.5) |
+| `Force/Shell` | Alpha (0.5), Min screen radius (3 px), Full-detail radius (160 px), Sampled tier radius (5 m), Volume view margin (10 m), Union march, Union half res, Union jitter, Union step (1.5 m), Union max steps (8), Visible bounds iso frac (1.0), Interior alpha, Backface alpha, Rim power (3), Rim intensity (1.5), Junction smoothing (0.5) |
 | `Force/Glow` | Contact intensity (0.33), Contact width (0.15), Contact wall alpha (0.5), Geometry distance (0.5 m) |
 | `Force/Pattern` | Scale (0.6 /m), Scroll speed (0.3), Intensity (0.5) |
 | `Force/Teams` | Per-team shell colour |

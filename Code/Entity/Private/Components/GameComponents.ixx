@@ -351,7 +351,7 @@ export struct GameStructureLink
 };
 
 // A building: team + health (health IS the construction progress while `blueprint`), a territory
-// ForceQuery that drains health inside enemy-owned field, the melee/emitter-load intake the units'
+// bake tap that drains health inside enemy-owned field, the melee/emitter-load intake the units'
 // C++ pushes into, AND the resource node of the flow networks: three stores (energy/fuel/minerals)
 // with capacities and gravity-fed BANDS, plus the `links` vector distribution runs over. There is
 // NO global structure list anywhere — each structure moves resources across its OWN owned links in
@@ -400,7 +400,6 @@ export struct GameStructureComponent
                                // like flowUtil). SHIELD-LESS units (no ForceComponent — the swarm
                                // types) take field exposure damage inside it: without an emitter
                                // of their own, the GPU pressure/push readback path does not exist.
-    ForceQuery query;          // territory at the structure (authority instances only)
     // ---- the flow-network node (game stamps capacity/band per tick so tweaks stay live) ----
     float store[3] = {};       // energy, fuel, minerals
     float capacity[3] = {};    // 0 = this structure does not carry the medium
