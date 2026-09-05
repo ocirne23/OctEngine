@@ -1,0 +1,13 @@
+# Co-op GROUND-EDGE wall: an INVISIBLE 100 m long, 20 m tall static box just inside the 600 m
+# ground plane's rim. No Render component — nothing should be able to see the world's edge.
+#
+# Unlike barrier.pre (Layer Barrier vs Player alone, so waves walk through it), this one leaves the
+# layer at Default and so blocks EVERYONE, exactly like rock.pre. It exists because waves spawn in
+# the open band BETWEEN the barrier and the ground edge: crowd pressure there used to shove bodies
+# off the rim, and a unit de-selected mid-fall keeps a disabled body, so it hung under the map.
+# Long axis = X; the Game layer rotates the E/W sides 90°. Spawn y = 10 (collider half height).
+Prefab gameEdgeWall
+	Component Physics
+		Body Static
+		Shape Box
+		HalfExtents 50 10 0.5

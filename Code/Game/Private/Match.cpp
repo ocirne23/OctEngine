@@ -191,6 +191,21 @@ static_assert((float)c_coopCells * c_coopCellSize == c_coopHalfSize * 2.0f);
 static constexpr float c_coopGroundEdge = 296.0f;  // spawn clamp just inside the 600 m ground
 static constexpr float c_coopBaseClearRadius = 26.0f; // rock-free zone around the Base + starters
 static constexpr float c_barrierStep = 20.0f;      // one barrier.pre segment (posts at centers)
+// The INVISIBLE edge-wall ring just inside the ground rim: waves spawn in the band outside the
+// barrier, where crowd pressure used to shove bodies off the world. Blocks everyone (edgewall.pre
+// stays on the Default layer, like rock.pre). 100 m segments — nothing sees it, so long boxes keep
+// the static body count at 6 a side instead of 30.
+static constexpr float c_coopEdgeWall = 299.0f;
+static constexpr float c_edgeWallStep = 100.0f;
+static constexpr float c_edgeWallHalfThick = 0.5f; // MUST match edgewall.pre's HalfExtents z
+static constexpr float c_edgeWallSpan = 300.0f;    // tangential reach of a side: the whole rim, so
+                                                   // the four sides seal the corners between them
+// A wave spawn point is clamped to +-c_coopGroundEdge, so this is the gap between the furthest a
+// body can be placed and the wall's INNER FACE. It has to clear the largest unit's body radius —
+// enemyTitan.pre, 2.0 m — or that unit spawns overlapping a static and gets kicked when it unparks.
+static constexpr float c_edgeWallClearance = c_coopEdgeWall - c_edgeWallHalfThick - c_coopGroundEdge;
+static_assert(c_edgeWallClearance >= 2.0f, "spawn clamp is too close to the edge wall: the biggest "
+    "unit body would spawn inside it — move c_coopGroundEdge in or c_coopEdgeWall out");
 
 // Deterministic map math: every instance must derive the IDENTICAL layout from the seed alone
 // (the corridor-table contract), so the generator uses its own splitmix-style hash/RNG — never
@@ -1136,12 +1151,24 @@ void GameMatch::spawnTerrain()
         requests.push_back({ "Entities/Game/barrier.pre", Transform(glm::vec3(-c_coopHalfSize, 10.0f, o), 1.0f, yaw90) });
         requests.push_back({ "Entities/Game/barrier.pre", Transform(glm::vec3(c_coopHalfSize, 10.0f, o), 1.0f, yaw90) });
     }
+    // The ground-edge ring, OUTSIDE the barrier: solid for everyone, so a wave shoved around in
+    // its spawn band cannot be pushed off the world. Segments overlap at the corners — they are
+    // static boxes, so that costs nothing.
+    const size_t edgeStart = requests.size();
+    for (float o = -c_edgeWallSpan + c_edgeWallStep * 0.5f; !m_coopMap.pvp && o < c_edgeWallSpan; o += c_edgeWallStep)
+    {
+        requests.push_back({ "Entities/Game/edgewall.pre", Transform(glm::vec3(o, 10.0f, -c_coopEdgeWall)) });
+        requests.push_back({ "Entities/Game/edgewall.pre", Transform(glm::vec3(o, 10.0f, c_coopEdgeWall)) });
+        requests.push_back({ "Entities/Game/edgewall.pre", Transform(glm::vec3(-c_coopEdgeWall, 10.0f, o), 1.0f, yaw90) });
+        requests.push_back({ "Entities/Game/edgewall.pre", Transform(glm::vec3(c_coopEdgeWall, 10.0f, o), 1.0f, yaw90) });
+    }
     oc::vector<EntityPtr> spawned = Globals::world.spawnBatch(requests, /*addRoots*/ false);
     for (size_t i = 0; i < spawned.size(); ++i)
     {
         if (!spawned[i])
             continue;
-        spawned[i]->setName(i >= rockCount ? "Barrier" : (i & 1) ? "RockMark" : "Rock");
+        spawned[i]->setName(i >= edgeStart ? "EdgeWall"
+            : i >= rockCount ? "Barrier" : (i & 1) ? "RockMark" : "Rock");
         if (m_terrainRoot)
             spawned[i]->reparentEntity(m_terrainRoot.get()); // root at origin: world pos == local
         else

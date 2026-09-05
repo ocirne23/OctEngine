@@ -168,6 +168,21 @@ A big square — `c_coopHalfSize` 270 m on the 600 m ground plane — of RANDOM 
 `Layer Player`, mask All) — units and shots walk through. Visuals are a post per segment plus
 `drawCoopBarrier`'s pulsing energy lines on the real clock.
 
+**Edge WALL at ±299:** an `edgewall.pre` ring just inside the 600 m ground rim — **invisible** (no
+Render component) and, unlike the barrier, on the Default layer, so it is **solid for everyone**
+exactly like `rock.pre`. Waves spawn in the band BETWEEN the barrier and the rim, where crowd
+pressure used to shove bodies off the world; a unit de-selected mid-fall then hung under the map
+(see **Far tick**). 100 m segments — nothing sees it, so long boxes hold the ring to 6 static
+bodies a side, each side spanning the WHOLE rim (±300) so the four seal the corners between them.
+Co-op only: a PvP arena's rock border is already solid.
+
+> **Spawn clearance is a `static_assert`.** A wave spawn point is clamped to ±`c_coopGroundEdge`
+> (296) on BOTH axes — the push-out writes 272–282, also inside — so no spawn CENTRE can land in
+> the wall. The body around it still has to fit: `c_edgeWallClearance` = wall − half-thickness −
+> clamp = **2.5 m**, against the largest unit radius (Titan, 2.0 m in `enemyTitan.pre`) — 0.5 m
+> spare. The assert fails the build if anyone moves `c_coopGroundEdge` out or the wall in;
+> `c_edgeWallHalfThick` must be kept in step with `edgewall.pre`'s `HalfExtents`.
+
 **Nodes:** a STARTER mineral + fuel pair ~10 m from the Base, then golden-angle-spiral candidates
 SNAPPED to reachable open cells with a 13 m spacing floor.
 
@@ -1055,6 +1070,14 @@ roster** every interval of sim time:
 * Waypoints advance and the order clears with the full sim's radius rule. A step into rock holds.
 * No combat, bubble, strain or health death check while far. **The ONE exception: a unit below
   `voidY` −3 — fallen through the floor — is killed by the far tick too**, so no unit escapes it.
+
+> **THE VOID KILL RUNS BEFORE BOTH SKIPS**, on the whole roster, in `NpcSystem::service`'s walk —
+> not only inside `updateFar`. A unit that falls off the world edge keeps sinking while its body is
+> live and ends up somewhere nothing visits: OUT of the spatial index (the `spatialEntry.isValid`
+> skip) or holding a stale tier stamp (the selected skip) while the entity pass no longer reaches
+> it. `updateFar`'s own `voidY` test was then unreachable and the body sank forever — deep under
+> the map, still in the roster. **That parallelFor is the one thing that sees every rostered unit,
+> so the check belongs there.** `updateFar` keeps its copy for the units it does run on.
 
 ## Loose units spawn PARKED
 

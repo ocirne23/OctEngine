@@ -371,10 +371,23 @@ void NpcSystem::service(StructureSystem& structures)
                 for (uint32 i = begin; i < end; ++i)
                 {
                     Entity* e = m_units[i].get();
+                    GameUnitComponent* unit = getComponent<GameUnitComponent>(e);
+                    // THE VOID KILL RUNS FIRST, on the whole roster, before either skip below.
+                    // A unit that fell off the world keeps falling as long as its body is live,
+                    // and it ends up somewhere nothing visits: OUT of the spatial index (the
+                    // isValid skip), or holding a stale tier stamp (the selected skip) while the
+                    // entity pass no longer reaches it. Either way updateFar's own voidY test was
+                    // unreachable and the body sank forever. This walk is the one thing that sees
+                    // every rostered unit, so the check belongs here.
+                    if (unit && unit->alive() && e->pos.y < GameUnitComponent::params.voidY)
+                    {
+                        unit->kill(*e);
+                        continue;
+                    }
                     if (!e->spatialEntry.isValid()
                         || (Globals::spatialIndex.getPassMaskExact(e->spatialEntry.handle()) & (SpatialPassBits_UpdateTiers | SpatialPassBit_Main)))
                         continue; // selected (a tier, or on screen): the entity pass owns it
-                    if (GameUnitComponent* unit = getComponent<GameUnitComponent>(e); unit && unit->updateFar(*e, dt))
+                    if (unit && unit->updateFar(*e, dt))
                         ++local;
                 }
                 moved.fetch_add(local, oc::memory_order_relaxed);
