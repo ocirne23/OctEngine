@@ -294,7 +294,10 @@ void NavSystem::tickSlot(TeamSlot& slot, float deltaSec)
     // unit sources the list is dirty EVERY frame, which chained builds back to back. Only a slot
     // with nothing published yet skips the wait.
     const bool due = ((slot.sourcesDirty || slot.periodic) && slot.timer <= 0.0f) || !slot.published;
-    if (due && !m_obstaclesDirty)
+    // A rebuild of a published field can wait a frame: not on a physics-step frame that a
+    // step-free frame follows (JobSystem::deferFromPhysicsFrame) — the first chunk's job would
+    // land on the workers next to the solver tasks. A slot with nothing published kicks at once.
+    if (due && !m_obstaclesDirty && (!slot.published || !Globals::jobSystem.deferFromPhysicsFrame()))
         kickBuild(slot, deltaSec);
 }
 

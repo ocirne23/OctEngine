@@ -198,6 +198,17 @@ workers' `m_wakeEpoch`. On the workers' eventcount the helper would wake for a N
 cannot take and eat a wake a real worker needed. Only **High** submits pay the extra check
 ([JobSystem.cpp:417](Private/JobSystem.cpp#L417)).
 
+## The frame's physics step flag
+
+`setFrameHasPhysicsStep(bool)` — main publishes `PhysicsWorld::willStep(dt)` at the frame top, before
+any kick — records whether this frame runs the physics step, whose solver fork/join tasks land on the
+workers. **`deferFromPhysicsFrame()`** is what optional work checks: true on a step frame whose
+PREDECESSOR did not step, i.e. a step-free frame follows, so work that can wait a frame (the World's
+periodic SIM LOD selection) moves there and the workers never carry the solver and that job in one
+frame. **Below the step rate physics steps every frame**: the previous frame stepped too, waiting
+gains nothing, so it reads false and the work runs as scheduled. `frameHasPhysicsStep()` is the raw
+flag.
+
 ## Scheduling
 
 * **Per-context Chase-Lev steal deque** (`Threading:StealDeque`) — the owner pushes and pops LIFO at

@@ -1040,7 +1040,9 @@ overflow, or a hit while collapsed, reaches health. Spawn grace applies.
 
 ## Far tick
 
-`NpcSystem::service`, authority only. "Far tick interval (s)" 0.5, readout "Far ticked".
+`NpcSystem::service`, authority only. "Far tick interval (s)" 0.5, readout "Far ticked". **Not on a
+physics-step frame that a step-free frame follows** (`JobSystem::deferFromPhysicsFrame`): the
+accumulated time carries over, so the deferred tick covers a little more.
 
 Units the SIM LOD did not select — **no tier stamp, body disabled, never visited by the entity pass** —
 still walk their ROUTE or MOVE ORDER through `GameUnitComponent::updateFar`, **a parallelFor over the
@@ -1056,9 +1058,10 @@ roster** every interval of sim time:
 
 ## Loose units spawn PARKED
 
-`spawnLooseUnits` calls `PhysicsComponent::park(true)` plus `ForceComponent::setActive(false)` right
-after the batch. **The body command applies before the next step, so the body never simulates one**,
-and the bubble stays dark until a tiered visit.
+`spawnLooseUnits` calls `PhysicsComponent::park(true)` right after the batch. **The body command
+applies before the next step, so the body never simulates one.** The bubble needs nothing here:
+every bubble spawns dark, and only the World's SIM LOD gate switches it on (see the Entity
+CONTEXT's "Force bubbles").
 
 > Wave blobs overlap, and a live unselected body took box3d's push-out and — frictionless and never
 > steered — coasted away: the "flung" waves.

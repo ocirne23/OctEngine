@@ -66,6 +66,16 @@ public:
     ~JobSystem() { shutdown(); } // atexit runs on the main thread, so the helper-context teardown is valid
 
     uint32 getNumWorkers() const { return m_numWorkers; }
+
+    // THE FRAME'S PHYSICS STEP, published by main at the frame top before any kick
+    // (PhysicsWorld::willStep): the solver's fork/join tasks land on the workers that frame.
+    // Optional work that can wait a frame (the World's periodic selection) asks
+    // deferFromPhysicsFrame() and moves to a step-free frame, so the workers never carry both in
+    // one frame. Below the step rate physics steps EVERY frame (the previous frame stepped too):
+    // waiting gains nothing, so it reads false and the work runs as scheduled.
+    void setFrameHasPhysicsStep(bool step) { m_prevFramePhysicsStep = m_framePhysicsStep; m_framePhysicsStep = step; }
+    bool frameHasPhysicsStep() const { return m_framePhysicsStep; }
+    bool deferFromPhysicsFrame() const { return m_framePhysicsStep && !m_prevFramePhysicsStep; }
     JobSystemStats getStats() const;
 
     // Index of the calling thread's scheduler context: 0 = the registered main thread,
@@ -223,6 +233,8 @@ public:
     void submitReadyBatch(oc::span<Job* const> jobs); // fan-out path: straight to the shared queues
 
 private:
+    bool m_framePhysicsStep = false;     // see setFrameHasPhysicsStep
+    bool m_prevFramePhysicsStep = false;
 
     template<typename Func>
     void submitPostUpdateImpl(Func&& func, JobProfile profile, EJobPriority priority, uint8 flags, EPostUpdateBatch batch)

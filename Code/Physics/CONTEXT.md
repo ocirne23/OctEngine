@@ -47,6 +47,10 @@ main loop overlaps it with the "Spatial cull" and "Begin frame" jobs. It no-ops 
 since the last dispatch (`m_lastDispatchedStep`): the buffers still hold the OLD events, and refiring
 would duplicate them.
 
+**`willStep(dt)`** predicts whether the coming `update(dt)` takes a step (accumulator reaches a step,
+sim live). Main publishes it to `JobSystem::setFrameHasPhysicsStep` at the frame top, so work that
+can wait a frame keeps off the step's worker load — see Threading's "The frame's physics step flag".
+
 ### Creation and queries
 
 | Call | Notes |

@@ -385,6 +385,15 @@ void SpatialIndex::traverseParallel(const Tester& tester, const glm::dvec3& refP
 
     // 4x over-partitioned so the shared parallelFor cursor can rebalance around expensive roots
     // (the cells around the camera hold most of the visible world).
+    const auto serialEmit = [&](uint32 idx, const glm::vec3& pos)
+    {
+        if constexpr (std::is_invocable_v<EmitFunc, uint32, const glm::vec3&, uint32>)
+            emit(idx, pos, 0u);
+        else
+            emit(idx, pos);
+    };
+    if (m_visibleCollectChunks.empty())
+        m_visibleCollectChunks.resize(1); // slot 0 exists before the expansion emits
     const uint32 target = Globals::jobSystem.getNumWorkers() * 4;
     while (!m_frontier.empty() && uint32(m_frontier.size()) < target)
     {
@@ -397,7 +406,7 @@ void SpatialIndex::traverseParallel(const Tester& tester, const glm::dvec3& refP
             bool fullyInside = fc.fullyInside;
             if (!testCell(tester, cellMin, halfCell, fc.level, fullyInside, stats))
                 continue;
-            emitCellEntries(tester, cellMin, layerMask, *fc.rec, fc.level, fullyInside, stats, emit);
+            emitCellEntries(tester, cellMin, layerMask, *fc.rec, fc.level, fullyInside, stats, serialEmit);
             if (fc.level == 0)
                 continue; // no children: fully consumed by the expansion
             uint64 childMask = fc.rec->childMask;
@@ -421,16 +430,27 @@ void SpatialIndex::traverseParallel(const Tester& tester, const glm::dvec3& refP
     if (m_frontier.empty())
         return;
 
+    // A chunk-aware emit (idx, pos, chunk) gets slot 0 for the serial expansion above and 1 + the
+    // chunk's first frontier index for the fan-out: an owner-sliced list per chunk.
+    if (m_visibleCollectChunks.size() < m_frontier.size() + 1)
+        m_visibleCollectChunks.resize(m_frontier.size() + 1);
     oc::atomic<int> cellsTested = 0, cellsFullyInside = 0, entityTests = 0, emitted = 0;
     Globals::jobSystem.parallelFor(0, uint32(m_frontier.size()), 1,
         JobProfile{ "Spatial mark visible", EProfileCategory::Spatial },
         [&](uint32 begin, uint32 end)
     {
         TraverseStats local;
+        const auto chunkEmit = [&](uint32 idx, const glm::vec3& pos)
+        {
+            if constexpr (std::is_invocable_v<EmitFunc, uint32, const glm::vec3&, uint32>)
+                emit(idx, pos, begin + 1);
+            else
+                emit(idx, pos);
+        };
         for (uint32 i = begin; i < end; ++i)
         {
             const FrontierCell& fc = m_frontier[i];
-            traverseCell(tester, refPos, layerMask, fc.key, fc.level, *fc.rec, fc.fullyInside, local, emit);
+            traverseCell(tester, refPos, layerMask, fc.key, fc.level, *fc.rec, fc.fullyInside, local, chunkEmit);
         }
         cellsTested.fetch_add(local.cellsTested, oc::memory_order_relaxed);
         cellsFullyInside.fetch_add(local.cellsFullyInside, oc::memory_order_relaxed);
@@ -545,13 +565,32 @@ void SpatialIndex::markVisibleSet(ESpatialPass pass, const Frustum& frustumRelCa
 {
     const auto start = Clock::now();
     const uint32 passIdx = uint32(pass);
-    if (++m_visibleQueryId[passIdx] == 0) // 0 is reserved for never-stamped entries
-        ++m_visibleQueryId[passIdx];
-    const uint32 stampId = m_visibleQueryId[passIdx];
-    uint32* lastVisible = m_pool.lastVisible[passIdx].data();
-    const auto stamp = [lastVisible, stampId](uint32 idx, const glm::vec3&) { lastVisible[idx] = stampId; };
+    advanceStamp(pass);
+    const SpatialStamp stampId = m_visibleQueryId[passIdx];
+    SpatialStamp* lastVisible = m_pool.lastVisible[passIdx].data();
     TraverseStats stats;
-    traverseParallel(FrustumTester{ frustumRelCamera, occlusion, maxDist }, cameraPos, layerMask, stats, stamp);
+    const uint32 collect = pass == ESpatialPass::Main ? m_visibleCollectLayers : 0;
+    if (collect)
+    {
+        // Stamp + collect (see setVisibleCollect): the chunk-aware emit appends to its own list.
+        for (oc::vector<SpatialHandle>& chunk : m_visibleCollectChunks)
+            chunk.clear();
+        m_visibleCollected.clear();
+        const auto stampCollect = [this, lastVisible, stampId, collect](uint32 idx, const glm::vec3&, uint32 chunk)
+        {
+            lastVisible[idx] = stampId;
+            if (m_pool.layerMask[idx] & collect)
+                m_visibleCollectChunks[chunk].push_back(SpatialHandle{ idx, m_pool.gen[idx] });
+        };
+        traverseParallel(FrustumTester{ frustumRelCamera, occlusion, maxDist }, cameraPos, layerMask, stats, stampCollect);
+        for (const oc::vector<SpatialHandle>& chunk : m_visibleCollectChunks)
+            m_visibleCollected.insert(m_visibleCollected.end(), chunk.begin(), chunk.end());
+    }
+    else
+    {
+        const auto stamp = [lastVisible, stampId](uint32 idx, const glm::vec3&) { lastVisible[idx] = stampId; };
+        traverseParallel(FrustumTester{ frustumRelCamera, occlusion, maxDist }, cameraPos, layerMask, stats, stamp);
+    }
     m_stats.cellsTested += stats.cellsTested;
     m_stats.cellsFullyInside += stats.cellsFullyInside;
     m_stats.entityTests += stats.entityTests;
@@ -563,10 +602,9 @@ void SpatialIndex::markVisibleSphere(ESpatialPass pass, const glm::dvec3& center
 {
     const auto start = Clock::now();
     const uint32 passIdx = uint32(pass);
-    if (++m_visibleQueryId[passIdx] == 0)
-        ++m_visibleQueryId[passIdx];
-    const uint32 stampId = m_visibleQueryId[passIdx];
-    uint32* lastVisible = m_pool.lastVisible[passIdx].data();
+    advanceStamp(pass);
+    const SpatialStamp stampId = m_visibleQueryId[passIdx];
+    SpatialStamp* lastVisible = m_pool.lastVisible[passIdx].data();
     const auto stamp = [lastVisible, stampId](uint32 idx, const glm::vec3&) { lastVisible[idx] = stampId; };
     TraverseStats stats;
     traverseParallel(SphereTester{ radius }, center, layerMask, stats, stamp);
@@ -577,40 +615,55 @@ void SpatialIndex::markVisibleSphere(ESpatialPass pass, const glm::dvec3& center
     m_stats.markVisibleMs += std::chrono::duration<float, std::milli>(Clock::now() - start).count();
 }
 
-void SpatialIndex::markVisibleSpheres(ESpatialPass pass, const glm::dvec3* centers, const float* radii, uint32 count, uint32 layerMask)
+static constexpr ESpatialPass g_updateTierPass[3] = { ESpatialPass::UpdateTier0, ESpatialPass::UpdateTier1, ESpatialPass::UpdateTier2 };
+
+void SpatialIndex::advanceStamp(ESpatialPass pass)
 {
-    const auto start = Clock::now();
-    const uint32 passIdx = uint32(pass);
-    if (++m_visibleQueryId[passIdx] == 0)
-        ++m_visibleQueryId[passIdx];
-    const uint32 stampId = m_visibleQueryId[passIdx];
-    uint32* lastVisible = m_pool.lastVisible[passIdx].data();
-    const auto stamp = [lastVisible, stampId](uint32 idx, const glm::vec3&) { lastVisible[idx] = stampId; };
-    uint32 emitted = 0;
-    for (uint32 i = 0; i < count; ++i)
+    SpatialStamp& id = m_visibleQueryId[uint32(pass)];
+    if (++id == SpatialStamp_Linked) // the sentinel is never a generation
     {
-        if (radii[i] <= 0.0f)
-            continue;
-        TraverseStats stats;
-        traverseParallel(SphereTester{ radii[i] }, centers[i], layerMask, stats, stamp);
-        m_stats.cellsTested += stats.cellsTested;
-        m_stats.cellsFullyInside += stats.cellsFullyInside;
-        m_stats.entityTests += stats.entityTests;
-        emitted += stats.emitted;
+        // WRAP (every 65k stamps of this pass): every stale value in the row would become "current"
+        // again ~65k generations later — sweep them to the sentinel (0, the spawn guard, stays 0).
+        // One pass over the pool, on the thread advancing the pass (no traversal of this pass runs
+        // then); shared against registerEntry, which may grow the row (see querySphere).
+        id = 1;
+        const std::shared_lock lock(m_registerMutex);
+        for (SpatialStamp& stamp : m_pool.lastVisible[uint32(pass)])
+            if (stamp != 0)
+                stamp = SpatialStamp_Linked;
     }
-    m_stats.visiblePerPass[passIdx] = int(emitted); // overlapping balls count twice — a readout, not a set size
-    m_stats.markVisibleMs += std::chrono::duration<float, std::milli>(Clock::now() - start).count();
 }
 
-void SpatialIndex::setUpdateLod(const UpdateLodSphere* spheres, uint32 count)
+void SpatialIndex::advanceUpdateTiers()
 {
-    m_updateLodCount = glm::min(count, MaxUpdateLodSpheres);
-    for (uint32 i = 0; i < m_updateLodCount; ++i)
+    for (const ESpatialPass pass : g_updateTierPass)
+        advanceStamp(pass);
+    advanceStamp(ESpatialPass::UpdateRoot);
+}
+
+uint32 SpatialIndex::queryUpdateTiers(const glm::dvec3& center, float queryRadius, const float tierRadius[3], bool horizontal,
+                                      uint32 layerMask, oc::vector<uint64>& outUserData)
+{
+    outUserData.clear();
+    const std::shared_lock lock(m_registerMutex); // see querySphere (the stamp rows may grow under a registration)
+    SpatialStamp* tierStamp[3];
+    SpatialStamp tierId[3];
+    float tierR2[3];
+    for (int t = 0; t < 3; ++t)
     {
-        m_updateLodCenter[i] = spheres[i].center;
-        for (int t = 0; t < 3; ++t)
-            m_updateLodRadius[t][i] = spheres[i].radius[t];
+        tierStamp[t] = m_pool.lastVisible[uint32(g_updateTierPass[t])].data();
+        tierId[t] = m_visibleQueryId[uint32(g_updateTierPass[t])];
+        tierR2[t] = tierRadius[t] > 0.0f ? tierRadius[t] * tierRadius[t] : -1.0f; // -1: no distance is below it
     }
+    traverse(SphereTester{ queryRadius }, center, layerMask, [&](uint32 idx, const glm::vec3& pos)
+    {
+        const float d2 = horizontal ? pos.x * pos.x + pos.z * pos.z : glm::dot(pos, pos);
+        for (int t = 0; t < 3; ++t)
+            if (d2 < tierR2[t])
+                tierStamp[t][idx] = tierId[t];
+        outUserData.push_back(m_pool.userData[idx]);
+    });
+    return uint32(outUserData.size());
 }
 
 void SpatialIndex::update(const Camera& camera, const Frustum& frustum, const glm::mat4& viewProjRelCamera)
@@ -620,14 +673,8 @@ void SpatialIndex::update(const Camera& camera, const Frustum& frustum, const gl
         ProfileScope profileScope("Spatial commit", EProfileCategory::Spatial);
         commitFrame();          // applies cell moves queued during last frame's entity updates
     }
-    // SIM LOD tiers: before the culling-mode gate — update selection must not stop with culling.
-    if (m_updateLodCount > 0)
-    {
-        ProfileScope profileScope("Mark update tiers", EProfileCategory::Spatial);
-        static constexpr ESpatialPass tierPass[3] = { ESpatialPass::UpdateTier0, ESpatialPass::UpdateTier1, ESpatialPass::UpdateTier2 };
-        for (int t = 0; t < 3; ++t)
-            markVisibleSpheres(tierPass[t], m_updateLodCenter, m_updateLodRadius[t], m_updateLodCount, SpatialLayer_Entity);
-    }
+    // The SIM LOD tier stamps are NOT made here: the World's selection job stamps them
+    // (queryUpdateTiers), off the frame-critical path.
     setCullMaxDist(camera.far); // cull to exactly the view distance, not a fixed cap
     if (m_culling.mode == int(ESpatialCullMode::Off) || m_culling.freeze)
         return;

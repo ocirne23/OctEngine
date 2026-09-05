@@ -58,6 +58,7 @@ export constexpr uint32 SpatialLayer_Stress = 1u << 1;  // synthetic stress-test
 export constexpr uint32 SpatialLayer_Terrain = 1u << 2; // procedural terrain chunks (render culling only:
                                                         // NOT entities — their userData is not an Entity*,
                                                         // so gameplay queries must never include this layer)
+static_assert((SpatialLayer_Render | SpatialLayer_Stress | SpatialLayer_Terrain | (1u << 3)) < 256, "RecordPool stores the layer mask in a byte");
 export constexpr uint32 SpatialLayer_Entity = 1u << 3;  // EVERY non-global entity (userData = Entity*): the
                                                         // World's update-selection layer. Render is the
                                                         // subset with a render node (gameplay queries)
@@ -93,8 +94,23 @@ export enum class ESpatialPass : uint32
     UpdateTier0,
     UpdateTier1,
     UpdateTier2,
+    // World ROOT-DEDUPE stamps (from here on: never stamped on link, no visibility meaning):
+    // UpdateRoot = "this root is in the current periodic selection result" (generation advances
+    // with the selection job), VisibleRoot = "already queued from this frame's visible set"
+    // (advances every pass). Read with the exact accessors only.
+    UpdateRoot,
+    VisibleRoot,
     Count,
 };
+
+// A visibility stamp: the pass generation an entry was last stamped in. 16-bit: a generation counts
+// 1..65534 and the pool row is swept back to SpatialStamp_Linked when it wraps (advanceStamp), so
+// an entry stamped ~65k generations ago can never read as current again.
+export using SpatialStamp = uint16;
+// Stamp value "linked, never stamped in this pass": the link gives the UpdateTier passes this instead
+// of the spawn-guard 0 (which reads as "in every pass") or the current generation (which would read as
+// a real tier). Never equals a generation — SpatialIndex::hasStamp.
+export constexpr SpatialStamp SpatialStamp_Linked = 0xFFFF;
 
 // Pass bits as returned by SpatialIndex::getPassMask, bit p == 1 << uint32(ESpatialPass p).
 export constexpr uint32 SpatialPassBit_Main = 1u << 0;

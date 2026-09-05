@@ -158,6 +158,13 @@ public:
     uint32 getStepCount() const { return m_stepCount; }
     float getInterpolationAlpha() const;
     int getStepHz() const { return m_stepHz; } // for code that must pace itself in whole steps
+    // Whether update(deltaSec) will take a step this frame (the accumulator reaches a step and the
+    // sim is live): main publishes it to the JobSystem at the frame top (setFrameHasPhysicsStep),
+    // so work that can wait a frame keeps off the step's worker load.
+    bool willStep(double deltaSec) const
+    {
+        return m_initialized && !m_paused && m_accumulator + float(deltaSec) * m_timeScale >= 1.0f / float(m_stepHz);
+    }
 
     bool isInitialized() const { return m_initialized; }
 

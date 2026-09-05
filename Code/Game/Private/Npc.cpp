@@ -317,17 +317,11 @@ void NpcSystem::spawnLooseUnits(oc::span<const LooseSpawn> spawns)
         // steered (unselected) and frictionless, coasted away. Disabled from the first step, the
         // far tick walks them by teleport and the World's wake edge enables them (velocities
         // zeroed) once a player is near. The queue applies before the next step, so the body
-        // never simulates a single step here.
+        // never simulates a single step here. (The bubble needs nothing: it spawns dark and the
+        // World's gate switches it on only once the unit has a tier close enough.)
         if (Globals::world.simLodActive())
-        {
             if (PhysicsComponent* pc = getComponent<PhysicsComponent>(entity.get()))
                 pc->park(/*disable*/ true);
-            // The bubble too: a far unit is never visited, so nothing would gate it off, and an
-            // active field there would stand until a player came near. The first tiered visit
-            // switches it on when close enough.
-            if (ForceComponent* fc = getComponent<ForceComponent>(entity.get()))
-                fc->setActive(false);
-        }
         m_units.push_back(entity); // roster: deregistered by onWorldRootRemoved on any despawn path
         Globals::world.addRootEntity(oc::move(entity));
     }
@@ -362,7 +356,9 @@ void NpcSystem::service(StructureSystem& structures)
     if (Globals::world.simLodActive())
     {
         m_farAccum += float(Globals::time.getSimDeltaSec());
-        if (m_farAccum >= m_farInterval && !m_units.empty())
+        // Not on a physics-step frame that a step-free frame follows (JobSystem::deferFromPhysicsFrame):
+        // the accumulated time carries over, so the deferred tick just covers a little more.
+        if (m_farAccum >= m_farInterval && !m_units.empty() && !Globals::jobSystem.deferFromPhysicsFrame())
         {
             ProfileScope farScope("Npc far tick", EProfileCategory::Game);
             const float dt = m_farAccum;
@@ -376,8 +372,8 @@ void NpcSystem::service(StructureSystem& structures)
                 {
                     Entity* e = m_units[i].get();
                     if (!e->spatialEntry.isValid()
-                        || (Globals::spatialIndex.getPassMaskExact(e->spatialEntry.handle()) & SpatialPassBits_UpdateTiers))
-                        continue; // selected: the entity pass owns it
+                        || (Globals::spatialIndex.getPassMaskExact(e->spatialEntry.handle()) & (SpatialPassBits_UpdateTiers | SpatialPassBit_Main)))
+                        continue; // selected (a tier, or on screen): the entity pass owns it
                     if (GameUnitComponent* unit = getComponent<GameUnitComponent>(e); unit && unit->updateFar(*e, dt))
                         ++local;
                 }

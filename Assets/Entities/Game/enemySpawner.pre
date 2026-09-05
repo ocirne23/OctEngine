@@ -1,13 +1,14 @@
 # Enemy Spawner: a slow, tough hive body that holds off at StandoffRange from its target and,
 # once in range, CONTINUOUSLY births Swarm bodies next to itself every FireInterval seconds
 # (ShotKind 2: the "shot" is a spawn — NpcSystem::service). Kill it first or drown in swarm.
-# Squat green cylinder.
+# Squat CYAN cylinder — green is the friendly tint (applyTeamTint pulls own-team units 55 % toward
+# 0.3/1.0/0.4), and the authored green read as an ally. Cyan is the one hue no other enemy uses.
 Prefab gameEnemySpawner
 	Component Render
 		ObjectContainer baseshapes
 		Node Cylinder2
 		Type StaticMesh
-		Color 0.3 0.9 0.25
+		Color 0.1 0.85 0.95
 		Scale 1.2 0.7 1.2
 	Component Physics
 		Body Dynamic

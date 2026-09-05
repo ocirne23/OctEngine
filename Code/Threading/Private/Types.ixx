@@ -205,10 +205,10 @@ private:
 export struct JobSystemDesc
 {
     uint32 numWorkers = 0;                  // 0 = PHYSICAL cores - 2 (main + headroom), min 1
-    uint32 numFibers = 128;                 // max concurrently started-but-unfinished jobs (parked waits hold one)
+    uint32 numFibers = 64;                 // max concurrently started-but-unfinished jobs (parked waits hold one)
     uint32 fiberStackCommit = 64 * 1024;
     uint32 fiberStackReserve = 512 * 1024;
-    uint32 jobPoolCapacity = 16384;         // ad-hoc jobs in flight (rounded up to a power of two)
+    uint32 jobPoolCapacity = 32768;         // ad-hoc jobs in flight (rounded up to a power of two)
     uint32 queueCapacity = 16384;           // per priority class (rounded up to a power of two)
     uint32 dequeCapacity = 4096;            // per worker (rounded up to a power of two)
     uint32 postUpdateQueueCapacity = 1024;  // submitPostUpdate jobs awaiting the frame's kick

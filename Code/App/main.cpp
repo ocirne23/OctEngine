@@ -763,6 +763,7 @@ int main(int argc, char* argv[])
         // events additionally gate on Time::isPaused() like Frozen (see Time::setPaused). Read here,
         // after the input dispatch and tweak poll, so a toggle applies to this very frame.
         const double simDeltaSec = Globals::time.getSimDeltaSec();
+        Globals::jobSystem.setFrameHasPhysicsStep(Globals::physics.willStep(simDeltaSec)); // before any kick: optional jobs keep off the step's worker load
 
         Globals::networkManager.receive(deltaSec); // snapshot targets + events land before the sim/entity updates read them
         if (game)

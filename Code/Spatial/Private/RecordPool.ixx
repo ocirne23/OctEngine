@@ -73,10 +73,10 @@ public:
     oc::vector<uint64> cellKey;         // current cell Morton key at `level`
     oc::vector<uint64> userData;
     oc::vector<uint32> next, prev;      // intrusive per-cell doubly-linked list
-    oc::vector<uint32> layerMask;
-    oc::vector<uint32> gen;
-    oc::array<oc::vector<uint32>, NumSpatialPasses> lastVisible; // stamp generation per pass
-    oc::vector<uint32> lastMoveFrame;
+    oc::vector<uint8> layerMask;        // SpatialLayer_* bits (4 in use; static_assert in Types)
+    oc::vector<uint32> gen;             // handle generation: 32-bit so a stale handle can never match a reused slot
+    oc::array<oc::vector<SpatialStamp>, NumSpatialPasses> lastVisible; // stamp generation per pass (see SpatialStamp)
+    oc::vector<uint16> lastMoveFrame;   // frame id, MODULAR: compare as uint16(frameId - lastMoveFrame) (static promotion)
     oc::vector<uint32> storeIdx; // StaticTier: slot in the level's StaticStore, UINT32_MAX = pending
     oc::vector<uint8> level;
     oc::vector<uint8> flags;
@@ -92,7 +92,7 @@ private:
         next.resize(m_capacity); prev.resize(m_capacity);
         layerMask.resize(m_capacity);
         gen.resize(m_capacity);
-        for (oc::vector<uint32>& pass : lastVisible)
+        for (oc::vector<SpatialStamp>& pass : lastVisible)
             pass.resize(m_capacity);
         lastMoveFrame.resize(m_capacity);
         storeIdx.resize(m_capacity);

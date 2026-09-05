@@ -97,10 +97,10 @@ SpatialHandle SpatialIndex::registerEntry(const glm::dvec3& pos, float radius, u
         m_pool.userData[idx] = userData;
         m_pool.next[idx] = UINT32_MAX;
         m_pool.prev[idx] = UINT32_MAX;
-        m_pool.layerMask[idx] = layerMask;
+        m_pool.layerMask[idx] = uint8(layerMask);
         for (uint32 p = 0; p < uint32(ESpatialPass::Count); ++p)
             m_pool.lastVisible[p][idx] = 0; // never stamped: reports visible until the first query, unless NoSpawnGuard
-        m_pool.lastMoveFrame[idx] = m_frameId;
+        m_pool.lastMoveFrame[idx] = uint16(m_frameId);
         m_pool.storeIdx[idx] = UINT32_MAX;
         m_pool.level[idx] = uint8(level);
         m_pool.flags[idx] = uint8(RecordFlag_Alive | RecordFlag_Unlinked | (spawnVisible ? 0 : RecordFlag_NoSpawnGuard));
@@ -159,12 +159,12 @@ void SpatialIndex::updateEntry(SpatialHandle handle, const glm::dvec3& pos, floa
             m_pool.posY[idx] = rel.y;
             m_pool.posZ[idx] = rel.z;
             m_pool.radius[idx] = radius;
-            m_pool.lastMoveFrame[idx] = m_frameId;
+            m_pool.lastMoveFrame[idx] = uint16(m_frameId);
             return;
         }
     }
     m_pool.flags[idx] = uint8(m_pool.flags[idx] | RecordFlag_PendingMove);
-    m_pool.lastMoveFrame[idx] = m_frameId;
+    m_pool.lastMoveFrame[idx] = uint16(m_frameId);
     m_pendingOps.local().push_back({ .newKey = key, .newRelPos = rel, .newRadius = radius,
                                      .idx = idx, .gen = handle.gen, .type = PendingOp::Move, .newLevel = uint8(level) });
 }
@@ -174,7 +174,7 @@ void SpatialIndex::setLayerMask(SpatialHandle handle, uint32 layerMask)
     if (!m_pool.isValidAlive(handle))
         return;
     const uint32 idx = handle.idx;
-    m_pool.layerMask[idx] = layerMask;
+    m_pool.layerMask[idx] = uint8(layerMask);
     if ((m_pool.flags[idx] & RecordFlag_StaticTier) && m_pool.storeIdx[idx] != UINT32_MAX)
         m_static[m_pool.level[idx]].layer[m_pool.storeIdx[idx]] = layerMask;
 }
@@ -205,9 +205,17 @@ void SpatialIndex::commitFrame()
                 // runs with the entry actually in the index) decides for real. NOT for NoSpawnGuard
                 // entries: with the culling FROZEN no markVisibleSet ever re-decides, so this write
                 // would leak every newly linked (off-screen-streamed) entry into the frozen main set.
+                // RENDER passes only. The SIM LOD tiers are stamped by the World's PERIODIC
+                // selection job: a "current" tier stamp made here would read as a real tier
+                // (tier 0!) for frames, and the spawn-guard 0 as "in every tier" for ever — they
+                // get the LINKED sentinel instead (hasStamp false: the World derives the tier from
+                // the distance until the job stamps it). The root-dedupe passes stay 0: a fresh
+                // root must not read as held.
                 if (!(opFlags & RecordFlag_NoSpawnGuard))
-                    for (uint32 p = 0; p < uint32(ESpatialPass::Count); ++p)
+                    for (uint32 p = 0; p < uint32(ESpatialPass::UpdateTier0); ++p)
                         m_pool.lastVisible[p][op.idx] = m_visibleQueryId[p];
+                for (uint32 p = uint32(ESpatialPass::UpdateTier0); p <= uint32(ESpatialPass::UpdateTier2); ++p)
+                    m_pool.lastVisible[p][op.idx] = SpatialStamp_Linked;
             }
             break;
         case PendingOp::Move:
@@ -367,8 +375,8 @@ void SpatialIndex::promotionScan()
                                 | RecordFlag_StaticTier | RecordFlag_PendingStatic;
         if ((m_pool.flags[idx] & (RecordFlag_Alive | exclude)) != RecordFlag_Alive)
             continue;
-        if (m_frameId - m_pool.lastMoveFrame[idx] < uint32(m_promoteAfterFrames))
-            continue;
+        if (uint16(uint16(m_frameId) - m_pool.lastMoveFrame[idx]) < uint16(glm::min(m_promoteAfterFrames, 65535)))
+            continue; // modular 16-bit age: an entry static for > 65k frames reads young for a few frames — harmless
         // selected: stays linked and queryable until a rebuild folds it into the sorted store
         m_pool.flags[idx] = uint8(m_pool.flags[idx] | RecordFlag_StaticTier | RecordFlag_PendingStatic);
         m_pool.storeIdx[idx] = UINT32_MAX;

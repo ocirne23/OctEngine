@@ -78,26 +78,40 @@ public:
     void markVisibleSet(ESpatialPass pass, const Frustum& frustumRelCamera, const glm::dvec3& cameraPos, float maxDist,
                         uint32 layerMask, IOcclusionTester* occlusion = nullptr);
     void markVisibleSphere(ESpatialPass pass, const glm::dvec3& center, float radius, uint32 layerMask);
-    // One stamp generation covering the UNION of several balls (markVisibleSphere per call would
-    // leave only the last ball stamped). One radius per ball; a ball with radius <= 0 is skipped.
-    void markVisibleSpheres(ESpatialPass pass, const glm::dvec3* centers, const float* radii, uint32 count, uint32 layerMask);
-
-    // SIM LOD selection (World): the spheres to stamp the UpdateTier passes with in the next
-    // update() — each carries one radius per tier (<= 0 = that tier is not stamped by it): a
-    // player focus point stamps all three, a forcefield zone tier 1 and 2 only. Runs in every
-    // culling mode (it is update logic, not culling); count 0 = no stamping (the World then
-    // visits everything).
-    struct UpdateLodSphere
+    // SIM LOD selection (the World's selection job — NOT the cull job: it is update logic, and
+    // not frame-critical). advanceUpdateTiers opens a new stamp generation for the three
+    // UpdateTier passes (once per selection, before its traversals; nothing else stamps them, so
+    // the stamps stay current until the next selection). queryUpdateTiers is ONE traversal of the
+    // ball (center, queryRadius): every hit is emitted AND stamped in each tier whose radius it
+    // falls inside (nested balls: tierRadius[t] > distance, <= 0 = that tier is not stamped by
+    // this ball; horizontal = XZ distance). Stamps are pure stores — several calls may run
+    // concurrently on jobs; the hit list is the caller's.
+    void advanceUpdateTiers(); // the three tiers + UpdateRoot
+    void advanceStamp(ESpatialPass pass); // one pass's generation (the World: VisibleRoot, every pass)
+    // Root DEDUPE: stamps the entry current in `pass` and reports whether it was NOT current
+    // before — an ATOMIC exchange, so of several jobs reaching one root exactly one gets true.
+    bool stampCurrentOnce(SpatialHandle handle, ESpatialPass pass)
     {
-        glm::dvec3 center;
-        float radius[3];
-    };
-    static constexpr uint32 MaxUpdateLodSpheres = 96;
-    void setUpdateLod(const UpdateLodSphere* spheres, uint32 count);
+        if (!m_pool.isValidAlive(handle))
+            return false;
+        const SpatialStamp id = m_visibleQueryId[uint32(pass)];
+        return oc::atomic_ref<SpatialStamp>(m_pool.lastVisible[uint32(pass)][handle.idx]).exchange(id, oc::memory_order_relaxed) != id;
+    }
+    // The VISIBLE set for the World's update selection, straight from the cull job's Main
+    // frustum pass — no second traversal: the Main stamp also appends the HANDLE of every hit
+    // carrying one of these layers (per-chunk lists, merged once inside the job). Valid from
+    // joinUpdateJob until the next kick; empty when nothing collects (headless, layers 0).
+    // Handles, not userData: entities may die between the join and the consumer (the destroy
+    // windows sit there) — userData(handle) reads 0 for a dead one.
+    void setVisibleCollect(uint32 layerMask) { m_visibleCollectLayers = layerMask; }
+    const oc::vector<SpatialHandle>& visibleHandles() const { return m_visibleCollected; }
+    uint64 userData(SpatialHandle handle) const { return m_pool.isValidAlive(handle) ? m_pool.userData[handle.idx] : 0; }
+    uint32 queryUpdateTiers(const glm::dvec3& center, float queryRadius, const float tierRadius[3], bool horizontal,
+                            uint32 layerMask, oc::vector<uint64>& outUserData);
 
     // Exact-compare variants (NO spawn guard: a never-stamped entry reads as in no pass) for the
-    // World's update selection. isStampedCurrent/stampCurrent are its MAIN-THREAD single-entry
-    // accessors (the ancestors of a selected entity get marked between the join and the pass).
+    // World's update selection. isStampedCurrent/stampCurrent are its single-entry accessors (the
+    // selection job stamps the ancestors of a selected entity; pure stores, job-safe).
     // isAlive lets the World check that a root its post-update selection job found still exists
     // when the next pass uses it (the generation in the handle rules out slot reuse).
     bool isAlive(SpatialHandle handle) const { return m_pool.isValidAlive(handle); }
@@ -110,6 +124,16 @@ public:
             if (m_pool.lastVisible[p][handle.idx] == m_visibleQueryId[p])
                 mask |= 1u << p;
         return mask;
+    }
+    // Whether a stamp generation was EVER written in `pass` (neither the spawn-guard 0 nor the
+    // link-time SpatialStamp_Linked): for the tier passes, "the selection job placed this entry
+    // at some point" — else the World derives the tier from the distance.
+    bool hasStamp(SpatialHandle handle, ESpatialPass pass) const
+    {
+        if (!m_pool.isValidAlive(handle))
+            return false;
+        const SpatialStamp stamp = m_pool.lastVisible[uint32(pass)][handle.idx];
+        return stamp != 0 && stamp != SpatialStamp_Linked;
     }
     bool isStampedCurrent(SpatialHandle handle, ESpatialPass pass) const
     {
@@ -145,7 +169,7 @@ public:
     {
         if (!m_pool.isValidAlive(handle))
             return false;
-        const uint32 stamp = m_pool.lastVisible[uint32(ESpatialPass::Main)][handle.idx];
+        const SpatialStamp stamp = m_pool.lastVisible[uint32(ESpatialPass::Main)][handle.idx];
         return stamp == m_visibleQueryId[uint32(ESpatialPass::Main)]
             || (stamp == 0 && !(m_pool.flags[handle.idx] & RecordFlag_NoSpawnGuard));
     }
@@ -158,7 +182,7 @@ public:
         uint32 mask = 0;
         for (uint32 p = 0; p < uint32(ESpatialPass::Count); ++p)
         {
-            const uint32 stamp = m_pool.lastVisible[p][handle.idx];
+            const SpatialStamp stamp = m_pool.lastVisible[p][handle.idx];
             if (stamp == m_visibleQueryId[p] || (spawnGuard && stamp == 0))
                 mask |= 1u << p;
         }
@@ -267,11 +291,7 @@ private:
     uint32 m_levelEntityCount[Morton::MaxLevels] = {};
     uint32 m_numLevels = Morton::MaxLevels;
     uint32 m_frameId = 1;
-    uint32 m_visibleQueryId[uint32(ESpatialPass::Count)] = {}; // stamp generation per pass, 0 = never stamped
-    // The SIM LOD spheres split per tier for markVisibleSpheres: centers once, one radius row per tier.
-    glm::dvec3 m_updateLodCenter[MaxUpdateLodSpheres];
-    float m_updateLodRadius[3][MaxUpdateLodSpheres];
-    uint32 m_updateLodCount = 0;
+    SpatialStamp m_visibleQueryId[uint32(ESpatialPass::Count)] = {}; // stamp generation per pass, 0 = never stamped (advanceStamp: wrap sweep)
     uint32 m_promoteCursor = 0;  // round-robin pool scan position for static promotion
     bool m_staticEnabled = true;
     int m_promoteAfterFrames = 60;
@@ -285,6 +305,11 @@ private:
     mutable SpatialStats m_stats;
     oc::vector<FrontierCell> m_frontier;     // traverseParallel scratch (main thread only)
     oc::vector<FrontierCell> m_frontierNext;
+    // setVisibleCollect: slot 0 = the serial frontier expansion, slot 1 + i = fan-out chunk i
+    // (owner-sliced: a chunk appends to its own list only), merged into m_visibleCollected.
+    uint32 m_visibleCollectLayers = 0;
+    oc::vector<oc::vector<SpatialHandle>> m_visibleCollectChunks;
+    oc::vector<SpatialHandle> m_visibleCollected;
 
     // Near-ball requery hysteresis, see update.
     glm::dvec3 m_lastNearQueryPos = glm::dvec3(1e30);

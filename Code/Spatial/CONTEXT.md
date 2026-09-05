@@ -133,6 +133,18 @@ invalidates that pass's previous generation — one consumer per pass by design.
 | `Main` | The camera frustum, occlusion-testable. |
 | `Near` | A camera ball that keeps off-screen shadow casters and ray-traced geometry alive. |
 | `UpdateTier0/1/2` | The World's SIM LOD selection. **Not rendering.** |
+| `UpdateRoot` / `VisibleRoot` | The World's ROOT-DEDUPE stamps: "this root is in the current periodic selection result" (advances with the selection job) / "already queued from this frame's visible set" (advances every pass). No visibility meaning — read with the exact accessors only. |
+
+**Stamps are 16-bit** (`SpatialStamp`): a generation counts 1..65534, and `advanceStamp` sweeps the
+pass's pool row back to `SpatialStamp_Linked` when it wraps, so a stale value can never read as
+current again. The pool's other narrow rows: `layerMask` is a byte (4 layer bits, static_assert),
+`lastMoveFrame` a modular uint16 (the promotion age compares as `uint16(frame - last)`); `next`/`prev`/
+`storeIdx` stay 32-bit (indices up to the capacity) and `gen` stays 32-bit so a stale handle can never
+match a reused slot.
+
+**The link-time spawn-guard stamp covers Main and Near ONLY.** The tier and root passes are left at
+0 on link: their generations advance with the World's periodic selection, so a "current" stamp made
+here would read as a real tier 0 (or "root already held") for frames.
 
 Read back with `getPassMask` / `isVisible` (both apply the spawn guard), or with the exact-compare
 variants below. `SpatialPassBit_*` are the bits; `SpatialPassBits_UpdateTiers` is the tier mask.
@@ -156,11 +168,21 @@ counters (`TraverseStats`) accumulate locally and merge once — which also fixe
 race from concurrent script-worker queries. `OcclusionBuffer`'s hidden-cell counter went atomic with
 a plain-int mirror for the tweak panel, which binds a raw `int*`.
 
-### `markVisibleSpheres`
+### The SIM LOD tiers are NOT stamped by the cull job
 
-ONE stamp generation over the UNION of several balls, one radius per ball (a radius <= 0 skips the
-ball). **`markVisibleSphere` per call would leave only the last ball stamped**, which is why the SIM
-LOD uses this. `visiblePerPass` counts overlapping balls twice.
+`update()` stamps Main and Near only. The `UpdateTier` passes are stamped by the World's selection
+job through `advanceUpdateTiers` + `queryUpdateTiers` (below), off the frame-critical path.
+
+### The visible set hand-over (`setVisibleCollect`)
+
+The Main frustum stamp also COLLECTS: with `setVisibleCollect(layerMask)` set (the World passes
+`SpatialLayer_Entity`), the stamp lambda appends the `SpatialHandle` of every hit carrying one of
+those layers to an owner-sliced per-chunk list (`traverseParallel` hands a chunk-aware emit — `(idx,
+pos, chunk)` — slot 0 for its serial expansion, 1 + the chunk's first frontier index for the
+fan-out), merged once inside the job. `visibleHandles()` is valid from `joinUpdateJob` until the
+next kick; `userData(handle)` resolves one and reads 0 for an entry that died in between (the
+destroy windows sit between the join and the World's pass). **This is how the World selects what is
+on screen every frame without a traversal of its own.**
 
 ### The Near ball's hysteresis
 
@@ -200,18 +222,27 @@ passes unconditionally.
 
 ### SIM LOD hooks
 
-`setUpdateLod(spheres, count)` — at most `MaxUpdateLodSpheres` = 96 `UpdateLodSphere`s, each a
-center plus ONE RADIUS PER TIER (<= 0 = that tier is not stamped by it) — records what the NEXT
-`update()` stamps the three `UpdateTier` passes with. The World builds the list from its focus
-points (all three tiers at the config radii) and its zones (tier 1 and 2 only).
+`advanceUpdateTiers()` opens a new stamp generation for the three `UpdateTier` passes — the World's
+selection job calls it once per selection, and NOTHING else stamps those passes, so the stamps stay
+current until the next selection (which may be several frames later).
+
+`queryUpdateTiers(center, queryRadius, tierRadius[3], horizontal, layerMask, outUserData)` is ONE
+serial `traverse` of the ball that both emits every hit AND stamps it in each tier whose radius
+exceeds its distance to the center (nested balls; a `tierRadius` <= 0 is never stamped by that
+ball; `horizontal` = XZ distance). The World runs one per sphere on a parallelFor — **the stamps are
+pure stores, so overlapping balls stamping the same entry concurrently is fine.** The distance test
+is center-to-center (the entry radius only widens the query ball).
 
 Three accessors exist purely for the World's selection logic:
 
 | Accessor | Difference from the normal one |
 |---|---|
-| `getPassMaskExact` | **No spawn guard** — a never-stamped entry reads as in no pass. That is how the World tells a fresh unlinked entry from a placed one. |
+| `getPassMaskExact` | **No spawn guard** — a never-stamped entry reads as in no pass. |
+| `hasStamp` | Whether a real generation was EVER written in a pass (neither the spawn-guard 0 nor `SpatialStamp_Linked`). For the tier passes: "the selection job placed this entry at some point" — the World derives a fresh entry's tier from the distance instead. |
 | `isStampedCurrent` | Single-entry exact compare. |
-| `stampCurrent` | **Main-thread** single-entry stamp; the World marks the ancestors of a selected entity between the join and the pass. |
+| `stampCurrent` | Single-entry stamp (a pure store, job-safe); the selection job marks the ancestors of every hit with it. |
+| `stampCurrentOnce` | Stamp + "was it not current before" as ONE atomic exchange: of several jobs reaching the same root exactly one gets true. The World's root dedupe. |
+| `advanceStamp` | Opens a new generation for one pass (the World: `VisibleRoot`, every pass). |
 
 See the SIM LOD section in [`Code/Entity/CONTEXT.md`](../Entity/CONTEXT.md).
 

@@ -71,6 +71,12 @@ export struct SimLodConfig
     // 0, so a unit walking into a far base's field ticks (and is pushed) without a player near.
     float zoneMargin = 5.0f;
     float zoneTier2Band = 25.0f;
+    // The selection job (the sphere queries + tier stamps) runs once this much SIM TIME has
+    // passed since its last kick (frame-rate independent; at least one pass apart); in between
+    // the last result is reused (dead roots dropped, new roots visited from the pending list).
+    // NOT frame-sensitive: what the camera sees is selected every frame from the cull job's
+    // frustum pass regardless. The query margin has to cover this much motion.
+    float selectionIntervalSec = 0.05f;
     int maxCatchUp = 8;          // cap on the frames of dt a resumed tick receives
     bool units = true;           // GameUnitComponent follows the LOD
     bool structures = false;     // GameStructureComponent (barracks/turret clocks, flows)
@@ -157,9 +163,10 @@ public:
             return;
         Entity* e = entity.get();
         m_rootEntities.push_back(oc::move(entity));
-        m_pendingRoots.push_back(e);
         if (e->isGlobal())
             m_globalRoots.push_back(e);
+        else
+            m_pendingRoots.push_back({ e, m_updateFrame });
     }
     // Drops the World's ownership of a root entity (it dies here unless something else still holds it).
     // Notifies m_onRootEntityRemoved FIRST (the entity is still alive during the callback) — the Game
@@ -172,7 +179,7 @@ public:
         if (m_onRootEntityRemoved)
             m_onRootEntityRemoved(entity);
         oc::erase_if(m_rootEntities, [entity](const EntityPtr& e) { return e.get() == entity; });
-        oc::erase_if(m_pendingRoots, [entity](const Entity* e) { return e == entity; });
+        oc::erase_if(m_pendingRoots, [entity](const PendingRoot& p) { return p.entity == entity; });
         oc::erase_if(m_globalRoots, [entity](const Entity* e) { return e == entity; });
     }
     const oc::vector<EntityPtr>& rootEntities() const { return m_rootEntities; }
@@ -291,35 +298,56 @@ private:
     // visited for its sync/placement but takes no sim step) or < 0 = DORMANT: do not visit the
     // entity or its subtree at all this frame.
     float simLodDelta(Entity& entity);
-    // Its three pieces: the tiers from the entity's own spatial stamps (placed = a real tier
-    // stamp exists — a fresh unlinked entry only carries the spawn guard), the dormant / wake
-    // transitions (PhysicsComponent park/unpark), and the time-based tick cadence.
+    // Its three pieces: the tiers — from the entity's own spatial stamps once the periodic job has
+    // placed it, else (fresh, or never inside a ball) by direct distance to the focus points and
+    // zones — the dormant / wake transitions (PhysicsComponent park/unpark), and the time-based
+    // tick cadence.
     struct SimLodTiers
     {
         uint8 dist;  // 0..2 by the tier balls, 3 = beyond the outer radius (dormant)
         uint8 tick;  // dist floored by "Visible max tier" for an in-view entity
-        bool placed;
     };
     SimLodTiers simLodTiers(const Entity& entity) const;
+    int simLodDistanceTier(const glm::vec3& pos) const; // the tier by direct distance to the focus points / zones (3 = none); the fallback while no stamp exists
     void simLodTransition(Entity& entity, uint8 tier);
     float simLodCadence(Entity& entity, uint8 tier);
-    // THE SELECTION runs as a POST-UPDATE job (computeSelection): it queries the index between
-    // commits and resolves the hits to roots for the NEXT pass, so update() kicks its batches
-    // without waiting on any query. The result carries each root's spatial handle (liveness proof
-    // at use — a root may die in between) and the ancestor entries between a hit and its root,
-    // which update() stamps with the CURRENT generation (the cull re-stamps the tiers every frame,
-    // so a stamp made inside the job would be stale by the time the pass descends).
+    // THE SELECTION runs as a POST-UPDATE job (computeSelection) every "Selection interval"
+    // passes: it opens a new UpdateTier stamp generation, then ONE traversal per sphere (a focus
+    // point or a zone) on a parallelFor stamps every hit's tiers by distance band, walks it up to
+    // its root (stamping the ancestors) and records the root — the tier stamps are the job's, not
+    // the cull job's, so the stamps stay current until the next selection. ROOT DEDUPE is a stamp
+    // too: the walk's atomic UpdateRoot stamp lets exactly one sphere record a shared root (no
+    // sort, no merge), and the same stamp tells update() which visible / pending roots the result
+    // already holds. The result carries each root's spatial handle (liveness proof at use — a root
+    // may die in between) and is reused, dead roots dropped, until the next job replaces it.
+    struct SelectSphere
+    {
+        glm::dvec3 center;
+        float queryRadius;
+        float tierRadius[3];
+    };
     struct SelectResult
     {
-        oc::vector<EntityUpdateNode> nodes;      // the deduped roots, ready to submit (Global roots skipped)
+        oc::vector<EntityUpdateNode> nodes;      // the roots, ready to submit (deduped by the UpdateRoot stamp, Global roots skipped)
         oc::vector<SpatialHandle> rootHandles;   // aligned with nodes
-        oc::vector<SpatialHandle> ancestors;
-        oc::vector<Entity*> rootScratch;         // the walk's raw roots before the dedupe
+        oc::vector<SelectSphere> spheres;        // the job's inputs, built at kick from the focus + zones
+        oc::vector<oc::vector<uint64>> hits;     // owner-sliced per sphere: the traversal's hits (Entity* as userData)
+        oc::vector<oc::vector<Entity*>> roots;   // owner-sliced per sphere: the roots this sphere won
         bool valid = false; // set by the job, consumed by the next update() (sequenced by the join)
     };
     SelectResult m_selectResult;
-    oc::vector<uint64> m_selectHits; // the job's query scratch (Entity* as userData)
     JobCounter m_selectCounter;      // the in-flight selection job (submitted at the end of update, see joinSelection)
+    uint64 m_selectKickFrame = 0;    // the pass that kicked the in-flight / last job (0 = never)
+    float m_selectKickTime = 0.0f;   // sim time (m_simTimeAccum) at that kick: the interval clock
+    // Roots added since the last selection that could see them: visited unconditionally every
+    // pass. A root added in pass f links at the commit of pass f + 1 at the latest, so the job
+    // kicked at the end of pass k >= f + 1 finds it; that job's result retires it (and any root the
+    // result contains anyway — a root added before pass k's commit is found AND still pending).
+    struct PendingRoot
+    {
+        Entity* entity;
+        uint64 frame;
+    };
 public:
     // The selection job is FIRE-AND-FORGET from the end of update(): it gets the whole rest of the
     // frame instead of the present window. Main calls this right BEFORE the next frame's spatial
@@ -328,10 +356,14 @@ public:
     void joinSelection();
 private:
     void computeSelection(SelectResult& out); // the job body (also the first LOD frame's inline fallback)
-    void selectUpdateRoot(Entity* hit, SelectResult& out); // a hit up to its root, ancestors recorded
+    // A hit up to its root, ancestors stamped; the root is recorded once per generation of
+    // `rootPass` (UpdateRoot from the job, VisibleRoot from the per-pass visible walk, which also
+    // skips roots the current periodic result holds).
+    void selectUpdateRoot(Entity* hit, ESpatialPass rootPass, oc::vector<Entity*>& roots);
 
     uint64 m_updateFrame = 0; // salts the per-entity random re-measure below
     oc::vector<EntityUpdateNode> m_updateLevel; // root gather scratch
+    oc::vector<Entity*> m_visibleRoots;         // per pass: the cull job's visible entities walked to their roots
     // Frame arena for in-flight batch nodes: claimed with an atomic bump (NEVER rolled back),
     // pointer-stable during the pass (resized only between frames, from last frame's use +
     // overflow). A claim past the end runs that batch's subtrees serially instead (correct, just
@@ -350,8 +382,7 @@ private:
     uint32 m_simLodFocusCount = 0;
     glm::dvec4 m_simLodZone[MaxSimLodZones];  // xyz center, w radius
     uint32 m_simLodZoneCount = 0;
-    void pushUpdateLod(); // focus + zones -> SpatialIndex::setUpdateLod
-    float zoneQueryRadius(double zoneRadius) const { return float(zoneRadius) + m_simLod.zoneMargin + m_simLod.zoneTier2Band; }
+    void buildSelectSpheres(oc::vector<SelectSphere>& out) const; // focus + zones -> the job's inputs (at kick)
     uint16 m_simLodFollowMask = 0; // per pass: sim kinds that follow the LOD
     uint16 m_simLodPinMask = 0;    // per pass: sim kinds that pin their entity to full rate
     bool m_simLodActive = false;   // per pass: selection by spatial query + stamps (else every root, every child)
@@ -361,7 +392,7 @@ private:
     float m_frameTimeRing[256] = {};
     float m_simTimeAccum = 0.0f;
     oc::vector<Entity*> m_globalRoots;  // EEntityFlag_Global roots: always visited
-    oc::vector<Entity*> m_pendingRoots; // roots added since the last pass: visited once unconditionally
+    oc::vector<PendingRoot> m_pendingRoots; // see PendingRoot
     int m_simLodStats[4] = {};     // last pass's per-tier entity counts (live readout tweaks)
     JobCost m_spawnBatchCost{ 20000 }; // spawnBatch auto-grain seed (~20us/entity until measured)
     JobCost m_destroyBatchCost{ 10000 }; // releaseBatch auto-grain seed

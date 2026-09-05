@@ -158,7 +158,10 @@ fills the stretch where main otherwise only waits on the "Spatial cull" and "Beg
    or when the "Rebuild interval" has elapsed AND (its sources changed — id/kind, or moved more than
    half a cell — or the raster changed, or it is periodic). **The interval gates the dirty path too:**
    thousands of moving unit sources are dirty every frame, which used to chain builds back to back.
-   A team with no sources publishes null and units fall back to the local search.
+   A team with no sources publishes null and units fall back to the local search. **A rebuild of a
+   published field also waits out a physics-step frame** that a step-free frame follows
+   (`JobSystem::deferFromPhysicsFrame`), so the first chunk's job does not land next to the solver
+   tasks; a slot with nothing published kicks at once.
 5. **Queue the flow and pressure steps as ONE POST-UPDATE JOB.**
 
 ### The field steps are a post-update job

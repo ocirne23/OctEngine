@@ -21,6 +21,9 @@ void ForceComponent::spawn(Entity& entity, const SpawnInfo& info, const Transfor
         info.output, info.reach, info.focus, info.distribution, info.width);
     emitter.setMergeable(info.mergeable);
     emitter.setAnalyticReadback(info.analyticReadback);
+    // DARK until the World's SIM LOD gate first decides (setActive below): a bubble never holds a
+    // GPU slot before its entity has a tier — a far spawn stays dark for as long as it stays far.
+    emitter.setActive(false);
 }
 
 void ForceComponent::destroy(Entity& entity, const SpawnInfo&)

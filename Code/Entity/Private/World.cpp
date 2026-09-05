@@ -50,6 +50,8 @@ bool World::initialize()
         Tweak::floatVar("Game/Sim LOD", "Query margin (m)", &c.queryMargin, 0.0f, 100.0f, 1.0f);
         Tweak::floatVar("Game/Sim LOD", "Zone margin (m)", &c.zoneMargin, 0.0f, 100.0f, 1.0f);
         Tweak::floatVar("Game/Sim LOD", "Zone tier 2 band (m)", &c.zoneTier2Band, 0.0f, 200.0f, 1.0f);
+        Tweak::floatVar("Game/Sim LOD", "Selection interval (s)", &c.selectionIntervalSec, 0.0f, 1.0f, 0.01f);
+        Globals::spatialIndex.setVisibleCollect(SpatialLayer_Entity); // the cull job hands over the visible entities (see update)
         Tweak::intVar("Game/Sim LOD", "Force bubbles max tier (3 = always)", &c.forceMaxTier, 0, 3, 1.0f);
         Tweak::boolean("Game/Sim LOD", "Dormant disables physics body", &c.dormantDisableBody);
         Tweak::boolean("Game/Sim LOD/Follows", "Units", &c.units);
@@ -72,7 +74,6 @@ void World::setSimLodFocus(const glm::vec3* points, uint32 count)
     m_simLodFocusCount = glm::min(count, MaxSimLodFocus);
     for (uint32 i = 0; i < m_simLodFocusCount; ++i)
         m_simLodFocus[i] = glm::dvec3(points[i]);
-    pushUpdateLod();
 }
 
 void World::setSimLodZones(const glm::vec4* spheres, uint32 count)
@@ -80,102 +81,103 @@ void World::setSimLodZones(const glm::vec4* spheres, uint32 count)
     m_simLodZoneCount = glm::min(count, MaxSimLodZones);
     for (uint32 i = 0; i < m_simLodZoneCount; ++i)
         m_simLodZone[i] = glm::dvec4(spheres[i]);
-    pushUpdateLod();
 }
 
-// The tier stamps ride the NEXT cull job (this runs after this frame's join); the selection
-// query in update() uses the fresh spheres. One frame of stamp latency is nothing against the
-// tier radii. A focus point stamps all three tiers at the config radii; a zone stamps tier 1
-// out to its radius + margin and tier 2 over the band beyond, never tier 0.
-void World::pushUpdateLod()
+// A focus point stamps all three tiers at the config radii; a zone stamps tier 1 out to its
+// radius + margin and tier 2 over the band beyond, never tier 0. Each ball is queried at its
+// outer tier radius + the query margin, so an entity LEAVING the outer tier is still visited
+// once with no tier stamp (= dormant) and takes its dormancy edge.
+void World::buildSelectSpheres(oc::vector<SelectSphere>& out) const
 {
-    static_assert(MaxSimLodFocus + MaxSimLodZones <= SpatialIndex::MaxUpdateLodSpheres);
-    SpatialIndex::UpdateLodSphere spheres[MaxSimLodFocus + MaxSimLodZones];
-    uint32 count = 0;
-    if (m_simLod.enabled)
+    out.clear();
+    for (uint32 i = 0; i < m_simLodFocusCount; ++i)
+        out.push_back({ m_simLodFocus[i], m_simLod.radius[2] + m_simLod.queryMargin,
+            { m_simLod.radius[0], m_simLod.radius[1], m_simLod.radius[2] } });
+    for (uint32 i = 0; i < m_simLodZoneCount; ++i)
     {
-        for (uint32 i = 0; i < m_simLodFocusCount; ++i)
-            spheres[count++] = { m_simLodFocus[i], { m_simLod.radius[0], m_simLod.radius[1], m_simLod.radius[2] } };
-        for (uint32 i = 0; i < m_simLodZoneCount; ++i)
-        {
-            const float tier1 = float(m_simLodZone[i].w) + m_simLod.zoneMargin;
-            spheres[count++] = { glm::dvec3(m_simLodZone[i]), { 0.0f, tier1, tier1 + m_simLod.zoneTier2Band } };
-        }
+        const float tier1 = float(m_simLodZone[i].w) + m_simLod.zoneMargin;
+        const float tier2 = tier1 + m_simLod.zoneTier2Band;
+        out.push_back({ glm::dvec3(m_simLodZone[i]), tier2 + m_simLod.queryMargin, { 0.0f, tier1, tier2 } });
     }
-    Globals::spatialIndex.setUpdateLod(spheres, count);
 }
 
 bool World::simLodSelected(const Entity& entity) const
 {
     if (!m_simLodActive || entity.isGlobal() || !entity.spatialEntry.isValid())
         return true;
-    return (Globals::spatialIndex.getPassMask(entity.spatialEntry.handle()) & (SpatialPassBits_UpdateTiers | SpatialPassBit_Main)) != 0;
+    const SpatialIndex& spatialIndex = Globals::spatialIndex;
+    const SpatialHandle handle = entity.spatialEntry.handle();
+    if (spatialIndex.getPassMask(handle) & (SpatialPassBits_UpdateTiers | SpatialPassBit_Main))
+        return true;
+    // Linked but never tier-stamped (fresh, or never inside a ball): follows a non-Global parent —
+    // its tier then comes from the distance (simLodTiers). A Global root's children need a real
+    // stamp, or every rock under the terrain root would be visited.
+    return !spatialIndex.hasStamp(handle, ESpatialPass::UpdateTier2) && entity.parent && !entity.parent->isGlobal();
 }
 
-// A query hit at any depth: its ancestors are stamped UpdateTier2 so the descent reaches it (a
-// visited parent emits only selected children — see submitEntityBatches), and its root is queued.
-// A chain that is already stamped was queued by an earlier hit (or is a hit itself); a Global
-// ancestor is visited from the global list anyway.
-// The selection job: one sphere query per focus point, every hit walked up to its root. Runs
-// between commits (post-update), single-threaded over its own scratch; the root/ancestor dedupe
-// happens here so update() only stamps, checks liveness and submits.
+// The selection job. A new tier stamp generation first (nothing else stamps the tiers, so the
+// stamps hold until the next job), then one traversal per sphere on a parallelFor — each stamps
+// its hits' tiers by distance band and walks every hit up to its root — over owner-sliced scratch
+// (a slot per sphere: no per-worker state across the fan-out's waits). The serial tail merges the
+// roots and dedupes (overlapping balls, several hits under one root) into submit-ready nodes, so
+// update() only checks liveness and copies. Runs between commits (post-update) — see the kick in
+// update() for what makes the root walk and the stamps safe.
 void World::computeSelection(SelectResult& out)
 {
     ProfileScope scope("Update selection query", EProfileCategory::Entity);
     out.nodes.clear();
     out.rootHandles.clear();
-    out.ancestors.clear();
-    out.rootScratch.clear();
-    const float radius = m_simLod.radius[2] + m_simLod.queryMargin;
-    for (uint32 i = 0; i < m_simLodFocusCount; ++i)
+    const uint32 numSpheres = uint32(out.spheres.size());
+    out.hits.resize(numSpheres);
+    out.roots.resize(numSpheres);
+    Globals::spatialIndex.advanceUpdateTiers();
+    Globals::jobSystem.parallelFor(0u, numSpheres, 1u, JobProfile{ "Update selection sphere", EProfileCategory::Entity },
+        [this, &out](uint32 begin, uint32 end)
     {
-        m_selectHits.clear();
-        Globals::spatialIndex.querySphere(m_simLodFocus[i], radius, SpatialLayer_Entity, m_selectHits);
-        for (const uint64 userData : m_selectHits)
-            selectUpdateRoot(reinterpret_cast<Entity*>(userData), out);
-    }
-    for (uint32 i = 0; i < m_simLodZoneCount; ++i)
-    {
-        m_selectHits.clear();
-        Globals::spatialIndex.querySphere(glm::dvec3(m_simLodZone[i]), zoneQueryRadius(m_simLodZone[i].w) + m_simLod.queryMargin,
-            SpatialLayer_Entity, m_selectHits);
-        for (const uint64 userData : m_selectHits)
-            selectUpdateRoot(reinterpret_cast<Entity*>(userData), out);
-    }
-    // Dedupe here (overlapping focus balls, several hits under one root), then emit submit-ready
-    // nodes so update() copies nothing and sorts nothing.
-    oc::sort(out.rootScratch.begin(), out.rootScratch.end());
-    out.rootScratch.erase(oc::unique(out.rootScratch.begin(), out.rootScratch.end()), out.rootScratch.end());
-    for (Entity* root : out.rootScratch)
-    {
-        out.nodes.push_back({ root, Transform() });
-        out.rootHandles.push_back(root->spatialEntry.handle());
-    }
-    const auto handleLess = [](const SpatialHandle& a, const SpatialHandle& b) {
-        return a.idx != b.idx ? a.idx < b.idx : a.gen < b.gen; };
-    const auto handleEq = [](const SpatialHandle& a, const SpatialHandle& b) {
-        return a.idx == b.idx && a.gen == b.gen; };
-    oc::sort(out.ancestors.begin(), out.ancestors.end(), handleLess);
-    out.ancestors.erase(oc::unique(out.ancestors.begin(), out.ancestors.end(), handleEq), out.ancestors.end());
+        for (uint32 i = begin; i < end; ++i)
+        {
+            const SelectSphere& s = out.spheres[i];
+            oc::vector<Entity*>& roots = out.roots[i];
+            roots.clear();
+            Globals::spatialIndex.queryUpdateTiers(s.center, s.queryRadius, s.tierRadius, m_simLod.horizontal, SpatialLayer_Entity, out.hits[i]);
+            for (const uint64 userData : out.hits[i])
+                selectUpdateRoot(reinterpret_cast<Entity*>(userData), ESpatialPass::UpdateRoot, roots);
+        }
+    });
+    // Already deduped by the UpdateRoot stamp: a plain concatenation.
+    for (const oc::vector<Entity*>& roots : out.roots)
+        for (Entity* root : roots)
+        {
+            out.nodes.push_back({ root, Transform() });
+            out.rootHandles.push_back(root->spatialEntry.handle());
+        }
     out.valid = true;
 }
 
-void World::selectUpdateRoot(Entity* hit, SelectResult& out)
+// A hit at any depth: its ancestors are stamped UpdateTier2 (the job's fresh generation; a pure
+// store, so overlapping balls may stamp the same chain concurrently) so the descent reaches it —
+// a visited parent emits only selected children (submitEntityBatches) — and its root is recorded
+// ONCE: the atomic stampCurrentOnce on `rootPass` makes exactly one caller win a shared root. A
+// Global ancestor is visited from the global list anyway; a Global root is skipped, which is
+// what makes the merge with m_globalRoots dedupe-free.
+void World::selectUpdateRoot(Entity* hit, ESpatialPass rootPass, oc::vector<Entity*>& roots)
 {
-    // No stamping here (the generation would be stale by the pass): the ancestors are recorded and
-    // update() stamps them. Duplicates from shared ancestors fall to the caller's sort/unique.
     Entity* e = hit;
     while (Entity* p = e->parent)
     {
         if (p->isGlobal())
             return;
         if (p->spatialEntry.isValid())
-            out.ancestors.push_back(p->spatialEntry.handle());
+            Globals::spatialIndex.stampCurrent(p->spatialEntry.handle(), ESpatialPass::UpdateTier2);
         e = p;
     }
-    if (e->isGlobal())
-        return; // Global roots come from m_globalRoots — skipping them here is what makes the merge dedupe-free
-    out.rootScratch.push_back(e);
+    if (e->isGlobal() || !e->spatialEntry.isValid())
+        return;
+    const SpatialHandle handle = e->spatialEntry.handle();
+    if (rootPass == ESpatialPass::VisibleRoot && Globals::spatialIndex.isStampedCurrent(handle, ESpatialPass::UpdateRoot))
+        return; // the periodic result holds it already
+    if (Globals::spatialIndex.stampCurrentOnce(handle, rootPass))
+        roots.push_back(e);
 }
 
 // The tiers from the entity's OWN spatial stamps: the UpdateTier balls around every focus point
@@ -187,16 +189,22 @@ void World::selectUpdateRoot(Entity* hit, SelectResult& out)
 // (unlinked, the mask is only the spawn GUARD saying "in every pass"), so the tier is unknown.
 World::SimLodTiers World::simLodTiers(const Entity& entity) const
 {
+    const SpatialIndex& spatialIndex = Globals::spatialIndex;
     const SpatialHandle handle = entity.spatialEntry.handle();
-    const uint32 mask = Globals::spatialIndex.getPassMask(handle);
-    SimLodTiers t{ 3, 3, true };
-    if (mask & SpatialPassBit_UpdateTier0)      t.dist = 0;
-    else if (mask & SpatialPassBit_UpdateTier1) t.dist = 1;
-    else if (mask & SpatialPassBit_UpdateTier2) t.dist = 2;
-    if (t.dist != 3 && !(Globals::spatialIndex.getPassMaskExact(handle) & SpatialPassBits_UpdateTiers))
-        t.placed = false;
+    SimLodTiers t{ 3, 3 };
+    if (spatialIndex.hasStamp(handle, ESpatialPass::UpdateTier2))
+    {
+        // Placed by the periodic job at some point: the EXACT stamps (an old generation = the last
+        // job saw it outside every ball = dormant).
+        const uint32 mask = spatialIndex.getPassMaskExact(handle);
+        if (mask & SpatialPassBit_UpdateTier0)      t.dist = 0;
+        else if (mask & SpatialPassBit_UpdateTier1) t.dist = 1;
+        else if (mask & SpatialPassBit_UpdateTier2) t.dist = 2;
+    }
+    else
+        t.dist = uint8(simLodDistanceTier(entity.pos)); // fresh (unlinked, or linked since the last job): the same tier, by distance
     t.tick = t.dist;
-    if (t.tick != 3 && (mask & SpatialPassBit_Main) && t.tick > uint8(m_simLod.visibleMaxTier))
+    if (t.tick != 3 && t.tick > uint8(m_simLod.visibleMaxTier) && (spatialIndex.getPassMask(handle) & SpatialPassBit_Main))
         t.tick = uint8(glm::clamp(m_simLod.visibleMaxTier, 0, 2));
     return t;
 }
@@ -258,19 +266,59 @@ float World::simLodCadence(Entity& entity, uint8 tier)
     return glm::min(elapsed, m_updateDelta * float(glm::max(m_simLod.maxCatchUp, 1)));
 }
 
+// The tier by direct distance (XZ per the tweak) to the focus points and zones — what the stamps
+// encode, computed here for an entity that has no stamp yet (a fresh one: the periodic job has not
+// run since it linked). O(focus + zones) per call: the pending list is short.
+int World::simLodDistanceTier(const glm::vec3& pos) const
+{
+    const glm::dvec3 p(pos);
+    const auto dist2 = [&](const glm::dvec3& c)
+    {
+        const glm::dvec3 d = p - c;
+        return m_simLod.horizontal ? d.x * d.x + d.z * d.z : glm::dot(d, d);
+    };
+    int tier = 3;
+    for (uint32 i = 0; i < m_simLodFocusCount && tier > 0; ++i)
+    {
+        const double d2 = dist2(m_simLodFocus[i]);
+        for (int t = 0; t < tier; ++t)
+            if (d2 < double(m_simLod.radius[t]) * double(m_simLod.radius[t]))
+            {
+                tier = t;
+                break;
+            }
+    }
+    for (uint32 i = 0; i < m_simLodZoneCount && tier > 1; ++i)
+    {
+        const double d2 = dist2(glm::dvec3(m_simLodZone[i]));
+        const double tier1 = m_simLodZone[i].w + double(m_simLod.zoneMargin);
+        const double tier2 = tier1 + double(m_simLod.zoneTier2Band);
+        if (d2 < tier1 * tier1)
+            tier = 1;
+        else if (d2 < tier2 * tier2 && tier > 2)
+            tier = 2;
+    }
+    return tier;
+}
+
+// The delta for this visit AND the bubble gate: a bubble spawns DARK, and this is the one place
+// that switches it — on for an entity the LOD does not apply to, by distance tier otherwise —
+// so it never holds a GPU slot before its entity has a tier.
 float World::simLodDelta(Entity& entity)
 {
+    ForceComponent* force = getComponent<ForceComponent>(&entity);
     if (!m_simLodActive || entity.isGlobal() || !entity.spatialEntry.isValid())
+    {
+        if (force)
+            force->setActive(true);
         return m_updateDelta;
+    }
     // Only entities carrying a following sim kind and no pinning one are THROTTLED; a bubble is
     // tier-gated on every selected entity regardless.
     const bool throttled = (entity.typeBits & m_simLodFollowMask) && !(entity.typeBits & m_simLodPinMask);
-    ForceComponent* force = getComponent<ForceComponent>(&entity);
     if (!throttled && !force)
         return m_updateDelta;
     const SimLodTiers tiers = simLodTiers(entity);
-    if (!tiers.placed)
-        return m_updateDelta; // tier unknown: full-rate visit, nothing decided
     // The bubble gate, by DISTANCE tier, set every visit (a handle resolve + a store) so a tweak
     // change applies without a tier change; an entity leaving the selection keeps its last
     // state — the query-margin visit (distance tier 3) switches it off on the way out.
@@ -358,12 +406,28 @@ void World::update(Renderer& renderer, float deltaSeconds)
         // Global roots, and a pending root's entry is unlinked until the commit AFTER the job ran,
         // so the query could not have found it. The first LOD frame has no result: inline.
         Globals::jobSystem.wait(m_selectCounter); // main already joined before the spatial kick: a no-op guard
-        if (!m_selectResult.valid)
+        if (m_selectKickFrame == 0)
+        {
+            buildSelectSpheres(m_selectResult.spheres); // the first LOD pass: inline, nothing ran yet
             computeSelection(m_selectResult);
+            m_selectKickFrame = m_updateFrame;
+            m_selectKickTime = m_simTimeAccum;
+        }
         SelectResult& sel = m_selectResult;
         SpatialIndex& spatialIndex = Globals::spatialIndex;
-        for (const SpatialHandle h : sel.ancestors)
-            spatialIndex.stampCurrent(h, ESpatialPass::UpdateTier2);
+        // "In the periodic result" = the root's UpdateRoot stamp is current (the job's generation,
+        // held until the next job). A FRESH result retires the pending roots it covers (see
+        // PendingRoot): those added before the kick pass — linked by the time it ran — and any it
+        // contains anyway.
+        const auto inResult = [&](const Entity* e) {
+            return e->spatialEntry.isValid() && spatialIndex.isStampedCurrent(e->spatialEntry.handle(), ESpatialPass::UpdateRoot); };
+        if (sel.valid)
+        {
+            sel.valid = false;
+            const uint64 kickFrame = m_selectKickFrame;
+            oc::erase_if(m_pendingRoots, [&](const PendingRoot& p) { return p.frame < kickFrame || inResult(p.entity); });
+        }
+        // Dead roots out (order is free). The result itself stays: reused until the next job.
         for (size_t i = 0; i < sel.nodes.size();)
         {
             if (spatialIndex.isAlive(sel.rootHandles[i]))
@@ -376,14 +440,28 @@ void World::update(Renderer& renderer, float deltaSeconds)
             sel.rootHandles[i] = sel.rootHandles.back();
             sel.rootHandles.pop_back();
         }
-        m_updateLevel.swap(sel.nodes); // O(1): the job's list becomes the level; it clears its own next run
-        sel.valid = false;
+        m_updateLevel.assign(sel.nodes.begin(), sel.nodes.end());
+        // THE VISIBLE SET, fresh EVERY frame from the cull job's Main pass (no traversal here — the
+        // stamp collected the handles): each visible entity walked to its root (ancestors stamped);
+        // the VisibleRoot stamp (a new generation per pass) dedupes among them and the UpdateRoot
+        // stamp skips those the periodic result holds, so a root is visited once. This is what
+        // keeps what the player sees at full rate no matter how stale the periodic selection is.
+        spatialIndex.advanceStamp(ESpatialPass::VisibleRoot);
+        m_visibleRoots.clear();
+        for (const SpatialHandle h : spatialIndex.visibleHandles())
+            if (Entity* e = reinterpret_cast<Entity*>(spatialIndex.userData(h)))
+                selectUpdateRoot(e, ESpatialPass::VisibleRoot, m_visibleRoots);
+        for (Entity* e : m_visibleRoots)
+            m_updateLevel.push_back({ e, Transform() });
         for (Entity* e : m_globalRoots)
             m_updateLevel.push_back({ e, Transform() });
-        for (Entity* e : m_pendingRoots)
-            m_updateLevel.push_back({ e, Transform() });
+        for (const PendingRoot& p : m_pendingRoots)
+            if (!inResult(p.entity) && !(p.entity->spatialEntry.isValid()
+                && spatialIndex.isStampedCurrent(p.entity->spatialEntry.handle(), ESpatialPass::VisibleRoot)))
+                m_updateLevel.push_back({ p.entity, Transform() }); // not queued by either source yet: one visit
     }
-    m_pendingRoots.clear();
+    if (!m_simLodActive)
+        m_pendingRoots.clear(); // every root was visited; nothing is owed a visit
     {
         // The root list's arena copy + the batch job submits (the first workers start inside).
         ProfileScope submitScope("Update batch submit", EProfileCategory::Entity);
@@ -404,9 +482,18 @@ void World::update(Renderer& renderer, float deltaSeconds)
     // walk is safe; registrations take the index's exclusive lock against the query. It sees
     // positions one commit older than an inline query would; the query margin covers a frame of
     // motion, and roots spawned meanwhile arrive through m_pendingRoots.
-    if (m_simLodActive)
+    // Once "Selection interval (s)" of sim time has passed since the last kick (frame-rate
+    // independent; 0 = every pass): in between the last result is reused (the tier stamps are
+    // the job's own generation, so they stay current too). NOT on a physics-step frame when a
+    // step-free one follows (JobSystem::deferFromPhysicsFrame): the workers carry the solver
+    // tasks OR this job in a frame, never both.
+    if (m_simLodActive && m_simTimeAccum - m_selectKickTime >= m_simLod.selectionIntervalSec
+        && !Globals::jobSystem.deferFromPhysicsFrame())
     {
         ProfileScope queueScope("Update selection queue", EProfileCategory::Entity);
+        m_selectKickFrame = m_updateFrame;
+        m_selectKickTime = m_simTimeAccum;
+        buildSelectSpheres(m_selectResult.spheres);
         Globals::jobSystem.submit([this] { computeSelection(m_selectResult); },
             { "Update selection query", EProfileCategory::Entity }, EJobPriority::Normal, &m_selectCounter);
     }
