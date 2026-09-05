@@ -44,12 +44,32 @@ public:
     void commitFrame();
 
     uint32 querySphere(const glm::dvec3& center, float radius, uint32 layerMask, oc::vector<uint64>& outUserData) const;
+    // CALLBACK forms: `emit(userData)` per hit, straight out of the traversal — no result buffer,
+    // so a caller on a job fiber needs no scratch at all (a thread_local one would follow the
+    // THREAD across a park, not the job). Zero-allocation type erasure: the functor stays on the
+    // caller's stack. Do NOT wait inside emit (the index's shared lock is held).
+    template<typename Func>
+    void forEachInSphere(const glm::dvec3& center, float radius, uint32 layerMask, Func&& emit) const
+    {
+        forEachInSphereImpl(center, radius, layerMask, &emit,
+            [](void* ctx, uint64 userData) { (*static_cast<std::remove_reference_t<Func>*>(ctx))(userData); });
+    }
+    template<typename Func>
+    void forEachInFrustum(const Frustum& frustumRelCamera, const glm::dvec3& cameraPos, float maxDist, uint32 layerMask,
+                          Func&& emit, IOcclusionTester* occlusion = nullptr) const
+    {
+        forEachInFrustumImpl(frustumRelCamera, cameraPos, maxDist, layerMask, occlusion, &emit,
+            [](void* ctx, uint64 userData) { (*static_cast<std::remove_reference_t<Func>*>(ctx))(userData); });
+    }
     uint32 queryAABB(const glm::dvec3& boxMin, const glm::dvec3& boxMax, uint32 layerMask, oc::vector<uint64>& outUserData) const;
     uint32 queryFrustum(const Frustum& frustumRelCamera, const glm::dvec3& cameraPos, float maxDist, uint32 layerMask,
                         oc::vector<uint64>& outUserData, IOcclusionTester* occlusion = nullptr) const;
     uint32 queryRay(const glm::dvec3& origin, const glm::dvec3& dir, double maxDist, uint32 layerMask,
                     oc::vector<uint64>& outUserData) const; // broadphase: entries whose bounds cross the segment
     uint64 queryNearest(const glm::dvec3& pos, float maxRadius, uint32 layerMask, uint64 excludeUserData = 0) const;
+    void forEachInSphereImpl(const glm::dvec3& center, float radius, uint32 layerMask, void* ctx, void (*emit)(void*, uint64)) const;
+    void forEachInFrustumImpl(const Frustum& frustumRelCamera, const glm::dvec3& cameraPos, float maxDist, uint32 layerMask,
+                              IOcclusionTester* occlusion, void* ctx, void (*emit)(void*, uint64)) const;
 
     // Per-pass visibility stamps consumed by the render gate; each call invalidates that pass's
     // previous stamp generation (single consumer per pass by design). Main is the camera frustum
@@ -59,14 +79,21 @@ public:
                         uint32 layerMask, IOcclusionTester* occlusion = nullptr);
     void markVisibleSphere(ESpatialPass pass, const glm::dvec3& center, float radius, uint32 layerMask);
     // One stamp generation covering the UNION of several balls (markVisibleSphere per call would
-    // leave only the last ball stamped).
-    void markVisibleSpheres(ESpatialPass pass, const glm::dvec3* centers, uint32 count, float radius, uint32 layerMask);
+    // leave only the last ball stamped). One radius per ball; a ball with radius <= 0 is skipped.
+    void markVisibleSpheres(ESpatialPass pass, const glm::dvec3* centers, const float* radii, uint32 count, uint32 layerMask);
 
-    // SIM LOD selection (World): the focus points + the three tier radii to stamp the UpdateTier
-    // passes with in the next update(). Runs in every culling mode (it is update logic, not
-    // culling); count 0 = no stamping (the World then visits everything).
-    static constexpr uint32 MaxUpdateLodFocus = 16;
-    void setUpdateLod(const glm::dvec3* focus, uint32 count, const float radii[3]);
+    // SIM LOD selection (World): the spheres to stamp the UpdateTier passes with in the next
+    // update() — each carries one radius per tier (<= 0 = that tier is not stamped by it): a
+    // player focus point stamps all three, a forcefield zone tier 1 and 2 only. Runs in every
+    // culling mode (it is update logic, not culling); count 0 = no stamping (the World then
+    // visits everything).
+    struct UpdateLodSphere
+    {
+        glm::dvec3 center;
+        float radius[3];
+    };
+    static constexpr uint32 MaxUpdateLodSpheres = 96;
+    void setUpdateLod(const UpdateLodSphere* spheres, uint32 count);
 
     // Exact-compare variants (NO spawn guard: a never-stamped entry reads as in no pass) for the
     // World's update selection. isStampedCurrent/stampCurrent are its MAIN-THREAD single-entry
@@ -241,9 +268,10 @@ private:
     uint32 m_numLevels = Morton::MaxLevels;
     uint32 m_frameId = 1;
     uint32 m_visibleQueryId[uint32(ESpatialPass::Count)] = {}; // stamp generation per pass, 0 = never stamped
-    glm::dvec3 m_updateLodFocus[MaxUpdateLodFocus];
-    uint32 m_updateLodFocusCount = 0;
-    float m_updateLodRadii[3] = {};
+    // The SIM LOD spheres split per tier for markVisibleSpheres: centers once, one radius row per tier.
+    glm::dvec3 m_updateLodCenter[MaxUpdateLodSpheres];
+    float m_updateLodRadius[3][MaxUpdateLodSpheres];
+    uint32 m_updateLodCount = 0;
     uint32 m_promoteCursor = 0;  // round-robin pool scan position for static promotion
     bool m_staticEnabled = true;
     int m_promoteAfterFrames = 60;

@@ -191,6 +191,33 @@ oc::string StructureSystem::describeType(EStructureType type) const
     return out;
 }
 
+void StructureSystem::collectShieldBubbles(oc::vector<glm::vec4>& out, uint32 maxCount) const
+{
+    oc::small_vector<uint32, 32> seenGroups; // a merge group's sphere is the same for every member
+    for (const Ref& ref : m_frame)
+    {
+        if (out.size() >= maxCount)
+            break;
+        if (!hasShieldEmitter(ref.type))
+            continue;
+        const ForceComponent* fc = getComponent<ForceComponent>(ref.entity);
+        if (!fc)
+            continue;
+        glm::vec3 center;
+        float radius;
+        uint32 group = 0;
+        if (!fc->emitter.getBubbleBounds(center, radius, &group))
+            continue;
+        if (group != 0)
+        {
+            if (oc::find(seenGroups.begin(), seenGroups.end(), group) != seenGroups.end())
+                continue;
+            seenGroups.push_back(group);
+        }
+        out.push_back(glm::vec4(center, radius));
+    }
+}
+
 glm::vec3 StructureSystem::structureLabelAnchor(int index) const
 {
     return m_frame[index].entity->pos
@@ -296,7 +323,9 @@ void StructureSystem::registerTweaks()
     Tweak::floatVar("Game/Economy", "Transport tick rate (Hz)", &m_transportTickHz, 1.0f, 60.0f, 1.0f, [this] { m_linksDirty = true; });
     Tweak::intVar("Game/Economy", "Transport substeps", &m_transportSubsteps, 1, 16, 1.0f, [this] { m_linksDirty = true; });
     Tweak::intVar("Game/Economy", "Transport spread (groups)", &m_transportSpread, 1, 8, 1.0f, [this] { m_linksDirty = true; });
-    Tweak::intVar("Game/Economy", "Cells per segment", &m_cellsPerSegment, 1, 64, 1.0f);
+    Tweak::intVar("Game/Economy", "Cable cells per segment", &m_cellsPerSegment[0], 1, 64, 1.0f);
+    Tweak::intVar("Game/Economy", "Pipeline cells per segment", &m_cellsPerSegment[1], 1, 64, 1.0f);
+    Tweak::intVar("Game/Economy", "Conveyor cells per segment", &m_cellsPerSegment[2], 1, 64, 1.0f);
     Tweak::floatVar("Game/Economy", "Storage pushes below (fill)", &m_storageLowMark, 0.0f, 1.0f, 0.05f);
     Tweak::floatVar("Game/Economy", "Storage pulls above (fill)", &m_storageHighMark, 0.0f, 1.0f, 0.05f);
     Tweak::intVar("Game/Economy", "Transport nodes (stat)", &m_statTransportNodes, 0, 1000000);
@@ -545,8 +574,7 @@ glm::ivec2 StructureSystem::footprintExtent(EStructureType t, const glm::quat& r
     return glm::abs(forward.x) >= glm::abs(forward.z) ? glm::ivec2(3, 1) : glm::ivec2(1, 3);
 }
 
-bool StructureSystem::cellsFree(EStructureType type, const glm::vec3& p, const glm::quat& rot,
-    bool ignoreCables) const
+bool StructureSystem::footprintAreaClear(EStructureType type, const glm::vec3& p, const glm::quat& rot) const
 {
     const glm::ivec2 ext = footprintExtent(type, rot);
     const glm::vec2 half(ext.x * GridCellSize * 0.5f, ext.y * GridCellSize * 0.5f);
@@ -570,6 +598,14 @@ bool StructureSystem::cellsFree(EStructureType type, const glm::vec3& p, const g
                 && overlaps(snapToGrid(EStructureType::Extractor, glm::vec3(n.pos.x, 0.0f, n.pos.z)), exHalf))
                 return false;
     }
+    return true;
+}
+
+bool StructureSystem::cellsFree(EStructureType type, const glm::vec3& p, const glm::quat& rot,
+    bool ignoreCables) const
+{
+    if (!footprintAreaClear(type, p, rot))
+        return false;
     // PER-CELL occupancy (the hash the derived links run on): buildings refuse ANY occupied cell,
     // a cable may slot UNDER a crossing's free middle cell, a crossing may bridge OVER exactly one
     // cable in its middle cell. ignoreCables treats cable cells as open (unit-spawn probe).
@@ -627,17 +663,16 @@ bool StructureSystem::actorInFootprint(EStructureType type, const glm::vec3& p)
         return false;
     constexpr float actorRadius = 0.7f; // capsule/unit body, generous by design
     const float half = footprintCellsOf(type) * GridCellSize * 0.5f + actorRadius;
-    thread_local oc::vector<uint64> results;
-    Globals::spatialIndex.querySphere(glm::dvec3(p), half * 1.5f, SpatialLayer_Render, results);
-    for (const uint64 user : results)
+    bool blocked = false;
+    Globals::spatialIndex.forEachInSphere(glm::dvec3(p), half * 1.5f, SpatialLayer_Render, [&](uint64 user)
     {
         const Entity* entity = reinterpret_cast<const Entity*>(user);
         if (!hasComponent<GameUnitComponent>(entity)) // units AND player capsules (puppets)
-            continue;
+            return;
         if (glm::abs(entity->pos.x - p.x) < half && glm::abs(entity->pos.z - p.z) < half)
-            return true;
-    }
-    return false;
+            blocked = true;
+    });
+    return blocked;
 }
 
 // ---------------------------------------------------------------- requests
@@ -798,9 +833,16 @@ void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groun
         rot = glm::angleAxis(std::atan2(-dir.x, -dir.y), glm::vec3(0.0f, 1.0f, 0.0f));
     }
     // GRID: every placement snaps (extractors snap the node's position too) and occupied cells
-    // refuse — validated HERE, the MP seam, not just at aim time.
+    // refuse — validated HERE, the MP seam, not just at aim time. A CROSSING goes through
+    // planCrossing instead: its END cells may hold own-medium cables, which it REPLACES (below,
+    // right before the spawn, so the cells are free when insertCells runs).
     const glm::vec3 snappedGround = snapToGrid(type, groundPos);
-    if (!cellsFree(type, snappedGround, rot) || actorInFootprint(type, snappedGround))
+    CrossingPlan crossing;
+    if (isCrossingType(type))
+        crossing = planCrossing(type, snappedGround, rot, team);
+    else
+        crossing.valid = cellsFree(type, snappedGround, rot);
+    if (!crossing.valid || actorInFootprint(type, snappedGround))
         return; // overlap raced the ghost — silently refused (it already showed red)
     if (type == EStructureType::Extractor)
     {
@@ -826,6 +868,12 @@ void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groun
         if (glm::dot(dir, dir) > 0.5f)
             rot = glm::angleAxis(std::atan2(-dir.x, -dir.y), glm::vec3(0.0f, 1.0f, 0.0f));
     }
+    // The crossing's END cells give way to it: the own-medium segments they held are redundant
+    // (an end conducts that medium) and would refuse the placement. Their networks re-derive.
+    for (const uint32 id : crossing.replace)
+        if (id != 0)
+            if (const int idx = structureIndexById(id); idx >= 0)
+                destroyStructureAt((size_t)idx);
     // CHEAT ("Free instant build", Synced — the server's value rules): skip the blueprint phase.
     const int index = spawnStructure(m_nextStructureId++, type, pos, rot, team,
         /*built*/ m_cheatInstantBuild, type == EStructureType::Extractor ? nodeIndex : -1);
@@ -924,6 +972,47 @@ int StructureSystem::bridgeableAt(const glm::vec3& p) const
         return -1;
     const int index = structureIndexById(it->second.id);
     return index >= 0 && isBridgeable(index, cx, cz) ? index : -1;
+}
+
+StructureSystem::CrossingPlan StructureSystem::planCrossing(EStructureType type, const glm::vec3& p,
+    const glm::quat& rot, uint8 team) const
+{
+    CrossingPlan plan;
+    if (!isCrossingType(type) || !footprintAreaClear(type, p, rot))
+        return plan;
+    const int medium = crossingMediumOf(type);
+    int cellIdx = -1;
+    int replaceCount = 0;
+    bool blocked = false;
+    forEachFootprintCell(type, p, rot, [&](int cx, int cz)
+    {
+        ++cellIdx;
+        if (blocked)
+            return;
+        const auto it = m_cells.find(cellKey(cx, cz));
+        if (it == m_cells.end())
+            return; // empty cell
+        const CellEntry& entry = it->second;
+        const int occIdx = structureIndexById(entry.id);
+        if (occIdx < 0 || entry.underId != 0)
+        {
+            blocked = true; // a stale id, or a cell that already bridges something
+            return;
+        }
+        if (cellIdx == 1) // the MIDDLE bridges one plain cable or another crossing's END
+        {
+            blocked = !isBridgeable(occIdx, cx, cz);
+            return;
+        }
+        // An END: only this crossing's OWN medium as a plain cable, own team — that segment is
+        // redundant under the end and gets replaced. Anything else blocks.
+        if (cableMediumOf(m_frame[occIdx].type) == medium && m_frame[occIdx].state->team == team)
+            plan.replace[replaceCount++] = entry.id;
+        else
+            blocked = true;
+    });
+    plan.valid = !blocked;
+    return plan;
 }
 
 void StructureSystem::rebuildNetworks()
@@ -1172,7 +1261,6 @@ void StructureSystem::rebuildNetworks()
     oc::vector<uint32> nodeOfSeg(segs.size(), UINT32_MAX);
     oc::vector<uint32> nodeOfCross(crossings.size(), UINT32_MAX);
     oc::unordered_map<uint64, uint32> junctionOf;    // (building << 2 | medium) -> node
-    const int cellsPerSeg = glm::max(m_cellsPerSegment, 1);
     for (uint32 r = 0; r < (uint32)m_net.runs.size(); ++r)
     {
         TransportRun& run = m_net.runs[r];
@@ -1239,14 +1327,19 @@ void StructureSystem::rebuildNetworks()
             }
         }
     }
-    // Junction edges: every attachment pair (segment/crossing end, building) of a BUILT building.
+    // Junction edges: every attachment pair (segment/crossing end, building) of a BUILT building —
+    // AND every pair of conductors touching the same building, so a line THROUGH a building
+    // bridges cable-to-cable. The junction itself is a pure port: it accepts cells only while a
+    // slot on it wants some, so nothing ever parks in (or relays through) a producer's port.
+    oc::unordered_map<uint64, oc::vector<uint32>> touching; // (building << 2 | medium) -> conductor nodes
     for (const auto& [segSlot, buildingIdx] : attachPairs)
     {
         if (m_frame[buildingIdx].state->blueprint)
             continue;
-        const auto it = junctionOf.find((uint64)buildingIdx << 2 | segs[segSlot].medium);
-        if (it != junctionOf.end())
+        const uint64 key = (uint64)buildingIdx << 2 | segs[segSlot].medium;
+        if (const auto it = junctionOf.find(key); it != junctionOf.end())
             connect(it->second, nodeOfSeg[segSlot]);
+        touching[key].push_back(nodeOfSeg[segSlot]);
     }
     for (const auto& [segSlot, buildingIdx] : crossAttach)
     {
@@ -1254,13 +1347,20 @@ void StructureSystem::rebuildNetworks()
             continue;
         // The crossing that attached this building: the one whose union member is segSlot and
         // whose end touches the building — scan is fine, crossings are few.
-        const auto it = junctionOf.find((uint64)buildingIdx << 2 | segs[segSlot].medium);
-        if (it == junctionOf.end())
-            continue;
+        const uint64 key = (uint64)buildingIdx << 2 | segs[segSlot].medium;
+        const auto it = junctionOf.find(key);
         for (int c = 0; c < (int)crossings.size(); ++c)
             if (crossings[c].seg == segSlot)
-                connect(it->second, nodeOfCross[c]);
+            {
+                if (it != junctionOf.end())
+                    connect(it->second, nodeOfCross[c]);
+                touching[key].push_back(nodeOfCross[c]);
+            }
     }
+    for (const auto& [key, nodes] : touching)
+        for (size_t a = 0; a < nodes.size(); ++a)
+            for (size_t b = a + 1; b < nodes.size(); ++b)
+                connect(nodes[a], nodes[b]);
     for (uint32 n = 0; n < (uint32)m_net.nodes.size(); ++n)
     {
         TransportNode& node = m_net.nodes[n];
@@ -1302,12 +1402,11 @@ void StructureSystem::rebuildNetworks()
             addTransportSlot(idx, node.medium, n);
         node.slotCount = (uint32)m_net.slots.size() - node.slotFirst;
     }
-    m_net.fillNext.assign(m_net.nodes.size(), 0);
     m_net.outAdj.assign(m_net.adj.size(), 0);
     m_net.outSlot.assign(m_net.slots.size(), 0);
     m_net.inSlot.assign(m_net.slots.size(), 0);
+    m_net.bfsQueue.assign(m_net.nodes.size(), 0);
     m_statTransportNodes = (int)m_net.nodes.size();
-    (void)cellsPerSeg;
 
     for (const Ref& s : m_frame)
         updateArms(s);

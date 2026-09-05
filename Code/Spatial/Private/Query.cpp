@@ -455,6 +455,21 @@ uint32 SpatialIndex::querySphere(const glm::dvec3& center, float radius, uint32 
     return uint32(outUserData.size());
 }
 
+void SpatialIndex::forEachInSphereImpl(const glm::dvec3& center, float radius, uint32 layerMask, void* ctx, void (*emit)(void*, uint64)) const
+{
+    const std::shared_lock lock(m_registerMutex); // see querySphere
+    traverse(SphereTester{ radius }, center, layerMask,
+        [&](uint32 idx, const glm::vec3&) { emit(ctx, m_pool.userData[idx]); });
+}
+
+void SpatialIndex::forEachInFrustumImpl(const Frustum& frustumRelCamera, const glm::dvec3& cameraPos, float maxDist, uint32 layerMask,
+                                        IOcclusionTester* occlusion, void* ctx, void (*emit)(void*, uint64)) const
+{
+    const std::shared_lock lock(m_registerMutex); // see querySphere
+    traverse(FrustumTester{ frustumRelCamera, occlusion, maxDist }, cameraPos, layerMask,
+        [&](uint32 idx, const glm::vec3&) { emit(ctx, m_pool.userData[idx]); });
+}
+
 uint32 SpatialIndex::queryAABB(const glm::dvec3& boxMin, const glm::dvec3& boxMax, uint32 layerMask, oc::vector<uint64>& outUserData) const
 {
     outUserData.clear();
@@ -562,7 +577,7 @@ void SpatialIndex::markVisibleSphere(ESpatialPass pass, const glm::dvec3& center
     m_stats.markVisibleMs += std::chrono::duration<float, std::milli>(Clock::now() - start).count();
 }
 
-void SpatialIndex::markVisibleSpheres(ESpatialPass pass, const glm::dvec3* centers, uint32 count, float radius, uint32 layerMask)
+void SpatialIndex::markVisibleSpheres(ESpatialPass pass, const glm::dvec3* centers, const float* radii, uint32 count, uint32 layerMask)
 {
     const auto start = Clock::now();
     const uint32 passIdx = uint32(pass);
@@ -574,8 +589,10 @@ void SpatialIndex::markVisibleSpheres(ESpatialPass pass, const glm::dvec3* cente
     uint32 emitted = 0;
     for (uint32 i = 0; i < count; ++i)
     {
+        if (radii[i] <= 0.0f)
+            continue;
         TraverseStats stats;
-        traverseParallel(SphereTester{ radius }, centers[i], layerMask, stats, stamp);
+        traverseParallel(SphereTester{ radii[i] }, centers[i], layerMask, stats, stamp);
         m_stats.cellsTested += stats.cellsTested;
         m_stats.cellsFullyInside += stats.cellsFullyInside;
         m_stats.entityTests += stats.entityTests;
@@ -585,13 +602,15 @@ void SpatialIndex::markVisibleSpheres(ESpatialPass pass, const glm::dvec3* cente
     m_stats.markVisibleMs += std::chrono::duration<float, std::milli>(Clock::now() - start).count();
 }
 
-void SpatialIndex::setUpdateLod(const glm::dvec3* focus, uint32 count, const float radii[3])
+void SpatialIndex::setUpdateLod(const UpdateLodSphere* spheres, uint32 count)
 {
-    m_updateLodFocusCount = glm::min(count, MaxUpdateLodFocus);
-    for (uint32 i = 0; i < m_updateLodFocusCount; ++i)
-        m_updateLodFocus[i] = focus[i];
-    for (int t = 0; t < 3; ++t)
-        m_updateLodRadii[t] = radii[t];
+    m_updateLodCount = glm::min(count, MaxUpdateLodSpheres);
+    for (uint32 i = 0; i < m_updateLodCount; ++i)
+    {
+        m_updateLodCenter[i] = spheres[i].center;
+        for (int t = 0; t < 3; ++t)
+            m_updateLodRadius[t][i] = spheres[i].radius[t];
+    }
 }
 
 void SpatialIndex::update(const Camera& camera, const Frustum& frustum, const glm::mat4& viewProjRelCamera)
@@ -602,12 +621,12 @@ void SpatialIndex::update(const Camera& camera, const Frustum& frustum, const gl
         commitFrame();          // applies cell moves queued during last frame's entity updates
     }
     // SIM LOD tiers: before the culling-mode gate — update selection must not stop with culling.
-    if (m_updateLodFocusCount > 0)
+    if (m_updateLodCount > 0)
     {
         ProfileScope profileScope("Mark update tiers", EProfileCategory::Spatial);
         static constexpr ESpatialPass tierPass[3] = { ESpatialPass::UpdateTier0, ESpatialPass::UpdateTier1, ESpatialPass::UpdateTier2 };
         for (int t = 0; t < 3; ++t)
-            markVisibleSpheres(tierPass[t], m_updateLodFocus, m_updateLodFocusCount, m_updateLodRadii[t], SpatialLayer_Entity);
+            markVisibleSpheres(tierPass[t], m_updateLodCenter, m_updateLodRadius[t], m_updateLodCount, SpatialLayer_Entity);
     }
     setCullMaxDist(camera.far); // cull to exactly the view distance, not a fixed cap
     if (m_culling.mode == int(ESpatialCullMode::Off) || m_culling.freeze)

@@ -61,6 +61,11 @@ public:
     // shield once the battery passes "Reboot energy", so this needs no state of its own.
     void charge(float amount) { m_energy = glm::min(m_energy + glm::max(amount, 0.0f), m_energyMax); }
 
+    // Hard move of the capsule (F10 load). Follows the respawn TELEPORT CONTRACT: physics
+    // teleport, zeroed velocity, both interpolation poses stomped and the step stamp refreshed —
+    // otherwise the render mix runs backward on stepping frames. Main thread only. Drops the
+    // standing move order so the capsule does not walk back to where it was.
+    void teleport(const glm::vec3& pos);
     Entity* entity() const { return m_entity.get(); }
     glm::vec3 interpolatedPos() const; // render-smooth body pose for the follow camera
     glm::vec3 bodyPos() const;         // current body position (authority logic)

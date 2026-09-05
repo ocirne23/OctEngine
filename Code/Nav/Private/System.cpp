@@ -46,6 +46,7 @@ void NavSystem::initialize()
         f.initialize();
     for (PressureField& p : m_pressure)
         p.initialize();
+    m_pathScratch.initialize();
     Tweak::boolean("Nav", "Enabled", &m_enabled);
     Tweak::floatVar("Nav", "Flow half-life (s)", &m_flowHalfLife, 0.05f, 60.0f, 0.05f);
     Tweak::floatVar("Nav", "Pressure diffusion", &m_pressureDiffusion, 0.0f, 0.25f, 0.005f);
@@ -166,7 +167,10 @@ bool NavSystem::seedPath(uint32 team, const glm::vec3& from, const glm::vec3& to
     if (!raster || team >= MaxTeams)
         return false;
     oc::vector<glm::vec2> path;
-    if (!raster->findPath(glm::vec2(from.x, from.z), glm::vec2(to.x, to.z), 8192, clearance * 0.5f, path))
+    // local() right before the call, not held past it: findPath has no wait inside, so the
+    // fiber stays on this worker for exactly the span the scratch is in use.
+    if (!raster->findPath(glm::vec2(from.x, from.z), glm::vec2(to.x, to.z), 8192, clearance * 0.5f, path,
+            m_pathScratch.local()))
         return false;
     // The A* runs to the real destination (a truncated SEARCH would pick the wrong way round an
     // obstacle), but only the first "Seed range" metres are WRITTEN: a lane far ahead of the group

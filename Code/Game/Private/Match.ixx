@@ -191,6 +191,7 @@ private:
     Rect m_labelsViewport;
     bool m_labelsCameraValid = false;
     JobCounter m_labelsCounter;
+    oc::vector<Entity*> m_labelUnits; // the labels job's visible-unit scratch (one job in flight; never a thread_local — the job may park)
 public:
     void joinWorldLabels(); // main.cpp, right before ui.update
 private:
@@ -218,10 +219,17 @@ private:
     void submitNavFeed(float deltaSec); // queues gatherNavFeed on the post-update batch
     void gatherNavFeed(float deltaSec); // one SLICE of the unit sweep a frame (a cycle = Nav's rebuild interval); publishes at the cycle end
     // SAVE/LOAD (F9/F10, server/single player only — clients refuse): structures/cables/units for
-    // all teams to Assets/Local/gamesave.txt (players are NOT saved). Loading clears the current
-    // set (removal hooks -> GRm prune connected clients) and re-broadcasts the loaded state.
+    // all teams to Assets/Local/gamesave.txt, plus the LOCAL player's position (`PlayerPos`; remote
+    // players and all player STATE — health, energy, materials — are still not saved). Loading
+    // clears the current set (removal hooks -> GRm prune connected clients), re-broadcasts the
+    // loaded state and teleports the local capsule.
     void saveGame();
     void loadGame(oc::string_view path = {}); // empty = the F10 path (Local/gamesave.txt)
+    // The co-op TRICKLE state (`WaveTrickle` / `AmbientTrickle`): points still queued to spawn plus
+    // what the trickle needs to spawn them — so an F9 during a wave does not shrink it. loadTrickle
+    // must run AFTER rebuildCoopMap, which voids the in-progress ambient group.
+    void saveTrickle(AssetNode& root) const;
+    void loadTrickle(const AssetNode& root);
 
     GamePlayer m_player;
     GameCamera m_camera;
@@ -240,6 +248,10 @@ private:
     float m_focusClusterRadius = 40.0f;
     float m_focusClusterTimer = 0.0f;
     oc::vector<glm::vec3> m_focusClusters;
+    // The shield structures' bubble spheres as SIM LOD ZONES (tier 1 + a tier 2 band, no tier 0):
+    // an enemy walking into a far base's field ticks — and gets pushed — with no player near.
+    // Refreshed on the cluster timer.
+    oc::vector<glm::vec4> m_fieldZones;
     oc::unordered_map<uint64, uint8> m_navCellTeams;     // the hash the current cycle culls against (built by the previous cycle)
     oc::unordered_map<uint64, uint8> m_navCellTeamsNext; // being built by the current cycle's slices
     oc::vector<Nav::NavSource> m_navUnitSources[Nav::MaxTeams]; // the current cycle's accepted unit sources
@@ -403,6 +415,12 @@ private:
                                          // each spawned unit spends its type's cost (m_waveCost)
     float m_ambientPendingBudget = 0.0f; // POINTS of world-start scatter still to spawn (same costs)
     glm::vec3 m_waveOrigin{ 0.0f }; // the wave's cluster center on the spawn ring
+    // The blob's radius, sized ONCE per wave in queueWave so the AREA scales with the wave's
+    // expected BODY COUNT (see waveSpawnRadius) — a big wave gets room instead of stacking bodies
+    // on the same disc for physics to shove apart. Rides the save: a mid-wave load keeps the disc.
+    float m_waveRadius = 8.0f;
+    float m_waveSpawnAreaPerUnit = 6.0f; // m² of blob per body (~2.8 m mean spacing at 6)
+    float waveSpawnRadius(float budget) const;
     // Spacing: the last few wave spawn points, so a new roll can reject a spot inside a body that
     // was just placed (bodies are parked at spawn — an overlap there resolves only when a player
     // comes near, as a push-out in the player's face)
@@ -423,8 +441,10 @@ private:
                                                15.0f, 100.0f, 500.0f, 30.0f, 40.0f,  // Elite, Giant, Titan, Lobber, Spawner
                                                5.0f };                             // Warrior
     float waveCostOf(ENpcType t) const { return glm::max(m_waveCost[(int)t], 0.1f); }
-    int m_waveMaxAlive = 25000;    // total AI units cap (ambient + waves)
-    int m_ambientBudget = 50000;    // POINTS of world-start scatter (same per-type costs as waves)
+    int m_waveMaxAlive = 50000;    // total AI units cap (ambient + waves)
+    // Live AI bodies (ambient + waves): the alive cap in queueWave AND the HUD's "Enemies alive".
+    int aiAliveCount() const;
+    int m_ambientBudget = 250000;    // POINTS of world-start scatter (same per-type costs as waves)
     float m_ambientSafeRadius = 45.0f; // the scatter keeps clear of the Base (planar)
     int m_ambientRecipeWindow = 3;     // a group rolls recipes gated within this many bands below its depth band
     float m_ambientDepthScale = 0.9f;  // the depth fraction that already counts as the deepest band (titans off the corners)

@@ -79,6 +79,11 @@ public:
     void setMergeable(bool mergeable);
     bool getMergeable() const;
     bool isMerged() const; // currently carried by a group emitter
+    // Bounding sphere of the bubble this emitter is currently part of: the GROUP's displayed
+    // sphere while merged (groupId = 1 + group index — the same for every member, a dedupe key),
+    // else its own uncontested iso bubble (groupId 0). False = no bubble (invalid, gated off,
+    // below iso). Main thread between joinMerge and update() — the group list is the merge job's.
+    bool getBubbleBounds(glm::vec3& center, float& radius, uint32* groupId = nullptr) const;
 
     // GPU readback results, ~2 frames old (zero until the first readback lands). Force is the
     // opposing teams' field pressure integrated over this emitter's own bubble; pressure is the

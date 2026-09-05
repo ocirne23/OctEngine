@@ -16,3 +16,5 @@ Nav/Debug draw = 0
 Physics/Debug/Draw colliders = 0
 Force/Debug/Draw emitters = 0
 Force/Debug/Draw queries = 0
+Time/Max FPS = 0
+Time/VSync = 0

@@ -824,20 +824,8 @@ glm::vec2 TeamField::wallPush(const glm::vec2& xz, float range) const
 
 namespace
 {
-    struct AStarNode
-    {
-        glm::ivec2 cell;
-        uint32 parent;
-        uint32 g;
-        uint32 h;
-        bool closed;
-    };
-    struct AStarOpen
-    {
-        uint32 f;
-        uint32 index;
-        bool operator>(const AStarOpen& o) const { return f > o.f; }
-    };
+    using AStarNode = TeamField::AStarNode;
+    using AStarOpen = TeamField::AStarOpen;
     inline uint64 packCell(const glm::ivec2& c) { return (uint64(uint32(c.x)) << 32) | uint64(uint32(c.y)); }
     inline uint32 octile(const glm::ivec2& a, const glm::ivec2& b)
     {
@@ -848,7 +836,7 @@ namespace
 }
 
 bool TeamField::findPath(const glm::vec2& from, const glm::vec2& to, uint32 maxExpand, float radius,
-    oc::vector<glm::vec2>& outPath) const
+    oc::vector<glm::vec2>& outPath, PathScratch& scratch) const
 {
     outPath.clear();
     const glm::ivec2 start = cellOf(from), goal = cellOf(to);
@@ -865,9 +853,9 @@ bool TeamField::findPath(const glm::vec2& from, const glm::vec2& to, uint32 maxE
         outPath.push_back(to);
         return true;
     }
-    thread_local oc::vector<AStarNode> nodes;
-    thread_local oc::unordered_map<uint64, uint32> index;
-    thread_local oc::priority_queue<AStarOpen, oc::vector<AStarOpen>, oc::greater<AStarOpen>> open;
+    oc::vector<AStarNode>& nodes = scratch.nodes;
+    oc::unordered_map<uint64, uint32>& index = scratch.index;
+    auto& open = scratch.open;
     nodes.clear();
     index.clear();
     while (!open.empty())
@@ -926,7 +914,7 @@ bool TeamField::findPath(const glm::vec2& from, const glm::vec2& to, uint32 maxE
 
     // Reconstruct start -> goal, then STRING PULL: keep a point only where the line from the last
     // kept point to the one after it would clip the raster.
-    thread_local oc::vector<glm::vec2> cells;
+    oc::vector<glm::vec2>& cells = scratch.cells;
     cells.clear();
     for (uint32 i = reached; i != UINT32_MAX; i = nodes[i].parent)
         cells.push_back(cellCenter(nodes[i].cell));

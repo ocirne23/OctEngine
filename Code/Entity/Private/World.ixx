@@ -46,7 +46,7 @@ export struct SimLodConfig
 {
     bool enabled = true;
     bool horizontal = true;      // XZ distance (top-down game); off = full 3D distance
-    float radius[3] = { 25.0f, 50.0f, 200.0f }; // tier t applies while dist < radius[t]; beyond radius[2] = dormant
+    float radius[3] = { 25.0f, 50.0f, 225.0f }; // tier t applies while dist < radius[t]; beyond radius[2] = dormant
     // Tick cadence for tier 1, tier 2, dormant: TIME-based (seconds between ticks; dormant 0 =
     // never) with a MINIMUM frame gap so a low frame rate still skips frames. The tick receives
     // the exact sim time it covers (World keeps a per-frame time ring; nothing on the entity).
@@ -66,6 +66,11 @@ export struct SimLodConfig
     float queryMargin = 10.0f;   // the selection query reaches radius[2] + this, so an entity LEAVING the
                                  // outer tier is still visited once in the band with no tier stamp
                                  // (= dormant) and takes its dormancy edge (units park their body)
+    // ZONES (setSimLodZones — the Game publishes the friendly forcefield bubbles): a zone stamps
+    // tier 1 within its radius + zoneMargin and tier 2 over a further zoneTier2Band, never tier
+    // 0, so a unit walking into a far base's field ticks (and is pushed) without a player near.
+    float zoneMargin = 5.0f;
+    float zoneTier2Band = 25.0f;
     int maxCatchUp = 8;          // cap on the frames of dt a resumed tick receives
     bool units = true;           // GameUnitComponent follows the LOD
     bool structures = false;     // GameStructureComponent (barracks/turret clocks, flows)
@@ -86,6 +91,11 @@ public:
     // camera in the plain testbed. No focus = no LOD (everything ticks at full rate).
     static constexpr uint32 MaxSimLodFocus = 16;
     void setSimLodFocus(const glm::vec3* points, uint32 count);
+    // SIM LOD zones: spheres (xyz center, w radius) that stamp tier 1 and 2 only — see
+    // SimLodConfig::zoneMargin. GameMatch publishes the friendly structures' bubble spheres (the
+    // merge group's sphere where merged). Same timing as the focus; stays until set again.
+    static constexpr uint32 MaxSimLodZones = 64;
+    void setSimLodZones(const glm::vec4* spheres, uint32 count);
     // Whether the last pass selected by spatial query (else everything was visited). The Game's
     // far tick for unselected units keys on it.
     bool simLodActive() const { return m_simLodActive; }
@@ -338,6 +348,10 @@ private:
     SimLodConfig m_simLod;
     glm::dvec3 m_simLodFocus[MaxSimLodFocus]; // dvec3: the index API's type (query centers, tier stamps)
     uint32 m_simLodFocusCount = 0;
+    glm::dvec4 m_simLodZone[MaxSimLodZones];  // xyz center, w radius
+    uint32 m_simLodZoneCount = 0;
+    void pushUpdateLod(); // focus + zones -> SpatialIndex::setUpdateLod
+    float zoneQueryRadius(double zoneRadius) const { return float(zoneRadius) + m_simLod.zoneMargin + m_simLod.zoneTier2Band; }
     uint16 m_simLodFollowMask = 0; // per pass: sim kinds that follow the LOD
     uint16 m_simLodPinMask = 0;    // per pass: sim kinds that pin their entity to full rate
     bool m_simLodActive = false;   // per pass: selection by spatial query + stamps (else every root, every child)

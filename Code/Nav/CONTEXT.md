@@ -127,7 +127,7 @@ re-kicks all.
 | `sample(xz, seed)` | 3×3 lowest-neighbour scan crossing chunk borders → `{valid, dist, srcIndex, descentDir}`. **`seed` jitters ties** so a plateau equidistant between two sources does not stall a whole crowd on one line. `descentDir` is zero AT a source. |
 | `sourceAt(i)` | Names the target. |
 | `isBlocked`, `lineOfSight(a, b, radius)`, `freeDistance(a, dir, maxLen, radius)`, `wallPush(xz, range)` | Raster reads, any thread. `radius > 0` also tests the two parallel offset lines — a body, not a point. |
-| `findPath(from, to, maxExpand, radius, outPath)` | A* string-pulled into a minimal polyline. **NOT for per-unit use** — this is the one-shot planner behind `seedPath`. |
+| `findPath(from, to, maxExpand, radius, outPath, scratch)` | A* string-pulled into a minimal polyline. **NOT for per-unit use** — this is the one-shot planner behind `seedPath`. `scratch` is the caller's `PathScratch` working set (NavSystem hands its `PerWorker` slot in with `local()` right before the call — findPath never waits, so the fiber cannot migrate mid-search; the A* holds NO thread_local). |
 | `steerPoint`, `avoid`, `chooseSide` | Per-walker helpers the PLAYER uses. `avoid` picks the nearest clear whisker (±30/60/90/120°) and carries a `side` hysteresis so a slide along a long wall does not flip-flop. `chooseSide` is deterministic from geometry, **so a whole group agrees**. |
 
 ### `CostWindow` — the per-tick raster snapshot

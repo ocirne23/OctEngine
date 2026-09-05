@@ -1156,21 +1156,24 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
     {
         if (!outEntities || maxOut <= 0)
             return 0;
-        thread_local oc::vector<uint64> results;
-        Globals::spatialIndex.querySphere(glm::dvec3(position), radius, SpatialLayer_Render, results);
-        const int count = glm::min(int(results.size()), maxOut);
-        for (int i = 0; i < count; ++i)
-            outEntities[i] = reinterpret_cast<Entity*>(results[i]);
+        int count = 0; // straight into the caller's array: no scratch on a job that may park
+        Globals::spatialIndex.forEachInSphere(glm::dvec3(position), radius, SpatialLayer_Render, [&](uint64 user)
+        {
+            if (count < maxOut)
+                outEntities[count++] = reinterpret_cast<Entity*>(user);
+        });
         return count;
     }
 
     // ---- radius query results ----
     // A THREAD-LOCAL ring of result buffers, handed out by generation-tagged handle (the OcArray discipline).
-    // Thread-local because a query's results belong to whoever asked -- scripts run on the main thread today,
-    // but nothing here needs to know that. A ring because queries NEST: a foreach over one may run another in
-    // its body, and each needs its own live buffer. Recycling a slot bumps its generation, so a handle held
-    // across more than kQueryRingSize further queries reads as EMPTY rather than as the results that replaced
-    // its own -- the loop ends early instead of walking someone else's entities.
+    // Thread-local because a query's results belong to whoever asked. A ring because queries NEST: a foreach
+    // over one may run another in its body, and each needs its own live buffer. Recycling a slot bumps its
+    // generation, so a handle held across more than kQueryRingSize further queries reads as EMPTY rather than
+    // as the results that replaced its own -- the loop ends early instead of walking someone else's entities.
+    // FIBER NOTE: a script tick never parks (no thunk waits), so a foreach cannot resume on another thread
+    // mid-loop; if one ever did, the generation check turns the foreign ring's slot into EMPTY, never into a
+    // walk over another thread's entities. Keep it that way: no waiting thunks.
     constexpr uint32 kQueryRingSize = 8;
 
     struct ScriptQueryFrame

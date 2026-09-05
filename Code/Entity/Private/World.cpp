@@ -48,6 +48,8 @@ bool World::initialize()
         Tweak::intVar("Game/Sim LOD", "Visible max tier", &c.visibleMaxTier, 0, 2, 1.0f);
         Tweak::intVar("Game/Sim LOD", "Max catch-up (frames)", &c.maxCatchUp, 1, 60, 1.0f);
         Tweak::floatVar("Game/Sim LOD", "Query margin (m)", &c.queryMargin, 0.0f, 100.0f, 1.0f);
+        Tweak::floatVar("Game/Sim LOD", "Zone margin (m)", &c.zoneMargin, 0.0f, 100.0f, 1.0f);
+        Tweak::floatVar("Game/Sim LOD", "Zone tier 2 band (m)", &c.zoneTier2Band, 0.0f, 200.0f, 1.0f);
         Tweak::intVar("Game/Sim LOD", "Force bubbles max tier (3 = always)", &c.forceMaxTier, 0, 3, 1.0f);
         Tweak::boolean("Game/Sim LOD", "Dormant disables physics body", &c.dormantDisableBody);
         Tweak::boolean("Game/Sim LOD/Follows", "Units", &c.units);
@@ -70,11 +72,37 @@ void World::setSimLodFocus(const glm::vec3* points, uint32 count)
     m_simLodFocusCount = glm::min(count, MaxSimLodFocus);
     for (uint32 i = 0; i < m_simLodFocusCount; ++i)
         m_simLodFocus[i] = glm::dvec3(points[i]);
-    // The tier stamps ride the NEXT cull job (this runs after this frame's join); the selection
-    // query in update() uses the fresh points. One frame of stamp latency is nothing against the
-    // tier radii.
-    static_assert(MaxSimLodFocus <= SpatialIndex::MaxUpdateLodFocus);
-    Globals::spatialIndex.setUpdateLod(m_simLodFocus, m_simLod.enabled ? m_simLodFocusCount : 0, m_simLod.radius);
+    pushUpdateLod();
+}
+
+void World::setSimLodZones(const glm::vec4* spheres, uint32 count)
+{
+    m_simLodZoneCount = glm::min(count, MaxSimLodZones);
+    for (uint32 i = 0; i < m_simLodZoneCount; ++i)
+        m_simLodZone[i] = glm::dvec4(spheres[i]);
+    pushUpdateLod();
+}
+
+// The tier stamps ride the NEXT cull job (this runs after this frame's join); the selection
+// query in update() uses the fresh spheres. One frame of stamp latency is nothing against the
+// tier radii. A focus point stamps all three tiers at the config radii; a zone stamps tier 1
+// out to its radius + margin and tier 2 over the band beyond, never tier 0.
+void World::pushUpdateLod()
+{
+    static_assert(MaxSimLodFocus + MaxSimLodZones <= SpatialIndex::MaxUpdateLodSpheres);
+    SpatialIndex::UpdateLodSphere spheres[MaxSimLodFocus + MaxSimLodZones];
+    uint32 count = 0;
+    if (m_simLod.enabled)
+    {
+        for (uint32 i = 0; i < m_simLodFocusCount; ++i)
+            spheres[count++] = { m_simLodFocus[i], { m_simLod.radius[0], m_simLod.radius[1], m_simLod.radius[2] } };
+        for (uint32 i = 0; i < m_simLodZoneCount; ++i)
+        {
+            const float tier1 = float(m_simLodZone[i].w) + m_simLod.zoneMargin;
+            spheres[count++] = { glm::dvec3(m_simLodZone[i]), { 0.0f, tier1, tier1 + m_simLod.zoneTier2Band } };
+        }
+    }
+    Globals::spatialIndex.setUpdateLod(spheres, count);
 }
 
 bool World::simLodSelected(const Entity& entity) const
@@ -103,6 +131,14 @@ void World::computeSelection(SelectResult& out)
     {
         m_selectHits.clear();
         Globals::spatialIndex.querySphere(m_simLodFocus[i], radius, SpatialLayer_Entity, m_selectHits);
+        for (const uint64 userData : m_selectHits)
+            selectUpdateRoot(reinterpret_cast<Entity*>(userData), out);
+    }
+    for (uint32 i = 0; i < m_simLodZoneCount; ++i)
+    {
+        m_selectHits.clear();
+        Globals::spatialIndex.querySphere(glm::dvec3(m_simLodZone[i]), zoneQueryRadius(m_simLodZone[i].w) + m_simLod.queryMargin,
+            SpatialLayer_Entity, m_selectHits);
         for (const uint64 userData : m_selectHits)
             selectUpdateRoot(reinterpret_cast<Entity*>(userData), out);
     }
@@ -283,7 +319,7 @@ void World::update(Renderer& renderer, float deltaSeconds)
 
     // SIM LOD: resolve the per-pass constants once (the tweaks are live, the pass reads copies).
     m_simLodFollowMask = m_simLodPinMask = 0;
-    m_simLodActive = m_simLod.enabled && m_simLodFocusCount > 0 && m_updateDelta > 0.0f;
+    m_simLodActive = m_simLod.enabled && (m_simLodFocusCount + m_simLodZoneCount) > 0 && m_updateDelta > 0.0f;
     if (m_simLodActive)
     {
         const auto kind = [this](bool follows, EComponentID id) { (follows ? m_simLodFollowMask : m_simLodPinMask) |= uint16(1 << id); };

@@ -48,6 +48,7 @@ public:
     // never ask for more than that.
     static void queryVisibleUnits(const Camera& camera, oc::vector<Entity*>& out);
     void queryAllUnits(oc::vector<Entity*>& out) const; // roster walk: save/load + the profiling scenario
+	int getNumUnits() const { return (int)m_units.size(); }
 
     // World::removeRootEntity notification (wired by GameMatch): drops the unit/projectile roster
     // entry for ANY despawn path (death destroy request, network despawn, editor delete). Must NOT

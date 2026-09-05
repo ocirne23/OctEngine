@@ -144,8 +144,24 @@ export namespace Nav
         // point = from, last = to). `radius` is the body clearance used by the string pull.
         // Expansion is capped at maxExpand cells; false = no path inside that budget. NOT for
         // per-unit use (see the unit steering) — this is the one-shot planner behind seedPath.
+        // `scratch` is the caller's A* working set (reused across calls, grows to the search):
+        // NEVER a thread_local — the caller is a job fiber that can resume on another thread.
+        struct AStarNode { glm::ivec2 cell; uint32 parent; uint32 g; uint32 h; bool closed; };
+        struct AStarOpen
+        {
+            uint32 f;
+            uint32 index;
+            bool operator>(const AStarOpen& o) const { return f > o.f; }
+        };
+        struct PathScratch
+        {
+            oc::vector<AStarNode> nodes;
+            oc::unordered_map<uint64, uint32> index;
+            oc::priority_queue<AStarOpen, oc::vector<AStarOpen>, oc::greater<AStarOpen>> open;
+            oc::vector<glm::vec2> cells;
+        };
         bool findPath(const glm::vec2& from, const glm::vec2& to, uint32 maxExpand, float radius,
-            oc::vector<glm::vec2>& outPath) const;
+            oc::vector<glm::vec2>& outPath, PathScratch& scratch) const;
         // String pulling for a single walker (main thread — O(steps * LOS)): greedily walk the
         // descent from xz up to maxSteps cells, return the farthest path point visible from xz
         // (the source position itself when the walk reaches it). false = no field data here.

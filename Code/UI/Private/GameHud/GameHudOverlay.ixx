@@ -200,7 +200,7 @@ public:
 					col(1.0f, 1.0f, 1.0f, 1.0f), popup.title.c_str());
 			}
 			const ImVec2 mouse = ImGui::GetIO().MousePos;
-			thread_local oc::vector<glm::vec4> rects;
+			oc::small_vector<glm::vec4, 16> rects; // stack: this runs on the widget-pass job
 			rects.resize(n);
 			for (int i = 0; i < n; ++i)
 			{
@@ -225,7 +225,7 @@ public:
 					text(ImVec2(sMin.x + (btnW - ss.x) * 0.5f, ty), subFont, col(0.8f, 0.8f, 0.8f, 1.0f), button.sub.c_str());
 				}
 			}
-			Globals::gameHud.setPopupButtonRects(rects);
+			Globals::gameHud.setPopupButtonRects(oc::span<const glm::vec4>(rects.data(), rects.size()));
 		}
 
 		// ---- bottom LEFT: the hotbar (one row, or a columns-wide GRID -- the RTS QWER/ASDF/ZXCV

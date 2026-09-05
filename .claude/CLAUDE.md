@@ -88,7 +88,7 @@ Debug:      /JMC /ZI        + link /INCREMENTAL
 
 | Flag | Why |
 |---|---|
-| `/GT` | Fiber-safe TLS — job code must not cache `thread_local` addresses across a `wait()`. |
+| `/GT` | Fiber-safe TLS — job code must not cache `thread_local` addresses across a `wait()`. **See the rule below before writing `thread_local` anywhere a job can reach.** |
 | `/arch:AVX2` | The baseline `Core.OcBit` names instructions against. |
 | `/GS-` | No stack cookies — a deliberate mitigation trade. |
 | `/Gw` | One COMDAT per global, so `/OPT:REF` can drop unreferenced data (pairs with `/GL`). |
@@ -104,6 +104,31 @@ Debug:      /JMC /ZI        + link /INCREMENTAL
   Npc/Structures and the Nav A*. Safe because all of it is static TLS in App.exe, which every thread
   initializes at creation. The runtime-compiled script DLLs are built by ScriptHost's own command
   line and keep their guards.
+
+> ### `thread_local` IN JOB CODE IS A STANDING RULE too
+>
+> Jobs run on FIBERS: **any wait — `jobSystem.wait`, a nested `parallelFor`, a JobCounter join —
+> can park the job and resume it on ANOTHER worker thread.** A `thread_local` (or a
+> `PerWorker::local()` / `getWorkerIndex()`) taken before the wait then points at the wrong
+> thread's slot: two jobs sharing one scratch buffer, or a write landing in a slot another job
+> is reading. **Do NOT add new `thread_local`s to code a job can reach.** Prefer:
+>
+> * **consume inline** — `SpatialIndex::forEachInSphere` / `forEachInFrustum` hand every hit to a
+>   callback straight out of the traversal, so a probe needs NO result buffer (every game/entity
+>   probe works this way now);
+> * **owner-sliced scratch** — one buffer sized for the whole problem, each job working its own
+>   index range (the transport's per-run BFS queue, the Force merge's per-slot staging);
+> * a member of the object that owns the job when only one such job is in flight (the labels
+>   job's unit list);
+> * `PerWorker<T>` only for code with NO wait between `local()` and the last use, re-reading
+>   `local()` after every wait (see Threading's CONTEXT.md — the Nav seed-path A* scratch);
+> * a plain local `oc::vector` / `oc::small_vector` when the allocation is cheap enough.
+>
+> **The codebase carries NO job-reachable `thread_local` scratch any more.** The remaining
+> `thread_local`s outside Core are deliberate and documented in place: the JobSystem's own worker
+> context (re-read after every wait by design), `FileSystem`'s main-thread IO scope (kept tight
+> around the call, never around a wait), and the script query ring + RNG (a script tick never
+> parks — no thunk waits; keep it so).
 
 > ### `/Zc:threadSafeInit-` IS A STANDING RULE, not just a flag
 >

@@ -2,18 +2,18 @@ module Game;
 
 import Core;
 import Core.glm;
-import Core.Log;
 import Entity;
 import Threading;
 import :Structures;
 
 // THE CABLE TRANSPORT — see the block in Structures.ixx. This file is the tick: the boundary
-// with the buildings' float stores (inject / apply, main thread) and the job (offer / apply
-// stencil passes over the flat node graph, owner-only writes, no atomics).
+// with the buildings' float stores (inject / apply, main thread) and the job (per run, in
+// parallel across runs: the two BFS fields, then the offer / apply stencil sub-steps over the
+// flat node graph — owner-only writes, no atomics).
 
 // The port role of a building type in a medium: PRODUCERS push whole cells out of their store,
-// CONSUMERS pull into their headroom, STORAGE does either by the fill of its own port node
-// (push while the cable there is at/below the low mark, pull while at/above the high mark).
+// CONSUMERS pull into their headroom, STORAGE does either by the fill of the cable next to its
+// port (push while at/below the low mark, pull while at/above the high mark).
 StructureSystem::ETransportRole StructureSystem::transportRoleOf(EStructureType t, int medium)
 {
     using R = ETransportRole;
@@ -39,7 +39,6 @@ void StructureSystem::addTransportSlot(int buildingIdx, int medium, uint32 node)
     const Ref& ref = m_frame[buildingIdx];
     TransportSlot slot;
     slot.state = ref.state;
-    slot.structureId = ref.state->structureId;
     slot.node = node;
     slot.medium = (uint8)medium;
     slot.role = transportRoleOf(ref.type, medium);
@@ -58,7 +57,7 @@ void StructureSystem::addTransportSlot(int buildingIdx, int medium, uint32 node)
 void StructureSystem::transportInject(const TransportRun& run)
 {
     const float period = transportTickPeriod();
-    const float cellsPerSeg = (float)glm::max(m_cellsPerSegment, 1);
+    const float cellsPerSeg = (float)cellsPerSegmentOf(run.medium);
     const int substeps = glm::max(m_transportSubsteps, 1);
     for (uint32 n = run.firstNode; n < run.firstNode + run.numNode; ++n)
     {
@@ -66,10 +65,7 @@ void StructureSystem::transportInject(const TransportRun& run)
         if (!node.junction)
             continue;
         // The most this port can move in one tick: its node's out-rate over the tick (+1 so a
-        // fractional rate still moves). Pushed cells are RESERVED out of the store now and the
-        // unused part refunded at the join, so the store never reads more than it holds; the
-        // cap keeps a battery from parking its whole bank in transit (its own consumers — the
-        // Base's shield — keep reading a live store).
+        // fractional rate still moves) — it also caps what a storage reserves out of its bank.
         const int maxPerTick = (int)((uint64)node.rateFp * (uint64)substeps / 1024u) + 1;
         for (uint32 s = node.slotFirst; s < node.slotFirst + node.slotCount; ++s)
         {
@@ -82,12 +78,27 @@ void StructureSystem::transportInject(const TransportRun& run)
             const float cap = c->capacity[m];
             if (cap <= 0.0f)
                 continue;
-            const auto push = [&]() {
-                const int cells = glm::min((int)std::floor(glm::max(c->store[m], 0.0f)), maxPerTick);
+            // A STORAGE offers at most what its port can take right now (its free space): a
+            // reserved supply the network cannot move must never leave the store and bounce back.
+            // A PRODUCER reserves nothing, so it offers up to its per-tick cap and the port takes
+            // the cells over the sub-steps as space frees — at "Cells per segment" 1 a port would
+            // otherwise cap every producer at one cell per tick.
+            const int portSpace = glm::max((int)cellsPerSeg - (int)node.fill, 0);
+            const auto push = [&](bool reserve) {
+                int cells = glm::min((int)std::floor(glm::max(c->store[m], 0.0f)), maxPerTick);
+                if (reserve)
+                    cells = glm::min(cells, portSpace);
                 if (cells <= 0)
                     return;
-                c->store[m] -= (float)cells;
-                slot.supply = slot.reserved = cells; };
+                slot.supply = cells;
+                // A PRODUCER's store in this medium is drained by the transport alone, so the
+                // taken cells simply come off at the join — no reservation, no visible dip.
+                // STORAGE (the Base: siege load drains it meanwhile) reserves, refunded at the join.
+                if (reserve)
+                {
+                    c->store[m] -= (float)cells;
+                    slot.reserved = cells;
+                } };
             const auto pull = [&](bool metered) {
                 int cells = (int)std::floor(glm::max(cap - c->store[m], 0.0f)); // whole cells: capacities are whole numbers
                 if (metered && slot.intakePerSec > 0.0f)
@@ -107,14 +118,18 @@ void StructureSystem::transportInject(const TransportRun& run)
                 slot.demand = glm::max(cells, 0); };
             switch (slot.role)
             {
-            case ETransportRole::Producer: push(); break;
+            case ETransportRole::Producer: push(false); break;
             case ETransportRole::Consumer: pull(true); break;
             case ETransportRole::Storage:
             {
                 // The price signal is the CABLE next to the port — the mean fill of the junction's
                 // neighbours — never the junction itself: a push fills the own junction to the
                 // high mark, which then read as "pull it back" (the Base oscillated on exactly
-                // that).
+                // that). TRUE HYSTERESIS: the port keeps its mode until the OPPOSITE mark is
+                // crossed — pulling until the cable runs down to the low mark, pushing until it
+                // fills to the high mark. (A per-tick band with a hold zone between the marks
+                // idled a battery every other tick on 2-cell segments: one pulled cell dropped
+                // the mean into the zone.)
                 float fill = 0.0f;
                 if (node.adjCount > 0)
                 {
@@ -122,10 +137,14 @@ void StructureSystem::transportInject(const TransportRun& run)
                         fill += (float)m_net.nodes[m_net.adj[node.adjFirst + a].node].fill;
                     fill /= (float)node.adjCount * cellsPerSeg;
                 }
-                if (fill <= m_storageLowMark)
-                    push();
-                else if (fill >= m_storageHighMark)
+                if (fill >= m_storageHighMark)
+                    slot.storageMode = 1;
+                else if (fill <= m_storageLowMark)
+                    slot.storageMode = -1;
+                if (slot.storageMode > 0)
                     pull(false);
+                else if (slot.storageMode < 0)
+                    push(true);
                 break;
             }
             }
@@ -135,6 +154,7 @@ void StructureSystem::transportInject(const TransportRun& run)
 
 void StructureSystem::transportApplyBoundary()
 {
+    ProfileScope scope("Transport apply", EProfileCategory::Game);
     for (const uint32 r : m_net.dueRuns)
     {
         const TransportRun& run = m_net.runs[r];
@@ -233,36 +253,34 @@ void StructureSystem::kickTransport()
 void StructureSystem::transportTick()
 {
     TransportNet& net = m_net;
-    const int cellsPerSeg = glm::max(m_cellsPerSegment, 1);
+    const int cellsPerSegOf[3] = { cellsPerSegmentOf(0), cellsPerSegmentOf(1), cellsPerSegmentOf(2) };
     const int substeps = glm::max(m_transportSubsteps, 1);
-    // A pass over every due run's nodes: inline for small runs, fanned out for large ones.
-    const auto forDueNodes = [&](const char* name, auto&& fn)
+    // A pass over ONE run's nodes: inline for a small run, fanned out for a large one (a big
+    // base is usually one run — this is where the work splits when it is worth it).
+    const auto forRunNodes = [&](const TransportRun& run, const char* name, auto&& fn)
     {
-        for (const uint32 r : net.dueRuns)
+        if (run.numNode < 1024)
         {
-            const TransportRun& run = net.runs[r];
-            if (run.numNode < 1024)
-            {
-                for (uint32 n = run.firstNode; n < run.firstNode + run.numNode; ++n)
-                    fn(n);
-            }
-            else
-                Globals::jobSystem.parallelFor(run.firstNode, run.firstNode + run.numNode, 256u,
-                    JobProfile{ name, EProfileCategory::Game }, [&](uint32 begin, uint32 end)
-                {
-                    for (uint32 n = begin; n < end; ++n)
-                        fn(n);
-                });
+            for (uint32 n = run.firstNode; n < run.firstNode + run.numNode; ++n)
+                fn(n);
         }
+        else
+            Globals::jobSystem.parallelFor(run.firstNode, run.firstNode + run.numNode, 256u,
+                JobProfile{ name, EProfileCategory::Game }, [&](uint32 begin, uint32 end)
+            {
+                for (uint32 n = begin; n < end; ++n)
+                    fn(n);
+            });
     };
 
     // OFFER: from the fill snapshot, node n decides what leaves it this sub-step — its own
-    // slots' demand first, then lower-filled neighbours (half the difference each, weighted by
-    // deficit, integer remainder rotated), all within its out-budget — and what it takes from
-    // its slots' supply into its free space. Writes only its own out/in scratch and its carry.
+    // slots' demand first, then its neighbours (toward demand, else filling away from supply,
+    // space-weighted, integer remainder rotated), all within its out-budget — and what it takes
+    // from its slots' supply into its free space. Writes only its own out/in scratch and carry.
     const auto offer = [&](uint32 n)
     {
         TransportNode& node = net.nodes[n];
+        const int cellsPerSeg = cellsPerSegOf[glm::min((int)node.medium, 2)];
         // The out-budget accrues while a node has nothing to send (an idle line banks a burst, so
         // a front crosses a segment per sub-step instead of a segment per rate tick), CAPPED at
         // two ticks' worth — never minutes of banked throughput released at once.
@@ -292,19 +310,31 @@ void StructureSystem::transportTick()
                 outTotal += part;
             }
         }
-        // 2) FORWARD: everything it can, into neighbours with free space that did not feed it
-        //    last sub-step (the conveyor rule — never back where it came from). Space-weighted,
-        //    integer remainder rotated. No fill gradient is needed: a line runs full end to end,
-        //    a dead end fills up and stops, and equal neighbours never ping-pong.
+        // 2) FORWARD: everything it can, into neighbours with free space that are strictly
+        //    DOWNHILL on the demand field (closer to a port that wants cells); with no such
+        //    outlet, FILL: into cables (never ports) strictly farther from supply than this
+        //    node. Space-weighted, integer remainder rotated. Cells therefore travel toward
+        //    demand when there is any and otherwise fill the network outward from the producers
+        //    until it is full — no fill gradient, no ping-pong, nothing drifts back toward a
+        //    source or into another producer's dead end.
         if (node.adjCount > 0 && remaining > 0 && budget > 0)
         {
+            bool fillMode = false;
             const auto spaceAt = [&](uint32 a) {
-                if (a < 32 && (node.inMask & (1u << a)) != 0)
+                const TransportNode& to = net.nodes[net.adj[node.adjFirst + a].node];
+                if (fillMode ? (to.junction || to.sdist <= node.sdist || to.sdist == 0xFFFF)
+                             : (node.dist == 0xFFFF || to.dist >= node.dist))
                     return 0;
-                return glm::max(cellsPerSeg - (int)net.nodes[net.adj[node.adjFirst + a].node].fill, 0); };
+                return glm::max(cellsPerSeg - (int)to.fill, 0); };
             int total = 0;
             for (uint32 a = 0; a < node.adjCount; ++a)
                 total += spaceAt(a);
+            if (total == 0 && node.sdist != 0xFFFF)
+            {
+                fillMode = true;
+                for (uint32 a = 0; a < node.adjCount; ++a)
+                    total += spaceAt(a);
+            }
             if (total > 0)
             {
                 const int move = glm::min(glm::min(total, remaining), budget);
@@ -359,21 +389,16 @@ void StructureSystem::transportTick()
         for (uint32 a = 0; a < node.adjCount; ++a)
             net.outAdj[node.adjFirst + a] = 0;
     };
-    const auto applyKeepOut = [&](uint32 n)
+    const auto apply = [&](uint32 n)
     {
         TransportNode& node = net.nodes[n];
         int fill = (int)node.fill;
-        uint32 inMask = 0;
         for (uint32 a = 0; a < node.adjCount; ++a)
         {
             const TransportAdj& adj = net.adj[node.adjFirst + a];
             fill -= (int)net.outAdj[node.adjFirst + a];
-            if (adj.reverse != UINT32_MAX && net.outAdj[adj.reverse] != 0)
-            {
+            if (adj.reverse != UINT32_MAX)
                 fill += (int)net.outAdj[adj.reverse];
-                if (a < 32)
-                    inMask |= 1u << a;
-            }
         }
         for (uint32 s = node.slotFirst; s < node.slotFirst + node.slotCount; ++s)
         {
@@ -382,14 +407,91 @@ void StructureSystem::transportTick()
             net.outSlot[s] = net.inSlot[s] = 0;
         }
         node.fill = (uint16)glm::clamp(fill, 0, 65535);
-        node.inMask = inMask;
     };
-    for (int sub = 0; sub < substeps; ++sub)
+    // THE TWO FIELDS, once per tick per run: a BFS through cables only (ports never relay — a
+    // line bridges a building cable-to-cable) from every port with unserved DEMAND (`dist`) and
+    // from every port pushing SUPPLY (`sdist`). The offer pass moves cells strictly downhill on
+    // the demand field, else strictly uphill on the supply field (filling up).
+    const auto buildFields = [&](const TransportRun& run)
     {
-        forDueNodes("Transport offer", offer);
-        forDueNodes("Transport apply", applyKeepOut);
-        forDueNodes("Transport clear", clearOut);
+        // The queue is THIS RUN'S SLICE of the shared scratch (a run's BFS only ever visits its
+        // own node range, so the slice is owner-only): runs tick in parallel below, and no
+        // thread_local / PerWorker is involved — a job may resume on another thread after any
+        // wait, the nested parallelFor of a large run included.
+        uint32* const queue = net.bfsQueue.data() + run.firstNode;
+        const auto bfs = [&](uint16 TransportNode::* field, bool (*seeds)(const TransportSlot&))
+        {
+            uint32 tail = 0;
+            for (uint32 n = run.firstNode; n < run.firstNode + run.numNode; ++n)
+            {
+                TransportNode& node = net.nodes[n];
+                node.*field = 0xFFFF;
+                if (!node.junction)
+                    continue;
+                for (uint32 s = node.slotFirst; s < node.slotFirst + node.slotCount; ++s)
+                    if (seeds(net.slots[s]))
+                    {
+                        node.*field = 0;
+                        queue[tail++] = n;
+                        break;
+                    }
+            }
+            for (uint32 head = 0; head < tail; ++head)
+            {
+                const TransportNode& node = net.nodes[queue[head]];
+                for (uint32 a = 0; a < node.adjCount; ++a)
+                {
+                    TransportNode& to = net.nodes[net.adj[node.adjFirst + a].node];
+                    if (to.*field != 0xFFFF || to.junction)
+                        continue; // reached already, or a port (an endpoint, never a relay)
+                    to.*field = (uint16)glm::min((int)(node.*field) + 1, 0xFFFE);
+                    queue[tail++] = net.adj[node.adjFirst + a].node;
+                }
+            }
+            // Unseeded ports must still SEND (a producer's port on the demand field) — one hop
+            // above their best cable, so they read as uphill of it.
+            for (uint32 n = run.firstNode; n < run.firstNode + run.numNode; ++n)
+            {
+                TransportNode& node = net.nodes[n];
+                if (!node.junction || node.*field != 0xFFFF)
+                    continue;
+                int best = 0xFFFF;
+                for (uint32 a = 0; a < node.adjCount; ++a)
+                    best = glm::min(best, (int)(net.nodes[net.adj[node.adjFirst + a].node].*field));
+                if (best != 0xFFFF)
+                    node.*field = (uint16)glm::min(best + 1, 0xFFFE);
+            }
+        };
+        bfs(&TransportNode::dist, [](const TransportSlot& s) { return s.demand > 0; });
+        bfs(&TransportNode::sdist, [](const TransportSlot& s) { return s.supply > 0; });
+    };
+    // ONE RUN, start to finish: its fields, then the sub-steps. Runs share no state, so the due
+    // runs tick IN PARALLEL (one job per run above a couple of runs); a single huge run fans its
+    // passes out per node instead.
+    const auto tickRun = [&](const TransportRun& run)
+    {
+        ProfileScope scope("Transport run", EProfileCategory::Game);
+        buildFields(run);
+        for (int sub = 0; sub < substeps; ++sub)
+        {
+            forRunNodes(run, "Transport offer", offer);
+            forRunNodes(run, "Transport apply", apply);
+            forRunNodes(run, "Transport clear", clearOut);
+        }
+    };
+    const uint32 numDue = (uint32)net.dueRuns.size();
+    if (numDue < 2)
+    {
+        for (const uint32 r : net.dueRuns)
+            tickRun(net.runs[r]);
     }
+    else
+        Globals::jobSystem.parallelFor(0u, numDue, 1u, JobProfile{ "Transport runs", EProfileCategory::Game },
+            [&](uint32 begin, uint32 end)
+        {
+            for (uint32 i = begin; i < end; ++i)
+                tickRun(net.runs[net.dueRuns[i]]);
+        });
 }
 
 // ---------------------------------------------------------------- readouts + mirror
@@ -403,7 +505,7 @@ bool StructureSystem::cableInfo(int index, CableInfo& out) const
     const TransportRun& run = m_net.runs[node.run];
     out.medium = node.medium;
     out.fill = node.fill;
-    out.capacity = glm::max(m_cellsPerSegment, 1);
+    out.capacity = cellsPerSegmentOf(node.medium);
     out.movedPerSec = node.movedAvg; // ~2 s average, not the last tick's burst
     out.ratePerSec = m_cableThroughput[glm::min((int)node.medium, 2)];
     out.runFill = out.runCapacity = out.runSegments = 0;

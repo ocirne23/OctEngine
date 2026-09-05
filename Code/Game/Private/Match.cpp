@@ -250,8 +250,9 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
         Tweak::floatVar("Game/Coop", "Cost lobber", &m_waveCost[(int)ENpcType::Lobber], 0.1f, 500.0f, 0.5f);
         Tweak::floatVar("Game/Coop", "Cost spawner", &m_waveCost[(int)ENpcType::Spawner], 0.1f, 500.0f, 0.5f);
         Tweak::floatVar("Game/Coop", "Cost warrior", &m_waveCost[(int)ENpcType::Warrior], 0.1f, 500.0f, 0.5f);
-        Tweak::intVar("Game/Coop", "Max enemy units", &m_waveMaxAlive, 1, 20000, 50);
-        Tweak::intVar("Game/Coop", "Ambient budget", &m_ambientBudget, 0, 60000, 10);
+        Tweak::intVar("Game/Coop", "Max enemy units", &m_waveMaxAlive, 1, 60000, 50);
+        Tweak::floatVar("Game/Coop", "Wave spawn area per unit", &m_waveSpawnAreaPerUnit, 1.0f, 60.0f, 0.5f);
+        Tweak::intVar("Game/Coop", "Ambient budget", &m_ambientBudget, 0, 500000, 10);
         Tweak::floatVar("Game/Coop", "Ambient safe radius", &m_ambientSafeRadius, 10.0f, 200.0f, 1.0f);
         Tweak::intVar("Game/Coop", "Ambient recipe window", &m_ambientRecipeWindow, 0, 20, 1);
         Tweak::floatVar("Game/Coop", "Ambient depth scale", &m_ambientDepthScale, 0.5f, 1.0f, 0.01f);
@@ -644,13 +645,40 @@ void GameMatch::tickWaves(float deltaSec)
     queueWave();
 }
 
+// Live AI bodies — ambient and previous waves alike. Roster walk, main thread.
+int GameMatch::aiAliveCount() const
+{
+    return m_npcs.getNumUnits();
+}
+
+// The wave blob's radius for `budget` points of the CURRENT mix. Area — not radius — scales with
+// the expected body count, so the areal density is the same in wave 1 and wave 20: the old formula
+// grew the radius LINEARLY off the REMAINING budget and capped at 30 m, which meant a big wave
+// stacked hundreds of bodies on one disc (parked bodies do not push apart, so the pile only
+// resolved as physics shoved them out once a player came near) AND the disc SHRANK as the wave
+// trickled, packing the tail tightest.
+//
+// The blob is clamped to the ground plane and any point inside the barrier square is pushed back
+// out (see tickCoopSpawns), so an oversized disc becomes a wide BAND hugging the barrier — the
+// only direction with room, since the spawn band is just c_coopGroundEdge - c_coopHalfSize deep.
+float GameMatch::waveSpawnRadius(float budget) const
+{
+    float weight = 0.0f, cost = 0.0f;
+    for (const WaveMixEntry& e : m_waveMix)
+    {
+        weight += e.weight;
+        cost += e.weight * waveCostOf(e.type);
+    }
+    const float meanCost = weight > 0.0f ? glm::max(cost / weight, 0.1f) : 1.0f;
+    const float bodies = glm::max(budget, 0.0f) / meanCost;
+    const float area = bodies * glm::max(m_waveSpawnAreaPerUnit, 1.0f);
+    // 8 m floor keeps a handful of bodies from spawning on one spot; the ceiling is the world.
+    return glm::clamp(std::sqrt(area / glm::pi<float>()), 8.0f, c_coopGroundEdge);
+}
+
 void GameMatch::queueWave()
 {
-    int aiAlive = 0; // ambient + previous waves both count against the cap
-    for (const EntityPtr& e : m_npcs.units())
-        if (const GameUnitComponent* u = getComponent<GameUnitComponent>(e.get());
-            u && u->team == (uint32)CoopAiTeam && u->alive())
-            ++aiAlive;
+    const int aiAlive = aiAliveCount(); // ambient + previous waves both count against the cap
     // BUDGET points, not a unit count: the alive cap converts conservatively at the CHEAPEST cost
     // (the worst-case body count a budget could buy).
     float cheapest = FLT_MAX;
@@ -693,6 +721,9 @@ void GameMatch::queueWave()
     for (const auto& entry : c_waveArchetypes[pick].mix)
         if (entry.weight > 0.0f)
             m_waveMix.push_back({ entry.type, entry.weight * glm::linearRand(0.6f, 1.4f) });
+    // Size the blob for EVERYTHING still queued (a previous wave's tail included) — once, with the
+    // mix that will spend it, so the density holds from the first body to the last.
+    m_waveRadius = waveSpawnRadius(m_wavePendingBudget);
     // One planned lane from the spawn ring to the Base — the swarm commits to it, and the units'
     // own periodic seed requests keep it fresh (Nav's proximity dedup makes the wave one plan).
     Globals::navSystem.seedPath(CoopAiTeam, m_waveOrigin, m_waveDest, laneSeedSpeed(), laneSeedWidth());
@@ -736,9 +767,11 @@ void GameMatch::tickCoopSpawns()
             }
         }
         m_wavePendingBudget -= waveCostOf(type);
-        // Cluster around the ring point — bigger remaining waves spread over a wider blob. The
-        // blob stays in the band OUTSIDE the barrier but inside the ground plane: a point that
-        // drifted through the barrier line pushes back out along the wave's dominant axis.
+        // Cluster around the ring point in the blob queueWave sized for THIS wave's body count
+        // (m_waveRadius — constant for the whole trickle, so the tail is as loose as the head).
+        // The blob stays in the band OUTSIDE the barrier but inside the ground plane: a point that
+        // drifted through the barrier line pushes back out along the wave's dominant axis, which
+        // is what turns a big wave's oversized disc into a wide band along the barrier face.
         // A few rolls against the recent spawn points: a spot inside a body placed a moment ago
         // is rejected (parked bodies never push each other apart until a player is near).
         constexpr float c_spawnSpacing = 2.0f; // > two grunt radii
@@ -746,8 +779,7 @@ void GameMatch::tickCoopSpawns()
         for (int attempt = 0; attempt < 6; ++attempt)
         {
             const float a = glm::linearRand(0.0f, glm::two_pi<float>());
-            const float r = glm::min(8.0f + m_wavePendingBudget * 0.05f, 30.0f)
-                * std::sqrt(glm::linearRand(0.0f, 1.0f));
+            const float r = m_waveRadius * std::sqrt(glm::linearRand(0.0f, 1.0f)); // uniform by area
             pos = m_waveOrigin + glm::vec3(std::cos(a) * r, 1.0f, std::sin(a) * r);
             pos.x = glm::clamp(pos.x, -c_coopGroundEdge, c_coopGroundEdge);
             pos.z = glm::clamp(pos.z, -c_coopGroundEdge, c_coopGroundEdge);
@@ -1561,6 +1593,78 @@ void GameMatch::sendUnitType(int index)
 
 static constexpr const char* c_gameSavePath = "Local/gamesave.txt"; // cwd = Assets/
 
+// The PENDING TRICKLE: a wave is sized in points at queueWave and the bodies materialize over the
+// following frames (tickCoopSpawns, "Spawns per frame"). Saving mid-wave used to drop everything
+// not yet spawned, so an F9 during a big wave quietly shrank it. Everything the trickle reads is
+// written here — the remaining points, WHERE they enter (m_waveOrigin) and march (m_waveDest), and
+// the wave's ROLLED, JITTERED mix, which cannot be re-derived from the archetype table. The
+// spacing ring (m_waveRecent) is deliberately left out: it only rejects spots for a few spawns.
+void GameMatch::saveTrickle(AssetNode& root) const
+{
+    AssetNode& wave = root.addChild("WaveTrickle");
+    wave.set("Pending", m_wavePendingBudget);
+    wave.set("Origin", m_waveOrigin);
+    wave.set("Dest", m_waveDest);
+    wave.set("Radius", m_waveRadius); // the blob queueWave sized for this wave's body count
+    wave.set("LastArchetype", oc::to_string(m_lastArchetype)); // keeps "never twice in a row"
+    for (const WaveMixEntry& e : m_waveMix)
+    {
+        AssetNode& entry = wave.addChild("Mix"); // Type is the raw ENpcType int — append-only
+        entry.values = { oc::to_string((int)e.type), oc::to_string(e.weight) };
+    }
+    // The world-start SCATTER trickles through the same budget, plus the group it is mid-way
+    // through placing (anchored on this map's cells, which the load regenerates identically).
+    AssetNode& ambient = root.addChild("AmbientTrickle");
+    ambient.set("Pending", m_ambientPendingBudget);
+    ambient.set("Center", m_ambientSpawn.center);
+    ambient.set("Radius", m_ambientSpawn.radius);
+    ambient.set("Remaining", oc::to_string(m_ambientSpawn.remaining));
+    ambient.set("Archetype", oc::to_string(m_ambientSpawn.archetype));
+}
+
+// Counterpart of saveTrickle. MUST run after rebuildCoopMap, which voids the in-progress ambient
+// group (its anchor belongs to the old map). A save with NO trickle nodes — every save before this
+// existed — clears both budgets: that file IS the complete state, and letting the running session's
+// own scatter continue on top of it would double-spawn.
+void GameMatch::loadTrickle(const AssetNode& root)
+{
+    m_wavePendingBudget = 0.0f;
+    m_ambientPendingBudget = 0.0f;
+    m_ambientSpawn.remaining = 0;
+    if (const AssetNode* wave = root.find("WaveTrickle"))
+    {
+        m_wavePendingBudget = glm::max(wave->find("Pending") ? wave->find("Pending")->asFloat() : 0.0f, 0.0f);
+        m_waveOrigin = wave->find("Origin") ? wave->find("Origin")->asVec3() : m_waveOrigin;
+        m_waveDest = wave->find("Dest") ? wave->find("Dest")->asVec3() : m_waveDest;
+        m_lastArchetype = wave->find("LastArchetype") ? wave->find("LastArchetype")->asInt() : -1;
+        m_waveMix.clear();
+        for (const AssetNode* entry : wave->findAll("Mix"))
+        {
+            if (m_waveMix.size() >= m_waveMix.capacity())
+                break; // fixed_vector: a hand-edited save cannot overrun it
+            const int type = glm::clamp(entry->asInt(0), 0, (int)ENpcType::Count - 1);
+            m_waveMix.push_back({ (ENpcType)type, glm::max(entry->asFloat(1), 0.0f) });
+        }
+        // Older trickle saves have no Radius: re-derive it from what is LEFT, which is the best
+        // this end can do — the original wave's total is not in the file.
+        m_waveRadius = wave->find("Radius") ? glm::clamp(wave->find("Radius")->asFloat(), 8.0f, c_coopGroundEdge)
+                                            : waveSpawnRadius(m_wavePendingBudget);
+        if (m_waveMix.empty())
+            m_wavePendingBudget = 0.0f; // nothing to sample: dropping the points beats a wrong mix
+        else if (m_wavePendingBudget > 0.0f) // re-seed the lane the trickled units will follow
+            Globals::navSystem.seedPath(CoopAiTeam, m_waveOrigin, m_waveDest, laneSeedSpeed(), laneSeedWidth());
+    }
+    if (const AssetNode* ambient = root.find("AmbientTrickle"))
+    {
+        m_ambientPendingBudget = glm::max(ambient->find("Pending") ? ambient->find("Pending")->asFloat() : 0.0f, 0.0f);
+        m_ambientSpawn.center = ambient->find("Center") ? ambient->find("Center")->asVec3() : glm::vec3(0.0f);
+        m_ambientSpawn.radius = glm::max(ambient->find("Radius") ? ambient->find("Radius")->asFloat() : 6.0f, 0.0f);
+        m_ambientSpawn.remaining = glm::max(ambient->find("Remaining") ? ambient->find("Remaining")->asInt() : 0, 0);
+        m_ambientSpawn.archetype = glm::clamp(ambient->find("Archetype") ? ambient->find("Archetype")->asInt() : 0,
+            0, c_numWaveArchetypes - 1);
+    }
+}
+
 void GameMatch::saveGame()
 {
     if (m_isClient)
@@ -1581,9 +1685,14 @@ void GameMatch::saveGame()
         root.set("WaveIndex", oc::to_string(m_waveIndex));
         root.set("WaveTimer", glm::max(m_waveTimer, 0.0f));
         root.set("MatchTime", m_matchTime); // the HUD clock (sim seconds since the world spawned)
+        saveTrickle(root); // the wave/ambient spawns still queued (a save mid-wave loses nothing)
     }
     else if (m_coopMap.built && m_coopMap.pvp)
         root.set("PvpMap", oc::to_string((int)m_coopMap.pvpMap)); // the arena (EPvpMap index)
+    // The LOCAL player's body position (its own capsule only — remote players are not saved).
+    // Headless (no capsule) writes nothing, and a load without the key leaves the player put.
+    if (m_player.entity())
+        root.set("PlayerPos", m_player.bodyPos());
     m_structures.saveTo(root);
     m_npcs.saveUnits(root);
     // F9: an explicit user action, main thread.
@@ -1648,7 +1757,12 @@ void GameMatch::loadGame(oc::string_view path)
         m_waveTimer = glm::max(n->asFloat(), 0.0f);
     if (const AssetNode* n = root.find("MatchTime"))
         m_matchTime = glm::max(n->asFloat(), 0.0f);
-    m_wavePendingBudget = 0.0f; // a wave mid-trickle at save time is not resumed: the units that spawned are in the save
+    // The local player back to where it stood. Both call sites (F10 in updateWindowed, the
+    // --scenario timer) are main thread and pre-physics, so the direct body setters are sanctioned.
+    // Older saves carry no key and leave the player put; remote players keep their own positions.
+    if (const AssetNode* n = root.find("PlayerPos"))
+        m_player.teleport(n->asVec3(m_player.bodyPos()));
+    loadTrickle(root); // resume the queued wave/ambient spawns (after rebuildCoopMap — see there)
     if (m_isServer)
     {
         for (int i = 0; i < m_structures.structureCount(); ++i)
@@ -2095,6 +2209,12 @@ void GameMatch::update(float deltaSec)
                 if (!nearAnyFocus(e->pos))
                     m_focusClusters.push_back(e->pos);
             }
+            // The base fields as ZONES (tier 1 + band): the structures are Global (always ticking,
+            // fields always projected), but a unit in their field beyond every focus point was
+            // unselected — teleported by the far tick straight through the barrier.
+            m_fieldZones.clear();
+            m_structures.collectShieldBubbles(m_fieldZones, World::MaxSimLodZones);
+            Globals::world.setSimLodZones(m_fieldZones.data(), (uint32)m_fieldZones.size());
         }
         for (const glm::vec3& c : m_focusClusters)
             if (focusCount < World::MaxSimLodFocus)
@@ -2542,7 +2662,7 @@ void GameMatch::setMode(EPlayerMode mode)
     switch (mode)
     {
     case EPlayerMode::Build:  break; // the category entry logs its own line (activateSlot)
-    case EPlayerMode::Delete: Log::info("Delete mode (X): click a structure to demolish — X returns to Select"); break;
+    case EPlayerMode::Delete: Log::info("Delete mode (X): click a structure to demolish (one, then back to Select) — X cancels"); break;
     case EPlayerMode::Select: Log::info("Select mode: click inspects, RMB routes / moves — Q/W build, A/S/D cables, X delete"); break;
     }
 }
@@ -2716,7 +2836,9 @@ void GameMatch::placeCableLine(EStructureType armed, const glm::vec3& from, cons
         {
             const glm::vec2 dir(glm::sign(next.x - points[i].x), glm::sign(next.z - points[i].z));
             const EStructureType crossing = crossingForMedium(cableMediumOf(armed));
-            if (m_structures.cellsFree(crossing, next, crossingRotation(dir))
+            // planCrossing, not cellsFree: an END cell holding our OWN medium is replaced, so a
+            // stroke crosses a foreign line even where its own run already stands.
+            if (m_structures.planCrossing(crossing, next, crossingRotation(dir), (uint8)m_team).valid
                 && !StructureSystem::actorInFootprint(crossing, next))
             {
                 requestPlace(crossing, next, -1, glm::vec3(dir.x, 0.0f, dir.y));
@@ -2950,7 +3072,10 @@ void GameMatch::updateDeleteMode(const Camera& camera, bool confirmEdge)
     drawCircle(m_structures.structurePos(hover) * glm::vec3(1, 0, 1) + glm::vec3(0.0f, 0.3f, 0.0f), 1.6f,
         packColor(deletable ? glm::vec3(1.0f, 0.25f, 0.2f) : glm::vec3(0.5f, 0.5f, 0.5f)), 20);
     if (confirmEdge && deletable)
+    {
         requestDemolish(m_structures.structureId(hover)); // validated in the authority tick (server)
+        setMode(EPlayerMode::Select); // one demolish per arm: the Delete button releases itself
+    }
 }
 
 void GameMatch::updateSelectMode(const Camera& camera, bool confirmEdge, bool rmbEdge)
@@ -3555,7 +3680,7 @@ void GameMatch::buildWorldLabels()
     // remote instances' GameUnitComponents are populated by the snapshot game blob. Puppets are
     // player capsules; the own player is skipped (its HUD bars cover it).
     Entity* ownPlayer = m_player.entity();
-    thread_local oc::vector<Entity*> units;
+    oc::vector<Entity*>& units = m_labelUnits; // the labels job's own scratch (one job at a time)
     NpcSystem::queryVisibleUnits(camera, units);
     for (Entity* unitEntity : units)
     {
@@ -3617,22 +3742,20 @@ void GameMatch::tickPlayerMelee(float deltaSec)
     if (m_meleeDps <= 0.0f || m_meleeRadius <= 0.0f)
         return;
     ProfileScope scope("Player melee", EProfileCategory::Game);
-    thread_local oc::vector<uint64> nearby;
     const auto meleeAround = [&](const glm::vec3& pos, uint8 team)
     {
-        Globals::spatialIndex.querySphere(glm::dvec3(pos), m_meleeRadius, SpatialLayer_Render, nearby);
-        for (const uint64 user : nearby)
+        Globals::spatialIndex.forEachInSphere(glm::dvec3(pos), m_meleeRadius, SpatialLayer_Render, [&](uint64 user)
         {
             Entity* other = reinterpret_cast<Entity*>(user);
             GameUnitComponent* u = getComponent<GameUnitComponent>(other);
             if (!u || u->puppet || u->team == team || !u->alive())
-                continue;
+                return;
             // The query matches bounding spheres — the melee rule is the CENTER distance (XZ,
             // the same measure the units' own melee probes use).
             const glm::vec2 d = glm::vec2(other->pos.x, other->pos.z) - glm::vec2(pos.x, pos.z);
             if (glm::dot(d, d) <= m_meleeRadius * m_meleeRadius)
                 u->damage(m_meleeDps * deltaSec);
-        }
+        });
     };
     meleeAround(m_player.bodyPos(), (uint8)m_team);
     for (const auto& [id, p] : m_clientPlayers)
@@ -3789,6 +3912,8 @@ void GameMatch::updateHud()
         hud.setCounterText("Time", clock, glm::vec3(0.9f, 0.9f, 0.9f));
         hud.setCounter("Next wave (s)", glm::max(m_waveTimer, 0.0f), 0, glm::vec3(1.0f, 0.45f, 0.3f));
         hud.setCounter("Next wave power", nextWaveBudget(), 0, glm::vec3(1.0f, 0.45f, 0.3f)); // budget points before the alive cap
+        // Live AI bodies against "Max enemy units" — an O(1) roster size, so no caching.
+        hud.setCounter("AI alive", (float)aiAliveCount(), 0, glm::vec3(1.0f, 0.45f, 0.3f));
     }
 }
 

@@ -366,6 +366,20 @@ float GamePlayer::shieldRadius() const
     return fc ? fc->emitter.getEquilibriumRadius() : 0.0f;
 }
 
+void GamePlayer::teleport(const glm::vec3& pos)
+{
+    PhysicsComponent* pc = m_entity ? getComponent<PhysicsComponent>(m_entity.get()) : nullptr;
+    if (!pc || !pc->body.isValid())
+        return;
+    const glm::quat rot = pc->body.getRotation(); // the capsule keeps its upright pose
+    Globals::physics.teleportBody(pc->body, pos, rot);
+    pc->body.setLinearVelocity(glm::vec3(0.0f));
+    pc->prevPos = pc->currPos = pos;
+    pc->prevRot = pc->currRot = rot;
+    pc->lastStep = Globals::physics.getStepCount();
+    m_hasMoveTarget = false;
+}
+
 glm::vec3 GamePlayer::interpolatedPos() const
 {
     const PhysicsComponent* pc = m_entity ? getComponent<PhysicsComponent>(m_entity.get()) : nullptr;

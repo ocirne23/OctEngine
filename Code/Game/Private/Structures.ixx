@@ -7,13 +7,13 @@ import File; // AssetNode (save/load)
 import Force;
 import Threading; // the transport job
 
-// The build/economy layer WITHOUT a structure roster: every structure is an ENTITY whose
-// GameStructureComponent holds its identity (stable id, team, health, blueprint), its three
-// resource stores and its LINKS to other structures — distribution runs per-entity over those
-// links inside the engine's entity pass (see GameComponents.ixx). This system is the seam around
-// them: placement (grid/nodes/requests — the MP validation point), link management, production
-// (income, fuel burn, consumer drain, emitter ramps — iterating a PER-FRAME spatial query, the
-// same no-lists pattern the units use), the death sweep, per-team totals, mirrors and save/load.
+// The build/economy layer: every structure is an ENTITY whose GameStructureComponent holds its
+// identity (stable id, team, health, blueprint) and its three float resource stores. Resources
+// move between structures over the CABLE TRANSPORT this system owns (whole cells per segment, a
+// fixed-rate job — see the block below and Transport.cpp). This system is the seam around them:
+// placement (grid/nodes/requests — the MP validation point), the network rebuild, production
+// (income, fuel burn, consumer drain, emitter ramps — over the roster), the death sweep, per-team
+// totals, mirrors and save/load.
 // SAVE FILES STORE Type AS AN INT: never remove or reorder values — new types APPEND before Count.
 // Connector is a RETIRED slot (range links are gone; cables are physical now): its table entries
 // remain, placement refuses it and loadFrom skips it. BarracksBrute/Runner/Spitter are RETIRED
@@ -34,8 +34,8 @@ export constexpr bool isPlaceableType(EStructureType t)
         && t != EStructureType::Base && t != EStructureType::Connector && !isRetiredBarracksType(t);
 }
 // PHYSICAL CABLES: 1-cell grid segments, one type per medium. A contiguous same-medium run of
-// BUILT segments touching two buildings derives a GameStructureLink between them (see
-// rebuildDerivedLinks). A Crossing is a 1x3 oriented bridge OF ONE MEDIUM (one type per medium,
+// BUILT segments is one transport RUN; the buildings it touches are its ports (see
+// rebuildNetworks). A Crossing is a 1x3 oriented bridge OF ONE MEDIUM (one type per medium,
 // like the cables): a perpendicular cable passes UNDER its middle cell, and it conducts only its
 // own medium between its two ENDS — never whatever happens to touch them.
 export constexpr bool isCableType(EStructureType t)
@@ -135,7 +135,7 @@ public:
         EStructureType type = EStructureType::Emitter;
         int nodeIndex = -1; // Extractor: the node under it
         // Cable segments: the four render-only arm child entities (+X, -X, +Z, -Z), cached at
-        // spawn; rebuildDerivedLinks enables the ones pointing at a connected neighbour. The owning
+        // spawn; rebuildNetworks enables the ones pointing at a connected neighbour. The owning
         // EntityPtr keeps the whole tree alive, so the raw pointers cannot dangle.
         Entity* arms[4] = {};
         // PROBLEM BADGE (the world label's bubble): what GameMatch::structureWarning last found,
@@ -195,6 +195,11 @@ public:
     {
         return hasShieldEmitter(m_frame[index].type) ? m_frame[index].state->emitter.outputFrac : 0.0f;
     }
+    // The bubble spheres (xyz center, w radius) the shield structures currently project: one per
+    // merge GROUP where members merged (friendly units in the group ride along), else the
+    // structure's own bubble; structures with no bubble (blueprints, unpowered) contribute none.
+    // Appends at most maxCount; the SIM LOD zones (GameMatch::update). Main thread.
+    void collectShieldBubbles(oc::vector<glm::vec4>& out, uint32 maxCount) const;
 
     // SAVE/LOAD (server): every structure + link into/from an AssetNode tree. loadFrom CLEARS the
     // current set first (removal hooks fire, so connected clients prune) and preserves ids.
@@ -474,6 +479,19 @@ public:
     // already bridged). The paint stroke's auto-crossing probe: such a cell of another medium gets
     // the stroke's crossing placed over it.
     int bridgeableAt(const glm::vec3& snappedGroundPos) const;
+    // A crossing placement, validated with ONE relaxation `cellsFree` does not make: an END cell
+    // may hold a plain cable of the crossing's OWN medium, which is REPLACED. Such a segment is
+    // redundant — the crossing's end conducts that medium anyway — and refusing it meant a stroke
+    // could not cross a foreign line wherever its own run already stood. Everything else (another
+    // medium, a building, a second crossing) blocks exactly as before. `replace` names the
+    // segments to demolish first; own team only, so a stroke never eats an enemy's cable.
+    struct CrossingPlan
+    {
+        bool valid = false;
+        uint32 replace[2] = {}; // the two END cells' own-medium cables (0 = that end was empty)
+    };
+    CrossingPlan planCrossing(EStructureType type, const glm::vec3& snappedGroundPos,
+        const glm::quat& rot, uint8 team) const;
     static float spawnHeightOf(EStructureType type); // the prefab box's HALF height (ghost preview)
     // A player capsule or unit standing on the footprint (spatial query — no rosters). Separate
     // from cellsFree on purpose: that one also probes unit SPAWN points, which must not refuse a
@@ -547,7 +565,7 @@ private:
     void removeStructureBookkeeping(size_t index); // unlink, free the node, erase + reindex, fire GRm
     void applyStructureTint(const Ref& s);
     void applyDemolishRequest(uint32 id, uint8 team);
-    void stampTuning(const Ref& s); // capacity/band per medium (per tick — tweaks stay live)
+    void stampTuning(const Ref& s); // capacities + machine variant (per tick — tweaks stay live)
     void tickProduction(float deltaSec); // income, fuel burn, consumer drain, emitter ramps
     void tickDamage(float deltaSec);     // death sweep + strainable marks
     void tickConstructors(float deltaSec);
@@ -575,6 +593,10 @@ private:
     }
     void insertCells(const Ref& s);   // spawn seam (also demotes an under-cable below a crossing)
     void eraseCells(const Ref& s);    // remove seam (promotes the under-cable back to primary)
+    // Everything a footprint must clear BEFORE the per-cell occupancy walk: the arena bounds, the
+    // co-op rock rects and the free nodes' reserved extractor footprints. Shared by cellsFree and
+    // planCrossing, which only differ in what they make of an OCCUPIED cell.
+    bool footprintAreaClear(EStructureType type, const glm::vec3& p, const glm::quat& rot) const;
     // (cx, cz) is the raised MIDDLE cell of the crossing at frame index `index`.
     bool isCrossingCenter(int index, int cx, int cz) const;
     // The occupant at frame index `index` may pass UNDER a crossing's middle at (cx, cz): a plain
@@ -596,13 +618,14 @@ private:
     // medium is a JUNCTION node (its port: every segment touching it is a neighbour, so a line
     // through an emitter carries through), and the building's SLOT hangs on that node. Each
     // transport tick (fixed rate, runs staggered over frames) the game INJECTS every slot's
-    // supply/demand from the building's float store (reserving pushed cells out of it), a JOB
-    // runs `Substeps` of owner-only stencil passes — OFFER: a node serves its slots' demand
-    // first, then FORWARDS into neighbours with free space that did not feed it last sub-step
-    // (the conveyor rule: cells never turn back, a line runs full end to end, a dead end fills
-    // and stops), then takes slot supply into its free space, all within its out-rate; APPLY: fill' = fill -
-    // out + in — and the join hands the cells to the stores. No atomics, no entity walk, the
-    // result is independent of scheduling, and a run's bottleneck is simply its slowest segment.
+    // supply/demand from the building's float store, and a JOB ticks the due runs IN PARALLEL:
+    // per run two BFS fields (hops to the nearest wanting port, hops to the nearest pushing
+    // port), then `Substeps` of owner-only stencil passes — OFFER: a node serves its slots'
+    // demand first, then FORWARDS into neighbours with free space that are downhill toward
+    // demand, else uphill away from supply (filling up), then takes slot supply into its free
+    // space, all within its out-rate; APPLY: fill' = fill - out + in — and the join hands the
+    // cells to the stores. No atomics, no entity walk, no TLS, the result is independent of
+    // scheduling, and a run's bottleneck is simply its slowest segment.
     // Node adjacency is CSR (a junction has any number of neighbours); each adjacency slot knows
     // the reverse slot so APPLY reads its inflow from the neighbours' own out-slots.
     struct TransportNode
@@ -619,15 +642,18 @@ private:
         uint8 medium = 0;
         uint8 junction = 0;        // a building's port node: never saved or mirrored
         uint8 rotate = 0;          // integer-remainder rotation counter
-        uint32 inMask = 0;         // adjacency slots that fed this node last sub-step (bit per slot,
-                                   // the first 32): never forwarded back into — the conveyor rule
+        uint16 dist = 0xFFFF;      // THE DEMAND FIELD: hops (through cables) to the nearest port that
+                                   // wants cells this tick; 0xFFFF = none. Cells move strictly
+                                   // DOWNHILL on it — toward demand — first
+        uint16 sdist = 0xFFFF;     // THE SUPPLY FIELD: hops to the nearest port pushing cells this
+                                   // tick. With no demand outlet, cells move strictly UPHILL on it —
+                                   // away from supply — so cables fill up outward from producers
     };
     struct TransportAdj { uint32 node; uint32 reverse; }; // neighbour + its slot pointing back here
     enum class ETransportRole : uint8 { Consumer, Producer, Storage };
     struct TransportSlot // one (building, medium) port
     {
         GameStructureComponent* state = nullptr;
-        uint32 structureId = 0;
         uint32 node = 0;           // the junction it hangs on
         uint8 medium = 0;
         ETransportRole role = ETransportRole::Consumer;
@@ -636,6 +662,9 @@ private:
         int32 reserved = 0;           // cells reserved OUT of the store at inject (refund = reserved - taken)
         float intakeCarry = 0.0f;     // metered machines: fractional per-tick intake carry
         float intakePerSec = 0.0f;    // 0 = unmetered
+        int8 storageMode = 0;         // storage: +1 pulling, -1 pushing, 0 undecided — flips only at the
+                                      // OPPOSITE mark (true hysteresis; a per-tick band idled every
+                                      // other tick on small segments)
     };
     struct TransportRun { uint32 firstNode = 0, numNode = 0; uint8 medium = 0; uint8 group = 0; };
     struct TransportNet
@@ -646,11 +675,12 @@ private:
         oc::vector<TransportRun> runs;
         oc::unordered_map<uint32, uint32> nodeById; // cable/crossing id -> node (label, mirror, save)
         // job scratch, owner-only writes
-        oc::vector<uint16> fillNext;
         oc::vector<uint16> outAdj;  // per adjacency slot: cells sent to that neighbour this sub-step
         oc::vector<uint16> outSlot; // per port slot: cells delivered this sub-step
         oc::vector<uint16> inSlot;  // per port slot: cells taken from the port this sub-step
         oc::vector<uint32> dueRuns; // the runs this job ticks
+        oc::vector<uint32> bfsQueue; // nodes.size() entries: each run's BFS uses ITS node range as
+                                     // its queue (owner-only, so runs tick in parallel — no TLS)
     };
     TransportNet m_net;
     oc::unordered_map<uint32, uint16> m_savedFills; // fills of cables that left the graph (rebuild carry-over)
@@ -751,7 +781,10 @@ private:
     float m_transportTickHz = 10.0f;
     int m_transportSubsteps = 4;
     int m_transportSpread = 4;
-    int m_cellsPerSegment = 4;        // soft capacity of one segment (a run buffers segments x this)
+    int m_cellsPerSegment[3] = { 2, 1, 1 }; // soft capacity of one segment by MEDIUM (a run buffers
+                                            // segments x this): energy holds a burst, the slower
+                                            // pipe/conveyor are pure transport
+    int cellsPerSegmentOf(int medium) const { return glm::max(m_cellsPerSegment[glm::clamp(medium, 0, 2)], 1); }
     float m_storageLowMark = 0.25f;   // storage pushes while its port node is at/below this fill
     float m_storageHighMark = 0.75f;  // ... and pulls while at/above this (hysteresis between)
     int m_statTransportNodes = 0;     // read-only stats under Game/Economy
@@ -771,7 +804,7 @@ private:
     // units in reach (GameStructureParams::medicRange/medicHealRate) and GameMatch heals the own
     // player (tickMedicHealing).
     float m_medicEnergyPerSec = 1.5f;
-    float m_barracksEnergyIntake = 2.0f; // energy/s a barracks' power links deliver at most: the BUILD RATE
+    float m_barracksEnergyIntake = 2.0f; // energy/s a barracks' transport port takes at most: the BUILD RATE
                                          // (build time = unit cost / this — Grunt 5 -> 2.5 s, Brute 20 -> 10 s)
     float m_genEnergyPerSec = 5.0f;
     float m_solarEnergyPerSec = 1.0f;

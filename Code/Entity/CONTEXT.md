@@ -230,6 +230,7 @@ code defaults rule every run and a stale tweaks.cfg never overrides a tuning cha
 | `forceMaxTier` | 1 |
 | `visibleMaxTier` | 2 (= distance rules everything) |
 | `queryMargin` | 10 m |
+| `zoneMargin` / `zoneTier2Band` | 5 m / 25 m (zones, see Focus) |
 | `maxCatchUp` | 8 frames |
 | Follows: units / structures / projectiles / scripts / animators | **on / off / off / off / on** |
 
@@ -239,11 +240,19 @@ code defaults rule every run and a stale tweaks.cfg never overrides a tuning cha
 `world.update`. `GameMatch::update` publishes every player capsule (own plus the server's client
 twins); main.cpp publishes the camera in the plain testbed.
 
-It forwards to `SpatialIndex::setUpdateLod`, which stamps the three `UpdateTier` passes in the NEXT
-cull job. **One frame of latency vs the focus.**
+**Zones.** `World::setSimLodZones(spheres, count)` — at most `MaxSimLodZones` 64, xyz center plus
+w radius — are spheres that stamp **tier 1 out to radius + `zoneMargin` and tier 2 over a further
+`zoneTier2Band`, never tier 0.** `GameMatch::update` publishes the shield structures' bubble spheres
+(the merge group's sphere where merged, from `ForceEmitter::getBubbleBounds`), so a unit that walks
+into a far base's field ticks and is pushed with no player near. They stay set until set again (the
+Game refreshes them every 0.25 s).
 
-**NO focus, paused (`dt == 0`), or disabled = LOD INACTIVE**: every root and every child is visited,
-and the pass scales with the entity count.
+Both go through `pushUpdateLod` to `SpatialIndex::setUpdateLod` as one sphere list with a radius
+per tier, which stamps the three `UpdateTier` passes in the NEXT cull job. **One frame of latency
+vs the focus.**
+
+**NO focus and no zone, paused (`dt == 0`), or disabled = LOD INACTIVE**: every root and every child
+is visited, and the pass scales with the entity count.
 
 ## Active: the visit set
 
@@ -252,9 +261,10 @@ The pass is **DETACHED from the entity count.** It is:
 1. The **`Global` roots** (`m_globalRoots`).
 2. **Roots added since the last pass** (`m_pendingRoots`), visited ONCE unconditionally — a fresh
    entry links only at the next commit, so no query can find it on its spawn frame.
-3. **One `querySphere` per focus point** at `radius[2] + queryMargin` on the Entity layer, **at ANY
-   depth**: `selectUpdateRoot` walks each hit up to its root, **stamping every ancestor so the descent
-   passes through them**, and queues the root. Sort + unique dedupes overlapping balls.
+3. **One `querySphere` per focus point** at `radius[2] + queryMargin` — **and one per zone** at its
+   radius + `zoneMargin` + `zoneTier2Band` + `queryMargin` — on the Entity layer, **at ANY depth**:
+   `selectUpdateRoot` walks each hit up to its root, **stamping every ancestor so the descent passes
+   through them**, and queues the root. Sort + unique dedupes overlapping balls.
 
 **Descent.** `submitEntityBatches` copies only SELECTED children into the arena (`simLodSelected`:
 any UpdateTier or Main stamp on the child's OWN entry; never-stamped fresh entries count as stamped).

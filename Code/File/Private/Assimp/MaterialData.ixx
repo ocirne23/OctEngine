@@ -46,6 +46,7 @@ public:
 private:
 
     const aiMaterial* m_pMaterial       = nullptr;
+    oc::string m_name;                  // read once at initialize; getName() hands out its c_str
     uint32 m_diffuseTexIdx              = UINT32_MAX;
     uint32 m_normalTexIdx               = UINT32_MAX;
     uint32 m_opacityTexIdx              = UINT32_MAX;

@@ -28,30 +28,24 @@ static constexpr const char* c_npcPrefabs[(int)ENpcType::Count] = {
 static constexpr const char* c_npcNames[(int)ENpcType::Count] = { "Enemy", "Brute", "Runner", "Spitter", "Swarm",
     "Elite", "Giant", "Titan", "Lobber", "Spawner", "Warrior" };
 
-static void collectUnits(oc::span<const uint64> results, oc::vector<Entity*>& out)
-{
-    out.clear();
-    for (const uint64 user : results)
-    {
-        Entity* entity = reinterpret_cast<Entity*>(user);
-        if (hasComponent<GameUnitComponent>(entity))
-            out.push_back(entity);
-    }
-}
-
 // Units inside the view frustum, for the overhead labels — anything off screen would be projected
-// and thrown away, so it is never fetched. Transient by design: nothing holds the result.
+// and thrown away, so it is never fetched. The hits are filtered straight out of the traversal
+// into `out` (no intermediate buffer: the labels job may park on another thread).
 void NpcSystem::queryVisibleUnits(const Camera& camera, oc::vector<Entity*>& out)
 {
     ProfileScope scope("Npc visible units (query)", EProfileCategory::Game);
-    thread_local oc::vector<uint64> results;
+    out.clear();
     const glm::dvec3 cameraPos(camera.position);
     // The renderer's current view-projection is the frustum this frame is drawn with; the spatial
     // index wants it camera-relative (exact at any world scale).
     const Frustum world(Globals::rendererVK.getCenterViewProj());
-    Globals::spatialIndex.queryFrustum(rebaseFrustum(world, cameraPos), cameraPos, FLT_MAX,
-        SpatialLayer_Render, results);
-    collectUnits(results, out);
+    Globals::spatialIndex.forEachInFrustum(rebaseFrustum(world, cameraPos), cameraPos, FLT_MAX,
+        SpatialLayer_Render, [&](uint64 user)
+    {
+        Entity* entity = reinterpret_cast<Entity*>(user);
+        if (hasComponent<GameUnitComponent>(entity))
+            out.push_back(entity);
+    });
 }
 
 // Every unit in the world — for save/load (which must persist units the camera cannot see) and
@@ -90,7 +84,6 @@ void NpcSystem::registerTweaks()
     Tweak::floatVar("Game/Enemies", "Push tension", &up.tension, 0.0f, 10.0f, 0.05f);
     Tweak::floatVar("Game/Enemies", "Field damage/s", &up.fieldDps, 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Enemies", "Field damage mult", &up.fieldDpsMult, 0.0f, 10.0f, 0.05f);
-    Tweak::floatVar("Game/Enemies", "Field damage starts (x iso)", &up.fieldDamageStart, 0.0f, 0.95f, 0.05f);
     Tweak::floatVar("Game/Enemies", "Field push starts (x iso)", &up.fieldPushStart, 0.0f, 0.95f, 0.05f);
     Tweak::floatVar("Game/Enemies", "Emitter drain mult", &up.emitterDrainMult, 0.0f, 10.0f, 0.05f);
     Tweak::floatVar("Game/Enemies", "Emitter drain range (m)", &up.strainRange, 0.0f, 40.0f, 0.5f);
@@ -487,6 +480,12 @@ void NpcSystem::saveUnits(AssetNode& root) const
         n.set("Energy", u->energy);
         n.set("Source", oc::to_string(u->sourceId));
         n.set("RouteIndex", oc::to_string(u->routeIndex));
+        // The standing MOVE ORDER is what makes a co-op WAVE unit a wave unit — there is no
+        // per-unit `ambient` flag any more, so without it a loaded wave stopped where it stood and
+        // held its patch like ambient scatter. Transient WANDER strolls are deliberately skipped:
+        // they time out in seconds, and restoring one would pin an idler to a stale spot.
+        if (u->moveOrder && !u->wanderOrder)
+            n.set("Order", u->targetPos);
     }
 }
 
@@ -513,6 +512,12 @@ void NpcSystem::loadUnits(const AssetNode& root, StructureSystem& structures)
         u->health = glm::clamp(n->find("Health") ? n->find("Health")->asFloat() : u->health, 1.0f, u->healthMax);
         u->energy = glm::clamp(n->find("Energy") ? n->find("Energy")->asFloat() : u->energy, 0.0f, u->energyMax);
         u->routeIndex = (uint8)glm::clamp(n->find("RouteIndex") ? n->find("RouteIndex")->asInt() : 0, 0, 255);
+        // Resume the march (co-op wave units, and any player-ordered unit). NOT `fresh`: this is
+        // the same order continuing, not a new one, so it keeps following whatever lane exists —
+        // the units re-request their own on their normal timers. `orderMove` re-clears routeIndex,
+        // which is what an ordered unit saved anyway. Older saves have no key and stay AI-driven.
+        if (const AssetNode* order = n->find("Order"))
+            u->orderMove(order->asVec3(), /*fresh*/ false);
         if (GameStructureComponent* barracks = structures.structureStateById(source))
             barracks->barracks.population += u->popCost;
     }

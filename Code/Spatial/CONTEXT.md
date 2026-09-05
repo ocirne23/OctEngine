@@ -85,7 +85,11 @@ commitFrame()
 
 **Queries**, read-only and valid between commits:
 `querySphere` · `queryAABB` · `queryFrustum` · `queryRay` (a **broadphase** — entries whose bounds
-cross the segment) · `queryNearest`.
+cross the segment) · `queryNearest`, all filling a caller's `oc::vector<uint64>`; plus the
+CALLBACK forms `forEachInSphere` / `forEachInFrustum`, which hand each hit to a functor straight
+out of the traversal — **the form to use from job code**: no result buffer, so nothing
+`thread_local` rides a fiber that may resume on another thread (zero-allocation type erasure; do
+not wait inside the callback — the index's shared lock is held). Every game/entity probe uses them.
 
 ### `spawnVisible` — the spawn guard
 
@@ -154,9 +158,9 @@ a plain-int mirror for the tweak panel, which binds a raw `int*`.
 
 ### `markVisibleSpheres`
 
-ONE stamp generation over the UNION of several balls. **`markVisibleSphere` per call would leave only
-the last ball stamped**, which is why the SIM LOD uses this. `visiblePerPass` counts overlapping
-balls twice.
+ONE stamp generation over the UNION of several balls, one radius per ball (a radius <= 0 skips the
+ball). **`markVisibleSphere` per call would leave only the last ball stamped**, which is why the SIM
+LOD uses this. `visiblePerPass` counts overlapping balls twice.
 
 ### The Near ball's hysteresis
 
@@ -196,8 +200,10 @@ passes unconditionally.
 
 ### SIM LOD hooks
 
-`setUpdateLod(focus, count, radii[3])` — at most `MaxUpdateLodFocus` = 16 points — records the focus
-points and the three tier radii to stamp in the NEXT `update()`.
+`setUpdateLod(spheres, count)` — at most `MaxUpdateLodSpheres` = 96 `UpdateLodSphere`s, each a
+center plus ONE RADIUS PER TIER (<= 0 = that tier is not stamped by it) — records what the NEXT
+`update()` stamps the three `UpdateTier` passes with. The World builds the list from its focus
+points (all three tiers at the config radii) and its zones (tier 1 and 2 only).
 
 Three accessors exist purely for the World's selection logic:
 

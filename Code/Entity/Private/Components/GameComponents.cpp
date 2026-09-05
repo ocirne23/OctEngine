@@ -297,15 +297,15 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             // Random pick among the 4 nearest enemy structures; nearest enemy player (a puppet in
             // the same query) as the fallback.
             m_retargetTimer = params.retargetInterval * (0.7f + 0.6f * unitRand01(m_rng));
-            thread_local oc::vector<uint64> results;
-            Globals::spatialIndex.querySphere(glm::dvec3(pos), params.targetSearchRadius,
-                SpatialLayer_Render, results);
+            // (Every spatial probe in this pass consumes its hits INLINE — no result buffer, so
+            // nothing thread_local rides a job that may park and resume on another thread.)
             struct Candidate { float distSq; glm::vec3 pos; };
             Candidate best[4];
             int count = 0;
             float bestPlayerDistSq = FLT_MAX;
             glm::vec3 bestPlayerPos(0.0f);
-            for (const uint64 user : results)
+            Globals::spatialIndex.forEachInSphere(glm::dvec3(pos), params.targetSearchRadius,
+                SpatialLayer_Render, [&](uint64 user)
             {
                 Entity* other = reinterpret_cast<Entity*>(user);
                 if (const GameUnitComponent* pu = getComponent<GameUnitComponent>(other);
@@ -317,11 +317,11 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                         bestPlayerDistSq = glm::dot(d, d);
                         bestPlayerPos = other->pos;
                     }
-                    continue;
+                    return;
                 }
                 const GameStructureComponent* sc = getComponent<GameStructureComponent>(other);
                 if (!sc || sc->invulnerable || sc->team == team || !sc->alive())
-                    continue;
+                    return;
                 const glm::vec2 d = glm::vec2(other->pos.x, other->pos.z) - here;
                 const Candidate c{ glm::dot(d, d), other->pos };
                 if (count < 4)
@@ -335,7 +335,7 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                     if (c.distSq < best[worst].distSq)
                         best[worst] = c;
                 }
-            }
+            });
             if (count > 0)
             {
                 targetPos = best[glm::min(int(unitRand01(m_rng) * count), count - 1)].pos;
@@ -371,10 +371,6 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
         // Base and only bit what stood in its way.
         const bool ordered = targetLocked && moveOrder;
         const float breakRadius = ordered ? params.orderBreakRadius : 0.0f;
-        thread_local oc::vector<uint64> nearby;
-        Globals::spatialIndex.querySphere(glm::dvec3(pos),
-            glm::max(glm::max(glm::max(attackRange + 6.0f, c_strainRange), engageRadius), breakRadius),
-            SpatialLayer_Render, nearby);
         glm::vec3 bitePos(0.0f);
         float engageDistSq = engageRadius * engageRadius;
         glm::vec3 engagePos(0.0f);
@@ -387,7 +383,9 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
         GameStructureComponent* bite = nullptr;
         GameStructureComponent* strain = nullptr;
         float biteDist = FLT_MAX, strainDist = c_strainRange;
-        for (const uint64 user : nearby)
+        Globals::spatialIndex.forEachInSphere(glm::dvec3(pos),
+            glm::max(glm::max(glm::max(attackRange + 6.0f, c_strainRange), engageRadius), breakRadius),
+            SpatialLayer_Render, [&](uint64 user)
         {
             Entity* other = reinterpret_cast<Entity*>(user);
             if (GameStructureComponent* sc = getComponent<GameStructureComponent>(other);
@@ -406,12 +404,12 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                     bite = sc;
                     bitePos = other->pos;
                 }
-                continue;
+                return;
             }
             GameUnitComponent* pu = getComponent<GameUnitComponent>(other);
             if (!pu || pu == this || pu->team == team || !pu->alive()
                 || glm::abs(other->pos.y - pos.y) >= 3.0f)
-                continue;
+                return;
             const glm::vec2 to(other->pos.x - pos.x, other->pos.z - pos.z);
             if (routing && glm::dot(to, to) < engageDistSq) // nearest enemy on the march
             {
@@ -436,7 +434,7 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                     meleeVictimReach = reach;
                 }
             }
-        }
+        });
         if (meleeVictim)
         {
             meleeVictim->damage(attackDps * deltaSec);
@@ -567,17 +565,15 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                         goalDir = wallDir;
                     else
                     {
-                        thread_local oc::vector<uint64> crowd;
-                        Globals::spatialIndex.querySphere(glm::dvec3(pos), 4.0,
-                            SpatialLayer_Render, crowd);
                         float bestSq = FLT_MAX;
                         glm::vec2 away(0.0f);
-                        for (const uint64 user : crowd)
+                        Globals::spatialIndex.forEachInSphere(glm::dvec3(pos), 4.0,
+                            SpatialLayer_Render, [&](uint64 user)
                         {
                             Entity* other = reinterpret_cast<Entity*>(user);
                             if (other == &entity || (!getComponent<GameUnitComponent>(other)
                                 && !getComponent<GameStructureComponent>(other)))
-                                continue; // only the things that can pin us, never scenery
+                                return; // only the things that can pin us, never scenery
                             const glm::vec2 d = here - glm::vec2(other->pos.x, other->pos.z);
                             const float dSq = glm::dot(d, d);
                             if (dSq > 1e-6f && dSq < bestSq)
@@ -585,7 +581,7 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
                                 bestSq = dSq;
                                 away = d;
                             }
-                        }
+                        });
                         goalDir = bestSq < FLT_MAX ? away / std::sqrt(bestSq) : -goalDir;
                     }
                     wGoal = 1.5f;
@@ -756,11 +752,11 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
         {
             // GRADED exposure: the push equilibrium parks a pressing unit AT the shell surface
             // (opposing φ ~ iso), where a binary `inside` test read false most frames — units
-            // ground against bubbles taking no damage. Damage now ramps with field DEPTH: zero
-            // below iso x "Field damage starts (x iso)", full at the surface and beyond.
+            // ground against bubbles taking no damage. Damage ramps with field DEPTH instead:
+            // zero outside the field, full at the surface and beyond.
             // (fs.opposing is already the strongest NON-own field, so no owningTeam gate needed.)
             const float iso = glm::max(Globals::forceSystem.getParams().isoThreshold, 1e-3f);
-            const float exposure = glm::smoothstep(iso * params.fieldDamageStart, iso, fs.opposing);
+            const float exposure = glm::smoothstep(0.0f, iso, fs.opposing);
             if (exposure > 0.0f)
                 health = glm::max(0.0f,
                     health - params.fieldDps * params.fieldDpsMult * exposure * deltaSec);
@@ -1031,20 +1027,18 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
         // heal banked into their inbox (their own tick applies it). Never a roster walk.
         entity.setProfiled();
         const glm::vec3 pos = entity.pos;
-        thread_local oc::vector<uint64> nearby;
-        Globals::spatialIndex.querySphere(glm::dvec3(pos), params.medicRange, SpatialLayer_Render, nearby);
         const float amount = params.medicHealRate * deltaSec;
-        for (const uint64 user : nearby)
+        Globals::spatialIndex.forEachInSphere(glm::dvec3(pos), params.medicRange, SpatialLayer_Render, [&](uint64 user)
         {
             Entity* other = reinterpret_cast<Entity*>(user);
             GameUnitComponent* u = getComponent<GameUnitComponent>(other);
             if (!u || u->puppet || u->team != team || !u->alive())
-                continue;
+                return;
             const glm::vec3 d = other->pos - pos;
             if (d.x * d.x + d.z * d.z > params.medicRange * params.medicRange)
-                continue; // the sphere query is a broadphase on bounds
+                return; // the sphere query is a broadphase on bounds
             u->heal(amount);
-        }
+        });
     }
     else if (machineKind == EMachineKind::Turret && !blueprint)
     {
@@ -1056,24 +1050,22 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
         if (store[0] >= capacity[0] - 0.01f)
         {
             const glm::vec3 pos = entity.pos;
-            thread_local oc::vector<uint64> nearby;
-            Globals::spatialIndex.querySphere(glm::dvec3(pos), params.turretRange,
-                SpatialLayer_Render, nearby);
             Entity* target = nullptr;
             float bestDistSq = params.turretRange * params.turretRange;
-            for (const uint64 user : nearby)
+            Globals::spatialIndex.forEachInSphere(glm::dvec3(pos), params.turretRange,
+                SpatialLayer_Render, [&](uint64 user)
             {
                 Entity* other = reinterpret_cast<Entity*>(user);
                 const GameUnitComponent* u = getComponent<GameUnitComponent>(other);
                 if (!u || u->puppet || u->team == team || !u->alive())
-                    continue; // puppets are player capsules — turrets target only units (known gap)
+                    return; // puppets are player capsules — turrets target only units (known gap)
                 const glm::vec3 d = other->pos - pos;
                 if (glm::dot(d, d) < bestDistSq)
                 {
                     bestDistSq = glm::dot(d, d);
                     target = other;
                 }
-            }
+            });
             if (target)
             {
                 store[0] = glm::max(store[0] - capacity[0], 0.0f); // the bar restarts
@@ -1145,23 +1137,21 @@ void GameProjectileComponent::update(Entity& entity, float deltaSec)
     }
     if (emitterDrain > 0.0f)
     {
-        thread_local oc::vector<uint64> nearby;
-        Globals::spatialIndex.querySphere(glm::dvec3(pos), emitterDrainRadius, SpatialLayer_Render, nearby);
         GameStructureComponent* strain = nullptr;
         float best = emitterDrainRadius;
-        for (const uint64 user : nearby)
+        Globals::spatialIndex.forEachInSphere(glm::dvec3(pos), emitterDrainRadius, SpatialLayer_Render, [&](uint64 user)
         {
             Entity* other = reinterpret_cast<Entity*>(user);
             GameStructureComponent* sc = getComponent<GameStructureComponent>(other);
             if (!sc || !sc->strainable || sc->team == team)
-                continue;
+                return;
             const float d = glm::distance(glm::vec2(pos.x, pos.z), glm::vec2(other->pos.x, other->pos.z));
             if (d < best)
             {
                 best = d;
                 strain = sc;
             }
-        }
+        });
         if (strain)
             strain->addLoad(emitterDrain);
     }
@@ -1180,20 +1170,18 @@ void GameProjectileComponent::onContact(Entity& self, Entity& other, bool begin)
         // SPLASH: every enemy-team unit/structure within the radius of the impact point takes the
         // full hit (the touched victim included — it is inside the radius by definition). The
         // contact dispatch runs after the frame's spatial commit, so the query is legal here.
-        thread_local oc::vector<uint64> nearby;
-        Globals::spatialIndex.querySphere(glm::dvec3(self.pos), splashRadius, SpatialLayer_Render, nearby);
         const float r2 = splashRadius * splashRadius;
-        for (const uint64 user : nearby)
+        Globals::spatialIndex.forEachInSphere(glm::dvec3(self.pos), splashRadius, SpatialLayer_Render, [&](uint64 user)
         {
             Entity* victim = reinterpret_cast<Entity*>(user);
             const glm::vec3 d = victim->pos - self.pos;
             if (glm::dot(d, d) > r2)
-                continue;
+                return;
             if (GameUnitComponent* unit = getComponent<GameUnitComponent>(victim); unit && unit->team != team)
                 unit->damage(unitDamage);
             else if (GameStructureComponent* sc = getComponent<GameStructureComponent>(victim); sc && sc->team != team)
                 sc->damage(structureDamage);
-        }
+        });
     }
     else if (GameUnitComponent* unit = getComponent<GameUnitComponent>(&other); unit && unit->team != team)
         unit->damage(unitDamage);

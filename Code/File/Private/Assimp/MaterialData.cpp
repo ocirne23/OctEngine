@@ -30,6 +30,9 @@ MaterialData::~MaterialData()
 bool MaterialData::initialize(const aiMaterial* pMaterial)
 {
     m_pMaterial = pMaterial;
+    aiString name;
+    if (pMaterial->Get(AI_MATKEY_NAME, name) == aiReturn_SUCCESS)
+        m_name = name.C_Str();
     /*
 	printf("Material: %s\n", getName());
 	for (uint32 i = aiTextureType_DIFFUSE; i < AI_TEXTURE_TYPE_MAX; i++)
@@ -78,9 +81,7 @@ uint32 MaterialData::getMetalRoughnessTexIdx() const
 
 const char* MaterialData::getName() const
 {
-    static thread_local aiString name;
-    m_pMaterial->Get(AI_MATKEY_NAME, name);
-    return name.C_Str();
+    return m_name.c_str(); // read once at initialize (no per-call TLS buffer: loading runs on jobs)
 }
 
 glm::vec3 MaterialData::getBaseColor() const

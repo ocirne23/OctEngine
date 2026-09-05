@@ -27,9 +27,6 @@ export struct GameUnitParams
     float tension = 1.5f;          // surface tension: drain + push scale by (1 + tension*pressure)
     float fieldDps = 10.0f;        // health/s while squished below damageRadius under pressure
     float fieldDpsMult = 1.0f;     // global scale on the field exposure damage (x fieldDps)
-    float fieldDamageStart = 0.6f; // exposure ramp start as a fraction of iso: the push equilibrium
-                                   // parks pressing units AT the surface (opposing ~ iso), so damage
-                                   // ramps with field depth instead of a binary inside test
     float fieldPushStart = 0.7f;   // push ramp start as a fraction of iso: below it the field does
                                    // NOT shove, so units walk into the damage band instead of being
                                    // stopped out in the weak fringe before it (0 = push everywhere)

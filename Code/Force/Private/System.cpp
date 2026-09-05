@@ -187,6 +187,27 @@ bool ForceEmitter::isMerged() const
     return false;
 }
 
+bool ForceEmitter::getBubbleBounds(glm::vec3& center, float& radius, uint32* groupId) const
+{
+    const ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle);
+    if (!inst || !inst->active)
+        return false;
+    if (groupId)
+        *groupId = inst->group;
+    if (inst->group != 0)
+    {
+        const ForceSystem::MergeGroup& group = Globals::forceSystem.m_groups[inst->group - 1];
+        center = group.center;
+        radius = group.coverRadius;
+    }
+    else
+    {
+        center = inst->bubbleCenter;
+        radius = inst->bubbleRadius;
+    }
+    return radius > 0.0f;
+}
+
 glm::vec3 ForceEmitter::getAppliedForce() const
 {
     if (const ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))

@@ -76,8 +76,17 @@ around it) would otherwise be dormant. Greedy clusters over the non-AI units, re
 0.25 s: a unit farther than "Unit cluster focus radius" (40 m) from every focus seeds a new one, up
 to the 16-slot cap (players first, then clusters in roster order).
 
-With the LOD active the World visits ONLY entities within the outer tier radius of a focus point,
-plus `Global true` roots. A structure beyond that radius **does not tick at all** — no production, no
+**PLUS THE BASE FIELDS AS ZONES** (`World::setSimLodZones`, refreshed on the same 0.25 s timer):
+`StructureSystem::collectShieldBubbles` gathers every shield structure's bubble sphere — ONE sphere
+per merge group where they merged (friendly units in the group ride along), else the structure's own
+bubble; blueprints and unpowered emitters have no bubble and add none — up to the 64-zone cap in
+roster order. A zone stamps **tier 1 + a tier 2 band, never tier 0**. The structures themselves are
+`Global` (always ticking, fields always projected); what was missing was the ENEMY in their field:
+beyond every focus point it was unselected, and the far tick teleported it straight through the
+barrier. Inside a zone it ticks at tier 1 with its body live, so the field pushes it.
+
+With the LOD active the World visits ONLY entities within the outer tier radius of a focus point
+or a zone's band, plus `Global true` roots. A structure beyond that radius **does not tick at all** — no production, no
 flows, no turret fire.
 
 > **EVERY BUILDING prefab authors `Global true`** (emitter, generator, extractor, battery, fuel tank,
@@ -184,10 +193,10 @@ unlimited counts):
 * `opposing` / `opposingGradient` reproduce the SHIELDED units' exact push chain —
   `-grad × 0.35` (the 13-sample integral's mean self-weight) `× forceGain × pushGain × pressure ×
   tension`, speed-clamped — **so ONE "Field push gain" tweak rules both paths.**
-* Exposure damage is GRADED by field depth
-  (`smoothstep(iso × "Field damage starts", iso, opposing) × fieldDps × mult`), **because the push
-  equilibrium parks pressing units AT the surface** (`opposing ≈ iso`), where a binary inside test
-  read false and units ground on shells unharmed.
+* Exposure damage is GRADED by field depth (`smoothstep(0, iso, opposing) × fieldDps × mult`),
+  **because the push equilibrium parks pressing units AT the surface** (`opposing ≈ iso`), where a
+  binary inside test read false and units ground on shells unharmed. The ramp starts at zero field —
+  anywhere the opposing field is present does some damage.
 * The push itself also ramps from "Field push starts (x iso)" 0.7 — **below it the field does NOT
   shove, so units walk into the damage band instead of being stopped out in the weak fringe.**
 * ~3 frames latent.
@@ -264,7 +273,24 @@ rolls (budget math plus glm RNG, main-thread — `linearRand` is not thread-safe
 `NpcSystem::spawnLooseUnits`, one `World::spawnBatch` fan-out per frame, with team/order/roster fixup
 serial after the join.
 
-Wave spawn points roll up to 6 times against the last `c_waveRecentSpawns` (32) spawns at 2 m
+## The spawn blob
+
+Bodies land in a disc around `m_waveOrigin` (the ring point), **sized ONCE per wave in `queueWave`
+by `waveSpawnRadius`: the AREA scales with the wave's expected body count, so the areal density is
+the same in wave 1 and wave 20.** Body count = the queued points / the MIX's weighted mean cost, and
+`r = sqrt(bodies · "Wave spawn area per unit" / π)`, clamped to [8 m, the ground edge]. It rides the
+save (`WaveTrickle/Radius`), so a mid-wave load keeps the same blob.
+
+> The old formula grew the radius LINEARLY off the REMAINING budget and capped it at 30 m. Two
+> faults: a big wave stacked hundreds of bodies on one 30 m disc — and parked bodies never push each
+> other apart, so the pile only resolved as box3d shoved them out once a player came near — and the
+> disc SHRANK as the wave trickled, packing the tail tightest of all.
+
+The blob is clamped to the ground plane and any point inside the barrier square pushes back out
+along the wave's dominant axis, **so an oversized disc becomes a wide BAND along the barrier face** —
+the only direction with room, since the spawn band is just `c_coopGroundEdge − c_coopHalfSize` deep.
+
+Spawn points then roll up to 6 times against the last `c_waveRecentSpawns` (32) spawns at 2 m
 spacing, **so parked bodies rarely overlap in the first place.**
 
 Each unit is `orderMove`d to the Base's near face on the incoming side; the lock releases on arrival
@@ -321,10 +347,13 @@ follow radius. The "Nav follow radius" band may still walk an existing crowd lan
 
 Wave units stay order-driven until arrival or the first enemy structure inside "Order break radius", then the same gated AI takes over.
 
+**That standing order is therefore the ONLY thing that marks a wave unit**, so the F9 save carries it
+per unit (`Order`, see Save / load): without it a loaded wave stopped where it stood and held its
+patch like ambient scatter.
+
 ## Known gaps
 
 * **The Base takes damage but the death sweep never destroys it — no lose condition yet.**
-* The wave clock and pending counts are not saved (F10 re-arms).
 * Thousands of dynamic bodies is the AIM, not yet a measured budget. Knobs: Max enemy units, Spawns
   per frame, `Physics/World/Worker count`.
 
@@ -490,29 +519,41 @@ producer is served first (what a conveyor does).
 
 | | |
 |---|---|
-| Node | a segment / crossing: `fill` cells (soft capacity "Cells per segment" 4), out-rate = the medium's "… throughput" (cells/s), `moved` gauge |
-| Junction | one per (BUILT building, medium): the building's port. Every segment touching the building is its neighbour, **so a line through an emitter carries through**; its out-rate scales with its degree so the cable stays the bottleneck |
-| Slot | the building's port on its junction: role by type — **producer** (generator, solar; extractor fuel/minerals; fabricator minerals) pushes whole cells OUT of its float store, **consumer** pulls into its headroom, **storage** (battery and Base; fuel tank; Base and silo for MINERALS) pushes while the CABLE next to its port — the mean fill of its junction's neighbours, never the junction itself, which its own push fills — is at/below "Storage pushes below" (0.25) and pulls while at/above "Storage pulls above" (0.75): the fill is the price signal. **The Base's shield is FREE** (no per-second draw, no pressure surcharge — only the enemy siege load drains it), so the Base is a pure storage building: it banks for the grid and self-generates a trickle |
+| Node | a segment / crossing: `fill` cells (soft capacity per MEDIUM — "Cable / Pipeline / Conveyor cells per segment" 2 / 1 / 1: energy holds a burst, the slower media are pure transport), out-rate = the medium's "… throughput" (cells/s), `moved` gauge |
+| Junction | one per (BUILT building, medium): the building's PORT. Every segment touching the building is its neighbour, and those segments are also connected to EACH OTHER, **so a line through an emitter carries through cable-to-cable** — the port itself accepts cells only while a slot on it still wants some (nothing parks in a producer's port, nothing relays through it); its out-rate scales with its degree so the cable stays the bottleneck |
+| Slot | the building's port on its junction: role by type — **producer** (generator, solar; extractor fuel/minerals; fabricator minerals) pushes whole cells OUT of its float store, **consumer** pulls into its headroom, **storage** (battery and Base; fuel tank; Base and silo for MINERALS) reads the CABLE next to its port — the mean fill of its junction's neighbours, never the junction itself, which its own push fills — as the price signal, with TRUE hysteresis: it switches to PULLING when that fill reaches "Storage pulls above" (0.75) and keeps pulling until it drops to "Storage pushes below" (0.25), where it switches to PUSHING until the cable fills back up (a per-tick band idled a battery every other tick on 2-cell segments). **The Base's shield is FREE** (no per-second draw, no pressure surcharge — only the enemy siege load drains it), so the Base is a pure storage building: it banks for the grid and self-generates a trickle |
 | Tick | fixed "Transport tick rate" 10 Hz, runs staggered over "Transport spread" 4 groups so a big base's work lands on several frames |
 
-**Per tick, on main:** `kickTransport` — inject every due slot (a producer RESERVES its cells out of
-the store now; the unused part is refunded at the join; metered machines — barracks "energy
-intake", turret shot energy / fire interval — meter their demand with a carry), then ONE job.
+**Per tick, on main:** `kickTransport` — inject every due slot (supply capped at the port's free
+space; a PRODUCER's taken cells simply come off its store at the join — the transport is that
+store's only drain, so no reservation and no visible dip; STORAGE reserves, since the Base's siege
+load drains it meanwhile, refunded at the join; metered machines — barracks "energy intake", turret
+shot energy / fire interval — meter their demand with a carry), then ONE job.
 **The job** runs "Transport substeps" (4) × three owner-only passes: OFFER (a node serves its own
-slots' demand first, then FORWARDS everything it can into neighbours with free space that did not
-feed it last sub-step — the conveyor rule, `inMask`: never back where it came from, so a line runs
-full end to end with no fill gradient, a dead end fills up and stops, and equal neighbours never
-ping-pong — space-weighted with the integer remainder rotated, all inside its out-budget, which
+slots' demand first, then FORWARDS everything it can into neighbours with free space that are
+strictly DOWNHILL on THE DEMAND FIELD — `dist`, one BFS per run per tick from every port with
+unserved demand, through cables only (ports never relay; an unseeded port sits one hop above its
+best cable so it can still send) — and, with no such outlet, into cables (never ports) strictly
+UPHILL on THE SUPPLY FIELD — `sdist`, the same BFS from every port pushing supply — so cells travel
+toward demand when there is any and otherwise FILL the network outward from the producers until it
+is full: no fill gradient, nothing drifts back toward a source or into another producer's dead end,
+no ping-pong, loops are harmless — space-weighted with the integer remainder rotated, all inside
+its out-budget, which
 BANKS while idle, capped at two ticks, so a front crosses a segment per sub-step; then takes slot
 supply into its free space),
-APPLY (fill' = fill − out + the neighbours' out-slots aimed here), CLEAR. No atomics, no entity
-walk, scheduling-independent; a run over 1024 nodes fans its passes out, smaller runs stay inline.
+APPLY (fill' = fill − out + the neighbours' out-slots aimed here), CLEAR. **The due runs tick IN
+PARALLEL** (one job per run above a couple of runs; each run's BFS queue is its own slice of one
+shared buffer — no `thread_local`, no `PerWorker`: the nested fan-out below is a wait, and a job
+may resume on another thread after it); a run over 1024 nodes additionally fans its passes out per
+node. No atomics, no entity walk, scheduling-independent. Scopes: `Transport inject` /
+`Transport apply` (main), `Transport tick` → `Transport runs` → `Transport run` → `Transport
+offer/apply/clear` (job).
 **At the join** (`joinTransport`, top of the next tick) the cells land in the stores and
 `flowUtil` = the served fraction of what each port asked.
 
 Consumers still drain their internal float battery every production tick; empty = unpowered. A
 full producer buffer still throttles production. Cells in the cables are real: a long run buffers
-`segments × 4`, and a cut line keeps what it held (fills survive rebuilds by structure id, save as
+`segments × its medium's cells per segment`, and a cut line keeps what it held (fills survive rebuilds by structure id, save as
 `Fill`, and mirror to clients by id — `GCf`, rotating, 6 B a segment: the fill plus the ~2 s
 throughput average as a fraction of the rate, so clients draw the same bottleneck rings and label
 numbers).
@@ -574,6 +615,16 @@ cable may slot under a free crossing middle; a crossing's middle may bridge exac
 OR one END cell of another crossing (`isBridgeable` — an end counts as cable for bridging, so
 crossings chain and stack); its ends must be free** — plus the derivation and the arm visuals.
 `ignoreCables` is the unit-spawn probe, since cables are walk-through.
+
+> **A CROSSING is validated by `planCrossing`, not `cellsFree`** (both share `footprintAreaClear`
+> for the bounds / rock / reserved-node checks). One relaxation: an END cell may hold a plain cable
+> of the crossing's OWN medium and OWN team, which the placement **REPLACES** — that segment is
+> redundant under an end, which conducts that medium anyway, and refusing it meant a paint stroke
+> could not cross a foreign line wherever its own run already stood. Anything else (another medium,
+> a building, a second crossing, an enemy's cable) blocks exactly as before. `placeStructure`
+> demolishes the named segments right before the spawn, so the cells are free when `insertCells`
+> runs and the networks simply re-derive. **The replaced run is severed until the crossing is
+> BUILT** — a blueprint conducts nothing.
 
 **`isWalkThrough`** = cables, crossings AND the flat **Solar** slab: their prefab collider is `Layer
 Cable, CollidesWith Projectile`, so players and units pass over them, and the code treats them alike
@@ -708,7 +759,7 @@ page and mode slots get a one-liner instead.
 |---|---|---|
 | Q / W | **CMBT / PROD** | the category's items, in order |
 | A / S / D | **CBL-P / CBL-F / CBL-M** — the cables arm straight from the root (a hidden `c_cableCategory`, still drawn as the root page: `isRootPage`) | items 4–6 |
-| X (slot 9) | **DEL** | **DEL** (category pages cap at 9 items so X stays Delete) |
+| X (slot 9) | **DEL** — one demolish, then straight back to Select (the button releases itself) | **DEL** (category pages cap at 9 items so X stays Delete) |
 | C (slot 10) | **CNCL** — leaves Delete mode / disarms a cable, back to Select | **CNCL** — straight back to Select |
 | V (slot 11) | — | — |
 
@@ -820,9 +871,11 @@ after it is a bridgeable SOLE occupant of ANOTHER medium (`bridgeableAt` — a p
 crossing's end cell, with nothing bridging it), the stroke places **the stroke's OWN medium's crossing over that cell with its long
 axis along the stroke** (`crossingForMedium`): the held cell and the cell beyond become the
 crossing's two end cells and are never painted, so the painted run continues through the
-crossing's outward ends. A crossing the cells refuse (an end cell occupied, an actor on
-it, an L-turn at the foreign cell) falls back to the plain skip. Same-medium cells still just skip —
-the stroke merges into that run. The release AND the RMB cancel both land the held cell (it was
+crossing's outward ends. **An end cell that already holds this stroke's own medium is no obstacle:
+`planCrossing` replaces it** (see the cell hash), so re-crossing a line where the run already
+stands works. A crossing the cells still refuse (an end on another medium or a building, an actor
+on it, an L-turn at the foreign cell) falls back to the plain skip. Same-medium cells still just
+skip — the stroke merges into that run. The release AND the RMB cancel both land the held cell (it was
 already shown painted); switching items or disarming drops it.
 
 One placement burst caps at `c_cableMaxSegments` 32 GqP events.
@@ -1013,8 +1066,10 @@ and the bubble stays dark until a tiered visit.
 **The World's wake edge** (a fresh entity starts at `schedTier` 3, so its first stamped visit IS a
 wake) zeroes the velocities and enables it once a player is near.
 
-This is what makes a WAVE — spawned outside the barrier, far from everyone — reach the Base. **A unit
-that ARRIVES while no player is near stands frozen there**; structures are not focus points (known).
+This is what makes a WAVE — spawned outside the barrier, far from everyone — reach the Base. A unit
+that arrives at a shielded base enters its ZONE (see SIM LOD focus) and ticks at tier 1 there, so
+the field pushes it. **One that arrives at an UNSHIELDED target while no player is near stands
+frozen there** (known).
 
 ## `Friction 0` on every unit capsule
 
@@ -1118,9 +1173,14 @@ mutexed; `~GameMatch` joins it too.
 
 **HUD** through `Globals::gameHud`: bars Health / Shield / Materials, counters Minerals / Fuel / Power
 (co-op authority adds "Time" — the match clock as h:mm:ss of authority sim time, `m_matchTime`, saved
-as `MatchTime` — then "Next wave (s)" and "Next wave power" — the coming wave's budget points before
-the alive cap, `nextWaveBudget`),
+as `MatchTime` — then "Next wave (s)", "Next wave power" — the coming wave's budget points before
+the alive cap, `nextWaveBudget` — and "Enemies alive"),
 and hotbar slot counts = affordable.
+
+**"Enemies alive"** is `aiAliveCount()` — the NpcSystem roster size, which is also what the alive cap
+compares against "Max enemy units" in `queueWave`. It is O(1), so the HUD reads it every frame with
+no caching. **The roster is every unit**, so player-team barracks units count in it too, and a unit
+at 0 hp stays until its queued destroy drains.
 
 ---
 
@@ -1132,8 +1192,38 @@ A full sim snapshot to `Assets/Local/gamesave.txt` through AssetParser
 (`StructureSystem::saveTo` / `loadFrom` / `clearAllStructures`, `NpcSystem::saveUnits` / `loadUnits`,
 `GameMatch::saveGame` / `loadGame`): structures with id / type / pos / facing / node / team /
 blueprint / stores / route — **cable segments are ordinary Structure entries, with NO Cable nodes** —
-plus the map inputs. **Players and shots are NOT saved**; projectiles are transient and a load clears
-them.
+plus the map inputs and `PlayerPos`, the LOCAL player's body position. **Shots are NOT saved**;
+projectiles are transient and a load clears them.
+
+**The PENDING TRICKLE** rides along too (`saveTrickle` / `loadTrickle`, co-op only). A wave is sized
+in points at `queueWave` and its bodies materialize over the following frames, so a save mid-wave
+used to drop everything not yet spawned — an F9 during a big wave quietly shrank it. `WaveTrickle`
+carries the remaining points, WHERE they enter (`Origin`) and march (`Dest`), the blob `Radius`,
+`LastArchetype`, and
+the wave's rolled, JITTERED `Mix` — which cannot be re-derived from the archetype table.
+`AmbientTrickle` carries the world-start scatter's remaining points plus the group it is mid-way
+through placing. A resumed wave with points left **re-seeds its Nav lane**.
+
+> `loadTrickle` MUST run after `rebuildCoopMap` — that voids the in-progress ambient group, whose
+> anchor belongs to the old map. A save with NO trickle nodes (every save from before this existed)
+> CLEARS both budgets: that file is the complete state, and letting the running session's own
+> scatter continue on top of it would double-spawn. The spacing ring (`m_waveRecent`) is deliberately
+> not saved — it only rejects spots for a handful of spawns.
+
+Units save type / team / pos / health / energy / source / route index **plus `Order`, the standing
+MOVE ORDER destination** — written only for a real move order, never for a transient `wanderOrder`
+stroll. `loadUnits` replays it through `orderMove(pos, fresh=false)`, so a loaded co-op wave keeps
+marching on the Base instead of parking (see **Targeting range gates**: the order is the only wave
+marker). A save without the key loads AI-driven, as before.
+
+`PlayerPos` is written only when the instance owns a capsule (headless writes no key), and a load
+without the key leaves the player put — so old saves still load. The load runs
+`GamePlayer::teleport`, which follows the same **teleport contract** as the death respawn: physics
+teleport, zeroed velocity, both interpolation poses stomped and the step stamp refreshed, plus the
+standing move order dropped. Both call sites — F10 in `updateWindowed` and the `--scenario` timer —
+are main thread and PRE-`physics.update`, so those direct body setters are sanctioned.
+**REMOTE players are not saved, and no player STATE is** (health, energy, materials): a load leaves
+every player's pools as they are.
 
 > **SAVE COMPAT: `Type` is the raw enum INT, so `EStructureType` values are never removed or
 > reordered.** New types APPEND before Count; the retired Connector (index 2) keeps its dead slot
