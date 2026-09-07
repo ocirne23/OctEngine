@@ -3,6 +3,7 @@ module Entity;
 import Core;
 import Core.glm;
 import Core.Transform;
+import Core.Time; // the seed-request clock
 import :Entity;
 import Force;
 import Physics;
@@ -103,7 +104,7 @@ void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
     m_retargetTimer = 0.0f; // pick a target on the first authority tick
     // Random PHASE on the periodic timers: a barracks batch spawns in one frame, and without this
     // every unit of it would ask for a plan (and checkpoint its progress) on the same tick forever.
-    m_seedTimer = params.seedRequestInterval * unitRand01(m_rng);
+    m_seedDue = (float)Globals::time.getSimElapsedSec() + params.seedRequestInterval * unitRand01(m_rng);
     m_stuckCheckTimer = 0.75f * unitRand01(m_rng);
     if (const PhysicsComponent::SpawnInfo* si = getPhysicsSpawnInfo(&entity))
     {
@@ -515,13 +516,14 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
             // up with the group. Only ROUTES and MOVE ORDERS seed — a HUNTED target (nav field,
             // local search, engage) seeds only for params.huntSeedTeam (the co-op AI): friendly
             // units chasing an enemy must not carve lanes toward it.
-            m_seedTimer -= deltaSec;
+            // The due time is on the SIM CLOCK, independent of the tier's tick rate (see m_seedDue).
+            const float simNow = (float)Globals::time.getSimElapsedSec();
             // A WANDER never seeds, hunt-seed team or not (the co-op AI is that team, and its
             // strolls were carving lanes to random points).
             const bool wandering = targetLocked && moveOrder && wanderOrder;
-            if (m_seedTimer <= 0.0f && !wandering && (walkIsOrder || (int)team == params.huntSeedTeam))
+            if (simNow >= m_seedDue && !wandering && (walkIsOrder || (int)team == params.huntSeedTeam))
             {
-                m_seedTimer = params.seedRequestInterval * (0.75f + 0.5f * unitRand01(m_rng));
+                m_seedDue = simNow + params.seedRequestInterval * (0.75f + 0.5f * unitRand01(m_rng));
                 const std::lock_guard<std::mutex> lock(g_unitEventMutex);
                 g_seedRequests.push_back(SeedRequest{ pos, walkTarget, (uint8)team,
                     m_pressureTimer > params.unstickAfter });

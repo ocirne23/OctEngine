@@ -157,7 +157,7 @@ int main(int argc, char* argv[])
         // can never sit in a multi-second Low job (V3 tile, nav build) when the next pump is due.
         window.runOnWindowThread([] { Globals::jobSystem.registerExternalHelper(); }, /*wait*/ true);
         window.setIdleWork([] { return Globals::jobSystem.tryRunOneHighJob(); },
-                           [] { Globals::jobSystem.externalHelperWait(); },
+                           [](bool (*wakeNow)(const void*), const void* user) { Globals::jobSystem.externalHelperWait(wakeNow, user); },
                            [] { Globals::jobSystem.wakeExternalHelper(); });
     }
     if (!headlessServer)

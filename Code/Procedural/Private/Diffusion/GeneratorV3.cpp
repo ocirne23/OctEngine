@@ -1315,6 +1315,10 @@ namespace Procedural
 				const Sample s = sampleFromBlock(block, wx, wz);
 				fill(wx, wz, s, /*withDetail*/ !coarse, out[(size_t)j * resX + i]);
 			}
+			// A ~262k-texel fill on a Low pump or bake job: let higher-priority work through between
+			// rows. No lock is held here (the block is resolved, the fill is lock-free), so a
+			// pre-empting sampler cannot deadlock on m_pipelineMutex. Outside a job this is a no-op.
+			Globals::jobSystem.preemptionPoint();
 		}
 	}
 }

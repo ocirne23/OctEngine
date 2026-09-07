@@ -1,6 +1,7 @@
 module;
 
 #include <intrin.h>
+#pragma comment(lib, "Synchronization.lib") // WaitOnAddress with a timeout (idle's forced sleep)
 
 module Threading;
 
@@ -22,6 +23,23 @@ static thread_local WorkerContext* t_worker = nullptr;
 // just waits; the workers guarantee progress.
 static thread_local uint32 t_helpDepth = 0;
 static constexpr uint32 MaxHelpDepth = 4;
+
+// The external helper's consecutive failed High-ring pops (tryRunOneHighJob): past a few,
+// externalHelperWait treats a ring that "looks" non-empty as a claimed-but-unpublished cell and
+// sleeps timed instead of returning to spin - the same case as WorkerContext::idleStreak.
+static thread_local uint32 t_helperMissStreak = 0;
+
+// The innermost job executing on a NON-FIBER thread (main helping, the window helper, a timer-
+// thread inline fallback). On a fiber the same slot is Fiber::currentJob, because it must travel
+// with the fiber across a park: a resumed fiber lands on a thread whose own slot says nothing about
+// it. currentJobSlot() picks the right one; re-resolve it after anything that can park.
+static thread_local Job* t_currentJob = nullptr;
+
+static Job** currentJobSlot()
+{
+    WorkerContext* ctx = t_worker;
+    return (ctx && ctx->currentFiber) ? &ctx->currentFiber->currentJob : &t_currentJob;
+}
 
 // ThreadLocalScope's pin count on this thread (debug only). Nonzero = job code on this thread is
 // mid-use of thread-local state, so nothing may park this fiber or run another job body here.
@@ -139,6 +157,12 @@ void JobSystem::initialize(const JobSystemDesc& desc)
         m_contexts[i].deque.initialize(desc.dequeCapacity);
     }
     t_worker = &m_contexts[0]; // the calling (main) thread becomes the helper context
+    // MAIN THREAD SPECIAL CASE: the frame's critical path, and the producer of most of the
+    // frame's submits. workers + main + window cover every hardware thread, so any other thread
+    // (audio, a driver, the OS) preempts one of them; when that is main, mid-submit, ABOVE_NORMAL
+    // gets it a core back ahead of the equal-priority workers instead of after their quantum.
+    static constexpr int c_threadPriorityAboveNormal = 1; // THREAD_PRIORITY_ABOVE_NORMAL: a macro, does not cross the header-unit boundary
+    SetThreadPriority(GetCurrentThread(), c_threadPriorityAboveNormal);
 
     m_running.store(true);
     m_threads.reserve(m_numWorkers);
@@ -224,6 +248,7 @@ JobSystemStats JobSystem::getStats() const
         stats.numParked += ctx.numParked;
         stats.numResumed += ctx.numResumed;
         stats.numSleeps += ctx.numSleeps;
+        stats.numPreempted += ctx.numPreempted;
         stats.busyNs += ctx.busyNs;
     }
     return stats;
@@ -302,6 +327,7 @@ void JobSystem::workerMain(uint32 contextIndex)
         if (m_resumeQueue.pop(fiber)) // resumed waits first: they hold fibers and gate dependents
         {
             ctx.numResumed++;
+            ctx.idleStreak = 0;
             runFiber(ctx, fiber);
             continue;
         }
@@ -314,12 +340,18 @@ void JobSystem::workerMain(uint32 contextIndex)
             {
                 fiber = &m_fibers[fiberIndex];
                 fiber->job = job;
+                ctx.idleStreak = 0;
                 runFiber(ctx, fiber);
                 continue;
             }
             m_freeFibers.push(fiberIndex);
         }
-        idle(ctx);
+        // A miss streak of a few rounds means a ring LOOKS non-empty but nothing can be popped:
+        // a producer claimed a cell and was preempted before publishing it. Sleep anyway (its
+        // wake comes after the publish); spinning on it keeps every core hot, which is exactly
+        // what stops the OS from rescheduling that producer - a full quantum lost, seen live as
+        // 15-25 ms of the whole system frozen in a submit loop.
+        idle(ctx, ++ctx.idleStreak >= 4);
     }
     ConvertFiberToThread();
     t_worker = nullptr;
@@ -333,6 +365,10 @@ void JobSystem::execute(Job& job)
         ctx->numExecuted++;
     const bool timed = (job.flags & EJobFlag_Untimed) == 0;
     const Clock::time_point timedStart = timed ? Clock::now() : Clock::time_point{};
+    // publish this job as the current one (preemptionPoint reads its priority); nested inline
+    // runs (helpWait, a pre-emption point) stack, so the outer one is put back afterwards
+    Job* const outerJob = *currentJobSlot();
+    *currentJobSlot() = &job;
     if (job.name) // REQUIRED for submitted jobs; graph jobs carry their node name. The scope
     {             // migrates with the fiber if the body parks, like any other ProfileScope.
         ProfileScope profileScope(job.name, job.profileCategory);
@@ -340,6 +376,7 @@ void JobSystem::execute(Job& job)
     }
     else
         job.invoke(job.storage);
+    *currentJobSlot() = outerJob; // re-resolved: a fiber slot follows the fiber to whichever thread resumed it
     if (timed)
     {
         // wall time, min 1us: parked waits inside the job count (they occupy dependency-time on
@@ -545,27 +582,41 @@ void JobSystem::dropJob(Job* job)
         signalCounter(*signal);
 }
 
-void JobSystem::idle(WorkerContext& ctx)
+void JobSystem::idle(WorkerContext& ctx, bool forceSleep)
 {
     // brief spin: catch work landing within ~a microsecond without a kernel round-trip
-    for (uint32 spin = 0; spin < 8; ++spin)
-    {
-        for (uint32 pause = 0; pause < 8; ++pause)
-            _mm_pause();
-        if (anyWorkForWorker())
-            return;
-    }
+    if (!forceSleep)
+        for (uint32 spin = 0; spin < 8; ++spin)
+        {
+            for (uint32 pause = 0; pause < 8; ++pause)
+                _mm_pause();
+            if (anyWorkForWorker())
+                return;
+        }
     const uint32 epoch = m_wakeEpoch.load(oc::memory_order_acquire);
     m_numSleepers.fetch_add(1, oc::memory_order_seq_cst);
     // recheck AFTER announcing the sleep (Dekker with wakeMany): either we see the work here or
-    // the submitter sees us and bumps the epoch
+    // the submitter sees us and bumps the epoch. The recheck is APPROXIMATE (wasEmpty): a cell a
+    // producer claimed but has not published yet reads as work, and the caller has just failed
+    // to pop it. forceSleep therefore turns "work seen: return and retry" into a TIMED sleep - a
+    // real push after our announce still wakes us at once (the epoch moves), and a producer
+    // preempted mid-publish costs at most a millisecond, with this core handed back to the OS
+    // so that producer can be rescheduled. Anything else spun here with every core hot.
+    bool timed = false;
     if (anyWorkForWorker())
     {
-        m_numSleepers.fetch_sub(1, oc::memory_order_relaxed);
-        return;
+        if (!forceSleep)
+        {
+            m_numSleepers.fetch_sub(1, oc::memory_order_relaxed);
+            return;
+        }
+        timed = true;
     }
     ctx.numSleeps++;
-    m_wakeEpoch.wait(epoch, oc::memory_order_acquire);
+    if (timed)
+        WaitOnAddress(&m_wakeEpoch, const_cast<uint32*>(&epoch), sizeof(epoch), 1); // 1 ms cap; oc::atomic::wait has no timeout
+    else
+        m_wakeEpoch.wait(epoch, oc::memory_order_acquire);
     m_numSleepers.fetch_sub(1, oc::memory_order_relaxed);
 }
 
@@ -592,12 +643,25 @@ void JobSystem::wakeMany(uint32 count)
     const uint32 sleepers = m_numSleepers.load(oc::memory_order_relaxed);
     if (!sleepers)
         return;
-    m_wakeEpoch.fetch_add(1, oc::memory_order_release);
-    if (count >= sleepers)
-        m_wakeEpoch.notify_all();
+    const auto notify = [&]
+    {
+        m_wakeEpoch.fetch_add(1, oc::memory_order_release);
+        if (count >= sleepers)
+            m_wakeEpoch.notify_all();
+        else
+            for (uint32 i = 0; i < count; ++i)
+                m_wakeEpoch.notify_one();
+    };
+    // Scoped on registered contexts: the notify is a kernel call (WakeByAddress), the one thing a
+    // submit does that can take real time - so a submit-heavy span on the profiler shows whether
+    // the wakes are it. An unregistered thread (a JobMutex unlock from outside) has no track.
+    if (t_worker)
+    {
+        ProfileScope scope("Worker wake", EProfileCategory::Threading);
+        notify();
+    }
     else
-        for (uint32 i = 0; i < count; ++i)
-            m_wakeEpoch.notify_one();
+        notify();
 }
 
 void JobSystem::wait(JobCounter& counter)
@@ -637,23 +701,38 @@ void JobSystem::registerExternalHelper()
     t_worker = &m_contexts[m_numWorkers + 1];
 }
 
-void JobSystem::externalHelperWait()
+void JobSystem::externalHelperWait(bool (*wakeNow)(const void*), const void* user)
 {
     const uint32 epoch = m_helperEpoch.load(oc::memory_order_acquire);
     m_helperSleeping.store(1, oc::memory_order_relaxed);
     // pairs with the seq_cst fence on the submit side: at least one of us sees the other
     oc::atomic_thread_fence(oc::memory_order_seq_cst);
-    if (!m_readyQueues[uint32(EJobPriority::High)].wasEmpty() || !m_running.load(oc::memory_order_relaxed))
+    // Every wake condition is re-checked here, AFTER the epoch load: a wakeExternalHelper() that
+    // ran before it bumped an epoch we are now holding, so the wait below would not see it. The
+    // caller's own condition (the pump request) must be part of this recheck for the same reason.
+    if (!m_running.load(oc::memory_order_relaxed) || (wakeNow && wakeNow(user)))
     {
         m_helperSleeping.store(0, oc::memory_order_relaxed);
         return;
     }
-    m_helperEpoch.wait(epoch, oc::memory_order_acquire);
+    // A ring that LOOKS non-empty after a streak of failed pops is a claimed-but-unpublished
+    // cell (a preempted producer): sleep TIMED instead of returning to spin - see idle().
+    const bool looksNonEmpty = !m_readyQueues[uint32(EJobPriority::High)].wasEmpty();
+    if (looksNonEmpty && t_helperMissStreak < 4)
+    {
+        m_helperSleeping.store(0, oc::memory_order_relaxed);
+        return;
+    }
+    if (looksNonEmpty)
+        WaitOnAddress(&m_helperEpoch, const_cast<uint32*>(&epoch), sizeof(epoch), 1);
+    else
+        m_helperEpoch.wait(epoch, oc::memory_order_acquire);
     m_helperSleeping.store(0, oc::memory_order_relaxed);
 }
 
 void JobSystem::wakeExternalHelper()
 {
+    ProfileScope scope("Helper wake", EProfileCategory::Threading); // kernel call, see wakeMany
     m_helperEpoch.fetch_add(1, oc::memory_order_release);
     m_helperEpoch.notify_one();
 }
@@ -665,7 +744,11 @@ bool JobSystem::tryRunOneHighJob()
         return false;
     Job* job;
     if (!m_readyQueues[uint32(EJobPriority::High)].pop(job))
+    {
+        ++t_helperMissStreak;
         return false;
+    }
+    t_helperMissStreak = 0;
     assertNotThreadLocalPinned();
     ++t_helpDepth;
     execute(*job);
@@ -686,6 +769,88 @@ bool JobSystem::tryRunOneJob()
     execute(*job);
     --t_helpDepth;
     return true;
+}
+
+bool JobSystem::preemptionPoint()
+{
+    WorkerContext* ctx = t_worker;
+    if (!ctx)
+        return false;
+    const Job* job = *currentJobSlot();
+    if (!job || job->effectivePriority == EJobPriority::High) // not in a job, or nothing outranks it
+        return false;
+    const EJobPriority mine = job->effectivePriority;
+    if (!hasHigherPriorityReady(mine))
+        return false;
+    return runHigherPriorityJobs(mine);
+}
+
+bool JobSystem::hasHigherPriorityReady(EJobPriority mine) const
+{
+    // the shared rings only: the deques hold continuations of mixed priority, and a job sitting
+    // in some other worker's deque is that worker's next pop anyway
+    for (uint32 p = 0; p < uint32(mine); ++p)
+        if (!m_readyQueues[p].wasEmpty())
+            return true;
+    return false;
+}
+
+bool JobSystem::runHigherPriorityJobs(EJobPriority mine)
+{
+    // Runs each ready job above `mine` INLINE, nested inside the current job, and returns once the
+    // higher rings are empty. Nesting is bounded by the priority count (a nested Normal job can only
+    // reach a High one), so a fiber needs no depth cap; a non-fiber stack keeps wait()'s cap.
+    WorkerContext* ctx = t_worker;
+    if (!ctx)
+        return false;
+    const bool onFiber = ctx->currentFiber != nullptr;
+    if (!onFiber && t_helpDepth >= MaxHelpDepth)
+        return false;
+    assertNotThreadLocalPinned(); // the nested bodies would run on this thread's pinned TLS
+    const auto popHigher = [this, mine]() -> Job*
+    {
+        Job* job = nullptr;
+        for (uint32 p = 0; p < uint32(mine) && !m_readyQueues[p].pop(job); ++p) {}
+        return job;
+    };
+    Job* job = popHigher();
+    if (!job)
+        return false;
+    // The marker: one "Pre-emption" span per point that ran something, nested inside the
+    // interrupted job's own scope, with the jobs it ran as its children - so the profiler shows
+    // WHERE a job was interrupted and by WHAT. It migrates with the fiber like any scope.
+    ProfileScope scope("Pre-emption", EProfileCategory::Threading);
+    bool ran = false;
+    do
+    {
+        if (job->flags & EJobFlag_ForeignWait)
+        {
+            // Its wait may be for exactly the job suspended beneath it on this stack (the deadlock
+            // helpWait refuses at depth >= 1); a fiber context that STARTS it parks instead. Back to
+            // its SHARED ring, not this worker's deque: main's help and the window thread only see
+            // the rings, and a High "Begin frame job" parked in the deque of a worker mid-way
+            // through a seconds-long Low job would wait out that job. The next point pops it again
+            // - two ring ops per chunk, and the wake below is a no-op unless someone sleeps.
+            if (!m_readyQueues[uint32(job->effectivePriority)].push(job))
+                submitReady(job); // transiently full: the general path still never drops it
+            else
+            {
+                wakeOne();
+                if (job->effectivePriority == EJobPriority::High && m_helperSleeping.load(oc::memory_order_relaxed))
+                    wakeExternalHelper();
+            }
+            return ran;
+        }
+        ctx->numPreempted++;
+        if (!onFiber)
+            ++t_helpDepth;
+        execute(*job);
+        if (!onFiber)
+            --t_helpDepth;
+        ran = true;
+        ctx = t_worker; // re-read: the nested job may have parked and migrated this fiber
+    } while ((job = popHigher()) != nullptr);
+    return ran;
 }
 
 void JobSystem::helpWait(JobCounter& counter, WorkerContext& ctx)

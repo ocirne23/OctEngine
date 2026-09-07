@@ -208,8 +208,8 @@ export struct JobSystemDesc
     uint32 numFibers = 64;                 // max concurrently started-but-unfinished jobs (parked waits hold one)
     uint32 fiberStackCommit = 64 * 1024;
     uint32 fiberStackReserve = 512 * 1024;
-    uint32 jobPoolCapacity = 32768;         // ad-hoc jobs in flight (rounded up to a power of two)
-    uint32 queueCapacity = 16384;           // per priority class (rounded up to a power of two)
+    uint32 jobPoolCapacity = 65536;         // ad-hoc jobs in flight (rounded up to a power of two): 8 MB of Jobs
+    uint32 queueCapacity = 65536;           // per priority class (rounded up to a power of two): a whole pool can sit in one ring
     uint32 dequeCapacity = 4096;            // per worker (rounded up to a power of two)
     uint32 postUpdateQueueCapacity = 1024;  // submitPostUpdate jobs awaiting the frame's kick
     uint32 parallelForTargetChunkNs = 25000; // auto-grain (JobCost overload) aims chunks at this duration
@@ -226,5 +226,6 @@ export struct JobSystemStats
     uint64 numResumed = 0;
     uint64 numSleeps = 0;    // workers going through a kernel wait
     uint64 numInlineFallbacks = 0; // pool/queue exhaustion made a submit run on the calling thread
+    uint64 numPreempted = 0; // higher-priority jobs run inline at a pre-emption point (see JobSystem::preemptionPoint)
     uint64 busyNs = 0;       // summed measured job wall time across contexts (timed jobs)
 };

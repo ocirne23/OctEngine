@@ -36,14 +36,14 @@ ONE loop and ONE init sequence for every mode; `headlessServer` branches inside 
 | 15 | `scriptContext.update(...)` | |
 | 16 | **`world.joinSelection()`**, then **KICKS: `getCullView` → `spatialIndex.kickUpdateJob` → `renderer.kickBeginFrameJob`** | The join: last frame's SIM LOD selection query (fired at the end of `world.update`, it had the whole frame) must be done before the commit inside the spatial kick — normally a no-op. Kicks under a `"Frame kicks"` scope, **which attributes the submit + wake cost that used to read as a gap.** |
 | 17 | `physics.update(simDt)` | ≤ 1 step; contact events stay buffered. |
-| 18 | `audio.update` → `navSystem.update` → **`joinBeginFrameJob` → `joinUpdateJob`** | Headless instead calls `spatialIndex.commitFrame()`. |
+| 18 | `audio.update` → **`joinBeginFrameJob` → `joinUpdateJob`** | Headless instead calls `spatialIndex.commitFrame()`. |
 | 19 | `game->update(simDt)` **or** `world.setSimLodFocus(&camera.position, 1)` | The rest of the game tick; also publishes the SIM LOD focus. |
 | 20 | `physics.dispatchContactEvents(...)` | **AFTER the joins** — contact scripts query the index and can touch renderer state. |
 | 21 | **`world.update(renderer, simDt)`** | The parallel entity pass. |
 | 22 | `networkManager.send(dt)` | Server: snapshot entities at their POST-update poses. |
 | 23 | terrain → collider → ocean → scatter → particles → force | |
 | 24 | `ui.drawGizmoEntity` → `game->joinWorldLabels()` → **`ui.update(...)`** | The game's world-labels job (kicked at the end of its tick, row 19, overlapping the entity pass) feeds the widget pass's HUD overlay, so it joins right before the pass is queued. |
-| 25 | **`kickPostUpdateJobs()` → `renderer.present()`** | Headless kicks too — **an unkicked queue only fills up.** |
+| 25 | **`navSystem.update`** → **`kickPostUpdateJobs()` → `renderer.present()`** | The nav publish + its Low-priority build kicks go LAST before the post-update kick, so the build slices run through present and the fence wait instead of next to the cull chunks (they used to kick at row 18, right after the spatial kick, and delay it). It also queues the field-steps job that rides this kick. A finished build publishes one frame later. Headless kicks too — **an unkicked queue only fills up.** |
 | 26 | `mainLoopScope.stop()` → `profiler.endFrame()` | **The scope stops BEFORE the frame mark, so the record stays inside this frame's window.** |
 | 27 | Headless: Sleep-based tick limiter | |
 
@@ -51,7 +51,7 @@ After the loop: `joinPostUpdateJobs()` and `forceSystem.joinMerge()` for the fin
 
 > **The quiescent window (16 → 18) is the whole point.** The drains, net receive and `game.updatePlayer`
 > above it are the last registers and container loads, and `physics.update` no longer fires contact
-> scripts — so the cull and begin-frame jobs overlap the physics step, audio and the nav publish.
+> scripts — so the cull and begin-frame jobs overlap the physics step and audio.
 > **Nothing added between the kicks and the joins may touch the spatial index or renderer frame
 > state.**
 

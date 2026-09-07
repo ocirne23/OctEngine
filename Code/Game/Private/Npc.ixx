@@ -44,9 +44,9 @@ public:
     // damage() call as every other victim, and the game drains it to the owning instance.
     void service(StructureSystem& structures);
 
-    // Units inside the view frustum — the overhead labels only draw what is on screen, so they
-    // never ask for more than that.
-    static void queryVisibleUnits(const Camera& camera, oc::vector<Entity*>& out);
+    // Units inside the view frustum AND within maxDist of the camera — the overhead labels only
+    // draw what is on screen and readable, so they never ask for more than that.
+    static void queryVisibleUnits(const Camera& camera, float maxDist, oc::vector<Entity*>& out);
     void queryAllUnits(oc::vector<Entity*>& out) const; // roster walk: save/load + the profiling scenario
 	int getNumUnits() const { return (int)m_units.size(); }
 

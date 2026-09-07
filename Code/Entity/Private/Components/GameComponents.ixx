@@ -307,7 +307,10 @@ private:
     float m_fireTimer = 0.0f;
     uint32 m_rng = 0;           // tiny per-unit LCG — worker-safe, seeded from the entity address
     float m_pressureTimer = 0.0f; // stalled time (displacement checkpoints) -> weights + pressure
-    float m_seedTimer = 0.0f;       // per-unit cooldown on lane requests (the area limiter is global)
+    // Lane requests are due at an ABSOLUTE sim time, not on a countdown of the tick delta: a
+    // throttled tick hands the unit a delta capped at "Max catch-up" frames, so a countdown ran
+    // ~8x slow at tier 2. The request cadence must not depend on the SIM LOD tier.
+    float m_seedDue = 0.0f; // sim seconds (Time::getSimElapsedSec) of the next request; the area limiter is global
     float m_ignoreFlowTimer = 0.0f; // > 0: the lane term is skipped (fresh move order)
     glm::vec2 m_stuckAnchor{ 0.0f };
     float m_stuckCheckTimer = 0.0f;

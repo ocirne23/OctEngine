@@ -64,8 +64,16 @@ void Window::threadMain(oc::string title, glm::ivec2 size)
         if (m_idleWait)
         {
             // Parks in the job system's helper eventcount: woken by High submissions (physics
-            // fan-outs, spatial stamps) AND by requestPump via the wake hook.
-            m_idleWait();
+            // fan-outs, spatial stamps) AND by requestPump via the wake hook. The predicate is the
+            // pump check again, re-run INSIDE the park after it announced itself: a request that
+            // landed between the check at the loop top and the park's epoch read has already
+            // fired its wake, and without the recheck the park would sleep through it (main then
+            // busy-waits on the pump forever - seen live).
+            m_idleWait([](const void* self)
+            {
+                const Window& w = *static_cast<const Window*>(self);
+                return int32(w.m_pumpRequested.load(oc::memory_order_acquire) - w.m_pumpServed.load(oc::memory_order_relaxed)) > 0;
+            }, this);
             continue;
         }
         // No hooks wired yet (pre-jobSystem init): park on the pump epoch alone.
@@ -164,7 +172,7 @@ void Window::runOnWindowThread(oc::function<void()> op, bool wait)
     }
 }
 
-void Window::setIdleWork(oc::function<bool()> work, oc::function<void()> wait, oc::function<void()> wake)
+void Window::setIdleWork(oc::function<bool()> work, IdleWaitFunc wait, oc::function<void()> wake)
 {
     m_wakeIdle = oc::move(wake); // main-side: requestPump (main) is its only reader
     // work/wait are installed on the window thread itself so they are never raced.

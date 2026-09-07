@@ -19,7 +19,9 @@ struct Fiber
 
     void* handle = nullptr;      // Win32 fiber
     void* returnFiber = nullptr; // scheduler fiber of the worker currently running us
-    Job* job = nullptr;
+    Job* job = nullptr;          // the job this fiber was started for
+    Job* currentJob = nullptr;   // the INNERMOST job executing on it: `job`, or a higher-priority job
+                                 // nested inside it by a pre-emption point (see JobSystem::preemptionPoint)
     EState state = EState::Idle;
     oc::atomic<uint32> switchDone = 0;  // parked fiber has fully switched out; resumers spin on this
     oc::atomic<uint32> debugRunning = 0; // debug-only tripwire: a fiber must never run on two workers
@@ -40,12 +42,14 @@ struct alignas(64) WorkerContext
     void* schedulerFiber = nullptr;
     uint32 index = 0;
     uint32 stealSeed = 0;
+    uint32 idleStreak = 0;          // consecutive getWork misses; past a few, idle() sleeps even if a ring "looks" non-empty
     bool isWorker = false;          // false for the registered main thread (helps in wait, never parks)
     uint64 numExecuted = 0;
     uint64 numStolen = 0;
     uint64 numParked = 0;
     uint64 numResumed = 0;
     uint64 numSleeps = 0;
+    uint64 numPreempted = 0; // higher-priority jobs this context ran inline at a pre-emption point
     uint64 busyNs = 0; // summed measured job time (timed jobs only)
 };
 
@@ -191,6 +195,23 @@ public:
     // Registered non-worker threads (main) can pump one ready job manually, e.g. to burn a stall.
     bool tryRunOneJob();
 
+    // PRE-EMPTION POINT. Call from inside a long Normal/Low job body at a spot where nothing is
+    // half-done: every job of a STRICTLY HIGHER priority waiting in the shared rings runs to
+    // completion right here, on the caller's fiber/stack, before this returns - the calling job
+    // is interrupted for exactly that long. Returns true when at least one job ran. Fibers cannot
+    // be interrupted asynchronously (no safe point to switch a stack out from under it), so
+    // pre-emption is COOPERATIVE: a job that never reaches a point is never interrupted. A
+    // Normal/Low parallelFor reaches one BETWEEN CHUNKS automatically; a hand-written loop calls
+    // this itself, e.g. once per outer iteration. A High job returns false at once.
+    // Rules, the same as for a job run inline by wait():
+    //  * no ThreadLocalScope may be alive (the nested body would run on the pinned TLS) - asserted;
+    //  * do not call while holding a JobMutex the nested job could take (it would park this fiber
+    //    behind the very job that holds the lock);
+    //  * EJobFlag_ForeignWait jobs are never run here (they go back to the ring): their wait could
+    //    be for exactly the job suspended beneath them on this stack.
+    // The cheap path - no higher-priority work queued - is one relaxed load per higher ring.
+    bool preemptionPoint();
+
     // ThreadLocalScope's per-thread pin count (see the class below): +1 / -1 on the calling
     // thread. A no-op in non-debug.
     static void debugThreadLocalPin(int delta);
@@ -208,7 +229,11 @@ public:
     // window's requestPump wires this so a pump request always outranks the nap). Deliberately NOT
     // the workers' eventcount: the helper waking for a job it cannot take (Normal/Low) would eat a
     // wake a real worker needed.
-    void externalHelperWait();
+    // wakeNow(user) is the CALLER'S wake condition (the window's "pump requested"), re-checked
+    // AFTER the sleep is announced: a wakeExternalHelper() that lands between the caller's own
+    // check and the epoch load here would otherwise bump an epoch nobody had read yet - a lost
+    // wake, and main busy-waits on the pump forever. Pass nullptr when there is no such condition.
+    void externalHelperWait(bool (*wakeNow)(const void*), const void* user);
     void wakeExternalHelper();
 
     // Splits [begin, end) into grainSize chunks pulled from a shared atomic cursor by
@@ -305,12 +330,14 @@ private:
             uint32 grain;
             JobCost* cost;
             std::remove_reference_t<Func>* func;
+            EJobPriority priority;
         };
-        Shared shared{ begin, end, grainSize, cost, &func };
-        auto runner = [&shared]()
+        Shared shared{ begin, end, grainSize, cost, &func, priority };
+        auto runner = [&shared, this]()
         {
             const Clock::time_point start = shared.cost ? Clock::now() : Clock::time_point{};
             uint32 numItems = 0;
+            uint64 preemptedNs = 0;
             for (;;)
             {
                 const uint64 chunkBegin = shared.next.fetch_add(shared.grain, oc::memory_order_relaxed);
@@ -319,9 +346,18 @@ private:
                 const uint32 chunkEnd = uint32(oc::min(chunkBegin + shared.grain, shared.end));
                 (*shared.func)(uint32(chunkBegin), chunkEnd);
                 numItems += chunkEnd - uint32(chunkBegin);
+                // PRE-EMPTION POINT between chunks (see preemptionPoint): a Normal/Low loop lets
+                // the higher-priority jobs queued meanwhile run on this participant before it takes
+                // its next chunk. That time is not this loop's cost, so it leaves the JobCost sample.
+                if (shared.priority != EJobPriority::High && hasHigherPriorityReady(shared.priority))
+                {
+                    const Clock::time_point preemptStart = shared.cost ? Clock::now() : Clock::time_point{};
+                    if (runHigherPriorityJobs(shared.priority) && shared.cost)
+                        preemptedNs += uint64(std::chrono::nanoseconds(Clock::now() - preemptStart).count());
+                }
             }
             if (shared.cost && numItems) // includes the cursor overhead: overhead-dominated loops drive the grain up
-                shared.cost->addSample(uint64(std::chrono::nanoseconds(Clock::now() - start).count()), numItems);
+                shared.cost->addSample(uint64(std::chrono::nanoseconds(Clock::now() - start).count()) - preemptedNs, numItems);
         };
         const uint32 chunks = numChunks(count, grainSize);
         const uint32 numHelpers = oc::min(m_numWorkers, chunks - 1);
@@ -350,10 +386,15 @@ private:
     void fiberMain(Fiber& fiber);
     void runFiber(WorkerContext& ctx, Fiber* fiber);
     void execute(Job& job);
+    // Pre-emption plumbing (see preemptionPoint): the cheap ring check, then the inline run of
+    // every ready job above `mine`. Both take the priority explicitly so the parallelFor runner
+    // can use the loop's priority on the calling thread too, where no job may be current.
+    bool hasHigherPriorityReady(EJobPriority mine) const;
+    bool runHigherPriorityJobs(EJobPriority mine);
     Job* getWork(WorkerContext& ctx);
     Job* trySteal(WorkerContext& ctx);
     void pushReadyJob(Job* job);
-    void idle(WorkerContext& ctx);
+    void idle(WorkerContext& ctx, bool forceSleep); // forceSleep: ignore the "looks non-empty" checks (see the definition)
     bool anyWorkForWorker() const;
     void wakeMany(uint32 count);
     void wakeOne() { wakeMany(1); }
@@ -424,7 +465,8 @@ OC_INIT_SEG(OC_SEG_JOB_SYSTEM)
 //   * a fiber PARK (wait / parallelFor / JobMutex inside a job) — the fiber would resume on some
 //     other thread's TLS, and this thread would run another job on ours;
 //   * an INLINE job (main or the window thread executing a job inside wait, tryRunOneJob,
-//     tryRunOneHighJob, or a JobMutex spin) — that job body runs on the pinned TLS.
+//     tryRunOneHighJob, or a JobMutex spin; ANY context at a pre-emption point — preemptionPoint
+//     or the between-chunk point of a Normal/Low parallelFor) — that job body runs on the pinned TLS.
 // Nests (a job's own inner scopes stack) and compiles to two no-ops in non-debug builds.
 export class ThreadLocalScope final
 {

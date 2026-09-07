@@ -42,6 +42,7 @@ namespace
         }
 
         bool acceptCell(const glm::vec3&, const glm::vec3&) const { return true; }
+        glm::vec3 boundHalf() const { return glm::vec3(radius); } // enables the direct cell path (traverse)
 
         // 8 spheres at once; mostly pays for mid-size radii (gameplay queries, queryNearest rings)
         // where partially-covered cells dominate — huge balls take the fully-inside wholesale path.
@@ -84,6 +85,7 @@ namespace
         }
 
         bool acceptCell(const glm::vec3&, const glm::vec3&) const { return true; }
+        glm::vec3 boundHalf() const { return half; }
 
         // 8 sphere-vs-box tests at once (squared distance from the box to each sphere center).
         uint32 test8(const glm::vec3& cellMin, const float* px, const float* py, const float* pz,
@@ -224,6 +226,20 @@ namespace
     {
         t.test8(v, f, f, f, f, u, m);
     };
+
+    template <typename Tester>
+    concept HasBound = requires(const Tester& t) { t.boundHalf(); };
+
+    // quantizeAxis without the world-bound assert: a query volume may legitimately reach past it
+    uint64 quantizeAxisClamped(double v)
+    {
+        const int64 c = int64(glm::floor(v * Morton::InvFineCellSize)) + Morton::FineOffset;
+        return uint64(c < 0 ? 0 : (c > Morton::FineCoordMax ? Morton::FineCoordMax : c));
+    }
+
+    // A bounded query touching at most this many cells over all occupied levels addresses them
+    // directly instead of descending the hierarchy from the top (see traverse).
+    constexpr uint32 DirectCellLimit = 96;
 }
 
 template <typename Tester>
@@ -253,27 +269,10 @@ void SpatialIndex::emitCellEntries(const Tester& tester, const glm::vec3& cellMi
                                    const CellRecord& rec, uint32 level, bool fullyInside,
                                    TraverseStats& stats, const EmitFunc& emit) const
 {
-    for (uint32 idx = rec.dynHead; idx != UINT32_MAX; idx = m_pool.next[idx])
+    const BlockStore& store = m_blocks[level];
+    for (uint32 b = rec.head; b != UINT32_MAX;)
     {
-        if (!(m_pool.layerMask[idx] & layerMask))
-            continue;
-        const float entityRadius = m_pool.radius[idx];
-        if (entityRadius < 0.0f)
-            continue; // neutralized, pending free
-        const glm::vec3 pos = cellMin + glm::vec3(m_pool.posX[idx], m_pool.posY[idx], m_pool.posZ[idx]);
-        if (!fullyInside)
-        {
-            ++stats.entityTests;
-            if (!tester.testEntity(pos, entityRadius))
-                continue;
-        }
-        ++stats.emitted;
-        emit(idx, pos);
-    }
-    const StaticStore& store = m_static[level];
-    for (uint32 b = rec.staticHead; b != UINT32_MAX;)
-    {
-        const StaticBlock& block = store.blocks[b];
+        const CellBlock& block = store.blocks[b];
         b = block.next;
         if (fullyInside)
         {
@@ -347,10 +346,70 @@ void SpatialIndex::traverse(const Tester& tester, const glm::dvec3& refPos, uint
     // threads), so per-test increments on the shared stats would race on the hottest path.
     TraverseStats stats;
     const uint32 top = m_numLevels - 1;
-    m_levels[top].forEachCell([&](uint64 key, const CellRecord& rec)
+    bool direct = false;
+    if constexpr (HasBound<Tester>)
     {
-        traverseCell(tester, refPos, layerMask, key, top, rec, false, stats, emit);
-    });
+        // DIRECT CELL PATH for small bounded queries (the gameplay case: many balls of a few metres):
+        // address the cells the volume overlaps per level straight from the key math, and skip
+        // levels holding no entries at all — instead of descending from the 8 top cells through
+        // every level with a hash probe and a classify per child. The loose bound per level is the
+        // same half cell (top: the clamped-oversize radius) the hierarchy uses, so the result set is
+        // identical. Falls back to the descent when the volume spans too many cells.
+        const glm::vec3 half = tester.boundHalf();
+        const float topLevelMaxRadius = m_topLevelMaxRadius.load(oc::memory_order_relaxed);
+        struct LevelRange { uint64 x0, x1, y0, y1, z0, z1; };
+        LevelRange ranges[Morton::MaxLevels];
+        uint32 total = 0;
+        for (uint32 level = 0; level < m_numLevels; ++level)
+        {
+            if (m_levelEntityCount[level] == 0)
+                continue;
+            const float halfCell = float(Morton::cellSize(level) * 0.5);
+            const float loose = level == top && topLevelMaxRadius > halfCell ? topLevelMaxRadius : halfCell;
+            const glm::dvec3 lo = refPos - glm::dvec3(half + glm::vec3(loose));
+            const glm::dvec3 hi = refPos + glm::dvec3(half + glm::vec3(loose));
+            const uint32 shift = 2 * level;
+            LevelRange& r = ranges[level];
+            r.x0 = quantizeAxisClamped(lo.x) >> shift; r.x1 = quantizeAxisClamped(hi.x) >> shift;
+            r.y0 = quantizeAxisClamped(lo.y) >> shift; r.y1 = quantizeAxisClamped(hi.y) >> shift;
+            r.z0 = quantizeAxisClamped(lo.z) >> shift; r.z1 = quantizeAxisClamped(hi.z) >> shift;
+            total += uint32((r.x1 - r.x0 + 1) * (r.y1 - r.y0 + 1) * (r.z1 - r.z0 + 1));
+            if (total > DirectCellLimit)
+                break;
+        }
+        if (total <= DirectCellLimit)
+        {
+            direct = true;
+            for (uint32 level = 0; level < m_numLevels; ++level)
+            {
+                if (m_levelEntityCount[level] == 0)
+                    continue;
+                const LevelRange& r = ranges[level];
+                const CellMap& cells = m_levels[level];
+                const float halfCell = float(Morton::cellSize(level) * 0.5);
+                for (uint64 z = r.z0; z <= r.z1; ++z)
+                    for (uint64 y = r.y0; y <= r.y1; ++y)
+                        for (uint64 x = r.x0; x <= r.x1; ++x)
+                        {
+                            const uint64 key = Morton::encode({ x, y, z }); // level coords encode to the level key directly
+                            const CellRecord* rec = cells.find(key);
+                            if (!rec || rec->count == 0)
+                                continue;
+                            const glm::vec3 cellMin = glm::vec3(Morton::cellMinWorld(key, level) - refPos);
+                            bool fullyInside = false;
+                            if (testCell(tester, cellMin, halfCell, level, fullyInside, stats))
+                                emitCellEntries(tester, cellMin, layerMask, *rec, level, fullyInside, stats, emit);
+                        }
+            }
+        }
+    }
+    if (!direct)
+    {
+        m_levels[top].forEachCell([&](uint64 key, const CellRecord& rec)
+        {
+            traverseCell(tester, refPos, layerMask, key, top, rec, false, stats, emit);
+        });
+    }
     m_stats.cellsTested += stats.cellsTested;
     m_stats.cellsFullyInside += stats.cellsFullyInside;
     m_stats.entityTests += stats.entityTests;

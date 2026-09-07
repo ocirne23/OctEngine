@@ -55,15 +55,8 @@ void SpatialIndex::initialize(const SpatialIndexDesc& desc)
         Tweak::intVar("Spatial/Stats/Levels", levelEntryNames[i], &m_stats.perLevelEntities[i], 0, INT32_MAX);
     }
 
-    Tweak::boolean("Spatial/Static", "Enabled", &m_staticEnabled);
-    Tweak::intVar("Spatial/Static", "Promote after frames", &m_promoteAfterFrames, 1, 1000);
-    Tweak::intVar("Spatial/Static", "Scan budget", &m_staticScanBudget, 64, 1'000'000);
-    Tweak::floatVar("Spatial/Static", "Radius tolerance", &m_staticRadiusTolerance, 0.0f, 0.5f, 0.005f);
-    Tweak::floatVar("Spatial/Static", "Position tolerance", &m_staticPositionTolerance, 0.0f, 10.0f, 0.01f);
-    Tweak::intVar("Spatial/Stats", "Static entries", &m_stats.staticEntries, 0, INT32_MAX);
-    Tweak::intVar("Spatial/Stats", "Static blocks", &m_stats.staticBlocks, 0, INT32_MAX);
-    Tweak::intVar("Spatial/Stats", "Static promotions", &m_stats.staticPromotions, 0, INT32_MAX);
-    Tweak::intVar("Spatial/Stats", "Static demotions", &m_stats.staticDemotions, 0, INT32_MAX);
+    Tweak::intVar("Spatial/Stats", "Blocks", &m_stats.numBlocks, 0, INT32_MAX);
+    Tweak::intVar("Spatial/Stats", "Cell moves", &m_stats.cellMoves, 0, INT32_MAX);
 
     static constexpr oc::string_view cullModeNames[] = { "Off", "Stats only", "Cull", "Main only (debug)" };
     Tweak::enumVar("Spatial/Culling", "Mode", &m_culling.mode, cullModeNames);
@@ -103,12 +96,9 @@ SpatialHandle SpatialIndex::registerEntry(const glm::dvec3& pos, float radius, u
         m_pool.radius[idx] = radius;
         m_pool.cellKey[idx] = key;
         m_pool.userData[idx] = userData;
-        m_pool.next[idx] = UINT32_MAX;
-        m_pool.prev[idx] = UINT32_MAX;
         m_pool.layerMask[idx] = uint8(layerMask);
         for (uint32 p = 0; p < uint32(ESpatialPass::Count); ++p)
             m_pool.lastVisible[p][idx] = 0; // never stamped: reports visible until the first query, unless NoSpawnGuard
-        m_pool.lastMoveFrame[idx] = uint16(m_frameId);
         m_pool.storeIdx[idx] = UINT32_MAX;
         m_pool.level[idx] = uint8(level);
         m_pool.flags[idx] = uint8(RecordFlag_Alive | RecordFlag_Unlinked | (spawnVisible ? 0 : RecordFlag_NoSpawnGuard));
@@ -127,15 +117,15 @@ void SpatialIndex::unregisterEntry(SpatialHandle handle)
         if (!m_pool.isValidAlive(handle))
             return;
         const uint32 idx = handle.idx;
-        if (m_pool.flags[idx] & RecordFlag_StaticTier)
+        if (!(m_pool.flags[idx] & RecordFlag_Unlinked))
         {
-            // tombstone the stored lane too (queries read it lock-free); the counters and the block
-            // bookkeeping wait for the Unlink op at commit (retireStatic)
+            // tombstone the lane (queries read it lock-free); the counters and the block bookkeeping
+            // wait for the Unlink op at commit (retireLane)
             const uint32 slot = m_pool.storeIdx[idx];
-            m_static[m_pool.level[idx]].blocks[StaticStore::blockOf(slot)].radius[StaticStore::laneOf(slot)] = StaticBlock::Tombstone;
+            m_blocks[m_pool.level[idx]].blocks[BlockStore::blockOf(slot)].radius[BlockStore::laneOf(slot)] = CellBlock::Tombstone;
         }
         m_pool.flags[idx] = uint8((m_pool.flags[idx] & ~RecordFlag_Alive) | RecordFlag_PendingFree);
-        m_pool.radius[idx] = -1e30f; // queries this frame can no longer return the dying entry
+        m_pool.radius[idx] = -1e30f; // getRadius reads the pool copy; the lane above is what queries test
     }
     // Per-worker staging: outside the lock (only the handle's own gen is needed).
     m_pendingOps.local().push_back({ .newKey = 0, .newRelPos = glm::vec3(0.0f), .newRadius = 0.0f,
@@ -147,35 +137,33 @@ void SpatialIndex::updateEntry(SpatialHandle handle, const glm::dvec3& pos, floa
     if (!m_pool.isValidAlive(handle))
         return;
     const uint32 idx = handle.idx;
-    const bool isStatic = (m_pool.flags[idx] & (RecordFlag_StaticTier | RecordFlag_PendingMove)) == RecordFlag_StaticTier;
-    if (isStatic && radius != m_pool.radius[idx]
-        && glm::abs(radius - m_pool.radius[idx]) <= m_pool.radius[idx] * m_staticRadiusTolerance)
-        radius = m_pool.radius[idx]; // drift inside the band: keep the stored radius, so the level cannot flip either
     const uint32 level = entryLevel(radius);
     const uint64 key = Morton::keyAtLevel(Morton::fineKey(pos), level);
     const glm::vec3 rel = glm::vec3(pos - Morton::cellMinWorld(key, level));
-    if (key == m_pool.cellKey[idx] && level == m_pool.level[idx] && !(m_pool.flags[idx] & RecordFlag_PendingMove))
+    const uint8 flags = m_pool.flags[idx];
+    if (key == m_pool.cellKey[idx] && level == m_pool.level[idx] && !(flags & RecordFlag_PendingMove))
     {
         if (rel.x == m_pool.posX[idx] && rel.y == m_pool.posY[idx] && rel.z == m_pool.posZ[idx] && radius == m_pool.radius[idx])
-            return; // untouched, keeps lastMoveFrame aging for the static tier
-        if (isStatic && radius == m_pool.radius[idx])
+            return; // untouched
+        // Same cell: in place, the pool copy and the lane queries read (no lane yet while Unlinked:
+        // the Link op inserts from the pool copy).
+        m_pool.posX[idx] = rel.x;
+        m_pool.posY[idx] = rel.y;
+        m_pool.posZ[idx] = rel.z;
+        m_pool.radius[idx] = radius;
+        if (!(flags & RecordFlag_Unlinked))
         {
-            const glm::vec3 delta = rel - glm::vec3(m_pool.posX[idx], m_pool.posY[idx], m_pool.posZ[idx]);
-            if (glm::dot(delta, delta) <= m_staticPositionTolerance * m_staticPositionTolerance)
-                return; // drift inside the band: the stored copy stays, lastMoveFrame keeps aging
+            const uint32 slot = m_pool.storeIdx[idx];
+            CellBlock& block = m_blocks[level].blocks[BlockStore::blockOf(slot)];
+            const uint32 lane = BlockStore::laneOf(slot);
+            block.posX[lane] = rel.x;
+            block.posY[lane] = rel.y;
+            block.posZ[lane] = rel.z;
+            block.radius[lane] = radius;
         }
-        if (!(m_pool.flags[idx] & RecordFlag_StaticTier)) // any change to a static entry demotes it via Move
-        {
-            m_pool.posX[idx] = rel.x;
-            m_pool.posY[idx] = rel.y;
-            m_pool.posZ[idx] = rel.z;
-            m_pool.radius[idx] = radius;
-            m_pool.lastMoveFrame[idx] = uint16(m_frameId);
-            return;
-        }
+        return;
     }
-    m_pool.flags[idx] = uint8(m_pool.flags[idx] | RecordFlag_PendingMove);
-    m_pool.lastMoveFrame[idx] = uint16(m_frameId);
+    m_pool.flags[idx] = uint8(flags | RecordFlag_PendingMove);
     m_pendingOps.local().push_back({ .newKey = key, .newRelPos = rel, .newRadius = radius,
                                      .idx = idx, .gen = handle.gen, .type = PendingOp::Move, .newLevel = uint8(level) });
 }
@@ -186,10 +174,10 @@ void SpatialIndex::setLayerMask(SpatialHandle handle, uint32 layerMask)
         return;
     const uint32 idx = handle.idx;
     m_pool.layerMask[idx] = uint8(layerMask);
-    if (m_pool.flags[idx] & RecordFlag_StaticTier)
+    if (!(m_pool.flags[idx] & RecordFlag_Unlinked))
     {
         const uint32 slot = m_pool.storeIdx[idx];
-        m_static[m_pool.level[idx]].blocks[StaticStore::blockOf(slot)].layer[StaticStore::laneOf(slot)] = layerMask;
+        m_blocks[m_pool.level[idx]].blocks[BlockStore::blockOf(slot)].layer[BlockStore::laneOf(slot)] = layerMask;
     }
 }
 
@@ -199,6 +187,7 @@ void SpatialIndex::commitFrame()
 
     assert(m_initialized);
     const auto start = Clock::now();
+    int cellMoves = 0;
     // Per-slot FIFO is the only ordering guarantee (one visitor per entity per pass keeps a frame's
     // Moves for one entry in one slot). The lone cross-slot case - Link (main) + first Move (worker)
     // in the same frame - self-heals: a Move that lands before its Link skips on RecordFlag_Unlinked
@@ -215,7 +204,7 @@ void SpatialIndex::commitFrame()
         case PendingOp::Link:
             if ((opFlags & (RecordFlag_Alive | RecordFlag_Unlinked)) == (RecordFlag_Alive | RecordFlag_Unlinked))
             {
-                linkIntoCell(op.idx);
+                insertLane(op.idx);
                 m_pool.flags[op.idx] = uint8(opFlags & ~RecordFlag_Unlinked);
                 // Counts as visible for the current stamp generation; the next markVisibleSet (which
                 // runs with the entry actually in the index) decides for real. NOT for NoSpawnGuard
@@ -237,7 +226,7 @@ void SpatialIndex::commitFrame()
         case PendingOp::Move:
             if ((opFlags & RecordFlag_Alive) && !(opFlags & RecordFlag_Unlinked))
             {
-                demoteOrUnlink(op.idx);
+                retireLane(op.idx);
                 m_pool.cellKey[op.idx] = op.newKey;
                 m_pool.posX[op.idx] = op.newRelPos.x;
                 m_pool.posY[op.idx] = op.newRelPos.y;
@@ -245,16 +234,15 @@ void SpatialIndex::commitFrame()
                 m_pool.radius[op.idx] = op.newRadius;
                 m_pool.level[op.idx] = op.newLevel;
                 m_pool.flags[op.idx] = uint8(m_pool.flags[op.idx] & ~RecordFlag_PendingMove);
-                linkIntoCell(op.idx);
+                insertLane(op.idx);
+                ++cellMoves;
             }
             break;
         case PendingOp::Unlink:
             if (opFlags & RecordFlag_PendingFree)
             {
-                if (opFlags & RecordFlag_StaticTier)
-                    retireStatic(op.idx); // the lane was tombstoned at unregister; this settles the counters/blocks
-                else if (!(opFlags & RecordFlag_Unlinked))
-                    unlinkFromCell(op.idx);
+                if (!(opFlags & RecordFlag_Unlinked))
+                    retireLane(op.idx); // the lane was tombstoned at unregister; this settles the counters/blocks
                 m_pool.release(op.idx);
             }
             break;
@@ -262,25 +250,21 @@ void SpatialIndex::commitFrame()
     }
     ops.clear();
     });
-    if (m_staticEnabled)
-        promotionScan(); // promotes in place: no rebuild phase follows
     sweepEmptyCells();
 
     m_stats.numEntries = int(m_pool.numAlive());
+    m_stats.cellMoves = cellMoves;
     int totalCells = 0;
-    int totalStatic = 0;
     int totalBlocks = 0;
     for (uint32 i = 0; i < m_numLevels; ++i)
     {
         m_stats.perLevelCells[i] = int(m_levels[i].size());
         m_stats.perLevelEntities[i] = int(m_levelEntityCount[i]);
         totalCells += int(m_levels[i].size());
-        totalStatic += int(m_static[i].numLive);
-        totalBlocks += int(m_static[i].numBlocksInUse);
+        totalBlocks += int(m_blocks[i].numBlocksInUse);
     }
     m_stats.numCells = totalCells;
-    m_stats.staticEntries = totalStatic;
-    m_stats.staticBlocks = totalBlocks;
+    m_stats.numBlocks = totalBlocks;
     m_stats.cellsTested = 0;
     m_stats.cellsFullyInside = 0;
     m_stats.entityTests = 0;
@@ -289,18 +273,14 @@ void SpatialIndex::commitFrame()
     ++m_frameId;
 }
 
-void SpatialIndex::linkIntoCell(uint32 idx)
+void SpatialIndex::insertLane(uint32 idx)
 {
     const uint32 level = m_pool.level[idx];
     const uint64 key = m_pool.cellKey[idx];
     CellRecord& rec = m_levels[level].getOrCreate(key);
-    const uint32 head = rec.dynHead;
-    m_pool.next[idx] = head;
-    m_pool.prev[idx] = UINT32_MAX;
-    if (head != UINT32_MAX)
-        m_pool.prev[head] = idx;
-    rec.dynHead = idx;
-    ++rec.dynCount;
+    m_pool.storeIdx[idx] = m_blocks[level].insert(rec.head, m_pool.posX[idx], m_pool.posY[idx], m_pool.posZ[idx],
+                                                  m_pool.radius[idx], m_pool.layerMask[idx], idx);
+    ++rec.count;
     ++m_levelEntityCount[level];
     setOccupancyBits(level, key);
 }
@@ -319,103 +299,42 @@ void SpatialIndex::setOccupancyBits(uint32 level, uint64 key)
     }
 }
 
-void SpatialIndex::demoteOrUnlink(uint32 idx)
-{
-    if (m_pool.flags[idx] & RecordFlag_StaticTier)
-    {
-        retireStatic(idx); // stored, not in a dynamic list
-        m_pool.flags[idx] = uint8(m_pool.flags[idx] & ~RecordFlag_StaticTier);
-        ++m_stats.staticDemotions;
-    }
-    else
-        unlinkFromCell(idx);
-}
-
-void SpatialIndex::unlinkFromCell(uint32 idx)
+void SpatialIndex::retireLane(uint32 idx)
 {
     const uint32 level = m_pool.level[idx];
-    const uint64 key = m_pool.cellKey[idx];
-    CellRecord* rec = m_levels[level].find(key);
-    assert(rec);
-    const uint32 nxt = m_pool.next[idx];
-    const uint32 prv = m_pool.prev[idx];
-    if (prv != UINT32_MAX) m_pool.next[prv] = nxt; else rec->dynHead = nxt;
-    if (nxt != UINT32_MAX) m_pool.prev[nxt] = prv;
-    m_pool.next[idx] = UINT32_MAX;
-    m_pool.prev[idx] = UINT32_MAX;
-    --rec->dynCount;
-    --m_levelEntityCount[level];
-    if (rec->dynCount == 0 && rec->childMask == 0 && rec->staticCount == 0)
-        m_emptyCandidates.push_back({ key, level });
-}
-
-void SpatialIndex::promotionScan()
-{
-    if (m_promoteAfterFrames <= 0)
-        return;
-    const uint32 capacity = m_pool.capacity();
-    uint32 budget = glm::min(uint32(m_staticScanBudget), capacity);
-    while (budget--)
-    {
-        const uint32 idx = m_promoteCursor;
-        m_promoteCursor = m_promoteCursor + 1 < capacity ? m_promoteCursor + 1 : 0;
-        constexpr uint8 exclude = RecordFlag_Unlinked | RecordFlag_PendingFree | RecordFlag_PendingMove | RecordFlag_StaticTier;
-        if ((m_pool.flags[idx] & (RecordFlag_Alive | exclude)) != RecordFlag_Alive)
-            continue;
-        if (uint16(uint16(m_frameId) - m_pool.lastMoveFrame[idx]) < uint16(glm::min(m_promoteAfterFrames, 65535)))
-            continue; // modular 16-bit age: an entry static for > 65k frames reads young for a few frames — harmless
-        promoteEntry(idx);
-    }
-}
-
-void SpatialIndex::promoteEntry(uint32 idx)
-{
-    const uint32 level = m_pool.level[idx];
-    CellRecord* rec = m_levels[level].find(m_pool.cellKey[idx]);
-    assert(rec); // linked, so its cell exists
-    m_pool.storeIdx[idx] = m_static[level].insert(rec->staticHead, m_pool.posX[idx], m_pool.posY[idx], m_pool.posZ[idx],
-                                                  m_pool.radius[idx], m_pool.layerMask[idx], idx);
-    ++rec->staticCount; // before the unlink, so an emptied dynamic list does not nominate the cell for the sweep
-    m_pool.flags[idx] = uint8(m_pool.flags[idx] | RecordFlag_StaticTier);
-    unlinkFromCell(idx);
-    ++m_stats.staticPromotions;
-}
-
-void SpatialIndex::retireStatic(uint32 idx)
-{
-    const uint32 level = m_pool.level[idx];
-    StaticStore& store = m_static[level];
+    BlockStore& store = m_blocks[level];
     const uint32 slot = m_pool.storeIdx[idx];
-    const uint32 b = StaticStore::blockOf(slot);
-    StaticBlock& block = store.blocks[b];
-    block.radius[StaticStore::laneOf(slot)] = StaticBlock::Tombstone; // idempotent over unregisterEntry's early tombstone
+    const uint32 b = BlockStore::blockOf(slot);
+    CellBlock& block = store.blocks[b];
+    block.radius[BlockStore::laneOf(slot)] = CellBlock::Tombstone; // idempotent over unregisterEntry's early tombstone
+    m_pool.storeIdx[idx] = UINT32_MAX;
     --block.live;
-    --store.numLive;
+    --m_levelEntityCount[level];
     CellRecord* rec = m_levels[level].find(m_pool.cellKey[idx]);
-    assert(rec && rec->staticCount);
-    --rec->staticCount;
-    if (rec->staticCount == 0)
+    assert(rec && rec->count);
+    --rec->count;
+    if (rec->count == 0)
     {
         // the whole chain is dead: free it, and let the sweep judge the cell
-        for (uint32 cur = rec->staticHead; cur != UINT32_MAX;)
+        for (uint32 cur = rec->head; cur != UINT32_MAX;)
         {
             const uint32 next = store.blocks[cur].next;
             store.freeBlock(cur);
             cur = next;
         }
-        rec->staticHead = UINT32_MAX;
-        if (rec->dynCount == 0 && rec->childMask == 0)
+        rec->head = UINT32_MAX;
+        if (rec->childMask == 0)
             m_emptyCandidates.push_back({ m_pool.cellKey[idx], level });
         return;
     }
     if (block.live == 0)
     {
         // unlink the emptied block from the cell's chain
-        if (rec->staticHead == b)
-            rec->staticHead = block.next;
+        if (rec->head == b)
+            rec->head = block.next;
         else
         {
-            uint32 prev = rec->staticHead;
+            uint32 prev = rec->head;
             while (store.blocks[prev].next != b)
                 prev = store.blocks[prev].next;
             store.blocks[prev].next = block.next;
@@ -423,40 +342,42 @@ void SpatialIndex::retireStatic(uint32 idx)
         store.freeBlock(b);
     }
     // compact once the dead lanes would fill a whole block (frees at least one block per pass, so
-    // the cost stays one cell walk per 8 demotions)
+    // the cost stays one cell walk per 8 retirements)
     uint32 numBlocks = 0;
-    for (uint32 cur = rec->staticHead; cur != UINT32_MAX; cur = store.blocks[cur].next)
+    for (uint32 cur = rec->head; cur != UINT32_MAX; cur = store.blocks[cur].next)
         ++numBlocks;
-    if (numBlocks >= 2 && numBlocks * StaticBlock::Lanes - rec->staticCount >= StaticBlock::Lanes)
-        compactStaticCell(level, *rec);
+    if (numBlocks >= 2 && numBlocks * CellBlock::Lanes - rec->count >= CellBlock::Lanes)
+        compactCell(level, *rec);
 }
 
-void SpatialIndex::compactStaticCell(uint32 level, CellRecord& rec)
+void SpatialIndex::compactCell(uint32 level, CellRecord& rec)
 {
-    StaticStore& store = m_static[level];
+    BlockStore& store = m_blocks[level];
     oc::vector<CompactEntry>& live = m_compactScratch;
     live.clear();
     // Keep every lane the pool still OWNS, tombstoned or not: an entry unregistered this frame has
-    // its lane tombstoned already but its Unlink op (retireStatic, which settles the counters through
+    // its lane tombstoned already but its Unlink op (retireLane, which settles the counters through
     // storeIdx) may still be queued behind this op — dropping the lane here would strand that slot.
-    for (uint32 cur = rec.staticHead; cur != UINT32_MAX; cur = store.blocks[cur].next)
+    // Ownership = a live or pending-free record whose storeIdx names this lane (a released slot has
+    // flags 0; a recycled one is Unlinked with storeIdx reset).
+    for (uint32 cur = rec.head; cur != UINT32_MAX; cur = store.blocks[cur].next)
     {
-        const StaticBlock& block = store.blocks[cur];
+        const CellBlock& block = store.blocks[cur];
         for (uint32 lane = 0; lane < block.count; ++lane)
         {
             const uint32 idx = block.poolIdx[lane];
-            if ((m_pool.flags[idx] & RecordFlag_StaticTier) && m_pool.storeIdx[idx] == StaticStore::slotOf(cur, lane))
+            if ((m_pool.flags[idx] & (RecordFlag_Alive | RecordFlag_PendingFree)) && m_pool.storeIdx[idx] == BlockStore::slotOf(cur, lane))
                 live.push_back({ block.posX[lane], block.posY[lane], block.posZ[lane], block.radius[lane], block.layer[lane], idx });
         }
     }
-    assert(uint32(live.size()) == rec.staticCount);
+    assert(uint32(live.size()) == rec.count);
     // refill the chain's blocks from the head, then free the surplus tail
-    uint32 cur = rec.staticHead;
+    uint32 cur = rec.head;
     uint32 prev = UINT32_MAX;
     for (uint32 i = 0; i < uint32(live.size()); cur = store.blocks[cur].next)
     {
-        StaticBlock& block = store.blocks[cur];
-        const uint32 n = glm::min(StaticBlock::Lanes, uint32(live.size()) - i);
+        CellBlock& block = store.blocks[cur];
+        const uint32 n = glm::min(CellBlock::Lanes, uint32(live.size()) - i);
         for (uint32 lane = 0; lane < n; ++lane, ++i)
         {
             const CompactEntry& e = live[i];
@@ -464,16 +385,16 @@ void SpatialIndex::compactStaticCell(uint32 level, CellRecord& rec)
             block.radius[lane] = e.radius;
             block.layer[lane] = e.layer;
             block.poolIdx[lane] = e.poolIdx;
-            m_pool.storeIdx[e.poolIdx] = StaticStore::slotOf(cur, lane);
+            m_pool.storeIdx[e.poolIdx] = BlockStore::slotOf(cur, lane);
         }
-        for (uint32 lane = n; lane < StaticBlock::Lanes; ++lane)
-            block.radius[lane] = StaticBlock::Tombstone;
+        for (uint32 lane = n; lane < CellBlock::Lanes; ++lane)
+            block.radius[lane] = CellBlock::Tombstone;
         block.count = n;
         block.live = n;
         prev = cur;
     }
     if (prev == UINT32_MAX)
-        rec.staticHead = UINT32_MAX;
+        rec.head = UINT32_MAX;
     else
         store.blocks[prev].next = UINT32_MAX;
     while (cur != UINT32_MAX)
@@ -490,7 +411,7 @@ void SpatialIndex::sweepEmptyCells()
     {
         const EmptyCandidate candidate = m_emptyCandidates[i];
         const CellRecord* rec = m_levels[candidate.level].find(candidate.key);
-        if (!rec || rec->dynCount != 0 || rec->childMask != 0 || rec->staticCount != 0)
+        if (!rec || rec->count != 0 || rec->childMask != 0)
             continue; // resurrected this frame, or already swept
         m_levels[candidate.level].erase(candidate.key);
         if (candidate.level + 1 >= m_numLevels)
@@ -501,7 +422,7 @@ void SpatialIndex::sweepEmptyCells()
         if (!parent)
             continue;
         parent->childMask &= ~(1ull << bit);
-        if (parent->dynCount == 0 && parent->childMask == 0)
+        if (parent->count == 0 && parent->childMask == 0)
             m_emptyCandidates.push_back({ parentKey, candidate.level + 1 });
     }
     m_emptyCandidates.clear();

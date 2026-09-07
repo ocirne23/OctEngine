@@ -9,7 +9,7 @@ import :Morton;
 import :Types;
 import :CellMap;
 import :RecordPool;
-import :StaticStore;
+import :BlockStore;
 
 // Spatial index independent of the entity parent/child hierarchy: an implicit 64-ary hierarchy
 // over per-level hashed grids. Entries live at exactly one level (the one matching their bounding
@@ -250,15 +250,14 @@ private:
     };
 
     uint32 entryLevel(float radius); // levelForRadius clamped to the level count; tracks the oversize radius
-    void linkIntoCell(uint32 idx);
-    void unlinkFromCell(uint32 idx);
+    // Commit-only lane bookkeeping (see BlockStore): insertLane appends the entry into its cell's
+    // chain from the pool copy; retireLane tombstones its lane, frees an emptied block, and compacts
+    // the cell once a block's worth of lanes is dead.
+    void insertLane(uint32 idx);
+    void retireLane(uint32 idx);
+    void compactCell(uint32 level, CellRecord& rec);
     void setOccupancyBits(uint32 level, uint64 key);
-    void demoteOrUnlink(uint32 idx); // pulls a StaticTier entry back to dynamic, else plain unlink
     void sweepEmptyCells();
-    void promotionScan();
-    void promoteEntry(uint32 idx);   // dynamic list -> the cell's static chain (commit only)
-    void retireStatic(uint32 idx);   // tombstones the stored lane, frees an emptied block, compacts the cell when a block's worth is dead
-    void compactStaticCell(uint32 level, CellRecord& rec);
 
     template <typename Tester, typename EmitFunc>
     void traverse(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask, const EmitFunc& emit) const;
@@ -275,7 +274,7 @@ private:
     bool testCell(const Tester& tester, const glm::vec3& cellMin, float halfCell, uint32 level,
                   bool& fullyInside, TraverseStats& stats) const;
 
-    // The cell's own entry emission (dynamic list + static ranges) split out of traverseCell,
+    // The cell's own entry emission (its block chain, 8 lanes at a time) split out of traverseCell,
     // shared by the frontier expansion for the upper-level cells it consumes while splitting.
     template <typename Tester, typename EmitFunc>
     void emitCellEntries(const Tester& tester, const glm::vec3& cellMin, uint32 layerMask,
@@ -296,7 +295,7 @@ private:
                           bool registerLock);
 
     oc::array<CellMap, Morton::MaxLevels> m_levels;
-    oc::array<StaticStore, Morton::MaxLevels> m_static;
+    oc::array<BlockStore, Morton::MaxLevels> m_blocks;
     RecordPool m_pool;
     // Staged per scheduler context, drained FIFO per slot in commitFrame. Deliberately a PerWorker
     // (not owner-sliced or a shared queue): the pushes come from ANY job — the entity pass's
@@ -306,17 +305,11 @@ private:
     PerWorker<oc::vector<PendingOp>> m_pendingOps;
     oc::vector<EmptyCandidate> m_emptyCandidates;
     struct CompactEntry { float x, y, z, radius; uint32 layer, poolIdx; };
-    oc::vector<CompactEntry> m_compactScratch; // compactStaticCell's live-lane gather (kept: sized by the largest cell)
+    oc::vector<CompactEntry> m_compactScratch; // compactCell's owned-lane gather (kept: sized by the largest cell)
     uint32 m_levelEntityCount[Morton::MaxLevels] = {};
     uint32 m_numLevels = Morton::MaxLevels;
     uint32 m_frameId = 1;
     SpatialStamp m_visibleQueryId[uint32(ESpatialPass::Count)] = {}; // stamp generation per pass, 0 = never stamped (advanceStamp: wrap sweep)
-    uint32 m_promoteCursor = 0;  // round-robin pool scan position for static promotion
-    bool m_staticEnabled = true;
-    int m_promoteAfterFrames = 60;
-    int m_staticScanBudget = 1024;   // pool slots inspected per commit (promotion is immediate, so a full sweep takes capacity / budget frames)
-    float m_staticRadiusTolerance = 0.05f;  // relative radius drift a static entry absorbs without demoting
-    float m_staticPositionTolerance = 1.0f; // world-unit position drift a static entry absorbs without demoting
     oc::atomic<float> m_topLevelMaxRadius = 0.0f; // largest clamped-oversize radius, inflates top-level tests (CAS-max: updateEntry runs on jobs)
     // Parallel spawning: exclusive over registerEntry/unregisterEntry (slot acquire/release + SoA
     // growth), shared over queries — see the threading contract above.

@@ -61,6 +61,7 @@ private:
     int m_parkedPerSec = 0;
     int m_resumedPerSec = 0;
     int m_sleepsPerSec = 0;
+    int m_preemptedPerSec = 0;
     int m_inlineFallbacks = 0;
     int m_busyPercent = 0;
 };

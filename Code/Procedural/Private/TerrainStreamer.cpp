@@ -643,6 +643,9 @@ namespace Procedural
 		for (;;)
 		{
 			ProfileScope profileScope("TerrainStreamer::pumpJob", EProfileCategory::Procedural);
+			// Between chunks (the finer points sit inside generateChunk / sampleGrid): a Low pump
+			// that has a queue of chunks ahead of it must not hold a worker against High work.
+			Globals::jobSystem.preemptionPoint();
 
 			Request req;
 			bool haveWork = false;

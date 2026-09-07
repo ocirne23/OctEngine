@@ -357,6 +357,7 @@ void World::update(Renderer& renderer, float deltaSeconds)
         m_updateArena.resize(glm::max(4096u, lastUse * 2));
     m_updateArenaCursor.store(0, oc::memory_order_relaxed);
     m_updateArenaOverflow.store(0, oc::memory_order_relaxed);
+    m_updateArenaSpill.clear(); // last pass's spill blocks: the arena above now covers them
 
     m_updateRenderer = &renderer;
     m_updateDelta = deltaSeconds;
@@ -468,10 +469,17 @@ void World::update(Renderer& renderer, float deltaSeconds)
         // while main filtered and copied every root serially) and submits only the small
         // global + pending list itself, so the first batches start within a few microseconds.
         ProfileScope submitScope("Update batch submit", EProfileCategory::Entity);
-        submitRootSlices(m_updateLevel.data(), uint32(m_updateLevel.size())); // LOD: global + pending, inline below one slice
+        {
+            ProfileScope scope("Root slices: global + pending", EProfileCategory::Entity);
+            submitRootSlices(m_updateLevel.data(), uint32(m_updateLevel.size())); // LOD: global + pending, inline below one slice
+        }
         if (m_simLodActive)
         {
-            submitRootSlices(m_selectResult.nodes.data(), uint32(m_selectResult.nodes.size()));
+            {
+                ProfileScope scope("Root slices: selection", EProfileCategory::Entity);
+                submitRootSlices(m_selectResult.nodes.data(), uint32(m_selectResult.nodes.size()));
+            }
+            ProfileScope scope("Visible root slices", EProfileCategory::Entity);
             submitVisibleRootSlices();
         }
     }
@@ -528,48 +536,65 @@ void World::joinSelection()
 // exhaustion - an inline child batch reuses that same staging slot, so nothing may read `nodes`
 // once the first submit goes out. Called from the main thread for the roots and from batch jobs
 // for their children.
-void World::submitEntityBatches(const EntityUpdateNode* nodes, uint32 count)
+bool World::submitEntityBatches(const EntityUpdateNode* nodes, uint32 count, const EntityUpdateNode** inlineNodes, uint32* inlineCount)
 {
     static_assert(std::is_trivially_copyable_v<EntityUpdateNode>);
     if (count == 0)
-        return;
+        return false;
     const uint32 slot = m_updateArenaCursor.fetch_add(count, oc::memory_order_relaxed);
-    if (slot + count > uint32(m_updateArena.size()))
+    EntityUpdateNode* dst;
+    if (slot + count <= uint32(m_updateArena.size()))
+        dst = m_updateArena.data() + slot;
+    else
     {
-        // Arena exhausted (the claim is never rolled back): run these subtrees serially via the
-        // recursive path - correct, just not parallel; the overflow grows the arena next frame so
-        // this stays a one-frame hiccup. Reads `nodes` directly, which is fine: the serial path
-        // never touches the staging slots.
+        // Arena exhausted (the claim is never rolled back): SPILL into a block of this claim's
+        // own, pointer-stable like the arena and freed between passes once the arena has grown
+        // to cover it. The mutex guards the block list only; this is the rare path (the arena is
+        // sized from last pass, so it takes a burst - a wave spawn, a camera swing - to get
+        // here), and it used to run these subtrees SERIALLY on the submitting thread instead,
+        // which on main was a 20 ms "Update batch submit" on a burst frame.
         m_updateArenaOverflow.fetch_add(count, oc::memory_order_relaxed);
-        for (uint32 i = 0; i < count; ++i)
-            if (simLodSelected(*nodes[i].entity))
-                nodes[i].entity->update(*m_updateRenderer, m_updateDelta, nodes[i].parentWorld);
-        return;
+        ProfileScope scope("Update arena spill", EProfileCategory::Entity); // rare by design: visible when it is not
+        std::lock_guard lock(m_updateArenaSpillMutex);
+        dst = m_updateArenaSpill.emplace_back(oc::make_unique<EntityUpdateNode[]>(count)).get();
     }
     // SELECTION filter while copying: only stamped children ride into the arena (see update();
     // the root list from main is pre-selected, so only emitted children ever drop). The claim
     // covers all `count` nodes — the few slots a dropped child leaves unused are cheaper than a
     // second predicate pass, and the arena is sized from last frame's claims anyway.
-    uint32 out = slot;
+    uint32 out = 0;
     for (uint32 i = 0; i < count; ++i)
         if (simLodSelected(*nodes[i].entity))
-            m_updateArena[out++] = nodes[i];
-    count = out - slot;
+            dst[out++] = nodes[i];
+    count = out;
 
+    bool handedBack = false;
     uint32 begin = 0;
     while (begin < count)
     {
         uint32 cost = 0, end = begin;
         while (end < count && cost < m_updateBudget)
-            cost += glm::max<uint32>(m_updateArena[slot + end++].entity->updateCost, 1);
-        const uint32 batchSlot = slot + begin;
+            cost += glm::max<uint32>(dst[end++].entity->updateCost, 1);
+        const EntityUpdateNode* batch = dst + begin;
         const uint32 n = end - begin;
+        begin = end;
+        // THE CONTINUATION: the first batch goes back to the calling batch job to run on the same
+        // fiber instead of becoming a job. A unit's few child parts are then processed by the job
+        // that just updated the unit — one job per SUBTREE budget instead of one per level per
+        // parent, which at 40k units was 40k+ continuation jobs and exhausted the job pool.
+        if (inlineNodes && !handedBack)
+        {
+            *inlineNodes = batch;
+            *inlineCount = n;
+            handedBack = true;
+            continue;
+        }
         // High: the pass is the frame's critical path (main waits on it), every batch is bounded
         // (~25us budget), and High is what the window-thread helper serves between pumps.
-        Globals::jobSystem.submit([this, batchSlot, n] { updateBatchJob(batchSlot, n); },
+        Globals::jobSystem.submit([this, batch, n] { updateBatchJob(batch, n); },
             { "Entity Update", EProfileCategory::Entity }, EJobPriority::High, &m_updateCounter);
-        begin = end;
     }
+    return handedBack;
 }
 
 // A root source handed to the workers in slices: each slice job runs submitEntityBatches on its
@@ -582,6 +607,7 @@ void World::submitRootSlices(const EntityUpdateNode* nodes, uint32 count)
 {
     if (count <= rootSliceSize)
     {
+        ProfileScope scope("Root batches inline", EProfileCategory::Entity); // the copy, partition and submits on the caller
         submitEntityBatches(nodes, count);
         return;
     }
@@ -605,7 +631,11 @@ void World::submitVisibleRootSlices()
     const uint32 count = uint32(handles.size());
     const uint32 numSlices = (count + rootSliceSize - 1) / rootSliceSize;
     if (m_visibleRootSlices.size() < numSlices)
+    {
+        ProfileScope scope("Visible slices resize", EProfileCategory::Entity);
         m_visibleRootSlices.resize(numSlices);
+    }
+    ProfileScope submitScope("Visible slice submits", EProfileCategory::Entity);
     for (uint32 slice = 0; slice < numSlices; ++slice)
     {
         const uint32 begin = slice * rootSliceSize;
@@ -624,25 +654,33 @@ void World::submitVisibleRootSlices()
             submitEntityBatches(s.nodes.data(), uint32(s.nodes.size()));
         };
         if (numSlices == 1)
+        {
+            ProfileScope scope("Visible root walk inline", EProfileCategory::Entity);
             walk(); // one slice: inline, no job round trip
+        }
         else
             Globals::jobSystem.submit(walk, { "Update visible slice", EProfileCategory::Entity }, EJobPriority::High, &m_updateCounter);
     }
 }
 
-void World::updateBatchJob(uint32 begin, uint32 count)
+void World::updateBatchJob(const EntityUpdateNode* nodes, uint32 count)
 {
     // Safe because updateSelf never fiber-waits (and neither does this job - submits don't wait):
     // everything it touches is the audited thread-safe inline set, and the per-worker staging slot
     // stays exclusively ours for the job's whole body.
     EntityUpdateStaging& staging = m_updateStaging.local();
     const ThreadLocalScope tlsPin; // asserts should any update path ever park the fiber
+    // Loops over the CONTINUATION: after a batch, the first budget of the children it emitted is
+    // run right here (submitEntityBatches hands it back) and only the rest become jobs — so a
+    // subtree descends on this fiber until it fans out wider than one budget.
+    for (;;)
+    {
     staging.children.clear();
     const Clock::time_point batchStart = Clock::now();
     uint32 batchCost = 0;
-    for (uint32 i = begin; i < begin + count; ++i)
+    for (uint32 i = 0; i < count; ++i)
     {
-        const EntityUpdateNode& node = m_updateArena[i];
+        const EntityUpdateNode& node = nodes[i];
         Entity* entity = node.entity;
         // SIM LOD: the delta this visit gets (0 = sync/placement only), or no visit at all —
         // a dormant entity's subtree is dropped from the pass here.
@@ -678,11 +716,15 @@ void World::updateBatchJob(uint32 begin, uint32 count)
     // Calibrate: ns per COST UNIT, so the batch budget tracks real update costs.
     m_updateCost.addSample(uint64(std::chrono::nanoseconds(Clock::now() - batchStart).count()), batchCost);
 
-    // The continuation: this batch's children become new batch jobs RIGHT NOW - no level barrier.
-    // Submitted from a worker they land on its local deque (LIFO), so a lone deep subtree descends
-    // on one warm core while wide fan-outs get stolen.
-    if (!staging.children.empty())
-        submitEntityBatches(staging.children.data(), uint32(staging.children.size()));
+    // The continuation: this batch's children are partitioned RIGHT NOW - no level barrier. The
+    // first budget of them comes back as (begin, count) for this very fiber; the rest become jobs,
+    // which from a worker land on its local deque (LIFO), so wide fan-outs get stolen while the
+    // warm subtree stays here. The staging vector is copied into the arena BEFORE any submit
+    // (see submitEntityBatches), so an inline child batch reusing this slot cannot hurt us.
+    if (staging.children.empty()
+        || !submitEntityBatches(staging.children.data(), uint32(staging.children.size()), &nodes, &count))
+        return;
+    }
 }
 
 static RendererVKLayout::EPipelineIndex parsePipeline(const oc::string& name)

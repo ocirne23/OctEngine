@@ -10,11 +10,9 @@ import :Morton;
 
 struct CellRecord
 {
-    uint32 dynHead = UINT32_MAX; // head of the cell's intrusive entry list (RecordPool index)
-    uint32 dynCount = 0;
-    uint64 childMask = 0;        // occupied 4x4x4 child cells one level down
-    uint32 staticHead = UINT32_MAX; // first StaticBlock of the cell's static chain, UINT32_MAX = none
-    uint32 staticCount = 0;         // live static entries (blocks free as soon as they empty, so 0 <=> no chain)
+    uint64 childMask = 0;      // occupied 4x4x4 child cells one level down
+    uint32 head = UINT32_MAX;  // first CellBlock of the cell's chain, UINT32_MAX = none
+    uint32 count = 0;          // entries owning a lane here (blocks free as soon as they empty, so 0 <=> no chain)
 };
 
 class CellMap final

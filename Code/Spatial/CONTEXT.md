@@ -70,6 +70,13 @@ An implicit 64-ary hierarchy over per-level hashed grids.
   parent is `key >> 6`, and the low 6 bits select one of the parent's 4×4×4 children.
 * **Every `CellRecord` holds a 64-bit child-occupancy mask**, so queries descend with bit scans and
   never visit empty space.
+* **Small bounded queries skip the descent** (`traverse`, testers with `boundHalf()`: sphere and
+  AABB): per level holding any entry (`m_levelEntityCount`), the cells the volume overlaps — the
+  bound plus that level's loose half cell — are addressed straight from the key math (`quantize`,
+  shift, `encode`) and probed directly; empty levels cost nothing. A few-metre ball is 1–8 probes
+  at level 0. Past `DirectCellLimit` (96) cells over all levels the query descends from the top
+  instead. Same loose bounds, so the result set is identical either way. **Built for the gameplay
+  case: many small-radius queries per frame.**
 * The API takes `dvec3`; per-entry data is SoA with **cell-relative float positions**, and query math
   is reference-relative float — exact at planet scale. Frustums rebase to camera-relative in double
   (`rebaseFrustum`) so the planes stay exact.
@@ -108,7 +115,7 @@ sectors and scatter groups all pass false.
 
 | Operation | Rule |
 |---|---|
-| `updateEntry` | **Callable from any job during the parallel entity pass.** A same-cell update writes only that entry's SoA slots (~4 stores); a cell change stages into a `PerWorker` pending list. One visitor per entry. |
+| `updateEntry` | **Callable from any job during the parallel entity pass.** A same-cell update writes only that entry's pool slots and its block lane (~8 stores, two lines); a cell change stages into a `PerWorker` pending list. One visitor per entry. |
 | `registerEntry` / `unregisterEntry` | Callable from any thread **in the spawn window** (parallel entity spawning). Both take `m_registerMutex` EXCLUSIVE, because pool growth reallocates the SoA. |
 | `query*` | Take `m_registerMutex` SHARED — a spawning worker's script `OnSpawn` may query while another worker registers. |
 | `setLayerMask` / `commitFrame` | Single-threaded, main, outside the pass. |
@@ -140,10 +147,9 @@ invalidates that pass's previous generation — one consumer per pass by design.
 
 **Stamps are 16-bit** (`SpatialStamp`): a generation counts 1..65534, and `advanceStamp` sweeps the
 pass's pool row back to `SpatialStamp_Linked` when it wraps, so a stale value can never read as
-current again. The pool's other narrow rows: `layerMask` is a byte (4 layer bits, static_assert),
-`lastMoveFrame` a modular uint16 (the promotion age compares as `uint16(frame - last)`); `next`/`prev`/
-`storeIdx` stay 32-bit (indices up to the capacity) and `gen` stays 32-bit so a stale handle can never
-match a reused slot.
+current again. The pool's other narrow rows: `layerMask` is a byte (4 layer bits, static_assert);
+`storeIdx` stays 32-bit (block * 8 + lane) and `gen` stays 32-bit so a stale handle can never match
+a reused slot.
 
 **The link-time spawn-guard stamp covers Main and Near ONLY.** The tier and root passes are left at
 0 on link: their generations advance with the World's periodic selection, so a "current" stamp made
@@ -281,32 +287,34 @@ the block mip keeps the FARTHEST depth, and any near-plane crossing reports visi
 (PhysicsComponent spawn and resume), while `render()` runs in the cull window where no spawn is
 legal.
 
-## Static tier
+## Cell blocks
 
-Entries unchanged for `promoteAfterFrames` (60) promote into **8-lane SoA blocks chained per cell**
-(`StaticStore` / `StaticBlock`, `CellRecord.staticHead`), so the 8-wide AVX2 testers (`test8`) load a
-block transpose-free and **every mutation costs the size of its cell, never the level** — there is
-NO level-wide rebuild.
+Every linked entry lives in an **8-lane SoA block chained per cell** (`BlockStore` / `CellBlock`,
+`CellRecord.head`), so the 8-wide AVX2 testers (`test8`) load a block transpose-free and **every
+mutation costs the size of its cell, never the level**. There is no separate dynamic list and no
+static tier: a settled entry and a moving one are the same lane, the difference is only whether
+`updateEntry` writes it this frame. (The tier existed when static entries were sorted level-wide
+ranges; per-cell blocks made the split pointless, since a block lane takes an in-place write as
+cheaply as the pool did.)
 
-* **Promotion is immediate and budgeted:** the scan inspects `staticScanBudget` (1024) pool slots per
-  commit round-robin, so a full sweep takes `capacity / budget` frames; an eligible entry leaves its
-  dynamic list and appends into its cell's head block (a new head when that is full) in the same
-  commit. `storeIdx` = `block * 8 + lane`.
-* **Any real change to a static entry demotes it** (tombstone + Move op + a later re-promotion).
-  `updateEntry` therefore absorbs drift: a radius within `staticRadiusTolerance` (5%, relative) and
-  a position within `staticPositionTolerance` (1 world unit) of the stored copy count as
-  untouched — the stored copy stays, `lastMoveFrame` keeps aging. Queries then test the stored
-  sphere, so the band is the accepted cull error. Both are Spatial/Static tweaks.
-* **Demotion tombstones** — a negative radius fails every test in place (unused lanes past a block's
-  `count` carry one too, so `test8` always runs all 8 lanes). `unregisterEntry` writes only the
-  lane's tombstone (queries read lock-free); the counters and blocks settle in `retireStatic` at
-  commit (the Unlink op, or a Move's demote).
-* **Blocks free as soon as they empty**, so `staticCount == 0` <=> no chain (the sweep relies on it).
-  A cell whose dead lanes would fill a whole block compacts itself (`compactStaticCell`: gather the
-  live lanes into the kept `m_compactScratch`, refill from the head, free the tail) — at least one
-  block freed per pass, so one cell walk per 8 demotions.
-* Sphere, AABB and frustum testers all test static blocks 8-wide. Stats: `Static entries`, `Static
-  blocks`, and the running `Static promotions` / `Static demotions` (a settled scene stops both).
+* **Layout.** `storeIdx` = `block * 8 + lane` (UINT32_MAX while `Unlinked`). The pool keeps the
+  authoritative copy (`getPosition`, the same-cell compare in `updateEntry`, the Link op inserts
+  from it); the lane carries the copy queries read. Unused lanes past a block's `count` hold a
+  tombstone radius, so `test8` always runs all 8 lanes.
+* **Same-cell update** = the pool stores plus the lane stores (two cache lines), from any job.
+  **Cell change** = a Move op: at commit `retireLane` the old lane, update the pool, `insertLane`
+  into the new cell's head block (a new head when that is full). `Cell moves` in the stats counts
+  them per commit.
+* **Tombstones** — a negative radius fails every test in place. `unregisterEntry` writes only the
+  lane's tombstone (queries read lock-free); the counters and blocks settle in `retireLane` at
+  commit (the Unlink op, or a Move).
+* **Blocks free as soon as they empty**, so `count == 0` <=> no chain (the sweep relies on it). A
+  cell whose dead lanes would fill a whole block compacts itself (`compactCell`: gather the OWNED
+  lanes — a tombstoned lane whose Unlink op is still queued this commit is still owned, dropping it
+  would strand that op's `storeIdx` — into the kept `m_compactScratch`, refill from the head, free
+  the tail) — at least one block freed per pass, so one cell walk per 8 retirements.
+* Sphere, AABB and frustum testers test blocks 8-wide; the ray tester goes lane by lane. Stats:
+  `Blocks` (entries / blocks = the lane fill) and `Cell moves`.
 
 ## Stress harness
 
@@ -315,10 +323,11 @@ timed queries, brute-force verification. Stats under Spatial/Stats.
 
 ## Not yet built
 
-**Threading-parallel script QUERIES.** The `markVisible*` stamps and `queryUpdateTiers` fan out,
-but the other `query*` / `forEachIn*` entry points still traverse serially: their emit appends to
+**Threading-parallel LARGE script QUERIES.** The `markVisible*` stamps and `queryUpdateTiers` fan
+out, but the other `query*` / `forEachIn*` entry points traverse serially: their emit appends to
 one out-vector (or runs the caller's inline callback), and they may run concurrently from script
-workers, so they cannot share the single `m_frontier` scratch.
+workers, so they cannot share the single `m_frontier` scratch. Small ones take the direct cell path
+and need no fan-out; only a large ball from a script would gain.
 
 **Leaf-cell slicing in the fan-out.** The expansion stops at leaves: a narrow view over a few big
 cells yields fewer roots than `numWorkers * 4`, and one root can hold most of the work. Splitting a

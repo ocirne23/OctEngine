@@ -349,7 +349,7 @@ Standalone executables: `NetFuzz` (Core + Network) and `DslCompiler` (Core + Ent
 | [Physics](../Code/Physics/CONTEXT.md) | box3d wrapper: the job-driven solver + task ring, the body-command queue, buoyancy, PhysicsComponent, park/suspend, contacts, layers |
 | [Particle](../Code/Particle/CONTEXT.md) | GPU particles + decals, `.pfx` effects, ParticleComponent |
 | [Force](../Code/Force/CONTEXT.md) | Forcefield bubbles: the analytic field, live team count, the baked pressure field, shell tiers / union march, emitter merging, ForceComponent |
-| [Spatial](../Code/Spatial/CONTEXT.md) | The spatial index: the one update call + its kick/join window, the Morton hierarchy, layers, visibility stamps, occlusion, static tier |
+| [Spatial](../Code/Spatial/CONTEXT.md) | The spatial index: the one update call + its kick/join window, the Morton hierarchy, per-cell 8-lane blocks, layers, visibility stamps, occlusion |
 | [Nav](../Code/Nav/CONTEXT.md) | Per-team flow fields: TeamField Dijkstra builds, the post-update field steps, goal fields, seed paths + the rate limiter, unit context steering |
 | [Threading](../Code/Threading/CONTEXT.md) | The fiber job system: worker sizing, post-update jobs, `ForeignWait`, the external helper, scheduling, JobSync, JobGraph, the JobCounter invariants |
 | [Procedural](../Code/Procedural/CONTEXT.md) | `ITerrainSampler`, the V3 diffusion generator, TerrainStreamer, HeightMapBaker (water reach / flow), ocean clipmap, terrain collider, scatter |
@@ -437,7 +437,7 @@ Checked-in inputs for repeatable runs:
 * `*.txt` game saves — the F9 format: structures (cable segments included) and units — for
   `--scenario <path>` and `Tools/profile.ps1`. `march-64-units.txt` is the corridor with 64 team-0
   units, the standard perf scenario. `coop-42k.txt` is the starter base plus 42k ambient enemies and
-  nothing else — **the co-op perf scenario** (entity-count stress: spatial, SIM LOD, static tier); a
+  nothing else — **the co-op perf scenario** (entity-count stress: spatial, SIM LOD); a
   co-op scenario loads as saved, with NO march order (`runScenario` skips it when `--coop`):
   `Tools/profile.ps1 -Game -Server -AppArgs "--coop" -Scenario "Scenarios/coop-42k.txt" -ScenarioAt 2 -After 30`.
 * `*.tweaks` override files for `--tweaks <path>`. `cpu-profile.tweaks` = GPU features off.

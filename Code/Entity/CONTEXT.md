@@ -152,8 +152,13 @@ parent's batch body ran. Subtrees therefore descend independently.
 > The old breadth-first level walk stalled every depth on the slowest batch of the previous one at a
 > "Level merge" barrier.
 
-Worker-submitted continuations land on that worker's LIFO deque, so a deep subtree descends
-cache-warm on one core while wide fan-outs get stolen. Batches submit at **`EJobPriority::High`**
+**The first budget of a batch's children runs on the SAME fiber**: `submitEntityBatches` hands the
+first batch back to the calling `updateBatchJob`, which loops on it, and only the remaining batches
+become jobs. A unit's few child parts are therefore updated by the job that updated the unit — one
+job per subtree BUDGET, not one per level per parent, which at 40k units was 40k+ continuation
+jobs a frame and exhausted the job pool. The root slices still submit every batch (they are the
+fan-out). The other continuations land on that worker's LIFO deque, so wide fan-outs get stolen
+while the warm subtree stays put. Batches submit at **`EJobPriority::High`**
 under the name `"Entity Update"` — the pass is the frame's critical path, every batch is bounded, and
 High is what the window-thread helper serves between pumps.
 
@@ -174,8 +179,12 @@ per cost unit".** There is no even-split term any more: **parallelism comes from
 the pass, and is resized **only between passes** (jobs hold pointers into it) from last frame's use
 plus overflow, doubled.
 
-A claim past the end runs those subtrees serially through the recursive `Entity::update` — correct,
-just not parallel — and the overflow grows the arena next frame, so it is a one-frame hiccup.
+A claim past the end **spills into a block of its own** (`m_updateArenaSpill`, allocated under a
+mutex — the rare path, since a burst such as a wave spawn or a camera swing is what gets there),
+pointer-stable like the arena and freed between passes once the arena has grown to cover it. The
+pass stays parallel. (It used to run those subtrees serially on the submitting thread, which on main
+was a 20 ms "Update batch submit" on a burst frame.) Batch jobs address nodes by POINTER, never by
+arena index, so arena and spill batches are the same to them.
 
 `updateSelf` emits children into `PerWorker` staging, and `submitEntityBatches` copies them into the
 arena in **ONE claim BEFORE the first submit.**

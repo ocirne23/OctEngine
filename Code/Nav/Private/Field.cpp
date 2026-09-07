@@ -116,6 +116,10 @@ void TeamField::rasterizeObstacles(oc::span<const NavObstacle> obstacles, uint8 
             for (int x = lo.x; x <= hi.x; ++x)
                 m_chunks.getOrCreate(chunkKey(glm::ivec2(x, z)));
     }
+    // Pre-emption points between the phases (each phase boundary is a barrier, nothing is half-
+    // done), and the parallelFors run at the build's own LOW priority so their automatic points
+    // between chunks yield to Normal work too, not just High.
+    Globals::jobSystem.preemptionPoint();
 
     // Phase 2: stamp the blocked footprints, one obstacle per work item (breachable obstacles
     // wait for phase 2b).
@@ -139,7 +143,8 @@ void TeamField::rasterizeObstacles(oc::span<const NavObstacle> obstacles, uint8 
                         chunk->cost[cellIndex(cell)] = Blocked;
                 }
         }
-    });
+    }, EJobPriority::Low);
+    Globals::jobSystem.preemptionPoint();
     // Phase 2b: BREACHABLE obstacles (cost != 0) after the Blocked barrier — their cells stay
     // walkable at the (1 + cost) multiplier and never override a Blocked cell. Overlapping
     // breachable obstacles racing on one cell both write a max, which can only lose the larger
@@ -166,7 +171,8 @@ void TeamField::rasterizeObstacles(oc::span<const NavObstacle> obstacles, uint8 
                     }
                 }
         }
-    });
+    }, EJobPriority::Low);
+    Globals::jobSystem.preemptionPoint();
     if (clearanceCost == 0)
         return;
 
@@ -185,6 +191,7 @@ void TeamField::rasterizeObstacles(oc::span<const NavObstacle> obstacles, uint8 
         }
     struct RingCtx { TeamField* self; oc::vector<Chunk*>* chunks; oc::vector<uint64>* keys; uint8 clearanceCost; };
     RingCtx ringCtx{ this, &chunks, &chunkKeys, clearanceCost };
+    Globals::jobSystem.preemptionPoint(); // after the serial chunk gather
     Globals::jobSystem.parallelFor(0u, uint32(chunks.size()), 1u, { "Nav raster clearance", EProfileCategory::Game },
         [c = &ringCtx](uint32 begin, uint32 end)
     {
@@ -212,7 +219,7 @@ void TeamField::rasterizeObstacles(oc::span<const NavObstacle> obstacles, uint8 
                     }
             }
         }
-    });
+    }, EJobPriority::Low);
 }
 
 void TeamField::queueChunk(uint64 key, Chunk& chunk)
@@ -232,6 +239,7 @@ void TeamField::beginBuild(oc::span<const NavObstacle> obstacles, oc::span<const
     m_sources.assign(sources.begin(), sources.end());
     m_cellsReached = 0;
     rasterizeObstacles(obstacles, params.clearanceCost);
+    Globals::jobSystem.preemptionPoint(); // raster complete, seeding not started
 
     // CHUNK-WAVE multi-source Dijkstra: instead of one global heap, each WAVE solves every dirty
     // chunk to its LOCAL fixpoint in parallel (floodSolveChunk — a 256-cell mini-Dijkstra against
@@ -266,6 +274,8 @@ void TeamField::beginBuild(oc::span<const NavObstacle> obstacles, oc::span<const
                 chunk.src[i] = uint16(s);
                 queueChunk(key, chunk);
             }
+        if ((s & 63) == 63)
+            Globals::jobSystem.preemptionPoint(); // thousands of unit sources: a point every 64
     }
     if (m_nextWave.empty())
         m_buildDone = true; // no sources: an obstacle-only raster is complete as is
@@ -323,6 +333,10 @@ bool TeamField::stepBuild(uint32 maxChunks)
         m_waveCursor = end;
         solved += end - begin;
         m_buildSolved += end - begin;
+        // Pre-emption point per wave: the wave's Low parallelFor already yields between chunk
+        // solves; this covers the serial queueing above. Nothing is half-done here (the front
+        // lives in members, exactly the state a step boundary leaves).
+        Globals::jobSystem.preemptionPoint();
     }
     if ((m_waveCursor >= uint32(m_wave.size()) && m_nextWave.empty()) || m_buildIteration >= 4096)
     {

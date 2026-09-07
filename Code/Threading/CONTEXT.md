@@ -15,8 +15,8 @@ the fiber resumes later on **whichever worker picks it up**, which may be a diff
 > **`ThreadLocalScope` is the runtime tripwire for that rule** ([JobSystem.ixx](Private/JobSystem.ixx),
 > debug only): declare one where thread-local state is taken and keep it alive while the state is
 > used. While one is alive on a thread, a fiber park (`fiberWait`, a `JobMutex` park) or an inline
-> job on that thread (`helpWait`, `tryRunOneJob`, `tryRunOneHighJob`) asserts. Every job-reachable
-> `thread_local` and every `PerWorker::local()` use in a job should carry one.
+> job on that thread (`helpWait`, `tryRunOneJob`, `tryRunOneHighJob`, a pre-emption point) asserts.
+> Every job-reachable `thread_local` and every `PerWorker::local()` use in a job should carry one.
 
 All memory is allocated in `initialize()`. The steady-state hot paths are lock-free and allocate
 nothing.
@@ -64,9 +64,11 @@ continuations, so nothing lands on a deque nobody drains.
   on the main thread, so the helper-context teardown is valid. It joins the workers and the timer
   thread, then **drops** leftover queued jobs — destroying their captures and signaling their
   counters, so nothing deadlocks — including post-update jobs whose kick never came.
-* `JobSystemDesc` defaults: 128 fibers (64 KB commit / 512 KB reserve each), 16384 pooled jobs,
-  16384 per priority ring, 4096 per worker deque, 1024 post-update slots, 25 µs parallelFor target
-  chunk. Capacities round up to a power of two.
+* `JobSystemDesc` defaults: 64 fibers (64 KB commit / 512 KB reserve each), 65536 pooled jobs
+  (8 MB), 65536 per priority ring (a whole pool fits one ring), 4096 per worker deque, 1024
+  post-update slots, 25 µs parallelFor target chunk. Capacities round up to a power of two. The
+  pool was exhausted at 32768 by the entity pass's per-parent continuation jobs — fixed at the
+  source (see Entity's continuation batches), the headroom stays.
 
 ## Submitting work
 
@@ -78,7 +80,8 @@ parallelFor(begin, end, JobCost&, JobProfile, fn, priority)        // auto-grain
 signal(JobCounter&)                                                // manual decrement, for external completion
 ```
 
-Priorities are `High` / `Normal` / `Low`, one shared ring each.
+Priorities are `High` / `Normal` / `Low`, one shared ring each. A higher priority also interrupts a
+lower running job at its pre-emption points — see [Pre-emption](#pre-emption).
 
 ### The `JobProfile` is REQUIRED
 
@@ -103,6 +106,54 @@ outlive the wait.
 Chunks are pulled from one shared atomic cursor by `min(numWorkers, numChunks - 1)` helper jobs
 **plus the calling thread**. A range that fits in one grain runs inline with no submit at all. It is
 nestable.
+
+## Pre-emption
+
+**Cooperative, never asynchronous.** A fiber cannot be switched out from under a running job at an
+arbitrary instruction (locks, allocator state, half-written scratch), so a higher-priority job
+interrupts a lower one only at a **pre-emption point**, where the lower job declares nothing is
+half-done:
+
+| Point | Where |
+|---|---|
+| `preemptionPoint()` | Hand-written: call it inside a long Normal/Low job body, e.g. once per outer iteration. Returns true when something ran. |
+| Between chunks of a Normal/Low `parallelFor` | Automatic, every participant (helper jobs and the calling thread alike). The time spent there is subtracted from the `JobCost` sample, so pre-emption cannot inflate the grain. |
+
+At a point, **every ready job of a STRICTLY higher priority** (the shared High ring for a Normal job,
+High plus Normal for a Low one) **runs to completion inline, nested inside the current job on its
+fiber or stack**, and the point returns once those rings are empty. A High job has nothing above it
+and returns at once. The cheap path — nothing higher queued — is one relaxed `wasEmpty` load per
+higher ring, so a point per 25 µs chunk costs nothing measurable.
+
+Nesting is bounded by the priority count (a nested Normal job can only reach a High one), so a fiber
+needs no depth cap; on a non-fiber stack (main, the window helper) the `MaxHelpDepth` cap of
+`wait()` applies. A nested job that parks parks the whole fiber, outer job included — the
+interrupted job resumes only after the higher one finished. Deques are never consulted: they hold
+continuations of mixed priority, and a job in another worker's deque is that worker's next pop
+anyway.
+
+The rules are those of any inline job:
+
+* **No `ThreadLocalScope` may be alive** at a point — asserted, like `helpWait`.
+* **Do not reach a point while holding a `JobMutex`** the nested job could take: the nested lock
+  parks this fiber behind the very job that holds the lock.
+* **`EJobFlag_ForeignWait` jobs are never run at a point.** Their wait could be for exactly the job
+  suspended beneath them on this stack (the `helpWait` depth ≥ 1 deadlock). They go back to their
+  **shared ring** — never the worker's deque: main's help and the window thread only see the rings,
+  and a High "Begin frame job" parked in the deque of a worker mid-way through a seconds-long Low
+  job would wait out that job. The next point pops it again; two ring ops per chunk.
+
+**Profiler marker.** A point that runs something opens one `"Pre-emption"` scope (Threading
+category) nested inside the interrupted job's own scope, with the jobs it ran as children — so the
+timeline shows WHERE a job was interrupted and by WHAT. It migrates with the fiber like any scope.
+`getStats().numPreempted` (Threading/Stats "Pre-empted/s") counts jobs run at points, and the self
+test pins a Low spinner on every worker, fires 256 High jobs and requires at least one to have run at
+a point (main and the window helper legitimately take some).
+
+**Points today:** the terrain pump between chunks, `generateChunk` between its stages and per vertex
+row, `TerrainGenV3::sampleGrid` per row (all outside the V3 pipeline lock — a point INSIDE it would
+deadlock against the Normal collider job, which samples terrain), and the nav build per wave on top
+of its Low parallelFor's automatic points.
 
 ## Post-update jobs
 
@@ -189,7 +240,7 @@ reserved context and runs jobs there.
 |---|---|
 | `registerExternalHelper()` | Once, on that thread — gives it `PerWorker::local()` and profiling. |
 | `tryRunOneHighJob()` | Runs ONE job **from the High ring only**. |
-| `externalHelperWait()` | Parks until a High job is submitted, or `wakeExternalHelper()` fires. |
+| `externalHelperWait(wakeNow, user)` | Parks until a High job is submitted, or `wakeExternalHelper()` fires. `wakeNow(user)` is the caller's own wake condition (the window's pump request), **re-checked after the sleep is announced** — a wake that landed between the caller's check and the epoch load here would otherwise be lost, and main busy-waits on the pump forever (seen live). |
 | `wakeExternalHelper()` | The window's pump request wires this, so a pump request always outranks the nap. |
 
 App wires all four through `window.setIdleWork(...)`
@@ -231,6 +282,20 @@ flag.
 * **Idle** = a short `_mm_pause` spin (~1 µs), then sleep on an eventcount (`oc::atomic::wait` →
   `WaitOnAddress`) with a Dekker announce-and-recheck against `wakeMany`. `anyWorkForWorker` also
   requires a free fiber: jobs cannot start without one, and the fiber release wakes sleepers.
+* **The recheck is approximate, and that once froze the whole process.** `wasEmpty` reports a cell a
+  producer has CLAIMED but not yet PUBLISHED as work, while `pop` reports it as empty. A producer
+  preempted by the OS between the two (main, mid-submit loop) left every worker returning from
+  `idle()` to spin — no sleep, every core hot, and the OS did not hand main a core back until a
+  quantum ended: 15–25 ms of nothing on every track, seen live. So a worker counts consecutive
+  `getWork` misses (`WorkerContext::idleStreak`); from the fourth on, a recheck that still says
+  "work" turns into a **1 ms TIMED sleep** (`WaitOnAddress` with a timeout) instead of a return. A
+  real push after the announce still wakes it at once through the epoch, and the preempted producer
+  gets the core. The window helper does the same (`t_helperMissStreak` in `tryRunOneHighJob` /
+  `externalHelperWait`).
+* **Main runs at `THREAD_PRIORITY_ABOVE_NORMAL`** (set in `initialize()`): workers + main + window
+  cover every hardware thread, so any other thread preempts one of them, and when it is main — the
+  critical path and the frame's main producer — it should get a core back ahead of the
+  equal-priority workers, not after their quantum.
 * **On pool or queue exhaustion a submit executes INLINE** with a debug assert and a
   `numInlineFallbacks` bump — out of phase, but never dropped. Raise the `JobSystemDesc` capacities.
 

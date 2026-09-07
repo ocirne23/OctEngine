@@ -28,10 +28,11 @@ static constexpr const char* c_npcPrefabs[(int)ENpcType::Count] = {
 static constexpr const char* c_npcNames[(int)ENpcType::Count] = { "Enemy", "Brute", "Runner", "Spitter", "Swarm",
     "Elite", "Giant", "Titan", "Lobber", "Spawner", "Warrior" };
 
-// Units inside the view frustum, for the overhead labels — anything off screen would be projected
-// and thrown away, so it is never fetched. The hits are filtered straight out of the traversal
-// into `out` (no intermediate buffer: the labels job may park on another thread).
-void NpcSystem::queryVisibleUnits(const Camera& camera, oc::vector<Entity*>& out)
+// Units inside the view frustum and within maxDist, for the overhead labels — anything off screen
+// or too far to read would be projected and thrown away, so it is never fetched. The hits are
+// filtered straight out of the traversal into `out` (no intermediate buffer: the labels job may
+// park on another thread).
+void NpcSystem::queryVisibleUnits(const Camera& camera, float maxDist, oc::vector<Entity*>& out)
 {
     ProfileScope scope("Npc visible units (query)", EProfileCategory::Game);
     out.clear();
@@ -39,7 +40,7 @@ void NpcSystem::queryVisibleUnits(const Camera& camera, oc::vector<Entity*>& out
     // The renderer's current view-projection is the frustum this frame is drawn with; the spatial
     // index wants it camera-relative (exact at any world scale).
     const Frustum world(Globals::rendererVK.getCenterViewProj());
-    Globals::spatialIndex.forEachInFrustum(rebaseFrustum(world, cameraPos), cameraPos, FLT_MAX,
+    Globals::spatialIndex.forEachInFrustum(rebaseFrustum(world, cameraPos), cameraPos, maxDist,
         SpatialLayer_Render, [&](uint64 user)
     {
         Entity* entity = reinterpret_cast<Entity*>(user);

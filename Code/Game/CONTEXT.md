@@ -62,7 +62,10 @@ POST-UPDATE job** submitted by `update` and joined at the top of the next frame,
 frame's `NavSystem::update` (see Nav's thread contract for why the setters are legal there). **The
 unit sweep is SLICED over Nav's "Rebuild interval"** — ceil(roster × dt / interval) units a frame, a
 constant slice, publishing when the cursor wraps — since Nav consumes sources only at that cadence;
-the cull hash a cycle tests against is the previous cycle's (one interval stale).
+the cull hash a cycle tests against is the previous cycle's (one interval stale). Both post-update
+jobs are Normal and carry **pre-emption points** (see Threading) so High work gets through: the nav
+feed every 256 swept units, after the sweep and before the publish; the ambient wander every 16
+strolls. A unit or a stroll is always handled whole before a point.
 
 In game mode `InputControls::setGameMode(true)` mutes the testbed spawn and possess keys — script
 event fires, hotbar routing, F5/F6 and T/R/G stay — and the sponza spawn is skipped.
@@ -927,6 +930,14 @@ charge"**, pay a pressure surcharge ("Emitter energy/s @ pressure 1") plus a per
 drain range" — 20 m, the Bastion's visible bubble radius at reach 45 / output 2.6, planar distance
 to the STRUCTURE, shield state irrelevant; spitter shots deposit too, within their own
 `EmitterDrainRadius`).
+
+**World labels are CULLED before they are built** ("Game/HUD" `Label max distance`, 120 m, not
+Synced, **measured from the PLAYER entity** — the camera only when there is none): units come from
+a frustum query bounded by that distance plus the camera-to-player distance and then test the exact
+player distance, structures test it against the anchor (the selected one is exempt), and both drop
+anything `worldToScreen` puts outside
+the viewport plus the overlay's 100 px margin — `worldToScreen` itself only rejects what is BEHIND
+the camera, so without these every structure on the map built a label the widget pass then clipped.
 
 **World labels:** a health bar over every damageable structure, plus a second bar for storage (energy
 yellow, fuel orange) and a third on the Base. **FULL health and shield bars stay hidden** — only

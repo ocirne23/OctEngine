@@ -188,6 +188,11 @@ This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
   exit-recheck protocol, nearest-first). **`createMeshScene` runs IN the pump** — it is pure
   per-instance copying, audited — and the main thread only does the GPU-facing
   `ObjectContainer::initialize`, **so warm-tile mesh builds overlap cold V3 waits, which park fibers.**
+* **Pre-emption points** (see Threading): the pump yields to higher-priority jobs between chunks,
+  `generateChunk` after its `sampleGrid` and per vertex row, and `TerrainGenV3::sampleGrid` per row.
+  **All of them sit OUTSIDE the V3 pipeline `JobMutex`** — the Normal collider job samples terrain
+  and would park on that lock behind the very job holding it, so a point under the lock deadlocks.
+  A cold-tile inference itself is never interrupted; it parks the fiber anyway.
 * A `Resident` declares its `container` FIRST so it is destroyed AFTER the `node` that references its
   meshes. A chunk leaving the ring frees all GPU residency through `~ObjectContainer` →
   `Renderer::removeObjectContainer`, **so residency stays bounded across a session.**

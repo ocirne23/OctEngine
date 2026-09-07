@@ -2,6 +2,7 @@ module Procedural;
 
 import Core;
 import Core.glm;
+import Threading; // pre-emption points between the chunk's stages and rows
 import :TerrainGenerator;
 import :TerrainSampler;
 import :TerrainChunk;
@@ -30,6 +31,10 @@ namespace Procedural
 		const uint32 gpr = vpr + 2; // grid points per row: the vertex grid plus a 1-point halo
 		oc::vector<TerrainPoint> field((size_t)gpr * gpr);
 		maps.sampleGrid(ox - (double)step, oz - (double)step, (double)step, gpr, gpr, field);
+		// This runs on a Low pump job (or the Normal collider job): let higher-priority work through
+		// between the stages and between the vertex rows below. The V3 lock is NOT held here — the
+		// grid was resolved above — so a pre-empting job that samples terrain cannot deadlock on it.
+		Globals::jobSystem.preemptionPoint();
 
 		// Vertex coords -> grid entry. SIGNED on purpose: the border vertices ask for col/row -1, which the
 		// halo holds. (With uint32 that underflows and only lands on the right entry by wrapping twice.)
@@ -72,6 +77,7 @@ namespace Procedural
 				out.bitangents.push_back(glm::normalize(dpdv));
 				out.texCoords.push_back({ (float)col / (float)res, (float)row / (float)res, 0.0f });
 			}
+			Globals::jobSystem.preemptionPoint(); // nothing half-done between rows
 		}
 
 		out.indices.reserve((size_t)res * res * 6);

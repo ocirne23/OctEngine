@@ -22,6 +22,7 @@ void JobSystemStress::initialize()
     Tweak::intVar("Threading/Stats", "Parked/s", &m_parkedPerSec, 0, INT32_MAX, 0.0f);
     Tweak::intVar("Threading/Stats", "Resumed/s", &m_resumedPerSec, 0, INT32_MAX, 0.0f);
     Tweak::intVar("Threading/Stats", "Sleeps/s", &m_sleepsPerSec, 0, INT32_MAX, 0.0f);
+    Tweak::intVar("Threading/Stats", "Pre-empted/s", &m_preemptedPerSec, 0, INT32_MAX, 0.0f);
     Tweak::intVar("Threading/Stats", "Inline fallbacks", &m_inlineFallbacks, 0, INT32_MAX, 0.0f);
     Tweak::intVar("Threading/Stats", "Busy %", &m_busyPercent, 0, 100, 0.0f);
 }
@@ -183,6 +184,7 @@ void JobSystemStress::updateStatsDisplay()
         m_parkedPerSec = int(double(stats.numParked - m_lastStats.numParked) / interval);
         m_resumedPerSec = int(double(stats.numResumed - m_lastStats.numResumed) / interval);
         m_sleepsPerSec = int(double(stats.numSleeps - m_lastStats.numSleeps) / interval);
+        m_preemptedPerSec = int(double(stats.numPreempted - m_lastStats.numPreempted) / interval);
         m_inlineFallbacks = int(stats.numInlineFallbacks);
         m_busyPercent = int(100.0 * double(stats.busyNs - m_lastStats.busyNs) / (interval * 1e9 * double(Globals::jobSystem.getNumContexts())));
     }
@@ -354,6 +356,44 @@ void JobSystemStress::selfTest()
         const bool pass = total == 100000u;
         numFailed += !pass;
         sprintf_s(buf, "JobSystem self test: PerWorker sums via graph-nested parallelFor - %s", pass ? "PASS" : "FAIL");
+        pass ? Log::info(buf) : Log::error(buf);
+    }
+
+    { // pre-emption: a Low job pinned on every worker lets High jobs through at its pre-emption
+      // points. Main and the window helper may run some of the High jobs too, so the pass
+      // condition is "at least one ran at a pre-emption point", not "all did". The spinners time
+      // out, so a broken pre-emption reports FAIL instead of hanging.
+        const uint32 numSpinners = jobSystem.getNumWorkers();
+        constexpr uint32 numHigh = 256;
+        oc::atomic<uint32> started = 0;
+        oc::atomic<uint32> highDone = 0;
+        JobCounter lowCounter;
+        JobCounter highCounter;
+        const uint64 preemptedBefore = jobSystem.getStats().numPreempted;
+        const Clock::time_point start = Clock::now();
+        for (uint32 i = 0; i < numSpinners; ++i)
+            jobSystem.submit([&started, &highDone, start]
+                {
+                    started.fetch_add(1, oc::memory_order_relaxed);
+                    while (highDone.load(oc::memory_order_relaxed) < numHigh && Clock::now() - start < std::chrono::seconds(2))
+                        if (!Globals::jobSystem.preemptionPoint())
+                            for (volatile int spin = 0; spin < 50; ++spin) {}
+                }, { "testPreemptLow" }, EJobPriority::Low, &lowCounter);
+        while (started.load(oc::memory_order_relaxed) < numSpinners && Clock::now() - start < std::chrono::seconds(1))
+            std::this_thread::yield(); // every worker is inside a spinner before the High work lands
+        for (uint32 i = 0; i < numHigh; ++i)
+            jobSystem.submit([&highDone]
+                {
+                    for (volatile int spin = 0; spin < 2000; ++spin) {}
+                    highDone.fetch_add(1, oc::memory_order_relaxed);
+                }, { "testPreemptHigh" }, EJobPriority::High, &highCounter);
+        jobSystem.wait(highCounter);
+        jobSystem.wait(lowCounter);
+        const uint64 preempted = jobSystem.getStats().numPreempted - preemptedBefore;
+        const bool pass = highDone.load(oc::memory_order_relaxed) == numHigh && preempted > 0;
+        numFailed += !pass;
+        sprintf_s(buf, "JobSystem self test: pre-emption (%u Low spinners, %u High jobs, %llu pre-empted) - %s",
+            numSpinners, numHigh, preempted, pass ? "PASS" : "FAIL");
         pass ? Log::info(buf) : Log::error(buf);
     }
 

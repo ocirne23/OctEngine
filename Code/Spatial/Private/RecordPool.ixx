@@ -8,8 +8,9 @@ constexpr uint32 NumSpatialPasses = uint32(ESpatialPass::Count);
 
 // Module-internal SoA storage for every registered entry. Slots come from a BitRangeAllocator so
 // indices stay low and dense; positions are stored relative to the owning cell's min corner
-// (bounded by the cell size, so float keeps full precision at planet-scale coordinates) split
-// into per-axis arrays for future 8-wide SIMD tests. Nothing here is exported.
+// (bounded by the cell size, so float keeps full precision at planet-scale coordinates). The
+// pool copy is the authoritative one (getPosition, the same-cell compare in updateEntry, the
+// Link op); the cell's CellBlock lane carries the copy queries read. Nothing here is exported.
 
 enum ERecordFlag : uint8
 {
@@ -17,7 +18,6 @@ enum ERecordFlag : uint8
     RecordFlag_Unlinked    = 2, // registered but not yet linked into its cell (pre-commit)
     RecordFlag_PendingFree   = 4,  // unregistered, unlink + slot release happen at commit
     RecordFlag_PendingMove   = 8,  // a queued Move op holds newer data than the in-place SoA fields
-    RecordFlag_StaticTier    = 16, // stored in the static tier (storeIdx = block * 8 + lane), not in a dynamic list
     RecordFlag_NoSpawnGuard  = 64, // registerEntry(spawnVisible = false): the entry is NEVER treated as
                                    // visible before its first real stamp — streamed terrain wants this
                                    // (chunks materialize off-screen constantly; the guard pinned them in
@@ -69,12 +69,10 @@ public:
     oc::vector<float> radius;           // negative = neutralized (pending free), fails every test
     oc::vector<uint64> cellKey;         // current cell Morton key at `level`
     oc::vector<uint64> userData;
-    oc::vector<uint32> next, prev;      // intrusive per-cell doubly-linked list
     oc::vector<uint8> layerMask;        // SpatialLayer_* bits (4 in use; static_assert in Types)
     oc::vector<uint32> gen;             // handle generation: 32-bit so a stale handle can never match a reused slot
     oc::array<oc::vector<SpatialStamp>, NumSpatialPasses> lastVisible; // stamp generation per pass (see SpatialStamp)
-    oc::vector<uint16> lastMoveFrame;   // frame id, MODULAR: compare as uint16(frameId - lastMoveFrame) (static promotion)
-    oc::vector<uint32> storeIdx; // StaticTier: block * 8 + lane in the level's StaticStore
+    oc::vector<uint32> storeIdx;        // linked: block * 8 + lane in the level's BlockStore; UINT32_MAX while Unlinked
     oc::vector<uint8> level;
     oc::vector<uint8> flags;
 
@@ -86,12 +84,10 @@ private:
         radius.resize(m_capacity);
         cellKey.resize(m_capacity);
         userData.resize(m_capacity);
-        next.resize(m_capacity); prev.resize(m_capacity);
         layerMask.resize(m_capacity);
         gen.resize(m_capacity);
         for (oc::vector<SpatialStamp>& pass : lastVisible)
             pass.resize(m_capacity);
-        lastMoveFrame.resize(m_capacity);
         storeIdx.resize(m_capacity);
         level.resize(m_capacity);
         flags.resize(m_capacity);

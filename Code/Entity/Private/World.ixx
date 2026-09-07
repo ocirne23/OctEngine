@@ -289,8 +289,11 @@ private:
     // CONTINUATION-BATCH entity update (see update()): one batch job processes a node range from
     // the arena and immediately slices the children it emitted into new batch jobs - no level
     // barrier, a child's only dependency is its own parent, which just finished.
-    void updateBatchJob(uint32 begin, uint32 count);
-    void submitEntityBatches(const EntityUpdateNode* nodes, uint32 count);
+    void updateBatchJob(const EntityUpdateNode* nodes, uint32 count); // nodes: arena or spill, pointer-stable for the pass
+    // With inlineNodes/inlineCount the FIRST batch is handed back for the caller to run inline
+    // (the batch job's continuation) and only the rest are submitted; returns false when nothing
+    // was handed back. Without them every batch is submitted.
+    bool submitEntityBatches(const EntityUpdateNode* nodes, uint32 count, const EntityUpdateNode** inlineNodes = nullptr, uint32* inlineCount = nullptr);
     // The root sources go to the workers in slices of rootSliceSize (see World.cpp): a slice job
     // runs submitEntityBatches on its range; a visible slice first walks its handles to roots.
     static constexpr uint32 rootSliceSize = 256;
@@ -375,11 +378,14 @@ private:
     oc::vector<VisibleRootSlice> m_visibleRootSlices; // sized on main before the slice jobs go out
     // Frame arena for in-flight batch nodes: claimed with an atomic bump (NEVER rolled back),
     // pointer-stable during the pass (resized only between frames, from last frame's use +
-    // overflow). A claim past the end runs that batch's subtrees serially instead (correct, just
-    // not parallel) and grows the arena next frame.
+    // overflow). A claim past the end SPILLS into a block of its own (m_updateArenaSpill, allocated
+    // under the mutex - rare, the arena is sized from last pass), so the pass stays parallel; the
+    // spill is freed between passes once the arena has grown to cover it.
     oc::vector<EntityUpdateNode> m_updateArena;
     oc::atomic<uint32> m_updateArenaCursor = 0;
     oc::atomic<uint32> m_updateArenaOverflow = 0;
+    oc::vector<oc::unique_ptr<EntityUpdateNode[]>> m_updateArenaSpill;
+    std::mutex m_updateArenaSpillMutex;
     Renderer* m_updateRenderer = nullptr; // pass-scoped: shrinks every batch job's capture to 16 bytes
     float m_updateDelta = 0.0f;
     uint32 m_updateBudget = 1;            // cost units per batch (~25us), computed once per pass

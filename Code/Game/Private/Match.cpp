@@ -265,7 +265,7 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
         Tweak::floatVar("Game/Coop", "Cost lobber", &m_waveCost[(int)ENpcType::Lobber], 0.1f, 500.0f, 0.5f);
         Tweak::floatVar("Game/Coop", "Cost spawner", &m_waveCost[(int)ENpcType::Spawner], 0.1f, 500.0f, 0.5f);
         Tweak::floatVar("Game/Coop", "Cost warrior", &m_waveCost[(int)ENpcType::Warrior], 0.1f, 500.0f, 0.5f);
-        Tweak::intVar("Game/Coop", "Max enemy units", &m_waveMaxAlive, 1, 60000, 50);
+        Tweak::intVar("Game/Coop", "Max enemy units", &m_waveMaxAlive, 1, 100000, 50);
         Tweak::floatVar("Game/Coop", "Wave spawn area per unit", &m_waveSpawnAreaPerUnit, 1.0f, 60.0f, 0.5f);
         Tweak::intVar("Game/Coop", "Ambient budget", &m_ambientBudget, 0, 1000000, 10);
         Tweak::floatVar("Game/Coop", "Ambient safe radius", &m_ambientSafeRadius, 10.0f, 200.0f, 1.0f);
@@ -275,6 +275,7 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
         Tweak::floatVar("Game/Coop", "Ambient wander distance", &m_ambientWanderDistance, 2.0f, 60.0f, 1.0f);
         Tweak::floatVar("Game/Coop", "Ambient wander base bias", &m_ambientWanderBaseBias, 0.0f, 2.0f, 0.05f);
         Tweak::floatVar("Game/Coop", "Ambient wander timeout (s)", &m_ambientWanderTimeout, 1.0f, 60.0f, 1.0f);
+        Tweak::floatVar("Game/HUD", "Label max distance", &m_labelMaxDistance, 10.0f, 2000.0f, 10.0f, {}, ETweakFlags::None);
         Tweak::floatVar("Game/Nav", "Nav unit source reach", &m_navUnitSourceReach, 8.0f, 400.0f, 4.0f);
         Tweak::floatVar("Game/Sim LOD", "Unit cluster focus radius", &m_focusClusterRadius, 5.0f, 200.0f, 1.0f, {}, ETweakFlags::None);
         Tweak::intVar("Game/Coop", "Spawns per frame", &m_spawnsPerFrame, 1, 200, 1);
@@ -2444,6 +2445,11 @@ void GameMatch::gatherNavFeed(float deltaSec)
             m_navCellTeamsNext[cellKey(e->pos)] |= uint8(1u << u->team);
             if (otherTeamNear(e->pos, (uint8)u->team))
                 m_navUnitSources[u->team].push_back(Nav::NavSource{ e->pos, glm::max(u->bodyRadius, 0.25f), 0, 3 });
+            // Pre-emption point every 256 units (see JobSystem::preemptionPoint): a Normal job
+            // in the present window, so High work (physics tasks, spatial chunks) gets through.
+            // Every unit is fully recorded before the point - the sweep resumes at i + 1.
+            if ((i & 255) == 255)
+                Globals::jobSystem.preemptionPoint();
         }
         m_navFeedCursor = end;
         if (m_navFeedCursor < n)
@@ -2452,6 +2458,7 @@ void GameMatch::gatherNavFeed(float deltaSec)
 
     // CYCLE END: the cheap parts (players into the hash, obstacles + structure sources, player
     // sources), then the publish.
+    Globals::jobSystem.preemptionPoint(); // sweep complete, cycle end not started
     m_navFeedCursor = 0;
     const auto markPlayer = [&](Entity* e, uint8 team) {
         if (e && team < Nav::MaxTeams)
@@ -2512,6 +2519,7 @@ void GameMatch::gatherNavFeed(float deltaSec)
     }
     // The Nav setters (change-detected: a compare per source, a copy on change) — on the job, see
     // submitNavFeed for why that is legal.
+    Globals::jobSystem.preemptionPoint(); // lists complete, publish not started
     {
         ProfileScope publishScope("Game nav publish", EProfileCategory::Game);
         Globals::navSystem.setObstacles(m_navObstacles);
@@ -3154,7 +3162,7 @@ void GameMatch::updateUnitSelection(const Camera& camera)
         {
             const glm::vec2 lo = glm::min(m_lmbDownPos, m_mousePos), hi = glm::max(m_lmbDownPos, m_mousePos);
             oc::vector<Entity*> units;
-            NpcSystem::queryVisibleUnits(camera, units);
+            NpcSystem::queryVisibleUnits(camera, FLT_MAX, units); // a box select reaches every unit on screen, however far
             for (Entity* e : units)
             {
                 const GameUnitComponent* u = getComponent<GameUnitComponent>(e);
@@ -3531,6 +3539,28 @@ void GameMatch::buildWorldLabels()
     popup.title.clear();
     popup.buttons.clear();
     const Rect& viewport = m_labelsViewport;
+    // CULLING. worldToScreen only rejects what is BEHIND the camera, so without these every
+    // structure on the map and every unit in the frustum built a label, was copied into GameHud
+    // and walked by the widget pass, which then clipped most of them. A label past "Label max
+    // distance" is unreadable and one outside the viewport (plus the overlay's own margin) is
+    // never drawn; neither is worth building. The selected structure keeps its label regardless.
+    // The distance is from the PLAYER, not the camera: the top-down camera sits well above and
+    // behind the capsule, and what matters is what is near the player (the camera is the
+    // fallback when there is no player entity - the editor, a spectating client).
+    const Entity* cullEntity = m_player.entity();
+    const glm::vec3 cullCenter = cullEntity ? cullEntity->pos : camera.position;
+    const float maxDist2 = m_labelMaxDistance * m_labelMaxDistance;
+    const auto inRange = [&](const glm::vec3& p)
+    {
+        const glm::vec3 d = p - cullCenter;
+        return glm::dot(d, d) <= maxDist2;
+    };
+    const glm::vec2 vpMin = glm::vec2(viewport.min) - 100.0f;
+    const glm::vec2 vpMax = glm::vec2(viewport.max) + 100.0f;
+    const auto onScreen = [&](const glm::vec2& p)
+    {
+        return p.x >= vpMin.x && p.x <= vpMax.x && p.y >= vpMin.y && p.y <= vpMax.y;
+    };
     // PROBLEM BADGES, on a per-structure JITTERED ~1 s timer: the check scans a structure's links,
     // and every state it reports changes on the timescale of a player's actions, so re-running it
     // per structure per frame is waste. The jitter is a STABLE per-id phase (a hash of the
@@ -3565,7 +3595,10 @@ void GameMatch::buildWorldLabels()
                 && m_structures.structureHealth(i) >= healthMax - 1e-3f)))
             continue;
         HudWorldLabel label;
-        if (!camera.worldToScreen(viewport, m_structures.structureLabelAnchor(i), label.screenPos))
+        const glm::vec3 anchor = m_structures.structureLabelAnchor(i);
+        if (i != selected && !inRange(anchor))
+            continue;
+        if (!camera.worldToScreen(viewport, anchor, label.screenPos) || !onScreen(label.screenPos))
             continue;
         label.title = c_structureShortNames[(int)type]; // the selected one overrides w/ full name
         if (const char* warning = m_structures.structureWarning(i)) // the cached problem bubble
@@ -3715,17 +3748,21 @@ void GameMatch::buildWorldLabels()
     // player capsules; the own player is skipped (its HUD bars cover it).
     Entity* ownPlayer = m_player.entity();
     oc::vector<Entity*>& units = m_labelUnits; // the labels job's own scratch (one job at a time)
-    NpcSystem::queryVisibleUnits(camera, units);
+    // The query measures from the CAMERA; a unit within maxDist of the player is within
+    // maxDist + |camera - player| of the camera, so that bound keeps the traversal tight and the
+    // exact player-distance test below does the rest.
+    NpcSystem::queryVisibleUnits(camera, m_labelMaxDistance + glm::distance(cullCenter, camera.position), units);
     for (Entity* unitEntity : units)
     {
         const GameUnitComponent* u = getComponent<GameUnitComponent>(unitEntity);
-        if (!u || unitEntity == ownPlayer)
+        if (!u || unitEntity == ownPlayer || !inRange(unitEntity->pos))
             continue;
         // (Swarm bodies included: full bars are hidden, so only the DAMAGED slice of a thousand-
         // body horde pushes a label — the drown-the-HUD concern the old shieldOutput skip covered.)
         HudWorldLabel label;
         const float height = u->puppet ? 2.0f : 1.6f;
-        if (!camera.worldToScreen(viewport, unitEntity->pos + glm::vec3(0.0f, height, 0.0f), label.screenPos))
+        if (!camera.worldToScreen(viewport, unitEntity->pos + glm::vec3(0.0f, height, 0.0f), label.screenPos)
+            || !onScreen(label.screenPos)) // the frustum query is conservative (entry bounds)
             continue;
         label.title = u->getShortName(); // the prefab's `ShortName` tag (same on every instance — no wire type needed)
         // FULL bars stay hidden ("AlwaysDisplayHealth true" in the .pre opts a prefab back in):
@@ -3858,6 +3895,10 @@ void GameMatch::tickAmbientWander(float deltaSec)
         }
     for (; issue > 0; --issue)
     {
+        // Pre-emption point every 16 strolls (a stroll is up to 32 probes plus a ground clamp):
+        // a Normal post-update job, so High work gets through. A stroll is issued whole.
+        if ((issue & 15) == 0)
+            Globals::jobSystem.preemptionPoint();
         GameUnitComponent* u = nullptr;
         Entity* e = nullptr;
         for (int scan = 0; scan < c_wanderScanCap && !u; ++scan)
@@ -3928,11 +3969,9 @@ void GameMatch::updateHud()
     hud.setBar("Health", m_player.health(), m_player.healthMax(), glm::vec3(0.9f, 0.25f, 0.2f));
     hud.setBar("Energy", m_player.energy(), m_player.energyMax(), glm::vec3(0.3f, 0.8f, 1.0f));
     hud.setBar("Materials", m_player.materials(), m_player.materialsMax(), glm::vec3(1.0f, 0.8f, 0.4f)); // carried inventory
-    hud.setCounter("Pressure", m_player.pressure(), 2, glm::vec3(0.8f, 0.4f, 1.0f));
-    hud.setCounter("Density", m_player.density(), 2, glm::vec3(0.6f, 0.9f, 0.6f));
-    hud.setCounter("Shield radius", m_player.shieldRadius(), 2, glm::vec3(0.3f, 0.8f, 1.0f));
-    hud.setCounter("Minerals", m_structures.minerals((uint8)m_team), 0, glm::vec3(0.6f, 0.8f, 1.0f));
-    hud.setCounter("Fuel", m_structures.fuel((uint8)m_team), 0, glm::vec3(1.0f, 0.6f, 0.2f));
+    // (Pressure, density, shield radius, minerals and fuel are deliberately NOT counters: they
+    // read on the structure labels and the tweaks, and the HUD column is kept to what a player
+    // acts on each second.)
     hud.setBar("Grid energy", m_structures.gridEnergy(), glm::max(m_structures.gridEnergyCapacity(), 1.0f),
         glm::vec3(1.0f, 0.9f, 0.3f));
     hud.setCounter("Energy gen/s", m_structures.energyGenPerSec(), 1, glm::vec3(1.0f, 0.9f, 0.3f));

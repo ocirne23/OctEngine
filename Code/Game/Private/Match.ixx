@@ -444,7 +444,7 @@ private:
                                                15.0f, 100.0f, 500.0f, 30.0f, 40.0f,  // Elite, Giant, Titan, Lobber, Spawner
                                                5.0f };                             // Warrior
     float waveCostOf(ENpcType t) const { return glm::max(m_waveCost[(int)t], 0.1f); }
-    int m_waveMaxAlive = 50000;    // total AI units cap (ambient + waves)
+    int m_waveMaxAlive = 100000;    // total AI units cap (ambient + waves)
     // Live AI bodies (ambient + waves): the alive cap in queueWave AND the HUD's "Enemies alive".
     int aiAliveCount() const;
     int m_ambientBudget = 500000;    // POINTS of world-start scatter (same per-type costs as waves)
@@ -455,6 +455,7 @@ private:
     float m_ambientWanderDistance = 12.0f; // stroll length (0.4-1x of it)
     float m_ambientWanderBaseBias = 0.5f;  // heading = random unit vector + bias * toward the Base
     float m_ambientWanderTimeout = 12.0f;  // a stroll that does not arrive gives up after this
+    float m_labelMaxDistance = 120.0f;     // world labels (unit/structure bars, names) beyond this are not built
     int m_spawnsPerFrame = 100;    // trickle budget — a huge wave enters over seconds, not one hitch
 
     bool m_enabled = false;

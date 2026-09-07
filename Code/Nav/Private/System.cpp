@@ -481,6 +481,9 @@ void NavSystem::runFieldSteps()
             if (gain > 0.0f)
                 for (size_t i = first; i < pressureItems.size(); ++i)
                     pressureItems[i].push = &pushes[t];
+            // A pre-emption point per team gather (the beginSteps walk every chunk serially);
+            // the Low parallelFors below yield between items on their own.
+            Globals::jobSystem.preemptionPoint();
         }
         struct Ctx
         {

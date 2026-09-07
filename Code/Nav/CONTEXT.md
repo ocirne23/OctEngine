@@ -107,6 +107,14 @@ min — and a missed improvement just re-queues the chunk.
 
 ### The build is STEPPED across frames
 
+A build is also **pre-emptible** (see Threading). Every `parallelFor` in it — the three raster
+phases and the waves — runs at the build's own LOW priority, so their automatic between-chunk
+points yield to Normal work as well as High; explicit points sit at every raster phase boundary,
+after the raster, every 64 sources of the seed loop, and after each wave's serial queueing in
+`stepBuild`. Nothing is half-done at any of them — the front lives in members. The field-step job
+adds one per team gather. `floodSolveChunk` and the seed-path A\* carry a `ThreadLocalScope` and
+therefore have NO points inside; their granularity is the chunk / the job.
+
 `beginBuild` (raster + seeds) runs in the `"Nav build"` job together with the first chunk budget;
 the front (`m_wave`/`m_nextWave` plus `m_waveCursor`) lives in the field, and `NavSystem::update`
 submits one `"Nav build step"` job per frame with a CALCULATED chunk budget (`buildStepBudget`):
@@ -152,9 +160,13 @@ probe.
 
 ## `NavSystem::update` (main)
 
-Runs from main.cpp's kick/join window, after `physics.update`
-([main.cpp:779](../App/main.cpp#L779)) — it touches neither the spatial index nor the renderer, so it
-fills the stretch where main otherwise only waits on the "Spatial cull" and "Begin frame" jobs.
+Runs LAST in the frame, right before main's `kickPostUpdateJobs()` + `present()` (App row 25). It
+used to sit in the kick/join window after `physics.update`, but the Low-priority build slices it
+kicks there landed next to the "Spatial cull" chunks and delayed them (a worker holding a build
+chunk finishes it first). From the tail of the frame they run through present and the fence wait
+instead — the stretch where the workers are otherwise idle — and the field-steps job it queues
+rides the same post-update kick. **A finished build publishes one frame later than the in-window
+placement did**; the game tick and the entity pass of the NEXT frame are the first readers.
 
 1. **Publish** finished builds — a `shared_ptr<const TeamField>` swap. Workers only ever read
    published pointers, which change only here.
@@ -308,7 +320,11 @@ stale by the time anyone gets there.
 | **EVERY unit on its own jittered timer**, while it walks a ROUTE or a MOVE ORDER — a unit chasing a HUNTED enemy (nav field / local search / engage) requests one only on `GameUnitParams::huntSeedTeam` (the co-op AI team; -1 = none), so friendly units never carve lanes toward enemies | [Npc.cpp:397](../Game/Private/Npc.cpp#L397) |
 
 The unit path queues a `SeedRequest{from, to, team, stuck}` every "Seed request interval" (×0.75–1.25
-jitter, random phase at spawn), drained on the main thread by `NpcSystem::service` into
+jitter, random phase at spawn). **The due time is on the SIM CLOCK** (`m_seedDue` against
+`Time::getSimElapsedSec`), not a countdown of the tick delta — a throttled tick's delta is capped at
+"Max catch-up" frames, so a countdown ran ~8× slow at tier 2. The cadence is therefore independent of
+the SIM LOD tier; the tier only bounds it below by its tick rate (1 s at tier 2). Requests are
+drained on the main thread by `NpcSystem::service` into
 `requestSeedPath` at "Order lane speed" — or "Stuck lane speed" when the unit is stalled past
 "Unstick after".
 

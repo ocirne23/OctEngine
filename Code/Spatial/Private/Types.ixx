@@ -156,10 +156,8 @@ export struct SpatialStats
     int cellsFullyInside = 0;
     int entityTests = 0;
     int visiblePerPass[uint32(ESpatialPass::Count)] = {};
-    int staticEntries = 0;
-    int staticBlocks = 0;     // 8-lane blocks in use across all levels
-    int staticPromotions = 0; // running totals (a settled scene stops both)
-    int staticDemotions = 0;
+    int numBlocks = 0;  // 8-lane cell blocks in use across all levels (numEntries / numBlocks = lane fill)
+    int cellMoves = 0;  // entries that changed cell in the last commit (Move ops applied)
     float commitMs = 0.0f;
     float markVisibleMs = 0.0f;
     int perLevelCells[Morton::MaxLevels] = {};
