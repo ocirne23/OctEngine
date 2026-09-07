@@ -17,10 +17,7 @@ enum ERecordFlag : uint8
     RecordFlag_Unlinked    = 2, // registered but not yet linked into its cell (pre-commit)
     RecordFlag_PendingFree   = 4,  // unregistered, unlink + slot release happen at commit
     RecordFlag_PendingMove   = 8,  // a queued Move op holds newer data than the in-place SoA fields
-    RecordFlag_StaticTier    = 16, // selected for / stored in the static tier (storeIdx = which)
-    RecordFlag_PendingStatic = 32, // sits in a pendingPromotions list; blocks re-promotion until a
-                                   // rebuild consumes that entry (a demote in between would otherwise
-                                   // allow a duplicate, and the rebuild would unlink the entry twice)
+    RecordFlag_StaticTier    = 16, // stored in the static tier (storeIdx = block * 8 + lane), not in a dynamic list
     RecordFlag_NoSpawnGuard  = 64, // registerEntry(spawnVisible = false): the entry is NEVER treated as
                                    // visible before its first real stamp — streamed terrain wants this
                                    // (chunks materialize off-screen constantly; the guard pinned them in
@@ -77,7 +74,7 @@ public:
     oc::vector<uint32> gen;             // handle generation: 32-bit so a stale handle can never match a reused slot
     oc::array<oc::vector<SpatialStamp>, NumSpatialPasses> lastVisible; // stamp generation per pass (see SpatialStamp)
     oc::vector<uint16> lastMoveFrame;   // frame id, MODULAR: compare as uint16(frameId - lastMoveFrame) (static promotion)
-    oc::vector<uint32> storeIdx; // StaticTier: slot in the level's StaticStore, UINT32_MAX = pending
+    oc::vector<uint32> storeIdx; // StaticTier: block * 8 + lane in the level's StaticStore
     oc::vector<uint8> level;
     oc::vector<uint8> flags;
 

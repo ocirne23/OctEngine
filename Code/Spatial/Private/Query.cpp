@@ -270,57 +270,48 @@ void SpatialIndex::emitCellEntries(const Tester& tester, const glm::vec3& cellMi
         ++stats.emitted;
         emit(idx, pos);
     }
-    if (rec.staticCount)
+    const StaticStore& store = m_static[level];
+    for (uint32 b = rec.staticHead; b != UINT32_MAX;)
     {
-        const StaticStore& store = m_static[level];
-        const uint32 first = rec.staticStart;
-        const uint32 last = first + rec.staticCount;
-        const auto testStaticScalar = [&](uint32 i)
-        {
-            if (store.radius[i] < 0.0f || !(store.layer[i] & layerMask))
-                return;
-            ++stats.entityTests;
-            const glm::vec3 pos = cellMin + glm::vec3(store.posX[i], store.posY[i], store.posZ[i]);
-            if (tester.testEntity(pos, store.radius[i]))
-            {
-                ++stats.emitted;
-                emit(store.poolIdx[i], pos);
-            }
-        };
+        const StaticBlock& block = store.blocks[b];
+        b = block.next;
         if (fullyInside)
         {
-            for (uint32 i = first; i < last; ++i)
+            for (uint32 lane = 0; lane < block.count; ++lane)
             {
-                if (store.radius[i] < 0.0f || !(store.layer[i] & layerMask))
+                if (block.radius[lane] < 0.0f || !(block.layer[lane] & layerMask))
                     continue;
                 ++stats.emitted;
-                emit(store.poolIdx[i], cellMin + glm::vec3(store.posX[i], store.posY[i], store.posZ[i]));
+                emit(block.poolIdx[lane], cellMin + glm::vec3(block.posX[lane], block.posY[lane], block.posZ[lane]));
             }
         }
         else if constexpr (HasTest8<Tester>)
         {
-            uint32 i = first;
-            for (; i + 8 <= last; i += 8)
+            // all 8 lanes: the unused ones carry a tombstone radius and drop out of the mask
+            stats.entityTests += int(block.count);
+            uint32 hits = tester.test8(cellMin, block.posX, block.posY, block.posZ, block.radius, block.layer, layerMask);
+            while (hits)
             {
-                stats.entityTests += 8;
-                uint32 hits = tester.test8(cellMin, &store.posX[i], &store.posY[i], &store.posZ[i],
-                                           &store.radius[i], &store.layer[i], layerMask);
-                while (hits)
-                {
-                    const uint32 lane = uint32(oc::tzcnt(hits));
-                    hits &= hits - 1;
-                    const uint32 s = i + lane;
-                    ++stats.emitted;
-                    emit(store.poolIdx[s], cellMin + glm::vec3(store.posX[s], store.posY[s], store.posZ[s]));
-                }
+                const uint32 lane = uint32(oc::tzcnt(hits));
+                hits &= hits - 1;
+                ++stats.emitted;
+                emit(block.poolIdx[lane], cellMin + glm::vec3(block.posX[lane], block.posY[lane], block.posZ[lane]));
             }
-            for (; i < last; ++i)
-                testStaticScalar(i);
         }
         else
         {
-            for (uint32 i = first; i < last; ++i)
-                testStaticScalar(i);
+            for (uint32 lane = 0; lane < block.count; ++lane)
+            {
+                if (block.radius[lane] < 0.0f || !(block.layer[lane] & layerMask))
+                    continue;
+                ++stats.entityTests;
+                const glm::vec3 pos = cellMin + glm::vec3(block.posX[lane], block.posY[lane], block.posZ[lane]);
+                if (tester.testEntity(pos, block.radius[lane]))
+                {
+                    ++stats.emitted;
+                    emit(block.poolIdx[lane], pos);
+                }
+            }
         }
     }
 }
@@ -372,10 +363,15 @@ void SpatialIndex::traverse(const Tester& tester, const glm::dvec3& refPos, uint
 // parallelFors traverseCell over the roots. Each root's subtree is disjoint, an entry lives in
 // exactly one cell, and the cell maps only mutate in commitFrame - so the only shared writes are
 // the emit itself (thread-safe stamps) and the stats, which accumulate per chunk and merge once.
-template <typename Tester, typename EmitFunc>
+template <typename Tester, typename EmitFunc, typename PrepareFunc>
 void SpatialIndex::traverseParallel(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask,
-                                    TraverseStats& stats, const EmitFunc& emit)
+                                    TraverseStats& stats, const EmitFunc& emit, const PrepareFunc& prepareChunks,
+                                    bool registerLock)
 {
+    // registerLock: the serial expansion and every chunk take the index's SHARED lock (a registration
+    // may grow the pool SoA under a post-update query). Per phase, never across the parallelFor's
+    // wait: a fiber park would carry the lock to another thread.
+    const auto sharedLock = [&]() { return registerLock ? std::shared_lock(m_registerMutex) : std::shared_lock<std::shared_mutex>(); };
     const uint32 top = m_numLevels - 1;
     m_frontier.clear();
     m_levels[top].forEachCell([&](uint64 key, const CellRecord& rec)
@@ -392,9 +388,9 @@ void SpatialIndex::traverseParallel(const Tester& tester, const glm::dvec3& refP
         else
             emit(idx, pos);
     };
-    if (m_visibleCollectChunks.empty())
-        m_visibleCollectChunks.resize(1); // slot 0 exists before the expansion emits
+    prepareChunks(1u); // slot 0 exists before the expansion emits
     const uint32 target = Globals::jobSystem.getNumWorkers() * 4;
+    std::shared_lock expansionLock = sharedLock();
     while (!m_frontier.empty() && uint32(m_frontier.size()) < target)
     {
         m_frontierNext.clear();
@@ -427,18 +423,20 @@ void SpatialIndex::traverseParallel(const Tester& tester, const glm::dvec3& refP
         if (!anySplit)
             break; // every surviving cell was a leaf: nothing left for the parallel phase
     }
+    if (expansionLock.owns_lock())
+        expansionLock.unlock();
     if (m_frontier.empty())
         return;
 
     // A chunk-aware emit (idx, pos, chunk) gets slot 0 for the serial expansion above and 1 + the
     // chunk's first frontier index for the fan-out: an owner-sliced list per chunk.
-    if (m_visibleCollectChunks.size() < m_frontier.size() + 1)
-        m_visibleCollectChunks.resize(m_frontier.size() + 1);
+    prepareChunks(uint32(m_frontier.size()) + 1);
     oc::atomic<int> cellsTested = 0, cellsFullyInside = 0, entityTests = 0, emitted = 0;
     Globals::jobSystem.parallelFor(0, uint32(m_frontier.size()), 1,
-        JobProfile{ "Spatial mark visible", EProfileCategory::Spatial },
+        JobProfile{ "Spatial traverse chunk", EProfileCategory::Spatial },
         [&](uint32 begin, uint32 end)
     {
+        const std::shared_lock chunkLock = sharedLock();
         TraverseStats local;
         const auto chunkEmit = [&](uint32 idx, const glm::vec3& pos)
         {
@@ -582,14 +580,15 @@ void SpatialIndex::markVisibleSet(ESpatialPass pass, const Frustum& frustumRelCa
             if (m_pool.layerMask[idx] & collect)
                 m_visibleCollectChunks[chunk].push_back(SpatialHandle{ idx, m_pool.gen[idx] });
         };
-        traverseParallel(FrustumTester{ frustumRelCamera, occlusion, maxDist }, cameraPos, layerMask, stats, stampCollect);
+        const auto prepare = [this](uint32 slots) { if (m_visibleCollectChunks.size() < slots) m_visibleCollectChunks.resize(slots); };
+        traverseParallel(FrustumTester{ frustumRelCamera, occlusion, maxDist }, cameraPos, layerMask, stats, stampCollect, prepare, false);
         for (const oc::vector<SpatialHandle>& chunk : m_visibleCollectChunks)
             m_visibleCollected.insert(m_visibleCollected.end(), chunk.begin(), chunk.end());
     }
     else
     {
         const auto stamp = [lastVisible, stampId](uint32 idx, const glm::vec3&) { lastVisible[idx] = stampId; };
-        traverseParallel(FrustumTester{ frustumRelCamera, occlusion, maxDist }, cameraPos, layerMask, stats, stamp);
+        traverseParallel(FrustumTester{ frustumRelCamera, occlusion, maxDist }, cameraPos, layerMask, stats, stamp, [](uint32) {}, false);
     }
     m_stats.cellsTested += stats.cellsTested;
     m_stats.cellsFullyInside += stats.cellsFullyInside;
@@ -607,7 +606,7 @@ void SpatialIndex::markVisibleSphere(ESpatialPass pass, const glm::dvec3& center
     SpatialStamp* lastVisible = m_pool.lastVisible[passIdx].data();
     const auto stamp = [lastVisible, stampId](uint32 idx, const glm::vec3&) { lastVisible[idx] = stampId; };
     TraverseStats stats;
-    traverseParallel(SphereTester{ radius }, center, layerMask, stats, stamp);
+    traverseParallel(SphereTester{ radius }, center, layerMask, stats, stamp, [](uint32) {}, false);
     m_stats.cellsTested += stats.cellsTested;
     m_stats.cellsFullyInside += stats.cellsFullyInside;
     m_stats.entityTests += stats.entityTests;
@@ -641,38 +640,42 @@ void SpatialIndex::advanceUpdateTiers()
     advanceStamp(ESpatialPass::UpdateRoot);
 }
 
-uint32 SpatialIndex::queryUpdateTiers(const glm::dvec3& center, float queryRadius, const float tierRadius[3], bool horizontal,
-                                      uint32 layerMask, oc::vector<uint64>& outUserData)
+const oc::vector<oc::vector<uint64>>& SpatialIndex::queryUpdateTiers(const glm::dvec3& center, float queryRadius, const float tierRadius[3],
+                                                                      bool horizontal, uint32 layerMask)
 {
-    outUserData.clear();
-    const std::shared_lock lock(m_registerMutex); // see querySphere (the stamp rows may grow under a registration)
-    SpatialStamp* tierStamp[3];
+    for (oc::vector<uint64>& chunk : m_tierHitChunks)
+        chunk.clear();
     SpatialStamp tierId[3];
     float tierR2[3];
     for (int t = 0; t < 3; ++t)
     {
-        tierStamp[t] = m_pool.lastVisible[uint32(g_updateTierPass[t])].data();
         tierId[t] = m_visibleQueryId[uint32(g_updateTierPass[t])];
         tierR2[t] = tierRadius[t] > 0.0f ? tierRadius[t] * tierRadius[t] : -1.0f; // -1: no distance is below it
     }
-    traverse(SphereTester{ queryRadius }, center, layerMask, [&](uint32 idx, const glm::vec3& pos)
+    // The stamp rows are indexed per hit (not through a cached data pointer): a registration may
+    // grow them between the traversal's phases; each phase holds the shared lock (registerLock).
+    const auto stampCollect = [&](uint32 idx, const glm::vec3& pos, uint32 chunk)
     {
         const float d2 = horizontal ? pos.x * pos.x + pos.z * pos.z : glm::dot(pos, pos);
         for (int t = 0; t < 3; ++t)
             if (d2 < tierR2[t])
-                tierStamp[t][idx] = tierId[t];
-        outUserData.push_back(m_pool.userData[idx]);
-    });
-    return uint32(outUserData.size());
+                m_pool.lastVisible[uint32(g_updateTierPass[t])][idx] = tierId[t];
+        m_tierHitChunks[chunk].push_back(m_pool.userData[idx]);
+    };
+    const auto prepare = [this](uint32 slots) { if (m_tierHitChunks.size() < slots) m_tierHitChunks.resize(slots); };
+    TraverseStats stats;
+    traverseParallel(SphereTester{ queryRadius }, center, layerMask, stats, stampCollect, prepare, true);
+    m_stats.cellsTested += stats.cellsTested;
+    m_stats.cellsFullyInside += stats.cellsFullyInside;
+    m_stats.entityTests += stats.entityTests;
+    return m_tierHitChunks;
 }
 
 void SpatialIndex::update(const Camera& camera, const Frustum& frustum, const glm::mat4& viewProjRelCamera)
 {
     ProfileScope updateScope("Spatial", EProfileCategory::Spatial);
-    {
-        ProfileScope profileScope("Spatial commit", EProfileCategory::Spatial);
-        commitFrame();          // applies cell moves queued during last frame's entity updates
-    }
+
+    commitFrame();          // applies cell moves queued during last frame's entity updates
     // The SIM LOD tier stamps are NOT made here: the World's selection job stamps them
     // (queryUpdateTiers), off the frame-critical path.
     setCullMaxDist(camera.far); // cull to exactly the view distance, not a fixed cap

@@ -8,8 +8,10 @@ import Core.glm;
 // level-L cell key is the fine Morton key shifted right by 6*L, a cell's parent is key >> 6,
 // and the low 6 bits of a key select one of the parent's 4x4x4 children.
 
+// 8 m: at game density unit-sized entries then share cells ~10 to one. 2 m cells put them one per
+// cell, so a traversal tested ~2 cells per hit and the 8-lane static blocks ran 2 lanes full.
 #ifndef SPATIAL_FINEST_CELL_SIZE
-#define SPATIAL_FINEST_CELL_SIZE 2.0
+#define SPATIAL_FINEST_CELL_SIZE 8.0
 #endif
 
 export namespace Morton
@@ -36,7 +38,7 @@ export namespace Morton
     inline uint64 quantizeAxis(double v)
     {
         const int64 c = int64(glm::floor(v * InvFineCellSize)) + FineOffset;
-        assert(c >= 0 && c <= FineCoordMax); // outside the +/-2097km world bound (see SPATIAL_FINEST_CELL_SIZE)
+        assert(c >= 0 && c <= FineCoordMax); // outside the +/-8389km world bound (see SPATIAL_FINEST_CELL_SIZE)
         return uint64(c < 0 ? 0 : (c > FineCoordMax ? FineCoordMax : c));
     }
 

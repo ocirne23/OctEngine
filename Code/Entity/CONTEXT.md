@@ -421,9 +421,12 @@ than an inline query would; the query margin has to cover `selectionIntervalSec`
 roots spawned meanwhile arrive through the pending list.
 
 **The job owns the tier stamps.** It opens a new `UpdateTier` generation
-(`SpatialIndex::advanceUpdateTiers`) and then runs ONE traversal per sphere on a parallelFor
-(`"Update selection sphere"`, owner-sliced scratch per sphere): `queryUpdateTiers` stamps each hit's
-tiers by distance band and emits it, and the walk stamps the ancestors with the same generation.
+(`SpatialIndex::advanceUpdateTiers`) and then, sphere by sphere, runs ONE PARALLEL traversal
+(`queryUpdateTiers` rides the index's frontier fan-out: it stamps each hit's tiers by distance band
+and returns the hits as a list per traversal chunk) followed by a parallelFor over those chunks
+(`"Update selection roots"`, a roots slot per chunk) whose root walk stamps the ancestors with the
+same generation. Sequential spheres because the index has one fan-out scratch; each is parallel
+inside, so one player's ball no longer costs a single worker milliseconds.
 Nothing else stamps the tiers, so the stamps stay current across the passes that reuse the result —
 the cull job stamps Main and Near only, nothing on the frame-critical path. Readers that run before
 the join (the far tick, a client's snapshot apply) may see a stamp mid-transition; a torn decision

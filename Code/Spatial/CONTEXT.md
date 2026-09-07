@@ -58,11 +58,14 @@ queries, unit targeting) work server-side.
 An implicit 64-ary hierarchy over per-level hashed grids.
 
 * **An entry lives at exactly ONE level** — the smallest whose cell size fits its bounding sphere
-  (`cellSize >= 2*radius`, `Morton::levelForRadius`). So an entity extends at most half a cell beyond
-  its own, and queries only need half-a-cell loose bounds.
+  (`cellSize >= 2*radius`, `Morton::levelForRadius`, clamped by `entryLevel`). So an entity extends
+  at most half a cell beyond its own, and queries only need half-a-cell loose bounds.
 * **11 levels** (`Morton::MaxLevels`), cell size ×4 per level. The finest is the compile-time
-  `SPATIAL_FINEST_CELL_SIZE`, default 2 m; 21 bits per axis puts the world bound at ±2097 km, with
-  the origin mid-lattice.
+  `SPATIAL_FINEST_CELL_SIZE`, default 8 m; 21 bits per axis puts the world bound at ±8389 km, with
+  the origin mid-lattice. **8 m is a density choice:** at game density unit-sized entries share a
+  cell ~10 to one. At 2 m they sat one per cell — the traversal tested ~2 cells per hit and the
+  8-lane static blocks ran 2 lanes full; 8 m cut cells tested 6× for the same visible set. 32 m
+  measured the same, so the finer of the two won.
 * **BMI2 Morton keys** (`Spatial:Morton`): `pdep` / `pext`. A level-L key is the fine key `>> 6*L`, a
   parent is `key >> 6`, and the low 6 bits select one of the parent's 4×4×4 children.
 * **Every `CellRecord` holds a 64-bit child-occupancy mask**, so queries descend with bit scans and
@@ -159,8 +162,16 @@ Both `markVisibleSet` and `markVisibleSphere` run `traverseParallel`
    parallelFor cursor can rebalance around expensive roots**, since the cells around the camera hold
    most of the visible world. It classifies cells and emits the upper cells' own few entries as it
    goes.
-2. A **grain-1 High `parallelFor`** runs `traverseCell` per root. `"Spatial mark visible"` spans show
-   on the worker tracks. High because the render gate waits on these stamps.
+2. A **grain-1 High `parallelFor`** runs `traverseCell` per root. `"Spatial traverse chunk"` spans
+   show on the worker tracks. High because the render gate waits on these stamps.
+
+A chunk-aware emit `(idx, pos, chunk)` gets `prepareChunks(n)` before any emit with `chunk < n`, so
+a caller can keep an owner-sliced list per chunk (slot 0 = the serial expansion, `1 + root index`
+= the fan-out). `registerLock = true` makes the expansion and every chunk take the index's SHARED
+lock per phase — never across the parallelFor's wait, which could park the fiber and carry the lock
+to another thread — for a caller outside the kick/join window (`queryUpdateTiers`). The
+`m_frontier` scratch allows ONE traverseParallel at a time: the cull job's, or the post-update
+selection's, never both in flight (the selection is joined before the spatial kick).
 
 **Thread-safe by structure:** an entry lives in exactly ONE cell, so no two roots ever stamp the same
 slot; the cell maps only mutate in `commitFrame`; and the stamp is a pure store. Per-traversal
@@ -226,12 +237,14 @@ passes unconditionally.
 selection job calls it once per selection, and NOTHING else stamps those passes, so the stamps stay
 current until the next selection (which may be several frames later).
 
-`queryUpdateTiers(center, queryRadius, tierRadius[3], horizontal, layerMask, outUserData)` is ONE
-serial `traverse` of the ball that both emits every hit AND stamps it in each tier whose radius
-exceeds its distance to the center (nested balls; a `tierRadius` <= 0 is never stamped by that
-ball; `horizontal` = XZ distance). The World runs one per sphere on a parallelFor — **the stamps are
-pure stores, so overlapping balls stamping the same entry concurrently is fine.** The distance test
-is center-to-center (the entry radius only widens the query ball).
+`queryUpdateTiers(center, queryRadius, tierRadius[3], horizontal, layerMask)` is ONE PARALLEL
+traversal of the ball (`traverseParallel` with `registerLock`) that stamps every hit in each tier
+whose radius exceeds its distance to the center (nested balls; a `tierRadius` <= 0 is never stamped
+by that ball; `horizontal` = XZ distance) and returns the hits as **one owner-sliced list per
+traversal chunk** (`m_tierHitChunks`, some empty, valid until the next call). The World runs its
+spheres IN SEQUENCE (the frontier scratch allows one traversal at a time) — **the stamps are pure
+stores, so overlapping balls stamping the same entry is fine.** The distance test is
+center-to-center (the entry radius only widens the query ball).
 
 Three accessors exist purely for the World's selection logic:
 
@@ -270,19 +283,30 @@ legal.
 
 ## Static tier
 
-Entries unchanged for `promoteAfterFrames` (60) promote into per-level **Morton-key-sorted SoA
-ranges** (`StaticStore`), so queries iterate them linearly and the 8-wide AVX2 testers (`test8`) get
-transpose-free loads.
+Entries unchanged for `promoteAfterFrames` (60) promote into **8-lane SoA blocks chained per cell**
+(`StaticStore` / `StaticBlock`, `CellRecord.staticHead`), so the 8-wide AVX2 testers (`test8`) load a
+block transpose-free and **every mutation costs the size of its cell, never the level** — there is
+NO level-wide rebuild.
 
-* Promotion is budgeted: `staticScanBudget` (65536) pool slots inspected per commit, and
-  `staticRebuildBatch` (1024) pending promotions force a level rebuild — **one level per commit**.
-* A promoted entry stays in its dynamic list until a rebuild consumes it.
-* **Demotion tombstones** — a negative radius fails every test in place; rebuilds drop tombstones and
-  merge pending promotions back into sorted order.
-* **A rebuild allocates nothing past the peak:** it merges into the store's `Build` arrays, which are
-  DOUBLE-BUFFERED with the live SoA set and swapped in at the end, and the promotion list is a kept
-  `SpatialIndex` scratch (`m_rebuildAdds`).
-* Sphere, AABB and frustum testers all test static ranges 8-wide.
+* **Promotion is immediate and budgeted:** the scan inspects `staticScanBudget` (1024) pool slots per
+  commit round-robin, so a full sweep takes `capacity / budget` frames; an eligible entry leaves its
+  dynamic list and appends into its cell's head block (a new head when that is full) in the same
+  commit. `storeIdx` = `block * 8 + lane`.
+* **Any real change to a static entry demotes it** (tombstone + Move op + a later re-promotion).
+  `updateEntry` therefore absorbs drift: a radius within `staticRadiusTolerance` (5%, relative) and
+  a position within `staticPositionTolerance` (1 world unit) of the stored copy count as
+  untouched — the stored copy stays, `lastMoveFrame` keeps aging. Queries then test the stored
+  sphere, so the band is the accepted cull error. Both are Spatial/Static tweaks.
+* **Demotion tombstones** — a negative radius fails every test in place (unused lanes past a block's
+  `count` carry one too, so `test8` always runs all 8 lanes). `unregisterEntry` writes only the
+  lane's tombstone (queries read lock-free); the counters and blocks settle in `retireStatic` at
+  commit (the Unlink op, or a Move's demote).
+* **Blocks free as soon as they empty**, so `staticCount == 0` <=> no chain (the sweep relies on it).
+  A cell whose dead lanes would fill a whole block compacts itself (`compactStaticCell`: gather the
+  live lanes into the kept `m_compactScratch`, refill from the head, free the tail) — at least one
+  block freed per pass, so one cell walk per 8 demotions.
+* Sphere, AABB and frustum testers all test static blocks 8-wide. Stats: `Static entries`, `Static
+  blocks`, and the running `Static promotions` / `Static demotions` (a settled scene stops both).
 
 ## Stress harness
 
@@ -291,6 +315,12 @@ timed queries, brute-force verification. Stats under Spatial/Stats.
 
 ## Not yet built
 
-**Threading-parallel QUERIES.** The `markVisible*` stamps already fan out, but the `query*` entry
-points still traverse serially: their emit appends to one out-vector, so they need per-task
-collection before they can ride `traverseParallel`.
+**Threading-parallel script QUERIES.** The `markVisible*` stamps and `queryUpdateTiers` fan out,
+but the other `query*` / `forEachIn*` entry points still traverse serially: their emit appends to
+one out-vector (or runs the caller's inline callback), and they may run concurrently from script
+workers, so they cannot share the single `m_frontier` scratch.
+
+**Leaf-cell slicing in the fan-out.** The expansion stops at leaves: a narrow view over a few big
+cells yields fewer roots than `numWorkers * 4`, and one root can hold most of the work. Splitting a
+leaf's static chain (indexable by block) and its dynamic list (a serial walk to cut it) into slices
+would fill the workers for that case.

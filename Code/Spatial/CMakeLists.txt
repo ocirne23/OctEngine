@@ -11,8 +11,8 @@ target_include_directories(${PROJECT_NAME} PUBLIC  "${CMAKE_CURRENT_SOURCE_DIR}/
 target_link_libraries(${PROJECT_NAME} PUBLIC Core Threading)
 
 # Finest cell size (meters) is compile-time so all quantization math constant-folds.
-# Override here if a world needs a different extent: 2m cells span +/-2097km.
-# target_compile_definitions(${PROJECT_NAME} PRIVATE SPATIAL_FINEST_CELL_SIZE=2.0)
+# Override here if a world needs a different extent or density: 8m cells span +/-8389km.
+# target_compile_definitions(${PROJECT_NAME} PRIVATE SPATIAL_FINEST_CELL_SIZE=8.0)
 
 set_target_properties(${PROJECT_NAME} PROPERTIES FOLDER Engine)
 

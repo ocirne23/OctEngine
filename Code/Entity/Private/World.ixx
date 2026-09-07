@@ -336,8 +336,7 @@ private:
         oc::vector<EntityUpdateNode> nodes;      // the roots, ready to submit (deduped by the UpdateRoot stamp, Global roots skipped)
         oc::vector<SpatialHandle> rootHandles;   // aligned with nodes
         oc::vector<SelectSphere> spheres;        // the job's inputs, built at kick from the focus + zones
-        oc::vector<oc::vector<uint64>> hits;     // owner-sliced per sphere: the traversal's hits (Entity* as userData)
-        oc::vector<oc::vector<Entity*>> roots;   // owner-sliced per sphere: the roots this sphere won
+        oc::vector<oc::vector<Entity*>> roots;   // owner-sliced per traversal chunk of the current sphere: the roots it won
         bool valid = false; // set by the job, consumed by the next update() (sequenced by the join)
     };
     SelectResult m_selectResult;

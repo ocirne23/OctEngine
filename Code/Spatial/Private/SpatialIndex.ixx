@@ -106,8 +106,12 @@ public:
     void setVisibleCollect(uint32 layerMask) { m_visibleCollectLayers = layerMask; }
     const oc::vector<SpatialHandle>& visibleHandles() const { return m_visibleCollected; }
     uint64 userData(SpatialHandle handle) const { return m_pool.isValidAlive(handle) ? m_pool.userData[handle.idx] : 0; }
-    uint32 queryUpdateTiers(const glm::dvec3& center, float queryRadius, const float tierRadius[3], bool horizontal,
-                            uint32 layerMask, oc::vector<uint64>& outUserData);
+    // PARALLEL (traverseParallel, so one call at a time — the World's selection runs its spheres
+    // in sequence): the hits come back as owner-sliced lists, one per traversal chunk (some
+    // empty), valid until the next queryUpdateTiers. Callable from a job; its chunks take the
+    // register lock themselves (a spawn may register meanwhile).
+    const oc::vector<oc::vector<uint64>>& queryUpdateTiers(const glm::dvec3& center, float queryRadius, const float tierRadius[3],
+                                                           bool horizontal, uint32 layerMask);
 
     // Exact-compare variants (NO spawn guard: a never-stamped entry reads as in no pass) for the
     // World's update selection. isStampedCurrent/stampCurrent are its single-entry accessors (the
@@ -245,13 +249,16 @@ private:
         bool fullyInside;
     };
 
+    uint32 entryLevel(float radius); // levelForRadius clamped to the level count; tracks the oversize radius
     void linkIntoCell(uint32 idx);
     void unlinkFromCell(uint32 idx);
     void setOccupancyBits(uint32 level, uint64 key);
     void demoteOrUnlink(uint32 idx); // pulls a StaticTier entry back to dynamic, else plain unlink
     void sweepEmptyCells();
     void promotionScan();
-    void rebuildStaticLevel(uint32 level);
+    void promoteEntry(uint32 idx);   // dynamic list -> the cell's static chain (commit only)
+    void retireStatic(uint32 idx);   // tombstones the stored lane, frees an emptied block, compacts the cell when a block's worth is dead
+    void compactStaticCell(uint32 level, CellRecord& rec);
 
     template <typename Tester, typename EmitFunc>
     void traverse(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask, const EmitFunc& emit) const;
@@ -275,13 +282,18 @@ private:
                          const CellRecord& rec, uint32 level, bool fullyInside,
                          TraverseStats& stats, const EmitFunc& emit) const;
 
-    // Multithreaded traversal for the markVisible* stamps: expands a frontier of subtree roots
-    // serially (emitting the upper cells' own entries as it goes), then parallelFors traverseCell
-    // over the roots. emit must be thread-safe; the stamps are (each entry lives in exactly ONE
-    // cell, so no two roots ever emit the same index).
-    template <typename Tester, typename EmitFunc>
+    // Multithreaded traversal for the markVisible* stamps and the update-tier query: expands a
+    // frontier of subtree roots serially (emitting the upper cells' own entries as it goes), then
+    // parallelFors traverseCell over the roots. emit must be thread-safe; the stamps are (each
+    // entry lives in exactly ONE cell, so no two roots ever emit the same index). A chunk-aware
+    // emit (idx, pos, chunk) gets prepareChunks(n) called before any emit with chunk < n, so an
+    // owner-sliced list per chunk can be sized. registerLock: see the definition. Uses the
+    // m_frontier scratch: ONE traverseParallel at a time (the cull job, or the post-update
+    // selection — never both in flight).
+    template <typename Tester, typename EmitFunc, typename PrepareFunc>
     void traverseParallel(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask,
-                          TraverseStats& stats, const EmitFunc& emit);
+                          TraverseStats& stats, const EmitFunc& emit, const PrepareFunc& prepareChunks,
+                          bool registerLock);
 
     oc::array<CellMap, Morton::MaxLevels> m_levels;
     oc::array<StaticStore, Morton::MaxLevels> m_static;
@@ -293,8 +305,8 @@ private:
     // drop, and thousands of pushes a frame on one shared atomic cursor would contend.
     PerWorker<oc::vector<PendingOp>> m_pendingOps;
     oc::vector<EmptyCandidate> m_emptyCandidates;
-    struct RebuildAdd { uint64 key; uint32 poolIdx; };
-    oc::vector<RebuildAdd> m_rebuildAdds; // rebuildStaticLevel's promotion scratch (kept: rebuilds are frequent)
+    struct CompactEntry { float x, y, z, radius; uint32 layer, poolIdx; };
+    oc::vector<CompactEntry> m_compactScratch; // compactStaticCell's live-lane gather (kept: sized by the largest cell)
     uint32 m_levelEntityCount[Morton::MaxLevels] = {};
     uint32 m_numLevels = Morton::MaxLevels;
     uint32 m_frameId = 1;
@@ -302,8 +314,9 @@ private:
     uint32 m_promoteCursor = 0;  // round-robin pool scan position for static promotion
     bool m_staticEnabled = true;
     int m_promoteAfterFrames = 60;
-    int m_staticScanBudget = 65536;  // pool slots inspected per commit
-    int m_staticRebuildBatch = 1024; // pending promotions that force a level rebuild
+    int m_staticScanBudget = 1024;   // pool slots inspected per commit (promotion is immediate, so a full sweep takes capacity / budget frames)
+    float m_staticRadiusTolerance = 0.05f;  // relative radius drift a static entry absorbs without demoting
+    float m_staticPositionTolerance = 1.0f; // world-unit position drift a static entry absorbs without demoting
     oc::atomic<float> m_topLevelMaxRadius = 0.0f; // largest clamped-oversize radius, inflates top-level tests (CAS-max: updateEntry runs on jobs)
     // Parallel spawning: exclusive over registerEntry/unregisterEntry (slot acquire/release + SoA
     // growth), shared over queries — see the threading contract above.
@@ -317,6 +330,7 @@ private:
     uint32 m_visibleCollectLayers = 0;
     oc::vector<oc::vector<SpatialHandle>> m_visibleCollectChunks;
     oc::vector<SpatialHandle> m_visibleCollected;
+    oc::vector<oc::vector<uint64>> m_tierHitChunks; // queryUpdateTiers' owner-sliced hits (kept: one query per selection sphere)
 
     // Near-ball requery hysteresis, see update.
     glm::dvec3 m_lastNearQueryPos = glm::dvec3(1e30);

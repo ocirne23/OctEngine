@@ -157,10 +157,11 @@ export struct SpatialStats
     int entityTests = 0;
     int visiblePerPass[uint32(ESpatialPass::Count)] = {};
     int staticEntries = 0;
-    int staticRebuilds = 0;
+    int staticBlocks = 0;     // 8-lane blocks in use across all levels
+    int staticPromotions = 0; // running totals (a settled scene stops both)
+    int staticDemotions = 0;
     float commitMs = 0.0f;
     float markVisibleMs = 0.0f;
-    float rebuildMs = 0.0f; // duration of the most recent static-tier rebuild
     int perLevelCells[Morton::MaxLevels] = {};
     int perLevelEntities[Morton::MaxLevels] = {};
 };

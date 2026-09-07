@@ -116,41 +116,45 @@ bool World::simLodSelected(const Entity& entity) const
 }
 
 // The selection job. A new tier stamp generation first (nothing else stamps the tiers, so the
-// stamps hold until the next job), then one traversal per sphere on a parallelFor — each stamps
-// its hits' tiers by distance band and walks every hit up to its root — over owner-sliced scratch
-// (a slot per sphere: no per-worker state across the fan-out's waits). The serial tail merges the
-// roots and dedupes (overlapping balls, several hits under one root) into submit-ready nodes, so
-// update() only checks liveness and slices them to the workers. Runs between commits (post-update) — see the kick in
-// update() for what makes the root walk and the stamps safe.
+// stamps hold until the next job), then, sphere by sphere, ONE PARALLEL traversal (the index's
+// frontier fan-out: it stamps the hits' tiers by distance band and hands the hits back as a
+// list per traversal chunk), followed by a parallelFor over those chunks that walks every hit
+// up to its root — owner-sliced scratch (a roots slot per chunk: no per-worker state across the
+// fan-out's waits). The serial tail merges the roots, already deduped by the atomic UpdateRoot
+// stamp (overlapping balls, several hits under one root), into submit-ready nodes, so update()
+// only checks liveness and slices them to the workers. Runs between commits (post-update) — see
+// the kick in update() for what makes the root walk and the stamps safe.
 void World::computeSelection(SelectResult& out)
 {
     ProfileScope scope("Update selection query", EProfileCategory::Entity);
     out.nodes.clear();
     out.rootHandles.clear();
-    const uint32 numSpheres = uint32(out.spheres.size());
-    out.hits.resize(numSpheres);
-    out.roots.resize(numSpheres);
     Globals::spatialIndex.advanceUpdateTiers();
-    Globals::jobSystem.parallelFor(0u, numSpheres, 1u, JobProfile{ "Update selection sphere", EProfileCategory::Entity },
-        [this, &out](uint32 begin, uint32 end)
+    for (const SelectSphere& s : out.spheres)
     {
-        for (uint32 i = begin; i < end; ++i)
+        const oc::vector<oc::vector<uint64>>& hitChunks =
+            Globals::spatialIndex.queryUpdateTiers(s.center, s.queryRadius, s.tierRadius, m_simLod.horizontal, SpatialLayer_Entity);
+        const uint32 numChunks = uint32(hitChunks.size());
+        if (out.roots.size() < numChunks)
+            out.roots.resize(numChunks);
+        Globals::jobSystem.parallelFor(0u, numChunks, 1u, JobProfile{ "Update selection roots", EProfileCategory::Entity },
+            [this, &out, &hitChunks](uint32 begin, uint32 end)
         {
-            const SelectSphere& s = out.spheres[i];
-            oc::vector<Entity*>& roots = out.roots[i];
-            roots.clear();
-            Globals::spatialIndex.queryUpdateTiers(s.center, s.queryRadius, s.tierRadius, m_simLod.horizontal, SpatialLayer_Entity, out.hits[i]);
-            for (const uint64 userData : out.hits[i])
-                selectUpdateRoot(reinterpret_cast<Entity*>(userData), ESpatialPass::UpdateRoot, roots);
-        }
-    });
-    // Already deduped by the UpdateRoot stamp: a plain concatenation.
-    for (const oc::vector<Entity*>& roots : out.roots)
-        for (Entity* root : roots)
-        {
-            out.nodes.push_back({ root, Transform() });
-            out.rootHandles.push_back(root->spatialEntry.handle());
-        }
+            for (uint32 c = begin; c < end; ++c)
+            {
+                oc::vector<Entity*>& roots = out.roots[c];
+                roots.clear();
+                for (const uint64 userData : hitChunks[c])
+                    selectUpdateRoot(reinterpret_cast<Entity*>(userData), ESpatialPass::UpdateRoot, roots);
+            }
+        });
+        for (uint32 c = 0; c < numChunks; ++c)
+            for (Entity* root : out.roots[c])
+            {
+                out.nodes.push_back({ root, Transform() });
+                out.rootHandles.push_back(root->spatialEntry.handle());
+            }
+    }
     out.valid = true;
 }
 

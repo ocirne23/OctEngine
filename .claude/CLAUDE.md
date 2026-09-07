@@ -436,10 +436,10 @@ Checked-in inputs for repeatable runs:
 
 * `*.txt` game saves — the F9 format: structures (cable segments included) and units — for
   `--scenario <path>` and `Tools/profile.ps1`. `march-64-units.txt` is the corridor with 64 team-0
-  units, the standard perf scenario. `coop-wave9.txt` is a late co-op session (wave 9, a built
-  base, thousands of ambient units) — **the co-op perf scenario**; a co-op scenario loads as saved,
-  with NO march order (`runScenario` skips it when `--coop`):
-  `Tools/profile.ps1 -Game -Server -AppArgs "--coop" -Scenario "Scenarios/coop-wave9.txt" -ScenarioAt 2 -After 30`.
+  units, the standard perf scenario. `coop-42k.txt` is the starter base plus 42k ambient enemies and
+  nothing else — **the co-op perf scenario** (entity-count stress: spatial, SIM LOD, static tier); a
+  co-op scenario loads as saved, with NO march order (`runScenario` skips it when `--coop`):
+  `Tools/profile.ps1 -Game -Server -AppArgs "--coop" -Scenario "Scenarios/coop-42k.txt" -ScenarioAt 2 -After 30`.
 * `*.tweaks` override files for `--tweaks <path>`. `cpu-profile.tweaks` = GPU features off.
 
 ## `Assets/Local/`
