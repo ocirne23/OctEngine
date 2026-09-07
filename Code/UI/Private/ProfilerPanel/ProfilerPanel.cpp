@@ -64,6 +64,15 @@ void ProfilerPanel::prepare()
     ProfileScope scope("Profiler panel prepare", EProfileCategory::UI);
     Profiler& profiler = Globals::profiler;
     m_prepared = true;
+    // The escape menu's "Pause profiler" checkbox toggles the profiler without this panel
+    // (its UI is what the user wants out of the frame): adopt the external state, and treat an
+    // external resume like our own (skip the pause-gap frame for the auto pause).
+    if (const bool paused = profiler.isPaused(); paused != m_paused)
+    {
+        m_paused = paused;
+        if (!paused)
+            m_autoPauseChecked = profiler.getFrameCount();
+    }
     if (profiler.getFrameCount() < 4)
         return;
 

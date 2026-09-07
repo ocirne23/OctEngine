@@ -120,7 +120,7 @@ bool World::simLodSelected(const Entity& entity) const
 // its hits' tiers by distance band and walks every hit up to its root — over owner-sliced scratch
 // (a slot per sphere: no per-worker state across the fan-out's waits). The serial tail merges the
 // roots and dedupes (overlapping balls, several hits under one root) into submit-ready nodes, so
-// update() only checks liveness and copies. Runs between commits (post-update) — see the kick in
+// update() only checks liveness and slices them to the workers. Runs between commits (post-update) — see the kick in
 // update() for what makes the root walk and the stamps safe.
 void World::computeSelection(SelectResult& out)
 {
@@ -399,12 +399,13 @@ void World::update(Renderer& renderer, float deltaSeconds)
         ProfileScope selectScope("Update selection", EProfileCategory::Entity);
         // The QUERY already ran as last frame's post-update job (computeSelection, joined at the
         // top of this frame) and left submit-ready nodes, so the batches kick without waiting on
-        // it. Left here, all O(roots) with no sort: stamp the ancestors with THIS frame's
-        // generation (the cull re-stamped the tiers since the job ran), swap-remove roots that
-        // died in between (the spatial handle proves liveness — a slot reuse fails its
-        // generation), and append the Global and pending roots. NO dedupe is needed: the job skips
-        // Global roots, and a pending root's entry is unlinked until the commit AFTER the job ran,
-        // so the query could not have found it. The first LOD frame has no result: inline.
+        // it. Left here on main, O(roots) over the CONTIGUOUS handle array only: swap-remove roots
+        // that died in between (the spatial handle proves liveness — a slot reuse fails its
+        // generation), then gather the Global and pending roots. Everything that touches an
+        // Entity (the visible walk, the selection filter, the cost partition) runs on the slice
+        // jobs the submit below kicks. NO dedupe is needed: the job skips Global roots, and a
+        // pending root's entry is unlinked until the commit AFTER the job ran, so the query could
+        // not have found it. The first LOD frame has no result: inline.
         Globals::jobSystem.wait(m_selectCounter); // main already joined before the spatial kick: a no-op guard
         if (m_selectKickFrame == 0)
         {
@@ -440,32 +441,35 @@ void World::update(Renderer& renderer, float deltaSeconds)
             sel.rootHandles[i] = sel.rootHandles.back();
             sel.rootHandles.pop_back();
         }
-        m_updateLevel.assign(sel.nodes.begin(), sel.nodes.end());
         // THE VISIBLE SET, fresh EVERY frame from the cull job's Main pass (no traversal here — the
         // stamp collected the handles): each visible entity walked to its root (ancestors stamped);
         // the VisibleRoot stamp (a new generation per pass) dedupes among them and the UpdateRoot
         // stamp skips those the periodic result holds, so a root is visited once. This is what
         // keeps what the player sees at full rate no matter how stale the periodic selection is.
+        // The walk itself runs on the visible-slice jobs below; main only opens the generation
+        // and claims the PENDING roots in it FIRST (stampCurrentOnce), so a slice that walks a
+        // visible descendant up to a pending root loses the exchange and skips it.
         spatialIndex.advanceStamp(ESpatialPass::VisibleRoot);
-        m_visibleRoots.clear();
-        for (const SpatialHandle h : spatialIndex.visibleHandles())
-            if (Entity* e = reinterpret_cast<Entity*>(spatialIndex.userData(h)))
-                selectUpdateRoot(e, ESpatialPass::VisibleRoot, m_visibleRoots);
-        for (Entity* e : m_visibleRoots)
-            m_updateLevel.push_back({ e, Transform() });
         for (Entity* e : m_globalRoots)
             m_updateLevel.push_back({ e, Transform() });
         for (const PendingRoot& p : m_pendingRoots)
-            if (!inResult(p.entity) && !(p.entity->spatialEntry.isValid()
-                && spatialIndex.isStampedCurrent(p.entity->spatialEntry.handle(), ESpatialPass::VisibleRoot)))
+            if (!inResult(p.entity) && (!p.entity->spatialEntry.isValid()
+                || spatialIndex.stampCurrentOnce(p.entity->spatialEntry.handle(), ESpatialPass::VisibleRoot)))
                 m_updateLevel.push_back({ p.entity, Transform() }); // not queued by either source yet: one visit
     }
     if (!m_simLodActive)
         m_pendingRoots.clear(); // every root was visited; nothing is owed a visit
     {
-        // The root list's arena copy + the batch job submits (the first workers start inside).
+        // The batch job submits: main hands the root SOURCES to slice jobs (the workers were idle
+        // while main filtered and copied every root serially) and submits only the small
+        // global + pending list itself, so the first batches start within a few microseconds.
         ProfileScope submitScope("Update batch submit", EProfileCategory::Entity);
-        submitEntityBatches(m_updateLevel.data(), uint32(m_updateLevel.size()));
+        submitRootSlices(m_updateLevel.data(), uint32(m_updateLevel.size())); // LOD: global + pending, inline below one slice
+        if (m_simLodActive)
+        {
+            submitRootSlices(m_selectResult.nodes.data(), uint32(m_selectResult.nodes.size()));
+            submitVisibleRootSlices();
+        }
     }
 
     {
@@ -561,6 +565,64 @@ void World::submitEntityBatches(const EntityUpdateNode* nodes, uint32 count)
         Globals::jobSystem.submit([this, batchSlot, n] { updateBatchJob(batchSlot, n); },
             { "Entity Update", EProfileCategory::Entity }, EJobPriority::High, &m_updateCounter);
         begin = end;
+    }
+}
+
+// A root source handed to the workers in slices: each slice job runs submitEntityBatches on its
+// range (the selection filter, the cost partition, the arena copy and the batch submits all
+// happen there), so the per-root cache misses spread over the workers and the first batches
+// start while the rest of the list is still being sliced. `nodes` must stay valid and unchanged
+// for the whole pass: main's m_updateLevel and the selection result both are (the next selection
+// job is kicked only after the pass's wait). Below one slice it is an inline call.
+void World::submitRootSlices(const EntityUpdateNode* nodes, uint32 count)
+{
+    if (count <= rootSliceSize)
+    {
+        submitEntityBatches(nodes, count);
+        return;
+    }
+    for (uint32 begin = 0; begin < count; begin += rootSliceSize)
+    {
+        const uint32 n = glm::min(rootSliceSize, count - begin);
+        Globals::jobSystem.submit([this, nodes, begin, n] { submitEntityBatches(nodes + begin, n); },
+            { "Update root slice", EProfileCategory::Entity }, EJobPriority::High, &m_updateCounter);
+    }
+}
+
+// The visible set's root walk, sliced over the cull job's collected handles: each slice job
+// walks its handles to their roots into ITS OWN scratch slot (owner-sliced: no per-worker state,
+// the job never waits) and submits those roots as batches straight away. Concurrent slices are
+// safe by construction: the ancestor stamps are pure stores of one generation, the root dedupe is
+// stampCurrentOnce's atomic exchange, and nothing links or unlinks entries during the pass. The
+// slots are sized on main BEFORE any job goes out (a resize would move them).
+void World::submitVisibleRootSlices()
+{
+    const oc::vector<SpatialHandle>& handles = Globals::spatialIndex.visibleHandles();
+    const uint32 count = uint32(handles.size());
+    const uint32 numSlices = (count + rootSliceSize - 1) / rootSliceSize;
+    if (m_visibleRootSlices.size() < numSlices)
+        m_visibleRootSlices.resize(numSlices);
+    for (uint32 slice = 0; slice < numSlices; ++slice)
+    {
+        const uint32 begin = slice * rootSliceSize;
+        const uint32 end = glm::min(begin + rootSliceSize, count);
+        const auto walk = [this, slice, begin, end, handleData = handles.data()]
+        {
+            const SpatialIndex& spatialIndex = Globals::spatialIndex;
+            VisibleRootSlice& s = m_visibleRootSlices[slice];
+            s.roots.clear();
+            for (uint32 i = begin; i < end; ++i)
+                if (Entity* e = reinterpret_cast<Entity*>(spatialIndex.userData(handleData[i])))
+                    selectUpdateRoot(e, ESpatialPass::VisibleRoot, s.roots);
+            s.nodes.clear();
+            for (Entity* e : s.roots)
+                s.nodes.push_back({ e, Transform() });
+            submitEntityBatches(s.nodes.data(), uint32(s.nodes.size()));
+        };
+        if (numSlices == 1)
+            walk(); // one slice: inline, no job round trip
+        else
+            Globals::jobSystem.submit(walk, { "Update visible slice", EProfileCategory::Entity }, EJobPriority::High, &m_updateCounter);
     }
 }
 

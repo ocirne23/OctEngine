@@ -176,6 +176,11 @@ void MainMenu::renderEscape(bool offerDebugToggle)
 		{
 			ImGui::Spacing();
 			ImGui::Checkbox("Debug panels", &m_debugPanels);
+			// The Profiler panel's Pause button without the panel: freezes the profiler's rings +
+			// frame marks (Profiler::setPaused); the panel adopts the state when it next shows.
+			bool profilerPaused = Globals::profiler.isPaused();
+			if (ImGui::Checkbox("Pause profiler", &profilerPaused))
+				Globals::profiler.setPaused(profilerPaused);
 			ImGui::Spacing();
 		}
 		if (ImGui::Button("Exit to menu", buttonSize))

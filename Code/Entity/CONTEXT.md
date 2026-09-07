@@ -431,11 +431,22 @@ there is one coarse tick, never a crash (aligned 32-bit stores).
 
 Its `SelectResult` carries SUBMIT-READY nodes (deduped by the `UpdateRoot` stamp, Global roots
 skipped, order free) WITH their spatial handles, and is REUSED until the next job replaces it. What
-`update()` does on main (`"Update selection"`), all O(roots + visible) with stamp checks only:
-retire the pending roots a fresh result covers, swap-remove roots whose handle is no longer alive
-(`SpatialIndex::isAlive` — a slot reuse fails its generation), append the visible roots (item 0
-above), the Global roots and the pending roots neither source queued. The first LOD frame has no
-result and computes inline.
+`update()` does on main (`"Update selection"`), touching NO entity — only the contiguous handle
+array and the two short lists: retire the pending roots a fresh result covers, swap-remove roots
+whose handle is no longer alive (`SpatialIndex::isAlive` — a slot reuse fails its generation),
+open the `VisibleRoot` generation and gather the Global roots plus the pending roots the result
+does not hold (a pending root is claimed with `stampCurrentOnce` so the visible walk skips it).
+The first LOD frame has no result and computes inline.
+
+**The per-root work runs on ROOT SLICE JOBS** (`"Update batch submit"` only kicks them, so the
+first batches start within microseconds and the workers are not idle while main walks lists):
+`submitRootSlices` hands the result's nodes (and, LOD off, every root) to the workers in slices of
+`rootSliceSize` (256), each running `submitEntityBatches` — the selection filter, the cost
+partition, the arena copy and the batch submits — on its range; `submitVisibleRootSlices` slices
+the cull job's `visibleHandles()` the same way, each slice walking its handles to their roots
+into its own scratch slot (`VisibleRootSlice`, owner-sliced) before submitting them. The sources
+stay disjoint by the stamps (`UpdateRoot` for the result, `VisibleRoot` for the walk and the
+pending claim), so slices never need to see each other.
 
 ---
 

@@ -143,7 +143,8 @@ public:
 		return action;
 	}
 	// Widget pass, over the docked panels / the game layout / the lobby page. offerDebugToggle
-	// adds the "Debug panels" checkbox (game layout only — the editor already has every panel).
+	// adds the "Debug panels" and "Pause profiler" checkboxes (game layout only — the editor
+	// already has every panel).
 	void renderEscape(bool offerDebugToggle);
 	// The SHARED GAME PAUSE (main writes both, every frame): offersPause adds the escape menu's
 	// "Pause game" button (a running game only); paused shows the centered PAUSED box with its

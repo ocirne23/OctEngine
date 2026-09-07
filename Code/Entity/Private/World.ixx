@@ -291,6 +291,11 @@ private:
     // barrier, a child's only dependency is its own parent, which just finished.
     void updateBatchJob(uint32 begin, uint32 count);
     void submitEntityBatches(const EntityUpdateNode* nodes, uint32 count);
+    // The root sources go to the workers in slices of rootSliceSize (see World.cpp): a slice job
+    // runs submitEntityBatches on its range; a visible slice first walks its handles to roots.
+    static constexpr uint32 rootSliceSize = 256;
+    void submitRootSlices(const EntityUpdateNode* nodes, uint32 count);
+    void submitVisibleRootSlices();
     // SIM LOD decision for one node of the pass, from the entity's own spatial pass mask (the
     // UpdateTier stamps + Main; worker-safe: writes the entity's sched bytes and this worker's
     // staging counters only). Returns the delta to hand updateSelf: the frame delta (full rate),
@@ -362,8 +367,13 @@ private:
     void selectUpdateRoot(Entity* hit, ESpatialPass rootPass, oc::vector<Entity*>& roots);
 
     uint64 m_updateFrame = 0; // salts the per-entity random re-measure below
-    oc::vector<EntityUpdateNode> m_updateLevel; // root gather scratch
-    oc::vector<Entity*> m_visibleRoots;         // per pass: the cull job's visible entities walked to their roots
+    oc::vector<EntityUpdateNode> m_updateLevel; // root gather scratch (LOD: the global + pending roots only)
+    struct VisibleRootSlice // owner-sliced scratch of one visible-slice job: its handles walked to roots
+    {
+        oc::vector<Entity*> roots;
+        oc::vector<EntityUpdateNode> nodes;
+    };
+    oc::vector<VisibleRootSlice> m_visibleRootSlices; // sized on main before the slice jobs go out
     // Frame arena for in-flight batch nodes: claimed with an atomic bump (NEVER rolled back),
     // pointer-stable during the pass (resized only between frames, from last frame's use +
     // overflow). A claim past the end runs that batch's subtrees serially instead (correct, just

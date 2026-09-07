@@ -232,7 +232,9 @@ While the overlay is over a RUNNING game **the frame camera is left untouched** 
 follow cam nor the fly camera runs, because the fly-camera branch would overwrite it with the testbed
 camera's pose (*the view dropped to that pose every time the overlay opened*).
 
-The overlay also carries the **"Debug panels"** checkbox that drives the game layout's side panel.
+The overlay also carries the **"Debug panels"** checkbox that drives the game layout's side panel,
+and next to it **"Pause profiler"** — `Profiler::setPaused` without the Profiler panel's own UI in
+the frame (the panel adopts the state when it next shows).
 
 ---
 
