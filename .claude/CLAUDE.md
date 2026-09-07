@@ -124,7 +124,9 @@ Debug:      /JMC /ZI        + link /INCREMENTAL
 >   callback straight out of the traversal, so a probe needs NO result buffer (every game/entity
 >   probe works this way now);
 > * **owner-sliced scratch** — one buffer sized for the whole problem, each job working its own
->   index range (the transport's per-run BFS queue, the Force merge's per-slot staging);
+>   index range (the transport's per-run BFS queue), or **one slot per parallelFor CHUNK**
+>   (`JobSystem::numChunks(count, grain)` slots, indexed by `begin / grain` — the Force merge
+>   stagings): memory scales with the work, not the context count;
 > * a member of the object that owns the job when only one such job is in flight (the labels
 >   job's unit list);
 > * `PerWorker<T>` when a serial phase must DRAIN every slot with `forEach` (a merge) — a

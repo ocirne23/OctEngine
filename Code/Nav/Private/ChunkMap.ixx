@@ -17,9 +17,15 @@ export namespace Nav
 
         ChunkMap() { reset(64); }
 
+        // Chunks are POOLED: reset and erase park the values in m_pool and getOrCreate re-initializes
+        // one from there, so a rebuild (the TeamField resets every 0.25 s) or an evict/regrow cycle
+        // allocates nothing once the peak chunk count has been reached. reset also keeps the table
+        // capacity, so the rebuild does not regrow through the doublings again.
         void reset(uint32 capacity)
         {
-            m_capacity = oc::bitCeil(capacity < 64 ? 64u : capacity);
+            for (oc::unique_ptr<T>& value : m_values)
+                releaseChunk(value);
+            m_capacity = oc::bitCeil(oc::max(capacity < 64 ? 64u : capacity, m_capacity));
             m_keys.assign(m_capacity, InvalidChunkKey);
             m_values.clear();
             m_values.resize(m_capacity);
@@ -54,7 +60,7 @@ export namespace Nav
                 if (m_keys[slot] == InvalidChunkKey)
                 {
                     m_keys[slot] = key;
-                    m_values[slot] = oc::make_unique<T>();
+                    m_values[slot] = takeChunk();
                     ++m_size;
                     return *m_values[slot];
                 }
@@ -73,7 +79,7 @@ export namespace Nav
                     return;
                 slot = (slot + 1) & mask;
             }
-            m_values[slot].reset();
+            releaseChunk(m_values[slot]);
             uint32 hole = slot;
             while (true) // backward-shift: pull later probe-chain entries into the hole
             {
@@ -89,7 +95,7 @@ export namespace Nav
                 }
             }
             m_keys[hole] = InvalidChunkKey;
-            m_values[hole].reset();
+            m_values[hole].reset(); // moved-from by the shift (or the released slot itself): already null
             --m_size;
         }
 
@@ -113,11 +119,11 @@ export namespace Nav
         template<typename Pred>
         void eraseIf(Pred&& pred) // pred(uint64 key, T&) -> bool
         {
-            oc::vector<uint64> doomed;
+            m_doomed.clear(); // kept scratch: no allocation on the per-step eviction sweep
             for (uint32 slot = 0; slot < m_capacity; ++slot)
                 if (m_keys[slot] != InvalidChunkKey && pred(m_keys[slot], *m_values[slot]))
-                    doomed.push_back(m_keys[slot]);
-            for (const uint64 key : doomed)
+                    m_doomed.push_back(m_keys[slot]);
+            for (const uint64 key : m_doomed)
                 erase(key);
         }
 
@@ -130,6 +136,21 @@ export namespace Nav
             return x ^ (x >> 31);
         }
         uint32 homeSlot(uint64 key) const { return uint32(hashKey(key)) & (m_capacity - 1); }
+
+        oc::unique_ptr<T> takeChunk() // a pooled chunk re-initialized in place, else a fresh one
+        {
+            if (m_pool.empty())
+                return oc::make_unique<T>();
+            oc::unique_ptr<T> chunk = oc::move(m_pool.back());
+            m_pool.pop_back();
+            *chunk = T();
+            return chunk;
+        }
+        void releaseChunk(oc::unique_ptr<T>& chunk)
+        {
+            if (chunk)
+                m_pool.push_back(oc::move(chunk));
+        }
 
         void grow()
         {
@@ -155,6 +176,8 @@ export namespace Nav
 
         oc::vector<uint64> m_keys;
         oc::vector<oc::unique_ptr<T>> m_values;
+        oc::vector<uint64> m_doomed; // eraseIf scratch
+        oc::vector<oc::unique_ptr<T>> m_pool; // released chunks, reused by getOrCreate
         uint32 m_capacity = 0;
         uint32 m_size = 0;
     };

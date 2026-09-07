@@ -279,6 +279,9 @@ transpose-free loads.
 * A promoted entry stays in its dynamic list until a rebuild consumes it.
 * **Demotion tombstones** — a negative radius fails every test in place; rebuilds drop tombstones and
   merge pending promotions back into sorted order.
+* **A rebuild allocates nothing past the peak:** it merges into the store's `Build` arrays, which are
+  DOUBLE-BUFFERED with the live SoA set and swapped in at the end, and the promotion list is a kept
+  `SpatialIndex` scratch (`m_rebuildAdds`).
 * Sphere, AABB and frustum testers all test static ranges 8-wide.
 
 ## Stress harness

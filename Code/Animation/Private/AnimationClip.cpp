@@ -82,6 +82,7 @@ void AnimationPlayer::initialize(const Skeleton* pSkeleton, const AnimationClip*
     m_poseA.resize(numBones);
     m_poseB.resize(numBones);
     m_snapshot.resize(numBones);
+    m_localTransforms.assign(numBones, glm::mat4(1.0f));
     m_globalTransforms.assign(numBones, glm::mat4(1.0f));
     m_palette.assign(numBones, glm::mat4(1.0f));
     m_boneModifiers.assign(numBones, BoneModifier{});
@@ -273,7 +274,8 @@ void AnimationPlayer::evaluate()
         blendPose(m_poseA, m_snapshot, 1.0f - m_fade); // = lerp(snapshot, foreground, m_fade)
 
     // Build local matrices from the (blended) TRS, applying any programmatic per-bone modifiers.
-    oc::vector<glm::mat4> local(numBones);
+    // Into the kept scratch: a fresh vector here was one 4 KB allocation per animator per tick.
+    oc::vector<glm::mat4>& local = m_localTransforms;
     for (uint32 i = 0; i < numBones; ++i)
     {
         local[i] = glm::translate(glm::mat4(1.0f), m_poseA.pos[i]) * glm::mat4_cast(m_poseA.rot[i]) * glm::scale(glm::mat4(1.0f), m_poseA.scale[i]);

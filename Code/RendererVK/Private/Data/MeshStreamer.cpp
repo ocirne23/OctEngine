@@ -215,7 +215,7 @@ void MeshStreamer::workerRun(std::stop_token stopToken)
 
 void MeshStreamer::drainCompletions()
 {
-    oc::deque<StreamInCompletion> completed;
+    oc::deque<StreamInCompletion>& completed = m_completionScratch; // kept twin: swap, not a fresh deque per frame
     {
         std::scoped_lock lock(m_completionMutex);
         completed.swap(m_completions);
@@ -255,6 +255,7 @@ void MeshStreamer::drainCompletions()
         }
         set.state = EState::Resident;
     }
+    completed.clear();
 }
 
 void MeshStreamer::processDeferredFrees(bool releaseAll)
@@ -337,7 +338,8 @@ void MeshStreamer::solveEvictions()
 
     // Evict least-recently-seen first, cold sets only — an over-budget scene where everything is
     // actively referenced stays over budget rather than flickering meshes in and out.
-    oc::vector<uint32> candidates;
+    oc::vector<uint32>& candidates = m_evictCandidates; // kept scratch
+    candidates.clear();
     for (uint32 i = 0; i < (uint32)m_sets.size(); ++i)
         if (m_sets[i].state == EState::Resident && m_frameCounter - m_sets[i].lastSeenFrame >= (uint32)m_coldFrames)
             candidates.push_back(i);

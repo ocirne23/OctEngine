@@ -360,7 +360,23 @@ private:
         else
             Globals::jobSystem.parallelFor(0u, count, grain, profile, fn);
     }
-    void refreshBubbleBounds(EmitterInstance& inst); // on jobs: writes inst + the PerWorker candidate staging
+    // OWNER-SLICED staging for a pass: one slot per chunk the pass hands out (the inline path is
+    // one chunk; JobSystem::numChunks above it), so a pass's staging memory scales with its item
+    // count, not with the scheduler's context count as a PerWorker would. fn reads its slot at
+    // `slots[begin / grain]`; the serial drain walks exactly passSlots() of them.
+    static uint32 passSlots(uint32 count, uint32 grain, uint32 minParallel)
+    {
+        return count < minParallel ? 1u : JobSystem::numChunks(count, grain); // inline calls fn(0, count) even at 0
+    }
+    template<typename T>
+    static void prepareSlots(oc::vector<T>& slots, uint32 n) // grow (capacity kept) + clear the n in use
+    {
+        if (slots.size() < n)
+            slots.resize(n);
+        for (uint32 i = 0; i < n; ++i)
+            slots[i].clear();
+    }
+    void refreshBubbleBounds(EmitterInstance& inst, oc::vector<uint32>& candidates); // on jobs: writes inst + the chunk's candidate slot
     uint32 createGroup(uint32 team);
     void dissolveGroup(uint32 groupIdx); // Merged members start Leaving from the group's displayed sphere
     void beginJoin(EmitterInstance& inst, uint32 groupIdx, const glm::vec3& fromCenter, float fromRadius);
@@ -393,19 +409,25 @@ private:
     oc::vector<MergeGroup> m_groups;
     oc::vector<uint32> m_freeGroups;
     // Join-pass staging: the neighbour pass appends each candidate's pairs (i << 32 | j, i < j)
-    // per worker; the serial union pass drains them.
-    PerWorker<oc::vector<uint64>> m_pairStaging;
-    // Candidate cell list: the bounds pass stages candidate indices per worker + CAS-maxes the
+    // into its CHUNK's slot (owner-sliced, see passSlots); the serial union pass drains them.
+    oc::vector<oc::vector<uint64>> m_pairStaging;
+    // Candidate cell list: the bounds pass stages candidate indices per chunk + CAS-maxes the
     // largest join radius; serially they become (cellKey, emitter) pairs sorted by key (cell =
     // 2 x that radius, so a 3x3x3 neighbourhood holds every possible partner), and the neighbour
     // pass binary-searches the 27 cells — a private structure over the candidates only, instead
     // of the entity SpatialIndex whose finest cells are full of render entries to filter.
-    PerWorker<oc::vector<uint32>> m_candidateStaging;
+    oc::vector<oc::vector<uint32>> m_candidateStaging;
     // Renderer-slot churn staging: the upload jobs see the ACTIVE gate flip and stage the emitter
-    // index; update() mints/retires the slots SERIALLY right after, since the renderer's
-    // create/destroy grow vectors those same jobs are indexing.
-    PerWorker<oc::vector<uint32>> m_slotAcquire;
-    PerWorker<oc::vector<uint32>> m_slotRelease;
+    // index in their chunk's slot; update() mints/retires the slots SERIALLY right after, since
+    // the renderer's create/destroy grow vectors those same jobs are indexing.
+    struct SlotChurn
+    {
+        oc::vector<uint32> acquire;
+        oc::vector<uint32> release;
+        void clear() { acquire.clear(); release.clear(); }
+    };
+    static constexpr uint32 c_uploadGrain = 64; // the "Force upload" parallelFor's grain (slots index by it)
+    oc::vector<SlotChurn> m_slotChurn;
     oc::vector<oc::pair<uint64, uint32>> m_cells;
     oc::atomic<uint32> m_maxJoinRadiusBits = 0; // float bits (positive floats order as uints)
     JobCounter m_mergeCounter; // the in-flight merge job (update kicks -> joinMerge joins next frame)
@@ -432,7 +454,10 @@ private:
     // Chunk-key set for the selection: a STAMP-cleared open-addressing table (no per-frame clear,
     // no sort) whose first-seen keys land in `unique`. One per worker for the boxes pass, one
     // for the serial merge of the workers' unique lists. Past the probe limit a key is appended
-    // unchecked — the cap step dedups the (rare) survivors.
+    // unchecked — the cap step dedups the (rare) survivors. Deliberately still a PerWorker (not
+    // owner-sliced like the vector stagings): a slot is a fixed 4096-entry table, and its dedupe
+    // pays off with FEW, FULL slots — one per 256-emitter chunk would cost more memory on a big
+    // map than one per context, and hand the serial merge many more near-duplicate lists.
     struct BakeKeySet
     {
         static constexpr uint32 SIZE = 4096; // power of two; ~8x the chunk cap

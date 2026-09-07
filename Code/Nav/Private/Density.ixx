@@ -13,6 +13,38 @@ import :Field;
 // window, so a crowd map is exactly as large as the crowd.
 export namespace Nav
 {
+    // Chunk-creation requests from ANY thread (a splat/inject into a missing chunk, a pressure
+    // front reaching a border cell): a BOUNDED lock-free append — one atomic bump into a fixed
+    // array — drained serially by beginStep. Bounded on purpose: a request past the cap is simply
+    // dropped and re-issued by the next frame's splat (the chunk arrives a frame later, invisible
+    // at the front's speed), so a field pays 2 KB instead of a vector per scheduler context, and
+    // the size no longer follows the worker count. The drain relies on the phase barrier (the
+    // pushes' jobs are joined before beginStep runs) for visibility of the key stores, exactly as
+    // the per-context lists did.
+    class TouchQueue final
+    {
+    public:
+        static constexpr uint32 Capacity = 256;
+        void push(uint64 key)
+        {
+            const uint32 i = m_count.fetch_add(1, oc::memory_order_relaxed);
+            if (i < Capacity)
+                m_keys[i] = key;
+        }
+        template<typename Func>
+        void drain(Func&& func) // serial, between phases
+        {
+            const uint32 n = oc::min(m_count.load(oc::memory_order_relaxed), Capacity);
+            for (uint32 i = 0; i < n; ++i)
+                func(m_keys[i]);
+            m_count.store(0, oc::memory_order_relaxed);
+        }
+        void clear() { m_count.store(0, oc::memory_order_relaxed); }
+    private:
+        oc::atomic<uint32> m_count = 0;
+        uint64 m_keys[Capacity];
+    };
+
     // Per-team CROWD FLOW: units splat their planar velocity into their cell every tick; the read
     // buffer is an exponentially decayed trail (persisting ~1 s), so a unit reads "which way is
     // the crowd already moving here" and blends into it — a group commits to one way round a wall
@@ -32,7 +64,7 @@ export namespace Nav
         static constexpr float Scale = 1024.0f; // int16 -> +-32 m/s summed per cell
 
         void initialize();
-        bool isInitialized() const { return m_touch.isInitialized(); }
+        bool isInitialized() const { return m_initialized; }
         void splat(const glm::vec2& xz, const glm::vec2& velocity); // worker-safe (atomic adds)
         // Worker-safe 3x3 mean. With a `raster`, BLOCKED cells are left out of the average
         // entirely instead of averaging in as zero: inside a one-cell gap two thirds of the
@@ -77,7 +109,8 @@ export namespace Nav
     private:
 
         ChunkMap<Chunk> m_chunks;
-        PerWorker<oc::vector<uint64>> m_touch;
+        TouchQueue m_touch;
+        bool m_initialized = false;
         uint32 m_write = 0;
         uint32 m_frame = 0;
         float m_splatGain = 0.06f; // = 1 - decay: the read buffer is an EMA of the splatted
@@ -108,7 +141,7 @@ export namespace Nav
         };
 
         void initialize();
-        bool isInitialized() const { return m_touch.isInitialized(); }
+        bool isInitialized() const { return m_initialized; }
         void inject(const glm::vec2& xz, float amount);   // worker-safe (atomic add into the write buffer)
         // Main thread: carve a NEGATIVE-pressure trough along a polyline (`amount` > 0 = depth).
         // Everything reads pressure as "go the other way", so a trough ATTRACTS: units steer into
@@ -136,7 +169,7 @@ export namespace Nav
         // drains/evicts, snapshots `prevActive` for the quiet-skip and appends StepItems; stepChunk
         // runs PER CHUNK from any worker — one Jacobi step read -> write (a task writes only its
         // own dst buffer, peak and touchedFrame; neighbours are read from src and prevActive), with
-        // growth requests riding the PerWorker touch queue (the chunk exists before the NEXT step —
+        // growth requests riding the TouchQueue (the chunk exists before the NEXT step —
         // the front moves well under a cell a frame, so the delay is invisible); endStep (MAIN)
         // flips the buffers. `item.push` (may be null) is called for every active cell with the
         // gradient the step already has in hand — the pressure->flow push rides this, and it must
@@ -164,7 +197,8 @@ export namespace Nav
         float cellValue(const glm::ivec2& cell, uint32 buffer, const Chunk*& cached, glm::ivec2& cachedCoord) const;
 
         ChunkMap<Chunk> m_chunks;
-        PerWorker<oc::vector<uint64>> m_touch;
+        TouchQueue m_touch;
+        bool m_initialized = false;
         uint32 m_write = 0;
         uint32 m_frame = 0;
         // This step's parameters, stashed by beginStep (see the FlowField twin).

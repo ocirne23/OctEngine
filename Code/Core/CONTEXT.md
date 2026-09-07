@@ -569,4 +569,7 @@ pool-bounded).
 * Sampling runs every frame whatever the metric, so switching to Churn/s shows warm data.
 * Under Churn/s the header shows total bandwidth and all figures carry a "/s" suffix.
 
-**The tracker itself is untouched — no per-frame state on the allocation hot path.**
+**The tracker itself is untouched — no per-frame state on the allocation hot path.** The panel
+allocates nothing per frame once warm either (it would show in its own treemap): the snapshot is a
+flat vector of trivial nodes whose children sit in a contiguous index range, and the treemap layout
+runs on two kept stacks.

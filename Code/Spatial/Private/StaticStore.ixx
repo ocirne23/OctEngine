@@ -24,5 +24,21 @@ struct StaticStore
     oc::vector<Pending> pendingPromotions;
     uint32 numTombstones = 0;
 
+    // The rebuild's target arrays, DOUBLE-BUFFERED with the live ones: rebuildStaticLevel merges
+    // into these (capacity kept from the last rebuild), then swaps them with the live set, so a
+    // rebuild allocates nothing once both sets have reached the level's peak size.
+    struct Build
+    {
+        oc::vector<float> posX, posY, posZ, radius;
+        oc::vector<uint32> layer, poolIdx;
+        oc::vector<uint64> cellKey;
+        void clearAndReserve(uint32 n)
+        {
+            posX.clear(); posY.clear(); posZ.clear(); radius.clear(); layer.clear(); poolIdx.clear(); cellKey.clear();
+            posX.reserve(n); posY.reserve(n); posZ.reserve(n); radius.reserve(n); layer.reserve(n); poolIdx.reserve(n); cellKey.reserve(n);
+        }
+    };
+    Build build;
+
     uint32 size() const { return uint32(poolIdx.size()); }
 };

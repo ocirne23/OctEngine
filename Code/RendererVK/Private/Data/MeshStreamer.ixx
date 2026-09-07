@@ -158,6 +158,8 @@ private:
     oc::deque<StreamInRequest> m_requests;      // guarded by m_requestMutex
     std::mutex m_completionMutex;
     oc::deque<StreamInCompletion> m_completions; // guarded by m_completionMutex
+    oc::deque<StreamInCompletion> m_completionScratch; // drainCompletions swaps the queue into this (kept)
+    oc::vector<uint32> m_evictCandidates;              // solveEvictions scratch (kept)
 
     // Tweaks ("Streaming" category, next to the texture budget)
     int m_budgetMB = 256;

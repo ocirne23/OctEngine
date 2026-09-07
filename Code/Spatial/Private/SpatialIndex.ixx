@@ -286,8 +286,15 @@ private:
     oc::array<CellMap, Morton::MaxLevels> m_levels;
     oc::array<StaticStore, Morton::MaxLevels> m_static;
     RecordPool m_pool;
-    PerWorker<oc::vector<PendingOp>> m_pendingOps; // staged per scheduler context, drained FIFO per slot in commitFrame
+    // Staged per scheduler context, drained FIFO per slot in commitFrame. Deliberately a PerWorker
+    // (not owner-sliced or a shared queue): the pushes come from ANY job — the entity pass's
+    // continuation batches, spawn jobs — with no chunk identity to slice by, the per-frame volume
+    // is unbounded (every moved entity, several ops per entry possible) so a bounded queue cannot
+    // drop, and thousands of pushes a frame on one shared atomic cursor would contend.
+    PerWorker<oc::vector<PendingOp>> m_pendingOps;
     oc::vector<EmptyCandidate> m_emptyCandidates;
+    struct RebuildAdd { uint64 key; uint32 poolIdx; };
+    oc::vector<RebuildAdd> m_rebuildAdds; // rebuildStaticLevel's promotion scratch (kept: rebuilds are frequent)
     uint32 m_levelEntityCount[Morton::MaxLevels] = {};
     uint32 m_numLevels = Morton::MaxLevels;
     uint32 m_frameId = 1;

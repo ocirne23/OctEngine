@@ -167,7 +167,7 @@ cover every support box. Worker-safe between updates; ~3 frames latent end to en
 |---|---|
 | `"Force merge join"` (Wait) | Normally already joined at the loop top; a guarantee, not the expected path. |
 | `"Force prepare"` | Params push, plus destroying the merge job's retired group slots. |
-| `"Force upload"` | A per-emitter `parallelFor` (grain 64): distinct renderer slots, read-only readback span, `PerWorker` debug lines. An emitter whose ACTIVE gate flipped only STAGES its index. |
+| `"Force upload"` | A per-emitter `parallelFor` (grain `c_uploadGrain` = 64): distinct renderer slots, read-only readback span, the renderer's per-worker debug lines. An emitter whose ACTIVE gate flipped only STAGES its index in its chunk's `SlotChurn` slot (owner-sliced, see below). |
 | `"Force slots"` | **Serial.** Retires the staged slots, then mints slots for the newly active ones and uploads them, then mints the slots of groups founded on the merge job — the renderer's create/destroy grow vectors the upload jobs index, so they cannot run inside them. |
 | `"Force groups upload"` | A per-group `runPass` (grain 16, inline under 32): own slot, own readback, and in shared-readback mode its OWN members (an emitter belongs to at most one group). The sphere fold is `forceSphereFold()` — a namespace-scope constant, since a function-local static is a race under `/Zc:threadSafeInit-`. |
 | `"Force queries"` | Query positions up, results latched. |
@@ -391,12 +391,21 @@ the slot to `m_retiredGroupSlots`, which `update()` destroys.
 parallelFor's submit + wake + join costs more than a handful of items** — and a `parallelFor` above
 it. The work is **PARALLEL AND SCALED BY CANDIDATES, NOT EMITTERS**.
 
+**Staging is OWNER-SLICED, not `PerWorker`:** a pass that stages results gets ONE SLOT PER CHUNK
+(`passSlots(count, grain, minParallel)` = 1 inline, else `JobSystem::numChunks`; `prepareSlots`
+grows the slot vector with capacity kept and clears the slots in use), `fn` indexes its slot by
+`begin / grain`, and the serial drain walks exactly that many. Memory therefore scales with the
+pass's item count, not the machine's context count, and no thread-local state is involved — the
+merge passes run inside the merge job, whose `parallelFor` joins park the fiber. The one
+`PerWorker` left is the bake `BakeKeySet` (a fixed 4096-entry hash table per slot — few, full slots
+dedupe best; see System.ixx).
+
 | Pass | Kind | minParallel | What |
 |---|---|---|---|
-| `"Force merge bounds"` | per emitter | 256 | Refresh the cached profile. A CANDIDATE = mergeable + has a bubble + own cover term under `maxRadius`, staged `PerWorker` with a CAS-max of the largest join radius (float bits — positive floats order as uints). |
+| `"Force merge bounds"` | per emitter | 256 | Refresh the cached profile. A CANDIDATE = mergeable + has a bubble + own cover term under `maxRadius`, staged in the chunk's slot with a CAS-max of the largest join radius (float bits — positive floats order as uints). |
 | `"Force merge leave"` | per group | 8 | Touches only its own members. |
 | `"Force merge cells"` | **serial** | — | Candidates → `(cellKey, idx)` sorted by key. **Cell = 2 × the largest join radius, so a 3×3×3 neighbourhood holds every possible partner.** |
-| `"Force merge neighbours"` | per candidate | 128 | Binary-search the 27 cells, exact test `joinDistance × (rᵢ+rⱼ)`, pairs `i<j` staged `PerWorker`. |
+| `"Force merge neighbours"` | per candidate | 128 | Binary-search the 27 cells, exact test `joinDistance × (rᵢ+rⱼ)`, pairs `i<j` staged in the chunk's slot. |
 | `"Force merge union"` | **serial** | — | Ungrouped pair → new group; lone + group → join if it fits; two groups → merge smaller into larger. Serial because of the renderer slot API and cross-group membership moves. **Its cost is the PAIR count.** |
 | `"Force merge cover"` | per group | 8 | `recomputeCover` targets plus the `dissolve` flag. |
 | `"Force merge dissolve"` | **serial** | — | The sweep. |

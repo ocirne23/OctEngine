@@ -44,12 +44,10 @@ namespace
         return (r * 3 + g * 4 + b * 2) > 1300 ? 0xE0101010 : 0xF0F0F0F0;
     }
 
-    struct FRect { float x, y, w, h; };
-
     // Squarified treemap (Bruls et al.): greedily grow a row while it improves the worst aspect
     // ratio, lay each finished row along the current short side. areas are in px^2 and must sum to
-    // at most rect area; outRects parallels areas.
-    double rowWorstAspect(const oc::vector<double>& areas, uint32 begin, uint32 end, double shortSide)
+    // at most rect area; outRects parallels areas (both `count` long, caller-owned).
+    double rowWorstAspect(const double* areas, uint32 begin, uint32 end, double shortSide)
     {
         double sum = 0.0, minArea = 1e300, maxArea = 0.0;
         for (uint32 i = begin; i < end; ++i)
@@ -64,7 +62,7 @@ namespace
         return oc::max(w2 * maxArea / s2, s2 / (w2 * minArea));
     }
 
-    void layoutRow(const oc::vector<double>& areas, uint32 begin, uint32 end, FRect& remaining, oc::vector<FRect>& outRects)
+    void layoutRow(const double* areas, uint32 begin, uint32 end, FRect& remaining, FRect* outRects)
     {
         double rowArea = 0.0;
         for (uint32 i = begin; i < end; ++i)
@@ -103,18 +101,17 @@ namespace
         }
     }
 
-    void squarify(const oc::vector<double>& areas, const FRect& rect, oc::vector<FRect>& outRects)
+    void squarify(const double* areas, uint32 count, const FRect& rect, FRect* outRects)
     {
-        outRects.resize(areas.size());
         FRect remaining = rect;
         uint32 i = 0;
-        while (i < (uint32)areas.size())
+        while (i < count)
         {
             const double shortSide = oc::max(1.0, (double)oc::min(remaining.w, remaining.h));
             const uint32 rowStart = i;
             double best = rowWorstAspect(areas, rowStart, i + 1, shortSide);
             ++i;
-            while (i < (uint32)areas.size())
+            while (i < count)
             {
                 const double with = rowWorstAspect(areas, rowStart, i + 1, shortSide);
                 if (with > best)
@@ -148,7 +145,10 @@ void MemoryPanel::prepare()
     }
 
     if (const MemScopeNode* root = Globals::memoryTracker.getRoot())
-        buildSnapshot(root);
+    {
+        m_nodes.resize(1); // trivial nodes: clear + resize keeps the capacity
+        buildSnapshot(0, root);
+    }
 }
 
 void MemoryPanel::render()
@@ -173,12 +173,11 @@ void MemoryPanel::render()
     }
 }
 
-uint32 MemoryPanel::buildSnapshot(const MemScopeNode* node)
+void MemoryPanel::buildSnapshot(uint32 idx, const MemScopeNode* node)
 {
-    const uint32 idx = (uint32)m_nodes.size();
-    m_nodes.emplace_back();
     {
         ViewNode& view = m_nodes[idx];
+        view = ViewNode();
         view.src = node;
         view.name = node->name;
         view.category = node->category;
@@ -208,19 +207,27 @@ uint32 MemoryPanel::buildSnapshot(const MemScopeNode* node)
         case EMetric::Churn:      view.selfBytes = (int64)oc::max(view.rateBytes, 0.0f); break;
         }
     }
-    int64 inclusive = m_nodes[idx].selfBytes;
+    // Reserve the children's CONTIGUOUS block first, then descend: everything the subtrees append
+    // lands above it, so the block never fragments. (m_nodes may reallocate — index, never hold.)
+    uint32 numChildren = 0;
     for (const MemScopeNode* child = node->firstChild.load(oc::memory_order_acquire); child != nullptr;
          child = child->nextSibling.load(oc::memory_order_relaxed))
+        ++numChildren;
+    const uint32 first = (uint32)m_nodes.size();
+    m_nodes.resize(first + numChildren);
+    m_nodes[idx].firstChild = first;
+    m_nodes[idx].numChildren = numChildren;
+    int64 inclusive = m_nodes[idx].selfBytes;
+    uint32 k = 0;
+    for (const MemScopeNode* child = node->firstChild.load(oc::memory_order_acquire); child != nullptr;
+         child = child->nextSibling.load(oc::memory_order_relaxed), ++k)
     {
-        const uint32 childIdx = buildSnapshot(child); // (m_nodes may reallocate - re-index below)
-        m_nodes[idx].children.push_back(childIdx);
-        inclusive += m_nodes[childIdx].inclusiveBytes;
+        buildSnapshot(first + k, child);
+        inclusive += m_nodes[first + k].inclusiveBytes;
     }
-    ViewNode& view = m_nodes[idx];
-    view.inclusiveBytes = inclusive;
-    oc::sort(view.children.begin(), view.children.end(), [this](uint32 a, uint32 b)
-        { return m_nodes[a].inclusiveBytes > m_nodes[b].inclusiveBytes; });
-    return idx;
+    m_nodes[idx].inclusiveBytes = inclusive;
+    oc::sort(m_nodes.begin() + first, m_nodes.begin() + first + numChildren,
+        [](const ViewNode& a, const ViewNode& b) { return a.inclusiveBytes > b.inclusiveBytes; });
 }
 
 void MemoryPanel::drawHeader()
@@ -386,7 +393,7 @@ void MemoryPanel::drawTreemap()
             ImGui::Text("Rate: %s/s, %.0f allocs/s", bytesBuf, (double)view.rateAllocs);
         }
         ImGui::Text("Category: %s", profileCategoryName((EProfileCategory)view.category));
-        if (!view.children.empty())
+        if (view.numChildren != 0)
             ImGui::TextDisabled("click to zoom");
         ImGui::EndTooltip();
     }
@@ -414,12 +421,12 @@ void MemoryPanel::drawNode(uint32 nodeIdx, float x0, float y0, float x1, float y
     if (hovered)
     {
         m_hoveredNode = nodeIdx;
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !view.children.empty())
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && view.numChildren != 0)
             m_clickedZoom = view.src;
     }
 
-    const bool drawTitle = h >= kTitleHeight * 2.0f && w >= 40.0f && !view.children.empty();
-    if (drawTitle || (view.children.empty() && w >= 32.0f && h >= 12.0f))
+    const bool drawTitle = h >= kTitleHeight * 2.0f && w >= 40.0f && view.numChildren != 0;
+    if (drawTitle || (view.numChildren == 0 && w >= 32.0f && h >= 12.0f))
     {
         char bytesBuf[64], labelBuf[160];
         formatBytes(bytesBuf, sizeof(bytesBuf), (double)view.inclusiveBytes);
@@ -430,7 +437,7 @@ void MemoryPanel::drawNode(uint32 nodeIdx, float x0, float y0, float x1, float y
         drawList->PopClipRect();
     }
 
-    if (view.children.empty() || depth >= kMaxDrawDepth || w < kMinBoxSize * 4.0f || h < kMinBoxSize * 4.0f)
+    if (view.numChildren == 0 || depth >= kMaxDrawDepth || w < kMinBoxSize * 4.0f || h < kMinBoxSize * 4.0f)
         return;
 
     // Children squarified into the content area under the title strip. No explicit "(self)" box:
@@ -443,17 +450,24 @@ void MemoryPanel::drawNode(uint32 nodeIdx, float x0, float y0, float x1, float y
         return;
 
     const double areaScale = (double)(cx1 - cx0) * (double)(cy1 - cy0) / (double)view.inclusiveBytes;
-    oc::vector<double> areas(view.children.size());
-    for (size_t i = 0; i < view.children.size(); ++i)
-        areas[i] = (double)oc::max<int64>(m_nodes[view.children[i]].inclusiveBytes, 0) * areaScale;
-    oc::vector<FRect> rects;
-    squarify(areas, FRect{ cx0, cy0, cx1 - cx0, cy1 - cy0 }, rects);
+    // Layout scratch as a stack: this node's range is [base, base + n); the recursion below appends
+    // above it and pops back to our top, so the range stays ours. Index, never hold a reference —
+    // a child's push may reallocate.
+    const uint32 n = view.numChildren;
+    const size_t base = m_areaStack.size();
+    m_areaStack.resize(base + n);
+    m_rectStack.resize(base + n);
+    for (uint32 i = 0; i < n; ++i)
+        m_areaStack[base + i] = (double)oc::max<int64>(m_nodes[view.firstChild + i].inclusiveBytes, 0) * areaScale;
+    squarify(m_areaStack.data() + base, n, FRect{ cx0, cy0, cx1 - cx0, cy1 - cy0 }, m_rectStack.data() + base);
 
-    for (size_t i = 0; i < view.children.size(); ++i)
+    for (uint32 i = 0; i < n; ++i)
     {
-        const FRect& rect = rects[i];
+        const FRect rect = m_rectStack[base + i]; // a copy: the recursion may grow the stack
         if (rect.w < 0.5f || rect.h < 0.5f)
             continue;
-        drawNode(view.children[i], rect.x, rect.y, rect.x + rect.w, rect.y + rect.h, depth + 1);
+        drawNode(view.firstChild + i, rect.x, rect.y, rect.x + rect.w, rect.y + rect.h, depth + 1);
     }
+    m_areaStack.resize(base);
+    m_rectStack.resize(base);
 }

@@ -63,7 +63,11 @@ Clients run no unit sim: the feed there stages **obstacles only**, for the local
 
 * 2D over XZ, **2 m cells** — the same as the game's structure grid and Spatial's finest cell.
 * **16×16-cell CHUNKS (32 m)** in `Nav::ChunkMap<T>`: open-addressed `uint64 → unique_ptr<T>`, the
-  Spatial CellMap pattern. **Values are heap-owned, so growth never moves a chunk.**
+  Spatial CellMap pattern. **Values are heap-owned, so growth never moves a chunk.** Chunks are
+  POOLED inside the map: `reset` / `erase` park them, `getOrCreate` re-initializes a parked one, and
+  `reset` keeps the table capacity — so a rebuild or an evict/regrow cycle allocates nothing once the
+  peak is reached. The team fields ROTATE too (`TeamSlot::live` / `retired`): `kickBuild` rebuilds
+  into the field the last publish retired unless a seed-path job still holds it.
 * Chunk key = 28-bit packed chunk coords (`Nav::chunkKey`), sign-extended on the way back.
   `Nav:Grid` is pure coordinate math.
 * **Storage scales with ACTIVE AREA, not world size** — several far-apart battle sites coexist and
@@ -200,8 +204,11 @@ fully settle before the pressure phase**: the pressure→flow push splats ATOMIC
 buffers that the flow tasks write plainly.
 
 A chunk task writes only its own write buffer, peak and touched flags, and reads neighbours' READ
-buffers. Growth requests ride the `PerWorker` touch queue and materialize before the NEXT step — the
-front moves well under a cell a frame, so the delay is invisible.
+buffers. Growth requests ride the field's `TouchQueue` — a BOUNDED lock-free append (256 keys, one
+atomic bump, 2 KB per field; a request past the cap is dropped and re-issued by the next splat) —
+and materialize before the NEXT step; the front moves well under a cell a frame, so the delay is
+invisible. The step job's gathered `StepItem` lists and the `ChunkMap`'s eviction scratch are kept
+members, so a step allocates nothing.
 
 ## Goal fields
 
@@ -242,8 +249,8 @@ then writes it in TWO places.
 holds a `JobCounter`) and submitted the `"Nav seed path"` job (Normal priority). The job touches
 only the plan and the raster, and **holds its own `shared_ptr` to that raster**, so a publish on
 main during the search cannot free it. It also applies the "Seed range" cut. `findPath` never
-waits, so the `PerWorker` scratch taken with `local()` right before the call is valid for the whole
-search.
+waits, so the job's `thread_local` `PathScratch`, pinned by a `ThreadLocalScope` over the call, is
+valid for the whole search.
 
 The NEXT `update` whose plan counter is done writes the lane and the trough — on main, outside the
 pass, against the CURRENT raster — which keeps the write contract exactly what it was: the only

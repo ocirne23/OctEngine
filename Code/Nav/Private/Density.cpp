@@ -9,8 +9,7 @@ namespace Nav
 
 void FlowField::initialize()
 {
-    if (!m_touch.isInitialized())
-        m_touch.initialize();
+    m_initialized = true;
 }
 
 static void atomicAddSat16(int16& value, int amount)
@@ -32,8 +31,7 @@ void FlowField::splat(const glm::vec2& xz, const glm::vec2& velocity)
     Chunk* chunk = m_chunks.find(key);
     if (!chunk)
     {
-        if (m_touch.isInitialized())
-            m_touch.local().push_back(key);
+        m_touch.push(key);
         return;
     }
     const uint32 i = cellIndex(c);
@@ -116,13 +114,7 @@ void FlowField::beginStep(float deltaSec, uint32 keepFrames, float halfLifeSec, 
     m_splatGain = glm::max(1.0f - m_stepDecay, 0.0005f);
     m_stepRaster = raster;
     m_stepMaxSpeed = maxSpeed;
-    if (m_touch.isInitialized())
-        m_touch.forEach([&](oc::vector<uint64>& keys)
-        {
-            for (const uint64 key : keys)
-                m_chunks.getOrCreate(key).touchedFrame = m_frame;
-            keys.clear();
-        });
+    m_touch.drain([&](uint64 key) { m_chunks.getOrCreate(key).touchedFrame = m_frame; });
     // The buffer just written becomes the READ buffer; the next WRITE buffer starts as the read
     // buffer decayed, so a lane keeps its direction for a while after the units passed. Eviction
     // runs HERE (the step never writes touchedFrame, so before/after is the same set) — the map
@@ -289,8 +281,7 @@ void FlowField::seedPath(oc::span<const glm::vec2> path, float speed, float radi
 void FlowField::clear()
 {
     m_chunks.reset(64);
-    if (m_touch.isInitialized())
-        m_touch.forEach([](oc::vector<uint64>& keys) { keys.clear(); });
+    m_touch.clear();
 }
 
 }
@@ -300,8 +291,7 @@ namespace Nav
 
 void PressureField::initialize()
 {
-    if (!m_touch.isInitialized())
-        m_touch.initialize();
+    m_initialized = true;
 }
 
 void PressureField::inject(const glm::vec2& xz, float amount)
@@ -311,8 +301,7 @@ void PressureField::inject(const glm::vec2& xz, float amount)
     Chunk* chunk = m_chunks.find(key);
     if (!chunk)
     {
-        if (m_touch.isInitialized())
-            m_touch.local().push_back(key);
+        m_touch.push(key);
         return;
     }
     oc::atomic_ref<float> ref(chunk->p[m_write][cellIndex(c)]);
@@ -398,13 +387,7 @@ void PressureField::beginStep(float deltaSec, const TeamField* raster, float dif
     m_stepDiffusion = glm::clamp(diffusionPerSec * deltaSec * 60.0f, 0.0f, 0.25f); // Jacobi stability
     m_stepFloor = propagationFloor;
     m_stepRaster = raster;
-    if (m_touch.isInitialized())
-        m_touch.forEach([&](oc::vector<uint64>& keys)
-        {
-            for (const uint64 key : keys)
-                m_chunks.getOrCreate(key).touchedFrame = m_frame;
-            keys.clear();
-        });
+    m_touch.drain([&](uint64 key) { m_chunks.getOrCreate(key).touchedFrame = m_frame; });
     // Evict FIRST — one frame later than evicting on this step's result, invisible at any sane
     // keep window — so the map never mutates while the fan-out reads across chunks.
     const uint32 cutoff = m_frame > keepFrames ? m_frame - keepFrames : 0;
@@ -507,13 +490,10 @@ void PressureField::stepChunk(uint64 key, Chunk& chunk, const CellVisit* onActiv
                 glm::vec2(nv[0] - nv[1], nv[2] - nv[3]) / (2.0f * CellSize));
         // Growth: pressure at a border cell wants to cross into a chunk that may not exist.
         // Queued through the worker-safe touch queue; the chunk exists before the next step.
-        if (m_touch.isInitialized())
-        {
-            if (cx == 0 && !nbr[1]) m_touch.local().push_back(chunkKey(coord + c_n4[1]));
-            if (cx == ChunkCells - 1 && !nbr[0]) m_touch.local().push_back(chunkKey(coord + c_n4[0]));
-            if (cz == 0 && !nbr[3]) m_touch.local().push_back(chunkKey(coord + c_n4[3]));
-            if (cz == ChunkCells - 1 && !nbr[2]) m_touch.local().push_back(chunkKey(coord + c_n4[2]));
-        }
+        if (cx == 0 && !nbr[1]) m_touch.push(chunkKey(coord + c_n4[1]));
+        if (cx == ChunkCells - 1 && !nbr[0]) m_touch.push(chunkKey(coord + c_n4[0]));
+        if (cz == 0 && !nbr[3]) m_touch.push(chunkKey(coord + c_n4[3]));
+        if (cz == ChunkCells - 1 && !nbr[2]) m_touch.push(chunkKey(coord + c_n4[2]));
     }
     chunk.peak = peak;
     if (peak > c_eps)
@@ -564,8 +544,7 @@ void PressureField::seedPath(oc::span<const glm::vec2> path, float amount, float
 void PressureField::clear()
 {
     m_chunks.reset(64);
-    if (m_touch.isInitialized())
-        m_touch.forEach([](oc::vector<uint64>& keys) { keys.clear(); });
+    m_touch.clear();
 }
 
 }

@@ -393,10 +393,6 @@ void ForceSystem::initialize()
         Tweak::color3("Force/Teams", teamNames[i], &m_params.teamColors[i]);
     Tweak::intVar("Force", "Emitters (stat)", &m_statEmitters, 0, 1000000);
     Tweak::intVar("Force", "GPU slots (stat)", &m_statSlots, 0, 1000000); // only ACTIVE emitters hold one
-    m_pairStaging.initialize();
-    m_candidateStaging.initialize();
-    m_slotAcquire.initialize();
-    m_slotRelease.initialize();
     m_bakeKeyStaging.initialize();
     Tweak::boolean("Force/Merge", "Enabled", &m_merge.enabled);
     Tweak::floatVar("Force/Merge", "Join distance (x radii)", &m_merge.joinDistance, 0.0f, 1.5f, 0.01f);
@@ -798,16 +794,17 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
     }
     const glm::vec3 up(0.0f, 1.0f, 0.0f);
     const float blendStep = deltaSec / glm::max(m_merge.blendTime, 1e-3f);
-    m_slotAcquire.forEach([](oc::vector<uint32>& list) { list.clear(); });
-    m_slotRelease.forEach([](oc::vector<uint32>& list) { list.clear(); });
+    const uint32 numUploadSlots = JobSystem::numChunks((uint32)m_emitters.size(), c_uploadGrain);
+    prepareSlots(m_slotChurn, numUploadSlots);
     // Per-emitter upload on jobs: each iteration touches only its own instance, its own renderer
     // slot (distinct vector elements, no growth — create/destroy are main-thread outside this),
-    // the read-only readback span and the PerWorker-staged debug lines. An emitter whose ACTIVE
-    // gate flipped only STAGES its index — the renderer slot itself is minted/retired serially
-    // below, where growing the renderer's vectors cannot race these jobs.
-    Globals::jobSystem.parallelFor(0u, (uint32)m_emitters.size(), 64u, JobProfile{ "Force upload", EProfileCategory::Force },
+    // the read-only readback span and the renderer's per-worker debug lines. An emitter whose
+    // ACTIVE gate flipped only STAGES its index in the chunk's own slot — the renderer slot itself
+    // is minted/retired serially below, where growing the renderer's vectors cannot race these jobs.
+    Globals::jobSystem.parallelFor(0u, (uint32)m_emitters.size(), c_uploadGrain, JobProfile{ "Force upload", EProfileCategory::Force },
         [&](uint32 begin, uint32 end)
     {
+    SlotChurn& churn = m_slotChurn[begin / c_uploadGrain];
     for (uint32 emitterIdx = begin; emitterIdx < end; ++emitterIdx)
     {
         EmitterInstance& inst = m_emitters[emitterIdx];
@@ -824,12 +821,12 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
             inst.appliedForce = glm::vec3(0.0f);
             inst.pressure = 0.0f;
             if (inst.rendererSlot != UINT32_MAX)
-                m_slotRelease.local().push_back(emitterIdx);
+                churn.release.push_back(emitterIdx);
             continue;
         }
         if (inst.rendererSlot == UINT32_MAX)
         {
-            m_slotAcquire.local().push_back(emitterIdx); // minted AND uploaded serially below
+            churn.acquire.push_back(emitterIdx); // minted AND uploaded serially below
             continue;
         }
         uploadEmitter(renderer, inst, blendStep);
@@ -839,19 +836,17 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
         // Slot churn, serial on main: releases first, so a slot freed this frame is at least in
         // the renderer's retirement queue before the acquires ask for one.
         ProfileScope slotScope("Force slots", EProfileCategory::Force);
-        m_slotRelease.forEach([&](const oc::vector<uint32>& list)
-        {
-            for (const uint32 idx : list)
+        for (uint32 s = 0; s < numUploadSlots; ++s)
+            for (const uint32 idx : m_slotChurn[s].release)
             {
                 renderer.destroyForceEmitter(m_emitters[idx].rendererSlot);
                 m_emitters[idx].rendererSlot = UINT32_MAX;
                 --m_numSlottedEmitters;
             }
-        });
         uint32 starved = 0;
-        m_slotAcquire.forEach([&](const oc::vector<uint32>& list)
+        for (uint32 s = 0; s < numUploadSlots; ++s)
         {
-            for (const uint32 idx : list)
+            for (const uint32 idx : m_slotChurn[s].acquire)
             {
                 EmitterInstance& inst = m_emitters[idx];
                 // A placeholder desc (output 0): uploadEmitter overwrites it on the next line with
@@ -867,7 +862,7 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
                 ++m_numSlottedEmitters;
                 uploadEmitter(renderer, inst, blendStep);
             }
-        });
+        }
         if (starved > 0 && !m_slotCapWarned)
         {
             m_slotCapWarned = true; // once per stretch: more ACTIVE bubbles than the GPU has slots
@@ -1040,7 +1035,7 @@ static float forceDist2(const glm::vec3& a, const glm::vec3& b)
 // Works for any shape; radius 0 = no bubble above iso (e.g. a collapsed shield's 0.01 output),
 // which keeps the emitter out of every group.
 // Runs on a job (one emitter per call, writes only its own instance + the worker's staging list).
-void ForceSystem::refreshBubbleBounds(EmitterInstance& inst)
+void ForceSystem::refreshBubbleBounds(EmitterInstance& inst, oc::vector<uint32>& candidates)
 {
     if (!inst.active)
     {
@@ -1091,7 +1086,7 @@ void ForceSystem::refreshBubbleBounds(EmitterInstance& inst)
         && m_merge.radiusScale * inst.bubbleRadius * m_merge.coverScale + m_merge.coverMargin <= m_merge.maxRadius;
     if (inst.candidate)
     {
-        m_candidateStaging.local().push_back((uint32)(&inst - m_emitters.data()));
+        candidates.push_back((uint32)(&inst - m_emitters.data()));
         const float joinRadius = glm::max(m_merge.joinDistance, 0.0f) * inst.bubbleRadius;
         const uint32 bits = oc::bitCast<uint32>(joinRadius);
         uint32 seen = m_maxJoinRadiusBits.load(oc::memory_order_relaxed);
@@ -1268,9 +1263,9 @@ bool ForceSystem::recomputeCover(MergeGroup& group)
 
 // The body of the "Force merge" job (see joinMerge). Every pass that is per-emitter or per-group
 // is a runPass (inline when small, parallelFor when not): an emitter's bounds refresh writes only
-// its own instance + its worker's staging list, a group's leave/cover pass touches only its own
+// its own instance + its chunk's staging slot, a group's leave/cover pass touches only its own
 // members (an emitter belongs to at most one group), and the neighbour search reads the sorted
-// candidate cells and stages pairs per worker. Only the candidate sort, the pair UNION (group
+// candidate cells and stages pairs per chunk. Only the candidate sort, the pair UNION (group
 // creation / membership moves across groups) and the dissolve sweep are serial — their cost is
 // the number of candidates and join-distance PAIRS, not the emitter count. No renderer access here.
 // ---- the baked pressure field (see System.ixx) ----
@@ -1560,15 +1555,17 @@ void ForceSystem::updateMerging(float deltaSec)
     const uint32 numGroups = (uint32)m_groups.size();
 
     // 1. Bubble bounds for every live emitter (cached profile; the transition targets need fresh
-    // centres even while merging is disabled) + the candidate staging.
-    m_candidateStaging.forEach([](oc::vector<uint32>& list) { list.clear(); });
+    // centres even while merging is disabled) + the candidate staging, one slot per chunk.
+    const uint32 numBoundsSlots = passSlots(numEmitters, 64u, 256u);
+    prepareSlots(m_candidateStaging, numBoundsSlots);
     m_maxJoinRadiusBits.store(0u, oc::memory_order_relaxed);
     runPass(numEmitters, 64u, 256u, JobProfile{ "Force merge bounds", EProfileCategory::Force },
         [&](uint32 begin, uint32 end)
     {
+        oc::vector<uint32>& candidates = m_candidateStaging[begin / 64u];
         for (uint32 i = begin; i < end; ++i)
             if (m_emitters[i].generation != 0)
-                refreshBubbleBounds(m_emitters[i]);
+                refreshBubbleBounds(m_emitters[i], candidates);
     });
 
     if (!m_merge.enabled)
@@ -1657,21 +1654,20 @@ void ForceSystem::updateMerging(float deltaSec)
         m_cells.clear();
         const float cell = glm::max(2.0f * oc::bitCast<float>(m_maxJoinRadiusBits.load(oc::memory_order_relaxed)), 0.5f);
         const float invCell = 1.0f / cell;
-        m_candidateStaging.forEach([&](const oc::vector<uint32>& list) {
-            for (const uint32 idx : list)
+        for (uint32 s = 0; s < numBoundsSlots; ++s)
+            for (const uint32 idx : m_candidateStaging[s])
                 m_cells.emplace_back(forceCellKey(m_emitters[idx].bubbleCenter, invCell), idx);
-        });
         oc::sort(m_cells.begin(), m_cells.end(), [](const oc::pair<uint64, uint32>& a, const oc::pair<uint64, uint32>& b) {
             return a.first < b.first;
         });
     }
-    m_pairStaging.forEach([](oc::vector<uint64>& pairs) { pairs.clear(); });
     const uint32 numCandidates = (uint32)m_cells.size();
+    const uint32 numPairSlots = passSlots(numCandidates, 32u, 128u);
+    prepareSlots(m_pairStaging, numPairSlots);
     runPass(numCandidates, 32u, 128u, JobProfile{ "Force merge neighbours", EProfileCategory::Force },
         [&](uint32 begin, uint32 end)
     {
-        oc::vector<uint64>& pairs = m_pairStaging.local(); // no waits inside: the slot stays ours
-        const ThreadLocalScope tlsPin;
+        oc::vector<uint64>& pairs = m_pairStaging[begin / 32u]; // the chunk's own slot
         const oc::pair<uint64, uint32>* cells = m_cells.data();
         for (uint32 c = begin; c < end; ++c)
         {
@@ -1775,10 +1771,9 @@ void ForceSystem::updateMerging(float deltaSec)
     };
     {
         ProfileScope unionScope("Force merge union", EProfileCategory::Force);
-        m_pairStaging.forEach([&](const oc::vector<uint64>& pairs) {
-            for (const uint64 pair : pairs)
+        for (uint32 s = 0; s < numPairSlots; ++s)
+            for (const uint64 pair : m_pairStaging[s])
                 processPair((uint32)(pair >> 32), (uint32)pair);
-        });
     }
 
     // 5. Covers (one job per group): target + displayed sphere; undersized groups flag a dissolve

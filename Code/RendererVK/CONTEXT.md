@@ -285,6 +285,10 @@ the GPU.
 
 **Non-DDS, procedural and embedded textures are pinned at full res.**
 
+Both streamers' `update()` allocate nothing per frame once warm: the completion queue is swapped into
+a KEPT twin deque (a fresh deque per frame allocated even when empty), and the solver's grant heap,
+retention order, promotion order and eviction candidates are kept member scratch.
+
 ## Mesh data (`MeshStreamer`, "Mesh Streaming" tweaks)
 
 Cooked scenes register mesh sets — source mesh, LOD levels and `.vsc` byte ranges (see

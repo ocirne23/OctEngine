@@ -216,6 +216,19 @@ public:
     // safe to run concurrently with itself. Returns when the whole range is done. `profile` is
     // REQUIRED and covers each participant's WHOLE run (helper jobs through execute(), the calling
     // thread wrapped here) — one span per participant, not per chunk.
+    //
+    // OWNER-SLICED STAGING: chunk k covers [begin + k*grain, begin + (k+1)*grain) clipped to end,
+    // so func can index a per-chunk slot by (chunkBegin - begin) / grainSize, and numChunks() says
+    // how many slots a pass needs — memory that scales with the WORK, not with the scheduler's
+    // context count the way a PerWorker slot does. Slots are exclusively the chunk's (no TLS, so
+    // a wait inside func cannot mix them up) and a serial phase drains exactly numChunks of them.
+    // The single-call paths (count <= grain, no workers) run chunk 0 alone; a zero count runs
+    // nothing, and numChunks() then reads 0.
+    static constexpr uint32 numChunks(uint32 count, uint32 grainSize)
+    {
+        grainSize = grainSize > 1 ? grainSize : 1;
+        return (count + grainSize - 1) / grainSize;
+    }
     template<typename Func>
     void parallelFor(uint32 begin, uint32 end, uint32 grainSize, JobProfile profile, Func&& func, EJobPriority priority = EJobPriority::Normal)
     {
@@ -310,8 +323,8 @@ private:
             if (shared.cost && numItems) // includes the cursor overhead: overhead-dominated loops drive the grain up
                 shared.cost->addSample(uint64(std::chrono::nanoseconds(Clock::now() - start).count()), numItems);
         };
-        const uint32 numChunks = (count + grainSize - 1) / grainSize;
-        const uint32 numHelpers = oc::min(m_numWorkers, numChunks - 1);
+        const uint32 chunks = numChunks(count, grainSize);
+        const uint32 numHelpers = oc::min(m_numWorkers, chunks - 1);
         JobCounter counter;
         {
             // The calling thread's span covers the helper submits (+ wakes) AND its own share, so

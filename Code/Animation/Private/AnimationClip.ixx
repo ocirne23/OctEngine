@@ -181,6 +181,7 @@ private:
     Pose m_bind;     // bind-pose local TRS (fallback for bones a clip doesn't animate)
     Pose m_poseA;    // scratch: foreground pose
     Pose m_poseB;    // scratch: second blend-space clip
+    oc::vector<glm::mat4> m_localTransforms;  // scratch: per-bone local TRS matrix (kept: evaluate() runs every tick)
     oc::vector<glm::mat4> m_globalTransforms; // scratch: per-bone composed global transform
     oc::vector<glm::mat4> m_palette;
     oc::vector<BoneModifier> m_boneModifiers; // per-bone, sized to the skeleton; None unless posed

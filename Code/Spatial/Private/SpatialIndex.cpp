@@ -389,8 +389,8 @@ void SpatialIndex::rebuildStaticLevel(uint32 level)
     const auto start = Clock::now();
     StaticStore& store = m_static[level];
 
-    struct Add { uint64 key; uint32 poolIdx; };
-    oc::vector<Add> adds;
+    oc::vector<RebuildAdd>& adds = m_rebuildAdds; // kept scratch
+    adds.clear();
     adds.reserve(store.pendingPromotions.size());
     for (const StaticStore::Pending& pending : store.pendingPromotions)
     {
@@ -407,17 +407,18 @@ void SpatialIndex::rebuildStaticLevel(uint32 level)
         adds.push_back({ m_pool.cellKey[pending.idx], pending.idx });
     }
     store.pendingPromotions.clear();
-    oc::sort(adds.begin(), adds.end(), [](const Add& a, const Add& b) { return a.key < b.key; });
+    oc::sort(adds.begin(), adds.end(), [](const RebuildAdd& a, const RebuildAdd& b) { return a.key < b.key; });
 
-    // merge the (sorted) surviving store with the sorted additions into fresh arrays
+    // merge the (sorted) surviving store with the sorted additions into the store's BUILD arrays
+    // (double-buffered with the live set — swapped below, so nothing is allocated past the peak)
     const uint32 oldSize = store.size();
     const uint32 newCapacity = oldSize - store.numTombstones + uint32(adds.size());
-    oc::vector<float> posX, posY, posZ, radius;
-    oc::vector<uint32> layer, poolIdx;
-    oc::vector<uint64> cellKey;
-    posX.reserve(newCapacity); posY.reserve(newCapacity); posZ.reserve(newCapacity);
-    radius.reserve(newCapacity); layer.reserve(newCapacity); poolIdx.reserve(newCapacity);
-    cellKey.reserve(newCapacity);
+    StaticStore::Build& build = store.build;
+    build.clearAndReserve(newCapacity);
+    oc::vector<float>& posX = build.posX; oc::vector<float>& posY = build.posY; oc::vector<float>& posZ = build.posZ;
+    oc::vector<float>& radius = build.radius;
+    oc::vector<uint32>& layer = build.layer; oc::vector<uint32>& poolIdx = build.poolIdx;
+    oc::vector<uint64>& cellKey = build.cellKey;
     uint32 o = 0, a = 0;
     while (o < oldSize || a < uint32(adds.size()))
     {

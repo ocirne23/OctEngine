@@ -351,7 +351,8 @@ void TextureStreamer::issueOps()
     // Promotions ordered by how much resolution the priority pass wants (lowest desiredTop = biggest on
     // screen sharpens first, cheaper reads breaking ties), and only while the committed ledger (resident
     // + in-flight growth) stays under budget, so a burst of issued reads can't land us above it.
-    oc::vector<uint32> promotions;
+    oc::vector<uint32>& promotions = m_promotions; // kept scratch
+    promotions.clear();
     for (uint32 texIdx = 0; texIdx < (uint32)m_states.size(); ++texIdx)
     {
         const StreamState& state = m_states[texIdx];
@@ -384,13 +385,14 @@ void TextureStreamer::update()
     // 1. Apply finished disk reads: create + upload the replacement images, swap them into the live
     //    textures, queue their descriptor rewrites, park the old images for deferred destruction.
     {
-        oc::deque<StreamCompletion> completions;
+        oc::deque<StreamCompletion>& completions = m_completionScratch; // kept twin: swap, not a fresh deque per frame
         {
             std::scoped_lock lock(m_completionMutex);
             completions.swap(m_completions);
         }
         for (StreamCompletion& completion : completions)
             applyCompletion(oc::move(completion));
+        completions.clear();
     }
 
     // 2. Fold this frame's want accumulators into the hysteresis-filtered desired mips: promotions apply
@@ -444,14 +446,11 @@ void TextureStreamer::update()
         const uint64 budgetBytes = (uint64)m_budgetMB * 1024ull * 1024ull;
         const uint64 availBytes = budgetBytes > m_pinnedBytes ? budgetBytes - m_pinnedBytes : 0;
 
-        struct Grant { uint8 deficit; uint32 cost; uint32 texIdx; };
-        auto lowerPriority = [](const Grant& a, const Grant& b)
-        {
-            if (a.deficit != b.deficit) return a.deficit < b.deficit;
-            if (a.cost != b.cost) return a.cost > b.cost;
-            return a.texIdx > b.texIdx;
-        };
-        oc::priority_queue<Grant, oc::vector<Grant>, decltype(lowerPriority)> grants(lowerPriority);
+        // A max-heap over the kept m_grantHeap (the same order a priority_queue<Grant, ..., lowerPriority>
+        // would give), so the solver allocates nothing once warm.
+        oc::vector<Grant>& grants = m_grantHeap;
+        grants.clear();
+        const auto pushGrant = [&](const Grant& g) { grants.push_back(g); oc::push_heap(grants.begin(), grants.end(), grantLowerPriority); };
 
         uint64 usedBytes = 0;
         for (uint32 texIdx = 0; texIdx < (uint32)m_states.size(); ++texIdx)
@@ -462,25 +461,27 @@ void TextureStreamer::update()
             state.targetTop = state.tailTop;
             usedBytes += state.tailBytes;
             if (state.desiredTop < state.tailTop)
-                grants.push(Grant{ (uint8)(state.tailTop - state.desiredTop), state.meta.mips[state.tailTop - 1].byteSize, texIdx });
+                pushGrant(Grant{ (uint8)(state.tailTop - state.desiredTop), state.meta.mips[state.tailTop - 1].byteSize, texIdx });
         }
         while (!grants.empty() && usedBytes < availBytes)
         {
-            const Grant grant = grants.top();
-            grants.pop();
+            oc::pop_heap(grants.begin(), grants.end(), grantLowerPriority);
+            const Grant grant = grants.back();
+            grants.pop_back();
             StreamState& state = m_states[grant.texIdx];
             if (usedBytes + grant.cost > availBytes)
                 continue; // too big; cheaper grants may still fit
             usedBytes += grant.cost;
             state.targetTop--;
             if (state.targetTop > state.desiredTop)
-                grants.push(Grant{ (uint8)(state.targetTop - state.desiredTop), state.meta.mips[state.targetTop - 1].byteSize, grant.texIdx });
+                pushGrant(Grant{ (uint8)(state.targetTop - state.desiredTop), state.meta.mips[state.targetTop - 1].byteSize, grant.texIdx });
         }
 
         // Retention phase: after every need is met, keep already-resident mips that still fit instead of
         // evicting them (a camera spin must not re-stream everything behind you). Most recently seen
         // textures retain first, so under real budget pressure eviction is oldest-first.
-        oc::vector<uint32> retainOrder;
+        oc::vector<uint32>& retainOrder = m_retainOrder; // kept scratch
+        retainOrder.clear();
         for (uint32 texIdx = 0; texIdx < (uint32)m_states.size(); ++texIdx)
         {
             const StreamState& state = m_states[texIdx];

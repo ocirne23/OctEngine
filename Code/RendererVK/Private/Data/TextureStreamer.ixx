@@ -161,6 +161,15 @@ private:
         uint32 swapFrame = 0; // streamer frame the swap happened; safe to destroy NUM_FRAMES_IN_FLIGHT later
     };
 
+    // The residency solver's grant heap entry (update step 3): one mip level owed to a texture.
+    struct Grant { uint8 deficit; uint32 cost; uint32 texIdx; };
+    static bool grantLowerPriority(const Grant& a, const Grant& b)
+    {
+        if (a.deficit != b.deficit) return a.deficit < b.deficit;
+        if (a.cost != b.cost) return a.cost > b.cost;
+        return a.texIdx > b.texIdx;
+    }
+
     void workerRun(std::stop_token stopToken);
     void applyCompletion(StreamCompletion&& completion);
     // Replaces the live image with one spanning [targetTop..numMips): uploads mips [targetTop..dataMipEnd)
@@ -178,6 +187,11 @@ private:
     oc::deque<StreamRequest> m_requests;      // guarded by m_requestMutex
     std::mutex m_completionMutex;
     oc::deque<StreamCompletion> m_completions; // guarded by m_completionMutex
+    oc::deque<StreamCompletion> m_completionScratch; // update() swaps the queue into this (kept: no per-frame deque)
+    // update()'s per-frame scratch, kept so the solver allocates nothing once warm
+    oc::vector<Grant> m_grantHeap;      // step 3: the grant priority heap (push_heap/pop_heap)
+    oc::vector<uint32> m_retainOrder;   // step 3: retention order
+    oc::vector<uint32> m_promotions;    // issueOps: promotion order
 
     oc::vector<RetiredImage> m_retiredImages;
     uint32 m_opCounter = 0;

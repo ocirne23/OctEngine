@@ -103,6 +103,13 @@ export namespace Nav
             oc::vector<NavSource> buildSources; // snapshot the in-flight job reads
             oc::shared_ptr<TeamField> pending;  // being built
             oc::shared_ptr<const TeamField> published;
+            // The two fields ROTATE instead of being re-made every 0.25 s: `live` is the non-const
+            // handle behind `published`, `retired` the one it replaced. kickBuild rebuilds INTO
+            // `retired` when nothing else holds it (a seed-path job may still, via plan->raster —
+            // then it is dropped and a fresh field is made), so the chunk pool, the map table and
+            // the wave vectors of the last-but-one build are reused.
+            oc::shared_ptr<TeamField> live;
+            oc::shared_ptr<TeamField> retired;
             JobCounter counter;
             float timer = 0.0f;
             float radius = 0.0f;   // 0 = the "Field radius" tweak (team fields); goals set their own
@@ -143,6 +150,8 @@ export namespace Nav
         TeamSlot m_raster; // obstacle raster only (rebuilt on obstacle change) — for avoid()/lineOfSight
         oc::unordered_map<uint64, oc::unique_ptr<TeamSlot>> m_goals; // JobCounter is immovable
         float m_stepDelta = 0.0f; // dt for the step job (a member: the job outlives update()'s stack)
+        oc::vector<FlowField::StepItem> m_flowItems;         // the step job's gathered chunks (one job in flight;
+        oc::vector<PressureField::StepItem> m_pressureItems; // kept so the capacity survives across steps)
         uint32 m_frame = 0;
         FlowField m_flow[MaxTeams];
         PressureField m_pressure[MaxTeams];

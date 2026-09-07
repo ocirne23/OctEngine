@@ -279,7 +279,13 @@ bool NavSystem::requestSeedPath(uint32 team, const glm::vec3& from, const glm::v
 void NavSystem::kickBuild(TeamSlot& slot, float deltaSec)
 {
     slot.buildSources = slot.sources;
-    slot.pending = oc::make_shared<TeamField>();
+    // Reuse the field retired by the last publish (pooled chunks, sized table, wave vectors) unless
+    // a seed-path job still reads it; see TeamSlot.
+    if (slot.retired && slot.retired.use_count() == 1)
+        slot.pending = oc::move(slot.retired);
+    else
+        slot.pending = oc::make_shared<TeamField>();
+    slot.retired.reset();
     slot.building = true;
     slot.sourcesDirty = false;
     slot.timer = m_rebuildInterval;
@@ -357,7 +363,9 @@ void NavSystem::update(float deltaSec)
             }
             slot.lastBuildChunks = slot.pending->buildSolvedChunks(); // sizes the next build's slices
             slot.building = false;
-            slot.published = oc::move(slot.pending);
+            slot.retired = oc::move(slot.live); // the field being replaced: the next build's target
+            slot.live = oc::move(slot.pending);
+            slot.published = slot.live;         // releases the old const handle, so `retired` reads as free
             slot.pending.reset();
         }
     };
@@ -441,9 +449,10 @@ void NavSystem::update(float deltaSec)
 // flow (v += -grad p): a jam bends the stream upstream of it and a seeded trough sucks the
 // surrounding lanes in; the push rides the diffusion step itself, which hands each active cell's
 // gradient to the callback instead of a second pass re-resolving neighbours.
-// Runs on a JOB FIBER: the nested parallelFors park it, so everything here is STACK locals (the
-// fiber stack stays alive across the parks; a thread_local would be shared with whatever job the
-// worker picks up meanwhile - the standing Nav rule).
+// Runs on a JOB FIBER: the nested parallelFors park it, so everything here is STACK locals or
+// members of the system (one step job in flight — the item lists are kept members so their
+// capacity survives across steps); a thread_local would be shared with whatever job the worker
+// picks up meanwhile - the standing Nav rule.
 void NavSystem::runFieldSteps()
 {
     const float deltaSec = m_stepDelta;
@@ -451,8 +460,10 @@ void NavSystem::runFieldSteps()
         const uint32 keepFrames = uint32(glm::max(m_keepFrames, 1));
         const TeamField* raster = m_raster.published.get();
         const float gain = pressureFlowGain();
-        oc::vector<FlowField::StepItem> flowItems;
-        oc::vector<PressureField::StepItem> pressureItems;
+        oc::vector<FlowField::StepItem>& flowItems = m_flowItems;
+        oc::vector<PressureField::StepItem>& pressureItems = m_pressureItems;
+        flowItems.clear();
+        pressureItems.clear();
         PressureField::CellVisit pushes[MaxTeams];
         for (uint32 t = 0; t < MaxTeams; ++t)
         {
@@ -508,6 +519,8 @@ void NavSystem::clear()
         slot.sources.clear();
         slot.buildSources.clear();
         slot.published.reset();
+        slot.live.reset();    // a full clear frees the rotated fields too
+        slot.retired.reset();
         slot.sourcesDirty = false;
     };
     for (TeamSlot& slot : m_teams)

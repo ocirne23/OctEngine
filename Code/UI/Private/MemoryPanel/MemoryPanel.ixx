@@ -10,6 +10,12 @@ import Core.MemoryTracker;
 // CHURN RATE (allocator bandwidth: bytes allocated per second, EMA-smoothed per path - the
 // tracker's cumulative counters are sampled every prepare and the delta over the sample gap is
 // the instantaneous rate, so the treemap shows what code allocates every frame).
+//
+// The panel itself allocates NOTHING per frame once warm (it would otherwise show up in its own
+// treemap): the snapshot is a flat vector of trivially-copyable nodes whose children sit in a
+// CONTIGUOUS index range (no per-node vector), and the treemap layout uses two kept stacks.
+struct FRect { float x, y, w, h; }; // module-internal (the layout helpers in the .cpp use it too)
+
 export class MemoryPanel
 {
 public:
@@ -40,7 +46,11 @@ private:
         uint64 cumCount = 0;
         float rateBytes = 0.0f;   // smoothed self churn, bytes/sec
         float rateAllocs = 0.0f;  // smoothed self churn, allocations/sec
-        oc::vector<uint32> children; // indices into m_nodes, sorted desc by inclusiveBytes
+        // The children are m_nodes[firstChild .. firstChild + numChildren): the block is reserved
+        // BEFORE the recursion descends into them, so it stays contiguous, and is sorted desc by
+        // inclusiveBytes in place (a node's own firstChild index survives the move).
+        uint32 firstChild = 0;
+        uint32 numChildren = 0;
     };
 
     // Per-path rate state, persistent across frames (m_nodes is rebuilt every frame). Keyed by the
@@ -55,12 +65,16 @@ private:
         bool seeded = false; // first sample only records the baseline
     };
 
-    uint32 buildSnapshot(const MemScopeNode* node);
+    void buildSnapshot(uint32 idx, const MemScopeNode* node); // fills m_nodes[idx] (already sized) + its subtree
     void drawHeader();
     void drawTreemap();
     void drawNode(uint32 nodeIdx, float x0, float y0, float x1, float y1, uint32 depth);
 
-    oc::vector<ViewNode> m_nodes; // snapshot rebuilt every frame; index 0 = tree root
+    oc::vector<ViewNode> m_nodes; // snapshot rebuilt every frame (trivial nodes: capacity kept); index 0 = tree root
+    // drawNode's layout scratch, used as STACKS: a node appends its children's areas/rects, recurses
+    // (the children append above), then pops back — no per-node vector, no per-frame allocation.
+    oc::vector<double> m_areaStack;
+    oc::vector<FRect> m_rectStack;
     bool m_prepared = false;       // prepare() ran for this UI frame (render clears it)
     const MemScopeNode* m_zoom = nullptr; // zoom target (null = root); MemScopeNodes are never freed
     EMetric m_metric = EMetric::Live;
