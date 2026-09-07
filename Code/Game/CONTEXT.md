@@ -1195,7 +1195,9 @@ info block, the barracks popup) are a JOB: `updateWindowed` captures this frame'
 viewport, `update` submits the job at ITS END (structures settled; only the entity pass overlaps
 it, which changes field values, never rosters or the structure list), and main joins it right
 before `ui.update` queues the widget pass that paints them (`joinWorldLabels`). GameHud writes are
-mutexed; `~GameMatch` joins it too.
+mutexed; `~GameMatch` joins it too. The label list and the popup are the job's KEPT scratch
+(`m_labelsScratch`, `m_labelsPopup`), swapped into GameHud at the end so last frame's list comes
+back with its capacity — no per-frame list allocation, only the selected info string outgrows SSO.
 
 **HUD** through `Globals::gameHud`: bars Health / Shield / Materials, counters Minerals / Fuel / Power
 (co-op authority adds "Time" — the match clock as h:mm:ss of authority sim time, `m_matchTime`, saved

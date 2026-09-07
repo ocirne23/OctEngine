@@ -190,6 +190,7 @@ public:
     void addDebugLine(const glm::vec3& a, const glm::vec3& b, uint32 color)
     {
         oc::vector<DebugLinePipeline::LineVertex>& verts = m_debugLineVerts.local();
+        const ThreadLocalScope tlsPin;
         verts.push_back({ a, color });
         verts.push_back({ b, color });
     }

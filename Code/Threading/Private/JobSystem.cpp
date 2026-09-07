@@ -23,6 +23,25 @@ static thread_local WorkerContext* t_worker = nullptr;
 static thread_local uint32 t_helpDepth = 0;
 static constexpr uint32 MaxHelpDepth = 4;
 
+// ThreadLocalScope's pin count on this thread (debug only). Nonzero = job code on this thread is
+// mid-use of thread-local state, so nothing may park this fiber or run another job body here.
+static thread_local uint32 t_tlsPinDepth = 0;
+
+static void assertNotThreadLocalPinned()
+{
+    assert(t_tlsPinDepth == 0 && "a ThreadLocalScope is alive across a fiber park or an inline job: thread-local state would change hands");
+}
+
+void JobSystem::debugThreadLocalPin(int delta)
+{
+#ifndef NDEBUG
+    assert(delta > 0 || t_tlsPinDepth > 0);
+    t_tlsPinDepth += uint32(delta);
+#else
+    (void)delta;
+#endif
+}
+
 // For the internal recycling rings (free fibers/jobs, resume queue) a push can transiently fail
 // even though the ring is sized beyond its whole population: a preempted pop has claimed a cell
 // but not republished its sequence yet. The popper is running, not blocked, so spinning is
@@ -647,6 +666,7 @@ bool JobSystem::tryRunOneHighJob()
     Job* job;
     if (!m_readyQueues[uint32(EJobPriority::High)].pop(job))
         return false;
+    assertNotThreadLocalPinned();
     ++t_helpDepth;
     execute(*job);
     --t_helpDepth;
@@ -661,6 +681,7 @@ bool JobSystem::tryRunOneJob()
     Job* job = getWork(*ctx);
     if (!job)
         return false;
+    assertNotThreadLocalPinned();
     ++t_helpDepth;
     execute(*job);
     --t_helpDepth;
@@ -677,6 +698,7 @@ void JobSystem::helpWait(JobCounter& counter, WorkerContext& ctx)
     // parallelFor wait helped into UI::updateJob, whose first act waits on the prepare counter.
     // Such jobs go back to the queues for a fiber context (which parks instead of nesting).
     const bool refuseForeignWait = t_helpDepth >= 1;
+    assertNotThreadLocalPinned(); // the jobs run inline below would share this thread's TLS
     uint32 spins = 0;
     while (!counter.isDone())
     {
@@ -711,6 +733,7 @@ void JobSystem::helpWait(JobCounter& counter, WorkerContext& ctx)
 
 void JobSystem::fiberWait(JobCounter& counter, WorkerContext& ctx)
 {
+    assertNotThreadLocalPinned(); // the park may resume this fiber on another thread's TLS
     // announce the waiter inside the same atomic as the count: the zero transition either sees
     // the registration in its own fetch_sub (and claims the wait list, where it finds our node
     // if we managed to push one) or never touches counter memory again. Our registration bit
@@ -813,6 +836,7 @@ void JobSystem::lockJobMutexSlow(JobMutex& mutex)
         WorkerContext* ctx = t_worker; // re-read every round: a parked fiber resumes anywhere
         if (ctx && ctx->currentFiber)
         {
+            assertNotThreadLocalPinned(); // about to park (the help branch asserts in tryRunOneJob)
             Fiber* fiber = ctx->currentFiber;
             FiberWaitNode node{ fiber, nullptr };
             while (mutex.m_listLock.exchange(1, oc::memory_order_acquire) != 0)

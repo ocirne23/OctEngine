@@ -32,7 +32,8 @@ public:
 		const glm::ivec2 size = viewport.getSize();
 		if (size.x <= 0 || size.y <= 0)
 			return;
-		const GameHud::Snapshot hud = Globals::gameHud.snapshot();
+		Globals::gameHud.snapshot(m_hud); // into the kept copy: no per-frame vector/string allocations
+		const GameHud::Snapshot& hud = m_hud;
 		if (!hud.hotbarActive)
 			Globals::gameHud.setSlotScreenRects({}); // nothing drawn = nothing clickable
 		if (!hud.popup.active)
@@ -368,6 +369,7 @@ private:
 		snprintf(buf, bufSize, whole ? "%.0f / %.0f" : "%.1f / %.1f", value, maxValue);
 	}
 
+	GameHud::Snapshot m_hud; // the per-frame copy, kept so its vectors and strings keep their capacity
 	bool  m_enabled = true;
 	float m_scale = 1.0f;
 	float m_opacity = 0.9f;

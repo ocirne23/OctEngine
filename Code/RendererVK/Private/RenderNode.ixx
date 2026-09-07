@@ -29,6 +29,7 @@ export inline void markRenderNodeTransformDirty(uint32 idx)
     if (bits == allBits)
         return;
     oc::array<oc::vector<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT>& lists = Globals::renderNodeDirtyLists.local();
+    const ThreadLocalScope tlsPin;
     for (uint32 frame = 0; frame < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++frame)
         if (!(bits & (1u << frame)))
             lists[frame].push_back(idx);

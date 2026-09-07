@@ -118,8 +118,10 @@ waits for the in-flight builds to finish (bounded: no NEW build kicks while it i
 re-kicks all.
 
 > **STANDING RULE for anything inside these jobs: gather buffers must be STACK locals, never
-> `thread_local`.** A parallelFor wait parks the fiber, and the worker may pick up another team's job
-> and clear a shared thread_local mid-use.
+> `thread_local`** — unless the code between taking and last using it provably never waits, AND
+> a `ThreadLocalScope` pins it (the chunk solve's `heap` in `floodSolveChunk` is the one such
+> buffer). A parallelFor wait parks the fiber, and the worker may pick up another team's job and
+> clear a shared thread_local mid-use; the pin asserts at that park.
 
 ### Reading it
 
@@ -128,7 +130,7 @@ re-kicks all.
 | `sample(xz, seed)` | 3×3 lowest-neighbour scan crossing chunk borders → `{valid, dist, srcIndex, descentDir}`. **`seed` jitters ties** so a plateau equidistant between two sources does not stall a whole crowd on one line. `descentDir` is zero AT a source. |
 | `sourceAt(i)` | Names the target. |
 | `isBlocked`, `lineOfSight(a, b, radius)`, `freeDistance(a, dir, maxLen, radius)`, `wallPush(xz, range)` | Raster reads, any thread. `radius > 0` also tests the two parallel offset lines — a body, not a point. |
-| `findPath(from, to, maxExpand, radius, outPath, scratch)` | A* string-pulled into a minimal polyline. **NOT for per-unit use** — this is the one-shot planner behind `seedPath`. `scratch` is the caller's `PathScratch` working set (NavSystem hands its `PerWorker` slot in with `local()` right before the call — findPath never waits, so the fiber cannot migrate mid-search; the A* holds NO thread_local). |
+| `findPath(from, to, maxExpand, radius, outPath, scratch)` | A* string-pulled into a minimal polyline. **NOT for per-unit use** — this is the one-shot planner behind `seedPath`. `scratch` is the caller's `PathScratch` working set (the seedPath job's `thread_local`, pinned by a `ThreadLocalScope` over the call — findPath never waits, so the fiber cannot migrate mid-search, and the pin asserts if that changes). |
 | `steerPoint`, `avoid`, `chooseSide` | Per-walker helpers the PLAYER uses. `avoid` picks the nearest clear whisker (±30/60/90/120°) and carries a `side` hysteresis so a slide along a long wall does not flip-flop. `chooseSide` is deterministic from geometry, **so a whole group agrees**. |
 
 ### `CostWindow` — the per-tick raster snapshot

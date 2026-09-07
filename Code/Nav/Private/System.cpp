@@ -49,7 +49,6 @@ void NavSystem::initialize()
         f.initialize();
     for (PressureField& p : m_pressure)
         p.initialize();
-    m_pathScratch.initialize();
     Tweak::boolean("Nav", "Enabled", &m_enabled);
     Tweak::floatVar("Nav", "Flow half-life (s)", &m_flowHalfLife, 0.05f, 60.0f, 0.05f);
     Tweak::floatVar("Nav", "Pressure diffusion", &m_pressureDiffusion, 0.0f, 0.25f, 0.005f);
@@ -184,10 +183,14 @@ bool NavSystem::seedPath(uint32 team, const glm::vec3& from, const glm::vec3& to
     NavSystem* self = this;
     Globals::jobSystem.submit([self, plan]
     {
-        // local() right before the call, not held past it: findPath has no wait inside, so the
-        // fiber stays on this worker for exactly the span the scratch is in use.
-        plan->found = plan->raster->findPath(plan->from, plan->to, 8192, plan->clearance * 0.5f, plan->path,
-            self->m_pathScratch.local());
+        // The A*'s working set is this THREAD's (pure scratch, never drained — so a thread_local,
+        // not a PerWorker): findPath has no wait inside, so the fiber stays on this worker for
+        // exactly the span it is in use; the pin asserts should that ever change.
+        {
+            static thread_local TeamField::PathScratch pathScratch;
+            const ThreadLocalScope tlsPin;
+            plan->found = plan->raster->findPath(plan->from, plan->to, 8192, plan->clearance * 0.5f, plan->path, pathScratch);
+        }
         if (!plan->found || plan->range <= 0.0f)
             return;
         // The A* runs to the real destination (a truncated SEARCH would pick the wrong way round

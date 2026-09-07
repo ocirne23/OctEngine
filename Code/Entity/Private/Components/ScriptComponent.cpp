@@ -15,6 +15,7 @@ module Entity;
 import Core;
 import Core.Log;
 import Core.Transform;
+import Threading; // ThreadLocalScope around every script entry point
 import :Entity;
 import :ScriptContext;
 import :ScriptEventManager;
@@ -106,8 +107,12 @@ namespace
     }
 }
 
+// Every entry point runs under a ThreadLocalScope: a script tick NEVER parks (the per-thread query
+// ring and RNG in ScriptContext depend on it) — a thunk that waits asserts here in debug.
+
 bool invokeScriptOnSpawn(const ScriptModule* module, Entity& entity, void* scriptData)
 {
+    const ThreadLocalScope tlsPin;
     const unsigned long code = sehInvoke(reinterpret_cast<ScriptOnSpawnFn>(module->onSpawn), &entity, scriptData);
     if (code == 0)
         return true;
@@ -117,6 +122,7 @@ bool invokeScriptOnSpawn(const ScriptModule* module, Entity& entity, void* scrip
 
 bool invokeScriptOnDestroy(const ScriptModule* module, Entity& entity, void* scriptData)
 {
+    const ThreadLocalScope tlsPin;
     const unsigned long code = sehInvoke(reinterpret_cast<ScriptOnSpawnFn>(module->onDestroy), &entity, scriptData);
     if (code == 0)
         return true;
@@ -126,6 +132,7 @@ bool invokeScriptOnDestroy(const ScriptModule* module, Entity& entity, void* scr
 
 bool invokeScriptUpdate(const ScriptModule* module, Entity& entity, float deltaSeconds, void* scriptData)
 {
+    const ThreadLocalScope tlsPin;
     const unsigned long code = sehInvoke(reinterpret_cast<ScriptUpdateFn>(module->update), &entity, deltaSeconds, scriptData);
     if (code == 0)
         return true;
@@ -135,6 +142,7 @@ bool invokeScriptUpdate(const ScriptModule* module, Entity& entity, float deltaS
 
 bool invokeScriptOnEvent(const ScriptModule* module, Entity& entity, int eventIdx, void* scriptData)
 {
+    const ThreadLocalScope tlsPin;
     const unsigned long code = sehInvoke(reinterpret_cast<ScriptOnEventFn>(module->onEvent), &entity, eventIdx, scriptData);
     if (code == 0)
         return true;
@@ -144,6 +152,7 @@ bool invokeScriptOnEvent(const ScriptModule* module, Entity& entity, int eventId
 
 bool invokeScriptOnPhysicsEvent(const ScriptModule* module, Entity& entity, Entity* other, int begin, int sensor, int64 contactId, void* scriptData)
 {
+    const ThreadLocalScope tlsPin;
     const unsigned long code = sehInvoke(reinterpret_cast<ScriptOnPhysicsEventFn>(module->onPhysicsEvent), &entity, other, begin, sensor, contactId, scriptData);
     if (code == 0)
         return true;

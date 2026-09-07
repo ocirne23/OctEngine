@@ -4,6 +4,7 @@ import Core;
 import Core.glm;
 import Core.Tweaks;
 import RendererVK;
+import Threading; // ThreadLocalScope on the PerWorker staging slots
 import :System;
 
 using namespace RendererVKLayout;
@@ -1303,6 +1304,7 @@ void ForceSystem::buildBakeChunks(Renderer& renderer)
             [&](uint32 begin, uint32 end)
         {
         BakeKeySet& keys = m_bakeKeyStaging.local(); // no waits inside: the slot stays ours
+        const ThreadLocalScope tlsPin;
         for (uint32 i = begin; i < end; ++i)
         {
             const EmitterInstance& inst = m_emitters[i];
@@ -1669,6 +1671,7 @@ void ForceSystem::updateMerging(float deltaSec)
         [&](uint32 begin, uint32 end)
     {
         oc::vector<uint64>& pairs = m_pairStaging.local(); // no waits inside: the slot stays ours
+        const ThreadLocalScope tlsPin;
         const oc::pair<uint64, uint32>* cells = m_cells.data();
         for (uint32 c = begin; c < end; ++c)
         {

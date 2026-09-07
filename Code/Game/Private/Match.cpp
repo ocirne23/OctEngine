@@ -267,7 +267,7 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
         Tweak::floatVar("Game/Coop", "Cost warrior", &m_waveCost[(int)ENpcType::Warrior], 0.1f, 500.0f, 0.5f);
         Tweak::intVar("Game/Coop", "Max enemy units", &m_waveMaxAlive, 1, 60000, 50);
         Tweak::floatVar("Game/Coop", "Wave spawn area per unit", &m_waveSpawnAreaPerUnit, 1.0f, 60.0f, 0.5f);
-        Tweak::intVar("Game/Coop", "Ambient budget", &m_ambientBudget, 0, 500000, 10);
+        Tweak::intVar("Game/Coop", "Ambient budget", &m_ambientBudget, 0, 1000000, 10);
         Tweak::floatVar("Game/Coop", "Ambient safe radius", &m_ambientSafeRadius, 10.0f, 200.0f, 1.0f);
         Tweak::intVar("Game/Coop", "Ambient recipe window", &m_ambientRecipeWindow, 0, 20, 1);
         Tweak::floatVar("Game/Coop", "Ambient depth scale", &m_ambientDepthScale, 0.5f, 1.0f, 0.01f);
@@ -3520,9 +3520,16 @@ void GameMatch::buildWorldLabels()
 {
     ProfileScope scope("Game world labels", EProfileCategory::Game);
     const Camera& camera = m_labelsCamera;
-    oc::vector<HudWorldLabel> labels;
+    // Both are the job's kept scratch, SWAPPED into GameHud at the end (last frame's list comes
+    // back with its capacity): no list allocation per frame, only the label strings that outgrow
+    // the SSO buffer (the selected structure's info block).
+    oc::vector<HudWorldLabel>& labels = m_labelsScratch;
+    labels.clear();
     labels.reserve(m_structures.structureCount());
-    HudPopup popup; // the selected own barracks' unit-type picker (inactive = none)
+    HudPopup& popup = m_labelsPopup; // the selected own barracks' unit-type picker (inactive = none)
+    popup.active = false;
+    popup.title.clear();
+    popup.buttons.clear();
     const Rect& viewport = m_labelsViewport;
     // PROBLEM BADGES, on a per-structure JITTERED ~1 s timer: the check scans a structure's links,
     // and every state it reports changes on the timescale of a player's actions, so re-running it
@@ -3756,8 +3763,8 @@ void GameMatch::buildWorldLabels()
             continue;
         labels.push_back(oc::move(label));
     }
-    Globals::gameHud.setWorldLabels(oc::move(labels));
-    Globals::gameHud.setPopup(oc::move(popup));
+    Globals::gameHud.swapWorldLabels(labels);
+    Globals::gameHud.swapPopup(popup);
 }
 
 void GameMatch::tickPlayerMelee(float deltaSec)

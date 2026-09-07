@@ -146,10 +146,6 @@ export namespace Nav
         uint32 m_frame = 0;
         FlowField m_flow[MaxTeams];
         PressureField m_pressure[MaxTeams];
-        // The seed-path A*'s working set, per worker context: taken with local() right before
-        // findPath and released after — findPath never waits, so the job cannot migrate between
-        // the two (the PerWorker contract; a thread_local would follow the thread, not the job).
-        PerWorker<TeamField::PathScratch> m_pathScratch;
         oc::vector<oc::unique_ptr<SeedPlan>> m_seedPlans; // queued/in-flight plans, applied by update() (JobCounter is immovable)
         oc::vector<NavObstacle> m_obstacles;
         oc::vector<NavObstacle> m_buildObstacles; // snapshot shared by every in-flight job

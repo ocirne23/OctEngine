@@ -632,6 +632,7 @@ void World::updateBatchJob(uint32 begin, uint32 count)
     // everything it touches is the audited thread-safe inline set, and the per-worker staging slot
     // stays exclusively ours for the job's whole body.
     EntityUpdateStaging& staging = m_updateStaging.local();
+    const ThreadLocalScope tlsPin; // asserts should any update path ever park the fiber
     staging.children.clear();
     const Clock::time_point batchStart = Clock::now();
     uint32 batchCost = 0;

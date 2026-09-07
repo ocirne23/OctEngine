@@ -207,11 +207,12 @@ public:
 		oc::erase_if(m_counters, [name](const HudCounter& c) { return name == c.name; });
 	}
 
-	// Replaces the popup (per-frame rebuild; an inactive one clears it).
-	void setPopup(HudPopup&& popup)
+	// Replaces the popup (per-frame rebuild; an inactive one clears it). A SWAP: the caller gets
+	// the previous popup back — the buttons vector keeps its capacity across frames (clear() it).
+	void swapPopup(HudPopup& popup)
 	{
 		const std::lock_guard lock(m_mutex);
-		m_popup = oc::move(popup);
+		oc::swap(m_popup, popup);
 	}
 
 	// The overlay reports where it drew each popup button (or nothing when no popup was drawn).
@@ -234,11 +235,13 @@ public:
 		return -1;
 	}
 
-	// Replaces the whole world-label list (per-frame rebuild; pass {} to clear).
-	void setWorldLabels(oc::vector<HudWorldLabel>&& labels)
+	// Replaces the whole world-label list (per-frame rebuild). A SWAP: the caller gets last
+	// frame's list back, capacity intact, so two vectors ping-pong between the builder and the HUD
+	// and no frame allocates the list (clear() it before the next build). Pass an empty one to clear.
+	void swapWorldLabels(oc::vector<HudWorldLabel>& labels)
 	{
 		const std::lock_guard lock(m_mutex);
-		m_worldLabels = oc::move(labels);
+		m_worldLabels.swap(labels);
 	}
 
 	// Removes every slot, bar and counter (a script's OnDestroy typically calls this).
@@ -300,11 +303,11 @@ public:
 		HudPopup popup;
 	};
 
-	// One copy per frame for the overlay (UI thread).
-	Snapshot snapshot() const
+	// One copy per frame for the overlay (UI thread), INTO a snapshot the caller keeps: the copy
+	// assignments reuse the vectors' and strings' capacity, so a steady HUD copies without allocating.
+	void snapshot(Snapshot& out) const
 	{
 		const std::lock_guard lock(m_mutex);
-		Snapshot out;
 		for (int i = 0; i < NumSlots; ++i)
 		{
 			out.slots[i] = m_slots[i];
@@ -317,7 +320,6 @@ public:
 		out.counters = m_counters;
 		out.worldLabels = m_worldLabels;
 		out.popup = m_popup;
-		return out;
 	}
 
 private:

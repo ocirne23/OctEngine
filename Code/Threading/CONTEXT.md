@@ -11,6 +11,12 @@ the fiber resumes later on **whichever worker picks it up**, which may be a diff
 > Everything else in this file follows from that one fact. It is also why the whole build is `/GT`:
 > **never cache a `thread_local` address — `PerWorker::local()` or `getWorkerIndex()` included —
 > across a wait.**
+>
+> **`ThreadLocalScope` is the runtime tripwire for that rule** ([JobSystem.ixx](Private/JobSystem.ixx),
+> debug only): declare one where thread-local state is taken and keep it alive while the state is
+> used. While one is alive on a thread, a fiber park (`fiberWait`, a `JobMutex` park) or an inline
+> job on that thread (`helpWait`, `tryRunOneJob`, `tryRunOneHighJob`) asserts. Every job-reachable
+> `thread_local` and every `PerWorker::local()` use in a job should carry one.
 
 All memory is allocated in `initialize()`. The steady-state hot paths are lock-free and allocate
 nothing.
@@ -239,7 +245,7 @@ the cache-hottest slot.
 |---|---|
 | `JobMutex` | Fiber-parking mutex. A contended `lock()` inside a job parks the fiber; main helps; unregistered threads block. **Barging, not FIFO handoff** — do not use where fairness matters. Use it for long exclusive sections, such as V3 tile inference, where a seconds-long wait must hold a fiber and not a worker. `JobMutex::Scope` is the RAII guard. |
 | `JobEvent` | Manual-reset event over a `JobCounter`. `signal()` is idempotent and releases all current and future waiters until `reset()`, which is only legal between batches. The building block for "wait until that tile/bake/upload exists". |
-| `PerWorker<T>` | One cacheline-aligned `T` per **context**. `local()` / `at(i)` / `forEach`. Each slot is single-writer within a parallel phase; a downstream serial node drains them with `forEach`. **Re-read `local()` after any wait.** |
+| `PerWorker<T>` | One cacheline-aligned `T` per **context**. `local()` / `at(i)` / `forEach`. Each slot is single-writer within a parallel phase; a downstream serial node drains them with `forEach`. **Re-read `local()` after any wait**, and pin a held `local()` reference with a `ThreadLocalScope`. Pure scratch that is never drained needs no PerWorker: a pinned `thread_local` does the same (the Nav seed-path A*). |
 
 Both `JobMutex` and `JobEvent` are used by `Procedural`'s V3 generator — see
 [GeneratorV3.cpp:606](../Procedural/Private/Diffusion/GeneratorV3.cpp#L606).

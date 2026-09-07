@@ -191,6 +191,10 @@ public:
     // Registered non-worker threads (main) can pump one ready job manually, e.g. to burn a stall.
     bool tryRunOneJob();
 
+    // ThreadLocalScope's per-thread pin count (see the class below): +1 / -1 on the calling
+    // thread. A no-op in non-debug.
+    static void debugThreadLocalPin(int delta);
+
     // The window thread's integration (see Core.Window): claims the reserved external helper
     // context so PerWorker::local()/profiling work there. Call once, on that thread.
     void registerExternalHelper();
@@ -399,3 +403,21 @@ export namespace Globals
 OC_INIT_SEG(OC_SEG_JOB_SYSTEM)
     JobSystem jobSystem;
 }
+
+// DEBUG TRIPWIRE for thread-local state in job code — a `thread_local` scratch buffer, a
+// `PerWorker::local()` slot, a `getWorkerIndex()`. Declare one right where such state is taken
+// and keep it alive for as long as the state is used: it PINS the current thread's TLS to that
+// code. While a pin is held on a thread, every path that would let the TLS change hands asserts:
+//   * a fiber PARK (wait / parallelFor / JobMutex inside a job) — the fiber would resume on some
+//     other thread's TLS, and this thread would run another job on ours;
+//   * an INLINE job (main or the window thread executing a job inside wait, tryRunOneJob,
+//     tryRunOneHighJob, or a JobMutex spin) — that job body runs on the pinned TLS.
+// Nests (a job's own inner scopes stack) and compiles to two no-ops in non-debug builds.
+export class ThreadLocalScope final
+{
+public:
+    ThreadLocalScope() { JobSystem::debugThreadLocalPin(+1); }
+    ~ThreadLocalScope() { JobSystem::debugThreadLocalPin(-1); }
+    ThreadLocalScope(const ThreadLocalScope&) = delete;
+    ThreadLocalScope& operator=(const ThreadLocalScope&) = delete;
+};

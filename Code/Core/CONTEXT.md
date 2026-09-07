@@ -302,7 +302,9 @@ rect back (`setSlotScreenRects` / `setPopupButtonRects`), so gameplay resolves c
 `slotAtScreenPos` / `popupButtonAtScreenPos`.
 
 Mutex-guarded because scripts tick on workers: **every write is a short lock, and the UI takes ONE
-snapshot copy per frame.** Colours are linear 0..1 RGB, matching the DSL surface.
+snapshot copy per frame** — `snapshot(Snapshot&)` into a copy the overlay KEEPS, so the vectors and
+strings reuse their capacity. The per-frame rebuilt lists (world labels, the popup) are handed over
+by SWAP (`swapWorldLabels` / `swapPopup`): the builder gets last frame's list back and reuses it. Colours are linear 0..1 RGB, matching the DSL surface.
 
 It is a plain `.CRT$XCU` global, **so it outlives `~World`'s script `OnDestroy` calls** — plain XCU
 destructs last, see InitSeg.h.

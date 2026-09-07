@@ -111,7 +111,14 @@ Debug:      /JMC /ZI        + link /INCREMENTAL
 > can park the job and resume it on ANOTHER worker thread.** A `thread_local` (or a
 > `PerWorker::local()` / `getWorkerIndex()`) taken before the wait then points at the wrong
 > thread's slot: two jobs sharing one scratch buffer, or a write landing in a slot another job
-> is reading. **Do NOT add new `thread_local`s to code a job can reach.** Prefer:
+> is reading.
+>
+> **A `thread_local` (or a held `PerWorker::local()` reference) in job code IS ALLOWED, on two
+> conditions:** the code between taking it and its last use never waits, AND a `ThreadLocalScope`
+> (Threading, debug-only) is alive over that whole span. The pin asserts at any fiber park or
+> inline job on the thread, so a wait added later is caught at once instead of corrupting scratch.
+> Pattern: the Nav chunk solve's heap (`Field.cpp`), the entity batch job's staging (`World.cpp`),
+> every script entry point (`ScriptComponent.cpp`). When the wait cannot be ruled out, use instead:
 >
 > * **consume inline** — `SpatialIndex::forEachInSphere` / `forEachInFrustum` hand every hit to a
 >   callback straight out of the traversal, so a probe needs NO result buffer (every game/entity
@@ -120,15 +127,15 @@ Debug:      /JMC /ZI        + link /INCREMENTAL
 >   index range (the transport's per-run BFS queue, the Force merge's per-slot staging);
 > * a member of the object that owns the job when only one such job is in flight (the labels
 >   job's unit list);
-> * `PerWorker<T>` only for code with NO wait between `local()` and the last use, re-reading
->   `local()` after every wait (see Threading's CONTEXT.md — the Nav seed-path A* scratch);
+> * `PerWorker<T>` when a serial phase must DRAIN every slot with `forEach` (a merge) — a
+>   thread_local cannot be enumerated from another thread, so every merge staging stays PerWorker;
 > * a plain local `oc::vector` / `oc::small_vector` when the allocation is cheap enough.
 >
-> **The codebase carries NO job-reachable `thread_local` scratch any more.** The remaining
-> `thread_local`s outside Core are deliberate and documented in place: the JobSystem's own worker
-> context (re-read after every wait by design), `FileSystem`'s main-thread IO scope (kept tight
-> around the call, never around a wait), and the script query ring + RNG (a script tick never
-> parks — no thunk waits; keep it so).
+> **Unpinned by design** (they cannot or need not carry the scope): the JobSystem's own worker
+> context (re-read after every wait), Core's profiler / memory-tracker / allocator TLS (Core and
+> File cannot link Threading; they follow the thread on purpose), `FileSystem`'s main-thread IO
+> scope (kept tight around the call, never around a wait), and single-expression
+> `PerWorker::local().push_back(...)` calls (no span for a wait to land in).
 
 > ### `/Zc:threadSafeInit-` IS A STANDING RULE, not just a flag
 >

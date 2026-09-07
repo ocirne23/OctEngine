@@ -368,7 +368,11 @@ void TeamField::floodSolveChunk(uint64 key, Chunk& chunk, uint32 maxDist)
     };
 
     // Local lazy-deletion heap over THIS chunk's cells: packed (dist << 16) | cellIndex.
-    oc::vector<uint32> heap;
+    // Legal ONLY because this solve never waits (no parallelFor, no join, no JobMutex): the pin
+    // asserts should that ever change — see ThreadLocalScope.
+    static thread_local oc::vector<uint32> heap;
+    const ThreadLocalScope tlsPin;
+    heap.clear();
     heap.reserve(ChunkArea);
     const auto push = [&](uint32 dist, uint32 idx)
     {

@@ -144,8 +144,9 @@ export namespace Nav
         // point = from, last = to). `radius` is the body clearance used by the string pull.
         // Expansion is capped at maxExpand cells; false = no path inside that budget. NOT for
         // per-unit use (see the unit steering) — this is the one-shot planner behind seedPath.
-        // `scratch` is the caller's A* working set (reused across calls, grows to the search):
-        // NEVER a thread_local — the caller is a job fiber that can resume on another thread.
+        // `scratch` is the caller's A* working set (reused across calls, grows to the search).
+        // findPath never waits, so a thread_local pinned by a ThreadLocalScope (the seedPath job)
+        // is legal; the pin asserts if a wait is ever added in here.
         struct AStarNode { glm::ivec2 cell; uint32 parent; uint32 g; uint32 h; bool closed; };
         struct AStarOpen
         {

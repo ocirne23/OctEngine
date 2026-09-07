@@ -21,6 +21,7 @@ import Physics;
 import Force;
 import Spatial;
 import Script;
+import Threading; // ThreadLocalScope on the per-thread query ring
 import :Entity;
 import :Component;
 import :ScriptComponent; // releaseScriptArrays (module-linkage, declared next to the component)
@@ -1202,6 +1203,7 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
     int thunk_worldQueryRadius(glm::vec3 position, float radius)
     {
         thread_local uint32 nextSlot = 0;
+        const ThreadLocalScope tlsPin; // the frame is this thread's ring slot across the query
         const uint32 slot = nextSlot++ % kQueryRingSize;
         ScriptQueryFrame& frame = queryRing()[slot];
         ++frame.generation; // retires any handle still pointing at this slot

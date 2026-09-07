@@ -4,6 +4,7 @@ import Core;
 import Core.glm;
 import Core.Camera;
 import Core.Rect;  // the labels job's captured viewport
+import Core.GameHud; // the labels job's kept scratch (HudWorldLabel, HudPopup)
 import Threading;  // JobCounter (the labels job)
 import Entity;
 import Force;
@@ -192,6 +193,8 @@ private:
     bool m_labelsCameraValid = false;
     JobCounter m_labelsCounter;
     oc::vector<Entity*> m_labelUnits; // the labels job's visible-unit scratch (one job in flight; never a thread_local — the job may park)
+    oc::vector<HudWorldLabel> m_labelsScratch; // the labels job builds here, then SWAPS with GameHud's list (two vectors ping-pong)
+    HudPopup m_labelsPopup;                    // same for the barracks popup (its buttons vector keeps its capacity)
 public:
     void joinWorldLabels(); // main.cpp, right before ui.update
 private:
@@ -444,7 +447,7 @@ private:
     int m_waveMaxAlive = 50000;    // total AI units cap (ambient + waves)
     // Live AI bodies (ambient + waves): the alive cap in queueWave AND the HUD's "Enemies alive".
     int aiAliveCount() const;
-    int m_ambientBudget = 250000;    // POINTS of world-start scatter (same per-type costs as waves)
+    int m_ambientBudget = 500000;    // POINTS of world-start scatter (same per-type costs as waves)
     float m_ambientSafeRadius = 45.0f; // the scatter keeps clear of the Base (planar)
     int m_ambientRecipeWindow = 3;     // a group rolls recipes gated within this many bands below its depth band
     float m_ambientDepthScale = 0.9f;  // the depth fraction that already counts as the deepest band (titans off the corners)
