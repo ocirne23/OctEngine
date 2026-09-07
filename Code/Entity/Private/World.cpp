@@ -593,12 +593,11 @@ void World::updateBatchJob(uint32 begin, uint32 count)
         const Clock::time_point measureStart = measure ? Clock::now() : Clock::time_point{};
         // Per-entity scope for OPT-IN entities only (EEntityFlag_Profiled: simulated
         // things — animators, scripts, units, machine structures; static scenery stays
-        // scope-free so it cannot flood the rings). NAMED by the interned entity name from
-        // Globals::entityNames, which stays valid in the ring after the entity dies.
+        // scope-free so it cannot flood the rings). NAMED by the registry-owned entity name from
+        // Globals::entityNames; destruction transfers its buffer to the profiler's frame history.
         if (entity->isProfiled())
         {
-            const char* name = Globals::entityNames.get(entity);
-            ProfileScope entityScope(name ? name : "Entity", EProfileCategory::Entity);
+            ProfileScope entityScope(entity->spawnTemplate->displayName.c_str(), EProfileCategory::Entity);
             entity->updateSelf(*m_updateRenderer, delta, node.parentWorld, staging.children);
         }
         else

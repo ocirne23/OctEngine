@@ -282,7 +282,7 @@ private:
     bool m_lmbDown = false;
     bool m_lmbReleased = false;  // release edge (consumed by updateWindowed)
     void updateUnitSelection(const Camera& camera);
-    bool orderSelectedUnits(const glm::vec3& target, bool freshOrder); // true = a lane was seeded (fresh order + A* found a route)
+    bool orderSelectedUnits(const glm::vec3& target, bool freshOrder); // true = a lane plan was queued (fresh order + a raster to plan over; the A* runs on a job)
     bool moveOrderAt(const glm::vec3& worldPos, bool includePlayer = true); // THE RMB move order: player (unless CTRL: units only) + selected units walk there (fresh order, lane seeded); returns orderSelectedUnits'
     glm::vec3 pointOutsideFootprint(const glm::vec3& clicked, int structure) const; // a click on a building -> the reachable point at its face
     bool m_scenarioOrderPending = false; // runScenario loaded; issueScenarioOrder retries each update until units are queryable

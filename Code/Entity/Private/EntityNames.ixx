@@ -5,10 +5,9 @@ import Core;
 export class Entity;
 
 // Entity display names live HERE, outside the Entity header: the entity carries no name field, and
-// getName/setName/hasName forward to this registry keyed by the entity pointer. The stored string is
-// the INTERNED copy (Profiler::internName): permanent and deduped, so a name pointer read from here
-// doubles as the entity's ProfileScope name and stays valid in the profiler ring after the entity
-// dies. Names repeat heavily (every "Enemy", every "Border"), so the intern pool stays tiny.
+// getName/setName/hasName forward to this registry keyed by the entity pointer. Each entry owns its
+// string; a replaced or destroyed entry transfers its buffer to the profiler until its markers leave
+// the profiler's frame-history window.
 //
 // Thread safety: set/erase run at spawn/rename/destroy time — the parallel spawn/destroy window,
 // where several workers name entities at once — and get runs from the parallel entity pass (script
@@ -19,7 +18,7 @@ export class EntityNameRegistry final
 public:
 
     void set(const Entity* entity, oc::string_view name); // empty = unnamed (entry removed)
-    const char* get(const Entity* entity) const;         // nullptr when unnamed; interned, permanent
+    const char* get(const Entity* entity) const;         // nullptr when unnamed; owned by this registry
     void erase(const Entity* entity);                    // Entity::destroy
 
 private:
@@ -29,7 +28,7 @@ private:
     struct Shard
     {
         mutable std::mutex mutex;
-        oc::unordered_map<const Entity*, const char*> names;
+        oc::unordered_map<const Entity*, oc::unique_ptr<char[]>> names;
     };
 
     Shard& shardFor(const Entity* entity) const

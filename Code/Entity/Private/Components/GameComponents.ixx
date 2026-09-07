@@ -143,8 +143,8 @@ export struct GameUnitComponent
         uint8 shotKind = 0; // the unit's ShotKind: which shell prefab the game spawns
     };
     static void takeFireRequests(oc::vector<FireRequest>& out);
-    // EVERY unit with somewhere to be asks for a planned lane on its own timer (Nav path seeding
-    // is main-thread work). The game drains these and forwards them to NavSystem::requestSeedPath,
+    // EVERY unit with somewhere to be asks for a planned lane on its own timer (requestSeedPath is
+    // a main-thread call). The game drains these and forwards them to NavSystem::requestSeedPath,
     // whose PROXIMITY dedup collapses a whole crowd walking the same way into ONE plan — that is
     // what makes a per-unit request affordable, and it keeps a group's lane refreshed as the group
     // advances without anyone tracking the group.
@@ -297,13 +297,12 @@ export struct GameUnitComponent
     // tint their own side as well.
     static void applyTeamTint(Entity& entity);
     uint8 tintState = 0; // 0 authored (never touched), 1 friendly green, 2 authored (restored after a re-team)
-    // The HUD tag authored as `ShortName` in the .pre — INTERNED (Profiler::internName), so the
-    // pointer is permanent and the component owns no string. Replicated units carry it too: the
-    // prefab spawns identically on every instance.
-    const char* getShortName() const { return m_shortName; }
+    // The HUD tag authored as `ShortName` in the .pre. Replicated units carry it too: the prefab
+    // spawns identically on every instance.
+    const char* getShortName() const { return m_shortName.c_str(); }
 
 private:
-    const char* m_shortName = "UNIT";
+    oc::string m_shortName = "UNIT";
     float m_retargetTimer = 0.0f;
     float m_fireTimer = 0.0f;
     uint32 m_rng = 0;           // tiny per-unit LCG — worker-safe, seeded from the entity address

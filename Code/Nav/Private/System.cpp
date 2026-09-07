@@ -33,6 +33,9 @@ void NavSystem::waitAll()
     waitSlot(m_raster);
     for (auto& [key, slot] : m_goals)
         waitSlot(*slot);
+    for (oc::unique_ptr<SeedPlan>& plan : m_seedPlans)
+        Globals::jobSystem.wait(plan->counter);
+    m_seedPlans.clear();
 }
 
 void NavSystem::initialize()
@@ -156,28 +159,43 @@ const TeamField* NavSystem::goalField(uint64 key) const
     return it != m_goals.end() ? it->second->published.get() : nullptr;
 }
 
-// Seeds write the same flow/pressure chunk buffers the step job writes, and need no fence against
-// it: the step job only ever runs in the present window (queued by update(), kicked before present,
-// joined at the top of the next frame), and no game code - this included - runs on main there.
+// The A* is the expensive half (thousands of expansions plus the string pull) and used to run on
+// main; it now runs as a job that touches only the plan and the IMMUTABLE raster it holds a
+// reference to. The cheap half - writing the lane - stays on main in applySeedPlans, which keeps
+// the write contract unchanged: seeds write the same flow/pressure chunk buffers the step job
+// writes, and need no fence against it, because the step job only ever runs in the present window
+// (queued by update(), kicked before present, joined before the next update) and no game code runs
+// on main there.
 bool NavSystem::seedPath(uint32 team, const glm::vec3& from, const glm::vec3& to, float speed,
-    float laneWidth, float clearance, oc::vector<glm::vec2>* outPath)
+    float laneWidth, float clearance)
 {
-    ProfileScope scope("Nav seed path", EProfileCategory::Game);
-    const TeamField* raster = m_raster.published.get();
-    if (!raster || team >= MaxTeams)
+    if (!m_raster.published || team >= MaxTeams)
         return false;
-    oc::vector<glm::vec2> path;
-    // local() right before the call, not held past it: findPath has no wait inside, so the
-    // fiber stays on this worker for exactly the span the scratch is in use.
-    if (!raster->findPath(glm::vec2(from.x, from.z), glm::vec2(to.x, to.z), 8192, clearance * 0.5f, path,
-            m_pathScratch.local()))
-        return false;
-    // The A* runs to the real destination (a truncated SEARCH would pick the wrong way round an
-    // obstacle), but only the first "Seed range" metres are WRITTEN: a lane far ahead of the group
-    // is stale by the time anyone gets there, and the group re-seeds from where it actually is.
-    if (m_seedRange > 0.0f)
+    oc::unique_ptr<SeedPlan>& entry = m_seedPlans.emplace_back(oc::make_unique<SeedPlan>());
+    SeedPlan* plan = entry.get();
+    plan->raster = m_raster.published;
+    plan->from = glm::vec2(from.x, from.z);
+    plan->to = glm::vec2(to.x, to.z);
+    plan->speed = speed;
+    plan->laneWidth = laneWidth;
+    plan->clearance = clearance;
+    plan->range = m_seedRange;
+    plan->team = team;
+    NavSystem* self = this;
+    Globals::jobSystem.submit([self, plan]
     {
-        float remaining = m_seedRange;
+        // local() right before the call, not held past it: findPath has no wait inside, so the
+        // fiber stays on this worker for exactly the span the scratch is in use.
+        plan->found = plan->raster->findPath(plan->from, plan->to, 8192, plan->clearance * 0.5f, plan->path,
+            self->m_pathScratch.local());
+        if (!plan->found || plan->range <= 0.0f)
+            return;
+        // The A* runs to the real destination (a truncated SEARCH would pick the wrong way round
+        // an obstacle), but only the first "Seed range" metres are WRITTEN: a lane far ahead of
+        // the group is stale by the time anyone gets there, and the group re-seeds from where it
+        // actually is.
+        oc::vector<glm::vec2>& path = plan->path;
+        float remaining = plan->range;
         for (size_t i = 0; i + 1 < path.size(); ++i)
         {
             const float len = glm::distance(path[i], path[i + 1]);
@@ -189,16 +207,33 @@ bool NavSystem::seedPath(uint32 team, const glm::vec3& from, const glm::vec3& to
             }
             remaining -= len;
         }
-    }
-    m_flow[team].seedPath(path, speed, laneWidth * 0.5f, raster);
-    // ... and carve a pressure TROUGH along the same route: pressure is where "attraction" lives
-    // (the steering reads -grad p and the flow is pushed by -grad p), so the lane pulls units and
-    // surrounding flow into itself instead of only existing where it was drawn.
-    if (m_seedTrough > 0.0f)
-        m_pressure[team].seedPath(path, m_seedTrough, laneWidth * 0.5f, raster, m_seedSqueeze);
-    if (outPath)
-        *outPath = path;
+    }, { "Nav seed path", EProfileCategory::Game }, EJobPriority::Normal, &plan->counter);
     return true;
+}
+
+void NavSystem::applySeedPlans()
+{
+    const TeamField* raster = m_raster.published.get(); // the CURRENT raster: the write skips walls, and a plan may predate a publish
+    for (size_t i = 0; i < m_seedPlans.size();)
+    {
+        SeedPlan& plan = *m_seedPlans[i];
+        if (!plan.counter.isDone())
+        {
+            ++i;
+            continue;
+        }
+        if (plan.found)
+        {
+            m_flow[plan.team].seedPath(plan.path, plan.speed, plan.laneWidth * 0.5f, raster);
+            // ... and carve a pressure TROUGH along the same route: pressure is where "attraction"
+            // lives (the steering reads -grad p and the flow is pushed by -grad p), so the lane
+            // pulls units and surrounding flow into itself instead of only existing where it was
+            // drawn.
+            if (m_seedTrough > 0.0f)
+                m_pressure[plan.team].seedPath(plan.path, m_seedTrough, plan.laneWidth * 0.5f, raster, m_seedSqueeze);
+        }
+        m_seedPlans.erase(m_seedPlans.begin() + i); // in order: a later re-plan that disagrees must win over an earlier one
+    }
 }
 
 bool NavSystem::requestSeedPath(uint32 team, const glm::vec3& from, const glm::vec3& to, float speed,
@@ -339,6 +374,7 @@ void NavSystem::update(float deltaSec)
         }
         m_seedExpiry.pop_front();
     }
+    applySeedPlans(); // the lanes whose A* jobs finished: written here, outside the pass, before the step job is queued
     for (TeamSlot& slot : m_teams)
         publish(slot);
     publish(m_raster);

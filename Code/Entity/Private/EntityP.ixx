@@ -36,7 +36,7 @@ export enum EEntityFlags : uint8
     // miss that walk, so reparentEntity clears it up the new ancestor chain.
     EEntityFlag_PhysicsSuspended     = 1 << 5,
 
-    // OPT-IN per-entity ProfileScope in the parallel entity pass (named by the interned entity name):
+    // OPT-IN per-entity ProfileScope in the parallel entity pass (named by the registry-owned name):
     // the interesting components set it at spawn (Animator/Force/Script/GameUnit), machine
     // structures (barracks/turret) latch it in their update — plain static scenery stays scope-
     // free so it cannot flood the profiler rings.
@@ -92,7 +92,7 @@ public:
 
     Entity* parent = nullptr;
     // NO name field: the display name lives in Globals::entityNames (EntityNames.ixx), keyed by the
-    // entity pointer and interned via Profiler::internName. getName/setName/hasName forward there.
+    // entity pointer. getName/setName/hasName forward there.
     const EntitySpawnTemplate* spawnTemplate = nullptr;
     // EVERY entity's registration in the SpatialIndex (Entity::create; layer Entity, plus Render
     // when it has a render node): render culling, gameplay queries AND the World's update
@@ -115,7 +115,7 @@ public:
 
     void update(Renderer& renderer, float deltaSeconds, const Transform& parentWorld = Transform());
     void updateSelf(Renderer& renderer, float deltaSeconds, const Transform& parentWorld, oc::vector<EntityUpdateNode>& outChildren);
-    const char* getName() const; // "" when unnamed; interned, permanent (see EntityNames.ixx)
+    const char* getName() const; // "" when unnamed; owned by EntityNameRegistry (see EntityNames.ixx)
     bool hasName() const;
     void setName(oc::string_view name);
     void reparentEntity(Entity* newParent);

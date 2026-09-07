@@ -23,7 +23,8 @@ waits on in-flight build jobs.
 ### Thread contract
 
 * `setGoal` / `clearGoal` / `update` / `drawDebug` / `seedPath` / `requestSeedPath` are **MAIN
-  THREAD**, outside the entity pass.
+  THREAD**, outside the entity pass. `seedPath` only QUEUES: its A* runs on a `"Nav seed path"`
+  job and `update` writes the finished lanes (see Seed paths).
 * `setObstacles` / `setTeamSources` are main thread OR **the game's nav-feed POST-UPDATE job**: that
   batch runs during present, when nothing on main touches Nav, and the field-step job in the same
   batch holds only the fields — so the change-detect compare and the source copy run off main. The
@@ -151,7 +152,8 @@ fills the stretch where main otherwise only waits on the "Spatial cull" and "Beg
 
 1. **Publish** finished builds — a `shared_ptr<const TeamField>` swap. Workers only ever read
    published pointers, which change only here.
-2. Retire expired seed stamps and expire idle goals.
+2. Retire expired seed stamps, **apply the seed plans whose A\* job finished** (`applySeedPlans`:
+   the lane + trough writes, in queue order), and expire idle goals.
 3. **Swap the obstacle snapshot** if dirty — but only while NO build is in flight, since every job
    shares it. A dirty obstacle set waits for the fleet to drain, then marks every field dirty.
 4. **Kick one Low-priority `"Nav build"` job per due slot.** A slot is due when nothing is published,
@@ -224,13 +226,29 @@ static constexpr uint32 GoalExpireFrames = 60;
 The single most important idea here: **nothing per-unit plans. One A\* writes a lane, and the crowd
 follows it.**
 
-`seedPath(team, from, to, speed, laneWidth, clearance, outPath)`
+`seedPath(team, from, to, speed, laneWidth, clearance)`
 ([System.ixx:62](Private/System.ixx#L62)) plans ONE route with A* over the raster
 (`TeamField::findPath` — straight-shot test first, then octile A*, string-pulled by `lineOfSight`),
 then writes it in TWO places.
 
 > `laneWidth` is how wide the lane is PAINTED; `clearance` is the **planning** width — how much room
 > the planned route keeps from walls. They are separate knobs.
+
+### The A\* is a job; the write is main
+
+`seedPath` returns as soon as it has QUEUED a `SeedPlan` (`m_seedPlans`, heap-owned — the plan
+holds a `JobCounter`) and submitted the `"Nav seed path"` job (Normal priority). The job touches
+only the plan and the raster, and **holds its own `shared_ptr` to that raster**, so a publish on
+main during the search cannot free it. It also applies the "Seed range" cut. `findPath` never
+waits, so the `PerWorker` scratch taken with `local()` right before the call is valid for the whole
+search.
+
+The NEXT `update` whose plan counter is done writes the lane and the trough — on main, outside the
+pass, against the CURRENT raster — which keeps the write contract exactly what it was: the only
+other writer of those buffers is the field-step job, which runs in the present window. **Cost:
+one or two frames from order to lane,** invisible next to the step's own frame of staleness.
+`seedPath`'s `true` therefore means "queued", not "a route exists": a failed search is dropped
+silently at apply time. `waitAll` (`clear`, the dtor) joins in-flight plans before dropping them.
 
 ### 1 — Into the team's flow as a lane (`FlowField::seedPath`)
 
@@ -262,7 +280,7 @@ stale by the time anyone gets there.
 [System.ixx:70](Private/System.ixx#L70). **This is what makes a per-unit request affordable.**
 
 * It refuses a plan when one of the same team was already made within "Seed area" of BOTH its start
-  and its destination inside "Seed cooldown", and caps plans at "Seed max/frame".
+  and its destination inside "Seed cooldown", and caps plan jobs queued at "Seed max/frame".
 * **The test is a DISTANCE, not a bucket test** — two units either side of a bucket border are one
   request — but the candidates come from a hash of recent plans **BUCKETED BY START at exactly the
   dedup radius**, so only the 3×3 bucket neighbourhood is scanned. Constant cost per request, no

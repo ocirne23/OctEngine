@@ -57,13 +57,14 @@ export namespace Nav
         // SEED PATH (main thread): plan a route from -> to with A* over the obstacle raster
         // (string-pulled) and WRITE it into `team`'s flow field as a lane of `speed` m/s, `width`
         // metres wide. Units following the crowd flow then take that route without any of them
-        // planning; the lane decays like any other ("Nav/Flow decay"). false = no raster yet or no
-        // path within the budget. `outPath` (optional) receives the planned polyline for debug draw.
+        // planning; the lane decays like any other ("Nav/Flow decay"). The A* runs on a JOB: this
+        // only queues the plan, and the next update() whose job has finished writes the lane — one
+        // or two frames of latency, none of it on main. false = no raster yet (nothing queued).
         // `laneWidth` is how wide the lane is PAINTED (0 = one cell; the pressure push spreads it
         // further either way); `clearance` is the planning width — how much room the planned route
         // keeps from walls.
         bool seedPath(uint32 team, const glm::vec3& from, const glm::vec3& to, float speed,
-            float laneWidth = 0.0f, float clearance = 2.0f, oc::vector<glm::vec2>* outPath = nullptr);
+            float laneWidth = 0.0f, float clearance = 2.0f);
         // The RATE-LIMITED entry point (main thread) — EVERY unit asks on its own timer, this is
         // what makes that affordable: a request is refused when a plan of the same team was already
         // made within "Seed area" metres of BOTH its start and its destination inside the last
@@ -113,7 +114,21 @@ export namespace Nav
             uint32 lastBuildChunks = 0; // chunk solves of the last completed build: sizes the next build's per-frame steps
         };
 
+        // One queued seed plan: the A* job fills `path`/`found` over `raster` (its own reference,
+        // so a publish on main cannot free the field under the search), and update() applies it.
+        struct SeedPlan
+        {
+            oc::shared_ptr<const TeamField> raster;
+            oc::vector<glm::vec2> path;
+            glm::vec2 from{ 0.0f }, to{ 0.0f };
+            float speed = 0.0f, laneWidth = 0.0f, clearance = 0.0f, range = 0.0f;
+            uint32 team = 0;
+            bool found = false;
+            JobCounter counter;
+        };
+
         bool sourcesChanged(const oc::vector<NavSource>& a, oc::span<const NavSource> b) const;
+        void applySeedPlans(); // main: write every finished plan's lane + trough, drop it
         void kickBuild(TeamSlot& slot, float deltaSec);       // beginBuild + the first step, as one Low job
         void submitBuildStep(TeamSlot& slot, float deltaSec); // the next step (update, once the previous step is done)
         // The per-step chunk budget: the last build's total spread evenly over "Build spread (s)"
@@ -135,6 +150,7 @@ export namespace Nav
         // findPath and released after — findPath never waits, so the job cannot migrate between
         // the two (the PerWorker contract; a thread_local would follow the thread, not the job).
         PerWorker<TeamField::PathScratch> m_pathScratch;
+        oc::vector<oc::unique_ptr<SeedPlan>> m_seedPlans; // queued/in-flight plans, applied by update() (JobCounter is immovable)
         oc::vector<NavObstacle> m_obstacles;
         oc::vector<NavObstacle> m_buildObstacles; // snapshot shared by every in-flight job
         uint64 m_obstacleHash = 0;
@@ -176,7 +192,7 @@ export namespace Nav
         float m_flowMaxSpeed = 20.0f;      // per-cell magnitude cap (splats SUM — see FlowField::update)
         float m_seedArea = 10.0f;         // metres: requests from/to the same area are ONE lane
         float m_seedCooldown = 3.0f;      // seconds that area pair stays suppressed
-        int m_seedMaxPerFrame = 2;        // hard cap on plans per frame (A* is main-thread work)
+        int m_seedMaxPerFrame = 2;        // hard cap on plan JOBS queued per frame
         float m_seedTrough = 20.0f;        // NEGATIVE pressure a seeded lane carves (0 = flow only)
         float m_seedSqueeze = 10.0f;       // extra trough depth per blocked neighbour of a lane cell
         float m_seedRange = 20.0f;        // metres of the plan actually written (0 = all of it)

@@ -20,8 +20,7 @@ EntityArchetype makeEntityArchetype(uint16 typeBits)
     return EntityArchetype{ uint16(getEntityAllocSize(typeBits)), typeBits };
 }
 
-// The entity owns NO name storage: Globals::entityNames maps the entity pointer to the interned
-// copy (permanent, deduped), which is the name.
+// The entity owns NO name storage: Globals::entityNames maps the entity pointer to its owned copy.
 void Entity::setName(oc::string_view newName)
 {
     Globals::entityNames.set(this, newName);

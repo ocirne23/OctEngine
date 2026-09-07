@@ -25,14 +25,7 @@ Particle, Force, Spatial, Threading, Network and Nav.
 ### Names
 
 **There is NO name field.** `getName` / `setName` / `hasName` forward to `Globals::entityNames`
-(`EntityNameRegistry`), a pointer-keyed 64-shard mutexed map to an INTERNED name
-(`Profiler::internName` — permanent and deduped).
-
-So the same pointer names the entity's opt-in `ProfileScope` in the parallel pass **and stays valid
-in the profiler ring after the entity dies**. `Entity::destroy` erases the entry; `set`/`erase` are
-parallel-spawn/destroy safe, and `get` is called from the entity pass.
-
-> The 8 bytes freed by moving the name out now hold the `SpatialEntry` handle.
+(`EntityNameRegistry`), a pointer-keyed 64-shard mutexed map that owns each name buffer.
 
 ### Flags (`EEntityFlags`)
 
@@ -654,7 +647,7 @@ parameter tables and the steering are in [`Code/Nav/CONTEXT.md`](../Nav/CONTEXT.
 
 ### Authoring
 
-**`Component GameUnit`** — `ShortName` (the 3–5 char HUD tag, interned; the world labels use it on
+**`Component GameUnit`** — `ShortName` (the 3–5 char HUD tag, owned by each component; the world labels use it on
 every instance, **so replicated units need no type on the wire**), then `Team`, `HealthMax`,
 `EnergyMax`, `ShieldOutput`, `MoveSpeed`, `Accel`, `AttackRange`, `AttackDps`, `PlayerDps`,
 `EmitterDrain`, `Ranged`, `StandoffRange`, `FireInterval`, `ShotKind`, `AlwaysDisplayHealth`,

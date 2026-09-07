@@ -1,73 +1,11 @@
+module;
+
+#include <intrin.h>
+#include <cstdint>
+
 export module Core.LockFreeList;
 
-import Core;
-import Core.Allocator;
-
-export template <typename T>
-class LockedList final
-{
-public:
-    oc::list<T> m_list;
-    std::mutex m_mutex;
-    ~LockedList()
-    {
-        m_list.clear();
-    }
-
-    void push_back(T&& entry)
-    {
-        std::unique_lock<std::mutex> lock(m_mutex);
-        m_list.push_back(entry);
-    }
-
-    void push_front(T&& entry)
-    {
-        std::unique_lock<std::mutex> lock(m_mutex);
-        m_list.push_front(entry);
-    }
-
-    void push_list_back(oc::list<T*>& list)
-    {
-        std::unique_lock<std::mutex> lock(m_mutex);
-        if (!list.empty())
-        {
-            m_list.splice(m_list.end(), list);
-            list.clear();
-        }
-    }
-
-    void push_list_front(oc::list<T>& list)
-    {
-        std::unique_lock<std::mutex> lock(m_mutex);
-        if (!list.empty())
-        {
-            m_list.splice(m_list.begin(), list);
-            list.clear();
-        }
-    }
-
-    T&& pop()
-    {
-        std::unique_lock<std::mutex> lock(m_mutex);
-        if (m_list.empty())
-            return nullptr;
-        T&& entry = m_list.front();
-        m_list.pop_front();
-        return entry;
-    }
-
-    bool empty()
-    {
-        std::unique_lock<std::mutex> lock(m_mutex);
-        return m_list.empty();
-    }
-
-    size_t size()
-    {
-        std::unique_lock<std::mutex> lock(m_mutex);
-        return m_list.size();
-    }
-};
+export import Core.OcBit;
 
 template<typename DestinationType, typename SourceType> inline DestinationType alias_cast(SourceType pPtr)
 {
@@ -216,10 +154,10 @@ public:
         return interlockedIsListEmpty(m_listHead);
     }
 
-    void push_front(T& entry)
+    void push_front(T* pEntry)
     {
-        assert(entry.pNext == nullptr);
-        interlockedPushEntry(m_listHead, *(Entry*)(((char*)&entry) + offsetof(T, pNext)));
+        assert(pEntry->pNext == nullptr);
+        interlockedPushEntry(m_listHead, *(Entry*)(((char*)pEntry) + offsetof(T, pNext)));
     }
 
     void push_list_front(LockFreeList<T>& list)
@@ -231,31 +169,6 @@ public:
             interlockedPushEntry(m_listHead, *(Entry*)(((char*)pEntry) + offsetof(T, pNext)));
             pEntry = pEntry->Next;
         }
-    }
-
-    void push_list_front(oc::list<T*, Allocator::toStd<T*>>& list)
-    {
-        for (T* pEntry : list)
-        {
-            assert(pEntry->pNext == nullptr);
-            interlockedPushEntry(m_listHead, *(Entry*)(((char*)pEntry) + offsetof(T, pNext)));
-        }
-    }
-
-    void push_list_front(LockedList<T*>& list)
-    {
-        if (!list.empty())
-        {
-            list.m_mutex.lock();
-            for (T* pEntry : list.m_list)
-            {
-                assert(pEntry->pNext == nullptr);
-                interlockedPushEntry(m_listHead, *(Entry*)(((char*)pEntry) + offsetof(T, pNext)));
-            }
-            list.m_list.clear();
-            list.m_mutex.unlock();
-        }
-        assert(list.empty());
     }
 
     T* pop()

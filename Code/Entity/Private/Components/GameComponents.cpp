@@ -78,7 +78,7 @@ void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
     }
     puppet = info.puppet;
     if (!info.shortName.empty())
-        m_shortName = Globals::profiler.internName(info.shortName);
+        m_shortName = info.shortName;
     team = info.team;
     health = healthMax = info.healthMax;
     shieldOutput = info.shieldOutput;

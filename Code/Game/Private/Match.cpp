@@ -3321,7 +3321,7 @@ void GameMatch::issueScenarioOrder()
                                             : (m_team == 0 ? m_enemyBasePos : m_basePos);
     const bool laneSeeded = moveOrderAt(target);
     Log::info(oc::format("Scenario: {} units ordered to ({:.0f}, {:.0f}) after {} frames, lane {}", (uint32)m_selectedUnits.size(),
-        m_player.moveTarget().x, m_player.moveTarget().z, m_scenarioOrderTries, laneSeeded ? "seeded" : "NOT seeded (A* failed)"));
+        m_player.moveTarget().x, m_player.moveTarget().z, m_scenarioOrderTries, laneSeeded ? "plan queued" : "NOT queued (no raster yet)"));
 }
 
 // THE right-click move order, shared by the RMB handler and the profiling scenario: the player and
@@ -3364,8 +3364,8 @@ bool GameMatch::orderSelectedUnits(const glm::vec3& target, bool freshOrder)
         if (GameUnitComponent* u = getComponent<GameUnitComponent>(p.get()))
             u->orderMove(glm::vec3(target.x, 0.0f, target.z), freshOrder);
     bool laneSeeded = false;
-    // A FRESH order seeds a planned LANE from the group to the destination: one A* (main thread),
-    // written into the team flow, and the units follow it as crowd flow — the group routes around
+    // A FRESH order seeds a planned LANE from the group to the destination: one A* (a job; Nav
+    // writes the lane on a later update), into the team flow, and the units follow it as crowd flow — the group routes around
     // buildings without any of them planning. The start is the largest cluster's centre, so a lone
     // straggler cannot pull the lane's origin away from the bulk of the group.
     glm::vec3 groupPos;

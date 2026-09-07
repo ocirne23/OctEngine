@@ -6,15 +6,17 @@ import :EntityNames;
 
 void EntityNameRegistry::set(const Entity* entity, oc::string_view name)
 {
-    // Intern OUTSIDE the shard lock: the profiler has its own mutex, and a name that repeats is a
-    // hash-set hit there. Runs only at spawn/rename time - never in the update path.
-    const char* interned = name.empty() ? nullptr : Globals::profiler.internName(name);
+    assert(!name.empty());
+
+    oc::unique_ptr<char[]> copy = oc::make_unique<char[]>(name.size() + 1);
+    oc::char_traits<char>::copy(copy.get(), name.data(), name.size());
+    copy[name.size()] = '\0';
+
     Shard& shard = shardFor(entity);
-    std::lock_guard lock(shard.mutex);
-    if (interned)
-        shard.names[entity] = interned;
-    else
-        shard.names.erase(entity);
+    {
+        std::lock_guard lock(shard.mutex);
+		shard.names[entity] = oc::move(copy);
+    }
 }
 
 const char* EntityNameRegistry::get(const Entity* entity) const
@@ -22,12 +24,20 @@ const char* EntityNameRegistry::get(const Entity* entity) const
     Shard& shard = shardFor(entity);
     std::lock_guard lock(shard.mutex);
     const auto it = shard.names.find(entity);
-    return it != shard.names.end() ? it->second : nullptr;
+    return it != shard.names.end() ? it->second.get() : nullptr;
 }
 
 void EntityNameRegistry::erase(const Entity* entity)
 {
     Shard& shard = shardFor(entity);
-    std::lock_guard lock(shard.mutex);
-    shard.names.erase(entity);
+    oc::unique_ptr<char[]> retired;
+    {
+        std::lock_guard lock(shard.mutex);
+        const auto it = shard.names.find(entity);
+        if (it != shard.names.end())
+        {
+            retired = oc::move(it->second);
+            shard.names.erase(it);
+        }
+    }
 }

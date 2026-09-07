@@ -359,11 +359,7 @@ directly usable as an ImGui `ImU32`) — **must be edited together.**
 The entity pass carries a scope only for entities flagged `EEntityFlag_Profiled`, a one-way
 `setProfiled()` latch. Animator, Force, Script and GameUnit set it at spawn; machine structures
 (barracks, turret) latch it in update, since `machineKind` is stamped post-spawn. **Static scenery
-stays scope-free so it cannot flood the rings.**
-
-The scope is named by `Entity::name` — the entity's ONLY name storage, an INTERNED pointer
-(`Profiler::internName`, a permanent mutex-guarded dedup pool). **Records store names BY POINTER and
-outlive entities, so an owned string would dangle.**
+stays scope-free so it cannot flood the rings.**.
 
 ## Thread registration is explicit-only
 
