@@ -8,12 +8,14 @@ import :CommandBuffer;
 import :ComputePipeline;
 import :DescriptorSet;
 import :Layout;
+import :Settings;
 
 export class LightGridComputePipeline final
 {
 public:
 
-	void initialize();
+	// `params` (the distance LOD) is baked into the shader as #defines: reloadShaders() re-reads it.
+	void initialize(const LightGridParams* params);
 	void reloadShaders();
 	struct RecordParams
 	{
@@ -38,4 +40,5 @@ private:
 
 	oc::array<PerFrameData, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_perFrameData;
 	ComputePipeline m_computePipeline;
+	const LightGridParams* m_params = nullptr;
 };

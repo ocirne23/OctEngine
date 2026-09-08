@@ -31,6 +31,7 @@ Prefab gameEnemyWarrior
 		EnergyMax 40
 		ShieldOutput 0.8
 		MoveSpeed 4.0
-		AttackDps 8
-		PlayerDps 13
+		AttackInterval 1.0
+		AttackDamage 8
+		PlayerDamage 13
 		EmitterDrain 3

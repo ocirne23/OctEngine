@@ -418,4 +418,26 @@ calls `reloadShaders()`.
 
 * `*.inc.glsl` are includes.
 * **`shared.inc.glsl` / `ubo.inc.glsl` structs must stay in sync with `Private/Layout.ixx`.**
+* **The light grid's distance LOD** (`light_grid.cs.glsl`, `lodCellSize`) is `LightGridParams`
+  under "Graphics/LOD/Light grid", BAKED AS `#define`s (the loop runs per light per grid) — a
+  change reloads the compute shader: `level = floor(pow(max(dist - start, 0) / step, power))`,
+  `cellSize = clamp(minCell << level, minCell, maxCell)` in world units per cell. Min cell 0
+  (log2) = the full GRID_SIZE cells per axis; min == max pins one resolution everywhere; the
+  defaults (0 m, 16 m, 0.5, 0, 2) follow the old sqrt ramp but stop at 4 m cells.
+  > **THE BUILD IS ONE THREAD PER LIGHT, ONE LANE PER WORKGROUP — ON PURPOSE.** `getOrInsertGrid`
+  > spins on a table slot another thread marked `INITIALIZING_ENTRY`; lanes of one wave have no
+  > forward-progress guarantee against each other, so a wider workgroup can deadlock a wave on
+  > its own insert. **Do not widen `local_size_x` without replacing that spin.** The cost model
+  > that follows from it: a frame is bounded by its SLOWEST light thread, which walks every grid
+  > its box touches and every cell inside (two atomics each). A full-res grid (1 m cells) is
+  > 32^3 cells at `MAX_LIGHTCELL_LIGHTS` 16 = ~1.2 MB, so **"Per-cell budget (cells)"** (1024):
+  > a light spanning more cells than that INSIDE a grid is added as the grid's LARGE light
+  > (`MAX_LARGE_LIGHTS_PER_GRID` 14, one entry evaluated by every pixel of the grid) instead —
+  > a range-12 emitter at full res was 15k serial atomics per grid. Point and spot lights also
+  > skip the cells their range sphere misses (`addLightToGrid`, ~half the box's corners).
+* **"Graphics/LOD/Light grid/Debug Mode"** (`LightGridParams::debugMode`, rides `aoParams.w` in the UBO, so
+  no reload) overlays the forward pass's `computeLitColor` (`instanced_indirect_lit.inc.glsl`):
+  1 light grid cells (random colour per grid), 2 per-cell light count heat (green → red at the cell
+  cap, magenta = the point's grid is missing from the hash table), 3 light ranges (a step of blue
+  per covering light), 4 sun shadow cascades. Not saved.
 * SPIR-V plus source dumps land in `Assets/Local/` for Aftermath crash analysis.

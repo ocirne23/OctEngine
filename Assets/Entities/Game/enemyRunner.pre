@@ -26,6 +26,7 @@ Prefab gameEnemyRunner
 		EnergyMax 0
 		ShieldOutput 0
 		MoveSpeed 7.6
-		AttackDps 4.2
-		PlayerDps 7
+		AttackInterval 0.6
+		AttackDamage 2.5
+		PlayerDamage 4.2
 		EmitterDrain 2

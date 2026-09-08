@@ -470,7 +470,8 @@ powered for the first 79 NON-CABLE structures, plus resource totals. **Mirrored 
 LOCAL ForceComponent from the synced outputFrac**, so client-side fields are real and the client
 player's shield readbacks work.
 
-Other broadcasts: **GRt** routes, **GBu** barracks unit type, **GLt** turret beams, **GWv** wave
+Other broadcasts: **GRt** routes, **GBu** barracks unit type, **GLt** strike beams (kind byte:
+turret lightning / melee hit, then from + to), **GWv** wave
 index, **GDm** damage flush, **GMp** map, **GPz** the shared pause state (u8; the client request is
 **GqZ** — any seated player may pause or resume; see the escape menu in `Code/App/CONTEXT.md`).
 
@@ -813,7 +814,22 @@ when it is false — so the cancel chain keeps first claim.**
 * **Turret** — HITSCAN lightning. The component picks the nearest enemy unit in "Turret range" and
   lands "Turret damage" on the spot; **it never misses.** The strike is a BUNDLE of jagged debug
   lines fading over "Turret beam lifetime" 0.5 s (`NpcSystem::addBeam` / `drawBeams`), broadcast to
-  clients as GLt.
+  clients as GLt, plus a muzzle FLASH.
+  > **BEAMS AND FLASHES** (`NpcSystem`): a beam has a kind — `Turret` (the lightning) or `MeleeHit`
+  > (a unit's swing, see Targets) — and `addBeam` also spawns its FLASHES: temporary point lights
+  > that `drawBeams` pushes to the renderer every frame (`addPointLight`, a per-frame record) with
+  > the intensity fading linearly over the beam's lifetime, scaled by "Muzzle flash intensity".
+  > At most `c_maxFlashes` 256 live — past that the oldest goes. GLt carries the kind byte; melee
+  > hit beams are relayed at most `c_maxHitBroadcast` 64 per frame, turret strikes always.
+  > **There is NO impact flash: the VICTIM lights itself** — `GameUnitComponent::tickHurtLight`
+  > (every role, before the client gate) compares health against the last tick's and pushes a red
+  > point light over the collider's top while it drops, decaying over "Hurt light decay (s)" after
+  > the last drop. So a melee hit, a turret strike, a shell AND force-field exposure all light the
+  > unit, and clients see it off the replicated health. "Hurt light intensity" scales it.
+  > **Flash counts never scale with the crowd:** "Light area (m)" buckets the world and "Hurt
+  > flashes/s per area" caps the flashes in each bucket (see the Entity CONTEXT's
+  > GameUnitComponent notes). The shield/emitter GLOW is the Force system's bubble light
+  > ("Force/Glow/Bubble light …" tweaks): one light per bubble, sized by the bubble radius.
   > **THE ENERGY STORE IS THE RELOAD BAR** (the barracks rule, and there is NO fire timer any more):
   > `stampTuning` sets its energy capacity to "Turret shot energy" (**2 — keep it a WHOLE number:
   > the transport delivers whole cells and a consumer asks for `floor(capacity − store)`, so 1.5
@@ -935,6 +951,10 @@ off placement), one per team.
 Every structure taps the pressure bake at its position (`sampleBakedField`, no GPU query slot);
 **territory owned by ANY other team's bubble drains health.**
 
+**THE EMITTER GLOW is the Force system's bubble light** (no `Component Light` on the emitter
+prefabs): one point light per bubble at its centre, sized by its iso radius, so it grows and fades
+with the powered field and goes dark with it — see [`Code/Force/CONTEXT.md`](../Force/CONTEXT.md).
+
 Emitters shrink out over "Emitter shrink time" when starved and **latch off until "Emitter restart
 charge"**, pay a pressure surcharge ("Emitter energy/s @ pressure 1") plus a per-unit siege drain
 (`addEmitterLoad`: a flat rate onto the NEAREST strainable enemy emitter within "Game/Enemies/Emitter
@@ -1050,9 +1070,18 @@ non-invulnerable structures, player capsules, and **live units from the roster �
 to units with another team's unit or player within "Nav unit source reach" 64 m** via a coarse cell
 hash, so thousands of far ambient enemies no longer tile the map with the AI team's field).
 
-**UNIT-VS-UNIT COMBAT:** non-ranged units melee ONE enemy unit — the nearest inside
-`attackRange + victim.bodyRadius` — for `attackDps`, holding at that ring. Players in the swarm still
-take the area damage from every adjacent unit.
+**UNIT-VS-UNIT COMBAT:** non-ranged units melee ONE victim — the nearest enemy unit or player
+capsule inside `attackRange + victim.bodyRadius` (a capsule gets a flat 0.8 allowance) — holding
+at that ring.
+
+**MELEE IS DISCRETE.** A unit swings once every `AttackInterval` seconds for `AttackDamage` health
+on a unit or structure, `PlayerDamage` on a player capsule (all authored per prefab; the timer runs
+down whether or not a victim is in reach, clamped at 0, so the first swing on arrival lands at
+once, and it starts at a random phase so a barracks batch never swings in lockstep). One swing
+lands on ONE victim: the melee enemy unit or player first, else the structure it is biting. Each landed swing is reported as a `GameUnitComponent::HitRecord`
+(striker + victim position), drained by `NpcSystem::service` into a `MeleeHit` beam — a line
+striker → victim over "Melee hit lifetime" 0.25 s; the victim lights itself through the hurt
+light (see the turret section for beams, flashes and the hurt light). Ranged units never swing.
 
 **There is NO published player list.** Units find enemy players — puppet GameUnitComponents,
 spatially registered like everything else — in the SAME queries as structures: the auto-target sweep

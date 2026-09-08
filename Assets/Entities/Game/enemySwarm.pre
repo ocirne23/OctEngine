@@ -30,6 +30,7 @@ Prefab gameEnemySwarm
 		MoveSpeed 4.5
 		Accel 25
 		AttackRange 1.2
-		AttackDps 5
-		PlayerDps 8
+		AttackInterval 1.0
+		AttackDamage 5
+		PlayerDamage 8
 		EmitterDrain 1

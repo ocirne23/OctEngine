@@ -6,8 +6,9 @@ import File;
 import :Allocator;
 import :Layout;
 
-void LightGridComputePipeline::initialize()
+void LightGridComputePipeline::initialize(const LightGridParams* params)
 {
+    m_params = params;
     for (PerFrameData& perFrame : m_perFrameData)
     {
         perFrame.inIndirectCommandBuffer.initialize(sizeof(vk::DispatchIndirectCommand),
@@ -33,6 +34,20 @@ void LightGridComputePipeline::buildComputeLayout(ComputePipelineLayout& compute
 {
     computePipelineLayout.computeShaderDebugFilePath = "Shaders/light_grid.cs.glsl";
     computePipelineLayout.computeShaderText = FileSystem::readFileStr(computePipelineLayout.computeShaderDebugFilePath);
+    // The distance LOD as #defines (see LightGridParams). Cell sizes are powers of two that must
+    // divide GRID_SIZE (32 = 2^5), and the coarsest can never be finer than the finest.
+    const int minLog2 = oc::clamp(m_params->minCellLog2, 0, 5);
+    const int maxLog2 = oc::clamp(m_params->maxCellLog2, minLog2, 5);
+    computePipelineLayout.defines.push_back({ "LIGHT_GRID_LOD_START", oc::format("{:.4f}", glm::max(m_params->lodStart, 0.0f)) });
+    computePipelineLayout.defines.push_back({ "LIGHT_GRID_LOD_STEP",  oc::format("{:.4f}", glm::max(m_params->lodStep, 0.01f)) });
+    // The curve exponent: the two common ones get their cheap forms (sqrt / no-op) instead of pow.
+    const float power = glm::max(m_params->lodPower, 0.01f);
+    computePipelineLayout.defines.push_back({ "LIGHT_GRID_LOD_POWER", oc::format("{:.4f}", power) });
+    computePipelineLayout.defines.push_back({ "LIGHT_GRID_LOD_CURVE",
+        glm::abs(power - 0.5f) < 1e-3f ? "1" : glm::abs(power - 1.0f) < 1e-3f ? "2" : "0" });
+    computePipelineLayout.defines.push_back({ "LIGHT_GRID_MIN_CELL",  oc::format("{}u", 1u << minLog2) });
+    computePipelineLayout.defines.push_back({ "LIGHT_GRID_MAX_CELL",  oc::format("{}u", 1u << maxLog2) });
+    computePipelineLayout.defines.push_back({ "LIGHT_GRID_CELL_BUDGET", oc::format("{}", glm::max(m_params->cellBudget, 1)) });
     auto& descriptorSetBindings = computePipelineLayout.descriptorSetLayoutBindings;
     descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // UBO
         .binding = 0,

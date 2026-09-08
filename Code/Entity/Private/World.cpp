@@ -1458,8 +1458,9 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         if (const AssetNode* n = unitNode->find("MoveSpeed"))     info->moveSpeed = n->asFloat(0, info->moveSpeed);
         if (const AssetNode* n = unitNode->find("Accel"))         info->accel = n->asFloat(0, info->accel);
         if (const AssetNode* n = unitNode->find("AttackRange"))   info->attackRange = n->asFloat(0, info->attackRange);
-        if (const AssetNode* n = unitNode->find("AttackDps"))     info->attackDps = n->asFloat(0, info->attackDps);
-        if (const AssetNode* n = unitNode->find("PlayerDps"))     info->playerDps = n->asFloat(0, info->playerDps);
+        if (const AssetNode* n = unitNode->find("AttackInterval")) info->attackInterval = glm::max(n->asFloat(0, info->attackInterval), 0.05f);
+        if (const AssetNode* n = unitNode->find("AttackDamage"))  info->attackDamage = n->asFloat(0, info->attackDamage);
+        if (const AssetNode* n = unitNode->find("PlayerDamage"))  info->playerDamage = n->asFloat(0, info->playerDamage);
         if (const AssetNode* n = unitNode->find("EmitterDrain"))  info->emitterDrain = n->asFloat(0, info->emitterDrain);
         if (const AssetNode* n = unitNode->find("Ranged"))        info->ranged = n->asBool();
         if (const AssetNode* n = unitNode->find("StandoffRange")) info->standoffRange = n->asFloat(0, info->standoffRange);

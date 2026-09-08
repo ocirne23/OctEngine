@@ -69,6 +69,7 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     m_taaParams.registerTweaks(rerecordCallback);
     m_postParams.registerTweaks(rerecordCallback);
     m_lodParams.registerTweaks();
+    m_lightGridParams.registerTweaks([this]() { if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess) return; m_lightGridComputePipeline.reloadShaders(); setHaveToRecordCommandBuffers(); });
     // Wireframe is baked pipeline state (polygonMode), so flipping it rebuilds the static mesh pipeline —
     // same GPU-idle + reload pattern as the RTAO alpha-test and ocean hit-lighting tweaks.
     Tweak::boolean("Editor", "Wireframe", &m_wireframe, [this]() {
@@ -176,7 +177,7 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     m_compositePipeline.initialize(m_renderPass);
     m_indirectCullComputePipeline.initialize(m_maxInstanceData, m_maxUniqueMeshes);
     m_skinningComputePipeline.initialize(m_maxSkinningPaletteEntries, m_maxSkinningJobs);
-    m_lightGridComputePipeline.initialize();
+    m_lightGridComputePipeline.initialize(&m_lightGridParams);
     m_accelStructure.initialize(m_maxUniqueMeshes);
     m_giProbePipeline.initialize(m_maxGiTlasInstances, m_maxTextures, m_numTextureDescriptors);
     m_giProbePipeline.setDebugDepthReadOnly(m_depthPrepassReuse);
@@ -762,7 +763,7 @@ void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const
     // the forward pass skips its depth-aware AO upsample there and uses those values directly.
     ubo.aoParams = glm::vec4((m_rtParams.enabled && m_rtaoParams.enabled) ? 1.0f : 0.0f,
         (m_rtParams.enabled && m_rtParams.giEnabled) ? m_giProbePipeline.getStrength() : 0.0f,
-        m_rtaoParams.maxDistance, 0.0f);
+        m_rtaoParams.maxDistance, (float)m_lightGridParams.debugMode);
     ubo.giVisParams = m_giProbePipeline.getVisibilityParams();
     ubo.frameIndex = m_frameCounter;
     // SIM clock, not the wall clock: shader animation (ocean waves, force pulses, fog) freezes with

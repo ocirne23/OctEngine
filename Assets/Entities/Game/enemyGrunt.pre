@@ -27,4 +27,7 @@ Prefab gameEnemyGrunt
 		HealthMax 60
 		EnergyMax 0
 		ShieldOutput 0
+		AttackInterval 1.0
+		AttackDamage 6
+		PlayerDamage 10
 		EmitterDrain 2

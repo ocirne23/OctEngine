@@ -481,7 +481,8 @@ export namespace RendererVKLayout
         glm::vec4 atmosParams;   // x = Rayleigh scale height (m), y = Mie scale height (m), z = Mie extinction ratio, w = ozone strength
         glm::vec4 groundParams;  // rgb = ground albedo * intensity, w = horizon terrain fraction (fallback ambient)
         glm::vec4 aoParams;      // x = RTAO enabled (0/1), y = GI strength, z = RTAO max distance (m; the
-                                 // forward pass skips its AO upsample past it; 0 = no falloff), w unused
+                                 // forward pass skips its AO upsample past it; 0 = no falloff),
+                                 // w = light debug overlay mode (LightGridParams::debugMode; 0 = off)
         glm::vec4 giVisParams;   // x = Chebyshev variance floor (fraction of spacing), y = Chebyshev power, z = probe weight floor, w = mean scale (footprint widening)
 
         // Ocean (FFT/Tessendorf water; OceanSimulationPipeline + ocean_*.cs.glsl / ocean.fs.glsl)

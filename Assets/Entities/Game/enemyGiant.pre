@@ -30,7 +30,8 @@ Prefab gameEnemyGiant
 		ShieldOutput 1.15
 		MoveSpeed 2.0
 		AttackRange 2.2
-		AttackDps 28
-		PlayerDps 30
+		AttackInterval 2.0
+		AttackDamage 56
+		PlayerDamage 60
 		EmitterDrain 15
 		AlwaysDisplayHealth true

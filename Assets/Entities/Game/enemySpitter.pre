@@ -28,7 +28,8 @@ Prefab gameEnemySpitter
 		EnergyMax 32
 		ShieldOutput 0.64
 		MoveSpeed 3.6
-		AttackDps 0
-		PlayerDps 0
+		AttackInterval 1.0
+		AttackDamage 0
+		PlayerDamage 0
 		EmitterDrain 2
 		Ranged true

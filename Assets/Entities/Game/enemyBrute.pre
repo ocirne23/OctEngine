@@ -29,6 +29,7 @@ Prefab gameEnemyBrute
 		EnergyMax 80
 		ShieldOutput 1.04
 		MoveSpeed 2.4
-		AttackDps 12
-		PlayerDps 20
+		AttackInterval 1.5
+		AttackDamage 18
+		PlayerDamage 30
 		EmitterDrain 5

@@ -39,6 +39,55 @@ layout (binding = 3, std430) coherent buffer InOutTable
 #define GRID_TABLE_NAME        inout_gridTable
 #include "light_grid.inc.glsl"
 
+// Distance LOD (injected from LightGridParams; the fallbacks reproduce the engine defaults):
+//   level    = floor(pow(max(dist - START, 0) / STEP, POWER))
+//   cellSize = clamp(MIN_CELL << level, MIN_CELL, MAX_CELL)   [world units per cell]
+// MIN_CELL 1 = GRID_SIZE cells per axis (full resolution); MAX_CELL GRID_SIZE = one cell per grid.
+#ifndef LIGHT_GRID_LOD_START
+#define LIGHT_GRID_LOD_START 0.0
+#endif
+#ifndef LIGHT_GRID_LOD_STEP
+#define LIGHT_GRID_LOD_STEP 16.0
+#endif
+#ifndef LIGHT_GRID_LOD_POWER
+#define LIGHT_GRID_LOD_POWER 0.5
+#endif
+// The engine picks the curve's cheap form from the exponent: 1 = sqrt (power 0.5), 2 = linear
+// (power 1), 0 = the general pow.
+#ifndef LIGHT_GRID_LOD_CURVE
+#define LIGHT_GRID_LOD_CURVE 1
+#endif
+#ifndef LIGHT_GRID_MIN_CELL
+#define LIGHT_GRID_MIN_CELL 1u
+#endif
+#ifndef LIGHT_GRID_MAX_CELL
+#define LIGHT_GRID_MAX_CELL uint(GRID_SIZE)
+#endif
+// A light spanning more cells than this in one grid is added as that grid's LARGE light (one
+// entry, evaluated by every pixel of the grid) instead of per cell: a wide light in a full-res
+// grid would otherwise cost this ONE thread tens of thousands of atomics.
+#ifndef LIGHT_GRID_CELL_BUDGET
+#define LIGHT_GRID_CELL_BUDGET 1024
+#endif
+
+uint lodCellSize(ivec3 gridPos)
+{
+    const float viewDist = distance(vec3(gridPos) * GRID_SIZE + GRID_SIZE / 2, u_viewPos);
+    const float t = max(viewDist - LIGHT_GRID_LOD_START, 0.0) * (1.0 / LIGHT_GRID_LOD_STEP);
+#if LIGHT_GRID_LOD_CURVE == 1
+    const float level = sqrt(t);
+#elif LIGHT_GRID_LOD_CURVE == 2
+    const float level = t;
+#else
+    const float level = pow(t, LIGHT_GRID_LOD_POWER);
+#endif
+    const uint cellSize = LIGHT_GRID_MIN_CELL << uint(min(level, 8.0));
+    return clamp(cellSize, LIGHT_GRID_MIN_CELL, LIGHT_GRID_MAX_CELL);
+}
+
+// ONE lane per workgroup ON PURPOSE: getOrInsertGrid spins on a slot another thread marked
+// INITIALIZING_ENTRY. Lanes of one wave have no forward-progress guarantee against each other, so
+// a wider workgroup can deadlock a wave on its own insert. Do not widen without fixing that.
 layout(local_size_x=1, local_size_y=1, local_size_z=1) in;
 
 void main()
@@ -49,8 +98,10 @@ void main()
     float reach = abs(light.range);
     vec3 lightMin = light.pos - vec3(reach);
     vec3 lightMax = light.pos + vec3(reach);
+    float sphereRadius = reach; // point / spot: cells outside the range sphere are skipped
     if (light.width > 0.0 && light.range < 0.0)
     {
+        sphereRadius = 0.0; // capsule: keep the box
         // Tube light: capsule along the axis. Bound as the two end-cap spheres of radius + absRange.
         const float height   = length(light.direction);
         const float halfLen  = height * 0.5;
@@ -66,6 +117,7 @@ void main()
     }
     else if (light.width > 0.0)
     {
+        sphereRadius = 0.0; // quad: keep the box
         // Area light: bound the front-facing influence box. The quad only emits along +normal, so
         // the box spans [0, range] on the normal axis (dropping the always-culled back half) and
         // half-extent + range on the in-plane axes. Build the same right/up/normal frame as shading.
@@ -105,20 +157,24 @@ void main()
         {
             for (int z = gridMin.z; z <= gridMax.z; ++z)
             {
-                float viewDist = distance(vec3(x, y, z) * GRID_SIZE + GRID_SIZE / 2 , u_viewPos);
-                uint cellSize = 1 << int(mix(0, 8, sqrt(viewDist) / float(GRID_SIZE)));
-                if (cellSize > GRID_SIZE / 2)
-                    cellSize = GRID_SIZE;
+                // Depends only on the grid position, so every light that touches a grid agrees
+                // on its cell size (getOrInsertGrid keeps the first one).
+                const uint cellSize = lodCellSize(ivec3(x, y, z));
                 const uint gridIdx = getOrInsertGrid(ivec3(x, y, z), cellSize);
                 if (gridIdx == INVALID_GRID) // out of table/data space; buffers grow next frame
                     continue;
-                if (reach <= float(GRID_SIZE / 2))
+                // The cells this light's box spans INSIDE this grid, at this grid's resolution.
+                const ivec3 gridMinW = ivec3(x, y, z) * GRID_SIZE;
+                const ivec3 minCell = max(ivec3(floor(lightMin)) - gridMinW, ivec3(0)) / int(cellSize);
+                const ivec3 maxCell = min(ivec3(floor(lightMax)) - gridMinW, ivec3(GRID_SIZE - 1)) / int(cellSize);
+                const ivec3 span = maxCell - minCell + 1;
+                if (reach > float(GRID_SIZE / 2) || span.x * span.y * span.z > LIGHT_GRID_CELL_BUDGET)
                 {
-                    addLightToGrid(gridIdx, lightIdx, lightMin, lightMax);
+                    addLargeLight(gridIdx, lightIdx);
                 }
                 else
                 {
-                    addLargeLight(gridIdx, lightIdx);
+                    addLightToGrid(gridIdx, lightIdx, minCell, maxCell, light.pos, sphereRadius);
                 }
             }
         }

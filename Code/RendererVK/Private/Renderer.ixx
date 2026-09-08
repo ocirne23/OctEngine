@@ -734,6 +734,7 @@ private:
     PostParams m_postParams;
     RTParams m_rtParams;
     RTAOParams m_rtaoParams;
+    LightGridParams m_lightGridParams;
     TAAParams m_taaParams;
 
     glm::vec3 m_cameraPos = glm::vec3(0.0f);

@@ -218,8 +218,35 @@ export struct RTParams
                                 // chain; rays don't need per-level fidelity). Applied when containers load.
     bool blasCompaction = true; // copy-compact static BLASes after build (~30-50% of their memory back);
                                 // applies to BLASes built after a change
-
     void registerTweaks();
+};
+
+// The clustered light grid's distance LOD (light_grid.cs.glsl): each occupied GRID_SIZE^3 grid is
+// split into cells of `cellSize` world units, picked per grid from its view distance:
+//   level    = floor(pow(max(dist - lodStart, 0) / lodStep, lodPower))
+//   cellSize = clamp(minCell << level, minCell, maxCell)
+// so cells start at minCell (1 = a cell per world unit, the full GRID_SIZE^3 resolution) and double
+// every "step" of the curve; lodPower 0.5 gives the old sqrt ramp, 1 a linear one. minCell ==
+// maxCell pins one resolution everywhere. Baked as shader #defines (the loop runs per light per
+// grid), so a change reloads the shader.
+export struct LightGridParams
+{
+    float lodStart = 0.0f;  // m: no coarsening inside this distance
+    float lodStep = 16.0f;  // m: the curve's unit distance (one doubling at lodPower 1)
+    float lodPower = 0.5f;  // curve exponent on (dist - start) / step
+    int   minCellLog2 = 0;  // finest cell size = 2^n world units (0 = 1 m: GRID_SIZE cells per axis)
+    int   maxCellLog2 = 1;  // coarsest cell size = 2^n world units (5 = 32 = one cell per grid)
+    // A light spanning more cells than this inside ONE grid becomes that grid's LARGE light (one
+    // entry, evaluated by every pixel in the grid) instead of a per-cell insert: the build runs one
+    // thread per light, so a wide light in a full-res grid was tens of thousands of serial atomics.
+    int   cellBudget = 1024;
+    // Forward-pass lighting debug overlay (computeLitColor, instanced_indirect_lit.inc.glsl), rides
+    // the UBO (aoParams.w) so it needs no shader reload: 0 off, 1 light grid cells (random colour
+    // per grid), 2 per-cell light count heat (green -> red at the cell cap, magenta = the cell's
+    // hash lookup missed), 3 light ranges (blue per covering light), 4 sun shadow cascades.
+    int   debugMode = 0;
+
+    void registerTweaks(const oc::function<void()>& onReloadShaders);
 };
 
 export struct RTAOParams

@@ -468,10 +468,13 @@ void GameMatch::handleNetEvent(oc::string_view name)
         }
         else if (name == "GLt")
         {
+            const uint8 kind = reader.read<uint8>();
             const float fx = reader.read<float>(), fy = reader.read<float>(), fz = reader.read<float>();
             const float tx = reader.read<float>(), ty = reader.read<float>(), tz = reader.read<float>();
             if (!reader.overflowed())
-                m_npcs.addBeam(glm::vec3(fx, fy, fz), glm::vec3(tx, ty, tz));
+                m_npcs.addBeam(glm::vec3(fx, fy, fz), glm::vec3(tx, ty, tz),
+                    kind == (uint8)NpcSystem::EBeamKind::MeleeHit ? NpcSystem::EBeamKind::MeleeHit
+                                                                  : NpcSystem::EBeamKind::Turret);
         }
         else if (name == "GPz")
         {

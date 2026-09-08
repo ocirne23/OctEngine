@@ -133,6 +133,20 @@ private:
     friend class ForceEmitter;
     friend class ForceQuery;
 
+    // THE BUBBLE LIGHT: every bubble — an emitter's own iso bubble, or a merge GROUP's sphere in
+    // place of its members' — carries one point light at its centre, sized by its radius (range =
+    // radius x "Bubble light range", intensity = "Bubble light intensity" x radius^2, so the rim
+    // brightness is the same at every size), in the team colour. It FADES in and out over "Bubble
+    // light fade" (a member's own light crossfades into its group's as it joins), and the
+    // fade-out keeps playing at the last centre/radius after the bubble is gone. Per-frame light
+    // records, pushed from the upload jobs (lock-free). There is no light count budget: the
+    // merging already collapses an overlapping crowd into ONE bubble.
+    struct BubbleLight
+    {
+        float fade = 0.0f;        // 0..1
+        glm::vec3 center{ 0.0f }; // last lit centre / radius: the fade-out's anchor
+        float radius = 0.0f;
+    };
     struct EmitterInstance
     {
         uint32 generation = 0; // 0 = free slot
@@ -140,7 +154,12 @@ private:
         uint32 team = 0;
         bool active = true; // see ForceEmitter::setActive
         bool analyticReadback = false; // see ForceEmitter::setAnalyticReadback
-        float output = 1.0f;
+        float output = 1.0f;  // the SET output; the field uses liveOutput() = output x ramp
+        // ACTIVATION RAMP: 0 while gated off, climbing to 1 over "Activate ramp (s)" once active,
+        // so a bubble GROWS in (the SIM LOD tier edge, a fresh spawn) instead of popping at full
+        // size — the field, the iso bounds (and so the bubble light), the merge weights all read
+        // the ramped output.
+        float ramp = 0.0f;
         float reach = 1.0f;
         float focus = 0.0f;
         float distribution = 0.5f;
@@ -174,6 +193,7 @@ private:
         // Bubble radius cache: the 16-station profile only re-evaluates when a shape parameter
         // (or the iso threshold) changed — a moving unit just translates the centre.
         float boundsOutput = -1.0f, boundsReach = -1.0f, boundsFocus = -1.0f, boundsDist = -1.0f, boundsWidth = -1.0f, boundsIso = -1.0f;
+        BubbleLight light; // the bubble's glow (see stepBubbleLight)
         glm::vec3 blendFromCenter{ 0.0f }; // transition start sphere
         float blendFromRadius = 0.0f;
         glm::vec3 blendCenter{ 0.0f };     // the sphere uploaded last frame (a reversal restarts from it)
@@ -201,6 +221,7 @@ private:
         glm::vec3 appliedForce{ 0.0f }; // latched readback (shared mode hands it to the members)
         float pressure = 0.0f;
         bool dissolve = false;          // set by the parallel cover pass, acted on serially (renderer slot)
+        BubbleLight light;              // the group sphere's glow (see stepBubbleLight)
     };
     struct MergeParams
     {
@@ -306,6 +327,11 @@ private:
         return m_merge.spreadScale * glm::distance(m.bubbleCenter, center) + m_merge.radiusScale * m.bubbleRadius;
     }
     void debugDrawGroup(Renderer& renderer, const MergeGroup& group) const;
+    static float liveOutput(const EmitterInstance& inst) { return inst.output * inst.ramp; }
+    // One bubble's light for this frame: eases `light.fade` toward lit (1) / dark (0) and pushes
+    // the point light while any fade remains. Worker-safe (own state, a lock-free renderer push).
+    void stepBubbleLight(Renderer& renderer, BubbleLight& light, bool lit, const glm::vec3& center,
+        float radius, uint32 team, float deltaSec) const;
 
     // Parallel entity spawning: create/destroy of emitters and queries run concurrently from spawn
     // jobs — the free lists and generation counter serialize here. m_emitters is RESERVED to
@@ -401,6 +427,13 @@ private:
     bool m_debugDraw = false;
     bool m_debugDrawQueries = false;
     bool m_debugDrawGroups = false;
+    float m_activateRamp = 0.6f; // "Activate ramp (s)": see EmitterInstance::ramp
+    // "Force/Glow" bubble light tweaks (see BubbleLight)
+    bool m_bubbleLight = true;
+    float m_bubbleLightIntensity = 1.0f; // x radius^2
+    float m_bubbleLightRange = 1.5f;     // x radius
+    float m_bubbleLightFade = 0.5f;      // seconds, in and out
+    float m_bubbleLightWhite = 0.35f;    // team colour -> white mix
 };
 
 export namespace Globals

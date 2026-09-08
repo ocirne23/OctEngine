@@ -22,11 +22,12 @@ void addLightToCell(uint gridIdx, uint cellIdx, uint lightId);
 void addLargeLight(uint gridIdx, uint lightId);
 uint getGridMemoryUsage(uint cellSize);
 uint getOrInsertGrid(ivec3 gridPos, uint cellSize);
-void addLightToGrid(uint gridIdx, uint lightId, vec3 lightMin, vec3 lightMax);
+void addLightToGrid(uint gridIdx, uint lightId, ivec3 minCell, ivec3 maxCell, vec3 sphereCenter, float sphereRadius);
 #endif
 
-#define MAX_LARGE_LIGHTS_PER_GRID 6 // Must be even
-#define MAX_LIGHTCELL_LIGHTS 16     // Must be even
+#define MAX_LARGE_LIGHTS_PER_GRID 14 // Must be even
+#define MAX_LIGHTCELL_LIGHTS 16      // Must be even
+#define GRID_HEADER_SIZE (4 + (MAX_LARGE_LIGHTS_PER_GRID / 2 + 1)) // uints before the cells
 // GRID_SIZE is defined in hash_grid.inc.glsl (included below).
 
 // GRID DATA MEMORY LAYOUT:
@@ -39,7 +40,7 @@ void addLightToGrid(uint gridIdx, uint lightId, vec3 lightMin, vec3 lightMax);
 //     {
 //         uint numLights;
 //         uint16_t lightIds[MAX_LIGHTCELL_LIGHTS];
-//     } cells[cellSize^3];
+//     } cells[(GRID_SIZE / cellSize)^3];
 // }
 
 #ifndef GRID_DATA_NAME
@@ -80,7 +81,7 @@ ivec3 getGridMin(uint gridIdx)
 
 uint getCellOffset(uint gridIdx, uint cellIdx)
 {
-	return gridIdx + 8 + cellIdx * (MAX_LIGHTCELL_LIGHTS / 2 + 1);
+	return gridIdx + GRID_HEADER_SIZE + cellIdx * (MAX_LIGHTCELL_LIGHTS / 2 + 1);
 }
 
 uint getCellSize(uint gridIdx)
@@ -170,7 +171,7 @@ void addLargeLight(uint gridIdx, uint lightId)
 uint getGridMemoryUsage(uint cellSize)
 {
 	const uint numCells = GRID_SIZE / cellSize;
-	return 4 + (MAX_LARGE_LIGHTS_PER_GRID / 2 + 1) + numCells * numCells * numCells * (MAX_LIGHTCELL_LIGHTS / 2 + 1);
+	return GRID_HEADER_SIZE + numCells * numCells * numCells * (MAX_LIGHTCELL_LIGHTS / 2 + 1);
 }
 
 // Returned when the table or grid data buffer is out of space: the light is dropped for this frame.
@@ -218,22 +219,31 @@ uint getOrInsertGrid(ivec3 gridPos, uint cellSize)
 	}
 }
 
-void addLightToGrid(uint gridIdx, uint lightId, vec3 lightMin, vec3 lightMax)
+// Adds the light to the cells [minCell, maxCell] (cell coordinates inside this grid, already
+// clamped by the caller). sphereRadius > 0: cells whose box misses the sphere are skipped — the
+// corners of a range box are ~48% of its volume, and every skipped cell is two atomics saved.
+void addLightToGrid(uint gridIdx, uint lightId, ivec3 minCell, ivec3 maxCell, vec3 sphereCenter, float sphereRadius)
 {
-	const ivec3 gridMin = getGridMin(gridIdx) * GRID_SIZE;
-	const uint cellSize = getCellSize(gridIdx);
-
-	const uint numCells = GRID_SIZE / cellSize;
+	const vec3 gridMinW  = vec3(getGridMin(gridIdx) * GRID_SIZE);
+	const uint cellSize  = getCellSize(gridIdx);
+	const float cellSizeF = float(cellSize);
+	const uint numCells  = GRID_SIZE / cellSize;
 	const uint numCellsSq = numCells * numCells;
-	const ivec3 minCell = max(ivec3(floor(lightMin)) - gridMin, ivec3(0)) / ivec3(cellSize);
-	const ivec3 maxCell = min(ivec3(floor(lightMax)) - gridMin, ivec3(GRID_SIZE - 1)) / ivec3(cellSize);
-	for (uint x = minCell.x; x <= maxCell.x; ++x)
+	const float radiusSq = sphereRadius * sphereRadius;
+	for (int x = minCell.x; x <= maxCell.x; ++x)
 	{
-		for (uint y = minCell.y; y <= maxCell.y; ++y)
+		for (int y = minCell.y; y <= maxCell.y; ++y)
 		{
-			for (uint z = minCell.z; z <= maxCell.z; ++z)
+			for (int z = minCell.z; z <= maxCell.z; ++z)
 			{
-				const uint cellIdx = x + y * numCells + z * numCellsSq;
+				if (sphereRadius > 0.0)
+				{
+					const vec3 cellMin = gridMinW + vec3(x, y, z) * cellSizeF;
+					const vec3 d = sphereCenter - clamp(sphereCenter, cellMin, cellMin + cellSizeF);
+					if (dot(d, d) > radiusSq)
+						continue;
+				}
+				const uint cellIdx = uint(x) + uint(y) * numCells + uint(z) * numCellsSq;
 				addLightToCell(gridIdx, cellIdx, lightId);
 			}
 		}

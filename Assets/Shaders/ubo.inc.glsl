@@ -99,7 +99,8 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                           // ground-bounce tint for downward GI/fog rays), w = horizon terrain fraction
                           // (virtual sky probe projection: fraction of above-horizon sky treated as ground)
     vec4 u_aoParams;      // x = RTAO enabled (0/1), y = GI strength, z = RTAO max distance (m; past it the
-                          // AO image is exactly (N, 1) so the upsample is skipped; 0 = no falloff), w unused
+                          // AO image is exactly (N, 1) so the upsample is skipped; 0 = no falloff),
+                          // w = forward-pass light debug overlay mode (0 = off; see computeLitColor)
     vec4 u_giVisParams;   // x = Chebyshev variance floor (fraction of spacing), y = Chebyshev power, z = probe weight floor, w = mean scale (footprint widening)
 
     // Ocean (FFT/Tessendorf water; ocean_*.cs.glsl simulation + ocean.fs.glsl shading)

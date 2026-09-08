@@ -28,6 +28,7 @@ Prefab gameEnemyElite
 		EnergyMax 70
 		ShieldOutput 0.9
 		MoveSpeed 4.6
-		AttackDps 11
-		PlayerDps 16
+		AttackInterval 0.8
+		AttackDamage 9
+		PlayerDamage 13
 		EmitterDrain 4

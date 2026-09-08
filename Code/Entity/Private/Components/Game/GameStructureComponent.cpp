@@ -145,7 +145,7 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
                 // HITSCAN lightning: the damage lands right here (damage() is atomic — the melee
                 // sweep uses the same call from workers); only the BEAM visual is queued.
                 if (GameUnitComponent* victim = getComponent<GameUnitComponent>(target))
-                    victim->damage(params.turretDamage);
+                    victim->damage(params.turretDamage, team);
                 const std::lock_guard<std::mutex> lock(g_structureEventMutex);
                 g_turretFire.push_back(TurretFireRequest{ pos + glm::vec3(0.0f, 1.0f, 0.0f),
                     target->pos, team });

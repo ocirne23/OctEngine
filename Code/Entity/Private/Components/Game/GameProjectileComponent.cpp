@@ -94,13 +94,13 @@ void GameProjectileComponent::onContact(Entity& self, Entity& other, bool begin)
             if (glm::dot(d, d) > r2)
                 return;
             if (GameUnitComponent* unit = getComponent<GameUnitComponent>(victim); unit && unit->team != team)
-                unit->damage(unitDamage);
+                unit->damage(unitDamage, team);
             else if (GameStructureComponent* sc = getComponent<GameStructureComponent>(victim); sc && sc->team != team)
                 sc->damage(structureDamage);
         });
     }
     else if (GameUnitComponent* unit = getComponent<GameUnitComponent>(&other); unit && unit->team != team)
-        unit->damage(unitDamage);
+        unit->damage(unitDamage, team);
     else if (GameStructureComponent* sc = getComponent<GameStructureComponent>(&other); sc && sc->team != team)
         sc->damage(structureDamage);
     spent = true;

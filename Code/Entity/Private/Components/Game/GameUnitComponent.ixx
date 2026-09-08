@@ -80,6 +80,19 @@ export struct GameUnitParams
     // (GamePlayer applies the same rule on the owner). Per-prefab override: SpawnInfo::heightLimit.
     float heightLimit = 5.0f;
     bool navEnabled = true;        // steer by the Nav fields when they exist
+    // The HURT LIGHT: a unit whose health DROPS glows (a temporary point light over its body) —
+    // full brightness while it keeps dropping (field exposure), decaying over hurtLightDecay
+    // after the last drop (a melee hit, a turret strike, a shell).
+    float hurtLightIntensity = 8.0f;
+    float hurtLightDecay = 0.25f;  // seconds from full to dark
+    // AREA BUDGET for the hurt flashes (the Nav seed limiter's idea — a budget per world-area
+    // bucket — as a lock-free hashed slot table, since this is decided on workers): at most
+    // `hurtFlashRate` flashes per second per `lightArea` square no matter how many units stand
+    // in it — a lone hit unit always flashes, a swarm in a field shows random flashes across it.
+    // (The shield glow needs no budget: it is the Force system's bubble light, and merging
+    // already collapses an overlapping crowd into one bubble.)
+    float lightArea = 8.0f;        // m: the bucket size
+    float hurtFlashRate = 4.0f;    // flashes per second per area
     // Context steering weights (see GameUnitComponent.cpp, steerHeading): each candidate heading scores
     //   free * (Goal*dot(goal) + Flow*laneW*dot(lane) + Persist*dot(last))
     //   - Pressure*gpW*dot(gradP) + Wall*dot(wallAway) - clipped*CornerClip
@@ -173,6 +186,14 @@ export struct GameUnitComponent
         uint8 popCost = 0;
     };
     static void takeDeaths(oc::vector<DeathRecord>& out);
+    // A MELEE HIT landed (the damage is already applied): the striker's position and the victim's,
+    // for the game's hit visual (a line plus a flash). Pure report — nothing to service.
+    struct HitRecord
+    {
+        glm::vec3 from{ 0.0f };
+        glm::vec3 to{ 0.0f };
+    };
+    static void takeHits(oc::vector<HitRecord>& out);
     // (There is NO separate shield mirror: this component's state RIDES THE ENTITY SYNC — the
     // engine's snapshot/claim records carry a quantized game blob whenever the entity has a
     // GameUnitComponent. See NetworkManager's packGameStateBlob/applyGameStateBlob.)
@@ -188,8 +209,11 @@ export struct GameUnitComponent
         float moveSpeed = 4.0f;
         float accel = 15.0f;          // soft on purpose: steering loses the shoving match vs bubbles
         float attackRange = 1.5f;     // melee reach measured to the victim's meleeRadius ring
-        float attackDps = 6.0f;       // structure health/s while in reach
-        float playerDps = 10.0f;      // player health/s while in reach (game routes it to the owner)
+        // MELEE is DISCRETE: one hit of attackDamage every attackInterval seconds while a victim
+        // (an enemy unit, else a structure) is in reach. The victim takes the whole hit at once.
+        float attackInterval = 1.0f;  // seconds between hits
+        float attackDamage = 6.0f;    // health per hit
+        float playerDamage = 10.0f;   // health per hit on a PLAYER capsule (the game routes it to the owner)
         float emitterDrain = 1.0f;    // energy/s this unit costs the nearest active enemy emitter
         bool ranged = false;          // spitter stance: hold at standoffRange and queue FireRequests
         float standoffRange = 16.0f;
@@ -206,7 +230,7 @@ export struct GameUnitComponent
     float energy = 40.0f, energyMax = 40.0f;
     float shieldOutput = 0.8f;
     float moveSpeed = 4.0f, accel = 15.0f;
-    float attackRange = 1.5f, attackDps = 6.0f, playerDps = 10.0f;
+    float attackRange = 1.5f, attackInterval = 1.0f, attackDamage = 6.0f, playerDamage = 10.0f;
     float emitterDrain = 1.0f;
     bool ranged = false;
     float standoffRange = 16.0f, fireInterval = 3.0f;
@@ -301,7 +325,10 @@ export struct GameUnitComponent
     void kill(Entity& entity);
     // Atomic (projectile contacts are main-thread, melee is workers). Units: CAS on health.
     // Puppets: accumulates into pendingDamage — ONE damage entry point for every victim kind.
-    void damage(float amount);
+    // `sourceTeam` = the attacker's team: the hurt light takes its colour (UnknownTeam = the
+    // neutral red). A plain byte store — concurrent attackers race for it, harmlessly.
+    static constexpr uint32 UnknownTeam = UINT32_MAX;
+    void damage(float amount, uint32 sourceTeam = UnknownTeam);
     float takePendingDamage(); // main thread: drain the puppet inbox (atomic exchange)
     bool alive() const { return health > 0.0f; }
     // HEAL inbox (workers — a Medic station's update): banked atomically like damage and applied
@@ -347,6 +374,7 @@ private:
         float stopRange = 0.0f;     // hold this far from the walk target (melee reach / standoff)
         bool inEnemyBubble = false; // stamped-radius signal — the shield-less FALLBACK when the bake is off
     };
+    void tickHurtLight(const Entity& entity, float deltaSec); // every role, before the client gate
     void applyHeightLimit(Tick& t);  // launched above the ceiling -> put back AT it, climb cancelled
     bool applyInboxes(Tick& t);      // the damage + heal inboxes; false = the unit died this tick
     void resolveWalkTarget(Tick& t); // route, then the locked order, then the Nav fields, then the local search
@@ -362,6 +390,16 @@ private:
     oc::string m_shortName = "UNIT";
     float m_retargetTimer = 0.0f;
     float m_fireTimer = 0.0f;
+    float m_attackTimer = 0.0f; // melee: counts down to the next hit; clamps at 0 with no victim
+                                // in reach, so the first hit on arrival lands at once
+    // The hurt light (see GameUnitParams): health is compared against the last tick's on EVERY
+    // role — a drop is a drop whether the authority applied it or the replicated blob landed it.
+    float m_lastHealth = 0.0f;
+    float m_hurtGlow = 0.0f;    // 0..1, the light's fade
+    uint8 m_hurtTeam = 0xFF;    // the last attacker's team (0xFF = unknown): the light's colour
+    void noteHurtTeam(uint32 sourceTeam) { m_hurtTeam = sourceTeam == UnknownTeam ? 0xFF : (uint8)glm::min(sourceTeam, 254u); }
+    uint32 opposingTeamGuess() const;   // field exposure with no team on the sample: the next team over
+    float m_bodyTop = 1.0f;     // the light's height over the entity origin (the collider's top)
     uint32 m_rng = 0;           // tiny per-unit LCG — worker-safe, seeded from the entity address
     float m_pressureTimer = 0.0f; // stalled time (displacement checkpoints) -> weights + pressure
     // Lane requests are due at an ABSOLUTE sim time, not on a countdown of the tick delta: a

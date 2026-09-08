@@ -502,11 +502,12 @@ void GameMatch::update(float deltaSec)
     // The unit SIM runs inside the entity pass (GameUnitComponent); this drains what it queued
     // (shots to spawn, deaths) and runs production.
     m_npcs.service(m_structures);
-    if (m_isServer) // turret lightning is a pure visual on clients: broadcast this frame's strikes
+    if (m_isServer) // strikes (turret lightning, melee hits) are pure visuals on clients: broadcast this frame's
         for (const NpcSystem::Beam& beam : m_npcs.newBeams())
         {
             uint8 buffer[32];
             NetWriter writer(buffer);
+            writer.write<uint8>((uint8)beam.kind);
             writer.write<float>(beam.from.x); writer.write<float>(beam.from.y); writer.write<float>(beam.from.z);
             writer.write<float>(beam.to.x);   writer.write<float>(beam.to.y);   writer.write<float>(beam.to.z);
             Globals::networkManager.fireNetworkEvent("GLt", writer.data());
@@ -732,7 +733,7 @@ void GameMatch::tickPlayerMelee(float deltaSec)
             // the same measure the units' own melee probes use).
             const glm::vec2 d = glm::vec2(other->pos.x, other->pos.z) - glm::vec2(pos.x, pos.z);
             if (glm::dot(d, d) <= m_meleeRadius * m_meleeRadius)
-                u->damage(m_meleeDps * deltaSec);
+                u->damage(m_meleeDps * deltaSec, team);
         });
     };
     meleeAround(m_player.bodyPos(), (uint8)m_team);

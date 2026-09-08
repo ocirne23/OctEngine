@@ -142,6 +142,7 @@ void ForceSystem::initialize()
     Tweak::floatVar("Force/Bake", "Sample height", &m_bakeSampleHeight, 0.0f, 10.0f, 0.1f);
     Tweak::intVar("Force/Bake", "Chunks (stat)", &m_statBakeChunks, 0, 100000);
     Tweak::floatVar("Force", "Force gain", &m_params.forceGain, 0.0f, 10.0f);
+    Tweak::floatVar("Force", "Activate ramp (s)", &m_activateRamp, 0.0f, 5.0f, 0.05f);
     Tweak::floatVar("Force/Shell", "Alpha", &m_params.shellAlpha, 0.0f, 1.0f);
     // Draw culling/LOD (the field/readbacks of a culled shell stay live; desktop only):
     Tweak::floatVar("Force/Shell", "Min screen radius (px)", &m_params.minShellPixels, 0.0f, 50.0f, 0.5f);
@@ -166,6 +167,11 @@ void ForceSystem::initialize()
     Tweak::floatVar("Force/Glow", "Contact wall alpha", &m_params.contactWallAlpha, 0.0f, 1.0f);
     Tweak::floatVar("Force/Shell", "Junction smoothing", &m_params.junctionSmoothing, 0.0f, 2.0f);
     Tweak::floatVar("Force/Glow", "Geometry distance (m)", &m_params.geoGlowDistance, 0.0f, 4.0f);
+    Tweak::boolean("Force/Glow", "Bubble light", &m_bubbleLight);
+    Tweak::floatVar("Force/Glow", "Bubble light intensity", &m_bubbleLightIntensity, 0.0f, 20.0f, 0.05f);
+    Tweak::floatVar("Force/Glow", "Bubble light range (x radius)", &m_bubbleLightRange, 0.5f, 4.0f, 0.05f);
+    Tweak::floatVar("Force/Glow", "Bubble light fade (s)", &m_bubbleLightFade, 0.02f, 3.0f, 0.02f);
+    Tweak::floatVar("Force/Glow", "Bubble light white mix", &m_bubbleLightWhite, 0.0f, 1.0f, 0.05f);
     Tweak::floatVar("Force/Pattern", "Scale (1/m)", &m_params.patternScale, 0.01f, 8.0f);
     Tweak::floatVar("Force/Pattern", "Scroll speed", &m_params.patternSpeed, 0.0f, 4.0f);
     Tweak::floatVar("Force/Pattern", "Intensity", &m_params.patternIntensity, 0.0f, 4.0f);
@@ -492,12 +498,13 @@ void ForceSystem::uploadEmitter(Renderer& renderer, EmitterInstance& inst, float
     const uint32 readbackBit = analytic ? FORCE_FLAG_READBACK : 0u;
     const uint32 flags = !merged ? (FORCE_FLAG_ACTIVE | readbackBit)
         : (analytic && m_merge.memberReadback ? (FORCE_FLAG_ACTIVE | FORCE_FLAG_PASSIVE | FORCE_FLAG_READBACK) : 0u);
-    const float transitionReach = transition ? sphereReach(sphereRadius, inst.output) : 0.0f;
+    const float output = liveOutput(inst); // the activation ramp applies to the field
+    const float transitionReach = transition ? sphereReach(sphereRadius, output) : 0.0f;
     EmitterInstance sphere; // the transition sphere as an instance (upload + debug rings)
     if (transitionReach > 0.0f)
     {
         sphere.team = inst.team;
-        sphere.output = inst.output;
+        sphere.output = output;
         sphere.reach = transitionReach;
         sphere.focus = 0.5f;
         sphere.distribution = 0.5f;
@@ -507,7 +514,7 @@ void ForceSystem::uploadEmitter(Renderer& renderer, EmitterInstance& inst, float
         sphere.pos = sphereCenter - up * (transitionReach * 0.5f);
     }
     const EmitterInstance& src = transitionReach > 0.0f ? sphere : inst;
-    const RendererVKLayout::ForceEmitterGpu gpu = buildEmitterGpu(src.pos, src.dir, src.output, src.reach,
+    const RendererVKLayout::ForceEmitterGpu gpu = buildEmitterGpu(src.pos, src.dir, output, src.reach,
         src.focus, src.team, src.distribution, src.width,
         refreshDistributionScale(transitionReach > 0.0f ? sphere : inst), src.shellAlpha, flags);
     renderer.updateForceEmitter(inst.rendererSlot, gpu);
@@ -591,20 +598,33 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
         EmitterInstance& inst = m_emitters[emitterIdx];
         if (inst.generation == 0)
             continue;
+        const float rampStep = m_activateRamp > 1e-3f ? deltaSec / m_activateRamp : 1.0f;
         if (!inst.active)
         {
-            // Gated off (SIM LOD): no field this frame, and the GPU SLOT GOES BACK — the far half
-            // of a 25k-unit map must not sit on the renderer's MAX_FORCE_EMITTERS. Any merge
-            // transition is dropped on the spot (the merge pass already evicted it — no bubble).
+            // Gated off (SIM LOD): any merge transition is dropped on the spot (the merge pass
+            // already evicted it — never a candidate), and the bubble SHRINKS OUT as its own over
+            // the ramp. Only once dark does the GPU SLOT GO BACK — the far half of a 25k-unit map
+            // must not sit on the renderer's MAX_FORCE_EMITTERS.
             inst.mergeState = EmitterInstance::EMergeState::Own;
             inst.group = 0;
             inst.blend = 0.0f;
-            inst.appliedForce = glm::vec3(0.0f);
-            inst.pressure = 0.0f;
-            if (inst.rendererSlot != UINT32_MAX)
-                churn.release.push_back(emitterIdx);
-            continue;
+            inst.ramp = glm::max(inst.ramp - rampStep, 0.0f);
+            if (inst.ramp <= 0.0f)
+            {
+                inst.appliedForce = glm::vec3(0.0f);
+                inst.pressure = 0.0f;
+                inst.light.fade = 0.0f;
+                if (inst.rendererSlot != UINT32_MAX)
+                    churn.release.push_back(emitterIdx);
+                continue;
+            }
         }
+        else
+            inst.ramp = glm::min(inst.ramp + rampStep, 1.0f);
+        // The bubble light: lit while this emitter projects its OWN bubble (Own / Leaving); a
+        // Joining or Merged member fades out as its group's light fades in.
+        stepBubbleLight(renderer, inst.light, inst.bubbleRadius > 0.0f && inst.group == 0,
+            inst.bubbleCenter, inst.bubbleRadius, inst.team, deltaSec);
         if (inst.rendererSlot == UINT32_MAX)
         {
             churn.acquire.push_back(emitterIdx); // minted AND uploaded serially below
@@ -672,7 +692,10 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
     for (uint32 g = begin; g < end; ++g)
     {
         MergeGroup& group = m_groups[g];
-        if (group.generation == 0 || group.rendererSlot == UINT32_MAX)
+        if (group.generation == 0)
+            continue;
+        stepBubbleLight(renderer, group.light, group.coverRadius > 0.0f, group.center, group.coverRadius, group.team, deltaSec);
+        if (group.rendererSlot == UINT32_MAX)
             continue;
         // The group sphere: focus 0.5 / distribution 0.5 / width 1, axis up, centred on `center`
         // — its budget fold is the constant sphere fold (namespace scope: worker-reachable).
@@ -697,7 +720,7 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
                     || !(member.analyticReadback || !m_bakePublished))
                     continue; // a Joining member still has its own active transition sphere; a
                               // bake-read member already sampled its own position in uploadEmitter
-                member.appliedForce = group.appliedForce * (glm::max(member.output, 0.0f) * invSum);
+                member.appliedForce = group.appliedForce * (glm::max(liveOutput(member), 0.0f) * invSum);
                 member.pressure = group.pressure;
             }
         }
@@ -748,6 +771,33 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
 // axial planes + a circle at the widest station + the output line pos -> target. Deformation
 // against other bubbles only exists in the field evaluation — this is the authoring view of
 // reach/focus/distribution, not the equilibrium surface.
+void ForceSystem::stepBubbleLight(Renderer& renderer, BubbleLight& light, bool lit, const glm::vec3& center,
+    float radius, uint32 team, float deltaSec) const
+{
+    if (!m_bubbleLight || m_bubbleLightIntensity <= 0.0f)
+    {
+        light.fade = 0.0f;
+        return;
+    }
+    const float step = deltaSec / glm::max(m_bubbleLightFade, 1e-3f);
+    if (lit)
+    {
+        light.center = center;
+        light.radius = radius;
+        light.fade = glm::min(light.fade + step, 1.0f);
+    }
+    else
+        light.fade = glm::max(light.fade - step, 0.0f);
+    if (light.fade <= 0.0f || light.radius <= 0.0f)
+        return;
+    const glm::vec3 teamColor = m_params.teamColors[glm::min(team, MAX_FORCE_TEAMS - 1)];
+    const glm::vec3 color = glm::mix(teamColor, glm::vec3(1.0f), m_bubbleLightWhite);
+    // Ease the fade so a light never pops at either end.
+    const float f = light.fade * light.fade * (3.0f - 2.0f * light.fade);
+    renderer.addPointLight(PointLight(light.center, light.radius * m_bubbleLightRange, color,
+        m_bubbleLightIntensity * light.radius * light.radius * f));
+}
+
 void ForceSystem::debugDrawEmitter(Renderer& renderer, const EmitterInstance& inst) const
 {
     const glm::vec3 dir = glm::dot(inst.dir, inst.dir) > 1e-6f ? glm::normalize(inst.dir) : glm::vec3(0.0f, 1.0f, 0.0f);
@@ -818,10 +868,11 @@ static float forceDist2(const glm::vec3& a, const glm::vec3& b)
 // Runs on a job (one emitter per call, writes only its own instance + the worker's staging list).
 void ForceSystem::refreshBubbleBounds(EmitterInstance& inst, oc::vector<uint32>& candidates)
 {
-    if (!inst.active)
+    if (!inst.active && inst.ramp <= 0.0f)
     {
-        // No bubble while gated off: evicted from its group by the member sweep (radius 0 =
-        // unfit), never a candidate. The bounds cache is dropped so reactivation recomputes.
+        // No bubble once gated off AND dark: evicted from its group by the member sweep (radius
+        // 0 = unfit), never a candidate. The bounds cache is dropped so reactivation recomputes.
+        // (While still fading out it keeps a shrinking OWN bubble below — but is no candidate.)
         inst.bubbleRadius = 0.0f;
         inst.candidate = false;
         inst.boundsOutput = -1.0f;
@@ -835,10 +886,11 @@ void ForceSystem::refreshBubbleBounds(EmitterInstance& inst, oc::vector<uint32>&
     inst.bubbleValid = true;
     inst.bubbleCenter = center;
     const float iso = m_params.isoThreshold;
-    if (inst.boundsOutput != inst.output || inst.boundsReach != inst.reach || inst.boundsFocus != inst.focus
+    const float output = liveOutput(inst); // the bubble grows with the activation ramp
+    if (inst.boundsOutput != output || inst.boundsReach != inst.reach || inst.boundsFocus != inst.focus
         || inst.boundsDist != inst.distribution || inst.boundsWidth != inst.width || inst.boundsIso != iso)
     {
-        inst.boundsOutput = inst.output;
+        inst.boundsOutput = output;
         inst.boundsReach = inst.reach;
         inst.boundsFocus = inst.focus;
         inst.boundsDist = inst.distribution;
@@ -847,7 +899,7 @@ void ForceSystem::refreshBubbleBounds(EmitterInstance& inst, oc::vector<uint32>&
         const float m = 1.0f - 2.0f * glm::clamp(inst.focus, 0.0f, 1.0f);
         const float W = glm::clamp(inst.width, 0.05f, 4.0f);
         const float D = glm::clamp(inst.distribution, 0.0f, 1.0f);
-        const float foldedOutput = inst.output * forceReferenceBudget() / (glm::max(inst.distNormE, 1e-6f) * W * W);
+        const float foldedOutput = output * forceReferenceBudget() / (glm::max(inst.distNormE, 1e-6f) * W * W);
         float r2 = 0.0f;
         constexpr int STATIONS = 16;
         for (int i = 0; i <= STATIONS; ++i)
@@ -863,7 +915,7 @@ void ForceSystem::refreshBubbleBounds(EmitterInstance& inst, oc::vector<uint32>&
     }
     // A candidate is mergeable, has a bubble, and could fit SOME group at all (its own cover term
     // under "Max group radius") — a map-scale emitter would otherwise stretch the candidate cells.
-    inst.candidate = inst.mergeable && inst.bubbleRadius > 0.0f
+    inst.candidate = inst.active && inst.mergeable && inst.bubbleRadius > 0.0f // a fading-out bubble never merges
         && m_merge.radiusScale * inst.bubbleRadius * m_merge.coverScale + m_merge.coverMargin <= m_merge.maxRadius;
     if (inst.candidate)
     {
@@ -903,6 +955,7 @@ uint32 ForceSystem::createGroup(uint32 team)
         m_generationCounter = 1;
     group.rendererSlot = UINT32_MAX;
     group.team = team;
+    group.light = BubbleLight{}; // a reused slot starts dark and fades in
     group.center = group.targetCenter = glm::vec3(0.0f);
     group.coverRadius = group.reach = group.output = group.sumOutput = 0.0f;
     group.targetRadius = group.targetOutput = 0.0f;
@@ -974,7 +1027,7 @@ void ForceSystem::smoothGroup(MergeGroup& group, float deltaSec)
         const EmitterInstance& m = m_emitters[idx];
         if (m.mergeState == EmitterInstance::EMergeState::Joining && m.blend <= 0.0f)
             continue;
-        const float w = glm::max(m.output, 1e-4f);
+        const float w = glm::max(liveOutput(m), 1e-4f);
         motion += (m.bubbleCenter - m.prevBubbleCenter) * w;
         motionWeight += w;
     }
@@ -1009,7 +1062,7 @@ bool ForceSystem::recomputeCover(MergeGroup& group)
     for (const uint32 idx : group.members)
     {
         const EmitterInstance& m = m_emitters[idx];
-        const float w = glm::max(m.output, 1e-4f);
+        const float w = glm::max(liveOutput(m), 1e-4f);
         sumOut += w;
         maxOut = glm::max(maxOut, w);
         const float W = glm::clamp(m.width, 0.05f, 4.0f);

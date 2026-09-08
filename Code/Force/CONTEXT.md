@@ -114,14 +114,25 @@ debug density view heat-maps it.
 
 ### Active gate
 
-`setActive(false)` keeps the INSTANCE and every parameter but projects NO field this frame: **its
-renderer slot goes back** (skipped by the grid, draw, compute and bake), no readback (force and
-pressure read zero), evicted from merging and never a merge candidate. The next `update()` that sees
-it active mints a fresh slot and uploads it in the same frame. Pass-safe like `setOutput` — the
+`setActive(false)` keeps the INSTANCE and every parameter and shrinks the field out over the
+activation ramp (below); once dark **its renderer slot goes back** (skipped by the grid, draw,
+compute and bake), no readback (force and pressure read zero), evicted from merging and never a
+merge candidate. The next `update()` that sees it active mints a fresh slot (if it lost one) and
+uploads it in the same frame. Pass-safe like `setOutput` — the
 setter only writes the bool, and the slot churn itself runs serially in `update()`.
 
 **The World's SIM LOD drives it by tier** — "Game/Sim LOD/Force bubbles max tier", default 1. See
 [`Code/Entity/CONTEXT.md`](../Entity/CONTEXT.md).
+
+**A bubble GROWS in, never pops:** `EmitterInstance::ramp` is 0 while gated off and climbs to 1
+over "Force/Activate ramp (s)" (0.6) once active, and every field consumer reads
+`liveOutput(inst) = output × ramp` — the GPU upload, the iso bounds (so the bubble, and with it
+the bubble light's radius and intensity, grow from nothing), the merge weights and the readback
+split. `getOutput()` still returns the SET output. The tier edge and a fresh spawn (a
+ForceComponent starts inactive until the gate first decides) both ramp up; **deactivation ramps
+DOWN the same way** — a gated-off emitter drops any merge state at once and is never a candidate,
+but keeps a shrinking OWN bubble (and its light) until the ramp reaches 0, and only THEN hands its
+renderer slot back.
 
 ## Live team count
 
@@ -464,6 +475,23 @@ Groups under `minMembers` dissolve; `Enabled` off dissolves everything.
   untouched.
 * **Every getter and setter keeps working while merged**; `isMerged()` tells.
 
+## The bubble light
+
+**Every bubble carries ONE point light** (`ForceSystem::stepBubbleLight`, "Force/Glow/Bubble
+light …"): an emitter projecting its OWN bubble (Own / Leaving, `bubbleRadius > 0`) lights it at
+`bubbleCenter`, and a merge GROUP lights its displayed sphere at `center` / `coverRadius` — so a
+crowd of shielded units whose bubbles merged is one larger light, and the units' own lights
+crossfade into it as they join (a Joining / Merged member is dark). Range = radius × "Bubble light
+range", intensity = "Bubble light intensity" × radius² (the rim brightness is the same at every
+size), colour = the team shell colour mixed toward white. **Every light FADES** over "Bubble light
+fade" (smoothstep-eased) in both directions, and the fade-out keeps playing at the last lit
+centre/radius after the bubble is gone (a starved emitter, a collapsed shield); a SIM-LOD-gated
+emitter drops to dark at once (far away). A reused group slot starts dark. Pushed from the upload
+jobs as per-frame light records (`addPointLight`, lock-free) — `EmitterInstance::light` /
+`MergeGroup::light` hold the fade state. **No light count budget is needed: merging already
+collapses an overlapping crowd into one bubble.** This is the game's shield and emitter glow
+(there is no `Component Light` on those prefabs).
+
 ## `ForceEmitter::setShellAlpha`
 
 `outputParams.y`, default 1. **0 SKIPS the ray-marched shell draw entirely while the field stays
@@ -496,10 +524,10 @@ never rasterizes, so pane-classified walls would silently drop.
 
 | Group | Entries |
 |---|---|
-| `Force` | Enabled, Iso threshold (0.15), March steps (10), Use grid, Force gain (5), Emitters + GPU slots (stats) |
+| `Force` | Enabled, Iso threshold (0.15), March steps (10), Use grid, Force gain (5), Activate ramp (0.6 s), Emitters + GPU slots (stats) |
 | `Force/Bake` | Enabled, Sample height (1 m), Chunks (stat) |
 | `Force/Shell` | Alpha (0.5), Min screen radius (3 px), Full-detail radius (160 px), Sampled tier radius (5 m), Volume view margin (10 m), Union march, Union half res, Union jitter, Union step (1.5 m), Union max steps (8), Visible bounds iso frac (1.0), Interior alpha, Backface alpha, Rim power (3), Rim intensity (1.5), Junction smoothing (0.5) |
-| `Force/Glow` | Contact intensity (0.33), Contact width (0.15), Contact wall alpha (0.5), Geometry distance (0.5 m) |
+| `Force/Glow` | Contact intensity (0.33), Contact width (0.15), Contact wall alpha (0.5), Geometry distance (0.5 m), **Bubble light** (on), Bubble light intensity (1 × radius²), Bubble light range (1.5 × radius), Bubble light fade (0.5 s), Bubble light white mix (0.35) |
 | `Force/Pattern` | Scale (0.6 /m), Scroll speed (0.3), Intensity (0.5) |
 | `Force/Teams` | Per-team shell colour |
 | `Force/Merge` | Enabled, Join distance (0.5), Leave distance (0.85), Cover spread/radius scale (1/1), Cover scale (0.85), Cover margin (0.2 m), Max group radius (**8 m**), Max members (255), Min members (2), Summed output fraction (0.5), Member readback, Smooth time (0.3 s), Blend time (0.5 s), Leave from group sphere (0.5), Groups + Merged emitters (stats) |

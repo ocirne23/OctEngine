@@ -671,7 +671,22 @@ one probe) → `tickSteering` (`steerHeading` = the context steering, brake, the
 into the context and every queued command builds on it.
 
 * **`GameUnitComponent`** — team, health, shield battery, plus C++ steering / targeting / melee /
-  ranged stance. DSL sets orders through `self.unit.setTarget`.
+  ranged stance. DSL sets orders through `self.unit.setTarget`. **The HURT LIGHT**
+  (`tickHurtLight`, at the top of `update` on every role, before the client gate): a health drop
+  since the last tick pushes a red point light over the collider's top (`addPointLight`, a
+  per-frame record) at full brightness, decaying over `params.hurtLightDecay` after the last
+  drop, off whatever wrote `health` (the sim or the blob). **Its colour is the ATTACKER's team**
+  (the Force shell colours): `damage(amount, sourceTeam)` tags the victim (melee, shells, the
+  turret, the player aura pass their team), field exposure tags the burning field's owner off the
+  bake sample or, where the sample names no team, the next team over (`opposingTeamGuess`);
+  untagged damage (the script thunk) keeps the neutral red. Clients never receive the tag, so a
+  replicated unit's flash is red there. **AREA-BUDGETED** (the Nav seed
+  limiter's idea, as a lock-free hashed slot table in the `.cpp`, world XZ bucketed into
+  `params.lightArea` squares): a hurt unit flashes only when its area's flash slot has been quiet
+  for `1 / hurtFlashRate` seconds (CAS on a timestamp — a lone hit unit always flashes, a swarm
+  in a field shows random flashes across it). **The shield GLOW is not here:** it is the Force
+  system's bubble light (see [`Code/Force/CONTEXT.md`](../Force/CONTEXT.md)) — a collapsed
+  shield has no bubble and so no light, and a merged crowd is one light.
 * **`GameStructureComponent`** — team, health, blueprint, invulnerable, meleeRadius, its bake-tap
   territory damage, atomic `damage()` / `addLoad()` intake, the three float stores (the game's cable
   transport moves whole cells in and out of them at its tick boundary — see
@@ -690,7 +705,10 @@ parameter tables and the steering are in [`Code/Nav/CONTEXT.md`](../Nav/CONTEXT.
 
 **`Component GameUnit`** — `ShortName` (the 3–5 char HUD tag, owned by each component; the world labels use it on
 every instance, **so replicated units need no type on the wire**), then `Team`, `HealthMax`,
-`EnergyMax`, `ShieldOutput`, `MoveSpeed`, `Accel`, `AttackRange`, `AttackDps`, `PlayerDps`,
+`EnergyMax`, `ShieldOutput`, `MoveSpeed`, `Accel`, `AttackRange`, `AttackInterval` + `AttackDamage`
++ `PlayerDamage` (melee is DISCRETE: one hit every `AttackInterval` seconds on one victim — the
+nearest enemy unit or player capsule first, for `AttackDamage` / `PlayerDamage`, else the bitten
+structure for `AttackDamage` — each reported as a `HitRecord` for the game's visual),
 `EmitterDrain`, `Ranged`, `StandoffRange`, `FireInterval`, `ShotKind`, `AlwaysDisplayHealth`,
 `HeightLimit`.
 

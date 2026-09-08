@@ -27,12 +27,20 @@ static void atomicAdd(float& value, float amount)
 }
 
 // Worker-side reports, drained by the game (see the queues' declarations). The mutex only ever
-// guards three small append-only vectors touched on the rare tick where a unit fires, asks for a
-// lane or dies.
+// guards four small append-only vectors touched on the rare tick where a unit fires, hits, asks
+// for a lane or dies.
 static std::mutex g_unitEventMutex;
 static oc::vector<GameUnitComponent::FireRequest> g_fireRequests;
 static oc::vector<GameUnitComponent::DeathRecord> g_deaths;
 static oc::vector<GameUnitComponent::SeedRequest> g_seedRequests;
+static oc::vector<GameUnitComponent::HitRecord> g_hits;
+
+void GameUnitComponent::takeHits(oc::vector<HitRecord>& out)
+{
+    const std::lock_guard<std::mutex> lock(g_unitEventMutex);
+    out.swap(g_hits);
+    g_hits.clear();
+}
 
 void GameUnitComponent::takeFireRequests(oc::vector<FireRequest>& out)
 {
@@ -81,8 +89,9 @@ void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
     moveSpeed = info.moveSpeed;
     accel = info.accel;
     attackRange = info.attackRange;
-    attackDps = info.attackDps;
-    playerDps = info.playerDps;
+    attackInterval = info.attackInterval;
+    attackDamage = info.attackDamage;
+    playerDamage = info.playerDamage;
     emitterDrain = info.emitterDrain;
     ranged = info.ranged;
     standoffRange = info.standoffRange;
@@ -98,24 +107,89 @@ void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
     // every unit of it would ask for a plan (and checkpoint its progress) on the same tick forever.
     m_seedDue = (float)Globals::time.getSimElapsedSec() + params.seedRequestInterval * unitRand01(m_rng);
     m_stuckCheckTimer = 0.75f * unitRand01(m_rng);
+    m_attackTimer = attackInterval * unitRand01(m_rng); // a batch must not swing in lockstep
     if (const PhysicsComponent::SpawnInfo* si = getPhysicsSpawnInfo(&entity))
     {
-        float r = 0.5f;
+        float r = 0.5f, top = 1.0f;
         switch (si->shape.type)
         {
-        case EPhysicsShapeType::Box:     r = glm::max(si->shape.halfExtents.x, si->shape.halfExtents.z); break;
-        case EPhysicsShapeType::Sphere:
-        case EPhysicsShapeType::Capsule: r = si->shape.radius; break;
+        case EPhysicsShapeType::Box:     r = glm::max(si->shape.halfExtents.x, si->shape.halfExtents.z); top = si->shape.halfExtents.y; break;
+        case EPhysicsShapeType::Sphere:  r = top = si->shape.radius; break;
+        case EPhysicsShapeType::Capsule: r = si->shape.radius; top = si->shape.radius + si->shape.halfHeight; break;
         default: break;
         }
         bodyRadius = r * entity.scale;
+        m_bodyTop = top * entity.scale;
     }
+    m_lastHealth = health;
+}
+
+// ---------------------------------------------------------------- the light area budgets
+// World XZ is bucketed into params.lightArea squares, each hashed to a slot row of a fixed table
+// (collisions merge two far-apart areas' budgets — harmless for a visual). Everything is relaxed
+// atomics: workers race for slots, a lost race only means no light this frame.
+namespace
+{
+    constexpr uint32 c_areaSlots = 4096;                 // power of two
+    oc::atomic<float> g_flashSlots[c_areaSlots]; // sim seconds of the area's last flash
+
+    uint32 areaSlotOf(const glm::vec3& pos)
+    {
+        const float area = glm::max(GameUnitComponent::params.lightArea, 1.0f);
+        const uint32 x = uint32(int32(glm::floor(pos.x / area)));
+        const uint32 z = uint32(int32(glm::floor(pos.z / area)));
+        uint32 n = x * 1597334673u ^ z * 3812015801u;
+        n = n * 747796405u + 2891336453u;
+        n = ((n >> ((n >> 28u) + 4u)) ^ n) * 277803737u;
+        return (n ^ (n >> 22u)) & (c_areaSlots - 1u);
+    }
+
+    // One flash per 1/hurtFlashRate seconds per area: claim the slot's time by CAS.
+    bool claimFlash(const glm::vec3& pos, float now)
+    {
+        const float rate = GameUnitComponent::params.hurtFlashRate;
+        if (rate <= 0.0f)
+            return true;
+        oc::atomic<float>& slot = g_flashSlots[areaSlotOf(pos)];
+        float last = slot.load(oc::memory_order_relaxed);
+        while (now - last >= 1.0f / rate)
+            if (slot.compare_exchange_weak(last, now, oc::memory_order_relaxed))
+                return true;
+        return false;
+    }
+
+}
+
+// The HURT LIGHT (every role): a health drop since the last tick lights the body — when the area's
+// flash budget lets it — and the glow decays after. Per-frame light record, lock-free — like
+// LightComponent's pushes.
+void GameUnitComponent::tickHurtLight(const Entity& entity, float deltaSec)
+{
+    m_hurtGlow = glm::max(m_hurtGlow - deltaSec / glm::max(params.hurtLightDecay, 1e-3f), 0.0f);
+    if (health < m_lastHealth - 1e-4f && claimFlash(entity.pos, (float)Globals::time.getSimElapsedSec()))
+        m_hurtGlow = 1.0f;
+    m_lastHealth = health;
+    if (m_hurtGlow <= 0.0f || params.hurtLightIntensity <= 0.0f || !Globals::rendererVK.isInitialized())
+        return;
+    // A wide range for the intensity: the inverse-square falloff must be near nothing where the
+    // range window cuts it, or the light reads as a hard-edged disc on the ground.
+    const glm::vec3 pos = entity.pos + glm::vec3(0.0f, m_bodyTop + 0.3f, 0.0f);
+    const float range = glm::max(bodyRadius * 8.0f, 4.0f);
+    // The ATTACKER's team colour (the force shell colours), a touch toward white; neutral red
+    // when nothing tagged the damage.
+    glm::vec3 color(1.0f, 0.35f, 0.2f);
+    if (m_hurtTeam != 0xFF)
+        color = glm::mix(Globals::forceSystem.getParams().teamColors[glm::min<uint32>(m_hurtTeam, 7u)], glm::vec3(1.0f), 0.3f);
+    Globals::rendererVK.addPointLight(PointLight(pos, range, color,
+        params.hurtLightIntensity * (0.5f + 0.5f * bodyRadius) * m_hurtGlow));
 }
 
 // ---------------------------------------------------------------- the authority tick
 
 void GameUnitComponent::update(Entity& entity, float deltaSec)
 {
+    // (The shield GLOW is the Force system's bubble light — a collapsed shield has no bubble.)
+    tickHurtLight(entity, deltaSec);
     if (Globals::networkManager.role() == ENetRole::Client)
         return; // clients mirror via the entity sync's game blob
     PhysicsComponent* pc = getComponent<PhysicsComponent>(&entity);
@@ -375,11 +449,11 @@ void GameUnitComponent::tickCombat(Tick& t)
     float engageDistSq = engageRadius * engageRadius;
     glm::vec3 engagePos(0.0f);
     bool engage = false;
-    // Unit-vs-unit melee hits ONE victim: the nearest enemy unit inside reach (players in the
-    // swarm still take the area damage from every adjacent unit).
+    // Melee hits ONE victim: the nearest enemy unit OR player capsule inside reach.
     GameUnitComponent* meleeVictim = nullptr;
     float meleeVictimDistSq = FLT_MAX;
     float meleeVictimReach = 0.0f;
+    glm::vec3 meleeVictimPos(0.0f);
     GameStructureComponent* bite = nullptr;
     GameStructureComponent* strain = nullptr;
     float biteDist = FLT_MAX, strainDist = c_strainRange;
@@ -417,28 +491,37 @@ void GameUnitComponent::tickCombat(Tick& t)
             engagePos = other->pos;
             engage = true;
         }
-        if (pu->puppet) // standing in the swarm hurts — no targeting needed
+        if (!ranged) // melee at the victim's body ring (a capsule gets a flat allowance)
         {
-            const float reach = attackRange + 0.8f; // capsule allowance
-            if (playerDps > 0.0f && glm::dot(to, to) < reach * reach)
-                pu->damage(playerDps * t.deltaSec); // atomic: banks into the puppet inbox
-        }
-        else if (!ranged) // unit-vs-unit melee at the victim's body ring
-        {
-            const float reach = attackRange + pu->bodyRadius;
+            const float reach = attackRange + (pu->puppet ? 0.8f : pu->bodyRadius);
             const float distSq = glm::dot(to, to);
             if (distSq < reach * reach && distSq < meleeVictimDistSq)
             {
                 meleeVictim = pu;
                 meleeVictimDistSq = distSq;
                 meleeVictimReach = reach;
+                meleeVictimPos = other->pos;
             }
         }
     });
+    // DISCRETE melee: the timer runs down whether or not anything is in reach (clamped at 0, so
+    // arriving at a victim swings at once), and one swing lands on ONE victim — the enemy unit or
+    // player first (attackDamage / playerDamage), else the structure — and reports the hit for
+    // the game's visual.
+    m_attackTimer = glm::max(m_attackTimer - t.deltaSec, 0.0f);
+    const bool canBite = bite && biteDist <= attackRange && t.pos.y > -2.0f && t.pos.y < 8.0f;
     if (meleeVictim)
-    {
-        meleeVictim->damage(attackDps * t.deltaSec);
         t.stopRange = glm::max(t.stopRange, meleeVictimReach); // hold at the ring
+    const float swing = meleeVictim ? (meleeVictim->puppet ? playerDamage : attackDamage) : attackDamage;
+    if (!ranged && m_attackTimer <= 0.0f && swing > 0.0f && (meleeVictim || canBite))
+    {
+        if (meleeVictim)
+            meleeVictim->damage(swing, team); // atomic: a unit's health, or the puppet's inbox
+        else
+            bite->damage(swing);        // atomic — workers bite concurrently
+        m_attackTimer = attackInterval;
+        const std::lock_guard<std::mutex> lock(g_unitEventMutex);
+        g_hits.push_back(HitRecord{ t.pos, meleeVictim ? meleeVictimPos : bitePos });
     }
     if (!engage && t.routing && bite && biteDist < engageRadius)
     {
@@ -472,11 +555,8 @@ void GameUnitComponent::tickCombat(Tick& t)
             m_fireTimer = fireInterval * (0.8f + 0.4f * unitRand01(m_rng));
         }
     }
-    else if (bite && biteDist <= attackRange && t.pos.y > -2.0f && t.pos.y < 8.0f)
-    {
-        bite->damage(attackDps * t.deltaSec); // atomic — workers bite concurrently
-        t.stopRange = attackRange + bite->meleeRadius;
-    }
+    else if (canBite)
+        t.stopRange = attackRange + bite->meleeRadius; // the swing itself landed above
     if (strain)
         strain->addLoad(emitterDrain * params.emitterDrainMult);
 }
@@ -725,7 +805,10 @@ void GameUnitComponent::tickField(Tick& t)
         // COLLAPSED gate (the player's rule): while the battery holds, pressure only DRAINS it —
         // health starts bleeding after the shield is gone, never before.
         if (collapsed && t.fc->emitter.getEquilibriumRadius() < params.damageRadius && pressure > iso)
+        {
             health = glm::max(0.0f, health - params.fieldDps * params.fieldDpsMult * t.deltaSec);
+            noteHurtTeam(opposingTeamGuess()); // the pressure readback carries no team
+        }
 
         // Push normalized by the output that PRODUCED the ~2-frame-latent readback, so a collapsed
         // shield is shoved exactly like a live one. Speed clamp rides the same queue (approximate
@@ -753,7 +836,10 @@ void GameUnitComponent::tickField(Tick& t)
     if (!fs.valid)
     {
         if (t.inEnemyBubble) // bake disabled: the stamped-radius fallback (damage only, no push)
+        {
             health = glm::max(0.0f, health - params.fieldDps * params.fieldDpsMult * t.deltaSec);
+            noteHurtTeam(opposingTeamGuess());
+        }
         return;
     }
     // GRADED exposure: the push equilibrium parks a pressing unit AT the shell surface (opposing
@@ -764,8 +850,13 @@ void GameUnitComponent::tickField(Tick& t)
     const float iso = glm::max(Globals::forceSystem.getParams().isoThreshold, 1e-3f);
     const float exposure = glm::smoothstep(0.0f, iso, fs.opposing);
     if (exposure > 0.0f)
+    {
         health = glm::max(0.0f,
             health - params.fieldDps * params.fieldDpsMult * exposure * t.deltaSec);
+        // The sample's owning team is the strongest field's — the burner, unless our own field
+        // is stronger here, in which case the opposing team is not named: guess.
+        noteHurtTeam(fs.owningTeam != team ? fs.owningTeam : opposingTeamGuess());
+    }
     // Push with the SAME chain the shielded units land on. Their force is
     // appliedForce / outputHistory = forceGain x (self-weighted mean of -grad over the unit's
     // bubble) — the 13-sample integral's mean self-weight is ~0.35 — times
@@ -794,10 +885,17 @@ void GameUnitComponent::tickField(Tick& t)
 
 // ---------------------------------------------------------------- inboxes, tint, death
 
-void GameUnitComponent::damage(float amount)
+uint32 GameUnitComponent::opposingTeamGuess() const
+{
+    const uint32 n = glm::max(Globals::forceSystem.numTeams(), 2u);
+    return (team + 1u) % n;
+}
+
+void GameUnitComponent::damage(float amount, uint32 sourceTeam)
 {
     if (amount <= 0.0f)
         return;
+    noteHurtTeam(sourceTeam);
     // EVERY victim banks into the inbox: puppets for owner routing, units so their OWN tick can
     // absorb shield-first (GamePlayer::applyDamage's rule) — the old direct health CAS bypassed
     // the shield entirely, and draining in the owner tick keeps `energy` single-writer.
@@ -1016,8 +1114,9 @@ void writeGameUnitSpawnInfo(const GameUnitComponent::SpawnInfo& info, AssetNode&
     if (info.moveSpeed != d.moveSpeed)       out.set("MoveSpeed", info.moveSpeed);
     if (info.accel != d.accel)               out.set("Accel", info.accel);
     if (info.attackRange != d.attackRange)   out.set("AttackRange", info.attackRange);
-    if (info.attackDps != d.attackDps)       out.set("AttackDps", info.attackDps);
-    if (info.playerDps != d.playerDps)       out.set("PlayerDps", info.playerDps);
+    if (info.attackInterval != d.attackInterval) out.set("AttackInterval", info.attackInterval);
+    if (info.attackDamage != d.attackDamage) out.set("AttackDamage", info.attackDamage);
+    if (info.playerDamage != d.playerDamage) out.set("PlayerDamage", info.playerDamage);
     if (info.emitterDrain != d.emitterDrain) out.set("EmitterDrain", info.emitterDrain);
     if (info.ranged != d.ranged)             out.set("Ranged", info.ranged);
     if (info.standoffRange != d.standoffRange) out.set("StandoffRange", info.standoffRange);

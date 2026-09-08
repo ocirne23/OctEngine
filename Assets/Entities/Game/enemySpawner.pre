@@ -31,8 +31,9 @@ Prefab gameEnemySpawner
 		EnergyMax 100
 		ShieldOutput 1.0
 		MoveSpeed 2.2
-		AttackDps 0
-		PlayerDps 0
+		AttackInterval 1.0
+		AttackDamage 0
+		PlayerDamage 0
 		EmitterDrain 4
 		Ranged true
 		StandoffRange 18
