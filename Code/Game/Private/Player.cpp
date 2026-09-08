@@ -27,19 +27,19 @@ void GamePlayer::registerTweaks()
     Tweak::floatVar("Game/Player", "Sprint energy/s", &m_sprintEnergyPerSec, 0.0f, 50.0f, 0.5f);
     Tweak::floatVar("Game/Player", "Health max", &m_healthMax, 10.0f, 1000.0f, 1.0f);
     Tweak::floatVar("Game/Player", "Health drain/s", &m_healthDrainRate, 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Shield", "Max output", &m_shieldMaxOutput, 0.2f, 5.0f, 0.05f);
-    Tweak::floatVar("Game/Shield", "Energy max", &m_energyMax, 1.0f, 1000.0f, 1.0f);
-    Tweak::floatVar("Game/Shield", "Energy regen/s", &m_energyRegenRate, 0.0f, 100.0f, 0.5f);
-    Tweak::floatVar("Game/Shield", "Energy drain/s @ pressure 1", &m_energyDrainRate, 0.0f, 200.0f, 0.5f);
-    Tweak::floatVar("Game/Shield", "Reboot energy", &m_rebootEnergy, 0.0f, 1000.0f, 1.0f);
-    Tweak::floatVar("Game/Shield", "Damage absorb (energy per hp)", &m_damageAbsorb, 0.0f, 20.0f, 0.1f);
-    Tweak::floatVar("Game/Shield", "Cover drain reduction", &m_coverDrainReduction, 0.0f, 5.0f, 0.05f);
+    Tweak::floatVar("Game/Player", "Max output", &m_shieldMaxOutput, 0.2f, 5.0f, 0.05f);
+    Tweak::floatVar("Game/Player", "Energy max", &m_energyMax, 1.0f, 1000.0f, 1.0f);
+    Tweak::floatVar("Game/Player", "Energy regen/s", &m_energyRegenRate, 0.0f, 100.0f, 0.5f);
+    Tweak::floatVar("Game/Player", "Energy drain/s @ pressure 1", &m_energyDrainRate, 0.0f, 200.0f, 0.5f);
+    Tweak::floatVar("Game/Player", "Reboot energy", &m_rebootEnergy, 0.0f, 1000.0f, 1.0f);
+    Tweak::floatVar("Game/Player", "Damage absorb (energy per hp)", &m_damageAbsorb, 0.0f, 20.0f, 0.1f);
+    Tweak::floatVar("Game/Player", "Cover drain reduction", &m_coverDrainReduction, 0.0f, 5.0f, 0.05f);
     Tweak::floatVar("Game/Player", "Spawn grace (s)", &m_spawnGraceSec, 0.0f, 10.0f, 0.1f);
     Tweak::floatVar("Game/Player", "Materials max", &m_materialsMax, 5.0f, 500.0f, 1.0f);
     Tweak::floatVar("Game/Player", "Move arrive radius", &m_arriveRadius, 0.1f, 5.0f, 0.05f);
-    Tweak::floatVar("Game/Shield", "Damage radius", &m_damageRadius, 0.0f, 3.0f, 0.05f);
-    Tweak::floatVar("Game/Shield", "Push gain", &m_shieldPushGain, 0.0f, 100000.0f, 100.0f);
-    Tweak::floatVar("Game/Shield", "Surface tension", &m_shieldTension, 0.0f, 10.0f, 0.05f);
+    Tweak::floatVar("Game/Player", "Damage radius", &m_damageRadius, 0.0f, 3.0f, 0.05f);
+    Tweak::floatVar("Game/Player", "Push gain", &m_shieldPushGain, 0.0f, 100000.0f, 100.0f);
+    Tweak::floatVar("Game/Player", "Surface tension", &m_shieldTension, 0.0f, 10.0f, 0.05f);
 }
 
 void GamePlayer::spawn(const glm::vec3& pos)

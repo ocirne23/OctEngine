@@ -154,7 +154,16 @@ namespace
 		}
 	};
 
-	void renderCategory(CategoryNode& node, int depth, oc::string_view parentPath, oc::vector<const TweakVar*>& deferredCallbacks)
+	// Header/TreeNode background from the owning group's colour: full strength for the group fold
+	// (depth 0), a dimmer tint for the category fold (depth 1); deeper nodes stay unframed.
+	void pushFoldColors(const glm::vec4& color, float alpha)
+	{
+		ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(color.x, color.y, color.z, alpha));
+		ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(color.x, color.y, color.z, glm::min(1.0f, alpha + 0.15f)));
+		ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(color.x, color.y, color.z, glm::min(1.0f, alpha + 0.3f)));
+	}
+
+	void renderCategory(CategoryNode& node, int depth, oc::string_view parentPath, const glm::vec4& groupColor, oc::vector<const TweakVar*>& deferredCallbacks)
 	{
 		// Visible text is node.name; everything after "##" is the (hidden) ImGui ID.
 		// Use the full category path as the ID so categories that share a display
@@ -169,7 +178,17 @@ namespace
 
 		bool open;
 		if (depth == 0)
+		{
+			pushFoldColors(groupColor, 0.55f);
 			open = ImGui::CollapsingHeader(label.c_str());
+			ImGui::PopStyleColor(3);
+		}
+		else if (depth == 1)
+		{
+			pushFoldColors(groupColor, 0.25f);
+			open = ImGui::TreeNodeEx(label.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_Framed);
+			ImGui::PopStyleColor(3);
+		}
 		else
 			open = ImGui::TreeNodeEx(label.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth);
 
@@ -179,11 +198,27 @@ namespace
 				drawTweakVar(TweakRegistry::get().vars()[i], i, deferredCallbacks);
 
 			for (CategoryNode& child : node.children)
-				renderCategory(child, depth + 1, path, deferredCallbacks);
+				renderCategory(child, depth + 1, path, groupColor, deferredCallbacks);
 
 			if (depth != 0)
 				ImGui::TreePop();
 		}
+	}
+
+	// Root categories in the group table's order; roots the table does not list come after, in
+	// registration order (they all sit in the fallback group, so only that group ever has them).
+	void sortRootCategories(CategoryNode& group, oc::span<const oc::string_view> order)
+	{
+		size_t next = 0;
+		for (const oc::string_view name : order)
+			for (size_t i = next; i < group.children.size(); ++i)
+				if (group.children[i].name == name)
+				{
+					if (i != next)
+						oc::swap(group.children[i], group.children[next]);
+					++next;
+					break;
+				}
 	}
 }
 
@@ -196,12 +231,17 @@ void TweakPanel::render()
 		return;
 	}
 
-	CategoryNode root;
+	// One node per group (Tweak::groups() order), the root categories beneath it.
+	const oc::span<const TweakGroup> groups = Tweak::groups();
+	oc::vector<CategoryNode> groupNodes(groups.size());
+	for (size_t g = 0; g < groups.size(); ++g)
+		groupNodes[g].name = groups[g].name;
+
 	for (int i = 0; i < static_cast<int>(vars.size()); ++i)
 	{
 		oc::string_view cat = vars[i].category.empty() ? oc::string_view("General") : vars[i].category;
 
-		CategoryNode* node = &root;
+		CategoryNode* node = &groupNodes[Tweak::groupIndexOf(cat)];
 		size_t start = 0;
 		while (start <= cat.size())
 		{
@@ -217,8 +257,14 @@ void TweakPanel::render()
 		node->varIndices.push_back(i);
 	}
 
-	for (CategoryNode& child : root.children)
-		renderCategory(child, 0, {}, m_deferredCallbacks);
+	for (size_t g = 0; g < groups.size(); ++g)
+	{
+		CategoryNode& group = groupNodes[g];
+		if (group.children.empty())
+			continue; // nothing registered under it (Game/* before a match, the fallback group)
+		sortRootCategories(group, groups[g].categories);
+		renderCategory(group, 0, {}, groups[g].color, m_deferredCallbacks);
+	}
 }
 
 void TweakPanel::flushDeferredCallbacks()

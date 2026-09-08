@@ -641,7 +641,7 @@ renderer state.** It fires, for each side:
 A **LIST** of lights. `Component Light` with `Light Point/Spot/Area/Tube` children: `Color` /
 `Intensity` / `Range`, entity-space `Offset` / `Direction`, `Enabled`, plus `ConeAngle` /
 `EdgeSoftness` (Spot), `Width` / `Height` / `Rotation` (Area), `Radius` / `Length` (Tube). Component
-`Debug true` plus the "Lights/Debug geometry" tweak draw wireframes. Demo:
+`Debug true` plus the "Editor/Light debug geometry" tweak draw wireframes. Demo:
 `Entities/Debug/lightRig.pre`.
 
 **Lights are PER-FRAME RECORDS**: `update` calls `renderer.addLightInfo` per enabled light (lock-free,
@@ -700,7 +700,7 @@ every instance, **so replicated units need no type on the wire**), then `Team`, 
 > **HEIGHT LIMIT.** The physics can launch a body (bubble shoves, stacked bodies, contact impulses),
 > so every actor is held under a world-Y ceiling: above it the body is teleported back AT the ceiling
 > with its climb cancelled — vy clamped ≤ 0, planar velocity kept, per the teleport contract.
-> Shared default `Game/Actors/Height limit (m)` = 10; per prefab **0 = shared, > 0 = own ceiling,
+> Shared default `Game/Nav/Height limit (m)` = 10; per prefab **0 = shared, > 0 = own ceiling,
 > < 0 = NONE** (the hook for flying units). Applied at the top of `GameUnitComponent::update`
 > **BEFORE the puppet gate**, so the server's twins of client capsules are held too, and owner-side in
 > `GamePlayer::tickShieldAndHealth` — both land at the same height, so the owner's next claim

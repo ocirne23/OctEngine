@@ -942,7 +942,7 @@ drain range" — 20 m, the Bastion's visible bubble radius at reach 45 / output 
 to the STRUCTURE, shield state irrelevant; spitter shots deposit too, within their own
 `EmitterDrainRadius`).
 
-**World labels are CULLED before they are built** ("Game/HUD" `Label max distance`, 120 m, not
+**World labels are CULLED before they are built** ("HUD" `Label max distance`, 120 m, not
 Synced, **measured from the PLAYER entity** — the camera only when there is none): units come from
 a frustum query bounded by that distance plus the camera-to-player distance and then test the exact
 player distance, structures test it against the anchor (the selected one is exempt), and both drop
@@ -1165,7 +1165,7 @@ bar without regrowing the bubble.
   from the CPU pressure bake (`bakedReadback` / `sampleBakedField`) — the player holds no GPU
   query slot.
 * **SURFACE TENSION**: push AND drain scale by `(1 + tension × pressure)` on BOTH sides
-  ("Game/Shield/Surface tension", "Game/Enemies/Push tension", "Game/Structures/Pressure draw
+  ("Game/Player/Surface tension", "Game/Enemies/Push tension", "Game/Structures/Pressure draw
   tension") — **leaning deep into a bubble stiffens superlinearly and burns both batteries.**
 * "Cover drain reduction" cuts the drain by the FRIENDLY field surplus over the own output — standing
   inside a team emitter's bubble.

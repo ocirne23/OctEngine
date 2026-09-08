@@ -104,28 +104,28 @@ void NpcSystem::registerTweaks()
     Tweak::boolean("Game/Enemies", "Nav fields", &up.navEnabled);
     // Shared by units AND player capsules (GamePlayer reads the same param); a prefab's
     // `HeightLimit` overrides it (< 0 = no ceiling, for flying units).
-    Tweak::floatVar("Game/Actors", "Height limit (m)", &up.heightLimit, 1.0f, 200.0f, 0.5f);
-    Tweak::floatVar("Game/Enemies/Steer", "Goal", &up.steerGoal, 0.0f, 3.0f, 0.05f);
-    Tweak::floatVar("Game/Enemies/Steer", "Flow", &up.steerFlow, 0.0f, 3.0f, 0.05f);
-    Tweak::floatVar("Game/Enemies/Steer", "Flow splat gain", &up.flowSplatGain, 0.0f, 5.0f, 0.05f);
-    Tweak::floatVar("Game/Enemies/Steer", "Persist", &up.steerPersist, 0.0f, 3.0f, 0.05f);
-    Tweak::floatVar("Game/Enemies/Steer", "Track goal", &up.steerTrackGoal, 0.0f, 3.0f, 0.05f);
-    Tweak::floatVar("Game/Enemies/Steer", "Track flow mult", &up.trackFlowMult, 0.0f, 1.0f, 0.05f);
-    Tweak::floatVar("Game/Enemies/Steer", "Pressure", &up.steerPressure, 0.0f, 3.0f, 0.05f);
-    Tweak::floatVar("Game/Enemies/Steer", "Pressure knee", &up.pressureKnee, 0.01f, 3.0f, 0.01f);
-    Tweak::floatVar("Game/Enemies/Steer", "Flow knee", &up.flowKnee, 0.01f, 2.0f, 0.01f);
-    Tweak::floatVar("Game/Enemies/Steer", "Presence pressure", &up.presencePressure, 0.0f, 1.0f, 0.005f);
-    Tweak::floatVar("Game/Enemies/Steer", "Look-ahead", &up.steerLook, 2.0f, 30.0f, 0.5f);
-    Tweak::floatVar("Game/Enemies/Steer", "Wall push", &up.steerWall, 0.0f, 3.0f, 0.05f);
-    Tweak::floatVar("Game/Enemies/Steer", "Wall keep (m)", &up.wallKeep, 0.0f, 3.0f, 0.05f);
-    Tweak::floatVar("Game/Enemies/Steer", "Corner clip penalty", &up.steerCornerClip, 0.0f, 3.0f, 0.05f);
-    Tweak::floatVar("Game/Enemies/Steer", "Stuck pressure", &up.stuckPressure, 0.0f, 10.0f, 0.1f);
-    Tweak::floatVar("Game/Enemies/Steer", "Unstick after (s)", &up.unstickAfter, 0.5f, 10.0f, 0.1f);
-    Tweak::floatVar("Game/Enemies/Steer", "Seed request interval (s)", &up.seedRequestInterval, 0.5f, 30.0f, 0.5f);
-    Tweak::floatVar("Game/Enemies/Steer", "Order lane speed", &m_orderLaneSpeed, 0.0f, 20.0f, 0.5f);
-    Tweak::floatVar("Game/Enemies/Steer", "Stuck lane speed", &m_stuckLaneSpeed, 0.0f, 20.0f, 0.5f);
-    Tweak::floatVar("Game/Enemies/Steer", "Lane width (m)", &m_laneWidth, 0.0f, 12.0f, 0.5f);
-    Tweak::floatVar("Game/Enemies/Steer", "Order flow blind (s)", &up.orderFlowBlind, 0.0f, 10.0f, 0.1f);
+    Tweak::floatVar("Game/Nav", "Height limit (m)", &up.heightLimit, 1.0f, 200.0f, 0.5f);
+    Tweak::floatVar("Game/Nav", "Goal", &up.steerGoal, 0.0f, 3.0f, 0.05f);
+    Tweak::floatVar("Game/Nav", "Flow", &up.steerFlow, 0.0f, 3.0f, 0.05f);
+    Tweak::floatVar("Game/Nav", "Flow splat gain", &up.flowSplatGain, 0.0f, 5.0f, 0.05f);
+    Tweak::floatVar("Game/Nav", "Persist", &up.steerPersist, 0.0f, 3.0f, 0.05f);
+    Tweak::floatVar("Game/Nav", "Track goal", &up.steerTrackGoal, 0.0f, 3.0f, 0.05f);
+    Tweak::floatVar("Game/Nav", "Track flow mult", &up.trackFlowMult, 0.0f, 1.0f, 0.05f);
+    Tweak::floatVar("Game/Nav", "Pressure", &up.steerPressure, 0.0f, 3.0f, 0.05f);
+    Tweak::floatVar("Game/Nav", "Pressure knee", &up.pressureKnee, 0.01f, 3.0f, 0.01f);
+    Tweak::floatVar("Game/Nav", "Flow knee", &up.flowKnee, 0.01f, 2.0f, 0.01f);
+    Tweak::floatVar("Game/Nav", "Presence pressure", &up.presencePressure, 0.0f, 1.0f, 0.005f);
+    Tweak::floatVar("Game/Nav", "Look-ahead", &up.steerLook, 2.0f, 30.0f, 0.5f);
+    Tweak::floatVar("Game/Nav", "Wall push", &up.steerWall, 0.0f, 3.0f, 0.05f);
+    Tweak::floatVar("Game/Nav", "Wall keep (m)", &up.wallKeep, 0.0f, 3.0f, 0.05f);
+    Tweak::floatVar("Game/Nav", "Corner clip penalty", &up.steerCornerClip, 0.0f, 3.0f, 0.05f);
+    Tweak::floatVar("Game/Nav", "Stuck pressure", &up.stuckPressure, 0.0f, 10.0f, 0.1f);
+    Tweak::floatVar("Game/Nav", "Unstick after (s)", &up.unstickAfter, 0.5f, 10.0f, 0.1f);
+    Tweak::floatVar("Game/Nav", "Seed request interval (s)", &up.seedRequestInterval, 0.5f, 30.0f, 0.5f);
+    Tweak::floatVar("Game/Nav", "Order lane speed", &m_orderLaneSpeed, 0.0f, 20.0f, 0.5f);
+    Tweak::floatVar("Game/Nav", "Stuck lane speed", &m_stuckLaneSpeed, 0.0f, 20.0f, 0.5f);
+    Tweak::floatVar("Game/Nav", "Lane width (m)", &m_laneWidth, 0.0f, 12.0f, 0.5f);
+    Tweak::floatVar("Game/Nav", "Order flow blind (s)", &up.orderFlowBlind, 0.0f, 10.0f, 0.1f);
     // Shot speeds, applied when the fire queues are serviced here (the rest of the production
     // tuning registers from StructureSystem onto the component params).
     Tweak::floatVar("Game/Friendlies", "Turret beam lifetime", &m_beamLifetime, 0.02f, 2.0f, 0.01f);

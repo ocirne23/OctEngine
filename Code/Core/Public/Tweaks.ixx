@@ -36,6 +36,51 @@ export enum class ETweakFlags : uint8
 export constexpr ETweakFlags operator|(ETweakFlags a, ETweakFlags b) { return ETweakFlags(uint8(a) | uint8(b)); }
 export constexpr bool anyFlag(ETweakFlags a, ETweakFlags b) { return (uint8(a) & uint8(b)) != 0; }
 
+// The panel's top-level folds. A category's ROOT segment ("Sky" of "Sky/Clouds") maps to one group
+// through this table; the group is presentation only and is NOT part of the "Category/Name"
+// identity, so grouping a category never orphans its saved value. Panel order = table order (groups,
+// then the categories inside a group). A root missing from every group lands in the last entry.
+export struct TweakGroup
+{
+	oc::string_view name;
+	glm::vec4       color;      // header tint
+	oc::span<const oc::string_view> categories; // root category names, in display order
+};
+
+namespace TweakGroups
+{
+	constexpr oc::string_view c_graphics[] = { "Sky", "Shadows", "Fog", "RT", "RTAO", "TAA", "Post", "LOD" };
+	constexpr oc::string_view c_fx[]       = { "Particles", "Decals", "Force", "Ocean", "Terrain", "Scatter" };
+	constexpr oc::string_view c_system[]   = { "Time", "Editor", "Audio", "Physics", "Mesh Streaming", "Texture Streaming", "Spatial", "Threading" };
+	constexpr oc::string_view c_game[]     = { "Game", "HUD", "Network", "Nav" };
+
+	inline const TweakGroup c_table[] = {
+		{ "Graphics", glm::vec4(0.26f, 0.48f, 0.85f, 1.0f), c_graphics },
+		{ "FX",       glm::vec4(0.80f, 0.42f, 0.20f, 1.0f), c_fx },
+		{ "System",   glm::vec4(0.45f, 0.55f, 0.60f, 1.0f), c_system },
+		{ "Game",     glm::vec4(0.30f, 0.65f, 0.35f, 1.0f), c_game },
+		{ "Other",    glm::vec4(0.50f, 0.50f, 0.50f, 1.0f), {} }, // fallback: every root not listed above
+	};
+}
+
+export namespace Tweak
+{
+	inline oc::span<const TweakGroup> groups() { return TweakGroups::c_table; }
+
+	// Index into groups() for a category path; the last group when its root is unlisted.
+	inline size_t groupIndexOf(oc::string_view category)
+	{
+		const size_t slash = category.find('/');
+		const oc::string_view root = slash == oc::string_view::npos ? category : category.substr(0, slash);
+		const size_t count = sizeof(TweakGroups::c_table) / sizeof(TweakGroups::c_table[0]);
+		for (size_t g = 0; g + 1 < count; ++g)
+			for (const oc::string_view name : TweakGroups::c_table[g].categories)
+				if (name == root)
+					return g;
+		return count - 1;
+	}
+}
+
 export struct TweakVar
 {
 	oc::string_view name;

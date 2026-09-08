@@ -167,7 +167,8 @@ spot.
 | **Text Editor** | Plain text. |
 | **Log** (`OutputLog`) | `Core.Log` view with filters and search. |
 | **Entity Editor** | Authors a `.pre` document. See below. |
-| **Tweaks**, **Stats** (`ui.setRenderStats`), **Profiler**, **Memory** | |
+| **Tweaks** (`TweakPanel`) | The registry as a tree: one coloured `CollapsingHeader` per **group** (`Tweak::groups()` in Core.Tweaks — Graphics / FX / System / Game, plus the "Other" fallback), a tinted framed node per root category, plain nodes below. Groups are presentation only; the root-category → group table lives in Core. |
+| **Stats** (`ui.setRenderStats`), **Profiler**, **Memory** | |
 
 The docked set lives inside a `"Root"` window with a dockspace; `"Viewport"` uses
 `ImGuiWindowFlags_NoBackground` so the 3D render shows through.

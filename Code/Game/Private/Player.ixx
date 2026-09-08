@@ -110,7 +110,7 @@ private:
     float m_graceTimer = 0.0f;      // seconds of post-spawn drain immunity (stale readbacks)
     bool m_shieldCollapsed = false; // latched at empty battery, cleared at "Reboot energy"
 
-    // Tweaks ("Game/Player", "Game/Shield")
+    // Tweaks ("Game/Player" — movement, health, and the shield battery)
     float m_moveSpeed = 4.0f;
     float m_accel = 30.0f; // deliberately soft: steering force must lose against bubble push
     float m_jumpSpeed = 6.0f;

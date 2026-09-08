@@ -493,7 +493,7 @@ radius the unit marches lane-friendly toward the target.
 | Seed range | 20 m |
 | Debug draw / team / radius / flow min | 0 / 0 / 60 m / 0.1 m/s |
 
-### `Game/Enemies/Steer` (defaults from [GameUnitComponent.ixx](../Entity/Private/Components/Game/GameUnitComponent.ixx))
+### `Game/Nav` steering (defaults from [GameUnitComponent.ixx](../Entity/Private/Components/Game/GameUnitComponent.ixx))
 
 | Tweak | Default | | Tweak | Default |
 |---|---|---|---|---|

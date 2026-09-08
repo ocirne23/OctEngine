@@ -67,7 +67,7 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
         Tweak::floatVar("Game/Coop", "Ambient wander distance", &m_ambientWanderDistance, 2.0f, 60.0f, 1.0f);
         Tweak::floatVar("Game/Coop", "Ambient wander base bias", &m_ambientWanderBaseBias, 0.0f, 2.0f, 0.05f);
         Tweak::floatVar("Game/Coop", "Ambient wander timeout (s)", &m_ambientWanderTimeout, 1.0f, 60.0f, 1.0f);
-        Tweak::floatVar("Game/HUD", "Label max distance", &m_labelMaxDistance, 10.0f, 2000.0f, 10.0f, {}, ETweakFlags::None);
+        Tweak::floatVar("HUD", "Label max distance", &m_labelMaxDistance, 10.0f, 2000.0f, 10.0f, {}, ETweakFlags::None);
         Tweak::floatVar("Game/Nav", "Nav unit source reach", &m_navUnitSourceReach, 8.0f, 400.0f, 4.0f);
         Tweak::floatVar("Game/Sim LOD", "Unit cluster focus radius", &m_focusClusterRadius, 5.0f, 200.0f, 1.0f, {}, ETweakFlags::None);
         Tweak::intVar("Game/Coop", "Spawns per frame", &m_spawnsPerFrame, 1, 200, 1);
@@ -85,7 +85,7 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
         Tweak::floatVar("Game/Player", "Base heal/s", &m_baseHealRate, 0.0f, 100.0f, 0.5f);
         Tweak::floatVar("Game/Player", "Melee damage/s", &m_meleeDps, 0.0f, 200.0f, 0.5f);
         Tweak::floatVar("Game/Player", "Melee radius", &m_meleeRadius, 0.0f, 12.0f, 0.25f);
-        Tweak::floatVar("Game/Enemies/Steer", "Group cluster radius", &m_selectionClusterRadius, 2.0f, 60.0f, 0.5f);
+        Tweak::floatVar("Game/Nav", "Group cluster radius", &m_selectionClusterRadius, 2.0f, 60.0f, 0.5f);
     }
     m_camera.registerTweaks();
     m_player.registerTweaks();

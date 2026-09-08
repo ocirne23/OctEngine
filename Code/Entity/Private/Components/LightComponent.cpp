@@ -11,7 +11,7 @@ import RendererVK;
 static bool s_debugDrawAllLights = false;
 static const struct LightTweaks
 {
-    LightTweaks() { Tweak::boolean("Lights", "Debug geometry", &s_debugDrawAllLights); }
+    LightTweaks() { Tweak::boolean("Editor", "Light debug geometry", &s_debugDrawAllLights); }
 } s_lightTweaks; // TweakRegistry is a function-local static, so registering during static init is safe
 
 const char* lightTypeToken(ELightType type)

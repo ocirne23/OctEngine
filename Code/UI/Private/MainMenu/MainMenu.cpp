@@ -24,11 +24,11 @@ namespace
 	};
 
 	constexpr oc::string_view c_displayCats[]  = { "Time", "HUD", "Post" };
-	constexpr oc::string_view c_graphicsCats[] = { "TAA", "Shadows", "RT", "RTAO", "GI", "Lights", "LOD",
+	constexpr oc::string_view c_graphicsCats[] = { "TAA", "Shadows", "RT", "RTAO", "GI", "LOD",
 		"Fog", "Decals", "Particles", "Sky", "Force/Shell", "Texture Streaming", "Mesh Streaming" };
 	constexpr oc::string_view c_worldCats[]    = { "Terrain", "Ocean", "Scatter" };
 	constexpr oc::string_view c_audioCats[]    = { "Audio" };
-	constexpr oc::string_view c_gameplayCats[] = { "Game", "Player" };
+	constexpr oc::string_view c_gameplayCats[] = { "Game" };
 
 	constexpr SettingsSection c_sections[] = {
 		{ "Display",  c_displayCats,  sizeof(c_displayCats) / sizeof(c_displayCats[0]) },

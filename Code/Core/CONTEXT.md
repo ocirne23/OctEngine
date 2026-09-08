@@ -230,6 +230,14 @@ must outlive the registration.** This is the standard way to make anything runti
 
 **Identity is `"Category/Name"` — renaming orphans the saved value.**
 
+## Groups
+
+The panel's top folds are **groups**, NOT part of the category string: `TweakGroups::c_table` in
+Tweaks.ixx maps each ROOT category ("Sky" of "Sky/Clouds") to a group with a header colour —
+Graphics / FX / System / Game — and a root listed nowhere lands in the trailing "Other" group.
+`Tweak::groups()` / `Tweak::groupIndexOf(category)` are the lookups the TweakPanel uses. **A new
+root category goes into that table**, otherwise it shows under "Other". Panel order = table order.
+
 ## `ETweakFlags`
 
 Optional last parameter after `onChange`, or `Tweak::ScopedFlags` RAII to flag a whole

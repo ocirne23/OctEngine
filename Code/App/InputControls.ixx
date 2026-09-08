@@ -67,9 +67,9 @@ private:
     // keeps its meaning of driving the locally-owned entity instead (see updatePlayerControl).
     EntityPtr playerEntity;
     bool playerThirdPerson = true;   // start visible; V toggles
-    float playerEyeHeight = 0.55f;   // metres above the capsule center
-    float playerThirdDistance = 3.5f;
-    float playerSprintMult = 2.0f;   // LShift multiplier on Move speed
+    static constexpr float playerEyeHeight = 0.55f;   // metres above the capsule center
+    static constexpr float playerThirdDistance = 3.5f;
+    static constexpr float playerSprintMult = 2.0f;   // LShift multiplier on Move speed
 
     oc::shared_ptr<EntitySpawnTemplate> lightTmpl; // built once, see lightTemplate()
 
@@ -125,10 +125,6 @@ public:
 		Tweak::floatVar("Network/Player", "Move speed", &playerMoveSpeed, 0.5f, 30.0f, 0.1f);
 		Tweak::floatVar("Network/Player", "Accel", &playerAccel, 1.0f, 200.0f, 0.5f);
 		Tweak::floatVar("Network/Player", "Jump speed", &playerJumpSpeed, 0.5f, 20.0f, 0.1f);
-
-		Tweak::floatVar("Player", "Eye height", &playerEyeHeight, 0.0f, 2.0f, 0.05f);
-		Tweak::floatVar("Player", "Third person dist", &playerThirdDistance, 0.5f, 10.0f, 0.1f);
-		Tweak::floatVar("Player", "Sprint mult", &playerSprintMult, 1.0f, 5.0f, 0.1f);
 
         auto& input = Globals::input;
         pKeyboardListener = input.addKeyboardListener();
