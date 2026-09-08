@@ -64,12 +64,38 @@ void PhysicsComponent::park(bool disable)
         disable ? PhysicsWorld::EBodyCommand::SetEnabled : PhysicsWorld::EBodyCommand::SetAwake, glm::vec3(0.0f));
 }
 
-void PhysicsComponent::unpark()
+void PhysicsComponent::unpark(Entity& entity, const glm::vec3& velocity)
 {
     if (!body.isValid() || suspended)
         return;
-    Globals::physics.queueBodyCommand(body, PhysicsWorld::EBodyCommand::SetLinearVelocity, glm::vec3(0.0f));
+    Globals::physics.queueBodyCommand(body, PhysicsWorld::EBodyCommand::SetLinearVelocity, velocity);
     Globals::physics.queueBodyCommand(body, PhysicsWorld::EBodyCommand::SetAngularVelocity, glm::vec3(0.0f));
+    // OVERLAP LIFT: a far-ticked body teleports through everything, so it may wake inside another
+    // dynamic body (the slowed front of a wave at the SIM LOD edge). If any live dynamic body
+    // stands within a metre, lift this one 2 m so it lands on top instead of the solver blasting
+    // the two apart. A body woken earlier in the same pass counts too (its schedTier already left
+    // 3 — a racy byte read, so of two bodies waking together at least one sees the other).
+    if (bodyType == EPhysicsBodyType::Dynamic)
+    {
+        const glm::vec3 pos = body.getPosition();
+        bool occupied = false;
+        Globals::spatialIndex.forEachInSphere(glm::dvec3(pos), 1.0f, SpatialLayer_Entity, [&](uint64 user)
+        {
+            Entity* other = reinterpret_cast<Entity*>(user);
+            const PhysicsComponent* opc = other != &entity ? getComponent<PhysicsComponent>(other) : nullptr;
+            occupied |= opc && opc->bodyType == EPhysicsBodyType::Dynamic && opc->body.isValid() && !opc->suspended
+                && (opc->body.isEnabled() || other->schedTier != 3)
+                && glm::distance(opc->body.getPosition(), pos) < 1.0f;
+        });
+        if (occupied)
+        {
+            // Teleport contract: body pose + prev/curr stomp + step claim.
+            const glm::vec3 lifted = pos + glm::vec3(0.0f, 2.0f, 0.0f);
+            Globals::physics.teleportBody(body, lifted, body.getRotation());
+            prevPos = currPos = lifted;
+            lastStep = Globals::physics.getStepCount();
+        }
+    }
     Globals::physics.queueBodyCommand(body, PhysicsWorld::EBodyCommand::SetEnabled, glm::vec3(1.0f));
 }
 

@@ -62,6 +62,8 @@ bool PhysicsWorld::initialize()
     }
     m_worldHandle = oc::bitCast<uint32>(world);
     m_initialized = true;
+    m_contactHertz = def.contactHertz;
+    applyContactTuning(); // our damping + push-out speed cap, hertz as box3d ships it
 
     PhysicsBodyDesc staticDesc;
     staticDesc.type = EPhysicsBodyType::Static;
@@ -77,6 +79,9 @@ bool PhysicsWorld::initialize()
     // is also the A/B toggle for measuring what the fan-out actually buys on a given scene.
     Tweak::intVar("Physics/World", "Worker count", &m_workerCount, 1, B3_MAX_WORKERS, 1.0f,
         [this] { b3World_SetWorkerCount(oc::bitCast<b3WorldId>(m_worldHandle), m_workerCount); });
+    Tweak::floatVar("Physics/World", "Contact hertz", &m_contactHertz, 5.0f, 240.0f, 1.0f, [this] { applyContactTuning(); });
+    Tweak::floatVar("Physics/World", "Contact damping", &m_contactDamping, 0.0f, 50.0f, 0.5f, [this] { applyContactTuning(); });
+    Tweak::floatVar("Physics/World", "Contact push speed (m/s)", &m_contactSpeed, 0.1f, 20.0f, 0.1f, [this] { applyContactTuning(); });
 
     Tweak::floatVar("Physics/Buoyancy", "Density (kg/m3)", &m_waterDensity, 0.0f, 3000.0f, 10.0f);
     Tweak::floatVar("Physics/Buoyancy", "Linear drag", &m_waterLinearDrag, 0.0f, 20.0f, 0.1f);
@@ -892,6 +897,12 @@ void PhysicsWorld::debugDraw(const glm::vec3& viewPos, const DebugLineFn& line)
     draw.context = &ctx;
 
     b3World_Draw(oc::bitCast<b3WorldId>(m_worldHandle), &draw, PhysicsLayers::All);
+}
+
+void PhysicsWorld::applyContactTuning()
+{
+    if (m_initialized)
+        b3World_SetContactTuning(oc::bitCast<b3WorldId>(m_worldHandle), m_contactHertz, m_contactDamping, m_contactSpeed);
 }
 
 void PhysicsWorld::setGravity(const glm::vec3& gravity)

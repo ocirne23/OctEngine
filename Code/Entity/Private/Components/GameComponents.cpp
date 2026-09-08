@@ -854,61 +854,24 @@ void GameUnitComponent::kill(Entity& entity)
     }
 }
 
-bool GameUnitComponent::updateFar(Entity& entity, float deltaSec)
+bool GameUnitComponent::farHeading(const Entity& entity, glm::vec2& dir, float& speed, float& dist, bool spread)
 {
-    if (!isAuthority() || puppet || !alive() || deltaSec <= 0.0f)
-        return false;
-    if (entity.pos.y < params.voidY) // through the floor while unselected: the full sim never
-    {                                // visits it, so the far tick has to do the killing
-        kill(entity);
-        return false;
-    }
-    PhysicsComponent* pc = getComponent<PhysicsComponent>(&entity);
-    if (!pc || !pc->body.isValid())
-        return false;
-    // The ENTITY position is the far truth: the pass never visits this unit, so nothing else
-    // writes it, and the body (disabled) is teleported to match below.
-    const glm::vec3 pos = entity.pos;
-    const glm::vec2 here(pos.x, pos.z);
-
-    // Where to: the route first, then the locked move order. Same arrival rule as update().
+    // Where to: the route first, then the locked move order. Nothing else moves a far unit.
     glm::vec3 target;
     if (routeIndex < routeCount)
-    {
-        if (glm::distance(here, glm::vec2(route[routeIndex].x, route[routeIndex].z)) < params.waypointRadius)
-            ++routeIndex;
-        if (routeIndex >= routeCount)
-            return false;
         target = route[routeIndex];
-    }
     else if (targetLocked && moveOrder)
-    {
-        if (wanderOrder) // a stroll times out here too — the full sim's clock never runs while far
-        {
-            wanderTimeLeft -= deltaSec;
-            if (wanderTimeLeft <= 0.0f)
-            {
-                targetLocked = moveOrder = false;
-                return false;
-            }
-        }
-        if (glm::distance(here, glm::vec2(targetPos.x, targetPos.z)) < params.waypointRadius)
-        {
-            targetLocked = moveOrder = false; // arrived: the AI resumes when the unit is selected again
-            return false;
-        }
         target = targetPos;
-    }
     else
         return false;
-
+    const glm::vec2 here(entity.pos.x, entity.pos.z);
     // Direction: straight where the raster shows a clear line to the target, else the enemy team
     // field's descent (geodesic, routes around rocks) — the order points at enemy ground anyway.
     const glm::vec2 toTarget(target.x - here.x, target.z - here.y);
-    const float dist = glm::length(toTarget);
+    dist = glm::length(toTarget);
     if (dist < 1e-3f)
         return false;
-    glm::vec2 dir = toTarget / dist;
+    dir = toTarget / dist;
     const Nav::TeamField* raster = Globals::navSystem.isEnabled() ? Globals::navSystem.raster() : nullptr;
     if (raster && !raster->lineOfSight(here, glm::vec2(target.x, target.z), bodyRadius) && Globals::navSystem.anyFieldPublished())
     {
@@ -927,12 +890,81 @@ bool GameUnitComponent::updateFar(Entity& entity, float deltaSec)
         if (best.valid && glm::dot(best.descentDir, best.descentDir) > 0.5f)
             dir = best.descentDir;
     }
-    const float walkSpeed = targetLocked && moveOrder && wanderOrder // a stroll (the flag stays set
-        ? glm::min(moveSpeed * params.wanderSpeedMult, params.wanderSpeedMax) // after the order, so
-        : moveSpeed;                                                          // gate on the order)
-    const glm::vec2 next = here + dir * glm::min(walkSpeed * deltaSec, dist);
+    speed = targetLocked && moveOrder && wanderOrder // a stroll (the flag stays set after the
+        ? glm::min(moveSpeed * params.wanderSpeedMult, params.wanderSpeedMax) // order, so gate on
+        : moveSpeed;                                                          // the order)
+    if (spread)
+    {
+        // A persistent per-unit lateral bias (address hash, like the steering fan's spread): the
+        // field descent is 8-connected on a 2 m grid, so unbiased every unit in an area walks the
+        // same cells and the wave funnels into one line. The bias fans it across the corridor.
+        const float hashFrac = float(uint32((uintptr_t(this) >> 4) * 2654435761u) >> 8) * (1.0f / 16777216.0f);
+        const float angle = glm::radians(params.farSpreadDeg) * (hashFrac - 0.5f);
+        const float c = std::cos(angle), s = std::sin(angle);
+        dir = glm::vec2(dir.x * c - dir.y * s, dir.x * s + dir.y * c);
+    }
+    return true;
+}
+
+glm::vec3 GameUnitComponent::wakeVelocity(const Entity& entity)
+{
+    glm::vec2 dir;
+    float speed, dist;
+    if (!isAuthority() || puppet || !alive() || !farHeading(entity, dir, speed, dist))
+        return glm::vec3(0.0f); // nowhere to go (ambient, arrived, idle): wakes at rest
+    return glm::vec3(dir.x * speed, 0.0f, dir.y * speed);
+}
+
+bool GameUnitComponent::updateFar(Entity& entity, float deltaSec)
+{
+    if (!isAuthority() || puppet || !alive() || deltaSec <= 0.0f)
+        return false;
+    if (entity.pos.y < params.voidY) // through the floor while unselected: the full sim never
+    {                                // visits it, so the far tick has to do the killing
+        kill(entity);
+        return false;
+    }
+    PhysicsComponent* pc = getComponent<PhysicsComponent>(&entity);
+    if (!pc || !pc->body.isValid())
+        return false;
+    // The ENTITY position is the far truth: the pass never visits this unit, so nothing else
+    // writes it, and the body (disabled) is teleported to match below.
+    const glm::vec3 pos = entity.pos;
+    const glm::vec2 here(pos.x, pos.z);
+
+    // Arrival / timeout bookkeeping first (the same rules as update()), then the shared heading.
+    if (routeIndex < routeCount)
+    {
+        if (glm::distance(here, glm::vec2(route[routeIndex].x, route[routeIndex].z)) < params.waypointRadius)
+            ++routeIndex;
+    }
+    else if (targetLocked && moveOrder)
+    {
+        if (wanderOrder) // a stroll times out here too — the full sim's clock never runs while far
+        {
+            wanderTimeLeft -= deltaSec;
+            if (wanderTimeLeft <= 0.0f)
+                targetLocked = moveOrder = false;
+        }
+        if (targetLocked && glm::distance(here, glm::vec2(targetPos.x, targetPos.z)) < params.waypointRadius)
+            targetLocked = moveOrder = false; // arrived: the AI resumes when the unit is selected again
+    }
+    glm::vec2 dir;
+    float walkSpeed, dist;
+    if (!farHeading(entity, dir, walkSpeed, dist))
+        return false;
+    const Nav::TeamField* raster = Globals::navSystem.isEnabled() ? Globals::navSystem.raster() : nullptr;
+    glm::vec2 next = here + dir * glm::min(walkSpeed * deltaSec, dist);
     if (raster && raster->isBlocked(Nav::cellOf(next)))
-        return false; // into rock: hold until a field covers it or the full sim takes over
+    {
+        // The spread bias aimed at rock: take the plain heading instead, and hold only when that
+        // is blocked too (until a field covers it or the full sim takes over).
+        if (!farHeading(entity, dir, walkSpeed, dist, /*spread*/ false))
+            return false;
+        next = here + dir * glm::min(walkSpeed * deltaSec, dist);
+        if (raster->isBlocked(Nav::cellOf(next)))
+            return false;
+    }
 
     // Teleport contract: body pose + prev/curr stomp + step claim, entity position, spatial entry.
     const glm::vec3 newPos(next.x, pos.y, next.y);

@@ -197,6 +197,14 @@ private:
     int m_subSteps = 4;
     int m_stepHz = 20;
     int m_workerCount = 1; // box3d parallelism, driven onto the engine job system (see :TaskScheduler)
+    // Contact tuning (b3World_SetContactTuning). Hertz starts from box3d's default; damping and
+    // the PUSH-OUT SPEED cap are ours, both set for SOFT overlap recovery: box3d's defaults unwind
+    // a deep overlap in one step, which is the "explosion" when a stack of far-ticked unit bodies
+    // enables at the SIM LOD edge.
+    float m_contactHertz = 30.0f;
+    float m_contactDamping = 50.0f;
+    float m_contactSpeed = 0.1f; // m/s: max overlap resolution speed
+    void applyContactTuning();
     // Handed to box3d as b3WorldDef::userTaskContext and returned through both task callbacks, so
     // the solver's fork/join state is owned by this world rather than by file statics.
     PhysicsTaskScheduler m_taskScheduler;

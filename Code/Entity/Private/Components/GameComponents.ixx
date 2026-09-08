@@ -58,6 +58,11 @@ export struct GameUnitParams
     float maxSpeedMult = 3.0f;     // field shoves never launch: speed clamp = moveSpeed * this
     float maxSpeed = 10.0f;        // absolute m/s cap on every unit body, every tick, any cause
     float waypointRadius = 3.0f;   // a route waypoint counts as reached inside this
+    float farSpreadDeg = 40.0f;    // FAR walk: each unit's heading carries a persistent lateral
+                                   // bias in +-half this (per-unit hash), so a wave does not
+                                   // funnel into one line of cells on the field descent and
+                                   // arrive at the tier edge out of a single spot; a biased step
+                                   // into rock falls back to the plain heading
     float routeEngageRadius = 5.0f;  // marching a route: an enemy unit/structure this near is
                                      // engaged (walk target diverts to it), the route resumes after
     float orderBreakRadius = 15.0f;  // a MOVE ORDER drops at the first enemy structure this near:
@@ -278,6 +283,16 @@ export struct GameUnitComponent
     // bubble; waypoints advance and the order clears with the full sim's radius rule. A unit with
     // nowhere to go stays parked. Returns true when it moved.
     bool updateFar(Entity& entity, float deltaSec);
+    // The far-walk HEADING: the route waypoint / locked order, straight where the raster has
+    // line of sight, else the nearest enemy field's descent; `speed` is the walk speed and `dist`
+    // the remaining straight-line distance. `spread` applies the unit's persistent lateral bias
+    // ("Far spread"). false = nowhere to go. Shared by updateFar and the wake velocity; no state
+    // changes (updateFar does the arrival bookkeeping itself).
+    bool farHeading(const Entity& entity, glm::vec2& dir, float& speed, float& dist, bool spread = true);
+    // The velocity to WAKE with (World's SIM LOD wake edge -> PhysicsComponent::unpark): full walk
+    // speed along the far heading, so a marching wave unit does not stand still until its first
+    // throttled tick (up to a second at tier 2). Zero for a unit with nowhere to go.
+    glm::vec3 wakeVelocity(const Entity& entity);
     // Health to 0 + the ONE-SHOT death report (destroy request, the spawner's population freed).
     // Called by update() at 0 hp or below voidY, and by updateFar() below voidY.
     void kill(Entity& entity);
@@ -308,8 +323,8 @@ private:
     uint32 m_rng = 0;           // tiny per-unit LCG — worker-safe, seeded from the entity address
     float m_pressureTimer = 0.0f; // stalled time (displacement checkpoints) -> weights + pressure
     // Lane requests are due at an ABSOLUTE sim time, not on a countdown of the tick delta: a
-    // throttled tick hands the unit a delta capped at "Max catch-up" frames, so a countdown ran
-    // ~8x slow at tier 2. The request cadence must not depend on the SIM LOD tier.
+    // throttled tick's delta is clipped by "Max catch-up", so a countdown ran slow whenever the
+    // cap bit. The request cadence must not depend on the SIM LOD tier.
     float m_seedDue = 0.0f; // sim seconds (Time::getSimElapsedSec) of the next request; the area limiter is global
     float m_ignoreFlowTimer = 0.0f; // > 0: the lane term is skipped (fresh move order)
     glm::vec2 m_stuckAnchor{ 0.0f };

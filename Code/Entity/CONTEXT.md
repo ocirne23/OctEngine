@@ -19,8 +19,8 @@ Particle, Force, Spatial, Threading, Network and Nav.
 ## `Entity`
 
 [EntityP.ixx:70](Private/EntityP.ixx#L70). Fields: `pos` / `scale` / `rot`, `parent`,
-`spawnTemplate`, `spatialEntry`, `refCount`, `typeBits`, `flags`, `updateCost`, `schedTier`,
-`schedSkipped`.
+`spawnTemplate`, `spatialEntry`, `refCount`, `typeBits`, `flags`, `updateCost`, `schedTier` (2 bits),
+`schedTick` (14 bits).
 
 ### Names
 
@@ -224,7 +224,7 @@ code defaults rule every run and a stale tweaks.cfg never overrides a tuning cha
 |---|---|
 | `enabled` | true |
 | `horizontal` | **true — XZ distance** (top-down game); off = full 3D |
-| `radius[3]` | **25 / 50 / 100 m** |
+| `radius[3]` | **25 / 50 / 225 m** |
 | `intervalSec[3]` | 0.25 / 1.0 / 0.0 (dormant 0 = never) |
 | `minFrames[3]` | 4 / 16 / 8 |
 | `intervalJitter` | 0.25 |
@@ -234,7 +234,7 @@ code defaults rule every run and a stale tweaks.cfg never overrides a tuning cha
 | `queryMargin` | 10 m |
 | `zoneMargin` / `zoneTier2Band` | 5 m / 25 m (zones, see Focus) |
 | `selectionIntervalSec` | 0.05 s of sim time between selection jobs, frame-rate independent (the visible set is fresh every frame regardless) |
-| `maxCatchUp` | 8 frames |
+| `maxCatchUpSec` | 1.0 s — **SECONDS, never frames**: a cap in frames was frame-rate bound (8 frames at 1000 fps handed a 1 s tick 8 ms, and far units could not accelerate at all) |
 | Follows: units / structures / projectiles / scripts / animators | **on / off / off / off / on** |
 
 ## Focus
@@ -312,17 +312,24 @@ and the dormant edge go by `dist` alone.**
 | tick tier | Cadence |
 |---|---|
 | 0 | Every frame. |
-| 1 / 2 | TIME-based: a tick every `intervalSec[t]`, but never closer than `minFrames[t]` — **the frame gap is the floor for low frame rates.** |
+| 1 / 2 | TIME-based: a tick every `intervalSec[t]`, but never closer than `minFrames[t]` × this frame's delta — **the frame gap is the floor for low frame rates**, and at a high frame rate the interval rules. |
 | 3 (dormant) | The margin band. `intervalSec[2]` 0 = never; the entity AND its subtree are skipped entirely. |
 
-**Exact elapsed time without a per-entity clock** (Entity must stay ≤ 64 bytes):
-`World::m_frameTimeRing` holds the cumulative sim time at the end of each of the last **256** passes,
-so elapsed = now − ring[pass of the last tick], found from `schedSkipped` alone (saturating at 254).
+**The per-entity clock** (Entity must stay ≤ 64 bytes): `schedTick` is the sim time of the last
+tick in **1/64 s, 14 bits, wrapping every 256 s** — the two bytes the header had left. Elapsed is the
+wrap-safe difference, and since both ends sit on the same grid the deltas of consecutive ticks sum to
+exactly the grid time. **It replaced a pass counter against a 256-entry time ring**, which could
+measure at most 255 passes back: at 1000 fps that is 0.25 s, so a tier-2 tick could never see its
+1 s and never fired, and tier-1 ticks with a jittered threshold above 0.25 s never fired either.
 
 `intervalJitter` is a per-entity ± factor **so a wave that entered a tier together drifts apart**
 instead of ticking in lockstep.
 
-Since the camera is top-down, **a visible entity beyond the outer radius is accepted as not
+**The far tick (`NpcSystem::service`) must therefore key on the TIER stamps, never on Main:** a
+visible unit beyond the outer radius is walked from the visible set but its cadence is dormant, so
+nothing ticks it; the far tick used to skip on Main too and froze every far unit the camera could
+see (waves arrived in blobs released as they scrolled out of view). Since the camera is top-down,
+**a visible entity beyond the outer radius is accepted as not
 selected** — there is no frustum query. (The user's call.)
 
 ## Per-entity kinds
@@ -375,7 +382,7 @@ a 25k-unit map only pays GPU slots for the bubbles near a player. See
 | Value | Meaning |
 |---|---|
 | the frame delta | full rate |
-| the accumulated catch-up | a throttled entity's tick frame, capped at `maxCatchUp` × the frame delta |
+| the accumulated catch-up | a throttled entity's tick frame, capped at `maxCatchUpSec` (never below one frame delta) |
 | **0** | **skipped frame: no sim step.** Game components, script and animator are not called; Network correction, the Physics pose read and the placement tail (compose / render / spatial / audio / particle / force / light / children) still run. |
 | **< 0** | DORMANT: do not visit the entity or its subtree at all. |
 

@@ -321,8 +321,8 @@ stale by the time anyone gets there.
 
 The unit path queues a `SeedRequest{from, to, team, stuck}` every "Seed request interval" (×0.75–1.25
 jitter, random phase at spawn). **The due time is on the SIM CLOCK** (`m_seedDue` against
-`Time::getSimElapsedSec`), not a countdown of the tick delta — a throttled tick's delta is capped at
-"Max catch-up" frames, so a countdown ran ~8× slow at tier 2. The cadence is therefore independent of
+`Time::getSimElapsedSec`), not a countdown of the tick delta — a throttled tick's delta is clipped by
+"Max catch-up", so a countdown ran slow whenever the cap bit. The cadence is therefore independent of
 the SIM LOD tier; the tier only bounds it below by its tick rate (1 s at tier 2). Requests are
 drained on the main thread by `NpcSystem::service` into
 `requestSeedPath` at "Order lane speed" — or "Stuck lane speed" when the unit is stalled past

@@ -81,6 +81,9 @@ can wait a frame keeps off the step's worker load — see Threading's "The frame
 | `Physics/World → Sub Steps` | 4 | 1..16 |
 | `Physics/World → Step Hz` | **20** | 5..120 |
 | `Physics/World → Worker count` | see below | 1..`B3_MAX_WORKERS` |
+| `Physics/World → Contact hertz` | box3d's default, read from `b3DefaultWorldDef` | live (`b3World_SetContactTuning`) |
+| `Physics/World → Contact damping` | **50** | 0..50 — high = overlap recovery bleeds energy instead of bouncing |
+| `Physics/World → Contact push speed (m/s)` | **0.1** | 0.1..20 — the cap on overlap resolution speed. box3d's own default unwinds a deep overlap in one step, which was the "explosion" when a stack of far-ticked unit bodies enabled at the SIM LOD edge. |
 | `Physics/Buoyancy → Density (kg/m3)` | 1000 | 0..3000 |
 | `Physics/Buoyancy → Linear drag` | 3 | 0..20 |
 | `Physics/Debug → Draw colliders / joints / contacts / bounds` | off | |
@@ -305,7 +308,7 @@ and are never rendered.
 |---|---|
 | `suspendBody()` / `suspendPhysicsTree` | The entity was DISABLED (`EEntityFlag_Enabled`). `updateTree` stops reaching it, so the body would otherwise keep colliding invisibly. Drops the occluder too; the next update after re-enable re-adds and resyncs. |
 | `park(disable)` | SIM LOD dormancy. Zero the velocities, then either DISABLE or merely sleep. |
-| `unpark()` | Zero the velocities — a body parked inside a crowd may still hold a contact push-out — and enable. **Skipped while `suspended`**: an Enabled-off subtree owns its own disable. |
+| `unpark(entity, velocity)` | Set the linear velocity to `velocity` (a marching unit's walk from `GameUnitComponent::wakeVelocity` — full speed along its far heading, so it does not stand until its first throttled tick; zero for anything at rest, and a body parked inside a crowd may still hold a contact push-out), zero the angular velocity, and enable. **Skipped while `suspended`**: an Enabled-off subtree owns its own disable. **OVERLAP LIFT** first, for a DYNAMIC body: one 1 m `forEachInSphere` on the Entity layer; if any live (or same-pass-woken, by `schedTier`) dynamic body is within 1 m, this one is teleported 2 m up. Far-ticked units teleport through each other, so the front of a wave wakes stacked; landing on a body is fine, being blasted out of it was the "explosion". |
 
 Both park calls ride the body-command queue, so **the entity pass never writes box3d.** See the SIM
 LOD section in [`Code/Entity/CONTEXT.md`](../Entity/CONTEXT.md).

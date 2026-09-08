@@ -77,7 +77,11 @@ export struct SimLodConfig
     // NOT frame-sensitive: what the camera sees is selected every frame from the cull job's
     // frustum pass regardless. The query margin has to cover this much motion.
     float selectionIntervalSec = 0.05f;
-    int maxCatchUp = 8;          // cap on the frames of dt a resumed tick receives
+    float maxCatchUpSec = 1.0f;  // cap in SECONDS on the dt a throttled tick receives (= the tier 2
+                                 // interval: a tick normally gets its whole stretch; only a return
+                                 // from dormancy is clipped). A cap in FRAMES was frame-rate bound —
+                                 // 8 frames at 1000 fps is 8 ms for a 1 s tick, so far units could
+                                 // not accelerate at all.
     bool units = true;           // GameUnitComponent follows the LOD
     bool structures = false;     // GameStructureComponent (barracks/turret clocks, flows)
     bool projectiles = false;    // GameProjectileComponent (lifetime, deflection)
@@ -105,6 +109,9 @@ public:
     // Whether the last pass selected by spatial query (else everything was visited). The Game's
     // far tick for unselected units keys on it.
     bool simLodActive() const { return m_simLodActive; }
+    // The tier by direct distance to the focus points / zones (3 = none) — what a NEVER-stamped
+    // entity is scheduled by; the game's far tick uses it to leave such a unit to the pass.
+    int simLodDistanceTier(const glm::vec3& pos) const;
     // Update SELECTION (see update()): whether a child a visited parent emitted is part of this
     // frame's pass — its spatial mask carries a tier or Main stamp (a never-stamped fresh entry
     // counts as stamped). Everything when the LOD is inactive. Public for the NetworkManager: an
@@ -315,8 +322,7 @@ private:
         uint8 dist;  // 0..2 by the tier balls, 3 = beyond the outer radius (dormant)
         uint8 tick;  // dist floored by "Visible max tier" for an in-view entity
     };
-    SimLodTiers simLodTiers(const Entity& entity) const;
-    int simLodDistanceTier(const glm::vec3& pos) const; // the tier by direct distance to the focus points / zones (3 = none); the fallback while no stamp exists
+    SimLodTiers simLodTiers(const Entity& entity) const; // simLodDistanceTier (public) is the fallback while no stamp exists
     void simLodTransition(Entity& entity, uint8 tier);
     float simLodCadence(Entity& entity, uint8 tier);
     // THE SELECTION runs as a POST-UPDATE job (computeSelection) every "Selection interval"
@@ -401,11 +407,9 @@ private:
     uint16 m_simLodFollowMask = 0; // per pass: sim kinds that follow the LOD
     uint16 m_simLodPinMask = 0;    // per pass: sim kinds that pin their entity to full rate
     bool m_simLodActive = false;   // per pass: selection by spatial query + stamps (else every root, every child)
-    // Cumulative sim time at the end of each of the last 256 passes (indexed by m_updateFrame):
-    // the time a throttled entity's tick covers = now - ring[frame of its last tick], from its
-    // schedSkipped count alone (no per-entity clock — Entity stays one cache line).
-    float m_frameTimeRing[256] = {};
     float m_simTimeAccum = 0.0f;
+    // The SIM LOD's per-entity clock value for THIS pass (Entity::schedTick units: 1/64 s, 14 bits).
+    uint32 schedTickNow() const { return uint32(m_simTimeAccum * Entity::SchedTickHz) & Entity::SchedTickMask; }
     oc::vector<Entity*> m_globalRoots;  // EEntityFlag_Global roots: always visited
     oc::vector<PendingRoot> m_pendingRoots; // see PendingRoot
     int m_simLodStats[4] = {};     // last pass's per-tier entity counts (live readout tweaks)

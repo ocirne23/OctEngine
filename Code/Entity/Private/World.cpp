@@ -46,7 +46,7 @@ bool World::initialize()
         Tweak::intVar("Game/Sim LOD", "Dormant min frames", &c.minFrames[2], 1, 600, 1.0f);
         Tweak::floatVar("Game/Sim LOD", "Interval jitter", &c.intervalJitter, 0.0f, 0.5f, 0.01f);
         Tweak::intVar("Game/Sim LOD", "Visible max tier", &c.visibleMaxTier, 0, 2, 1.0f);
-        Tweak::intVar("Game/Sim LOD", "Max catch-up (frames)", &c.maxCatchUp, 1, 60, 1.0f);
+        Tweak::floatVar("Game/Sim LOD", "Max catch-up (s)", &c.maxCatchUpSec, 0.01f, 10.0f, 0.05f);
         Tweak::floatVar("Game/Sim LOD", "Query margin (m)", &c.queryMargin, 0.0f, 100.0f, 1.0f);
         Tweak::floatVar("Game/Sim LOD", "Zone margin (m)", &c.zoneMargin, 0.0f, 100.0f, 1.0f);
         Tweak::floatVar("Game/Sim LOD", "Zone tier 2 band (m)", &c.zoneTier2Band, 0.0f, 200.0f, 1.0f);
@@ -230,9 +230,14 @@ void World::simLodTransition(Entity& entity, uint8 tier)
     }
     else if (prevTier == 3)
     {
-        entity.schedSkipped = 0;
+        entity.schedTick = schedTickNow(); // no catch-up over the dormant stretch
         if (PhysicsComponent* physics = getComponent<PhysicsComponent>(&entity))
-            physics->unpark();
+        {
+            // A marching unit wakes at its walk velocity (zero for one with nowhere to go): its
+            // first throttled tick may be a second away, and until then the body only coasts.
+            GameUnitComponent* unit = getComponent<GameUnitComponent>(&entity);
+            physics->unpark(entity, unit ? unit->wakeVelocity(entity) : glm::vec3(0.0f));
+        }
     }
 }
 
@@ -243,31 +248,30 @@ void World::simLodTransition(Entity& entity, uint8 tier)
 // 0 (skipped frame) or < 0 (dormant: not visited).
 float World::simLodCadence(Entity& entity, uint8 tier)
 {
+    const uint32 now = schedTickNow();
     if (tier == 0)
     {
-        entity.schedSkipped = 0;
+        entity.schedTick = now;
         return m_updateDelta;
     }
     const float intervalSec = m_simLod.intervalSec[tier - 1];
     if (tier == 3 && intervalSec <= 0.0f)
-    {
-        entity.schedSkipped = 254;
         return -1.0f; // dormant, never ticks
-    }
-    const uint32 skipped = entity.schedSkipped;
-    const float elapsed = m_simTimeAccum - m_frameTimeRing[uint32(m_updateFrame - skipped - 1) & 255];
+    // The per-entity clock: 1/64 s units, wrap-safe over 256 s. Both ends sit on the same grid,
+    // so the deltas of consecutive ticks sum to exactly the grid time — no drift.
+    const float elapsed = float((now - entity.schedTick) & Entity::SchedTickMask) / Entity::SchedTickHz;
     // Per-entity jitter on the interval (+-intervalJitter): a wave that entered the tier on the
-    // same frame drifts apart within a few ticks instead of ticking in lockstep.
+    // same frame drifts apart within a few ticks instead of ticking in lockstep. The frame-gap
+    // floor is a TIME too (minFrames x this frame's delta): at a low frame rate a tick still
+    // skips that many frames, at a high one the interval rules.
     const float hashFrac = float(uint32((uintptr_t(&entity) >> 6) * 2654435761u) >> 8) * (1.0f / 16777216.0f);
-    const float threshold = intervalSec * (1.0f + m_simLod.intervalJitter * (hashFrac * 2.0f - 1.0f));
-    const bool tick = int(skipped) + 1 >= glm::max(m_simLod.minFrames[tier - 1], 1) && elapsed >= threshold;
-    if (!tick)
-    {
-        entity.schedSkipped = uint8(glm::min<uint32>(skipped + 1, 254)); // 254: the ring reaches 255 passes back
+    const float threshold = glm::max(intervalSec * (1.0f + m_simLod.intervalJitter * (hashFrac * 2.0f - 1.0f)),
+        float(glm::max(m_simLod.minFrames[tier - 1], 1)) * m_updateDelta);
+    if (elapsed < threshold)
         return tier == 3 ? -1.0f : 0.0f;
-    }
-    entity.schedSkipped = 0;
-    return glm::min(elapsed, m_updateDelta * float(glm::max(m_simLod.maxCatchUp, 1)));
+    entity.schedTick = now;
+    // Capped in SECONDS, never frames: at 1000 fps an 8-frame cap handed a 1 s tick 8 ms.
+    return glm::min(elapsed, glm::max(m_simLod.maxCatchUpSec, m_updateDelta));
 }
 
 // The tier by direct distance (XZ per the tweak) to the focus points and zones — what the stamps
@@ -362,7 +366,6 @@ void World::update(Renderer& renderer, float deltaSeconds)
     m_updateRenderer = &renderer;
     m_updateDelta = deltaSeconds;
     m_simTimeAccum += deltaSeconds;
-    m_frameTimeRing[uint32(m_updateFrame) & 255] = m_simTimeAccum; // cumulative time at the end of THIS pass
     // COST-BUDGETED batches instead of a uniform grain: every entity carries a measured updateCost
     // (unmeasured counts as 1 so it still partitions), and a batch fills until the summed cost
     // reaches ~25us of measured time (m_updateCost's EMA is fed COST UNITS as its item count, so

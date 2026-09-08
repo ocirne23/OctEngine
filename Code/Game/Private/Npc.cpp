@@ -98,6 +98,7 @@ void NpcSystem::registerTweaks()
     Tweak::floatVar("Game/Enemies", "Unit max speed (m/s)", &up.maxSpeed, 1.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Enemies", "Wander speed mult", &up.wanderSpeedMult, 0.05f, 1.0f, 0.01f);
     Tweak::floatVar("Game/Enemies", "Wander speed max (m/s)", &up.wanderSpeedMax, 0.1f, 20.0f, 0.1f);
+    Tweak::floatVar("Game/Enemies", "Far spread (deg)", &up.farSpreadDeg, 0.0f, 120.0f, 1.0f);
     Tweak::floatVar("Game/Enemies", "Target track radius", &up.targetTrackRadius, 0.0f, 400.0f, 1.0f);
     Tweak::floatVar("Game/Enemies", "Nav follow radius", &up.navFollowRadius, 0.0f, 400.0f, 1.0f);
     Tweak::boolean("Game/Enemies", "Nav fields", &up.navEnabled);
@@ -385,9 +386,20 @@ void NpcSystem::service(StructureSystem& structures)
                         unit->kill(*e);
                         continue;
                     }
-                    if (!e->spatialEntry.isValid()
-                        || (Globals::spatialIndex.getPassMaskExact(e->spatialEntry.handle()) & (SpatialPassBits_UpdateTiers | SpatialPassBit_Main)))
-                        continue; // selected (a tier, or on screen): the entity pass owns it
+                    // The entity pass owns a unit it will TICK: one with a current tier stamp, or a
+                    // fresh (never stamped) one whose distance tier is inside the balls. NOT the
+                    // Main (on-screen) stamp: a visible unit beyond the outer radius is walked by
+                    // the pass but dormant there (never ticked), so skipping it here froze every
+                    // far unit the top-down camera could see — a wave then arrived in blobs, each
+                    // released when it scrolled out of view or behind an occluder.
+                    if (!e->spatialEntry.isValid())
+                        continue;
+                    const SpatialHandle handle = e->spatialEntry.handle();
+                    if (Globals::spatialIndex.getPassMaskExact(handle) & SpatialPassBits_UpdateTiers)
+                        continue;
+                    if (!Globals::spatialIndex.hasStamp(handle, ESpatialPass::UpdateTier2)
+                        && Globals::world.simLodDistanceTier(e->pos) < 3)
+                        continue; // fresh and near a player: the pass ticks it by distance until the job stamps it
                     if (unit && unit->updateFar(*e, dt))
                         ++local;
                 }
