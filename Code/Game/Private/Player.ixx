@@ -67,6 +67,10 @@ public:
     // standing move order so the capsule does not walk back to where it was.
     void teleport(const glm::vec3& pos);
     Entity* entity() const { return m_entity.get(); }
+    // "Detach camera" tweak: the follow camera and ALL game mouse/hotkey input stand down and the
+    // testbed fly camera takes the frame — the capsule keeps simulating (a standing move order
+    // still completes), it just receives no new orders. Personal, never synced.
+    bool cameraDetached() const { return m_detachCamera; }
     glm::vec3 interpolatedPos() const; // render-smooth body pose for the follow camera
     glm::vec3 bodyPos() const;         // current body position (authority logic)
 
@@ -111,6 +115,7 @@ private:
     bool m_shieldCollapsed = false; // latched at empty battery, cleared at "Reboot energy"
 
     // Tweaks ("Game/Player" — movement, health, and the shield battery)
+    bool m_detachCamera = false; // local-only (not Synced): free-fly view, see cameraDetached()
     float m_moveSpeed = 4.0f;
     float m_accel = 30.0f; // deliberately soft: steering force must lose against bubble push
     float m_jumpSpeed = 6.0f;

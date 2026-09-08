@@ -44,6 +44,10 @@ public:
     void reloadShaders(vk::RenderPass sceneRenderPass);
     void setUseGrid(bool useGrid) { m_useGrid = useGrid; } // takes effect on the next reloadShaders
     bool getUseGrid() const { return m_useGrid; }
+    // DEBUG density view (FORCE_DENSITY_VIEW define in force_shell.fs) — rebuild-class like useGrid,
+    // so the release shader carries none of the march: caller is GPU-idle and follows with reloadShaders.
+    void setDensityView(bool enabled) { m_densityView = enabled; }
+    bool getDensityView() const { return m_densityView; }
     // LIVE team count (the NUM_FORCE_TEAMS shader define): remakes the team-sized resources (shell
     // volume: ONE RGBA16F texture at <= 4 teams instead of two; bake readback stride) — caller
     // guarantees GPU idle and follows with reloadShaders (the useGrid toggle pattern).
@@ -189,6 +193,7 @@ private:
     GraphicsPipeline m_unionPipeline;    // half-res: m_marchRenderPass; full-res: the scene pass
     GraphicsPipeline m_upsamplePipeline; // the scene-color depth-aware blend (half-res mode only)
     bool m_useGrid = true;
+    bool m_densityView = false; // FORCE_DENSITY_VIEW define on the shell fragment (setDensityView)
     bool m_unionHalfRes = true;
     bool m_unionJitter = true;
     uint32 m_numTeams = RendererVKLayout::MAX_FORCE_TEAMS;

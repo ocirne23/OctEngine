@@ -1,4 +1,4 @@
-# Friendly NPC unit: upright capsule with a small team-0 bubble - presses enemy shields, gets
+# Friendly NPC unit: sphere body with a small team-0 bubble - presses enemy shields, gets
 # pressured by enemy fields (player shield rules, no regen). Spawned by a Barracks; guards its
 # home area (aggro/leash in NpcSystem).
 Prefab gameFriendlyUnit
@@ -10,9 +10,8 @@ Prefab gameFriendlyUnit
 		Scale 0.4 0.7 0.4
 	Component Physics
 		Body Dynamic
-		Shape Capsule
+		Shape Sphere
 		Radius 0.45
-		HalfHeight 0.3
 		Density 100
 		Friction 0.3
 		LockRotation true

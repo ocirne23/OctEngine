@@ -1,6 +1,7 @@
 // GI irradiance probes — a single persistent, world-space CASCADED CLIPMAP volume. GI_NUM_CASCADES nested
-// probe grids, each GI_CASCADE_PROBE_DIM^3 probes at a fixed power-of-two spacing (BASE_SPACING << cascade),
-// camera-centered. Probes sit at ABSOLUTE lattice positions (lc * spacing) and are stored toroidally
+// probe grids, each GI_PROBE_DIM_X x _Y x _Z probes at a fixed power-of-two spacing (BASE_SPACING << cascade),
+// centred on the scene focus lifted by GI_FOCUS_Y_OFFSET. Probes sit at ABSOLUTE lattice positions
+// (lc * spacing) and are stored toroidally
 // (slot = lc & (DIM-1)), so a probe that stays in range maps to the same storage slot every frame and its
 // SH carries forward in place — no hash table, no copy, no prev/cur ping-pong. When the camera moves, the
 // lattice coords that scroll out are silently overwritten by the new coords that wrap into their slots.
@@ -9,13 +10,15 @@
 //   GI_GRID_DATA_NAME   float[] per-probe data: cascade-major, slot-linear, GI_PROBE_STRIDE floats each.
 // For the write side (trace) also define GI_PROBE_WRITE.
 //
-// Requires shared.inc.glsl (PI) (u_viewPos — the camera, which centers the cascades).
+// Requires shared.inc.glsl (PI) (u_sceneFocus — the scene focus, which centers the cascades: the game's
+// player, else the camera; see Renderer::setSceneFocus).
 
 #ifndef GI_PROBE_INC_GLSL
 #define GI_PROBE_INC_GLSL
 
-// GI_SH_STRIDE, GI_NUM_CASCADES, GI_CASCADE_PROBE_DIM and GI_CASCADE_BASE_SPACING are injected by the
-// engine from RendererVKLayout (Layout.ixx).
+// GI_SH_STRIDE, GI_NUM_CASCADES, GI_PROBE_DIM_X/Y/Z, GI_FOCUS_Y_OFFSET and GI_CASCADE_BASE_SPACING are
+// injected by the engine from RendererVKLayout (Layout.ixx, the live g_giGrid — the "GI" grid tweaks
+// reload every shader).
 // Per-probe layout (words): SH-L1 RGB 0..11, SH-L1 mean depth +12..15, SH-L1 mean depth^2 +16..19,
 // backface-hit fraction +20, relocation offset xyz +21..23.
 #define GI_PROBE_STRIDE (GI_SH_STRIDE + 12)
@@ -47,8 +50,10 @@
 #endif
 // -----------------------------------------------------------------------------------------------------
 
-#define GI_CASCADE_PROBES (GI_CASCADE_PROBE_DIM * GI_CASCADE_PROBE_DIM * GI_CASCADE_PROBE_DIM)
-#define GI_DIM_MASK        (GI_CASCADE_PROBE_DIM - 1)
+#define GI_PROBE_DIMS      ivec3(GI_PROBE_DIM_X, GI_PROBE_DIM_Y, GI_PROBE_DIM_Z)
+#define GI_CASCADE_PROBES  (GI_PROBE_DIM_X * GI_PROBE_DIM_Y * GI_PROBE_DIM_Z)
+#define GI_DIM_MASK        (GI_PROBE_DIMS - 1)
+#define GI_PROBE_DIM_MIN   min(min(GI_PROBE_DIM_X, GI_PROBE_DIM_Y), GI_PROBE_DIM_Z) // the fade bands scale with the narrowest axis
 
 vec4 shBasisL1(vec3 d)
 {
@@ -58,19 +63,21 @@ vec4 shBasisL1(vec3 d)
 // Probe spacing (world units) of a cascade. Cascade 0 is finest; each level doubles.
 int giCascadeSpacing(int c) { return GI_CASCADE_BASE_SPACING << c; }
 
-// Integer lattice coord of the cascade's min corner, snapped so the camera sits at its center.
-ivec3 giCascadeOrigin(int c, vec3 camPos)
+// Integer lattice coord of the cascade's min corner, snapped so the focus (lifted by GI_FOCUS_Y_OFFSET —
+// a positive offset puts more probes above the ground than below) sits at its center.
+ivec3 giCascadeOrigin(int c, vec3 focusPos)
 {
     int s = giCascadeSpacing(c);
-    return ivec3(floor(camPos / float(s))) - ivec3(GI_CASCADE_PROBE_DIM / 2);
+    vec3 center = focusPos + vec3(0.0, GI_FOCUS_Y_OFFSET, 0.0);
+    return ivec3(floor(center / float(s))) - GI_PROBE_DIMS / 2;
 }
 
-// Toroidal slot (linear) for an absolute lattice coord. lc & mask is a true mod for power-of-two DIM,
+// Toroidal slot (linear) for an absolute lattice coord. lc & mask is a true mod for power-of-two DIMs,
 // correct for negative coords under two's complement.
 uint giSlotLinear(ivec3 lc)
 {
-    ivec3 s = lc & ivec3(GI_DIM_MASK);
-    return uint(s.x + s.y * GI_CASCADE_PROBE_DIM + s.z * GI_CASCADE_PROBE_DIM * GI_CASCADE_PROBE_DIM);
+    ivec3 s = lc & GI_DIM_MASK;
+    return uint(s.x + s.y * GI_PROBE_DIM_X + s.z * GI_PROBE_DIM_X * GI_PROBE_DIM_Y);
 }
 
 // Word offset into GI_GRID_DATA_NAME for the probe at lattice coord lc in cascade c.
@@ -144,11 +151,11 @@ vec3 giEvalSkySH(vec3 n) { return giEvalCell(GI_SKY_SH_BASE, n); }
 bool giCascadeFits(int c, vec3 p, out ivec3 base, out ivec3 origin, out int s, out vec3 frac)
 {
     s      = giCascadeSpacing(c);
-    origin = giCascadeOrigin(c, u_viewPos);
+    origin = giCascadeOrigin(c, u_sceneFocus.xyz);
     vec3 pf = p / float(s);
     base   = ivec3(floor(pf));
     frac   = pf - vec3(base);
-    return !(any(lessThan(base, origin)) || any(greaterThanEqual(base + 1, origin + GI_CASCADE_PROBE_DIM)));
+    return !(any(lessThan(base, origin)) || any(greaterThanEqual(base + 1, origin + GI_PROBE_DIMS)));
 }
 
 // Trilinear irradiance from one cascade's 8 nearest probes, with DDGI-style backface weighting (probes
@@ -266,16 +273,16 @@ vec3 evalProbeSHCoverage(vec3 worldPos, vec3 n, out float coverage)
 
         // Fade toward the next cascade over the outer `band` cells of this window (1 = interior, 0 = face).
         vec3  cellInWin = vec3(base - origin);
-        vec3  distCells = min(cellInWin, vec3(GI_CASCADE_PROBE_DIM - 2) - cellInWin);
+        vec3  distCells = min(cellInWin, vec3(GI_PROBE_DIMS - 2) - cellInWin);
         float edge = min(min(distCells.x, distCells.y), distCells.z);
         if (c == GI_NUM_CASCADES - 1)
         {
             // Outermost cascade: there is nothing coarser to fade into, so fade the COVERAGE instead
             // (wider band than the inter-cascade one — this hands over to a fallback, not to more data).
-            coverage = clamp(edge / (float(GI_CASCADE_PROBE_DIM) * 0.2), 0.0, 1.0);
+            coverage = clamp(edge / (float(GI_PROBE_DIM_MIN) * 0.2), 0.0, 1.0);
             return E0;
         }
-        float band = float(GI_CASCADE_PROBE_DIM) * 0.1;
+        float band = float(GI_PROBE_DIM_MIN) * 0.1;
         float fade = clamp(edge / band, 0.0, 1.0);
         if (fade >= 1.0)
             return E0;
@@ -307,9 +314,9 @@ vec3 giDebugColor(vec3 worldPos, vec3 n)
     for (int c = 0; c < GI_NUM_CASCADES; ++c)
     {
         int   s      = giCascadeSpacing(c);
-        ivec3 origin = giCascadeOrigin(c, u_viewPos);
+        ivec3 origin = giCascadeOrigin(c, u_sceneFocus.xyz);
         ivec3 base   = ivec3(floor(p / float(s)));
-        if (any(lessThan(base, origin)) || any(greaterThanEqual(base + 1, origin + GI_CASCADE_PROBE_DIM)))
+        if (any(lessThan(base, origin)) || any(greaterThanEqual(base + 1, origin + GI_PROBE_DIMS)))
             continue;
 
         vec3 lod;

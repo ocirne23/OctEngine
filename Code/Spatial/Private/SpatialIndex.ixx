@@ -153,10 +153,12 @@ public:
     // queued during last frame's entity updates, tracks the render camera's far plane, then stamps the
     // Main frustum set - rasterizing the CPU occlusion buffer first when it is enabled - and the Near
     // ball. The Near ball is requeried only once the camera has moved past its slack, so its hysteresis
-    // state belongs here rather than at the call site.
+    // state belongs here rather than at the call site. Then the Shadow pass: the same frustum swept
+    // toward the sun (sunDirection points AT the sun) on the horizontal plane by shadowReach, so the
+    // off-screen casters whose shadows fall into the view keep their shadow pass.
     // viewProjRelCamera maps camera-relative world positions to clip space in the renderer's REVERSED-Z
     // convention; it is flipped back to standard z here, for the occlusion rasterizer only.
-    void update(const Camera& camera, const Frustum& frustum, const glm::mat4& viewProjRelCamera);
+    void update(const Camera& camera, const Frustum& frustum, const glm::mat4& viewProjRelCamera, const glm::vec3& sunDirection);
 
     // update() as the High "Spatial cull" job: kick copies the view into members (the job outlives
     // the caller's stack) and submits; join waits, helping. An INVALID view (the first VR frame — see
@@ -208,6 +210,7 @@ private:
     Camera m_updateJobCamera;
     Frustum m_updateJobFrustum;
     glm::mat4 m_updateJobViewProj = glm::mat4(1.0f);
+    glm::vec3 m_updateJobSunDirection = glm::vec3(0.0f, 1.0f, 0.0f);
     JobCounter m_updateJobCounter;
     bool m_updateJobKicked = false; // false = the view was invalid, join has nothing to wait on
 

@@ -99,6 +99,16 @@ void FreeFlyCameraController::initialize(glm::vec3 position, glm::vec3 lookAt, g
         };
 }
 
+void FreeFlyCameraController::setPose(const glm::vec3& position, const glm::vec3& lookAt)
+{
+    m_position = position;
+    const glm::vec3 toTarget = lookAt - position;
+    if (glm::dot(toTarget, toTarget) > 1e-8f)
+        m_direction = glm::normalize(toTarget);
+    m_up = glm::normalize(glm::cross(worldLockedRight(m_direction, m_worldUp, m_up), m_direction));
+    m_viewMatrix = glm::lookAt(m_position, m_position + m_direction, m_up);
+}
+
 void FreeFlyCameraController::update(double deltaTime)
 {
     const float deltaSec = static_cast<float>(deltaTime);

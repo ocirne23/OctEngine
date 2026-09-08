@@ -62,14 +62,30 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
 
     auto rerecordCallback = [this]() { setHaveToRecordCommandBuffers(); };
     m_skyParams.registerTweaks();
-    m_shadowParams.registerTweaks();
+    // "Shadows/Debug mode" is the SHADOW_DEBUG define on the lit fragment variants: GPU-idle + pipeline
+    // rebuild, the wireframe pattern below.
+    m_shadowParams.registerTweaks([this]() {
+        if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
+            return;
+        m_staticMeshGraphicsPipeline.setShadowDebugMode(m_shadowParams.debugMode);
+        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_maxTextures);
+        setHaveToRecordCommandBuffers();
+    });
     m_fogParams.registerTweaks();
     m_rtParams.registerTweaks();
     m_rtaoParams.registerTweaks(rerecordCallback, [this]() { if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess) return; m_rtaoPipeline.reloadShaders(); setHaveToRecordCommandBuffers(); });
     m_taaParams.registerTweaks(rerecordCallback);
     m_postParams.registerTweaks(rerecordCallback);
     m_lodParams.registerTweaks();
-    m_lightGridParams.registerTweaks([this]() { if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess) return; m_lightGridComputePipeline.reloadShaders(); setHaveToRecordCommandBuffers(); });
+    m_lightGridParams.registerTweaks(
+        [this]() { if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess) return; m_lightGridComputePipeline.reloadShaders(); setHaveToRecordCommandBuffers(); },
+        [this]() { // "Debug Mode" = the LIGHT_GRID_DEBUG define on the lit fragments (the wireframe pattern below)
+            if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
+                return;
+            m_staticMeshGraphicsPipeline.setLightGridDebugMode(m_lightGridParams.debugMode);
+            m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_maxTextures);
+            setHaveToRecordCommandBuffers();
+        });
     // Wireframe is baked pipeline state (polygonMode), so flipping it rebuilds the static mesh pipeline —
     // same GPU-idle + reload pattern as the RTAO alpha-test and ocean hit-lighting tweaks.
     Tweak::boolean("Editor", "Wireframe", &m_wireframe, [this]() {
@@ -91,6 +107,14 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
         m_giProbePipeline.reloadDebugShaders(m_perFrameData[0].sceneColor.getRenderPass());
         setHaveToRecordCommandBuffers();
     });
+    // GI probe debug cubes — the same state the testbed's P / O keys flip. Enabled is a per-frame stage
+    // flag; the colour mode and radius are push constants in the cached debug secondary, so they re-record.
+    Tweak::boolean("GI", "Debug probes", &m_giProbeDebugEnabled);
+    {
+        static constexpr oc::string_view s_giProbeDebugModeNames[] = { "Irradiance", "Cascade / LOD colour" };
+        Tweak::enumVar("GI", "Debug probe colour", &m_giProbeDebugMode, s_giProbeDebugModeNames, rerecordCallback);
+    }
+    Tweak::floatVar("GI", "Debug probe radius", &m_giProbeDebugRadius, 0.02f, 1.0f, 0.01f, rerecordCallback);
     // Live toggles: the primary CB re-records every frame, so no re-record callback is needed.
     Tweak::boolean("Particles", "Enabled", &m_particlesEnabled);
     Tweak::boolean("Particles", "Depth collision", &m_particleCollision);
@@ -180,6 +204,14 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     m_lightGridComputePipeline.initialize(&m_lightGridParams);
     m_accelStructure.initialize(m_maxUniqueMeshes);
     m_giProbePipeline.initialize(m_maxGiTlasInstances, m_maxTextures, m_numTextureDescriptors);
+    // The GI grid shape is a #define in every probe-sampling shader (Layout.ixx g_giGrid): a change waits
+    // for the GPU, re-allocates the SH clipmap, reloads EVERY shader (reloadShaders waits + re-records).
+    m_giProbePipeline.registerGridTweaks([this]() {
+        if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
+            return;
+        m_giProbePipeline.resizeGrid();
+        reloadShaders();
+    });
     m_giProbePipeline.setDebugDepthReadOnly(m_depthPrepassReuse);
     m_giProbePipeline.initializeDebug(sceneRenderPass);
     m_debugLinePipeline.initialize(sceneRenderPass);
@@ -673,6 +705,7 @@ CullView Renderer::getCullView(const Camera& camera, const Rect& viewportRect)
     // The occlusion rasterizer takes camera-relative positions: the translate re-bases the reversed-z
     // center view-projection onto the cull camera.
     view.viewProjRelCamera = m_centerViewProj * glm::translate(glm::mat4(1.0f), view.camera.position);
+    view.sunDirection = m_skyParams.sunDirection;
     return view;
 }
 
@@ -763,7 +796,7 @@ void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const
     // the forward pass skips its depth-aware AO upsample there and uses those values directly.
     ubo.aoParams = glm::vec4((m_rtParams.enabled && m_rtaoParams.enabled) ? 1.0f : 0.0f,
         (m_rtParams.enabled && m_rtParams.giEnabled) ? m_giProbePipeline.getStrength() : 0.0f,
-        m_rtaoParams.maxDistance, (float)m_lightGridParams.debugMode);
+        m_rtaoParams.maxDistance, 0.0f); // w unused: the light grid debug overlay is the LIGHT_GRID_DEBUG define
     ubo.giVisParams = m_giProbePipeline.getVisibilityParams();
     ubo.frameIndex = m_frameCounter;
     // SIM clock, not the wall clock: shader animation (ocean waves, force pulses, fog) freezes with
@@ -894,13 +927,16 @@ void Renderer::buildUboSunShadow(const Camera& camera)
 {
     RendererVKLayout::Ubo& ubo = m_ubo;
     ubo.rtSunShadow = (m_rtParams.enabled && m_rtParams.rtSunShadow) ? 1.0f : 0.0f;
+    // The shaders' cascade pick and the RTAO falloff measure from here; it matches computeSunCascades'
+    // origin below.
+    ubo.sceneFocus = glm::vec4(m_sceneFocusEnabled ? m_sceneFocus : camera.position, 0.0f);
 
     // Use the effective flag: with RT off (or RT-sun off) the PCSS cascades supply the sun shadow.
     if (ubo.rtSunShadow < 0.5f)
     {
         const glm::ivec2 viewportSize = m_viewportRect.getSize();
         const float aspect = (float)viewportSize.x / (float)viewportSize.y;
-        computeSunCascades(camera, aspect, m_skyParams.sunDirection,
+        computeSunCascades(camera, aspect, m_skyParams.sunDirection, m_sceneFocusEnabled ? &m_sceneFocus : nullptr,
             m_shadowParams.maxDistance, m_shadowParams.splitLambda, m_shadowParams.casterPad, m_sunCascadeViewProj);
         m_numSunCascades = RendererVKLayout::NUM_SHADOW_CASCADES;
         for (uint32 c = 0; c < RendererVKLayout::NUM_SHADOW_CASCADES; ++c)
@@ -1009,7 +1045,7 @@ void Renderer::buildUboForce()
     ubo.forceParams3 = glm::vec4(glm::clamp(force.interiorAlpha, 0.0f, 1.0f),
         glm::clamp(force.backfaceAlpha, 0.0f, 1.0f), glm::clamp(force.contactWallAlpha, 0.0f, 1.0f),
         glm::clamp(force.junctionSmoothing, 0.0f, 2.0f));
-    ubo.forceParams4 = glm::vec4(force.densityView ? 1.0f : 0.0f, glm::max(force.densityRange, 1e-3f), 0.0f, 0.0f);
+    ubo.forceParams4 = glm::vec4(0.0f /* x unused: the density view is the FORCE_DENSITY_VIEW define */, glm::max(force.densityRange, 1e-3f), 0.0f, 0.0f);
 
     // SAMPLED SHELL TIER: fit the bake volume over the union of the LARGE drawable emitters'
     // support boxes (+ margin) — the FIXED texel grid's resolution then self-adjusts to the active
@@ -1463,6 +1499,7 @@ void Renderer::setForceFieldParams(const ForceFieldParams& params)
     // volume/buffers (setNumTeams) — a game-mode event, never per-frame.
     const uint32 numTeams = glm::clamp(params.numTeams, 2u, RendererVKLayout::MAX_FORCE_TEAMS);
     if (params.useGrid != m_forceFieldPipeline.getUseGrid()
+        || params.densityView != m_forceFieldPipeline.getDensityView() // FORCE_DENSITY_VIEW: the debug overlay is a define too
         || numTeams != m_forceFieldPipeline.getNumTeams()
         || params.unionHalfRes != m_forceFieldPipeline.getUnionHalfRes()
         || params.unionJitter != m_forceFieldPipeline.getUnionJitter())
@@ -1476,6 +1513,7 @@ void Renderer::setForceFieldParams(const ForceFieldParams& params)
             // mode switch or the grid tweak), declared so FileSystem's assert stays meaningful.
             const FileSystem::AllowMainThreadIO allowIo;
             m_forceFieldPipeline.setUseGrid(params.useGrid);
+            m_forceFieldPipeline.setDensityView(params.densityView);
             m_forceFieldPipeline.setNumTeams(numTeams);
             m_forceFieldPipeline.setUnionJitter(params.unionJitter);
             if (params.unionHalfRes != m_forceFieldPipeline.getUnionHalfRes())
@@ -1536,7 +1574,10 @@ uint16 Renderer::createSolidColorMaterial(const glm::vec3& color)
     const uint16 texIdx = Globals::textureManager.upload(texture, false, true);
 
     RendererVKLayout::MaterialInfo material{};
-    material.flags = RendererVKLayout::MATERIAL_FLAG_NO_RAYTRACING; // tints are debug-flat visuals
+    // No MATERIAL_FLAG_NO_RAYTRACING: the flag also drops the instance from the sun shadow caster cull,
+    // and every tinted game entity (units, structures, the player) went shadowless. Tints cast shadows
+    // and sit in the TLAS like any lit material; gizmo exclusion lives in gizmos.oc.
+    material.flags = 0;
     material.opacity = 1.0f;
     material.diffuseTexIdx = texIdx;
     material.normalTexIdx = RendererVKLayout::FALLBACK_NORMAL_TEX_IDX;
@@ -2562,7 +2603,7 @@ void Renderer::recordGiProbeDebug(uint32 frameIdx)
     const vk::Rect2D scissor{ .offset = vk::Offset2D{ 0, 0 }, .extent = extent };
     vkCb.setViewport(0, { viewport });
     vkCb.setScissor(0, { scissor });
-    m_giProbePipeline.recordDebugDraw(cb, frameIdx, frameData.ubo, m_giProbeDebugRadius, m_giProbeDebugMode);
+    m_giProbePipeline.recordDebugDraw(cb, frameIdx, frameData.ubo, m_giProbeDebugRadius, (uint32)m_giProbeDebugMode);
     cb.end();
 }
 
@@ -3028,7 +3069,7 @@ bool Renderer::recordGlobalIllum(uint32 frameIdx)
         .rtMeshAlias = m_accelStructure.getMeshAliasBuffer(),
         .materialInfos = m_materialInfosBuffer,
         .nodePassMasks = frameData.inNodePassMasksBuffer,
-        .viewPos = m_cameraPos,
+        .viewPos = sceneFocusOrCamera(), // the RT set is bounded around the scene focus (the player in game mode)
         .numInstances = numInstances,
     };
     m_giProbePipeline.recordTlasInstances(globalIllumCommandBuffer, frameIdx, tlasParams);
@@ -3049,8 +3090,9 @@ bool Renderer::recordGlobalIllum(uint32 frameIdx)
         vk::AccessFlagBits2::eAccelerationStructureReadKHR | vk::AccessFlagBits2::eShaderStorageRead);
 
     // 5. Trace rays per clipmap probe and temporally blend irradiance into the SH. The probe set and
-    // its toroidal window are derived from the camera (this frame's u_viewPos in the UBO); probes that
-    // scrolled in since last frame (relative to m_giPrevCameraPos) are full-replaced rather than blended.
+    // its toroidal window are derived from the SCENE FOCUS (this frame's u_sceneFocus in the UBO — the
+    // player in game mode, else the camera); probes that scrolled in since last frame (relative to
+    // m_giPrevFocusPos) are full-replaced rather than blended.
     // Gated by the GI toggle — the TLAS built above still serves RTAO and RT shadows when GI is off.
     if (m_rtParams.giEnabled)
     {
@@ -3068,10 +3110,10 @@ bool Renderer::recordGlobalIllum(uint32 frameIdx)
         .shadowMapView = frameData.shadowMap.getSampleView(),
         .shadowMapSampler = frameData.shadowMap.getSampler(),
         .frameIndex = m_frameCounter,
-        .prevViewPos = m_giPrevCameraPos,
+        .prevViewPos = m_giPrevFocusPos,
     };
     m_giProbePipeline.recordTrace(globalIllumCommandBuffer, frameIdx, traceParams);
-    m_giPrevCameraPos = m_cameraPos;
+    m_giPrevFocusPos = sceneFocusOrCamera();
 
     // trace (SH write) -> fragment read in the main pass + vertex read (per-particle lighting)
     fullBarrier(vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite,

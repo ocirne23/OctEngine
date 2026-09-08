@@ -74,6 +74,8 @@ public:
     // Global wireframe ("Renderer/Wireframe" tweak): scene variants rasterize as lines.
     // Takes effect on the next reloadShaders (the Renderer reloads when the tweak flips).
     void setWireframe(bool enabled) { m_wireframe = enabled; }
+    void setShadowDebugMode(int mode) { m_shadowDebugMode = mode; }       // SHADOW_DEBUG define on the lit + terrain fragments
+    void setLightGridDebugMode(int mode) { m_lightGridDebugMode = mode; } // LIGHT_GRID_DEBUG define, same shaders
     // Depth-prepass reuse: the scene pass binds the G-buffer prepass depth READ-ONLY, so no scene variant
     // may write depth (rebuild via reloadShaders after flipping, like wireframe). Default matches the
     // Renderer's m_depthPrepassReuse default.
@@ -94,6 +96,8 @@ private:
     bool m_stereo = false;
     bool m_oceanHitLights = false; // OCEAN_HIT_LIGHTS define on the ocean fragment variant
     bool m_wireframe = false;      // global wireframe: scene variants get vk::PolygonMode::eLine
+    int  m_shadowDebugMode = 0;    // ShadowParams::debugMode, baked as SHADOW_DEBUG (0 = no define)
+    int  m_lightGridDebugMode = 0; // LightGridParams::debugMode, baked as LIGHT_GRID_DEBUG (0 = no define)
     bool m_depthReadOnly = true;   // depth-prepass reuse: all scene variants depthWrite off (read-only depth attachment)
 
     vk::DeviceSize m_preprocessSize = 0;

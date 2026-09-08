@@ -27,7 +27,7 @@ float giSquareFalloff(float dist, float lightRadius)
 // gl_FragCoord-based dither (unavailable in compute); cheap and leak-free enough for diffuse GI.
 float giSunShadow(vec3 worldPos, vec3 N)
 {
-    float dist = length(worldPos - u_viewPos);
+    float dist = length(worldPos - u_sceneFocus.xyz); // same pick as shadows.inc.glsl's getSunCascade
     int cascade = NUM_SHADOW_CASCADES - 1;
     for (int i = 0; i < NUM_SHADOW_CASCADES; ++i)
     {

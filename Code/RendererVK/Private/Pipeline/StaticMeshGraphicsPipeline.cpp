@@ -206,6 +206,25 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         }
     }
 
+    // Debug overlays are BAKED defines, never uniforms: SHADOW_DEBUG ("Shadows/Debug mode") and
+    // LIGHT_GRID_DEBUG ("Graphics/LOD/Light grid/Debug Mode") live in the lit core
+    // (instanced_indirect_lit.inc.glsl / shadows.inc.glsl), and each switch reloads this pipeline
+    // through the Renderer's tweak callback. Only the shaders that include the lit core get them: the
+    // lit opaque/transparent fragment and the terrain fragment.
+    const auto defineLitDebug = [&](const char* name, int mode)
+    {
+        if (mode == 0)
+            return;
+        const oc::string modeText = oc::to_string(mode);
+        graphicsPipelineLayout.fragmentShader.defines.push_back({ name, modeText });
+        for (PipelineVariant& variant : graphicsPipelineLayout.additionalVariants)
+            if (variant.fragmentShader.debugFilePath == graphicsPipelineLayout.fragmentShader.debugFilePath
+                || variant.fragmentShader.debugFilePath == terrainVariantPath)
+                variant.fragmentShader.defines.push_back({ name, modeText });
+    };
+    defineLitDebug("SHADOW_DEBUG", m_shadowDebugMode);
+    defineLitDebug("LIGHT_GRID_DEBUG", m_lightGridDebugMode);
+
     auto& bindingDescriptions = graphicsPipelineLayout.vertexLayoutInfo.bindingDescriptions;
     bindingDescriptions.push_back(vk::VertexInputBindingDescription{
         .binding = 0,

@@ -63,7 +63,7 @@ Three entry points, all main thread, at three different points of main.cpp's loo
 |---|---|---|
 | `updatePlayer(dt)` | After `networkManager.receive`, **PRE-PHYSICS** ([main.cpp:747](../App/main.cpp#L747) region) | **The PLAYER/CAMERA hot path and nothing else**: capsule adoption on a client, velocity steering, and the shield's body push — the direct body setters that must land BEFORE this frame's physics step. Deliberately minimal so main reaches the spatial and begin-frame kicks as early as possible. |
 | `update(dt)` | AFTER the spatial + begin-frame joins ([main.cpp:791](../App/main.cpp#L791)) | The whole rest of the tick: structures authority/mirror, materials, unit production, base healing, nav staging, net flushes. **Spawns, destroys and spatial queries are legal again here.** Becomes the server tick in MP. |
-| `updateWindowed(camera, dt)` | Right after `controls.applyPlayerCamera` | Camera overwrite, aim and placement input, ghost + debug draw, HUD. **SKIPPED while the main menu or lobby is active**, so a lobby client's constructed GameMatch simulates but gets no input, camera or HUD. |
+| `updateWindowed(camera, dt)` | Right after `controls.applyPlayerCamera` | Camera overwrite, aim and placement input (`updateGameInput`), ghost + debug draw, HUD. **SKIPPED while the main menu or lobby is active**, so a lobby client's constructed GameMatch simulates but gets no input, camera or HUD. With the "Detach camera" tweak on, the camera overwrite and the input half are skipped (see the Multiplayer section). |
 
 **Consequences of `update`'s placement:** freshly spawned actors link into the spatial index at the
 NEXT commit (the spawn guard keeps them visible), new bodies' velocities integrate on the NEXT step,
@@ -528,7 +528,30 @@ authority seams as local input.
 remove per-client players and replay world state.
 
 Gameplay tweaks sync automatically through the `Core.Tweaks` `Synced` flag — all `Game/*` except
-`Game/Camera` and `Game/Sim LOD`.
+`Game/Camera`, `Game/Sim LOD` and `Game/Player/Detach camera (free fly)`.
+
+**Shadow preset:** the `GameMatch` ctor writes the top-down "Shadows" values into the renderer's live
+tweak block through `Renderer::setShadowParams` (Max distance 250 m from the player, Split lambda 0.5,
+Caster pad 500 m, both biases 0) and the dtor restores whatever the sandbox had. They remain editable
+in the tweak panel during the match.
+
+**Off-screen casters** are not a game concern: the spatial `Shadow` pass (the view frustum swept
+toward the sun by "Spatial/Culling/Shadow reach (m)") keeps walls and units outside the view casting
+into it — see the Spatial CONTEXT.
+
+**Scene focus:** `updateWindowed` calls `Renderer::setSceneFocus` every frame with the player's X/Z and
+Y pinned at 1 m (a jump must not scroll the GI clipmap or slide the cascades), so
+every distance-based quality falloff measures from the PLAYER: the sun cascades are nested spheres
+around it ("Shadows/Max distance" is metres from the player) and the RTAO fade/early-out use the same
+origin — the follow camera hanging in empty sky plays no part. `clearSceneFocus` while the camera is
+detached and in `~GameMatch` (camera-based again). See "The scene focus" in the RendererVK CONTEXT.
+
+**`Game/Player/Detach camera (free fly)`** (local, `GamePlayer::cameraDetached`): main runs the
+testbed `FreeFlyCameraController` INSTEAD of the follow camera (seeded from the follow view on the
+flip via `setPose`, WASD handed over), and `updateWindowed` skips `GameCamera::apply` and the whole
+input half (`updateGameInput`: grid hotkeys, hotbar/popup clicks, mode clicks, the RMB move order)
+— LMB-look and WASD belong to the fly camera. The debug draws, labels and HUD keep running; the
+capsule keeps simulating (a standing move order still completes) but takes no new orders.
 
 ---
 
@@ -1148,9 +1171,11 @@ that arrives at a shielded base enters its ZONE (see SIM LOD focus) and ticks at
 the field pushes it. **One that arrives at an UNSHIELDED target while no player is near stands
 frozen there** (known).
 
-## `Friction 0` on every unit capsule
+## `Friction 0` on every unit body
 
-Every `enemy*.pre`; the player keeps 0.3.
+Every `enemy*.pre`; the player keeps 0.3. **Units are SPHERE bodies** (`Shape Sphere`, radius per
+prefab, `LockRotation`); only the player is still an upright capsule. `GameUnitComponent` reads the
+body's radius and top from the physics spawn info, so the shape switch needs no code.
 
 The steering SETS the body velocity each tick, and the SIM LOD ticks tier-1/2 units only every 0.25 /
 1 s, **so ground friction (unit 0.3 × ground 0.6, ~4 m/s² of deceleration) bled the commanded speed

@@ -1,4 +1,4 @@
-# Enemy NPC unit (also the barracks' Grunt): upright capsule, HEALTH ONLY - like the Swarm it
+# Enemy NPC unit (also the barracks' Grunt): sphere body, HEALTH ONLY - like the Swarm it
 # carries NO Component Force: no bubble, no shield battery, no GPU readbacks. Enemy fields still
 # SHOVE it and burn it through the BAKED pressure field (GameUnitComponent's shield-less branch:
 # a CPU tap of the field + its gradient; the bubble-radius check is only the fallback when the
@@ -13,9 +13,8 @@ Prefab gameEnemyGrunt
 		Scale 0.5 0.8 0.5
 	Component Physics
 		Body Dynamic
-		Shape Capsule
+		Shape Sphere
 		Radius 0.5
-		HalfHeight 0.3
 		Density 100
 		Friction 0
 		LockRotation true

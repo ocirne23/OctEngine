@@ -7,6 +7,7 @@ import Core.Tweaks;
 namespace
 {
     constexpr oc::string_view s_tonemapperNames[] = { "Off", "Reinhard", "ACES", "AgX" };
+    constexpr oc::string_view s_shadowDebugNames[] = { "Off", "Cascade index", "Cascade blend band", "Sun visibility", "Texel size" };
 }
 
 void SkyParams::registerTweaks()
@@ -58,8 +59,9 @@ void SkyParams::registerTweaks()
     Tweak::float3("Sky", "Up Axis", &up, 0.01f, [&]() { up = glm::normalize(up); });
 }
 
-void ShadowParams::registerTweaks()
+void ShadowParams::registerTweaks(const oc::function<void()>& onReloadShaders)
 {
+    Tweak::enumVar("Shadows", "Debug mode", &debugMode, s_shadowDebugNames, onReloadShaders); // SHADOW_DEBUG define
     Tweak::floatVar("Shadows", "Max distance (m)", &maxDistance, 25.0f, 5000.0f, 5.0f);
     Tweak::floatVar("Shadows", "Split lambda", &splitLambda, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Shadows", "Caster pad (m)", &casterPad, 0.0f, 5000.0f, 10.0f);
@@ -120,7 +122,7 @@ void PostParams::registerTweaks(const oc::function<void()>& onReRecord)
 void RTParams::registerTweaks()
 {
     Tweak::boolean("RT", "Enable RT", &enabled);
-    Tweak::boolean("RT/GI", "Enable GI", &giEnabled);
+    Tweak::boolean("GI", "Enable GI", &giEnabled); // its own Graphics category (with the GIProbePipeline knobs); still needs "RT/Enable RT"
     Tweak::boolean("RT", "RT Lights", &rtLightShadows);
     Tweak::boolean("RT", "RT Sun", &rtSunShadow);
     Tweak::intVar("RT", "RT Sun Rays", &sunShadowRays, 1, 8);
@@ -129,7 +131,7 @@ void RTParams::registerTweaks()
     Tweak::boolean("RT", "BLAS compaction", &blasCompaction);
 }
 
-void LightGridParams::registerTweaks(const oc::function<void()>& onReloadShaders)
+void LightGridParams::registerTweaks(const oc::function<void()>& onReloadShaders, const oc::function<void()>& onReloadLitShaders)
 {
     Tweak::floatVar("LOD/Light grid", "LOD start (m)", &lodStart, 0.0f, 1000.0f, 1.0f, onReloadShaders);
     Tweak::floatVar("LOD/Light grid", "LOD step (m)", &lodStep, 0.5f, 1000.0f, 0.5f, onReloadShaders);
@@ -137,8 +139,9 @@ void LightGridParams::registerTweaks(const oc::function<void()>& onReloadShaders
     Tweak::intVar("LOD/Light grid", "Min cell (log2 m)", &minCellLog2, 0, 5, 1.0f, onReloadShaders);
     Tweak::intVar("LOD/Light grid", "Max cell (log2 m)", &maxCellLog2, 0, 5, 1.0f, onReloadShaders);
     Tweak::intVar("LOD/Light grid", "Per-cell budget (cells)", &cellBudget, 8, 32768, 8.0f, onReloadShaders);
-    // 0 off, 1 grid cells, 2 light count heat, 3 light ranges, 4 sun cascades (LightGridParams::debugMode)
-    Tweak::intVar("LOD/Light grid", "Debug Mode", &debugMode, 0, 4, 0.0f, {}, ETweakFlags::None);
+    // 0 off, 1 grid cells, 2 light count heat, 3 light ranges (LightGridParams::debugMode) — the
+    // LIGHT_GRID_DEBUG define on the lit fragments. Sun cascades: the baked "Shadows/Debug mode".
+    Tweak::intVar("LOD/Light grid", "Debug Mode", &debugMode, 0, 3, 0.0f, onReloadLitShaders, ETweakFlags::None);
 }
 
 void RTAOParams::registerTweaks(const oc::function<void()>& onReRecord, const oc::function<void()>& onReloadShaders)

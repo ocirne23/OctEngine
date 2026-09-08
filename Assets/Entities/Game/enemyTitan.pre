@@ -10,9 +10,8 @@ Prefab gameEnemyTitan
 		Scale 2 2.8 2
 	Component Physics
 		Body Dynamic
-		Shape Capsule
+		Shape Sphere
 		Radius 2
-		HalfHeight 1.2
 		Density 450
 		Friction 0
 		LockRotation true

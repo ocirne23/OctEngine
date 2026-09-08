@@ -197,9 +197,11 @@ vec3 computeLitColor(vec3 worldPos, vec3 V, vec3 N, vec3 materialColor, float ro
 	// Past the RTAO max distance (u_aoParams.z) the trace writes exactly (N, 1.0) — no occlusion, bent
 	// normal = surface normal (rtao.cs.glsl early-out) — so the depth-aware upsample (up to 8 taps + 4
 	// world-pos reconstructions) would only re-fetch those constants. Skip it and use them directly;
-	// z = 0 (falloff disabled) keeps the upsample everywhere.
+	// z = 0 (falloff disabled) keeps the upsample everywhere. The gate measures from the SCENE FOCUS, the
+	// same origin as rtao.cs.glsl's early-out; the camera distance still drives the upsample's depth weights.
 	const float aoViewDist = length(worldPos - u_viewPos);
-	if (u_aoParams.x > 0.5 && (u_aoParams.z <= 0.0 || aoViewDist < u_aoParams.z))
+	const float aoFocusDist = length(worldPos - u_sceneFocus.xyz);
+	if (u_aoParams.x > 0.5 && (u_aoParams.z <= 0.0 || aoFocusDist < u_aoParams.z))
 	{
 		const vec4 aoSample = sampleAOBilateral(gl_FragCoord.xy * u_screenSize.zw, worldPos, aoViewDist);
 		ao = aoSample.w;
@@ -223,9 +225,14 @@ vec3 computeLitColor(vec3 worldPos, vec3 V, vec3 N, vec3 materialColor, float ro
 	const ivec3 gridPos = getGridPos(worldPos);
     uint tableIdx = getTableIdx(gridPos);
 
-	// Light debug overlay ("Graphics/LOD/Light grid/Debug Mode", u_aoParams.w): 0 off, 1 grid cells,
-	// 2 per-cell light count heat, 3 light ranges, 4 sun cascades. Uniform-driven, so no reload.
-	const int debugMode = int(u_aoParams.w + 0.5);
+	// Light debug overlay ("Graphics/LOD/Light grid/Debug Mode"): 0 off, 1 grid cells, 2 per-cell light
+	// count heat, 3 light ranges. BAKED: StaticMeshGraphicsPipeline defines LIGHT_GRID_DEBUG and the tweak
+	// reloads the pipeline, so at 0 every debug branch and variable below folds away (the sun cascade
+	// view is the SHADOW_DEBUG overlay at the end).
+#ifndef LIGHT_GRID_DEBUG
+#define LIGHT_GRID_DEBUG 0
+#endif
+	const int debugMode = LIGHT_GRID_DEBUG;
 	bool  debugHit = false;          // this point's grid was found in the hash table
 	uint  debugLightCount = 0u;      // large + cell lights the point evaluated
 	vec3  debugRangeTint = vec3(0.0);
@@ -281,9 +288,10 @@ vec3 computeLitColor(vec3 worldPos, vec3 V, vec3 N, vec3 materialColor, float ro
 		}
 		else if (debugMode == 3) // every light whose range covers the point adds a step of blue
 			color += debugRangeTint + vec3(0.0, 0.0, 0.02);
-		else if (debugMode == 4) // sun shadow cascades
-			color = mix(color, cascadeDebugColor(getSunCascade(worldPos)), 0.35);
 	}
+#if defined(SHADOW_DEBUG) && SHADOW_DEBUG != 0
+	color = shadowDebugOverlay(color, worldPos, N); // "Shadows/Debug mode": baked, see shadows.inc.glsl
+#endif
 	return color;
 }
 

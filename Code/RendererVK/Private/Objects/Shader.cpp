@@ -134,8 +134,13 @@ static oc::string buildLayoutPreamble()
     };
     def("NUM_SHADOW_CASCADES", NUM_SHADOW_CASCADES);
     def("GI_SH_STRIDE", GI_SH_STRIDE);
-    def("GI_NUM_CASCADES", GI_NUM_CASCADES);
-    def("GI_CASCADE_PROBE_DIM", GI_CASCADE_PROBE_DIM);
+    // The LIVE grid shape (g_giGrid, the "GI" grid tweaks): baked so the addressing stays constant-folded;
+    // a change reloads every shader (GIProbePipeline::registerGridTweaks).
+    def("GI_NUM_CASCADES", g_giGrid.numCascades);
+    def("GI_PROBE_DIM_X", g_giGrid.dimX());
+    def("GI_PROBE_DIM_Y", g_giGrid.dimY());
+    def("GI_PROBE_DIM_Z", g_giGrid.dimZ());
+    def("GI_FOCUS_Y_OFFSET", g_giGrid.focusOffsetY); // float literal (to_string keeps the decimal point)
     def("GI_CASCADE_BASE_SPACING", GI_CASCADE_BASE_SPACING);
     def("VOL_FROXEL_X", VOL_FROXEL_X);
     def("VOL_FROXEL_Y", VOL_FROXEL_Y);

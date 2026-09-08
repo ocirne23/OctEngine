@@ -289,24 +289,38 @@ export namespace RendererVKLayout
     constexpr uint32 PASS_GI     = 1u << 2;
     constexpr uint32 PASS_ALL    = PASS_MAIN | PASS_SHADOW | PASS_GI;
 
-    // Diffuse GI irradiance probes. A single persistent, world-space cascaded clipmap volume: GI_NUM_CASCADES
-    // nested toroidal probe grids, each GI_CASCADE_PROBE_DIM^3 probes at a fixed power-of-two spacing
-    // (GI_CASCADE_BASE_SPACING << cascade), camera-centered. Probes live at absolute lattice positions
-    // (lc * spacing) and are addressed toroidally (slot = lc & (DIM-1)), so irradiance carries forward in
-    // place across frames with no hash table, copy, or ping-pong. SH-L1 RGB per probe.
-    // The GI_* sizing constants are injected into every shader compile (Shader.cpp buildLayoutPreamble).
+    // Diffuse GI irradiance probes. A single persistent, world-space cascaded clipmap volume: numCascades
+    // nested toroidal probe grids, each dimX x dimY x dimZ probes at a fixed power-of-two spacing
+    // (GI_CASCADE_BASE_SPACING << cascade), centred on the scene focus (+ a Y offset). Probes live at
+    // absolute lattice positions (lc * spacing) and are addressed toroidally (slot = lc & (DIM-1), so
+    // every dim is a power of two), so irradiance carries forward in place across frames with no hash
+    // table, copy, or ping-pong. SH-L1 RGB per probe.
+    // The GI_* sizing values are injected into EVERY shader compile (Shader.cpp buildLayoutPreamble) as
+    // #defines: the grid shape is a compile-time constant in the shaders (no per-sample uniform math),
+    // and the "GI" grid tweaks change it through GIProbePipeline::registerGridTweaks — GPU idle, the SH
+    // buffer re-allocated (resizeGrid), every shader reloaded, the clipmap cleared.
     constexpr uint32 GI_SH_STRIDE = 12;                                                  // SH-L1 RGB floats per probe
     constexpr uint32 GI_PROBE_STRIDE = GI_SH_STRIDE + 12;                                 // SH + SH-L1 depth + depth^2 + backface fraction + relocation offset xyz
-    constexpr uint32 GI_NUM_CASCADES = 4;                                                // nested clipmap levels
-    constexpr uint32 GI_CASCADE_PROBE_DIM = 32;                                          // probes per axis per cascade (power of two)
     constexpr uint32 GI_CASCADE_BASE_SPACING = 2;                                        // finest cascade probe spacing, world units (power of two)
-    constexpr uint32 GI_CASCADE_PROBES = GI_CASCADE_PROBE_DIM * GI_CASCADE_PROBE_DIM * GI_CASCADE_PROBE_DIM;
-    constexpr uint32 GI_PROBES_TOTAL = GI_NUM_CASCADES * GI_CASCADE_PROBES;
+    struct GiGridConfig
+    {
+        int numCascades = 4;                    // nested clipmap levels (1..8)
+        int dimLog2X = 5, dimLog2Y = 2, dimLog2Z = 5; // probes per axis per cascade as log2 (2..6 = 4..64): power of two for the toroidal mask
+        float focusOffsetY = 2.0f;              // metres added to the scene focus before centring the grids (> 0 = more probes above the ground than below)
 
-    // + one extra SH-L1 slot after the last probe: the "virtual sky probe" (skyRadiance projected by the
-    // trace pass), evaluated as the out-of-field fallback so it matches the probes by construction.
-    constexpr size_t GI_GRID_DATA_BUFFER_SIZE = ((size_t)GI_PROBES_TOTAL * GI_PROBE_STRIDE + GI_SH_STRIDE) * sizeof(uint32);
-    constexpr uint32 GI_TRACE_THREADS = GI_PROBES_TOTAL + 64;                            // one invocation per probe + one workgroup projecting the sky SH
+        uint32 dimX() const { return 1u << dimLog2X; }
+        uint32 dimY() const { return 1u << dimLog2Y; }
+        uint32 dimZ() const { return 1u << dimLog2Z; }
+        uint32 probesPerCascade() const { return dimX() * dimY() * dimZ(); } // a multiple of 64 (every dim >= 4): the trace's sky workgroup relies on it
+        uint32 probesTotal() const { return (uint32)numCascades * probesPerCascade(); }
+        uint32 traceThreads() const { return probesTotal() + 64; }            // one invocation per probe + one workgroup projecting the sky SH
+        // + one extra SH-L1 slot after the last probe: the "virtual sky probe" (skyRadiance projected by the
+        // trace pass), evaluated as the out-of-field fallback so it matches the probes by construction.
+        size_t gridDataBufferSize() const { return ((size_t)probesTotal() * GI_PROBE_STRIDE + GI_SH_STRIDE) * sizeof(uint32); }
+    };
+    // THE live grid shape: GIProbePipeline owns the tweaks on it; buildLayoutPreamble reads it at every
+    // shader compile, so a change must be followed by a full shader reload (see registerGridTweaks).
+    inline GiGridConfig g_giGrid;
 
     constexpr uint32 GI_INITIAL_TLAS_INSTANCES = 256; // grown when the instance count exceeds it
     constexpr size_t GI_TLAS_INSTANCE_SIZE = 64;                                         // sizeof(VkAccelerationStructureInstanceKHR)
@@ -425,6 +439,9 @@ export namespace RendererVKLayout
         // per-cascade far distance is stashed in m[0][3] and the world texel size in m[1][3]. Readers
         // restore the bottom row to [0,0,0,1] before using the matrix (see the shaders' cascadeMatrix).
         glm::mat4 cascadeViewProj[NUM_SHADOW_CASCADES];
+        glm::vec4 sceneFocus;   // xyz = the SCENE FOCUS every distance-based quality falloff measures from: the
+                                // sun cascade pick, the RTAO fade/early-out (the game's player via
+                                // Renderer::setSceneFocus; the camera position otherwise), w unused
         glm::vec3 shadowParams; // x = depth bias, y = normal bias (texels), z = 1/resolution
         float sunShadowRays;    // RT sun shadow rays per pixel (1 = single jittered ray)
 
@@ -482,7 +499,7 @@ export namespace RendererVKLayout
         glm::vec4 groundParams;  // rgb = ground albedo * intensity, w = horizon terrain fraction (fallback ambient)
         glm::vec4 aoParams;      // x = RTAO enabled (0/1), y = GI strength, z = RTAO max distance (m; the
                                  // forward pass skips its AO upsample past it; 0 = no falloff),
-                                 // w = light debug overlay mode (LightGridParams::debugMode; 0 = off)
+                                 // w = unused (the light debug overlay is the LIGHT_GRID_DEBUG define)
         glm::vec4 giVisParams;   // x = Chebyshev variance floor (fraction of spacing), y = Chebyshev power, z = probe weight floor, w = mean scale (footprint widening)
 
         // Ocean (FFT/Tessendorf water; OceanSimulationPipeline + ocean_*.cs.glsl / ocean.fs.glsl)
@@ -587,7 +604,7 @@ export namespace RendererVKLayout
                                 // y = backface alpha (far/inner surface visibility from outside),
                                 // z = contact wall alpha (interior equilibrium pane),
                                 // w = junction smoothing (smooth-max width as a fraction of iso)
-        glm::vec4 forceParams4; // x = density debug view (0/1: heatmap of peak field along the ray),
+        glm::vec4 forceParams4; // x = unused (the density debug view is the FORCE_DENSITY_VIEW define),
                                 // y = density range (field value mapping to white), zw = unused
         glm::vec4 forceBake0;   // sampled shell tier: xyz = bake volume world min, w = the reach
                                 // threshold an emitter marches the volume at (see ForceFieldPipeline)

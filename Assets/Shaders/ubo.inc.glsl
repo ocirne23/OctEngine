@@ -45,6 +45,8 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     float u_rtSunShadow;   // > 0.5: ray-traced sun shadows instead of PCSS cascades
 
     mat4 u_cascadeViewProj[NUM_SHADOW_CASCADES];
+    vec4 u_sceneFocus;   // xyz = the SCENE FOCUS every distance-based quality falloff measures from — the sun cascade
+                         // pick, the RTAO fade/early-out (the game's player; the camera position otherwise), w unused
     vec3 u_shadowParams; // x = depth bias, y = normal bias (texels), z = 1/resolution
     float u_sunShadowRays; // RT sun shadow rays per pixel (1 = single jittered ray)
 
@@ -100,7 +102,7 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                           // (virtual sky probe projection: fraction of above-horizon sky treated as ground)
     vec4 u_aoParams;      // x = RTAO enabled (0/1), y = GI strength, z = RTAO max distance (m; past it the
                           // AO image is exactly (N, 1) so the upsample is skipped; 0 = no falloff),
-                          // w = forward-pass light debug overlay mode (0 = off; see computeLitColor)
+                          // w = unused (the forward-pass light debug overlay is the LIGHT_GRID_DEBUG define)
     vec4 u_giVisParams;   // x = Chebyshev variance floor (fraction of spacing), y = Chebyshev power, z = probe weight floor, w = mean scale (footprint widening)
 
     // Ocean (FFT/Tessendorf water; ocean_*.cs.glsl simulation + ocean.fs.glsl shading)
@@ -203,7 +205,7 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                          // y = backface alpha (far/inner surface visibility from outside),
                          // z = contact wall alpha (interior equilibrium pane),
                          // w = junction smoothing (smooth-max width as a fraction of iso)
-    vec4 u_forceParams4; // x = density debug view (0/1: heatmap of peak field along the ray),
+    vec4 u_forceParams4; // x = unused (the density debug view is the FORCE_DENSITY_VIEW define),
                          // y = density range (field value mapping to white), zw = unused
     vec4 u_forceBake0;   // sampled shell tier: xyz = bake volume world min, w = tier reach threshold
     vec4 u_forceBake1;   // xyz = 1 / bake volume world size, w = tier enabled (0/1)

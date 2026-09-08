@@ -380,6 +380,8 @@ void ForceFieldPipeline::buildDrawLayout(GraphicsPipelineLayout& layout)
         layout.vertexShader.defines.push_back({ "FORCE_GRID", "" });
         layout.fragmentShader.defines.push_back({ "FORCE_GRID", "" });
     }
+    if (m_densityView) // "Force/Debug/Density view": a baked overlay, never a uniform
+        layout.fragmentShader.defines.push_back({ "FORCE_DENSITY_VIEW", "" });
     layout.vertexShader.defines.push_back(numTeamsDefine(m_numTeams));
     layout.fragmentShader.defines.push_back(numTeamsDefine(m_numTeams));
     // Cull FRONT faces and skip the fixed-function depth test: the box's far/inside faces rasterize

@@ -8,7 +8,7 @@ import :Layout;
 
 export float radicalInverse(uint32 i, uint32 base);
 export float sunVisibleFraction(const glm::vec3& sunDir, const glm::vec3& moonDir, float cosSunRadius, float cosMoonRadius, float sunGlow);
-export void computeSunCascades(const Camera& camera, float aspect, const glm::vec3& sunDir,
+export void computeSunCascades(const Camera& camera, float aspect, const glm::vec3& sunDir, float focusDistance,
     float shadowFar, float splitLambda, float casterPad, glm::mat4(&outViewProj)[RendererVKLayout::NUM_SHADOW_CASCADES]);
 
 // Radical inverse in an arbitrary base; (Halton(2), Halton(3)) gives the low-discrepancy sub-pixel jitter
@@ -48,7 +48,12 @@ float sunVisibleFraction(const glm::vec3& sunDir, const glm::vec3& moonDir,
 //   splitLambda:  0 = evenly spaced splits (uniform), 1 = logarithmic (splits bunch up close to
 //                 the camera). Higher = more shadow-map resolution near the camera.
 //   casterPad:    up-sun depth-slab extension per cascade — see the comment at its use.
-void computeSunCascades(const Camera& camera, float aspect, const glm::vec3& sunDir,
+//   focus:        null = the classic camera-frustum slices (the shader picks by distance to the camera).
+//                 Set = the ORIGIN of the whole distribution (Renderer::setSceneFocus, the game's
+//                 player): cascade c is the SPHERE of radius splits[c + 1] around it, nested, and the
+//                 shader picks by distance to that point (u_sceneFocus) — so shadowFar and the split
+//                 scheme are metres from the player, and a camera hanging in empty sky is irrelevant.
+void computeSunCascades(const Camera& camera, float aspect, const glm::vec3& sunDir, const glm::vec3* focus,
     float shadowFar, float splitLambda, float casterPad, glm::mat4(&outViewProj)[RendererVKLayout::NUM_SHADOW_CASCADES])
 {
     constexpr uint32 N = RendererVKLayout::NUM_SHADOW_CASCADES;
@@ -64,7 +69,7 @@ void computeSunCascades(const Camera& camera, float aspect, const glm::vec3& sun
     const glm::vec3 forward = -glm::normalize(glm::vec3(invView[2])); // right-handed: -Z is forward
     const float tanHalfV = tanf(glm::radians(camera.fovDeg) * 0.5f);
 
-    float splits[N + 1];
+    float splits[N + 1]; // distances from the pick origin (the focus, else the camera)
     splits[0] = shadowNear;
     for (uint32 i = 1; i <= N; ++i)
     {
@@ -80,24 +85,34 @@ void computeSunCascades(const Camera& camera, float aspect, const glm::vec3& sun
     for (uint32 c = 0; c < N; ++c)
     {
         const float dists[2] = { splits[c], splits[c + 1] };
-        glm::vec3 corners[8];
-        int idx = 0;
-        for (int di = 0; di < 2; ++di)
-        {
-            const float d = dists[di];
-            const float h = d * tanHalfV;
-            const float w = h * aspect;
-            const glm::vec3 cc = camPos + forward * d;
-            corners[idx++] = cc + up * h + right * w;
-            corners[idx++] = cc + up * h - right * w;
-            corners[idx++] = cc - up * h + right * w;
-            corners[idx++] = cc - up * h - right * w;
-        }
         glm::vec3 center(0.0f);
-        for (int k = 0; k < 8; ++k) center += corners[k];
-        center /= 8.0f;
         float radius = 0.0f;
-        for (int k = 0; k < 8; ++k) radius = glm::max(radius, glm::length(corners[k] - center));
+        if (focus)
+        {
+            // Focused: the cascade IS the pick sphere — everything within splits[c + 1] of the focus, so
+            // the shader's distance pick and this coverage agree exactly (nested, no frustum slicing).
+            center = *focus;
+            radius = dists[1];
+        }
+        else
+        {
+            glm::vec3 corners[8];
+            int idx = 0;
+            for (int di = 0; di < 2; ++di)
+            {
+                const float d = dists[di];
+                const float h = d * tanHalfV;
+                const float w = h * aspect;
+                const glm::vec3 cc = camPos + forward * d;
+                corners[idx++] = cc + up * h + right * w;
+                corners[idx++] = cc + up * h - right * w;
+                corners[idx++] = cc - up * h + right * w;
+                corners[idx++] = cc - up * h - right * w;
+            }
+            for (int k = 0; k < 8; ++k) center += corners[k];
+            center /= 8.0f;
+            for (int k = 0; k < 8; ++k) radius = glm::max(radius, glm::length(corners[k] - center));
+        }
         radius = ceilf(radius * 16.0f) / 16.0f;
 
         // How far up-sun a caster can be above this cascade and still be captured. Extends only the

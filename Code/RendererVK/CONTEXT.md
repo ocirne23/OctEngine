@@ -191,6 +191,40 @@ effect immediately.**
 * **RTAO**, **TAA**, **PCSS cascades**, **volumetric fog**, **GPU compute skinning**.
 * **"RT/RT Sun" replaces the PCSS cascades entirely** — the shadow cull and draw are skipped.
 
+## The scene focus
+
+`Renderer::setSceneFocus(worldPos)` / `clearSceneFocus()` set the world point every DISTANCE-BASED
+QUALITY FALLOFF measures from; it reaches the shaders as `u_sceneFocus` (the camera position when
+cleared, so the sandbox behaves as before). The game sets its PLAYER every windowed frame, so the
+top-down camera hanging in empty sky shapes none of these:
+
+* **Sun cascades** (`computeSunCascades`). Focused: cascade c is the SPHERE of radius `splits[c + 1]`
+  around the focus (nested), and `getSunCascade` (PCSS), `giSunShadow` (GI) and the debug overlay pick
+  by distance to `u_sceneFocus`, so "Shadows/Max distance" and the split lambda are metres from the
+  point. Cleared: the classic camera-frustum slices.
+* **GI grid shape** ("GI" tweaks Cascades, Probes X/Y/Z (log2), Focus Y offset) is
+  `RendererVKLayout::g_giGrid`, injected into EVERY shader compile as `GI_NUM_CASCADES`,
+  `GI_PROBE_DIM_X/Y/Z` and `GI_FOCUS_Y_OFFSET` (Shader.cpp `buildLayoutPreamble`), so the toroidal
+  addressing stays constant-folded. Dims are powers of two (the `lc & (DIM-1)` mask) and every dim ≥ 4
+  keeps the probe count a multiple of 64 (the trace's sky workgroup). A change runs
+  `GIProbePipeline::registerGridTweaks`'s callback: GPU idle → `resizeGrid()` (SH buffer re-allocated,
+  clear scheduled; the consumers rebind it at their next record) → `Renderer::reloadShaders()`. A
+  positive Y offset lifts the grid centre so more probes sit above the ground than below.
+* **GI clipmap + TLAS range.** `giCascadeOrigin(c, u_sceneFocus.xyz)` centres every probe cascade on the
+  focus (sample, trace and debug sides alike), the trace's previous-window freshness test uses last
+  frame's focus (`m_giPrevFocusPos`), and the TLAS instance range bound (`RT/TLAS Range`) is measured
+  from it too (`sceneFocusOrCamera()`), so the ray-traced set is the geometry around the player.
+* **RTAO** "Fade Start" / "Max Distance": the fade and the trace early-out in `rtao.cs.glsl`, and the
+  forward pass's upsample-skip gate, all measure from `u_sceneFocus`. The ray-origin distance bias
+  stays on the CAMERA distance — it compensates a depth-reconstruction error that lies along the view
+  ray, and so do the upsample's depth weights.
+
+**Anything new that fades or early-outs by distance measures from `u_sceneFocus`, never `u_viewPos`**
+(view-ray geometry is the exception).
+
+`shadowParams()` / `setShadowParams()` expose the same `ShadowParams` block the "Shadows" tweaks
+edit, so a mode can install a preset that stays live in the panel (the game's match ctor/dtor).
+
 ## Long-range sun shadows
 
 "Shadows/Terrain march *". Past the PCSS `Max distance` and `RT/TLAS Range`, distant pixels
@@ -435,9 +469,21 @@ calls `reloadShaders()`.
   > (`MAX_LARGE_LIGHTS_PER_GRID` 14, one entry evaluated by every pixel of the grid) instead —
   > a range-12 emitter at full res was 15k serial atomics per grid. Point and spot lights also
   > skip the cells their range sphere misses (`addLightToGrid`, ~half the box's corners).
-* **"Graphics/LOD/Light grid/Debug Mode"** (`LightGridParams::debugMode`, rides `aoParams.w` in the UBO, so
-  no reload) overlays the forward pass's `computeLitColor` (`instanced_indirect_lit.inc.glsl`):
+* **Debug overlays are `#define`-driven, NEVER uniforms** — a debug switch rebuilds its pipeline
+  (GPU idle + reload, the wireframe pattern), so the release shader carries no debug branch at all.
+  The three today: `SHADOW_DEBUG` and `LIGHT_GRID_DEBUG` (below, both on the lit fragments) and
+  `FORCE_DENSITY_VIEW` ("Force/Debug/Density view", `ForceFieldPipeline::setDensityView` through
+  `setForceFieldParams`'s rebuild branch). Keep new ones on the same pattern.
+* **"Shadows/Debug mode"** (`ShadowParams::debugMode`) is BAKED as the `SHADOW_DEBUG` define into the
+  lit and terrain fragment variants (`StaticMeshGraphicsPipeline::setShadowDebugMode`; the tweak callback
+  in `Renderer` does the GPU-idle + reload, the wireframe pattern), so the release shader carries none of
+  it. `shadowDebugOverlay` in `shadows.inc.glsl`: 1 cascade index tint, 2 the cross-fade band (white),
+  3 the raw sun visibility, 4 shadow-map texel size heat (green 5 cm → red 1 m). PCSS path only.
+  `~GameMatch`'s shadow-preset restore leaves this field alone for the same reason.
+* **"Graphics/LOD/Light grid/Debug Mode"** (`LightGridParams::debugMode`) is BAKED as the
+  `LIGHT_GRID_DEBUG` define on the same lit fragments (its own reload callback; at 0 every debug branch
+  folds away) and overlays the forward pass's `computeLitColor` (`instanced_indirect_lit.inc.glsl`):
   1 light grid cells (random colour per grid), 2 per-cell light count heat (green → red at the cell
   cap, magenta = the point's grid is missing from the hash table), 3 light ranges (a step of blue
-  per covering light), 4 sun shadow cascades. Not saved.
+  per covering light). Not saved. The sun cascade view lives in the baked "Shadows/Debug mode" above.
 * SPIR-V plus source dumps land in `Assets/Local/` for Aftermath crash analysis.

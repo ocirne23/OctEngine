@@ -33,7 +33,7 @@ mat4 cascadeMatrix(int c)
 
 int getSunCascade(vec3 worldPos)
 {
-	float dist = length(worldPos - u_viewPos);
+	float dist = length(worldPos - u_sceneFocus.xyz); // the cascades are concentric about the scene focus (the player in game mode)
 	for (int i = 0; i < NUM_SHADOW_CASCADES; ++i)
 		if (dist < cascadeSplit(i)) return i;
 	return NUM_SHADOW_CASCADES - 1;
@@ -188,7 +188,7 @@ float sampleSunShadow(vec3 worldPos, vec3 N)
 	int nextCascade = min(cascade + 1, NUM_SHADOW_CASCADES - 1);
 
 	// Blend factor t ramps 0->1 across the last SHADOW_CASCADE_BLEND fraction of this cascade's range.
-	float dist = length(worldPos - u_viewPos);
+	float dist = length(worldPos - u_sceneFocus.xyz); // the cascades are concentric about the scene focus (the player in game mode)
 	float splitFar = cascadeSplit(cascade);
 	float prevSplit = (cascade > 0) ? cascadeSplit(cascade - 1) : 0.0;
 	float bandStart = mix(prevSplit, splitFar, 1.0 - SHADOW_CASCADE_BLEND);
@@ -223,3 +223,31 @@ float sampleSunShadow(vec3 worldPos, vec3 N)
 		return pcssBorder(pa, pb, cascade, nextCascade, texelUV, rotation, t);
 	}
 }
+
+// Debug overlay, compiled in by the SHADOW_DEBUG define ("Shadows/Debug mode" — a pipeline reload, not a
+// uniform, so the release shader carries none of it). Applied to the final lit colour:
+//   1  cascade index tint (red / green / blue / magenta = cascade 0..3)
+//   2  the cross-fade band: the cascade tint, going WHITE across the SHADOW_CASCADE_BLEND band into the next
+//   3  the raw sun visibility term alone (what sampleSunShadow returns), greyscale
+//   4  shadow-map texel size heat: green = 5 cm per texel, red = 1 m per texel (log scale)
+#if defined(SHADOW_DEBUG) && SHADOW_DEBUG != 0
+vec3 shadowDebugOverlay(vec3 color, vec3 worldPos, vec3 N)
+{
+	int cascade = getSunCascade(worldPos);
+#if SHADOW_DEBUG == 1
+	return mix(color, cascadeDebugColor(cascade), 0.5);
+#elif SHADOW_DEBUG == 2
+	float dist = length(worldPos - u_sceneFocus.xyz); // the cascades are concentric about the scene focus (the player in game mode)
+	float splitFar = cascadeSplit(cascade);
+	float prevSplit = (cascade > 0) ? cascadeSplit(cascade - 1) : 0.0;
+	float bandStart = mix(prevSplit, splitFar, 1.0 - SHADOW_CASCADE_BLEND);
+	float t = (cascade == NUM_SHADOW_CASCADES - 1) ? 0.0 : clamp((dist - bandStart) / max(splitFar - bandStart, 1e-4), 0.0, 1.0);
+	return mix(mix(color, cascadeDebugColor(cascade), 0.3), vec3(1.0), t);
+#elif SHADOW_DEBUG == 3
+	return vec3(sampleSunShadow(worldPos, N));
+#else
+	float heat = clamp(log2(cascadeTexelWorldSize(cascade) / 0.05) / log2(1.0 / 0.05), 0.0, 1.0);
+	return mix(color, mix(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), heat), 0.6);
+#endif
+}
+#endif

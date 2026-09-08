@@ -141,7 +141,8 @@ invalidates that pass's previous generation — one consumer per pass by design.
 | Pass | Meaning |
 |---|---|
 | `Main` | The camera frustum, occlusion-testable. |
-| `Near` | A camera ball that keeps off-screen shadow casters and ray-traced geometry alive. |
+| `Near` | A camera ball that keeps off-screen ray-traced geometry (and its shadows) alive. |
+| `Shadow` | The Main frustum swept toward the sun by `shadowReach`: off-screen sun shadow casters. |
 | `UpdateTier0/1/2` | The World's SIM LOD selection. **Not rendering.** |
 | `UpdateRoot` / `VisibleRoot` | The World's ROOT-DEDUPE stamps: "this root is in the current periodic selection result" (advances with the selection job) / "already queued from this frame's visible set" (advances every pass). No visibility meaning — read with the exact accessors only. |
 
@@ -151,7 +152,7 @@ current again. The pool's other narrow rows: `layerMask` is a byte (4 layer bits
 `storeIdx` stays 32-bit (block * 8 + lane) and `gen` stays 32-bit so a stale handle can never match
 a reused slot.
 
-**The link-time spawn-guard stamp covers Main and Near ONLY.** The tier and root passes are left at
+**The link-time spawn-guard stamp covers Main, Near and Shadow ONLY.** The tier and root passes are left at
 0 on link: their generations advance with the World's periodic selection, so a "current" stamp made
 here would read as a real tier 0 (or "root already held") for frames.
 
@@ -187,7 +188,7 @@ a plain-int mirror for the tweak panel, which binds a raw `int*`.
 
 ### The SIM LOD tiers are NOT stamped by the cull job
 
-`update()` stamps Main and Near only. The `UpdateTier` passes are stamped by the World's selection
+`update()` stamps Main, Near and Shadow only. The `UpdateTier` passes are stamped by the World's selection
 job through `advanceUpdateTiers` + `queryUpdateTiers` (below), off the frame-critical path.
 
 ### The visible set hand-over (`setVisibleCollect`)
@@ -211,6 +212,17 @@ staying unstamped: they can enter the ball without the camera moving
 Terrain rides the Main stamp but **skips the Near ball**: main-culled terrain keeps its shadow and GI
 passes unconditionally.
 
+### The Shadow pass
+
+A caster shadows the visible ground when it sits UP-SUN of it, so the Near ball (centred on a camera
+that may hang far above the scene) is the wrong shape for shadow relevance. `update()` therefore
+stamps a third render pass every frame: **the inflated Main frustum swept toward the sun on the
+horizontal plane by `shadowReach`** — the Minkowski sum with that segment, which keeps the face
+normals and moves only the planes facing against the sweep (by reach × −(n·s)). The sun direction
+rides in `CullView::sunDirection` (the renderer fills it in `getCullView`); a near-vertical sun skips
+the sweep. No occlusion test: a caster hidden behind a wall still casts. `Shadow`-only entries push
+`PASS_SHADOW` alone (Entity.cpp); Near-only still pushes `PASS_SHADOW | PASS_GI`.
+
 ### Culling config (`Spatial/Culling` tweaks)
 
 | Field | Default | Notes |
@@ -218,7 +230,8 @@ passes unconditionally.
 | `mode` | `Cull` | `Off` / `StatsOnly` / `Cull` / `MainOnly` (debug — visibly breaks off-screen shadows and GI). |
 | `freeze` | false | Stop re-stamping and fly around to inspect the culled set. |
 | `margin` | 4 m | Frustum inflation masking the one-frame stamp latency. |
-| `nearRadius` | **0** | Shadow-caster + ray-tracing relevance range. |
+| `nearRadius` | **0** | Ray-tracing (and RT shadow) relevance range around the camera. |
+| `shadowReach` | 60 m | Shadow pass: how far the view frustum is swept toward the sun; 0 = off. |
 | `nearSlack` | 16 m | Near-ball inflation and requery threshold; 0 = every frame. |
 | `maxDist` | overwritten | Set from the camera far plane every update. |
 | `skinnedRadiusScale` | 1.5 | Animation can exceed the bind-pose bounds sphere. |

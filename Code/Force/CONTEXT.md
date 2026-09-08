@@ -483,7 +483,10 @@ light …"): an emitter projecting its OWN bubble (Own / Leaving, `bubbleRadius 
 crowd of shielded units whose bubbles merged is one larger light, and the units' own lights
 crossfade into it as they join (a Joining / Merged member is dark). Range = radius × "Bubble light
 range", intensity = "Bubble light intensity" × radius² (the rim brightness is the same at every
-size), colour = the team shell colour mixed toward white. **Every light FADES** over "Bubble light
+size), colour = the team shell colour mixed toward white. **The light sits ABOVE the bubble centre** by
+radius × "Bubble light height" (0.5): a Centered structure emitter's centre is inside its own mesh,
+where a point light is swallowed (dark, or lit from within under RT light shadows); the lift scales
+with the bubble so it stays inside the dome and above the mesh at every size. **Every light FADES** over "Bubble light
 fade" (smoothstep-eased) in both directions, and the fade-out keeps playing at the last lit
 centre/radius after the bubble is gone (a starved emitter, a collapsed shield); a SIM-LOD-gated
 emitter drops to dark at once (far away). A reused group slot starts dark. Pushed from the upload

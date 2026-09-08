@@ -91,8 +91,10 @@ export struct SkyParams
 // "Shadows" category. Consumed per frame by computeSunCascades, so changes apply live.
 export struct ShadowParams
 {
-    float maxDistance = 2000.0f; // farthest camera distance receiving sun shadows (m). Lower = every
-                                // cascade covers less ground = sharper shadows everywhere, at range cost.
+    float maxDistance = 2000.0f; // farthest distance receiving sun shadows (m), measured from the shadow
+                                // focus (Renderer::setSceneFocus — the player in game mode; the camera when
+                                // unset). Lower = every cascade covers less ground = sharper shadows
+                                // everywhere, at range cost.
     float splitLambda = 0.95f;  // cascade split scheme: 0 = uniform splits, 1 = logarithmic (resolution
                                 // bunches up near the camera)
     float casterPad = 4000.0f;   // how far up-sun a caster may sit above a cascade and still be captured
@@ -113,11 +115,16 @@ export struct ShadowParams
                                 // the map's texels are 8 m near / 132 m far and carry none of the sub-
                                 // texel relief that is actually rendered, so a surface point sits on a
                                 // heightfield coarser than itself. Too small = acne on lit slopes.
+    // Debug overlay, BAKED as the SHADOW_DEBUG define into the lit fragment variants (a change reloads
+    // the static mesh pipeline through the Renderer's callback — no uniform, no per-pixel cost when off):
+    // 0 off, 1 cascade index tint, 2 the cascade cross-fade band, 3 the raw sun visibility, 4 shadow-map
+    // texel size heat. Cascade data only exists on the PCSS path (RT sun off).
+    int debugMode = 0;
     float terrainMarchSpread = 0.02f;  // penumbra growth per metre along the ray. Deliberately far wider
                                 // than the true sun disc (~0.005): the softness is what keeps the map's
                                 // texels from resolving as stair-steps, and what keeps the doubling
                                 // sample spacing self-consistent (this is a cone trace, not a point march).
-    void registerTweaks();
+    void registerTweaks(const oc::function<void()>& onReloadShaders); // debugMode is a baked define
 };
 
 // Volumetric fog (froxel grid; see VolumetricFogPipeline) — the TweakPanel's "Fog" categories.
@@ -240,13 +247,16 @@ export struct LightGridParams
     // entry, evaluated by every pixel in the grid) instead of a per-cell insert: the build runs one
     // thread per light, so a wide light in a full-res grid was tens of thousands of serial atomics.
     int   cellBudget = 1024;
-    // Forward-pass lighting debug overlay (computeLitColor, instanced_indirect_lit.inc.glsl), rides
-    // the UBO (aoParams.w) so it needs no shader reload: 0 off, 1 light grid cells (random colour
-    // per grid), 2 per-cell light count heat (green -> red at the cell cap, magenta = the cell's
-    // hash lookup missed), 3 light ranges (blue per covering light), 4 sun shadow cascades.
+    // Forward-pass lighting debug overlay (computeLitColor, instanced_indirect_lit.inc.glsl), BAKED as
+    // the LIGHT_GRID_DEBUG define on the lit fragment variants (a change reloads the static mesh
+    // pipeline; every debug branch folds away at 0): 0 off, 1 light grid cells (random colour per
+    // grid), 2 per-cell light count heat (green -> red at the cell cap, magenta = the cell's hash
+    // lookup missed), 3 light ranges (blue per covering light).
     int   debugMode = 0;
 
-    void registerTweaks(const oc::function<void()>& onReloadShaders);
+    // onReloadShaders: the LOD defines (the light grid COMPUTE shader); onReloadLitShaders: debugMode
+    // (the static mesh pipeline's lit fragments).
+    void registerTweaks(const oc::function<void()>& onReloadShaders, const oc::function<void()>& onReloadLitShaders);
 };
 
 export struct RTAOParams
@@ -256,8 +266,9 @@ export struct RTAOParams
     float radius = 1.0f;
     float power = 1.5f;
     float intensity = 1.0f;
-    float fadeStart = 30.0f;   // distance from camera (world units) where AO begins to fade out
-    float maxDistance = 60.0f; // distance at which AO is fully gone; 0 disables the falloff
+    float fadeStart = 30.0f;   // distance (m) from the SCENE FOCUS (Renderer::setSceneFocus — the player in game
+                               // mode; the camera when unset) where AO begins to fade out
+    float maxDistance = 60.0f; // focus distance at which AO is fully gone (trace early-out); 0 disables the falloff
     float normalBias = 0.02f;    // constant ray-origin offset along the surface normal (m)
     float distanceBias = 0.001f; // ray-origin offset toward the camera per meter of view distance: absorbs
                                  // the depth-reconstruction error (grows with distance, lies along the view

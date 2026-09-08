@@ -430,10 +430,11 @@ private:
     float m_activateRamp = 0.6f; // "Activate ramp (s)": see EmitterInstance::ramp
     // "Force/Glow" bubble light tweaks (see BubbleLight)
     bool m_bubbleLight = true;
-    float m_bubbleLightIntensity = 1.0f; // x radius^2
-    float m_bubbleLightRange = 1.5f;     // x radius
+    float m_bubbleLightIntensity = 2.0f; // x radius^2
+    float m_bubbleLightRange = 2.0f;     // x radius
+    float m_bubbleLightHeight = 0.8f;    // x radius: lift above the bubble centre (out of a Centered structure's mesh)
     float m_bubbleLightFade = 0.5f;      // seconds, in and out
-    float m_bubbleLightWhite = 0.35f;    // team colour -> white mix
+    float m_bubbleLightWhite = 0.2f;    // team colour -> white mix
 };
 
 export namespace Globals

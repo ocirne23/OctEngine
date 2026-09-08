@@ -730,7 +730,7 @@ const oc::vector<oc::vector<uint64>>& SpatialIndex::queryUpdateTiers(const glm::
     return m_tierHitChunks;
 }
 
-void SpatialIndex::update(const Camera& camera, const Frustum& frustum, const glm::mat4& viewProjRelCamera)
+void SpatialIndex::update(const Camera& camera, const Frustum& frustum, const glm::mat4& viewProjRelCamera, const glm::vec3& sunDirection)
 {
     ProfileScope updateScope("Spatial", EProfileCategory::Spatial);
 
@@ -777,6 +777,27 @@ void SpatialIndex::update(const Camera& camera, const Frustum& frustum, const gl
         m_lastNearQueryPos = cameraPos;
         m_framesSinceNearQuery = 0;
     }
+
+    // SHADOW pass: a caster shadows the visible ground when it sits UP-SUN of it, so the set that
+    // matters is the view frustum swept toward the sun on the horizontal plane by shadowReach — the
+    // Minkowski sum of the (inflated, camera-relative) frustum with that segment. A convex volume
+    // swept along a segment keeps its face normals; only the planes facing AGAINST the sweep move,
+    // by reach * -(n . s). No occlusion test: a caster hidden behind a wall still casts.
+    const float reach = m_culling.shadowReach;
+    const glm::vec3 sunPlanar(sunDirection.x, 0.0f, sunDirection.z);
+    if (reach > 0.0f && glm::dot(sunPlanar, sunPlanar) > 1e-6f)
+    {
+        const glm::vec3 sweep = glm::normalize(sunPlanar);
+        Frustum shadowFrustum = cullFrustum;
+        for (glm::vec4& plane : shadowFrustum.planes)
+        {
+            const float facing = glm::dot(glm::vec3(plane), sweep);
+            if (facing < 0.0f)
+                plane.w -= facing * reach;
+        }
+        markVisibleSet(ESpatialPass::Shadow, shadowFrustum, cameraPos, m_culling.maxDist + m_culling.margin + reach,
+            SpatialLayer_Render, nullptr);
+    }
 }
 
 void SpatialIndex::kickUpdateJob(const CullView& view)
@@ -787,7 +808,8 @@ void SpatialIndex::kickUpdateJob(const CullView& view)
     m_updateJobCamera = view.camera;
     m_updateJobFrustum = view.frustum;
     m_updateJobViewProj = view.viewProjRelCamera;
-    Globals::jobSystem.submit([this] { update(m_updateJobCamera, m_updateJobFrustum, m_updateJobViewProj); },
+    m_updateJobSunDirection = view.sunDirection;
+    Globals::jobSystem.submit([this] { update(m_updateJobCamera, m_updateJobFrustum, m_updateJobViewProj, m_updateJobSunDirection); },
         { "Spatial cull", EProfileCategory::Spatial }, EJobPriority::High, &m_updateJobCounter);
 }
 

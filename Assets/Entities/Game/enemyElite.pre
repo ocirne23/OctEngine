@@ -9,9 +9,8 @@ Prefab gameEnemyElite
 		Scale 0.55 0.9 0.55
 	Component Physics
 		Body Dynamic
-		Shape Capsule
+		Shape Sphere
 		Radius 0.55
-		HalfHeight 0.35
 		Density 130
 		Friction 0
 		LockRotation true

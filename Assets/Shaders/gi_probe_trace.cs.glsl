@@ -69,7 +69,7 @@ layout (push_constant) uniform PushConstants
     uint  numRays;
     float temporalAlpha;
     float maxRayDist;
-    vec3  prevViewPos; // last frame's camera (drives the previous clipmap window for freshness)
+    vec3  prevViewPos; // last frame's scene focus (drives the previous clipmap window for freshness)
     float _pad;
 } pc;
 
@@ -249,17 +249,17 @@ void main()
 
     const int  cascade = int(id / uint(GI_CASCADE_PROBES));
     const uint local   = id - uint(cascade) * uint(GI_CASCADE_PROBES);
-    const uint D       = uint(GI_CASCADE_PROBE_DIM);
-    const ivec3 oc     = ivec3(int(local % D), int((local / D) % D), int(local / (D * D)));
+    const uint DX      = uint(GI_PROBE_DIM_X), DY = uint(GI_PROBE_DIM_Y);
+    const ivec3 oc     = ivec3(int(local % DX), int((local / DX) % DY), int(local / (DX * DY)));
 
     const int   spacing    = giCascadeSpacing(cascade);
-    const ivec3 lc         = giCascadeOrigin(cascade, u_viewPos) + oc;
+    const ivec3 lc         = giCascadeOrigin(cascade, u_sceneFocus.xyz) + oc;
     const vec3  probeCenter = vec3(lc) * float(spacing);
 
     // A probe is "fresh" when its lattice coord was outside the previous frame's clipmap window for this
     // cascade (it just scrolled in), so we replace rather than blend to converge immediately.
     const ivec3 prevOrigin = giCascadeOrigin(cascade, pc.prevViewPos);
-    const bool  fresh = any(lessThan(lc, prevOrigin)) || any(greaterThanEqual(lc, prevOrigin + GI_CASCADE_PROBE_DIM));
+    const bool  fresh = any(lessThan(lc, prevOrigin)) || any(greaterThanEqual(lc, prevOrigin + GI_PROBE_DIMS));
 
     // Relocation: trace from the offset position steered in previous frames (fresh slots hold a scrolled-out
     // probe's offset -> start back on the lattice).

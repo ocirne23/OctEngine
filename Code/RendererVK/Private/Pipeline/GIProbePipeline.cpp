@@ -43,9 +43,7 @@ void GIProbePipeline::initialize(uint32 maxTlasInstances, uint32 maxTextures, ui
 {
     m_textureSampler.initialize();
 
-    m_giGridData.initialize(RendererVKLayout::GI_GRID_DATA_BUFFER_SIZE,
-        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal);
-
+    resizeGrid();
     resizeTlasInstanceBuffers(maxTlasInstances);
 
     ComputePipelineLayout tlasLayout;  buildTlasInstanceLayout(tlasLayout);     m_tlasInstancePipeline.initialize(tlasLayout);
@@ -57,15 +55,32 @@ void GIProbePipeline::initialize(uint32 maxTlasInstances, uint32 maxTextures, ui
         m_traceSets[i].initialize(m_tracePipeline.getDescriptorSetLayout(), numTextureDescriptors);
     }
 
-    Tweak::intVar("RT/GI", "Rays Per Probe", &m_giRaysPerProbe, 1, 128);
-    Tweak::floatVar("RT/GI", "Temporal Alpha", &m_giTemporalAlpha, 0.0f, 0.05f, 0.001f);
-    Tweak::floatVar("RT/GI", "Max Ray Distance", &m_giMaxRayDist, 0.0f, 128.0f);
-    Tweak::floatVar("RT/GI", "Strength", &m_giStrength, 0.0f, 10.0f, 0.01f);
+    Tweak::intVar("GI", "Rays Per Probe", &m_giRaysPerProbe, 1, 128);
+    Tweak::floatVar("GI", "Temporal Alpha", &m_giTemporalAlpha, 0.0f, 0.05f, 0.001f);
+    Tweak::floatVar("GI", "Max Ray Distance", &m_giMaxRayDist, 0.0f, 128.0f);
+    Tweak::floatVar("GI", "Strength", &m_giStrength, 0.0f, 10.0f, 0.01f);
     Tweak::floatVar("RT", "TLAS Range", &m_tlasRange, 16.0f, 8192.0f, 16.0f);
-    Tweak::floatVar("RT/GI", "Vis Variance Floor", &m_visVarianceFloor, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("RT/GI", "Vis Cheb Power", &m_visChebPower, 1.0f, 6.0f, 0.1f);
-    Tweak::floatVar("RT/GI", "Vis Weight Floor", &m_visWeightFloor, 0.0f, 0.25f, 0.005f);
-    Tweak::floatVar("RT/GI", "Vis Mean Scale", &m_visMeanScale, 0.5f, 3.0f, 0.05f);
+    Tweak::floatVar("GI", "Vis Variance Floor", &m_visVarianceFloor, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("GI", "Vis Cheb Power", &m_visChebPower, 1.0f, 6.0f, 0.1f);
+    Tweak::floatVar("GI", "Vis Weight Floor", &m_visWeightFloor, 0.0f, 0.25f, 0.005f);
+    Tweak::floatVar("GI", "Vis Mean Scale", &m_visMeanScale, 0.5f, 3.0f, 0.05f);
+}
+
+void GIProbePipeline::registerGridTweaks(const oc::function<void()>& onGridChanged)
+{
+    RendererVKLayout::GiGridConfig& grid = RendererVKLayout::g_giGrid;
+    Tweak::intVar("GI", "Cascades", &grid.numCascades, 1, 8, 1.0f, onGridChanged);
+    Tweak::intVar("GI", "Probes X (log2)", &grid.dimLog2X, 2, 6, 1.0f, onGridChanged);
+    Tweak::intVar("GI", "Probes Y (log2)", &grid.dimLog2Y, 2, 6, 1.0f, onGridChanged);
+    Tweak::intVar("GI", "Probes Z (log2)", &grid.dimLog2Z, 2, 6, 1.0f, onGridChanged);
+    Tweak::floatVar("GI", "Focus Y offset (m)", &grid.focusOffsetY, -128.0f, 128.0f, 0.5f, onGridChanged);
+}
+
+void GIProbePipeline::resizeGrid()
+{
+    m_giGridData.initialize(RendererVKLayout::g_giGrid.gridDataBufferSize(),
+        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal);
+    doClear(); // fresh storage: the next GI frame zeroes it before the first trace
 }
 
 void GIProbePipeline::resizeTlasInstanceBuffers(uint32 maxTlasInstances)
@@ -231,7 +246,7 @@ void GIProbePipeline::recordTrace(CommandBuffer& commandBuffer, uint32 frameIdx,
     };
     cmd.pushConstants(m_tracePipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
 
-    cmd.dispatch((RendererVKLayout::GI_TRACE_THREADS + 63) / 64, 1, 1);
+    cmd.dispatch((RendererVKLayout::g_giGrid.traceThreads() + 63) / 64, 1, 1);
 }
 
 void GIProbePipeline::buildDebugLayout(GraphicsPipelineLayout& layout)
@@ -289,5 +304,5 @@ void GIProbePipeline::recordDebugDraw(CommandBuffer& commandBuffer, uint32 frame
     DebugPC pc{ .radius = radius, .mode = mode };
     cmd.pushConstants(m_debugPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eVertex, 0, sizeof(pc), &pc);
     // One instanced cube (36 verts) per clipmap probe across all cascades.
-    cmd.draw(36, RendererVKLayout::GI_PROBES_TOTAL, 0, 0);
+    cmd.draw(36, RendererVKLayout::g_giGrid.probesTotal(), 0, 0);
 }

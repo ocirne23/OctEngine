@@ -10,9 +10,8 @@ Prefab gameEnemyLobber
 		Scale 0.7 0.9 0.7
 	Component Physics
 		Body Dynamic
-		Shape Capsule
+		Shape Sphere
 		Radius 0.7
-		HalfHeight 0.4
 		Density 140
 		Friction 0
 		LockRotation true

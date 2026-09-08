@@ -120,5 +120,6 @@ export struct CullView
     Camera camera;
     Frustum frustum;
     glm::mat4 viewProjRelCamera = glm::mat4(1.0f);
+    glm::vec3 sunDirection = glm::vec3(0.0f, 1.0f, 0.0f); // toward the sun; the spatial Shadow pass sweeps the frustum up-sun
     bool valid = false;
 };

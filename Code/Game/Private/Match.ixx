@@ -10,6 +10,7 @@ import Entity;
 import Force;
 import Input;
 import Nav;
+import RendererVK; // ShadowParams (the game's shadow preset)
 import :GameCamera;
 import :Player;
 import :Structures;
@@ -95,6 +96,10 @@ public:
     // the NEXT step, and feedNav's staging feeds the NEXT frame's NavSystem::update.
     void update(float deltaSec);
     void updateWindowed(Camera& camera, float deltaSec);
+    // "Game/Player/Detach camera" tweak: main runs the testbed fly camera INSTEAD of the follow
+    // camera and updateWindowed leaves the frame camera alone and takes no game input (the fly
+    // camera owns LMB-look and WASD, which are the game's place/select and grid hotkeys).
+    bool cameraDetached() const { return m_player.cameraDetached(); }
 
     bool enabled() const { return m_enabled; }
 
@@ -162,6 +167,9 @@ private:
     oc::string m_typeCards[(int)EStructureType::Count];
     double m_typeCardTime = -1.0; // real-clock stamp of the last rebuild (< 0 = never built)
     void updateModeSwitching();
+    // The windowed tick's INPUT half: grid hotkeys, hotbar/popup clicks, the active mode's
+    // clicks and the RMB move order. Skipped entirely while the camera is detached.
+    void updateGameInput(const Camera& camera);
     void updateBuildMode(const Camera& camera, bool confirmEdge, bool cancelEdge);
     void disarmBuild(); // drop the armed item + any half-finished two-click flow (RMB / Esc)
     void activateSlot(int slot); // grid hotkey OR click on the drawn slot: category / item / Delete / Cancel / Back
@@ -236,6 +244,7 @@ private:
 
     GamePlayer m_player;
     GameCamera m_camera;
+    ShadowParams m_sandboxShadowParams; // the renderer's "Shadows" values before our preset (restored in ~GameMatch)
     StructureSystem m_structures;
     NpcSystem m_npcs;
 

@@ -33,11 +33,11 @@ void main()
     uint inst = uint(gl_InstanceIndex);
     int  cascade = int(inst / uint(GI_CASCADE_PROBES));
     uint local   = inst - uint(cascade) * uint(GI_CASCADE_PROBES);
-    uint D       = uint(GI_CASCADE_PROBE_DIM);
-    ivec3 oc     = ivec3(int(local % D), int((local / D) % D), int(local / (D * D)));
+    uint DX      = uint(GI_PROBE_DIM_X), DY = uint(GI_PROBE_DIM_Y);
+    ivec3 oc     = ivec3(int(local % DX), int((local / DX) % DY), int(local / (DX * DY)));
 
     int   spacing = giCascadeSpacing(cascade);
-    ivec3 lc      = giCascadeOrigin(cascade, u_viewPos) + oc;
+    ivec3 lc      = giCascadeOrigin(cascade, u_sceneFocus.xyz) + oc;
     uint  cellBase = giProbeBase(cascade, lc);
     vec3  center  = vec3(lc) * float(spacing) + giProbeOffset(cellBase);
 

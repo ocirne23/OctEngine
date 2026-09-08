@@ -195,6 +195,21 @@ public:
         verts.push_back({ b, color });
     }
     void setSunLight(const glm::vec3& direction, const glm::vec3& color, float intensity);
+    // SCENE FOCUS: the world point every distance-based quality falloff measures from (u_sceneFocus).
+    // Sun cascades: with a focus set they are nested SPHERES around it and the shader picks by
+    // distance to it, so "Shadows/Max distance" and the split lambda are metres from the point.
+    // RTAO: "Fade Start" / "Max Distance" (fade + early-out) are metres from it too. The game sets
+    // its player every windowed frame, so a camera hanging in empty sky no longer shapes either.
+    // Cleared = the camera: classic frustum-slice cascades and camera-distance falloffs.
+    void setSceneFocus(const glm::vec3& worldPos) { m_sceneFocus = worldPos; m_sceneFocusEnabled = true; }
+    void clearSceneFocus() { m_sceneFocusEnabled = false; }
+    // The GI clipmap window and the TLAS range bound centre on this too (frame-loop side, after beginFrame).
+    glm::vec3 sceneFocusOrCamera() const { return m_sceneFocusEnabled ? m_sceneFocus : m_cameraPos; }
+    // The live "Shadows" tweak block (cascade range/split/bias). setShadowParams writes the SAME
+    // members the tweak panel edits, so a caller's preset shows up there and stays editable; the
+    // game installs its top-down preset at match start and restores the sandbox values at teardown.
+    const ShadowParams& shadowParams() const { return m_shadowParams; }
+    void setShadowParams(const ShadowParams& params) { m_shadowParams = params; }
     void present();
 
     // ---- GPU particles + projected decals (driven by the Particle library) ----
@@ -403,8 +418,9 @@ public:
     bool isVrStageSpace() const { return Globals::openXR.isStageSpace(); }
     IVrSession* getVrSession() { return Globals::openXR.isEnabled() ? &Globals::openXR : nullptr; }
 
+    // The testbed keys (P / O) and the "GI/Debug probes" tweaks drive the same state.
     void toggleGiProbeDebug() { m_giProbeDebugEnabled = !m_giProbeDebugEnabled; }
-    void cycleGiProbeDebugMode() { m_giProbeDebugMode ^= 1u; setHaveToRecordCommandBuffers(); } // 0 = irradiance, 1 = cellSize/LOD
+    void cycleGiProbeDebugMode() { m_giProbeDebugMode ^= 1; setHaveToRecordCommandBuffers(); } // 0 = irradiance, 1 = cellSize/LOD
 
     void setWindowMinimized(bool minimized);
     void recreateWindowSurface(Window& window);
@@ -721,6 +737,8 @@ private:
 
     SkyParams m_skyParams;
     ShadowParams m_shadowParams;
+    glm::vec3 m_sceneFocus = glm::vec3(0.0f); // setSceneFocus
+    bool m_sceneFocusEnabled = false;
     FogParams m_fogParams;
     OceanParams m_oceanParams;
     glm::vec4 m_terrainParams{ 0.0f }; // see setTerrainParams; x = 0 disables the ocean land cull
@@ -738,7 +756,7 @@ private:
     TAAParams m_taaParams;
 
     glm::vec3 m_cameraPos = glm::vec3(0.0f);
-    glm::vec3 m_giPrevCameraPos = glm::vec3(0.0f); // last frame's camera; drives GI clipmap probe freshness
+    glm::vec3 m_giPrevFocusPos = glm::vec3(0.0f); // last frame's scene focus (sceneFocusOrCamera); drives GI clipmap probe freshness
     float m_mipPixelScale = 0.0f; // viewportHeight / tan(fovY/2): projected diameter px = radius * scale / dist
     MeshLodParams m_lodParams;
 
@@ -751,9 +769,9 @@ private:
     // reprojection before overwriting.
     RendererVKLayout::Ubo m_ubo;
 
-    bool   m_giProbeDebugEnabled = false;
-    uint32 m_giProbeDebugMode = 0;
-    float  m_giProbeDebugRadius = 0.12f;
+    bool   m_giProbeDebugEnabled = false; // a per-frame stage flag (no re-record)
+    int    m_giProbeDebugMode = 0;        // recorded as a push constant: changes re-record ("GI/Debug probe colour")
+    float  m_giProbeDebugRadius = 0.12f;  // idem, cube half-extent as a fraction of sqrt(spacing)
 
     glm::ivec2 m_windowSize;
     const void* m_imguiDrawData = nullptr; // what present records: promoted from the pending slot on main

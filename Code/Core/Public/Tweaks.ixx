@@ -49,7 +49,7 @@ export struct TweakGroup
 
 namespace TweakGroups
 {
-	constexpr oc::string_view c_graphics[] = { "Sky", "Shadows", "Fog", "RT", "RTAO", "TAA", "Post", "LOD" };
+	constexpr oc::string_view c_graphics[] = { "Sky", "Shadows", "Fog", "RT", "GI", "RTAO", "TAA", "Post", "LOD" };
 	constexpr oc::string_view c_fx[]       = { "Particles", "Decals", "Force", "Ocean", "Terrain", "Scatter" };
 	constexpr oc::string_view c_system[]   = { "Time", "Editor", "Audio", "Physics", "Mesh Streaming", "Texture Streaming", "Spatial", "Threading" };
 	constexpr oc::string_view c_game[]     = { "Game", "HUD", "Network", "Nav" };

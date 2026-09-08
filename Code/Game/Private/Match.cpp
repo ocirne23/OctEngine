@@ -38,6 +38,22 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
     GameUnitComponent::params.huntSeedTeam = coop ? (int)CoopAiTeam : -1;
     GameUnitComponent::params.localTeam = m_team; // own-team units tint green (re-stamped when the team changes)
 
+    // Top-down shadow preset. The cascades are nested spheres around the PLAYER (setSceneFocus, fed
+    // by updateWindowed), so "Max distance" is metres from the player: 250 m reaches the zoomed-out
+    // view with an even near/log split, the caster pad only needs the tallest structure, and the biases
+    // go to zero because the ground plane is flat and the casters sit on it. Written into the live
+    // "Shadows" tweaks (still editable in the panel); the sandbox values come back in ~GameMatch.
+    m_sandboxShadowParams = Globals::rendererVK.shadowParams();
+    {
+        ShadowParams preset = m_sandboxShadowParams;
+        preset.maxDistance = 250.0f;
+        preset.splitLambda = 0.5f;
+        preset.casterPad = 500.0f;
+        preset.depthBias = 0.0f;
+        preset.normalBias = 0.0f;
+        Globals::rendererVK.setShadowParams(preset);
+    }
+
     {
         // Gameplay tweaks persist between runs and the server's values overrule the clients'.
         const Tweak::ScopedFlags scoped(ETweakFlags::Synced);
@@ -172,6 +188,12 @@ GameMatch::~GameMatch()
     if (!m_enabled)
         return;
     Globals::jobSystem.wait(m_labelsCounter); // the labels job reads this object
+    Globals::rendererVK.clearSceneFocus(); // back to camera-based cascades and RTAO falloff for the sandbox/menu
+    // The ctor's top-down preset off again. The debug mode stays as it is NOW: it is a baked shader
+    // define, and only its tweak callback reloads the pipeline — a silent write would desync the two.
+    ShadowParams restored = m_sandboxShadowParams;
+    restored.debugMode = Globals::rendererVK.shadowParams().debugMode;
+    Globals::rendererVK.setShadowParams(restored);
     // Exit-to-menu can destroy a GameMatch MID-RUN: every tweak registered on a member (the ctor's
     // Game/* block + camera/player/structures/npcs) must leave the registry with it, or the
     // per-frame poll reads freed memory. Statics (component params) stay and re-register in place.
@@ -826,20 +848,8 @@ void GameMatch::updateHud()
     }
 }
 
-void GameMatch::updateWindowed(Camera& camera, float deltaSec)
+void GameMatch::updateGameInput(const Camera& camera)
 {
-    if (!m_enabled)
-        return;
-    ProfileScope scope("Game windowed", EProfileCategory::Game);
-
-    Input& input = Globals::input;
-    // Camera yaw on the ARROW keys (Q/E belong to the grid hotkeys) + middle-drag.
-    const float yawAxis = (input.isKeyDown(SDL_Scancode::SDL_SCANCODE_RIGHT) ? 1.0f : 0.0f)
-                        - (input.isKeyDown(SDL_Scancode::SDL_SCANCODE_LEFT) ? 1.0f : 0.0f);
-    m_camera.apply(camera, m_player.interpolatedPos(), deltaSec, yawAxis, m_dragDeltaX, m_wheelAccum);
-    m_dragDeltaX = 0.0f;
-    m_wheelAccum = 0.0f;
-
     // Grid keys first, then the active mode consumes the clicks. Requests queue here and are
     // validated/applied in the authority tick. Whatever RMB the mode does NOT consume becomes a
     // player MOVE ORDER below. The HOTBAR eats clicks over it: LMB on a slot activates it (same
@@ -925,7 +935,50 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     const float shieldR = m_player.shieldRadius();
     if (shieldR > 0.05f)
         drawCircle(m_player.interpolatedPos(), shieldR, packColor(glm::vec3(0.3f, 0.8f, 1.0f)), 32);
-    modeScope.stop();
+}
+
+void GameMatch::updateWindowed(Camera& camera, float deltaSec)
+{
+    if (!m_enabled)
+        return;
+    ProfileScope scope("Game windowed", EProfileCategory::Game);
+
+    // DETACHED ("Game/Player/Detach camera"): main already ran the fly camera into `camera`; the
+    // follow camera and every game input stand down (LMB/WASD are the fly controls now). The
+    // listener-fed edges are still drained so no click lands the moment the tweak flips back.
+    const bool detached = m_player.cameraDetached();
+    if (!detached)
+    {
+        Input& input = Globals::input;
+        // Camera yaw on the ARROW keys (Q/E belong to the grid hotkeys) + middle-drag.
+        const float yawAxis = (input.isKeyDown(SDL_Scancode::SDL_SCANCODE_RIGHT) ? 1.0f : 0.0f)
+                            - (input.isKeyDown(SDL_Scancode::SDL_SCANCODE_LEFT) ? 1.0f : 0.0f);
+        m_camera.apply(camera, m_player.interpolatedPos(), deltaSec, yawAxis, m_dragDeltaX, m_wheelAccum);
+    }
+    m_dragDeltaX = 0.0f;
+    m_wheelAccum = 0.0f;
+    // SCENE FOCUS = the player: sun cascades are nested spheres around it, picked by distance to it,
+    // and the RTAO fade measures from it — not from the follow camera hanging in empty sky. The
+    // detached fly camera has geometry anywhere, so it takes the classic camera-based falloffs.
+    if (detached)
+        Globals::rendererVK.clearSceneFocus();
+    else
+    {
+        // Player X/Z only, Y pinned at 1 m (the walkable plane is y = 0): a jump must not slide the
+        // shadow cascades, the RTAO falloff and the GI clipmap window up and down with the capsule.
+        const glm::vec3 playerPos = m_player.interpolatedPos();
+        Globals::rendererVK.setSceneFocus(glm::vec3(playerPos.x, 1.0f, playerPos.z));
+    }
+    if (detached)
+    {
+        m_placeClicked = false;
+        m_rmbClicked = false;
+        m_lmbReleased = false;
+        m_rmbMoveDrag = false;
+        refreshBuildHotbar(); // the HUD stays live
+    }
+    else
+        updateGameInput(camera);
 
     m_structures.drawDebug();
     m_npcs.drawBeams(deltaSec); // turret lightning strikes

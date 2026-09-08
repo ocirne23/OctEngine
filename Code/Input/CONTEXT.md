@@ -198,6 +198,9 @@ sensitivity 0.01, near 0.05 / far 42000.
   C).
 * `setPosition` is a hard reposition, so player control hands the camera back where the possessed
   capsule left it instead of popping to the pre-possession spot.
+* `setPose(position, lookAt)` repositions AND re-aims (world-up-locked basis) without touching the
+  tweak/listener registration — the game's "Detach camera" tweak seeds the flight from the follow
+  camera's view. `initialize` stays once-per-run.
 * `m_maxLookDelta` (150 px) rejects a mouse delta that large between two events as "we missed some".
 * `setLockToWorldUp` keeps the horizon level.
 

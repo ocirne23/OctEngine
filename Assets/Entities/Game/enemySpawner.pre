@@ -12,9 +12,8 @@ Prefab gameEnemySpawner
 		Scale 1.2 0.7 1.2
 	Component Physics
 		Body Dynamic
-		Shape Capsule
+		Shape Sphere
 		Radius 1.2
-		HalfHeight 0.3
 		Density 300
 		Friction 0
 		LockRotation true

@@ -91,6 +91,7 @@ export enum class ESpatialPass : uint32
 {
     Main = 0,
     Near,
+    Shadow, // the Main frustum swept toward the sun (SpatialCullingConfig::shadowReach): off-screen sun shadow casters
     UpdateTier0,
     UpdateTier1,
     UpdateTier2,
@@ -115,9 +116,10 @@ export constexpr SpatialStamp SpatialStamp_Linked = 0xFFFF;
 // Pass bits as returned by SpatialIndex::getPassMask, bit p == 1 << uint32(ESpatialPass p).
 export constexpr uint32 SpatialPassBit_Main = 1u << 0;
 export constexpr uint32 SpatialPassBit_Near = 1u << 1;
-export constexpr uint32 SpatialPassBit_UpdateTier0 = 1u << 2;
-export constexpr uint32 SpatialPassBit_UpdateTier1 = 1u << 3;
-export constexpr uint32 SpatialPassBit_UpdateTier2 = 1u << 4;
+export constexpr uint32 SpatialPassBit_Shadow = 1u << 2;
+export constexpr uint32 SpatialPassBit_UpdateTier0 = 1u << 3;
+export constexpr uint32 SpatialPassBit_UpdateTier1 = 1u << 4;
+export constexpr uint32 SpatialPassBit_UpdateTier2 = 1u << 5;
 export constexpr uint32 SpatialPassBits_UpdateTiers = SpatialPassBit_UpdateTier0 | SpatialPassBit_UpdateTier1 | SpatialPassBit_UpdateTier2;
 
 export enum class ESpatialCullMode : int
@@ -136,6 +138,9 @@ export struct SpatialCullingConfig
     bool freeze = false;             // stop re-stamping, fly around to inspect the culled set
     float margin = 4.0f;             // frustum inflation masking the one-frame stamp latency
     float nearRadius = 0.0f;       // shadow-caster + ray-tracing relevance range around the camera
+    float shadowReach = 60.0f;     // Shadow pass: how far (m) the view frustum is swept toward the sun on the
+                                   // horizontal plane — off-screen casters up to this far up-sun of the
+                                   // visible ground keep their shadow pass. 0 = off (Main + Near only).
     float nearSlack = 16.0f;         // Near ball inflation; requery only after the camera moves this far (0 = every frame)
     float maxDist = 5000.0f; // main-pass cull distance; overwritten each frame with the camera far plane (setCullMaxDist)
     float skinnedRadiusScale = 1.5f; // animation can exceed the bind-pose bounds sphere

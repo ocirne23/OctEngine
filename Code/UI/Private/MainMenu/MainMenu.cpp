@@ -40,7 +40,7 @@ namespace
 
 	bool matchesPrefix(oc::string_view category, oc::string_view prefix)
 	{
-		// "RT" matches "RT" and "RT/GI", never "RTAO"
+		// "Fog" matches "Fog" and "Fog/Quality"; "RT" never matches "RTAO"
 		if (!oc::startsWith(category, prefix))
 			return false;
 		return category.size() == prefix.size() || category[prefix.size()] == '/';

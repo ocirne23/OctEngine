@@ -128,6 +128,8 @@ void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform&
                 passMask = RendererVKLayout::PASS_ALL; // in view: feeds every pass
             else if ((spatialMask & SpatialPassBit_Near) && culling.mode != int(ESpatialCullMode::MainOnly))
                 passMask = RendererVKLayout::PASS_SHADOW | RendererVKLayout::PASS_GI; // off-screen but shadow/RT relevant
+            else if ((spatialMask & SpatialPassBit_Shadow) && culling.mode != int(ESpatialCullMode::MainOnly))
+                passMask = RendererVKLayout::PASS_SHADOW; // off-screen, up-sun of the view: its shadow falls into it
             if (passMask != 0)
                 renderer.renderNode(render->node, passMask);
         }

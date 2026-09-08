@@ -170,6 +170,7 @@ void ForceSystem::initialize()
     Tweak::boolean("Force/Glow", "Bubble light", &m_bubbleLight);
     Tweak::floatVar("Force/Glow", "Bubble light intensity", &m_bubbleLightIntensity, 0.0f, 20.0f, 0.05f);
     Tweak::floatVar("Force/Glow", "Bubble light range (x radius)", &m_bubbleLightRange, 0.5f, 4.0f, 0.05f);
+    Tweak::floatVar("Force/Glow", "Bubble light height (x radius)", &m_bubbleLightHeight, 0.0f, 1.0f, 0.05f);
     Tweak::floatVar("Force/Glow", "Bubble light fade (s)", &m_bubbleLightFade, 0.02f, 3.0f, 0.02f);
     Tweak::floatVar("Force/Glow", "Bubble light white mix", &m_bubbleLightWhite, 0.0f, 1.0f, 0.05f);
     Tweak::floatVar("Force/Pattern", "Scale (1/m)", &m_params.patternScale, 0.01f, 8.0f);
@@ -794,7 +795,12 @@ void ForceSystem::stepBubbleLight(Renderer& renderer, BubbleLight& light, bool l
     const glm::vec3 color = glm::mix(teamColor, glm::vec3(1.0f), m_bubbleLightWhite);
     // Ease the fade so a light never pops at either end.
     const float f = light.fade * light.fade * (3.0f - 2.0f * light.fade);
-    renderer.addPointLight(PointLight(light.center, light.radius * m_bubbleLightRange, color,
+    // Lifted above the bubble centre by a fraction of the radius: a CENTERED structure emitter (Base,
+    // emitter) has its centre inside its own mesh, where a point light is swallowed by the geometry
+    // (dark, or lit from within under RT light shadows). Scaling with the radius keeps it inside the
+    // dome and above the mesh for every bubble size, the player's capsule included.
+    const glm::vec3 lightPos = light.center + glm::vec3(0.0f, light.radius * m_bubbleLightHeight, 0.0f);
+    renderer.addPointLight(PointLight(lightPos, light.radius * m_bubbleLightRange, color,
         m_bubbleLightIntensity * light.radius * light.radius * f));
 }
 

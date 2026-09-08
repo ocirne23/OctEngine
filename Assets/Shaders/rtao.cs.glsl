@@ -100,11 +100,14 @@ void main()
     // The depth image is jittered (exact depth-prepass reuse); reconstruct at the surface's true
     // unjittered position so ray origins don't wobble sub-pixel with the jitter — see taaJitterUv.
     const vec3 worldPos = worldPosFromDepth(uv - taaJitterUv(u_taaJitter.xy), depth);
-    const float viewDist = length(u_viewPos - worldPos);
+    const float viewDist = length(u_viewPos - worldPos);          // geometric: the ray-origin bias below
+    const float focusDist = length(u_sceneFocus.xyz - worldPos);  // quality falloff: from the scene focus (the game's player)
 
     // Past the AO max distance the result is always "no occlusion", so skip the ray loop entirely.
-    // (bent normal = surface normal so the forward pass evaluates GI along the surface.)
-    if (pc.maxDistance > 0.0 && viewDist >= pc.maxDistance)
+    // (bent normal = surface normal so the forward pass evaluates GI along the surface.) Measured from
+    // the scene focus, like the fade below, so a top-down camera far above the ground does not fade
+    // the AO out under the player.
+    if (pc.maxDistance > 0.0 && focusDist >= pc.maxDistance)
     {
         imageStore(u_aoOut, px, vec4(N, 1.0));
         return;
@@ -170,10 +173,11 @@ void main()
     float ao = clamp(1.0 - (occ / float(n)) * pc.intensity, 0.0, 1.0);
     ao = pow(ao, pc.power);
     // Distance falloff: far-away surfaces get noisy/low-quality AO (radius is fixed in world units, so it
-    // shrinks in screen space with distance), so fade the occlusion back toward 1.0 (no AO) past fadeStart.
+    // shrinks in screen space with distance), so fade the occlusion back toward 1.0 (no AO) past fadeStart
+    // — distance from the scene focus (see focusDist), matching the early-out above.
     if (pc.maxDistance > 0.0)
     {
-        float fade = clamp((viewDist - pc.fadeStart) / max(pc.maxDistance - pc.fadeStart, 1e-3), 0.0, 1.0);
+        float fade = clamp((focusDist - pc.fadeStart) / max(pc.maxDistance - pc.fadeStart, 1e-3), 0.0, 1.0);
         ao = mix(ao, 1.0, fade);
     }
     // Bent normal = average unoccluded direction; fall back to the surface normal when fully occluded.

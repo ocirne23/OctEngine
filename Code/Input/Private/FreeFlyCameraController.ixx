@@ -25,6 +25,10 @@ public:
     // Hard reposition (view matrix refreshes on the next update): player control hands the camera
     // back where the possessed capsule left it instead of popping to the pre-possession spot
     void setPosition(const glm::vec3& position) { m_position = position; }
+    // Hard reposition PLUS re-aim (world-up-locked basis): the game's detached camera starts the
+    // flight from the follow camera's exact view instead of the testbed pose. No re-registration
+    // of tweaks or listeners — initialize() stays a once-per-run call.
+    void setPose(const glm::vec3& position, const glm::vec3& lookAt);
 
     glm::vec3 getPosition() const { return m_position; }
     glm::vec3 getDirection() const { return m_direction; }

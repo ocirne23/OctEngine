@@ -183,7 +183,9 @@ void main()
     // DEBUG density view: heatmap of the STRONGEST team field along the ray instead of the shell —
     // tip concentration, lobe merging and the budget fold read directly; a white contour marks the
     // iso threshold (the bubble boundary). Overlapping proxies dedup via dominance at the peak.
-    if (u_forceParams4.x > 0.5)
+    // BAKED by the FORCE_DENSITY_VIEW define ("Force/Debug/Density view" reloads the force pipelines),
+    // so the release shader carries none of this march.
+#ifdef FORCE_DENSITY_VIEW
     {
         const int densitySteps = int(u_forceParams1.w);
         const float densityDt = (t1 - t0) / float(densitySteps);
@@ -213,6 +215,7 @@ void main()
         out_color = vec4(heat * 0.8, 0.8);
         return;
     }
+#endif
 
     // SAMPLED TIER: large emitters march the baked field volume — two trilinear taps per sample
     // instead of the analytic candidate loop, so their cost stops scaling with emitter density.

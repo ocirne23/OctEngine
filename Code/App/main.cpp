@@ -237,6 +237,9 @@ int main(int argc, char* argv[])
     // Client: the server connection dropped (set inside receive() by the NetworkManager hook,
     // acted on at the top of the next frame — a menu-launched session returns to the menu).
     bool serverLost = false;
+    // Game "Detach camera" tweak edge: the fly camera picks up the follow camera's pose on the
+    // frame the tweak flips on, and hands WASD back to the game when it flips off.
+    bool gameCameraDetached = false;
 
     // The GAME/WORLD half of a mode start: testbed content, or GameMatch + its world. Runs before
     // the loop on the command-line path, at countdown end on the lobby host, and INSIDE the event
@@ -405,6 +408,7 @@ int main(int argc, char* argv[])
         Globals::ui.clearChat();
         controls.setGameMode(true);         // the menu phase mutes testbed keys + pauses free flight again
         cameraController.setMovementEnabled(false);
+        gameCameraDetached = false;         // the next game re-seeds the fly camera from its own follow view
         Globals::ui.setGameLayout(false);   // the editor layout returns if the next pick is the sandbox
         Globals::ui.setMainMenuActive(true); // reactivation resets to the front page
     };
@@ -732,7 +736,25 @@ int main(int argc, char* argv[])
             {
                 // Menu/lobby/escape-menu active = no game input, camera overwrite or HUD (a lobby
                 // client's GameMatch already exists and simulates, but the overlay owns the screen).
-                game->updateWindowed(camera, (float)deltaSec); // game mode: follow-camera overwrite + aim/HUD/debug draw
+                // "Game/Player/Detach camera": the testbed fly camera takes the frame instead of
+                // the follow camera, seeded from the follow view on the flip so nothing pops.
+                const bool detached = game->cameraDetached();
+                if (detached != gameCameraDetached)
+                {
+                    if (detached)
+                    {
+                        const glm::vec3 forward = -glm::vec3(camera.viewMatrix[0][2], camera.viewMatrix[1][2], camera.viewMatrix[2][2]);
+                        cameraController.setPose(camera.position, camera.position + forward);
+                    }
+                    cameraController.setMovementEnabled(detached);
+                    gameCameraDetached = detached;
+                }
+                if (detached)
+                {
+                    cameraController.update(deltaSec);
+                    camera = cameraController.getCamera();
+                }
+                game->updateWindowed(camera, (float)deltaSec); // game mode: follow-camera overwrite + aim/HUD/debug draw (neither while detached)
             }
             else if (game && game->enabled() && !Globals::ui.isMainMenuActive())
             {

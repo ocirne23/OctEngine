@@ -14,13 +14,14 @@ import :Sampler;
 import :Layout;
 
 // Diffuse GI probe system over a single persistent, world-space CASCADED CLIPMAP volume. GI_NUM_CASCADES
-// nested toroidal probe grids (camera-centered, doubling spacing) store SH-L1 irradiance at absolute lattice
+// nested toroidal probe grids (centred on the SCENE FOCUS — u_sceneFocus: the game's player, else the camera —
+// with doubling spacing) store SH-L1 irradiance at absolute lattice
 // positions; toroidal addressing carries irradiance forward in place with no hash table, copy, or ping-pong.
 // Two compute passes per frame:
 //   1. TLAS-instance pass : writes the per-instance VkAccelerationStructureInstanceKHR array on the GPU.
 //   2. Trace pass         : ray-queries the TLAS per probe, shades hits (reusing the light grid + sun), and
 //                           temporally blends into each probe's SH-L1 (full replace for probes that just
-//                           scrolled into the clipmap). The probe set + window is derived from the camera.
+//                           scrolled into the clipmap). The probe set + window is derived from the scene focus.
 // The TLAS is built by the AccelerationStructure object between the two passes (orchestrated by the Renderer).
 export class GIProbePipeline final
 {
@@ -29,6 +30,13 @@ public:
     // variable count the trace sets are allocated with. Both owned by the Renderer.
     void initialize(uint32 maxTlasInstances, uint32 maxTextures, uint32 numTextureDescriptors);
     void reloadShaders(uint32 maxTextures);
+    // The "GI" grid-shape tweaks (RendererVKLayout::g_giGrid: cascades, probes per axis, focus Y offset).
+    // They are shader #defines in EVERY pipeline that samples the probes, so onGridChanged must: wait for
+    // the GPU, call resizeGrid(), reload ALL shaders (Renderer::reloadShaders) and re-record.
+    void registerGridTweaks(const oc::function<void()>& onGridChanged);
+    // Re-allocates the persistent SH clipmap buffer for the current g_giGrid and schedules the one-time
+    // clear (nothing is preserved — the toroidal slots mean something else now). GPU must be idle.
+    void resizeGrid();
     // Grows the per-frame TLAS instance buffers (GPU scratch, nothing preserved; GPU must be idle).
     void resizeTlasInstanceBuffers(uint32 maxTlasInstances);
     // Re-allocates the trace descriptor sets with a grown live texture count (GPU must be idle).
@@ -49,7 +57,7 @@ public:
         Buffer& rtMeshAlias;     // mesh idx -> RT mesh idx (LOD chains share one BLAS; packed into sbtOffset)
         Buffer& materialInfos;   // MATERIAL_FLAG_NO_RAYTRACING -> instance mask 0
         Buffer& nodePassMasks;   // nodes without PASS_GI|PASS_SHADOW -> instance mask 0
-        glm::vec3 viewPos;       // TLAS range bound center (camera)
+        glm::vec3 viewPos;       // TLAS range bound center (the scene focus: Renderer::sceneFocusOrCamera)
         uint32 numInstances;
     };
     void recordTlasInstances(CommandBuffer& commandBuffer, uint32 frameIdx, TlasInstanceParams& params);
@@ -69,7 +77,7 @@ public:
         vk::ImageView shadowMapView;
         vk::Sampler shadowMapSampler;
         uint32 frameIndex;       // free-running frame counter (RNG seed)
-        glm::vec3 prevViewPos;   // last frame's camera (previous clipmap window, drives probe freshness)
+        glm::vec3 prevViewPos;   // last frame's scene focus (previous clipmap window, drives probe freshness)
     };
     void recordTrace(CommandBuffer& commandBuffer, uint32 frameIdx, TraceParams& params);
     // Rewrites one slot of the trace set's texture array (binding 13) with a streamed texture's current view.

@@ -12,9 +12,8 @@ Prefab gameEnemyWarrior
 		Scale 0.6 0.95 0.6
 	Component Physics
 		Body Dynamic
-		Shape Capsule
+		Shape Sphere
 		Radius 0.6
-		HalfHeight 0.35
 		Density 110
 		Friction 0
 		LockRotation true

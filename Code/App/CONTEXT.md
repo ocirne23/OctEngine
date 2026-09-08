@@ -28,7 +28,7 @@ ONE loop and ONE init sequence for every mode; `headlessServer` branches inside 
 | 7 | `TweakRegistry::update(dt)` | Saved/Synced change detection. |
 | 8 | `input.update` → **`ui.prepare()`** → `controls.update` | The panel prepare jobs overlap everything down to `ui.update`. |
 | 9 | Escape menu | |
-| 10 | **`joinPostUpdateJobs(Sim)`**, then camera: `game->updateWindowed` **or** VR **or** fly camera + `applyPlayerCamera` | The Sim join sits before the frame's first main-thread write to units/rosters (unit orders in the windowed tick, the entity-change drains at row 11); headless joins it before the script drain instead. |
+| 10 | **`joinPostUpdateJobs(Sim)`**, then camera: `game->updateWindowed` (fly camera first when `game->cameraDetached()` — the "Game/Player/Detach camera" tweak, seeded via `setPose` on the flip) **or** VR **or** fly camera + `applyPlayerCamera` | The Sim join sits before the frame's first main-thread write to units/rosters (unit orders in the windowed tick, the entity-change drains at row 11); headless joins it before the script drain instead. |
 | 11 | Script reload requests, then the UI and script `EntityChange` drains | |
 | 12 | `simDeltaSec = time.getSimDeltaSec()` | **Read HERE, after the input dispatch and tweak poll, so a pause toggle applies to this very frame.** |
 | 13 | `networkManager.receive(dt)` | Snapshot targets and events land before the sim reads them. |
@@ -288,8 +288,8 @@ Values live on the component and are **deliberately not serialized**.
 
 | Key | Action |
 |---|---|
-| P | Toggle the GI probe debug cubes |
-| O | Cycle its mode (irradiance ↔ cellSize/LOD colour) |
+| P | Toggle the GI probe debug cubes (also the "GI/Debug probes" tweak — the game modes have no P) |
+| O | Cycle its mode (irradiance ↔ cellSize/LOD colour; also "GI/Debug probe colour") |
 | L | Aim the sun down the camera forward |
 
 ## Player control
