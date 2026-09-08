@@ -234,13 +234,14 @@ glm::vec2 StructureSystem::structureFacing(int index) const
     return glm::vec2(forward.x, forward.z);
 }
 
-static uint32 packColor(const glm::vec3& c)
+// (Declared in Structures.ixx — shared by every Game implementation unit.)
+uint32 packColor(const glm::vec3& c)
 {
     const glm::vec3 s = glm::clamp(c, 0.0f, 1.0f) * 255.0f;
     return (uint32)s.x | ((uint32)s.y << 8) | ((uint32)s.z << 16) | 0xFF000000u;
 }
 
-static void drawCircle(const glm::vec3& center, float radius, uint32 color, int segments = 24)
+void drawCircle(const glm::vec3& center, float radius, uint32 color, int segments)
 {
     glm::vec3 prev = center + glm::vec3(radius, 0.0f, 0.0f);
     for (int i = 1; i <= segments; ++i)
@@ -1795,7 +1796,7 @@ void StructureSystem::tickDamage(float)
         // emitter shrinking out is not a drain target, the next powered one is.
         s.state->strainable = hasShieldEmitter(s.type) && !s.state->blueprint
             && s.state->powered && s.state->emitter.outputFrac > 0.05f;
-        // The CPU bubble-radius stand-in shield-less units test against (see GameComponents.ixx):
+        // The CPU bubble-radius stand-in shield-less units test against (see GameStructureComponent.ixx):
         // the visible sphere radius is ~half the reach, scaled by the live output ramp.
         s.state->bubbleRadius = s.state->strainable
             ? emitterReachOf(s.type) * 0.5f * s.state->emitter.outputFrac : 0.0f;
@@ -2166,7 +2167,7 @@ void StructureSystem::drawDebug() const
     {
         const glm::vec3 base = node.type == ENodeType::Mineral
             ? glm::vec3(0.2f, 0.4f, 1.0f) : glm::vec3(1.0f, 0.6f, 0.15f);
-        drawCircle(glm::vec3(node.pos.x, 0.3f, node.pos.z), m_extractorSnapRadius, packColor(base));
+        drawCircle(glm::vec3(node.pos.x, 0.3f, node.pos.z), m_extractorSnapRadius, packColor(base), 24);
     }
 
     // Constructor build/repair reach (amber), medic heal reach (green) + red rings on unpowered

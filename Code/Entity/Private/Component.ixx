@@ -13,7 +13,9 @@ export import :ParticleComponent;
 export import :ForceComponent;
 export import :LightComponent;
 export import :NetworkComponent;
-export import :GameComponents;
+export import :GameUnitComponent;
+export import :GameStructureComponent;
+export import :GameProjectileComponent;
 export import :ScriptComponent;
 
 import :Entity;

@@ -166,11 +166,7 @@ void NpcSystem::clear()
     m_turretFireScratch.clear();
 }
 
-static uint32 packColor(const glm::vec3& c)
-{
-    const glm::vec3 s = glm::clamp(c, 0.0f, 1.0f) * 255.0f;
-    return (uint32)s.x | ((uint32)s.y << 8) | ((uint32)s.z << 16) | 0xFF000000u;
-}
+// (packColor comes from Structures.ixx, shared by every Game implementation unit.)
 
 // A unit spawn point on a ring around a building, on the first of 8 probed angles whose cell is
 // free of structures (and inside the arena bounds) — units must never spawn INSIDE the building.

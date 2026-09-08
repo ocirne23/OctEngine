@@ -1,3 +1,4 @@
 export module Force;
 
-export import :System;
+export import :Emitter;
+export import :ForceSystem;

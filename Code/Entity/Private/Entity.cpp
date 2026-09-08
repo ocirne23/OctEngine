@@ -76,7 +76,7 @@ void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform&
         if (simStep)
         {
             // Game-layer sim BEFORE the script, so DSL orders/reads see this frame's state. Authority
-            // gating and thread-safety live inside the components (see GameComponents.ixx).
+            // gating and thread-safety live inside the components (see Components/Game/GameUnitComponent.ixx).
             if (GameUnitComponent* gameUnit = getComponent<GameUnitComponent>(this))
                 gameUnit->update(*this, deltaSeconds);
             if (GameStructureComponent* gameStructure = getComponent<GameStructureComponent>(this))

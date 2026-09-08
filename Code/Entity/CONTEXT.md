@@ -18,7 +18,8 @@ Particle, Force, Spatial, Threading, Network and Nav.
 
 ## `Entity`
 
-[EntityP.ixx:70](Private/EntityP.ixx#L70). Fields: `pos` / `scale` / `rot`, `parent`,
+[Entity.ixx:70](Private/Entity.ixx#L70) (the partition `Entity:Entity`; the module's barrel is
+`Public/EntityP.ixx`). Fields: `pos` / `scale` / `rot`, `parent`,
 `spawnTemplate`, `spatialEntry`, `refCount`, `typeBits`, `flags`, `updateCost`, `schedTier` (2 bits),
 `schedTick` (14 bits).
 
@@ -123,7 +124,7 @@ lets the parallel pass slice them.
 
 ## Spatial entries
 
-**EVERY entity registers at the end of `Entity::create`** ([EntityP.cpp:261](Private/EntityP.cpp#L261))
+**EVERY entity registers at the end of `Entity::create`** ([Entity.cpp:261](Private/Entity.cpp#L261))
 — parallel-spawn safe, since the index locks.
 
 * Layer `SpatialLayer_Entity` always, plus `SpatialLayer_Render` when it has a render node.
@@ -657,7 +658,17 @@ Script surface: a `Light` DSL struct plus the writable `self.light.lights` seque
 
 ## The Game components
 
-ID 9/10/11 in one partition, `Components/GameComponents.ixx`.
+ID 9/10/11, one partition each under `Components/Game/`: `GameUnitComponent`,
+`GameStructureComponent`, `GameProjectileComponent` (`.ixx` + `.cpp`). Each `.cpp` carries its own
+copies of the small helpers (the client early-out, the atomic CAS adds, the spawn-info readback),
+like every other component.
+
+**`GameUnitComponent::update` is a step sequence over a per-tick `Tick` context** (private, declared
+in the `.ixx`): `applyHeightLimit` → the puppet gate → `applyInboxes` (damage, death, heal) →
+`resolveWalkTarget` (route / order / `resolveNavTarget` / `searchLocalTarget`) → `tickCombat` (the
+one probe) → `tickSteering` (`steerHeading` = the context steering, brake, the hard cap) →
+`tickField` (shield battery + push, or the baked-field stand-in). The body's velocity is read ONCE
+into the context and every queued command builds on it.
 
 * **`GameUnitComponent`** — team, health, shield battery, plus C++ steering / targeting / melee /
   ranged stance. DSL sets orders through `self.unit.setTarget`.

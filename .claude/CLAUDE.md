@@ -149,7 +149,7 @@ Debug:      /JMC /ZI        + link /INCREMENTAL
 
 That is why these hold namespace-scope objects:
 
-* `forceReferenceBudget` / `forceSphereFold` (Force/System.cpp) — reached from the merge parallelFors
+* `forceReferenceBudget` / `forceSphereFold` (Force/ForceSystem.cpp) — reached from the merge parallelFors
 * `AnimStateMachine::getCurrentStateName`'s `"<none>"` (Animation) — reached from a script thunk on
   workers
 * `layerNames()` (Physics) — reached from the terrain collider's tile-build jobs

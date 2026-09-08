@@ -226,7 +226,7 @@ passes unconditionally.
 ## Entity integration
 
 **Every entity registers at the end of `Entity::create`**
-([EntityP.cpp:261](../Entity/Private/EntityP.cpp#L261)) — parallel-spawn safe, since the index locks.
+([Entity.cpp:261](../Entity/Private/Entity.cpp#L261)) — parallel-spawn safe, since the index locks.
 
 * Layer `SpatialLayer_Entity` always, plus `SpatialLayer_Render` when the entity has a render node.
 * Bounds come from `RenderNode::getWorldBounds`, skinned inflated by `skinnedRadiusScale`; otherwise

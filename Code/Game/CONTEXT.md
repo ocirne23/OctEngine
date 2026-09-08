@@ -39,6 +39,17 @@ Without `--game` the testbed is untouched.
 `Game:Match` (the orchestrator), `Game:Player`, `Game:Structures`, `Game:Npc`, `Game:GameCamera`;
 barrel `Public/Game.ixx`.
 
+**`GameMatch`'s bodies are split over seven implementation units by topic** (all `module Game;`,
+the list is repeated at the end of `Match.ixx`): `Match.cpp` (construction, `spawnWorld`, the three
+frame entry points, the nav feed, the player ticks, the HUD), `MatchMap.cpp` (the generated
+terrain + the per-team Base anchors), `MatchCoop.cpp` (waves, the spawn trickle, the ambient
+wander, the trickle save state), `MatchNet.cpp` (teams, the join replay, every game event, the
+request seams, the pause), `MatchSave.cpp` (F9/F10 + the scenario), `MatchInput.cpp` (hotbar,
+modes, placement, selection, orders), `MatchLabels.cpp` (the world-label job). What more than one
+of them reads — the shared constants and the structure ghost — is declared UNEXPORTED at the end
+of `Match.ixx` (module linkage). `packColor` / `drawCircle` are declared the same way at the end
+of `Structures.ixx` and serve every Game implementation unit (Structures, Npc, the Match files).
+
 > **`GameMatch` MUST be a stack local in `main()`** — it holds EntityPtrs and Force handles, so a
 > global would need an InitSeg slot.
 
@@ -336,7 +347,7 @@ accounting.** The authority HUD shows "Next wave (s)".
 * `isBarracksUnitType` allows only Grunt / Brute / Runner / Swarm anywhere; **an old Spitter-barracks
   save loads as a Grunt barracks.**
 
-### Archetypes (`c_waveArchetypes`, [Match.cpp:514](Private/Match.cpp#L514))
+### Archetypes (`c_waveArchetypes`, [MatchCoop.cpp](Private/MatchCoop.cpp))
 
 ONE archetype per wave: a named recipe of at most 4 weighted types, **gated by a minimum wave index**,
 weights jittered, and **never the same recipe twice in a row** when a choice exists.

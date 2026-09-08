@@ -314,9 +314,9 @@ stale by the time anyone gets there.
 
 | Caller | Where |
 |---|---|
-| A fresh RMB move order for the selected units, started at the centroid of their LARGEST CLUSTER (single-linkage flood fill at "Group cluster radius" 12 m — a straggler must not drag the lane's origin off the bulk) | [Match.cpp:2900](../Game/Private/Match.cpp#L2900) |
-| Every barracks route change, leg by leg | [Match.cpp:2739](../Game/Private/Match.cpp#L2739) |
-| Each co-op wave, once, at `queueWave` | [Match.cpp:647](../Game/Private/Match.cpp#L647) |
+| A fresh RMB move order for the selected units, started at the centroid of their LARGEST CLUSTER (single-linkage flood fill at "Group cluster radius" 12 m — a straggler must not drag the lane's origin off the bulk) | `GameMatch::orderSelectedUnits`, [MatchInput.cpp](../Game/Private/MatchInput.cpp) |
+| Every barracks route change, leg by leg | `GameMatch::seedRouteLane`, [MatchInput.cpp](../Game/Private/MatchInput.cpp) |
+| Each co-op wave, once, at `queueWave` | [MatchCoop.cpp](../Game/Private/MatchCoop.cpp) |
 | **EVERY unit on its own jittered timer**, while it walks a ROUTE or a MOVE ORDER — a unit chasing a HUNTED enemy (nav field / local search / engage) requests one only on `GameUnitParams::huntSeedTeam` (the co-op AI team; -1 = none), so friendly units never carve lanes toward enemies | [Npc.cpp:397](../Game/Private/Npc.cpp#L397) |
 
 The unit path queues a `SeedRequest{from, to, team, stuck}` every "Seed request interval" (×0.75–1.25
@@ -381,7 +381,7 @@ negative = seeded lanes.
 ## Unit steering
 
 Implemented in `GameUnitComponent::update`
-([GameComponents.cpp:442](../Entity/Private/Components/GameComponents.cpp#L442)), documented here
+(`steerHeading` in [GameUnitComponent.cpp](../Entity/Private/Components/Game/GameUnitComponent.cpp)), documented here
 because it is what the fields exist for. **CONTEXT STEERING — no search, and no per-unit path state
 beyond the last heading.**
 
@@ -493,7 +493,7 @@ radius the unit marches lane-friendly toward the target.
 | Seed range | 20 m |
 | Debug draw / team / radius / flow min | 0 / 0 / 60 m / 0.1 m/s |
 
-### `Game/Enemies/Steer` (defaults from [GameComponents.ixx](../Entity/Private/Components/GameComponents.ixx))
+### `Game/Enemies/Steer` (defaults from [GameUnitComponent.ixx](../Entity/Private/Components/Game/GameUnitComponent.ixx))
 
 | Tweak | Default | | Tweak | Default |
 |---|---|---|---|---|

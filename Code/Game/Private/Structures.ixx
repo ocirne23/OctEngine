@@ -855,3 +855,8 @@ private:
     int m_housePopulation = 10;    // added per linked house
     float m_houseLinkRadius = 25.0f;
 };
+
+// Debug-line helpers shared by the Game implementation units (Structures, Npc, the Match*.cpp
+// files). Module linkage, NOT exported; bodies in Structures.cpp.
+uint32 packColor(const glm::vec3& c);
+void drawCircle(const glm::vec3& center, float radius, uint32 color, int segments = 32);

@@ -489,3 +489,46 @@ private:
     float m_meleeDps = 10.0f;       // player melee aura: health/s to enemy units in melee range
     float m_meleeRadius = 2.5f;     // melee range (m, XZ from the capsule)
 };
+
+// ---- Shared by the Match*.cpp implementation units (module linkage, NOT exported) --------------
+// GameMatch's bodies are split by topic:
+//   Match.cpp        construction, spawnWorld, the three frame entry points, the nav feed, the
+//                    player ticks (melee, healing), the HUD
+//   MatchMap.cpp     the generated terrain: the co-op grid, the PvP arenas, rocks/nodes, the
+//                    per-team Base anchors
+//   MatchCoop.cpp    the co-op director: waves, the spawn trickle, the ambient wander, the trickle
+//                    save state
+//   MatchNet.cpp     teams, the join replay, every game event (send + handle), the requests
+//   MatchSave.cpp    F9/F10 save/load + the profiling scenario
+//   MatchInput.cpp   the hotbar, the interaction modes, placement, selection, orders
+//   MatchLabels.cpp  the world-label job
+// Everything more than one of them reads is declared here.
+inline constexpr float c_corridorHalfLength = 65.0f; // Lane/Wide/Chokepoints x extent of the play area
+inline constexpr float c_corridorHalfWidth = 20.0f;  // Lane z extent
+// The CO-OP map: a big square centred on the shared Base — impassable rock terrain over a coarse
+// cell grid plus a player-blocking barrier ring at ±c_coopHalfSize (see MatchMap.cpp). The ground
+// plane (ground.pre) is 600 m, so ±300 is the hard edge; waves spawn in the open ring BETWEEN the
+// barrier and the ground edge and walk in through it (the barrier's collider only matches the
+// Player layer).
+inline constexpr float c_coopHalfSize = 270.0f;
+inline constexpr float c_coopGroundEdge = 296.0f;    // spawn clamp just inside the 600 m ground
+// The 12 hotbar slots' key captions: QWER / ASDF / ZXCV, row-major (see MatchInput.cpp).
+inline constexpr oc::string_view c_gridKeyLabels[12] = { "Q", "W", "E", "R", "A", "S", "D", "F", "Z", "X", "C", "V" };
+// 3-5 char shorthands, indexed by EStructureType — the SAME vocabulary the hotbar slot and the
+// world tag over a building use, so a slot and the thing it builds read identically.
+inline constexpr const char* c_structureShortNames[] = { "EMIT", "GEN", "CON", "EXTR", "BATT",
+    "FUEL", "SOL", "FAB", "BSTN", "LNC", "BRK", "BRK-B", "BRK-R", "BRK-S", "WALL", "TRT", "SILO",
+    "CNST", "BASE", "CBL-P", "CBL-F", "CBL-M", "CRS-P", "CRS-F", "CRS-M", "HOUS", "MEDC" };
+static_assert(oc::size(c_structureShortNames) == (size_t)EStructureType::Count);
+// The barracks' unit-type popup captions, in ENpcType order (the same order the price tables use).
+inline constexpr const char* c_unitTypeNames[] = { "Grunt", "Brute", "Runner", "Spitter", "Swarm",
+    "Elite", "Giant", "Titan", "Lobber", "Spawner", "Warrior" };
+static_assert(oc::size(c_unitTypeNames) == (size_t)ENpcType::Count);
+// The popup's buttons, in order: the producible types (isBarracksUnitType — no Spitter).
+inline constexpr uint8 c_barracksMenu[] = { (uint8)ENpcType::Grunt, (uint8)ENpcType::Warrior,
+    (uint8)ENpcType::Brute, (uint8)ENpcType::Runner, (uint8)ENpcType::Swarm };
+// (packColor / drawCircle come from Structures.ixx.)
+// GHOST: the exact box the structure will occupy — footprint square × the prefab's height, drawn
+// as a wireframe at the snapped position (every whitebox building IS a box, so this is the real
+// shape, not an approximation), plus the interior cell lines so the grid it takes is unambiguous.
+void drawStructureGhost(EStructureType type, const glm::vec3& groundPos, uint32 color);

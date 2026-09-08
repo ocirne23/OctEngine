@@ -5,12 +5,13 @@ import Core.glm;
 import Core.Tweaks;
 import RendererVK;
 import Threading; // ThreadLocalScope on the PerWorker staging slots
-import :System;
+import :ForceSystem;
 
 using namespace RendererVKLayout;
 
 // CPU mirror of the shader's axial density bump (force_field.inc.glsl forceDistributionGain).
-static float forceDistributionGain(float t, float D)
+// (Declared in ForceSystem.ixx: the ForceEmitter readbacks in Emitter.cpp use it too.)
+float forceDistributionGain(float t, float D)
 {
     const float b = (t - D) * (1.0f / 0.45f);
     return 0.15f + std::exp(-b * b);
@@ -55,7 +56,7 @@ static const float g_forceReferenceBudget = [] {
     return (float)sum;
 }();
 
-static float forceReferenceBudget() { return g_forceReferenceBudget; }
+float forceReferenceBudget() { return g_forceReferenceBudget; } // declared in ForceSystem.ixx
 
 float ForceSystem::refreshDistributionScale(EmitterInstance& inst) const
 {
@@ -77,227 +78,7 @@ static uint32 packDebugColor(const glm::vec3& c)
     return (uint32)s.x | ((uint32)s.y << 8) | ((uint32)s.z << 16) | 0xFF000000u;
 }
 
-// ---- ForceEmitter handle ----
-
-ForceEmitter& ForceEmitter::operator=(ForceEmitter&& move) noexcept
-{
-    if (this != &move)
-    {
-        destroy();
-        m_handle = move.m_handle;
-        move.m_handle = 0;
-    }
-    return *this;
-}
-
-void ForceEmitter::destroy()
-{
-    if (m_handle != 0)
-    {
-        Globals::forceSystem.destroyEmitter(m_handle);
-        m_handle = 0;
-    }
-}
-
-void ForceEmitter::setTransform(const glm::vec3& pos, const glm::vec3& direction)
-{
-    if (ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
-    {
-        inst->pos = pos;
-        inst->dir = direction;
-    }
-}
-
-void ForceEmitter::setPosition(const glm::vec3& pos)
-{
-    if (ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
-        inst->pos = pos;
-}
-
-void ForceEmitter::setOutput(float output)
-{
-    if (ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
-        inst->output = output;
-}
-
-void ForceEmitter::setActive(bool active)
-{
-    if (ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
-        inst->active = active;
-}
-
-void ForceEmitter::setReach(float reach)
-{
-    if (ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
-        inst->reach = reach;
-}
-
-void ForceEmitter::setFocus(float focus)
-{
-    if (ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
-        inst->focus = focus;
-}
-
-void ForceEmitter::setDistribution(float distribution)
-{
-    if (ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
-        inst->distribution = distribution;
-}
-
-void ForceEmitter::setWidth(float width)
-{
-    if (ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
-        inst->width = width;
-}
-
-void ForceEmitter::setTeam(uint32 team)
-{
-    if (ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
-        inst->team = glm::min(team, Globals::forceSystem.numTeams() - 1);
-}
-
-void ForceEmitter::setShellAlpha(float alpha)
-{
-    if (ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
-        inst->shellAlpha = glm::clamp(alpha, 0.0f, 1.0f);
-}
-
-void ForceEmitter::setAnalyticReadback(bool analytic)
-{
-    if (ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
-        inst->analyticReadback = analytic;
-}
-
-void ForceEmitter::setMergeable(bool mergeable)
-{
-    if (ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
-        inst->mergeable = mergeable; // a cleared flag makes the next merge pass drop it from its group
-}
-
-bool ForceEmitter::getMergeable() const
-{
-    if (const ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
-        return inst->mergeable;
-    return false;
-}
-
-bool ForceEmitter::isMerged() const
-{
-    if (const ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
-        return inst->group != 0;
-    return false;
-}
-
-bool ForceEmitter::getBubbleBounds(glm::vec3& center, float& radius, uint32* groupId) const
-{
-    const ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle);
-    if (!inst || !inst->active)
-        return false;
-    if (groupId)
-        *groupId = inst->group;
-    if (inst->group != 0)
-    {
-        const ForceSystem::MergeGroup& group = Globals::forceSystem.m_groups[inst->group - 1];
-        center = group.center;
-        radius = group.coverRadius;
-    }
-    else
-    {
-        center = inst->bubbleCenter;
-        radius = inst->bubbleRadius;
-    }
-    return radius > 0.0f;
-}
-
-glm::vec3 ForceEmitter::getAppliedForce() const
-{
-    if (const ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
-        return inst->appliedForce;
-    return glm::vec3(0.0f);
-}
-
-float ForceEmitter::getPressure() const
-{
-    if (const ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
-        return inst->pressure;
-    return 0.0f;
-}
-
-float ForceEmitter::getEquilibriumRadius() const
-{
-    const ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle);
-    if (!inst)
-        return 0.0f;
-    // Same fold + gain the upload and the debug rings use; the distNorm cache is refreshed by
-    // every update(), so a same-frame focus/distribution setter is at most one frame stale.
-    const float W = glm::clamp(inst->width, 0.05f, 4.0f);
-    const float folded = inst->output * forceReferenceBudget() / (glm::max(inst->distNormE, 1e-6f) * W * W);
-    const float centerDensity = folded * forceDistributionGain(0.5f, glm::clamp(inst->distribution, 0.0f, 1.0f));
-    const float threshold = glm::max(Globals::forceSystem.getParams().isoThreshold, inst->pressure);
-    if (threshold <= 0.0f || centerDensity <= threshold)
-        return 0.0f;
-    const float u2 = 1.0f - std::sqrt(threshold / centerDensity);
-    return 0.5f * glm::max(inst->reach, 1e-3f) * W * std::sqrt(u2);
-}
-
-float ForceEmitter::getCenterDensityFactor() const
-{
-    const ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle);
-    if (!inst)
-        return 1.0f;
-    const float W = glm::clamp(inst->width, 0.05f, 4.0f);
-    const float fold = forceReferenceBudget() / (glm::max(inst->distNormE, 1e-6f) * W * W);
-    return fold * forceDistributionGain(0.5f, glm::clamp(inst->distribution, 0.0f, 1.0f));
-}
-
-float ForceEmitter::getOutput() const
-{
-    if (const ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
-        return inst->output;
-    return 0.0f;
-}
-
-float ForceEmitter::getReach() const
-{
-    if (const ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
-        return inst->reach;
-    return 0.0f;
-}
-
-float ForceEmitter::getFocus() const
-{
-    if (const ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
-        return inst->focus;
-    return 0.5f;
-}
-
-float ForceEmitter::getDistribution() const
-{
-    if (const ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
-        return inst->distribution;
-    return 0.5f;
-}
-
-float ForceEmitter::getWidth() const
-{
-    if (const ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
-        return inst->width;
-    return 1.0f;
-}
-
-uint32 ForceEmitter::getTeam() const
-{
-    if (const ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
-        return inst->team;
-    return 0;
-}
-
-float ForceEmitter::getShellAlpha() const
-{
-    if (const ForceSystem::EmitterInstance* inst = Globals::forceSystem.resolveEmitter(m_handle))
-        return inst->shellAlpha;
-    return 1.0f;
-}
+// (The ForceEmitter handle's bodies live in Emitter.cpp.)
 
 // ---- ForceQuery handle ----
 
@@ -348,7 +129,7 @@ void ForceSystem::initialize()
 {
     // Reserved to the caps so createEmitter/createQuery growth NEVER reallocates: a concurrent
     // spawn job may be resolving its own fresh handle while another creates (see m_createMutex in
-    // System.ixx). Emitter INSTANCES are capped far above the renderer's slots — only ACTIVE
+    // ForceSystem.ixx). Emitter INSTANCES are capped far above the renderer's slots — only ACTIVE
     // emitters hold one (see MAX_FORCE_INSTANCES).
     m_emitters.reserve(MAX_FORCE_INSTANCES);
     m_queries.reserve(RendererVKLayout::MAX_FORCE_QUERIES);
@@ -1268,7 +1049,7 @@ bool ForceSystem::recomputeCover(MergeGroup& group)
 // candidate cells and stages pairs per chunk. Only the candidate sort, the pair UNION (group
 // creation / membership moves across groups) and the dissolve sweep are serial — their cost is
 // the number of candidates and join-distance PAIRS, not the emitter count. No renderer access here.
-// ---- the baked pressure field (see System.ixx) ----
+// ---- the baked pressure field (see ForceSystem.ixx) ----
 
 static uint64 bakeChunkKey(int bx, int bz)
 {

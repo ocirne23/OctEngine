@@ -1444,7 +1444,7 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         tmpl.spawnInfos.emplace_back(oc::make_shared<NetworkComponent::SpawnInfo>());
     }
 
-    // GAME components (Components/GameComponents.ixx) — !m_headless like Force: they create Force
+    // GAME components (Components/Game/*.ixx) — !m_headless like Force: they create Force
     // queries/read readbacks, and --game refuses headless anyway.
     if (const AssetNode* unitNode = findComponentNode(node, "GameUnit"); unitNode && !m_headless)
     {

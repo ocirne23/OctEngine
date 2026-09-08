@@ -30,7 +30,15 @@ Reach still scales the total. `getCenterDensityFactor()` converts a measured den
 units (~1.11 for the default centred sphere).
 
 Gradients are finite-differenced. Field math lives ONCE in `force_field.inc.glsl`; a CPU lobe mirror
-in System.cpp drives the debug rings and the "camera inside a bubble" test.
+in ForceSystem.cpp drives the debug rings and the "camera inside a bubble" test.
+
+## Files
+
+`Private/ForceSystem.ixx` / `.cpp` (`Force:ForceSystem`) is the system: instances, queries, the
+upload, the bake, merging. `Private/Emitter.ixx` / `.cpp` (`Force:Emitter`) is the `ForceEmitter`
+handle class alone — its bodies resolve the instance through `Globals::forceSystem`; the two CPU
+field mirrors it needs (`forceDistributionGain`, `forceReferenceBudget`) are declared unexported in
+ForceSystem.ixx. `ForceQuery` stays in ForceSystem.ixx.
 
 > ### SHADER RULE: never a dynamic-index STORE into the per-team phi arrays
 >
@@ -45,7 +53,7 @@ in System.cpp drives the debug rings and the "camera inside a bubble" test.
 
 ## `Globals::forceSystem`
 
-[System.ixx:139](Private/System.ixx#L139).
+[ForceSystem.ixx](Private/ForceSystem.ixx).
 
 * `initialize()` from main before world spawns — registers the "Force" tweaks, which live on
   `ForceFieldParams` and are pushed to the renderer every update.
@@ -62,7 +70,7 @@ initialize, so growth never reallocates under a concurrent handle resolve.
 
 > ### An INSTANCE is not a GPU SLOT
 >
-> `MAX_FORCE_INSTANCES` (**32768**, System.ixx) caps the CPU instances; `MAX_FORCE_EMITTERS`
+> `MAX_FORCE_INSTANCES` (**32768**, ForceSystem.ixx) caps the CPU instances; `MAX_FORCE_EMITTERS`
 > (**8192**) caps the renderer slots. **`createEmitter` claims only an instance** — a renderer slot
 > is minted by the first `update()` that sees the emitter ACTIVE and handed back the frame it is
 > gated off. Every unit on a 25k-unit co-op map can therefore carry a bubble while only the ones
@@ -294,7 +302,7 @@ bisections run 5 iterations where the shell FS keeps 6 for cross-proxy hit match
 
 "Visible bounds iso frac", default 1.0; 0 = off.
 
-`packVisibleBounds` (System.cpp, inside `buildEmitterGpu`) packs each emitter's closed-form OWN iso
+`packVisibleBounds` (ForceSystem.cpp, inside `buildEmitterGpu`) packs each emitter's closed-form OWN iso
 extent — evaluated at iso × the frac, the merge slack for two sub-iso fields summing past iso — into
 `teamFlags.w`. `forceVisibleBounds` then shrinks the proxy VS, interval FS and shell FS march boxes,
 **so a weak bubble in a full-size reach box costs its actual size.**
@@ -398,7 +406,7 @@ grows the slot vector with capacity kept and clears the slots in use), `fn` inde
 pass's item count, not the machine's context count, and no thread-local state is involved — the
 merge passes run inside the merge job, whose `parallelFor` joins park the fiber. The one
 `PerWorker` left is the bake `BakeKeySet` (a fixed 4096-entry hash table per slot — few, full slots
-dedupe best; see System.ixx).
+dedupe best; see ForceSystem.ixx).
 
 | Pass | Kind | minParallel | What |
 |---|---|---|---|

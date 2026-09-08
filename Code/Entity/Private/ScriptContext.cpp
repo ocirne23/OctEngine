@@ -1295,7 +1295,7 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
     }
 
     // ---- game components ----
-    // The DSL's orders/config tier over the C++ sim in Components/GameComponents.cpp. Null-checked:
+    // The DSL's orders/config tier over the C++ sim in Components/Game/*.cpp. Null-checked:
     // unlike self.* (require-gated), these handles also arrive from cross-entity expressions.
     void* thunk_entityGetGameUnitComponent(Entity* en) { return en ? getComponent<GameUnitComponent>(en) : nullptr; }
     GameUnitComponent* asGameUnit(void* p) { return static_cast<GameUnitComponent*>(p); }
