@@ -77,11 +77,9 @@ export struct SimLodConfig
     // NOT frame-sensitive: what the camera sees is selected every frame from the cull job's
     // frustum pass regardless. The query margin has to cover this much motion.
     float selectionIntervalSec = 0.05f;
-    float maxCatchUpSec = 1.0f;  // cap in SECONDS on the dt a throttled tick receives (= the tier 2
-                                 // interval: a tick normally gets its whole stretch; only a return
-                                 // from dormancy is clipped). A cap in FRAMES was frame-rate bound —
-                                 // 8 frames at 1000 fps is 8 ms for a 1 s tick, so far units could
-                                 // not accelerate at all.
+    float maxCatchUpSec = 1.0f;  // cap in SECONDS (never frames: frame-rate bound) on the dt a throttled
+                                 // tick receives — a tick gets its whole stretch, only a return from
+                                 // dormancy is clipped
     bool units = true;           // GameUnitComponent follows the LOD
     bool structures = false;     // GameStructureComponent (barracks/turret clocks, flows)
     bool projectiles = false;    // GameProjectileComponent (lifetime, deflection)
@@ -109,8 +107,8 @@ public:
     // Whether the last pass selected by spatial query (else everything was visited). The Game's
     // far tick for unselected units keys on it.
     bool simLodActive() const { return m_simLodActive; }
-    // The tier by direct distance to the focus points / zones (3 = none) — what a NEVER-stamped
-    // entity is scheduled by; the game's far tick uses it to leave such a unit to the pass.
+    // The tier by direct distance to the focus points / zones (3 = none): what a never-stamped
+    // entity is scheduled by (the game's far tick leaves such a unit to the pass).
     int simLodDistanceTier(const glm::vec3& pos) const;
     // Update SELECTION (see update()): whether a child a visited parent emitted is part of this
     // frame's pass — its spatial mask carries a tier or Main stamp (a never-stamped fresh entry

@@ -71,10 +71,9 @@ void PhysicsComponent::unpark(Entity& entity, const glm::vec3& velocity)
     Globals::physics.queueBodyCommand(body, PhysicsWorld::EBodyCommand::SetLinearVelocity, velocity);
     Globals::physics.queueBodyCommand(body, PhysicsWorld::EBodyCommand::SetAngularVelocity, glm::vec3(0.0f));
     // OVERLAP LIFT: a far-ticked body teleports through everything, so it may wake inside another
-    // dynamic body (the slowed front of a wave at the SIM LOD edge). If any live dynamic body
-    // stands within a metre, lift this one 2 m so it lands on top instead of the solver blasting
-    // the two apart. A body woken earlier in the same pass counts too (its schedTier already left
-    // 3 — a racy byte read, so of two bodies waking together at least one sees the other).
+    // dynamic body. Any live one within a metre (or one woken earlier this pass: schedTier left 3,
+    // a racy read that at least one of a waking pair sees) lifts this body 2 m so it lands on top
+    // instead of the solver blasting the two apart.
     if (bodyType == EPhysicsBodyType::Dynamic)
     {
         const glm::vec3 pos = body.getPosition();
@@ -89,7 +88,6 @@ void PhysicsComponent::unpark(Entity& entity, const glm::vec3& velocity)
         });
         if (occupied)
         {
-            // Teleport contract: body pose + prev/curr stomp + step claim.
             const glm::vec3 lifted = pos + glm::vec3(0.0f, 2.0f, 0.0f);
             Globals::physics.teleportBody(body, lifted, body.getRotation());
             prevPos = currPos = lifted;

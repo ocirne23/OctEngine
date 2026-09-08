@@ -233,8 +233,7 @@ void World::simLodTransition(Entity& entity, uint8 tier)
         entity.schedTick = schedTickNow(); // no catch-up over the dormant stretch
         if (PhysicsComponent* physics = getComponent<PhysicsComponent>(&entity))
         {
-            // A marching unit wakes at its walk velocity (zero for one with nowhere to go): its
-            // first throttled tick may be a second away, and until then the body only coasts.
+            // A marching unit wakes at its walk velocity: its first throttled tick may be a second away.
             GameUnitComponent* unit = getComponent<GameUnitComponent>(&entity);
             physics->unpark(entity, unit ? unit->wakeVelocity(entity) : glm::vec3(0.0f));
         }
@@ -257,20 +256,18 @@ float World::simLodCadence(Entity& entity, uint8 tier)
     const float intervalSec = m_simLod.intervalSec[tier - 1];
     if (tier == 3 && intervalSec <= 0.0f)
         return -1.0f; // dormant, never ticks
-    // The per-entity clock: 1/64 s units, wrap-safe over 256 s. Both ends sit on the same grid,
-    // so the deltas of consecutive ticks sum to exactly the grid time — no drift.
+    // Wrap-safe on the 14-bit clock; both ends sit on the same grid, so consecutive deltas sum
+    // exactly to the grid time.
     const float elapsed = float((now - entity.schedTick) & Entity::SchedTickMask) / Entity::SchedTickHz;
     // Per-entity jitter on the interval (+-intervalJitter): a wave that entered the tier on the
     // same frame drifts apart within a few ticks instead of ticking in lockstep. The frame-gap
-    // floor is a TIME too (minFrames x this frame's delta): at a low frame rate a tick still
-    // skips that many frames, at a high one the interval rules.
+    // floor is minFrames x this frame's delta.
     const float hashFrac = float(uint32((uintptr_t(&entity) >> 6) * 2654435761u) >> 8) * (1.0f / 16777216.0f);
     const float threshold = glm::max(intervalSec * (1.0f + m_simLod.intervalJitter * (hashFrac * 2.0f - 1.0f)),
         float(glm::max(m_simLod.minFrames[tier - 1], 1)) * m_updateDelta);
     if (elapsed < threshold)
         return tier == 3 ? -1.0f : 0.0f;
     entity.schedTick = now;
-    // Capped in SECONDS, never frames: at 1000 fps an 8-frame cap handed a 1 s tick 8 ms.
     return glm::min(elapsed, glm::max(m_simLod.maxCatchUpSec, m_updateDelta));
 }
 

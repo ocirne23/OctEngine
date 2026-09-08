@@ -107,14 +107,9 @@ public:
                           // chance, and fills each fan-out batch until the summed cost reaches its
                           // time budget — no guessed initial value, the first update IS the guess
     // World SCHEDULING state, like updateCost: written only by World's update pass (its SIM LOD —
-    // tier + the sim time of the last tick). A component may READ schedTier inside its update (the
-    // pass sets it before the components run — PhysicsComponent::unpark's overlap test);
-    // nothing outside the pass looks at these.
-    // A fresh entity starts UNPLACED (tier 3): its first stamped visit is then a WAKE edge, which
-    // is how a body the spawner parked (far wave units) gets enabled once a player is near.
-    // schedTick is a PER-ENTITY CLOCK in 1/64 s, wrapping every 256 s — the two bytes the header
-    // has left. (A pass counter against a 256-entry time ring could measure at most 255 passes
-    // back: at 1000 fps that is 0.25 s, so a tier-2 tick could never see its 1 s and never fired.)
+    // tier + the sim time of the last tick, 1/64 s units wrapping every 256 s). The entity itself
+    // never looks at these. A fresh entity starts UNPLACED (tier 3): its first stamped visit is
+    // then a WAKE edge, which is how a body the spawner parked gets enabled once a player is near.
     uint16 schedTier : 2 = 3;
     uint16 schedTick : 14 = 0;
     static constexpr float SchedTickHz = 64.0f;

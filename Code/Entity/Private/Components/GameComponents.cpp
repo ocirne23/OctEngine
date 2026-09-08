@@ -895,9 +895,8 @@ bool GameUnitComponent::farHeading(const Entity& entity, glm::vec2& dir, float& 
         : moveSpeed;                                                          // the order)
     if (spread)
     {
-        // A persistent per-unit lateral bias (address hash, like the steering fan's spread): the
-        // field descent is 8-connected on a 2 m grid, so unbiased every unit in an area walks the
-        // same cells and the wave funnels into one line. The bias fans it across the corridor.
+        // Persistent per-unit bias (address hash): unbiased, every unit in an area walks the same
+        // descent cells and the wave files into one line.
         const float hashFrac = float(uint32((uintptr_t(this) >> 4) * 2654435761u) >> 8) * (1.0f / 16777216.0f);
         const float angle = glm::radians(params.farSpreadDeg) * (hashFrac - 0.5f);
         const float c = std::cos(angle), s = std::sin(angle);
@@ -957,8 +956,7 @@ bool GameUnitComponent::updateFar(Entity& entity, float deltaSec)
     glm::vec2 next = here + dir * glm::min(walkSpeed * deltaSec, dist);
     if (raster && raster->isBlocked(Nav::cellOf(next)))
     {
-        // The spread bias aimed at rock: take the plain heading instead, and hold only when that
-        // is blocked too (until a field covers it or the full sim takes over).
+        // The spread bias aimed at rock: the plain heading, and hold only when that is blocked too.
         if (!farHeading(entity, dir, walkSpeed, dist, /*spread*/ false))
             return false;
         next = here + dir * glm::min(walkSpeed * deltaSec, dist);

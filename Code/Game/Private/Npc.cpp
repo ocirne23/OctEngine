@@ -386,12 +386,10 @@ void NpcSystem::service(StructureSystem& structures)
                         unit->kill(*e);
                         continue;
                     }
-                    // The entity pass owns a unit it will TICK: one with a current tier stamp, or a
-                    // fresh (never stamped) one whose distance tier is inside the balls. NOT the
-                    // Main (on-screen) stamp: a visible unit beyond the outer radius is walked by
-                    // the pass but dormant there (never ticked), so skipping it here froze every
-                    // far unit the top-down camera could see — a wave then arrived in blobs, each
-                    // released when it scrolled out of view or behind an occluder.
+                    // The entity pass owns a unit it will TICK: a current tier stamp, or a fresh
+                    // (never stamped) one inside the balls by distance. NOT the Main (on-screen)
+                    // stamp: a visible unit beyond the outer radius is walked but dormant there,
+                    // so skipping on it froze every far unit the camera could see.
                     if (!e->spatialEntry.isValid())
                         continue;
                     const SpatialHandle handle = e->spatialEntry.handle();

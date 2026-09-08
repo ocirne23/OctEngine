@@ -60,12 +60,10 @@ export struct PhysicsComponent
     // velocities, then DISABLE (out of the broadphase + solver, pose kept — nothing can wake or
     // push it) or merely put it to sleep. unpark: zero the velocities (a body parked inside a
     // crowd may still hold a contact push-out) and enable — a no-op on an enabled body; skipped
-    // while `suspended` (an Enabled-off subtree owns its own disable). `velocity` is the linear
-    // velocity to wake WITH (a marching unit's walk, see GameUnitComponent::wakeVelocity; zero for
-    // anything at rest), so a far-ticked body does not stand still until its first throttled tick.
-    // A DYNAMIC body that wakes within a metre of another live dynamic body (far-ticked units
-    // teleport through each other) is first LIFTED 2 m, so the solver never has to unwind a deep
-    // penetration in one step. Landing on another body is fine; exploding out of it is not.
+    // while `suspended` (an Enabled-off subtree owns its own disable). `velocity` = the linear
+    // velocity to wake with (a marching unit's walk — GameUnitComponent::wakeVelocity; zero at
+    // rest). A dynamic body waking within a metre of another live one is first LIFTED 2 m (far-
+    // ticked units teleport through each other; landing on a body beats exploding out of it).
     void park(bool disable);
     void unpark(Entity& entity, const glm::vec3& velocity = glm::vec3(0.0f));
 };
