@@ -296,6 +296,37 @@ namespace Procedural
 		// Terrain texture splatting (TERRAIN pipeline variant; pushed to the renderer every frame from
 		// updateTerrainTextures via Renderer::setTerrainTextureParams). The surface composites bottom-up
 		// as ground -> beach -> rock -> snow; these shape where each layer takes over.
+		// Terrain wetness clipmap (Renderer::setTerrainWetParams; the renderer bakes ocean swash + rain
+		// into a toroidal window around the scene focus, the TERRAIN shader darkens and glosses wet ground).
+		Tweak::boolean("Terrain/Wetness", "Enabled", &m_wetEnabled);
+		Tweak::floatVar("Terrain/Wetness", "Texel size (m)", &m_wetTexelSize, 0.1f, 4.0f, 0.1f);
+		Tweak::floatVar("Terrain/Wetness", "Dry time (s)", &m_wetDryTime, 1.0f, 600.0f, 1.0f);
+		Tweak::floatVar("Terrain/Wetness", "Dry temp sensitivity", &m_wetDryTempSens, 0.0f, 0.2f, 0.005f);
+		Tweak::floatVar("Terrain/Wetness", "Rain (1/s)", &m_wetRain, 0.0f, 2.0f, 0.01f);
+		Tweak::floatVar("Terrain/Wetness", "Wet-in time (s)", &m_wetInTime, 0.0f, 5.0f, 0.05f);
+		Tweak::floatVar("Terrain/Wetness", "Film depth (m)", &m_wetFilmDepth, 0.0f, 0.5f, 0.005f);
+		// Sideways spread rate; the on/off toggle is the renderer's own "Diffusion" tweak (a baked define
+		// on terrain_wetness.cs.glsl, reloaded on change).
+		Tweak::floatVar("Terrain/Wetness", "Diffusion rate (1/s)", &m_wetDiffusionRate, 0.0f, 60.0f, 0.5f);
+		// Pooling: draining water retreats into the low spots of a world-anchored noise, so the gloss
+		// breaks up into blobs instead of fading uniformly.
+		Tweak::floatVar("Terrain/Wetness", "Pool scale (1/m)", &m_wetPoolScale, 0.0f, 20.0f, 0.1f);
+		Tweak::floatVar("Terrain/Wetness", "Pool softness", &m_wetPoolSoftness, 0.0f, 1.0f, 0.01f);
+		Tweak::floatVar("Terrain/Wetness", "Damp gloss", &m_wetDampGloss, 0.0f, 1.0f, 0.01f);
+		Tweak::floatVar("Terrain/Wetness", "Pool hold", &m_wetPoolHold, 1.0f, 8.0f, 0.1f);
+		// Steep ground sheds water: the terrain shader raises the wetness to 1 + slope * drain (= that
+		// much faster decay, per pixel against the mesh normal) and the compute pass divides the wet-in
+		// and rain rates by the same factor (map gradient), so a cliff also takes longer to soak.
+		Tweak::floatVar("Terrain/Wetness", "Slope drain", &m_wetSlopeDrain, 0.0f, 20.0f, 0.1f);
+		// Albedo: DAMP (soaked ground everywhere) is a plateau above the knee that fades smoothly to dry;
+		// the WET scale is the standing-film layer on top — the whole surface just after a wave (above
+		// the spike start) and the pools once it drains. Fully wet = damp x wet.
+		Tweak::floatVar("Terrain/Wetness", "Wet albedo scale", &m_wetAlbedoScale, 0.1f, 1.0f, 0.01f);
+		Tweak::floatVar("Terrain/Wetness", "Damp albedo scale", &m_wetDampAlbedoScale, 0.1f, 1.0f, 0.01f);
+		Tweak::floatVar("Terrain/Wetness", "Damp knee", &m_wetDampKnee, 0.01f, 1.0f, 0.01f);
+		Tweak::floatVar("Terrain/Wetness", "Wet spike start", &m_wetSpikeStart, 0.0f, 0.99f, 0.01f);
+		Tweak::floatVar("Terrain/Wetness", "Wet roughness", &m_wetRoughness, 0.0f, 1.0f, 0.01f);
+
 		Tweak::floatVar("Terrain/Textures", "Ground uv scale (1/m)", &m_texUvScaleGround, 0.005f, 2.0f);
 		Tweak::floatVar("Terrain/Textures", "Rock uv scale (1/m)", &m_texUvScaleRock, 0.005f, 2.0f);
 		Tweak::floatVar("Terrain/Textures", "Snow uv scale (1/m)", &m_texUvScaleSnow, 0.005f, 2.0f);
@@ -449,6 +480,26 @@ namespace Procedural
 			.snowAridity = m_texSnowAridity,
 			.cragWanderAmp = m_texCragWanderAmp * cragScale,
 			.cragWanderWavelength = m_texCragWanderWavelength * cragScale,
+		});
+		renderer.setTerrainWetParams({
+			.enabled = m_wetEnabled,
+			.texelSize = m_wetTexelSize,
+			.dryTime = m_wetDryTime,
+			.dryTempSens = m_wetDryTempSens,
+			.rain = m_wetRain,
+			.wetInTime = m_wetInTime,
+			.filmDepth = m_wetFilmDepth,
+			.diffusionRate = m_wetDiffusionRate,
+			.albedoScale = m_wetAlbedoScale,
+			.dampAlbedoScale = m_wetDampAlbedoScale,
+			.dampKnee = m_wetDampKnee,
+			.spikeStart = m_wetSpikeStart,
+			.roughness = m_wetRoughness,
+			.poolScale = m_wetPoolScale,
+			.poolSoftness = m_wetPoolSoftness,
+			.dampGloss = m_wetDampGloss,
+			.poolHold = m_wetPoolHold,
+			.slopeDrain = m_wetSlopeDrain,
 		});
 
 		if (!m_texSetRegistered)
@@ -807,9 +858,10 @@ namespace Procedural
 						yMin = glm::min(yMin, t[0]); yMax = glm::max(yMax, t[0]);
 						aMin = glm::min(aMin, t[3]); aMax = glm::max(aMax, t[3]);
 					}
-					Log::info(oc::format("[Terrain] baked cascade {} ({:.0f} m): height {:.0f}..{:.0f} | "
+					Log::info(oc::format("[Terrain] baked cascade {} ({:.0f} m, {}): height {:.0f}..{:.0f} | "
 					                      "altitude {:.0f}..{:.0f} | temp {:.1f}..{:.1f} C | humidity {:.2f}..{:.2f}",
-					                      c, baked.ranges[(int)c], yMin, yMax, aMin, aMax, tMin, tMax, hMin, hMax));
+					                      c, baked.ranges[(int)c], c != 0 ? "coarse" : (m_terrainMapBaker.activeNearIsFull() ? "full" : "quick pass"),
+					                      yMin, yMax, aMin, aMax, tMin, tMax, hMin, hMax));
 				}
 			}
 			renderer.setFogTerrainHeightMap(baked.texels, baked.center, baked.ranges, maps->seaLevel());

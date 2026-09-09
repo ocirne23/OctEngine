@@ -114,7 +114,9 @@ export namespace Procedural
 
 		// --- Tweak-backed configuration (source of truth; the generator/ChunkParams are built from these) ---
 		bool  m_enabled = false;
-		int   m_seed = 62500;
+		//int   m_seed = 62500;
+		//int   m_seed = 7236781;
+		int   m_seed = 516121;
 		int   m_chunkSize = 1024;
 		int   m_lod0Res = 512;
 		int   m_ringRadius = 32;   // max generation range from the camera chunk, in chunks
@@ -226,6 +228,28 @@ export namespace Procedural
 		float m_texSnowSlopeStart = 0.26f;
 		float m_texSnowSlopeFull = 0.60f;
 		float m_texSnowAridity = 0.10f;    // humidity at/below which cold ground stays bare (polar desert)
+
+		// --- Terrain/Wetness tweaks: the wetness clipmap (Renderer::TerrainWetTweaks), pushed every frame
+		// from updateTerrainTextures. The renderer bakes ocean swash + rain into it; the TERRAIN shader
+		// darkens and glosses wet ground.
+		bool  m_wetEnabled = true;
+		float m_wetTexelSize = 0.5f;   // m per texel (1024 texels = 512 m around the scene focus)
+		float m_wetDryTime = 30.0f;    // s to decay to 1/e on cool ground
+		float m_wetDryTempSens = 0.04f;// extra decay rate per C above 15 C
+		float m_wetRain = 0.0f;        // wetness per second added everywhere (a weather driver later)
+		float m_wetInTime = 2.0f;      // s for ground under water to reach full wetness (no per-texel popping)
+		float m_wetFilmDepth = 0.03f;  // m of water over which the wetting target ramps 0 -> 1
+		float m_wetDiffusionRate = 1.0f; // 1/s sideways spread (framerate independent; the on/off toggle is the renderer's define tweak)
+		float m_wetPoolScale = 3.0f;      // 1/m: pooling noise scale as the ground dries (0 = uniform film)
+		float m_wetPoolSoftness = 0.15f;  // noise band around the wetness that half-pools
+		float m_wetDampGloss = 0.6f;      // fraction of the roughness drop the damp ground between pools keeps
+		float m_wetPoolHold = 1.5f;       // >= 1: pool threshold = wet^(1/hold), pools outlast the wetness
+		float m_wetSlopeDrain = 20.0f;     // steep ground dries faster: decay rate x (1 + slope * drain); 0 = off
+		float m_wetAlbedoScale = 0.75f;// FILM albedo multiplier (standing water: the near-full spike + the pools), on top of damp
+		float m_wetDampAlbedoScale = 0.6f; // DAMP albedo multiplier (soaked ground everywhere, between the pools too)
+		float m_wetDampKnee = 0.25f;   // wetness below which the damp plateau fades to dry (~1.4 dry times)
+		float m_wetSpikeStart = 0.7f;  // wetness above which the whole surface carries the film darkening
+		float m_wetRoughness = 0.15f;  // roughness at full wetness
 
 		// --- Threading: generation runs on up to m_maxGenJobs Low-priority pump jobs; V3 waits
 		// inside them park their fibers (several pumps joining one cold tile all proceed when it

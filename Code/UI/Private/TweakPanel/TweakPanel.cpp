@@ -40,7 +40,7 @@ void drawTweakVar(const TweakVar& var, int index, oc::vector<const TweakVar*>& d
 		{
 			drawLabel(var);
 			float* v = static_cast<float*>(var.data);
-			int numDecimals = var.speed >= 1.0f ? 1 : static_cast<int>(-std::log10(var.speed));
+			int numDecimals = var.speed >= 1.0f ? 1 : oc::max(static_cast<int>(-std::log10(var.speed)), 2);
 			oc::string formatStr = ("%." + oc::to_string(numDecimals) + "f");
 			if (var.isUnbounded())
 				changed = ImGui::DragFloat("##v", v, var.speed, var.min, FLT_MAX, formatStr.c_str());

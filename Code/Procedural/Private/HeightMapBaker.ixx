@@ -384,6 +384,20 @@ export namespace Procedural
 	// maps identity or the ranges change, or the camera strays a quarter of the FINEST range from the
 	// active center; centers snap to the COARSEST cascade's texel lattice so no cascade's features ever
 	// swim between re-bakes.
+	//
+	// TWO PASSES for a NEW sampler. The near cascade at Full detail is the expensive one: for V3 it is
+	// every full-detail tile under the near range — at 4 km and sub-metre mpp that is ~1000 tiles, ~1.5 s
+	// each cold, all serialised on one inference lock — and the map ships all-or-nothing, so after a
+	// reseed the climate stayed flat for tens of minutes while the mesh (nearest tiles first) was long
+	// visible. So a sampler the baker has not seen ships a QUICK pass first — both cascades at Coarse
+	// detail, a few dozen coarse tiles, seconds — and then re-bakes the near cascade at Full detail with
+	// the same centre. Coarse and Full share the fitted climate baseline, so the textures land with the
+	// quick pass and only the near heights refine later. A drift or rule change on a Full map goes
+	// straight to Full: the mesh has streamed those tiles already, and a coarse flash would show.
+	//
+	// A bake whose inputs go stale while it runs is CANCELLED (checked between row bands, so at most one
+	// band of tile fetches is wasted) — otherwise a cold Full pass would gate the next quick pass behind
+	// minutes of inference nothing will ship.
 	class HeightMapBaker
 	{
 	public:
@@ -408,6 +422,8 @@ export namespace Procedural
 		// A bake job is outstanding — keep polling update() (active or not) until it drains, so its
 		// result is consumed the frame it lands and a disabled consumer knows when it can stop calling.
 		bool inFlight() const { return m_bakeInFlight; }
+		// Whether the ACTIVE map's near cascade is the Full-detail one (false = the quick coarse pass).
+		bool activeNearIsFull() const { return m_valid && m_active.fullNear; }
 
 		bool update(Baked& out, bool active, const oc::shared_ptr<const ITerrainSampler>& maps,
 			const glm::vec2& camXZ, glm::vec2 ranges, uint32 res, uint32 numCascades, uint32 channels = 1,
@@ -417,19 +433,15 @@ export namespace Procedural
 			if (m_bakeInFlight && m_bakeCounter.isDone())
 			{
 				oc::vector<float> texels = oc::move(m_bake->result);
+				const bool cancelled = m_bake->cancel.load(oc::memory_order_relaxed);
 				m_bakeInFlight = false;
-				if (active) // a bake finishing after its consumer got disabled is dropped
+				// A bake finishing after its consumer got disabled, or after its inputs went stale, is dropped.
+				if (active && !cancelled)
 				{
 					out.texels = oc::move(texels);
-					out.center = m_pendingCenter;
-					out.ranges = m_pendingRanges;
-					m_activeCenter = m_pendingCenter;
-					m_activeRanges = m_pendingRanges;
-					m_activeMaps = m_pendingMaps;
-					m_activeReach = m_pendingReach;
-					m_activeReachOn = m_pendingReachOn;
-					m_activeFlow = m_pendingFlow;
-					m_activeFlowOn = m_pendingFlowOn;
+					out.center = m_pending.center;
+					out.ranges = m_pending.ranges;
+					m_active = m_pending;
 					m_valid = true;
 					shipped = true;
 				}
@@ -437,10 +449,10 @@ export namespace Procedural
 			if (!active)
 			{
 				m_valid = false;
+				if (m_bakeInFlight)
+					m_bake->cancel.store(true, oc::memory_order_relaxed); // nothing will consume it
 				return false;
 			}
-			if (m_bakeInFlight)
-				return shipped; // one bake in flight at a time
 
 			ranges.x = glm::max(ranges.x, 1.0f);
 			ranges.y = numCascades > 1 ? glm::max(ranges.y, ranges.x) : ranges.x;
@@ -452,46 +464,75 @@ export namespace Procedural
 			const bool reachOnNow = waterReach != nullptr;
 			const FlowField flowNow = flowField ? *flowField : FlowField{};
 			const bool flowOnNow = flowField != nullptr;
-			const glm::vec2 drift = glm::abs(camXZ - m_activeCenter);
-			const bool stale = !m_valid
-				|| m_activeMaps != maps.get()
-				|| m_activeRanges != ranges
-				|| m_activeReachOn != reachOnNow
-				|| (reachOnNow && !(m_activeReach == reachNow))
-				|| m_activeFlowOn != flowOnNow
-				|| (flowOnNow && !(m_activeFlow == flowNow))
-				|| glm::max(drift.x, drift.y) > ranges.x * 0.25f;
-			if (!stale)
+			const auto stale = [&](const Inputs& in)
+			{
+				const glm::vec2 drift = glm::abs(camXZ - in.center);
+				return in.maps != maps.get()
+					|| in.ranges != ranges
+					|| in.reachOn != reachOnNow
+					|| (reachOnNow && !(in.reach == reachNow))
+					|| in.flowOn != flowOnNow
+					|| (flowOnNow && !(in.flow == flowNow))
+					|| glm::max(drift.x, drift.y) > ranges.x * 0.25f;
+			};
+
+			if (m_bakeInFlight) // one bake in flight at a time
+			{
+				if (stale(m_pending))
+					m_bake->cancel.store(true, oc::memory_order_relaxed); // see the class comment
+				return shipped;
+			}
+
+			const bool activeStale = !m_valid || stale(m_active);
+			if (!activeStale && m_active.fullNear)
 				return shipped;
 
-			// Snap the shared center to the COARSEST cascade's texel lattice: every cascade's texels then
-			// re-land on the exact same world positions bake after bake (with the default range ratio the
-			// finer lattice divides the coarser), so re-bakes reproduce identical values where the terrain
-			// is unchanged. Snapping to the finest lattice instead let the coarse cascade's texels shift
-			// sub-coarse-texel per bake — on steep coasts a 16 m texel's height then jumped meters between
-			// bakes, and consumers thresholding the field (the ocean land cull) flipped visibly.
-			const float texel = ranges[numCascades > 1 ? 1 : 0] / float(res);
-			const glm::vec2 center = glm::floor(camXZ / texel + 0.5f) * texel;
-			m_pendingCenter = center;
-			m_pendingRanges = ranges;
-			m_pendingMaps = maps.get();
-			m_pendingReach = reachNow;
-			m_pendingReachOn = reachOnNow;
-			m_pendingFlow = flowNow;
-			m_pendingFlowOn = flowOnNow;
+			Inputs in;
+			if (!activeStale)
+			{
+				// The quick pass shipped and still fits: upgrade it in place — same centre, near at Full.
+				in = m_active;
+				in.fullNear = true;
+			}
+			else
+			{
+				// Snap the shared center to the COARSEST cascade's texel lattice: every cascade's texels then
+				// re-land on the exact same world positions bake after bake (with the default range ratio the
+				// finer lattice divides the coarser), so re-bakes reproduce identical values where the terrain
+				// is unchanged. Snapping to the finest lattice instead let the coarse cascade's texels shift
+				// sub-coarse-texel per bake — on steep coasts a 16 m texel's height then jumped meters between
+				// bakes, and consumers thresholding the field (the ocean land cull) flipped visibly.
+				const float texel = ranges[numCascades > 1 ? 1 : 0] / float(res);
+				in.center = glm::floor(camXZ / texel + 0.5f) * texel;
+				in.ranges = ranges;
+				in.maps = maps.get();
+				in.reach = reachNow;
+				in.reachOn = reachOnNow;
+				in.flow = flowNow;
+				in.flowOn = flowOnNow;
+				// Quick pass only for a sampler this baker has not shipped yet (first map, reseed, config
+				// rebuild). A drift or rule change on a known sampler goes straight to Full: its tiles are
+				// what the mesh streamed nearest-first, so the wait is short, and a coarse flash would show.
+				in.fullNear = m_valid && m_active.maps == maps.get();
+			}
+			m_pending = in;
 			// The bake parameters exceed the job's 64-byte inline capture - box them (result rides
 			// in the same box, written before the counter signals; read only after isDone).
-			m_bake = oc::make_shared<BakeJob>(BakeJob{ maps, center, ranges, res, numCascades, channels,
-				reachNow, reachOnNow, flowNow, flowOnNow, {} });
+			m_bake = oc::make_shared<BakeJob>();
+			m_bake->maps = maps;
+			m_bake->in = in;
+			m_bake->res = res;
+			m_bake->numCascades = numCascades;
+			m_bake->channels = channels;
 			m_bakeInFlight = true;
 			Globals::jobSystem.submit([bake = m_bake]() {
 
 				const oc::shared_ptr<const ITerrainSampler>& maps = bake->maps;
-				const glm::vec2 center = bake->center, ranges = bake->ranges;
+				const glm::vec2 center = bake->in.center, ranges = bake->in.ranges;
 				const uint32 res = bake->res, numCascades = bake->numCascades, channels = bake->channels;
-				const bool applyReach = bake->applyReach, applyFlow = bake->applyFlow;
-				const WaterReach reach = bake->reach;
-				const FlowField flow = bake->flow;
+				const bool applyReach = bake->in.reachOn, applyFlow = bake->in.flowOn;
+				const WaterReach reach = bake->in.reach;
+				const FlowField flow = bake->in.flow;
 				oc::vector<float> heights((size_t)numCascades * res * res * channels);
 				oc::vector<TerrainPoint> points; // reused across cascades
 				for (uint32 c = 0; c < numCascades; ++c)
@@ -506,12 +547,30 @@ export namespace Procedural
 					// cost (V3) that is the difference between a handful of coarse tiles and thousands of
 					// full-detail ones covering terrain mostly beyond the mesh ring — see ESampleDetail. The
 					// shader crossfades near->far, so the fidelity step blends in instead of seaming.
-					const ESampleDetail detail = (c == 0) ? ESampleDetail::Full : ESampleDetail::Coarse;
+					// The quick pass (see the class comment) asks Coarse for the near cascade as well.
+					const ESampleDetail detail = (c == 0 && bake->in.fullNear) ? ESampleDetail::Full : ESampleDetail::Coarse;
 
-					// ONE grid call per cascade, not res*res point calls: it lets the sampler resolve
-					// whatever it needs (V3: its tile set, under one lock each) before touching a texel.
+					// Grid calls per ROW BAND, not res*res point calls: a grid call lets the sampler resolve
+					// whatever it needs (V3: its tile set, under one lock each) before touching a texel. Bands
+					// rather than one whole-cascade call so a cancel lands within one band's tile fetches
+					// instead of after the whole cascade's — a cold Full band is ~one tile row of inference.
+					// A band re-resolves its tiles, which is a cache lookup each; nothing measurable.
+					constexpr uint32 kBandRows = 16;
 					points.resize((size_t)res * res);
-					maps->sampleGrid(x0, z0, texelSize, res, res, points, detail);
+					bool cancelled = false;
+					for (uint32 r0 = 0; r0 < res; r0 += kBandRows)
+					{
+						const uint32 rows = glm::min(kBandRows, res - r0);
+						maps->sampleGrid(x0, z0 + texelSize * (double)r0, texelSize, res, rows,
+							oc::span<TerrainPoint>(points.data() + (size_t)r0 * res, (size_t)rows * res), detail);
+						if (bake->cancel.load(oc::memory_order_relaxed))
+						{
+							cancelled = true;
+							break;
+						}
+					}
+					if (cancelled)
+						break; // the result is never read (update drops a cancelled bake)
 
 					for (uint32 j = 0; j < res; ++j)
 						for (uint32 i = 0; i < res; ++i)
@@ -571,38 +630,41 @@ export namespace Procedural
 		bool hasActiveMap() const { return m_valid; }
 
 		// Callers must destroy this after draining (both owners outlive the frame); the wait covers
-		// a bake still in flight at teardown.
-		~HeightMapBaker() { Globals::jobSystem.wait(m_bakeCounter); }
+		// a bake still in flight at teardown — cancelled first, so teardown never sits behind a cold pass.
+		~HeightMapBaker()
+		{
+			if (m_bake)
+				m_bake->cancel.store(true, oc::memory_order_relaxed);
+			Globals::jobSystem.wait(m_bakeCounter);
+		}
 
 	private:
+		// Everything a bake is a function of (besides res/cascades/channels, which never change per
+		// consumer). Compared to decide staleness — of the active map, and of the in-flight bake (cancel).
+		struct Inputs
+		{
+			const ITerrainSampler* maps = nullptr; // identity only (never dereferenced)
+			glm::vec2 center = glm::vec2(0.0f);
+			glm::vec2 ranges = glm::vec2(0.0f);
+			WaterReach reach;                      // the reach rule baked into the water-level channel
+			bool reachOn = false;
+			FlowField flow;                        // the flow-direction rule, likewise
+			bool flowOn = false;
+			bool fullNear = false;                 // near cascade at Full detail (final) vs Coarse (quick pass)
+		};
 		struct BakeJob
 		{
 			oc::shared_ptr<const ITerrainSampler> maps;
-			glm::vec2 center, ranges;
-			uint32 res, numCascades, channels;
-			WaterReach reach;
-			bool applyReach;
-			FlowField flow;
-			bool applyFlow;
+			Inputs in;
+			uint32 res = 0, numCascades = 0, channels = 0;
+			oc::atomic<bool> cancel{ false };
 			oc::vector<float> result;
 		};
 		oc::shared_ptr<BakeJob> m_bake;
 		JobCounter m_bakeCounter;
 		bool m_bakeInFlight = false;
-		WaterReach m_activeReach;      // the reach rule baked into the live map (see update)
-		bool m_activeReachOn = false;
-		WaterReach m_pendingReach;     // ... and the one the in-flight bake is using
-		bool m_pendingReachOn = false;
-		FlowField m_activeFlow;        // same active/pending pair for the flow-direction rule
-		bool m_activeFlowOn = false;
-		FlowField m_pendingFlow;
-		bool m_pendingFlowOn = false;
-		glm::vec2 m_pendingCenter = glm::vec2(0.0f); // inputs of the IN-FLIGHT bake
-		glm::vec2 m_pendingRanges = glm::vec2(0.0f);
-		const ITerrainSampler* m_pendingMaps = nullptr;  // identity only (never dereferenced)
-		glm::vec2 m_activeCenter = glm::vec2(0.0f);  // inputs of the ACTIVE (shipped) map
-		glm::vec2 m_activeRanges = glm::vec2(0.0f);
-		const ITerrainSampler* m_activeMaps = nullptr;   // identity only (never dereferenced)
+		Inputs m_pending; // inputs of the IN-FLIGHT bake
+		Inputs m_active;  // inputs of the ACTIVE (shipped) map
 		bool m_valid = false;
 	};
 }

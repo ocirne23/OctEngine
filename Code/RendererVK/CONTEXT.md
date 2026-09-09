@@ -139,7 +139,7 @@ The **primary command buffer**, assembled in `present()`. Desktop:
 
 ```
 GPU Frame
-  Skinning → Ocean sim → Indirect cull → Light grid → Force compute → Particle sim
+  Skinning → Ocean sim → Indirect cull → Light grid → Force compute → Particle sim → Terrain wetness
     → Shadow cull → Shadow draw            (both skipped under RT sun shadow)
     → G-buffer → GI → RTAO → Volumetric fog
     → Force intervals → Force union march  (own render passes, half-res; see Force)
@@ -389,7 +389,7 @@ the TLAS instance `sbtOffset` for hit-shader fetches, and materials stay per-ins
 | Directory | Contents |
 |---|---|
 | `Objects/` | Thin Vulkan wrappers: Device, SwapChain, Buffer, ComputePipeline / GraphicsPipeline, AccelerationStructure, GBuffer, SceneColor, ShadowMap, GpuProfiler, BakedWorldMap, Texture, Shader, ... |
-| `Pipeline/` | One class per pass or feature: StaticMeshGraphics, GBuffer, GIProbe, RTAO, TAA, VolumetricFog, EyeAdaptation, Composite, Skinning, DebugLine, Particle, Decal, ForceField, OceanSimulation, LightGrid, IndirectCull, ShadowCull, ShadowMapGraphics. **Each registers its own tweaks.** |
+| `Pipeline/` | One class per pass or feature: StaticMeshGraphics, GBuffer, GIProbe, RTAO, TAA, VolumetricFog, EyeAdaptation, Composite, Skinning, DebugLine, Particle, Decal, ForceField, OceanSimulation, TerrainWetness, LightGrid, IndirectCull, ShadowCull, ShadowMapGraphics. **Each registers its own tweaks.** |
 | `Data/` | MeshDataManager, TextureManager, TextureStreamer, MeshStreamer, StagingManager, ShaderDatabase, GpuCrashTracker (Aftermath, runtime-loaded, optional). |
 | `Layout.ixx` | `RendererVKLayout` — every GPU struct and `MAX_*` cap. **Must stay in sync with `shared.inc.glsl` / `ubo.inc.glsl`.** |
 | `Settings.ixx` | The tweak-backed param structs the outside pushes in (`SkyParams`, `FogParams`, `OceanParams`, `ForceFieldParams`, LOD, RT, ...). **Deliberately does not import `:Layout`** — the one place both are visible static_asserts that `ForceFieldParams::teamColors` covers `MAX_FORCE_TEAMS`. |
@@ -449,6 +449,21 @@ Both push params in every frame; the renderer owns none of the tweaks.
 * **`setOceanParams`** — flipping `hitLighting` rebuilds the ocean fragment variant (GPU idle + shader
   reload). `setOceanWaveTrough` sizes the waterline band the fog scatter samples for the underwater fog
   boundary.
+* **`setTerrainWetParams`** — the terrain WETNESS clipmap (`TerrainWetnessPipeline`,
+  `terrain_wetness.cs.glsl` / `.inc.glsl`): ONE persistent R16F image, `TERRAIN_WET_RES`² texels of
+  `texelSize` m, stored **toroidally around the scene focus** exactly like the GI probe clipmap (slot =
+  lattice & (RES−1); the CPU packs this frame's and last frame's window origin into
+  `u_terrainWetParams0`, and a texel whose coord was outside last frame's window starts dry). The pass
+  runs after the particle sim: decay `exp(−dt/dryTime)` (sharpened on warm ground from the map's own
+  climate), then **ground under the LIVE ocean surface is set to 1** — the same calm-depth + swash
+  residual predicate the lit core uses for underwater sunlight, so the wet tongue is where the water
+  was drawn, and permanently submerged seabed stays 1 until a drawdown exposes it — plus a uniform
+  rain term. Pointwise per texel, so it reads and writes in place (GENERAL for life, no ping/pong). The
+  TERRAIN fragment shader (binding 18, UPDATE_AFTER_BIND) manual-bilinears it (never across the wrap
+  seam), ORs in the current wave's own footprint at mesh resolution, and scales albedo / lerps
+  roughness. **Disabled = the pass is skipped and the presence flag is 0**; re-enabling parks the previous
+  origin out of range so nothing stale shows. Rain from weather, particle hits and script splats are
+  the planned injection sources.
 
 ---
 

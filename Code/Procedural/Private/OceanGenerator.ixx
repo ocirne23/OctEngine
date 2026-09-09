@@ -189,8 +189,8 @@ export namespace Procedural
 		float m_waveHeightLimit = 1.0f;
 		float m_shoreFoamDepth = 8.0f;  // surf band: water-column height (m) that churns white; 0 = off
 		float m_shoreFoamMax = 0.75f;   // surf band opacity cap: keeps the refracted bottom visible through the foam
-		float m_swashAmp = 0.5f;        // swash run-up: un-shoaled wave height riding up the beach (0 = hard cutoff)
-		float m_swashDrawdown = 0.0f;   // receding burial depth (m below seabed): deeper = cleaner retreat edge
+		float m_swashAmp = 0.3f;        // swash run-up: un-shoaled wave height riding up the beach (0 = hard cutoff)
+		float m_swashDrawdown = 0.1f;   // receding burial depth (m below seabed): deeper = cleaner retreat edge
 		float m_troughMargin = 0.35f;   // m the trough is held above the seabed (covers baked-map vs mesh error)
 		float m_shoreFoamBias = -0.80f;   // surf fold-threshold shift: negative = sparser/more transparent surf
 		float m_swashFlow = 0.5f;       // backflow: horizontal chop on the tongue (recede flows seaward; 0 = off)

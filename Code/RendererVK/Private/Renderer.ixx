@@ -36,6 +36,7 @@ import :GBuffer;
 import :GBufferPipeline;
 import :RTAOPipeline;
 import :OceanSimulationPipeline;
+import :TerrainWetnessPipeline;
 import :VolumetricFogPipeline;
 import :BakedWorldMap;
 import :SceneColor;
@@ -357,6 +358,43 @@ public:
         float cragWanderWavelength = 2000.0f; // metres at the model's true scale
     };
     void setTerrainTextureParams(const TerrainTexTweaks& params) { m_terrainTexTweaks = params; }
+    // Terrain wetness clipmap (TerrainWetnessPipeline): the decaying memory of where water touched the
+    // ground — the ocean swash tongue, permanently submerged seabed, rain — read by the TERRAIN shader
+    // to darken and gloss it. A TERRAIN_WET_RES^2 toroidal window of texelSize metres around the scene
+    // focus. Pushed every frame by the terrain streamer (mirrors its "Terrain/Wetness" tweaks).
+    struct TerrainWetTweaks
+    {
+        bool enabled = false;
+        float texelSize = 0.5f;      // m; 1024 texels = 512 m of coverage
+        float dryTime = 90.0f;       // s for wetness to decay to 1/e on cool ground
+        float dryTempSens = 0.04f;   // extra decay rate per C above 15 C (warm sand dries faster); 0 = uniform
+        float rain = 0.0f;           // wetness added per second everywhere (0 = no rain)
+        float wetInTime = 0.4f;      // s for ground under water to reach full wetness (0 = instant)
+        float filmDepth = 0.03f;     // m of water over which the wetting target ramps 0 -> 1 (softens the tongue edge)
+        float diffusionRate = 15.0f; // 1/s: sideways spread through the 3x3 tent (packed per frame as
+                                     // 1 - exp(-rate * dt), so it is framerate independent); the toggle is
+                                     // the pipeline's own "Diffusion" tweak (a baked define)
+        // Two darkening layers (the terrain shader): DAMP = soaked ground everywhere, a plateau above the
+        // damp knee that fades smoothly to dry below it; FILM = standing water on top — the whole surface
+        // just after a wave (above the spike start) and the pools once it drains. Fully wet = both.
+        float albedoScale = 0.55f;   // FILM albedo multiplier (on top of damp)
+        float dampAlbedoScale = 0.75f; // DAMP albedo multiplier
+        float dampKnee = 0.25f;      // wetness below which damp fades to dry (0.25 = ~1.4 dry times of plateau)
+        float spikeStart = 0.7f;     // wetness above which the whole surface carries the film darkening
+        float roughness = 0.15f;     // roughness at full wetness
+        // Pooling: as the ground dries, the film retreats into the low spots of a world-anchored noise
+        // (the crevices), so gloss breaks up into blobs instead of fading uniformly.
+        float poolScale = 3.0f;      // 1/m noise scale (~30 cm pools; 0 = off, uniform film)
+        float poolSoftness = 0.15f;  // noise band around the wetness that half-pools (edge softness)
+        float dampGloss = 0.3f;      // fraction of the roughness drop the damp ground between pools keeps
+        float poolHold = 2.0f;       // >= 1: pool threshold = wet^(1/hold), so the crevices keep their
+                                     // water long after the surface between them has drained
+        float slopeDrain = 4.0f;     // steep ground sheds water: decay rate x (1 + slope * drain) in the
+                                     // terrain shader (per pixel, mesh normal) AND wet-in / rain rate
+                                     // / (1 + slope * drain) in the compute pass (map gradient, 8 m);
+                                     // slope = 1 - N.y (a 45-degree face ~2.2x at 4, a wall 5x); 0 = off
+    };
+    void setTerrainWetParams(const TerrainWetTweaks& params) { m_terrainWetTweaks = params; }
     // Deepest current ocean wave trough below the calm water level (m, >= 0; the OceanGenerator estimates
     // it from its displacement readback). Sizes the waterline band inside which the fog scatter samples
     // the live FFT wave height for the underwater fog boundary (fogParams7.y).
@@ -481,6 +519,7 @@ private:
     void buildUboTerrain();
     void recordSkinning(uint32 frameIdx);
     void recordOceanSim(uint32 frameIdx);
+    void recordTerrainWetness(uint32 frameIdx);
     void recordIndirectCull(uint32 frameIdx);
     void recordLightGrid(uint32 frameIdx);
     void recordShadowCull(uint32 frameIdx);
@@ -684,6 +723,7 @@ private:
     GBufferPipeline m_gbufferPipeline;
     RTAOPipeline m_rtaoPipeline;
     OceanSimulationPipeline m_oceanSimPipeline;
+    TerrainWetnessPipeline m_terrainWetnessPipeline;
     VolumetricFogPipeline m_volumetricFogPipeline;
     // CPU-baked terrain height snapshots around the camera (raw surface height, world meters). The shore
     // map drives the ocean's shoaling/surf/waterline; the fog terrain map (2 cascades) drives the fog's
@@ -748,6 +788,9 @@ private:
     oc::vector<uint16> m_terrainSplatTextures; // for the per-frame streaming noteUse + replacement frees
     glm::vec4 m_terrainSplatClimate[RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS]{};
     TerrainTexTweaks m_terrainTexTweaks; // see setTerrainTextureParams
+    TerrainWetTweaks m_terrainWetTweaks; // see setTerrainWetParams
+    glm::ivec2 m_terrainWetPrevOrigin = glm::ivec2(0); // last frame's wetness window origin (lattice coord)
+    bool m_terrainWetWasEnabled = false;                // the window was live last frame (else every texel starts dry)
     float m_oceanWaveTrough = 0.0f;  // see setOceanWaveTrough; 0 while the ocean is disabled
     PostParams m_postParams;
     RTParams m_rtParams;
@@ -901,6 +944,7 @@ private:
         CommandBuffer indirectCullCommandBuffer;
         CommandBuffer skinningCommandBuffer;
         CommandBuffer oceanSimCommandBuffer;
+        CommandBuffer terrainWetnessCommandBuffer;
         CommandBuffer lightGridCommandBuffer;
         CommandBuffer imguiCommandBuffer;
         CommandBuffer shadowCullCommandBuffer;

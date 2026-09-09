@@ -361,6 +361,12 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
             .descriptorCount = 1,
             .stageFlags = vk::ShaderStageFlagBits::eFragment
         });
+    descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // u_terrainWet (terrain wetness clipmap, GENERAL layout)
+        .binding = 18,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+        .descriptorCount = 1,
+        .stageFlags = vk::ShaderStageFlagBits::eFragment
+    });
     descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // u_terrainHeight (terrain-data cascades: ocean depth/water level)
         .binding = 19,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
@@ -376,16 +382,16 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         .stageFlags = vk::ShaderStageFlagBits::eFragment
     });
 
-    // Per-binding flags (parallel to descriptorSetBindings): the AO (13), TLAS (11) and baked terrain
-    // height (19) bindings are refreshed after the (cached) draw CB is recorded -> UPDATE_AFTER_BIND;
-    // the texture array (20) is variable-count (allocated at the live texture capacity), only partially
-    // written, and UPDATE_AFTER_BIND so the TextureStreamer can rewrite swapped slots without re-recording
-    // the cached draw CBs.
+    // Per-binding flags (parallel to descriptorSetBindings): the AO (13), TLAS (11), terrain wetness (18)
+    // and baked terrain height (19) bindings are refreshed after the (cached) draw CB is recorded ->
+    // UPDATE_AFTER_BIND; the texture array (20) is variable-count (allocated at the live texture
+    // capacity), only partially written, and UPDATE_AFTER_BIND so the TextureStreamer can rewrite swapped
+    // slots without re-recording the cached draw CBs.
     graphicsPipelineLayout.descriptorBindingFlags.resize(descriptorSetBindings.size());
     for (size_t i = 0; i < descriptorSetBindings.size(); ++i)
     {
         if (descriptorSetBindings[i].binding == 11 || descriptorSetBindings[i].binding == 13
-            || descriptorSetBindings[i].binding == 19)
+            || descriptorSetBindings[i].binding == 18 || descriptorSetBindings[i].binding == 19)
             graphicsPipelineLayout.descriptorBindingFlags[i] = vk::DescriptorBindingFlagBits::eUpdateAfterBind;
         else if (descriptorSetBindings[i].binding == 20)
             graphicsPipelineLayout.descriptorBindingFlags[i] = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount | vk::DescriptorBindingFlagBits::eUpdateAfterBind;
@@ -408,6 +414,16 @@ void StaticMeshGraphicsPipeline::updateTerrainHeightDescriptor(vk::DescriptorSet
     // ocean VS/FS read them for water depth/level.
     vk::DescriptorImageInfo imageInfo{ .sampler = terrainSampler, .imageView = terrainView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal };
     vk::WriteDescriptorSet write{ .dstSet = descriptorSet, .dstBinding = 19, .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };
+    Globals::device.getDevice().updateDescriptorSets(1, &write, 0, nullptr);
+}
+
+void StaticMeshGraphicsPipeline::updateTerrainWetnessDescriptor(vk::DescriptorSet descriptorSet, vk::ImageView wetView, vk::Sampler wetSampler)
+{
+    // The wetness clipmap (18) is written in place by the wetness compute pass and lives in GENERAL for
+    // its whole life; the terrain fragment shader texelFetches it (terrain_wetness.inc.glsl).
+    vk::DescriptorImageInfo imageInfo{ .sampler = wetSampler, .imageView = wetView, .imageLayout = vk::ImageLayout::eGeneral };
+    vk::WriteDescriptorSet write{ .dstSet = descriptorSet, .dstBinding = 18, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };
     Globals::device.getDevice().updateDescriptorSets(1, &write, 0, nullptr);
 }

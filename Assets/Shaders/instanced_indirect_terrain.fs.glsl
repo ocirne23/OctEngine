@@ -24,6 +24,11 @@ layout (location = 0) out vec4 out_color;
 
 #include "instanced_indirect_lit.inc.glsl"
 
+// Terrain wetness clipmap (binding 18, written by terrain_wetness.cs.glsl): the decaying memory of
+// where water touched the ground — the swash tongue, rain. Applied on top of the splat in main().
+#define TERRAIN_WET_BINDING 18
+#include "terrain_wetness.inc.glsl"
+
 // Baked terrain fields at one point (terrain-data cascades), mild-climate fallbacks without a map.
 // altitude is the MACRO band: height far above it = mountain crag; height ~ altitude = flatland.
 struct TerrainFields
@@ -444,7 +449,50 @@ void main()
 	return;
 #endif
 
-	const TerrainSample surf = terrainSplat(in_pos, geoN, fields);
+	TerrainSample surf = terrainSplat(in_pos, geoN, fields);
+	// Wetness: darker, glossier ground where water touched it recently (the clipmap holds the memory).
+	// Deliberately the MAP ALONE — no instantaneous "under the live surface" override here: the map
+	// accumulates at the wet-in rate (slower on slopes), so ground under a wave soaks up visibly
+	// rather than snapping to wet, and a cliff face a wave splashes only ever gets damp. The lit core
+	// still lights the covered pixels as underwater from the live surface, so the water itself reads.
+	if (terrainWetPresent())
+	{
+		float wet = terrainWetnessAt(in_pos.xz);
+		// Slope drain: water runs off a face instead of soaking in, so steep ground dries faster. The
+		// stored wetness decays as exp(-t / tau), so wet^k IS a k-times faster decay — evaluated here per
+		// pixel against the exact geometric normal (the map's 8 m texels cannot see a cliff face), with no
+		// extra state. k = 1 + slope * drain: at drain 4 a 45-degree face dries ~2.2x faster, a wall 5x.
+		// Ground under water is 1 either way; the film only leaves faster once the wave has gone.
+		const float slope = 1.0 - clamp(geoN.y, 0.0, 1.0);
+		wet = pow(wet, 1.0 + slope * u_terrainWetParams5.x);
+		// Pooling: draining water retreats into the crevices. A world-anchored value fBm stands in for the
+		// micro-relief; a point is POOLED where the noise sits below the wetness, so at full wetness the
+		// whole surface is filmed, and as it dries only the low spots (low noise) keep their film — the
+		// blobby, breaking-up gloss of a beach draining. The ground between the pools is merely DAMP:
+		// darkened by the wetness itself, with only a fraction of the roughness drop.
+		float pool = wet;
+		if (u_terrainWetParams4.x > 0.0 && wet > 0.0 && wet < 1.0)
+		{
+			const float n = terrainFbm(in_pos.xz * u_terrainWetParams4.x) * 0.5 + 0.5;
+			const float soft = max(u_terrainWetParams4.y, 1e-3);
+			// Pool hold: the crevices keep their water long after the surface between them has drained,
+			// so the pool threshold lags the wetness — wet^(1/hold): at hold 2 the pools are still half
+			// there when the wetness itself is down to a quarter.
+			const float level = pow(wet, 1.0 / max(u_terrainWetParams4.w, 1.0));
+			pool = 1.0 - smoothstep(level - soft, level + soft, n);
+		}
+		// Two darkening layers. DAMP is the soaked ground everywhere, pools and the spaces between them
+		// alike: a plateau that holds while the wetness is above the damp knee (0.25 = ~1.4 dry times),
+		// then fades smoothly to dry. FILM is standing water on top of it — the whole surface just after a
+		// wave (the spike, above the spike-start wetness) and the pools once it drains. Fully wet ground
+		// carries both, so its albedo is the product of the two scales.
+		const float damp = smoothstep(0.0, max(u_terrainWetParams5.z, 1e-3), wet);
+		const float spike = smoothstep(min(u_terrainWetParams5.w, 0.99), 1.0, wet);
+		const float film = max(spike, pool);
+		const float gloss = max(film, damp * u_terrainWetParams4.z);
+		surf.albedo *= mix(1.0, u_terrainWetParams5.y, damp) * mix(1.0, u_terrainWetParams2.y, film);
+		surf.rough = mix(surf.rough, u_terrainWetParams2.z, gloss); // a water film flattens the microfacets
+	}
 	// We already sampled the terrain data cascade for fields.waterLevel; hand it to the lit core so
 	// doSunLight's underwater test reuses it instead of re-fetching the same cascade.
 	g_waterLevelOverride = fields.waterLevel;

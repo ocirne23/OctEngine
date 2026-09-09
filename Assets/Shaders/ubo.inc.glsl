@@ -189,6 +189,30 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                               // z = humidity at/below which cold ground stays bare (polar desert), w unused
     vec4 u_terrainTexParams5; // x = crag wander amplitude (m; 0 = off), y = crag wander frequency (1/m),
                               // zw unused
+    // Terrain wetness clipmap (terrain_wetness.inc.glsl; keep in sync with RendererVKLayout::Ubo): a
+    // TERRAIN_WET_RES^2 toroidal window of texels around the scene focus, lattice = integer texel index.
+    vec4 u_terrainWetParams0; // xy = window origin lattice coord (min corner, exact ints as floats),
+                              // zw = LAST frame's origin (texels that scrolled in start dry)
+    vec4 u_terrainWetParams1; // x = texel size (m), y = 1 / texel size, z = decay factor this frame
+                              // (exp(-dt / dry time)), w = rain wetting added this frame
+    vec4 u_terrainWetParams2; // x = enabled (0/1: the map is present), y = albedo multiplier at full
+                              // wetness, z = roughness at full wetness, w = drying temperature
+                              // sensitivity (extra decay rate per C above 15 C; 0 = uniform)
+    vec4 u_terrainWetParams3; // x = ping/pong layer written this frame (the reader samples it),
+                              // y = wet-in added per frame under water (dt / wet-in time),
+                              // z = film depth (m) of water over which the wetting target ramps 0 -> 1
+                              // (softens the tongue's edge), w = diffusion spread this frame
+                              // (1 - exp(-rate * dt): fraction of the 3x3 tent replacing the centre)
+    vec4 u_terrainWetParams4; // pooling (terrain FS): x = pool noise scale (1/m; 0 = off: uniform film),
+                              // y = pool softness (noise band around the wetness that half-pools),
+                              // z = damp gloss (fraction of the roughness drop the ground BETWEEN pools
+                              // keeps), w = pool hold (>= 1: pool threshold = wet^(1/hold), so pools
+                              // outlast the wetness)
+    vec4 u_terrainWetParams5; // x = slope drain (terrain FS raises the wetness to 1 + slope * drain:
+                              // steep faces decay that much faster; 0 = off), y = damp albedo multiplier
+                              // (soaked ground, pools and between them alike), z = damp knee (wetness
+                              // below which the damp plateau fades to dry), w = wet spike start (wetness
+                              // above which the whole surface carries the standing-film darkening)
     vec4 u_terrainSplatClimate[MAX_TERRAIN_SPLAT_MATERIALS]; // ground/rock CLIMATE BOX: xy = t01 range,
                               // zw = h01 range. Weight is 1 inside and Gaussian-decays outside, so a full
                               // 0..1 range on an axis means "this axis does not matter for this entry".

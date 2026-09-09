@@ -193,6 +193,14 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     m_staticMeshGraphicsPipeline.initialize(sceneRenderPass, m_maxUniqueMeshes, m_maxTextures, m_sceneViewCount > 1);
     m_rtaoPipeline.initialize(&m_rtaoParams, ext.width, ext.height, m_maxTextures, m_numTextureDescriptors, m_sceneViewCount);
     m_oceanSimPipeline.initialize();
+    // "Terrain/Wetness" Diffusion is a baked define on the wetness compute shader: GPU idle + reload +
+    // re-record, the light grid's pattern.
+    m_terrainWetnessPipeline.initialize([this]() {
+        if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
+            return;
+        m_terrainWetnessPipeline.reloadShaders();
+        setHaveToRecordCommandBuffers();
+    });
     m_volumetricFogPipeline.initialize();
     m_volumetricFogPipeline.initializeApply(sceneRenderPass, m_sceneViewCount);
     m_fogTerrainMap.initialize(RendererVKLayout::FOG_TERRAIN_RES, RendererVKLayout::FOG_TERRAIN_CASCADES, 4, "FogTerrainHeight"); // RGBA: terrain height, water level, fog thickness, spare
@@ -253,6 +261,7 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
         perFrame.indirectCullCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
         perFrame.skinningCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
         perFrame.oceanSimCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
+        perFrame.terrainWetnessCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
         perFrame.lightGridCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
         perFrame.imguiCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
         perFrame.shadowCullCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
@@ -453,6 +462,7 @@ void Renderer::reloadShaders()
     m_gbufferPipeline.reloadShaders(m_perFrameData[m_swapChain.getPrevFrameIdx()].gbuffer);
     m_rtaoPipeline.reloadShaders();
     m_oceanSimPipeline.reloadShaders();
+    m_terrainWetnessPipeline.reloadShaders();
     m_volumetricFogPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_indirectCullComputePipeline.reloadShaders();
     m_skinningComputePipeline.reloadShaders();
@@ -1212,6 +1222,42 @@ void Renderer::buildUboTerrain()
         tex.snowAridity, 0.0f);
     ubo.terrainTexParams5 = glm::vec4(glm::max(tex.cragWanderAmp, 0.0f),
         1.0f / glm::max(tex.cragWanderWavelength, 1.0f), 0.0f, 0.0f);
+
+    // Terrain wetness clipmap window: TERRAIN_WET_RES texels of texelSize centred on the scene focus, its
+    // origin an integer lattice coord (the shaders address the toroidal image by lattice & (RES-1)).
+    // The compute pass carries a texel's wetness only if its coord was inside LAST frame's window, so a
+    // window that was not live last frame (first enable, re-enable) parks the previous origin out of
+    // range and every texel starts dry instead of inheriting a stale slot.
+    {
+        const TerrainWetTweaks& wet = m_terrainWetTweaks;
+        const float texel = glm::max(wet.texelSize, 0.05f);
+        const glm::vec3 focus = sceneFocusOrCamera();
+        constexpr int32 res = (int32)RendererVKLayout::TERRAIN_WET_RES;
+        const glm::ivec2 origin = glm::ivec2(glm::floor(glm::vec2(focus.x, focus.z) / texel)) - res / 2;
+        const glm::ivec2 prevOrigin = m_terrainWetWasEnabled ? m_terrainWetPrevOrigin : origin + res * 2;
+        m_terrainWetPrevOrigin = origin;
+        m_terrainWetWasEnabled = wet.enabled;
+        // SIM delta (frozen by the global pause, like the particles), capped so a hitch cannot dry the map.
+        const float dt = oc::min((float)Globals::time.getSimDeltaSec(), 0.25f);
+        const float decay = wet.dryTime > 0.0f ? std::exp(-dt / wet.dryTime) : 0.0f;
+        ubo.terrainWetParams0 = glm::vec4((float)origin.x, (float)origin.y, (float)prevOrigin.x, (float)prevOrigin.y);
+        ubo.terrainWetParams1 = glm::vec4(texel, 1.0f / texel, decay, glm::max(wet.rain, 0.0f) * dt);
+        ubo.terrainWetParams2 = glm::vec4(wet.enabled ? 1.0f : 0.0f, glm::clamp(wet.albedoScale, 0.0f, 1.0f),
+            glm::clamp(wet.roughness, 0.0f, 1.0f), glm::max(wet.dryTempSens, 0.0f));
+        // Ping/pong layer: frame slots alternate strictly, so the written layer is the slot's parity (the
+        // pass reads the other; the terrain shader samples this one in the same frame).
+        const float writeLayer = (float)(m_swapChain.getCurrentFrameIndex() & 1u);
+        const float wetIn = wet.wetInTime > 0.0f ? dt / wet.wetInTime : 1.0f;
+        // Diffusion spread as a per-frame mix fraction from a per-second rate: the tent's variance then
+        // grows by ~rate * texel^2 per second at any framerate (a fixed per-frame fraction would spread
+        // twice as fast at twice the fps).
+        const float spread = 1.0f - std::exp(-glm::max(wet.diffusionRate, 0.0f) * dt);
+        ubo.terrainWetParams3 = glm::vec4(writeLayer, wetIn, glm::max(wet.filmDepth, 0.0f), spread);
+        ubo.terrainWetParams4 = glm::vec4(glm::max(wet.poolScale, 0.0f), glm::clamp(wet.poolSoftness, 0.0f, 1.0f),
+            glm::clamp(wet.dampGloss, 0.0f, 1.0f), glm::max(wet.poolHold, 1.0f));
+        ubo.terrainWetParams5 = glm::vec4(glm::max(wet.slopeDrain, 0.0f), glm::clamp(wet.dampAlbedoScale, 0.0f, 1.0f),
+            glm::clamp(wet.dampKnee, 0.0f, 1.0f), glm::clamp(wet.spikeStart, 0.0f, 0.99f));
+    }
     static_assert(sizeof(ubo.terrainSplatClimate) == sizeof(m_terrainSplatClimate));
     memcpy(ubo.terrainSplatClimate, m_terrainSplatClimate, sizeof(m_terrainSplatClimate));
     // The splat textures belong to no rendered instance's material, so the projected-size priority pass
@@ -2363,6 +2409,23 @@ void Renderer::recordOceanSim(uint32 frameIdx)
     cb.end();
 }
 
+void Renderer::recordTerrainWetness(uint32 frameIdx)
+{
+    PerFrameData& frameData = m_perFrameData[frameIdx];
+    CommandBuffer& cb = frameData.terrainWetnessCommandBuffer;
+    vk::CommandBufferInheritanceInfo inheritance;
+    cb.begin(false, &inheritance);
+    const TerrainWetnessPipeline::RecordParams params{
+        .ubo = &frameData.ubo,
+        .terrainView = m_fogTerrainMap.getView(),
+        .terrainSampler = m_fogTerrainMap.getSampler(),
+        .oceanMapsView = m_oceanSimPipeline.getMapsView(),
+        .oceanMapsSampler = m_oceanSimPipeline.getMapsSampler(),
+    };
+    m_terrainWetnessPipeline.record(cb, frameIdx, params);
+    cb.end();
+}
+
 void Renderer::recordLightGrid(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
@@ -3222,6 +3285,11 @@ void Renderer::recordCommandBuffers()
                 m_fogTerrainMap.getView(), m_fogTerrainMap.getSampler());
         }
         m_volumetricFogPipeline.updateTerrainDescriptor(frameIdx, m_fogTerrainMap.getView(), m_fogTerrainMap.getSampler());
+        m_terrainWetnessPipeline.updateTerrainDescriptor(frameIdx, m_fogTerrainMap.getView(), m_fogTerrainMap.getSampler());
+        // The wetness clipmap image never changes handle; rewritten alongside so a recreated set gets it.
+        for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)
+            m_staticMeshGraphicsPipeline.updateTerrainWetnessDescriptor(frameData.staticMeshPipelineDescriptorSet[eye].getDescriptorSet(),
+                m_terrainWetnessPipeline.getView(), m_terrainWetnessPipeline.getSampler());
     }
 
     descriptorScope.stop();
@@ -3238,6 +3306,7 @@ void Renderer::recordCommandBuffers()
         recordLightGrid(frameIdx);
         recordForceCompute(frameIdx); // indirect dispatches: emitter/query changes never re-record
         recordParticleSim(frameIdx); // indirect dispatches: emitter/spawn changes never re-record
+        recordTerrainWetness(frameIdx); // executed only while enabled (m_terrainWetTweaks.enabled)
         recordShadowCull(frameIdx);
         recordShadowDraw(frameIdx);
         recordVolumetricFog(frameIdx); // shared scatter/integrate (center view in VR)
@@ -3395,6 +3464,15 @@ void Renderer::recordCommandBuffers()
             vk::CommandBuffer vkParticleSimCommandBuffer = frameData.particleSimCommandBuffer.getCommandBuffer();
             m_gpuProfiler.beginScope(vkCommandBuffer, "Particle sim");
             vkCommandBuffer.executeCommands(1, &vkParticleSimCommandBuffer);
+            m_gpuProfiler.endScope(vkCommandBuffer);
+        }
+        // Terrain wetness clipmap: decay + re-wet under this frame's live ocean surface (after the ocean
+        // sim, before the forward pass samples it). Skipped while disabled: the shader presence flag is 0.
+        if (m_terrainWetTweaks.enabled)
+        {
+            vk::CommandBuffer vkTerrainWetnessCommandBuffer = frameData.terrainWetnessCommandBuffer.getCommandBuffer();
+            m_gpuProfiler.beginScope(vkCommandBuffer, "Terrain wetness");
+            vkCommandBuffer.executeCommands(1, &vkTerrainWetnessCommandBuffer);
             m_gpuProfiler.endScope(vkCommandBuffer);
         }
         // RT sun shadows replace the cascades entirely (forward pass traces, GI uses per-probe sun rays),

@@ -234,12 +234,29 @@ kicked ONCE, at startup while the terrain is enabled or from `updateTerrainTextu
 enabled later (`kickTexBake`; a disabled terrain never reads the source image sets); **the TERRAIN
 shader falls back to flat colours until that bake finishes.**
 
+The streamer also owns the **"Terrain/Wetness" tweaks** (enabled, texel size, dry time, temperature
+sensitivity, rain, wet albedo scale / roughness), pushed every frame from `updateTerrainTextures` through
+`Renderer::setTerrainWetParams`. The wetness clipmap itself — swash injection, decay, the toroidal window
+— is the renderer's (`TerrainWetnessPipeline`; see the Terrain and ocean integration section of
+[`Code/RendererVK/CONTEXT.md`](../RendererVK/CONTEXT.md)).
+
 ---
 
 # `HeightMapBaker`
 
 The async snapshot bake driver: **ONE Low job in flight** (JobCounter-polled), re-baking on camera
 drift past range/4 or a config change — **configs carry `operator==` so tweaks stay live**.
+
+**Two passes for a NEW sampler.** The near cascade at Full detail is every full-detail tile under the
+near range — at 4 km and sub-metre mpp ~1000 V3 tiles, ~1.5 s each cold, serialised on the one
+inference lock — and the map ships all-or-nothing, so after a reseed the climate textures stayed flat
+for tens of minutes while the mesh was long visible. A sampler the baker has not shipped yet (first
+map, reseed, config rebuild) therefore gets a **quick pass first — both cascades at Coarse detail,
+seconds** — then a Full-near re-bake at the same centre replaces it. Coarse and Full share the fitted
+climate baseline, so the textures land with the quick pass; only the near heights refine later. A drift
+or rule change on a known sampler goes straight to Full (its tiles are what the mesh streamed).
+**A bake whose inputs go stale while it runs is cancelled** (an atomic checked between 16-row bands of
+`sampleGrid`, so at most one band of tile fetches is wasted), and teardown cancels before it waits.
 
 **Centres snap to the COARSEST cascade's texel lattice**, so no cascade's features ever swim as the
 camera moves. Both cascades measure the same world distance at their own texel size, **so near and far

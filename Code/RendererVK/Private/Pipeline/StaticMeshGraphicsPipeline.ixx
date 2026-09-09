@@ -67,6 +67,8 @@ public:
     void updateTextureDescriptor(vk::DescriptorSet descriptorSet, uint32 slotIdx, vk::ImageView view);
     // Points the terrain-data cascade binding (19) at the active ping-pong image (refreshed per frame).
     void updateTerrainHeightDescriptor(vk::DescriptorSet descriptorSet, vk::ImageView terrainView, vk::Sampler terrainSampler);
+    // Points the terrain wetness clipmap binding (18) at the wetness image (GENERAL layout).
+    void updateTerrainWetnessDescriptor(vk::DescriptorSet descriptorSet, vk::ImageView wetView, vk::Sampler wetSampler);
     void update(uint32 frameIdx, oc::vector<ObjectContainer*>& objectContainers);
     // Ocean variant: light refraction/reflection ray hits with the grid lights (OCEAN_HIT_LIGHTS define).
     // Takes effect on the next reloadShaders (the Renderer reloads when the tweak flips).

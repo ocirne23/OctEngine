@@ -590,6 +590,32 @@ export namespace RendererVKLayout
         glm::vec4 terrainTexParams5; // x = crag wander amplitude (m; 0 = off), y = crag wander frequency
                                      // (1/m), zw unused. The wander breaks the rock boundary off the
                                      // elevation contour the crag test would otherwise trace — see terrainSplat.
+        // Terrain wetness clipmap (TerrainWetnessPipeline; terrain_wetness.inc.glsl). A TERRAIN_WET_RES^2
+        // toroidal window of texels around the scene focus; lattice coords are integer texel indices.
+        glm::vec4 terrainWetParams0; // xy = window origin lattice coord (min corner, as floats),
+                                     // zw = LAST frame's origin (texels that scrolled in start dry)
+        glm::vec4 terrainWetParams1; // x = texel size (m), y = 1 / texel size, z = decay factor this frame
+                                     // (exp(-dt / dry time)), w = rain wetting added this frame
+        glm::vec4 terrainWetParams2; // x = enabled (0/1: the map is present), y = albedo multiplier at full
+                                     // wetness, z = roughness at full wetness, w = drying temperature
+                                     // sensitivity (extra decay rate per C above 15 C; 0 = uniform)
+        glm::vec4 terrainWetParams3; // x = ping/pong layer written this frame (the reader samples it),
+                                     // y = wet-in added per frame under water (dt / wet-in time),
+                                     // z = film depth (m) of water over which the wetting target ramps
+                                     // 0 -> 1 (softens the tongue's edge), w = diffusion spread this
+                                     // frame (1 - exp(-rate * dt): fraction of the 3x3 tent replacing
+                                     // the centre; framerate independent)
+        glm::vec4 terrainWetParams4; // pooling (the terrain shader): x = pool noise scale (1/m; 0 = off:
+                                     // uniform film), y = pool softness (noise band around the wetness
+                                     // that half-pools), z = damp gloss (fraction of the roughness drop
+                                     // the ground BETWEEN pools keeps), w = pool hold (>= 1: the pool
+                                     // threshold is wet^(1/hold), so pools outlast the wetness)
+        glm::vec4 terrainWetParams5; // x = slope drain (the terrain shader raises the wetness to
+                                     // 1 + slope * drain, i.e. steep faces decay that much faster;
+                                     // 0 = off), y = damp albedo multiplier (soaked ground, pools and
+                                     // between them alike), z = damp knee (wetness below which the damp
+                                     // plateau fades to dry), w = wet spike start (wetness above which
+                                     // the whole surface carries the standing-film darkening)
         glm::vec4 terrainSplatClimate[MAX_TERRAIN_SPLAT_MATERIALS]; // ground/rock CLIMATE BOX in the
                                      // (t01, h01) space: xy = temperature range, zw = humidity range.
                                      // Weight is 1 inside the box and Gaussian-decays outside it, so a
@@ -749,6 +775,8 @@ export namespace RendererVKLayout
     constexpr uint32 FOG_TERRAIN_RES = 512;     // fog terrain height map resolution per cascade (CPU-baked around
                                                 // the camera; setFogTerrainHeightMap expects CASCADES*RES*RES floats)
     constexpr uint32 FOG_TERRAIN_CASCADES = 2;  // layer 0 = near/fine, layer 1 = far/coarse (same res, larger range)
+    constexpr uint32 TERRAIN_WET_RES = 1024;    // terrain wetness clipmap texels per axis (power of two: toroidal
+                                                // slot = lattice & (RES-1)); 512 m of coverage at the 0.5 m texel
 
     // Local participating-media box, submitted per frame like lights (Renderer::addFogVolume). Density adds
     // to the global fog inside the box, fading out over the outer edgeSoftness fraction of each half extent.

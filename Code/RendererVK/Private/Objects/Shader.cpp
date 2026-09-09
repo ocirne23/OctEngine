@@ -157,6 +157,7 @@ static oc::string buildLayoutPreamble()
     def("OCEAN_FFT_SIZE", OCEAN_FFT_SIZE);
     def("OCEAN_CASCADES", OCEAN_CASCADES);
     def("MAX_TERRAIN_SPLAT_MATERIALS", MAX_TERRAIN_SPLAT_MATERIALS);
+    def("TERRAIN_WET_RES", TERRAIN_WET_RES);
     def("PASS_MAIN", PASS_MAIN, "u");
     def("PASS_SHADOW", PASS_SHADOW, "u");
     def("PASS_GI", PASS_GI, "u");
