@@ -96,6 +96,14 @@ layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 
 layout (location = 0) out vec4 out_color;
 
+// --- Shore debug view: set a mode, F5. Paints the depth-keyed terms instead of shading, to find which
+// one's boundary a visible line on the water follows.
+//   1 = calm depth      black 0 -> white 4 m, green iso-lines every 0.5 m, RED = land (depth < 0)
+//   2 = swash fade-in   the tongue weight (backflow): white = full, black = none
+//   4 = shoal fades     R / G / B = cascade 0 / 1 / 2 shoal fade (black = that band fully shoaled out)
+//   5 = shore foam band the surf band's nearShore target (u_oceanParams5.z)
+#define OCEAN_DEBUG_MODE 0
+
 float D_GGX(float NoH, float a)
 {
     float a2 = a * a;
@@ -156,6 +164,7 @@ struct SceneHit
 // flat white — sample the beach splat by world XZ instead (flat sand fallback).
 vec3 terrainSeabedAlbedo(vec2 worldXZ, float rayT)
 {
+    vec3 albedo = vec3(0.32, 0.28, 0.22);
     if (u_terrainTexParams3.x > 0.5)
     {
         const uint beachMatIdx = uint(u_terrainTexParams0.x) + uint(u_terrainTexParams0.y) + uint(u_terrainTexParams0.z);
@@ -163,10 +172,15 @@ vec3 terrainSeabedAlbedo(vec2 worldXZ, float rayT)
         {
             const uint sandTexIdx = in_materialInfos[beachMatIdx].diffuseNormalTexIdx & 0xFFFFu;
             const float lod = clamp(log2(max(rayT, 1.0)) + 1.0, 0.0, 7.0);
-            return textureLod(u_textures[nonuniformEXT(sandTexIdx)], worldXZ * u_terrainTexParams1.x, lod).rgb;
+            albedo = textureLod(u_textures[nonuniformEXT(sandTexIdx)], worldXZ * u_terrainTexParams1.x, lod).rgb;
         }
     }
-    return vec3(0.32, 0.28, 0.22);
+    // The seabed is, by definition, fully wet: darken it exactly as the terrain shader darkens ground at
+    // full wetness (damp x standing film — instanced_indirect_terrain.fs.glsl), so the sand seen through
+    // the water and the wet sand the water just left are the same colour at the waterline.
+    if (u_terrainWetParams2.x > 0.5)
+        albedo *= u_terrainWetParams5.y * u_terrainWetParams2.y;
+    return albedo;
 }
 
 bool traceScene(vec3 origin, vec3 dir, float tMax, out SceneHit hit)
@@ -328,11 +342,36 @@ void main()
             const float Jraw = (1.0 + chop * sxx) * (1.0 + chop * szz) - chop * sxz * chop * sxz;
             const float b = mix(0.75, 1.45, target) + u_oceanParams8.y; // "Shore foam bias"
             shoreFoam = target * (1.0 - smoothstep(b - 0.4, b + 0.4, Jraw));
-            shoreFoam = min(shoreFoam, u_oceanParams7.y); // "Shore foam max": keep the bottom visible through the lace
+            // "Shore foam max": keep the bottom visible through the lace. A soft knee, not a min(): a hard
+            // clamp flattened the whole waterline band into a plateau with an edge wherever the target
+            // exceeded the cap; this eases toward the cap and never quite reaches it.
+            const float foamMax = max(u_oceanParams7.y, 1e-3);
+            shoreFoam = foamMax * (1.0 - exp(-shoreFoam / foamMax));
         }
     }
     const float ns = u_oceanParams1.w;
     vec3 N = normalize(vec3(-slope.x * ns, 1.0, -slope.y * ns));
+
+#if OCEAN_DEBUG_MODE != 0
+    {
+        const float depthDbg = oceanEffectiveDepth(in_uv, shoreHW.y - shoreHW.x);
+        const float swDbg = oceanSwashWeight(depthDbg, shoreHW.y);
+        vec3 dbg = vec3(0.0);
+#if OCEAN_DEBUG_MODE == 1
+        dbg = depthDbg < 0.0 ? vec3(1.0, 0.0, 0.0) : vec3(clamp(depthDbg / 4.0, 0.0, 1.0));
+        if (depthDbg >= 0.0 && fract(depthDbg * 2.0) < 0.05)
+            dbg.g = 1.0;
+#elif OCEAN_DEBUG_MODE == 2
+        dbg = vec3(swDbg / max(u_oceanParams7.z, 1e-3));
+#elif OCEAN_DEBUG_MODE == 4
+        dbg = vec3(oceanShoalFade(depthDbg, u_oceanParams2.x), oceanShoalFade(depthDbg, u_oceanParams2.y), oceanShoalFade(depthDbg, u_oceanParams2.z));
+#elif OCEAN_DEBUG_MODE == 5
+        dbg = vec3(u_oceanParams5.z > 0.0 ? 1.0 - smoothstep(u_oceanParams5.z, 4.0 * u_oceanParams5.z, depthDbg) : 0.0);
+#endif
+        out_color = vec4(dbg, 1.0);
+        return;
+    }
+#endif
 
     // Underside (camera below the surface looking at its back face): refracted sky in Snell's window
     // with the sun blazing through it, TIR to the water body outside it. The underwater fog handles the

@@ -66,16 +66,13 @@ float underwaterLiveWaveY(vec2 worldXZ, float columnDepth, float waterLevel)
         sampleXZ -= flowOff * (flowCap / (flowCap + length(flowOff)));
     }
 
-    float y = 0.0, rawY = 0.0;
+    // The raw cascade sum times the ONE depth weight the displacement uses (mirrors oceanSurfaceWeight):
+    // 1 in open water, easing to the swash base (amplitude x sea x land fades) across the approach band.
+    float rawY = 0.0;
     for (int c = 0; c < OCEAN_CASCADES; ++c)
-    {
-        const float L = u_oceanParams2[c];
-        const float d = textureLod(u_uwOceanMaps, vec3(sampleXZ / L, float(c)), 0.0).y;
-        rawY += d;
-        y += d * smoothstep(0.0, max(u_oceanParams4.z * L, 0.01), columnDepth); // oceanShoalFade
-    }
-    y += rawY * sw;
-    return y;
+        rawY += textureLod(u_uwOceanMaps, vec3(sampleXZ / u_oceanParams2[c], float(c)), 0.0).y;
+    const float base = u_oceanParams7.z * seaFade * landFade;
+    return rawY * (1.0 - fadeIn * (1.0 - base));
 }
 
 vec3 underwaterSunTransmittance(vec2 worldXZ, float depthBelow, float footprint, float reach)

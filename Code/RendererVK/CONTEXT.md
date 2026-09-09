@@ -53,10 +53,17 @@ fence or in the end-of-frame acquire.
 > Loop-top intervals read like 4/8 ms around a 6 ms period, **which is why a tolerance-gated snap
 > rejected most frames.**
 
-So the start is QUANTIZED to the nearest whole number of periods (min 1; a dropped frame = 2), using
+So the start is QUANTIZED to the nearest whole number of periods (a dropped frame = 2), using
 the display's reported refresh (`Window::getDisplayRefreshHz`) or the measured period EMA when the
 platform reports none. **Rounding against the real clock every frame bounds the drift to half a
 period.** Without vsync the intervals are arbitrary and the raw clock stands.
+
+**A frame that rounds to ZERO periods (under half a period since the last start) keeps the raw
+clock.** That is a present that did NOT throttle — an occluded window, a refresh-rate mismatch — and
+snapping it forward would advance the attributed clock a whole period per frame, so it ran minutes
+ahead of the wall clock; the limiter then slept the whole lead out the moment the window lost focus
+(`Inactive max FPS`), which read as a deadlock. The limiter also never waits more than one period,
+whatever the attributed start says.
 
 ## The pump kick
 

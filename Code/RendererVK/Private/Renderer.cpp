@@ -1070,7 +1070,7 @@ void Renderer::buildUboOcean()
         glm::max(ocean.swashFlow, 0.0f), glm::max(ocean.rtRayCutoffDist, 0.0f));
     ubo.oceanParams9 = glm::vec4(glm::max(ocean.troughMargin, 0.0f), glm::max(ocean.rtRefractionRange, 10.0f),
         glm::max(ocean.rtReflectionRange, 50.0f), glm::clamp(ocean.rtReflectionMaxRough, 0.0f, 1.0f));
-    ubo.oceanParams10 = glm::vec4(glm::max(ocean.waveHeightLimit, 0.0f), glm::max(ocean.timeScale, 0.0f), 0.0f, 0.0f);
+    ubo.oceanParams10 = glm::vec4(0.0f, glm::max(ocean.timeScale, 0.0f), 0.0f, 0.0f); // x: the removed breaking limit
 }
 
 // Forcefield bubbles (Force library pushes m_forceFieldParams every frame; all UBO-driven = live).
@@ -1257,6 +1257,8 @@ void Renderer::buildUboTerrain()
             glm::clamp(wet.dampGloss, 0.0f, 1.0f), glm::max(wet.poolHold, 1.0f));
         ubo.terrainWetParams5 = glm::vec4(glm::max(wet.slopeDrain, 0.0f), glm::clamp(wet.dampAlbedoScale, 0.0f, 1.0f),
             glm::clamp(wet.dampKnee, 0.0f, 1.0f), glm::clamp(wet.spikeStart, 0.0f, 0.99f));
+        ubo.terrainWetParams6 = glm::vec4(glm::clamp(wet.surfaceThreshold, 0.0f, 1.0f), glm::clamp(wet.surfaceSoftness, 0.0f, 1.0f),
+            glm::clamp(wet.surfaceWaviness, 0.0f, 1.0f), glm::max(wet.surfaceDepth, 0.0f));
     }
     static_assert(sizeof(ubo.terrainSplatClimate) == sizeof(m_terrainSplatClimate));
     memcpy(ubo.terrainSplatClimate, m_terrainSplatClimate, sizeof(m_terrainSplatClimate));

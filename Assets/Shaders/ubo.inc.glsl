@@ -156,8 +156,8 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                             // y = RT refraction ray range (m: underwater visibility of traced geometry),
                             // z = RT reflection ray range (m),
                             // w = RT reflection roughness cutoff (rougher pixels skip the mirror ray)
-    vec4 u_oceanParams10;   // x = wave height limit as a fraction of water depth (breaking limit;
-                            // scales the shoaled cascade sum, 0 = unbounded),
+    vec4 u_oceanParams10;   // x unused (was the breaking limit, removed: the swash amplitude alone shapes
+                            // the shore — oceanSurfaceWeight),
                             // y = spectrum clock rate (sqrt(world scale): holds the model sea's periods), zw unused
     vec4 u_terrainParams;   // x = streamed terrain mesh coverage radius (m, radial from camera XZ;
                             // 0 = no terrain mesh up — fences the ocean land cull),
@@ -213,6 +213,11 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                               // (soaked ground, pools and between them alike), z = damp knee (wetness
                               // below which the damp plateau fades to dry), w = wet spike start (wetness
                               // above which the whole surface carries the standing-film darkening)
+    vec4 u_terrainWetParams6; // surface water (terrain FS draws near-full-wetness ground AS water, with
+                              // the ocean's surface terms): x = wetness at which the look is half in,
+                              // y = half-width of that ramp, z = waviness (0 = ground normal, 1 = live
+                              // FFT wave normal), w = virtual water depth (m) the ground is tinted
+                              // through (Beer-Lambert + in-scatter)
     vec4 u_terrainSplatClimate[MAX_TERRAIN_SPLAT_MATERIALS]; // ground/rock CLIMATE BOX: xy = t01 range,
                               // zw = h01 range. Weight is 1 inside and Gaussian-decays outside, so a full
                               // 0..1 range on an axis means "this axis does not matter for this entry".

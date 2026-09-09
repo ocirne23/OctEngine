@@ -38,10 +38,13 @@ public:
     //    Already late = the frame ends now. UNCAPPED + VSYNC (FIFO present) every frame lands on a
     //    whole number of refresh periods BY CONSTRUCTION - only the CPU's view of it jitters,
     //    because the throttle lands either in the loop-top fence or in the end-of-frame acquire -
-    //    so the start is QUANTIZED to the nearest whole number of periods (min 1; a dropped frame
-    //    is 2) using the display's reported refresh rate, or the measured period EMA when the
-    //    platform reports none. Rounding against the real clock each frame bounds the drift to
-    //    half a period. Without vsync intervals are arbitrary, so the raw clock is used.
+    //    so the start is QUANTIZED to the nearest whole number of periods (a dropped frame is 2)
+    //    using the display's reported refresh rate, or the measured period EMA when the platform
+    //    reports none. Rounding against the real clock each frame bounds the drift to half a
+    //    period; a frame that rounds to ZERO periods (present did not throttle) keeps the raw
+    //    clock, and the limiter never waits more than one period, so the attributed clock can
+    //    never run away from the wall clock. Without vsync intervals are arbitrary, so the raw
+    //    clock is used.
     //  * Pump kick: requestPump() fires "Pump lead" BEFORE the frame starts, so the window thread
     //    pumps while we still wait and the events are at most a lead old when sampled. Capped, the
     //    end is exact and the limiter kicks inside its own wait; uncapped, the fence decides, so the

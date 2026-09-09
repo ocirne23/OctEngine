@@ -318,6 +318,12 @@ namespace Procedural
 		// much faster decay, per pixel against the mesh normal) and the compute pass divides the wet-in
 		// and rain rates by the same factor (map gradient), so a cliff also takes longer to soak.
 		Tweak::floatVar("Terrain/Wetness", "Slope drain", &m_wetSlopeDrain, 0.0f, 20.0f, 0.1f);
+		// Surface water: above the threshold the standing film is drawn AS water (the ocean shader's
+		// surface terms over the lit ground), so the ocean's intersection with the sand has no hard line.
+		Tweak::floatVar("Terrain/Wetness", "Surface water threshold", &m_wetSurfaceThreshold, 0.0f, 1.0f, 0.01f);
+		Tweak::floatVar("Terrain/Wetness", "Surface water softness", &m_wetSurfaceSoftness, 0.0f, 1.0f, 0.01f);
+		Tweak::floatVar("Terrain/Wetness", "Surface water waviness", &m_wetSurfaceWaviness, 0.0f, 1.0f, 0.01f);
+		Tweak::floatVar("Terrain/Wetness", "Surface water depth (m)", &m_wetSurfaceDepth, 0.0f, 2.0f, 0.01f);
 		// Albedo: DAMP (soaked ground everywhere) is a plateau above the knee that fades smoothly to dry;
 		// the WET scale is the standing-film layer on top — the whole surface just after a wave (above
 		// the spike start) and the pools once it drains. Fully wet = damp x wet.
@@ -500,6 +506,10 @@ namespace Procedural
 			.dampGloss = m_wetDampGloss,
 			.poolHold = m_wetPoolHold,
 			.slopeDrain = m_wetSlopeDrain,
+			.surfaceThreshold = m_wetSurfaceThreshold,
+			.surfaceSoftness = m_wetSurfaceSoftness,
+			.surfaceWaviness = m_wetSurfaceWaviness,
+			.surfaceDepth = m_wetSurfaceDepth,
 		});
 
 		if (!m_texSetRegistered)

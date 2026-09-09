@@ -554,8 +554,8 @@ export namespace RendererVKLayout
                                    // y = RT refraction ray range (m: underwater visibility),
                                    // z = RT reflection ray range (m),
                                    // w = RT reflection roughness cutoff (rougher = sky fallback)
-        glm::vec4 oceanParams10;   // x = wave height limit as a fraction of water depth (breaking limit;
-                                   //     scales the shoaled cascade sum, 0 = unbounded),
+        glm::vec4 oceanParams10;   // x unused (was the breaking limit, removed: the swash amplitude alone
+                                   //     shapes the shore — oceanSurfaceWeight),
                                    // y = spectrum clock rate (sqrt(world scale): holds the model sea's periods), zw unused
         glm::vec4 terrainParams;   // x = streamed terrain mesh coverage radius (m, radial from camera XZ;
                                    // 0 = no terrain mesh up — fences the ocean land cull),
@@ -616,6 +616,11 @@ export namespace RendererVKLayout
                                      // between them alike), z = damp knee (wetness below which the damp
                                      // plateau fades to dry), w = wet spike start (wetness above which
                                      // the whole surface carries the standing-film darkening)
+        glm::vec4 terrainWetParams6; // surface water (the terrain shader draws near-full-wetness ground AS
+                                     // water, with the ocean's surface terms): x = wetness at which the
+                                     // look is half in, y = half-width of that ramp, z = waviness (0 = the
+                                     // ground's normal, 1 = the live FFT wave normal), w = virtual water
+                                     // depth (m) the ground is tinted through (Beer-Lambert + in-scatter)
         glm::vec4 terrainSplatClimate[MAX_TERRAIN_SPLAT_MATERIALS]; // ground/rock CLIMATE BOX in the
                                      // (t01, h01) space: xy = temperature range, zw = humidity range.
                                      // Weight is 1 inside the box and Gaussian-decays outside it, so a

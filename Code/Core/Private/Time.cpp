@@ -62,15 +62,24 @@ void Time::beginFrame(bool windowFocused, bool vr, bool vsync, float displayRefr
         limitFrameRate(targetFps); // waits out the rest to the desired end; attributes it when it waited
         return;
     }
-    // Stable time uncapped: under FIFO frames land on whole refresh periods (only the CPU's view jitters), so snap the start to the nearest multiple (min 1) of the display period; no vsync = raw clock
+    // Stable time uncapped: under FIFO frames land on whole refresh periods (only the CPU's view jitters), so snap the start to the nearest multiple of the display period; no vsync = raw clock
     const Clock::time_point signaled = Clock::now();
     Clock::time_point frameStart = signaled;
     const double vsyncPeriod = displayRefreshHz > 0.0f ? 1.0 / double(displayRefreshHz) : m_framePeriodSec;
     if (m_stableFrameTime && vsync && vsyncPeriod > 0.0)
     {
         const double intervals = std::chrono::duration<double>(signaled - lastFrameStart).count() / vsyncPeriod;
-        const double rounded = glm::max(1.0, std::round(intervals));
-        frameStart = lastFrameStart + secondsToDuration(rounded * vsyncPeriod);
+        const double rounded = std::round(intervals);
+        // A frame under half a period = present did NOT throttle (occluded window, refresh mismatch). A former min-1 clamp here advanced the
+        // attributed clock a whole period per such frame, so it ran minutes AHEAD of the wall clock, and the limiter then slept it all out on defocus.
+        // Such a frame has no throttle lateness to trim, so it advances the attributed clock by exactly its REAL interval (raw start to raw start):
+        // always positive, never a period it did not take. NOT the raw clock itself: the last attributed start was snapped up to half a period ahead
+        // of the wall clock, so the raw clock can sit BEHIND it, and a backwards or zero delta is a one-frame flicker (eye adaptation / TAA blends
+        // overshoot) or a division by zero downstream. The attributed delta is never smaller than the frame took, except for the bounded snap.
+        if (rounded >= 1.0)
+            frameStart = lastFrameStart + secondsToDuration(rounded * vsyncPeriod);
+        else
+            frameStart = lastFrameStart + (signaled - m_lastRawFrameStart);
     }
     update(frameStart);
     trackRawPeriod();
@@ -93,8 +102,10 @@ void Time::trackRawPeriod()
 void Time::limitFrameRate(int targetFps)
 {
     // m_currentTime is the attributed start of the frame that is ending (set by the previous call).
-    const Clock::time_point desiredFrameEnd = m_currentTime + secondsToDuration(1.0 / targetFps);
+    const Clock::duration period = secondsToDuration(1.0 / targetFps);
     Clock::time_point frameEnd = Clock::now();
+    // Never wait more than one period: an attributed start that leads the wall clock (a snap gone wrong) must not turn into a multi-second sleep
+    const Clock::time_point desiredFrameEnd = oc::min(m_currentTime + period, frameEnd + period);
     if (frameEnd < desiredFrameEnd)
     {
         ProfileScope scope("Frame limit", EProfileCategory::Wait);

@@ -99,17 +99,13 @@ namespace Procedural
 		// A wave cannot stand taller than the water it is in (H/d ~ 0.78 when it breaks). The shoal fade
 		// alone cannot enforce this: it fades a band by its WAVELENGTH, so the mid cascade still runs at
 		// full height in shallow water. Scales the shoaled sum, so waves shrink instead of flat-topping.
-		Tweak::floatVar("Ocean/Shore", "Wave height limit (x depth)", &m_waveHeightLimit, 0.0f, 2.0f, 0.01f);
 		Tweak::floatVar("Ocean/Shore", "Shore foam depth (m)", &m_shoreFoamDepth, 0.0f, 8.0f, 0.05f);
 		Tweak::floatVar("Ocean/Shore", "Shore foam max", &m_shoreFoamMax, 0.0f, 1.0f, 0.01f);
 		Tweak::floatVar("Ocean/Shore", "Swash amplitude", &m_swashAmp, 0.0f, 2.0f, 0.01f);
-		Tweak::floatVar("Ocean/Shore", "Swash drawdown (m)", &m_swashDrawdown, 0.00f, 2.0f, 0.01f);
-		// How far above the seabed the TROUGH is held. The clamp measures against the baked
-		// depth map, but you see the LOD'd terrain mesh, and the two disagree by decimetres — so the old
-		// hard-coded 5 cm let a trough that clears the map's seabed sink under the real ground, which then
-		// pokes through the surface. This is the margin for that error, so size it to the disagreement, not
-		// to the waves. Tapered in with depth, so the waterline does not lift and retreat.
-		Tweak::floatVar("Ocean/Shore", "Trough margin (m)", &m_troughMargin, 0.0f, 1.0f, 0.01f);
+		// "Swash drawdown" and "Trough margin" are no longer registered: both shaped the waterline FLOOR
+		// (the smooth max that held the surface above the seabed and sank it under the sand on recede),
+		// which is gone — the surface is the wave and the depth buffer cuts it against the sand. The
+		// params still ride the UBO (u_oceanParams8.x / u_oceanParams9.x), unread.
 		Tweak::floatVar("Ocean/Shore", "Shore foam bias", &m_shoreFoamBias, -1.0f, 1.0f, 0.01f);
 		Tweak::floatVar("Ocean/Shore", "Swash backflow", &m_swashFlow, 0.0f, 3.0f, 0.01f);
 		// Land cull: clipmap triangles buried deeper than this under the local water level (over their
@@ -429,7 +425,6 @@ namespace Procedural
 		params.shoalScale = m_shoalScale;
 		params.horizonDepth = m_horizonDepth * s;
 		params.horizonDepthRange = m_horizonDepthRange * s;
-		params.waveHeightLimit = m_waveHeightLimit;
 		params.timeScale = std::sqrt(s); // Froude periods are x sqrt(s); slow the clock to the model's periods
 		params.shoreFoamDepth = m_shoreFoamDepth * s;
 		params.shoreFoamMax = m_shoreFoamMax;
@@ -698,6 +693,19 @@ namespace Procedural
 		return amp * seaFade * landFade * fadeIn;
 	}
 
+	// CPU mirror of oceanSwashBase: the weight above without the depth fade-in — the fraction of a
+	// cascade's raw amplitude that survives to the beach (each cascade shoals toward it, not to zero).
+	float OceanGenerator::swashBase(float depth, float waterLevel) const
+	{
+		const float amp = glm::clamp(m_params.swashAmp, 0.0f, 4.0f);
+		if (amp <= 0.0f)
+			return 0.0f;
+		const float seaFade = 1.0f - glm::smoothstep(0.05f, 1.0f, std::fabs(waterLevel - m_seaLevel));
+		const float reach = glm::max(swashReach(), 0.01f);
+		const float landFade = glm::clamp(1.0f + glm::min(depth, 0.0f) / reach, 0.0f, 1.0f);
+		return amp * seaFade * landFade;
+	}
+
 	// CPU mirror of oceanSampleDisplacement (ocean_wave.inc.glsl) at an UNDISPLACED world XZ, bilinear-
 	// wrapped over the readback tile: shoal-faded cascade sum, swash backflow, the raw
 	// run-up residual, then the waterline floor — same order, same clamps, y relative to the LOCAL water
@@ -732,7 +740,6 @@ namespace Procedural
 				return glm::mix(glm::mix(fetch(x0, z0), fetch(x0 + 1, z0), fx),
 					glm::mix(fetch(x0, z0 + 1), fetch(x0 + 1, z0 + 1), fx), fz);
 			};
-			const float shoal = glm::max(m_params.shoalScale, 0.0f);
 			const float chop = m_params.choppiness;
 			float rawY = 0.0f;
 			glm::vec2 rawXZ(0.0f);
@@ -740,20 +747,17 @@ namespace Procedural
 			{
 				const float L = glm::max(m_params.cascadeSizes[c], 1.0f); // same floor as buildUboOcean
 				const glm::vec3 d = sampleCascade(c, L);
-				// oceanShoalFade. The shader's "Horizon depth" floor is knowingly omitted: it only
-				// engages a kilometre out, and nothing floats there.
-				disp += glm::vec3(d.x * chop, d.y, d.z * chop)
-					* glm::smoothstep(0.0f, glm::max(shoal * L, 0.01f), depth);
 				rawY += d.y;
 				rawXZ += glm::vec2(d.x, d.z);
 			}
-			// Breaking limit, mirroring the shader: scale the shoaled sum so a wave never stands taller
-			// than a fraction of the water it is in (the swash still rides the raw field).
-			if (m_params.waveHeightLimit > 0.0f && depth > 0.0f)
-			{
-				const float cap = m_params.waveHeightLimit * depth;
-				disp *= cap / (cap + std::fabs(disp.y));
-			}
+			// The raw sum times the ONE depth weight (mirrors oceanSurfaceWeight): 1 in open water,
+			// easing to the swash base across the approach band (the same fade-in swashWeight uses).
+			// The shader's "Horizon depth" floor is knowingly omitted: it only engages a kilometre out,
+			// and nothing floats there.
+			const float fadeIn = 1.0f - glm::smoothstep(0.0f,
+				glm::max(2.0f * reach, glm::max(m_params.shoalScale, 0.0f) * glm::max(m_params.cascadeSizes.y, 1.0f)), depth);
+			const float w = 1.0f - fadeIn * (1.0f - swashBase(depth, shoreHW.y));
+			disp = glm::vec3(rawXZ.x * chop, rawY, rawXZ.y * chop) * w;
 			sw = swashWeight(depth, shoreHW.y);
 			// Backflow: the tongue slides seaward as the wave recedes, gated by its thickness above the
 			// sand and soft-capped to ~the reach (a buried surface must not keep sliding).
@@ -763,22 +767,9 @@ namespace Procedural
 			flowOff *= flowCap / (flowCap + glm::length(flowOff));
 			disp.x += flowOff.x;
 			disp.z += flowOff.y;
-			disp.y += rawY * sw;
 		}
-		// Waterline floor: the inner-rounded smooth max, tightening under an active swash.
-		constexpr float eps = 0.05f;
-		const float k = glm::mix(0.2f, 0.06f, glm::clamp(sw * 4.0f, 0.0f, 1.0f));
-		float floorY = eps - glm::max(depth, 2.0f * eps);
-		const float troughMargin = glm::max(m_params.troughMargin, 0.0f);
-		if (troughMargin > 0.0f && depth > 0.0f)
-			floorY += troughMargin * glm::smoothstep(0.0f, 2.0f * troughMargin, depth);
-		// Drawdown sinks the receding surface UNDER the sand — which is exactly what beaches a floating
-		// body as the wave leaves, so buoyancy wants it as much as the depth cut does.
-		if (glm::clamp(m_params.swashAmp, 0.0f, 4.0f) > 0.0f && depth > 0.0f && m_params.swashDrawdown > 0.0f)
-			floorY = glm::mix(floorY, -depth - glm::max(m_params.swashDrawdown, eps),
-				1.0f - glm::smoothstep(0.0f, glm::max(reach, 0.01f), depth));
-		const float hh = glm::max(k - std::fabs(disp.y - floorY), 0.0f) / k;
-		disp.y = glm::max(disp.y, floorY) - hh * hh * (k * 0.25f);
+		// No waterline floor (mirrors the shader): the surface is the wave, and a trough that dips under
+		// the seabed beaches a floating body exactly as the depth buffer exposes the sand there.
 		return disp;
 	}
 

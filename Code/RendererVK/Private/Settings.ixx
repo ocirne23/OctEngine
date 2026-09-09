@@ -388,11 +388,6 @@ export struct OceanParams
     // still reads the raw map. 0 range = off.
     float horizonDepth      = 30.0f;
     float horizonDepthRange = 1500.0f;
-    // Breaking limit: max wave height as a fraction of the local depth (real waves break near H/d ~ 0.78,
-    // crest ~ 0.39 d). The per-cascade shoal fade cannot express this — it keys on each band's WAVELENGTH,
-    // so with cascade sizes 8x apart any fade depth that suits the swell leaves the mid band at full
-    // amplitude in a metre of water. Scales the shoaled sum rather than clipping crests. 0 = unbounded.
-    float waveHeightLimit = 0.5f;
     // Rate of the spectrum's clock relative to the frame clock (1 = real time). OceanGenerator sets
     // sqrt(world scale): its Froude-scaled inputs give a shrunk sea whose periods are x sqrt(s), and this
     // slows the evolution back to the model sea's periods so the miniature does not race. Only the

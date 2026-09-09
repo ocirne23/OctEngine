@@ -234,21 +234,25 @@ export namespace Procedural
 		// darkens and glosses wet ground.
 		bool  m_wetEnabled = true;
 		float m_wetTexelSize = 0.5f;   // m per texel (1024 texels = 512 m around the scene focus)
-		float m_wetDryTime = 30.0f;    // s to decay to 1/e on cool ground
+		float m_wetDryTime = 10.0f;    // s to decay to 1/e on cool ground
 		float m_wetDryTempSens = 0.04f;// extra decay rate per C above 15 C
 		float m_wetRain = 0.0f;        // wetness per second added everywhere (a weather driver later)
-		float m_wetInTime = 2.0f;      // s for ground under water to reach full wetness (no per-texel popping)
-		float m_wetFilmDepth = 0.03f;  // m of water over which the wetting target ramps 0 -> 1
-		float m_wetDiffusionRate = 1.0f; // 1/s sideways spread (framerate independent; the on/off toggle is the renderer's define tweak)
+		float m_wetInTime = 5.0f;      // s for ground under water to reach full wetness (no per-texel popping)
+		float m_wetFilmDepth = 0.00f;  // m of water over which the wetting target ramps 0 -> 1
+		float m_wetDiffusionRate = 2.0f; // 1/s sideways spread (framerate independent; the on/off toggle is the renderer's define tweak)
 		float m_wetPoolScale = 3.0f;      // 1/m: pooling noise scale as the ground dries (0 = uniform film)
 		float m_wetPoolSoftness = 0.15f;  // noise band around the wetness that half-pools
-		float m_wetDampGloss = 0.6f;      // fraction of the roughness drop the damp ground between pools keeps
-		float m_wetPoolHold = 1.5f;       // >= 1: pool threshold = wet^(1/hold), pools outlast the wetness
+		float m_wetDampGloss = 0.7f;      // fraction of the roughness drop the damp ground between pools keeps
+		float m_wetPoolHold = 2.0f;       // >= 1: pool threshold = wet^(1/hold), pools outlast the wetness
 		float m_wetSlopeDrain = 20.0f;     // steep ground dries faster: decay rate x (1 + slope * drain); 0 = off
-		float m_wetAlbedoScale = 0.75f;// FILM albedo multiplier (standing water: the near-full spike + the pools), on top of damp
-		float m_wetDampAlbedoScale = 0.6f; // DAMP albedo multiplier (soaked ground everywhere, between the pools too)
-		float m_wetDampKnee = 0.25f;   // wetness below which the damp plateau fades to dry (~1.4 dry times)
-		float m_wetSpikeStart = 0.7f;  // wetness above which the whole surface carries the film darkening
+		float m_wetSurfaceThreshold = 0.9f; // wetness at which the ground is drawn AS water (ocean look), half in
+		float m_wetSurfaceSoftness = 0.4f; // half-width of that ramp (it blends out, never edges)
+		float m_wetSurfaceWaviness = 1.0f;  // film normal: 0 = ground normal, 1 = live FFT wave normal
+		float m_wetSurfaceDepth = 0.1f;    // m of virtual water the ground is tinted through (ocean absorption + scatter)
+		float m_wetAlbedoScale = 0.80f;// FILM albedo multiplier (standing water: the near-full spike + the pools), on top of damp
+		float m_wetDampAlbedoScale = 0.55f; // DAMP albedo multiplier (soaked ground everywhere, between the pools too)
+		float m_wetDampKnee = 0.2f;   // wetness below which the damp plateau fades to dry (~1.4 dry times)
+		float m_wetSpikeStart = 0.2f;  // wetness above which the whole surface carries the film darkening
 		float m_wetRoughness = 0.15f;  // roughness at full wetness
 
 		// --- Threading: generation runs on up to m_maxGenJobs Low-priority pump jobs; V3 waits

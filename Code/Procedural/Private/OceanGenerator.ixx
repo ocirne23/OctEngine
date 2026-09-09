@@ -91,6 +91,7 @@ export namespace Procedural
 		glm::vec2 sampleShoreData(float x, float z) const;          // (water depth, water level) from the terrain-data CPU copy
 		float swashReach() const;                                   // run-up band height; mirrors the UBO's estimate
 		float swashWeight(float depth, float waterLevel) const;     // mirrors oceanSwashWeight
+		float swashBase(float depth, float waterLevel) const;       // mirrors oceanSwashBase (no depth fade-in)
 		glm::vec3 sampleDisplacement(glm::vec2 worldXZ) const;      // CPU mirror of oceanSampleDisplacement
 		void estimateWaveTrough(); // sparse re-scan of the readback for the deepest current trough (underwater fog boundary)
 
@@ -151,7 +152,7 @@ export namespace Procedural
 		// three tilings never re-align.
 		glm::vec3 m_cascadeSizes = glm::vec3(1536.0f, 188.0f, 25.0f);
 
-		glm::vec3 m_absorption = glm::vec3(0.897f, 0.082f, 0.15f);  // Beer-Lambert extinction (1/m)
+		glm::vec3 m_absorption = glm::vec3(85.0f / 255.0f, 14.0f / 255.0f, 20.0f / 255.0f);  // Beer-Lambert extinction (1/m)
 		glm::vec3 m_scatterColor = glm::vec3(0.047f, 0.1f, 0.15f);
 		float m_scatterStrength = 1.0f;
 		float m_roughness = 0.07f;
@@ -183,13 +184,9 @@ export namespace Procedural
 		// that looks exactly like wind 0. Only the seabed moves, never the surface. 0 range = off.
 		float m_horizonDepth = 2.0f;
 		float m_horizonDepthRange = 3000.0f;
-		// Breaking limit (max wave height as a fraction of depth). The per-cascade shoal fade keys on each
-		// band's WAVELENGTH, so with cascade sizes 8x apart no single fade depth can both let the swell
-		// live offshore and keep the mid band down in a metre of water — this is the other half.
-		float m_waveHeightLimit = 1.0f;
 		float m_shoreFoamDepth = 8.0f;  // surf band: water-column height (m) that churns white; 0 = off
 		float m_shoreFoamMax = 0.75f;   // surf band opacity cap: keeps the refracted bottom visible through the foam
-		float m_swashAmp = 0.3f;        // swash run-up: un-shoaled wave height riding up the beach (0 = hard cutoff)
+		float m_swashAmp = 0.5f;        // swash run-up: un-shoaled wave height riding up the beach (0 = hard cutoff)
 		float m_swashDrawdown = 0.1f;   // receding burial depth (m below seabed): deeper = cleaner retreat edge
 		float m_troughMargin = 0.35f;   // m the trough is held above the seabed (covers baked-map vs mesh error)
 		float m_shoreFoamBias = -0.80f;   // surf fold-threshold shift: negative = sparser/more transparent surf

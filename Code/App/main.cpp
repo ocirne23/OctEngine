@@ -163,7 +163,7 @@ int main(int argc, char* argv[])
     if (!headlessServer)
     {
         cameraController.initialize(glm::vec3(-1.5f, 14.0f, -7.1f), glm::vec3(0.0f, 4.0f, 0.0f));
-        Globals::rendererVK.initialize(window, EValidation::DISABLED, EVr::DISABLED); // ENABLED DISABLED
+        Globals::rendererVK.initialize(window, EValidation::ENABLED, EVr::DISABLED); // ENABLED DISABLED
         Globals::ui.initialize();
     }
     Globals::world.initialize();

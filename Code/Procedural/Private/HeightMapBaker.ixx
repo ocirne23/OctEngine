@@ -59,7 +59,7 @@ export namespace Procedural
 		// texel a hair under sea level qualifies, so one shallow inland dip vouches for every hollow within
 		// the radius of it — the thing this whole pass exists to stop, reintroduced by a puddle. Swell needs
 		// a real body of water behind it; this is where that line is drawn. 0 = any water below sea level.
-		float swashDepth = 1.0f;
+		float swashDepth = 2.0f;
 
 		// Compared to decide whether a baked map went stale (HeightMapBaker::update). Defaulted rather than
 		// hand-written so a field added above is covered without anyone remembering to extend it — a missed

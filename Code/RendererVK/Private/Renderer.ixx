@@ -393,6 +393,16 @@ public:
                                      // terrain shader (per pixel, mesh normal) AND wet-in / rain rate
                                      // / (1 + slope * drain) in the compute pass (map gradient, 8 m);
                                      // slope = 1 - N.y (a 45-degree face ~2.2x at 4, a wall 5x); 0 = off
+        // Surface water: where the WETNESS is still near full the terrain shader draws the ground AS
+        // water — the ocean shader's Fresnel sky reflection and dielectric sun glint over the lit ground
+        // — so the ocean's depth-buffer intersection with the sand lands on ground that already looks
+        // like water. Keyed on the smooth wetness field, not the pooled noise (that drew water blobs);
+        // it ramps over [threshold - softness, threshold + softness] so it blends out, never edges.
+        float surfaceThreshold = 0.7f; // wetness at which the water look is half in
+        float surfaceSoftness = 0.25f; // half-width of the ramp
+        float surfaceWaviness = 0.5f;  // film normal: 0 = the ground's normal, 1 = the live FFT wave normal
+        float surfaceDepth = 0.15f;    // m of virtual water the ground is tinted through (the ocean's
+                                       // absorption + in-scatter), so the colours match at the waterline
     };
     void setTerrainWetParams(const TerrainWetTweaks& params) { m_terrainWetTweaks = params; }
     // Deepest current ocean wave trough below the calm water level (m, >= 0; the OceanGenerator estimates
