@@ -543,8 +543,9 @@ into it — see the Spatial CONTEXT.
 Y pinned at 1 m (a jump must not scroll the GI clipmap or slide the cascades), so
 every distance-based quality falloff measures from the PLAYER: the sun cascades are nested spheres
 around it ("Shadows/Max distance" is metres from the player) and the RTAO fade/early-out use the same
-origin — the follow camera hanging in empty sky plays no part. `clearSceneFocus` while the camera is
-detached and in `~GameMatch` (camera-based again). See "The scene focus" in the RendererVK CONTEXT.
+origin — the follow camera hanging in empty sky plays no part. With the camera detached the focus stays
+on the player unless the local "Game/Player/Detach focus point" tweak is on too (`clearSceneFocus`, the
+fly camera takes it); `~GameMatch` clears it. See "The scene focus" in the RendererVK CONTEXT.
 
 **`Game/Player/Detach camera (free fly)`** (local, `GamePlayer::cameraDetached`): main runs the
 testbed `FreeFlyCameraController` INSTEAD of the follow camera (seeded from the follow view on the

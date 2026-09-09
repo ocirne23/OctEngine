@@ -128,7 +128,7 @@ export namespace Procedural
 		// --- The Terrain Diffusion generator. ONNX-model backed: it needs 2.28 GB of
 		// weights on disk and a DirectML-capable GPU, and it generates 7.68 km tiles rather than evaluating
 		// a point function. See Private/Diffusion/GeneratorV3.ixx.
-		float m_v3MetersPerPixel = 3.0f;  // 30 = the model's true training scale; lower compresses the world
+		float m_v3MetersPerPixel = 0.3f;  // 30 = the model's true training scale; lower compresses the world
 		float m_v3HeightScale = 1.0f;
 		float m_v3DetailSlopeGain = 0.75f; // slope -> detail mask (the model only resolves 30 m/px)
 		// Wavelengths/amplitudes are in MODEL metres and ride metersPerPixel, so the OCTAVE counts are what

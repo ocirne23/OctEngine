@@ -21,6 +21,7 @@ void GamePlayer::registerTweaks()
     // A view preference like Game/Camera: registered OUTSIDE the Synced scope so the server never
     // pushes its own value onto a client that is flying around.
     Tweak::boolean("Game/Player", "Detach camera (free fly)", &m_detachCamera);
+    Tweak::boolean("Game/Player", "Detach focus point", &m_detachFocus); // only matters with the camera detached
     // Gameplay tweaks persist between runs and the server's values overrule the clients'.
     const Tweak::ScopedFlags scoped( ETweakFlags::Synced);
     Tweak::floatVar("Game/Player", "Move speed", &m_moveSpeed, 0.5f, 30.0f, 0.1f);

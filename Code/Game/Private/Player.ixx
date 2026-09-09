@@ -71,6 +71,10 @@ public:
     // testbed fly camera takes the frame — the capsule keeps simulating (a standing move order
     // still completes), it just receives no new orders. Personal, never synced.
     bool cameraDetached() const { return m_detachCamera; }
+    // "Detach focus point" tweak: with the camera detached, ALSO move the scene focus (shadow cascades,
+    // RTAO falloff, GI clipmap) to the fly camera. Off = the focus stays on the player entity, so the
+    // fly camera inspects the player's lighting from anywhere. Personal, never synced.
+    bool focusDetached() const { return m_detachFocus; }
     glm::vec3 interpolatedPos() const; // render-smooth body pose for the follow camera
     glm::vec3 bodyPos() const;         // current body position (authority logic)
 
@@ -116,6 +120,7 @@ private:
 
     // Tweaks ("Game/Player" — movement, health, and the shield battery)
     bool m_detachCamera = false; // local-only (not Synced): free-fly view, see cameraDetached()
+    bool m_detachFocus = false;  // local-only: the scene focus follows the fly camera, see focusDetached()
     float m_moveSpeed = 4.0f;
     float m_accel = 30.0f; // deliberately soft: steering force must lose against bubble push
     float m_jumpSpeed = 6.0f;

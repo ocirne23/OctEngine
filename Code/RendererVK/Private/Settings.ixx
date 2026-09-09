@@ -266,9 +266,9 @@ export struct RTAOParams
     float radius = 1.0f;
     float power = 1.5f;
     float intensity = 1.0f;
-    float fadeStart = 30.0f;   // distance (m) from the SCENE FOCUS (Renderer::setSceneFocus — the player in game
+    float fadeStart = 100.0f;  // distance (m) from the SCENE FOCUS (Renderer::setSceneFocus — the player in game
                                // mode; the camera when unset) where AO begins to fade out
-    float maxDistance = 60.0f; // focus distance at which AO is fully gone (trace early-out); 0 disables the falloff
+    float maxDistance = 120.0f; // focus distance at which AO is fully gone (trace early-out); 0 disables the falloff
     float normalBias = 0.02f;    // constant ray-origin offset along the surface normal (m)
     float distanceBias = 0.001f; // ray-origin offset toward the camera per meter of view distance: absorbs
                                  // the depth-reconstruction error (grows with distance, lies along the view
@@ -393,6 +393,12 @@ export struct OceanParams
     // so with cascade sizes 8x apart any fade depth that suits the swell leaves the mid band at full
     // amplitude in a metre of water. Scales the shoaled sum rather than clipping crests. 0 = unbounded.
     float waveHeightLimit = 0.5f;
+    // Rate of the spectrum's clock relative to the frame clock (1 = real time). OceanGenerator sets
+    // sqrt(world scale): its Froude-scaled inputs give a shrunk sea whose periods are x sqrt(s), and this
+    // slows the evolution back to the model sea's periods so the miniature does not race. Only the
+    // e^{iwt} evolution reads it — the breaking-crest acceleration stays in the spectrum's own time, so
+    // the foam criterion (a fraction of g) keeps the model sea's look.
+    float timeScale = 1.0f;
     float shoreFoamDepth = 8.0f;  // water-column height (m) below which the waterline churns white; 0 = off
     float shoreFoamMax   = 0.75f; // surf band opacity cap: shore foam coverage never exceeds this, so the
                                   // refracted bottom stays visible through the lace (whitecaps unaffected)

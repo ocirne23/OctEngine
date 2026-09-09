@@ -548,7 +548,8 @@ export namespace RendererVKLayout
                                    // z = RT reflection ray range (m),
                                    // w = RT reflection roughness cutoff (rougher = sky fallback)
         glm::vec4 oceanParams10;   // x = wave height limit as a fraction of water depth (breaking limit;
-                                   //     scales the shoaled cascade sum, 0 = unbounded), yzw unused
+                                   //     scales the shoaled cascade sum, 0 = unbounded),
+                                   // y = spectrum clock rate (sqrt(world scale): holds the model sea's periods), zw unused
         glm::vec4 terrainParams;   // x = streamed terrain mesh coverage radius (m, radial from camera XZ;
                                    // 0 = no terrain mesh up — fences the ocean land cull),
                                    // y = temperature lapse rate, C per WORLD metre above sea level (<= 0;

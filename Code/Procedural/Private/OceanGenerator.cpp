@@ -27,6 +27,13 @@ namespace Procedural
 		auto gridDirty = [this]() { m_gridDirty = true; };
 
 		Tweak::boolean("Ocean", "Enabled", &m_enabled);
+		// The ocean's "Meters per pixel": every metre-valued tweak in this panel is a MODEL metre, and the
+		// sea is drawn at model x scale — wavelengths, heights, cascades, the shore depths, the clipmap
+		// cells and the optical depths all shrink together, so the coastline keeps its look on a compressed
+		// terrain (terrain mpp 3 = scale 0.1). The waves keep the model sea's PERIODS (the spectrum clock
+		// slows by sqrt(scale) to undo the Froude speed-up), so the miniature moves like the model in
+		// slow motion rather than racing. Rebuilds the grid (ring cell).
+		Tweak::floatVar("Ocean", "World scale", &m_worldScale, 0.01f, 4.0f, 0.01f, gridDirty); // 1 = model scale
 		Tweak::floatVar("Ocean", "Ring cell (m)", &m_ringCell, 0.02f, 2.0f, 0.005f, gridDirty);
 		Tweak::intVar("Ocean", "Ring resolution", &m_ringRes, 64, 512, 4.0f, gridDirty);
 		Tweak::intVar("Ocean", "Rings", &m_rings, 1, 10, 1.0f, gridDirty);
@@ -146,7 +153,7 @@ namespace Procedural
 		// so both cull paths (Spatial gate + GPU per-instance frustum test) drop off-screen water.
 		// Sector borders duplicate identical vertices: same position, cell size and morph -> watertight.
 		const int   N = glm::clamp(m_ringRes & ~3, 16, 1024); // multiple of 4: hole/sector edges stay on the lattice
-		const float c0 = glm::max(m_ringCell, 0.01f);
+		const float c0 = glm::max(m_ringCell * m_worldScale, 0.001f); // world metres: the cell rides the scale like the waves it holds
 		const int   rings = glm::clamp(m_rings, 1, 12);
 		constexpr float MORPH_BAND_START = 0.7f; // morph over the outer 30% of each ring
 
@@ -344,13 +351,13 @@ namespace Procedural
 			m_windSteerSynced = true;
 		}
 		glm::vec2 sum(0.0f);
-		if (m_terrainData && m_terrainData->ranges.x > 0.0f && m_windSteerRange > 0.0f)
+		if (m_terrainData && m_terrainData->ranges.x > 0.0f && m_windSteerRange * m_worldScale > 0.0f)
 		{
 			// Votes from the near cascade of the streamer's baked terrain-data map. The flow direction
 			// rides bits 8-15 of the bit-cast packed climate channel (HeightMapBaker's data-map layout).
 			const int32 res = (int32)m_terrainData->res;
 			const float texel = m_terrainData->ranges.x / (float)res;
-			const int32 radius = (int32)(m_windSteerRange / texel);
+			const int32 radius = (int32)(m_windSteerRange * m_worldScale / texel);
 			const int32 step = glm::max(radius / 16, 1); // <= 33x33 taps of the CPU copy
 			const glm::vec2 rel = glm::vec2(camera.position.x, camera.position.z) - m_terrainData->center;
 			const int32 cx = (int32)std::floor(rel.x / texel) + res / 2;
@@ -380,28 +387,35 @@ namespace Procedural
 		return m_steeredWindAngle;
 	}
 
+	// The ONE place the world scale is applied: the tweaks are model metres, the renderer and the CPU
+	// mirror (which reads m_params) get world metres. Froude similarity keeps the spectrum a shrunk copy
+	// of itself — U x sqrt(s), fetch/depth/patch sizes x s — every other length rides s, every 1/m
+	// optical density rides 1/s (the same water column, in fewer metres), dimensionless ratios
+	// (amplitude, choppiness, shoal fraction, height limit, swash amplitude, foam thresholds — the break
+	// acceleration is a fraction of g, invariant under Froude scaling) pass through untouched.
 	void OceanGenerator::pushOceanParams(Renderer& renderer, const Camera& camera)
 	{
 		const float windAngle = steeredWindAngle(camera); // base wind, turned toward the local shore flow
-		OceanParams params;
+		const float s = glm::max(m_worldScale, 0.001f);
+		OceanParams& params = m_params;
 		params.enabled = m_enabled;
 		params.windDirection = glm::vec2(std::cos(windAngle), std::sin(windAngle));
-		params.windSpeed = m_windSpeed;
-		params.fetchKm = m_fetchKm;
-		params.depth = m_depth;
-		params.horizonLevelOffset = m_horizonLevelOffset;
+		params.windSpeed = m_windSpeed * std::sqrt(s);
+		params.fetchKm = m_fetchKm * s;
+		params.depth = m_depth * s;
+		params.horizonLevelOffset = m_horizonLevelOffset * s;
 		params.amplitude = m_amplitude;
 		params.choppiness = m_choppiness;
 		params.normalStrength = m_normalStrength;
-		params.cascadeSizes = m_cascadeSizes;
-		params.seaLevel = m_seaLevel;
+		params.cascadeSizes = m_cascadeSizes * s;
+		params.seaLevel = m_seaLevel; // the world datum: never scaled
 		params.detailBias = m_detailBias;
-		params.absorption = m_absorption;
+		params.absorption = m_absorption / s;
 		params.scatterColor = m_scatterColor;
 		params.scatterStrength = m_scatterStrength;
 		params.roughness = m_roughness;
 		params.glintFilter = m_glintFilter;
-		params.sssStrength = m_sssStrength;
+		params.sssStrength = m_sssStrength / s; // per metre of crest height
 		params.sssPower = m_sssPower;
 		params.hitLighting = m_hitLighting;
 		params.foamColor = m_foamColor;
@@ -413,22 +427,23 @@ namespace Procedural
 		params.foamBoost = m_foamBoost;
 		params.turbidity = m_turbidity;
 		params.shoalScale = m_shoalScale;
-		params.horizonDepth = m_horizonDepth;
-		params.horizonDepthRange = m_horizonDepthRange;
+		params.horizonDepth = m_horizonDepth * s;
+		params.horizonDepthRange = m_horizonDepthRange * s;
 		params.waveHeightLimit = m_waveHeightLimit;
-		params.shoreFoamDepth = m_shoreFoamDepth;
+		params.timeScale = std::sqrt(s); // Froude periods are x sqrt(s); slow the clock to the model's periods
+		params.shoreFoamDepth = m_shoreFoamDepth * s;
 		params.shoreFoamMax = m_shoreFoamMax;
 		params.swashAmp = m_swashAmp;
-		params.swashDrawdown = m_swashDrawdown;
-		params.troughMargin = m_troughMargin;
+		params.swashDrawdown = m_swashDrawdown * s;
+		params.troughMargin = m_troughMargin * s;
 		params.shoreFoamBias = m_shoreFoamBias;
 		params.swashFlow = m_swashFlow;
-		params.cullMargin = m_cullMargin;
-		params.farCullError = m_farCullError;
-		params.rtRefractionRange = m_rtRefractionRange;
-		params.rtReflectionRange = m_rtReflectionRange;
+		params.cullMargin = m_cullMargin * s;
+		params.farCullError = m_farCullError * s;
+		params.rtRefractionRange = m_rtRefractionRange * s;
+		params.rtReflectionRange = m_rtReflectionRange * s;
 		params.rtReflectionMaxRough = m_rtReflectionMaxRough;
-		params.rtRayCutoffDist = m_rtRayCutoffDist;
+		params.rtRayCutoffDist = m_rtRayCutoffDist * s;
 		renderer.setOceanParams(params);
 	}
 
@@ -516,7 +531,7 @@ namespace Procedural
 		// same world positions (a clipmap's whole point: each world point keeps its sample position and
 		// ring-fixed mip, so waves are rock-stable under camera motion). 8*cell aligns rings 0-2 perfectly;
 		// coarser rings shift sub-texel, which is invisible against their band-limited content.
-		const float snap = 8.0f * glm::max(m_ringCell, 0.01f);
+		const float snap = 8.0f * glm::max(m_ringCell * m_worldScale, 0.001f); // the scaled cell rebuildGrid used
 		const float px = std::floor(camera.position.x / snap + 0.5f) * snap;
 		const float pz = std::floor(camera.position.z / snap + 0.5f) * snap;
 		const Transform xf(glm::vec3(px, m_seaLevel, pz), 1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
@@ -535,7 +550,7 @@ namespace Procedural
 		// ever grew out to cover it, being under real mesh is exactly when dropping it is right).
 		const float meshRadius = renderer.getTerrainMeshRadius();
 		const glm::vec2 camXZ(camera.position.x, camera.position.z);
-		const float wetNeed = glm::max(m_cullMargin, 0.0f) + swashReach() + glm::max(m_farCullError, 0.0f) + 2.0f;
+		const float wetNeed = glm::max(m_params.cullMargin, 0.0f) + swashReach() + glm::max(m_params.farCullError, 0.0f) + 2.0f;
 		const auto sectorDry = [&](const Sector& s) {
 			if (!m_drySectorCull || !m_dryGridValid || meshRadius <= 0.0f || s.horizonBand)
 				return false; // the band is the horizon itself: never dropped for terrain
@@ -613,15 +628,16 @@ namespace Procedural
 	// Outside the near cascade / without terrain data: open-ocean depth at sea level. One knowing
 	// omission vs the shader: the far-cascade fallback — buoyancy queries only matter near the camera,
 	// well inside the near cascade's range.
+	// Everything below reads m_params — the world-scaled set the shaders got — never the model-metre tweaks.
 	glm::vec2 OceanGenerator::sampleShoreData(float x, float z) const
 	{
 		if (!m_terrainData || m_terrainData->texels.empty() || m_terrainData->ranges.x <= 1.0f)
-			return glm::vec2(m_depth, m_seaLevel);
+			return glm::vec2(m_params.depth, m_seaLevel);
 		const uint32 res = m_terrainData->res;
 		const float u = (x - m_terrainData->center.x) / m_terrainData->ranges.x + 0.5f;
 		const float v = (z - m_terrainData->center.y) / m_terrainData->ranges.x + 0.5f;
 		if (u <= 0.0f || u >= 1.0f || v <= 0.0f || v >= 1.0f)
-			return glm::vec2(m_depth, m_seaLevel);
+			return glm::vec2(m_params.depth, m_seaLevel);
 		const float tx = glm::clamp(u * (float)res - 0.5f, 0.0f, (float)res - 1.001f);
 		const float tz = glm::clamp(v * (float)res - 0.5f, 0.0f, (float)res - 1.001f);
 		const uint32 x0 = (uint32)tx, z0 = (uint32)tz;
@@ -662,14 +678,14 @@ namespace Procedural
 	// on-land band the shaders draw the tongue in, so it is also the band buoyancy must find water in.
 	float OceanGenerator::swashReach() const
 	{
-		return glm::clamp(m_swashAmp, 0.0f, 4.0f) * (m_waveTrough + 0.25f);
+		return glm::clamp(m_params.swashAmp, 0.0f, 4.0f) * (m_waveTrough + 0.25f);
 	}
 
 	// CPU mirror of oceanSwashWeight (ocean_wave.inc.glsl): how much of the RAW un-shoaled wave field
 	// rides the surface at this water depth (negative = land height above the local level).
 	float OceanGenerator::swashWeight(float depth, float waterLevel) const
 	{
-		const float amp = glm::clamp(m_swashAmp, 0.0f, 4.0f);
+		const float amp = glm::clamp(m_params.swashAmp, 0.0f, 4.0f);
 		if (amp <= 0.0f)
 			return 0.0f;
 		const float seaFade = 1.0f - glm::smoothstep(0.05f, 1.0f, std::fabs(waterLevel - m_seaLevel));
@@ -678,7 +694,7 @@ namespace Procedural
 		const float reach = glm::max(swashReach(), 0.01f);
 		const float landFade = glm::clamp(1.0f + glm::min(depth, 0.0f) / reach, 0.0f, 1.0f);
 		const float fadeIn = 1.0f - glm::smoothstep(0.0f,
-			glm::max(2.0f * reach, glm::max(m_shoalScale, 0.0f) * glm::max(m_cascadeSizes.y, 1.0f)), depth);
+			glm::max(2.0f * reach, glm::max(m_params.shoalScale, 0.0f) * glm::max(m_params.cascadeSizes.y, 1.0f)), depth);
 		return amp * seaFade * landFade * fadeIn;
 	}
 
@@ -716,32 +732,33 @@ namespace Procedural
 				return glm::mix(glm::mix(fetch(x0, z0), fetch(x0 + 1, z0), fx),
 					glm::mix(fetch(x0, z0 + 1), fetch(x0 + 1, z0 + 1), fx), fz);
 			};
-			const float shoal = glm::max(m_shoalScale, 0.0f);
+			const float shoal = glm::max(m_params.shoalScale, 0.0f);
+			const float chop = m_params.choppiness;
 			float rawY = 0.0f;
 			glm::vec2 rawXZ(0.0f);
 			for (uint32 c = 0; c < RendererVKLayout::OCEAN_CASCADES; ++c)
 			{
-				const float L = glm::max(m_cascadeSizes[c], 1.0f);
+				const float L = glm::max(m_params.cascadeSizes[c], 1.0f); // same floor as buildUboOcean
 				const glm::vec3 d = sampleCascade(c, L);
 				// oceanShoalFade. The shader's "Horizon depth" floor is knowingly omitted: it only
 				// engages a kilometre out, and nothing floats there.
-				disp += glm::vec3(d.x * m_choppiness, d.y, d.z * m_choppiness)
+				disp += glm::vec3(d.x * chop, d.y, d.z * chop)
 					* glm::smoothstep(0.0f, glm::max(shoal * L, 0.01f), depth);
 				rawY += d.y;
 				rawXZ += glm::vec2(d.x, d.z);
 			}
 			// Breaking limit, mirroring the shader: scale the shoaled sum so a wave never stands taller
 			// than a fraction of the water it is in (the swash still rides the raw field).
-			if (m_waveHeightLimit > 0.0f && depth > 0.0f)
+			if (m_params.waveHeightLimit > 0.0f && depth > 0.0f)
 			{
-				const float cap = m_waveHeightLimit * depth;
+				const float cap = m_params.waveHeightLimit * depth;
 				disp *= cap / (cap + std::fabs(disp.y));
 			}
 			sw = swashWeight(depth, shoreHW.y);
 			// Backflow: the tongue slides seaward as the wave recedes, gated by its thickness above the
 			// sand and soft-capped to ~the reach (a buried surface must not keep sliding).
 			const float flowFade = glm::smoothstep(0.0f, 0.35f, rawY * sw + depth);
-			glm::vec2 flowOff = rawXZ * (m_choppiness * glm::max(m_swashFlow, 0.0f) * sw * flowFade);
+			glm::vec2 flowOff = rawXZ * (chop * glm::max(m_params.swashFlow, 0.0f) * sw * flowFade);
 			const float flowCap = glm::clamp(0.5f * reach, 0.25f, 1.0f);
 			flowOff *= flowCap / (flowCap + glm::length(flowOff));
 			disp.x += flowOff.x;
@@ -752,13 +769,13 @@ namespace Procedural
 		constexpr float eps = 0.05f;
 		const float k = glm::mix(0.2f, 0.06f, glm::clamp(sw * 4.0f, 0.0f, 1.0f));
 		float floorY = eps - glm::max(depth, 2.0f * eps);
-		const float troughMargin = glm::max(m_troughMargin, 0.0f);
+		const float troughMargin = glm::max(m_params.troughMargin, 0.0f);
 		if (troughMargin > 0.0f && depth > 0.0f)
 			floorY += troughMargin * glm::smoothstep(0.0f, 2.0f * troughMargin, depth);
 		// Drawdown sinks the receding surface UNDER the sand — which is exactly what beaches a floating
 		// body as the wave leaves, so buoyancy wants it as much as the depth cut does.
-		if (glm::clamp(m_swashAmp, 0.0f, 4.0f) > 0.0f && depth > 0.0f && m_swashDrawdown > 0.0f)
-			floorY = glm::mix(floorY, -depth - glm::max(m_swashDrawdown, eps),
+		if (glm::clamp(m_params.swashAmp, 0.0f, 4.0f) > 0.0f && depth > 0.0f && m_params.swashDrawdown > 0.0f)
+			floorY = glm::mix(floorY, -depth - glm::max(m_params.swashDrawdown, eps),
 				1.0f - glm::smoothstep(0.0f, glm::max(reach, 0.01f), depth));
 		const float hh = glm::max(k - std::fabs(disp.y - floorY), 0.0f) / k;
 		disp.y = glm::max(disp.y, floorY) - hh * hh * (k * 0.25f);

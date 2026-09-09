@@ -97,6 +97,16 @@ export namespace Procedural
 		// --- Clipmap geometry config (a change rebuilds the mesh) ---
 		bool  m_enabled = false;
 		float m_seaLevel = 0.0f;   // mirrors the terrain's datum; set every update(), never tweaked here
+		// UNIFORM world scale, the ocean's counterpart of the terrain's "Meters per pixel" (mpp / 30):
+		// every tweak below is authored in MODEL metres and the sea is drawn at model x scale. The
+		// spectrum is scaled by Froude similarity (lengths x s, wind speed x sqrt(s), gravity untouched),
+		// which is the one scaling of the JONSWAP/TMA inputs under which wavelengths AND wave heights both
+		// come out x s — so the scaled sea is a shrunk copy of the model sea. Froude periods would be
+		// x sqrt(s) (a miniature races), so the spectrum clock runs at sqrt(s) (OceanParams::timeScale) and
+		// the periods stay the model sea's. Applied ONCE, in pushOceanParams: the shaders and the CPU
+		// buoyancy mirror both read the scaled set (m_params), so neither can disagree with the other.
+		float m_worldScale = 0.1f;  // 1 = the model sea; a 10x sea against the default terrain (mpp 0.3, 100x), tuned by eye
+		OceanParams m_params;      // the SCALED param set last pushed to the renderer; the CPU mirror reads it
 		// Reach = ringCell * res/2 * 2^(rings-1), and every ring costs the same vertex count whatever its
 		// cell size — so buy near-field detail by trading cell size for ring COUNT, not by biasing the mip
 		// (a finer mip samples detail the mesh cannot hold and simply aliases). At 2 m cells the finest

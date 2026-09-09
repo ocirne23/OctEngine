@@ -144,7 +144,11 @@ void main()
     const vec2 h0p = h0( m, cascade, L, kMin, kMax, 0u);
     const vec2 h0m = h0(-m, cascade, L, kMin, kMax, 0u);
     const float w = dispersion(max(k, 1e-5), u_oceanParams1.z);
-    const float wt = w * u_timeSeconds;
+    // The clock rate (u_oceanParams10.y) is sqrt(world scale): the Froude-scaled inputs shrink the sea
+    // but shorten its periods by the same sqrt(s), and this holds them at the model sea's. Only the
+    // evolution reads it — the accel/velocity signals below stay in spectrum time on purpose, so the
+    // breaking criterion (accel as a fraction of g) does not change with the scale.
+    const float wt = w * u_timeSeconds * u_oceanParams10.y;
     const vec2 ep = vec2(cos(wt), sin(wt));
     const vec2 termP = cmul(h0p, ep);                              // h0(k) e^{+iwt}
     const vec2 termM = cmul(vec2(h0m.x, -h0m.y), vec2(ep.x, -ep.y)); // h0*(-k) e^{-iwt}

@@ -38,7 +38,7 @@ export namespace Procedural
 		// same climate, just smaller and quicker to fly across. Lowering it is quadratically more expensive
 		// (the same view distance then spans more model pixels, so more tiles must be generated).
 		// heightScale is then a pure vertical exaggeration ON TOP: 1 = the model's real proportions.
-		float metersPerPixel = 3.0f;
+		float metersPerPixel = 0.3f;
 		float heightScale = 1.0f;
 
 		// --- Sub-pixel detail. The diffusion field is smooth below 30 m, so without this a close-up

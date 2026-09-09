@@ -958,9 +958,10 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     m_dragDeltaX = 0.0f;
     m_wheelAccum = 0.0f;
     // SCENE FOCUS = the player: sun cascades are nested spheres around it, picked by distance to it,
-    // and the RTAO fade measures from it — not from the follow camera hanging in empty sky. The
-    // detached fly camera has geometry anywhere, so it takes the classic camera-based falloffs.
-    if (detached)
+    // the RTAO fade measures from it and the GI clipmap centres on it — not on the follow camera hanging
+    // in empty sky. With the camera detached the focus STAYS on the player (inspect its lighting from
+    // anywhere) unless "Detach focus point" is on too, which hands it to the fly camera.
+    if (detached && m_player.focusDetached())
         Globals::rendererVK.clearSceneFocus();
     else
     {

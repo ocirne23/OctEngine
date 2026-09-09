@@ -154,7 +154,8 @@ just smaller and quicker to fly across.
 | Value | Meaning |
 |---|---|
 | **30** | The model's true training scale; continents are continent-sized and peaks ~10 km. A tile is then 7.68 km. |
-| **3 (the default)** | A 10× compressed world; a tile is 768 m. |
+| 3 | A 10× compressed world; a tile is 768 m. |
+| **0.3 (the default)** | A 100× compressed world; a tile is 76.8 m. |
 
 **Lowering it is quadratically more expensive** — the same view distance spans more model pixels, so
 more tiles must be generated. `heightScale` is a pure vertical exaggeration ON TOP (1 = real
@@ -282,6 +283,29 @@ directions: otherwise the wave travel direction would turn where one map hands o
 # `OceanGenerator`
 
 "Ocean*" tweaks. The CPU side of the FFT/Tessendorf water.
+
+## World scale
+
+**"Ocean/World scale" is the ocean's `metersPerPixel`**: every metre-valued ocean tweak is a MODEL
+metre, and the sea is drawn at model × scale (1 = the model sea; **0.1 is the default**, a 10× sea against
+the default terrain's 100× compression, tuned by eye rather than tied to the terrain's factor). Applied in ONE place, `pushOceanParams`, which fills the scaled `m_params` the renderer gets —
+**and the CPU buoyancy mirror reads `m_params`, never the tweak members**, so the two cannot disagree
+about the scale.
+
+| Quantity | Scaling | Why |
+|---|---|---|
+| fetch, depth, cascade patch sizes | × s | Froude similarity: with gravity untouched this is the ONE scaling of the JONSWAP/TMA inputs under which wavelengths AND heights both come out × s — the scaled sea is a shrunk copy, not the full-size spectrum aliased into small patches. |
+| wind speed | × √s | The velocity half of the same similarity (`U²/(F g)` and the wave-age ratio stay invariant). |
+| every other metre (shore depths, swash drawdown, margins, cull slack, RT ranges, horizon offset, steer range, **ring cell**) | × s | Same world, fewer metres. The ring cell shrinking keeps the clipmap's detail per wavelength and its reach per model kilometre. |
+| absorption, SSS strength (per metre) | ÷ s | The same water column in fewer metres, so deep water stays deep-coloured. |
+| dimensionless ratios (amplitude, choppiness, shoal fraction, height limit, swash amplitude, foam thresholds) | — | The break acceleration is a fraction of g, invariant under Froude scaling. |
+| sea level | — | The world datum, owned by the terrain. |
+
+**The periods stay the model sea's.** Froude scaling alone shortens them by √s, and a miniature sea at
+real-sea speed reads as racing. So `OceanParams::timeScale` = √s slows the spectrum's clock
+(`ocean_spectrum.cs.glsl`, the `e^{iωt}` evolution only) back to the model periods: the sea is the model
+sea in slow motion, shrunk. The breaking-crest acceleration stays in spectrum time on purpose, so the
+foam criterion (a fraction of g) keeps the model look at every scale.
 
 ## The geometry clipmap
 
