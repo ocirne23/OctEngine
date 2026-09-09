@@ -621,6 +621,9 @@ export namespace RendererVKLayout
                                      // look is half in, y = half-width of that ramp, z = waviness (0 = the
                                      // ground's normal, 1 = the live FFT wave normal), w = virtual water
                                      // depth (m) the ground is tinted through (Beer-Lambert + in-scatter)
+        glm::vec4 terrainWetParams7; // x = linear dry this frame (dry rate x dt: the constant part of the
+                                     // drain, next to the proportional exp(-dt / dry time) — together
+                                     // rain settles at dryTime x (rain - dryRate)), yzw unused
         glm::vec4 terrainSplatClimate[MAX_TERRAIN_SPLAT_MATERIALS]; // ground/rock CLIMATE BOX in the
                                      // (t01, h01) space: xy = temperature range, zw = humidity range.
                                      // Weight is 1 inside the box and Gaussian-decays outside it, so a

@@ -367,7 +367,10 @@ public:
         bool enabled = false;
         float texelSize = 0.5f;      // m; 1024 texels = 512 m of coverage
         float dryTime = 90.0f;       // s for wetness to decay to 1/e on cool ground
-        float dryTempSens = 0.04f;   // extra decay rate per C above 15 C (warm sand dries faster); 0 = uniform
+        float dryTempSens = 0.00f;   // extra decay rate per C above 15 C (warm sand dries faster); 0 = uniform
+        float dryRate = 0.005f;      // 1/s: the CONSTANT part of the drain, next to the proportional dry time —
+                                     // d(wet)/dt = rain - dryRate - wet / dryTime, so rain below the rate never
+                                     // keeps ground wet and above it settles at dryTime x (rain - dryRate)
         float rain = 0.0f;           // wetness added per second everywhere (0 = no rain)
         float wetInTime = 0.4f;      // s for ground under water to reach full wetness (0 = instant)
         float filmDepth = 0.03f;     // m of water over which the wetting target ramps 0 -> 1 (softens the tongue edge)

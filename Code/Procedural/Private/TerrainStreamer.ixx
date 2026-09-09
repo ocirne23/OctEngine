@@ -234,8 +234,9 @@ export namespace Procedural
 		// darkens and glosses wet ground.
 		bool  m_wetEnabled = true;
 		float m_wetTexelSize = 0.5f;   // m per texel (1024 texels = 512 m around the scene focus)
-		float m_wetDryTime = 10.0f;    // s to decay to 1/e on cool ground
+		float m_wetDryTime = 9.0f;    // s to decay to 1/e on cool ground
 		float m_wetDryTempSens = 0.04f;// extra decay rate per C above 15 C
+		float m_wetDryRate = 0.005f;   // 1/s constant drain next to the proportional dry time (rain equilibrium = dryTime x (rain - rate))
 		float m_wetRain = 0.0f;        // wetness per second added everywhere (a weather driver later)
 		float m_wetInTime = 5.0f;      // s for ground under water to reach full wetness (no per-texel popping)
 		float m_wetFilmDepth = 0.00f;  // m of water over which the wetting target ramps 0 -> 1

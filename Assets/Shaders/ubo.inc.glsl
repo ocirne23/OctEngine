@@ -218,6 +218,9 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                               // y = half-width of that ramp, z = waviness (0 = ground normal, 1 = live
                               // FFT wave normal), w = virtual water depth (m) the ground is tinted
                               // through (Beer-Lambert + in-scatter)
+    vec4 u_terrainWetParams7; // x = linear dry this frame (dry rate x dt: the constant part of the drain,
+                              // next to the proportional exp(-dt / dry time) — together rain settles at
+                              // dryTime x (rain - dryRate)), yzw unused
     vec4 u_terrainSplatClimate[MAX_TERRAIN_SPLAT_MATERIALS]; // ground/rock CLIMATE BOX: xy = t01 range,
                               // zw = h01 range. Weight is 1 inside and Gaussian-decays outside, so a full
                               // 0..1 range on an axis means "this axis does not matter for this entry".

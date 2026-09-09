@@ -86,6 +86,7 @@ void main()
 
     const vec2 worldXZ = (vec2(lc) + 0.5) * u_terrainWetParams1.x;
     float decay = u_terrainWetParams1.z;
+    float dryMul = 1.0; // warm-ground multiplier on BOTH drain terms (see below)
     float target = 0.0;   // wetting target under water this frame
     float soak = 1.0;     // accumulation rate scale (slope drain: water runs off a face before it soaks in)
     if (terrainHeightMapPresent())
@@ -104,7 +105,8 @@ void main()
             // Warm ground dries faster: the decay exponent scales with the temperature above 15 C
             // (colder than that = the base dry time). Evaluated at the map's own height.
             const float tempC = terrainTemperatureAt(terrainClimateAt(worldXZ), d.x);
-            decay = pow(decay, 1.0 + max(tempC - 15.0, 0.0) * u_terrainWetParams2.w);
+            dryMul = 1.0 + max(tempC - 15.0, 0.0) * u_terrainWetParams2.w;
+            decay = pow(decay, dryMul);
         }
         // Slope drain on the ACCUMULATION side: the same drain factor the terrain shader applies to the
         // decay (wetness^(1 + slope * drain)) divides the wet-in and rain rates here, so a cliff face
@@ -121,7 +123,12 @@ void main()
         }
     }
     // Rise toward the target at the wet-in rate, never fall below the decayed carry.
-    wet = max(wet * decay, min(wet + u_terrainWetParams3.y * soak, target));
+    // Drain = the proportional decay (exp(-dt / dry time)) PLUS a constant per-second rate: purely
+    // exponential drying settles against rain at a level that is hard to reason about, purely linear
+    // never settles at all. With both, d(wet)/dt = rain - rate - wet / dryTime: rain below the rate
+    // never keeps ground wet, above it the ground settles at dryTime x (rain - rate).
+    const float drained = max(wet * decay - u_terrainWetParams7.x * dryMul, 0.0);
+    wet = max(drained, min(wet + u_terrainWetParams3.y * soak, target));
     wet += u_terrainWetParams1.w * soak; // rain
     imageStore(u_wet, ivec3(slot, writeLayer), vec4(clamp(wet, 0.0, 1.0)));
 }

@@ -1259,6 +1259,7 @@ void Renderer::buildUboTerrain()
             glm::clamp(wet.dampKnee, 0.0f, 1.0f), glm::clamp(wet.spikeStart, 0.0f, 0.99f));
         ubo.terrainWetParams6 = glm::vec4(glm::clamp(wet.surfaceThreshold, 0.0f, 1.0f), glm::clamp(wet.surfaceSoftness, 0.0f, 1.0f),
             glm::clamp(wet.surfaceWaviness, 0.0f, 1.0f), glm::max(wet.surfaceDepth, 0.0f));
+        ubo.terrainWetParams7 = glm::vec4(glm::max(wet.dryRate, 0.0f) * dt, 0.0f, 0.0f, 0.0f);
     }
     static_assert(sizeof(ubo.terrainSplatClimate) == sizeof(m_terrainSplatClimate));
     memcpy(ubo.terrainSplatClimate, m_terrainSplatClimate, sizeof(m_terrainSplatClimate));

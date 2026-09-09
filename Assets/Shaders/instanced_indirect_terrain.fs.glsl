@@ -633,8 +633,13 @@ void main()
 			const float soft = max(u_terrainWetParams4.y, 1e-3);
 			// Pool hold: the crevices keep their water long after the surface between them has drained,
 			// so the pool threshold lags the wetness — wet^(1/hold): at hold 2 the pools are still half
-			// there when the wetness itself is down to a quarter.
-			const float level = pow(wet, 1.0 / max(u_terrainWetParams4.w, 1.0));
+			// there when the wetness itself is down to a quarter. The threshold is scaled so that AT the
+			// surface water threshold (where the ground is drawn as water) it already clears the noise's
+			// whole range plus the soft edge: every pixel is pooled, one uniform film. The noise only
+			// starts to break through below that wetness, and the two looks hand over without a seam.
+			const float hold = max(u_terrainWetParams4.w, 1.0);
+			const float full = pow(max(u_terrainWetParams6.x, 1e-3), 1.0 / hold); // held wetness at the surface water threshold
+			const float level = pow(wet, 1.0 / hold) * ((1.0 + soft) / full);
 			pool = 1.0 - smoothstep(level - soft, level + soft, n);
 		}
 		// Two darkening layers. DAMP is the soaked ground everywhere, pools and the spaces between them

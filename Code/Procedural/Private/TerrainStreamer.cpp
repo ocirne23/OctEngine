@@ -302,6 +302,10 @@ namespace Procedural
 		Tweak::floatVar("Terrain/Wetness", "Texel size (m)", &m_wetTexelSize, 0.1f, 4.0f, 0.1f);
 		Tweak::floatVar("Terrain/Wetness", "Dry time (s)", &m_wetDryTime, 1.0f, 600.0f, 1.0f);
 		Tweak::floatVar("Terrain/Wetness", "Dry temp sensitivity", &m_wetDryTempSens, 0.0f, 0.2f, 0.005f);
+		// The constant part of the drain, next to the proportional "Dry time": d(wet)/dt = rain - rate -
+		// wet / dryTime. Rain below the rate never keeps ground wet; above it the ground settles at
+		// dryTime x (rain - rate) — an equilibrium you can dial with "Rain".
+		Tweak::floatVar("Terrain/Wetness", "Dry rate (1/s)", &m_wetDryRate, 0.0f, 0.2f, 0.001f);
 		Tweak::floatVar("Terrain/Wetness", "Rain (1/s)", &m_wetRain, 0.0f, 2.0f, 0.01f);
 		Tweak::floatVar("Terrain/Wetness", "Wet-in time (s)", &m_wetInTime, 0.0f, 5.0f, 0.05f);
 		Tweak::floatVar("Terrain/Wetness", "Film depth (m)", &m_wetFilmDepth, 0.0f, 0.5f, 0.005f);
@@ -492,6 +496,7 @@ namespace Procedural
 			.texelSize = m_wetTexelSize,
 			.dryTime = m_wetDryTime,
 			.dryTempSens = m_wetDryTempSens,
+			.dryRate = m_wetDryRate,
 			.rain = m_wetRain,
 			.wetInTime = m_wetInTime,
 			.filmDepth = m_wetFilmDepth,
