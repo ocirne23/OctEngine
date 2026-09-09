@@ -53,6 +53,7 @@ bool World::initialize()
         Tweak::floatVar("Game/Sim LOD", "Selection interval (s)", &c.selectionIntervalSec, 0.0f, 1.0f, 0.01f);
         Globals::spatialIndex.setVisibleCollect(SpatialLayer_Entity); // the cull job hands over the visible entities (see update)
         Tweak::intVar("Game/Sim LOD", "Force bubbles max tier (3 = always)", &c.forceMaxTier, 0, 3, 1.0f);
+        Tweak::intVar("Game/Sim LOD", "Buoyancy max tier (3 = always)", &c.buoyancyMaxTier, 0, 3, 1.0f);
         Tweak::boolean("Game/Sim LOD", "Dormant disables physics body", &c.dormantDisableBody);
         Tweak::boolean("Game/Sim LOD/Follows", "Units", &c.units);
         Tweak::boolean("Game/Sim LOD/Follows", "Structures", &c.structures);
@@ -306,29 +307,37 @@ int World::simLodDistanceTier(const glm::vec3& pos) const
     return tier;
 }
 
-// The delta for this visit AND the bubble gate: a bubble spawns DARK, and this is the one place
-// that switches it — on for an entity the LOD does not apply to, by distance tier otherwise —
-// so it never holds a GPU slot before its entity has a tier.
+// The delta for this visit AND the two distance gates: a bubble spawns DARK and a body spawns
+// with its buoyancy off, and this is the one place that switches either — on for an entity the
+// LOD does not apply to, by distance tier otherwise — so a bubble never holds a GPU slot and a
+// body never runs its probe math before its entity has a tier.
 float World::simLodDelta(Entity& entity)
 {
     ForceComponent* force = getComponent<ForceComponent>(&entity);
+    PhysicsComponent* physics = getComponent<PhysicsComponent>(&entity);
+    if (physics && physics->bodyType != EPhysicsBodyType::Dynamic)
+        physics = nullptr; // only a dynamic body floats: a static structure must not pay the tier lookup
     if (!m_simLodActive || entity.isGlobal() || !entity.spatialEntry.isValid())
     {
         if (force)
             force->setActive(true);
+        if (physics)
+            physics->buoyant = true;
         return m_updateDelta;
     }
-    // Only entities carrying a following sim kind and no pinning one are THROTTLED; a bubble is
-    // tier-gated on every selected entity regardless.
+    // Only entities carrying a following sim kind and no pinning one are THROTTLED; a bubble and
+    // a body's buoyancy are tier-gated on every selected entity regardless.
     const bool throttled = (entity.typeBits & m_simLodFollowMask) && !(entity.typeBits & m_simLodPinMask);
-    if (!throttled && !force)
+    if (!throttled && !force && !physics)
         return m_updateDelta;
     const SimLodTiers tiers = simLodTiers(entity);
-    // The bubble gate, by DISTANCE tier, set every visit (a handle resolve + a store) so a tweak
-    // change applies without a tier change; an entity leaving the selection keeps its last
-    // state — the query-margin visit (distance tier 3) switches it off on the way out.
+    // The gates, by DISTANCE tier, set every visit (a handle resolve + a store) so a tweak change
+    // applies without a tier change; an entity leaving the selection keeps its last state — the
+    // query-margin visit (distance tier 3) switches both off on the way out.
     if (force)
         force->setActive(int(tiers.dist) <= m_simLod.forceMaxTier);
+    if (physics)
+        physics->buoyant = int(tiers.dist) <= m_simLod.buoyancyMaxTier;
     if (!throttled)
         return m_updateDelta;
     m_updateStaging.local().simLodCount[tiers.tick]++;

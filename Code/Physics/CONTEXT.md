@@ -150,8 +150,8 @@ the job system is always up — there is no inline fallback path.**
 
 ## Profile markers
 
-Always on, `EProfileCategory::Physics`. Scope tree: `"Physics"` → `"Physics step"` →
-`"Buoyancy"`, with `"Collider debug draw"` and `"Physics contacts"` as siblings.
+Always on, `EProfileCategory::Physics`. Scope tree: `"Physics"` → `"Physics step"`, with
+`"Collider debug draw"` and `"Physics contacts"` as siblings.
 
 * **Each task runs under a `ProfileScope` named by the LITERAL `"Physics Job"`**, opened by the
   JobSystem itself from the submit's `JobProfile` — the same string is the job name, so stats and
@@ -255,14 +255,20 @@ In a `.pre`: `Layer Debris` + `CollidesWith Default, Player` (or `All` / `None`)
 `setWaterSurface(fn, activeFn)`. `fn(x, z)` returns the water surface world Y at that column, or
 `-FLT_MAX` where there is no water; the App wires in the ocean's `sampleWaterHeight`.
 
-Every dynamic body gets probe-based buoyancy and drag **before each fixed step** (box3d clears
-applied forces every step). Bodies denser than water sink, lighter ones float and bob in the swell,
-and tilted floaters right themselves — per-probe forces torque the body for free.
+**The PhysicsWorld applies NO buoyancy itself.** It only holds the sampler plus the
+`Physics/Buoyancy` tweaks and exposes them as thread-safe reads: `isWaterActive()`,
+`sampleWaterHeight(x, z)`, `getWaterDensity()`, `getWaterLinearDrag()`, `getGravity()`. The
+probe math runs PER COMPONENT on the entity pass (workers) — `PhysicsComponent::applyBuoyancy` in
+Entity, gated by SIM LOD tier — and the result is queued as one `ApplyForce` plus one `ApplyTorque`
+through the body-command queue. It used to be a main-thread pass over a whole-world broadphase
+overlap per step (box3d has no body-list API), which scaled with every enabled body on the map.
 
-**`activeFn` is the cheap global gate.** The pass iterates bodies through a WHOLE-WORLD broadphase
-overlap every step, because box3d has no body-list API, which is pure waste while no water exists
-anywhere. `OceanGenerator::hasWater()` false — disabled, or the readback unprimed — skips the pass
-outright. An empty `activeFn` means always active; an empty `fn` disables the pass entirely.
+`activeFn` is the cheap global gate: `OceanGenerator::hasWater()` false — disabled, or the readback
+unprimed — and every component skips. An empty `activeFn` means always active; an empty `fn`
+disables buoyancy entirely.
+
+The sampler is read from workers, so it must be a const read: the ocean's CPU tile is refreshed on
+main in `ocean.update`, after the entity pass has joined.
 
 ## Debug draw
 
@@ -312,6 +318,25 @@ and are never rendered.
 
 Both park calls ride the body-command queue, so **the entity pass never writes box3d.** See the SIM
 LOD section in [`Code/Entity/CONTEXT.md`](../Entity/CONTEXT.md).
+
+### Buoyancy per component
+
+`applyBuoyancy()`, called from `update` ONCE PER STEP INTERVAL and OFF THE STEP FRAME: box3d clears
+forces every step and sums whatever lands before it, so the application goes on the first frame
+after a step that does not step itself (`buoyancyStep` remembers the step it was read after;
+`JobSystem::frameHasPhysicsStep` / `prevFrameHadPhysicsStep` pick the frame) — the step frame is
+already the expensive one. Below the step rate every frame steps and the step frame is the only
+choice. It runs while `buoyant` is set (the SIM LOD gate, `buoyancyMaxTier`) and `buoyancyVolume > 0`
+(dynamic, non-sensor, density > 0; the exact volume from box3d's mass at spawn).
+
+* **`lockRotation` body** (units, the player): ONE probe at the AABB centre carrying the whole
+  volume — a torque could not act, so the grid buys nothing — queued as one `ApplyForce`.
+* **Free body**: the world AABB splits into 2×2×2 probes; each carries its share of the volume
+  scaled by depth as an Archimedes force plus a drag against its point velocity; the sum is queued
+  as ONE `ApplyForce` + ONE `ApplyTorque` about the centre of mass, so the off-centre probes still
+  give righting torque and tumbling damping.
+
+A whole body above the local surface (1 m margin) costs one sampler call either way.
 
 ## Contact and sensor events
 

@@ -79,6 +79,7 @@ public:
     // waiting gains nothing, so it reads false and the work runs as scheduled.
     void setFrameHasPhysicsStep(bool step) { m_prevFramePhysicsStep = m_framePhysicsStep; m_framePhysicsStep = step; }
     bool frameHasPhysicsStep() const { return m_framePhysicsStep; }
+    bool prevFrameHadPhysicsStep() const { return m_prevFramePhysicsStep; } // true on every frame below the step rate
     bool deferFromPhysicsFrame() const { return m_framePhysicsStep && !m_prevFramePhysicsStep; }
     JobSystemStats getStats() const;
 

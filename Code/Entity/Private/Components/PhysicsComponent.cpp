@@ -6,6 +6,7 @@ import Core.Transform;
 import :Entity;
 import Physics;
 import Spatial;
+import Threading;
 
 void PhysicsComponent::spawn(Entity& entity, const SpawnInfo& info, const Transform& base)
 {
@@ -29,6 +30,9 @@ void PhysicsComponent::spawn(Entity& entity, const SpawnInfo& info, const Transf
     desc.userData = &entity;
     desc.lockRotation = info.lockRotation;
     body = Globals::physics.createBody(desc, oc::span(&info.shape, 1));
+    // The exact displaced volume from box3d's mass (the world scale is baked into the shape).
+    if (info.bodyType == EPhysicsBodyType::Dynamic && !info.shape.isSensor && info.shape.density > 0.0f && body.isValid())
+        buoyancyVolume = body.getMass() / info.shape.density;
 
     if (info.bodyType == EPhysicsBodyType::Static)
     {
@@ -97,6 +101,61 @@ void PhysicsComponent::unpark(Entity& entity, const glm::vec3& velocity)
     Globals::physics.queueBodyCommand(body, PhysicsWorld::EBodyCommand::SetEnabled, glm::vec3(1.0f));
 }
 
+void PhysicsComponent::applyBuoyancy()
+{
+    const PhysicsWorld& physics = Globals::physics;
+    glm::vec3 lo, hi;
+    body.getAABB(lo, hi);
+    // Early out: whole body above the local surface (1m margin covers the wave slope across the AABB).
+    const float waterAtCenter = physics.sampleWaterHeight((lo.x + hi.x) * 0.5f, (lo.z + hi.z) * 0.5f);
+    if (lo.y > waterAtCenter + 1.0f)
+        return;
+
+    const float waterDensity = physics.getWaterDensity();
+    const float drag = physics.getWaterLinearDrag();
+    const glm::vec3 gravity = physics.getGravity();
+
+    if (lockRotation)
+    {
+        // A locked body cannot use a torque, so ONE probe at the centre carrying the whole volume
+        // gives the same net lift and drag as the grid for a fraction of the sampling and queuing.
+        const glm::vec3 probe = (lo + hi) * 0.5f;
+        const float submerged = glm::clamp((waterAtCenter - probe.y) / glm::max(hi.y - lo.y, 0.01f) + 0.5f, 0.0f, 1.0f);
+        if (submerged <= 0.0f)
+            return;
+        const float displacedMass = waterDensity * buoyancyVolume * submerged;
+        glm::vec3 force = -gravity * displacedMass; // Archimedes: weight of the displaced water, upward
+        force -= body.getLinearVelocity() * (displacedMass * drag);
+        Globals::physics.queueBodyCommand(body, PhysicsWorld::EBodyCommand::ApplyForce, force);
+        return;
+    }
+
+    // Free rotation: a 2x2x2 probe grid, each cell its share of the volume, so the off-centre
+    // forces give righting torque and tumbling damping.
+    const float cellVolume = buoyancyVolume * (1.0f / 8.0f);
+    const float cellHeight = glm::max((hi.y - lo.y) * 0.5f, 0.01f);
+    const glm::vec3 centerOfMass = body.getCenterOfMass();
+    glm::vec3 force(0.0f), torque(0.0f);
+    for (uint32 i = 0; i < 8; ++i)
+    {
+        const glm::vec3 probe = glm::mix(lo, hi,
+            glm::vec3(0.25f) + 0.5f * glm::vec3(float(i & 1u), float((i >> 1) & 1u), float((i >> 2) & 1u)));
+        const float waterY = physics.sampleWaterHeight(probe.x, probe.z);
+        const float submerged = glm::clamp((waterY - probe.y) / cellHeight + 0.5f, 0.0f, 1.0f);
+        if (submerged <= 0.0f)
+            continue;
+        const float displacedMass = waterDensity * cellVolume * submerged;
+        glm::vec3 probeForce = -gravity * displacedMass; // Archimedes: weight of the displaced water, upward
+        probeForce -= body.getPointVelocity(probe) * (displacedMass * drag);
+        force += probeForce;
+        torque += glm::cross(probe - centerOfMass, probeForce);
+    }
+    if (force == glm::vec3(0.0f))
+        return;
+    Globals::physics.queueBodyCommand(body, PhysicsWorld::EBodyCommand::ApplyForce, force);
+    Globals::physics.queueBodyCommand(body, PhysicsWorld::EBodyCommand::ApplyTorque, torque);
+}
+
 void PhysicsComponent::update(Entity& entity, const Transform& parentWorld)
 {
     if (!body.isValid())
@@ -134,6 +193,18 @@ void PhysicsComponent::update(Entity& entity, const Transform& parentWorld)
         if (!lockRotation)
             entity.rot = local.quat; // a locked body's rot is frozen at spawn — writing it back
                                      // would stomp script-driven facing (see the player capsule)
+
+        // Once per step interval, on a frame that did not step (the step frame is the busy one)
+        // unless every frame steps: the queued force lands at the next drain and box3d holds it
+        // until the step. The pass runs after this frame's physics.update, so `stepCount` is the
+        // step the read follows.
+        if (buoyant && buoyancyVolume > 0.0f && buoyancyStep != stepCount
+            && (!Globals::jobSystem.frameHasPhysicsStep() || Globals::jobSystem.prevFrameHadPhysicsStep())
+            && Globals::physics.isWaterActive())
+        {
+            buoyancyStep = stepCount;
+            applyBuoyancy();
+        }
     }
 }
 

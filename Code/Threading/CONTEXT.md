@@ -264,7 +264,8 @@ PREDECESSOR did not step, i.e. a step-free frame follows, so work that can wait 
 periodic SIM LOD selection) moves there and the workers never carry the solver and that job in one
 frame. **Below the step rate physics steps every frame**: the previous frame stepped too, waiting
 gains nothing, so it reads false and the work runs as scheduled. `frameHasPhysicsStep()` is the raw
-flag.
+flag, `prevFrameHadPhysicsStep()` the previous frame's — `PhysicsComponent`'s buoyancy uses both
+to land on the first step-free frame after a step (or every frame below the step rate).
 
 ## Scheduling
 

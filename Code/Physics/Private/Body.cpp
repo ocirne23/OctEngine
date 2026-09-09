@@ -106,6 +106,13 @@ glm::vec3 PhysicsBody::getCenterOfMass() const
     return toGlm(b3Body_GetWorldCenterOfMass(toBodyId(m_handle)));
 }
 
+void PhysicsBody::getAABB(glm::vec3& outLower, glm::vec3& outUpper) const
+{
+    const b3AABB aabb = b3Body_ComputeAABB(toBodyId(m_handle));
+    outLower = toGlm(aabb.lowerBound);
+    outUpper = toGlm(aabb.upperBound);
+}
+
 glm::vec3 PhysicsBody::getPointVelocity(const glm::vec3& worldPoint) const
 {
     return toGlm(b3Body_GetWorldPointVelocity(toBodyId(m_handle), toB3(worldPoint)));

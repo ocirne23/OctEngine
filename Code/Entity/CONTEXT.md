@@ -231,6 +231,7 @@ code defaults rule every run and a stale tweaks.cfg never overrides a tuning cha
 | `intervalJitter` | 0.25 |
 | `dormantDisableBody` | true |
 | `forceMaxTier` | 1 |
+| `buoyancyMaxTier` | 1 (see Buoyancy gate) |
 | `visibleMaxTier` | 2 (= distance rules everything) |
 | `queryMargin` | 10 m |
 | `zoneMargin` / `zoneTier2Band` | 5 m / 25 m (zones, see Focus) |
@@ -375,6 +376,15 @@ tier, and a far spawn stays dark for as long as it stays far (it is never visite
 RENDERER SLOT BACK (`MAX_FORCE_EMITTERS` 8192, versus `MAX_FORCE_INSTANCES` 32768 CPU instances), so
 a 25k-unit map only pays GPU slots for the bubbles near a player. See
 [`Code/Force/CONTEXT.md`](../Force/CONTEXT.md).
+
+## Buoyancy gate
+
+The same shape as the bubble gate, for a DYNAMIC `PhysicsComponent` body: `simLodDelta` writes
+`PhysicsComponent::buoyant = dist <= buoyancyMaxTier` on every visited entity with one (always
+`true` outside the LOD). The component runs its own probe math on the pass while the flag is set
+(see Buoyancy per component in [`Code/Physics/CONTEXT.md`](../Physics/CONTEXT.md)), so the cost
+follows the near tiers: a body spawns with the flag off, a never-visited far spawn stays off, and
+the query-margin visit clears it on the way out. A static body never pays the tier lookup.
 
 ## The delta
 

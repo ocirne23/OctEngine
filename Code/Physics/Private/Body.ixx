@@ -62,6 +62,7 @@ public:
 
     float getMass() const;                  // 0 for a static/kinematic body
     glm::vec3 getCenterOfMass() const;      // world space
+    void getAABB(glm::vec3& outLower, glm::vec3& outUpper) const; // world AABB over every shape (the body origin if none)
     glm::vec3 getPointVelocity(const glm::vec3& worldPoint) const; // includes the spin contribution
 
     // Per-body multiplier on world gravity (0 = floats, 1 = normal, negative = falls upward).

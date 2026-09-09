@@ -60,6 +60,8 @@ export struct SimLodConfig
     int forceMaxTier = 1;          // a ForceComponent's bubble is ACTIVE only while its entity's tier
                                    // is <= this (3 = always); applies to every selected entity with a
                                    // bubble, throttled or not (structures included)
+    int buoyancyMaxTier = 1;       // a dynamic PhysicsComponent body runs its buoyancy probes only
+                                   // while its entity's tier is <= this (3 = always)
     int visibleMaxTier = 2;      // TICK-RATE floor for an in-view entity inside the outer radius (0 = full
                                  // rate on screen); never affects the bubble gate or dormancy, which go
                                  // by distance alone. 2 = distance rules everything (default)

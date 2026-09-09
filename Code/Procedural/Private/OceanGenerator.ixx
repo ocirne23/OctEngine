@@ -66,8 +66,8 @@ export namespace Procedural
 		float sampleWaterHeight(float x, float z) const;
 
 		// True when sampleWaterHeight can return water AT ALL (enabled + displacement readback
-		// primed) - the App wires this as the buoyancy pass's global gate, so a disabled ocean
-		// costs physics nothing (the pass otherwise sweeps the whole broadphase every step).
+		// primed) - the App wires this as buoyancy's global gate, so a disabled ocean costs the
+		// PhysicsComponents nothing.
 		bool hasWater() const { return m_enabled && !m_dispTile.empty() && m_dispTileRes != 0; }
 
 		// The heading the swell actually TRAVELS in open water (radians, XZ) — the terrain streamer's baked

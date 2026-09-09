@@ -111,16 +111,12 @@ public:
     RayHit castRayClosest(const glm::vec3& origin, const glm::vec3& translation, uint64 maskBits = PhysicsLayers::All,
         const PhysicsBody* ignoreBody = nullptr, bool staticOnly = false) const;
 
-    // Buoyancy: with a water surface set (the App wires the ocean's CPU height field), every dynamic
-    // body gets probe-based buoyancy + drag before each fixed step — bodies denser than water sink,
-    // lighter ones float and bob in the swell, tilted floaters right themselves (per-probe forces
-    // torque the body for free). fn(x, z) returns the water surface world Y at that column, or
-    // -FLT_MAX where there is no water. Density/drag are Tweaks under Physics/Buoyancy. An empty
-    // function disables the pass entirely.
-    // `active` is the cheap global gate: the buoyancy pass iterates bodies via a WHOLE-WORLD
-    // broadphase overlap every step (box3d has no body-list API), which is pure waste while no
-    // water exists anywhere - when `active` returns false the pass is skipped outright. Empty =
-    // always active (a supplied fn is assumed to have water somewhere).
+    // Water surface for buoyancy (the App wires the ocean's CPU height field). fn(x, z) returns
+    // the water surface world Y at that column, or -FLT_MAX where there is no water. `active` is
+    // the cheap global gate (no water anywhere yet); empty = always active. THE PHYSICS WORLD
+    // APPLIES NO BUOYANCY ITSELF: Entity's PhysicsComponent computes the probe forces for its own
+    // body on the entity pass (workers) through the read-only queries below, and queues them.
+    // Density/drag are Tweaks under Physics/Buoyancy.
     using WaterSurfaceFn = oc::function<float(float x, float z)>;
     using WaterActiveFn = oc::function<bool()>;
     void setWaterSurface(WaterSurfaceFn fn, WaterActiveFn active = {})
@@ -128,6 +124,13 @@ public:
         m_waterSurface = oc::move(fn);
         m_waterActive = oc::move(active);
     }
+    // Thread-safe reads for the component's buoyancy (the sampler is a const read of a CPU tile
+    // that only main refreshes, outside the entity pass).
+    bool isWaterActive() const { return m_waterSurface && (!m_waterActive || m_waterActive()); }
+    float sampleWaterHeight(float x, float z) const { return m_waterSurface(x, z); } // isWaterActive first
+    float getWaterDensity() const { return m_waterDensity; }
+    float getWaterLinearDrag() const { return m_waterLinearDrag; }
+    const glm::vec3& getGravity() const { return m_gravity; }
 
     // Resolves a ContactEvent::contactId (from THIS frame, before the next update()) to its first manifold
     // point in world space. Returns false (leaving the outputs untouched) if the contact is stale/gone or
@@ -170,7 +173,6 @@ public:
 
 private:
 
-    void applyBuoyancy(); // per fixed step, before b3World_Step (box3d clears forces every step)
     void applyQueuedCommands(); // main thread, start of update
     void stepSimulation(double deltaSec);
     void debugDraw(const glm::vec3& viewPos, const DebugLineFn& line); // driven by update(), see setDebugDrawCallback
@@ -216,8 +218,7 @@ private:
     WaterSurfaceFn m_waterSurface;
     WaterActiveFn m_waterActive; // global gate; empty = always on
     float m_waterDensity = 1000.0f;  // kg/m^3: fresh water; shapes denser than this sink
-    float m_waterLinearDrag = 3.0f;  // 1/s: drag on each submerged probe's point velocity
-    oc::vector<uint64> m_buoyancyShapes; // per-step overlap scratch (b3StoreShapeId bits)
+    float m_waterLinearDrag = 0.0f;//3.0f;  // 1/s: drag on each submerged probe's point velocity
 
     // Debug draw tweaks (Physics/Debug)
     DebugLineFn m_debugLine;       // registered by the App, see setDebugDrawCallback
