@@ -110,11 +110,6 @@ vec3 terrainWaterFilm(vec3 body, vec3 worldPos, vec3 V, vec3 geoN, float footpri
 	const vec3 sunTint = u_sunTransmittance * u_sunColor.rgb * u_eclipseParams.x; // = the ocean's sunTint
 	const vec3 ambientSky = skyRadiance(up);
 
-	// Whitewater: lambertian foam under the sun (shadowed through the lit core) plus sky and ambient —
-	// the ocean's whitewater, used by the turbidity milkiness and the shoreline lace below.
-	const vec3 whitewater = doSunLight(worldPos, V, N, vec3(0.0), u_oceanFoam.rgb * INV_PI, 0.0, 0.85, 0.7225)
-		+ u_oceanFoam.rgb * (ambientSky + u_ambientColor);
-
 	// Body: the ground seen through the film — Beer-Lambert absorbed along the refracted path through a
 	// virtual "Surface water depth" of water (a real film is too thin to tint; the ocean beside it has a
 	// shallow column, and this is what keeps the two the same colour at the waterline), with the
@@ -128,10 +123,33 @@ vec3 terrainWaterFilm(vec3 body, vec3 worldPos, vec3 V, vec3 geoN, float footpri
 		const vec3 inscatter = u_oceanScatter.rgb * u_oceanScatter.w * (ambientSky + sunTint * max(L.y, 0.0) / PI);
 		tinted = body * T + inscatter * (1.0 - T);
 	}
+
+	// Shoreline lace coverage, up front (it is cheap) so the whitewater below is lit only where the milk
+	// or the lace will show it: the ocean's surf-band foam at its waterline target (column ~ 0 -> target
+	// 1), realized through the raw fold Jacobian with the same bias/threshold, eased toward "Shore foam
+	// max" — so the lace the water carries onto the sand is the same lace it wears at the edge. Only at
+	// and below the calm water level (eased out over half a swash reach above it): lace is what the surf
+	// leaves at the waterline, not something the wet sand above it keeps.
+	float foam = 0.0;
+	if (u_oceanParams5.z > 0.0)
+	{
+		const float Jraw = (1.0 + chop * rxx) * (1.0 + chop * rzz) - chop * rxz * chop * rxz;
+		const float target = mask * (1.0 - smoothstep(0.0, 0.5 * reach, -depth));
+		const float b = mix(0.75, 1.45, target) + u_oceanParams8.y;
+		const float foamMax = max(u_oceanParams7.y, 1e-3);
+		foam = foamMax * (1.0 - exp(-target * (1.0 - smoothstep(b - 0.4, b + 0.4, Jraw)) / foamMax));
+	}
 	// Entrained bubbles: the ocean's accumulated turbulence (the decaying memory of breaking, strongest
 	// exactly at the shore) turns the water milky ("Turbidity") and rougher. The surf beside the film
 	// carries it, so the film carries it too.
 	const float milk = clamp(turbulence * u_oceanParams5.y, 0.0, 1.0);
+	// Whitewater: lambertian foam lit by the pixel's ALREADY-RESOLVED sun radiance (g_sunRadiance — the
+	// lit core's shadow visibility and underwater transmittance, no second shadow evaluation) plus sky
+	// and ambient. The ocean's whitewater; skipped where neither the milk nor the lace would show it.
+	vec3 whitewater = vec3(0.0);
+	if (milk > 0.003 || foam > 0.003)
+		whitewater = doLight(g_sunRadiance, L, V, N, vec3(0.0), u_oceanFoam.rgb * INV_PI, 0.0, 0.85, 0.7225)
+			+ u_oceanFoam.rgb * (ambientSky + u_ambientColor);
 	tinted = mix(tinted, whitewater * 0.55, milk);
 
 	// The ocean's microfacet alpha: perceptual roughness^2, plus the LEAN slope variance (scaled by
@@ -154,26 +172,12 @@ vec3 terrainWaterFilm(vec3 body, vec3 worldPos, vec3 V, vec3 geoN, float footpri
 	const vec3 reflection = mix(terrainReflectedSkyRadiance(R), ambientSky, reflBlur);
 
 	vec3 color = mix(tinted, reflection, F);
-	// Sun glint: the ocean's dielectric GGX (F0 0.02, alphaF) through the lit core, so it is shadow-gated
-	// and underwater-gated like every other surface; specular only (no diffuse term: the body already
-	// carries the ground's diffuse light).
-	color += doSunLight(worldPos, V, N, vec3(0.02), vec3(0.0), 0.0, alphaF, alphaF * alphaF);
-
-	// Shoreline lace: the ocean's surf-band foam at its waterline target (column ~ 0 -> target 1),
-	// realized through the raw fold Jacobian with the same bias/threshold, capped by "Shore foam max"
-	// — so the lace the water carries onto the sand is the same lace it wears at the edge.
-	if (u_oceanParams5.z > 0.0)
-	{
-		const float Jraw = (1.0 + chop * rxx) * (1.0 + chop * rzz) - chop * rxz * chop * rxz;
-		// Only at and below the calm water level: lace is what the surf leaves at the waterline, not
-		// something the wet sand above it keeps. Eased out over half a swash reach above the level.
-		const float target = mask * (1.0 - smoothstep(0.0, 0.5 * reach, -depth));
-		const float b = mix(0.75, 1.45, target) + u_oceanParams8.y;
-		const float foamMax = max(u_oceanParams7.y, 1e-3); // the ocean's soft knee toward "Shore foam max"
-		const float foam = foamMax * (1.0 - exp(-target * (1.0 - smoothstep(b - 0.4, b + 0.4, Jraw)) / foamMax));
-		if (foam > 0.003)
-			color = mix(color, whitewater, foam);
-	}
+	// Sun glint: the ocean's dielectric GGX (F0 0.02, alphaF) on the pixel's resolved sun radiance —
+	// shadow-gated and underwater-gated exactly as the ground under it was, without a second shadow
+	// evaluation; specular only (no diffuse term: the body already carries the ground's diffuse light).
+	color += doLight(g_sunRadiance, L, V, N, vec3(0.02), vec3(0.0), 0.0, alphaF, alphaF * alphaF);
+	if (foam > 0.003)
+		color = mix(color, whitewater, foam);
 	return mix(body, color, mask);
 }
 
@@ -610,6 +614,7 @@ void main()
 	// water left most recently, so the water look covers the whole tongue behind a wave and fades out
 	// smoothly with it — the pools are a noise pattern, and keying on them drew random water blobs.
 	float wetSurface = 0.0;
+	float wetCamAbove = 1.0; // 0 when the camera is under the water: no gloss, no surface film seen from below
 	if (terrainWetPresent())
 	{
 		float wet = terrainWetnessAt(in_pos.xz);
@@ -653,8 +658,8 @@ void main()
 		// Seen from UNDER the water (camera below the pixel's calm level) the ground is seabed: it keeps
 		// the darkening — the ocean's traced seabed carries the same — but no gloss and no surface film
 		// (a sky reflection has no business under the surface). Eased over half a metre of camera height.
-		const float camAbove = smoothstep(-0.25, 0.25, u_viewPos.y - fields.waterLevel);
-		const float gloss = max(film, damp * u_terrainWetParams4.z) * camAbove;
+		wetCamAbove = smoothstep(-0.25, 0.25, u_viewPos.y - fields.waterLevel);
+		const float gloss = max(film, damp * u_terrainWetParams4.z) * wetCamAbove;
 		surf.albedo *= mix(1.0, u_terrainWetParams5.y, damp) * mix(1.0, u_terrainWetParams2.y, film);
 		surf.rough = mix(surf.rough, u_terrainWetParams2.z, gloss); // a water film flattens the microfacets
 	}
@@ -674,8 +679,8 @@ void main()
 	{
 		const float th = u_terrainWetParams6.x;
 		const float start = min(max(u_terrainWetParams5.w, th - u_terrainWetParams6.y), th - 1e-3);
-		// Faded out when the camera is under the water: no surface film seen from below (see camAbove).
-		const float waterMask = smoothstep(start, th, wetSurface) * smoothstep(-0.25, 0.25, u_viewPos.y - fields.waterLevel);
+		// Faded out when the camera is under the water: no surface film seen from below.
+		const float waterMask = smoothstep(start, th, wetSurface) * wetCamAbove;
 		if (waterMask > 0.0)
 			color = terrainWaterFilm(color, in_pos, V, geoN, wetFootprint, waterMask, fields.waterLevel - in_pos.y, fields.waterLevel, wetSurface);
 	}

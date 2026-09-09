@@ -544,13 +544,12 @@ export namespace RendererVKLayout
                                    // (oceanVertexCulled; 0 = off),
                                    // y = shore foam max coverage (surf band opacity cap),
                                    // z = swash amplitude (0 = off), w = swash reach (m, CPU estimate)
-        glm::vec4 oceanParams8;    // x = swash drawdown burial (m below the seabed when receding),
+        glm::vec4 oceanParams8;    // x unused (was the swash drawdown of the removed waterline floor),
                                    // y = shore foam threshold bias (negative = sparser surf),
                                    // z = swash backflow (horizontal chop scale on the tongue),
                                    // w = RT ray cutoff distance (m from the camera; beyond it the water
                                    //     shader traces no scene rays, 0 = unlimited)
-        glm::vec4 oceanParams9;    // x = trough margin (m): how far above the seabed the wave trough is
-                                   // held, tapered in with depth so the waterline itself does not lift,
+        glm::vec4 oceanParams9;    // x unused (was the trough margin of the removed waterline floor),
                                    // y = RT refraction ray range (m: underwater visibility),
                                    // z = RT reflection ray range (m),
                                    // w = RT reflection roughness cutoff (rougher = sky fallback)

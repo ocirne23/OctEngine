@@ -55,14 +55,13 @@ export namespace Procedural
 		            oc::shared_ptr<const BakedTerrainData> terrainData = nullptr, float seaLevel = 0.0f);
 
 		// Water surface world Y at (x, z), CPU-evaluated from the GPU displacement readback (a full mirror
-		// of the clipmap vertex shader: cascade sum, shoaling fade, swash run-up and the waterline
-		// floor; ~2 frames of latency — invisible for physics). Returns -FLT_MAX where there is
+		// of the clipmap vertex shader: the raw cascade sum times the shore's surface weight, plus the
+		// swash backflow; ~2 frames of latency — invisible for physics). Returns -FLT_MAX where there is
 		// no water: ocean disabled, readback not primed, or land beyond the swash run-up band per the
 		// shore bake. Inside that band it returns the live tongue surface, which SINKS BELOW the terrain
-		// as the wave recedes (the drawdown floor) — bodies beach themselves on their own that way, so
-		// callers want a plain surface-vs-point test, not a separate dry check. This is the buoyancy
-		// height field the App wires into PhysicsWorld::setWaterSurface; keys 8/9's cubes bob in the
-		// swell through it.
+		// as the wave recedes — bodies beach themselves on their own that way, so callers want a plain
+		// surface-vs-point test, not a separate dry check. This is the buoyancy height field the App
+		// wires into PhysicsWorld::setWaterSurface; keys 8/9's cubes bob in the swell through it.
 		float sampleWaterHeight(float x, float z) const;
 
 		// True when sampleWaterHeight can return water AT ALL (enabled + displacement readback
@@ -173,9 +172,9 @@ export namespace Procedural
 		float m_turbidity = 0.0f;    // entrained bubbles: milky brightening + roughness of the wake
 
 		// --- Shore interaction (driven by the streamer's baked terrain-data map) ---
-		// Waves fade below depth = scale * cascade patch size. Cut 4x alongside the 4x cascade sizes so the
-		// ABSOLUTE fade depths (and so the whole coastline look) are unchanged by that change — raise it
-		// if you want the bigger swell to start feeling the bottom further out, which is the physical truth.
+		// The shore's APPROACH BAND: open water eases to the swash amplitude over depth = scale x the mid
+		// cascade's patch size (floored at two swash reaches) — oceanSwashFadeIn. Cut 4x alongside the 4x
+		// cascade sizes so the absolute band depth (and so the coastline look) was unchanged by that change.
 		float m_shoalScale = 0.005f;
 		// Past m_horizonDepthRange the waves assume at least m_horizonDepth of water, whatever the baked
 		// map says. Distant depth errors all run SHALLOW (coarse texels average shore slopes into the
@@ -186,9 +185,7 @@ export namespace Procedural
 		float m_horizonDepthRange = 3000.0f;
 		float m_shoreFoamDepth = 8.0f;  // surf band: water-column height (m) that churns white; 0 = off
 		float m_shoreFoamMax = 0.75f;   // surf band opacity cap: keeps the refracted bottom visible through the foam
-		float m_swashAmp = 0.5f;        // swash run-up: un-shoaled wave height riding up the beach (0 = hard cutoff)
-		float m_swashDrawdown = 0.1f;   // receding burial depth (m below seabed): deeper = cleaner retreat edge
-		float m_troughMargin = 0.35f;   // m the trough is held above the seabed (covers baked-map vs mesh error)
+		float m_swashAmp = 0.5f;        // swash run-up: the fraction of the raw wave height that runs up the beach (0 = hard cutoff)
 		float m_shoreFoamBias = -0.80f;   // surf fold-threshold shift: negative = sparser/more transparent surf
 		float m_swashFlow = 0.5f;       // backflow: horizontal chop on the tongue (recede flows seaward; 0 = off)
 		float m_cullMargin = 1.0f;      // VS land cull: footprint buried deeper than this = triangle discarded (0 = off)

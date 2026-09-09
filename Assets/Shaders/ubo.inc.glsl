@@ -143,16 +143,14 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                             // z = swash amplitude (scale on the un-shoaled wave height running up the
                             // beach, 0 = off), w = swash reach (m; CPU estimate of max run-up height —
                             // sizes the land sampling band and relaxes the vertex cull)
-    vec4 u_oceanParams8;    // x = swash drawdown burial (m below the seabed a receding surface sinks;
-                            // deeper = steeper, cleaner cut against the sand),
+    vec4 u_oceanParams8;    // x unused (was the swash drawdown of the removed waterline floor),
                             // y = shore foam threshold bias (shifts the surf fold threshold:
                             // negative = sparser/more transparent surf),
                             // z = swash backflow (scale on the raw horizontal chop riding the swash
                             // weight: the tongue flows back seaward as the wave recedes),
                             // w = RT ray cutoff distance (m from the camera; beyond it the water shader
                             // traces no scene rays at all, 0 = unlimited)
-    vec4 u_oceanParams9;    // x = trough margin (m): how far above the seabed the wave trough is held,
-                            // tapered in with depth so the waterline itself does not lift,
+    vec4 u_oceanParams9;    // x unused (was the trough margin of the removed waterline floor),
                             // y = RT refraction ray range (m: underwater visibility of traced geometry),
                             // z = RT reflection ray range (m),
                             // w = RT reflection roughness cutoff (rougher pixels skip the mirror ray)

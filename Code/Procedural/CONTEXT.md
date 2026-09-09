@@ -313,9 +313,9 @@ about the scale.
 |---|---|---|
 | fetch, depth, cascade patch sizes | × s | Froude similarity: with gravity untouched this is the ONE scaling of the JONSWAP/TMA inputs under which wavelengths AND heights both come out × s — the scaled sea is a shrunk copy, not the full-size spectrum aliased into small patches. |
 | wind speed | × √s | The velocity half of the same similarity (`U²/(F g)` and the wave-age ratio stay invariant). |
-| every other metre (shore depths, swash drawdown, margins, cull slack, RT ranges, horizon offset, steer range, **ring cell**) | × s | Same world, fewer metres. The ring cell shrinking keeps the clipmap's detail per wavelength and its reach per model kilometre. |
+| every other metre (shore depths, cull slack, RT ranges, horizon offset, steer range, **ring cell**) | × s | Same world, fewer metres. The ring cell shrinking keeps the clipmap's detail per wavelength and its reach per model kilometre. |
 | absorption, SSS strength (per metre) | ÷ s | The same water column in fewer metres, so deep water stays deep-coloured. |
-| dimensionless ratios (amplitude, choppiness, shoal fraction, height limit, swash amplitude, foam thresholds) | — | The break acceleration is a fraction of g, invariant under Froude scaling. |
+| dimensionless ratios (amplitude, choppiness, the approach-band fraction, swash amplitude, foam thresholds) | — | The break acceleration is a fraction of g, invariant under Froude scaling. |
 | sea level | — | The world datum, owned by the terrain. |
 
 **The periods stay the model sea's.** Froude scaling alone shortens them by √s, and a miniature sea at
@@ -362,23 +362,30 @@ IFFT into displacement and gradient maps **each frame, so every parameter is liv
 variant displaces this mesh and shades it (RT refraction, Beer-Lambert). Params push through
 `Renderer::setOceanParams`; **the mesh rebuilds only when ring params change.**
 
-**The ocean bakes NOTHING itself** — shoaling, surf, swash and the land cull all read the streamer's
-terrain-data map, and the GPU passes read the SAME bake the CPU copy comes from, **so the drawn water
-and the simulated water agree by construction.**
+**The ocean bakes NOTHING itself** — the shore's surface weight, surf, swash and the land cull all read
+the streamer's terrain-data map, and the GPU passes read the SAME bake the CPU copy comes from, **so
+the drawn water and the simulated water agree by construction.**
+
+**The shore is ONE depth weight on the raw cascade sum** (`oceanSurfaceWeight`, ocean_wave.inc.glsl):
+1 in open water, easing to "Swash amplitude" (× sea-connection × land-height fades) across an approach
+band sized by "Shoal depth scale". Every cascade is scaled alike, so the wave's spectral detail is
+preserved into the beach; there is no per-cascade shoaling, no breaking limit and no waterline floor
+any more — the surface is the wave, and the depth buffer cuts it against the sand. The swash weight
+(the same base, faded in across the band) gates only the tongue's backflow.
 
 ## `sampleWaterHeight` — the buoyancy field
 
 CPU-evaluated from the GPU displacement readback, and **a full CPU MIRROR of the clipmap vertex
-shader**: cascade sum, shoaling fade, swash run-up and the waterline floor. ~2 frames latent —
-invisible for physics. The App wires it into `PhysicsWorld::setWaterSurface`.
+shader**: the raw cascade sum times the shore's surface weight, plus the swash backflow. ~2 frames
+latent — invisible for physics. The App wires it into `PhysicsWorld::setWaterSurface`.
 
 > **The shader is what you see, the mirror is what floats on it. Changing either without the other is a
 > silent bug** — bodies sink through drawn waves, or float on dry sand.
 
 It returns `-FLT_MAX` where there is no water: ocean disabled, readback not primed, or land beyond the
 swash run-up band. **Inside that band it returns the live tongue surface, which SINKS BELOW the terrain
-as the wave recedes (the drawdown floor) — so bodies beach themselves**, and callers want a plain
-surface-vs-point test rather than a separate dry check.
+as the wave recedes — so bodies beach themselves**, and callers want a plain surface-vs-point test
+rather than a separate dry check.
 
 `hasWater()` is the App's global gate for the buoyancy pass, **so a disabled ocean costs physics
 nothing** — the pass otherwise sweeps the whole broadphase every step.

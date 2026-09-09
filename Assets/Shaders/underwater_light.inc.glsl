@@ -27,15 +27,15 @@ layout (binding = UNDERWATER_OCEAN_BINDING) uniform sampler2DArray u_uwOceanMaps
 // without moving the pattern (the geometric entry point uses the true depth); 1 = physical. The fog
 // passes sqrt of its shaft boost so brightness and length grow together; surfaces pass 1.
 // Live wave height (m, relative to the calm local water level): mirrors the vertex displacement's
-// VERTICAL logic — shoal-faded cascades plus the swash run-up residual (no flow rotation / choppy XZ,
-// close enough for gating). Lets callers test "underwater" against the INSTANTANEOUS surface instead of
-// the calm level, so sand exposed by a receding swash reads as dry (no caustics/absorption) and the
-// run-up tongue reads as covered. columnDepth = calm water depth at the point (drives the shoal fades).
+// VERTICAL logic — the raw cascade sum times the ocean's surface weight (no flow rotation / choppy
+// XZ, close enough for gating). Lets callers test "underwater" against the INSTANTANEOUS surface
+// instead of the calm level, so sand exposed by a receding swash reads as dry (no caustics/absorption)
+// and the run-up tongue reads as covered. columnDepth = calm water depth at the point.
 float underwaterLiveWaveY(vec2 worldXZ, float columnDepth, float waterLevel)
 {
-    // Swash weight — mirrors oceanSwashWeight (ocean_wave.inc.glsl): amplitude x sea-connection fade
-    // (landlocked lakes/ponds at elevated levels get no swell) x land-height decay x wide fade-in
-    // (~2 swash reaches of approach depth, floored by the mid-cascade shoal band).
+    // The shore weights — mirror oceanSwashBase / oceanSwashFadeIn / oceanSwashWeight
+    // (ocean_wave.inc.glsl): amplitude x sea-connection fade (landlocked water at an elevated level
+    // gets no swell) x land-height fade, and the approach fade-in across the swash band.
     const float seaFade = 1.0 - smoothstep(0.05, 1.0, abs(waterLevel - u_oceanParams2.w));
     const float reach = max(u_oceanParams7.w, 0.01);
     const float landFade = clamp(1.0 + min(columnDepth, 0.0) / reach, 0.0, 1.0);

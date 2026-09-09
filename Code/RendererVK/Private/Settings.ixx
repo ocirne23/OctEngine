@@ -373,12 +373,11 @@ export struct OceanParams
                                     // turbulent water (the wake stays visible after the foam thins)
 
     // Shore interaction: the baked terrain-data cascades (Renderer::setFogTerrainHeightMap, baked by the
-    // terrain streamer) drive fake shoaling — each cascade's displacement fades out below depth =
-    // shoalScale * its patch size, so long swell dies offshore while chop runs almost to the beach and
-    // waves never poke through land — plus a surf/foam band where the water column vanishes at the
-    // waterline.
-    float shoalScale     = 0.005f; // shoaling depth as a fraction of each cascade's patch size (scaled
-                                // down with the cascade sizes above to hold the absolute depths)
+    // terrain streamer) give the water its depth — open water eases to the swash amplitude across an
+    // approach band at the shore (oceanSurfaceWeight, ocean_wave.inc.glsl), the swash tongue runs up the
+    // beach and flows back, and a surf/foam band forms where the water column vanishes at the waterline.
+    float shoalScale     = 0.005f; // approach band depth as a fraction of the mid cascade's patch size
+                                // (floored at two swash reaches; scaled down with the cascade sizes)
     // Horizon depth: past horizonDepthRange the waves assume AT LEAST horizonDepth of water, whatever
     // the baked map says. Every distant depth error runs shallow — coarse texels average shore slopes
     // into the water, the generator reports depth exactly 0 for samples it could not resolve, and the
@@ -399,17 +398,8 @@ export struct OceanParams
                                   // refracted bottom stays visible through the lace (whitecaps unaffected)
     float swashAmp       = 0.5f;  // swash run-up: scale on the un-shoaled wave height riding through the
                                   // waterline and up the beach (waves crash and flow over; 0 = hard cutoff)
-    float swashDrawdown  = 1.0f;  // m below the seabed a receding swash surface sinks: deeper = steeper,
-                                  // cleaner cut against the sand (shallow grazes sawtooth the retreat edge)
     float shoreFoamBias  = -0.33f;  // shifts the surf fold threshold: negative = sparser lace / more
                                   // transparent shore waves, positive = denser churn
-    // How far above the seabed the wave TROUGH is held (m). The clamp that does this had a hard-coded 5 cm
-    // margin, which is far under the decimetre-scale disagreement between the baked depth map it measures
-    // against and the LOD'd terrain mesh you actually see — so a trough legally clear of the map's seabed
-    // still sank under the real ground and let it poke through the surface. Raise until that stops.
-    // Tapered in with depth (see the shader): the margin cannot exceed the water it is lifting the surface
-    // within, and lifting it at the waterline would drag the water's edge seaward.
-    float troughMargin = 0.15f;
     float swashFlow      = 0.33f;  // backflow: scale on the raw horizontal chop riding the swash weight —
                                   // the tongue visibly flows back seaward as the wave recedes (0 = off)
     float cullMargin     = 1.0f;  // land cull: clipmap triangles whose whole footprint is buried deeper

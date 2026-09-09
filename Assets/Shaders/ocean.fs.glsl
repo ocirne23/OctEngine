@@ -99,8 +99,8 @@ layout (location = 0) out vec4 out_color;
 // --- Shore debug view: set a mode, F5. Paints the depth-keyed terms instead of shading, to find which
 // one's boundary a visible line on the water follows.
 //   1 = calm depth      black 0 -> white 4 m, green iso-lines every 0.5 m, RED = land (depth < 0)
-//   2 = swash fade-in   the tongue weight (backflow): white = full, black = none
-//   4 = shoal fades     R / G / B = cascade 0 / 1 / 2 shoal fade (black = that band fully shoaled out)
+//   2 = swash weight    the tongue weight (backflow): white = full, black = none
+//   3 = surface weight  oceanSurfaceWeight: white = open water, darker = eased toward the swash amplitude
 //   5 = shore foam band the surf band's nearShore target (u_oceanParams5.z)
 #define OCEAN_DEBUG_MODE 0
 
@@ -363,8 +363,8 @@ void main()
             dbg.g = 1.0;
 #elif OCEAN_DEBUG_MODE == 2
         dbg = vec3(swDbg / max(u_oceanParams7.z, 1e-3));
-#elif OCEAN_DEBUG_MODE == 4
-        dbg = vec3(oceanShoalFade(depthDbg, u_oceanParams2.x), oceanShoalFade(depthDbg, u_oceanParams2.y), oceanShoalFade(depthDbg, u_oceanParams2.z));
+#elif OCEAN_DEBUG_MODE == 3
+        dbg = vec3(oceanSurfaceWeight(depthDbg, shoreHW.y));
 #elif OCEAN_DEBUG_MODE == 5
         dbg = vec3(u_oceanParams5.z > 0.0 ? 1.0 - smoothstep(u_oceanParams5.z, 4.0 * u_oceanParams5.z, depthDbg) : 0.0);
 #endif

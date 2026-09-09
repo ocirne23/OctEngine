@@ -90,22 +90,18 @@ namespace Procedural
 
 		// Shore interaction: driven by the terrain streamer's baked terrain-data map (nothing baked here;
 		// no data while terrain rendering is disabled — the ocean then behaves as open sea).
+		// "Shoal depth scale" sizes the APPROACH BAND (x the mid cascade's patch size, floored at two
+		// swash reaches): the depth over which open water eases to the swash amplitude. See
+		// oceanSwashFadeIn / oceanSurfaceWeight in ocean_wave.inc.glsl.
 		Tweak::floatVar("Ocean/Shore", "Shoal depth scale", &m_shoalScale, 0.0f, 0.1f, 0.001f);
 		// Past "range" the waves assume at least "Horizon depth" of water whatever the map says (see the
 		// header): distant depth readings all err shallow, and shallow reads as a dead mirror sea. Only
 		// the assumed seabed moves — the surface stays put, so this cannot put water over land.
 		Tweak::floatVar("Ocean/Shore", "Horizon depth (m)", &m_horizonDepth, 0.0f, 200.0f, 1.0f);
 		Tweak::floatVar("Ocean/Shore", "Horizon depth range (m)", &m_horizonDepthRange, 0.0f, 8000.0f, 50.0f);
-		// A wave cannot stand taller than the water it is in (H/d ~ 0.78 when it breaks). The shoal fade
-		// alone cannot enforce this: it fades a band by its WAVELENGTH, so the mid cascade still runs at
-		// full height in shallow water. Scales the shoaled sum, so waves shrink instead of flat-topping.
 		Tweak::floatVar("Ocean/Shore", "Shore foam depth (m)", &m_shoreFoamDepth, 0.0f, 8.0f, 0.05f);
 		Tweak::floatVar("Ocean/Shore", "Shore foam max", &m_shoreFoamMax, 0.0f, 1.0f, 0.01f);
 		Tweak::floatVar("Ocean/Shore", "Swash amplitude", &m_swashAmp, 0.0f, 2.0f, 0.01f);
-		// "Swash drawdown" and "Trough margin" are no longer registered: both shaped the waterline FLOOR
-		// (the smooth max that held the surface above the seabed and sank it under the sand on recede),
-		// which is gone — the surface is the wave and the depth buffer cuts it against the sand. The
-		// params still ride the UBO (u_oceanParams8.x / u_oceanParams9.x), unread.
 		Tweak::floatVar("Ocean/Shore", "Shore foam bias", &m_shoreFoamBias, -1.0f, 1.0f, 0.01f);
 		Tweak::floatVar("Ocean/Shore", "Swash backflow", &m_swashFlow, 0.0f, 3.0f, 0.01f);
 		// Land cull: clipmap triangles buried deeper than this under the local water level (over their
@@ -387,7 +383,7 @@ namespace Procedural
 	// mirror (which reads m_params) get world metres. Froude similarity keeps the spectrum a shrunk copy
 	// of itself — U x sqrt(s), fetch/depth/patch sizes x s — every other length rides s, every 1/m
 	// optical density rides 1/s (the same water column, in fewer metres), dimensionless ratios
-	// (amplitude, choppiness, shoal fraction, height limit, swash amplitude, foam thresholds — the break
+	// (amplitude, choppiness, the approach-band fraction, swash amplitude, foam thresholds — the break
 	// acceleration is a fraction of g, invariant under Froude scaling) pass through untouched.
 	void OceanGenerator::pushOceanParams(Renderer& renderer, const Camera& camera)
 	{
@@ -429,8 +425,6 @@ namespace Procedural
 		params.shoreFoamDepth = m_shoreFoamDepth * s;
 		params.shoreFoamMax = m_shoreFoamMax;
 		params.swashAmp = m_swashAmp;
-		params.swashDrawdown = m_swashDrawdown * s;
-		params.troughMargin = m_troughMargin * s;
 		params.shoreFoamBias = m_shoreFoamBias;
 		params.swashFlow = m_swashFlow;
 		params.cullMargin = m_cullMargin * s;
@@ -676,8 +670,8 @@ namespace Procedural
 		return glm::clamp(m_params.swashAmp, 0.0f, 4.0f) * (m_waveTrough + 0.25f);
 	}
 
-	// CPU mirror of oceanSwashWeight (ocean_wave.inc.glsl): how much of the RAW un-shoaled wave field
-	// rides the surface at this water depth (negative = land height above the local level).
+	// CPU mirror of oceanSwashWeight (ocean_wave.inc.glsl): the swash base faded in across the approach
+	// band — the weight that gates the tongue behaviours (the backflow). depth < 0 = land height.
 	float OceanGenerator::swashWeight(float depth, float waterLevel) const
 	{
 		const float amp = glm::clamp(m_params.swashAmp, 0.0f, 4.0f);
@@ -693,8 +687,8 @@ namespace Procedural
 		return amp * seaFade * landFade * fadeIn;
 	}
 
-	// CPU mirror of oceanSwashBase: the weight above without the depth fade-in — the fraction of a
-	// cascade's raw amplitude that survives to the beach (each cascade shoals toward it, not to zero).
+	// CPU mirror of oceanSwashBase: the fraction of the raw wave field that runs up the beach — the
+	// swash amplitude x the sea-connection fade x the land-height fade, no approach fade-in.
 	float OceanGenerator::swashBase(float depth, float waterLevel) const
 	{
 		const float amp = glm::clamp(m_params.swashAmp, 0.0f, 4.0f);
@@ -707,9 +701,9 @@ namespace Procedural
 	}
 
 	// CPU mirror of oceanSampleDisplacement (ocean_wave.inc.glsl) at an UNDISPLACED world XZ, bilinear-
-	// wrapped over the readback tile: shoal-faded cascade sum, swash backflow, the raw
-	// run-up residual, then the waterline floor — same order, same clamps, y relative to the LOCAL water
-	// level like the shader's. The shader is what you SEE and this is what floats on it, so any change
+	// wrapped over the readback tile: the raw cascade sum times the surface weight, then the swash
+	// backflow — same order, same clamps, y relative to the LOCAL water level like the shader's. The
+	// shader is what you SEE and this is what floats on it, so any change
 	// there has to land here too; the divergence is invisible until a body sinks through a drawn wave.
 	// Two knowing omissions: the ring-matched vertex mip (the readback is one fixed band limit — the
 	// physics surface is the same waves minus the finest detail) and the flow rotation (disabled in the
@@ -721,8 +715,8 @@ namespace Procedural
 		const float reach = swashReach();
 		glm::vec3 disp(0.0f);
 		float sw = 0.0f;
-		// Buried deeper than the run-up band: every shoal fade and the swash weight are zero, so the
-		// sampling below would displace nothing — skip to the floor clamp (bit-identical, no fetches).
+		// Buried deeper than the run-up band: the surface weight is zero, so the sampling below would
+		// displace nothing — skip it (bit-identical, no fetches).
 		if (depth > -reach)
 		{
 			const uint32 res = m_dispTileRes;
@@ -756,9 +750,9 @@ namespace Procedural
 			// and nothing floats there.
 			const float fadeIn = 1.0f - glm::smoothstep(0.0f,
 				glm::max(2.0f * reach, glm::max(m_params.shoalScale, 0.0f) * glm::max(m_params.cascadeSizes.y, 1.0f)), depth);
-			const float w = 1.0f - fadeIn * (1.0f - swashBase(depth, shoreHW.y));
-			disp = glm::vec3(rawXZ.x * chop, rawY, rawXZ.y * chop) * w;
-			sw = swashWeight(depth, shoreHW.y);
+			const float base = swashBase(depth, shoreHW.y);
+			disp = glm::vec3(rawXZ.x * chop, rawY, rawXZ.y * chop) * (1.0f - fadeIn * (1.0f - base));
+			sw = base * fadeIn; // = swashWeight, with the shared base and fade-in evaluated once
 			// Backflow: the tongue slides seaward as the wave recedes, gated by its thickness above the
 			// sand and soft-capped to ~the reach (a buried surface must not keep sliding).
 			const float flowFade = glm::smoothstep(0.0f, 0.35f, rawY * sw + depth);
@@ -777,10 +771,10 @@ namespace Procedural
 	{
 		if (!m_enabled || m_dispTile.empty() || m_dispTileRes == 0)
 			return -FLT_MAX;
-		// Land beyond the run-up band: the swash weight and every shoal fade are zero there, so the
-		// shaders draw no live water — the same gate the displacement uses, one shore fetch instead of
-		// the whole inverse. Inside the band this DOES return water above the drawn shoreline: that is
-		// the tongue, and a body in it floats until the drawdown floor lets it back down onto the sand.
+		// Land beyond the run-up band: the surface weight is zero there, so the shaders draw no live
+		// water — the same gate the displacement uses, one shore fetch instead of the whole inverse.
+		// Inside the band this DOES return water above the drawn shoreline: that is the tongue, and a
+		// body in it floats until the receding wave dips under the sand and beaches it.
 		if (sampleShoreData(x, z).x <= -swashReach())
 			return -FLT_MAX;
 		// The maps store where the UNDISPLACED grid point ENDS UP; a fixed world column needs the

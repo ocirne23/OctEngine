@@ -1066,9 +1066,9 @@ void Renderer::buildUboOcean()
     const float swashAmp = glm::clamp(ocean.swashAmp, 0.0f, 4.0f);
     const float swashReach = swashAmp * (m_oceanWaveTrough + 0.25f);
     ubo.oceanParams7 = glm::vec4(glm::max(ocean.cullMargin, 0.0f), glm::clamp(ocean.shoreFoamMax, 0.0f, 1.0f), swashAmp, swashReach);
-    ubo.oceanParams8 = glm::vec4(glm::max(ocean.swashDrawdown, 0.0f), glm::clamp(ocean.shoreFoamBias, -1.0f, 1.0f),
+    ubo.oceanParams8 = glm::vec4(0.0f /* x: the removed swash drawdown */, glm::clamp(ocean.shoreFoamBias, -1.0f, 1.0f),
         glm::max(ocean.swashFlow, 0.0f), glm::max(ocean.rtRayCutoffDist, 0.0f));
-    ubo.oceanParams9 = glm::vec4(glm::max(ocean.troughMargin, 0.0f), glm::max(ocean.rtRefractionRange, 10.0f),
+    ubo.oceanParams9 = glm::vec4(0.0f /* x: the removed trough margin */, glm::max(ocean.rtRefractionRange, 10.0f),
         glm::max(ocean.rtReflectionRange, 50.0f), glm::clamp(ocean.rtReflectionMaxRough, 0.0f, 1.0f));
     ubo.oceanParams10 = glm::vec4(0.0f, glm::max(ocean.timeScale, 0.0f), 0.0f, 0.0f); // x: the removed breaking limit
 }

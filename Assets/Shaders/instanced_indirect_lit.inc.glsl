@@ -104,6 +104,11 @@ layout (binding = 10, std430) readonly buffer GiGridData { vec4 gi_gridData[]; }
 // >= this sentinel = not provided -> fetch it. Default keeps every other lit variant unchanged.
 const float WATER_LEVEL_UNSET = 1e30;
 float g_waterLevelOverride = WATER_LEVEL_UNSET;
+// The sun radiance doSunLight last resolved for this pixel — transmittance, colour, eclipse, shadow
+// visibility (PCSS / RT / terrain march) and the underwater transmittance all applied. A material that
+// adds a second lobe after computeLitColor (the terrain's water film) lights it with THIS through
+// doLight, instead of paying the shadow evaluation again.
+vec3 g_sunRadiance = vec3(0.0);
 
 vec3 doSunLight(vec3 worldPos, vec3 V, vec3 N, vec3 specularCol, vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
 {
@@ -148,6 +153,7 @@ vec3 doSunLight(vec3 worldPos, vec3 V, vec3 N, vec3 specularCol, vec3 matColOver
 		if (depthBelow > 0.0)
 			lightRadiance *= underwaterSunTransmittance(worldPos.xz, depthBelow, 0.0, 1.0); // surfaces: physical reach
 	}
+	g_sunRadiance = lightRadiance;
 	return doLight(lightRadiance, L, V, N, specularCol, matColOverPi, metalness, roughness, roughnessSq);
 }
 // Depth-aware 2x2 upsample of the half-res AO/bent-normal image. Plain bilinear bleeds across depth
