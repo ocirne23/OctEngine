@@ -11,7 +11,7 @@
 layout (binding = 1, std430) readonly buffer Particles { Particle pp_particles[]; };
 layout (binding = 2, std430) readonly buffer AliveList { uint pa_alive[]; };
 layout (binding = 3, std430) readonly buffer Emitters { ParticleEmitter pe_emitters[]; };
-layout (binding = 5, std430) readonly buffer GiGridData { float gi_gridData[]; };
+layout (binding = 5, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 
 #define GI_GRID_DATA_NAME gi_gridData
 #include "gi_probe.inc.glsl"

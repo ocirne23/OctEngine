@@ -258,7 +258,10 @@ then writes it in TWO places.
 ### The A\* is a job; the write is main
 
 `seedPath` returns as soon as it has QUEUED a `SeedPlan` (`m_seedPlans`, heap-owned — the plan
-holds a `JobCounter`) and submitted the `"Nav seed path"` job (Normal priority). The job touches
+holds a `JobCounter`; applied plans return to `m_seedPlanPool` and are reused with their path
+capacity, so the steady state allocates no plans) and submitted the `"Nav seed path"` job (Normal
+priority). `TeamField::rasterizeObstacles` likewise keeps its clearance-ring work lists as members
+(`m_ringChunks` / `m_ringKeys`), so a rebuild allocates nothing either. The job touches
 only the plan and the raster, and **holds its own `shared_ptr` to that raster**, so a publish on
 main during the search cannot free it. It also applies the "Seed range" cut. `findPath` never
 waits, so the job's `thread_local` `PathScratch`, pinned by a `ThreadLocalScope` over the call, is

@@ -14,7 +14,7 @@
 layout (location = 0) in vec2 v_uv;
 layout (binding = 1) uniform sampler2D u_depth;
 layout (binding = 2) uniform sampler3D u_integrated;
-layout (binding = 4, std430) readonly buffer GiGridData { float gi_gridData[]; };
+layout (binding = 4, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 
 #define TERRAIN_HEIGHT_BINDING 3
 #include "terrain_height.inc.glsl"

@@ -16,7 +16,7 @@
 layout (binding = 1, std430) readonly buffer Decals { Decal d_decals[]; };
 layout (binding = 2) uniform sampler2D u_gbufferDepth;
 layout (binding = 3) uniform sampler2D u_gbufferNormal;
-layout (binding = 4, std430) readonly buffer GiGridData { float gi_gridData[]; };
+layout (binding = 4, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 layout (binding = 20) uniform sampler2D u_textures[]; // bindless texture array (variable count)
 
 #define GI_GRID_DATA_NAME gi_gridData

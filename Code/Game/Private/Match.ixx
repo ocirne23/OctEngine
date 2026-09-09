@@ -264,8 +264,72 @@ private:
     // an enemy walking into a far base's field ticks — and gets pushed — with no player near.
     // Refreshed on the cluster timer.
     oc::vector<glm::vec4> m_fieldZones;
-    oc::unordered_map<uint64, uint8> m_navCellTeams;     // the hash the current cycle culls against (built by the previous cycle)
-    oc::unordered_map<uint64, uint8> m_navCellTeamsNext; // being built by the current cycle's slices
+    // Team bits per nav cell, as a FLAT open-addressing map: the hash map it replaced freed every
+    // node on clear() and re-allocated them all the next cycle — most of the nav feed's memory churn.
+    // clear() only resets the slots; the table keeps its size across cycles.
+    struct NavCellTeamMap
+    {
+        struct Entry { uint64 key = 0; uint8 teams = 0; bool used = false; };
+        oc::vector<Entry> table;
+        uint32 count = 0;
+
+        static uint32 slotOf(uint64 key, size_t size) // splitmix64 finalizer, masked (size is a power of two)
+        {
+            key ^= key >> 30; key *= 0xbf58'476d'1ce4'e5b9ull;
+            key ^= key >> 27; key *= 0x94d0'49bb'1331'11ebull;
+            return uint32(key ^ (key >> 31)) & uint32(size - 1);
+        }
+        uint8 find(uint64 key) const
+        {
+            if (table.empty())
+                return 0;
+            for (uint32 s = slotOf(key, table.size());; s = (s + 1) & uint32(table.size() - 1))
+            {
+                if (!table[s].used)
+                    return 0;
+                if (table[s].key == key)
+                    return table[s].teams;
+            }
+        }
+        void orTeams(uint64 key, uint8 bits)
+        {
+            if ((count + 1) * 2 > table.size())
+                grow();
+            for (uint32 s = slotOf(key, table.size());; s = (s + 1) & uint32(table.size() - 1))
+            {
+                Entry& e = table[s];
+                if (!e.used)
+                {
+                    e = Entry{ key, bits, true };
+                    ++count;
+                    return;
+                }
+                if (e.key == key)
+                {
+                    e.teams |= bits;
+                    return;
+                }
+            }
+        }
+        void grow()
+        {
+            oc::vector<Entry> old = oc::move(table);
+            table.assign(glm::max<size_t>(old.size() * 2, 256), Entry{});
+            count = 0;
+            for (const Entry& e : old)
+                if (e.used)
+                    orTeams(e.key, e.teams);
+        }
+        void clear()
+        {
+            for (Entry& e : table)
+                e = Entry{};
+            count = 0;
+        }
+        void swap(NavCellTeamMap& other) { table.swap(other.table); oc::swap(count, other.count); }
+    };
+    NavCellTeamMap m_navCellTeams;     // the map the current cycle culls against (built by the previous cycle)
+    NavCellTeamMap m_navCellTeamsNext; // being built by the current cycle's slices
     oc::vector<Nav::NavSource> m_navUnitSources[Nav::MaxTeams]; // the current cycle's accepted unit sources
     uint32 m_navFeedCursor = 0; // roster index the next slice starts at (0 = a cycle just published)
     // Lane seeding parameters live on NpcSystem (one set of tweaks); Match reads them for its own

@@ -33,7 +33,9 @@ public:
     // The "GI" grid-shape tweaks (RendererVKLayout::g_giGrid: cascades, probes per axis, focus Y offset).
     // They are shader #defines in EVERY pipeline that samples the probes, so onGridChanged must: wait for
     // the GPU, call resizeGrid(), reload ALL shaders (Renderer::reloadShaders) and re-record.
-    void registerGridTweaks(const oc::function<void()>& onGridChanged);
+    // onDefineChanged: g_giGrid values that are shader defines but change no resource (the Chebyshev
+    // power) — reload every shader, no resize, no clipmap clear.
+    void registerGridTweaks(const oc::function<void()>& onGridChanged, const oc::function<void()>& onDefineChanged);
     // Re-allocates the persistent SH clipmap buffer for the current g_giGrid and schedules the one-time
     // clear (nothing is preserved — the toroidal slots mean something else now). GPU must be idle.
     void resizeGrid();
@@ -98,7 +100,7 @@ public:
     float getStrength() const { return m_giStrength; }
     // x = Chebyshev variance floor (fraction of probe spacing), y = Chebyshev power, z = probe weight
     // floor, w = mean scale. Uploaded to the frame UBO (u_giVisParams) for every probe-sampling shader.
-    glm::vec4 getVisibilityParams() const { return glm::vec4(m_visVarianceFloor, m_visChebPower, m_visWeightFloor, m_visMeanScale); }
+    glm::vec4 getVisibilityParams() const { return glm::vec4(m_visVarianceFloor, 0.0f /* y unused: the power is the GI_VIS_CHEB_POWER define */, m_visWeightFloor, m_visMeanScale); }
 
 private:
     void buildTlasInstanceLayout(ComputePipelineLayout& layout);
@@ -121,7 +123,7 @@ private:
     // temporally stabler occlusion edges (the L1 depth estimate wobbles with the per-frame ray jitter);
     // lower floor / higher power = sharper leak blocking.
     float m_visVarianceFloor = 0.3f;   // min std-dev as a fraction of the cascade's probe spacing
-    float m_visChebPower = 2.0f;       // exponent on the Chebyshev weight (DDGI uses 3)
+    // (the Chebyshev exponent lives in RendererVKLayout::g_giGrid.visChebPower — a shader define)
     float m_visWeightFloor = 0.01f;    // occluded probes keep this much weight (0 = hard cutoff)
     float m_visMeanScale = 2.5f;      // scales the reconstructed mean distance before the Chebyshev test:
                                        // > 1 widens each probe's visible footprint (more overlap/smoothing),

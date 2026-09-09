@@ -7,7 +7,7 @@
 
 #include "shared.inc.glsl"
 
-layout (binding = 1, std430) readonly buffer GiGridData { float gi_gridData[]; };
+layout (binding = 1, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 
 layout (push_constant) uniform PC
 {

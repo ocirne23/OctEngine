@@ -52,7 +52,7 @@ layout (binding = 6, std430) readonly buffer InFogVolumes
 };
 layout (binding = 7) uniform sampler3D u_history;
 layout (binding = 8, rgba16f) uniform writeonly image3D u_outScatter;
-layout (binding = 9, std430) readonly buffer GiGridData { float gi_gridData[]; };
+layout (binding = 9, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 #define TERRAIN_HEIGHT_BINDING 10
 #include "terrain_height.inc.glsl"
 // FFT ocean maps at binding 11 (declared by the include as u_uwOceanMaps): the underwater fog boundary

@@ -74,7 +74,7 @@ layout (binding = 15, std430) readonly buffer InRTIndices   { uint in_indices[];
 layout (binding = 16, std430) readonly buffer InRTMeshInfos { InMeshInfo in_meshInfos[]; };
 layout (binding = 17, std430) readonly buffer InRTInstances { InMeshInstance in_instances[]; };
 
-layout (binding = 10, std430) readonly buffer GiGridData { float gi_gridData[]; };
+layout (binding = 10, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 #define GI_GRID_DATA_NAME gi_gridData
 #include "gi_probe.inc.glsl"
 

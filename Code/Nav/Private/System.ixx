@@ -156,6 +156,8 @@ export namespace Nav
         FlowField m_flow[MaxTeams];
         PressureField m_pressure[MaxTeams];
         oc::vector<oc::unique_ptr<SeedPlan>> m_seedPlans; // queued/in-flight plans, applied by update() (JobCounter is immovable)
+        oc::vector<oc::unique_ptr<SeedPlan>> m_seedPlanPool; // applied plans, reused by seedPath: a plan (and its path
+                                                            // vector) was allocated per request, up to "Seed max/frame" a frame
         oc::vector<NavObstacle> m_obstacles;
         oc::vector<NavObstacle> m_buildObstacles; // snapshot shared by every in-flight job
         uint64 m_obstacleHash = 0;

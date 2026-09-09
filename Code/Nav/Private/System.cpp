@@ -170,7 +170,17 @@ bool NavSystem::seedPath(uint32 team, const glm::vec3& from, const glm::vec3& to
 {
     if (!m_raster.published || team >= MaxTeams)
         return false;
-    oc::unique_ptr<SeedPlan>& entry = m_seedPlans.emplace_back(oc::make_unique<SeedPlan>());
+    // Pooled: an applied plan comes back here with its path capacity (applySeedPlans); only the
+    // very first requests allocate.
+    oc::unique_ptr<SeedPlan> recycled;
+    if (!m_seedPlanPool.empty())
+    {
+        recycled = oc::move(m_seedPlanPool.back());
+        m_seedPlanPool.pop_back();
+        recycled->path.clear();
+        recycled->found = false;
+    }
+    oc::unique_ptr<SeedPlan>& entry = m_seedPlans.emplace_back(recycled ? oc::move(recycled) : oc::make_unique<SeedPlan>());
     SeedPlan* plan = entry.get();
     plan->raster = m_raster.published;
     plan->from = glm::vec2(from.x, from.z);
@@ -235,7 +245,12 @@ void NavSystem::applySeedPlans()
             if (m_seedTrough > 0.0f)
                 m_pressure[plan.team].seedPath(plan.path, m_seedTrough, plan.laneWidth * 0.5f, raster, m_seedSqueeze);
         }
-        m_seedPlans.erase(m_seedPlans.begin() + i); // in order: a later re-plan that disagrees must win over an earlier one
+        // In order: a later re-plan that disagrees must win over an earlier one. The plan object goes
+        // back to the pool (its raster reference released now, so a retired field can be reused).
+        oc::unique_ptr<SeedPlan> done = oc::move(m_seedPlans[i]);
+        m_seedPlans.erase(m_seedPlans.begin() + i);
+        done->raster.reset();
+        m_seedPlanPool.push_back(oc::move(done));
     }
 }
 

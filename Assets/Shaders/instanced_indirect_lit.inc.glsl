@@ -75,7 +75,7 @@ layout (binding = 17, std430) readonly buffer InRTInstances { InMeshInstance in_
 
 // GI irradiance probes (diffuse indirect). Persistent cascaded clipmap SH volume, written by the probe
 // trace pass; addressed toroidally relative to the camera (u_viewPos), so no hash table is needed.
-layout (binding = 10, std430) readonly buffer GiGridData { float gi_gridData[]; };
+layout (binding = 10, std430) readonly buffer GiGridData { vec4 gi_gridData[]; }; // vec4 layout: gi_probe.inc.glsl
 
 #include "shadows.inc.glsl"
 
@@ -107,8 +107,8 @@ float g_waterLevelOverride = WATER_LEVEL_UNSET;
 
 vec3 doSunLight(vec3 worldPos, vec3 V, vec3 N, vec3 specularCol, vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
 {
-	vec3 L = normalize(u_sunDirection.xyz);
-	if (max(dot(N, L), 0.0) <= 0.0)
+	const vec3 L = u_sunDirection.xyz; // normalized on the CPU (SkyParams / setSunLight)
+	if (dot(N, L) <= 0.0)
 		return vec3(0.0);
 	float visibility = u_rtSunShadow > 0.5 ? traceSunVisibility(worldPos, N) : sampleSunShadow(worldPos, N);
 	// Long-range terrain shadows. BOTH sources above run out of data well inside the streamed mesh ring —
@@ -128,7 +128,8 @@ vec3 doSunLight(vec3 worldPos, vec3 V, vec3 N, vec3 specularCol, vec3 matColOver
 			visibility = min(visibility, mix(1.0, terrainVis, fadeIn));
 		}
 	}
-	vec3 lightRadiance = atmosTransmittanceToLight(0.0, L, u_skyUp) * u_sunColor.rgb * visibility * u_eclipseParams.x;
+	// u_sunTransmittance = atmosTransmittanceToLight(0.0, L, u_skyUp), evaluated once per frame on the CPU.
+	vec3 lightRadiance = u_sunTransmittance * u_sunColor.rgb * (visibility * u_eclipseParams.x);
 	// Underwater: the sun crossed the wavy surface — caustic focus + Beer-Lambert absorption
 	// (underwater_light.inc.glsl), so seabed/submerged objects get the dancing light patterns. One
 	// water-level fetch + a branch above water; only underwater pixels pay for the wave taps.
@@ -165,6 +166,7 @@ vec4 sampleAOBilateral(vec2 fullUv, vec3 pos, float viewDist)
 	const vec2 offs[4] = vec2[](vec2(0.0), vec2(aoTexel.x, 0.0), vec2(0.0, aoTexel.y), aoTexel);
 
 	const float sigmaZ = max(0.05 * viewDist, 0.02);
+	const float gaussK = -1.4426950409 / (2.0 * sigmaZ * sigmaZ); // exp(-x/(2s^2)) == exp2(x * gaussK): one exp2, no divide per tap
 	vec4 sum = vec4(0.0);
 	float wsum = 0.0;
 	for (int i = 0; i < 4; ++i)
@@ -174,8 +176,8 @@ vec4 sampleAOBilateral(vec2 fullUv, vec3 pos, float viewDist)
 		if (d <= 0.0) // background (reversed-Z far = 0)
 			continue;
 		const vec3 tapPos = worldPosFromDepth(uv, d);
-		const float dz = length(tapPos - pos);
-		const float w  = bw[i] * exp(-(dz * dz) / (2.0 * sigmaZ * sigmaZ));
+		const vec3 dp = tapPos - pos;
+		const float w  = bw[i] * exp2(dot(dp, dp) * gaussK); // squared distance straight from the dot: no sqrt
 		sum  += texture(u_ao, uv) * w;
 		wsum += w;
 	}
@@ -190,7 +192,7 @@ vec3 computeLitColor(vec3 worldPos, vec3 V, vec3 N, vec3 materialColor, float ro
 {
 	const vec3 specularColor  = mix(vec3(0.04), materialColor, metalness);
 	const float roughnessSq = roughness * roughness;
-	const vec3 matColOverPi = materialColor / PI;
+	const vec3 matColOverPi = materialColor * INV_PI;
 
 	float ao = 1.0;
 	vec3 bentN = N;
@@ -214,12 +216,12 @@ vec3 computeLitColor(vec3 worldPos, vec3 V, vec3 N, vec3 materialColor, float ro
 	// at the outermost cascade's window face; the fallback is only evaluated where it contributes.
 	float giCoverage;
 	const vec3 indirectE = evalProbeSHCoverage(worldPos, bentN, giCoverage);
-	vec3 indirect = (indirectE.x >= 0.0) ? (indirectE / PI) : vec3(0.0);
+	vec3 indirect = (indirectE.x >= 0.0) ? (indirectE * INV_PI) : vec3(0.0);
 	if (giCoverage < 1.0)
-		indirect = mix(giEvalSkySH(bentN) / PI, indirect, giCoverage);
-	indirect *= u_aoParams.y;
+		indirect = mix(giEvalSkySH(bentN) * INV_PI, indirect, giCoverage);
+	// indirect * strength + ambient, times AO: two scalar folds fewer than the previous grouping.
 	ao *= texAO;
-	vec3 color = materialColor * (indirect + u_ambientColor) * ao;
+	vec3 color = materialColor * ((indirect * u_aoParams.y + u_ambientColor) * ao);
 
 	color += doSunLight(worldPos, V, N, specularColor, matColOverPi, metalness, roughness, roughnessSq);
 	const ivec3 gridPos = getGridPos(worldPos);

@@ -210,6 +210,9 @@ top-down camera hanging in empty sky shapes none of these:
   `GIProbePipeline::registerGridTweaks`'s callback: GPU idle → `resizeGrid()` (SH buffer re-allocated,
   clear scheduled; the consumers rebind it at their next record) → `Renderer::reloadShaders()`. A
   positive Y offset lifts the grid centre so more probes sit above the ground than below.
+* **`DescriptorSetUpdateInfo` holds small-buffer vectors** (`oc::small_vector<…, 2>`,
+  CommandBuffer.ixx): the per-frame passes build these as temporaries with one info each, and with
+  `oc::vector` every entry was a heap allocation per record — the bulk of "Record primary"'s churn.
 * **"Record GI" allocates nothing per frame.** `GIProbePipeline` keeps its `DescriptorSetUpdateInfo`
   lists as members (`buildUpdateScratch`, handles patched per record; the texture list keeps its
   capacity), and `AccelerationStructure::recordBuildSkinnedBlas` refills member build arrays. Keep it
@@ -455,6 +458,18 @@ GLSL in `Assets/Shaders/`, **compiled at runtime with glslang — shader edits n
 calls `reloadShaders()`.
 
 * `*.inc.glsl` are includes.
+* **Per-pixel work hoisted to the UBO / per pixel:** `u_sunTransmittance` is the CPU mirror of
+  `atmosTransmittanceToLight(0, sun, up)` (`buildUboSky`; keep the constants in sync with
+  atmosphere.inc.glsl) — the lit sun term never runs the Chapman function per pixel; `u_sunDirection` is
+  normalized on the CPU, so shaders use it raw; the PCSS Vogel disk rotates its compile-time tap angles
+  by ONE per-pixel `(cos, sin)` (`rotSC`) instead of a sincos per tap; `u_cascadeSunSizeTexels` holds
+  the per-cascade PCSS penumbra scale (`buildUboSunShadow`, from the matrices' bottom-row scalars);
+  divide-by-PI is `* INV_PI`; the AO bilateral weights use `exp2` of the squared distance.
+* **The GI probe buffer is `vec4[]`** (every includer declares it so; layout table at the top of
+  gi_probe.inc.glsl): a probe is 6 wide loads — SH in 3, depth moments in 2, backface + relocation
+  offset packed in 1 — not 24 scalar ones; the write side packs the same way. The Chebyshev weight
+  exponent is the `GI_VIS_CHEB_POWER` define (`g_giGrid.visChebPower`, "GI/Vis Cheb Power", integer;
+  a reload-only tweak), unrolled to multiplies.
 * **`shared.inc.glsl` / `ubo.inc.glsl` structs must stay in sync with `Private/Layout.ixx`.**
 * **The light grid's distance LOD** (`light_grid.cs.glsl`, `lodCellSize`) is `LightGridParams`
   under "Graphics/LOD/Light grid", BAKED AS `#define`s (the loop runs per light per grid) — a

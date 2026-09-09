@@ -206,12 +206,14 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     m_giProbePipeline.initialize(m_maxGiTlasInstances, m_maxTextures, m_numTextureDescriptors);
     // The GI grid shape is a #define in every probe-sampling shader (Layout.ixx g_giGrid): a change waits
     // for the GPU, re-allocates the SH clipmap, reloads EVERY shader (reloadShaders waits + re-records).
-    m_giProbePipeline.registerGridTweaks([this]() {
-        if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
-            return;
-        m_giProbePipeline.resizeGrid();
-        reloadShaders();
-    });
+    m_giProbePipeline.registerGridTweaks(
+        [this]() {
+            if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
+                return;
+            m_giProbePipeline.resizeGrid();
+            reloadShaders();
+        },
+        [this]() { reloadShaders(); }); // define-only (Chebyshev power): reloadShaders waits for the GPU itself
     m_giProbePipeline.setDebugDepthReadOnly(m_depthPrepassReuse);
     m_giProbePipeline.initializeDebug(sceneRenderPass);
     m_debugLinePipeline.initialize(sceneRenderPass);
@@ -918,6 +920,29 @@ void Renderer::buildUboSky()
     ubo.nebulaParams = glm::vec4(sky.nebulaIntensity, sky.nebulaScale, sky.nebulaBandWidth, sky.nebulaDust);
     ubo.nebulaAxis = glm::vec4(glm::normalize(sky.nebulaAxis), 0.0f);
     ubo.atmosParams = glm::vec4(sky.rayleighHeight, sky.mieHeight, sky.mieExtinction, sky.ozone);
+
+    // Sun transmittance at ground level: the CPU mirror of atmosphere.inc.glsl's
+    // atmosTransmittanceToLight(0, sunDir, up) — Chapman optical depth (r = planet radius, h = 0),
+    // atmosTau, exp. Constant per frame, so the lit fragment shaders read u_sunTransmittance instead of
+    // evaluating it per pixel. KEEP IN SYNC with the GLSL constants (ATMOS_R_PLANET, ATMOS_BETA_OZONE).
+    {
+        constexpr float c_planetRadius = 6371e3f;
+        const glm::vec3 c_betaOzone(0.650e-6f, 1.881e-6f, 0.085e-6f);
+        const auto chapman = [](float X, float cosChi) // Schüler's grazing-incidence closed form
+        {
+            const float c = std::sqrt(1.5707963f * X);
+            if (cosChi >= 0.0f)
+                return c / ((c - 1.0f) * cosChi + 1.0f);
+            const float sinChi = std::sqrt(glm::max(1.0f - cosChi * cosChi, 1e-6f));
+            const float X0 = X * sinChi;
+            return 2.0f * std::sqrt(1.5707963f * X0) * std::exp(glm::min(X - X0, 60.0f)) - c / ((c - 1.0f) * (-cosChi) + 1.0f);
+        };
+        const float cosChi = glm::dot(glm::normalize(sky.up), sky.sunDirection); // pos = up * R, so cos(chi) = up . L
+        const float odR = sky.rayleighHeight * chapman(c_planetRadius / sky.rayleighHeight, cosChi);
+        const float odM = sky.mieHeight * chapman(c_planetRadius / sky.mieHeight, cosChi);
+        const glm::vec3 tau = ubo.betaRayleigh * odR + glm::vec3(ubo.betaMie * sky.mieExtinction) * odM + c_betaOzone * (sky.ozone * odR);
+        ubo.sunTransmittance = glm::exp(-tau);
+    }
     ubo.groundParams = glm::vec4(sky.groundColor * sky.groundIntensity, glm::clamp(sky.groundHorizon, 0.0f, 1.0f));
 }
 
@@ -939,8 +964,20 @@ void Renderer::buildUboSunShadow(const Camera& camera)
         computeSunCascades(camera, aspect, m_skyParams.sunDirection, m_sceneFocusEnabled ? &m_sceneFocus : nullptr,
             m_shadowParams.maxDistance, m_shadowParams.splitLambda, m_shadowParams.casterPad, m_sunCascadeViewProj);
         m_numSunCascades = RendererVKLayout::NUM_SHADOW_CASCADES;
+        // PCSS penumbra scale per cascade (the shader's former pcssSunSizeTexels): the physical penumbra
+        // over a world gap g spans 2 g tan(sunRadius); a PCF disk of radius r ramps over ~2r, so the
+        // radius is g tan(sunRadius), and gapNorm * depthRange / texelWorldSize converts it to texels.
+        // depthRange and texelWorldSize ride in the matrices' bottom rows (computeSunCascades).
+        static_assert(RendererVKLayout::NUM_SHADOW_CASCADES == 4, "cascadeSunSizeTexels is one vec4");
+        const float cosT = glm::clamp(m_skyParams.sunAngularCos, 0.5f, 0.9999999f);
+        const float tanT = std::sqrt(1.0f - cosT * cosT) / cosT;
         for (uint32 c = 0; c < RendererVKLayout::NUM_SHADOW_CASCADES; ++c)
+        {
             ubo.cascadeViewProj[c] = m_sunCascadeViewProj[c];
+            const float texelWorldSize = m_sunCascadeViewProj[c][1][3];
+            const float depthRange = m_sunCascadeViewProj[c][2][3];
+            ubo.cascadeSunSizeTexels[c] = tanT * depthRange / glm::max(texelWorldSize, 1e-6f);
+        }
         ubo.shadowParams = glm::vec3(m_shadowParams.depthBias, m_shadowParams.normalBias, 1.0f / (float)RendererVKLayout::SHADOW_MAP_RESOLUTION);
     }
     else

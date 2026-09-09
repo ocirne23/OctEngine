@@ -61,14 +61,14 @@ void GIProbePipeline::initialize(uint32 maxTlasInstances, uint32 maxTextures, ui
     Tweak::floatVar("GI", "Strength", &m_giStrength, 0.0f, 10.0f, 0.01f);
     Tweak::floatVar("RT", "TLAS Range", &m_tlasRange, 16.0f, 8192.0f, 16.0f);
     Tweak::floatVar("GI", "Vis Variance Floor", &m_visVarianceFloor, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("GI", "Vis Cheb Power", &m_visChebPower, 1.0f, 6.0f, 0.1f);
     Tweak::floatVar("GI", "Vis Weight Floor", &m_visWeightFloor, 0.0f, 0.25f, 0.005f);
     Tweak::floatVar("GI", "Vis Mean Scale", &m_visMeanScale, 0.5f, 3.0f, 0.05f);
 }
 
-void GIProbePipeline::registerGridTweaks(const oc::function<void()>& onGridChanged)
+void GIProbePipeline::registerGridTweaks(const oc::function<void()>& onGridChanged, const oc::function<void()>& onDefineChanged)
 {
     RendererVKLayout::GiGridConfig& grid = RendererVKLayout::g_giGrid;
+    Tweak::intVar("GI", "Vis Cheb Power", &grid.visChebPower, 1, 6, 1.0f, onDefineChanged); // GI_VIS_CHEB_POWER define
     Tweak::intVar("GI", "Cascades", &grid.numCascades, 1, 8, 1.0f, onGridChanged);
     Tweak::intVar("GI", "Probes X (log2)", &grid.dimLog2X, 2, 6, 1.0f, onGridChanged);
     Tweak::intVar("GI", "Probes Y (log2)", &grid.dimLog2Y, 2, 6, 1.0f, onGridChanged);

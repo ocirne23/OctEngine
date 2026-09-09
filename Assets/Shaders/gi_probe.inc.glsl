@@ -7,7 +7,8 @@
 // lattice coords that scroll out are silently overwritten by the new coords that wrap into their slots.
 //
 // Buffers / names the includer must define before including (read side):
-//   GI_GRID_DATA_NAME   float[] per-probe data: cascade-major, slot-linear, GI_PROBE_STRIDE floats each.
+//   GI_GRID_DATA_NAME   vec4[] per-probe data: cascade-major, slot-linear, GI_PROBE_STRIDE_V4 vec4s each
+//                       (16-byte loads: a probe read is 6 wide loads, not 24 scalar ones).
 // For the write side (trace) also define GI_PROBE_WRITE.
 //
 // Requires shared.inc.glsl (PI) (u_sceneFocus — the scene focus, which centers the cascades: the game's
@@ -19,13 +20,14 @@
 // GI_SH_STRIDE, GI_NUM_CASCADES, GI_PROBE_DIM_X/Y/Z, GI_FOCUS_Y_OFFSET and GI_CASCADE_BASE_SPACING are
 // injected by the engine from RendererVKLayout (Layout.ixx, the live g_giGrid — the "GI" grid tweaks
 // reload every shader).
-// Per-probe layout (words): SH-L1 RGB 0..11, SH-L1 mean depth +12..15, SH-L1 mean depth^2 +16..19,
-// backface-hit fraction +20, relocation offset xyz +21..23.
-#define GI_PROBE_STRIDE (GI_SH_STRIDE + 12)
-#define GI_DEPTH_BASE    uint(GI_SH_STRIDE)       // dist SH-L1 (scalar, 4 coeffs)
-#define GI_DEPTH2_BASE   (uint(GI_SH_STRIDE) + 4u) // dist^2 SH-L1
-#define GI_BACKFACE_OFS  (uint(GI_SH_STRIDE) + 8u)
-#define GI_OFFSET_OFS    (uint(GI_SH_STRIDE) + 9u)
+// Per-probe layout, in VEC4s (24 floats = 6 vec4; the CPU sizes the buffer in floats, GI_PROBE_STRIDE):
+//   [0] = (c0.rgb, c1.r)  [1] = (c1.gb, c2.rg)  [2] = (c2.b, c3.rgb)   SH-L1 RGB irradiance
+//   [3] = SH-L1 mean depth   [4] = SH-L1 mean depth^2
+//   [5] = (backface-hit fraction, relocation offset xyz)
+#define GI_PROBE_STRIDE_V4 ((uint(GI_SH_STRIDE) + 12u) / 4u)
+#define GI_DEPTH_V4   3u
+#define GI_DEPTH2_V4  4u
+#define GI_MISC_V4    5u
 
 #ifndef GI_NORMAL_BIAS
 #define GI_NORMAL_BIAS 1.5 // push the sample point along the normal (world units) to limit self-leak
@@ -60,6 +62,19 @@ vec4 shBasisL1(vec3 d)
     return vec4(0.282095, 0.488603 * d.y, 0.488603 * d.z, 0.488603 * d.x);
 }
 
+// cheb^GI_VIS_CHEB_POWER with the exponent baked (integer define from RendererVKLayout::g_giGrid): the
+// fixed-count loop unrolls to POWER-1 multiplies.
+#ifndef GI_VIS_CHEB_POWER
+#define GI_VIS_CHEB_POWER 2
+#endif
+float giChebPow(float x)
+{
+    float r = x;
+    for (int i = 1; i < GI_VIS_CHEB_POWER; ++i)
+        r *= x;
+    return r;
+}
+
 // Probe spacing (world units) of a cascade. Cascade 0 is finest; each level doubles.
 int giCascadeSpacing(int c) { return GI_CASCADE_BASE_SPACING << c; }
 
@@ -80,10 +95,10 @@ uint giSlotLinear(ivec3 lc)
     return uint(s.x + s.y * GI_PROBE_DIM_X + s.z * GI_PROBE_DIM_X * GI_PROBE_DIM_Y);
 }
 
-// Word offset into GI_GRID_DATA_NAME for the probe at lattice coord lc in cascade c.
+// vec4 offset into GI_GRID_DATA_NAME for the probe at lattice coord lc in cascade c.
 uint giProbeBase(int c, ivec3 lc)
 {
-    return (uint(c) * uint(GI_CASCADE_PROBES) + giSlotLinear(lc)) * uint(GI_PROBE_STRIDE);
+    return (uint(c) * uint(GI_CASCADE_PROBES) + giSlotLinear(lc)) * GI_PROBE_STRIDE_V4;
 }
 
 // SH-L1 projections of the probe's hit distance and squared hit distance (misses counted as the depth
@@ -91,9 +106,8 @@ uint giProbeBase(int c, ivec3 lc)
 // moment of the distance to geometry that way, for a Chebyshev occlusion test at lookup time.
 void giReadDepthSH(uint cellBase, out vec4 dsh, out vec4 d2sh)
 {
-    uint b = cellBase + GI_DEPTH_BASE;
-    dsh  = vec4(GI_GRID_DATA_NAME[b],      GI_GRID_DATA_NAME[b + 1u], GI_GRID_DATA_NAME[b + 2u], GI_GRID_DATA_NAME[b + 3u]);
-    d2sh = vec4(GI_GRID_DATA_NAME[b + 4u], GI_GRID_DATA_NAME[b + 5u], GI_GRID_DATA_NAME[b + 6u], GI_GRID_DATA_NAME[b + 7u]);
+    dsh  = GI_GRID_DATA_NAME[cellBase + GI_DEPTH_V4];
+    d2sh = GI_GRID_DATA_NAME[cellBase + GI_DEPTH2_V4];
 }
 
 // Band-limited reconstruction of a scalar SH-L1 function at a direction (no cosine convolution — this is
@@ -101,23 +115,22 @@ void giReadDepthSH(uint cellBase, out vec4 dsh, out vec4 d2sh)
 float giEvalDepth(vec4 c, vec3 d) { return dot(c, shBasisL1(d)); }
 
 // Fraction of the probe's gather rays that hit backfacing geometry (~1 = embedded in a wall/terrain).
-float giProbeBackfaceFrac(uint cellBase) { return GI_GRID_DATA_NAME[cellBase + GI_BACKFACE_OFS]; }
+float giProbeBackfaceFrac(uint cellBase) { return GI_GRID_DATA_NAME[cellBase + GI_MISC_V4].x; }
 
 // Relocation offset: probes embedded in / grazing geometry trace from (and are treated as sitting at)
 // lattice position + offset. Trilinear weights stay on the unmoved lattice.
-vec3 giProbeOffset(uint cellBase)
-{
-    uint b = cellBase + GI_OFFSET_OFS;
-    return vec3(GI_GRID_DATA_NAME[b], GI_GRID_DATA_NAME[b + 1u], GI_GRID_DATA_NAME[b + 2u]);
-}
+vec3 giProbeOffset(uint cellBase) { return GI_GRID_DATA_NAME[cellBase + GI_MISC_V4].yzw; }
 
-// Raw SH-L1 RGB coefficients of one probe.
+// Raw SH-L1 RGB coefficients of one probe (three wide loads, unpacked per the layout above).
 void giReadSH(uint cellBase, out vec3 c0, out vec3 c1, out vec3 c2, out vec3 c3)
 {
-    c0 = vec3(GI_GRID_DATA_NAME[cellBase + 0u], GI_GRID_DATA_NAME[cellBase + 1u],  GI_GRID_DATA_NAME[cellBase + 2u]);
-    c1 = vec3(GI_GRID_DATA_NAME[cellBase + 3u], GI_GRID_DATA_NAME[cellBase + 4u],  GI_GRID_DATA_NAME[cellBase + 5u]);
-    c2 = vec3(GI_GRID_DATA_NAME[cellBase + 6u], GI_GRID_DATA_NAME[cellBase + 7u],  GI_GRID_DATA_NAME[cellBase + 8u]);
-    c3 = vec3(GI_GRID_DATA_NAME[cellBase + 9u], GI_GRID_DATA_NAME[cellBase + 10u], GI_GRID_DATA_NAME[cellBase + 11u]);
+    vec4 p0 = GI_GRID_DATA_NAME[cellBase];
+    vec4 p1 = GI_GRID_DATA_NAME[cellBase + 1u];
+    vec4 p2 = GI_GRID_DATA_NAME[cellBase + 2u];
+    c0 = p0.xyz;
+    c1 = vec3(p0.w, p1.xy);
+    c2 = vec3(p1.zw, p2.x);
+    c3 = p2.yzw;
 }
 
 // Cosine-convolved irradiance E(n) from SH-L1 coefficients. Diffuse exit radiance is albedo/PI * E(n).
@@ -143,7 +156,7 @@ vec3 giEvalCell(uint cellBase, vec3 n)
 // to in open space — instead of a differently-shaped cheap approximation that diverges at low sun angles
 // (a single sky sample along the normal misses the bright horizon in-scatter band the probes gather).
 // Returns cosine-convolved irradiance E(n), like evalProbeSHCoverage.
-#define GI_SKY_SH_BASE (uint(GI_NUM_CASCADES) * uint(GI_CASCADE_PROBES) * uint(GI_PROBE_STRIDE))
+#define GI_SKY_SH_BASE (uint(GI_NUM_CASCADES) * uint(GI_CASCADE_PROBES) * GI_PROBE_STRIDE_V4) // vec4 index; 3 vec4s of SH
 vec3 giEvalSkySH(vec3 n) { return giEvalCell(GI_SKY_SH_BASE, n); }
 
 // True when cascade c's 8-probe stencil around p fully fits inside its toroidal window (so the slots are
@@ -214,12 +227,14 @@ vec3 giSampleCascade(int c, int s, ivec3 base, vec3 frac, vec3 samplePos, vec3 n
             float d = min(len, cap * 0.95);
             if (mean2 > 1e-3 && d > mean)
             {
-                // u_giVisParams: x = variance floor (fraction of spacing), y = power, z = weight floor.
+                // u_giVisParams: x = variance floor (fraction of spacing), z = weight floor. The power
+                // is the GI_VIS_CHEB_POWER define ("GI/Vis Cheb Power", integer): a chain of multiplies
+                // instead of a pow per probe (16 probes a pixel).
                 float minDev   = u_giVisParams.x * float(s);
                 float variance = max(mean2 - mean * mean, minDev * minDev);
                 float delta    = d - mean;
                 float cheb     = variance / (variance + delta * delta);
-                w *= max(pow(cheb, u_giVisParams.y), u_giVisParams.z);
+                w *= max(giChebPow(cheb), u_giVisParams.z);
             }
         }
         if (w <= 0.0)
@@ -334,57 +349,37 @@ vec3 giDebugColor(vec3 worldPos, vec3 n)
 
 void giStoreCell(uint cellBase, vec3 c0, vec3 c1, vec3 c2, vec3 c3)
 {
-    GI_GRID_DATA_NAME[cellBase + 0u]  = c0.r;
-    GI_GRID_DATA_NAME[cellBase + 1u]  = c0.g;
-    GI_GRID_DATA_NAME[cellBase + 2u]  = c0.b;
-    GI_GRID_DATA_NAME[cellBase + 3u]  = c1.r;
-    GI_GRID_DATA_NAME[cellBase + 4u]  = c1.g;
-    GI_GRID_DATA_NAME[cellBase + 5u]  = c1.b;
-    GI_GRID_DATA_NAME[cellBase + 6u]  = c2.r;
-    GI_GRID_DATA_NAME[cellBase + 7u]  = c2.g;
-    GI_GRID_DATA_NAME[cellBase + 8u]  = c2.b;
-    GI_GRID_DATA_NAME[cellBase + 9u]  = c3.r;
-    GI_GRID_DATA_NAME[cellBase + 10u] = c3.g;
-    GI_GRID_DATA_NAME[cellBase + 11u] = c3.b;
+    GI_GRID_DATA_NAME[cellBase]      = vec4(c0, c1.r);
+    GI_GRID_DATA_NAME[cellBase + 1u] = vec4(c1.gb, c2.rg);
+    GI_GRID_DATA_NAME[cellBase + 2u] = vec4(c2.b, c3);
 }
 
 // Temporally blend this frame's freshly-projected coefficients into a probe (lerp toward the new value).
 // alpha == 1 fully replaces the stored value (used for probes that just scrolled into the clipmap).
 void giBlendCell(uint cellBase, vec3 c0, vec3 c1, vec3 c2, vec3 c3, float alpha)
 {
-    for (uint k = 0u; k < 12u; ++k)
-    {
-        float prev = GI_GRID_DATA_NAME[cellBase + k];
-        float next;
-        if      (k < 3u)  next = c0[k];
-        else if (k < 6u)  next = c1[k - 3u];
-        else if (k < 9u)  next = c2[k - 6u];
-        else              next = c3[k - 9u];
-        GI_GRID_DATA_NAME[cellBase + k] = mix(prev, next, alpha);
-    }
+    GI_GRID_DATA_NAME[cellBase]      = mix(GI_GRID_DATA_NAME[cellBase],      vec4(c0, c1.r),     alpha);
+    GI_GRID_DATA_NAME[cellBase + 1u] = mix(GI_GRID_DATA_NAME[cellBase + 1u], vec4(c1.gb, c2.rg), alpha);
+    GI_GRID_DATA_NAME[cellBase + 2u] = mix(GI_GRID_DATA_NAME[cellBase + 2u], vec4(c2.b, c3),     alpha);
 }
 
 // Temporally blend the probe's SH-L1 depth moments (the Chebyshev visibility estimate) and its
-// backface-hit fraction (the embedded-probe rejection signal).
+// backface-hit fraction (the embedded-probe rejection signal; shares the misc vec4 with the offset).
 void giBlendProbeStats(uint cellBase, vec4 dsh, vec4 d2sh, float backfaceFrac, float alpha)
 {
-    uint b = cellBase + GI_DEPTH_BASE;
-    for (uint k = 0u; k < 4u; ++k)
-    {
-        GI_GRID_DATA_NAME[b + k]      = mix(GI_GRID_DATA_NAME[b + k],      dsh[k],  alpha);
-        GI_GRID_DATA_NAME[b + 4u + k] = mix(GI_GRID_DATA_NAME[b + 4u + k], d2sh[k], alpha);
-    }
-    uint bf = cellBase + GI_BACKFACE_OFS;
-    GI_GRID_DATA_NAME[bf] = mix(GI_GRID_DATA_NAME[bf], backfaceFrac, alpha);
+    GI_GRID_DATA_NAME[cellBase + GI_DEPTH_V4]  = mix(GI_GRID_DATA_NAME[cellBase + GI_DEPTH_V4],  dsh,  alpha);
+    GI_GRID_DATA_NAME[cellBase + GI_DEPTH2_V4] = mix(GI_GRID_DATA_NAME[cellBase + GI_DEPTH2_V4], d2sh, alpha);
+    vec4 misc = GI_GRID_DATA_NAME[cellBase + GI_MISC_V4];
+    misc.x = mix(misc.x, backfaceFrac, alpha);
+    GI_GRID_DATA_NAME[cellBase + GI_MISC_V4] = misc;
 }
 
 // Store the relocation offset (written unblended — the relocation logic is already iterative).
 void giStoreProbeOffset(uint cellBase, vec3 offset)
 {
-    uint b = cellBase + GI_OFFSET_OFS;
-    GI_GRID_DATA_NAME[b]      = offset.x;
-    GI_GRID_DATA_NAME[b + 1u] = offset.y;
-    GI_GRID_DATA_NAME[b + 2u] = offset.z;
+    vec4 misc = GI_GRID_DATA_NAME[cellBase + GI_MISC_V4];
+    misc.yzw = offset;
+    GI_GRID_DATA_NAME[cellBase + GI_MISC_V4] = misc;
 }
 
 #endif // GI_PROBE_WRITE

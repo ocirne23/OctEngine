@@ -12,6 +12,7 @@ const uint EMPTY_ENTRY        = 0xFFFFFFFFu;
 const uint INITIALIZING_ENTRY = 0xEFFFFFFFu;
 
 const float PI = 3.14159265359;
+const float INV_PI = 0.31830988618; // multiply by this instead of dividing by PI (a division is not folded by every compiler)
 
 #include "ubo.inc.glsl"
 

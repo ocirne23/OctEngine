@@ -8,8 +8,12 @@ export struct DescriptorSetUpdateInfo
     uint32 binding;
     uint32 startIdx = 0;
     vk::DescriptorType type;
-    oc::vector<vk::DescriptorBufferInfo> bufferInfos;
-    oc::vector<vk::DescriptorImageInfo> imageInfos;
+    // Small-buffer vectors: nearly every update carries ONE info, and the per-frame passes build
+    // these as temporaries (`.bufferInfos = { ... }`) — with oc::vector each entry was a heap
+    // allocation per record, the bulk of "Record primary"'s memory churn. Texture arrays spill to
+    // the heap as before.
+    oc::small_vector<vk::DescriptorBufferInfo, 2> bufferInfos;
+    oc::small_vector<vk::DescriptorImageInfo, 2> imageInfos;
     //oc::variant<vk::DescriptorBufferInfo, vk::DescriptorImageInfo> info;
 };
 

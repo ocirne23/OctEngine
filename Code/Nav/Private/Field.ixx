@@ -205,5 +205,9 @@ export namespace Nav
         ChunkMap<Chunk> m_chunks;
         oc::vector<NavSource> m_sources;
         uint32 m_cellsReached = 0;
+        // rasterizeObstacles' clearance-ring work list, kept across builds (the field is pooled via
+        // TeamSlot::retired) so a rebuild allocates nothing: it was two chunk-count-sized vectors per build.
+        oc::vector<Chunk*> m_ringChunks;
+        oc::vector<uint64> m_ringKeys;
     };
 }

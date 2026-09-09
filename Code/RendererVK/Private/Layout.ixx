@@ -307,6 +307,8 @@ export namespace RendererVKLayout
         int numCascades = 4;                    // nested clipmap levels (1..8)
         int dimLog2X = 5, dimLog2Y = 2, dimLog2Z = 5; // probes per axis per cascade as log2 (2..6 = 4..64): power of two for the toroidal mask
         float focusOffsetY = 2.0f;              // metres added to the scene focus before centring the grids (> 0 = more probes above the ground than below)
+        int visChebPower = 2;                   // Chebyshev visibility weight exponent (GI_VIS_CHEB_POWER, 1..6; DDGI uses 3) — a define,
+                                                // so the sample loop multiplies instead of pow-ing per probe; a change reloads shaders only
 
         uint32 dimX() const { return 1u << dimLog2X; }
         uint32 dimY() const { return 1u << dimLog2Y; }
@@ -419,7 +421,9 @@ export namespace RendererVKLayout
     {
         ViewData views[NUM_UBO_VIEWS];
         Frustum frustum;         // centre/combined frustum (culling, shadow cascade fit)
-        glm::vec3 viewPad_;      // (the centre viewPos moved into views[]) keeps betaMie in a std140 16-byte slot
+        glm::vec3 sunTransmittance; // atmosphere transmittance toward the sun at ground level (the shader's
+                                 // atmosTransmittanceToLight(0, sun, up), a Chapman evaluation per channel):
+                                 // constant per frame, so buildUboSky computes it once instead of every lit pixel
         float betaMie;           // Mie scattering coefficient at sea level (1/m), drives sky + indirect sky light
         glm::vec3 sunDirection;  // xyz = normalized direction towards the sun, w unused
         float sunAngularCos;     // cos of the sun disc radius (1 = point, smaller = bigger disc)
@@ -442,6 +446,9 @@ export namespace RendererVKLayout
         glm::vec4 sceneFocus;   // xyz = the SCENE FOCUS every distance-based quality falloff measures from: the
                                 // sun cascade pick, the RTAO fade/early-out (the game's player via
                                 // Renderer::setSceneFocus; the camera position otherwise), w unused
+        glm::vec4 cascadeSunSizeTexels; // per cascade: PCF disk radius (texels) per unit of normalized depth gap —
+                                // tan(sun radius) * depthRange / texelWorldSize, once per frame instead of a
+                                // sqrt + two divides per lit pixel (shadows.inc.glsl pcssSunSizeTexels)
         glm::vec3 shadowParams; // x = depth bias, y = normal bias (texels), z = 1/resolution
         float sunShadowRays;    // RT sun shadow rays per pixel (1 = single jittered ray)
 

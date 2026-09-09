@@ -15,15 +15,9 @@ float cascadeTexelWorldSize(int c) { return u_cascadeViewProj[c][1][3]; }
 float cascadeDepthRange(int c) { return u_cascadeViewProj[c][2][3]; }
 
 // PCF disk radius (texels) per unit of normalized depth gap, derived from the sun's angular size so
-// PCSS softness matches the ray-traced sun. The physical penumbra over a world gap g spans 2*g*tan(
-// sunRadius) total, and a PCF disk of radius r ramps visibility over ~2r, so the radius is the HALF
-// width: g*tan(sunRadius). gapNorm * depthRange = world gap; / texelWorldSize = texels.
-float pcssSunSizeTexels(int c)
-{
-	float cosT = clamp(u_sunAngularCos, 0.5, 0.9999999);
-	float tanT = sqrt(1.0 - cosT * cosT) / cosT;
-	return tanT * cascadeDepthRange(c) / cascadeTexelWorldSize(c);
-}
+// PCSS softness matches the ray-traced sun (tan(sunRadius) * depthRange / texelWorldSize — the
+// derivation sits at Renderer::buildUboSunShadow, which computes it per cascade once per frame).
+float pcssSunSizeTexels(int c) { return u_cascadeSunSizeTexels[c]; }
 mat4 cascadeMatrix(int c)
 {
 	mat4 m = u_cascadeViewProj[c];
@@ -47,22 +41,26 @@ float interleavedGradientNoise(vec2 p)
 
 // Evenly distributed disk sample (golden-angle spiral), rotated per pixel. Far better coverage than a
 // fixed 12-point Poisson set when the kernel radius is large, which keeps PCSS smooth at low tap counts.
-vec2 vogelDisk(int i, int count, float rotation)
+// rotSC = (cos, sin) of the per-pixel rotation, computed ONCE in sampleSunShadow: the tap's own angle
+// i * GOLDEN_ANGLE is a compile-time constant once the fixed-count loops unroll, so the rotation is a
+// 2x2 multiply per tap instead of a sincos per tap (32 sincos per pixel before).
+vec2 vogelDisk(int i, int count, vec2 rotSC)
 {
 	float r = sqrt((float(i) + 0.5) / float(count));
-	float theta = float(i) * GOLDEN_ANGLE + rotation;
-	return r * vec2(cos(theta), sin(theta));
+	float a = float(i) * GOLDEN_ANGLE;
+	vec2 ca = vec2(cos(a), sin(a));
+	return r * vec2(ca.x * rotSC.x - ca.y * rotSC.y, ca.y * rotSC.x + ca.x * rotSC.y);
 }
 
 // PCSS blocker search: average the depths of texels closer to the light than the receiver. Returns the
 // blocker count (0 => no occluders => fully lit).
-float blockerSearch(vec2 uv, int cascade, float receiverDepth, float radiusUV, float rotation, out float avgBlocker)
+float blockerSearch(vec2 uv, int cascade, float receiverDepth, float radiusUV, vec2 rotSC, out float avgBlocker)
 {
 	float sum = 0.0;
 	float count = 0.0;
 	for (int i = 0; i < PCSS_BLOCKER_SAMPLES; ++i)
 	{
-		vec2 off = vogelDisk(i, PCSS_BLOCKER_SAMPLES, rotation) * radiusUV;
+		vec2 off = vogelDisk(i, PCSS_BLOCKER_SAMPLES, rotSC) * radiusUV;
 		float d = textureLod(u_shadowMapDepth, vec3(uv + off, float(cascade)), 0.0).r;
 		if (d < receiverDepth)
 		{
@@ -86,24 +84,13 @@ vec4 projectCascade(vec3 worldPos, vec3 N, int cascade, float normalOffset, floa
 	return vec4(uv, proj.z - depthBias, valid);
 }
 
-// One PCF tap. Stochastically reads cascade A or B based on a per-tap dither vs the blend factor t,
-// so the boundary cross-fades without adding samples. Out-of-bounds taps read as lit.
-float shadowTap(vec4 pa, vec4 pb, int ca, int cb, vec2 off, float dither, float t)
-{
-	bool useB = dither < t;
-	vec4 p = useB ? pb : pa;
-	if (p.w < 0.5)
-		return 1.0;
-	return texture(u_shadowMap, vec4(p.xy + off, float(useB ? cb : ca), p.z));
-}
-
 // Variable-radius PCF over a Vogel disk for a single cascade.
-float pcfVogelSingle(vec4 p, int cascade, float radiusUV, float rotation)
+float pcfVogelSingle(vec4 p, int cascade, float radiusUV, vec2 rotSC)
 {
 	float sum = 0.0;
 	for (int i = 0; i < PCSS_FILTER_SAMPLES; ++i)
 	{
-		vec2 off = vogelDisk(i, PCSS_FILTER_SAMPLES, rotation) * radiusUV;
+		vec2 off = vogelDisk(i, PCSS_FILTER_SAMPLES, rotSC) * radiusUV;
 		sum += texture(u_shadowMap, vec4(p.xy + off, float(cascade), p.z));
 	}
 	return sum / float(PCSS_FILTER_SAMPLES);
@@ -111,26 +98,26 @@ float pcfVogelSingle(vec4 p, int cascade, float radiusUV, float rotation)
 
 // Full PCSS for one cascade: blocker search -> penumbra estimate -> variable-radius PCF. Returns
 // visibility in [0,1]; fragments outside the cascade or with no occluders read as fully lit.
-float pcssCascade(vec4 p, int cascade, float texelUV, float rotation)
+float pcssCascade(vec4 p, int cascade, float texelUV, vec2 rotSC)
 {
 	if (p.w < 0.5)
 		return 1.0; // outside this cascade's coverage
 	float searchRadiusUV = PCSS_MAX_PENUMBRA_TEXELS * texelUV;
 	float avgBlocker;
-	float blockers = blockerSearch(p.xy, cascade, p.z, searchRadiusUV, rotation, avgBlocker);
+	float blockers = blockerSearch(p.xy, cascade, p.z, searchRadiusUV, rotSC, avgBlocker);
 	if (blockers <= 0.0)
 		return 1.0; // no occluders found
 	// Directional penumbra: width grows with the world gap to the blocker (constant across cascades
 	// once expressed in texels). Caster touching the surface => ~MIN texels (sharp); far => up to MAX.
 	float penumbraTexels = clamp((p.z - avgBlocker) * pcssSunSizeTexels(cascade), PCSS_MIN_PENUMBRA_TEXELS, PCSS_MAX_PENUMBRA_TEXELS);
-	return pcfVogelSingle(p, cascade, penumbraTexels * texelUV, rotation);
+	return pcfVogelSingle(p, cascade, penumbraTexels * texelUV, rotSC);
 }
 
 // Border PCSS: the fixed tap budget (blocker + filter) is split between the two cascades by t, so a
 // border pixel costs the same as a normal one. Each tap is routed to a cascade by a deterministic
 // low-discrepancy key, keeping both subsets spatially uniform; each cascade's visibility is averaged
 // over its own taps, then blended by the continuous factor t.
-float pcssBorder(vec4 pa, vec4 pb, int ca, int cb, float texelUV, float rotation, float t)
+float pcssBorder(vec4 pa, vec4 pb, int ca, int cb, float texelUV, vec2 rotSC, float t)
 {
 	float searchRadiusUV = PCSS_MAX_PENUMBRA_TEXELS * texelUV;
 	float minRadiusUV = PCSS_MIN_PENUMBRA_TEXELS * texelUV;
@@ -147,7 +134,7 @@ float pcssBorder(vec4 pa, vec4 pb, int ca, int cb, float texelUV, float rotation
 		if ((useB && !validB) || (!useB && !validA))
 			continue;
 		vec4 p = useB ? pb : pa;
-		vec2 off = vogelDisk(i, PCSS_BLOCKER_SAMPLES, rotation) * searchRadiusUV;
+		vec2 off = vogelDisk(i, PCSS_BLOCKER_SAMPLES, rotSC) * searchRadiusUV;
 		float d = textureLod(u_shadowMapDepth, vec3(p.xy + off, float(useB ? cb : ca)), 0.0).r;
 		if (d < p.z)
 		{
@@ -171,7 +158,7 @@ float pcssBorder(vec4 pa, vec4 pb, int ca, int cb, float texelUV, float rotation
 			continue; // route only to valid cascades; the other supplies the result via fallback below
 		vec4 p = useB ? pb : pa;
 		float rad = useB ? radB : radA;
-		float vis = texture(u_shadowMap, vec4(p.xy + vogelDisk(i, PCSS_FILTER_SAMPLES, rotation) * rad, float(useB ? cb : ca), p.z));
+		float vis = texture(u_shadowMap, vec4(p.xy + vogelDisk(i, PCSS_FILTER_SAMPLES, rotSC) * rad, float(useB ? cb : ca), p.z));
 		if (useB) { sumB += vis; nB += 1.0; }
 		else      { sumA += vis; nA += 1.0; }
 	}
@@ -197,7 +184,7 @@ float sampleSunShadow(vec3 worldPos, vec3 N)
 	// Slope factor (tan of the angle between N and the sun): widen bias at grazing angles where acne
 	// and leaking appear, leaving flat-lit surfaces lightly biased. The normal offset is additionally
 	// scaled by each cascade's world texel size so near/far cascades get a matching offset.
-	vec3 L = normalize(u_sunDirection.xyz);
+	vec3 L = u_sunDirection.xyz; // normalized on the CPU
 	float NdotL = clamp(dot(N, L), 0.0, 1.0);
 	float slope = clamp(sqrt(1.0 - NdotL * NdotL) / max(NdotL, 1e-3), 1.0, 4.0);
 	// Distant fragments get progressively larger biases: shadow map depth precision and texel density
@@ -213,14 +200,15 @@ float sampleSunShadow(vec3 worldPos, vec3 N)
 
 	float texelUV = u_shadowParams.z; // 1 / resolution
 	float rotation = ditherBase * 6.2831853;
+	vec2 rotSC = vec2(cos(rotation), sin(rotation)); // the ONE sincos per pixel every Vogel tap rotates by
 	// Outside the cross-fade band: one full-quality cascade evaluation. Inside it: split the same tap
 	// budget across both cascades (constant cost) and blend by t.
 	if (t <= 0.0)
-		return pcssCascade(pa, cascade, texelUV, rotation);
+		return pcssCascade(pa, cascade, texelUV, rotSC);
 	else
 	{
 		vec4 pb = projectCascade(worldPos, N, nextCascade, normalScale * cascadeTexelWorldSize(nextCascade), depthBias);
-		return pcssBorder(pa, pb, cascade, nextCascade, texelUV, rotation, t);
+		return pcssBorder(pa, pb, cascade, nextCascade, texelUV, rotSC, t);
 	}
 }
 

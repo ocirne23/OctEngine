@@ -629,8 +629,7 @@ void GameMatch::gatherNavFeed(float deltaSec)
         const uint8 own = uint8(1u << team);
         for (int dz = -1; dz <= 1; ++dz)
             for (int dx = -1; dx <= 1; ++dx)
-                if (const auto it = m_navCellTeams.find((uint64)(uint32)(cx + dx) << 32 | (uint32)(cz + dz));
-                    it != m_navCellTeams.end() && (it->second & ~own))
+                if (m_navCellTeams.find((uint64)(uint32)(cx + dx) << 32 | (uint32)(cz + dz)) & ~own)
                     return true;
         return false; };
     const oc::span<const EntityPtr> units = m_npcs.units();
@@ -646,7 +645,7 @@ void GameMatch::gatherNavFeed(float deltaSec)
             const GameUnitComponent* u = getComponent<GameUnitComponent>(e);
             if (!u || u->puppet || !u->alive() || u->team >= Nav::MaxTeams)
                 continue;
-            m_navCellTeamsNext[cellKey(e->pos)] |= uint8(1u << u->team);
+            m_navCellTeamsNext.orTeams(cellKey(e->pos), uint8(1u << u->team));
             if (otherTeamNear(e->pos, (uint8)u->team))
                 m_navUnitSources[u->team].push_back(Nav::NavSource{ e->pos, glm::max(u->bodyRadius, 0.25f), 0, 3 });
             // Pre-emption point every 256 units (see JobSystem::preemptionPoint): a Normal job
@@ -666,7 +665,7 @@ void GameMatch::gatherNavFeed(float deltaSec)
     m_navFeedCursor = 0;
     const auto markPlayer = [&](Entity* e, uint8 team) {
         if (e && team < Nav::MaxTeams)
-            m_navCellTeamsNext[cellKey(e->pos)] |= uint8(1u << team); };
+            m_navCellTeamsNext.orTeams(cellKey(e->pos), uint8(1u << team)); };
     markPlayer(m_player.entity(), (uint8)m_team);
     for (const auto& [id, p] : m_clientPlayers)
         markPlayer(p.get(), (uint8)requestTeam(id));

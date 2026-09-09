@@ -141,6 +141,7 @@ static oc::string buildLayoutPreamble()
     def("GI_PROBE_DIM_Y", g_giGrid.dimY());
     def("GI_PROBE_DIM_Z", g_giGrid.dimZ());
     def("GI_FOCUS_Y_OFFSET", g_giGrid.focusOffsetY); // float literal (to_string keeps the decimal point)
+    def("GI_VIS_CHEB_POWER", g_giGrid.visChebPower);
     def("GI_CASCADE_BASE_SPACING", GI_CASCADE_BASE_SPACING);
     def("VOL_FROXEL_X", VOL_FROXEL_X);
     def("VOL_FROXEL_Y", VOL_FROXEL_Y);

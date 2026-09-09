@@ -27,7 +27,9 @@ layout (binding = UBO_BINDING, std140) uniform UBO
 {
     ViewData u_views[3];
     vec4 u_frustumPlanes[6];
-    vec3 u_viewPad;        // padding (centre viewPos lives in u_views[]); keeps u_betaMie 16-byte aligned
+    vec3 u_sunTransmittance; // atmosTransmittanceToLight(0, sun, up) evaluated ONCE per frame on the CPU
+                             // (Renderer::buildUboSky) — the lit shaders' sun term reads it instead of
+                             // running the Chapman function per pixel
     float u_betaMie;       // Mie scattering coefficient at sea level (1/m), drives sky + indirect sky light
 
     vec3 u_sunDirection;   // xyz = normalized direction towards the sun, w unused
@@ -47,6 +49,8 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     mat4 u_cascadeViewProj[NUM_SHADOW_CASCADES];
     vec4 u_sceneFocus;   // xyz = the SCENE FOCUS every distance-based quality falloff measures from — the sun cascade
                          // pick, the RTAO fade/early-out (the game's player; the camera position otherwise), w unused
+    vec4 u_cascadeSunSizeTexels; // per cascade: PCF disk radius (texels) per unit of normalized depth gap, CPU-computed
+                                 // (Renderer::buildUboSunShadow) — see shadows.inc.glsl pcssSunSizeTexels
     vec3 u_shadowParams; // x = depth bias, y = normal bias (texels), z = 1/resolution
     float u_sunShadowRays; // RT sun shadow rays per pixel (1 = single jittered ray)
 

@@ -1092,7 +1092,9 @@ re-seeded by `loadUnits`).
 `GameMatch::gatherNavFeed` (a post-update job that also calls the Nav setters) supplies obstacles (the border ring plus structure footprints) and per-team sources (live
 non-invulnerable structures, player capsules, and **live units from the roster — no sweep, CULLED
 to units with another team's unit or player within "Nav unit source reach" 64 m** via a coarse cell
-hash, so thousands of far ambient enemies no longer tile the map with the AI team's field).
+hash, so thousands of far ambient enemies no longer tile the map with the AI team's field). That hash
+is `NavCellTeamMap` (Match.ixx), a flat open-addressing table whose `clear()` only resets slots: the
+EASTL map it replaced freed and re-allocated every node each cycle, most of the feed's memory churn.
 
 **UNIT-VS-UNIT COMBAT:** non-ranged units melee ONE victim — the nearest enemy unit or player
 capsule inside `attackRange + victim.bodyRadius` (a capsule gets a flat 0.8 allowance) — holding

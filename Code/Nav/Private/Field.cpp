@@ -179,10 +179,12 @@ void TeamField::rasterizeObstacles(oc::span<const NavObstacle> obstacles, uint8 
     // Phase 3: the clearance ring, one chunk per work item; ring cells crossing into a neighbour
     // chunk write through find() — the inflated pre-creation guarantees it exists. The Blocked set
     // is FINAL after phase 2's barrier, so the != Blocked filter cannot race with a Blocked write.
-    oc::vector<Chunk*> chunks;      // stack, not thread_local: this runs inside a build job and
-    oc::vector<uint64> chunkKeys;   // the parallelFor parks the fiber (see FlowField::update)
-    chunks.reserve(m_chunks.size());
-    chunkKeys.reserve(m_chunks.size());
+    // Members, not thread_local (this runs inside a build job and the parallelFor parks the fiber —
+    // see FlowField::update) and not stack locals (two chunk-count-sized allocations per build).
+    oc::vector<Chunk*>& chunks = m_ringChunks;
+    oc::vector<uint64>& chunkKeys = m_ringKeys;
+    chunks.clear();
+    chunkKeys.clear();
     for (uint32 slot = 0; slot < m_chunks.capacity(); ++slot)
         if (m_chunks.slotKey(slot) != InvalidChunkKey)
         {
