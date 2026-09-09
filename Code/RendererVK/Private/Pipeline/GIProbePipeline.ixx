@@ -142,6 +142,16 @@ private:
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_traceSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_debugSets;
 
+    // PERSISTENT descriptor-update scratch (built once by buildUpdateScratch): the per-frame records only
+    // patch buffer/image handles into these, so "Record GI" allocates nothing after its first frame — the
+    // old per-call DescriptorSetUpdateInfo temporaries cost ~20 heap vectors plus a texture-count-sized
+    // one every frame. The texture list keeps its capacity across frames (clear + push_back).
+    void buildUpdateScratch();
+    bool m_updateScratchBuilt = false;
+    oc::array<DescriptorSetUpdateInfo, 8> m_tlasUpdates;   // bindings 0..7 of the TLAS-instance set
+    oc::vector<DescriptorSetUpdateInfo> m_traceUpdates;    // the trace set's fixed bindings (see recordTrace for the index map)
+    DescriptorSetUpdateInfo m_traceTexUpdate;              // binding 13: the whole texture array (written separately; may be empty)
+
     bool m_cleared = false;
     bool m_debugDepthReadOnly = true; // scene pass depth is read-only under depth-prepass reuse
 };

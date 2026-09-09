@@ -169,27 +169,50 @@ void GIProbePipeline::recordClearPersistent(CommandBuffer& commandBuffer)
     cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &bar });
 }
 
+void GIProbePipeline::buildUpdateScratch()
+{
+    const auto buf = [](uint32 binding, vk::DescriptorType type = vk::DescriptorType::eStorageBuffer)
+    {
+        DescriptorSetUpdateInfo u{ .binding = binding, .type = type };
+        u.bufferInfos.resize(1);
+        return u;
+    };
+    for (uint32 b = 0; b < 8; ++b)
+        m_tlasUpdates[b] = buf(b);
+
+    m_traceUpdates.clear();
+    m_traceUpdates.push_back(buf(0, vk::DescriptorType::eUniformBuffer)); // [0] UBO
+    for (const uint32 b : { 1u, 2u, 3u, 5u, 6u, 7u, 8u, 9u, 12u })           // [1..9] lightInfos, lightGrid, lightTable, vertices, indices, meshInfos, meshInstances, materialInfos, GI grid
+        m_traceUpdates.push_back(buf(b));
+    DescriptorSetUpdateInfo shadow{ .binding = 11, .type = vk::DescriptorType::eCombinedImageSampler }; // [10] shadow map
+    shadow.imageInfos.resize(1);
+    m_traceUpdates.push_back(oc::move(shadow));
+
+    m_traceTexUpdate = DescriptorSetUpdateInfo{ .binding = 13, .type = vk::DescriptorType::eCombinedImageSampler };
+    m_updateScratchBuilt = true;
+}
+
 void GIProbePipeline::recordTlasInstances(CommandBuffer& commandBuffer, uint32 frameIdx, TlasInstanceParams& params)
 {
     if (params.numInstances == 0)
         return;
+    if (!m_updateScratchBuilt)
+        buildUpdateScratch();
 
     DescriptorSet& set = m_tlasInstanceSets[frameIdx];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
 
     auto bufInfo = [](Buffer& buf) { return vk::DescriptorBufferInfo{ .buffer = buf.getBuffer(), .range = buf.getSize() }; };
-    oc::array<DescriptorSetUpdateInfo, 8> updates{
-        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.renderNodeTransforms) } },
-        DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.meshInstances) } },
-        DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.instanceOffsets) } },
-        DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.blasAddresses) } },
-        DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_tlasInstanceBuffer[frameIdx]) } },
-        DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.materialInfos) } },
-        DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.nodePassMasks) } },
-        DescriptorSetUpdateInfo{ .binding = 7, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.rtMeshAlias) } },
-    };
+    m_tlasUpdates[0].bufferInfos[0] = bufInfo(params.renderNodeTransforms);
+    m_tlasUpdates[1].bufferInfos[0] = bufInfo(params.meshInstances);
+    m_tlasUpdates[2].bufferInfos[0] = bufInfo(params.instanceOffsets);
+    m_tlasUpdates[3].bufferInfos[0] = bufInfo(params.blasAddresses);
+    m_tlasUpdates[4].bufferInfos[0] = bufInfo(m_tlasInstanceBuffer[frameIdx]);
+    m_tlasUpdates[5].bufferInfos[0] = bufInfo(params.materialInfos);
+    m_tlasUpdates[6].bufferInfos[0] = bufInfo(params.nodePassMasks);
+    m_tlasUpdates[7].bufferInfos[0] = bufInfo(params.rtMeshAlias);
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
-    commandBuffer.cmdUpdateDescriptorSets(m_tlasInstancePipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, updates);
+    commandBuffer.cmdUpdateDescriptorSets(m_tlasInstancePipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, m_tlasUpdates);
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_tlasInstancePipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_tlasInstancePipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
     TlasInstancePC pc{ .viewPos = params.viewPos, .maxRange = m_tlasRange, .numInstances = params.numInstances };
@@ -199,32 +222,36 @@ void GIProbePipeline::recordTlasInstances(CommandBuffer& commandBuffer, uint32 f
 
 void GIProbePipeline::recordTrace(CommandBuffer& commandBuffer, uint32 frameIdx, TraceParams& params)
 {
+    if (!m_updateScratchBuilt)
+        buildUpdateScratch();
     DescriptorSet& set = m_traceSets[frameIdx];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
     auto bufInfo = [](Buffer& buf) { return vk::DescriptorBufferInfo{ .buffer = buf.getBuffer(), .range = buf.getSize() }; };
 
-    oc::vector<DescriptorSetUpdateInfo> updates;
-    updates.push_back(DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } });
-    updates.push_back(DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.lightInfos) } });
-    updates.push_back(DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.lightGrid) } });
-    updates.push_back(DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.lightTable) } });
-    updates.push_back(DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.vertexBuffer) } });
-    updates.push_back(DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.indexBuffer) } });
-    updates.push_back(DescriptorSetUpdateInfo{ .binding = 7, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.meshInfos) } });
-    updates.push_back(DescriptorSetUpdateInfo{ .binding = 8, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.meshInstances) } });
-    updates.push_back(DescriptorSetUpdateInfo{ .binding = 9, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.materialInfos) } });
-
-    DescriptorSetUpdateInfo texUpdate{ .binding = 13, .type = vk::DescriptorType::eCombinedImageSampler };
-    for (uint16 texIdx = 0; texIdx < (uint16)Globals::textureManager.getNumTextures(); ++texIdx)
-        texUpdate.imageInfos.push_back(vk::DescriptorImageInfo{ .sampler = m_textureSampler.getSampler(), .imageView = Globals::textureManager.getViewForDescriptor(texIdx), .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal });
-    if (!texUpdate.imageInfos.empty())
-        updates.push_back(oc::move(texUpdate));
-
-    updates.push_back(DescriptorSetUpdateInfo{ .binding = 11, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { vk::DescriptorImageInfo{ .sampler = params.shadowMapSampler, .imageView = params.shadowMapView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } });
-    updates.push_back(DescriptorSetUpdateInfo{ .binding = 12, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_giGridData) } });
+    // Patch this frame's handles into the persistent scratch (index map in buildUpdateScratch).
+    m_traceUpdates[0].bufferInfos[0] = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) };
+    m_traceUpdates[1].bufferInfos[0] = bufInfo(params.lightInfos);
+    m_traceUpdates[2].bufferInfos[0] = bufInfo(params.lightGrid);
+    m_traceUpdates[3].bufferInfos[0] = bufInfo(params.lightTable);
+    m_traceUpdates[4].bufferInfos[0] = bufInfo(params.vertexBuffer);
+    m_traceUpdates[5].bufferInfos[0] = bufInfo(params.indexBuffer);
+    m_traceUpdates[6].bufferInfos[0] = bufInfo(params.meshInfos);
+    m_traceUpdates[7].bufferInfos[0] = bufInfo(params.meshInstances);
+    m_traceUpdates[8].bufferInfos[0] = bufInfo(params.materialInfos);
+    m_traceUpdates[9].bufferInfos[0] = bufInfo(m_giGridData);
+    m_traceUpdates[10].imageInfos[0] = vk::DescriptorImageInfo{ .sampler = params.shadowMapSampler, .imageView = params.shadowMapView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal };
 
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
-    commandBuffer.cmdUpdateDescriptorSets(m_tracePipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, updates);
+    commandBuffer.cmdUpdateDescriptorSets(m_tracePipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, m_traceUpdates);
+
+    // The whole texture array, every frame (streamed slot changes ride the pending-write path too, but
+    // this keeps the set complete). Its list keeps its capacity across frames; skipped when empty (a
+    // zero-count write is invalid).
+    m_traceTexUpdate.imageInfos.clear();
+    for (uint16 texIdx = 0; texIdx < (uint16)Globals::textureManager.getNumTextures(); ++texIdx)
+        m_traceTexUpdate.imageInfos.push_back(vk::DescriptorImageInfo{ .sampler = m_textureSampler.getSampler(), .imageView = Globals::textureManager.getViewForDescriptor(texIdx), .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal });
+    if (!m_traceTexUpdate.imageInfos.empty())
+        commandBuffer.cmdUpdateDescriptorSets(m_tracePipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, oc::span<DescriptorSetUpdateInfo>(&m_traceTexUpdate, 1));
 
     // The acceleration-structure descriptor (binding 4) needs a pNext'd write the buffer/image helper
     // does not support; write it directly.

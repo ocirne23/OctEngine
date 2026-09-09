@@ -166,6 +166,11 @@ private:
 
     // Double-buffered skinned BLASes (rebuilt every frame) + per-frame scratch. Allocated lazily/in place.
     oc::array<oc::vector<Blas>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_skinnedBlas;
+    // recordBuildSkinnedBlas's per-call build arrays, kept so the per-frame rebuild allocates nothing.
+    oc::vector<vk::AccelerationStructureGeometryKHR> m_skinnedGeoms;
+    oc::vector<vk::AccelerationStructureBuildGeometryInfoKHR> m_skinnedBuildInfos;
+    oc::vector<vk::AccelerationStructureBuildRangeInfoKHR> m_skinnedRanges;
+    oc::vector<vk::DeviceSize> m_skinnedScratchOffsets;
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_skinnedBlasScratch;
     oc::array<vk::DeviceAddress, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_skinnedBlasScratchAlignedAddr{};
 

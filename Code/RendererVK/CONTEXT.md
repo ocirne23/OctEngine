@@ -210,6 +210,10 @@ top-down camera hanging in empty sky shapes none of these:
   `GIProbePipeline::registerGridTweaks`'s callback: GPU idle → `resizeGrid()` (SH buffer re-allocated,
   clear scheduled; the consumers rebind it at their next record) → `Renderer::reloadShaders()`. A
   positive Y offset lifts the grid centre so more probes sit above the ground than below.
+* **"Record GI" allocates nothing per frame.** `GIProbePipeline` keeps its `DescriptorSetUpdateInfo`
+  lists as members (`buildUpdateScratch`, handles patched per record; the texture list keeps its
+  capacity), and `AccelerationStructure::recordBuildSkinnedBlas` refills member build arrays. Keep it
+  that way: a per-frame `oc::vector` temporary in that scope shows up as memory churn in the profiler.
 * **GI clipmap + TLAS range.** `giCascadeOrigin(c, u_sceneFocus.xyz)` centres every probe cascade on the
   focus (sample, trace and debug sides alike), the trace's previous-window freshness test uses last
   frame's focus (`m_giPrevFocusPos`), and the TLAS instance range bound (`RT/TLAS Range`) is measured

@@ -486,11 +486,17 @@ void AccelerationStructure::recordBuildSkinnedBlas(vk::CommandBuffer cmd, uint32
     bool wroteAddresses = false;
 
     // Pass 1: build geometry + sizes, find total scratch, (re)allocate BLAS buffers for new entries.
+    // The build arrays are members reused every frame (this runs per frame while anything skinned is
+    // on screen): assign() refills in place, so the steady state allocates nothing.
     const uint32 count = (uint32)builds.size();
-    oc::vector<vk::AccelerationStructureGeometryKHR> geoms(count);
-    oc::vector<vk::AccelerationStructureBuildGeometryInfoKHR> buildInfos(count);
-    oc::vector<vk::AccelerationStructureBuildRangeInfoKHR> ranges(count);
-    oc::vector<vk::DeviceSize> scratchOffsets(count);
+    oc::vector<vk::AccelerationStructureGeometryKHR>& geoms = m_skinnedGeoms;
+    oc::vector<vk::AccelerationStructureBuildGeometryInfoKHR>& buildInfos = m_skinnedBuildInfos;
+    oc::vector<vk::AccelerationStructureBuildRangeInfoKHR>& ranges = m_skinnedRanges;
+    oc::vector<vk::DeviceSize>& scratchOffsets = m_skinnedScratchOffsets;
+    geoms.assign(count, vk::AccelerationStructureGeometryKHR{});
+    buildInfos.assign(count, vk::AccelerationStructureBuildGeometryInfoKHR{});
+    ranges.assign(count, vk::AccelerationStructureBuildRangeInfoKHR{});
+    scratchOffsets.assign(count, vk::DeviceSize{ 0 });
     vk::DeviceSize totalScratch = 0;
     const vk::DeviceSize align = m_scratchAlignment;
     slot.resize(count);
