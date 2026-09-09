@@ -3199,6 +3199,10 @@ bool Renderer::recordGlobalIllum(uint32 frameIdx)
     // Gated by the GI toggle — the TLAS built above still serves RTAO and RT shadows when GI is off.
     if (m_rtParams.giEnabled)
     {
+    // The miss-ray sky map: after the "make prior writes visible" barrier above (dst compute), which
+    // orders the previous frame's trace reads of the single image before this write.
+    m_giProbePipeline.recordSkyMap(globalIllumCommandBuffer, frameIdx, frameData.ubo);
+
     GIProbePipeline::TraceParams traceParams{
         .ubo = frameData.ubo,
         .lightInfos = frameData.lightInfosBuffer,

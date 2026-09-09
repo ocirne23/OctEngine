@@ -25,7 +25,7 @@ namespace
         uint32 numRays;
         float temporalAlpha;
         float maxRayDist;
-        glm::vec3 prevViewPos; float _pad0;
+        glm::vec3 prevViewPos; uint32 updateInterval;
     };
     struct DebugPC
     {
@@ -46,16 +46,21 @@ void GIProbePipeline::initialize(uint32 maxTlasInstances, uint32 maxTextures, ui
     resizeGrid();
     resizeTlasInstanceBuffers(maxTlasInstances);
 
+    createSkyMap();
+
     ComputePipelineLayout tlasLayout;  buildTlasInstanceLayout(tlasLayout);     m_tlasInstancePipeline.initialize(tlasLayout);
+    ComputePipelineLayout skyLayout;   buildSkyMapLayout(skyLayout);            m_skyMapPipeline.initialize(skyLayout);
     ComputePipelineLayout traceLayout; buildTraceLayout(traceLayout, maxTextures); m_tracePipeline.initialize(traceLayout);
 
     for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
     {
         m_tlasInstanceSets[i].initialize(m_tlasInstancePipeline.getDescriptorSetLayout());
+        m_skyMapSets[i].initialize(m_skyMapPipeline.getDescriptorSetLayout());
         m_traceSets[i].initialize(m_tracePipeline.getDescriptorSetLayout(), numTextureDescriptors);
     }
 
     Tweak::intVar("GI", "Rays Per Probe", &m_giRaysPerProbe, 1, 128);
+    Tweak::intVar("GI", "Update interval (frames)", &m_giUpdateInterval, 1, 8);
     Tweak::floatVar("GI", "Temporal Alpha", &m_giTemporalAlpha, 0.0f, 0.05f, 0.001f);
     Tweak::floatVar("GI", "Max Ray Distance", &m_giMaxRayDist, 0.0f, 128.0f);
     Tweak::floatVar("GI", "Strength", &m_giStrength, 0.0f, 10.0f, 0.01f);
@@ -99,11 +104,24 @@ void GIProbePipeline::resizeTextureDescriptors(uint32 numTextureDescriptors)
         m_traceSets[i].initialize(m_tracePipeline.getDescriptorSetLayout(), numTextureDescriptors);
 }
 
+GIProbePipeline::~GIProbePipeline()
+{
+    vk::Device dev = Globals::device.getDevice();
+    if (m_skyMapSampler)
+        dev.destroySampler(m_skyMapSampler);
+    if (m_skyMapView)
+        dev.destroyImageView(m_skyMapView);
+    if (m_skyMapImage)
+        Globals::gpuAllocator.destroyImage(m_skyMapImage, m_skyMapMemory);
+}
+
 void GIProbePipeline::reloadShaders(uint32 maxTextures)
 {
     ComputePipelineLayout tlasLayout;  buildTlasInstanceLayout(tlasLayout);
+    ComputePipelineLayout skyLayout;   buildSkyMapLayout(skyLayout);
     ComputePipelineLayout traceLayout; buildTraceLayout(traceLayout, maxTextures);
     bool ok = m_tlasInstancePipeline.reloadShaders(tlasLayout);
+    ok = m_skyMapPipeline.reloadShaders(skyLayout) && ok;
     ok = m_tracePipeline.reloadShaders(traceLayout) && ok;
     if (!ok)
         printf("GIProbePipeline: shader reload failed, keeping previous pipeline(s)\n");
@@ -116,6 +134,104 @@ void GIProbePipeline::buildTlasInstanceLayout(ComputePipelineLayout& layout)
     for (uint32 b = 0; b <= 7; ++b)
         layout.descriptorSetLayoutBindings.push_back(storageBinding(b));
     layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(TlasInstancePC) });
+}
+
+void GIProbePipeline::buildSkyMapLayout(ComputePipelineLayout& layout)
+{
+    layout.computeShaderDebugFilePath = "Shaders/gi_sky_map.cs.glsl";
+    layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
+    auto& b = layout.descriptorSetLayoutBindings;
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // UBO (sun / sky params)
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });  // the sky map
+}
+
+void GIProbePipeline::createSkyMap()
+{
+    vk::Device dev = Globals::device.getDevice();
+    constexpr vk::Format format = vk::Format::eR16G16B16A16Sfloat;
+    vk::ImageCreateInfo info{
+        .imageType = vk::ImageType::e2D,
+        .format = format,
+        .extent = { SKY_MAP_WIDTH, SKY_MAP_HEIGHT, 1 },
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = vk::SampleCountFlagBits::e1,
+        .tiling = vk::ImageTiling::eOptimal,
+        .usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled,
+        .sharingMode = vk::SharingMode::eExclusive,
+        .initialLayout = vk::ImageLayout::eUndefined,
+    };
+    (void)Globals::gpuAllocator.createImage(info, m_skyMapImage, m_skyMapMemory, "GI.skyMap");
+    vk::ImageViewCreateInfo viewInfo{
+        .image = m_skyMapImage,
+        .viewType = vk::ImageViewType::e2D,
+        .format = format,
+        .subresourceRange = { .aspectMask = vk::ImageAspectFlagBits::eColor, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 },
+    };
+    auto viewResult = dev.createImageView(viewInfo);
+    assert(viewResult.result == vk::Result::eSuccess);
+    m_skyMapView = viewResult.value;
+
+    // One-time UNDEFINED -> GENERAL; the image stays GENERAL for life (storage write + sampled read).
+    CommandBuffer init;
+    init.initialize(vk::CommandBufferLevel::ePrimary);
+    vk::CommandBuffer cmd = init.begin(true);
+    vk::ImageMemoryBarrier2 bar{
+        .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+        .oldLayout = vk::ImageLayout::eUndefined,
+        .newLayout = vk::ImageLayout::eGeneral,
+        .image = m_skyMapImage,
+        .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 },
+    };
+    cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &bar });
+    init.end();
+    init.submitGraphics();
+    (void)Globals::device.graphicsQueueWaitIdle();
+
+    // Azimuth wraps (repeat U), the poles clamp (V); bilinear, no mips.
+    vk::SamplerCreateInfo samplerInfo{
+        .magFilter = vk::Filter::eLinear,
+        .minFilter = vk::Filter::eLinear,
+        .mipmapMode = vk::SamplerMipmapMode::eNearest,
+        .addressModeU = vk::SamplerAddressMode::eRepeat,
+        .addressModeV = vk::SamplerAddressMode::eClampToEdge,
+        .addressModeW = vk::SamplerAddressMode::eClampToEdge,
+        .anisotropyEnable = vk::False,
+        .minLod = 0.0f,
+        .maxLod = 0.0f,
+        .borderColor = vk::BorderColor::eFloatOpaqueBlack,
+        .unnormalizedCoordinates = vk::False,
+    };
+    auto samplerResult = dev.createSampler(samplerInfo);
+    assert(samplerResult.result == vk::Result::eSuccess);
+    m_skyMapSampler = samplerResult.value;
+}
+
+void GIProbePipeline::recordSkyMap(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo)
+{
+    if (!m_updateScratchBuilt)
+        buildUpdateScratch();
+    DescriptorSet& set = m_skyMapSets[frameIdx];
+    vk::DescriptorSet vkSet = set.getDescriptorSet();
+    m_skyUpdates[0].bufferInfos[0] = vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) };
+    m_skyUpdates[1].imageInfos[0] = vk::DescriptorImageInfo{ .imageView = m_skyMapView, .imageLayout = vk::ImageLayout::eGeneral };
+
+    vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
+    commandBuffer.cmdUpdateDescriptorSets(m_skyMapPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, m_skyUpdates);
+    cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_skyMapPipeline.getPipeline());
+    cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_skyMapPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
+    cmd.dispatch(SKY_MAP_WIDTH / 8, SKY_MAP_HEIGHT / 8, 1);
+
+    // sky-map write -> the trace's sampled read.
+    vk::MemoryBarrier2 bar{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
+    };
+    cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &bar });
 }
 
 void GIProbePipeline::buildTraceLayout(ComputePipelineLayout& layout, uint32 maxTextures)
@@ -133,6 +249,7 @@ void GIProbePipeline::buildTraceLayout(ComputePipelineLayout& layout, uint32 max
     b.push_back(storageBinding(7)); // meshInfos
     b.push_back(storageBinding(8)); // meshInstances
     b.push_back(storageBinding(9)); // materials
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 10, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // miss-ray sky map
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 11, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // shadow map
     b.push_back(storageBinding(12)); // GI clipmap SH volume (read + write)
     // Texture array last (13 = the set's highest binding number, required for eVariableDescriptorCount):
@@ -187,6 +304,13 @@ void GIProbePipeline::buildUpdateScratch()
     DescriptorSetUpdateInfo shadow{ .binding = 11, .type = vk::DescriptorType::eCombinedImageSampler }; // [10] shadow map
     shadow.imageInfos.resize(1);
     m_traceUpdates.push_back(oc::move(shadow));
+    DescriptorSetUpdateInfo sky{ .binding = 10, .type = vk::DescriptorType::eCombinedImageSampler };    // [11] miss-ray sky map
+    sky.imageInfos.resize(1);
+    m_traceUpdates.push_back(oc::move(sky));
+
+    m_skyUpdates[0] = buf(0, vk::DescriptorType::eUniformBuffer);
+    m_skyUpdates[1] = DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageImage };
+    m_skyUpdates[1].imageInfos.resize(1);
 
     m_traceTexUpdate = DescriptorSetUpdateInfo{ .binding = 13, .type = vk::DescriptorType::eCombinedImageSampler };
     m_updateScratchBuilt = true;
@@ -240,6 +364,7 @@ void GIProbePipeline::recordTrace(CommandBuffer& commandBuffer, uint32 frameIdx,
     m_traceUpdates[8].bufferInfos[0] = bufInfo(params.materialInfos);
     m_traceUpdates[9].bufferInfos[0] = bufInfo(m_giGridData);
     m_traceUpdates[10].imageInfos[0] = vk::DescriptorImageInfo{ .sampler = params.shadowMapSampler, .imageView = params.shadowMapView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal };
+    m_traceUpdates[11].imageInfos[0] = vk::DescriptorImageInfo{ .sampler = m_skyMapSampler, .imageView = m_skyMapView, .imageLayout = vk::ImageLayout::eGeneral };
 
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
     commandBuffer.cmdUpdateDescriptorSets(m_tracePipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, m_traceUpdates);
@@ -270,6 +395,7 @@ void GIProbePipeline::recordTrace(CommandBuffer& commandBuffer, uint32 frameIdx,
         .temporalAlpha = m_giTemporalAlpha,
         .maxRayDist = m_giMaxRayDist,
         .prevViewPos = params.prevViewPos,
+        .updateInterval = (uint32)oc::max(m_giUpdateInterval, 1),
     };
     cmd.pushConstants(m_tracePipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
 

@@ -113,8 +113,10 @@ void main()
     o.blasLo = addr.x;
     o.blasHi = addr.y;
 
-    // Mask gates traversal: the ray uses cullMask 0xFF, so mask 0 makes this instance unhittable. Mask off
-    // any instance that cannot be safely traversed:
+    // Instances that must not be traced become INACTIVE (acceleration structure reference 0, below): the
+    // TLAS build skips an inactive instance entirely, so it costs nothing in the build or in traversal,
+    // where a mask-0 instance would still be a node in the tree. Excluded is any instance that cannot
+    // be safely traversed:
     //  - no real BLAS (zeroed/out-of-range address) -> would chase a null/garbage pointer, and
     //  - a non-finite transform (NaN/Inf from an out-of-range renderNode/instanceOffset index) -> makes the
     //    driver's TLAS bounds garbage, which also MMU-faults traversal on NVIDIA.
@@ -133,8 +135,13 @@ void main()
     // Range bound: rays never reach past the GI clipmap + max ray distance, so distant geometry
     // only bloats the TLAS build (origin-distance test: cheap, conservative via the RT/GI tweak).
     const bool inRange = distance(pos, pc.viewPos) <= pc.maxRange;
-    const uint mask = (hasBlas && finiteXform && !noRT && inRtSet && inRange) ? 0xFFu : 0x00u;
-    o.instanceCustomIndexAndMask = (id & 0x00FFFFFFu) | (mask << 24);       // custom = instance idx
+    const bool traceable = hasBlas && finiteXform && !noRT && inRtSet && inRange;
+    if (!traceable)
+    {
+        o.blasLo = 0u; // reference 0 = inactive: not built, not traversed
+        o.blasHi = 0u;
+    }
+    o.instanceCustomIndexAndMask = (id & 0x00FFFFFFu) | (0xFFu << 24);      // custom = instance idx
 
     out_instances[id] = o;
 }

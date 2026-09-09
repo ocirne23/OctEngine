@@ -220,6 +220,19 @@ top-down camera hanging in empty sky shapes none of these:
 * **`DescriptorSetUpdateInfo` holds small-buffer vectors** (`oc::small_vector<…, 2>`,
   CommandBuffer.ixx): the per-frame passes build these as temporaries with one info each, and with
   `oc::vector` every entry was a heap allocation per record — the bulk of "Record primary"'s churn.
+* **GI trace cost levers** (gi_probe_trace.cs.glsl): **"GI/Update interval (frames)"** — a probe traces
+  every N frames, interleaved per WORKGROUP (whole waves exit) with the blend alpha scaled by N, so
+  wall-time convergence is unchanged and the ray count divides by N; fresh (just scrolled-in) probes
+  always trace. **Miss rays sample a per-frame lat-long sky bake** (`gi_sky_map.cs.glsl`, 128×64
+  RGBA16F, recorded by `GIProbePipeline::recordSkyMap` just before the trace) instead of marching the
+  atmosphere; the virtual sky probe keeps the analytic `skyRadiance`. **Gather hits use
+  `giEvalBounce`** (gi_probe.inc.glsl, write side): the cheap multi-bounce lookup — no Chebyshev, no
+  cross-cascade fade, walk starts at the tracing probe's cascade — because the result is temporally
+  blended. The probe buffer is **NOT `coherent`** in the trace (each invocation writes only its own
+  probe; stale cross-probe reads are by design) — the light/force grid INSERT passes must keep theirs
+  (their cell-claim spin re-reads the table with a plain load). **TLAS exclusions are INACTIVE
+  instances** (reference 0, `gi_tlas_instances.cs.glsl`), which the build skips entirely, not
+  mask-0 nodes.
 * **"Record GI" allocates nothing per frame.** `GIProbePipeline` keeps its `DescriptorSetUpdateInfo`
   lists as members (`buildUpdateScratch`, handles patched per record; the texture list keeps its
   capacity), and `AccelerationStructure::recordBuildSkinnedBlas` refills member build arrays. Keep it

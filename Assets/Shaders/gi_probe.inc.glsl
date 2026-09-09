@@ -347,6 +347,67 @@ vec3 giDebugColor(vec3 worldPos, vec3 n)
 
 #ifdef GI_PROBE_WRITE
 
+// Multi-bounce lookup for the trace's gather HITS — the cheap cousin of evalProbeSHCoverage. The result
+// is albedo-scaled and temporally blended at a few permille per visit, so noise is free: no Chebyshev
+// visibility (skips the two depth-moment loads and the reconstruction per probe), no cross-cascade fade,
+// and the walk starts at cStart (the tracing probe's cascade: its rays reach 8(c+1) m and its window
+// spans 32 spacings, so the hit nearly always fits) instead of the finest. 4 vec4 loads per probe
+// (misc + SH) instead of 6, one cascade instead of up to two. Backface-dead rejection and the
+// half-Lambert probe-direction fade stay — they are what keeps a wall from leaking into the bounce.
+// coverage behaves like evalProbeSHCoverage's (1 inside, fading over the outermost window's edge band).
+vec3 giEvalBounce(vec3 worldPos, vec3 n, int cStart, out float coverage)
+{
+    coverage = 1.0;
+    for (int c = max(cStart, 0); c < GI_NUM_CASCADES; ++c)
+    {
+        vec3  p = giBiasedSample(worldPos, n, giCascadeSpacing(c));
+        ivec3 base, origin; int s; vec3 frac;
+        if (!giCascadeFits(c, p, base, origin, s, frac))
+            continue;
+
+        vec3 a0 = vec3(0.0), a1 = vec3(0.0), a2 = vec3(0.0), a3 = vec3(0.0);
+        float totalW = 0.0;
+        for (int i = 0; i < 8; ++i)
+        {
+            ivec3 off = ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
+            vec3 w3 = mix(1.0 - frac, frac, vec3(off));
+            float w = w3.x * w3.y * w3.z;
+            if (w <= 0.0)
+                continue;
+            ivec3 lc = base + off;
+            uint cellBase = giProbeBase(c, lc);
+            vec4 misc = GI_GRID_DATA_NAME[cellBase + GI_MISC_V4]; // x = backface fraction, yzw = offset
+            w *= 1.0 - smoothstep(GI_BACKFACE_DEAD_MIN, GI_BACKFACE_DEAD_MAX, misc.x);
+            if (w <= 0.0)
+                continue;
+            vec3 toProbe = vec3(lc) * float(s) + misc.yzw - p;
+            float len = length(toProbe);
+            if (len > 1e-4)
+                w *= dot(n, toProbe / len) * 0.5 + 0.5;
+            if (w <= 0.0)
+                continue;
+            vec3 c0, c1, c2, c3;
+            giReadSH(cellBase, c0, c1, c2, c3);
+            a0 += w * c0; a1 += w * c1; a2 += w * c2; a3 += w * c3;
+            totalW += w;
+        }
+        if (totalW <= 1e-4)
+            continue; // every probe backfaced -> try a coarser cascade
+
+        if (c == GI_NUM_CASCADES - 1)
+        {
+            vec3  cellInWin = vec3(base - origin);
+            vec3  distCells = min(cellInWin, vec3(GI_PROBE_DIMS - 2) - cellInWin);
+            float edge = min(min(distCells.x, distCells.y), distCells.z);
+            coverage = clamp(edge / (float(GI_PROBE_DIM_MIN) * 0.2), 0.0, 1.0);
+        }
+        float inv = 1.0 / totalW;
+        return giEvalSH(a0 * inv, a1 * inv, a2 * inv, a3 * inv, n);
+    }
+    coverage = 0.0;
+    return vec3(-1.0);
+}
+
 void giStoreCell(uint cellBase, vec3 c0, vec3 c1, vec3 c2, vec3 c3)
 {
     GI_GRID_DATA_NAME[cellBase]      = vec4(c0, c1.r);

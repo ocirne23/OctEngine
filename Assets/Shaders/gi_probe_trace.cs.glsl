@@ -59,9 +59,13 @@ layout (binding = 7, std430) readonly buffer InMeshInfos   { InMeshInfo in_meshI
 layout (binding = 8, std430) readonly buffer InInstances   { InMeshInstance in_instances[]; };
 layout (binding = 9, std430) readonly buffer InMaterials   { MaterialInfo in_materialInfos[]; };
 layout (binding = 13) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
+layout (binding = 10) uniform sampler2D u_skyMap; // per-frame lat-long bake of skyRadiance (gi_sky_map.cs.glsl)
 layout (binding = 11) uniform sampler2DArrayShadow u_shadowMap;
 // GI probe clipmap volume (persistent SH, read+write for the multi-bounce lookup + temporal blend).
-layout (binding = 12, std430) coherent buffer GiGridData { vec4 gi_gridData[]; };
+// NOT coherent: every invocation writes only its own probe and reads other probes' cells, where a
+// stale (last-visit) value is accepted by design — the qualifier would bypass L1 on the ~30 vec4 loads
+// per gather hit that the multi-bounce lookup makes.
+layout (binding = 12, std430) buffer GiGridData { vec4 gi_gridData[]; };
 
 layout (push_constant) uniform PushConstants
 {
@@ -69,8 +73,8 @@ layout (push_constant) uniform PushConstants
     uint  numRays;
     float temporalAlpha;
     float maxRayDist;
-    vec3  prevViewPos; // last frame's scene focus (drives the previous clipmap window for freshness)
-    float _pad;
+    vec3  prevViewPos;    // last frame's scene focus (drives the previous clipmap window for freshness)
+    uint  updateInterval; // a probe (workgroup) traces every N frames; fresh probes always trace
 } pc;
 
 // Light grid (read) + shared diffuse lighting.
@@ -109,6 +113,14 @@ vec3 sampleSphere(uint i, uint n, vec2 jitter)
 vec3 vNormal(uint vi) { uint b = vi * 12u; return vec3(in_vertices[b + 3u], in_vertices[b + 4u], in_vertices[b + 5u]); }
 vec2 vUV(uint vi)     { uint b = vi * 12u; return vec2(in_vertices[b + 10u], in_vertices[b + 11u]); }
 
+// Miss radiance: the per-frame sky bake (same lat-long mapping as gi_sky_map.cs.glsl) instead of the
+// analytic skyRadiance march per ray. The virtual sky probe (projectSkySH) keeps the analytic call.
+vec3 skyMiss(vec3 d)
+{
+    const vec2 uv = vec2(atan(d.x, d.z) * (0.5 / PI) + 0.5, acos(clamp(d.y, -1.0, 1.0)) * (1.0 / PI));
+    return textureLod(u_skyMap, uv, 0.0).rgb;
+}
+
 // View-independent sun visibility from a point: one shadow ray toward the sun via the TLAS. Returns 1
 // (lit) or 0 (occluded). Used per gather-ray hit (RT sun mode) so off-screen hits are shadowed
 // correctly, unlike the camera-frustum-fit shadow maps.
@@ -127,7 +139,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out fl
     while (rayQueryProceedEXT(rq)) {}
 
     if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionTriangleEXT)
-        return skyRadiance(dir);
+        return skyMiss(dir);
 
     const int instanceIdx = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
     const int prim        = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
@@ -138,24 +150,24 @@ vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out fl
     // Bound every post-hit buffer access. A bad meshIdx/triBase/vertex index would otherwise read wildly
     // out of bounds and MMU-fault; treat any out-of-range hit as a miss.
     if (uint(instanceIdx) >= in_instances.length())
-        return skyRadiance(dir);
+        return skyMiss(dir);
     // Geometry comes from the RT meshIdx the TLAS writer packed into the instance's sbtOffset (a LOD
     // chain traces one shared BLAS, which may differ from the raster-selected level the instance
     // references); the material still comes from the instance.
     const uint meshIdx     = rayQueryGetIntersectionInstanceShaderBindingTableRecordOffsetEXT(rq, true);
     const uint materialIdx = in_instances[instanceIdx].meshIdxMaterialIdx >> 16;
     if (meshIdx >= in_meshInfos.length() || materialIdx >= in_materialInfos.length())
-        return skyRadiance(dir);
+        return skyMiss(dir);
     const InMeshInfo mi    = in_meshInfos[meshIdx];
 
     const uint triBase = mi.firstIndex + uint(prim) * 3u;
     if (triBase + 2u >= in_indices.length())
-        return skyRadiance(dir);
+        return skyMiss(dir);
     const uint v0 = uint(mi.vertexOffset) + in_indices[triBase + 0u];
     const uint v1 = uint(mi.vertexOffset) + in_indices[triBase + 1u];
     const uint v2 = uint(mi.vertexOffset) + in_indices[triBase + 2u];
     if ((max(max(v0, v1), v2) * 12u + 11u) >= in_vertices.length())
-        return skyRadiance(dir);
+        return skyMiss(dir);
 
     const vec3 b = vec3(1.0 - bc.x - bc.y, bc.x, bc.y);
     const vec3 objN = normalize(b.x * vNormal(v0) + b.y * vNormal(v1) + b.z * vNormal(v2));
@@ -175,9 +187,11 @@ vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out fl
     g_sunShadowOverride = sunVisibility(worldPos + worldN * 0.02);
     vec3 radiance = giGatherDirect(worldPos, worldN, albedo);
     // Previous-frame indirect at the hit -> multi-bounce (infinite, temporally). The cur SH already holds
-    // the carried-forward irradiance for this frame.
+    // the carried-forward irradiance for this frame. The CHEAP lookup (no Chebyshev, no cross-cascade
+    // fade, starting at this probe's own cascade): the result is albedo-scaled and blended at
+    // temporalAlpha, so its noise is free and the shading-quality path's ~2x loads are not.
     float giCov;
-    vec3 prevE = evalProbeSHCoverage(worldPos, worldN, giCov);
+    vec3 prevE = giEvalBounce(worldPos, worldN, cascade, giCov);
     if (prevE.x >= 0.0) // fade the multi-bounce with coverage so traced hits near the field's edge don't step
         radiance += albedo * (prevE / PI) * giCov;
     return radiance;
@@ -261,6 +275,13 @@ void main()
     const ivec3 prevOrigin = giCascadeOrigin(cascade, pc.prevViewPos);
     const bool  fresh = any(lessThan(lc, prevOrigin)) || any(greaterThanEqual(lc, prevOrigin + GI_PROBE_DIMS));
 
+    // Update interval ("GI/Update interval"): a probe traces every updateInterval frames, with the blend
+    // alpha scaled to match, so convergence in WALL time is unchanged while the ray count divides by the
+    // interval. Interleaved per WORKGROUP (whole waves exit, no half-empty waves); fresh probes always
+    // trace — a skipped fresh slot would show the scrolled-out probe's data for a frame.
+    if (!fresh && ((gl_WorkGroupID.x + pc.frameIndex) % pc.updateInterval) != 0u)
+        return;
+
     // Relocation: trace from the offset position steered in previous frames (fresh slots hold a scrolled-out
     // probe's offset -> start back on the lattice).
     const uint cellBase = giProbeBase(cascade, lc);
@@ -338,7 +359,7 @@ void main()
     if (offLen > maxLen)
         newOffset *= maxLen / offLen;
 
-    float alpha = fresh ? 1.0 : pc.temporalAlpha;
+    float alpha = fresh ? 1.0 : min(pc.temporalAlpha * float(pc.updateInterval), 1.0);
     if (!fresh)
     {
         // The stored moments were traced from the old position: after a relocation step, blend faster in

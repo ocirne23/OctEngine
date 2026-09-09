@@ -4,6 +4,7 @@ import Core;
 import Core.glm;
 
 import :VK;
+import :Allocator;
 import :Buffer;
 import :CommandBuffer;
 import :ComputePipeline;
@@ -17,15 +18,20 @@ import :Layout;
 // nested toroidal probe grids (centred on the SCENE FOCUS — u_sceneFocus: the game's player, else the camera —
 // with doubling spacing) store SH-L1 irradiance at absolute lattice
 // positions; toroidal addressing carries irradiance forward in place with no hash table, copy, or ping-pong.
-// Two compute passes per frame:
+// Three compute passes per frame:
 //   1. TLAS-instance pass : writes the per-instance VkAccelerationStructureInstanceKHR array on the GPU.
-//   2. Trace pass         : ray-queries the TLAS per probe, shades hits (reusing the light grid + sun), and
+//   2. Sky-map pass       : bakes skyRadiance into a small lat-long image the trace samples on MISS rays
+//                           (one 8x8-workgroup dispatch instead of an atmosphere march per miss).
+//   3. Trace pass         : ray-queries the TLAS per probe, shades hits (reusing the light grid + sun), and
 //                           temporally blends into each probe's SH-L1 (full replace for probes that just
 //                           scrolled into the clipmap). The probe set + window is derived from the scene focus.
-// The TLAS is built by the AccelerationStructure object between the two passes (orchestrated by the Renderer).
+//                           "GI/Update interval": a probe traces every N frames (per workgroup, alpha scaled
+//                           by N — same wall-time convergence, 1/N of the rays); fresh probes always trace.
+// The TLAS is built by the AccelerationStructure object between passes 1 and 3 (orchestrated by the Renderer).
 export class GIProbePipeline final
 {
 public:
+    ~GIProbePipeline();
     // maxTextures = fixed device-limit cap baked into the trace layout; numTextureDescriptors = live
     // variable count the trace sets are allocated with. Both owned by the Renderer.
     void initialize(uint32 maxTlasInstances, uint32 maxTextures, uint32 numTextureDescriptors);
@@ -63,6 +69,10 @@ public:
         uint32 numInstances;
     };
     void recordTlasInstances(CommandBuffer& commandBuffer, uint32 frameIdx, TlasInstanceParams& params);
+
+    // Bakes this frame's skyRadiance into the miss-ray sky map (+ the write -> trace-read barrier). Record
+    // AFTER a barrier that orders the previous frame's trace (its reads of the single image) before compute.
+    void recordSkyMap(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo);
 
     struct TraceParams
     {
@@ -104,16 +114,29 @@ public:
 
 private:
     void buildTlasInstanceLayout(ComputePipelineLayout& layout);
+    void buildSkyMapLayout(ComputePipelineLayout& layout);
     void buildTraceLayout(ComputePipelineLayout& layout, uint32 maxTextures);
     void buildDebugLayout(GraphicsPipelineLayout& layout);
+    void createSkyMap();
 
     ComputePipeline m_tlasInstancePipeline;
+    ComputePipeline m_skyMapPipeline;
     ComputePipeline m_tracePipeline;
     GraphicsPipeline m_debugPipeline;
     vk::RenderPass m_debugRenderPass;
 
+    // Miss-ray sky map (gi_sky_map.cs.glsl): one small lat-long RGBA16F image, GENERAL layout for life,
+    // rewritten every GI frame before the trace. Single-buffered: the previous frame's trace reads are
+    // ordered before this frame's write by the barrier the Renderer records ahead of recordSkyMap.
+    static constexpr uint32 SKY_MAP_WIDTH = 128, SKY_MAP_HEIGHT = 64;
+    vk::Image m_skyMapImage;
+    VmaAllocation m_skyMapMemory{};
+    vk::ImageView m_skyMapView;
+    vk::Sampler m_skyMapSampler; // linear, U repeat (azimuth wraps), V clamp (poles)
+
     // GI probe trace tuning (runtime-tweakable; consumed by GIProbePipeline::recordTrace).
-    int m_giRaysPerProbe = 17;         // gather rays per probe per frame
+    int m_giRaysPerProbe = 17;         // gather rays per probe per visit
+    int m_giUpdateInterval = 8;        // a probe traces every N frames (alpha scaled by N; fresh probes always trace)
     float m_giTemporalAlpha = 0.005f;  // per-frame blend toward freshly traced irradiance
     float m_giMaxRayDist = 8.0f;       // gather ray max distance (world units)
     float m_giStrength = 1.0f;         // multiplier on the sampled probe irradiance at shading time
@@ -141,6 +164,7 @@ private:
     Sampler m_textureSampler;
 
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_tlasInstanceSets;
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_skyMapSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_traceSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_debugSets;
 
@@ -151,6 +175,7 @@ private:
     void buildUpdateScratch();
     bool m_updateScratchBuilt = false;
     oc::array<DescriptorSetUpdateInfo, 8> m_tlasUpdates;   // bindings 0..7 of the TLAS-instance set
+    oc::array<DescriptorSetUpdateInfo, 2> m_skyUpdates;    // the sky-map set: UBO + storage image
     oc::vector<DescriptorSetUpdateInfo> m_traceUpdates;    // the trace set's fixed bindings (see recordTrace for the index map)
     DescriptorSetUpdateInfo m_traceTexUpdate;              // binding 13: the whole texture array (written separately; may be empty)
 
