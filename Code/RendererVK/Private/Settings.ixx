@@ -414,7 +414,7 @@ export struct OceanParams
                                   // 0 = never cull from far data
 
     // Ray tracing budget (ocean.fs.glsl traces the scene TLAS per pixel for refraction + reflection).
-    float rtRefractionRange = 10.0f;  // max refracted-ray length (m): how far underwater geometry stays
+    float rtRefractionRange = 25.0f;  // max refracted-ray length (m): how far underwater geometry stays
                                        // visible through the surface (the ~99% Beer-Lambert extinction
                                        // bound still applies on top, so clear water is the case this caps)
     float rtReflectionRange = 3000.0f; // max mirror-ray length (m): how distant scenery still reflects

@@ -70,9 +70,14 @@ public:
     };
     void recordTlasInstances(CommandBuffer& commandBuffer, uint32 frameIdx, TlasInstanceParams& params);
 
-    // Bakes this frame's skyRadiance into the miss-ray sky map (+ the write -> trace-read barrier). Record
-    // AFTER a barrier that orders the previous frame's trace (its reads of the single image) before compute.
+    // Bakes this frame's sky into the sky map: layer 0 = skyRadiance (GI miss rays, the forward pass's
+    // skyRadiance(up) ambient), layer 1 = the mirror sky (ocean / terrain-film reflection rays: 12-step
+    // march, saturation curve, no ground term). Self-contained barriers: last frame's compute + fragment
+    // reads of the single image -> this write -> this frame's compute + fragment reads. Recorded on EVERY
+    // frame (ahead of the RT toggle) because the forward pass samples it.
     void recordSkyMap(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo);
+    vk::ImageView getSkyMapView() const { return m_skyMapView; }
+    vk::Sampler getSkyMapSampler() const { return m_skyMapSampler; }
 
     struct TraceParams
     {
@@ -125,10 +130,10 @@ private:
     GraphicsPipeline m_debugPipeline;
     vk::RenderPass m_debugRenderPass;
 
-    // Miss-ray sky map (gi_sky_map.cs.glsl): one small lat-long RGBA16F image, GENERAL layout for life,
-    // rewritten every GI frame before the trace. Single-buffered: the previous frame's trace reads are
-    // ordered before this frame's write by the barrier the Renderer records ahead of recordSkyMap.
-    static constexpr uint32 SKY_MAP_WIDTH = 128, SKY_MAP_HEIGHT = 64;
+    // Sky map (gi_sky_map.cs.glsl): a small lat-long RGBA16F 2-layer array (0 = skyRadiance, 1 = mirror
+    // sky), GENERAL layout for life, rewritten every frame. Single-buffered under recordSkyMap's barriers.
+    // 256x128: reflections look along the horizon band, where the sunset gradient needs ~1.4 deg rows.
+    static constexpr uint32 SKY_MAP_WIDTH = 256, SKY_MAP_HEIGHT = 128, SKY_MAP_LAYERS = 2;
     vk::Image m_skyMapImage;
     VmaAllocation m_skyMapMemory{};
     vk::ImageView m_skyMapView;

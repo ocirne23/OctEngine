@@ -154,7 +154,7 @@ void GIProbePipeline::createSkyMap()
         .format = format,
         .extent = { SKY_MAP_WIDTH, SKY_MAP_HEIGHT, 1 },
         .mipLevels = 1,
-        .arrayLayers = 1,
+        .arrayLayers = SKY_MAP_LAYERS,
         .samples = vk::SampleCountFlagBits::e1,
         .tiling = vk::ImageTiling::eOptimal,
         .usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled,
@@ -164,9 +164,9 @@ void GIProbePipeline::createSkyMap()
     (void)Globals::gpuAllocator.createImage(info, m_skyMapImage, m_skyMapMemory, "GI.skyMap");
     vk::ImageViewCreateInfo viewInfo{
         .image = m_skyMapImage,
-        .viewType = vk::ImageViewType::e2D,
+        .viewType = vk::ImageViewType::e2DArray,
         .format = format,
-        .subresourceRange = { .aspectMask = vk::ImageAspectFlagBits::eColor, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 },
+        .subresourceRange = { .aspectMask = vk::ImageAspectFlagBits::eColor, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = SKY_MAP_LAYERS },
     };
     auto viewResult = dev.createImageView(viewInfo);
     assert(viewResult.result == vk::Result::eSuccess);
@@ -183,7 +183,7 @@ void GIProbePipeline::createSkyMap()
         .oldLayout = vk::ImageLayout::eUndefined,
         .newLayout = vk::ImageLayout::eGeneral,
         .image = m_skyMapImage,
-        .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 },
+        .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, SKY_MAP_LAYERS },
     };
     cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &bar });
     init.end();
@@ -220,18 +220,28 @@ void GIProbePipeline::recordSkyMap(CommandBuffer& commandBuffer, uint32 frameIdx
 
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
     commandBuffer.cmdUpdateDescriptorSets(m_skyMapPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, m_skyUpdates);
+
+    // Last frame's readers of the single image (the trace, the forward pass) -> this write: an execution
+    // dependency is all a write-after-read needs.
+    vk::MemoryBarrier2 readToWrite{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eFragmentShader,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+    };
+    cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &readToWrite });
+
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_skyMapPipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_skyMapPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
-    cmd.dispatch(SKY_MAP_WIDTH / 8, SKY_MAP_HEIGHT / 8, 1);
+    cmd.dispatch(SKY_MAP_WIDTH / 8, SKY_MAP_HEIGHT / 8, SKY_MAP_LAYERS);
 
-    // sky-map write -> the trace's sampled read.
-    vk::MemoryBarrier2 bar{
+    // sky-map write -> the trace's and the forward pass's sampled reads.
+    vk::MemoryBarrier2 writeToRead{
         .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
         .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eFragmentShader,
         .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
     };
-    cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &bar });
+    cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &writeToRead });
 }
 
 void GIProbePipeline::buildTraceLayout(ComputePipelineLayout& layout, uint32 maxTextures)

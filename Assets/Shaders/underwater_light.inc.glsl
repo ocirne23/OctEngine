@@ -75,7 +75,12 @@ float underwaterLiveWaveY(vec2 worldXZ, float columnDepth, float waterLevel)
     return rawY * (1.0 - fadeIn * (1.0 - base));
 }
 
-vec3 underwaterSunTransmittance(vec2 worldXZ, float depthBelow, float footprint, float reach)
+// waterLevel = the local CALM water level: the caustic's wave field is scaled by the ocean's ONE depth
+// weight at the entry point (mirrors oceanSurfaceWeight — 1 in open water, easing to swash amplitude x
+// sea x land fades across the approach band), the same damping the drawn surface (ocean mesh, terrain
+// film) applies. Without it the surf zone focused full open-water waves under a damped surface, and
+// the pattern read as distorted against the film above it.
+vec3 underwaterSunTransmittance(vec2 worldXZ, float depthBelow, float footprint, float reach, float waterLevel)
 {
     const vec3 sunDir = normalize(u_sunDirection.xyz);
     const float sy = max(sunDir.y, 0.08); // grazing sun: cap the path-length blow-up
@@ -98,6 +103,17 @@ vec3 underwaterSunTransmittance(vec2 worldXZ, float depthBelow, float footprint,
             sxx += g.z;
             szz += g.w;
             sxz += textureLod(u_uwOceanMaps, vec3(uv, float(c)), lod).w; // displacement layer w = dDx/dz
+        }
+        // The shore's wave damping (see the header comment): the Jacobian terms are linear in the
+        // displacement, so the weight multiplies straight in. Column depth at the entry point is
+        // unknown; the shaded point's depth stands in (the entry lies within a few metres of it).
+        {
+            const float seaFade = 1.0 - smoothstep(0.05, 1.0, abs(waterLevel - u_oceanParams2.w));
+            const float reachSw = max(u_oceanParams7.w, 0.01);
+            const float landFade = clamp(1.0 + min(depthBelow, 0.0) / reachSw, 0.0, 1.0);
+            const float fadeIn = 1.0 - smoothstep(0.0, max(2.0 * reachSw, u_oceanParams4.z * u_oceanParams2.y), depthBelow);
+            const float w = 1.0 - fadeIn * (1.0 - u_oceanParams7.z * seaFade * landFade);
+            sxx *= w; szz *= w; sxz *= w;
         }
         // Fold Jacobian (Tessendorf): < 1 converging (bright), > 1 diverging (dim). Applied as a CONTRAST
         // EXPONENT — "Caustic strength" steepens the response, so converging zones spike into hot

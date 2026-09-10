@@ -1068,9 +1068,10 @@ void Renderer::buildUboOcean()
     ubo.oceanParams7 = glm::vec4(glm::max(ocean.cullMargin, 0.0f), glm::clamp(ocean.shoreFoamMax, 0.0f, 1.0f), swashAmp, swashReach);
     ubo.oceanParams8 = glm::vec4(0.0f /* x: the removed swash drawdown */, glm::clamp(ocean.shoreFoamBias, -1.0f, 1.0f),
         glm::max(ocean.swashFlow, 0.0f), glm::max(ocean.rtRayCutoffDist, 0.0f));
-    ubo.oceanParams9 = glm::vec4(0.0f /* x: the removed trough margin */, glm::max(ocean.rtRefractionRange, 10.0f),
+    ubo.oceanParams9 = glm::vec4(0.0f /* x: the removed trough margin */, glm::max(ocean.rtRefractionRange, 1.0f), // the tweak's own minimum; 10 here silently floored 1..9 m
         glm::max(ocean.rtReflectionRange, 50.0f), glm::clamp(ocean.rtReflectionMaxRough, 0.0f, 1.0f));
-    ubo.oceanParams10 = glm::vec4(0.0f, glm::max(ocean.timeScale, 0.0f), 0.0f, 0.0f); // x: the removed breaking limit
+    ubo.oceanParams10 = glm::vec4(0.0f /* x: the removed breaking limit */, glm::max(ocean.timeScale, 0.0f),
+        m_cameraWaterY, m_cameraWaterValid ? 1.0f : 0.0f); // zw: the live water surface under the camera (setCameraWaterSurface)
 }
 
 // Forcefield bubbles (Force library pushes m_forceFieldParams every frame; all UBO-driven = live).
@@ -1259,7 +1260,7 @@ void Renderer::buildUboTerrain()
             glm::clamp(wet.dampKnee, 0.0f, 1.0f), glm::clamp(wet.spikeStart, 0.0f, 0.99f));
         ubo.terrainWetParams6 = glm::vec4(glm::clamp(wet.surfaceThreshold, 0.0f, 1.0f), glm::clamp(wet.surfaceSoftness, 0.0f, 1.0f),
             glm::clamp(wet.surfaceWaviness, 0.0f, 1.0f), glm::max(wet.surfaceDepth, 0.0f));
-        ubo.terrainWetParams7 = glm::vec4(glm::max(wet.dryRate, 0.0f) * dt, 0.0f, 0.0f, 0.0f);
+        ubo.terrainWetParams7 = glm::vec4(glm::max(wet.dryRate, 0.0f) * dt, glm::max(wet.cameraBand, 0.001f), glm::max(wet.liveMargin, 0.0f), 0.0f);
     }
     static_assert(sizeof(ubo.terrainSplatClimate) == sizeof(m_terrainSplatClimate));
     memcpy(ubo.terrainSplatClimate, m_terrainSplatClimate, sizeof(m_terrainSplatClimate));
@@ -3079,9 +3080,16 @@ bool Renderer::recordGlobalIllum(uint32 frameIdx)
     vk::CommandBufferInheritanceInfo globalIllumInheritanceInfo;
     vk::CommandBuffer vkGlobalIllumCommandBuffer = globalIllumCommandBuffer.begin(false, &globalIllumInheritanceInfo);
 
-    // RT master toggle off: record an EMPTY GI command buffer (the primary executes it unconditionally) so
-    // no acceleration structures are built/compacted and no rays are traced, and return false so the caller
-    // skips the RT-dependent AO / volumetric-fog passes. Diagnostic A/B for the acceleration-structure churn.
+    // The sky map (GI miss rays + the ocean / terrain-film mirror rays + the skyRadiance(up) ambient in the
+    // forward pass) is baked on EVERY frame, ahead of the RT toggle: the forward shaders sample it whether
+    // or not anything is ray traced. Its own barriers order last frame's reads before the write and the
+    // write before this frame's compute + fragment reads.
+    m_giProbePipeline.recordSkyMap(globalIllumCommandBuffer, frameIdx, frameData.ubo);
+
+    // RT master toggle off: record an otherwise EMPTY GI command buffer (the primary executes it
+    // unconditionally) so no acceleration structures are built/compacted and no rays are traced, and
+    // return false so the caller skips the RT-dependent AO / volumetric-fog passes. Diagnostic A/B for the
+    // acceleration-structure churn.
     if (!m_rtParams.enabled)
     {
         globalIllumCommandBuffer.end();
@@ -3199,10 +3207,6 @@ bool Renderer::recordGlobalIllum(uint32 frameIdx)
     // Gated by the GI toggle — the TLAS built above still serves RTAO and RT shadows when GI is off.
     if (m_rtParams.giEnabled)
     {
-    // The miss-ray sky map: after the "make prior writes visible" barrier above (dst compute), which
-    // orders the previous frame's trace reads of the single image before this write.
-    m_giProbePipeline.recordSkyMap(globalIllumCommandBuffer, frameIdx, frameData.ubo);
-
     GIProbePipeline::TraceParams traceParams{
         .ubo = frameData.ubo,
         .lightInfos = frameData.lightInfosBuffer,
@@ -3293,10 +3297,15 @@ void Renderer::recordCommandBuffers()
         }
         m_volumetricFogPipeline.updateTerrainDescriptor(frameIdx, m_fogTerrainMap.getView(), m_fogTerrainMap.getSampler());
         m_terrainWetnessPipeline.updateTerrainDescriptor(frameIdx, m_fogTerrainMap.getView(), m_fogTerrainMap.getSampler());
-        // The wetness clipmap image never changes handle; rewritten alongside so a recreated set gets it.
+        // The wetness clipmap and the GI sky map never change handle; rewritten alongside so a recreated
+        // set gets them.
         for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)
+        {
             m_staticMeshGraphicsPipeline.updateTerrainWetnessDescriptor(frameData.staticMeshPipelineDescriptorSet[eye].getDescriptorSet(),
                 m_terrainWetnessPipeline.getView(), m_terrainWetnessPipeline.getSampler());
+            m_staticMeshGraphicsPipeline.updateSkyMapDescriptor(frameData.staticMeshPipelineDescriptorSet[eye].getDescriptorSet(),
+                m_giProbePipeline.getSkyMapView(), m_giProbePipeline.getSkyMapSampler());
+        }
     }
 
     descriptorScope.stop();

@@ -223,9 +223,8 @@ top-down camera hanging in empty sky shapes none of these:
 * **GI trace cost levers** (gi_probe_trace.cs.glsl): **"GI/Update interval (frames)"** — a probe traces
   every N frames, interleaved per WORKGROUP (whole waves exit) with the blend alpha scaled by N, so
   wall-time convergence is unchanged and the ray count divides by N; fresh (just scrolled-in) probes
-  always trace. **Miss rays sample a per-frame lat-long sky bake** (`gi_sky_map.cs.glsl`, 128×64
-  RGBA16F, recorded by `GIProbePipeline::recordSkyMap` just before the trace) instead of marching the
-  atmosphere; the virtual sky probe keeps the analytic `skyRadiance`. **Gather hits use
+  always trace. **Miss rays sample THE SKY MAP** instead of marching the atmosphere; the virtual sky
+  probe keeps the analytic `skyRadiance`. **Gather hits use
   `giEvalBounce`** (gi_probe.inc.glsl, write side): the cheap multi-bounce lookup — no Chebyshev, no
   cross-cascade fade, walk starts at the tracing probe's cascade — because the result is temporally
   blended. The probe buffer is **NOT `coherent`** in the trace (each invocation writes only its own
@@ -233,6 +232,15 @@ top-down camera hanging in empty sky shapes none of these:
   (their cell-claim spin re-reads the table with a plain load). **TLAS exclusions are INACTIVE
   instances** (reference 0, `gi_tlas_instances.cs.glsl`), which the build skips entirely, not
   mask-0 nodes.
+* **THE SKY MAP** (`gi_sky_map.cs.glsl`, owned by `GIProbePipeline`, `recordSkyMap` at the top of
+  `recordGlobalIllum` on EVERY frame — ahead of the RT toggle — with its own read→write→read barriers):
+  a 256×128 RGBA16F lat-long 2-layer array, GENERAL for life. Layer 0 = `skyRadiance` (GI miss rays,
+  the forward pass's per-frame-constant `skyRadiance(up)` ambient), layer 1 = `mirrorSkyRadiance`
+  (atmosphere.inc.glsl: the ocean's and the terrain wet film's reflection-ray sky, 12-step march +
+  saturation). Mapping + layer ids live in atmosphere.inc.glsl (`skyMapUV` / `skyMapDir`,
+  `SKY_MAP_LAYER_*`); the forward set binds it at **20** (the texture array moved to **21**, still the
+  set's highest binding for the variable count). Anything that would call `skyRadiance` or
+  `atmosphereScatterCheap` per pixel samples the map instead.
 * **"Record GI" allocates nothing per frame.** `GIProbePipeline` keeps its `DescriptorSetUpdateInfo`
   lists as members (`buildUpdateScratch`, handles patched per record; the texture list keeps its
   capacity), and `AccelerationStructure::recordBuildSkinnedBlas` refills member build arrays. Keep it

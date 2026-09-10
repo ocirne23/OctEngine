@@ -182,6 +182,40 @@ vec3 skyRadiance(vec3 dir)
 	return radiance * groundAtten + groundSun;
 }
 
+// Sky for a MIRROR ray (ocean surface, terrain wet film): matched to sky.fs.glsl (12 view steps + the
+// eclipse saturation curve). skyRadiance() is GI-grade and under-samples the long grazing paths
+// reflections look along. No sun disc (the GGX glint is its reflection) and no ground term.
+vec3 mirrorSkyRadiance(vec3 dir)
+{
+	const vec3 up = normalize(u_skyUp);
+	const float eclipse = u_eclipseParams.x;
+	const vec3 luminosity = vec3(0.2126, 0.7152, 0.0722);
+	vec3 color = atmosphereScatterCheap(dir, normalize(u_sunDirection.xyz), up, 12) * u_sunColor.rgb;
+	color = mix(vec3(dot(color, luminosity)), color, 2.0 * (2.0 - eclipse)) * eclipse;
+	if (dot(u_skyRadianceColor, u_skyRadianceColor) > 0.0)
+		color += atmosphereScatterCheap(dir, up, up, 4) * u_skyRadianceColor;
+	return color;
+}
+
+// THE SKY MAP (gi_sky_map.cs.glsl, GIProbePipeline): both functions above baked once per frame into a
+// lat-long 2-layer array — layer SKY_MAP_LAYER_GI = skyRadiance, SKY_MAP_LAYER_MIRROR =
+// mirrorSkyRadiance. Consumers declare `sampler2DArray u_skyMap` on their own binding and sample
+// textureLod(u_skyMap, vec3(skyMapUV(dir), layer), 0.0). World +Y pole: u = atan(d.x, d.z) / 2pi + 0.5
+// (the sampler repeats U), v = acos(d.y) / pi (clamped V).
+#define SKY_MAP_LAYER_GI     0.0
+#define SKY_MAP_LAYER_MIRROR 1.0
+vec2 skyMapUV(vec3 d)
+{
+	return vec2(atan(d.x, d.z) * (0.5 / PI) + 0.5, acos(clamp(d.y, -1.0, 1.0)) * (1.0 / PI));
+}
+vec3 skyMapDir(vec2 uv) // texel centre uv -> direction (the bake's inverse of skyMapUV)
+{
+	const float phi = (uv.x - 0.5) * 2.0 * PI;
+	const float theta = uv.y * PI;
+	const float st = sin(theta);
+	return vec3(st * sin(phi), cos(theta), st * cos(phi));
+}
+
 //vec3 skyRadiance(vec3 dir)
 //{
 //	const vec3 up = normalize(u_skyUp);

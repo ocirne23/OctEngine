@@ -42,7 +42,8 @@ layout (binding = 6, std430) readonly buffer InGridTable
     uint in_gridTable[];
 };
 
-layout (binding = 20) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
+layout (binding = 20) uniform sampler2DArray u_skyMap;   // GI's per-frame sky bake (atmosphere.inc.glsl: skyMapUV / SKY_MAP_LAYER_*)
+layout (binding = 21) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
 layout (binding = 8) uniform sampler2DArrayShadow u_shadowMap;      // comparison sampler (hardware PCF)
 layout (binding = 9) uniform sampler2DArray u_shadowMapDepth;       // raw depth (PCSS blocker search)
 layout (binding = 13) uniform sampler2D u_ao;                       // denoised half-res screen-space AO (bilateral upsample)
@@ -109,10 +110,49 @@ float g_waterLevelOverride = WATER_LEVEL_UNSET;
 // adds a second lobe after computeLitColor (the terrain's water film) lights it with THIS through
 // doLight, instead of paying the shadow evaluation again.
 vec3 g_sunRadiance = vec3(0.0);
+// The same BEFORE the underwater factor (no caustic focus, no Beer-Lambert): the sun as it arrives at
+// the water SURFACE above this pixel. A lobe that sits on the surface (the terrain's water film glint
+// and whitewater) is lit with this — with g_sunRadiance the ground's caustic pattern rode into the
+// film's specular and showed as warped caustics on every filmed pixel under a wave.
+vec3 g_sunRadianceSurface = vec3(0.0);
+// Depth of this pixel below the LIVE water surface (m; negative = above it, -1e30 = no terrain data),
+// resolved by doSunLight for every pixel — the same test that gates the caustics/absorption, published
+// so the terrain's water film can gate on it too (ground under the live surface is the ocean's to draw).
+float g_liveDepthBelow = -1e30;
+float g_liveWaterLevel = 0.0;      // the calm local level the depth was measured from
+bool  g_liveDepthResolved = false; // resolveLiveDepth ran for this pixel (a material may call it EARLY —
+                                   // the terrain gates its wetness gloss on it before computeLitColor)
+
+// Resolves g_liveDepthBelow / g_liveWaterLevel for worldPos, once per pixel. One water-level fetch (or
+// the material's override); only the swash band pays for the wave taps.
+void resolveLiveDepth(vec3 worldPos)
+{
+	if (g_liveDepthResolved)
+		return;
+	g_liveDepthResolved = true;
+	if (!terrainHeightMapPresent())
+		return;
+	const float localWaterLevel = g_waterLevelOverride < WATER_LEVEL_UNSET ? g_waterLevelOverride : terrainDataAt(worldPos.xz).y;
+	float depthBelow = localWaterLevel - worldPos.y;
+	// Swash band: gate against the LIVE displaced surface, not the calm level — a receded wave
+	// leaves sand below the calm line dry (no caustics/absorption tint on exposed bottom), and the
+	// run-up tongue is lit as underwater while it covers the beach. Points deeper than the swash
+	// reach are underwater at any wave phase and skip the wave taps (u_oceanParams7.w is 0 with
+	// swash off, so this is free for non-swash setups).
+	const float swashReach = u_oceanParams7.w;
+	if (swashReach > 0.0 && abs(depthBelow) < swashReach)
+		depthBelow += underwaterLiveWaveY(worldPos.xz, depthBelow, localWaterLevel);
+	g_liveDepthBelow = depthBelow;
+	g_liveWaterLevel = localWaterLevel;
+}
 
 vec3 doSunLight(vec3 worldPos, vec3 V, vec3 N, vec3 specularCol, vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
 {
 	const vec3 L = u_sunDirection.xyz; // normalized on the CPU (SkyParams / setSunLight)
+	// Live depth first, ahead of the facing early-out: the film gate needs it on every pixel.
+	resolveLiveDepth(worldPos);
+	const float depthBelow = g_liveDepthBelow;
+	const float localWaterLevel = g_liveWaterLevel;
 	if (dot(N, L) <= 0.0)
 		return vec3(0.0);
 	float visibility = u_rtSunShadow > 0.5 ? traceSunVisibility(worldPos, N) : sampleSunShadow(worldPos, N);
@@ -135,24 +175,12 @@ vec3 doSunLight(vec3 worldPos, vec3 V, vec3 N, vec3 specularCol, vec3 matColOver
 	}
 	// u_sunTransmittance = atmosTransmittanceToLight(0.0, L, u_skyUp), evaluated once per frame on the CPU.
 	vec3 lightRadiance = u_sunTransmittance * u_sunColor.rgb * (visibility * u_eclipseParams.x);
+	g_sunRadianceSurface = lightRadiance;
 	// Underwater: the sun crossed the wavy surface — caustic focus + Beer-Lambert absorption
-	// (underwater_light.inc.glsl), so seabed/submerged objects get the dancing light patterns. One
-	// water-level fetch + a branch above water; only underwater pixels pay for the wave taps.
-	if (terrainHeightMapPresent())
-	{
-		const float localWaterLevel = g_waterLevelOverride < WATER_LEVEL_UNSET ? g_waterLevelOverride : terrainDataAt(worldPos.xz).y;
-		float depthBelow = localWaterLevel - worldPos.y;
-		// Swash band: gate against the LIVE displaced surface, not the calm level — a receded wave
-		// leaves sand below the calm line dry (no caustics/absorption tint on exposed bottom), and the
-		// run-up tongue is lit as underwater while it covers the beach. Points deeper than the swash
-		// reach are underwater at any wave phase and skip the wave taps (u_oceanParams7.w is 0 with
-		// swash off, so this is free for non-swash setups).
-		const float swashReach = u_oceanParams7.w;
-		if (swashReach > 0.0 && abs(depthBelow) < swashReach)
-			depthBelow += underwaterLiveWaveY(worldPos.xz, depthBelow, localWaterLevel);
-		if (depthBelow > 0.0)
-			lightRadiance *= underwaterSunTransmittance(worldPos.xz, depthBelow, 0.0, 1.0); // surfaces: physical reach
-	}
+	// (underwater_light.inc.glsl), so seabed/submerged objects get the dancing light patterns. Keyed on
+	// the live depth resolved above.
+	if (depthBelow > 0.0)
+		lightRadiance *= underwaterSunTransmittance(worldPos.xz, depthBelow, 0.0, 1.0, localWaterLevel); // surfaces: physical reach
 	g_sunRadiance = lightRadiance;
 	return doLight(lightRadiance, L, V, N, specularCol, matColOverPi, metalness, roughness, roughnessSq);
 }

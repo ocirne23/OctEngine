@@ -374,26 +374,33 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment
     });
 
-    // 20 = the set's highest binding number: required for eVariableDescriptorCount.
-    descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // u_textures
+    descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // u_skyMap (GI's per-frame sky bake: layer 0 skyRadiance, layer 1 mirror sky; GENERAL layout)
         .binding = 20,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+        .descriptorCount = 1,
+        .stageFlags = vk::ShaderStageFlagBits::eFragment
+    });
+
+    // 21 = the set's highest binding number: required for eVariableDescriptorCount.
+    descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // u_textures
+        .binding = 21,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
         .descriptorCount = maxTextures,
         .stageFlags = vk::ShaderStageFlagBits::eFragment
     });
 
-    // Per-binding flags (parallel to descriptorSetBindings): the AO (13), TLAS (11), terrain wetness (18)
-    // and baked terrain height (19) bindings are refreshed after the (cached) draw CB is recorded ->
-    // UPDATE_AFTER_BIND; the texture array (20) is variable-count (allocated at the live texture
-    // capacity), only partially written, and UPDATE_AFTER_BIND so the TextureStreamer can rewrite swapped
-    // slots without re-recording the cached draw CBs.
+    // Per-binding flags (parallel to descriptorSetBindings): the AO (13), TLAS (11), terrain wetness (18),
+    // baked terrain height (19) and sky map (20) bindings are refreshed after the (cached) draw CB is
+    // recorded -> UPDATE_AFTER_BIND; the texture array (21) is variable-count (allocated at the live
+    // texture capacity), only partially written, and UPDATE_AFTER_BIND so the TextureStreamer can rewrite
+    // swapped slots without re-recording the cached draw CBs.
     graphicsPipelineLayout.descriptorBindingFlags.resize(descriptorSetBindings.size());
     for (size_t i = 0; i < descriptorSetBindings.size(); ++i)
     {
         if (descriptorSetBindings[i].binding == 11 || descriptorSetBindings[i].binding == 13
-            || descriptorSetBindings[i].binding == 18 || descriptorSetBindings[i].binding == 19)
+            || descriptorSetBindings[i].binding == 18 || descriptorSetBindings[i].binding == 19 || descriptorSetBindings[i].binding == 20)
             graphicsPipelineLayout.descriptorBindingFlags[i] = vk::DescriptorBindingFlagBits::eUpdateAfterBind;
-        else if (descriptorSetBindings[i].binding == 20)
+        else if (descriptorSetBindings[i].binding == 21)
             graphicsPipelineLayout.descriptorBindingFlags[i] = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount | vk::DescriptorBindingFlagBits::eUpdateAfterBind;
     }
 }
@@ -402,7 +409,17 @@ void StaticMeshGraphicsPipeline::updateTextureDescriptor(vk::DescriptorSet descr
 {
     // Streamed texture slot rewrite (same recorded-once CB situation as the AO/TLAS bindings above).
     vk::DescriptorImageInfo imageInfo{ .sampler = m_sampler.getSampler(), .imageView = view, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal };
-    vk::WriteDescriptorSet write{ .dstSet = descriptorSet, .dstBinding = 20, .dstArrayElement = slotIdx, .descriptorCount = 1,
+    vk::WriteDescriptorSet write{ .dstSet = descriptorSet, .dstBinding = 21, .dstArrayElement = slotIdx, .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };
+    Globals::device.getDevice().updateDescriptorSets(1, &write, 0, nullptr);
+}
+
+void StaticMeshGraphicsPipeline::updateSkyMapDescriptor(vk::DescriptorSet descriptorSet, vk::ImageView skyView, vk::Sampler skySampler)
+{
+    // The GI sky bake (20) is rewritten every frame by GIProbePipeline::recordSkyMap and lives in GENERAL;
+    // the ocean / terrain-film mirror rays and the constant skyRadiance(up) ambient sample it.
+    vk::DescriptorImageInfo imageInfo{ .sampler = skySampler, .imageView = skyView, .imageLayout = vk::ImageLayout::eGeneral };
+    vk::WriteDescriptorSet write{ .dstSet = descriptorSet, .dstBinding = 20, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };
     Globals::device.getDevice().updateDescriptorSets(1, &write, 0, nullptr);
 }
@@ -654,7 +671,7 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
             .bufferInfos = { vk::DescriptorBufferInfo { .buffer = params.rtMeshInstancesBuffer.getBuffer(), .range = params.rtMeshInstancesBuffer.getSize() } }
         },
         DescriptorSetUpdateInfo{
-            .binding = 20,
+            .binding = 21,
             .type = vk::DescriptorType::eCombinedImageSampler,
         },
     };

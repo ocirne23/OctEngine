@@ -49,7 +49,8 @@ layout (binding = 6, std430) readonly buffer InGridTable
 #define TABLE_SIZE_NAME in_tableSize
 #include "light_grid.inc.glsl"
 
-layout (binding = 20) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
+layout (binding = 20) uniform sampler2DArray u_skyMap;   // GI's per-frame sky bake (atmosphere.inc.glsl: skyMapUV / SKY_MAP_LAYER_*)
+layout (binding = 21) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
 layout (binding = 11) uniform accelerationStructureEXT u_tlas;
 
 // Scene geometry for ray hits (custom index = index into in_instances; RT meshIdx rides the sbtOffset).
@@ -133,23 +134,17 @@ float normalVariance(vec3 N)
     return min(0.25 * (dot(dNdx, dNdx) + dot(dNdy, dNdy)), 0.03);
 }
 
-// Sky for the mirror ray, matched to sky.fs.glsl (step counts + eclipse saturation). skyRadiance() is
-// GI-grade and under-samples the long grazing paths reflections look along. No sun disc: the GGX glint
-// is its reflection.
-vec3 adjustSaturation(vec3 color, float saturation)
-{
-    const vec3 luminosity = vec3(0.2126, 0.7152, 0.0722);
-    return mix(vec3(dot(color, luminosity)), color, saturation);
-}
+// Sky for the mirror ray: the per-frame bake of mirrorSkyRadiance (atmosphere.inc.glsl — 12-step march
+// + eclipse saturation, matched to sky.fs.glsl) — one fetch instead of a march per pixel. No sun disc:
+// the GGX glint is its reflection.
 vec3 reflectedSkyRadiance(vec3 dir)
 {
-    const vec3 up = normalize(u_skyUp);
-    const float eclipse = u_eclipseParams.x;
-    vec3 color = atmosphereScatterCheap(dir, normalize(u_sunDirection.xyz), up, 12) * u_sunColor.rgb;
-    color = adjustSaturation(color, 2.0 * (2.0 - eclipse)) * eclipse;
-    if (dot(u_skyRadianceColor, u_skyRadianceColor) > 0.0)
-        color += atmosphereScatterCheap(dir, up, up, 4) * u_skyRadianceColor;
-    return color;
+    return textureLod(u_skyMap, vec3(skyMapUV(dir), SKY_MAP_LAYER_MIRROR), 0.0).rgb;
+}
+// skyRadiance(up): the same constant for every pixel — one fetch of the GI layer.
+vec3 skyAmbientUp(vec3 up)
+{
+    return textureLod(u_skyMap, vec3(skyMapUV(up), SKY_MAP_LAYER_GI), 0.0).rgb;
 }
 
 struct SceneHit
@@ -160,21 +155,33 @@ struct SceneHit
     vec3 albedo;
 };
 
-// Terrain colors procedurally in its own pipeline variant, so a raw material fetch shades the bottom
-// flat white — sample the beach splat by world XZ instead (flat sand fallback).
-vec3 terrainSeabedAlbedo(vec2 worldXZ, float rayT)
+// The seabed at a ray hit IS the terrain: the terrain shader's own splat (terrain_splat.inc.glsl —
+// ground / beach / rock / snow by climate, slope and relief) evaluated at the hit, with the baked fields
+// fetched the way the terrain VS does per vertex. Albedo only (the water column blurs any detail normal
+// away), at a ray-cone LOD instead of screen derivatives (a ray hit has none).
+float g_seabedLod = 0.0;
+#define TERRAIN_SPLAT_TEX(tex, uv) textureLod(tex, uv, g_seabedLod)
+#define TERRAIN_SPLAT_ALBEDO_ONLY
+#include "terrain_splat.inc.glsl"
+
+vec3 terrainSeabedAlbedo(vec3 worldPos, vec3 geoN, float rayT)
 {
-    vec3 albedo = vec3(0.32, 0.28, 0.22);
-    if (u_terrainTexParams3.x > 0.5)
+    TerrainFields f; // mild-climate fallbacks without a map, as the terrain VS
+    f.altitude = worldPos.y - u_terrainParams.z;
+    f.temperature = 12.5;
+    f.humidity = 0.5;
+    f.waterLevel = u_terrainParams.z;
+    if (terrainHeightMapPresent())
     {
-        const uint beachMatIdx = uint(u_terrainTexParams0.x) + uint(u_terrainTexParams0.y) + uint(u_terrainTexParams0.z);
-        if (beachMatIdx < in_materialInfos.length())
-        {
-            const uint sandTexIdx = in_materialInfos[beachMatIdx].diffuseNormalTexIdx & 0xFFFFu;
-            const float lod = clamp(log2(max(rayT, 1.0)) + 1.0, 0.0, 7.0);
-            albedo = textureLod(u_textures[nonuniformEXT(sandTexIdx)], worldXZ * u_terrainTexParams1.x, lod).rgb;
-        }
+        const vec4 td = terrainDataAt(worldPos.xz);
+        f.altitude = td.w;
+        f.waterLevel = td.y;
+        const vec4 climate = terrainClimateAt(worldPos.xz);
+        f.humidity = climate.w;
+        f.temperature = terrainTemperatureAt(climate, worldPos.y);
     }
+    g_seabedLod = clamp(log2(max(rayT, 1.0)) + 1.0, 0.0, 7.0);
+    vec3 albedo = terrainSplat(worldPos, geoN, f).albedo;
     // The seabed is, by definition, fully wet: darken it exactly as the terrain shader darkens ground at
     // full wetness (damp x standing film — instanced_indirect_terrain.fs.glsl), so the sand seen through
     // the water and the wet sand the water just left are the same colour at the waterline.
@@ -228,7 +235,7 @@ bool traceScene(vec3 origin, vec3 dir, float tMax, out SceneHit hit)
                 if (materialIdx < in_materialInfos.length())
                 {
                     if ((in_materialInfos[materialIdx].flags & MATERIAL_FLAG_TERRAIN) != 0u)
-                        hit.albedo = terrainSeabedAlbedo(hit.pos.xz, hit.t);
+                        hit.albedo = terrainSeabedAlbedo(hit.pos, hit.N, hit.t);
                     else
                     {
                         const uint diffuseTexIdx = in_materialInfos[materialIdx].diffuseNormalTexIdx & 0x0000FFFFu;
@@ -379,7 +386,7 @@ void main()
     if (dot(N, V) < 0.0 && u_viewPos.y < in_pos.y)
     {
         const vec3 sunTintU = u_sunColor.rgb * atmosTransmittanceToLight(0.0, L, up) * u_eclipseParams.x;
-        const vec3 inscatterU = u_oceanScatter.rgb * u_oceanScatter.w * (skyRadiance(up) + sunTintU * max(L.y, 0.0) / PI);
+        const vec3 inscatterU = u_oceanScatter.rgb * u_oceanScatter.w * (skyAmbientUp(up) + sunTintU * max(L.y, 0.0) / PI);
         const vec3 refrUp = refract(-V, -N, 1.33);
         vec3 color = inscatterU; // TIR (refract() = 0): mirror of the water body
         if (dot(refrUp, refrUp) > 1e-6)
@@ -419,7 +426,7 @@ void main()
     const float sunVis = !sunUp ? 0.0
         : (u_rtSunShadow > 0.5 ? rtShadowVisibility(in_pos + N * 0.1, L, 0.05, 10000.0)
                                : sampleSunShadow(in_pos, N));
-    const vec3 ambientSky = skyRadiance(up);
+    const vec3 ambientSky = skyAmbientUp(up);
     const vec3 whitewater = u_oceanFoam.rgb * (sunTint * (NoL * sunVis) / PI + ambientSky + u_ambientColor);
 
     const vec3 sigmaT = u_oceanAbsorption.rgb;
@@ -440,8 +447,14 @@ void main()
         if (dot(refrDir, refrDir) > 1e-6)
         {
             const float minSigma = max(min(sigmaT.r, min(sigmaT.g, sigmaT.b)), 1e-3);
+            // "Refraction range" is the max refracted-ray length that still shows the bottom — traced
+            // OR height-field — so it caps underwater visibility in clear water where extinction alone
+            // would not. The bottom fades out over the last 25% of the range (a hard cutoff draws a
+            // contour on the seabed); beyond it the body is pure in-scatter.
+            const float range = u_oceanParams9.y;
+            const float tMax = min(4.6 / minSigma, range);
             SceneHit hit;
-            bool haveHit = rtInRange && traceScene(in_pos, refrDir, min(4.6 / minSigma, u_oceanParams9.y), hit);
+            bool haveHit = rtInRange && traceScene(in_pos + N * 0.05, refrDir, tMax, hit);
             if (!haveHit && refrDir.y < -0.02)
             {
                 // Miss (seabed beyond the TLAS range / rays off): pseudo-hit against the baked terrain
@@ -453,17 +466,21 @@ void main()
                 float bottom = in_pos.y - oceanSampleShoreData(in_pos.xz).x;
                 const float t = max(bottom, 0.02) / -refrDir.y;
                 bottom = in_pos.y - oceanSampleShoreData(in_pos.xz + refrDir.xz * t).x; // one refinement for sloped shelves
-                hit.t = clamp(max(bottom, 0.02) / -refrDir.y, 0.0, 4.6 / minSigma);
-                hit.pos = in_pos + refrDir * hit.t;
-                hit.N = vec3(0.0, 1.0, 0.0);
-                hit.albedo = terrainSeabedAlbedo(hit.pos.xz, hit.t);
-                haveHit = true;
+                hit.t = max(bottom, 0.02) / -refrDir.y;
+                if (hit.t < range) // the same bound as the traced ray: past it there is no bottom to draw
+                {
+                    hit.t = min(hit.t, 4.6 / minSigma);
+                    hit.pos = in_pos + refrDir * hit.t;
+                    hit.N = vec3(0.0, 1.0, 0.0);
+                    hit.albedo = terrainSeabedAlbedo(hit.pos, hit.N, hit.t);
+                    haveHit = true;
+                }
             }
             if (haveHit)
             {
                 const float sunPath = max(oceanSampleShoreData(hit.pos.xz).y - hit.pos.y, 0.0) / max(L.y, 0.25); // column above the hit
                 const vec3 hitRadiance = shadeHit(hit, refrDir, sunTint * sunVis * exp(-sigmaT * sunPath), L);
-                const vec3 T = exp(-sigmaT * hit.t);
+                const vec3 T = exp(-sigmaT * hit.t) * (1.0 - smoothstep(0.75 * range, range, hit.t));
                 body = hitRadiance * T + inscatter * (1.0 - T);
             }
         }

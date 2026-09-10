@@ -156,7 +156,9 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                             // w = RT reflection roughness cutoff (rougher pixels skip the mirror ray)
     vec4 u_oceanParams10;   // x unused (was the breaking limit, removed: the swash amplitude alone shapes
                             // the shore — oceanSurfaceWeight),
-                            // y = spectrum clock rate (sqrt(world scale): holds the model sea's periods), zw unused
+                            // y = spectrum clock rate (sqrt(world scale): holds the model sea's periods),
+                            // z = LIVE water surface world Y under the camera, w = 1 when z is valid
+                            //     (the terrain wet-film camera gate tests against the waves, not the calm level)
     vec4 u_terrainParams;   // x = streamed terrain mesh coverage radius (m, radial from camera XZ;
                             // 0 = no terrain mesh up — fences the ocean land cull),
                             // y = temperature lapse rate, C per WORLD metre above sea level (<= 0; pairs
@@ -218,7 +220,11 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                               // through (Beer-Lambert + in-scatter)
     vec4 u_terrainWetParams7; // x = linear dry this frame (dry rate x dt: the constant part of the drain,
                               // next to the proportional exp(-dt / dry time) — together rain settles at
-                              // dryTime x (rain - dryRate)), yzw unused
+                              // dryTime x (rain - dryRate)),
+                              // y = camera ease band (m): half-width over which the film + gloss fade out
+                              //     as the camera goes under the live water surface,
+                              // z = live-surface margin (m): the film + gloss stay on ground up to this far
+                              //     below the estimated live surface (it sits under the drawn ocean edge), w unused
     vec4 u_terrainSplatClimate[MAX_TERRAIN_SPLAT_MATERIALS]; // ground/rock CLIMATE BOX: xy = t01 range,
                               // zw = h01 range. Weight is 1 inside and Gaussian-decays outside, so a full
                               // 0..1 range on an axis means "this axis does not matter for this entry".

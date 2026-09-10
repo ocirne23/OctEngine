@@ -248,6 +248,8 @@ export namespace Procedural
 		float m_wetSlopeDrain = 20.0f;     // steep ground dries faster: decay rate x (1 + slope * drain); 0 = off
 		float m_wetSurfaceThreshold = 0.9f; // wetness at which the ground is drawn AS water (ocean look), half in
 		float m_wetSurfaceSoftness = 0.4f; // half-width of that ramp (it blends out, never edges)
+		float m_wetCameraBand = 0.2f;      // m: half-width of the film's fade-out as the camera goes under the live surface
+		float m_wetLiveMargin = 0.08f;     // m: film + gloss stay on ground up to this far below the estimated live surface
 		float m_wetSurfaceWaviness = 1.0f;  // film normal: 0 = ground normal, 1 = live FFT wave normal
 		float m_wetSurfaceDepth = 0.1f;    // m of virtual water the ground is tinted through (ocean absorption + scatter)
 		float m_wetAlbedoScale = 0.80f;// FILM albedo multiplier (standing water: the near-full spike + the pools), on top of damp

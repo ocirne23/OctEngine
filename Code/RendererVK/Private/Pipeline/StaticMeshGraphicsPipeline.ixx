@@ -63,8 +63,10 @@ public:
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params, bool updateDescriptors = true);
     void updateAODescriptor(vk::DescriptorSet descriptorSet, vk::ImageView aoView, vk::Sampler aoSampler);
     void updateTlasDescriptor(vk::DescriptorSet descriptorSet, vk::AccelerationStructureKHR tlas);
-    // Rewrites one slot of the texture array (binding 20) with a streamed texture's current view.
+    // Rewrites one slot of the texture array (binding 21) with a streamed texture's current view.
     void updateTextureDescriptor(vk::DescriptorSet descriptorSet, uint32 slotIdx, vk::ImageView view);
+    // Points the sky map binding (20) at GI's per-frame sky bake (GENERAL layout).
+    void updateSkyMapDescriptor(vk::DescriptorSet descriptorSet, vk::ImageView skyView, vk::Sampler skySampler);
     // Points the terrain-data cascade binding (19) at the active ping-pong image (refreshed per frame).
     void updateTerrainHeightDescriptor(vk::DescriptorSet descriptorSet, vk::ImageView terrainView, vk::Sampler terrainSampler);
     // Points the terrain wetness clipmap binding (18) at the wetness image (GENERAL layout).

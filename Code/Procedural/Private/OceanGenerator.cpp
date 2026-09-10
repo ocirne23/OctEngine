@@ -458,6 +458,7 @@ namespace Procedural
 			m_waveTrough = 0.0f;
 			pushOceanParams(renderer, camera);  // enabled=false gates the GPU FFT + the ocean draw
 			renderer.setOceanWaveTrough(0.0f);  // no waves: the underwater-fog boundary sits at the calm level
+			renderer.setCameraWaterSurface(0.0f, false); // the film gate falls back to the calm local level
 			return;
 		}
 		m_disabledIdle = false;
@@ -591,6 +592,12 @@ namespace Procedural
 
 		estimateWaveTrough();
 		renderer.setOceanWaveTrough(m_waveTrough); // sinks the underwater-fog boundary below live troughs
+
+		// The live surface under the camera (the same readback the buoyancy reads; ~2 frames of latency):
+		// the terrain wet-film gate flips at the actual swell instead of the calm level. -FLT_MAX = no
+		// water at the camera XZ (dry land, a lake beyond the shore bake) -> the shader's calm fallback.
+		const float camWaterY = sampleWaterHeight(camera.position.x, camera.position.z);
+		renderer.setCameraWaterSurface(camWaterY, camWaterY > -FLT_MAX);
 	}
 
 	// FP16 -> FP32 (readback texels are RGBA16F). Fabian Giesen's half_to_float_fast: rebias the

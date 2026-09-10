@@ -59,7 +59,7 @@ layout (binding = 7, std430) readonly buffer InMeshInfos   { InMeshInfo in_meshI
 layout (binding = 8, std430) readonly buffer InInstances   { InMeshInstance in_instances[]; };
 layout (binding = 9, std430) readonly buffer InMaterials   { MaterialInfo in_materialInfos[]; };
 layout (binding = 13) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
-layout (binding = 10) uniform sampler2D u_skyMap; // per-frame lat-long bake of skyRadiance (gi_sky_map.cs.glsl)
+layout (binding = 10) uniform sampler2DArray u_skyMap; // the per-frame sky bake (gi_sky_map.cs.glsl; mapping in atmosphere.inc.glsl)
 layout (binding = 11) uniform sampler2DArrayShadow u_shadowMap;
 // GI probe clipmap volume (persistent SH, read+write for the multi-bounce lookup + temporal blend).
 // NOT coherent: every invocation writes only its own probe and reads other probes' cells, where a
@@ -113,13 +113,9 @@ vec3 sampleSphere(uint i, uint n, vec2 jitter)
 vec3 vNormal(uint vi) { uint b = vi * 12u; return vec3(in_vertices[b + 3u], in_vertices[b + 4u], in_vertices[b + 5u]); }
 vec2 vUV(uint vi)     { uint b = vi * 12u; return vec2(in_vertices[b + 10u], in_vertices[b + 11u]); }
 
-// Miss radiance: the per-frame sky bake (same lat-long mapping as gi_sky_map.cs.glsl) instead of the
-// analytic skyRadiance march per ray. The virtual sky probe (projectSkySH) keeps the analytic call.
-vec3 skyMiss(vec3 d)
-{
-    const vec2 uv = vec2(atan(d.x, d.z) * (0.5 / PI) + 0.5, acos(clamp(d.y, -1.0, 1.0)) * (1.0 / PI));
-    return textureLod(u_skyMap, uv, 0.0).rgb;
-}
+// Miss radiance: the per-frame sky bake (skyRadiance layer) instead of the analytic march per ray. The
+// virtual sky probe (projectSkySH) keeps the analytic call.
+vec3 skyMiss(vec3 d) { return textureLod(u_skyMap, vec3(skyMapUV(d), SKY_MAP_LAYER_GI), 0.0).rgb; }
 
 // View-independent sun visibility from a point: one shadow ray toward the sun via the TLAS. Returns 1
 // (lit) or 0 (occluded). Used per gather-ray hit (RT sun mode) so off-screen hits are shadowed
