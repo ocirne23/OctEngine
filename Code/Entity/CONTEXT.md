@@ -507,7 +507,11 @@ owner they mean to (the root list through `removeRootEntity`, so its roster call
 then rosters) **BEFORE this, on main** — only the teardown itself runs on workers.
 
 Users: the EntityChange Delete drain in `handleEntityChanges` (which moves the Delete handles out
-after the serial pass, so the teardown is one parallel batch) and `NpcSystem::clear`.
+after the serial pass, so the teardown is one parallel batch), the Game load path's unit + shot
+despawn (`NpcSystem::despawnUnitsAndShots`), and **`World::clearRootEntities`** — the whole-world
+wipe (game teardown, exit-to-menu): it moves the root list out, clears the pending / global lists,
+fires NO removal notifications, and releases every root through this batch. A root some other
+holder still references survives it, so the teardowns drop their own `EntityPtr`s first.
 
 ## What makes it safe, per resource
 

@@ -119,10 +119,11 @@ void GameMatch::tickWaves(float deltaSec)
     queueWave();
 }
 
-// Live AI bodies — ambient and previous waves alike. Roster walk, main thread.
+// Live units — ambient and previous waves alike (player-team units too). The count update()
+// cached this frame from the World's root list.
 int GameMatch::aiAliveCount() const
 {
-    return m_npcs.getNumUnits();
+    return m_aliveUnits;
 }
 
 // The NEXT wave's budget in points, before the "Max enemy units" cap: base + growth per wave so
@@ -358,11 +359,12 @@ void GameMatch::tickCoopSpawns()
 }
 
 // AMBIENT WANDER (co-op authority): an IDLE AI unit now and then takes a short stroll, its heading
-// biased toward the Base. Performance: the EXPECTED number of strolls this frame is roster /
+// biased toward the Base. Performance: the EXPECTED number of strolls this frame is unit count /
 // "Ambient wander interval" × dt (5000 units at 90 s and 60 fps = ~0.93 a frame), carried as a
 // fractional budget so every frame issues that many on average — a steady trickle instead of a
-// burst — and each stroll costs at most c_wanderScanCap random roster probes to find an idle
-// unit. No per-unit timer. The order is a wander (orderWander): it never seeds a lane and
+// burst — and each stroll costs at most c_wanderScanCap random probes into the World's root list
+// (every unit is a root; a non-unit hit is a wasted probe) to find an idle unit. No per-unit
+// timer. The order is a wander (orderWander): it never seeds a lane and
 // self-expires after "Ambient wander timeout", so a target behind rock cannot pin the unit. Far
 // (LOD-skipped) units walk it through the far tick's teleport like any order. Hunting, locked or
 // routing units are skipped as candidates. Runs on a POST-UPDATE job (see update): its own RNG,
@@ -371,16 +373,17 @@ void GameMatch::tickAmbientWander(float deltaSec)
 {
     if (!m_coop || m_ambientWanderInterval <= 0.0f)
         return;
-    const oc::span<const EntityPtr> units = m_npcs.units();
-    const int n = (int)units.size();
-    if (n == 0)
+    // The root list only mutates on main, after this post-update job joins.
+    const oc::vector<EntityPtr>& roots = Globals::world.rootEntities();
+    const int n = (int)roots.size();
+    if (n == 0 || m_aliveUnits == 0)
         return;
     const auto rand01 = [&] { return std::uniform_real_distribution<float>(0.0f, 1.0f)(m_wanderRng); };
-    // The budget is sized from the SELECTED roster, not the whole one: only selected units are
-    // candidates, so a whole-roster budget would land every far unit's strolls on the few near a
-    // player. The selected fraction is estimated from the random probes below (each is a fair
-    // sample of the roster), smoothed — no roster walk.
-    m_wanderBudget += (float)n * m_wanderSelectedFrac * deltaSec / m_ambientWanderInterval;
+    // The budget is sized from the SELECTED units, not all of them: only selected units are
+    // candidates, so a whole-population budget would land every far unit's strolls on the few
+    // near a player. The selected fraction is estimated from the random unit probes below (each
+    // is a fair sample), smoothed — no walk. m_aliveUnits is update()'s cached count.
+    m_wanderBudget += (float)m_aliveUnits * m_wanderSelectedFrac * deltaSec / m_ambientWanderInterval;
     int issue = (int)m_wanderBudget;
     if (issue <= 0)
         return;
@@ -403,16 +406,21 @@ void GameMatch::tickAmbientWander(float deltaSec)
         Entity* e = nullptr;
         for (int scan = 0; scan < c_wanderScanCap && !u; ++scan)
         {
-            e = units[glm::clamp((int)(rand01() * (float)n), 0, n - 1)].get();
+            e = roots[glm::clamp((int)(rand01() * (float)n), 0, n - 1)].get();
             u = e ? getComponent<GameUnitComponent>(e) : nullptr;
+            if (!u || u->puppet)
+            {
+                u = nullptr; // not a unit (structure, rock, shot, player capsule): no sample either
+                continue;
+            }
             // Only SELECTED units (inside the SIM LOD's outer tier of some player) stroll: a far
             // unit is invisible and would walk its order by the far tick's teleport, then arrive
             // in view mid-stroll — a whole patch "starting to wander" the moment a player came
             // near. Tier 2 and closer all behave alike.
-            const bool selected = e && Globals::world.simLodSelected(*e);
+            const bool selected = Globals::world.simLodSelected(*e);
             m_wanderSelectedFrac += ((selected ? 1.0f : 0.0f) - m_wanderSelectedFrac) * 0.02f;
-            if (u && (u->team != CoopAiTeam || u->puppet || !u->alive() || u->targetLocked || u->hasTarget
-                || u->routeIndex < u->routeCount || !selected))
+            if (u->team != CoopAiTeam || !u->alive() || u->targetLocked || u->hasTarget
+                || u->routeIndex < u->routeCount || !selected)
                 u = nullptr;
         }
         if (!u)

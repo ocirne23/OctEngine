@@ -24,10 +24,22 @@ Without `--game` the testbed is untouched.
 
 **Code/Game holds NO entity lists and runs NO world-wide spatial queries.**
 
-* `NpcSystem` and `StructureSystem` keep **ROSTERS of owning `EntityPtr`s**, added at spawn and
-  deregistered through `World::setOnRootEntityRemoved` — **the ONE notification every removal path
-  funnels into** (death destroy request, network despawn, editor delete). No per-frame query
-  revalidates them.
+* `StructureSystem` keeps **a ROSTER of owning `EntityPtr`s**, added at spawn and deregistered
+  through `World::setOnRootEntityRemoved` — **the ONE notification every removal path funnels
+  into** (death destroy request, network despawn, editor delete). No per-frame query revalidates
+  it.
+* **UNITS and PROJECTILES have NO roster.** The World's root list owns them, and every "all units"
+  consumer walks `World::rootEntities()` — a root with a `GameUnitComponent` that is not a puppet
+  IS a unit, a root with a `GameProjectileComponent` IS a shot (`NpcSystem::queryAllUnits` /
+  `countUnits`, the far tick, the nav feed sweep, the SIM LOD clusters, the ambient wander
+  probes, the route push, the load path's despawn). The list only mutates on main, after the
+  post-update jobs join, so those jobs read it like the roster they replaced. `GameMatch::update`
+  caches ONE `countUnits` walk a frame as `m_aliveUnits` (`aiAliveCount`).
+* **Teardown wipes the WHOLE World.** `~GameMatch` has every holder drop its `EntityPtr`s
+  (structures, player, client twins, selection, terrain root, ground), then `NpcSystem::clear`
+  calls `World::clearRootEntities` — every root, released as one parallel batch — and discards the
+  component queues. The load path (`loadUnits`) despawns only units + shots by root walk, since
+  `loadFrom` has just rebuilt the structures.
 * The per-entity SIMULATION lives in the Entity components, inside the parallel pass. A unit
   **REPORTS** what the game needs — shots to spawn, its death, damage — through the components' static
   event queues, and `NpcSystem::service` drains them on the main thread.
@@ -68,11 +80,12 @@ Three entry points, all main thread, at three different points of main.cpp's loo
 **Consequences of `update`'s placement:** freshly spawned actors link into the spatial index at the
 NEXT commit (the spawn guard keeps them visible), new bodies' velocities integrate on the NEXT step,
 and the nav feed's staging feeds the NEXT frame's `NavSystem::update` — **the gather
-(`gatherNavFeed`: structure roster, unit roster, player bodies) AND the Nav setter calls are ONE
-POST-UPDATE job** submitted by `update` and joined at the top of the next frame, ahead of that
-frame's `NavSystem::update` (see Nav's thread contract for why the setters are legal there). **The
-unit sweep is SLICED over Nav's "Rebuild interval"** — ceil(roster × dt / interval) units a frame, a
-constant slice, publishing when the cursor wraps — since Nav consumes sources only at that cadence;
+(`gatherNavFeed`: structure roster, the World's root list for the units, player bodies) AND the Nav
+setter calls are ONE POST-UPDATE job** submitted by `update` and joined at the top of the next
+frame, ahead of that frame's `NavSystem::update` (see Nav's thread contract for why the setters are
+legal there). **The unit sweep is SLICED over Nav's "Rebuild interval"** — ceil(roots × dt /
+interval) World roots a frame (non-units skipped), a constant slice, publishing when the cursor
+wraps — since Nav consumes sources only at that cadence;
 the cull hash a cycle tests against is the previous cycle's (one interval stale). Both post-update
 jobs are Normal and carry **pre-emption points** (see Threading) so High work gets through: the nav
 feed every 256 swept units, after the sweep and before the publish; the ambient wander every 16
@@ -88,7 +101,7 @@ plus every client twin, **so no unit throttles near any player** — **plus FRIE
 combat only runs inside the selection, so an army fighting far from every player (and the enemies
 around it) would otherwise be dormant. Greedy clusters over the non-AI units, refreshed every
 0.25 s: a unit farther than "Unit cluster focus radius" (40 m) from every focus seeds a new one, up
-to the 16-slot cap (players first, then clusters in roster order).
+to the 16-slot cap (players first, then clusters in World root order).
 
 **PLUS THE BASE FIELDS AS ZONES** (`World::setSimLodZones`, refreshed on the same 0.25 s timer):
 `StructureSystem::collectShieldBubbles` gathers every shield structure's bubble sphere — ONE sphere
@@ -259,15 +272,16 @@ confined to the corners** (the corners are the geodesic maximum; at 0.9 the mid-
 The scatter keeps clear of the planar "Ambient safe radius" (45 m) around the Base.
 
 **Wander** (`tickAmbientWander`, co-op authority, **a POST-UPDATE job** — it only writes idle units'
-order fields and reads the roster + the immutable map, so it runs during present, never in front of
+order fields and reads the World's root list + the immutable map, so it runs during present, never in front of
 the entity batch submit; its orders land in the next pass): an IDLE AI unit — not hunting, locked or routing —
 now and then strolls 0.4–1× "Ambient wander distance" (12 m) with its heading = a random unit vector
 + "Ambient wander base bias" (0.5) × toward the Base, clamped to open ground. **Cheap and SMOOTH by
-design:** the expected strolls per frame = SELECTED roster / "Ambient wander interval" (90 s) × dt
-(the selected fraction is a smoothed estimate from the random probes — sizing from the whole roster
-dumped every far unit's strolls on the few near a player), carried as a fractional budget (`m_wanderBudget`) so every frame
-issues that many on average, each costing at most 32 random roster probes to find an idle unit — a
-steady trickle, no per-unit timer, no burst.
+design:** the expected strolls per frame = SELECTED units / "Ambient wander interval" (90 s) × dt
+(the unit count is `m_aliveUnits`, and the selected fraction is a smoothed estimate from the random
+probes — sizing from every unit dumped every far unit's strolls on the few near a player), carried
+as a fractional budget (`m_wanderBudget`) so every frame issues that many on average, each costing
+at most 32 random probes into the root list (a non-unit root is a wasted probe) to find an idle
+unit — a steady trickle, no per-unit timer, no burst.
 The order is a **wander order** (`GameUnitComponent::orderWander`): it never seeds a lane (not even
 on the hunt-seed AI team — a stroll is a direction, not a route), **walks at
 "Wander speed mult" (0.25) × the unit's move speed, capped at "Wander speed max" (2 m/s) so runners
@@ -1073,7 +1087,8 @@ authored colours (restored per node if a unit ever leaves the local team).
 * **The SIM is `GameUnitComponent`** in the entity pass: steering by the Nav flow fields (see Nav),
   shield battery on player rules minus regen with permanent collapse, exposure damage, field push,
   melee, the ranged stance, and death / void self-despawn.
-* **`NpcSystem` is PRODUCTION + SERVICING plus the rosters.** It holds no other unit state.
+* **`NpcSystem` is PRODUCTION + SERVICING.** It holds no entity lists at all — units and shots are
+  World roots, walked when needed (see The architecture rule).
   `service(structures)` drains the components' static queues on the main thread: FireRequests, deaths
   (freeing the spawner's roster slot), SeedRequests, TurretFireRequests and SpawnRequests.
 * **Shield, health and team need NO publish step** — they live on the component and ride the entity
@@ -1090,7 +1105,7 @@ re-seeded by `loadUnits`).
 ## Targets
 
 `GameMatch::gatherNavFeed` (a post-update job that also calls the Nav setters) supplies obstacles (the border ring plus structure footprints) and per-team sources (live
-non-invulnerable structures, player capsules, and **live units from the roster — no sweep, CULLED
+non-invulnerable structures, player capsules, and **live units from the World's root list — CULLED
 to units with another team's unit or player within "Nav unit source reach" 64 m** via a coarse cell
 hash, so thousands of far ambient enemies no longer tile the map with the AI team's field). That hash
 is `NavCellTeamMap` (Match.ixx), a flat open-addressing table whose `clear()` only resets slots: the
@@ -1138,7 +1153,7 @@ accumulated time carries over, so the deferred tick covers a little more.
 
 Units the SIM LOD did not select — **no tier stamp, body disabled, never visited by the entity pass** —
 still walk their ROUTE or MOVE ORDER through `GameUnitComponent::updateFar`, **a parallelFor over the
-roster** every interval of sim time:
+World's root list** (non-units skipped per element) every interval of sim time:
 
 * Straight at the target where the raster shows a clear line, else along the enemy team field's
   descent (geodesic, around rocks).
@@ -1148,13 +1163,13 @@ roster** every interval of sim time:
 * No combat, bubble, strain or health death check while far. **The ONE exception: a unit below
   `voidY` −3 — fallen through the floor — is killed by the far tick too**, so no unit escapes it.
 
-> **THE VOID KILL RUNS BEFORE BOTH SKIPS**, on the whole roster, in `NpcSystem::service`'s walk —
+> **THE VOID KILL RUNS BEFORE BOTH SKIPS**, on every unit, in `NpcSystem::service`'s walk —
 > not only inside `updateFar`. A unit that falls off the world edge keeps sinking while its body is
 > live and ends up somewhere nothing visits: OUT of the spatial index (the `spatialEntry.isValid`
 > skip) or holding a stale tier stamp (the selected skip) while the entity pass no longer reaches
 > it. `updateFar`'s own `voidY` test was then unreachable and the body sank forever — deep under
-> the map, still in the roster. **That parallelFor is the one thing that sees every rostered unit,
-> so the check belongs there.** `updateFar` keeps its copy for the units it does run on.
+> the map, still a World root. **That parallelFor is the one thing that sees every unit, so the
+> check belongs there.** `updateFar` keeps its copy for the units it does run on.
 
 ## Loose units spawn PARKED
 
@@ -1284,10 +1299,11 @@ as `MatchTime` — then "Next wave (s)", "Next wave power" — the coming wave's
 the alive cap, `nextWaveBudget` — and "Enemies alive"),
 and hotbar slot counts = affordable.
 
-**"Enemies alive"** is `aiAliveCount()` — the NpcSystem roster size, which is also what the alive cap
-compares against "Max enemy units" in `queueWave`. It is O(1), so the HUD reads it every frame with
-no caching. **The roster is every unit**, so player-team barracks units count in it too, and a unit
-at 0 hp stays until its queued destroy drains.
+**"Enemies alive"** is `aiAliveCount()` — `m_aliveUnits`, ONE `NpcSystem::countUnits` walk of the
+World's root list cached at the top of every `update`, which is also what the alive cap compares
+against "Max enemy units" in `queueWave` (same frame, so never stale there). **It counts every
+unit**, so player-team barracks units count in it too, and a unit at 0 hp stays until its queued
+destroy drains.
 
 ---
 

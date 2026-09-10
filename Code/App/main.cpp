@@ -404,8 +404,8 @@ int main(int argc, char* argv[])
     const auto exitToMenu = [&]()
     {
         controls.resetForMenu();            // possessed capsule / test emitters / force balls released
-        game.reset();                       // ~GameMatch: nav clear, rosters, structures, player, ground (+ its tweak unregistration)
-        Globals::world.clearRootEntities(); // sponza / skysphere / capsules / leftovers; NetworkComponents unregister through the still-open host
+        game.reset();                       // ~GameMatch: nav clear, structure tables, then the WHOLE world wiped (+ its tweak unregistration)
+        Globals::world.clearRootEntities(); // no game: sponza / skysphere / capsules / leftovers; NetworkComponents unregister through the still-open host
         // The sandbox's procedural world goes with it (see startWorldAndGame): the other modes start
         // from terrain + ocean off.
         TweakRegistry::get().setOverride("Terrain/Enabled=0");

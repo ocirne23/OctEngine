@@ -23,18 +23,24 @@ static_assert((int)ENpcType::Count == GameNumUnitTypes);
 // The unit/projectile PRODUCTION layer. The per-entity simulation itself (steering, shields,
 // melee, lifetimes, contact damage) is GameUnitComponent/GameProjectileComponent inside the
 // engine's entity pass, and a unit REPORTS what the game needs (shots to spawn, its death, player
-// damage) through the component's event queues. This system only spawns actors, drains those
-// queues, and keeps the ROSTERS (owning EntityPtrs of every unit/projectile it spawned — added at
-// spawn, deregistered by World::removeRootEntity's callback via onWorldRootRemoved, so every
-// despawn path is covered and no world-wide query exists anywhere). Unit shield/health state still
-// syncs through the entity snapshot's game blob, the overhead labels run a frustum query at the
-// point of need, and barracks roster COUNTS ride the spawn/death events.
+// damage) through the component's event queues. This system only spawns actors and drains those
+// queues. NOTHING IS ROSTERED HERE: the World's root list is the one owner of every unit and
+// projectile entity, and everything that needs "every unit" walks it (queryAllUnits / countUnits /
+// the far tick) — a root with a GameUnitComponent that is not a puppet IS a unit, a root with a
+// GameProjectileComponent IS a shot. Unit shield/health state still syncs through the entity
+// snapshot's game blob, the overhead labels run a frustum query at the point of need, and
+// barracks roster COUNTS ride the spawn/death events.
 // All ticks main thread pre-physics (direct body setters sanctioned) — the authority seam.
 export class NpcSystem final
 {
 public:
     void registerTweaks(); // barracks/turret production + the GameUnitComponent::params baseline
-    void clear();          // despawns every unit/projectile entity (before world teardown)
+    // TEARDOWN: wipes the ENTIRE World — every root (structures, projectiles, units, player
+    // capsules, terrain, ground) through World::clearRootEntities — and discards whatever the
+    // removed actors left in the component queues. ~GameMatch calls it after every other holder
+    // dropped its EntityPtrs, so the World's batch release is the last reference and the teardown
+    // fans out over the job system. Not the load path: loadUnits despawns only units + shots.
+    void clear();
 
     // Drains everything the per-entity sims queued during the pass: barracks spawn requests (the
     // BARRACKS decided, paid energy and claimed its roster slot in its own component update —
@@ -47,14 +53,12 @@ public:
     // Units inside the view frustum AND within maxDist of the camera — the overhead labels only
     // draw what is on screen and readable, so they never ask for more than that.
     static void queryVisibleUnits(const Camera& camera, float maxDist, oc::vector<Entity*>& out);
-    void queryAllUnits(oc::vector<Entity*>& out) const; // roster walk: save/load + the profiling scenario
-	int getNumUnits() const { return (int)m_units.size(); }
-
-    // World::removeRootEntity notification (wired by GameMatch): drops the unit/projectile roster
-    // entry for ANY despawn path (death destroy request, network despawn, editor delete). Must NOT
-    // call removeRootEntity (see World.ixx).
-    void onWorldRootRemoved(const Entity* entity);
-    oc::span<const EntityPtr> units() const { return m_units; } // feedNav's per-team sources
+    // Every live unit = every World root with a GameUnitComponent that is not a puppet (player
+    // capsules are puppets — never units). A walk of World::rootEntities(), O(roots): save/load,
+    // the profiling scenario, the HUD count (GameMatch caches it once a frame). Main thread, or a
+    // post-update job (the root list only mutates on main, after those jobs join).
+    static void queryAllUnits(oc::vector<Entity*>& out);
+    static int countUnits();
 
     // A unit with no owning barracks (sourceId 0, no route, no death accounting) — the co-op
     // ambient scatter + wave director's entry point. Returns null on spawn failure.
@@ -76,7 +80,7 @@ public:
     void spawnLooseUnits(oc::span<const LooseSpawn> spawns);
 
     // SAVE/LOAD (server): every live unit into/from an AssetNode tree (projectiles are transient —
-    // a load clears them). loadUnits despawns the live units first.
+    // a load clears them). loadUnits despawns the live units + shots first (a root walk).
     void saveUnits(AssetNode& root) const;
     void loadUnits(const AssetNode& root, StructureSystem& structures); // re-seeds roster counts
 
@@ -85,6 +89,8 @@ private:
         uint8 team, ENpcType type); // spawn + team/source/route setup on the component
     void fireShot(const char* prefabPath, const char* name, const glm::vec3& from,
         const glm::vec3& velocity, uint8 team); // projectile spawn (main thread, pre-physics)
+    static void despawnUnitsAndShots(); // every unit + projectile root out of the World (load path)
+    void discardQueued(); // drops every queued report/request the removed actors left behind
 
 public:
     // STRIKE VISUALS — pure visuals here (the components already landed the damage):
@@ -124,15 +130,14 @@ private:
     static constexpr size_t c_maxHitBroadcast = 64;  // melee hit beams relayed to clients per service()
 
     // Spawn cooldowns and alive counts live ON the barracks (GameStructureComponent::barracks) —
-    // no id-keyed maps, and the state dies with its structure.
-    // The rosters: owning refs, maintained by spawn + onWorldRootRemoved (never queried).
-    oc::vector<EntityPtr> m_units;
-    oc::vector<EntityPtr> m_shots;
+    // no id-keyed maps, and the state dies with its structure. No entity lists here at all — see
+    // the class comment.
     oc::vector<GameUnitComponent::FireRequest> m_fireScratch; // drained queues (reused buffers)
     oc::vector<GameUnitComponent::DeathRecord> m_deathScratch;
     oc::vector<GameUnitComponent::SeedRequest> m_seedScratch;
     // FAR TICK (service): units the SIM LOD left unselected walk their orders by
-    // GameUnitComponent::updateFar every m_farInterval seconds of sim time.
+    // GameUnitComponent::updateFar every m_farInterval seconds of sim time — a parallelFor over
+    // the World's root list, skipping non-units.
     float m_farInterval = 0.5f;
     float m_farAccum = 0.0f;
     int m_farTicked = 0; // live readout: units moved by the last far tick

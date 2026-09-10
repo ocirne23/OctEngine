@@ -49,30 +49,31 @@ void NpcSystem::queryVisibleUnits(const Camera& camera, float maxDist, oc::vecto
     });
 }
 
-// Every unit in the world — for save/load (which must persist units the camera cannot see) and
-// the profiling scenario's select-all. A roster walk, not a query.
-void NpcSystem::queryAllUnits(oc::vector<Entity*>& out) const
+// A World root is a unit when it carries a GameUnitComponent and is not a puppet (the player
+// capsules carry the component as puppets and are never units).
+static bool isUnitRoot(Entity* entity)
 {
-    out.clear();
-    for (const EntityPtr& u : m_units)
-        out.push_back(u.get());
+    if (!hasComponent<GameUnitComponent>(entity))
+        return false;
+    return !getComponent<GameUnitComponent>(entity)->puppet;
 }
 
-void NpcSystem::onWorldRootRemoved(const Entity* entity)
+// Every unit in the world — for save/load (which must persist units the camera cannot see) and
+// the profiling scenario's select-all. A walk of the World's root list, not a spatial query.
+void NpcSystem::queryAllUnits(oc::vector<Entity*>& out)
 {
-    const auto drop = [entity](oc::vector<EntityPtr>& roster)
-    {
-        for (size_t i = 0; i < roster.size(); ++i)
-            if (roster[i].get() == entity)
-            {
-                roster[i] = oc::move(roster.back());
-                roster.pop_back();
-                return true;
-            }
-        return false;
-    };
-    if (!drop(m_units))
-        drop(m_shots);
+    out.clear();
+    for (const EntityPtr& root : Globals::world.rootEntities())
+        if (isUnitRoot(root.get()))
+            out.push_back(root.get());
+}
+
+int NpcSystem::countUnits()
+{
+    int count = 0;
+    for (const EntityPtr& root : Globals::world.rootEntities())
+        count += isUnitRoot(root.get()) ? 1 : 0;
+    return count;
 }
 
 void NpcSystem::registerTweaks()
@@ -145,19 +146,30 @@ void NpcSystem::registerTweaks()
 
 void NpcSystem::clear()
 {
-    // Teardown: despawn every actor we spawned — the rosters ARE the world-wide answer, no query.
-    // Deregister first (move-out), so removeRootEntity's onWorldRootRemoved callback no-ops
-    // instead of mutating the roster under the loop. Puppets are never in the rosters.
-    const auto despawnAll = [](oc::vector<EntityPtr>& roster)
-    {
-        oc::vector<EntityPtr> actors = oc::move(roster);
-        roster.clear();
-        for (const EntityPtr& e : actors)
-            Globals::world.removeRootEntity(e.get());
-        Globals::world.releaseBatch(oc::move(actors)); // the teardown itself fans out over the job system
-    };
-    despawnAll(m_units);
-    despawnAll(m_shots);
+    // Teardown: the whole World goes — every root, whatever it is. The other holders dropped
+    // their EntityPtrs before this (see ~GameMatch), so the World's batch release is the last
+    // reference and the destruction fans out over the job system.
+    Globals::world.clearRootEntities();
+    discardQueued();
+}
+
+// The load path's despawn: every unit and projectile root, nothing else (the structures were just
+// rebuilt by loadFrom, and the ground / terrain / player stay). Owning copies are collected FIRST —
+// removeRootEntity erases from the list being walked — and released as one parallel batch.
+// Puppets are never units (isUnitRoot).
+void NpcSystem::despawnUnitsAndShots()
+{
+    oc::vector<EntityPtr> actors;
+    for (const EntityPtr& root : Globals::world.rootEntities())
+        if (isUnitRoot(root.get()) || hasComponent<GameProjectileComponent>(root.get()))
+            actors.push_back(root);
+    for (const EntityPtr& e : actors)
+        Globals::world.removeRootEntity(e.get());
+    Globals::world.releaseBatch(oc::move(actors));
+}
+
+void NpcSystem::discardQueued()
+{
     // Drop any queued reports/requests the removed actors left behind, so stale deaths cannot
     // decrement (or stale requests spawn into) a world that has been reset (load/teardown paths).
     GameUnitComponent::takeFireRequests(m_fireScratch);
@@ -318,8 +330,7 @@ Entity* NpcSystem::spawnUnit(const StructureSystem& structures, const glm::vec3&
             unit->route[i] = route[i];
         unit->routeIndex = 0;
     }
-    m_units.push_back(entity); // roster: deregistered by onWorldRootRemoved on any despawn path
-    return entity.get();
+    return entity.get(); // owned by the World's root list — no roster
 }
 
 Entity* NpcSystem::spawnLooseUnit(const StructureSystem& structures, const glm::vec3& pos,
@@ -367,8 +378,7 @@ void NpcSystem::spawnLooseUnits(oc::span<const LooseSpawn> spawns)
         if (Globals::world.simLodActive())
             if (PhysicsComponent* pc = getComponent<PhysicsComponent>(entity.get()))
                 pc->park(/*disable*/ true);
-        m_units.push_back(entity); // roster: deregistered by onWorldRootRemoved on any despawn path
-        Globals::world.addRootEntity(oc::move(entity));
+        Globals::world.addRootEntity(oc::move(entity)); // the root list is the owner — no roster
     }
 }
 
@@ -388,7 +398,7 @@ void NpcSystem::fireShot(const char* prefabPath, const char* name, const glm::ve
     }
     if (PhysicsComponent* pc = getComponent<PhysicsComponent>(shot.get()))
         pc->body.setLinearVelocity(velocity); // main thread pre-physics: direct setter sanctioned
-    m_shots.push_back(shot); // roster: deregistered by onWorldRootRemoved on any despawn path
+    // Owned by the World's root list — no roster.
 }
 
 void NpcSystem::service(StructureSystem& structures)
@@ -403,28 +413,33 @@ void NpcSystem::service(StructureSystem& structures)
         m_farAccum += float(Globals::time.getSimDeltaSec());
         // Not on a physics-step frame that a step-free frame follows (JobSystem::deferFromPhysicsFrame):
         // the accumulated time carries over, so the deferred tick just covers a little more.
-        if (m_farAccum >= m_farInterval && !m_units.empty() && !Globals::jobSystem.deferFromPhysicsFrame())
+        // A walk of the World's root list (every unit is a root; non-units are skipped per
+        // element) — the list only mutates on main, and this joins before service returns.
+        const oc::vector<EntityPtr>& roots = Globals::world.rootEntities();
+        if (m_farAccum >= m_farInterval && !roots.empty() && !Globals::jobSystem.deferFromPhysicsFrame())
         {
             ProfileScope farScope("Npc far tick", EProfileCategory::Game);
             const float dt = m_farAccum;
             m_farAccum = 0.0f;
             oc::atomic<int> moved = 0;
-            Globals::jobSystem.parallelFor(0u, (uint32)m_units.size(), 64u, JobProfile{ "Npc far tick", EProfileCategory::Game },
+            Globals::jobSystem.parallelFor(0u, (uint32)roots.size(), 64u, JobProfile{ "Npc far tick", EProfileCategory::Game },
                 [&](uint32 begin, uint32 end)
             {
                 int local = 0;
                 for (uint32 i = begin; i < end; ++i)
                 {
-                    Entity* e = m_units[i].get();
+                    Entity* e = roots[i].get();
+                    if (!isUnitRoot(e))
+                        continue; // structures, rocks, shots, player capsules (puppets)
                     GameUnitComponent* unit = getComponent<GameUnitComponent>(e);
-                    // THE VOID KILL RUNS FIRST, on the whole roster, before either skip below.
+                    // THE VOID KILL RUNS FIRST, on every unit, before either skip below.
                     // A unit that fell off the world keeps falling as long as its body is live,
                     // and it ends up somewhere nothing visits: OUT of the spatial index (the
                     // isValid skip), or holding a stale tier stamp (the selected skip) while the
                     // entity pass no longer reaches it. Either way updateFar's own voidY test was
                     // unreachable and the body sank forever. This walk is the one thing that sees
-                    // every rostered unit, so the check belongs here.
-                    if (unit && unit->alive() && e->pos.y < GameUnitComponent::params.voidY)
+                    // every unit, so the check belongs here.
+                    if (unit->alive() && e->pos.y < GameUnitComponent::params.voidY)
                     {
                         unit->kill(*e);
                         continue;
@@ -441,7 +456,7 @@ void NpcSystem::service(StructureSystem& structures)
                     if (!Globals::spatialIndex.hasStamp(handle, ESpatialPass::UpdateTier2)
                         && Globals::world.simLodDistanceTier(e->pos) < 3)
                         continue; // fresh and near a player: the pass ticks it by distance until the job stamps it
-                    if (unit && unit->updateFar(*e, dt))
+                    if (unit->updateFar(*e, dt))
                         ++local;
                 }
                 moved.fetch_add(local, oc::memory_order_relaxed);
@@ -528,13 +543,13 @@ void NpcSystem::service(StructureSystem& structures)
 
 void NpcSystem::saveUnits(AssetNode& root) const
 {
+    // The World's root list is the source (queryAllUnits): puppets — player capsules — are
+    // already excluded there, so players are never saved.
     oc::vector<Entity*> units;
     queryAllUnits(units);
     for (Entity* entity : units)
     {
         const GameUnitComponent* u = getComponent<GameUnitComponent>(entity);
-        if (!u || u->puppet)
-            continue; // puppets are player capsules — players are never saved
         int type = (int)ENpcType::Grunt; // the prefab variant, recovered from the entity name
         for (int t = 0; t < (int)ENpcType::Count; ++t)
             if (oc::string_view(entity->getName()) == c_npcNames[t])
@@ -558,7 +573,8 @@ void NpcSystem::saveUnits(AssetNode& root) const
 
 void NpcSystem::loadUnits(const AssetNode& root, StructureSystem& structures)
 {
-    clear(); // despawn live units + projectiles (projectiles are transient, not saved)
+    despawnUnitsAndShots(); // projectiles are transient, not saved
+    discardQueued();
     // Population tallies are maintained by the spawn/death edges, so a load has to re-seed them:
     // the structures were just rebuilt (all zero) and every unit below re-registers as it spawns.
     for (const StructureSystem::Ref& s : structures.structures())

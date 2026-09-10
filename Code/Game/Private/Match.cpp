@@ -113,20 +113,20 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
     // the same process, so the previous mode's count must never linger (a no-op when unchanged).
     Globals::forceSystem.setNumTeams(m_coop ? 2 : 8);
 
-    // The game rosters (structures + units/projectiles) replace every world-wide spatial query:
-    // they deregister through this ONE notification, which every removal path funnels into
-    // (destroy requests, editor deletes, network despawns). Cleared in ~GameMatch — the world
+    // The structure roster replaces every world-wide spatial query for structures: it deregisters
+    // through this ONE notification, which every removal path funnels into (destroy requests,
+    // editor deletes, network despawns). Units and projectiles have no roster — the World's root
+    // list is walked instead (NpcSystem::queryAllUnits). Cleared in ~GameMatch — the world
     // outlives this object.
     Globals::world.setOnRootEntityRemoved([this](const Entity* entity)
     {
         m_structures.onWorldRootRemoved(entity);
-        m_npcs.onWorldRootRemoved(entity);
     });
     // Route change -> the barracks' live units (the march index is KEPT and clamped: an appended
     // route continues where the unit was, a finished unit marches to the new tail).
-    m_structures.onRouteLiveUnits = [this](uint32 sourceId, oc::span<const glm::vec3> route)
+    m_structures.onRouteLiveUnits = [](uint32 sourceId, oc::span<const glm::vec3> route)
     {
-        for (const EntityPtr& e : m_npcs.units())
+        for (const EntityPtr& e : Globals::world.rootEntities()) // every unit is a World root
             if (GameUnitComponent* u = getComponent<GameUnitComponent>(e.get()); u && u->sourceId == sourceId)
             {
                 u->routeCount = (uint8)glm::min((int)route.size(), (int)GameUnitComponent::MaxRoutePoints);
@@ -200,14 +200,19 @@ GameMatch::~GameMatch()
     TweakRegistry::get().unregisterInRange(this, sizeof(GameMatch));
     applyPause(false); // a shared pause must not outlive the match (exit-to-menu mid-pause)
     Globals::navSystem.clear(); // waits on in-flight builds before the world goes
-    m_npcs.clear();
+    // The WHOLE World is wiped below (NpcSystem::clear): every holder drops its EntityPtrs FIRST,
+    // so the World's batch release is the last reference to everything and the teardown fans out
+    // over the job system. StructureSystem::clear also resets its tables (and joins the transport
+    // job, which holds component pointers) — its per-entity removals just find the roots still
+    // there.
     m_structures.clear();
     m_player.despawn();
-    if (m_terrainRoot)
-        Globals::world.removeRootEntity(m_terrainRoot.get()); // co-op rocks + barrier segments
-    if (m_ground)
-        Globals::world.removeRootEntity(m_ground.get()); // corridor walls are its children — they go with it
-    Globals::world.setOnRootEntityRemoved(nullptr); // last: the callback captures this object
+    m_clientPlayers.clear();
+    m_selectedUnits.clear();
+    m_terrainRoot = {}; // co-op rocks + barrier segments (children)
+    m_ground = {};      // corridor walls are its children
+    Globals::world.setOnRootEntityRemoved(nullptr); // before the wipe: the callback captures this object
+    m_npcs.clear();
 }
 
 void GameMatch::spawnWorld()
@@ -395,7 +400,12 @@ void GameMatch::update(float deltaSec)
         return;
     ProfileScope scope("Game update", EProfileCategory::Game);
     if (m_scenarioOrderPending && !m_isClient)
-        issueScenarioOrder(); // after runScenario's load: units come from the roster, the Base/raster from the ticks below
+        issueScenarioOrder(); // after runScenario's load: units come from the World's root list, the Base/raster from the ticks below
+
+    // The live unit count, ONE walk of the World's root list a frame: the HUD's "AI alive", the
+    // wave cap (queueWave, below) and the wander budget (a post-update job) all read the cached
+    // value instead of walking again.
+    m_aliveUnits = NpcSystem::countUnits();
 
     // SIM LOD focus = every player: our capsule plus (server) each client's twin, so a unit is
     // never throttled near ANY player. Published before world.update reads it (main.cpp order).
@@ -403,7 +413,8 @@ void GameMatch::update(float deltaSec)
     // from every player — and the enemies around it — would otherwise be dormant. Greedy clusters
     // over the non-AI units, refreshed every 0.25 s (the selection tolerates a frame of staleness
     // anyway): a unit farther than "Unit cluster focus radius" from every focus point seeds a new
-    // one, up to the focus cap; the remaining slots go to the first clusters found in roster order.
+    // one, up to the focus cap; the remaining slots go to the first clusters found in World root
+    // order.
     {
         glm::vec3 focus[World::MaxSimLodFocus];
         uint32 focusCount = 0;
@@ -428,7 +439,7 @@ void GameMatch::update(float deltaSec)
                     if (nearPoint(c, p))
                         return true;
                 return false; };
-            for (const EntityPtr& e : m_npcs.units())
+            for (const EntityPtr& e : Globals::world.rootEntities()) // every unit is a World root
             {
                 if (focusCount + (uint32)m_focusClusters.size() >= World::MaxSimLodFocus)
                     break;
@@ -612,11 +623,13 @@ void GameMatch::submitNavFeed(float deltaSec)
 void GameMatch::gatherNavFeed(float deltaSec)
 {
     ProfileScope scope("Game nav feed", EProfileCategory::Game);
-    // THE UNIT SWEEP IS SLICED: Nav consumes sources once per "Rebuild interval", so the roster is
-    // walked over that many frames — ceil(n * dt / interval) units a frame, a constant slice — and
-    // the lists publish when the cursor wraps. Culling (see below) tests each unit against the team
-    // cell hash the PREVIOUS cycle built: one interval stale, a metre or two of motion against
-    // 64 m cells. Clients (no unit sim) have an empty sweep and publish every frame.
+    // THE UNIT SWEEP IS SLICED: Nav consumes sources once per "Rebuild interval", so the World's
+    // root list (every unit is a root; other roots are skipped) is walked over that many frames —
+    // ceil(n * dt / interval) roots a frame, a constant slice — and the lists publish when the
+    // cursor wraps. Culling (see below) tests each unit against the team cell hash the PREVIOUS
+    // cycle built: one interval stale, a metre or two of motion against 64 m cells. Clients (no
+    // unit sim) have an empty sweep and publish every frame. The root list only mutates on main,
+    // after this job joins.
     const float cell = glm::max(m_navUnitSourceReach, 8.0f);
     const auto cellKey = [&](const glm::vec3& p) {
         return (uint64)(uint32)(int)glm::floor(p.x / cell) << 32 | (uint32)(int)glm::floor(p.z / cell); };
@@ -632,7 +645,7 @@ void GameMatch::gatherNavFeed(float deltaSec)
                 if (m_navCellTeams.find((uint64)(uint32)(cx + dx) << 32 | (uint32)(cz + dz)) & ~own)
                     return true;
         return false; };
-    const oc::span<const EntityPtr> units = m_npcs.units();
+    const oc::vector<EntityPtr>& units = Globals::world.rootEntities();
     const uint32 n = m_isClient ? 0u : (uint32)units.size();
     if (n > 0)
     {
@@ -648,7 +661,7 @@ void GameMatch::gatherNavFeed(float deltaSec)
             m_navCellTeamsNext.orTeams(cellKey(e->pos), uint8(1u << u->team));
             if (otherTeamNear(e->pos, (uint8)u->team))
                 m_navUnitSources[u->team].push_back(Nav::NavSource{ e->pos, glm::max(u->bodyRadius, 0.25f), 0, 3 });
-            // Pre-emption point every 256 units (see JobSystem::preemptionPoint): a Normal job
+            // Pre-emption point every 256 roots (see JobSystem::preemptionPoint): a Normal job
             // in the present window, so High work (physics tasks, spatial chunks) gets through.
             // Every unit is fully recorded before the point - the sweep resumes at i + 1.
             if ((i & 255) == 255)

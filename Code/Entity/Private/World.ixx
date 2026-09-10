@@ -190,7 +190,17 @@ public:
         oc::erase_if(m_globalRoots, [entity](const Entity* e) { return e == entity; });
     }
     const oc::vector<EntityPtr>& rootEntities() const { return m_rootEntities; }
-    void clearRootEntities() { m_rootEntities.clear(); m_pendingRoots.clear(); m_globalRoots.clear(); }
+    // Drops EVERY root at once (no m_onRootEntityRemoved notifications — the callers are the
+    // teardowns, which reset their own holders first), releasing the World's references as one
+    // parallel batch: a root nothing else holds dies on a worker. Main thread, spawn window.
+    void clearRootEntities()
+    {
+        oc::vector<EntityPtr> roots = oc::move(m_rootEntities);
+        m_rootEntities.clear();
+        m_pendingRoots.clear();
+        m_globalRoots.clear();
+        releaseBatch(oc::move(roots));
+    }
 
     // Applies one EntityChange event
     void handleEntityChange(EntityChange& change, const Camera& camera, const Rect& viewportRect);

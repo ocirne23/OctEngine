@@ -152,14 +152,14 @@ void GameMatch::issueScenarioOrder()
 {
     // Select ALL live own-team units (not just the visible ones — the box select's query is a
     // frustum), then the same order the RMB press gives: locked move target + one seeded lane.
-    // The unit roster serves loaded units immediately (no spatial-link latency any more), but the
+    // The World's root list serves loaded units immediately (no spatial-link latency), but the
     // enemy Base view and the published nav raster still arrive frames later — the retry loop
     // stays (bounded, in case the save held none).
     m_selectedUnits.clear();
     oc::vector<Entity*> units;
-    m_npcs.queryAllUnits(units);
+    NpcSystem::queryAllUnits(units); // puppets already excluded
     for (Entity* e : units)
-        if (const GameUnitComponent* u = getComponent<GameUnitComponent>(e); u && !u->puppet && u->alive() && u->team == (uint32)m_team)
+        if (const GameUnitComponent* u = getComponent<GameUnitComponent>(e); u->alive() && u->team == (uint32)m_team)
             m_selectedUnits.push_back(EntityPtr(e));
     // The same order a right-click on the other team's Base gives: clicked at its centre, so the
     // destination lands on the face toward the player (pushed out of the footprint — the centre

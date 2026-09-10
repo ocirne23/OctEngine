@@ -503,7 +503,8 @@ It calls `GameMatch::runScenario` on the authority:
    queryable (spatial entries link at `commitFrame`, AFTER `game.update`), the enemy Base is in
    `StructureSystem`'s per-frame view (refreshed in `tickAuthority`, also after), and
    `navSystem.raster()` is published.
-3. Then it selects EVERY live own-team unit (`NpcSystem::queryAllUnits`, world-wide) and issues
+3. Then it selects EVERY live own-team unit (`NpcSystem::queryAllUnits`, a walk of the World's root
+   list) and issues
    `moveOrderAt(pointOutsideFootprint(base))` — THE RMB move order, so locked targets plus one seeded
    lane. `pointOutsideFootprint` is the click-on-building push-out, **because the Base CENTRE is
    blocked cells, where the A\* fails and every unit's own plan request fails too**, which left the

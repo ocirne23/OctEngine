@@ -331,7 +331,7 @@ private:
     NavCellTeamMap m_navCellTeams;     // the map the current cycle culls against (built by the previous cycle)
     NavCellTeamMap m_navCellTeamsNext; // being built by the current cycle's slices
     oc::vector<Nav::NavSource> m_navUnitSources[Nav::MaxTeams]; // the current cycle's accepted unit sources
-    uint32 m_navFeedCursor = 0; // roster index the next slice starts at (0 = a cycle just published)
+    uint32 m_navFeedCursor = 0; // World root index the next slice starts at (0 = a cycle just published)
     // Lane seeding parameters live on NpcSystem (one set of tweaks); Match reads them for its own
     // route/order seeding.
     float laneSeedSpeed() const { return m_npcs.orderLaneSpeed(); }
@@ -518,8 +518,10 @@ private:
                                                5.0f };                             // Warrior
     float waveCostOf(ENpcType t) const { return glm::max(m_waveCost[(int)t], 0.1f); }
     int m_waveMaxAlive = 100000;    // total AI units cap (ambient + waves)
-    // Live AI bodies (ambient + waves): the alive cap in queueWave AND the HUD's "Enemies alive".
+    // Live units (every team): the alive cap in queueWave AND the HUD's "Enemies alive". The
+    // cached result of ONE NpcSystem::countUnits walk per update() — units have no roster.
     int aiAliveCount() const;
+    int m_aliveUnits = 0;
     int m_ambientBudget = 500000;    // POINTS of world-start scatter (same per-type costs as waves)
     float m_ambientSafeRadius = 45.0f; // the scatter keeps clear of the Base (planar)
     int m_ambientRecipeWindow = 3;     // a group rolls recipes gated within this many bands below its depth band
