@@ -106,6 +106,11 @@ void StructureSystem::mirrorRoute(uint32 id, oc::span<const glm::vec3> points)
 
 void StructureSystem::saveTo(AssetNode& root) const
 {
+    // ONLY NON-DEFAULT VALUES are written (a base is hundreds of cable segments): every optional
+    // key below has a load fallback that restores the same state when it is missing — full
+    // health, empty stores, built, no facing, no node, team 0, a dark emitter, the Grunt barracks,
+    // no fill. Id, Type and Position are the keys every structure carries. A BLUEPRINT's health is
+    // its build progress, always below max, so it is always written (the fallback is "full").
     for (const Ref& s : m_frame)
     {
         AssetNode& n = root.addChild("Structure");
@@ -114,20 +119,29 @@ void StructureSystem::saveTo(AssetNode& root) const
         n.set("Position", s.entity->pos);
         const glm::vec3 forward = s.type == EStructureType::Lance || isCrossingType(s.type)
             ? s.entity->rot * glm::vec3(0.0f, 0.0f, -1.0f) : glm::vec3(0.0f);
-        n.set("Facing", glm::vec3(forward.x, 0.0f, forward.z));
-        n.set("NodeIndex", oc::to_string(s.nodeIndex));
-        n.set("Team", oc::to_string((int)s.state->team));
-        n.set("Blueprint", s.state->blueprint != 0); // bitfield -> the bool overload
-        n.set("Health", s.state->health);
-        n.set("Charge", s.state->store[0]);
-        n.set("Fuel", s.state->store[1]);
-        n.set("Minerals", s.state->store[2]);
+        if (glm::dot(glm::vec2(forward.x, forward.z), glm::vec2(forward.x, forward.z)) > 1e-4f)
+            n.set("Facing", glm::vec3(forward.x, 0.0f, forward.z));
+        if (s.nodeIndex >= 0)
+            n.set("NodeIndex", oc::to_string(s.nodeIndex));
+        if (s.state->team != 0)
+            n.set("Team", oc::to_string((int)s.state->team));
+        if (s.state->blueprint)
+            n.set("Blueprint", true); // bitfield -> the bool overload
+        if (s.state->health < s.state->healthMax - 1e-3f)
+            n.set("Health", s.state->health);
+        if (s.state->store[0] > 1e-3f)
+            n.set("Charge", s.state->store[0]);
+        if (s.state->store[1] > 1e-3f)
+            n.set("Fuel", s.state->store[1]);
+        if (s.state->store[2] > 1e-3f)
+            n.set("Minerals", s.state->store[2]);
         if (isCableOrCrossing(s.type)) // the cells it holds (transport node fill)
-            if (const auto it = m_net.nodeById.find(s.state->structureId); it != m_net.nodeById.end())
+            if (const auto it = m_net.nodeById.find(s.state->structureId);
+                it != m_net.nodeById.end() && m_net.nodes[it->second].fill != 0)
                 n.set("Fill", oc::to_string((int)m_net.nodes[it->second].fill));
-        if (hasShieldEmitter(s.type)) // union variants: only the active one is meaningful
+        if (hasShieldEmitter(s.type) && s.state->emitter.outputFrac > 1e-3f) // union variants: only the active one is meaningful
             n.set("OutputFrac", s.state->emitter.outputFrac);
-        if (isBarracksType(s.type))
+        if (isBarracksType(s.type) && s.state->barracks.unitType != 0)
             n.set("UnitType", oc::to_string((int)s.state->barracks.unitType));
         if (isBarracksType(s.type) && !s.state->route.empty())
         {
@@ -161,6 +175,10 @@ void StructureSystem::loadFrom(const AssetNode& root)
 {
     refresh();
     clearAllStructures();
+    // THE FALLBACKS BELOW ARE THE SAVE'S DEFAULTS: saveTo omits every key whose value the
+    // fallback restores (full health, empty stores, built, no facing, no node, team 0, a dark
+    // emitter, unit type 0, no fill), so a missing key is the common case, not an old save. Keep
+    // the two in step.
     for (const AssetNode* n : root.findAll("Structure"))
     {
         int typeInt = n->find("Type") ? n->find("Type")->asInt() : -1;

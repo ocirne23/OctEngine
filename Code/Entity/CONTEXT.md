@@ -685,7 +685,10 @@ one probe) → `tickSteering` (`steerHeading` = the context steering, brake, the
 into the context and every queued command builds on it.
 
 * **`GameUnitComponent`** — team, health, shield battery, plus C++ steering / targeting / melee /
-  ranged stance. DSL sets orders through `self.unit.setTarget`. **The HURT LIGHT**
+  ranged stance. DSL sets orders through `self.unit.setTarget`. **`liveCount()`** is the number
+  of non-puppet instances alive — a relaxed atomic incremented in `spawn` and decremented in
+  `destroy` (both worker-side in the batch paths), so the game's "units alive" is a load, never a
+  walk. **The HURT LIGHT**
   (`tickHurtLight`, at the top of `update` on every role, before the client gate): a health drop
   since the last tick pushes a red point light over the collider's top (`addPointLight`, a
   per-frame record) at full brightness, decaying over `params.hurtLightDecay` after the last

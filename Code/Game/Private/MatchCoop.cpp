@@ -119,11 +119,11 @@ void GameMatch::tickWaves(float deltaSec)
     queueWave();
 }
 
-// Live units — ambient and previous waves alike (player-team units too). The count update()
-// cached this frame from the World's root list.
+// Live units — ambient and previous waves alike (player-team units too): the component's own
+// count, kept at its spawn / destroy edges.
 int GameMatch::aiAliveCount() const
 {
-    return m_aliveUnits;
+    return NpcSystem::countUnits();
 }
 
 // The NEXT wave's budget in points, before the "Max enemy units" cap: base + growth per wave so
@@ -230,6 +230,7 @@ void GameMatch::tickCoopSpawns()
     // The frame's spawns are ROLLED first (budget math + RNG stay serial on main — glm's linearRand
     // is not thread-safe), then materialized in ONE NpcSystem::spawnLooseUnits batch: the entity
     // creations fan out over the job system instead of running one by one.
+    ProfileScope scope("Coop spawn trickle", EProfileCategory::Game);
     oc::small_vector<NpcSystem::LooseSpawn, 64> spawns;
     int budget = glm::max(m_spawnsPerFrame, 1);
     while (budget > 0 && m_wavePendingBudget > 0.0f)
@@ -376,14 +377,15 @@ void GameMatch::tickAmbientWander(float deltaSec)
     // The root list only mutates on main, after this post-update job joins.
     const oc::vector<EntityPtr>& roots = Globals::world.rootEntities();
     const int n = (int)roots.size();
-    if (n == 0 || m_aliveUnits == 0)
+    const int aliveUnits = NpcSystem::countUnits(); // the component's edge-maintained count (any thread)
+    if (n == 0 || aliveUnits == 0)
         return;
     const auto rand01 = [&] { return std::uniform_real_distribution<float>(0.0f, 1.0f)(m_wanderRng); };
     // The budget is sized from the SELECTED units, not all of them: only selected units are
     // candidates, so a whole-population budget would land every far unit's strolls on the few
     // near a player. The selected fraction is estimated from the random unit probes below (each
-    // is a fair sample), smoothed — no walk. m_aliveUnits is update()'s cached count.
-    m_wanderBudget += (float)m_aliveUnits * m_wanderSelectedFrac * deltaSec / m_ambientWanderInterval;
+    // is a fair sample), smoothed — no walk.
+    m_wanderBudget += (float)aliveUnits * m_wanderSelectedFrac * deltaSec / m_ambientWanderInterval;
     int issue = (int)m_wanderBudget;
     if (issue <= 0)
         return;

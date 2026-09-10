@@ -25,8 +25,9 @@ static_assert((int)ENpcType::Count == GameNumUnitTypes);
 // engine's entity pass, and a unit REPORTS what the game needs (shots to spawn, its death, player
 // damage) through the component's event queues. This system only spawns actors and drains those
 // queues. NOTHING IS ROSTERED HERE: the World's root list is the one owner of every unit and
-// projectile entity, and everything that needs "every unit" walks it (queryAllUnits / countUnits /
-// the far tick) — a root with a GameUnitComponent that is not a puppet IS a unit, a root with a
+// projectile entity, and everything that needs "every unit" walks it (queryAllUnits / the far
+// tick; the COUNT alone comes from GameUnitComponent::liveCount, maintained at the component's
+// spawn / destroy edges) — a root with a GameUnitComponent that is not a puppet IS a unit, a root with a
 // GameProjectileComponent IS a shot. Unit shield/health state still syncs through the entity
 // snapshot's game blob, the overhead labels run a frustum query at the point of need, and
 // barracks roster COUNTS ride the spawn/death events.
@@ -54,10 +55,12 @@ public:
     // draw what is on screen and readable, so they never ask for more than that.
     static void queryVisibleUnits(const Camera& camera, float maxDist, oc::vector<Entity*>& out);
     // Every live unit = every World root with a GameUnitComponent that is not a puppet (player
-    // capsules are puppets — never units). A walk of World::rootEntities(), O(roots): save/load,
-    // the profiling scenario, the HUD count (GameMatch caches it once a frame). Main thread, or a
-    // post-update job (the root list only mutates on main, after those jobs join).
+    // capsules are puppets — never units). A walk of World::rootEntities(), O(roots): save/load
+    // and the profiling scenario only. Main thread, or a post-update job (the root list only
+    // mutates on main, after those jobs join).
     static void queryAllUnits(oc::vector<Entity*>& out);
+    // The live unit COUNT is no walk at all: GameUnitComponent keeps it at its spawn / destroy
+    // edges (liveCount). O(1) from any thread — the HUD, the wave cap, the wander budget.
     static int countUnits();
 
     // A unit with no owning barracks (sourceId 0, no route, no death accounting) — the co-op

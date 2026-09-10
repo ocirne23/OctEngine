@@ -70,10 +70,7 @@ void NpcSystem::queryAllUnits(oc::vector<Entity*>& out)
 
 int NpcSystem::countUnits()
 {
-    int count = 0;
-    for (const EntityPtr& root : Globals::world.rootEntities())
-        count += isUnitRoot(root.get()) ? 1 : 0;
-    return count;
+    return GameUnitComponent::liveCount(); // spawn/destroy edges on the component — no walk
 }
 
 void NpcSystem::registerTweaks()
@@ -343,6 +340,7 @@ void NpcSystem::spawnLooseUnits(oc::span<const LooseSpawn> spawns)
 {
     if (spawns.empty())
         return;
+    ProfileScope scope("Npc loose spawn batch", EProfileCategory::Game);
     // The entity creations fan out over the job system; everything below the batch is the same
     // per-unit fixup spawnUnit does, minus the route copy (loose units have no owning barracks) —
     // cheap component writes, kept serial on main.
@@ -477,6 +475,7 @@ void NpcSystem::service(StructureSystem& structures)
     // claimed the roster slot and set the cooldown — this only performs the entity spawn). A
     // failed spawn refunds the cost and the slot.
     GameStructureComponent::takeSpawnRequests(m_spawnScratch);
+    ProfileScope spawnScope("Npc barracks spawns", EProfileCategory::Game);
     for (const uint32 barracksId : m_spawnScratch)
     {
         const int index = structures.structureIndexById(barracksId);
@@ -496,6 +495,7 @@ void NpcSystem::service(StructureSystem& structures)
             s.state->barracks.population = glm::max(s.state->barracks.population - (int)s.state->barracks.spawnPop, 0);
         }
     }
+    spawnScope.stop();
     // Lightning the TURRETS fired (their component paid the energy, set the cooldown and landed
     // the hitscan damage): only the beam visual is left to add.
     m_newBeams.clear();
@@ -509,6 +509,7 @@ void NpcSystem::service(StructureSystem& structures)
 
     // Shots the RANGED units asked for during the pass (spawning is main-thread only).
     GameUnitComponent::takeFireRequests(m_fireScratch);
+    ProfileScope fireScope("Npc fire requests", EProfileCategory::Game);
     for (const GameUnitComponent::FireRequest& request : m_fireScratch)
     {
         const glm::vec3 from = request.from + glm::vec3(0.0f, 0.8f, 0.0f);
@@ -533,6 +534,7 @@ void NpcSystem::service(StructureSystem& structures)
             lob ? "EnemyLob" : "EnemyShot", from + dir / len * 1.2f,
             dir / len * (lob ? m_lobberShotSpeed : m_spitterShotSpeed), request.team);
     }
+    fireScope.stop();
     // Each reported death frees its population on its spawner — the tally is maintained by the
     // spawn/death edges instead of by recounting units every frame.
     GameUnitComponent::takeDeaths(m_deathScratch);
@@ -554,14 +556,23 @@ void NpcSystem::saveUnits(AssetNode& root) const
         for (int t = 0; t < (int)ENpcType::Count; ++t)
             if (oc::string_view(entity->getName()) == c_npcNames[t])
                 type = t;
+        // ONLY NON-DEFAULT VALUES are written (a co-op save holds tens of thousands of units):
+        // every key below has a load fallback that restores the same state when it is missing —
+        // team 1, a fresh spawn's full health / battery, no spawner, route start. Type and
+        // Position are the two keys every unit carries (the type names the prefab: explicit).
         AssetNode& n = root.addChild("Unit");
         n.set("Type", oc::to_string(type));
-        n.set("Team", oc::to_string((int)u->team));
+        if (u->team != 1)
+            n.set("Team", oc::to_string((int)u->team));
         n.set("Position", entity->pos);
-        n.set("Health", u->health);
-        n.set("Energy", u->energy);
-        n.set("Source", oc::to_string(u->sourceId));
-        n.set("RouteIndex", oc::to_string(u->routeIndex));
+        if (u->health < u->healthMax - 1e-3f)
+            n.set("Health", u->health);
+        if (u->energy < u->energyMax - 1e-3f)
+            n.set("Energy", u->energy);
+        if (u->sourceId != 0)
+            n.set("Source", oc::to_string(u->sourceId));
+        if (u->routeIndex != 0)
+            n.set("RouteIndex", oc::to_string(u->routeIndex));
         // The standing MOVE ORDER is what makes a co-op WAVE unit a wave unit — there is no
         // per-unit `ambient` flag any more, so without it a loaded wave stopped where it stood and
         // held its patch like ambient scatter. Transient WANDER strolls are deliberately skipped:
@@ -580,6 +591,10 @@ void NpcSystem::loadUnits(const AssetNode& root, StructureSystem& structures)
     for (const StructureSystem::Ref& s : structures.structures())
         if (isBarracksType(s.type))
             s.state->barracks.population = 0;
+    // THE FALLBACKS BELOW ARE THE SAVE'S DEFAULTS: saveUnits omits every key whose value the
+    // fallback restores (team 1, the fresh spawn's full health / battery, source 0, route index
+    // 0), so a missing key is the common case, not an old save. Type and Position are always
+    // written. Keep the two in step.
     for (const AssetNode* n : root.findAll("Unit"))
     {
         const int typeInt = glm::clamp(n->find("Type") ? n->find("Type")->asInt() : 0,

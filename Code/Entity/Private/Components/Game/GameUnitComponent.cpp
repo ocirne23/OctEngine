@@ -34,6 +34,20 @@ static oc::vector<GameUnitComponent::FireRequest> g_fireRequests;
 static oc::vector<GameUnitComponent::DeathRecord> g_deaths;
 static oc::vector<GameUnitComponent::SeedRequest> g_seedRequests;
 static oc::vector<GameUnitComponent::HitRecord> g_hits;
+// Live non-puppet units (see liveCount): +1 in spawn, -1 in destroy — both worker-side in the
+// batch spawn / release paths, so an atomic; relaxed, nothing orders on it.
+static oc::atomic<int> g_liveUnits = 0;
+
+int GameUnitComponent::liveCount()
+{
+    return g_liveUnits.load(oc::memory_order_relaxed);
+}
+
+void GameUnitComponent::destroy(Entity&, const SpawnInfo& info)
+{
+    if (!info.puppet)
+        g_liveUnits.fetch_sub(1, oc::memory_order_relaxed);
+}
 
 void GameUnitComponent::takeHits(oc::vector<HitRecord>& out)
 {
@@ -78,6 +92,8 @@ void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
         entity.setProfiled(); // units with shields carry a per-entity profile scope
     }
     puppet = info.puppet;
+    if (!info.puppet)
+        g_liveUnits.fetch_add(1, oc::memory_order_relaxed); // paired with destroy()
     if (!info.shortName.empty())
         m_shortName = info.shortName;
     team = info.team;

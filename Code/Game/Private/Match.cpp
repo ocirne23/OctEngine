@@ -402,11 +402,6 @@ void GameMatch::update(float deltaSec)
     if (m_scenarioOrderPending && !m_isClient)
         issueScenarioOrder(); // after runScenario's load: units come from the World's root list, the Base/raster from the ticks below
 
-    // The live unit count, ONE walk of the World's root list a frame: the HUD's "AI alive", the
-    // wave cap (queueWave, below) and the wander budget (a post-update job) all read the cached
-    // value instead of walking again.
-    m_aliveUnits = NpcSystem::countUnits();
-
     // SIM LOD focus = every player: our capsule plus (server) each client's twin, so a unit is
     // never throttled near ANY player. Published before world.update reads it (main.cpp order).
     // PLUS FRIENDLY UNIT CLUSTERS: combat only runs inside the selection, so an army fighting far
@@ -416,6 +411,7 @@ void GameMatch::update(float deltaSec)
     // one, up to the focus cap; the remaining slots go to the first clusters found in World root
     // order.
     {
+        ProfileScope focusScope("Sim LOD focus", EProfileCategory::Game);
         glm::vec3 focus[World::MaxSimLodFocus];
         uint32 focusCount = 0;
         focus[focusCount++] = m_player.bodyPos();
@@ -536,6 +532,8 @@ void GameMatch::update(float deltaSec)
     // (shots to spawn, deaths) and runs production.
     m_npcs.service(m_structures);
     if (m_isServer) // strikes (turret lightning, melee hits) are pure visuals on clients: broadcast this frame's
+    {
+        ProfileScope beamScope("Strike broadcast", EProfileCategory::Game);
         for (const NpcSystem::Beam& beam : m_npcs.newBeams())
         {
             uint8 buffer[32];
@@ -545,8 +543,10 @@ void GameMatch::update(float deltaSec)
             writer.write<float>(beam.to.x);   writer.write<float>(beam.to.y);   writer.write<float>(beam.to.z);
             Globals::networkManager.fireNetworkEvent("GLt", writer.data());
         }
+    }
     if (m_coop)
     {
+        ProfileScope coopScope("Coop waves", EProfileCategory::Game);
         tickWaves(deltaSec);
         tickCoopSpawns();
     }
@@ -561,9 +561,10 @@ void GameMatch::update(float deltaSec)
         m_statTimer -= deltaSec;
         if (m_statTimer <= 0.0f)
         {
-            sendStats();
+            sendStats(); // (its own "Game send stats" scope)
             m_statTimer = 0.2f; // ~5 Hz volatile-state mirror
         }
+        ProfileScope damageScope("Damage flush", EProfileCategory::Game);
         // GDm: damage banked on the client twins' puppet inboxes (unit melee, projectile hits —
         // the same damage() call every victim gets) is owed to each owner, whose GamePlayer runs
         // the shield-absorb rules (health is owner-computed). The component inbox accumulates

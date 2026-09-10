@@ -30,11 +30,13 @@ Without `--game` the testbed is untouched.
   it.
 * **UNITS and PROJECTILES have NO roster.** The World's root list owns them, and every "all units"
   consumer walks `World::rootEntities()` — a root with a `GameUnitComponent` that is not a puppet
-  IS a unit, a root with a `GameProjectileComponent` IS a shot (`NpcSystem::queryAllUnits` /
-  `countUnits`, the far tick, the nav feed sweep, the SIM LOD clusters, the ambient wander
-  probes, the route push, the load path's despawn). The list only mutates on main, after the
-  post-update jobs join, so those jobs read it like the roster they replaced. `GameMatch::update`
-  caches ONE `countUnits` walk a frame as `m_aliveUnits` (`aiAliveCount`).
+  IS a unit, a root with a `GameProjectileComponent` IS a shot (`NpcSystem::queryAllUnits`, the
+  far tick, the nav feed sweep, the SIM LOD clusters, the ambient wander probes, the route push,
+  the load path's despawn). The list only mutates on main, after the post-update jobs join, so
+  those jobs read it like the roster they replaced. **The unit COUNT is no walk:**
+  `GameUnitComponent::liveCount` is a relaxed atomic kept at the component's spawn / destroy
+  edges (non-puppets only), read through `NpcSystem::countUnits` / `aiAliveCount` from any
+  thread — nothing on main touches it.
 * **Teardown wipes the WHOLE World.** `~GameMatch` has every holder drop its `EntityPtr`s
   (structures, player, client twins, selection, terrain root, ground), then `NpcSystem::clear`
   calls `World::clearRootEntities` — every root, released as one parallel batch — and discards the
@@ -290,7 +292,7 @@ the entity batch submit; its orders land in the next pass): an IDLE AI unit — 
 now and then strolls 0.4–1× "Ambient wander distance" (12 m) with its heading = a random unit vector
 + "Ambient wander base bias" (0.5) × toward the Base, clamped to open ground. **Cheap and SMOOTH by
 design:** the expected strolls per frame = SELECTED units / "Ambient wander interval" (90 s) × dt
-(the unit count is `m_aliveUnits`, and the selected fraction is a smoothed estimate from the random
+(the unit count is `GameUnitComponent::liveCount`, and the selected fraction is a smoothed estimate from the random
 probes — sizing from every unit dumped every far unit's strolls on the few near a player), carried
 as a fractional budget (`m_wanderBudget`) so every frame issues that many on average, each costing
 at most 32 random probes into the root list (a non-unit root is a wasted probe) to find an idle
@@ -1312,11 +1314,11 @@ as `MatchTime` — then "Next wave (s)", "Next wave power" — the coming wave's
 the alive cap, `nextWaveBudget` — and "Enemies alive"),
 and hotbar slot counts = affordable.
 
-**"Enemies alive"** is `aiAliveCount()` — `m_aliveUnits`, ONE `NpcSystem::countUnits` walk of the
-World's root list cached at the top of every `update`, which is also what the alive cap compares
-against "Max enemy units" in `queueWave` (same frame, so never stale there). **It counts every
-unit**, so player-team barracks units count in it too, and a unit at 0 hp stays until its queued
-destroy drains.
+**"Enemies alive"** is `aiAliveCount()` — `GameUnitComponent::liveCount`, the component's own
+count kept at its spawn / destroy edges (O(1), any thread, nothing walked), which is also what the
+alive cap compares against "Max enemy units" in `queueWave`. **It counts every unit**, so
+player-team barracks units count in it too, and a unit at 0 hp stays until its queued destroy
+drains.
 
 ---
 
@@ -1329,7 +1331,11 @@ A full sim snapshot to `Assets/Local/gamesave.txt` through AssetParser
 `GameMatch::saveGame` / `loadGame`): structures with id / type / pos / facing / node / team /
 blueprint / stores / route — **cable segments are ordinary Structure entries, with NO Cable nodes** —
 plus the map inputs and `PlayerPos`, the LOCAL player's body position. **Shots are NOT saved**;
-projectiles are transient and a load clears them.
+projectiles are transient and a load clears them. **A structure entry writes only NON-DEFAULT
+keys**: Id, Type and Position always; Facing, NodeIndex, Team, Blueprint, Health, the three
+stores, Fill, OutputFrac and UnitType only when the `loadFrom` fallback (no facing, no node, team
+0, built, full health, empty stores, no fill, dark, Grunt) would not restore them. A blueprint's
+health is its build progress and is always below max, so it is always written.
 
 **The PENDING TRICKLE** rides along too (`saveTrickle` / `loadTrickle`, co-op only). A wave is sized
 in points at `queueWave` and its bodies materialize over the following frames, so a save mid-wave
@@ -1348,7 +1354,10 @@ through placing. A resumed wave with points left **re-seeds its Nav lane**.
 
 Units save type / team / pos / health / energy / source / route index **plus `Order`, the standing
 MOVE ORDER destination** — written only for a real move order, never for a transient `wanderOrder`
-stroll. `loadUnits` replays it through `orderMove(pos, fresh=false)`, so a loaded co-op wave keeps
+stroll. **Only NON-DEFAULT keys are written** (a co-op save holds tens of thousands of units):
+Type and Position always, the rest only when the load fallback would not restore it — team 1, a
+fresh spawn's full health and battery, source 0 and route index 0 are omitted. `loadUnits`'s
+fallbacks ARE those defaults; keep the two in step. `loadUnits` replays it through `orderMove(pos, fresh=false)`, so a loaded co-op wave keeps
 marching on the Base instead of parking (see **Targeting range gates**: the order is the only wave
 marker). A save without the key loads AI-driven, as before.
 

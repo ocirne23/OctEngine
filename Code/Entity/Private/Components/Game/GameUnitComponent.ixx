@@ -194,6 +194,11 @@ export struct GameUnitComponent
         glm::vec3 to{ 0.0f };
     };
     static void takeHits(oc::vector<HitRecord>& out);
+    // The number of LIVE UNITS — non-puppet instances of this component in existence, maintained
+    // at the spawn / destroy edges (a relaxed atomic: both run on workers in the batch paths).
+    // The game's "units alive" (the HUD, the wave cap, the wander budget) reads THIS instead of
+    // walking anything. A unit at 0 hp counts until its queued destroy drains.
+    static int liveCount();
     // (There is NO separate shield mirror: this component's state RIDES THE ENTITY SYNC — the
     // engine's snapshot/claim records carry a quantized game blob whenever the entity has a
     // GameUnitComponent. See NetworkManager's packGameStateBlob/applyGameStateBlob.)
@@ -300,7 +305,7 @@ export struct GameUnitComponent
     uint8 routeCount = 0, routeIndex = 0;
 
     void spawn(Entity& entity, const SpawnInfo& info, const Transform& base);
-    void destroy(Entity& entity, const SpawnInfo& info) {}
+    void destroy(Entity& entity, const SpawnInfo& info); // the live count's decrement
     // Authority only — see the contract above. ONE tick is the step sequence declared under
     // `Tick` below: height limit, inboxes, walk target, combat probe, steering, field.
     void update(Entity& entity, float deltaSec);

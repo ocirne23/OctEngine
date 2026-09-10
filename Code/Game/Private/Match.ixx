@@ -518,10 +518,9 @@ private:
                                                5.0f };                             // Warrior
     float waveCostOf(ENpcType t) const { return glm::max(m_waveCost[(int)t], 0.1f); }
     int m_waveMaxAlive = 100000;    // total AI units cap (ambient + waves)
-    // Live units (every team): the alive cap in queueWave AND the HUD's "Enemies alive". The
-    // cached result of ONE NpcSystem::countUnits walk per update() — units have no roster.
+    // Live units (every team): the alive cap in queueWave AND the HUD's "Enemies alive" —
+    // GameUnitComponent's own live count (spawn/destroy edges), O(1), no roster and no walk.
     int aiAliveCount() const;
-    int m_aliveUnits = 0;
     int m_ambientBudget = 500000;    // POINTS of world-start scatter (same per-type costs as waves)
     float m_ambientSafeRadius = 45.0f; // the scatter keeps clear of the Base (planar)
     int m_ambientRecipeWindow = 3;     // a group rolls recipes gated within this many bands below its depth band
