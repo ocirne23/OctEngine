@@ -6,6 +6,19 @@ import :Device;
 import :Shader;
 import :RenderPass;
 
+// Width of every rasterized line: the debug-line pass (line topology) and the wireframe variants
+// (eLine polygon mode). Needs the wideLines device feature, enabled in Device.cpp.
+static constexpr float LINE_WIDTH = 3.0f;
+
+static bool rasterizesLines(vk::PrimitiveTopology topology, vk::PolygonMode polygonMode)
+{
+    return polygonMode == vk::PolygonMode::eLine
+        || topology == vk::PrimitiveTopology::eLineList
+        || topology == vk::PrimitiveTopology::eLineStrip
+        || topology == vk::PrimitiveTopology::eLineListWithAdjacency
+        || topology == vk::PrimitiveTopology::eLineStripWithAdjacency;
+}
+
 GraphicsPipeline::GraphicsPipeline() {}
 GraphicsPipeline::~GraphicsPipeline()
 {
@@ -139,7 +152,7 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
         .depthBiasConstantFactor = layout.depthBiasConstantFactor,
         .depthBiasClamp = 0.0f,
         .depthBiasSlopeFactor = layout.depthBiasSlopeFactor,
-        .lineWidth = 1.0f,
+        .lineWidth = rasterizesLines(layout.topology, layout.polygonMode) ? LINE_WIDTH : 1.0f,
     };
     vk::PipelineMultisampleStateCreateInfo pipelineMultisampleStateCreateInfo
     {
@@ -281,6 +294,7 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
         pipelineDepthStencilStateCreateInfo.depthWriteEnable = variant.depthWrite ? vk::True : vk::False;
         pipelineColorBlendAttachmentState.blendEnable = variant.blendEnable ? vk::True : vk::False;
         pipelineRasterizationStateCreateInfo.polygonMode = variant.polygonMode;
+        pipelineRasterizationStateCreateInfo.lineWidth = rasterizesLines(layout.topology, variant.polygonMode) ? LINE_WIDTH : 1.0f;
         pipelineRasterizationStateCreateInfo.cullMode = variant.cullMode;
         if (variant.blendEnable)
         {

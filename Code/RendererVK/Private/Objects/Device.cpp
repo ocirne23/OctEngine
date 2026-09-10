@@ -112,6 +112,7 @@ bool Device::initialize()
     vk::PhysicalDeviceFeatures2 deviceFeatures;
     m_physicalDevice.getFeatures2(&deviceFeatures);
     deviceFeatures.features.samplerAnisotropy = vk::True;
+    deviceFeatures.features.wideLines = vk::True; // debug lines and wireframe rasterize LINE_WIDTH px wide
     vk::PhysicalDeviceVulkan11Features vk11Features
     {
         .pNext = &deviceFeatures,

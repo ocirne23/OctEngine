@@ -48,8 +48,21 @@ Without `--game` the testbed is untouched.
 
 ## Partitions
 
-`Game:Match` (the orchestrator), `Game:Player`, `Game:Structures`, `Game:Npc`, `Game:GameCamera`;
-barrel `Public/Game.ixx`.
+`Game:Match` (the orchestrator), `Game:Player`, `Game:Structures`, `Game:StructureTypes`
+(`EStructureType` + the constexpr type predicates, `ENodeType`, `GameMaxTeams`,
+`GameNumUnitTypes` — `export import`ed by `Game:Structures`, so importers see one surface),
+`Game:Npc`, `Game:GameCamera`; barrel `Public/Game.ixx`.
+
+**`StructureSystem`'s bodies are split over six implementation units by topic** (all
+`module Game;`, the list is repeated at the end of `Structures.ixx`): `Structures.cpp` (the
+type tables behind `structureTypeName` / `spawnHeightOf`, `describeType`, `registerTweaks`,
+`refresh` / `stampTuning`, `clear`, the nodes, request queueing, `tickAuthority` / `tickMirror`),
+`StructuresPlacement.cpp` (the grid: snap, footprints, the cell hash, `cellsFree` /
+`planCrossing`; `spawnStructure` / destroy / `placeStructure` / `spawnBase` / demolish — the
+prefab table lives here), `StructuresNetwork.cpp` (`rebuildNetworks` + `updateArms`),
+`StructuresEconomy.cpp` (`tickProduction`, the death sweep, constructors, materials / repairs,
+the tint, `drawDebug`), `StructuresSync.cpp` (the `mirror*` appliers, `saveTo` / `loadFrom` /
+`clearAllStructures`) and `Transport.cpp` (the cable transport tick).
 
 **`GameMatch`'s bodies are split over seven implementation units by topic** (all `module Game;`,
 the list is repeated at the end of `Match.ixx`): `Match.cpp` (construction, `spawnWorld`, the three

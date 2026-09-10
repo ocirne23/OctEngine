@@ -167,6 +167,11 @@ load/store, and the last hands colour to TAA. They are compatible with the origi
 load/store ops and layouts differ (**the deps are verbatim — they are part of compatibility**). A
 single-stage frame uses the original pass, and **VR eye passes stay unsplit**.
 
+**Line width.** Every pipeline that rasterizes lines — the debug-line pass (line topology) and the
+wireframe variants (`eLine` polygon mode) — is created with `lineWidth = LINE_WIDTH` (3 px, a
+constant in `Objects/GraphicsPipeline.cpp`). This needs the core `wideLines` device feature, enabled
+in `Objects/Device.cpp`; it is NOT an extension.
+
 > The split exists so `GpuProfiler` can time each stage: timestamps must be written **outside** render
 > passes, because multiview would replicate them and a SECONDARY_COMMAND_BUFFERS subpass admits no
 > other primary commands. See Profiling in [`Code/Core/CONTEXT.md`](../Core/CONTEXT.md).
