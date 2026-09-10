@@ -395,7 +395,8 @@ void main()
             sunTrans = mix(vec3(1.0),
                 underwaterSunTransmittance(worldPos.xz, depthMid, viewZ * (2.0 / float(VOL_FROXEL_Y)),
                     u_fogParams7.x,
-                    waterY - u_fogParams8.x // the calm level itself (waterY carries the fog boundary offset)
+                    (waterY - u_fogParams8.x) - (surfY - depthMid), // calm column depth at the submerged midpoint
+                    waterY - u_fogParams8.x                          // the calm level itself (waterY carries the fog boundary offset)
                     ), underFrac);
             gSun = mix(g, 0.78, underFrac); // strong forward lobe: ~8x gain toward the sun
         }

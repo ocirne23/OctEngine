@@ -123,6 +123,11 @@ MainMenu's lobby page, with `LobbyView` / `LobbyAction` snapshots polled exactly
 sandbox start immediately, and command-line runs never lobby — **a CLI game server calls
 `lobby.markStarted` so menu clients joining it still get the go signal.**
 
+**The SANDBOX content** (`startWorldAndGame`, the `!startGame` branch): sponza + the skysphere
+prefab, plus the procedural world — `Terrain/Enabled` and `Ocean/Enabled` are switched ON through
+tweak OVERRIDES (applied at once, never written back to tweaks.cfg) and switched off again in
+`exitToMenu`, so every other mode keeps its own default of off.
+
 ## Events (server-authoritative, reliable)
 
 | Event | Meaning |

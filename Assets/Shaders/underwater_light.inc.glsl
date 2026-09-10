@@ -31,16 +31,29 @@ layout (binding = UNDERWATER_OCEAN_BINDING) uniform sampler2DArray u_uwOceanMaps
 // XZ, close enough for gating). Lets callers test "underwater" against the INSTANTANEOUS surface
 // instead of the calm level, so sand exposed by a receding swash reads as dry (no caustics/absorption)
 // and the run-up tongue reads as covered. columnDepth = calm water depth at the point.
-float underwaterLiveWaveY(vec2 worldXZ, float columnDepth, float waterLevel)
+// THE shore weights, for every consumer that mirrors the ocean's vertex displacement outside the ocean
+// shader (mirror oceanSwashBase / oceanSwashFadeIn / oceanSwashWeight / oceanSurfaceWeight in
+// ocean_wave.inc.glsl): amplitude x sea-connection fade (landlocked water at an elevated level gets no
+// swell) x land-height fade, and the approach fade-in across the swash band. columnDepth = the CALM
+// water depth at the point (negative on dry land), waterLevel = the calm local level.
+//   swash   = amplitude x sea x land x fadeIn      (the tongue: what drives the backflow / flow offset)
+//   surface = 1 - fadeIn x (1 - amplitude x sea x land)  (the ONE depth weight on the raw cascade sum:
+//             1 in open water, easing to the swash base across the approach band)
+void oceanShoreWeights(float columnDepth, float waterLevel, out float swash, out float surface)
 {
-    // The shore weights — mirror oceanSwashBase / oceanSwashFadeIn / oceanSwashWeight
-    // (ocean_wave.inc.glsl): amplitude x sea-connection fade (landlocked water at an elevated level
-    // gets no swell) x land-height fade, and the approach fade-in across the swash band.
     const float seaFade = 1.0 - smoothstep(0.05, 1.0, abs(waterLevel - u_oceanParams2.w));
     const float reach = max(u_oceanParams7.w, 0.01);
     const float landFade = clamp(1.0 + min(columnDepth, 0.0) / reach, 0.0, 1.0);
     const float fadeIn = 1.0 - smoothstep(0.0, max(2.0 * reach, u_oceanParams4.z * u_oceanParams2.y), columnDepth);
-    const float sw = u_oceanParams7.z * seaFade * landFade * fadeIn;
+    const float base = u_oceanParams7.z * seaFade * landFade;
+    swash = base * fadeIn;
+    surface = 1.0 - fadeIn * (1.0 - base);
+}
+
+float underwaterLiveWaveY(vec2 worldXZ, float columnDepth, float waterLevel)
+{
+    float sw, surfaceW;
+    oceanShoreWeights(columnDepth, waterLevel, sw, surfaceW);
 
     // Swash backflow moves the water HORIZONTALLY (displaced = source + chop offset), so the surface
     // above this ground point originates from x - offset: first-order inverse — evaluate the offset
@@ -66,21 +79,19 @@ float underwaterLiveWaveY(vec2 worldXZ, float columnDepth, float waterLevel)
         sampleXZ -= flowOff * (flowCap / (flowCap + length(flowOff)));
     }
 
-    // The raw cascade sum times the ONE depth weight the displacement uses (mirrors oceanSurfaceWeight):
-    // 1 in open water, easing to the swash base (amplitude x sea x land fades) across the approach band.
+    // The raw cascade sum times the ONE depth weight the displacement uses.
     float rawY = 0.0;
     for (int c = 0; c < OCEAN_CASCADES; ++c)
         rawY += textureLod(u_uwOceanMaps, vec3(sampleXZ / u_oceanParams2[c], float(c)), 0.0).y;
-    const float base = u_oceanParams7.z * seaFade * landFade;
-    return rawY * (1.0 - fadeIn * (1.0 - base));
+    return rawY * surfaceW;
 }
 
-// waterLevel = the local CALM water level: the caustic's wave field is scaled by the ocean's ONE depth
-// weight at the entry point (mirrors oceanSurfaceWeight — 1 in open water, easing to swash amplitude x
-// sea x land fades across the approach band), the same damping the drawn surface (ocean mesh, terrain
-// film) applies. Without it the surf zone focused full open-water waves under a damped surface, and
-// the pattern read as distorted against the film above it.
-vec3 underwaterSunTransmittance(vec2 worldXZ, float depthBelow, float footprint, float reach, float waterLevel)
+// columnDepth / waterLevel = the CALM depth and level at the shaded point (oceanShoreWeights): the
+// caustic's wave field is scaled by the ocean's surface weight, the same damping the drawn surface
+// (ocean mesh, terrain film) applies. Without it the surf zone focused full open-water waves under a
+// damped surface, and the pattern read as distorted against the film above it. depthBelow stays the
+// LIVE depth (path length + entry point); the weight wants the calm column, hence the separate input.
+vec3 underwaterSunTransmittance(vec2 worldXZ, float depthBelow, float footprint, float reach, float columnDepth, float waterLevel)
 {
     const vec3 sunDir = normalize(u_sunDirection.xyz);
     const float sy = max(sunDir.y, 0.08); // grazing sun: cap the path-length blow-up
@@ -106,15 +117,10 @@ vec3 underwaterSunTransmittance(vec2 worldXZ, float depthBelow, float footprint,
         }
         // The shore's wave damping (see the header comment): the Jacobian terms are linear in the
         // displacement, so the weight multiplies straight in. Column depth at the entry point is
-        // unknown; the shaded point's depth stands in (the entry lies within a few metres of it).
-        {
-            const float seaFade = 1.0 - smoothstep(0.05, 1.0, abs(waterLevel - u_oceanParams2.w));
-            const float reachSw = max(u_oceanParams7.w, 0.01);
-            const float landFade = clamp(1.0 + min(depthBelow, 0.0) / reachSw, 0.0, 1.0);
-            const float fadeIn = 1.0 - smoothstep(0.0, max(2.0 * reachSw, u_oceanParams4.z * u_oceanParams2.y), depthBelow);
-            const float w = 1.0 - fadeIn * (1.0 - u_oceanParams7.z * seaFade * landFade);
-            sxx *= w; szz *= w; sxz *= w;
-        }
+        // unknown; the shaded point's stands in (the entry lies within a few metres of it).
+        float swashW, surfaceW;
+        oceanShoreWeights(columnDepth, waterLevel, swashW, surfaceW);
+        sxx *= surfaceW; szz *= surfaceW; sxz *= surfaceW;
         // Fold Jacobian (Tessendorf): < 1 converging (bright), > 1 diverging (dim). Applied as a CONTRAST
         // EXPONENT — "Caustic strength" steepens the response, so converging zones spike into hot
         // filaments (up to 8x) instead of a gentle modulation, which is what makes fog columns read as

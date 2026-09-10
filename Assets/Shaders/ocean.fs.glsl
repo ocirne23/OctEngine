@@ -153,6 +153,8 @@ struct SceneHit
     vec3 pos;
     vec3 N;
     vec3 albedo;
+    float waterLevel; // calm water level above the hit (the column shadeHit / the body attenuate through):
+                      // fetched ONCE per hit — the seabed splat already reads the terrain data there
 };
 
 // The seabed at a ray hit IS the terrain: the terrain shader's own splat (terrain_splat.inc.glsl —
@@ -164,7 +166,8 @@ float g_seabedLod = 0.0;
 #define TERRAIN_SPLAT_ALBEDO_ONLY
 #include "terrain_splat.inc.glsl"
 
-vec3 terrainSeabedAlbedo(vec3 worldPos, vec3 geoN, float rayT)
+// waterLevel returns the calm level the fields carry (the hit's column: one terrain fetch serves both).
+vec3 terrainSeabedAlbedo(vec3 worldPos, vec3 geoN, float rayT, out float waterLevel)
 {
     TerrainFields f; // mild-climate fallbacks without a map, as the terrain VS
     f.altitude = worldPos.y - u_terrainParams.z;
@@ -176,10 +179,13 @@ vec3 terrainSeabedAlbedo(vec3 worldPos, vec3 geoN, float rayT)
         const vec4 td = terrainDataAt(worldPos.xz);
         f.altitude = td.w;
         f.waterLevel = td.y;
-        const vec4 climate = terrainClimateAt(worldPos.xz);
+        // NEAREST climate texel (the terrain VS bilinears): seen through water at a ray-cone LOD the
+        // data map's texel grid never shows, and it is one decode instead of four.
+        const vec4 climate = terrainClimateNearestAt(worldPos.xz);
         f.humidity = climate.w;
         f.temperature = terrainTemperatureAt(climate, worldPos.y);
     }
+    waterLevel = f.waterLevel;
     g_seabedLod = clamp(log2(max(rayT, 1.0)) + 1.0, 0.0, 7.0);
     vec3 albedo = terrainSplat(worldPos, geoN, f).albedo;
     // The seabed is, by definition, fully wet: darken it exactly as the terrain shader darkens ground at
@@ -207,6 +213,7 @@ bool traceScene(vec3 origin, vec3 dir, float tMax, out SceneHit hit)
     hit.pos = origin + dir * hit.t;
     hit.N = -dir;
     hit.albedo = vec3(0.3);
+    hit.waterLevel = -1e30; // unset: a terrain hit fills it from the seabed splat's own terrain fetch, the rest fetch below
 
     // Interpolated normal/uv + material albedo, bounds-checked like rt_shadow.inc.glsl.
     const int instanceIdx = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
@@ -235,7 +242,7 @@ bool traceScene(vec3 origin, vec3 dir, float tMax, out SceneHit hit)
                 if (materialIdx < in_materialInfos.length())
                 {
                     if ((in_materialInfos[materialIdx].flags & MATERIAL_FLAG_TERRAIN) != 0u)
-                        hit.albedo = terrainSeabedAlbedo(hit.pos, hit.N, hit.t);
+                        hit.albedo = terrainSeabedAlbedo(hit.pos, hit.N, hit.t, hit.waterLevel);
                     else
                     {
                         const uint diffuseTexIdx = in_materialInfos[materialIdx].diffuseNormalTexIdx & 0x0000FFFFu;
@@ -246,6 +253,8 @@ bool traceScene(vec3 origin, vec3 dir, float tMax, out SceneHit hit)
             }
         }
     }
+    if (hit.waterLevel < -1e29) // non-terrain hit (or an unresolved one): one shore fetch for the column
+        hit.waterLevel = oceanSampleShoreData(hit.pos.xz).y;
     return true;
 }
 
@@ -262,7 +271,7 @@ vec3 shadeHit(SceneHit hit, vec3 rayDir, vec3 sunRadiance, vec3 L)
     indirect *= u_aoParams.y;
     // Ambient/GI reaching an underwater hit must Beer-Lambert down the column too — the probes don't
     // know about the water (it's not in the TLAS), so the seabed would read open-air-lit at any depth.
-    const vec3 ambientAtten = exp(-u_oceanAbsorption.rgb * max(oceanSampleShoreData(hit.pos.xz).y - hit.pos.y, 0.0));
+    const vec3 ambientAtten = exp(-u_oceanAbsorption.rgb * max(hit.waterLevel - hit.pos.y, 0.0));
     vec3 radiance = hit.albedo * (sun / PI + (indirect + u_ambientColor) * ambientAtten);
 
 #ifdef OCEAN_HIT_LIGHTS
@@ -472,13 +481,13 @@ void main()
                     hit.t = min(hit.t, 4.6 / minSigma);
                     hit.pos = in_pos + refrDir * hit.t;
                     hit.N = vec3(0.0, 1.0, 0.0);
-                    hit.albedo = terrainSeabedAlbedo(hit.pos, hit.N, hit.t);
+                    hit.albedo = terrainSeabedAlbedo(hit.pos, hit.N, hit.t, hit.waterLevel);
                     haveHit = true;
                 }
             }
             if (haveHit)
             {
-                const float sunPath = max(oceanSampleShoreData(hit.pos.xz).y - hit.pos.y, 0.0) / max(L.y, 0.25); // column above the hit
+                const float sunPath = max(hit.waterLevel - hit.pos.y, 0.0) / max(L.y, 0.25); // column above the hit
                 const vec3 hitRadiance = shadeHit(hit, refrDir, sunTint * sunVis * exp(-sigmaT * sunPath), L);
                 const vec3 T = exp(-sigmaT * hit.t) * (1.0 - smoothstep(0.75 * range, range, hit.t));
                 body = hitRadiance * T + inscatter * (1.0 - T);

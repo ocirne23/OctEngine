@@ -250,8 +250,13 @@ int main(int argc, char* argv[])
         FileSystem::AllowMainThreadIO modeIo; // one-shot prefab/scene loads on selection (the F10 pattern)
         if (!startGame)
         {
+            // The SANDBOX: the testbed scene plus the procedural world. Terrain + ocean are switched
+            // on for this mode only (tweak overrides: applied now, never written back to tweaks.cfg,
+            // so the other modes keep their own default of off); exitToMenu switches them off again.
+            TweakRegistry::get().setOverride("Terrain/Enabled=1");
+            TweakRegistry::get().setOverride("Ocean/Enabled=1");
             Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/sponza.pre", Transform(), true));
-            //Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/skysphere.pre", Transform(spawnOffset), true));
+            Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/skysphere.pre", Transform(), true));
             //Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/character.pre", Transform(spawnOffset), true));
             //Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/particle.pre", Transform(spawnOffset), true));
             //Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/SphereField.pre", Transform(spawnOffset), true));
@@ -400,7 +405,11 @@ int main(int argc, char* argv[])
     {
         controls.resetForMenu();            // possessed capsule / test emitters / force balls released
         game.reset();                       // ~GameMatch: nav clear, rosters, structures, player, ground (+ its tweak unregistration)
-        Globals::world.clearRootEntities(); // sponza / capsules / leftovers; NetworkComponents unregister through the still-open host
+        Globals::world.clearRootEntities(); // sponza / skysphere / capsules / leftovers; NetworkComponents unregister through the still-open host
+        // The sandbox's procedural world goes with it (see startWorldAndGame): the other modes start
+        // from terrain + ocean off.
+        TweakRegistry::get().setOverride("Terrain/Enabled=0");
+        TweakRegistry::get().setOverride("Ocean/Enabled=0");
         Globals::networkManager.shutdown(); // role back to None — hosting/joining again is supported
         Globals::networkManager.setEventFilter({}); // a stale Gq*/Lb* filter must not gate the next session
         lobby.reset();

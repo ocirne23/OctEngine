@@ -67,15 +67,13 @@ vec3 terrainWaterFilm(vec3 body, vec3 worldPos, vec3 V, vec3 geoN, float footpri
 		if (c == 0)
 			turbulence = m.w; // the accumulated breaking memory rides cascade 0's moments
 	}
-	// The ocean's ONE depth weight (mirrors oceanSurfaceWeight): 1 in open water, easing to the swash
-	// base (amplitude x sea x land fades) across the approach band. On dry sand the weight IS the swash
-	// base, which is the water's surface shape at the waterline, so the film continues the water.
-	const float seaFade = 1.0 - smoothstep(0.05, 1.0, abs(waterLevel - u_oceanParams2.w));
+	// The ocean's ONE depth weight (oceanShoreWeights, underwater_light.inc.glsl): 1 in open water,
+	// easing to the swash base (amplitude x sea x land fades) across the approach band. On dry sand the
+	// weight IS the swash base, which is the water's surface shape at the waterline, so the film
+	// continues the water.
 	const float reach = max(u_oceanParams7.w, 0.01);
-	const float landFade = clamp(1.0 + min(depth, 0.0) / reach, 0.0, 1.0);
-	const float fadeIn = 1.0 - smoothstep(0.0, max(2.0 * reach, u_oceanParams4.z * u_oceanParams2.y), depth);
-	const float base = u_oceanParams7.z * seaFade * landFade;
-	const float w = 1.0 - fadeIn * (1.0 - base);
+	float swashW, w;
+	oceanShoreWeights(depth, waterLevel, swashW, w);
 	slopeSum *= w;
 	varSum *= w * w;
 	const float sxx = rxx * w, szz = rzz * w, sxz = rxz * w; // the normal's Jacobian follows the weighted chop
@@ -287,19 +285,18 @@ void main()
 	// water left most recently, so the water look covers the whole tongue behind a wave and fades out
 	// smoothly with it — the pools are a noise pattern, and keying on them drew random water blobs.
 	float wetSurface = 0.0;
-	float wetCamAbove = 1.0; // 0 when the camera is under the water: no gloss, no surface film seen from below
 	// We already sampled the terrain data cascade for fields.waterLevel; hand it to the lit core so its
 	// underwater test reuses it instead of re-fetching the same cascade — then resolve that test NOW
 	// (doSunLight would, but the gloss below needs it first; it runs once per pixel either way).
 	// aboveLive: 0 on ground under the LIVE water surface right now — the same test that switches the
 	// caustics on — so neither the wet gloss nor the surface film shows through the ocean's own water
 	// (a second sky reflection under the first). The estimate sits UNDER the drawn ocean edge (no choppy
-	// XZ offset, no tongue thickness), so the gate is pushed "Live surface margin" (u_terrainWetParams7.z)
+	// XZ offset, no tongue thickness), so the gate is pushed "Live surface margin" (u_terrainWetParams7.y)
 	// below it — without that a bare band of ground showed between the waterline and the film — and
 	// eases in over the 10 cm above that.
 	g_waterLevelOverride = fields.waterLevel;
 	resolveLiveDepth(in_pos);
-	const float liveMargin = u_terrainWetParams7.z;
+	const float liveMargin = u_terrainWetParams7.y;
 	const float aboveLive = 1.0 - smoothstep(liveMargin - 0.1, liveMargin, g_liveDepthBelow);
 	if (terrainWetPresent())
 	{
@@ -341,16 +338,10 @@ void main()
 		const float damp = smoothstep(0.0, max(u_terrainWetParams5.z, 1e-3), wet);
 		const float spike = smoothstep(min(u_terrainWetParams5.w, 0.99), 1.0, wet);
 		const float film = max(spike, pool);
-		// Seen from UNDER the water the ground is seabed: it keeps the darkening — the ocean's traced
-		// seabed carries the same — but no gloss and no surface film (a sky reflection has no business
-		// under the surface). The camera is tested against the LIVE wave surface under it
-		// (u_oceanParams10.z, the CPU readback at the camera XZ) so the film flips at the actual crest
-		// while surfacing through a swell; where the readback has no water (dry land, a lake beyond the
-		// shore bake) the pixel's calm level stands in. Eased over +-"Camera ease band" of camera height.
-		const float camSurfaceY = u_oceanParams10.w > 0.5 ? u_oceanParams10.z : fields.waterLevel;
-		const float camBand = u_terrainWetParams7.y;
-		wetCamAbove = smoothstep(-camBand, camBand, u_viewPos.y - camSurfaceY);
-		const float gloss = max(film, damp * u_terrainWetParams4.z) * wetCamAbove * aboveLive;
+		// Under the live water surface (aboveLive) the ground is seabed: it keeps the darkening — the
+		// ocean's traced seabed carries the same — but no gloss (a sky reflection has no business under
+		// the ocean's own).
+		const float gloss = max(film, damp * u_terrainWetParams4.z) * aboveLive;
 		surf.albedo *= mix(1.0, u_terrainWetParams5.y, damp) * mix(1.0, u_terrainWetParams2.y, film);
 		surf.rough = mix(surf.rough, u_terrainWetParams2.z, gloss); // a water film flattens the microfacets
 	}
@@ -367,10 +358,9 @@ void main()
 	{
 		const float th = u_terrainWetParams6.x;
 		const float start = min(max(u_terrainWetParams5.w, th - u_terrainWetParams6.y), th - 1e-3);
-		// Faded out when the camera is under the water (no surface film seen from below) and on ground
-		// under the LIVE water surface (aboveLive, resolved above with the gloss: the ocean draws the
-		// water there, a film would only double it).
-		const float waterMask = smoothstep(start, th, wetSurface) * wetCamAbove * aboveLive;
+		// Faded out on ground under the LIVE water surface (aboveLive, resolved above with the gloss: the
+		// ocean draws the water there, a film would only double it).
+		const float waterMask = smoothstep(start, th, wetSurface) * aboveLive;
 		if (waterMask > 0.0)
 			color = terrainWaterFilm(color, in_pos, V, geoN, wetFootprint, waterMask, fields.waterLevel - in_pos.y, fields.waterLevel, wetSurface);
 	}

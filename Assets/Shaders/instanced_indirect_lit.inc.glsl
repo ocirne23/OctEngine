@@ -134,14 +134,23 @@ void resolveLiveDepth(vec3 worldPos)
 		return;
 	const float localWaterLevel = g_waterLevelOverride < WATER_LEVEL_UNSET ? g_waterLevelOverride : terrainDataAt(worldPos.xz).y;
 	float depthBelow = localWaterLevel - worldPos.y;
-	// Swash band: gate against the LIVE displaced surface, not the calm level — a receded wave
-	// leaves sand below the calm line dry (no caustics/absorption tint on exposed bottom), and the
-	// run-up tongue is lit as underwater while it covers the beach. Points deeper than the swash
-	// reach are underwater at any wave phase and skip the wave taps (u_oceanParams7.w is 0 with
-	// swash off, so this is free for non-swash setups).
-	const float swashReach = u_oceanParams7.w;
-	if (swashReach > 0.0 && abs(depthBelow) < swashReach)
-		depthBelow += underwaterLiveWaveY(worldPos.xz, depthBelow, localWaterLevel);
+	// Gate against the LIVE displaced surface, not the calm level — a receded wave leaves sand below
+	// the calm line dry (no caustics/absorption tint on exposed bottom), and the run-up tongue is lit
+	// as underwater while it covers the beach. The wave taps are paid only near the surface: within
+	// the surface's max EXCURSION — the larger of the swash reach (u_oceanParams7.w) and the open-water
+	// trough (u_fogParams7.y = 2 x trough + 0.5) — the wave decides which side of the surface the point
+	// is on, so it is added in full; beyond it only the caustic/absorption PATH LENGTH would change, so
+	// the contribution fades out over a half-excursion band instead of cutting. A hard cut at the swash
+	// reach drew a line across the seabed that moved with "Swash amplitude": the depth stepped by the
+	// wave height across it. Both terms are 0 with the ocean off, so this is free without water.
+	const float excursion = max(u_oceanParams7.w, 0.5 * (u_fogParams7.y - 0.5));
+	if (excursion > 0.0)
+	{
+		const float fadeEnd = excursion + max(0.5 * excursion, 0.5);
+		const float dist = abs(depthBelow);
+		if (dist < fadeEnd)
+			depthBelow += underwaterLiveWaveY(worldPos.xz, depthBelow, localWaterLevel) * (1.0 - smoothstep(excursion, fadeEnd, dist));
+	}
 	g_liveDepthBelow = depthBelow;
 	g_liveWaterLevel = localWaterLevel;
 }
@@ -149,12 +158,14 @@ void resolveLiveDepth(vec3 worldPos)
 vec3 doSunLight(vec3 worldPos, vec3 V, vec3 N, vec3 specularCol, vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
 {
 	const vec3 L = u_sunDirection.xyz; // normalized on the CPU (SkyParams / setSunLight)
-	// Live depth first, ahead of the facing early-out: the film gate needs it on every pixel.
+	if (dot(N, L) <= 0.0)
+		return vec3(0.0);
+	// After the facing early-out: a material that needs the live depth on EVERY pixel (the terrain's
+	// film gate) resolves it itself before computeLitColor; here it is a no-op then, and other lit
+	// materials keep paying the water-level fetch only on sun-facing pixels.
 	resolveLiveDepth(worldPos);
 	const float depthBelow = g_liveDepthBelow;
 	const float localWaterLevel = g_liveWaterLevel;
-	if (dot(N, L) <= 0.0)
-		return vec3(0.0);
 	float visibility = u_rtSunShadow > 0.5 ? traceSunVisibility(worldPos, N) : sampleSunShadow(worldPos, N);
 	// Long-range terrain shadows. BOTH sources above run out of data well inside the streamed mesh ring —
 	// the cascades end at Shadows/Max distance (3 km default), the RT path's instances at RT/TLAS Range
@@ -180,7 +191,7 @@ vec3 doSunLight(vec3 worldPos, vec3 V, vec3 N, vec3 specularCol, vec3 matColOver
 	// (underwater_light.inc.glsl), so seabed/submerged objects get the dancing light patterns. Keyed on
 	// the live depth resolved above.
 	if (depthBelow > 0.0)
-		lightRadiance *= underwaterSunTransmittance(worldPos.xz, depthBelow, 0.0, 1.0, localWaterLevel); // surfaces: physical reach
+		lightRadiance *= underwaterSunTransmittance(worldPos.xz, depthBelow, 0.0, 1.0, localWaterLevel - worldPos.y, localWaterLevel); // surfaces: physical reach
 	g_sunRadiance = lightRadiance;
 	return doLight(lightRadiance, L, V, N, specularCol, matColOverPi, metalness, roughness, roughnessSq);
 }

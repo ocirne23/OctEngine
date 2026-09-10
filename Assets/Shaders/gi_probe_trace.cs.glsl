@@ -280,8 +280,11 @@ void main()
 
     // Relocation: trace from the offset position steered in previous frames (fresh slots hold a scrolled-out
     // probe's offset -> start back on the lattice).
+    // The misc vec4 (x = stored backface fraction, yzw = offset) is read ONCE here and rewritten once at
+    // the end (giBlendProbeStats); a fresh slot's contents belong to a scrolled-out probe -> zeros.
     const uint cellBase = giProbeBase(cascade, lc);
-    const vec3 probeOffset = fresh ? vec3(0.0) : giProbeOffset(cellBase);
+    const vec4 prevMisc    = fresh ? vec4(0.0) : gi_gridData[cellBase + GI_MISC_V4];
+    const vec3 probeOffset = prevMisc.yzw;
     const vec3 probePos    = probeCenter + probeOffset;
 
     const uint N = max(pc.numRays, 1u);
@@ -368,11 +371,10 @@ void main()
         // has just escaped: flush the near-black inside-the-wall history quickly — but softly (a hard
         // alpha-1 replace would stamp a single noisy N-ray snapshot that then persists for ~1/alpha
         // frames). This refires for a few frames while the stored fraction descends, averaging the reset.
-        if (giProbeBackfaceFrac(cellBase) > GI_BACKFACE_DEAD_MAX && backFrac < GI_BACKFACE_DEAD_MIN)
+        if (prevMisc.x > GI_BACKFACE_DEAD_MAX && backFrac < GI_BACKFACE_DEAD_MIN)
             alpha = max(alpha, 0.35);
     }
 
     giBlendCell(cellBase, c0, c1, c2, c3, alpha);
-    giBlendProbeStats(cellBase, dsh, d2sh, backFrac, alpha); // depth moments + embedded-probe stats for lookup
-    giStoreProbeOffset(cellBase, newOffset);
+    giBlendProbeStats(cellBase, dsh, d2sh, prevMisc.x, backFrac, newOffset, alpha); // depth moments + embedded-probe stats + offset
 }

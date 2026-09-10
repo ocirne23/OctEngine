@@ -192,7 +192,7 @@ export namespace Procedural
 		float m_farCullError = 4.0f;    // land cull from the FAR terrain cascade: flat error allowance (m); 0 = near-only
 
 		// --- Ray tracing budget (ocean.fs.glsl per-pixel refraction/reflection rays; all live) ---
-		float m_rtRefractionRange = 10.0f;   // max refracted-ray length (m): underwater visibility of traced geometry
+		float m_rtRefractionRange = 30.0f;   // max refracted-ray length (m): underwater visibility of traced geometry
 		float m_rtReflectionRange = 3000.0f;  // max mirror-ray length (m): how distant scenery still reflects
 		float m_rtReflectionMaxRough = 0.25f; // roughness above which the mirror ray is skipped (blurred-sky fallback)
 		float m_rtRayCutoffDist = 0.0f;       // camera distance (m) beyond which NO rays trace (analytic

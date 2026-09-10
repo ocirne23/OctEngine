@@ -406,8 +406,6 @@ public:
         float surfaceWaviness = 0.5f;  // film normal: 0 = the ground's normal, 1 = the live FFT wave normal
         float surfaceDepth = 0.15f;    // m of virtual water the ground is tinted through (the ocean's
                                        // absorption + in-scatter), so the colours match at the waterline
-        float cameraBand = 0.2f;       // m: half-width of the ease over which the film + gloss fade out as
-                                       // the camera goes under the live water surface (setCameraWaterSurface)
         float liveMargin = 0.08f;      // m: the film + gloss stay on ground up to this far BELOW the estimated
                                        // live surface (the estimate sits under the drawn ocean edge: no choppy
                                        // XZ, no tongue thickness — without the margin a bare band shows above
@@ -418,11 +416,6 @@ public:
     // it from its displacement readback). Sizes the waterline band inside which the fog scatter samples
     // the live FFT wave height for the underwater fog boundary (fogParams7.y).
     void setOceanWaveTrough(float meters) { m_oceanWaveTrough = glm::max(meters, 0.0f); }
-    // The LIVE water surface world Y under the camera (OceanGenerator::sampleWaterHeight at the camera
-    // XZ, from the displacement readback), or invalid where there is no water there. Reaches the shaders
-    // as u_oceanParams10.zw: the terrain wet-film gate tests the camera against the waves instead of
-    // the calm level, so surfacing through a swell flips the film at the actual crest.
-    void setCameraWaterSurface(float worldY, bool valid) { m_cameraWaterY = worldY; m_cameraWaterValid = valid; }
     // Flipping OceanParams::hitLighting rebuilds the ocean fragment variant (GPU idle + shader reload).
     void setOceanParams(const OceanParams& ocean);
     // Replaces the fog terrain map (FOG_TERRAIN_CASCADES layers of FOG_TERRAIN_RES^2 RGBA texel quads,
@@ -816,8 +809,6 @@ private:
     glm::ivec2 m_terrainWetPrevOrigin = glm::ivec2(0); // last frame's wetness window origin (lattice coord)
     bool m_terrainWetWasEnabled = false;                // the window was live last frame (else every texel starts dry)
     float m_oceanWaveTrough = 0.0f;  // see setOceanWaveTrough; 0 while the ocean is disabled
-    float m_cameraWaterY = 0.0f;     // see setCameraWaterSurface
-    bool m_cameraWaterValid = false;
     PostParams m_postParams;
     RTParams m_rtParams;
     RTAOParams m_rtaoParams;

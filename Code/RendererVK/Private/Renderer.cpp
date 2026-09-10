@@ -1028,7 +1028,12 @@ void Renderer::buildUboFog()
     // froxel segments outside +-band of the calm level are trivially above/below any possible wave, so
     // only a thin shell pays for wave taps. The CPU trough estimate (ocean readback) bounds the wave
     // amplitude; 0 disables wave sampling entirely (ocean off).
-    const float waveBand = m_oceanParams.enabled ? m_oceanWaveTrough * 2.0f + 0.5f : 0.0f;
+    // The band must also cover the swash RUN-UP (amplitude x (trough + 0.25), the same reach
+    // buildUboOcean packs into oceanParams7.w): with a large swash amplitude the tongue climbs past
+    // 2 x trough, and froxels beyond the band got the calm level while their neighbours got the wave —
+    // a line in the fog's caustics that moved with the amplitude.
+    const float swashReachBand = glm::clamp(m_oceanParams.swashAmp, 0.0f, 4.0f) * (m_oceanWaveTrough + 0.25f);
+    const float waveBand = m_oceanParams.enabled ? glm::max(m_oceanWaveTrough * 2.0f + 0.5f, swashReachBand) : 0.0f;
     ubo.fogParams7 = glm::vec4(
         glm::max(fog.shaftBoost, 0.0f),        // x: underwater sun in-scatter gain (fog light shafts)
         waveBand,
@@ -1070,8 +1075,7 @@ void Renderer::buildUboOcean()
         glm::max(ocean.swashFlow, 0.0f), glm::max(ocean.rtRayCutoffDist, 0.0f));
     ubo.oceanParams9 = glm::vec4(0.0f /* x: the removed trough margin */, glm::max(ocean.rtRefractionRange, 1.0f), // the tweak's own minimum; 10 here silently floored 1..9 m
         glm::max(ocean.rtReflectionRange, 50.0f), glm::clamp(ocean.rtReflectionMaxRough, 0.0f, 1.0f));
-    ubo.oceanParams10 = glm::vec4(0.0f /* x: the removed breaking limit */, glm::max(ocean.timeScale, 0.0f),
-        m_cameraWaterY, m_cameraWaterValid ? 1.0f : 0.0f); // zw: the live water surface under the camera (setCameraWaterSurface)
+    ubo.oceanParams10 = glm::vec4(0.0f /* x: the removed breaking limit */, glm::max(ocean.timeScale, 0.0f), 0.0f, 0.0f);
 }
 
 // Forcefield bubbles (Force library pushes m_forceFieldParams every frame; all UBO-driven = live).
@@ -1260,7 +1264,7 @@ void Renderer::buildUboTerrain()
             glm::clamp(wet.dampKnee, 0.0f, 1.0f), glm::clamp(wet.spikeStart, 0.0f, 0.99f));
         ubo.terrainWetParams6 = glm::vec4(glm::clamp(wet.surfaceThreshold, 0.0f, 1.0f), glm::clamp(wet.surfaceSoftness, 0.0f, 1.0f),
             glm::clamp(wet.surfaceWaviness, 0.0f, 1.0f), glm::max(wet.surfaceDepth, 0.0f));
-        ubo.terrainWetParams7 = glm::vec4(glm::max(wet.dryRate, 0.0f) * dt, glm::max(wet.cameraBand, 0.001f), glm::max(wet.liveMargin, 0.0f), 0.0f);
+        ubo.terrainWetParams7 = glm::vec4(glm::max(wet.dryRate, 0.0f) * dt, glm::max(wet.liveMargin, 0.0f), 0.0f, 0.0f);
     }
     static_assert(sizeof(ubo.terrainSplatClimate) == sizeof(m_terrainSplatClimate));
     memcpy(ubo.terrainSplatClimate, m_terrainSplatClimate, sizeof(m_terrainSplatClimate));

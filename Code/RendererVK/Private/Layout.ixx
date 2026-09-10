@@ -555,9 +555,7 @@ export namespace RendererVKLayout
                                    // w = RT reflection roughness cutoff (rougher = sky fallback)
         glm::vec4 oceanParams10;   // x unused (was the breaking limit, removed: the swash amplitude alone
                                    //     shapes the shore — oceanSurfaceWeight),
-                                   // y = spectrum clock rate (sqrt(world scale): holds the model sea's periods),
-                                   // z = LIVE water surface world Y under the camera, w = 1 when z is valid
-                                   //     (Renderer::setCameraWaterSurface — the terrain wet-film camera gate)
+                                   // y = spectrum clock rate (sqrt(world scale): holds the model sea's periods), zw unused
         glm::vec4 terrainParams;   // x = streamed terrain mesh coverage radius (m, radial from camera XZ;
                                    // 0 = no terrain mesh up — fences the ocean land cull),
                                    // y = temperature lapse rate, C per WORLD metre above sea level (<= 0;
@@ -625,11 +623,9 @@ export namespace RendererVKLayout
         glm::vec4 terrainWetParams7; // x = linear dry this frame (dry rate x dt: the constant part of the
                                      // drain, next to the proportional exp(-dt / dry time) — together
                                      // rain settles at dryTime x (rain - dryRate)),
-                                     // y = camera ease band (m): half-width over which the film + gloss
-                                     //     fade out as the camera goes under the live water surface,
-                                     // z = live-surface margin (m): the film + gloss stay on ground up to this
+                                     // y = live-surface margin (m): the film + gloss stay on ground up to this
                                      //     far below the estimated live surface (it sits under the drawn ocean
-                                     //     edge), w unused
+                                     //     edge), zw unused
         glm::vec4 terrainSplatClimate[MAX_TERRAIN_SPLAT_MATERIALS]; // ground/rock CLIMATE BOX in the
                                      // (t01, h01) space: xy = temperature range, zw = humidity range.
                                      // Weight is 1 inside the box and Gaussian-decays outside it, so a

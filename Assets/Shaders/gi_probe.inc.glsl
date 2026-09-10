@@ -425,22 +425,14 @@ void giBlendCell(uint cellBase, vec3 c0, vec3 c1, vec3 c2, vec3 c3, float alpha)
 }
 
 // Temporally blend the probe's SH-L1 depth moments (the Chebyshev visibility estimate) and its
-// backface-hit fraction (the embedded-probe rejection signal; shares the misc vec4 with the offset).
-void giBlendProbeStats(uint cellBase, vec4 dsh, vec4 d2sh, float backfaceFrac, float alpha)
+// backface-hit fraction (the embedded-probe rejection signal), and store the relocation offset
+// (unblended — the relocation logic is already iterative). The fraction and the offset share the misc
+// vec4: one read + one write for both. prevBackfaceFrac = the stored fraction the caller already read.
+void giBlendProbeStats(uint cellBase, vec4 dsh, vec4 d2sh, float prevBackfaceFrac, float backfaceFrac, vec3 offset, float alpha)
 {
     GI_GRID_DATA_NAME[cellBase + GI_DEPTH_V4]  = mix(GI_GRID_DATA_NAME[cellBase + GI_DEPTH_V4],  dsh,  alpha);
     GI_GRID_DATA_NAME[cellBase + GI_DEPTH2_V4] = mix(GI_GRID_DATA_NAME[cellBase + GI_DEPTH2_V4], d2sh, alpha);
-    vec4 misc = GI_GRID_DATA_NAME[cellBase + GI_MISC_V4];
-    misc.x = mix(misc.x, backfaceFrac, alpha);
-    GI_GRID_DATA_NAME[cellBase + GI_MISC_V4] = misc;
-}
-
-// Store the relocation offset (written unblended — the relocation logic is already iterative).
-void giStoreProbeOffset(uint cellBase, vec3 offset)
-{
-    vec4 misc = GI_GRID_DATA_NAME[cellBase + GI_MISC_V4];
-    misc.yzw = offset;
-    GI_GRID_DATA_NAME[cellBase + GI_MISC_V4] = misc;
+    GI_GRID_DATA_NAME[cellBase + GI_MISC_V4] = vec4(mix(prevBackfaceFrac, backfaceFrac, alpha), offset);
 }
 
 #endif // GI_PROBE_WRITE

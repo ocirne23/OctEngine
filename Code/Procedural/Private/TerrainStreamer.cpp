@@ -326,7 +326,6 @@ namespace Procedural
 		// surface terms over the lit ground), so the ocean's intersection with the sand has no hard line.
 		Tweak::floatVar("Terrain/Wetness", "Surface water threshold", &m_wetSurfaceThreshold, 0.0f, 1.0f, 0.01f);
 		Tweak::floatVar("Terrain/Wetness", "Surface water softness", &m_wetSurfaceSoftness, 0.0f, 1.0f, 0.01f);
-		Tweak::floatVar("Terrain/Wetness", "Camera ease band (m)", &m_wetCameraBand, 0.01f, 2.0f, 0.01f);
 		Tweak::floatVar("Terrain/Wetness", "Live surface margin (m)", &m_wetLiveMargin, 0.0f, 1.0f, 0.01f);
 		Tweak::floatVar("Terrain/Wetness", "Surface water waviness", &m_wetSurfaceWaviness, 0.0f, 1.0f, 0.01f);
 		Tweak::floatVar("Terrain/Wetness", "Surface water depth (m)", &m_wetSurfaceDepth, 0.0f, 2.0f, 0.01f);
@@ -517,7 +516,6 @@ namespace Procedural
 			.surfaceSoftness = m_wetSurfaceSoftness,
 			.surfaceWaviness = m_wetSurfaceWaviness,
 			.surfaceDepth = m_wetSurfaceDepth,
-			.cameraBand = m_wetCameraBand,
 			.liveMargin = m_wetLiveMargin,
 		});
 
