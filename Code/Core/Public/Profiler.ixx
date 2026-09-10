@@ -84,11 +84,16 @@ export inline oc::atomic<bool> g_profilerPaused = false;
 export class ProfileTrack final
 {
 public:
-    static constexpr uint32_t CAPACITY = 1 << 15; // records; 1 MiB per track, ring overwrite when full
+    // Default ring: 1 MiB per track, overwrite when full. Per-track override at registration (a
+    // power of two): the main thread gets 4x, since its loop emits ~170 scopes a frame in a co-op
+    // session and lapped the default within a 256-frame report window.
+    static constexpr uint32_t CAPACITY = 1 << 15;
 
-    void initialize(const char* name, uint32_t threadId, uint32_t sortKey)
+    void initialize(const char* name, uint32_t threadId, uint32_t sortKey, uint32_t capacity = CAPACITY)
     {
-        m_records = oc::make_unique<ProfileRecord[]>(CAPACITY);
+        assert((capacity & (capacity - 1)) == 0 && "ProfileTrack capacity must be a power of two");
+        m_capacity = capacity;
+        m_records = oc::make_unique<ProfileRecord[]>(capacity);
         setName(name);
         m_threadId = threadId;
         m_sortKey = sortKey;
@@ -99,7 +104,7 @@ public:
         if (g_profilerPaused.load(oc::memory_order_relaxed)) [[unlikely]]
             return; // paused: the recorded data is frozen for inspection
         const uint64_t idx = m_cursor.load(oc::memory_order_relaxed);
-        ProfileRecord& record = m_records[idx & (CAPACITY - 1)];
+        ProfileRecord& record = m_records[idx & (m_capacity - 1)];
         record.start = start;
         record.end = end;
         record.name = name;
@@ -121,7 +126,8 @@ public:
     uint32_t getThreadId() const { return m_threadId; }
     uint32_t getSortKey() const { return m_sortKey; }
     uint64_t getCursor() const { return m_cursor.load(oc::memory_order_acquire); }
-    const ProfileRecord& getRecord(uint64_t absIdx) const { return m_records[absIdx & (CAPACITY - 1)]; }
+    uint32_t getCapacity() const { return m_capacity; }
+    const ProfileRecord& getRecord(uint64_t absIdx) const { return m_records[absIdx & (m_capacity - 1)]; }
 
     uint32_t m_openDepth = 0; // owner-thread scope nesting depth (touched only by ProfileScope on the owner)
 
@@ -140,6 +146,7 @@ public:
 private:
 
     oc::unique_ptr<ProfileRecord[]> m_records;
+    uint32_t m_capacity = CAPACITY;
     oc::atomic<uint64_t> m_cursor = 0;
     char m_name[48] = {};
     uint32_t m_threadId = 0;
@@ -224,8 +231,9 @@ public:
     // on first scope) means no name race with a SetThreadDescription from the spawning thread, no
     // one-time registration cost polluting the first profiled scope, and a deterministic track
     // order in the UI. Renames in place if the thread already registered. Returns nullptr past
-    // MAX_TRACKS; the pointer is stable for the process lifetime.
-    ProfileTrack* registerThread(const char* name, uint32_t sortKey = SORT_KEY_WORKER);
+    // MAX_TRACKS; the pointer is stable for the process lifetime. capacity (records, a power of
+    // two) sizes the ring; a rename keeps the existing ring.
+    ProfileTrack* registerThread(const char* name, uint32_t sortKey = SORT_KEY_WORKER, uint32_t capacity = ProfileTrack::CAPACITY);
 
     static constexpr uint32_t SORT_KEY_MAIN = 0;
     static constexpr uint32_t SORT_KEY_NAMED = 1;        // GPU track
@@ -270,7 +278,7 @@ public:
 private:
 
     void initialize();
-    ProfileTrack* registerTrack(const char* name, uint32_t threadId, uint32_t sortKey);
+    ProfileTrack* registerTrack(const char* name, uint32_t threadId, uint32_t sortKey, uint32_t capacity = ProfileTrack::CAPACITY);
 
     oc::array<oc::unique_ptr<ProfileTrack>, MAX_TRACKS> m_tracks;
     oc::atomic<uint32_t> m_numTracks = 0;

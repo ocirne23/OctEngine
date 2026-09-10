@@ -349,7 +349,10 @@ ProfileScope scope("Name", EProfileCategory::Physics);
 RAII, and **the name MUST be a string literal** — records store it by pointer. About 15 ns on the hot
 path: two rdtsc plus one 32-byte store into the calling thread's lock-free single-writer ring.
 
-`ProfileTrack` holds `CAPACITY` = 32K records (1 MiB per track), overwrite-on-wrap.
+`ProfileTrack` holds `CAPACITY` = 32K records (1 MiB per track) by default, overwrite-on-wrap;
+`registerThread` takes a per-track capacity (a power of two) and **the Main track gets 4x (128K
+records, 4 MiB)**: the main loop emits ~170 scopes a frame in a co-op session, which lapped 32K
+inside the default 256-frame report window.
 `MAX_TRACKS` = 64, `FRAME_HISTORY` = 512, `MAX_OPEN_DEPTH` = 32.
 
 `stop()` exists for the cases where a scope must end early; the destructor is then a no-op.
@@ -367,9 +370,10 @@ directly usable as an ImGui `ImU32`) — **must be edited together.**
 ### Entity scopes are opt-in
 
 The entity pass carries a scope only for entities flagged `EEntityFlag_Profiled`, a one-way
-`setProfiled()` latch. Animator, Force, Script and GameUnit set it at spawn; machine structures
-(barracks, turret) latch it in update, since `machineKind` is stamped post-spawn. **Static scenery
-stays scope-free so it cannot flood the rings.**.
+`setProfiled()` latch. Animator sets it at spawn; machine structures (barracks, medic, turret) latch
+it in update, since `machineKind` is stamped post-spawn. **Units, scripts and force emitters carry NO
+scope**: a co-op session runs thousands of unit updates per frame, and their scopes lapped the
+32k-record rings within ~60 frames. Static scenery stays scope-free for the same reason.
 
 ## Thread registration is explicit-only
 

@@ -40,7 +40,7 @@ void Profiler::initialize()
     // endStaticInit() at the top of main() runs under a synthetic "Static init" scope: static
     // initializers' allocations (Assimp schema tables, engine globals, ...) attribute to their own
     // path instead of "<unscoped>", and the whole phase gets a timed record.
-    ProfileTrack* mainTrack = registerThread("Main", SORT_KEY_MAIN);
+    ProfileTrack* mainTrack = registerThread("Main", SORT_KEY_MAIN, ProfileTrack::CAPACITY * 4);
     if (mainTrack != nullptr)
     {
         m_staticInitStart = tick();
@@ -141,7 +141,7 @@ ProfileTrack* Profiler::threadTrack()
     return t_profileTrack;
 }
 
-ProfileTrack* Profiler::registerThread(const char* name, uint32 sortKey)
+ProfileTrack* Profiler::registerThread(const char* name, uint32 sortKey, uint32 capacity)
 {
     if (ProfileTrack* track = t_profileTrack; track != nullptr)
     {
@@ -149,7 +149,7 @@ ProfileTrack* Profiler::registerThread(const char* name, uint32 sortKey)
         track->setSortKey(sortKey);
         return track;
     }
-    ProfileTrack* track = registerTrack(name, (uint32)GetCurrentThreadId(), sortKey);
+    ProfileTrack* track = registerTrack(name, (uint32)GetCurrentThreadId(), sortKey, capacity);
     t_profileTrack = track;
     return track;
 }
@@ -159,7 +159,7 @@ ProfileTrack* Profiler::createNamedTrack(const char* name, uint32 sortKey)
     return registerTrack(name, 0, sortKey);
 }
 
-ProfileTrack* Profiler::registerTrack(const char* name, uint32 threadId, uint32 sortKey)
+ProfileTrack* Profiler::registerTrack(const char* name, uint32 threadId, uint32 sortKey, uint32 capacity)
 {
     // The track + its ring are PERMANENT profiler infrastructure, and on a freshly registering
     // thread they allocate before t_profileTrack exists - suppress the memory hooks so they don't
@@ -174,7 +174,7 @@ ProfileTrack* Profiler::registerTrack(const char* name, uint32 threadId, uint32 
     if (idx < MAX_TRACKS)
     {
         m_tracks[idx] = oc::make_unique<ProfileTrack>();
-        m_tracks[idx]->initialize(name, threadId, sortKey);
+        m_tracks[idx]->initialize(name, threadId, sortKey, capacity);
         track = m_tracks[idx].get();
         m_numTracks.store(idx + 1, oc::memory_order_release); // publish after construction
     }
@@ -441,10 +441,10 @@ oc::string Profiler::buildReport(const ProfileReportOptions& options) const
                     ((EProfileCategory)record.category == EProfileCategory::Wait ? data.waitMs : data.busyMs) += (double)(e - s) * msPerTick;
             }
         const uint64 cursor = track.getCursor();
-        if (cursor >= ProfileTrack::CAPACITY)
+        if (cursor >= track.getCapacity())
         {
             // the writer may be overwriting this slot right now - a diagnostic read, not data
-            const uint64 oldestEnd = track.getRecord(cursor - ProfileTrack::CAPACITY + 1).end;
+            const uint64 oldestEnd = track.getRecord(cursor - track.getCapacity() + 1).end;
             if (oldestEnd > tMin && tMax > tMin)
                 data.coverage = oldestEnd >= tMax ? 0.0 : (double)(tMax - oldestEnd) / (double)(tMax - tMin);
         }
@@ -525,7 +525,8 @@ bool Profiler::snapshotTrack(uint32 trackIdx, uint64 tMin, uint64 tMax, oc::vect
     out.clear();
     const ProfileTrack& track = *m_tracks[trackIdx];
     const uint64 cursor = track.getCursor();
-    const uint64 lo = cursor > ProfileTrack::CAPACITY ? cursor - ProfileTrack::CAPACITY : 0;
+    const uint64 capacity = track.getCapacity();
+    const uint64 lo = cursor > capacity ? cursor - capacity : 0;
 
     // Pushes happen at scope END, so records are ordered by end time: scan backwards from the
     // newest and stop at the first record that ended before the window.
@@ -548,12 +549,12 @@ bool Profiler::snapshotTrack(uint32 trackIdx, uint64 tMin, uint64 tMax, oc::vect
     // old all-or-nothing discard made busy tracks flicker out of wide zoomed-out views entirely,
     // every time the writer advanced past the scan's oldest index.
     const uint64 written = track.getCursor() - cursor;
-    if (written >= ProfileTrack::CAPACITY)
+    if (written >= capacity)
     {
         out.clear(); // writer lapped the whole ring mid-copy - nothing trustworthy
         return false;
     }
-    const uint32 maxValidAge = (uint32)(ProfileTrack::CAPACITY - written);
+    const uint32 maxValidAge = (uint32)(capacity - written);
     while (!out.empty() && out.back()._pad1 > maxValidAge)
         out.pop_back();
     return true;

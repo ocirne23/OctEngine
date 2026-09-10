@@ -643,25 +643,14 @@ void JobSystem::wakeMany(uint32 count)
     const uint32 sleepers = m_numSleepers.load(oc::memory_order_relaxed);
     if (!sleepers)
         return;
-    const auto notify = [&]
-    {
-        m_wakeEpoch.fetch_add(1, oc::memory_order_release);
-        if (count >= sleepers)
-            m_wakeEpoch.notify_all();
-        else
-            for (uint32 i = 0; i < count; ++i)
-                m_wakeEpoch.notify_one();
-    };
-    // Scoped on registered contexts: the notify is a kernel call (WakeByAddress), the one thing a
-    // submit does that can take real time - so a submit-heavy span on the profiler shows whether
-    // the wakes are it. An unregistered thread (a JobMutex unlock from outside) has no track.
-    if (t_worker)
-    {
-        ProfileScope scope("Worker wake", EProfileCategory::Threading);
-        notify();
-    }
+    // Deliberately unscoped: the notify is a kernel call (WakeByAddress), but Main submits ~200
+    // of them per frame in a co-op session, and a scope per wake lapped its profiler ring.
+    m_wakeEpoch.fetch_add(1, oc::memory_order_release);
+    if (count >= sleepers)
+        m_wakeEpoch.notify_all();
     else
-        notify();
+        for (uint32 i = 0; i < count; ++i)
+            m_wakeEpoch.notify_one();
 }
 
 void JobSystem::wait(JobCounter& counter)

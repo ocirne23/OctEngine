@@ -705,9 +705,9 @@ void World::updateBatchJob(const EntityUpdateNode* nodes, uint32 count)
             ^ uint32(m_updateFrame * 0x9E3779B9u);
         const bool measure = entity->updateCost == 0 || (mix & 1023) == 0;
         const Clock::time_point measureStart = measure ? Clock::now() : Clock::time_point{};
-        // Per-entity scope for OPT-IN entities only (EEntityFlag_Profiled: simulated
-        // things — animators, scripts, units, machine structures; static scenery stays
-        // scope-free so it cannot flood the rings). NAMED by the registry-owned entity name from
+        // Per-entity scope for OPT-IN entities only (EEntityFlag_Profiled: animators and
+        // machine structures; units, scripts and scenery stay scope-free so thousands of
+        // them cannot flood the rings). NAMED by the registry-owned entity name from
         // Globals::entityNames; destruction transfers its buffer to the profiler's frame history.
         if (entity->isProfiled())
         {

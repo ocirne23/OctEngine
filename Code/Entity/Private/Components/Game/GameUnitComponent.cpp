@@ -87,10 +87,6 @@ static float unitRand01(uint32& state)
 
 void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Transform&)
 {
-    if (const ForceComponent::SpawnInfo* si = getForceSpawnInfo(&entity))
-    {
-        entity.setProfiled(); // units with shields carry a per-entity profile scope
-    }
     puppet = info.puppet;
     if (!info.puppet)
         g_liveUnits.fetch_add(1, oc::memory_order_relaxed); // paired with destroy()
