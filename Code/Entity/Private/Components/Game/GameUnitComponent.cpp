@@ -3,22 +3,16 @@ module Entity;
 import Core;
 import Core.glm;
 import Core.Transform;
-import Core.Time; // the seed-request clock
+import Core.Time;
 import :Entity;
 import Force;
 import Physics;
 import Spatial;
 import Nav;
-import RendererVK; // applyTeamTint's material override
-
-// See GameUnitComponent.ixx for the design + authority/thread contract. Everything here runs either
-// on the parallel entity pass (update — authority instances only) or on the main thread (spawn,
-// the orders); cross-entity writes are the atomic CAS helpers, cross-entity lookup is spatial.
+import RendererVK;
 
 GameUnitParams GameUnitComponent::params;
 
-// Cross-entity writes from the parallel pass (two units biting one structure on different workers
-// must not lose hits).
 static void atomicAdd(float& value, float amount)
 {
     oc::atomic_ref<float> ref(value);
@@ -26,17 +20,12 @@ static void atomicAdd(float& value, float amount)
     while (!ref.compare_exchange_weak(cur, cur + amount)) {}
 }
 
-// Worker-side reports, drained by the game (see the queues' declarations). The mutex only ever
-// guards four small append-only vectors touched on the rare tick where a unit fires, hits, asks
-// for a lane or dies.
 static std::mutex g_unitEventMutex;
 static oc::vector<GameUnitComponent::FireRequest> g_fireRequests;
 static oc::vector<GameUnitComponent::DeathRecord> g_deaths;
 static oc::vector<GameUnitComponent::SeedRequest> g_seedRequests;
 static oc::vector<GameUnitComponent::HitRecord> g_hits;
-// Live non-puppet units (see liveCount): +1 in spawn, -1 in destroy — both worker-side in the
-// batch spawn / release paths, so an atomic; relaxed, nothing orders on it.
-static oc::atomic<int> g_liveUnits = 0;
+static oc::atomic<int> g_liveUnits = 0; // spawn/destroy both run on workers in the batch paths
 
 int GameUnitComponent::liveCount()
 {
@@ -77,9 +66,7 @@ void GameUnitComponent::takeDeaths(oc::vector<DeathRecord>& out)
     g_deaths.clear();
 }
 
-// Tiny LCG: units roll targets/jitters on WORKERS — the engine script RNG is fine but this keeps
-// each unit's stream independent of scheduling order.
-static float unitRand01(uint32& state)
+static float unitRand01(uint32& state) // per-unit stream, independent of scheduling order
 {
     state = state * 1664525u + 1013904223u;
     return float(state >> 8) * (1.0f / 16777216.0f);
@@ -89,15 +76,13 @@ void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
 {
     puppet = info.puppet;
     if (!info.puppet)
-        g_liveUnits.fetch_add(1, oc::memory_order_relaxed); // paired with destroy()
+        g_liveUnits.fetch_add(1, oc::memory_order_relaxed);
     if (!info.shortName.empty())
         m_shortName = info.shortName;
     team = info.team;
     health = healthMax = info.healthMax;
     shieldOutput = info.shieldOutput;
-    // No shield = no battery: a shield-less body (swarm) carries zero energy, so nothing —
-    // damage absorb, the label pass's shield-vs-health branch — ever mistakes it for shielded.
-    energy = energyMax = shieldOutput > 0.0f ? info.energyMax : 0.0f;
+    energy = energyMax = shieldOutput > 0.0f ? info.energyMax : 0.0f; // no shield = no battery
     moveSpeed = info.moveSpeed;
     accel = info.accel;
     attackRange = info.attackRange;
@@ -113,13 +98,12 @@ void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
     heightLimit = info.heightLimit;
     for (float& h : m_outputHistory)
         h = shieldOutput;
-    m_rng = uint32(uintptr_t(this) >> 4) * 2654435761u + 1u; // worker-safe per-unit stream
-    m_retargetTimer = 0.0f; // pick a target on the first authority tick
-    // Random PHASE on the periodic timers: a barracks batch spawns in one frame, and without this
-    // every unit of it would ask for a plan (and checkpoint its progress) on the same tick forever.
+    m_rng = uint32(uintptr_t(this) >> 4) * 2654435761u + 1u;
+    m_retargetTimer = 0.0f;
+    // Random phase on the periodic timers: a batch spawned in one frame must not act in lockstep.
     m_seedDue = (float)Globals::time.getSimElapsedSec() + params.seedRequestInterval * unitRand01(m_rng);
     m_stuckCheckTimer = 0.75f * unitRand01(m_rng);
-    m_attackTimer = attackInterval * unitRand01(m_rng); // a batch must not swing in lockstep
+    m_attackTimer = attackInterval * unitRand01(m_rng);
     if (const PhysicsComponent::SpawnInfo* si = getPhysicsSpawnInfo(&entity))
     {
         float r = 0.5f, top = 1.0f;
@@ -136,13 +120,11 @@ void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
     m_lastHealth = health;
 }
 
-// ---------------------------------------------------------------- the light area budgets
-// World XZ is bucketed into params.lightArea squares, each hashed to a slot row of a fixed table
-// (collisions merge two far-apart areas' budgets — harmless for a visual). Everything is relaxed
-// atomics: workers race for slots, a lost race only means no light this frame.
+// Hurt-flash area budget: world XZ bucketed into lightArea squares hashed to a slot table. Slot
+// collisions merge far-apart areas' budgets, and a lost CAS race only means no light this frame.
 namespace
 {
-    constexpr uint32 c_areaSlots = 4096;                 // power of two
+    constexpr uint32 c_areaSlots = 4096;
     oc::atomic<float> g_flashSlots[c_areaSlots]; // sim seconds of the area's last flash
 
     uint32 areaSlotOf(const glm::vec3& pos)
@@ -156,7 +138,6 @@ namespace
         return (n ^ (n >> 22u)) & (c_areaSlots - 1u);
     }
 
-    // One flash per 1/hurtFlashRate seconds per area: claim the slot's time by CAS.
     bool claimFlash(const glm::vec3& pos, float now)
     {
         const float rate = GameUnitComponent::params.hurtFlashRate;
@@ -172,9 +153,6 @@ namespace
 
 }
 
-// The HURT LIGHT (every role): a health drop since the last tick lights the body — when the area's
-// flash budget lets it — and the glow decays after. Per-frame light record, lock-free — like
-// LightComponent's pushes.
 void GameUnitComponent::tickHurtLight(const Entity& entity, float deltaSec)
 {
     m_hurtGlow = glm::max(m_hurtGlow - deltaSec / glm::max(params.hurtLightDecay, 1e-3f), 0.0f);
@@ -183,27 +161,22 @@ void GameUnitComponent::tickHurtLight(const Entity& entity, float deltaSec)
     m_lastHealth = health;
     if (m_hurtGlow <= 0.0f || params.hurtLightIntensity <= 0.0f || !Globals::rendererVK.isInitialized())
         return;
-    // A wide range for the intensity: the inverse-square falloff must be near nothing where the
-    // range window cuts it, or the light reads as a hard-edged disc on the ground.
+    // Wide range: the inverse-square falloff must be near nothing where the range window cuts it,
+    // or the light reads as a hard-edged disc on the ground.
     const glm::vec3 pos = entity.pos + glm::vec3(0.0f, m_bodyTop + 0.3f, 0.0f);
     const float range = glm::max(bodyRadius * 8.0f, 4.0f);
-    // The ATTACKER's team colour (the force shell colours), a touch toward white; neutral red
-    // when nothing tagged the damage.
-    glm::vec3 color(1.0f, 0.35f, 0.2f);
+    glm::vec3 color(1.0f, 0.35f, 0.2f); // neutral red; else the attacker's team colour
     if (m_hurtTeam != 0xFF)
         color = glm::mix(Globals::forceSystem.getParams().teamColors[glm::min<uint32>(m_hurtTeam, 7u)], glm::vec3(1.0f), 0.3f);
     Globals::rendererVK.addPointLight(PointLight(pos, range, color,
         params.hurtLightIntensity * (0.5f + 0.5f * bodyRadius) * m_hurtGlow));
 }
 
-// ---------------------------------------------------------------- the authority tick
-
 void GameUnitComponent::update(Entity& entity, float deltaSec)
 {
-    // (The shield GLOW is the Force system's bubble light — a collapsed shield has no bubble.)
     tickHurtLight(entity, deltaSec);
     if (Globals::networkManager.role() == ENetRole::Client)
-        return; // clients mirror via the entity sync's game blob
+        return;
     PhysicsComponent* pc = getComponent<PhysicsComponent>(&entity);
     if (!pc || !pc->body.isValid())
         return;
@@ -213,27 +186,22 @@ void GameUnitComponent::update(Entity& entity, float deltaSec)
     t.fields = params.navEnabled && Globals::navSystem.isEnabled();
     t.vel = pc->body.getLinearVelocity();
 
-    // Crowd presence: a weak pressure source (players too) — the diffused field is a smoothed
-    // crowd density that keeps units spaced. The stall injection in tickSteering is far stronger.
     if (t.fields && params.presencePressure > 0.0f)
         Globals::navSystem.pressure(team).inject(t.here, params.presencePressure * deltaSec * 60.0f);
-    // The height limit runs BEFORE the puppet gate on purpose: the server's twins of client
-    // capsules are held under the same ceiling their owners clamp themselves to in GamePlayer, so
-    // both land at the same height and the owner's next claim re-anchors instead of fighting.
+    // Before the puppet gate on purpose: the server's twins of client capsules are held under the
+    // same ceiling their owners clamp to in GamePlayer, so the owner's next claim does not fight it.
     applyHeightLimit(t);
     if (puppet)
-        return; // state carrier: GamePlayer writes it
-    if (!applyInboxes(t))
-        return; // died this tick
+        return;
+    if (!applyDamageAndHeal(t))
+        return;
     resolveWalkTarget(t);
     tickCombat(t);
     tickSteering(t);
     tickField(t);
+    applyPush(t);
 }
 
-// Launched above the ceiling -> put back AT the ceiling with the climb cancelled (the queued
-// velocity keeps the planar part). Teleport contract: stomp the interpolation poses and claim the
-// step, or PhysicsComponent::update mixes toward the pre-teleport pose on stepping frames.
 void GameUnitComponent::applyHeightLimit(Tick& t)
 {
     const float ceiling = effectiveHeightLimit();
@@ -243,15 +211,15 @@ void GameUnitComponent::applyHeightLimit(Tick& t)
     Globals::physics.teleportBody(t.pc.body, clamped, t.pc.body.getRotation());
     t.vel.y = glm::min(t.vel.y, 0.0f);
     Globals::physics.queueBodyCommand(t.pc.body, PhysicsWorld::EBodyCommand::SetLinearVelocity, t.vel);
+    // Teleport contract: stomp the interpolation poses and claim the step, or PhysicsComponent::update
+    // mixes toward the pre-teleport pose on stepping frames.
     t.pc.prevPos = t.pc.currPos = clamped;
     t.pc.lastStep = Globals::physics.getStepCount();
 }
 
-bool GameUnitComponent::applyInboxes(Tick& t)
+bool GameUnitComponent::applyDamageAndHeal(Tick& t)
 {
-    // Direct damage lands via the inbox — the battery eats it FIRST, exactly the player's
-    // applyDamage rule ("Damage absorb" energy per hp, collapse latch on empty), and only the
-    // overflow reaches health. Shield-less bodies (swarm: shieldOutput 0) take it all on health.
+    // The battery eats direct damage first (the player's applyDamage rule); shield-less bodies take it all.
     if (const float dmg = takePendingDamage(); dmg > 0.0f)
     {
         float remaining = dmg;
@@ -266,16 +234,13 @@ bool GameUnitComponent::applyInboxes(Tick& t)
         if (remaining > 0.0f)
             health = glm::max(health - remaining, 0.0f);
     }
-    // The DEATH check runs on the damage alone: a heal that landed the same tick must not revive a
-    // unit the damage just killed (a medic station's radius was making units immortal).
+    // Death before the heal: a heal landing the same tick must not revive the unit (a medic
+    // station's radius was making units immortal).
     if (health <= 0.0f || t.pos.y < params.voidY)
     {
         kill(t.entity);
         return false;
     }
-    // The HEAL inbox (medic stations), for the survivors: health and the battery both, applied
-    // here so `energy` stays single-writer; a battery holding charge again lifts the permanent
-    // collapse latch.
     if (const float heal = oc::atomic_ref<float>(pendingHeal).exchange(0.0f, oc::memory_order_acq_rel); heal > 0.0f)
     {
         health = glm::min(health + heal, healthMax);
@@ -286,15 +251,14 @@ bool GameUnitComponent::applyInboxes(Tick& t)
     return true;
 }
 
-// Where to walk: the route, then the locked order, then the Nav fields, then the local search.
 void GameUnitComponent::resolveWalkTarget(Tick& t)
 {
     if (targetLocked && moveOrder
         && glm::distance(t.here, glm::vec2(targetPos.x, targetPos.z)) < params.waypointRadius)
-        targetLocked = moveOrder = false; // move order arrived: back to the AI
+        targetLocked = moveOrder = false;
     if (targetLocked && moveOrder && wanderOrder)
     {
-        wanderTimeLeft -= t.deltaSec; // a wander that cannot get there just gives up
+        wanderTimeLeft -= t.deltaSec;
         if (wanderTimeLeft <= 0.0f)
             targetLocked = moveOrder = false;
     }
@@ -309,8 +273,6 @@ void GameUnitComponent::resolveWalkTarget(Tick& t)
             t.routing = t.haveWalkTarget = t.walkIsOrder = true;
         }
     }
-    // NAV: the geodesically nearest enemy across every other team's field; its descent direction
-    // already routes around walls. Falls through to the local search where no field covers us.
     if (!t.routing && !targetLocked && t.fields && Globals::navSystem.anyFieldPublished())
         resolveNavTarget(t);
     if (!t.routing && !t.navResolved)
@@ -335,10 +297,7 @@ void GameUnitComponent::resolveNavTarget(Tick& t)
             bestField = field;
         }
     }
-    // RANGE-GATED: only a source within targetSearchRadius (geodesic metres) counts. The field
-    // rebuilds every ~0.25 s and its sources are LIVE positions, so this tracks a moving
-    // player far tighter than the local search's retarget-interval snapshots — and the gate is
-    // what keeps distant units holding their patch instead of marching across the map.
+    // The range gate keeps distant units holding their patch instead of marching across the map.
     if (best.valid && best.dist <= params.targetSearchRadius)
     {
         targetPos = bestField->sourceAt(best.srcIndex).pos;
@@ -351,16 +310,10 @@ void GameUnitComponent::resolveNavTarget(Tick& t)
         t.navSteer = glm::dot(t.navDir, t.navDir) > 0.5f;
         return;
     }
-    // OUT OF THE SEARCH RADIUS: a target picked on an earlier tick is STALE — drop it
-    // (targetLocked never gets here). Kept, the unit marched to the last known spot for up
-    // to a whole retarget interval and looked as if it ignored the follow radius entirely.
-    hasTarget = false;
+    hasTarget = false; // an earlier tick's target is stale out here: kept, the unit marched to it
     if (!best.valid || best.dist > params.navFollowRadius)
         return;
-    // NAV FOLLOW band: too far to TARGET (the player sprinted out of the search radius), but
-    // still near the action — if the crowd FLOW field holds a lane here, walk it (no target, no
-    // combat lock). The chasers' own trail + the seeded lane keep pulling the pack along until
-    // the target is back in range or the lane decays.
+    // Follow band: no target, but walk the crowd lane if one holds here (the pack keeps chasing).
     const Nav::TeamField* raster = Globals::navSystem.raster();
     if (!raster)
         return;
@@ -370,7 +323,7 @@ void GameUnitComponent::resolveNavTarget(Tick& t)
     {
         t.navDir = lane / laneLen;
         t.navSteer = true;
-        t.navResolved = true; // following, not hunting: the local re-search stays off
+        t.navResolved = true;
         t.walkTarget = t.pos + glm::vec3(t.navDir.x, 0.0f, t.navDir.y) * 8.0f;
         t.haveWalkTarget = true;
     }
@@ -381,11 +334,9 @@ void GameUnitComponent::searchLocalTarget(Tick& t)
     m_retargetTimer -= t.deltaSec;
     if (!targetLocked && (m_retargetTimer <= 0.0f || !hasTarget))
     {
-        // Random pick among the 4 nearest enemy structures; nearest enemy player (a puppet in
-        // the same query) as the fallback.
         m_retargetTimer = params.retargetInterval * (0.7f + 0.6f * unitRand01(m_rng));
-        // (Every spatial probe in this pass consumes its hits INLINE — no result buffer, so
-        // nothing thread_local rides a job that may park and resume on another thread.)
+        // Every probe consumes its hits inline: no result buffer, nothing thread_local across a job
+        // that may park and resume on another thread.
         struct Candidate { float distSq; glm::vec3 pos; };
         Candidate best[4];
         int count = 0;
@@ -438,30 +389,20 @@ void GameUnitComponent::searchLocalTarget(Tick& t)
     }
     t.walkTarget = targetPos;
     t.haveWalkTarget = hasTarget;
-    t.walkIsOrder = hasTarget && targetLocked && moveOrder && !wanderOrder; // a wander never seeds
+    t.walkIsOrder = hasTarget && targetLocked && moveOrder && !wanderOrder;
 }
 
-// Combat: ONE short probe serves the structure bite, the emitter strain and the melee sweep over
-// enemy players/units (decoupled from the walk target: a wall in the way gets chewed too). The
-// strain reach must fit inside the query radius. A unit MARCHING A ROUTE runs it too: the nearest
-// enemy unit inside routeEngageRadius becomes its walk target for this tick (melee closes in,
-// ranged fires at it), and the march resumes once it is gone.
 void GameUnitComponent::tickCombat(Tick& t)
 {
     t.stopRange = attackRange;
-    const float c_strainRange = params.strainRange; // emitter siege-drain reach ("Emitter drain range")
+    const float c_strainRange = params.strainRange;
     const float engageRadius = t.routing ? params.routeEngageRadius : 0.0f;
-    // A MOVE ORDER (the wave's march on the Base, a player's RMB) breaks off at the first
-    // enemy structure inside orderBreakRadius: the order drops and the AI takes over, which
-    // hunts the NEAREST structure — otherwise the whole wave walked past everything to the
-    // Base and only bit what stood in its way.
     const bool ordered = targetLocked && moveOrder;
     const float breakRadius = ordered ? params.orderBreakRadius : 0.0f;
     glm::vec3 bitePos(0.0f);
     float engageDistSq = engageRadius * engageRadius;
     glm::vec3 engagePos(0.0f);
     bool engage = false;
-    // Melee hits ONE victim: the nearest enemy unit OR player capsule inside reach.
     GameUnitComponent* meleeVictim = nullptr;
     float meleeVictimDistSq = FLT_MAX;
     float meleeVictimReach = 0.0f;
@@ -478,7 +419,7 @@ void GameUnitComponent::tickCombat(Tick& t)
             sc && sc->team != team)
         {
             const float d = glm::distance(t.here, glm::vec2(other->pos.x, other->pos.z));
-            if (sc->strainable && d < strainDist) // shield-state-independent siege drain
+            if (sc->strainable && d < strainDist)
             {
                 strainDist = d;
                 strain = sc;
@@ -497,15 +438,15 @@ void GameUnitComponent::tickCombat(Tick& t)
             || glm::abs(other->pos.y - t.pos.y) >= 3.0f)
             return;
         const glm::vec2 to(other->pos.x - t.pos.x, other->pos.z - t.pos.z);
-        if (t.routing && glm::dot(to, to) < engageDistSq) // nearest enemy on the march
+        if (t.routing && glm::dot(to, to) < engageDistSq)
         {
             engageDistSq = glm::dot(to, to);
             engagePos = other->pos;
             engage = true;
         }
-        if (!ranged) // melee at the victim's body ring (a capsule gets a flat allowance)
+        if (!ranged)
         {
-            const float reach = attackRange + (pu->puppet ? 0.8f : pu->bodyRadius);
+            const float reach = attackRange + (pu->puppet ? 0.8f : pu->bodyRadius); // capsules: flat allowance
             const float distSq = glm::dot(to, to);
             if (distSq < reach * reach && distSq < meleeVictimDistSq)
             {
@@ -516,28 +457,24 @@ void GameUnitComponent::tickCombat(Tick& t)
             }
         }
     });
-    // DISCRETE melee: the timer runs down whether or not anything is in reach (clamped at 0, so
-    // arriving at a victim swings at once), and one swing lands on ONE victim — the enemy unit or
-    // player first (attackDamage / playerDamage), else the structure — and reports the hit for
-    // the game's visual.
     m_attackTimer = glm::max(m_attackTimer - t.deltaSec, 0.0f);
     const bool canBite = bite && biteDist <= attackRange && t.pos.y > -2.0f && t.pos.y < 8.0f;
     if (meleeVictim)
-        t.stopRange = glm::max(t.stopRange, meleeVictimReach); // hold at the ring
+        t.stopRange = glm::max(t.stopRange, meleeVictimReach);
     const float swing = meleeVictim ? (meleeVictim->puppet ? playerDamage : attackDamage) : attackDamage;
     if (!ranged && m_attackTimer <= 0.0f && swing > 0.0f && (meleeVictim || canBite))
     {
         if (meleeVictim)
-            meleeVictim->damage(swing, team); // atomic: a unit's health, or the puppet's inbox
+            meleeVictim->damage(swing, team);
         else
-            bite->damage(swing);        // atomic — workers bite concurrently
+            bite->damage(swing);
         m_attackTimer = attackInterval;
         const std::lock_guard<std::mutex> lock(g_unitEventMutex);
         g_hits.push_back(HitRecord{ t.pos, meleeVictim ? meleeVictimPos : bitePos });
     }
     if (!engage && t.routing && bite && biteDist < engageRadius)
     {
-        engage = true; // a structure on the march is engaged like a unit (units first)
+        engage = true;
         engagePos = bitePos;
     }
     if (engage)
@@ -550,7 +487,7 @@ void GameUnitComponent::tickCombat(Tick& t)
     {
         targetLocked = moveOrder = false; // the order is done: the AI hunts from here
         hasTarget = false;
-        t.walkTarget = bitePos; // this tick already heads for it
+        t.walkTarget = bitePos;
         t.haveWalkTarget = true;
         t.walkIsOrder = false;
     }
@@ -561,27 +498,21 @@ void GameUnitComponent::tickCombat(Tick& t)
         if (t.haveWalkTarget && m_fireTimer <= 0.0f
             && glm::distance(t.here, glm::vec2(t.walkTarget.x, t.walkTarget.z)) <= standoffRange)
         {
-            // Spawning is main-thread only: queue the shot for the game to service.
             const std::lock_guard<std::mutex> lock(g_unitEventMutex);
             g_fireRequests.push_back(FireRequest{ t.pos, t.walkTarget, (uint8)team, shotKind });
             m_fireTimer = fireInterval * (0.8f + 0.4f * unitRand01(m_rng));
         }
     }
     else if (canBite)
-        t.stopRange = attackRange + bite->meleeRadius; // the swing itself landed above
+        t.stopRange = attackRange + bite->meleeRadius;
     if (strain)
         strain->addLoad(emitterDrain * params.emitterDrainMult);
 }
 
-// Steering: walk toward the target through the context steering over the nav fields, or BRAKE.
-// Physics writes are QUEUED (workers): one frame of latency.
-// BRAKE (no target, or arrived): the capsules run FRICTION 0 — the SIM LOD ticks them at up to
-// 1 s intervals and ground friction between ticks bled the commanded speed away — so stopping is
-// an explicit command too: planar velocity to zero at the steering accel. Without it a coasting
-// unit never stops, keeps splatting its velocity into the crowd lane, and the pack follows the
-// ghost trail. No lane splat while braking (only the walk branch).
 void GameUnitComponent::tickSteering(Tick& t)
 {
+    // The capsules run friction 0 (the SIM LOD ticks them at up to 1 s intervals), so stopping is
+    // an explicit command; a coasting unit would keep splatting its velocity into the crowd lane.
     const auto brake = [&]
     {
         const glm::vec3 planar(t.vel.x, 0.0f, t.vel.z);
@@ -596,20 +527,14 @@ void GameUnitComponent::tickSteering(Tick& t)
     const glm::vec2 toTarget(t.walkTarget.x - t.pos.x, t.walkTarget.z - t.pos.z);
     const float dist = glm::length(toTarget);
     if (!t.haveWalkTarget || dist <= t.stopRange)
-        brake(); // nothing to walk to, or arrived: hold position
+        brake();
     else
     {
         const glm::vec2 goalDir = t.navSteer ? t.navDir : toTarget / glm::max(dist, 1e-3f);
         const Nav::TeamField* raster = t.fields ? Globals::navSystem.raster() : nullptr;
-        // PLAN REQUEST on a jittered per-unit timer, while walking (not only while stuck): Nav
-        // dedups by proximity, so a crowd going the same way costs one plan and the lane keeps
-        // up with the group. Only ROUTES and MOVE ORDERS seed — a HUNTED target (nav field,
-        // local search, engage) seeds only for params.huntSeedTeam (the co-op AI): friendly
-        // units chasing an enemy must not carve lanes toward it.
-        // The due time is on the SIM CLOCK, independent of the tier's tick rate (see m_seedDue).
         const float simNow = (float)Globals::time.getSimElapsedSec();
-        // A WANDER never seeds, hunt-seed team or not (the co-op AI is that team, and its
-        // strolls were carving lanes to random points).
+        // Only routes and move orders seed; a hunted target seeds only for huntSeedTeam, and a
+        // wander never (its strolls were carving lanes to random points).
         const bool wandering = targetLocked && moveOrder && wanderOrder;
         if (simNow >= m_seedDue && !wandering && (t.walkIsOrder || (int)team == params.huntSeedTeam))
         {
@@ -618,8 +543,8 @@ void GameUnitComponent::tickSteering(Tick& t)
             g_seedRequests.push_back(SeedRequest{ t.pos, t.walkTarget, (uint8)team,
                 m_pressureTimer > params.unstickAfter });
         }
-        // STUCK DETECTION by displacement checkpoints (per-tick progress never accumulates on
-        // a jittering heading): < 0.6 m per 0.75 s accrues stalled time into m_pressureTimer.
+        // Stuck detection by displacement checkpoints: per-tick progress never accumulates on a
+        // jittering heading.
         m_stuckCheckTimer -= t.deltaSec;
         if (m_stuckCheckTimer <= 0.0f)
         {
@@ -631,7 +556,6 @@ void GameUnitComponent::tickSteering(Tick& t)
         }
         const glm::vec2 dir = raster ? steerHeading(t, goalDir, *raster) : goalDir;
         const glm::vec2 measured(t.vel.x, t.vel.z); // the body's REAL planar velocity (pre-command)
-        // A wander is a stroll: a fraction of the run speed.
         const float walkSpeed = wandering
             ? glm::min(moveSpeed * params.wanderSpeedMult, params.wanderSpeedMax) : moveSpeed;
         glm::vec3 dv(dir.x * walkSpeed - t.vel.x, 0.0f, dir.y * walkSpeed - t.vel.z);
@@ -644,13 +568,11 @@ void GameUnitComponent::tickSteering(Tick& t)
         t.vel += glm::vec3(dv.x, 0.0f, dv.z);
         if (t.fields)
         {
-            // Contribute the MEASURED velocity (never the command — a pinned unit must not
-            // write "into the wall"), one cell BEHIND (a trail belongs behind the walker, and
-            // splatting the own cell fed the heading back to itself).
+            // Splat the MEASURED velocity (a pinned unit must not write "into the wall"), one cell
+            // BEHIND (splatting the own cell fed the heading back to itself).
             const float measuredLen = glm::length(measured);
             if (measuredLen > 0.1f && params.flowSplatGain > 0.0f)
                 Globals::navSystem.flow(team).splat(t.here - measured / measuredLen * Nav::CellSize, measured * params.flowSplatGain);
-            // Back-pressure: stalled time injects pressure that diffuses outward each frame.
             if (m_pressureTimer > 0.4f && params.stuckPressure > 0.0f)
             {
                 const float strength = glm::min(m_pressureTimer - 0.4f, 1.5f) * params.stuckPressure;
@@ -659,9 +581,8 @@ void GameUnitComponent::tickSteering(Tick& t)
         }
     }
 
-    // HARD velocity cap, whatever launched the body (a field shove, a box3d push-out, a wall
-    // clip): the queued command applies before the next step, so `vel` stays the frame's truth
-    // for the push clamps in tickField.
+    // Hard cap on whatever launched the body (a box3d push-out, a wall clip); `vel` stays the
+    // frame's truth that applyPush scales the field impulse against.
     if (const float speed = glm::length(t.vel); speed > params.maxSpeed)
     {
         t.vel *= params.maxSpeed / speed;
@@ -669,32 +590,24 @@ void GameUnitComponent::tickSteering(Tick& t)
     }
 }
 
-// CONTEXT STEERING over the nav fields: score a fan of headings by goal alignment, open run, crowd
-// lane, persistence, minus the pressure gradient; stalls shift the weights toward the fields.
 glm::vec2 GameUnitComponent::steerHeading(Tick& t, glm::vec2 goalDir, const Nav::TeamField& raster)
 {
     const bool stalled = m_pressureTimer > 0.4f;
     const bool unstick = m_pressureTimer > params.unstickAfter;
     float wGoal = unstick ? 0.0f : params.steerGoal * (stalled ? 0.3f : 1.0f);
     const float look = glm::max(params.steerLook, moveSpeed * 1.0f);
-    // ONE raster snapshot for every probe this tick (the chunk-hash helpers pay a find() per
-    // cell — 100+ per unit per tick without it).
+    // One raster snapshot per tick: the chunk-hash helpers pay a find() per cell, 100+ per unit.
     Nav::TeamField::CostWindow window;
     raster.snapshotCosts(t.here, int(std::ceil((look + bodyRadius + params.wallKeep)
         / Nav::CellSize)) + 1, window);
-    // Wall keep-away: in a gap both walls cancel (the unit centres itself), at a corner the
-    // single push swings it wide. The run itself is a centre-line march so a 1-tile gap reads
-    // as open.
+    // In a gap both walls cancel (the unit centres itself); at a corner the single push swings it wide.
     const glm::vec2 wallAway = window.wallPush(t.here, bodyRadius + params.wallKeep);
     const float wallLen = glm::length(wallAway);
     const glm::vec2 wallDir = wallLen > 1e-4f ? wallAway / wallLen : glm::vec2(0.0f);
     const float wallW = glm::min(wallLen, 1.0f) * params.steerWall;
     if (unstick)
     {
-        // Really stuck: replace the goal with an ESCAPE, backing away from whatever pins us — a
-        // nearby wall first (the wall push already points away from it), else the nearest
-        // unit/structure/player from a small spatial query, else simply the opposite of where
-        // we were trying to go.
+        // Escape: away from a nearby wall, else the nearest unit/structure/player, else reverse.
         if (wallLen > 1e-3f)
             goalDir = wallDir;
         else
@@ -707,7 +620,7 @@ glm::vec2 GameUnitComponent::steerHeading(Tick& t, glm::vec2 goalDir, const Nav:
                 Entity* other = reinterpret_cast<Entity*>(user);
                 if (other == &t.entity || (!getComponent<GameUnitComponent>(other)
                     && !getComponent<GameStructureComponent>(other)))
-                    return; // only the things that can pin us, never scenery
+                    return;
                 const glm::vec2 d = t.here - glm::vec2(other->pos.x, other->pos.z);
                 const float dSq = glm::dot(d, d);
                 if (dSq > 1e-6f && dSq < bestSq)
@@ -721,10 +634,8 @@ glm::vec2 GameUnitComponent::steerHeading(Tick& t, glm::vec2 goalDir, const Nav:
         wGoal = 1.5f;
     }
     m_ignoreFlowTimer = glm::max(0.0f, m_ignoreFlowTimer - t.deltaSec);
-    // LIVE TARGET WITHIN THE TRACK RADIUS: the goal is the team field's descent at the target's
-    // LIVE position (~0.25 s fresh) — floor the goal weight up and near-mute the seeded lane,
-    // whose periodic re-plans lag a moving player badly. Farther (but inside the search radius)
-    // the unit marches lane-friendly toward the target.
+    // Tracking a live target: the field descent is ~0.25 s fresh, the seeded lane's re-plans lag
+    // a moving player badly — floor the goal weight and near-mute the lane.
     const bool tracking = t.navTracking && !unstick;
     if (tracking)
         wGoal = glm::max(wGoal, params.steerTrackGoal * (stalled ? 0.3f : 1.0f));
@@ -734,9 +645,7 @@ glm::vec2 GameUnitComponent::steerHeading(Tick& t, glm::vec2 goalDir, const Nav:
     const float wPersist = unstick ? 0.0f : params.steerPersist * (stalled ? 0.2f : 1.0f);
     const float wPressure = params.steerPressure * (unstick ? 3.0f : 1.0f);
     const float bodyProbe = bodyRadius + 0.1f;
-    // Compressive response x/(x+knee): one stuck unit registers, a hundred never saturate. The
-    // knee is the value scoring 0.5.
-    const auto knee = [](float x, float k) { return x / (x + glm::max(k, 1e-4f)); };
+    const auto knee = [](float x, float k) { return x / (x + glm::max(k, 1e-4f)); }; // never saturates
     glm::vec2 lane = Globals::navSystem.flow(team).sample(t.here, &raster);
     const float laneLen = glm::length(lane);
     const float laneW = knee(laneLen, params.flowKnee * glm::max(moveSpeed, 0.1f));
@@ -751,15 +660,14 @@ glm::vec2 GameUnitComponent::steerHeading(Tick& t, glm::vec2 goalDir, const Nav:
     {
         const glm::vec2 probe = t.here + d * bodyProbe;
         if (window.isBlocked(Nav::cellOf(probe)))
-            return; // blocked at the body: not a heading
+            return;
         const float free = window.freeDistance(t.here, d, look) / look;
         float score = free * (wGoal * glm::dot(d, goalDir)
             + wFlow * laneW * glm::dot(d, lane)
             + (m_hasLastDir ? wPersist * glm::dot(d, m_lastDir) : 0.0f));
         score -= wPressure * gpW * glm::dot(d, gp);
         score += wallW * glm::dot(d, wallDir);
-        // Corner clip: two lateral body samples PENALIZE (not forbid) brushing a corner the
-        // centre-line run cannot see.
+        // Two lateral body samples PENALIZE (not forbid) brushing a corner the centre-line run cannot see.
         const glm::vec2 probeSide(-d.y * bodyRadius, d.x * bodyRadius);
         const int clipped = int(window.isBlocked(Nav::cellOf(probe + probeSide)))
             + int(window.isBlocked(Nav::cellOf(probe - probeSide)));
@@ -770,9 +678,8 @@ glm::vec2 GameUnitComponent::steerHeading(Tick& t, glm::vec2 goalDir, const Nav:
             best = d;
         }
     };
-    // Fan of 16 anchored ON the goal (k = 0 IS goalDir — a free-floating fan often had no
-    // candidate through a one-cell gap, which subtends about one 22.5 deg slot); the other 15
-    // carry a per-unit offset so a crowd does not walk in columns.
+    // Fan anchored ON the goal (a free-floating fan often had no candidate through a one-cell
+    // gap); the per-unit offset keeps a crowd from walking in columns.
     constexpr int c_candidates = 16;
     constexpr float c_step = glm::two_pi<float>() / c_candidates;
     const float refAngle = std::atan2(goalDir.y, goalDir.x);
@@ -783,7 +690,7 @@ glm::vec2 GameUnitComponent::steerHeading(Tick& t, glm::vec2 goalDir, const Nav:
         const float a = refAngle + float(k) * c_step + spread;
         consider(glm::vec2(std::cos(a), std::sin(a)));
     }
-    if (laneW > 0.0f) // the lane is generally not on the fan's grid
+    if (laneW > 0.0f)
         consider(lane);
     glm::vec2 dir = best;
     if (unstick) // break symmetric two-unit locks
@@ -797,9 +704,6 @@ glm::vec2 GameUnitComponent::steerHeading(Tick& t, glm::vec2 goalDir, const Nav:
     return dir;
 }
 
-// The shield battery + push (the player rules, minus regen) off the emitter readbacks, or — for a
-// SHIELD-LESS body — the BAKED pressure field standing in for them (ForceSystem::sampleBakedField,
-// a CPU bilinear tap, no per-unit GPU slot).
 void GameUnitComponent::tickField(Tick& t)
 {
     if (t.fc && t.fc->emitter.isValid())
@@ -809,36 +713,22 @@ void GameUnitComponent::tickField(Tick& t)
         const float before = energy;
         energy = glm::max(0.0f, energy - pressure * tension * params.energyDrainRate * t.deltaSec);
         if (before > 0.0f && energy <= 0.0f)
-            collapsed = true; // reaches clients promptly: the game blob's change detection forces
-                              // this entity's next snapshot record out
+            collapsed = true;
         t.fc->emitter.setOutput(energy > 0.0f ? shieldOutput : 0.01f);
 
         const float iso = Globals::forceSystem.getParams().isoThreshold;
-        // COLLAPSED gate (the player's rule): while the battery holds, pressure only DRAINS it —
-        // health starts bleeding after the shield is gone, never before.
         if (collapsed && t.fc->emitter.getEquilibriumRadius() < params.damageRadius && pressure > iso)
         {
             health = glm::max(0.0f, health - params.fieldDps * params.fieldDpsMult * t.deltaSec);
             noteHurtTeam(opposingTeamGuess()); // the pressure readback carries no team
         }
 
-        // Push normalized by the output that PRODUCED the ~2-frame-latent readback, so a collapsed
-        // shield is shoved exactly like a live one. Speed clamp rides the same queue (approximate
-        // by one frame — the queue itself is one frame latent anyway).
+        // Normalized by the output that PRODUCED the ~2-frame-latent readback, so a collapsed
+        // shield is shoved exactly like a live one.
         const glm::vec3 force = t.fc->emitter.getAppliedForce() / glm::max(m_outputHistory[0], 1e-3f);
-        // Push ramps in NEAR THE SURFACE only (pressure ~ iso): pushing everywhere in the support
-        // stopped units out in the weak fringe, before the damage band could ever reach them.
         const float pushRamp = glm::smoothstep(iso * params.fieldPushStart, iso, pressure);
         if (glm::dot(force, force) > 1e-8f && pushRamp > 0.0f)
-        {
-            Globals::physics.queueBodyCommand(t.pc.body, PhysicsWorld::EBodyCommand::ApplyImpulse,
-                force * (t.deltaSec * params.pushGain * pressure * tension * pushRamp));
-            const float speed = glm::length(t.vel);
-            const float maxSpeed = moveSpeed * params.maxSpeedMult;
-            if (speed > maxSpeed)
-                Globals::physics.queueBodyCommand(t.pc.body, PhysicsWorld::EBodyCommand::SetLinearVelocity,
-                    t.vel * (maxSpeed / speed));
-        }
+            t.impulse += force * (t.deltaSec * params.pushGain * pressure * tension * pushRamp);
         m_outputHistory[0] = m_outputHistory[1];
         m_outputHistory[1] = m_outputHistory[2];
         m_outputHistory[2] = energy > 0.0f ? shieldOutput : 0.01f;
@@ -854,48 +744,54 @@ void GameUnitComponent::tickField(Tick& t)
         }
         return;
     }
-    // GRADED exposure: the push equilibrium parks a pressing unit AT the shell surface (opposing
-    // φ ~ iso), where a binary `inside` test read false most frames — units ground against
-    // bubbles taking no damage. Damage ramps with field DEPTH instead: zero outside the field,
-    // full at the surface and beyond.
-    // (fs.opposing is already the strongest NON-own field, so no owningTeam gate needed.)
+    // Graded by field depth: the push equilibrium parks a pressing unit AT the shell, where a
+    // binary `inside` test read false most frames (units ground against bubbles taking no damage).
     const float iso = glm::max(Globals::forceSystem.getParams().isoThreshold, 1e-3f);
     const float exposure = glm::smoothstep(0.0f, iso, fs.opposing);
     if (exposure > 0.0f)
     {
         health = glm::max(0.0f,
             health - params.fieldDps * params.fieldDpsMult * exposure * t.deltaSec);
-        // The sample's owning team is the strongest field's — the burner, unless our own field
-        // is stronger here, in which case the opposing team is not named: guess.
         noteHurtTeam(fs.owningTeam != team ? fs.owningTeam : opposingTeamGuess());
     }
-    // Push with the SAME chain the shielded units land on. Their force is
-    // appliedForce / outputHistory = forceGain x (self-weighted mean of -grad over the unit's
-    // bubble) — the 13-sample integral's mean self-weight is ~0.35 — times
-    // pushGain * pressure * tension. Reproduce it from the field sample so ONE "Field push gain"
-    // tweak rules both paths and a swarm body shoves like any unit.
+    // Reproduces the shielded chain (appliedForce / output = forceGain x self-weighted mean of
+    // -grad over the bubble, mean self-weight ~0.35) so ONE "Field push gain" rules both paths.
     constexpr float c_bubbleSelfWeight = 0.35f;
     const glm::vec3 grad = fs.opposingGradient;
     const float pressure = fs.opposing;
-    // Same near-surface push ramp as the shielded path: no shove in the weak fringe, so bodies
-    // reach the damage band before the field starts holding them out.
     const float pushRamp = glm::smoothstep(iso * params.fieldPushStart, iso, pressure);
     if (pressure > 0.0f && pushRamp > 0.0f && glm::dot(grad, grad) > 1e-8f)
     {
         const float tension = 1.0f + params.tension * pressure;
         const glm::vec3 force = -grad
             * (c_bubbleSelfWeight * Globals::forceSystem.getParams().forceGain);
-        Globals::physics.queueBodyCommand(t.pc.body, PhysicsWorld::EBodyCommand::ApplyImpulse,
-            force * (t.deltaSec * params.pushGain * pressure * tension * pushRamp));
-        const float speed = glm::length(t.vel);
-        const float maxSpeed = moveSpeed * params.maxSpeedMult;
-        if (speed > maxSpeed)
-            Globals::physics.queueBodyCommand(t.pc.body, PhysicsWorld::EBodyCommand::SetLinearVelocity,
-                t.vel * (maxSpeed / speed));
+        t.impulse += force * (t.deltaSec * params.pushGain * pressure * tension * pushRamp);
     }
 }
 
-// ---------------------------------------------------------------- inboxes, tint, death
+void GameUnitComponent::applyPush(Tick& t)
+{
+    if (glm::dot(t.impulse, t.impulse) <= 1e-12f)
+        return;
+    const float mass = t.pc.body.getMass();
+    if (mass <= 0.0f)
+        return;
+    // The impulse lands on top of the steering's queued velocity (queue order), so the post-step
+    // speed is |vel + s a|; s = the positive root of |vel + s a|^2 = cap^2, clamped to [0, 1].
+    const float cap = params.maxSpeed;
+    const glm::vec3 a = t.impulse / mass;
+    const float aa = glm::dot(a, a);
+    const float va = glm::dot(t.vel, a);
+    const float slack = cap * cap - glm::dot(t.vel, t.vel);
+    float s = 1.0f;
+    if (slack <= 0.0f)
+        s = va < 0.0f ? 1.0f : 0.0f; // already over the cap: only a push that slows the body lands
+    else if (aa + 2.0f * va > slack)
+        s = (-va + std::sqrt(glm::max(va * va + aa * slack, 0.0f))) / aa;
+    if (s <= 0.0f)
+        return;
+    Globals::physics.queueBodyCommand(t.pc.body, PhysicsWorld::EBodyCommand::ApplyImpulse, t.impulse * s);
+}
 
 uint32 GameUnitComponent::opposingTeamGuess() const
 {
@@ -908,10 +804,7 @@ void GameUnitComponent::damage(float amount, uint32 sourceTeam)
     if (amount <= 0.0f)
         return;
     noteHurtTeam(sourceTeam);
-    // EVERY victim banks into the inbox: puppets for owner routing, units so their OWN tick can
-    // absorb shield-first (GamePlayer::applyDamage's rule) — the old direct health CAS bypassed
-    // the shield entirely, and draining in the owner tick keeps `energy` single-writer.
-    atomicAdd(pendingDamage, amount);
+    atomicAdd(pendingDamage, amount); // every victim banks into the inbox: the owner tick absorbs shield-first
 }
 
 void GameUnitComponent::heal(float amount)
@@ -930,14 +823,13 @@ void GameUnitComponent::applyTeamTint(Entity& entity)
 {
     GameUnitComponent* unit = getComponent<GameUnitComponent>(&entity);
     if (!unit || unit->puppet)
-        return; // player capsules keep their own look
+        return;
     const bool friendly = params.localTeam >= 0 && (int)unit->team == params.localTeam;
     const uint8 want = friendly ? 1 : 2;
     if (unit->tintState == want || (!friendly && unit->tintState == 0))
-        return; // already right (an untouched non-friendly unit IS its authored colour)
+        return; // an untouched non-friendly unit IS its authored colour
     unit->tintState = want;
-    // One node at a time: a friendly node is its OWN authored colour pulled toward green — a TINT,
-    // so the unit types stay told apart — and a non-friendly one is restored to that colour.
+    // A tint toward green (not a flat colour) so the unit types stay told apart.
     constexpr glm::vec3 c_friendlyGreen(0.3f, 1.0f, 0.4f); // the HUD's own-team bar colour
     constexpr float c_tintStrength = 0.55f;
     const auto tintNode = [&](Entity* node)
@@ -961,22 +853,19 @@ void GameUnitComponent::applyTeamTint(Entity& entity)
 void GameUnitComponent::kill(Entity& entity)
 {
     health = 0.0f;
-    if (deathReported) // once — the queued destroy may take a tick to drain
+    if (deathReported) // the queued destroy may take a tick to drain
         return;
     deathReported = true;
     Globals::scriptEvents.addDestroyRequest(EntityPtr(&entity));
     if (sourceId != 0)
     {
         const std::lock_guard<std::mutex> lock(g_unitEventMutex);
-        g_deaths.push_back({ sourceId, popCost }); // its spawner frees the population
+        g_deaths.push_back({ sourceId, popCost });
     }
 }
 
-// ---------------------------------------------------------------- the far tick
-
 bool GameUnitComponent::farHeading(const Entity& entity, glm::vec2& dir, float& speed, float& dist, bool spread)
 {
-    // Where to: the route first, then the locked move order. Nothing else moves a far unit.
     glm::vec3 target;
     if (routeIndex < routeCount)
         target = route[routeIndex];
@@ -985,13 +874,12 @@ bool GameUnitComponent::farHeading(const Entity& entity, glm::vec2& dir, float& 
     else
         return false;
     const glm::vec2 here(entity.pos.x, entity.pos.z);
-    // Direction: straight where the raster shows a clear line to the target, else the enemy team
-    // field's descent (geodesic, routes around rocks) — the order points at enemy ground anyway.
     const glm::vec2 toTarget(target.x - here.x, target.z - here.y);
     dist = glm::length(toTarget);
     if (dist < 1e-3f)
         return false;
     dir = toTarget / dist;
+    // No line of sight: the enemy team field's descent (geodesic, around rocks).
     const Nav::TeamField* raster = Globals::navSystem.isEnabled() ? Globals::navSystem.raster() : nullptr;
     if (raster && !raster->lineOfSight(here, glm::vec2(target.x, target.z), bodyRadius) && Globals::navSystem.anyFieldPublished())
     {
@@ -1010,13 +898,12 @@ bool GameUnitComponent::farHeading(const Entity& entity, glm::vec2& dir, float& 
         if (best.valid && glm::dot(best.descentDir, best.descentDir) > 0.5f)
             dir = best.descentDir;
     }
-    speed = targetLocked && moveOrder && wanderOrder // a stroll (the flag stays set after the
-        ? glm::min(moveSpeed * params.wanderSpeedMult, params.wanderSpeedMax) // order, so gate on
-        : moveSpeed;                                                          // the order)
+    speed = targetLocked && moveOrder && wanderOrder // wanderOrder stays set after the order, so gate on it
+        ? glm::min(moveSpeed * params.wanderSpeedMult, params.wanderSpeedMax)
+        : moveSpeed;
     if (spread)
     {
-        // Persistent per-unit bias (address hash): unbiased, every unit in an area walks the same
-        // descent cells and the wave files into one line.
+        // Persistent per-unit bias: unbiased, every unit walks the same descent cells in one file.
         const float hashFrac = float(uint32((uintptr_t(this) >> 4) * 2654435761u) >> 8) * (1.0f / 16777216.0f);
         const float angle = glm::radians(params.farSpreadDeg) * (hashFrac - 0.5f);
         const float c = std::cos(angle), s = std::sin(angle);
@@ -1030,7 +917,7 @@ glm::vec3 GameUnitComponent::wakeVelocity(const Entity& entity)
     glm::vec2 dir;
     float speed, dist;
     if (Globals::networkManager.role() == ENetRole::Client || puppet || !alive() || !farHeading(entity, dir, speed, dist))
-        return glm::vec3(0.0f); // nowhere to go (ambient, arrived, idle): wakes at rest
+        return glm::vec3(0.0f);
     return glm::vec3(dir.x * speed, 0.0f, dir.y * speed);
 }
 
@@ -1038,20 +925,17 @@ bool GameUnitComponent::updateFar(Entity& entity, float deltaSec)
 {
     if (Globals::networkManager.role() == ENetRole::Client || puppet || !alive() || deltaSec <= 0.0f)
         return false;
-    if (entity.pos.y < params.voidY) // through the floor while unselected: the full sim never
-    {                                // visits it, so the far tick has to do the killing
+    if (entity.pos.y < params.voidY) // the full sim never visits an unselected unit: kill it here
+    {
         kill(entity);
         return false;
     }
     PhysicsComponent* pc = getComponent<PhysicsComponent>(&entity);
     if (!pc || !pc->body.isValid())
         return false;
-    // The ENTITY position is the far truth: the pass never visits this unit, so nothing else
-    // writes it, and the body (disabled) is teleported to match below.
-    const glm::vec3 pos = entity.pos;
+    const glm::vec3 pos = entity.pos; // the far truth; the disabled body is teleported to match below
     const glm::vec2 here(pos.x, pos.z);
 
-    // Arrival / timeout bookkeeping first (the same rules as update()), then the shared heading.
     if (routeIndex < routeCount)
     {
         if (glm::distance(here, glm::vec2(route[routeIndex].x, route[routeIndex].z)) < params.waypointRadius)
@@ -1059,14 +943,14 @@ bool GameUnitComponent::updateFar(Entity& entity, float deltaSec)
     }
     else if (targetLocked && moveOrder)
     {
-        if (wanderOrder) // a stroll times out here too — the full sim's clock never runs while far
+        if (wanderOrder) // the full sim's clock never runs while far
         {
             wanderTimeLeft -= deltaSec;
             if (wanderTimeLeft <= 0.0f)
                 targetLocked = moveOrder = false;
         }
         if (targetLocked && glm::distance(here, glm::vec2(targetPos.x, targetPos.z)) < params.waypointRadius)
-            targetLocked = moveOrder = false; // arrived: the AI resumes when the unit is selected again
+            targetLocked = moveOrder = false;
     }
     glm::vec2 dir;
     float walkSpeed, dist;
@@ -1076,7 +960,7 @@ bool GameUnitComponent::updateFar(Entity& entity, float deltaSec)
     glm::vec2 next = here + dir * glm::min(walkSpeed * deltaSec, dist);
     if (raster && raster->isBlocked(Nav::cellOf(next)))
     {
-        // The spread bias aimed at rock: the plain heading, and hold only when that is blocked too.
+        // The spread bias aimed at rock: retry the plain heading, hold only when that is blocked too.
         if (!farHeading(entity, dir, walkSpeed, dist, /*spread*/ false))
             return false;
         next = here + dir * glm::min(walkSpeed * deltaSec, dist);
@@ -1098,8 +982,6 @@ bool GameUnitComponent::updateFar(Entity& entity, float deltaSec)
     }
     return true;
 }
-
-// ---------------------------------------------------------------- spawn-info plumbing
 
 const GameUnitComponent::SpawnInfo* getGameUnitSpawnInfo(const Entity* entity)
 {

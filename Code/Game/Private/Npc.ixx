@@ -102,10 +102,11 @@ public:
     //   MeleeHit — a unit's swing: a plain line striker -> victim over "Melee hit lifetime".
     // (No impact flash: the VICTIM lights itself on its health drop — GameUnitComponent's hurt
     // light — on every role, which also covers shells and force-field exposure.)
-    // A FLASH is a temporary point light: addBeam spawns them, drawBeams pushes each to the
-    // renderer every frame with its intensity fading over its life (per-frame light records, so
-    // nothing is owned). The server broadcasts this frame's new beams (GLt) so clients add the
-    // same ones — melee hits capped per frame (c_maxHitBroadcast), turret strikes always.
+    // A turret beam also carries its MUZZLE FLASH: drawBeams pushes one point light at `from`
+    // per Turret beam every frame, fading with the beam (per-frame light records, so nothing is
+    // owned and no second list is kept). The server broadcasts this frame's new beams (GLt) so
+    // clients add the same ones — melee hits capped per frame (c_maxHitBroadcast), turret
+    // strikes always.
     enum class EBeamKind : uint8 { Turret, MeleeHit };
     struct Beam
     {
@@ -117,19 +118,8 @@ public:
     };
     void addBeam(const glm::vec3& from, const glm::vec3& to, EBeamKind kind);
     oc::span<const Beam> newBeams() const { return m_newBeams; } // added since the last service()
-    void drawBeams(float deltaSec); // ages + draws beams AND flashes (main thread, every windowed frame)
+    void drawBeams(float deltaSec); // ages + draws beams (and the turret muzzle lights) — main thread, every windowed frame
 private:
-    struct Flash
-    {
-        glm::vec3 pos{ 0.0f };
-        glm::vec3 color{ 1.0f };
-        float range = 3.0f;
-        float intensity = 10.0f; // peak; fades linearly to 0 over `life`
-        float ttl = 0.0f;
-        float life = 0.0f;
-    };
-    void addFlash(const glm::vec3& pos, const glm::vec3& color, float range, float intensity, float life);
-    static constexpr size_t c_maxFlashes = 256;      // the light grid is finite: past this the OLDEST flash goes
     static constexpr size_t c_maxHitBroadcast = 64;  // melee hit beams relayed to clients per service()
 
     // Spawn cooldowns and alive counts live ON the barracks (GameStructureComponent::barracks) —
@@ -163,7 +153,6 @@ private:
 
     oc::vector<Beam> m_beams;
     oc::vector<Beam> m_newBeams;
-    oc::vector<Flash> m_flashes;
 
     // Tweaks (unit stats are prefab-authored; the shared sim baselines live on the components'
     // params — barracks/turret production tuning now registers from StructureSystem. What remains
@@ -173,5 +162,5 @@ private:
     float m_lobberShotSpeed = 14.0f; // ShotKind 1: the slow splash shell
     float m_beamLifetime = 0.5f;     // turret lightning
     float m_hitLifetime = 0.25f;     // melee hit line + its flash
-    float m_flashIntensity = 1.0f;   // multiplier on every flash's peak
+    float m_flashIntensity = 1.0f;   // multiplier on the turret muzzle light's peak
 };

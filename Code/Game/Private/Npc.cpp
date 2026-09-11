@@ -207,20 +207,6 @@ static glm::vec3 freeSpawnPointAround(const StructureSystem& structures, const g
     return glm::vec3(center.x + std::cos(start) * ringRadius, 1.0f, center.z + std::sin(start) * ringRadius);
 }
 
-void NpcSystem::addFlash(const glm::vec3& pos, const glm::vec3& color, float range, float intensity, float life)
-{
-    if (m_flashes.size() >= c_maxFlashes) // drop the OLDEST (the one closest to expiring)
-    {
-        size_t oldest = 0;
-        for (size_t i = 1; i < m_flashes.size(); ++i)
-            if (m_flashes[i].ttl < m_flashes[oldest].ttl)
-                oldest = i;
-        m_flashes[oldest] = m_flashes.back();
-        m_flashes.pop_back();
-    }
-    m_flashes.push_back({ pos, color, range, intensity * m_flashIntensity, life, life });
-}
-
 void NpcSystem::addBeam(const glm::vec3& from, const glm::vec3& to, EBeamKind kind)
 {
     const float life = kind == EBeamKind::Turret ? m_beamLifetime : m_hitLifetime;
@@ -229,30 +215,22 @@ void NpcSystem::addBeam(const glm::vec3& from, const glm::vec3& to, EBeamKind ki
     if (kind == EBeamKind::Turret || m_newBeams.size() < c_maxHitBroadcast)
         m_newBeams.push_back(beam);
     // No impact flash: the VICTIM lights itself on the health drop (GameUnitComponent's hurt
-    // light), on every role. Only the turret's muzzle flashes here.
-    if (kind == EBeamKind::Turret)
-        addFlash(from, glm::vec3(0.7f, 0.85f, 1.0f), 8.0f, 200.0f, life);
+    // light), on every role. The turret's muzzle light is drawn off the beam itself.
 }
 
 void NpcSystem::drawBeams(float deltaSec)
 {
-    // FLASHES: one point light each, fading linearly to nothing.
-    for (Flash& f : m_flashes)
-    {
-        f.ttl -= deltaSec;
-        const float fade = glm::clamp(f.ttl / glm::max(f.life, 1e-3f), 0.0f, 1.0f);
-        if (fade > 0.0f)
-            Globals::rendererVK.addPointLight(PointLight(f.pos, f.range, f.color, f.intensity * fade));
-    }
-    oc::erase_if(m_flashes, [](const Flash& f) { return f.ttl <= 0.0f; });
-
     // TURRET: a BUNDLE of jagged lines per strike (re-jittered every frame = flicker), fading
     // over the lifetime: a bright dense CORE of tightly packed strands plus wider, dimmer forks
-    // around it — debug lines are 1 px, so thickness comes from count.
+    // around it — debug lines are 1 px, so thickness comes from count. Plus the MUZZLE FLASH:
+    // one point light at the muzzle, fading with the bolt.
     // MELEE HIT: one line striker -> victim, plus one faint strand beside it, fading.
     constexpr int c_segments = 8;
     constexpr int c_coreStrands = 6;  // spread 0.12 m: reads as one thick bolt
     constexpr int c_forkStrands = 4;  // spread 0.9 m: the crackle around it
+    constexpr float c_muzzleRange = 8.0f;
+    constexpr float c_muzzleIntensity = 200.0f;
+    const glm::vec3 muzzleColor(0.7f, 0.85f, 1.0f);
     for (Beam& b : m_beams)
     {
         b.ttl -= deltaSec;
@@ -266,6 +244,9 @@ void NpcSystem::drawBeams(float deltaSec)
                 packColor(glm::vec3(1.0f, 0.5f, 0.2f) * (0.15f + 0.5f * fade)));
             continue;
         }
+        if (fade > 0.0f)
+            Globals::rendererVK.addPointLight(PointLight(b.from, c_muzzleRange, muzzleColor,
+                c_muzzleIntensity * m_flashIntensity * fade));
         const glm::vec3 axis = b.to - b.from;
         glm::vec3 side = glm::cross(axis, glm::vec3(0.0f, 1.0f, 0.0f));
         if (glm::dot(side, side) < 1e-4f)

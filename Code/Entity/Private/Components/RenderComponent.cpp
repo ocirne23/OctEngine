@@ -28,6 +28,35 @@ void RenderComponent::destroy(Entity& entity, const SpawnInfo& info)
 
 }
 
+void RenderComponent::update(Entity& entity, Renderer& renderer, const Transform& world)
+{
+    node.setTransform(composeTransform(world, localTransform));
+    SpatialIndex& spatialIndex = Globals::spatialIndex;
+    const SpatialCullingConfig& culling = spatialIndex.getCullingConfig();
+    const bool hasEntry = entity.spatialEntry.isValid();
+    if (hasEntry)
+    {
+        const Sphere bounds = node.getWorldBounds();
+        const float radius = node.isSkinned() ? bounds.radius * culling.skinnedRadiusScale : bounds.radius;
+        spatialIndex.updateEntry(entity.spatialEntry.handle(), glm::dvec3(bounds.pos), radius);
+    }
+    if (culling.mode >= int(ESpatialCullMode::Cull) && hasEntry)
+    {
+        const uint32 spatialMask = spatialIndex.getPassMask(entity.spatialEntry.handle());
+        uint32 passMask = 0;
+        if (spatialMask & SpatialPassBit_Main)
+            passMask = RendererVKLayout::PASS_ALL;
+        else if ((spatialMask & SpatialPassBit_Near) && culling.mode != int(ESpatialCullMode::MainOnly))
+            passMask = RendererVKLayout::PASS_SHADOW | RendererVKLayout::PASS_GI; // off-screen but shadow/RT relevant
+        else if ((spatialMask & SpatialPassBit_Shadow) && culling.mode != int(ESpatialCullMode::MainOnly))
+            passMask = RendererVKLayout::PASS_SHADOW; // off-screen, up-sun of the view
+        if (passMask != 0)
+            renderer.renderNode(node, passMask);
+    }
+    else
+        renderer.renderNode(node);
+}
+
 const RenderComponent::SpawnInfo* getRenderSpawnInfo(const Entity* entity)
 {
     if (!entity->spawnTemplate || !hasComponent<RenderComponent>(entity))

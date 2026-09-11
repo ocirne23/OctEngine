@@ -32,6 +32,9 @@ export struct RenderComponent
 
     void spawn(Entity& entity, const SpawnInfo& info, const Transform& base);
     void destroy(Entity& entity, const SpawnInfo& info);
+    // Requires a valid node: places it, refreshes the entity's spatial entry from its bounds and
+    // submits it under the cull pass mask. renderNode is lock-free (the parallel entity pass).
+    void update(Entity& entity, Renderer& renderer, const Transform& world);
 };
 
 export const RenderComponent::SpawnInfo* getRenderSpawnInfo(const Entity* entity);

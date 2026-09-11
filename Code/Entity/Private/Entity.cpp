@@ -100,42 +100,12 @@ void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform&
     }
 
     const Transform world = composeTransform(parentWorld, Transform(pos, scale, rot));
-    SpatialIndex& spatialIndex = Globals::spatialIndex;
-    const SpatialCullingConfig& culling = spatialIndex.getCullingConfig();
-    RenderComponent* render = getComponent<RenderComponent>(this);
-    const bool hasNode = render && render->node.isValid(); // empty when spawned without a container, or after destroy()
-    if (hasNode)
-        render->node.setTransform(composeTransform(world, render->localTransform));
     // The spatial entry follows the render bounds when there are any, else the entity position.
-    if (spatialEntry.isValid())
-    {
-        if (hasNode)
-        {
-            const Sphere bounds = render->node.getWorldBounds();
-            const float radius = render->node.isSkinned() ? bounds.radius * culling.skinnedRadiusScale : bounds.radius;
-            spatialIndex.updateEntry(spatialEntry.handle(), glm::dvec3(bounds.pos), radius);
-        }
-        else
-            spatialIndex.updateEntry(spatialEntry.handle(), glm::dvec3(world.pos), 0.0f);
-    }
-    if (hasNode)
-    {
-        if (culling.mode >= int(ESpatialCullMode::Cull) && spatialEntry.isValid())
-        {
-            const uint32 spatialMask = spatialIndex.getPassMask(spatialEntry.handle());
-            uint32 passMask = 0;
-            if (spatialMask & SpatialPassBit_Main)
-                passMask = RendererVKLayout::PASS_ALL; // in view: feeds every pass
-            else if ((spatialMask & SpatialPassBit_Near) && culling.mode != int(ESpatialCullMode::MainOnly))
-                passMask = RendererVKLayout::PASS_SHADOW | RendererVKLayout::PASS_GI; // off-screen but shadow/RT relevant
-            else if ((spatialMask & SpatialPassBit_Shadow) && culling.mode != int(ESpatialCullMode::MainOnly))
-                passMask = RendererVKLayout::PASS_SHADOW; // off-screen, up-sun of the view: its shadow falls into it
-            if (passMask != 0)
-                renderer.renderNode(render->node, passMask);
-        }
-        else
-            renderer.renderNode(render->node);
-    }
+    // The node is empty when spawned without a container, or after destroy().
+    if (RenderComponent* render = getComponent<RenderComponent>(this); render && render->node.isValid())
+        render->update(*this, renderer, world);
+    else if (spatialEntry.isValid())
+        Globals::spatialIndex.updateEntry(spatialEntry.handle(), glm::dvec3(world.pos), 0.0f);
 
     if (AudioComponent* audio = getComponent<AudioComponent>(this))
         audio->update(*this, world); // playing follow-sounds track the entity

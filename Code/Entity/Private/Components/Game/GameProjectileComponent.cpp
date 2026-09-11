@@ -8,10 +8,6 @@ import Force;
 import Physics;
 import Spatial;
 
-// See GameProjectileComponent.ixx (and the shared contract in GameUnitComponent.ixx): update runs on
-// the parallel entity pass on authority instances only; onContact is main-thread (the physics
-// contact dispatch). Cross-entity writes go through the victims' atomic damage()/addLoad().
-
 GameProjectileParams GameProjectileComponent::params;
 
 void GameProjectileComponent::spawn(Entity& entity, const SpawnInfo& info, const Transform&)
@@ -24,7 +20,7 @@ void GameProjectileComponent::spawn(Entity& entity, const SpawnInfo& info, const
     emitterDrainRadius = info.emitterDrainRadius;
     splashRadius = info.splashRadius;
     if (ForceComponent* fc = getComponent<ForceComponent>(&entity))
-        fc->emitter.setTeam(team); // the shot's field carries the shooter's team
+        fc->emitter.setTeam(team);
 }
 
 void GameProjectileComponent::update(Entity& entity, float deltaSec)
@@ -41,8 +37,6 @@ void GameProjectileComponent::update(Entity& entity, float deltaSec)
         spent = true;
         return;
     }
-    // Enemy fields brake/deflect the shot (force-ball pattern), and pressing near a bubble SAPS
-    // the nearest active enemy emitter — sustained barrages are a real siege drain.
     if (ForceComponent* fc = getComponent<ForceComponent>(&entity); fc && fc->emitter.isValid() && pc)
     {
         const glm::vec3 force = fc->emitter.getAppliedForce();
@@ -75,17 +69,11 @@ void GameProjectileComponent::update(Entity& entity, float deltaSec)
 
 void GameProjectileComponent::onContact(Entity& self, Entity& other, bool begin)
 {
-    // Main thread, inside physics.dispatchContactEvents. First contact spends the shot:
-    // enemy-team victims take the hit, everything else (ground, own team) just stops it.
     if (!begin || spent || Globals::networkManager.role() == ENetRole::Client)
         return;
-    // damage() handles puppets itself (banks into pendingDamage for owner routing), so enemy
-    // projectiles hurt players through the exact same call as units.
     if (splashRadius > 0.0f)
     {
-        // SPLASH: every enemy-team unit/structure within the radius of the impact point takes the
-        // full hit (the touched victim included — it is inside the radius by definition). The
-        // contact dispatch runs after the frame's spatial commit, so the query is legal here.
+        // Legal here: the contact dispatch runs after the frame's spatial commit.
         const float r2 = splashRadius * splashRadius;
         Globals::spatialIndex.forEachInSphere(glm::dvec3(self.pos), splashRadius, SpatialLayer_Render, [&](uint64 user)
         {
@@ -103,11 +91,9 @@ void GameProjectileComponent::onContact(Entity& self, Entity& other, bool begin)
         unit->damage(unitDamage, team);
     else if (GameStructureComponent* sc = getComponent<GameStructureComponent>(&other); sc && sc->team != team)
         sc->damage(structureDamage);
-    spent = true;
+    spent = true; // any contact spends the shot, own team and ground included
     Globals::scriptEvents.addDestroyRequest(EntityPtr(&self));
 }
-
-// ---------------------------------------------------------------- spawn-info plumbing
 
 const GameProjectileComponent::SpawnInfo* getGameProjectileSpawnInfo(const Entity* entity)
 {

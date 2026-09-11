@@ -115,8 +115,10 @@ per-entity visit**:
 
 ```
 Script → Network → Animator → Physics
-  → compose world transform → refresh the SpatialIndex entry
-  → push the RenderNode (gated on getPassMask when Spatial culling mode >= Cull)
+  → compose world transform
+  → RenderComponent::update: place the node, refresh the SpatialIndex entry from its bounds,
+    push the RenderNode (gated on getPassMask when Spatial culling mode >= Cull)
+    (no node: the entry follows the entity position, radius 0)
 ```
 
 `updateSelf` emits its children into a caller-supplied vector rather than recursing, which is what
@@ -639,7 +641,7 @@ renderer state.** It fires, for each side:
 | Component | Notes |
 |---|---|
 | `SceneComponent` | Children. |
-| `RenderComponent` | RenderNode + local transform, static or skinned, plus `Color`. |
+| `RenderComponent` | RenderNode + local transform, static or skinned, plus `Color`. `update` places the node, refreshes the spatial entry from its bounds and submits it under the cull pass mask. |
 | `AnimatorComponent` | AnimationPlayer + AnimStateMachine from `.apl`; gameplay through `stateMachine.setFloat/Bool/Trigger`, clip events through `onEvent`. |
 | `ScriptComponent` | See [`Code/Script/CONTEXT.md`](../Script/CONTEXT.md). |
 | `PhysicsComponent` | See [`Code/Physics/CONTEXT.md`](../Physics/CONTEXT.md). |
@@ -678,11 +680,20 @@ copies of the small helpers (the client early-out, the atomic CAS adds, the spaw
 like every other component.
 
 **`GameUnitComponent::update` is a step sequence over a per-tick `Tick` context** (private, declared
-in the `.ixx`): `applyHeightLimit` → the puppet gate → `applyInboxes` (damage, death, heal) →
+in the `.ixx`): `applyHeightLimit` → the puppet gate → `applyDamageAndHeal` (damage, death, heal) →
 `resolveWalkTarget` (route / order / `resolveNavTarget` / `searchLocalTarget`) → `tickCombat` (the
 one probe) → `tickSteering` (`steerHeading` = the context steering, brake, the hard cap) →
-`tickField` (shield battery + push, or the baked-field stand-in). The body's velocity is read ONCE
-into the context and every queued command builds on it.
+`tickField` (shield battery + push, or the baked-field stand-in — both BANK the push into
+`Tick::impulse`) → `applyPush` (**the tick's ONE `ApplyImpulse`**). The body's velocity is read ONCE
+into the context and every queued command builds on it. **The push speed limiter is on the impulse
+itself:** the steering's `SetLinearVelocity` lands first, the impulse on top, so applyPush scales
+the impulse by the largest `s` in [0, 1] keeping `|vel + s * impulse / mass|` under
+`params.maxSpeed` (the positive root of the quadratic) — **one ABSOLUTE cap** ("Unit max speed
+(m/s)", 12 ≈ 1.5x the runner's 7.6, the fastest unit), the same one `tickSteering` holds the
+body to; there is no per-unit multiplier. A body already over the cap only takes a push that
+slows it. Before this, the clamp was a trailing `SetLinearVelocity` tested against
+the PRE-impulse velocity: it never capped the tick's own shove and, when it fired a tick later,
+it overwrote the push entirely — a launch / snap-back oscillation.
 
 * **`GameUnitComponent`** — team, health, shield battery, plus C++ steering / targeting / melee /
   ranged stance. DSL sets orders through `self.unit.setTarget`. **`liveCount()`** is the number

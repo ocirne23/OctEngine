@@ -869,11 +869,11 @@ when it is false — so the cancel chain keeps first claim.**
   lines fading over "Turret beam lifetime" 0.5 s (`NpcSystem::addBeam` / `drawBeams`), broadcast to
   clients as GLt, plus a muzzle FLASH.
   > **BEAMS AND FLASHES** (`NpcSystem`): a beam has a kind — `Turret` (the lightning) or `MeleeHit`
-  > (a unit's swing, see Targets) — and `addBeam` also spawns its FLASHES: temporary point lights
-  > that `drawBeams` pushes to the renderer every frame (`addPointLight`, a per-frame record) with
-  > the intensity fading linearly over the beam's lifetime, scaled by "Muzzle flash intensity".
-  > At most `c_maxFlashes` 256 live — past that the oldest goes. GLt carries the kind byte; melee
-  > hit beams are relayed at most `c_maxHitBroadcast` 64 per frame, turret strikes always.
+  > (a unit's swing, see Targets). **The muzzle FLASH is not a separate record:** `drawBeams`
+  > pushes one point light at every live Turret beam's `from` (`addPointLight`, a per-frame
+  > record) with the intensity fading linearly over the beam's lifetime, scaled by "Muzzle flash
+  > intensity" — so it lives and dies with the bolt. GLt carries the kind byte; melee hit beams
+  > are relayed at most `c_maxHitBroadcast` 64 per frame, turret strikes always.
   > **There is NO impact flash: the VICTIM lights itself** — `GameUnitComponent::tickHurtLight`
   > (every role, before the client gate) compares health against the last tick's and pushes a red
   > point light over the collider's top while it drops, decaying over "Hurt light decay (s)" after

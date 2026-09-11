@@ -513,7 +513,8 @@ radius the unit marches lane-friendly toward the target.
 | Lane width | 3 m | | Group cluster radius | 12 m |
 
 Related `Game/Enemies`: Target search radius 15 m, Target track radius 5 m, Nav follow radius 40 m,
-Retarget interval 5 s, Route engage radius 10 m, Unit max speed 10 m/s, Nav fields on.
+Retarget interval 5 s, Route engage radius 10 m, Unit max speed 12 m/s (~1.5x the runner), Nav
+fields on.
 
 > **Flow above Goal is deliberate:** a lane is a proven route, so where one exists it should outweigh
 > walking straight at the goal.

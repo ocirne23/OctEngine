@@ -7,13 +7,8 @@ import :Entity;
 import Force;
 import Spatial;
 
-// See GameStructureComponent.ixx (and the shared contract in GameUnitComponent.ixx): update runs on
-// the parallel entity pass on authority instances only; cross-entity writes are the atomic CAS
-// helpers, cross-entity lookup is spatial.
-
 GameStructureParams GameStructureComponent::params;
 
-// Machine event queues (rare, tiny — the same discipline as the unit events).
 static std::mutex g_structureEventMutex;
 static oc::vector<uint32> g_spawnRequests;
 static oc::vector<GameStructureComponent::TurretFireRequest> g_turretFire;
@@ -61,43 +56,30 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
 {
     if (Globals::networkManager.role() == ENetRole::Client)
         return;
-    // ---- territory: HOSTILE = any OTHER team's bubble owns the structure's point (push a field
-    // over their base to siege it). Health is the construction progress too, so a blueprint under
-    // an enemy bubble literally un-builds.
-    if (!invulnerable) // one bake tap (worker-safe), no GPU query slot
+    // Any OTHER team's bubble over the point drains health — a blueprint under it un-builds.
+    if (!invulnerable)
     {
         const ForceSystem::FieldSample territory = Globals::forceSystem.sampleBakedField(entity.pos, team);
         if (territory.valid && territory.inside && territory.owningTeam != (uint32)team)
             fieldDrain(params.fieldDamageRate * deltaSec);
     }
 
-    // (Resource transport is the game's cable network job — see StructureSystem: this component
-    // only owns its float stores; cells enter and leave them at the game's tick boundary.)
-
-    // ---- machine logic (the union's stamped variant): the DECISION runs here per-entity, worker-
-    // side, spending from the structure's OWN stores; the actual entity spawn rides an event queue
-    // because spawning is main-thread only.
     if (machineKind == EMachineKind::Barracks && !blueprint)
     {
-        entity.setProfiled(); // machine structures earn a per-entity profile scope (latched here —
-                              // machineKind is stamped by the game AFTER spawn, so spawn can't know)
+        entity.setProfiled(); // latched here: machineKind is stamped by the game AFTER spawn
         BarracksData& b = barracks;
-        // THE ENERGY STORE IS THE BUILD BAR: the game stamps capacity = the selected unit's
-        // cost and caps the barracks' cable intake ("Barracks energy intake/s"), so the store
-        // fills at the build rate and a unit is born the moment it is FULL — build time = cost /
-        // intake, no timer. The epsilon covers a fill that lands a rounding step short of the cap.
+        // The store fills at the capped cable intake; full = a unit. The epsilon covers a fill that
+        // lands a rounding step short of the cap.
         if (b.population + (int)b.spawnPop <= b.popCap && store[0] >= b.spawnCost - 0.01f)
         {
-            store[0] = glm::max(store[0] - b.spawnCost, 0.0f); // the bar restarts (refunded on spawn fail)
-            b.population += b.spawnPop;   // the unit's death event frees it again
+            store[0] = glm::max(store[0] - b.spawnCost, 0.0f); // refunded by the game on spawn fail
+            b.population += b.spawnPop;
             const std::lock_guard<std::mutex> lock(g_structureEventMutex);
             g_spawnRequests.push_back(structureId);
         }
     }
     else if (machineKind == EMachineKind::Medic && !blueprint && powered)
     {
-        // MEDIC: one spatial query of the heal radius per station, own-team units inside get a
-        // heal banked into their inbox (their own tick applies it). Never a roster walk.
         entity.setProfiled();
         const glm::vec3 pos = entity.pos;
         const float amount = params.medicHealRate * deltaSec;
@@ -116,10 +98,7 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
     else if (machineKind == EMachineKind::Turret && !blueprint)
     {
         entity.setProfiled();
-        // THE ENERGY STORE IS THE RELOAD BAR (the barracks rule): the game stamps capacity = one
-        // shot's energy and caps the turret's cable intake to shotEnergy / fireInterval, so a fed
-        // turret fires at exactly the authored cadence and a starved one simply fires slower —
-        // no timer. A full store with no target holds its charge and fires the moment one appears.
+        // The store is the reload bar: capacity = one shot, intake capped to shotEnergy / fireInterval.
         if (store[0] >= capacity[0] - 0.01f)
         {
             const glm::vec3 pos = entity.pos;
@@ -131,7 +110,7 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
                 Entity* other = reinterpret_cast<Entity*>(user);
                 const GameUnitComponent* u = getComponent<GameUnitComponent>(other);
                 if (!u || u->puppet || u->team == team || !u->alive())
-                    return; // puppets are player capsules — turrets target only units (known gap)
+                    return; // turrets never target player capsules (known gap)
                 const glm::vec3 d = other->pos - pos;
                 if (glm::dot(d, d) < bestDistSq)
                 {
@@ -141,9 +120,7 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
             });
             if (target)
             {
-                store[0] = glm::max(store[0] - capacity[0], 0.0f); // the bar restarts
-                // HITSCAN lightning: the damage lands right here (damage() is atomic — the melee
-                // sweep uses the same call from workers); only the BEAM visual is queued.
+                store[0] = glm::max(store[0] - capacity[0], 0.0f);
                 if (GameUnitComponent* victim = getComponent<GameUnitComponent>(target))
                     victim->damage(params.turretDamage, team);
                 const std::lock_guard<std::mutex> lock(g_structureEventMutex);
@@ -163,13 +140,10 @@ void GameStructureComponent::damage(float amount)
 
 void GameStructureComponent::addLoad(float energyPerSec)
 {
-    // Only strainable structures are ever deposited on, and strainable is only set on emitters —
-    // the `emitter` union variant is the active one by contract.
+    // Only emitters are strainable, so `emitter` is the active variant by contract.
     if (energyPerSec > 0.0f)
         atomicAdd(emitter.unitLoad, energyPerSec);
 }
-
-// ---------------------------------------------------------------- spawn-info plumbing
 
 const GameStructureComponent::SpawnInfo* getGameStructureSpawnInfo(const Entity* entity)
 {
