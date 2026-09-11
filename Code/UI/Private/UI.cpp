@@ -24,6 +24,7 @@ import :MainMenu;
 
 void UI::initialize()
 {
+    ProfileScope scope("UI::initialize", EProfileCategory::UI);
     ImGuiContext* context = ImGui::GetCurrentContext();
     assert(context != nullptr && "Imgui must be initialized by renderer first");
     (void)context;
@@ -71,7 +72,7 @@ void UI::update(const oc::vector<EntityPtr>& rootEntities, const Camera& camera,
     // joins it at the top of the next frame, so it fills the present + fence-wait window. The two
     // references outlive that join (the world's root list, main's camera); deltaSec is copied.
     Globals::jobSystem.submitPostUpdate([this, &rootEntities, &camera, deltaSec] { updateJob(rootEntities, camera, deltaSec); },
-        { "UI widget pass", EProfileCategory::UI }, EJobPriority::Normal,
+        { "UI update", EProfileCategory::UI }, EJobPriority::Normal,
         EJobFlag_ForeignWait); // updateJob's first act waits on m_prepareCounter — see the flag's comment
 }
 
@@ -85,7 +86,6 @@ void UI::flushMainThreadWork()
 
 void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& camera, double deltaSec)
 {
-    ProfileScope profileScope("UI update", EProfileCategory::UI);
     {
         // The panel prepare jobs (see prepare()) must have landed before any panel renders — a
         // wait that shows up here means the prep did not fully overlap the pre-UI work.
@@ -439,7 +439,7 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
             m_renderStats.numMeshSets, m_renderStats.numEvictedMeshSets);
         ImGui::Text("static BLAS: %.1f MiB (compaction saved %.1f MiB)", m_renderStats.blasBytes * toMiB,
             m_renderStats.blasCompactionSavedBytes * toMiB);
-        ImGui::Text("meshLOD groups: %u, picks L0-L4: %u/%u/%u/%u/%u", m_renderStats.numMeshLodGroups,
+        ImGui::Text("meshLOD groups: %u, picks L0-L4 (debug builds): %u/%u/%u/%u/%u", m_renderStats.numMeshLodGroups,
             m_renderStats.lodInstanceCounts[0], m_renderStats.lodInstanceCounts[1], m_renderStats.lodInstanceCounts[2],
             m_renderStats.lodInstanceCounts[3], m_renderStats.lodInstanceCounts[4]);
     }

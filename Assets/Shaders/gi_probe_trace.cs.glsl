@@ -114,7 +114,7 @@ vec3 vNormal(uint vi) { uint b = vi * 12u; return vec3(in_vertices[b + 3u], in_v
 vec2 vUV(uint vi)     { uint b = vi * 12u; return vec2(in_vertices[b + 10u], in_vertices[b + 11u]); }
 
 // Miss radiance: the per-frame sky bake (skyRadiance layer) instead of the analytic march per ray. The
-// virtual sky probe (projectSkySH) keeps the analytic call.
+// virtual sky probe (projectSkySH) samples the same bake, so the two agree by construction.
 vec3 skyMiss(vec3 d) { return textureLod(u_skyMap, vec3(skyMapUV(d), SKY_MAP_LAYER_GI), 0.0).rgb; }
 
 // View-independent sun visibility from a point: one shadow ray toward the sun via the TLAS. Returns 1
@@ -203,13 +203,15 @@ shared vec3 s_skySH[4 * 64];
 
 void projectSkySH(uint lane)
 {
+    // From THE SKY MAP (baked + barriered before this dispatch), not the analytic skyRadiance: the
+    // virtual probe then matches the miss rays by construction — both see the same filtered bake.
     const vec3 dir = sampleSphere(lane, 64u, vec2(0.0));
-    vec3 rad = skyRadiance(dir);
+    vec3 rad = skyMiss(dir);
     const vec3 up = normalize(u_skyUp);
     // Sky/Ground Horizon (u_groundParams.w): on rolling terrain part of the above-horizon hemisphere is
-    // other sunlit ground, not sky — real probes see that as geometry hits; blend the analytic ground in.
+    // other sunlit ground, not sky — real probes see that as geometry hits; blend the ground in.
     if (dot(dir, up) > 0.0)
-        rad = mix(rad, skyRadiance(-up), u_groundParams.w);
+        rad = mix(rad, skyMiss(-up), u_groundParams.w);
     const float wsh = 4.0 * PI / 64.0;
     const vec4 Y = shBasisL1(dir) * wsh;
     s_skySH[lane]        = rad * Y.x;

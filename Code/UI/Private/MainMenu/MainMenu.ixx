@@ -27,7 +27,7 @@ export struct MainMenuAction
 };
 
 // ---- Lobby (multiplayer pre-game screen) ----
-// The UI-facing SNAPSHOT of the lobby: App's LobbySystem (the model — roster, ready flags,
+// The UI-facing SNAPSHOT of the lobby: Game's LobbySystem (the model — roster, ready flags,
 // countdown, all networked server-authoritatively) rebuilds it every frame on the main thread
 // (setLobbyView, between the widget-pass join and kick); the widget pass only draws it and
 // records a LobbyAction for main to poll — the same sequencing as MainMenuAction.

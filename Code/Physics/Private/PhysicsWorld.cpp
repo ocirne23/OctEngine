@@ -42,6 +42,7 @@ bool PhysicsWorld::initialize()
 {
     if (m_initialized)
         return true;
+    ProfileScope scope("PhysicsWorld::initialize", EProfileCategory::Physics);
 
     b3WorldDef def = b3DefaultWorldDef();
     def.gravity = toB3(m_gravity);

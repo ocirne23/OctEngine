@@ -26,7 +26,10 @@ Particle, Force, Spatial, Threading, Network and Nav.
 ### Names
 
 **There is NO name field.** `getName` / `setName` / `hasName` forward to `Globals::entityNames`
-(`EntityNameRegistry`), a pointer-keyed 64-shard mutexed map that owns each name buffer.
+(`EntityNameRegistry`), a pointer-keyed 64-shard mutexed map that owns each name buffer — **but
+only for a name SET after the spawn.** A spawned entity's name is its template's `displayName`,
+read through `spawnTemplate` (which outlives the entity: World's caches, retired lists and
+`keepTemplateAlive`), so `Entity::create` makes no name allocation. A `setName` overrides it.
 
 ### Flags (`EEntityFlags`)
 
@@ -492,8 +495,8 @@ physics step, or present.**
 ## `World::spawnBatch(span<SpawnRequest>, addRoots = true)`
 
 The sanctioned entry. **Templates resolve on MAIN** — the template, container, clip and audio caches
-are not job-safe — then a cost-grained parallelFor runs only the `Entity::create` calls, and roots
-attach serially after the join.
+are not job-safe — then a cost-grained parallelFor runs only the `Entity::create` calls (each under
+a per-prefab `ProfileScope`, nested in "Spawn batch"), and roots attach serially after the join.
 
 A request name **with an extension** resolves like `spawnAssetFile` with
 `overrideDefaultTransform = true` (position replaced, rotation composed onto the authored default,
@@ -562,6 +565,13 @@ dispatch: destroys are deferred requests, and `syncScriptDataLive`'s re-registra
 * `spawn(name, transform)`, `spawnAssetFile(path, transform, overrideDefaultTransform = true)`,
   `createEmptyEntity(name)` — **archetype 0, NO components, so it cannot hold children.** A grouping
   root needs a `Component Scene` prefab, e.g. `Entities/Game/terrainroot.pre`.
+* `spawnAssetFile` = `resolveAssetTemplate(path)` + `spawnTemplate(tmpl, transform, override)`.
+  **A caller that spawns the same file every frame holds the template** (NpcSystem's projectile
+  shells): a resolve is a lexical path normalization plus two keyed lookups — several heap strings
+  per call. `templateGeneration()` changes on `reloadPrefabs` / `invalidatePrefab`; a holder
+  re-resolves when it sees a new value. Every spawn runs inside a `ProfileScope` named by the
+  template's `displayName` (the single route and the batch job alike), so the memory panel
+  attributes spawn allocations per prefab.
 * `addRootEntity` also queues the root for ONE unconditional visit and, if Global, adds it to the
   always-visited list.
 * **`removeRootEntity` notifies `m_onRootEntityRemoved` FIRST, while the entity is still alive.** The

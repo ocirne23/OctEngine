@@ -275,7 +275,19 @@ public:
     // fiber wait counts once per resume on whichever track ran it.
     oc::string buildReport(const ProfileReportOptions& options = {}) const;
 
+    // The report ON DISK. Core cannot touch the disk (it sits below File), so the writer is injected
+    // from main exactly like the tweak registry's file IO (Tweaks::setFileIo): it gets the path and
+    // the finished text, creates the directory, writes, logs. writeReport is false when no writer is
+    // installed or the write failed. One-shot (--profile-after, F7), never per-frame.
+    using ReportWriterFn = oc::function<bool(const oc::string& path, const oc::string& report)>;
+    void setReportWriter(ReportWriterFn writer) { m_reportWriter = oc::move(writer); }
+    bool writeReport(const oc::string& path, const ProfileReportOptions& options = {}) const
+    {
+        return m_reportWriter ? m_reportWriter(path, buildReport(options)) : false;
+    }
+
 private:
+    ReportWriterFn m_reportWriter;
 
     void initialize();
     ProfileTrack* registerTrack(const char* name, uint32_t threadId, uint32_t sortKey, uint32_t capacity = ProfileTrack::CAPACITY);

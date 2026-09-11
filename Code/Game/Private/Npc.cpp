@@ -361,13 +361,26 @@ void NpcSystem::spawnLooseUnits(oc::span<const LooseSpawn> spawns)
     }
 }
 
-void NpcSystem::fireShot(const char* prefabPath, const char* name, const glm::vec3& from,
+const EntitySpawnTemplate* NpcSystem::shellTemplate(bool lob)
+{
+    if (m_shellGeneration != Globals::world.templateGeneration())
+    {
+        static constexpr const char* c_paths[2] = { "Entities/Game/enemyShot.pre", "Entities/Game/enemyLob.pre" };
+        for (int i = 0; i < 2; ++i)
+            m_shellTemplates[i] = Globals::world.resolveAssetTemplate(c_paths[i]);
+        m_shellGeneration = Globals::world.templateGeneration();
+    }
+    return m_shellTemplates[lob ? 1 : 0].get();
+}
+
+void NpcSystem::fireShot(const EntitySpawnTemplate& shell, const glm::vec3& from,
     const glm::vec3& velocity, uint8 team)
 {
-    EntityPtr shot = Globals::world.spawnAssetFile(prefabPath, Transform(from), true);
+    // Named by its prefab (gameEnemyShot / gameEnemyLob) — no per-shot rename, which was two
+    // more allocations in the name registry for a name nothing reads.
+    EntityPtr shot = Globals::world.spawnTemplate(shell, Transform(from), true);
     if (!shot)
         return;
-    shot->setName(name);
     Globals::world.addRootEntity(shot);
     if (GameProjectileComponent* proj = getComponent<GameProjectileComponent>(shot.get()))
     {
@@ -511,9 +524,9 @@ void NpcSystem::service(StructureSystem& structures)
             continue;
         }
         const bool lob = request.shotKind == 1;
-        fireShot(lob ? "Entities/Game/enemyLob.pre" : "Entities/Game/enemyShot.pre",
-            lob ? "EnemyLob" : "EnemyShot", from + dir / len * 1.2f,
-            dir / len * (lob ? m_lobberShotSpeed : m_spitterShotSpeed), request.team);
+        if (const EntitySpawnTemplate* shell = shellTemplate(lob))
+            fireShot(*shell, from + dir / len * 1.2f,
+                dir / len * (lob ? m_lobberShotSpeed : m_spitterShotSpeed), request.team);
     }
     fireScope.stop();
     // Each reported death frees its population on its spawner — the tally is maintained by the

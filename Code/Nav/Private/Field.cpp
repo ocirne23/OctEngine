@@ -847,6 +847,68 @@ namespace
     using AStarNode = TeamField::AStarNode;
     using AStarOpen = TeamField::AStarOpen;
     inline uint64 packCell(const glm::ivec2& c) { return (uint64(uint32(c.x)) << 32) | uint64(uint32(c.y)); }
+    inline uint64 mixKey(uint64 k) // splitmix64 finalizer: neighbouring cells land in distant slots
+    {
+        k ^= k >> 30; k *= 0xbf58476d1ce4e5b9ull;
+        k ^= k >> 27; k *= 0x94d049bb133111ebull;
+        return k ^ (k >> 31);
+    }
+}
+
+void TeamField::AStarIndex::clear()
+{
+    count = 0;
+    if (++generation != 0)
+        return;
+    for (Slot& s : slots) // the stamp wrapped: every old stamp now reads as live, so scrub them
+        s.stamp = 0;
+    generation = 1;
+}
+
+uint32* TeamField::AStarIndex::find(uint64 key)
+{
+    if (slots.empty())
+        return nullptr;
+    const size_t mask = slots.size() - 1;
+    for (size_t i = mixKey(key) & mask;; i = (i + 1) & mask)
+    {
+        Slot& s = slots[i];
+        if (s.stamp != generation)
+            return nullptr;
+        if (s.key == key)
+            return &s.node;
+    }
+}
+
+void TeamField::AStarIndex::insert(uint64 key, uint32 node)
+{
+    if ((count + 1) * 2 > slots.size()) // keep the load under 1/2: grow (the only allocation) and rehash the live slots
+    {
+        oc::vector<Slot> old = oc::move(slots);
+        const uint32 live = generation;
+        slots.assign(glm::max<size_t>(old.size() * 2, 4096), Slot{ 0, 0, 0 });
+        generation = 1;
+        const size_t mask = slots.size() - 1;
+        for (const Slot& s : old)
+        {
+            if (s.stamp != live)
+                continue;
+            size_t i = mixKey(s.key) & mask;
+            while (slots[i].stamp == generation)
+                i = (i + 1) & mask;
+            slots[i] = Slot{ s.key, s.node, generation };
+        }
+    }
+    const size_t mask = slots.size() - 1;
+    size_t i = mixKey(key) & mask;
+    while (slots[i].stamp == generation)
+        i = (i + 1) & mask;
+    slots[i] = Slot{ key, node, generation };
+    ++count;
+}
+
+namespace
+{
     inline uint32 octile(const glm::ivec2& a, const glm::ivec2& b)
     {
         const uint32 dx = uint32(glm::abs(a.x - b.x)), dz = uint32(glm::abs(a.y - b.y));
@@ -874,7 +936,7 @@ bool TeamField::findPath(const glm::vec2& from, const glm::vec2& to, uint32 maxE
         return true;
     }
     oc::vector<AStarNode>& nodes = scratch.nodes;
-    oc::unordered_map<uint64, uint32>& index = scratch.index;
+    AStarIndex& index = scratch.index;
     auto& open = scratch.open;
     nodes.clear();
     index.clear();
@@ -885,7 +947,7 @@ bool TeamField::findPath(const glm::vec2& from, const glm::vec2& to, uint32 maxE
         { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 } };
     static constexpr uint32 c_stepCost[8] = { 16, 16, 16, 16, 23, 23, 23, 23 };
     nodes.push_back(AStarNode{ start, UINT32_MAX, 0, octile(start, goal), false });
-    index[packCell(start)] = 0;
+    index.insert(packCell(start), 0);
     open.push(AStarOpen{ nodes[0].h, 0 });
     uint32 reached = UINT32_MAX;
     uint32 expanded = 0;
@@ -913,19 +975,19 @@ bool TeamField::findPath(const glm::vec2& from, const glm::vec2& to, uint32 maxE
                 continue; // no corner cutting
             const uint32 g = nodes[top.index].g + c_stepCost[k] * (1u + (cost == Blocked ? 0u : cost));
             const uint64 key = packCell(n);
-            const auto it = index.find(key);
-            if (it == index.end())
+            const uint32* known = index.find(key);
+            if (!known)
             {
                 const uint32 idx = uint32(nodes.size());
                 nodes.push_back(AStarNode{ n, top.index, g, octile(n, goal), false });
-                index[key] = idx;
+                index.insert(key, idx);
                 open.push(AStarOpen{ g + nodes[idx].h, idx });
             }
-            else if (!nodes[it->second].closed && g < nodes[it->second].g)
+            else if (!nodes[*known].closed && g < nodes[*known].g)
             {
-                nodes[it->second].g = g;
-                nodes[it->second].parent = top.index;
-                open.push(AStarOpen{ g + nodes[it->second].h, it->second });
+                nodes[*known].g = g;
+                nodes[*known].parent = top.index;
+                open.push(AStarOpen{ g + nodes[*known].h, *known });
             }
         }
     }

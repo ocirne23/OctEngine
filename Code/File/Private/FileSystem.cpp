@@ -69,6 +69,7 @@ void FileSystem::assertIoThread(bool allowMainThread)
 
 bool FileSystem::initialize()
 {
+    ProfileScope scope("FileSystem::initialize", EProfileCategory::File);
     g_mainThreadId = std::this_thread::get_id();
     g_mainThreadKnown = true;
     const AllowMainThreadIO allowIo; // startup: finding the repo root is main-thread by definition

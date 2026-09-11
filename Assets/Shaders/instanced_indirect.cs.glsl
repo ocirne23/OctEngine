@@ -120,7 +120,7 @@ layout (binding = 14, std430) readonly buffer InNodeLodStateBiasBuffer
 };
 layout (binding = 15, std430) buffer OutLodStatsBuffer
 {
-    uint out_lodStats[]; // per-level pick counts this frame (stats readback)
+    uint out_lodStats[]; // per-level pick counts this frame (stats readback; written under SHADER_STATS only)
 };
 
 vec3 quat_transform(vec3 v, vec4 q)
@@ -196,7 +196,9 @@ void main()
                 }
                 chosenMeshIdx = lodMeshAt(group, level);
             }
+#ifdef SHADER_STATS
             atomicAdd(out_lodStats[level], 1);
+#endif
             if (chosenMeshIdx != meshIdx)
             {
                 meshIdx = chosenMeshIdx;

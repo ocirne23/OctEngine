@@ -1,4 +1,4 @@
-export module App.Lobby;
+export module Game:Lobby;
 
 import Core;
 import Core.Log;
@@ -6,8 +6,8 @@ import Core.glm;
 import Entity;  // NetworkManager
 import Network; // NetWriter/NetReader
 import UI;      // LobbyView/LobbyAction (the MainMenu's lobby page)
-import App.Chat; // the chat event the lobby-phase filter lets through
-import Game;     // EPvpMap / pvpMapName (the host's arena pick)
+import :Match;   // EPvpMap / pvpMapName (the host's arena pick)
+import :Chat;    // ChatSystem (the chat event the lobby-phase filter lets through)
 
 // The multiplayer PRE-GAME LOBBY: after the menu hosts or joins, players gather here, toggle
 // Ready, and any player can press Start once everyone is ready — a 3 second countdown runs, any

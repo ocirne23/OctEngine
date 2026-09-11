@@ -433,7 +433,8 @@ named "GPU" track. Alignment uses `VK_KHR_calibrated_timestamps`, with fallback 
 ## Text report
 
 `Profiler::buildReport(ProfileReportOptions)` → `oc::string`. **Core does no IO**, so
-`App.ProfileDump`'s `writeProfileReport(path, options)` writes it through FileSystem.
+`Profiler::writeReport(path, options)` writes it through the writer main injects (`setReportWriter` —
+FileSystem with main-thread IO allowed explicitly, a one-shot; Core itself does no IO).
 
 Contents — the last N completed frames, never across a pause gap:
 

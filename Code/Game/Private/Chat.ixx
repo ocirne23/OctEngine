@@ -1,4 +1,4 @@
-export module App.Chat;
+export module Game:Chat;
 
 import Core;
 import Core.Log;

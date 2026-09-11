@@ -111,6 +111,7 @@ GizmoController::~GizmoController()
 
 void GizmoController::initialize(World& world)
 {
+    ProfileScope scope("GizmoController::initialize", EProfileCategory::Input);
     m_gizmo = world.spawn("Gizmo", Transform());
 
     m_mouseListener = Globals::input.addMouseListener();

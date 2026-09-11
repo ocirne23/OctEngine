@@ -27,6 +27,7 @@ import :Engine;
 bool AudioSystem::initialize()
 {
     assert(!m_initialized);
+    ProfileScope scope("AudioSystem::initialize", EProfileCategory::Audio);
     SystemState& state = audioState();
 
     ma_engine_config engineConfig = ma_engine_config_init();

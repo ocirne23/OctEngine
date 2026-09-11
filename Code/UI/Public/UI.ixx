@@ -11,7 +11,7 @@ import UI.Gizmo;
 
 import UI.fwd;
 export import :MainMenu; // MainMenuAction crosses to main(), which performs the mode start
-export import :ChatPanel; // ChatView crosses to main() (App.Chat is the model)
+export import :ChatPanel; // ChatView crosses to main() (Game's ChatSystem is the model)
 import :AssetBrowser;
 import :SceneView;
 import :PropertiesPanel;
@@ -123,7 +123,7 @@ public:
     void setMainMenuHostNote(oc::string note) { m_mainMenu.setHostNote(oc::move(note)); }
     void setMainMenuStatus(oc::string status) { m_mainMenu.setStatus(oc::move(status)); } // front-page line (disconnect reasons)
     MainMenuAction takeMainMenuAction() { return m_mainMenu.takeAction(); }
-    // Lobby page (App's LobbySystem is the model — main pushes a view snapshot each frame and
+    // Lobby page (Game's LobbySystem is the model — main pushes a view snapshot each frame and
     // polls the button actions, same sequencing as the menu action above)
     void openMainMenuLobby() { m_mainMenu.openLobby(); }
     bool isMainMenuLobbyOpen() const { return m_mainMenu.isLobbyOpen(); }
@@ -138,7 +138,7 @@ public:
     // (the PAUSED box + its Resume button) and tells the escape menu whether to offer "Pause game".
     void setGamePaused(bool paused) { m_mainMenu.setGamePaused(paused); }
     void setEscapeOffersPause(bool offers) { m_mainMenu.setEscapeOffersPause(offers); }
-    // Text chat (App's ChatSystem is the model): drawn inside the lobby page and as an overlay in
+    // Text chat (Game's ChatSystem is the model): drawn inside the lobby page and as an overlay in
     // the game layout. main pushes the view when the log changed and polls the sent line.
     void setChatView(ChatView view) { m_chat.setView(oc::move(view)); }
     oc::string takeChatOutgoing() { return m_chat.takeOutgoing(); }
@@ -192,7 +192,7 @@ private:
 	TextEditor      m_textEditor;
 	ScriptEditor    m_scriptEditor;
 	GameHudOverlay  m_gameHudOverlay; // in-game HUD painted over the viewport (Core.GameHud is the model)
-	ChatPanel       m_chat;           // multiplayer text chat (lobby page + game overlay; App.Chat is the model)
+	ChatPanel       m_chat;           // multiplayer text chat (lobby page + game overlay; Game's ChatSystem is the model)
 	MainMenu        m_mainMenu;
 };
 

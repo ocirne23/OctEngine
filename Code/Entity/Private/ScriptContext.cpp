@@ -29,6 +29,7 @@ import :World;
 
 void registerScriptDslBindings()
 {
+    ProfileScope scope("registerScriptDslBindings", EProfileCategory::Script);
     ScriptBindings& bindings = Globals::scriptBindings;
     using T = DSLType;
 

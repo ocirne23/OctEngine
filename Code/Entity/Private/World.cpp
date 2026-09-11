@@ -25,6 +25,7 @@ import Audio;
 
 bool World::initialize()
 {
+    ProfileScope scope("World::initialize", EProfileCategory::Entity);
     Globals::assetRegistry.scanDirectory();
     m_updateStaging.initialize(); // main calls this after JobSystem::initialize
 
@@ -835,7 +836,10 @@ ObjectContainer* World::findLoadedContainer(const oc::string& name)
 EntityPtr World::spawn(const oc::string& name, const Transform& base)
 {
     if (oc::shared_ptr<const EntitySpawnTemplate> tmpl = getOrBuildPrefabTemplate(name))
+    {
+        ProfileScope scope(tmpl->displayName.c_str(), EProfileCategory::Entity); // per prefab, like spawnTemplate
         return Entity::create(*tmpl, base);
+    }
     return EntityPtr{};
 }
 
@@ -860,16 +864,9 @@ oc::vector<EntityPtr> World::spawnBatch(oc::span<const SpawnRequest> requests, b
         }
         else
         {
-            // Asset FILE: the spawnAssetFile route — lexical normalize, registry root lookup with
-            // file-template fallback, and the same override composition (caller position, caller
-            // rotation composed onto the authored default, authored scale).
-            oc::string fileName = FileSystem::isAbsolute(request.name)
-                ? FileSystem::relativePath(request.name, oc::string(), /*allowMainThread*/ true)
-                : FileSystem::normalize(request.name);
-            if (fileName.empty())
-                fileName = request.name;
-            const oc::string* rootName = Globals::assetRegistry.findRootForFile(fileName);
-            templates[i] = rootName ? getOrBuildPrefabTemplate(*rootName) : buildFileTemplate(fileName);
+            // Asset FILE: the spawnAssetFile route — resolve, then the same override composition
+            // (caller position, caller rotation composed onto the authored default, authored scale).
+            templates[i] = resolveAssetTemplate(request.name);
             if (templates[i])
             {
                 const Transform& dt = templates[i]->defaultTransform;
@@ -885,7 +882,11 @@ oc::vector<EntityPtr> World::spawnBatch(oc::span<const SpawnRequest> requests, b
         {
             for (uint32 i = begin; i < end; ++i)
                 if (templates[i])
+                {
+                    // Per prefab, so the memory panel attributes the spawn allocations to a type.
+                    ProfileScope prefabScope(templates[i]->displayName.c_str(), EProfileCategory::Entity);
                     results[i] = Entity::create(*templates[i], transforms[i]);
+                }
         });
 
     if (addRoots)
@@ -918,6 +919,7 @@ void World::reloadPrefabs()
     for (auto& [name, tmpl] : m_templates)
         m_retiredTemplates.push_back(oc::move(tmpl));
     m_templates.clear();
+    ++m_templateGeneration;
 }
 
 void World::invalidatePrefab(const oc::string& name)
@@ -926,6 +928,7 @@ void World::invalidatePrefab(const oc::string& name)
     {
         m_retiredTemplates.push_back(oc::move(it->second)); // kept alive for live entities
         m_templates.erase(it);
+        ++m_templateGeneration;
     }
 }
 
@@ -1556,6 +1559,10 @@ oc::shared_ptr<const EntitySpawnTemplate> World::buildInlineTemplate(const Asset
 
 oc::shared_ptr<const EntitySpawnTemplate> World::buildFileTemplate(const oc::string& path)
 {
+    // A template build is the one-time cost behind a first spawn: the asset parse plus every
+    // container / clip / audio import it pulls in. Named by the file so the memory panel shows
+    // which asset's import allocated.
+    ProfileScope scope(path.c_str(), EProfileCategory::Entity);
     AssetNode doc;
     oc::string error;
     if (!loadAssetFile(path, doc, error))
@@ -1595,7 +1602,7 @@ oc::shared_ptr<const EntitySpawnTemplate> World::getOrBuildPrefabTemplate(const 
     return nullptr;
 }
 
-EntityPtr World::spawnAssetFile(const oc::string& path, const Transform& base, bool overrideDefaultTransform)
+oc::shared_ptr<const EntitySpawnTemplate> World::resolveAssetTemplate(const oc::string& path)
 {
     // Runtime callers pass Assets/-relative names ("Entities/Game/x.pre") — pure LEXICAL
     // normalization, no filesystem hit: this runs PER SPAWN (the co-op wave trickle spawns dozens
@@ -1610,21 +1617,32 @@ EntityPtr World::spawnAssetFile(const oc::string& path, const Transform& base, b
         fileName = path;
 
     const oc::string* rootName = Globals::assetRegistry.findRootForFile(fileName);
-    oc::shared_ptr<const EntitySpawnTemplate> tmpl = rootName ? getOrBuildPrefabTemplate(*rootName) : buildFileTemplate(fileName);
-    if (!tmpl)
-        return EntityPtr{};
+    return rootName ? getOrBuildPrefabTemplate(*rootName) : buildFileTemplate(fileName);
+}
 
-    const Transform& dt = tmpl->defaultTransform;
+EntityPtr World::spawnTemplate(const EntitySpawnTemplate& tmpl, const Transform& base, bool overrideDefaultTransform)
+{
+    const Transform& dt = tmpl.defaultTransform;
     // Override replaces the POSITION and COMPOSES the caller's rotation onto the authored default
     // (identity callers keep the authored rotation exactly). The rotation used to be dropped
     // outright — aimed Lances and replicated spawns silently spawned with the prefab default.
     const glm::vec3 pos = overrideDefaultTransform ? base.pos : dt.pos;
     const glm::quat quat = overrideDefaultTransform ? base.quat * dt.quat : dt.quat;
-    return Entity::create(*tmpl, Transform(pos, dt.scale, quat));
+    ProfileScope scope(tmpl.displayName.c_str(), EProfileCategory::Entity); // per prefab: which type allocates
+    return Entity::create(tmpl, Transform(pos, dt.scale, quat));
+}
+
+EntityPtr World::spawnAssetFile(const oc::string& path, const Transform& base, bool overrideDefaultTransform)
+{
+    oc::shared_ptr<const EntitySpawnTemplate> tmpl = resolveAssetTemplate(path);
+    if (!tmpl)
+        return EntityPtr{};
+    return spawnTemplate(*tmpl, base, overrideDefaultTransform);
 }
 
 EntityPtr World::createEmptyEntity(const oc::string& name)
 {
+    ProfileScope scope("World::createEmptyEntity", EProfileCategory::Entity);
     // A blank template with NO components (archetype 0) and no prefabName: Entity::create leaves
     // prefabInstance false, so the entity is editable and serializes inline. It has no
     // SceneComponent, so it cannot hold CHILDREN — a group root must come from a prefab with

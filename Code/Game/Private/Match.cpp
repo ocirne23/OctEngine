@@ -268,7 +268,7 @@ void GameMatch::spawnWorld()
             if (const int index = m_structures.structureIndexById(id); index >= 0)
                 sendUnitType(index);
         };
-        // (+ the App layer's text chat "ChM" — a string up to 256B; App.Chat's c_maxEventBytes)
+        // (+ the text chat "ChM" — a string up to 256B; ChatSystem::c_maxEventBytes, Game:Chat)
         Globals::networkManager.setEventFilter([](uint32, oc::string_view name, oc::span<const uint8> data, Entity*)
         {
             return (name.size() >= 2 && name[0] == 'G' && name[1] == 'q' && data.size() <= 64)

@@ -5,7 +5,7 @@ import Core.imgui;
 import Core.glm;
 import Core.Rect;
 
-// The multiplayer TEXT CHAT widget: a scrolling message log + an input line. App's ChatSystem is
+// The multiplayer TEXT CHAT widget: a scrolling message log + an input line. Game's ChatSystem is
 // the model (messages arrive over the "ChM" network event); main pushes a ChatView snapshot when
 // the log changed (setView, between the widget-pass join and kick) and polls takeOutgoing() for
 // the line the player sent — the same sequencing every menu/lobby action uses.

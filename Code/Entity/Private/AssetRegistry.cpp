@@ -53,6 +53,7 @@ void AssetRegistry::clear()
 
 void AssetRegistry::scanDirectory(const oc::string& rootDir)
 {
+    ProfileScope scope("AssetRegistry::scanDirectory", EProfileCategory::Entity);
     clear();
 
     // Startup asset scan: main thread by design (nothing can spawn before it finishes).

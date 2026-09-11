@@ -266,7 +266,7 @@ numbered XCU section — **so plain globals destruct after all of them.**
 | Section | Globals |
 |---|---|
 | `XCA` / `XCA1` / `XCA2` | allocator → profiler → memoryTracker (**first up, last down**) |
-| plain `XCU` | input, audio, spatialIndex, entityAllocator, scriptContext, scriptHost, assetRegistry, time, gameHud, ... |
+| plain `XCU` | input, audio, spatialIndex, entityAllocator, scriptContext, scriptHost, assetRegistry, time, gameHud, Procedural's `g_diffusionRuntime` (destructs after terrain has joined its chunk pumps), ... |
 | `XCU1..XCU4` | VK instance → device + gpuAllocator → rendererVK + openXR → the data managers |
 | `XCU5` | **jobSystem** |
 | `XCU51` | physics |

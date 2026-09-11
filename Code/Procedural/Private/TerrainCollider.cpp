@@ -19,6 +19,7 @@ namespace Procedural
 
 	void TerrainCollider::initialize(void* terrainUserData)
 	{
+		ProfileScope scope("TerrainCollider::initialize", EProfileCategory::Procedural);
 		m_terrainUserData = terrainUserData;
 		const auto dirty = [this]() { m_configDirty = true; };
 		Tweak::boolean("Terrain/Collision", "Enabled", &m_enabled);

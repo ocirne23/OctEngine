@@ -21,6 +21,7 @@ Window::~Window()
 
 bool Window::initialize(oc::string_view windowTitle, glm::ivec2 pos, glm::ivec2 size)
 {
+    ProfileScope scope("Window::initialize", EProfileCategory::Core);
     (void)pos;
     m_running.store(true, oc::memory_order_relaxed);
     m_thread = std::thread(&Window::threadMain, this, oc::string(windowTitle), size);

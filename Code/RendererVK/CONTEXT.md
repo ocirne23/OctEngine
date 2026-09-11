@@ -228,8 +228,8 @@ top-down camera hanging in empty sky shapes none of these:
 * **GI trace cost levers** (gi_probe_trace.cs.glsl): **"GI/Update interval (frames)"** — a probe traces
   every N frames, interleaved per WORKGROUP (whole waves exit) with the blend alpha scaled by N, so
   wall-time convergence is unchanged and the ray count divides by N; fresh (just scrolled-in) probes
-  always trace. **Miss rays sample THE SKY MAP** instead of marching the atmosphere; the virtual sky
-  probe keeps the analytic `skyRadiance`. **Gather hits use
+  always trace. **Miss rays AND the virtual sky probe sample THE SKY MAP** instead of marching the
+  atmosphere, so the out-of-field fallback matches the misses by construction. **Gather hits use
   `giEvalBounce`** (gi_probe.inc.glsl, write side): the cheap multi-bounce lookup — no Chebyshev, no
   cross-cascade fade, walk starts at the tracing probe's cascade — because the result is temporally
   blended. The probe buffer is **NOT `coherent`** in the trace (each invocation writes only its own
@@ -311,6 +311,11 @@ lock-free too. **`addDebugLine` and the transform dirty lists are `PerWorker`-st
 **Pass masks** `PASS_MAIN` / `PASS_SHADOW` / `PASS_GI` (Layout.ixx — the same bits Spatial uses). Main
 cull, shadow cull and the GI TLAS writer each early-out on their bit; TLAS also range-bounds by
 `RT/TLAS Range`.
+
+**GPU stats atomics are debug-build only:** `buildLayoutPreamble` defines `SHADER_STATS` under
+`#ifndef NDEBUG`, and the main cull's per-level LOD pick counter (`out_lodStats`) is written only under
+it. The buffer stays bound in every build; the readout (the UI's "picks L0-L4") reads zeros in
+RelWithDebInfo / Release. Put any new per-instance stats atomic behind the same define.
 
 **Transforms upload SPARSELY:** write only through `RenderNode::setTransform`, which is change-detected
 into per-frame-in-flight dirty lists. **A mutable `getTransform` would bypass the tracking.**

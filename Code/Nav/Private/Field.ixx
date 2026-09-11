@@ -154,10 +154,24 @@ export namespace Nav
             uint32 index;
             bool operator>(const AStarOpen& o) const { return f > o.f; }
         };
+        // cell -> node index, open addressing over ONE flat array. A node-based hash map freed
+        // every node on clear() and re-allocated them on the next search, thousands of times per
+        // plan; here a search is cleared by bumping the generation stamp, and the array only grows
+        // (an allocation) when a search discovers more cells than any before it.
+        struct AStarIndex
+        {
+            struct Slot { uint64 key; uint32 node; uint32 stamp; };
+            oc::vector<Slot> slots; // size is a power of two; a slot is live iff stamp == generation
+            uint32 generation = 0;
+            uint32 count = 0;
+            void clear();
+            uint32* find(uint64 key); // nullptr = absent
+            void insert(uint64 key, uint32 node); // key must be absent
+        };
         struct PathScratch
         {
             oc::vector<AStarNode> nodes;
-            oc::unordered_map<uint64, uint32> index;
+            AStarIndex index;
             oc::priority_queue<AStarOpen, oc::vector<AStarOpen>, oc::greater<AStarOpen>> open;
             oc::vector<glm::vec2> cells;
         };

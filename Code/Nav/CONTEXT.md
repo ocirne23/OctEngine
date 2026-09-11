@@ -265,7 +265,11 @@ priority). `TeamField::rasterizeObstacles` likewise keeps its clearance-ring wor
 only the plan and the raster, and **holds its own `shared_ptr` to that raster**, so a publish on
 main during the search cannot free it. It also applies the "Seed range" cut. `findPath` never
 waits, so the job's `thread_local` `PathScratch`, pinned by a `ThreadLocalScope` over the call, is
-valid for the whole search.
+valid for the whole search. **The scratch is allocation-free in steady state:** the cell → node
+index is `AStarIndex`, a flat open-addressing table cleared by a generation stamp (the node-based
+`oc::unordered_map` it replaced freed and re-allocated one node per discovered cell on EVERY
+search), and the node / open / cells vectors keep their capacity. Only a search larger than any
+before it on that thread grows the arrays.
 
 The NEXT `update` whose plan counter is done writes the lane and the trough — on main, outside the
 pass, against the CURRENT raster — which keeps the write contract exactly what it was: the only

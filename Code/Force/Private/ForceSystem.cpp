@@ -127,6 +127,7 @@ void ForceSystem::setNumTeams(uint32 numTeams)
 
 void ForceSystem::initialize()
 {
+    ProfileScope scope("ForceSystem::initialize", EProfileCategory::Force);
     // Reserved to the caps so createEmitter/createQuery growth NEVER reallocates: a concurrent
     // spawn job may be resolving its own fresh handle while another creates (see m_createMutex in
     // ForceSystem.ixx). Emitter INSTANCES are capped far above the renderer's slots — only ACTIVE

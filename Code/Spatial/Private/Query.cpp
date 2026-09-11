@@ -802,6 +802,8 @@ void SpatialIndex::update(const Camera& camera, const Frustum& frustum, const gl
 
 void SpatialIndex::kickUpdateJob(const CullView& view)
 {
+    ProfileScope scope("Spatial kick", EProfileCategory::Spatial);
+
     m_updateJobKicked = view.valid;
     if (!view.valid) // first VR frame: no head view yet — skip this frame's cull (see the declaration)
         return;

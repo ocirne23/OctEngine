@@ -151,6 +151,7 @@ namespace Procedural
 
 	void ScatterSystem::initialize()
 	{
+		ProfileScope scope("ScatterSystem::initialize", EProfileCategory::Procedural);
 		auto dirty = [this]() { m_configDirty = true; };
 		Tweak::boolean("Scatter", "Enabled", &m_enabled);
 		Tweak::intVar("Scatter", "Seed", &m_seed, 0, 1000000, 1.0f, dirty);

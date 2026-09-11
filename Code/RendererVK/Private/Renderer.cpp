@@ -676,6 +676,7 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
 
 void Renderer::kickBeginFrameJob(const Camera& camera, const Rect& viewportRect)
 {
+    ProfileScope scope("Begin frame kick", EProfileCategory::Renderer);
     m_beginFrameJobCamera = camera;
     m_beginFrameJobRect = viewportRect;
     if (Globals::openXR.isEnabled())
@@ -701,6 +702,7 @@ void Renderer::joinBeginFrameJob()
 
 CullView Renderer::getCullView(const Camera& camera, const Rect& viewportRect)
 {
+    ProfileScope scope("Cull view", EProfileCategory::Renderer);
     CullView view;
     if (!Globals::openXR.isEnabled())
     {

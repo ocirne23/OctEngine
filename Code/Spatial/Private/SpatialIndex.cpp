@@ -32,6 +32,7 @@ static void atomicFloatMax(oc::atomic<float>& target, float value)
 void SpatialIndex::initialize(const SpatialIndexDesc& desc)
 {
     assert(!m_initialized);
+    ProfileScope scope("SpatialIndex::initialize", EProfileCategory::Spatial);
     m_numLevels = glm::clamp(desc.numLevels, 2u, Morton::MaxLevels);
     for (uint32 i = 0; i < m_numLevels; ++i)
         m_levels[i].initialize(desc.initialCellCapacity);

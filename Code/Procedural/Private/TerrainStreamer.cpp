@@ -240,6 +240,7 @@ namespace Procedural
 
 	void TerrainStreamer::initialize()
 	{
+		ProfileScope scope("TerrainStreamer::initialize", EProfileCategory::Procedural);
 		auto dirty = [this]() { m_configDirty = true; };
 
 		// Dirty so rebuildMaps runs on toggle: enabling is what kicks the V3 model load (disabled terrain
@@ -543,6 +544,11 @@ namespace Procedural
 	// rather than trusting its declaration order, so entries stay grouped however reads best there.
 	void TerrainStreamer::registerTerrainTextures(Renderer& renderer)
 	{
+		// One-shot (the F10 pattern): setTerrainSplatMaterials uploads the DDS set, and the texture
+		// upload reads each file on THIS thread. Covered by main's startup scope when terrain starts
+		// enabled; a runtime enable (the tweak panel, the sandbox's override) needs its own.
+		FileSystem::AllowMainThreadIO registerIo;
+
 		auto tryBuildMat = [](const TerrainTexSource& src) -> oc::optional<Renderer::TerrainSplatMaterial>
 		{
 			Renderer::TerrainSplatMaterial mat;
@@ -604,6 +610,11 @@ namespace Procedural
 
 	void TerrainStreamer::rebuildMaps()
 	{
+		// A one-shot on a config change (the F10 pattern): constructing the generator below probes its
+		// model assets on this thread before the background load starts. At startup main's own scope
+		// covers it; a runtime enable (the tweak panel, the sandbox's override) needs this one.
+		FileSystem::AllowMainThreadIO rebuildIo;
+
 		// Disabled = no generator and, crucially, NO MODEL KICK: constructing TerrainGenV3 (even the throwaway
 		// "kick" below) is what starts the 2.28 GB GPU load, so a disabled terrain must never reach it. The
 		// Enabled tweak is registered dirty, so flipping it on lands back here and starts the load then.

@@ -7,7 +7,8 @@
 // atmosphere march per consumer sample:
 //   layer 0 = skyRadiance       (GI miss rays, the forward pass's skyRadiance(up) ambient)
 //   layer 1 = mirrorSkyRadiance (ocean / terrain wet-film reflection rays: 12-step, saturation curve)
-// The GI virtual sky probe keeps the analytic skyRadiance (64 lanes, once per frame).
+// The GI virtual sky probe (gi_probe_trace.cs.glsl projectSkySH) samples layer 0 too, so the
+// out-of-field fallback and the miss rays agree by construction.
 
 layout (binding = 1, rgba16f) uniform writeonly image2DArray u_skyMap;
 

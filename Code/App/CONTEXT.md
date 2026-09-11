@@ -1,7 +1,10 @@
 # App
 
-> Documentation for `Code/App` — the testbed executable: `main.cpp`, `App.Lobby`, `App.Chat`,
-> `InputControls`, `App.ProfileDump`.
+> Documentation for `Code/App` — the testbed executable: `main.cpp` (ONLY `main()`: the init
+> sequence, the timers, the frame loop), `App.Session`, `InputControls`, `App.UnattendedRun`. (The
+> lobby and chat MODELS, `LobbySystem` / `ChatSystem`, are `Game:Lobby` /
+> `Game:Chat` — plain stack locals in main, which services them; the profile report writer is
+> `Profiler::writeReport` with main's injected file writer.)
 > Read [`.claude/CLAUDE.md`](../../.claude/CLAUDE.md) first — rules, building, style, dependency
 > direction.
 >
@@ -75,7 +78,7 @@ and `physics.setWaterSurface`.
 | `--server` / `--connect <ip>` / `--port N` / `--tickrate N` / `--headless` / `--no-encrypt` | |
 | `--scenario <save\|default>` / `--scenario-at <sec>` | |
 | `--profile-after <sec>` / `--profile-frames W` / `--profile-out path` / `--profile-workers` | |
-| `--quit-after <sec>` / `--no-vsync` | `--no-vsync` is just `setOverride("Time/VSync=0")`. |
+| `--quit-after <sec>` / `--no-vsync` | `--no-vsync` is just `setOverride("Time/VSync=0")`. **Either unattended flag also installs `App.UnattendedRun`'s failure handling**: no modal dialogs (assert / abort / OS fault box — the run FAILS instead of hanging on a button), assert text to stderr, and an unhandled-exception filter that prints the faulting thread's PDB-symbolized stack (file:line) to stderr. Interactive runs keep the dialogs and the debugger break. |
 | `--tweak "Cat/Name=v"` / `--tweaks <file>` | |
 
 **The MAIN MENU boots when none of these apply**: no mode flags, not a client or server, not
@@ -106,7 +109,17 @@ network start are legal, **under a one-shot `AllowMainThreadIO`** (the F10 patte
 A failed host or join leaves the menu up with the reason in the log. During the menu phase the testbed
 keys are muted (`setGameMode(true)`) and free flight is paused; the mode start restores both.
 
-**The start is SPLIT in two:**
+**The mode flow lives in `App.Session`** (`Session.ixx`, which also holds `LaunchOptions` /
+`parseCommandLine`, `installFileHooks` and the `g_running` flag) — a stack local in `main()` (it owns the
+`oc::optional<GameMatch>`, the `LobbySystem` and the `ChatSystem`, so it must stay one: see the
+`GameMatch` rule in [`Code/Game/CONTEXT.md`](../Game/CONTEXT.md)). Its methods are the phases the
+loop calls in order: `serviceServerLost` / `serviceMainMenu` / `serviceChat` (menu servicing, row 6),
+`serviceEscapeMenu` and `updateCamera` (rows 9–10), plus the network event dispatch it installs
+(`installNetworkCallbacks`). `main()` itself keeps the command line (`parseCommandLine` →
+`LaunchOptions`), the engine init sequence INLINE (its order is the init-order documentation), the
+timers and the frame loop.
+
+**The start is SPLIT in two (both `Session` methods):**
 
 * **`startNetworkFor(mode, startGame, address)`** — host/join plus the server join hooks. **Game modes
   wire lobby and GameMatch together, lobby FIRST.**
@@ -114,7 +127,7 @@ keys are muted (`setGameMode(true)`) and free flight is paused; the mode start r
 
 ---
 
-# Lobby (`App.Lobby`)
+# Lobby (`Game:Lobby`, serviced here)
 
 `LobbySystem` is a plain stack local in main — **plain state, no entity handles.** The UI is the
 MainMenu's lobby page, with `LobbyView` / `LobbyAction` snapshots polled exactly like the menu action.
@@ -185,9 +198,9 @@ inert, so the host cannot start.
 
 ---
 
-# Chat (`App.Chat`)
+# Chat (`Game:Chat`, serviced here)
 
-`ChatSystem`, a plain stack local next to the lobby. The UI is `UI:ChatPanel`: main pushes a `ChatView`
+`ChatSystem` (Game's `Chat.ixx`), a plain stack local next to the lobby. The UI is `UI:ChatPanel`: main pushes a `ChatView`
 snapshot **only when `chat.generation()` changed**, and polls `takeChatOutgoing()` every frame.
 
 Drawn EMBEDDED in the lobby page and as a translucent OVERLAY in the game layout's bottom-right corner
@@ -321,8 +334,10 @@ a wall raycast).
 
 ---
 
-# `App.ProfileDump`
+# The profile report writer
 
-`writeProfileReport(path, options)` — `Profiler::buildReport` writes through FileSystem, **because Core
-does no IO.** Wired to F7, the Profiler panel's Dump button, and the `--profile-after` timer. See
-**Profiling** in [`Code/Core/CONTEXT.md`](../Core/CONTEXT.md).
+`Globals::profiler.writeReport(path, options)` (Core) writes `buildReport` through the writer main
+injects with `setReportWriter` at startup — **because Core does no IO**, the same pattern as the tweak
+registry's `setFileIo`: the lambda in main creates the directory and writes through FileSystem with
+main-thread IO allowed explicitly (a one-shot). Wired to F7, the Profiler panel's Dump button, and the
+`--profile-after` timer. See **Profiling** in [`Code/Core/CONTEXT.md`](../Core/CONTEXT.md).

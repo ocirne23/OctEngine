@@ -368,11 +368,7 @@ namespace Procedural
 		class DiffusionRuntime
 		{
 		public:
-			static DiffusionRuntime& get()
-			{
-				static DiffusionRuntime r;
-				return r;
-			}
+			static DiffusionRuntime& get(); // g_diffusionRuntime below: a namespace-scope global, NOT a function-local static
 
 			void beginLoad()
 			{
@@ -478,13 +474,16 @@ namespace Procedural
 				m_loader = std::thread([this]() { loadWorker(); });
 			}
 
-		private:
+			// Constructible ONLY as g_diffusionRuntime (the global below); public so that definition compiles.
 			DiffusionRuntime() = default;
+			DiffusionRuntime(const DiffusionRuntime&) = delete;
 			~DiffusionRuntime()
 			{
 				if (m_loader.joinable())
 					m_loader.join();
 			}
+
+		private:
 
 			void setStatus(oc::string_view s)
 			{
@@ -630,6 +629,15 @@ namespace Procedural
 			oc::unordered_map<uint64, oc::shared_ptr<PendingTile>> m_pending;
 			std::mutex m_pendingMutex;
 		};
+
+		// THE runtime, in PLAIN static init (.CRT$XCU — see InitSeg.h): constructed before every
+		// numbered section (a defaulted ctor: nothing happens until beginLoad) and therefore destroyed
+		// AFTER all of them, in particular after Globals::terrain (XCUA), whose destructor joins the
+		// chunk pump jobs. As a function-local static it was constructed LATE (at the first terrain
+		// enable, after every global) and so destroyed FIRST at exit — while a pump job could still be
+		// inside fetchTile erasing from m_pending: a crash on any quit during chunk generation.
+		DiffusionRuntime g_diffusionRuntime;
+		DiffusionRuntime& DiffusionRuntime::get() { return g_diffusionRuntime; }
 
 		FieldTilePtr DiffusionRuntime::fetchTile(int32 ti, int32 tj)
 		{

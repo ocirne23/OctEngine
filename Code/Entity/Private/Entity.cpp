@@ -20,7 +20,10 @@ EntityArchetype makeEntityArchetype(uint16 typeBits)
     return EntityArchetype{ uint16(getEntityAllocSize(typeBits)), typeBits };
 }
 
-// The entity owns NO name storage: Globals::entityNames maps the entity pointer to its owned copy.
+// The entity owns NO name storage: Globals::entityNames maps the entity pointer to its owned copy —
+// but ONLY for a name set after the spawn. A freshly spawned entity's name is its template's
+// displayName, read straight from the template (which outlives every entity spawned from it:
+// World's caches, retired lists and keepTemplateAlive), so a spawn makes no name allocation.
 void Entity::setName(oc::string_view newName)
 {
     Globals::entityNames.set(this, newName);
@@ -28,13 +31,14 @@ void Entity::setName(oc::string_view newName)
 
 const char* Entity::getName() const
 {
-    const char* name = Globals::entityNames.get(this);
-    return name ? name : "";
+    if (const char* name = Globals::entityNames.get(this))
+        return name;
+    return spawnTemplate ? spawnTemplate->displayName.c_str() : "";
 }
 
 bool Entity::hasName() const
 {
-    return Globals::entityNames.get(this) != nullptr;
+    return Globals::entityNames.get(this) != nullptr || (spawnTemplate && !spawnTemplate->displayName.empty());
 }
 
 void Entity::setFrozen(bool on)
@@ -213,8 +217,7 @@ EntityPtr Entity::create(const EntitySpawnTemplate& tmpl, const Transform& trans
     entity->scale = transform.scale;
     entity->rot = transform.quat;
 
-    entity->setName(tmpl.displayName);
-    entity->spawnTemplate = &tmpl;
+    entity->spawnTemplate = &tmpl; // also the name: getName falls back to tmpl.displayName (no registry entry, no allocation)
     entity->typeBits = tmpl.archetype.typeBits;
     entity->flags = initialFlags | EEntityFlag_ContiguousAllocation; // slice owned by the tree block until broken
     entity->setEnabled(tmpl.enabled);

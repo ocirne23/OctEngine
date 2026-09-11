@@ -90,8 +90,12 @@ public:
 private:
     Entity* spawnUnit(const StructureSystem& structures, const glm::vec3& pos, uint32 sourceId,
         uint8 team, ENpcType type); // spawn + team/source/route setup on the component
-    void fireShot(const char* prefabPath, const char* name, const glm::vec3& from,
+    void fireShot(const EntitySpawnTemplate& shell, const glm::vec3& from,
         const glm::vec3& velocity, uint8 team); // projectile spawn (main thread, pre-physics)
+    // The two shell templates, resolved ONCE per World template generation: a per-shot
+    // spawnAssetFile paid a path normalization and two keyed lookups (several heap strings) for
+    // every projectile, on every frame a ranged unit fired.
+    const EntitySpawnTemplate* shellTemplate(bool lob);
     static void despawnUnitsAndShots(); // every unit + projectile root out of the World (load path)
     void discardQueued(); // drops every queued report/request the removed actors left behind
 
@@ -125,6 +129,8 @@ private:
     // Spawn cooldowns and alive counts live ON the barracks (GameStructureComponent::barracks) —
     // no id-keyed maps, and the state dies with its structure. No entity lists here at all — see
     // the class comment.
+    oc::shared_ptr<const EntitySpawnTemplate> m_shellTemplates[2]; // [0] enemyShot.pre, [1] enemyLob.pre (see shellTemplate)
+    uint32 m_shellGeneration = 0; // World::templateGeneration() the cache was resolved at
     oc::vector<GameUnitComponent::FireRequest> m_fireScratch; // drained queues (reused buffers)
     oc::vector<GameUnitComponent::DeathRecord> m_deathScratch;
     oc::vector<GameUnitComponent::SeedRequest> m_seedScratch;

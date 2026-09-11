@@ -218,6 +218,7 @@ void NetworkManager::initialize()
     static bool s_registered = false;
     if (s_registered)
         return;
+    ProfileScope scope("NetworkManager::initialize", EProfileCategory::Network);
     s_registered = true;
 
     Tweak::floatVar("Network", "Snapshot Hz", &s_snapshotHz, 1.0f, 60.0f, 0.5f);

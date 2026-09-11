@@ -53,7 +53,11 @@ Without `--game` the testbed is untouched.
 `Game:Match` (the orchestrator), `Game:Player`, `Game:Structures`, `Game:StructureTypes`
 (`EStructureType` + the constexpr type predicates, `ENodeType`, `GameMaxTeams`,
 `GameNumUnitTypes` — `export import`ed by `Game:Structures`, so importers see one surface),
-`Game:Npc`, `Game:GameCamera`; barrel `Public/Game.ixx`.
+`Game:Npc`, `Game:GameCamera`, `Game:Lobby` (the multiplayer pre-game LOBBY model, `LobbySystem` —
+ready checks, the start countdown, the host's team/map picks; the `Lb*` events) and `Game:Chat` (the
+TEXT CHAT model, `ChatSystem` — the "ChM" event's log). **Both are plain stack locals in `main()`**,
+serviced by main's menu loop and drawn by the UI's lobby page / `UI:ChatPanel`: see **Lobby** and
+**Chat** in [`Code/App/CONTEXT.md`](../App/CONTEXT.md) for the flow; barrel `Public/Game.ixx`.
 
 **`StructureSystem`'s bodies are split over six implementation units by topic** (all
 `module Game;`, the list is repeated at the end of `Structures.ixx`): `Structures.cpp` (the
@@ -1106,6 +1110,10 @@ authored colours (restored per node if a unit ever leaves the local team).
   World roots, walked when needed (see The architecture rule).
   `service(structures)` drains the components' static queues on the main thread: FireRequests, deaths
   (freeing the spawner's roster slot), SeedRequests, TurretFireRequests and SpawnRequests.
+  A FireRequest spawns its shell from a CACHED template (`shellTemplate`, re-resolved when
+  `World::templateGeneration()` changes) through `World::spawnTemplate`, and the shot keeps its
+  prefab name — the per-shot path resolve and rename were the "Npc fire requests" allocations;
+  what remains is the entity tree block plus the component spawns themselves.
 * **Shield, health and team need NO publish step** — they live on the component and ride the entity
   snapshot's game blob.
 

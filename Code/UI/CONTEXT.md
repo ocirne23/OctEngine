@@ -190,7 +190,7 @@ respawn-only.**
 ## Chat (`UI:ChatPanel`)
 
 The multiplayer text-chat widget: a `ChatView` snapshot pushed by main through `UI::setChatView` **only
-when App.Chat's log generation changed**, plus `takeChatOutgoing()` for the sent line.
+when Game:Chat's log generation changed**, plus `takeChatOutgoing()` for the sent line.
 
 `renderEmbedded` draws it inside the lobby page (MainMenu holds a non-owning pointer, set by UI's
 ctor); `renderOverlay` draws it as a translucent bottom-right window in the game layout, after the

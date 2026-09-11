@@ -15,6 +15,7 @@ void SpatialOccluder::reset()
 
 void OcclusionBuffer::initialize()
 {
+    ProfileScope scope("OcclusionBuffer::initialize", EProfileCategory::Spatial);
     m_depth.resize(Width * Height);
     m_blockMax.resize(BlocksX * BlocksY);
     Tweak::boolean("Spatial/Occlusion", "Enabled", &m_enabled);

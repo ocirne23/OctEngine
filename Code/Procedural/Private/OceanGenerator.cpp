@@ -24,6 +24,7 @@ namespace Procedural
 
 	void OceanGenerator::initialize()
 	{
+		ProfileScope scope("OceanGenerator::initialize", EProfileCategory::Procedural);
 		auto gridDirty = [this]() { m_gridDirty = true; };
 
 		Tweak::boolean("Ocean", "Enabled", &m_enabled);

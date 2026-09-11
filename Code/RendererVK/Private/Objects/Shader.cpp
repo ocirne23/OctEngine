@@ -179,6 +179,9 @@ static oc::string buildLayoutPreamble()
     def("FORCE_FLAG_ACTIVE", FORCE_FLAG_ACTIVE, "u");
     def("FORCE_FLAG_READBACK", FORCE_FLAG_READBACK, "u");
     def("FORCE_CELL_MAX_EMITTERS", FORCE_CELL_MAX_EMITTERS, "u");
+#ifndef NDEBUG
+    def("SHADER_STATS", 1); // debug builds only: the GPU stats atomics (the cull's LOD pick counts)
+#endif
     return s;
 }
 

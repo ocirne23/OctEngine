@@ -66,7 +66,12 @@ void* EntityAllocator::allocate(uint32 size)
 
         while (m_chunkLock.test_and_set(oc::memory_order_acquire))
             _mm_pause();
-        addChunkLocked(size, chunk);
+        {
+            // The 1 MB chunk is attributed here, not to whichever spawn happened to exhaust the
+            // previous one (the very first is the "Terrain" empty entity in main).
+            ProfileScope scope("EntityAllocator chunk", EProfileCategory::Entity);
+            addChunkLocked(size, chunk);
+        }
         m_chunkLock.clear(oc::memory_order_release);
     }
 }

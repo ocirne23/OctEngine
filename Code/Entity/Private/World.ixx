@@ -157,6 +157,14 @@ public:
     // handleEntityChanges and NpcSystem::clear go through it.
     void releaseBatch(oc::vector<EntityPtr>&& entities);
     EntityPtr spawnAssetFile(const oc::string& path, const Transform& base, bool overrideDefaultTransform = true);
+    // The two halves of spawnAssetFile, for a caller that spawns the SAME file every frame (the
+    // projectile shots): resolve once, spawn from the template. A resolve costs a path
+    // normalization and two keyed lookups — several heap strings — per call, which is what the
+    // per-spawn route pays. templateGeneration() changes whenever reloadPrefabs / invalidatePrefab
+    // retires templates, so a holder re-resolves when it sees a new value.
+    oc::shared_ptr<const EntitySpawnTemplate> resolveAssetTemplate(const oc::string& path);
+    EntityPtr spawnTemplate(const EntitySpawnTemplate& tmpl, const Transform& base, bool overrideDefaultTransform = true);
+    uint32 templateGeneration() const { return m_templateGeneration; }
     // NO components (archetype 0): editable, serializes inline — but it cannot hold children.
     // A grouping root must come from a prefab with `Component Scene`.
     EntityPtr createEmptyEntity(const oc::string& name);
@@ -300,6 +308,7 @@ private:
     oc::vector<oc::shared_ptr<EntitySpawnTemplate>> m_retiredTemplates; // superseded by reloadPrefabs, kept alive for live entities
     oc::unordered_set<oc::string> m_buildingTemplates; // prefab names currently being built (cycle guard)
     oc::shared_ptr<EntitySpawnTemplate> m_emptyTemplate; // blank Scene-only template for editable (non-prefab) entities
+    uint32 m_templateGeneration = 1; // bumped by reloadPrefabs / invalidatePrefab: cached resolveAssetTemplate results re-resolve
     oc::vector<oc::shared_ptr<const EntitySpawnTemplate>> m_editorTemplates; // ad-hoc templates kept alive via keepTemplateAlive()
     oc::vector<EntityPtr> m_rootEntities;
     bool m_headless = false;

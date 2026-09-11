@@ -262,6 +262,7 @@ public:
 		m_savedLoaded = true;
 		if (!m_readFile)
 			return;
+		ProfileScope scope("Tweaks::loadSaved", EProfileCategory::Core);
 		std::istringstream file(oc::toStd(m_readFile(c_savePath)));
 		oc::string line;
 		while (oc::getline(file, line))
