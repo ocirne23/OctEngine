@@ -119,10 +119,19 @@ export void installFileHooks()
 export class Session
 {
 public:
-    Session(const LaunchOptions& options, InputControls& controls, FreeFlyCameraController& cameraController)
-        : m_options(options), m_controls(controls), m_cameraController(cameraController)
+    Session(const LaunchOptions& options)
+        : m_options(options)
     {
+        if (options.headlessServer())
+            return;
+        m_cameraController.initialize(glm::vec3(-1.5f, 14.0f, -7.1f), glm::vec3(0.0f, 4.0f, 0.0f));
+        if (Globals::rendererVK.isVrEnabled()) // the renderer is up before the session exists
+            m_vrCameraController.initialize(glm::vec3(-1.0f, Globals::rendererVK.isVrStageSpace() ? 0.0f : 1.0f, 0.0f));
     }
+    // The controls take the camera by reference, so they are constructed AFTER the session and
+    // linked back here.
+    void attachControls(InputControls& controls) { m_controls = &controls; }
+    FreeFlyCameraController& cameraController() { return m_cameraController; }
 
     GameMatch* game() { return m_game ? &*m_game : nullptr; }
     bool gameRunningOnScreen() const { return m_game && m_game->enabled() && !Globals::ui.isMainMenuActive(); }
@@ -202,7 +211,7 @@ public:
             if (Globals::networkManager.role() == ENetRole::Server)
                 Globals::world.addRootEntity(Globals::world.spawnAssetFile("Entities/Debug/networkTest.pre", Transform(glm::vec3(0, 0, 0)), true));
         }
-        m_controls.setGameMode(startGame);
+        m_controls->setGameMode(startGame);
         m_cameraController.setMovementEnabled(!startGame);
         Globals::ui.setGameLayout(startGame);
         if (!startGame)
@@ -225,7 +234,7 @@ public:
 
     void exitToMenu()
     {
-        m_controls.resetForMenu();
+        m_controls->resetForMenu();
         m_game.reset();
         Globals::world.clearRootEntities();
         TweakRegistry::get().setOverride("Terrain/Enabled=0");
@@ -235,7 +244,7 @@ public:
         m_lobby.reset();
         m_chat.reset();
         Globals::ui.clearChat();
-        m_controls.setGameMode(true);
+        m_controls->setGameMode(true);
         m_cameraController.setMovementEnabled(false);
         m_gameCameraDetached = false;
         Globals::ui.setGameLayout(false);
@@ -255,7 +264,7 @@ public:
     void enterMainMenu()
     {
         ProfileScope scope("Session::enterMainMenu", EProfileCategory::App);
-        m_controls.setGameMode(true);
+        m_controls->setGameMode(true);
         m_cameraController.setMovementEnabled(false);
         NetAddress hostEndpoint = netGetLocalAddress();
         hostEndpoint.port = m_options.netPort;
@@ -306,7 +315,7 @@ public:
     void serviceEscapeMenu()
     {
         const bool escapeAllowed = !Globals::ui.isMainMenuActive() || Globals::ui.isMainMenuLobbyOpen();
-        if (m_controls.takeEscapePressed() && escapeAllowed)
+        if (m_controls->takeEscapePressed() && escapeAllowed)
         {
             if (Globals::ui.isEscapeMenuOpen())
                 Globals::ui.setEscapeMenuOpen(false);
@@ -342,7 +351,7 @@ public:
         }
     }
 
-    void updateCamera(Camera& camera, double deltaSec, VRFreeFlyCameraController& vrCameraController)
+    void updateCamera(Camera& camera, double deltaSec)
     {
         if (gameRunningOnScreen() && !Globals::ui.isEscapeMenuOpen())
         {
@@ -369,14 +378,14 @@ public:
         }
         else if (Globals::rendererVK.isVrEnabled())
         {
-            vrCameraController.update(deltaSec);
-            camera = vrCameraController.getCamera();
+            m_vrCameraController.update(deltaSec);
+            camera = m_vrCameraController.getCamera();
         }
         else
         {
             m_cameraController.update(deltaSec);
             camera = m_cameraController.getCamera();
-            m_controls.applyPlayerCamera(camera);
+            m_controls->applyPlayerCamera(camera);
         }
     }
 
@@ -483,8 +492,9 @@ private:
     }
 
     const LaunchOptions& m_options;
-    InputControls& m_controls;
-    FreeFlyCameraController& m_cameraController;
+    InputControls* m_controls = nullptr; // attachControls
+    FreeFlyCameraController m_cameraController;
+    VRFreeFlyCameraController m_vrCameraController;
 
     oc::optional<GameMatch> m_game;
     LobbySystem m_lobby;

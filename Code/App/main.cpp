@@ -46,8 +46,6 @@ int main(int argc, char* argv[])
         installUnattendedFailureHandling();
 
     Window window;
-    FreeFlyCameraController cameraController;
-    VRFreeFlyCameraController vrCameraController;
     if (!headlessServer)
     {
         window.initialize("Vulkan", glm::ivec2(5, 35), glm::ivec2(1920, 1080));
@@ -61,7 +59,6 @@ int main(int argc, char* argv[])
         window.setIdleWork([] { return Globals::jobSystem.tryRunOneHighJob(); },
                            [](bool (*wakeNow)(const void*), const void* user) { Globals::jobSystem.externalHelperWait(wakeNow, user); },
                            [] { Globals::jobSystem.wakeExternalHelper(); });
-        cameraController.initialize(glm::vec3(-1.5f, 14.0f, -7.1f), glm::vec3(0.0f, 4.0f, 0.0f));
         Globals::rendererVK.initialize(window, EValidation::ENABLED, EVr::DISABLED);
         Globals::ui.initialize();
     }
@@ -93,10 +90,7 @@ int main(int argc, char* argv[])
         Globals::physics.setWaterSurface([](float x, float z) { return Globals::ocean.sampleWaterHeight(x, z); },
             [] { return Globals::ocean.hasWater(); });
         if (Globals::rendererVK.isVrEnabled())
-        {
             Globals::vrInput.initialize(Globals::rendererVK.getVrSession());
-            vrCameraController.initialize(glm::vec3(-1.0f, Globals::rendererVK.isVrStageSpace() ? 0.0f : 1.0f, 0.0f));
-        }
     }
 
     SystemEventListenerHandle systemEventListener;
@@ -116,9 +110,10 @@ int main(int argc, char* argv[])
     }
 
     GizmoController gizmo;
-    InputControls controls(gizmo, cameraController, Globals::world);
+    Session session(options);
+    InputControls controls(gizmo, session.cameraController(), Globals::world);
     controls.setProfileDump(options.profileOutPath, options.profileOptions);
-    Session session(options, controls, cameraController);
+    session.attachControls(controls);
     session.installNetworkCallbacks();
     if (options.mainMenu())
         session.enterMainMenu();
@@ -147,8 +142,8 @@ int main(int argc, char* argv[])
     Timer titleUpdateTimer(std::chrono::milliseconds(100), [&](Timer&) {
             if (headlessServer)
                 return Timer::REPEAT;
-            const glm::vec3 pos = cameraController.getPosition();
-            const glm::vec3 dir = cameraController.getDirection();
+            const glm::vec3 pos = session.cameraController().getPosition();
+            const glm::vec3 dir = session.cameraController().getDirection();
             const oc::string netStatus = Globals::networkManager.getStatusText();
             char windowTitleBuf[320];
             sprintf_s(windowTitleBuf, sizeof(windowTitleBuf), "%s%sFPS: %i mem: %.2fmb instances: %i meshtypes: %i materials: %i, pos: %.1f, %.1f, %.1f, dir: %.1f, %.1f, %.1f",
@@ -236,7 +231,7 @@ int main(int argc, char* argv[])
             controls.update((float)deltaSec);
             session.serviceEscapeMenu();
             Globals::jobSystem.joinPostUpdateJobs(JobSystem::EPostUpdateBatch::Sim);
-            session.updateCamera(camera, deltaSec, vrCameraController);
+            session.updateCamera(camera, deltaSec);
             Globals::scriptHost.handleScriptReloadRequests(Globals::ui.takeScriptReloadRequests());
             Globals::world.handleEntityChanges(Globals::ui.takeEntityChanges(), camera, Globals::ui.getViewportRect());
         }
