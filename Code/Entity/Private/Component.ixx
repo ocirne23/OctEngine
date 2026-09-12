@@ -37,7 +37,7 @@ export void breakContiguousAllocation(Entity* member);
 // reverts to its own slice, each child subtree becomes an independent allocation.
 export void breakContiguousAllocationFromRoot(Entity* root);
 // True if every contiguous member below `entity` is owned solely by its parent's children list
-// (refcount 1) — i.e. destroying the tree is guaranteed to destroy all of them.
+// (refcount 1) - i.e. destroying the tree is guaranteed to destroy all of them.
 export bool contiguousTreeSolelyOwned(Entity* entity);
 
 export constexpr uint16 MaxInlineComponentTypes = 13;

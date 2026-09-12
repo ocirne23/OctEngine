@@ -14,7 +14,7 @@ void ScriptEventManager::fireEvent(EventKey key)
 		return; // global pause: script events don't fire, matching the Frozen rule per entity
 
 	// SNAPSHOT under the lock, INVOKE outside it: the scripts themselves can run long, fire nested
-	// events (re-entering here on the same thread) or re-register their listener — holding the lock
+	// events (re-entering here on the same thread) or re-register their listener - holding the lock
 	// across the invokes would serialize every event dispatch engine-wide. Safe against a
 	// concurrent (parallel) entity destroy because that path's unregisterListener WAITS for
 	// m_dispatching to drain before any component is torn down.
@@ -68,7 +68,7 @@ void ScriptEventManager::onScriptLoadedCallback(const ScriptModule* script, cons
 	for (const oc::string& oldName : oldNames)
 	{
 		if (oc::find(newNames.begin(), newNames.end(), oldName) != newNames.end())
-			continue; // still present — keep the existing registration
+			continue; // still present - keep the existing registration
 		auto keyIt = m_eventNameKeyLookup.find(oldName);
 		if (keyIt == m_eventNameKeyLookup.end())
 			continue;

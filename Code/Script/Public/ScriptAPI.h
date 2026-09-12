@@ -343,7 +343,7 @@ struct OcScriptField
     X(void,        hudSetCounter,          (const char*, name), (float, value), (int, decimals), (glm::vec3, color)) /* decimals 0 = integer display */ \
     X(void,        hudRemoveCounter,       (const char*, name)) \
     X(void,        hudClear,               (int, unused)) /* removes every slot, bar and counter */ \
-    /* ---- game components (GameUnit/GameStructure/GameProjectile — the shared C++ sim; the DSL is
+    /* ---- game components (GameUnit/GameStructure/GameProjectile - the shared C++ sim; the DSL is
        the orders/config tier: read state, re-tune stats, set/clear a unit's walk target) ---- */ \
     X(void*,       entityGetGameUnitComponent,(Entity*, entity)) \
     X(float,       gameUnitGetHealth,      (void*, gameUnit)) \

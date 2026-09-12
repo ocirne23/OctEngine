@@ -1,12 +1,12 @@
-// Forcefield emitter hash grid — a third user of hash_grid.inc.glsl (after the light grid and the
+// Forcefield emitter hash grid - a third user of hash_grid.inc.glsl (after the light grid and the
 // GI probe grid), UNIFORM world-space FORCE_GRID_CELL_SIZE (16 m) cells (NOT camera-adaptive: gameplay force/query
 // evaluation happens anywhere in the world, not just near the camera). Each occupied cell stores a
 // fixed-capacity list of compact emitter indices; an emitter is inserted into every cell its reach
 // bounds overlap, so a point's containing cell lists every emitter whose compact support can reach
-// it — an EMPTY cell therefore provably has zero field (the union march's skip relies on this).
+// it - an EMPTY cell therefore provably has zero field (the union march's skip relies on this).
 //
 // TABLE BUFFER: { uint numCells; uint dataCounter; uint tableSize; uint pad; uint table[]; }
-//   (numCells/dataCounter are the CPU capacity readback — on overflow the counter keeps
+//   (numCells/dataCounter are the CPU capacity readback - on overflow the counter keeps
 //   incrementing so the readback measures true demand, light-grid contract)
 // DATA BUFFER, per cell (FORCE_CELL_UINTS uints):
 //   { ivec3 cellPos; uint count; uint16 emitterIds[FORCE_CELL_MAX_EMITTERS]; }
@@ -18,7 +18,7 @@
 
 #include "hash_grid.inc.glsl"
 
-// The FORCE grid's OWN cell size — finer than the shared GRID_SIZE (32) the light grid keeps:
+// The FORCE grid's OWN cell size - finer than the shared GRID_SIZE (32) the light grid keeps:
 // every evaluation's gather cost scales with how many small emitters one cell collects, and a
 // swarm battle packs dozens of unit bubbles into a 32 m cell. 16 m quarters the gathered set;
 // the insert side (an emitter touches ~8x the cells) is a single-thread-per-emitter pass that
@@ -35,7 +35,7 @@ ivec3 forceGridPos(vec3 pos) { return ivec3(floor(pos / FORCE_GRID_CELL_SIZE)); 
 
 // The insert pass MUST see these buffers coherent (light_grid.cs.glsl does the same): the cell-claim
 // spin re-reads the table with a PLAIN load, and without coherent that load may be cached per
-// invocation — the CAS loser then never observes the winner's atomicExchange publish and spins until
+// invocation - the CAS loser then never observes the winner's atomicExchange publish and spins until
 // the device is lost. Read-only consumers run strictly after the insert barrier and skip the
 // qualifier (coherent bypasses caching).
 #ifdef FORCE_GRID_WRITE

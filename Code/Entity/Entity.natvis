@@ -10,11 +10,11 @@
       base = alignUp(sizeof(Entity), 16), then for every component id BELOW the one being addressed,
       add alignUp(sizeof(ThatComponent), 16) when its bit is set in typeBits.
 
-    Component order (EComponentID in Private/Entity.ixx) — keep in sync when adding a component type:
+    Component order (EComponentID in Private/Entity.ixx) - keep in sync when adding a component type:
       Scene 0x01, Render 0x02, Animator 0x04, Physics 0x08,
       Audio 0x10, Particle 0x20, Force 0x40, Light 0x80, Network 0x100,
       GameUnit 0x200, GameStructure 0x400, GameProjectile 0x800, Script 0x1000
-    (The Game*/Script offset chains below stop at Network — expand them the same way if you need
+    (The Game*/Script offset chains below stop at Network - expand them the same way if you need
     those components in the debugger; the Script entry's chain must add the three Game sizes.)
   -->
 

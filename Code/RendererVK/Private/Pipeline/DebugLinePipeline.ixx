@@ -13,7 +13,7 @@ import :Layout;
 // World-space debug line overlay (physics collider wireframes, etc.), drawn into the main color pass
 // after the forward pass (depth-tested against the scene, no depth writes). Lines are accumulated on
 // the CPU each frame (Renderer::addDebugLine), copied into a mapped per-frame vertex buffer in
-// present(), and drawn with one indirect call — the count rides in a mapped indirect buffer, so the
+// present(), and drawn with one indirect call - the count rides in a mapped indirect buffer, so the
 // cached secondary command buffer never re-records for line-count changes. GPU buffers are allocated
 // lazily on first use (a debug feature shouldn't cost VRAM while off).
 export class DebugLinePipeline final

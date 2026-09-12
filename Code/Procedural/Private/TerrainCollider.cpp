@@ -37,7 +37,7 @@ namespace Procedural
 		if (!active)
 		{
 			// Inactive (disabled / terrain off): no profile scope. Clear once on the transition, then
-			// only poll the in-flight build until it lands (stale by generation, dropped) — after that
+			// only poll the in-flight build until it lands (stale by generation, dropped) - after that
 			// every frame is two branches and a return.
 			if (!m_inactiveIdle)
 			{
@@ -88,7 +88,7 @@ namespace Procedural
 		};
 
 		// --- Adopt the finished build: create the static body at the tile origin (geometry is
-		// tile-local in XZ with world Y, like render chunks — keeps float precision high).
+		// tile-local in XZ with world Y, like render chunks - keeps float precision high).
 		if (haveDone && done.generation == m_generation && done.mesh.isValid() && !oc::contains(m_tiles, done.key))
 		{
 			PhysicsBodyDesc desc;
@@ -123,7 +123,7 @@ namespace Procedural
 		}
 
 		// --- Launch the nearest missing tile (one build in flight at a time; a tile is a few ms of
-		// sampleGrid + BVH warm, but can wait on V3 tile inference — a Low job that parks its fiber).
+		// sampleGrid + BVH warm, but can wait on V3 tile inference - a Low job that parks its fiber).
 		if (m_buildInFlight)
 			return;
 
@@ -169,7 +169,7 @@ namespace Procedural
 			out.generation = generation;
 
 			// Sample on the same world lattice generateChunk uses (tile origins are multiples of the
-			// spacing), one grid call — see ITerrainSampler::sampleGrid.
+			// spacing), one grid call - see ITerrainSampler::sampleGrid.
 			const uint32 vpr = res + 1;
 			const double step = (double)tileSize / (double)res;
 			const double ox = (double)coord.x * (double)tileSize;

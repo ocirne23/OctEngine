@@ -5,7 +5,7 @@ import Core;
 // ONNX Runtime wrapper for the diffusion models (port of the reference's OnnxModel).
 //
 // ORT is kept entirely behind a pimpl: no onnxruntime header is included by any .ixx, so the runtime never
-// reaches Procedural's public surface — the same discipline as box3d in Physics and Steam Audio in Audio.
+// reaches Procedural's public surface - the same discipline as box3d in Physics and Steam Audio in Audio.
 // ORT's C++ API throws; every throw is caught at this boundary and turned into a logged failure, because
 // the rest of the engine is exception-free by style.
 export namespace Procedural::Diffusion
@@ -40,7 +40,7 @@ export namespace Procedural::Diffusion
 		bool isValid() const;
 
 		// Runs the model and copies OUTPUT 0 into `out` (resized to the element count). Any further outputs
-		// are ignored, as in the reference — these models have exactly one.
+		// are ignored, as in the reference - these models have exactly one.
 		// Safe to call concurrently on one instance (ORT sessions are), but the pipeline serialises anyway.
 		bool run(oc::span<const OnnxInput> inputs, oc::vector<float>& out);
 

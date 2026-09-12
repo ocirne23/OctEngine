@@ -2,8 +2,8 @@
 
 // FFT ocean, pass 1/3: initial spectrum + time evolution (Tessendorf 2001; Horvath 2015).
 //
-// For every wavevector k of every cascade this evaluates the TMA spectrum — JONSWAP S_j(w) (Hasselmann et
-// al. 1973) times the Kitaigorodskii finite-depth attenuation PHI(w, D) (Bouws et al. 1985) — with the
+// For every wavevector k of every cascade this evaluates the TMA spectrum - JONSWAP S_j(w) (Hasselmann et
+// al. 1973) times the Kitaigorodskii finite-depth attenuation PHI(w, D) (Bouws et al. 1985) - with the
 // Hasselmann directional spreading D(theta, w), converts the variance to a wave amplitude on the k-lattice,
 // draws the deterministic per-texel complex gaussian (Box-Muller from an integer hash, so the sea is stable
 // across frames and parameter changes), and time-evolves it with the FINITE-DEPTH dispersion relation
@@ -13,13 +13,13 @@
 // Ten real signals are produced per texel: h, Dx, Dz (displacement), dh/dx, dh/dz, dDx/dx, dDz/dz,
 // dDx/dz (derivatives for normals + the fold Jacobian), plus the surface's vertical acceleration
 // d2h/dt2 = -w^2 h~ and velocity dh/dt (exact per-component time derivatives) for the Longuet-Higgins
-// breaking-crest foam criterion — a crest whose downward acceleration exceeds a fraction of g is
+// breaking-crest foam criterion - a crest whose downward acceleration exceeds a fraction of g is
 // breaking, which is what makes LARGE waves foam (their Jacobian folding is choppiness-scaled and weak).
 // All spectra are Hermitian, so pairs pack as one complex signal each (IFFT(A + iB) = a + ib for real
 // a, b): 5 complex signals = 3 RGBA32F layers per cascade (rg = first complex, ba = second).
 //
 // Cascades band-split the wavenumber range (each keeps [kmin, kmax)) so summing them never duplicates
-// energy — the standard multi-patch setup used by e.g. the Atlas ocean (GDC 2019) and GodotOceanWaves.
+// energy - the standard multi-patch setup used by e.g. the Atlas ocean (GDC 2019) and GodotOceanWaves.
 
 #include "ubo.inc.glsl"
 
@@ -112,7 +112,7 @@ vec2 h0(ivec2 m, uint cascade, float L, float kMin, float kMax, uint which)
 
     // Wave-age generation limit: wind cannot generate waves whose phase speed much exceeds the wind
     // itself, but JONSWAP extrapolated below its validity range (U < ~5 m/s) still assigns energy to
-    // fast long swells — leaving visible waves at near-zero wind. Softly suppress components with
+    // fast long swells - leaving visible waves at near-zero wind. Softly suppress components with
     // c = w/k beyond ~2.5 U: negligible for developed seas (the spectral peak sits inside the limit),
     // and collapses the sea to glass as the wind dies.
     const float phaseSpeed = w / k;
@@ -146,7 +146,7 @@ void main()
     const float w = dispersion(max(k, 1e-5), u_oceanParams1.z);
     // The clock rate (u_oceanParams10.y) is sqrt(world scale): the Froude-scaled inputs shrink the sea
     // but shorten its periods by the same sqrt(s), and this holds them at the model sea's. Only the
-    // evolution reads it — the accel/velocity signals below stay in spectrum time on purpose, so the
+    // evolution reads it - the accel/velocity signals below stay in spectrum time on purpose, so the
     // breaking criterion (accel as a fraction of g) does not change with the scale.
     const float wt = w * u_timeSeconds * u_oceanParams10.y;
     const vec2 ep = vec2(cos(wt), sin(wt));
@@ -161,7 +161,7 @@ void main()
     //   P0 = h        + i Dx        P1 = Dz       + i dh/dx
     //   P2 = dh/dz    + i dDx/dx    P3 = dDz/dz   + i dDx/dz
     // Dx = i kx/k h~, Dz = i kz/k h~ (choppy displacement, Tessendorf eq. 44 NEGATED: under this e^{+ikx}
-    // transform the paper's -i sign converges water into the TROUGHS — sharp valleys, round crests; +i
+    // transform the paper's -i sign converges water into the TROUGHS - sharp valleys, round crests; +i
     // pinches the crests, and the dD derivatives flip with it so the fold Jacobian stays consistent);
     // dh/dx = i kx h~; dDx/dx = -kx^2/k h~; dDz/dz = -kz^2/k h~; dDx/dz = -kx kz / k h~.
     const vec2 Dx    = iht * kn.x;

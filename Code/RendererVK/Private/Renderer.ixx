@@ -133,11 +133,11 @@ public:
     ~Renderer();
 
     bool initialize(Window& window, EValidation validation, EVr vr = EVr::DISABLED);
-    // False in headless server mode (the global exists — static init_seg — but initialize never ran).
+    // False in headless server mode (the global exists - static init_seg - but initialize never ran).
     // Anything that may run headless and would touch GPU/mapped state must gate on this.
     bool isInitialized() const { return m_initialized; }
 
-    // Blocks until this frame slot's previous GPU submission has retired (the slot's fence) — the
+    // Blocks until this frame slot's previous GPU submission has retired (the slot's fence) - the
     // vsync/GPU throttle of the whole loop. Call it FIRST THING in the frame, before input is
     // sampled: nothing else may write the slot's host-visible per-frame buffers before it, and
     // waiting at the top keeps input -> sim -> present tight instead of letting the sampled input
@@ -149,7 +149,7 @@ public:
     bool waitFrameSlot(uint64 timeoutNs = UINT64_MAX);
     // viewportRect is the editor's viewport sub-rect within the swapchain (ignored in VR, which renders
     // full-extent); a change to it re-records the command buffers.
-    // [Concurrency: SERIAL-OWNER of the render chain — ONE call in flight. Desktop runs it as the
+    // [Concurrency: SERIAL-OWNER of the render chain - ONE call in flight. Desktop runs it as the
     // "Begin frame job" in the physics->world.update quiescent window (main.cpp), overlapping
     // audio.update; nothing may touch renderer frame state until the join, and its outputs
     // (m_centerViewProj, m_sunCascadeViewProj, the returned frustum, counter resets) are valid only
@@ -157,22 +157,22 @@ public:
     const Frustum& beginFrame(const Camera& camera, const Rect& viewportRect);
     // beginFrame as the High "Begin frame job": kick copies camera + rect into members (the job
     // outlives the caller's stack) and submits; join waits, helping. In VR the kick only stores and
-    // DEFERS — join then runs beginFrame synchronously on the calling (main) thread, because
+    // DEFERS - join then runs beginFrame synchronously on the calling (main) thread, because
     // xrWaitFrame owns VR pacing and would pin a worker. Renderer frame state must stay untouched
     // between kick and join (see main.cpp's window comment).
     void kickBeginFrameJob(const Camera& camera, const Rect& viewportRect);
     void joinBeginFrameJob();
     // The culling view for this frame's spatial cull, computable BEFORE beginFrame. Desktop: the
     // exact frustum beginFrame will build (bit-identical via computeCenterViewProj). VR: LAST
-    // frame's head view — one frame of cull latency, absorbed by the culling margin — invalid on
+    // frame's head view - one frame of cull latency, absorbed by the culling margin - invalid on
     // the first VR frame (the head pose arrives only inside beginFrame).
     CullView getCullView(const Camera& camera, const Rect& viewportRect);
     // Desktop only (asserts !VR): the exact culling frustum beginFrame will build this frame,
-    // computable BEFORE beginFrame — the camera and viewport are final by then and TAA jitter is
-    // never baked into the mvp — so the main loop can kick the spatial cull while beginFrame still
+    // computable BEFORE beginFrame - the camera and viewport are final by then and TAA jitter is
+    // never baked into the mvp - so the main loop can kick the spatial cull while beginFrame still
     // runs. Applies the viewport rect (idempotent with beginFrame's own apply) and publishes
     // m_centerViewProj, so getCenterViewProj() serves this frame's matrix from here on. In VR the
-    // head pose only exists after openXR.beginFrame() inside beginFrame — VR culls synchronously.
+    // head pose only exists after openXR.beginFrame() inside beginFrame - VR culls synchronously.
     Frustum computeCullFrustum(const Camera& camera, const Rect& viewportRect);
     // passMask (RendererVKLayout::PASS_* bits) selects which culled passes may draw/trace the node
     // this frame: main view, sun shadows, ray tracing (GI/RTAO/RT shadows).
@@ -229,7 +229,7 @@ public:
     // Loads a standalone texture (path relative to Assets/) into the bindless array for particle
     // emitters / decals to reference (ParticleEmitterGpu::texFlags.x, DecalInfo::params.x).
     uint16 loadEffectTexture(const char* filePath, bool sRGB = true);
-    // A material whose diffuse is a 1x1 solid-color texture — the per-entity TINT path: pass the
+    // A material whose diffuse is a 1x1 solid-color texture - the per-entity TINT path: pass the
     // returned index to RenderNode::setMaterialOverride. Cached per quantized color (repeat calls
     // with the same color are free); main thread.
     uint16 createSolidColorMaterial(const glm::vec3& color);
@@ -243,7 +243,7 @@ public:
     // Deactivates the slot; it recycles after the in-flight frames have drained (the per-emitter
     // force readback is slot-indexed, so a slot must not be re-issued while stale results can land).
     void destroyForceEmitter(uint32 slot);
-    // Persistent gameplay point-query slots (stable indices across the ~2-frame readback latency —
+    // Persistent gameplay point-query slots (stable indices across the ~2-frame readback latency -
     // deliberately NOT a lock-free per-frame push). Same main-thread + retirement contract as the
     // emitter slots. Returns UINT32_MAX when all MAX_FORCE_QUERIES slots are taken.
     uint32 createForceQuerySlot();
@@ -273,7 +273,7 @@ public:
     const SkyParams& getSkyParams() const { return m_skyParams; }
     void setFogParams(const FogParams& fog) { m_fogParams = fog; }
     // Live terrain state for the shaders: meshRadius = radius (m, radial from the camera XZ) inside which
-    // streamed terrain chunks are guaranteed resident — the fence for the ocean's land cull (0 = no
+    // streamed terrain chunks are guaranteed resident - the fence for the ocean's land cull (0 = no
     // terrain mesh up, cull disabled); seaLevel feeds the terrain shader's coloring. Set per frame.
     // lapseRate = the generator's temperature change per WORLD metre above sea level (<= 0). The terrain
     // data map bakes the SEA-LEVEL temperature baseline; this is the other half, and the shaders multiply
@@ -287,7 +287,7 @@ public:
     // fence on the SAME value its vertex shaders do, or it deletes water the VS would have drawn.
     float getTerrainMeshRadius() const { return m_terrainParams.x; }
     // One terrain splat material: BC-compressed .dds paths (relative to Assets/). Which climate it covers
-    // is NOT here — see setTerrainSplatClimate; textures are heavy and change ~never, the climate boxes
+    // is NOT here - see setTerrainSplatClimate; textures are heavy and change ~never, the climate boxes
     // are two dozen floats and track live tweaks.
     struct TerrainSplatMaterial
     {
@@ -307,7 +307,7 @@ public:
         bool hasSnow = false;
     };
     // Registers the terrain texture set: mats must be laid out [numGround][numRock][beach?][snow?] to
-    // match. Call once (or again to replace — old materials stay allocated, textures are freed; cheap
+    // match. Call once (or again to replace - old materials stay allocated, textures are freed; cheap
     // enough for a config-tweak refresh, not a per-frame path). Textures mip-stream like cooked scene
     // textures.
     void setTerrainSplatMaterials(oc::span<const TerrainSplatMaterial> mats, const TerrainSplatCounts& counts);
@@ -316,7 +316,7 @@ public:
     // space: xy = (t01 min, t01 max), zw = (h01 min, h01 max). Weight is 1 inside the box and
     // Gaussian-decays outside it, so an entry that does not care about an axis leaves it full width (0..1)
     // instead of having to claim a fictional value on it.
-    // Cheap — push it per frame. The boxes are authored in real climate units and converted through the
+    // Cheap - push it per frame. The boxes are authored in real climate units and converted through the
     // generator's live precipitation scale, so a tweak change must reach the shader without dragging a
     // texture re-upload behind it.
     void setTerrainSplatClimate(oc::span<const glm::vec4> boxes);
@@ -330,7 +330,7 @@ public:
         float climateBlend = 0.09f;   // Gaussian sigma OUTSIDE a climate box, in (t01,h01) units
         // Slope here is 1 - N.y, so these read as angles: 0.30 = 45 deg, 0.55 = 63 deg. Soil genuinely
         // stops holding around 45, which is also about the steepest the diffusion model's 30 m/px field
-        // reaches — a threshold set for a sharper procedural field simply never fires on it.
+        // reaches - a threshold set for a sharper procedural field simply never fires on it.
         float slopeRockStart = 0.30f;
         float slopeRockFull = 0.55f;
         float cragStart = 12.0f;
@@ -341,7 +341,7 @@ public:
         // cold mountain read as white with bare rock on its faces. It sheds EARLIER than rock appears
         // (0.18 = 35 deg vs 0.30 = 45), so a steepening slope loses its snow first and only then goes to
         // bedrock, rather than flipping between the two at one shared angle.
-        // Mean annual temperature below freezing is NOT permanent snow — Siberia averages -10 C and is
+        // Mean annual temperature below freezing is NOT permanent snow - Siberia averages -10 C and is
         // forest. Permanent cover needs roughly -8 C and colder, so these sit well below 0: measured on the
         // model's own climate, a -2 C snow line covers 15.8% of land and a +2 C one covers 25.4%.
         float snowTempFull = -11.0f;  // C at/below which cover is complete
@@ -350,7 +350,7 @@ public:
         float snowSlopeFull = 0.45f;  // slope where none remains (~57 deg)
         float snowAridity = 0.10f;    // humidity at/below which cold ground stays bare (polar desert)
         // Crag wander. The crag test measures the surface against the generator's macro altitude, which for
-        // V3 is a 7.68 km surface — nearly flat across one mountain — so crag ~= height - constant and the
+        // V3 is a 7.68 km surface - nearly flat across one mountain - so crag ~= height - constant and the
         // rock boundary traces an elevation contour right across a range. This wanders it. Scaled by the
         // local relief in the shader, so it can only modulate relief that exists and never rocks a plain.
         // TerrainStreamer scales these by V3's world scale, like the crag thresholds.
@@ -359,7 +359,7 @@ public:
     };
     void setTerrainTextureParams(const TerrainTexTweaks& params) { m_terrainTexTweaks = params; }
     // Terrain wetness clipmap (TerrainWetnessPipeline): the decaying memory of where water touched the
-    // ground — the ocean swash tongue, permanently submerged seabed, rain — read by the TERRAIN shader
+    // ground - the ocean swash tongue, permanently submerged seabed, rain - read by the TERRAIN shader
     // to darken and gloss it. A TERRAIN_WET_RES^2 toroidal window of texelSize metres around the scene
     // focus. Pushed every frame by the terrain streamer (mirrors its "Terrain/Wetness" tweaks).
     struct TerrainWetTweaks
@@ -368,7 +368,7 @@ public:
         float texelSize = 0.5f;      // m; 1024 texels = 512 m of coverage
         float dryTime = 90.0f;       // s for wetness to decay to 1/e on cool ground
         float dryTempSens = 0.00f;   // extra decay rate per C above 15 C (warm sand dries faster); 0 = uniform
-        float dryRate = 0.005f;      // 1/s: the CONSTANT part of the drain, next to the proportional dry time —
+        float dryRate = 0.005f;      // 1/s: the CONSTANT part of the drain, next to the proportional dry time -
                                      // d(wet)/dt = rain - dryRate - wet / dryTime, so rain below the rate never
                                      // keeps ground wet and above it settles at dryTime x (rain - dryRate)
         float rain = 0.0f;           // wetness added per second everywhere (0 = no rain)
@@ -378,7 +378,7 @@ public:
                                      // 1 - exp(-rate * dt), so it is framerate independent); the toggle is
                                      // the pipeline's own "Diffusion" tweak (a baked define)
         // Two darkening layers (the terrain shader): DAMP = soaked ground everywhere, a plateau above the
-        // damp knee that fades smoothly to dry below it; FILM = standing water on top — the whole surface
+        // damp knee that fades smoothly to dry below it; FILM = standing water on top - the whole surface
         // just after a wave (above the spike start) and the pools once it drains. Fully wet = both.
         float albedoScale = 0.55f;   // FILM albedo multiplier (on top of damp)
         float dampAlbedoScale = 0.75f; // DAMP albedo multiplier
@@ -397,8 +397,8 @@ public:
                                      // / (1 + slope * drain) in the compute pass (map gradient, 8 m);
                                      // slope = 1 - N.y (a 45-degree face ~2.2x at 4, a wall 5x); 0 = off
         // Surface water: where the WETNESS is still near full the terrain shader draws the ground AS
-        // water — the ocean shader's Fresnel sky reflection and dielectric sun glint over the lit ground
-        // — so the ocean's depth-buffer intersection with the sand lands on ground that already looks
+        // water - the ocean shader's Fresnel sky reflection and dielectric sun glint over the lit ground
+        // - so the ocean's depth-buffer intersection with the sand lands on ground that already looks
         // like water. Keyed on the smooth wetness field, not the pooled noise (that drew water blobs);
         // it ramps over [threshold - softness, threshold + softness] so it blends out, never edges.
         float surfaceThreshold = 0.7f; // wetness at which the water look is half in
@@ -408,7 +408,7 @@ public:
                                        // absorption + in-scatter), so the colours match at the waterline
         float liveMargin = 0.08f;      // m: the film + gloss stay on ground up to this far BELOW the estimated
                                        // live surface (the estimate sits under the drawn ocean edge: no choppy
-                                       // XZ, no tongue thickness — without the margin a bare band shows above
+                                       // XZ, no tongue thickness - without the margin a bare band shows above
                                        // the waterline)
     };
     void setTerrainWetParams(const TerrainWetTweaks& params) { m_terrainWetTweaks = params; }
@@ -431,7 +431,7 @@ public:
     void clearFogTerrainHeightMap() { m_fogTerrainMap.clear(); } // fog reverts to the flat height base
     // This frame slot's ocean displacement readback: RGBA16F texels (Dx, h, Dz, dDxz), outRes^2 per
     // cascade, cascades packed consecutively. Safe to read between beginFrame (fence waited) and
-    // present (slot resubmits) — copy it out inside that window (Procedural::OceanGenerator does, for
+    // present (slot resubmits) - copy it out inside that window (Procedural::OceanGenerator does, for
     // the buoyancy water-height queries); contents are ~2 frames old and only refresh while the ocean
     // simulates.
     oc::span<const uint16> getOceanDisplacementReadback(uint32& outRes) const
@@ -442,7 +442,7 @@ public:
     void setPostParams(const PostParams& post) { m_postParams = post; setHaveToRecordCommandBuffers(); }
     // The UI's snapshotted ImGui draw data (an ImDrawData*, opaque here); present() records the
     // ImGui pass from it. Null until the first UI::render - the pass is skipped.
-    // Called by the widget-pass JOB: only PENDING — present must never see a snapshot before main
+    // Called by the widget-pass JOB: only PENDING - present must never see a snapshot before main
     // promoted it in updateImGuiTextures() (after the join, textures uploaded). A fast pass that
     // finished before present N recorded would otherwise get drawn one frame early, with its
     // freshly baked atlas texture still a create request (frame 0's atlas, every time).
@@ -502,7 +502,7 @@ private:
     // Applied by beginFrame from its viewportRect argument, which is the only way to set it. VR renders
     // full-extent (no editor panel sub-rect), so the rect is ignored there.
     // An EMPTY rect is ignored (keeps the previous one): the UI widget pass runs a frame behind, so
-    // frame 0 arrives with the default Rect() — the swapchain-sized rect from initialize() stands
+    // frame 0 arrives with the default Rect() - the swapchain-sized rect from initialize() stands
     // in, instead of a 0/0 aspect reaching glm::perspective (asserted in Debug).
     void setViewportRect(const Rect& rect) { if (Globals::openXR.isEnabled()) return; if (rect.getSize().x <= 0 || rect.getSize().y <= 0) return; if (rect != m_viewportRect) { m_viewportRect = rect; setHaveToRecordCommandBuffers(); } }
 
@@ -520,7 +520,7 @@ private:
     // mesh set warm in the mesh streamer) and publishes the node's state-slot bias for the cull shader.
     void noteLodChainUse(const RenderNode& node, uint32 startIdx, PerFrameData& frameData);
 
-    // beginFrame helpers, in call order (run wherever beginFrame runs — the desktop job or main in
+    // beginFrame helpers, in call order (run wherever beginFrame runs - the desktop job or main in
     // VR; see each definition in Renderer.cpp).
     glm::mat4 computeCenterViewProj(const Camera& camera) const; // pure: projection (VR: combined eyes) * view, from m_viewportRect
     void applyVrHeadPose(const Camera& cameraIn, Camera& camera, glm::quat& vrBaseOrientation);
@@ -546,7 +546,7 @@ private:
     void recordGBuffer(uint32 frameIdx);
     void recordGBufferInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
     // Depth-prepass reuse: transitions this eye's G-buffer depth SHADER_READ_ONLY <-> DEPTH_READ_ONLY
-    // around the scene pass (the reuse render pass performs no transitions itself — its dependency array
+    // around the scene pass (the reuse render pass performs no transitions itself - its dependency array
     // must stay identical to the main pass's for render-pass compatibility).
     void recordReuseDepthBarrier(vk::CommandBuffer cb, vk::Image gbufferDepth, uint32 eyeIndex, bool toAttachment);
     void recordAOInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
@@ -617,9 +617,9 @@ private:
     std::recursive_mutex m_spawnMutex;
 
     uint32 addRenderNodeTransform(const Transform& transform);
-    // vertexCounts: exact per-MeshInfo vertex count (parallel to meshInfos) — the BLAS builder needs a
+    // vertexCounts: exact per-MeshInfo vertex count (parallel to meshInfos) - the BLAS builder needs a
     // tight maxVertex per mesh and offsets are no longer monotonic with the mesh streamer's free-list.
-    // skinnedOutputs: MeshInfos pointing at per-instance skinned output regions — excluded from the
+    // skinnedOutputs: MeshInfos pointing at per-instance skinned output regions - excluded from the
     // one-time static BLAS builds (and thus compaction): their regions are uninitialized until the
     // skinning compute runs, and their addresses are owned per frame slot by the skinned BLAS rebuild.
     uint32 addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>& meshInfos, oc::span<const uint32> vertexCounts, bool skinnedOutputs = false);
@@ -672,7 +672,7 @@ private:
 
     // Everything one spawnSkinnedNode allocated (per-instance MeshInfo range, output vertex regions,
     // palette region, contiguous SkinningJob/SkinnedBlasBuild range), recycled as a unit: destroying the
-    // node parks its bundle (jobs/BLAS deactivated IN PLACE — the per-frame skinned BLAS slots are
+    // node parks its bundle (jobs/BLAS deactivated IN PLACE - the per-frame skinned BLAS slots are
     // positional and sized once, so entries never move) on a per-container free list, and the next
     // spawnSkinnedNode of the same container reuses it wholesale with zero GPU uploads or re-records.
     struct SkinnedInstanceBundle
@@ -684,7 +684,7 @@ private:
         uint32 numMeshes;
         oc::vector<uint32> lodGroupForMesh; // per mesh: MeshLodGroup idx (UINT32_MAX = no chain)
         oc::vector<uint32> blasIndexCounts; // per mesh: the skinned BLAS's index count (its RT level's,
-                                             // restored on unpark — src.indexCount would be level 0's)
+                                             // restored on unpark - src.indexCount would be level 0's)
     };
     uint32 acquireSkinnedBundle(uint32 sourceKey); // reactivates + returns a parked bundle, UINT32_MAX if none free
     uint32 registerSkinnedBundle(const SkinnedInstanceBundle& bundle);
@@ -699,8 +699,8 @@ private:
     uint32 allocateSkinningPalette(uint32 boneCount);
     void setSkinningPalette(uint32 paletteHandle, oc::span<const glm::mat4> palette);
     // A bundle's SkinningJob/SkinnedBlasBuild entries must be one contiguous range (the per-frame
-    // skinned BLAS slots are positional), so the range is allocated as a block — from the free list
-    // (destroyed containers) when one fits, appended otherwise — and filled per mesh afterwards.
+    // skinned BLAS slots are positional), so the range is allocated as a block - from the free list
+    // (destroyed containers) when one fits, appended otherwise - and filled per mesh afterwards.
     uint32 allocateSkinningJobRange(uint32 count);
     void setSkinnedInstance(uint32 jobIdx, uint32 baseVertexOffset, uint32 skinVertexOffset, uint32 outVertexOffset, uint32 vertexCount, uint32 paletteHandle, uint32 meshIdx, uint32 firstIndex, uint32 indexCount);
 
@@ -776,7 +776,7 @@ private:
     bool m_particleResetPending = true;
     bool m_decalsEnabled = true;
     // CPU force-emitter slot table (Force library), compact-uploaded per frame; destroyed slots stay
-    // reserved (FORCE_FLAG_ACTIVE cleared) until the in-flight frames drain, then recycle — the
+    // reserved (FORCE_FLAG_ACTIVE cleared) until the in-flight frames drain, then recycle - the
     // per-emitter force readback is slot-indexed and must never pair a new emitter with stale results.
     oc::vector<RendererVKLayout::ForceEmitterGpu> m_forceEmitters;
     oc::vector<uint32> m_freeForceEmitterSlots;
@@ -824,7 +824,7 @@ private:
     uint32 m_numSunCascades = 0;
     glm::mat4 m_centerViewProj = glm::mat4(1.0f);
 
-    // The frame UBO, assembled by buildFrameUbo each beginFrame (one call in flight — see beginFrame's
+    // The frame UBO, assembled by buildFrameUbo each beginFrame (one call in flight - see beginFrame's
     // concurrency note). Persists across frames: buildUboViews reads last frame's mvps out of it for
     // reprojection before overwriting.
     RendererVKLayout::Ubo m_ubo;
@@ -928,7 +928,7 @@ private:
     Buffer m_instanceOffsetsBuffer;
 
     // GPU LOD selection (shared, device-local): per-mesh group index, packed group data, and the
-    // per-instance hysteresis state the main cull reads/writes (advisory only — the shader clamps
+    // per-instance hysteresis state the main cull reads/writes (advisory only - the shader clamps
     // whatever it reads into the frame's valid band, so cross-frame races and garbage are benign).
     Buffer m_meshLodGroupIdxBuffer;
     Buffer m_meshLodGroupsBuffer;

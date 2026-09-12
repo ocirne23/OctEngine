@@ -11,12 +11,12 @@ import :TerrainSampler;
 export namespace Procedural
 {
 	// Physics for the procedural terrain: a focus-centered ring of small static triangle-mesh collider
-	// tiles, sampled from the SAME ITerrainSampler the terrain renders — heights are sampled on the render
+	// tiles, sampled from the SAME ITerrainSampler the terrain renders - heights are sampled on the render
 	// LOD0 lattice with the render mesh's triangulation, so bodies rest exactly on the drawn surface.
 	//
 	// Kept performant by never touching the render chunks (a LOD0 chunk is ~500k triangles; a collider
 	// only needs the ground near dynamic bodies): tiles are a few tens of meters, only exist within
-	// "Radius" of the focus (the camera — thrown bodies start there), and each is built off the main
+	// "Radius" of the focus (the camera - thrown bodies start there), and each is built off the main
 	// thread (sampleGrid + BVH build) with ONE build in flight, nearest-first. The main thread only
 	// creates/destroys the static bodies, which is cheap in box3d. Tiles clear and rebuild when the
 	// sampler identity changes (terrain regenerated), exactly like the streamer's residents.
@@ -27,7 +27,7 @@ export namespace Procedural
 		TerrainCollider(const TerrainCollider&) = delete;
 		TerrainCollider& operator=(const TerrainCollider&) = delete;
 		// Wait out the in-flight build job (main thread helps), then tiles destroy their
-		// bodies/meshes — Globals::physics outlives any stack-local instance.
+		// bodies/meshes - Globals::physics outlives any stack-local instance.
 		~TerrainCollider() { Globals::jobSystem.wait(m_buildCounter); }
 
 		void initialize(void* terrainUserData); // registers the Tweaks ("Terrain/Collision")

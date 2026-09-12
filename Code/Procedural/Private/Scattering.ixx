@@ -13,25 +13,25 @@ import :TerrainSampler;
 
 export namespace Procedural
 {
-	// One scatterable model: how it looks and how it occupies ground. Assets are shared — any number of
+	// One scatterable model: how it looks and how it occupies ground. Assets are shared - any number of
 	// rules can reference one by name. Configured in the SCATTER_ASSETS table (Scattering.cpp).
 	struct ScatterAsset
 	{
 		const char* name = "";
-		const char* ocPath = "";           // .oc file relative to Assets/ — the model path and import options
+		const char* ocPath = "";           // .oc file relative to Assets/ - the model path and import options
 		                                   // (MergeNodes/PreTransformVertices/DecimationFactor) come from it,
 		                                   // so scatter and World share one cooked .vsc per model
-		oc::vector<const char*> nodes;    // spawnable node paths in the model — each placement picks one
+		oc::vector<const char*> nodes;    // spawnable node paths in the model - each placement picks one
 		                                   // at random (variants); empty = spawn the model root
 		float footprintRadius = 1.0f;      // ground exclusion radius (m at scale 1): no other footprinted
 		                                   // instance may overlap it. 0 = never blocks/blocked (cheap grass)
 		float minScale = 0.8f;             // uniform random scale range
 		float maxScale = 1.3f;
 		float slopeAlign = 0.0f;           // 0 = always upright, 1 = up-axis fully follows the terrain normal
-		float sinkDepth = 0.08f;           // m (x scale) embedded below the surface — hides floating edges on slopes
+		float sinkDepth = 0.08f;           // m (x scale) embedded below the surface - hides floating edges on slopes
 	};
 
-	// One asset's distribution in one climate — add as many rules as you like, and reference one asset from
+	// One asset's distribution in one climate - add as many rules as you like, and reference one asset from
 	// any number of them. Density falls off smoothly with the local climate's distance to the rule's
 	// attractor (the same (t, h) space the terrain's textures are picked in), so scatter borders are soft
 	// and track the ground they stand on rather than snapping at a classification boundary.
@@ -39,7 +39,7 @@ export namespace Procedural
 	struct ScatterRule
 	{
 		// The climate this asset likes, in REAL units (mean annual temperature C / annual precipitation
-		// mm/yr) — the same units the terrain's texture table uses. Density falls off as a Gaussian around
+		// mm/yr) - the same units the terrain's texture table uses. Density falls off as a Gaussian around
 		// it, so a rule is an attractor in climate space rather than a member of a named region.
 		// It named a biome enum once. That enum belonged to the old noise generator and went with it, but
 		// the indirection was worth losing on its own: a rule now says what climate it wants instead of
@@ -61,7 +61,7 @@ export namespace Procedural
 	// follows the camera, each cell's placements computed deterministically on a worker thread from the
 	// SAME ITerrainSampler the terrain renders from (height/water/climate agree with the ground by
 	// construction), then bridged to RenderNodes on the main thread. Placements are a pure function of
-	// (cell, seed, config) — revisiting a cell always reproduces the identical instances. Per-rule view
+	// (cell, seed, config) - revisiting a cell always reproduces the identical instances. Per-rule view
 	// distances spawn/despawn each cell's instance groups as the camera moves (trees carry far, pebbles
 	// near) without regenerating the cell.
 	class ScatterSystem
@@ -73,7 +73,7 @@ export namespace Procedural
 		ScatterSystem& operator=(const ScatterSystem&) = delete;
 
 		void initialize();  // registers Tweaks
-		// Per frame, after terrain.update: maps = terrain.activeClimateMaps() — scatter follows the live
+		// Per frame, after terrain.update: maps = terrain.activeClimateMaps() - scatter follows the live
 		// terrain field, clears itself while terrain is disabled, and regenerates when the field changes.
 		void update(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps);
 
@@ -160,7 +160,7 @@ export namespace Procedural
 
 		// --- Per-rule runtime, resolved by loadAssets (read-only afterwards, shared with the worker):
 		// table asset index (UINT16_MAX = rule dropped), variant count, and the rule attractor's
-		// coordinates in climate space. m_ruleOrder is the generation order — valid rules sorted by
+		// coordinates in climate space. m_ruleOrder is the generation order - valid rules sorted by
 		// footprint descending, so large objects claim ground before small ones fill the gaps.
 		struct RuleRuntime
 		{
@@ -172,7 +172,7 @@ export namespace Procedural
 		oc::vector<uint16> m_ruleOrder;
 		float m_maxViewDistance = 0.0f;
 
-		// The placement function itself — pure, worker-thread; see the definition for the filter chain.
+		// The placement function itself - pure, worker-thread; see the definition for the filter chain.
 		static void generateCell(const ITerrainSampler& maps, glm::ivec2 coord, const GenParams& params,
 			oc::span<const RuleRuntime> ruleRt, oc::span<const uint16> order, oc::vector<GroupResult>& outGroups);
 
@@ -192,7 +192,7 @@ export namespace Procedural
 		// --- Main-thread residency state. Cell keys pack the coord (cellKey/cellCoord), so anything that
 		// only needs a coordinate range enumerates coords and hash-probes instead of walking a map. Groups
 		// live in per-rule maps so the spawn scan probes only the cells inside each rule's OWN view-
-		// distance ring — never the full residency ring, which is sized by the largest rule.
+		// distance ring - never the full residency ring, which is sized by the largest rule.
 		oc::unordered_set<uint64> m_residentCells; // every generated ring cell, incl. placement-less ones
 		oc::vector<oc::unordered_map<uint64, RuleGroup>> m_ruleGroups; // [ruleIdx][cellKey]
 		oc::unordered_set<uint64> m_pending;

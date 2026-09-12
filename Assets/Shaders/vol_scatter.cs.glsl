@@ -108,7 +108,7 @@ float fogNoise(vec3 worldPos)
 
 // Mean of the exponential height profile exp(-max(y - base, 0) * falloff) over one slice's ray segment,
 // in closed form. A point sample (even jittered + temporally blended) only converges to this mean after
-// many frames — while the camera moves the history is short, and the partially-converged per-slice means
+// many frames - while the camera moves the history is short, and the partially-converged per-slice means
 // disagree, which reads as view-aligned density layers sweeping with the camera. The analytic mean is
 // exact every frame, so the height fog profile is layer-free even with zero history (only the lighting
 // stays stochastic).
@@ -127,7 +127,7 @@ float heightFogMean(float yA, float yB, float base, float falloff)
 }
 
 // Vertical FFT wave displacement at worldXZ (m, sum of the cascades, shoal-faded like the drawn surface;
-// chop and river flow rotation are skipped — sub-froxel for a fog boundary). The mip matches the froxel's
+// chop and river flow rotation are skipped - sub-froxel for a fog boundary). The mip matches the froxel's
 // world footprint, band-limiting the boundary to what the froxel grid can represent anyway.
 float oceanWaveHeightAt(vec2 worldXZ, float waterDepth, float footprint)
 {
@@ -214,12 +214,12 @@ void main()
 
     // View rays from u_mvp's x/y/w ROWS (the sky.fs pattern): for a world direction d, ndc.xy =
     // (r0.d, r1.d) / (rw.d), so solving the 3x3 system {r0.d = ndc.x, r1.d = ndc.y, rw.d = 1} gives the
-    // exact ray through a pixel from O(1)-magnitude rotation/projection terms — no camera translation,
+    // exact ray through a pixel from O(1)-magnitude rotation/projection terms - no camera translation,
     // no depth-convention dependence, and no float32 invMvp (whose error grows with the camera's
     // distance from the origin and RE-ROLLS EVERY FRAME: the previous two-point unprojection through it
-    // wobbled the ray directions per frame, de-syncing the temporal reprojection into fog shimmer —
+    // wobbled the ray directions per frame, de-syncing the temporal reprojection into fog shimmer -
     // reversed-Z shrank the unproject baseline and amplified it). mvp is unjittered (the TAA jitter only
-    // applies at rasterization). The UNJITTERED froxel-center ray feeds the temporal reprojection below —
+    // applies at rasterization). The UNJITTERED froxel-center ray feeds the temporal reprojection below -
     // reprojecting the jittered sample point would smear the per-frame jitter into the history lookup.
     const mat3 rayFromNdc = inverse(mat3(
         vec3(u_mvp[0][0], u_mvp[1][0], u_mvp[2][0]),
@@ -259,12 +259,12 @@ void main()
         if (u_fogParams6.z > 0.0)
         {
             // Regional climate: x = fog thickness (density multiplier), and the height-falloff multiplier
-            // (fog hugs the ground in one region, towers in another) DERIVED from temperature — it is a
+            // (fog hugs the ground in one region, towers in another) DERIVED from temperature - it is a
             // pure function of it, so the slot it used to be baked into is now free entirely.
             // Both eased in by Region strength.
             // Temperature is evaluated at the GROUND (td.x), not at this froxel: the fog's character comes
             // from the air over the terrain, and .z on its own is only the sea-level baseline. Using the
-            // baseline directly would give a mountain valley the coast's falloff — the altitude signal is
+            // baseline directly would give a mountain valley the coast's falloff - the altitude signal is
             // the entire point of the knob.
             const vec4 climate = terrainClimateNearestAt(worldPos.xz);
             regionMul = mix(1.0, climate.x, u_fogParams6.z);
@@ -280,10 +280,10 @@ void main()
     const float heightDensity = u_fogParams0.x * heightFogMean(yA, yB, heightBase, heightFalloff) * regionMul;
 
     // Underwater: everything at/below the LOCAL water surface is ALWAYS fogged at the global density x
-    // "Fog/Underwater density" (u_fogParams6.w) — the height profile and the regional thickness only
+    // "Fog/Underwater density" (u_fogParams6.w) - the height profile and the regional thickness only
     // shape the fog ABOVE the surface, so dipping the camera below the waterline reads as murky depth
     // regardless of the local climate (thick murk under thin haze at > 1, off at 0). The boundary is the
-    // LIVE WAVE SURFACE: froxel segments inside the waterline band (u_fogParams7.y — sized CPU-side from
+    // LIVE WAVE SURFACE: froxel segments inside the waterline band (u_fogParams7.y - sized CPU-side from
     // the readback's trough estimate, 0 = ocean off) sample the FFT displacement for the real wave height,
     // so fog neither pokes out of troughs nor recedes under crests; segments outside the band are
     // trivially above/below any possible wave, so only a thin shell pays for the wave taps.
@@ -293,7 +293,7 @@ void main()
     if (u_fogParams7.y > 0.0 && y0 < waterY + u_fogParams7.y && y1 > waterY - u_fogParams7.y)
         surfY += oceanWaveHeightAt(worldPos.xz, waterDepth, viewZ * (2.0 / float(VOL_FROXEL_Y)));
     // Underwater fog is a NEAR-FIELD effect: water absorbs everything within tens of meters, so distant
-    // underwater froxels can never be legitimately seen — but the froxel grid integrates THROUGH the
+    // underwater froxels can never be legitimately seen - but the froxel grid integrates THROUGH the
     // water surface, and at range the coarse Z slices + XY bilinear leaked the dense tinted murk from
     // behind the surface into the surface pixels (blurry, shimmering distant water). Fading the whole
     // underwater treatment out by view distance removes the discontinuity the leak fed on; beyond the
@@ -304,7 +304,7 @@ void main()
 
     // Density noise fades out where one noise wavelength drops under the froxel footprint (sub-froxel
     // noise is pure aliasing the temporal blend turns into shimmer; its mean is 1) and is skipped
-    // entirely where there is no medium to modulate — sky/above-fog froxels pay nothing.
+    // entirely where there is no medium to modulate - sky/above-fog froxels pay nothing.
     float noiseMul = 1.0;
     const float noiseWavelength = 1.0 / max(u_fogParams2.x, 1e-4);
     const float noiseAmp = u_fogParams2.y * (1.0 - smoothstep(40.0 * noiseWavelength, 80.0 * noiseWavelength, viewZ));
@@ -342,7 +342,7 @@ void main()
         // Multiple rays are jittered in a cone (sun softness) per froxel per frame; together with the
         // temporal blend this turns the binary visibility into a smooth penumbra instead of blotches.
         // Beyond the terrain shadow distance both sources run out of data (TLAS range bound / cascade
-        // extent) — distant froxels march the terrain height cascades instead: cheaper than the ray,
+        // extent) - distant froxels march the terrain height cascades instead: cheaper than the ray,
         // and mountains actually shadow far fog.
         const vec3 sunDir = normalize(u_sunDirection.xyz);
         float sunVis;
@@ -350,7 +350,7 @@ void main()
         {
             // Froxel receivers float in air, so they need none of the surface path's self-shadow bias:
             // its own tuned 25 m start / 10 steps (~12.8 km reach), kept as-is now that the march is
-            // shared with the lit surfaces (which start much further out — see u_terrainShadowParams).
+            // shared with the lit surfaces (which start much further out - see u_terrainShadowParams).
             sunVis = terrainSunVisibility(worldPos, sunDir, 25.0, 10, max(u_fogParams4.w, 0.015), 4.0);
         }
         else if (u_rtSunShadow > 0.5)
@@ -376,20 +376,20 @@ void main()
         else
             sunVis = giSunShadow(worldPos, vec3(0.0));
 
-        // Light shafts: sunlight reaching an underwater froxel crossed the wavy surface — caustic focus
-        // + Beer-Lambert absorption (underwater_light.inc.glsl) — weighted by the slice's SUBMERGED
+        // Light shafts: sunlight reaching an underwater froxel crossed the wavy surface - caustic focus
+        // + Beer-Lambert absorption (underwater_light.inc.glsl) - weighted by the slice's SUBMERGED
         // fraction, never a binary test at the jittered sample point: straddling froxels flipped between
         // air and water lighting per frame, and the temporal blend smeared that flicker across every
         // distant water surface. Depth = the submerged part's midpoint (y0/y1 are slice bounds, jitter-
         // free). The sun phase also steepens underwater: water forward-scatters far harder than haze
-        // (g -> ~0.65) — without the forward lobe the focused columns barely brighten toward the sun
+        // (g -> ~0.65) - without the forward lobe the focused columns barely brighten toward the sun
         // and no shafts read at any strength.
         vec3 sunTrans = vec3(1.0);
         float gSun = g;
         if (underFrac > 0.0)
         {
             const float depthMid = max((surfY - y0) - 0.5 * underFrac * (y1 - y0), 0.05);
-            // "Fog/Shaft boost" (u_fogParams7.x): non-physical gain on the underwater sun in-scatter —
+            // "Fog/Shaft boost" (u_fogParams7.x): non-physical gain on the underwater sun in-scatter -
             // at fog-scale densities the physically correct shaft radiance is too faint to read. Its
             // sqrt also feeds the helper's REACH, so boosting brightness stretches shaft length too.
             sunTrans = mix(vec3(1.0),

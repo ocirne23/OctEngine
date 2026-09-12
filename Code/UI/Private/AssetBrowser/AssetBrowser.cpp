@@ -7,7 +7,7 @@ import Entity;
 import File;
 import :AssetBrowser;
 
-// Splits a relative path into its components ("a/b/c" -> {a, b, c}) — the breadcrumb walks these.
+// Splits a relative path into its components ("a/b/c" -> {a, b, c}) - the breadcrumb walks these.
 static oc::vector<oc::string> splitPathComponents(const oc::string& path)
 {
 	oc::vector<oc::string> parts;
@@ -72,7 +72,7 @@ static bool isTextFile(const oc::string& ext)
 	return ext == ".txt" || ext == ".scr";
 }
 
-// NOTE: isDirectory + ext come from the cached listing — these used to call
+// NOTE: isDirectory + ext come from the cached listing - these used to call
 // std::filesystem::is_directory() PER ITEM PER FRAME (a syscall each).
 static const char* fileIcon(bool isDirectory, const oc::string& ext)
 {
@@ -200,7 +200,7 @@ void AssetBrowser::prepare()
 {
 	// Periodic refresh of the listings the panel actually drew, on a job. Files also appear from
 	// OUTSIDE the browser (prefab saves, compiled scripts, cooked assets), so a poll is the only
-	// way to notice — but only while the panel is being used.
+	// way to notice - but only while the panel is being used.
 	if (!m_active)
 		return;
 	ProfileScope scope("Asset browser prepare", EProfileCategory::UI);
@@ -213,7 +213,7 @@ void AssetBrowser::prepare()
 void AssetBrowser::render()
 {
 	++m_frame;
-	// Focused OR hovered counts as "in use" — the rescan poll (prepare) runs only then.
+	// Focused OR hovered counts as "in use" - the rescan poll (prepare) runs only then.
 	m_active = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)
 		|| ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows);
 	{
@@ -268,7 +268,7 @@ void AssetBrowser::render()
 
 void AssetBrowser::queueSavePrefab(Entity* root, const oc::string& path)
 {
-	invalidateListings(); // the app writes the .pre this frame — show it on the next draw
+	invalidateListings(); // the app writes the .pre this frame - show it on the next draw
 	std::error_code ec;
 	const oc::string rel = FileSystem::relativePath(path, oc::string(), /*allowMainThread*/ true);
 	const oc::string savePath = (ec || rel.empty()) ? path : rel;
@@ -443,7 +443,7 @@ void AssetBrowser::renderDirectoryTree(const oc::string& dir)
 	// ever recurses into entries the cached listing already marked as directories, and a folder that
 	// disappeared simply lists empty (drawn as a leaf) until the next rescan notices.
 	const bool isCurrent = (dir == m_currentPath);
-	DirListing& dirListing = listing(dir); // cached — no per-frame enumeration
+	DirListing& dirListing = listing(dir); // cached - no per-frame enumeration
 	const bool hasSubDirs = dirListing.hasSubDirs;
 
 	ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow
@@ -631,7 +631,7 @@ void AssetBrowser::renderContentList()
 
 void AssetBrowser::renderContextMenu(const oc::string& p)
 {
-	// (no ProfileScope: this runs PER ITEM — hundreds of records per frame would flood the ring.
+	// (no ProfileScope: this runs PER ITEM - hundreds of records per frame would flood the ring.
 	// The early-out below means an unopened popup costs one ImGui call.)
 	if (!ImGui::BeginPopupContextItem("##ab_ctx"))
 		return;
@@ -703,7 +703,7 @@ void AssetBrowser::navigateTo(const oc::string& path)
 		m_selectedPath.clear();
 		m_searchBuf[0] = '\0';
 		// Entering a folder is the one moment a stale listing would be most visible: re-scan it
-		// on the spot (one directory, on a click — not per frame).
+		// on the spot (one directory, on a click - not per frame).
 		scanDirectory(m_currentPath, m_dirCache[m_currentPath]);
 	}
 }

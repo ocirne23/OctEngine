@@ -1,11 +1,11 @@
 #version 460
 
 // The ANALYTIC tier's UNION MARCH: one fullscreen march per covered pixel over the interval the
-// small-emitter proxies rasterized (force_interval.fs.glsl) — where N small bubbles stack on a
+// small-emitter proxies rasterized (force_interval.fs.glsl) - where N small bubbles stack on a
 // pixel, the field is marched ONCE instead of once per proxy, killing the overdraw term of the
 // old per-proxy path. Marching and shading match force_shell.fs.glsl exactly (same crossing/wall
 // machinery, same analytic refinement, shared shading include); the ownership discard is gone
-// because ONE march owns every crossing — the only skip is a crossing whose dominant contributor
+// because ONE march owns every crossing - the only skip is a crossing whose dominant contributor
 // is a SAMPLED-tier (large) emitter, which that emitter's own proxy draws. Premultiplied blend,
 // manual reversed-Z depth clamp, no depth write.
 
@@ -47,12 +47,12 @@ void main()
 
     // FORCE_UNION_UV_SCALE (injected, 2.0 in the half-res mode; absent = full res): maps this
     // pass's gl_FragCoord back to full-res uv (the interval texelFetch below stays in this pass's
-    // own texels — its target always matches this resolution).
+    // own texels - its target always matches this resolution).
     const vec2 uv = gl_FragCoord.xy * u_screenSize.zw * FORCE_UNION_UV_SCALE;
     const vec3 rayOrigin = u_viewPos;
     const vec3 rayDir = normalize(worldPosFromDepth(uv, 0.0) - rayOrigin);
 
-    // Manual depth test: clamp the march to the opaque scene (once — not per proxy).
+    // Manual depth test: clamp the march to the opaque scene (once - not per proxy).
     const float sceneDepth = texture(u_gbufferDepth, uv).r;
     float sceneDist = 1e30;
     if (sceneDepth > 0.0) // reversed-Z: 0 = sky/far
@@ -73,7 +73,7 @@ void main()
     uint bestTeam;
     float bestPhi, secondPhi, F;
     forceSampleField(rayOrigin + rayDir * t0, iso, bestTeam, bestPhi, secondPhi, F);
-    // Camera-inside is ONE point per frame, evaluated on the CPU (buildUboForce forceBake2.w) —
+    // Camera-inside is ONE point per frame, evaluated on the CPU (buildUboForce forceBake2.w) -
     // never re-sampled per fragment.
     const bool cameraInsideField = t0 > 0.0 ? u_forceBake2.w > 0.5 : F > 0.0;
     uint prevTeam = bestTeam;
@@ -88,8 +88,8 @@ void main()
     ivec3 cachedGridPos = ivec3(0x7FFFFFFF);
     uint cachedCell = FORCE_INVALID_CELL;
 #endif
-    // Static per-pixel phase jitter (FORCE_UNION_JITTER — "Force/Shell/Union jitter", compiled
-    // out when off) breaks the march's step-count banding into spatial noise — larger "Union
+    // Static per-pixel phase jitter (FORCE_UNION_JITTER - "Force/Shell/Union jitter", compiled
+    // out when off) breaks the march's step-count banding into spatial noise - larger "Union
     // step (m)" settings stay presentable. Purely spatial (no frame term), so shells never
     // shimmer with TAA off; crossings still bisect to the exact surface either way.
 #ifdef FORCE_UNION_JITTER
@@ -103,7 +103,7 @@ void main()
         bool sampledEmpty = false;
 #ifdef FORCE_GRID
         // EMPTY-CELL FAST PATH: a cell with NO candidates holds no emitters at all (the grid
-        // insert covers every support) — provable, not heuristic — so the field there is exactly
+        // insert covers every support) - provable, not heuristic - so the field there is exactly
         // zero. After the crossing logic below the index also JUMPS past the empty stretch.
         const vec3 samplePos = rayOrigin + rayDir * t;
         const ivec3 gridPos = forceGridPos(samplePos);
@@ -137,7 +137,7 @@ void main()
                 hitTeam = entryCrossing ? bestTeam : prevTeam;
                 float lo = tPrev, hi = t;
                 // 5 refinements (not the shell FS's 6): this is the pixel's ONLY march, so there
-                // is no cross-proxy hit-error matching to satisfy — bracket/32 stays under the
+                // is no cross-proxy hit-error matching to satisfy - bracket/32 stays under the
                 // normal's finite-difference step at the union tier's step sizes.
                 for (int b = 0; b < 5; ++b)
                 {
@@ -182,7 +182,7 @@ void main()
                 }
             }
             // Composite the step's events in ray order. The only skip: a crossing owned by a
-            // sampled-tier emitter (its own proxy draws it) — everything else is ours, exactly
+            // sampled-tier emitter (its own proxy draws it) - everything else is ours, exactly
             // once, because this is the pixel's ONLY analytic march.
             for (int ev = 0; ev < 2 && numShaded < 3; ++ev)
             {
@@ -229,7 +229,7 @@ void main()
         fPrev = F;
 #ifdef FORCE_GRID
         // JUMP the INDEX past the empty cell's exit (uniform dt preserved, so the refinement
-        // brackets stay one step wide), and move the bracket's start to the exit — the skipped
+        // brackets stay one step wide), and move the bracket's start to the exit - the skipped
         // stretch is provably zero, and a bracket spanning it would cost the bisection its
         // accuracy at the next bubble's entry.
         if (sampledEmpty)

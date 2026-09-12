@@ -15,7 +15,7 @@ constexpr uint32 GameProtocolId = 0x4F43534B; // batched Spawn/Despawn (u16 coun
 constexpr uint16 GameNetVersion = 15;
 
 // Engine-reserved event: Synced-flagged tweak values, server -> clients (full set at join +
-// re-broadcast on change). Intercepted in fireEventAttributed — never reaches scripts or the
+// re-broadcast on change). Intercepted in fireEventAttributed - never reaches scripts or the
 // game hook, and a client-sent copy is dropped (only clients APPLY it).
 constexpr oc::string_view TweakSyncEventName = "OcTweakSync";
 
@@ -42,7 +42,7 @@ constexpr size_t MaxEventDataBytes = 1024; // payload cap: bounded so one event 
 // type byte + senderClientId + senderNetId + name length + name + payload length (varints are <= 5B
 // at these magnitudes). Both caps are enforced before send, so a valid event always fits.
 constexpr size_t MaxEventMessageBytes = 1 + 5 + 5 + 5 + MaxEventNameLength + 5 + MaxEventDataBytes;
-// Events are reliable, so exceeding this would only fragment (correct, just more packets) — the
+// Events are reliable, so exceeding this would only fragment (correct, just more packets) - the
 // assert exists to make that a DECISION rather than something a grown header does behind our backs.
 static_assert(MaxEventMessageBytes <= netMaxSinglePacketMessage(NetHostConfig{}.maxPacketSize, true),
     "an event no longer fits one packet: raise maxPacketSize, lower the caps, or accept fragmenting");
@@ -59,14 +59,14 @@ constexpr uint8 ChannelClaim = 3;
 // ---- tweaks (server send policy; correction thresholds live in NetSyncParams) ------------------
 static float s_snapshotHz = 20.0f;       // matches the physics fixed step
 static bool  s_quantize = true;
-// Snapshots are UNRELIABLE, so an oversized one is DROPPED, not fragmented — this must stay under
+// Snapshots are UNRELIABLE, so an oversized one is DROPPED, not fragmented - this must stay under
 // the transport's single-packet budget, which is why the cap is derived rather than written down.
 static int   s_snapshotMaxBytes = int(netMaxSinglePacketMessage(NetHostConfig{}.maxPacketSize, true)) - 64;
-// SNAPSHOT POLICY (per PEER — see sendSnapshotTick). An entity is due for a peer when it CHANGED
+// SNAPSHOT POLICY (per PEER - see sendSnapshotTick). An entity is due for a peer when it CHANGED
 // since that peer last received it (awake body, sleep edge, moved transform, flag or game-blob
 // change), thinned by the cadence of its distance TIER to that peer's own player: NEAR (< "Near
 // radius") every tick, MID (< "Mid radius", the sim LOD's outer tier) every "Mid every ticks",
-// FAR every "Far every ticks" — far units do move (the Game's far tick walks a wave in from the
+// FAR every "Far every ticks" - far units do move (the Game's far tick walks a wave in from the
 // spawn ring) and the client applies them directly while unselected (handleSnapshot), so it only
 // needs them roughly right until they cross its player's radius. KEYFRAMES repair lost packets:
 // an entity is re-sent unchanged on its tier's rotation, slowest for a SLEEPING body (nothing
@@ -83,7 +83,7 @@ static int   s_asleepKeyframeEveryTicks = 100;
 static int   s_farMaxPerTick = 100;
 // SPAWN STREAM flow control (server, per ready peer, per frame): records drained while the peer's
 // session channel holds fewer than "Queue target" reliable messages, at most "Records per frame".
-// The transport disconnects a peer past maxQueuedReliablePerChannel (1024) — the target keeps a
+// The transport disconnects a peer past maxQueuedReliablePerChannel (1024) - the target keeps a
 // bulk stream far below that, and the per-frame cap bounds the receiving client's spawn work
 // (a replicated spawn is a real prefab instantiation on its main thread).
 static int   s_spawnRecordsPerFrame = 128;
@@ -100,12 +100,12 @@ static bool  s_showStats = true;
 static bool  s_encrypt = true;
 
 // Thinning limit, not a clock: claims fire on physics step boundaries (see send()), so this only
-// caps them lower and above the step rate never binds. The two ends need not agree — the
+// caps them lower and above the step rate never binds. The two ends need not agree - the
 // displacement budget is wall-clock, so an inflated rate buys nothing.
 static float s_maxUpdateHz = 20.0f;
 static float s_maxClaimSpeed = 60.0f;     // m/s the movement token bucket refills at (cap = half a second
                                           // of it); must exceed the fastest LEGITIMATE motion, free fall included
-// How hard the server's twin chases an accepted claim (1/sec — 1/step closes the gap in one step).
+// How hard the server's twin chases an accepted claim (1/sec - 1/step closes the gap in one step).
 // It follows through the solver rather than being teleported onto the claim; see handleClaimMessage.
 static float s_twinFollowGain = 10.0f;
 static float s_twinResyncDistance = 2.0f; // past this the follow can't close it: hard teleport
@@ -117,7 +117,7 @@ static int   s_forcedTicks = 30;          // snapshot ticks the owner stays forc
 static float s_claimReanchorRadius = 2.0f; // a claim this close to the twin's CURRENT state always accepts (guaranteed rejection recovery)
 static int   s_claimRedundancy = 4;       // past claims carried in EVERY packet (<= ring capacity 8): a claim survives unless this many consecutive packets drop
 // Claim passthrough: re-emit an accepted claim extrapolated this far forward along its velocity,
-// cancelling the hold until the next snapshot tick. Must stay CONSTANT — a varying, arrival-phase
+// cancelling the hold until the next snapshot tick. Must stay CONSTANT - a varying, arrival-phase
 // dependent shift is what makes remote motion pulse. Higher = prediction, and overshoot on turns.
 static float s_ownerPredictTicks = 0.5f;
 
@@ -137,7 +137,7 @@ static bool isFinite(float v) { return std::isfinite(v); }
 static bool isFinite(const glm::vec3& v) { return isFinite(v.x) && isFinite(v.y) && isFinite(v.z); }
 static bool isFinite(const glm::quat& q) { return isFinite(q.x) && isFinite(q.y) && isFinite(q.z) && isFinite(q.w); }
 
-// wire quaternions must also be UNIT — box3d builds a rotation matrix from it
+// wire quaternions must also be UNIT - box3d builds a rotation matrix from it
 static bool sanitizeRotation(glm::quat& q)
 {
     if (!isFinite(q))
@@ -400,7 +400,7 @@ void NetworkManager::receive(double deltaSec)
     }
 
     // cap the dt fed to the transport: the first frame after a long init (multi-second asset/model
-    // loads) or a debugger pause arrives with SECONDS of deltaSec, and Time::update has no clamp —
+    // loads) or a debugger pause arrives with SECONDS of deltaSec, and Time::update has no clamp -
     // uncapped it advances the transport clock past the 5s handshake/receive timeouts in ONE step,
     // failing the connection before the buffered replies are even drained
     m_host.update(glm::min(deltaSec, 0.5));
@@ -433,7 +433,7 @@ void NetworkManager::receive(double deltaSec)
                 m_localClientId = 0;
                 m_preWelcomeEvents.clear(); // stale parked events must not replay into a new session
                 if (m_onServerLost)
-                    m_onServerLost(); // the App may shut us down NEXT frame — the reconnect below is then moot
+                    m_onServerLost(); // the App may shut us down NEXT frame - the reconnect below is then moot
                 // auto-reconnect: heals startup-time handshake failures and server restarts alike;
                 // a failed attempt takes connectTimeoutSec to report, which self-paces the retries.
                 // The re-handshake re-runs Hello->Welcome and the world replay is idempotent.
@@ -560,7 +560,7 @@ void NetworkManager::handleSessionMessage(NetPeerId peer, NetReader& reader, uin
         if (oc::find(m_readyPeers.begin(), m_readyPeers.end(), peer) == m_readyPeers.end())
             m_readyPeers.push_back(peer);
         // duplicate Hello from an already-ready peer (the reliable channel dedups packets, so only a
-        // misbehaving client sends two): resend the Welcome with the EXISTING id and do nothing else —
+        // misbehaving client sends two): resend the Welcome with the EXISTING id and do nothing else -
         // minting a fresh id would leak the old one and fire onClientJoined again (a second player)
         if (const auto existing = m_peerClients.find(peer); existing != m_peerClients.end())
         {
@@ -575,7 +575,7 @@ void NetworkManager::handleSessionMessage(NetPeerId peer, NetReader& reader, uin
             break;
         }
         const uint32 clientId = m_nextClientId++;
-        m_peerClients[peer] = clientId; // stable per connection — peer ids recycle, clientIds don't
+        m_peerClients[peer] = clientId; // stable per connection - peer ids recycle, clientIds don't
         uint8 buffer[32];
         NetWriter writer(buffer);
         writer.write<uint8>(uint8(ENetMsg::Welcome));
@@ -587,9 +587,9 @@ void NetworkManager::handleSessionMessage(NetPeerId peer, NetReader& reader, uin
         m_host.send(peer, writer.data(), ENetDelivery::Reliable, ChannelSession);
         // the networked world arrives HERE: every live spawn record is OWED to the peer, drained
         // by send() under flow control, ordered after the Welcome on the same channel (overlap with
-        // this frame's pending announces is harmless — the client spawn is idempotent). Ownership
+        // this frame's pending announces is harmless - the client spawn is idempotent). Ownership
         // that diverged from a record (proximity transfers) rides as OwnerChange right behind that
-        // record's batch — see drainSpawnStreams.
+        // record's batch - see drainSpawnStreams.
         {
             PeerStream& stream = m_peerStreams[peer];
             stream = {};
@@ -636,7 +636,7 @@ void NetworkManager::handleSessionMessage(NetPeerId peer, NetReader& reader, uin
         if (reader.overflowed())
             break;
         // a (re)connect rebuilds the replicated world from the replay that follows this Welcome:
-        // drop everything left from a previous session — stale ghosts would linger unsynced, and
+        // drop everything left from a previous session - stale ghosts would linger unsynced, and
         // after a SERVER restart its fresh id counter would collide with our old ids, splattering
         // snapshots/ownership onto the wrong entities. No-op on the first connect (registry empty).
         // Roots collected under the lock, destroyed outside it (the destroy cascade unregisters).
@@ -685,7 +685,7 @@ void NetworkManager::handleSpawnMessage(NetReader& reader)
     if (reader.overflowed())
         return;
     // a bad record is skipped, not the batch: every field is read before any validation, so the
-    // reader stays aligned on the next record — only exhausting the message ends the loop
+    // reader stays aligned on the next record - only exhausting the message ends the loop
     for (uint16 i = 0; i < count; ++i)
         if (!spawnReplicatedRecord(reader))
             break;
@@ -727,7 +727,7 @@ bool NetworkManager::spawnReplicatedRecord(NetReader& reader)
     {
         const std::lock_guard<std::mutex> lock(m_entityMutex);
         if (oc::contains(m_entities, baseId))
-            return true; // duplicate (late-joiner replay overlapping the frame's announce) — idempotent by design
+            return true; // duplicate (late-joiner replay overlapping the frame's announce) - idempotent by design
     }
     // spawn the same prefab locally with the server's ids forced onto its NetworkComponents in tree
     // order; main thread, before the entity pass, same context handleEntityChange spawns from
@@ -751,7 +751,7 @@ bool NetworkManager::spawnReplicatedRecord(NetReader& reader)
         Log::warning("Network: replicated '" + path + "' registered " + oc::to_string(registered)
             + " NetworkComponents, server announced " + oc::to_string(count) + " (asset mismatch?)");
     // The announced launch velocities start the local twin moving like the original (a projectile
-    // flies instead of dropping from rest). Main thread pre-physics — direct setters sanctioned.
+    // flies instead of dropping from rest). Main thread pre-physics - direct setters sanctioned.
     if (PhysicsComponent* pc = getComponent<PhysicsComponent>(spawned.get());
         pc && pc->bodyType == EPhysicsBodyType::Dynamic && pc->body.isValid())
     {
@@ -805,7 +805,7 @@ void NetworkManager::setOwner(Entity& root, uint32 clientId)
     };
     apply(root);
     // stamp the spawn record so the Spawn message carries the owner. The root grouping map lives
-    // only until this frame's send() — setOwner must be called in the spawn's own frame (live
+    // only until this frame's send() - setOwner must be called in the spawn's own frame (live
     // ownership TRANSFER after the announce needs its own message, future work)
     if (const auto it = m_dynamicRootIds.find(&root); it != m_dynamicRootIds.end())
         m_dynamicSpawns[it->second].ownerClientId = clientId;
@@ -817,7 +817,7 @@ void NetworkManager::setOwner(Entity& root, uint32 clientId)
 // ---- GAME BLOB: GameUnitComponent state riding the entity sync. Snapshot records (server ->
 // clients) and claim packets (owner -> server) append these 5 bytes whenever the entity carries
 // the component, so units AND player capsules (puppets) sync shields/teams/materials through the
-// ONE per-entity stream — no separate game event. Layout: healthFrac u8, energyFrac u8, emitter
+// ONE per-entity stream - no separate game event. Layout: healthFrac u8, energyFrac u8, emitter
 // output u8 (over 0..8), materialsFrac u8, flags u8 (bit0 collapsed, bits 4-6 team).
 constexpr float GameBlobOutputRange = 8.0f;
 constexpr size_t GameBlobBytes = 5;
@@ -840,11 +840,11 @@ static bool packGameStateBlob(Entity* entity, uint8 out[GameBlobBytes])
 }
 
 // Which parts of the blob the receiver adopts, by direction:
-// * applyShield — health/battery/output. Off on the RECEIVING OWNER: it computes its own.
-// * applyMaterials / applyTeam — server-authoritative, so a snapshot (server -> anyone, the owner
+// * applyShield - health/battery/output. Off on the RECEIVING OWNER: it computes its own.
+// * applyMaterials / applyTeam - server-authoritative, so a snapshot (server -> anyone, the owner
 //   INCLUDED) always applies them while a claim (owner -> server) never does: a client must not
 //   be able to mint its own inventory, nor re-team its twin's field into the enemy's bubbles.
-//   Both apply independently of applyShield — an owner still learns the team the server gave it.
+//   Both apply independently of applyShield - an owner still learns the team the server gave it.
 static void applyGameStateBlob(Entity* entity, const uint8 blob[GameBlobBytes],
     bool applyShield, bool applyMaterials, bool applyTeam)
 {
@@ -888,9 +888,9 @@ void NetworkManager::sendClaims()
         if (dynamicBody)
         {
             // claim-side twin of the snapshot sleep policy: every tick while awake, ONE final
-            // rest-pose claim on the awake->asleep edge, then silence — an owned-but-settled object
+            // rest-pose claim on the awake->asleep edge, then silence - an owned-but-settled object
             // costs nothing upstream (sleepDirty serves both policies: the server uses it for
-            // snapshots, the owning client here — different processes, never the same entity role)
+            // snapshots, the owning client here - different processes, never the same entity role)
             if (physics->body.isAwake())
                 comp->state->sleepDirty = true;
             else if (comp->state->sleepDirty)
@@ -905,7 +905,7 @@ void NetworkManager::sendClaims()
         record.input = comp->state->input;
         if (dynamicBody)
         {
-            // the raw stepped pose, not the interpolated render pose — that one trails the sim by
+            // the raw stepped pose, not the interpolated render pose - that one trails the sim by
             // up to a step, and smoothing belongs on the observer's playback buffer
             record.pos = physics->body.getPosition();
             record.rot = physics->body.getRotation();
@@ -1005,7 +1005,7 @@ void NetworkManager::handleClaimMessage(NetPeerId peer, NetReader& reader)
         }
     }
     if (!comp || comp->ownerClientId != senderClientId)
-        return; // unknown entity, or a client claiming something it doesn't own (spoof) — drop
+        return; // unknown entity, or a client claiming something it doesn't own (spoof) - drop
 
     // parse everything first: `look` rides once at the tail (it barely changes over the redundancy
     // window) and applies to every record
@@ -1045,7 +1045,7 @@ void NetworkManager::handleClaimMessage(NetPeerId peer, NetReader& reader)
     if (reader.overflowed() || !isFinite(look))
         return;
     // The owner's self-computed game state (its shield) lands on the twin regardless of how the
-    // pose claims fare — it is display/team state, and this replaces the old GqE report event.
+    // pose claims fare - it is display/team state, and this replaces the old GqE report event.
     // Materials stay server-authoritative: a client cannot claim its own inventory.
     if (hasGame)
         applyGameStateBlob(entity, gameBlob, /*applyShield*/ true, /*applyMaterials*/ false,
@@ -1095,12 +1095,12 @@ void NetworkManager::handleClaimMessage(NetPeerId peer, NetReader& reader)
         else if (recovering && glm::length(pos - twinPos) < s_claimReanchorRadius)
         {
             // Anti-deadlock: a stale anchor walled off from the twin would veto forever. Gated on
-            // `recovering` because it BYPASSES validation — ungated, every normal claim lands here
+            // `recovering` because it BYPASSES validation - ungated, every normal claim lands here
             // (accepted claims pin the twin) and an attacker walks the radius per packet.
         }
         else if (comp->state->server.lastAcceptedClaimSeq == 0)
         {
-            // first claim seeds the anchor — validated against the twin's CURRENT authoritative state
+            // first claim seeds the anchor - validated against the twin's CURRENT authoritative state
             // (the server just spawned/handed it over), or an attacker's opening claim could teleport
             // anywhere once per entity for free
             if (glm::length(pos - twinPos) > s_claimTeleportCap)
@@ -1118,7 +1118,7 @@ void NetworkManager::handleClaimMessage(NetPeerId peer, NetReader& reader)
                 && Globals::physics.castRayClosest(comp->state->server.lastAcceptedClaimPos, delta, PhysicsLayers::All,
                     dynamicBody ? &physics->body : nullptr, true /*staticOnly*/).hit)
                 // trajectory crosses STATIC world geometry (wall teleport). The twin's own body is
-                // excluded (it stands in this very path) and so is every other dynamic body — a
+                // excluded (it stands in this very path) and so is every other dynamic body - a
                 // pushed cube sits right in front of the pusher's claims, and validating against it
                 // rejected the pusher's OWN movement (Forced loop = "lost authority of my cube")
                 result = EClaimResult::RejectedPath;
@@ -1129,11 +1129,11 @@ void NetworkManager::handleClaimMessage(NetPeerId peer, NetReader& reader)
         {
             // authority is back with the owner: stop forcing corrections IMMEDIATELY. Leaving the
             // window armed after acceptance drags the owner toward its own RTT-old state for the
-            // remainder — a constant backward pull while moving ("stuck in mud")
+            // remainder - a constant backward pull while moving ("stuck in mud")
             comp->state->server.forcedUntilTick = 0;
             comp->state->server.lastAcceptedClaimSeq = seq;
             // spend the bucket on what this claim actually moved (the re-anchor and first-claim
-            // paths spend too — otherwise they would be a free displacement channel)
+            // paths spend too - otherwise they would be a free displacement channel)
             comp->state->server.claimBudget = glm::max(0.0f,
                 comp->state->server.claimBudget - glm::length(pos - comp->state->server.lastAcceptedClaimPos));
             comp->state->server.lastAcceptedClaimPos = pos;
@@ -1146,7 +1146,7 @@ void NetworkManager::handleClaimMessage(NetPeerId peer, NetReader& reader)
             comp->state->server.claimStreamSeq = seq;
             if (dynamicBody && comp->state->server.arbitratedUntilTick > m_serverTick)
             {
-                // ARBITRATION (player-vs-player contact): the solver owns the pose — the claim
+                // ARBITRATION (player-vs-player contact): the solver owns the pose - the claim
                 // becomes bounded velocity INTENT, so the shoving contest resolves with real
                 // contacts server-side instead of two teleport-pinned bodies interpenetrating
                 Globals::physics.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::NudgeVelocity,
@@ -1158,7 +1158,7 @@ void NetworkManager::handleClaimMessage(NetPeerId peer, NetReader& reader)
                 // collapsed the render interpolation and, since claims ride the OWNER's step clock
                 // while the server steps on its own, dragged the twin backwards whenever two server
                 // steps fell between two claims. The twin only has to be approximately right for
-                // server-side collisions — other clients get the owner's stream via passthrough.
+                // server-side collisions - other clients get the owner's stream via passthrough.
                 const glm::quat twinRot = physics->body.getRotation();
                 glm::vec3 desiredLin = linVel + (pos - twinPos) * s_twinFollowGain;
                 if (const float speed = glm::length(desiredLin); speed > s_maxClaimVelocity && speed > 1e-6f)
@@ -1185,7 +1185,7 @@ void NetworkManager::handleClaimMessage(NetPeerId peer, NetReader& reader)
             }
             else
             {
-                // main thread before the entity pass — same context the snapshot targets apply in
+                // main thread before the entity pass - same context the snapshot targets apply in
                 entity->pos = pos;
                 entity->rot = rot;
             }
@@ -1195,7 +1195,7 @@ void NetworkManager::handleClaimMessage(NetPeerId peer, NetReader& reader)
             if (comp->state->server.violations < 0xffff)
                 ++comp->state->server.violations;
             // reassert server authority: the owner's snapshot records carry Forced for a while, and
-            // the owner's correction gate obeys them — dragging it back to the authoritative state
+            // the owner's correction gate obeys them - dragging it back to the authoritative state
             comp->state->server.forcedUntilTick = m_serverTick + uint32(glm::max(1, s_forcedTicks));
         }
     }
@@ -1236,7 +1236,7 @@ void NetworkManager::transferOwnership(uint32 netId, NetworkComponent* comp, uin
 
 void NetworkManager::setOwnershipTransfers(bool enabled)
 {
-    s_transferEnabled = enabled; // writes through the tweak's live variable — the panel shows it
+    s_transferEnabled = enabled; // writes through the tweak's live variable - the panel shows it
 }
 
 void NetworkManager::setServerPrimary(Entity& entity, bool primary)
@@ -1303,7 +1303,7 @@ void NetworkManager::updateOwnershipTransfers(double deltaSec)
     const float transferRadiusSq = s_transferRadius * s_transferRadius;
     const float releaseRadiusSq = s_releaseRadius * s_releaseRadius;
 
-    // HAND-OVER: server-owned, moving bodies around a CLIENT primary — its physics then drives the
+    // HAND-OVER: server-owned, moving bodies around a CLIENT primary - its physics then drives the
     // object, so pushing it feels local to that player. The SpatialIndex holds every non-global
     // entity (bounds broadphase; the exact distance is re-tested), and send() runs after the
     // frame's join, where read-only queries are legal.
@@ -1327,7 +1327,7 @@ void NetworkManager::updateOwnershipTransfers(double deltaSec)
             if (!physics || physics->bodyType != EPhysicsBodyType::Dynamic || !physics->body.isValid())
                 continue;
             if (!physics->body.isAwake())
-                continue; // sleeping props stay server-owned (near-zero cost) — the contact steal
+                continue; // sleeping props stay server-owned (near-zero cost) - the contact steal
                           // takes over the instant a player actually hits one, grace covers the RTT
             const glm::vec3 pos = physics->body.getPosition();
             if (glm::dot(sourcePos - pos, sourcePos - pos) < transferRadiusSq)
@@ -1336,9 +1336,9 @@ void NetworkManager::updateOwnershipTransfers(double deltaSec)
     }
 
     // TRANSFERRED objects: the SERVER's primary RE-CLAIMS by proximity, exactly like a client
-    // acquires — the server player pushing a client-held object takes its simulation back; else
+    // acquires - the server player pushing a client-held object takes its simulation back; else
     // release with hysteresis once away from the owner's primaries (an owner's own primary never
-    // releases — it is never in this list).
+    // releases - it is never in this list).
     m_transferredScratch = m_transferredIds; // transferOwnership edits the list
     for (const uint32 netId : m_transferredScratch)
     {
@@ -1382,7 +1382,7 @@ void NetworkManager::stealOwnershipOnContact(Entity& object, uint32 byClientId)
         return;
     const auto ticksFromSec = [](float sec) { return uint32(glm::max(1.0f, sec * glm::clamp(s_snapshotHz, 1.0f, 240.0f))); };
 
-    // PLAYER vs PLAYER: never stealable — instead BOTH primaries enter server ARBITRATION for the
+    // PLAYER vs PLAYER: never stealable - instead BOTH primaries enter server ARBITRATION for the
     // window: their twins' poses become solver-owned (claims apply as velocity intent, see
     // handleClaimMessage) so the shoving contest resolves with real contacts in ONE place, and each
     // owner softly corrects toward the arbitrated result while still steering
@@ -1445,7 +1445,7 @@ void NetworkManager::handleOwnerChangeMessage(NetReader& reader)
         comp->state->transferredOwnership = newOwnerClientId != 0 && newOwnerClientId == m_localClientId;
         if (newOwnerClientId == m_localClientId)
         {
-            // now OURS: drop the interpolation history recorded while someone else owned it — a
+            // now OURS: drop the interpolation history recorded while someone else owned it - a
             // stale ring reaching the playback path would teleport the entity into the past
             comp->state->client.remoteBuffer = nullptr;
             m_remoteBuffers.erase(netId);
@@ -1458,7 +1458,7 @@ size_t NetworkManager::encodeSpawnRecord(const DynamicSpawn& record, oc::span<ui
 {
     // transform refreshed from the live ROOT when the base id is still registered, so a late joiner
     // spawns the entity where it IS, not where it was born. The base id's entity is the FIRST
-    // NetworkComponent registered in the tree — which may be a CHILD (a Scene-only root carries no
+    // NetworkComponent registered in the tree - which may be a CHILD (a Scene-only root carries no
     // component), so walk up: reading the child would ship its LOCAL offset as the root transform.
     glm::vec3 pos = record.spawnPos;
     glm::quat rot = record.spawnRot;
@@ -1475,7 +1475,7 @@ size_t NetworkManager::encodeSpawnRecord(const DynamicSpawn& record, oc::span<ui
             rot = root->rot;
             scale = root->scale;
             // The root body's velocities ride along, so the receiver's LOCAL twin starts moving
-            // like the original instead of dropping from rest until corrections catch it — the
+            // like the original instead of dropping from rest until corrections catch it - the
             // announce goes out in send(), AFTER the spawner set any launch velocity (projectiles).
             if (const PhysicsComponent* pc = getComponent<PhysicsComponent>(root);
                 pc && pc->bodyType == EPhysicsBodyType::Dynamic && pc->body.isValid())
@@ -1527,7 +1527,7 @@ void NetworkManager::drainSpawnStreams()
         const auto queueOpen = [&] { return m_host.getQueuedReliable(peer, ChannelSession) < queueTarget; };
 
         // despawns first: one for a spawn still owed is ignored client-side (unknown id), and the
-        // owed spawn then finds its record gone and is skipped — never a spawn AFTER its despawn
+        // owed spawn then finds its record gone and is skipped - never a spawn AFTER its despawn
         while (!stream.owedDespawns.empty() && budget > 0 && queueOpen())
         {
             NetWriter writer(oc::span<uint8>(buffer, messageCap));
@@ -1616,7 +1616,7 @@ void NetworkManager::handleEventMessage(NetPeerId peer, oc::span<const uint8> by
     {
         // Events (ch1) share no ordering with the ch2 Welcome, so the server's join-time burst
         // (game world replay, tweak sync) can arrive BEFORE we process the Welcome. The reliable
-        // transport has already acked these — dropping here loses them forever. Park them and
+        // transport has already acked these - dropping here loses them forever. Park them and
         // replay the moment the Welcome lands.
         if (m_preWelcomeEvents.size() < 256)
             m_preWelcomeEvents.emplace_back(bytes.begin(), bytes.end());
@@ -1685,8 +1685,8 @@ void NetworkManager::fireEventAttributed(oc::string_view name, uint32 senderClie
 {
     if (name == TweakSyncEventName)
     {
-        // Engine-reserved tweak sync. Applied only when WE are the client — a hostile client
-        // cannot push values to a server — and applySyncedBlob itself ignores every key the
+        // Engine-reserved tweak sync. Applied only when WE are the client - a hostile client
+        // cannot push values to a server - and applySyncedBlob itself ignores every key the
         // receiver did not flag as Synced, clamping to the receiver's own bounds.
         if (m_role == ENetRole::Client)
             TweakRegistry::get().applySyncedBlob(data);
@@ -1709,7 +1709,7 @@ void NetworkManager::handleSnapshot(NetReader& reader)
     const uint8 flags = reader.read<uint8>();
     if (flags & ~SnapshotFlag_Quantized)
     {
-        // a future format we don't know how to parse — a per-record size is not recoverable, drop the message
+        // a future format we don't know how to parse - a per-record size is not recoverable, drop the message
         if (!m_warnedUnknownRecFlags)
         {
             m_warnedUnknownRecFlags = true;
@@ -1760,7 +1760,7 @@ void NetworkManager::handleSnapshot(NetReader& reader)
             }
         }
         uint8 gameBlob[GameBlobBytes] = {};
-        if (recFlags & NetRecFlag_Game) // parsed even when the entity resolve below misses — record framing
+        if (recFlags & NetRecFlag_Game) // parsed even when the entity resolve below misses - record framing
         {
             for (size_t c = 0; c < GameBlobBytes; ++c)
                 gameBlob[c] = reader.read<uint8>();
@@ -1778,8 +1778,8 @@ void NetworkManager::handleSnapshot(NetReader& reader)
         if (comp->state->client.hasTarget && tick <= comp->state->client.serverTick)
             continue; // stale (reordered unreliable packet)
         // remote-owned entities also record into their interpolation ring (another player's entity:
-        // the observer plays this history back a couple of ticks behind — see NetSnapshotRing).
-        // The SERVER's own player rides the same path (flagged — it is server-owned by id).
+        // the observer plays this history back a couple of ticks behind - see NetSnapshotRing).
+        // The SERVER's own player rides the same path (flagged - it is server-owned by id).
         if ((recFlags & NetRecFlag_Physics)
             && ((recFlags & NetRecFlag_ServerPlayer)
                 || (comp->ownerClientId != 0 && comp->ownerClientId != m_localClientId)))
@@ -1808,7 +1808,7 @@ void NetworkManager::handleSnapshot(NetReader& reader)
                 /*applyMaterials*/ true, /*applyTeam*/ true);
 
         // UNSELECTED by the sim LOD (beyond every player's outer radius): the entity pass never
-        // visits it, so NetworkComponent::update never applies this target — and the LOD selects
+        // visits it, so NetworkComponent::update never applies this target - and the LOD selects
         // by the entity's LOCAL position, which would sit at the spawn point forever while the
         // server's unit walks into range (the client saw a wave only as the few units spawned
         // near a player). Apply the pose HERE (main thread, pre-pass) under the Game far tick's
@@ -1848,7 +1848,7 @@ void NetworkManager::send(double deltaSec)
     ProfileScope scope("NetworkManager::send", EProfileCategory::Network);
 
     // Synced tweaks: whenever any flagged value changed, re-broadcast the full set (small and
-    // idempotent — no per-var dirty bookkeeping). Queued here, drained with the other events below.
+    // idempotent - no per-var dirty bookkeeping). Queued here, drained with the other events below.
     if (m_role == ENetRole::Server && TweakRegistry::get().syncGeneration() != m_sentTweakGeneration)
     {
         m_sentTweakGeneration = TweakRegistry::get().syncGeneration();
@@ -1881,7 +1881,7 @@ void NetworkManager::send(double deltaSec)
         updateOwnershipTransfers(deltaSec); // proximity handover of touched objects
 
         // this frame's runtime spawns/despawns become OWED to every ready client, delivered by the
-        // flow-controlled drain below (reliable, session channel) — never sent directly: a
+        // flow-controlled drain below (reliable, session channel) - never sent directly: a
         // 100-per-frame wave trickle or a mass death would overflow the transport's reliable queue
         for (const NetPeerId peer : m_readyPeers)
         {
@@ -1898,7 +1898,7 @@ void NetworkManager::send(double deltaSec)
         m_pendingDespawn.clear();
         drainSpawnStreams();
         // spawn-call grouping keys are raw entity pointers, only meaningful within this frame's
-        // synchronous spawns — purge before the allocator can recycle an address into a false match
+        // synchronous spawns - purge before the allocator can recycle an address into a false match
         m_dynamicRootIds.clear();
 
         const double interval = 1.0 / double(glm::clamp(s_snapshotHz, 1.0f, 240.0f));
@@ -1921,7 +1921,7 @@ void NetworkManager::send(double deltaSec)
         // frame while m_netTime advances in whole ones, so a time comparison at the step rate
         // measures just-under-interval and drops that step's claim entirely. Achievable rates are
         // the step rate over a whole number. A frame taking several steps claims only the newest
-        // pose (accepted — it is already running below the physics rate).
+        // pose (accepted - it is already running below the physics rate).
         const uint32 stepCount = Globals::physics.getStepCount();
         const int stepHz = glm::max(1, Globals::physics.getStepHz());
         const uint32 stepsPerClaim = uint32(glm::max(1.0f,
@@ -1978,7 +1978,7 @@ void NetworkManager::observeSnapshotTick()
         {
             // the BODY's world pose is authoritative (and what the client teleports its body to);
             // an awake body changes every tick, then ONE final record on the awake->asleep edge so
-            // the client hard-syncs and sleeps too — after that only the keyframe rotation refreshes
+            // the client hard-syncs and sleeps too - after that only the keyframe rotation refreshes
             const bool asleep = !physics->body.isAwake();
             if (!asleep)
             {
@@ -2002,7 +2002,7 @@ void NetworkManager::observeSnapshotTick()
             // CLAIM PASSTHROUGH: re-emit the owner's accepted claim rather than sampling the twin,
             // whose pose age wobbles ±1 tick as the owner/network/server clocks drift (remote
             // clients replay that wobble as speed pulsing). Ticks with no fresh claim extrapolate by
-            // its velocity. Forced/arbitrated/asleep keep the twin — the authoritative state then.
+            // its velocity. Forced/arbitrated/asleep keep the twin - the authoritative state then.
             if (comp->ownerClientId != 0 && comp->state->server.claimStreamSeq != 0 && !asleep && forcedFlag == 0)
             {
                 // snapshots may outpace claims, so the cap must cover that steady-state gap plus a
@@ -2079,7 +2079,7 @@ void NetworkManager::sendSnapshotTick()
 }
 
 // One peer's records for this tick (m_entityMutex held, after observeSnapshotTick). Every entity
-// is tiered by its distance to THIS peer's own player(s) — near / mid / far — then each tier is
+// is tiered by its distance to THIS peer's own player(s) - near / mid / far - then each tier is
 // walked round-robin from the peer's cursor: an entity is due when it changed since this peer
 // last received it and its tier's cadence tick is up, or on its keyframe rotation (slowest for a
 // sleeping body). Near first under the peer's budget; far additionally capped.
@@ -2227,7 +2227,7 @@ void NetworkManager::sendSnapshotTo(NetPeerId peer, PeerStream& stream)
 
 void NetworkManager::fireNetworkEvent(oc::string_view name, oc::span<const uint8> data, Entity* sender)
 {
-    // the same caps the receiver enforces — otherwise an event that is valid to send is rejected on
+    // the same caps the receiver enforces - otherwise an event that is valid to send is rejected on
     // arrival, which is a far more confusing failure than refusing it here
     if (name.empty() || name.size() > MaxEventNameLength || data.size() > MaxEventDataBytes)
     {
@@ -2244,16 +2244,16 @@ void NetworkManager::fireNetworkEvent(oc::string_view name, oc::span<const uint8
     uint32 senderNetId = 0;
     if (sender)
         if (const NetworkComponent* comp = getComponent<NetworkComponent>(sender))
-            senderNetId = comp->netId; // assigned at spawn and never changes — safe to read off-thread
+            senderNetId = comp->netId; // assigned at spawn and never changes - safe to read off-thread
     // NetHost is single-threaded and this is reachable from worker-thread script thunks during the
-    // parallel entity pass — queue, send() drains on the main thread the same frame
+    // parallel entity pass - queue, send() drains on the main thread the same frame
     const std::lock_guard<std::mutex> lock(m_eventMutex);
     m_pendingOutgoingEvents.push_back({ oc::string(name), { data.begin(), data.end() }, senderNetId });
 }
 
 // The CLIENT id is server->client only: a client's identity is implied by its connection, and an
 // ignored client-writable identity field is a refactor away from being trusted. The NET id names the
-// firing entity, which no connection implies, so it travels both ways — and is checked for ownership.
+// firing entity, which no connection implies, so it travels both ways - and is checked for ownership.
 void NetworkManager::sendEventTo(NetPeerId peer, oc::string_view name, uint32 senderClientId,
     uint32 senderNetId, oc::span<const uint8> data)
 {
@@ -2261,7 +2261,7 @@ void NetworkManager::sendEventTo(NetPeerId peer, oc::string_view name, uint32 se
     NetWriter writer(buffer);
     writer.write<uint8>(uint8(ENetMsg::Event));
     if (m_role == ENetRole::Server)
-        writer.writeVarUInt(senderClientId); // who it originated from — the connection can't say
+        writer.writeVarUInt(senderClientId); // who it originated from - the connection can't say
     writer.writeVarUInt(senderNetId);
     writer.writeString(name);
     writer.writeVarUInt(data.size());
@@ -2291,7 +2291,7 @@ uint32 NetworkManager::registerEntity(Entity& entity, NetworkComponent* comp)
     }
     else if (m_role == ENetRole::Server)
     {
-        // the server is the sole id authority — scene load and runtime spawns alike mint an id and
+        // the server is the sole id authority - scene load and runtime spawns alike mint an id and
         // create/extend the ROOT's spawn record, which is how the entity reaches every client
         // (announced when ready peers exist, replayed to late joiners; registration is synchronous
         // DFS on the main thread, so a tree's ids stay contiguous from the base)
@@ -2330,7 +2330,7 @@ uint32 NetworkManager::registerEntity(Entity& entity, NetworkComponent* comp)
     const auto [it, inserted] = m_entities.insert_or_assign(netId, Replicated{ &entity, comp });
     if (!inserted)
         // the Entity Editor respawning this entity: the new twin spawns (and re-derives the same
-        // name-path hash) while the old one is still registered — replace, pointer-checked unregister
+        // name-path hash) while the old one is still registered - replace, pointer-checked unregister
         // keeps the replacement safe when the old entity dies
         Log::warning("Network: netId " + oc::to_string(netId) + " re-registered by entity '"
             + entity.getName() + "' (editor respawn?)");
@@ -2354,7 +2354,7 @@ void NetworkManager::unregisterEntity(uint32 netId, const NetworkComponent* comp
     m_claimRings.erase(netId);    // owner-side redundancy ring, if this was a locally-owned entity
     m_remoteBuffers.erase(netId); // observer-side interpolation history (component dies with the entity, so no dangling reader)
     // a BASE id dying on the server despawns the whole replicated tree client-side (child ids of a
-    // partial destruction are deliberately ignored — despawn is all-or-nothing at the root)
+    // partial destruction are deliberately ignored - despawn is all-or-nothing at the root)
     if (m_role == ENetRole::Server)
         if (const auto it = m_dynamicSpawns.find(netId); it != m_dynamicSpawns.end())
         {
@@ -2379,7 +2379,7 @@ oc::string NetworkManager::getStatusText() const
             + " KB/s in " + kbs(stats.bytesReceivedPerSec) + " KB/s"
             + (owed != 0 ? " | spawn backlog " + oc::to_string(owed) : "")
             // sustained nonzero = someone is flooding us (or the limits are set too tight for the
-            // configured rates) — worth seeing without opening a panel
+            // configured rates) - worth seeing without opening a panel
             + (stats.packetsDroppedPerSec != 0 ? " | DROPPED " + oc::to_string(stats.packetsDroppedPerSec) + "/s" : "");
     }
     if (m_serverPeer == InvalidNetPeerId || !m_host.isConnected(m_serverPeer))

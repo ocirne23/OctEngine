@@ -5,7 +5,7 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 
-// Depth-prepass reuse (gbuffer.vs.glsl) needs bit-exact positions across programs — see the note there.
+// Depth-prepass reuse (gbuffer.vs.glsl) needs bit-exact positions across programs - see the note there.
 invariant gl_Position;
 
 #include "shared.inc.glsl"
@@ -68,7 +68,7 @@ void main()
     gl_Position = u_mvp * vec4(out_pos, 1.0);
     gl_Position.xy += u_taaJitter.xy * gl_Position.w; // TAA sub-pixel jitter (clip space)
 #ifdef FORCE_NEAR_DEPTH
-    // GizmoUI: stamp (nearly) the nearest depth — NDC z = 1 under REVERSED-Z, eGreater compare. Only z is
+    // GizmoUI: stamp (nearly) the nearest depth - NDC z = 1 under REVERSED-Z, eGreater compare. Only z is
     // touched, so x/y/w (and thus the on-screen shape) are unchanged; the gizmo just always wins depth.
     // The residual 1% of the original z keeps the gizmo's own parts depth-sorted against each other.
     gl_Position.z = mix(gl_Position.w, gl_Position.z, 0.01);

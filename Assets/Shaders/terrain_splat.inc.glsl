@@ -1,9 +1,9 @@
 // --- Terrain texture splatting (setTerrainSplatMaterials; u_terrainTexParams*/u_terrainSplatClimate) ---
-// Four physical layers composited bottom-up — no biome enum, climate selects textures directly:
-//   1. GROUND — climate-picked soil/vegetation, world-XZ projection
-//   2. BEACH  — shoreline band just above the local waterline (not climate-selected)
-//   3. ROCK   — bedrock where too steep / too prominent to hold soil; climate-picked type, triplanar
-//   4. SNOW   — cover over ALL of the above (snow falls ON bedrock — as a ground type the rock layer
+// Four physical layers composited bottom-up - no biome enum, climate selects textures directly:
+//   1. GROUND - climate-picked soil/vegetation, world-XZ projection
+//   2. BEACH  - shoreline band just above the local waterline (not climate-selected)
+//   3. ROCK   - bedrock where too steep / too prominent to hold soil; climate-picked type, triplanar
+//   4. SNOW   - cover over ALL of the above (snow falls ON bedrock - as a ground type the rock layer
 //               would paint over it and peaks would come out gray)
 //
 // Shared by the terrain fragment shader (its own pixels) and the ocean shader (the seabed at a
@@ -13,9 +13,9 @@
 //   u_textures[] + GL_EXT_nonuniform_qualifier, the UBO (u_terrainTexParams*, u_terrainSplatClimate,
 //   u_terrainParams).
 // Optional, before including:
-//   TERRAIN_SPLAT_TEX(tex, uv)  — the texture fetch. Defaults to texture() (screen derivatives); a ray
+//   TERRAIN_SPLAT_TEX(tex, uv)  - the texture fetch. Defaults to texture() (screen derivatives); a ray
 //                                 hit has none, so the ocean defines it as textureLod at a ray-cone LOD.
-//   TERRAIN_SPLAT_ALBEDO_ONLY   — skip the normal + ARM taps (the seabed only needs colour: the water
+//   TERRAIN_SPLAT_ALBEDO_ONLY   - skip the normal + ARM taps (the seabed only needs colour: the water
 //                                 column blurs any detail normal away). TerrainSample.normal is then the
 //                                 geometric normal and rough/metal/ao are constants.
 
@@ -92,7 +92,7 @@ vec3 decodeTriplanarNormal(vec3 ns, bool bc5)
 
 // Triplanar version for the rock layer (whiteout-style normal blend), so cliff faces don't smear.
 // PLANE SKIPPING: the three projection weights sum to 1, so a plane below TRIPLANAR_WMIN contributes
-// <~4% and is dropped (its texture taps skipped) — on shallow crag one axis dominates and the other two
+// <~4% and is dropped (its texture taps skipped) - on shallow crag one axis dominates and the other two
 // are near-zero, cutting up to 2/3 of the taps. Surviving weights are renormalised so no energy is lost.
 // The branch is coherent across a quad except on the exact plane-crossover diagonal, where one pixel may
 // get a slightly wrong mip; invisible in practice.
@@ -167,7 +167,7 @@ TerrainSample sampleTerrainTriplanar(uint matIdx, vec3 worldPos, vec3 geoN, floa
 
 // Crag wander noise (value fBm over world XZ). Lives HERE and not in the generator: the wander must be
 // scaled by local relief, which the generator's coarse path cannot supply (its relief is 0 by
-// construction — the cascades would disagree). The shader always has the true mesh height.
+// construction - the cascades would disagree). The shader always has the true mesh height.
 float terrainHash12(vec2 p)
 {
 	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -225,7 +225,7 @@ struct ClimatePick
 // Top THREE climate entries in [first, first + count) as a partition of unity, each weighted RELATIVE to
 // the FOURTH (w - w3): when the #3/#4 ranking swaps both sit at zero contribution, so the third texture
 // fades in and out rather than popping (the generalisation of the old top-two's relative-to-third trick).
-// Three real entries — not two — is what lets a pixel where three climate boxes overlap show all three
+// Three real entries - not two - is what lets a pixel where three climate boxes overlap show all three
 // instead of pinching the loser into a hard sliver.
 ClimatePick pickClimate(vec2 climate, int first, int count, float invS2)
 {
@@ -247,7 +247,7 @@ ClimatePick pickClimate(vec2 climate, int first, int count, float invS2)
 	return ClimatePick(i0, i1, i2, a1 * inv, a2 * inv);
 }
 
-// A layer samples the top climate pick, then blends i1/i2 in ONLY when their coverage clears this — so
+// A layer samples the top climate pick, then blends i1/i2 in ONLY when their coverage clears this - so
 // the flat interior of a climate box stays one sample, a two-box border costs two, and only a genuine
 // three-box junction pays for three. Sequential mix (i1 at n1/(1-n2), then i2 at n2) reproduces the
 // weighted sum n0*s0 + n1*s1 + n2*s2 exactly; a skipped small weight just folds into s0.
@@ -269,7 +269,7 @@ TerrainSample terrainSplat(vec3 worldPos, vec3 geoN, TerrainFields f)
 		return TerrainSample(vec3(0.5), geoN, 0.92, 0.0, 1.0);
 
 	// The baked temperature already carries the altitude lapse, so elevation enters the selection as
-	// the cold it causes — snow line and vegetation cannot disagree.
+	// the cold it causes - snow line and vegetation cannot disagree.
 	const vec2 climate = vec2(clamp((f.temperature + 25.0) / 75.0, 0.0, 1.0), f.humidity);
 	const float invS2 = 1.0 / (2.0 * u_terrainTexParams0.w * u_terrainTexParams0.w);
 	const float slope = 1.0 - clamp(geoN.y, 0.0, 1.0);
@@ -281,7 +281,7 @@ TerrainSample terrainSplat(vec3 worldPos, vec3 geoN, TerrainFields f)
 	if (u_terrainTexParams3.x > 0.5)
 		beachW = 1.0 - smoothstep(0.3, max(u_terrainTexParams2.z, 0.31), worldPos.y - f.waterLevel);
 
-	// Rock: too steep OR standing too far above the macro altitude (crag). max(), not a sum —
+	// Rock: too steep OR standing too far above the macro altitude (crag). max(), not a sum -
 	// the two coincide on a cliff. On V3 terrain crag is what puts rock on mountains (the 30 m/px field
 	// rarely reaches the slope threshold). The relief is wandered by fBm first or the rock boundary is
 	// an elevation contour across a whole range; |wander| <= relief keeps flat lowlands untouched.
@@ -291,7 +291,7 @@ TerrainSample terrainSplat(vec3 worldPos, vec3 geoN, TerrainFields f)
 		float relief = (worldPos.y - u_terrainParams.z) - f.altitude;
 		const float wanderAmp = u_terrainTexParams5.x;
 		// The wander moves relief by at most +-amp, so only pixels where that can change the crag
-		// smoothstep pay for the 12-hash fBm — saturated flatland (crag 0) and sheer crag (1) skip it.
+		// smoothstep pay for the 12-hash fBm - saturated flatland (crag 0) and sheer crag (1) skip it.
 		if (wanderAmp > 0.0 && relief + wanderAmp > u_terrainTexParams2.x && relief - wanderAmp < u_terrainTexParams2.y)
 		{
 			const float w = terrainFbm(worldPos.xz * u_terrainTexParams5.y) * wanderAmp;
@@ -314,7 +314,7 @@ TerrainSample terrainSplat(vec3 worldPos, vec3 geoN, TerrainFields f)
 	const uint snowMatIdx = uint(baseMat + numGround + numRock) + (u_terrainTexParams3.x > 0.5 ? 1u : 0u);
 
 	// --- Composite bottom-up, sampling only what shows ---
-	// Full snow cover: everything beneath is hidden — the whole splat is the snow sample alone.
+	// Full snow cover: everything beneath is hidden - the whole splat is the snow sample alone.
 	if (snowW >= TERRAIN_LAYER_OPAQUE)
 	{
 		TerrainSample surf = sampleTerrainXZ(snowMatIdx, worldPos.xz * u_terrainTexParams2.w, geoN);
@@ -322,7 +322,7 @@ TerrainSample terrainSplat(vec3 worldPos, vec3 geoN, TerrainFields f)
 		return surf;
 	}
 
-	// 1. Ground — buried under a full beach band or a full-coverage cliff face: placeholder, mixed away.
+	// 1. Ground - buried under a full beach band or a full-coverage cliff face: placeholder, mixed away.
 	TerrainSample surf;
 	if (beachW < TERRAIN_LAYER_OPAQUE && rockW < TERRAIN_LAYER_OPAQUE)
 	{

@@ -113,7 +113,7 @@ void BakedWorldMap::recordUpload(CommandBuffer& commandBuffer)
     const vk::Image dst = m_image[m_active ^ 1u];
     const vk::ImageSubresourceRange allLayers{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, m_numLayers };
 
-    // The inactive image was still sampled by older submissions the last time it was active — the
+    // The inactive image was still sampled by older submissions the last time it was active - the
     // discard transition must execution-depend on those reads (WRITE_AFTER_READ).
     vk::ImageMemoryBarrier2 toDst{
         .srcStageMask = SAMPLE_STAGES,

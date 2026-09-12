@@ -20,7 +20,7 @@ EntityArchetype makeEntityArchetype(uint16 typeBits)
     return EntityArchetype{ uint16(getEntityAllocSize(typeBits)), typeBits };
 }
 
-// The entity owns NO name storage: Globals::entityNames maps the entity pointer to its owned copy —
+// The entity owns NO name storage: Globals::entityNames maps the entity pointer to its owned copy -
 // but ONLY for a name set after the spawn. A freshly spawned entity's name is its template's
 // displayName, read straight from the template (which outlives every entity spawned from it:
 // World's caches, retired lists and keepTemplateAlive), so a spawn makes no name allocation.
@@ -71,7 +71,7 @@ void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform&
 
     // deltaSeconds is whatever the World scheduled for this visit (its SIM LOD hands throttled
     // entities a 0 on skipped frames and the accumulated catch-up on ticking ones): ZERO = no
-    // simulation step — the sim components are not called at all — while the sync parts (network
+    // simulation step - the sim components are not called at all - while the sync parts (network
     // correction, physics pose read) and the placement tail below still run every visit.
     const bool simStep = !frozen && deltaSeconds > 0.0f;
 
@@ -142,7 +142,7 @@ void Entity::update(Renderer& renderer, float deltaSeconds, const Transform& par
 }
 
 // Recursive alloc size of the template's entity + its whole SceneComponent child tree, lazily cached on
-// the template (idempotent, so the racy relaxed store is benign — every writer stores the same value).
+// the template (idempotent, so the racy relaxed store is benign - every writer stores the same value).
 static uint32 getTreeAllocSize(const EntitySpawnTemplate& tmpl)
 {
     const uint32 cached = oc::atomic_ref<uint32>(tmpl.treeAllocSize).load(oc::memory_order_relaxed);
@@ -189,8 +189,8 @@ EntityPtr Entity::create(const EntitySpawnTemplate& tmpl, const Transform& trans
     uint8* treeCursor = static_cast<uint8*>(Globals::entityAllocator.allocate(getTreeAllocSize(tmpl)));
     // PARALLEL SPAWNING + server id contiguity: a replicated tree's netIds must mint back-to-back
     // (the client adopts base + cursor in DFS order), so a server tree that mints MORE THAN ONE id
-    // holds the manager's register lock across the whole tree spawn. A single-component tree —
-    // every unit/projectile prefab — mints atomically inside registerEntity and stays parallel.
+    // holds the manager's register lock across the whole tree spawn. A single-component tree -
+    // every unit/projectile prefab - mints atomically inside registerEntity and stays parallel.
     const bool lockNetIds = getTreeNetworkCount(tmpl) > 1
         && Globals::networkManager.role() == ENetRole::Server;
     if (lockNetIds)
@@ -234,7 +234,7 @@ EntityPtr Entity::create(const EntitySpawnTemplate& tmpl, const Transform& trans
 
     // Spatial registration for EVERY entity (parallel-spawn safe: registerEntry locks). Bounds from
     // the render node when there is one (skinned inflated by the culling config), else a point at
-    // the spawn position (for a tree CHILD that is its LOCAL position — the entry links at the
+    // the spawn position (for a tree CHILD that is its LOCAL position - the entry links at the
     // next commit and the child's first visit re-places it in world space before any query can
     // see it). Headless has no render nodes, so every entry there is a point.
     {
@@ -247,7 +247,7 @@ EntityPtr Entity::create(const EntitySpawnTemplate& tmpl, const Transform& trans
             const Sphere bounds = render->node.getWorldBounds();
             // A node whose bounds are not usable yet (no mesh bounds, a degenerate sphere) reports
             // a negative or non-finite radius: keep the spawn point instead of tripping the
-            // index's `radius >= 0` assert — the first visit re-places the entry from real bounds.
+            // index's `radius >= 0` assert - the first visit re-places the entry from real bounds.
             const bool usable = bounds.radius >= 0.0f && std::isfinite(bounds.radius)
                 && !glm::any(glm::isnan(bounds.pos)) && !glm::any(glm::isinf(bounds.pos));
             if (usable)
@@ -268,7 +268,7 @@ void Entity::destroy(Entity* entity)
     constexpr uint8 rootContiguous = EEntityFlag_RootAllocation | EEntityFlag_ContiguousAllocation;
 
     // Intact allocation root: verify every member is owned solely by its parent's children list before
-    // committing to the one-chunk free — an externally referenced member would outlive this teardown.
+    // committing to the one-chunk free - an externally referenced member would outlive this teardown.
     // On failure the allocation splits: each child subtree re-checks at its own death, so only the path
     // to the offending member degrades to per-entity freeing.
     // (Residual hole: a script OnDestroy grabbing a ref to a sibling member mid-teardown.)
@@ -520,7 +520,7 @@ void Entity::reparentEntity(Entity* newParent)
     if ((flags & EEntityFlag_ContiguousAllocation) && !(flags & EEntityFlag_RootAllocation))
     {
         // Moving within the same allocation keeps the tree intact (the root teardown still reaches us);
-        // any other destination — including the failed moves that still detach below — leaves it.
+        // any other destination - including the failed moves that still detach below - leaves it.
         Entity* oldRoot = findAllocationRoot(parent);
         Entity* newRoot = (newParent && hasComponent<SceneComponent>(newParent) && !isSelfOrDescendant(newParent, this))
                         ? findAllocationRoot(newParent) : nullptr;
@@ -531,11 +531,11 @@ void Entity::reparentEntity(Entity* newParent)
 
     if (newParent && !hasComponent<SceneComponent>(newParent))
     {
-        // LOUD refusal: the detach above already ran, so the entity is now parentless — if the
+        // LOUD refusal: the detach above already ran, so the entity is now parentless - if the
         // caller drops its EntityPtr believing the parent holds one, the entity silently dies
         // (this exact failure shipped once: walls parented under a Scene-less ground vanished).
         Log::warning("Entity: cannot parent '" + oc::string(getName()) + "' under '"
-            + oc::string(newParent->getName()) + "' — the parent has no SceneComponent (add "
+            + oc::string(newParent->getName()) + "' - the parent has no SceneComponent (add "
             "'Component Scene' to its prefab); the entity is now UNPARENTED");
         return;
     }

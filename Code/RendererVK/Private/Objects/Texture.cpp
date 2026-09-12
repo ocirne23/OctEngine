@@ -364,7 +364,7 @@ bool Texture::initialize(uint32 width, uint32 height, vk::Format format, const o
 	m_format = format;
     // Only synthesize a full mip chain when generating from a single source level (the blit path below).
     // When the source already carries its own mips (e.g. DDS), use them as-is so the image's mipLevels and
-    // the upload loop stay in lockstep — otherwise the loop reads past imageDataMips and upper levels of the
+    // the upload loop stay in lockstep - otherwise the loop reads past imageDataMips and upper levels of the
     // image are left undefined.
     const bool generateFromSingle = generateMips && imageDataMips.size() == 1;
     m_numMipLevels = generateFromSingle ? (uint32)(std::floor(std::log2(oc::max(width, height)))) + 1 : (uint32)imageDataMips.size();

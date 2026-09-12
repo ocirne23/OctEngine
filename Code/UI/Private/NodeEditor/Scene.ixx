@@ -35,7 +35,7 @@ public:
     bool isDirty(); // graph changed since it was last loaded/saved (nodes/links/pins/positions differ)
 
     // Queues a copy/paste for the next update() (which runs inside the editor's own Begin/End, where mouse
-    // position and canvas transform are valid) — lets a caller outside the UI frame, e.g. a global keyboard
+    // position and canvas transform are valid) - lets a caller outside the UI frame, e.g. a global keyboard
     // hook in main.cpp, trigger the same action as the in-editor Ctrl+C/Ctrl+V shortcut.
     void requestCopy() { m_pendingCopyRequest = true; }
     void requestPaste() { m_pendingPasteRequest = true; }
@@ -118,7 +118,7 @@ private:
 
     // Dirty tracking: the serialized graph captured right after a load/save, compared against the live
     // graph to detect unsaved edits. Captured lazily (once the graph has rendered a frame so node
-    // positions are valid) — m_hasBaseline gates that.
+    // positions are valid) - m_hasBaseline gates that.
     oc::string m_baselineState;
     bool m_hasBaseline = false;
 

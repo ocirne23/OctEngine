@@ -7,13 +7,13 @@ import Core.Rect;
 import Core.Tweaks;
 
 import :MainMenu;
-import :TweakPanel; // drawTweakVar — the settings page draws the same widget rows
+import :TweakPanel; // drawTweakVar - the settings page draws the same widget rows
 
 namespace
 {
 	// ---- Settings curation -----------------------------------------------------------------
 	// The settings page is BUILT FROM THE TWEAK REGISTRY: each section lists top-level category
-	// prefixes (a prefix pulls the whole subtree — "Ocean" includes "Ocean/Waves"), and dev-only
+	// prefixes (a prefix pulls the whole subtree - "Ocean" includes "Ocean/Waves"), and dev-only
 	// branches are filtered below. A tweak that is not registered yet (e.g. Game/* before a game
 	// mode started) simply does not appear.
 	struct SettingsSection
@@ -122,11 +122,11 @@ void MainMenu::render(const Rect& fullRect, oc::vector<const TweakVar*>& deferre
 }
 
 // The Esc overlay: a fullscreen click-blocking DIM window (a background-draw-list rect would sit
-// UNDER the docked panels, a foreground one OVER the buttons — a window layers correctly), then
+// UNDER the docked panels, a foreground one OVER the buttons - a window layers correctly), then
 // the button window on top of it. Both are FOCUSED ONLY ON THE OPENING FRAME (dim first, buttons
 // last, so the pair lands above the editor panels with the buttons in front): a per-frame
 // SetNextWindowFocus re-runs ImGui's focus change every Begin, and that CLEARS THE ACTIVE WIDGET
-// each time — a button press never survived to its release, so clicks did nothing. Afterwards the
+// each time - a button press never survived to its release, so clicks did nothing. Afterwards the
 // display order is stable on its own: the dim blocks clicks from reaching the panels, and its
 // NoBringToFrontOnFocus keeps a click on the dim itself from raising it over the buttons.
 void MainMenu::renderEscape(bool offerDebugToggle)
@@ -197,7 +197,7 @@ void MainMenu::renderPausedBox()
 	if (!m_gamePaused)
 		return;
 	// The SHARED pause: a small centered box over everything (under the escape menu when both
-	// are up), with the one button any player may press. It never dims the screen — the game
+	// are up), with the one button any player may press. It never dims the screen - the game
 	// view stays readable while everyone waits.
 	const ImGuiViewport* viewport = ImGui::GetMainViewport();
 	const ImVec2 center(viewport->Pos.x + viewport->Size.x * 0.5f, viewport->Pos.y + viewport->Size.y * 0.35f);
@@ -274,7 +274,7 @@ void MainMenu::renderMain()
 	{
 		ImGui::TextUnformatted("Server address:");
 		ImGui::SetNextItemWidth(-FLT_MIN);
-		ImGui::InputTextWithHint("##address", "ip[:port] — empty = play offline", m_address, sizeof(m_address));
+		ImGui::InputTextWithHint("##address", "ip[:port] - empty = play offline", m_address, sizeof(m_address));
 	}
 	if (!m_status.empty())
 		ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.4f, 1.0f), "%s", m_status.c_str());
@@ -433,7 +433,7 @@ void MainMenu::renderLobby()
 			{
 				// Only OUR row is a picker; the host's count bounds it. The pick reaches the
 				// server as an LbT request (or applies at once on the host) and the LbS echo
-				// moves the row — the same round trip the Ready toggle takes.
+				// moves the row - the same round trip the Ready toggle takes.
 				ImGui::SetNextItemWidth(110.0f);
 				char comboId[32];
 				snprintf(comboId, sizeof(comboId), "##lobbyTeam%u", player.clientId);

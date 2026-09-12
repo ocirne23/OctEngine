@@ -3,7 +3,7 @@ export module File:TextureConvert;
 import Core;
 
 // Standalone image -> BC-compressed .dds conversion (same compressor the scene cooker uses for cooked
-// scene textures), for loose textures that no ISceneData references — e.g. the procedural terrain's
+// scene textures), for loose textures that no ISceneData references - e.g. the procedural terrain's
 // biome texture sets. Output mip chains stream through the TextureStreamer like any cooked .dds.
 export namespace TextureConvert
 {

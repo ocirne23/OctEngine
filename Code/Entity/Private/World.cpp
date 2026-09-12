@@ -62,7 +62,7 @@ bool World::initialize()
         Tweak::boolean("Game/Sim LOD/Follows", "Scripts", &c.scripts);
         Tweak::boolean("Game/Sim LOD/Follows", "Animators", &c.animators);
     }
-    // Live readouts (overwritten every pass; edits are meaningless) — deliberately not Saved.
+    // Live readouts (overwritten every pass; edits are meaningless) - deliberately not Saved.
     Tweak::intVar("Game/Sim LOD/Stats", "Full rate", &m_simLodStats[0], 0, 1 << 20, 0.0f);
     Tweak::intVar("Game/Sim LOD/Stats", "Tier 1", &m_simLodStats[1], 0, 1 << 20, 0.0f);
     Tweak::intVar("Game/Sim LOD/Stats", "Tier 2", &m_simLodStats[2], 0, 1 << 20, 0.0f);
@@ -111,7 +111,7 @@ bool World::simLodSelected(const Entity& entity) const
     const SpatialHandle handle = entity.spatialEntry.handle();
     if (spatialIndex.getPassMask(handle) & (SpatialPassBits_UpdateTiers | SpatialPassBit_Main))
         return true;
-    // Linked but never tier-stamped (fresh, or never inside a ball): follows a non-Global parent —
+    // Linked but never tier-stamped (fresh, or never inside a ball): follows a non-Global parent -
     // its tier then comes from the distance (simLodTiers). A Global root's children need a real
     // stamp, or every rock under the terrain root would be visited.
     return !spatialIndex.hasStamp(handle, ESpatialPass::UpdateTier2) && entity.parent && !entity.parent->isGlobal();
@@ -121,10 +121,10 @@ bool World::simLodSelected(const Entity& entity) const
 // stamps hold until the next job), then, sphere by sphere, ONE PARALLEL traversal (the index's
 // frontier fan-out: it stamps the hits' tiers by distance band and hands the hits back as a
 // list per traversal chunk), followed by a parallelFor over those chunks that walks every hit
-// up to its root — owner-sliced scratch (a roots slot per chunk: no per-worker state across the
+// up to its root - owner-sliced scratch (a roots slot per chunk: no per-worker state across the
 // fan-out's waits). The serial tail merges the roots, already deduped by the atomic UpdateRoot
 // stamp (overlapping balls, several hits under one root), into submit-ready nodes, so update()
-// only checks liveness and slices them to the workers. Runs between commits (post-update) — see
+// only checks liveness and slices them to the workers. Runs between commits (post-update) - see
 // the kick in update() for what makes the root walk and the stamps safe.
 void World::computeSelection(SelectResult& out)
 {
@@ -161,8 +161,8 @@ void World::computeSelection(SelectResult& out)
 }
 
 // A hit at any depth: its ancestors are stamped UpdateTier2 (the job's fresh generation; a pure
-// store, so overlapping balls may stamp the same chain concurrently) so the descent reaches it —
-// a visited parent emits only selected children (submitEntityBatches) — and its root is recorded
+// store, so overlapping balls may stamp the same chain concurrently) so the descent reaches it -
+// a visited parent emits only selected children (submitEntityBatches) - and its root is recorded
 // ONCE: the atomic stampCurrentOnce on `rootPass` makes exactly one caller win a shared root. A
 // Global ancestor is visited from the global list anyway; a Global root is skipped, which is
 // what makes the merge with m_globalRoots dedupe-free.
@@ -188,10 +188,10 @@ void World::selectUpdateRoot(Entity* hit, ESpatialPass rootPass, oc::vector<Enti
 
 // The tiers from the entity's OWN spatial stamps: the UpdateTier balls around every focus point
 // (cull job) and Main (the camera's main pass). DISTANCE tier = what the bubble gate and the
-// dormant transition go by — the camera sees the whole tier-1/2 area from above, so visibility
+// dormant transition go by - the camera sees the whole tier-1/2 area from above, so visibility
 // must never override distance for those; TICK tier = the distance tier floored by "Visible max
 // tier" for an in-view entity (a rate floor for what the player can see), dormant stays dormant.
-// NOT placed: the entry carries no real tier stamp — the spawn-frame visit from the pending list
+// NOT placed: the entry carries no real tier stamp - the spawn-frame visit from the pending list
 // (unlinked, the mask is only the spawn GUARD saying "in every pass"), so the tier is unknown.
 World::SimLodTiers World::simLodTiers(const Entity& entity) const
 {
@@ -216,8 +216,8 @@ World::SimLodTiers World::simLodTiers(const Entity& entity) const
 }
 
 // The dormant / wake transitions on the entity's scheduling state. DORMANT: the body would glide
-// on at its last steering velocity for as long as nothing ticks it — park it (disabled or
-// asleep, per the tweak). WAKE (also the FIRST stamped visit of a fresh entity — schedTier
+// on at its last steering velocity for as long as nothing ticks it - park it (disabled or
+// asleep, per the tweak). WAKE (also the FIRST stamped visit of a fresh entity - schedTier
 // starts at 3): unpark, no catch-up over the stretch.
 void World::simLodTransition(Entity& entity, uint8 tier)
 {
@@ -273,7 +273,7 @@ float World::simLodCadence(Entity& entity, uint8 tier)
     return glm::min(elapsed, glm::max(m_simLod.maxCatchUpSec, m_updateDelta));
 }
 
-// The tier by direct distance (XZ per the tweak) to the focus points and zones — what the stamps
+// The tier by direct distance (XZ per the tweak) to the focus points and zones - what the stamps
 // encode, computed here for an entity that has no stamp yet (a fresh one: the periodic job has not
 // run since it linked). O(focus + zones) per call: the pending list is short.
 int World::simLodDistanceTier(const glm::vec3& pos) const
@@ -309,8 +309,8 @@ int World::simLodDistanceTier(const glm::vec3& pos) const
 }
 
 // The delta for this visit AND the two distance gates: a bubble spawns DARK and a body spawns
-// with its buoyancy off, and this is the one place that switches either — on for an entity the
-// LOD does not apply to, by distance tier otherwise — so a bubble never holds a GPU slot and a
+// with its buoyancy off, and this is the one place that switches either - on for an entity the
+// LOD does not apply to, by distance tier otherwise - so a bubble never holds a GPU slot and a
 // body never runs its probe math before its entity has a tier.
 float World::simLodDelta(Entity& entity)
 {
@@ -333,7 +333,7 @@ float World::simLodDelta(Entity& entity)
         return m_updateDelta;
     const SimLodTiers tiers = simLodTiers(entity);
     // The gates, by DISTANCE tier, set every visit (a handle resolve + a store) so a tweak change
-    // applies without a tier change; an entity leaving the selection keeps its last state — the
+    // applies without a tier change; an entity leaving the selection keeps its last state - the
     // query-margin visit (distance tier 3) switches both off on the way out.
     if (force)
         force->setActive(int(tiers.dist) <= m_simLod.forceMaxTier);
@@ -395,8 +395,8 @@ void World::update(Renderer& renderer, float deltaSeconds)
     m_updateStaging.forEach([](EntityUpdateStaging& s) { for (uint32& n : s.simLodCount) n = 0; });
     setupScope.stop();
 
-    // SELECTION. LOD inactive (no focus, paused, disabled): every root, every child — the pass
-    // scales with the entity count. LOD active: the pass is DETACHED from the entity count — the
+    // SELECTION. LOD inactive (no focus, paused, disabled): every root, every child - the pass
+    // scales with the entity count. LOD active: the pass is DETACHED from the entity count - the
     // visit set is the global roots, the roots added since the last pass (unlinked until the next
     // commit, so a query cannot find them yet) and one sphere query per focus point at the outer
     // tier radius + margin on the Entity layer, at ANY depth: every hit walks up to its root
@@ -415,7 +415,7 @@ void World::update(Renderer& renderer, float deltaSeconds)
         // The QUERY already ran as last frame's post-update job (computeSelection, joined at the
         // top of this frame) and left submit-ready nodes, so the batches kick without waiting on
         // it. Left here on main, O(roots) over the CONTIGUOUS handle array only: swap-remove roots
-        // that died in between (the spatial handle proves liveness — a slot reuse fails its
+        // that died in between (the spatial handle proves liveness - a slot reuse fails its
         // generation), then gather the Global and pending roots. Everything that touches an
         // Entity (the visible walk, the selection filter, the cost partition) runs on the slice
         // jobs the submit below kicks. NO dedupe is needed: the job skips Global roots, and a
@@ -433,7 +433,7 @@ void World::update(Renderer& renderer, float deltaSeconds)
         SpatialIndex& spatialIndex = Globals::spatialIndex;
         // "In the periodic result" = the root's UpdateRoot stamp is current (the job's generation,
         // held until the next job). A FRESH result retires the pending roots it covers (see
-        // PendingRoot): those added before the kick pass — linked by the time it ran — and any it
+        // PendingRoot): those added before the kick pass - linked by the time it ran - and any it
         // contains anyway.
         const auto inResult = [&](const Entity* e) {
             return e->spatialEntry.isValid() && spatialIndex.isStampedCurrent(e->spatialEntry.handle(), ESpatialPass::UpdateRoot); };
@@ -456,7 +456,7 @@ void World::update(Renderer& renderer, float deltaSeconds)
             sel.rootHandles[i] = sel.rootHandles.back();
             sel.rootHandles.pop_back();
         }
-        // THE VISIBLE SET, fresh EVERY frame from the cull job's Main pass (no traversal here — the
+        // THE VISIBLE SET, fresh EVERY frame from the cull job's Main pass (no traversal here - the
         // stamp collected the handles): each visible entity walked to its root (ancestors stamped);
         // the VisibleRoot stamp (a new generation per pass) dedupes among them and the UpdateRoot
         // stamp skips those the periodic result holds, so a root is visited once. This is what
@@ -503,7 +503,7 @@ void World::update(Renderer& renderer, float deltaSeconds)
     // NEXT frame's selection, FIRE-AND-FORGET the moment the pass is done: it has the whole rest
     // of the frame (send, procedural updates, UI, present, the fence wait, the next frame's input
     // and physics) instead of only the present window, and main joins it just before the next
-    // spatial kick (joinSelection — the commit in there would mutate the index under it). Nothing
+    // spatial kick (joinSelection - the commit in there would mutate the index under it). Nothing
     // destroys entities in that stretch (the destroy windows sit after the joins), so the root
     // walk is safe; registrations take the index's exclusive lock against the query. It sees
     // positions one commit older than an inline query would; the query margin covers a frame of
@@ -570,7 +570,7 @@ bool World::submitEntityBatches(const EntityUpdateNode* nodes, uint32 count, con
     }
     // SELECTION filter while copying: only stamped children ride into the arena (see update();
     // the root list from main is pre-selected, so only emitted children ever drop). The claim
-    // covers all `count` nodes — the few slots a dropped child leaves unused are cheaper than a
+    // covers all `count` nodes - the few slots a dropped child leaves unused are cheaper than a
     // second predicate pass, and the arena is sized from last frame's claims anyway.
     uint32 out = 0;
     for (uint32 i = 0; i < count; ++i)
@@ -590,7 +590,7 @@ bool World::submitEntityBatches(const EntityUpdateNode* nodes, uint32 count, con
         begin = end;
         // THE CONTINUATION: the first batch goes back to the calling batch job to run on the same
         // fiber instead of becoming a job. A unit's few child parts are then processed by the job
-        // that just updated the unit — one job per SUBTREE budget instead of one per level per
+        // that just updated the unit - one job per SUBTREE budget instead of one per level per
         // parent, which at 40k units was 40k+ continuation jobs and exhausted the job pool.
         if (inlineNodes && !handedBack)
         {
@@ -681,7 +681,7 @@ void World::updateBatchJob(const EntityUpdateNode* nodes, uint32 count)
     EntityUpdateStaging& staging = m_updateStaging.local();
     const ThreadLocalScope tlsPin; // asserts should any update path ever park the fiber
     // Loops over the CONTINUATION: after a batch, the first budget of the children it emitted is
-    // run right here (submitEntityBatches hands it back) and only the rest become jobs — so a
+    // run right here (submitEntityBatches hands it back) and only the rest become jobs - so a
     // subtree descends on this fiber until it fans out wider than one budget.
     for (;;)
     {
@@ -692,14 +692,14 @@ void World::updateBatchJob(const EntityUpdateNode* nodes, uint32 count)
     {
         const EntityUpdateNode& node = nodes[i];
         Entity* entity = node.entity;
-        // SIM LOD: the delta this visit gets (0 = sync/placement only), or no visit at all —
+        // SIM LOD: the delta this visit gets (0 = sync/placement only), or no visit at all -
         // a dormant entity's subtree is dropped from the pass here.
         const float delta = simLodDelta(*entity);
         if (delta < 0.0f)
             continue;
         batchCost += glm::max<uint32>(entity->updateCost, 1);
         // MEASURED cost: an entity's FIRST update is timed and becomes its updateCost
-        // (250ns units — no guessed initial value), then a ~1/1024-per-frame random
+        // (250ns units - no guessed initial value), then a ~1/1024-per-frame random
         // re-measure keeps it honest as behaviour changes (a unit that starts fighting,
         // a script that goes idle). Two clock reads only on measured updates.
         const uint32 mix = uint32((uintptr_t(entity) >> 4) * 2654435761u)
@@ -864,7 +864,7 @@ oc::vector<EntityPtr> World::spawnBatch(oc::span<const SpawnRequest> requests, b
         }
         else
         {
-            // Asset FILE: the spawnAssetFile route — resolve, then the same override composition
+            // Asset FILE: the spawnAssetFile route - resolve, then the same override composition
             // (caller position, caller rotation composed onto the authored default, authored scale).
             templates[i] = resolveAssetTemplate(request.name);
             if (templates[i])
@@ -901,7 +901,7 @@ void World::releaseBatch(oc::vector<EntityPtr>&& entities)
     if (entities.empty())
         return;
     ProfileScope profileScope("Destroy batch", EProfileCategory::Entity);
-    // Each release is an atomic decrement; the last one runs Entity::destroy on that worker —
+    // Each release is an atomic decrement; the last one runs Entity::destroy on that worker -
     // every component teardown seam locks (see the parallel-spawning notes), and a parent and
     // its child both in the batch compose through the refcounts like any external holder.
     Globals::jobSystem.parallelFor(0, (uint32)entities.size(), m_destroyBatchCost,
@@ -976,7 +976,7 @@ oc::shared_ptr<RenderComponent::SpawnInfo> World::buildRenderSpawnInfo(const Ass
         return nullptr;
 
     // Type defaults from the container itself (skinned iff its source scene had a skeleton) but can be
-    // overridden explicitly — `Type StaticMesh` / `Type SkinnedMesh`, with an optional nested `Rig` token.
+    // overridden explicitly - `Type StaticMesh` / `Type SkinnedMesh`, with an optional nested `Rig` token.
     bool skinned = container->isSkinned();
     oc::string rigType;
     if (const AssetNode* typeNode = renderNode.find("Type"))
@@ -1329,7 +1329,7 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         }
 
     // A Hull/Mesh physics shape (parsed below) sources its geometry from the render container, so the
-    // collision snapshot is captured while the container's scene data is loaded — one import, not two.
+    // collision snapshot is captured while the container's scene data is loaded - one import, not two.
     const AssetNode* physicsNode = findComponentNode(node, "Physics");
     bool wantsCollisionGeometry = false;
     if (physicsNode)
@@ -1342,7 +1342,7 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
     {
         if (m_headless)
         {
-            // no RenderComponent (no ObjectContainer load — that path is all renderer), but a Hull/Mesh
+            // no RenderComponent (no ObjectContainer load - that path is all renderer), but a Hull/Mesh
             // physics shape still needs to know WHERE its geometry lives: the names are enough, the
             // geometry itself comes from ensureCollisionSource's renderer-free import below
             if (const AssetNode* containerNode = renderNode->find("ObjectContainer"))
@@ -1456,7 +1456,7 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         tmpl.spawnInfos.emplace_back(oc::make_shared<NetworkComponent::SpawnInfo>());
     }
 
-    // GAME components (Components/Game/*.ixx) — !m_headless like Force: they create Force
+    // GAME components (Components/Game/*.ixx) - !m_headless like Force: they create Force
     // queries/read readbacks, and --game refuses headless anyway.
     if (const AssetNode* unitNode = findComponentNode(node, "GameUnit"); unitNode && !m_headless)
     {
@@ -1604,10 +1604,10 @@ oc::shared_ptr<const EntitySpawnTemplate> World::getOrBuildPrefabTemplate(const 
 
 oc::shared_ptr<const EntitySpawnTemplate> World::resolveAssetTemplate(const oc::string& path)
 {
-    // Runtime callers pass Assets/-relative names ("Entities/Game/x.pre") — pure LEXICAL
+    // Runtime callers pass Assets/-relative names ("Entities/Game/x.pre") - pure LEXICAL
     // normalization, no filesystem hit: this runs PER SPAWN (the co-op wave trickle spawns dozens
     // of units per frame through NpcSystem::service, and relativePath() resolves both sides
-    // through weakly_canonical — a per-spawn syscall on the main thread). Only an ABSOLUTE path
+    // through weakly_canonical - a per-spawn syscall on the main thread). Only an ABSOLUTE path
     // (editor drag/drop) still resolves against the working directory; the registry lookup below
     // normalizes its keys, so the lexical form matches it.
     oc::string fileName = FileSystem::isAbsolute(path)
@@ -1625,7 +1625,7 @@ EntityPtr World::spawnTemplate(const EntitySpawnTemplate& tmpl, const Transform&
     const Transform& dt = tmpl.defaultTransform;
     // Override replaces the POSITION and COMPOSES the caller's rotation onto the authored default
     // (identity callers keep the authored rotation exactly). The rotation used to be dropped
-    // outright — aimed Lances and replicated spawns silently spawned with the prefab default.
+    // outright - aimed Lances and replicated spawns silently spawned with the prefab default.
     const glm::vec3 pos = overrideDefaultTransform ? base.pos : dt.pos;
     const glm::quat quat = overrideDefaultTransform ? base.quat * dt.quat : dt.quat;
     ProfileScope scope(tmpl.displayName.c_str(), EProfileCategory::Entity); // per prefab: which type allocates
@@ -1645,7 +1645,7 @@ EntityPtr World::createEmptyEntity(const oc::string& name)
     ProfileScope scope("World::createEmptyEntity", EProfileCategory::Entity);
     // A blank template with NO components (archetype 0) and no prefabName: Entity::create leaves
     // prefabInstance false, so the entity is editable and serializes inline. It has no
-    // SceneComponent, so it cannot hold CHILDREN — a group root must come from a prefab with
+    // SceneComponent, so it cannot hold CHILDREN - a group root must come from a prefab with
     // `Component Scene` (Entities/Game/terrainroot.pre is the pattern). Cached (and kept across
     // reloadPrefabs) so its address stays stable for the entities that point at it.
     if (!m_emptyTemplate)
@@ -1719,13 +1719,13 @@ void World::handleEntityChange(EntityChange& change, const Camera& camera, const
     }
     else if (auto* rs = oc::get_if<EntityChange::RespawnEntity>(&change.type))
     {
-        // Entity::create() only stores a raw, non-owning pointer to the template — keep it alive for
+        // Entity::create() only stores a raw, non-owning pointer to the template - keep it alive for
         // as long as the entity might reference it (World's own template caches do the same for
         // prefabs; this one is ad-hoc, so nothing else would hold onto it).
         keepTemplateAlive(rs->tmpl);
 
         Transform t(rs->oldEntity->pos, rs->oldEntity->scale, rs->oldEntity->rot);
-        // Pre-set the frozen flag so component spawn already sees it — the respawn attaches to its parent
+        // Pre-set the frozen flag so component spawn already sees it - the respawn attaches to its parent
         // only further down, so create() can't inherit it from there.
         const uint8 initialFlags = rs->oldEntity->isFrozen() ? uint8(EEntityFlag_Frozen) : uint8(0);
         EntityPtr newEntity = Entity::create(*rs->tmpl, t, initialFlags);
@@ -1742,7 +1742,7 @@ void World::handleEntityChange(EntityChange& change, const Camera& camera, const
             }
 
         // Re-attach where the old entity was: a root (in m_rootEntities) or a child (in its parent's
-        // SceneComponent::children) — replace it in place so siblings/order aren't disturbed.
+        // SceneComponent::children) - replace it in place so siblings/order aren't disturbed.
         if (Entity* parent = rs->oldEntity->parent)
         {
             newEntity->parent = parent;

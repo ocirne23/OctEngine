@@ -148,7 +148,7 @@ namespace Procedural::Diffusion
 		{
 			// Lowest w with start < w*stride + offset + size, i.e. w >= ceil((start - offset - size + 1)/stride).
 			// Kept as the reference's explicit sign branch: both arms divide non-negative operands, where
-			// Java's and C++'s '/' agree. Do not "simplify" — the signs are the whole point.
+			// Java's and C++'s '/' agree. Do not "simplify" - the signs are the whole point.
 			const int32 numerator = pixelRange[d].start - m_offset[d] - m_size[d] + 1;
 			if (numerator >= 0)
 				out[d] = (numerator + m_stride[d] - 1) / m_stride[d];

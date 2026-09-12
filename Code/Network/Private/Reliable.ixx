@@ -7,7 +7,7 @@ import :Socket;
 import :Crypto;
 
 // Reliable-UDP game protocol over a single UdpSocket. A NetHost is symmetric: it accepts incoming
-// connections (server), connects out (client), or both at once — two hosts that connect() to each
+// connections (server), connects out (client), or both at once - two hosts that connect() to each
 // other resolve the simultaneous handshake automatically (p2p, tie-broken on connect salts).
 //
 // Handshake (4-way, anti-spoofing: the responder stores no state and allocates nothing until the
@@ -75,7 +75,7 @@ export struct NetEvent
 
 export struct NetHostConfig
 {
-    uint32 protocolId = 0x4F435331;    // "OCS1" — must match on both ends
+    uint32 protocolId = 0x4F435331;    // "OCS1" - must match on both ends
     uint16 maxPeers = 32;              // total connection slots (incoming + outgoing)
     bool acceptIncoming = true;        // false = pure client (p2p simultaneous connect still works)
     bool encrypt = false;              // ECDH handshake + AES-128-GCM per packet (+16B); must match on both ends
@@ -93,11 +93,11 @@ export struct NetHostConfig
     // 60 Hz snapshots + claims + acks runs well under 200/s.
     uint32 maxPacketsPerSecPerAddress = 400;
     uint32 packetBurstPerAddress = 200;   // bucket cap: absorbs legitimate bursts after a stall
-    uint32 maxPacketsPerUpdate = 8192;    // global work ceiling per update() — a flood cannot make
+    uint32 maxPacketsPerUpdate = 8192;    // global work ceiling per update() - a flood cannot make
                                           // one frame unbounded no matter how many addresses it uses
     uint16 maxPeersPerIp = 4;             // one machine must not be able to eat every connection slot
     uint32 maxQueuedReliablePerChannel = 1024; // a peer that stops acking while we keep queueing is
-                                               // an unbounded memory sink — disconnect it instead
+                                               // an unbounded memory sink - disconnect it instead
 
     // debug link simulation, applied to outgoing packets (live-editable)
     float simPacketLoss = 0.0f;        // 0..1 chance to drop
@@ -111,7 +111,7 @@ export struct NetHostStats
     uint32 packetsReceivedPerSec = 0;
     uint32 bytesSentPerSec = 0;
     uint32 bytesReceivedPerSec = 0;
-    uint32 packetsDroppedPerSec = 0; // rate-limited away — sustained nonzero means a flood (or limits set too tight)
+    uint32 packetsDroppedPerSec = 0; // rate-limited away - sustained nonzero means a flood (or limits set too tight)
 };
 
 // protocol internals shared between interface and implementation. The framing sizes are exported so
@@ -240,7 +240,7 @@ public:
     float getPeerPacketLoss(NetPeerId peer) const; // 0..1 over the recent send window
     // Reliable messages queued (sent-unacked + not yet sent) on one channel of a peer. The caller's
     // flow control: keep bulk streams under a target so they never reach maxQueuedReliablePerChannel
-    // (which disconnects the peer — a limit for peers that stop acking, not a buffer to fill).
+    // (which disconnects the peer - a limit for peers that stop acking, not a buffer to fill).
     uint32 getQueuedReliable(NetPeerId peer, uint8 channel) const;
 
     const NetHostStats& getStats() const { return m_stats; }
@@ -294,7 +294,7 @@ private:
     uint64 m_rngState = 0;
 
     // Fixed-size rate-limit table: FIXED because the thing being defended against is an attacker
-    // who varies its source address — a per-address map would grow with every forged sender. Two
+    // who varies its source address - a per-address map would grow with every forged sender. Two
     // addresses colliding on a slot merely share a (generous) budget.
     static constexpr uint32 RateBucketCount = 512;
     struct RateBucket

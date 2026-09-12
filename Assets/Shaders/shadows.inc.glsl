@@ -15,7 +15,7 @@ float cascadeTexelWorldSize(int c) { return u_cascadeViewProj[c][1][3]; }
 float cascadeDepthRange(int c) { return u_cascadeViewProj[c][2][3]; }
 
 // PCF disk radius (texels) per unit of normalized depth gap, derived from the sun's angular size so
-// PCSS softness matches the ray-traced sun (tan(sunRadius) * depthRange / texelWorldSize — the
+// PCSS softness matches the ray-traced sun (tan(sunRadius) * depthRange / texelWorldSize - the
 // derivation sits at Renderer::buildUboSunShadow, which computes it per cascade once per frame).
 float pcssSunSizeTexels(int c) { return u_cascadeSunSizeTexels[c]; }
 mat4 cascadeMatrix(int c)
@@ -212,7 +212,7 @@ float sampleSunShadow(vec3 worldPos, vec3 N)
 	}
 }
 
-// Debug overlay, compiled in by the SHADOW_DEBUG define ("Shadows/Debug mode" — a pipeline reload, not a
+// Debug overlay, compiled in by the SHADOW_DEBUG define ("Shadows/Debug mode" - a pipeline reload, not a
 // uniform, so the release shader carries none of it). Applied to the final lit colour:
 //   1  cascade index tint (red / green / blue / magenta = cascade 0..3)
 //   2  the cross-fade band: the cascade tint, going WHITE across the SHADOW_CASCADE_BLEND band into the next

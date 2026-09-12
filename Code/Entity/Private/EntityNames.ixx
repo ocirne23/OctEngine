@@ -9,8 +9,8 @@ export class Entity;
 // string; a replaced or destroyed entry transfers its buffer to the profiler until its markers leave
 // the profiler's frame-history window.
 //
-// Thread safety: set/erase run at spawn/rename/destroy time — the parallel spawn/destroy window,
-// where several workers name entities at once — and get runs from the parallel entity pass (script
+// Thread safety: set/erase run at spawn/rename/destroy time - the parallel spawn/destroy window,
+// where several workers name entities at once - and get runs from the parallel entity pass (script
 // thunks, the per-entity ProfileScope). Pointer-hashed SHARDS with one mutex each keep both paths
 // uncontended; there is no lock-free read because a shard's map may rehash under a concurrent set.
 export class EntityNameRegistry final

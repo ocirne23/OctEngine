@@ -20,14 +20,14 @@ public:
     void setSensitivity(float sensitivity) { m_sensitivity = sensitivity; }
     void setLockToWorldUp(bool lock) { m_lockToWorldUp = lock; }
     // Off = mouse-look only: the WASD/Space/Ctrl fly keys are released to whoever borrowed them
-    // (player control routes them to the owned entity while active — see InputControls key C)
+    // (player control routes them to the owned entity while active - see InputControls key C)
     void setMovementEnabled(bool enabled) { m_movementEnabled = enabled; }
     // Hard reposition (view matrix refreshes on the next update): player control hands the camera
     // back where the possessed capsule left it instead of popping to the pre-possession spot
     void setPosition(const glm::vec3& position) { m_position = position; }
     // Hard reposition PLUS re-aim (world-up-locked basis): the game's detached camera starts the
     // flight from the follow camera's exact view instead of the testbed pose. No re-registration
-    // of tweaks or listeners — initialize() stays a once-per-run call.
+    // of tweaks or listeners - initialize() stays a once-per-run call.
     void setPose(const glm::vec3& position, const glm::vec3& lookAt);
 
     glm::vec3 getPosition() const { return m_position; }

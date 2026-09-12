@@ -105,7 +105,7 @@ void PhysicsWorld::shutdown()
     m_initialized = false;
 }
 
-// Fires the step's buffered contact/sensor begin/end events (box3d clears them on the NEXT step —
+// Fires the step's buffered contact/sensor begin/end events (box3d clears them on the NEXT step -
 // with at most one step per update they stay valid until then, which is what lets the dispatch
 // defer to later in the frame). End events may reference destroyed shapes and are validated first.
 static void drainContactEvents(b3WorldId world, const oc::function<void(const PhysicsWorld::ContactEvent&)>& contactCallback)
@@ -167,7 +167,7 @@ void PhysicsWorld::stepSimulation(double deltaSec)
     const float step = 1.0f / float(m_stepHz);
     const b3WorldId world = oc::bitCast<b3WorldId>(m_worldHandle);
 
-    // AT MOST ONE step per update — deliberate (see the header): it keeps box3d's contact buffers
+    // AT MOST ONE step per update - deliberate (see the header): it keeps box3d's contact buffers
     // valid until the deferred dispatchContactEvents, and it bounds the step cost per frame. Below
     // stepHz the sim runs SLOWER than real time instead of catching up; the residual is clamped to
     // one owed step so a hitch never spirals.
@@ -293,7 +293,7 @@ PhysicsBody PhysicsWorld::createBody(const PhysicsBodyDesc& desc, oc::span<const
     bodyDef.motionLocks.angularZ = desc.lockRotation;
 
     // Convex hull builds are pure math over the point cloud (no world access) and by far the most
-    // expensive part of a hull body's creation — precomputed HERE so the box3d world lock below
+    // expensive part of a hull body's creation - precomputed HERE so the box3d world lock below
     // covers only the actual body/shape registration (parallel entity spawning).
     const float scale = desc.transform.scale;
     oc::small_vector<b3HullData*, 4> prebuiltHulls; // parallel to `shapes`; null for non-hull entries
@@ -312,7 +312,7 @@ PhysicsBody PhysicsWorld::createBody(const PhysicsBodyDesc& desc, oc::span<const
         prebuiltHulls.push_back(hull);
     }
 
-    std::unique_lock lock(g_bodyLifecycleMutex); // parallel spawn jobs — see Body.ixx
+    std::unique_lock lock(g_bodyLifecycleMutex); // parallel spawn jobs - see Body.ixx
     const b3BodyId body = b3CreateBody(oc::bitCast<b3WorldId>(m_worldHandle), &bodyDef);
     if (B3_IS_NULL(body))
     {
@@ -386,7 +386,7 @@ PhysicsBody PhysicsWorld::createBody(const PhysicsBodyDesc& desc, oc::span<const
         }
     }
     lock.unlock();
-    for (b3HullData* hull : prebuiltHulls) // frees only heap blocks — no world access needed
+    for (b3HullData* hull : prebuiltHulls) // frees only heap blocks - no world access needed
         if (hull)
             b3DestroyHull(hull);
     return PhysicsBody(oc::bitCast<uint64>(body));

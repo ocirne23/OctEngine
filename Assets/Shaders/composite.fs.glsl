@@ -1,7 +1,7 @@
 #version 450
 
 // Composites the TAA-resolved scene colour into the swapchain: applies the scene exposure and the
-// selected tonemap operator (the only place HDR is mapped to display range — everything upstream is
+// selected tonemap operator (the only place HDR is mapped to display range - everything upstream is
 // linear radiance). The resolved image is full render-target sized; the area outside the editor
 // viewport panel holds the scene clear colour and is later covered by ImGui.
 

@@ -4,7 +4,7 @@
 // the query position ("which team's bubble, after deformation, contains this point?"). Results are
 // written slot-indexed straight into the host-visible readback buffer, stamped with the frame index
 // so the CPU can tell a live result from a never-evaluated slot; the CPU reads them ~2 frames later.
-// (Field FORCE for shield-less bodies does not live here any more — that is the baked pressure
+// (Field FORCE for shield-less bodies does not live here any more - that is the baked pressure
 // field, force_bake.cs.glsl.)
 
 layout (local_size_x = FORCE_SIM_GROUP_SIZE) in;

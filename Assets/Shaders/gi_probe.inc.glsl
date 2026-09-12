@@ -1,9 +1,9 @@
-// GI irradiance probes — a single persistent, world-space CASCADED CLIPMAP volume. GI_NUM_CASCADES nested
+// GI irradiance probes - a single persistent, world-space CASCADED CLIPMAP volume. GI_NUM_CASCADES nested
 // probe grids, each GI_PROBE_DIM_X x _Y x _Z probes at a fixed power-of-two spacing (BASE_SPACING << cascade),
 // centred on the scene focus lifted by GI_FOCUS_Y_OFFSET. Probes sit at ABSOLUTE lattice positions
 // (lc * spacing) and are stored toroidally
 // (slot = lc & (DIM-1)), so a probe that stays in range maps to the same storage slot every frame and its
-// SH carries forward in place — no hash table, no copy, no prev/cur ping-pong. When the camera moves, the
+// SH carries forward in place - no hash table, no copy, no prev/cur ping-pong. When the camera moves, the
 // lattice coords that scroll out are silently overwritten by the new coords that wrap into their slots.
 //
 // Buffers / names the includer must define before including (read side):
@@ -11,14 +11,14 @@
 //                       (16-byte loads: a probe read is 6 wide loads, not 24 scalar ones).
 // For the write side (trace) also define GI_PROBE_WRITE.
 //
-// Requires shared.inc.glsl (PI) (u_sceneFocus — the scene focus, which centers the cascades: the game's
+// Requires shared.inc.glsl (PI) (u_sceneFocus - the scene focus, which centers the cascades: the game's
 // player, else the camera; see Renderer::setSceneFocus).
 
 #ifndef GI_PROBE_INC_GLSL
 #define GI_PROBE_INC_GLSL
 
 // GI_SH_STRIDE, GI_NUM_CASCADES, GI_PROBE_DIM_X/Y/Z, GI_FOCUS_Y_OFFSET and GI_CASCADE_BASE_SPACING are
-// injected by the engine from RendererVKLayout (Layout.ixx, the live g_giGrid — the "GI" grid tweaks
+// injected by the engine from RendererVKLayout (Layout.ixx, the live g_giGrid - the "GI" grid tweaks
 // reload every shader).
 // Per-probe layout, in VEC4s (24 floats = 6 vec4; the CPU sizes the buffer in floats, GI_PROBE_STRIDE):
 //   [0] = (c0.rgb, c1.r)  [1] = (c1.gb, c2.rg)  [2] = (c2.b, c3.rgb)   SH-L1 RGB irradiance
@@ -78,7 +78,7 @@ float giChebPow(float x)
 // Probe spacing (world units) of a cascade. Cascade 0 is finest; each level doubles.
 int giCascadeSpacing(int c) { return GI_CASCADE_BASE_SPACING << c; }
 
-// Integer lattice coord of the cascade's min corner, snapped so the focus (lifted by GI_FOCUS_Y_OFFSET —
+// Integer lattice coord of the cascade's min corner, snapped so the focus (lifted by GI_FOCUS_Y_OFFSET -
 // a positive offset puts more probes above the ground than below) sits at its center.
 ivec3 giCascadeOrigin(int c, vec3 focusPos)
 {
@@ -110,7 +110,7 @@ void giReadDepthSH(uint cellBase, out vec4 dsh, out vec4 d2sh)
     d2sh = GI_GRID_DATA_NAME[cellBase + GI_DEPTH2_V4];
 }
 
-// Band-limited reconstruction of a scalar SH-L1 function at a direction (no cosine convolution — this is
+// Band-limited reconstruction of a scalar SH-L1 function at a direction (no cosine convolution - this is
 // the raw function estimate, unlike irradiance).
 float giEvalDepth(vec4 c, vec3 d) { return dot(c, shBasisL1(d)); }
 
@@ -153,7 +153,7 @@ vec3 giEvalCell(uint cellBase, vec3 n)
 // Virtual sky probe: the trace pass projects skyRadiance (sky + analytic sunlit ground) into one extra
 // SH-L1 slot stored after the last probe. Out-of-field surfaces evaluate it exactly like a real probe
 // with no geometry hits, so leaving the probe field hands over to the same integral the probes converge
-// to in open space — instead of a differently-shaped cheap approximation that diverges at low sun angles
+// to in open space - instead of a differently-shaped cheap approximation that diverges at low sun angles
 // (a single sky sample along the normal misses the bright horizon in-scatter band the probes gather).
 // Returns cosine-convolved irradiance E(n), like evalProbeSHCoverage.
 #define GI_SKY_SH_BASE (uint(GI_NUM_CASCADES) * uint(GI_CASCADE_PROBES) * GI_PROBE_STRIDE_V4) // vec4 index; 3 vec4s of SH
@@ -192,7 +192,7 @@ vec3 giSampleCascade(int c, int s, ivec3 base, vec3 frac, vec3 samplePos, vec3 n
         ivec3 lc = base + off;
         uint cellBase = giProbeBase(c, lc);
 
-        // Reject probes embedded in geometry (mostly-backface gather) — their near-black SH is not signal.
+        // Reject probes embedded in geometry (mostly-backface gather) - their near-black SH is not signal.
         w *= 1.0 - smoothstep(GI_BACKFACE_DEAD_MIN, GI_BACKFACE_DEAD_MAX, giProbeBackfaceFrac(cellBase));
         if (w <= 0.0)
             continue;
@@ -264,7 +264,7 @@ vec3 giBiasedSample(vec3 worldPos, vec3 n, int s)
 }
 
 // coverage = 1 deep inside the probe field, falling to 0 over the OUTERMOST cascade's edge band (and 0
-// where no cascade covers the point). Callers blend their ambient fallback in by it — without the fade,
+// where no cascade covers the point). Callers blend their ambient fallback in by it - without the fade,
 // leaving the probe field dropped the bounce light in a single step, which read as a bright square zone
 // around the camera at the last cascade's window face.
 vec3 evalProbeSHCoverage(vec3 worldPos, vec3 n, out float coverage)
@@ -293,7 +293,7 @@ vec3 evalProbeSHCoverage(vec3 worldPos, vec3 n, out float coverage)
         if (c == GI_NUM_CASCADES - 1)
         {
             // Outermost cascade: there is nothing coarser to fade into, so fade the COVERAGE instead
-            // (wider band than the inter-cascade one — this hands over to a fallback, not to more data).
+            // (wider band than the inter-cascade one - this hands over to a fallback, not to more data).
             coverage = clamp(edge / (float(GI_PROBE_DIM_MIN) * 0.2), 0.0, 1.0);
             return E0;
         }
@@ -347,13 +347,13 @@ vec3 giDebugColor(vec3 worldPos, vec3 n)
 
 #ifdef GI_PROBE_WRITE
 
-// Multi-bounce lookup for the trace's gather HITS — the cheap cousin of evalProbeSHCoverage. The result
+// Multi-bounce lookup for the trace's gather HITS - the cheap cousin of evalProbeSHCoverage. The result
 // is albedo-scaled and temporally blended at a few permille per visit, so noise is free: no Chebyshev
 // visibility (skips the two depth-moment loads and the reconstruction per probe), no cross-cascade fade,
 // and the walk starts at cStart (the tracing probe's cascade: its rays reach 8(c+1) m and its window
 // spans 32 spacings, so the hit nearly always fits) instead of the finest. 4 vec4 loads per probe
 // (misc + SH) instead of 6, one cascade instead of up to two. Backface-dead rejection and the
-// half-Lambert probe-direction fade stay — they are what keeps a wall from leaking into the bounce.
+// half-Lambert probe-direction fade stay - they are what keeps a wall from leaking into the bounce.
 // coverage behaves like evalProbeSHCoverage's (1 inside, fading over the outermost window's edge band).
 vec3 giEvalBounce(vec3 worldPos, vec3 n, int cStart, out float coverage)
 {
@@ -426,7 +426,7 @@ void giBlendCell(uint cellBase, vec3 c0, vec3 c1, vec3 c2, vec3 c3, float alpha)
 
 // Temporally blend the probe's SH-L1 depth moments (the Chebyshev visibility estimate) and its
 // backface-hit fraction (the embedded-probe rejection signal), and store the relocation offset
-// (unblended — the relocation logic is already iterative). The fraction and the offset share the misc
+// (unblended - the relocation logic is already iterative). The fraction and the offset share the misc
 // vec4: one read + one write for both. prevBackfaceFrac = the stored fraction the caller already read.
 void giBlendProbeStats(uint cellBase, vec4 dsh, vec4 d2sh, float prevBackfaceFrac, float backfaceFrac, vec3 offset, float alpha)
 {

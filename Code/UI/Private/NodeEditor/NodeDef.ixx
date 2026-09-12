@@ -164,7 +164,7 @@ export EDataType dataTypeFromToken(oc::string_view token)
 
 // Value types a Script Data member (persistent per-instance struct field) may have. Deliberately excluded:
 // String (an oc::string can't live in the POD block that crosses the script ABI) and the raw handle types
-// Entity / Pointer — a component/entity handle persisted across frames would dangle once its target is
+// Entity / Pointer - a component/entity handle persisted across frames would dangle once its target is
 // destroyed, so handles must be re-fetched each frame (see entityGetForceComponent), never stored.
 export inline constexpr EDataType memberTypes[] = { EDataType::Int, EDataType::Float, EDataType::Bool, EDataType::Vec3 };
 
@@ -177,7 +177,7 @@ constexpr bool memberTypesAreStorablePod()
             return false;
     return true;
 }
-static_assert(memberTypesAreStorablePod(), "Script Data members must be POD value types — no handles (Entity/Pointer) or Exec/String");
+static_assert(memberTypesAreStorablePod(), "Script Data members must be POD value types - no handles (Entity/Pointer) or Exec/String");
 
 // C++ type name for a member field, used both for the struct declaration and the in-node type button label.
 export const char* memberCppType(EDataType type)
@@ -697,7 +697,7 @@ export const oc::vector<NodeDef>& nodeRegistry()
         "" });
 
     // ---- force component (all via ABI thunks, so they work in a sandboxed script DLL) ----
-    // Get Force Component: resolves the entity's ForceComponent ONCE in the if-condition and branches on it —
+    // Get Force Component: resolves the entity's ForceComponent ONCE in the if-condition and branches on it -
     // true runs when the entity has one (the Component handle is bound and in scope on that chain), break
     // continues past the if whether or not it was present (like the If node, no else). The handle is a single
     // lookup shared by every Get/Set Force that reads it, and it is out of scope on the break chain, so it can
@@ -751,7 +751,7 @@ export const oc::vector<NodeDef>& nodeRegistry()
         "?8{ctx->forceSetLocalDirection($1, $8);\n}?9{ctx->forceSetLocalOffset($1, $9);\n}?10{ctx->forceSetCentered($1, $10);\n}#0" });
 
     // ---- light component (same shape as the force nodes: resolve the handle once, then indexed get/set) ----
-    // Get Light Component: resolves the entity's LightComponent ONCE in the if-condition and branches on it —
+    // Get Light Component: resolves the entity's LightComponent ONCE in the if-condition and branches on it -
     // true runs when the entity has one, break continues past the if either way. Feed the Component pin into
     // Get/Set Light; Count is the number of lights on it, the valid Index range for both.
     r.push_back({ "GetLightComponent", "Get Light Component", "Light", true,
@@ -922,7 +922,7 @@ export const oc::vector<NodeDef>& nodeRegistry()
         "ctx->physicsApplyImpulse($1, $2);\n#0" });
 
     // Teleport Body: queues an absolute pose, applied before the next physics step. The only way to move
-    // a body of any type — Set Entity moves the mesh and leaves the collider behind.
+    // a body of any type - Set Entity moves the mesh and leaves the collider behind.
     r.push_back({ "TeleportBody", "Teleport Body", "Physics", true,
         { { "", D::Exec, "" },
             { "Component", D::Pointer, "nullptr" },

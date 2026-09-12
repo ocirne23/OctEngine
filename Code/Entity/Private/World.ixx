@@ -30,10 +30,10 @@ export struct EntityUpdateStaging
 
 // SIM LOD ("Game/Sim LOD" tweaks, not Saved): which entities the update pass visits and how
 // often their SIMULATION components tick, by the distance to the nearest FOCUS point (the
-// players — the Game layer publishes them; the testbed uses the camera). The SpatialIndex stamps
+// players - the Game layer publishes them; the testbed uses the camera). The SpatialIndex stamps
 // three UpdateTier passes (balls at radius[0..2] around every focus point); an entity's own
 // stamps give its DISTANCE tier: 0 = every frame, 1/2 = time-based intervals, 3 = DORMANT
-// (beyond radius[2]: not visited at all — no sim, no render push, subtree skipped). The visit
+// (beyond radius[2]: not visited at all - no sim, no render push, subtree skipped). The visit
 // set comes from one sphere query per focus point (radius[2] + queryMargin), run as a POST-UPDATE
 // job for the NEXT pass (see computeSelection), plus the Global and freshly added roots; a visited
 // parent emits only stamped children. The decision is PER ENTITY
@@ -55,7 +55,7 @@ export struct SimLodConfig
     float intervalJitter = 0.25f;  // per-entity +-fraction on the interval so a wave that entered a tier
                                    // together spreads out instead of ticking in lockstep
     bool dormantDisableBody = true; // dormant edge: DISABLE a throttled entity's physics body (out of the
-                                    // broadphase + solver, pose kept — nothing can wake it) instead of
+                                    // broadphase + solver, pose kept - nothing can wake it) instead of
                                     // only parking it asleep; re-enabled on the wake edge either way
     int forceMaxTier = 1;          // a ForceComponent's bubble is ACTIVE only while its entity's tier
                                    // is <= this (3 = always); applies to every selected entity with a
@@ -68,7 +68,7 @@ export struct SimLodConfig
     float queryMargin = 10.0f;   // the selection query reaches radius[2] + this, so an entity LEAVING the
                                  // outer tier is still visited once in the band with no tier stamp
                                  // (= dormant) and takes its dormancy edge (units park their body)
-    // ZONES (setSimLodZones — the Game publishes the friendly forcefield bubbles): a zone stamps
+    // ZONES (setSimLodZones - the Game publishes the friendly forcefield bubbles): a zone stamps
     // tier 1 within its radius + zoneMargin and tier 2 over a further zoneTier2Band, never tier
     // 0, so a unit walking into a far base's field ticks (and is pushed) without a player near.
     float zoneMargin = 5.0f;
@@ -80,7 +80,7 @@ export struct SimLodConfig
     // frustum pass regardless. The query margin has to cover this much motion.
     float selectionIntervalSec = 0.05f;
     float maxCatchUpSec = 1.0f;  // cap in SECONDS (never frames: frame-rate bound) on the dt a throttled
-                                 // tick receives — a tick gets its whole stretch, only a return from
+                                 // tick receives - a tick gets its whole stretch, only a return from
                                  // dormancy is clipped
     bool units = true;           // GameUnitComponent follows the LOD
     bool structures = false;     // GameStructureComponent (barracks/turret clocks, flows)
@@ -97,11 +97,11 @@ public:
     void update(Renderer& renderer, float deltaSeconds);
 
     // SIM LOD focus points (see SimLodConfig): set every frame BEFORE update() by whoever knows
-    // where the players are — GameMatch::update publishes every player capsule, main.cpp the
+    // where the players are - GameMatch::update publishes every player capsule, main.cpp the
     // camera in the plain testbed. No focus = no LOD (everything ticks at full rate).
     static constexpr uint32 MaxSimLodFocus = 16;
     void setSimLodFocus(const glm::vec3* points, uint32 count);
-    // SIM LOD zones: spheres (xyz center, w radius) that stamp tier 1 and 2 only — see
+    // SIM LOD zones: spheres (xyz center, w radius) that stamp tier 1 and 2 only - see
     // SimLodConfig::zoneMargin. GameMatch publishes the friendly structures' bubble spheres (the
     // merge group's sphere where merged). Same timing as the focus; stays until set again.
     static constexpr uint32 MaxSimLodZones = 64;
@@ -113,13 +113,13 @@ public:
     // entity is scheduled by (the game's far tick leaves such a unit to the pass).
     int simLodDistanceTier(const glm::vec3& pos) const;
     // Update SELECTION (see update()): whether a child a visited parent emitted is part of this
-    // frame's pass — its spatial mask carries a tier or Main stamp (a never-stamped fresh entry
+    // frame's pass - its spatial mask carries a tier or Main stamp (a never-stamped fresh entry
     // counts as stamped). Everything when the LOD is inactive. Public for the NetworkManager: an
     // unselected client entity gets its snapshot applied directly (the pass never visits it).
     bool simLodSelected(const Entity& entity) const;
 
     // Headless server mode: set BEFORE any spawn. Templates then carry only Scene/Physics/Script/
-    // Network components — everything renderer-touching (Render/Animator/Light/Particle/Force) and
+    // Network components - everything renderer-touching (Render/Animator/Light/Particle/Force) and
     // Audio is dropped at build time, so updateSelf never dereferences the (uninitialized) renderer
     // and no GPU resource is ever created. Hull/Mesh collision still works: the Render node's
     // container NAME is parsed textually and the geometry comes from the renderer-free
@@ -131,7 +131,7 @@ public:
     EntityPtr spawn(const oc::string& name, const Transform& base);
 
     // PARALLEL ENTITY SPAWNING: spawns a batch of prefabs with the Entity::create calls fanned out
-    // over the job system (main thread only, called in the window where spawning is legal today —
+    // over the job system (main thread only, called in the window where spawning is legal today -
     // the entity-change drains / game.update, after the spatial/begin-frame joins and outside the
     // parallel entity pass). Templates resolve HERE on main (the template cache is not job-safe);
     // the jobs run only Entity::create, whose resource seams are all safe against concurrent
@@ -151,7 +151,7 @@ public:
 
     // PARALLEL ENTITY DESTRUCTION: releases a batch of handles with the resulting Entity::destroy
     // calls fanned out over the job system (same window/contract as spawnBatch). A handle that is
-    // not the entity's LAST reference just decrements — callers drop every other owner they mean
+    // not the entity's LAST reference just decrements - callers drop every other owner they mean
     // to (root list, rosters) BEFORE this, on main, so the notifications (removeRootEntity's
     // callback) stay serial and only the teardown itself runs on workers. The Delete drain in
     // handleEntityChanges and NpcSystem::clear go through it.
@@ -159,13 +159,13 @@ public:
     EntityPtr spawnAssetFile(const oc::string& path, const Transform& base, bool overrideDefaultTransform = true);
     // The two halves of spawnAssetFile, for a caller that spawns the SAME file every frame (the
     // projectile shots): resolve once, spawn from the template. A resolve costs a path
-    // normalization and two keyed lookups — several heap strings — per call, which is what the
+    // normalization and two keyed lookups - several heap strings - per call, which is what the
     // per-spawn route pays. templateGeneration() changes whenever reloadPrefabs / invalidatePrefab
     // retires templates, so a holder re-resolves when it sees a new value.
     oc::shared_ptr<const EntitySpawnTemplate> resolveAssetTemplate(const oc::string& path);
     EntityPtr spawnTemplate(const EntitySpawnTemplate& tmpl, const Transform& base, bool overrideDefaultTransform = true);
     uint32 templateGeneration() const { return m_templateGeneration; }
-    // NO components (archetype 0): editable, serializes inline — but it cannot hold children.
+    // NO components (archetype 0): editable, serializes inline - but it cannot hold children.
     // A grouping root must come from a prefab with `Component Scene`.
     EntityPtr createEmptyEntity(const oc::string& name);
 
@@ -184,7 +184,7 @@ public:
             m_pendingRoots.push_back({ e, m_updateFrame });
     }
     // Drops the World's ownership of a root entity (it dies here unless something else still holds it).
-    // Notifies m_onRootEntityRemoved FIRST (the entity is still alive during the callback) — the Game
+    // Notifies m_onRootEntityRemoved FIRST (the entity is still alive during the callback) - the Game
     // layer's rosters deregister through it, so EVERY removal path (editor delete, script destroy
     // request, network despawn) reaches them without any world-wide query. The callback must not call
     // removeRootEntity itself (reentrant erase_if); a remover that already deregistered just sees a
@@ -198,7 +198,7 @@ public:
         oc::erase_if(m_globalRoots, [entity](const Entity* e) { return e == entity; });
     }
     const oc::vector<EntityPtr>& rootEntities() const { return m_rootEntities; }
-    // Drops EVERY root at once (no m_onRootEntityRemoved notifications — the callers are the
+    // Drops EVERY root at once (no m_onRootEntityRemoved notifications - the callers are the
     // teardowns, which reset their own holders first), releasing the World's references as one
     // parallel batch: a root nothing else holds dies on a worker. Main thread, spawn window.
     void clearRootEntities()
@@ -328,13 +328,13 @@ private:
     // SIM LOD decision for one node of the pass, from the entity's own spatial pass mask (the
     // UpdateTier stamps + Main; worker-safe: writes the entity's sched bytes and this worker's
     // staging counters only). Returns the delta to hand updateSelf: the frame delta (full rate),
-    // the accumulated catch-up (a throttled entity's tick frame), 0 (skipped frame — the entity is
+    // the accumulated catch-up (a throttled entity's tick frame), 0 (skipped frame - the entity is
     // visited for its sync/placement but takes no sim step) or < 0 = DORMANT: do not visit the
     // entity or its subtree at all this frame.
     float simLodDelta(Entity& entity);
-    // Its three pieces: the tiers — from the entity's own spatial stamps once the periodic job has
+    // Its three pieces: the tiers - from the entity's own spatial stamps once the periodic job has
     // placed it, else (fresh, or never inside a ball) by direct distance to the focus points and
-    // zones — the dormant / wake transitions (PhysicsComponent park/unpark), and the time-based
+    // zones - the dormant / wake transitions (PhysicsComponent park/unpark), and the time-based
     // tick cadence.
     struct SimLodTiers
     {
@@ -347,11 +347,11 @@ private:
     // THE SELECTION runs as a POST-UPDATE job (computeSelection) every "Selection interval"
     // passes: it opens a new UpdateTier stamp generation, then ONE traversal per sphere (a focus
     // point or a zone) on a parallelFor stamps every hit's tiers by distance band, walks it up to
-    // its root (stamping the ancestors) and records the root — the tier stamps are the job's, not
+    // its root (stamping the ancestors) and records the root - the tier stamps are the job's, not
     // the cull job's, so the stamps stay current until the next selection. ROOT DEDUPE is a stamp
     // too: the walk's atomic UpdateRoot stamp lets exactly one sphere record a shared root (no
     // sort, no merge), and the same stamp tells update() which visible / pending roots the result
-    // already holds. The result carries each root's spatial handle (liveness proof at use — a root
+    // already holds. The result carries each root's spatial handle (liveness proof at use - a root
     // may die in between) and is reused, dead roots dropped, until the next job replaces it.
     struct SelectSphere
     {
@@ -374,7 +374,7 @@ private:
     // Roots added since the last selection that could see them: visited unconditionally every
     // pass. A root added in pass f links at the commit of pass f + 1 at the latest, so the job
     // kicked at the end of pass k >= f + 1 finds it; that job's result retires it (and any root the
-    // result contains anyway — a root added before pass k's commit is found AND still pending).
+    // result contains anyway - a root added before pass k's commit is found AND still pending).
     struct PendingRoot
     {
         Entity* entity;
@@ -383,7 +383,7 @@ private:
 public:
     // The selection job is FIRE-AND-FORGET from the end of update(): it gets the whole rest of the
     // frame instead of the present window. Main calls this right BEFORE the next frame's spatial
-    // kick (the commit inside it would mutate the index under a still-running query) — normally a
+    // kick (the commit inside it would mutate the index under a still-running query) - normally a
     // no-op, a real wait only when the job outlasted the frame.
     void joinSelection();
 private:
@@ -442,7 +442,7 @@ private:
 export namespace Globals
 {
 // ~World destroys the root entities (their components need spatialIndex/physics/audio/renderer/
-// networkManager and the job system's main-thread context — all destruct later, see InitSeg.h) and
+// networkManager and the job system's main-thread context - all destruct later, see InitSeg.h) and
 // then the caches (ObjectContainers → Renderer::removeObjectContainer, audio buffers →
 // Globals::audio). Members destruct in reverse declaration order, so m_rootEntities empties before
 // the caches they reference.

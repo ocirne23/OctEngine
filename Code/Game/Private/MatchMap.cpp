@@ -34,7 +34,7 @@ static constexpr float c_coopBaseClearRadius = 26.0f; // rock-free zone around t
 static constexpr float c_barrierStep = 20.0f;      // one barrier.pre segment (posts at centers)
 // The INVISIBLE edge-wall ring just inside the ground rim: waves spawn in the band outside the
 // barrier, where crowd pressure used to shove bodies off the world. Blocks everyone (edgewall.pre
-// stays on the Default layer, like rock.pre). 100 m segments — nothing sees it, so long boxes keep
+// stays on the Default layer, like rock.pre). 100 m segments - nothing sees it, so long boxes keep
 // the static body count at 6 a side instead of 30.
 static constexpr float c_coopEdgeWall = 299.0f;
 static constexpr float c_edgeWallStep = 100.0f;
@@ -42,14 +42,14 @@ static constexpr float c_edgeWallHalfThick = 0.5f; // MUST match edgewall.pre's 
 static constexpr float c_edgeWallSpan = 300.0f;    // tangential reach of a side: the whole rim, so
                                                    // the four sides seal the corners between them
 // A wave spawn point is clamped to +-c_coopGroundEdge, so this is the gap between the furthest a
-// body can be placed and the wall's INNER FACE. It has to clear the largest unit's body radius —
-// enemyTitan.pre, 2.0 m — or that unit spawns overlapping a static and gets kicked when it unparks.
+// body can be placed and the wall's INNER FACE. It has to clear the largest unit's body radius -
+// enemyTitan.pre, 2.0 m - or that unit spawns overlapping a static and gets kicked when it unparks.
 static constexpr float c_edgeWallClearance = c_coopEdgeWall - c_edgeWallHalfThick - c_coopGroundEdge;
 static_assert(c_edgeWallClearance >= 2.0f, "spawn clamp is too close to the edge wall: the biggest "
-    "unit body would spawn inside it — move c_coopGroundEdge in or c_coopEdgeWall out");
+    "unit body would spawn inside it - move c_coopGroundEdge in or c_coopEdgeWall out");
 
 // Deterministic map math: every instance must derive the IDENTICAL layout from the seed alone
-// (the corridor-table contract), so the generator uses its own splitmix-style hash/RNG — never
+// (the corridor-table contract), so the generator uses its own splitmix-style hash/RNG - never
 // glm::linearRand, whose global engine state differs per instance.
 static uint32 mapHash(uint32 x)
 {
@@ -94,7 +94,7 @@ int GameMatch::coopCellAt(const glm::vec3& pos) const
     return z * m_coopMap.cellsX + x;
 }
 
-// The PvP arena layouts: pure functions of (arena, team count) — identical on every instance.
+// The PvP arena layouts: pure functions of (arena, team count) - identical on every instance.
 // A rock BORDER ring surrounds each open area; the flood fill from team 0's Base seals anything
 // the layout cut off, and every Base cell gets a rock-free disc (a middle team's Base on the
 // Chokepoints wall line carves its own gap).
@@ -149,7 +149,7 @@ void GameMatch::generatePvpGrid()
     finishGrid(seeds);
 }
 
-// The pure-math half: identical on every instance from (seed, fill, lanes) alone — MapRng only,
+// The pure-math half: identical on every instance from (seed, fill, lanes) alone - MapRng only,
 // never glm::linearRand (global engine state). Produces blocked cells, the BFS depth/reachable
 // sets and the merged obstacle rects.
 void GameMatch::generateCoopGrid()
@@ -188,7 +188,7 @@ void GameMatch::generateCoopGrid()
     }
 
     // Carved ATTACK LANES: evenly spread directions (jittered) wobbling from the base ring out
-    // past the barrier — they guarantee the edge ring connects to the Base (waves walk in through
+    // past the barrier - they guarantee the edge ring connects to the Base (waves walk in through
     // the openings) and give the noise blobs natural chokepoints to defend.
     const int lanes = glm::clamp(map.lanes, 2, 12);
     const auto clearAt = [&](const glm::vec2& p) // ~1.5 cells wide: the cell + its 4 neighbours
@@ -224,7 +224,7 @@ void GameMatch::generateCoopGrid()
 }
 
 // Flood fill from the seed cells (4-connected BFS = geodesic cell distance). Any open cell it
-// never reaches becomes rock — so EVERY open cell is reachable from the Base by construction, and
+// never reaches becomes rock - so EVERY open cell is reachable from the Base by construction, and
 // everything placed on open ground (nodes, ambient spawns, move orders) is reachable too. Then the
 // merged obstacle rects.
 void GameMatch::finishGrid(oc::span<const int> seedCells)
@@ -274,7 +274,7 @@ void GameMatch::finishGrid(oc::span<const int> seedCells)
     }
 
     // Merged obstacle rects (horizontal runs): one rect serves Nav, placement (cellsFree) and the
-    // spawn probes — a few hundred instead of ~1300 per-cell entries.
+    // spawn probes - a few hundred instead of ~1300 per-cell entries.
     m_terrainRects.clear();
     for (int z = 0; z < nz; ++z)
         for (int x = 0; x < n; )
@@ -296,7 +296,7 @@ void GameMatch::finishGrid(oc::span<const int> seedCells)
 
 // Rocks (+ the co-op barrier ring) under ONE root entity (removed whole on regeneration), then
 // the resource nodes on reachable open cells. Deterministic: MapRng seeded off the map seed (a
-// PvP arena has none — its rock heights roll from the arena index).
+// PvP arena has none - its rock heights roll from the arena index).
 void GameMatch::spawnTerrain()
 {
     MapRng rng{ mapHash((m_coopMap.pvp ? (uint32)m_coopMap.pvpMap + 17u : m_coopMap.seed) ^ 0xC0FFEEu) };
@@ -327,9 +327,9 @@ void GameMatch::spawnTerrain()
         requests.push_back({ "Entities/Game/terrainmark.pre", Transform(coopCellCenter(i), rockScale, identity) });
     }
     const size_t rockCount = requests.size();
-    // The co-op barrier ring: 20 m segments on all four sides (E/W rotated 90° — the prefab's
+    // The co-op barrier ring: 20 m segments on all four sides (E/W rotated 90° - the prefab's
     // long axis is X). Collider layer Barrier vs Player only: units and shots pass, capsules do
-    // not. A PvP arena needs none — its rock border is solid for everyone.
+    // not. A PvP arena needs none - its rock border is solid for everyone.
     const glm::quat yaw90 = glm::angleAxis(glm::half_pi<float>(), glm::vec3(0.0f, 1.0f, 0.0f));
     for (float o = -c_coopHalfSize + c_barrierStep * 0.5f; !m_coopMap.pvp && o < c_coopHalfSize; o += c_barrierStep)
     {
@@ -339,7 +339,7 @@ void GameMatch::spawnTerrain()
         requests.push_back({ "Entities/Game/barrier.pre", Transform(glm::vec3(c_coopHalfSize, 10.0f, o), 1.0f, yaw90) });
     }
     // The ground-edge ring, OUTSIDE the barrier: solid for everyone, so a wave shoved around in
-    // its spawn band cannot be pushed off the world. Segments overlap at the corners — they are
+    // its spawn band cannot be pushed off the world. Segments overlap at the corners - they are
     // static boxes, so that costs nothing.
     const size_t edgeStart = requests.size();
     for (float o = -c_edgeWallSpan + c_edgeWallStep * 0.5f; !m_coopMap.pvp && o < c_edgeWallSpan; o += c_edgeWallStep)
@@ -369,7 +369,7 @@ void GameMatch::spawnTerrain()
     }
     // RESOURCE NODES: the starter pair in the cleared Base zone, then a golden-angle spiral of
     // candidates SNAPPED to reachable open cells (skip when none nearby or too close to another
-    // node) — even coverage that respects whatever the noise carved, and reachable by the flood
+    // node) - even coverage that respects whatever the noise carved, and reachable by the flood
     // fill's guarantee.
     m_structures.spawnNode(10.0f, 4.0f, ENodeType::Mineral);
     m_structures.spawnNode(-4.0f, 10.0f, ENodeType::Fuel);
@@ -508,7 +508,7 @@ void GameMatch::rebuildCoopMap(uint32 seed, float fill, int lanes)
     m_coopMap.built = true;
     spawnTerrain();
     // The rock rects are the co-op "walls": Nav obstacles (feedNav re-reads m_wallObstacles every
-    // frame) and placement refusals (cellsFree — ghosts turn red on rock, unit spawns skip it).
+    // frame) and placement refusals (cellsFree - ghosts turn red on rock, unit spawns skip it).
     m_wallObstacles.clear();
     for (const glm::vec4& r : m_terrainRects)
         m_wallObstacles.push_back(Nav::NavObstacle{ glm::vec2(r.x, r.y), glm::vec2(r.z, r.w) });
@@ -536,7 +536,7 @@ void GameMatch::sendMapSeed()
 }
 
 // An ambient body position: a random point in the disc around the group anchor that lands on OPEN
-// ground (rejection-sampled), then slid at least a body's width off any neighbouring rock edge —
+// ground (rejection-sampled), then slid at least a body's width off any neighbouring rock edge -
 // continuous coverage across cell borders, so nothing lines up on the lattice.
 glm::vec3 GameMatch::ambientPointNear(const glm::vec3& center, float radius) const
 {
@@ -653,9 +653,9 @@ glm::vec3 GameMatch::baseGroundPos(uint8 team) const
 glm::vec3 GameMatch::teamStartPos(uint8 team) const
 {
     if (m_coop)
-        return m_playerStart; // one shared Base — everyone spawns/respawns beside it
+        return m_playerStart; // one shared Base - everyone spawns/respawns beside it
     // One Base per playable team; the spawn sits just beside it. Prefer the LIVE Base of that
-    // team (on a client the mirrored one — it never learned the lobby's team count), else the
+    // team (on a client the mirrored one - it never learned the lobby's team count), else the
     // layout formula.
     const glm::vec3 offset(0.0f, 1.0f, -6.0f);
     for (int i = 0; i < m_structures.structureCount(); ++i)

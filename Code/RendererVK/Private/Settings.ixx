@@ -36,7 +36,7 @@ export struct SkyParams
     float groundIntensity = 0.0f;
     float groundHorizon = 0.25f;  // fraction of every hemisphere treated as sunlit terrain in the
                                   // out-of-GI-range fallback (skyGroundRadiance): up-facing surfaces see
-                                  // ground near the horizon on rolling terrain, not a clean sky plane —
+                                  // ground near the horizon on rolling terrain, not a clean sky plane -
                                   // 0 = flat-world (up-facing surfaces get pure sky), raise to brighten
                                   // distant terrain toward what the probes see
 
@@ -87,12 +87,12 @@ export struct SkyParams
     void registerTweaks();
 };
 
-// Sun shadow cascade distribution (raster path; RT sun shadows ignore these) — the TweakPanel's
+// Sun shadow cascade distribution (raster path; RT sun shadows ignore these) - the TweakPanel's
 // "Shadows" category. Consumed per frame by computeSunCascades, so changes apply live.
 export struct ShadowParams
 {
     float maxDistance = 2000.0f; // farthest distance receiving sun shadows (m), measured from the shadow
-                                // focus (Renderer::setSceneFocus — the player in game mode; the camera when
+                                // focus (Renderer::setSceneFocus - the player in game mode; the camera when
                                 // unset). Lower = every cascade covers less ground = sharper shadows
                                 // everywhere, at range cost.
     float splitLambda = 0.95f;  // cascade split scheme: 0 = uniform splits, 1 = logarithmic (resolution
@@ -104,7 +104,7 @@ export struct ShadowParams
     float normalBias = 1.0f;     // sun cascade normal bias (texels)
 
     // Long-range terrain sun shadows. Past maxDistance (and past the RT path's TLAS range) both shadow
-    // sources run out of data, so distant ground goes uniformly lit — a hard terminator across a mesh
+    // sources run out of data, so distant ground goes uniformly lit - a hard terminator across a mesh
     // ring that reaches ~33 km. The baked terrain height cascades still have data far beyond that, so
     // distant pixels cone-march them instead (terrainSunVisibility) and take the darker of the two. These
     // apply to BOTH shadow modes; only the terrain map has to be up.
@@ -116,7 +116,7 @@ export struct ShadowParams
                                 // texel relief that is actually rendered, so a surface point sits on a
                                 // heightfield coarser than itself. Too small = acne on lit slopes.
     // Debug overlay, BAKED as the SHADOW_DEBUG define into the lit fragment variants (a change reloads
-    // the static mesh pipeline through the Renderer's callback — no uniform, no per-pixel cost when off):
+    // the static mesh pipeline through the Renderer's callback - no uniform, no per-pixel cost when off):
     // 0 off, 1 cascade index tint, 2 the cascade cross-fade band, 3 the raw sun visibility, 4 shadow-map
     // texel size heat. Cascade data only exists on the PCSS path (RT sun off).
     int debugMode = 0;
@@ -127,7 +127,7 @@ export struct ShadowParams
     void registerTweaks(const oc::function<void()>& onReloadShaders); // debugMode is a baked define
 };
 
-// Volumetric fog (froxel grid; see VolumetricFogPipeline) — the TweakPanel's "Fog" categories.
+// Volumetric fog (froxel grid; see VolumetricFogPipeline) - the TweakPanel's "Fog" categories.
 // All UBO-driven, so changes apply live.
 export struct FogParams
 {
@@ -159,18 +159,18 @@ export struct FogParams
                                    // shifts Z resolution from near to far (worth ~0.7-0.85 at long ranges)
     float terrainShadowDist = 512.0f; // froxels beyond this distance sun-shadow by marching the terrain
                                    // height map instead of TLAS rays / cascade taps (both run out of data
-                                   // at distance — TLAS is range-bounded); needs the terrain fog map
+                                   // at distance - TLAS is range-bounded); needs the terrain fog map
     float regionStrength = 1.0f;   // how much the baked regional fog fields (terrain data map channel B:
                                    // thickness + height-falloff mul, Procedural's sampleFogThickness /
                                    // sampleFogHeightFalloff) modulate the height fog: 0 = uniform fog,
                                    // 1 = fully region-driven
     float shaftBoost = 10.0f;        // non-physical gain on the underwater sun in-scatter (fog only, not
                                     // surfaces): water scatters little at fog densities, so physically
-                                    // correct shafts are faint — this makes them readable. 1 = physical.
+                                    // correct shafts are faint - this makes them readable. 1 = physical.
     float causticStrength = 1.5f;   // underwater caustic focus (fold-Jacobian light pattern on submerged
                                     // surfaces + fog shafts; underwater_light.inc.glsl): 0 = off, > 1
                                     // exaggerated. Beer-Lambert depth absorption is separate (Ocean/Absorption).
-    float causticDepthFade = 0.25f; // caustic contrast decay with depth (1/m) — approximates defocus;
+    float causticDepthFade = 0.25f; // caustic contrast decay with depth (1/m) - approximates defocus;
                                     // higher = the pattern washes out closer to the surface
     float causticShoreFade = 1.0f;  // caustic contrast ramps in over this much water depth (m), so the
                                     // pattern dissolves at the terrain-waterline intersection; 0 = off
@@ -192,7 +192,7 @@ export struct FogParams
     void registerTweaks();
 };
 
-// Exposure + tonemapping, applied in the composite pass (the HDR -> display mapping) — the
+// Exposure + tonemapping, applied in the composite pass (the HDR -> display mapping) - the
 // TweakPanel's "Post" category. Baked into the composite push constants, so changes re-record.
 export struct PostParams
 {
@@ -266,7 +266,7 @@ export struct RTAOParams
     float radius = 1.0f;
     float power = 1.5f;
     float intensity = 1.0f;
-    float fadeStart = 100.0f;  // distance (m) from the SCENE FOCUS (Renderer::setSceneFocus — the player in game
+    float fadeStart = 100.0f;  // distance (m) from the SCENE FOCUS (Renderer::setSceneFocus - the player in game
                                // mode; the camera when unset) where AO begins to fade out
     float maxDistance = 120.0f; // focus distance at which AO is fully gone (trace early-out); 0 disables the falloff
     float normalBias = 0.02f;    // constant ray-origin offset along the surface normal (m)
@@ -291,7 +291,7 @@ export struct TAAParams
     void registerTweaks(const oc::function<void()>& onReRecord);
 };
 
-// Mesh LOD chains (authored "LodN_*" meshes and/or meshopt-generated) — the TweakPanel's "LOD" category.
+// Mesh LOD chains (authored "LodN_*" meshes and/or meshopt-generated) - the TweakPanel's "LOD" category.
 // Selection runs per instance at renderNode time; generate/generateLevels/minIndices are read at
 // ObjectContainer load, so they only affect containers loaded after a change.
 export struct MeshLodParams
@@ -325,7 +325,7 @@ export struct OceanParams
     float windSpeed   = 10.5f;  // U10 wind speed (m/s): the main sea-state knob
     float fetchKm     = 300.0f; // fetch (km): distance the wind has blown over; longer = bigger swell
     float depth       = 100.0f; // ocean depth D (m): finite-depth dispersion + TMA shallow-water attenuation
-                                // (shallow values like 35 visibly mute the long swell — by design)
+                                // (shallow values like 35 visibly mute the long swell - by design)
     float horizonLevelOffset = -0.5f; // vertical shift (m, usually negative) of the HORIZON BAND only.
                                 // The band is exempt from the land cull (its triangles are far larger
                                 // than the cull's footprint bound), so it draws over distant terrain;
@@ -334,7 +334,7 @@ export struct OceanParams
     float choppiness  = 1.1f;   // horizontal displacement lambda (0 = heightfield only, higher = sharper crests)
     float normalStrength = 1.0f; // artistic scale on the shading slopes
     glm::vec3 cascadeSizes = glm::vec3(1536.0f, 188.0f, 25.0f); // FFT patch sizes (m); each TILES with its
-                                // own size, so the largest sets how often the sea repeats — keep it many
+                                // own size, so the largest sets how often the sea repeats - keep it many
                                 // times the peak wavelength. Non-rational ratios keep the three from
                                 // re-aligning; scale them as a SET (the band split ties cascade c+1's
                                 // range to L_c, so growing one alone just moves the repetition down)
@@ -362,7 +362,7 @@ export struct OceanParams
     glm::vec3 foamColor    = glm::vec3(0.88f, 0.92f, 0.94f);
     float foamBias         = 0.6f;  // fold threshold: Jacobian below this is folding (foaming)
     float foamBreakAccel   = 0.25f; // breaking threshold (Longuet-Higgins): downward crest acceleration
-                                    // above this fraction of g is breaking — what makes LARGE waves foam
+                                    // above this fraction of g is breaking - what makes LARGE waves foam
     float foamSoftness     = 0.5f;  // edge width of both thresholds (small = crisp crest lines)
     float foamDecay        = 0.985f; // turbulence retention per frame (wake persistence)
     float foamSpread       = 1.2f;  // turbulence diffusion per frame: the wake spreads as it lives (also
@@ -373,15 +373,15 @@ export struct OceanParams
                                     // turbulent water (the wake stays visible after the foam thins)
 
     // Shore interaction: the baked terrain-data cascades (Renderer::setFogTerrainHeightMap, baked by the
-    // terrain streamer) give the water its depth — open water eases to the swash amplitude across an
+    // terrain streamer) give the water its depth - open water eases to the swash amplitude across an
     // approach band at the shore (oceanSurfaceWeight, ocean_wave.inc.glsl), the swash tongue runs up the
     // beach and flows back, and a surf/foam band forms where the water column vanishes at the waterline.
     float shoalScale     = 0.005f; // approach band depth as a fraction of the mid cascade's patch size
                                 // (floored at two swash reaches; scaled down with the cascade sizes)
     // Horizon depth: past horizonDepthRange the waves assume AT LEAST horizonDepth of water, whatever
-    // the baked map says. Every distant depth error runs shallow — coarse texels average shore slopes
+    // the baked map says. Every distant depth error runs shallow - coarse texels average shore slopes
     // into the water, the generator reports depth exactly 0 for samples it could not resolve, and the
-    // vertical scale compresses real shelves — and shallow is the ruinous direction: it fades the waves
+    // vertical scale compresses real shelves - and shallow is the ruinous direction: it fades the waves
     // out AND (via fade^2) the LEAN variance, leaving a mirror that reflects the sky exactly like wind 0.
     // Only the assumed seabed moves, never the surface, so it cannot put water over land; the land cull
     // still reads the raw map. 0 range = off.
@@ -390,7 +390,7 @@ export struct OceanParams
     // Rate of the spectrum's clock relative to the frame clock (1 = real time). OceanGenerator sets
     // sqrt(world scale): its Froude-scaled inputs give a shrunk sea whose periods are x sqrt(s), and this
     // slows the evolution back to the model sea's periods so the miniature does not race. Only the
-    // e^{iwt} evolution reads it — the breaking-crest acceleration stays in the spectrum's own time, so
+    // e^{iwt} evolution reads it - the breaking-crest acceleration stays in the spectrum's own time, so
     // the foam criterion (a fraction of g) keeps the model sea's look.
     float timeScale = 1.0f;
     float shoreFoamDepth = 8.0f;  // water-column height (m) below which the waterline churns white; 0 = off
@@ -400,14 +400,14 @@ export struct OceanParams
                                   // waterline and up the beach (waves crash and flow over; 0 = hard cutoff)
     float shoreFoamBias  = -0.33f;  // shifts the surf fold threshold: negative = sparser lace / more
                                   // transparent shore waves, positive = denser churn
-    float swashFlow      = 0.33f;  // backflow: scale on the raw horizontal chop riding the swash weight —
+    float swashFlow      = 0.33f;  // backflow: scale on the raw horizontal chop riding the swash weight -
                                   // the tongue visibly flows back seaward as the wave recedes (0 = off)
     float cullMargin     = 1.0f;  // land cull: clipmap triangles whose whole footprint is buried deeper
                                   // than this under the local water level are VS-culled (0 = off)
     float farCullError = 4.0f;    // land cull from the FAR terrain cascade (beyond the near cascade's
                                   // ~860 m): flat burial error allowance in METERS, covering how far
                                   // the far mesh LODs stray from the bake. Deliberately NOT scaled by
-                                  // the far texel — that left everything under tens of meters of
+                                  // the far texel - that left everything under tens of meters of
                                   // terrain alive (a visible band of buried water past the near
                                   // handover). Narrow rivers the coarse point-sampled bake cannot
                                   // resolve may lose triangles out there (speed over accuracy);
@@ -431,7 +431,7 @@ export struct OceanParams
 export struct ForceFieldParams
 {
     bool enabled = true;             // gates the shell draw + force compute passes
-    // LIVE team count (2..MAX_FORCE_TEAMS), a GAME-MODE setting (ForceSystem::setNumTeams — co-op
+    // LIVE team count (2..MAX_FORCE_TEAMS), a GAME-MODE setting (ForceSystem::setNumTeams - co-op
     // runs 2), not a tweak: changing it recompiles the force shaders (NUM_FORCE_TEAMS define) and
     // remakes the team-sized bake volume/buffers, so per-sample cost and memory fit the mode
     // instead of always paying for 8 teams. MAX_FORCE_TEAMS stays the CAP: the UBO color array
@@ -471,7 +471,7 @@ export struct ForceFieldParams
                                        // jaggies; 0 = hard crease. Queries use the same function, so
                                        // the gameplay inside-test always matches the drawn surface
     float geoGlowDistance = 0.5f;      // glow band where the shell intersects scene geometry (m)
-    // SHELL CULLING/LOD (desktop; VR skips the cull — the center frustum is the wrong eye's):
+    // SHELL CULLING/LOD (desktop; VR skips the cull - the center frustum is the wrong eye's):
     float minShellPixels = 3.0f;       // a shell whose projected proxy radius is under this skips
                                        // the DRAW entirely (its field/readbacks stay live); 0 = off
     float shellFullResPixels = 160.0f; // projected radius at/above which the march runs the full
@@ -479,14 +479,14 @@ export struct ForceFieldParams
     float sampledShellRadius = 8.0f;   // emitters whose VISIBLE bubble radius (forceEmitterVisibleRadius,
                                        // not authored reach) is >= this march the BAKED shell volume
                                        // (two trilinear taps/sample) instead of the analytic
-                                       // candidate loop — hits/normals/shading stay analytic.
+                                       // candidate loop - hits/normals/shading stay analytic.
                                        // 0 = tier off. Small bubbles stay analytic: the fixed-size
                                        // volume's resolution cannot resolve them
     float shellVolumeViewMargin = 10.0f; // the sampled-tier volume's fit is CLIPPED to the camera's
                                        // ground-band view footprint plus this margin (m), so its
                                        // fixed texel grid follows the zoom, not the spread of every
                                        // large bubble; 0 = the unbounded union (old behaviour)
-    // UNION MARCH (desktop): the ANALYTIC tier renders as ONE march per pixel — the small proxies
+    // UNION MARCH (desktop): the ANALYTIC tier renders as ONE march per pixel - the small proxies
     // only rasterize their ray intervals (MIN-blend), a fullscreen pass marches the per-pixel
     // union once. Kills the overdraw term where small bubbles stack. Off = per-proxy marches (A/B).
     bool unionMarch = true;
@@ -496,7 +496,7 @@ export struct ForceFieldParams
     float patternSpeed = 0.3f;       // pattern scroll speed
     float patternIntensity = 0.5f;
     // Per-team shell colors (linear rgb); 8 = RendererVKLayout::MAX_FORCE_TEAMS (static_asserted
-    // where both are visible — Settings deliberately doesn't import :Layout).
+    // where both are visible - Settings deliberately doesn't import :Layout).
     glm::vec3 teamColors[8] = {
         { 0.20f, 0.55f, 1.00f }, // 0 blue
         { 1.00f, 0.30f, 0.15f }, // 1 red

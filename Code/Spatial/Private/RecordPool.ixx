@@ -19,7 +19,7 @@ enum ERecordFlag : uint8
     RecordFlag_PendingFree   = 4,  // unregistered, unlink + slot release happen at commit
     RecordFlag_PendingMove   = 8,  // a queued Move op holds newer data than the in-place SoA fields
     RecordFlag_NoSpawnGuard  = 64, // registerEntry(spawnVisible = false): the entry is NEVER treated as
-                                   // visible before its first real stamp — streamed terrain wants this
+                                   // visible before its first real stamp - streamed terrain wants this
                                    // (chunks materialize off-screen constantly; the guard pinned them in
                                    // the main pass until first entering the frustum, forever with Freeze)
 };

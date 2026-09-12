@@ -99,7 +99,7 @@ glm::vec2 FlowField::sampleArea(const glm::vec2& xz, int radiusCells, const Team
     return count > 0 ? sum / (Scale * float(count)) : glm::vec2(0.0f);
 }
 
-// Per-step multiplier for a half-life: 0.5^(dt/halfLife) — the frame-rate-independent form of a
+// Per-step multiplier for a half-life: 0.5^(dt/halfLife) - the frame-rate-independent form of a
 // "x% per frame" decay.
 static float fadeStep(float deltaSec, float halfLifeSec)
 {
@@ -117,7 +117,7 @@ void FlowField::beginStep(float deltaSec, uint32 keepFrames, float halfLifeSec, 
     m_touch.drain([&](uint64 key) { m_chunks.getOrCreate(key).touchedFrame = m_frame; });
     // The buffer just written becomes the READ buffer; the next WRITE buffer starts as the read
     // buffer decayed, so a lane keeps its direction for a while after the units passed. Eviction
-    // runs HERE (the step never writes touchedFrame, so before/after is the same set) — the map
+    // runs HERE (the step never writes touchedFrame, so before/after is the same set) - the map
     // must not mutate once the fan-out starts reading across chunks.
     m_write ^= 1u;
     const uint32 cutoff = m_frame > keepFrames ? m_frame - keepFrames : 0;
@@ -184,14 +184,14 @@ void FlowField::seedPath(oc::span<const glm::vec2> path, float speed, float radi
     {
         const glm::ivec2 c = cellOf(p);
         if (raster && raster->isBlocked(c))
-            return; // never seed flow into a wall — nothing can stand there to follow it
+            return; // never seed flow into a wall - nothing can stand there to follow it
         Chunk& chunk = m_chunks.getOrCreate(chunkKey(chunkOf(c)));
         chunk.touchedFrame = m_frame;
         const uint32 i = cellIndex(c);
         // Max magnitude, EXCEPT when the plan disagrees with what is there: re-seeding the same
         // route is idempotent and a strong live lane is never weakened, but a re-plan that goes a
         // DIFFERENT way must win even where a milling crowd's own splats sum higher than the lane
-        // speed — otherwise a group's periodic re-seed silently writes nothing exactly where the
+        // speed - otherwise a group's periodic re-seed silently writes nothing exactly where the
         // group is standing.
         for (uint32 b = 0; b < 2; ++b)
         {
@@ -209,7 +209,7 @@ void FlowField::seedPath(oc::span<const glm::vec2> path, float speed, float radi
     };
     // Segment directions up front: the WRITTEN vector near a junction is a blend of the two
     // segments meeting there, easing over c_turnBlend metres on each side. The polyline itself is
-    // untouched (a rounded path could cut a wall corner) — only the flow VECTORS turn gradually,
+    // untouched (a rounded path could cut a wall corner) - only the flow VECTORS turn gradually,
     // so a 90 deg corner in the route reads as an arc to anything following it.
     static constexpr float c_turnBlend = 2.0f;
     oc::fixed_vector<glm::vec2, 64> dirs;
@@ -231,7 +231,7 @@ void FlowField::seedPath(oc::span<const glm::vec2> path, float speed, float radi
         for (float t = 0.0f; t <= len; t += CellSize * 0.5f)
         {
             // Half-weight toward the neighbouring segment AT the junction, fading to none
-            // c_turnBlend metres away — the two sides of a corner meet at the bisector.
+            // c_turnBlend metres away - the two sides of a corner meet at the bisector.
             glm::vec2 v = dir;
             if (s > 0 && t < c_turnBlend)
                 v += dirs[s - 1] * (0.5f * (1.0f - t / c_turnBlend));
@@ -264,7 +264,7 @@ void FlowField::seedPath(oc::span<const glm::vec2> path, float speed, float radi
                 || raster->isBlocked(cellOf(p - side * CellSize)));
             // FOCUS: blocked lateral cells hand their share to the surviving ones, so a wide lane
             // squeezing past a wall concentrates its strength on the centre instead of thinning
-            // out (capped — a one-cell gap must not write an absurd magnitude).
+            // out (capped - a one-cell gap must not write an absurd magnitude).
             int open = 0;
             for (int l = -lateral; l <= lateral; ++l)
                 if (!(raster && raster->isBlocked(cellOf(p + side * (float(l) * CellSize)))))
@@ -388,8 +388,8 @@ void PressureField::beginStep(float deltaSec, const TeamField* raster, float dif
     m_stepFloor = propagationFloor;
     m_stepRaster = raster;
     m_touch.drain([&](uint64 key) { m_chunks.getOrCreate(key).touchedFrame = m_frame; });
-    // Evict FIRST — one frame later than evicting on this step's result, invisible at any sane
-    // keep window — so the map never mutates while the fan-out reads across chunks.
+    // Evict FIRST - one frame later than evicting on this step's result, invisible at any sane
+    // keep window - so the map never mutates while the fan-out reads across chunks.
     const uint32 cutoff = m_frame > keepFrames ? m_frame - keepFrames : 0;
     m_chunks.eraseIf([&](uint64, Chunk& chunk) { return chunk.touchedFrame < cutoff; });
     // SERIAL snapshot for the quiet-skip: during the parallel step a neighbour's peak/touchedFrame
@@ -428,7 +428,7 @@ void PressureField::stepChunk(uint64 key, Chunk& chunk, const CellVisit* onActiv
     const TeamField::Chunk* rasterSelf = raster ? raster->chunks().find(key) : nullptr;
 
     // QUIET SKIP: a chunk that held nothing last step, took no injection this frame and has no
-    // active neighbour cannot produce anything — zero its output and move on. Most chunks of a
+    // active neighbour cannot produce anything - zero its output and move on. Most chunks of a
     // large field are quiet most of the time, which is what makes the whole pass cheap.
     bool quiet = !chunk.prevActive;
     for (int d = 0; d < 4 && quiet; ++d)
@@ -485,7 +485,7 @@ void PressureField::stepChunk(uint64 key, Chunk& chunk, const CellVisit* onActiv
         peak = glm::max(peak, glm::abs(v));
         if (glm::abs(v) <= c_eps)
             continue;
-        if (onActiveCell) // the gradient is already in hand — see the header
+        if (onActiveCell) // the gradient is already in hand - see the header
             (*onActiveCell)(cellCenter(base + glm::ivec2(cx, cz)),
                 glm::vec2(nv[0] - nv[1], nv[2] - nv[3]) / (2.0f * CellSize));
         // Growth: pressure at a border cell wants to cross into a chunk that may not exist.

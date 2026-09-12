@@ -85,7 +85,7 @@ NetAddress netGetLocalAddress()
     sockaddr_in remote{};
     remote.sin_family = AF_INET;
     remote.sin_port = htons(53);
-    remote.sin_addr.s_addr = htonl(0x08080808); // 8.8.8.8 — any public address works for routing
+    remote.sin_addr.s_addr = htonl(0x08080808); // 8.8.8.8 - any public address works for routing
     NetAddress out = NetAddress::loopback(0);
     if (::connect(s, reinterpret_cast<const sockaddr*>(&remote), sizeof(remote)) == 0)
     {
@@ -140,7 +140,7 @@ NetAddress netGetExternalAddress(uint32 timeoutMs)
         {
             const int received = socket.receive(chunk);
             if (received < 0)
-                break; // closed — the whole reply is in
+                break; // closed - the whole reply is in
             if (received == 0) { Sleep(5); socket.poll(); continue; }
             response.append(reinterpret_cast<const char*>(chunk), (size_t)received);
         }

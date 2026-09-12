@@ -7,7 +7,7 @@ import Network; // NetWriter/NetReader
 import UI;      // ChatView (the ChatPanel's snapshot)
 
 // The multiplayer TEXT CHAT model: the message log every instance keeps, fed by ONE network
-// event — "ChM" [string text] (reliable ch1). A sent line is fireNetworkEvent'd: the local fire
+// event - "ChM" [string text] (reliable ch1). A sent line is fireNetworkEvent'd: the local fire
 // lands it in our own log (sender = our clientId), the transport carries it to the server, which
 // relays it to every other client re-attributed to the real sender (NetworkManager never trusts
 // a client-written identity). Single player fires locally only, so the box still works offline.
@@ -70,7 +70,7 @@ public:
 		++m_generation;
 	}
 
-	// Bumps on every log change — main pushes a fresh view only then (see main.cpp).
+	// Bumps on every log change - main pushes a fresh view only then (see main.cpp).
 	uint32 generation() const { return m_generation; }
 
 	ChatView view() const

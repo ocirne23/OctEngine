@@ -7,7 +7,7 @@ import Force;
 
 // The player character: upright physics capsule (Entities/Game/player.pre) carrying a personal
 // shield ForceEmitter (via its ForceComponent) and a health pool. BATTERY MODEL: while the Energy
-// battery holds any charge the shield runs at constant "Max output" — its radius squishes with
+// battery holds any charge the shield runs at constant "Max output" - its radius squishes with
 // PRESSURE alone (field equilibrium), never with the battery level, so regen refills the bar
 // without regrowing the bubble. Pressure drains the battery; at empty the shield COLLAPSES
 // (latched) and restarts only once regen reaches "Reboot energy". The opposing field also
@@ -20,23 +20,23 @@ public:
     void registerTweaks();
     void spawn(const glm::vec3& pos); // spawnAssetFile + addRootEntity; creates the territory query
     void despawn();
-    // PvP: the player's Force team — the shield, projectiles and the cover check all follow it.
+    // PvP: the player's Force team - the shield, projectiles and the cover check all follow it.
     // Applies to an already-spawned/adopted capsule too (the client learns its team at Welcome).
     void setTeam(uint32 team);
     uint32 team() const { return m_team; }
-    // Re-anchor the death respawn (a client learns its team — and so its Base — after adopting).
+    // Re-anchor the death respawn (a client learns its team - and so its Base - after adopting).
     void setRespawnPos(const glm::vec3& pos) { m_spawnPos = pos; }
     // The RESOLVER the respawn runs the anchor through (GameMatch wires it): returns a FREE cell
     // near the anchor, so a player never respawns inside a building placed on the spawn spot.
     void setRespawnResolver(oc::function<glm::vec3(const glm::vec3&)> resolver) { m_respawnResolver = oc::move(resolver); }
-    // CO-OP CLIENT: the server spawned our player (Component Network + setOwner) — poll-adopt the
+    // CO-OP CLIENT: the server spawned our player (Component Network + setOwner) - poll-adopt the
     // locally-owned capsule instead of spawning one. Movement/shield/health then run on the SAME
     // code paths (the owner simulates; the claim stream carries the body state to the server).
     void clientAdopt(const glm::vec3& respawnPos);
 
     // Velocity steering toward the standing RMB move order + LShift sprint + Space jump off a
-    // ground raycast. NO WASD: those keys are grid hotkeys — the player moves by mouse only.
-    // Windowed input only — no-ops without window focus.
+    // ground raycast. NO WASD: those keys are grid hotkeys - the player moves by mouse only.
+    // Windowed input only - no-ops without window focus.
     void tickMovement(const glm::vec3& cameraForwardPlanar, float deltaSec);
 
     // RTS move order (right-click ground, or hold RMB to steer at the cursor): a planar
@@ -50,7 +50,7 @@ public:
     // drain / death respawn.
     void tickShieldAndHealth(float deltaSec);
     // DIRECT damage (enemy unit melee, routed from the server's unit sim). The SHIELD BATTERY
-    // absorbs it first ("Damage absorb" energy per hp) — only the overflow, or everything while
+    // absorbs it first ("Damage absorb" energy per hp) - only the overflow, or everything while
     // the shield is collapsed, reaches health. Spawn grace applies; death resolves through
     // tickShieldAndHealth's existing respawn path.
     void applyDamage(float amount);
@@ -62,13 +62,13 @@ public:
     void charge(float amount) { m_energy = glm::min(m_energy + glm::max(amount, 0.0f), m_energyMax); }
 
     // Hard move of the capsule (F10 load). Follows the respawn TELEPORT CONTRACT: physics
-    // teleport, zeroed velocity, both interpolation poses stomped and the step stamp refreshed —
+    // teleport, zeroed velocity, both interpolation poses stomped and the step stamp refreshed -
     // otherwise the render mix runs backward on stepping frames. Main thread only. Drops the
     // standing move order so the capsule does not walk back to where it was.
     void teleport(const glm::vec3& pos);
     Entity* entity() const { return m_entity.get(); }
     // "Detach camera" tweak: the follow camera and ALL game mouse/hotkey input stand down and the
-    // testbed fly camera takes the frame — the capsule keeps simulating (a standing move order
+    // testbed fly camera takes the frame - the capsule keeps simulating (a standing move order
     // still completes), it just receives no new orders. Personal, never synced.
     bool cameraDetached() const { return m_detachCamera; }
     // "Detach focus point" tweak: with the camera detached, ALSO move the scene focus (shadow cascades,
@@ -111,14 +111,14 @@ private:
     float m_energy = 100.0f;
     float m_lastPressure = 0.0f;
     float m_lastDensity = 0.0f;
-    float m_outputHistory[3] = { 1.5f, 1.5f, 1.5f }; // outputs of recent ticks — the applied-force
+    float m_outputHistory[3] = { 1.5f, 1.5f, 1.5f }; // outputs of recent ticks - the applied-force
                                                      // readback is ~2 frames latent and scales with
                                                      // output, so the push normalizes by the output
                                                      // that PRODUCED it (shield-state-independent)
     float m_graceTimer = 0.0f;      // seconds of post-spawn drain immunity (stale readbacks)
     bool m_shieldCollapsed = false; // latched at empty battery, cleared at "Reboot energy"
 
-    // Tweaks ("Game/Player" — movement, health, and the shield battery)
+    // Tweaks ("Game/Player" - movement, health, and the shield battery)
     bool m_detachCamera = false; // local-only (not Synced): free-fly view, see cameraDetached()
     bool m_detachFocus = false;  // local-only: the scene focus follows the fly camera, see focusDetached()
     float m_moveSpeed = 4.0f;
@@ -132,7 +132,7 @@ private:
     float m_healthDrainRate = 15.0f;    // health/s while unshielded in enemy territory
     float m_shieldMaxOutput = 1.5f;     // field output while the battery holds ANY charge
     float m_energyMax = 100.0f;
-    float m_energyRegenRate = 10.0f;    // energy/s refill (battery only — never grows the bubble)
+    float m_energyRegenRate = 10.0f;    // energy/s refill (battery only - never grows the bubble)
     float m_energyDrainRate = 50.0f;    // energy/s drained per unit of pressure
     float m_rebootEnergy = 20.0f;       // collapsed shield restarts once the battery refills to this
     float m_damageAbsorb = 2.0f;        // shield ENERGY spent per hp of direct damage absorbed
@@ -141,13 +141,13 @@ private:
                                          // the own output (standing inside a team emitter's bubble)
     float m_materialsMax = 50.0f;        // inventory size ("Game/Player/Materials max")
     float m_materials = m_materialsMax; // carried construction stock (see materials())
-    float m_spawnGraceSec = 1.0f;        // no energy/health drain this long after (re)spawn — the
+    float m_spawnGraceSec = 1.0f;        // no energy/health drain this long after (re)spawn - the
                                          // GPU readbacks still carry the death position for ~2 frames
     float m_arriveRadius = 0.8f;         // metres: a move order completes inside this ring
     float m_damageRadius = 1.0f;        // metres: health drains once the equilibrium shield radius
                                         // squishes below this (capsule half-height is 0.8 world)
     float m_shieldPushGain = 10000.0f;  // applied-force -> impulse scale (testbed force-ball precedent)
     float m_shieldTension = 1.5f;       // SURFACE TENSION: push AND energy drain scale by
-                                        // (1 + tension * pressure) — leaning deep into a bubble
+                                        // (1 + tension * pressure) - leaning deep into a bubble
                                         // stiffens superlinearly and burns both sides' batteries
 };

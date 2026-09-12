@@ -7,7 +7,7 @@ import Core.Tweaks;
 
 // One tweak variable as its ImGui widget row (label + slider/checkbox/combo/...). Shared by the
 // Tweaks editor panel and the main menu's Settings page. A changed var with an onChange is only
-// COLLECTED into deferredCallbacks (main-thread work — see TweakPanel::flushDeferredCallbacks).
+// COLLECTED into deferredCallbacks (main-thread work - see TweakPanel::flushDeferredCallbacks).
 export void drawTweakVar(const TweakVar& var, int index, oc::vector<const TweakVar*>& deferredCallbacks);
 
 export class TweakPanel

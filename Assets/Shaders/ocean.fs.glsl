@@ -10,7 +10,7 @@
 // (Schlick, F0 = 0.02) between the RAY-TRACED refracted body (Snell n = 1.33, Beer-Lambert both ways,
 // closed-form single-scatter; the water itself has TLAS mask 0 so rays pass through) and the RAY-TRACED
 // mirror reflection (sky fallback). GGX/Smith sun glint widened by spec AA + LEAN-filtered slope
-// variance (Bruneton 2010 — the elongated glitter path at distance), Jacobian whitecap foam with
+// variance (Bruneton 2010 - the elongated glitter path at distance), Jacobian whitecap foam with
 // temporal turbulence (ocean_foam.cs.glsl), one RT sun shadow ray. Ray budgets: "Ocean/RT" tweaks.
 
 #include "shared.inc.glsl"
@@ -126,7 +126,7 @@ float F_Schlick(float u, float f0)
 }
 // Geometric specular AA. Weight/cap deliberately far below the usual 0.5/0.18: a full-strength term
 // re-widens the lobe by exactly what "Glint sharpness" reveals (cancelling the knob), and water wants
-// a little sub-pixel shimmer — that IS the sparkle.
+// a little sub-pixel shimmer - that IS the sparkle.
 float normalVariance(vec3 N)
 {
     vec3 dNdx = dFdx(N);
@@ -134,14 +134,14 @@ float normalVariance(vec3 N)
     return min(0.25 * (dot(dNdx, dNdx) + dot(dNdy, dNdy)), 0.03);
 }
 
-// Sky for the mirror ray: the per-frame bake of mirrorSkyRadiance (atmosphere.inc.glsl — 12-step march
-// + eclipse saturation, matched to sky.fs.glsl) — one fetch instead of a march per pixel. No sun disc:
+// Sky for the mirror ray: the per-frame bake of mirrorSkyRadiance (atmosphere.inc.glsl - 12-step march
+// + eclipse saturation, matched to sky.fs.glsl) - one fetch instead of a march per pixel. No sun disc:
 // the GGX glint is its reflection.
 vec3 reflectedSkyRadiance(vec3 dir)
 {
     return textureLod(u_skyMap, vec3(skyMapUV(dir), SKY_MAP_LAYER_MIRROR), 0.0).rgb;
 }
-// skyRadiance(up): the same constant for every pixel — one fetch of the GI layer.
+// skyRadiance(up): the same constant for every pixel - one fetch of the GI layer.
 vec3 skyAmbientUp(vec3 up)
 {
     return textureLod(u_skyMap, vec3(skyMapUV(up), SKY_MAP_LAYER_GI), 0.0).rgb;
@@ -154,10 +154,10 @@ struct SceneHit
     vec3 N;
     vec3 albedo;
     float waterLevel; // calm water level above the hit (the column shadeHit / the body attenuate through):
-                      // fetched ONCE per hit — the seabed splat already reads the terrain data there
+                      // fetched ONCE per hit - the seabed splat already reads the terrain data there
 };
 
-// The seabed at a ray hit IS the terrain: the terrain shader's own splat (terrain_splat.inc.glsl —
+// The seabed at a ray hit IS the terrain: the terrain shader's own splat (terrain_splat.inc.glsl -
 // ground / beach / rock / snow by climate, slope and relief) evaluated at the hit, with the baked fields
 // fetched the way the terrain VS does per vertex. Albedo only (the water column blurs any detail normal
 // away), at a ray-cone LOD instead of screen derivatives (a ray hit has none).
@@ -189,7 +189,7 @@ vec3 terrainSeabedAlbedo(vec3 worldPos, vec3 geoN, float rayT, out float waterLe
     g_seabedLod = clamp(log2(max(rayT, 1.0)) + 1.0, 0.0, 7.0);
     vec3 albedo = terrainSplat(worldPos, geoN, f).albedo;
     // The seabed is, by definition, fully wet: darken it exactly as the terrain shader darkens ground at
-    // full wetness (damp x standing film — instanced_indirect_terrain.fs.glsl), so the sand seen through
+    // full wetness (damp x standing film - instanced_indirect_terrain.fs.glsl), so the sand seen through
     // the water and the wet sand the water just left are the same colour at the waterline.
     if (u_terrainWetParams2.x > 0.5)
         albedo *= u_terrainWetParams5.y * u_terrainWetParams2.y;
@@ -259,7 +259,7 @@ bool traceScene(vec3 origin, vec3 dir, float tMax, out SceneHit hit)
 }
 
 // Sun + GI probe irradiance at a ray hit; grid lights behind OCEAN_HIT_LIGHTS ("Hit lighting" tweak).
-// Analytic only — no shadow rays inside what is already a refraction/reflection ray.
+// Analytic only - no shadow rays inside what is already a refraction/reflection ray.
 vec3 shadeHit(SceneHit hit, vec3 rayDir, vec3 sunRadiance, vec3 L)
 {
     const vec3 sun = sunRadiance * max(dot(hit.N, L), 0.0);
@@ -269,7 +269,7 @@ vec3 shadeHit(SceneHit hit, vec3 rayDir, vec3 sunRadiance, vec3 L)
     if (giCoverage < 1.0)
         indirect = mix(giEvalSkySH(hit.N) / PI, indirect, giCoverage);
     indirect *= u_aoParams.y;
-    // Ambient/GI reaching an underwater hit must Beer-Lambert down the column too — the probes don't
+    // Ambient/GI reaching an underwater hit must Beer-Lambert down the column too - the probes don't
     // know about the water (it's not in the TLAS), so the seabed would read open-air-lit at any depth.
     const vec3 ambientAtten = exp(-u_oceanAbsorption.rgb * max(hit.waterLevel - hit.pos.y, 0.0));
     vec3 radiance = hit.albedo * (sun / PI + (indirect + u_ambientColor) * ambientAtten);
@@ -317,7 +317,7 @@ void main()
     float jacobian, accel;
     oceanSampleSurface(in_uv, slope, jacobian, slopeVar, accel, shoreHW);
 
-    // Accumulated turbulence (churn energy of past breaking; sampled unconditionally — derivatives
+    // Accumulated turbulence (churn energy of past breaking; sampled unconditionally - derivatives
     // need uniform control flow). Drives aged foam, milkiness and extra roughness.
     const float turbulence = oceanSampleTurbulence(in_uv, length(fwidth(in_uv)));
     const float foam = oceanInstantFoam(jacobian, accel, turbulence * u_oceanParams5.x);
@@ -429,7 +429,7 @@ void main()
     const float alphaF = clamp(sqrt(alphaSq), 0.02, 1.0);
 
     // Sun visibility: one RT shadow ray (or PCSS fallback). Back-lit crests still need it while crest
-    // SSS is on — the subsurface glow must stay shadow-gated.
+    // SSS is on - the subsurface glow must stay shadow-gated.
     const vec3 sunTint = u_sunColor.rgb * atmosTransmittanceToLight(0.0, L, up) * u_eclipseParams.x;
     const bool sunUp = L.y > 0.0 && (NoL > 0.0 || u_oceanParams6.z > 0.0);
     const float sunVis = !sunUp ? 0.0
@@ -443,7 +443,7 @@ void main()
 
     const float F = F_Schlick(NoV, 0.02);
 
-    // "Ray cutoff dist": beyond it no scene rays at all — refraction uses the analytic bottom (the
+    // "Ray cutoff dist": beyond it no scene rays at all - refraction uses the analytic bottom (the
     // path misses already take), reflection the sky. 0 = unlimited.
     const bool rtInRange = u_oceanParams8.w <= 0.0 || distance(u_viewPos, in_pos) < u_oceanParams8.w;
 
@@ -456,8 +456,8 @@ void main()
         if (dot(refrDir, refrDir) > 1e-6)
         {
             const float minSigma = max(min(sigmaT.r, min(sigmaT.g, sigmaT.b)), 1e-3);
-            // "Refraction range" is the max refracted-ray length that still shows the bottom — traced
-            // OR height-field — so it caps underwater visibility in clear water where extinction alone
+            // "Refraction range" is the max refracted-ray length that still shows the bottom - traced
+            // OR height-field - so it caps underwater visibility in clear water where extinction alone
             // would not. The bottom fades out over the last 25% of the range (a hard cutoff draws a
             // contour on the seabed); beyond it the body is pure in-scatter.
             const float range = u_oceanParams9.y;
@@ -468,9 +468,9 @@ void main()
             {
                 // Miss (seabed beyond the TLAS range / rays off): pseudo-hit against the baked terrain
                 // height field instead. Bottom distance measured from the SURFACE point, not the calm
-                // level — the waterline band would reject otherwise (RT tMin guarantees a miss exactly
+                // level - the waterline band would reject otherwise (RT tMin guarantees a miss exactly
                 // there). Never reject a negative estimate: terrain stood behind the water in the depth
-                // test, so a bottom exists — clamp to a centimeters-deep hit (a map-vs-mesh
+                // test, so a bottom exists - clamp to a centimeters-deep hit (a map-vs-mesh
                 // disagreement otherwise draws a deep-blue line along the shore).
                 float bottom = in_pos.y - oceanSampleShoreData(in_pos.xz).x;
                 const float t = max(bottom, 0.02) / -refrDir.y;

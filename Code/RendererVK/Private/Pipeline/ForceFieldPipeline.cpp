@@ -159,7 +159,7 @@ void ForceFieldPipeline::resizeIntervalTarget(uint32 width, uint32 height)
     vk::Device vkDevice = Globals::device.getDevice();
     destroyIntervalTarget();
     // HALF RESOLUTION (m_unionHalfRes): the union march (and the interval bounds that feed it)
-    // run at half the swapchain extent — 4x fewer marched pixels; the upsample blend restores
+    // run at half the swapchain extent - 4x fewer marched pixels; the upsample blend restores
     // full res depth-aware. Both FS map their gl_FragCoord back to full-res uv with the injected
     // FORCE_UNION_UV_SCALE. Full-res mode keeps the old direct scene-color draw and creates NO
     // march target at all.
@@ -223,7 +223,7 @@ void ForceFieldPipeline::resizeIntervalTarget(uint32 width, uint32 height)
     }
 
     if (!m_unionHalfRes)
-        return; // full-res mode: the march draws into scene color directly — no separate target
+        return; // full-res mode: the march draws into scene color directly - no separate target
 
     // The half-res march target (same extent as the interval target).
     const vk::ImageCreateInfo marchInfo{
@@ -273,8 +273,8 @@ void ForceFieldPipeline::createShellVolume()
     vk::Device vkDevice = Globals::device.getDevice();
     // TEAM-SIZED: <= 4 teams fit ONE RGBA16F volume (half the 8-team footprint), only 5+ need the
     // second texture. Deliberately NOT RG16F for the 2-team case: rg16f image STORES need the
-    // shaderStorageImageExtendedFormats device feature, which the engine does not enable — rgba16f
-    // is in the always-supported storage set. The unused second view slot stays null — bindings
+    // shaderStorageImageExtendedFormats device feature, which the engine does not enable - rgba16f
+    // is in the always-supported storage set. The unused second view slot stays null - bindings
     // fall back to view A, which those shader variants never statically use.
     const int numVolumes = m_numTeams > 4 ? 2 : 1;
     const vk::Format format = vk::Format::eR16G16B16A16Sfloat;
@@ -314,7 +314,7 @@ void ForceFieldPipeline::createShellVolume()
         .magFilter = vk::Filter::eLinear,
         .minFilter = vk::Filter::eLinear,
         .mipmapMode = vk::SamplerMipmapMode::eNearest,
-        // Outside the fitted volume = ZERO field (transparent black border) — correct by
+        // Outside the fitted volume = ZERO field (transparent black border) - correct by
         // construction: the volume covers every sampled-tier emitter's support.
         .addressModeU = vk::SamplerAddressMode::eClampToBorder,
         .addressModeV = vk::SamplerAddressMode::eClampToBorder,
@@ -326,7 +326,7 @@ void ForceFieldPipeline::createShellVolume()
     m_shellVolumeSampler = samplerResult.value;
 
     // One-time GENERAL transition + zero-clear (the images stay GENERAL for life: compute writes
-    // and fragment samples both use it, so the per-frame reuse needs no layout traffic) — a
+    // and fragment samples both use it, so the per-frame reuse needs no layout traffic) - a
     // never-yet-baked read decodes as zero field.
     CommandBuffer init;
     init.initialize(vk::CommandBufferLevel::ePrimary);
@@ -452,7 +452,7 @@ void ForceFieldPipeline::buildIntervalLayout(GraphicsPipelineLayout& layout)
 }
 
 // The union march: a fullscreen triangle whose FS marches each covered pixel's interval once
-// (force_union.fs.glsl) — the analytic tier's one-march-per-pixel path, at HALF RES into the
+// (force_union.fs.glsl) - the analytic tier's one-march-per-pixel path, at HALF RES into the
 // march target (no blending: single draw over a zero clear).
 void ForceFieldPipeline::buildUnionLayout(GraphicsPipelineLayout& layout)
 {
@@ -491,7 +491,7 @@ void ForceFieldPipeline::buildUnionLayout(GraphicsPipelineLayout& layout)
 }
 
 // The upsample blend: a fullscreen triangle in scene color that composites the half-res march
-// target depth-aware (force_union_upsample.fs.glsl) — bilinear weights x depth similarity so
+// target depth-aware (force_union_upsample.fs.glsl) - bilinear weights x depth similarity so
 // shells never bleed across geometry silhouettes. Premultiplied over the lit scene, exactly the
 // blend the full-res union draw used.
 void ForceFieldPipeline::buildUpsampleLayout(GraphicsPipelineLayout& layout)
@@ -623,7 +623,7 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
         m_mappedIndirect[i][BAKE_DISPATCH_OFFSET + 1] = 1;
         m_mappedIndirect[i][BAKE_DISPATCH_OFFSET + 2] = 1;
         // Shell-volume bake: y/z group counts are the fixed volume dims; x toggles per frame in
-        // upload (0 = tier inactive — the cached CB's dispatch becomes a no-op).
+        // upload (0 = tier inactive - the cached CB's dispatch becomes a no-op).
         m_mappedIndirect[i][SHELLBAKE_DISPATCH_OFFSET + 1] = FORCE_SHELL_VOLUME_Y / FORCE_SHELL_VOLUME_GROUP;
         m_mappedIndirect[i][SHELLBAKE_DISPATCH_OFFSET + 2] = FORCE_SHELL_VOLUME_Z / FORCE_SHELL_VOLUME_GROUP;
         m_mappedIndirect[i][INTERVAL_DRAW_OFFSET] = 36;  // instanceCount + firstInstance per frame
@@ -658,7 +658,7 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
     createBakeReadbackBuffers();
 }
 
-// The CPU-readback bake's buffers — TEAM-SIZED stride ((numTeams + 3) / 4 vec4s per sample: 2
+// The CPU-readback bake's buffers - TEAM-SIZED stride ((numTeams + 3) / 4 vec4s per sample: 2
 // teams halve the readback and the CPU copy). Re-run by setNumTeams (Buffer::initialize
 // self-destroys the previous allocation).
 void ForceFieldPipeline::createBakeReadbackBuffers()
@@ -714,7 +714,7 @@ void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu>
 {
     // Would this shell's ray-march draw be visible? Mirrors forceEmitterBounds (the proxy's
     // bounding sphere): frustum test + projected-size floor. A culled shell still contributes
-    // its FIELD — it only moves into the non-drawn partition below.
+    // its FIELD - it only moves into the non-drawn partition below.
     const auto shellVisible = [&](const ForceEmitterGpu& e)
     {
         if (!shellCull.enabled)
@@ -737,7 +737,7 @@ void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu>
     ForceEmittersGpu* dst = m_mappedEmitters[frameIdx].data();
     // ONE classification sweep: each ACTIVE slot is tested once (shellVisible once) and its index
     // lands in a bucket; the compact buffer is then written bucket by bucket in partition order
-    // [SAMPLED-tier drawable | ANALYTIC drawable | non-drawn field | PASSIVE tail] — the union
+    // [SAMPLED-tier drawable | ANALYTIC drawable | non-drawn field | PASSIVE tail] - the union
     // pass's interval draw covers exactly the analytic range via firstInstance (with the union
     // OFF the proxy draw simply spans both drawable buckets), a culled/invisible shell still
     // contributes field (`count`), and the PASSIVE tail (merge-group members that only want their
@@ -811,7 +811,7 @@ void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu>
     m_bakeChunkLists[frameIdx].assign(bakeChunks.begin(), bakeChunks.begin() + numChunks);
 
     uint32* ind = m_mappedIndirect[frameIdx].data();
-    // UNION MARCH routing: with the pass on, the proxy draw keeps only the sampled tier — the
+    // UNION MARCH routing: with the pass on, the proxy draw keeps only the sampled tier - the
     // analytic drawables rasterize their intervals instead and the fullscreen march shades them.
     const uint32 analyticDrawCount = drawCount - sampledDrawCount;
     const bool unionActive = shellCull.unionPass && analyticDrawCount > 0;
@@ -906,7 +906,7 @@ void ForceFieldPipeline::recordCompute(CommandBuffer& commandBuffer, uint32 fram
     }
     { // the SAMPLED SHELL TIER's volume bake: one thread per voxel into the two field volumes.
       // Acquire: the PREVIOUS frame's shell-fragment reads of the (single-set) volumes must finish
-      // before this frame's writes — an execution+layout-preserving image barrier on the queue.
+      // before this frame's writes - an execution+layout-preserving image barrier on the queue.
         oc::array<vk::ImageMemoryBarrier2, 2> acquire;
         const uint32 numVolumes = m_shellVolumeImage[1] ? 2u : 1u; // team-sized (see createShellVolume)
         for (uint32 i = 0; i < numVolumes; ++i)
@@ -928,7 +928,7 @@ void ForceFieldPipeline::recordCompute(CommandBuffer& commandBuffer, uint32 fram
             DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_gridTableBuffers[frameIdx]) } },
             DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_gridDataBuffers[frameIdx]) } },
             DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageImage, .imageInfos = { vk::DescriptorImageInfo{ .imageView = m_shellVolumeView[0], .imageLayout = vk::ImageLayout::eGeneral } } },
-            // <= 4 teams: no second volume — bind A (never statically used by those shader variants)
+            // <= 4 teams: no second volume - bind A (never statically used by those shader variants)
             DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eStorageImage, .imageInfos = { vk::DescriptorImageInfo{ .imageView = m_shellVolumeView[1] ? m_shellVolumeView[1] : m_shellVolumeView[0], .imageLayout = vk::ImageLayout::eGeneral } } },
         };
         vkCb.bindPipeline(vk::PipelineBindPoint::eCompute, m_shellBakePipeline.getPipeline());
@@ -1011,13 +1011,13 @@ void ForceFieldPipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameId
 
 // The UNION MARCH at half res (analytic tier, one march per covered pixel), in its own render
 // pass: vertexCount is 0 whenever the pass is off (VR, tweak, density view), so recording it is
-// always safe — a clear + no draw. gbuffer depth is SHADER_READ_ONLY here (pre scene stages).
+// always safe - a clear + no draw. gbuffer depth is SHADER_READ_ONLY here (pre scene stages).
 void ForceFieldPipeline::recordUnionMarchPass(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo,
     const vk::Viewport& viewport, const vk::Rect2D& scissor,
     vk::ImageView gbufferDepthView, vk::Sampler gbufferSampler)
 {
     if (!m_unionHalfRes)
-        return; // full-res mode: no march target — the scene stage draws the march directly
+        return; // full-res mode: no march target - the scene stage draws the march directly
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
     const vk::ClearValue clear{ vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } } };
     const vk::RenderPassBeginInfo begin{
@@ -1053,7 +1053,7 @@ void ForceFieldPipeline::recordUnionMarchPass(CommandBuffer& commandBuffer, uint
 
 // The scene-color half of the union path (the "Force union blend" scene stage): half-res mode =
 // the depth-aware upsample blend of the march target; full-res mode = the direct march draw over
-// the lit scene (the pre-half-res path). Same indirect command either way — 0 vertices = no-op.
+// the lit scene (the pre-half-res path). Same indirect command either way - 0 vertices = no-op.
 void ForceFieldPipeline::recordUnionDraw(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 viewIndex, const DrawParams& params)
 {
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();

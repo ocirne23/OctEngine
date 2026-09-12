@@ -3,13 +3,13 @@
 // THE single authority for static-init / teardown ordering of engine globals. Construction runs top
 // to bottom, destruction (atexit, main thread) runs bottom to top. Section names sort
 // lexicographically; a global WITHOUT a pragma lands in plain ".CRT$XCU", which constructs after the
-// XCA sections but BEFORE every numbered XCU section — so plain globals destruct after all of them.
+// XCA sections but BEFORE every numbered XCU section - so plain globals destruct after all of them.
 //
 // Use at the global's definition (the pragma applies to the whole TU):
 //     OC_INIT_SEG(OC_SEG_WORLD)
 //     World world;
 //
-// #pragma directives don't macro-expand their arguments; the __pragma() operator does — hence the
+// #pragma directives don't macro-expand their arguments; the __pragma() operator does - hence the
 // macro below. Available everywhere via forceinclude.h (/FI), no include needed.
 
 // -- Core bootstrap: allocator first (global new/delete), then the profiler and the memory tracker
@@ -38,9 +38,9 @@
 #define OC_SEG_WORLD           ".CRT$XCU8" // root entities die, then caches -> live renderer/audio
 #define OC_SEG_UI              ".CRT$XCU9" // panel EntityPtrs + EntityChange queues
 
-// -- Procedural world systems: FIRST to destruct — they free render chunks/sectors (-> renderer),
+// -- Procedural world systems: FIRST to destruct - they free render chunks/sectors (-> renderer),
 // static collider bodies (-> physics), and their dtors may wait on in-flight jobs (-> job system).
-// Order among them is link-order-undefined (same section, different TUs) — their dtors are
+// Order among them is link-order-undefined (same section, different TUs) - their dtors are
 // independent of each other; shared terrain data is handed out as shared_ptr copies.
 #define OC_SEG_PROCEDURAL ".CRT$XCUA" // terrain, terrainCollider, ocean, scatter
 

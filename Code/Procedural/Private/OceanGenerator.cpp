@@ -29,7 +29,7 @@ namespace Procedural
 
 		Tweak::boolean("Ocean", "Enabled", &m_enabled);
 		// The ocean's "Meters per pixel": every metre-valued tweak in this panel is a MODEL metre, and the
-		// sea is drawn at model x scale — wavelengths, heights, cascades, the shore depths, the clipmap
+		// sea is drawn at model x scale - wavelengths, heights, cascades, the shore depths, the clipmap
 		// cells and the optical depths all shrink together, so the coastline keeps its look on a compressed
 		// terrain (terrain mpp 3 = scale 0.1). The waves keep the model sea's PERIODS (the spectrum clock
 		// slows by sqrt(scale) to undo the Froude speed-up), so the miniature moves like the model in
@@ -90,14 +90,14 @@ namespace Procedural
 		Tweak::floatVar("Ocean/Foam", "Turbidity", &m_turbidity, 0.0f, 1.0f, 0.01f);
 
 		// Shore interaction: driven by the terrain streamer's baked terrain-data map (nothing baked here;
-		// no data while terrain rendering is disabled — the ocean then behaves as open sea).
+		// no data while terrain rendering is disabled - the ocean then behaves as open sea).
 		// "Shoal depth scale" sizes the APPROACH BAND (x the mid cascade's patch size, floored at two
 		// swash reaches): the depth over which open water eases to the swash amplitude. See
 		// oceanSwashFadeIn / oceanSurfaceWeight in ocean_wave.inc.glsl.
 		Tweak::floatVar("Ocean/Shore", "Shoal depth scale", &m_shoalScale, 0.0f, 0.1f, 0.001f);
 		// Past "range" the waves assume at least "Horizon depth" of water whatever the map says (see the
 		// header): distant depth readings all err shallow, and shallow reads as a dead mirror sea. Only
-		// the assumed seabed moves — the surface stays put, so this cannot put water over land.
+		// the assumed seabed moves - the surface stays put, so this cannot put water over land.
 		Tweak::floatVar("Ocean/Shore", "Horizon depth (m)", &m_horizonDepth, 0.0f, 200.0f, 1.0f);
 		Tweak::floatVar("Ocean/Shore", "Horizon depth range (m)", &m_horizonDepthRange, 0.0f, 8000.0f, 50.0f);
 		Tweak::floatVar("Ocean/Shore", "Shore foam depth (m)", &m_shoreFoamDepth, 0.0f, 8.0f, 0.05f);
@@ -106,11 +106,11 @@ namespace Procedural
 		Tweak::floatVar("Ocean/Shore", "Shore foam bias", &m_shoreFoamBias, -1.0f, 1.0f, 0.01f);
 		Tweak::floatVar("Ocean/Shore", "Swash backflow", &m_swashFlow, 0.0f, 3.0f, 0.01f);
 		// Land cull: clipmap triangles buried deeper than this under the local water level (over their
-		// whole footprint) are discarded in the vertex shaders — no displacement sampling, no raster.
+		// whole footprint) are discarded in the vertex shaders - no displacement sampling, no raster.
 		Tweak::floatVar("Ocean/Shore", "Cull margin (m)", &m_cullMargin, 0.0f, 4.0f, 0.05f);
 		// Beyond the near terrain cascade (~860 m) the cull uses the FAR cascade with this flat burial
 		// error allowance in meters (covers the far mesh LODs' drift off the bake). Narrow rivers the
-		// coarse far bake cannot resolve may lose triangles out there — speed over accuracy; raise it
+		// coarse far bake cannot resolve may lose triangles out there - speed over accuracy; raise it
 		// if that shows, 0 = never cull from far data.
 		Tweak::floatVar("Ocean/Shore", "Far cull error (m)", &m_farCullError, 0.0f, 20.0f, 0.25f);
 		// Whole-sector skip when the baked terrain buries a sector's entire footprint (see the header):
@@ -121,9 +121,9 @@ namespace Procedural
 		// geometry through the water) and reflection (scenery mirrored in it). Refraction range = how far
 		// underwater stays visible (the ~99% Beer-Lambert extinction bound still applies on top, so this
 		// caps the clear-water case); reflection rays skip above the roughness cutoff (a wide lobe cannot
-		// be represented by one mirror sample — the blurred sky stands in); the ray cutoff distance stops
+		// be represented by one mirror sample - the blurred sky stands in); the ray cutoff distance stops
 		// ALL rays past that camera distance (refraction falls back to the analytic baked-terrain bottom,
-		// reflections to the atmosphere — the same paths misses already take), 0 = unlimited.
+		// reflections to the atmosphere - the same paths misses already take), 0 = unlimited.
 		Tweak::floatVar("Ocean/RT", "Refraction range (m)", &m_rtRefractionRange, 1.0f, 100.0f, 1.0f);
 		Tweak::floatVar("Ocean/RT", "Reflection range (m)", &m_rtReflectionRange, 50.0f, 10000.0f, 50.0f);
 		Tweak::floatVar("Ocean/RT", "Reflection max rough", &m_rtReflectionMaxRough, 0.0f, 1.0f, 0.01f);
@@ -140,9 +140,9 @@ namespace Procedural
 		// texcoord carries (ring cell size, morph weight): the vertex shaders read them to pick the
 		// ring-matched displacement mip and to run the CDLOD boundary morph (over each ring's outer band,
 		// odd vertices collapse onto the next ring's lattice and the mip blends +1, so adjacent rings meet
-		// exactly — no stitching geometry needed).
+		// exactly - no stitching geometry needed).
 		// Built as SECTORS (terrain-chunk style): ring 0 whole, each annulus as 8 rectangular blocks
-		// around its hole, the horizon band as its 4 sides — each its own container/node + spatial entry
+		// around its hole, the horizon band as its 4 sides - each its own container/node + spatial entry
 		// so both cull paths (Spatial gate + GPU per-instance frustum test) drop off-screen water.
 		// Sector borders duplicate identical vertices: same position, cell size and morph -> watertight.
 		const int   N = glm::clamp(m_ringRes & ~3, 16, 1024); // multiple of 4: hole/sector edges stay on the lattice
@@ -156,7 +156,7 @@ namespace Procedural
 		oc::vector<uint32> indices;
 
 		// Wraps the accumulated arrays into one sector: container + node + SpatialIndex registration
-		// (SpatialLayer_Terrain like terrain chunks — render culling only, invisible to gameplay
+		// (SpatialLayer_Terrain like terrain chunks - render culling only, invisible to gameplay
 		// queries; no spawn guard, sectors surround the camera and stamp on the next markVisibleSet).
 		bool emittingHorizonBand = false;
 		const auto emitSector = [&]() {
@@ -178,7 +178,7 @@ namespace Procedural
 				overrides.pipelineIdx = RendererVKLayout::EPipelineIndex::Ocean;
 				overrides.useSceneTextures = true;
 				overrides.excludeFromRayTracing = true; // the animated water surface isn't in the TLAS
-				// No meshopt LOD chains (same as terrain chunks): the clipmap IS its own LOD — a generated
+				// No meshopt LOD chains (same as terrain chunks): the clipmap IS its own LOD - a generated
 				// level would collapse the lattice the CDLOD morph and ring-matched mips depend on. The
 				// old single-mesh ocean carried chains too but projected too large to ever leave LOD0;
 				// per-sector meshes are small enough that the selector actually used them (stretched
@@ -266,15 +266,15 @@ namespace Procedural
 		// Horizon band: a coarse quad ring from the outermost ring's edge to the camera far plane, so
 		// the sea reaches the horizon in every view direction instead of ending at the ring reach. Its
 		// inner edge sits on the last ring's fully-morphed lattice (2x its cell, which the CDLOD morph
-		// collapses the edge onto — morph hits exactly 1 there) with the matching texcoord cell size, so
+		// collapses the edge onto - morph hits exactly 1 there) with the matching texcoord cell size, so
 		// the seam is watertight and mip-continuous by the same construction the rings use. Outer verts
 		// carry a proportionally scaled cell size: they band-limit to the coarsest mips (near-flat), which
 		// is what sub-pixel waves at that distance resolve to anyway; shading stays per-pixel regardless.
 		// Chebyshev half-extent = far plane covers every Euclidean far-plane point (diagonals clip first).
-		// One sector per side (corner vertices duplicated between sides — identical, watertight).
+		// One sector per side (corner vertices duplicated between sides - identical, watertight).
 		// The cell size is stored NEGATED: that flags the band to the vertex shaders, which take abs()
 		// for the mip/morph math and skip the land cull. The cull deletes a vertex once its +-3-cell
-		// footprint is buried, which assumes no co-triangle vertex lies further away — true for the
+		// footprint is buried, which assumes no co-triangle vertex lies further away - true for the
 		// rings, FALSE here (a band triangle spans from the ring edge out to the far plane), so one
 		// buried inner vertex would take a kilometre-wide slice of the horizon with it.
 		if (m_horizonBand && m_lastFar > 0.0f)
@@ -321,9 +321,9 @@ namespace Procedural
 	}
 
 	// Baked flow -> simulation wind. The FFT field travels along the wind its SPECTRUM was built with, and
-	// the spectrum regenerates every frame — so turning that wind is the one continuous way to make the
+	// the spectrum regenerates every frame - so turning that wind is the one continuous way to make the
 	// whole sea (every cascade, chop, foam) genuinely travel toward the local shore. The per-pixel
-	// alternative — rotating each texel's sample position by its own flow angle (oceanFlowRotation) — is
+	// alternative - rotating each texel's sample position by its own flow angle (oceanFlowRotation) - is
 	// disabled in the shader: the rotation pivots on the world origin, so the sea creased along every
 	// 8-bit angle contour, worse with distance.
 	// Here the baked shore directions around the camera vote (ocean texels carrying a direction; land and
@@ -369,7 +369,7 @@ namespace Procedural
 		// Needs a net vote worth at least one texel: a lone sliver of coast at the range's edge may turn
 		// the sea, a wash of mutually cancelling directions may not. Votes are the direction the water
 		// should TRAVEL; the sim's dominant waves travel AGAINST its wind vector (see swellTravelAngle),
-		// so the wind target points the opposite way — offshore votes (faded to the travel heading) then
+		// so the wind target points the opposite way - offshore votes (faded to the travel heading) then
 		// negate right back to the base tweak.
 		const float target = glm::dot(sum, sum) > 1.0f ? std::atan2(-sum.y, -sum.x) : m_windAngle;
 		float d = target - m_steeredWindAngle;
@@ -382,9 +382,9 @@ namespace Procedural
 
 	// The ONE place the world scale is applied: the tweaks are model metres, the renderer and the CPU
 	// mirror (which reads m_params) get world metres. Froude similarity keeps the spectrum a shrunk copy
-	// of itself — U x sqrt(s), fetch/depth/patch sizes x s — every other length rides s, every 1/m
+	// of itself - U x sqrt(s), fetch/depth/patch sizes x s - every other length rides s, every 1/m
 	// optical density rides 1/s (the same water column, in fewer metres), dimensionless ratios
-	// (amplitude, choppiness, the approach-band fraction, swash amplitude, foam thresholds — the break
+	// (amplitude, choppiness, the approach-band fraction, swash amplitude, foam thresholds - the break
 	// acceleration is a fraction of g, invariant under Froude scaling) pass through untouched.
 	void OceanGenerator::pushOceanParams(Renderer& renderer, const Camera& camera)
 	{
@@ -465,7 +465,7 @@ namespace Procedural
 
 		ProfileScope profileScope("Ocean", EProfileCategory::Procedural);
 		// ONE sea level, owned by the terrain (see the header). Adopted here every frame rather than
-		// tweaked separately: this used to be its own slider, and the two silently forked — the water plane
+		// tweaked separately: this used to be its own slider, and the two silently forked - the water plane
 		// moved while the terrain kept reporting its water at the old datum, which does not merely look
 		// wrong. The swash gate fades on |baked water level - sea level|, so a metre of disagreement turned
 		// the swash off planet-wide.
@@ -476,7 +476,7 @@ namespace Procedural
 
 		// A new bake rebuilds the dry-sector block grid: per-block MAX of (water level - height) over the
 		// COARSEST cascade (largest coverage; its max is at least as wet as any finer view of the same
-		// ground). One ~quarter-ms pass per shipped bake — every ~range/4 of camera travel.
+		// ground). One ~quarter-ms pass per shipped bake - every ~range/4 of camera travel.
 		if (m_terrainData.get() != m_dryGridSource)
 		{
 			m_dryGridSource = m_terrainData.get();
@@ -507,7 +507,7 @@ namespace Procedural
 		// Push the spectrum/shading params every frame; `enabled` also gates the GPU FFT simulation.
 		pushOceanParams(renderer, camera);
 
-		// The horizon band is sized to the camera far plane; a far change (rare — settings, VR) rebuilds.
+		// The horizon band is sized to the camera far plane; a far change (rare - settings, VR) rebuilds.
 		if (camera.far != m_lastFar)
 		{
 			m_lastFar = camera.far;
@@ -527,13 +527,13 @@ namespace Procedural
 		const Transform xf(glm::vec3(px, m_seaLevel, pz), 1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
 
 		// Dry-sector test: skippable only when every block the footprint overlaps is buried deeper than
-		// the same terms the vertex cull demands (margin + swash reach + far error + slack) — so a
+		// the same terms the vertex cull demands (margin + swash reach + far error + slack) - so a
 		// skipped sector could never have contributed geometry. Out-of-range footprints count as wet.
 		//
 		// FENCED ON THE STREAMED MESH RADIUS, exactly like oceanVertexCulled: past the terrain mesh
 		// nothing is drawn to hide the water, so the VS deliberately never culls out there and the sea
 		// is what fills the horizon. A CPU test that skipped those sectors on baked "land" would delete
-		// water the VS was going to draw — which is what left no horizon water behind unloaded terrain.
+		// water the VS was going to draw - which is what left no horizon water behind unloaded terrain.
 		// So a sector is only skippable when its WHOLE footprint sits under loaded mesh; anything
 		// reaching past it renders, and the VS still culls the buried part per vertex. The horizon
 		// band always reaches past the mesh, so it is never dropped here (and, if the streamer's ring
@@ -562,7 +562,7 @@ namespace Procedural
 
 		// Push the visible sectors, terrain-chunk style: re-center each sector's spatial entry on the
 		// snapped node position, then gate on the dry test and the Main-pass stamp (Spatial/Culling >=
-		// Cull). The ocean draws PASS_MAIN only, so a culled sector has nothing to push at all — and the
+		// Cull). The ocean draws PASS_MAIN only, so a culled sector has nothing to push at all - and the
 		// GPU per-instance frustum cull refines whatever the CPU gates let through.
 		const SpatialCullingConfig& culling = Globals::spatialIndex.getCullingConfig();
 		const bool gate = culling.mode >= int(ESpatialCullMode::Cull);
@@ -584,7 +584,7 @@ namespace Procedural
 
 		// Refresh the CPU copy of the GPU displacement readback inside this frame's fence-safe window
 		// (the slot's buffer is stable between beginFrame and present, and physics updates BEFORE
-		// beginFrame — so buoyancy must query an owned copy, not the live buffer).
+		// beginFrame - so buoyancy must query an owned copy, not the live buffer).
 		uint32 tileRes = 0;
 		const oc::span<const uint16> tile = renderer.getOceanDisplacementReadback(tileRes);
 		m_dispTile.assign(tile.begin(), tile.end());
@@ -613,12 +613,12 @@ namespace Procedural
 		return oc::bitCast<float>(o);
 	}
 
-	// (water depth, water surface level) at (x, z) from the terrain-data map's CPU copy (near cascade) —
+	// (water depth, water surface level) at (x, z) from the terrain-data map's CPU copy (near cascade) -
 	// the CPU mirror of the shaders' oceanSampleShoreData (depth = local water level - terrain height).
 	// Outside the near cascade / without terrain data: open-ocean depth at sea level. One knowing
-	// omission vs the shader: the far-cascade fallback — buoyancy queries only matter near the camera,
+	// omission vs the shader: the far-cascade fallback - buoyancy queries only matter near the camera,
 	// well inside the near cascade's range.
-	// Everything below reads m_params — the world-scaled set the shaders got — never the model-metre tweaks.
+	// Everything below reads m_params - the world-scaled set the shaders got - never the model-metre tweaks.
 	glm::vec2 OceanGenerator::sampleShoreData(float x, float z) const
 	{
 		if (!m_terrainData || m_terrainData->texels.empty() || m_terrainData->ranges.x <= 1.0f)
@@ -643,7 +643,7 @@ namespace Procedural
 
 	// Deepest-possible current wave trough (m below the calm level) from the readback: the sum of each
 	// cascade's layer minimum bounds any combined trough (cascades add; their minima rarely coincide, so
-	// this is conservative — right for hiding fog under the surface). The minimum over the WHOLE tiling
+	// this is conservative - right for hiding fog under the surface). The minimum over the WHOLE tiling
 	// patch is a sea-state statistic, near-stationary frame to frame, so re-scan sparsely.
 	void OceanGenerator::estimateWaveTrough()
 	{
@@ -663,7 +663,7 @@ namespace Procedural
 		m_waveTrough = troughSum;
 	}
 
-	// Swash run-up reach (m). MIRRORS Renderer.cpp's UBO packing of u_oceanParams7.w — the conservative
+	// Swash run-up reach (m). MIRRORS Renderer.cpp's UBO packing of u_oceanParams7.w - the conservative
 	// max run-up height derived from the wave-trough estimate this class itself publishes. It sizes the
 	// on-land band the shaders draw the tongue in, so it is also the band buoyancy must find water in.
 	float OceanGenerator::swashReach() const
@@ -672,7 +672,7 @@ namespace Procedural
 	}
 
 	// CPU mirror of oceanSwashWeight (ocean_wave.inc.glsl): the swash base faded in across the approach
-	// band — the weight that gates the tongue behaviours (the backflow). depth < 0 = land height.
+	// band - the weight that gates the tongue behaviours (the backflow). depth < 0 = land height.
 	float OceanGenerator::swashWeight(float depth, float waterLevel) const
 	{
 		const float amp = glm::clamp(m_params.swashAmp, 0.0f, 4.0f);
@@ -688,7 +688,7 @@ namespace Procedural
 		return amp * seaFade * landFade * fadeIn;
 	}
 
-	// CPU mirror of oceanSwashBase: the fraction of the raw wave field that runs up the beach — the
+	// CPU mirror of oceanSwashBase: the fraction of the raw wave field that runs up the beach - the
 	// swash amplitude x the sea-connection fade x the land-height fade, no approach fade-in.
 	float OceanGenerator::swashBase(float depth, float waterLevel) const
 	{
@@ -703,10 +703,10 @@ namespace Procedural
 
 	// CPU mirror of oceanSampleDisplacement (ocean_wave.inc.glsl) at an UNDISPLACED world XZ, bilinear-
 	// wrapped over the readback tile: the raw cascade sum times the surface weight, then the swash
-	// backflow — same order, same clamps, y relative to the LOCAL water level like the shader's. The
+	// backflow - same order, same clamps, y relative to the LOCAL water level like the shader's. The
 	// shader is what you SEE and this is what floats on it, so any change
 	// there has to land here too; the divergence is invisible until a body sinks through a drawn wave.
-	// Two knowing omissions: the ring-matched vertex mip (the readback is one fixed band limit — the
+	// Two knowing omissions: the ring-matched vertex mip (the readback is one fixed band limit - the
 	// physics surface is the same waves minus the finest detail) and the flow rotation (disabled in the
 	// shader; if OCEAN_FLOW_SAMPLE_ROTATION ever comes back it must come back here too).
 	glm::vec3 OceanGenerator::sampleDisplacement(glm::vec2 worldXZ) const
@@ -717,7 +717,7 @@ namespace Procedural
 		glm::vec3 disp(0.0f);
 		float sw = 0.0f;
 		// Buried deeper than the run-up band: the surface weight is zero, so the sampling below would
-		// displace nothing — skip it (bit-identical, no fetches).
+		// displace nothing - skip it (bit-identical, no fetches).
 		if (depth > -reach)
 		{
 			const uint32 res = m_dispTileRes;
@@ -773,7 +773,7 @@ namespace Procedural
 		if (!m_enabled || m_dispTile.empty() || m_dispTileRes == 0)
 			return -FLT_MAX;
 		// Land beyond the run-up band: the surface weight is zero there, so the shaders draw no live
-		// water — the same gate the displacement uses, one shore fetch instead of the whole inverse.
+		// water - the same gate the displacement uses, one shore fetch instead of the whole inverse.
 		// Inside the band this DOES return water above the drawn shoreline: that is the tongue, and a
 		// body in it floats until the receding wave dips under the sand and beaches it.
 		if (sampleShoreData(x, z).x <= -swashReach())

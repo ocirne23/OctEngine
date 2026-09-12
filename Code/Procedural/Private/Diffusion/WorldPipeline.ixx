@@ -37,7 +37,7 @@ export namespace Procedural::Diffusion
 		                EInferenceDevice device, bool coarseOnly, EPrecision precision = EPrecision::Fp32);
 		bool isValid() const;
 
-		// Cheap reseed: swaps the synthetic map and drops the tile caches. The models stay loaded — this is
+		// Cheap reseed: swaps the synthetic map and drops the tile caches. The models stay loaded - this is
 		// the ONLY sane way to change seed, since reloading is 2.28 GB of ONNX.
 		void setSeed(uint64 newSeed);
 		uint64 seed() const { return m_seed; }
@@ -45,7 +45,7 @@ export namespace Procedural::Diffusion
 		const ModelConfig& config() const { return m_config; }
 
 		// Slice of the coarse stage, shape [7, ci1-ci0, cj1-cj0], in COARSE pixel units (1 = 256 native px).
-		// Channels 0..5 are weighted sums; channel 6 is the blend weight — divide to recover values.
+		// Channels 0..5 are weighted sums; channel 6 is the blend weight - divide to recover values.
 		// Channel meanings (after the /weight divide): 0 elev_sqrt, 1 p5, 2 temp, 3 temp_std,
 		// 4 precip, 5 precip_std.
 		FloatTensor getCoarseSlice(int32 ci0, int32 cj0, int32 ci1, int32 cj1);
@@ -59,7 +59,7 @@ export namespace Procedural::Diffusion
 		// j = column/x). Requires the full pipeline (coarseOnly == false).
 		//   outElev    -> H*W metres above sea level (negative = seabed)
 		//   outMacro   -> H*W, optional: the COARSE STAGE's surface (7.68 km per pixel) resampled to this
-		//                 window — the macro elevation the local relief is measured against, which is what
+		//                 window - the macro elevation the local relief is measured against, which is what
 		//                 the terrain shader's rock layer keys on: (mesh height - macro) tells a crag from
 		//                 flat ground at altitude.
 		//                 NOT the pipeline's own low band (residual + lowres), even though that is a finer
@@ -78,7 +78,7 @@ export namespace Procedural::Diffusion
 
 		uint64 totalComputedWindowCount() const;
 		size_t residentCacheBytes() const;
-		// "coarse 180 calls/180 items 372ms | base ..." — which stage actually dominates.
+		// "coarse 180 calls/180 items 372ms | base ..." - which stage actually dominates.
 		oc::string inferenceStatsText() const;
 		void resetInferenceStats();
 
@@ -102,7 +102,7 @@ export namespace Procedural::Diffusion
 
 		void computeElev(int32 i1, int32 j1, int32 i2, int32 j2, oc::vector<float>& outElev,
 		                 oc::vector<float>* outMacro);
-		// The coarse stage's surface over a native window — the macro elevation BOTH terrain-data cascades
+		// The coarse stage's surface over a native window - the macro elevation BOTH terrain-data cascades
 		// can agree on. See the .cpp for why it is this and not the finer Laplacian low band.
 		void computeCoarseSurface(int32 i1, int32 j1, int32 i2, int32 j2, oc::vector<float>& out);
 		void computeClimate(int32 i1, int32 j1, int32 i2, int32 j2, oc::span<const float> elev,

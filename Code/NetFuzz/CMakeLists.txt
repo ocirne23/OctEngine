@@ -8,7 +8,7 @@ set_target_properties(${PROJECT_NAME} PROPERTIES FOLDER _Build)
 set_target_properties(${PROJECT_NAME} PROPERTIES LINK_FLAGS "/ignore:4099")
 
 # Core + Network only: the point is a headless target that stands up the protocol stack in seconds.
-# Reaching the GAME-layer parsers (NetworkManager) does not need Entity linked here — the `game` mode
+# Reaching the GAME-layer parsers (NetworkManager) does not need Entity linked here - the `game` mode
 # drives them through a real socket against a running `App --server --headless`.
 target_link_libraries(${PROJECT_NAME} PRIVATE Core Network)
 

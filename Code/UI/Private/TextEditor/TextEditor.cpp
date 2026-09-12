@@ -6,7 +6,7 @@ import File;
 import :TextEditor;
 
 // ImGui's InputTextMultiline needs a fixed buffer; grow it into m_text via the resize callback (the
-// imgui_stdlib.cpp pattern — that helper isn't vendored here, so it's inlined).
+// imgui_stdlib.cpp pattern - that helper isn't vendored here, so it's inlined).
 static int textResizeCallback(ImGuiInputTextCallbackData* data)
 {
 	if (data->EventFlag == ImGuiInputTextFlags_CallbackResize)
@@ -97,7 +97,7 @@ void TextEditor::renderToolbar()
 	ImGui::SameLine();
 	const oc::string label = m_hasDoc
 		? (m_path.empty() ? oc::string("(unsaved)") : FileSystem::filename(m_path))
-		: oc::string("(no file open — double-click a .txt in Content)");
+		: oc::string("(no file open - double-click a .txt in Content)");
 	ImGui::TextDisabled("%s%s", label.c_str(), isDirty() ? " *" : "");
 
 	renderSaveAsPopup();
@@ -172,7 +172,7 @@ void TextEditor::renderUnsavedPopup()
 }
 
 // Any file dragged out of the asset browser carries one of these path payloads depending on its type
-// (ASSET_FILE = spawnable .pre, SCRIPT_FILE = .scr, TEXT_FILE = everything else) — accept all three here
+// (ASSET_FILE = spawnable .pre, SCRIPT_FILE = .scr, TEXT_FILE = everything else) - accept all three here
 // so dropping ANY asset onto the panel opens it for viewing/editing as plain text.
 static void acceptFileDropTarget(TextEditor& editor, const ImVec2& min, const ImVec2& max)
 {
@@ -216,7 +216,7 @@ void TextEditor::render()
 	// resize callback only fires on real capacity growth, not on every keystroke.
 	//
 	// PushFont(NULL, size), not SetWindowFontScale: InputTextMultiline draws into its own internal child
-	// window, and this ImGui version's docs call SetWindowFontScale out as the legacy/unreliable path —
+	// window, and this ImGui version's docs call SetWindowFontScale out as the legacy/unreliable path -
 	// PushFont's size is a stack value that applies through nested child windows unconditionally.
 	const ImGuiInputTextFlags flags = ImGuiInputTextFlags_AllowTabInput | ImGuiInputTextFlags_CallbackResize;
 	ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * m_fontScale);

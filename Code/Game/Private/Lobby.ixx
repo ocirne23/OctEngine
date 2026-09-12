@@ -10,7 +10,7 @@ import :Match;   // EPvpMap / pvpMapName (the host's arena pick)
 import :Chat;    // ChatSystem (the chat event the lobby-phase filter lets through)
 
 // The multiplayer PRE-GAME LOBBY: after the menu hosts or joins, players gather here, toggle
-// Ready, and any player can press Start once everyone is ready — a 3 second countdown runs, any
+// Ready, and any player can press Start once everyone is ready - a 3 second countdown runs, any
 // un-ready (or a new player joining) cancels it, and at zero the match launches.
 //
 // SERVER-AUTHORITATIVE over NetworkManager events (all reliable, so state never silently drops):
@@ -18,26 +18,26 @@ import :Chat;    // ChatSystem (the chat event the lobby-phase filter lets throu
 //   "LbT" client->server [u8 team]    team pick request (PvP; server validates < numTeams)
 //   "LbG" client->server              start request (server re-validates all-ready)
 //   "LbS" server->clients [u8 flags: 1 coop | 2 countdown | 4 started][f32 remaining]
-//         [u32 mapSeed][f32 terrainFill][u8 terrainLanes]   — the host's co-op MAP settings
-//         [u8 numTeams][u8 pvpMap]                          — the host's PvP team count + arena
-//         [u8 count]{[u32 clientId][u8 ready][u8 team]}   — the full state, broadcast on every change
+//         [u32 mapSeed][f32 terrainFill][u8 terrainLanes]   - the host's co-op MAP settings
+//         [u8 numTeams][u8 pvpMap]                          - the host's PvP team count + arena
+//         [u8 count]{[u32 clientId][u8 ready][u8 team]}   - the full state, broadcast on every change
 // PVP TEAMS: the host sets "Number of teams" (2..GameMaxTeams, SetNumTeams action); every player
 // picks their own team on the lobby page (SetTeam action -> LbT on a client). A joiner lands on
 // the least-populated team; lowering the count re-seats anyone above it the same way. At launch
 // main hands the count + the roster's picks to the host's GameMatch (setLobbyTeams, before
-// spawnWorld) — it spawns one Base per team and seats each client's capsule on its pick.
+// spawnWorld) - it spawns one Base per team and seats each client's capsule on its pick.
 // CO-OP MAP SETTINGS: the host edits them on the lobby page (SetMapSettings action), every LbS
 // mirrors them so clients see the upcoming map. At launch main hands them to the host's GameMatch
 // (setMapSettings, before spawnWorld); the values that GENERATE reach clients through the game's
-// own "GMp" event, which precedes the world replay — a client never generates from the lobby
+// own "GMp" event, which precedes the world replay - a client never generates from the lobby
 // copy, so the two can never disagree.
 //   "LbX" server->clients [u8 coop]   the countdown finished: launch now
 // Clients ignore relayed LbR/LbG (a client's event also relays to the other clients) and act only
 // on the server's LbS/LbX (sender 0). A client joining an already-RUNNING game gets LbS(started)
-// from the join hook, which precedes the world replay in the reliable stream — see main.cpp's
+// from the join hook, which precedes the world replay in the reliable stream - see main.cpp's
 // dispatcher for why the client must construct its GameMatch inside that dispatch.
 //
-// Main-thread only (NetworkManager contract); holds no entity handles — a plain stack object in
+// Main-thread only (NetworkManager contract); holds no entity handles - a plain stack object in
 // main(). The countdown ticks on the REAL clock (the sim clock may be paused).
 export class LobbySystem final
 {
@@ -48,7 +48,7 @@ public:
 	static bool handlesEvent(oc::string_view name) { return name.size() >= 2 && name[0] == 'L' && name[1] == 'b'; }
 
 	// Enter the lobby right after the network started (host) / the connect began (client). The
-	// client's coop flag is provisional — the first LbS overrides it with the host's mode.
+	// client's coop flag is provisional - the first LbS overrides it with the host's mode.
 	void enter(bool host, bool coop)
 	{
 		m_host = host;
@@ -119,12 +119,12 @@ public:
 	}
 	EPvpMap pvpMap() const { return m_pvpMap; } // the host's arena pick (PvP; mirrored to clients)
 
-	// TRUE once, server: the countdown hit zero — main spawns the game world.
+	// TRUE once, server: the countdown hit zero - main spawns the game world.
 	bool takeServerStart() { return take(m_serverStart); }
-	// TRUE once, client: the first lobby state arrived (the mode is now known) — main constructs
+	// TRUE once, client: the first lobby state arrived (the mode is now known) - main constructs
 	// the local GameMatch INSIDE the event dispatch (see main.cpp's dispatcher comment).
 	bool takeClientConstruct() { return take(m_clientConstruct); }
-	// TRUE once, client: the server declared the game running — main closes the menu.
+	// TRUE once, client: the server declared the game running - main closes the menu.
 	bool takeClientStart() { return take(m_clientStart); }
 
 	// Server roster minus itself: who needs a capsule + world replay when the match launches.
@@ -137,7 +137,7 @@ public:
 		return ids;
 	}
 
-	// Server join/left hooks (main wraps them together with GameMatch's — lobby FIRST, so a late
+	// Server join/left hooks (main wraps them together with GameMatch's - lobby FIRST, so a late
 	// joiner's start signal precedes the world replay in the same reliable stream).
 	void onClientJoined(uint32 clientId)
 	{
@@ -179,7 +179,7 @@ public:
 		NetReader reader(Globals::networkManager.currentEventData());
 		if (m_host)
 		{
-			// requests from clients; our own broadcasts also self-dispatch here — sender 0 skips
+			// requests from clients; our own broadcasts also self-dispatch here - sender 0 skips
 			if (sender == 0)
 				return;
 			if (name == "LbR" && (m_state == EState::Lobby || m_state == EState::Countdown))
@@ -419,7 +419,7 @@ private:
 		}
 	}
 
-	// PvP: the team with the fewest seated players (lowest index on a tie) — where a joiner and a
+	// PvP: the team with the fewest seated players (lowest index on a tie) - where a joiner and a
 	// re-seated player land. Co-op is always team 0.
 	uint8 leastPopulatedTeam() const
 	{

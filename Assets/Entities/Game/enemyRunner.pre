@@ -1,5 +1,5 @@
 # Enemy Runner: fast fragile harasser - half health, NO shield (health only, like the Swarm: no
-# Component Force, no bubble, no readbacks — enemy fields still shove and burn it through the
+# Component Force, no bubble, no readbacks - enemy fields still shove and burn it through the
 # BAKED pressure field, see enemyGrunt.pre), retargets twice as often; slips through field gaps
 # on speed and picks at whatever is unguarded.
 Prefab gameEnemyRunner

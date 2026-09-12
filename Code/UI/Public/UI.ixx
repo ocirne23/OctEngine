@@ -36,10 +36,10 @@ public:
 
     void initialize();
     // TWO PHASES per frame. ImGui itself is single-context/single-thread, so the widget pass
-    // (update) stays serial — but the panels' DATA work (profiler ring snapshot + per-track sort,
+    // (update) stays serial - but the panels' DATA work (profiler ring snapshot + per-track sort,
     // memory treemap snapshot, log snapshot + filter) touches no ImGui and runs on JOBS. Call
     // prepare() as early in the frame as possible (main.cpp: right after input.update, before the
-    // camera/game/controls work) — the jobs overlap with everything up to update(), which waits on
+    // camera/game/controls work) - the jobs overlap with everything up to update(), which waits on
     // them first thing. Only panels that were OPEN last frame prepare, and every panel prepares
     // inline in its render if nothing ran ahead, so prepare() is an optimization, never required.
     void prepare();
@@ -84,7 +84,7 @@ public:
     const Rect& getViewportRect() const { return m_viewportRect; }
 
     // Merged drain of every panel's queued changes into ONE vector: each source appends and keeps its
-    // own capacity (see the panels' takeChanges). The steady-state all-empty frame builds nothing —
+    // own capacity (see the panels' takeChanges). The steady-state all-empty frame builds nothing -
     // empty-range inserts touch no storage, and the returned vector never allocates.
     oc::vector<EntityChange> takeEntityChanges()
     {
@@ -123,14 +123,14 @@ public:
     void setMainMenuHostNote(oc::string note) { m_mainMenu.setHostNote(oc::move(note)); }
     void setMainMenuStatus(oc::string status) { m_mainMenu.setStatus(oc::move(status)); } // front-page line (disconnect reasons)
     MainMenuAction takeMainMenuAction() { return m_mainMenu.takeAction(); }
-    // Lobby page (Game's LobbySystem is the model — main pushes a view snapshot each frame and
+    // Lobby page (Game's LobbySystem is the model - main pushes a view snapshot each frame and
     // polls the button actions, same sequencing as the menu action above)
     void openMainMenuLobby() { m_mainMenu.openLobby(); }
     bool isMainMenuLobbyOpen() const { return m_mainMenu.isLobbyOpen(); }
     void setMainMenuLobbyView(const LobbyView& view) { m_mainMenu.setLobbyView(view); }
     LobbyAction takeMainMenuLobbyAction() { return m_mainMenu.takeLobbyAction(); }
     // Escape menu (Esc overlay in every running mode + the lobby; main owns the open state and
-    // applies the polled action — Resume/ExitToMenu/Quit)
+    // applies the polled action - Resume/ExitToMenu/Quit)
     void setEscapeMenuOpen(bool open) { m_mainMenu.setEscapeOpen(open); }
     bool isEscapeMenuOpen() const { return m_mainMenu.isEscapeOpen(); }
     EscapeMenuAction takeEscapeMenuAction() { return m_mainMenu.takeEscapeAction(); }
@@ -143,12 +143,12 @@ public:
     void setChatView(ChatView view) { m_chat.setView(oc::move(view)); }
     oc::string takeChatOutgoing() { return m_chat.takeOutgoing(); }
     void clearChat() { m_chat.clear(); }
-    // GAME LAYOUT (co-op/PvP): the widget pass draws NO editor panels — one fullscreen viewport
+    // GAME LAYOUT (co-op/PvP): the widget pass draws NO editor panels - one fullscreen viewport
     // window (HUD painted into it, same focus tracking the editor's Viewport panel has, so the
     // input gate and the game's viewport-focus checks work unchanged) plus, while the escape
     // menu's "Debug panels" checkbox is set, a resizable LEFT section with Tweaks / Profiler /
     // Memory tabs that shrinks the viewport rect. main sets it with the mode start (startWorldAndGame)
-    // and clears it on exit-to-menu — main thread, pre-kick window (the pass reads it on the job).
+    // and clears it on exit-to-menu - main thread, pre-kick window (the pass reads it on the job).
     void setGameLayout(bool game)
     {
         if (game && !m_gameLayout)
@@ -198,7 +198,7 @@ private:
 
 export namespace Globals
 {
-// The FIRST engine global to destruct (see InitSeg.h) — the panels hold EntityPtrs (Scene selection,
+// The FIRST engine global to destruct (see InitSeg.h) - the panels hold EntityPtrs (Scene selection,
 // Entity Editor document, pending prefab save) and EntityChange queues, released while everything an
 // entity destructor touches is still alive.
 OC_INIT_SEG(OC_SEG_UI)

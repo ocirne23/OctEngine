@@ -26,7 +26,7 @@ public:
 
     const oc::unordered_map<oc::string, ObjectContainerDesc>& getObjectContainers() const { return m_objectContainers; }
 
-    // .apl Animator entries by name — for editor tooling (Entity Editor) to offer a searchable list.
+    // .apl Animator entries by name - for editor tooling (Entity Editor) to offer a searchable list.
     const oc::unordered_map<oc::string, AnimatorDesc>& getAnimators() const { return m_animators; }
 
 private:

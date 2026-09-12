@@ -11,9 +11,9 @@
 // tangent (loc 2) and uv (loc 3); leaving them unconsumed is valid.
 //
 // It ALSO evaluates the baked terrain fields (altitude/temperature/humidity/water level) here, per vertex,
-// and hands them to the FS as one interpolant — see the comment at the evaluation below.
+// and hands them to the FS as one interpolant - see the comment at the evaluation below.
 
-// Depth-prepass reuse (gbuffer.vs.glsl) needs bit-exact positions across programs — see the note there.
+// Depth-prepass reuse (gbuffer.vs.glsl) needs bit-exact positions across programs - see the note there.
 invariant gl_Position;
 
 #include "shared.inc.glsl"
@@ -76,7 +76,7 @@ void main()
         waterLevel = td.y;
         const vec4 climate = terrainClimateAt(out_pos.xz);
         humidity = climate.w;
-        // The map stores a SEA-LEVEL baseline + one lapse rate, evaluated at the shaded height — never
+        // The map stores a SEA-LEVEL baseline + one lapse rate, evaluated at the shaded height - never
         // bake a temperature sample (only valid at the height it was taken; the cascades' heights differ).
         temperature = terrainTemperatureAt(climate, out_pos.y);
     }

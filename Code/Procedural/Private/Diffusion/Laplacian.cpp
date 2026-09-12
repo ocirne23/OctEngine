@@ -16,7 +16,7 @@ namespace Procedural::Diffusion
 			return v < lo ? lo : (v > hi ? hi : v);
 		}
 
-		// Java's Math.round(double) is floor(x + 0.5) — NOT std::lround, which rounds half away from zero
+		// Java's Math.round(double) is floor(x + 0.5) - NOT std::lround, which rounds half away from zero
 		// and so disagrees for negatives. Everything here is positive, but be explicit rather than lucky.
 		int32 javaRound(double x)
 		{
@@ -68,7 +68,7 @@ namespace Procedural::Diffusion
 			for (int32 c = 0; c < sW; c++)
 				padded.at(r + 1, c + 1) = src.at(r, c);
 
-		// Rows first from src, then columns from the already-row-padded array — so the corners end up
+		// Rows first from src, then columns from the already-row-padded array - so the corners end up
 		// doubly extrapolated. That's what the reference does.
 		for (int32 c = 1; c <= sW; c++)
 		{
@@ -183,7 +183,7 @@ namespace Procedural::Diffusion
 		outBeta = Grid(outH, outW);
 
 		// O(outH * outW * win^2) brute force, as in the reference. It stays cheap because this runs on the
-		// COARSE grid (outH/outW are single digits), not at native resolution — don't be tempted by an
+		// COARSE grid (outH/outW are single digits), not at native resolution - don't be tempted by an
 		// integral-image rewrite, which would change the summation order for no real gain.
 		for (int32 r = 0; r < outH; r++)
 		{

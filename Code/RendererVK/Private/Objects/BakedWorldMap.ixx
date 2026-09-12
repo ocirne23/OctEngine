@@ -17,7 +17,7 @@ import :Layout;
 //   1. upload()        stages the texels into this frame slot's host-visible buffer (call between
 //                      beginFrame's fence wait and submit) together with the region they describe.
 //   2. recordUpload()  copies them into the INACTIVE image inside the re-recorded-every-frame primary CB
-//                      — the destination was sampled by older submissions the last time it was active,
+//                      - the destination was sampled by older submissions the last time it was active,
 //                      so the discard transition needs a real execution dependency on those reads
 //                      (fences order the CPU, not the GPU).
 //   3. flipIfPending() called where the UBO is written: activates the new image together with its

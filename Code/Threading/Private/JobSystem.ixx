@@ -164,9 +164,9 @@ public:
     // so anything the next frame consumes is safe. Queue from ANY thread (a worker inside the entity
     // pass, the window thread, main); one submit = one run, at the next kick; a job queued after the
     // kick simply rides the next frame's batch.
-    // TWO BATCHES, kicked together, JOINED AT DIFFERENT POINTS of the next frame — a job picks the
+    // TWO BATCHES, kicked together, JOINED AT DIFFERENT POINTS of the next frame - a job picks the
     // one matching what it touches:
-    //  - Frame: joined FIRST thing in the next frame (the UI widget pass — the ImGui context must
+    //  - Frame: joined FIRST thing in the next frame (the UI widget pass - the ImGui context must
     //    be quiescent before the main-thread flush and the input pump).
     //  - Sim: joined just before the frame's ENTITY-CHANGE DRAINS (the first main-thread point that
     //    destroys entities or mutates rosters), so a job that only reads world/roster state and
@@ -241,11 +241,11 @@ public:
     // getNumWorkers() helper jobs plus the calling thread. func(chunkBegin, chunkEnd) must be
     // safe to run concurrently with itself. Returns when the whole range is done. `profile` is
     // REQUIRED and covers each participant's WHOLE run (helper jobs through execute(), the calling
-    // thread wrapped here) — one span per participant, not per chunk.
+    // thread wrapped here) - one span per participant, not per chunk.
     //
     // OWNER-SLICED STAGING: chunk k covers [begin + k*grain, begin + (k+1)*grain) clipped to end,
     // so func can index a per-chunk slot by (chunkBegin - begin) / grainSize, and numChunks() says
-    // how many slots a pass needs — memory that scales with the WORK, not with the scheduler's
+    // how many slots a pass needs - memory that scales with the WORK, not with the scheduler's
     // context count the way a PerWorker slot does. Slots are exclusively the chunk's (no TLS, so
     // a wait inside func cannot mix them up) and a serial phase drains exactly numChunks of them.
     // The single-call paths (count <= grain, no workers) run chunk 0 alone; a zero count runs
@@ -459,15 +459,15 @@ OC_INIT_SEG(OC_SEG_JOB_SYSTEM)
     JobSystem jobSystem;
 }
 
-// DEBUG TRIPWIRE for thread-local state in job code — a `thread_local` scratch buffer, a
+// DEBUG TRIPWIRE for thread-local state in job code - a `thread_local` scratch buffer, a
 // `PerWorker::local()` slot, a `getWorkerIndex()`. Declare one right where such state is taken
 // and keep it alive for as long as the state is used: it PINS the current thread's TLS to that
 // code. While a pin is held on a thread, every path that would let the TLS change hands asserts:
-//   * a fiber PARK (wait / parallelFor / JobMutex inside a job) — the fiber would resume on some
+//   * a fiber PARK (wait / parallelFor / JobMutex inside a job) - the fiber would resume on some
 //     other thread's TLS, and this thread would run another job on ours;
 //   * an INLINE job (main or the window thread executing a job inside wait, tryRunOneJob,
-//     tryRunOneHighJob, or a JobMutex spin; ANY context at a pre-emption point — preemptionPoint
-//     or the between-chunk point of a Normal/Low parallelFor) — that job body runs on the pinned TLS.
+//     tryRunOneHighJob, or a JobMutex spin; ANY context at a pre-emption point - preemptionPoint
+//     or the between-chunk point of a Normal/Low parallelFor) - that job body runs on the pinned TLS.
 // Nests (a job's own inner scopes stack) and compiles to two no-ops in non-debug builds.
 export class ThreadLocalScope final
 {

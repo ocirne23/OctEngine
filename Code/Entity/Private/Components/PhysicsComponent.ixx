@@ -60,13 +60,13 @@ export struct PhysicsComponent
     // Pulls the body out of the simulation (and drops its occluder) while the entity is disabled
     // (EEntityFlag_Enabled); the next update() after re-enable re-adds and resyncs it. See updateTree.
     void suspendBody();
-    // PARK / UNPARK — for a body whose entity the World stops simulating (SIM LOD dormancy).
+    // PARK / UNPARK - for a body whose entity the World stops simulating (SIM LOD dormancy).
     // Both ride the body-command queue (pass-safe, applied before the next step). park: zero the
-    // velocities, then DISABLE (out of the broadphase + solver, pose kept — nothing can wake or
+    // velocities, then DISABLE (out of the broadphase + solver, pose kept - nothing can wake or
     // push it) or merely put it to sleep. unpark: zero the velocities (a body parked inside a
-    // crowd may still hold a contact push-out) and enable — a no-op on an enabled body; skipped
+    // crowd may still hold a contact push-out) and enable - a no-op on an enabled body; skipped
     // while `suspended` (an Enabled-off subtree owns its own disable). `velocity` = the linear
-    // velocity to wake with (a marching unit's walk — GameUnitComponent::wakeVelocity; zero at
+    // velocity to wake with (a marching unit's walk - GameUnitComponent::wakeVelocity; zero at
     // rest). A dynamic body waking within a metre of another live one is first LIFTED 2 m (far-
     // ticked units teleport through each other; landing on a body beats exploding out of it).
     void park(bool disable);
@@ -74,7 +74,7 @@ export struct PhysicsComponent
     // BUOYANCY, per component on the entity pass (workers), ONCE PER STEP INTERVAL and OFF THE
     // STEP FRAME: box3d clears forces every step and sums whatever lands before it, so the
     // application goes on the first frame after a step that does not step itself (the step frame
-    // is already the expensive one) — `buoyancyStep` remembers the step it was read after. Below
+    // is already the expensive one) - `buoyancyStep` remembers the step it was read after. Below
     // the step rate every frame steps, and the step frame is the only choice. There a gated
     // dynamic body with `lockRotation` uses ONE probe at its AABB centre with the whole volume
     // (no torque to gain, one force queued); a free one splits its world AABB into 2x2x2 probes, each carrying its share
@@ -85,7 +85,7 @@ export struct PhysicsComponent
     void applyBuoyancy();
 };
 
-// Suspends every PhysicsComponent body in this entity's subtree (used when the entity is disabled —
+// Suspends every PhysicsComponent body in this entity's subtree (used when the entity is disabled -
 // updateTree stops reaching it, so the bodies would otherwise keep colliding invisibly).
 export void suspendPhysicsTree(Entity& entity, SceneComponent* sc);
 

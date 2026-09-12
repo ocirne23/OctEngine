@@ -56,7 +56,7 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
 {
     if (Globals::networkManager.role() == ENetRole::Client)
         return;
-    // Any OTHER team's bubble over the point drains health — a blueprint under it un-builds.
+    // Any OTHER team's bubble over the point drains health - a blueprint under it un-builds.
     if (!invulnerable)
     {
         const ForceSystem::FieldSample territory = Globals::forceSystem.sampleBakedField(entity.pos, team);

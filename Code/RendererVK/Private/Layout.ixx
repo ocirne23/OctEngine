@@ -103,7 +103,7 @@ export namespace RendererVKLayout
     constexpr uint32 MAX_FORCE_TEAMS = 8;           // team CAP: sizes the UBO color array and is the
                                                     // "outside every bubble" sentinel. The LIVE count
                                                     // is ForceFieldParams::numTeams (shader define
-                                                    // NUM_FORCE_TEAMS, 2 in co-op) — the force
+                                                    // NUM_FORCE_TEAMS, 2 in co-op) - the force
                                                     // pipelines/bakes rebuild to fit it
     constexpr uint32 MAX_FORCE_QUERIES = 1024;      // persistent gameplay point-query slots
                                                     // (structures; units read the baked field)
@@ -120,7 +120,7 @@ export namespace RendererVKLayout
     // pressure bake instead, which is the default for every ground consumer.
     constexpr uint32 FORCE_FLAG_READBACK = 1u << 2;
 
-    // Force emitter hash grid (uniform 32 m cells, NOT camera-adaptive — gameplay queries happen
+    // Force emitter hash grid (uniform 32 m cells, NOT camera-adaptive - gameplay queries happen
     // anywhere). Fixed per-cell emitter capacity; cells bump-allocate from the data buffer with the
     // light grid's overflow-inflated-counter growth contract (checkForceGridCapacity).
     constexpr uint32 FORCE_CELL_MAX_EMITTERS = 64;  // packed uint16 indices per occupied cell (must stay even)
@@ -143,9 +143,9 @@ export namespace RendererVKLayout
     };
     static_assert(sizeof(ForceEmitterGpu) == 64);
 
-    // The emitter's VISIBLE size: the bounding half-extent of its drawn (iso-shrunk) box — the
+    // The emitter's VISIBLE size: the bounding half-extent of its drawn (iso-shrunk) box - the
     // actual bubble radius, not the authored Reach. CPU mirror of the shader's forceVisibleRadius
-    // (forceVisibleBounds + the teamFlags.w pack, force_field.inc.glsl — keep in sync). THE
+    // (forceVisibleBounds + the teamFlags.w pack, force_field.inc.glsl - keep in sync). THE
     // sampled-tier metric: the upload partition and the bake-volume fit classify with it, matching
     // the shell FS / union ownership tests against u_forceBake0.w.
     inline float forceEmitterVisibleRadius(const ForceEmitterGpu& e)
@@ -205,14 +205,14 @@ export namespace RendererVKLayout
 
     // BAKED PRESSURE FIELD ("force bake"): a sparse set of XZ CHUNKS the CPU selects each frame
     // from the live emitters' support boxes, evaluated by force_bake.cs.glsl at ONE fixed gameplay
-    // height (ALL team field values per sample) and read back host-visible — the CPU-side field
+    // height (ALL team field values per sample) and read back host-visible - the CPU-side field
     // any number of consumers samples for force/exposure with NO per-consumer GPU slot. A chunk is
     // a 16 m square: 16x16 samples at 1 m spacing (unit-shield bubbles, reach 3, stay resolved),
     // CORNER-aligned to the world lattice (sample (i,j) of chunk (bx,bz) sits at (bx*16+i, bz*16+j)),
     // so bilinear taps cross chunk borders seamlessly and a missing chunk reads as zero field
     // (= outside every support).
     constexpr uint32 FORCE_BAKE_CHUNK_SAMPLES = 16;   // per axis (workgroup = one chunk, 16x16)
-    constexpr float FORCE_BAKE_SAMPLE_SPACING = 1.0f; // m — also spelled in force_bake.cs.glsl
+    constexpr float FORCE_BAKE_SAMPLE_SPACING = 1.0f; // m - also spelled in force_bake.cs.glsl
     constexpr uint32 MAX_FORCE_BAKE_CHUNKS = 512;     // 16 m chunks: 512 covers ~131k m^2 of field
     constexpr uint32 FORCE_BAKE_SAMPLES_PER_CHUNK = FORCE_BAKE_CHUNK_SAMPLES * FORCE_BAKE_CHUNK_SAMPLES;
     struct alignas(16) ForceBakeChunksGpu
@@ -223,7 +223,7 @@ export namespace RendererVKLayout
         glm::ivec4 chunks[MAX_FORCE_BAKE_CHUNKS]; // xy = chunk coord (floor(world / 16 m)), zw unused
     };
     constexpr size_t FORCE_BAKE_HEADER_SIZE = sizeof(ForceBakeChunksGpu) - sizeof(glm::ivec4) * MAX_FORCE_BAKE_CHUNKS;
-    // Output/readback: per sample (numTeams + 3) / 4 vec4s (every LIVE team's field value —
+    // Output/readback: per sample (numTeams + 3) / 4 vec4s (every LIVE team's field value -
     // ONE vec4 with <= 4 teams, halving the readback + the CPU copy), chunk-major:
     // (chunk * 256 + localZ * 16 + localX) * vec4PerSample. The stride is the live team count's,
     // so the buffers are remade on a numTeams change (ForceFieldPipeline::setNumTeams).
@@ -239,7 +239,7 @@ export namespace RendererVKLayout
     // phi[0..3]/phi[4..7]), refit each frame over the union of the LARGE drawable emitters'
     // support boxes (Ubo::forceBake0/1 carry the mapping, so the FIXED texel grid's resolution
     // self-adjusts to the active spread). Shell proxies whose reach exceeds the threshold march
-    // these textures (two trilinear taps per sample) instead of the analytic candidate loop —
+    // these textures (two trilinear taps per sample) instead of the analytic candidate loop -
     // hits, normals and shading stay analytic. Written by force_shellbake.cs each frame.
     constexpr uint32 FORCE_SHELL_VOLUME_X = 128;
     constexpr uint32 FORCE_SHELL_VOLUME_Y = 48;
@@ -297,7 +297,7 @@ export namespace RendererVKLayout
     // table, copy, or ping-pong. SH-L1 RGB per probe.
     // The GI_* sizing values are injected into EVERY shader compile (Shader.cpp buildLayoutPreamble) as
     // #defines: the grid shape is a compile-time constant in the shaders (no per-sample uniform math),
-    // and the "GI" grid tweaks change it through GIProbePipeline::registerGridTweaks — GPU idle, the SH
+    // and the "GI" grid tweaks change it through GIProbePipeline::registerGridTweaks - GPU idle, the SH
     // buffer re-allocated (resizeGrid), every shader reloaded, the clipmap cleared.
     constexpr uint32 GI_SH_STRIDE = 12;                                                  // SH-L1 RGB floats per probe
     constexpr uint32 GI_PROBE_STRIDE = GI_SH_STRIDE + 12;                                 // SH + SH-L1 depth + depth^2 + backface fraction + relocation offset xyz
@@ -307,7 +307,7 @@ export namespace RendererVKLayout
         int numCascades = 4;                    // nested clipmap levels (1..8)
         int dimLog2X = 5, dimLog2Y = 2, dimLog2Z = 5; // probes per axis per cascade as log2 (2..6 = 4..64): power of two for the toroidal mask
         float focusOffsetY = 2.0f;              // metres added to the scene focus before centring the grids (> 0 = more probes above the ground than below)
-        int visChebPower = 2;                   // Chebyshev visibility weight exponent (GI_VIS_CHEB_POWER, 1..6; DDGI uses 3) — a define,
+        int visChebPower = 2;                   // Chebyshev visibility weight exponent (GI_VIS_CHEB_POWER, 1..6; DDGI uses 3) - a define,
                                                 // so the sample loop multiplies instead of pow-ing per probe; a change reloads shaders only
 
         uint32 dimX() const { return 1u << dimLog2X; }
@@ -352,7 +352,7 @@ export namespace RendererVKLayout
     };
 
     // Per-skinned-instance job for the skinning compute, uploaded each frame into a std430 SSBO the
-    // shader indexes with gl_WorkGroupID.y (one indirect dispatch covers all jobs — data-driven, no
+    // shader indexes with gl_WorkGroupID.y (one indirect dispatch covers all jobs - data-driven, no
     // re-record when instances spawn). Offsets are in element units (MeshVertex / SkinningVertex / mat4).
     struct SkinningJob
     {
@@ -446,7 +446,7 @@ export namespace RendererVKLayout
         glm::vec4 sceneFocus;   // xyz = the SCENE FOCUS every distance-based quality falloff measures from: the
                                 // sun cascade pick, the RTAO fade/early-out (the game's player via
                                 // Renderer::setSceneFocus; the camera position otherwise), w unused
-        glm::vec4 cascadeSunSizeTexels; // per cascade: PCF disk radius (texels) per unit of normalized depth gap —
+        glm::vec4 cascadeSunSizeTexels; // per cascade: PCF disk radius (texels) per unit of normalized depth gap -
                                 // tan(sun radius) * depthRange / texelWorldSize, once per frame instead of a
                                 // sqrt + two divides per lit pixel (shadows.inc.glsl pcssSunSizeTexels)
         glm::vec3 shadowParams; // x = depth bias, y = normal bias (texels), z = 1/resolution
@@ -467,7 +467,7 @@ export namespace RendererVKLayout
                                 // render target. The scene renders through this sub-rect (editor viewport panel),
                                 // so screen-space reconstruction must map full-frame UV through it.
         glm::vec4 taaJitter;    // xy = this frame's TAA sub-pixel jitter in NDC (0 when TAA disabled), zw =
-                                // LAST frame's. ALL raster passes apply xy in clip space — the G-buffer
+                                // LAST frame's. ALL raster passes apply xy in clip space - the G-buffer
                                 // prepass included, so the forward pass's depth-prepass reuse tests its
                                 // depth DIRECTLY, bound read-only (conservative unjittered prefills could
                                 // not cover sub-pixel slits/grazing silhouettes). mvp/invMvp/prevMvp stay
@@ -536,7 +536,7 @@ export namespace RendererVKLayout
                                    // w = breaking-crest foam threshold (downward crest accel in g units)
         glm::vec4 oceanParams6;    // x = far-cascade land-cull error allowance (m; flat burial slack the
                                    //     cull demands when only far terrain data covers the footprint,
-                                   //     0 = never cull from far data — moved here from the removed params10),
+                                   //     0 = never cull from far data - moved here from the removed params10),
                                    // y = glint variance filter scale (spec AA + LEAN roughness),
                                    // z = crest SSS strength (0 = off), w = crest SSS forward-lobe power
         glm::vec4 oceanParams7;    // x = land cull margin (m): clipmap triangles whose whole footprint is
@@ -554,12 +554,12 @@ export namespace RendererVKLayout
                                    // z = RT reflection ray range (m),
                                    // w = RT reflection roughness cutoff (rougher = sky fallback)
         glm::vec4 oceanParams10;   // x unused (was the breaking limit, removed: the swash amplitude alone
-                                   //     shapes the shore — oceanSurfaceWeight),
+                                   //     shapes the shore - oceanSurfaceWeight),
                                    // y = spectrum clock rate (sqrt(world scale): holds the model sea's periods), zw unused
         glm::vec4 terrainParams;   // x = streamed terrain mesh coverage radius (m, radial from camera XZ;
-                                   // 0 = no terrain mesh up — fences the ocean land cull),
+                                   // 0 = no terrain mesh up - fences the ocean land cull),
                                    // y = temperature lapse rate, C per WORLD metre above sea level (<= 0;
-                                   //     pairs with the map's baked sea-level baseline — terrainTemperatureAt),
+                                   //     pairs with the map's baked sea-level baseline - terrainTemperatureAt),
                                    // z = sea level (world Y, live from the streamer), w unused
         glm::vec4 terrainShadowParams; // long-range sun shadows marched off the terrain height cascades,
                                    // for the ground the cascades and the TLAS cannot reach (ShadowParams):
@@ -588,7 +588,7 @@ export namespace RendererVKLayout
                                      // w = unused
         glm::vec4 terrainTexParams5; // x = crag wander amplitude (m; 0 = off), y = crag wander frequency
                                      // (1/m), zw unused. The wander breaks the rock boundary off the
-                                     // elevation contour the crag test would otherwise trace — see terrainSplat.
+                                     // elevation contour the crag test would otherwise trace - see terrainSplat.
         // Terrain wetness clipmap (TerrainWetnessPipeline; terrain_wetness.inc.glsl). A TERRAIN_WET_RES^2
         // toroidal window of texels around the scene focus; lattice coords are integer texel indices.
         glm::vec4 terrainWetParams0; // xy = window origin lattice coord (min corner, as floats),
@@ -621,7 +621,7 @@ export namespace RendererVKLayout
                                      // ground's normal, 1 = the live FFT wave normal), w = virtual water
                                      // depth (m) the ground is tinted through (Beer-Lambert + in-scatter)
         glm::vec4 terrainWetParams7; // x = linear dry this frame (dry rate x dt: the constant part of the
-                                     // drain, next to the proportional exp(-dt / dry time) — together
+                                     // drain, next to the proportional exp(-dt / dry time) - together
                                      // rain settles at dryTime x (rain - dryRate)),
                                      // y = live-surface margin (m): the film + gloss stay on ground up to this
                                      //     far below the estimated live surface (it sits under the drawn ocean
@@ -654,7 +654,7 @@ export namespace RendererVKLayout
                                 // threshold an emitter marches the volume at (see ForceFieldPipeline)
         glm::vec4 forceBake1;   // xyz = 1 / bake volume world size, w = tier enabled (0/1)
         glm::vec4 forceBake2;   // x = union march step size (m), y = union march max steps,
-                                // z = px per (radius/dist) — the union march's distance LOD, w unused
+                                // z = px per (radius/dist) - the union march's distance LOD, w unused
     };
 
     struct alignas(16) RenderNodeTransform : Transform {};
@@ -764,7 +764,7 @@ export namespace RendererVKLayout
     constexpr uint32 MATERIAL_FLAG_OCEAN = 1u << 28; // ocean water: the G-buffer prepass vertex shader Gerstner-
                                                      // displaces these instances so depth/normal match the forward pass
     constexpr uint32 MATERIAL_FLAG_TERRAIN = 1u << 27; // terrain chunk: colors procedurally (TERRAIN variant), the
-                                                       // material's diffuse slot is a fallback — RT hits (ocean
+                                                       // material's diffuse slot is a fallback - RT hits (ocean
                                                        // refraction) substitute the beach splat instead
 
     struct alignas(16) MaterialInfo

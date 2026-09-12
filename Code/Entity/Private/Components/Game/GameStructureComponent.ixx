@@ -33,7 +33,7 @@ export struct GameStructureComponent
         uint32 team = 0;
         float healthMax = 100.0f;
         bool invulnerable = false; // the Base: skipped by every damage path
-        float meleeRadius = 1.0f;  // footprint half — units gnaw against this ring, not the center
+        float meleeRadius = 1.0f;  // footprint half - units gnaw against this ring, not the center
         bool alwaysDisplayHealth = false;
         bool alwaysShowResources = false; // overhead store bars even unselected
     };
@@ -66,7 +66,7 @@ export struct GameStructureComponent
         // No spawn timer: the energy store IS the build bar (capacity = spawnCost).
         int population;     // += spawnPop per spawn decision, -= popCost by the game per death event
         int popCap;         // own allowance + linked houses, game-stamped each tick
-        uint8 unitType;     // the produced type (a player order — synced/saved by the game)
+        uint8 unitType;     // the produced type (a player order - synced/saved by the game)
         uint8 spawnPop;
         uint8 houses;
         float spawnCost;

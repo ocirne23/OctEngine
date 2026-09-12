@@ -78,7 +78,7 @@ void OutputLog::prepare()
 void OutputLog::render()
 {
 	if (!m_prepared)
-		prepare(); // nothing ran ahead of us — inline
+		prepare(); // nothing ran ahead of us - inline
 	m_prepared = false;
 	if (ImGui::Button("Clear"))
 		Log::clear();
@@ -101,7 +101,7 @@ void OutputLog::render()
 
 	ImGui::Separator();
 
-	// (snapshot + filter ran in prepare(): m_visible indexes m_snapshot — both replaced together,
+	// (snapshot + filter ran in prepare(): m_visible indexes m_snapshot - both replaced together,
 	// so the pair is always consistent; a filter edit shows up next frame)
 	ImGui::BeginChild("##ol_scroll", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None,
 		ImGuiWindowFlags_HorizontalScrollbar);

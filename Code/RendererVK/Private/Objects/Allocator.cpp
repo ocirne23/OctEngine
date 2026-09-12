@@ -2,7 +2,7 @@ module;
 
 #include <cstdio>
 
-// The C VMA header lives in the global module fragment (no VMA_IMPLEMENTATION — that is compiled once in
+// The C VMA header lives in the global module fragment (no VMA_IMPLEMENTATION - that is compiled once in
 // Vma.cpp). Its declarations attach to the global module so they link against that implementation.
 #pragma warning(push, 0)
 #include "vma/vk_mem_alloc.h"

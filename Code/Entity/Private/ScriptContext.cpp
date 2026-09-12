@@ -394,7 +394,7 @@ void registerScriptDslBindings()
         } });
 
     // GAME components: the shared C++ sim (units/structures/projectiles) with the DSL as the
-    // orders/config tier — a script sets a unit's target or reads health; walking/fighting is C++.
+    // orders/config tier - a script sets a unit's target or reads health; walking/fighting is C++.
     const DSLType unitType = bindings.registerComponentType("unit", "GameUnitComponent", EComponentID_GameUnit,
         "ctx->entityGetGameUnitComponent($r)");
     bindings.registerObject({ "unit", unitType, /*sidebarTopLevel*/ false,
@@ -1242,7 +1242,7 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
     void thunk_sendNetworkEvent(const char* eventName)
     {
         // worker-safe: the local fire matches thunk_sendEvent, the network half only queues (mutex-guarded,
-        // drained by NetworkManager::send on the main thread — NetHost itself is single-threaded)
+        // drained by NetworkManager::send on the main thread - NetHost itself is single-threaded)
         if (eventName)
             Globals::networkManager.fireNetworkEvent(eventName);
     }

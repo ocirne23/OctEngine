@@ -12,7 +12,7 @@ export import :ScriptLoader;
 export import :Transpiler;
 
 // Compiled-and-loaded script DLL: the raw entry-point function pointers. Typed as void* so this library
-// stays decoupled from the script ABI (ScriptAPI.h) and from the engine — the caller (Entity) owns the
+// stays decoupled from the script ABI (ScriptAPI.h) and from the engine - the caller (Entity) owns the
 // ScriptContext and casts these. A null `update` marks a script that failed to compile.
 export struct ScriptModule
 {
@@ -56,7 +56,7 @@ export typedef void(*ScriptLoadedCallback)(const ScriptModule* script, const oc:
 // Extension-agnostic: a .scr (node-graph-generated) and a .dsl (DSL-editor-generated, see Code/Script/Private/
 // DSL/Transpiler.ixx) are both just a source file whose body-only C++ compiles under the same ScriptAPI.h ABI --
 // getOrLoad never inspects the extension, only the file's content. Pure compile/load only: it knows nothing
-// about the engine — no renderer, entity or input.
+// about the engine - no renderer, entity or input.
 export class ScriptHost final
 {
 public:
@@ -111,7 +111,7 @@ private:
     ScriptLoadedCallback m_scriptLoadedCallback = nullptr;
 
     // Parallel entity spawning: concurrent ScriptComponent spawns getOrLoad the same or different
-    // scripts — the cache (and a miss's compile/load) serializes here. Module pointers stay stable
+    // scripts - the cache (and a miss's compile/load) serializes here. Module pointers stay stable
     // (node-based map), so cached callers keep lock-free reads of the returned ScriptModule.
     std::mutex m_loadMutex;
     oc::string vcvarsPath;                                 // cached after first lookup

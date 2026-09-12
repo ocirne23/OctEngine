@@ -35,7 +35,7 @@ export namespace SceneCache
         uint64 meshesOffset, materialsOffset, texturesOffset, nodesOffset, meshRefsOffset, texStampsOffset, stringsOffset;
         uint32 numMeshes, numMaterials, numTextures, numNodes, numMeshRefs, numTexStamps;
         uint32 stringsSize;
-        uint32 sourcePathOffset; // the source model path (into strings) — lets the cook-time GC pass
+        uint32 sourcePathOffset; // the source model path (into strings) - lets the cook-time GC pass
                                  // identify caches whose source vanished or changed without a lookup table
     };
     static_assert(sizeof(CookedHeader) == 120);

@@ -2,11 +2,11 @@
 
 // Per-emitter applied force: one thread per compacted live emitter. The opposing teams' field
 // pressure is integrated over a small fixed set of sample points spread through the emitter's own
-// bubble (the shape's midpoint + 12 icosahedron directions at ~70% of its half-extent) — a single
+// bubble (the shape's midpoint + 12 icosahedron directions at ~70% of its half-extent) - a single
 // center tap would read zero when two large bubbles press rims together without their centers
 // overlapping. Each sample is weighted by the emitter's own normalized field there, so deep-contact
 // samples dominate and the result is continuous as contact begins/ends. The opposing gradient is
-// finite-differenced (4-tap tetrahedral) — the warped-sphere shape has no cheap analytic gradient.
+// finite-differenced (4-tap tetrahedral) - the warped-sphere shape has no cheap analytic gradient.
 // Results are written SLOT-indexed (the source slot rides in teamFlags.z) straight into the
 // host-visible readback buffer; the CPU reads them ~2 frames later (ocean-readback contract).
 
@@ -60,7 +60,7 @@ void main()
         force += wSelf * -grad;
         pressure += opp;
     }
-    force *= e.outputParams.x * (1.0 / 13.0); // Output * mean — the raw integral; the "Force gain"
+    force *= e.outputParams.x * (1.0 / 13.0); // Output * mean - the raw integral; the "Force gain"
     pressure *= 1.0 / 13.0;                   // tweak is a CPU-side multiplier on the readback
     out_forces[e.teamFlags.z] = vec4(force, pressure);
 }

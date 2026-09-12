@@ -109,7 +109,7 @@ layout (binding = 12, std430) readonly buffer InMeshLodGroupsBuffer
 };
 // Per-instance LOD hysteresis state, addressed via the node's per-frame slot bias (below). Written by
 // this pass only; frames in flight may race on a slot, but stale/garbage values are clamped into the
-// current frame's valid band before use, so torn reads degrade to a fresh pick — never a wrong level.
+// current frame's valid band before use, so torn reads degrade to a fresh pick - never a wrong level.
 layout (binding = 13, std430) buffer LodLevelStateBuffer
 {
     uint lodLevelState[];

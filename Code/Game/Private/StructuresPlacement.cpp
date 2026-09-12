@@ -11,10 +11,10 @@ import :Structures;
 
 // GRID PLACEMENT + the spawn/remove seams (see Structures.ixx): the snap, the footprints, the
 // per-cell occupancy hash the derived links and every placement run on, cellsFree / planCrossing
-// (validated at aim AND at apply — the MP seam), and the one spawn path every structure enters
+// (validated at aim AND at apply - the MP seam), and the one spawn path every structure enters
 // through (spawnStructure) with its bookkeeping counterpart (removeStructureBookkeeping).
 
-// Per-type PREFABS — the only consumer is spawnStructure (the names/heights tables live in
+// Per-type PREFABS - the only consumer is spawnStructure (the names/heights tables live in
 // Structures.cpp behind structureTypeName / spawnHeightOf).
 static constexpr const char* structurePrefabs[] = {
     "Entities/Game/emitter.pre", "Entities/Game/generator.pre", "Entities/Game/transmitter.pre",
@@ -33,7 +33,7 @@ static_assert(oc::size(structurePrefabs) == (size_t)EStructureType::Count);
 
 glm::vec3 StructureSystem::snapToGrid(EStructureType type, const glm::vec3& groundPos)
 {
-    // Odd footprints center on a CELL, even ones on a corner — either way the footprint covers
+    // Odd footprints center on a CELL, even ones on a corner - either way the footprint covers
     // whole cells exactly.
     const float offset = (footprintCellsOf(type) & 1) ? GridCellSize * 0.5f : 0.0f;
     const auto snap = [&](float v) { return std::round((v - offset) / GridCellSize) * GridCellSize + offset; };
@@ -117,7 +117,7 @@ bool StructureSystem::cellsFree(EStructureType type, const glm::vec3& p, const g
             free = false;
             return;
         }
-        free = false; // buildings refuse any occupied cell (cables included — no building on a cable)
+        free = false; // buildings refuse any occupied cell (cables included - no building on a cable)
     });
     return free;
 }
@@ -126,7 +126,7 @@ bool StructureSystem::actorInFootprint(EStructureType type, const glm::vec3& p)
 {
     // A player capsule or a unit standing on the cells blocks the placement: the structure would
     // spawn inside them and the solver would fling whatever it engulfs. Checked at aim (red ghost)
-    // AND in placeStructure (the MP seam) — actors move between the two.
+    // AND in placeStructure (the MP seam) - actors move between the two.
     // Cables/crossings/solars are WALK-THROUGH (their collider ignores bodies), so standing on the
     // cells never blocks them.
     if (isWalkThrough(type))
@@ -158,7 +158,7 @@ int StructureSystem::spawnStructure(uint32 id, EStructureType type, const glm::v
     if (!state)
     {
         Log::warning(oc::string(structurePrefabs[(int)type])
-            + " has no GameStructure component — placement refused");
+            + " has no GameStructure component - placement refused");
         return -1;
     }
     entity->setName(structureTypeName(type));
@@ -170,7 +170,7 @@ int StructureSystem::spawnStructure(uint32 id, EStructureType type, const glm::v
     state->blueprint = !built;
     state->health = built ? healthMax : 1.0f; // health IS the build progress
     if (ForceComponent* fc = getComponent<ForceComponent>(entity.get()))
-        fc->emitter.setTeam(team); // prefabs author team 0 — the builder's team owns the field
+        fc->emitter.setTeam(team); // prefabs author team 0 - the builder's team owns the field
     Ref ref;
     ref.owner = entity; // owning: the roster's raw pointers can never dangle
     ref.entity = entity.get();
@@ -198,7 +198,7 @@ int StructureSystem::spawnStructure(uint32 id, EStructureType type, const glm::v
     return (int)m_frame.size() - 1;
 }
 
-// Deregister + full bookkeeping, WITHOUT touching the world's root list — shared by the game's own
+// Deregister + full bookkeeping, WITHOUT touching the world's root list - shared by the game's own
 // removal (destroyStructureAt) and by onWorldRootRemoved for out-of-band deletions.
 void StructureSystem::removeStructureBookkeeping(size_t index)
 {
@@ -224,7 +224,7 @@ void StructureSystem::destroyStructureAt(size_t index)
     Globals::world.removeRootEntity(entity);
 }
 
-// Any root leaving the world (editor delete, script destroy request — paths that never reach
+// Any root leaving the world (editor delete, script destroy request - paths that never reach
 // destroyStructureAt). Ours are deregistered by then, so this only fires for out-of-band removals.
 void StructureSystem::onWorldRootRemoved(const Entity* entity)
 {
@@ -267,7 +267,7 @@ void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groun
     if (!isPlaceableType(type) || (int)team >= GameMaxTeams)
         return; // the Base only enters through spawnBase; the Connector is retired
     // Orientation FIRST (a crossing's footprint depends on it), then the grid validation.
-    // Lance: the AIMED facing from the two-click placement when given, else auto — away from the
+    // Lance: the AIMED facing from the two-click placement when given, else auto - away from the
     // own Base. Crossings: the facing quantized to an axis (default +X).
     glm::quat rot(1.0f, 0.0f, 0.0f, 0.0f);
     if (isCrossingType(type))
@@ -280,7 +280,7 @@ void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groun
         rot = glm::angleAxis(std::atan2(-dir.x, -dir.y), glm::vec3(0.0f, 1.0f, 0.0f));
     }
     // GRID: every placement snaps (extractors snap the node's position too) and occupied cells
-    // refuse — validated HERE, the MP seam, not just at aim time. A CROSSING goes through
+    // refuse - validated HERE, the MP seam, not just at aim time. A CROSSING goes through
     // planCrossing instead: its END cells may hold own-medium cables, which it REPLACES (below,
     // right before the spawn, so the cells are free when insertCells runs).
     const glm::vec3 snappedGround = snapToGrid(type, groundPos);
@@ -290,11 +290,11 @@ void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groun
     else
         crossing.valid = cellsFree(type, snappedGround, rot);
     if (!crossing.valid || actorInFootprint(type, snappedGround))
-        return; // overlap raced the ghost — silently refused (it already showed red)
+        return; // overlap raced the ghost - silently refused (it already showed red)
     if (type == EStructureType::Extractor)
     {
         if (nodeIndex < 0 || nodeIndex >= (int)m_nodes.size() || m_nodes[nodeIndex].extracted)
-            return; // two same-frame requests for one node race — validated at apply
+            return; // two same-frame requests for one node race - validated at apply
     }
     const glm::vec3 pos = snappedGround + glm::vec3(0.0f, spawnHeightOf(type), 0.0f);
     if (type == EStructureType::Lance)
@@ -321,7 +321,7 @@ void StructureSystem::placeStructure(EStructureType type, const glm::vec3& groun
         if (id != 0)
             if (const int idx = structureIndexById(id); idx >= 0)
                 destroyStructureAt((size_t)idx);
-    // CHEAT ("Free instant build", Synced — the server's value rules): skip the blueprint phase.
+    // CHEAT ("Free instant build", Synced - the server's value rules): skip the blueprint phase.
     const int index = spawnStructure(m_nextStructureId++, type, pos, rot, team,
         /*built*/ m_cheatInstantBuild, type == EStructureType::Extractor ? nodeIndex : -1);
     if (index >= 0 && onStructurePlaced)
@@ -383,7 +383,7 @@ int StructureSystem::cableSegmentAt(int cx, int cz, bool builtOnly) const
     const auto it = m_cells.find(cellKey(cx, cz));
     if (it == m_cells.end())
         return -1;
-    // The under-cable stands in when a crossing bridges the cell — which is also what keeps a
+    // The under-cable stands in when a crossing bridges the cell - which is also what keeps a
     // crossing from unioning with the cable passing under it (the crossing itself is not a cable).
     for (const uint32 id : { it->second.id, it->second.underId })
     {
@@ -451,7 +451,7 @@ StructureSystem::CrossingPlan StructureSystem::planCrossing(EStructureType type,
             blocked = !isBridgeable(occIdx, cx, cz);
             return;
         }
-        // An END: only this crossing's OWN medium as a plain cable, own team — that segment is
+        // An END: only this crossing's OWN medium as a plain cable, own team - that segment is
         // redundant under the end and gets replaced. Anything else blocks.
         if (cableMediumOf(m_frame[occIdx].type) == medium && m_frame[occIdx].state->team == team)
             plan.replace[replaceCount++] = entry.id;

@@ -77,7 +77,7 @@ namespace
 
     // Overwrites each animated node's local transform with the value at the start of its animation track.
     // FBX commonly leaves an animated node's mTransformation at a default (often the origin) and stores its
-    // real placement in the animation channels — so an unskinned mesh on such a node spawns in the wrong
+    // real placement in the animation channels - so an unskinned mesh on such a node spawns in the wrong
     // place. Baking frame 0 into mTransformation fixes static (unskinned) placement. Each FBX pivot
     // sub-node ($AssimpFbx$_Translation/Rotation/Scaling) is its own channel, so baking per node and letting
     // the graph walk multiply them reconstructs the correct composed pose. Skinned bones are unaffected:
@@ -143,9 +143,9 @@ bool SceneData::initialize(const char* filePath, bool mergeNodes, bool preTransf
         optimizationFlags |= aiProcess_LimitBoneWeights | aiProcess_PopulateArmatureData;
     //aiProcess_MakeLeftHanded
     // JoinIdenticalVertices is load-bearing: FBX exports commonly arrive as unindexed triangle soup
-    // (every triangle carries 3 unique vertices — Bistro is ~3.5x duplicated). Welding restores real
+    // (every triangle carries 3 unique vertices - Bistro is ~3.5x duplicated). Welding restores real
     // connectivity, without which meshopt_simplify treats every vertex as complex and LOD generation
-    // stalls at level 0 — and it cuts vertex memory by the same factor.
+    // stalls at level 0 - and it cuts vertex memory by the same factor.
     m_pScene = m_importer.ReadFile(filePath, aiProcess_Triangulate | aiProcess_JoinIdenticalVertices | aiProcess_GenNormals | aiProcess_FlipUVs | aiProcess_GenBoundingBoxes | aiProcess_CalcTangentSpace | optimizationFlags);
     if (!m_pScene)
     {

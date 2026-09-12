@@ -6,9 +6,9 @@ import Entity;
 import :Structures;
 
 // THE NETWORK REBUILD (see Structures.ixx, "CELL OCCUPANCY + DERIVED LINKS"): from the cell hash
-// to the flat transport graph Transport.cpp ticks — union-find over the built segments, crossing
+// to the flat transport graph Transport.cpp ticks - union-find over the built segments, crossing
 // conduction, building attachment and bridging, the run-contiguous node layout with CSR edges and
-// the port slots — plus the cable arm visuals that follow the same adjacency.
+// the port slots - plus the cable arm visuals that follow the same adjacency.
 
 void StructureSystem::rebuildNetworks()
 {
@@ -51,8 +51,8 @@ void StructureSystem::rebuildNetworks()
                 unite(i, n);
 
     // 2) CROSSINGS conduct THEIR OWN MEDIUM ONLY: each BUILT crossing resolves what sits just
-    //    beyond its two END cells along its axis — a cable run, an already-conducting crossing, or
-    //    a building — and ignores everything of another medium. Runs of its medium on both ends
+    //    beyond its two END cells along its axis - a cable run, an already-conducting crossing, or
+    //    a building - and ignores everything of another medium. Runs of its medium on both ends
     //    union through it; a run on one end and a building holding that medium on the other
     //    attaches the building. A fixpoint loop serves crossing chains.
     // Each END accepts connections from THREE sides: straight out along the axis plus the two
@@ -152,7 +152,7 @@ void StructureSystem::rebuildNetworks()
     }
 
     // 3) Building attachment: every run cell's 4-neighbours that hold a building with capacity in
-    //    the run's medium (blueprint buildings pre-wire — the flow already gates on their flag).
+    //    the run's medium (blueprint buildings pre-wire - the flow already gates on their flag).
     //    Collected as raw (seg slot, building) pairs first: the bridge step below still unions.
     oc::vector<oc::pair<int, int>> attachPairs; // (seg slot, building frame index)
     for (int i = 0; i < (int)segs.size(); ++i)
@@ -169,10 +169,10 @@ void StructureSystem::rebuildNetworks()
     for (const auto& [segSlot, buildingIdx] : crossAttach)
         attachPairs.push_back({ segSlot, buildingIdx });
 
-    // 3b) BUILDINGS BRIDGE: a BUILT building conducts every medium it holds — two same-medium runs
+    // 3b) BUILDINGS BRIDGE: a BUILT building conducts every medium it holds - two same-medium runs
     //     touching it merge into one (a power line with an emitter cut into the middle carries
     //     through), exactly like a cable cell would. Buildings still never connect DIRECTLY to
-    //     each other (adjacency alone derives nothing — a link always needs cable in between), and
+    //     each other (adjacency alone derives nothing - a link always needs cable in between), and
     //     a BLUEPRINT building does not bridge (consistent with blueprint cables breaking the
     //     path), though it still attaches to each run for the pre-wire.
     {
@@ -188,7 +188,7 @@ void StructureSystem::rebuildNetworks()
         }
     }
 
-    // 3c) Bucket the attachments by the FINAL union roots (dedup — several pairs can name the same
+    // 3c) Bucket the attachments by the FINAL union roots (dedup - several pairs can name the same
     //     building through different segments).
     oc::unordered_map<int, oc::vector<int>> runBuildings; // union root -> building frame indices
     for (const auto& [segSlot, buildingIdx] : attachPairs)
@@ -202,7 +202,7 @@ void StructureSystem::rebuildNetworks()
     }
 
     // 4) THE TRANSPORT GRAPH. Nodes, run-contiguous: every built segment, every conducting
-    //    crossing, and one JUNCTION per (built building, medium) that bridges — the building's
+    //    crossing, and one JUNCTION per (built building, medium) that bridges - the building's
     //    port. Edges: segment 4-adjacency, crossing <-> the run members at its ends, junction <->
     //    every segment/crossing touching the building. Slots (the ports) hang on the junctions;
     //    a BLUEPRINT building gets no node and no slot (it flows nothing) but is still stamped
@@ -322,7 +322,7 @@ void StructureSystem::rebuildNetworks()
             }
         }
     }
-    // Junction edges: every attachment pair (segment/crossing end, building) of a BUILT building —
+    // Junction edges: every attachment pair (segment/crossing end, building) of a BUILT building -
     // AND every pair of conductors touching the same building, so a line THROUGH a building
     // bridges cable-to-cable. The junction itself is a pure port: it accepts cells only while a
     // slot on it wants some, so nothing ever parks in (or relays through) a producer's port.
@@ -341,7 +341,7 @@ void StructureSystem::rebuildNetworks()
         if (m_frame[buildingIdx].state->blueprint)
             continue;
         // The crossing that attached this building: the one whose union member is segSlot and
-        // whose end touches the building — scan is fine, crossings are few.
+        // whose end touches the building - scan is fine, crossings are few.
         const uint64 key = (uint64)buildingIdx << 2 | segs[segSlot].medium;
         const auto it = junctionOf.find(key);
         for (int c = 0; c < (int)crossings.size(); ++c)
@@ -420,7 +420,7 @@ void StructureSystem::updateArms(const Ref& s)
         if (!s.arms[a])
             continue;
         // An arm shows toward anything the segment VISUALLY joins: a same-medium cable (blueprint
-        // included — adjacency, not conduction), a same-medium crossing, or a building holding
+        // included - adjacency, not conduction), a same-medium crossing, or a building holding
         // the medium.
         bool on = false;
         const int nx = cx + dirs[a].x, nz = cz + dirs[a].y;
@@ -429,7 +429,7 @@ void StructureSystem::updateArms(const Ref& s)
             on = true;
         else if (const auto it = m_cells.find(cellKey(nx, nz)); it != m_cells.end())
         {
-            // A same-medium crossing — on top, or an end bridged under another crossing's middle.
+            // A same-medium crossing - on top, or an end bridged under another crossing's middle.
             for (const uint32 id : { it->second.id, it->second.underId })
                 if (const int idx = id != 0 ? structureIndexById(id) : -1;
                     idx >= 0 && crossingMediumOf(m_frame[idx].type) == medium)

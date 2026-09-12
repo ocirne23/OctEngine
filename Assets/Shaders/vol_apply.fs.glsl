@@ -27,7 +27,7 @@ layout (location = 0) out vec4 out_color;
 // The fog volume itself is built once for the centre view, sampled here at each eye's reconstructed world pos.
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 
-// (fog base world Y, terrain height) at worldXZ — the terrain-follow datum vol_scatter builds per froxel,
+// (fog base world Y, terrain height) at worldXZ - the terrain-follow datum vol_scatter builds per froxel,
 // with the macro altitude weighted by `follow` (0 = the layer sits at sea level).
 vec2 volFarFieldGround(vec2 worldXZ, float follow)
 {
@@ -44,7 +44,7 @@ vec2 volFarFieldGround(vec2 worldXZ, float follow)
 // profile is tracked.
 //
 // Terrain follow and the regional fields both FADE OUT along the ray. They are local properties, while the
-// tail past the march is unbounded and inherits the last sub-segment — at full strength one sample governs
+// tail past the march is unbounded and inherits the last sub-segment - at full strength one sample governs
 // an infinite integral, so a zero-fog region erases the horizon along its azimuth and a high macro altitude
 // puts the base above the ray, filling the sky over that spot with a column of fog. Full weight at t0 keeps
 // the seam with the froxel volume exact; by `reach` both have settled to the global medium at sea level.
@@ -149,7 +149,7 @@ void main()
     // Texel z of the integrated volume stores the fog state at slice z's FAR edge, so the matching
     // texture coordinate sits half a slice below the continuous slice coordinate (texel centers are at
     // +0.5). Sampling without that shift read fog from half a slice too deep and anchored the linear
-    // reconstruction between slices wrong — one source of view-aligned fog banding.
+    // reconstruction between slices wrong - one source of view-aligned fog banding.
     const float s = volViewZToSlice(viewZ) * float(VOL_FROXEL_Z); // continuous slice index
     // Per-pixel interleaved-gradient dither (+-half a slice, rotated per frame): breaks the residual
     // Mach banding of the piecewise-linear reconstruction into noise below TAA's threshold.

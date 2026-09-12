@@ -34,12 +34,12 @@ void Time::beginFrame(bool windowFocused, bool vr, bool vsync, float displayRefr
     const int targetFps = vr ? 0 : (windowFocused || m_inactiveMaxFps <= 0 ? m_maxFps : m_inactiveMaxFps);
     const bool capped = targetFps > 0;
 
-    // The frame starts at whichever comes LAST: the limiter's desired end (capped) or the fence signal. Kick the pump a lead before the earliest of the two we can predict — the desired end is exact, the fence is predicted as raw last start + running MIN interval (FIFO unblocks early on alternate frames)
+    // The frame starts at whichever comes LAST: the limiter's desired end (capped) or the fence signal. Kick the pump a lead before the earliest of the two we can predict - the desired end is exact, the fence is predicted as raw last start + running MIN interval (FIFO unblocks early on alternate frames)
     const Clock::time_point desiredFrameEnd = capped ? lastFrameStart + secondsToDuration(1.0 / targetFps) : Clock::time_point::max();
     const Clock::time_point predictedFence = m_lastRawFrameStart + secondsToDuration(m_minFramePeriodSec);
     const Clock::time_point pumpAt = oc::min(desiredFrameEnd, predictedFence) - secondsToDuration(m_pumpLeadMs * 0.001);
     {
-        // Sleep/spin to pumpAt OURSELVES, polling the fence (timeout 0): a driver's finite fence timeout may run "substantially longer than requested" (spec) — NVIDIA's ran to the signal and the kick landed at frame start
+        // Sleep/spin to pumpAt OURSELVES, polling the fence (timeout 0): a driver's finite fence timeout may run "substantially longer than requested" (spec) - NVIDIA's ran to the signal and the kick landed at frame start
         ProfileScope scope("Pump kick wait", EProfileCategory::Wait);
         const Clock::duration spinWindow = secondsToDuration(0.0015);
         for (Clock::time_point now = Clock::now(); now < pumpAt; now = Clock::now())

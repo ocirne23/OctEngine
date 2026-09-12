@@ -9,7 +9,7 @@ public:
 
 	AssetBrowser() {}
 	void initialize();
-	// Refresh stale directory LISTINGS (the panel's only real cost — filesystem enumeration).
+	// Refresh stale directory LISTINGS (the panel's only real cost - filesystem enumeration).
 	// No ImGui: UI::prepare runs it on a job, so the I/O overlaps the frame's other work.
 	void prepare();
 	void render();
@@ -40,12 +40,12 @@ public:
 
 private:
 
-	// CACHED DIRECTORY LISTING. The browser used to enumerate the filesystem every frame — the
+	// CACHED DIRECTORY LISTING. The browser used to enumerate the filesystem every frame - the
 	// current folder once (plus a file_size syscall per row in list view) and, worse, the tree ran
 	// TWO directory_iterator passes per expanded folder, recursively. That was ~1 ms/frame of pure
 	// syscalls. Now each folder is scanned once and re-scanned at most every "RescanIntervalSec"
 	// (files also appear from outside the browser: prefab saves, compiled scripts, cooked assets),
-	// with the rescans running on the prepare job instead of the main thread — and ONLY while the
+	// with the rescans running on the prepare job instead of the main thread - and ONLY while the
 	// Content panel is focused or hovered (m_active): a browser sitting in a background tab has no
 	// reason to touch the disk at all, and the first interaction re-scans what it draws.
 	struct DirEntryInfo
@@ -56,14 +56,14 @@ private:
 		bool isDirectory = false;
 		uint64 size = 0;       // files only, cached (list view drew this with a syscall per row)
 		// Grid view's fitted caption: truncateLabel binary-searches ImGui::CalcTextSize with a
-		// substring allocation per probe — far too much to redo per item per frame. Cached against
+		// substring allocation per probe - far too much to redo per item per frame. Cached against
 		// the width it was fitted to (the icon-size slider changes it).
 		oc::string display;
 		float displayWidth = -1.0f;
 	};
 	struct DirListing
 	{
-		oc::vector<DirEntryInfo> entries; // directories first, then by name — the draw order
+		oc::vector<DirEntryInfo> entries; // directories first, then by name - the draw order
 		bool hasSubDirs = false;
 		double lastScanSec = -1.0;
 		uint64 touchedFrame = 0; // last frame a render actually read this listing

@@ -22,7 +22,7 @@ export namespace Procedural::Diffusion
 	{
 	public:
 		FloatTensor() = default;
-		// Zero-initialised — the accumulate semantics of addFrom depend on it.
+		// Zero-initialised - the accumulate semantics of addFrom depend on it.
 		explicit FloatTensor(oc::span<const int32> shape);
 
 		int32 ndim() const { return (int32)m_shape.size(); }
@@ -44,7 +44,7 @@ export namespace Procedural::Diffusion
 
 	// The affine map from a window index to the pixel bounds it covers:
 	//     bounds[d] = [i[d]*stride[d] + offset[d], i[d]*stride[d] + offset[d] + size[d])
-	// Windows OVERLAP when stride < size, which is the whole point — the overlap is what gets blended.
+	// Windows OVERLAP when stride < size, which is the whole point - the overlap is what gets blended.
 	class TensorWindow
 	{
 	public:

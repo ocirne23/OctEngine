@@ -127,7 +127,7 @@ void SceneView::renderEntityNode(Entity* entity, bool ancestorLocked)
 		++pushedColors;
 	}
 	// A locked prefab instance can't receive a dragged entity, so suppress its hover highlight while an
-	// entity is being dragged — otherwise the highlight wrongly suggests it's a valid drop target.
+	// entity is being dragged - otherwise the highlight wrongly suggests it's a valid drop target.
 	if (locked)
 		if (const ImGuiPayload* dnd = ImGui::GetDragDropPayload(); dnd && dnd->IsDataType("SV_ENTITY"))
 		{
@@ -224,7 +224,7 @@ void SceneView::renderContextMenu(Entity* entity, bool locked)
 	m_selected = EntityPtr(entity);
 
 	// An entity can be edited as a whole (renamed/deleted) unless it's an internal part of a locked
-	// prefab instance — i.e. only when its parent isn't itself locked.
+	// prefab instance - i.e. only when its parent isn't itself locked.
 	const bool canEdit = (entity->parent == nullptr) || !entity->parent->isPrefabLocked();
 
 	if (locked)
@@ -296,7 +296,7 @@ void SceneView::applyPendingMutations()
 
 void SceneView::render(const oc::vector<EntityPtr>& rootEntities)
 {
-	// Keyboard shortcuts (F2 rename, Delete) must only act when this panel owns focus — otherwise pressing
+	// Keyboard shortcuts (F2 rename, Delete) must only act when this panel owns focus - otherwise pressing
 	// Delete while editing a script in the Node editor would still delete the hierarchy selection. Capture it
 	// here (before BeginChild) so RootAndChildWindows covers the tree's child window too.
 	m_panelFocused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);

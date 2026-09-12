@@ -77,7 +77,7 @@ static void pushMust(MPMCQueue<T>& queue, const T& value)
 static constexpr uint32 c_logicalWorkerCoreMax = 16;
 
 // PHYSICAL cores via RelationProcessorCore (one record per core, however many logical CPUs it
-// carries). 0 on failure — the caller falls back to a logical-count guess.
+// carries). 0 on failure - the caller falls back to a logical-count guess.
 static uint32 physicalCoreCount()
 {
     DWORD bytes = 0;
@@ -658,7 +658,7 @@ void JobSystem::wait(JobCounter& counter)
     if (counter.isDone()) // fast path stays marker-free: most waits return immediately
         return;
     WorkerContext* ctx = t_worker;
-    // The scope is named after the job the counter last counted (JobCounter::label) — the
+    // The scope is named after the job the counter last counted (JobCounter::label) - the
     // profiler then says WHAT was waited for; a counter that never had a job keeps "Job wait".
     const char* waitName = counter.label ? counter.label : "Job wait";
     if (ctx && ctx->currentFiber)
@@ -846,7 +846,7 @@ void JobSystem::helpWait(JobCounter& counter, WorkerContext& ctx)
 {
     const bool mayExecute = t_helpDepth < MaxHelpDepth;
     // With a job frame already OPEN on this non-fiber stack (depth >= 1), a ForeignWait job may
-    // wait on exactly that suspended job's counter — executing it here wedges the whole stack
+    // wait on exactly that suspended job's counter - executing it here wedges the whole stack
     // (the suspended job can only finish when the frames above it return, and the frame above
     // would be waiting on it). Observed live: the window thread ran a UI prepare job, its
     // parallelFor wait helped into UI::updateJob, whose first act waits on the prepare counter.

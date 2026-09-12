@@ -28,7 +28,7 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     ViewData u_views[3];
     vec4 u_frustumPlanes[6];
     vec3 u_sunTransmittance; // atmosTransmittanceToLight(0, sun, up) evaluated ONCE per frame on the CPU
-                             // (Renderer::buildUboSky) — the lit shaders' sun term reads it instead of
+                             // (Renderer::buildUboSky) - the lit shaders' sun term reads it instead of
                              // running the Chapman function per pixel
     float u_betaMie;       // Mie scattering coefficient at sea level (1/m), drives sky + indirect sky light
 
@@ -47,10 +47,10 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     float u_rtSunShadow;   // > 0.5: ray-traced sun shadows instead of PCSS cascades
 
     mat4 u_cascadeViewProj[NUM_SHADOW_CASCADES];
-    vec4 u_sceneFocus;   // xyz = the SCENE FOCUS every distance-based quality falloff measures from — the sun cascade
+    vec4 u_sceneFocus;   // xyz = the SCENE FOCUS every distance-based quality falloff measures from - the sun cascade
                          // pick, the RTAO fade/early-out (the game's player; the camera position otherwise), w unused
     vec4 u_cascadeSunSizeTexels; // per cascade: PCF disk radius (texels) per unit of normalized depth gap, CPU-computed
-                                 // (Renderer::buildUboSunShadow) — see shadows.inc.glsl pcssSunSizeTexels
+                                 // (Renderer::buildUboSunShadow) - see shadows.inc.glsl pcssSunSizeTexels
     vec3 u_shadowParams; // x = depth bias, y = normal bias (texels), z = 1/resolution
     float u_sunShadowRays; // RT sun shadow rays per pixel (1 = single jittered ray)
 
@@ -133,7 +133,7 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                             // w = breaking-crest foam threshold (downward crest accel in g units)
     vec4 u_oceanParams6;    // x = far-cascade land-cull error allowance (m; flat burial slack the cull
                             //     demands when only far terrain data covers the footprint, 0 = never cull
-                            //     from far data — moved here from the removed params10),
+                            //     from far data - moved here from the removed params10),
                             // y = glint variance filter scale (spec AA + LEAN roughness),
                             // z = crest SSS strength (0 = off), w = crest SSS forward-lobe power
     vec4 u_oceanParams7;    // x = land cull margin (m): clipmap triangles whose whole footprint is
@@ -141,7 +141,7 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                             // (oceanVertexCulled; 0 = off),
                             // y = shore foam max coverage (surf band opacity cap),
                             // z = swash amplitude (scale on the un-shoaled wave height running up the
-                            // beach, 0 = off), w = swash reach (m; CPU estimate of max run-up height —
+                            // beach, 0 = off), w = swash reach (m; CPU estimate of max run-up height -
                             // sizes the land sampling band and relaxes the vertex cull)
     vec4 u_oceanParams8;    // x unused (was the swash drawdown of the removed waterline floor),
                             // y = shore foam threshold bias (shifts the surf fold threshold:
@@ -155,12 +155,12 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                             // z = RT reflection ray range (m),
                             // w = RT reflection roughness cutoff (rougher pixels skip the mirror ray)
     vec4 u_oceanParams10;   // x unused (was the breaking limit, removed: the swash amplitude alone shapes
-                            // the shore — oceanSurfaceWeight),
+                            // the shore - oceanSurfaceWeight),
                             // y = spectrum clock rate (sqrt(world scale): holds the model sea's periods), zw unused
     vec4 u_terrainParams;   // x = streamed terrain mesh coverage radius (m, radial from camera XZ;
-                            // 0 = no terrain mesh up — fences the ocean land cull),
+                            // 0 = no terrain mesh up - fences the ocean land cull),
                             // y = temperature lapse rate, C per WORLD metre above sea level (<= 0; pairs
-                            //     with the climate pack's baked sea-level baseline — terrainTemperatureAt),
+                            //     with the climate pack's baked sea-level baseline - terrainTemperatureAt),
                             // z = sea level (world Y, live from the streamer), w unused
     vec4 u_terrainShadowParams; // long-range sun shadows marched off the terrain height cascades, for the
                             // ground the cascades and the TLAS cannot reach:
@@ -217,7 +217,7 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                               // FFT wave normal), w = virtual water depth (m) the ground is tinted
                               // through (Beer-Lambert + in-scatter)
     vec4 u_terrainWetParams7; // x = linear dry this frame (dry rate x dt: the constant part of the drain,
-                              // next to the proportional exp(-dt / dry time) — together rain settles at
+                              // next to the proportional exp(-dt / dry time) - together rain settles at
                               // dryTime x (rain - dryRate)),
                               // y = live-surface margin (m): the film + gloss stay on ground up to this far
                               //     below the estimated live surface (it sits under the drawn ocean edge), zw unused
@@ -247,7 +247,7 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec4 u_forceBake0;   // sampled shell tier: xyz = bake volume world min, w = tier reach threshold
     vec4 u_forceBake1;   // xyz = 1 / bake volume world size, w = tier enabled (0/1)
     vec4 u_forceBake2;   // x = union march step size (m), y = union march max steps,
-                         // z = px per (radius/dist) — the union march's distance LOD, w unused
+                         // z = px per (radius/dist) - the union march's distance LOD, w unused
 };
 
 // View index selecting which u_views[] entry the convenience macros / reconstruction helpers read. Defaults

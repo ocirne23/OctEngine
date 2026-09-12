@@ -45,7 +45,7 @@ export struct HudCounter
 
 // World-anchored UI element (a health bar / info block over an entity). Gameplay PRE-PROJECTS the
 // world position into viewport pixels (Camera::worldToScreen) and replaces the whole list every
-// frame — no keys, no persistence; off-screen entities are simply not submitted.
+// frame - no keys, no persistence; off-screen entities are simply not submitted.
 export struct HudWorldLabel
 {
 	glm::vec2   screenPos{};      // viewport-space anchor: bar centered on x, stacked down from y
@@ -121,7 +121,7 @@ public:
 		m_slots[index].count = glm::max(count, 0);
 		m_slots[index].used = true;
 		// (the hover card is NOT cleared here: gameplay re-states it right after, and dropping it
-		//  first would make every re-state a fresh allocation — clearSlot is what wipes a slot)
+		//  first would make every re-state a fresh allocation - clearSlot is what wipes a slot)
 	}
 
 	// The slot's hover card (see HudSlot::tooltip). Unchanged text is a no-op, so a hotbar that
@@ -208,7 +208,7 @@ public:
 	}
 
 	// Replaces the popup (per-frame rebuild; an inactive one clears it). A SWAP: the caller gets
-	// the previous popup back — the buttons vector keeps its capacity across frames (clear() it).
+	// the previous popup back - the buttons vector keeps its capacity across frames (clear() it).
 	void swapPopup(HudPopup& popup)
 	{
 		const std::lock_guard lock(m_mutex);

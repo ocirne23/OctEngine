@@ -26,7 +26,7 @@ import :Structures;
 import :Npc;
 
 // The orchestrator's CORE: construction, the world spawn, the three frame entry points, the nav
-// feed, the player ticks and the HUD. The rest of GameMatch is split by topic — see the file list
+// feed, the player ticks and the HUD. The rest of GameMatch is split by topic - see the file list
 // at the end of Match.ixx.
 
 GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
@@ -88,7 +88,7 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
         Tweak::floatVar("Game/Sim LOD", "Unit cluster focus radius", &m_focusClusterRadius, 5.0f, 200.0f, 1.0f, {}, ETweakFlags::None);
         Tweak::intVar("Game/Coop", "Spawns per frame", &m_spawnsPerFrame, 1, 200, 1);
         // Map generation inputs, read once at generation on the AUTHORITY. Clients never read
-        // them: the values actually used ride the GMp event (and the save) with the seed — a
+        // them: the values actually used ride the GMp event (and the save) with the seed - a
         // joiner's tweak sync lands after the world replay, too late to drive generation.
         Tweak::intVar("Game/Coop", "Map seed", &m_mapSeedTweak, 0, 0x7fffffff, 1);
         Tweak::floatVar("Game/Coop", "Terrain fill", &m_terrainFill, 0.0f, 0.6f, 0.02f);
@@ -108,15 +108,15 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
     m_structures.registerTweaks();
     m_npcs.registerTweaks();
     Globals::navSystem.initialize(); // "Nav" tweaks + density staging (job system is up by now)
-    // Co-op: players share team 0, the AI is team 1 — the force shaders/bakes shrink to fit. PvP
+    // Co-op: players share team 0, the AI is team 1 - the force shaders/bakes shrink to fit. PvP
     // sets the default cap EXPLICITLY: exit-to-menu can chain a co-op session into a PvP one in
     // the same process, so the previous mode's count must never linger (a no-op when unchanged).
     Globals::forceSystem.setNumTeams(m_coop ? 2 : 8);
 
     // The structure roster replaces every world-wide spatial query for structures: it deregisters
     // through this ONE notification, which every removal path funnels into (destroy requests,
-    // editor deletes, network despawns). Units and projectiles have no roster — the World's root
-    // list is walked instead (NpcSystem::queryAllUnits). Cleared in ~GameMatch — the world
+    // editor deletes, network despawns). Units and projectiles have no roster - the World's root
+    // list is walked instead (NpcSystem::queryAllUnits). Cleared in ~GameMatch - the world
     // outlives this object.
     Globals::world.setOnRootEntityRemoved([this](const Entity* entity)
     {
@@ -138,7 +138,7 @@ GameMatch::GameMatch(bool enabled, bool coop) : m_coop(coop), m_enabled(enabled)
 
     m_mouse = Globals::input.addMouseListener();
     // MIDDLE-drag yaws the camera. RMB cannot: holding it steers the player (RTS move order), and
-    // a held button cannot mean two things at once — Q/E remain the keyboard yaw.
+    // a held button cannot mean two things at once - Q/E remain the keyboard yaw.
     m_mouse->onMouseMoved = [this](const SDL_MouseMotionEvent& evt)
     {
         const glm::vec2 pos(float(evt.x), float(evt.y));
@@ -190,7 +190,7 @@ GameMatch::~GameMatch()
     Globals::jobSystem.wait(m_labelsCounter); // the labels job reads this object
     Globals::rendererVK.clearSceneFocus(); // back to camera-based cascades and RTAO falloff for the sandbox/menu
     // The ctor's top-down preset off again. The debug mode stays as it is NOW: it is a baked shader
-    // define, and only its tweak callback reloads the pipeline — a silent write would desync the two.
+    // define, and only its tweak callback reloads the pipeline - a silent write would desync the two.
     ShadowParams restored = m_sandboxShadowParams;
     restored.debugMode = Globals::rendererVK.shadowParams().debugMode;
     Globals::rendererVK.setShadowParams(restored);
@@ -203,7 +203,7 @@ GameMatch::~GameMatch()
     // The WHOLE World is wiped below (NpcSystem::clear): every holder drops its EntityPtrs FIRST,
     // so the World's batch release is the last reference to everything and the teardown fans out
     // over the job system. StructureSystem::clear also resets its tables (and joins the transport
-    // job, which holds component pointers) — its per-entity removals just find the roots still
+    // job, which holds component pointers) - its per-entity removals just find the roots still
     // there.
     m_structures.clear();
     m_player.despawn();
@@ -223,7 +223,7 @@ void GameMatch::spawnWorld()
     m_isClient = Globals::networkManager.role() == ENetRole::Client;
     if (m_coop)
     {
-        // CO-OP: its own OPEN world — one shared Base at the center of a big wall-less map (the
+        // CO-OP: its own OPEN world - one shared Base at the center of a big wall-less map (the
         // corridor and its border ring are PvP-only). Waves come from any compass direction.
         m_basePos = glm::vec3(0.0f);
         m_playerStart = glm::vec3(0.0f, 1.0f, -6.0f);
@@ -238,7 +238,7 @@ void GameMatch::spawnWorld()
         Globals::world.addRootEntity(m_ground);
     }
 
-    // NOTE: no setOnGameEvent here — main.cpp owns the single dispatcher (lobby + game routing)
+    // NOTE: no setOnGameEvent here - main.cpp owns the single dispatcher (lobby + game routing)
     if (m_isServer)
     {
         // Structure changes broadcast to the client mirrors; only Gq* requests may come FROM clients.
@@ -268,7 +268,7 @@ void GameMatch::spawnWorld()
             if (const int index = m_structures.structureIndexById(id); index >= 0)
                 sendUnitType(index);
         };
-        // (+ the text chat "ChM" — a string up to 256B; ChatSystem::c_maxEventBytes, Game:Chat)
+        // (+ the text chat "ChM" - a string up to 256B; ChatSystem::c_maxEventBytes, Game:Chat)
         Globals::networkManager.setEventFilter([](uint32, oc::string_view name, oc::span<const uint8> data, Entity*)
         {
             return (name.size() >= 2 && name[0] == 'G' && name[1] == 'q' && data.size() <= 64)
@@ -283,7 +283,7 @@ void GameMatch::spawnWorld()
         // The generated co-op map (terrain + barrier + nodes): the AUTHORITY rolls the seed and
         // builds now; a CLIENT builds the identical set locally when the server's GMp event
         // delivers the seed (first thing in its join replay). Placement bounds = inside the
-        // barrier either way — cellsFree needs them before the map lands.
+        // barrier either way - cellsFree needs them before the map lands.
         m_structures.setPlacementBounds(glm::vec2(-c_coopHalfSize), glm::vec2(c_coopHalfSize));
         if (!m_isClient)
         {
@@ -297,7 +297,7 @@ void GameMatch::spawnWorld()
     {
         // PvP ARENA: rock terrain + nodes from the lobby's map pick (setPvpMap). The AUTHORITY
         // builds now; a CLIENT builds the identical layout when the server's GMp event names the
-        // arena (first in its join replay) — nodes included, so extractor node indices agree.
+        // arena (first in its join replay) - nodes included, so extractor node indices agree.
         // Until then the Lane's bounds stand in (cellsFree needs some before the map lands).
         if (!m_isClient)
             rebuildPvpMap(m_pvpMap);
@@ -371,13 +371,13 @@ void GameMatch::spawnWorld()
               "(Combat/Production/Cables), X = delete, C = cancel. Cables are physical: paint "
               "(press + drag) a run between buildings to connect them");
     if (m_coop)
-        Log::info("CO-OP: defend the central Base — swarm waves attack periodically, and the map "
+        Log::info("CO-OP: defend the central Base - swarm waves attack periodically, and the map "
                   "is crawling with scattered enemies to clear as you expand");
 }
 
 // ---- the frame ---------------------------------------------------------------------------------
 
-// Pre-physics, before the spatial/begin-frame kicks — ONLY the player body writes (see Match.ixx).
+// Pre-physics, before the spatial/begin-frame kicks - ONLY the player body writes (see Match.ixx).
 void GameMatch::updatePlayer(float deltaSec)
 {
     if (!m_enabled)
@@ -405,7 +405,7 @@ void GameMatch::update(float deltaSec)
     // SIM LOD focus = every player: our capsule plus (server) each client's twin, so a unit is
     // never throttled near ANY player. Published before world.update reads it (main.cpp order).
     // PLUS FRIENDLY UNIT CLUSTERS: combat only runs inside the selection, so an army fighting far
-    // from every player — and the enemies around it — would otherwise be dormant. Greedy clusters
+    // from every player - and the enemies around it - would otherwise be dormant. Greedy clusters
     // over the non-AI units, refreshed every 0.25 s (the selection tolerates a frame of staleness
     // anyway): a unit farther than "Unit cluster focus radius" from every focus point seeds a new
     // one, up to the focus cap; the remaining slots go to the first clusters found in World root
@@ -447,7 +447,7 @@ void GameMatch::update(float deltaSec)
             }
             // The base fields as ZONES (tier 1 + band): the structures are Global (always ticking,
             // fields always projected), but a unit in their field beyond every focus point was
-            // unselected — teleported by the far tick straight through the barrier.
+            // unselected - teleported by the far tick straight through the barrier.
             m_fieldZones.clear();
             m_structures.collectShieldBubbles(m_fieldZones, World::MaxSimLodZones);
             Globals::world.setSimLodZones(m_fieldZones.data(), (uint32)m_fieldZones.size());
@@ -461,7 +461,7 @@ void GameMatch::update(float deltaSec)
     if (m_isClient)
     {
         // Our team is the SERVER's assignment, carried on our capsule's puppet component by the
-        // snapshot game blob (never derived from the clientId — see allocateClientTeam). It lands
+        // snapshot game blob (never derived from the clientId - see allocateClientTeam). It lands
         // a snapshot or two after adoption; follow it whenever it changes.
         if (m_player.team() != m_team)
         {
@@ -494,7 +494,7 @@ void GameMatch::update(float deltaSec)
     }
     tickPlayerMelee(deltaSec);
 
-    // (No player-target publish step: units find enemy players — puppet GameUnitComponents —
+    // (No player-target publish step: units find enemy players - puppet GameUnitComponents -
     // through the same spatial queries as structures, and damage them through the same damage().)
 
     // MATERIALS loop (server-authoritative for every player): refill the carried inventory from
@@ -511,7 +511,7 @@ void GameMatch::update(float deltaSec)
         float serverMaterials = m_player.materials();
         tickPlayerMaterials(playerPos, (uint8)m_team, serverMaterials);
         m_player.setMaterials(serverMaterials);
-        // Client twins: the puppet component IS the store — materialsFrac holds the
+        // Client twins: the puppet component IS the store - materialsFrac holds the
         // server-authoritative inventory (the snapshot game blob carries it back to the owner),
         // so it dies with the capsule and no clientId-keyed map exists. Team is stamped here too:
         // claims never apply it (client-forgeable), and units read it straight off the component.
@@ -552,7 +552,7 @@ void GameMatch::update(float deltaSec)
     }
 
     // Flow fields: obstacles + per-team sources staged for the NEXT frame's NavSystem::update
-    // (which runs in main.cpp's kick/join window, BEFORE this bulk tick — one frame of source
+    // (which runs in main.cpp's kick/join window, BEFORE this bulk tick - one frame of source
     // latency, well inside nav's own async tolerances). The gather is a post-update job.
     submitNavFeed(deltaSec);
 
@@ -565,7 +565,7 @@ void GameMatch::update(float deltaSec)
             m_statTimer = 0.2f; // ~5 Hz volatile-state mirror
         }
         ProfileScope damageScope("Damage flush", EProfileCategory::Game);
-        // GDm: damage banked on the client twins' puppet inboxes (unit melee, projectile hits —
+        // GDm: damage banked on the client twins' puppet inboxes (unit melee, projectile hits -
         // the same damage() call every victim gets) is owed to each owner, whose GamePlayer runs
         // the shield-absorb rules (health is owner-computed). The component inbox accumulates
         // between flushes, so no clientId-keyed map is needed. Our own capsule's inbox drains in
@@ -608,7 +608,7 @@ void GameMatch::update(float deltaSec)
 
 // The nav feed rides the post-update batch: everything it reads is stable once the entity pass is
 // done (rosters change only on main during the tick, positions are the pass's output), and the
-// Nav setters it ends with are legal there too — the batch joins at the top of the next frame,
+// Nav setters it ends with are legal there too - the batch joins at the top of the next frame,
 // before that frame's NavSystem::update, and nothing on main touches Nav during present (the Nav
 // field-step job in the same batch has only the fields). So the change-detect compare and the
 // source copy run on the job as well. Same one-frame latency as the old inline feed, none of it
@@ -625,8 +625,8 @@ void GameMatch::gatherNavFeed(float deltaSec)
 {
     ProfileScope scope("Game nav feed", EProfileCategory::Game);
     // THE UNIT SWEEP IS SLICED: Nav consumes sources once per "Rebuild interval", so the World's
-    // root list (every unit is a root; other roots are skipped) is walked over that many frames —
-    // ceil(n * dt / interval) roots a frame, a constant slice — and the lists publish when the
+    // root list (every unit is a root; other roots are skipped) is walked over that many frames -
+    // ceil(n * dt / interval) roots a frame, a constant slice - and the lists publish when the
     // cursor wraps. Culling (see below) tests each unit against the team cell hash the PREVIOUS
     // cycle built: one interval stale, a metre or two of motion against 64 m cells. Clients (no
     // unit sim) have an empty sweep and publish every frame. The root list only mutates on main,
@@ -635,7 +635,7 @@ void GameMatch::gatherNavFeed(float deltaSec)
     const auto cellKey = [&](const glm::vec3& p) {
         return (uint64)(uint32)(int)glm::floor(p.x / cell) << 32 | (uint32)(int)glm::floor(p.z / cell); };
     // A unit's field is read only by OTHER teams' units within navFollowRadius of it, so a unit
-    // with no other team's unit or player anywhere near contributes nothing but flood area — and
+    // with no other team's unit or player anywhere near contributes nothing but flood area - and
     // thousands of ambient enemies as sources tiled the whole map with the AI team's field. A
     // unit stays a source when the 3x3 cells around it hold another team (reach .. 2x reach).
     const auto otherTeamNear = [&](const glm::vec3& p, uint8 team) {
@@ -703,7 +703,7 @@ void GameMatch::gatherNavFeed(float deltaSec)
         const uint8 breach = s.type == EStructureType::Wall && !s.state->blueprint
             ? (uint8)glm::clamp(m_structures.wallBreachCost(), 1, 254) : (uint8)0;
         m_navObstacles.push_back(Nav::NavObstacle{ c - half, c + half, breach });
-        // Sources: what units of OTHER teams walk toward — the same filter the local search used
+        // Sources: what units of OTHER teams walk toward - the same filter the local search used
         // (alive, not the invulnerable Base). Clients run no unit sim: obstacles only, for the
         // local player's goal field.
         if (m_isClient || s.state->invulnerable || !s.state->alive() || s.state->team >= Nav::MaxTeams)
@@ -712,7 +712,7 @@ void GameMatch::gatherNavFeed(float deltaSec)
             s.entity->pos, glm::max(s.state->meleeRadius, half), s.state->structureId, 0 });
     }
     // Enemy UNITS are targets too (unit-vs-unit combat): the cycle's sliced sweep above collected
-    // them (the NpcSystem roster IS the world-wide unit list — no spatial sweep).
+    // them (the NpcSystem roster IS the world-wide unit list - no spatial sweep).
     for (uint32 t = 0; t < Nav::MaxTeams; ++t)
     {
         m_navSources[t].insert(m_navSources[t].end(), m_navUnitSources[t].begin(), m_navUnitSources[t].end());
@@ -734,7 +734,7 @@ void GameMatch::gatherNavFeed(float deltaSec)
         for (const auto& [id, p] : m_clientPlayers)
             addPlayer(p.get(), requestTeam(id));
     }
-    // The Nav setters (change-detected: a compare per source, a copy on change) — on the job, see
+    // The Nav setters (change-detected: a compare per source, a copy on change) - on the job, see
     // submitNavFeed for why that is legal.
     Globals::jobSystem.preemptionPoint(); // lists complete, publish not started
     {
@@ -750,8 +750,8 @@ void GameMatch::gatherNavFeed(float deltaSec)
 void GameMatch::tickPlayerMelee(float deltaSec)
 {
     // AUTHORITY ONLY (called from the authority branch): units simulate here, so a client-side
-    // hit would be stomped by the next snapshot blob. Every player capsule — the server's own AND
-    // each client twin — grinds adjacent enemy UNITS (never puppets: players fighting players is
+    // hit would be stomped by the next snapshot blob. Every player capsule - the server's own AND
+    // each client twin - grinds adjacent enemy UNITS (never puppets: players fighting players is
     // not a melee aura's job) through the unified GameUnitComponent::damage().
     if (m_meleeDps <= 0.0f || m_meleeRadius <= 0.0f)
         return;
@@ -764,7 +764,7 @@ void GameMatch::tickPlayerMelee(float deltaSec)
             GameUnitComponent* u = getComponent<GameUnitComponent>(other);
             if (!u || u->puppet || u->team == team || !u->alive())
                 return;
-            // The query matches bounding spheres — the melee rule is the CENTER distance (XZ,
+            // The query matches bounding spheres - the melee rule is the CENTER distance (XZ,
             // the same measure the units' own melee probes use).
             const glm::vec2 d = glm::vec2(other->pos.x, other->pos.z) - glm::vec2(pos.x, pos.z);
             if (glm::dot(d, d) <= m_meleeRadius * m_meleeRadius)
@@ -782,7 +782,7 @@ void GameMatch::tickBaseHealing(float deltaSec)
 {
     ProfileScope scope("Base healing", EProfileCategory::Game);
     // Own player only: health is OWNER-computed, so every instance heals its own capsule against
-    // its LOCAL structure mirror (clients hold the Bases through the GPl replay) — no sync needed.
+    // its LOCAL structure mirror (clients hold the Bases through the GPl replay) - no sync needed.
     if (m_baseHealRate <= 0.0f || m_baseHealRadius <= 0.0f || !m_player.entity())
         return;
     const glm::vec3 pos = m_player.bodyPos();
@@ -795,13 +795,13 @@ void GameMatch::tickBaseHealing(float deltaSec)
         if (glm::distance(glm::vec2(pos.x, pos.z), glm::vec2(basePos.x, basePos.z)) <= m_baseHealRadius)
         {
             m_player.heal(m_baseHealRate * deltaSec);
-            return; // one Base is enough — never stack multiple
+            return; // one Base is enough - never stack multiple
         }
     }
 }
 
 // MEDIC STATIONS, the PLAYER half: every BUILT + POWERED own-team medic within "Medic heal radius"
-// heals the own capsule at "Medic heal/s" — HEALTH and the SHIELD BATTERY alike — on EVERY
+// heals the own capsule at "Medic heal/s" - HEALTH and the SHIELD BATTERY alike - on EVERY
 // instance against the local mirror (health/energy are owner-computed; `powered` reaches clients
 // through GSt). One heal per tick however many stations overlap. Units are the component's job.
 void GameMatch::tickMedicHealing(float deltaSec)
@@ -828,7 +828,7 @@ void GameMatch::tickMedicHealing(float deltaSec)
                 break;
             }
     }
-    // (UNITS are healed by the station's own component update in the parallel pass — one spatial
+    // (UNITS are healed by the station's own component update in the parallel pass - one spatial
     // query per powered station, banked into the unit's heal inbox. Nothing to do here.)
 }
 
@@ -856,7 +856,7 @@ void GameMatch::updateHud()
         hud.setCounterText("Time", clock, glm::vec3(0.9f, 0.9f, 0.9f));
         hud.setCounter("Next wave (s)", glm::max(m_waveTimer, 0.0f), 0, glm::vec3(1.0f, 0.45f, 0.3f));
         hud.setCounter("Next wave power", nextWaveBudget(), 0, glm::vec3(1.0f, 0.45f, 0.3f)); // budget points before the alive cap
-        // Live AI bodies against "Max enemy units" — an O(1) roster size, so no caching.
+        // Live AI bodies against "Max enemy units" - an O(1) roster size, so no caching.
         hud.setCounter("AI alive", (float)aiAliveCount(), 0, glm::vec3(1.0f, 0.45f, 0.3f));
     }
 }
@@ -905,7 +905,7 @@ void GameMatch::updateGameInput(const Camera& camera)
                            // and in Build with nothing armed)
 
     // MOVE ORDER (RTS right-click): RMB ALWAYS moves the player. Cancelling rides along on the
-    // same press — disarming a ghost, dropping a Lance/Wall anchor or a picked link endpoint, or
+    // same press - disarming a ghost, dropping a Lance/Wall anchor or a picked link endpoint, or
     // leaving a link tool all happen AND the capsule starts walking, because a cancel that also
     // ate the movement felt like a dropped input. Only the barracks ROUTE waypoint consumes the
     // press (m_rmbConsumed): it is a positive order, not a cancel, and pairing it with a move
@@ -918,7 +918,7 @@ void GameMatch::updateGameInput(const Camera& camera)
         m_rmbUnitsOnly = (SDL_GetModState() & SDL_KMOD_CTRL) != 0;
     if (rmbEdge && !m_rmbConsumed)
     {
-        // Cables/crossings/solars are WALK-THROUGH — an RMB near one is a plain ground order,
+        // Cables/crossings/solars are WALK-THROUGH - an RMB near one is a plain ground order,
         // never a walk-to-its-face building order.
         int hover = hoveredStructure(camera);
         if (hover >= 0 && isWalkThrough(m_structures.structureType(hover)))
@@ -944,7 +944,7 @@ void GameMatch::updateGameInput(const Camera& camera)
         drawCircle(m_player.moveTarget() + glm::vec3(0.0f, 0.15f, 0.0f), 0.6f,
             packColor(glm::vec3(0.3f, 0.95f, 0.6f)), 16);
 
-    // Faint ring at the estimated equilibrium shield radius — compare it against the drawn bubble.
+    // Faint ring at the estimated equilibrium shield radius - compare it against the drawn bubble.
     const float shieldR = m_player.shieldRadius();
     if (shieldR > 0.05f)
         drawCircle(m_player.interpolatedPos(), shieldR, packColor(glm::vec3(0.3f, 0.8f, 1.0f)), 32);
@@ -971,7 +971,7 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     m_dragDeltaX = 0.0f;
     m_wheelAccum = 0.0f;
     // SCENE FOCUS = the player: sun cascades are nested spheres around it, picked by distance to it,
-    // the RTAO fade measures from it and the GI clipmap centres on it — not on the follow camera hanging
+    // the RTAO fade measures from it and the GI clipmap centres on it - not on the follow camera hanging
     // in empty sky. With the camera detached the focus STAYS on the player (inspect its lighting from
     // anywhere) unless "Detach focus point" is on too, which hands it to the fly camera.
     if (detached && m_player.focusDetached())
@@ -1006,7 +1006,7 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
     }
 
     // Barracks unit routes (own team): line chain from the barracks through its waypoints, each
-    // with its destination circle — bright for the selected barracks, dim otherwise.
+    // with its destination circle - bright for the selected barracks, dim otherwise.
     ProfileScope routesScope("Barracks routes", EProfileCategory::Game);
     for (int i = 0; i < m_structures.structureCount(); ++i)
     {
@@ -1024,7 +1024,7 @@ void GameMatch::updateWindowed(Camera& camera, float deltaSec)
             prev = p;
         }
     }
-    // House links (own team): a line from each linked house to its barracks — bright when either
+    // House links (own team): a line from each linked house to its barracks - bright when either
     // end is selected; a selected house also shows its link radius, a selected constructor its
     // build/repair reach.
     if (const int sel = m_structures.structureIndexById(m_selectedId);

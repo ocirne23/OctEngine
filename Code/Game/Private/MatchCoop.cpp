@@ -13,10 +13,10 @@ import :Structures;
 import :Npc;
 
 // ---- CO-OP director -------------------------------------------------------------------------
-// Waves, the spawn trickle, the ambient scatter and its wander — authority only (clients never
+// Waves, the spawn trickle, the ambient scatter and its wander - authority only (clients never
 // spawn). See the Match.ixx CO-OP section for the state.
 
-// Wave ARCHETYPES: every wave rolls ONE recipe — a named mix of up to 4 unit types — gated by the
+// Wave ARCHETYPES: every wave rolls ONE recipe - a named mix of up to 4 unit types - gated by the
 // wave index so early waves stay simple and the heavy stuff unlocks over time. Single-type rushes
 // and combined-arms mixes both happen, but never every type in every wave; queueWave jitters the
 // picked recipe's weights so two waves of the same archetype still differ.
@@ -73,7 +73,7 @@ namespace
         return m;
     }();
 
-    // One unit from an archetype's authored mix (the ambient scatter's per-spawn roll — the wave
+    // One unit from an archetype's authored mix (the ambient scatter's per-spawn roll - the wave
     // path samples its stored, jittered copy instead).
     ENpcType sampleArchetype(const WaveArchetype& arch)
     {
@@ -109,7 +109,7 @@ ENpcType GameMatch::sampleMix(const oc::fixed_vector<WaveMixEntry, 4>& mix) cons
 }
 
 // The wave clock (authority, co-op only). The actual entity spawns are TRICKLED by tickCoopSpawns
-// — a They-are-Billions-sized wave materialized in one frame would be a multi-hundred-spawn hitch.
+// - a They-are-Billions-sized wave materialized in one frame would be a multi-hundred-spawn hitch.
 void GameMatch::tickWaves(float deltaSec)
 {
     m_waveTimer -= deltaSec;
@@ -119,7 +119,7 @@ void GameMatch::tickWaves(float deltaSec)
     queueWave();
 }
 
-// Live units — ambient and previous waves alike (player-team units too): the component's own
+// Live units - ambient and previous waves alike (player-team units too): the component's own
 // count, kept at its spawn / destroy edges.
 int GameMatch::aiAliveCount() const
 {
@@ -127,7 +127,7 @@ int GameMatch::aiAliveCount() const
 }
 
 // The NEXT wave's budget in points, before the "Max enemy units" cap: base + growth per wave so
-// far, where the growth itself climbs by "Wave growth growth" every wave —
+// far, where the growth itself climbs by "Wave growth growth" every wave -
 // base + growth*i + growthGrowth * (0 + 1 + ... + (i-1)) for the 0-based wave index i.
 float GameMatch::nextWaveBudget() const
 {
@@ -135,7 +135,7 @@ float GameMatch::nextWaveBudget() const
     return (float)m_waveBudget + m_waveBudgetGrowth * wave + m_waveGrowthGrowth * wave * (wave - 1.0f) * 0.5f;
 }
 
-// The wave blob's radius for `budget` points of the CURRENT mix. Area — not radius — scales with
+// The wave blob's radius for `budget` points of the CURRENT mix. Area - not radius - scales with
 // the expected body count, so the areal density is the same in wave 1 and wave 20: the old formula
 // grew the radius LINEARLY off the REMAINING budget and capped at 30 m, which meant a big wave
 // stacked hundreds of bodies on one disc (parked bodies do not push apart, so the pile only
@@ -143,7 +143,7 @@ float GameMatch::nextWaveBudget() const
 // trickled, packing the tail tightest.
 //
 // The blob is clamped to the ground plane and any point inside the barrier square is pushed back
-// out (see tickCoopSpawns), so an oversized disc becomes a wide BAND hugging the barrier — the
+// out (see tickCoopSpawns), so an oversized disc becomes a wide BAND hugging the barrier - the
 // only direction with room, since the spawn band is just c_coopGroundEdge - c_coopHalfSize deep.
 float GameMatch::waveSpawnRadius(float budget) const
 {
@@ -178,7 +178,7 @@ void GameMatch::queueWave()
     // A random compass direction, projected onto the barrier square and stepped OUTSIDE it: the
     // swarm clusters in the open ring beyond the barrier (its collider only matches players) and
     // pushes at the Base's near face (a point INSIDE the footprint would fail the A* and the move
-    // order alike — the pointOutsideFootprint rule). The locked order releases on arrival; the AI
+    // order alike - the pointOutsideFootprint rule). The locked order releases on arrival; the AI
     // takes over there. The carved lanes guarantee a route in from any side.
     const float angle = glm::linearRand(0.0f, glm::two_pi<float>());
     const glm::vec3 dir(std::cos(angle), 0.0f, std::sin(angle));
@@ -186,8 +186,8 @@ void GameMatch::queueWave()
     m_waveOrigin = dir * k;
     m_waveDest = dir * 6.0f;
     m_wavePendingBudget += budget;
-    // Roll this wave's COMPOSITION among the archetypes the index has unlocked — never the same
-    // recipe twice in a row when a choice exists — then jitter its weights so repeats still vary.
+    // Roll this wave's COMPOSITION among the archetypes the index has unlocked - never the same
+    // recipe twice in a row when a choice exists - then jitter its weights so repeats still vary.
     int eligible[c_numWaveArchetypes];
     int numEligible = 0;
     for (int i = 0; i < c_numWaveArchetypes; ++i)
@@ -205,13 +205,13 @@ void GameMatch::queueWave()
     for (const auto& entry : c_waveArchetypes[pick].mix)
         if (entry.weight > 0.0f)
             m_waveMix.push_back({ entry.type, entry.weight * glm::linearRand(0.6f, 1.4f) });
-    // Size the blob for EVERYTHING still queued (a previous wave's tail included) — once, with the
+    // Size the blob for EVERYTHING still queued (a previous wave's tail included) - once, with the
     // mix that will spend it, so the density holds from the first body to the last.
     m_waveRadius = waveSpawnRadius(m_wavePendingBudget);
-    // One planned lane from the spawn ring to the Base — the swarm commits to it, and the units'
+    // One planned lane from the spawn ring to the Base - the swarm commits to it, and the units'
     // own periodic seed requests keep it fresh (Nav's proximity dedup makes the wave one plan).
     Globals::navSystem.seedPath(CoopAiTeam, m_waveOrigin, m_waveDest, laneSeedSpeed(), laneSeedWidth());
-    Log::info(oc::format("Co-op: wave {} incoming — budget {:.0f} ({}) from ({:.0f}, {:.0f})", m_waveIndex,
+    Log::info(oc::format("Co-op: wave {} incoming - budget {:.0f} ({}) from ({:.0f}, {:.0f})", m_waveIndex,
         budget, c_waveArchetypes[pick].name, m_waveOrigin.x, m_waveOrigin.z));
     if (m_isServer)
     {
@@ -223,11 +223,11 @@ void GameMatch::queueWave()
 }
 
 // The trickle spawner (authority, per frame): a fixed budget of entity spawns serves the wave
-// first, then the world-start ambient scatter — thousands of units enter the world over a few
+// first, then the world-start ambient scatter - thousands of units enter the world over a few
 // seconds instead of one giant frame hitch.
 void GameMatch::tickCoopSpawns()
 {
-    // The frame's spawns are ROLLED first (budget math + RNG stay serial on main — glm's linearRand
+    // The frame's spawns are ROLLED first (budget math + RNG stay serial on main - glm's linearRand
     // is not thread-safe), then materialized in ONE NpcSystem::spawnLooseUnits batch: the entity
     // creations fan out over the job system instead of running one by one.
     ProfileScope scope("Coop spawn trickle", EProfileCategory::Game);
@@ -253,7 +253,7 @@ void GameMatch::tickCoopSpawns()
         }
         m_wavePendingBudget -= waveCostOf(type);
         // Cluster around the ring point in the blob queueWave sized for THIS wave's body count
-        // (m_waveRadius — constant for the whole trickle, so the tail is as loose as the head).
+        // (m_waveRadius - constant for the whole trickle, so the tail is as loose as the head).
         // The blob stays in the band OUTSIDE the barrier but inside the ground plane: a point that
         // drifted through the barrier line pushes back out along the wave's dominant axis, which
         // is what turns a big wave's oversized disc into a wide band along the barrier face.
@@ -295,9 +295,9 @@ void GameMatch::tickCoopSpawns()
         // AMBIENT units come in small GROUPS: a cluster anchored on a random REACHABLE open cell
         // of the generated map (uniform by area, outside the safe ring, reachable from the Base
         // by the flood fill's guarantee), its bodies scattered in a disc around the anchor and
-        // slid off any rock edge — a loose blob per group instead of one body per cell, which
+        // slid off any rock edge - a loose blob per group instead of one body per cell, which
         // lined up on the 10 m lattice. The Nav team fields never pull them (they cover the whole
-        // map, which marched every scattered unit to the base) — only the local search aggroes
+        // map, which marched every scattered unit to the base) - only the local search aggroes
         // them, so an ambient group holds its patch until players expand near it. Wave units
         // above stay field-driven after their order releases.
         if (m_coopMap.reachable.empty())
@@ -311,7 +311,7 @@ void GameMatch::tickCoopSpawns()
             if (glm::length(glm::vec2(center.x, center.z)) < m_ambientSafeRadius)
                 continue; // safe-ring reject: costs one budget tick, never the points
             // DISTANCE = DIFFICULTY: the group's archetype is gated by GEODESIC depth (BFS
-            // distance from the Base over the generated map) exactly like waves gate by index —
+            // distance from the Base over the generated map) exactly like waves gate by index -
             // the BAND is a window of recipes: a group rolls only recipes whose wave gate sits
             // within "Ambient recipe window" BELOW its depth band, so the near ring only rolls the
             // early recipes (swarm-grade) and the deep map rolls ONLY the elite-tier ones (giants,
@@ -362,8 +362,8 @@ void GameMatch::tickCoopSpawns()
 // AMBIENT WANDER (co-op authority): an IDLE AI unit now and then takes a short stroll, its heading
 // biased toward the Base. Performance: the EXPECTED number of strolls this frame is unit count /
 // "Ambient wander interval" × dt (5000 units at 90 s and 60 fps = ~0.93 a frame), carried as a
-// fractional budget so every frame issues that many on average — a steady trickle instead of a
-// burst — and each stroll costs at most c_wanderScanCap random probes into the World's root list
+// fractional budget so every frame issues that many on average - a steady trickle instead of a
+// burst - and each stroll costs at most c_wanderScanCap random probes into the World's root list
 // (every unit is a root; a non-unit hit is a wasted probe) to find an idle unit. No per-unit
 // timer. The order is a wander (orderWander): it never seeds a lane and
 // self-expires after "Ambient wander timeout", so a target behind rock cannot pin the unit. Far
@@ -384,7 +384,7 @@ void GameMatch::tickAmbientWander(float deltaSec)
     // The budget is sized from the SELECTED units, not all of them: only selected units are
     // candidates, so a whole-population budget would land every far unit's strolls on the few
     // near a player. The selected fraction is estimated from the random unit probes below (each
-    // is a fair sample), smoothed — no walk.
+    // is a fair sample), smoothed - no walk.
     m_wanderBudget += (float)aliveUnits * m_wanderSelectedFrac * deltaSec / m_ambientWanderInterval;
     int issue = (int)m_wanderBudget;
     if (issue <= 0)
@@ -417,7 +417,7 @@ void GameMatch::tickAmbientWander(float deltaSec)
             }
             // Only SELECTED units (inside the SIM LOD's outer tier of some player) stroll: a far
             // unit is invisible and would walk its order by the far tick's teleport, then arrive
-            // in view mid-stroll — a whole patch "starting to wander" the moment a player came
+            // in view mid-stroll - a whole patch "starting to wander" the moment a player came
             // near. Tier 2 and closer all behave alike.
             const bool selected = Globals::world.simLodSelected(*e);
             m_wanderSelectedFrac += ((selected ? 1.0f : 0.0f) - m_wanderSelectedFrac) * 0.02f;
@@ -446,7 +446,7 @@ void GameMatch::tickAmbientWander(float deltaSec)
 // The PENDING TRICKLE: a wave is sized in points at queueWave and the bodies materialize over the
 // following frames (tickCoopSpawns, "Spawns per frame"). Saving mid-wave used to drop everything
 // not yet spawned, so an F9 during a big wave quietly shrank it. Everything the trickle reads is
-// written here — the remaining points, WHERE they enter (m_waveOrigin) and march (m_waveDest), and
+// written here - the remaining points, WHERE they enter (m_waveOrigin) and march (m_waveDest), and
 // the wave's ROLLED, JITTERED mix, which cannot be re-derived from the archetype table. The
 // spacing ring (m_waveRecent) is deliberately left out: it only rejects spots for a few spawns.
 void GameMatch::saveTrickle(AssetNode& root) const
@@ -459,7 +459,7 @@ void GameMatch::saveTrickle(AssetNode& root) const
     wave.set("LastArchetype", oc::to_string(m_lastArchetype)); // keeps "never twice in a row"
     for (const WaveMixEntry& e : m_waveMix)
     {
-        AssetNode& entry = wave.addChild("Mix"); // Type is the raw ENpcType int — append-only
+        AssetNode& entry = wave.addChild("Mix"); // Type is the raw ENpcType int - append-only
         entry.values = { oc::to_string((int)e.type), oc::to_string(e.weight) };
     }
     // The world-start SCATTER trickles through the same budget, plus the group it is mid-way
@@ -473,8 +473,8 @@ void GameMatch::saveTrickle(AssetNode& root) const
 }
 
 // Counterpart of saveTrickle. MUST run after rebuildCoopMap, which voids the in-progress ambient
-// group (its anchor belongs to the old map). A save with NO trickle nodes — every save before this
-// existed — clears both budgets: that file IS the complete state, and letting the running session's
+// group (its anchor belongs to the old map). A save with NO trickle nodes - every save before this
+// existed - clears both budgets: that file IS the complete state, and letting the running session's
 // own scatter continue on top of it would double-spawn.
 void GameMatch::loadTrickle(const AssetNode& root)
 {
@@ -496,7 +496,7 @@ void GameMatch::loadTrickle(const AssetNode& root)
             m_waveMix.push_back({ (ENpcType)type, glm::max(entry->asFloat(1), 0.0f) });
         }
         // Older trickle saves have no Radius: re-derive it from what is LEFT, which is the best
-        // this end can do — the original wave's total is not in the file.
+        // this end can do - the original wave's total is not in the file.
         m_waveRadius = wave->find("Radius") ? glm::clamp(wave->find("Radius")->asFloat(), 8.0f, c_coopGroundEdge)
                                             : waveSpawnRadius(m_wavePendingBudget);
         if (m_waveMix.empty())

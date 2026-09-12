@@ -12,7 +12,7 @@ import Core;
 // Upstream lineage is Apache-2.0 (TSAIL Team / The HuggingFace Team, strongly influenced by
 // https://github.com/LuChengTHU/dpm-solver and https://github.com/NVlabs/edm). See Dependencies/Licenses.txt.
 //
-// Instances are per-tile and hold mutable step state — not reentrant, not shareable.
+// Instances are per-tile and hold mutable step state - not reentrant, not shareable.
 export namespace Procedural::Diffusion
 {
 	class EDMScheduler
@@ -35,7 +35,7 @@ export namespace Procedural::Diffusion
 		static void preconditionInputs(oc::span<const float> sample, float sigma, oc::span<float> out);
 
 		// The value fed to the model's `noise_labels` input: atan(sigma / sigma_data).
-		// NOTE this is what the pipeline actually uses — NOT the `timesteps` array, which the reference
+		// NOTE this is what the pipeline actually uses - NOT the `timesteps` array, which the reference
 		// computes and never reads. Deliberately not ported.
 		static float trigflowPreconditionNoise(float sigma);
 

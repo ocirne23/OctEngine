@@ -2,7 +2,7 @@ export module UI:TextEditor;
 
 import Core;
 
-// Standalone plain-text (.txt) file editor panel ("Text Editor" window) — a plain file editor with
+// Standalone plain-text (.txt) file editor panel ("Text Editor" window) - a plain file editor with
 // standard text-editing functionality (selection, copy/cut/paste, undo/redo, word/line navigation, all
 // native to ImGui's multiline input). Unrelated to the visual Script (Node Editor) panel.
 export class TextEditor
@@ -30,7 +30,7 @@ private:
 	void save();      // writes to m_path if set, else opens the Save As popup
 	void saveAs(const oc::string& path);
 
-	bool        m_hasDoc = false; // false until New/Open — lets the toolbar/text area gate on "no document open"
+	bool        m_hasDoc = false; // false until New/Open - lets the toolbar/text area gate on "no document open"
 	oc::string m_path;           // empty until first save/open
 	oc::string m_text;
 	oc::string m_baselineText;   // text at last load/save, for dirty-tracking

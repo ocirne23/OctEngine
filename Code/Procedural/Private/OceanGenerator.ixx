@@ -14,15 +14,15 @@ import :HeightMapBaker;
 export namespace Procedural
 {
 	// Render-only procedural ocean, the CPU side of the FFT/Tessendorf water: maintains a camera-following
-	// GEOMETRY CLIPMAP — concentric square rings, each with a FIXED world-space cell size that doubles per
+	// GEOMETRY CLIPMAP - concentric square rings, each with a FIXED world-space cell size that doubles per
 	// ring. Because a ring's cell size is constant, every world position inside it samples the displacement
-	// maps at a FIXED mip regardless of camera distance — wave shapes no longer morph with camera motion
+	// maps at a FIXED mip regardless of camera distance - wave shapes no longer morph with camera motion
 	// (the failure mode of the previous radially-graded grid, whose per-vertex mip followed distance). Ring
 	// transitions use a CDLOD-style vertex morph baked per vertex (texcoord = ring cell size + morph
 	// weight): over each ring's outer band, odd vertices collapse onto the next ring's coarser lattice and
-	// the sampled mip blends +1, so the boundary matches the next ring exactly — seamless by construction.
-	// The clipmap is split into SECTORS, terrain-chunk style — ring 0 whole, each outer ring as 8
-	// rectangular blocks around its hole, the horizon band as its 4 sides — each a container/node with
+	// the sampled mip blends +1, so the boundary matches the next ring exactly - seamless by construction.
+	// The clipmap is split into SECTORS, terrain-chunk style - ring 0 whole, each outer ring as 8
+	// rectangular blocks around its hole, the horizon band as its 4 sides - each a container/node with
 	// its own SpatialIndex entry, so the CPU visibility gate and the GPU per-instance frustum cull drop
 	// off-screen water instead of vertex-shading the whole multi-km disc every frame. All sectors share
 	// one transform, snapped to a lattice multiple so vertices re-land on the same world positions as
@@ -43,23 +43,23 @@ export namespace Procedural
 		void initialize();                                     // registers Tweaks
 		// Per-frame: push params + render (after beginFrame). terrainData = the streamer's active baked
 		// terrain-data map (TerrainStreamer::activeTerrainData(), nullptr = no terrain). The GPU passes
-		// read the SAME bake (the fog terrain cascades) for water depth/level — shoaling, surf, swash,
-		// the land cull — and this CPU copy feeds buoyancy and wind steering, so the drawn water and the
+		// read the SAME bake (the fog terrain cascades) for water depth/level - shoaling, surf, swash,
+		// the land cull - and this CPU copy feeds buoyancy and wind steering, so the drawn water and the
 		// simulated water agree by construction.
 		// `seaLevel` is the world datum, and it comes from the TERRAIN (TerrainStreamer::seaLevel) rather
 		// than being a tweak here. It cannot be two values: the terrain generator builds its heights around
 		// it (V3's elevations are relative to it, which is why moving it regenerates chunks), the ocean
-		// floats its surface on it, and the swash gate compares the two — so a fork between them switches
+		// floats its surface on it, and the swash gate compares the two - so a fork between them switches
 		// the swash off everywhere rather than just looking off.
 		void update(Renderer& renderer, const Camera& camera,
 		            oc::shared_ptr<const BakedTerrainData> terrainData = nullptr, float seaLevel = 0.0f);
 
 		// Water surface world Y at (x, z), CPU-evaluated from the GPU displacement readback (a full mirror
 		// of the clipmap vertex shader: the raw cascade sum times the shore's surface weight, plus the
-		// swash backflow; ~2 frames of latency — invisible for physics). Returns -FLT_MAX where there is
+		// swash backflow; ~2 frames of latency - invisible for physics). Returns -FLT_MAX where there is
 		// no water: ocean disabled, readback not primed, or land beyond the swash run-up band per the
 		// shore bake. Inside that band it returns the live tongue surface, which SINKS BELOW the terrain
-		// as the wave recedes — bodies beach themselves on their own that way, so callers want a plain
+		// as the wave recedes - bodies beach themselves on their own that way, so callers want a plain
 		// surface-vs-point test, not a separate dry check. This is the buoyancy height field the App
 		// wires into PhysicsWorld::setWaterSurface; keys 8/9's cubes bob in the swell through it.
 		float sampleWaterHeight(float x, float z) const;
@@ -69,7 +69,7 @@ export namespace Procedural
 		// PhysicsComponents nothing.
 		bool hasWater() const { return m_enabled && !m_dispTile.empty() && m_dispTileRes != 0; }
 
-		// The heading the swell actually TRAVELS in open water (radians, XZ) — the terrain streamer's baked
+		// The heading the swell actually TRAVELS in open water (radians, XZ) - the terrain streamer's baked
 		// flow field eases back to this offshore so the encoded directions meet the wind-driven open sea
 		// without a turn. NOTE the sim's convention: the spectrum's dominant term is h0(k) e^{i(k.x + wt)},
 		// which moves AGAINST the wind-direction vector, so travel = m_windAngle + pi (steeredWindAngle
@@ -79,7 +79,7 @@ export namespace Procedural
 		float swellTravelAngle() const { return m_windAngle + 3.14159265f; }
 
 	private:
-		// Turns the SIMULATION wind toward the baked shore flow around the camera — how the waves actually
+		// Turns the SIMULATION wind toward the baked shore flow around the camera - how the waves actually
 		// travel inland at the coast. See the .cpp.
 		float steeredWindAngle(const Camera& camera);
 		// Fills OceanParams from the tweak-backed members and pushes it (Renderer::setOceanParams);
@@ -101,14 +101,14 @@ export namespace Procedural
 		// every tweak below is authored in MODEL metres and the sea is drawn at model x scale. The
 		// spectrum is scaled by Froude similarity (lengths x s, wind speed x sqrt(s), gravity untouched),
 		// which is the one scaling of the JONSWAP/TMA inputs under which wavelengths AND wave heights both
-		// come out x s — so the scaled sea is a shrunk copy of the model sea. Froude periods would be
+		// come out x s - so the scaled sea is a shrunk copy of the model sea. Froude periods would be
 		// x sqrt(s) (a miniature races), so the spectrum clock runs at sqrt(s) (OceanParams::timeScale) and
 		// the periods stay the model sea's. Applied ONCE, in pushOceanParams: the shaders and the CPU
 		// buoyancy mirror both read the scaled set (m_params), so neither can disagree with the other.
 		float m_worldScale = 0.1f;  // 1 = the model sea; a 10x sea against the default terrain (mpp 0.3, 100x), tuned by eye
 		OceanParams m_params;      // the SCALED param set last pushed to the renderer; the CPU mirror reads it
 		// Reach = ringCell * res/2 * 2^(rings-1), and every ring costs the same vertex count whatever its
-		// cell size — so buy near-field detail by trading cell size for ring COUNT, not by biasing the mip
+		// cell size - so buy near-field detail by trading cell size for ring COUNT, not by biasing the mip
 		// (a finer mip samples detail the mesh cannot hold and simply aliases). At 2 m cells the finest
 		// cascade sat inside ~3 texels and was averaged out of the geometry entirely; 0.5 m gives it ~13
 		// and it comes back as real chop. 0.5 x 7 rings holds the same 4 km reach 2 x 5 rings had.
@@ -116,7 +116,7 @@ export namespace Procedural
 		int   m_ringRes = 256;         // cells per axis per ring (ring 0 is a full grid, outer rings are annuli)
 		int   m_rings = 7;             // ring count (defaults: 128 m fine region, ~4 km reach)
 		// One coarse quad band appended past the outermost ring, stretching its edge lattice out to the
-		// camera far plane — the sea meets the horizon in every direction instead of ending at the ring
+		// camera far plane - the sea meets the horizon in every direction instead of ending at the ring
 		// reach. Its inner edge sits on the last ring's fully-morphed (2x cell) lattice at the matching
 		// mip, so the seam is watertight by the same CDLOD construction the rings use.
 		bool  m_horizonBand = true;
@@ -131,7 +131,7 @@ export namespace Procedural
 		float m_windSpeed = 20.0f;     // U10 (m/s): the main sea-state knob
 		float m_fetchKm = 300.0f;      // wind fetch (km)
 		float m_depth = 100.0f;        // ocean depth (m): finite-depth dispersion + TMA attenuation
-		float m_windAngle = 5.12f;     // radians, XZ. The swell TRAVELS opposite this — see swellTravelAngle
+		float m_windAngle = 5.12f;     // radians, XZ. The swell TRAVELS opposite this - see swellTravelAngle
 		// Flow -> wind steering (steeredWindAngle): near a coast the SIM wind turns toward the baked flow
 		// so the waves roll toward the local shore; away from any it returns to m_windAngle.
 		bool  m_windSteerEnabled = true;
@@ -144,7 +144,7 @@ export namespace Procedural
 		float m_normalStrength = 1.0f;
 		// FFT patch sizes (m). Each cascade TILES with its own size, so the largest one sets how often the
 		// sea visibly repeats: at wind 20 / fetch 300 km the JONSWAP peak is a ~200 m wavelength, and the
-		// old 384 m patch held under two of them — the same crest pair every 384 m, ~10 times across the
+		// old 384 m patch held under two of them - the same crest pair every 384 m, ~10 times across the
 		// view. These hold ~7.7 instead. Scaled as a SET on purpose: the band split hands cascade c+1
 		// everything below 0.5*Nyquist(L_c), so growing only cascade 0 would push 15 m waves into a 47 m
 		// tile and just move the repetition down a cascade. Ratios (8.17, 7.52) stay non-rational so the
@@ -173,7 +173,7 @@ export namespace Procedural
 
 		// --- Shore interaction (driven by the streamer's baked terrain-data map) ---
 		// The shore's APPROACH BAND: open water eases to the swash amplitude over depth = scale x the mid
-		// cascade's patch size (floored at two swash reaches) — oceanSwashFadeIn. Cut 4x alongside the 4x
+		// cascade's patch size (floored at two swash reaches) - oceanSwashFadeIn. Cut 4x alongside the 4x
 		// cascade sizes so the absolute band depth (and so the coastline look) was unchanged by that change.
 		float m_shoalScale = 0.005f;
 		// Past m_horizonDepthRange the waves assume at least m_horizonDepth of water, whatever the baked
@@ -196,15 +196,15 @@ export namespace Procedural
 		float m_rtReflectionRange = 3000.0f;  // max mirror-ray length (m): how distant scenery still reflects
 		float m_rtReflectionMaxRough = 0.25f; // roughness above which the mirror ray is skipped (blurred-sky fallback)
 		float m_rtRayCutoffDist = 0.0f;       // camera distance (m) beyond which NO rays trace (analytic
-		                                      // bottom + sky fallbacks — the same paths misses take); 0 = unlimited
+		                                      // bottom + sky fallbacks - the same paths misses take); 0 = unlimited
 
 		// The streamer's active baked terrain-data map (adopted each update()); the shared_ptr keeps this
-		// snapshot alive across the frame even while the streamer ships a replacement bake — buoyancy
+		// snapshot alive across the frame even while the streamer ships a replacement bake - buoyancy
 		// queries (physics, before the next update) and wind steering read it.
 		oc::shared_ptr<const BakedTerrainData> m_terrainData;
 
 		// CPU copy of the GPU displacement readback tile, refreshed every update() inside the frame's
-		// fence-safe window — sampleWaterHeight can then run at ANY point in the frame (physics updates
+		// fence-safe window - sampleWaterHeight can then run at ANY point in the frame (physics updates
 		// before beginFrame) without racing the GPU rewriting the slot's readback buffer.
 		oc::vector<uint16> m_dispTile;                  // RGBA16F texels, res^2 per cascade
 		uint32 m_dispTileRes = 0;
@@ -215,7 +215,7 @@ export namespace Procedural
 		bool m_disabledIdle = false; // disabled AND cleared: update() is a branch and a return
 
 		// One clipmap sector per draw (see the class comment). Registered in the SpatialIndex like
-		// terrain chunks (SpatialLayer_Terrain, no spawn guard); unlike chunks they MOVE — updateEntry
+		// terrain chunks (SpatialLayer_Terrain, no spawn guard); unlike chunks they MOVE - updateEntry
 		// re-centers them on the snapped node position every frame, so they stay in the dynamic tier.
 		struct Sector
 		{
@@ -232,7 +232,7 @@ export namespace Procedural
 
 		// Dry-sector cull: sectors whose whole footprint is buried under land per the baked terrain data
 		// are skipped before anything reaches the GPU (a camera deep inland then renders no water at all).
-		// Conservative by construction — a per-block MAX of (water level - height) over the COARSEST
+		// Conservative by construction - a per-block MAX of (water level - height) over the COARSEST
 		// cascade, rebuilt once per adopted bake, and a sector only skips when every block it overlaps is
 		// dry beyond the same burial terms the vertex cull demands; footprints leaving the baked range
 		// always count as wet (unknown terrain = open-ocean fallback in the shaders).

@@ -37,13 +37,13 @@ export namespace Procedural
 		void update(Renderer& renderer, const Camera& camera); // per-frame: stream, drain, render (call after beginFrame)
 
 		// The live height/climate field, for systems that must agree with the rendered terrain (the
-		// ocean's shore-depth bake). nullptr while terrain rendering is disabled — consumers treat that
+		// ocean's shore-depth bake). nullptr while terrain rendering is disabled - consumers treat that
 		// as "no terrain" rather than sampling a field that isn't drawn. Thread-safe; the shared_ptr
 		// keeps the maps valid across config rebuilds (workers holding the old maps finish against them).
 		oc::shared_ptr<const ITerrainSampler> activeClimateMaps() { return m_enabled ? currentMaps() : nullptr; }
 		// The ocean-reach rule this streamer bakes into the terrain-data map, for anything baking the SAME
 		// fields off the same sampler (the ocean's shore map, which overrides that map inside its range).
-		// Handed out rather than duplicated so the two cannot drift apart — see applyWaterReach.
+		// Handed out rather than duplicated so the two cannot drift apart - see applyWaterReach.
 		// nullptr = the rule is off; bake the sampler's water level as-is.
 		const WaterReach* activeWaterReach() const { return m_waterReachEnabled ? &m_waterReach : nullptr; }
 		// The flow-direction rule, handed out for the same reason (the ocean's shore map must bake the
@@ -51,15 +51,15 @@ export namespace Procedural
 		// direction would turn where one map hands over to the other). nullptr = flow bits carry only what
 		// the generator authors. See applyFlowField.
 		const FlowField* activeFlowField() const { return m_flowFieldEnabled ? &m_flowField : nullptr; }
-		// The offshore heading the baked flow eases back into — the ocean's swell heading, pushed in by the
+		// The offshore heading the baked flow eases back into - the ocean's swell heading, pushed in by the
 		// app each frame (the streamer cannot know it; a stale angle just re-bakes one map). See FlowField.
 		void setFlowWindAngle(float radians) { m_flowField.windAngle = radians; }
 		// THE sea level datum for the world, tweak-backed here because the terrain generator builds its
-		// heights around it (so it regenerates chunks) — the ocean floats on this rather than owning a
+		// heights around it (so it regenerates chunks) - the ocean floats on this rather than owning a
 		// second copy. Valid even while terrain is disabled, so the ocean can still run on its own.
 		float seaLevel() const { return m_seaLevel; }
 		// CPU copy of the ACTIVE baked terrain-data map (the same texels setFogTerrainHeightMap shipped
-		// to the GPU) — the ocean samples it for buoyancy water depth/level and wind-steering flow votes.
+		// to the GPU) - the ocean samples it for buoyancy water depth/level and wind-steering flow votes.
 		// nullptr while no bake has shipped / terrain is disabled; a re-bake swaps in a NEW object, so
 		// consumers holding the old shared_ptr keep a coherent snapshot.
 		oc::shared_ptr<const BakedTerrainData> activeTerrainData() const { return m_terrainMapData; }
@@ -135,7 +135,7 @@ export namespace Procedural
 		float m_v3DetailSlopeGain = 0.75f; // slope -> detail mask (the model only resolves 30 m/px)
 		// Wavelengths/amplitudes are in MODEL metres and ride metersPerPixel, so the OCTAVE counts are what
 		// set how far below the model's 30 m/px the terrain actually has anything in it. See the tweak
-		// registration for the resolution arithmetic — this is the dial for "detailed at full world scale".
+		// registration for the resolution arithmetic - this is the dial for "detailed at full world scale".
 		float m_v3DetailWavelengthA = 220.0f;
 		float m_v3DetailAmplitudeA = 38.0f;
 		int   m_v3DetailOctavesA = 4;
@@ -154,7 +154,7 @@ export namespace Procedural
 		float m_v3HumidFog = 0.25f;
 		float m_v3ValleyFog = 0.25f;
 		int   m_v3MaxTiles = 256;           // resident tile budget (~800 KB each)
-		// Half-precision inference. Buys VRAM (~2.28 GB -> ~1.1 GB) and load time, NOT generation speed —
+		// Half-precision inference. Buys VRAM (~2.28 GB -> ~1.1 GB) and load time, NOT generation speed -
 		// the pipeline is dispatch-bound (see the tweak registration for the measurements). Needs the
 		// optional models from Tools/convert_models_fp16.py; without them it stays fp32. Flipping it
 		// reloads the models and changes the terrain for a given seed, so it regenerates the world.
@@ -180,7 +180,7 @@ export namespace Procedural
 		WaterReach m_waterReach;
 		bool  m_waterReachEnabled = true;
 		// Flow direction: which way the water moves per texel (toward land through the surf zone, downhill
-		// everywhere else) — the wave-travel field at the coast and the seed data for future rivers/water
+		// everywhere else) - the wave-travel field at the coast and the seed data for future rivers/water
 		// simulation. See applyFlowField.
 		FlowField m_flowField;
 		bool  m_flowFieldEnabled = true;
@@ -269,7 +269,7 @@ export namespace Procedural
 		// An unordered POOL of outstanding work, despite the deque: the worker rescans it on every dequeue
 		// and takes whichever chunk is nearest the camera THEN, so insertion order carries no meaning and
 		// neither side sorts it. Ordering it would just re-decide, one camera position stale, what the
-		// worker decides correctly at pick time — and FIFO is what made distant chunks generate before the
+		// worker decides correctly at pick time - and FIFO is what made distant chunks generate before the
 		// ground underfoot.
 		oc::deque<Request>     m_requests;
 		// Ring state the worker judges queued requests against at DEQUEUE time (guarded by m_mutex): both
@@ -290,8 +290,8 @@ export namespace Procedural
 		// --- Main-thread residency state ---
 		oc::unordered_map<uint64, Resident> m_residents;
 		oc::unordered_set<uint64>           m_pending; // requested/queued, not yet resident
-		// Last ring parameters published to the worker (main-thread copies: the publish is skipped —
-		// no lock taken — while none of them changed and there is nothing new to append).
+		// Last ring parameters published to the worker (main-thread copies: the publish is skipped -
+		// no lock taken - while none of them changed and there is nothing new to append).
 		int    m_lastRingCX = INT_MIN;
 		int    m_lastRingCZ = INT_MIN;
 		int    m_lastRingR = -1;

@@ -59,7 +59,7 @@ uint16 TextureManager::upload(const char* filePath, bool generateMips, bool sRGB
 uint16 TextureManager::uploadImpl(const oc::function<bool(Texture&)>& initialize)
 {
 	// The image build (file load, staging upload) is the expensive part and touches no manager
-	// state — it runs into a LOCAL texture outside the lock; the lock covers only the slot claim,
+	// state - it runs into a LOCAL texture outside the lock; the lock covers only the slot claim,
 	// the move into it, and the streamer bookkeeping (parallel entity spawning).
 	Texture texture;
 	if (!initialize(texture))

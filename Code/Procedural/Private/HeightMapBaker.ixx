@@ -11,7 +11,7 @@ export namespace Procedural
 	// wind-steering votes read the near cascade). Held by shared_ptr: the streamer replaces the whole
 	// object when a re-bake ships, so a consumer's copy of the pointer stays valid across the swap.
 	// Texel layout matches the GPU map (terrain_height.inc.glsl): cascade-major, res^2 RGBA floats per
-	// cascade — R = terrain height (world Y), G = water surface level, B = 4x8 packed bits (flow
+	// cascade - R = terrain height (world Y), G = water surface level, B = 4x8 packed bits (flow
 	// direction in bits 8-15; bit-cast, never float arithmetic), A = macro altitude.
 	struct BakedTerrainData
 	{
@@ -23,24 +23,24 @@ export namespace Procedural
 	};
 
 	// Sea level everywhere is a lie the ocean believes. A generator that models no lakes (V3) reports the
-	// ocean's level at every point on the planet, so every scrap of terrain within a metre of it — an
-	// inland hollow, a river flat, anything — reads as shoreline and the ocean runs swash up it.
+	// ocean's level at every point on the planet, so every scrap of terrain within a metre of it - an
+	// inland hollow, a river flat, anything - reads as shoreline and the ocean runs swash up it.
 	//
 	// The swash already has the right gate: it fades out where the baked water level departs from sea
 	// level, which is how landlocked water (lakes at altitude) is meant to be excluded. So the fix is not a
-	// new rule, it is telling the truth — drop the water level far below any ground the ocean cannot
+	// new rule, it is telling the truth - drop the water level far below any ground the ocean cannot
 	// actually reach, and the existing gate does the rest. The terrain shader's beach overlay keys on the
 	// same field, so inland sand goes with it.
 	//
 	// "Can reach" is a DISTANCE question, and this is the only place it is cheap to answer: the bake owns
 	// the whole camera-centred height grid, so one chamfer pass gives every texel its distance to real
-	// ocean in world metres. A per-point generator query cannot do this — it would have to search its own
-	// field per sample — and the coarse detail level has no fine elevation to search at all.
+	// ocean in world metres. A per-point generator query cannot do this - it would have to search its own
+	// field per sample - and the coarse detail level has no fine elevation to search at all.
 	//
 	// Both cascades measure the same world distance (just at their own texel size), so near and far agree.
 	//
 	// This applies to SUBMERGED ground as much as to dry land: a plateau at -0.05 m is under water by
-	// definition, so a land-only rule could never drain one, and those are exactly what V3 produces —
+	// definition, so a land-only rule could never drain one, and those are exactly what V3 produces -
 	// kilometres of sea-level film with no ocean within reach of it. The clipmap rides the baked level
 	// (the water-table lift in the ocean VS), so sinking it here actually removes the water rather than
 	// merely muting its swash.
@@ -57,12 +57,12 @@ export namespace Procedural
 		                        // gate's 1 m fade with room to spare; also pushes the beach overlay off.
 		// How deep water must be to count as OCEAN and seed reach for the ground around it. Without it any
 		// texel a hair under sea level qualifies, so one shallow inland dip vouches for every hollow within
-		// the radius of it — the thing this whole pass exists to stop, reintroduced by a puddle. Swell needs
+		// the radius of it - the thing this whole pass exists to stop, reintroduced by a puddle. Swell needs
 		// a real body of water behind it; this is where that line is drawn. 0 = any water below sea level.
 		float swashDepth = 2.0f;
 
 		// Compared to decide whether a baked map went stale (HeightMapBaker::update). Defaulted rather than
-		// hand-written so a field added above is covered without anyone remembering to extend it — a missed
+		// hand-written so a field added above is covered without anyone remembering to extend it - a missed
 		// one would silently leave the tweak doing nothing until the camera happened to move far enough.
 		bool operator==(const WaterReach&) const = default;
 	};
@@ -127,19 +127,19 @@ export namespace Procedural
 				continue;
 			// SUBMERGED GROUND IS DROPPED TOO, deliberately. It is the whole point: a plateau sitting at
 			// -0.05 m is under water by definition, so a land-only rule can never take its water away, and
-			// V3 grows plenty of them — vast films of sea, kilometres inland, that no swell has ever reached.
+			// V3 grows plenty of them - vast films of sea, kilometres inland, that no swell has ever reached.
 			// The ocean's clipmap rides the baked level (the VS water-table lift = level - sea level), so sinking it
 			// here genuinely drains them rather than just muting their swash.
 			//
 			// What protects a REAL shelving bay is the reach RADIUS, not a land test: its apron is shallow
 			// (so it never seeds itself) but it is close to water that does, and stays wet on that basis.
-			// Set the radius shorter than the apron and the sea WILL retreat off it — that is the knob, and
+			// Set the radius shorter than the apron and the sea WILL retreat off it - that is the knob, and
 			// it is the same trade in both directions.
 			//
 			// Sagging is the risk to watch, and the reason a blanket land-burial was removed from this bake
 			// once before: the clipmap's coarse outer rings vertex-sample the level, and a triangle bridging
 			// flat sea to a dropped texel tilts the surface. The feather is what keeps that a gentle ramp
-			// instead of a cliff — and it only ever happens out past the radius, where the water is meant to
+			// instead of a cliff - and it only ever happens out past the radius, where the water is meant to
 			// be leaving anyway.
 
 			// No ocean anywhere in this map reads as FLT_MAX -> fully dropped, which is the right answer for
@@ -165,10 +165,10 @@ export namespace Procedural
 		return encodeFlowAngle01(a01 - std::floor(a01));
 	}
 
-	// Direction assignment for the baked 8-bit flow channel — where the local water MOVES. Ocean texels
+	// Direction assignment for the baked 8-bit flow channel - where the local water MOVES. Ocean texels
 	// (submerged, water at sea level) within `oceanRange` of land point AT that land: this is what carries
-	// waves inland at the coast (the water shader rotates its wave field along it). Everything else — dry
-	// ground, lakes, reach-drained flats — points downhill, for rivers/water simulation to build on.
+	// waves inland at the coast (the water shader rotates its wave field along it). Everything else - dry
+	// ground, lakes, reach-drained flats - points downhill, for rivers/water simulation to build on.
 	struct FlowField
 	{
 		float oceanRange = 250.0f;   // world m: how far offshore the toward-land direction still applies
@@ -177,7 +177,7 @@ export namespace Procedural
 		// range "no direction" and "the wind's direction" are the same answer to 8-bit precision.
 		float oceanFade = 120.0f;
 		// World m of box averaging over the shore directions. The raw nearest-land field is Voronoi
-		// piecewise-constant — a jagged coastline flips it texel to texel, and waves would visibly change
+		// piecewise-constant - a jagged coastline flips it texel to texel, and waves would visibly change
 		// travel direction along the beach. Averaged as VECTORS, so opposing shores cancel to "none"
 		// rather than to a bogus average angle.
 		float smoothRadius = 40.0f;
@@ -203,7 +203,7 @@ export namespace Procedural
 		const size_t n = (size_t)res * res;
 		constexpr float kSeaEps = 0.05f; // the same "is this the ocean's level" test as applyWaterReach
 
-		// The 8 flow bits ride bits 8-15 of the bit-cast climate channel (bit ops only — the packed
+		// The 8 flow bits ride bits 8-15 of the bit-cast climate channel (bit ops only - the packed
 		// value may form NaN patterns, so no float arithmetic may ever touch it).
 		const auto readEnc = [](const float* t) -> uint32
 		{
@@ -216,7 +216,7 @@ export namespace Procedural
 
 		// Nearest-land feature transform, dead-reckoning style: the two chamfer sweeps of applyWaterReach,
 		// but PROPAGATING the nearest dry texel's coords and scoring candidates by true euclidean distance
-		// to them. Directions come out of this — chamfer distances alone visibly bend them near corners.
+		// to them. Directions come out of this - chamfer distances alone visibly bend them near corners.
 		constexpr uint32 kNoSeed = 0xFFFFFFFFu;
 		oc::vector<uint32> seed(n);  // packed (y << 16 | x) of the nearest non-ocean texel
 		oc::vector<float> distSq(n); // squared distance to it, in texels
@@ -269,7 +269,7 @@ export namespace Procedural
 			}
 
 		// Raw direction per SHORE texel, as (vector, weight). Land and out-of-reach ocean carry weight 0:
-		// the averaging below must never pull shore directions toward the beach's own downhill — that
+		// the averaging below must never pull shore directions toward the beach's own downhill - that
 		// points the OPPOSITE way, and the two would cancel exactly at the waterline. Authored (river)
 		// directions on shore texels do participate, so a river mouth blends into the surrounding surf.
 		const float r1 = cfg.oceanRange;
@@ -305,7 +305,7 @@ export namespace Procedural
 			}
 
 		// Separable box average over the shore vectors: windowed running SUMS per axis (O(n) at any
-		// radius), mean = sum / summed weight at the end — no per-window normalization needed, and land's
+		// radius), mean = sum / summed weight at the end - no per-window normalization needed, and land's
 		// zero weight keeps the mask exact.
 		const int32 radius = (int32)glm::clamp(cfg.smoothRadius / (float)texelSize + 0.5f, 0.0f, (float)(res / 4));
 		if (radius > 0)
@@ -348,7 +348,7 @@ export namespace Procedural
 				const size_t k = (size_t)j * res + i;
 				float* t = texels + k * channels;
 				if (readEnc(t) != 0)
-					continue; // generator-authored flow (rivers) is ground truth — never overwritten
+					continue; // generator-authored flow (rivers) is ground truth - never overwritten
 				uint32 enc = 0;
 				if (cls[k] == Shore)
 				{
@@ -386,17 +386,17 @@ export namespace Procedural
 	// swim between re-bakes.
 	//
 	// TWO PASSES for a NEW sampler. The near cascade at Full detail is the expensive one: for V3 it is
-	// every full-detail tile under the near range — at 4 km and sub-metre mpp that is ~1000 tiles, ~1.5 s
-	// each cold, all serialised on one inference lock — and the map ships all-or-nothing, so after a
+	// every full-detail tile under the near range - at 4 km and sub-metre mpp that is ~1000 tiles, ~1.5 s
+	// each cold, all serialised on one inference lock - and the map ships all-or-nothing, so after a
 	// reseed the climate stayed flat for tens of minutes while the mesh (nearest tiles first) was long
-	// visible. So a sampler the baker has not seen ships a QUICK pass first — both cascades at Coarse
-	// detail, a few dozen coarse tiles, seconds — and then re-bakes the near cascade at Full detail with
+	// visible. So a sampler the baker has not seen ships a QUICK pass first - both cascades at Coarse
+	// detail, a few dozen coarse tiles, seconds - and then re-bakes the near cascade at Full detail with
 	// the same centre. Coarse and Full share the fitted climate baseline, so the textures land with the
 	// quick pass and only the near heights refine later. A drift or rule change on a Full map goes
 	// straight to Full: the mesh has streamed those tiles already, and a coarse flash would show.
 	//
 	// A bake whose inputs go stale while it runs is CANCELLED (checked between row bands, so at most one
-	// band of tile fetches is wasted) — otherwise a cold Full pass would gate the next quick pass behind
+	// band of tile fetches is wasted) - otherwise a cold Full pass would gate the next quick pass behind
 	// minutes of inference nothing will ship.
 	class HeightMapBaker
 	{
@@ -416,10 +416,10 @@ export namespace Procedural
 		// RGB32F is not a sampled-image format on most GPUs): (height, water level, PACKED fog thickness
 		// | flow direction | temperature | humidity 4x8 bits BIT-CAST into the float texel, MACRO
 		// ALTITUDE). The packed channel tolerates no bilinear filtering and no float arithmetic (NaN
-		// patterns possible) — shaders decode texels via floatBitsToUint (terrainClimateAt); altitude is
+		// patterns possible) - shaders decode texels via floatBitsToUint (terrainClimateAt); altitude is
 		// a plain float (bilinear-safe). The flow bits carry the generator's authored angle where it has
 		// one, the computed toward-land/downhill field where flowField is non-null (applyFlowField).
-		// A bake job is outstanding — keep polling update() (active or not) until it drains, so its
+		// A bake job is outstanding - keep polling update() (active or not) until it drains, so its
 		// result is consumed the frame it lands and a disabled consumer knows when it can stop calling.
 		bool inFlight() const { return m_bakeInFlight; }
 		// Whether the ACTIVE map's near cascade is the Full-detail one (false = the quick coarse pass).
@@ -490,7 +490,7 @@ export namespace Procedural
 			Inputs in;
 			if (!activeStale)
 			{
-				// The quick pass shipped and still fits: upgrade it in place — same centre, near at Full.
+				// The quick pass shipped and still fits: upgrade it in place - same centre, near at Full.
 				in = m_active;
 				in.fullNear = true;
 			}
@@ -500,7 +500,7 @@ export namespace Procedural
 				// re-land on the exact same world positions bake after bake (with the default range ratio the
 				// finer lattice divides the coarser), so re-bakes reproduce identical values where the terrain
 				// is unchanged. Snapping to the finest lattice instead let the coarse cascade's texels shift
-				// sub-coarse-texel per bake — on steep coasts a 16 m texel's height then jumped meters between
+				// sub-coarse-texel per bake - on steep coasts a 16 m texel's height then jumped meters between
 				// bakes, and consumers thresholding the field (the ocean land cull) flipped visibly.
 				const float texel = ranges[numCascades > 1 ? 1 : 0] / float(res);
 				in.center = glm::floor(camXZ / texel + 0.5f) * texel;
@@ -545,7 +545,7 @@ export namespace Procedural
 					// Cascade 0 is the near/fine map; every later cascade spans tens of km at the same texel
 					// count, so ask for the cheap approximation there. For a generator with a real per-point
 					// cost (V3) that is the difference between a handful of coarse tiles and thousands of
-					// full-detail ones covering terrain mostly beyond the mesh ring — see ESampleDetail. The
+					// full-detail ones covering terrain mostly beyond the mesh ring - see ESampleDetail. The
 					// shader crossfades near->far, so the fidelity step blends in instead of seaming.
 					// The quick pass (see the class comment) asks Coarse for the near cascade as well.
 					const ESampleDetail detail = (c == 0 && bake->in.fullNear) ? ESampleDetail::Full : ESampleDetail::Coarse;
@@ -553,7 +553,7 @@ export namespace Procedural
 					// Grid calls per ROW BAND, not res*res point calls: a grid call lets the sampler resolve
 					// whatever it needs (V3: its tile set, under one lock each) before touching a texel. Bands
 					// rather than one whole-cascade call so a cancel lands within one band's tile fetches
-					// instead of after the whole cascade's — a cold Full band is ~one tile row of inference.
+					// instead of after the whole cascade's - a cold Full band is ~one tile row of inference.
 					// A band re-resolves its tiles, which is a cache lookup each; nothing measurable.
 					constexpr uint32 kBandRows = 16;
 					points.resize((size_t)res * res);
@@ -587,12 +587,12 @@ export namespace Procedural
 								// computed field where it has none) | SEA-LEVEL TEMPERATURE | humidity [0,1].
 								// 32 bits exceed float32's exact-integer range, so the bits are BIT-CAST into
 								// the texel (oc::bitCast here, floatBitsToUint in terrain_height.inc.glsl).
-								// The whole path — vector moves, staging memcpy, copyBufferToImage, texelFetch
-								// — carries raw bits with NO float arithmetic; some packs form NaN bit
+								// The whole path - vector moves, staging memcpy, copyBufferToImage, texelFetch
+								// - carries raw bits with NO float arithmetic; some packs form NaN bit
 								// patterns, which any arithmetic would corrupt. Keep it bit-exact end to end.
 								// Temperature is stored as the SEA-LEVEL BASELINE, not as a sample: a sample
 								// is only valid at the height it was taken from, and the two cascades bake
-								// different heights for the same spot — baking samples left the far cascade
+								// different heights for the same spot - baking samples left the far cascade
 								// 10.6 C too warm at peaks and its texture flipped at the crossfade. A
 								// baseline has no anchor to disagree about: consumers evaluate it at the
 								// height they shade (terrainTemperatureAt) against the generator's one
@@ -606,7 +606,7 @@ export namespace Procedural
 								texel[3] = p.altitude; // macro elevation (terrain coloring)
 							}
 						}
-					// NOTE: the water-level channel bakes EXACTLY what the sampler reports — no post-processing.
+					// NOTE: the water-level channel bakes EXACTLY what the sampler reports - no post-processing.
 					// A land-burial dive (sinking the level under land texels against standard-Z depth noise)
 					// briefly lived here and backfired: the ocean clipmap's coarse outer rings vertex-sample
 					// this channel, and one triangle bridging a flat water texel to a deeply dived land texel
@@ -617,7 +617,7 @@ export namespace Procedural
 					if (applyReach)
 						applyWaterReach(dst, res, channels, texelSize, maps->seaLevel(), reach);
 					// Flow directions are a distance question too (toward the nearest land), so they are
-					// also computed here — and after the reach pass, so drained inland films point downhill
+					// also computed here - and after the reach pass, so drained inland films point downhill
 					// instead of at a coast the ocean never reaches them from.
 					if (applyFlow)
 						applyFlowField(dst, res, channels, texelSize, maps->seaLevel(), flow);
@@ -630,7 +630,7 @@ export namespace Procedural
 		bool hasActiveMap() const { return m_valid; }
 
 		// Callers must destroy this after draining (both owners outlive the frame); the wait covers
-		// a bake still in flight at teardown — cancelled first, so teardown never sits behind a cold pass.
+		// a bake still in flight at teardown - cancelled first, so teardown never sits behind a cold pass.
 		~HeightMapBaker()
 		{
 			if (m_bake)
@@ -640,7 +640,7 @@ export namespace Procedural
 
 	private:
 		// Everything a bake is a function of (besides res/cascades/channels, which never change per
-		// consumer). Compared to decide staleness — of the active map, and of the in-flight bake (cancel).
+		// consumer). Compared to decide staleness - of the active map, and of the in-flight bake (cancel).
 		struct Inputs
 		{
 			const ITerrainSampler* maps = nullptr; // identity only (never dereferenced)

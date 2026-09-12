@@ -69,7 +69,7 @@ void TerrainWetnessPipeline::createImage()
     m_view = viewResult.value;
 
     // One-time init: clear to dry, then GENERAL for its whole life (compute read/write in place, fragment
-    // sampled read) — no per-frame layout churn.
+    // sampled read) - no per-frame layout churn.
     {
         CommandBuffer init;
         init.initialize(vk::CommandBufferLevel::ePrimary);

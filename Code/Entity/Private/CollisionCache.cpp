@@ -83,7 +83,7 @@ static void appendNodeGeometry(const CollisionSource& source, const CollisionSou
     {
         const CollisionSource::Mesh& mesh = source.meshes[meshIdx];
         // "Col_*" proxy meshes always collide; a render mesh is skipped when a proxy exists for its
-        // (or its node's) name — the proxy replaces it.
+        // (or its node's) name - the proxy replaces it.
         if (!nodeIsProxy && !isCollisionName(mesh.name)
             && (oc::contains(source.proxiedNames, mesh.name) || oc::contains(source.proxiedNames, node.name)))
             continue;

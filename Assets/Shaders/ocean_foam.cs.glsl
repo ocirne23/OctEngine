@@ -2,7 +2,7 @@
 
 // FFT ocean, pass 4/5: temporal TURBULENCE accumulation.
 //
-// The accumulated field is not foam — it is the churn energy breaking events leave in the water. It is
+// The accumulated field is not foam - it is the churn energy breaking events leave in the water. It is
 // injected by the SAME instant-foam function the water shader displays (oceanInstantFoam at base
 // thresholds: Jacobian folding + Longuet-Higgins downward crest acceleration, evaluated with
 // mip-filtered inputs matched to this field's texel footprint) and decays exponentially:
@@ -16,7 +16,7 @@
 //
 // Point-sampling the fine cascades' full-res gradients instead of mip-filtering them aliases badly (a
 // 0.75m mask texel reading one ~2.5cm steepness sample flickers per frame). The mips sampled here are
-// last frame's for the fine cascades (this pass runs before the blit) — one frame of latency, invisible.
+// last frame's for the fine cascades (this pass runs before the blit) - one frame of latency, invisible.
 //
 // The result is stashed into the cascade-0 moments layer's w channel BEFORE the mip blit, so the water
 // shader samples mip-filtered trail coverage with everything else. Decay is per frame (u_oceanParams3.z).
@@ -60,7 +60,7 @@ void main()
     const float jacobian = jxx * jzz - jxz * jxz;
 
     // The injection is the shared instant-foam function at BASE thresholds (biasBoost 0): only genuine
-    // breaking adds turbulence — the display-side threshold relaxation must not feed back into itself.
+    // breaking adds turbulence - the display-side threshold relaxation must not feed back into itself.
     const float instant = oceanInstantFoam(jacobian, accel, 0.0);
 
     // Previous turbulence, DIFFUSED: a wrapped 3x3 tent of last frame's layer, blended by the spread rate.

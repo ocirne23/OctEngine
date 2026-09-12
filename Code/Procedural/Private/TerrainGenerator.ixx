@@ -18,7 +18,7 @@ export namespace Procedural
 
 	// Generates one chunk's surface mesh (geometry only) from any generator's fields. Pure and thread-safe
 	// given a shared sampler. The height field is sampled in world space (so heights agree across chunk/LOD
-	// boundaries) and includes the seabed below sea level — the OceanGenerator draws the water over it and
+	// boundaries) and includes the seabed below sea level - the OceanGenerator draws the water over it and
 	// bakes its shore-depth map from the same field.
 	void generateChunk(const ITerrainSampler& maps, const ChunkParams& params, TerrainChunkMesh& out);
 }

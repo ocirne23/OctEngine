@@ -7,13 +7,13 @@ import Core.Transform;
 import File;
 
 // Snapshot record flags (the wire's per-record `recFlags` byte, mirrored into `targetFlags`).
-// A decoder that meets a bit it doesn't know drops the message — it cannot know the record's size.
+// A decoder that meets a bit it doesn't know drops the message - it cannot know the record's size.
 export constexpr uint8 NetRecFlag_Physics = 1 << 0; // record carries body WORLD pose + velocities (else entity LOCAL pos/rot)
 export constexpr uint8 NetRecFlag_Asleep  = 1 << 1; // the server's body is asleep: hard-sync once and sleep too
 export constexpr uint8 NetRecFlag_Forced  = 1 << 2; // owner must accept this correction (claims were rejected); non-owners ignore it
-export constexpr uint8 NetRecFlag_Arbitrated = 1 << 3; // player-vs-player contact: the server solver owns the pose — the owner softly corrects toward it while still steering (claims are velocity intent)
+export constexpr uint8 NetRecFlag_Arbitrated = 1 << 3; // player-vs-player contact: the server solver owns the pose - the owner softly corrects toward it while still steering (claims are velocity intent)
 export constexpr uint8 NetRecFlag_ServerPlayer = 1 << 4; // the SERVER's own player body: observers use the remote-player interp ring and never apply the interaction grace (locally shoving an actively-steered body only fabricates divergence)
-export constexpr uint8 NetRecFlag_Game = 1 << 5; // record carries the 5-byte GAME blob (GameUnitComponent state: health/energy/output/materials/flags) — see NetworkManager's packGameStateBlob
+export constexpr uint8 NetRecFlag_Game = 1 << 5; // record carries the 5-byte GAME blob (GameUnitComponent state: health/energy/output/materials/flags) - see NetworkManager's packGameStateBlob
 
 // Which simulation drives this entity, seen from the LOCAL process (derived, never stored):
 // the same entity reads LocalOwner on the client that owns it and RemoteOwner on the server/everyone else.
@@ -21,7 +21,7 @@ export enum class ENetAuthority : uint8
 {
     Local,       // netId == 0: not part of the session (single player / client-local content)
     ServerOwned, // ownerClientId == 0: the server's simulation is the authority
-    LocalOwner,  // owned by THIS process (client): my claims drive it — simulate freely, obey only Forced
+    LocalOwner,  // owned by THIS process (client): my claims drive it - simulate freely, obey only Forced
     RemoteOwner, // owned by another client: their claims drive it (the server validates, everyone else replicates)
 };
 
@@ -78,10 +78,10 @@ export struct NetEntityState
     // ---- shared by both roles ----
     NetInputState input; // owner writes its sampled intent here; the server mirrors the latest accepted one
 
-    // Ownership TRANSFER (server-decided, proximity-based — see NetworkManager::updateOwnershipTransfers):
+    // Ownership TRANSFER (server-decided, proximity-based - see NetworkManager::updateOwnershipTransfers):
     // ownership acquired via OwnerChange rather than the entity's Spawn. On the server it marks a
     // release candidate (reverts to server-owned once away from the owner's PRIMARY bodies); on the
-    // owning client it marks "not my primary entity" — player control drives only primaries, while
+    // owning client it marks "not my primary entity" - player control drives only primaries, while
     // the claim stream carries both.
     bool transferredOwnership = false;
 
@@ -103,11 +103,11 @@ export struct NetEntityState
         double claimBudgetTime = 0.0;
         glm::vec3 lastAcceptedClaimPos = glm::vec3(0.0f); // displacement-budget anchor: what was last ACCEPTED, not the live twin (contacts/corrections perturb it)
         EClaimResult lastClaimResult = EClaimResult::None;
-        uint16 violations = 0;           // rejected-claim count (saturating) — cheat telemetry
+        uint16 violations = 0;           // rejected-claim count (saturating) - cheat telemetry
         uint32 forcedUntilTick = 0;      // while serverTick < this, this entity's snapshot records carry NetRecFlag_Forced
 
         // newest ACCEPTED claim, re-emitted by snapshot ticks in place of the twin's pose (see
-        // sendSnapshotTick) — the twin's pose age wobbles with clock drift and reads as pulsing
+        // sendSnapshotTick) - the twin's pose age wobbles with clock drift and reads as pulsing
         glm::vec3 claimStreamPos = glm::vec3(0.0f);
         glm::quat claimStreamRot = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
         glm::vec3 claimStreamLinVel = glm::vec3(0.0f);
@@ -120,10 +120,10 @@ export struct NetEntityState
 
         // ARBITRATION (see NetworkManager::stealOwnershipOnContact):
         // primaries: while serverTick < arbitratedUntilTick (player-vs-player contact, refreshed per
-        // contact) the twin's pose is solver-owned — claims apply as bounded velocity nudges and the
+        // contact) the twin's pose is solver-owned - claims apply as bounded velocity nudges and the
         // owner's records carry NetRecFlag_Arbitrated. Objects: the last two DISTINCT clients to
         // touch, with the net time of each touch (an age is netTime - stamp: no per-frame aging
-        // walk) — both fresh = CONTESTED, the object reverts to server ownership until the window
+        // walk) - both fresh = CONTESTED, the object reverts to server ownership until the window
         // decays (single-owner transfer behavior resumes after).
         uint32 arbitratedUntilTick = 0;
         uint32 contestClients[2] = { 0, 0 };
@@ -131,14 +131,14 @@ export struct NetEntityState
         uint32 contestedUntilTick = 0;
 
         // This entity is the SERVER's own primary (its player body, marked via
-        // NetworkManager::setServerPrimary): it acts as a transfer SOURCE — re-claims transferred
-        // objects it approaches, exactly like a client's primary acquires — and is never itself
+        // NetworkManager::setServerPrimary): it acts as a transfer SOURCE - re-claims transferred
+        // objects it approaches, exactly like a client's primary acquires - and is never itself
         // handed to a client by the proximity transfer.
         bool serverPrimary = false;
 
         // ---- SNAPSHOT SEND STATE (see NetworkManager::sendSnapshotTick) ----
         // OBSERVED once per tick for every entity: the record as it would go on the wire, compared
-        // with the previous observation — any difference (awake body, sleep edge, moved transform,
+        // with the previous observation - any difference (awake body, sleep edge, moved transform,
         // flag or game-blob change) stamps changedTick. Sending is then PER PEER: a peer receives
         // the observed record when changedTick > sentTick[its slot], thinned by the cadence of the
         // entity's distance to THAT peer's player, or on its keyframe rotation; sentTick[slot] then
@@ -155,17 +155,17 @@ export struct NetEntityState
 
     struct ClientState
     {
-        // owner-side: next outgoing claim sequence (the redundancy ring lives in the manager —
+        // owner-side: next outgoing claim sequence (the redundancy ring lives in the manager -
         // only a handful of entities are ever locally owned)
         uint32 claimSeq = 0;
 
         // seconds of correction suspension left because one of OUR claim-driven bodies is (or just
-        // was) touching this server-owned body — corrections would fight the player's push with the
+        // was) touching this server-owned body - corrections would fight the player's push with the
         // server's RTT-old pre-push state (see NetSyncParams::interactionRadius)
         float localInteractionGrace = 0.0f;
 
         // latest server state, written by NetworkManager::receive on the main thread BEFORE the
-        // (parallel) entity pass — update() only reads it, so no synchronization is needed
+        // (parallel) entity pass - update() only reads it, so no synchronization is needed
         glm::vec3 targetPos = glm::vec3(0.0f);   // body WORLD pos when NetRecFlag_Physics, else entity LOCAL pos
         glm::quat targetRot = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
         glm::vec3 targetLinVel = glm::vec3(0.0f);
@@ -194,15 +194,15 @@ export struct NetEntityState
             new (&client) ClientState();
     }
 };
-// the union has no destructor dance only because both members need none — keep it that way
+// the union has no destructor dance only because both members need none - keep it that way
 static_assert(std::is_trivially_destructible_v<NetEntityState::ServerState>
     && std::is_trivially_destructible_v<NetEntityState::ClientState>);
 
-// Marks the entity as networked state ("Component Network" in .pre is pure PRESENCE — netIds are
+// Marks the entity as networked state ("Component Network" in .pre is pure PRESENCE - netIds are
 // minted only by the server). A client's component either carries the server's id, or stays
 // LOCAL-INERT with netId 0 (client-local content, never synced). update() runs client-side only and
 // corrects toward the latest target by the "Network/Correction" thresholds. DYNAMIC bodies sync the
-// BODY through the thread-safe PhysicsWorld queue — PhysicsComponent::update rewrites entity.pos/rot
+// BODY through the thread-safe PhysicsWorld queue - PhysicsComponent::update rewrites entity.pos/rot
 // from the body right after, so correcting the entity directly would be overwritten. Kinematic and
 // static bodies use the entity-transform path.
 export struct NetworkComponent
@@ -210,16 +210,16 @@ export struct NetworkComponent
     static constexpr EComponentID getId() { return EComponentID_Network; }
 
     uint32 netId = 0;         // 0 = local-inert (client-local content / single player); anything else is server-minted
-    uint32 ownerClientId = 0; // 0 = server-owned; else the clientId whose claims drive this entity (set via NetworkManager::setOwner, carried in the Spawn message — never authored)
+    uint32 ownerClientId = 0; // 0 = server-owned; else the clientId whose claims drive this entity (set via NetworkManager::setOwner, carried in the Spawn message - never authored)
 
     // null outside a session (role None, or a local-inert registration). NetworkManager only
     // touches registered components so it never null-checks; update() and outside readers must.
     oc::unique_ptr<NetEntityState> state;
 
-    // Local, ServerOwned, LocalOwner or RemoteOwner — from THIS process's perspective (see the enum)
+    // Local, ServerOwned, LocalOwner or RemoteOwner - from THIS process's perspective (see the enum)
     ENetAuthority authority() const;
 
-    struct SpawnInfo {}; // presence only — ids are assigned in code (see registerEntity), never authored
+    struct SpawnInfo {}; // presence only - ids are assigned in code (see registerEntity), never authored
 
     void spawn(Entity& entity, const SpawnInfo& info, const Transform& base);
     void destroy(Entity& entity, const SpawnInfo& info);

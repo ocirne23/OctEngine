@@ -35,7 +35,7 @@ void main()
 
     const vec2 uv = gl_FragCoord.xy * u_screenSize.zw;
     const float depth = texture(u_gbufferDepth, uv).r;
-    if (depth <= 0.0) // reversed-Z: sky/far — nothing to project onto
+    if (depth <= 0.0) // reversed-Z: sky/far - nothing to project onto
         discard;
     const vec3 worldPos = worldPosFromDepth(uv, depth);
 

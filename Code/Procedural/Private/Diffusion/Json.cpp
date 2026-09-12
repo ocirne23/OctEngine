@@ -131,7 +131,7 @@ namespace Procedural::Diffusion
 				if (m_i == start)
 					return fail("expected number");
 
-				// from_chars is locale-independent, unlike strtod — these files use '.' regardless of the
+				// from_chars is locale-independent, unlike strtod - these files use '.' regardless of the
 				// user's locale, so this must not depend on it.
 				double v = 0.0;
 				const char* first = m_s.data() + start;

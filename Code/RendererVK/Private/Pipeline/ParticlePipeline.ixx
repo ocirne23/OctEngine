@@ -14,7 +14,7 @@ import :Sampler;
 import :Layout;
 
 // GPU-driven particle system. The particle pool, dead-index stack and two alive lists are persistent
-// device-local state (single copy — frames in flight are serialized on the graphics queue, with a WAR
+// device-local state (single copy - frames in flight are serialized on the graphics queue, with a WAR
 // barrier at the head of each frame's sim pass). Per frame, three compute passes run with a cached
 // secondary command buffer and indirect args, so emitter/spawn-count changes never re-record:
 //   1. begin : (indirect, CPU-sized) pool init/reset OR zero this frame's OUT alive count + size the
@@ -22,7 +22,7 @@ import :Layout;
 //   2. emit  : (indirect, CPU-sized) one thread per spawn, popping the dead stack, initializing from
 //              the CPU-written emitter table and appending to the IN alive list.
 //   3. sim   : (indirect, GPU-sized) integrate + optional screen-space depth collision, compacting
-//              survivors into the OUT alive list — whose count IS the draw's instanceCount.
+//              survivors into the OUT alive list - whose count IS the draw's instanceCount.
 // The draw pass renders one quad per OUT entry inside the scene-color pass (after the opaque forward
 // draw, before fog apply): billboards/velocity-stretch, flipbooks, per-particle GI+sun lighting, soft
 // depth fade, premultiplied blend covering alpha through additive per emitter.
@@ -55,7 +55,7 @@ public:
     // pairs, expanded here into the per-spawn map; the total clamps to MAX_PARTICLE_SPAWNS_PER_FRAME.
     // reset runs the pool initialization this frame INSTEAD of the per-frame prepare; the caller
     // (Renderer) owns the pending-reset flag and must only clear it once the frame that carried
-    // reset=true was actually SUBMITTED with the sim executing — a reset consumed by a frame that
+    // reset=true was actually SUBMITTED with the sim executing - a reset consumed by a frame that
     // never runs (acquire failure, empty scene) would leave the pool permanently uninitialized
     // (dead stack empty -> every emit drops its spawn).
     void update(uint32 frameIdx, oc::span<const RendererVKLayout::ParticleEmitterGpu> emitters,

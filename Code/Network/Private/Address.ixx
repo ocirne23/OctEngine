@@ -18,7 +18,7 @@ export struct NetAddress final
                oc::to_string((ip >> 8) & 0xff) + "." + oc::to_string(ip & 0xff) + ":" + oc::to_string(port);
     }
 
-    // "127.0.0.1:1234" or "127.0.0.1" (port stays 0). No DNS — use netResolveHost for names.
+    // "127.0.0.1:1234" or "127.0.0.1" (port stays 0). No DNS - use netResolveHost for names.
     static NetAddress fromString(oc::string_view text)
     {
         NetAddress out;

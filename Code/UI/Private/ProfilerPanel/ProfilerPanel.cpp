@@ -80,7 +80,7 @@ void ProfilerPanel::prepare()
     // are tested - pausing freezes the rings, so pausing sooner would drop the spike frame's own
     // GPU records (they land when its frame slot's fence is next waited). The rings comfortably
     // retain those 2 extra frames, so nothing of the spike is lost. (selectFrame only ever SETS
-    // paused — an atomic exchange — so this is safe off the main thread; resume stays in render.)
+    // paused - an atomic exchange - so this is safe off the main thread; resume stays in render.)
     if (m_autoPause && !m_paused)
     {
         const uint64 frameCount = profiler.getFrameCount();
@@ -112,7 +112,7 @@ void ProfilerPanel::render()
 {
     Profiler& profiler = Globals::profiler;
     if (!m_prepared)
-        prepare(); // nothing ran ahead of us (first frame after opening, or no UI::prepare) — inline
+        prepare(); // nothing ran ahead of us (first frame after opening, or no UI::prepare) - inline
     m_prepared = false;
     if (profiler.getFrameCount() < 4)
     {
@@ -143,7 +143,7 @@ void ProfilerPanel::render()
         if (statsOpen)
         {
             if (!m_statsVisible)
-                aggregateStats(); // tab just opened: prepare skipped it — catch up inline this once
+                aggregateStats(); // tab just opened: prepare skipped it - catch up inline this once
             drawStatsTable();
             ImGui::EndTabItem();
         }
@@ -206,7 +206,7 @@ void ProfilerPanel::snapshotTracks()
     // One slot per track, filled IN PARALLEL: the copy out of each ring plus its sort is the bulk of
     // the panel's cost, and the tracks are independent (each ring is single-writer; a reader on any
     // thread is what snapshotTrack is for). Last frame's record buffers are handed back to their
-    // slots first so the vectors keep their capacity — no per-frame reallocation of tens of
+    // slots first so the vectors keep their capacity - no per-frame reallocation of tens of
     // thousands of records.
     m_trackScratch.resize(numTracks);
     for (TrackView& shown : m_tracks)
@@ -255,7 +255,7 @@ void ProfilerPanel::snapshotTracks()
         }
     }
     });
-    // Serial merge: the visible list + the per-track lane-count memory (a map — not for workers).
+    // Serial merge: the visible list + the per-track lane-count memory (a map - not for workers).
     // The record buffers MOVE into m_tracks and come back at the top of the next snapshot.
     for (uint32 i = 0; i < numTracks; ++i)
     {
@@ -273,7 +273,7 @@ void ProfilerPanel::snapshotTracks()
     oc::sort(m_tracks.begin(), m_tracks.end(), [](const TrackView& a, const TrackView& b)
         { return a.sortKey != b.sortKey ? a.sortKey < b.sortKey : a.trackIdx < b.trackIdx; });
 
-    // Uncapped fps inputs: the displayed frame's "main loop" (Main track, depth 0 — the fence wait
+    // Uncapped fps inputs: the displayed frame's "main loop" (Main track, depth 0 - the fence wait
     // sits OUTSIDE it, so this is pure CPU work) and "GPU Frame" (GPU track). A scope's record can
     // straddle the frame marks (the GPU frame lands a slot late), so per track take the matching
     // depth-0 record with the largest overlap with the frame window and use its FULL duration.
@@ -341,7 +341,7 @@ void ProfilerPanel::drawToolbar()
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Write a text report of the last 256 frames to Assets/Local/profile.txt (F7 does the same)");
     // Layout: the two fps readouts sit right after Pause (the numbers you actually watch), then the
-    // frame identity, then the auto-pause controls last — they are a setting, not a live number.
+    // frame identity, then the auto-pause controls last - they are a setting, not a live number.
     const double frameMs = (double)(m_windowEnd - m_windowStart) * profiler.getMsPerTick();
     ImGui::SameLine();
     ImGui::Text("%.2f ms (%.0f fps)", frameMs, frameMs > 0.0 ? 1000.0 / frameMs : 0.0);

@@ -22,7 +22,7 @@
     // can leave a TLSF memory block reporting IsEmpty() == false at teardown even when every allocation
     // has actually been freed (m_AllocCount == 0): a small leading free block never merges into the null
     // block, so its offset stays != 0. VMA's "some allocations were not freed" check is VMA_ASSERT_LEAK,
-    // which would abort the process on that benign case. Downgrade it to non-fatal — genuine allocation
+    // which would abort the process on that benign case. Downgrade it to non-fatal - genuine allocation
     // leaks are still surfaced: DebugLogAllAllocations prints each live allocation (VMA_LEAK_LOG_FORMAT)
     // and Allocator::destroy() dumps the full stats string whenever any allocation is really still alive.
     #define VMA_ASSERT_LEAK(expr) ((void)0)

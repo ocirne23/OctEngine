@@ -60,7 +60,7 @@ namespace
         return hash;
     }
     // No pointers: for a const char* argument this template outranks the buffer overload above (exact
-    // match vs pointer conversion) and would hash the 8 POINTER bytes — a different, ASLR-randomized
+    // match vs pointer conversion) and would hash the 8 POINTER bytes - a different, ASLR-randomized
     // cache name every launch, so nothing was ever reused and stale files piled up.
     template <typename T> requires (!std::is_pointer_v<T>)
     uint64 fnv1a(const T& value, uint64 hash) { return fnv1a(&value, sizeof(T), hash); }
@@ -223,7 +223,7 @@ namespace
 
     // Rescales a mip's alpha so the fraction of texels passing the alpha-test cutoff ("coverage")
     // matches the full-res image's: plain downsampling averages alpha toward the middle, which makes
-    // alpha-tested foliage thin out and vanish in coarse mips — exactly the mips LOD selection and mip
+    // alpha-tested foliage thin out and vanish in coarse mips - exactly the mips LOD selection and mip
     // streaming push distant vegetation onto. Coverage is monotonic in the scale, so a binary search
     // finds the factor that restores it.
     void preserveAlphaCoverage(uint8* pRgba, size_t numPixels, uint8 cutoff, float refCoverage)
@@ -376,7 +376,7 @@ namespace
         const uint32 numMeshes = scene.getNumMeshes();
 
         // Meshes that belong to an authored LodN_ chain (any level, or a plain "X" acting as level 0 of
-        // an existing "LodN_X" chain) never get generated chains — mirror of ObjectContainer's pre-scan.
+        // an existing "LodN_X" chain) never get generated chains - mirror of ObjectContainer's pre-scan.
         oc::vector<bool> inAuthoredChain(numMeshes, false);
         {
             oc::unordered_map<oc::string_view, uint32> meshIdxByName;
@@ -419,7 +419,7 @@ namespace
             const bool isColMesh = oc::string_view(meshData.getName()).starts_with("Col_");
 
             // Decimation simplifies the base geometry itself (error-unbounded, target count wins) and
-            // drops the vertices that fall out of use — everything downstream (LOD chains, collision
+            // drops the vertices that fall out of use - everything downstream (LOD chains, collision
             // snapshots, mesh streaming) sees only the decimated mesh. Col_ proxies are authored
             // collision shapes and keep their exact geometry.
             if (decimation < 1.0f && !meshData.isSkinned() && !isColMesh && numIndices >= 12)
@@ -474,7 +474,7 @@ namespace
 
             // Same policy as the runtime path in ObjectContainer::initializeMeshes, plus a vertex-cache
             // pass on each level (free at cook time). The simplify error is kept per level (scaled to
-            // mesh-local units) — the renderer's screen-space-error selection projects it into pixels.
+            // mesh-local units) - the renderer's screen-space-error selection projects it into pixels.
             const glm::vec3* pPositions = attributes[0];
             const float meshScale = meshopt_simplifyScale(&pPositions[0].x, numVertices, sizeof(glm::vec3));
             lodIndices.resize(numIndices);
@@ -532,7 +532,7 @@ namespace
         }
 
         const oc::string modelFolder = oc::fromStd(toPath(sourcePath).parent_path().string());
-        // A recook regenerates every conversion, so clear out the previous set first — otherwise .dds
+        // A recook regenerates every conversion, so clear out the previous set first - otherwise .dds
         // files of textures the scene no longer references would pile up.
         std::error_code ecPurge;
         std::filesystem::remove_all(toPath(texFolder), ecPurge);

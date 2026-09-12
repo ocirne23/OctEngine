@@ -26,7 +26,7 @@ export enum class BufferHostAccess
     // are fast. This is the safe default.
     eRandom,
     // CPU only ever writes the mapping (uploads, per-frame UBO/SSBO fills). Lets VMA place it in
-    // write-combined (uncached) — or ReBAR device-local-host-visible — memory, which is faster for the
+    // write-combined (uncached) - or ReBAR device-local-host-visible - memory, which is faster for the
     // GPU to read and for sequential CPU writes. Never read such a mapping on the CPU: WC reads are slow.
     eSequentialWrite,
 };

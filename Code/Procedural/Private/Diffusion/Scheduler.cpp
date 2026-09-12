@@ -6,7 +6,7 @@ import :Diffusion.Scheduler;
 // Precision note: this file is compiled /fp:precise (see Procedural/CMakeLists.txt) and the double/float
 // mixing below is REPRODUCED FROM THE REFERENCE, not incidental. Java evaluates Math.log/atan/pow/sqrt in
 // double and narrows on assignment; the explicit casts here pin the same widths. Do not "clean up" by
-// switching to the float overloads or by making everything double — the sigma schedule feeds every
+// switching to the float overloads or by making everything double - the sigma schedule feeds every
 // downstream value, so a last-bit difference changes the terrain.
 namespace Procedural::Diffusion
 {
@@ -84,7 +84,7 @@ namespace Procedural::Diffusion
 	                                     oc::span<float> sample, float sigmaS0, float sigmaT, float sigmaS1)
 	{
 		// Logs in double, but exp(-h) is deliberately recovered as the FLOAT ratio sigma_t/sigma_s0 rather
-		// than std::exp(-h) — that is what the reference does ("in float32 like Python"). The mix is intentional.
+		// than std::exp(-h) - that is what the reference does ("in float32 like Python"). The mix is intentional.
 		const double lT = -std::log((double)sigmaT);
 		const double lS0 = -std::log((double)sigmaS0);
 		const double lS1 = -std::log((double)sigmaS1);

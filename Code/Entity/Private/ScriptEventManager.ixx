@@ -88,7 +88,7 @@ private:
     // waitForDispatches: the ENTITY DESTROY path (Entity::destroy calls this before any component
     // is torn down). fireEvent invokes its snapshot outside the lock, so a dispatch that already
     // captured this entity may still be running on another worker (parallel destruction): wait
-    // until every in-flight dispatch has drained before the teardown proceeds — the entity is
+    // until every in-flight dispatch has drained before the teardown proceeds - the entity is
     // then either invoked while still fully alive, or never. Never set from inside a dispatch (a
     // script's re-registration through syncScriptDataLive passes false); destroys are deferred
     // requests, so no dispatch ever reaches a destroy on its own thread.
@@ -129,7 +129,7 @@ private:
 	mutable std::shared_mutex m_eventKeyMutex; // both guarded by this; only script load ever writes
 
 	// Parallel entity spawning: a spawn job's OnSpawn can fire an event while another job's
-	// ScriptComponent::spawn registers a listener — both structures serialize here. Held only for
+	// ScriptComponent::spawn registers a listener - both structures serialize here. Held only for
 	// map reads/writes: fireEvent SNAPSHOTS the dispatch list and invokes the scripts after
 	// releasing, so nested fires / re-registration from inside OnEvent re-lock freshly.
 	std::mutex m_listenerMutex;
@@ -140,7 +140,7 @@ private:
 
 export namespace Globals
 {
-// The deferred EntityChange queue holds EntityPtrs (requests queued after the last drain) —
+// The deferred EntityChange queue holds EntityPtrs (requests queued after the last drain) -
 // releasing them needs the job system and networkManager still alive, see InitSeg.h.
 OC_INIT_SEG(OC_SEG_SCRIPT_EVENTS)
     ScriptEventManager scriptEvents;

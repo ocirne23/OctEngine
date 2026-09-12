@@ -16,7 +16,7 @@ export namespace Procedural
 
 	// Physical climate -> the normalized (t01, h01) space that the scatter rules' climate attractors and
 	// the terrain shader's texture splatting BOTH share. The shader mirrors temperatureTo01 as
-	// clamp((temp + 25) / 75) — keep them in step.
+	// clamp((temp + 25) / 75) - keep them in step.
 	constexpr float temperatureTo01(float celsius)
 	{
 		constexpr float invRange = 1.0f / (TEMPERATURE_MAX_C - TEMPERATURE_MIN_C);
@@ -31,13 +31,13 @@ export namespace Procedural
 	}
 	// Encoding range of the baked 8-bit fog height-falloff MULTIPLIER: 0..FOG_FALLOFF_MUL_MAX maps to
 	// 0..255 (1.0 = the global Fog/Height Falloff unchanged).
-	// NOT baked any more — it is a pure function of temperature, so the shaders recompute it (see
+	// NOT baked any more - it is a pure function of temperature, so the shaders recompute it (see
 	// fogFalloffFromTemperature) and its 8 bits in the packed channel now carry the LAPSE RATE, which
 	// nothing else can reconstruct. Kept because both sides still need the range to agree.
 	inline constexpr float FOG_FALLOFF_MUL_MAX = 4.0f;
 
 	// Fog height-falloff from temperature: cold air hugs the ground, warm air lets fog tower. Mirrored by
-	// terrain_height.inc.glsl — keep them in step.
+	// terrain_height.inc.glsl - keep them in step.
 	constexpr float fogFalloffFromTemperature(float celsius)
 	{
 		const float t01 = (celsius + 10.0f) * (1.0f / 40.0f);
@@ -63,11 +63,11 @@ export namespace Procedural
 		// lapse * max(0, height above sea level), for a lapse rate the GENERATOR holds fixed and publishes
 		// once (ITerrainSampler::lapseRatePerMetre) rather than varying per point.
 		//
-		// This — not `temperature` — is what the terrain-data map bakes, and the reason is the map's two
+		// This - not `temperature` - is what the terrain-data map bakes, and the reason is the map's two
 		// cascades: they bake DIFFERENT heights for the same spot (the near one the full-detail surface, the
 		// far one its 7.68 km average, which cannot know a peak exists). A baked temperature is only valid at
 		// the height it was baked from, so the far one reported the temperature of the plateau a peak stands
-		// on — 10.6 C too warm, wider than a climate box, and its texture flipped at the crossfade. A
+		// on - 10.6 C too warm, wider than a climate box, and its texture flipped at the crossfade. A
 		// baseline plus a shared constant has no such anchor: every consumer evaluates at the height it
 		// shades, and the cascades agree by construction.
 		//
@@ -78,13 +78,13 @@ export namespace Procedural
 	};
 
 	// How much fidelity a query needs.
-	//   Full   — the real field, whatever it costs. Geometry and near-field bakes.
-	//   Coarse — a cheap, low-resolution approximation, for bakes that span tens of km at low texel
+	//   Full   - the real field, whatever it costs. Geometry and near-field bakes.
+	//   Coarse - a cheap, low-resolution approximation, for bakes that span tens of km at low texel
 	//            density. A generator whose field is built hierarchically may answer these from a much
 	//            cheaper level; one that is a plain function of (x, z) just ignores the hint.
 	// This exists because V3 (diffusion) generates 7.68 km TILES at real cost: a far cascade covering the
-	// whole view distance would otherwise force thousands of full-detail tiles — for terrain largely beyond
-	// the mesh ring — and evict the ones the geometry needs. V3 answers Coarse from its coarse stage alone,
+	// whole view distance would otherwise force thousands of full-detail tiles - for terrain largely beyond
+	// the mesh ring - and evict the ones the geometry needs. V3 answers Coarse from its coarse stage alone,
 	// where one tile covers several hundred km. The shader crossfades near->far, so the drop in fidelity
 	// blends in rather than seaming.
 	enum class ESampleDetail : uint8
@@ -94,12 +94,12 @@ export namespace Procedural
 	};
 
 	// The point-evaluable terrain field the generator (TerrainGenV3) implements.
-	// All methods are pure functions of world position — seeded, thread-safe, world-continuous — which is
+	// All methods are pure functions of world position - seeded, thread-safe, world-continuous - which is
 	// what keeps chunks, LODs, bakes (shore/fog maps) and buoyancy consistent with each other regardless
 	// of which generator produced them. Consumers hold shared_ptr<const ITerrainSampler>.
 	//
 	// A PURE interface: nothing here has a default. The defaults it used to carry composed the single-field
-	// samplers point by point, which is only free if the field is a cheap function of (x, z) — true of the
+	// samplers point by point, which is only free if the field is a cheap function of (x, z) - true of the
 	// noise generator they were written for, false of a tile-based one, which would silently inherit a
 	// cache lock per texel of every bake. An implementer answers each question the way that is actually
 	// cheap for it, or says so explicitly (a constant, or a value it does not model).
@@ -130,7 +130,7 @@ export namespace Procedural
 		// Both fields from one evaluation (bakes sampling both per texel use this).
 		virtual float sampleHeightAndWater(double worldX, double worldZ, float& outWaterLevel) const = 0;
 		virtual float sampleTemperature(double worldX, double worldZ) const = 0; // degrees CELSIUS (baked over TEMPERATURE_MIN_C..MAX_C)
-		virtual float sampleHumidity(double worldX, double worldZ) const = 0;   // normalized [0,1] (baked 1:1 — 0 -> 0.0, 255 -> 1.0)
+		virtual float sampleHumidity(double worldX, double worldZ) const = 0;   // normalized [0,1] (baked 1:1 - 0 -> 0.0, 255 -> 1.0)
 		virtual float sampleFogThickness(double worldX, double worldZ) const = 0; // [0,1] regional fog multiplier
 		// Regional multiplier on the global Fog/Height Falloff, [0, FOG_FALLOFF_MUL_MAX] (1 = neutral):
 		// lets a generator make fog hug the ground in one region and tower in another. 1 = no variation.
@@ -140,7 +140,7 @@ export namespace Procedural
 		// Baked into the ocean shore map so the water shader orients its wave field along rivers.
 		// A generator that models no rivers returns < 0 everywhere.
 		virtual float sampleFlowAngle01(double worldX, double worldZ) const = 0;
-		// The MACRO elevation (m above sea level) before fine detail — what separates "a mountain" (height
+		// The MACRO elevation (m above sea level) before fine detail - what separates "a mountain" (height
 		// far above the local altitude) from "high-altitude flatland" (height ~ altitude). Fed per-vertex
 		// to the terrain shader for coloring. A generator with no macro/detail split returns the full
 		// height above sea level.
@@ -148,18 +148,18 @@ export namespace Procedural
 		virtual float seaLevel() const = 0;
 
 		// Temperature change per metre of elevation above sea level, in this generator's VERTICAL FRAME
-		// (model metres for V3 — divide by vertScale for world metres). ONE value for the whole world, not a
+		// (model metres for V3 - divide by vertScale for world metres). ONE value for the whole world, not a
 		// field: `sampleTemperature` and `TerrainPoint::temperatureSeaLevel` are consistent with it by
 		// construction, so a consumer can re-derive the temperature at any height from the baseline alone.
 		//
 		// It was per-point once, regressed by the diffusion model per region and baked into the terrain-data
 		// map. Measured, that bought nothing: the two cascades regress the same data through the same
-		// windows, so their rates AGREE — near-vs-far disagreement was 0.15 C max either way, and all of it
+		// windows, so their rates AGREE - near-vs-far disagreement was 0.15 C max either way, and all of it
 		// came from the baselines. The per-region rate only bought fidelity to the model's own temperature,
 		// which has no consumer (the field is an artistic input, not a measurement), and cost 8 bits of the
 		// packed climate channel. What it did buy was regional variety in the lapse; that is now a tweak.
 		//
-		// 0 = temperature does not vary with height — correct for a generator that folds its own lapse into
+		// 0 = temperature does not vary with height - correct for a generator that folds its own lapse into
 		// sampleTemperature and exposes no way to move it: there the baseline IS the temperature, and a
 		// consumer lapsing it again would double-count.
 		virtual float lapseRatePerMetre() const = 0;

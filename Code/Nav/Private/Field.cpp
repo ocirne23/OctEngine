@@ -20,7 +20,7 @@ void TeamField::snapshotCosts(const glm::vec2& center, int radiusCells, CostWind
     out.origin = centerCell - radiusCells;
     out.size = radiusCells * 2 + 1;
     memset(out.cost, 0, size_t(out.size) * size_t(out.size)); // absent chunks stay "open"
-    // Chunk-wise row copies: the window spans at most 2x2 (up to 3x3 at MaxRadius) chunks — a few
+    // Chunk-wise row copies: the window spans at most 2x2 (up to 3x3 at MaxRadius) chunks - a few
     // hash lookups total instead of one per cell.
     const glm::ivec2 lo = out.origin, hi = out.origin + (out.size - 1);
     const glm::ivec2 chunkLo = chunkOf(lo), chunkHi = chunkOf(hi);
@@ -106,7 +106,7 @@ void TeamField::rasterizeObstacles(oc::span<const NavObstacle> obstacles, uint8 
     // descent hugs the middle of a gap instead of scraping the wall (units have a body radius).
     // MULTITHREADED (this runs inside the navFieldBuild jobs): every chunk any obstacle (inflated
     // by the one-cell ring) can touch is created SERIALLY first, so the parallel phases below never
-    // mutate the map — their writes are single bytes where every racing writer writes the SAME
+    // mutate the map - their writes are single bytes where every racing writer writes the SAME
     // value (Blocked in phase 2, clearanceCost in phase 3), which is the sanctioned kind of race.
     for (const NavObstacle& o : obstacles)
     {
@@ -145,7 +145,7 @@ void TeamField::rasterizeObstacles(oc::span<const NavObstacle> obstacles, uint8 
         }
     }, EJobPriority::Low);
     Globals::jobSystem.preemptionPoint();
-    // Phase 2b: BREACHABLE obstacles (cost != 0) after the Blocked barrier — their cells stay
+    // Phase 2b: BREACHABLE obstacles (cost != 0) after the Blocked barrier - their cells stay
     // walkable at the (1 + cost) multiplier and never override a Blocked cell. Overlapping
     // breachable obstacles racing on one cell both write a max, which can only lose the larger
     // of two costs (game footprints never overlap, so it does not happen in practice).
@@ -177,9 +177,9 @@ void TeamField::rasterizeObstacles(oc::span<const NavObstacle> obstacles, uint8 
         return;
 
     // Phase 3: the clearance ring, one chunk per work item; ring cells crossing into a neighbour
-    // chunk write through find() — the inflated pre-creation guarantees it exists. The Blocked set
+    // chunk write through find() - the inflated pre-creation guarantees it exists. The Blocked set
     // is FINAL after phase 2's barrier, so the != Blocked filter cannot race with a Blocked write.
-    // Members, not thread_local (this runs inside a build job and the parallelFor parks the fiber —
+    // Members, not thread_local (this runs inside a build job and the parallelFor parks the fiber -
     // see FlowField::update) and not stack locals (two chunk-count-sized allocations per build).
     oc::vector<Chunk*>& chunks = m_ringChunks;
     oc::vector<uint64>& chunkKeys = m_ringKeys;
@@ -244,13 +244,13 @@ void TeamField::beginBuild(oc::span<const NavObstacle> obstacles, oc::span<const
     Globals::jobSystem.preemptionPoint(); // raster complete, seeding not started
 
     // CHUNK-WAVE multi-source Dijkstra: instead of one global heap, each WAVE solves every dirty
-    // chunk to its LOCAL fixpoint in parallel (floodSolveChunk — a 256-cell mini-Dijkstra against
+    // chunk to its LOCAL fixpoint in parallel (floodSolveChunk - a 256-cell mini-Dijkstra against
     // the neighbours' current values), then a serial step turns the solves' borderImproved masks
     // into the next wave, creating chunks the front wants to enter. Distances only ever decrease
     // and the relaxation equations have one fixpoint, so the waves converge to EXACTLY the serial
-    // result — a chunk just re-solves when a later wave improves its boundary. Distances in 1/8 m:
+    // result - a chunk just re-solves when a later wave improves its boundary. Distances in 1/8 m:
     // an orthogonal step is 16, a diagonal 23; a cell's cost multiplies the step INTO it. Seeds
-    // cover each source's footprint (blocked or not — the front leaves them into free cells only).
+    // cover each source's footprint (blocked or not - the front leaves them into free cells only).
     // The front (m_wave/m_nextWave) is a member so the flood can pause between step jobs.
     m_buildMaxDist = uint32(glm::clamp(params.radius, 1.0f, 8000.0f) * DistScale);
     m_buildIteration = 0;
@@ -292,7 +292,7 @@ bool TeamField::stepBuild(uint32 maxChunks)
     // A CHUNK budget, not a wave budget: a wave is cut wherever the budget runs out and its
     // remainder (m_wave[m_waveCursor..]) resumes next step. The unsolved remainder keeps waveDirty
     // set, so a neighbour's border improvement cannot double-queue it; it reads the improved
-    // values when its turn comes — relaxation order never changes the fixpoint.
+    // values when its turn comes - relaxation order never changes the fixpoint.
     uint32 solved = 0;
     while (solved < maxChunks && m_buildIteration < 4096)
     {
@@ -317,7 +317,7 @@ bool TeamField::stepBuild(uint32 maxChunks)
             for (uint32 i = b; i < e; ++i)
                 c->self->floodSolveChunk((*c->wave)[i].key, *(*c->wave)[i].chunk, c->maxDist);
         }, EJobPriority::Low);
-        // Serial: turn the solves' border masks into the next wave (chunk creation lives here —
+        // Serial: turn the solves' border masks into the next wave (chunk creation lives here -
         // the map must never mutate while tasks read across it).
         for (uint32 i = begin; i < end; ++i)
         {
@@ -356,7 +356,7 @@ void TeamField::floodSolveChunk(uint64 key, Chunk& chunk, uint32 maxDist)
         { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 } };
     static constexpr uint32 c_stepCost[8] = { 16, 16, 16, 16, 23, 23, 23, 23 };
     const glm::ivec2 coord = chunkFromKey(key);
-    // The 3x3 chunk neighbourhood, resolved ONCE — every cell access below is index math, never a
+    // The 3x3 chunk neighbourhood, resolved ONCE - every cell access below is index math, never a
     // hash lookup (the serial flood paid a find() per neighbour per pop).
     Chunk* grid[9];
     for (int gz = -1; gz <= 1; ++gz)
@@ -385,7 +385,7 @@ void TeamField::floodSolveChunk(uint64 key, Chunk& chunk, uint32 maxDist)
 
     // Local lazy-deletion heap over THIS chunk's cells: packed (dist << 16) | cellIndex.
     // Legal ONLY because this solve never waits (no parallelFor, no join, no JobMutex): the pin
-    // asserts should that ever change — see ThreadLocalScope.
+    // asserts should that ever change - see ThreadLocalScope.
     static thread_local oc::vector<uint32> heap;
     const ThreadLocalScope tlsPin;
     heap.clear();
@@ -422,7 +422,7 @@ void TeamField::floodSolveChunk(uint64 key, Chunk& chunk, uint32 maxDist)
         borderMask |= borderBits(int(idx & (ChunkCells - 1)), int(idx >> ChunkBits));
     };
 
-    // Seed the heap: every already-finite cell (idempotent), plus boundary IMPORTS — an external
+    // Seed the heap: every already-finite cell (idempotent), plus boundary IMPORTS - an external
     // neighbour's value relaxed into our border cells.
     for (uint32 i = 0; i < ChunkArea; ++i)
     {
@@ -499,7 +499,7 @@ TeamField::Sample TeamField::sample(const glm::vec2& xz, uint32 seed) const
 {
     // 3x3 scan for the lowest neighbour (a per-cell hash of the seed adds < 1 dist unit of jitter,
     // so equal-distance ties resolve differently per unit). The centre wins only when nothing
-    // around it is lower — at/inside a source's footprint.
+    // around it is lower - at/inside a source's footprint.
     Sample out;
     const glm::ivec2 c = cellOf(xz);
     const glm::ivec2 chunkCoord = chunkOf(c);
@@ -553,7 +553,7 @@ TeamField::Sample TeamField::sample(const glm::vec2& xz, uint32 seed) const
     }
     // Direction = drop-weighted blend of every neighbour lower than the reference (the centre,
     // or the best neighbour when the centre is unreached): two equally lower neighbours pull
-    // diagonally between them instead of snapping to one cell centre — a straight corridor reads
+    // diagonally between them instead of snapping to one cell centre - a straight corridor reads
     // as a straight line, not a 45° stair. Blocked neighbours never enter (unreached).
     const uint32 refDist = centreDist != Unreached ? centreDist : bestDist + 1;
     glm::vec2 blend(0.0f);
@@ -596,7 +596,7 @@ TeamField::Sample TeamField::sample(const glm::vec2& xz, uint32 seed) const
 bool TeamField::steerPoint(const glm::vec2& xz, int maxSteps, float radius, glm::vec2& outPoint) const
 {
     // Greedy descent walk over cells (lowest 8-neighbour, no corner cutting), then the farthest
-    // visible point wins — the pulled string hugs corners instead of the cell-centre stair.
+    // visible point wins - the pulled string hugs corners instead of the cell-centre stair.
     static constexpr glm::ivec2 c_offsets[8] = {
         { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 } };
     glm::ivec2 cell = cellOf(xz);
@@ -710,7 +710,7 @@ glm::vec2 TeamField::avoid(const glm::vec2& xz, const glm::vec2& dir, float look
             if (side == 0)
             {
                 // First choice: the side whose wider probe survives; else position parity so a
-                // crowd splits. Latched into `side` — the walker keeps it until the way is clear.
+                // crowd splits. Latched into `side` - the walker keeps it until the way is clear.
                 const bool lFar = lineOfSight(xz, xz + l * (reach * 1.5f), radius);
                 const bool rFar = lineOfSight(xz, xz + r * (reach * 1.5f), radius);
                 if (lFar != rFar)
@@ -817,7 +817,7 @@ float TeamField::freeDistance(const glm::vec2& a, const glm::vec2& dir, float ma
 }
 
 // Push AWAY from every blocked cell whose nearest point lies within `range` of xz, weighted by
-// proximity (1 at contact, 0 at range) — the raster-side "keep your distance from walls" term. In
+// proximity (1 at contact, 0 at range) - the raster-side "keep your distance from walls" term. In
 // a one-cell gap the two side walls cancel (the walker centres itself); at a corner the single
 // wall swings it wide.
 glm::vec2 TeamField::wallPush(const glm::vec2& xz, float range) const

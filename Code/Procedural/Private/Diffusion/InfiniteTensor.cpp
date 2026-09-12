@@ -71,7 +71,7 @@ namespace Procedural::Diffusion
 		}
 
 		// --- Phase 3: evaluate. Every pending window of THIS stage runs before any caller descends to the
-		// next stage. That stage-major order is what makes model offloading affordable — interleaving
+		// next stage. That stage-major order is what makes model offloading affordable - interleaving
 		// stages per tile would rebuild an ONNX session per tile.
 		if (m_batchSize > 0 && m_batchFn)
 			computeBatched(pending);
@@ -270,7 +270,7 @@ namespace Procedural::Diffusion
 		if (mi != c.map.end())
 		{
 			// Already present: keep the incumbent and promote it, discarding the fresh result (reference
-			// behaviour). Unreachable in the current flow — phase 1 only ever enqueues uncached windows.
+			// behaviour). Unreachable in the current flow - phase 1 only ever enqueues uncached windows.
 			c.lru.splice(c.lru.end(), c.lru, mi->second);
 			return;
 		}

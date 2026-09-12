@@ -220,7 +220,7 @@ uint getOrInsertGrid(ivec3 gridPos, uint cellSize)
 }
 
 // Adds the light to the cells [minCell, maxCell] (cell coordinates inside this grid, already
-// clamped by the caller). sphereRadius > 0: cells whose box misses the sphere are skipped — the
+// clamped by the caller). sphereRadius > 0: cells whose box misses the sphere are skipped - the
 // corners of a range box are ~48% of its volume, and every skipped cell is two atomics saved.
 void addLightToGrid(uint gridIdx, uint lightId, ivec3 minCell, ivec3 maxCell, vec3 sphereCenter, float sphereRadius)
 {

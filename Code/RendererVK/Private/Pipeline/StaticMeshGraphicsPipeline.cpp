@@ -24,10 +24,10 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
     graphicsPipelineLayout.fragmentShader.text = FileSystem::readFileStr(graphicsPipelineLayout.fragmentShader.debugFilePath);
 
     // Reversed-Z forward pass tests DIRECTLY against the G-buffer prepass depth, bound read-only as the
-    // scene pass's depth attachment (SceneColor's reuse render pass — no copy): prepass and forward
+    // scene pass's depth attachment (SceneColor's reuse render pass - no copy): prepass and forward
     // rasterize identically (same culled draws, invariant gl_Position, same TAA jitter expression), so
-    // the visible surface's depth EQUALS the attachment value and must pass — eGreaterOrEqual, not
-    // eGreater — while occluded fragments fail early-Z before the expensive lit/terrain shaders run.
+    // the visible surface's depth EQUALS the attachment value and must pass - eGreaterOrEqual, not
+    // eGreater - while occluded fragments fail early-Z before the expensive lit/terrain shaders run.
     // Also correct with the tweak off (own depth cleared to far): equivalent to eGreater bar
     // last-draw-wins on exact coplanar opaque, which this scene never has.
     graphicsPipelineLayout.depthCompareOp = vk::CompareOp::eGreaterOrEqual;
@@ -175,7 +175,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 	}
 
     // Depth-prepass reuse: the scene pass binds the G-buffer prepass depth READ-ONLY (already complete,
-    // bit-identical to what this pass would rasterize), so no variant may write depth — a write-enabled
+    // bit-identical to what this pass would rasterize), so no variant may write depth - a write-enabled
     // pipeline against a read-only depth attachment is invalid. Costs the gizmo its internal depth sort
     // (accepted) and GI-debug sphere self-sorting; everything else only ever re-wrote identical values.
     if (m_depthReadOnly)

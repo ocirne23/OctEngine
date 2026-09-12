@@ -147,7 +147,7 @@ void OceanSimulationPipeline::createImages()
     // Persistent foam coverage mask over cascade 0's patch. Two layers = ping/pong: the foam pass reads
     // last frame's layer through a small diffusion tent and writes the other (frame slots alternate
     // strictly, so the layer roles just follow frameIdx & 1). The diffusion is what actually removes
-    // texel structure from the mask — a sampling-side blur gets undone by the dissolve threshold.
+    // texel structure from the mask - a sampling-side blur gets undone by the dissolve threshold.
     vk::ImageCreateInfo foamInfo{
         .imageType = vk::ImageType::e2D,
         .format = vk::Format::eR16Sfloat,
@@ -398,7 +398,7 @@ void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameI
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_foamPipeline.getPipeline());
         commandBuffer.cmdUpdateDescriptorSets(m_foamPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, set, updates);
         cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_foamPipeline.getPipelineLayout(), 0, 1, &set, 0, nullptr);
-        // Ping/pong: write layer frameIdx & 1, read (diffuse) the other — frame slots alternate strictly.
+        // Ping/pong: write layer frameIdx & 1, read (diffuse) the other - frame slots alternate strictly.
         FoamPC foamPc{ .writeLayer = frameIdx & 1u };
         cmd.pushConstants(m_foamPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(FoamPC), &foamPc);
         cmd.dispatch(N / 8, N / 8, 1);

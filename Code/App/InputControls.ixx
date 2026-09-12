@@ -52,7 +52,7 @@ private:
                                   // 1 = target end); budget-conserving bump
     float width = 1.0f;           // lateral scale (reach untouched): 1 = round, < 1 = narrower/sharper
 
-    bool gameMode = false;           // --game: the Game library owns player/camera/spawn keys — the
+    bool gameMode = false;           // --game: the Game library owns player/camera/spawn keys - the
                                      // testbed spawn/possess keys are muted (F5/F6/gizmo modes stay)
     bool escapePressed = false;      // Esc edge, polled by main (takeEscapePressed)
     bool playerControl = false;      // key C: WASD/Space drive the player entity, camera flight paused
@@ -184,7 +184,7 @@ public:
         }
     }
 
-    // Distance from the body center to the shape's lowest point, world units — grounds the jump
+    // Distance from the body center to the shape's lowest point, world units - grounds the jump
     // raycast for any player shape (capsule, cube, sphere).
     static float shapeBottomDistance(const Entity* entity, const PhysicsComponent& pc)
     {
@@ -215,7 +215,7 @@ public:
     }
 
     // Drives every locally-owned dynamic-body entity with WASD/Space while player control (key C)
-    // is on. The owning client simulates its own body — full responsiveness at any RTT: horizontal
+    // is on. The owning client simulates its own body - full responsiveness at any RTT: horizontal
     // velocity steering (frame-rate independent, snappy), Space jumps off a ground raycast. The
     // sampled intent lands in comp->input (streamed with the claims, mirrored server-side for
     // gameplay), and the claim stream carries the resulting body state to the server. Main thread,
@@ -256,7 +256,7 @@ public:
             net->state->input.move = move;
             net->state->input.look = cameraController.getDirection();
 
-            // Server reasserting itself (claims rejected): YIELD — steering against the forced
+            // Server reasserting itself (claims rejected): YIELD - steering against the forced
             // correction keeps the error large, breeds fresh rejections, and turns the resync into a
             // tug-of-war that only ends when the player releases the keys. Yielding lets it resolve
             // in one quick snap; records stop carrying Forced the moment claims are accepted again.
@@ -392,7 +392,7 @@ public:
         ScriptEventManager& scriptEvents = Globals::scriptEvents;
         Renderer& renderer = Globals::rendererVK;
 
-        // Escape: recorded in every mode (game mode included — main gives the game's own cancel
+        // Escape: recorded in every mode (game mode included - main gives the game's own cancel
         // chain first claim before opening the escape menu; see main.cpp)
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_ESCAPE && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN && !evt.repeat)
             escapePressed = true;
@@ -434,13 +434,13 @@ public:
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_PAUSE && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN && !evt.repeat)
             Globals::time.setPaused(!Globals::time.isPaused()); // Pause/Break: freeze all simulation (also the "Time/Paused" tweak; see Time::setPaused)
         if (gameMode)
-            return; // game mode: everything below is testbed spawns/possession — the Game library owns those keys
+            return; // game mode: everything below is testbed spawns/possession - the Game library owns those keys
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_K && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN)
             Globals::networkManager.fireNetworkEvent("NetPing"); // K: network-event smoke test (fires on every connected instance)
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_C && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN
-            && !evt.repeat && (evt.mod & SDL_KMOD_CTRL) == 0) // plain C only — Ctrl+C stays copy
+            && !evt.repeat && (evt.mod & SDL_KMOD_CTRL) == 0) // plain C only - Ctrl+C stays copy
         {
-            // C: toggle player control — WASD/Space drive the player instead of flying the camera
+            // C: toggle player control - WASD/Space drive the player instead of flying the camera
             // (mouse-look stays). On a client that is the locally-owned networked entity (see
             // updatePlayerControl); otherwise a local upright capsule is spawned and possessed.
             playerControl = !playerControl;
@@ -456,7 +456,7 @@ public:
             }
         }
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_V && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN
-            && !evt.repeat && (evt.mod & SDL_KMOD_CTRL) == 0) // plain V only — Ctrl+V stays paste
+            && !evt.repeat && (evt.mod & SDL_KMOD_CTRL) == 0) // plain V only - Ctrl+V stays paste
         {
             playerThirdPerson = !playerThirdPerson;
             if (playerControl)
@@ -464,7 +464,7 @@ public:
         }
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_U && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN)
         {
-            // U: runtime-spawn a networked physics cube thrown from the camera — on a server the spawn
+            // U: runtime-spawn a networked physics cube thrown from the camera - on a server the spawn
             // replicates to every client (Spawn message + physics sync + Despawn). Clients can't author
             // server state, so it's refused there rather than spawning a local unsynced ghost.
             if (Globals::networkManager.role() == ENetRole::Client)
@@ -577,7 +577,7 @@ public:
             spawnedForceQueries.clear();
             forceBalls.clear();
         }
-        // H: forcefield stress burst — 500 random emitters (random team/reach/focus) in a 150 m disc
+        // H: forcefield stress burst - 500 random emitters (random team/reach/focus) in a 150 m disc
         // around the camera. Press repeatedly to stack toward the 5000-emitter target; B clears.
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_H && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN)
         {
@@ -592,7 +592,7 @@ public:
                     glm::sphericalRand(1.0f), glm::linearRand(0.5f, 1.5f), glm::linearRand(1.5f, 5.0f), focus2));
             }
         }
-        // F: throw a physics sphere carrying a small team-1 forcefield — enemy bubbles knock it back
+        // F: throw a physics sphere carrying a small team-1 forcefield - enemy bubbles knock it back
         // via the GPU force readback (see update()).
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_F && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN)
         {

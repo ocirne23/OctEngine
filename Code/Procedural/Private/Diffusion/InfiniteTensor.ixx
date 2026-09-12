@@ -9,7 +9,7 @@ import :Diffusion.Tensor;
 // evaluated on demand and memoised.
 //
 // THE ONE IDEA TO INTERNALISE: overlapping windows are SUMMED, and nothing here knows about blending.
-// The blend is a convention the pipeline layers on top — every stage emits C+1 channels (the C data
+// The blend is a convention the pipeline layers on top - every stage emits C+1 channels (the C data
 // channels PRE-MULTIPLIED by a tent weight window, plus the raw weight as the last channel). Summing then
 // yields (sum of w*v, sum of w) per pixel, and every consumer divides to recover the weighted average.
 // Hence the `w > 1e-6f` guards all over WorldPipeline.
@@ -17,7 +17,7 @@ export namespace Procedural::Diffusion
 {
 	// Window index key. ndim is 3 throughout this pipeline (channel, row, col); the 4th slot keeps the key
 	// trivially copyable and hashable for any plausible extension. The reference uses List<Integer>, which
-	// boxes and allocates on every single lookup — this is the same thing without the garbage.
+	// boxes and allocates on every single lookup - this is the same thing without the garbage.
 	struct WindowKey
 	{
 		int32 v[4] = { 0, 0, 0, 0 };
@@ -84,7 +84,7 @@ export namespace Procedural::Diffusion
 
 	// Owns every InfiniteTensor and a per-tensor access-ordered LRU of computed windows.
 	//
-	// NOT thread-safe, exactly like the reference — callers must serialise. TerrainGenV3 does this with a
+	// NOT thread-safe, exactly like the reference - callers must serialise. TerrainGenV3 does this with a
 	// single inference thread, which is required rather than merely convenient (sampleHeight is called from
 	// the terrain streamer worker, the scatter worker and the height-map baker's std::async).
 	class MemoryTileStore

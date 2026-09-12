@@ -21,7 +21,7 @@ import :BlockStore;
 // Threading contract: updateEntry is callable from any job during the parallel entity pass -
 // same-cell updates write only that entry's SoA slots, and cell-changing ops stage into per-worker
 // pending lists. registerEntry/unregisterEntry are callable from any thread in the spawn window
-// (parallel entity spawning): both take m_registerMutex exclusively — pool growth reallocates the
+// (parallel entity spawning): both take m_registerMutex exclusively - pool growth reallocates the
 // SoA the query traversals read, so the query* entry points take it SHARED (a spawning worker's
 // script OnSpawn may query while another worker registers). setLayerMask/commitFrame stay
 // single-threaded (main, outside the pass); the markVisible* traversals stay lock-free (the
@@ -34,7 +34,7 @@ public:
 
     // spawnVisible: whether the entry counts as visible in every pass until its first real stamp.
     // Entities want true (a fresh spawn must not flash invisible during its link+stamp latency);
-    // streamed geometry (terrain chunks) passes false — appearing one frame late is invisible for
+    // streamed geometry (terrain chunks) passes false - appearing one frame late is invisible for
     // something that didn't exist before, while the guard would leak never-stamped off-screen entries
     // into the main pass (permanently while the culling is frozen).
     SpatialHandle registerEntry(const glm::dvec3& pos, float radius, uint64 userData, uint32 layerMask = 1, bool spawnVisible = true);
@@ -44,7 +44,7 @@ public:
     void commitFrame();
 
     uint32 querySphere(const glm::dvec3& center, float radius, uint32 layerMask, oc::vector<uint64>& outUserData) const;
-    // CALLBACK forms: `emit(userData)` per hit, straight out of the traversal — no result buffer,
+    // CALLBACK forms: `emit(userData)` per hit, straight out of the traversal - no result buffer,
     // so a caller on a job fiber needs no scratch at all (a thread_local one would follow the
     // THREAD across a park, not the job). Zero-allocation type erasure: the functor stays on the
     // caller's stack. Do NOT wait inside emit (the index's shared lock is held).
@@ -78,18 +78,18 @@ public:
     void markVisibleSet(ESpatialPass pass, const Frustum& frustumRelCamera, const glm::dvec3& cameraPos, float maxDist,
                         uint32 layerMask, IOcclusionTester* occlusion = nullptr);
     void markVisibleSphere(ESpatialPass pass, const glm::dvec3& center, float radius, uint32 layerMask);
-    // SIM LOD selection (the World's selection job — NOT the cull job: it is update logic, and
+    // SIM LOD selection (the World's selection job - NOT the cull job: it is update logic, and
     // not frame-critical). advanceUpdateTiers opens a new stamp generation for the three
     // UpdateTier passes (once per selection, before its traversals; nothing else stamps them, so
     // the stamps stay current until the next selection). queryUpdateTiers is ONE traversal of the
     // ball (center, queryRadius): every hit is emitted AND stamped in each tier whose radius it
     // falls inside (nested balls: tierRadius[t] > distance, <= 0 = that tier is not stamped by
-    // this ball; horizontal = XZ distance). Stamps are pure stores — several calls may run
+    // this ball; horizontal = XZ distance). Stamps are pure stores - several calls may run
     // concurrently on jobs; the hit list is the caller's.
     void advanceUpdateTiers(); // the three tiers + UpdateRoot
     void advanceStamp(ESpatialPass pass); // one pass's generation (the World: VisibleRoot, every pass)
     // Root DEDUPE: stamps the entry current in `pass` and reports whether it was NOT current
-    // before — an ATOMIC exchange, so of several jobs reaching one root exactly one gets true.
+    // before - an ATOMIC exchange, so of several jobs reaching one root exactly one gets true.
     bool stampCurrentOnce(SpatialHandle handle, ESpatialPass pass)
     {
         if (!m_pool.isValidAlive(handle))
@@ -98,15 +98,15 @@ public:
         return oc::atomic_ref<SpatialStamp>(m_pool.lastVisible[uint32(pass)][handle.idx]).exchange(id, oc::memory_order_relaxed) != id;
     }
     // The VISIBLE set for the World's update selection, straight from the cull job's Main
-    // frustum pass — no second traversal: the Main stamp also appends the HANDLE of every hit
+    // frustum pass - no second traversal: the Main stamp also appends the HANDLE of every hit
     // carrying one of these layers (per-chunk lists, merged once inside the job). Valid from
     // joinUpdateJob until the next kick; empty when nothing collects (headless, layers 0).
     // Handles, not userData: entities may die between the join and the consumer (the destroy
-    // windows sit there) — userData(handle) reads 0 for a dead one.
+    // windows sit there) - userData(handle) reads 0 for a dead one.
     void setVisibleCollect(uint32 layerMask) { m_visibleCollectLayers = layerMask; }
     const oc::vector<SpatialHandle>& visibleHandles() const { return m_visibleCollected; }
     uint64 userData(SpatialHandle handle) const { return m_pool.isValidAlive(handle) ? m_pool.userData[handle.idx] : 0; }
-    // PARALLEL (traverseParallel, so one call at a time — the World's selection runs its spheres
+    // PARALLEL (traverseParallel, so one call at a time - the World's selection runs its spheres
     // in sequence): the hits come back as owner-sliced lists, one per traversal chunk (some
     // empty), valid until the next queryUpdateTiers. Callable from a job; its chunks take the
     // register lock themselves (a spawn may register meanwhile).
@@ -131,7 +131,7 @@ public:
     }
     // Whether a stamp generation was EVER written in `pass` (neither the spawn-guard 0 nor the
     // link-time SpatialStamp_Linked): for the tier passes, "the selection job placed this entry
-    // at some point" — else the World derives the tier from the distance.
+    // at some point" - else the World derives the tier from the distance.
     bool hasStamp(SpatialHandle handle, ESpatialPass pass) const
     {
         if (!m_pool.isValidAlive(handle))
@@ -161,10 +161,10 @@ public:
     void update(const Camera& camera, const Frustum& frustum, const glm::mat4& viewProjRelCamera, const glm::vec3& sunDirection);
 
     // update() as the High "Spatial cull" job: kick copies the view into members (the job outlives
-    // the caller's stack) and submits; join waits, helping. An INVALID view (the first VR frame — see
+    // the caller's stack) and submits; join waits, helping. An INVALID view (the first VR frame - see
     // Renderer::getCullView) skips the whole update for that frame: stamps stay a frame stale (the
     // spawn guard keeps fresh entries visible) and the commit's pending ops just wait one frame. The
-    // index must stay QUIESCENT between kick and join — no registers, commits, queries or traversals
+    // index must stay QUIESCENT between kick and join - no registers, commits, queries or traversals
     // (see main.cpp's window comment).
     void kickUpdateJob(const CullView& view);
     void joinUpdateJob();
@@ -291,7 +291,7 @@ private:
     // emit (idx, pos, chunk) gets prepareChunks(n) called before any emit with chunk < n, so an
     // owner-sliced list per chunk can be sized. registerLock: see the definition. Uses the
     // m_frontier scratch: ONE traverseParallel at a time (the cull job, or the post-update
-    // selection — never both in flight).
+    // selection - never both in flight).
     template <typename Tester, typename EmitFunc, typename PrepareFunc>
     void traverseParallel(const Tester& tester, const glm::dvec3& refPos, uint32 layerMask,
                           TraverseStats& stats, const EmitFunc& emit, const PrepareFunc& prepareChunks,
@@ -301,8 +301,8 @@ private:
     oc::array<BlockStore, Morton::MaxLevels> m_blocks;
     RecordPool m_pool;
     // Staged per scheduler context, drained FIFO per slot in commitFrame. Deliberately a PerWorker
-    // (not owner-sliced or a shared queue): the pushes come from ANY job — the entity pass's
-    // continuation batches, spawn jobs — with no chunk identity to slice by, the per-frame volume
+    // (not owner-sliced or a shared queue): the pushes come from ANY job - the entity pass's
+    // continuation batches, spawn jobs - with no chunk identity to slice by, the per-frame volume
     // is unbounded (every moved entity, several ops per entry possible) so a bounded queue cannot
     // drop, and thousands of pushes a frame on one shared atomic cursor would contend.
     PerWorker<oc::vector<PendingOp>> m_pendingOps;
@@ -315,7 +315,7 @@ private:
     SpatialStamp m_visibleQueryId[uint32(ESpatialPass::Count)] = {}; // stamp generation per pass, 0 = never stamped (advanceStamp: wrap sweep)
     oc::atomic<float> m_topLevelMaxRadius = 0.0f; // largest clamped-oversize radius, inflates top-level tests (CAS-max: updateEntry runs on jobs)
     // Parallel spawning: exclusive over registerEntry/unregisterEntry (slot acquire/release + SoA
-    // growth), shared over queries — see the threading contract above.
+    // growth), shared over queries - see the threading contract above.
     mutable std::shared_mutex m_registerMutex;
     SpatialCullingConfig m_culling;
     mutable SpatialStats m_stats;

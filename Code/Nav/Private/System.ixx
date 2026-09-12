@@ -51,21 +51,21 @@ export namespace Nav
         const PressureField& pressure(uint32 team) const { return m_pressure[glm::min(team, MaxTeams - 1)]; }
         const FlowField& flow(uint32 team) const { return m_flow[glm::min(team, MaxTeams - 1)]; }
         bool anyFieldPublished() const { return m_publishedCount > 0; }
-        // Any published field — every field shares the obstacle raster, so this is THE raster for
+        // Any published field - every field shares the obstacle raster, so this is THE raster for
         // lineOfSight/avoid when a walker has no distance field of its own (routes, locked orders).
         const TeamField* raster() const { return m_raster.published.get(); }
         // SEED PATH (main thread): plan a route from -> to with A* over the obstacle raster
         // (string-pulled) and WRITE it into `team`'s flow field as a lane of `speed` m/s, `width`
         // metres wide. Units following the crowd flow then take that route without any of them
         // planning; the lane decays like any other ("Nav/Flow decay"). The A* runs on a JOB: this
-        // only queues the plan, and the next update() whose job has finished writes the lane — one
+        // only queues the plan, and the next update() whose job has finished writes the lane - one
         // or two frames of latency, none of it on main. false = no raster yet (nothing queued).
         // `laneWidth` is how wide the lane is PAINTED (0 = one cell; the pressure push spreads it
-        // further either way); `clearance` is the planning width — how much room the planned route
+        // further either way); `clearance` is the planning width - how much room the planned route
         // keeps from walls.
         bool seedPath(uint32 team, const glm::vec3& from, const glm::vec3& to, float speed,
             float laneWidth = 0.0f, float clearance = 2.0f);
-        // The RATE-LIMITED entry point (main thread) — EVERY unit asks on its own timer, this is
+        // The RATE-LIMITED entry point (main thread) - EVERY unit asks on its own timer, this is
         // what makes that affordable: a request is refused when a plan of the same team was already
         // made within "Seed area" metres of BOTH its start and its destination inside the last
         // "Seed cooldown" seconds, and at most "Seed max/frame" plans run in a frame. A crowd
@@ -77,7 +77,7 @@ export namespace Nav
         // GOAL fields: a single-destination field per KEY (the local player's move order, each
         // barracks route waypoint), the same TeamField with ONE source. Rebuilt when the
         // destination moves > half a cell or the obstacle raster changes; radius sized per goal.
-        // setGoal every frame the goal is wanted — a key not set for GoalExpireFrames is dropped.
+        // setGoal every frame the goal is wanted - a key not set for GoalExpireFrames is dropped.
         // setGoal/clearGoal are main-thread; goalField() is worker-safe during the entity pass
         // (the key map only changes inside update()).
         static constexpr uint32 GoalExpireFrames = 60;
@@ -105,7 +105,7 @@ export namespace Nav
             oc::shared_ptr<const TeamField> published;
             // The two fields ROTATE instead of being re-made every 0.25 s: `live` is the non-const
             // handle behind `published`, `retired` the one it replaced. kickBuild rebuilds INTO
-            // `retired` when nothing else holds it (a seed-path job may still, via plan->raster —
+            // `retired` when nothing else holds it (a seed-path job may still, via plan->raster -
             // then it is dropped and a fresh field is made), so the chunk pool, the map table and
             // the wave vectors of the last-but-one build are reused.
             oc::shared_ptr<TeamField> live;
@@ -139,7 +139,7 @@ export namespace Nav
         void kickBuild(TeamSlot& slot, float deltaSec);       // beginBuild + the first step, as one Low job
         void submitBuildStep(TeamSlot& slot, float deltaSec); // the next step (update, once the previous step is done)
         // The per-step chunk budget: the last build's total spread evenly over "Build spread (s)"
-        // at this frame's delta — a build costs the SAME slice of every frame and lands just as
+        // at this frame's delta - a build costs the SAME slice of every frame and lands just as
         // the next rebuild is due. A slot with no history builds in one step.
         uint32 buildStepBudget(const TeamSlot& slot, float deltaSec) const;
         void tickSlot(TeamSlot& slot, float deltaSec);
@@ -147,7 +147,7 @@ export namespace Nav
         void runFieldSteps(); // the step job's body: per-field begins + the two per-chunk fan-outs
 
         TeamSlot m_teams[MaxTeams];
-        TeamSlot m_raster; // obstacle raster only (rebuilt on obstacle change) — for avoid()/lineOfSight
+        TeamSlot m_raster; // obstacle raster only (rebuilt on obstacle change) - for avoid()/lineOfSight
         oc::unordered_map<uint64, oc::unique_ptr<TeamSlot>> m_goals; // JobCounter is immovable
         float m_stepDelta = 0.0f; // dt for the step job (a member: the job outlives update()'s stack)
         oc::vector<FlowField::StepItem> m_flowItems;         // the step job's gathered chunks (one job in flight;
@@ -174,7 +174,7 @@ export namespace Nav
         }
         oc::unordered_map<uint64, oc::vector<SeedStamp>> m_seedBuckets;
         // EXPIRY QUEUE: stamps are made in time order and each bucket is append-only at the back,
-        // so one global FIFO of (time, bucket) retires them without ever walking the map — update()
+        // so one global FIFO of (time, bucket) retires them without ever walking the map - update()
         // pops only what has actually expired, which is nothing at all on most frames.
         oc::deque<oc::pair<float, uint64>> m_seedExpiry;
         float m_time = 0.0f;
@@ -193,17 +193,17 @@ export namespace Nav
         float m_flowHalfLife = 5.0f;
         float m_pressureDiffusion = 0.1f; // Jacobi step weight at 60 Hz (dt-scaled, clamped to 0.25)
         float m_pressureFloor = 1.6f;      // magnitude a neighbour needs before it diffuses (0 = off)
-        float m_pressureHalfLife = 1.0f;  // seconds for pressure to halve — the seeded TROUGH has
+        float m_pressureHalfLife = 1.0f;  // seconds for pressure to halve - the seeded TROUGH has
                                           // to outlive the walk it was planned for, and jams stay
                                           // felt after the crowd that made them moved on
-        float m_flowMaxSpeed = 20.0f;      // per-cell magnitude cap (splats SUM — see FlowField::update)
+        float m_flowMaxSpeed = 20.0f;      // per-cell magnitude cap (splats SUM - see FlowField::update)
         float m_seedArea = 10.0f;         // metres: requests from/to the same area are ONE lane
         float m_seedCooldown = 3.0f;      // seconds that area pair stays suppressed
         int m_seedMaxPerFrame = 2;        // hard cap on plan JOBS queued per frame
         float m_seedTrough = 20.0f;        // NEGATIVE pressure a seeded lane carves (0 = flow only)
         float m_seedSqueeze = 10.0f;       // extra trough depth per blocked neighbour of a lane cell
         float m_seedRange = 20.0f;        // metres of the plan actually written (0 = all of it)
-        // LOG-SCALED tweak: the slider is the EXPONENT, the gain is 10^x — one slider covers
+        // LOG-SCALED tweak: the slider is the EXPONENT, the gain is 10^x - one slider covers
         // 0.01 .. 1000 m/s of flow per unit of pressure gradient, with fine control at the low end
         // (a linear 0..20 range could neither reach "pressure dominates" nor resolve small values).
         float m_pressureFlowGainExp = 0.3f;

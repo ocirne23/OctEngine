@@ -18,10 +18,10 @@ import :Npc;
 
 // The match orchestrator: owns the whitebox world (ground, objective, world-scale enemy emitter),
 // the player, the structure/economy system and the follow camera. MUST be a stack local in main()
-// (holds EntityPtrs and Force handles — a global would need an InitSeg slot).
+// (holds EntityPtrs and Force handles - a global would need an InitSeg slot).
 //
 // Two ticks, both main thread:
-//  - update(dt): the AUTHORITY tick — placement drain, capture, grids/power, damage, player
+//  - update(dt): the AUTHORITY tick - placement drain, capture, grids/power, damage, player
 //    movement + shield, world-field suppression, win check. Slots into the main loop between
 //    networkManager.receive() and physics.update() (direct body setters sanctioned there); this is
 //    the half that becomes the server tick in multiplayer.
@@ -55,8 +55,8 @@ export class GameMatch final
 public:
     // PvP (default): each client plays on its own Force team slot, everything a player builds
     // belongs to their team, and minerals/fuel are per-team.
-    // CO-OP (`--game --coop`, clients pass both too — the world layout is built locally): its own
-    // GENERATED world — no corridor, a much bigger square of seeded impassable rock terrain with
+    // CO-OP (`--game --coop`, clients pass both too - the world layout is built locally): its own
+    // GENERATED world - no corridor, a much bigger square of seeded impassable rock terrain with
     // carved attack lanes and a player-only barrier ring at the edge (see CoopMap below). Every
     // player on team 0 around ONE central Base; the AI team (CoopAiTeam) has unleashed units
     // scattered over the reachable map and sends periodic SWARM waves (They-are-Billions style:
@@ -76,7 +76,7 @@ public:
         m_terrainFill = fill;
         m_terrainLanes = lanes;
     }
-    // PvP team setup chosen OUTSIDE (the lobby): the host's team count (2..GameMaxTeams — one
+    // PvP team setup chosen OUTSIDE (the lobby): the host's team count (2..GameMaxTeams - one
     // Base per team, spread along the corridor) and the roster's picks (clientId, team; clientId
     // 0 = the server's own team). Call before spawnWorld on the authority. A client whose id is
     // not in the list (a late joiner) is seated on the least-populated team at join.
@@ -85,7 +85,7 @@ public:
     // build whatever the server's GMp event names.
     void setPvpMap(EPvpMap map) { m_pvpMap = map; }
     // The PLAYER/CAMERA hot path, and nothing else: capsule adoption (client) + velocity steering +
-    // the shield's body push — the direct body setters that must land BEFORE this frame's physics
+    // the shield's body push - the direct body setters that must land BEFORE this frame's physics
     // step. Deliberately minimal so main reaches the spatial/begin-frame kicks as early as possible.
     void updatePlayer(float deltaSec);
     // The REST of the game tick, called AFTER the spatial/begin-frame joins (spawns/destroys and
@@ -105,14 +105,14 @@ public:
 
     // PROFILING SCENARIO (`--scenario <save>`, main calls it once at `--scenario-frame`): loads the
     // save (F10's path when empty), selects EVERY live own-team unit and orders them all to the
-    // other team's Base — a repeatable crowd-pathing load without anyone at the keyboard.
+    // other team's Base - a repeatable crowd-pathing load without anyone at the keyboard.
     // Authority only (units simulate on the server). The load happens now; the select + order run
     // from the next update() (the loaded units' spatial entries link at the next commitFrame).
     bool runScenario(oc::string_view savePath);
 
     // MULTIPLAYER (windowed listen server + clients). The SERVER runs the whole sim; player-
     // structure state mirrors to clients over game events (GPl/GRm + periodic GSt stats; links
-    // derive locally on every instance from the mirrored cable segments — no cable wire);
+    // derive locally on every instance from the mirrored cable segments - no cable wire);
     // units and shots replicate as network entities (Component Network in their prefabs); each
     // client drives its own server-spawned capsule through the claim system and computes its own
     // shield locally (the mirrored emitter fields exist client-side, so readbacks are real).
@@ -121,20 +121,20 @@ public:
     void onClientLeft(uint32 clientId);
 
     // Network game events (GPl/GSt/Gq*/...). main.cpp owns the ONE setOnGameEvent hook (it also
-    // routes the lobby's "Lb*" traffic) and forwards everything else here — GameMatch must NOT
+    // routes the lobby's "Lb*" traffic) and forwards everything else here - GameMatch must NOT
     // install its own hook: main's dispatcher constructs a lobby client's GameMatch from INSIDE a
     // dispatch, and replacing the oc::function there would destroy the lambda mid-execution.
     void handleNetEvent(oc::string_view name);
 
     // SHARED PAUSE (the escape menu's "Pause game" / the paused box's "Resume"): ANY player may
-    // pause or resume. The authority applies it (Time::setPaused — the sim clock stops, the
+    // pause or resume. The authority applies it (Time::setPaused - the sim clock stops, the
     // transport keeps running so the resume still arrives) and broadcasts GPz; a client sends a
     // GqZ request. Join replay carries the current state.
     void requestPause(bool paused);
     bool isPaused() const { return m_paused; }
 
     // TRUE while Esc still has an in-game meaning (a pending two-click flow, an armed item, an
-    // open hotbar page, or a non-Select mode — cancelOneLevel would consume it). main's ESCAPE
+    // open hotbar page, or a non-Select mode - cancelOneLevel would consume it). main's ESCAPE
     // MENU only opens on an Esc press when this is false, so the cancel chain keeps first claim.
     void applyPause(bool paused); // sets the sim clock + m_paused (authority and mirror alike)
     bool m_paused = false;
@@ -163,7 +163,7 @@ private:
     bool aimGroundPoint(const Camera& camera, glm::vec3& outPos) const; // cursor ray vs colliders/ground plane
     void refreshBuildHotbar(); // repopulates slot labels/counts/hover cards for the current grid level
     // The hotbar hover cards, one per structure type: rebuilt once a REAL second (the tweaks they
-    // quote are live, but nobody drags one 60 times a second) — see refreshBuildHotbar.
+    // quote are live, but nobody drags one 60 times a second) - see refreshBuildHotbar.
     oc::string m_typeCards[(int)EStructureType::Count];
     double m_typeCardTime = -1.0; // real-clock stamp of the last rebuild (< 0 = never built)
     void updateModeSwitching();
@@ -190,24 +190,24 @@ private:
     int hoveredStructure(const Camera& camera) const; // structure index under the cursor, or -1
     void setMode(EPlayerMode mode);
     // Health bars + selected info over structures/units: a JOB (submitWorldLabels at the end of the
-    // game tick, joined by main before the widget pass is queued — see the definition).
+    // game tick, joined by main before the widget pass is queued - see the definition).
     void buildWorldLabels();
     void submitWorldLabels(float deltaSec);
     float m_labelsDelta = 0.0f; // the frame delta the job ages the warning timers by
-    // The problem badge over an own-team structure (nullptr = fine) — see the definition.
+    // The problem badge over an own-team structure (nullptr = fine) - see the definition.
     const char* structureWarning(int index, glm::vec3& color) const;
     Camera m_labelsCamera;
     Rect m_labelsViewport;
     bool m_labelsCameraValid = false;
     JobCounter m_labelsCounter;
-    oc::vector<Entity*> m_labelUnits; // the labels job's visible-unit scratch (one job in flight; never a thread_local — the job may park)
+    oc::vector<Entity*> m_labelUnits; // the labels job's visible-unit scratch (one job in flight; never a thread_local - the job may park)
     oc::vector<HudWorldLabel> m_labelsScratch; // the labels job builds here, then SWAPS with GameHud's list (two vectors ping-pong)
     HudPopup m_labelsPopup;                    // same for the barracks popup (its buttons vector keeps its capacity)
 public:
     void joinWorldLabels(); // main.cpp, right before ui.update
 private:
     void updateHud();
-    void tickBaseHealing(float deltaSec); // own player only — the owner computes its own health
+    void tickBaseHealing(float deltaSec); // own player only - the owner computes its own health
     void tickMedicHealing(float deltaSec); // medic stations: the own player (every instance); units heal in the station's component update
     void tickAmbientWander(float deltaSec); // co-op POST-UPDATE job: idle AI units stroll now and then, biased toward the Base (a steady per-frame budget)
     float m_wanderBudget = 0.0f;           // fractional strolls carried to the next frame
@@ -222,22 +222,22 @@ private:
     void sendUnitType(int index); // server: GBu broadcast (mirror + join replay)
     void sendStructurePlaced(int index);
     void sendStats();
-    // NAV: feed the flow-field service (authority only) — obstacles = rock terrain + every
+    // NAV: feed the flow-field service (authority only) - obstacles = rock terrain + every
     // structure footprint (change-detected inside Nav), sources = per team its structures + player
-    // bodies (every frame). Units read the fields inside the entity pass. The whole feed — gather
-    // AND the Nav setters — is a post-update job (submitted by update, joined at the top of the
+    // bodies (every frame). Units read the fields inside the entity pass. The whole feed - gather
+    // AND the Nav setters - is a post-update job (submitted by update, joined at the top of the
     // next frame, ahead of that frame's NavSystem::update).
     void submitNavFeed(float deltaSec); // queues gatherNavFeed on the post-update batch
     void gatherNavFeed(float deltaSec); // one SLICE of the unit sweep a frame (a cycle = Nav's rebuild interval); publishes at the cycle end
-    // SAVE/LOAD (F9/F10, server/single player only — clients refuse): structures/cables/units for
+    // SAVE/LOAD (F9/F10, server/single player only - clients refuse): structures/cables/units for
     // all teams to Assets/Local/gamesave.txt, plus the LOCAL player's position (`PlayerPos`; remote
-    // players and all player STATE — health, energy, materials — are still not saved). Loading
+    // players and all player STATE - health, energy, materials - are still not saved). Loading
     // clears the current set (removal hooks -> GRm prune connected clients), re-broadcasts the
     // loaded state and teleports the local capsule.
     void saveGame();
     void loadGame(oc::string_view path = {}); // empty = the F10 path (Local/gamesave.txt)
     // The co-op TRICKLE state (`WaveTrickle` / `AmbientTrickle`): points still queued to spawn plus
-    // what the trickle needs to spawn them — so an F9 during a wave does not shrink it. loadTrickle
+    // what the trickle needs to spawn them - so an F9 during a wave does not shrink it. loadTrickle
     // must run AFTER rebuildCoopMap, which voids the in-progress ambient group.
     void saveTrickle(AssetNode& root) const;
     void loadTrickle(const AssetNode& root);
@@ -253,7 +253,7 @@ private:
     oc::vector<Nav::NavObstacle> m_navObstacles;  // per-frame scratch: walls + structures
     oc::vector<Nav::NavSource> m_navSources[Nav::MaxTeams];
     // Unit sources are culled to units with ANOTHER team's unit/player within this reach (coarse:
-    // a cell hash of that size, 3x3 neighbourhood) — see gatherNavFeed. Bucket retained per frame.
+    // a cell hash of that size, 3x3 neighbourhood) - see gatherNavFeed. Bucket retained per frame.
     float m_navUnitSourceReach = 64.0f;
     // Friendly unit CLUSTERS as extra SIM LOD focus points (see the focus block in update): a
     // non-AI unit farther than this from every focus seeds a new cluster; refreshed every 0.25 s.
@@ -261,11 +261,11 @@ private:
     float m_focusClusterTimer = 0.0f;
     oc::vector<glm::vec3> m_focusClusters;
     // The shield structures' bubble spheres as SIM LOD ZONES (tier 1 + a tier 2 band, no tier 0):
-    // an enemy walking into a far base's field ticks — and gets pushed — with no player near.
+    // an enemy walking into a far base's field ticks - and gets pushed - with no player near.
     // Refreshed on the cluster timer.
     oc::vector<glm::vec4> m_fieldZones;
     // Team bits per nav cell, as a FLAT open-addressing map: the hash map it replaced freed every
-    // node on clear() and re-allocated them all the next cycle — most of the nav feed's memory churn.
+    // node on clear() and re-allocated them all the next cycle - most of the nav feed's memory churn.
     // clear() only resets the slots; the table keeps its size across cycles.
     struct NavCellTeamMap
     {
@@ -366,7 +366,7 @@ private:
     void issueScenarioOrder();           // select ALL own units + move order on the other Base
     void seedRouteLane(uint32 structureId); // barracks route -> a planned lane in the flow field
     // (While an ordered group walks, its lane is kept fresh by the UNITS' own periodic plan
-    // requests — Nav's proximity dedup makes the whole group cost one plan. See
+    // requests - Nav's proximity dedup makes the whole group cost one plan. See
     // GameUnitComponent's SeedRequest and NavSystem::requestSeedPath.)
     float m_selectionClusterRadius = 12.0f; // link radius of the selection's cluster centroid
     void pruneSelectedUnits();
@@ -374,10 +374,10 @@ private:
     bool m_saveKeyWasDown = false; // F9/F10 edges (save/load game state)
     bool m_loadKeyWasDown = false;
     int m_buildCategory = -1;    // grid hotbar page: -1 = ROOT (categories), else index into the categories
-                                 // (c_cableCategory = a cable armed FROM the root page — still drawn as root)
+                                 // (c_cableCategory = a cable armed FROM the root page - still drawn as root)
     bool isRootPage() const;     // the hotbar shows the root layout (categories, cables, Delete)
     int m_buildSelection = -1;   // armed item within the category (-1 = nothing armed, no ghost)
-    bool m_gridKeyWasDown[12] = {}; // QWER/ASDF/ZXCV edges (polled — one per hotbar slot)
+    bool m_gridKeyWasDown[12] = {}; // QWER/ASDF/ZXCV edges (polled - one per hotbar slot)
     bool m_lanceAiming = false;  // Lance two-click placement: first click anchored, awaiting facing
     glm::vec3 m_lancePendingPos{ 0.0f };
     bool m_wallPlacing = false;  // Wall drag placement: the press anchored the line start, release places
@@ -390,7 +390,7 @@ private:
 
     // TEAMS are SLOTS, never derived from the clientId: ids are minted monotonically and never
     // recycled (a reconnect or a failed first attempt burns one), so the second connection of the
-    // same friend used to land on team 2 — a team with no Base. The map spawns one Base per
+    // same friend used to land on team 2 - a team with no Base. The map spawns one Base per
     // playable team (m_numTeams, see spawnWorld), and a player without a Base has no respawn
     // anchor, no mineral bank and no healing, so the slot pool is exactly that many.
     uint8 m_numTeams = 2;                                  // PvP playable teams (the lobby's count)
@@ -399,13 +399,13 @@ private:
     uint8 allocateClientTeam(uint32 clientId) const;       // the lobby pick, else the least-populated team
     int clientTeam(uint32 clientId) const; // -1 = unknown client (no capsule yet); 0 = the server
     // The team a client's build/demolish/cable request acts as. Callers must reject unknown
-    // senders first (handleNetEvent does) — this clamps rather than failing.
+    // senders first (handleNetEvent does) - this clamps rather than failing.
     uint8 requestTeam(uint32 clientId) const { return (uint8)glm::max(clientTeam(clientId), 0); }
     glm::vec3 teamStartPos(uint8 team) const; // spawn/respawn anchor beside that team's Base
 
     // ---- CO-OP (see the constructor comment) ----
     // The ambient/wave team. Team 1, NOT a high slot: co-op runs the Force system at TWO live
-    // teams (setNumTeams(2) — the renderer's per-team costs shrink to fit), so every team index
+    // teams (setNumTeams(2) - the renderer's per-team costs shrink to fit), so every team index
     // must stay below 2. (< Nav::MaxTeams as well.)
     static constexpr uint8 CoopAiTeam = 1;
     // GENERATED MAP: impassable rock over a coarse cell grid (seeded noise + carved attack lanes),
@@ -413,11 +413,11 @@ private:
     // ambient spawns) guaranteed reachable from the Base by a flood fill that turns unreachable
     // open pockets into rock. The SERVER picks the seed (tweak "Map seed", 0 = random) and
     // broadcasts it as the "GMp" event (first thing in onClientJoined, before the structure
-    // replay; also into F9 saves) — clients defer terrain + nodes until it arrives and build the
+    // replay; also into F9 saves) - clients defer terrain + nodes until it arrives and build the
     // identical set locally from pure seeded math.
     // THE TERRAIN GRID serves BOTH modes: the co-op generator fills a 36² grid of 10 m cells, the
     // PvP arenas (generatePvpGrid) a per-arena rectangle of 5 m cells (rock.pre spawned at half
-    // scale) — everything downstream (cell math, flood fill, rects, rock spawn, clampToOpenGround)
+    // scale) - everything downstream (cell math, flood fill, rects, rock spawn, clampToOpenGround)
     // reads the grid's own dimensions.
     struct CoopMap
     {
@@ -452,7 +452,7 @@ private:
     glm::vec3 ambientPointNear(const glm::vec3& center, float radius) const; // ambient body spot on open ground
     void drawCoopBarrier(); // pulsing energy lines strung between the barrier posts
     // The AMBIENT scatter spawns in small groups: the trickle fills the current group (one
-    // archetype, a disc around a reachable anchor) before rolling the next — loose blobs, not a
+    // archetype, a disc around a reachable anchor) before rolling the next - loose blobs, not a
     // lattice.
     struct AmbientSpawn
     {
@@ -474,9 +474,9 @@ private:
     void queueWave();                // pick a compass direction, size the swarm, seed its lane
     void tickCoopSpawns();           // trickle: wave + ambient spawns on a per-frame budget
     // COMPOSITION recipes, sampled per spawned unit. The wave's is rolled once per wave in
-    // queueWave: an ARCHETYPE (single-type rush, screened siege, combined arms, ... — gated by the
+    // queueWave: an ARCHETYPE (single-type rush, screened siege, combined arms, ... - gated by the
     // wave index so early waves stay simple) with its weights jittered. The AMBIENT scatter picks
-    // its spawn position FIRST and gates the archetype roll by DISTANCE from the Base — the same
+    // its spawn position FIRST and gates the archetype roll by DISTANCE from the Base - the same
     // minWave gate, driven by depth instead of time, so the deep map holds the heavy recipes and
     // the near ring stays swarm-grade. Authority-only (clients never spawn).
     struct WaveMixEntry { ENpcType type; float weight; };
@@ -492,13 +492,13 @@ private:
     float m_ambientPendingBudget = 0.0f; // POINTS of world-start scatter still to spawn (same costs)
     glm::vec3 m_waveOrigin{ 0.0f }; // the wave's cluster center on the spawn ring
     // The blob's radius, sized ONCE per wave in queueWave so the AREA scales with the wave's
-    // expected BODY COUNT (see waveSpawnRadius) — a big wave gets room instead of stacking bodies
+    // expected BODY COUNT (see waveSpawnRadius) - a big wave gets room instead of stacking bodies
     // on the same disc for physics to shove apart. Rides the save: a mid-wave load keeps the disc.
     float m_waveRadius = 8.0f;
     float m_waveSpawnAreaPerUnit = 6.0f; // m² of blob per body (~2.8 m mean spacing at 6)
     float waveSpawnRadius(float budget) const;
     // Spacing: the last few wave spawn points, so a new roll can reject a spot inside a body that
-    // was just placed (bodies are parked at spawn — an overlap there resolves only when a player
+    // was just placed (bodies are parked at spawn - an overlap there resolves only when a player
     // comes near, as a push-out in the player's face)
     static constexpr int c_waveRecentSpawns = 32;
     glm::vec2 m_waveRecent[c_waveRecentSpawns]{};
@@ -518,7 +518,7 @@ private:
                                                5.0f };                             // Warrior
     float waveCostOf(ENpcType t) const { return glm::max(m_waveCost[(int)t], 0.1f); }
     int m_waveMaxAlive = 100000;    // total AI units cap (ambient + waves)
-    // Live units (every team): the alive cap in queueWave AND the HUD's "Enemies alive" —
+    // Live units (every team): the alive cap in queueWave AND the HUD's "Enemies alive" -
     // GameUnitComponent's own live count (spawn/destroy edges), O(1), no roster and no walk.
     int aiAliveCount() const;
     int m_ambientBudget = 500000;    // POINTS of world-start scatter (same per-type costs as waves)
@@ -530,7 +530,7 @@ private:
     float m_ambientWanderBaseBias = 0.5f;  // heading = random unit vector + bias * toward the Base
     float m_ambientWanderTimeout = 12.0f;  // a stroll that does not arrive gives up after this
     float m_labelMaxDistance = 120.0f;     // world labels (unit/structure bars, names) beyond this are not built
-    int m_spawnsPerFrame = 100;    // trickle budget — a huge wave enters over seconds, not one hitch
+    int m_spawnsPerFrame = 100;    // trickle budget - a huge wave enters over seconds, not one hitch
 
     bool m_enabled = false;
     uint32 m_team = 0;       // OUR team: 0 on server/single player; on a client it follows the
@@ -542,7 +542,7 @@ private:
     int m_cableSyncCursor = 0; // server: GCb rotation start when more blueprint segments exist than fit one event
     uint32 m_cableFillCursor = 0; // server: GCf rotation start over the transport's cable nodes
     oc::unordered_map<uint32, EntityPtr> m_clientPlayers;    // server: clientId -> their capsule
-                                                              // (the ONLY per-client store — carried
+                                                              // (the ONLY per-client store - carried
                                                               // materials live on the twin's puppet
                                                               // component, damage owed in its inbox)
     float m_damageTimer = 0.0f; // server: GDm flush cadence
@@ -557,7 +557,7 @@ private:
     float m_buildRadius = 6.0f;     // metres from a blueprint within which a player invests
     float m_playerBuildRate = 8.0f; // materials/s a player invests into a blueprint
     // Tweaks ("Game/Player"): health regen while standing near an OWN-team Base. Computed by each
-    // player's OWNER (health is owner-computed) against its local structure mirror — no sync.
+    // player's OWNER (health is owner-computed) against its local structure mirror - no sync.
     float m_baseHealRadius = 10.0f;
     float m_baseHealRate = 15.0f;   // health/s inside the radius
     float m_meleeDps = 10.0f;       // player melee aura: health/s to enemy units in melee range
@@ -579,7 +579,7 @@ private:
 // Everything more than one of them reads is declared here.
 inline constexpr float c_corridorHalfLength = 65.0f; // Lane/Wide/Chokepoints x extent of the play area
 inline constexpr float c_corridorHalfWidth = 20.0f;  // Lane z extent
-// The CO-OP map: a big square centred on the shared Base — impassable rock terrain over a coarse
+// The CO-OP map: a big square centred on the shared Base - impassable rock terrain over a coarse
 // cell grid plus a player-blocking barrier ring at ±c_coopHalfSize (see MatchMap.cpp). The ground
 // plane (ground.pre) is 600 m, so ±300 is the hard edge; waves spawn in the open ring BETWEEN the
 // barrier and the ground edge and walk in through it (the barrier's collider only matches the
@@ -588,7 +588,7 @@ inline constexpr float c_coopHalfSize = 270.0f;
 inline constexpr float c_coopGroundEdge = 296.0f;    // spawn clamp just inside the 600 m ground
 // The 12 hotbar slots' key captions: QWER / ASDF / ZXCV, row-major (see MatchInput.cpp).
 inline constexpr oc::string_view c_gridKeyLabels[12] = { "Q", "W", "E", "R", "A", "S", "D", "F", "Z", "X", "C", "V" };
-// 3-5 char shorthands, indexed by EStructureType — the SAME vocabulary the hotbar slot and the
+// 3-5 char shorthands, indexed by EStructureType - the SAME vocabulary the hotbar slot and the
 // world tag over a building use, so a slot and the thing it builds read identically.
 inline constexpr const char* c_structureShortNames[] = { "EMIT", "GEN", "CON", "EXTR", "BATT",
     "FUEL", "SOL", "FAB", "BSTN", "LNC", "BRK", "BRK-B", "BRK-R", "BRK-S", "WALL", "TRT", "SILO",
@@ -598,11 +598,11 @@ static_assert(oc::size(c_structureShortNames) == (size_t)EStructureType::Count);
 inline constexpr const char* c_unitTypeNames[] = { "Grunt", "Brute", "Runner", "Spitter", "Swarm",
     "Elite", "Giant", "Titan", "Lobber", "Spawner", "Warrior" };
 static_assert(oc::size(c_unitTypeNames) == (size_t)ENpcType::Count);
-// The popup's buttons, in order: the producible types (isBarracksUnitType — no Spitter).
+// The popup's buttons, in order: the producible types (isBarracksUnitType - no Spitter).
 inline constexpr uint8 c_barracksMenu[] = { (uint8)ENpcType::Grunt, (uint8)ENpcType::Warrior,
     (uint8)ENpcType::Brute, (uint8)ENpcType::Runner, (uint8)ENpcType::Swarm };
 // (packColor / drawCircle come from Structures.ixx.)
-// GHOST: the exact box the structure will occupy — footprint square × the prefab's height, drawn
+// GHOST: the exact box the structure will occupy - footprint square × the prefab's height, drawn
 // as a wireframe at the snapped position (every whitebox building IS a box, so this is the real
 // shape, not an approximation), plus the interior cell lines so the grid it takes is unambiguous.
 void drawStructureGhost(EStructureType type, const glm::vec3& groundPos, uint32 color);

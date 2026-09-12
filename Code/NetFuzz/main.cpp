@@ -3,7 +3,7 @@
 //
 //   NetFuzz reader [iterations] [seed]   NetReader primitives vs random buffers (invariant-checked)
 //   NetFuzz host   [iterations] [seed]   raw hostile packets at an in-process NetHost server
-//   NetFuzz game   <ip[:port]> [iter]    hostile client vs a live `App --server --headless` — the
+//   NetFuzz game   <ip[:port]> [iter]    hostile client vs a live `App --server --headless` - the
 //                                        only mode reaching NetworkManager's handlers
 //   NetFuzz all    [iterations] [seed]   reader + host
 //
@@ -131,7 +131,7 @@ namespace Pkt
 }
 
 // Completes the real 4-way handshake: the payload/message parsers only run for a CONNECTED peer.
-// Encryption off — sealed packets would only fail to open. `pump` advances an in-process server
+// Encryption off - sealed packets would only fail to open. `pump` advances an in-process server
 // between polls (it has no thread of its own); omit it for a real one.
 static bool handshake(UdpSocket& socket, const NetAddress& server, uint32 protocolId, uint64 clientSalt,
     const oc::function<void()>& pump = {})
@@ -225,7 +225,7 @@ static int fuzzHost(uint32 iterations, uint64 seed)
     Rng rng(seed);
 
     NetHostConfig config;
-    config.protocolId = 0x46555a5a; // "FUZZ" — isolated from a real server on the same machine
+    config.protocolId = 0x46555a5a; // "FUZZ" - isolated from a real server on the same machine
     NetHost server;
     if (!server.open(0, config))
     {
@@ -384,12 +384,12 @@ static int fuzzGame(const NetAddress& target, uint32 iterations, uint64 seed)
         printf("[game] FAIL: could not open socket\n");
         return 1;
     }
-    // must match GameProtocolId in NetworkManager.cpp — bumped on every wire change, which is the
+    // must match GameProtocolId in NetworkManager.cpp - bumped on every wire change, which is the
     // signal to re-run this mode
     constexpr uint32 GameProtocolId = 0x4F43534B;
     if (!handshake(socket, target, GameProtocolId, rng.next()))
     {
-        printf("[game] FAIL: no handshake — is the server running, and is GameProtocolId current?\n");
+        printf("[game] FAIL: no handshake - is the server running, and is GameProtocolId current?\n");
         return 1;
     }
     printf("[game] connected, sending malformed game messages\n");
@@ -428,12 +428,12 @@ static int fuzzGame(const NetAddress& target, uint32 iterations, uint64 seed)
         if (!writer.overflowed())
             sendPayload(socket, target, seq++, writer.data());
 
-        // stay under the transport rate limiter (400/s per address) — tripping it would mean
+        // stay under the transport rate limiter (400/s per address) - tripping it would mean
         // fuzzing the limiter instead of the parsers
         if ((i % 32) == 0)
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
-    printf("[game] ok — server still up (check its log for warnings, and that it kept simulating)\n");
+    printf("[game] ok - server still up (check its log for warnings, and that it kept simulating)\n");
     return 0;
 }
 

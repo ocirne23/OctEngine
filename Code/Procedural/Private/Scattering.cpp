@@ -22,14 +22,14 @@ namespace
 	// --- Scatter configuration ---------------------------------------------------------------------------
 	// THE place to add scatterable content. An asset describes one model (with optional node variants) and
 	// how it sits on the ground; a rule places one asset in one CLIMATE, given in real units (mean annual
-	// temperature C / annual precipitation mm/yr) with density falling off around it — add as many rules as
+	// temperature C / annual precipitation mm/yr) with density falling off around it - add as many rules as
 	// you like, and reference one asset from any number of them. Function-local statics so the tables build
 	// on first use (no global-init order dependency on the engine allocator).
 	//
 	// The climates below are the ones these rules were tuned against, carried over verbatim from the named
 	// biomes they used to reference. They are NOT the terrain textures' climate boxes: those were retuned
 	// onto the Whittaker diagram for the diffusion generator's real climate, while these still sit where the
-	// old noise generator's attractors were. So trees can disagree with the ground they stand on — worth
+	// old noise generator's attractors were. So trees can disagree with the ground they stand on - worth
 	// fixing, but it is a tuning pass with nothing to do with removing the generator.
 
 	oc::span<const ScatterAsset> scatterAssets()
@@ -163,7 +163,7 @@ namespace Procedural
 	}
 
 	// Load every asset's container, importing through its .oc so the model path and import
-	// options (incl. DecimationFactor) are shared with World's containers — both serve one cooked
+	// options (incl. DecimationFactor) are shared with World's containers - both serve one cooked
 	// .vsc + converted textures per model. A failed asset drops its rules with a warning.
 	void ScatterSystem::loadAssets()
 	{
@@ -267,9 +267,9 @@ namespace Procedural
 	}
 
 	// Places one cell's instances. Pure function of (maps, coord, params, config tables): candidates come
-	// from a per-rule jittered grid sized to the rule's density, then survive a filter chain — climate
+	// from a per-rule jittered grid sized to the rule's density, then survive a filter chain - climate
 	// weight (Gaussian falloff around the biome attractor, cheap first), cluster noise, altitude band
-	// above the water level, slope — and finally dart-throw against everything already accepted in the
+	// above the water level, slope - and finally dart-throw against everything already accepted in the
 	// cell (footprint discs; big-footprint rules run first). Overlap is exact within a cell; across cell
 	// borders only the jittered grid's spacing separates instances, which in practice keeps footprints
 	// from stacking without the cost of neighbor-cell regeneration.
@@ -315,7 +315,7 @@ namespace Procedural
 					// ONE evaluation for climate AND height: samplePoint returns both from a single tile
 					// resolve, where sampleTemperature + sampleHumidity + sampleHeightAndWater is three of
 					// them for the same point. Worth it even though the altitude test below rejects some
-					// candidates that never needed a height — under V3 the height falls out of the same
+					// candidates that never needed a height - under V3 the height falls out of the same
 					// resolve for free, so the only way to not pay for it is to resolve the tile twice.
 					TerrainPoint tp;
 					maps.samplePoint(wx, wz, tp);
@@ -510,7 +510,7 @@ namespace Procedural
 		if (!m_enabled || !maps || m_ruleOrder.empty())
 		{
 			// Inactive (disabled / terrain off / no rules): no profile scope. Clear once, starve the
-			// pumps (the dtor pattern) and drop late results until they exit — then every frame is a
+			// pumps (the dtor pattern) and drop late results until they exit - then every frame is a
 			// branch and a return. Reading the pump count BEFORE the drain makes "no pumps + drained"
 			// final: a pump only pushes results while it holds its slot.
 			if (m_inactiveIdle)
@@ -646,7 +646,7 @@ namespace Procedural
 				oc::erase_if(groups, [&](const auto& kv) { return outsideRing(kv.first); });
 		}
 
-		// --- Spawn scan: per rule, probe only the cells inside that rule's OWN view-distance ring — the
+		// --- Spawn scan: per rule, probe only the cells inside that rule's OWN view-distance ring - the
 		// residency ring is sized by the largest rule, and short-range rules never touch it. Gated besides:
 		// eligibility only changes on new admissions, a deferred over-budget spawn, or half a hysteresis of
 		// camera travel since the last scan (a group spawns at most that late; despawns stay exact, handled

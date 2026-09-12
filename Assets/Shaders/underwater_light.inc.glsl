@@ -1,15 +1,15 @@
 // Sunlight transmittance through the wavy water surface, for points BELOW the local water level.
-// Shared by the froxel fog (vol_scatter.cs.glsl — turns per-froxel sun light into volumetric light
-// shafts) and the lit surface pass (instanced_indirect.fs.glsl — caustics on underwater geometry).
+// Shared by the froxel fog (vol_scatter.cs.glsl - turns per-froxel sun light into volumetric light
+// shafts) and the lit surface pass (instanced_indirect.fs.glsl - caustics on underwater geometry).
 // Two physically-motivated terms, both from data that already exists:
 //   - CAUSTIC FOCUS: the fold Jacobian of the FFT wave field at the point where the sun ray crossed
 //     the surface (entryXZ = worldXZ + sunDir.xz/sunDir.y * depth). Converging wavefronts (J -> 0)
 //     focus light into the bright moving filaments; diverging ones dim it. Same Jacobian terms the
 //     whitecap foam uses, so the pattern matches the drawn surface exactly.
-//   - BEER-LAMBERT: exp(-u_oceanAbsorption.rgb * pathLength) — the blue-green shift with depth that
+//   - BEER-LAMBERT: exp(-u_oceanAbsorption.rgb * pathLength) - the blue-green shift with depth that
 //     makes accumulated froxel light read as colored shafts.
 // Tweaks ride u_fogParams7: z = caustic strength (0 disables the focus term, absorption remains),
-// w = caustic depth fade (1/m: contrast decay with depth, approximating defocus — paired with a mip
+// w = caustic depth fade (1/m: contrast decay with depth, approximating defocus - paired with a mip
 // that coarsens with depth so deep caustics blur out instead of aliasing).
 //
 // The includer defines UNDERWATER_OCEAN_BINDING for the FFT maps (fog binds them at 11, the forward
@@ -21,13 +21,13 @@
 layout (binding = UNDERWATER_OCEAN_BINDING) uniform sampler2DArray u_uwOceanMaps;
 
 // worldXZ/depthBelow locate the shaded point below the CALM water level; footprint = world size of one
-// receiver sample (froxel width for fog, ~0 for surface pixels) — it floors the sampling mip so the
+// receiver sample (froxel width for fog, ~0 for surface pixels) - it floors the sampling mip so the
 // pattern never aliases against what the receiver can represent. reach (>= 1) divides the depth the
 // ATTENUATION terms see (absorption + contrast fade + defocus), stretching how far shafts survive
 // without moving the pattern (the geometric entry point uses the true depth); 1 = physical. The fog
 // passes sqrt of its shaft boost so brightness and length grow together; surfaces pass 1.
 // Live wave height (m, relative to the calm local water level): mirrors the vertex displacement's
-// VERTICAL logic — the raw cascade sum times the ocean's surface weight (no flow rotation / choppy
+// VERTICAL logic - the raw cascade sum times the ocean's surface weight (no flow rotation / choppy
 // XZ, close enough for gating). Lets callers test "underwater" against the INSTANTANEOUS surface
 // instead of the calm level, so sand exposed by a receding swash reads as dry (no caustics/absorption)
 // and the run-up tongue reads as covered. columnDepth = calm water depth at the point.
@@ -56,7 +56,7 @@ float underwaterLiveWaveY(vec2 worldXZ, float columnDepth, float waterLevel)
     oceanShoreWeights(columnDepth, waterLevel, sw, surfaceW);
 
     // Swash backflow moves the water HORIZONTALLY (displaced = source + chop offset), so the surface
-    // above this ground point originates from x - offset: first-order inverse — evaluate the offset
+    // above this ground point originates from x - offset: first-order inverse - evaluate the offset
     // here, then sample the height field at the offset position. Without this the gate tests the wrong
     // water column and paints caustics on dry sand just in front of a receding tongue.
     vec2 sampleXZ = worldXZ;
@@ -122,7 +122,7 @@ vec3 underwaterSunTransmittance(vec2 worldXZ, float depthBelow, float footprint,
         oceanShoreWeights(columnDepth, waterLevel, swashW, surfaceW);
         sxx *= surfaceW; szz *= surfaceW; sxz *= surfaceW;
         // Fold Jacobian (Tessendorf): < 1 converging (bright), > 1 diverging (dim). Applied as a CONTRAST
-        // EXPONENT — "Caustic strength" steepens the response, so converging zones spike into hot
+        // EXPONENT - "Caustic strength" steepens the response, so converging zones spike into hot
         // filaments (up to 8x) instead of a gentle modulation, which is what makes fog columns read as
         // distinct rays. The exponent decays with depth (defocus), flattening focus toward 1.
         const float J = (1.0 + chop * sxx) * (1.0 + chop * szz) - chop * sxz * chop * sxz;

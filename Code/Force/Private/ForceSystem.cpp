@@ -21,7 +21,7 @@ float forceDistributionGain(float t, float D)
 // lateral integral of the falloff collapses in the warped-sphere coordinates (substituting the
 // warp turns each axial station into q^-m * (1-X^2)^3 up to a constant), so this is a cheap 1D
 // quadrature. Cached per emitter (depends only on focus + distribution; width scales the total by
-// width^2 analytically and reach by reach^3 — reach is deliberately NOT normalized away, so a
+// width^2 analytically and reach by reach^3 - reach is deliberately NOT normalized away, so a
 // bigger bubble is more total power at the same density, not a fainter one).
 static float forceShapeBudget(float focus, float D)
 {
@@ -38,7 +38,7 @@ static float forceShapeBudget(float focus, float D)
     return (float)sum;
 }
 
-// Reference: the plain gain-free sphere (focus 0.5, width 1) — an emitter with any focus/
+// Reference: the plain gain-free sphere (focus 0.5, width 1) - an emitter with any focus/
 // distribution/width carries exactly this shape's total, so Output is a balance-able budget and
 // narrowing/pinching visibly DENSIFIES the field instead of shedding power.
 // NAMESPACE scope, not a function-local static: the build is /Zc:threadSafeInit-, so a local static
@@ -130,7 +130,7 @@ void ForceSystem::initialize()
     ProfileScope scope("ForceSystem::initialize", EProfileCategory::Force);
     // Reserved to the caps so createEmitter/createQuery growth NEVER reallocates: a concurrent
     // spawn job may be resolving its own fresh handle while another creates (see m_createMutex in
-    // ForceSystem.ixx). Emitter INSTANCES are capped far above the renderer's slots — only ACTIVE
+    // ForceSystem.ixx). Emitter INSTANCES are capped far above the renderer's slots - only ACTIVE
     // emitters hold one (see MAX_FORCE_INSTANCES).
     m_emitters.reserve(MAX_FORCE_INSTANCES);
     m_queries.reserve(RendererVKLayout::MAX_FORCE_QUERIES);
@@ -212,7 +212,7 @@ static float forceIsoLateral(float t, float R, float m, float W, float D, float 
 
 // VISIBLE-BOUNDS pack (teamFlags.w, decoded by forceVisibleBounds in force_field.inc.glsl): the
 // emitter's own iso-surface extent from the closed-form profile, evaluated at iso x "Visible
-// bounds iso frac" (default 1.0 — tightest boxes; a surface can exist where two sub-iso fields
+// bounds iso frac" (default 1.0 - tightest boxes; a surface can exist where two sub-iso fields
 // SUM past iso, so lower the frac toward 0.5 for merge slack if a merged bulge ever clips at a
 // box edge; same-team crowds are what the merge system replaces with one group sphere anyway). The proxy/interval draws shrink to this box so the
 // marches skip the empty support space around a bubble far below its reach box (a drained shield
@@ -308,7 +308,7 @@ ForceEmitter ForceSystem::createEmitter(uint32 team, const glm::vec3& pos, const
             if (!m_instanceCapWarned)
             {
                 m_instanceCapWarned = true;
-                printf("ForceSystem: out of force emitter instances (cap %u) — new bubbles are dead handles\n",
+                printf("ForceSystem: out of force emitter instances (cap %u) - new bubbles are dead handles\n",
                     MAX_FORCE_INSTANCES);
             }
             return ForceEmitter();
@@ -429,7 +429,7 @@ void ForceSystem::destroyQuery(uint64 handle)
         Globals::rendererVK.destroyForceQuerySlot(rendererSlot); // see destroyEmitter
 }
 
-// The plain sphere's budget fold (focus 0.5 / distribution 0.5 / width 1) — group and transition
+// The plain sphere's budget fold (focus 0.5 / distribution 0.5 / width 1) - group and transition
 // spheres all use it; constants only, so computed once.
 // Namespace scope for the same reason as g_forceReferenceBudget (sphereReach runs in the merge
 // job's parallelFors). Declared BELOW that one, so within-TU static init order supplies it first.
@@ -494,7 +494,7 @@ void ForceSystem::uploadEmitter(Renderer& renderer, EmitterInstance& inst, float
     const bool transition = inst.mergeState == EmitterInstance::EMergeState::Joining
         || inst.mergeState == EmitterInstance::EMergeState::Leaving;
     // Readback source (setAnalyticReadback): the GPU integral only for flagged emitters, or for
-    // everyone while no bake is published. A BAKE-READ merged member needs no upload at all —
+    // everyone while no bake is published. A BAKE-READ merged member needs no upload at all -
     // its taps read its own position against the group's field, which is what PASSIVE bought.
     const bool analytic = inst.analyticReadback || !m_bakePublished;
     const uint32 readbackBit = analytic ? FORCE_FLAG_READBACK : 0u;
@@ -540,7 +540,7 @@ void ForceSystem::bakedReadback(EmitterInstance& inst, const RendererVKLayout::F
     // Mirrors force_emitter.cs: samples through the bubble weighted by the emitter's own
     // normalized field, force = Output x mean(wSelf x -grad), pressure = mean(opposing) over the
     // FULL tap count (a tap outside the own field adds zero, as the shader's `continue` does). The
-    // ring is planar at the bake height — the bake is a ground-band field.
+    // ring is planar at the bake height - the bake is a ground-band field.
     const glm::vec3 dir(gpu.dirFocus);
     const float R = gpu.posReach.w;
     const glm::vec3 center = glm::vec3(gpu.posReach) + dir * (R * 0.5f);
@@ -587,9 +587,9 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
     const uint32 numUploadSlots = JobSystem::numChunks((uint32)m_emitters.size(), c_uploadGrain);
     prepareSlots(m_slotChurn, numUploadSlots);
     // Per-emitter upload on jobs: each iteration touches only its own instance, its own renderer
-    // slot (distinct vector elements, no growth — create/destroy are main-thread outside this),
+    // slot (distinct vector elements, no growth - create/destroy are main-thread outside this),
     // the read-only readback span and the renderer's per-worker debug lines. An emitter whose
-    // ACTIVE gate flipped only STAGES its index in the chunk's own slot — the renderer slot itself
+    // ACTIVE gate flipped only STAGES its index in the chunk's own slot - the renderer slot itself
     // is minted/retired serially below, where growing the renderer's vectors cannot race these jobs.
     Globals::jobSystem.parallelFor(0u, (uint32)m_emitters.size(), c_uploadGrain, JobProfile{ "Force upload", EProfileCategory::Force },
         [&](uint32 begin, uint32 end)
@@ -604,8 +604,8 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
         if (!inst.active)
         {
             // Gated off (SIM LOD): any merge transition is dropped on the spot (the merge pass
-            // already evicted it — never a candidate), and the bubble SHRINKS OUT as its own over
-            // the ramp. Only once dark does the GPU SLOT GO BACK — the far half of a 25k-unit map
+            // already evicted it - never a candidate), and the bubble SHRINKS OUT as its own over
+            // the ramp. Only once dark does the GPU SLOT GO BACK - the far half of a 25k-unit map
             // must not sit on the renderer's MAX_FORCE_EMITTERS.
             inst.mergeState = EmitterInstance::EMergeState::Own;
             inst.group = 0;
@@ -669,7 +669,7 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
         if (starved > 0 && !m_slotCapWarned)
         {
             m_slotCapWarned = true; // once per stretch: more ACTIVE bubbles than the GPU has slots
-            printf("ForceSystem: out of GPU force emitter slots (%u of %u held, %u live emitters) — "
+            printf("ForceSystem: out of GPU force emitter slots (%u of %u held, %u live emitters) - "
                 "%u active emitters have no field\n", m_numSlottedEmitters,
                 RendererVKLayout::MAX_FORCE_EMITTERS, m_numLiveEmitters, starved);
         }
@@ -686,7 +686,7 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
                     group.team, 0.5f, 1.0f, 1.0f, 1.0f, 0u));
     }
     // Per-group upload on jobs: own group, own renderer slot, the read-only readback span, and
-    // (shared readback mode) its OWN members — an emitter belongs to at most one group, so the
+    // (shared readback mode) its OWN members - an emitter belongs to at most one group, so the
     // member writes are distinct too. Small group counts stay inline (runPass).
     runPass((uint32)m_groups.size(), 16u, 32u, JobProfile{ "Force groups upload", EProfileCategory::Force },
         [&](uint32 begin, uint32 end)
@@ -700,7 +700,7 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
         if (group.rendererSlot == UINT32_MAX)
             continue;
         // The group sphere: focus 0.5 / distribution 0.5 / width 1, axis up, centred on `center`
-        // — its budget fold is the constant sphere fold (namespace scope: worker-reachable).
+        // - its budget fold is the constant sphere fold (namespace scope: worker-reachable).
         // The group sphere integrates on the GPU only in shared-readback mode, where ANALYTIC
         // members take their split from it; bake-read members sample their own position.
         const uint32 groupFlags = FORCE_FLAG_ACTIVE | (m_merge.memberReadback ? 0u : FORCE_FLAG_READBACK);
@@ -769,9 +769,9 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
 }
 
 // Draws the emitter's UNCONTESTED iso surface (what its bubble looks like alone): the closed-form
-// profile of the warped-sphere shape solved for the iso threshold — four half-profiles in the two
+// profile of the warped-sphere shape solved for the iso threshold - four half-profiles in the two
 // axial planes + a circle at the widest station + the output line pos -> target. Deformation
-// against other bubbles only exists in the field evaluation — this is the authoring view of
+// against other bubbles only exists in the field evaluation - this is the authoring view of
 // reach/focus/distribution, not the equilibrium surface.
 void ForceSystem::stepBubbleLight(Renderer& renderer, BubbleLight& light, bool lit, const glm::vec3& center,
     float radius, uint32 team, float deltaSec) const
@@ -879,7 +879,7 @@ void ForceSystem::refreshBubbleBounds(EmitterInstance& inst, oc::vector<uint32>&
     {
         // No bubble once gated off AND dark: evicted from its group by the member sweep (radius
         // 0 = unfit), never a candidate. The bounds cache is dropped so reactivation recomputes.
-        // (While still fading out it keeps a shrinking OWN bubble below — but is no candidate.)
+        // (While still fading out it keeps a shrinking OWN bubble below - but is no candidate.)
         inst.bubbleRadius = 0.0f;
         inst.candidate = false;
         inst.boundsOutput = -1.0f;
@@ -921,7 +921,7 @@ void ForceSystem::refreshBubbleBounds(EmitterInstance& inst, oc::vector<uint32>&
         inst.bubbleRadius = r2 > 0.0f ? std::sqrt(r2) * 1.02f : 0.0f;
     }
     // A candidate is mergeable, has a bubble, and could fit SOME group at all (its own cover term
-    // under "Max group radius") — a map-scale emitter would otherwise stretch the candidate cells.
+    // under "Max group radius") - a map-scale emitter would otherwise stretch the candidate cells.
     inst.candidate = inst.active && inst.mergeable && inst.bubbleRadius > 0.0f // a fading-out bubble never merges
         && m_merge.radiusScale * inst.bubbleRadius * m_merge.coverScale + m_merge.coverMargin <= m_merge.maxRadius;
     if (inst.candidate)
@@ -941,7 +941,7 @@ static uint64 forceCellKey(const glm::vec3& p, float invCell)
     return ((uint64)(c.x & 0x1FFFFF) << 42) | ((uint64)(c.y & 0x1FFFFF) << 21) | (uint64)(c.z & 0x1FFFFF);
 }
 
-// Runs on the merge job: no renderer access — update() allocates the renderer slot on main.
+// Runs on the merge job: no renderer access - update() allocates the renderer slot on main.
 uint32 ForceSystem::createGroup(uint32 team)
 {
     uint32 idx;
@@ -1019,12 +1019,12 @@ void ForceSystem::beginLeave(EmitterInstance& inst, const glm::vec3& groupCenter
 }
 
 // Exponential ease of the displayed sphere toward the target; the radius is FLOORED by the cover
-// of the Merged members at the displayed centre (they project no field of their own — Joining
+// of the Merged members at the displayed centre (they project no field of their own - Joining
 // members still carry their transition sphere, so they may wait for the growth).
 void ForceSystem::smoothGroup(MergeGroup& group, float deltaSec)
 {
     // Follow the members' own MOTION 1:1 (output-weighted mean displacement of the members that
-    // were already in the group last frame — a just-joined member still has blend 0), so a moving
+    // were already in the group last frame - a just-joined member still has blend 0), so a moving
     // crowd carries its sphere along instead of towing it on a time constant; the ease below then
     // only absorbs the membership-induced jumps of the centroid.
     glm::vec3 motion(0.0f);
@@ -1107,7 +1107,7 @@ bool ForceSystem::recomputeCover(MergeGroup& group)
 // its own instance + its chunk's staging slot, a group's leave/cover pass touches only its own
 // members (an emitter belongs to at most one group), and the neighbour search reads the sorted
 // candidate cells and stages pairs per chunk. Only the candidate sort, the pair UNION (group
-// creation / membership moves across groups) and the dissolve sweep are serial — their cost is
+// creation / membership moves across groups) and the dissolve sweep are serial - their cost is
 // the number of candidates and join-distance PAIRS, not the emitter count. No renderer access here.
 // ---- the baked pressure field (see ForceSystem.ixx) ----
 
@@ -1117,7 +1117,7 @@ static uint64 bakeChunkKey(int bx, int bz)
 }
 
 // Chunk selection: every emitter's / group's support box is rasterized to 16 m chunk keys on jobs
-// (a PerWorker key list each — no shared set, no cap check on the hot path), then ONE serial
+// (a PerWorker key list each - no shared set, no cap check on the hot path), then ONE serial
 // sort + unique over the staged keys, capped at MAX_FORCE_BAKE_CHUNKS. The cap therefore drops
 // the highest keys (a corner of the covered area) instead of whichever emitter scanned last.
 void ForceSystem::buildBakeChunks(Renderer& renderer)
@@ -1159,7 +1159,7 @@ void ForceSystem::buildBakeChunks(Renderer& renderer)
             if (inst.mergeState == EmitterInstance::EMergeState::Joining
                 || inst.mergeState == EmitterInstance::EMergeState::Leaving)
             {
-                // The transition sphere lerps between the own bubble and the group sphere — cover
+                // The transition sphere lerps between the own bubble and the group sphere - cover
                 // where it currently stands too (sub-iso fringe past 3x the visible radius is
                 // negligible, so the multiplier is enough).
                 const float r = glm::max(inst.blendRadius * 3.0f, 1.0f);
@@ -1179,7 +1179,7 @@ void ForceSystem::buildBakeChunks(Renderer& renderer)
                    glm::vec2(group.center.x, group.center.z) + r);
         }
         // Serial merge: the workers' unique lists (a few hundred keys each at most) through one
-        // more stamp table — no concatenate, no sort.
+        // more stamp table - no concatenate, no sort.
         m_bakeMerge.begin();
         m_bakeKeyStaging.forEach([&](const BakeKeySet& keys) {
             for (const uint64 key : keys.unique)
@@ -1196,7 +1196,7 @@ void ForceSystem::buildBakeChunks(Renderer& renderer)
         {
             // Keep the chunks nearest the covered set's centroid: the OUTERMOST regions go
             // unbaked, never a coherent half-plane (the key packs bx as uint32, so negative X
-            // sorts last — cutting the sorted tail would drop every chunk on one side).
+            // sorts last - cutting the sorted tail would drop every chunk on one side).
             glm::dvec2 centroid(0.0);
             for (const uint64 key : uniqueKeys)
                 centroid += glm::dvec2((int)(uint32)(key >> 32), (int)(uint32)key);
@@ -1216,7 +1216,7 @@ void ForceSystem::buildBakeChunks(Renderer& renderer)
     if (capped && !m_bakeCapWarned)
     {
         m_bakeCapWarned = true; // once: dropped chunks read as zero field (no push/exposure there)
-        printf("ForceSystem: baked-field chunk cap hit (%u) — outermost emitter regions unbaked\n",
+        printf("ForceSystem: baked-field chunk cap hit (%u) - outermost emitter regions unbaked\n",
             MAX_FORCE_BAKE_CHUNKS);
     }
     renderer.setForceBakeChunks(m_bakeChunkScratch, m_bakeSampleHeight);
@@ -1336,7 +1336,7 @@ ForceSystem::FieldSample ForceSystem::sampleBakedField(const glm::vec3& pos, uin
     const float gzf = pos.z * c_invSpacing;
     const int gx0 = (int)std::floor(gxf), gz0 = (int)std::floor(gzf);
     const float fx = gxf - (float)gx0, fz = gzf - (float)gz0;
-    // The 2x2 lattice corners around the point — ONE fetch serves the bilinear value, the owning
+    // The 2x2 lattice corners around the point - ONE fetch serves the bilinear value, the owning
     // team AND the gradient. A corner in a missing chunk is ZERO field (outside every support).
     float corner[4][MAX_FORCE_TEAMS] = {};
     bool any = false;
@@ -1371,9 +1371,9 @@ ForceSystem::FieldSample ForceSystem::sampleBakedField(const glm::vec3& pos, uin
     s.owningTeam = best;
     s.field = phi[best];
     s.inside = phi[best] > glm::max(m_params.isoThreshold, second); // hard-max bound (no junction
-                                                                   // smoothing — rim-blur scale)
+                                                                   // smoothing - rim-blur scale)
     // The opposing field (vs the SAMPLED team) per corner: bilinear value + the analytic gradient
-    // of the bilinear patch — continuous inside a cell, gameplay-grade across them.
+    // of the bilinear patch - continuous inside a cell, gameplay-grade across them.
     float o[4];
     for (int c = 0; c < 4; ++c)
     {
@@ -1429,9 +1429,9 @@ void ForceSystem::updateMerging(float deltaSec)
     };
 
     // 2. Leave pass (one job per group): prune dead/re-created slots, then drop members that no
-    // longer qualify — not mergeable, no bubble, team changed, too far from the centre, or
+    // longer qualify - not mergeable, no bubble, team changed, too far from the centre, or
     // (hysteresis) no other member within leaveK * (ri + rj). leaveK < 1 means the member's own
-    // bubble still overlaps a neighbour's — i.e. is still inside the group's cover — on the frame
+    // bubble still overlaps a neighbour's - i.e. is still inside the group's cover - on the frame
     // it gets its field back.
     runPass(numGroups, 1u, 8u, JobProfile{ "Force merge leave", EProfileCategory::Force },
         [&](uint32 begin, uint32 end)
@@ -1485,7 +1485,7 @@ void ForceSystem::updateMerging(float deltaSec)
     }
     });
 
-    // 3. Candidate cells (serial: concatenate the staged candidates, sort by cell key — a few
+    // 3. Candidate cells (serial: concatenate the staged candidates, sort by cell key - a few
     // hundred entries) then the neighbour search (one job per candidate chunk): each candidate
     // binary-searches the 27 cells around its own and stages the pairs (i < j, once) that pass
     // the exact test joinK * (ri + rj). Cell = 2 x the largest join radius, so no partner can sit
@@ -1544,7 +1544,7 @@ void ForceSystem::updateMerging(float deltaSec)
         }
     });
 
-    // 4. Union pass (serial — creates groups, moves membership across groups): an ungrouped pair
+    // 4. Union pass (serial - creates groups, moves membership across groups): an ungrouped pair
     // founds a group, an ungrouped emitter joins its neighbour's group, two groups merge (smaller
     // into larger) when the result fits.
     const auto processPair = [&](uint32 ia, uint32 ib)

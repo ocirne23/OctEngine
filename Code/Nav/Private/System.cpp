@@ -193,7 +193,7 @@ bool NavSystem::seedPath(uint32 team, const glm::vec3& from, const glm::vec3& to
     NavSystem* self = this;
     Globals::jobSystem.submit([self, plan]
     {
-        // The A*'s working set is this THREAD's (pure scratch, never drained — so a thread_local,
+        // The A*'s working set is this THREAD's (pure scratch, never drained - so a thread_local,
         // not a PerWorker): findPath has no wait inside, so the fiber stays on this worker for
         // exactly the span it is in use; the pin asserts should that ever change.
         {
@@ -266,7 +266,7 @@ bool NavSystem::requestSeedPath(uint32 team, const glm::vec3& from, const glm::v
     // Suppressed when a recent plan of this team started within `area` of here AND went to within
     // `area` of the same destination: a crowd walking the same way is one plan, a unit heading
     // somewhere else is not blocked by it. The test is a DISTANCE (a bucket border used to let two
-    // plans through), but the candidates come from the 3x3 buckets around the start — bucket size
+    // plans through), but the candidates come from the 3x3 buckets around the start - bucket size
     // IS the radius, so nothing within range can sit outside that neighbourhood, and the cost per
     // request is constant no matter how many plans are alive.
     for (int dz = -1; dz <= 1; ++dz)
@@ -277,7 +277,7 @@ bool NavSystem::requestSeedPath(uint32 team, const glm::vec3& from, const glm::v
                 continue;
             // Read-only: retiring is the expiry queue's job (removing here would break the
             // append-only order it relies on). A stamp that expired since the last update is
-            // simply skipped — at most one frame's worth ever sits here.
+            // simply skipped - at most one frame's worth ever sits here.
             for (const SeedStamp& stamp : it->second)
                 if (m_time - stamp.time < m_seedCooldown
                     && glm::dot(stamp.from - f, stamp.from - f) < areaSq
@@ -354,7 +354,7 @@ void NavSystem::tickSlot(TeamSlot& slot, float deltaSec)
     // with nothing published yet skips the wait.
     const bool due = ((slot.sourcesDirty || slot.periodic) && slot.timer <= 0.0f) || !slot.published;
     // A rebuild of a published field can wait a frame: not on a physics-step frame that a
-    // step-free frame follows (JobSystem::deferFromPhysicsFrame) — the first chunk's job would
+    // step-free frame follows (JobSystem::deferFromPhysicsFrame) - the first chunk's job would
     // land on the workers next to the solver tasks. A slot with nothing published kicks at once.
     if (due && !m_obstaclesDirty && (!slot.published || !Globals::jobSystem.deferFromPhysicsFrame()))
         kickBuild(slot, deltaSec);
@@ -406,7 +406,7 @@ void NavSystem::update(float deltaSec)
     publish(m_raster);
     for (auto& [key, slot] : m_goals)
         publish(*slot);
-    // Expire goals nobody set for a while (only idle ones — a building slot waits its turn).
+    // Expire goals nobody set for a while (only idle ones - a building slot waits its turn).
     for (auto it = m_goals.begin(); it != m_goals.end();)
     {
         TeamSlot& slot = *it->second;
@@ -457,7 +457,7 @@ void NavSystem::update(float deltaSec)
 }
 
 // PER-CHUNK parallel across ALL teams: each field's serial pre-work (drain/flip/evict/gather/
-// snapshot) runs first, then every team's chunks go into ONE fan-out per phase — two barriers
+// snapshot) runs first, then every team's chunks go into ONE fan-out per phase - two barriers
 // total instead of one per field, and one team's lone big field no longer serializes behind the
 // empty ones. The flow phase must fully settle before the pressure phase: the pressure push splats
 // ATOMICALLY into the flow write buffers, which the flow tasks write plainly. Pressure PUSHES the
@@ -465,7 +465,7 @@ void NavSystem::update(float deltaSec)
 // surrounding lanes in; the push rides the diffusion step itself, which hands each active cell's
 // gradient to the callback instead of a second pass re-resolving neighbours.
 // Runs on a JOB FIBER: the nested parallelFors park it, so everything here is STACK locals or
-// members of the system (one step job in flight — the item lists are kept members so their
+// members of the system (one step job in flight - the item lists are kept members so their
 // capacity survives across steps); a thread_local would be shared with whatever job the worker
 // picks up meanwhile - the standing Nav rule.
 void NavSystem::runFieldSteps()
@@ -651,7 +651,7 @@ void NavSystem::drawDebug(const glm::vec3& focus,
                 const glm::vec2 tip = centre + dir * len * 0.6f;
                 // A line-list arrow is nearly invisible at RTS camera distance, so the shaft is
                 // drawn as a THICK bar (parallel offsets) and the head as a filled triangle of
-                // stacked chords — same primitive, an order of magnitude more readable.
+                // stacked chords - same primitive, an order of magnitude more readable.
                 const float halfW = 0.05f + 0.05f * t;
                 for (int o = -1; o <= 1; ++o)
                 {

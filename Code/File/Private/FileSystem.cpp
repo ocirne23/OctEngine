@@ -2,7 +2,7 @@ module File;
 
 import Core;
 import Core.Windows;
-// The ONLY place these two live now (Core deliberately stops exporting them — see Core.ixx):
+// The ONLY place these two live now (Core deliberately stops exporting them - see Core.ixx):
 // every other library reaches the disk through the FileSystem API below.
 import <filesystem>;
 import <fstream>;
@@ -36,7 +36,7 @@ namespace
 {
     // A ProfileScope that NO-OPS on threads the profiler does not track. Plain ProfileScope
     // dereferences the calling thread's track (and asserts), but IO legitimately runs on threads
-    // the engine deliberately leaves unregistered — the transient startup texture-bake pool, for
+    // the engine deliberately leaves unregistered - the transient startup texture-bake pool, for
     // instance (a track is permanent and 1 MiB, so short-lived pools do not get one).
     struct IoScope final
     {
@@ -59,10 +59,10 @@ bool FileSystem::isMainThread()
 
 void FileSystem::assertIoThread(bool allowMainThread)
 {
-    // Blocking the main thread on the disk is a frame hitch — say so explicitly (AllowMainThreadIO
+    // Blocking the main thread on the disk is a frame hitch - say so explicitly (AllowMainThreadIO
     // or the allowMainThread flag) wherever it is intended.
     assert((allowMainThread || t_allowMainThreadDepth > 0 || !isMainThread())
-        && "FileSystem: IO on the main thread — wrap it in FileSystem::AllowMainThreadIO, pass "
+        && "FileSystem: IO on the main thread - wrap it in FileSystem::AllowMainThreadIO, pass "
            "allowMainThread=true, or move the call to a job");
     (void)allowMainThread;
 }

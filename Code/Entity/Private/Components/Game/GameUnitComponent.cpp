@@ -635,7 +635,7 @@ glm::vec2 GameUnitComponent::steerHeading(Tick& t, glm::vec2 goalDir, const Nav:
     }
     m_ignoreFlowTimer = glm::max(0.0f, m_ignoreFlowTimer - t.deltaSec);
     // Tracking a live target: the field descent is ~0.25 s fresh, the seeded lane's re-plans lag
-    // a moving player badly — floor the goal weight and near-mute the lane.
+    // a moving player badly - floor the goal weight and near-mute the lane.
     const bool tracking = t.navTracking && !unstick;
     if (tracking)
         wGoal = glm::max(wGoal, params.steerTrackGoal * (stalled ? 0.3f : 1.0f));

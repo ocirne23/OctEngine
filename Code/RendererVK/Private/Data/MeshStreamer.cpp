@@ -120,7 +120,7 @@ void MeshStreamer::unregisterSets(uint32 firstMeshInfoIdx, uint32 count)
         set.removed = true;
         if (set.state == EState::Resident)
         {
-            // Free the CURRENT allocation like an eviction, minus the MeshInfo rewrites — the renderer
+            // Free the CURRENT allocation like an eviction, minus the MeshInfo rewrites - the renderer
             // neutralizes the whole freed range itself (freeMeshInfoRange).
             for (uint32 k = 0; k < set.numLevels; ++k)
                 m_deferredFrees.push_back(DeferredFree{
@@ -336,7 +336,7 @@ void MeshStreamer::solveEvictions()
     if (!m_enabled || m_stats.residentBytes <= m_stats.budgetBytes)
         return;
 
-    // Evict least-recently-seen first, cold sets only — an over-budget scene where everything is
+    // Evict least-recently-seen first, cold sets only - an over-budget scene where everything is
     // actively referenced stays over budget rather than flickering meshes in and out.
     oc::vector<uint32>& candidates = m_evictCandidates; // kept scratch
     candidates.clear();

@@ -154,7 +154,7 @@ void MemoryPanel::prepare()
 void MemoryPanel::render()
 {
     if (!m_prepared)
-        prepare(); // nothing ran ahead of us — inline
+        prepare(); // nothing ran ahead of us - inline
     m_prepared = false;
     const MemScopeNode* root = Globals::memoryTracker.getRoot();
     if (root == nullptr || m_nodes.empty())
@@ -208,7 +208,7 @@ void MemoryPanel::buildSnapshot(uint32 idx, const MemScopeNode* node)
         }
     }
     // Reserve the children's CONTIGUOUS block first, then descend: everything the subtrees append
-    // lands above it, so the block never fragments. (m_nodes may reallocate — index, never hold.)
+    // lands above it, so the block never fragments. (m_nodes may reallocate - index, never hold.)
     uint32 numChildren = 0;
     for (const MemScopeNode* child = node->firstChild.load(oc::memory_order_acquire); child != nullptr;
          child = child->nextSibling.load(oc::memory_order_relaxed))
@@ -451,7 +451,7 @@ void MemoryPanel::drawNode(uint32 nodeIdx, float x0, float y0, float x1, float y
 
     const double areaScale = (double)(cx1 - cx0) * (double)(cy1 - cy0) / (double)view.inclusiveBytes;
     // Layout scratch as a stack: this node's range is [base, base + n); the recursion below appends
-    // above it and pops back to our top, so the range stays ours. Index, never hold a reference —
+    // above it and pops back to our top, so the range stays ours. Index, never hold a reference -
     // a child's push may reallocate.
     const uint32 n = view.numChildren;
     const size_t base = m_areaStack.size();

@@ -37,7 +37,7 @@ export struct GameProjectileComponent
     float emitterDrain = 0.0f, emitterDrainRadius = 5.0f;
     float splashRadius = 0.0f;
     float age = 0.0f;
-    bool spent = false; // hit something — despawn queued, never damage twice
+    bool spent = false; // hit something - despawn queued, never damage twice
 
     void spawn(Entity& entity, const SpawnInfo& info, const Transform& base);
     void destroy(Entity& entity, const SpawnInfo& info) {}

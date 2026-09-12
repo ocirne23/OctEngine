@@ -27,7 +27,7 @@ namespace
 
 }
 
-// exported from :TweakPanel — the settings menu draws the same rows
+// exported from :TweakPanel - the settings menu draws the same rows
 void drawTweakVar(const TweakVar& var, int index, oc::vector<const TweakVar*>& deferredCallbacks)
 {
 		ImGui::PushID(index);

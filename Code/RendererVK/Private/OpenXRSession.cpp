@@ -225,8 +225,8 @@ bool OpenXRSession::createSession(vk::Instance vkInstance, vk::PhysicalDevice vk
     if (!xrCheck(xrCreateSession(m_instance, &sessionInfo, &m_session), "xrCreateSession"))
         return false;
 
-    // App/world space: prefer STAGE (the room/standing universe) so runtime-level space adjustments — SteamVR
-    // space drag, recenter — move the rendered view. STAGE origin sits on the floor at the play-area centre.
+    // App/world space: prefer STAGE (the room/standing universe) so runtime-level space adjustments - SteamVR
+    // space drag, recenter - move the rendered view. STAGE origin sits on the floor at the play-area centre.
     // Fall back to LOCAL (head-seeded, world-locked) where STAGE isn't offered.
     XrReferenceSpaceType appSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
     {

@@ -41,15 +41,15 @@ export struct ForceComponent
                                    // bubbles ride one GPU emitter; see "Force/Merge" tweaks); false opts out
         bool analyticReadback = false; // force/pressure from the GPU integral instead of the planar CPU
                                        // pressure bake (ForceEmitter::setAnalyticReadback): for bubbles
-                                       // that leave the ground band — projectiles, lobs
+                                       // that leave the ground band - projectiles, lobs
     };
 
     void spawn(Entity& entity, const SpawnInfo& info, const Transform& base);
     void destroy(Entity& entity, const SpawnInfo& info);
     void update(Entity& entity, const Transform& world); // emitter follows the entity (position + axis)
     // The bubble's ACTIVE gate (see ForceEmitter::setActive): spawns DARK; the World's SIM LOD
-    // gate owns it from the first visit on — on for an entity outside the LOD (Global, LOD off),
-    // by distance tier for a selected one — so a bubble never costs a GPU slot before its entity
+    // gate owns it from the first visit on - on for an entity outside the LOD (Global, LOD off),
+    // by distance tier for a selected one - so a bubble never costs a GPU slot before its entity
     // has a tier. Pass-safe.
     void setActive(bool active) { if (emitter.isValid()) emitter.setActive(active); }
 };

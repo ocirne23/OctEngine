@@ -7,11 +7,11 @@ import Core;
 // of Globals::profiler - pausing here freezes the panel's snapshot, recording continues.
 //
 // TWO PHASES: prepare() is the data work (auto-pause check, ring snapshot + per-track sort, stats
-// aggregation) and touches NO ImGui — UI::prepare runs it on a job, overlapped with the rest of the
+// aggregation) and touches NO ImGui - UI::prepare runs it on a job, overlapped with the rest of the
 // pre-UI main-thread work, and the tracks snapshot itself is a parallelFor. render() is the ImGui
 // phase and only reads what prepare built (it prepares inline if nothing ran, so the split is an
 // optimization, never a requirement). All the view state prepare reads (pause, zoom, filters) is
-// what render wrote LAST frame — exactly the ordering the single-threaded version had.
+// what render wrote LAST frame - exactly the ordering the single-threaded version had.
 export class ProfilerPanel
 {
 public:
@@ -55,7 +55,7 @@ private:
     void drawStatsTable();
 
     bool m_prepared = false;     // prepare() ran for this UI frame (render clears it)
-    bool m_statsVisible = false; // the Stats tab was open last frame — only then aggregate
+    bool m_statsVisible = false; // the Stats tab was open last frame - only then aggregate
 
     // ---- auto pause ----
     bool m_autoPause = false;

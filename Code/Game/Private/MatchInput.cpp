@@ -42,11 +42,11 @@ static constexpr const char* c_buildCategoryNames[c_numCategories] = { "Combat",
 static constexpr const char* c_buildCategoryCards[c_numCategories] = { // the slots' hover cards
     "Combat\nShields, walls, turrets and the barracks.",
     "Production\nPower, extraction, refining and storage." };
-// The three cables live on the ROOT page (A/S/D) — no page of their own. Arming one enters Build
+// The three cables live on the ROOT page (A/S/D) - no page of their own. Arming one enters Build
 // with this HIDDEN category, which draws and behaves as the root page (see isRootPage).
 static constexpr int c_cableCategory = 2;
 static constexpr int c_rootCableSlot = 4;      // A: c_cableItems[0], S, D follow
-// A category page is just its list of placeable types — the shorthand table (c_structureShortNames,
+// A category page is just its list of placeable types - the shorthand table (c_structureShortNames,
 // Match.ixx) IS each slot's caption.
 static constexpr EStructureType c_combatItems[] = {
     EStructureType::Emitter,
@@ -154,13 +154,13 @@ GameMatch::Aim GameMatch::computeAim(const Camera& camera, EStructureType type) 
         // Extractors only build ON a free resource node: snap the ghost to the nearest one.
         aim.nodeIndex = m_structures.findFreeNodeNear(aim.pos, m_structures.extractorSnapRadius());
         if (aim.nodeIndex < 0)
-            return aim; // no free node under the cursor — invalid, no ghost
+            return aim; // no free node under the cursor - invalid, no ghost
         aim.pos = m_structures.nodeGroundPos(aim.nodeIndex);
     }
     aim.pos = StructureSystem::snapToGrid(aim.type, aim.pos); // grid-aligned (extractors too)
 
     aim.valid = true;
-    // Placing a blueprint is free — "affordable" now means the footprint is CLEAR: no structure
+    // Placing a blueprint is free - "affordable" now means the footprint is CLEAR: no structure
     // (or reserved node) on those cells, and nobody standing in them (drives the red ghost AND
     // gates the confirm click; placeStructure re-checks both, the MP seam).
     aim.affordable = m_structures.cellsFree(aim.type, aim.pos)
@@ -170,12 +170,12 @@ GameMatch::Aim GameMatch::computeAim(const Camera& camera, EStructureType type) 
 
 bool GameMatch::aimGroundPoint(const Camera& camera, glm::vec3& outPos) const
 {
-    // Analytic ray vs the y=0 ground plane — the world floor IS flat, and a physics raycast kept
+    // Analytic ray vs the y=0 ground plane - the world floor IS flat, and a physics raycast kept
     // hitting the tall border-wall colliders (and other bodies) instead of the ground behind them,
     // which made near-wall placement jumpy.
     const Ray ray = camera.screenToRay(Globals::ui.getViewportRect(), m_mousePos);
     if (ray.dir.y > -1e-4f)
-        return false; // looking at/above the horizon — no ground under the cursor
+        return false; // looking at/above the horizon - no ground under the cursor
     outPos = ray.origin + ray.dir * (-ray.origin.y / ray.dir.y);
     return true;
 }
@@ -191,7 +191,7 @@ int GameMatch::hoveredStructure(const Camera& camera) const
 // ---- the hotbar and the modes ------------------------------------------------------------------
 
 // The hotbar page for the current state: ROOT (Select/Delete: categories + Delete on X) or the
-// picked category's items (+ Back on V). Called every windowed frame — counts stay live and the
+// picked category's items (+ Back on V). Called every windowed frame - counts stay live and the
 // highlight always mirrors the real state (the engine's number-key routing may poke selectSlot).
 bool GameMatch::isRootPage() const
 {
@@ -203,7 +203,7 @@ void GameMatch::refreshBuildHotbar()
     GameHud& hud = Globals::gameHud;
     // HOVER CARDS: the full type name + StructureSystem's description (one sentence, then the
     // exact per-second flows). Formatted from the LIVE tweaks, so they are rebuilt on a slow
-    // cadence instead of per frame — this runs every frame for the counts, and 26 formatted
+    // cadence instead of per frame - this runs every frame for the counts, and 26 formatted
     // strings a frame is pure waste for text that only moves when someone drags a tweak. The
     // cadence is REAL seconds, not a frame count: the rate must not follow the frame rate, and a
     // paused game still updates its cards. The setters below then early-out on an unchanged
@@ -270,8 +270,8 @@ void GameMatch::setMode(EPlayerMode mode)
     switch (mode)
     {
     case EPlayerMode::Build:  break; // the category entry logs its own line (activateSlot)
-    case EPlayerMode::Delete: Log::info("Delete mode (X): click a structure to demolish (one, then back to Select) — X cancels"); break;
-    case EPlayerMode::Select: Log::info("Select mode: click inspects, RMB routes / moves — Q/W build, A/S/D cables, X delete"); break;
+    case EPlayerMode::Delete: Log::info("Delete mode (X): click a structure to demolish (one, then back to Select) - X cancels"); break;
+    case EPlayerMode::Select: Log::info("Select mode: click inspects, RMB routes / moves - Q/W build, A/S/D cables, X delete"); break;
     }
 }
 
@@ -310,7 +310,7 @@ void GameMatch::activateSlot(int slot)
             m_buildSelection = -1;
             refreshBuildHotbar();
             Log::info(oc::string("Build: ") + c_buildCategoryNames[slot]
-                + " — grid keys arm an item, LMB places, RMB cancels, C/Esc back");
+                + " - grid keys arm an item, LMB places, RMB cancels, C/Esc back");
         }
         else if (slot >= c_rootCableSlot && slot < c_rootCableSlot + (int)oc::size(c_cableItems))
         {
@@ -369,7 +369,7 @@ void GameMatch::updateModeSwitching()
     if (backDown && !m_modeKeyWasDown[0])
         cancelOneLevel();
     m_modeKeyWasDown[0] = backDown;
-    // F9 save / F10 load (authority only — a client has no sim to save).
+    // F9 save / F10 load (authority only - a client has no sim to save).
     const bool saveDown = focused && input.isKeyDown(SDL_Scancode::SDL_SCANCODE_F9);
     if (saveDown && !m_saveKeyWasDown)
         saveGame();
@@ -392,19 +392,19 @@ void GameMatch::disarmBuild()
 
 // ---- placement ---------------------------------------------------------------------------------
 
-// The Crossing's axis rotation for a ±X/±Z facing — the SAME formula placeStructure applies to
+// The Crossing's axis rotation for a ±X/±Z facing - the SAME formula placeStructure applies to
 // the request's facing, so a client-side cellsFree probes exactly the cells it will cover.
 static glm::quat crossingRotation(const glm::vec2& dir)
 {
     return glm::angleAxis(std::atan2(-dir.x, -dir.y), glm::vec3(0.0f, 1.0f, 0.0f));
 }
 
-// Fill the auto-bent L between two snapped 1-cell positions — the dominant leg first, then the
-// perpendicular one — requesting a placement per FREE cell (occupied cells are skipped, so a line
+// Fill the auto-bent L between two snapped 1-cell positions - the dominant leg first, then the
+// perpendicular one - requesting a placement per FREE cell (occupied cells are skipped, so a line
 // across an existing run just fills the gaps). The stroke HOLDS its newest cell back until the
 // cell after it is known (m_cablePending): when that next cell holds a plain cable of ANOTHER
-// medium, the stroke's OWN medium's Crossing goes over it with its long axis along the stroke —
-// the held cell and the cell beyond are its two END cells and are never painted — so a stroke
+// medium, the stroke's OWN medium's Crossing goes over it with its long axis along the stroke -
+// the held cell and the cell beyond are its two END cells and are never painted - so a stroke
 // across a foreign run bridges it instead of leaving a gap. A crossing the cells refuse falls
 // back to the plain skip.
 void GameMatch::placeCableLine(EStructureType armed, const glm::vec3& from, const glm::vec3& to)
@@ -509,11 +509,11 @@ void GameMatch::updateCablePlacement(const Camera& camera, EStructureType armed,
 
 void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool cancelEdge)
 {
-    // (Grid keys / slot clicks arm items through activateSlot — see updateModeSwitching and the
+    // (Grid keys / slot clicks arm items through activateSlot - see updateModeSwitching and the
     // hotbar click in updateWindowed.)
     if (m_buildCategory < 0 || m_buildSelection < 0)
     {
-        // Nothing armed — browsing the category: clicks inspect, LMB drag box-selects units and
+        // Nothing armed - browsing the category: clicks inspect, LMB drag box-selects units and
         // RMB sets barracks routes / orders, exactly as Select mode. Only an ARMED item takes the
         // clicks away.
         updateRightClickActions(camera, cancelEdge);
@@ -532,7 +532,7 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         if (cancelEdge)
         {
             if (m_cablePainting)
-                finishCableStroke(armed); // the held cell was already shown painted — it lands
+                finishCableStroke(armed); // the held cell was already shown painted - it lands
             else
                 disarmBuild();
             return; // NOT consumed: the same press also walks the player
@@ -541,9 +541,9 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         return;
     }
 
-    // (Crossings are never armed: the paint stroke places them — placeCableLine.)
+    // (Crossings are never armed: the paint stroke places them - placeCableLine.)
 
-    // Lance second click: the position is anchored — the cursor now aims the cone's facing
+    // Lance second click: the position is anchored - the cursor now aims the cone's facing
     // (relative to the anchor); confirm places, too-close clicks just keep waiting. RIGHT-click
     // cancels the anchor before the confirm.
     if (m_lanceAiming)
@@ -598,7 +598,7 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
             const float len = glm::length(span);
             const int segments = glm::clamp((int)(len / c_wallSegmentSpacing) + 1, 1, c_wallMaxSegments);
             const glm::vec2 dir = len > 1e-3f ? span / len : glm::vec2(0.0f);
-            // Snap each sample to the SAME grid placeStructure uses — the preview circles must sit
+            // Snap each sample to the SAME grid placeStructure uses - the preview circles must sit
             // exactly where the segments will land. Diagonal lines can snap two samples into the
             // same cell; dedup so it draws (and places) once.
             glm::vec3 points[c_wallMaxSegments];
@@ -637,7 +637,7 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
     const Aim aim = computeAim(camera, armed);
     if (!aim.valid)
     {
-        // No ghost here (off-map, or an armed EXTRACTOR with no free node under the cursor — its
+        // No ghost here (off-map, or an armed EXTRACTOR with no free node under the cursor - its
         // aim is invalid over ordinary ground). Clicks still inspect.
         updateSelectionClick(camera, confirmEdge, /*allowPick*/ true);
         return;
@@ -668,7 +668,7 @@ void GameMatch::updateBuildMode(const Camera& camera, bool confirmEdge, bool can
         else
             requestPlace(aim.type, aim.pos, aim.nodeIndex, glm::vec3(0.0f));
     }
-    // A click the placement REFUSES (occupied cells — i.e. on a building) inspects it instead of
+    // A click the placement REFUSES (occupied cells - i.e. on a building) inspects it instead of
     // doing nothing; a click that can place always places.
     updateSelectionClick(camera, confirmEdge, /*allowPick*/ !aim.affordable);
 }
@@ -777,7 +777,7 @@ void GameMatch::pruneSelectedUnits()
 }
 
 // A barracks route becomes a LANE in the team's flow field: one A* per leg (barracks -> wp1 ->
-// ...), written as flow the marching units simply follow — no unit plans anything. The lane decays
+// ...), written as flow the marching units simply follow - no unit plans anything. The lane decays
 // like any other ("Nav/Flow decay"), and the units walking it keep it alive.
 void GameMatch::seedRouteLane(uint32 structureId)
 {
@@ -857,7 +857,7 @@ static bool largestClusterCentroid(oc::span<const EntityPtr> units, float linkRa
 // the selected units walk to a world position (a fresh order: the lane is seeded from the group).
 bool GameMatch::moveOrderAt(const glm::vec3& worldPos, bool includePlayer)
 {
-    // A click that lands inside co-op rock clamps to the nearest open cell — a target on blocked
+    // A click that lands inside co-op rock clamps to the nearest open cell - a target on blocked
     // cells fails the lane A* and every unit's own plan request (the pointOutsideFootprint rule,
     // applied to terrain).
     const glm::vec3 dest = clampToOpenGround(glm::vec3(worldPos.x, 0.0f, worldPos.z));
@@ -868,7 +868,7 @@ bool GameMatch::moveOrderAt(const glm::vec3& worldPos, bool includePlayer)
 
 // A clicked ground point on a structure, pushed just OUTSIDE its footprint along the side it fell
 // on: the capsule ends up at that face instead of grinding into the wall, and the Nav A* has a
-// reachable goal (a point inside the footprint is blocked cells — no lane, and every unit's own
+// reachable goal (a point inside the footprint is blocked cells - no lane, and every unit's own
 // plan request to it fails too).
 glm::vec3 GameMatch::pointOutsideFootprint(const glm::vec3& clicked, int structure) const
 {
@@ -894,14 +894,14 @@ bool GameMatch::orderSelectedUnits(const glm::vec3& target, bool freshOrder)
             u->orderMove(glm::vec3(target.x, 0.0f, target.z), freshOrder);
     bool laneSeeded = false;
     // A FRESH order seeds a planned LANE from the group to the destination: one A* (a job; Nav
-    // writes the lane on a later update), into the team flow, and the units follow it as crowd flow — the group routes around
+    // writes the lane on a later update), into the team flow, and the units follow it as crowd flow - the group routes around
     // buildings without any of them planning. The start is the largest cluster's centre, so a lone
     // straggler cannot pull the lane's origin away from the bulk of the group.
     glm::vec3 groupPos;
     if (freshOrder && largestClusterCentroid(m_selectedUnits, m_selectionClusterRadius, groupPos))
         laneSeeded = Globals::navSystem.seedPath(uint32(m_team), groupPos, target, laneSeedSpeed(), laneSeedWidth());
     // (No group re-seed timer: while they walk, the units themselves ask for a lane on their own
-    // timers and Nav's proximity dedup turns the whole group's requests into one plan — see
+    // timers and Nav's proximity dedup turns the whole group's requests into one plan - see
     // GameUnitComponent's plan request and NavSystem::requestSeedPath.)
     return laneSeeded;
 }
@@ -938,7 +938,7 @@ void GameMatch::updateRightClickActions(const Camera& camera, bool rmbEdge)
 // Click-to-select, shared by Select AND Build mode so inspecting a building never needs a mode
 // switch: hover ring, LMB picks (empty ground deselects), and the selection keeps its highlight.
 // allowPick false = this frame's click belongs to something else (a valid placement), so only the
-// rings draw — the selection still shows while building.
+// rings draw - the selection still shows while building.
 void GameMatch::updateSelectionClick(const Camera& camera, bool confirmEdge, bool allowPick)
 {
     const int hover = hoveredStructure(camera);

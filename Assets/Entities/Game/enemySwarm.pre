@@ -1,4 +1,4 @@
-# SWARM unit: the cheap co-op horde body — health only. NO Component Force: no bubble, no shield
+# SWARM unit: the cheap co-op horde body - health only. NO Component Force: no bubble, no shield
 # battery, no GPU readbacks; friendly fields instead shove AND burn it through the BAKED pressure
 # field (a CPU tap + gradient; the bubble-radius check is only the fallback when the bake is off)
 # and it still strains emitters (EmitterDrain). Spawned in bulk

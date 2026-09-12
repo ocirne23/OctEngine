@@ -33,7 +33,7 @@ export namespace Procedural::Diffusion
 		bool isNull() const { return type == EType::Null; }
 
 		// Object member lookup, nullptr when absent. Note a present-but-null member returns a non-null
-		// JsonValue with type Null — config files here use that (histogram_raw: null), and the two cases
+		// JsonValue with type Null - config files here use that (histogram_raw: null), and the two cases
 		// mean different things.
 		const JsonValue* find(oc::string_view key) const;
 

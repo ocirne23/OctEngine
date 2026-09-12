@@ -45,7 +45,7 @@ namespace
         glm::vec3 boundHalf() const { return glm::vec3(radius); } // enables the direct cell path (traverse)
 
         // 8 spheres at once; mostly pays for mid-size radii (gameplay queries, queryNearest rings)
-        // where partially-covered cells dominate — huge balls take the fully-inside wholesale path.
+        // where partially-covered cells dominate - huge balls take the fully-inside wholesale path.
         uint32 test8(const glm::vec3& cellMin, const float* px, const float* py, const float* pz,
                      const float* pr, const uint32* layers, uint32 layerMask) const
         {
@@ -351,7 +351,7 @@ void SpatialIndex::traverse(const Tester& tester, const glm::dvec3& refPos, uint
     {
         // DIRECT CELL PATH for small bounded queries (the gameplay case: many balls of a few metres):
         // address the cells the volume overlaps per level straight from the key math, and skip
-        // levels holding no entries at all — instead of descending from the 8 top cells through
+        // levels holding no entries at all - instead of descending from the 8 top cells through
         // every level with a hash probe and a classify per child. The loose bound per level is the
         // same half cell (top: the clamped-oversize radius) the hierarchy uses, so the result set is
         // identical. Falls back to the descent when the volume spans too many cells.
@@ -681,7 +681,7 @@ void SpatialIndex::advanceStamp(ESpatialPass pass)
     if (++id == SpatialStamp_Linked) // the sentinel is never a generation
     {
         // WRAP (every 65k stamps of this pass): every stale value in the row would become "current"
-        // again ~65k generations later — sweep them to the sentinel (0, the spawn guard, stays 0).
+        // again ~65k generations later - sweep them to the sentinel (0, the spawn guard, stays 0).
         // One pass over the pool, on the thread advancing the pass (no traversal of this pass runs
         // then); shared against registerEntry, which may grow the row (see querySphere).
         id = 1;
@@ -779,7 +779,7 @@ void SpatialIndex::update(const Camera& camera, const Frustum& frustum, const gl
     }
 
     // SHADOW pass: a caster shadows the visible ground when it sits UP-SUN of it, so the set that
-    // matters is the view frustum swept toward the sun on the horizontal plane by shadowReach — the
+    // matters is the view frustum swept toward the sun on the horizontal plane by shadowReach - the
     // Minkowski sum of the (inflated, camera-relative) frustum with that segment. A convex volume
     // swept along a segment keeps its face normals; only the planes facing AGAINST the sweep move,
     // by reach * -(n . s). No occlusion test: a caster hidden behind a wall still casts.
@@ -805,7 +805,7 @@ void SpatialIndex::kickUpdateJob(const CullView& view)
     ProfileScope scope("Spatial kick", EProfileCategory::Spatial);
 
     m_updateJobKicked = view.valid;
-    if (!view.valid) // first VR frame: no head view yet — skip this frame's cull (see the declaration)
+    if (!view.valid) // first VR frame: no head view yet - skip this frame's cull (see the declaration)
         return;
     m_updateJobCamera = view.camera;
     m_updateJobFrustum = view.frustum;

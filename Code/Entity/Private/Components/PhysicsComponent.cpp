@@ -191,7 +191,7 @@ void PhysicsComponent::update(Entity& entity, const Transform& parentWorld)
         const Transform local = parentWorld.inverse() * Transform(pos, parentWorld.scale * entity.scale, rot);
         entity.pos = local.pos;
         if (!lockRotation)
-            entity.rot = local.quat; // a locked body's rot is frozen at spawn — writing it back
+            entity.rot = local.quat; // a locked body's rot is frozen at spawn - writing it back
                                      // would stomp script-driven facing (see the player capsule)
 
         // Once per step interval, on a frame that did not step (the step frame is the busy one)

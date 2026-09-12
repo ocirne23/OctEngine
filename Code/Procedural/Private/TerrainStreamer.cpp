@@ -18,7 +18,7 @@ import :TerrainChunk;
 
 namespace
 {
-	// Chebyshev distance (in chunk units) from the camera to the NEAREST EDGE of a chunk's footprint —
+	// Chebyshev distance (in chunk units) from the camera to the NEAREST EDGE of a chunk's footprint -
 	// 0 while the camera stands inside/on it. Distance to the edge, not to the center ring: a neighbor's
 	// near boundary can be a whole chunk away when the camera sits centered, or right underfoot at the
 	// boundary, and the LOD should follow that continuously instead of stepping per camera-chunk crossing.
@@ -30,14 +30,14 @@ namespace
 		return glm::max(dx, dz);
 	}
 
-	// GEOMETRIC LOD bands over edge distance: lod = floor(log2(1 + d/lodStep)) — lodStep chunks of LOD0,
+	// GEOMETRIC LOD bands over edge distance: lod = floor(log2(1 + d/lodStep)) - lodStep chunks of LOD0,
 	// then 2*lodStep of LOD1, 4*lodStep of LOD2, ... capped at maxLod. Each LOD halves mesh density while
 	// a feature's screen size halves per distance DOUBLING, so doubling band widths keeps the on-screen
 	// triangle density roughly constant (linear bands over-detailed the mid rings). This is THE ring-LOD
 	// function: enqueue, queue staleness, result validation and eviction all derive from it.
 	uint32 ringLodAt(float edgeDist, float fullRes, float lodStep, uint32 maxLod)
 	{
-		// Everything whose edge is within fullRes chunks is unconditionally LOD0 — without it a chunk
+		// Everything whose edge is within fullRes chunks is unconditionally LOD0 - without it a chunk
 		// whose boundary you are standing on could already be a level down.
 		const float k = glm::max(edgeDist - fullRes, 0.0f) / glm::max(lodStep, 0.01f);
 		const int lod = (int)std::floor(std::log2(1.0f + k));
@@ -55,7 +55,7 @@ namespace
 	// --- Terrain splat texture sources -----------------------------------------------------------------
 	// THERE ARE NO BIOMES HERE. Climate picks textures directly: every Ground and Rock entry declares the
 	// CLIMATE BOX it covers in real units (mean annual temperature C, annual precipitation mm/yr), and the
-	// shader blends the two best matches per pixel — weight 1 inside the box, Gaussian falloff outside.
+	// shader blends the two best matches per pixel - weight 1 inside the box, Gaussian falloff outside.
 	// Leaving an axis at its full range means "this entry does not care about it": alpine bedrock is cold
 	// at ANY humidity and simply says so. The old point attractors could not express that, which is why
 	// every cold entry used to have to claim one fictional humidity and sit in a hand-tuned ladder.
@@ -63,7 +63,7 @@ namespace
 	// The bands come off the Whittaker diagram (the standard mean-temperature/mean-precipitation plot of
 	// what actually grows where). That is also why the hot entries sit at HIGHER precipitation than cold
 	// ones covering similar vegetation: 1000 mm on a 25 C plain is seasonal savanna, on a 0 C plain it is
-	// boreal forest. Evaporation is not modelled — it is baked into where the bands sit.
+	// boreal forest. Evaporation is not modelled - it is baked into where the bands sit.
 	//
 	// Beach and Snow are NOT climate entries; they are overlays the shader composites on top (see
 	// terrainSplat). Snow especially must not be a ground entry: the rock layer paints over the ground, so
@@ -72,7 +72,7 @@ namespace
 	// Sources are the CC0 sets under Assets/Textures/Terrain (see Assets/THIRD_PARTY_ASSETS.md); they bake
 	// once into Assets/Local/TerrainTex as BC .dds so they mip-stream like cooked scene textures.
 	enum class ESourceKind : uint8 { Ground, Rock, Beach, Snow };
-	// Sentinels for "this axis does not constrain the entry" — past the encodable climate range, so they
+	// Sentinels for "this axis does not constrain the entry" - past the encodable climate range, so they
 	// clamp to a full-width 0..1 box and contribute no distance on that axis.
 	constexpr float ANY_COLD = -1000.0f, ANY_HOT = 1000.0f, ANY_DRY = 0.0f, ANY_WET = 100000.0f;
 	struct TerrainTexSource
@@ -82,7 +82,7 @@ namespace
 		float tempMinC = ANY_COLD, tempMaxC = ANY_HOT;
 		float precipMinMm = ANY_DRY, precipMaxMm = ANY_WET;
 		// Texture set name under Assets/Textures/Terrain/. Sources default to the Poly Haven layout,
-		// <stem>/<stem>_{diff,nor_gl,arm}_2k.jpg, and bake to Local/TerrainTex/<stem>_{diff,nor,arm}.dds —
+		// <stem>/<stem>_{diff,nor_gl,arm}_2k.jpg, and bake to Local/TerrainTex/<stem>_{diff,nor,arm}.dds -
 		// so the cache is keyed by the texture, and swapping one here can never read a stale bake.
 		const char* stem;
 		// Only for sets that name their files differently (the ambientCG ones). Relative to Assets/.
@@ -95,10 +95,10 @@ namespace
 		// --- Ground: what the climate grows.
 		// The boxes ABUT with only a narrow overlap. That is deliberate and is the one thing to preserve
 		// when editing: a point inside two boxes scores a perfect 1.0 on both, so a wide overlap is not a
-		// wide blend — it is a permanent 50/50 mush in which neither texture ever appears on its own. The
+		// wide blend - it is a permanent 50/50 mush in which neither texture ever appears on its own. The
 		// blend comes from the Gaussian tails just outside the edges, so entries should MEET, not straddle.
 		//                temperature C           precipitation mm/yr
-		{ .tempMinC = ANY_COLD, .tempMaxC = -4.0f,   .precipMinMm = ANY_DRY,  .precipMaxMm = ANY_WET, .stem = "gravel_ground_01" },        // polar/alpine scree: frost-shattered rubble. The substrate beside (and under) the snow, at ANY humidity — above the snow line there is no vegetation left for humidity to decide
+		{ .tempMinC = ANY_COLD, .tempMaxC = -4.0f,   .precipMinMm = ANY_DRY,  .precipMaxMm = ANY_WET, .stem = "gravel_ground_01" },        // polar/alpine scree: frost-shattered rubble. The substrate beside (and under) the snow, at ANY humidity - above the snow line there is no vegetation left for humidity to decide
 		{ .tempMinC = -5.0f,    .tempMaxC = 0.0f,    .precipMinMm = 250.0f,   .precipMaxMm = ANY_WET, .stem = "rocky_trail" },             // tundra: moss and lichen over stony ground
 		{ .tempMinC = -1.0f,    .tempMaxC = 5.0f,    .precipMinMm = 300.0f,   .precipMaxMm = 1500.0f, .stem = "forest_ground_04" },        // taiga / boreal forest floor: needle litter
 		{ .tempMinC = 4.0f,     .tempMaxC = 19.0f,   .precipMinMm = ANY_DRY,  .precipMaxMm = 400.0f,  .stem = "dry_ground_01" },           // cold desert / dry steppe
@@ -112,8 +112,8 @@ namespace
 		{ .tempMinC = 18.0f,    .tempMaxC = ANY_HOT, .precipMinMm = 1300.0f,  .precipMaxMm = 2100.0f, .stem = "leaves_forest_ground" },    // tropical forest floor: leaf litter
 		{ .tempMinC = 16.0f,    .tempMaxC = ANY_HOT, .precipMinMm = 2000.0f,  .precipMaxMm = ANY_WET, .stem = "mud_forest" },              // wetland / swamp: saturated mud
 
-		// --- Rock: the bedrock the slope/crag layer exposes. Climate still selects the TYPE — weathering
-		// is a climate process — but the cold entry spans all humidity for the same reason the scree does.
+		// --- Rock: the bedrock the slope/crag layer exposes. Climate still selects the TYPE - weathering
+		// is a climate process - but the cold entry spans all humidity for the same reason the scree does.
 		{ .kind = ESourceKind::Rock, .tempMinC = ANY_COLD, .tempMaxC = 1.0f,    .precipMinMm = ANY_DRY, .precipMaxMm = ANY_WET, .stem = "gray_rocks" },           // alpine/polar granite: the rock the snow caps sit on and the faces it slides off
 		{ .kind = ESourceKind::Rock, .tempMinC = 0.0f,     .tempMaxC = 13.0f,   .precipMinMm = 1100.0f, .precipMaxMm = ANY_WET, .stem = "rock_pitted_mossy" },    // cool + wet: lichened, moss-pitted
 		{ .kind = ESourceKind::Rock, .tempMinC = 0.0f,     .tempMaxC = 16.0f,   .precipMinMm = 250.0f,  .precipMaxMm = 1100.0f, .stem = "rock_3" },               // temperate: plain weathered stone
@@ -264,7 +264,7 @@ namespace Procedural
 		// coloring all read these cascades. Disabling it degrades all three.
 		Tweak::boolean("Terrain", "Terrain data map", &m_terrainMapEnabled);
 		// Diagnostic: prints what each baked cascade actually contains, decoded the way the shader
-		// decodes it. The bake is otherwise invisible — a wrong sampler, pack or upload all look
+		// decodes it. The bake is otherwise invisible - a wrong sampler, pack or upload all look
 		// the same from the shader side.
 		Tweak::boolean("Terrain", "Log baked data map", &m_terrainMapDebugLog);
 		// The ocean runs swash onto anything within ~1 m of the water level, and V3 reports sea level
@@ -281,7 +281,7 @@ namespace Procedural
 		Tweak::floatVar("Terrain", "Ocean reach feather (m)", &m_waterReach.feather, 1.0f, 100.0f, 0.1f);
 		Tweak::floatVar("Terrain", "Ocean reach drop (m)", &m_waterReach.drop, 0.0f, 50.0f, 0.5f);
 		// Baked per-texel flow direction (the data map's 8 packed bits + the ocean shore map's B channel):
-		// toward the nearest land through the surf zone — the waves' travel direction at the coast — and
+		// toward the nearest land through the surf zone - the waves' travel direction at the coast - and
 		// downhill everywhere else (future rivers/water simulation). See applyFlowField for each knob's
 		// role; changing one re-bakes both maps, like the reach settings above.
 		Tweak::boolean("Terrain", "Flow direction", &m_flowFieldEnabled);
@@ -305,7 +305,7 @@ namespace Procedural
 		Tweak::floatVar("Terrain/Wetness", "Dry temp sensitivity", &m_wetDryTempSens, 0.0f, 0.2f, 0.005f);
 		// The constant part of the drain, next to the proportional "Dry time": d(wet)/dt = rain - rate -
 		// wet / dryTime. Rain below the rate never keeps ground wet; above it the ground settles at
-		// dryTime x (rain - rate) — an equilibrium you can dial with "Rain".
+		// dryTime x (rain - rate) - an equilibrium you can dial with "Rain".
 		Tweak::floatVar("Terrain/Wetness", "Dry rate (1/s)", &m_wetDryRate, 0.0f, 0.2f, 0.001f);
 		Tweak::floatVar("Terrain/Wetness", "Rain (1/s)", &m_wetRain, 0.0f, 2.0f, 0.01f);
 		Tweak::floatVar("Terrain/Wetness", "Wet-in time (s)", &m_wetInTime, 0.0f, 5.0f, 0.05f);
@@ -331,7 +331,7 @@ namespace Procedural
 		Tweak::floatVar("Terrain/Wetness", "Surface water waviness", &m_wetSurfaceWaviness, 0.0f, 1.0f, 0.01f);
 		Tweak::floatVar("Terrain/Wetness", "Surface water depth (m)", &m_wetSurfaceDepth, 0.0f, 2.0f, 0.01f);
 		// Albedo: DAMP (soaked ground everywhere) is a plateau above the knee that fades smoothly to dry;
-		// the WET scale is the standing-film layer on top — the whole surface just after a wave (above
+		// the WET scale is the standing-film layer on top - the whole surface just after a wave (above
 		// the spike start) and the pools once it drains. Fully wet = damp x wet.
 		Tweak::floatVar("Terrain/Wetness", "Wet albedo scale", &m_wetAlbedoScale, 0.1f, 1.0f, 0.01f);
 		Tweak::floatVar("Terrain/Wetness", "Damp albedo scale", &m_wetDampAlbedoScale, 0.1f, 1.0f, 0.01f);
@@ -350,7 +350,7 @@ namespace Procedural
 		Tweak::floatVar("Terrain/Textures", "Slope rock full", &m_texSlopeRockFull, 0.0f, 1.0f);
 		// Relief above the MACRO altitude: what separates a mountain from flat ground that merely sits
 		// high. This is the main rock control under V3.
-		// V3's macro altitude is the coarse stage's 7.68 km surface — nearly flat across one mountain — so
+		// V3's macro altitude is the coarse stage's 7.68 km surface - nearly flat across one mountain - so
 		// crag relief is essentially (height - constant) and the rock boundary traces an ELEVATION CONTOUR:
 		// grass gives way to stone at one height right across a range. This wanders it up and down.
 		// Scaled by the local relief in the shader, so it cannot rock a plain however high it is set; safe
@@ -359,7 +359,7 @@ namespace Procedural
 		Tweak::floatVar("Terrain/Textures", "Crag wander (m)", &m_texCragWanderAmp, 0.0f, 600.0f, 5.0f);
 		Tweak::floatVar("Terrain/Textures", "Crag wander wavelength (m)", &m_texCragWanderWavelength, 200.0f, 20000.0f, 100.0f);
 		// Beyond this view distance the splat layers fetch albedo only (no normal/ARM taps, geometric
-		// normal shading) — the minified detail mips carry no visible signal there. 0 = never simplify.
+		// normal shading) - the minified detail mips carry no visible signal there. 0 = never simplify.
 		Tweak::floatVar("Terrain/Textures", "Crag relief start (m)", &m_texCragStart, 0.0f, 200.0f);
 		Tweak::floatVar("Terrain/Textures", "Crag relief full (m)", &m_texCragFull, 0.0f, 400.0f);
 		Tweak::floatVar("Terrain/Textures", "Beach band (m)", &m_texBeachBand, 0.0f, 20.0f);
@@ -377,7 +377,7 @@ namespace Procedural
 		// "Meters per pixel" is a UNIFORM world scale: heights and detail shrink with it, so the model's
 		// proportions survive and "Height scale" stays a pure exaggeration on top (1 = real proportions).
 		// NOTE ON COST: lowering it compresses the world (mountains become reachable sooner) but is
-		// quadratically MORE expensive — the same view distance then spans more model pixels, so more tiles
+		// quadratically MORE expensive - the same view distance then spans more model pixels, so more tiles
 		// must be generated. 30 -> 15 is ~4x the inference work for the same ring radius.
 		Tweak::floatVar("Terrain/V3", "Meters per pixel", &m_v3MetersPerPixel, 0.05f, 30.0f, 0.05f, dirty); // 30 = true scale
 		Tweak::floatVar("Terrain/V3", "Height scale", &m_v3HeightScale, 0.0f, 4.0f, 0.05f, dirty);
@@ -398,7 +398,7 @@ namespace Procedural
 		// isotherm and therefore a contour line: grass gives way to rock at one height right across a range,
 		// and the snow line is a perfect ring. This wanders the temperature so those boundaries ride up and
 		// down instead. In degrees, so it breaks up the ground transitions and the snow line with one field,
-		// and it goes into the climate the scatter system reads too — trees keep marking the treeline the
+		// and it goes into the climate the scatter system reads too - trees keep marking the treeline the
 		// textures draw. 0 = the model's own banded climate.
 		// Roughly: at the model's lapse (~0.005 C/m in model metres) 1 C of wander moves a boundary ~200
 		// model metres up or down.
@@ -409,21 +409,21 @@ namespace Procedural
 		Tweak::intVar("Terrain/V3", "Climate wander octaves", &m_v3ClimateNoiseOctaves, 1, 6, 1.0f, dirty);
 		Tweak::floatVar("Terrain/V3", "Detail slope gain", &m_v3DetailSlopeGain, 0.0f, 4.0f, 0.05f, dirty); // higher = detail on gentler slopes
 		// THE resolution dial. The model resolves 30 m/px and nothing will make it resolve less, so every
-		// feature below that is these two fBm layers — and how far down they reach is set by the OCTAVE
+		// feature below that is these two fBm layers - and how far down they reach is set by the OCTAVE
 		// count, not the wavelength: finest feature = wavelength / 2^(octaves-1), in MODEL metres, then
 		// scaled by metersPerPixel/30 like everything else.
 		//
 		// At the defaults (A 220 m/4, B 45 m/3) the finest thing in the field is 45/4 = 11 model metres.
 		// That is why lowering "Meters per pixel" looks like it adds detail: at mpp=3 those 11 model metres
 		// become 1.1 world metres, which finally matches the 1 m vertex grid (chunk size / LOD0 res). It is
-		// not generating more — it is shrinking the world until the existing detail reaches the vertices.
+		// not generating more - it is shrinking the world until the existing detail reaches the vertices.
 		// To get the same crispness at FULL scale (mpp=30), raise the octaves instead:
 		//     B 3 -> 5   finest 11.25 m -> 2.81 m
 		//     A 4 -> 6   finest 27.50 m -> 6.88 m
 		// Do not chase the last factor of two: below ~2 m the detail is finer than the 1 m vertex grid can
 		// represent and simply aliases into shimmer. fbm() is amplitude-normalised, so extra octaves add
 		// roughness without inflating the relief, and each one is a single noise lookup against a diffusion
-		// tile resolve — the cost is not measurable next to inference.
+		// tile resolve - the cost is not measurable next to inference.
 		Tweak::floatVar("Terrain/V3", "Detail A wavelength (m)", &m_v3DetailWavelengthA, 20.0f, 1000.0f, 5.0f, dirty);
 		Tweak::floatVar("Terrain/V3", "Detail A amp (m)", &m_v3DetailAmplitudeA, 0.0f, 200.0f, 1.0f, dirty);
 		Tweak::intVar("Terrain/V3", "Detail A octaves", &m_v3DetailOctavesA, 1, 8, 1.0f, dirty);
@@ -451,8 +451,8 @@ namespace Procedural
 
 	// Bake the biome splat textures to the DDS cache in the background (no-op when fresh); chunks
 	// render with the flat-color fallback until updateTerrainTextures registers the finished set.
-	// ONLY while the terrain is enabled — a game whose terrain is off must not touch ~19 source
-	// image sets at startup — and once: enabling later kicks it from updateTerrainTextures.
+	// ONLY while the terrain is enabled - a game whose terrain is off must not touch ~19 source
+	// image sets at startup - and once: enabling later kicks it from updateTerrainTextures.
 	void TerrainStreamer::kickTexBake()
 	{
 		if (!m_enabled || m_texBakeKicked)
@@ -560,7 +560,7 @@ namespace Procedural
 			{
 				// Source images missing / bake failed: drop the entry. A ground or rock entry just leaves
 				// its climate to the neighbouring boxes; a missing beach or snow entry disables that
-				// overlay outright, which is worth saying out loud — a world with no snow layer looks like
+				// overlay outright, which is worth saying out loud - a world with no snow layer looks like
 				// a climate bug rather than a missing file.
 				Log::warning(oc::format("Terrain: splat set '{}' incomplete, skipping", src.stem));
 				return oc::nullopt;
@@ -618,7 +618,7 @@ namespace Procedural
 		// Disabled = no generator and, crucially, NO MODEL KICK: constructing TerrainGenV3 (even the throwaway
 		// "kick" below) is what starts the 2.28 GB GPU load, so a disabled terrain must never reach it. The
 		// Enabled tweak is registered dirty, so flipping it on lands back here and starts the load then.
-		// There is no unload API — models loaded during an earlier enabled stretch stay resident.
+		// There is no unload API - models loaded during an earlier enabled stretch stay resident.
 		if (!m_enabled)
 		{
 			m_v3AwaitingModels = false;
@@ -630,7 +630,7 @@ namespace Procedural
 		}
 
 		// The generator can't sample anything until its models are resident. Constructing it is what kicks
-		// the download/load off, so do that unconditionally, but only PUBLISH it once ready — otherwise
+		// the download/load off, so do that unconditionally, but only PUBLISH it once ready - otherwise
 		// every chunk built in the meantime would bake a flat sea-level world into the resident cache and
 		// never be revisited.
 		TerrainConfigV3 cfg;
@@ -659,7 +659,7 @@ namespace Procedural
 
 		// BEFORE the isReady() check, not inside the generator: switching precision reloads the models
 		// and drops isReady(), so a check taken before it would publish a generator whose pipeline is
-		// being torn down underneath it — and every chunk built meanwhile would bake a flat sea-level
+		// being torn down underneath it - and every chunk built meanwhile would bake a flat sea-level
 		// world into the resident cache and never be revisited.
 		TerrainGenV3::setPrecision(m_v3Fp16);
 
@@ -733,7 +733,7 @@ namespace Procedural
 				// Take the request NEAREST THE CAMERA, re-measured against the ring state as it is RIGHT NOW.
 				// Deliberately not a queue: FIFO order is enqueue TIME, which stops matching distance the
 				// moment the camera moves. Chunks arrive over many frames, and a chunk whose LOD band
-				// changes has its queued request invalidated and re-appended — landing BEHIND the far
+				// changes has its queued request invalidated and re-appended - landing BEHIND the far
 				// leading-edge chunks queued on earlier frames. The ground under the camera then arrives
 				// after the horizon does, which at V3's seconds-per-chunk is impossible to miss.
 				// Sorting each batch on the way in cannot fix that: it only orders WITHIN a batch, and the
@@ -741,7 +741,7 @@ namespace Procedural
 				// the live camera, is order-independent.
 				//
 				// Lazy staleness rides along in the same pass: requests that fell out of the ring are
-				// dropped HERE — the main thread never rewrites the queue — and bounce back as an EMPTY
+				// dropped HERE - the main thread never rewrites the queue - and bounce back as an EMPTY
 				// result so it releases its pending key (m_pending is main-thread-owned).
 				//
 				// O(queue) per generated chunk. The queue is a few hundred entries and a chunk costs
@@ -848,12 +848,12 @@ namespace Procedural
 	}
 
 	// Shared terrain-data map: FOG_TERRAIN_CASCADES camera-centered snapshots (HeightMapBaker, sampled
-	// from the SAME sampler the chunks render from) — a near cascade over m_terrainMapRange meters at
+	// from the SAME sampler the chunks render from) - a near cascade over m_terrainMapRange meters at
 	// fine texels and a far cascade over m_terrainMapFarRange at the same resolution (coarse texels are
 	// fine at those distances, so long-range data costs no extra memory). Per texel: height, water level,
 	// packed fog|falloff|temp|hum, macro altitude. Consumers: the volumetric fog's terrain follow + regional
 	// thickness, the ocean's shore-map fallback, and the TERRAIN pipeline's coloring. (The renderer-side
-	// API keeps the historical "FogTerrainHeightMap" name — fog was its first consumer.)
+	// API keeps the historical "FogTerrainHeightMap" name - fog was its first consumer.)
 	void TerrainStreamer::updateFogHeightMap(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps, float farRange)
 	{
 		const bool active = m_terrainMapEnabled && maps != nullptr;
@@ -894,7 +894,7 @@ namespace Procedural
 			}
 			renderer.setFogTerrainHeightMap(baked.texels, baked.center, baked.ranges, maps->seaLevel());
 			// Keep the shipped texels as the CPU copy (activeTerrainData): the ocean samples them for
-			// buoyancy and wind steering. A NEW object per bake — consumers' shared_ptrs stay coherent.
+			// buoyancy and wind steering. A NEW object per bake - consumers' shared_ptrs stay coherent.
 			m_terrainMapData = oc::make_shared<const BakedTerrainData>(BakedTerrainData{
 				oc::move(baked.texels), baked.center, baked.ranges,
 				RendererVKLayout::FOG_TERRAIN_RES, RendererVKLayout::FOG_TERRAIN_CASCADES });
@@ -921,7 +921,7 @@ namespace Procedural
 
 		// Starve the pumps and drop late results (a V3 chunk is seconds of work, so chunks keep landing
 		// for a while after the disable). Read the pump count BEFORE the drain: a pump only pushes while
-		// it holds its slot, so "no pumps, then results drained" is final — nothing can appear after.
+		// it holds its slot, so "no pumps, then results drained" is final - nothing can appear after.
 		const bool pumpsIdle = m_numPumps.load(oc::memory_order_acquire) == 0;
 		{
 			std::lock_guard<std::mutex> lk(m_mutex);
@@ -997,7 +997,7 @@ namespace Procedural
 		                          std::floor(camera.position.z / chunkSize * 4.0f) * 0.25f);
 
 		// Chunk mesh coverage: chunks span +-R around the camera's chunk, so a disk of R*chunkSize around
-		// the camera is guaranteed resident whatever its position within its own chunk — the fence for
+		// the camera is guaranteed resident whatever its position within its own chunk - the fence for
 		// the ocean's buried-under-land vertex cull. Also carries the live sea level (terrain coloring).
 		oc::shared_ptr<const ITerrainSampler> maps;
 		uint32 generation;
@@ -1009,7 +1009,7 @@ namespace Procedural
 
 		// The generator's lapse rate, converted to C per WORLD metre for the shaders (it publishes in its
 		// own vertical frame). This is how terrainTemperatureAt turns the map's baked SEA-LEVEL baseline
-		// into a temperature at any height, so it must be the rate the generator ACTUALLY used — hence read
+		// into a temperature at any height, so it must be the rate the generator ACTUALLY used - hence read
 		// from the sampler rather than from the tweak beside it. 0 with no terrain, and 0 from a generator
 		// that folds its own lapse into the temperature it reports: there the baseline IS the temperature
 		// and lapsing it again would double-count.
@@ -1031,7 +1031,7 @@ namespace Procedural
 
 		// Ring membership is CLOSED FORM: the column at Chebyshev distance cheb from the camera chunk
 		// wants ringLodAt(cheb) (geometric bands), nothing outside R. Every "is this still wanted"
-		// question below (result validation, eviction) is this arithmetic — no desired-key sets.
+		// question below (result validation, eviction) is this arithmetic - no desired-key sets.
 		const auto ringLod = [&](glm::ivec2 coord) -> int
 		{
 			const int cheb = glm::max(glm::abs(coord.x - camCX), glm::abs(coord.y - camCZ));
@@ -1074,7 +1074,7 @@ namespace Procedural
 
 		// The queue is an unordered POOL, not a queue: the worker rescans it on every dequeue and takes the
 		// chunk nearest the camera at that moment (see workerLoop), and drops out-of-range entries in the
-		// same pass. So the main thread neither sorts nor prunes — appending in any order is correct, and
+		// same pass. So the main thread neither sorts nor prunes - appending in any order is correct, and
 		// sorting here would only be re-deciding, one camera position out of date, something the worker
 		// decides properly a moment later.
 		// What it DOES owe the worker is the ring state to judge against, published under the same lock.
@@ -1132,14 +1132,14 @@ namespace Procedural
 			m_ringScanNeeded = true; // conservative: covers the failure continue below
 
 			// Route the chunk onto the terrain pipeline variant (procedural height/slope albedo). Keep the
-			// material's own texture indices (fallback) — terrain carries no textures.
+			// material's own texture indices (fallback) - terrain carries no textures.
 			ObjectContainer::MaterialOverrides overrides;
 			overrides.pipelineIdx = RendererVKLayout::EPipelineIndex::TerrainLit;
 			overrides.useSceneTextures = true;
 			// Chunks are already LOD'd by the streamer (resolution picked per ring distance), so the
 			// renderer's per-chunk meshopt LOD chains are pure redundant churn: 5x the MeshInfos plus LOD
 			// groups and BLAS-alias sharing, all recreated on every re-LOD. Disable them so each chunk is a
-			// single mesh with one identity-aliased BLAS — far less churn through the mesh/RT free lists.
+			// single mesh with one identity-aliased BLAS - far less churn through the mesh/RT free lists.
 			overrides.disableGeneratedLods = true;
 			auto container = oc::make_unique<ObjectContainer>();
 			if (!container->initialize(*res.scene, &overrides))
@@ -1156,7 +1156,7 @@ namespace Procedural
 			resident.lod = res.lod;
 			resident.node = oc::move(node);
 			// Culling registration: chunks live in the SpatialIndex like entity render components, but on
-			// their own layer (no Entity* behind userData — gameplay queries must not see them),
+			// their own layer (no Entity* behind userData - gameplay queries must not see them),
 			// registered ONCE (chunks never move, so they promote straight into the static tier), and
 			// WITHOUT the spawn-visibility guard (chunks stream in off-screen constantly; the guard
 			// would pin each one in the main pass until it first enters the frustum).
@@ -1175,7 +1175,7 @@ namespace Procedural
 		// column now wants a different LOD AND that replacement chunk is resident AND can take over ON
 		// SCREEN: a freshly registered replacement isn't main-stamped until the next markVisibleSet, so
 		// evicting on residency alone opened a one-frame hole on every in-view LOD change (and while the
-		// culling is FROZEN the replacement never gets stamped — the old chunk just stays).
+		// culling is FROZEN the replacement never gets stamped - the old chunk just stays).
 		for (auto it = m_residents.begin(); it != m_residents.end(); )
 		{
 			const Resident& res = it->second;
@@ -1209,7 +1209,7 @@ namespace Procedural
 
 		// --- Push resident chunks through the spatial culling gate. Main-visible chunks feed every pass;
 		// main-culled chunks KEEP their shadow/GI passes unconditionally (terrain is the ground
-		// everywhere — unlike entities, it skips the Near-ball test, because dropping the ground behind
+		// everywhere - unlike entities, it skips the Near-ball test, because dropping the ground behind
 		// the camera from the TLAS/shadow maps visibly breaks GI and long sun shadows; the GPU shadow
 		// cull and the TLAS range bound already refine those passes). MainOnly debug mode drops
 		// main-culled chunks entirely, like entities.

@@ -19,7 +19,7 @@ struct FRect { float x, y, w, h; }; // module-internal (the layout helpers in th
 export class MemoryPanel
 {
 public:
-    // prepare() = the treemap SNAPSHOT (walks the tracker's tree — atomics, reader-safe on any
+    // prepare() = the treemap SNAPSHOT (walks the tracker's tree - atomics, reader-safe on any
     // thread), no ImGui: UI::prepare runs it on a job. render() draws it (prepares inline if
     // nothing ran ahead). The metric toggle it reads is what the header set last frame.
     void prepare();
@@ -72,7 +72,7 @@ private:
 
     oc::vector<ViewNode> m_nodes; // snapshot rebuilt every frame (trivial nodes: capacity kept); index 0 = tree root
     // drawNode's layout scratch, used as STACKS: a node appends its children's areas/rects, recurses
-    // (the children append above), then pops back — no per-node vector, no per-frame allocation.
+    // (the children append above), then pops back - no per-node vector, no per-frame allocation.
     oc::vector<double> m_areaStack;
     oc::vector<FRect> m_rectStack;
     bool m_prepared = false;       // prepare() ran for this UI frame (render clears it)

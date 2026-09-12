@@ -107,7 +107,7 @@ private:
         for (const oc::string& candidate : candidates)
         {
             const oc::string resolvedPath = FileSystem::normalize(candidate);
-            // Shader compiles run at startup and on F5 (an explicit user action) — main thread.
+            // Shader compiles run at startup and on F5 (an explicit user action) - main thread.
             oc::string content = FileSystem::readFileStr(resolvedPath, /*allowMainThread*/ true);
             if (content.empty())
                 continue;

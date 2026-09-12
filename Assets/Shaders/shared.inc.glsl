@@ -3,7 +3,7 @@
 
 // ALPHA_MODE_* (RendererVKLayout::EAlphaMode) and MATERIAL_FLAG_* (RendererVKLayout::MATERIAL_FLAG_*)
 // are injected by the engine from Layout.ixx.
-// MATERIAL_FLAG_NO_RAYTRACING: debug/gizmo geometry that never blocks light — excluded from the TLAS
+// MATERIAL_FLAG_NO_RAYTRACING: debug/gizmo geometry that never blocks light - excluded from the TLAS
 // (mask 0) and from the sun cascade caster cull.
 // MATERIAL_FLAG_SKY: sky sphere, skipped in the G-buffer prepass so its depth stays at the far plane
 // (parallax-free TAA).
@@ -57,10 +57,10 @@ vec3 worldPosFromDepthMat(vec2 uv, float depth, mat4 invM)
 // g_viewIndex at VIEW_CENTER (centre view); per-eye passes set it to the eye they process.
 vec3 worldPosFromDepth(vec2 uv, float depth) { return worldPosFromDepthMat(uv, depth, u_invMvp); }
 
-// ALL raster passes (G-buffer prepass included — the forward early-Z tests its depth directly, read-only)
+// ALL raster passes (G-buffer prepass included - the forward early-Z tests its depth directly, read-only)
 // apply the TAA sub-pixel jitter in clip space, so image content at pixel uv is the surface at
 // uv - taaJitterUv(u_taaJitter.xy). Geometric consumers of sampled depth (reprojection, world-pos
-// reconstruction: TAA, AO temporal, RTAO) subtract it for exact positions — mvp/invMvp/prevMvp stay
+// reconstruction: TAA, AO temporal, RTAO) subtract it for exact positions - mvp/invMvp/prevMvp stay
 // unjittered. Pass u_taaJitter.zw (LAST frame's jitter) when interpreting the previous depth image.
 vec2 taaJitterUv(vec2 jitterNdc) { return vec2(jitterNdc.x, -jitterNdc.y) * 0.5 * u_viewportRect.zw; }
 
@@ -80,7 +80,7 @@ vec2 prevScreenUV(vec3 worldPos, out float clipW) { return prevScreenUVMat(world
 // u_reprojClip (prevMvp * inverse(mvp), fused in double precision on the CPU). Temporal passes must use
 // this instead of worldPosFromDepth + prevScreenUV: that world-space round trip loses precision with the
 // camera's distance from the world origin (pixel-scale history misses by ~500 units = temporal jitter).
-// clipW is the previous clip w scaled by 1/currentW — only its sign is meaningful (> 0 = in front).
+// clipW is the previous clip w scaled by 1/currentW - only its sign is meaningful (> 0 = in front).
 vec2 prevScreenUVClip(vec2 uv, float depth, out float clipW)
 {
     vec2 vpUv = (uv - u_viewportRect.xy) / u_viewportRect.zw;

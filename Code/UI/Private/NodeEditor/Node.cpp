@@ -65,7 +65,7 @@ Node& Node::addOutput(EDataType dataType, const oc::string& name)
     return *this;
 }
 
-// A Script Data member is a writable (square), concretely-typed output pin — writable so a Set node can
+// A Script Data member is a writable (square), concretely-typed output pin - writable so a Set node can
 // store into the persistent field, and readable so any node can read it.
 Node& Node::addMember(EDataType type, const oc::string& name)
 {
@@ -530,7 +530,7 @@ void Node::updateFunctionIO(bool firstFrame, bool inputSide)
         ImVec2(nodeOriginScreen.x + nodeW, dividerY), ImColor(255, 255, 255, 40), 1.0f);
     ImGui::Dummy(ImVec2(nodeW, 4.0f));
 
-    // Function name field — only on Function Input (it names the function). Function Output has no name; it
+    // Function name field - only on Function Input (it names the function). Function Output has no name; it
     // pairs to the Input whose exec flow reaches it (see Scene codegen), so it needs no identity of its own.
     if (!inputSide)
     {
@@ -695,7 +695,7 @@ void Node::updateReroute(bool firstFrame)
     ed::PushStyleVar(ed::StyleVar_NodePadding, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
     ed::PushStyleVar(ed::StyleVar_NodeRounding, w * 0.5f);
     ed::PushStyleVar(ed::StyleVar_LinkStrength, 0.0f); // let links meet the dot at their true angle, not forced horizontal
-    ed::PushStyleColor(ed::StyleColor_NodeBg,     ImVec4(0.0f, 0.0f, 0.0f, 0.0f)); // no node body — just the dot
+    ed::PushStyleColor(ed::StyleColor_NodeBg,     ImVec4(0.0f, 0.0f, 0.0f, 0.0f)); // no node body - just the dot
     ed::PushStyleColor(ed::StyleColor_NodeBorder, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
     ed::BeginNode(*this);
     ImGui::PushID(this);
@@ -708,7 +708,7 @@ void Node::updateReroute(bool firstFrame)
     ImGui::GetWindowDrawList()->AddCircleFilled(c, 5.0f, col, 12);
 
     // Pins pivot at the dot centre (so links meet at the dot) but keep only a tiny hit rect tucked in the far
-    // corner — the whole centre stays draggable as the node body, and the pins are effectively not grabbable.
+    // corner - the whole centre stays draggable as the node body, and the pins are effectively not grabbable.
     // Overlaid back at the dummy's top-left so their (empty) groups add no height, keeping the bounds square.
     constexpr float pinW = 2.0f;
     if (in)
@@ -866,7 +866,7 @@ void Node::update(double /*deltaSec*/, bool firstFrame)
     ImGui::EndGroup();
 
     // Divider + spacing only when there's a body beneath the title. A node that carries nothing but its
-    // title-line exec pins (e.g. Update, Break) stays compact — no line, no gap.
+    // title-line exec pins (e.g. Update, Break) stays compact - no line, no gap.
     const bool hasBody = !bodyInputs.empty() || !bodyOutputs.empty() || hasProperty;
     if (hasBody)
     {

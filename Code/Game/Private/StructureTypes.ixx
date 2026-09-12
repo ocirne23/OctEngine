@@ -4,9 +4,9 @@ import Core;
 
 // THE STRUCTURE TYPE VOCABULARY: the enum every structure carries plus the constexpr predicates
 // that classify it (placeable, cable, crossing, emitter, barracks, ...). Nothing here touches an
-// entity or a system — it is what StructureSystem (Game:Structures) and every other Game partition
+// entity or a system - it is what StructureSystem (Game:Structures) and every other Game partition
 // switch on. Re-exported through Game:Structures.
-// SAVE FILES STORE Type AS AN INT: never remove or reorder values — new types APPEND before Count.
+// SAVE FILES STORE Type AS AN INT: never remove or reorder values - new types APPEND before Count.
 // Connector is a RETIRED slot (range links are gone; cables are physical now): its table entries
 // remain, placement refuses it and loadFrom skips it. BarracksBrute/Runner/Spitter are RETIRED
 // too (ONE barracks type now produces the unit type its owner picks): placement refuses them and
@@ -29,7 +29,7 @@ export constexpr bool isPlaceableType(EStructureType t)
 // BUILT segments is one transport RUN; the buildings it touches are its ports (see
 // rebuildNetworks). A Crossing is a 1x3 oriented bridge OF ONE MEDIUM (one type per medium,
 // like the cables): a perpendicular cable passes UNDER its middle cell, and it conducts only its
-// own medium between its two ENDS — never whatever happens to touch them.
+// own medium between its two ENDS - never whatever happens to touch them.
 export constexpr bool isCableType(EStructureType t)
 {
     return t == EStructureType::CablePower || t == EStructureType::CablePipe
@@ -73,14 +73,14 @@ export constexpr int conduitMediumOf(EStructureType t) // cable OR crossing medi
     return isCableType(t) ? cableMediumOf(t) : crossingMediumOf(t);
 }
 
-// (No live structure ever carries a retired per-type barracks value — loadFrom converts them.)
+// (No live structure ever carries a retired per-type barracks value - loadFrom converts them.)
 export constexpr bool isBarracksType(EStructureType t)
 {
     return t == EStructureType::Barracks;
 }
 
 // UNIT TYPES, indexed like Npc's ENpcType (Grunt, Brute, Runner, Spitter, Swarm, Elite, Giant,
-// Titan, Lobber — Npc.ixx static_asserts the count). Structures cannot import Npc, so the
+// Titan, Lobber - Npc.ixx static_asserts the count). Structures cannot import Npc, so the
 // per-type prices live there as plain arrays.
 export constexpr int GameNumUnitTypes = 11; // (+ Spawner, Warrior)
 // What a barracks may be SET to produce: Grunt/Brute/Runner/Swarm/Warrior (10). The Spitter (3),
@@ -98,7 +98,7 @@ export constexpr bool isEmitterType(EStructureType t)
     return t == EStructureType::Emitter || t == EStructureType::Bastion || t == EStructureType::Lance;
 }
 // The Base's always-on bubble now runs on the SAME shield rules as the placeable emitters (energy
-// draw + pressure surcharge + unit siege drain, ramp/latch, outputFrac sync) — every emitter-union
+// draw + pressure surcharge + unit siege drain, ramp/latch, outputFrac sync) - every emitter-union
 // code path (tickPower, strainable, mirror, save/load) tests THIS, not isEmitterType.
 export constexpr bool hasShieldEmitter(EStructureType t)
 {

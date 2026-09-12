@@ -5,18 +5,18 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 
-// FFT ocean clipmap vertex shader (EPipelineIndex::Ocean) — the former OCEAN variant of
+// FFT ocean clipmap vertex shader (EPipelineIndex::Ocean) - the former OCEAN variant of
 // instanced_indirect.vs.glsl, split into its own file. Same pipeline layout, vertex input and output
 // interface as the shared static-mesh VS (it feeds the same DGC execution set), but the position path
 // is the ocean displacement: the texcoord carries (ring cell size, morph weight). Over each ring's
 // outer band the CDLOD morph collapses odd vertices onto the next ring's coarser (2*cell) lattice
 // while the sampled mip blends +1, so adjacent rings meet exactly. The displaced position samples the
-// maps at the ring-matched mip (fixed per world position — waves don't morph with camera motion). The
+// maps at the ring-matched mip (fixed per world position - waves don't morph with camera motion). The
 // fragment shader (ocean.fs.glsl) re-derives the shading normal per pixel from the (morphed) world XZ
 // in out_uv. The G-buffer prepass (gbuffer.vs.glsl, OCEAN branch) MUST keep identical morph + lod +
 // cull math or its depth diverges from the drawn surface.
 
-// Depth-prepass reuse (gbuffer.vs.glsl) needs bit-exact positions across programs — see the note there.
+// Depth-prepass reuse (gbuffer.vs.glsl) needs bit-exact positions across programs - see the note there.
 invariant gl_Position;
 
 #include "shared.inc.glsl"
@@ -73,7 +73,7 @@ void main()
     // opened gaps at coarse-ring boundaries). floor(x+0.5) instead of round(): odd vertices sit exactly
     // at .5 and GLSL round() is implementation-defined there.
     // Negative cell size = HORIZON BAND vertex: exempt from the land cull. Its triangles run from the
-    // ring edge out to the far plane, so they break the cull's +-3-cell footprint assumption — culling
+    // ring edge out to the far plane, so they break the cull's +-3-cell footprint assumption - culling
     // one buried inner vertex would tear a huge slice out of the horizon.
     const float ringCell = abs(in_uv.x);
     const bool horizonBand = in_uv.x < 0.0;
@@ -98,12 +98,12 @@ void main()
     out_pos = basePos;
     if (horizonBand)
     {
-        // The band is FLAT: no wave displacement, just "Horizon level offset" (a pure Y shift — routing
+        // The band is FLAT: no wave displacement, just "Horizon level offset" (a pure Y shift - routing
         // it through shoreHW would change the depth and re-shoal the waves). Its triangles span
         // kilometres, so displacing their vertices interpolates the wave field across the entire
         // horizon and the far sea visibly heaves with the sea state; the coarse ring-matched mip damps
         // that but never removes it. The FS still shades the band with wave normals, which is all that
-        // resolves at this range — and skipping the fetches makes band vertices nearly free.
+        // resolves at this range - and skipping the fetches makes band vertices nearly free.
         out_pos.y += u_oceanParams3.x;
     }
     else

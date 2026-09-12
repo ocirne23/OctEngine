@@ -17,7 +17,7 @@ import :Layout;
 // side (emitter hash-grid build, per-emitter applied forces, gameplay point queries).
 //
 // Draw: one instanced indirect draw of unit cubes (36 verts, front faces culled, fixed-function
-// depth off — the camera can sit inside a bubble) inside the scene-color pass after the debug
+// depth off - the camera can sit inside a bubble) inside the scene-color pass after the debug
 // overlays; each instance is oriented to its emitter's directional reach box and the fragment
 // shader ray-marches the analytic team field (force_field.inc.glsl), depth-testing manually
 // against the G-buffer depth. The live emitter slots are compacted into a mapped per-frame buffer
@@ -27,7 +27,7 @@ import :Layout;
 // Compute (recordCompute, after the light grid, outside any render pass): fill-clear + rebuild the
 // uniform 32 m emitter hash grid (big emitters ride the emitter header's global list instead), then
 // one thread per emitter integrates the opposing field pressure (13-sample own-field-weighted
-// integral) and one thread per registered query point evaluates the per-team fields — both write
+// integral) and one thread per registered query point evaluates the per-team fields - both write
 // SLOT-indexed results straight into host-visible readback buffers the CPU reads ~2 frames later
 // (ocean-readback contract: read the current slot between beginFrame's fence wait and present).
 //
@@ -44,12 +44,12 @@ public:
     void reloadShaders(vk::RenderPass sceneRenderPass);
     void setUseGrid(bool useGrid) { m_useGrid = useGrid; } // takes effect on the next reloadShaders
     bool getUseGrid() const { return m_useGrid; }
-    // DEBUG density view (FORCE_DENSITY_VIEW define in force_shell.fs) — rebuild-class like useGrid,
+    // DEBUG density view (FORCE_DENSITY_VIEW define in force_shell.fs) - rebuild-class like useGrid,
     // so the release shader carries none of the march: caller is GPU-idle and follows with reloadShaders.
     void setDensityView(bool enabled) { m_densityView = enabled; }
     bool getDensityView() const { return m_densityView; }
     // LIVE team count (the NUM_FORCE_TEAMS shader define): remakes the team-sized resources (shell
-    // volume: ONE RGBA16F texture at <= 4 teams instead of two; bake readback stride) — caller
+    // volume: ONE RGBA16F texture at <= 4 teams instead of two; bake readback stride) - caller
     // guarantees GPU idle and follows with reloadShaders (the useGrid toggle pattern).
     void setNumTeams(uint32 numTeams);
     uint32 getNumTeams() const { return m_numTeams; }
@@ -59,14 +59,14 @@ public:
     // with reloadShaders + resizeIntervalTarget (the targets change size/existence).
     void setUnionHalfRes(bool halfRes) { m_unionHalfRes = halfRes; }
     bool getUnionHalfRes() const { return m_unionHalfRes; }
-    // March-phase jitter (FORCE_UNION_JITTER define in force_union.fs) — rebuild-class, no
+    // March-phase jitter (FORCE_UNION_JITTER define in force_union.fs) - rebuild-class, no
     // resource changes: caller is GPU-idle and follows with reloadShaders.
     void setUnionJitter(bool jitter) { m_unionJitter = jitter; }
     bool getUnionJitter() const { return m_unionJitter; }
 
     // SHELL DRAW CULLING (upload-time, CPU): a drawable shell outside the view frustum, or whose
     // projected proxy radius is under minPixels, is compacted into the NON-drawn field partition
-    // instead — its field, grid presence and readbacks are untouched, only the ray-march draw is
+    // instead - its field, grid presence and readbacks are untouched, only the ray-march draw is
     // skipped. Frustum + camera come from the CENTER view (TAA jitter never bakes into it);
     // disabled in VR (one center frustum cannot serve both eyes).
     struct ShellCull
@@ -82,7 +82,7 @@ public:
         // only their ray intervals; the fullscreen union pass marches each covered pixel once.
         // Off (VR, "Union march" tweak, density debug view) = the analytic tier draws per-proxy.
         bool unionPass = false;
-        // The tier partition threshold, in VISIBLE bubble radius (forceEmitterVisibleRadius) —
+        // The tier partition threshold, in VISIBLE bubble radius (forceEmitterVisibleRadius) -
         // NOT authored reach. FLT_MAX = all analytic.
         float sampledRadius = 3.4e38f;
         bool logTierDebug = false; // "Force/Debug/Log tier classification": drawables' radii/tiers, 1/s
@@ -109,12 +109,12 @@ public:
         vk::ImageLayout gbufferDepthLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
         vk::Sampler gbufferSampler;
     };
-    // Which half of the shell rendering to record — the desktop primary gives each its own
+    // Which half of the shell rendering to record - the desktop primary gives each its own
     // scene-stage secondary so the GPU profiler splits "Force shells" / "Force union march";
     // VR records Both into the one per-eye pass.
     enum class EDrawPart { Proxies, UnionMarch, Both };
 
-    // Records the indirect instanced box draw (sampled-tier proxies — or every drawable when the
+    // Records the indirect instanced box draw (sampled-tier proxies - or every drawable when the
     // union pass is off) and/or the union-march fullscreen draw (vertexCount 0 when inactive); the
     // caller has begun a command buffer inside the scene-color render pass and set the
     // viewport/scissor. eye selects the per-eye set/views.
@@ -132,12 +132,12 @@ public:
     // 0, ends SHADER_READ_ONLY), recorded in the PRIMARY right after the interval pass. Each
     // covered pixel marches once at half res; the "Force union blend" scene stage (recordDraw
     // UnionMarch) then upsamples depth-aware into scene color. The viewport/scissor are the HALF
-    // ones (the caller halves the full-res viewport — same 0.5 factor the march FS's uv applies).
+    // ones (the caller halves the full-res viewport - same 0.5 factor the march FS's uv applies).
     // gbufferDepth is SHADER_READ_ONLY at this point in the frame (before the prepass-reuse barrier).
     void recordUnionMarchPass(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo,
         const vk::Viewport& viewport, const vk::Rect2D& scissor,
         vk::ImageView gbufferDepthView, vk::Sampler gbufferSampler);
-    // (Re)creates the interval + march targets at HALF the given (swapchain) extent — call at
+    // (Re)creates the interval + march targets at HALF the given (swapchain) extent - call at
     // init + on resize.
     void resizeIntervalTarget(uint32 width, uint32 height);
 
@@ -146,7 +146,7 @@ public:
     oc::span<const glm::vec4> getForceReadback(uint32 frameIdx) const { return m_mappedForceReadback[frameIdx]; }
     oc::span<const RendererVKLayout::ForceQueryResult> getQueryReadback(uint32 frameIdx) const { return m_mappedQueryReadback[frameIdx]; }
     // The baked pressure field of THIS frame slot: the data is ~2 frames old, so the chunk list it
-    // was evaluated for is returned WITH it (the per-slot copy stored at upload) — the pairing the
+    // was evaluated for is returned WITH it (the per-slot copy stored at upload) - the pairing the
     // CPU-side sampler indexes by.
     RendererVKLayout::ForceBakeReadback getBakeReadback(uint32 frameIdx) const
     {
@@ -170,7 +170,7 @@ private:
     void buildShellBakeLayout(ComputePipelineLayout& layout); // storage IMAGES at 5/6, unlike the rest
     // The shell-volume field textures + sampler (one set: barrier-serialized). TEAM-SIZED: ONE
     // RGBA16F volume at <= 4 teams, two at 5-8 (the second view slot stays null and binding 6
-    // falls back to view A — never statically used by those shaders).
+    // falls back to view A - never statically used by those shaders).
     void createShellVolume();
     void destroyShellVolume();
     void createBakeReadbackBuffers(); // team-sized stride (see Layout's bake comment)
@@ -217,13 +217,13 @@ private:
     oc::array<oc::span<glm::vec4>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedBakeReadback;
     oc::array<oc::vector<glm::ivec4>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_bakeChunkLists; // per-slot pairing (see getBakeReadback)
     // The sampled shell tier's field volumes (RendererVKLayout::FORCE_SHELL_VOLUME_*): ONE set,
-    // not per frame slot — the bake's acquire barrier (prev fragment reads -> compute writes)
+    // not per frame slot - the bake's acquire barrier (prev fragment reads -> compute writes)
     // serializes reuse on the queue. GENERAL layout for life.
     vk::Image m_shellVolumeImage[2]{};
     VmaAllocation m_shellVolumeMemory[2]{};
     vk::ImageView m_shellVolumeView[2]{};
     vk::Sampler m_shellVolumeSampler; // linear, clamp-to-border transparent black (outside = zero field)
-    // The union march's per-pixel interval target (RG16F, swapchain extent; single image — written
+    // The union march's per-pixel interval target (RG16F, swapchain extent; single image - written
     // and read within the frame, re-cleared every frame by its render pass).
     vk::Image m_intervalImage;
     VmaAllocation m_intervalMemory = nullptr;
@@ -256,11 +256,11 @@ private:
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_upsampleSets;
     uint32 m_viewCount = 1;
 
-    // Offsets into the per-frame indirect buffer (uints): [0..3] draw (sampled-tier proxies — or
-    // ALL drawables with the union pass off), [4..6] grid insert groups (x = emitter COUNT — the
+    // Offsets into the per-frame indirect buffer (uints): [0..3] draw (sampled-tier proxies - or
+    // ALL drawables with the union pass off), [4..6] grid insert groups (x = emitter COUNT - the
     // insert runs single-thread workgroups, see force_grid.cs.glsl), [8..10] force groups,
     // [12..14] query groups, [16..18] bake groups (x = chunk count), [20..22] shell-volume bake
-    // groups (x = 0 disables — the CB is cached, so the toggle rides here), [24..27] the interval
+    // groups (x = 0 disables - the CB is cached, so the toggle rides here), [24..27] the interval
     // pass draw (analytic drawables, firstInstance = the partition split), [28..31] the union
     // fullscreen draw (vertexCount 3 or 0).
     static constexpr uint32 DRAW_CMD_OFFSET = 0;

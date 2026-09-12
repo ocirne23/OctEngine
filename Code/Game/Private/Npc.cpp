@@ -28,7 +28,7 @@ static constexpr const char* c_npcPrefabs[(int)ENpcType::Count] = {
 static constexpr const char* c_npcNames[(int)ENpcType::Count] = { "Enemy", "Brute", "Runner", "Spitter", "Swarm",
     "Elite", "Giant", "Titan", "Lobber", "Spawner", "Warrior" };
 
-// Units inside the view frustum and within maxDist, for the overhead labels — anything off screen
+// Units inside the view frustum and within maxDist, for the overhead labels - anything off screen
 // or too far to read would be projected and thrown away, so it is never fetched. The hits are
 // filtered straight out of the traversal into `out` (no intermediate buffer: the labels job may
 // park on another thread).
@@ -58,7 +58,7 @@ static bool isUnitRoot(Entity* entity)
     return !getComponent<GameUnitComponent>(entity)->puppet;
 }
 
-// Every unit in the world — for save/load (which must persist units the camera cannot see) and
+// Every unit in the world - for save/load (which must persist units the camera cannot see) and
 // the profiling scenario's select-all. A walk of the World's root list, not a spatial query.
 void NpcSystem::queryAllUnits(oc::vector<Entity*>& out)
 {
@@ -70,14 +70,14 @@ void NpcSystem::queryAllUnits(oc::vector<Entity*>& out)
 
 int NpcSystem::countUnits()
 {
-    return GameUnitComponent::liveCount(); // spawn/destroy edges on the component — no walk
+    return GameUnitComponent::liveCount(); // spawn/destroy edges on the component - no walk
 }
 
 void NpcSystem::registerTweaks()
 {
     // Gameplay tweaks persist between runs and the server's values overrule the clients'.
     const Tweak::ScopedFlags scoped(ETweakFlags::Synced);
-    // The shared unit-sim baseline (GameUnitComponent::params — every unit of every team).
+    // The shared unit-sim baseline (GameUnitComponent::params - every unit of every team).
     GameUnitParams& up = GameUnitComponent::params;
     Tweak::floatVar("Game/Enemies", "Unit energy drain/s @ pressure 1", &up.energyDrainRate, 0.0f, 200.0f, 0.5f);
     Tweak::floatVar("Game/Enemies", "Push tension", &up.tension, 0.0f, 10.0f, 0.05f);
@@ -143,7 +143,7 @@ void NpcSystem::registerTweaks()
 
 void NpcSystem::clear()
 {
-    // Teardown: the whole World goes — every root, whatever it is. The other holders dropped
+    // Teardown: the whole World goes - every root, whatever it is. The other holders dropped
     // their EntityPtrs before this (see ~GameMatch), so the World's batch release is the last
     // reference and the destruction fans out over the job system.
     Globals::world.clearRootEntities();
@@ -151,8 +151,8 @@ void NpcSystem::clear()
 }
 
 // The load path's despawn: every unit and projectile root, nothing else (the structures were just
-// rebuilt by loadFrom, and the ground / terrain / player stay). Owning copies are collected FIRST —
-// removeRootEntity erases from the list being walked — and released as one parallel batch.
+// rebuilt by loadFrom, and the ground / terrain / player stay). Owning copies are collected FIRST -
+// removeRootEntity erases from the list being walked - and released as one parallel batch.
 // Puppets are never units (isUnitRoot).
 void NpcSystem::despawnUnitsAndShots()
 {
@@ -184,7 +184,7 @@ void NpcSystem::discardQueued()
 // (packColor comes from Structures.ixx, shared by every Game implementation unit.)
 
 // A unit spawn point on a ring around a building, on the first of 8 probed angles whose cell is
-// free of structures (and inside the arena bounds) — units must never spawn INSIDE the building.
+// free of structures (and inside the arena bounds) - units must never spawn INSIDE the building.
 // With a preferred direction (the barracks' first waypoint) the probe starts THERE and fans out
 // to both sides (+45, -45, +90, ...), so the unit spawns facing its route; without one the start
 // angle is random.
@@ -222,7 +222,7 @@ void NpcSystem::drawBeams(float deltaSec)
 {
     // TURRET: a BUNDLE of jagged lines per strike (re-jittered every frame = flicker), fading
     // over the lifetime: a bright dense CORE of tightly packed strands plus wider, dimmer forks
-    // around it — debug lines are 1 px, so thickness comes from count. Plus the MUZZLE FLASH:
+    // around it - debug lines are 1 px, so thickness comes from count. Plus the MUZZLE FLASH:
     // one point light at the muzzle, fading with the bolt.
     // MELEE HIT: one line striker -> victim, plus one faint strand beside it, fading.
     constexpr int c_segments = 8;
@@ -297,7 +297,7 @@ Entity* NpcSystem::spawnUnit(const StructureSystem& structures, const glm::vec3&
     unit->sourceId = sourceId;
     unit->popCost = (uint8)glm::clamp(structures.unitPopulation((int)type), 0, 255);
     if (ForceComponent* fc = getComponent<ForceComponent>(entity.get()))
-        fc->emitter.setTeam(team); // prefabs author team 1 — units carry their builder's team
+        fc->emitter.setTeam(team); // prefabs author team 1 - units carry their builder's team
     // Copy the barracks route in AT SPAWN (orders tier): the unit marches it before its AI
     // (still engaging enemy units that come within "Route engage radius" on the way).
     if (const int source = structures.structureIndexById(sourceId); source >= 0)
@@ -308,7 +308,7 @@ Entity* NpcSystem::spawnUnit(const StructureSystem& structures, const glm::vec3&
             unit->route[i] = route[i];
         unit->routeIndex = 0;
     }
-    return entity.get(); // owned by the World's root list — no roster
+    return entity.get(); // owned by the World's root list - no roster
 }
 
 Entity* NpcSystem::spawnLooseUnit(const StructureSystem& structures, const glm::vec3& pos,
@@ -323,7 +323,7 @@ void NpcSystem::spawnLooseUnits(oc::span<const LooseSpawn> spawns)
         return;
     ProfileScope scope("Npc loose spawn batch", EProfileCategory::Game);
     // The entity creations fan out over the job system; everything below the batch is the same
-    // per-unit fixup spawnUnit does, minus the route copy (loose units have no owning barracks) —
+    // per-unit fixup spawnUnit does, minus the route copy (loose units have no owning barracks) -
     // cheap component writes, kept serial on main.
     oc::vector<World::SpawnRequest> requests;
     requests.reserve(spawns.size());
@@ -344,11 +344,11 @@ void NpcSystem::spawnLooseUnits(oc::span<const LooseSpawn> spawns)
         GameUnitComponent::applyTeamTint(*entity);
         unit->sourceId = 0;
         if (ForceComponent* fc = getComponent<ForceComponent>(entity.get()))
-            fc->emitter.setTeam(s.team); // prefabs author team 1 — units carry their spawner's team
+            fc->emitter.setTeam(s.team); // prefabs author team 1 - units carry their spawner's team
         if (s.hasOrder)
             unit->orderMove(s.orderDest);
         // PARKED AT SPAWN while the SIM LOD selects: loose units (waves, ambient) spawn far from
-        // every player, in blobs that overlap — a live body there took box3d's push-out and, never
+        // every player, in blobs that overlap - a live body there took box3d's push-out and, never
         // steered (unselected) and frictionless, coasted away. Disabled from the first step, the
         // far tick walks them by teleport and the World's wake edge enables them (velocities
         // zeroed) once a player is near. The queue applies before the next step, so the body
@@ -357,7 +357,7 @@ void NpcSystem::spawnLooseUnits(oc::span<const LooseSpawn> spawns)
         if (Globals::world.simLodActive())
             if (PhysicsComponent* pc = getComponent<PhysicsComponent>(entity.get()))
                 pc->park(/*disable*/ true);
-        Globals::world.addRootEntity(oc::move(entity)); // the root list is the owner — no roster
+        Globals::world.addRootEntity(oc::move(entity)); // the root list is the owner - no roster
     }
 }
 
@@ -376,7 +376,7 @@ const EntitySpawnTemplate* NpcSystem::shellTemplate(bool lob)
 void NpcSystem::fireShot(const EntitySpawnTemplate& shell, const glm::vec3& from,
     const glm::vec3& velocity, uint8 team)
 {
-    // Named by its prefab (gameEnemyShot / gameEnemyLob) — no per-shot rename, which was two
+    // Named by its prefab (gameEnemyShot / gameEnemyLob) - no per-shot rename, which was two
     // more allocations in the name registry for a name nothing reads.
     EntityPtr shot = Globals::world.spawnTemplate(shell, Transform(from), true);
     if (!shot)
@@ -390,13 +390,13 @@ void NpcSystem::fireShot(const EntitySpawnTemplate& shell, const glm::vec3& from
     }
     if (PhysicsComponent* pc = getComponent<PhysicsComponent>(shot.get()))
         pc->body.setLinearVelocity(velocity); // main thread pre-physics: direct setter sanctioned
-    // Owned by the World's root list — no roster.
+    // Owned by the World's root list - no roster.
 }
 
 void NpcSystem::service(StructureSystem& structures)
 {
     ProfileScope scope("Npc service", EProfileCategory::Game);
-    // FAR TICK: units the SIM LOD did not select (no tier stamp on their spatial entry — beyond
+    // FAR TICK: units the SIM LOD did not select (no tier stamp on their spatial entry - beyond
     // the outer radius of every player, body disabled, never visited by the pass) walk their
     // orders by teleport instead, every m_farInterval of sim time. Runs BEFORE world.update on
     // main and joins here, so no far-ticked unit is ever touched by the pass in the same window.
@@ -406,7 +406,7 @@ void NpcSystem::service(StructureSystem& structures)
         // Not on a physics-step frame that a step-free frame follows (JobSystem::deferFromPhysicsFrame):
         // the accumulated time carries over, so the deferred tick just covers a little more.
         // A walk of the World's root list (every unit is a root; non-units are skipped per
-        // element) — the list only mutates on main, and this joins before service returns.
+        // element) - the list only mutates on main, and this joins before service returns.
         const oc::vector<EntityPtr>& roots = Globals::world.rootEntities();
         if (m_farAccum >= m_farInterval && !roots.empty() && !Globals::jobSystem.deferFromPhysicsFrame())
         {
@@ -466,7 +466,7 @@ void NpcSystem::service(StructureSystem& structures)
         Globals::navSystem.requestSeedPath(r.team, r.from, r.to,
             r.stuck ? m_stuckLaneSpeed : m_orderLaneSpeed, m_laneWidth);
     // Units the BARRACKS decided to produce during the pass (their component paid the energy,
-    // claimed the roster slot and set the cooldown — this only performs the entity spawn). A
+    // claimed the roster slot and set the cooldown - this only performs the entity spawn). A
     // failed spawn refunds the cost and the slot.
     GameStructureComponent::takeSpawnRequests(m_spawnScratch);
     ProfileScope spawnScope("Npc barracks spawns", EProfileCategory::Game);
@@ -474,7 +474,7 @@ void NpcSystem::service(StructureSystem& structures)
     {
         const int index = structures.structureIndexById(barracksId);
         if (index < 0)
-            continue; // the barracks died between deciding and servicing — its units died with it
+            continue; // the barracks died between deciding and servicing - its units died with it
         const StructureSystem::Ref& s = structures.structures()[index];
         const ENpcType unitType = (ENpcType)glm::min((int)s.state->barracks.unitType, (int)ENpcType::Count - 1);
         // Spawn on the side facing the route's first waypoint (random side without a route).
@@ -512,8 +512,8 @@ void NpcSystem::service(StructureSystem& structures)
         if (len <= 1e-3f)
             continue;
         // ShotKind picks the shell: 0 = the spitter's direct shot, 1 = the lobber's slow SPLASH
-        // shell (enemyLob.pre: SplashRadius — the projectile's contact damages everything in it),
-        // 2 = the SPAWNER: no shell at all — a loose Swarm body is born beside it, on the side
+        // shell (enemyLob.pre: SplashRadius - the projectile's contact damages everything in it),
+        // 2 = the SPAWNER: no shell at all - a loose Swarm body is born beside it, on the side
         // facing its target (it holds at StandoffRange like any ranged unit, so "in range" = the
         // same gate the fire timer uses).
         if (request.shotKind == 2)
@@ -529,7 +529,7 @@ void NpcSystem::service(StructureSystem& structures)
                 dir / len * (lob ? m_lobberShotSpeed : m_spitterShotSpeed), request.team);
     }
     fireScope.stop();
-    // Each reported death frees its population on its spawner — the tally is maintained by the
+    // Each reported death frees its population on its spawner - the tally is maintained by the
     // spawn/death edges instead of by recounting units every frame.
     GameUnitComponent::takeDeaths(m_deathScratch);
     for (const GameUnitComponent::DeathRecord& death : m_deathScratch)
@@ -539,7 +539,7 @@ void NpcSystem::service(StructureSystem& structures)
 
 void NpcSystem::saveUnits(AssetNode& root) const
 {
-    // The World's root list is the source (queryAllUnits): puppets — player capsules — are
+    // The World's root list is the source (queryAllUnits): puppets - player capsules - are
     // already excluded there, so players are never saved.
     oc::vector<Entity*> units;
     queryAllUnits(units);
@@ -551,7 +551,7 @@ void NpcSystem::saveUnits(AssetNode& root) const
             if (oc::string_view(entity->getName()) == c_npcNames[t])
                 type = t;
         // ONLY NON-DEFAULT VALUES are written (a co-op save holds tens of thousands of units):
-        // every key below has a load fallback that restores the same state when it is missing —
+        // every key below has a load fallback that restores the same state when it is missing -
         // team 1, a fresh spawn's full health / battery, no spawner, route start. Type and
         // Position are the two keys every unit carries (the type names the prefab: explicit).
         AssetNode& n = root.addChild("Unit");
@@ -567,7 +567,7 @@ void NpcSystem::saveUnits(AssetNode& root) const
             n.set("Source", oc::to_string(u->sourceId));
         if (u->routeIndex != 0)
             n.set("RouteIndex", oc::to_string(u->routeIndex));
-        // The standing MOVE ORDER is what makes a co-op WAVE unit a wave unit — there is no
+        // The standing MOVE ORDER is what makes a co-op WAVE unit a wave unit - there is no
         // per-unit `ambient` flag any more, so without it a loaded wave stopped where it stood and
         // held its patch like ambient scatter. Transient WANDER strolls are deliberately skipped:
         // they time out in seconds, and restoring one would pin an idler to a stale spot.
@@ -605,7 +605,7 @@ void NpcSystem::loadUnits(const AssetNode& root, StructureSystem& structures)
         u->energy = glm::clamp(n->find("Energy") ? n->find("Energy")->asFloat() : u->energy, 0.0f, u->energyMax);
         u->routeIndex = (uint8)glm::clamp(n->find("RouteIndex") ? n->find("RouteIndex")->asInt() : 0, 0, 255);
         // Resume the march (co-op wave units, and any player-ordered unit). NOT `fresh`: this is
-        // the same order continuing, not a new one, so it keeps following whatever lane exists —
+        // the same order continuing, not a new one, so it keeps following whatever lane exists -
         // the units re-request their own on their normal timers. `orderMove` re-clears routeIndex,
         // which is what an ordered unit saved anyway. Older saves have no key and stay AI-driven.
         if (const AssetNode* order = n->find("Order"))

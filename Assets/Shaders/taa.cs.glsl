@@ -30,7 +30,7 @@ layout (push_constant) uniform PC
     uint  height;
     float feedback;  // history weight in [0,1]; 0 disables temporal accumulation
     uint  viewIndex; // view to reconstruct in (0 = centre/desktop, 1 = left eye, 2 = right eye)
-    float oceanFeedback; // history weight cap on ocean pixels — see the ocean block below
+    float oceanFeedback; // history weight cap on ocean pixels - see the ocean block below
 } pc;
 
 bool insideViewport(vec2 uv)
@@ -60,12 +60,12 @@ void main()
     }
 
     // Sky pixels (the sky sphere is excluded from the G-buffer, so its depth stays at the cleared far
-    // plane — 0.0 under reversed-Z) reproject AT the far plane: the reprojection is then purely rotational
+    // plane - 0.0 under reversed-Z) reproject AT the far plane: the reprojection is then purely rotational
     // (parallax-free, correct for content at infinity) and the jittered sky raster still accumulates.
     const bool sky = depth <= 0.0;
     // The depth image is JITTERED (the prepass rasterizes identically to the forward pass, for exact
     // depth-prepass reuse): the surface sampled at uv truly sits at uv - jitter. Compensate every
-    // GEOMETRIC use of the sampled depth — reconstruction and reprojection — with the known jitter;
+    // GEOMETRIC use of the sampled depth - reconstruction and reprojection - with the known jitter;
     // this is exact, and what keeps reprojection wobble-free with a jittered reference.
     const vec2 uvUnjit = uv - taaJitterUv(u_taaJitter.xy);
     const vec3 worldPos = worldPosFromDepth(uvUnjit, depth); // disocclusion test only
@@ -82,8 +82,8 @@ void main()
         return;
     }
 
-    // Ocean pixels (prepass normal .a): the waves ANIMATE but this reprojection is camera-only — no
-    // motion vectors — so ocean history lands on the wrong wave every frame and full-weight accumulation
+    // Ocean pixels (prepass normal .a): the waves ANIMATE but this reprojection is camera-only - no
+    // motion vectors - so ocean history lands on the wrong wave every frame and full-weight accumulation
     // averages the specular sparkle into blur. Cap the feedback there (TAA/Ocean feedback tweak) and
     // tighten the variance clamp so the moving highlights stay crisp; water has no hard edges, so the
     // reduced accumulation costs no visible aliasing.
@@ -120,7 +120,7 @@ void main()
     {
         // Sky/geometry class mismatch: at silhouettes the sub-pixel jitter legitimately flips a pixel's
         // coverage between sky and geometry frame to frame. A hard fb = 0 here left those pixels
-        // permanently unaccumulated — raw jitter shimmer along every silhouette — so keep REDUCED
+        // permanently unaccumulated - raw jitter shimmer along every silhouette - so keep REDUCED
         // feedback instead: the variance clamp above already bounds what mismatched history can
         // contribute, and true reveals still converge in a few frames at this weight.
         fb *= 0.25;

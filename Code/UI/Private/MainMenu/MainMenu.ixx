@@ -8,7 +8,7 @@ import :ChatPanel;
 // The game-facing start screen, shown when App.exe launches without a mode (no --game/--server/
 // --connect and not an automated run). Rendered by the widget pass INSTEAD of the editor panels
 // while active (see UI::updateJob); the world renders full-window behind it. The menu itself only
-// records the player's choice — main() polls takeAction() after the post-update join and performs
+// records the player's choice - main() polls takeAction() after the post-update join and performs
 // the actual mode start (network host/join, world content, GameMatch), so all side effects stay on
 // the main thread in the pre-kick window.
 export struct MainMenuAction
@@ -27,10 +27,10 @@ export struct MainMenuAction
 };
 
 // ---- Lobby (multiplayer pre-game screen) ----
-// The UI-facing SNAPSHOT of the lobby: Game's LobbySystem (the model — roster, ready flags,
+// The UI-facing SNAPSHOT of the lobby: Game's LobbySystem (the model - roster, ready flags,
 // countdown, all networked server-authoritatively) rebuilds it every frame on the main thread
 // (setLobbyView, between the widget-pass join and kick); the widget pass only draws it and
-// records a LobbyAction for main to poll — the same sequencing as MainMenuAction.
+// records a LobbyAction for main to poll - the same sequencing as MainMenuAction.
 export struct LobbyView
 {
 	struct Player
@@ -61,7 +61,7 @@ export struct LobbyView
 
 export struct LobbyAction
 {
-	// Leave: back to the main menu (main tears the session down — the host's leave ends it for
+	// Leave: back to the main menu (main tears the session down - the host's leave ends it for
 	// every client, a client's leave is just its disconnect)
 	enum class EType : uint8 { None, ToggleReady, Start, SetMapSettings, SetTeam, SetNumTeams, SetPvpMap, Leave };
 	EType type = EType::None;
@@ -74,7 +74,7 @@ export struct LobbyAction
 };
 
 // ---- Escape menu (Esc overlay in every RUNNING mode + the lobby; never over the main menu) ----
-// Pause = the escape menu's "Pause game" button (a SHARED game pause — every player sees the paused
+// Pause = the escape menu's "Pause game" button (a SHARED game pause - every player sees the paused
 // box); Unpause = the paused box's "Resume" button (any player may press it).
 export enum class EscapeMenuAction : uint8 { None, Resume, ExitToMenu, Quit, Pause, Unpause };
 
@@ -85,7 +85,7 @@ public:
 	void setActive(bool active)
 	{
 		m_active = active;
-		if (active) // (re)activation always lands on the FRONT page — a previous session's stale
+		if (active) // (re)activation always lands on the FRONT page - a previous session's stale
 		{           // lobby/settings page must not greet the next one (exit-to-menu reactivates)
 			m_settingsOpen = false;
 			m_lobbyOpen = false;
@@ -106,7 +106,7 @@ public:
 	void setStatus(oc::string status) { m_status = oc::move(status); }
 
 	// Main thread, after the widget-pass join (the action was written by the PREVIOUS frame's
-	// widget pass — same sequencing as every panel queue). Returns None when nothing was clicked.
+	// widget pass - same sequencing as every panel queue). Returns None when nothing was clicked.
 	MainMenuAction takeAction()
 	{
 		MainMenuAction action = oc::move(m_action);
@@ -128,7 +128,7 @@ public:
 
 	// ---- Escape menu ----
 	// State written by MAIN only (Esc toggle, action application); the widget pass renders the
-	// overlay while open and records the button press for main to poll — the usual sequencing.
+	// overlay while open and records the button press for main to poll - the usual sequencing.
 	void setEscapeOpen(bool open)
 	{
 		if (open && !m_escapeOpen)
@@ -143,12 +143,12 @@ public:
 		return action;
 	}
 	// Widget pass, over the docked panels / the game layout / the lobby page. offerDebugToggle
-	// adds the "Debug panels" and "Pause profiler" checkboxes (game layout only — the editor
+	// adds the "Debug panels" and "Pause profiler" checkboxes (game layout only - the editor
 	// already has every panel).
 	void renderEscape(bool offerDebugToggle);
 	// The SHARED GAME PAUSE (main writes both, every frame): offersPause adds the escape menu's
 	// "Pause game" button (a running game only); paused shows the centered PAUSED box with its
-	// "Resume" button over everything (any player may resume — the game syncs the state).
+	// "Resume" button over everything (any player may resume - the game syncs the state).
 	void setEscapeOffersPause(bool offers) { m_escapeOffersPause = offers; }
 	void setGamePaused(bool paused) { m_gamePaused = paused; }
 	bool isGamePaused() const { return m_gamePaused; }

@@ -30,7 +30,7 @@ namespace Procedural
 		constexpr int32 TILE_W = TILE + 2 * HALO;
 
 		// Coarse tile: the COARSE STAGE's own lattice, where one pixel is 256 native pixels. A 64-pixel
-		// coarse tile therefore spans 16,384 native pixels — ~491 km at 30 m/px. That is the whole point of
+		// coarse tile therefore spans 16,384 native pixels - ~491 km at 30 m/px. That is the whole point of
 		// the coarse path: a wide-area query resolves to one or two of these instead of the thousands of
 		// full-detail tiles the same area would otherwise demand.
 		constexpr int32 CTILE = 64;
@@ -44,7 +44,7 @@ namespace Procedural
 			oc::vector<float> macro;   // the COARSE stage's surface (7.68 km/px), resampled to this tile: the
 			                            // reference the shader measures crag relief against. Identical in
 			                            // meaning on both detail levels, which is the point.
-			// Degrees C AT SEA LEVEL — the same baseline everything else in the engine carries (the baked
+			// Degrees C AT SEA LEVEL - the same baseline everything else in the engine carries (the baked
 			// terrain-data map, TerrainPoint::temperatureSeaLevel). Temperature at height is baseline +
 			// the one global lapse (cfg.lapseRate) x elevation, applied at sample time. The model's own
 			// temperature-at-elevation and its per-region regressed rate are DERIVATION inputs, undone at
@@ -63,17 +63,17 @@ namespace Procedural
 
 		// -------------------------------------------------------------------------------------------------
 		// Disk tile cache: Local/Diffusion/<seed>/{full|coarse}_x<j>_z<i>.tile (cwd is Assets/). Inference
-		// is deterministic per (seed, precision, tile), so a tile generated once never needs the GPU again —
+		// is deterministic per (seed, precision, tile), so a tile generated once never needs the GPU again -
 		// a cached fetch is a ~0.7 MB read instead of ~1.5 s of diffusion. Per-seed folders make a reseed a
 		// different directory rather than an invalidation, and fp16 gets its own suffix because precision
-		// CHANGES the terrain for a given seed (it is part of the world, not a perf knob — see
+		// CHANGES the terrain for a given seed (it is part of the world, not a perf knob - see
 		// TerrainConfigV3::useFp16).
 		// -------------------------------------------------------------------------------------------------
 		constexpr uint32 TILE_CACHE_MAGIC = 0x43445456; // 'VTDC'
 		// Bump when FieldTile's layout or ANYTHING in the pipeline that shapes its content changes
 		// (stages, strides, the coarse beta regression, ...): stale files fail the check and regenerate
 		// in place, exactly like the cooked scene cache.
-		// v2: planes are uint16, quantized over a per-plane [min, max] carried in the file — half the
+		// v2: planes are uint16, quantized over a per-plane [min, max] carried in the file - half the
 		// bytes of raw floats, and the worst-case error (range/65535) is centimetres on the steepest
 		// tile, far below the pipeline's own ~6 cm overlap tolerance. Saving ROUNDTRIPS the tile through
 		// the quantizer, so RAM and disk always hold bit-identical values: a tile can never change
@@ -81,11 +81,11 @@ namespace Procedural
 		// v3: the quantized plane is then delta-coded (wraparound, row-major linear), byte-SPLIT for the
 		// 16-bit planes (all low bytes, then all high bytes) and zstd-compressed. The transform is what
 		// earns the ratio: deltas of a smooth field are small, so after the split the high-byte half is
-		// almost all zeros and the entropy concentrates in the low bytes. Lossless by construction — the
-		// float values are untouched, only the integer container is recoded — and per plane the STORED
+		// almost all zeros and the entropy concentrates in the low bytes. Lossless by construction - the
+		// float values are untouched, only the integer container is recoded - and per plane the STORED
 		// form wins if compression can't beat it, so a file is never larger than its uncompressed self.
 		// v4: one fewer plane and two thinner ones. The beta plane is GONE (the baseline is recovered at
-		// tile build now — see FieldTile::tempSea), and tempSea + precip store 8-bit: the rest of the
+		// tile build now - see FieldTile::tempSea), and tempSea + precip store 8-bit: the rest of the
 		// engine already encodes them at 8 bits (the baked map's [-25, 50] C channel, the 8-bit humidity),
 		// so 16 bits here was precision no consumer could ever see. Per-tile [min, max] makes the 8-bit
 		// step FINER than the map's fixed-range one on any tile narrower than the full climate range.
@@ -193,7 +193,7 @@ namespace Procedural
 			float maxV = 0.0f;
 		};
 
-		// The file's fixed plane schema — order and bit depth. Loader and writer MUST agree; a change here
+		// The file's fixed plane schema - order and bit depth. Loader and writer MUST agree; a change here
 		// is a TILE_CACHE_VERSION bump.
 		struct PlaneSchema
 		{
@@ -210,7 +210,7 @@ namespace Procedural
 		FieldTilePtr loadTileFromDisk(const oc::string& path, uint64 seed, int32 ti, int32 tj,
 		                              int32 expectWidth)
 		{
-			// Tile IO runs on the diffusion job (never the main thread) — the FileSystem assert covers it.
+			// Tile IO runs on the diffusion job (never the main thread) - the FileSystem assert covers it.
 			oc::vector<uint8> bytes;
 			if (!FileSystem::readFileBytes(path, bytes) || bytes.empty())
 				return nullptr;
@@ -267,7 +267,7 @@ namespace Procedural
 					return nullptr;
 
 				// MUST match the writer's roundtrip expression exactly (same step, same order of
-				// operations) — bit-identical dequantization is what the crack-free guarantee rests on.
+				// operations) - bit-identical dequantization is what the crack-free guarantee rests on.
 				const float maxQ = ps.eightBit ? 255.0f : 65535.0f;
 				const float step = (ph.maxV - ph.minV) / maxQ;
 				oc::vector<float>& v = (*t).*ps.plane;
@@ -355,7 +355,7 @@ namespace Procedural
 				}
 			}
 			// A write cut short (crash, full disk) leaves a file the loader's size probe rejects, so the
-			// worst case is a regenerate — no tmp+rename dance needed, same contract as the .vsc cache.
+			// worst case is a regenerate - no tmp+rename dance needed, same contract as the .vsc cache.
 			if (!FileSystem::writeFileBytes(path, f.data))
 				Log::warning(oc::format("[Diffusion] tile cache write failed: {}", path));
 		}
@@ -523,7 +523,7 @@ namespace Procedural
 				}
 				{
 					JobMutex::Scope lk(m_pipelineMutex);
-					// What the live pipeline was actually built with — the disk cache labels SAVES with this
+					// What the live pipeline was actually built with - the disk cache labels SAVES with this
 					// (readable wherever m_pipeline is non-null under the lock), never with the request-side
 					// mirror, so a precision flip racing a generation can't file a tile under the wrong folder.
 					m_pipelinePrecision = precision;
@@ -583,7 +583,7 @@ namespace Procedural
 			void evictLocked()
 			{
 				m_cache.trim((size_t)oc::max(4, m_maxTiles));
-				// Coarse tiles are ~52 KB and each covers hundreds of km, so a small fixed budget is plenty —
+				// Coarse tiles are ~52 KB and each covers hundreds of km, so a small fixed budget is plenty -
 				// and they must never be evicted by full-detail pressure, since they ARE the cheap fallback.
 				m_coarseCache.trim(64);
 			}
@@ -630,11 +630,11 @@ namespace Procedural
 			std::mutex m_pendingMutex;
 		};
 
-		// THE runtime, in PLAIN static init (.CRT$XCU — see InitSeg.h): constructed before every
+		// THE runtime, in PLAIN static init (.CRT$XCU - see InitSeg.h): constructed before every
 		// numbered section (a defaulted ctor: nothing happens until beginLoad) and therefore destroyed
 		// AFTER all of them, in particular after Globals::terrain (XCUA), whose destructor joins the
 		// chunk pump jobs. As a function-local static it was constructed LATE (at the first terrain
-		// enable, after every global) and so destroyed FIRST at exit — while a pump job could still be
+		// enable, after every global) and so destroyed FIRST at exit - while a pump job could still be
 		// inside fetchTile erasing from m_pending: a crash on any quit during chunk generation.
 		DiffusionRuntime g_diffusionRuntime;
 		DiffusionRuntime& DiffusionRuntime::get() { return g_diffusionRuntime; }
@@ -666,7 +666,7 @@ namespace Procedural
 					{
 						// Disk first, WITHOUT the pipeline lock: a cached tile must not queue behind another
 						// tile's ~1.5 s inference. The post-load mirror re-check pins the race where a reseed
-						// lands between path building and here — a changed seed drops the loaded tile and
+						// lands between path building and here - a changed seed drops the loaded tile and
 						// falls through to generation against the live pipeline.
 						{
 							const uint64 seed = m_activeSeed.load(oc::memory_order_relaxed);
@@ -705,8 +705,8 @@ namespace Procedural
 						for (size_t i = 0; i < plane; i++)
 							t->tempSea[i] = temp[i] - beta[i] * oc::max(0.0f, t->elev[i]);
 
-						// Labeled from the pipeline itself — the seed/precision this tile was ACTUALLY built
-						// with — never the mirrors. The write is ~1 MB against ~1.5 s of inference, so holding
+						// Labeled from the pipeline itself - the seed/precision this tile was ACTUALLY built
+						// with - never the mirrors. The write is ~1 MB against ~1.5 s of inference, so holding
 						// the lock for it costs nothing.
 						const uint64 seed = m_pipeline->seed();
 						saveTileToDisk(tileCachePath(seed, m_pipelinePrecision == EPrecision::Fp16, false, ti, tj),
@@ -722,7 +722,7 @@ namespace Procedural
 
 			// The claimant generates on its own thread; everyone else waits on the future. Callers are
 			// already worker threads that expect to block (the terrain streamer worker, the scatter worker,
-			// the height-map baker's std::async), and m_pipelineMutex is what actually serialises inference —
+			// the height-map baker's std::async), and m_pipelineMutex is what actually serialises inference -
 			// so a dedicated inference thread would only add a hop and a thread per tile.
 			if (!owner)
 			{
@@ -790,7 +790,7 @@ namespace Procedural
 
 				// PADDED by the regression window: unlike the full path, the coarse tensor carries no lapse
 				// rate (its channels are elev/p5/temp/temp_std/precip/precip_std), so this path has to
-				// regress its own the same way computeClimate does — and localBaselineTemperature crops
+				// regress its own the same way computeClimate does - and localBaselineTemperature crops
 				// (win - 1) from each axis. Fetching CBETA_PAD extra on every side makes its output land
 				// exactly on the tile.
 				constexpr int32 CBETA_WIN = 15;             // same window computeClimate regresses over
@@ -807,7 +807,7 @@ namespace Procedural
 
 				// Decode the padded region once: signed elevation for the tile itself, and the
 				// clamped-to-sea-level copy the regression wants (computeClimate clamps for the same reason
-				// — the lapse is only meaningful over land).
+				// - the lapse is only meaningful over land).
 				Grid pTemp(pw, pw), pElevLand(pw, pw);
 				oc::vector<float> pElev(pplane), pPrecip(pplane);
 				for (size_t i = 0; i < pplane; i++)
@@ -842,17 +842,17 @@ namespace Procedural
 						t->elev[dst] = pElev[src];
 						t->precip[dst] = pPrecip[src];
 						// The FITTED baseline, not one derived from the model's raw coarse temperature. The
-						// raw value carries a residual the fit does not — but the full path already threw
+						// raw value carries a residual the fit does not - but the full path already threw
 						// exactly that away: computeClimate CONSTRUCTS its temperature as tSea + beta*elev
 						// and never uses the raw coarse temperature at all (keeping the raw value here left
 						// the two levels disagreeing by that residual: measured 1.53 C mean, 8.9 C max).
-						// Fitting both the same way is what actually makes them converge — and since the
+						// Fitting both the same way is what actually makes them converge - and since the
 						// full path's tile build now UNDOES that construction to get its baseline back,
 						// this path just stores its fit directly.
 						t->tempSea[dst] = tSea.at(r, c);
 					}
 				// At 7.68 km per pixel the coarse level IS the macro surface, so macro == elev and this
-				// path's own (elev - macro) is zero — a coarse tile cannot tell a crag from flat ground.
+				// path's own (elev - macro) is zero - a coarse tile cannot tell a crag from flat ground.
 				// That costs nothing: the shader never subtracts these two. It measures crag as the
 				// full-detail MESH height (which it always has) minus this macro, and the FULL path now
 				// reports this same coarse surface (WorldPipeline::computeCoarseSurface), so both detail
@@ -888,7 +888,7 @@ namespace Procedural
 		bool valid = false;
 	};
 
-	// A block of tiles covering a query region, fetched UP FRONT — one shared-cache lock per tile — and
+	// A block of tiles covering a query region, fetched UP FRONT - one shared-cache lock per tile - and
 	// then sampled with no locking at all. This is what sampleGrid buys over per-point fetching: a
 	// 512x512 bake resolves to a couple of dozen tiles, not a quarter-million lock/unlock pairs.
 	struct TerrainGenV3::TileBlock
@@ -901,7 +901,7 @@ namespace Procedural
 		// The offset is NOT decoration: the coarse lattice is PIXEL-CENTRED with respect to the native
 		// one. WorldPipeline::computeClimate maps native -> coarse as (native + 0.5)/S - 0.5, i.e. coarse
 		// pixel c is centred at native (c + 0.5)*S. Sampling it as native/S instead shifts the entire
-		// coarse field by HALF A COARSE PIXEL — 128 native pixels, which is 3.8 km at 30 m/px — so the
+		// coarse field by HALF A COARSE PIXEL - 128 native pixels, which is 3.8 km at 30 m/px - so the
 		// far cascade's climate lands somewhere else than the near cascade's and the textures disagree
 		// for the same position.
 		double latticeScale = 0.0;
@@ -1019,7 +1019,7 @@ namespace Procedural
 		// Central differences over the lattice -> WORLD slope. The halo is what lets this work at a tile
 		// edge without a seam. The vertical scaling matters: without it, compressing the world would
 		// silently steepen every slope, which then skews the detail mask and the fog. With it, worldScale
-		// cancels and the slope depends only on heightScale — i.e. proportions hold.
+		// cancels and the slope depends only on heightScale - i.e. proportions hold.
 		const float eL = tile->elev[(size_t)li * w + (lj > 0 ? lj - 1 : lj)];
 		const float eR = tile->elev[(size_t)li * w + lj + 1];
 		const float eU = tile->elev[(size_t)(li > 0 ? li - 1 : li) * w + lj];
@@ -1066,7 +1066,7 @@ namespace Procedural
 	}
 
 	// Climate lives in the MODEL's elevation frame and stays there. metersPerPixel and heightScale are
-	// presentation choices — we draw the same planet at a different size, not relocate it — so the
+	// presentation choices - we draw the same planet at a different size, not relocate it - so the
 	// climate rides along unscaled and a shrunk world keeps the snow caps and biome bands of the
 	// full-size one. Only the procedural detail adds relief the model never saw, so it alone earns a
 	// lapse correction (converted back into model metres to stay in that frame).
@@ -1087,7 +1087,7 @@ namespace Procedural
 	float TerrainGenV3::lapseOf() const { return oc::min(m_cfg.lapseRate, 0.0f); }
 
 	// The temperature this point would have AT SEA LEVEL: the baseline the lapse rate is applied to.
-	// This — not a temperature — is what the terrain-data map bakes, so consumers can evaluate at their
+	// This - not a temperature - is what the terrain-data map bakes, so consumers can evaluate at their
 	// own height (see TerrainPoint::temperatureSeaLevel).
 	//
 	// Everything that does not depend on height belongs here, and everything that does belongs in the
@@ -1103,7 +1103,7 @@ namespace Procedural
 
 	// Temperature at the point's FULL surface height (model elevation + the procedural detail).
 	//
-	// Literally the baseline evaluated at this height, so it CANNOT disagree with what the map bakes —
+	// Literally the baseline evaluated at this height, so it CANNOT disagree with what the map bakes -
 	// which was worth restructuring for. The previous form built the temperature by bolting corrections
 	// onto the model's value, and the detail layer's correction used a hardcoded -0.0065 while the
 	// model's own relief used the regressed beta; the result was not an affine function of the reported
@@ -1155,11 +1155,11 @@ namespace Procedural
 		// altitude is the MACRO band, NOT the full surface. The terrain shader's rock layer keys on the
 		// crag relief (height - altitude) to tell a mountain from flat ground at altitude, so reporting
 		// the full elevation here made that difference the detail layer alone (a few metres) and no
-		// slope ever grew rock — mountain tops came out textured as whatever biome the lowland was.
+		// slope ever grew rock - mountain tops came out textured as whatever biome the lowland was.
 		// The macro surface, unperturbed. The crag WANDER that stops the rock boundary being a contour
 		// line lives in the terrain shader, not here: it has to be scaled by the local relief (so it can
 		// only modulate relief that exists, never invent rock on a plain), and relief is exactly what
-		// this path cannot supply on the coarse level — macro == elev there, so relief is 0 by
+		// this path cannot supply on the coarse level - macro == elev there, so relief is 0 by
 		// construction and the far cascade would silently get no wander at all while the near one did.
 		// The shader has the full-detail MESH height whichever cascade it reads, so it can always
 		// compute the real relief. See terrainSplat / u_terrainTexParams5.
@@ -1231,7 +1231,7 @@ namespace Procedural
 	float TerrainGenV3::sampleWaterHeight(double, double) const
 	{
 		// The model's elevation is already relative to sea level, so the sea is exactly seaLevel.
-		// (Elevated water — lakes, rivers — is not modelled yet.)
+		// (Elevated water - lakes, rivers - is not modelled yet.)
 		return m_cfg.seaLevel;
 	}
 
@@ -1296,8 +1296,8 @@ namespace Procedural
 			return;
 
 		// THE reason this override exists: resolve every tile the grid touches ONCE (one shared-cache lock
-		// each), then fill without taking a lock at all. The base class's per-point loop meant a fetch —
-		// mutex + LRU touch — for every one of the ~262k texels in a cascade, all of it contending with the
+		// each), then fill without taking a lock at all. The base class's per-point loop meant a fetch -
+		// mutex + LRU touch - for every one of the ~262k texels in a cascade, all of it contending with the
 		// mesh worker for a grid that covers only a couple of dozen tiles.
 		const bool coarse = (detail == ESampleDetail::Coarse);
 		const double x1 = originX + step * (double)(resX - 1);

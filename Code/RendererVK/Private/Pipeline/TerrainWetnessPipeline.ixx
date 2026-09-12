@@ -13,7 +13,7 @@ import :Layout;
 // Terrain wetness clipmap: ONE persistent R16F image (two layers = ping/pong), TERRAIN_WET_RES^2 texels,
 // stored toroidally around the scene focus (terrain_wetness.inc.glsl has the addressing; the same scheme
 // as the GI probe clipmap). Per frame, terrain_wetness.cs.glsl reads last frame's layer (optionally
-// through a 3x3 diffusion tent — a shader define), decays it and wets the ground the live ocean surface
+// through a 3x3 diffusion tent - a shader define), decays it and wets the ground the live ocean surface
 // covers (the swash tongue, permanently submerged seabed) at a rate-limited wet-in, plus a uniform rain
 // term, into the other layer; the TERRAIN fragment shader samples the written layer to darken albedo and
 // drop roughness. GENERAL layout for its whole life, cleared once at init. Entirely UBO-driven
@@ -25,7 +25,7 @@ public:
     ~TerrainWetnessPipeline();
     TerrainWetnessPipeline(const TerrainWetnessPipeline&) = delete;
 
-    // onDefinesChanged: fired when a baked-define tweak (Diffusion / Diffusion spread) changes — the
+    // onDefinesChanged: fired when a baked-define tweak (Diffusion / Diffusion spread) changes - the
     // Renderer idles the GPU, calls reloadShaders and re-records (the light grid's pattern).
     void initialize(oc::function<void()> onDefinesChanged);
     void reloadShaders();
@@ -70,6 +70,6 @@ private:
     // "Terrain/Wetness" Diffusion toggle, BAKED as the WET_DIFFUSION define on the compute shader (the
     // tent reads per texel are not worth a uniform branch); a change reloads it. The spread RATE is
     // UBO-driven (Renderer::TerrainWetTweaks::diffusionRate, packed per frame with dt), so it is live
-    // and framerate independent — a define could not carry the frame delta.
+    // and framerate independent - a define could not carry the frame delta.
     bool m_diffusion = true;
 };

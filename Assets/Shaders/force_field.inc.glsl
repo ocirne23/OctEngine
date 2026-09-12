@@ -1,7 +1,7 @@
-// Forcefield bubble field math — THE single definition, consumed by the shell draw
+// Forcefield bubble field math - THE single definition, consumed by the shell draw
 // (force_shell.vs/fs.glsl) and the grid/force/query compute passes. Keep the lobe in sync with the
 // CPU mirror in Code/Force/Private/System.cpp (forceDistributionGain + the debug rings' closed-form
-// iso profile) — the debug rings and gameplay reason
+// iso profile) - the debug rings and gameplay reason
 // about the same field the pixels shade.
 //
 // Emitter model: the bubble spans EXACTLY the "output line" pos -> pos + dir * Reach, whatever the
@@ -9,14 +9,14 @@
 //   u^2 = X^2 + Y^2 * ((1 - X) / (1 + X))^m,   m = 1 - 2*focus
 //   w = Output * (1 - u^2)^2 * distGain(t)     for u < 1, else 0 (COMPACT SUPPORT, C1 falloff)
 // focus 0.5 (m = 0) is an EXACT sphere spanning the line; focus 0 an exact cone with its point at
-// the emitter; focus 1 the cone pointed at the target — one "pinch" slider, reach never changes.
+// the emitter; focus 1 the cone pointed at the target - one "pinch" slider, reach never changes.
 // distGain is a smooth bump at t = Distribution along the line (0 = density at the emitter end,
 // 1 = at the target), with its budget normalization pre-folded into Output on the CPU
 // (System.cpp forceDistributionMean) so total emitted field is conserved exactly.
 // A team's field phi[t] is the SUM of its emitters' w (merging). A point is inside team t where
 // phi[t] > iso AND phi[t] beats every other team; the drawn surface is
 //   F = phi[best] - max(iso, phi[secondBest]) = 0
-// — the equal-field pressure equilibrium, so squish and focused-cone pierce need no simulation.
+// - the equal-field pressure equilibrium, so squish and focused-cone pierce need no simulation.
 //
 // This include declares the compacted emitter buffer itself; the consumer sets
 // FORCE_EMITTERS_BINDING before including (default 1). Candidate enumeration: with FORCE_GRID
@@ -29,7 +29,7 @@
 
 // The LIVE team count (2..MAX_FORCE_TEAMS), injected per force pipeline from the game mode
 // (co-op = 2): every per-team loop and phi array is sized by it, so a 2-team mode pays a quarter
-// of the 8-team accumulation. MAX_FORCE_TEAMS stays the CAP — the UBO color array's size and the
+// of the 8-team accumulation. MAX_FORCE_TEAMS stays the CAP - the UBO color array's size and the
 // "outside every bubble" sentinel (never an index).
 #ifndef NUM_FORCE_TEAMS
 #define NUM_FORCE_TEAMS 8 // = MAX_FORCE_TEAMS, as a PLAIN literal (this macro is used in #if)
@@ -53,7 +53,7 @@ struct ForceEmitterData
 layout (binding = FORCE_EMITTERS_BINDING, std430) readonly buffer ForceEmitters
 {
     // fe_count = field-contributing emitters; fe_evalCount = fe_count + the FORCE_FLAG_PASSIVE tail
-    // (merge-group members that only want their own force/pressure readback — force_emitter.cs
+    // (merge-group members that only want their own force/pressure readback - force_emitter.cs
     // evaluates them, nothing else ever sees them).
     uint fe_count; uint fe_evalCount; uint fe_pad0; uint fe_pad1;
     ForceEmitterData fe_emitters[];
@@ -86,7 +86,7 @@ float forceContribution(vec3 x, ForceEmitterData e)
     const float Y2 = lat2 * (4.0 / (R * R)) * (invW * invW); // lateral, in (width*R/2)^2 units
     const float m = 1.0 - 2.0 * e.dirFocus.w;   // focus 0.5 -> 0 (sphere); 0/1 -> +-1 (cones)
     const float q = clamp((1.0 - X) / (1.0 + X), 1e-4, 1e4);
-    // Focus 0.5 (m exactly 0 — every merge-group sphere and most shields) skips the pow (exp+log).
+    // Focus 0.5 (m exactly 0 - every merge-group sphere and most shields) skips the pow (exp+log).
     const float u2 = X * X + Y2 * (m == 0.0 ? 1.0 : pow(q, m));
     if (u2 >= 1.0)
         return 0.0;
@@ -97,7 +97,7 @@ float forceContribution(vec3 x, ForceEmitterData e)
 // Conservative local bounds of an emitter's field support, shared by the proxy VS, the FS ray
 // interval, and the grid insert so they always agree. Local frame: +Z = emitter direction. The
 // support spans exactly [0, Reach] axially; max lateral half-width is R/2 for the sphere growing
-// to R at the full cones — bounded by (R/2)*(1 + |m|). Small slack covers normal-tap offsets.
+// to R at the full cones - bounded by (R/2)*(1 + |m|). Small slack covers normal-tap offsets.
 void forceEmitterBounds(ForceEmitterData e, out float side, out float forward, out float back)
 {
     const float R = e.posReach.w;
@@ -108,12 +108,12 @@ void forceEmitterBounds(ForceEmitterData e, out float side, out float forward, o
 }
 
 // The DRAWN box: forceEmitterBounds shrunk to the emitter's packed visible-surface extent
-// (teamFlags.w — CPU packVisibleBounds in Force/System.cpp: axial lo/hi in R units as two unorm8,
+// (teamFlags.w - CPU packVisibleBounds in Force/System.cpp: axial lo/hi in R units as two unorm8,
 // lateral fraction of `side` as unorm16; 0 = feature off or nothing above the reduced iso, keep
 // the full support box). The pack is the OWN-iso extent at iso x "Visible bounds iso frac"
-// (default 1.0 = tightest; lowering it adds merge slack — two sub-iso fields can SUM to a
+// (default 1.0 = tightest; lowering it adds merge slack - two sub-iso fields can SUM to a
 // surface outside either's own iso extent, and iso/2 covers an equal pair). Consumers: the
-// proxy VS, the interval FS and the shell FS's march interval — the GRID insert, the bake fits
+// proxy VS, the interval FS and the shell FS's march interval - the GRID insert, the bake fits
 // and every CPU mirror keep the FULL support box (the FIELD is unchanged, only the draw shrinks).
 void forceVisibleBounds(ForceEmitterData e, out float side, out float forward, out float back)
 {
@@ -126,10 +126,10 @@ void forceVisibleBounds(ForceEmitterData e, out float side, out float forward, o
     const float hi = float((p >> 8u) & 0xFFu) * (1.0 / 255.0);
     side *= float(p >> 16u) * (1.0 / 65535.0);
     forward = R * min(hi + 0.02, 1.02);
-    back = R * (0.02 - lo); // lo > 0.02: negative back — the box starts in FRONT of the emitter
+    back = R * (0.02 - lo); // lo > 0.02: negative back - the box starts in FRONT of the emitter
 }
 
-// The emitter's VISIBLE size: the bounding half-extent of its drawn (iso-shrunk) box — the actual
+// The emitter's VISIBLE size: the bounding half-extent of its drawn (iso-shrunk) box - the actual
 // bubble radius, not the authored Reach (a drained or narrow emitter is much smaller than its
 // support; a merged group sphere's reach is ~2x its bubble). THE sampled-tier metric: the shell FS
 // and the union ownership test compare this against u_forceBake0.w, and the CPU mirrors it
@@ -182,7 +182,7 @@ void forceAccumulateCell(vec3 x, uint cell, out float phi[NUM_FORCE_TEAMS])
         const float c = forceContribution(x, e);
         // NEVER a dynamic-index store (phi[e.teamFlags.x] += c): the NVIDIA compiler miscompiles
         // that on a 2-element private array (the add lands in BOTH elements for index 1 and in
-        // NEITHER for index 0 — φ0 == φ1 everywhere at NUM_FORCE_TEAMS 2). The compare inside the
+        // NEITHER for index 0 - φ0 == φ1 everywhere at NUM_FORCE_TEAMS 2). The compare inside the
         // unrolled per-team loop compiles to predicated adds and is correct at every team count.
         for (uint t = 0u; t < NUM_FORCE_TEAMS; ++t)
             phi[t] += e.teamFlags.x == t ? c : 0.0;
@@ -196,7 +196,7 @@ void forceAccumulate(vec3 x, out float phi[NUM_FORCE_TEAMS])
 
 // forceAccumulate plus a SHELL-VISIBLE variant of each team's field: every contribution also
 // scaled by its emitter's shell alpha (outputParams.y). The shading path weighs team colors and
-// contact glow by the VISIBLE fields, so an invisible emitter (alpha 0 — e.g. a map-scale gameplay
+// contact glow by the VISIBLE fields, so an invisible emitter (alpha 0 - e.g. a map-scale gameplay
 // field) still deforms bubble geometry but neither tints the junction color mix nor lights the
 // whole rim as a contested seam.
 void forceAccumulateVisible(vec3 x, out float phi[NUM_FORCE_TEAMS], out float phiVis[NUM_FORCE_TEAMS])
@@ -221,7 +221,7 @@ void forceAccumulateVisible(vec3 x, out float phi[NUM_FORCE_TEAMS], out float ph
 }
 
 // C1 smooth max (k = blend width; 0 = hard max). Used for the surface's opposing bound so the
-// shells meet the equilibrium wall in a rounded fillet instead of a hard crease — the crease's
+// shells meet the equilibrium wall in a rounded fillet instead of a hard crease - the crease's
 // discontinuous normals printed march-step-sized classification jaggies along the junction.
 float forceSmoothMax(float a, float b, float k)
 {
@@ -285,7 +285,7 @@ void forceSampleField(vec3 x, float iso, out uint bestTeam, out float bestPhi, o
     forceSampleFieldCell(x, forceCandidateCell(x), iso, bestTeam, bestPhi, secondPhi, F);
 }
 
-// The strongest single contributor of `team` at x — the OWNER of a shell surface point. Every proxy
+// The strongest single contributor of `team` at x - the OWNER of a shell surface point. Every proxy
 // marches its own box, so overlapping same-team proxies would shade a merged surface point once per
 // proxy; only the fragment whose instance IS the dominant contributor keeps it (compact support puts
 // the point inside the dominant emitter's own proxy, so exactly one fragment survives). Ties break

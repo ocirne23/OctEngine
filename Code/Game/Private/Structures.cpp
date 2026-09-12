@@ -15,7 +15,7 @@ import :Structures;
 // system owns (Transport.cpp: integer cells per segment, a fixed-rate job). THIS file is the core:
 // the per-type tables, the hover card, the tweaks, the per-frame tuning re-stamp, the nodes, the
 // request queues and the two tick entry points (authority / mirror) that sequence the topic units
-// (placement, network, economy, sync — see the list at the end of Structures.ixx).
+// (placement, network, economy, sync - see the list at the end of Structures.ixx).
 
 static constexpr const char* structureNames[] = { "Emitter", "Generator", "Connector", "Extractor",
     "Battery", "Fuel tank", "Solar", "Fabricator", "Bastion", "Lance", "Barracks", "Brute barracks",
@@ -41,7 +41,7 @@ float StructureSystem::spawnHeightOf(EStructureType type)
 
 // The build hotbar's HOVER CARD: one sentence, then this type's exact per-second flows (and what it
 // banks or does), one per line. Every number comes straight off the live tweaks, so a retuned
-// economy retunes the card — nothing here is a hand-written constant.
+// economy retunes the card - nothing here is a hand-written constant.
 oc::string StructureSystem::describeType(EStructureType type) const
 {
     // Every metric line is "<sign> <value> <unit>[ <note>]", so the card scans as one column:
@@ -57,7 +57,7 @@ oc::string StructureSystem::describeType(EStructureType type) const
         if (rate > 0.0f) line(oc::format("+ {:g} {}/s{}", rate, what, note)); };
     const auto banks = [&](float amount, const char* what) {
         line(oc::format("= {:g} {}", amount, what)); };
-    // ONE word for every kind of reach — a bubble's, a beam's, a heal radius, a build range —
+    // ONE word for every kind of reach - a bubble's, a beam's, a heal radius, a build range -
     // so the cards never make a player wonder whether "Reach" and "Radius" mean different things.
     const auto range = [&](float metres) { line(oc::format("Range {:g} m", metres)); };
     const GameStructureParams& p = GameStructureComponent::params;
@@ -224,7 +224,7 @@ glm::vec2 StructureSystem::structureFacing(int index) const
     return glm::vec2(forward.x, forward.z);
 }
 
-// (Declared in Structures.ixx — shared by every Game implementation unit.)
+// (Declared in Structures.ixx - shared by every Game implementation unit.)
 uint32 packColor(const glm::vec3& c)
 {
     const glm::vec3 s = glm::clamp(c, 0.0f, 1.0f) * 255.0f;
@@ -328,17 +328,17 @@ void StructureSystem::registerTweaks()
     Tweak::floatVar("Game/Structures", "Bastion output", &m_bastionOutput, 0.2f, 8.0f, 0.05f);
     Tweak::floatVar("Game/Structures", "Bastion reach", &m_bastionReach, 2.0f, 46.0f, 0.5f);
     // The lance's Width 0.2 + Focus 0.85 concentrate a CONSERVED total (~25x+ local density), so
-    // its useful output range sits far below the other emitters' — hence the tiny floor.
+    // its useful output range sits far below the other emitters' - hence the tiny floor.
     Tweak::floatVar("Game/Structures", "Lance output", &m_lanceOutput, 0.01f, 8.0f, 0.01f);
     Tweak::floatVar("Game/Structures", "Lance reach", &m_lanceReach, 2.0f, 46.0f, 0.5f);
     Tweak::floatVar("Game/Structures", "Emitter shrink time", &m_emitterShrinkTime, 0.05f, 10.0f, 0.05f);
     Tweak::floatVar("Game/Structures", "Emitter grow time", &m_emitterGrowTime, 0.05f, 10.0f, 0.05f);
     Tweak::floatVar("Game/Structures", "Emitter restart charge", &m_emitterRestartCharge, 0.0f, 100.0f, 0.5f);
     Tweak::floatVar("Game/Structures", "Health max", &m_structureHealthMax, 10.0f, 1000.0f, 1.0f);
-    // The territory drain runs in GameStructureComponent::update — tune its shared param.
+    // The territory drain runs in GameStructureComponent::update - tune its shared param.
     Tweak::floatVar("Game/Structures", "Damage/s in enemy field",
         &GameStructureComponent::params.fieldDamageRate, 0.0f, 100.0f, 0.5f);
-    // Production tuning consumed by the component's machine logic (names unchanged — the saved
+    // Production tuning consumed by the component's machine logic (names unchanged - the saved
     // cfg keys keep applying).
     GameStructureParams& sp = GameStructureComponent::params;
     Tweak::intVar("Game/Friendlies", "Barracks population", &m_barracksPopulation, 0, 200, 1);
@@ -370,7 +370,7 @@ void StructureSystem::registerTweaks()
 void StructureSystem::refresh()
 {
     ProfileScope scope("Structures refresh", EProfileCategory::Game);
-    // The roster is maintained at the spawn/remove seams (no world query — type, node and id index
+    // The roster is maintained at the spawn/remove seams (no world query - type, node and id index
     // were recorded at spawnStructure); only the live tuning re-stamps per frame so tweaks apply.
     linkHouses(); // house counts feed the barracks' population cap stamped below
     for (const Ref& s : m_frame)
@@ -419,7 +419,7 @@ void StructureSystem::stampTuning(const Ref& s)
     c.capacity[0] = energyCapacityOf(s.type);
     c.capacity[1] = fuelCapacityOf(s.type);
     c.capacity[2] = mineralCapacityOf(s.type);
-    // A BARRACKS' energy capacity is its selected unit's cost (the build bar) — resolved HERE,
+    // A BARRACKS' energy capacity is its selected unit's cost (the build bar) - resolved HERE,
     // before the store clamp below: energyCapacityOf's 1.0 attach placeholder would otherwise
     // clamp the store to 1 every tick (the bar sat at 1 forever).
     if (isBarracksType(s.type))
@@ -429,14 +429,14 @@ void StructureSystem::stampTuning(const Ref& s)
         c.barracks.spawnCost = m_spawnEnergy[c.barracks.unitType];
         c.capacity[0] = glm::max(c.barracks.spawnCost, 1.0f);
     }
-    // A TURRET's energy capacity is ONE SHOT — the same rule, so its store reads as a RELOAD bar
+    // A TURRET's energy capacity is ONE SHOT - the same rule, so its store reads as a RELOAD bar
     // and a full one fires. Resolved here for the same reason: before the store clamp.
     else if (s.type == EStructureType::Turret)
         c.capacity[0] = glm::max(GameStructureComponent::params.turretShotEnergy, 0.01f);
     for (int m = 0; m < 3; ++m)
         c.store[m] = glm::min(c.store[m], c.capacity[m]);
-    // (Cables hold NO stores — capacity 0 everywhere: they are transport nodes, never endpoints.
-    // Roles — producer / consumer / storage per medium — and the METERED intakes of the barracks
+    // (Cables hold NO stores - capacity 0 everywhere: they are transport nodes, never endpoints.
+    // Roles - producer / consumer / storage per medium - and the METERED intakes of the barracks
     // and turret are resolved by the transport's inject, see transportInject.)
     // The union's machine variant (barracks spawn / turret fire logic runs per-entity in the
     // component update; the selected unit type's prices + the population cap are stamped here so
@@ -459,7 +459,7 @@ void StructureSystem::stampTuning(const Ref& s)
 
 void StructureSystem::clear()
 {
-    // Teardown: silent (no GRm hooks). Deregister the whole roster FIRST — removeRootEntity's
+    // Teardown: silent (no GRm hooks). Deregister the whole roster FIRST - removeRootEntity's
     // onWorldRootRemoved callback then no-ops instead of mutating m_frame under the loop.
     oc::vector<Ref> roster = oc::move(m_frame);
     m_frame.clear();
@@ -502,7 +502,7 @@ void StructureSystem::spawnNode(float x, float z, ENodeType type)
 void StructureSystem::clearNodes()
 {
     // Co-op map regeneration only (a new seed re-places the whole set). Structures referencing a
-    // node by index are cleared by the caller around this — every nodeIndex access elsewhere is
+    // node by index are cleared by the caller around this - every nodeIndex access elsewhere is
     // bound-checked, so a brief count mismatch cannot read out of range.
     for (Node& n : m_nodes)
         if (n.entity)
@@ -592,13 +592,13 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
         const int index = structureIndexById(request.id);
         if (index < 0 || !isBarracksType(m_frame[index].type)
             || m_frame[index].state->team != request.team)
-            continue; // died, not a barracks, or someone else's — refused (the MP seam)
+            continue; // died, not a barracks, or someone else's - refused (the MP seam)
         GameStructureComponent& s = *m_frame[index].state;
         request.points.resize(glm::min(request.points.size(), (size_t)MaxRouteWaypoints));
         s.route = oc::move(request.points);
         if (onRouteChanged)
             onRouteChanged(request.id);
-        // LIVE ORDERS: units already spawned from this barracks pick the new route up too — a
+        // LIVE ORDERS: units already spawned from this barracks pick the new route up too - a
         // World root walk via the GameMatch-wired hook (units are World roots, no roster here).
         if (onRouteLiveUnits)
             onRouteLiveUnits(request.id, oc::span<const glm::vec3>(s.route.data(), s.route.size()));
@@ -609,7 +609,7 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
         const int index = structureIndexById(request.id);
         if (index < 0 || !isBarracksType(m_frame[index].type)
             || m_frame[index].state->team != request.team || !isBarracksUnitType(request.unitType))
-            continue; // died, not a barracks, someone else's, or garbage — refused (the MP seam)
+            continue; // died, not a barracks, someone else's, or garbage - refused (the MP seam)
         GameStructureComponent& s = *m_frame[index].state;
         if (s.barracks.unitType == request.unitType)
             continue;
@@ -629,12 +629,12 @@ void StructureSystem::tickAuthority(const glm::vec3&, float deltaSec)
     tickProduction(deltaSec);
     // Death sweep BEFORE constructors: last frame's damage lands after this tick (contacts +
     // entity pass), so the sweep must judge it before a repair trickle can resurrect a 0-hp
-    // structure — repairs-first made buildings unkillable inside any constructor's range (the
+    // structure - repairs-first made buildings unkillable inside any constructor's range (the
     // heal always ran between the killing blow and the sweep). A structure that ends a frame at
     // EXACTLY 0 now dies; anything above 0 can still be out-healed legitimately.
     tickDamage(deltaSec);
     tickConstructors(deltaSec);
-    // The transport: inject the due runs' supply/demand and kick the job — it overlaps present
+    // The transport: inject the due runs' supply/demand and kick the job - it overlaps present
     // and the next frame's front, joined at the top of the next tick.
     m_transportTime += deltaSec;
     kickTransport();
@@ -644,10 +644,10 @@ void StructureSystem::tickMirror(float deltaSec)
 {
     ProfileScope scope("Structures mirror", EProfileCategory::Game);
     refresh();
-    rebuildNetworks(); // clients derive the graph locally from the mirrored structures — same
+    rebuildNetworks(); // clients derive the graph locally from the mirrored structures - same
                        // code, same inputs; the fills arrive by id (GCf), nothing is simulated
     // Ease each emitter's fraction toward the synced target at ramp-like speed, then drive the
-    // LOCAL field from it — the bubble animates as smoothly as the server's own.
+    // LOCAL field from it - the bubble animates as smoothly as the server's own.
     for (const Ref& ref : m_frame)
     {
         if (!hasShieldEmitter(ref.type))

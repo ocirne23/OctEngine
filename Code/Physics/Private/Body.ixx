@@ -4,7 +4,7 @@ import Core;
 import Core.glm;
 
 // Parallel entity spawning: box3d's body create/destroy mutate shared world arrays (body pools,
-// broadphase), so concurrent spawn/despawn jobs serialize on this ONE module-wide mutex —
+// broadphase), so concurrent spawn/despawn jobs serialize on this ONE module-wide mutex -
 // PhysicsWorld::createBody and PhysicsBody::destroy both take it. Everything else that writes
 // box3d stays main-thread-only (or rides the body-command queue) per the standing contract, so
 // no other box3d call needs it. Namespace scope per the /Zc:threadSafeInit- rule; a std::mutex

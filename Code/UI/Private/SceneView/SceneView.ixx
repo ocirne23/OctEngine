@@ -43,7 +43,7 @@ private:
 	// then drops it on the next render once the entity is no longer in the world.
 	EntityPtr m_selected;
 	Entity* m_renamingEntity = nullptr;
-	bool    m_panelFocused   = false;  // Scene panel (or a child of it) had keyboard focus this frame — gates F2/Delete
+	bool    m_panelFocused   = false;  // Scene panel (or a child of it) had keyboard focus this frame - gates F2/Delete
 	bool    m_focusRenameNext = false;
 	bool    m_worldOpen       = true;
 	char    m_renameBuffer[256] = {};

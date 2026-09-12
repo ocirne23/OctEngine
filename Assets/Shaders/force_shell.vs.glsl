@@ -2,7 +2,7 @@
 
 // Forcefield shell proxies: 36 vertices per instance (a unit cube, outward CCW winding), one
 // instance per compacted live emitter, oriented and sized to the emitter's directional reach bounds
-// (force_field.inc.glsl forceEmitterBounds — the FS intersects the same box for its march interval).
+// (force_field.inc.glsl forceEmitterBounds - the FS intersects the same box for its march interval).
 // Front faces are culled and the fixed-function depth test is off (the camera can be inside a
 // bubble); the fragment shader ray-marches the analytic team field inside the box.
 

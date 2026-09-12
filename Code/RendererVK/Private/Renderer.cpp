@@ -86,7 +86,7 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
             m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_maxTextures);
             setHaveToRecordCommandBuffers();
         });
-    // Wireframe is baked pipeline state (polygonMode), so flipping it rebuilds the static mesh pipeline —
+    // Wireframe is baked pipeline state (polygonMode), so flipping it rebuilds the static mesh pipeline -
     // same GPU-idle + reload pattern as the RTAO alpha-test and ocean hit-lighting tweaks.
     Tweak::boolean("Editor", "Wireframe", &m_wireframe, [this]() {
         if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
@@ -107,7 +107,7 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
         m_giProbePipeline.reloadDebugShaders(m_perFrameData[0].sceneColor.getRenderPass());
         setHaveToRecordCommandBuffers();
     });
-    // GI probe debug cubes — the same state the testbed's P / O keys flip. Enabled is a per-frame stage
+    // GI probe debug cubes - the same state the testbed's P / O keys flip. Enabled is a per-frame stage
     // flag; the colour mode and radius are push constants in the cached debug secondary, so they re-record.
     Tweak::boolean("GI", "Debug probes", &m_giProbeDebugEnabled);
     {
@@ -123,7 +123,7 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     Tweak::boolean("Decals", "Enabled", &m_decalsEnabled);
     // Present mode is swapchain creation state (FIFO vs Immediate), so a change recreates the
     // swapchain (device idle + re-init, same path as a lost acquire). A saved/override value fires
-    // onChange at registration, before the swapchain exists — the first creation below reads the
+    // onChange at registration, before the swapchain exists - the first creation below reads the
     // variable directly, so the callback only acts once initialized. Main-thread: the panel's
     // onChange runs in UI::flushMainThreadWork, between the frame-slot wait and present.
     Tweak::boolean("Time", "VSync", &m_vsyncEnabled, [this]() { if (m_initialized) recreateSwapchain(); }, ETweakFlags::Saved);
@@ -486,7 +486,7 @@ void Renderer::reloadShaders()
 void Renderer::setOceanParams(const OceanParams& ocean)
 {
     // OCEAN_HIT_LIGHTS is a compile-time variant define: flipping the tweak rebuilds the ocean fragment
-    // pipeline (GPU idle first — cached CBs reference the old pipeline; the re-record this queues happens
+    // pipeline (GPU idle first - cached CBs reference the old pipeline; the re-record this queues happens
     // in present(), so a mid-frame toggle is safe). Same pattern as the RTAO alpha-test tweak.
     const bool rebuildOceanVariant = ocean.hitLighting != m_oceanParams.hitLighting;
     m_oceanParams = ocean;
@@ -510,7 +510,7 @@ void Renderer::setTerrainSplatMaterials(oc::span<const TerrainSplatMaterial> mat
     assert(mats.size() <= RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS);
     assert((size_t)counts.numGround + counts.numRock + (counts.hasBeach ? 1 : 0) + (counts.hasSnow ? 1 : 0) == mats.size()
         && "counts must describe the whole [ground][rock][beach?][snow?] span");
-    // Replacing a live set: the old images may still be sampled in flight — same deferred free path as
+    // Replacing a live set: the old images may still be sampled in flight - same deferred free path as
     // ObjectContainer teardown (processed in present() after the GPU drain). The old material slots are
     // not recycled (nothing tracks their range), but a set replacement is a rare config-refresh event.
     m_pendingTextureFrees.insert(m_pendingTextureFrees.end(), m_terrainSplatTextures.begin(), m_terrainSplatTextures.end());
@@ -565,7 +565,7 @@ bool Renderer::waitFrameSlot(uint64 timeoutNs)
 {
     // This frame slot's fence must be waited BEFORE anything writes its host-visible per-frame buffers
     // (renderNode instance memcpys, LOD meshIdx redirects, firstInstance prefix sums, sparse transform
-    // uploads) — the wait inside acquireNextImage happens at the END of the CPU frame, after all those
+    // uploads) - the wait inside acquireNextImage happens at the END of the CPU frame, after all those
     // writes. Without this, the CPU scribbles over the slot while frame N-2 still reads it on the GPU;
     // invisible while per-frame data is byte-identical, but LOD switches change instance meshIdx en
     // masse and the torn instance/prefix data made the cull's buckets overflow into neighbouring
@@ -598,7 +598,7 @@ bool Renderer::waitFrameSlot(uint64 timeoutNs)
     return true;
 }
 
-// The one place the culling/center view-projection is built — beginFrame (via buildUboViews) and
+// The one place the culling/center view-projection is built - beginFrame (via buildUboViews) and
 // computeCullFrustum must agree bit-exactly, or the spatial cull and the GPU cull would disagree.
 glm::mat4 Renderer::computeCenterViewProj(const Camera& camera) const
 {
@@ -629,14 +629,14 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
     setViewportRect(viewportRect); // first: this frame's projection is built from the viewport's aspect below
 
     // The slot's fence is waited at the loop top (waitFrameSlot); anything that reached here without
-    // it is a main-loop ordering bug — but never run unsynchronized, so wait now (asserting).
+    // it is a main-loop ordering bug - but never run unsynchronized, so wait now (asserting).
     assert(m_frameSlotWaited && "Renderer::waitFrameSlot() must run at the top of the frame, before any per-slot writes");
     waitFrameSlot();
 
     // This slot's fence is waited, so its previous submission's GPU timestamps have landed. The
     // readback (two driver calls + the track pushes) needs nothing from this frame, so it runs as a
     // job across the sim; recordCommandBuffers joins it before beginRecord resets the slot's scope
-    // list + query pool. One job in flight at a time keeps the GPU track single-writer — the wait
+    // list + query pool. One job in flight at a time keeps the GPU track single-writer - the wait
     // here only ever spins if the last present() bailed before recording (acquire failure).
     Globals::jobSystem.wait(m_gpuCollectCounter);
     Globals::jobSystem.submit([this, collectFrameIdx = m_swapChain.getCurrentFrameIndex()] { m_gpuProfiler.collect(collectFrameIdx); },
@@ -681,7 +681,7 @@ void Renderer::kickBeginFrameJob(const Camera& camera, const Rect& viewportRect)
     m_beginFrameJobRect = viewportRect;
     if (Globals::openXR.isEnabled())
     {
-        m_beginFrameDeferred = true; // xrWaitFrame owns VR pacing and would pin a worker — run at the join instead
+        m_beginFrameDeferred = true; // xrWaitFrame owns VR pacing and would pin a worker - run at the join instead
         return;
     }
     Globals::jobSystem.submit([this] { beginFrame(m_beginFrameJobCamera, m_beginFrameJobRect); },
@@ -707,7 +707,7 @@ CullView Renderer::getCullView(const Camera& camera, const Rect& viewportRect)
     if (!Globals::openXR.isEnabled())
     {
         view.camera = camera;
-        view.frustum = computeCullFrustum(camera, viewportRect); // publishes m_centerViewProj — read below
+        view.frustum = computeCullFrustum(camera, viewportRect); // publishes m_centerViewProj - read below
         view.valid = true;
     }
     else
@@ -891,7 +891,7 @@ void Renderer::buildUboViews(const Camera& cameraIn, const Camera& camera, const
         (float)viewportSize.x / (float)swapExtent.width,
         (float)viewportSize.y / (float)swapExtent.height);
     // zw = LAST frame's jitter: TAA/AO-temporal compensate both frames' jittered depth images during
-    // reprojection (all raster passes jitter, the prepass included — see taaJitterUv in shared.inc.glsl).
+    // reprojection (all raster passes jitter, the prepass included - see taaJitterUv in shared.inc.glsl).
     ubo.taaJitter = glm::vec4(taaJitterNdc, m_prevTaaJitter);
     m_prevTaaJitter = taaJitterNdc;
 }
@@ -934,7 +934,7 @@ void Renderer::buildUboSky()
     ubo.atmosParams = glm::vec4(sky.rayleighHeight, sky.mieHeight, sky.mieExtinction, sky.ozone);
 
     // Sun transmittance at ground level: the CPU mirror of atmosphere.inc.glsl's
-    // atmosTransmittanceToLight(0, sunDir, up) — Chapman optical depth (r = planet radius, h = 0),
+    // atmosTransmittanceToLight(0, sunDir, up) - Chapman optical depth (r = planet radius, h = 0),
     // atmosTau, exp. Constant per frame, so the lit fragment shaders read u_sunTransmittance instead of
     // evaluating it per pixel. KEEP IN SYNC with the GLSL constants (ATMOS_R_PLANET, ATMOS_BETA_OZONE).
     {
@@ -1008,7 +1008,7 @@ void Renderer::buildUboFog()
     const FogParams& fog = m_fogParams;
 
     // A freshly uploaded fog terrain height map activates here, in the same frame slot as the UBO that
-    // carries its world center/sizes — descriptors (refreshed per frame in recordCommandBuffers) and
+    // carries its world center/sizes - descriptors (refreshed per frame in recordCommandBuffers) and
     // params stay coherent. Presence (fogParams3.y) is independent of Terrain Follow: the ocean also
     // reads these cascades as its shore-map fallback.
     m_fogTerrainMap.flipIfPending();
@@ -1026,13 +1026,13 @@ void Renderer::buildUboFog()
         glm::clamp(fog.regionStrength, 0.0f, 1.0f), // z: baked regional fog-thickness modulation
         glm::max(fog.underwaterDensity, 0.0f));     // w: density multiplier below the local water surface
     // x: underwater fog boundary margin (m) relative to the LIVE wave surface (the fog scatter samples
-    // the FFT displacement maps directly). y: the waterline band half-height gating those samples —
+    // the FFT displacement maps directly). y: the waterline band half-height gating those samples -
     // froxel segments outside +-band of the calm level are trivially above/below any possible wave, so
     // only a thin shell pays for wave taps. The CPU trough estimate (ocean readback) bounds the wave
     // amplitude; 0 disables wave sampling entirely (ocean off).
     // The band must also cover the swash RUN-UP (amplitude x (trough + 0.25), the same reach
     // buildUboOcean packs into oceanParams7.w): with a large swash amplitude the tongue climbs past
-    // 2 x trough, and froxels beyond the band got the calm level while their neighbours got the wave —
+    // 2 x trough, and froxels beyond the band got the calm level while their neighbours got the wave -
     // a line in the fog's caustics that moved with the amplitude.
     const float swashReachBand = glm::clamp(m_oceanParams.swashAmp, 0.0f, 4.0f) * (m_oceanWaveTrough + 0.25f);
     const float waveBand = m_oceanParams.enabled ? glm::max(m_oceanWaveTrough * 2.0f + 0.5f, swashReachBand) : 0.0f;
@@ -1069,7 +1069,7 @@ void Renderer::buildUboOcean()
     ubo.oceanParams6 = glm::vec4(glm::max(ocean.farCullError, 0.0f), glm::max(ocean.glintFilter, 0.0f),
         glm::max(ocean.sssStrength, 0.0f), glm::max(ocean.sssPower, 1.0f));
     // Swash reach: conservative max run-up height from the wave-amplitude readback (trough estimate ~
-    // crest scale) — sizes the on-land sampling band and keeps the vertex cull off the wet beach.
+    // crest scale) - sizes the on-land sampling band and keeps the vertex cull off the wet beach.
     const float swashAmp = glm::clamp(ocean.swashAmp, 0.0f, 4.0f);
     const float swashReach = swashAmp * (m_oceanWaveTrough + 0.25f);
     ubo.oceanParams7 = glm::vec4(glm::max(ocean.cullMargin, 0.0f), glm::clamp(ocean.shoreFoamMax, 0.0f, 1.0f), swashAmp, swashReach);
@@ -1093,7 +1093,7 @@ void Renderer::buildUboForce()
         glm::max(force.geoGlowDistance, 0.0f), (float)glm::clamp(force.marchSteps, 8, 256));
     ubo.forceParams2 = glm::vec4(glm::max(force.patternScale, 0.0f), force.patternSpeed,
         glm::max(force.patternIntensity, 0.0f),
-        // w: the shell march's LOD scale — (px per radius/dist) / full-detail radius, so the FS's
+        // w: the shell march's LOD scale - (px per radius/dist) / full-detail radius, so the FS's
         // steps taper as side/dist * this (clamped <= 1); 0 disables the taper.
         m_mipPixelScale * 0.5f / glm::max(force.shellFullResPixels, 1.0f));
     ubo.forceParams3 = glm::vec4(glm::clamp(force.interiorAlpha, 0.0f, 1.0f),
@@ -1102,7 +1102,7 @@ void Renderer::buildUboForce()
     ubo.forceParams4 = glm::vec4(0.0f /* x unused: the density view is the FORCE_DENSITY_VIEW define */, glm::max(force.densityRange, 1e-3f), 0.0f, 0.0f);
 
     // SAMPLED SHELL TIER: fit the bake volume over the union of the LARGE drawable emitters'
-    // support boxes (+ margin) — the FIXED texel grid's resolution then self-adjusts to the active
+    // support boxes (+ margin) - the FIXED texel grid's resolution then self-adjusts to the active
     // spread. No qualifying emitter (or tier off) = no bake dispatch and the FS branch stays cold.
     glm::vec3 bakeLo(FLT_MAX), bakeHi(-FLT_MAX);
     if (force.sampledShellRadius > 0.0f)
@@ -1125,7 +1125,7 @@ void Renderer::buildUboForce()
     // VIEW FOOTPRINT CLIP (XZ): the volume only has to cover what is on screen. The four corner
     // rays hit the union's height band at eight points; their XZ box (+ "Volume view margin") clips
     // the fit, so the fixed texel grid follows the zoom instead of stretching over every large
-    // bubble in the world — a 7 m bubble 100 m off-screen no longer halves a 40 m shell's
+    // bubble in the world - a 7 m bubble 100 m off-screen no longer halves a 40 m shell's
     // resolution. Outside the clipped fit the volume reads border black, but that boundary lies
     // outside the view by construction. A ray that misses the band (camera looking up: the
     // free-fly editor camera) leaves the union unclipped.
@@ -1204,7 +1204,7 @@ void Renderer::buildUboForce()
 
     ubo.forceBake2 = glm::vec4(glm::max(force.unionStepSize, 0.05f),
         (float)glm::clamp(force.unionMaxSteps, 8, 512),
-        m_mipPixelScale * 0.5f,                // z: px per (radius/dist) — the union march's distance LOD
+        m_mipPixelScale * 0.5f,                // z: px per (radius/dist) - the union march's distance LOD
         cameraInside ? 1.0f : 0.0f);           // w: the camera-inside bit
 }
 
@@ -1271,7 +1271,7 @@ void Renderer::buildUboTerrain()
     static_assert(sizeof(ubo.terrainSplatClimate) == sizeof(m_terrainSplatClimate));
     memcpy(ubo.terrainSplatClimate, m_terrainSplatClimate, sizeof(m_terrainSplatClimate));
     // The splat textures belong to no rendered instance's material, so the projected-size priority pass
-    // never sees them — report them here instead: terrain tiles them across the whole view, so they can
+    // never sees them - report them here instead: terrain tiles them across the whole view, so they can
     // always display roughly a screen's worth of texels.
     if (m_terrainSplatBaseMaterial >= 0)
     {
@@ -1589,7 +1589,7 @@ void Renderer::setForceFieldParams(const ForceFieldParams& params)
     // The grid toggle and the LIVE team count are compile-time shader defines (FORCE_GRID /
     // NUM_FORCE_TEAMS): rebuild the force pipelines, same GPU-idle + reload pattern as the ocean
     // hit-lighting tweak. A team-count change additionally remakes the team-sized bake
-    // volume/buffers (setNumTeams) — a game-mode event, never per-frame.
+    // volume/buffers (setNumTeams) - a game-mode event, never per-frame.
     const uint32 numTeams = glm::clamp(params.numTeams, 2u, RendererVKLayout::MAX_FORCE_TEAMS);
     if (params.useGrid != m_forceFieldPipeline.getUseGrid()
         || params.densityView != m_forceFieldPipeline.getDensityView() // FORCE_DENSITY_VIEW: the debug overlay is a define too
@@ -1706,7 +1706,7 @@ void Renderer::setSunLight(const glm::vec3& direction, const glm::vec3& color, f
 // the UI points its snapshot's ImDrawData::Textures at null (the documented "control the timing of
 // texture updates yourself" path) and the uploads happen HERE instead, on the main thread in the
 // window between the widget pass's join and the next UI::update, when the context is quiescent. A
-// glyph baked by pass N uploads at the top of frame N+1, before the present that draws it — and
+// glyph baked by pass N uploads at the top of frame N+1, before the present that draws it - and
 // THIS is also where pass N's snapshot becomes the one present records (the job only parks it as
 // pending): a pass that finished before present N recorded must not be drawn a frame early, with
 // its new textures still unuploaded.
@@ -1767,7 +1767,7 @@ void Renderer::present()
     transformScope.stop();
     ProfileScope bucketScope("Instance buckets + flushes", EProfileCategory::Renderer);
     // Bucket layout for the GPU culls: instances are pushed referencing LOD0, and the cull redirects
-    // each one to its selected level — so every member of a LOD chain gets a bucket sized to the
+    // each one to its selected level - so every member of a LOD chain gets a bucket sized to the
     // CHAIN's instance count (any split of the instances across levels fits). Non-chain meshes keep
     // exact buckets. The expansion can exceed the pushed instance count; the instance-index buffers
     // are sized to m_maxInstanceData, so grow when the expanded total outruns it.
@@ -1907,7 +1907,7 @@ void Renderer::present()
         if (!m_swapChain.acquireNextImage())
         {
             // The primary CB will not be submitted this frame, so registering the staging semaphore on
-            // it would leave the signal without a waiter — and the next flush that cycles back to that
+            // it would leave the signal without a waiter - and the next flush that cycles back to that
             // semaphore would re-signal it while still signaled (invalid for a binary semaphore). Hand
             // it back to the chain instead: the next flush waits it.
             Globals::stagingManager.restoreChainSemaphore(waitSemaphore);
@@ -2312,7 +2312,7 @@ uint32 Renderer::allocateSkinningPalette(uint32 boneCount)
 {
     const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
     // The palette store is a bump allocator; freed regions (destroyed containers) are recycled on an
-    // exact boneCount match — same-skeleton respawns, the common case — instead of tracking sub-ranges.
+    // exact boneCount match - same-skeleton respawns, the common case - instead of tracking sub-ranges.
     for (size_t i = 0; i < m_freeSkinningPaletteHandles.size(); ++i)
     {
         const uint32 handle = m_freeSkinningPaletteHandles[i];
@@ -2512,7 +2512,7 @@ void Renderer::recordShadowDraw(uint32 frameIdx)
 
 void Renderer::recordReuseDepthBarrier(vk::CommandBuffer cb, vk::Image gbufferDepth, uint32 eyeIndex, bool toAttachment)
 {
-    // Reads only on both sides (the reuse pass tests depth read-only; AO/fog/TAA sample) — nothing to
+    // Reads only on both sides (the reuse pass tests depth read-only; AO/fog/TAA sample) - nothing to
     // flush, so srcAccess stays empty and the barrier is an execution dependency + the layout transition.
     const vk::ImageMemoryBarrier2 barrier{
         .srcStageMask = toAttachment ? (vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader)
@@ -3125,7 +3125,7 @@ bool Renderer::recordGlobalIllum(uint32 frameIdx)
         {
             // Skinned output regions never build static BLASes: their data is uninitialized until the
             // skinning compute runs, and their address entries are owned per frame slot by the skinned
-            // rebuild — a static build entering compaction would clobber them with a garbage BLAS.
+            // rebuild - a static build entering compaction would clobber them with a garbage BLAS.
             if (!m_meshIsSkinnedOutput[meshIdx])
                 buildList.push_back(meshIdx);
         }
@@ -3134,7 +3134,7 @@ bool Renderer::recordGlobalIllum(uint32 frameIdx)
             m_meshInfosBuffer.getBackingStoreAs<RendererVKLayout::MeshInfo>().data(), m_meshVertexCounts.data(), buildList,
             m_rtParams.blasCompaction);
         // No GI clear here: new meshes (terrain streaming!) leave the persistent probe volume intact.
-        // Stale irradiance around new geometry self-corrects — embedded probes relocate out the next
+        // Stale irradiance around new geometry self-corrects - embedded probes relocate out the next
         // frame (with a fast history re-sync), the rest re-converge at the temporal blend rate.
     }
 
@@ -3207,10 +3207,10 @@ bool Renderer::recordGlobalIllum(uint32 frameIdx)
         vk::AccessFlagBits2::eAccelerationStructureReadKHR | vk::AccessFlagBits2::eShaderStorageRead);
 
     // 5. Trace rays per clipmap probe and temporally blend irradiance into the SH. The probe set and
-    // its toroidal window are derived from the SCENE FOCUS (this frame's u_sceneFocus in the UBO — the
+    // its toroidal window are derived from the SCENE FOCUS (this frame's u_sceneFocus in the UBO - the
     // player in game mode, else the camera); probes that scrolled in since last frame (relative to
     // m_giPrevFocusPos) are full-replaced rather than blended.
-    // Gated by the GI toggle — the TLAS built above still serves RTAO and RT shadows when GI is off.
+    // Gated by the GI toggle - the TLAS built above still serves RTAO and RT shadows when GI is off.
     if (m_rtParams.giEnabled)
     {
     GIProbePipeline::TraceParams traceParams{
@@ -3287,7 +3287,7 @@ void Renderer::recordCommandBuffers()
     const bool recordScene = !frameData.updated && m_meshInstanceCounter > 0;
 
     // Baked terrain-data cascades: point this slot's sets at the active ping-pong image
-    // (UPDATE_AFTER_BIND, like the AO/TLAS bindings — a re-bake swaps images without re-recording
+    // (UPDATE_AFTER_BIND, like the AO/TLAS bindings - a re-bake swaps images without re-recording
     // anything). The ocean passes read them for water depth/level (shoaling, surf, swash, land cull).
     // Rewritten only when this slot's sets re-record (recreated sets always come with a
     // setHaveToRecordCommandBuffers) or the ping-pong flipped since this slot last wrote (generation).
@@ -3361,7 +3361,7 @@ void Renderer::recordCommandBuffers()
             recordParticles(frameIdx);
             recordAO(frameIdx);
             recordFogApply(frameIdx);
-            if (m_taaParams.taaEnabled) // bypassed entirely when off — nothing to record or execute
+            if (m_taaParams.taaEnabled) // bypassed entirely when off - nothing to record or execute
                 recordTaa(frameIdx);
         }
         frameData.updated = true;
@@ -3372,7 +3372,7 @@ void Renderer::recordCommandBuffers()
         if (m_meshInstanceCounter > 0 && recordGlobalIllum(frameIdx))
         {
             // TLAS handle changed: the forward sets written at the last scene record hold the old
-            // (now destroyed) handle — rewrite them alongside the re-record of the passes that bake it.
+            // (now destroyed) handle - rewrite them alongside the re-record of the passes that bake it.
             for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)
                 m_staticMeshGraphicsPipeline.updateTlasDescriptor(frameData.staticMeshPipelineDescriptorSet[eye].getDescriptorSet(), m_accelStructure.getTlas(frameIdx));
             if (m_sceneViewCount == 1)
@@ -3427,12 +3427,12 @@ void Renderer::recordCommandBuffers()
     vk::CommandBuffer vkCommandBuffer = commandBuffer.begin(true);
     // GPU pass timings: timestamps live in the primary (re-recorded every frame) and OUTSIDE render
     // passes only; results are collected by a job kicked in beginFrame when this slot's fence is next
-    // waited — join it before beginRecord resets the slot's scope list + query pool it reads.
+    // waited - join it before beginRecord resets the slot's scope list + query pool it reads.
     Globals::jobSystem.wait(m_gpuCollectCounter);
     m_gpuProfiler.beginRecord(vkCommandBuffer, frameIdx);
     m_gpuProfiler.beginScope(vkCommandBuffer, "GPU Frame");
     // Pending baked-map uploads (fog terrain cascades): copied here in the primary (re-recorded
-    // every frame) because the destination ping-pong images were sampled by older submissions — the
+    // every frame) because the destination ping-pong images were sampled by older submissions - the
     // transitions need an execution dependency on those reads, which the StagingManager's fresh-image
     // upload path doesn't emit.
     m_fogTerrainMap.recordUpload(commandBuffer);
@@ -3565,7 +3565,7 @@ void Renderer::recordCommandBuffers()
                     recordAOInto(commandBuffer, frameIdx, eye); // compute AO for this eye
 
                 // This eye's forward set (AO view + TLAS) is written at scene-record time and on TLAS
-                // handle changes — see recordCommandBuffers' recordScene / GI-changed blocks.
+                // handle changes - see recordCommandBuffers' recordScene / GI-changed blocks.
                 { // Forward (+ fog apply) into this eye's SceneColor layer; depth = prepass depth read-only when reusing
                     if (m_depthPrepassReuse)
                         recordReuseDepthBarrier(vkCommandBuffer, gbuffer.getDepthImage(), eye, true);
@@ -3682,7 +3682,7 @@ void Renderer::recordCommandBuffers()
                 m_gpuProfiler.endScope(vkCommandBuffer);
             }
             // The forward set's AO view + TLAS are written at scene-record time and on TLAS handle
-            // changes — see the recordScene / GI-changed blocks above.
+            // changes - see the recordScene / GI-changed blocks above.
 
             { // The union march's interval pass + the HALF-RES march itself (each its own render
               // pass, before the scene stages): the analytic-tier proxies MIN-blend their ray
@@ -3715,7 +3715,7 @@ void Renderer::recordCommandBuffers()
             // barriers do the sampled<->attachment layout round-trip. Off = own cleared depth, rebuilt.
             // SPLIT for the GPU profiler: timestamps are illegal inside a SECONDARY_COMMAND_BUFFERS
             // subpass, so each stage runs in its OWN render-pass instance (SceneColor's split
-            // variants: first clears, middles load/store, the last hands colour to TAA — compatible
+            // variants: first clears, middles load/store, the last hands colour to TAA - compatible
             // with the pass the secondaries/pipelines were built against, since only load/store ops
             // and layouts differ). The deps must stay identical for that compatibility, so the
             // inter-instance attachment hazards get an explicit barrier between the instances.
@@ -3801,7 +3801,7 @@ void Renderer::recordCommandBuffers()
                 colorToTaaImg.dstStageMask |= vk::PipelineStageFlagBits2::eFragmentShader;
             vkCommandBuffer.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &colorToTaaImg });
             // Disabled TAA used to still run the full-screen resolve with feedback 0 (a visible "TAA"
-            // scope in the profiler for a pass that only copied) — now the dispatch is skipped outright.
+            // scope in the profiler for a pass that only copied) - now the dispatch is skipped outright.
             if (m_taaParams.taaEnabled)
             {
                 m_gpuProfiler.beginScope(vkCommandBuffer, "TAA");
@@ -4249,7 +4249,7 @@ Stats Renderer::getStats()
 
     stats.numMeshLodGroups = (uint32)m_meshLodGroups.size();
     static_assert(sizeof(stats.lodInstanceCounts) == sizeof(uint32) * RendererVKLayout::MAX_MESH_LODS);
-    // GPU-written, snapshotted in beginFrame — a few frames behind, and counting VISIBLE picks only.
+    // GPU-written, snapshotted in beginFrame - a few frames behind, and counting VISIBLE picks only.
     for (uint32 i = 0; i < RendererVKLayout::MAX_MESH_LODS; ++i)
         stats.lodInstanceCounts[i] = m_lodInstanceCounts[i];
 

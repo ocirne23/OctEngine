@@ -47,11 +47,11 @@ float sunVisibleFraction(const glm::vec3& sunDir, const glm::vec3& moonDir,
 //                 covers less ground = higher resolution everywhere (at the cost of range).
 //   splitLambda:  0 = evenly spaced splits (uniform), 1 = logarithmic (splits bunch up close to
 //                 the camera). Higher = more shadow-map resolution near the camera.
-//   casterPad:    up-sun depth-slab extension per cascade — see the comment at its use.
+//   casterPad:    up-sun depth-slab extension per cascade - see the comment at its use.
 //   focus:        null = the classic camera-frustum slices (the shader picks by distance to the camera).
 //                 Set = the ORIGIN of the whole distribution (Renderer::setSceneFocus, the game's
 //                 player): cascade c is the SPHERE of radius splits[c + 1] around it, nested, and the
-//                 shader picks by distance to that point (u_sceneFocus) — so shadowFar and the split
+//                 shader picks by distance to that point (u_sceneFocus) - so shadowFar and the split
 //                 scheme are metres from the player, and a camera hanging in empty sky is irrelevant.
 void computeSunCascades(const Camera& camera, float aspect, const glm::vec3& sunDir, const glm::vec3* focus,
     float shadowFar, float splitLambda, float casterPad, glm::mat4(&outViewProj)[RendererVKLayout::NUM_SHADOW_CASCADES])
@@ -89,7 +89,7 @@ void computeSunCascades(const Camera& camera, float aspect, const glm::vec3& sun
         float radius = 0.0f;
         if (focus)
         {
-            // Focused: the cascade IS the pick sphere — everything within splits[c + 1] of the focus, so
+            // Focused: the cascade IS the pick sphere - everything within splits[c + 1] of the focus, so
             // the shader's distance pick and this coverage agree exactly (nested, no frustum slicing).
             center = *focus;
             radius = dists[1];

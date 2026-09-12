@@ -301,7 +301,7 @@ public:
 			Globals::gameHud.setSlotScreenRects(rects);
 
 			// ---- HOVER CARD: the hovered slot's '\n'-separated tooltip in a box ABOVE the
-			// ---- hotbar — first line the name, then the description and the metrics.
+			// ---- hotbar - first line the name, then the description and the metrics.
 			// ---- Drawn after the grid so it sits over the neighbouring slots. The metric lines
 			// ---- share one "<sign> <value> <unit>" column: '+' output (green), '-' input or the
 			// ---- build cost (orange), '=' a capacity it banks (blue), so a card scans at a glance.
@@ -373,6 +373,6 @@ private:
 	bool  m_enabled = true;
 	float m_scale = 1.0f;
 	float m_opacity = 0.9f;
-	float m_hotbarSlotSize = 72.0f; // px at scale 1 (the grid is the main build UI — big enough to read)
+	float m_hotbarSlotSize = 72.0f; // px at scale 1 (the grid is the main build UI - big enough to read)
 	float m_hotbarTextScale = 1.9f; // slot caption size, x the base font
 };

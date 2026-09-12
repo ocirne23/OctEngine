@@ -49,7 +49,7 @@ private:
     uint16 uploadImpl(const oc::function<bool(Texture&)>& initialize);
 
     // Parallel entity spawning: solid-color tints (Renderer::createSolidColorMaterial) and effect
-    // textures (ParticleSystem::createEffect) can upload from concurrent spawn jobs — the slot
+    // textures (ParticleSystem::createEffect) can upload from concurrent spawn jobs - the slot
     // table serializes here (locked in uploadImpl and free).
     std::mutex m_uploadMutex;
     oc::vector<Texture> m_textures;

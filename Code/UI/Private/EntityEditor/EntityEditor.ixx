@@ -8,7 +8,7 @@ import Entity;
 // as a .pre file, instead of hand-editing the text. The entity being edited is spawned as a real root
 // entity in the running world (like everything else in this engine) and unpacked so it's freely editable.
 //
-// Components are inline-allocated in one buffer sized by typeBits at entity-creation time — there is no
+// Components are inline-allocated in one buffer sized by typeBits at entity-creation time - there is no
 // live add/remove/resize API. So adding/removing a component, or committing a field edit, assembles a
 // fresh EntitySpawnTemplate from the entity's current component set and respawns it in place (see
 // commitRespawn()). This reuses the exact machinery Save/Load already rely on (World's buildXSpawnInfo
@@ -74,7 +74,7 @@ private:
 	void renderScriptDataSection();
 
 	// Editing an already-live scene entity in place (via "Open Selected") vs. a dedicated one this editor
-	// spawned itself (New / Open by path) — only the latter gets deleted when switching away/closing.
+	// spawned itself (New / Open by path) - only the latter gets deleted when switching away/closing.
 	void requestOpenSelected(Entity* entity);
 	void requestClose();
 	void doSwitchOpenSelected(EntityPtr entity);
@@ -99,7 +99,7 @@ private:
 	void refreshDraftsFromEntity(); // re-reads every component's current SpawnInfo from m_selected
 
 	// Assembles a fresh EntitySpawnTemplate from the current draft state and queues a RespawnEntity for
-	// m_selected (not necessarily the document root — any node in the tree can be edited/respawned).
+	// m_selected (not necessarily the document root - any node in the tree can be edited/respawned).
 	void commitRespawn();
 
 	// Pushes the drafts straight into m_selected's LIVE components, no respawn. Covers only what can be

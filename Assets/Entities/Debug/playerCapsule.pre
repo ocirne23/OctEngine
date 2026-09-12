@@ -1,4 +1,4 @@
-// Local player: ONE entity — an invisible upright capsule body (LockRotation) with the skinned
+// Local player: ONE entity - an invisible upright capsule body (LockRotation) with the skinned
 // character as its render mesh. InputControls (key C) possesses and moves the body; PlayerBody.dsl
 // drives the CharacterAnimator "speed" param and writes the facing yaw into the entity rotation,
 // which a rotation-locked body deliberately never overwrites (PhysicsComponent skips the rot

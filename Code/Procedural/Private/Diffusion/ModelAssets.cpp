@@ -12,7 +12,7 @@ namespace Procedural::Diffusion
 	{
 		// Expected sizes for the assets shipped in Assets/TerrainDiffusion (upstream:
 		// huggingface.co/xandergos/terrain-diffusion-30m-onnx @ ad2df557eca5645f588766101cf3bc3682455c3e).
-		// These are a sanity check, not a security one — their real job is catching the two failure modes
+		// These are a sanity check, not a security one - their real job is catching the two failure modes
 		// that would otherwise surface as an inscrutable protobuf error deep inside ONNX Runtime:
 		// an unfetched git-lfs pointer, and a truncated copy.
 		struct RequiredAsset
@@ -24,12 +24,12 @@ namespace Procedural::Diffusion
 
 		// sizeBytes = 0 means "do not size-check". The JSONs are TEXT, and git rewrites their line endings
 		// on checkout unless told otherwise (.gitattributes marks *.onnx binary; nothing covers these), so
-		// their byte count is not a property of the file's content — world_pipeline_config.json is 774 bytes
+		// their byte count is not a property of the file's content - world_pipeline_config.json is 774 bytes
 		// with LF and 817 with CRLF, and pinning either one makes a normal git operation look exactly like a
 		// corrupt download. Neither failure this table exists to catch can reach them anyway: they are not
 		// lfs-tracked, and they are parsed immediately below, so damage surfaces as a JSON error naming the
 		// file rather than as an inscrutable protobuf failure inside ONNX Runtime. The .onnx blobs keep
-		// their sizes — they are binary, lfs-tracked, and fed straight to ORT.
+		// their sizes - they are binary, lfs-tracked, and fed straight to ORT.
 		constexpr RequiredAsset REQUIRED[] = {
 			{ "world_pipeline_config.json",          0ull, true },
 			{ "pipeline_data.json",                  0ull, true },
@@ -48,13 +48,13 @@ namespace Procedural::Diffusion
 		// A git-lfs pointer is a small text file. Detect it explicitly so the error can say what to do.
 		bool looksLikeLfsPointer(const oc::string& p)
 		{
-			// Model asset checks run at generator init (a worker job) — no main-thread exemption.
+			// Model asset checks run at generator init (a worker job) - no main-thread exemption.
 			const oc::string head = FileSystem::readFileStr(p);
 			return oc::string_view(head).starts_with(LFS_POINTER_MAGIC);
 		}
 
 		// A converted model counts as usable only if it is real weights. No size check, unlike REQUIRED,
-		// which pins exact upstream byte counts — these are converted locally, so there is no known-good
+		// which pins exact upstream byte counts - these are converted locally, so there is no known-good
 		// size to compare against, and a bad conversion surfaces as an ORT load error naming the file. But
 		// they sit beside the originals under the repo's "*.onnx filter=lfs" rule, so a clone without
 		// `git lfs pull` leaves a text pointer exactly where the weights should be; feeding that to ORT is
@@ -88,7 +88,7 @@ namespace Procedural::Diffusion
 	{
 		// Beside the fp32 originals, NOT in Local/: these are shipped assets like the models they came from,
 		// converted once and committed, not a cache the engine may regenerate. Nothing here ever writes
-		// them — Tools/convert_models_fp16.py does, by hand, when the model set changes.
+		// them - Tools/convert_models_fp16.py does, by hand, when the model set changes.
 		return assetPath(oc::string(stem) + "_fp16.onnx");
 	}
 

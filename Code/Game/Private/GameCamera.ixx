@@ -6,7 +6,7 @@ import Core.Camera;
 import Core.Tweaks;
 
 // Angled top-down follow camera: fixed downward pitch, player-rotatable yaw (Q/E held + RMB drag),
-// scroll-wheel zoom. Owns no entity state — apply() overwrites the frame camera's position and view
+// scroll-wheel zoom. Owns no entity state - apply() overwrites the frame camera's position and view
 // matrix after the fly camera produced it (the applyPlayerCamera pattern), so everything downstream
 // (UI picking, audio listener, renderer, culling) sees the game view.
 export class GameCamera final
@@ -47,7 +47,7 @@ public:
             m_yawDeg = glm::degrees(std::atan2(dir.x, -dir.z));
     }
 
-    // Yaw-derived planar forward for camera-relative player movement (valid on any thread/tick —
+    // Yaw-derived planar forward for camera-relative player movement (valid on any thread/tick -
     // pure function of the stored yaw).
     glm::vec3 forwardPlanar() const
     {

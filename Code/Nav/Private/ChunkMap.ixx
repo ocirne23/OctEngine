@@ -4,10 +4,10 @@ import Core;
 import :Grid;
 
 // Sparse chunk storage: an open-addressed uint64 -> unique_ptr<T> map (the Spatial CellMap
-// pattern — splitmix64 hash, power-of-two capacity, linear probing, backward-shift deletion). The
+// pattern - splitmix64 hash, power-of-two capacity, linear probing, backward-shift deletion). The
 // values are heap-owned so growth never moves a chunk: readers on workers may hold a chunk
 // pointer for a whole frame while nothing inserts/erases (all mutation is main-thread or inside
-// the build job that owns the map). find() is the hot path — units resolve their chunk every tick.
+// the build job that owns the map). find() is the hot path - units resolve their chunk every tick.
 export namespace Nav
 {
     template<typename T>

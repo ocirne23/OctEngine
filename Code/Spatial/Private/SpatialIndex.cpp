@@ -107,7 +107,7 @@ SpatialHandle SpatialIndex::registerEntry(const glm::dvec3& pos, float radius, u
         m_pool.flags[idx] = uint8(RecordFlag_Alive | RecordFlag_Unlinked | (spawnVisible ? 0 : RecordFlag_NoSpawnGuard));
         gen = m_pool.gen[idx]; // captured under the lock: a later growth may move the array
     }
-    // Staged per worker — no shared state, so the (possibly allocating) push stays outside the lock.
+    // Staged per worker - no shared state, so the (possibly allocating) push stays outside the lock.
     m_pendingOps.local().push_back({ .newKey = key, .newRelPos = rel, .newRadius = radius,
                                      .idx = idx, .gen = gen, .type = PendingOp::Link, .newLevel = uint8(level) });
     return { idx, gen };
@@ -215,7 +215,7 @@ void SpatialIndex::commitFrame()
                 // would leak every newly linked (off-screen-streamed) entry into the frozen main set.
                 // RENDER passes only. The SIM LOD tiers are stamped by the World's PERIODIC
                 // selection job: a "current" tier stamp made here would read as a real tier
-                // (tier 0!) for frames, and the spawn-guard 0 as "in every tier" for ever — they
+                // (tier 0!) for frames, and the spawn-guard 0 as "in every tier" for ever - they
                 // get the LINKED sentinel instead (hasStamp false: the World derives the tier from
                 // the distance until the job stamps it). The root-dedupe passes stay 0: a fresh
                 // root must not read as held.
@@ -360,7 +360,7 @@ void SpatialIndex::compactCell(uint32 level, CellRecord& rec)
     live.clear();
     // Keep every lane the pool still OWNS, tombstoned or not: an entry unregistered this frame has
     // its lane tombstoned already but its Unlink op (retireLane, which settles the counters through
-    // storeIdx) may still be queued behind this op — dropping the lane here would strand that slot.
+    // storeIdx) may still be queued behind this op - dropping the lane here would strand that slot.
     // Ownership = a live or pending-free record whose storeIdx names this lane (a released slot has
     // flags 0; a recycled one is Unlinked with storeIdx reset).
     for (uint32 cur = rec.head; cur != UINT32_MAX; cur = store.blocks[cur].next)

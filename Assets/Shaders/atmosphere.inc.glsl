@@ -19,7 +19,7 @@ const float ATMOS_OBSERVE_HEIGHT = 2.0;
 #define ATMOS_MIE_EXT u_atmosParams.z // Mie extinction/scattering ratio (absorption)
 #define ATMOS_OZONE   u_atmosParams.w // ozone absorption strength (1 = Earth-like)
 
-// Ozone absorption (Bruneton-style coefficients, 1/m). Absorbs green/yellow strongest — this is what
+// Ozone absorption (Bruneton-style coefficients, 1/m). Absorbs green/yellow strongest - this is what
 // kills the vivid green band single scattering otherwise produces at the horizon (the blue-heavy
 // Rayleigh source times blue-killing extinction peaks in green at mid optical depths; on Earth the
 // ozone layer absorbs exactly that, leaving the familiar orange/red horizon and blue twilight).
@@ -94,7 +94,7 @@ vec3 atmosphereScatter(vec3 dir, vec3 lightDir, vec3 up, int steps, out vec3 tra
 	float pR = phaseRayleigh(mu);
 	float pM = phaseHG(mu, u_skySunParams.y);
 
-	// View optical depth per sample as a difference of two Chapman evaluations — exact for an
+	// View optical depth per sample as a difference of two Chapman evaluations - exact for an
 	// exponential atmosphere. The numerically-accumulated version diverges per channel at grazing
 	// angles (rainbow/green hue artifacts), and gets worse the fewer steps are taken.
 	vec2 odViewFull = atmosLightOpticalDepth(ro, dir);
@@ -115,8 +115,8 @@ vec3 atmosphereScatter(vec3 dir, vec3 lightDir, vec3 up, int steps, out vec3 tra
 	}
 	vec2 odViewEnd = max(odViewFull - atmosLightOpticalDepth(ro + dir * tFar, dir), vec2(0.0));
 	transmittance = exp(-atmosTau(odViewEnd));
-	// Scatter boost (u_skySunParams.x) scales how much of the light gets in-scattered — more indirect
-	// sky light — without touching the transmittance. Applied here so every consumer (visible sky,
+	// Scatter boost (u_skySunParams.x) scales how much of the light gets in-scattered - more indirect
+	// sky light - without touching the transmittance. Applied here so every consumer (visible sky,
 	// GI miss rays, fog ambient, surface fallback) scales consistently.
 	return (sumR * u_betaRayleigh * pR + sumM * vec3(u_betaMie) * pM) * u_skySunParams.x;
 }
@@ -159,7 +159,7 @@ vec3 atmosphereScatterCheap(vec3 dir, vec3 lightDir, vec3 up, int steps)
 // version of the exact same scatter integral the sky renders with, sourced by the sun plus the
 // directional sky-radiance light (moonlight / space light, along u_skyUp). Below the horizon a
 // Lambertian ground stands in: a graze-direction sky sample scaled by the ground albedo (the sky's
-// bounce) PLUS the sun's direct contribution albedo/PI * E_sun — the dominant daytime term. Without the
+// bounce) PLUS the sun's direct contribution albedo/PI * E_sun - the dominant daytime term. Without the
 // sun term, downward GI rays and the out-of-field ambient fallback sat well below the brightness of the
 // sunlit ground the probes actually see.
 vec3 skyRadiance(vec3 dir)
@@ -198,7 +198,7 @@ vec3 mirrorSkyRadiance(vec3 dir)
 }
 
 // THE SKY MAP (gi_sky_map.cs.glsl, GIProbePipeline): both functions above baked once per frame into a
-// lat-long 2-layer array — layer SKY_MAP_LAYER_GI = skyRadiance, SKY_MAP_LAYER_MIRROR =
+// lat-long 2-layer array - layer SKY_MAP_LAYER_GI = skyRadiance, SKY_MAP_LAYER_MIRROR =
 // mirrorSkyRadiance. Consumers declare `sampler2DArray u_skyMap` on their own binding and sample
 // textureLod(u_skyMap, vec3(skyMapUV(dir), layer), 0.0). World +Y pole: u = atan(d.x, d.z) / 2pi + 0.5
 // (the sampler repeats U), v = acos(d.y) / pi (clamped V).

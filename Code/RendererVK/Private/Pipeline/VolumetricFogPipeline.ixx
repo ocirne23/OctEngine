@@ -66,7 +66,7 @@ public:
     // frame, so a re-bake's ping-pong flip never re-records the cached fog CBs. The scatter pass raises the
     // height-fog base by a fraction of the local terrain height (Fog/Terrain Follow), so fog pools in
     // valleys and clears the peaks; the far field marches the same ground past the volume. Covers the whole
-    // pipeline in one call — keep it that way, or a set added later gets missed.
+    // pipeline in one call - keep it that way, or a set added later gets missed.
     void updateTerrainDescriptor(uint32 frameIdx, vk::ImageView terrainView, vk::Sampler terrainSampler);
 
 private:

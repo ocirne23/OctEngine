@@ -331,7 +331,7 @@ void IndirectCullComputePipeline::record(CommandBuffer& commandBuffer, uint32 fr
         commandBuffer.cmdUpdateDescriptorSets(m_computePipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, descriptorSet, computeDescriptorSetUpdateInfos);
         vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_computePipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
         // Clear the full capacity (not just the live mesh count) so the recorded size never depends on
-        // how many meshes are registered — new meshes spawn without a re-record.
+        // how many meshes are registered - new meshes spawn without a re-record.
         vkCommandBuffer.fillBuffer(frameData.outIndirectCommandBuffer.getBuffer(), 0, vk::WholeSize, 0); // opaque
         vkCommandBuffer.fillBuffer(frameData.outTransparentIndirectCommandBuffer.getBuffer(), 0, vk::WholeSize, 0); // transparent
         {

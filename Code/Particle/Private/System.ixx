@@ -105,10 +105,10 @@ private:
     uint16 getTexture(const oc::string& path, bool sRGB);
 
     // Parallel entity spawning: effect create/destroy (and the spawn-time setEmitting resolve) run
-    // concurrently from spawn jobs — m_effects growth/erase and the caches serialize here. Held only
+    // concurrently from spawn jobs - m_effects growth/erase and the caches serialize here. Held only
     // for short map/vector work: the .pfx load, texture loads and renderer slot creation all run
     // OUTSIDE it (no nesting, so a plain mutex). The pass-safe setters (setTransform/setVelocity)
-    // stay lock-free — no create/destroy overlaps the parallel entity pass.
+    // stay lock-free - no create/destroy overlaps the parallel entity pass.
     std::mutex m_effectMutex;
     oc::vector<EffectInstance> m_effects;
     oc::vector<DecalInstance> m_decals;

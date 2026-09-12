@@ -21,7 +21,7 @@ namespace Procedural::Diffusion
 		constexpr int32 COARSE_STEPS = 20;
 		constexpr int32 LATENT_TILE_SIZE = 64;
 		// MUST be exactly LATENT_TILE_SIZE / 2. This is NOT a tunable overlap/cost dial, however much it
-		// looks like one — the latent stage silently produces a garbage world at any other value. Measured,
+		// looks like one - the latent stage silently produces a garbage world at any other value. Measured,
 		// on a region whose correct elevation is 3017..5708 m (100% land):
 		//     stride 16 -> -128..1661 m,  93% land   (wrong)
 		//     stride 32 ->  3017..5708 m, 100% land  (correct)
@@ -29,12 +29,12 @@ namespace Procedural::Diffusion
 		//     stride 64 -> -4483..-3892 m,  0% land
 		// Only SIZE/2 is right, and 64 being just as broken as 48 rules out any coarse-lattice alignment
 		// story: at 50% overlap the tent windows sum to exactly 1 (a partition of unity), and this stage
-		// depends on that. Blending LATENTS is not blending outputs — the weight-channel normalisation that
+		// depends on that. Blending LATENTS is not blending outputs - the weight-channel normalisation that
 		// makes the other stages stride-agnostic does not rescue this one.
 		// The failure is silent and does not look like a bug: overlapping windows still AGREE with each
 		// other to 7 cm, so any tile-agreement check reports "consistent" while the terrain is inverted.
-		// Catching it needs an ABSOLUTE check — the native surface against the coarse stage's own
-		// prediction for the same region — not tiles compared against each other.
+		// Catching it needs an ABSOLUTE check - the native surface against the coarse stage's own
+		// prediction for the same region - not tiles compared against each other.
 		constexpr int32 LATENT_TILE_STRIDE = LATENT_TILE_SIZE / 2;
 
 		// Batch sizes, chosen from measured DirectML scaling on these models rather than the reference's
@@ -46,7 +46,7 @@ namespace Procedural::Diffusion
 		// 8 is where it stops paying: a later sweep at 16 and 32 moved base by 0% (675 -> 674 -> 691 ms)
 		// while cutting dispatches 4x, which is the evidence that this pipeline is NOT dispatch-bound and
 		// that neither bigger batches nor fp16 nor IO binding has anything left to reclaim. The only wins
-		// left are algorithmic — do less work (see the stride above), not dispatch it better.
+		// left are algorithmic - do less work (see the stride above), not dispatch it better.
 		// Both models take a dynamic batch dim, and a partial final batch is fine.
 		constexpr int32 LATENT_BATCH = 8;
 		constexpr int32 COARSE_BATCH = 8;
@@ -55,7 +55,7 @@ namespace Procedural::Diffusion
 		// 240, 256) reproduces the reference elevation to within ~0.1% (3017..5708 m -> 3024..5706 at 224),
 		// because the decoder's weight-channel normalisation genuinely is stride-agnostic.
 		// 192 -> 224 measured: decoder 401 -> 347 ms, total inference ~1300 -> ~1156 ms (-11%). Less than
-		// the tile count suggests — wider tiles need more latent tiles around the edges (74 -> 86 items), so
+		// the tile count suggests - wider tiles need more latent tiles around the edges (74 -> 86 items), so
 		// part of the decoder saving is handed back to the latent stage. 240/256 gave nothing further.
 		// Stopping at 224 (1.14x redundancy): the decoder draws the visible fine detail, so it is the stage
 		// where a too-thin blend window would actually be seen, and a range check cannot detect a seam.
@@ -243,7 +243,7 @@ namespace Procedural::Diffusion
 		if (newSeed == m_seed || !m_valid)
 			return;
 		m_seed = newSeed;
-		// The stage lambdas read m_seed through `this`, so they pick this up with no rebuild — matching the
+		// The stage lambdas read m_seed through `this`, so they pick this up with no rebuild - matching the
 		// reference, where seed is volatile and read through the lambda's enclosing instance. Capturing the
 		// seed BY VALUE in the lambda would silently break reseeding.
 		m_syntheticMap = oc::make_unique<SyntheticMapFactory>(m_seed, m_config, m_data);
@@ -400,7 +400,7 @@ namespace Procedural::Diffusion
 		oc::vector<float> out(6 * plane);
 		for (int32 b = 0; b < batch; b++)
 		{
-			// The coarse output is NOT negated (unlike base/decoder) — it goes through the scheduler's EDM
+			// The coarse output is NOT negated (unlike base/decoder) - it goes through the scheduler's EDM
 			// output preconditioning instead.
 			for (int32 ch = 0; ch < 6; ch++)
 			{
@@ -439,7 +439,7 @@ namespace Procedural::Diffusion
 	}
 
 	// =====================================================================================================
-	// Latent stage — 2 flow-matching steps, batched
+	// Latent stage - 2 flow-matching steps, batched
 	// =====================================================================================================
 
 	void WorldPipeline::buildLatentStage()
@@ -504,7 +504,7 @@ namespace Procedural::Diffusion
 				condImg7[6 * N + px] = maskNorm;
 		}
 
-		// Climate components average only the INNER 2x2 of the patch — the halo is context for the model,
+		// Climate components average only the INNER 2x2 of the patch - the halo is context for the model,
 		// not part of the summary.
 		float climateMeans[4];
 		for (int32 ch = 0; ch < 4; ch++)
@@ -630,7 +630,7 @@ namespace Procedural::Diffusion
 	}
 
 	// =====================================================================================================
-	// Decoder stage — 1 flow-matching step to the high-frequency residual
+	// Decoder stage - 1 flow-matching step to the high-frequency residual
 	// =====================================================================================================
 
 	void WorldPipeline::buildDecoderStage()
@@ -789,7 +789,7 @@ namespace Procedural::Diffusion
 	// measures crag relief against, as (mesh height - altitude).
 	//
 	// Why not the Laplacian low band, which computeElev has already built: the terrain-data map has two
-	// cascades, and the far one is served by ESampleDetail::Coarse, which runs the coarse stage ALONE —
+	// cascades, and the far one is served by ESampleDetail::Coarse, which runs the coarse stage ALONE -
 	// skipping the latent stage is exactly what makes it ~249x cheaper. So the far cascade HAS no low band;
 	// it can only report the coarse surface. If the near cascade answered with the low band instead, the
 	// same mountain would measure its relief against two surfaces ~6x apart in smoothing, and it did:
@@ -798,7 +798,7 @@ namespace Procedural::Diffusion
 	// surface BOTH can compute.
 	//
 	// The price: macro is a 7.68 km surface, so high ground flatter than one coarse pixel reads as craggy
-	// rather than as plateau — there is no longer a reference fine enough to tell those apart.
+	// rather than as plateau - there is no longer a reference fine enough to tell those apart.
 	//
 	// Nearly free: the coarse tiles this reads are already resident, since the latent stage is conditioned
 	// on them and computeClimate slices the same window with a larger pad.
@@ -865,7 +865,7 @@ namespace Procedural::Diffusion
 		for (size_t i = 0; i < cplane; i++)
 		{
 			const float w = coarseSlice.data[6 * cplane + i];
-			// Coarse elevation: undo the sqrt, clamping ocean to 0 (as the reference does here — note this
+			// Coarse elevation: undo the sqrt, clamping ocean to 0 (as the reference does here - note this
 			// differs from computeElev, which keeps the sign).
 			const float e = oc::max(0.0f, unweight(coarseSlice.data[0 * cplane + i], w));
 			coarseElev.data[i] = e * e;

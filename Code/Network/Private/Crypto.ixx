@@ -4,7 +4,7 @@ import Core;
 
 // Module-internal wrappers over Windows CNG (bcrypt): system RNG, HMAC-SHA256 for the stateless
 // connect challenge, ephemeral ECDH P-256 key agreement, and AES-128-GCM packet sealing.
-// Nothing here is exported — the public surface is NetHostConfig::encrypt.
+// Nothing here is exported - the public surface is NetHostConfig::encrypt.
 
 constexpr uint32 NetCryptoPublicKeySize = 64; // P-256 uncompressed X||Y
 constexpr uint32 NetCryptoTagSize = 16;       // GCM auth tag appended per packet
@@ -68,7 +68,7 @@ struct NetKeyPair
 
 bool cryptoRandom(oc::span<uint8> out);
 
-// HMAC-SHA256(secret, data) truncated to 64 bits — the stateless connect-challenge MAC
+// HMAC-SHA256(secret, data) truncated to 64 bits - the stateless connect-challenge MAC
 uint64 cryptoStatelessMac(oc::span<const uint8> secret, oc::span<const uint8> data);
 
 bool cryptoGenerateKeyPair(NetKeyPair& out);

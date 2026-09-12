@@ -4,15 +4,15 @@ import Core;
 import :Layout;
 
 // Mesh data streaming (counterpart of the TextureStreamer): cooked scenes register each source mesh
-// (plus its generated LOD levels — they share the vertex range) as a "mesh set" with the byte ranges
+// (plus its generated LOD levels - they share the vertex range) as a "mesh set" with the byte ranges
 // its data occupies in the .vsc cache file. Every frame the renderer notes which sets instances
 // referenced; when the resident total exceeds the budget, the least-recently-seen cold sets evict
 // (their MeshInfos get indexCount 0, so draws/TLAS writes become no-ops, and their mega-buffer ranges
 // return to the free list after NUM_FRAMES_IN_FLIGHT). An evicted set referenced again re-streams from
 // the cache on a worker thread and restores its MeshInfos at freshly allocated offsets. Static BLASes
-// stay alive across the cycle — they are snapshots of identical geometry, so no rebuild is needed.
+// stay alive across the cycle - they are snapshots of identical geometry, so no rebuild is needed.
 //
-// Skinned meshes, procedural scenes and directly-imported (non-cooked) scenes never register — their
+// Skinned meshes, procedural scenes and directly-imported (non-cooked) scenes never register - their
 // data is pinned for the app's lifetime exactly as before.
 export class MeshStreamer final
 {

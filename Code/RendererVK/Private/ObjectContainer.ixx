@@ -59,7 +59,7 @@ public:
 
     NodeSpawnIdx getSpawnIdxForPath(const oc::string& nodePath) const;
 
-    // All node paths this container knows about — for editor tooling (Entity Editor) to offer a picker
+    // All node paths this container knows about - for editor tooling (Entity Editor) to offer a picker
     // scoped to a single container instead of every spawnable registered engine-wide.
     oc::vector<oc::string> getNodePaths() const;
     RenderNode spawnNodeForPath(const oc::string& nodePath, const Transform& transform);
@@ -132,7 +132,7 @@ private:
         uint64 size;
         EOwnedRange kind;
     };
-    // Mega-buffer uploads this container owns — everything EXCEPT ranges owned by a registered mesh
+    // Mega-buffer uploads this container owns - everything EXCEPT ranges owned by a registered mesh
     // stream set (re-streams relocate those; the MeshStreamer frees their current ranges at
     // unregisterSets) and skinned per-instance output regions (owned by the skinned bundles).
     oc::vector<OwnedDataRange> m_ownedDataRanges;

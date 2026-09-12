@@ -9,7 +9,7 @@ export import :Emitter; // the ForceEmitter handle (Emitter.ixx / Emitter.cpp)
 // Forcefield bubble manager (Globals::forceSystem). Emitters project analytic influence-field
 // "bubbles": same-team fields SUM (metaball merging), a point belongs to a team where that team's
 // field beats the iso threshold and every other team's field, and the bubble surface is the
-// equal-field equilibrium between teams — squish and focused-lobe "pierce" fall out of the math,
+// equal-field equilibrium between teams - squish and focused-lobe "pierce" fall out of the math,
 // no simulation. The renderer ray-marches the surface (ForceFieldPipeline); per-emitter applied
 // force and point queries are computed on the GPU and read back ~2 frames latent.
 // update() runs once per frame on the main thread (after the entity update, before present) and is
@@ -22,7 +22,7 @@ export import :Emitter; // the ForceEmitter handle (Emitter.ixx / Emitter.cpp)
 float forceDistributionGain(float t, float D); // the axial density bump (force_field.inc.glsl forceDistributionGain)
 float forceReferenceBudget();                  // the plain sphere's budget integral every shape is folded onto
 
-// CPU emitter instances — DELIBERATELY far above the renderer's MAX_FORCE_EMITTERS GPU slots.
+// CPU emitter instances - DELIBERATELY far above the renderer's MAX_FORCE_EMITTERS GPU slots.
 // Every unit in a co-op map carries a bubble (the "Max enemy units" cap is 25000), but only the
 // ones the SIM LOD keeps ACTIVE hold a renderer slot; the rest are instance-only and cost nothing
 // on the GPU. m_emitters is RESERVED to this at initialize(), so it never reallocates under a
@@ -50,7 +50,7 @@ public:
     {
         uint32 owningTeam = 0;      // strongest team at the point (only meaningful when inside)
         bool inside = false;        // inside owningTeam's bubble (field > iso and beats all others)
-        float ownField = 0.0f;      // the STRONGEST team's field at the point — written even when
+        float ownField = 0.0f;      // the STRONGEST team's field at the point - written even when
                                     // not inside any bubble (below iso), so it doubles as the
                                     // density readout; the debug density view heat-maps this value
         float opposingField = 0.0f; // best opposing team's field strength
@@ -78,9 +78,9 @@ public:
     void update(Renderer& renderer, float deltaSec);
     // The merge pass (updateMerging) runs as ONE job PIPELINED A FRAME: update() kicks it after the
     // upload, over this frame's post-sim emitter state, and joinMerge() (main loop top, right after
-    // the UI join — before input/entity-change drains can create or destroy emitters) joins it, so
+    // the UI join - before input/entity-change drains can create or destroy emitters) joins it, so
     // it overlaps present + the fence wait instead of anything main needs. The group spheres and
-    // member transitions the next upload uses are therefore ONE FRAME behind the emitters — a few
+    // member transitions the next upload uses are therefore ONE FRAME behind the emitters - a few
     // cm at unit speeds, inside the cover margin, and every membership rule has hysteresis. The
     // job never touches the renderer: group slots are allocated/retired on main inside update().
     void joinMerge();
@@ -95,7 +95,7 @@ public:
     // ---- THE BAKED PRESSURE FIELD ("Force/Bake" tweaks) ------------------------------------
     // A sparse CPU-side sampling of EVERY team's field: update() selects 16 m XZ chunks from the
     // live emitters'/groups' support boxes, the GPU evaluates 16x16 samples per chunk at "Sample
-    // height" (force_bake.cs), and update() republishes the paired readback copy — so ANY number
+    // height" (force_bake.cs), and update() republishes the paired readback copy - so ANY number
     // of consumers sample field force/exposure with plain bilinear taps and NO per-consumer GPU
     // slot (the swarm-unit replacement for per-unit ForceQueries).
     struct FieldSample
@@ -104,12 +104,12 @@ public:
         bool inside = false;  // inside owningTeam's bubble at the bake height
         uint32 owningTeam = 0;
         float field = 0.0f;                 // the STRONGEST team's field (owningTeam's), meaningful
-                                            // outside bubbles too — the density readout
+                                            // outside bubbles too - the density readout
         float opposing = 0.0f;              // strongest field of any team != the sampled team
         glm::vec3 opposingGradient{ 0.0f }; // planar (XZ) gradient of that field
     };
     // Worker-safe between updates (the published containers only mutate in update(), after the
-    // entity pass). A position outside every chunk reads as ZERO field — correct by construction,
+    // entity pass). A position outside every chunk reads as ZERO field - correct by construction,
     // the chunks cover every support box. ~3 frames latent end to end.
     FieldSample sampleBakedField(const glm::vec3& pos, uint32 team) const;
 
@@ -118,7 +118,7 @@ public:
     uint32 getNumMergedEmitters() const { return (uint32)m_statMerged; }
     const ForceFieldParams& getParams() const { return m_params; }
 
-    // The LIVE team count (2..MAX_FORCE_TEAMS) — a GAME-MODE setting, not a tweak (co-op = 2):
+    // The LIVE team count (2..MAX_FORCE_TEAMS) - a GAME-MODE setting, not a tweak (co-op = 2):
     // the renderer recompiles the force shaders and remakes the team-sized bake volume/buffers
     // when the pushed params change (one device idle). Team values on emitters/queries clamp
     // below it. Call before the mode's world spawns (main thread).
@@ -133,8 +133,8 @@ private:
     friend class ForceEmitter;
     friend class ForceQuery;
 
-    // THE BUBBLE LIGHT: every bubble — an emitter's own iso bubble, or a merge GROUP's sphere in
-    // place of its members' — carries one point light at its centre, sized by its radius (range =
+    // THE BUBBLE LIGHT: every bubble - an emitter's own iso bubble, or a merge GROUP's sphere in
+    // place of its members' - carries one point light at its centre, sized by its radius (range =
     // radius x "Bubble light range", intensity = "Bubble light intensity" x radius^2, so the rim
     // brightness is the same at every size), in the team colour. It FADES in and out over "Bubble
     // light fade" (a member's own light crossfades into its group's as it joins), and the
@@ -157,7 +157,7 @@ private:
         float output = 1.0f;  // the SET output; the field uses liveOutput() = output x ramp
         // ACTIVATION RAMP: 0 while gated off, climbing to 1 over "Activate ramp (s)" once active,
         // so a bubble GROWS in (the SIM LOD tier edge, a fresh spawn) instead of popping at full
-        // size — the field, the iso bounds (and so the bubble light), the merge weights all read
+        // size - the field, the iso bounds (and so the bubble light), the merge weights all read
         // the ramped output.
         float ramp = 0.0f;
         float reach = 1.0f;
@@ -191,7 +191,7 @@ private:
         bool bubbleValid = false;           // prevBubbleCenter holds a real previous refresh
         bool candidate = false;             // this frame: mergeable with a bubble (written by its own refresh)
         // Bubble radius cache: the 16-station profile only re-evaluates when a shape parameter
-        // (or the iso threshold) changed — a moving unit just translates the centre.
+        // (or the iso threshold) changed - a moving unit just translates the centre.
         float boundsOutput = -1.0f, boundsReach = -1.0f, boundsFocus = -1.0f, boundsDist = -1.0f, boundsWidth = -1.0f, boundsIso = -1.0f;
         BubbleLight light; // the bubble's glow (see stepBubbleLight)
         glm::vec3 blendFromCenter{ 0.0f }; // transition start sphere
@@ -257,7 +257,7 @@ private:
     };
 
     // Refreshes the cached shape budget integral if focus/distribution changed and returns the
-    // factor Output is multiplied by before upload: referenceBudget / (shapeBudget * width^2) —
+    // factor Output is multiplied by before upload: referenceBudget / (shapeBudget * width^2) -
     // TOTAL output is invariant across focus/distribution/width (reach still scales the total).
     float refreshDistributionScale(EmitterInstance& inst) const;
     EmitterInstance* resolveEmitter(uint64 handle);
@@ -334,7 +334,7 @@ private:
         float radius, uint32 team, float deltaSec) const;
 
     // Parallel entity spawning: create/destroy of emitters and queries run concurrently from spawn
-    // jobs — the free lists and generation counter serialize here. m_emitters is RESERVED to
+    // jobs - the free lists and generation counter serialize here. m_emitters is RESERVED to
     // MAX_FORCE_INSTANCES and m_queries to the renderer's MAX at initialize(), so growth never
     // reallocates under a concurrent resolveEmitter/resolveQuery (the setters stay lock-free, same
     // as the parallel-pass contract).
@@ -351,7 +351,7 @@ private:
     // Candidate cell list: the bounds pass stages candidate indices per chunk + CAS-maxes the
     // largest join radius; serially they become (cellKey, emitter) pairs sorted by key (cell =
     // 2 x that radius, so a 3x3x3 neighbourhood holds every possible partner), and the neighbour
-    // pass binary-searches the 27 cells — a private structure over the candidates only, instead
+    // pass binary-searches the 27 cells - a private structure over the candidates only, instead
     // of the entity SpatialIndex whose finest cells are full of render entries to filter.
     oc::vector<oc::vector<uint32>> m_candidateStaging;
     // Renderer-slot churn staging: the upload jobs see the ACTIVE gate flip and stage the emitter
@@ -391,9 +391,9 @@ private:
     // Chunk-key set for the selection: a STAMP-cleared open-addressing table (no per-frame clear,
     // no sort) whose first-seen keys land in `unique`. One per worker for the boxes pass, one
     // for the serial merge of the workers' unique lists. Past the probe limit a key is appended
-    // unchecked — the cap step dedups the (rare) survivors. Deliberately still a PerWorker (not
+    // unchecked - the cap step dedups the (rare) survivors. Deliberately still a PerWorker (not
     // owner-sliced like the vector stagings): a slot is a fixed 4096-entry table, and its dedupe
-    // pays off with FEW, FULL slots — one per 256-emitter chunk would cost more memory on a big
+    // pays off with FEW, FULL slots - one per 256-emitter chunk would cost more memory on a big
     // map than one per context, and hand the serial merge many more near-duplicate lists.
     struct BakeKeySet
     {
@@ -409,7 +409,7 @@ private:
     PerWorker<BakeKeySet> m_bakeKeyStaging;
     BakeKeySet m_bakeMerge;
     // Published chunk lookup: a DENSE uint16 grid over the chunk coords' bounding box when it fits
-    // (the normal case — O(1), two subtractions and a multiply per corner), else the sorted key
+    // (the normal case - O(1), two subtractions and a multiply per corner), else the sorted key
     // list and a binary search.
     oc::vector<uint16> m_bakeGrid;                  // chunk index or UINT16_MAX
     glm::ivec2 m_bakeGridLo{ 0 };

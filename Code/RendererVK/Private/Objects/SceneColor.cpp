@@ -184,7 +184,7 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
     // ---- Depth-prepass-reuse variant of the pass ("Depth prepass reuse" tweak): same colour attachment,
     // but the DEPTH attachment is the G-BUFFER's depth, bound READ-ONLY with no copy. The forward pass
     // tests eGreaterOrEqual directly against the prepass depth (bit-identical rasterization) and writes
-    // none of its own — every scene pipeline flips depthWrite off in this mode, which is also what makes
+    // none of its own - every scene pipeline flips depthWrite off in this mode, which is also what makes
     // the forward pass's own u_gbufferDepth sampling legal (read-only depth + sampled is allowed where a
     // writable attachment would be a feedback loop). loadOp LOAD + storeOp STORE + SHADER_READ_ONLY on
     // both ends hand the untouched prepass depth straight back to TAA/fog after the pass; the render pass
@@ -192,7 +192,7 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
     {
         // Render-pass COMPATIBILITY (validation-enforced for pipelines created against the main pass and
         // for the cached secondaries' inheritance) allows the two passes to differ ONLY in attachment
-        // load/store ops and layouts — the dependency array must be IDENTICAL, so the reuse pass carries
+        // load/store ops and layouts - the dependency array must be IDENTICAL, so the reuse pass carries
         // the main pass's dependencies verbatim and the depth's SHADER_READ_ONLY <-> DEPTH_READ_ONLY
         // layout round-trip is done with explicit barriers around the pass instead
         // (Renderer::recordReuseDepthBarrier). initial == final == the reference layout: this pass
@@ -246,7 +246,7 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
 
     // ---- SPLIT-instance variants (see getSplitRenderPass): first/middle/last x own-depth/reuse.
     // Compatibility with the main/reuse pass (and the swapchain pass the pipelines are built
-    // against) allows differences ONLY in load/store ops and layouts — the dependency array is
+    // against) allows differences ONLY in load/store ops and layouts - the dependency array is
     // carried VERBATIM in every variant (it is part of render-pass compatibility), which is also
     // why it cannot express the inter-instance attachment hazards: the Renderer emits explicit
     // barriers between the instances instead.

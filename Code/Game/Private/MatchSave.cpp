@@ -11,7 +11,7 @@ import :Player;
 import :Structures;
 import :Npc;
 
-// SAVE / LOAD (F9/F10, server/single player only — clients refuse) and the profiling SCENARIO
+// SAVE / LOAD (F9/F10, server/single player only - clients refuse) and the profiling SCENARIO
 // built on the load. See the Match.ixx comments on saveGame/loadGame and runScenario.
 
 static constexpr const char* c_gameSavePath = "Local/gamesave.txt"; // cwd = Assets/
@@ -23,11 +23,11 @@ void GameMatch::saveGame()
         Log::warning("Save game: server only");
         return;
     }
-    AssetNode root; // unnamed — writeAssetText writes only the children
+    AssetNode root; // unnamed - writeAssetText writes only the children
     if (m_coop && m_coopMap.built)
     {
         // The map's generation inputs: structure/unit positions and node indices only make sense
-        // on the exact map the save was played on — loadGame regenerates it from these.
+        // on the exact map the save was played on - loadGame regenerates it from these.
         root.set("MapSeed", oc::to_string((int)m_coopMap.seed));
         root.set("MapFill", m_coopMap.fill);
         root.set("MapLanes", oc::to_string(m_coopMap.lanes));
@@ -40,7 +40,7 @@ void GameMatch::saveGame()
     }
     else if (m_coopMap.built && m_coopMap.pvp)
         root.set("PvpMap", oc::to_string((int)m_coopMap.pvpMap)); // the arena (EPvpMap index)
-    // The LOCAL player's body position (its own capsule only — remote players are not saved).
+    // The LOCAL player's body position (its own capsule only - remote players are not saved).
     // Headless (no capsule) writes nothing, and a load without the key leaves the player put.
     if (m_player.entity())
         root.set("PlayerPos", m_player.bodyPos());
@@ -76,7 +76,7 @@ void GameMatch::loadGame(oc::string_view path)
     {
         if (const AssetNode* seedNode = root.find("MapSeed"); seedNode && seedNode->asInt() != 0)
         {
-            m_structures.clearAllStructures(); // fires GRm hooks — clients prune ahead of the swap
+            m_structures.clearAllStructures(); // fires GRm hooks - clients prune ahead of the swap
             rebuildCoopMap((uint32)seedNode->asInt(),
                 root.find("MapFill") ? root.find("MapFill")->asFloat() : m_coopMap.fill,
                 root.find("MapLanes") ? root.find("MapLanes")->asInt() : m_coopMap.lanes);
@@ -113,7 +113,7 @@ void GameMatch::loadGame(oc::string_view path)
     // Older saves carry no key and leave the player put; remote players keep their own positions.
     if (const AssetNode* n = root.find("PlayerPos"))
         m_player.teleport(n->asVec3(m_player.bodyPos()));
-    loadTrickle(root); // resume the queued wave/ambient spawns (after rebuildCoopMap — see there)
+    loadTrickle(root); // resume the queued wave/ambient spawns (after rebuildCoopMap - see there)
     if (m_isServer)
     {
         for (int i = 0; i < m_structures.structureCount(); ++i)
@@ -139,9 +139,9 @@ bool GameMatch::runScenario(oc::string_view savePath)
     }
     loadGame(savePath);
     Log::info(oc::format("Scenario: loaded '{}'", savePath.empty() ? oc::string_view(c_gameSavePath) : savePath));
-    // PvP: the loaded units' spatial entries link at the next commitFrame — the select-all query
+    // PvP: the loaded units' spatial entries link at the next commitFrame - the select-all query
     // runs from the next update() (issueScenarioOrder), marching everything on the other Base.
-    // CO-OP: no order — there is no enemy Base to march on, and the session is measured as saved
+    // CO-OP: no order - there is no enemy Base to march on, and the session is measured as saved
     // (the player holds position, the AI waves and ambient groups carry on).
     m_scenarioOrderPending = !m_coop;
     m_scenarioOrderTries = 0;
@@ -150,10 +150,10 @@ bool GameMatch::runScenario(oc::string_view savePath)
 
 void GameMatch::issueScenarioOrder()
 {
-    // Select ALL live own-team units (not just the visible ones — the box select's query is a
+    // Select ALL live own-team units (not just the visible ones - the box select's query is a
     // frustum), then the same order the RMB press gives: locked move target + one seeded lane.
     // The World's root list serves loaded units immediately (no spatial-link latency), but the
-    // enemy Base view and the published nav raster still arrive frames later — the retry loop
+    // enemy Base view and the published nav raster still arrive frames later - the retry loop
     // stays (bounded, in case the save held none).
     m_selectedUnits.clear();
     oc::vector<Entity*> units;
@@ -162,7 +162,7 @@ void GameMatch::issueScenarioOrder()
         if (const GameUnitComponent* u = getComponent<GameUnitComponent>(e); u->alive() && u->team == (uint32)m_team)
             m_selectedUnits.push_back(EntityPtr(e));
     // The same order a right-click on the other team's Base gives: clicked at its centre, so the
-    // destination lands on the face toward the player (pushed out of the footprint — the centre
+    // destination lands on the face toward the player (pushed out of the footprint - the centre
     // itself is blocked cells and the A* would fail). The structure view (m_frame) is a per-frame
     // spatial query refreshed AFTER this point in update, so the loaded Base shows up a frame
     // after the units do: wait for it as well.
@@ -171,7 +171,7 @@ void GameMatch::issueScenarioOrder()
         if (m_structures.structureType(i) == EStructureType::Base && m_structures.structureTeam(i) != (uint8)m_team)
             enemyBase = i;
     // Also wait for the Nav obstacle raster: the order's lane is an A* over it, and a unit's own
-    // plan requests need it too — an order before it is published walks straight into the walls.
+    // plan requests need it too - an order before it is published walks straight into the walls.
     const bool ready = !m_selectedUnits.empty() && enemyBase >= 0 && Globals::navSystem.raster() != nullptr;
     if (!ready && ++m_scenarioOrderTries < 600)
         return; // try again next update (bounded: ~10 s, in case the save holds no units / Nav is off)

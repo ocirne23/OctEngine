@@ -1,4 +1,4 @@
-# Connector: a 2x6x2 m pylon (Pillar3) all long links route through — links touching a Connector
+# Connector: a 2x6x2 m pylon (Pillar3) all long links route through - links touching a Connector
 # reach farther, and one Connector carries exactly ONE medium (power, fuel or minerals).
 # Spawned origin 3.0 above ground. (File keeps its historic name; the game calls it Connector.)
 Prefab gameConnector

@@ -251,7 +251,7 @@ vk::Semaphore StagingManager::updateNoLock()
         // The source is a streamed texture's replaced image: every mip sits in eShaderReadOnlyOptimal,
         // and the srcStage covers everything that may still be sampling it from earlier submissions on
         // this queue (fragment forward/G-buffer/shadow + compute GI/RTAO, incl. their ray queries). It
-        // is never transitioned back — nothing samples it after this frame's descriptor swap, and it is
+        // is never transitioned back - nothing samples it after this frame's descriptor swap, and it is
         // deferred-destroyed by the TextureStreamer.
         oc::array<vk::ImageMemoryBarrier2, 2> preCopyBarriers{
             vk::ImageMemoryBarrier2{
@@ -457,7 +457,7 @@ vk::Semaphore StagingManager::updateNoLock()
     m_mappedMemory = m_mappedStagingBuffers[m_currentBuffer];
 
     // The caller starts memcpy'ing into this buffer immediately (in upload*()), so it must be idle now: its
-    // previous submission may still be reading it on the GPU. Waiting here — before any write — rather than
+    // previous submission may still be reading it on the GPU. Waiting here - before any write - rather than
     // at the next submit (which happens after those writes) is what prevents the host from racing the copy.
     result = vkDevice.waitForFences(1, &m_fences[m_currentBuffer], vk::True, UINT64_MAX);
     if (result != vk::Result::eSuccess)

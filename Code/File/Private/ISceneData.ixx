@@ -38,7 +38,7 @@ export struct SceneCookOptions
 };
 
 // Byte ranges a mesh's data occupies in its cooked cache file (see CookedSceneData), so a consumer can
-// re-read it later without keeping the scene loaded — the renderer's mesh streaming uses this to evict
+// re-read it later without keeping the scene loaded - the renderer's mesh streaming uses this to evict
 // cold mesh data from VRAM and re-stream it on demand. Attribute offsets are glm::vec3 arrays of
 // numVertices; indices are uint32. Only cooked scenes provide one (getMeshStreamSource default: false).
 export struct MeshStreamSource
@@ -73,7 +73,7 @@ public:
 	// Loads animation clips from a separate file (rig in one file, animations in others) and appends them
 	// to outSet, resolving each channel against targetSkeleton BY BONE NAME (retargeting across files that
 	// share a skeleton, e.g. Mixamo exports). Any animation whose name contains skipName is ignored (null/
-	// "" keeps all) — handy for stripping a "TPose" track exported into every file. trackName selects a
+	// "" keeps all) - handy for stripping a "TPose" track exported into every file. trackName selects a
 	// single track from a multi-track file (kept only if its name contains trackName; null/"" keeps all).
 	// clipNameOverride names the kept clip(s) (suffixed _N if several are kept); when null the file-name
 	// stem is used. Returns false if the file has no kept animations.

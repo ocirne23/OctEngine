@@ -1,5 +1,5 @@
 // Per-player capsule: spawned by the server when a client joins, OWNED by that client. The owning
-// client drives it with WASD/Space (key C toggles player control — the free-fly camera releases
+// client drives it with WASD/Space (key C toggles player control - the free-fly camera releases
 // those keys; V toggles first/third person), simulating it LOCALLY for full responsiveness; the
 // claim stream carries the resulting body state to the server, validated by the Network/Validation
 // plausibility gate. Everyone else sees it as a normal replica.

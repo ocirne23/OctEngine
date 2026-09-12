@@ -64,10 +64,10 @@ public:
 
     // PAUSE ("Time/Paused" tweak, Synced so the server's pause freezes clients; Pause/Break key
     // toggles it): the REAL clock above never stops (frame pacing, Timers, UI, network keepalives),
-    // but the SIM clock does — every simulation consumer (physics, world/entity pass, game, scripts,
+    // but the SIM clock does - every simulation consumer (physics, world/entity pass, game, scripts,
     // particles, force, nav, the renderer's shader-animation time) reads getSimDeltaSec (0 while
     // paused) / getSimElapsedSec (stands still) instead of the real pair. The entity pass and
-    // script events ALSO gate on isPaused() like EEntityFlag_Frozen — a zero delta alone would not
+    // script events ALSO gate on isPaused() like EEntityFlag_Frozen - a zero delta alone would not
     // stop scripts/components from acting per-call. The flag only flips on the main thread between
     // frames (tweak poll / key handler); workers read it mid-pass, which is race-free by that timing.
     void setPaused(bool paused) { m_paused = paused; }

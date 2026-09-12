@@ -63,7 +63,7 @@ layout (binding = 10) uniform sampler2DArray u_skyMap; // the per-frame sky bake
 layout (binding = 11) uniform sampler2DArrayShadow u_shadowMap;
 // GI probe clipmap volume (persistent SH, read+write for the multi-bounce lookup + temporal blend).
 // NOT coherent: every invocation writes only its own probe and reads other probes' cells, where a
-// stale (last-visit) value is accepted by design — the qualifier would bypass L1 on the ~30 vec4 loads
+// stale (last-visit) value is accepted by design - the qualifier would bypass L1 on the ~30 vec4 loads
 // per gather hit that the multi-bounce lookup makes.
 layout (binding = 12, std430) buffer GiGridData { vec4 gi_gridData[]; };
 
@@ -204,12 +204,12 @@ shared vec3 s_skySH[4 * 64];
 void projectSkySH(uint lane)
 {
     // From THE SKY MAP (baked + barriered before this dispatch), not the analytic skyRadiance: the
-    // virtual probe then matches the miss rays by construction — both see the same filtered bake.
+    // virtual probe then matches the miss rays by construction - both see the same filtered bake.
     const vec3 dir = sampleSphere(lane, 64u, vec2(0.0));
     vec3 rad = skyMiss(dir);
     const vec3 up = normalize(u_skyUp);
     // Sky/Ground Horizon (u_groundParams.w): on rolling terrain part of the above-horizon hemisphere is
-    // other sunlit ground, not sky — real probes see that as geometry hits; blend the ground in.
+    // other sunlit ground, not sky - real probes see that as geometry hits; blend the ground in.
     if (dot(dir, up) > 0.0)
         rad = mix(rad, skyMiss(-up), u_groundParams.w);
     const float wsh = 4.0 * PI / 64.0;
@@ -234,7 +234,7 @@ void projectSkySH(uint lane)
     {
         vec3 c0 = s_skySH[0], c1 = s_skySH[64], c2 = s_skySH[128], c3 = s_skySH[192];
         // Direct sky-radiance light (moonlight / space light) delta projection, matching the per-probe
-        // injection in main() — unoccluded here (the virtual probe floats in open sky).
+        // injection in main() - unoccluded here (the virtual probe floats in open sky).
         if (dot(u_skyRadianceColor, u_skyRadianceColor) > 0.0)
         {
             const vec4 Ysky = shBasisL1(up);
@@ -276,7 +276,7 @@ void main()
     // Update interval ("GI/Update interval"): a probe traces every updateInterval frames, with the blend
     // alpha scaled to match, so convergence in WALL time is unchanged while the ray count divides by the
     // interval. Interleaved per WORKGROUP (whole waves exit, no half-empty waves); fresh probes always
-    // trace — a skipped fresh slot would show the scrolled-out probe's data for a frame.
+    // trace - a skipped fresh slot would show the scrolled-out probe's data for a frame.
     if (!fresh && ((gl_WorkGroupID.x + pc.frameIndex) % pc.updateInterval) != 0u)
         return;
 
@@ -324,7 +324,7 @@ void main()
     // Sky radiance (moonlight / space light): a directional delta light can't be hit by gather rays, so
     // its direct irradiance is projected straight into the probe SH (one SH-L1 delta projection; eval's
     // cosine convolution then yields ~E * max(dot(n, up), 0)). Visibility is a single ray from the probe
-    // center toward up (toggleable) — probes float in open space, so this is a soft, low-noise gate, and
+    // center toward up (toggleable) - probes float in open space, so this is a soft, low-noise gate, and
     // the temporal blend smooths it further. Bounces arrive for free through the prevE multi-bounce.
     if (dot(u_skyRadianceColor, u_skyRadianceColor) > 0.0)
     {
@@ -344,7 +344,7 @@ void main()
     // along the ray that found it; probes grazing a wall back off along the ray that found the closest
     // frontface; comfortable probes drift home so the offset doesn't fossilize around moved geometry.
     // Clamped to a fraction of the spacing so the probe stays representative of its trilinear cell.
-    // closestFront/closestBack are minima over few jittered rays — very noisy estimators — so every
+    // closestFront/closestBack are minima over few jittered rays - very noisy estimators - so every
     // steering step except the discrete punch-through is damped: raw per-frame corrections make the probe
     // position (and with it the whole Chebyshev visibility field) wobble frame to frame.
     const float minFront = 0.15 * float(spacing);
@@ -370,7 +370,7 @@ void main()
         alpha = max(alpha, 0.5 * clamp(moved / (0.25 * float(spacing)), 0.0, 1.0));
 
         // A probe whose stored backface fraction says "embedded" but whose rays now mostly hit frontfaces
-        // has just escaped: flush the near-black inside-the-wall history quickly — but softly (a hard
+        // has just escaped: flush the near-black inside-the-wall history quickly - but softly (a hard
         // alpha-1 replace would stamp a single noisy N-ray snapshot that then persists for ~1/alpha
         // frames). This refires for a few frames while the stored fraction descends, averaging the reset.
         if (prevMisc.x > GI_BACKFACE_DEAD_MAX && backFrac < GI_BACKFACE_DEAD_MIN)

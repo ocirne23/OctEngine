@@ -12,12 +12,12 @@
 //   u_fogParams5: xy = terrain height map world center XZ (shared by both cascades),
 //                 z = 1 / far cascade world size (0 = near only), w = baked terrain sea level (fog clamp floor)
 //   u_fogParams6: x = slice power (exponent on the normalized slice before the exponential mapping:
-//                 1 = plain exponential, < 1 shifts Z resolution from near to far — useful at long ranges),
+//                 1 = plain exponential, < 1 shifts Z resolution from near to far - useful at long ranges),
 //                 y = terrain shadow distance (froxels beyond it sun-shadow against the terrain height map
 //                 instead of TLAS rays / cascade taps, which both run out of data at distance),
 //                 z = regional fog strength (baked thickness/falloff modulation, 0 = uniform),
 //                 w = underwater density multiplier (on the global density, below the local water surface)
-//   u_fogParams9: far field (past the froxel volume; vol_apply) — x = enabled (> 0.5), y = density scale,
+//   u_fogParams9: far field (past the froxel volume; vol_apply) - x = enabled (> 0.5), y = density scale,
 //                 z = multiplier on the near field's height falloff (fogParams0.z), w = ground samples per ray
 
 #ifndef VOL_FOG_INC_GLSL
@@ -67,7 +67,7 @@ float volHeightAntideriv(float h, float k)
 // Optical depth over a stretch where the height above the base runs linearly: from hStart, at `slope`
 // metres of height per metre travelled, for `len` metres.
 //
-// Linearity in h is what this needs, not a straight ray through a flat layer — so if the base itself
+// Linearity in h is what this needs, not a straight ray through a flat layer - so if the base itself
 // varies linearly (a terrain-following layer over ground interpolated between two samples), its slope
 // just subtracts from the ray's and the result stays exact. That is what lets volFarField follow terrain
 // piecewise without ever sampling density.

@@ -13,11 +13,11 @@ import :Structures;
 import :Npc;
 
 // World-anchored UI: a health bar above every damageable structure, plus name/HP/power info on the
-// selected one. Projected with THIS frame's final camera (worldToScreen — captured in
+// selected one. Projected with THIS frame's final camera (worldToScreen - captured in
 // updateWindowed), replaced wholesale each frame; the overlay just paints at the given viewport
 // pixels. A JOB: submitted at the END of the game tick (structures settled for the frame; only the
 // entity pass runs alongside, and it changes field values, never the rosters or the structure
-// list — torn float reads are fine for a bar) and joined by main right before the widget pass is
+// list - torn float reads are fine for a bar) and joined by main right before the widget pass is
 // queued (joinWorldLabels), which is what consumes the labels. GameHud's writes are mutexed.
 void GameMatch::submitWorldLabels(float deltaSec)
 {
@@ -35,7 +35,7 @@ void GameMatch::joinWorldLabels()
 
 // The most pressing PROBLEM over an own-team structure, as a short badge (nullptr = nothing wrong).
 // These are the states the bars alone do not explain: a consumer with no power, an input that never
-// arrives, an output with nowhere to go, a full store, a capped barracks. Ordered by severity —
+// arrives, an output with nowhere to go, a full store, a capped barracks. Ordered by severity -
 // one badge per structure, the first hit wins. Blueprints are inert BY DESIGN and never warn.
 const char* GameMatch::structureWarning(int index, glm::vec3& color) const
 {
@@ -47,8 +47,8 @@ const char* GameMatch::structureWarning(int index, glm::vec3& color) const
     const auto linked = [&](uint8 medium) { return (s.attachedMask & (1u << medium)) != 0; }; // a run touches it
     constexpr glm::vec3 c_red(1.0f, 0.35f, 0.3f), c_orange(1.0f, 0.62f, 0.25f), c_amber(1.0f, 0.85f, 0.35f);
 
-    // 1) A MEDIUM WITH NO CABLE OF ITS OWN. Whichever media a structure MOVES — one it eats, one it
-    //    makes, one it banks — a missing line of that medium is dead weight: the input can never
+    // 1) A MEDIUM WITH NO CABLE OF ITS OWN. Whichever media a structure MOVES - one it eats, one it
+    //    makes, one it banks - a missing line of that medium is dead weight: the input can never
     //    arrive, or the output has nowhere to go. Structural, so it does NOT gate on the current
     //    stock: a cabled-but-starved or cabled-but-backed-up machine is not a badge (its bars say
     //    that, and it resolves itself), while an uncabled one never resolves.
@@ -158,7 +158,7 @@ void GameMatch::buildWorldLabels()
     for (int i = 0; i < m_structures.structureCount(); ++i)
     {
         const EStructureType type = m_structures.structureType(i);
-        // Cable segments: no label unless there is something to show — a blueprint's build
+        // Cable segments: no label unless there is something to show - a blueprint's build
         // progress or damage, AUTHORITY only (cable health is not mirrored, so a client's copy
         // would read full). Hundreds of full-health segments would drown the HUD.
         const float healthMax = m_structures.structures()[i].state->healthMax;
@@ -184,11 +184,11 @@ void GameMatch::buildWorldLabels()
         label.barMax = healthMax; // per-type: cables are softer than buildings
         {
             const float frac = label.barValue / label.barMax;
-            // Blueprint: health IS the construction progress — the bar reads blue while building.
+            // Blueprint: health IS the construction progress - the bar reads blue while building.
             label.barColor = m_structures.structureBlueprint(i) ? glm::vec3(0.5f, 0.7f, 1.0f)
                 : glm::mix(glm::vec3(1.0f, 0.25f, 0.2f), glm::vec3(0.3f, 1.0f, 0.4f), frac);
         }
-        // A FULL health bar stays hidden — only damage (or blueprint progress, or selection, or
+        // A FULL health bar stays hidden - only damage (or blueprint progress, or selection, or
         // "AlwaysDisplayHealth true" in the .pre) draws one.
         if (!m_structures.structureBlueprint(i) && i != selected
             && !m_structures.structures()[i].state->alwaysDisplayHealth
@@ -203,14 +203,14 @@ void GameMatch::buildWorldLabels()
         const bool mineralBar = type == EStructureType::MineralSilo
             || (mineralCap > 0.0f && energyCap <= 0.0f);
         // The STORE bars are opt-in when unselected: only the prefabs that author
-        // `AlwaysShowResources true` (storage, emitters, barracks — the stores a player watches at
+        // `AlwaysShowResources true` (storage, emitters, barracks - the stores a player watches at
         // a glance) carry them around, everything else shows them while SELECTED. The health bar
         // is unaffected: damage always shows one.
         const bool showResources = i == selected
             || m_structures.structures()[i].state->alwaysShowResources;
         if (m_structures.structureBlueprint(i) || !showResources)
         {
-        } // blueprint: no second bar — the (blue) health bar IS the build progress
+        } // blueprint: no second bar - the (blue) health bar IS the build progress
         else if (isCableOrCrossing(type))
         {
             // A conduit's second bar is its THROUGHPUT: the ~2 s average of cells leaving the
@@ -314,7 +314,7 @@ void GameMatch::buildWorldLabels()
         }
         labels.push_back(oc::move(label));
     }
-    // Units + players: own team green, enemy teams red. Only VISIBLE ones are fetched — an
+    // Units + players: own team green, enemy teams red. Only VISIBLE ones are fetched - an
     // off-screen one would just fail worldToScreen below. Works identically on server AND client:
     // remote instances' GameUnitComponents are populated by the snapshot game blob. Puppets are
     // player capsules; the own player is skipped (its HUD bars cover it).
@@ -330,20 +330,20 @@ void GameMatch::buildWorldLabels()
         if (!u || unitEntity == ownPlayer || !inRange(unitEntity->pos))
             continue;
         // (Swarm bodies included: full bars are hidden, so only the DAMAGED slice of a thousand-
-        // body horde pushes a label — the drown-the-HUD concern the old shieldOutput skip covered.)
+        // body horde pushes a label - the drown-the-HUD concern the old shieldOutput skip covered.)
         HudWorldLabel label;
         const float height = u->puppet ? 2.0f : 1.6f;
         if (!camera.worldToScreen(viewport, unitEntity->pos + glm::vec3(0.0f, height, 0.0f), label.screenPos)
             || !onScreen(label.screenPos)) // the frustum query is conservative (entry bounds)
             continue;
-        label.title = u->getShortName(); // the prefab's `ShortName` tag (same on every instance — no wire type needed)
+        label.title = u->getShortName(); // the prefab's `ShortName` tag (same on every instance - no wire type needed)
         // FULL bars stay hidden ("AlwaysDisplayHealth true" in the .pre opts a prefab back in):
-        // only damage draws attention. An undamaged non-player unit skips its label entirely —
+        // only damage draws attention. An undamaged non-player unit skips its label entirely -
         // no floating name over a healthy crowd; players always keep their name tag.
         const bool always = u->alwaysDisplayHealth;
         if (!u->puppet && !u->collapsed && u->energy > 0.0f)
         { // shield-less bodies (swarm) spawn with a ZERO battery, so they land in the health branch
-            // UNIT with a live shield: ONE bar — the shield IS the unit's front line, so the bar
+            // UNIT with a live shield: ONE bar - the shield IS the unit's front line, so the bar
             // shows it (shield color) until it collapses; only then does the health bar take over.
             if (always || u->energy < u->energyMax - 1e-3f)
             {

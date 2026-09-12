@@ -14,8 +14,8 @@ import :Field;
 export namespace Nav
 {
     // Chunk-creation requests from ANY thread (a splat/inject into a missing chunk, a pressure
-    // front reaching a border cell): a BOUNDED lock-free append — one atomic bump into a fixed
-    // array — drained serially by beginStep. Bounded on purpose: a request past the cap is simply
+    // front reaching a border cell): a BOUNDED lock-free append - one atomic bump into a fixed
+    // array - drained serially by beginStep. Bounded on purpose: a request past the cap is simply
     // dropped and re-issued by the next frame's splat (the chunk arrives a frame later, invisible
     // at the front's speed), so a field pays 2 KB instead of a vector per scheduler context, and
     // the size no longer follows the worker count. The drain relies on the phase barrier (the
@@ -47,7 +47,7 @@ export namespace Nav
 
     // Per-team CROWD FLOW: units splat their planar velocity into their cell every tick; the read
     // buffer is an exponentially decayed trail (persisting ~1 s), so a unit reads "which way is
-    // the crowd already moving here" and blends into it — a group commits to one way round a wall
+    // the crowd already moving here" and blends into it - a group commits to one way round a wall
     // and stragglers follow the stream instead of picking their own side. Same chunk/buffer/touch
     // machinery as DensityField; values are fixed-point int16 (1/64 m/s summed).
     class FlowField final
@@ -69,20 +69,20 @@ export namespace Nav
         // Worker-safe 3x3 mean. With a `raster`, BLOCKED cells are left out of the average
         // entirely instead of averaging in as zero: inside a one-cell gap two thirds of the
         // neighbourhood is wall, which used to cut the lane's sampled strength to a third of its
-        // real value — exactly where a unit most needs to believe in it.
+        // real value - exactly where a unit most needs to believe in it.
         glm::vec2 sample(const glm::vec2& xz, const TeamField* raster = nullptr) const;
         // Mean flow over the (2r+1)^2 cells around xz that are OPEN in `raster` (blocked cells and
         // absent chunks contribute nothing): "which way is the crowd around here going".
         glm::vec2 sampleArea(const glm::vec2& xz, int radiusCells, const TeamField* raster) const;
         // The per-frame step is split so ALL teams' chunks can share one fan-out (see
         // NavSystem::update): beginStep (MAIN thread) drains the touch queue, flips the buffers,
-        // evicts idle chunks and appends one StepItem per surviving chunk — stashing this step's
+        // evicts idle chunks and appends one StepItem per surviving chunk - stashing this step's
         // parameters on the field; stepChunk then runs PER CHUNK from any worker (it writes only
         // its own chunk's write buffer and reads neighbours' READ buffers, so items of any mix of
         // fields never conflict, and no map mutates during the fan-out).
         // Fading is FRAME-RATE INDEPENDENT: `halfLifeSec` is how long a lane takes to lose half its
         // speed, and the splat gain that feeds the EMA is derived from the same step. A wall cell
-        // holds nothing. `maxSpeed` caps a cell's magnitude (splats SUM — a milling crowd must not
+        // holds nothing. `maxSpeed` caps a cell's magnitude (splats SUM - a milling crowd must not
         // out-shout a seeded lane).
         struct StepItem
         {
@@ -94,11 +94,11 @@ export namespace Nav
             float maxSpeed, oc::vector<StepItem>& outItems);
         void stepChunk(uint64 key, Chunk& chunk); // worker-safe between beginStep and the barrier
         void clear();
-        // Main thread: zero both buffers within `radius` of xz — a fresh order wipes the old lane
+        // Main thread: zero both buffers within `radius` of xz - a fresh order wipes the old lane
         // around the ordered units so they can turn around without the trail pulling them back.
         void clearArea(const glm::vec2& xz, float radius);
         // Main thread: WRITE a lane along a polyline into both buffers (max-magnitude, so it is
-        // visible to units immediately and survives the next decay step) — a planned route handed
+        // visible to units immediately and survives the next decay step) - a planned route handed
         // to the crowd as flow, see NavSystem::seedPath. `raster` is REQUIRED to keep the lane's
         // lateral spread out of walls (a wide lane beside a building would otherwise write flow
         // into cells nothing can stand in).
@@ -121,7 +121,7 @@ export namespace Nav
     };
 
     // Per-team PRESSURE: a SIGNED scalar field jammed units INJECT into, that DIFFUSES outward every frame
-    // (one Jacobi step over the touched chunks — walls are reflective, so pressure flows around
+    // (one Jacobi step over the touched chunks - walls are reflective, so pressure flows around
     // buildings, not through them) and decays. Units steer DOWN the pressure gradient, so a jam is
     // felt upstream before anyone reaches it, and the jam itself is squeezed out toward open space.
     // Chunks grow wherever pressure reaches a border cell and evict once they are quiet.
@@ -134,7 +134,7 @@ export namespace Nav
             float p[2][ChunkArea];
             uint32 touchedFrame;
             float peak; // max value after the last step (eviction / growth decisions)
-            uint8 prevActive; // snapshot taken SERIALLY before the parallel step — the quiet-skip
+            uint8 prevActive; // snapshot taken SERIALLY before the parallel step - the quiet-skip
                               // reads the NEIGHBOURS' state, and during the step their peak/touched
                               // are being rewritten by their own tasks (racy and, worse, post-step)
             Chunk() { memset(p, 0, sizeof(p)); touchedFrame = 0; peak = 0.0f; prevActive = 0; }
@@ -157,22 +157,22 @@ export namespace Nav
         // Worker-safe central difference (per metre). Pass the `raster`: a blocked neighbour is
         // substituted with the centre value (NO-FLUX, the same boundary the diffusion step uses).
         // Without it a wall reads as a plain 0, which against a negative seeded trough looks like a
-        // high-pressure spot — every vector near a wall then pushes away from it.
+        // high-pressure spot - every vector near a wall then pushes away from it.
         glm::vec2 gradient(const glm::vec2& xz, const TeamField* raster = nullptr) const;
         // Centre of the OPEN cell with the lowest pressure within radiusCells (own cell excluded);
-        // false if none is open — the escape target for a unit boxed into a corner.
+        // false if none is open - the escape target for a unit boxed into a corner.
         bool lowestNearby(const glm::vec2& xz, int radiusCells, const TeamField* raster, glm::vec2& outCentre) const;
         // A visitor for the step's active cells: called with the cell centre and the pressure
         // gradient the step already computed (per metre, no-flux at walls).
         using CellVisit = oc::function<void(const glm::vec2& centre, const glm::vec2& gradient)>;
         // Split like the FlowField step (see there and NavSystem::update): beginStep (MAIN)
         // drains/evicts, snapshots `prevActive` for the quiet-skip and appends StepItems; stepChunk
-        // runs PER CHUNK from any worker — one Jacobi step read -> write (a task writes only its
+        // runs PER CHUNK from any worker - one Jacobi step read -> write (a task writes only its
         // own dst buffer, peak and touchedFrame; neighbours are read from src and prevActive), with
-        // growth requests riding the TouchQueue (the chunk exists before the NEXT step —
+        // growth requests riding the TouchQueue (the chunk exists before the NEXT step -
         // the front moves well under a cell a frame, so the delay is invisible); endStep (MAIN)
         // flips the buffers. `item.push` (may be null) is called for every active cell with the
-        // gradient the step already has in hand — the pressure->flow push rides this, and it must
+        // gradient the step already has in hand - the pressure->flow push rides this, and it must
         // only run AFTER the flow fan-out settled: it splats ATOMICALLY into flow write buffers the
         // flow tasks write plainly. Rates are FRAME-RATE INDEPENDENT (half-life + dt-scaled
         // diffusion clamped to the 0.25 Jacobi limit); `propagationFloor` stops sub-floor

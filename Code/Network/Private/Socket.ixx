@@ -12,13 +12,13 @@ export constexpr uint64 InvalidSocketHandle = ~0ull;
 export NetAddress netResolveHost(oc::string_view hostName, uint16 port);
 
 // The primary local IPv4 other machines on the LAN can dial (route selection via a connected UDP
-// socket — no packet is sent). Loopback when the machine has no route at all. Port is always 0;
+// socket - no packet is sent). Loopback when the machine has no route at all. Port is always 0;
 // callers fill in their own.
 export NetAddress netGetLocalAddress();
 
 // The PUBLIC IPv4 (what internet clients dial): a plain-HTTP GET to public IP-echo services
-// (checkip.amazonaws.com and fallbacks — the engine has no TLS, so HTTPS-only services are out).
-// BLOCKING up to timeoutMs (DNS + TCP round trip) — call from a background thread, never from the
+// (checkip.amazonaws.com and fallbacks - the engine has no TLS, so HTTPS-only services are out).
+// BLOCKING up to timeoutMs (DNS + TCP round trip) - call from a background thread, never from the
 // main loop. Invalid address (ip 0) on failure/timeout. Port is always 0; callers fill in their
 // own. Note the router must still forward that port for the endpoint to be reachable.
 export NetAddress netGetExternalAddress(uint32 timeoutMs = 3000);

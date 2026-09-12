@@ -15,7 +15,7 @@ import :Sampler;
 import :Layout;
 
 // Diffuse GI probe system over a single persistent, world-space CASCADED CLIPMAP volume. GI_NUM_CASCADES
-// nested toroidal probe grids (centred on the SCENE FOCUS — u_sceneFocus: the game's player, else the camera —
+// nested toroidal probe grids (centred on the SCENE FOCUS - u_sceneFocus: the game's player, else the camera -
 // with doubling spacing) store SH-L1 irradiance at absolute lattice
 // positions; toroidal addressing carries irradiance forward in place with no hash table, copy, or ping-pong.
 // Three compute passes per frame:
@@ -26,7 +26,7 @@ import :Layout;
 //                           temporally blends into each probe's SH-L1 (full replace for probes that just
 //                           scrolled into the clipmap). The probe set + window is derived from the scene focus.
 //                           "GI/Update interval": a probe traces every N frames (per workgroup, alpha scaled
-//                           by N — same wall-time convergence, 1/N of the rays); fresh probes always trace.
+//                           by N - same wall-time convergence, 1/N of the rays); fresh probes always trace.
 // The TLAS is built by the AccelerationStructure object between passes 1 and 3 (orchestrated by the Renderer).
 export class GIProbePipeline final
 {
@@ -40,10 +40,10 @@ public:
     // They are shader #defines in EVERY pipeline that samples the probes, so onGridChanged must: wait for
     // the GPU, call resizeGrid(), reload ALL shaders (Renderer::reloadShaders) and re-record.
     // onDefineChanged: g_giGrid values that are shader defines but change no resource (the Chebyshev
-    // power) — reload every shader, no resize, no clipmap clear.
+    // power) - reload every shader, no resize, no clipmap clear.
     void registerGridTweaks(const oc::function<void()>& onGridChanged, const oc::function<void()>& onDefineChanged);
     // Re-allocates the persistent SH clipmap buffer for the current g_giGrid and schedules the one-time
-    // clear (nothing is preserved — the toroidal slots mean something else now). GPU must be idle.
+    // clear (nothing is preserved - the toroidal slots mean something else now). GPU must be idle.
     void resizeGrid();
     // Grows the per-frame TLAS instance buffers (GPU scratch, nothing preserved; GPU must be idle).
     void resizeTlasInstanceBuffers(uint32 maxTlasInstances);
@@ -151,7 +151,7 @@ private:
     // temporally stabler occlusion edges (the L1 depth estimate wobbles with the per-frame ray jitter);
     // lower floor / higher power = sharper leak blocking.
     float m_visVarianceFloor = 0.3f;   // min std-dev as a fraction of the cascade's probe spacing
-    // (the Chebyshev exponent lives in RendererVKLayout::g_giGrid.visChebPower — a shader define)
+    // (the Chebyshev exponent lives in RendererVKLayout::g_giGrid.visChebPower - a shader define)
     float m_visWeightFloor = 0.01f;    // occluded probes keep this much weight (0 = hard cutoff)
     float m_visMeanScale = 2.5f;      // scales the reconstructed mean distance before the Chebyshev test:
                                        // > 1 widens each probe's visible footprint (more overlap/smoothing),
@@ -174,7 +174,7 @@ private:
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_debugSets;
 
     // PERSISTENT descriptor-update scratch (built once by buildUpdateScratch): the per-frame records only
-    // patch buffer/image handles into these, so "Record GI" allocates nothing after its first frame — the
+    // patch buffer/image handles into these, so "Record GI" allocates nothing after its first frame - the
     // old per-call DescriptorSetUpdateInfo temporaries cost ~20 heap vectors plus a texture-count-sized
     // one every frame. The texture list keeps its capacity across frames (clear + push_back).
     void buildUpdateScratch();

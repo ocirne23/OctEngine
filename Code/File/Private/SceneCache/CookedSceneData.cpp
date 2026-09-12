@@ -143,7 +143,7 @@ const IMeshData* CookedSceneData::getMesh(const char* pMeshName) const
 bool CookedSceneData::load(const oc::string& cachePath, const oc::string& sourcePath, uint64 sourceMTime, uint64 sourceSize, uint64 optionsHash)
 {
     // Cooked scenes load at SPAWN (main thread, cached afterwards) and on the terrain/mesh-stream
-    // jobs — both intended, so the main-thread policy is satisfied explicitly here.
+    // jobs - both intended, so the main-thread policy is satisfied explicitly here.
     FileSystem::assertIoThread(/*allowMainThread*/ true);
     FILE* pFile = nullptr;
     fopen_s(&pFile, cachePath.c_str(), "rb");

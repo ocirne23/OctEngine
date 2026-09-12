@@ -20,7 +20,7 @@ public:
     // per eye (getFramebuffer(eye)). The render pass stays non-multiview (viewMask 0) so the forward
     // pass's DGC execution set is allowed; the forward is rendered once per eye into its layer.
     // prepassDepthViews = the G-buffer's per-eye depth views: the REUSE pass variant binds them directly
-    // as a read-only depth attachment ("Depth prepass reuse" — the forward early-Z tests the prepass
+    // as a read-only depth attachment ("Depth prepass reuse" - the forward early-Z tests the prepass
     // depth with no copy and writes none of its own).
     bool initialize(vk::Format colorFormat, uint32 width, uint32 height, uint32 viewCount, const oc::array<vk::ImageView, 2>& prepassDepthViews);
     void destroy();
@@ -34,7 +34,7 @@ public:
     // SPLIT-instance variants: the Renderer records the forward pass as one instance PER STAGE so
     // the GPU profiler can bracket each stage (timestamps are illegal inside a secondaries
     // subpass). stage 0 = first (clears, STORES the depth for the followers), 1 = middle (loads,
-    // stores), 2 = last (loads, hands colour to TAA via SHADER_READ_ONLY, drops the depth) — all
+    // stores), 2 = last (loads, hands colour to TAA via SHADER_READ_ONLY, drops the depth) - all
     // COMPATIBLE with the main/reuse pass (identical dependency arrays, only load/store ops and
     // layouts differ), so the cached secondaries, the pipelines and the framebuffers serve every
     // variant. A frame with a single active stage uses the original pass instead (clear + final

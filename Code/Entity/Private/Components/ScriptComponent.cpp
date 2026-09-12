@@ -108,7 +108,7 @@ namespace
 }
 
 // Every entry point runs under a ThreadLocalScope: a script tick NEVER parks (the per-thread query
-// ring and RNG in ScriptContext depend on it) — a thunk that waits asserts here in debug.
+// ring and RNG in ScriptContext depend on it) - a thunk that waits asserts here in debug.
 
 bool invokeScriptOnSpawn(const ScriptModule* module, Entity& entity, void* scriptData)
 {

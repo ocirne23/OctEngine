@@ -78,8 +78,8 @@ namespace
         return FileSystem::readFileStr(path, /*allowMainThread*/ true);
     }
 
-    // Canonical cache key for a script. The same file reaches getOrLoad spelled different ways — the prefab
-    // stores a relative "Scripts/Foo.scr", the asset browser hands over an absolute backslash path — so key
+    // Canonical cache key for a script. The same file reaches getOrLoad spelled different ways - the prefab
+    // stores a relative "Scripts/Foo.scr", the asset browser hands over an absolute backslash path - so key
     // by the resolved absolute path. Otherwise a panel reload and the owning entity land in different slots
     // and the entity never sees the recompile (hot reload silently no-ops).
     oc::string cacheKey(const oc::string& path)
@@ -353,7 +353,7 @@ const ScriptModule* ScriptHost::getOrLoad(const oc::string& path, bool forceReco
     ProfileScope profileScope("Script compile", EProfileCategory::Script);
 
 #ifdef SCRIPTS_STATIC
-    // Cooked build: the script is baked into the engine binary and self-registered — resolve it from the registry
+    // Cooked build: the script is baked into the engine binary and self-registered - resolve it from the registry
     // (no cl, no LoadLibrary). forceRecompile is meaningless here (nothing to rebuild at runtime).
     if (const StaticScriptFns* e = findStaticEntries(path))
     {
@@ -388,7 +388,7 @@ const ScriptModule* ScriptHost::getOrLoad(const oc::string& path, bool forceReco
 #else
 
     // First load this session and not forced: if an existing DLL's mtime matches the source's (we stamp
-    // it to match after each compile), the source is unchanged since it was built — load it, skip cl.
+    // it to match after each compile), the source is unchanged since it was built - load it, skip cl.
     if (!forceRecompile && it == scripts.end())
     {
         const oc::string dll = scriptDllPath(path);
@@ -412,7 +412,7 @@ const ScriptModule* ScriptHost::getOrLoad(const oc::string& path, bool forceReco
     // Each build writes a FRESH, never-reused program PDB "<stem>.<serial>.pdb". The VS debugger caches
     // PDBs even after a module unloads, so reusing a name (even ping-ponging two) eventually collides
     // with a held handle (LNK1201). Name the new PDB with a serial ABOVE every "<stem>.<N>.pdb" already
-    // on disk — not just the last one this session made: a prior run (or a build whose PDB the debugger
+    // on disk - not just the last one this session made: a prior run (or a build whose PDB the debugger
     // still holds) can leave orphans at any index, and picking max+1 guarantees the linker never targets
     // a name still open, so a delete that failed earlier can never block this build.
     const oc::string outDir = FileSystem::parentPath(scriptDllPath(path));
@@ -481,7 +481,7 @@ void ScriptHost::unloadAll()
     {
         if (script.module) FreeLibrary((HMODULE)script.module);
         if (!script.dllPath.empty()) FileSystem::remove(script.dllPath, /*allowMainThread*/ true);
-        // Delete this script's PDBs — the live one plus any orphans on disk (keep nothing).
+        // Delete this script's PDBs - the live one plus any orphans on disk (keep nothing).
         retirePdbs(outDir, FileSystem::stem(path), oc::string());
     }
     scripts.clear();

@@ -54,7 +54,7 @@ public:
     vk::Sampler getMapsSampler() const { return m_mapsSampler.getSampler(); }
 
     // CPU displacement readback (buoyancy): each simulated frame copies the displacement layers' mip
-    // READBACK_MIP into that frame slot's host-visible buffer — a coarse tile is all physics needs (the
+    // READBACK_MIP into that frame slot's host-visible buffer - a coarse tile is all physics needs (the
     // swell moves bodies; sub-texel chop doesn't). Read the CURRENT slot only after beginFrame's fence
     // wait and only until that slot resubmits (Procedural::OceanGenerator copies it out right away);
     // contents are frame N-2's ocean, imperceptible for bobbing. Texels are RGBA16F (Dx, h, Dz, dDxz),

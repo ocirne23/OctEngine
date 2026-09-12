@@ -6,7 +6,7 @@
 // stages in a single dispatch), ping-ponging between the two halves of one shared array. Each RGBA32F
 // texel carries TWO packed complex signals (rg / ba) that share every twiddle, so the butterflies operate
 // on vec4s. Stockham is auto-sorting: no bit-reversal pass. The inverse transform uses e^{+i...} with no
-// 1/N scale — exactly Tessendorf's h(x) = sum h~(k) e^{+ikx}.
+// 1/N scale - exactly Tessendorf's h(x) = sum h~(k) e^{+ikx}.
 
 layout (local_size_x = OCEAN_FFT_SIZE / 2, local_size_y = 1, local_size_z = 1) in;
 

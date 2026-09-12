@@ -65,7 +65,7 @@ namespace
     }
 
     // Like realTargetOfOutput, but also collects every reroute waypoint passed through into `chain` (instead
-    // of skipping straight past them) — used by addReroutesBetweenSelected to decide which waypoints belong
+    // of skipping straight past them) - used by addReroutesBetweenSelected to decide which waypoints belong
     // to a copy/paste. Returns the first non-reroute node reached, or nullptr at a dead end or a cyclic chain.
     Node* traceForwardThroughReroutes(const oc::vector<oc::unique_ptr<Link>>& links, Pin* outputPin, oc::vector<Node*>& chain)
     {
@@ -79,7 +79,7 @@ namespace
             if (!nextNode->isReroute())
                 return nextNode;
             if (!visited.insert(nextNode).second)
-                return nullptr; // cyclic reroute chain — bail out rather than loop forever
+                return nullptr; // cyclic reroute chain - bail out rather than loop forever
             chain.push_back(nextNode);
             if (nextNode->getOutputPins().empty())
                 return nullptr;
@@ -92,7 +92,7 @@ namespace
     // silently dropping the connection: a reroute's two links each have exactly one endpoint on it, so
     // neither passes the "both ends selected" filter collectSelection applies afterward unless the reroute
     // is folded into the selection too. A single pass over each originally-selected node's outputs is enough
-    // — the destination side of a qualifying chain is always one of those same originally-selected nodes,
+    // - the destination side of a qualifying chain is always one of those same originally-selected nodes,
     // never a reroute newly added by this function.
     void addReroutesBetweenSelected(oc::set<Node*>& selected, oc::vector<Node*>& nodes, const oc::vector<oc::unique_ptr<Link>>& links)
     {
@@ -138,11 +138,11 @@ namespace
 
     // Focuses the add-node search box AND makes sure SDL is actually ready to feed it text on the very next
     // keystroke. ImGui only calls SDL_StartTextInput() once its own backend notices a text field is active,
-    // which (per this app's per-frame order — Input::update()'s SDL_PollEvent runs before UI::update()'s
+    // which (per this app's per-frame order - Input::update()'s SDL_PollEvent runs before UI::update()'s
     // ImGui_ImplSDL3_NewFrame(), the thing that actually calls it) normally lags a full frame behind the
     // widget gaining focus, silently swallowing whatever's typed during that frame. Calling it here too, the
     // instant the box is about to become active, closes that gap immediately instead of one frame late.
-    // SDL_GetKeyboardFocus() sidesteps needing this deeply-nested UI code to carry an SDL_Window* around —
+    // SDL_GetKeyboardFocus() sidesteps needing this deeply-nested UI code to carry an SDL_Window* around -
     // there's only ever the one app window anyway.
     void focusSearchBox()
     {
@@ -168,7 +168,7 @@ namespace
     // Best-effort ImGuiKey -> ASCII char for a letter/digit key, used to reconstruct the keystroke that
     // switches focus into the add-node search box the same frame it's pressed (see the AddNodePopup body):
     // SDL only generates text-input events while some text field already has focus, so the very keystroke
-    // that hands focus to the search box never arrives through that path — this rebuilds it directly instead
+    // that hands focus to the search box never arrives through that path - this rebuilds it directly instead
     // of losing it. Only handles plain letters/digits (matching the "start typing" detection below); shifted
     // digit-row symbols ('!', '@', ...) aren't reconstructed since their layout varies.
     char charForTypingKey(ImGuiKey key, bool shift)
@@ -400,7 +400,7 @@ namespace
         if (isScriptDataType(node->getTypeId()))
             return "data->" + outPin->name;
         // A Function Input parameter resolves to the generated function's C++ parameter, named by position
-        // (param<k>) — the pin's editable label is display-only and never reaches the code.
+        // (param<k>) - the pin's editable label is display-only and never reaches the code.
         if (isFunctionInputType(node->getTypeId()))
         {
             const int o = indexOfPin(node->getOutputPins(), outPin); // pin 0 is exec-out; params start at 1
@@ -536,7 +536,7 @@ namespace
     }
 
     // A Trigger Audio statement: plays the alias whose exec entry pin the flow arrived through. The override
-    // mask is settled at CODEGEN time from which override inputs are connected — unconnected ones pass their
+    // mask is settled at CODEGEN time from which override inputs are connected - unconnected ones pass their
     // (ignored) defaults, so the sound keeps its authored settings for those.
     oc::string emitTriggerAudioStmt(Codegen& cg, Node* node, oc::set<const Node*>& execStack, const HoistMap& hoist, const Pin* enteredPin)
     {
@@ -588,7 +588,7 @@ namespace
     }
 
     // A Function Output statement: assign each connected return input to the generated function's out-param,
-    // named by position (ret<k>) — the pin's editable label is display-only. It has no exec continuation
+    // named by position (ret<k>) - the pin's editable label is display-only. It has no exec continuation
     // (it's the end of the function body).
     oc::string emitFunctionOutputStmt(Codegen& cg, Node* node, const HoistMap& hoist)
     {
@@ -688,15 +688,15 @@ void Scene::initialize()
 {
     ed::Config config;
     config.SettingsFile = nullptr;
-    // NavigateButtonIndex stays the default (right-click), which also drives the context menu — a real drag
+    // NavigateButtonIndex stays the default (right-click), which also drives the context menu - a real drag
     // still pans, a near-stationary click still opens the popup (see the ContextMenuAction threshold fix and
     // NavigateAction's added middle-mouse-button support in imgui_node_editor.cpp).
     //
     // EnableSmoothZoom: with it off (the library default), NavigateAction::GetNextZoom truncates the wheel
-    // delta to an int before applying it — any accumulated scroll below a full 1.0 step is silently dropped,
+    // delta to an int before applying it - any accumulated scroll below a full 1.0 step is silently dropped,
     // every frame, forever. A physical mouse locally almost always clears 1.0 per notch within one frame, so
     // this goes unnoticed; over Remote Desktop the same notch's sub-events arrive spread across several
-    // frames, so each frame's delta is usually a fraction below 1.0 and gets truncated to zero — scrolling
+    // frames, so each frame's delta is usually a fraction below 1.0 and gets truncated to zero - scrolling
     // only "works" once it's fast enough that one frame's accumulated delta happens to clear 1.0. Smooth zoom
     // scales continuously (powf(power, steps)) instead of truncating, so it has no such threshold to miss.
     config.EnableSmoothZoom = true;
@@ -831,7 +831,7 @@ void Scene::removeNode(ed::NodeId nodeId)
     }
     else if (!node->isReroute())
     {
-        // A reroute chain feeding (or fed by) this node is meaningless once the node is gone — delete the
+        // A reroute chain feeding (or fed by) this node is meaningless once the node is gone - delete the
         // whole waypoint line, not just the segment adjacent to the node. Repeat until no chain remains
         // (deleteRerouteChain removes links, so re-scan after each).
         for (;;)
@@ -979,7 +979,7 @@ void Scene::applyMemberEdit(const MemberEdit& edit)
     {
         case EMemberOp::Add:
         {
-            // All nodes are in sync, so their counts match — derive one shared name from the first.
+            // All nodes are in sync, so their counts match - derive one shared name from the first.
             const size_t count = nodes.empty() ? 0 : nodes[0]->getOutputPins().size();
             const oc::string name = "member" + oc::to_string(count);
             for (Node* n : nodes)
@@ -1109,7 +1109,7 @@ void Scene::syncTriggerAudioPins(Node& node)
 
 // Dragging a link onto empty canvas opens the add-node popup with m_pendingLinkPin set to its dangling end;
 // once the user picks a node type, this wires that end to the new node's first pin (of the opposite kind)
-// that accepts it, in pin order. Leaves the link unconnected if none does — the node is still created either
+// that accepts it, in pin order. Leaves the link unconnected if none does - the node is still created either
 // way, but pruneOrphanedReroute cleans up a reroute chain left with nothing downstream (see there). A no-op
 // if the popup was opened normally (right-click), which clears m_pendingLinkPin beforehand.
 void Scene::autoConnectPending(Node& node)
@@ -1144,13 +1144,13 @@ void Scene::autoConnectPending(Node& node)
             }
     }
 
-    // The new node has no pin compatible with the dropped end, so it stays unconnected — prune it if it's a
+    // The new node has no pin compatible with the dropped end, so it stays unconnected - prune it if it's a
     // dead reroute stub (see pruneOrphanedReroute); a no-op otherwise (e.g. a plain unconnected input pin
     // freshly dragged out, never routed through anything).
     pruneOrphanedReroute(danglingPin);
 }
 
-// Deletes an orphaned reroute chain starting at `pin` — an output pin left with no downstream connection
+// Deletes an orphaned reroute chain starting at `pin` - an output pin left with no downstream connection
 // (numConnections == 0) after redirectIfRewiring picked up an existing link's input end and dropped the
 // segment immediately below it, or after autoConnectPending failed to find anywhere to reconnect it. Walks
 // upstream through each further reroute that becomes orphaned in turn (removeNode strips a reroute's own
@@ -1190,7 +1190,7 @@ void Scene::removeInputPin(Node* node, int index)
         resolveNodeTypes(n);
 }
 
-// Applies one param/return edit to a single Function Input/Output node (not synced across nodes — each
+// Applies one param/return edit to a single Function Input/Output node (not synced across nodes - each
 // function is independent). Function Input edits its OUTPUT pins (parameters); Function Output edits its
 // INPUT pins (return values). pin 0 is the fixed exec pin, so edited indices are always >= 1.
 void Scene::applyFunctionEdit(Node* node, const MemberEdit& edit)
@@ -1462,7 +1462,7 @@ oc::string Scene::generateCpp()
     oc::string code;
     // The .scr holds ONLY namespace-body-safe code: an optional Script Data struct, helper functions, and the
     // SCRIPT_EXPORT entry-point functions, followed by the //@graph metadata (all comments). It does NOT
-    // #include ScriptAPI.h or pick a build mode — the compiler wrapper supplies those, so the same file serves
+    // #include ScriptAPI.h or pick a build mode - the compiler wrapper supplies those, so the same file serves
     // both back-ends. ScriptHost force-includes ScriptAPI.h (+ /DSCRIPT_BUILD) when building the hot-reload DLL;
     // the App-Scripts aggregate (cooked build) includes ScriptAPI.h once and #includes each .scr straight into
     // its own namespace (real imported Entity, SCRIPT_STATIC_BUILD) so many scripts link into the engine binary
@@ -1543,7 +1543,7 @@ oc::string Scene::generateCpp()
         code += "}\n\n";
     }
 
-    // On Event dispatches a runtime-fired event by index (not name — the host resolves a name to an index via
+    // On Event dispatches a runtime-fired event by index (not name - the host resolves a name to an index via
     // ScriptEventCount/ScriptEventName and caches it, keeping the fire-time call a plain int compare). The
     // index is the entry's position among the On Event node's output pins, so it lines up with ScriptEventName.
     if (Node* eventNode = !functionScript ? findEventEntry() : nullptr)
@@ -1644,7 +1644,7 @@ oc::string Scene::serializeGraph()
             s += "//@reroute " + oc::to_string(i) + " " + dataTypeToken(m_nodes[i]->getInputPins()[0]->dataType) + "\n";
 
     // Script Data members (a dynamic node's output pins). Emitted before links so a load recreates them
-    // first — links reference these output pins by index.
+    // first - links reference these output pins by index.
     for (int i = 0; i < (int)m_nodes.size(); ++i)
         if (m_nodes[i]->isDynamic())
             for (const auto& pin : m_nodes[i]->getOutputPins())
@@ -1678,7 +1678,7 @@ oc::string Scene::serializeGraph()
         }
         else if (node->isFunctionOutput())
         {
-            // No //@funcname: a Function Output has no name — codegen pairs it to its Input by exec reachability.
+            // No //@funcname: a Function Output has no name - codegen pairs it to its Input by exec reachability.
             const auto& ins = node->getInputPins();
             for (size_t j = 1; j < ins.size(); ++j)
                 s += "//@return " + oc::to_string(i) + " " + memberTypeToken(ins[j]->dataType) + " " + ins[j]->name + "\n";
@@ -1757,7 +1757,7 @@ namespace
 
 // Core //@-tag parser shared by loadFromFile (full replace) and pasteFromClipboard (adds onto the live graph).
 // Node positions are shifted by `offset` as they're created (0,0 for a normal load). Does NOT clear the
-// existing graph or touch first-frame/baseline bookkeeping — callers own that. `byIndex` is filled in,
+// existing graph or touch first-frame/baseline bookkeeping - callers own that. `byIndex` is filled in,
 // indexed by the snippet's own local //@node indices (0..N-1 for a clipboard paste, whatever a file uses
 // for a full load), so callers can find the newly created nodes afterward (e.g. to select them).
 void Scene::loadLinesIntoGraph(const oc::vector<oc::string>& lines, ImVec2 offset, oc::vector<Node*>& byIndex)
@@ -1960,7 +1960,7 @@ void Scene::loadLinesIntoGraph(const oc::vector<oc::string>& lines, ImVec2 offse
 }
 
 // A reroute copied without the node on one end of its link (paste/duplicate only clips links where BOTH
-// endpoints are selected — see collectSelection) comes out of loadLinesIntoGraph missing that connection: an
+// endpoints are selected - see collectSelection) comes out of loadLinesIntoGraph missing that connection: an
 // orphaned waypoint routing nothing. Delete those so a paste/duplicate doesn't litter the graph with dead
 // dots. removeNode's own reroute-rejoin logic only fires when BOTH sides are still connected, so this can't
 // accidentally reconnect something that shouldn't be. Nulls out the pruned entries in byIndex so a caller's
@@ -2006,7 +2006,7 @@ bool Scene::loadFromFile(const oc::string& path)
 
 // Scoped serializeGraph: only `nodes` (with fresh local indices 0..N-1, independent of their position in the
 // live m_nodes) and only `links` (the caller is expected to have already filtered these to ones internal to
-// the selection — see copySelectedToClipboard). Mirrors serializeGraph's per-node-type sections exactly, just
+// the selection - see copySelectedToClipboard). Mirrors serializeGraph's per-node-type sections exactly, just
 // keyed by local index instead of indexOfNode, so a paste elsewhere reconstructs the same nodes/links/data.
 oc::string Scene::serializeSubset(const oc::vector<Node*>& nodes, const oc::vector<Link*>& links)
 {
@@ -2110,8 +2110,8 @@ oc::string Scene::serializeSubset(const oc::vector<Node*>& nodes, const oc::vect
     return s;
 }
 
-// Gathers every currently-selected node (plus any reroute waypoint that sits between two selected nodes —
-// see addReroutesBetweenSelected), and every link where both endpoints are in that set — the same subset
+// Gathers every currently-selected node (plus any reroute waypoint that sits between two selected nodes -
+// see addReroutesBetweenSelected), and every link where both endpoints are in that set - the same subset
 // copySelectedToClipboard and duplicateSelection each turn into a serialized clipping.
 void Scene::collectSelection(oc::vector<Node*>& nodes, oc::vector<Link*>& links) const
 {
@@ -2167,7 +2167,7 @@ void Scene::pasteFromClipboard(ImVec2 canvasPos)
 
     oc::vector<oc::string> lines = splitLines(text);
 
-    // Offset so the pasted selection's centroid (average node position) lands at the cursor — every node
+    // Offset so the pasted selection's centroid (average node position) lands at the cursor - every node
     // keeps its position relative to that centroid, so the layout copied is preserved exactly, just recentered.
     float sumX = 0.0f, sumY = 0.0f;
     int nodeCount = 0;
@@ -2197,7 +2197,7 @@ void Scene::pasteFromClipboard(ImVec2 canvasPos)
 
 // Node context menu "Duplicate": clones clickedId plus whatever else is already selected, offset a little
 // from the originals (unlike Ctrl+V, which recenters on the mouse), and selects the clones so they can be
-// dragged into place together. Self-contained — it doesn't touch the OS clipboard.
+// dragged into place together. Self-contained - it doesn't touch the OS clipboard.
 void Scene::duplicateSelection(ed::NodeId clickedId)
 {
     ed::SelectNode(clickedId, true); // fold the right-clicked node into whatever's already selected
@@ -2223,7 +2223,7 @@ void Scene::duplicateSelection(ed::NodeId clickedId)
 
 // Node context menu "Reset": restores every input pin's literal (and, for a wildcard pin, its pin-group type)
 // back to what NodeDef declares, then disconnects the node entirely. Pins are reset by position against
-// def->inputs, which only lines up for a plain NodeDef-spawned node — dynamic-pin node types (Script Data,
+// def->inputs, which only lines up for a plain NodeDef-spawned node - dynamic-pin node types (Script Data,
 // On Event, Function I/O, Function Call, Reroute, Trigger Audio's synced alias pins) skip the literal reset
 // and just get disconnected.
 void Scene::resetNodeToSpawnDefaults(ed::NodeId nodeId)
@@ -2337,7 +2337,7 @@ void Scene::update(double deltaSec)
     }
 
     // Same two actions, requested from outside this frame (e.g. main.cpp's global keyboard hook) via
-    // requestCopy()/requestPaste() — consumed here, where mouse position and the canvas transform are valid.
+    // requestCopy()/requestPaste() - consumed here, where mouse position and the canvas transform are valid.
     if (m_pendingCopyRequest)
     {
         m_pendingCopyRequest = false;
@@ -2357,7 +2357,7 @@ void Scene::update(double deltaSec)
     if (ed::ShowBackgroundContextMenu())
     {
         m_pendingAddPos = ed::ScreenToCanvas(ImGui::GetMousePos());
-        m_pendingAddScreenPos = ImGui::GetMousePos(); // captured once, at the click — not recomputed while open
+        m_pendingAddScreenPos = ImGui::GetMousePos(); // captured once, at the click - not recomputed while open
         m_pendingLinkPin = nullptr; // plain right-click add, not tied to a dropped link
         m_importFunctions = scanImportableFunctions(); // refresh the importable-function list while it's open
         ImGui::OpenPopup("AddNodePopup");
@@ -2385,19 +2385,19 @@ void Scene::update(double deltaSec)
         else if (hadQuery)
         {
             // With a query typed, Up/Down/Enter drive the filtered results list below via raw key checks (see
-            // the "!search.empty()" branch further down), not ImGui's own keyboard nav — so focus must stay
+            // the "!search.empty()" branch further down), not ImGui's own keyboard nav - so focus must stay
             // glued to the search box, or typing would stop reaching it. Only reasserted once it's confirmed
             // lost (last frame's IsItemActive(), captured below) AND nothing else is currently active either:
             // clicking a result row makes IT briefly active (mouse held down) before returning true on
             // release, and forcing focus back onto the search box mid-click would cancel that click before it
-            // completes — skip reasserting while any such click is in progress and let it finish naturally.
+            // completes - skip reasserting while any such click is in progress and let it finish naturally.
             if (!m_addNodeSearchWasActive && !ImGui::IsAnyItemActive())
                 focusSearchBox();
         }
         else
         {
             // Empty query: leave focus alone so ImGui's own keyboard nav can move Up/Down/Enter through the
-            // plain category tree below (BeginMenu/MenuItem are natively nav-able) — only steal focus back
+            // plain category tree below (BeginMenu/MenuItem are natively nav-able) - only steal focus back
             // once the user actually starts typing a letter/digit, so a fresh query still "just works".
             ImGuiKey typedKey = ImGuiKey_None;
             for (int k = ImGuiKey_A; k <= ImGuiKey_Z && typedKey == ImGuiKey_None; ++k)
@@ -2409,7 +2409,7 @@ void Scene::update(double deltaSec)
             {
                 // The search box is about to become active for the first time this frame, so InputText will
                 // pick up whatever's already in the buffer as its starting content (same trick the pin
-                // default-value boxes rely on) — seed it with the key that triggered the switch so it isn't
+                // default-value boxes rely on) - seed it with the key that triggered the switch so it isn't
                 // silently dropped waiting for SDL's text-input mode to catch up next frame (see
                 // focusSearchBox for why that catch-up now happens immediately anyway, closing this gap too).
                 if (const char c = charForTypingKey(typedKey, ImGui::GetIO().KeyShift))
@@ -2427,7 +2427,7 @@ void Scene::update(double deltaSec)
         if (ImGui::InputText("##addNodeSearch", m_addNodeSearchBuf, sizeof(m_addNodeSearchBuf)))
             m_addNodeSearchSelected = 0; // query changed: re-highlight the top result
         // Activating a text field via code (SetKeyboardFocusHere, just above) selects all of its existing
-        // text by default — same as tabbing into a field. That's exactly wrong here: we just seeded that
+        // text by default - same as tabbing into a field. That's exactly wrong here: we just seeded that
         // text ourselves and want the cursor placed after it, not the whole thing selected (or the very next
         // keystroke would overwrite it instead of appending). ReloadUserBufAndMoveToEnd is the documented way
         // to tell an active InputText "the buffer was changed externally, re-sync and put the cursor at the
@@ -2437,7 +2437,7 @@ void Scene::update(double deltaSec)
                 state->ReloadUserBufAndMoveToEnd();
         m_addNodeSearchWasActive = ImGui::IsItemActive(); // read by the hadQuery branch above, next frame
 
-        // Spawns a node def or imports a function at the click position and closes the popup — shared by the
+        // Spawns a node def or imports a function at the click position and closes the popup - shared by the
         // plain category tree below and the search results list.
         auto place = [&](const NodeDef* def, const FunctionRef* funcRef)
         {
@@ -2548,7 +2548,7 @@ void Scene::update(double deltaSec)
     ImGui::PopStyleVar();
 
     // The popup was opened by dropping a link on empty canvas (m_pendingLinkPin set) and just closed without
-    // picking anything (Escape / click elsewhere) — autoConnectPending never ran to consume/clear it, so the
+    // picking anything (Escape / click elsewhere) - autoConnectPending never ran to consume/clear it, so the
     // dropped end is abandoned outright. Same cleanup as autoConnectPending's own no-match fallthrough.
     if (!ImGui::IsPopupOpen("AddNodePopup") && m_pendingLinkPin)
     {
@@ -2605,7 +2605,7 @@ void Scene::update(double deltaSec)
 bool Scene::isDirty()
 {
     if (!m_hasBaseline)
-        return false; // baseline not captured yet (just loaded) — treat as clean until it settles
+        return false; // baseline not captured yet (just loaded) - treat as clean until it settles
     if (m_nodeEditorContext)
         ed::SetCurrentEditor(m_nodeEditorContext);
     return serializeGraph() != m_baselineState;
@@ -2614,8 +2614,8 @@ bool Scene::isDirty()
 void Scene::processInteractions()
 {
     // Re-plugging: grabbing an already-connected input pin picks up that link. Delete it and redirect the
-    // in-progress drag to originate from its source instead, so from that point on — this frame and every
-    // subsequent one, no matter what's currently hovered — it behaves exactly like a normal drag started at
+    // in-progress drag to originate from its source instead, so from that point on - this frame and every
+    // subsequent one, no matter what's currently hovered - it behaves exactly like a normal drag started at
     // that output pin (same preview, hover snapping, accept/reject path below). Called from both branches
     // below (hovering a pin vs. hovering empty canvas) so the switch happens the instant the drag starts,
     // not only once the cursor happens to first reach another pin. A no-op (returns `anchor` unchanged) once
@@ -2645,7 +2645,7 @@ void Scene::processInteractions()
             if (pin1Id && pin2Id && pin1Id != pin2Id)
             {
                 // pin1 is always the pin the drag STARTED from (the library's m_LinkStart), pin2 the one
-                // currently under the cursor — regardless of drag direction.
+                // currently under the cursor - regardless of drag direction.
                 Pin* pin1 = redirectIfRewiring(pin1Id.AsPointer<Pin>());
                 Pin* pin2 = pin2Id.AsPointer<Pin>();
 
@@ -2672,7 +2672,7 @@ void Scene::processInteractions()
         }
         else
         {
-            // Not hovering any pin (empty canvas, or a node body — Process() treats both the same). Still
+            // Not hovering any pin (empty canvas, or a node body - Process() treats both the same). Still
             // check for a rewire so the redirect fires immediately rather than waiting for the cursor to
             // reach another pin; and on the actual drop (mouse release), open the add-node popup with the
             // dangling end remembered so the picked node gets auto-wired to it (autoConnectPending).

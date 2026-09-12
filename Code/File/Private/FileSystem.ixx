@@ -4,12 +4,12 @@ import File.fwd;
 
 import Core;
 
-// THE filesystem seam. Every file/IO operation in the engine goes through here — <filesystem> and
+// THE filesystem seam. Every file/IO operation in the engine goes through here - <filesystem> and
 // <fstream> are NOT exported from Core, so no other library can touch the disk behind its back.
 // Paths are plain UTF-8 std::strings (no std::filesystem::path leaking into consumers); the pure
 // PATH helpers at the bottom are string math, not IO, and carry no thread restriction.
 //
-// MAIN-THREAD POLICY: every IO call asserts when it runs on the main thread — disk latency there
+// MAIN-THREAD POLICY: every IO call asserts when it runs on the main thread - disk latency there
 // is a frame hitch. Work that legitimately blocks the main thread (startup, an explicit user
 // action in the editor, save/load) must say so by declaring a scope:
 //
@@ -18,14 +18,14 @@ import Core;
 //
 // or per call with the trailing `allowMainThread` flag where a scope would be noise. Worker
 // threads are never restricted. NOTE (/GT fiber-safe TLS): the scope is thread_local, so a fiber
-// that PARKS inside one and resumes on another worker leaves the scope behind — keep the scope
+// that PARKS inside one and resumes on another worker leaves the scope behind - keep the scope
 // tight around the actual call, never around a job wait.
 export class FileSystem final
 {
 public:
 
     // Walks up from the working directory to the repo root, makes Assets/ the working directory
-    // and registers Dependencies/Dll/. Main thread, at startup — exempt by nature.
+    // and registers Dependencies/Dll/. Main thread, at startup - exempt by nature.
     static bool initialize();
 
     // Declares the enclosing scope as allowed to block on IO from the main thread.
@@ -44,7 +44,7 @@ public:
 
     // The same main-thread assert the API below runs, exposed for File's OWN internals: the
     // asset/cache readers stream binary ranges through std::ifstream directly (mesh streaming
-    // seeks, cooked-scene ranges), which no read-it-all API can express — they call this at their
+    // seeks, cooked-scene ranges), which no read-it-all API can express - they call this at their
     // IO entry points so the policy still covers them.
     static void assertIoThread(bool allowMainThread = false);
 
@@ -62,7 +62,7 @@ public:
     static bool isDirectory(const oc::string& path, bool allowMainThread = false);
     static bool isRegularFile(const oc::string& path, bool allowMainThread = false);
     static uint64 fileSize(const oc::string& path, bool allowMainThread = false); // 0 when missing
-    // Seconds since the file clock's epoch — only ever compared/stored, never formatted.
+    // Seconds since the file clock's epoch - only ever compared/stored, never formatted.
     static int64 lastWriteTimeSec(const oc::string& path, bool allowMainThread = false);
     static bool createDirectories(const oc::string& path, bool allowMainThread = false);
     static bool remove(const oc::string& path, bool allowMainThread = false);
@@ -103,7 +103,7 @@ public:
     static oc::string extension(oc::string_view path);      // ".ext" (with the dot), lowercase-preserving
     static oc::string replaceExtension(oc::string_view path, oc::string_view ext);
     static oc::string normalize(oc::string_view path);      // lexically normal, forward slashes
-    // Relative path computed PURELY from the strings — no disk access, unlike relativePath() which
+    // Relative path computed PURELY from the strings - no disk access, unlike relativePath() which
     // resolves both sides through weakly_canonical. Correct when both are already absolute+canonical
     // (which is what the asset browser holds), and the right choice for anything per-frame.
     static oc::string lexicallyRelative(oc::string_view path, oc::string_view base);

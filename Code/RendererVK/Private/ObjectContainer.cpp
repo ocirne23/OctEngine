@@ -233,7 +233,7 @@ void ObjectContainer::initializeMeshes(const ISceneData& sceneData, TempInitData
 
             // Skinned LOD chain, generated from the bind pose (skinned scenes bypass the cooked cache, so
             // this always runs at load): index-only levels over the source vertex ordering, which every
-            // instance's deformed output region preserves — one chain serves all instances at all levels.
+            // instance's deformed output region preserves - one chain serves all instances at all levels.
             if (lodParams.generate && numIndices >= (uint32)lodParams.minIndices)
             {
                 RendererVKLayout::SkinnedMeshSource& skinnedSrc = skinnedSources.back();
@@ -362,7 +362,7 @@ void ObjectContainer::initializeMeshes(const ISceneData& sceneData, TempInitData
         temp.lodGroupForMeshIdx[chain.baseMeshIdx] = Globals::rendererVK.addMeshLodGroup(group);
         m_ownedLodGroups.push_back(temp.lodGroupForMeshIdx[chain.baseMeshIdx]);
     }
-    // Register cooked meshes as streamable sets: one set per source mesh — its generated LOD levels
+    // Register cooked meshes as streamable sets: one set per source mesh - its generated LOD levels
     // share the vertex range, so they evict and restore as a unit. Authored LodN_ meshes each carry
     // their own vertices and register as independent sets through the same loop.
     {
@@ -776,7 +776,7 @@ void ObjectContainer::initializeNodes(const ISceneData& sceneData, TempInitData&
 RenderNode ObjectContainer::spawnNodeForIdx(NodeSpawnIdx idx, const Transform& transform)
 {
     assert(idx < m_nodeMeshRanges.size() && "Invalid NodeSpawnIdx");
-    // PARALLEL ENTITY SPAWNING: no whole-body lock — everything below reads immutable container
+    // PARALLEL ENTITY SPAWNING: no whole-body lock - everything below reads immutable container
     // data or calls renderer allocators that lock internally (addRenderNodeTransform,
     // addMeshInstanceOffsets, allocateLodStateRange). Only the rebased-offset CACHE block takes the
     // spawn mutex, so two concurrent spawns of the same sub-node fill it once.
@@ -857,7 +857,7 @@ RenderNode ObjectContainer::spawnSkinnedNode(const Transform& transform)
 
     Renderer& renderer = Globals::rendererVK;
     // PARALLEL ENTITY SPAWNING: unlike spawnNodeForIdx this DOES hold the spawn mutex whole-body
-    // (recursive — the nested allocator calls re-lock): the fresh-bundle build reads registry
+    // (recursive - the nested allocator calls re-lock): the fresh-bundle build reads registry
     // tables between those calls (getSkinnedMeshSource, getRtMeshAlias, the inline addMeshLodGroup)
     // that another spawn's addMeshInfos/addMeshLodGroup growth would reallocate under it. Skinned
     // spawns are the rare path; the parked-bundle reuse hit stays short regardless.

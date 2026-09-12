@@ -20,8 +20,8 @@ namespace Procedural
 		const double oz = (double)params.coord.y * (double)params.chunkSize;
 
 		// Sample the field ONCE per point, into a grid with a one-vertex halo, and take the normals from
-		// neighbouring grid entries. The obvious version — sampleHeight at the vertex plus four more for a
-		// central difference — costs 5 samples per vertex, which at LOD0 is 513*513*5 = 1.3M point queries
+		// neighbouring grid entries. The obvious version - sampleHeight at the vertex plus four more for a
+		// central difference - costs 5 samples per vertex, which at LOD0 is 513*513*5 = 1.3M point queries
 		// for ONE chunk. That is affordable for a noise field and ruinous for V3, where every query resolves
 		// a diffusion tile block and takes the tile-cache lock. sampleGrid resolves the block once and then
 		// fills lock-free, so this is ~5x fewer samples AND ~1.3M fewer lock round-trips.
@@ -32,8 +32,8 @@ namespace Procedural
 		oc::vector<TerrainPoint> field((size_t)gpr * gpr);
 		maps.sampleGrid(ox - (double)step, oz - (double)step, (double)step, gpr, gpr, field);
 		// This runs on a Low pump job (or the Normal collider job): let higher-priority work through
-		// between the stages and between the vertex rows below. The V3 lock is NOT held here — the
-		// grid was resolved above — so a pre-empting job that samples terrain cannot deadlock on it.
+		// between the stages and between the vertex rows below. The V3 lock is NOT held here - the
+		// grid was resolved above - so a pre-empting job that samples terrain cannot deadlock on it.
 		Globals::jobSystem.preemptionPoint();
 
 		// Vertex coords -> grid entry. SIGNED on purpose: the border vertices ask for col/row -1, which the
@@ -62,7 +62,7 @@ namespace Procedural
 				const float lz = (float)row * step;
 				// True surface height, INCLUDING the seabed below sea level: water is the OceanGenerator's
 				// job now (its shore-depth bake samples this same field, and its ray-traced refraction needs
-				// the real bottom to hit — the old max(h, seaLevel) lid read as zero-depth water and
+				// the real bottom to hit - the old max(h, seaLevel) lid read as zero-depth water and
 				// co-planed with it).
 				const float y = at(col, row).height;
 

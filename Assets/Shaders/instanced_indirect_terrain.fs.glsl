@@ -9,7 +9,7 @@
 
 // Procedural terrain variant of instanced_indirect.fs.glsl (EPipelineIndex::TerrainLit): same lighting
 // core (instanced_indirect_lit.inc.glsl), but the material albedo is replaced by climate-picked texture
-// splatting — procedural terrain chunks carry no textures of their own.
+// splatting - procedural terrain chunks carry no textures of their own.
 
 #include "shared.inc.glsl"
 
@@ -25,11 +25,11 @@ layout (location = 0) out vec4 out_color;
 #include "instanced_indirect_lit.inc.glsl"
 
 // Terrain wetness clipmap (binding 18, written by terrain_wetness.cs.glsl): the decaying memory of
-// where water touched the ground — the swash tongue, rain. Applied on top of the splat in main().
+// where water touched the ground - the swash tongue, rain. Applied on top of the splat in main().
 #define TERRAIN_WET_BINDING 18
 #include "terrain_wetness.inc.glsl"
 
-// Sky for the film's mirror ray — the same per-frame bake of mirrorSkyRadiance the ocean's
+// Sky for the film's mirror ray - the same per-frame bake of mirrorSkyRadiance the ocean's
 // reflectedSkyRadiance fetches, so the film reflects the same sky the water next to it does. No sun
 // disc: the GGX glint is its reflection.
 vec3 terrainReflectedSkyRadiance(vec3 dir)
@@ -101,7 +101,7 @@ vec3 terrainWaterFilm(vec3 body, vec3 worldPos, vec3 V, vec3 geoN, float footpri
 	const vec3 sunTint = u_sunTransmittance * u_sunColor.rgb * u_eclipseParams.x; // = the ocean's sunTint
 	const vec3 ambientSky = textureLod(u_skyMap, vec3(skyMapUV(up), SKY_MAP_LAYER_GI), 0.0).rgb; // skyRadiance(up): constant per frame, one fetch
 
-	// Body: the ground seen through the film — Beer-Lambert absorbed along the refracted path through a
+	// Body: the ground seen through the film - Beer-Lambert absorbed along the refracted path through a
 	// virtual "Surface water depth" of water (a real film is too thin to tint; the ocean beside it has a
 	// shallow column, and this is what keeps the two the same colour at the waterline), with the
 	// ocean's in-scatter filling in what was absorbed. Exactly the ocean shader's body mix.
@@ -118,7 +118,7 @@ vec3 terrainWaterFilm(vec3 body, vec3 worldPos, vec3 V, vec3 geoN, float footpri
 	// Shoreline lace coverage, up front (it is cheap) so the whitewater below is lit only where the milk
 	// or the lace will show it: the ocean's surf-band foam at its waterline target (column ~ 0 -> target
 	// 1), realized through the raw fold Jacobian with the same bias/threshold, eased toward "Shore foam
-	// max" — so the lace the water carries onto the sand is the same lace it wears at the edge. Only at
+	// max" - so the lace the water carries onto the sand is the same lace it wears at the edge. Only at
 	// and below the calm water level (eased out over half a swash reach above it): lace is what the surf
 	// leaves at the waterline, not something the wet sand above it keeps.
 	float foam = 0.0;
@@ -135,7 +135,7 @@ vec3 terrainWaterFilm(vec3 body, vec3 worldPos, vec3 V, vec3 geoN, float footpri
 	// carries it, so the film carries it too.
 	const float milk = clamp(turbulence * u_oceanParams5.y, 0.0, 1.0);
 	// Whitewater: lambertian foam lit by the pixel's ALREADY-RESOLVED sun radiance AT THE SURFACE
-	// (g_sunRadianceSurface — the lit core's shadow visibility, no second shadow evaluation, and NOT the
+	// (g_sunRadianceSurface - the lit core's shadow visibility, no second shadow evaluation, and NOT the
 	// underwater caustic/absorption factor: the foam floats on the film, it is not the seabed under it)
 	// plus sky and ambient. The ocean's whitewater; skipped where neither the milk nor the lace would
 	// show it.
@@ -149,7 +149,7 @@ vec3 terrainWaterFilm(vec3 body, vec3 worldPos, vec3 V, vec3 geoN, float footpri
 	// "Glint filtering") that stretches the glitter toward the horizon, plus the turbulence
 	// micro-roughness. No spec-AA term: that is a screen derivative, undefined in this branch.
 	// NOTE: the lit core's `roughness` parameter IS the GGX alpha (DistributionGGX takes its square as
-	// a2), so alphaF goes in directly — passing a perceptual value there gave the film a wider glint
+	// a2), so alphaF goes in directly - passing a perceptual value there gave the film a wider glint
 	// than the water beside it.
 	const float baseRough = clamp(u_oceanAbsorption.w, 0.02, 1.0);
 	const float slopeVariance = 0.5 * (slopeVar.x + slopeVar.y) * (ns * ns);
@@ -166,7 +166,7 @@ vec3 terrainWaterFilm(vec3 body, vec3 worldPos, vec3 V, vec3 geoN, float footpri
 
 	vec3 color = mix(tinted, reflection, F);
 	// Sun glint: the ocean's dielectric GGX (F0 0.02, alphaF) on the pixel's resolved sun radiance AT
-	// THE SURFACE — shadow-gated exactly as the ground under it was, without a second shadow evaluation,
+	// THE SURFACE - shadow-gated exactly as the ground under it was, without a second shadow evaluation,
 	// but NOT underwater-gated: the glint is the sun mirrored off the film, before the water, so the
 	// seabed's caustic focus has no business in it (with g_sunRadiance it warped into the lobe as
 	// distorted caustics on every filmed pixel under a wave). Specular only (no diffuse term: the body
@@ -177,14 +177,14 @@ vec3 terrainWaterFilm(vec3 body, vec3 worldPos, vec3 V, vec3 geoN, float footpri
 	return mix(body, color, mask);
 }
 
-// The splat itself (TerrainFields / TerrainSample / terrainSplat) is terrain_splat.inc.glsl — shared with
+// The splat itself (TerrainFields / TerrainSample / terrainSplat) is terrain_splat.inc.glsl - shared with
 // the ocean shader, which evaluates it at refraction-ray hits so the seabed IS this terrain.
 #include "terrain_splat.inc.glsl"
 
 // Baked terrain fields at one point (terrain-data cascades), mild-climate fallbacks without a map.
 // altitude is the MACRO band: height far above it = mountain crag; height ~ altitude = flatland.
 // Evaluated PER VERTEX in instanced_indirect_terrain.vs.glsl (every field is band-limited far below any
-// LOD's vertex lattice, and temperature is linear in height, so interpolation is exact — see the comment
+// LOD's vertex lattice, and temperature is linear in height, so interpolation is exact - see the comment
 // there) and read from the in_terrainFields interpolant. This dropped ~6-10 texel fetches per pixel.
 TerrainFields terrainFields()
 {
@@ -276,23 +276,23 @@ void main()
 
 	TerrainSample surf = terrainSplat(in_pos, geoN, fields);
 	// Wetness: darker, glossier ground where water touched it recently (the clipmap holds the memory).
-	// Deliberately the MAP ALONE — no instantaneous "under the live surface" override here: the map
+	// Deliberately the MAP ALONE - no instantaneous "under the live surface" override here: the map
 	// accumulates at the wet-in rate (slower on slopes), so ground under a wave soaks up visibly
 	// rather than snapping to wet, and a cliff face a wave splashes only ever gets damp. The lit core
 	// still lights the covered pixels as underwater from the live surface, so the water itself reads.
 	// Wetness AFTER the slope drain, for the surface-water pass below. Deliberately the raw field and
 	// NOT the pooled film: the field is spatially smooth (bilinear + diffusion) and highest where the
 	// water left most recently, so the water look covers the whole tongue behind a wave and fades out
-	// smoothly with it — the pools are a noise pattern, and keying on them drew random water blobs.
+	// smoothly with it - the pools are a noise pattern, and keying on them drew random water blobs.
 	float wetSurface = 0.0;
 	// We already sampled the terrain data cascade for fields.waterLevel; hand it to the lit core so its
-	// underwater test reuses it instead of re-fetching the same cascade — then resolve that test NOW
+	// underwater test reuses it instead of re-fetching the same cascade - then resolve that test NOW
 	// (doSunLight would, but the gloss below needs it first; it runs once per pixel either way).
-	// aboveLive: 0 on ground under the LIVE water surface right now — the same test that switches the
-	// caustics on — so neither the wet gloss nor the surface film shows through the ocean's own water
+	// aboveLive: 0 on ground under the LIVE water surface right now - the same test that switches the
+	// caustics on - so neither the wet gloss nor the surface film shows through the ocean's own water
 	// (a second sky reflection under the first). The estimate sits UNDER the drawn ocean edge (no choppy
 	// XZ offset, no tongue thickness), so the gate is pushed "Live surface margin" (u_terrainWetParams7.y)
-	// below it — without that a bare band of ground showed between the waterline and the film — and
+	// below it - without that a bare band of ground showed between the waterline and the film - and
 	// eases in over the 10 cm above that.
 	g_waterLevelOverride = fields.waterLevel;
 	resolveLiveDepth(in_pos);
@@ -302,7 +302,7 @@ void main()
 	{
 		float wet = terrainWetnessAt(in_pos.xz);
 		// Slope drain: water runs off a face instead of soaking in, so steep ground dries faster. The
-		// stored wetness decays as exp(-t / tau), so wet^k IS a k-times faster decay — evaluated here per
+		// stored wetness decays as exp(-t / tau), so wet^k IS a k-times faster decay - evaluated here per
 		// pixel against the exact geometric normal (the map's 8 m texels cannot see a cliff face), with no
 		// extra state. k = 1 + slope * drain: at drain 4 a 45-degree face dries ~2.2x faster, a wall 5x.
 		// Ground under water is 1 either way; the film only leaves faster once the wave has gone.
@@ -311,7 +311,7 @@ void main()
 		wetSurface = wet;
 		// Pooling: draining water retreats into the crevices. A world-anchored value fBm stands in for the
 		// micro-relief; a point is POOLED where the noise sits below the wetness, so at full wetness the
-		// whole surface is filmed, and as it dries only the low spots (low noise) keep their film — the
+		// whole surface is filmed, and as it dries only the low spots (low noise) keep their film - the
 		// blobby, breaking-up gloss of a beach draining. The ground between the pools is merely DAMP:
 		// darkened by the wetness itself, with only a fraction of the roughness drop.
 		float pool = wet;
@@ -320,7 +320,7 @@ void main()
 			const float n = terrainFbm(in_pos.xz * u_terrainWetParams4.x) * 0.5 + 0.5;
 			const float soft = max(u_terrainWetParams4.y, 1e-3);
 			// Pool hold: the crevices keep their water long after the surface between them has drained,
-			// so the pool threshold lags the wetness — wet^(1/hold): at hold 2 the pools are still half
+			// so the pool threshold lags the wetness - wet^(1/hold): at hold 2 the pools are still half
 			// there when the wetness itself is down to a quarter. The threshold is scaled so that AT the
 			// surface water threshold (where the ground is drawn as water) it already clears the noise's
 			// whole range plus the soft edge: every pixel is pooled, one uniform film. The noise only
@@ -332,14 +332,14 @@ void main()
 		}
 		// Two darkening layers. DAMP is the soaked ground everywhere, pools and the spaces between them
 		// alike: a plateau that holds while the wetness is above the damp knee (0.25 = ~1.4 dry times),
-		// then fades smoothly to dry. FILM is standing water on top of it — the whole surface just after a
+		// then fades smoothly to dry. FILM is standing water on top of it - the whole surface just after a
 		// wave (the spike, above the spike-start wetness) and the pools once it drains. Fully wet ground
 		// carries both, so its albedo is the product of the two scales.
 		const float damp = smoothstep(0.0, max(u_terrainWetParams5.z, 1e-3), wet);
 		const float spike = smoothstep(min(u_terrainWetParams5.w, 0.99), 1.0, wet);
 		const float film = max(spike, pool);
-		// Under the live water surface (aboveLive) the ground is seabed: it keeps the darkening — the
-		// ocean's traced seabed carries the same — but no gloss (a sky reflection has no business under
+		// Under the live water surface (aboveLive) the ground is seabed: it keeps the darkening - the
+		// ocean's traced seabed carries the same - but no gloss (a sky reflection has no business under
 		// the ocean's own).
 		const float gloss = max(film, damp * u_terrainWetParams4.z) * aboveLive;
 		surf.albedo *= mix(1.0, u_terrainWetParams5.y, damp) * mix(1.0, u_terrainWetParams2.y, film);
@@ -347,8 +347,8 @@ void main()
 	}
 	// surf.ao = baked texture AO on top of the screen-space term (ambient/indirect only).
 	vec3 color = computeLitColor(in_pos, V, surf.normal, surf.albedo, surf.rough, surf.metal, surf.ao);
-	// Surface water: where the wetness is still near full the ground is drawn AS WATER — the ocean
-	// shader's own surface terms over the lit ground — so the ocean's depth-buffer intersection with
+	// Surface water: where the wetness is still near full the ground is drawn AS WATER - the ocean
+	// shader's own surface terms over the lit ground - so the ocean's depth-buffer intersection with
 	// the sand lands on ground that already looks like the water leaving it, instead of a hard line.
 	// The mask ramps up to the surface water threshold (fully water) over the smooth wetness field,
 	// starting at the HIGHER of the wet spike start (where the standing-film darkening begins, so the

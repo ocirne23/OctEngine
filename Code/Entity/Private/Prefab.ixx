@@ -3,7 +3,7 @@
 import Core;
 import :Entity;
 
-// `text` overrides the serialized content when non-empty (still cycle-checked against `root`) — the
+// `text` overrides the serialized content when non-empty (still cycle-checked against `root`) - the
 // Entity Editor uses it to save its detached transform draft instead of the live world transform.
 export bool savePrefab(Entity* root, const oc::string& path, const oc::string& text = {});
 
@@ -11,5 +11,5 @@ export bool savePrefab(Entity* root, const oc::string& path, const oc::string& t
 export bool prefabWouldCycle(Entity* root, const oc::string& id);
 
 // Serializes `root` to prefab text (the same format savePrefab() writes to disk) without touching the
-// filesystem — used to build/compare in-memory dirty-tracking baselines (e.g. the Prefab Editor UI).
+// filesystem - used to build/compare in-memory dirty-tracking baselines (e.g. the Prefab Editor UI).
 export oc::string serializePrefabText(Entity* root, const oc::string& id);

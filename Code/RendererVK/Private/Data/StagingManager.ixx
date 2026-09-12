@@ -10,11 +10,11 @@ class SwapChain;
 
 // THREAD-SAFE: every public entry point serializes on one internal mutex, so upload*() may be called
 // from jobs/worker threads (the beginFrame UBO upload, future streamer work). A ring overflow inside
-// upload*() implicitly submits the batch to the graphics queue — legal from any thread because ALL
+// upload*() implicitly submits the batch to the graphics queue - legal from any thread because ALL
 // queue calls go through Device's graphics-queue mutex (CommandBuffer::submitGraphics,
 // SwapChain::present, Device::graphicsQueueWaitIdle). Lock order is staging mutex -> queue mutex,
 // never the reverse. update() waits fences while holding the mutex, so concurrent uploads block for
-// that duration — inherent to the shared ring, keep bulk uploads off latency-critical threads.
+// that duration - inherent to the shared ring, keep bulk uploads off latency-critical threads.
 export class StagingManager final
 {
 public:
@@ -38,7 +38,7 @@ public:
     // The signal semaphore is kept as m_nextUpdateSemaphore so the next update() consumes it.
     void flushPending();
     // present()'s acquire failed AFTER update(): the returned semaphore's waiter (the primary CB) will
-    // never be submitted, and a signaled binary semaphore must not be re-signaled — hand it back so the
+    // never be submitted, and a signaled binary semaphore must not be re-signaled - hand it back so the
     // next flush waits it, consuming the signal and preserving the chain's ordering.
     void restoreChainSemaphore(vk::Semaphore semaphore);
 

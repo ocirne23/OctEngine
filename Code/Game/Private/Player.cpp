@@ -93,7 +93,7 @@ void GamePlayer::clientAdopt(const glm::vec3& respawnPos)
         m_graceTimer = m_spawnGraceSec;
         for (float& h : m_outputHistory)
             h = m_shieldMaxOutput;
-        setTeam(m_team); // the replicated prefab authors team 0 — re-team the local twin's field
+        setTeam(m_team); // the replicated prefab authors team 0 - re-team the local twin's field
         Log::info("Adopted our player capsule from the server");
         return;
     }
@@ -133,13 +133,13 @@ void GamePlayer::tickMovement(const glm::vec3& cameraForwardPlanar, float deltaS
     if (!pc || pc->bodyType != EPhysicsBodyType::Dynamic || !pc->body.isValid())
         return;
 
-    (void)cameraForwardPlanar; // no keyboard steering: WASD belong to the grid hotkeys — the
+    (void)cameraForwardPlanar; // no keyboard steering: WASD belong to the grid hotkeys - the
                                // capsule moves ONLY by RMB move orders (see setMoveTarget)
     glm::vec3 move(0.0f);
     if (m_hasMoveTarget)
     {
         // RMB move order: steer planar toward the target and STOP inside the arrive radius (the
-        // capsule coasts the last bit — braking is the same accel clamp below, with move = 0).
+        // capsule coasts the last bit - braking is the same accel clamp below, with move = 0).
         // The route comes from a Nav GOAL field (one-source flow field around the order, so the
         // capsule walks AROUND buildings); straight line until the field is built / where it
         // does not reach.
@@ -176,7 +176,7 @@ void GamePlayer::tickMovement(const glm::vec3& cameraForwardPlanar, float deltaS
     else
         Globals::navSystem.clearGoal(c_navGoalSlot);
     // SPRINT burns the shield battery, gated on the COLLAPSE LATCH (a plain energy > 0 test never
-    // bit — tickShieldAndHealth's regen runs right after this and lifts the battery off zero
+    // bit - tickShieldAndHealth's regen runs right after this and lifts the battery off zero
     // before its own latch check ever sees it): emptying the battery collapses the shield HERE,
     // and both the bubble and the boost stay down until the battery refills to "Reboot energy".
     const bool sprinting = input.isKeyDown(SDL_Scancode::SDL_SCANCODE_LSHIFT)
@@ -259,7 +259,7 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
         m_graceTimer -= deltaSec;
         drainMult = 0.0f;
     }
-    // Surface tension: contact stiffens superlinearly with pressure — the same factor scales the
+    // Surface tension: contact stiffens superlinearly with pressure - the same factor scales the
     // push-out below, so shoving deep into a bubble both resists harder and drains faster.
     const float tension = 1.0f + m_shieldTension * pressure;
     m_energy = glm::clamp(m_energy - pressure * tension * m_energyDrainRate * drainMult * deltaSec
@@ -272,7 +272,7 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
 
     // Physical push-out, INDEPENDENT of the shield state: getAppliedForce scales with the
     // emitter's own output, so it is normalized by the output that produced the readback (the
-    // oldest history entry, matching the ~2-frame latency — dividing by the CURRENT output would
+    // oldest history entry, matching the ~2-frame latency - dividing by the CURRENT output would
     // spike ~150x on the collapse frame). A collapsed shield pushes exactly like a full one.
     const glm::vec3 force = fc->emitter.getAppliedForce() / glm::max(m_outputHistory[0], 1e-3f);
     if (glm::dot(force, force) > 1e-8f)
@@ -283,19 +283,19 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
 
     const float iso = Globals::forceSystem.getParams().isoThreshold;
     // Exposure scales with how far the shield squished below "Damage radius": 1% under = 1% of
-    // the drain rate, fully collapsed (radius 0) = the full rate — grazing contact only stings.
+    // the drain rate, fully collapsed (radius 0) = the full rate - grazing contact only stings.
     const float exposure = glm::clamp(1.0f - shieldRadius() / glm::max(m_damageRadius, 1e-3f), 0.0f, 1.0f);
     if (!inGrace && coverSurplus <= 0.0f && exposure > 0.0f && pressure > iso)
         m_health -= m_healthDrainRate * exposure * deltaSec;
     if (bodyPos.y < -20.0f)
-        m_health = 0.0f; // fell out of the world — respawn below
+        m_health = 0.0f; // fell out of the world - respawn below
 
     // HEIGHT LIMIT: the same ceiling the units obey (the capsule's puppet GameUnitComponent
-    // carries the per-prefab override, the shared default is "Game/Actors/Height limit") —
+    // carries the per-prefab override, the shared default is "Game/Actors/Height limit") -
     // launched above it, the capsule is put back AT the ceiling with its climb cancelled, planar
     // velocity kept. Owner-side: the server holds its twin under the same ceiling in the puppet's
     // unit tick, so the two land together and the next claim re-anchors. Teleport contract as the
-    // respawn below (main thread, pre-physics — direct setters are sanctioned here).
+    // respawn below (main thread, pre-physics - direct setters are sanctioned here).
     {
         const GameUnitComponent* unit = getComponent<GameUnitComponent>(m_entity.get());
         const float ceiling = unit ? unit->effectiveHeightLimit() : GameUnitComponent::params.heightLimit;
@@ -315,7 +315,7 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
     {
         // Death: hard respawn at the start position. Teleport contract: stomp the interpolation
         // poses too, or the render mix runs backward on stepping frames.
-        Log::info("Player down — respawning");
+        Log::info("Player down - respawning");
         // The anchor may sit under a building by now: the resolver walks to the nearest free cell.
         const glm::vec3 spawnAt = m_respawnResolver ? m_respawnResolver(m_spawnPos) : m_spawnPos;
         Globals::physics.teleportBody(pc->body, spawnAt, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
@@ -330,13 +330,13 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
         m_graceTimer = m_spawnGraceSec;
         m_hasMoveTarget = false; // do not walk back to where we died
     }
-    // Publish into the capsule's PUPPET GameUnitComponent — the state's network surface. The
+    // Publish into the capsule's PUPPET GameUnitComponent - the state's network surface. The
     // entity snapshot/claim game blob packs from and applies to it (change-detected server-side,
     // so a collapse edge flushes on the very next snapshot tick). Materials flow the OTHER way on
     // a client: server-authoritative, snapshot-applied to the component, read back here.
     if (GameUnitComponent* unit = getComponent<GameUnitComponent>(m_entity.get()))
     {
-        // Damage other actors banked on our puppet inbox (unit melee, enemy projectiles — the
+        // Damage other actors banked on our puppet inbox (unit melee, enemy projectiles - the
         // same damage() call every victim gets) applies through the shield-absorb rules.
         applyDamage(unit->takePendingDamage());
         unit->healthMax = m_healthMax;
@@ -347,7 +347,7 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
         const NetworkComponent* net = getComponent<NetworkComponent>(m_entity.get());
         if (net && net->authority() == ENetAuthority::LocalOwner)
         {
-            // Client: materials AND team are the server's to decide — read both off the component
+            // Client: materials AND team are the server's to decide - read both off the component
             // (the snapshot game blob writes them), never stamp over them. Gated on a snapshot
             // having actually landed: until then the component still holds the PREFAB's authored
             // team, and latching that would look like a real assignment.

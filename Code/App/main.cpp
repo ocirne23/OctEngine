@@ -242,7 +242,7 @@ int main(int argc, char* argv[])
         Globals::jobSystem.setFrameHasPhysicsStep(Globals::physics.willStep(simDeltaSec));
 
         Globals::networkManager.receive(deltaSec);
-        GameMatch* const game = session.game();
+        GameMatch* game = session.game();
         if (game)
             game->updatePlayer((float)simDeltaSec);
         Globals::scriptContext.update(camera, (float)simDeltaSec, (float)Globals::time.getSimElapsedSec());

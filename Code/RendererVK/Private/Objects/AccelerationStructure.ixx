@@ -37,7 +37,7 @@ public:
 
     // Container teardown (Renderer::freeMeshInfoRange): zeroes the freed meshes' address entries in
     // every frame slot, resets their aliases to identity (slot reuse expects it) and RETIRES self-owned
-    // static BLASes instead of destroying them — unlike streaming eviction there is no cold-frames
+    // static BLASes instead of destroying them - unlike streaming eviction there is no cold-frames
     // guarantee here, an in-flight TLAS may still reference them. recordCompaction destroys retirees
     // once the frames-in-flight window has passed (matured compaction batches skip them by handle compare).
     void onMeshRangeFreed(uint32 firstMeshIdx, uint32 count);
@@ -47,7 +47,7 @@ public:
     void freeSkinnedJobSlots(uint32 firstJob, uint32 count);
 
     // Records BLAS builds for the given meshes into cmd, reading geometry directly from the shared
-    // vertex/index buffers with each mesh's exact vertex count (maxVertex must be tight — see the
+    // vertex/index buffers with each mesh's exact vertex count (maxVertex must be tight - see the
     // comment in the implementation). Aliased and streamed-out (indexCount 0) meshes are skipped; the
     // address-fill pass afterwards refreshes every aliased mesh's entry from its target.
     // allowCompaction: builds carry eAllowCompaction and record a compacted-size query for
@@ -66,7 +66,7 @@ public:
     void recordCompaction(uint32 frameIdx, vk::CommandBuffer cmd);
 
     // Flushes this frame slot's pending static BLAS-address changes into its (fenced) address buffer.
-    // Static addresses only ever change from CPU here, in the owning frame — never on an in-flight slot.
+    // Static addresses only ever change from CPU here, in the owning frame - never on an in-flight slot.
     // Call every frame after recordBuildBlas + recordCompaction and before the TLAS-instance write.
     void syncFrameAddresses(uint32 frameIdx);
 
@@ -145,7 +145,7 @@ private:
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_blasScratch;
     oc::array<vk::DeviceAddress, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_blasScratchAlignedAddr{};
     // Per frame in flight (skinned BLAS addresses differ between slots; static addresses are the same, but
-    // each slot is written only in its own fenced frame — see the authoritative array below).
+    // each slot is written only in its own fenced frame - see the authoritative array below).
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_blasAddressBuffers;
     oc::array<oc::span<uint64>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedBlasAddresses;
 

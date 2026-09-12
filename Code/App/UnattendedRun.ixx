@@ -6,7 +6,7 @@ import Core.Windows;
 // FAILURE HANDLING FOR UNATTENDED RUNS (--quit-after / --profile-after: Tools/profile.ps1 and Claude's
 // runs, nobody at the screen). Two problems it solves:
 //   1. A Debug assert / abort / crash parked the process on a modal message box (Abort / Retry / Ignore,
-//      or the OS fault box) until someone clicked it — the run hung instead of failing.
+//      or the OS fault box) until someone clicked it - the run hung instead of failing.
 //   2. A crash died into a redirected log with its block buffer lost: no stack, often not even the last
 //      lines.
 // installUnattendedFailureHandling() routes the CRT's assert text to stderr, disables every dialog, and
@@ -42,7 +42,7 @@ namespace
     LONG __stdcall unattendedCrashFilter(EXCEPTION_POINTERS* info)
     {
         // ONE report: several job threads can fault together (the same bad pointer, every worker), and
-        // DbgHelp is single-threaded — the second SymInitialize fails and the two reports interleave.
+        // DbgHelp is single-threaded - the second SymInitialize fails and the two reports interleave.
         // Later faulting threads park until the first one's report terminates the process.
         static oc::atomic<bool> s_reporting = false;
         if (s_reporting.exchange(true))

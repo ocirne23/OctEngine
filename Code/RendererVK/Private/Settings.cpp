@@ -139,7 +139,7 @@ void LightGridParams::registerTweaks(const oc::function<void()>& onReloadShaders
     Tweak::intVar("LOD/Light grid", "Min cell (log2 m)", &minCellLog2, 0, 5, 1.0f, onReloadShaders);
     Tweak::intVar("LOD/Light grid", "Max cell (log2 m)", &maxCellLog2, 0, 5, 1.0f, onReloadShaders);
     Tweak::intVar("LOD/Light grid", "Per-cell budget (cells)", &cellBudget, 8, 32768, 8.0f, onReloadShaders);
-    // 0 off, 1 grid cells, 2 light count heat, 3 light ranges (LightGridParams::debugMode) — the
+    // 0 off, 1 grid cells, 2 light count heat, 3 light ranges (LightGridParams::debugMode) - the
     // LIGHT_GRID_DEBUG define on the lit fragments. Sun cascades: the baked "Shadows/Debug mode".
     Tweak::intVar("LOD/Light grid", "Debug Mode", &debugMode, 0, 3, 0.0f, onReloadLitShaders, ETweakFlags::None);
 }

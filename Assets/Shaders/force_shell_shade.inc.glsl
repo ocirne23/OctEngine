@@ -1,7 +1,7 @@
 // Forcefield shell SHADING, shared by the per-proxy shell FS (force_shell.fs.glsl) and the
 // analytic-tier UNION march FS (force_union.fs.glsl). Everything an instance identity used to
 // provide rides the `ownerIdx` parameter instead (the shading emitter: v_emitterIdx per-proxy,
-// the crossing's dominant emitter in the union pass) — it only scales the normal's
+// the crossing's dominant emitter in the union pass) - it only scales the normal's
 // finite-difference step (posReach.w) and the per-emitter shell alpha (outputParams.y).
 // The consumer includes force_field.inc.glsl first.
 
@@ -18,7 +18,7 @@ float forceHash(vec3 p)
     n = ((n >> ((n >> 28u) + 4u)) ^ n) * 277803737u;
     // The xor spans the full 32 bits: normalize by 2^32 so the noise stays in [0, 1). An undersized
     // divisor here returned [0, 4) and drove the ridged crest shaping (1 - |2f - 1|)^3 hugely
-    // NEGATIVE — the pattern then subtracted color in the premultiplied blend (black blotches).
+    // NEGATIVE - the pattern then subtracted color in the premultiplied blend (black blotches).
     return float((n >> 22u) ^ n) * (1.0 / 4294967296.0);
 }
 
@@ -33,7 +33,7 @@ float forceValueNoise(vec3 p)
                    mix(forceHash(i + vec3(0, 1, 1)), forceHash(i + vec3(1, 1, 1)), f.x), f.y), f.z);
 }
 
-// Flowing wave pattern: domain-warped 3D value noise shaped into soft ridged crests — drifting
+// Flowing wave pattern: domain-warped 3D value noise shaped into soft ridged crests - drifting
 // energy swells with no repeating tiling. Purely WORLD-anchored and per-emitter-free: moving
 // emitters slide through a stable pattern and merged shells shade seamlessly across their ownership
 // boundary (any per-emitter term here would print a seam where the dominant owner flips). The
@@ -68,7 +68,7 @@ float forcePattern(vec3 worldPos, vec3 n)
 // alpha" floor) or the far/inner backface seen through the front ("Backface alpha" scale).
 // The OUTWARD surface normal is the CALLER's (`normal`, unflipped): the shell FS supplies the
 // baked-volume gradient on the sampled tier and the analytic gradient otherwise, the union FS
-// always the analytic one — so the 4-tap finite difference pays the caller's cheapest field.
+// always the analytic one - so the 4-tap finite difference pays the caller's cheapest field.
 // forceShadeNormalH is the shared finite-difference step for computing it.
 float forceShadeNormalH(uint ownerIdx) { return max(0.005 * fe_emitters[ownerIdx].posReach.w, 0.01); }
 
@@ -95,7 +95,7 @@ vec4 forceShadeHit(vec3 rayOrigin, vec3 rayDir, float tHit, uint hitTeam, bool c
 
     // Field-weighted team color (sharpened phi^4 weights over the VISIBLE fields): isolated
     // bubbles keep their pure color, but toward a junction of two visible shells both sides
-    // converge to the same mix — so whichever surface (or side) a pixel's march classified, it
+    // converge to the same mix - so whichever surface (or side) a pixel's march classified, it
     // shades the same there. Hard per-team lookups printed march-step-sized color jaggies along
     // the junction rim. Invisible fields (shell alpha 0) carry no color weight: a bubble pressed
     // by one keeps its pure team color instead of going junction-purple.
@@ -111,7 +111,7 @@ vec4 forceShadeHit(vec3 rayOrigin, vec3 rayDir, float tHit, uint hitTeam, bool c
     teamColor /= max(weightSum, 1e-12);
     const float fresnel = pow(1.0 - clamp(dot(n, -rayDir), 0.0, 1.0), u_forceParams0.y);
     // Contact glow: the equilibrium seam lights up as the best VISIBLE opposing field approaches
-    // our own — an invisible field pressing in doesn't light the whole rim as a seam.
+    // our own - an invisible field pressing in doesn't light the whole rim as a seam.
     const float contact = smoothstep(1.0 - u_forceParams1.y, 1.0, opposingPhiVis / max(ownPhi, 1e-4));
     // Geometry glow: the shell surface fading into nearby opaque geometry along the view ray.
     const float geoGlow = u_forceParams1.z > 0.0
@@ -168,7 +168,7 @@ vec3 forceHeatColor(float t)
 // alpha". fade in [0,1] dissolves the pane at its rim (where min(phi_A, phi_B) approaches iso), so
 // the edge is analytic instead of stair-stepping with the march sampling. Premultiplied rgb + alpha.
 vec4 forceShadeWall(vec3 rayOrigin, vec3 rayDir, float tWall, uint teamA, uint teamB, float fade,
-    uint ownerIdx, vec3 normal) // normal from the caller — see forceShadeHit
+    uint ownerIdx, vec3 normal) // normal from the caller - see forceShadeHit
 {
     const vec3 pos = rayOrigin + rayDir * tWall;
     vec3 n = normal;

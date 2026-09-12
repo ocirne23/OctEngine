@@ -6,7 +6,7 @@ import Core;
 // RendererVK libs need not depend on each other. The renderer owns the real session (instance / session /
 // reference-space + frame loop) and implements this interface; the Input lib consumes it to build its own
 // controller action set; main.cpp bridges the two. Handles are opaque (void* / int64) so Core stays free
-// of any OpenXR types — consumers cast them back to the Xr* handles they already include.
+// of any OpenXR types - consumers cast them back to the Xr* handles they already include.
 export class IVrSession
 {
 public:

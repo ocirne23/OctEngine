@@ -69,7 +69,7 @@ export struct GameUnitParams
 
 // AUTHORITY: update() simulates only when this instance is not a network client; clients are state
 // containers the mirrors write into. Cross-entity writes are atomic (damage/heal/addLoad), lookup is
-// spatial only — nothing holds entity lists; the game drains the report queues below.
+// spatial only - nothing holds entity lists; the game drains the report queues below.
 export struct GameUnitComponent
 {
     static constexpr EComponentID getId() { return EComponentID_GameUnit; }
@@ -191,7 +191,7 @@ export struct GameUnitComponent
     void destroy(Entity& entity, const SpawnInfo& info);
     void update(Entity& entity, float deltaSec);
     // FAR TICK: the stand-in for a unit outside the SIM LOD selection (body disabled). Walks the
-    // route / move order by TELEPORT — no physics, combat or bubble. Returns true when it moved.
+    // route / move order by TELEPORT - no physics, combat or bubble. Returns true when it moved.
     bool updateFar(Entity& entity, float deltaSec);
     bool farHeading(const Entity& entity, glm::vec2& dir, float& speed, float& dist, bool spread = true);
     glm::vec3 wakeVelocity(const Entity& entity); // World's SIM LOD wake edge -> PhysicsComponent::unpark
@@ -229,7 +229,7 @@ private:
         bool navTracking = false;   // target within targetTrackRadius
         glm::vec2 navDir{ 0.0f };
         float stopRange = 0.0f;     // hold this far from the walk target
-        bool inEnemyBubble = false; // stamped-radius signal — the shield-less fallback when the bake is off
+        bool inEnemyBubble = false; // stamped-radius signal - the shield-less fallback when the bake is off
     };
     void tickHurtLight(const Entity& entity, float deltaSec); // every role, before the client gate
     void applyHeightLimit(Tick& t);

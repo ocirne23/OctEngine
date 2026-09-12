@@ -8,7 +8,7 @@ import Core.Rect;
 // The multiplayer TEXT CHAT widget: a scrolling message log + an input line. Game's ChatSystem is
 // the model (messages arrive over the "ChM" network event); main pushes a ChatView snapshot when
 // the log changed (setView, between the widget-pass join and kick) and polls takeOutgoing() for
-// the line the player sent — the same sequencing every menu/lobby action uses.
+// the line the player sent - the same sequencing every menu/lobby action uses.
 //
 // Drawn in two places: EMBEDDED in the lobby page (renderEmbedded) and as an OVERLAY window in the
 // bottom-right corner of the game viewport (renderOverlay). Enter opens the input line when no

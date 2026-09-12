@@ -1,4 +1,4 @@
-// Terrain wetness clipmap — read side. A single persistent R16F image, TERRAIN_WET_RES^2 texels of
+// Terrain wetness clipmap - read side. A single persistent R16F image, TERRAIN_WET_RES^2 texels of
 // u_terrainWetParams1.x metres, stored TOROIDALLY around the scene focus like the GI probe clipmap
 // (gi_probe.inc.glsl): a texel's storage slot is its integer lattice coord & (RES-1), so a texel that
 // stays in the window keeps its slot (and its wetness) frame after frame while the window scrolls, and

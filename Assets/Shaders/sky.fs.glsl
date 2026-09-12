@@ -34,7 +34,7 @@ const int VIEW_STEPS = 12;
 
 // ---------------------------------------------------------------------------------------------
 // Clouds: a marched slab [height, height + thickness] of domain-warped FBM with a vertical density
-// profile — a cheap "2.5D" volumetric: layers parallax against each other, bottoms sit lower than
+// profile - a cheap "2.5D" volumetric: layers parallax against each other, bottoms sit lower than
 // tops, edges dissolve in depth instead of looking like a painted plane.
 // ---------------------------------------------------------------------------------------------
 
@@ -116,7 +116,7 @@ float fbm3(vec3 p, int octaves, float minNeeded)
 // FBM with a per-octave domain ROTATION (orthonormal, no axis preserved). fbm3 only scales+offsets
 // between octaves, so every octave shares one axis-aligned cube lattice and the sum shows repeating
 // grid/cube shapes at low frequencies; rotating decorrelates the lattices. Used by the nebula (the
-// clouds keep the cheaper fbm3 — their density threshold + profile already hide the lattice).
+// clouds keep the cheaper fbm3 - their density threshold + profile already hide the lattice).
 float fbmR(vec3 p, int octaves)
 {
 	const mat3 rot = mat3( 0.00,  0.80,  0.60,
@@ -257,7 +257,7 @@ void main()
 	// cancels two large float32 values per pixel and jitters away from the origin). Derived from u_mvp's
 	// x/y/w ROWS only: for a world direction d, ndc.xy = (r0.d, r1.d) / (rw.d), so solving the 3x3 system
 	// {r0.d = ndc.x, r1.d = ndc.y, rw.d = 1} gives the exact ray from O(1)-magnitude rotation/projection
-	// terms — no camera translation and no ill-conditioned 4x4 inverse (u_invMvp is a float32 CPU inverse
+	// terms - no camera translation and no ill-conditioned 4x4 inverse (u_invMvp is a float32 CPU inverse
 	// whose error grows with the camera's distance from the origin and re-rolls every frame = jitter).
 	// The raster ran TAA-jittered while u_mvp is unjittered, so back the jitter out of the NDC first.
 	vec2 vpUv = (gl_FragCoord.xy * u_screenSize.zw - u_viewportRect.xy) / u_viewportRect.zw;
@@ -351,7 +351,7 @@ void main()
 			color += vec3(0.93, 0.95, 1.0) * ((lambert * albedo * u_cloudParams2.w) * transmittance);
 		}
 
-		// Night sky (stars + nebula). Visibility comes from the local sky luminance — daylight in-scatter
+		// Night sky (stars + nebula). Visibility comes from the local sky luminance - daylight in-scatter
 		// washes them out, so they fade in automatically at dusk and in dark sky regions. The moon disc
 		// masks both out (it is a solid body, not additive light).
 		if ((u_skySunParams.w > 0.0 || u_nebulaParams.x > 0.0) && moonCovered)
@@ -397,7 +397,7 @@ void main()
 
 						// Micro-star grid scale: ~1.5 px per cell at 1080p, so each speck is resolvable and
 						// the footprint clamp below keeps it TAA-stable. (The old 155.753 * 100.0 scale put
-						// ~15 cells inside one pixel — sub-pixel stars that only showed up as aliasing noise.)
+						// ~15 cells inside one pixel - sub-pixel stars that only showed up as aliasing noise.)
 						const float MICRO_STAR_SCALE = 650.0;
 						vec3 sd2 = dir * MICRO_STAR_SCALE + warp * 31.0;
 						float h2 = hash13(floor(sd2));
@@ -437,7 +437,7 @@ void main()
 						// Clamp the rendered footprint to >= ~1.2 pixels with a pixel-wide smooth edge and
 						// conserve the original energy via the area ratio. A sub-pixel point lands on a
 						// different jitter sample every frame (it pops in and out), so the TAA variance
-						// clipping eats it — dim smeared stars. A pixel-sized, analytically anti-aliased
+						// clipping eats it - dim smeared stars. A pixel-sized, analytically anti-aliased
 						// disc shades identically every frame and survives the accumulation intact.
 						float r = max(radius, pxr * 1.2);
 						float comp = (radius * radius) / (r * r);
@@ -462,7 +462,7 @@ void main()
 	}
 
 	// Ground plane (below the horizon): the through-planet march is meaningless there, so blend to a
-	// ground albedo (u_groundParams, Sky > Ground Albedo) lit like a diffuse surface — direct sun
+	// ground albedo (u_groundParams, Sky > Ground Albedo) lit like a diffuse surface - direct sun
 	// (horizon-tinted by the same transmittance the clouds use) plus the grazing sky as ambient, the
 	// same fallback skyRadiance() gives downward GI/fog rays. A narrow blend band keeps the horizon
 	// scatter colors (the red sunset band) intact right at the horizon line.
@@ -488,7 +488,7 @@ void main()
 	color = mix(color, cl.rgb, cl.a);
 	/*
 	// Highlight roll-off (u_skySunParams.z): there is no tonemapper, so everything over 1.0 hard-clips
-	// to flat white — the sun disc, its halo and the Mie forward peak all merge into one featureless
+	// to flat white - the sun disc, its halo and the Mie forward peak all merge into one featureless
 	// circle. Soft-clip the max channel above a knee with an exponential shoulder that asymptotes at 1:
 	// the overexposed region keeps a smooth gradient (disc > halo core > halo tail) instead of a hard
 	// silhouette. Max-channel (not per-channel) so saturated sunset hues roll off without shifting hue.

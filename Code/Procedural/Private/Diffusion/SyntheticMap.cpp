@@ -14,7 +14,7 @@ import :Diffusion.SyntheticMap;
 // pins the widths and forbids reassociation. It does still permit FMA contraction (VS2022 changed that
 // default), so results may differ from the Java/Python reference in the last bit. That is fine and
 // deliberate: what the world actually requires is DETERMINISM WITHIN A BUILD (same seed -> same world every
-// run), not bit-equality with another language's build. Do not "simplify" the casts regardless — dropping
+// run), not bit-equality with another language's build. Do not "simplify" the casts regardless - dropping
 // them changes results by far more than a last bit.
 namespace Procedural::Diffusion
 {
@@ -45,7 +45,7 @@ namespace Procedural::Diffusion
 		}
 
 		// np.interp clone: clamped at both ends, linear between. xp must be strictly increasing, which is
-		// exactly what the monotonicity fix-up in buildNoiseQuantiles guarantees — without it the divide
+		// exactly what the monotonicity fix-up in buildNoiseQuantiles guarantees - without it the divide
 		// below can be 0/0.
 		float interp(float x, const float* xp, const float* fp, int32 n)
 		{
@@ -190,8 +190,8 @@ namespace Procedural::Diffusion
 					dst[k++] = interp(nv, nq, dq, NOISE_QUANTILES);
 				}
 		}
-		// (The reference copies rawChannels into an identically-shaped array here. It is a pure no-op —
-		// five full-buffer copies for nothing — and is deliberately not reproduced.)
+		// (The reference copies rawChannels into an identically-shaped array here. It is a pure no-op -
+		// five full-buffer copies for nothing - and is deliberately not reproduced.)
 
 		// Pass 2: sample_full_synthetic_map post-processing, in place.
 		float* elevCh = out.data() + 0 * plane;

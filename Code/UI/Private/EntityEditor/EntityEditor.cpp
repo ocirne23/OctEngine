@@ -24,7 +24,7 @@ static SceneComponent* sceneComponentOf(Entity* entity)
 }
 
 // Copies a oc::string into a fixed InputText buffer each frame and writes edits back immediately (same
-// pattern PropertiesPanel uses for displayName) — the caller decides when to actually commit/respawn via
+// pattern PropertiesPanel uses for displayName) - the caller decides when to actually commit/respawn via
 // ImGui::IsItemDeactivatedAfterEdit() right after this call.
 static void inputTextStd(const char* label, oc::string& value)
 {
@@ -142,8 +142,8 @@ static oc::vector<oc::string> splitComma(const oc::string& s)
 	return out;
 }
 
-// All .dsl files under Assets/ (the working directory), as forward-slash paths relative to it — the same form
-// ScriptComponent::scriptPath uses. .scr is not offered: the node editor is gone, so nothing can author one —
+// All .dsl files under Assets/ (the working directory), as forward-slash paths relative to it - the same form
+// ScriptComponent::scriptPath uses. .scr is not offered: the node editor is gone, so nothing can author one -
 // though ScriptHost itself would still compile an existing path if a .pre carried it. Assets/Local holds
 // generated script build output, not sources.
 static void gatherScriptFiles(oc::vector<oc::string>& out)
@@ -300,7 +300,7 @@ void EntityEditor::onRespawned(EntityPtr oldEntity, EntityPtr newEntity)
 	// Deliberately NOT calling refreshDraftsFromEntity() here: the draft state (m_hasX/m_xDraft) is what
 	// drove this respawn and stays authoritative. A component whose builder legitimately returned null
 	// (e.g. Render with no mesh picked yet, Audio with no clips yet) should keep showing what the user
-	// typed so far rather than silently reverting — it just won't be part of the entity until valid.
+	// typed so far rather than silently reverting - it just won't be part of the entity until valid.
 }
 
 void EntityEditor::selectEntity(EntityPtr entity)
@@ -455,7 +455,7 @@ void EntityEditor::queueSave(const oc::string& path)
 	m_path = path;
 	rebaseline();
 
-	// A root respawned before its first save carries an empty sourceFile — respawn it once more so its
+	// A root respawned before its first save carries an empty sourceFile - respawn it once more so its
 	// template (and the Properties "Asset" field) picks up the file it now lives in.
 	if (m_editRoot && m_editRoot->getSourceFile() != m_path)
 	{
@@ -575,7 +575,7 @@ void EntityEditor::renderToolbar()
 		m_revealRequest = m_path;
 	ImGui::EndDisabled();
 	if (m_path.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-		ImGui::SetTooltip("No .pre file yet — save first");
+		ImGui::SetTooltip("No .pre file yet - save first");
 	ImGui::SameLine();
 
 	ImGui::BeginDisabled(!m_editRoot);
@@ -598,7 +598,7 @@ void EntityEditor::renderTreeNode(Entity* node)
 	ImGui::PushID(node);
 
 	SceneComponent* sc = sceneComponentOf(node);
-	const bool isLocked = node->isPrefabInstance(); // a "Prefab <name>" reference — edit the source file instead
+	const bool isLocked = node->isPrefabInstance(); // a "Prefab <name>" reference - edit the source file instead
 	const bool hasChildren = !isLocked && sc && !sc->children.empty();
 	const bool isRoot = (node->parent == nullptr);
 
@@ -617,7 +617,7 @@ void EntityEditor::renderTreeNode(Entity* node)
 	if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
 		selectEntity(EntityPtr(node));
 
-	// Drop an existing prefab here to add it as a locked reference child — a locked node can't itself
+	// Drop an existing prefab here to add it as a locked reference child - a locked node can't itself
 	// receive children (matches reparentEntity()'s own rule).
 	if (!isLocked && sc)
 		if (ImGui::BeginDragDropTarget())
@@ -684,7 +684,7 @@ void EntityEditor::renderNameAndTransform()
 
 	bool enabled = m_selected->isEnabled();
 	if (ImGui::Checkbox("Enabled", &enabled))
-		m_selected->setEnabled(enabled); // direct live mutation — no respawn needed, matches PropertiesPanel
+		m_selected->setEnabled(enabled); // direct live mutation - no respawn needed, matches PropertiesPanel
 
 	if (ImGui::CollapsingHeader("Transform"))
 	{
@@ -785,7 +785,7 @@ void EntityEditor::renderRenderSection()
 		commitRespawn();
 	}
 
-	// Node list is scoped to whichever container is currently named above — load it (cheap: cached after
+	// Node list is scoped to whichever container is currently named above - load it (cheap: cached after
 	// the first time) only once we know the name resolves to something real, so a half-typed name doesn't
 	// spam load-failure warnings every frame.
 	oc::vector<oc::string> nodePaths;
@@ -861,7 +861,7 @@ void EntityEditor::renderRenderSection()
 	if (ImGui::Button("Remove Render"))
 	{
 		m_hasRender = false;
-		if (m_hasAnimator) // an Animator drives a sibling skinned mesh — remove it too, it'd be meaningless without one
+		if (m_hasAnimator) // an Animator drives a sibling skinned mesh - remove it too, it'd be meaningless without one
 			m_hasAnimator = false;
 		commitRespawn();
 	}
@@ -1207,7 +1207,7 @@ void EntityEditor::renderForceSection()
 
 	commitDrag(ImGui::DragFloat3("Offset", &m_forceDraft.offset.x, 0.01f));
 	if (ImGui::IsItemHovered())
-		ImGui::SetTooltip("Entity-space offset from the anchor — Centered: the bubble centre; otherwise the span start");
+		ImGui::SetTooltip("Entity-space offset from the anchor - Centered: the bubble centre; otherwise the span start");
 
 	if (ImGui::Checkbox("Centered", &m_forceDraft.centered))
 		commitRespawn();
@@ -1244,7 +1244,7 @@ void EntityEditor::renderNetworkSection()
 		return;
 	ImGui::PushID("network");
 
-	// nothing to author: netIds/ownership are code abstractions, minted only by the server —
+	// nothing to author: netIds/ownership are code abstractions, minted only by the server -
 	// surface the live state read-only for debugging
 	if (const NetworkComponent* net = getComponent<NetworkComponent>(m_selected.get()))
 	{
@@ -1255,7 +1255,7 @@ void EntityEditor::renderNetworkSection()
 			ImGui::SetTooltip("Server-minted at spawn and replicated to clients; never stored in the .pre.\n0/Local = this instance is client-local (or single player) and never syncs");
 		if (net->ownerClientId != 0 && net->state)
 		{
-			// claim/violation state is the server union member — only valid to read there
+			// claim/violation state is the server union member - only valid to read there
 			if (Globals::networkManager.role() == ENetRole::Server)
 				ImGui::Text("owner: client %u  claim: %s  violations: %u", net->ownerClientId,
 					claimNames[glm::min(int(net->state->server.lastClaimResult), 5)], uint32(net->state->server.violations));
@@ -1296,7 +1296,7 @@ void EntityEditor::renderLightSection()
 	if (ImGui::IsItemHovered())
 		ImGui::SetTooltip("Wireframe overlay of each light's reach/shape (the Lights/Debug geometry tweak forces this on for every entity)");
 
-	// One collapsible block per light — the whole point of the component is holding several.
+	// One collapsible block per light - the whole point of the component is holding several.
 	int removeIdx = -1;
 	for (size_t i = 0; i < m_lightDraft.lights.size(); ++i)
 	{
@@ -1652,7 +1652,7 @@ void EntityEditor::commitRespawn()
 	uint16 typeBits = 0;
 	oc::vector<oc::shared_ptr<void>> infos;
 
-	// Scene (bit 0) — driven by the m_hasScene draft flag (toggled by Add/Remove Scene), not the live
+	// Scene (bit 0) - driven by the m_hasScene draft flag (toggled by Add/Remove Scene), not the live
 	// entity's current state. main.cpp splices any existing children from the old entity onto the
 	// respawned one, so they survive even though this editor rebuilds the component set from scratch.
 	if (m_hasScene)
@@ -1838,7 +1838,7 @@ void EntityEditor::commitRespawn()
 	tmpl->displayName = m_selected->getName();
 	tmpl->enabled = m_selected->isEnabled(); // carry the live enable state onto the respawned entity
 	tmpl->sourceFile = m_path; // every node in the document belongs to the open .pre (empty until first save)
-	// Keep the prefab identity across respawns — losing it would break "Open Selected"'s registry lookup
+	// Keep the prefab identity across respawns - losing it would break "Open Selected"'s registry lookup
 	// and re-serialize the entity inline instead of as a "Prefab <name>" reference.
 	tmpl->prefabName = (m_selected.get() == m_editRoot.get() && !m_path.empty())
 		? FileSystem::stem(m_path)

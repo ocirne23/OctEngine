@@ -6,7 +6,7 @@ import :Grid;
 import :ChunkMap;
 
 // A per-TEAM flow field: the geodesic distance from every reached cell to the NEAREST source of
-// that team (its structures + player bodies), plus which source won — so one cell read gives a
+// that team (its structures + player bodies), plus which source won - so one cell read gives a
 // unit of any OTHER team both "which way to the closest enemy" and "which enemy" (nearest by
 // walking distance around walls, not as the crow flies). Built by a radius-bounded multi-source
 // Dijkstra over the obstacle raster; chunks come into being only where the front reaches, which is
@@ -17,7 +17,7 @@ export namespace Nav
     struct NavSource
     {
         glm::vec3 pos{ 0.0f };
-        float stopRadius = 0.0f; // footprint half — seeds every cell it covers (a wall is a target too)
+        float stopRadius = 0.0f; // footprint half - seeds every cell it covers (a wall is a target too)
         uint32 id = 0;           // the game's stable id (structureId), 0 for players
         uint8 kind = 0;          // 0 structure, 1 player
     };
@@ -28,7 +28,7 @@ export namespace Nav
         glm::vec2 max{ 0.0f };
         // 0 = impassable (Blocked). Else a BREACHABLE obstacle: its cells stay walkable at a
         // (1 + cost) step multiplier, so the Dijkstra routes THROUGH it when the detour around is
-        // longer — the game's walls, which units then chew through. Steering/density still treat
+        // longer - the game's walls, which units then chew through. Steering/density still treat
         // only Blocked as a wall, so a unit walks into it and the bite lands.
         uint8 cost = 0;
         uint8 pad[3] = {}; // explicit: the obstacle list is change-detected by a byte hash
@@ -74,11 +74,11 @@ export namespace Nav
             glm::vec2 descentDir{ 0.0f }; // unit vector toward lower distance (zero AT a source)
         };
 
-        // The build is STEPPED across frames (any thread — the field is private until published):
+        // The build is STEPPED across frames (any thread - the field is private until published):
         // beginBuild rasterizes and seeds, then each stepBuild solves up to maxChunks chunks of the
-        // flood — a CONSTANT amount of work per step, cutting a wave mid-way when the budget runs
+        // flood - a CONSTANT amount of work per step, cutting a wave mid-way when the budget runs
         // out (the wave's remainder resumes next step; relaxation order never changes the
-        // fixpoint) — and returns whether the front is exhausted (isBuildDone). NavSystem submits
+        // fixpoint) - and returns whether the front is exhausted (isBuildDone). NavSystem submits
         // one step job per frame, so a big field costs the same slice of every frame instead of
         // one burst of thousands of chunk jobs.
         void beginBuild(oc::span<const NavObstacle> obstacles, oc::span<const NavSource> sources,
@@ -102,9 +102,9 @@ export namespace Nav
         // A stack-local SNAPSHOT of the raster around one walker: snapshotCosts fills it with a
         // handful of chunk lookups and row copies, and every probe after that (whisker march,
         // body/corner samples, wall push) is a plain array read. The chunk-hash helpers below pay
-        // a find() PER CELL — a steering unit makes 100+ such reads per tick, so it snapshots once
+        // a find() PER CELL - a steering unit makes 100+ such reads per tick, so it snapshots once
         // and reads the window instead. Cells outside the window read as OPEN, the same rule
-        // costAt() has for absent chunks — size the radius to cover the longest probe.
+        // costAt() has for absent chunks - size the radius to cover the longest probe.
         struct CostWindow
         {
             static constexpr int MaxRadius = 15; // 31x31 = 961 bytes, meant for the caller's stack
@@ -143,7 +143,7 @@ export namespace Nav
         // A* over the raster from `from` to `to`, string-pulled into a minimal polyline (first
         // point = from, last = to). `radius` is the body clearance used by the string pull.
         // Expansion is capped at maxExpand cells; false = no path inside that budget. NOT for
-        // per-unit use (see the unit steering) — this is the one-shot planner behind seedPath.
+        // per-unit use (see the unit steering) - this is the one-shot planner behind seedPath.
         // `scratch` is the caller's A* working set (reused across calls, grows to the search).
         // findPath never waits, so a thread_local pinned by a ThreadLocalScope (the seedPath job)
         // is legal; the pin asserts if a wait is ever added in here.
@@ -177,15 +177,15 @@ export namespace Nav
         };
         bool findPath(const glm::vec2& from, const glm::vec2& to, uint32 maxExpand, float radius,
             oc::vector<glm::vec2>& outPath, PathScratch& scratch) const;
-        // String pulling for a single walker (main thread — O(steps * LOS)): greedily walk the
+        // String pulling for a single walker (main thread - O(steps * LOS)): greedily walk the
         // descent from xz up to maxSteps cells, return the farthest path point visible from xz
         // (the source position itself when the walk reaches it). false = no field data here.
         bool steerPoint(const glm::vec2& xz, int maxSteps, float radius, glm::vec2& outPoint) const;
-        // Reactive avoidance on the raster alone (no distance data needed — any field's raster is
+        // Reactive avoidance on the raster alone (no distance data needed - any field's raster is
         // the same obstacle set): keeps `dir` if the whisker ahead is clear, else the nearest clear
         // whisker (±30/60/90/120°, side closest to the wanted direction first), else the wall
         // slide. Worker-safe, O(whiskers * cells).
-        // `side` is the walker's hysteresis (in/out): -1 right, +1 left, 0 none — a chosen side is
+        // `side` is the walker's hysteresis (in/out): -1 right, +1 left, 0 none - a chosen side is
         // kept while both are open (else a slide along a long wall flip-flops), reset when clear.
         glm::vec2 avoid(const glm::vec2& xz, const glm::vec2& dir, float lookAhead, float radius, int& side) const;
         // Which way round: probe sideways (±90° of dir) in steps up to maxProbe and return the

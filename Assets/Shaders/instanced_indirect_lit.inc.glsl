@@ -94,7 +94,7 @@ layout (binding = 10, std430) readonly buffer GiGridData { vec4 gi_gridData[]; }
 
 // Terrain data cascades (height/water level/climate/altitude) + FFT ocean maps: underwater sunlight
 // (caustics) for EVERY lit material, and the terrain variant's procedural coloring. Both bindings exist
-// set-wide (19 = terrain data, 7 = u_oceanMaps — see StaticMeshGraphicsPipeline::buildPipelineLayout).
+// set-wide (19 = terrain data, 7 = u_oceanMaps - see StaticMeshGraphicsPipeline::buildPipelineLayout).
 #define TERRAIN_HEIGHT_BINDING 19
 #include "terrain_height.inc.glsl"
 #define UNDERWATER_OCEAN_BINDING 7
@@ -105,22 +105,22 @@ layout (binding = 10, std430) readonly buffer GiGridData { vec4 gi_gridData[]; }
 // >= this sentinel = not provided -> fetch it. Default keeps every other lit variant unchanged.
 const float WATER_LEVEL_UNSET = 1e30;
 float g_waterLevelOverride = WATER_LEVEL_UNSET;
-// The sun radiance doSunLight last resolved for this pixel — transmittance, colour, eclipse, shadow
+// The sun radiance doSunLight last resolved for this pixel - transmittance, colour, eclipse, shadow
 // visibility (PCSS / RT / terrain march) and the underwater transmittance all applied. A material that
 // adds a second lobe after computeLitColor (the terrain's water film) lights it with THIS through
 // doLight, instead of paying the shadow evaluation again.
 vec3 g_sunRadiance = vec3(0.0);
 // The same BEFORE the underwater factor (no caustic focus, no Beer-Lambert): the sun as it arrives at
 // the water SURFACE above this pixel. A lobe that sits on the surface (the terrain's water film glint
-// and whitewater) is lit with this — with g_sunRadiance the ground's caustic pattern rode into the
+// and whitewater) is lit with this - with g_sunRadiance the ground's caustic pattern rode into the
 // film's specular and showed as warped caustics on every filmed pixel under a wave.
 vec3 g_sunRadianceSurface = vec3(0.0);
 // Depth of this pixel below the LIVE water surface (m; negative = above it, -1e30 = no terrain data),
-// resolved by doSunLight for every pixel — the same test that gates the caustics/absorption, published
+// resolved by doSunLight for every pixel - the same test that gates the caustics/absorption, published
 // so the terrain's water film can gate on it too (ground under the live surface is the ocean's to draw).
 float g_liveDepthBelow = -1e30;
 float g_liveWaterLevel = 0.0;      // the calm local level the depth was measured from
-bool  g_liveDepthResolved = false; // resolveLiveDepth ran for this pixel (a material may call it EARLY —
+bool  g_liveDepthResolved = false; // resolveLiveDepth ran for this pixel (a material may call it EARLY -
                                    // the terrain gates its wetness gloss on it before computeLitColor)
 
 // Resolves g_liveDepthBelow / g_liveWaterLevel for worldPos, once per pixel. One water-level fetch (or
@@ -134,11 +134,11 @@ void resolveLiveDepth(vec3 worldPos)
 		return;
 	const float localWaterLevel = g_waterLevelOverride < WATER_LEVEL_UNSET ? g_waterLevelOverride : terrainDataAt(worldPos.xz).y;
 	float depthBelow = localWaterLevel - worldPos.y;
-	// Gate against the LIVE displaced surface, not the calm level — a receded wave leaves sand below
+	// Gate against the LIVE displaced surface, not the calm level - a receded wave leaves sand below
 	// the calm line dry (no caustics/absorption tint on exposed bottom), and the run-up tongue is lit
 	// as underwater while it covers the beach. The wave taps are paid only near the surface: within
-	// the surface's max EXCURSION — the larger of the swash reach (u_oceanParams7.w) and the open-water
-	// trough (u_fogParams7.y = 2 x trough + 0.5) — the wave decides which side of the surface the point
+	// the surface's max EXCURSION - the larger of the swash reach (u_oceanParams7.w) and the open-water
+	// trough (u_fogParams7.y = 2 x trough + 0.5) - the wave decides which side of the surface the point
 	// is on, so it is added in full; beyond it only the caustic/absorption PATH LENGTH would change, so
 	// the contribution fades out over a half-excursion band instead of cutting. A hard cut at the swash
 	// reach drew a line across the seabed that moved with "Swash amplitude": the depth stepped by the
@@ -167,14 +167,14 @@ vec3 doSunLight(vec3 worldPos, vec3 V, vec3 N, vec3 specularCol, vec3 matColOver
 	const float depthBelow = g_liveDepthBelow;
 	const float localWaterLevel = g_liveWaterLevel;
 	float visibility = u_rtSunShadow > 0.5 ? traceSunVisibility(worldPos, N) : sampleSunShadow(worldPos, N);
-	// Long-range terrain shadows. BOTH sources above run out of data well inside the streamed mesh ring —
+	// Long-range terrain shadows. BOTH sources above run out of data well inside the streamed mesh ring -
 	// the cascades end at Shadows/Max distance (3 km default), the RT path's instances at RT/TLAS Range
-	// (4 km) — while terrain meshes run to ~33 km, so distant ground otherwise sits uniformly lit behind a
+	// (4 km) - while terrain meshes run to ~33 km, so distant ground otherwise sits uniformly lit behind a
 	// hard terminator. The baked height cascades still cover all of it, so march them there and take the
 	// DARKER of the two: inside the fade band both terms see the same ridge (min is a no-op, no double
 	// darkening), past it only the march survives. Skipped up close, where the map's texels are coarser
 	// than the geometry they would be shadowing and could only produce acne.
-	// Reach is bias * 2^10 — ~77 km at the default 150 m, comfortably past the far cascade's own range.
+	// Reach is bias * 2^10 - ~77 km at the default 150 m, comfortably past the far cascade's own range.
 	if (u_terrainShadowParams.x > 0.0 && terrainHeightMapPresent())
 	{
 		const float fadeIn = smoothstep(u_terrainShadowParams.x, u_terrainShadowParams.x * 1.25, distance(worldPos, u_viewPos));
@@ -187,7 +187,7 @@ vec3 doSunLight(vec3 worldPos, vec3 V, vec3 N, vec3 specularCol, vec3 matColOver
 	// u_sunTransmittance = atmosTransmittanceToLight(0.0, L, u_skyUp), evaluated once per frame on the CPU.
 	vec3 lightRadiance = u_sunTransmittance * u_sunColor.rgb * (visibility * u_eclipseParams.x);
 	g_sunRadianceSurface = lightRadiance;
-	// Underwater: the sun crossed the wavy surface — caustic focus + Beer-Lambert absorption
+	// Underwater: the sun crossed the wavy surface - caustic focus + Beer-Lambert absorption
 	// (underwater_light.inc.glsl), so seabed/submerged objects get the dancing light patterns. Keyed on
 	// the live depth resolved above.
 	if (depthBelow > 0.0)
@@ -232,7 +232,7 @@ vec4 sampleAOBilateral(vec2 fullUv, vec3 pos, float viewDist)
 
 // Full surface lighting for one shaded point: screen-space AO + bent-normal GI probe irradiance, sun
 // (with underwater caustics) and the clustered light grid. texAO multiplies only the ambient/indirect
-// term (baked texture AO on top of the screen-space term — pass 1.0 when the material carries none).
+// term (baked texture AO on top of the screen-space term - pass 1.0 when the material carries none).
 vec3 computeLitColor(vec3 worldPos, vec3 V, vec3 N, vec3 materialColor, float roughness, float metalness, float texAO)
 {
 	const vec3 specularColor  = mix(vec3(0.04), materialColor, metalness);
@@ -241,8 +241,8 @@ vec3 computeLitColor(vec3 worldPos, vec3 V, vec3 N, vec3 materialColor, float ro
 
 	float ao = 1.0;
 	vec3 bentN = N;
-	// Past the RTAO max distance (u_aoParams.z) the trace writes exactly (N, 1.0) — no occlusion, bent
-	// normal = surface normal (rtao.cs.glsl early-out) — so the depth-aware upsample (up to 8 taps + 4
+	// Past the RTAO max distance (u_aoParams.z) the trace writes exactly (N, 1.0) - no occlusion, bent
+	// normal = surface normal (rtao.cs.glsl early-out) - so the depth-aware upsample (up to 8 taps + 4
 	// world-pos reconstructions) would only re-fetch those constants. Skip it and use them directly;
 	// z = 0 (falloff disabled) keeps the upsample everywhere. The gate measures from the SCENE FOCUS, the
 	// same origin as rtao.cs.glsl's early-out; the camera distance still drives the upsample's depth weights.

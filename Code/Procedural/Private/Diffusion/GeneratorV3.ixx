@@ -34,7 +34,7 @@ export namespace Procedural
 		// --- World scale. The model natively resolves 30 m per pixel; that is what it was trained for and
 		// what makes its continents continent-sized and its peaks ~10 km.
 		// metersPerPixel is a UNIFORM scale: it shrinks elevation and detail by the same factor it shrinks
-		// the horizontal, so a compressed world keeps the model's proportions — same slopes, same shapes,
+		// the horizontal, so a compressed world keeps the model's proportions - same slopes, same shapes,
 		// same climate, just smaller and quicker to fly across. Lowering it is quadratically more expensive
 		// (the same view distance then spans more model pixels, so more tiles must be generated).
 		// heightScale is then a pure vertical exaggeration ON TOP: 1 = the model's real proportions.
@@ -66,31 +66,31 @@ export namespace Procedural
 		float temperatureOffset = 0.0f;  // degrees C
 
 		// THE lapse rate: how fast it cools with altitude, C per MODEL metre (it rides metersPerPixel like
-		// every other vertical quantity here). This is the snow line dial — it multiplies altitude, so it
+		// every other vertical quantity here). This is the snow line dial - it multiplies altitude, so it
 		// costs lowlands and ocean nothing.
 		//
 		// Fixed, not per-region. The model regresses its own rate per coarse pixel and that used to be baked
 		// into the terrain-data map, 8 bits of it. It bought nothing measurable: both cascades regress the
 		// same data through the same windows, so their rates agree, and near-vs-far disagreement was 0.15 C
-		// max with or without it — all of it from the baselines. It only bought fidelity to the model's
+		// max with or without it - all of it from the baselines. It only bought fidelity to the model's
 		// absolute temperature, which nothing consumes. Using one number instead frees those bits, makes the
 		// snow line a dial rather than a model output, and keeps every consumer able to re-derive the
 		// temperature at any height from the baseline alone.
-		// The regressed rate is still read internally — at tile build — to recover that baseline from the
+		// The regressed rate is still read internally - at tile build - to recover that baseline from the
 		// model's temperature; the tiles then carry only the baseline (FieldTile::tempSea).
 		// Default -0.008 = the measured mean of what the model regresses (its own values run -0.012..-0.004
 		// above 1000 m, so this sits mid-range; Earth's environmental lapse is ~-0.0065).
 		float lapseRate = -0.008f;
 
 		// --- Microclimate. The model's temperature is essentially a FUNCTION OF ELEVATION (it regresses a
-		// lapse rate against the coarse map), so every climate boundary it produces is an isotherm — and an
+		// lapse rate against the coarse map), so every climate boundary it produces is an isotherm - and an
 		// isotherm follows a contour line. Left alone, grass gives way to rock at the same height right
 		// across a mountain range, like a tide mark, and the snow line is a perfect ring.
 		// This is a slow wander added to the temperature to break that: real treelines and snow lines move
 		// hundreds of metres up and down a range with soil, drainage, wind scour and shelter. Adding it in
 		// DEGREES lets it act on the same axis the lapse rate does, so one field breaks up the ground
 		// transitions AND the snow line together, and it lands in the climate the scatter system and fog
-		// read too — so trees keep marking the treeline the textures draw.
+		// read too - so trees keep marking the treeline the textures draw.
 		// The wavelength is in model metres (it rides metersPerPixel like the detail layer). Keep it LONG:
 		// it is baked into the terrain-data map, whose far cascade is ~16 m per texel, and a wavelength near
 		// that aliases into near/far disagreement. The default is ~30x the far texel at mpp=3.
@@ -125,7 +125,7 @@ export namespace Procedural
 		// thread. Cheap and idempotent; the TerrainGenV3 constructor calls it for you.
 		static void beginLoad();
 		// Applies the inference precision process-wide (see TerrainConfigV3::useFp16). Cheap to call on
-		// every rebuild — only a CHANGE does anything — but a change RELOADS the models, so isReady() must
+		// every rebuild - only a CHANGE does anything - but a change RELOADS the models, so isReady() must
 		// be re-read after this, never cached across it.
 		static void setPrecision(bool useFp16);
 		// False while the models are loading, and permanently if that failed. Sampling before this is true
@@ -134,7 +134,7 @@ export namespace Procedural
 		static bool hasFailed();
 		// metersPerPixel / the model's native resolution: the uniform factor every world-space length the
 		// generator produces is scaled by (elevation, crag relief, detail). Anything OUTSIDE the generator
-		// that compares against those lengths in metres — the terrain shader's crag thresholds — has to
+		// that compares against those lengths in metres - the terrain shader's crag thresholds - has to
 		// scale by this too, or it is tuned for exactly one metersPerPixel. Valid before the models load
 		// (the native resolution has a default), so callers need not gate on isReady().
 		static float worldScale(float metersPerPixel);
@@ -155,11 +155,11 @@ export namespace Procedural
 		void samplePoint(double worldX, double worldZ, TerrainPoint& out,
 		                 ESampleDetail detail = ESampleDetail::Full) const override;
 		// Resolves the grid's whole tile set up front, then fills it without touching the shared cache.
-		// Wide-area consumers should use this rather than looping samplePoint — on V3 the difference is one
+		// Wide-area consumers should use this rather than looping samplePoint - on V3 the difference is one
 		// lock per tile versus one per point.
 		void sampleGrid(double originX, double originZ, double step, uint32 resX, uint32 resZ,
 		                oc::span<TerrainPoint> out, ESampleDetail detail = ESampleDetail::Full) const override;
-		// The smooth 30 m/px diffusion surface WITHOUT the procedural detail layer — the terrain shader uses
+		// The smooth 30 m/px diffusion surface WITHOUT the procedural detail layer - the terrain shader uses
 		// this to tell "a mountain" from "high flatland".
 		float sampleAltitude(double worldX, double worldZ) const override;
 		float seaLevel() const override;
@@ -168,8 +168,8 @@ export namespace Procedural
 		const TerrainConfigV3& config() const;
 
 	private:
-		// Defined in the .cpp. They are the tile-lattice mechanics — vectors of cached tiles, lattice
-		// offsets — which no consumer can name and none needs to see; declaring them here only lets the
+		// Defined in the .cpp. They are the tile-lattice mechanics - vectors of cached tiles, lattice
+		// offsets - which no consumer can name and none needs to see; declaring them here only lets the
 		// helpers below traffic in them.
 		struct Sample;    // one evaluation of the diffusion field at a world position
 		struct TileBlock; // the tiles covering a query region, resolved up front

@@ -52,7 +52,7 @@ void main()
 
 	const vec3 materialColor = diffuseSample.xyz;
 	// Two-channel BC5 normal maps store only X/Y (red/green), so .z reads 0 and would flip the normal
-	// into the surface — reconstruct Z from X/Y. Full RGB(A) normal maps keep their stored Z.
+	// into the surface - reconstruct Z from X/Y. Full RGB(A) normal maps keep their stored Z.
 	const vec3 normalSample = texture(u_textures[normalTexIdx], uv).xyz;
 	vec3 tangentNormal;
 	if ((material.flags & MATERIAL_FLAG_BC5_NORMAL) != 0u)

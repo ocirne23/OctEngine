@@ -62,7 +62,7 @@ int lodSelectLevel(MeshLodGroup group, float dist, float radius, float instanceS
     }
     else
     {
-        // No per-level error data (authored LodN_ chains): projected-size metric — each halving of
+        // No per-level error data (authored LodN_ chains): projected-size metric - each halving of
         // the on-screen diameter below fullResPixels drops one level (density ~ area).
         const float projPixels = max(1.0, radius * pixelsPerUnit);
         const float lodF = log2(max(1.0, u_lodParams0.z / projPixels)) + u_lodParams1.y + passBias;

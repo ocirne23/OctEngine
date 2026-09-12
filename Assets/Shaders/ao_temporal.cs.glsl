@@ -32,7 +32,7 @@ void main()
     const float depth = texture(u_curDepth, uv).r;
     if (depth <= 0.0) { imageStore(u_accumOut, px, raw); return; } // background (reversed-Z far = 0)
 
-    // The depth image is jittered (exact depth-prepass reuse); compensate geometric uses — see taaJitterUv.
+    // The depth image is jittered (exact depth-prepass reuse); compensate geometric uses - see taaJitterUv.
     const vec2 uvUnjit = uv - taaJitterUv(u_taaJitter.xy);
     const vec3 worldPos = worldPosFromDepth(uvUnjit, depth); // disocclusion test only
 
@@ -65,7 +65,7 @@ void main()
         {
             const vec2 tapUv = base + offs[i];
             // Last frame's depth is jittered by LAST frame's jitter: the surface at unjittered tapUv
-            // lives at tapUv + prevJitter — fetch there, reconstruct at tapUv.
+            // lives at tapUv + prevJitter - fetch there, reconstruct at tapUv.
             const float prevDepth = texture(u_prevDepth, tapUv + taaJitterUv(u_taaJitter.zw)).r;
             if (prevDepth <= 0.0)
                 continue;

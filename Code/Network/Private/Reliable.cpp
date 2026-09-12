@@ -464,7 +464,7 @@ void NetHost::handleConnectRequest(const NetAddress& from, NetPeerId id, NetRead
                 return; // simultaneous connect: we win as client, they will serve our request
             peer.isServerRole = true; // we lose: serve theirs on this slot, stop our own resends
         }
-        // Connected: late duplicate request (or a restart) — the stateless challenge is harmless
+        // Connected: late duplicate request (or a restart) - the stateless challenge is harmless
     }
     else if (!m_config.acceptIncoming)
     {
@@ -507,7 +507,7 @@ void NetHost::handleChallengeResponse(const NetAddress& from, NetPeerId id, NetR
             sendAccept(peer); // duplicate response, our accept was lost
             return;
         }
-        // same address, fresh salts: the remote end restarted — replace the stale connection
+        // same address, fresh salts: the remote end restarted - replace the stale connection
         emitDisconnected(id, ENetDisconnectReason::Remote);
         freePeer(id);
         id = InvalidNetPeerId;
@@ -544,7 +544,7 @@ void NetHost::handleChallengeResponse(const NetAddress& from, NetPeerId id, NetR
 }
 
 // Per-source token bucket, before any parsing/decryption/allocation. Unconnected senders included:
-// handshake requests are the cheapest thing to flood. Fixed table — a per-address map would grow
+// handshake requests are the cheapest thing to flood. Fixed table - a per-address map would grow
 // with every forged sender.
 bool NetHost::rateLimitAllows(const NetAddress& from)
 {
@@ -799,7 +799,7 @@ void NetHost::handlePayload(NetPeer& peer, NetPeerId id, oc::span<const uint8> b
             if (recvChannel.slots.empty())
                 recvChannel.slots.resize(NetReliableWindow);
             const uint16 offset = uint16(msgSeq - recvChannel.expectedSeq);
-            if (offset < NetReliableWindow) // otherwise already delivered (dup) — the packet ack covers it
+            if (offset < NetReliableWindow) // otherwise already delivered (dup) - the packet ack covers it
             {
                 NetPeer::RecvSlot& slot = recvChannel.slots[msgSeq % NetReliableWindow];
                 if (!slot.valid)
@@ -1106,7 +1106,7 @@ void NetHost::freePeer(NetPeerId id)
     peer.recvChannels.clear();
     peer.unreliableQueue.clear();
     peer.sentPackets.clear();
-    peer.sendWindowOverflow = false; // slots recycle — never inherit the previous occupant's state
+    peer.sendWindowOverflow = false; // slots recycle - never inherit the previous occupant's state
 }
 
 float NetHost::rand01()

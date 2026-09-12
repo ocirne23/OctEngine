@@ -111,9 +111,9 @@ export struct Frustum
 };
 
 // A culling-view snapshot handed from the renderer to the spatial index (the two libraries do not
-// link each other, so Core carries the type — the Core.VrSession pattern): the culling camera, its
+// link each other, so Core carries the type - the Core.VrSession pattern): the culling camera, its
 // frustum, and the camera-relative reversed-z view-projection for the CPU occlusion rasterizer.
-// valid=false = no view exists yet (the first VR frame — the head pose arrives only inside
+// valid=false = no view exists yet (the first VR frame - the head pose arrives only inside
 // Renderer::beginFrame, so VR culls one frame latent on the previous head view).
 export struct CullView
 {

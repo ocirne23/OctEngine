@@ -9,7 +9,7 @@ import RendererVK;
 import :Structures;
 
 // THE ECONOMY TICKS + materials (see Structures.ixx): production (income, fuel burn, consumer
-// drain, the emitter ramps — over the roster, the transport moves the cells between them), the
+// drain, the emitter ramps - over the roster, the transport moves the cells between them), the
 // death sweep, the constructors, the shared materials model (HEALTH IS THE PROGRESS: the same
 // price builds a blueprint and repairs a damaged structure), the tint, and the debug draw.
 
@@ -56,7 +56,7 @@ void StructureSystem::damageStructure(uint32 id, float amount)
 
 void StructureSystem::spendMinerals(uint8 team, float amount)
 {
-    // Silos drain first; the Base last — its trickle refills, and keeping silo stock rotating
+    // Silos drain first; the Base last - its trickle refills, and keeping silo stock rotating
     // makes conveyor supply lines visibly matter.
     for (const EStructureType pass : { EStructureType::MineralSilo, EStructureType::Base })
         for (const Ref& s : m_frame)
@@ -95,7 +95,7 @@ void StructureSystem::applyStructureTint(const Ref& s)
     }
     const auto material = Globals::rendererVK.createSolidColorMaterial(color);
     rc->node.setMaterialOverride(material);
-    // Cables/crossings are COMPOSITES (arm/end/ramp child entities): tint the child pieces along —
+    // Cables/crossings are COMPOSITES (arm/end/ramp child entities): tint the child pieces along -
     // this is also what turns them blueprint-gray and back.
     if (isCableOrCrossing(s.type))
         if (const SceneComponent* sc = getComponent<SceneComponent>(s.entity))
@@ -107,7 +107,7 @@ void StructureSystem::applyStructureTint(const Ref& s)
 
 float StructureSystem::investMaterials(const Ref& s, float amount)
 {
-    // HEALTH IS THE PROGRESS: materials heal at cost/healthMax per hp — the same price builds a
+    // HEALTH IS THE PROGRESS: materials heal at cost/healthMax per hp - the same price builds a
     // blueprint and repairs a damaged structure. A full-health blueprint flips to BUILT. Heals
     // against the COMPONENT's healthMax (cables are softer than buildings).
     if (amount <= 0.0f || (!isPlaceableType(s.type) && s.type != EStructureType::Base))
@@ -124,7 +124,7 @@ float StructureSystem::investMaterials(const Ref& s, float amount)
         applyStructureTint(s); // back to the authored color
         m_linksDirty = true;   // a finished cable segment starts conducting
         Log::info(oc::string(structureTypeName(s.type)) + " constructed");
-        if (onStructureBuilt) // server: re-fire GPl — cables are outside GSt, so this IS the
+        if (onStructureBuilt) // server: re-fire GPl - cables are outside GSt, so this IS the
             onStructureBuilt(s.state->structureId); // client's only built notification
     }
     return heal * materialsPerHp;
@@ -230,7 +230,7 @@ void StructureSystem::tickProduction(float deltaSec)
 
         // ---- producers: generators burn their OWN tank into their OWN buffer (full buffer =
         // export-limited = no fuel burn), solar trickles for free. The Base self-generates the
-        // same way into its own store — a baseline its shield draw eats from; sieges outpace it.
+        // same way into its own store - a baseline its shield draw eats from; sieges outpace it.
         if (ref.type == EStructureType::Base && m_baseEnergyGenPerSec > 0.0f)
         {
             const float add = glm::min(m_baseEnergyGenPerSec * dt, glm::max(s.capacity[0] - s.store[0], 0.0f));
@@ -270,7 +270,7 @@ void StructureSystem::tickProduction(float deltaSec)
         {
             ForceComponent* fc = getComponent<ForceComponent>(ref.entity);
             const float pressure = fc ? fc->emitter.getPressure() : 0.0f;
-            // THE BASE'S SHIELD IS FREE — no per-second draw, no pressure surcharge: the Base is a
+            // THE BASE'S SHIELD IS FREE - no per-second draw, no pressure surcharge: the Base is a
             // storage building (it banks energy for the grid and self-generates a trickle). Only
             // the enemy siege load still drains it, so a pressed Base can still go dark.
             const bool freeShield = ref.type == EStructureType::Base;
@@ -310,7 +310,7 @@ void StructureSystem::tickProduction(float deltaSec)
         if (draw <= 0.0f)
             continue;
         totalDemand += draw;
-        // Fabricators burn fuel alongside energy (piped into their own tank) — both must be there.
+        // Fabricators burn fuel alongside energy (piped into their own tank) - both must be there.
         const float fuelDraw = ref.type == EStructureType::Fabricator ? m_fabricatorFuelPerSec : 0.0f;
         s.powered = s.store[0] >= draw * dt - 1e-4f && s.store[1] >= fuelDraw * dt - 1e-4f;
         if (s.powered)
@@ -331,7 +331,7 @@ void StructureSystem::tickProduction(float deltaSec)
         m = 0.0f;
     for (const Ref& s : m_frame)
     {
-        // The HUD's "energy stored" counts DEDICATED storage only (Battery) — production buffers
+        // The HUD's "energy stored" counts DEDICATED storage only (Battery) - production buffers
         // and consumer trickle buffers are working charge, not reserves.
         if (s.type == EStructureType::Battery)
         {
@@ -349,12 +349,12 @@ void StructureSystem::tickProduction(float deltaSec)
 void StructureSystem::tickDamage(float)
 {
     ProfileScope scope("Structures death sweep", EProfileCategory::Game);
-    // Damage happens ON the entities (territory drain + atomic intake in the component) — this is
+    // Damage happens ON the entities (territory drain + atomic intake in the component) - this is
     // the DEATH SWEEP plus the strainable mark units aim their siege drain at.
     for (size_t i = 0; i < m_frame.size();)
     {
         const Ref& s = m_frame[i];
-        // ACTIVE = powered (paid its draw this tick — not latched down) with a bubble up: a dark
+        // ACTIVE = powered (paid its draw this tick - not latched down) with a bubble up: a dark
         // emitter shrinking out is not a drain target, the next powered one is.
         s.state->strainable = hasShieldEmitter(s.type) && !s.state->blueprint
             && s.state->powered && s.state->emitter.outputFrac > 0.05f;
@@ -363,7 +363,7 @@ void StructureSystem::tickDamage(float)
         s.state->bubbleRadius = s.state->strainable
             ? emitterReachOf(s.type) * 0.5f * s.state->emitter.outputFrac : 0.0f;
         // The Base takes damage but is NEVER destroyed (no lose condition yet): it survives at
-        // 0 hp — dead but standing, until players repair it back up.
+        // 0 hp - dead but standing, until players repair it back up.
         if (s.state->invulnerable || s.type == EStructureType::Base || s.state->alive())
         {
             ++i;
@@ -395,7 +395,7 @@ void StructureSystem::drawDebug() const
 {
     ProfileScope scope("Structures debug draw", EProfileCategory::Game);
     // SATURATED segments: a red pulsing ring over every segment whose ~2 s average throughput
-    // sits at or above 90 % of its out-rate — the bottlenecks, and nothing else (the segments
+    // sits at or above 90 % of its out-rate - the bottlenecks, and nothing else (the segments
     // themselves are real meshes; the selected-cable label carries the numbers). Clients read the
     // mirrored average (GCf), so they see the same rings.
     for (const TransportNode& node : m_net.nodes)

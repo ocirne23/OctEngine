@@ -8,7 +8,7 @@ import :Diffusion.ModelAssets;
 //
 // What it does: sample 5 channels of FastNoiseLite Perlin fBm, then QUANTILE-MATCH each channel onto a real
 // -world (WorldClim/ETOPO) distribution. That is what turns generic [-1,1] noise into plausible elevation /
-// temperature / precipitation values for the model to refine — it is the "coarse sketch" the diffusion
+// temperature / precipitation values for the model to refine - it is the "coarse sketch" the diffusion
 // stack is conditioned on, and it is where the world seed actually enters the pipeline.
 export namespace Procedural::Diffusion
 {

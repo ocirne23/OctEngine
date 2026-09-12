@@ -46,7 +46,7 @@ Entity* findAllocationRoot(Entity* entity)
     for (Entity* p = entity; p; p = p->parent)
     {
         if (!(p->flags & EEntityFlag_ContiguousAllocation))
-            return nullptr; // broken chain — no intact allocation above
+            return nullptr; // broken chain - no intact allocation above
         if (p->flags & EEntityFlag_RootAllocation)
             return p;
     }
@@ -65,7 +65,7 @@ static void promoteChildSubtrees(Entity* parent, const Entity* skip)
     {
         Entity* child = c.get();
         if (child == skip || !(child->flags & EEntityFlag_ContiguousAllocation) || (child->flags & EEntityFlag_RootAllocation))
-            continue; // the path continues below / broken member / grafted allocation — self-managing
+            continue; // the path continues below / broken member / grafted allocation - self-managing
         child->flags |= EEntityFlag_RootAllocation;
     }
 }
@@ -73,7 +73,7 @@ static void promoteChildSubtrees(Entity* parent, const Entity* skip)
 void breakContiguousAllocation(Entity* member)
 {
     if (!((member->flags & EEntityFlag_ContiguousAllocation) && !(member->flags & EEntityFlag_RootAllocation)))
-        return; // standalone/broken, or an allocation root — moving a whole allocation never breaks it
+        return; // standalone/broken, or an allocation root - moving a whole allocation never breaks it
     if (!findAllocationRoot(member))
     {
         assert(false); // a flagged member always has an intact chain to its root
@@ -99,7 +99,7 @@ void breakContiguousAllocationFromRoot(Entity* root)
 {
     assert(root->flags & EEntityFlag_RootAllocation);
     // Destroy-time fallback: the root reverts to freeing its own slice, each child subtree becomes its
-    // own allocation and re-runs the solely-owned check at its own death — so an externally referenced
+    // own allocation and re-runs the solely-owned check at its own death - so an externally referenced
     // member only degrades the path leading to it, recursively, instead of the whole tree.
     promoteChildSubtrees(root, nullptr);
     root->flags &= uint8(~(EEntityFlag_ContiguousAllocation | EEntityFlag_RootAllocation));
@@ -114,7 +114,7 @@ bool contiguousTreeSolelyOwned(Entity* entity)
     {
         Entity* child = c.get();
         if (!(child->flags & EEntityFlag_ContiguousAllocation) || (child->flags & EEntityFlag_RootAllocation))
-            continue; // self-managing (broken member or grafted allocation root) — not part of this block
+            continue; // self-managing (broken member or grafted allocation root) - not part of this block
         if (oc::atomic_ref<uint16>(child->refCount).load(oc::memory_order_relaxed) != 1)
             return false; // an external EntityPtr would outlive the tree teardown
         if (!contiguousTreeSolelyOwned(child))

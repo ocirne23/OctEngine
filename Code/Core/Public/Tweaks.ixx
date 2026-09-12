@@ -22,10 +22,10 @@ export enum class ETweakType : uint8
 	Enum,    // int index into enumNames
 };
 
-// Optional behavior flags. Saved: the value persists to Assets/Local/tweaks.cfg — loaded at
+// Optional behavior flags. Saved: the value persists to Assets/Local/tweaks.cfg - loaded at
 // startup (TweakRegistry::loadSaved from main), written back debounced whenever a change is
 // detected. Synced: in a network session the SERVER's value broadcasts to clients on change and
-// at join (NetworkManager watches syncGeneration()). Identity is "Category/Name" — renaming a
+// at join (NetworkManager watches syncGeneration()). Identity is "Category/Name" - renaming a
 // flagged tweak orphans its saved value (harmless: unknown keys are kept but never applied).
 export enum class ETweakFlags : uint8
 {
@@ -122,7 +122,7 @@ public:
 	{
 		ProfileScope scope("TweakRegistry::registerVar", EProfileCategory::Core);
 		// RE-registration (same "Category/Name") REPLACES in place: mode transitions reconstruct
-		// systems (exit-to-menu -> a fresh GameMatch) whose registerTweaks run again — the fresh
+		// systems (exit-to-menu -> a fresh GameMatch) whose registerTweaks run again - the fresh
 		// pointers supersede the old ones instead of growing duplicates.
 		const oc::string key = keyOf(var);
 		size_t slot = m_vars.size();
@@ -148,7 +148,7 @@ public:
 	}
 
 	// Mode-teardown support: removes every variable whose registered pointer (data or intensity)
-	// lies inside [object, object + size) — a dying stack subsystem (GameMatch) takes its MEMBER
+	// lies inside [object, object + size) - a dying stack subsystem (GameMatch) takes its MEMBER
 	// registrations with it, or update()/the panel would read freed memory every frame. Statics
 	// registered by the same code stay, and re-register in place on the next construction.
 	void unregisterInRange(const void* object, size_t size)
@@ -169,8 +169,8 @@ public:
 	}
 
 	// A whole FILE of overrides (`--tweaks <path>`, read by main through FileSystem): the
-	// tweaks.cfg format — one `Category/Name = v [v v v]` per line, `#`/`//` comments, blank lines
-	// ignored — each line applied through setOverride (wins over the saved file, never written
+	// tweaks.cfg format - one `Category/Name = v [v v v]` per line, `#`/`//` comments, blank lines
+	// ignored - each line applied through setOverride (wins over the saved file, never written
 	// back). How an automated run pins a whole configuration, e.g. graphics features off for a
 	// CPU-focused profile. Returns the number of lines applied; unparsable lines are logged.
 	uint32 loadOverrides(oc::string_view content, oc::string_view sourceName)
@@ -238,14 +238,14 @@ public:
 
 	const oc::vector<TweakVar>& vars() const { return m_vars; }
 
-	// ScopedFlags support — the default applied to registrations that pass no explicit flags.
+	// ScopedFlags support - the default applied to registrations that pass no explicit flags.
 	ETweakFlags defaultFlags() const { return m_defaultFlags; }
 	void setDefaultFlags(ETweakFlags flags) { m_defaultFlags = flags; }
 
 	// ---- Saved --------------------------------------------------------------------------
 	// Core sits BELOW the File library, so it cannot touch the disk itself: main() installs these
 	// two hooks (FileSystem::readFileStr / writeFileStr) before loadSaved(). Without them the
-	// Saved flag is simply inert — the registry keeps working in-memory.
+	// Saved flag is simply inert - the registry keeps working in-memory.
 	using ReadFileFn = oc::function<oc::string(const oc::string& path)>;
 	using WriteFileFn = oc::function<bool(const oc::string& path, const oc::string& content)>;
 	void setFileIo(ReadFileFn read, WriteFileFn write)
@@ -290,7 +290,7 @@ public:
 	}
 
 	// Main loop, once per frame. The panel (and gameplay code) writes through the raw pointers,
-	// so polling is the only reliable change hook: flagged vars diff against a snapshot — Saved
+	// so polling is the only reliable change hook: flagged vars diff against a snapshot - Saved
 	// changes arm a debounced file write (sliders drag every frame), Synced changes bump the
 	// generation the NetworkManager broadcasts on.
 	void update(float deltaSec)
@@ -354,7 +354,7 @@ public:
 			outChunks.push_back(oc::move(chunk));
 	}
 
-	// Receive side. Unknown keys, un-Synced vars and type mismatches are IGNORED — the sender
+	// Receive side. Unknown keys, un-Synced vars and type mismatches are IGNORED - the sender
 	// cannot modify anything the receiver did not itself flag as Synced; values clamp to the
 	// receiver's own bounds. Applied values refresh the snapshot, so they neither re-save the
 	// client's file nor bounce a sync generation.
@@ -367,7 +367,7 @@ public:
 		{
 			const uint8 keyLen = blob[cursor++];
 			if (cursor + keyLen + 2 > blob.size())
-				return; // malformed — drop the rest
+				return; // malformed - drop the rest
 			const oc::string_view key(reinterpret_cast<const char*>(blob.data() + cursor), keyLen);
 			cursor += keyLen;
 			const uint8 type = blob[cursor++];
@@ -472,7 +472,7 @@ private:
 			if (var.intensity && value.count >= 4)
 				*var.intensity = clamped(value.v[3]); // min/max bound the intensity drag
 			break;
-		default: // Float2/3/4, Color4 — component count from the TYPE, never from the record
+		default: // Float2/3/4, Color4 - component count from the TYPE, never from the record
 			std::memcpy(var.data, value.v, size_t(glm::min(value.count, componentCount(var))) * sizeof(float));
 			break;
 		}
@@ -520,7 +520,7 @@ private:
 			return; // no IO hook installed (headless tooling): Saved is inert
 		std::ostringstream file;
 		file << std::setprecision(9);
-		for (const auto& [key, values] : m_savedValues) // unknown keys kept — other run modes
+		for (const auto& [key, values] : m_savedValues) // unknown keys kept - other run modes
 		{
 			if (values.empty())
 				continue;
@@ -536,7 +536,7 @@ private:
 	static constexpr const char* c_savePath = "Local/tweaks.cfg";
 
 	oc::vector<TweakVar> m_vars;
-	oc::vector<Value> m_snapshots; // parallel to m_vars — last value seen by update()
+	oc::vector<Value> m_snapshots; // parallel to m_vars - last value seen by update()
 	oc::map<oc::string, oc::vector<float>> m_savedValues; // the file image, unknown keys preserved
 	oc::map<oc::string, oc::vector<float>> m_overrides;   // --tweak command-line overrides: win over the file, never saved
 	ETweakFlags m_defaultFlags = ETweakFlags::None;
@@ -544,13 +544,13 @@ private:
 	float m_saveTimer = 0.0f;
 	bool m_saveDirty = false;
 	bool m_savedLoaded = false;
-	ReadFileFn m_readFile;   // installed by main (FileSystem) — Core cannot import File
+	ReadFileFn m_readFile;   // installed by main (FileSystem) - Core cannot import File
 	WriteFileFn m_writeFile;
 };
 
 // ---- Convenience registration helpers --------------------------------------------------
 // Pass a string range of "0-inf" by using FLT_MAX as the max (renders as a drag instead of a slider).
-// Every helper takes optional flags LAST (after onChange — pass {} for onChange when only flags are
+// Every helper takes optional flags LAST (after onChange - pass {} for onChange when only flags are
 // wanted); to flag a whole registerTweaks() block, put one Tweak::ScopedFlags at its top instead.
 
 export namespace Tweak

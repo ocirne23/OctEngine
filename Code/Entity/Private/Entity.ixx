@@ -38,12 +38,12 @@ export enum EEntityFlags : uint8
 
     // OPT-IN per-entity ProfileScope in the parallel entity pass (named by the registry-owned name):
     // the interesting components set it at spawn (Animator/Force/Script/GameUnit), machine
-    // structures (barracks/turret) latch it in their update — plain static scenery stays scope-
+    // structures (barracks/turret) latch it in their update - plain static scenery stays scope-
     // free so it cannot flood the profiler rings.
     EEntityFlag_Profiled             = 1 << 6,
 
     // GLOBAL root (`Global true` in the .pre, root only): the World visits it every frame from its
-    // own list instead of finding it through the spatial index — for organisational roots whose
+    // own list instead of finding it through the spatial index - for organisational roots whose
     // children spread across the world (the co-op terrain root). It still registers a spatial
     // entry (gameplay queries, render culling); its children are selected individually like
     // everything else. Never inherited by children.
@@ -105,8 +105,8 @@ public:
     uint8 updateCost = 0; // MEASURED updateSelf weight in 250ns units (0 = not yet measured): the
                           // World measures the entity's first update, re-measures at a random low
                           // chance, and fills each fan-out batch until the summed cost reaches its
-                          // time budget — no guessed initial value, the first update IS the guess
-    // World SCHEDULING state, like updateCost: written only by World's update pass (its SIM LOD —
+                          // time budget - no guessed initial value, the first update IS the guess
+    // World SCHEDULING state, like updateCost: written only by World's update pass (its SIM LOD -
     // tier + the sim time of the last tick, 1/64 s units wrapping every 256 s). The entity itself
     // never looks at these. A fresh entity starts UNPLACED (tier 3): its first stamped visit is
     // then a WAKE edge, which is how a body the spawner parked gets enabled once a player is near.
@@ -234,7 +234,7 @@ export struct EntitySpawnTemplate
     mutable uint32 treeAllocSize = 0; // lazy cache: entity + recursive SceneComponent children, 0 = uncomputed
     // Lazy cache: NetworkComponents in the whole tree, UINT32_MAX = uncomputed (same benign-race
     // scheme as treeAllocSize). Entity::create needs it for server netId contiguity: only a tree
-    // that mints MORE THAN ONE id must hold the manager's register lock across the whole spawn —
+    // that mints MORE THAN ONE id must hold the manager's register lock across the whole spawn -
     // single-component trees (every unit/projectile prefab) mint atomically and stay parallel.
     mutable uint32 treeNetworkCount = UINT32_MAX;
 };

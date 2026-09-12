@@ -3,7 +3,7 @@ export module Entity:AnimationDescription;
 import Core;
 import File;
 
-// .anm — one named animation clip descriptor: a source file + which track inside it. Clips are retargeted
+// .anm - one named animation clip descriptor: a source file + which track inside it. Clips are retargeted
 // by bone name at load (see ISceneData::loadAnimations), so a rig and its animations can live in separate
 // files (Mixamo-style). The clip library that uses these lives in a .apl animator.
 export struct AnimationClipDesc
@@ -16,7 +16,7 @@ export struct AnimationClipDesc
     oc::vector<oc::pair<oc::string, float>> events; // notifies: name -> normalized time (0..1)
 };
 
-// .apl — an animator graph: parameters + a clip library + blend spaces + a state machine. Maps 1:1 onto
+// .apl - an animator graph: parameters + a clip library + blend spaces + a state machine. Maps 1:1 onto
 // the Animation runtime (AnimationPlayer + AnimStateMachine + BlendSpace1D). Stored as plain data; an
 // AnimatorComponent instantiates the runtime objects against a given skeleton at spawn time.
 export struct AnimatorDesc
@@ -54,7 +54,7 @@ export struct AnimatorDesc
         bool boolValue = false; // Equal target
     };
     // Playback-rate scaling for a state (or an animator-wide default). Either a constant Speed, or a float
-    // parameter (optionally multiplied by SpeedScale) that warps the clip rate each update — e.g. driving
+    // parameter (optionally multiplied by SpeedScale) that warps the clip rate each update - e.g. driving
     // run playback from the same "speed" parameter that drives the locomotion blend.
     struct SpeedBinding
     {

@@ -14,7 +14,7 @@ import :Layout;
 // Projected box decals, drawn inside the scene-color render pass immediately after the opaque forward
 // draw (before particles/fog, so those layer on top). Decals are submitted per frame like lights
 // (Renderer::addDecal, lock-free atomic cursor into a mapped per-frame buffer) and rendered with ONE
-// instanced indirect draw of unit cubes (36 verts, front faces culled, no depth test — works with the
+// instanced indirect draw of unit cubes (36 verts, front faces culled, no depth test - works with the
 // camera inside the volume): the fragment shader reconstructs the surface from the G-buffer depth,
 // projects it into decal space and blends premultiplied over the lit scene. instanceCount rides in a
 // mapped indirect buffer, so the cached secondary command buffer never re-records for count changes.

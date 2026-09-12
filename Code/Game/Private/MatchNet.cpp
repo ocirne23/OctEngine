@@ -13,9 +13,9 @@ import :Player;
 import :Structures;
 import :Npc;
 
-// MULTIPLAYER: the team slots, the per-client capsules and the join replay, every game event —
+// MULTIPLAYER: the team slots, the per-client capsules and the join replay, every game event -
 // the server's broadcasts (GPl/GRm/GSt/GCb/GCf/GRt/GBu/GLt/GWv/GMp/GPz/GDm) and the clients'
-// Gq* requests — and the request seams local input shares with them. See the Match.ixx
+// Gq* requests - and the request seams local input shares with them. See the Match.ixx
 // MULTIPLAYER comment and Code/Game/CONTEXT.md "Multiplayer sync".
 
 void GameMatch::setLobbyTeams(uint8 numTeams, oc::span<const oc::pair<uint32, uint8>> picks)
@@ -63,7 +63,7 @@ void GameMatch::onClientJoined(uint32 clientId)
 {
     // Their player: spawned server-side (player.pre carries Component Network), handed over with
     // setOwner in the SAME frame; the client adopts + drives it through the claim stream.
-    // Clients spawn beside THEIR team's Base — the team is a freshly allocated slot, and the
+    // Clients spawn beside THEIR team's Base - the team is a freshly allocated slot, and the
     // capsule's puppet component carries it to the owner through the snapshot game blob.
     const uint8 team = allocateClientTeam(clientId);
     const glm::vec3 clientStart = teamStartPos(team);
@@ -83,12 +83,12 @@ void GameMatch::onClientJoined(uint32 clientId)
         Log::info("Game: client " + oc::to_string(clientId) + " assigned team " + oc::to_string(team));
     }
     // World-state replay for the late joiner: the co-op map seed FIRST (the joiner builds its
-    // terrain + nodes from it before any structure mirror below arrives — reliable ch1 is
+    // terrain + nodes from it before any structure mirror below arrives - reliable ch1 is
     // ordered), then every structure, broadcast (mirrorPlace is idempotent, so already-connected
     // clients shrug the duplicates off; rebuildCoopMap no-ops on the repeated seed). Links need
-    // no replay — each client derives them locally from the mirrored cable segments.
+    // no replay - each client derives them locally from the mirrored cable segments.
     if (m_isServer && m_coopMap.built)
-        sendMapSeed(); // co-op inputs or the PvP arena — the joiner's terrain + nodes
+        sendMapSeed(); // co-op inputs or the PvP arena - the joiner's terrain + nodes
     for (int i = 0; i < m_structures.structureCount(); ++i)
         sendStructurePlaced(i);
     for (int i = 0; i < m_structures.structureCount(); ++i)
@@ -206,7 +206,7 @@ void GameMatch::sendStats()
     }
     Globals::networkManager.fireNetworkEvent("GSt", writer.data());
 
-    // GCb: build progress of cable/crossing BLUEPRINTS only (the segments under construction — a
+    // GCb: build progress of cable/crossing BLUEPRINTS only (the segments under construction - a
     // small, changing set; built ones are silent). 5 B per record; a long unbuilt run past the cap
     // rotates through m_cableSyncCursor over consecutive sends.
     constexpr int c_maxCableRecords = 190; // 2 + 190 * 5 = 952 B, under the 1024 B event cap
@@ -231,7 +231,7 @@ void GameMatch::sendStats()
     Globals::networkManager.fireNetworkEvent("GCb", cableWriter.data());
 
     // GCf: the cable FILLS + throughput (transport cells per segment, the ~2 s average as a
-    // fraction of the rate), rotating through the cable nodes from m_cableFillCursor — the
+    // fraction of the rate), rotating through the cable nodes from m_cableFillCursor - the
     // clients' cable visuals and the selected-cable label. 6 B each.
     {
         constexpr int c_maxFillRecords = 160; // 2 + 160 * 6 = 962 B, under the 1024 B event cap
@@ -407,7 +407,7 @@ void GameMatch::handleNetEvent(oc::string_view name)
             }
             if (!reader.overflowed())
                 m_structures.mirrorTotals(minerals, fuel, energy, cap, gen, use);
-            // (mirrorTotals takes the spans by value into its own arrays — safe past this scope)
+            // (mirrorTotals takes the spans by value into its own arrays - safe past this scope)
         }
         else if (name == "GCb")
         {
@@ -491,7 +491,7 @@ void GameMatch::handleNetEvent(oc::string_view name)
         }
         else if (name == "GMp")
         {
-            // The server's terrain: the co-op map's inputs or the PvP arena — build the identical
+            // The server's terrain: the co-op map's inputs or the PvP arena - build the identical
             // terrain (+ barrier) + nodes locally (the rebuilds are no-ops on the re-broadcasts
             // later joiners trigger). Sent FIRST in the join replay, so the map exists before any
             // structure mirror lands.
@@ -511,7 +511,7 @@ void GameMatch::handleNetEvent(oc::string_view name)
                     rebuildCoopMap(seed, fill, (int)lanes);
             }
         }
-        // (shield/materials state rides the entity snapshot's game blob now — no GSh event)
+        // (shield/materials state rides the entity snapshot's game blob now - no GSh event)
         return;
     }
     if (!m_isServer || name[1] != 'q')
@@ -565,7 +565,7 @@ void GameMatch::handleNetEvent(oc::string_view name)
         if (!reader.overflowed()) // team/barracks ownership + type range validated at apply
             m_structures.queueUnitTypeRequest(id, unitType, requestTeam(sender));
     }
-    // (GqE — the owner's shield self-report — now rides the claim stream's game blob, applied by
+    // (GqE - the owner's shield self-report - now rides the claim stream's game blob, applied by
     // NetworkManager to the twin's GameUnitComponent + emitter. GqS/GqM went with player combat.
     // Unknown Gq* names from stale builds simply fall through here.)
 }

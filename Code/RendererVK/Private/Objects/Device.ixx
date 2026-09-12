@@ -22,12 +22,12 @@ public:
     uint32 getGraphicsQueueIndex() const { return m_graphicsQueueIndex; }
     vk::Queue getGraphicsQueue() const { return m_graphicsQueue; }
     // vkQueueSubmit/vkQueueWaitIdle/vkQueuePresentKHR need external synchronization on the queue, and
-    // StagingManager's overflow submit can run off the main thread — so EVERY queue call takes this
+    // StagingManager's overflow submit can run off the main thread - so EVERY queue call takes this
     // mutex: submits via CommandBuffer::submitGraphics, presents via SwapChain::present, idles via
     // graphicsQueueWaitIdle(). Never call getGraphicsQueue().submit()/waitIdle() raw. (Known holes,
     // both main-thread-only by construction: the ImGui backend holds the raw queue for its
-    // texture-upload submits — post-join window, no worker uploads run there — and OpenXR submits
-    // internally at xrEndFrame — the VR path keeps beginFrame/present synchronous on main.)
+    // texture-upload submits - post-join window, no worker uploads run there - and OpenXR submits
+    // internally at xrEndFrame - the VR path keeps beginFrame/present synchronous on main.)
     std::mutex& getGraphicsQueueMutex() { return m_graphicsQueueMutex; }
     vk::Result graphicsQueueWaitIdle() { std::lock_guard<std::mutex> lock(m_graphicsQueueMutex); return m_graphicsQueue.waitIdle(); }
     bool supportsExtensions(oc::vector<const char*> extensions);

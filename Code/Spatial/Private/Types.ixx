@@ -56,7 +56,7 @@ export struct IOcclusionTester
 export constexpr uint32 SpatialLayer_Render = 1u << 0;  // entities with a RenderComponent
 export constexpr uint32 SpatialLayer_Stress = 1u << 1;  // synthetic stress-test entries
 export constexpr uint32 SpatialLayer_Terrain = 1u << 2; // procedural terrain chunks (render culling only:
-                                                        // NOT entities — their userData is not an Entity*,
+                                                        // NOT entities - their userData is not an Entity*,
                                                         // so gameplay queries must never include this layer)
 static_assert((SpatialLayer_Render | SpatialLayer_Stress | SpatialLayer_Terrain | (1u << 3)) < 256, "RecordPool stores the layer mask in a byte");
 export constexpr uint32 SpatialLayer_Entity = 1u << 3;  // EVERY non-global entity (userData = Entity*): the
@@ -81,7 +81,7 @@ export inline void inflateFrustum(Frustum& frustum, float margin)
 
 // The two visibility sets the render gate maintains. Main is the camera frustum (the set CPU
 // occlusion culling can shrink further); Near is a camera ball that keeps off-screen shadow
-// casters and ray-traced geometry pushed — the GPU shadow cull and the TLAS range bound do the
+// casters and ray-traced geometry pushed - the GPU shadow cull and the TLAS range bound do the
 // per-pass refinement from there.
 // The three UpdateTier passes are the World's SIM LOD selection (not rendering): balls around
 // every focus point (the players) at the tier radii, stamped in the same cull job via
@@ -110,7 +110,7 @@ export enum class ESpatialPass : uint32
 export using SpatialStamp = uint16;
 // Stamp value "linked, never stamped in this pass": the link gives the UpdateTier passes this instead
 // of the spawn-guard 0 (which reads as "in every pass") or the current generation (which would read as
-// a real tier). Never equals a generation — SpatialIndex::hasStamp.
+// a real tier). Never equals a generation - SpatialIndex::hasStamp.
 export constexpr SpatialStamp SpatialStamp_Linked = 0xFFFF;
 
 // Pass bits as returned by SpatialIndex::getPassMask, bit p == 1 << uint32(ESpatialPass p).
@@ -139,7 +139,7 @@ export struct SpatialCullingConfig
     float margin = 4.0f;             // frustum inflation masking the one-frame stamp latency
     float nearRadius = 0.0f;       // shadow-caster + ray-tracing relevance range around the camera
     float shadowReach = 60.0f;     // Shadow pass: how far (m) the view frustum is swept toward the sun on the
-                                   // horizontal plane — off-screen casters up to this far up-sun of the
+                                   // horizontal plane - off-screen casters up to this far up-sun of the
                                    // visible ground keep their shadow pass. 0 = off (Main + Near only).
     float nearSlack = 16.0f;         // Near ball inflation; requery only after the camera moves this far (0 = every frame)
     float maxDist = 5000.0f; // main-pass cull distance; overwritten each frame with the camera far plane (setCullMaxDist)

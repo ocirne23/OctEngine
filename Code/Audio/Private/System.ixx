@@ -42,7 +42,7 @@ private:
     void releaseSource(uint64 sourceHandle);
 
     // Parallel entity spawning/destruction: the source list mutates from spawn/despawn jobs (an
-    // AudioComponent's voices die with its entity) and from script triggers on workers — the
+    // AudioComponent's voices die with its entity) and from script triggers on workers - the
     // list edits serialize here. The miniaudio/Steam Audio teardown of a released source runs
     // OUTSIDE the lock (ma_sound_uninit is thread-safe against the mixer); update() walks the
     // list on main in a window no create/release overlaps.

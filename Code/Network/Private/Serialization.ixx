@@ -3,7 +3,7 @@ export module Network:Serialization;
 import Core;
 
 // Minimal byte-level serialization over a caller-provided buffer. The wire format is raw native
-// little-endian bytes: no tags, no versioning, no padding — both ends must agree on the layout.
+// little-endian bytes: no tags, no versioning, no padding - both ends must agree on the layout.
 // Overflow never touches memory out of bounds; check overflowed() after a batch of operations.
 
 export class NetWriter final
@@ -115,7 +115,7 @@ public:
         return src ? oc::span<const uint8>(src, numBytes) : oc::span<const uint8>();
     }
 
-    // view into the buffer — only valid while the underlying buffer lives
+    // view into the buffer - only valid while the underlying buffer lives
     oc::string_view readString()
     {
         const size_t size = size_t(readVarUInt());

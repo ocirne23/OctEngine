@@ -1,6 +1,6 @@
 // Network sync test scene, spawned by the SERVER only (main.cpp): its Network components register
 // there, get server-minted netIds, and the whole scene materializes on every client via Spawn
-// replication — clients spawn nothing shared themselves, their scenes can differ arbitrarily.
+// replication - clients spawn nothing shared themselves, their scenes can differ arbitrarily.
 // Gizmo-drag a render-only cube on the SERVER and the client copy follows at the snapshot rate;
 // drag one on the CLIENT and it returns to the server's state on the next keyframe (nothing sends
 // client -> server). The dynamic physics cubes drop onto the static ground and tumble: both sides

@@ -1,13 +1,13 @@
 #version 460
 
-// Terrain wetness clipmap — write side (TerrainWetnessPipeline; read side + addressing in
+// Terrain wetness clipmap - write side (TerrainWetnessPipeline; read side + addressing in
 // terrain_wetness.inc.glsl). One thread per storage slot of the toroidal window: decode the slot's
 // lattice coord for THIS frame's window, carry last frame's wetness if the coord was inside LAST frame's
-// window (a coord that scrolled in starts dry — its slot holds a stale coord's value), decay it, then
+// window (a coord that scrolled in starts dry - its slot holds a stale coord's value), decay it, then
 // inject:
 //   - ocean: ground under the LIVE water surface wets up. Same predicate the lit core uses for
-//     underwater sunlight — calm depth from the terrain-data map, plus the swash run-up residual within
-//     the swash band (underwaterLiveWaveY) — so the wet tongue is where the water was drawn. The
+//     underwater sunlight - calm depth from the terrain-data map, plus the swash run-up residual within
+//     the swash band (underwaterLiveWaveY) - so the wet tongue is where the water was drawn. The
 //     wetting TARGET ramps 0 -> 1 over the first film-depth metres of water (a thin tongue edge wets
 //     less than the body) and the texel RISES toward it at the wet-in rate rather than jumping, so an
 //     advancing front reads as a gradient in time and space instead of texels popping to 1. Permanently
@@ -20,7 +20,7 @@
 // --- Diffusion: reads last frame's value through a wrapped 3x3 tent so wetness spreads sideways as it
 // lives (the same trick the ocean foam mask uses), which also smooths the advancing front off the texel
 // grid. The toggle is BAKED from the "Terrain/Wetness" Diffusion tweak (TerrainWetnessPipeline::
-// buildLayout; a change reloads this shader — this is the fallback). The SPREAD is live and framerate
+// buildLayout; a change reloads this shader - this is the fallback). The SPREAD is live and framerate
 // independent: u_terrainWetParams3.w = 1 - exp(-rate * dt), the fraction of the tent replacing the
 // centre this frame, so the front advances ~rate * texel per second whatever the fps. It is a
 // one-way (max) spread: it wets the fringe without draining the body (see below).
@@ -78,7 +78,7 @@ void main()
                 tent += w * ((dx == 0 && dz == 0) ? wet : prevWet(lc + ivec2(dx, dz), prevOrigin, prevLayer, wet));
             }
         // ADDITIVE, not conserving: a texel only ever rises toward wetter neighbours, never falls toward
-        // drier ones — a plain blur would drain the wet body to feed its fringe, drying it faster than
+        // drier ones - a plain blur would drain the wet body to feed its fringe, drying it faster than
         // the decay says. Water that spreads is not lost here; the decay alone dries the ground.
         wet = max(wet, mix(wet, tent * (1.0 / 16.0), u_terrainWetParams3.w));
     }
@@ -110,7 +110,7 @@ void main()
         }
         // Slope drain on the ACCUMULATION side: the same drain factor the terrain shader applies to the
         // decay (wetness^(1 + slope * drain)) divides the wet-in and rain rates here, so a cliff face
-        // takes that much longer to soak. The slope comes from the map's height gradient — its 8 m
+        // takes that much longer to soak. The slope comes from the map's height gradient - its 8 m
         // texels see cliffs and steep banks, not sub-metre ledges (those only drain faster, per pixel).
         // Only paid where something is accumulating.
         if (u_terrainWetParams5.x > 0.0 && (target > 0.0 || u_terrainWetParams1.w > 0.0))

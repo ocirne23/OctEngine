@@ -37,7 +37,7 @@ export namespace Procedural::Diffusion
 	oc::vector<float> gaussianKernel1D(float sigma);
 
 	// Separable blur with REPLICATE (clamp) padding. The reference's doc comment claims reflect padding; the
-	// code clamps. The code is what matters — do not "fix" this to match the comment.
+	// code clamps. The code is what matters - do not "fix" this to match the comment.
 	Grid separableGaussianBlur(const Grid& src, oc::span<const float> kernel1D);
 
 	// residual + bilinearUpsample(lowres) at the residual's resolution.

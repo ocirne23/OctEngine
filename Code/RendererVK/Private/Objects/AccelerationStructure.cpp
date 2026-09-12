@@ -136,7 +136,7 @@ void AccelerationStructure::onMeshEvicted(uint32 meshIdx)
         m_blasList[meshIdx].handle = nullptr;
         m_blasList[meshIdx].buffer.destroy();
         // Anything aliased to this BLAS (authored-chain levels in other, still-resident sets) must stop
-        // referencing it too — those levels go RT-invisible until this mesh re-streams and rebuilds.
+        // referencing it too - those levels go RT-invisible until this mesh re-streams and rebuilds.
         for (uint32 m = 0; m < m_numAliasMeshes; ++m)
             if (m_mappedMeshAlias[m] == meshIdx)
                 markStaticBlasAddr(m, 0);
@@ -381,7 +381,7 @@ void AccelerationStructure::recordCompaction(uint32 frameIdx, vk::CommandBuffer 
     m_retiredBlas.resize(kept);
 
     // +1 over the frames-in-flight window: a batch stamped in frame F is submitted at F's end, and F's
-    // fence is first waited by beginFrame(F+2) — reading at F+1 would make eWait stall on the live frame.
+    // fence is first waited by beginFrame(F+2) - reading at F+1 would make eWait stall on the live frame.
     bool recordedCopy = false;
     while (!m_compactionBatches.empty()
         && m_compactionFrame - m_compactionBatches.front().frameStamp > RendererVKLayout::NUM_FRAMES_IN_FLIGHT)

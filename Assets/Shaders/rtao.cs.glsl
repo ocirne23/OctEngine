@@ -98,7 +98,7 @@ void main()
     const vec3 N = nRaw / nLen;
 
     // The depth image is jittered (exact depth-prepass reuse); reconstruct at the surface's true
-    // unjittered position so ray origins don't wobble sub-pixel with the jitter — see taaJitterUv.
+    // unjittered position so ray origins don't wobble sub-pixel with the jitter - see taaJitterUv.
     const vec3 worldPos = worldPosFromDepth(uv - taaJitterUv(u_taaJitter.xy), depth);
     const float viewDist = length(u_viewPos - worldPos);          // geometric: the ray-origin bias below
     const float focusDist = length(u_sceneFocus.xyz - worldPos);  // quality falloff: from the scene focus (the game's player)
@@ -114,7 +114,7 @@ void main()
     }
 
     // Ray-origin self-intersection bias. worldPos reconstructs from half-res depth, whose error lies
-    // ALONG THE VIEW RAY and grows with distance — a fixed offset left distant slope pixels starting
+    // ALONG THE VIEW RAY and grows with distance - a fixed offset left distant slope pixels starting
     // under the RT surface (dark banding on sloped terrain). Compensate along V, toward the camera: it
     // cancels the depth error 1:1 and lifts off the surface plane by only offset*NoV, so grazing walls
     // are NOT pushed away from their own contact detail (a 1/NoV-scaled NORMAL offset did exactly that
@@ -174,7 +174,7 @@ void main()
     ao = pow(ao, pc.power);
     // Distance falloff: far-away surfaces get noisy/low-quality AO (radius is fixed in world units, so it
     // shrinks in screen space with distance), so fade the occlusion back toward 1.0 (no AO) past fadeStart
-    // — distance from the scene focus (see focusDist), matching the early-out above.
+    // - distance from the scene focus (see focusDist), matching the early-out above.
     if (pc.maxDistance > 0.0)
     {
         float fade = clamp((focusDist - pc.fadeStart) / max(pc.maxDistance - pc.fadeStart, 1e-3), 0.0, 1.0);

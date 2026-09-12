@@ -5,7 +5,7 @@
 // table/data buffers were fill-cleared earlier in this command buffer; the read side (shell FS,
 // force/query compute) runs after the barrier.
 
-// ONE thread per workgroup, like light_grid.cs.glsl — NOT FORCE_SIM_GROUP_SIZE. The cell-claim
+// ONE thread per workgroup, like light_grid.cs.glsl - NOT FORCE_SIM_GROUP_SIZE. The cell-claim
 // protocol (forceGetOrInsertCell) spins on a CAS loser until the winner publishes; with contending
 // threads in the same warp the loser's spin can starve the winner forever (intra-warp lockstep) and
 // the first overlapping emitters hang the GPU. Single-thread workgroups are independently scheduled,

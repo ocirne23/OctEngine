@@ -11,8 +11,8 @@ export struct Ray
 
 // Rewrites a glm perspective/frustum projection's z row to REVERSED-Z [0,1] clip (near -> 1, far -> 0).
 // glm builds OpenGL [-1,1] matrices here (GLM_FORCE_DEPTH_ZERO_TO_ONE is not set), which Vulkan clips to
-// [0,w] — that both near-clipped at ~2x near and wasted half the depth curve. Reversed-Z stores distant
-// depths near 0.0, where float32 spacing shrinks exponentially — this cancels the projection's 1/d^2
+// [0,w] - that both near-clipped at ~2x near and wasted half the depth curve. Reversed-Z stores distant
+// depths near 0.0, where float32 spacing shrinks exponentially - this cancels the projection's 1/d^2
 // compression and gives near-constant relative depth precision at every distance (planet-scale terrain
 // stops z-fighting). The whole engine renders this convention: depth compare eGreater, clears/sky at 0.0.
 // Idempotent (only the z row is written), x/y rows and the -1 w row pass through untouched.
@@ -65,7 +65,7 @@ public:
         return position + worldDir * 15.0f;
     }
 
-    // Projects a world point into viewport-space pixels — the inverse of screenToRay (same fov/
+    // Projects a world point into viewport-space pixels - the inverse of screenToRay (same fov/
     // aspect conventions). Returns false when the point is behind the camera or the viewport is
     // degenerate. For world-anchored UI (labels/bars over entities).
     bool worldToScreen(const Rect& viewport, const glm::vec3& world, glm::vec2& outScreen) const

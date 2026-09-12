@@ -1,6 +1,6 @@
 # Co-op impassable-terrain ground marker: a flat tinted plane a little wider than its rock cell
 # (13 m vs the 10 m block), lying just above the ground so a dark red rim shows around every rock
-# — the "no building, no walking" zone reads at a glance, and with the rock tops varying the rim
+# - the "no building, no walking" zone reads at a glance, and with the rock tops varying the rim
 # is what outlines the blocked footprint exactly. Render only, spawned one per blocked cell next
 # to rock.pre under the CoopTerrain root.
 Prefab gameTerrainMark

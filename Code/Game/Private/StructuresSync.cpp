@@ -8,7 +8,7 @@ import File;
 import :Structures;
 
 // STATE IN AND OUT (see Structures.ixx): the client-side MIRROR appliers (idempotent, driven by
-// GameMatch's game events — GPl / GRm / GSt / GCb / GRt / GBu), and the F9/F10 SAVE/LOAD of the
+// GameMatch's game events - GPl / GRm / GSt / GCb / GRt / GBu), and the F9/F10 SAVE/LOAD of the
 // whole structure set (ids preserved, the networks re-derive from the cells on load).
 
 // ---------------------------------------------------------------- mirrors
@@ -20,7 +20,7 @@ void StructureSystem::mirrorPlace(uint32 id, EStructureType type, const glm::vec
         return; // garbage
     if (const int existing = structureIndexById(id); existing >= 0)
     {
-        // Duplicate replay — or the server's blueprint-completed re-send (see onStructureBuilt):
+        // Duplicate replay - or the server's blueprint-completed re-send (see onStructureBuilt):
         // apply the built flag idempotently so the client's derivation starts conducting too.
         if (built && m_frame[existing].state->blueprint)
         {
@@ -57,7 +57,7 @@ void StructureSystem::mirrorStructureState(uint32 id, float healthFrac, float ch
     GameStructureComponent& s = *ref.state;
     if (s.blueprint != blueprint)
     {
-        s.blueprint = blueprint; // completion (or a fresh ghost) — swap the tint to match
+        s.blueprint = blueprint; // completion (or a fresh ghost) - swap the tint to match
         applyStructureTint(ref);
         m_linksDirty = true;     // built buildings attach to runs; ghosts detach
     }
@@ -107,7 +107,7 @@ void StructureSystem::mirrorRoute(uint32 id, oc::span<const glm::vec3> points)
 void StructureSystem::saveTo(AssetNode& root) const
 {
     // ONLY NON-DEFAULT VALUES are written (a base is hundreds of cable segments): every optional
-    // key below has a load fallback that restores the same state when it is missing — full
+    // key below has a load fallback that restores the same state when it is missing - full
     // health, empty stores, built, no facing, no node, team 0, a dark emitter, the Grunt barracks,
     // no fill. Id, Type and Position are the keys every structure carries. A BLUEPRINT's health is
     // its build progress, always below max, so it is always written (the fallback is "full").
@@ -160,7 +160,7 @@ void StructureSystem::saveTo(AssetNode& root) const
 void StructureSystem::clearAllStructures()
 {
     while (!m_frame.empty())
-        destroyStructureAt(m_frame.size() - 1); // fires onStructureRemoved — clients prune
+        destroyStructureAt(m_frame.size() - 1); // fires onStructureRemoved - clients prune
     m_requests.clear();
     m_demolishRequests.clear();
     m_routeRequests.clear();
@@ -187,7 +187,7 @@ void StructureSystem::loadFrom(const AssetNode& root)
             continue; // garbage / duplicate entry
         if (typeInt == (int)EStructureType::Connector)
         {
-            Log::warning("Load game: Connector is retired — entry skipped (old save)");
+            Log::warning("Load game: Connector is retired - entry skipped (old save)");
             continue;
         }
         // Old saves' per-type barracks become a Barracks producing that type (Brute 1 / Runner 2 /

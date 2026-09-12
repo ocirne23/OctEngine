@@ -5,7 +5,7 @@ import Core.glm;
 
 // Deterministic, seed-driven coherent noise sampled in continuous world space. All methods are pure and
 // thread-safe (state is just the seed), so multiple worker threads can share one NoiseField. Coordinates
-// are in the caller's own units — multiply world meters by a frequency before sampling to set feature size.
+// are in the caller's own units - multiply world meters by a frequency before sampling to set feature size.
 export namespace Procedural
 {
 	class NoiseField
@@ -25,7 +25,7 @@ export namespace Procedural
 		// Slope-damped fBm (Musgrave 1989 "The Synthesis and Rendering of Eroded Fractal Terrains";
 		// Quilez's derivative formulation, iquilezles.org/articles/morenoise): each octave is divided by
 		// the accumulated gradient magnitude, so flats collect detail (smooth valley floors) while steep
-		// slopes damp it (eroded hillsides) — the classic cheap erosion look. Output ~[-1, 1].
+		// slopes damp it (eroded hillsides) - the classic cheap erosion look. Output ~[-1, 1].
 		float fbmEroded(float x, float y, uint32 octaves, float lacunarity = 2.0f, float persistence = 0.5f) const;
 
 		// Fractal Brownian motion: sum of octaves, normalized to ~[-1, 1].

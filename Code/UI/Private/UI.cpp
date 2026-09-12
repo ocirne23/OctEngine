@@ -73,7 +73,7 @@ void UI::update(const oc::vector<EntityPtr>& rootEntities, const Camera& camera,
     // references outlive that join (the world's root list, main's camera); deltaSec is copied.
     Globals::jobSystem.submitPostUpdate([this, &rootEntities, &camera, deltaSec] { updateJob(rootEntities, camera, deltaSec); },
         { "UI update", EProfileCategory::UI }, EJobPriority::Normal,
-        EJobFlag_ForeignWait); // updateJob's first act waits on m_prepareCounter — see the flag's comment
+        EJobFlag_ForeignWait); // updateJob's first act waits on m_prepareCounter - see the flag's comment
 }
 
 void UI::flushMainThreadWork()
@@ -87,7 +87,7 @@ void UI::flushMainThreadWork()
 void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& camera, double deltaSec)
 {
     {
-        // The panel prepare jobs (see prepare()) must have landed before any panel renders — a
+        // The panel prepare jobs (see prepare()) must have landed before any panel renders - a
         // wait that shows up here means the prep did not fully overlap the pre-UI work.
         ProfileScope waitScope("UI prepare wait", EProfileCategory::Wait);
         Globals::jobSystem.wait(m_prepareCounter);
@@ -121,7 +121,7 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
     if (m_gameLayout)
     {
         // GAME LAYOUT: no editor panels. Optional LEFT debug section (escape menu checkbox), then
-        // ONE fullscreen undecorated viewport window over the rest — a real ImGui window so the
+        // ONE fullscreen undecorated viewport window over the rest - a real ImGui window so the
         // HUD paints into its draw list and IsWindowFocused feeds the same viewport-focus gate the
         // editor's Viewport panel does (clicking into the debug section takes focus off the game,
         // clicking the world gives it back; the escape overlay takes it while open).
@@ -298,7 +298,7 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
 
         // Focus/grab tracking stays unconditional (not gated on viewportOpen below): if we skipped this
         // while the Viewport tab is in the background, m_isViewportFocused would stay stuck at whatever it
-        // was on the last visible frame instead of dropping to false — e.g. camera-look input would keep
+        // was on the last visible frame instead of dropping to false - e.g. camera-look input would keep
         // responding to mouse/keyboard after the user switched to another tab entirely.
         const ImGuiContext* ctx = ImGui::GetCurrentContext();
         const bool isViewportGrabbed = (ctx->MovingWindow == ctx->CurrentWindow);

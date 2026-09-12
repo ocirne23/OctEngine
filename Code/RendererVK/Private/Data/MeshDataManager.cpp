@@ -113,7 +113,7 @@ size_t MeshDataManager::allocRange(BitRangeAllocator<false>& allocator, size_t& 
     int bucketStart = allocator.acquireRange(numBuckets);
     if (bucketStart < 0)
     {
-        // No contiguous free run: grow the buffer (the whole old range is copied over — it may be
+        // No contiguous free run: grow the buffer (the whole old range is copied over - it may be
         // fragmented, so everything allocated must survive) and retry in the fresh tail.
         growBuffer(buffer, bufSize, bufSize, bufSize + size, usage);
         allocator.resize(uint32(bufSize / bucketBytes));

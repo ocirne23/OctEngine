@@ -33,16 +33,16 @@ public:
     };
 
     // Applies queued body commands (teleports, velocities, impulses, ...), then runs the fixed-step
-    // accumulator — AT MOST ONE step per update (deliberate: box3d buffers each step's contact/
+    // accumulator - AT MOST ONE step per update (deliberate: box3d buffers each step's contact/
     // sensor events until the NEXT step, so a single step keeps them valid for the deferred
     // dispatchContactEvents below; under stepHz the sim runs slower than real time instead of
-    // catching up). Contact events are NOT fired here — nothing in update() touches the spatial
+    // catching up). Contact events are NOT fired here - nothing in update() touches the spatial
     // index or renderer state, so the main loop overlaps it with the spatial-cull/begin-frame
     // jobs. Also emits the collider wireframes, see setDebugDrawCallback.
     void update(double deltaSec);
-    // Fires the step's contact/sensor events (reads box3d's buffers — no copy). Main thread, after
+    // Fires the step's contact/sensor events (reads box3d's buffers - no copy). Main thread, after
     // update() and before the next one; no-op unless a step ran since the last dispatch (the
-    // buffers still hold the OLD events until the next step — refiring would duplicate). Deferred
+    // buffers still hold the OLD events until the next step - refiring would duplicate). Deferred
     // out of update() because contact scripts query the spatial index and can touch renderer state
     // (light/sun thunks): the main loop calls this AFTER joining the spatial/begin-frame jobs.
     void dispatchContactEvents(const oc::function<void(const ContactEvent&)>& contactCallback);
@@ -103,7 +103,7 @@ public:
         glm::vec3 point = glm::vec3(0.0f);
         glm::vec3 normal = glm::vec3(0.0f);
     };
-    // ignoreBody skips every shape of that body — needed when the ray travels between two poses of
+    // ignoreBody skips every shape of that body - needed when the ray travels between two poses of
     // the body itself (network claim validation): box3d's closest-cast only ignores overlap AT the
     // origin, so the body's own surface a step ahead would count as a hit. staticOnly restricts hits
     // to static bodies (same caller: a DYNAMIC body in a movement claim's path is something the
@@ -201,7 +201,7 @@ private:
     int m_workerCount = 1; // box3d parallelism, driven onto the engine job system (see :TaskScheduler)
     // Contact tuning (b3World_SetContactTuning): hertz from box3d's default; damping and the
     // push-out speed cap are ours, set for SOFT overlap recovery (box3d's defaults unwind a deep
-    // overlap in one step — an explosion when stacked unit bodies enable at the SIM LOD edge).
+    // overlap in one step - an explosion when stacked unit bodies enable at the SIM LOD edge).
     float m_contactHertz = 30.0f;
     float m_contactDamping = 50.0f;
     float m_contactSpeed = 0.1f; // m/s: max overlap resolution speed

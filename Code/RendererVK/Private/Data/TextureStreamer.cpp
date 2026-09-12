@@ -332,7 +332,7 @@ void TextureStreamer::issueOps()
     };
 
     // Demotions first: they free memory and never need budget headroom. With GPU copies they skip the
-    // disk entirely — the surviving mips are copied out of the old image right here, synchronously.
+    // disk entirely - the surviving mips are copied out of the old image right here, synchronously.
     uint32 demotionsLeft = (uint32)oc::max(0, m_maxOpsInFlight);
     for (uint32 texIdx = 0; texIdx < (uint32)m_states.size() && demotionsLeft > 0; ++texIdx)
     {
@@ -441,7 +441,7 @@ void TextureStreamer::update()
     // 3. Solve residency targets under the budget (all sizes are file-byte estimates; VMA alignment
     //    overhead makes the true footprint a hair larger). Every texture is owed its tail; the remaining
     //    headroom is granted one mip level at a time to the largest desire deficit (cheapest grant first
-    //    on ties, then lowest index — a deterministic order, so targets stay stable while desires do).
+    //    on ties, then lowest index - a deterministic order, so targets stay stable while desires do).
     {
         const uint64 budgetBytes = (uint64)m_budgetMB * 1024ull * 1024ull;
         const uint64 availBytes = budgetBytes > m_pinnedBytes ? budgetBytes - m_pinnedBytes : 0;

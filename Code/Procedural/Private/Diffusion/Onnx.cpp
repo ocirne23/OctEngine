@@ -24,7 +24,7 @@ namespace Procedural::Diffusion
 		//
 		// ERROR, not WARNING: ORT logs straight to stdout, bypassing Core.Log, and at WARNING every session
 		// emits VerifyEachNodeIsAssignedToAnEp ("some nodes were not assigned to the preferred execution
-		// providers"). That one is unactionable by construction — ORT deliberately keeps shape/reshape ops
+		// providers"). That one is unactionable by construction - ORT deliberately keeps shape/reshape ops
 		// on the CPU because they compute tensor metadata, and a GPU round-trip per op to produce a few
 		// integers would be slower. Nothing here reads ORT's warning stream: a DirectML EP that genuinely
 		// fails to attach THROWS, and is reported below as an explicit error plus "inference provider: CPU".

@@ -6,7 +6,7 @@ import :Emitter;
 import :ForceSystem;
 
 // The ForceEmitter handle: every call resolves the instance through Globals::forceSystem (a
-// generation-checked index — a stale handle reads as invalid) and touches only that instance.
+// generation-checked index - a stale handle reads as invalid) and touches only that instance.
 
 ForceEmitter& ForceEmitter::operator=(ForceEmitter&& move) noexcept
 {

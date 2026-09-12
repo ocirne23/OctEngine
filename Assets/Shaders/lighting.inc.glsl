@@ -101,7 +101,7 @@ vec3 giGatherDirect(vec3 pos, vec3 N, vec3 albedo)
     if (sunNdotL > 0.0)
     {
         float sunShadow = (g_sunShadowOverride >= 0.0) ? g_sunShadowOverride : giSunShadow(pos, N);
-        // Same atmospheric attenuation as the forward pass' doSunLight — without it, probe-lit bounce
+        // Same atmospheric attenuation as the forward pass' doSunLight - without it, probe-lit bounce
         // light stays at full space-sun strength at low sun angles while direct light (and the
         // out-of-field skyGroundRadiance fallback) dims with transmittance. u_sunTransmittance = the
         // Chapman evaluation, done ONCE per frame on the CPU (this ran per gather hit before).
@@ -109,7 +109,7 @@ vec3 giGatherDirect(vec3 pos, vec3 N, vec3 albedo)
     }
 
     // The sky radiance light is intentionally absent here: it is injected directly into the probe SH
-    // (gi_probe_trace.cs.glsl), and its bounces arrive through the multi-bounce prevE feedback — adding
+    // (gi_probe_trace.cs.glsl), and its bounces arrive through the multi-bounce prevE feedback - adding
     // it at hit points too would double-count.
 
     const ivec3 gridPos = getGridPos(pos);
