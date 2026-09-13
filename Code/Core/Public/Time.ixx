@@ -29,7 +29,8 @@ public:
     // at the loop top does the whole frame boundary: the present-queue (fence) wait, the frame-rate
     // limit, the window thread's event-pump kick, and the start of the next frame's clock.
     //  * Limit: waits until the desired end (last frame start + 1/target; target = "Max FPS", or
-    //    "Inactive max FPS" when unfocused, 0 = uncapped; never in VR - xrWaitFrame owns pacing),
+    //    "Inactive max FPS" when unfocused, 0 = uncapped, further capped by the CEILING below;
+    //    never in VR - xrWaitFrame owns pacing),
     //    sleeping 1 ms steps while more than "Busy-wait window" remains (real milliseconds: the
     //    window thread sets timeBeginPeriod(1)) then spinning the last stretch.
     //  * Stable time: when it waited, the frame's end is ATTRIBUTED as the desired end rather than
@@ -57,6 +58,10 @@ public:
     // renderer presents FIFO; displayRefreshHz = the display's reported rate (0 = unknown).
     void registerTweaks();
     void beginFrame(bool windowFocused, bool vr, bool vsync, float displayRefreshHz, Window* pumpWindow, bool (*waitFence)(uint64 timeoutNs));
+    // A frame-rate CEILING on top of the tweaks (0 = none): the target is the lower of the two, so
+    // the "Max FPS" settings stay untouched while it holds. main sets it every frame - 60 while a
+    // menu is up (main menu, lobby, escape overlay), 0 otherwise. Never applies in VR.
+    void setFpsCeiling(int fps) { m_fpsCeiling = fps; }
 
     double getDeltaSec() const { return m_deltaSec; }
     double getElapsedSec() const { return m_elapsedSec; }
@@ -96,6 +101,7 @@ private:
     // Frame pacing (see beginFrame)
     int   m_maxFps = 0;            // 0 = uncapped
     int   m_inactiveMaxFps = 30;   // 0 = no extra cap when unfocused
+    int   m_fpsCeiling = 0;        // see setFpsCeiling: 0 = none; not a tweak, never saved
     float m_busyWaitMs = 2.5f;
     bool  m_stableFrameTime = true;
     float m_pumpLeadMs = 2.0f;

@@ -1,6 +1,7 @@
 export module UI:MainMenu;
 
 import Core;
+import Core.glm;
 import Core.Rect;
 import Core.Tweaks;
 import :ChatPanel;
@@ -26,7 +27,42 @@ export struct MainMenuAction
 	oc::string connectAddress; // !host: "ip[:port]" to join; empty = offline single player
 };
 
-// ---- Lobby (multiplayer pre-game screen) ----
+// ---- Lobby (pre-game screen) ----
+// The local lobby's WORLD block. The preview image is the Procedural terrain preview's output, copied
+// ONCE per generation by main into this UI-side type (UI cannot import Procedural) and shared by
+// pointer - the page re-uploads it into its ImGui texture when the generation changes.
+export struct LobbyPreviewImage
+{
+	uint32 width = 0;
+	uint32 height = 0;
+	uint32 generation = 0;
+	oc::vector<uint32> rgba; // RGBA8, row-major, row 0 = most negative Z
+	float extentKm = 0.0f;   // the world span the map covers (both axes), for the caption
+	float tileWorldSizeM = 0.0f; // one full-detail tile's side in world metres (the seeding unit)
+};
+
+export struct LobbyWorldView
+{
+	enum class EPreview : uint8 { Idle, LoadingModels, Generating, Ready, Failed };
+	uint32 terrainSeed = 0;
+	EPreview preview = EPreview::Idle;
+	float previewProgress = 0.0f;       // Generating: rows done / rows
+	oc::string previewStatus;           // LoadingModels / Failed: the generator's status line
+	oc::shared_ptr<const LobbyPreviewImage> image; // null until a preview is ready
+	// The seeded world: Seed world pressed, the playable area's diffusion TILES generate around
+	// the pick (the terrain mesh itself streams live) until settled.
+	bool seeded = false;
+	bool seededSettled = false;
+	float seededProgress = 0.0f;        // tiles done / tiles total
+	oc::string seededStatus;            // "Loading terrain models...", "Tiles 12 / 64 (20 on disk)"
+	glm::vec2 seededPick = glm::vec2(0.5f); // the pick the world was seeded at (the page's marker)
+	// The generated tiles' footprint on the map (normalized 0..1, valid when seededAreaValid): the
+	// square the page draws.
+	bool seededAreaValid = false;
+	glm::vec2 seededAreaMin = glm::vec2(0.0f);
+	glm::vec2 seededAreaMax = glm::vec2(0.0f);
+};
+
 // The UI-facing SNAPSHOT of the lobby: Game's LobbySystem (the model - roster, ready flags,
 // countdown, all networked server-authoritatively) rebuilds it every frame on the main thread
 // (setLobbyView, between the widget-pass join and kick); the widget pass only draws it and
@@ -57,13 +93,23 @@ export struct LobbyView
 	uint32 mapSeed = 0;        // 0 = the host rolls a random one at start
 	float terrainFill = 0.3f;
 	int terrainLanes = 6;
+	// LOCAL (offline) lobby: no roster, no ready check - Start launches at once - and the page
+	// carries the WORLD block: a terrain seed, its preview map and the "Seed world" pick (below).
+	bool local = false;
+	LobbyWorldView world;
 };
 
 export struct LobbyAction
 {
 	// Leave: back to the main menu (main tears the session down - the host's leave ends it for
 	// every client, a client's leave is just its disconnect)
-	enum class EType : uint8 { None, ToggleReady, Start, SetMapSettings, SetTeam, SetNumTeams, SetPvpMap, Leave };
+	enum class EType : uint8
+	{
+		None, ToggleReady, Start, SetMapSettings, SetTeam, SetNumTeams, SetPvpMap, Leave,
+		GeneratePreview, // local: preview the terrain seed (terrainSeed)
+		SeedWorld,       // local: build the full-detail world at the picked spot (pickU/pickV)
+		UnseedWorld,     // local: drop the seeded world (back to the flat default)
+	};
 	EType type = EType::None;
 	uint32 mapSeed = 0; // SetMapSettings (host only): the edited values
 	float terrainFill = 0.3f;
@@ -71,6 +117,10 @@ export struct LobbyAction
 	uint8 team = 0;     // SetTeam: the local player's pick (0-based)
 	int numTeams = 2;   // SetNumTeams (host only)
 	int pvpMap = 0;     // SetPvpMap (host only): index into LobbyView::pvpMapNames
+	uint32 terrainSeed = 0; // GeneratePreview
+	float pickU = 0.5f;     // SeedWorld: the picked spot on the preview (0..1, u right, v down)
+	float pickV = 0.5f;
+	float areaSizeM = 1024.0f; // SeedWorld: the playable area's side, world metres
 };
 
 // ---- Escape menu (Esc overlay in every RUNNING mode + the lobby; never over the main menu) ----
@@ -115,7 +165,16 @@ public:
 	}
 
 	// ---- Lobby page ----
-	void openLobby() { m_lobbyOpen = true; m_settingsOpen = false; }
+	void openLobby()
+	{
+		m_lobbyOpen = true;
+		m_settingsOpen = false;
+		m_terrainSeedEditInit = false; // the world block's widgets start from the session's state
+		m_previewPicked = false;
+		m_mapZoom = 1.0f;
+		m_mapCenter = glm::vec2(0.5f);
+		m_mapPressed = false;
+	}
 	// UI's chat widget, drawn embedded in the lobby page (non-owning; set once by UI's ctor).
 	void setChatPanel(ChatPanel* chat) { m_chat = chat; }
 	void setLobbyView(const LobbyView& view) { m_lobbyView = view; } // main thread, every frame while open
@@ -167,6 +226,8 @@ private:
 	void renderMain();
 	void renderSettings(oc::vector<const TweakVar*>& deferredCallbacks);
 	void renderLobby();
+	void renderLobbyWorld(); // the local lobby's right-hand column: seed, preview map, Seed world
+	void uploadPreviewImage(const LobbyPreviewImage& image); // (re)fills the ImGui texture
 
 	bool m_active = false;
 	bool m_settingsOpen = false;
@@ -187,6 +248,21 @@ private:
 	float m_mapEditFill = 0.3f;
 	int m_mapEditLanes = 6;
 	bool m_mapEditActive = false;
+	// The world block's widgets: the seed field (an edit copy; the view's seed is what was last
+	// previewed), the pick on the map (page-local until Seed world sends it), and which image
+	// generation the ImGui texture currently holds (0 = no texture yet).
+	int m_terrainSeedEdit = 1337;
+	bool m_terrainSeedEditInit = false;
+	bool m_previewPicked = false;
+	glm::vec2 m_previewPick = glm::vec2(0.5f);
+	uint32 m_previewUploadedGeneration = 0;
+	int m_areaSizeIdx = 1; // index into the page's playable-area size table (512 m, 1 km, 2 km, 4 km, 8 km)
+	// The map's view: zoom (1 = the whole image) and the map-space centre; wheel zooms about the
+	// cursor, a left drag pans, a click picks, double-click resets.
+	float m_mapZoom = 1.0f;
+	glm::vec2 m_mapCenter = glm::vec2(0.5f);
+	bool m_mapPressed = false; // left button went down over the map
+	bool m_mapDragged = false; // ...and moved past the drag threshold (so the release is not a pick)
 	int m_teamsEdit = 2; // host's "Number of teams" slider, committed on release (SetNumTeams)
 	bool m_teamsEditActive = false;
 	bool m_escapeOpen = false;

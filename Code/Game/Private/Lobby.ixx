@@ -49,10 +49,14 @@ public:
 
 	// Enter the lobby right after the network started (host) / the connect began (client). The
 	// client's coop flag is provisional - the first LbS overrides it with the host's mode.
-	void enter(bool host, bool coop)
+	// `local` = an OFFLINE single-player lobby: no network at all, the host is the only player, no
+	// ready check (Start launches at once) and nothing is broadcast. The page's world block (terrain
+	// seed, preview, Seed world) is the session's, not this model's.
+	void enter(bool host, bool coop, bool local = false)
 	{
 		m_host = host;
 		m_coop = coop;
+		m_local = local;
 		m_state = EState::Lobby;
 		m_players.clear();
 		m_haveState = false;
@@ -61,6 +65,8 @@ public:
 		if (m_host)
 		{
 			m_players.push_back({ 0, false, 0 }); // the server itself is clientId 0
+			if (m_local)
+				return; // no network session to filter
 			// While the lobby runs, clients may only send lobby traffic (+ chat lines); GameMatch
 			// installs the game's own Gq*-only filter when it spawns.
 			Globals::networkManager.setEventFilter([](uint32, oc::string_view name, oc::span<const uint8> data, Entity*)
@@ -83,6 +89,7 @@ public:
 	void reset()
 	{
 		m_state = EState::Inactive;
+		m_local = false;
 		m_players.clear();
 		m_haveState = false;
 		m_serverStart = false;
@@ -275,6 +282,7 @@ public:
 		LobbyView v;
 		v.valid = m_host || m_haveState;
 		v.hosting = m_host;
+		v.local = m_local;
 		v.coop = m_coop;
 		v.countdownActive = m_state == EState::Countdown;
 		v.countdownRemaining = oc::max(m_countdown, 0.0f);
@@ -322,7 +330,14 @@ public:
 		}
 		else if (action.type == LobbyAction::EType::Start)
 		{
-			if (m_host)
+			if (m_local)
+			{
+				// Nobody to wait for: launch now (takeServerStart, the same path the countdown takes).
+				m_state = EState::Started;
+				m_serverStart = true;
+				Log::info("Lobby: local start");
+			}
+			else if (m_host)
 				tryStartCountdown();
 			else
 				Globals::networkManager.fireNetworkEvent("LbG");
@@ -488,7 +503,7 @@ private:
 
 	void broadcastState() // server
 	{
-		if (!m_host)
+		if (!m_host || m_local)
 			return;
 		uint8 buffer[256];
 		NetWriter writer(buffer);
@@ -514,6 +529,7 @@ private:
 	oc::vector<Player> m_players;
 	EState m_state = EState::Inactive;
 	bool m_host = false;
+	bool m_local = false; // see enter
 	bool m_coop = false;
 	bool m_haveState = false;       // client: the first LbS arrived
 	bool m_serverStart = false;     // see takeServerStart

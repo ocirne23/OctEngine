@@ -134,6 +134,11 @@ but this one generates **256×256-pixel TILES through three ONNX models.**
   the height-map baker. The lock is a fiber-parking `JobMutex`
   ([GeneratorV3.cpp:606](Private/Diffusion/GeneratorV3.cpp#L606)) so a ~1.5 s cold-tile wait parks a
   FIBER rather than a pooled worker, and concurrent requesters park on a per-tile `JobEvent`.
+  **The lock covers ONLY the pipeline call** (`get` / `getCoarseSlice`, plus reading the seed and
+  precision it ran with): the plane assembly, the sea-level baseline recovery, the coarse lapse
+  regression and the quantised zstd disk write are the tile's own CPU work and run UNLOCKED, so the
+  next tile's dispatches start while they run instead of the GPU idling through every tile's tail.
+  Concurrent callers (the streamer's pumps, the seeder) are what make that overlap happen.
 * **The 2.28 GB of models load once per process and are RESEEDED, never reloaded.** So constructing a
   `TerrainGenV3` is cheap and a tweak rebuild costs nothing unless the seed actually moved. The load is
   DEFERRED until "Terrain/Enabled" — `rebuildMaps` early-outs disabled without constructing the
@@ -144,6 +149,58 @@ but this one generates **256×256-pixel TILES through three ONNX models.**
   TerrainStreamer polls it and rebuilds once it flips.
 
 Tiles cache to disk under `Assets/Local/Diffusion/<seed>/` (zstd).
+
+## World origin
+
+`TerrainConfigV3::originX/Z` (the streamer's `Terrain/Origin X (m)` / `Origin Z (m)` tweaks): where
+in the seed's model-space world the engine's (0, 0) sits. **Applied at the ONE world → lattice mapping
+every sample goes through** (`TileBlock::latticeX/Z`), so point queries and grid fills place the world
+identically; the detail and climate noise stay in engine coordinates on purpose (seeded noise, not
+model data). The tile caches are keyed in model space and never see it, so moving the origin
+regenerates chunks and bakes but no tile already on disk. The lobby's "Seed world" pick sets it
+through overrides.
+
+## `TerrainPreview` — the lobby's world overview
+
+`:TerrainPreview`, owned by the App's `Session` (a stack local in main), not a global. `request(seed,
+mpp)` constructs a `TerrainGenV3` for the seed (which kicks the model load and RESEEDS the shared
+runtime — **so the session disables a live world of another seed first**) and, once `isReady()`, runs
+ONE Low job that `sampleGrid`s a **256² grid at `ESampleDetail::Coarse`, one texel per coarse pixel**
+(`nativePerCoarsePixel() × metersPerPixel` world metres — 33 km across at the clamped 0.5 m/px, 1,970 km
+at 30; the page scales it to 512 px), in 32-row bands so a cancel lands within one band's tile fetches, then colours it (sea by
+depth, land by humidity / altitude / temperature, a hillshade, a one-texel coastline) into an
+immutable RGBA8 `Image` shared by pointer. `worldOffsetAt(u, v)` maps a pick on the image to the
+origin offset that puts the spot at (0, 0).
+
+## Generated bounds and the cache-only state
+
+`TerrainConfigV3::bounded` + `boundsMin/Max` (engine metres; the streamer's `setGeneratedBounds`, set
+by the session to the seeder's tile-aligned coverage): **inside a bounded generator a FULL tile is
+only fetched inside the rect** — `resolveBlock` leaves the slot null past it — **and every sample that
+lands on a null slot falls back to the COARSE stage** (`sampleField`, and `sampleGrid` resolves the
+coarse block once per grid). So the terrain-data bake's 4 km Full near cascade, the collider and the
+scatter cost nothing past the playable area, and the streamer's ring scan skips chunks that do not
+touch it. Without bounds a 512 m area still pulled ~800 tiles: the 3×3 chunk ring (~600 at 128 m
+tiles) plus the near cascade (~1000).
+
+`TerrainGenV3::unloadModels()` drops the ONNX sessions and enters the **cache-only** state: `isReady()`
+(= "sampling is valid") stays true, `modelsLoaded()` (= "inference is possible") is false, a cache
+miss is a null tile (coarse fallback, else sea level), and the next `TerrainGenV3` construction
+reloads — through the normal not-ready → ready handover. The session unloads at a seeded match's
+Start; the preview and the seeder gate on `modelsLoaded()`.
+
+## `TerrainSeeder` — pre-generating the playable area's tiles
+
+Same partition and ownership. `start(seed, mpp, origin, halfSize)` constructs a `TerrainGenV3` with
+that origin and, once ready, runs ONE Low job over the full-detail tiles covering
+`[-half, half]²` in engine space (`fullTileRange`), **nearest the origin first**: each
+`prefetchFullTile` is a disk read when the tile is cached under `Local/Diffusion/<seed>/` and ~1.5 s
+of inference otherwise, so a previously seeded area comes back in seconds. It only makes the TILES
+exist — the mesh, the collider and the bakes stay the streamer's live work — and reports done /
+total / cached plus the tile-aligned model-space rect it covers (`coverage`, the preview map's
+square). The generator's `fullTileRange` / `fullTileWorldRect` / `isFullTileCached` /
+`prefetchFullTile` exist for it. `TerrainStreamer::streamStatus()` remains the "how far has the mesh
+ring streamed in" read.
 
 ## World scale
 

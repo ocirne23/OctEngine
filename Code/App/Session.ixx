@@ -17,6 +17,7 @@ import RendererVK;
 import Entity;
 import Physics;
 import Network;
+import Procedural;
 
 export oc::atomic<bool> g_running = true;
 
@@ -237,8 +238,10 @@ public:
         m_controls->resetForMenu();
         m_game.reset();
         Globals::world.clearRootEntities();
-        TweakRegistry::get().setOverride("Terrain/Enabled=0");
-        TweakRegistry::get().setOverride("Ocean/Enabled=0");
+        unseedWorld(); // Terrain/Ocean off, the origin back at (0, 0)
+        m_terrainPreview.reset();
+        m_previewUiImage = nullptr;
+        m_previewUiGeneration = 0;
         Globals::networkManager.shutdown();
         Globals::networkManager.setEventFilter({});
         m_lobby.reset();
@@ -455,9 +458,11 @@ private:
         const bool startCoop = action.type == MainMenuAction::EType::StartCoop;
         if (!startNetworkFor(mode, startGame, action.connectAddress))
             return;
-        if (startGame && mode != ELaunchMode::Single)
+        if (startGame)
         {
-            m_lobby.enter(mode == ELaunchMode::Server, startCoop);
+            // Every game pick goes through the lobby: multiplayer to gather players, offline
+            // (local) for the world block - terrain seed, preview map, "Seed world".
+            m_lobby.enter(mode != ELaunchMode::Client, startCoop, mode == ELaunchMode::Single);
             Globals::ui.openMainMenuLobby();
         }
         else
@@ -476,18 +481,158 @@ private:
                 exitToMenu();
             else
             {
+                serviceWorldAction(lobbyAction);
                 m_lobby.handleAction(lobbyAction);
                 m_lobby.update((float)Globals::time.getDeltaSec());
-                Globals::ui.setMainMenuLobbyView(m_lobby.view());
+                LobbyView view = m_lobby.view();
+                if (view.local)
+                    fillWorldView(view.world);
+                Globals::ui.setMainMenuLobbyView(view);
             }
         }
         if (m_lobby.takeServerStart())
         {
+            // A seeded world has every tile it may need on disk (Start waited for the seeder), so the
+            // 2.28 GB of diffusion weights go before the match: the streamer keeps serving the caches
+            // and nothing infers in game. The next preview or the sandbox reloads them.
+            if (m_worldSeeded)
+                Procedural::TerrainGenV3::unloadModels();
             startWorldAndGame(true, m_lobby.coop());
             if (m_game)
                 for (const uint32 clientId : m_lobby.connectedClientIds())
                     m_game->onClientJoined(clientId);
             Globals::ui.setMainMenuActive(false);
+        }
+    }
+
+    // ---- The local lobby's world block (the terrain seed preview + "Seed world") ----
+    // The preview is Procedural's TerrainPreview (a session member: it owns a job and a generator,
+    // nothing an entity reaches). Seeding the world is four tweak OVERRIDES - seed, origin X/Z,
+    // Terrain + Ocean enabled - the same switch the sandbox throws, so the streamer builds the
+    // full-detail ring around the pick while the lobby is still up (the world shows behind the
+    // menu) and the page's bar follows TerrainStreamer::streamStatus until it settles.
+    void serviceWorldAction(const LobbyAction& action)
+    {
+        if (action.type == LobbyAction::EType::GeneratePreview)
+        {
+            // The diffusion runtime holds ONE seed process-wide (TerrainPreview's header): a live
+            // world of another seed would lose its tiles under the preview, so it goes first.
+            if (m_worldSeeded)
+                unseedWorld();
+            m_terrainPreview.request(action.terrainSeed, Globals::terrain.v3MetersPerPixel());
+        }
+        else if (action.type == LobbyAction::EType::SeedWorld)
+        {
+            if (m_terrainPreview.state() != Procedural::TerrainPreview::EState::Ready)
+                return;
+            const glm::vec2 origin = m_terrainPreview.worldOffsetAt(action.pickU, action.pickV);
+            const float halfSize = glm::clamp(action.areaSizeM, 256.0f, 65536.0f) * 0.5f;
+            if (!m_worldSeeded)
+                m_ringRadiusBeforeSeed = Globals::terrain.ringRadius(); // restored by unseedWorld
+            // The ring covers the playable area and no more: the streamer builds meshes live over
+            // the seeded tiles, and chunks past the area would pull cold tiles on the fly.
+            const int ringRadius = glm::clamp((int)glm::ceil(halfSize / (float)glm::max(Globals::terrain.chunkSize(), 1)), 1, 64);
+            TweakRegistry& tweaks = TweakRegistry::get();
+            tweaks.setOverride(oc::format("Terrain/Seed={}", m_terrainPreview.seed()));
+            tweaks.setOverride(oc::format("Terrain/Origin X (m)={}", origin.x));
+            tweaks.setOverride(oc::format("Terrain/Origin Z (m)={}", origin.y));
+            tweaks.setOverride(oc::format("Terrain/Range (chunks)={}", ringRadius));
+            tweaks.setOverride("Terrain/Enabled=1");
+            tweaks.setOverride("Ocean/Enabled=1");
+            m_terrainSeeder.start(m_terrainPreview.seed(), Globals::terrain.v3MetersPerPixel(), origin, halfSize);
+            // The streamer must not touch anything past the seeded tiles: the bounds gate its ring and
+            // turn every full-detail sample outside them into a coarse one.
+            glm::vec2 boundsMin, boundsMax;
+            if (m_terrainSeeder.engineCoverage(boundsMin, boundsMax))
+                Globals::terrain.setGeneratedBounds(true, boundsMin, boundsMax);
+            m_worldSeeded = true;
+            m_worldSeededPick = glm::vec2(action.pickU, action.pickV);
+            Log::info(oc::format("Lobby: seeding the world with seed {} at ({:.0f}, {:.0f}) m, {:.0f} m playable area, ring {}",
+                m_terrainPreview.seed(), origin.x, origin.y, halfSize * 2.0f, ringRadius));
+        }
+        else if (action.type == LobbyAction::EType::UnseedWorld)
+            unseedWorld();
+    }
+
+    void unseedWorld()
+    {
+        TweakRegistry& tweaks = TweakRegistry::get();
+        tweaks.setOverride("Terrain/Enabled=0");
+        tweaks.setOverride("Ocean/Enabled=0");
+        tweaks.setOverride("Terrain/Origin X (m)=0");
+        tweaks.setOverride("Terrain/Origin Z (m)=0");
+        if (m_worldSeeded)
+        {
+            tweaks.setOverride(oc::format("Terrain/Range (chunks)={}", m_ringRadiusBeforeSeed));
+            Globals::terrain.setGeneratedBounds(false, glm::vec2(0.0f), glm::vec2(0.0f));
+        }
+        m_terrainSeeder.reset();
+        m_worldSeeded = false;
+    }
+
+    void fillWorldView(LobbyWorldView& world)
+    {
+        using EState = Procedural::TerrainPreview::EState;
+        m_terrainPreview.update();
+        world.terrainSeed = m_terrainPreview.seed();
+        switch (m_terrainPreview.state())
+        {
+        case EState::LoadingModels: world.preview = LobbyWorldView::EPreview::LoadingModels; break;
+        case EState::Generating:    world.preview = LobbyWorldView::EPreview::Generating; break;
+        case EState::Ready:         world.preview = LobbyWorldView::EPreview::Ready; break;
+        case EState::Failed:        world.preview = LobbyWorldView::EPreview::Failed; break;
+        default:                    world.preview = LobbyWorldView::EPreview::Idle; break;
+        }
+        world.previewProgress = m_terrainPreview.progress();
+        world.previewStatus = m_terrainPreview.statusText();
+        // The image crosses to the UI's own type ONCE per generation (UI cannot import Procedural).
+        if (const oc::shared_ptr<const Procedural::TerrainPreview::Image> image = m_terrainPreview.image())
+        {
+            if (image->generation != m_previewUiGeneration)
+            {
+                auto ui = oc::make_shared<LobbyPreviewImage>();
+                ui->width = image->width;
+                ui->height = image->height;
+                ui->generation = image->generation;
+                ui->rgba = image->rgba;
+                ui->extentKm = (float)(image->texelWorldSize * (double)image->width / 1000.0);
+                ui->tileWorldSizeM = (float)image->tileWorldSize;
+                m_previewUiImage = oc::move(ui);
+                m_previewUiGeneration = image->generation;
+            }
+        }
+        else
+            m_previewUiImage = nullptr;
+        world.image = m_previewUiImage;
+
+        world.seeded = m_worldSeeded;
+        world.seededPick = m_worldSeededPick;
+        if (!m_worldSeeded)
+            return;
+        // The bar is the TILE seeding (the diffusion work); the terrain mesh streams live around it.
+        using ESeed = Procedural::TerrainSeeder::EState;
+        m_terrainSeeder.update();
+        world.seededSettled = m_terrainSeeder.state() == ESeed::Done;
+        world.seededProgress = m_terrainSeeder.progress();
+        switch (m_terrainSeeder.state())
+        {
+        case ESeed::Failed:        world.seededStatus = "Terrain generator unavailable"; break;
+        case ESeed::LoadingModels: world.seededStatus = "Loading terrain models..."; break;
+        case ESeed::Generating:
+        case ESeed::Done:
+            world.seededStatus = oc::format("Tiles {} / {} ({} on disk)", m_terrainSeeder.tilesDone(),
+                m_terrainSeeder.tilesTotal(), m_terrainSeeder.tilesCached());
+            break;
+        default:                   world.seededStatus = "Starting..."; break;
+        }
+        // The generated tiles' footprint, model space -> the map's normalized frame.
+        glm::vec2 coveredMin, coveredMax;
+        if (m_previewUiImage && m_terrainSeeder.coverage(coveredMin, coveredMax))
+        {
+            const float extent = m_previewUiImage->extentKm * 1000.0f;
+            world.seededAreaValid = extent > 0.0f;
+            world.seededAreaMin = coveredMin / extent + 0.5f;
+            world.seededAreaMax = coveredMax / extent + 0.5f;
         }
     }
 
@@ -504,4 +649,11 @@ private:
     bool m_gameCameraDetached = false;
     oc::shared_ptr<ExternalIpResult> m_externalIp;
     oc::string m_menuLanEndpoint;
+    Procedural::TerrainPreview m_terrainPreview;
+    Procedural::TerrainSeeder m_terrainSeeder;
+    oc::shared_ptr<const LobbyPreviewImage> m_previewUiImage;
+    uint32 m_previewUiGeneration = 0;
+    bool m_worldSeeded = false;
+    glm::vec2 m_worldSeededPick = glm::vec2(0.5f);
+    int m_ringRadiusBeforeSeed = 32; // "Terrain/Range (chunks)" before seeding sized the ring
 };

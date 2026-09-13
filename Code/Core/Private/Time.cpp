@@ -31,7 +31,11 @@ void Time::registerTweaks()
 void Time::beginFrame(bool windowFocused, bool vr, bool vsync, float displayRefreshHz, Window* pumpWindow, bool (*waitFence)(uint64))
 {
     const Clock::time_point lastFrameStart = m_currentTime;
-    const int targetFps = vr ? 0 : (windowFocused || m_inactiveMaxFps <= 0 ? m_maxFps : m_inactiveMaxFps);
+    const int tweakFps = windowFocused || m_inactiveMaxFps <= 0 ? m_maxFps : m_inactiveMaxFps;
+    // The ceiling (menus) caps whatever the tweaks say; 0 on either side means "no limit from me".
+    const int targetFps = vr ? 0
+        : m_fpsCeiling <= 0 ? tweakFps
+        : tweakFps <= 0 ? m_fpsCeiling : oc::min(tweakFps, m_fpsCeiling);
     const bool capped = targetFps > 0;
 
     // The frame starts at whichever comes LAST: the limiter's desired end (capped) or the fence signal. Kick the pump a lead before the earliest of the two we can predict - the desired end is exact, the fence is predicted as raw last start + running MIN interval (FIFO unblocks early on alternate frames)

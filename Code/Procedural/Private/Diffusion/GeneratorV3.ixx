@@ -31,6 +31,22 @@ export namespace Procedural
 		uint32 seed = 1337;
 		float seaLevel = 0.0f;
 
+		// --- World origin. Where in the seed's MODEL-space world (in world metres, the same frame every
+		// sample query uses) the engine's (0, 0) sits: every query is offset by this before it reaches the
+		// tile lattice, so the lobby's "seed the world here" pick becomes the spot the game builds on. The
+		// tile caches are keyed in model space and never see it, so moving the origin costs no regeneration
+		// of tiles already on disk - only of the chunks and bakes built against the old placement.
+		float originX = 0.0f;
+		float originZ = 0.0f;
+
+		// --- Generated bounds (engine metres, AFTER the origin). When `bounded`, FULL-detail tiles are
+		// only fetched inside this rect - the playable area the lobby's seeder pre-generated - and any
+		// full-detail sample outside it falls back to the COARSE stage (one cheap tile per hundreds of
+		// km, cached on disk by the preview), so the streamer's ring, the terrain-data bake's near
+		// cascade, the collider and the scatter can never pull a cold full tile past the area's edge.
+		bool bounded = false;
+		float boundsMinX = 0.0f, boundsMinZ = 0.0f, boundsMaxX = 0.0f, boundsMaxZ = 0.0f;
+
 		// --- World scale. The model natively resolves 30 m per pixel; that is what it was trained for and
 		// what makes its continents continent-sized and its peaks ~10 km.
 		// metersPerPixel is a UNIFORM scale: it shrinks elevation and detail by the same factor it shrinks
@@ -129,17 +145,50 @@ export namespace Procedural
 		// be re-read after this, never cached across it.
 		static void setPrecision(bool useFp16);
 		// False while the models are loading, and permanently if that failed. Sampling before this is true
-		// yields a flat sea-level world, so callers must gate geometry generation on it.
+		// yields a flat sea-level world, so callers must gate geometry generation on it. ALSO true in the
+		// cache-only state after unloadModels(): the disk cache still answers, so sampling is valid -
+		// a miss there is a null tile (coarse fallback / sea level), never a load.
 		static bool isReady();
+		// The models are actually resident: what INFERENCE needs (the preview, the seeder). False in
+		// the cache-only state.
+		static bool modelsLoaded();
 		static bool hasFailed();
+		// Frees the ONNX sessions (the 2.28 GB of weights, VRAM and RAM) and keeps serving the disk
+		// and RAM tile caches - the game's state once the lobby has pre-generated its playable area,
+		// where nothing should infer any more. Waits out an inference in flight (main thread helps).
+		// The next construction of a TerrainGenV3 (a new preview, the sandbox) reloads them; until that
+		// load lands isReady() is false again, exactly like the first startup.
+		static void unloadModels();
 		// metersPerPixel / the model's native resolution: the uniform factor every world-space length the
 		// generator produces is scaled by (elevation, crag relief, detail). Anything OUTSIDE the generator
 		// that compares against those lengths in metres - the terrain shader's crag thresholds - has to
 		// scale by this too, or it is tuned for exactly one metersPerPixel. Valid before the models load
 		// (the native resolution has a default), so callers need not gate on isReady().
 		static float worldScale(float metersPerPixel);
+		// Native model pixels per COARSE-stage pixel (256 in the shipped config). One coarse pixel is
+		// therefore nativePerCoarsePixel() * metersPerPixel world metres - the texel size of anything that
+		// samples at ESampleDetail::Coarse (the lobby's world preview). Valid before the models load.
+		static int32 nativePerCoarsePixel();
 		// Short human-readable status, or the reason it failed.
 		static oc::string statusText();
+
+		// --- Tile PRE-GENERATION (the lobby's "Seed world"). A cold full-detail tile is what a sample
+		// pays ~1.5 s for; once it exists (in the runtime's cache, and on disk under Local/Diffusion/
+		// <seed>/) the streamer's mesh builds are cheap, so the lobby generates the playable area's tiles
+		// up front and the streamer builds meshes live. Tile indices are (ti = z row, tj = x column) on
+		// the full-detail lattice; every method applies the config's origin.
+		static int32 fullTilePixels(); // native pixels per full-detail tile (256)
+		// Inclusive index range of the full tiles covering an engine-space rect.
+		void fullTileRange(double x0, double z0, double x1, double z1,
+		                   int32& outTi0, int32& outTj0, int32& outTi1, int32& outTj1) const;
+		// The engine-space rect one full tile covers.
+		void fullTileWorldRect(int32 ti, int32 tj, double& outX0, double& outZ0, double& outX1, double& outZ1) const;
+		// True when the tile is already in the disk cache: a fetch is then a read, not inference. Disk
+		// access - never from the main thread without an AllowMainThreadIO scope.
+		bool isFullTileCached(int32 ti, int32 tj) const;
+		// Generates (or loads) the tile into the runtime's cache and drops the handle. Blocking - on a
+		// job the wait parks the fiber. A no-op while the models are not ready.
+		void prefetchFullTile(int32 ti, int32 tj) const;
 
 		float sampleHeight(double worldX, double worldZ) const override;
 		float sampleWaterHeight(double worldX, double worldZ) const override;

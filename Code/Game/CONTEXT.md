@@ -53,7 +53,7 @@ Without `--game` the testbed is untouched.
 `Game:Match` (the orchestrator), `Game:Player`, `Game:Structures`, `Game:StructureTypes`
 (`EStructureType` + the constexpr type predicates, `ENodeType`, `GameMaxTeams`,
 `GameNumUnitTypes` — `export import`ed by `Game:Structures`, so importers see one surface),
-`Game:Npc`, `Game:GameCamera`, `Game:Lobby` (the multiplayer pre-game LOBBY model, `LobbySystem` —
+`Game:Npc`, `Game:GameCamera`, `Game:Lobby` (the pre-game LOBBY model, `LobbySystem` — multiplayer, or LOCAL: offline, one player, Start launches at once —
 ready checks, the start countdown, the host's team/map picks; the `Lb*` events) and `Game:Chat` (the
 TEXT CHAT model, `ChatSystem` — the "ChM" event's log). **Both are plain stack locals in `main()`**,
 serviced by main's menu loop and drawn by the UI's lobby page / `UI:ChatPanel`: see **Lobby** and

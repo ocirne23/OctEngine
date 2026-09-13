@@ -203,6 +203,10 @@ cannot see the renderer**; both it and `pumpWindow` may be null.
 Tweaks (all Saved): `Max FPS` (0 = uncapped), `Inactive max FPS` (30), `Busy-wait window (ms)` (2.5),
 `Stable frame time` (on), `Input pump lead (ms)` (2.0), `VSync`.
 
+**`setFpsCeiling(fps)`** is a cap ON TOP of those (the target is the lower of the two; 0 = none), not a
+tweak and never saved: main sets 60 every frame while a menu is up (main menu pages, the lobby, the
+escape overlay) and 0 otherwise, so the settings survive untouched. Never applies in VR.
+
 The full behaviour — the limit, stable-time attribution, the vsync period quantization and the pump
 prediction — is documented under **Frame pacing** in
 [`Code/RendererVK/CONTEXT.md`](../RendererVK/CONTEXT.md), where the fence and swapchain live.

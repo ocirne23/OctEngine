@@ -132,9 +132,48 @@ timers and the frame loop.
 `LobbySystem` is a plain stack local in main — **plain state, no entity handles.** The UI is the
 MainMenu's lobby page, with `LobbyView` / `LobbyAction` snapshots polled exactly like the menu action.
 
-**A MULTIPLAYER co-op or PvP pick enters the lobby instead of starting.** Offline picks and the
-sandbox start immediately, and command-line runs never lobby — **a CLI game server calls
-`lobby.markStarted` so menu clients joining it still get the go signal.**
+**EVERY co-op or PvP pick enters the lobby instead of starting** — multiplayer to gather players,
+offline as a LOCAL lobby (see below). The sandbox starts immediately, and command-line runs never
+lobby — **a CLI game server calls `lobby.markStarted` so menu clients joining it still get the go
+signal.**
+
+## The local lobby and the world block
+
+An offline pick calls `lobby.enter(host, coop, local = true)`: no network, no event filter, the host
+is the only player, nothing is broadcast, and **Start launches at once** (`takeServerStart`, no ready
+check or countdown). The page hides the roster, the ready button, the endpoint block and the chat, and
+adds a second column, **the WORLD block** (`LobbyView::local` + `LobbyWorldView`, filled by
+`Session::fillWorldView`):
+
+* **Terrain seed + "Generate preview"** — `LobbyAction::GeneratePreview` → the session's
+  `Procedural::TerrainPreview` (a `Session` member: it owns a job and a generator) samples the seed's
+  COARSE stage into a 256² overview map (see the Procedural CONTEXT). The image crosses to the UI's
+  `LobbyPreviewImage` ONCE per generation (UI cannot import Procedural) and the page uploads it into
+  its own ImGui-managed texture. **A new preview first UNSEEDS a seeded world** — the diffusion
+  runtime holds one seed process-wide.
+* **Click the map, pick a playable-area size, then "Seed world"** — `LobbyAction::SeedWorld`
+  carries the pick (0..1) and the area's side in metres; `serviceWorldAction` turns it into tweak
+  OVERRIDES: `Terrain/Seed`, `Terrain/Origin X (m)` / `Origin Z (m)` (from
+  `TerrainPreview::worldOffsetAt`, so the pick becomes the engine's origin), **`Terrain/Range
+  (chunks)` sized to the area** (the previous radius is remembered and restored on unseed),
+  `Terrain/Enabled=1` and `Ocean/Enabled=1` — the sandbox's switch. It then starts the session's
+  `Procedural::TerrainSeeder`, which **pre-generates the area's full-detail diffusion TILES,
+  nearest-first, loading any already in the disk cache instead of regenerating**; the terrain MESH
+  streams live over them (the streamer's pumps park on the same per-tile events). **The page's bar is
+  the tile count and Start stays disabled until the seeder is done**; the map draws the generated
+  tiles' footprint as a square and estimates the tile count for the chosen size. "Re-seed" moves the
+  origin or changes the size; "Unseed" (`UnseedWorld`) drops the overrides again.
+  The seeder's tile-aligned coverage also becomes the streamer's **generated bounds**
+  (`setGeneratedBounds`): the ring never requests a chunk outside it and the generator answers every
+  full-detail sample past it from the coarse stage, so nothing outside the playable area costs a
+  cold tile.
+* **Start** first calls `TerrainGenV3::unloadModels()` for a seeded world (every tile it needs is on
+  disk; the caches keep serving and nothing infers in game), then runs
+  `startWorldAndGame(true, coop)` unchanged: the game spawns over the streamed terrain (its flat ground plane and grid still sit at y = 0 — the match does not yet read the
+  terrain height), and `exitToMenu` unseeds, resets the preview and switches the terrain off.
+
+The multiplayer lobby has no world block: a client would not get the seed or the origin (they would
+have to ride the game's GMp event), so the seeded world is single-player only for now.
 
 **The SANDBOX content** (`startWorldAndGame`, the `!startGame` branch): sponza + the skysphere
 prefab, plus the procedural world — `Terrain/Enabled` and `Ocean/Enabled` are switched ON through

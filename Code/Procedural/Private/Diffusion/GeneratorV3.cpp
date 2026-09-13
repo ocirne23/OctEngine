@@ -373,15 +373,43 @@ namespace Procedural
 			void beginLoad()
 			{
 				std::lock_guard<std::mutex> lk(m_loadMutex);
-				if (m_loadStarted)
+				if (m_loadStarted && !m_cacheOnly.load(oc::memory_order_acquire))
 					return;
+				// A reload after unloadModels(): the thread has exited (unload joined it). Leave the
+				// cache-only state FIRST so samplers see "not ready" until the load lands, instead of
+				// building chunks against a cache with holes.
+				if (m_loader.joinable())
+					m_loader.join();
+				m_cacheOnly.store(false, oc::memory_order_release);
 				m_loadStarted = true;
 				// The assets are on disk (shipped with the repo), but getting 2.28 GB of ONNX into DirectML
 				// still takes seconds, so it stays off the main thread.
 				m_loader = std::thread([this]() { loadWorker(); });
 			}
 
+			// Drops the pipeline (the ONNX sessions = the weights) and serves the tile caches only. See
+			// TerrainGenV3::unloadModels.
+			void unloadModels()
+			{
+				std::lock_guard<std::mutex> lk(m_loadMutex);
+				if (!m_loadStarted || m_cacheOnly.load(oc::memory_order_acquire))
+					return;
+				if (m_loader.joinable())
+					m_loader.join(); // a load still in flight finishes first (seconds at most)
+				{
+					JobMutex::Scope pk(m_pipelineMutex); // waits out an inference in flight
+					m_pipeline.reset();
+				}
+				m_ready.store(false, oc::memory_order_release);
+				m_cacheOnly.store(true, oc::memory_order_release);
+				setStatus("Models unloaded - serving the tile cache only");
+				Log::info("[Diffusion] models unloaded (disk/RAM tile cache only)");
+			}
+
 			bool isReady() const { return m_ready.load(oc::memory_order_acquire); }
+			bool isCacheOnly() const { return m_cacheOnly.load(oc::memory_order_acquire); }
+			// Sampling is valid: the models are up, OR unloaded with the caches still serving.
+			bool canSample() const { return isReady() || isCacheOnly(); }
 			bool hasFailed() const { return m_failed.load(oc::memory_order_acquire); }
 			// The model's own resolution, in metres per pixel (30 in the shipped config).
 			float nativeResolution() const { return m_nativeResolution.load(oc::memory_order_relaxed); }
@@ -392,6 +420,8 @@ namespace Procedural
 			{
 				if (m_ready.load(oc::memory_order_acquire))
 					return "Ready";
+				if (m_cacheOnly.load(oc::memory_order_acquire))
+					return "Models unloaded - serving the tile cache only";
 				std::lock_guard<std::mutex> lk(m_statusMutex);
 				if (m_failed.load(oc::memory_order_acquire))
 					return m_assets.error().empty() ? "Failed - see log" : m_assets.error();
@@ -400,6 +430,13 @@ namespace Procedural
 
 			// Blocking on a miss. Serialised through m_pipelineMutex: the tile store is not thread-safe.
 			FieldTilePtr fetchTile(int32 ti, int32 tj);
+			// Whether the full tile's disk-cache file exists for the active seed/precision (a stale file
+			// still counts here; fetchTile regenerates it in place). Disk access.
+			bool isTileCached(int32 ti, int32 tj) const
+			{
+				return FileSystem::exists(tileCachePath(m_activeSeed.load(oc::memory_order_relaxed),
+					m_activeFp16.load(oc::memory_order_relaxed), false, ti, tj));
+			}
 			// The coarse-stage counterpart. Also blocking, but a tiny fraction of the cost per unit area.
 			FieldTilePtr fetchCoarseTile(int32 ti, int32 tj);
 
@@ -595,6 +632,7 @@ namespace Procedural
 			uint64 m_seedAtLoad = 1337;
 			EPrecision m_precision = EPrecision::Fp32; // guarded by m_loadMutex; see setPrecision
 			oc::atomic<bool> m_ready{ false };
+			oc::atomic<bool> m_cacheOnly{ false }; // see unloadModels: no pipeline, the caches still serve
 			oc::atomic<bool> m_failed{ false };
 			oc::atomic<float> m_nativeResolution{ 30.0f };
 			oc::atomic<int32> m_nativePerCoarse{ 256 };
@@ -677,17 +715,28 @@ namespace Procedural
 								return t;
 						}
 
-						// One inference at a time: the tile store is not thread-safe.
-						JobMutex::Scope lk(m_pipelineMutex);
-						if (!m_pipeline)
-							return nullptr;
-
 						const int32 i1 = ti * TILE - HALO, i2 = (ti + 1) * TILE + HALO;
 						const int32 j1 = tj * TILE - HALO, j2 = (tj + 1) * TILE + HALO;
 
+						// One inference at a time: the tile store is not thread-safe. The lock covers ONLY
+						// the pipeline call (and the seed/precision it was made with): the plane assembly,
+						// the baseline recovery and the ~1 MB quantised zstd write below are CPU work on
+						// this tile's own buffers, so they run unlocked and the NEXT tile's dispatches
+						// start while they do - otherwise the GPU idles for every tile's tail.
 						oc::vector<float> elev, climate, macro;
-						if (!m_pipeline->get(i1, j1, i2, j2, /*withClimate*/ true, elev, climate, &macro))
-							return nullptr;
+						uint64 seed;
+						bool fp16;
+						{
+							JobMutex::Scope lk(m_pipelineMutex);
+							if (!m_pipeline)
+								return nullptr;
+							if (!m_pipeline->get(i1, j1, i2, j2, /*withClimate*/ true, elev, climate, &macro))
+								return nullptr;
+							// Labeled from the pipeline itself - the seed/precision this tile was ACTUALLY
+							// built with - never the mirrors.
+							seed = m_pipeline->seed();
+							fp16 = m_pipelinePrecision == EPrecision::Fp16;
+						}
 
 						const size_t plane = (size_t)TILE_W * TILE_W;
 						auto t = oc::make_shared<FieldTile>();
@@ -705,12 +754,7 @@ namespace Procedural
 						for (size_t i = 0; i < plane; i++)
 							t->tempSea[i] = temp[i] - beta[i] * oc::max(0.0f, t->elev[i]);
 
-						// Labeled from the pipeline itself - the seed/precision this tile was ACTUALLY built
-						// with - never the mirrors. The write is ~1 MB against ~1.5 s of inference, so holding
-						// the lock for it costs nothing.
-						const uint64 seed = m_pipeline->seed();
-						saveTileToDisk(tileCachePath(seed, m_pipelinePrecision == EPrecision::Fp16, false, ti, tj),
-						               *t, seed, ti, tj);
+						saveTileToDisk(tileCachePath(seed, fp16, false, ti, tj), *t, seed, ti, tj);
 						return t;
 					});
 					pending = oc::make_shared<PendingTile>();
@@ -776,7 +820,22 @@ namespace Procedural
 			// No pending-dedup here, unlike fetchTile: a coarse tile is a handful of 64x64 model calls, and
 			// cheapness is the entire point of this path. Two threads racing the same tile is a rare, small
 			// waste; the pipeline lock below already serialises them.
-			FieldTilePtr tile;
+			// PADDED by the regression window: unlike the full path, the coarse tensor carries no lapse
+			// rate (its channels are elev/p5/temp/temp_std/precip/precip_std), so this path has to
+			// regress its own the same way computeClimate does - and localBaselineTemperature crops
+			// (win - 1) from each axis. Fetching CBETA_PAD extra on every side makes its output land
+			// exactly on the tile.
+			constexpr int32 CBETA_WIN = 15;             // same window computeClimate regresses over
+			constexpr int32 CBETA_PAD = CBETA_WIN / 2;  // 7
+			const int32 i0 = ti * CTILE - CHALO, i1 = (ti + 1) * CTILE + CHALO;
+			const int32 j0 = tj * CTILE - CHALO, j1 = (tj + 1) * CTILE + CHALO;
+
+			// The pipeline lock covers only the slice fetch (and the seed/precision it was made with);
+			// the decode, the regression and the save below are this tile's own CPU work and run
+			// unlocked, the same split as fetchTile.
+			FloatTensor slice;
+			uint64 seed;
+			bool fp16;
 			{
 				JobMutex::Scope lk(m_pipelineMutex);
 				if (!m_pipeline)
@@ -787,19 +846,13 @@ namespace Procedural
 					if (FieldTilePtr hit = m_coarseCache.get(key))
 						return hit;
 				}
+				slice = m_pipeline->getCoarseSlice(i0 - CBETA_PAD, j0 - CBETA_PAD, i1 + CBETA_PAD, j1 + CBETA_PAD);
+				seed = m_pipeline->seed();
+				fp16 = m_pipelinePrecision == EPrecision::Fp16;
+			}
 
-				// PADDED by the regression window: unlike the full path, the coarse tensor carries no lapse
-				// rate (its channels are elev/p5/temp/temp_std/precip/precip_std), so this path has to
-				// regress its own the same way computeClimate does - and localBaselineTemperature crops
-				// (win - 1) from each axis. Fetching CBETA_PAD extra on every side makes its output land
-				// exactly on the tile.
-				constexpr int32 CBETA_WIN = 15;             // same window computeClimate regresses over
-				constexpr int32 CBETA_PAD = CBETA_WIN / 2;  // 7
-				const int32 i0 = ti * CTILE - CHALO, i1 = (ti + 1) * CTILE + CHALO;
-				const int32 j0 = tj * CTILE - CHALO, j1 = (tj + 1) * CTILE + CHALO;
-				const FloatTensor slice = m_pipeline->getCoarseSlice(i0 - CBETA_PAD, j0 - CBETA_PAD,
-				                                                     i1 + CBETA_PAD, j1 + CBETA_PAD);
-
+			FieldTilePtr tile;
+			{
 				const int32 pw = CTILE_W + 2 * CBETA_PAD;
 				const size_t pplane = (size_t)pw * pw;
 				const size_t plane = (size_t)CTILE_W * CTILE_W;
@@ -860,10 +913,8 @@ namespace Procedural
 				t->macro = t->elev;
 				tile = t;
 
-				// Same contract as fetchTile's save: labeled from the pipeline, inside its lock.
-				const uint64 seed = m_pipeline->seed();
-				saveTileToDisk(tileCachePath(seed, m_pipelinePrecision == EPrecision::Fp16, true, ti, tj),
-				               *t, seed, ti, tj);
+				// Same contract as fetchTile's save: labeled from the pipeline (captured under its lock).
+				saveTileToDisk(tileCachePath(seed, fp16, true, ti, tj), *t, seed, ti, tj);
 			}
 
 			std::lock_guard<std::mutex> ck(m_cacheMutex);
@@ -906,10 +957,16 @@ namespace Procedural
 		// for the same position.
 		double latticeScale = 0.0;
 		double latticeOffset = 0.0;
+		// The config's world origin (TerrainConfigV3::originX/Z): applied HERE, at the one world -> lattice
+		// mapping every sample goes through, so a point query and a grid fill place the world identically.
+		// The detail and climate noise stay in engine coordinates on purpose - they are seeded noise, not
+		// model data, and nothing else compares them against the tile lattice.
+		double originX = 0.0;
+		double originZ = 0.0;
 		bool coarse = false;
 
-		double latticeX(double worldX) const { return worldX * latticeScale + latticeOffset; }
-		double latticeZ(double worldZ) const { return worldZ * latticeScale + latticeOffset; }
+		double latticeX(double worldX) const { return (worldX + originX) * latticeScale + latticeOffset; }
+		double latticeZ(double worldZ) const { return (worldZ + originZ) * latticeScale + latticeOffset; }
 		double worldPerLattice() const { return latticeScale > 0.0 ? 1.0 / latticeScale : 0.0; }
 
 		const FieldTile* tileAt(int32 ti, int32 tj) const
@@ -934,12 +991,14 @@ namespace Procedural
 	bool TerrainGenV3::resolveBlock(double x0, double z0, double x1, double z1, bool coarse, TileBlock& out) const
 	{
 		DiffusionRuntime& rt = DiffusionRuntime::get();
-		if (!rt.isReady())
+		if (!rt.canSample())
 			return false;
 
 		out.coarse = coarse;
 		out.span = coarse ? CTILE : TILE;
 		out.halo = coarse ? CHALO : HALO;
+		out.originX = (double)m_cfg.originX;
+		out.originZ = (double)m_cfg.originZ;
 
 		if (!coarse)
 		{
@@ -974,9 +1033,22 @@ namespace Procedural
 		out.tiles.assign((size_t)out.th * out.tw, nullptr);
 		for (int32 ti = 0; ti < out.th; ti++)
 			for (int32 tj = 0; tj < out.tw; tj++)
+			{
+				if (!coarse && m_cfg.bounded)
+				{
+					// Outside the generated bounds a FULL tile is never fetched (it would be a cold
+					// ~1.5 s inference for terrain past the playable area); the slot stays null and the
+					// sample paths fall back to the coarse stage there.
+					double x0, z0, x1, z1;
+					fullTileWorldRect(out.ti0 + ti, out.tj0 + tj, x0, z0, x1, z1);
+					if (x1 <= (double)m_cfg.boundsMinX || x0 >= (double)m_cfg.boundsMaxX
+						|| z1 <= (double)m_cfg.boundsMinZ || z0 >= (double)m_cfg.boundsMaxZ)
+						continue;
+				}
 				out.tiles[(size_t)ti * out.tw + tj] = coarse
 					? rt.fetchCoarseTile(out.ti0 + ti, out.tj0 + tj)
 					: rt.fetchTile(out.ti0 + ti, out.tj0 + tj);
+			}
 		return true;
 	}
 
@@ -1039,7 +1111,16 @@ namespace Procedural
 		TileBlock b;
 		if (!resolveBlock(worldX, worldZ, worldX, worldZ, coarse, b))
 			return Sample{};
-		return sampleFromBlock(b, worldX, worldZ);
+		Sample s = sampleFromBlock(b, worldX, worldZ);
+		// No full tile here (outside the generated bounds, or not in the cache with the models
+		// unloaded): the coarse stage's answer beats a sea-level hole.
+		if (!s.valid && !coarse)
+		{
+			TileBlock cb;
+			if (resolveBlock(worldX, worldZ, worldX, worldZ, true, cb))
+				s = sampleFromBlock(cb, worldX, worldZ);
+		}
+		return s;
 	}
 
 	// The slope mask: sf^2 * sqrt(sf), so detail ramps in sharply and plains stay perfectly smooth.
@@ -1199,11 +1280,44 @@ namespace Procedural
 		const float nr = DiffusionRuntime::get().nativeResolution();
 		return metersPerPixel / (nr > 0.0f ? nr : 30.0f);
 	}
+	int32 TerrainGenV3::nativePerCoarsePixel() { return DiffusionRuntime::get().nativePerCoarsePixel(); }
+	int32 TerrainGenV3::fullTilePixels() { return TILE; }
+
+	void TerrainGenV3::fullTileRange(double x0, double z0, double x1, double z1,
+	                                 int32& outTi0, int32& outTj0, int32& outTi1, int32& outTj1) const
+	{
+		// The full-detail lattice mapping resolveBlock uses: lattice = (world + origin) * invMpp.
+		const double s = (double)m_invMpp;
+		outTj0 = floorDiv((int32)std::floor((x0 + (double)m_cfg.originX) * s), TILE);
+		outTj1 = floorDiv((int32)std::floor((x1 + (double)m_cfg.originX) * s), TILE);
+		outTi0 = floorDiv((int32)std::floor((z0 + (double)m_cfg.originZ) * s), TILE);
+		outTi1 = floorDiv((int32)std::floor((z1 + (double)m_cfg.originZ) * s), TILE);
+	}
+
+	void TerrainGenV3::fullTileWorldRect(int32 ti, int32 tj, double& outX0, double& outZ0, double& outX1, double& outZ1) const
+	{
+		const double mpp = (double)m_cfg.metersPerPixel;
+		outX0 = (double)tj * TILE * mpp - (double)m_cfg.originX;
+		outX1 = (double)(tj + 1) * TILE * mpp - (double)m_cfg.originX;
+		outZ0 = (double)ti * TILE * mpp - (double)m_cfg.originZ;
+		outZ1 = (double)(ti + 1) * TILE * mpp - (double)m_cfg.originZ;
+	}
+
+	bool TerrainGenV3::isFullTileCached(int32 ti, int32 tj) const { return DiffusionRuntime::get().isTileCached(ti, tj); }
+
+	void TerrainGenV3::prefetchFullTile(int32 ti, int32 tj) const
+	{
+		DiffusionRuntime& rt = DiffusionRuntime::get();
+		if (rt.isReady())
+			(void)rt.fetchTile(ti, tj);
+	}
 	void TerrainGenV3::setPrecision(bool useFp16)
 	{
 		DiffusionRuntime::get().setPrecision(useFp16 ? EPrecision::Fp16 : EPrecision::Fp32);
 	}
-	bool TerrainGenV3::isReady() { return DiffusionRuntime::get().isReady(); }
+	bool TerrainGenV3::isReady() { return DiffusionRuntime::get().canSample(); }
+	bool TerrainGenV3::modelsLoaded() { return DiffusionRuntime::get().isReady(); }
+	void TerrainGenV3::unloadModels() { DiffusionRuntime::get().unloadModels(); }
 	bool TerrainGenV3::hasFailed() { return DiffusionRuntime::get().hasFailed(); }
 	oc::string TerrainGenV3::statusText() { return DiffusionRuntime::get().statusText(); }
 
@@ -1314,14 +1428,29 @@ namespace Procedural
 			return;
 		}
 
+		// Any full tile the grid touches that is not there (outside the generated bounds, or missing
+		// from the cache with the models unloaded) is answered from the coarse stage instead - resolved
+		// ONCE for the grid, like the full block, never per texel.
+		bool anyMissing = false;
+		for (const FieldTilePtr& tile : block.tiles)
+			anyMissing |= tile == nullptr;
+		TileBlock coarseBlock;
+		const bool haveCoarse = !coarse && anyMissing && resolveBlock(originX, originZ, x1, z1, true, coarseBlock);
+
 		for (uint32 j = 0; j < resZ; j++)
 		{
 			const double wz = originZ + step * (double)j;
 			for (uint32 i = 0; i < resX; i++)
 			{
 				const double wx = originX + step * (double)i;
-				const Sample s = sampleFromBlock(block, wx, wz);
-				fill(wx, wz, s, /*withDetail*/ !coarse, out[(size_t)j * resX + i]);
+				Sample s = sampleFromBlock(block, wx, wz);
+				bool withDetail = !coarse;
+				if (!s.valid && haveCoarse)
+				{
+					s = sampleFromBlock(coarseBlock, wx, wz);
+					withDetail = false;
+				}
+				fill(wx, wz, s, withDetail, out[(size_t)j * resX + i]);
 			}
 			// A ~262k-texel fill on a Low pump or bake job: let higher-priority work through between
 			// rows. No lock is held here (the block is resolved, the fill is lock-free), so a

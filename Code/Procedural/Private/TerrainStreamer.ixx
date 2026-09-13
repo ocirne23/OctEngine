@@ -64,6 +64,41 @@ export namespace Procedural
 		// consumers holding the old shared_ptr keep a coherent snapshot.
 		oc::shared_ptr<const BakedTerrainData> activeTerrainData() const { return m_terrainMapData; }
 
+		// How far the ring around the camera has streamed in - the lobby's "seeding the world" bar. Main
+		// thread (it reads the residency sets). `settled` is the whole ring resident, the terrain-data map
+		// shipped and nothing in flight; before the first update after an enable it is false even though
+		// nothing is pending yet, because nothing is resident either.
+		struct StreamStatus
+		{
+			bool enabled = false;
+			bool modelsReady = false;  // V3 models loaded (false while loading; see failed)
+			bool failed = false;       // the model load failed: the world stays empty
+			uint32 resident = 0;       // chunks live in the renderer
+			uint32 pending = 0;        // chunks requested, generating or waiting for upload
+			bool mapShipped = false;   // the terrain-data map (climate, water reach) is live
+			bool settled() const { return enabled && modelsReady && pending == 0 && resident > 0 && mapShipped; }
+			float progress() const { return resident + pending == 0 ? 0.0f : (float)resident / (float)(resident + pending); }
+		};
+		StreamStatus streamStatus() const;
+		// The V3 world scale the streamer is configured with (the "Terrain/V3/Meters per pixel" tweak), so a
+		// preview sampled outside the streamer maps its texels to the same world metres the mesh will use.
+		float v3MetersPerPixel() const { return m_v3MetersPerPixel; }
+		// The ring's radius in chunks and the chunk size in metres ("Terrain/Range (chunks)" / "Chunk size
+		// (m)"): the lobby sizes the ring to the seeded playable area and restores the radius after.
+		int ringRadius() const { return m_ringRadius; }
+		int chunkSize() const { return m_chunkSize; }
+		// The GENERATED bounds (engine metres): the playable area the lobby's seeder pre-generated
+		// full tiles for. While set, the ring never requests a chunk outside it, and the generator
+		// (TerrainConfigV3::bounded) answers every full-detail sample outside it from the coarse stage
+		// - so nothing past the area's edge ever costs a cold tile. Main thread; rebuilds the maps.
+		void setGeneratedBounds(bool bounded, glm::vec2 boundsMin, glm::vec2 boundsMax)
+		{
+			m_bounded = bounded;
+			m_boundsMin = boundsMin;
+			m_boundsMax = boundsMax;
+			m_configDirty = true;
+		}
+
 	private:
 		struct Request
 		{
@@ -117,6 +152,14 @@ export namespace Procedural
 		//int   m_seed = 62500;
 		//int   m_seed = 7236781;
 		int   m_seed = 516121;
+		// Where in the seed's world the engine origin sits (world metres; TerrainConfigV3::originX/Z). The
+		// lobby's "Seed world" pick sets these through overrides so the match builds on the chosen spot.
+		float m_originX = 0.0f;
+		float m_originZ = 0.0f;
+		// See setGeneratedBounds. Not tweaks: the session sets them with the seeded world.
+		bool m_bounded = false;
+		glm::vec2 m_boundsMin = glm::vec2(0.0f);
+		glm::vec2 m_boundsMax = glm::vec2(0.0f);
 		int   m_chunkSize = 1024;
 		int   m_lod0Res = 512;
 		int   m_ringRadius = 32;   // max generation range from the camera chunk, in chunks
@@ -263,7 +306,7 @@ export namespace Procedural
 		// leaving decrements m_numPumps BEFORE its empty-recheck and re-claims a slot if requests
 		// remain, and every append is followed by kickPump - so requests never strand. ---
 		oc::atomic<int32>      m_numPumps{ 0 };
-		int                     m_maxGenJobs = 4; // tweak: concurrent chunk generations
+		int                     m_maxGenJobs = 12; // tweak: concurrent chunk generations
 		JobCounter              m_pumpCounter;
 		std::mutex              m_mutex;
 		// An unordered POOL of outstanding work, despite the deque: the worker rescans it on every dequeue

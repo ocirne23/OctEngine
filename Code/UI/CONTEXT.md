@@ -216,6 +216,19 @@ Both the menu action and the lobby action use the same sequencing: **the UI only
 main polls it after the post-update join and performs the mode start.** See
 [`Code/App/CONTEXT.md`](../App/CONTEXT.md).
 
+**The local lobby's world block** (`LobbyView::local`, `LobbyWorldView`, `renderLobbyWorld`) draws
+the terrain-seed preview map through ONE ImGui-managed texture: an `ImTextureData` registered with
+`ImGui::RegisterUserTexture` (imgui_internal; **`PlatformIO.Textures` is REBUILT at every Render from
+the atlases plus that user list, so a plain push into it vanishes**) with `RefCount 1`, so
+**`Renderer::updateImGuiTextures` creates and updates it on main exactly like the font atlas — no
+renderer API.** It is a NAMESPACE-SCOPE plain
+global in MainMenu.cpp, not a member: `ImGui_ImplVulkan_Shutdown` (the renderer's dtor) walks that
+list and UI (XCU9) is the first engine global to go, while a plain global destructs after every
+numbered section. The wrapper frees only the CPU pixels. The pass writes pixels + `WantCreate` /
+`WantUpdates` from the job (the only ImGui user in that window); the create lands at the top of the
+next frame, before the present that draws it, and the draw command resolves the id at record time.
+The pick on the map is page-local (`m_previewPick`) until "Seed world" sends it.
+
 ## Game HUD overlay (`UI:GameHudOverlay`)
 
 Draws the in-game HUD OVER the viewport, with `Core.GameHud` as the model.

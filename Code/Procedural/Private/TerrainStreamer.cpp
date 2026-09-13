@@ -246,7 +246,10 @@ namespace Procedural
 		// Dirty so rebuildMaps runs on toggle: enabling is what kicks the V3 model load (disabled terrain
 		// never loads the 2.28 GB of models onto the GPU).
 		Tweak::boolean("Terrain", "Enabled", &m_enabled, dirty);
-		Tweak::intVar("Terrain", "Seed", &m_seed, 0, 1000000, 1.0f, dirty);
+		// The ceiling is float-exact (overrides travel as floats): the lobby seeds the world through one.
+		Tweak::intVar("Terrain", "Seed", &m_seed, 0, 16000000, 1.0f, dirty);
+		Tweak::floatVar("Terrain", "Origin X (m)", &m_originX, -1.0e7f, 1.0e7f, 10.0f, dirty);
+		Tweak::floatVar("Terrain", "Origin Z (m)", &m_originZ, -1.0e7f, 1.0e7f, 10.0f, dirty);
 		Tweak::intVar("Terrain", "Chunk size (m)", &m_chunkSize, 128, 1024, 1.0f, dirty);
 		Tweak::intVar("Terrain", "LOD0 resolution", &m_lod0Res, 128, 1024, 1.0f, dirty);
 		Tweak::intVar("Terrain", "Range (chunks)", &m_ringRadius, 1, 64, 1.0f); // max generation radius from the camera chunk
@@ -636,6 +639,13 @@ namespace Procedural
 		TerrainConfigV3 cfg;
 		cfg.seed = (uint32)m_seed;
 		cfg.seaLevel = m_seaLevel;
+		cfg.originX = m_originX;
+		cfg.originZ = m_originZ;
+		cfg.bounded = m_bounded;
+		cfg.boundsMinX = m_boundsMin.x;
+		cfg.boundsMinZ = m_boundsMin.y;
+		cfg.boundsMaxX = m_boundsMax.x;
+		cfg.boundsMaxZ = m_boundsMax.y;
 		cfg.metersPerPixel = m_v3MetersPerPixel;
 		cfg.heightScale = m_v3HeightScale;
 		cfg.detailSlopeGain = m_v3DetailSlopeGain;
@@ -688,6 +698,18 @@ namespace Procedural
 	{
 		std::lock_guard<std::mutex> lk(m_mutex);
 		return m_maps;
+	}
+
+	TerrainStreamer::StreamStatus TerrainStreamer::streamStatus() const
+	{
+		StreamStatus s;
+		s.enabled = m_enabled;
+		s.failed = TerrainGenV3::hasFailed();
+		s.modelsReady = m_enabled && !m_v3AwaitingModels && !s.failed;
+		s.resident = (uint32)m_residents.size();
+		s.pending = (uint32)m_pending.size();
+		s.mapShipped = m_terrainMapUploaded;
+		return s;
 	}
 
 	void TerrainStreamer::clearResidents()
@@ -1052,6 +1074,15 @@ namespace Procedural
 				for (int dx = -R; dx <= R; ++dx)
 				{
 					const glm::ivec2 coord(camCX + dx, camCZ + dz);
+					// Generated bounds: a chunk that does not touch the seeded area is never requested
+					// (its tiles were never generated; see setGeneratedBounds).
+					if (m_bounded)
+					{
+						const float x0 = (float)coord.x * chunkSize, z0 = (float)coord.y * chunkSize;
+						if (x0 + chunkSize <= m_boundsMin.x || x0 >= m_boundsMax.x
+							|| z0 + chunkSize <= m_boundsMin.y || z0 >= m_boundsMax.y)
+							continue;
+					}
 					const uint32 lod = ringLodAt(chunkEdgeDist(camChunks, coord), fullRes, lodStep, maxLod);
 					const uint64 key = chunkKey(coord, lod);
 					if (m_residents.count(key) || m_pending.count(key))
