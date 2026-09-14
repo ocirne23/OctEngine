@@ -59,7 +59,7 @@ int main(int argc, char* argv[])
         window.setIdleWork([] { return Globals::jobSystem.tryRunOneHighJob(); },
                            [](bool (*wakeNow)(const void*), const void* user) { Globals::jobSystem.externalHelperWait(wakeNow, user); },
                            [] { Globals::jobSystem.wakeExternalHelper(); });
-        Globals::rendererVK.initialize(window, EValidation::ENABLED, EVr::DISABLED);
+        Globals::rendererVK.initialize(window, EValidation::DISABLED, EVr::DISABLED); // DISABLED ENABLED
         Globals::ui.initialize();
     }
     Globals::world.initialize();
