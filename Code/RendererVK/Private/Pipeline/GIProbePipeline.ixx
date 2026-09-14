@@ -65,9 +65,10 @@ public:
         Buffer& rtMeshAlias;     // mesh idx -> RT mesh idx (LOD chains share one BLAS; packed into sbtOffset)
         Buffer& materialInfos;   // MATERIAL_FLAG_NO_RAYTRACING -> instance mask 0
         Buffer& nodePassMasks;   // nodes without PASS_GI|PASS_SHADOW -> instance mask 0
-        glm::vec3 viewPos;       // TLAS range bound center (the scene focus: Renderer::sceneFocusOrCamera)
-        uint32 numInstances;
+        Buffer& ubo;             // u_giTlasNumInstances (live count), u_giTrace1.w (range bound), u_sceneFocus (its center)
+        uint32 capacity;         // the instance buffer's slot count: the dispatch covers all of it (tail written inactive)
     };
+    // Cached (recorded once per invalidation): the live instance count and the range bound ride the UBO.
     void recordTlasInstances(CommandBuffer& commandBuffer, uint32 frameIdx, TlasInstanceParams& params);
 
     // Bakes this frame's sky into the sky map: layer 0 = skyRadiance (GI miss rays, the forward pass's
@@ -93,12 +94,15 @@ public:
         vk::AccelerationStructureKHR tlas;
         vk::ImageView shadowMapView;
         vk::Sampler shadowMapSampler;
-        uint32 frameIndex;       // free-running frame counter (RNG seed)
-        glm::vec3 prevViewPos;   // last frame's scene focus (previous clipmap window, drives probe freshness)
     };
+    // Cached (recorded once per invalidation): the frame index, the previous focus and the tweaks ride the
+    // UBO (u_frameIndex, u_giTrace0/1 - see getTraceParams0 / getTlasRange).
     void recordTrace(CommandBuffer& commandBuffer, uint32 frameIdx, TraceParams& params);
-    // Rewrites one slot of the trace set's texture array (binding 13) with a streamed texture's current view.
+    // Rewrites one slot of the trace set's texture array (binding 13) with a new or streamed texture's view.
     void updateTextureDescriptor(uint32 frameIdx, uint32 slotIdx, vk::ImageView view);
+    // u_giTrace0: x = rays per probe, y = temporal alpha, z = max ray distance, w = update interval (frames).
+    glm::vec4 getTraceParams0() const { return glm::vec4((float)oc::max(m_giRaysPerProbe, 1), m_giTemporalAlpha, m_giMaxRayDist, (float)oc::max(m_giUpdateInterval, 1)); }
+    float getTlasRange() const { return m_tlasRange; }
 
     // Debug visualization: instanced cubes at every clipmap probe, drawn into the main color pass.
     // initializeDebug must be called after the main render pass exists.
@@ -179,10 +183,11 @@ private:
     // one every frame. The texture list keeps its capacity across frames (clear + push_back).
     void buildUpdateScratch();
     bool m_updateScratchBuilt = false;
-    oc::array<DescriptorSetUpdateInfo, 8> m_tlasUpdates;   // bindings 0..7 of the TLAS-instance set
+    oc::array<DescriptorSetUpdateInfo, 9> m_tlasUpdates;   // bindings 0..7 of the TLAS-instance set + the UBO (8)
     oc::array<DescriptorSetUpdateInfo, 2> m_skyUpdates;    // the sky-map set: UBO + storage image
     oc::vector<DescriptorSetUpdateInfo> m_traceUpdates;    // the trace set's fixed bindings (see recordTrace for the index map)
-    DescriptorSetUpdateInfo m_traceTexUpdate;              // binding 13: the whole texture array (written separately; may be empty)
+    // Writes every live texture view into the trace sets' array (binding 13) - at (re)allocation only.
+    void fillTextureDescriptors();
 
     bool m_cleared = false;
     bool m_debugDepthReadOnly = true; // scene pass depth is read-only under depth-prepass reuse

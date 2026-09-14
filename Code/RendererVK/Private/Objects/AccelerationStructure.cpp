@@ -579,62 +579,72 @@ void AccelerationStructure::recordBuildSkinnedBlas(vk::CommandBuffer cmd, uint32
     }
 }
 
-bool AccelerationStructure::recordBuildTlas(vk::CommandBuffer cmd, uint32 frameIdx, Buffer& instanceBuffer, uint32 numInstances)
+namespace
 {
-    if (numInstances == 0)
-        return false;
-
-    vk::Device dev = Globals::device.getDevice();
-
-    vk::AccelerationStructureGeometryInstancesDataKHR inst{ .arrayOfPointers = vk::False };
-    inst.data.deviceAddress = instanceBuffer.getDeviceAddress();
-    vk::AccelerationStructureGeometryKHR geom{
-        .geometryType = vk::GeometryTypeKHR::eInstances,
-        .flags = vk::GeometryFlagBitsKHR::eOpaque,
-    };
-    geom.geometry.instances = inst;
-    vk::AccelerationStructureBuildGeometryInfoKHR buildInfo{
-        .type = vk::AccelerationStructureTypeKHR::eTopLevel,
-        .flags = vk::BuildAccelerationStructureFlagBitsKHR::ePreferFastTrace,
-        .mode = vk::BuildAccelerationStructureModeKHR::eBuild,
-        .geometryCount = 1,
-        .pGeometries = &geom,
-    };
-
-    // Grow (and recreate) the TLAS only when the instance count exceeds the current capacity; otherwise
-    // rebuild in place. Capacity is rounded up generously so this is rare. Returns true when the handle
-    // changed, so callers that bake it (e.g. the recorded-once AO pass) know to re-record.
-    const bool handleChanged = (!m_tlas[frameIdx] || numInstances > m_tlasCapacity[frameIdx]);
-    if (handleChanged)
+    // The TLAS build description shared by the size query and the build (instance geometry, fast-trace).
+    struct TlasBuildDesc
     {
-        const uint32 capacity = ((numInstances + 4095u) / 4096u) * 4096u;
-        vk::AccelerationStructureBuildSizesInfoKHR sizes = dev.getAccelerationStructureBuildSizesKHR(vk::AccelerationStructureBuildTypeKHR::eDevice, buildInfo, capacity);
-        if (m_tlas[frameIdx])
-            dev.destroyAccelerationStructureKHR(m_tlas[frameIdx]);
-        m_tlasBuffer[frameIdx].initialize(sizes.accelerationStructureSize,
-            vk::BufferUsageFlagBits2::eAccelerationStructureStorageKHR | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
-            vk::MemoryPropertyFlagBits::eDeviceLocal, false, "AS.tlas");
-        vk::AccelerationStructureCreateInfoKHR ci{
-            .buffer = m_tlasBuffer[frameIdx].getBuffer(),
-            .size = sizes.accelerationStructureSize,
-            .type = vk::AccelerationStructureTypeKHR::eTopLevel,
-        };
-        auto res = dev.createAccelerationStructureKHR(ci);
-        assert(res.result == vk::Result::eSuccess && "Failed to create TLAS");
-        m_tlas[frameIdx] = res.value;
-        ensureScratch(m_tlasScratch[frameIdx], m_tlasScratchAlignedAddr[frameIdx], sizes.buildScratchSize);
-        m_tlasCapacity[frameIdx] = capacity;
-    }
+        vk::AccelerationStructureGeometryKHR geom;
+        vk::AccelerationStructureBuildGeometryInfoKHR buildInfo;
+        explicit TlasBuildDesc(vk::DeviceAddress instanceAddr)
+        {
+            vk::AccelerationStructureGeometryInstancesDataKHR inst{ .arrayOfPointers = vk::False };
+            inst.data.deviceAddress = instanceAddr;
+            geom = vk::AccelerationStructureGeometryKHR{
+                .geometryType = vk::GeometryTypeKHR::eInstances,
+                .flags = vk::GeometryFlagBitsKHR::eOpaque,
+            };
+            geom.geometry.instances = inst;
+            buildInfo = vk::AccelerationStructureBuildGeometryInfoKHR{
+                .type = vk::AccelerationStructureTypeKHR::eTopLevel,
+                .flags = vk::BuildAccelerationStructureFlagBitsKHR::ePreferFastTrace,
+                .mode = vk::BuildAccelerationStructureModeKHR::eBuild,
+                .geometryCount = 1,
+                .pGeometries = &geom,
+            };
+        }
+    };
+}
 
-    buildInfo.dstAccelerationStructure = m_tlas[frameIdx];
-    buildInfo.scratchData.deviceAddress = m_tlasScratchAlignedAddr[frameIdx];
-    vk::AccelerationStructureBuildRangeInfoKHR range{
-        .primitiveCount = numInstances,
+bool AccelerationStructure::ensureTlasCapacity(uint32 frameIdx, uint32 capacity)
+{
+    // Recreated only when the capacity (the instance buffer's slot count) changes; the build then always
+    // covers the whole capacity, so the recorded build command stays valid until the next growth.
+    if (m_tlas[frameIdx] && capacity == m_tlasCapacity[frameIdx])
+        return false;
+    vk::Device dev = Globals::device.getDevice();
+    const TlasBuildDesc desc(0); // the size query ignores the instance address
+    vk::AccelerationStructureBuildSizesInfoKHR sizes = dev.getAccelerationStructureBuildSizesKHR(vk::AccelerationStructureBuildTypeKHR::eDevice, desc.buildInfo, capacity);
+    if (m_tlas[frameIdx])
+        dev.destroyAccelerationStructureKHR(m_tlas[frameIdx]);
+    m_tlasBuffer[frameIdx].initialize(sizes.accelerationStructureSize,
+        vk::BufferUsageFlagBits2::eAccelerationStructureStorageKHR | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
+        vk::MemoryPropertyFlagBits::eDeviceLocal, false, "AS.tlas");
+    vk::AccelerationStructureCreateInfoKHR ci{
+        .buffer = m_tlasBuffer[frameIdx].getBuffer(),
+        .size = sizes.accelerationStructureSize,
+        .type = vk::AccelerationStructureTypeKHR::eTopLevel,
+    };
+    auto res = dev.createAccelerationStructureKHR(ci);
+    assert(res.result == vk::Result::eSuccess && "Failed to create TLAS");
+    m_tlas[frameIdx] = res.value;
+    ensureScratch(m_tlasScratch[frameIdx], m_tlasScratchAlignedAddr[frameIdx], sizes.buildScratchSize);
+    m_tlasCapacity[frameIdx] = capacity;
+    return true;
+}
+
+void AccelerationStructure::recordBuildTlas(vk::CommandBuffer cmd, uint32 frameIdx, Buffer& instanceBuffer)
+{
+    assert(m_tlas[frameIdx] && "ensureTlasCapacity must precede recordBuildTlas");
+    TlasBuildDesc desc(instanceBuffer.getDeviceAddress());
+    desc.buildInfo.dstAccelerationStructure = m_tlas[frameIdx];
+    desc.buildInfo.scratchData.deviceAddress = m_tlasScratchAlignedAddr[frameIdx];
+    const vk::AccelerationStructureBuildRangeInfoKHR range{
+        .primitiveCount = m_tlasCapacity[frameIdx], // inactive tail records (reference 0) are skipped by the build
         .primitiveOffset = 0,
         .firstVertex = 0,
         .transformOffset = 0,
     };
     const vk::AccelerationStructureBuildRangeInfoKHR* pRange = &range;
-    cmd.buildAccelerationStructuresKHR(buildInfo, pRange);
-    return handleChanged;
+    cmd.buildAccelerationStructuresKHR(desc.buildInfo, pRange);
 }

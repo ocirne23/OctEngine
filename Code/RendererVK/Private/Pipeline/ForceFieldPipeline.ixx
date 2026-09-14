@@ -122,21 +122,30 @@ public:
         EDrawPart part = EDrawPart::Both);
 
     // The union march's INTERVAL pass: its own tiny render pass (RG16F, cleared to fp16-max,
-    // MIN-blended (tEntry, -tExit) per analytic proxy), recorded in the PRIMARY (re-recorded every
-    // frame) right before the scene stages; the target ends SHADER_READ_ONLY for the union FS.
-    // Cheap: rasterization only, no marching. Instance count rides the indirect buffer (0 when the
-    // union pass is off, so recording it unconditionally is a clear + no draws).
-    void recordIntervalPass(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo,
+    // MIN-blended (tEntry, -tExit) per analytic proxy) right before the scene stages; the target ends
+    // SHADER_READ_ONLY for the union FS. Cheap: rasterization only, no marching. Instance count rides
+    // the indirect buffer (0 when the union pass is off: a clear + no draws). A render pass can only
+    // begin in a PRIMARY, so beginIntervalPass opens it there (SECONDARY_COMMAND_BUFFERS contents; the
+    // caller ends it) and recordIntervalDraw records the draw into a CACHED render-pass-continue
+    // secondary inheriting getIntervalRenderPass / getIntervalFramebuffer.
+    void beginIntervalPass(vk::CommandBuffer primary);
+    void recordIntervalDraw(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo,
         const vk::Viewport& viewport, const vk::Rect2D& scissor);
+    vk::RenderPass getIntervalRenderPass() const { return m_intervalRenderPass; }
+    vk::Framebuffer getIntervalFramebuffer() const { return m_intervalFramebuffer; }
     // The union MARCH at HALF RESOLUTION: its own render pass (RGBA16F premultiplied, cleared to
-    // 0, ends SHADER_READ_ONLY), recorded in the PRIMARY right after the interval pass. Each
-    // covered pixel marches once at half res; the "Force union blend" scene stage (recordDraw
+    // 0, ends SHADER_READ_ONLY) right after the interval pass, split the same primary/secondary way.
+    // Each covered pixel marches once at half res; the "Force union blend" scene stage (recordDraw
     // UnionMarch) then upsamples depth-aware into scene color. The viewport/scissor are the HALF
     // ones (the caller halves the full-res viewport - same 0.5 factor the march FS's uv applies).
     // gbufferDepth is SHADER_READ_ONLY at this point in the frame (before the prepass-reuse barrier).
-    void recordUnionMarchPass(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo,
+    // Half-res mode only (no march target otherwise).
+    void beginUnionMarchPass(vk::CommandBuffer primary);
+    void recordUnionMarchDraw(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo,
         const vk::Viewport& viewport, const vk::Rect2D& scissor,
         vk::ImageView gbufferDepthView, vk::Sampler gbufferSampler);
+    vk::RenderPass getMarchRenderPass() const { return m_marchRenderPass; }
+    vk::Framebuffer getMarchFramebuffer() const { return m_marchFramebuffer; }
     // (Re)creates the interval + march targets at HALF the given (swapchain) extent - call at
     // init + on resize.
     void resizeIntervalTarget(uint32 width, uint32 height);

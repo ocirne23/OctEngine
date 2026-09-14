@@ -57,14 +57,14 @@ vec3 giLightIrradiance(LightInfo light, vec3 pos, vec3 N)
     if (NdotL <= 0.0)
         return vec3(0.0);
 
-    vec3 rad = light.color * giSquareFalloff(dist, abs(light.range));
+    float shape = 1.0; // spot cone / rect facing factor; the falloff is applied after the early-outs
     if (light.width < 0.0) // spot light: rotation = cone half-angle, |direction| = edge softness
     {
         float softness = length(light.direction);
         float cosAngle = dot(-L, light.direction / max(softness, 1e-4));
         float cosOuter = cos(light.rotation);
         float cosInner = mix(cosOuter, 1.0, softness);
-        rad *= smoothstep(cosOuter, cosInner, cosAngle);
+        shape = smoothstep(cosOuter, cosInner, cosAngle);
     }
     else if (light.width > 0.0 && light.range >= 0.0) // rect area light: one-sided, emits along its normal
     {
@@ -80,9 +80,9 @@ vec3 giLightIrradiance(LightInfo light, vec3 pos, vec3 N)
         float facing = dot(quadNormal, -L); // -L points from the light toward the surface
         if (facing <= 0.0)
             return vec3(0.0);
-        rad *= facing;
+        shape = facing;
     }
-    return rad * NdotL;
+    return light.color * (giSquareFalloff(dist, abs(light.range)) * shape * NdotL);
 }
 
 // Optional sun-shadow override: when >= 0, giGatherDirect uses this value instead of the cascade shadow

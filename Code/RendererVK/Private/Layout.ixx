@@ -508,6 +508,12 @@ export namespace RendererVKLayout
                                  // forward pass skips its AO upsample past it; 0 = no falloff),
                                  // w = unused (the light debug overlay is the LIGHT_GRID_DEBUG define)
         glm::vec4 giVisParams;   // x = Chebyshev variance floor (fraction of spacing), y = Chebyshev power, z = probe weight floor, w = mean scale (footprint widening)
+        // GI probe trace + TLAS-instance parameters (gi_probe_trace / gi_tlas_instances): in the UBO, not push
+        // constants, so the GI command buffer is recorded ONCE (tweaks and the per-frame values ride the UBO).
+        glm::vec4 giTrace0;      // x = rays per probe, y = temporal alpha, z = max ray distance (m), w = update interval (frames)
+        glm::vec4 giTrace1;      // xyz = LAST frame's scene focus (the previous clipmap window -> probe freshness), w = TLAS range (m)
+        uint32 giTlasNumInstances; // live mesh-instance count for the TLAS-instance writer; slots past it become inactive
+        float giPad0, giPad1, giPad2;
 
         // Ocean (FFT/Tessendorf water; OceanSimulationPipeline + ocean_*.cs.glsl / ocean.fs.glsl)
         glm::vec4 oceanParams0;    // xy = wind direction (unit), z = spectrum amplitude scale, w = choppiness lambda

@@ -509,6 +509,13 @@ private:
     CommandBuffer& getCurrentCommandBuffer() { return m_perFrameData[m_swapChain.getCurrentFrameIndex()].primaryCommandBuffer; }
 
     void recordCommandBuffers();
+    // recordCommandBuffers' parts (see the frame order in CONTEXT.md):
+    void recordSceneSecondaries(uint32 frameIdx);                          // every cached secondary (invalidation frames only)
+    void recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary); // skinning .. shadow draw (shared by both view modes)
+    void recordPrimaryVR(uint32 frameIdx, CommandBuffer& primary);          // GI + fog, then the per-eye chain inline, eye adaptation, the eye composites
+    void recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer primary);  // G-buffer, GI, RTAO, fog, force passes, the split scene forward, TAA, eye adaptation
+    // One GPU-profiler scope around one executeCommands.
+    void executeScoped(vk::CommandBuffer primary, const char* scope, vk::CommandBuffer secondary);
     // Rewrites swapped streamed-texture slots in this frame slot's bindless texture arrays (all
     // consuming pipelines). Called from recordCommandBuffers, where the slot's fence has been waited.
     void applyPendingTextureDescriptorWrites(uint32 frameIdx);
@@ -563,6 +570,7 @@ private:
     void recordForceFieldInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex,
         ForceFieldPipeline::EDrawPart part = ForceFieldPipeline::EDrawPart::Both);
     void recordForceCompute(uint32 frameIdx);
+    void recordForceMarch(uint32 frameIdx);
     void checkForceGridCapacity();
     void recordAO(uint32 frameIdx);
     void recordVolumetricFog(uint32 frameIdx);
@@ -577,7 +585,8 @@ private:
     void syncTextureDescriptorCapacity();
     void createEyeCompositeTargets();
     void destroyEyeCompositeTargets();
-    bool recordGlobalIllum(uint32 frameIdx); // returns true if the ray-tracing TLAS handle changed this frame
+    void recordGlobalIllumPrep(uint32 frameIdx); // per frame: one-shot BLAS builds, compaction, the skinned rebuild, the one-time clear
+    void recordGlobalIllum(uint32 frameIdx);     // cached: sky map, TLAS instances + build, probe trace
     void setHaveToRecordCommandBuffers();
     void recreateSwapchain();
     void createLightGridBuffers();
@@ -966,7 +975,8 @@ private:
         CommandBuffer imguiCommandBuffer;
         CommandBuffer shadowCullCommandBuffer;
         CommandBuffer shadowDrawCommandBuffer;
-        CommandBuffer globalIllumCommandBuffer;
+        CommandBuffer globalIllumCommandBuffer; // cached: sky map + TLAS instances/build + trace (recordGlobalIllum)
+        CommandBuffer giPrepCommandBuffer;      // per frame: BLAS builds / compaction / skinned rebuild (recordGlobalIllumPrep)
         CommandBuffer volumetricFogCommandBuffer;
         CommandBuffer fogApplyCommandBuffer;
         CommandBuffer giProbeDebugCommandBuffer;
@@ -976,6 +986,8 @@ private:
         CommandBuffer decalCommandBuffer;
         CommandBuffer forceFieldCommandBuffer;
         CommandBuffer forceUnionCommandBuffer; // the union-march fullscreen draw, its own scene stage for the GPU profiler
+        CommandBuffer forceIntervalCommandBuffer; // the union march's interval pass (own render pass, before the scene stages)
+        CommandBuffer forceMarchCommandBuffer;    // the half-res union march pass (own render pass; empty in full-res mode)
         CommandBuffer forceComputeCommandBuffer;
         CommandBuffer taaCommandBuffer;
         CommandBuffer eyeAdaptCommandBuffer;

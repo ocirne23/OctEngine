@@ -224,12 +224,18 @@ uint getOrInsertGrid(ivec3 gridPos, uint cellSize)
 // corners of a range box are ~48% of its volume, and every skipped cell is two atomics saved.
 void addLightToGrid(uint gridIdx, uint lightId, ivec3 minCell, ivec3 maxCell, vec3 sphereCenter, float sphereRadius)
 {
-	const vec3 gridMinW  = vec3(getGridMin(gridIdx) * GRID_SIZE);
 	const uint cellSize  = getCellSize(gridIdx);
 	const float cellSizeF = float(cellSize);
 	const uint numCells  = GRID_SIZE / cellSize;
 	const uint numCellsSq = numCells * numCells;
-	const float radiusSq = sphereRadius * sphereRadius;
+	// Only the sphere test reads these (three grid-header loads): skip them for the box-only callers.
+	vec3 gridMinW = vec3(0.0);
+	float radiusSq = 0.0;
+	if (sphereRadius > 0.0)
+	{
+		gridMinW = vec3(getGridMin(gridIdx) * GRID_SIZE);
+		radiusSq = sphereRadius * sphereRadius;
+	}
 	for (int x = minCell.x; x <= maxCell.x; ++x)
 	{
 		for (int y = minCell.y; y <= maxCell.y; ++y)

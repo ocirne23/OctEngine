@@ -13,20 +13,6 @@ import :Layout;
 
 namespace
 {
-    struct TlasInstancePC
-    {
-        glm::vec3 viewPos;
-        float maxRange; // instances whose origin is further out get TLAS mask 0
-        uint32 numInstances;
-    };
-    struct TracePC
-    {
-        uint32 frameIndex;
-        uint32 numRays;
-        float temporalAlpha;
-        float maxRayDist;
-        glm::vec3 prevViewPos; uint32 updateInterval;
-    };
     struct DebugPC
     {
         float  radius; // cube half-extent as a fraction of probe spacing
@@ -58,6 +44,7 @@ void GIProbePipeline::initialize(uint32 maxTlasInstances, uint32 maxTextures, ui
         m_skyMapSets[i].initialize(m_skyMapPipeline.getDescriptorSetLayout());
         m_traceSets[i].initialize(m_tracePipeline.getDescriptorSetLayout(), numTextureDescriptors);
     }
+    fillTextureDescriptors();
 
     Tweak::intVar("GI", "Rays Per Probe", &m_giRaysPerProbe, 1, 128);
     Tweak::intVar("GI", "Update interval (frames)", &m_giUpdateInterval, 1, 8);
@@ -102,6 +89,27 @@ void GIProbePipeline::resizeTextureDescriptors(uint32 numTextureDescriptors)
     // count; the layout and pipeline declare the fixed device-limit cap and stay untouched.
     for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
         m_traceSets[i].initialize(m_tracePipeline.getDescriptorSetLayout(), numTextureDescriptors);
+    fillTextureDescriptors(); // fresh sets: the pending-write path only carries slots swapped from now on
+}
+
+// Writes every live texture view into the trace sets' texture array (binding 13). Called when the sets are
+// (re)allocated; afterwards new uploads and streamed swaps arrive one slot at a time through
+// updateTextureDescriptor (the TextureStreamer's pending-write path), so the per-frame record writes none.
+void GIProbePipeline::fillTextureDescriptors()
+{
+    const uint32 numTextures = (uint32)Globals::textureManager.getNumTextures();
+    if (numTextures == 0)
+        return;
+    oc::vector<vk::DescriptorImageInfo> infos;
+    infos.reserve(numTextures);
+    for (uint16 texIdx = 0; texIdx < (uint16)numTextures; ++texIdx)
+        infos.push_back(vk::DescriptorImageInfo{ .sampler = m_textureSampler.getSampler(), .imageView = Globals::textureManager.getViewForDescriptor(texIdx), .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal });
+    for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
+    {
+        vk::WriteDescriptorSet write{ .dstSet = m_traceSets[i].getDescriptorSet(), .dstBinding = 13, .dstArrayElement = 0, .descriptorCount = numTextures,
+            .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = infos.data() };
+        Globals::device.getDevice().updateDescriptorSets(1, &write, 0, nullptr);
+    }
 }
 
 GIProbePipeline::~GIProbePipeline()
@@ -133,7 +141,9 @@ void GIProbePipeline::buildTlasInstanceLayout(ComputePipelineLayout& layout)
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
     for (uint32 b = 0; b <= 7; ++b)
         layout.descriptorSetLayoutBindings.push_back(storageBinding(b));
-    layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(TlasInstancePC) });
+    // The UBO (binding 8): the live instance count, the range bound and its center (u_sceneFocus) - no push
+    // constants, so the GI command buffer records once.
+    layout.descriptorSetLayoutBindings.push_back(vk::DescriptorSetLayoutBinding{ .binding = 8, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
 }
 
 void GIProbePipeline::buildSkyMapLayout(ComputePipelineLayout& layout)
@@ -267,13 +277,13 @@ void GIProbePipeline::buildTraceLayout(ComputePipelineLayout& layout, uint32 max
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 13, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = maxTextures, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // textures
     layout.descriptorBindingFlags.resize(b.size());
     layout.descriptorBindingFlags.back() = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount | vk::DescriptorBindingFlagBits::eUpdateAfterBind;
-    layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(TracePC) });
 }
 
 void GIProbePipeline::updateTextureDescriptor(uint32 frameIdx, uint32 slotIdx, vk::ImageView view)
 {
-    // Streamed texture slot rewrite. The trace set is refilled on every recordTrace anyway; this keeps the
-    // set valid even on frames where the GI record early-outs (stale views must never dangle).
+    // New-upload / streamed-swap slot rewrite: the ONLY per-slot path into the trace set's texture array
+    // after fillTextureDescriptors (the record never rewrites the array). UPDATE_AFTER_BIND, so the cached
+    // command buffer that binds the set needs no re-record.
     vk::DescriptorImageInfo imageInfo{ .sampler = m_textureSampler.getSampler(), .imageView = view, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal };
     vk::WriteDescriptorSet write{ .dstSet = m_traceSets[frameIdx].getDescriptorSet(), .dstBinding = 13, .dstArrayElement = slotIdx, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };
@@ -306,6 +316,7 @@ void GIProbePipeline::buildUpdateScratch()
     };
     for (uint32 b = 0; b < 8; ++b)
         m_tlasUpdates[b] = buf(b);
+    m_tlasUpdates[8] = buf(8, vk::DescriptorType::eUniformBuffer);
 
     m_traceUpdates.clear();
     m_traceUpdates.push_back(buf(0, vk::DescriptorType::eUniformBuffer)); // [0] UBO
@@ -321,14 +332,14 @@ void GIProbePipeline::buildUpdateScratch()
     m_skyUpdates[0] = buf(0, vk::DescriptorType::eUniformBuffer);
     m_skyUpdates[1] = DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageImage };
     m_skyUpdates[1].imageInfos.resize(1);
-
-    m_traceTexUpdate = DescriptorSetUpdateInfo{ .binding = 13, .type = vk::DescriptorType::eCombinedImageSampler };
     m_updateScratchBuilt = true;
 }
 
+// Recorded ONCE (cached secondary): the dispatch covers the instance buffer's whole capacity and the shader
+// reads the live count from the UBO, writing the tail inactive.
 void GIProbePipeline::recordTlasInstances(CommandBuffer& commandBuffer, uint32 frameIdx, TlasInstanceParams& params)
 {
-    if (params.numInstances == 0)
+    if (params.capacity == 0)
         return;
     if (!m_updateScratchBuilt)
         buildUpdateScratch();
@@ -345,13 +356,12 @@ void GIProbePipeline::recordTlasInstances(CommandBuffer& commandBuffer, uint32 f
     m_tlasUpdates[5].bufferInfos[0] = bufInfo(params.materialInfos);
     m_tlasUpdates[6].bufferInfos[0] = bufInfo(params.nodePassMasks);
     m_tlasUpdates[7].bufferInfos[0] = bufInfo(params.rtMeshAlias);
+    m_tlasUpdates[8].bufferInfos[0] = vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) };
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
     commandBuffer.cmdUpdateDescriptorSets(m_tlasInstancePipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, m_tlasUpdates);
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_tlasInstancePipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_tlasInstancePipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
-    TlasInstancePC pc{ .viewPos = params.viewPos, .maxRange = m_tlasRange, .numInstances = params.numInstances };
-    cmd.pushConstants(m_tlasInstancePipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
-    cmd.dispatch((params.numInstances + 63) / 64, 1, 1);
+    cmd.dispatch((params.capacity + 63) / 64, 1, 1);
 }
 
 void GIProbePipeline::recordTrace(CommandBuffer& commandBuffer, uint32 frameIdx, TraceParams& params)
@@ -378,15 +388,8 @@ void GIProbePipeline::recordTrace(CommandBuffer& commandBuffer, uint32 frameIdx,
 
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
     commandBuffer.cmdUpdateDescriptorSets(m_tracePipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, m_traceUpdates);
-
-    // The whole texture array, every frame (streamed slot changes ride the pending-write path too, but
-    // this keeps the set complete). Its list keeps its capacity across frames; skipped when empty (a
-    // zero-count write is invalid).
-    m_traceTexUpdate.imageInfos.clear();
-    for (uint16 texIdx = 0; texIdx < (uint16)Globals::textureManager.getNumTextures(); ++texIdx)
-        m_traceTexUpdate.imageInfos.push_back(vk::DescriptorImageInfo{ .sampler = m_textureSampler.getSampler(), .imageView = Globals::textureManager.getViewForDescriptor(texIdx), .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal });
-    if (!m_traceTexUpdate.imageInfos.empty())
-        commandBuffer.cmdUpdateDescriptorSets(m_tracePipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, oc::span<DescriptorSetUpdateInfo>(&m_traceTexUpdate, 1));
+    // The texture array (binding 13) is NOT rewritten here: filled at set allocation (fillTextureDescriptors)
+    // and kept current per slot by the TextureStreamer's pending-write path (updateTextureDescriptor).
 
     // The acceleration-structure descriptor (binding 4) needs a pNext'd write the buffer/image helper
     // does not support; write it directly.
@@ -397,18 +400,9 @@ void GIProbePipeline::recordTrace(CommandBuffer& commandBuffer, uint32 frameIdx,
     cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_tracePipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_tracePipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
 
-    // Trace tuning (passed via push constants, runtime-tweakable). Rays are amortized over frames via the
+    // Trace tuning + the per-frame values (frame index, previous focus) ride the UBO (u_giTrace0/1,
+    // u_frameIndex - see getTraceParams), so this record is cached. Rays are amortized over frames via the
     // temporal blend.
-    TracePC pc{
-        .frameIndex = params.frameIndex,
-        .numRays = (uint32)oc::max(m_giRaysPerProbe, 1),
-        .temporalAlpha = m_giTemporalAlpha,
-        .maxRayDist = m_giMaxRayDist,
-        .prevViewPos = params.prevViewPos,
-        .updateInterval = (uint32)oc::max(m_giUpdateInterval, 1),
-    };
-    cmd.pushConstants(m_tracePipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eCompute, 0, sizeof(pc), &pc);
-
     cmd.dispatch((RendererVKLayout::g_giGrid.traceThreads() + 63) / 64, 1, 1);
 }
 

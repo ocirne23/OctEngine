@@ -196,6 +196,8 @@ float sampleSunShadow(vec3 worldPos, vec3 N)
 	float normalScale = u_shadowParams.y * slope * distScale;
 
 	vec4 pa = projectCascade(worldPos, N, cascade, normalScale * cascadeTexelWorldSize(cascade), depthBias);
+	if (t <= 0.0 && pa.w < 0.5)
+		return 1.0; // outside the single cascade's coverage: skip the dither + sincos (pcssCascade would return 1 anyway)
 	float ditherBase = interleavedGradientNoise(gl_FragCoord.xy);
 
 	float texelUV = u_shadowParams.z; // 1 / resolution

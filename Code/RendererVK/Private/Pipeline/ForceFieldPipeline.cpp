@@ -423,7 +423,7 @@ void ForceFieldPipeline::buildComputeLayout(ComputePipelineLayout& layout, const
 }
 
 // The interval pass: the shell VS's proxy boxes with a rasterization-only FS MIN-blending each
-// box's ray interval into the RG16F target (see recordIntervalPass).
+// box's ray interval into the RG16F target (see beginIntervalPass / recordIntervalDraw).
 void ForceFieldPipeline::buildIntervalLayout(GraphicsPipelineLayout& layout)
 {
     layout.vertexShader.debugFilePath = "Shaders/force_shell.vs.glsl"; // the same proxy boxes
@@ -1012,13 +1012,9 @@ void ForceFieldPipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameId
 // The UNION MARCH at half res (analytic tier, one march per covered pixel), in its own render
 // pass: vertexCount is 0 whenever the pass is off (VR, tweak, density view), so recording it is
 // always safe - a clear + no draw. gbuffer depth is SHADER_READ_ONLY here (pre scene stages).
-void ForceFieldPipeline::recordUnionMarchPass(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo,
-    const vk::Viewport& viewport, const vk::Rect2D& scissor,
-    vk::ImageView gbufferDepthView, vk::Sampler gbufferSampler)
+void ForceFieldPipeline::beginUnionMarchPass(vk::CommandBuffer primary)
 {
-    if (!m_unionHalfRes)
-        return; // full-res mode: no march target - the scene stage draws the march directly
-    vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
+    assert(m_unionHalfRes && "no march target in full-res mode");
     const vk::ClearValue clear{ vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } } };
     const vk::RenderPassBeginInfo begin{
         .renderPass = m_marchRenderPass,
@@ -1027,7 +1023,16 @@ void ForceFieldPipeline::recordUnionMarchPass(CommandBuffer& commandBuffer, uint
         .clearValueCount = 1,
         .pClearValues = &clear,
     };
-    cmd.beginRenderPass(begin, vk::SubpassContents::eInline);
+    primary.beginRenderPass(begin, vk::SubpassContents::eSecondaryCommandBuffers);
+}
+
+void ForceFieldPipeline::recordUnionMarchDraw(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo,
+    const vk::Viewport& viewport, const vk::Rect2D& scissor,
+    vk::ImageView gbufferDepthView, vk::Sampler gbufferSampler)
+{
+    if (!m_unionHalfRes)
+        return; // full-res mode: no march target - the scene stage draws the march directly
+    vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
     cmd.setViewport(0, { viewport });
     cmd.setScissor(0, { scissor });
     DescriptorSet& unionSet = m_unionSets[frameIdx];
@@ -1048,7 +1053,6 @@ void ForceFieldPipeline::recordUnionMarchPass(CommandBuffer& commandBuffer, uint
     const uint32 viewIndex = 0; // desktop only (VR keeps per-proxy shells; its indirect is 0)
     cmd.pushConstants(m_unionPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eFragment, 0, sizeof(uint32), &viewIndex);
     cmd.drawIndirect(m_indirectBuffers[frameIdx].getBuffer(), UNION_DRAW_OFFSET * sizeof(uint32), 1, sizeof(vk::DrawIndirectCommand));
-    cmd.endRenderPass();
 }
 
 // The scene-color half of the union path (the "Force union blend" scene stage): half-res mode =
@@ -1096,10 +1100,8 @@ void ForceFieldPipeline::recordUnionDraw(CommandBuffer& commandBuffer, uint32 fr
 
 // The interval pass: see the header comment. Recorded in the PRIMARY right before the scene
 // stages; unconditional (clear + indirect draws that are 0 instances when the union pass is off).
-void ForceFieldPipeline::recordIntervalPass(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo,
-    const vk::Viewport& viewport, const vk::Rect2D& scissor)
+void ForceFieldPipeline::beginIntervalPass(vk::CommandBuffer primary)
 {
-    vk::CommandBuffer vkCb = commandBuffer.getCommandBuffer();
     const vk::ClearValue clear{ vk::ClearColorValue{ std::array<float, 4>{ 65504.0f, 65504.0f, 0.0f, 0.0f } } };
     const vk::RenderPassBeginInfo begin{
         .renderPass = m_intervalRenderPass,
@@ -1108,7 +1110,13 @@ void ForceFieldPipeline::recordIntervalPass(CommandBuffer& commandBuffer, uint32
         .clearValueCount = 1,
         .pClearValues = &clear,
     };
-    vkCb.beginRenderPass(begin, vk::SubpassContents::eInline);
+    primary.beginRenderPass(begin, vk::SubpassContents::eSecondaryCommandBuffers);
+}
+
+void ForceFieldPipeline::recordIntervalDraw(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo,
+    const vk::Viewport& viewport, const vk::Rect2D& scissor)
+{
+    vk::CommandBuffer vkCb = commandBuffer.getCommandBuffer();
     vkCb.setViewport(0, { viewport });
     vkCb.setScissor(0, { scissor });
     vk::DescriptorSet set = m_intervalSets[frameIdx].getDescriptorSet();
@@ -1122,5 +1130,4 @@ void ForceFieldPipeline::recordIntervalPass(CommandBuffer& commandBuffer, uint32
     const uint32 viewIndex = 0; // desktop only (VR keeps per-proxy shells)
     vkCb.pushConstants(m_intervalPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, sizeof(uint32), &viewIndex);
     vkCb.drawIndirect(m_indirectBuffers[frameIdx].getBuffer(), INTERVAL_DRAW_OFFSET * sizeof(uint32), 1, sizeof(vk::DrawIndirectCommand));
-    vkCb.endRenderPass();
 }

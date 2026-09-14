@@ -159,14 +159,14 @@ vec3 volLightScatter(LightInfo light, vec3 pos, vec3 viewDir, float g, bool shad
     const float dist = length(toLight);
     const vec3 L = toLight / max(dist, 1e-4);
 
-    vec3 rad = light.color * giSquareFalloff(dist, abs(light.range));
+    float shape = 1.0; // spot cone / rect facing factor; the falloff is applied after the early-out
     if (light.width < 0.0) // spot: rotation = cone half-angle, |direction| = edge softness
     {
         const float softness = length(light.direction);
         const float cosAngle = dot(-L, light.direction / max(softness, 1e-4));
         const float cosOuter = cos(light.rotation);
         const float cosInner = mix(cosOuter, 1.0, softness);
-        rad *= smoothstep(cosOuter, cosInner, cosAngle);
+        shape = smoothstep(cosOuter, cosInner, cosAngle);
     }
     else if (light.width > 0.0 && light.range >= 0.0) // rect area: one-sided along its facing normal
     {
@@ -178,8 +178,9 @@ vec3 volLightScatter(LightInfo light, vec3 pos, vec3 viewDir, float g, bool shad
         const float facing = dot(cross(up, right), -L);
         if (facing <= 0.0)
             return vec3(0.0);
-        rad *= facing;
+        shape = facing;
     }
+    vec3 rad = light.color * (giSquareFalloff(dist, abs(light.range)) * shape);
     if (dot(rad, rad) < 1e-10)
         return vec3(0.0);
     if (shadowRays)

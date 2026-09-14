@@ -225,7 +225,8 @@ export struct RTParams
                                 // chain; rays don't need per-level fidelity). Applied when containers load.
     bool blasCompaction = true; // copy-compact static BLASes after build (~30-50% of their memory back);
                                 // applies to BLASes built after a change
-    void registerTweaks();
+    // onReRecord: the master + GI toggles are baked into the cached GI command buffer.
+    void registerTweaks(const oc::function<void()>& onReRecord);
 };
 
 // The clustered light grid's distance LOD (light_grid.cs.glsl): each occupied GRID_SIZE^3 grid is

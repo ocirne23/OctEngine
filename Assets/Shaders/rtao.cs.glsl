@@ -100,7 +100,6 @@ void main()
     // The depth image is jittered (exact depth-prepass reuse); reconstruct at the surface's true
     // unjittered position so ray origins don't wobble sub-pixel with the jitter - see taaJitterUv.
     const vec3 worldPos = worldPosFromDepth(uv - taaJitterUv(u_taaJitter.xy), depth);
-    const float viewDist = length(u_viewPos - worldPos);          // geometric: the ray-origin bias below
     const float focusDist = length(u_sceneFocus.xyz - worldPos);  // quality falloff: from the scene focus (the game's player)
 
     // Past the AO max distance the result is always "no occlusion", so skip the ray loop entirely.
@@ -119,6 +118,7 @@ void main()
     // cancels the depth error 1:1 and lifts off the surface plane by only offset*NoV, so grazing walls
     // are NOT pushed away from their own contact detail (a 1/NoV-scaled NORMAL offset did exactly that
     // and artifacted flat walls). The small constant normal offset handles triangle self-intersection.
+    const float viewDist = length(u_viewPos - worldPos);
     const vec3 V = (u_viewPos - worldPos) / max(viewDist, 1e-4);
     const vec3 rayOrigin = worldPos + N * pc.normalBias + V * min(viewDist * pc.distanceBias, pc.radius * 0.5);
 

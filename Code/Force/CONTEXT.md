@@ -270,8 +270,11 @@ density debug view forces it off.
 
 **The ANALYTIC tier becomes ONE march per pixel:**
 
-1. The analytic proxies draw ONLY into an interval pass — its own RG16F render pass in the primary
-   before the scene stages ("Force intervals"): shell VS + `force_interval.fs` **MIN-blend**
+1. The analytic proxies draw ONLY into an interval pass — its own RG16F render pass, begun/ended in
+   the primary before the scene stages ("Force intervals"; a secondary cannot begin a render pass)
+   around a CACHED render-pass-continue secondary holding the draw (`Renderer::recordForceMarch`,
+   re-recorded only on invalidation), gated on the force enable like the compute and the two scene
+   stages: shell VS + `force_interval.fs` **MIN-blend**
    `(tEntry, −tExit)` per box (`blendOp eMin` is a `GraphicsPipelineLayout` field), cleared to
    fp16-max, ending SHADER_READ_ONLY.
 2. A fullscreen triangle (`composite.vs` + `force_union.fs`, indirect vertexCount 3 or 0) marches
@@ -290,10 +293,11 @@ it idles the device, re-sizes / creates or destroys the targets, and re-injects
 `FORCE_UNION_UV_SCALE`.
 
 * Interval and march targets are swapchain/2; both FS map `gl_FragCoord` back to full uv with the
-  injected scale, and the primary passes halved viewport and scissor.
+  injected scale, and the cached secondaries carry halved viewport and scissor.
 * The march renders into its own RGBA16F pass ("Force union march", cleared 0, no blend, ending
-  SHADER_READ_ONLY), recorded right after the interval pass where gbuffer depth is still
-  SHADER_READ_ONLY.
+  SHADER_READ_ONLY), split the same way (pass in the primary, draw in its own cached secondary),
+  right after the interval pass where gbuffer depth is still SHADER_READ_ONLY (not recorded or
+  executed in full-res mode).
 * The `"Force union blend"` scene stage (`force_union_upsample.fs`) composites it **depth-aware**:
   2×2 bilinear weights × relative depth similarity, where each half texel's representative depth is
   the full-res depth at its own march uv — the exact value it clamped against — with a nearest-depth

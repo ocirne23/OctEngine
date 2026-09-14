@@ -50,7 +50,6 @@ void main()
     const vec2 uv = (vec2(px) + 0.5) * texel;
 
     const vec3 current = texture(u_currentColor, uv).rgb;
-    const float depth = texture(u_gbufferDepth, uv).r;
 
     // Pixels outside the editor viewport panel carry no reliable motion; pass straight through.
     if (!insideViewport(uv) || pc.feedback <= 0.0)
@@ -58,6 +57,7 @@ void main()
         imageStore(u_resolveOut, px, vec4(current, 1.0));
         return;
     }
+    const float depth = texture(u_gbufferDepth, uv).r;
 
     // Sky pixels (the sky sphere is excluded from the G-buffer, so its depth stays at the cleared far
     // plane - 0.0 under reversed-Z) reproject AT the far plane: the reprojection is then purely rotational
@@ -68,7 +68,6 @@ void main()
     // GEOMETRIC use of the sampled depth - reconstruction and reprojection - with the known jitter;
     // this is exact, and what keeps reprojection wobble-free with a jittered reference.
     const vec2 uvUnjit = uv - taaJitterUv(u_taaJitter.xy);
-    const vec3 worldPos = worldPosFromDepth(uvUnjit, depth); // disocclusion test only
     float clipW;
     // Clip-space reprojection (u_reprojClip): the world-space round trip drifts pixel-scale away from
     // the world origin, which made TAA fetch history off-target and turned every stochastic input
@@ -127,6 +126,7 @@ void main()
     }
     else if (!sky)
     {
+        const vec3 worldPos = worldPosFromDepth(uvUnjit, depth); // disocclusion test only
         const vec3 prevWorld = worldPosFromDepthMat(prevUv, prevDepth, u_prevInvMvp);
         const float thresh = 0.05 * (1.0 + distance(u_viewPos, worldPos));
         if (distance(prevWorld, worldPos) > thresh)

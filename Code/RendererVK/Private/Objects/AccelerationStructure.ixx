@@ -95,8 +95,13 @@ public:
     // records in instanceBuffer. The TLAS is double-buffered (one per frame-in-flight): it is rebuilt
     // every frame and ray-queried in the same frame, so a single shared TLAS would be write-after-read
     // raced by the next frame's rebuild (pipelined across submits on one queue) -> device lost.
-    // Returns true when the TLAS handle changed (first build / capacity growth).
-    bool recordBuildTlas(vk::CommandBuffer cmd, uint32 frameIdx, Buffer& instanceBuffer, uint32 numInstances);
+    // CPU-side, before recording: (re)creates this slot's TLAS for exactly `capacity` instances (the instance
+    // buffer's slot count). Returns true when the handle changed (first build / capacity growth) - every
+    // command buffer that bakes the handle (GI, RTAO, fog, the forward set's descriptor) must then re-record.
+    bool ensureTlasCapacity(uint32 frameIdx, uint32 capacity);
+    // Cached (recorded once per invalidation): builds over the slot's whole capacity; the instance writer
+    // marks the slots past the live count INACTIVE, which the build skips.
+    void recordBuildTlas(vk::CommandBuffer cmd, uint32 frameIdx, Buffer& instanceBuffer);
 
     // mesh idx -> BLAS device address (uint64), consumed by the TLAS-instance compute shader. Per frame
     // in flight: skinned meshes have a different BLAS per slot, so the address differs between frames.

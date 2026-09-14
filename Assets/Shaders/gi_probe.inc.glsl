@@ -192,14 +192,17 @@ vec3 giSampleCascade(int c, int s, ivec3 base, vec3 frac, vec3 samplePos, vec3 n
         ivec3 lc = base + off;
         uint cellBase = giProbeBase(c, lc);
 
+        // The misc vec4 (x = backface fraction, yzw = relocation offset) is loaded ONCE: the buffer is
+        // not readonly under GI_PROBE_WRITE, so the compiler cannot merge the two accessor loads itself.
+        const vec4 misc = GI_GRID_DATA_NAME[cellBase + GI_MISC_V4];
         // Reject probes embedded in geometry (mostly-backface gather) - their near-black SH is not signal.
-        w *= 1.0 - smoothstep(GI_BACKFACE_DEAD_MIN, GI_BACKFACE_DEAD_MAX, giProbeBackfaceFrac(cellBase));
+        w *= 1.0 - smoothstep(GI_BACKFACE_DEAD_MIN, GI_BACKFACE_DEAD_MAX, misc.x);
         if (w <= 0.0)
             continue;
 
         // Directional terms use the probe's relocated position (where it actually traced from); the
         // trilinear weights above stay on the unmoved lattice.
-        vec3 probeWorld = vec3(lc) * float(s) + giProbeOffset(cellBase);
+        vec3 probeWorld = vec3(lc) * float(s) + misc.yzw;
 
         vec3 toProbe = probeWorld - samplePos;
         float len = length(toProbe);

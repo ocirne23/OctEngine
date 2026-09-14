@@ -246,10 +246,10 @@ vec3 computeLitColor(vec3 worldPos, vec3 V, vec3 N, vec3 materialColor, float ro
 	// world-pos reconstructions) would only re-fetch those constants. Skip it and use them directly;
 	// z = 0 (falloff disabled) keeps the upsample everywhere. The gate measures from the SCENE FOCUS, the
 	// same origin as rtao.cs.glsl's early-out; the camera distance still drives the upsample's depth weights.
-	const float aoViewDist = length(worldPos - u_viewPos);
 	const float aoFocusDist = length(worldPos - u_sceneFocus.xyz);
 	if (u_aoParams.x > 0.5 && (u_aoParams.z <= 0.0 || aoFocusDist < u_aoParams.z))
 	{
+		const float aoViewDist = length(worldPos - u_viewPos);
 		const vec4 aoSample = sampleAOBilateral(gl_FragCoord.xy * u_screenSize.zw, worldPos, aoViewDist);
 		ao = aoSample.w;
 		// Evaluate the indirect irradiance along the bent normal rather than the surface normal: in concave

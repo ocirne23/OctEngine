@@ -85,6 +85,13 @@ void main()
     const InMeshInstance instance = in_instances[instanceIdx];
     if ((in_nodePassMasks[instance.renderNodeIdx] & PASS_SHADOW) == 0u)
         return; // not shadow-relevant this frame
+    // Resolve the alpha-mask texture once here (0xFFFF = opaque) so the depth pass can discard cutout
+    // fragments without touching the material buffer. Tested first: it needs only the instance word,
+    // and a gizmo instance then skips the transform + cascade test below.
+    const uint materialIdx = (instance.meshIdxMaterialIdx & 0xFFFF0000u) >> 16;
+    const MaterialInfo material = in_materialInfos[materialIdx];
+    if ((material.flags & MATERIAL_FLAG_NO_RAYTRACING) != 0u)
+        return; // gizmo geometry: never casts shadows (matches its TLAS mask-0 exclusion)
     uint meshIdx                  = instance.meshIdxMaterialIdx & 0x0000FFFF;
     const InMeshInfo meshInfo     = in_meshInfos[meshIdx];
 
@@ -101,12 +108,6 @@ void main()
     if (cascadeMask == 0u)
         return; // casts no shadow in any cascade
 
-    // Resolve the alpha-mask texture once here (0xFFFF = opaque) so the depth pass can discard cutout
-    // fragments without touching the material buffer.
-    const uint materialIdx = (instance.meshIdxMaterialIdx & 0xFFFF0000u) >> 16;
-    const MaterialInfo material = in_materialInfos[materialIdx];
-    if ((material.flags & MATERIAL_FLAG_NO_RAYTRACING) != 0u)
-        return; // gizmo geometry: never casts shadows (matches its TLAS mask-0 exclusion)
     const uint alphaMode = (material.metalRoughnessTexIdxAlphaMode & 0xFFFF0000u) >> 16;
     const uint alphaTexIdx = (alphaMode == ALPHA_MODE_MASK) ? (material.diffuseNormalTexIdx & 0x0000FFFFu) : 0xFFFFu;
     const uint packed = (alphaTexIdx << 16) | (cascadeMask & 0x0000FFFFu);

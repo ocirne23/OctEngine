@@ -48,12 +48,14 @@ void main()
             sum  += texture(u_accumAO, nuv) * ws;
             wsum += ws;
         }
-        vec4 bg = texture(u_accumAO, uv); // no geometry nearby: keep the background value
+        vec4 bg;
         if (wsum > 1e-4)
         {
             bg = sum / wsum;
             bg.xyz = (dot(bg.xyz, bg.xyz) > 1e-8) ? normalize(bg.xyz) : vec3(0.0, 0.0, 1.0);
         }
+        else
+            bg = texture(u_accumAO, uv); // no geometry nearby: keep the background value
         imageStore(u_aoOut, px, bg);
         return;
     }

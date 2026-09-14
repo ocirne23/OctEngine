@@ -268,14 +268,36 @@ TerrainSample terrainSplat(vec3 worldPos, vec3 geoN, TerrainFields f)
 	if (baseMat < 0 || numGround <= 0)
 		return TerrainSample(vec3(0.5), geoN, 0.92, 0.0, 1.0);
 
+	const float slope = 1.0 - clamp(geoN.y, 0.0, 1.0);
+
+	// --- Coverages ---
+	// Snow over everything, but it slides off steep faces (the mountain's rock shows through)
+	// and needs humidity to fall at all (no white polar deserts). Evaluated first: full snow cover
+	// returns before the beach / rock coverages (the rock fBm in particular) are computed.
+	float snowW = 0.0;
+	if (u_terrainTexParams3.y > 0.5)
+	{
+		const float cold  = 1.0 - smoothstep(u_terrainTexParams3.z, u_terrainTexParams3.w, f.temperature);
+		const float holds = 1.0 - smoothstep(u_terrainTexParams4.x, u_terrainTexParams4.y, slope);
+		const float wet = smoothstep(0.0, max(u_terrainTexParams4.z, 1e-3), f.humidity);
+		snowW = cold * holds * wet;
+	}
+	const uint snowMatIdx = uint(baseMat + numGround + numRock) + (u_terrainTexParams3.x > 0.5 ? 1u : 0u);
+
+	// Full snow cover: everything beneath is hidden - the whole splat is the snow sample alone.
+	if (snowW >= TERRAIN_LAYER_OPAQUE)
+	{
+		TerrainSample surf = sampleTerrainXZ(snowMatIdx, worldPos.xz * u_terrainTexParams2.w, geoN);
+		surf.normal = normalize(surf.normal);
+		return surf;
+	}
+
 	// The baked temperature already carries the altitude lapse, so elevation enters the selection as
 	// the cold it causes - snow line and vegetation cannot disagree.
 	const vec2 climate = vec2(clamp((f.temperature + 25.0) / 75.0, 0.0, 1.0), f.humidity);
 	const float invS2 = 1.0 / (2.0 * u_terrainTexParams0.w * u_terrainTexParams0.w);
-	const float slope = 1.0 - clamp(geoN.y, 0.0, 1.0);
 	const vec2 uvGround = worldPos.xz * u_terrainTexParams1.x;
 
-	// --- Coverages ---
 	// Beach: the band just above the local waterline.
 	float beachW = 0.0;
 	if (u_terrainTexParams3.x > 0.5)
@@ -301,27 +323,7 @@ TerrainSample terrainSplat(vec3 worldPos, vec3 geoN, TerrainFields f)
 		rockW = max(smoothstep(u_terrainTexParams1.z, u_terrainTexParams1.w, slope), crag * 0.85);
 	}
 
-	// Snow over everything, but it slides off steep faces (the mountain's rock shows through)
-	// and needs humidity to fall at all (no white polar deserts).
-	float snowW = 0.0;
-	if (u_terrainTexParams3.y > 0.5)
-	{
-		const float cold  = 1.0 - smoothstep(u_terrainTexParams3.z, u_terrainTexParams3.w, f.temperature);
-		const float holds = 1.0 - smoothstep(u_terrainTexParams4.x, u_terrainTexParams4.y, slope);
-		const float wet = smoothstep(0.0, max(u_terrainTexParams4.z, 1e-3), f.humidity);
-		snowW = cold * holds * wet;
-	}
-	const uint snowMatIdx = uint(baseMat + numGround + numRock) + (u_terrainTexParams3.x > 0.5 ? 1u : 0u);
-
 	// --- Composite bottom-up, sampling only what shows ---
-	// Full snow cover: everything beneath is hidden - the whole splat is the snow sample alone.
-	if (snowW >= TERRAIN_LAYER_OPAQUE)
-	{
-		TerrainSample surf = sampleTerrainXZ(snowMatIdx, worldPos.xz * u_terrainTexParams2.w, geoN);
-		surf.normal = normalize(surf.normal);
-		return surf;
-	}
-
 	// 1. Ground - buried under a full beach band or a full-coverage cliff face: placeholder, mixed away.
 	TerrainSample surf;
 	if (beachW < TERRAIN_LAYER_OPAQUE && rockW < TERRAIN_LAYER_OPAQUE)

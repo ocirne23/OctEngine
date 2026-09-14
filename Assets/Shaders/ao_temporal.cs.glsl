@@ -34,7 +34,6 @@ void main()
 
     // The depth image is jittered (exact depth-prepass reuse); compensate geometric uses - see taaJitterUv.
     const vec2 uvUnjit = uv - taaJitterUv(u_taaJitter.xy);
-    const vec3 worldPos = worldPosFromDepth(uvUnjit, depth); // disocclusion test only
 
     float clipW;
     // Clip-space reprojection: precision independent of the camera's world position (see shared.inc.glsl).
@@ -49,6 +48,7 @@ void main()
     if (clipW > 0.0 && all(greaterThanEqual(prevUv, vec2(0.0))) && all(lessThanEqual(prevUv, vec2(1.0))))
     {
         // Distance-scaled disocclusion threshold: tolerate more at range (depth precision falls off).
+        const vec3 worldPos = worldPosFromDepth(uvUnjit, depth); // disocclusion test only
         const float viewDist = length(worldPos - u_viewPos);
         const float thresh = 0.02 + 0.01 * viewDist;
 

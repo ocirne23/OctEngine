@@ -67,15 +67,11 @@ layout (binding = 11) uniform sampler2DArrayShadow u_shadowMap;
 // per gather hit that the multi-bounce lookup makes.
 layout (binding = 12, std430) buffer GiGridData { vec4 gi_gridData[]; };
 
-layout (push_constant) uniform PushConstants
-{
-    uint  frameIndex;
-    uint  numRays;
-    float temporalAlpha;
-    float maxRayDist;
-    vec3  prevViewPos;    // last frame's scene focus (drives the previous clipmap window for freshness)
-    uint  updateInterval; // a probe (workgroup) traces every N frames; fresh probes always trace
-} pc;
+// Trace parameters come from the UBO (u_giTrace0 / u_giTrace1 / u_frameIndex), not push constants, so the
+// GI command buffer records once: numRays, temporalAlpha, maxRayDist, updateInterval (a probe workgroup
+// traces every N frames; fresh probes always trace) and prevViewPos (last frame's scene focus, the
+// previous clipmap window for freshness).
+#define GI_MAX_RAY_DIST (u_giTrace0.z)
 
 // Light grid (read) + shared diffuse lighting.
 #define GRID_DATA_NAME  in_gridData
@@ -127,7 +123,7 @@ float sunVisibility(vec3 origin)
 
 vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out float backface)
 {
-    const float rayMax = pc.maxRayDist * (cascade + 1);
+    const float rayMax = GI_MAX_RAY_DIST * (cascade + 1);
     hitDist = rayMax; // misses (and out-of-bounds hits) count as open space at the gather range
     backface = 0.0;   // 1 when the committed hit faces away (ray started inside/behind the geometry)
     rayQueryEXT rq;
@@ -137,14 +133,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out fl
     if (rayQueryGetIntersectionTypeEXT(rq, true) != gl_RayQueryCommittedIntersectionTriangleEXT)
         return skyMiss(dir);
 
-    const int instanceIdx = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
-    const int prim        = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
-    const vec2 bc         = rayQueryGetIntersectionBarycentricsEXT(rq, true);
-    const float t         = rayQueryGetIntersectionTEXT(rq, true);
-    const mat4x3 o2w      = rayQueryGetIntersectionObjectToWorldEXT(rq, true);
-
     // Bound every post-hit buffer access. A bad meshIdx/triBase/vertex index would otherwise read wildly
     // out of bounds and MMU-fault; treat any out-of-range hit as a miss.
+    const int instanceIdx = rayQueryGetIntersectionInstanceCustomIndexEXT(rq, true);
     if (uint(instanceIdx) >= in_instances.length())
         return skyMiss(dir);
     // Geometry comes from the RT meshIdx the TLAS writer packed into the instance's sbtOffset (a LOD
@@ -156,6 +147,7 @@ vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out fl
         return skyMiss(dir);
     const InMeshInfo mi    = in_meshInfos[meshIdx];
 
+    const int  prim    = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
     const uint triBase = mi.firstIndex + uint(prim) * 3u;
     if (triBase + 2u >= in_indices.length())
         return skyMiss(dir);
@@ -165,6 +157,9 @@ vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out fl
     if ((max(max(v0, v1), v2) * 12u + 11u) >= in_vertices.length())
         return skyMiss(dir);
 
+    const vec2 bc    = rayQueryGetIntersectionBarycentricsEXT(rq, true);
+    const float t    = rayQueryGetIntersectionTEXT(rq, true);
+    const mat4x3 o2w = rayQueryGetIntersectionObjectToWorldEXT(rq, true);
     const vec3 b = vec3(1.0 - bc.x - bc.y, bc.x, bc.y);
     const vec3 objN = normalize(b.x * vNormal(v0) + b.y * vNormal(v1) + b.z * vNormal(v2));
     vec3 worldN = normalize(mat3(o2w) * objN);
@@ -264,34 +259,34 @@ void main()
     const uint DX      = uint(GI_PROBE_DIM_X), DY = uint(GI_PROBE_DIM_Y);
     const ivec3 oc     = ivec3(int(local % DX), int((local / DX) % DY), int(local / (DX * DY)));
 
-    const int   spacing    = giCascadeSpacing(cascade);
-    const ivec3 lc         = giCascadeOrigin(cascade, u_sceneFocus.xyz) + oc;
-    const vec3  probeCenter = vec3(lc) * float(spacing);
+    const ivec3 lc = giCascadeOrigin(cascade, u_sceneFocus.xyz) + oc;
 
     // A probe is "fresh" when its lattice coord was outside the previous frame's clipmap window for this
     // cascade (it just scrolled in), so we replace rather than blend to converge immediately.
-    const ivec3 prevOrigin = giCascadeOrigin(cascade, pc.prevViewPos);
+    const ivec3 prevOrigin = giCascadeOrigin(cascade, u_giTrace1.xyz);
     const bool  fresh = any(lessThan(lc, prevOrigin)) || any(greaterThanEqual(lc, prevOrigin + GI_PROBE_DIMS));
 
     // Update interval ("GI/Update interval"): a probe traces every updateInterval frames, with the blend
     // alpha scaled to match, so convergence in WALL time is unchanged while the ray count divides by the
     // interval. Interleaved per WORKGROUP (whole waves exit, no half-empty waves); fresh probes always
     // trace - a skipped fresh slot would show the scrolled-out probe's data for a frame.
-    if (!fresh && ((gl_WorkGroupID.x + pc.frameIndex) % pc.updateInterval) != 0u)
+    const uint updateInterval = max(uint(u_giTrace0.w), 1u);
+    if (!fresh && ((gl_WorkGroupID.x + u_frameIndex) % updateInterval) != 0u)
         return;
 
     // Relocation: trace from the offset position steered in previous frames (fresh slots hold a scrolled-out
     // probe's offset -> start back on the lattice).
     // The misc vec4 (x = stored backface fraction, yzw = offset) is read ONCE here and rewritten once at
     // the end (giBlendProbeStats); a fresh slot's contents belong to a scrolled-out probe -> zeros.
-    const uint cellBase = giProbeBase(cascade, lc);
+    const int  spacing     = giCascadeSpacing(cascade);
+    const uint cellBase    = giProbeBase(cascade, lc);
     const vec4 prevMisc    = fresh ? vec4(0.0) : gi_gridData[cellBase + GI_MISC_V4];
     const vec3 probeOffset = prevMisc.yzw;
-    const vec3 probePos    = probeCenter + probeOffset;
+    const vec3 probePos    = vec3(lc) * float(spacing) + probeOffset;
 
-    const uint N = max(pc.numRays, 1u);
+    const uint N = max(uint(u_giTrace0.x), 1u);
     const float wsh = 4.0 * PI / float(N);
-    const uint seed = hashU(id ^ (pc.frameIndex * 0x9e3779b9u));
+    const uint seed = hashU(id ^ (u_frameIndex * 0x9e3779b9u));
     const vec2 jitter = vec2(hashToFloat(seed), hashToFloat(seed ^ 0x9e3779b9u));
 
     vec3 c0 = vec3(0.0), c1 = vec3(0.0), c2 = vec3(0.0), c3 = vec3(0.0);
@@ -360,7 +355,7 @@ void main()
     if (offLen > maxLen)
         newOffset *= maxLen / offLen;
 
-    float alpha = fresh ? 1.0 : min(pc.temporalAlpha * float(pc.updateInterval), 1.0);
+    float alpha = fresh ? 1.0 : min(u_giTrace0.y * float(updateInterval), 1.0);
     if (!fresh)
     {
         // The stored moments were traced from the old position: after a relocation step, blend faster in

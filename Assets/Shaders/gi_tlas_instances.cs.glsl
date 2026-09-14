@@ -3,12 +3,16 @@
 #extension GL_EXT_shader_explicit_arithmetic_types : enable
 #extension GL_EXT_shader_16bit_storage : enable
 
+#define UBO_BINDING 8 // bindings 0..7 are the storage buffers below
 #include "shared.inc.glsl"
 
 // Builds the TLAS instance array on the GPU, one VkAccelerationStructureInstanceKHR per mesh instance.
 // Reuses the exact world-transform composition (renderNode * instanceOffset) from instanced_indirect.cs,
 // so ray-traced geometry matches what the raster path draws. No frustum culling: GI needs off-screen
 // geometry too.
+// Dispatched over the instance buffer's whole CAPACITY (the TLAS is built over the same count, so the
+// GI command buffer records once): the live count u_giTlasNumInstances comes from the UBO and every
+// slot past it is written INACTIVE (reference 0), which the TLAS build skips.
 
 struct RenderNodeTransform { vec4 posScale; vec4 quat; };
 struct InMeshInstance      { uint renderNodeIdx; uint instanceOffsetIdx; uint meshIdxMaterialIdx; uint pipelineIdxAlphaMode; };
@@ -46,13 +50,6 @@ layout (binding = 6, std430) readonly buffer InNodePassMasksBuffer        { uint
 // (packed into sbtOffset below) for the hit shaders' attribute fetches.
 layout (binding = 7, std430) readonly buffer InRtMeshAliasBuffer          { uint in_rtMeshAlias[]; };
 
-layout (push_constant) uniform PushConstants
-{
-    vec3 viewPos;
-    float maxRange; // instances whose origin is further out get mask 0 (bounds the TLAS build)
-    uint numInstances;
-} pc;
-
 vec3 quat_transform(vec3 v, vec4 q)
 {
     return v + 2.0 * cross(q.xyz, cross(q.xyz, v) + q.w * v);
@@ -72,8 +69,20 @@ layout(local_size_x = 64) in;
 void main()
 {
     const uint id = gl_GlobalInvocationID.x;
-    if (id >= pc.numInstances)
+    if (id >= uint(out_instances.length()))
         return;
+    if (id >= u_giTlasNumInstances)
+    {
+        // Past the live count: an inactive record (reference 0 - not built, not traversed).
+        TlasInstance dead;
+        dead.row0 = vec4(0.0); dead.row1 = vec4(0.0); dead.row2 = vec4(0.0);
+        dead.instanceCustomIndexAndMask = 0u;
+        dead.sbtOffsetAndFlags = 0u;
+        dead.blasLo = 0u;
+        dead.blasHi = 0u;
+        out_instances[id] = dead;
+        return;
+    }
 
     const InMeshInstance inst = in_instances[id];
     const uint meshIdx = inst.meshIdxMaterialIdx & 0x0000FFFFu;
@@ -134,7 +143,8 @@ void main()
     const bool inRtSet = (in_nodePassMasks[inst.renderNodeIdx] & (PASS_GI | PASS_SHADOW)) != 0u;
     // Range bound: rays never reach past the GI clipmap + max ray distance, so distant geometry
     // only bloats the TLAS build (origin-distance test: cheap, conservative via the RT/GI tweak).
-    const bool inRange = distance(pos, pc.viewPos) <= pc.maxRange;
+    // Centered on the scene focus (the player in game mode; the camera otherwise).
+    const bool inRange = distance(pos, u_sceneFocus.xyz) <= u_giTrace1.w;
     const bool traceable = hasBlas && finiteXform && !noRT && inRtSet && inRange;
     if (!traceable)
     {

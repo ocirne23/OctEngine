@@ -149,7 +149,7 @@ GPU Frame
   Skinning → Ocean sim → Indirect cull → Light grid → Force compute → Particle sim → Terrain wetness
     → Shadow cull → Shadow draw            (both skipped under RT sun shadow)
     → G-buffer → GI → RTAO → Volumetric fog
-    → Force intervals → Force union march  (own render passes, half-res; see Force)
+    → Force intervals → Force union march  (own render passes in the primary around cached draw secondaries, half-res, gated on the force enable; see Force)
     → Scene forward → TAA → Eye adaptation
   Composite + UI
 ```
@@ -237,8 +237,22 @@ top-down camera hanging in empty sky shapes none of these:
   (their cell-claim spin re-reads the table with a plain load). **TLAS exclusions are INACTIVE
   instances** (reference 0, `gi_tlas_instances.cs.glsl`), which the build skips entirely, not
   mask-0 nodes.
+* **THE GI RECORD IS SPLIT IN TWO.** `recordGlobalIllumPrep` is the PER-FRAME secondary — the work whose
+  content changes frame to frame: one-shot static BLAS builds, compaction copies, the skinned BLAS
+  rebuild, the one-time probe clear — and is empty on most frames. `recordGlobalIllum` is a CACHED
+  secondary (recorded with the scene secondaries): the sky map, the TLAS-instance write, the TLAS build
+  and the probe trace. **Everything per-frame in it rides the UBO** — `u_giTlasNumInstances`,
+  `u_giTrace0/1` (the trace tweaks, last frame's focus, the TLAS range), `u_frameIndex`, `u_sceneFocus`
+  — so neither shader has push constants. The instance dispatch and the TLAS build cover the instance
+  buffer's whole CAPACITY (`m_maxGiTlasInstances`); the shader writes every slot past the live count
+  INACTIVE. `AccelerationStructure::ensureTlasCapacity` (CPU, at the top of `recordCommandBuffers`)
+  sizes each slot's TLAS to that capacity and invalidates on a handle change, so the GI/RTAO/fog
+  secondaries and the forward set's TLAS descriptor all re-record together. Invalidation also comes
+  from the instance-capacity growth and from the `RT/Enable RT` + `GI/Enable GI` tweaks (baked in).
+  The trace set's texture array is filled at set allocation (`fillTextureDescriptors`) and kept current
+  per slot by the streamer's pending-write path — the record never rewrites it.
 * **THE SKY MAP** (`gi_sky_map.cs.glsl`, owned by `GIProbePipeline`, `recordSkyMap` at the top of
-  `recordGlobalIllum` on EVERY frame — ahead of the RT toggle — with its own read→write→read barriers):
+  the cached `recordGlobalIllum` — ahead of the RT toggle — with its own read→write→read barriers):
   a 256×128 RGBA16F lat-long 2-layer array, GENERAL for life. Layer 0 = `skyRadiance` (GI miss rays,
   the forward pass's per-frame-constant `skyRadiance(up)` ambient), layer 1 = `mirrorSkyRadiance`
   (atmosphere.inc.glsl: the ocean's and the terrain wet film's reflection-ray sky, 12-step march +
@@ -247,13 +261,14 @@ top-down camera hanging in empty sky shapes none of these:
   set's highest binding for the variable count). Anything that would call `skyRadiance` or
   `atmosphereScatterCheap` per pixel samples the map instead.
 * **"Record GI" allocates nothing per frame.** `GIProbePipeline` keeps its `DescriptorSetUpdateInfo`
-  lists as members (`buildUpdateScratch`, handles patched per record; the texture list keeps its
-  capacity), and `AccelerationStructure::recordBuildSkinnedBlas` refills member build arrays. Keep it
-  that way: a per-frame `oc::vector` temporary in that scope shows up as memory churn in the profiler.
+  lists as members (`buildUpdateScratch`, handles patched per record), and
+  `AccelerationStructure::recordBuildSkinnedBlas` refills member build arrays. Keep it that way: a
+  per-frame `oc::vector` temporary in that scope shows up as memory churn in the profiler.
 * **GI clipmap + TLAS range.** `giCascadeOrigin(c, u_sceneFocus.xyz)` centres every probe cascade on the
   focus (sample, trace and debug sides alike), the trace's previous-window freshness test uses last
-  frame's focus (`m_giPrevFocusPos`), and the TLAS instance range bound (`RT/TLAS Range`) is measured
-  from it too (`sceneFocusOrCamera()`), so the ray-traced set is the geometry around the player.
+  frame's focus (`m_giPrevFocusPos`, advanced in `buildUbo` only while GI traces, published as
+  `u_giTrace1.xyz`), and the TLAS instance range bound (`RT/TLAS Range`, `u_giTrace1.w`) is measured
+  from `u_sceneFocus` too, so the ray-traced set is the geometry around the player.
 * **RTAO** "Fade Start" / "Max Distance": the fade and the trace early-out in `rtao.cs.glsl`, and the
   forward pass's upsample-skip gate, all measure from `u_sceneFocus`. The ray-origin distance bias
   stays on the CAMERA distance — it compensates a depth-reconstruction error that lies along the view
