@@ -158,13 +158,14 @@ void main()
         if (((e.texFlags.y & PARTICLE_FLAG_UNDERWATER) != 0u) != cameraUnder)
             envelope = 0.0;
     }
-    // Ground fade: exp(-height above the ground / fade height), the ground being the terrain or the
-    // local water surface, whichever is higher (dust hugs the ground, thins out with height).
+    // Ground fade: exp(-height above the TERRAIN / fade height) - dust hugs the ground and thins out with
+    // height - and none over water: it fades out with the water depth across the first half metre, so
+    // the sea is dust-free and the waterline is a soft edge rather than a cut.
     if ((e.texFlags.y & PARTICLE_FLAG_GROUND_FADE) != 0u && terrainHeightMapPresent())
     {
         const vec4 td = terrainDataAt(pos.xz);
-        const float ground = max(td.x, td.y);
-        envelope *= exp(-max(pos.y - ground, 0.0) / max(e.spinParams.w, 0.01));
+        envelope *= exp(-max(pos.y - td.x, 0.0) / max(e.spinParams.w, 0.01));
+        envelope *= 1.0 - smoothstep(0.0, 0.5, td.y - td.x);
     }
     float alpha = mix(e.colorStart.a, e.colorEnd.a, lifeFrac) * envelope;
     vec3 color = mix(e.colorStart.rgb, e.colorEnd.rgb, lifeFrac);

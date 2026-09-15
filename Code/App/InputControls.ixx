@@ -82,7 +82,7 @@ private:
         {
             auto info = oc::make_shared<LightComponent::SpawnInfo>();
             info->lights.emplace_back(); // placeholder; spawnLight overwrites it on the live component
-            info->debugDraw = true;
+            info->debugDraw = false;
             lightTmpl = oc::make_shared<EntitySpawnTemplate>();
             lightTmpl->archetype = makeEntityArchetype(uint16(1 << EComponentID_Light));
             lightTmpl->spawnInfos.push_back(oc::move(info));
