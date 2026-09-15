@@ -120,6 +120,17 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     Tweak::boolean("Particles", "Depth collision", &m_particleCollision);
     Tweak::floatVar("Particles", "Time scale", &m_particleTimeScale, 0.0f, 4.0f);
     Tweak::boolean("Particles", "Log stats", &m_particleLogStats);
+    Tweak::boolean("Particles", "Rain occlusion", &m_rainOcclusionEnabled);
+    Tweak::floatVar("Particles", "Rain occlusion pad", &m_rainOcclusionCasterPad, 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Particles", "Rain occlusion bias", &m_rainOcclusionTolerance, 0.0f, 2.0f, 0.01f);
+    Tweak::floatVar("Particles", "Streak camera blur", &m_streakCameraBlur, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Particles", "Wind speed", &m_windSpeed, 0.0f, 40.0f, 0.1f);
+    Tweak::floatVar("Particles", "Wind angle", &m_windAngleDeg, 0.0f, 360.0f, 1.0f);
+    Tweak::floatVar("Particles", "Wind gust strength", &m_windGustStrength, 0.0f, 20.0f, 0.1f);
+    Tweak::floatVar("Particles", "Wind gust size", &m_windGustSize, 2.0f, 200.0f, 1.0f);
+    Tweak::floatVar("Particles", "Wind sheet contrast", &m_windSheetContrast, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Particles", "Wind sheet size", &m_windSheetSize, 2.0f, 200.0f, 1.0f);
+    Tweak::floatVar("Particles", "Wind sheet drift", &m_windSheetDrift, 0.0f, 20.0f, 0.1f);
     Tweak::boolean("Decals", "Enabled", &m_decalsEnabled);
     // Present mode is swapchain creation state (FIFO vs Immediate), so a change recreates the
     // swapchain (device idle + re-init, same path as a lost acquire). A saved/override value fires
@@ -235,6 +246,12 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     for (PerFrameData& perFrame : m_perFrameData)
         perFrame.shadowMap.initialize();
     m_shadowMapGraphicsPipeline.initialize(m_perFrameData[0].shadowMap, m_maxUniqueMeshes, m_maxTextures);
+    // The weather volume's top-down rain occlusion map: the same two pipelines in their RAIN_OCCLUSION
+    // variant over a single-layer map per frame slot.
+    m_rainCullComputePipeline.initialize(m_maxInstanceData, m_maxUniqueMeshes, true);
+    for (PerFrameData& perFrame : m_perFrameData)
+        perFrame.rainOcclusionMap.initialize(RendererVKLayout::RAIN_OCCLUSION_RESOLUTION, 1);
+    m_rainMapGraphicsPipeline.initialize(m_perFrameData[0].rainOcclusionMap, m_maxUniqueMeshes, m_maxTextures, true);
     m_gbufferPipeline.initialize(m_perFrameData[0].gbuffer, m_maxTextures);
 
     vk::Device vkDevice = Globals::device.getDevice();
@@ -253,6 +270,8 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
 
         perFrame.shadowCullDescriptorSet.initialize(m_shadowCullComputePipeline.getDescriptorSetLayout());
         perFrame.shadowDrawDescriptorSet.initialize(m_shadowMapGraphicsPipeline.getDescriptorSetLayout(), m_numTextureDescriptors);
+        perFrame.rainCullDescriptorSet.initialize(m_rainCullComputePipeline.getDescriptorSetLayout());
+        perFrame.rainDrawDescriptorSet.initialize(m_rainMapGraphicsPipeline.getDescriptorSetLayout(), m_numTextureDescriptors);
 
         perFrame.primaryCommandBuffer.initialize(vk::CommandBufferLevel::ePrimary);
         perFrame.staticMeshCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
@@ -266,6 +285,8 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
         perFrame.imguiCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
         perFrame.shadowCullCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
         perFrame.shadowDrawCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
+        perFrame.rainCullCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
+        perFrame.rainDrawCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
         perFrame.globalIllumCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
         perFrame.giPrepCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
         perFrame.volumetricFogCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
@@ -472,6 +493,8 @@ void Renderer::reloadShaders()
     m_lightGridComputePipeline.reloadShaders();
     m_shadowCullComputePipeline.reloadShaders();
     m_shadowMapGraphicsPipeline.reloadShaders(m_maxTextures);
+    m_rainCullComputePipeline.reloadShaders();
+    m_rainMapGraphicsPipeline.reloadShaders(m_maxTextures);
     m_giProbePipeline.reloadShaders(m_maxTextures);
     m_giProbePipeline.reloadDebugShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_debugLinePipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
@@ -808,6 +831,31 @@ void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const
 
     buildUboViews(cameraIn, camera, vrBaseOrientation);
 
+    // Camera velocity over the WALL-CLOCK frame delta (camera motion is not paused with the sim): the
+    // weather volumes' streaks are motion blur relative to the eye. A teleport (first frame, scene
+    // load) reads as zero rather than one huge streak.
+    {
+        const float dt = (float)Globals::time.getDeltaSec();
+        glm::vec3 velocity(0.0f);
+        if (m_havePrevCameraPos && dt > 1e-4f)
+        {
+            velocity = (camera.position - m_prevCameraPos) / dt;
+            if (glm::dot(velocity, velocity) > 200.0f * 200.0f)
+                velocity = glm::vec3(0.0f);
+        }
+        m_prevCameraPos = camera.position;
+        m_havePrevCameraPos = true;
+        ubo.cameraVelocity = glm::vec4(velocity, glm::clamp(m_streakCameraBlur, 0.0f, 1.0f));
+    }
+    {
+        const float a = glm::radians(m_windAngleDeg);
+        const glm::vec2 dir(std::cos(a), std::sin(a));
+        ubo.weatherWind0 = glm::vec4(dir.x * m_windSpeed, 0.0f, dir.y * m_windSpeed, glm::max(m_windGustStrength, 0.0f));
+        ubo.weatherWind1 = glm::vec4(1.0f / glm::max(m_windGustSize, 1.0f), glm::clamp(m_windSheetContrast, 0.0f, 1.0f),
+            1.0f / glm::max(m_windSheetSize, 1.0f), glm::max(m_windSheetDrift, 0.0f));
+        ubo.weatherWind2 = glm::vec4(dir, 0.0f, 0.0f);
+    }
+
     // RTAO and the GI probe contribution both need the acceleration structures, so both fold in the RT
     // master toggle; GI additionally gates on its own switch.
     // z = the RTAO max distance: past it the trace writes exactly (N, 1.0) (rtao.cs.glsl early-out), so
@@ -831,6 +879,7 @@ void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const
 
     buildUboSky();
     buildUboSunShadow(camera);
+    buildUboRainOcclusion();
     buildUboFog();
     buildUboOcean();
     buildUboForce();
@@ -1011,6 +1060,32 @@ void Renderer::buildUboSunShadow(const Camera& camera)
     ubo.rtLightShadows = (m_rtParams.enabled && m_rtParams.rtLightShadows) ? 1.0f : 0.0f;
     ubo.terrainShadowParams = glm::vec4(glm::max(m_shadowParams.terrainMarchStart, 0.0f),
         glm::max(m_shadowParams.terrainMarchBias, 1.0f), glm::max(m_shadowParams.terrainMarchSpread, 0.002f), 0.0f);
+}
+
+// The weather volume's rain occlusion map: a top-down orthographic view over the latched volume box
+// (setRainOcclusionVolume), looking straight down -Y. The eye sits casterPad above the box top so a roof
+// well above the volume still shelters it; the XZ footprint is padded 25 % over the box (one-frame lag
+// behind the camera-following emitter). Standard Z, plain bottom row: the rain cull, the rain depth
+// pass and the particle sim's shelter test all read it verbatim.
+void Renderer::buildUboRainOcclusion()
+{
+    RendererVKLayout::Ubo& ubo = m_ubo;
+    const RainOcclusionVolume& v = m_rainVolume;
+    if (!v.active || !m_rainOcclusionEnabled)
+    {
+        ubo.rainOcclusionViewProj = glm::mat4(1.0f);
+        ubo.rainOcclusionParams = glm::vec4(0.0f);
+        return;
+    }
+    const float hx = glm::max(v.halfExtents.x, 1.0f) * 1.25f;
+    const float hz = glm::max(v.halfExtents.z, 1.0f) * 1.25f;
+    const float pad = glm::max(m_rainOcclusionCasterPad, 1.0f);
+    const float range = 2.0f * glm::max(v.halfExtents.y, 1.0f) + pad + 1.0f; // 1 m below the box bottom
+    const glm::vec3 eye = v.center + glm::vec3(0.0f, v.halfExtents.y + pad, 0.0f);
+    const glm::mat4 view = glm::lookAtRH(eye, v.center, glm::vec3(0.0f, 0.0f, 1.0f));
+    const glm::mat4 proj = glm::orthoRH_ZO(-hx, hx, -hz, hz, 0.0f, range);
+    ubo.rainOcclusionViewProj = proj * view;
+    ubo.rainOcclusionParams = glm::vec4(1.0f, 1.0f / range, glm::max(m_rainOcclusionTolerance, 0.0f), 0.0f);
 }
 
 // Volumetric fog params + the fog terrain height cascades (also the ocean's shore-map fallback).
@@ -1488,6 +1563,13 @@ void Renderer::destroyParticleEmitter(uint32 slot)
     m_retiredParticleEmitters.emplace_back(slot, m_frameCounter);
 }
 
+void Renderer::setRainOcclusionVolume(const glm::vec3& center, const glm::vec3& halfExtents)
+{
+    m_rainVolumeRequest.center = center;
+    m_rainVolumeRequest.halfExtents = halfExtents;
+    m_rainVolumeRequest.active = true;
+}
+
 uint32 Renderer::createForceEmitter(const RendererVKLayout::ForceEmitterGpu& desc)
 {
     const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
@@ -1946,6 +2028,10 @@ void Renderer::present()
     // (acquire failure -> recreateSwapchain return) keeps it pending for the next frame.
     if (particleResetCarried)
         m_particleResetPending = false;
+    // Latch this frame's rain occlusion request for the NEXT frame's begin-frame job (the request is
+    // main-thread state written between the join and here); a frame with no request switches it off.
+    m_rainVolume = m_rainVolumeRequest;
+    m_rainVolumeRequest.active = false;
     // This frame's submission is now new GPU work that could read the shared mesh/material/instance-offset
     // buffers; any upload into them from here on needs a fresh drain. See StagingManager::ensureDrainedForSharedWrite.
     Globals::stagingManager.resetSharedWriteGate();
@@ -2161,6 +2247,7 @@ void Renderer::growMeshInstanceCapacity(uint32 needed)
 
     m_indirectCullComputePipeline.resizeInstanceBuffers(m_maxInstanceData);
     m_shadowCullComputePipeline.resizeInstanceBuffers(m_maxInstanceData);
+    m_rainCullComputePipeline.resizeInstanceBuffers(m_maxInstanceData);
     setHaveToRecordCommandBuffers();
     printf("Renderer: grew mesh instance capacity to %u\n", m_maxInstanceData);
 }
@@ -2191,8 +2278,10 @@ void Renderer::growUniqueMeshCapacity(uint32 needed)
     m_accelStructure.resizeBlasAddressBuffer(m_maxUniqueMeshes);
     m_indirectCullComputePipeline.resizeCommandBuffers(m_maxUniqueMeshes);
     m_shadowCullComputePipeline.resizeCommandBuffers(m_maxUniqueMeshes);
+    m_rainCullComputePipeline.resizeCommandBuffers(m_maxUniqueMeshes);
     m_staticMeshGraphicsPipeline.resizeMeshCapacity(m_maxUniqueMeshes);
     m_shadowMapGraphicsPipeline.resizeMeshCapacity(m_maxUniqueMeshes);
+    m_rainMapGraphicsPipeline.resizeMeshCapacity(m_maxUniqueMeshes);
     setHaveToRecordCommandBuffers();
     printf("Renderer: grew unique mesh capacity to %u\n", m_maxUniqueMeshes);
 }
@@ -2524,6 +2613,62 @@ void Renderer::recordShadowDraw(uint32 frameIdx)
     cb.end();
 }
 
+// The weather volume's rain occlusion map: the shadow cull + depth pass pair in their RAIN_OCCLUSION
+// variant (one view, u_rainOcclusionViewProj). Executed right after the indirect cull, BEFORE the
+// particle sim, so the sim reads this frame's map.
+void Renderer::recordRainOcclusionCull(uint32 frameIdx)
+{
+    PerFrameData& frameData = m_perFrameData[frameIdx];
+    CommandBuffer& cb = frameData.rainCullCommandBuffer;
+    vk::CommandBufferInheritanceInfo inheritance;
+    cb.begin(false, &inheritance);
+
+    ShadowCullComputePipeline::RecordParams params{
+        .descriptorSet = frameData.rainCullDescriptorSet,
+        .ubo = frameData.ubo,
+        .dispatchIndirectBuffer = m_indirectCullComputePipeline.getDispatchIndirectBuffer(frameIdx),
+        .inRenderNodeTransformsBuffer = frameData.inRenderNodeTransformsBuffer,
+        .inMeshInstancesBuffer = frameData.inMeshInstancesBuffer,
+        .inMeshInstanceOffsetsBuffer = m_instanceOffsetsBuffer,
+        .inMeshInfoBuffer = m_meshInfosBuffer,
+        .inFirstInstancesBuffer = frameData.inFirstInstancesBuffer,
+        .inMaterialInfoBuffer = m_materialInfosBuffer,
+        .inNodePassMasksBuffer = frameData.inNodePassMasksBuffer,
+        .inMeshLodGroupIdxBuffer = m_meshLodGroupIdxBuffer,
+        .inMeshLodGroupsBuffer = m_meshLodGroupsBuffer,
+    };
+    m_rainCullComputePipeline.record(cb, frameIdx, params);
+    cb.end();
+}
+
+void Renderer::recordRainOcclusionDraw(uint32 frameIdx)
+{
+    PerFrameData& frameData = m_perFrameData[frameIdx];
+    ShadowMap& map = frameData.rainOcclusionMap;
+    vk::CommandBufferInheritanceInfo inheritance{ .renderPass = map.getRenderPass() };
+    CommandBuffer& cb = frameData.rainDrawCommandBuffer;
+    vk::CommandBuffer vkCb = cb.begin(false, &inheritance);
+
+    const float res = (float)map.getResolution();
+    const vk::Viewport viewport{ .x = 0.0f, .y = 0.0f, .width = res, .height = res, .minDepth = 0.0f, .maxDepth = 1.0f };
+    const vk::Rect2D scissor{ .offset = vk::Offset2D{ 0, 0 }, .extent = vk::Extent2D{ map.getResolution(), map.getResolution() } };
+    vkCb.setViewport(0, { viewport });
+    vkCb.setScissor(0, { scissor });
+
+    ShadowMapGraphicsPipeline::RecordParams params{
+        .descriptorSet = frameData.rainDrawDescriptorSet,
+        .ubo = frameData.ubo,
+        .meshInstanceBuffer = m_rainCullComputePipeline.getOutMeshInstancesBuffer(frameIdx),
+        .vertexBuffer = Globals::meshDataManager.getVertexBuffer(),
+        .indexBuffer = Globals::meshDataManager.getIndexBuffer(),
+        .instanceIdxBuffer = m_rainCullComputePipeline.getInstanceIdxBuffer(frameIdx),
+        .indirectCommandBuffer = m_rainCullComputePipeline.getIndirectCommandBuffer(frameIdx),
+        .meshCountBuffer = frameData.meshCountBuffer,
+    };
+    m_rainMapGraphicsPipeline.record(cb, frameIdx, params);
+    cb.end();
+}
+
 void Renderer::recordReuseDepthBarrier(vk::CommandBuffer cb, vk::Image gbufferDepth, uint32 eyeIndex, bool toAttachment)
 {
     // Reads only on both sides (the reuse pass tests depth read-only; AO/fog/TAA sample) - nothing to
@@ -2762,6 +2907,8 @@ void Renderer::recordParticleSim(uint32 frameIdx)
         .prevDepthView = m_perFrameData[prevFrameIdx].gbuffer.getDepthView(),
         .prevNormalView = m_perFrameData[prevFrameIdx].gbuffer.getNormalView(),
         .gbufferSampler = frameData.gbuffer.getSampler(),
+        .rainOcclusionView = frameData.rainOcclusionMap.getSampleView(),
+        .rainOcclusionSampler = frameData.rainOcclusionMap.getDepthSampler(),
     };
     m_particlePipeline.recordSim(cb, frameIdx, simParams);
     cb.end();
@@ -3344,6 +3491,7 @@ void Renderer::applyPendingTextureDescriptorWrites(uint32 frameIdx)
             m_gbufferPipeline.updateTextureDescriptor(frameData.gbufferDescriptorSet[eye].getDescriptorSet(), texIdx, view);
         }
         m_shadowMapGraphicsPipeline.updateTextureDescriptor(frameData.shadowDrawDescriptorSet.getDescriptorSet(), texIdx, view);
+        m_rainMapGraphicsPipeline.updateTextureDescriptor(frameData.rainDrawDescriptorSet.getDescriptorSet(), texIdx, view);
         m_giProbePipeline.updateTextureDescriptor(frameIdx, texIdx, view);
         m_rtaoPipeline.updateTextureDescriptor(frameIdx, texIdx, view);
         m_particlePipeline.updateTextureDescriptor(frameIdx, texIdx, view);
@@ -3377,6 +3525,8 @@ void Renderer::recordSceneSecondaries(uint32 frameIdx)
     recordIndirectCull(frameIdx);
     recordLightGrid(frameIdx);
     recordForceCompute(frameIdx); // indirect dispatches: emitter/query changes never re-record
+    recordRainOcclusionCull(frameIdx); // executed only while a weather volume requested the map
+    recordRainOcclusionDraw(frameIdx);
     recordParticleSim(frameIdx); // indirect dispatches: emitter/spawn changes never re-record
     recordTerrainWetness(frameIdx); // executed only while enabled (m_terrainWetTweaks.enabled)
     recordShadowCull(frameIdx);
@@ -3439,8 +3589,31 @@ void Renderer::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary)
     // Forcefield grid build + force/query compute (Force library readbacks land ~2 frames later).
     if (m_forceFieldParams.enabled)
         executeScoped(primary, "Force compute", frameData.forceComputeCommandBuffer.getCommandBuffer());
-    // Particle emit/simulate (outside any render pass; reads LAST frame's G-buffer for collision,
-    // writes the alive list + indirect draw args the in-pass billboard draw consumes).
+    // The weather volume's rain occlusion map (cull + top-down depth), gated on the UBO this frame was
+    // built with (buildUboRainOcclusion) so the pass and the sim's shelter test always agree.
+    if (m_particlesEnabled && m_ubo.rainOcclusionParams.x > 0.5f)
+    {
+        executeScoped(primary, "Rain occlusion cull", frameData.rainCullCommandBuffer.getCommandBuffer());
+        m_gpuProfiler.beginScope(primary, "Rain occlusion draw");
+        ShadowMap& map = frameData.rainOcclusionMap;
+        vk::ClearValue clear;
+        clear.depthStencil = vk::ClearDepthStencilValue{ .depth = 1.0f, .stencil = 0 };
+        const vk::RenderPassBeginInfo rpBegin{
+            .renderPass = map.getRenderPass(),
+            .framebuffer = map.getFramebuffer(),
+            .renderArea = vk::Rect2D{ .offset = vk::Offset2D{ 0, 0 }, .extent = vk::Extent2D{ map.getResolution(), map.getResolution() } },
+            .clearValueCount = 1,
+            .pClearValues = &clear,
+        };
+        vk::CommandBuffer vkRainDraw = frameData.rainDrawCommandBuffer.getCommandBuffer();
+        primary.beginRenderPass(rpBegin, vk::SubpassContents::eSecondaryCommandBuffers);
+        primary.executeCommands(1, &vkRainDraw);
+        primary.endRenderPass();
+        m_gpuProfiler.endScope(primary);
+    }
+    // Particle emit/simulate (outside any render pass; reads LAST frame's G-buffer for collision and
+    // THIS frame's rain occlusion map, writes the alive list + indirect draw args the in-pass billboard
+    // draw consumes).
     if (m_particlesEnabled)
         executeScoped(primary, "Particle sim", frameData.particleSimCommandBuffer.getCommandBuffer());
     // Terrain wetness clipmap: decay + re-wet under this frame's live ocean surface (after the ocean
@@ -3921,6 +4094,7 @@ void Renderer::syncTextureDescriptorCapacity()
             perFrame.gbufferDescriptorSet[eye].initialize(m_gbufferPipeline.getDescriptorSetLayout(), m_numTextureDescriptors);
         }
         perFrame.shadowDrawDescriptorSet.initialize(m_shadowMapGraphicsPipeline.getDescriptorSetLayout(), m_numTextureDescriptors);
+        perFrame.rainDrawDescriptorSet.initialize(m_rainMapGraphicsPipeline.getDescriptorSetLayout(), m_numTextureDescriptors);
     }
     setHaveToRecordCommandBuffers();
 }

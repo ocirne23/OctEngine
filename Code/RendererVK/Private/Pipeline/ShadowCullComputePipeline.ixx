@@ -32,7 +32,9 @@ public:
         Buffer& inMeshLodGroupsBuffer;        // 12
     };
 
-    void initialize(uint32 maxMeshInstances, uint32 maxUniqueMeshes);
+    // rainOcclusion: the RAIN_OCCLUSION shader variant - one view (u_rainOcclusionViewProj) instead of
+    // the sun cascades; the weather volume's top-down shelter map (a second instance of this class).
+    void initialize(uint32 maxMeshInstances, uint32 maxUniqueMeshes, bool rainOcclusion = false);
     void reloadShaders();
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params);
     // Capacity growth (caller must have the GPU idle and re-record command buffers afterwards).
@@ -50,6 +52,7 @@ private:
     void buildComputeLayout(ComputePipelineLayout& layout);
 
     ComputePipeline m_computePipeline;
+    bool m_rainOcclusion = false;
 
     struct PerFrameData
     {

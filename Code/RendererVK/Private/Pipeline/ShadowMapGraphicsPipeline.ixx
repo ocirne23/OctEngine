@@ -37,7 +37,10 @@ public:
         Buffer& meshCountBuffer;       // uint32 live mesh count (DGC sequenceCountAddress), CPU-written per frame
     };
 
-    void initialize(ShadowMap& shadowMap, uint32 maxUniqueMeshes, uint32 maxTextures);
+    // rainOcclusion: the RAIN_OCCLUSION vertex variant - projects through u_rainOcclusionViewProj (one
+    // view, no cascade mask); the weather volume's top-down shelter map (a second instance of this class
+    // over a single-layer ShadowMap).
+    void initialize(ShadowMap& shadowMap, uint32 maxUniqueMeshes, uint32 maxTextures, bool rainOcclusion = false);
     void reloadShaders(uint32 maxTextures);
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params);
     // Rewrites one slot of the texture array (binding 7) with a streamed texture's current view.
@@ -57,6 +60,7 @@ private:
     IndirectCommandsLayout m_indirectCommandsLayout;
     Sampler m_sampler; // for the diffuse texture array used by the alpha-mask discard
     vk::RenderPass m_renderPass;
+    bool m_rainOcclusion = false;
 
     vk::DeviceSize m_preprocessSize = 0;
     // One preprocess scratch per frame in flight (a single multiview execute renders all cascades).

@@ -47,8 +47,13 @@ void main()
         return;
     }
     vec3 worldPos = quat_transform(in_pos * inst.posScale.w, inst.quat) + inst.posScale.xyz;
+#ifdef RAIN_OCCLUSION
+    // The weather volume's top-down shelter map: one view, a plain matrix.
+    gl_Position = u_rainOcclusionViewProj * vec4(worldPos, 1.0);
+#else
     // Restore the canonical [0,0,0,1] bottom row (its slots carry packed per-cascade scalars).
     mat4 m = u_cascadeViewProj[gl_ViewIndex];
     m[0][3] = 0.0; m[1][3] = 0.0; m[2][3] = 0.0; m[3][3] = 1.0;
     gl_Position = m * vec4(worldPos, 1.0);
+#endif
 }

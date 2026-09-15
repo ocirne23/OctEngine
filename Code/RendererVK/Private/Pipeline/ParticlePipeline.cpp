@@ -59,6 +59,7 @@ void ParticlePipeline::buildSimLayout(ComputePipelineLayout& layout)
         b.push_back(vk::DescriptorSetLayoutBinding{ .binding = binding, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 8, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 9, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 10, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
 }
 
 void ParticlePipeline::buildDrawLayout(GraphicsPipelineLayout& layout, uint32 maxTextures)
@@ -288,7 +289,7 @@ void ParticlePipeline::recordSim(CommandBuffer& commandBuffer, uint32 frameIdx, 
 
     { // sim: integrate + compact survivors into the OUT list
         DescriptorSet& set = m_simSets[frameIdx];
-        oc::array<DescriptorSetUpdateInfo, 10> updates{
+        oc::array<DescriptorSetUpdateInfo, 11> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { bufInfo(m_paramsBuffers[frameIdx]) } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(Ubo) } } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_poolBuffer) } },
@@ -299,6 +300,7 @@ void ParticlePipeline::recordSim(CommandBuffer& commandBuffer, uint32 frameIdx, 
             DescriptorSetUpdateInfo{ .binding = 7, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_emitterBuffers[frameIdx]) } },
             DescriptorSetUpdateInfo{ .binding = 8, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.gbufferSampler, params.prevDepthView) } },
             DescriptorSetUpdateInfo{ .binding = 9, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.gbufferSampler, params.prevNormalView) } },
+            DescriptorSetUpdateInfo{ .binding = 10, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.rainOcclusionSampler, params.rainOcclusionView) } },
         };
         commandBuffer.cmdUpdateDescriptorSets(m_simPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, set.getDescriptorSet(), updates);
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_simPipeline.getPipeline());

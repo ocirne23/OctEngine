@@ -37,7 +37,10 @@ void main()
     const ParticleEmitter e = pe_emitters[particle.misc.x];
 
     const float age = particle.posAge.w;
-    const float lifeFrac = clamp(age / particle.velLife.w, 0.0, 1.0);
+    // A weather volume particle never ages out (it wraps), so its "life" sits at the midpoint: colour and
+    // size are the mid blend and the fade envelope is replaced by the box's XZ edge fade below.
+    const bool volume = (e.texFlags.y & PARTICLE_FLAG_VOLUME) != 0u;
+    const float lifeFrac = volume ? 0.5 : clamp(age / particle.velLife.w, 0.0, 1.0);
     const vec3 pos = particle.posAge.xyz;
 
     // Per-particle constants re-derived from the spawn seed (cheaper than storing them).
@@ -48,7 +51,10 @@ void main()
     // Alpha envelope: fade in over the first fadeParams.x of life, out from fadeParams.y to death.
     const float fadeIn = clamp(lifeFrac / max(e.fadeParams.x, 1e-3), 0.0, 1.0);
     const float fadeOut = 1.0 - smoothstep(e.fadeParams.y, 1.0, lifeFrac);
-    float alpha = mix(e.colorStart.a, e.colorEnd.a, lifeFrac) * fadeIn * fadeOut;
+    const float envelope = volume
+        ? particleVolumeEdgeFade(pos - e.posSpawnRadius.xyz, e.volumeParams.xyz) * weatherSheet(pos, u_timeSeconds)
+        : fadeIn * fadeOut;
+    float alpha = mix(e.colorStart.a, e.colorEnd.a, lifeFrac) * envelope;
     vec3 color = mix(e.colorStart.rgb, e.colorEnd.rgb, lifeFrac);
 
     if ((e.texFlags.y & PARTICLE_FLAG_LIT) != 0u)
@@ -77,17 +83,22 @@ void main()
 
     float halfW = size * 0.5;
     float halfH = size * 0.5;
-    const vec3 vel = particle.velLife.xyz;
+    // Weather volume streaks: a streak is the drop's motion relative to what the EYE TRACKS. A player
+    // tracks the ground, not the camera, so only a fraction (u_cameraVelocity.w) of the camera's own
+    // motion smears the drops - the full amount lays fast-panned rain nearly flat.
+    const vec3 vel = volume ? particle.velLife.xyz - u_cameraVelocity.xyz * u_cameraVelocity.w : particle.velLife.xyz;
     if (e.sizeParams.w > 0.0 && dot(vel, vel) > 1e-4)
     {
-        // Velocity stretch: align the quad's up axis with the screen-projected velocity.
+        // Velocity stretch: align the quad's up axis with the screen-projected velocity, and stretch by
+        // the PROJECTED speed - a drop flying along the view ray is seen end-on as a dot, so its axis
+        // (numerically arbitrary at that point) never shows.
         const vec3 velPlane = vel - fwd * dot(vel, fwd);
         const float l = length(velPlane);
         if (l > 1e-3)
         {
             up = velPlane / l;
             right = normalize(cross(fwd, up));
-            halfH += length(vel) * e.sizeParams.w * 0.5;
+            halfH += l * e.sizeParams.w * 0.5;
         }
     }
     else if (e.spinParams.x != 0.0 || e.spinParams.y > 0.5)

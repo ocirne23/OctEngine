@@ -67,19 +67,58 @@ Shaders `particle_begin.cs.glsl` → `particle_emit.cs.glsl` → `particle_sim.c
   (0 = smoke .. 1 = fire). `cullMode = None`, depth test on, **depth write off**.
 * It is the `"Particles"` scene stage inside "Scene forward", after Force union blend and before
   Fog apply ([Renderer.cpp:3526](../RendererVK/Private/Renderer.cpp#L3526)).
-* Tweaks under `Particles/*`: Enabled, Depth collision, Time scale, Log stats.
+* Tweaks under `Particles/*`: Enabled, Depth collision, Time scale, Log stats (plus the rain
+  occlusion trio, see below).
+
+## Weather volumes (rain / snow)
+
+An emitter with a non-zero `Volume x, y, z` (box half extents) is a WEATHER VOLUME
+(`PARTICLE_FLAG_VOLUME`): the emit pass spawns uniformly inside the box, the sim WRAPS a particle
+that leaves a face back in through the opposite one (`particleVolumeWrap`) and never ages it out, so
+`Count` particles fill the box once (spawned over the first frames - half the frame's spawn cap per
+volume) and stay. The draw pins the life fraction at 0.5 (mid colour/size) and replaces the fade
+envelope with an XZ edge fade over the outer 20 % of the box, so the side wrap seam never pops.
+
+* `FollowCamera true` — the box rides `Renderer::cameraPos()` + `Offset` with an identity rotation
+  (the wrap is per world axis), so the instance transform is ignored and the box never drains behind
+  a moving camera. Put the box BELOW the camera (`Offset 0, -10, 0`) so the streaks fall through the
+  view.
+* `Occlude true` — the shelter test: `update` unions every occluding box and hands it to
+  `Renderer::setRainOcclusionVolume`; the sim samples the renderer's top-down RAIN OCCLUSION MAP
+  (see RendererVK) and a particle deeper than the roof surface at its XZ (by more than
+  "Particles/Rain occlusion bias") restarts at the box top at a FRESH RANDOM XZ - the same XZ would
+  drop it straight back onto the roof, and a box top that is itself indoors would pin it there.
+  Tweaks `Particles/Rain occlusion*`.
+* `WindResponse <1/s>` — the horizontal velocity relaxes onto the renderer's WEATHER WIND
+  (`Particles/Wind speed / angle / gust strength / gust size / sheet contrast / sheet size / sheet
+  drift`, `Ubo::weatherWind0/1/2`) at that rate; heavy drops ~1, flakes ~4, 0 = ignores wind. The
+  local wind is the mean PLUS a 2D gust vector of "gust strength" m/s from two large-scale noise
+  fields (`weatherWindAt`, particle.inc.glsl) - absolute, so flurries exist in calm air. The fields
+  travel along the wind direction at "sheet drift" plus half the wind speed (a gust front sweeps
+  even in light wind), so they pack the drops into moving bands = the density waves of a storm;
+  `weatherSheet` additionally multiplies the drawn alpha by a third travelling field (sheet contrast)
+  for visible curtains. A storm: speed 15, gust strength 8, sheet contrast 0.7, sheet drift 6.
+* No terrain floor: a drop below the ground is hidden by the depth test until it wraps, which is
+  correct for every camera that cannot see under the terrain. Splashes at the impact point are the
+  natural follow-up (the depth collision already reports the hit).
+
+Testbed toggles: `Particles/Rain` and `Particles/Snow` (ParticleSystem tweaks) create/destroy one
+camera-following instance of `Effects/rain.pfx` / `Effects/snow.pfx`. The handles are DETACHED, not
+destroyed, in `~ParticleSystem` - the plain-XCU particle system outlives the renderer.
 
 ## `.pfx` effects
 
 A `ParticleEffectDesc` is a named set of `ParticleEmitterDesc`s — fire = flames + smoke + embers.
 `loadParticleEffect(path, ...)` parses the text asset; the **full grammar is documented at
-[Effect.ixx:92](Private/Effect.ixx#L92)**, every entry optional. Demo: `Assets/Effects/fire.pfx`.
+[Effect.ixx:92](Private/Effect.ixx#L92)**, every entry optional. Demos: `Assets/Effects/fire.pfx`,
+`rain.pfx`, `snow.pfx`.
 
 Emitter fields group as **appearance** (texture, flipbook cols/rows/fps, colorStart/End, additivity,
 fadeIn, fadeOutStart, softFadeDistance, lit, emissiveFloor), **spawning** (rate, burst, spawnRadius,
-spawnShell, coneAngleDeg, speedMin/Max, localOffset, localDirection, inheritVelocity), **motion**
-(lifeMin/Max, gravity, drag, turbulence + frequency + scroll, collide, collisionBounce) and **shape
-over life** (sizeStart/End, sizeVariance, velocityStretch, spinMax, randomRotation).
+spawnShell, coneAngleDeg, speedMin/Max, localOffset, localDirection, inheritVelocity), **weather
+volume** (volume, count, followCamera, occlude - see above), **motion** (lifeMin/Max, gravity, drag,
+turbulence + frequency + scroll, collide, collisionBounce) and **shape over life** (sizeStart/End,
+sizeVariance, velocityStretch, spinMax, randomRotation).
 
 An empty `texturePath` renders a procedural soft round sprite (`PARTICLE_TEX_NONE`). Textures load
 through `Renderer::loadEffectTexture` into the bindless array, cached per path.

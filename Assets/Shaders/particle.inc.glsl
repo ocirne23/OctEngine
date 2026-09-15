@@ -13,7 +13,7 @@ struct Particle
     uvec4 misc;    // x = emitter slot, y = RNG seed, z = rotation (float bits), w = spin rad/s (float bits)
 };
 
-// Mirror of RendererVKLayout::ParticleEmitterGpu (192 bytes).
+// Mirror of RendererVKLayout::ParticleEmitterGpu (208 bytes).
 struct ParticleEmitter
 {
     vec4 posSpawnRadius;  // xyz = world position, w = spawn radius (m)
@@ -28,7 +28,23 @@ struct ParticleEmitter
     vec4 fadeParams;      // x = fade-in end (life frac), y = fade-out start, z = additivity, w = soft fade dist (m)
     vec4 spinParams;      // x = max spin (rad/s), y = random initial rotation (0/1), z = lit emissive floor, w unused
     uvec4 texFlags;       // x = texture idx, y = PARTICLE_FLAG_* bits, z = flipbook cols | rows << 16, w = flipbook fps (float bits)
+    vec4 volumeParams;    // PARTICLE_FLAG_VOLUME: xyz = box half extents (m) around posSpawnRadius.xyz, w = wind response (1/s)
 };
+
+// Weather volume helpers (PARTICLE_FLAG_VOLUME). The box is centred on the emitter position, which
+// follows the camera; a particle leaving one face re-enters through the opposite one, so the box
+// never drains and the count stays constant regardless of how far the camera travels.
+vec3 particleVolumeWrap(vec3 rel, vec3 halfExtents)
+{
+    const vec3 size = 2.0 * halfExtents;
+    return mod(rel + halfExtents, size) - halfExtents;
+}
+// Alpha fade over the outer band of the box's XZ footprint, so the wrap seam at the sides never pops.
+float particleVolumeEdgeFade(vec3 rel, vec3 halfExtents)
+{
+    const vec2 edge = abs(rel.xz) / max(halfExtents.xz, vec2(1e-3));
+    return 1.0 - smoothstep(0.8, 1.0, max(edge.x, edge.y));
+}
 
 // GPU counters block: sim dispatch args + per-parity draw args (instanceCount IS the alive count) +
 // the dead-stack top. Bound as one buffer that is also the indirect dispatch/draw source.
@@ -86,5 +102,41 @@ vec3 particleTurbulence(vec3 p)
                 particleNoise(p + vec3(31.416, 27.183, 12.793)) * 2.0 - 1.0,
                 particleNoise(p + vec3(-17.321, 41.421, -23.606)) * 2.0 - 1.0);
 }
+
+// ---- weather wind (the UBO's u_weatherWind0/1; only for includers that have the UBO - the sim + draw) ----
+#ifdef UBO_INC_GLSL
+// A noise field that TRAVELS along the wind direction - at the sheet drift speed plus half the mean
+// wind, like a gust front, so it sweeps even in light wind - and evolves in time. Sampled in the
+// horizontal plane; returns [-1, 1].
+float weatherTravellingNoise(vec2 worldXZ, float invSize, float time, float phase)
+{
+    const vec2 travel = u_weatherWind2.xy * (u_weatherWind1.w * time) + u_weatherWind0.xz * (time * 0.5);
+    const vec2 p = (worldXZ - travel) * invSize;
+    return particleNoise(vec3(p.x, time * 0.35 + phase, p.y)) * 2.0 - 1.0;
+}
+// The local wind velocity at a point: the mean wind plus a 2D gust vector of the gust strength (two
+// decorrelated fields), so flurries swirl in calm air and lean with the wind in a storm. The fields
+// are large-scale and travelling, so a gust front moving through the volume packs the drops into a
+// band ahead of it - the density "waves" of a storm - before the wrap evens them out again.
+vec3 weatherWindAt(vec3 pos, float time)
+{
+    const float g = u_weatherWind0.w;
+    if (g <= 0.0)
+        return u_weatherWind0.xyz;
+    const vec2 gust = vec2(weatherTravellingNoise(pos.xz, u_weatherWind1.x, time, 0.0),
+                           weatherTravellingNoise(pos.xz, u_weatherWind1.x, time, 53.0));
+    return u_weatherWind0.xyz + vec3(gust.x, 0.0, gust.y) * g;
+}
+// Alpha multiplier for the drawn drops: sheets of denser and thinner rain sweeping through. Contrast
+// 0 = uniform; at 1 the thinnest sheet is nearly empty and the densest twice as bright.
+float weatherSheet(vec3 pos, float time)
+{
+    const float c = u_weatherWind1.y;
+    if (c <= 0.0)
+        return 1.0;
+    const float n = weatherTravellingNoise(pos.xz, u_weatherWind1.z, time, 37.0);
+    return clamp(1.0 + c * n * 1.5, 0.0, 2.0);
+}
+#endif
 
 #endif

@@ -44,10 +44,20 @@ void main()
 
     uint seed = particlePcg(p_frameIndex * 0x9E3779B9u + gid * 0x85EBCA6Bu + particleIdx);
 
-    // Spawn position: random point in (or on) the emitter's sphere.
-    vec3 offDir = normalize(vec3(particleRand(seed), particleRand(seed), particleRand(seed)) * 2.0 - 1.0 + 1e-5);
-    float offR = e.posSpawnRadius.w * mix(pow(particleRand(seed), 1.0 / 3.0), 1.0, e.spawnParams.w);
-    vec3 pos = e.posSpawnRadius.xyz + offDir * offR;
+    // Spawn position: random point in (or on) the emitter's sphere - or, for a weather volume,
+    // uniformly inside its box (the box fills at once instead of raining in from a point).
+    vec3 pos;
+    if ((e.texFlags.y & PARTICLE_FLAG_VOLUME) != 0u)
+    {
+        const vec3 r = vec3(particleRand(seed), particleRand(seed), particleRand(seed)) * 2.0 - 1.0;
+        pos = e.posSpawnRadius.xyz + r * e.volumeParams.xyz;
+    }
+    else
+    {
+        vec3 offDir = normalize(vec3(particleRand(seed), particleRand(seed), particleRand(seed)) * 2.0 - 1.0 + 1e-5);
+        float offR = e.posSpawnRadius.w * mix(pow(particleRand(seed), 1.0 / 3.0), 1.0, e.spawnParams.w);
+        pos = e.posSpawnRadius.xyz + offDir * offR;
+    }
 
     // Direction: uniform within the cone around the emitter's local +Y.
     const float cosCone = cos(clamp(e.spawnParams.x, 0.0, PARTICLE_PI));

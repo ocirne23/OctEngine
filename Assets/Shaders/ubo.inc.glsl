@@ -54,6 +54,16 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec3 u_shadowParams; // x = depth bias, y = normal bias (texels), z = 1/resolution
     float u_sunShadowRays; // RT sun shadow rays per pixel (1 = single jittered ray)
 
+    // Rain occlusion map (weather particle volumes): top-down ortho view-projection (standard Z, plain
+    // bottom row) over the volume. Params: x = present (0/1), y = 1 / depth range (m), z = shelter
+    // tolerance (m), w unused.
+    mat4 u_rainOcclusionViewProj;
+    vec4 u_rainOcclusionParams;
+    vec4 u_cameraVelocity; // xyz = the centre view's velocity this frame (m/s), w = the fraction of it weather streaks subtract
+    vec4 u_weatherWind0;   // xyz = mean wind velocity (m/s), w = gust strength (m/s)
+    vec4 u_weatherWind1;   // x = 1 / gust size (1/m), y = sheet contrast [0,1], z = 1 / sheet size (1/m), w = sheet drift (m/s)
+    vec4 u_weatherWind2;   // xy = wind direction unit vector in XZ, zw unused
+
     float u_rtLightShadows; // > 0.5: ray-traced shadows for punctual/area/tube lights
     float u_timeSeconds;    // elapsed app time (cloud wind / sky animation)
     float u_cloudCoverage;  // 0 = clear sky, 1 = overcast

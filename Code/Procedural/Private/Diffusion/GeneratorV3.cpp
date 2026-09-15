@@ -1039,10 +1039,10 @@ namespace Procedural
 					// Outside the generated bounds a FULL tile is never fetched (it would be a cold
 					// ~1.5 s inference for terrain past the playable area); the slot stays null and the
 					// sample paths fall back to the coarse stage there.
-					double x0, z0, x1, z1;
-					fullTileWorldRect(out.ti0 + ti, out.tj0 + tj, x0, z0, x1, z1);
-					if (x1 <= (double)m_cfg.boundsMinX || x0 >= (double)m_cfg.boundsMaxX
-						|| z1 <= (double)m_cfg.boundsMinZ || z0 >= (double)m_cfg.boundsMaxZ)
+					double xx0, zz0, xx1, zz1;
+					fullTileWorldRect(out.ti0 + ti, out.tj0 + tj, xx0, zz0, xx1, zz1);
+					if (xx1 <= (double)m_cfg.boundsMinX || xx0 >= (double)m_cfg.boundsMaxX
+						|| zz1 <= (double)m_cfg.boundsMinZ || zz0 >= (double)m_cfg.boundsMaxZ)
 						continue;
 				}
 				out.tiles[(size_t)ti * out.tw + tj] = coarse

@@ -225,6 +225,14 @@ public:
     // Flags the slot's live particles for retirement; the slot recycles once the kill has drained.
     void destroyParticleEmitter(uint32 slot);
     void resetParticles() { m_particleResetPending = true; }
+    // Rain occlusion map for the weather particle volumes (PARTICLE_FLAG_OCCLUDE): the world box the
+    // NEXT frame's top-down shelter depth pass covers (main thread, between the begin-frame join and
+    // present - the scene-focus pattern; one call per frame, the request expires each present). The map
+    // is padded 25 % in XZ over the box so the one-frame lag behind the emitter never shows. Nothing
+    // requested = the pass is skipped and the sim's shelter test is off.
+    void setRainOcclusionVolume(const glm::vec3& center, const glm::vec3& halfExtents);
+    // This frame's camera position (valid after the begin-frame join): the weather volumes follow it.
+    const glm::vec3& cameraPos() const { return m_cameraPos; }
     void addDecal(const RendererVKLayout::DecalInfo& decal); // [Concurrency: LOCK-FREE]
     // Loads a standalone texture (path relative to Assets/) into the bindless array for particle
     // emitters / decals to reference (ParticleEmitterGpu::texFlags.x, DecalInfo::params.x).
@@ -537,6 +545,7 @@ private:
     void buildUboViews(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation);
     void buildUboSky();
     void buildUboSunShadow(const Camera& camera);
+    void buildUboRainOcclusion();
     void buildUboFog();
     void buildUboOcean();
     void buildUboForce();
@@ -548,6 +557,8 @@ private:
     void recordLightGrid(uint32 frameIdx);
     void recordShadowCull(uint32 frameIdx);
     void recordShadowDraw(uint32 frameIdx);
+    void recordRainOcclusionCull(uint32 frameIdx);
+    void recordRainOcclusionDraw(uint32 frameIdx);
     void recordStaticMesh(uint32 frameIdx);
     void recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
     void recordGBuffer(uint32 frameIdx);
@@ -760,6 +771,10 @@ private:
     TaaPipeline m_taaPipeline;
     ShadowCullComputePipeline m_shadowCullComputePipeline;
     ShadowMapGraphicsPipeline m_shadowMapGraphicsPipeline;
+    // The weather volume's top-down rain occlusion map: RAIN_OCCLUSION variants of the shadow cull +
+    // depth pipelines over a single-layer ShadowMap per frame slot (PerFrameData::rainOcclusionMap).
+    ShadowCullComputePipeline m_rainCullComputePipeline;
+    ShadowMapGraphicsPipeline m_rainMapGraphicsPipeline;
     CompositePipeline m_compositePipeline;
     EyeAdaptationPipeline m_eyeAdaptationPipeline;
     AccelerationStructure m_accelStructure;
@@ -778,6 +793,30 @@ private:
     bool m_particleCollision = true;
     float m_particleTimeScale = 1.0f;
     bool m_particleLogStats = false; // "Particles/Log stats": prints GPU alive/dead counts ~once a second
+    // Rain occlusion volume: the request written by setRainOcclusionVolume (main thread, after the
+    // begin-frame join) is latched into the active box by present, so the begin-frame job of the NEXT
+    // frame reads it without a race; the pass runs only while a box is active.
+    struct RainOcclusionVolume
+    {
+        glm::vec3 center{ 0.0f };
+        glm::vec3 halfExtents{ 0.0f };
+        bool active = false;
+    };
+    RainOcclusionVolume m_rainVolumeRequest;
+    RainOcclusionVolume m_rainVolume;
+    bool m_rainOcclusionEnabled = false;     // "Particles/Rain occlusion" (off by default: the map costs a cull + depth pass per frame)
+    float m_rainOcclusionCasterPad = 100.0f; // "Particles/Rain occlusion pad": how far above the box a roof still shelters (m)
+    float m_rainOcclusionTolerance = 0.25f;  // "Particles/Rain occlusion bias": depth below the surface before a drop counts as sheltered (m)
+    float m_streakCameraBlur = 0.15f;        // "Particles/Streak camera blur": fraction of the camera velocity the weather streaks subtract
+    // Weather wind for the volumes ("Particles/Wind *", Ubo::weatherWind0/1/2). A storm: speed 15,
+    // gust strength 8, sheet contrast 0.7, sheet drift 6.
+    float m_windSpeed = 1.0f;       // m/s
+    float m_windAngleDeg = 0.0f;    // direction the wind blows TOWARDS, degrees from +X around +Y
+    float m_windGustStrength = 5.0f; // m/s, amplitude of the 2D gust vector added to the mean (calm air flurries too)
+    float m_windGustSize = 50.0f;   // m, the gust field's feature size
+    float m_windSheetContrast = 0.5f; // [0,1] alpha density bands sweeping through
+    float m_windSheetSize = 50.0f;  // m
+    float m_windSheetDrift = 5.0f;  // m/s the fields travel along the wind direction on top of half the wind speed
     // Pool init/reset request. Cleared only AFTER a frame that carried reset=1 AND executed the sim was
     // actually submitted: a reset consumed by a frame that never runs (acquire failure -> early return,
     // no mesh instances so the sim CB is skipped) would leave the dead stack empty forever, silently
@@ -825,6 +864,8 @@ private:
     TAAParams m_taaParams;
 
     glm::vec3 m_cameraPos = glm::vec3(0.0f);
+    glm::vec3 m_prevCameraPos = glm::vec3(0.0f); // last frame's, for u_cameraVelocity (buildFrameUbo)
+    bool m_havePrevCameraPos = false;
     glm::vec3 m_giPrevFocusPos = glm::vec3(0.0f); // last frame's scene focus (sceneFocusOrCamera); drives GI clipmap probe freshness
     float m_mipPixelScale = 0.0f; // viewportHeight / tan(fovY/2): projected diameter px = radius * scale / dist
     MeshLodParams m_lodParams;
@@ -952,6 +993,7 @@ private:
         SceneColor sceneColor;
         GBuffer gbuffer;
         ShadowMap shadowMap;
+        ShadowMap rainOcclusionMap; // single layer, RAIN_OCCLUSION_RESOLUTION: the weather volume's shelter depth
 
         // Per-eye in VR
         oc::array<DescriptorSet, 2> staticMeshPipelineDescriptorSet;
@@ -962,6 +1004,8 @@ private:
         DescriptorSet lightGridPipelineDescriptorSet;
         DescriptorSet shadowCullDescriptorSet;
         DescriptorSet shadowDrawDescriptorSet;
+        DescriptorSet rainCullDescriptorSet;
+        DescriptorSet rainDrawDescriptorSet;
 
         CommandBuffer primaryCommandBuffer;
         CommandBuffer staticMeshCommandBuffer;
@@ -975,6 +1019,8 @@ private:
         CommandBuffer imguiCommandBuffer;
         CommandBuffer shadowCullCommandBuffer;
         CommandBuffer shadowDrawCommandBuffer;
+        CommandBuffer rainCullCommandBuffer;
+        CommandBuffer rainDrawCommandBuffer;
         CommandBuffer globalIllumCommandBuffer; // cached: sky map + TLAS instances/build + trace (recordGlobalIllum)
         CommandBuffer giPrepCommandBuffer;      // per frame: BLAS builds / compaction / skinned rebuild (recordGlobalIllumPrep)
         CommandBuffer volumetricFogCommandBuffer;

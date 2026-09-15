@@ -50,12 +50,23 @@ vec4 quat_multiply(vec4 q, vec4 p)
 
 // Builds a cascade bitmask: bit c set if the world-space sphere overlaps cascade c's clip volume
 // (Vulkan zero-to-one depth: -w<=x,y<=w and 0<=z<=w), extracted from each cascade's view-projection.
+// RAIN_OCCLUSION variant (the weather volume's top-down shelter map): ONE view, u_rainOcclusionViewProj,
+// so the mask is 0 or 1.
+#ifdef RAIN_OCCLUSION
+#define NUM_OVERLAP_VIEWS 1u
+#else
+#define NUM_OVERLAP_VIEWS NUM_SHADOW_CASCADES
+#endif
 uint cascadeOverlapMask(vec3 center, float radius)
 {
     uint mask = 0u;
-    for (uint c = 0; c < NUM_SHADOW_CASCADES; ++c)
+    for (uint c = 0; c < NUM_OVERLAP_VIEWS; ++c)
     {
+#ifdef RAIN_OCCLUSION
+        mat4 m = u_rainOcclusionViewProj;
+#else
         mat4 m = u_cascadeViewProj[c];
+#endif
         // Gribb-Hartmann planes; rows of the column-major matrix.
         vec4 rx = vec4(m[0][0], m[1][0], m[2][0], m[3][0]);
         vec4 ry = vec4(m[0][1], m[1][1], m[2][1], m[3][1]);

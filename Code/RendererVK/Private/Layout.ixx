@@ -47,7 +47,14 @@ export namespace RendererVKLayout
     constexpr uint32 PARTICLE_FLAG_LIT     = 1u << 0; // per-particle GI probe + sun lighting in the vertex shader
     constexpr uint32 PARTICLE_FLAG_COLLIDE = 1u << 1; // screen-space depth collision (previous frame's G-buffer)
     constexpr uint32 PARTICLE_FLAG_KILL    = 1u << 2; // emitter destroyed: the sim retires its live particles
+    constexpr uint32 PARTICLE_FLAG_VOLUME  = 1u << 3; // weather volume: box spawn (volumeParams), particles WRAP at the box faces and never age out
+    constexpr uint32 PARTICLE_FLAG_OCCLUDE = 1u << 4; // volume only: a particle under the rain occlusion map's surface restarts at the box top
     constexpr uint32 PARTICLE_TEX_NONE = 0xFFFFu;     // texIdx sentinel: procedural soft round sprite
+
+    // Rain occlusion map (the weather volume's shelter test): ONE top-down orthographic depth view over
+    // the volume, rendered by a second instance of the shadow cull + depth pipelines (RAIN_OCCLUSION
+    // define) right after the indirect cull, so the particle sim samples THIS frame's map.
+    constexpr uint32 RAIN_OCCLUSION_RESOLUTION = 512;
 
     // Per-emitter GPU config, uploaded per frame for every live slot (small). Particles reference their
     // emitter slot each frame, so live param edits retroactively drive already-spawned particles.
@@ -66,8 +73,9 @@ export namespace RendererVKLayout
         glm::vec4 fadeParams{ 0.1f, 0.7f, 0.0f, 0.25f }; // x = fade-in end (life frac), y = fade-out start, z = additivity [0,1], w = soft-particle fade distance (m)
         glm::vec4 spinParams{ 0.0f };              // x = max spin (rad/s, random sign), y = random initial rotation (0/1), z = lit emissive floor [0,1], w unused
         glm::uvec4 texFlags{ PARTICLE_TEX_NONE, 0u, 0u, 0u }; // x = texture idx (PARTICLE_TEX_NONE = procedural), y = PARTICLE_FLAG_* bits, z = flipbook cols | rows << 16 (0 = none), w = flipbook fps (float bits)
+        glm::vec4 volumeParams{ 0.0f };            // PARTICLE_FLAG_VOLUME: xyz = box half extents (m) around posSpawnRadius.xyz, w = wind response (1/s: how fast the horizontal velocity relaxes onto the local wind)
     };
-    static_assert(sizeof(ParticleEmitterGpu) == 192);
+    static_assert(sizeof(ParticleEmitterGpu) == 208);
 
     // Projected box decals (DecalPipeline / decal.vs/fs.glsl), submitted per frame like lights
     // (Renderer::addDecal, lock-free). Drawn in the scene-color pass right after the opaque forward
@@ -451,6 +459,24 @@ export namespace RendererVKLayout
                                 // sqrt + two divides per lit pixel (shadows.inc.glsl pcssSunSizeTexels)
         glm::vec3 shadowParams; // x = depth bias, y = normal bias (texels), z = 1/resolution
         float sunShadowRays;    // RT sun shadow rays per pixel (1 = single jittered ray)
+
+        // Rain occlusion map (weather particle volumes): a plain top-down ortho view-projection (standard
+        // Z, no packed bottom row) over the volume, rendered by the rain cull + depth pass and sampled
+        // by the particle sim. Params: x = map present this frame (0/1), y = 1 / ortho depth range (m),
+        // z = shelter depth tolerance (m), w unused.
+        glm::mat4 rainOcclusionViewProj;
+        glm::vec4 rainOcclusionParams;
+        glm::vec4 cameraVelocity; // xyz = the centre view's velocity this frame (m/s, frame delta), w = the
+                                  // fraction of it the weather volumes' streaks subtract ("Particles/Streak
+                                  // camera blur": 0 = the eye tracks the world, streaks stay true to the
+                                  // drop's motion; 1 = full motion blur relative to the camera)
+        // Weather wind for the volumes ("Particles/Wind *"; particle.inc.glsl weatherWindAt / weatherSheet).
+        glm::vec4 weatherWind0;   // xyz = mean wind velocity (m/s, horizontal), w = gust strength (m/s): the local
+                                  // wind adds a 2D noise vector of this amplitude, so flurries exist in calm air too
+        glm::vec4 weatherWind1;   // x = 1 / gust size (1/m), y = sheet contrast [0,1] (alpha bands of density that
+                                  // ride the wind), z = 1 / sheet size (1/m), w = sheet drift (m/s along the wind
+                                  // direction, on top of half the wind speed - the bands sweep even in light wind)
+        glm::vec4 weatherWind2;   // xy = wind direction unit vector in XZ (from the angle, valid at zero speed), zw unused
 
         float rtLightShadows;   // > 0.5: ray-traced shadows for punctual/area/tube lights
         float timeSeconds;      // elapsed app time (cloud wind / sky animation)

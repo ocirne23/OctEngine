@@ -26,6 +26,18 @@ layout (binding = 6, std430) buffer Counters { PARTICLE_COUNTERS_BLOCK };
 layout (binding = 7, std430) readonly buffer Emitters { ParticleEmitter pe_emitters[]; };
 layout (binding = 8) uniform sampler2D u_prevDepth;   // last frame's G-buffer depth (centre/left view)
 layout (binding = 9) uniform sampler2D u_prevNormal;  // last frame's G-buffer world normal
+layout (binding = 10) uniform sampler2DArray u_rainOcclusion; // THIS frame's top-down rain occlusion depth, one layer (standard Z; border 1 = open sky)
+
+// Weather volume shelter test: true when the particle sits deeper than the occlusion map's surface at
+// its XZ by more than the tolerance (i.e. under a roof). Outside the map the border depth (1 = far)
+// never shelters.
+bool rainSheltered(vec3 pos)
+{
+    const vec4 clip = u_rainOcclusionViewProj * vec4(pos, 1.0); // ortho: w = 1
+    const vec2 uv = clip.xy * 0.5 + 0.5;
+    const float surface = texture(u_rainOcclusion, vec3(uv, 0.0)).r;
+    return (clip.z - surface) > u_rainOcclusionParams.z * u_rainOcclusionParams.y;
+}
 
 void main()
 {
@@ -39,7 +51,8 @@ void main()
 
     particle.posAge.w += p_dt;
     const bool killed = (e.texFlags.y & PARTICLE_FLAG_KILL) != 0u;
-    if (particle.posAge.w >= particle.velLife.w || killed)
+    const bool volume = (e.texFlags.y & PARTICLE_FLAG_VOLUME) != 0u; // never ages out: it wraps instead
+    if ((particle.posAge.w >= particle.velLife.w && !volume) || killed)
     {
         const int deadSlot = atomicAdd(c_deadCount, 1);
         pd_deadList[deadSlot] = particleIdx;
@@ -89,6 +102,40 @@ void main()
                 }
             }
         }
+    }
+
+    if (volume)
+    {
+        // Weather volume: the box rides the emitter (the camera). A drop under the occlusion map's
+        // surface restarts at the box top at a fresh random XZ - the same XZ would just drop it back
+        // onto the roof, and a box top that is itself indoors would pin it there. Then wrap.
+        const vec3 halfExt = max(e.volumeParams.xyz, vec3(1e-3));
+        // Wind: the horizontal velocity relaxes onto the LOCAL wind (mean wind swung by the gust field) at
+        // the emitter's wind response rate - heavy drops lean slowly, flakes follow at once.
+        if (e.volumeParams.w > 0.0)
+        {
+            const vec3 wind = weatherWindAt(pos, u_timeSeconds);
+            const float k = min(1.0, e.volumeParams.w * p_dt);
+            vel.xz += (wind.xz - vel.xz) * k;
+            pos.xz += (wind.xz - particle.velLife.xz) * k * p_dt * 0.5; // half-step: the relaxed part of this frame's motion
+        }
+        vec3 rel = pos - e.posSpawnRadius.xyz;
+        // A drop restarts at the box top at a FRESH RANDOM XZ when it is sheltered, and also when it
+        // falls out through the bottom: the gust field has divergence, so drops pile up where the wind
+        // converges, and a per-axis Y wrap would keep each one in its sink forever - the whole volume
+        // would drain into "waterfalls". Fresh XZ per fall = new rain from the cloud, uniformly spread,
+        // so clustering is bounded by what one fall through the box can do (as in reality).
+        const bool sheltered = (e.texFlags.y & PARTICLE_FLAG_OCCLUDE) != 0u && u_rainOcclusionParams.x > 0.5 && rainSheltered(pos);
+        if (sheltered || rel.y < -halfExt.y)
+        {
+            uint seed = particle.misc.y;
+            rel.x = (particleRand(seed) * 2.0 - 1.0) * halfExt.x;
+            rel.z = (particleRand(seed) * 2.0 - 1.0) * halfExt.z;
+            // Just inside the top face: exactly ON it, the wrap below folds it onto the bottom face.
+            rel.y = halfExt.y * 0.999;
+            particle.misc.y = seed;
+        }
+        pos = e.posSpawnRadius.xyz + particleVolumeWrap(rel, halfExt);
     }
 
     particle.posAge.xyz = pos;

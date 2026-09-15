@@ -46,6 +46,11 @@ private:
 export class ParticleSystem final
 {
 public:
+    // The weather effect handles are DETACHED here, not destroyed: Globals::particleSystem is a plain
+    // XCU global, so it destructs after the renderer (InitSeg order), and a handle destroy would call
+    // into the dead renderer. The GPU state is gone with it anyway.
+    ~ParticleSystem() { m_rainEffect.m_id = 0; m_snowEffect.m_id = 0; }
+
     void initialize();
     // Advances rate accumulators/bursts into renderer spawn requests, re-uploads emitter GPU state,
     // ages + submits decals. Call once per frame from the main loop, after world.update.
@@ -78,6 +83,7 @@ private:
         uint32 rendererSlot = UINT32_MAX;
         uint16 textureIdx = 0xFFFF; // PARTICLE_TEX_NONE or resolved bindless index
         float rateAccum = 0.0f;
+        uint32 volumeFillSpawned = 0; // weather volumes: particles of desc.count spawned so far (fills over frames)
     };
     struct EffectInstance
     {
@@ -117,6 +123,13 @@ private:
     uint64 m_nextEffectId = 1;
     uint32 m_nextDecalId = 1;
     uint32 m_rngState = 0x12345678;
+
+    // "Particles/Rain" and "Particles/Snow" tweaks: the testbed's camera-following weather volumes
+    // (Effects/rain.pfx, Effects/snow.pfx), created/destroyed in update() when the toggle changes.
+    bool m_weatherRain = false;
+    bool m_weatherSnow = false;
+    ParticleEffect m_rainEffect;
+    ParticleEffect m_snowEffect;
 };
 
 export namespace Globals

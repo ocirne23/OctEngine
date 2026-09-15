@@ -146,7 +146,9 @@ The **primary command buffer**, assembled in `present()`. Desktop:
 
 ```
 GPU Frame
-  Skinning → Ocean sim → Indirect cull → Light grid → Force compute → Particle sim → Terrain wetness
+  Skinning → Ocean sim → Indirect cull → Light grid → Force compute
+    → Rain occlusion cull → Rain occlusion draw  (only while a weather volume requested the map; see Particle)
+    → Particle sim → Terrain wetness
     → Shadow cull → Shadow draw            (both skipped under RT sun shadow)
     → G-buffer → GI → RTAO → Volumetric fog
     → Force intervals → Force union march  (own render passes in the primary around cached draw secondaries, half-res, gated on the force enable; see Force)
@@ -517,6 +519,21 @@ Both push params in every frame; the renderer owns none of the tweaks.
   roughness. **Disabled = the pass is skipped and the presence flag is 0**; re-enabling parks the previous
   origin out of range so nothing stale shows. Rain from weather, particle hits and script splats are
   the planned injection sources.
+* **`setRainOcclusionVolume`** — the RAIN OCCLUSION MAP for the weather particle volumes
+  (`PARTICLE_FLAG_OCCLUDE`, see Particle): ONE top-down orthographic D32 view
+  (`RAIN_OCCLUSION_RESOLUTION`², a single-layer `ShadowMap` per frame slot) rendered by SECOND
+  INSTANCES of the shadow cull + depth pipelines in their `RAIN_OCCLUSION` shader variant (one view,
+  `u_rainOcclusionViewProj`, a plain matrix - no packed bottom row - instead of the cascades; the same
+  `PASS_SHADOW` casters and alpha-mask discard). It runs right after the indirect cull and BEFORE the
+  particle sim, so the sim samples THIS frame's map (binding 10, the map's non-comparison sampler, border
+  1 = open sky). The particle system requests the box every frame (main thread after the begin-frame
+  join, the scene-focus pattern); `present` latches it for the NEXT frame's `buildUboRainOcclusion`
+  (eye `Rain occlusion pad` m above the box top, footprint padded 25 % for the one-frame lag), and the
+  primary executes the pass only when the UBO it was built with says so (`u_rainOcclusionParams.x`), so
+  the pass and the sim's test never disagree. Skipped entirely (no request or "Particles/Rain
+  occlusion" off - **the default**) = the params are zero and the sim's shelter test is off. Tweaks
+  under `Particles/*`: Rain occlusion (off by default), Rain occlusion pad, Rain occlusion bias (the
+  depth below the surface that counts as sheltered).
 
 ---
 

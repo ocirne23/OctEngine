@@ -417,7 +417,8 @@ Spawn by prefab name (`world.spawn`) or by path (`world.spawnAssetFile`).
 ## `.pfx` — particle effects
 
 `ParticleEffect <name>` with `Emitter <name>` children. **The full grammar is documented at
-`Code/Particle/Private/Effect.ixx`**; demo `Assets/Effects/fire.pfx`.
+`Code/Particle/Private/Effect.ixx`**; demos `Assets/Effects/fire.pfx`, and the camera-following
+weather volumes `rain.pfx` / `snow.pfx` (`Volume` + `FollowCamera` + `Occlude`, see Particle).
 
 ## `.dsl` — scripts
 

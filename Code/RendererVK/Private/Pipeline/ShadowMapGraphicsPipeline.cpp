@@ -16,6 +16,8 @@ void ShadowMapGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& layo
 {
     layout.vertexShader.debugFilePath = "Shaders/shadow_depth.vs.glsl";
     layout.vertexShader.text = FileSystem::readFileStr(layout.vertexShader.debugFilePath);
+    if (m_rainOcclusion)
+        layout.vertexShader.defines.push_back(ShaderDefine{ "RAIN_OCCLUSION", "1" });
     // Fragment stage discards alpha-masked (cutout) fragments so foliage casts correct shadows.
     layout.fragmentShader.debugFilePath = "Shaders/shadow_depth.fs.glsl";
     layout.fragmentShader.text = FileSystem::readFileStr(layout.fragmentShader.debugFilePath);
@@ -99,8 +101,9 @@ void ShadowMapGraphicsPipeline::createPreprocessBuffers(uint32 maxUniqueMeshes)
     }
 }
 
-void ShadowMapGraphicsPipeline::initialize(ShadowMap& shadowMap, uint32 maxUniqueMeshes, uint32 maxTextures)
+void ShadowMapGraphicsPipeline::initialize(ShadowMap& shadowMap, uint32 maxUniqueMeshes, uint32 maxTextures, bool rainOcclusion)
 {
+    m_rainOcclusion = rainOcclusion;
     m_renderPass = shadowMap.getRenderPass();
     m_sampler.initialize();
     GraphicsPipelineLayout layout;

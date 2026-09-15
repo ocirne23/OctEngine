@@ -41,6 +41,20 @@ export struct ParticleEmitterDesc
     glm::vec3 localDirection{ 0.0f, 1.0f, 0.0f }; // cone axis in emitter space
     float inheritVelocity = 0.0f;             // fraction of the emitter's velocity added at spawn
 
+    // Weather volume (rain / snow). A non-zero volume turns the emitter into a BOX of half extents
+    // volume around its position: particles spawn uniformly inside it, WRAP at its faces (leaving one
+    // face re-enters through the opposite one) and never age out, so `count` particles fill the box
+    // once (spawned over the first frames, spawn-cap limited) and stay. With followCamera the emitter
+    // rides the camera (position = camera + localOffset, identity rotation), so the box never
+    // drains. occlude enables the shelter test against the renderer's top-down rain occlusion map: a
+    // particle under a roof restarts at the box top at a random XZ. Rate/Burst still work on top.
+    glm::vec3 volume{ 0.0f };    // box half extents (m); zero = ordinary point/sphere emitter
+    uint32 count = 0;            // particles filling the box (volume emitters only)
+    bool followCamera = false;
+    bool occlude = false;
+    float windResponse = 0.0f;   // 1/s: how fast the horizontal velocity relaxes onto the renderer's weather
+                                 // wind ("Particles/Wind *"; heavy drops ~1, flakes ~4); 0 = ignores wind
+
     // Motion.
     float lifeMin = 1.0f;
     float lifeMax = 2.0f;
@@ -59,6 +73,8 @@ export struct ParticleEmitterDesc
     float velocityStretch = 0.0f; // s: elongates the quad along velocity (0 = round billboard)
     float spinMax = 0.0f;        // rad/s, random sign per particle
     bool randomRotation = true;  // random initial roll (ignored while velocity-stretched)
+
+    bool isVolume() const { return volume.x > 0.0f && volume.y > 0.0f && volume.z > 0.0f; }
 
     // Fills the static part of the GPU config; the ParticleSystem overwrites the per-instance fields
     // (position/rotation/velocity) each frame. textureIdx = renderer bindless index (PARTICLE_TEX_NONE
@@ -106,5 +122,8 @@ export struct DecalDesc
 //           Size <start> <end>        SizeVariance 0.3
 //           VelocityStretch 0.05      Spin 3                RandomRotation false
 //           FadeIn 0.1                FadeOutStart 0.6      SoftFade 0.5
+//           Volume x, y, z            Count 60000           # weather box (half extents) + its fill count
+//           FollowCamera true         Occlude true          # ride the camera / shelter under roofs
+//           WindResponse 1.0                                # 1/s relaxation onto the Particles/Wind tweaks
 // Returns false (with the error in outError) on parse failure.
 export bool loadParticleEffect(const oc::string& path, ParticleEffectDesc& outDesc, oc::string& outError);

@@ -27,6 +27,13 @@ ParticleEmitterGpu ParticleEmitterDesc::toGpu(uint16 textureIdx) const
         flags |= PARTICLE_FLAG_LIT;
     if (collide)
         flags |= PARTICLE_FLAG_COLLIDE;
+    if (isVolume())
+    {
+        flags |= PARTICLE_FLAG_VOLUME;
+        if (occlude)
+            flags |= PARTICLE_FLAG_OCCLUDE;
+        gpu.volumeParams = glm::vec4(volume, glm::max(windResponse, 0.0f));
+    }
     const uint32 flipbook = (flipbookCols > 0 && flipbookRows > 0) ? (flipbookCols | (flipbookRows << 16)) : 0;
     gpu.texFlags = glm::uvec4(textureIdx, flags, flipbook, glm::floatBitsToUint(flipbookFps));
     return gpu;
@@ -73,6 +80,11 @@ static void parseEmitter(const AssetNode& node, ParticleEmitterDesc& e)
     if (const AssetNode* n = node.find("FadeIn"))        e.fadeIn = n->asFloat(0, e.fadeIn);
     if (const AssetNode* n = node.find("FadeOutStart"))  e.fadeOutStart = n->asFloat(0, e.fadeOutStart);
     if (const AssetNode* n = node.find("SoftFade"))      e.softFadeDistance = n->asFloat(0, e.softFadeDistance);
+    if (const AssetNode* n = node.find("Volume"))        e.volume = n->asVec3(e.volume);
+    if (const AssetNode* n = node.find("Count"))         e.count = (uint32)n->asInt(0);
+    if (const AssetNode* n = node.find("FollowCamera"))  e.followCamera = n->asBool(0, e.followCamera);
+    if (const AssetNode* n = node.find("Occlude"))       e.occlude = n->asBool(0, e.occlude);
+    if (const AssetNode* n = node.find("WindResponse"))  e.windResponse = n->asFloat(0, e.windResponse);
 }
 
 bool loadParticleEffect(const oc::string& path, ParticleEffectDesc& outDesc, oc::string& outError)

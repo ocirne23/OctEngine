@@ -2,6 +2,7 @@ module Particle;
 
 import Core;
 import Core.glm;
+import Core.Tweaks;
 import RendererVK;
 import :Effect;
 import :System;
@@ -98,6 +99,8 @@ void ParticleEffect::burst()
 
 void ParticleSystem::initialize()
 {
+    Tweak::boolean("Particles", "Rain", &m_weatherRain);
+    Tweak::boolean("Particles", "Snow", &m_weatherSnow);
 }
 
 uint16 ParticleSystem::getTexture(const oc::string& path, bool sRGB)
@@ -219,6 +222,26 @@ void ParticleSystem::destroyEffect(uint64 id)
 void ParticleSystem::update(Renderer& renderer, float deltaSec)
 {
     ProfileScope profileScope("Particles", EProfileCategory::Particle);
+
+    // Testbed weather toggles: one camera-following volume effect each.
+    const auto syncWeather = [this](bool wanted, ParticleEffect& effect, const char* path)
+    {
+        if (wanted && !effect.isValid())
+            effect = createEffect(oc::string(path));
+        else if (!wanted && effect.isValid())
+            effect.destroy();
+    };
+    syncWeather(m_weatherRain, m_rainEffect, "Effects/rain.pfx");
+    syncWeather(m_weatherSnow, m_snowEffect, "Effects/snow.pfx");
+
+    // Weather volumes fill over frames: MAX_PARTICLE_SPAWNS_PER_FRAME caps the whole frame's spawn
+    // map, so one volume takes at most half of it and leaves room for everything else.
+    constexpr uint32 VOLUME_FILL_PER_FRAME = MAX_PARTICLE_SPAWNS_PER_FRAME / 2;
+    // The union of every occluding volume this frame, handed to the renderer for the NEXT frame's
+    // top-down rain occlusion map.
+    glm::vec3 occlusionMin(FLT_MAX), occlusionMax(-FLT_MAX);
+    bool occlusionRequested = false;
+
     // Effects: refresh every emitter slot's GPU config from its desc + instance transform (so live
     // .pfx edits and moving emitters both just work) and turn rates/bursts into spawn requests.
     for (EffectInstance& inst : m_effects)
@@ -229,13 +252,24 @@ void ParticleSystem::update(Renderer& renderer, float deltaSec)
             EmitterInstance& emitter = inst.emitters[i];
 
             ParticleEmitterGpu gpu = desc.toGpu(emitter.textureIdx);
-            const glm::vec3 worldPos = inst.pos + inst.rot * desc.localOffset;
+            // A camera-following weather volume ignores the instance transform: it rides the camera
+            // with an identity rotation so the box axes stay world-aligned (the wrap is per axis).
+            const bool follow = desc.followCamera && desc.isVolume();
+            const glm::vec3 worldPos = follow ? renderer.cameraPos() + desc.localOffset : inst.pos + inst.rot * desc.localOffset;
+            const glm::quat rot = follow ? glm::quat(1, 0, 0, 0) : inst.rot;
             gpu.posSpawnRadius = glm::vec4(worldPos, gpu.posSpawnRadius.w);
             const glm::vec3 dir = glm::dot(desc.localDirection, desc.localDirection) > 1e-6f
                 ? glm::normalize(desc.localDirection) : glm::vec3(0, 1, 0);
-            gpu.rotation = quatToVec4(inst.rot * rotationBetween(glm::vec3(0, 1, 0), dir));
-            gpu.velocityInherit = glm::vec4(inst.velocity, desc.inheritVelocity);
+            gpu.rotation = quatToVec4(rot * rotationBetween(glm::vec3(0, 1, 0), dir));
+            gpu.velocityInherit = glm::vec4(follow ? glm::vec3(0.0f) : inst.velocity, desc.inheritVelocity);
             renderer.updateParticleEmitter(emitter.rendererSlot, gpu);
+
+            if (desc.isVolume() && desc.occlude)
+            {
+                occlusionMin = glm::min(occlusionMin, worldPos - desc.volume);
+                occlusionMax = glm::max(occlusionMax, worldPos + desc.volume);
+                occlusionRequested = true;
+            }
 
             uint32 spawnCount = 0;
             if (inst.emitting && desc.rate > 0.0f)
@@ -246,11 +280,19 @@ void ParticleSystem::update(Renderer& renderer, float deltaSec)
             }
             if (inst.pendingBurst)
                 spawnCount += desc.burst;
+            if (desc.isVolume() && emitter.volumeFillSpawned < desc.count)
+            {
+                const uint32 fill = oc::min(desc.count - emitter.volumeFillSpawned, VOLUME_FILL_PER_FRAME);
+                emitter.volumeFillSpawned += fill;
+                spawnCount += fill;
+            }
             if (spawnCount > 0)
                 renderer.emitParticles(emitter.rendererSlot, spawnCount);
         }
         inst.pendingBurst = false;
     }
+    if (occlusionRequested)
+        renderer.setRainOcclusionVolume((occlusionMin + occlusionMax) * 0.5f, (occlusionMax - occlusionMin) * 0.5f);
 
     // Decals: age, fade, submit the live set (per-frame push, like lights).
     for (size_t i = 0; i < m_decals.size();)

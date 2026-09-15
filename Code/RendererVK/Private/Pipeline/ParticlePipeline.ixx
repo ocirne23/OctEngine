@@ -67,6 +67,8 @@ public:
         vk::ImageView prevDepthView;   // last frame's G-buffer depth (collision)
         vk::ImageView prevNormalView;  // last frame's G-buffer world normal
         vk::Sampler   gbufferSampler;
+        vk::ImageView rainOcclusionView;    // THIS frame's top-down rain occlusion depth (weather volume shelter)
+        vk::Sampler   rainOcclusionSampler; // non-comparison, clamp-to-border white (outside = open sky)
     };
     // Records begin/emit/sim into a begun secondary command buffer (outside any render pass).
     void recordSim(CommandBuffer& commandBuffer, uint32 frameIdx, const SimParams& params);

@@ -8,8 +8,9 @@ import :Layout;
 ShadowCullComputePipeline::ShadowCullComputePipeline() {}
 ShadowCullComputePipeline::~ShadowCullComputePipeline() {}
 
-void ShadowCullComputePipeline::initialize(uint32 maxMeshInstances, uint32 maxUniqueMeshes)
+void ShadowCullComputePipeline::initialize(uint32 maxMeshInstances, uint32 maxUniqueMeshes, bool rainOcclusion)
 {
+    m_rainOcclusion = rainOcclusion;
     resizeInstanceBuffers(maxMeshInstances);
     resizeCommandBuffers(maxUniqueMeshes);
 
@@ -54,6 +55,8 @@ void ShadowCullComputePipeline::buildComputeLayout(ComputePipelineLayout& comput
 {
     computePipelineLayout.computeShaderDebugFilePath = "Shaders/instanced_indirect_shadow.cs.glsl";
     computePipelineLayout.computeShaderText = FileSystem::readFileStr(computePipelineLayout.computeShaderDebugFilePath);
+    if (m_rainOcclusion)
+        computePipelineLayout.defines.push_back(ShaderDefine{ "RAIN_OCCLUSION", "1" });
 
     auto& b = computePipelineLayout.descriptorSetLayoutBindings;
     for (uint32 i = 0; i <= 12; i++) // 11/12 = LOD group idx per mesh / LOD group data
