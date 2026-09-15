@@ -90,6 +90,9 @@ public:
         vk::Sampler   gbufferSampler;
         vk::ImageView terrainView;      // terrain-data cascades (PARTICLE_FLAG_GROUND_FADE)
         vk::Sampler   terrainSampler;
+        Buffer* lightInfosBuffer = nullptr; // the scene's lights + light grid (LIT particles), this frame slot's
+        Buffer* lightGridsBuffer = nullptr;
+        Buffer* lightTableBuffer = nullptr;
     };
     // Records the indirect billboard draw; the caller has begun a command buffer inside the
     // scene-color render pass and set the viewport/scissor. eye selects the per-eye set/view.

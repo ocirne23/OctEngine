@@ -484,7 +484,8 @@ export namespace RendererVKLayout
         // Rain occlusion map (weather particle volumes): a plain top-down ortho view-projection (standard
         // Z, no packed bottom row) over the volume, rendered by the rain cull + depth pass and sampled
         // by the particle sim. Params: x = map present this frame (0/1), y = 1 / ortho depth range (m),
-        // z = shelter depth tolerance (m), w unused.
+        // z = shelter depth tolerance (m), w = the lit particles' scattering anisotropy g ("Particles/
+        // Anisotropy"; unrelated to the map, it rides the free slot).
         glm::mat4 rainOcclusionViewProj;
         glm::vec4 rainOcclusionParams;
         glm::vec4 cameraVelocity; // xyz = the centre view's velocity this frame (m/s, frame delta), w = the

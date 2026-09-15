@@ -19,6 +19,94 @@ layout (binding = 5, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 #define TERRAIN_HEIGHT_BINDING 6
 #include "terrain_height.inc.glsl"
 
+// The scene's punctual lights through the light grid (the forward pass's own buffers), for LIT
+// particles: a dust mote near a lamp picks up the lamp. Irradiance only - a particle is a scattering
+// speck with no normal, so every light contributes its falloff-attenuated colour isotropically.
+struct LightInfo
+{
+    vec3 pos;
+    float range;
+    vec3 color;
+    float width;     // 0 = point light, > 0 = rectangular area light, < 0 = spot
+    vec3 direction;  // area light: up-axis, magnitude = height; spot: axis, magnitude = edge softness
+    float rotation;  // area light: rotation of the quad around direction; spot: cone half-angle
+};
+layout (binding = 7, std430) readonly buffer InLightInfos { LightInfo in_lightInfos[]; };
+layout (binding = 8, std430) readonly buffer InLightGrid { uint in_gridData[]; };
+layout (binding = 9, std430) readonly buffer InGridTable
+{
+    uint in_numGrids;
+    uint in_gridDataCounter;
+    uint in_tableSize;
+    uint in_gridTable[];
+};
+#define GRID_DATA_NAME  in_gridData
+#define GRID_TABLE_NAME in_gridTable
+#define TABLE_SIZE_NAME in_tableSize
+#include "light_grid.inc.glsl"
+
+// Scattering phase, Henyey-Greenstein normalized so g = 0 gives 1: forward scattering makes a light
+// BEHIND the particle (light -> particle -> camera aligned) bright and one beside it dim - the halo
+// and dark side that stop a lit mist reading flat. cosTheta = dot(light-to-particle, particle-to-eye);
+// g = "Particles/Anisotropy" (u_rainOcclusionParams.w), separate from the fog's.
+float particlePhase(float cosTheta)
+{
+    const float g = clamp(u_rainOcclusionParams.w, -0.95, 0.95);
+    const float g2 = g * g;
+    const float denom = 1.0 + g2 - 2.0 * g * cosTheta;
+    return (1.0 - g2) / (denom * sqrt(max(denom, 1e-4)));
+}
+
+// One light's irradiance at a point (the forward pass's falloff + spot cone; area and tube lights as a
+// point at their centre - a particle cannot resolve their shape), phase-weighted toward the eye.
+vec3 particleLightIrradiance(LightInfo light, vec3 pos, vec3 toEye)
+{
+    const vec3 lightVec = light.pos - pos;
+    const float dist = max(length(lightVec), 1e-3);
+    const float range = abs(light.range);
+    float attenuation = 1.0 / (dist * dist + 1.0);
+    const float dr2 = (dist / range) * (dist / range);
+    float falloff = clamp(1.0 - dr2 * dr2, 0.0, 1.0);
+    falloff *= falloff;
+    float spot = 1.0;
+    if (light.width < 0.0)
+    {
+        const float softness = max(length(light.direction), 1e-4);
+        const float cosAngle = dot(-lightVec / dist, light.direction / softness);
+        const float cosOuter = cos(light.rotation);
+        spot = smoothstep(cosOuter, mix(cosOuter, 1.0, softness), cosAngle);
+    }
+    const float phase = particlePhase(dot(-lightVec / dist, toEye));
+    return light.color * (attenuation * falloff * spot * phase);
+}
+
+// Sum of the lights covering pos: the grid cell's own list plus the grid's large-light list.
+vec3 particleLocalLights(vec3 pos, vec3 toEye)
+{
+    vec3 sum = vec3(0.0);
+    const ivec3 gridPos = getGridPos(pos);
+    uint tableIdx = getTableIdx(gridPos);
+    for (uint probe = 0u; probe < 8u; ++probe) // bounded probe walk (the forward pass loops until EMPTY_ENTRY)
+    {
+        const uint gridIdx = getGridIdx(tableIdx);
+        if (gridIdx == EMPTY_ENTRY)
+            break;
+        if (getGridMin(gridIdx) == gridPos)
+        {
+            const uint numLargeLights = getLargeLightCount(gridIdx);
+            for (uint i = 0u; i < min(numLargeLights, MAX_LARGE_LIGHTS_PER_GRID); ++i)
+                sum += particleLightIrradiance(in_lightInfos[getLargeLightId(gridIdx, i)], pos, toEye);
+            const uint cellOffset = calcCellOffset(gridIdx, gridPos, pos);
+            const uint numLights = getNumLightsForCell(cellOffset);
+            for (uint i = 0u; i < min(numLights, MAX_LIGHTCELL_LIGHTS); ++i)
+                sum += particleLightIrradiance(in_lightInfos[getLightId(cellOffset, i)], pos, toEye);
+            break;
+        }
+        tableIdx = getNextTableIdx(tableIdx);
+    }
+    return sum;
+}
+
 // 0 = centre/desktop, 1/2 = the eyes in VR (selects the view matrices + billboard basis).
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 
@@ -81,17 +169,8 @@ void main()
     float alpha = mix(e.colorStart.a, e.colorEnd.a, lifeFrac) * envelope;
     vec3 color = mix(e.colorStart.rgb, e.colorEnd.rgb, lifeFrac);
 
-    if ((e.texFlags.y & PARTICLE_FLAG_LIT) != 0u)
-    {
-        const vec3 n = normalize(u_viewPos - pos + vec3(0.0, 1e-4, 0.0));
-        float coverage;
-        vec3 E = evalProbeSHCoverage(pos, n, coverage);
-        const vec3 irr = mix(giEvalSkySH(n), E, coverage);
-        const vec3 sun = atmosTransmittanceToLight(0.0, normalize(u_sunDirection), u_skyUp)
-            * u_sunColor.rgb * u_eclipseParams.x;
-        const vec3 light = irr * (1.0 / PI) + sun * 0.2 + u_ambientColor;
-        color *= mix(light, vec3(1.0), e.spinParams.z);
-    }
+    // (Lighting is evaluated further down, at the CORNER's world position, so a big sprite gets a
+    // gradient across it from the interpolation instead of one flat tint.)
 
     // Billboard basis for the selected view.
     const vec3 fwd = normalize(pos - u_viewPos);
@@ -135,6 +214,27 @@ void main()
     const vec3 world = pos + right * (c.x * halfW) + up * (c.y * halfH);
     gl_Position = u_mvp * vec4(world, 1.0);
     gl_Position.xy += u_taaJitter.xy * gl_Position.w;
+
+    if ((e.texFlags.y & PARTICLE_FLAG_LIT) != 0u)
+    {
+        // Lit at THIS corner's world position (the four corners differ, and the rasterizer interpolates
+        // the colour across the quad), so a lamp beside a 2 m mist sprite lights its near edge more than
+        // its far edge and the sprite reads as a gradient rather than a flat card.
+        const vec3 n = normalize(u_viewPos - world + vec3(0.0, 1e-4, 0.0));
+        float coverage;
+        vec3 E = evalProbeSHCoverage(world, n, coverage);
+        const vec3 irr = mix(giEvalSkySH(n), E, coverage);
+        // The sun and the scene's lights are phase-weighted (particlePhase): a back-lit mist glows, a
+        // side-lit one dims. GI and ambient stay isotropic - they come from everywhere.
+        const vec3 toEye = n;
+        const vec3 sunDir = normalize(u_sunDirection);
+        const vec3 sun = atmosTransmittanceToLight(0.0, sunDir, u_skyUp)
+            * u_sunColor.rgb * u_eclipseParams.x * particlePhase(dot(-sunDir, toEye));
+        // GI + sun + ambient, plus the scene's punctual lights through the light grid (a lamp lights the
+        // dust around it).
+        const vec3 light = irr * (1.0 / PI) + sun * 0.2 + u_ambientColor + particleLocalLights(world, toEye);
+        color *= mix(light, vec3(1.0), e.spinParams.z);
+    }
 
     // Flipbook frame selection (uv y flipped: texture v grows downward).
     const vec2 uvBase = vec2(corner01.x, 1.0 - corner01.y);

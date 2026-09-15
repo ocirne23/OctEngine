@@ -63,8 +63,13 @@ Shaders `particle_begin.cs.glsl` → `particle_emit.cs.glsl` → `particle_sim.c
 * Sim: gravity, drag, noise turbulence, and optional screen-space collision against last frame's
   G-buffer (`Particles → Depth collision`).
 * Draw: billboards in scene colour in ONE pipeline — velocity stretch, flipbooks, per-particle
-  GI + sun lighting, soft depth fade, and premultiplied blend with per-emitter `additivity`
+  lighting, soft depth fade, and premultiplied blend with per-emitter `additivity`
   (0 = smoke .. 1 = fire). `cullMode = None`, depth test on, **depth write off**.
+* **`Lit true`** = per particle (in the vertex shader): the GI probe irradiance + sun + ambient PLUS
+  the scene's punctual lights through the LIGHT GRID (the forward pass's own light-info / grid / table
+  buffers, bindings 7..9 of the draw set): each covering light adds its falloff-attenuated colour
+  isotropically (a particle is a scattering speck with no normal; spot cones apply, area and tube lights
+  count as points). `EmissiveFloor` blends toward unlit.
 * It is the `"Particles"` scene stage inside "Scene forward", after Force union blend and before
   Fog apply ([Renderer.cpp:3526](../RendererVK/Private/Renderer.cpp#L3526)).
 * Tweaks under `Particles/*`: Enabled, Depth collision, Time scale, Log stats (plus the rain

@@ -124,6 +124,7 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     Tweak::floatVar("Particles", "Rain occlusion pad", &m_rainOcclusionCasterPad, 0.0f, 500.0f, 1.0f);
     Tweak::floatVar("Particles", "Rain occlusion bias", &m_rainOcclusionTolerance, 0.0f, 2.0f, 0.01f);
     Tweak::floatVar("Particles", "Streak camera blur", &m_streakCameraBlur, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Particles", "Anisotropy", &m_particleAnisotropy, -0.9f, 0.95f, 0.01f);
     Tweak::floatVar("Particles", "Wind speed", &m_windSpeed, 0.0f, 40.0f, 0.1f);
     Tweak::floatVar("Particles", "Wind angle", &m_windAngleDeg, 0.0f, 360.0f, 1.0f);
     Tweak::floatVar("Particles", "Wind gust strength", &m_windGustStrength, 0.0f, 20.0f, 0.1f);
@@ -1081,10 +1082,11 @@ void Renderer::buildUboRainOcclusion()
 {
     RendererVKLayout::Ubo& ubo = m_ubo;
     const RainOcclusionVolume& v = m_rainVolume;
+    const float anisotropy = glm::clamp(m_particleAnisotropy, -0.95f, 0.95f); // rides the params' free w
     if (!v.active || !m_rainOcclusionEnabled)
     {
         ubo.rainOcclusionViewProj = glm::mat4(1.0f);
-        ubo.rainOcclusionParams = glm::vec4(0.0f);
+        ubo.rainOcclusionParams = glm::vec4(0.0f, 0.0f, 0.0f, anisotropy);
         return;
     }
     const float hx = glm::max(v.halfExtents.x, 1.0f) * 1.25f;
@@ -1095,7 +1097,7 @@ void Renderer::buildUboRainOcclusion()
     const glm::mat4 view = glm::lookAtRH(eye, v.center, glm::vec3(0.0f, 0.0f, 1.0f));
     const glm::mat4 proj = glm::orthoRH_ZO(-hx, hx, -hz, hz, 0.0f, range);
     ubo.rainOcclusionViewProj = proj * view;
-    ubo.rainOcclusionParams = glm::vec4(1.0f, 1.0f / range, glm::max(m_rainOcclusionTolerance, 0.0f), 0.0f);
+    ubo.rainOcclusionParams = glm::vec4(1.0f, 1.0f / range, glm::max(m_rainOcclusionTolerance, 0.0f), anisotropy);
 }
 
 // Volumetric fog params + the fog terrain height cascades (also the ocean's shore-map fallback).
@@ -2968,6 +2970,9 @@ void Renderer::recordParticlesInto(CommandBuffer& cb, uint32 frameIdx, uint32 ey
         .gbufferSampler = frameData.gbuffer.getSampler(),
         .terrainView = m_fogTerrainMap.getView(),
         .terrainSampler = m_fogTerrainMap.getSampler(),
+        .lightInfosBuffer = &frameData.lightInfosBuffer,
+        .lightGridsBuffer = &frameData.lightGridsBuffer,
+        .lightTableBuffer = &frameData.lightTableBuffer,
     };
     m_particlePipeline.recordDraw(cb, frameIdx, eyeIndex, drawParams);
 }

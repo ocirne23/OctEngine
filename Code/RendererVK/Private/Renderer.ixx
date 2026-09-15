@@ -823,6 +823,7 @@ private:
     float m_rainOcclusionCasterPad = 100.0f; // "Particles/Rain occlusion pad": how far above the box a roof still shelters (m)
     float m_rainOcclusionTolerance = 0.25f;  // "Particles/Rain occlusion bias": depth below the surface before a drop counts as sheltered (m)
     float m_streakCameraBlur = 0.15f;        // "Particles/Streak camera blur": fraction of the camera velocity the weather streaks subtract
+    float m_particleAnisotropy = 0.8f;       // "Particles/Anisotropy": the lit particles' scattering phase g (0 = isotropic, forward < 1)
     // Weather wind for the volumes ("Particles/Wind *", Ubo::weatherWind0/1/2). A storm: speed 15,
     // gust strength 8, sheet contrast 0.7, sheet drift 6.
     float m_windSpeed = 1.0f;       // m/s

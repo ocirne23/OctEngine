@@ -56,7 +56,7 @@ layout (binding = UBO_BINDING, std140) uniform UBO
 
     // Rain occlusion map (weather particle volumes): top-down ortho view-projection (standard Z, plain
     // bottom row) over the volume. Params: x = present (0/1), y = 1 / depth range (m), z = shelter
-    // tolerance (m), w unused.
+    // tolerance (m), w = the lit particles' scattering anisotropy g (rides the free slot).
     mat4 u_rainOcclusionViewProj;
     vec4 u_rainOcclusionParams;
     vec4 u_cameraVelocity; // xyz = the centre view's velocity this frame (m/s), w = the fraction of it weather streaks subtract

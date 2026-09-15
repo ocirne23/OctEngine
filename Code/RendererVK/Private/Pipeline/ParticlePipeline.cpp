@@ -107,6 +107,8 @@ void ParticlePipeline::buildDrawLayout(GraphicsPipelineLayout& layout, uint32 ma
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 4, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 5, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 6, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex }); // terrain data (ground fade)
+    for (uint32 binding = 7; binding <= 9; ++binding) // light infos, light grid, grid table (LIT particles pick up the scene's lights)
+        b.push_back(vk::DescriptorSetLayoutBinding{ .binding = binding, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex });
     // 20 = the set's highest binding number: required for eVariableDescriptorCount.
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 20, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = maxTextures, .stageFlags = vk::ShaderStageFlagBits::eFragment });
     layout.descriptorBindingFlags.resize(b.size());
@@ -391,7 +393,7 @@ void ParticlePipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameIdx,
     DescriptorSet& set = m_drawSets[drawSlot(frameIdx, eye)];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
 
-    oc::array<DescriptorSetUpdateInfo, 8> updates{
+    oc::array<DescriptorSetUpdateInfo, 11> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(Ubo) } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_poolBuffer) } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_aliveBuffers[1 - parity]) } },
@@ -400,12 +402,15 @@ void ParticlePipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameIdx,
             vk::DescriptorImageInfo{ .sampler = params.gbufferSampler, .imageView = params.gbufferDepthView, .imageLayout = params.gbufferDepthLayout } } },
         DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.giGridDataBuffer) } },
         DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.terrainSampler, params.terrainView) } },
+        DescriptorSetUpdateInfo{ .binding = 7, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(*params.lightInfosBuffer) } },
+        DescriptorSetUpdateInfo{ .binding = 8, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(*params.lightGridsBuffer) } },
+        DescriptorSetUpdateInfo{ .binding = 9, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(*params.lightTableBuffer) } },
         DescriptorSetUpdateInfo{ .binding = 20, .type = vk::DescriptorType::eCombinedImageSampler },
     };
     const size_t numTextures = Globals::textureManager.getNumTextures();
-    updates[7].imageInfos.reserve(numTextures);
+    updates[10].imageInfos.reserve(numTextures);
     for (uint16 texIdx = 0; texIdx < (uint16)numTextures; ++texIdx)
-        updates[7].imageInfos.push_back(vk::DescriptorImageInfo{
+        updates[10].imageInfos.push_back(vk::DescriptorImageInfo{
             .sampler = m_textureSampler.getSampler(),
             .imageView = Globals::textureManager.getViewForDescriptor(texIdx), // freed slots -> fallback
             .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal });
