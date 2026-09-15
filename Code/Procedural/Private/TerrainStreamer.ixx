@@ -202,6 +202,9 @@ export namespace Procedural
 		// optional models from Tools/convert_models_fp16.py; without them it stays fp32. Flipping it
 		// reloads the models and changes the terrain for a given seed, so it regenerates the world.
 		bool  m_v3Fp16 = false;
+		// "Load models": off = the terrain runs on the existing .tile cache only (TerrainGenV3::
+		// setModelLoadingEnabled), so no weights are ever loaded.
+		bool  m_v3LoadModels = false;
 		// V3 can't generate until its models are downloaded+loaded. Building chunks before then would bake a
 		// flat sea-level world into the resident cache, so the streamer idles instead and rebuilds on ready.
 		bool m_v3AwaitingModels = false;

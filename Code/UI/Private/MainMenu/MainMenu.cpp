@@ -145,7 +145,7 @@ void MainMenu::render(const Rect& fullRect, oc::vector<const TweakVar*>& deferre
 // each time - a button press never survived to its release, so clicks did nothing. Afterwards the
 // display order is stable on its own: the dim blocks clicks from reaching the panels, and its
 // NoBringToFrontOnFocus keeps a click on the dim itself from raising it over the buttons.
-void MainMenu::renderEscape(bool offerDebugToggle)
+void MainMenu::renderEscape(EEscapeLayout layout)
 {
 	const bool focusThisFrame = m_escapeFocusPending;
 	m_escapeFocusPending = false;
@@ -188,10 +188,10 @@ void MainMenu::renderEscape(bool offerDebugToggle)
 			m_escapeAction = EscapeMenuAction::Resume;
 		if (m_escapeOffersPause && !m_gamePaused && ImGui::Button("Pause game", buttonSize))
 			m_escapeAction = EscapeMenuAction::Pause; // shared: every player sees the paused box
-		if (offerDebugToggle)
+		if (layout != EEscapeLayout::Lobby)
 		{
 			ImGui::Spacing();
-			ImGui::Checkbox("Debug panels", &m_debugPanels);
+			ImGui::Checkbox("Debug panels", layout == EEscapeLayout::Game ? &m_debugPanels : &m_editorPanels);
 			// The Profiler panel's Pause button without the panel: freezes the profiler's rings +
 			// frame marks (Profiler::setPaused); the panel adopts the state when it next shows.
 			bool profilerPaused = Globals::profiler.isPaused();

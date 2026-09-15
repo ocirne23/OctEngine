@@ -110,7 +110,7 @@ export namespace Procedural
 				m_statusText = TerrainGenV3::statusText();
 				return;
 			}
-			if (!TerrainGenV3::modelsLoaded()) // inference needs the weights, not just the caches
+			if (!TerrainGenV3::canGenerate()) // the weights, or the caches when loading is switched off
 			{
 				m_statusText = TerrainGenV3::statusText();
 				return;
@@ -365,7 +365,7 @@ export namespace Procedural
 				m_statusText = TerrainGenV3::statusText();
 				return;
 			}
-			if (!TerrainGenV3::modelsLoaded()) // inference needs the weights, not just the caches
+			if (!TerrainGenV3::canGenerate()) // the weights, or the caches when loading is switched off
 			{
 				m_statusText = TerrainGenV3::statusText();
 				return;

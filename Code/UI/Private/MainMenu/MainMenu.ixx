@@ -201,10 +201,10 @@ public:
 		m_escapeAction = EscapeMenuAction::None;
 		return action;
 	}
-	// Widget pass, over the docked panels / the game layout / the lobby page. offerDebugToggle
-	// adds the "Debug panels" and "Pause profiler" checkboxes (game layout only - the editor
-	// already has every panel).
-	void renderEscape(bool offerDebugToggle);
+	// Widget pass, over the docked panels / the game layout / the lobby page. The Editor and Game
+	// layouts add the "Debug panels" and "Pause profiler" checkboxes.
+	enum class EEscapeLayout : uint8 { Lobby, Editor, Game };
+	void renderEscape(EEscapeLayout layout);
 	// The SHARED GAME PAUSE (main writes both, every frame): offersPause adds the escape menu's
 	// "Pause game" button (a running game only); paused shows the centered PAUSED box with its
 	// "Resume" button over everything (any player may resume - the game syncs the state).
@@ -212,9 +212,11 @@ public:
 	void setGamePaused(bool paused) { m_gamePaused = paused; }
 	bool isGamePaused() const { return m_gamePaused; }
 	void renderPausedBox(); // widget pass; no-op unless paused
-	// The escape menu's "Debug panels" checkbox: while set, the GAME layout shows the left-side
-	// Tweaks/Profiler/Memory section (see UI::updateJob). Written by the widget pass, read by it.
+	// The escape menu's "Debug panels" checkbox, ONE STATE PER LAYOUT (see UI::updateJob). Written by
+	// the widget pass, read by it. Game (default off): the left-side Tweaks/Profiler/Memory/Log
+	// section. Editor (default on): every docked panel - off leaves only the viewport, full window.
 	bool debugPanelsEnabled() const { return m_debugPanels; }
+	bool editorPanelsEnabled() const { return m_editorPanels; }
 
 	// Widget pass only. fullRect = the whole window (the menu centers itself in it); changed
 	// settings vars with onChange callbacks are collected into deferredCallbacks (the TweakPanel's
@@ -268,6 +270,7 @@ private:
 	bool m_escapeOpen = false;
 	bool m_escapeFocusPending = false; // focus the overlay windows on the OPENING frame only
 	bool m_debugPanels = false;        // "Debug panels" checkbox (game layout's left-side section)
+	bool m_editorPanels = true;        // "Debug panels" checkbox (editor layout's docked panels)
 	bool m_escapeOffersPause = false;  // a game runs: the escape menu shows "Pause game"
 	bool m_gamePaused = false;         // the shared pause is on: the PAUSED box shows
 	EscapeMenuAction m_escapeAction = EscapeMenuAction::None;

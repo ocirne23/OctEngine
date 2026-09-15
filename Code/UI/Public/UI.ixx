@@ -147,7 +147,8 @@ public:
     // window (HUD painted into it, same focus tracking the editor's Viewport panel has, so the
     // input gate and the game's viewport-focus checks work unchanged) plus, while the escape
     // menu's "Debug panels" checkbox is set, a resizable LEFT section with Tweaks / Profiler /
-    // Memory tabs that shrinks the viewport rect. main sets it with the mode start (startWorldAndGame)
+    // Memory tabs that shrinks the viewport rect. (The editor layout's own "Debug panels" state hides
+    // every docked panel and draws that same viewport window.) main sets it with the mode start (startWorldAndGame)
     // and clears it on exit-to-menu - main thread, pre-kick window (the pass reads it on the job).
     void setGameLayout(bool game)
     {
@@ -158,6 +159,8 @@ public:
     bool isGameLayout() const { return m_gameLayout; }
 
 private:
+
+    void renderFullscreenViewport(float left); // widget pass: the game layout's viewport window (see updateJob)
 
     bool m_isViewportGrabbed = false;
     bool m_isViewportFocused = false;

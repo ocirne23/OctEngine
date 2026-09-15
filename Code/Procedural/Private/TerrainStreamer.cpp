@@ -246,6 +246,8 @@ namespace Procedural
 		// Dirty so rebuildMaps runs on toggle: enabling is what kicks the V3 model load (disabled terrain
 		// never loads the 2.28 GB of models onto the GPU).
 		Tweak::boolean("Terrain", "Enabled", &m_enabled, dirty);
+		Tweak::boolean("Terrain", "Load models", &m_v3LoadModels, dirty);
+
 		// The ceiling is float-exact (overrides travel as floats): the lobby seeds the world through one.
 		Tweak::intVar("Terrain", "Seed", &m_seed, 0, 16000000, 1.0f, dirty);
 		Tweak::floatVar("Terrain", "Origin X (m)", &m_originX, -1.0e7f, 1.0e7f, 10.0f, dirty);
@@ -447,6 +449,9 @@ namespace Procedural
 		// the log says so. Flipping it RELOADS the weights and regenerates the world - fp16 is not
 		// bit-identical, so the same seed grows visibly different fine detail.
 		Tweak::boolean("Terrain/V3", "FP16 inference", &m_v3Fp16, dirty);
+		// Off = never load the 2.28 GB of diffusion weights: the terrain runs on the .tile files already
+		// in Local/Diffusion/<seed>/ (a missing tile falls back to the coarse stage, else sea level).
+		// Turning it off with the models up unloads them.
 
 		rebuildMaps();  // (a no-op while disabled: no generator, no model load)
 		kickTexBake();  // (likewise gated: a disabled terrain reads no source images)
@@ -671,6 +676,7 @@ namespace Procedural
 		// and drops isReady(), so a check taken before it would publish a generator whose pipeline is
 		// being torn down underneath it - and every chunk built meanwhile would bake a flat sea-level
 		// world into the resident cache and never be revisited.
+		TerrainGenV3::setModelLoadingEnabled(m_v3LoadModels); // before any construction below kicks a load
 		TerrainGenV3::setPrecision(m_v3Fp16);
 
 		oc::shared_ptr<const ITerrainSampler> maps;

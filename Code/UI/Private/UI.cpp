@@ -113,7 +113,7 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
         m_mainMenu.render(m_viewportRect, m_tweakPanel.deferredCallbacks());
         m_mainMenu.renderPausedBox(); // (no-op unless the shared pause is on)
         if (m_mainMenu.isEscapeOpen()) // reachable from the LOBBY page (its only leave mechanism)
-            m_mainMenu.renderEscape(false);
+            m_mainMenu.renderEscape(MainMenu::EEscapeLayout::Lobby);
         renderImGuiToSnapshot();
         return;
     }
@@ -181,36 +181,7 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
             ImGui::End();
         }
 
-        {
-            ProfileScope scope("Panel: Viewport", EProfileCategory::UI);
-            const ImVec2 vpPos(viewportLeft, viewport->Pos.y);
-            const ImVec2 vpSize(viewport->Pos.x + viewport->Size.x - viewportLeft, viewport->Size.y);
-            ImGui::SetNextWindowPos(vpPos, ImGuiCond_Always);
-            ImGui::SetNextWindowSize(vpSize, ImGuiCond_Always);
-            if (m_gameLayoutFocusPending)
-            {
-                m_gameLayoutFocusPending = false;
-                ImGui::SetNextWindowFocus();
-            }
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-            const ImGuiWindowFlags vpFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize
-                | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBringToFrontOnFocus
-                | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollWithMouse;
-            const bool viewportOpen = ImGui::Begin("##GameViewport", nullptr, vpFlags);
-            m_isViewportGrabbed = false;
-            const bool isViewportFocused = viewportOpen && ImGui::IsWindowFocused();
-            m_hasViewportGainedFocus = isViewportFocused && !m_isViewportFocused;
-            m_isViewportFocused = isViewportFocused;
-            m_viewportRect = Rect(glm::ivec2((int)vpPos.x, (int)vpPos.y), glm::ivec2(int(vpPos.x + vpSize.x), int(vpPos.y + vpSize.y)));
-            if (viewportOpen)
-            {
-                ProfileScope hudScope("Game HUD overlay", EProfileCategory::UI);
-                m_gameHudOverlay.render(m_viewportRect);
-            }
-            ImGui::End();
-            ImGui::PopStyleVar(2);
-        }
+        renderFullscreenViewport(viewportLeft);
 
         {
             // Text chat over the viewport's bottom-right corner (after the viewport window so it
@@ -230,12 +201,13 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
         if (m_mainMenu.isEscapeOpen())
         {
             ProfileScope scope("Escape menu", EProfileCategory::UI);
-            m_mainMenu.renderEscape(true);
+            m_mainMenu.renderEscape(MainMenu::EEscapeLayout::Game);
         }
         renderImGuiToSnapshot();
         return;
     }
 
+    const bool editorPanels = m_mainMenu.editorPanelsEnabled();
     {
         ProfileScope scope("Dockspace", EProfileCategory::UI);
         ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -252,8 +224,9 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
         ImGui::Begin("Root", nullptr, rootWindowFlags);
         ImGui::PopStyleVar(3);
 
+        // Panels hidden: KeepAliveOnly, or the unsubmitted docked windows would be undocked.
         ImGuiID dockspace_id = ImGui::GetID("Root");
-        ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), 0);
+        ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), editorPanels ? 0 : ImGuiDockNodeFlags_KeepAliveOnly);
 
         static bool first_time = true;
         if (first_time)
@@ -289,6 +262,31 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
         }
 
         ImGui::End();
+    }
+
+    if (!editorPanels)
+    {
+        // The escape menu's "Debug panels" is off: no panel at all, only the viewport over the full
+        // window. The open flags drop, so no prepare jobs run, and the gizmo gets no selection.
+        m_logOpen = false;
+        m_contentOpen = false;
+        m_scriptEditorOpen = false;
+        m_profilerOpen = false;
+        m_memoryOpen = false;
+        renderFullscreenViewport(ImGui::GetMainViewport()->Pos.x);
+        if (m_gizmo)
+        {
+            ProfileScope scope("Gizmo update", EProfileCategory::UI);
+            m_gizmo->update(camera, m_viewportRect, nullptr, deltaSec);
+        }
+        m_mainMenu.renderPausedBox();
+        if (m_mainMenu.isEscapeOpen())
+        {
+            ProfileScope scope("Escape menu", EProfileCategory::UI);
+            m_mainMenu.renderEscape(MainMenu::EEscapeLayout::Editor);
+        }
+        renderImGuiToSnapshot();
+        return;
     }
 
     {
@@ -526,13 +524,49 @@ void UI::updateJob(const oc::vector<EntityPtr>& rootEntities, const Camera& came
     if (m_mainMenu.isEscapeOpen())
     {
         ProfileScope scope("Escape menu", EProfileCategory::UI);
-        m_mainMenu.renderEscape(false);
+        m_mainMenu.renderEscape(MainMenu::EEscapeLayout::Editor);
     }
 
     // The widget pass ends by producing its own draw data: ImGui::Render + the renderer-facing
     // snapshot run right here on the job (the context is ours until the join), so main's frame top
     // is just the join + flushMainThreadWork.
     renderImGuiToSnapshot();
+}
+
+// The undecorated viewport window from `left` to the main viewport's right edge, full height - the
+// game layout's, and the editor's while its panels are hidden. A real ImGui window, so the HUD paints
+// into its draw list and IsWindowFocused feeds the same viewport-focus gate the docked Viewport does.
+void UI::renderFullscreenViewport(float left)
+{
+    ProfileScope scope("Panel: Viewport", EProfileCategory::UI);
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const ImVec2 vpPos(left, viewport->Pos.y);
+    const ImVec2 vpSize(viewport->Pos.x + viewport->Size.x - left, viewport->Size.y);
+    ImGui::SetNextWindowPos(vpPos, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(vpSize, ImGuiCond_Always);
+    if (m_gameLayoutFocusPending)
+    {
+        m_gameLayoutFocusPending = false;
+        ImGui::SetNextWindowFocus();
+    }
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    const ImGuiWindowFlags vpFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize
+        | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBringToFrontOnFocus
+        | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollWithMouse;
+    const bool viewportOpen = ImGui::Begin("##GameViewport", nullptr, vpFlags);
+    m_isViewportGrabbed = false;
+    const bool isViewportFocused = viewportOpen && ImGui::IsWindowFocused();
+    m_hasViewportGainedFocus = isViewportFocused && !m_isViewportFocused;
+    m_isViewportFocused = isViewportFocused;
+    m_viewportRect = Rect(glm::ivec2((int)vpPos.x, (int)vpPos.y), glm::ivec2(int(vpPos.x + vpSize.x), int(vpPos.y + vpSize.y)));
+    if (viewportOpen)
+    {
+        ProfileScope hudScope("Game HUD overlay", EProfileCategory::UI);
+        m_gameHudOverlay.render(m_viewportRect);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
 }
 
 void UI::handleKeyEvent(SDL_Event evt)

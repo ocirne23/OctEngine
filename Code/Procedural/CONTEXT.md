@@ -187,7 +187,17 @@ tiles) plus the near cascade (~1000).
 (= "sampling is valid") stays true, `modelsLoaded()` (= "inference is possible") is false, a cache
 miss is a null tile (coarse fallback, else sea level), and the next `TerrainGenV3` construction
 reloads — through the normal not-ready → ready handover. The session unloads at a seeded match's
-Start; the preview and the seeder gate on `modelsLoaded()`.
+Start.
+
+**"Terrain/V3/Load models"** (on by default) is the same state as a SWITCH:
+`TerrainGenV3::setModelLoadingEnabled`, applied at the top of `rebuildMaps` before any construction.
+Off: models already up are unloaded, and `beginLoad` enters cache-only instead of starting the loader,
+so the terrain runs entirely on the `.tile` files already under `Local/Diffusion/<seed>/`. `setPrecision`
+in cache-only only switches the cache folder (and clears the RAM caches) — it never reloads. The
+preview and the seeder gate on `canGenerate()`: the models are up, or loading is off and the caches
+serve (a preview then shows only coarse tiles generated before). **A tile missing from disk is retried
+from disk on every fetch** — cheap per call, but a camera flying far past the cached area pays one
+failed read per tile per grid.
 
 ## `TerrainSeeder` — pre-generating the playable area's tiles
 

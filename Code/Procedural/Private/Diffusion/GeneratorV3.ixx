@@ -159,6 +159,15 @@ export namespace Procedural
 		// The next construction of a TerrainGenV3 (a new preview, the sandbox) reloads them; until that
 		// load lands isReady() is false again, exactly like the first startup.
 		static void unloadModels();
+		// The "Terrain/V3/Load models" switch, process-wide. Off: loaded models are unloaded and none
+		// are ever loaded - the terrain runs entirely on the previously generated .tile files (a tile
+		// not on disk falls back to the coarse stage, else sea level). Call before constructing a
+		// generator so the construction does not kick a load. On: the next construction loads them.
+		static void setModelLoadingEnabled(bool enabled);
+		static bool modelLoadingEnabled();
+		// What the preview and the seeder wait for: the models are up, OR loading is switched off and
+		// the caches serve (a preview then shows only what was generated before).
+		static bool canGenerate();
 		// metersPerPixel / the model's native resolution: the uniform factor every world-space length the
 		// generator produces is scaled by (elevation, crag relief, detail). Anything OUTSIDE the generator
 		// that compares against those lengths in metres - the terrain shader's crag thresholds - has to

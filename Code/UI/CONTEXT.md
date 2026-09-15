@@ -267,6 +267,17 @@ The prepare gating flags follow the SELECTED tab; Content and Script Editor stay
 runs, **so its first-time layout still builds on the first editor frame.** The sandbox pick keeps the
 full editor.
 
+## Editor layout without panels
+
+The editor layout has its OWN "Debug panels" state (`MainMenu::editorPanelsEnabled`, default ON; the
+game layout's stays default OFF — `MainMenu::EEscapeLayout` picks which one the checkbox binds). Off:
+**no panel is submitted, only the same `##GameViewport` window (`UI::renderFullscreenViewport`) over the
+full window**, the HUD overlay, the paused box and the escape overlay. All prepare gating flags drop and
+the gizmo gets a null selection.
+
+**The dockspace is still submitted, with `ImGuiDockNodeFlags_KeepAliveOnly`** — ImGui undocks the
+windows of a dockspace that is not kept alive, so the layout would not come back with the checkbox.
+
 ---
 
 # Gizmo split

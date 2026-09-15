@@ -373,6 +373,13 @@ namespace Procedural
 			void beginLoad()
 			{
 				std::lock_guard<std::mutex> lk(m_loadMutex);
+				if (!m_loadEnabled)
+				{
+					// Model loading switched off: serve the tile caches only, never touch the weights.
+					if (!m_loadStarted || m_cacheOnly.load(oc::memory_order_acquire))
+						enterCacheOnlyLocked();
+					return;
+				}
 				if (m_loadStarted && !m_cacheOnly.load(oc::memory_order_acquire))
 					return;
 				// A reload after unloadModels(): the thread has exited (unload joined it). Leave the
@@ -404,6 +411,37 @@ namespace Procedural
 				m_cacheOnly.store(true, oc::memory_order_release);
 				setStatus("Models unloaded - serving the tile cache only");
 				Log::info("[Diffusion] models unloaded (disk/RAM tile cache only)");
+			}
+
+			// The "Terrain/V3/Load models" switch. Off: loaded models are unloaded, and no later
+			// construction loads them - the caches answer every sample, and a tile that is not on
+			// disk is a null tile (coarse fallback, else sea level). On again: the next construction
+			// (TerrainGenV3's ctor calls beginLoad) loads them through the normal not-ready handover.
+			void setLoadEnabled(bool enabled)
+			{
+				bool unload = false;
+				{
+					std::lock_guard<std::mutex> lk(m_loadMutex);
+					if (m_loadEnabled == enabled)
+						return;
+					m_loadEnabled = enabled;
+					if (!enabled)
+					{
+						if (!m_loadStarted)
+							enterCacheOnlyLocked(); // nothing loaded yet: straight to the caches
+						else
+							unload = !m_cacheOnly.load(oc::memory_order_acquire);
+					}
+					Log::info(enabled ? "[Diffusion] model loading enabled"
+					                  : "[Diffusion] model loading disabled - using the tile cache only");
+				}
+				if (unload)
+					unloadModels(); // takes m_loadMutex itself; joins a load in flight
+			}
+			bool isLoadEnabled() const
+			{
+				std::lock_guard<std::mutex> lk(m_loadMutex);
+				return m_loadEnabled;
 			}
 
 			bool isReady() const { return m_ready.load(oc::memory_order_acquire); }
@@ -477,9 +515,14 @@ namespace Procedural
 				m_activeFp16.store(p == EPrecision::Fp16, oc::memory_order_relaxed); // disk-cache path mirror
 				if (p == m_precision)
 					return;
-				if (!m_loadStarted)
+				if (!m_loadStarted || m_cacheOnly.load(oc::memory_order_acquire))
 				{
-					m_precision = p; // nothing to reload; loadWorker will read it
+					// Nothing loaded to reload; loadWorker reads it if a load ever starts. The cached
+					// tiles are the OTHER precision's folder, so they go.
+					m_precision = p;
+					std::lock_guard<std::mutex> ck(m_cacheMutex);
+					m_cache.clear();
+					m_coarseCache.clear();
 					return;
 				}
 
@@ -526,6 +569,16 @@ namespace Procedural
 			{
 				std::lock_guard<std::mutex> lk(m_statusMutex);
 				m_status.assign(s.data(), s.size());
+			}
+
+			// Caller holds m_loadMutex; nothing is loaded or loading.
+			void enterCacheOnlyLocked()
+			{
+				if (m_cacheOnly.load(oc::memory_order_acquire))
+					return;
+				m_ready.store(false, oc::memory_order_release);
+				m_cacheOnly.store(true, oc::memory_order_release);
+				setStatus("Model loading disabled - serving the tile cache only");
 			}
 
 			void loadWorker()
@@ -627,8 +680,9 @@ namespace Procedural
 
 			ModelAssets m_assets;
 			std::thread m_loader;
-			std::mutex m_loadMutex;
+			mutable std::mutex m_loadMutex;
 			bool m_loadStarted = false;
+			bool m_loadEnabled = true; // guarded by m_loadMutex; see setLoadEnabled
 			uint64 m_seedAtLoad = 1337;
 			EPrecision m_precision = EPrecision::Fp32; // guarded by m_loadMutex; see setPrecision
 			oc::atomic<bool> m_ready{ false };
@@ -1318,6 +1372,9 @@ namespace Procedural
 	bool TerrainGenV3::isReady() { return DiffusionRuntime::get().canSample(); }
 	bool TerrainGenV3::modelsLoaded() { return DiffusionRuntime::get().isReady(); }
 	void TerrainGenV3::unloadModels() { DiffusionRuntime::get().unloadModels(); }
+	void TerrainGenV3::setModelLoadingEnabled(bool enabled) { DiffusionRuntime::get().setLoadEnabled(enabled); }
+	bool TerrainGenV3::modelLoadingEnabled() { return DiffusionRuntime::get().isLoadEnabled(); }
+	bool TerrainGenV3::canGenerate() { return modelsLoaded() || (!modelLoadingEnabled() && isReady()); }
 	bool TerrainGenV3::hasFailed() { return DiffusionRuntime::get().hasFailed(); }
 	oc::string TerrainGenV3::statusText() { return DiffusionRuntime::get().statusText(); }
 

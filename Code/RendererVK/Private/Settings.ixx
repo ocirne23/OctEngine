@@ -148,8 +148,8 @@ export struct FogParams
                                    // structure (local lights, fog volumes, noise)
     bool  farField = true;         // extend the fog past `range` analytically instead of with more slices
                                    // (vol_apply's volFarField); unbounded, so the horizon fully fogs
-    float farFieldDensity = 1.0f;  // far-field deviations from the near field's own fog. At 1/1 the two are
-    float farFieldThickness = 1.0f; // one continuous medium; near fog is usually authored far thicker than
+    float farFieldDensity = 0.5f;  // far-field deviations from the near field's own fog. At 1/1 the two are
+    float farFieldThickness = 0.5f; // one continuous medium; near fog is usually authored far thicker than
                                    // anything readable over tens of km, hence the knobs. Thickness scales
                                    // heightFalloff's scale height (> 1 = thicker at range)
     int   farFieldSteps = 4;       // ground samples along the far segment. Each sub-segment between them is
