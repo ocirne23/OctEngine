@@ -504,6 +504,12 @@ Both push params in every frame; the renderer owns none of the tweaks.
 * **`setOceanParams`** — flipping `hitLighting` rebuilds the ocean fragment variant (GPU idle + shader
   reload). `setOceanWaveTrough` sizes the waterline band the fog scatter samples for the underwater fog
   boundary.
+* **The Ocean variant is BACK-FACE CULLED, like the prepass.** The clipmap carries every triangle in
+  both windings (see Sectors in [`Code/Procedural/CONTEXT.md`](../Procedural/CONTEXT.md)), so the
+  underside draws from under water and the prepass holds the nearest face from either side. Do not
+  switch it to cull none: the depth-read-only forward pass would shade every wave crossing along an
+  underwater ray. The underside shading (Snell's window, TIR, the "Underside transmission" tweak in
+  `u_oceanParams10.z`) lives in `ocean.fs.glsl`.
 * **`setTerrainWetParams`** — the terrain WETNESS clipmap (`TerrainWetnessPipeline`,
   `terrain_wetness.cs.glsl` / `.inc.glsl`): ONE persistent R16F image, `TERRAIN_WET_RES`² texels of
   `texelSize` m, stored **toroidally around the scene focus** exactly like the GI probe clipmap (slot =

@@ -294,10 +294,16 @@ void main()
 	// XZ offset, no tongue thickness), so the gate is pushed "Live surface margin" (u_terrainWetParams7.y)
 	// below it - without that a bare band of ground showed between the waterline and the film - and
 	// eases in over the 10 cm above that.
+	// Also 0 for the whole frame while the CAMERA is under water: the gloss and the film are sky
+	// mirrored off standing water, which a submerged viewer never sees (the ocean's own underside draws
+	// what it mirrors). The camera's side is the particle draw's gate: the live wave height under the
+	// camera (the CPU mirror, u_weatherWind2.z), else the calm level here, else sea level.
 	g_waterLevelOverride = fields.waterLevel;
 	resolveLiveDepth(in_pos);
 	const float liveMargin = u_terrainWetParams7.y;
-	const float aboveLive = 1.0 - smoothstep(liveMargin - 0.1, liveMargin, g_liveDepthBelow);
+	const float waterAtCamera = u_weatherWind2.w > 0.5 ? u_weatherWind2.z : fields.waterLevel;
+	const float aboveLive = u_viewPos.y < waterAtCamera ? 0.0
+		: 1.0 - smoothstep(liveMargin - 0.1, liveMargin, g_liveDepthBelow);
 	if (terrainWetPresent())
 	{
 		float wet = terrainWetnessAt(in_pos.xz);

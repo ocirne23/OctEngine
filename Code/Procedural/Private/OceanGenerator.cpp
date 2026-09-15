@@ -77,6 +77,7 @@ namespace Procedural
 		// Crest SSS (Sea of Thieves-style): sun shining through back-lit crests, scaled by wave height.
 		Tweak::floatVar("Ocean/Shading", "SSS strength", &m_sssStrength, 0.0f, 4.0f, 0.01f);
 		Tweak::floatVar("Ocean/Shading", "SSS power", &m_sssPower, 1.0f, 16.0f, 0.1f);
+		Tweak::floatVar("Ocean/Shading", "Underside transmission", &m_undersideTransmission, 0.0f, 1.0f, 0.01f); // sky through Snell's window from below; less = more internal reflection
 		Tweak::boolean("Ocean/Shading", "Hit lighting", &m_hitLighting); // lights on geometry seen through/mirrored in the water
 		Tweak::color3("Ocean/Shading", "Foam color", &m_foamColor);
 		// One instant-foam response (thresholds + softness) draws the crest foam AND injects the
@@ -145,6 +146,9 @@ namespace Procedural
 		// around its hole, the horizon band as its 4 sides - each its own container/node + spatial entry
 		// so both cull paths (Spatial gate + GPU per-instance frustum test) drop off-screen water.
 		// Sector borders duplicate identical vertices: same position, cell size and morph -> watertight.
+		// Every triangle is emitted in both windings, back to back, so the back-face-culled prepass and
+		// Ocean pipelines draw the surface from either side and the prepass depth holds the nearest face
+		// from below as well as above. Adjacent copies hit the vertex cache; only the index count doubles.
 		const int   N = glm::clamp(m_ringRes & ~3, 16, 1024); // multiple of 4: hole/sector edges stay on the lattice
 		const float c0 = glm::max(m_ringCell * m_worldScale, 0.001f); // world metres: the cell rides the scale like the waves it holds
 		const int   rings = glm::clamp(m_rings, 1, 12);
@@ -154,6 +158,10 @@ namespace Procedural
 		oc::vector<glm::vec3> normals;
 		oc::vector<glm::vec3> texCoords;
 		oc::vector<uint32> indices;
+		const auto pushTri = [&](uint32 a, uint32 b, uint32 c) {
+			indices.push_back(a); indices.push_back(b); indices.push_back(c); // up-facing
+			indices.push_back(a); indices.push_back(c); indices.push_back(b); // down-facing
+		};
 
 		// Wraps the accumulated arrays into one sector: container + node + SpatialIndex registration
 		// (SpatialLayer_Terrain like terrain chunks - render culling only, invisible to gameplay
@@ -239,8 +247,8 @@ namespace Procedural
 					const uint32 b = a + 1;
 					const uint32 c = a + (uint32)w;
 					const uint32 d = c + 1;
-					indices.push_back(a); indices.push_back(c); indices.push_back(b);
-					indices.push_back(b); indices.push_back(c); indices.push_back(d);
+					pushTri(a, c, b);
+					pushTri(b, c, d);
 				}
 			}
 		};
@@ -311,8 +319,8 @@ namespace Procedural
 					{
 						const uint32 in0 = k, in1 = k + 1;
 						const uint32 out0 = (uint32)(M + 1) + k, out1 = out0 + 1;
-						indices.push_back(in0); indices.push_back(in1); indices.push_back(out0);
-						indices.push_back(in1); indices.push_back(out1); indices.push_back(out0);
+						pushTri(in0, in1, out0);
+						pushTri(in1, out1, out0);
 					}
 					emitSector();
 				}
@@ -410,6 +418,7 @@ namespace Procedural
 		params.glintFilter = m_glintFilter;
 		params.sssStrength = m_sssStrength / s; // per metre of crest height
 		params.sssPower = m_sssPower;
+		params.undersideTransmission = m_undersideTransmission;
 		params.hitLighting = m_hitLighting;
 		params.foamColor = m_foamColor;
 		params.foamBias = m_foamBias;

@@ -354,6 +354,8 @@ export struct OceanParams
     // scaled by height above the calm water line. Power shapes the toward-the-sun view lobe.
     float sssStrength      = 0.65f;  // per meter of crest height; 0 disables (and the extra shadow rays with it)
     float sssPower         = 1.0f;
+    float undersideTransmission = 1.0f; // scale on the sky seen through Snell's window from below (1 = Fresnel
+                                        // transmission; less = more internal reflection, a darker ceiling)
     bool  hitLighting      = false; // evaluate the scene's grid lights at refraction/reflection ray hits
                                     // (OCEAN_HIT_LIGHTS shader variant; toggling reloads the pipeline)
     // Foam & turbulence. ONE instant-foam response (oceanInstantFoam) both draws the per-pixel crest

@@ -196,7 +196,9 @@ vec3 terrainSeabedAlbedo(vec3 worldPos, vec3 geoN, float rayT, out float waterLe
     return albedo;
 }
 
-bool traceScene(vec3 origin, vec3 dir, float tMax, out SceneHit hit)
+// underwater: the hit sits in the water column, so its calm level is fetched for shadeHit's absorption
+// (a reflection ray's hit is above the surface: no column, no fetch).
+bool traceScene(vec3 origin, vec3 dir, float tMax, bool underwater, out SceneHit hit)
 {
     rayQueryEXT rq;
     rayQueryInitializeEXT(rq, u_tlas, gl_RayFlagsNoneEXT, 0xFFu, origin, 0.05, dir, tMax);
@@ -253,7 +255,7 @@ bool traceScene(vec3 origin, vec3 dir, float tMax, out SceneHit hit)
             }
         }
     }
-    if (hit.waterLevel < -1e29) // non-terrain hit (or an unresolved one): one shore fetch for the column
+    if (underwater && hit.waterLevel < -1e29) // non-terrain hit (or an unresolved one): one shore fetch for the column
         hit.waterLevel = oceanSampleShoreData(hit.pos.xz).y;
     return true;
 }
@@ -302,6 +304,45 @@ vec3 shadeHit(SceneHit hit, vec3 rayDir, vec3 sunRadiance, vec3 L)
     return radiance;
 }
 
+// The water body along `dir` from `origin` (a surface point offset to the water side): the scene hit
+// (TLAS; the baked terrain height field when that misses or rays are off), shaded, Beer-Lambert
+// absorbed over the path and blended into the in-scatter. Bounded at ~99% extinction and "Refraction
+// range" (the bottom fades over the range's last 25%: a hard cutoff draws a contour on the seabed).
+// surfPos/shoreHW: the pixel's surface point and its shore fetch, the height-field fallback's first
+// estimate (bottom measured from the SURFACE point, not the calm level - the waterline band would
+// reject otherwise; never rejected when negative: terrain stood behind the water in the depth test, so
+// a bottom exists - a map-vs-mesh disagreement otherwise draws a deep-blue line along the shore).
+vec3 traceWaterBody(vec3 origin, vec3 dir, vec3 surfPos, vec2 shoreHW, vec3 sunTint, float sunVis, vec3 L, vec3 inscatter, bool rtInRange)
+{
+    const vec3 sigmaT = u_oceanAbsorption.rgb;
+    const float minSigma = max(min(sigmaT.r, min(sigmaT.g, sigmaT.b)), 1e-3);
+    const float range = u_oceanParams9.y;
+    const float tMax = min(4.6 / minSigma, range);
+    SceneHit hit;
+    bool haveHit = rtInRange && traceScene(origin, dir, tMax, true, hit);
+    if (!haveHit && dir.y < -0.02)
+    {
+        float bottom = surfPos.y - shoreHW.x;
+        const float t = max(bottom, 0.02) / -dir.y;
+        bottom = surfPos.y - oceanSampleShoreData(surfPos.xz + dir.xz * t).x; // one refinement for sloped shelves
+        hit.t = max(bottom, 0.02) / -dir.y;
+        if (hit.t < range)
+        {
+            hit.t = min(hit.t, 4.6 / minSigma);
+            hit.pos = surfPos + dir * hit.t;
+            hit.N = vec3(0.0, 1.0, 0.0);
+            hit.albedo = terrainSeabedAlbedo(hit.pos, hit.N, hit.t, hit.waterLevel);
+            haveHit = true;
+        }
+    }
+    if (!haveHit)
+        return inscatter;
+    const float sunPath = max(hit.waterLevel - hit.pos.y, 0.0) / max(L.y, 0.25); // column above the hit
+    const vec3 hitRadiance = shadeHit(hit, dir, sunTint * sunVis * exp(-sigmaT * sunPath), L);
+    const vec3 T = exp(-sigmaT * hit.t) * (1.0 - smoothstep(0.75 * range, range, hit.t));
+    return hitRadiance * T + inscatter * (1.0 - T);
+}
+
 void main()
 {
 #ifdef STEREO
@@ -309,17 +350,67 @@ void main()
 #endif
     const vec3 up = normalize(u_skyUp);
     const vec3 L  = normalize(u_sunDirection.xyz);
-    const vec3 V  = normalize(u_viewPos - in_pos);
+    const vec3 toCam = u_viewPos - in_pos;
+    const float viewDist = length(toCam);
+    const vec3 V = toCam / max(viewDist, 1e-4);
+    const vec3 sunTint = u_sunTransmittance * u_sunColor.rgb * u_eclipseParams.x; // per-frame atmosTransmittanceToLight
+    // "Ray cutoff dist": beyond it no scene rays at all - the body uses the analytic bottom (the path
+    // misses already take), reflection the sky. 0 = unlimited.
+    const bool rtInRange = u_oceanParams8.w <= 0.0 || viewDist < u_oceanParams8.w;
 
-    // Wave normal, fold Jacobian, LEAN slope variance, vertical acceleration; shoreHW = (terrain
-    // height, water level) here, reused by the surf band and SSS below.
+    // Wave normal, fold Jacobian (shoaled + raw), LEAN slope variance, vertical acceleration; shoreHW =
+    // (terrain height, water level) here, reused by the surf band and SSS below.
     vec2 slope, slopeVar, shoreHW;
-    float jacobian, accel;
-    oceanSampleSurface(in_uv, slope, jacobian, slopeVar, accel, shoreHW);
+    float jacobian, jacobianRaw, accel;
+    oceanSampleSurface(in_uv, slope, jacobian, jacobianRaw, slopeVar, accel, shoreHW);
+    const float ns = u_oceanParams1.w;
+    vec3 N = normalize(vec3(-slope.x * ns, 1.0, -slope.y * ns));
+    // Screen derivatives up front: the underside path returns early, and derivatives are undefined in
+    // non-uniform control flow.
+    const vec3 faceN = cross(dFdx(in_pos), dFdy(in_pos));
+    const float uvFootprint = length(fwidth(in_uv));
 
-    // Accumulated turbulence (churn energy of past breaking; sampled unconditionally - derivatives
-    // need uniform control flow). Drives aged foam, milkiness and extra roughness.
-    const float turbulence = oceanSampleTurbulence(in_uv, length(fwidth(in_uv)));
+    // Underside (camera on the water side of this triangle): refracted sky in Snell's window, the water
+    // body's in-scatter outside it (TIR). The side comes from the rasterized triangle's plane, not
+    // gl_FrontFacing: the clipmap carries both windings under back-face culling, so the surviving copy
+    // is always front-facing.
+    if (dot(faceN, V) * dot(faceN, N) < 0.0)
+    {
+        // Keep the detail normal inside the camera's hemisphere at grazing (a flip would open the window
+        // at TIR angles).
+        const float nv = dot(N, V);
+        if (nv > -1e-3)
+            N = normalize(N - V * (nv + 1e-3));
+        const vec3 inscatterU = u_oceanScatter.rgb * u_oceanScatter.w * (skyAmbientUp(up) + sunTint * max(L.y, 0.0) / PI);
+        // The mirror (TIR, and whatever the window does not transmit): the seabed and submerged shore
+        // reflected in the underside - the same traced water body the top side refracts into, along
+        // the mirrored ray. Sun-shadowed like the top side so the reflected bottom is not lit through
+        // cliffs.
+        const float sunVisU = L.y <= 0.0 ? 0.0
+            : (u_rtSunShadow > 0.5 ? rtShadowVisibility(in_pos + N * 0.1, L, 0.05, 10000.0) : sampleSunShadow(in_pos, N));
+        vec3 color = traceWaterBody(in_pos - N * 0.05, reflect(-V, N), in_pos, shoreHW, sunTint, sunVisU, L, inscatterU, rtInRange);
+        const vec3 refrUp = refract(-V, -N, 1.33);
+        if (dot(refrUp, refrUp) > 1e-6)
+        {
+            const vec3 tDir = normalize(refrUp);
+            // Fresnel from inside the water: Schlick on the transmitted (air-side) cosine, which reaches 0
+            // at the critical angle. "Underside transmission" scales it.
+            const float trans = (1.0 - F_Schlick(clamp(dot(tDir, N), 0.0, 1.0), 0.02)) * u_oceanParams10.z;
+            vec3 sky = reflectedSkyRadiance(tDir);
+            const float sunDot = max(dot(tDir, L), 0.0);
+            sky += sunTint * (pow(sunDot, 600.0) * 30.0 + pow(sunDot, 24.0) * 0.6);
+            color = mix(color, sky, trans);
+        }
+        // The underwater fog carries the water column only within its 100-300 m fade (vol_scatter);
+        // absorb the path beyond it here, on the same curve.
+        color *= exp(-u_oceanAbsorption.rgb * (viewDist * smoothstep(100.0, 300.0, viewDist)));
+        out_color = vec4(color, 1.0);
+        return;
+    }
+
+    // Accumulated turbulence (churn energy of past breaking). Drives aged foam, milkiness and extra
+    // roughness.
+    const float turbulence = oceanSampleTurbulence(in_uv, uvFootprint);
     const float foam = oceanInstantFoam(jacobian, accel, turbulence * u_oceanParams5.x);
 
     // Shoreline surf band: coverage target from the breaking bore front + the waterline, realized
@@ -339,25 +430,10 @@ void main()
         float target = nearShore * smoothstep(0.4, 0.8, bore);
         target = max(target, 1.0 - smoothstep(0.0, 0.35 * shoreFoamDepth, column));
 
-        // fwidth stays OUTSIDE the target gate: derivatives in non-uniform control flow are undefined.
-        const float fp = length(fwidth(in_pos.xz));
-        if (target > 0.001) // open water: skip the taps
+        if (target > 0.001)
         {
-            float sxx = 0.0, szz = 0.0, sxz = 0.0;
-            const float chop = u_oceanParams0.w;
-            for (int c = 0; c < OCEAN_CASCADES; ++c)
-            {
-                const float Lc = u_oceanParams2[c];
-                const float lod = max(log2(max(fp, 1e-3) * float(OCEAN_FFT_SIZE) / Lc), 0.0);
-                const vec2 uvc = in_uv / Lc;
-                const vec4 g = textureLod(u_oceanMaps, vec3(uvc, float(OCEAN_CASCADES + c)), lod); // (dh/dx, dh/dz, dDx/dx, dDz/dz)
-                sxx += g.z;
-                szz += g.w;
-                sxz += textureLod(u_oceanMaps, vec3(uvc, float(c)), lod).w; // displacement layer w = dDx/dz
-            }
-            const float Jraw = (1.0 + chop * sxx) * (1.0 + chop * szz) - chop * sxz * chop * sxz;
             const float b = mix(0.75, 1.45, target) + u_oceanParams8.y; // "Shore foam bias"
-            shoreFoam = target * (1.0 - smoothstep(b - 0.4, b + 0.4, Jraw));
+            shoreFoam = target * (1.0 - smoothstep(b - 0.4, b + 0.4, jacobianRaw));
             // "Shore foam max": keep the bottom visible through the lace. A soft knee, not a min(): a hard
             // clamp flattened the whole waterline band into a plateau with an edge wherever the target
             // exceeded the cap; this eases toward the cap and never quite reaches it.
@@ -365,9 +441,6 @@ void main()
             shoreFoam = foamMax * (1.0 - exp(-shoreFoam / foamMax));
         }
     }
-    const float ns = u_oceanParams1.w;
-    vec3 N = normalize(vec3(-slope.x * ns, 1.0, -slope.y * ns));
-
 #if OCEAN_DEBUG_MODE != 0
     {
         const float depthDbg = oceanEffectiveDepth(in_uv, shoreHW.y - shoreHW.x);
@@ -389,28 +462,6 @@ void main()
     }
 #endif
 
-    // Underside (camera below the surface looking at its back face): refracted sky in Snell's window
-    // with the sun blazing through it, TIR to the water body outside it. The underwater fog handles the
-    // water column, so no view-path absorption here.
-    if (dot(N, V) < 0.0 && u_viewPos.y < in_pos.y)
-    {
-        const vec3 sunTintU = u_sunColor.rgb * atmosTransmittanceToLight(0.0, L, up) * u_eclipseParams.x;
-        const vec3 inscatterU = u_oceanScatter.rgb * u_oceanScatter.w * (skyAmbientUp(up) + sunTintU * max(L.y, 0.0) / PI);
-        const vec3 refrUp = refract(-V, -N, 1.33);
-        vec3 color = inscatterU; // TIR (refract() = 0): mirror of the water body
-        if (dot(refrUp, refrUp) > 1e-6)
-        {
-            const vec3 tDir = normalize(refrUp);
-            const float T = 1.0 - F_Schlick(clamp(dot(-V, N), 0.0, 1.0), 0.02);
-            vec3 sky = reflectedSkyRadiance(tDir);
-            const float sunDot = max(dot(tDir, L), 0.0);
-            sky += sunTintU * (pow(sunDot, 600.0) * 30.0 + pow(sunDot, 24.0) * 0.6);
-            color = sky * T + inscatterU * (1.0 - T);
-        }
-        out_color = vec4(color, 1.0);
-        return;
-    }
-
     if (dot(N, V) < 0.0) // grazing: keep the shading hemisphere consistent
         N = -N;
 
@@ -430,7 +481,6 @@ void main()
 
     // Sun visibility: one RT shadow ray (or PCSS fallback). Back-lit crests still need it while crest
     // SSS is on - the subsurface glow must stay shadow-gated.
-    const vec3 sunTint = u_sunColor.rgb * atmosTransmittanceToLight(0.0, L, up) * u_eclipseParams.x;
     const bool sunUp = L.y > 0.0 && (NoL > 0.0 || u_oceanParams6.z > 0.0);
     const float sunVis = !sunUp ? 0.0
         : (u_rtSunShadow > 0.5 ? rtShadowVisibility(in_pos + N * 0.1, L, 0.05, 10000.0)
@@ -438,61 +488,17 @@ void main()
     const vec3 ambientSky = skyAmbientUp(up);
     const vec3 whitewater = u_oceanFoam.rgb * (sunTint * (NoL * sunVis) / PI + ambientSky + u_ambientColor);
 
-    const vec3 sigmaT = u_oceanAbsorption.rgb;
     const vec3 inscatter = u_oceanScatter.rgb * u_oceanScatter.w * (ambientSky + sunTint * max(L.y, 0.0) / PI);
 
     const float F = F_Schlick(NoV, 0.02);
 
-    // "Ray cutoff dist": beyond it no scene rays at all - refraction uses the analytic bottom (the
-    // path misses already take), reflection the sky. 0 = unlimited.
-    const bool rtInRange = u_oceanParams8.w <= 0.0 || distance(u_viewPos, in_pos) < u_oceanParams8.w;
-
-    // Refracted body: ray-traced, Beer-Lambert absorbed both ways, bounded at ~99% extinction and the
-    // "Refraction range" tweak.
+    // Refracted body: the traced water column (Beer-Lambert both ways).
     vec3 body = inscatter;
     if (F < 0.98) // at grazing the transmitted term is invisible: skip the ray
     {
         const vec3 refrDir = refract(-V, N, 1.0 / 1.33);
         if (dot(refrDir, refrDir) > 1e-6)
-        {
-            const float minSigma = max(min(sigmaT.r, min(sigmaT.g, sigmaT.b)), 1e-3);
-            // "Refraction range" is the max refracted-ray length that still shows the bottom - traced
-            // OR height-field - so it caps underwater visibility in clear water where extinction alone
-            // would not. The bottom fades out over the last 25% of the range (a hard cutoff draws a
-            // contour on the seabed); beyond it the body is pure in-scatter.
-            const float range = u_oceanParams9.y;
-            const float tMax = min(4.6 / minSigma, range);
-            SceneHit hit;
-            bool haveHit = rtInRange && traceScene(in_pos + N * 0.05, refrDir, tMax, hit);
-            if (!haveHit && refrDir.y < -0.02)
-            {
-                // Miss (seabed beyond the TLAS range / rays off): pseudo-hit against the baked terrain
-                // height field instead. Bottom distance measured from the SURFACE point, not the calm
-                // level - the waterline band would reject otherwise (RT tMin guarantees a miss exactly
-                // there). Never reject a negative estimate: terrain stood behind the water in the depth
-                // test, so a bottom exists - clamp to a centimeters-deep hit (a map-vs-mesh
-                // disagreement otherwise draws a deep-blue line along the shore).
-                float bottom = in_pos.y - oceanSampleShoreData(in_pos.xz).x;
-                const float t = max(bottom, 0.02) / -refrDir.y;
-                bottom = in_pos.y - oceanSampleShoreData(in_pos.xz + refrDir.xz * t).x; // one refinement for sloped shelves
-                hit.t = max(bottom, 0.02) / -refrDir.y;
-                if (hit.t < range) // the same bound as the traced ray: past it there is no bottom to draw
-                {
-                    hit.t = min(hit.t, 4.6 / minSigma);
-                    hit.pos = in_pos + refrDir * hit.t;
-                    hit.N = vec3(0.0, 1.0, 0.0);
-                    hit.albedo = terrainSeabedAlbedo(hit.pos, hit.N, hit.t, hit.waterLevel);
-                    haveHit = true;
-                }
-            }
-            if (haveHit)
-            {
-                const float sunPath = max(hit.waterLevel - hit.pos.y, 0.0) / max(L.y, 0.25); // column above the hit
-                const vec3 hitRadiance = shadeHit(hit, refrDir, sunTint * sunVis * exp(-sigmaT * sunPath), L);
-                const vec3 T = exp(-sigmaT * hit.t) * (1.0 - smoothstep(0.75 * range, range, hit.t));
-                body = hitRadiance * T + inscatter * (1.0 - T);
-            }
-        }
+            body = traceWaterBody(in_pos + N * 0.05, refrDir, in_pos, shoreHW, sunTint, sunVis, L, inscatter, rtInRange);
     }
 
     // Reflection: ray-traced mirror, sky fallback, roughness-blurred toward the average sky.
@@ -501,10 +507,13 @@ void main()
     R = normalize(R);
     const float reflBlur = clamp(alphaF * 2.0 - 0.05, 0.0, 0.6);
     vec3 reflColor = reflectedSkyRadiance(R);
-    if (alphaF < u_oceanParams9.w && rtInRange) // "Reflection max rough": a wide lobe can't be one mirror sample
+    // Skipped near nadir (F < 2.5%, the mirror is invisible - the refraction's F > 98% rule mirrored):
+    // a top-down camera keeps only its refraction ray. "Reflection max rough": a wide lobe can't be one
+    // mirror sample.
+    if (F > 0.025 && alphaF < u_oceanParams9.w && rtInRange)
     {
         SceneHit hit;
-        if (traceScene(in_pos + N * 0.05, R, u_oceanParams9.z, hit)) // "Reflection range"
+        if (traceScene(in_pos + N * 0.05, R, u_oceanParams9.z, false, hit)) // "Reflection range"
             reflColor = shadeHit(hit, R, sunTint, L);
     }
     const vec3 reflection = mix(reflColor, ambientSky, reflBlur);

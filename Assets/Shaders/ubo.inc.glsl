@@ -170,7 +170,9 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                             // w = RT reflection roughness cutoff (rougher pixels skip the mirror ray)
     vec4 u_oceanParams10;   // x unused (was the breaking limit, removed: the swash amplitude alone shapes
                             // the shore - oceanSurfaceWeight),
-                            // y = spectrum clock rate (sqrt(world scale): holds the model sea's periods), zw unused
+                            // y = spectrum clock rate (sqrt(world scale): holds the model sea's periods),
+                            // z = underside transmission (scale on the sky seen through Snell's window from
+                            //     below; the rest is internal reflection), w unused
     vec4 u_oceanSpray0;     // x = particle emitter slot (uint bits; 0xFFFFFFFF = off), y = rate (spawns / m^2 / s at
                             //     full breaking), z = grid radius around the scene focus (m), w = sim delta (s)
     vec4 u_oceanSpray1;     // x = breaking threshold (instant foam), y = upward kick (m/s), z = forward speed (m/s), w = spawn lead (m)

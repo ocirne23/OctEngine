@@ -1174,7 +1174,8 @@ void Renderer::buildUboOcean()
         glm::max(ocean.swashFlow, 0.0f), glm::max(ocean.rtRayCutoffDist, 0.0f));
     ubo.oceanParams9 = glm::vec4(0.0f /* x: the removed trough margin */, glm::max(ocean.rtRefractionRange, 1.0f), // the tweak's own minimum; 10 here silently floored 1..9 m
         glm::max(ocean.rtReflectionRange, 50.0f), glm::clamp(ocean.rtReflectionMaxRough, 0.0f, 1.0f));
-    ubo.oceanParams10 = glm::vec4(0.0f /* x: the removed breaking limit */, glm::max(ocean.timeScale, 0.0f), 0.0f, 0.0f);
+    ubo.oceanParams10 = glm::vec4(0.0f /* x: the removed breaking limit */, glm::max(ocean.timeScale, 0.0f),
+        glm::clamp(ocean.undersideTransmission, 0.0f, 1.0f), 0.0f);
     // Ocean spray producer: the emitter slot the Particle system published (UINT32_MAX = off), the sim
     // delta the rate integrates over (frozen with the global pause, like the particle sim itself).
     const float sprayDt = oc::min((float)Globals::time.getSimDeltaSec(), 0.25f);

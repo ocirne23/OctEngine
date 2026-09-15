@@ -407,6 +407,12 @@ frustum cull drop off-screen water **instead of vertex-shading the whole multi-k
 * All sectors share ONE transform, **snapped to a lattice multiple so vertices re-land on the same
   world positions** as the camera moves.
 * **Sector borders duplicate identical vertices, so splitting cannot open seams.**
+* **Every triangle is emitted in BOTH windings** (`pushTri`), so the back-face-culled prepass and Ocean
+  pipelines draw the surface from either side and the prepass depth holds the nearest face from below
+  too. (A cull-none forward variant over a prepass with no underside depth shaded every wave crossing
+  along an underwater ray — stacked "water planes".) Only the index count doubles. **So
+  `gl_FrontFacing` is always true on the water**; the ocean shader takes the side from the triangle's
+  plane instead.
 * The Spatial Main gate skips off-screen sectors (ocean is `PASS_MAIN` only), and a "Dry sector cull"
   skips sectors fully buried AND inside the streamed-mesh radius.
 * **The horizon band is exempt from BOTH under-terrain culls** — a negated cell size flags its

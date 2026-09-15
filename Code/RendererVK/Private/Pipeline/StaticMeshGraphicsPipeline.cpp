@@ -135,8 +135,8 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 	// layout/interface as the shared one) displaces the clipmap grid by the OceanSimulationPipeline's
 	// displacement maps (binding 7); a dedicated fragment shader shades the surface (Fresnel, GGX sun
 	// glint, RAY-TRACED refraction with Beer-Lambert absorption, Jacobian foam). Opaque + depth write
-	// (matches the G-buffer prepass ocean branch); double-sided so it still draws when the camera dips
-	// below the surface.
+	// (matches the G-buffer prepass ocean branch). Back-face culled like the prepass: the clipmap carries
+	// every triangle in both windings (OceanGenerator::rebuildGrid), so the underside draws from below.
 	const oc::string oceanVertexPath = "Shaders/instanced_indirect_ocean.vs.glsl";
 	const oc::string oceanVariantPath = "Shaders/ocean.fs.glsl";
 	const oc::string oceanVariantText = FileSystem::readFileStr(oceanVariantPath);
@@ -155,7 +155,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 			.debugFilePath = oceanVariantPath,
 			.defines = oc::move(oceanFragDefines),
 		},
-		.cullMode = vk::CullModeFlagBits::eNone,
+		.cullMode = vk::CullModeFlagBits::eBack,
 	});
 
 	// Global wireframe ("Renderer/Wireframe" tweak): rasterize every scene variant as lines. The sky and

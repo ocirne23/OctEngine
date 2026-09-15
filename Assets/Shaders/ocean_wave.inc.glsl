@@ -239,24 +239,16 @@ vec3 oceanSampleDisplacement(vec2 worldXZ, float cellSize, float morph, vec2 sho
 // distant slopes):
 //   slope    : chop-corrected slope (Tessendorf: grad h / (1 + lambda dD))
 //   jacobian : horizontal fold J (< ~0.5 = folding crest)
+//   jacobianRaw : the same before the shore's depth weight (the surf band reads folds off it)
 //   slopeVar : LEAN term (Bruneton 2010) - slope variance lost to mip filtering, returned as
 //              microfacet roughness (the elongated sun glitter at distance)
 //   accel    : vertical acceleration (breaking-crest foam driver)
 //   shoreHW  : the (terrain height, water level) fetch, returned for the caller to reuse
-void oceanSampleSurface(vec2 worldXZ, out vec2 slope, out float jacobian, out vec2 slopeVar, out float accel, out vec2 shoreHW)
+void oceanSampleSurface(vec2 worldXZ, out vec2 slope, out float jacobian, out float jacobianRaw, out vec2 slopeVar, out float accel, out vec2 shoreHW)
 {
     const float chop = u_oceanParams0.w;
     shoreHW = oceanSampleShoreData(worldXZ);
     const float depth = oceanEffectiveDepth(worldXZ, shoreHW.y - shoreHW.x);
-    // Buried under land: flat calm surface (with swash on, the run-up band still shades).
-    if (depth <= (u_oceanParams7.z > 0.0 ? -u_oceanParams7.w : 0.0))
-    {
-        slope = vec2(0.0);
-        jacobian = 1.0;
-        slopeVar = vec2(0.0);
-        accel = 0.0;
-        return;
-    }
     const vec2 fr = oceanFlowRotation(worldXZ);
     const vec2 sampleXZ = oceanFlowSamplePos(worldXZ, fr);
     vec2 slopeSum = vec2(0.0);
@@ -273,6 +265,17 @@ void oceanSampleSurface(vec2 worldXZ, out vec2 slope, out float jacobian, out ve
         varSum += max(m.xy - g.xy * g.xy, vec2(0.0));
         sxx += g.z; szz += g.w; sxz += d.w;
         accel += m.z;
+    }
+    jacobianRaw = (1.0 + chop * sxx) * (1.0 + chop * szz) - chop * sxz * chop * sxz;
+    // Buried under land: flat calm surface (with swash on, the run-up band still shades, and its surf
+    // lace still reads the raw folds).
+    if (depth <= (u_oceanParams7.z > 0.0 ? -u_oceanParams7.w : 0.0))
+    {
+        slope = vec2(0.0);
+        jacobian = 1.0;
+        slopeVar = vec2(0.0);
+        accel = 0.0;
+        return;
     }
     // The one depth weight the displacement used (oceanSurfaceWeight), so shading tracks the geometry:
     // slopes and the Jacobian scale with the height, the variance with its square.

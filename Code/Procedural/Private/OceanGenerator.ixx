@@ -158,6 +158,7 @@ export namespace Procedural
 		float m_glintFilter = 1.0f;     // scale on the roughness-widening variance (spec AA + LEAN)
 		float m_sssStrength = 0.66f;     // crest SSS: back-lit crests glow the scatter color, per meter of height
 		float m_sssPower = 1.0f;        // crest SSS toward-the-sun view lobe exponent
+		float m_undersideTransmission = 1.0f; // sky through Snell's window from below (1 = Fresnel; less = more internal reflection)
 		bool  m_hitLighting = false; // grid lights at refraction/reflection ray hits (pipeline reload on toggle)
 		// Foam & turbulence: one instant-foam response draws the crest foam AND injects the accumulated
 		// turbulence field, which in turn relaxes the fold threshold (aged foam along live geometry) and
