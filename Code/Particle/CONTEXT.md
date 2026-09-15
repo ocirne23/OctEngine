@@ -70,6 +70,28 @@ Shaders `particle_begin.cs.glsl` → `particle_emit.cs.glsl` → `particle_sim.c
 * Tweaks under `Particles/*`: Enabled, Depth collision, Time scale, Log stats (plus the rain
   occlusion trio, see below).
 
+## The GPU spawn path (other compute passes driving particles)
+
+Besides the CPU spawn map, ANY compute pass that runs before the particle sim in the frame can spawn:
+it binds the particle COUNTERS + SPAWN REQUEST buffers (`Renderer` hands out
+`ParticlePipeline::getCountersBuffer / getSpawnRequestBuffer`), includes `particle_spawn.inc.glsl` and
+calls `particleRequestSpawn(pos, vel, emitterSlot)`. A request names an ordinary emitter slot - a
+`.pfx` instance the CPU owns, whose slot it published to the producer - so the look (life, size,
+colour, lighting, stretch, texture) stays authored, while the producer decides position and velocity
+(the emitter's spawn shape / cone / speed are skipped; velocity inheritance still applies).
+
+* `particle_begin` latches the request count (clamped to `MAX_PARTICLE_GPU_SPAWNS` = 64 K per frame
+  across all producers), sizes the GPU emit dispatch (`c_gpuEmitGroups`, indirect) and zeroes the
+  counter for the next frame's producers; `particle_emit` in its `PARTICLE_GPU_SPAWN` variant consumes
+  the requests right after the CPU emit. Everything after that is the ordinary chain.
+* The pool (`MAX_PARTICLES`) is shared with the CPU emitters: a producer budgets its rate.
+* `Particles/Log stats` prints the latched GPU spawn count.
+
+**First producer: ocean spray** (`ocean_spray.cs.glsl`, the last `OceanSimulationPipeline` step -
+see RendererVK). The Particle system owns one `Effects/ocean_spray.pfx` instance (`Particles/Ocean
+spray`, `Rate 0`) and publishes its slot through `Renderer::setOceanSprayEmitter` every frame; the
+producer spawns droplets on breaking crests at `Ocean/Spray *` rates.
+
 ## Weather volumes (rain / snow)
 
 An emitter with a non-zero `Volume x, y, z` (box half extents) is a WEATHER VOLUME
@@ -102,9 +124,23 @@ envelope with an XZ edge fade over the outer 20 % of the box, so the side wrap s
   correct for every camera that cannot see under the terrain. Splashes at the impact point are the
   natural follow-up (the depth collision already reports the hit).
 
-Testbed toggles: `Particles/Rain` and `Particles/Snow` (ParticleSystem tweaks) create/destroy one
-camera-following instance of `Effects/rain.pfx` / `Effects/snow.pfx`. The handles are DETACHED, not
-destroyed, in `~ParticleSystem` - the plain-XCU particle system outlives the renderer.
+* `Underwater true` — the volume lives BELOW the live ocean surface: the sim puts a particle that is
+  above the surface (same FFT + shore sampling as `WaterFloor`) back at a random depth under it, so
+  a bubble reaching the surface pops and re-forms below; the draw hides the whole volume while the
+  camera is above SEA LEVEL (`u_oceanParams2.w`, the coarse gate). `Effects/underwater.pfx` (silt +
+  bubbles). `AboveWater true` is the inverse (a particle under the surface goes back up over it, hidden
+  while the camera is under sea level): `Effects/dust.pfx`. On a non-volume emitter only the draw
+  gate applies: the ocean spray carries it so the spray hides while the camera is under the sea.
+* `HeightFalloff <m>` — alpha falls off as exp(-height above the ground / m), the ground being the
+  terrain or the local water level (the draw binds the terrain-data cascades at 6, refreshed per
+  frame like the sim's); dust hugs the ground.
+
+**Built-in ambient effects** (`ParticleSystem::m_builtins`): `Rain`, `Snow`, `Dust`
+(`Effects/dust.pfx`, motes + fluff) and `Underwater`, each a `Particles/<Name>` toggle that
+creates/destroys one camera-following instance, with `<Name> count / size / alpha / size variation` multiplier tweaks
+applied on top of the `.pfx` every frame (count scales the rate and the fill count - live upward,
+downward on the next toggle since a box never drains). The handles are DETACHED, not destroyed, in
+`~ParticleSystem` - the plain-XCU particle system outlives the renderer.
 
 ## `.pfx` effects
 

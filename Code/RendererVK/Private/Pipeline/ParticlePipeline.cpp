@@ -14,8 +14,10 @@ import :Layout;
 using namespace RendererVKLayout;
 
 // GPU counters block, see particle.inc.glsl: [0..15] sim dispatch args, [16..31] parity-0 draw args,
-// [32..47] parity-1 draw args (instanceCount = alive count), [48..63] dead-stack top + padding.
-static constexpr vk::DeviceSize COUNTERS_SIZE = 64;
+// [32..47] parity-1 draw args (instanceCount = alive count), [48..63] dead-stack top + the GPU spawn
+// counter / latched count + padding, [64..79] the GPU emit dispatch args.
+static constexpr vk::DeviceSize COUNTERS_SIZE = 80;
+static constexpr vk::DeviceSize GPU_EMIT_DISPATCH_OFFSET = 64;
 static constexpr vk::DeviceSize drawArgsOffset(uint32 parity) { return 16 + parity * 16; }
 
 static vk::DescriptorBufferInfo bufInfo(const Buffer& buffer)
@@ -37,10 +39,12 @@ void ParticlePipeline::buildBeginLayout(ComputePipelineLayout& layout)
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 2, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
 }
 
-void ParticlePipeline::buildEmitLayout(ComputePipelineLayout& layout)
+void ParticlePipeline::buildEmitLayout(ComputePipelineLayout& layout, bool gpuSpawn)
 {
     layout.computeShaderDebugFilePath = "Shaders/particle_emit.cs.glsl";
     layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
+    if (gpuSpawn)
+        layout.defines.push_back(ShaderDefine{ "PARTICLE_GPU_SPAWN", "1" }); // binding 6 = the request buffer
     auto& b = layout.descriptorSetLayoutBindings;
     for (uint32 binding = 0; binding <= 6; ++binding)
         b.push_back(vk::DescriptorSetLayoutBinding{ .binding = binding,
@@ -60,6 +64,24 @@ void ParticlePipeline::buildSimLayout(ComputePipelineLayout& layout)
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 8, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 9, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 10, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 11, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // ocean maps
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 12, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // terrain data
+    // Binding 12 (terrain-data cascades) is a ping-pong pair rewritten per frame by updateTerrainDescriptor.
+    layout.descriptorBindingFlags.resize(b.size());
+    layout.descriptorBindingFlags.back() = vk::DescriptorBindingFlagBits::eUpdateAfterBind;
+}
+
+void ParticlePipeline::updateTerrainDescriptor(uint32 frameIdx, vk::ImageView terrainView, vk::Sampler terrainSampler)
+{
+    // The sim (binding 12) and every eye's draw set (binding 6, the ground fade).
+    vk::DescriptorImageInfo imageInfo{ .sampler = terrainSampler, .imageView = terrainView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal };
+    oc::array<vk::WriteDescriptorSet, 1 + MAX_VIEWS> writes;
+    writes[0] = vk::WriteDescriptorSet{ .dstSet = m_simSets[frameIdx].getDescriptorSet(), .dstBinding = 12, .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };
+    for (uint32 eye = 0; eye < m_viewCount; ++eye)
+        writes[1 + eye] = vk::WriteDescriptorSet{ .dstSet = m_drawSets[drawSlot(frameIdx, eye)].getDescriptorSet(), .dstBinding = 6, .descriptorCount = 1,
+            .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };
+    Globals::device.getDevice().updateDescriptorSets(1 + m_viewCount, writes.data(), 0, nullptr);
 }
 
 void ParticlePipeline::buildDrawLayout(GraphicsPipelineLayout& layout, uint32 maxTextures)
@@ -84,9 +106,12 @@ void ParticlePipeline::buildDrawLayout(GraphicsPipelineLayout& layout, uint32 ma
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 3, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 4, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 5, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 6, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex }); // terrain data (ground fade)
     // 20 = the set's highest binding number: required for eVariableDescriptorCount.
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 20, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = maxTextures, .stageFlags = vk::ShaderStageFlagBits::eFragment });
     layout.descriptorBindingFlags.resize(b.size());
+    // Binding 6 (terrain-data cascades) is a ping-pong pair rewritten per frame by updateTerrainDescriptor.
+    layout.descriptorBindingFlags[6] = vk::DescriptorBindingFlagBits::eUpdateAfterBind;
     layout.descriptorBindingFlags.back() = vk::DescriptorBindingFlagBits::ePartiallyBound
         | vk::DescriptorBindingFlagBits::eVariableDescriptorCount | vk::DescriptorBindingFlagBits::eUpdateAfterBind;
 
@@ -100,7 +125,8 @@ void ParticlePipeline::initialize(vk::RenderPass sceneRenderPass, uint32 maxText
     m_textureSampler.initialize();
 
     { ComputePipelineLayout layout; buildBeginLayout(layout); m_beginPipeline.initialize(layout); }
-    { ComputePipelineLayout layout; buildEmitLayout(layout);  m_emitPipeline.initialize(layout); }
+    { ComputePipelineLayout layout; buildEmitLayout(layout, false); m_emitPipeline.initialize(layout); }
+    { ComputePipelineLayout layout; buildEmitLayout(layout, true);  m_emitGpuPipeline.initialize(layout); }
     { ComputePipelineLayout layout; buildSimLayout(layout);   m_simPipeline.initialize(layout); }
     { GraphicsPipelineLayout layout; buildDrawLayout(layout, maxTextures); m_drawPipeline.initialize(sceneRenderPass, layout); }
 
@@ -114,6 +140,8 @@ void ParticlePipeline::initialize(vk::RenderPass sceneRenderPass, uint32 maxText
     m_countersBuffer.initialize(COUNTERS_SIZE,
         vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eIndirectBuffer | vk::BufferUsageFlagBits2::eTransferSrc,
         vk::MemoryPropertyFlagBits::eDeviceLocal, false, "ParticleCounters");
+    m_spawnRequestBuffer.initialize(MAX_PARTICLE_GPU_SPAWNS * sizeof(ParticleSpawnRequestGpu), vk::BufferUsageFlagBits2::eStorageBuffer,
+        vk::MemoryPropertyFlagBits::eDeviceLocal, false, "ParticleSpawnRequests");
 
     for (uint32 i = 0; i < NUM_FRAMES_IN_FLIGHT; ++i)
     {
@@ -144,6 +172,7 @@ void ParticlePipeline::initialize(vk::RenderPass sceneRenderPass, uint32 maxText
 
         m_beginSets[i].initialize(m_beginPipeline.getDescriptorSetLayout());
         m_emitSets[i].initialize(m_emitPipeline.getDescriptorSetLayout());
+        m_emitGpuSets[i].initialize(m_emitGpuPipeline.getDescriptorSetLayout());
         m_simSets[i].initialize(m_simPipeline.getDescriptorSetLayout());
         for (uint32 eye = 0; eye < m_viewCount; ++eye)
             m_drawSets[drawSlot(i, eye)].initialize(m_drawPipeline.getDescriptorSetLayout(), numTextureDescriptors);
@@ -153,11 +182,13 @@ void ParticlePipeline::initialize(vk::RenderPass sceneRenderPass, uint32 maxText
 void ParticlePipeline::reloadShaders(vk::RenderPass sceneRenderPass)
 {
     ComputePipelineLayout beginLayout; buildBeginLayout(beginLayout);
-    ComputePipelineLayout emitLayout;  buildEmitLayout(emitLayout);
+    ComputePipelineLayout emitLayout;  buildEmitLayout(emitLayout, false);
+    ComputePipelineLayout emitGpuLayout; buildEmitLayout(emitGpuLayout, true);
     ComputePipelineLayout simLayout;   buildSimLayout(simLayout);
     GraphicsPipelineLayout drawLayout; buildDrawLayout(drawLayout, Globals::textureManager.getDescriptorCap());
     bool ok = m_beginPipeline.reloadShaders(beginLayout);
     ok = m_emitPipeline.reloadShaders(emitLayout) && ok;
+    ok = m_emitGpuPipeline.reloadShaders(emitGpuLayout) && ok;
     ok = m_simPipeline.reloadShaders(simLayout) && ok;
     ok = m_drawPipeline.reloadShaders(sceneRenderPass, drawLayout) && ok;
     if (!ok)
@@ -261,8 +292,11 @@ void ParticlePipeline::recordSim(CommandBuffer& commandBuffer, uint32 frameIdx, 
         cmd.dispatchIndirect(m_beginDispatchBuffers[frameIdx].getBuffer(), 0);
     }
 
+    // begin wrote the counters: the emits read them, and the GPU emit's dispatch args are consumed by
+    // dispatchIndirect.
     fullBarrier(vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite,
-        vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite);
+        vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eDrawIndirect,
+        vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eIndirectCommandRead);
 
     { // emit: one thread per spawn
         DescriptorSet& set = m_emitSets[frameIdx];
@@ -282,6 +316,25 @@ void ParticlePipeline::recordSim(CommandBuffer& commandBuffer, uint32 frameIdx, 
         cmd.dispatchIndirect(m_emitDispatchBuffers[frameIdx].getBuffer(), 0);
     }
 
+    { // GPU emit: one thread per producer request (GPU-sized dispatch, count latched by begin). Appends to
+      // the same IN list + dead stack as the CPU emit through atomics, so no barrier between the two.
+        DescriptorSet& set = m_emitGpuSets[frameIdx];
+        oc::array<DescriptorSetUpdateInfo, 7> updates{
+            DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { bufInfo(m_paramsBuffers[frameIdx]) } },
+            DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_poolBuffer) } },
+            DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_aliveBuffers[parity]) } },
+            DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_deadListBuffer) } },
+            DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_countersBuffer) } },
+            DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_emitterBuffers[frameIdx]) } },
+            DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_spawnRequestBuffer) } },
+        };
+        commandBuffer.cmdUpdateDescriptorSets(m_emitGpuPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, set.getDescriptorSet(), updates);
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_emitGpuPipeline.getPipeline());
+        vk::DescriptorSet vkSet = set.getDescriptorSet();
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_emitGpuPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
+        cmd.dispatchIndirect(m_countersBuffer.getBuffer(), GPU_EMIT_DISPATCH_OFFSET); // c_gpuEmitGroups
+    }
+
     // emit wrote the IN count + pool; the sim dispatch args (begin) are consumed by dispatchIndirect.
     fullBarrier(vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite,
         vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eDrawIndirect,
@@ -289,7 +342,7 @@ void ParticlePipeline::recordSim(CommandBuffer& commandBuffer, uint32 frameIdx, 
 
     { // sim: integrate + compact survivors into the OUT list
         DescriptorSet& set = m_simSets[frameIdx];
-        oc::array<DescriptorSetUpdateInfo, 11> updates{
+        oc::array<DescriptorSetUpdateInfo, 13> updates{
             DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { bufInfo(m_paramsBuffers[frameIdx]) } },
             DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(Ubo) } } },
             DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_poolBuffer) } },
@@ -301,6 +354,8 @@ void ParticlePipeline::recordSim(CommandBuffer& commandBuffer, uint32 frameIdx, 
             DescriptorSetUpdateInfo{ .binding = 8, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.gbufferSampler, params.prevDepthView) } },
             DescriptorSetUpdateInfo{ .binding = 9, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.gbufferSampler, params.prevNormalView) } },
             DescriptorSetUpdateInfo{ .binding = 10, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.rainOcclusionSampler, params.rainOcclusionView) } },
+            DescriptorSetUpdateInfo{ .binding = 11, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.oceanMapsSampler, params.oceanMapsView) } },
+            DescriptorSetUpdateInfo{ .binding = 12, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.terrainSampler, params.terrainView) } },
         };
         commandBuffer.cmdUpdateDescriptorSets(m_simPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, set.getDescriptorSet(), updates);
         cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_simPipeline.getPipeline());
@@ -336,7 +391,7 @@ void ParticlePipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameIdx,
     DescriptorSet& set = m_drawSets[drawSlot(frameIdx, eye)];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
 
-    oc::array<DescriptorSetUpdateInfo, 7> updates{
+    oc::array<DescriptorSetUpdateInfo, 8> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(Ubo) } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_poolBuffer) } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(m_aliveBuffers[1 - parity]) } },
@@ -344,12 +399,13 @@ void ParticlePipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameIdx,
         DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
             vk::DescriptorImageInfo{ .sampler = params.gbufferSampler, .imageView = params.gbufferDepthView, .imageLayout = params.gbufferDepthLayout } } },
         DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { bufInfo(params.giGridDataBuffer) } },
+        DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { sampledRO(params.terrainSampler, params.terrainView) } },
         DescriptorSetUpdateInfo{ .binding = 20, .type = vk::DescriptorType::eCombinedImageSampler },
     };
     const size_t numTextures = Globals::textureManager.getNumTextures();
-    updates[6].imageInfos.reserve(numTextures);
+    updates[7].imageInfos.reserve(numTextures);
     for (uint16 texIdx = 0; texIdx < (uint16)numTextures; ++texIdx)
-        updates[6].imageInfos.push_back(vk::DescriptorImageInfo{
+        updates[7].imageInfos.push_back(vk::DescriptorImageInfo{
             .sampler = m_textureSampler.getSampler(),
             .imageView = Globals::textureManager.getViewForDescriptor(texIdx), // freed slots -> fallback
             .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal });

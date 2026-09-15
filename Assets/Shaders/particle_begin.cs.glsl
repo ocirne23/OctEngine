@@ -39,6 +39,10 @@ void main()
                 c_draw[i * 4u + 2u] = 0u;
                 c_draw[i * 4u + 3u] = 0u;
             }
+            // GPU spawn path: requests made before the reset are dropped with the pool.
+            c_gpuSpawnCount = 0u;
+            c_gpuSpawnConsume = 0u;
+            c_gpuEmitGroups = uvec4(0u, 1u, 1u, 0u);
         }
         return;
     }
@@ -46,7 +50,14 @@ void main()
         return;
     const uint outIdx = 1u - p_parity;
     c_draw[outIdx * 4u + 1u] = 0u;
-    const uint total = c_draw[p_parity * 4u + 1u] + p_spawnCount;
+    // GPU spawn path: latch this frame's producer count (clamped to the request buffer), size the GPU
+    // emit dispatch, and zero the counter for the NEXT frame's producers (they run after this frame's
+    // whole particle chain on the same queue).
+    const uint gpuSpawns = min(c_gpuSpawnCount, MAX_PARTICLE_GPU_SPAWNS);
+    c_gpuSpawnConsume = gpuSpawns;
+    c_gpuSpawnCount = 0u;
+    c_gpuEmitGroups = uvec4((gpuSpawns + 63u) / 64u, 1u, 1u, 0u);
+    const uint total = c_draw[p_parity * 4u + 1u] + p_spawnCount + gpuSpawns;
     c_simGroups.x = (total + PARTICLE_SIM_GROUP_SIZE - 1u) / PARTICLE_SIM_GROUP_SIZE;
     c_simGroups.y = 1u;
     c_simGroups.z = 1u;

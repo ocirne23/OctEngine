@@ -15,6 +15,9 @@ layout (binding = 5, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 
 #define GI_GRID_DATA_NAME gi_gridData
 #include "gi_probe.inc.glsl"
+// The terrain-data cascades (height / water level) for the ground fade (PARTICLE_FLAG_GROUND_FADE).
+#define TERRAIN_HEIGHT_BINDING 6
+#include "terrain_height.inc.glsl"
 
 // 0 = centre/desktop, 1/2 = the eyes in VR (selects the view matrices + billboard basis).
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
@@ -51,9 +54,30 @@ void main()
     // Alpha envelope: fade in over the first fadeParams.x of life, out from fadeParams.y to death.
     const float fadeIn = clamp(lifeFrac / max(e.fadeParams.x, 1e-3), 0.0, 1.0);
     const float fadeOut = 1.0 - smoothstep(e.fadeParams.y, 1.0, lifeFrac);
-    const float envelope = volume
+    float envelope = volume
         ? particleVolumeEdgeFade(pos - e.posSpawnRadius.xyz, e.volumeParams.xyz) * weatherSheet(pos, u_timeSeconds)
         : fadeIn * fadeOut;
+    // The camera's side of the water decides whole-emitter visibility: an underwater volume shows only
+    // while the camera is under the water surface at its XZ, an above-water one only while it is over
+    // it. The surface is the LIVE wave height under the camera when the ocean supplies it (the CPU
+    // mirror, u_weatherWind2.z), else the local calm water level from the terrain data, else sea level.
+    // The sim keeps the particles themselves on their side of the live surface; this is the gate.
+    if ((e.texFlags.y & (PARTICLE_FLAG_UNDERWATER | PARTICLE_FLAG_ABOVE_WATER)) != 0u)
+    {
+        const float waterAtCamera = u_weatherWind2.w > 0.5 ? u_weatherWind2.z
+            : (terrainHeightMapPresent() ? terrainDataAt(u_viewPos.xz).y : u_oceanParams2.w);
+        const bool cameraUnder = u_viewPos.y < waterAtCamera;
+        if (((e.texFlags.y & PARTICLE_FLAG_UNDERWATER) != 0u) != cameraUnder)
+            envelope = 0.0;
+    }
+    // Ground fade: exp(-height above the ground / fade height), the ground being the terrain or the
+    // local water surface, whichever is higher (dust hugs the ground, thins out with height).
+    if ((e.texFlags.y & PARTICLE_FLAG_GROUND_FADE) != 0u && terrainHeightMapPresent())
+    {
+        const vec4 td = terrainDataAt(pos.xz);
+        const float ground = max(td.x, td.y);
+        envelope *= exp(-max(pos.y - ground, 0.0) / max(e.spinParams.w, 0.01));
+    }
     float alpha = mix(e.colorStart.a, e.colorEnd.a, lifeFrac) * envelope;
     vec3 color = mix(e.colorStart.rgb, e.colorEnd.rgb, lifeFrac);
 

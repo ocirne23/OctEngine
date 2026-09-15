@@ -99,8 +99,15 @@ void ParticleEffect::burst()
 
 void ParticleSystem::initialize()
 {
-    Tweak::boolean("Particles", "Rain", &m_weatherRain);
-    Tweak::boolean("Particles", "Snow", &m_weatherSnow);
+    for (BuiltinEffect& b : m_builtins)
+    {
+        Tweak::boolean("Particles", b.name, &b.enabled);
+        Tweak::floatVar("Particles", b.countName, &b.countScale, 0.0f, 4.0f, 0.01f);
+        Tweak::floatVar("Particles", b.sizeName, &b.sizeScale, 0.1f, 4.0f, 0.01f);
+        Tweak::floatVar("Particles", b.alphaName, &b.alphaScale, 0.0f, 4.0f, 0.01f);
+        Tweak::floatVar("Particles", b.sizeVarName, &b.sizeVarScale, 0.0f, 4.0f, 0.01f);
+    }
+    Tweak::boolean("Particles", "Ocean spray", &m_oceanSpray);
 }
 
 uint16 ParticleSystem::getTexture(const oc::string& path, bool sRGB)
@@ -231,8 +238,18 @@ void ParticleSystem::update(Renderer& renderer, float deltaSec)
         else if (!wanted && effect.isValid())
             effect.destroy();
     };
-    syncWeather(m_weatherRain, m_rainEffect, "Effects/rain.pfx");
-    syncWeather(m_weatherSnow, m_snowEffect, "Effects/snow.pfx");
+    for (BuiltinEffect& b : m_builtins)
+        syncWeather(b.enabled, b.effect, b.path);
+    // Ocean spray: the renderer's producer pass spawns into this instance's emitter slot (GPU spawn path).
+    syncWeather(m_oceanSpray, m_oceanSprayEffect, "Effects/ocean_spray.pfx");
+    {
+        // The .pfx's emitters in file order: droplets, mist, foam chunks (missing ones fall back to droplets).
+        uint32 slots[3] = { UINT32_MAX, UINT32_MAX, UINT32_MAX };
+        if (const EffectInstance* inst = findEffect(m_oceanSprayEffect.m_id))
+            for (size_t i = 0; i < 3 && i < inst->emitters.size(); ++i)
+                slots[i] = inst->emitters[i].rendererSlot;
+        renderer.setOceanSprayEmitters(slots[0], slots[1], slots[2]);
+    }
 
     // Weather volumes fill over frames: MAX_PARTICLE_SPAWNS_PER_FRAME caps the whole frame's spawn
     // map, so one volume takes at most half of it and leaves room for everything else.
@@ -246,12 +263,30 @@ void ParticleSystem::update(Renderer& renderer, float deltaSec)
     // .pfx edits and moving emitters both just work) and turn rates/bursts into spawn requests.
     for (EffectInstance& inst : m_effects)
     {
+        // A built-in effect's live multiplier tweaks (count / size / alpha); 1 for everything else.
+        float countScale = 1.0f, sizeScale = 1.0f, alphaScale = 1.0f, sizeVarScale = 1.0f;
+        for (const BuiltinEffect& b : m_builtins)
+        {
+            if (b.effect.m_id == inst.id)
+            {
+                countScale = b.countScale;
+                sizeScale = b.sizeScale;
+                alphaScale = b.alphaScale;
+                sizeVarScale = b.sizeVarScale;
+                break;
+            }
+        }
         for (size_t i = 0; i < inst.emitters.size() && i < inst.desc->emitters.size(); ++i)
         {
             const ParticleEmitterDesc& desc = inst.desc->emitters[i];
             EmitterInstance& emitter = inst.emitters[i];
 
             ParticleEmitterGpu gpu = desc.toGpu(emitter.textureIdx);
+            gpu.sizeParams.x *= sizeScale;
+            gpu.sizeParams.y *= sizeScale;
+            gpu.sizeParams.z = oc::min(gpu.sizeParams.z * sizeVarScale, 1.0f); // > 1 would flip sizes negative
+            gpu.colorStart.w *= alphaScale;
+            gpu.colorEnd.w *= alphaScale;
             // A camera-following weather volume ignores the instance transform: it rides the camera
             // with an identity rotation so the box axes stay world-aligned (the wrap is per axis).
             const bool follow = desc.followCamera && desc.isVolume();
@@ -274,15 +309,18 @@ void ParticleSystem::update(Renderer& renderer, float deltaSec)
             uint32 spawnCount = 0;
             if (inst.emitting && desc.rate > 0.0f)
             {
-                emitter.rateAccum += desc.rate * deltaSec;
+                emitter.rateAccum += desc.rate * countScale * deltaSec;
                 spawnCount = (uint32)emitter.rateAccum;
                 emitter.rateAccum -= (float)spawnCount;
             }
             if (inst.pendingBurst)
                 spawnCount += desc.burst;
-            if (desc.isVolume() && emitter.volumeFillSpawned < desc.count)
+            // The fill count scales live upward only (a lower scale takes effect on the next toggle: the
+            // box never drains, so there is nothing to remove from).
+            const uint32 fillCount = (uint32)((float)desc.count * countScale);
+            if (desc.isVolume() && emitter.volumeFillSpawned < fillCount)
             {
-                const uint32 fill = oc::min(desc.count - emitter.volumeFillSpawned, VOLUME_FILL_PER_FRAME);
+                const uint32 fill = oc::min(fillCount - emitter.volumeFillSpawned, VOLUME_FILL_PER_FRAME);
                 emitter.volumeFillSpawned += fill;
                 spawnCount += fill;
             }

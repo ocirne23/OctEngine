@@ -132,7 +132,7 @@ export struct ShadowParams
 export struct FogParams
 {
     bool  enabled = true;
-    float density = 0.010f;        // global extinction at the height base (1/m)
+    float density = 0.050f;        // global extinction at the height base (1/m)
     float heightBase = 0.0f;       // world height where the global fog is densest
     float heightFalloff = 0.33f;   // exponential density falloff above the base (1/m)
     float terrainFollow = 1.0f;   // fraction of the local terrain height added to the height base (needs a
@@ -174,7 +174,7 @@ export struct FogParams
                                     // higher = the pattern washes out closer to the surface
     float causticShoreFade = 1.0f;  // caustic contrast ramps in over this much water depth (m), so the
                                     // pattern dissolves at the terrain-waterline intersection; 0 = off
-    float underwaterDensity = 0.7f; // multiplier on the global density at/below the LOCAL water surface
+    float underwaterDensity = 1.0f; // multiplier on the global density at/below the LOCAL water surface
                                     // (terrain data map water level; always-on murk, immune to regional
                                     // thickness): thick murk under thin morning haze, or 0 to disable
     float underwaterOffset = -1.0f;  // raises/lowers the underwater fog boundary relative to the local

@@ -49,7 +49,12 @@ public:
     // The weather effect handles are DETACHED here, not destroyed: Globals::particleSystem is a plain
     // XCU global, so it destructs after the renderer (InitSeg order), and a handle destroy would call
     // into the dead renderer. The GPU state is gone with it anyway.
-    ~ParticleSystem() { m_rainEffect.m_id = 0; m_snowEffect.m_id = 0; }
+    ~ParticleSystem()
+    {
+        for (BuiltinEffect& b : m_builtins)
+            b.effect.m_id = 0;
+        m_oceanSprayEffect.m_id = 0;
+    }
 
     void initialize();
     // Advances rate accumulators/bursts into renderer spawn requests, re-uploads emitter GPU state,
@@ -124,12 +129,35 @@ private:
     uint32 m_nextDecalId = 1;
     uint32 m_rngState = 0x12345678;
 
-    // "Particles/Rain" and "Particles/Snow" tweaks: the testbed's camera-following weather volumes
-    // (Effects/rain.pfx, Effects/snow.pfx), created/destroyed in update() when the toggle changes.
-    bool m_weatherRain = false;
-    bool m_weatherSnow = false;
-    ParticleEffect m_rainEffect;
-    ParticleEffect m_snowEffect;
+    // The BUILT-IN ambient effects, each one camera-following volume .pfx instance created/destroyed in
+    // update() by its "Particles/<Name>" toggle, with "<Name> count / size / alpha" multiplier tweaks
+    // applied on top of the .pfx (the emitter table is re-uploaded per frame, so they are live).
+    struct BuiltinEffect
+    {
+        // The registry keeps VIEWS of tweak names, so every name is a literal here (never a built string).
+        const char* name;
+        const char* countName;
+        const char* sizeName;
+        const char* alphaName;
+        const char* sizeVarName;
+        const char* path;
+        bool enabled;
+        float countScale = 1.0f; // fill count + rate
+        float sizeScale = 1.0f;
+        float alphaScale = 1.0f;
+        float sizeVarScale = 1.0f; // multiplier on the .pfx SizeVariance (the product clamps to 1)
+        ParticleEffect effect;
+    };
+    BuiltinEffect m_builtins[4] = {
+        { "Rain", "Rain count", "Rain size", "Rain alpha", "Rain size variation", "Effects/rain.pfx", false },
+        { "Snow", "Snow count", "Snow size", "Snow alpha", "Snow size variation", "Effects/snow.pfx", false },
+        { "Dust", "Dust count", "Dust size", "Dust alpha", "Dust size variation", "Effects/dust.pfx", true, 4.0f, 0.5f, 0.5f },
+        { "Underwater", "Underwater count", "Underwater size", "Underwater alpha", "Underwater size variation", "Effects/underwater.pfx", true, 4.0f, 1.0f, 0.05f },
+    };
+    // "Particles/Ocean spray": one Effects/ocean_spray.pfx instance (no CPU spawns) whose emitter slot the
+    // renderer's ocean spray producer spawns into over the particle GPU spawn path.
+    bool m_oceanSpray = true;
+    ParticleEffect m_oceanSprayEffect;
 };
 
 export namespace Globals

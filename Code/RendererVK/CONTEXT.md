@@ -146,7 +146,7 @@ The **primary command buffer**, assembled in `present()`. Desktop:
 
 ```
 GPU Frame
-  Skinning → Ocean sim → Indirect cull → Light grid → Force compute
+  Skinning → Ocean sim (+ its spray step: particle spawn requests) → Indirect cull → Light grid → Force compute
     → Rain occlusion cull → Rain occlusion draw  (only while a weather volume requested the map; see Particle)
     → Particle sim → Terrain wetness
     → Shadow cull → Shadow draw            (both skipped under RT sun shadow)
@@ -519,6 +519,20 @@ Both push params in every frame; the renderer owns none of the tweaks.
   roughness. **Disabled = the pass is skipped and the presence flag is 0**; re-enabling parks the previous
   origin out of range so nothing stale shows. Rain from weather, particle hits and script splats are
   the planned injection sources.
+* **The particle GPU SPAWN PATH + ocean spray.** `ParticlePipeline` keeps one shared spawn-request
+  buffer (`MAX_PARTICLE_GPU_SPAWNS` × `ParticleSpawnRequestGpu`) and a request counter in its counters
+  block; a producer compute pass that runs BEFORE "Particle sim" binds both (`getCountersBuffer` /
+  `getSpawnRequestBuffer`) and appends through `particle_spawn.inc.glsl` (the contract is in
+  Particle/CONTEXT.md). The first producer is `ocean_spray.cs.glsl`, step 6 of
+  `OceanSimulationPipeline::record` (after the mip chain; the maps' final barrier includes compute):
+  an `OCEAN_SPRAY_GRID`² world grid around `u_sceneFocus` ("Ocean/Spray radius"), per cell the fold
+  Jacobian + crest acceleration at explicit LOD (compute has no derivatives) through the water shader's
+  own `oceanInstantFoam`, land skipped through the shore data (binding 2, the fog terrain map,
+  UPDATE_AFTER_BIND + refreshed per frame like the wetness pass), and a hashed dice at "Spray rate" ×
+  cell area × dt × breaking. The emitter slot arrives through `setOceanSprayEmitter` (the Particle
+  system's `Effects/ocean_spray.pfx` instance) in `u_oceanSpray0.x`; `UINT32_MAX` switches the step off
+  in-shader, so the cached CB records once. Tweaks `Ocean/Spray rate / radius / threshold / kick /
+  speed`.
 * **`setRainOcclusionVolume`** — the RAIN OCCLUSION MAP for the weather particle volumes
   (`PARTICLE_FLAG_OCCLUDE`, see Particle): ONE top-down orthographic D32 view
   (`RAIN_OCCLUSION_RESOLUTION`², a single-layer `ShadowMap` per frame slot) rendered by SECOND

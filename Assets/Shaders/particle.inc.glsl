@@ -26,7 +26,7 @@ struct ParticleEmitter
     vec4 colorStart;      // rgb = linear color * intensity, a = start alpha
     vec4 colorEnd;
     vec4 fadeParams;      // x = fade-in end (life frac), y = fade-out start, z = additivity, w = soft fade dist (m)
-    vec4 spinParams;      // x = max spin (rad/s), y = random initial rotation (0/1), z = lit emissive floor, w unused
+    vec4 spinParams;      // x = max spin (rad/s), y = random initial rotation (0/1), z = lit emissive floor, w = ground fade height (m)
     uvec4 texFlags;       // x = texture idx, y = PARTICLE_FLAG_* bits, z = flipbook cols | rows << 16, w = flipbook fps (float bits)
     vec4 volumeParams;    // PARTICLE_FLAG_VOLUME: xyz = box half extents (m) around posSpawnRadius.xyz, w = wind response (1/s)
 };
@@ -47,13 +47,26 @@ float particleVolumeEdgeFade(vec3 rel, vec3 halfExtents)
 }
 
 // GPU counters block: sim dispatch args + per-parity draw args (instanceCount IS the alive count) +
-// the dead-stack top. Bound as one buffer that is also the indirect dispatch/draw source.
+// the dead-stack top + the GPU spawn path's counter, latched count and emit dispatch args. Bound as one
+// buffer that is also the indirect dispatch/draw source (80 bytes; ParticlePipeline.cpp offsets).
 // c_draw[parity * 4 + 0..3] = vertexCount(6), instanceCount, firstVertex(0), firstInstance(0).
+// c_gpuSpawnCount: producers append here (unbounded; the begin pass clamps to MAX_PARTICLE_GPU_SPAWNS
+// into c_gpuSpawnConsume, which the GPU emit pass reads, then zeroes it for the next frame's producers).
 #define PARTICLE_COUNTERS_BLOCK \
     uvec4 c_simGroups;          \
     uint  c_draw[8];            \
     int   c_deadCount;          \
-    uint  c_pad0; uint c_pad1; uint c_pad2;
+    uint  c_gpuSpawnCount;      \
+    uint  c_gpuSpawnConsume;    \
+    uint  c_pad2;               \
+    uvec4 c_gpuEmitGroups;
+
+// One GPU spawn request (RendererVKLayout::ParticleSpawnRequestGpu, 32 bytes): see particle_spawn.inc.glsl.
+struct ParticleSpawnRequest
+{
+    vec4 posSize;    // xyz = world position, w reserved
+    vec4 velEmitter; // xyz = velocity (m/s), w = emitter slot (uint bits)
+};
 
 // ---- RNG (pcg) ----
 uint particlePcg(uint v)

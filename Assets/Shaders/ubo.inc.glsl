@@ -62,7 +62,7 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec4 u_cameraVelocity; // xyz = the centre view's velocity this frame (m/s), w = the fraction of it weather streaks subtract
     vec4 u_weatherWind0;   // xyz = mean wind velocity (m/s), w = gust strength (m/s)
     vec4 u_weatherWind1;   // x = 1 / gust size (1/m), y = sheet contrast [0,1], z = 1 / sheet size (1/m), w = sheet drift (m/s)
-    vec4 u_weatherWind2;   // xy = wind direction unit vector in XZ, zw unused
+    vec4 u_weatherWind2;   // xy = wind direction unit vector in XZ, z = live water surface Y under the camera, w = z valid (0/1)
 
     float u_rtLightShadows; // > 0.5: ray-traced shadows for punctual/area/tube lights
     float u_timeSeconds;    // elapsed app time (cloud wind / sky animation)
@@ -171,6 +171,11 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec4 u_oceanParams10;   // x unused (was the breaking limit, removed: the swash amplitude alone shapes
                             // the shore - oceanSurfaceWeight),
                             // y = spectrum clock rate (sqrt(world scale): holds the model sea's periods), zw unused
+    vec4 u_oceanSpray0;     // x = particle emitter slot (uint bits; 0xFFFFFFFF = off), y = rate (spawns / m^2 / s at
+                            //     full breaking), z = grid radius around the scene focus (m), w = sim delta (s)
+    vec4 u_oceanSpray1;     // x = breaking threshold (instant foam), y = upward kick (m/s), z = forward speed (m/s), w = spawn lead (m)
+    vec4 u_oceanSpray2;     // x = mist emitter slot, y = foam-chunk emitter slot (uint bits; 0xFFFFFFFF = droplets), z = spawn height (m), w unused
+    vec4 u_oceanSpray3;     // xyz = relative spawn weights of droplets / mist / foam chunks, w unused
     vec4 u_terrainParams;   // x = streamed terrain mesh coverage radius (m, radial from camera XZ;
                             // 0 = no terrain mesh up - fences the ocean land cull),
                             // y = temperature lapse rate, C per WORLD metre above sea level (<= 0; pairs

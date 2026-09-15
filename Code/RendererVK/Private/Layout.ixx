@@ -42,6 +42,23 @@ export namespace RendererVKLayout
     constexpr uint32 MAX_PARTICLE_EMITTERS = 256;            // live emitter slots (table re-uploaded per frame)
     constexpr uint32 MAX_PARTICLE_SPAWNS_PER_FRAME = 16 * 1024; // spawn-map capacity (one uint per spawned particle)
     constexpr uint32 PARTICLE_SIM_GROUP_SIZE = 64;
+    // GPU spawn path: any compute pass that runs BEFORE the particle sim in the frame appends
+    // ParticleSpawnRequestGpu entries (particle_spawn.inc.glsl: particleRequestSpawn) to one shared
+    // request buffer; the begin pass clamps + latches the count and the GPU emit dispatch (indirect,
+    // GPU-sized) turns them into particles of the named emitter slot. Requests past the cap are dropped.
+    constexpr uint32 MAX_PARTICLE_GPU_SPAWNS = 64 * 1024;
+    // Ocean spray producer (ocean_spray.cs.glsl, an OceanSimulationPipeline step): a world-space grid of
+    // this many cells per axis around the scene focus, each rolling for spray on breaking crests.
+    constexpr uint32 OCEAN_SPRAY_GRID = 128;
+
+    // One GPU spawn request (particle_spawn.inc.glsl mirror). w of velEmitter = the emitter slot as uint
+    // bits; w of posSize is reserved (size scale; the emit pass ignores it today).
+    struct alignas(16) ParticleSpawnRequestGpu
+    {
+        glm::vec4 posSize;    // xyz = world position, w reserved
+        glm::vec4 velEmitter; // xyz = velocity (m/s), w = emitter slot (uint bits)
+    };
+    static_assert(sizeof(ParticleSpawnRequestGpu) == 32);
 
     // ParticleEmitterGpu::flags bits (mirrored in the particle shaders via the injected defines).
     constexpr uint32 PARTICLE_FLAG_LIT     = 1u << 0; // per-particle GI probe + sun lighting in the vertex shader
@@ -49,6 +66,10 @@ export namespace RendererVKLayout
     constexpr uint32 PARTICLE_FLAG_KILL    = 1u << 2; // emitter destroyed: the sim retires its live particles
     constexpr uint32 PARTICLE_FLAG_VOLUME  = 1u << 3; // weather volume: box spawn (volumeParams), particles WRAP at the box faces and never age out
     constexpr uint32 PARTICLE_FLAG_OCCLUDE = 1u << 4; // volume only: a particle under the rain occlusion map's surface restarts at the box top
+    constexpr uint32 PARTICLE_FLAG_WATER_FLOOR = 1u << 5; // the live ocean surface is a floor: a particle reaching it lands on it and fades out
+    constexpr uint32 PARTICLE_FLAG_UNDERWATER  = 1u << 6; // volume only: lives below the live ocean surface (relocated under it when above; hidden while the camera is above sea level)
+    constexpr uint32 PARTICLE_FLAG_ABOVE_WATER = 1u << 7; // volume only: the inverse - lives above the surface (relocated over it when below; hidden while the camera is under sea level)
+    constexpr uint32 PARTICLE_FLAG_GROUND_FADE = 1u << 8; // alpha falls off exp(-height above the ground / spinParams.w) (dust hugging the ground)
     constexpr uint32 PARTICLE_TEX_NONE = 0xFFFFu;     // texIdx sentinel: procedural soft round sprite
 
     // Rain occlusion map (the weather volume's shelter test): ONE top-down orthographic depth view over
@@ -71,7 +92,7 @@ export namespace RendererVKLayout
         glm::vec4 colorStart{ 1.0f };              // rgb = linear color * intensity, a = start alpha
         glm::vec4 colorEnd{ 1.0f, 1.0f, 1.0f, 0.0f };
         glm::vec4 fadeParams{ 0.1f, 0.7f, 0.0f, 0.25f }; // x = fade-in end (life frac), y = fade-out start, z = additivity [0,1], w = soft-particle fade distance (m)
-        glm::vec4 spinParams{ 0.0f };              // x = max spin (rad/s, random sign), y = random initial rotation (0/1), z = lit emissive floor [0,1], w unused
+        glm::vec4 spinParams{ 0.0f };              // x = max spin (rad/s, random sign), y = random initial rotation (0/1), z = lit emissive floor [0,1], w = ground fade height (m, PARTICLE_FLAG_GROUND_FADE)
         glm::uvec4 texFlags{ PARTICLE_TEX_NONE, 0u, 0u, 0u }; // x = texture idx (PARTICLE_TEX_NONE = procedural), y = PARTICLE_FLAG_* bits, z = flipbook cols | rows << 16 (0 = none), w = flipbook fps (float bits)
         glm::vec4 volumeParams{ 0.0f };            // PARTICLE_FLAG_VOLUME: xyz = box half extents (m) around posSpawnRadius.xyz, w = wind response (1/s: how fast the horizontal velocity relaxes onto the local wind)
     };
@@ -476,7 +497,9 @@ export namespace RendererVKLayout
         glm::vec4 weatherWind1;   // x = 1 / gust size (1/m), y = sheet contrast [0,1] (alpha bands of density that
                                   // ride the wind), z = 1 / sheet size (1/m), w = sheet drift (m/s along the wind
                                   // direction, on top of half the wind speed - the bands sweep even in light wind)
-        glm::vec4 weatherWind2;   // xy = wind direction unit vector in XZ (from the angle, valid at zero speed), zw unused
+        glm::vec4 weatherWind2;   // xy = wind direction unit vector in XZ (from the angle, valid at zero speed),
+                                  // z = the LIVE water surface world Y under the camera (setCameraWaterSurface),
+                                  // w = 1 when z is valid (the particle draw's camera-side water gate)
 
         float rtLightShadows;   // > 0.5: ray-traced shadows for punctual/area/tube lights
         float timeSeconds;      // elapsed app time (cloud wind / sky animation)
@@ -588,6 +611,17 @@ export namespace RendererVKLayout
         glm::vec4 oceanParams10;   // x unused (was the breaking limit, removed: the swash amplitude alone
                                    //     shapes the shore - oceanSurfaceWeight),
                                    // y = spectrum clock rate (sqrt(world scale): holds the model sea's periods), zw unused
+        // Ocean spray (ocean_spray.cs.glsl -> the particle GPU spawn path; "Ocean/Spray *" tweaks):
+        glm::vec4 oceanSpray0;     // x = particle emitter slot (uint bits; 0xFFFFFFFF = off), y = rate (spawns per
+                                   //     m^2 per s at full breaking), z = grid radius around the scene focus (m),
+                                   //     w = sim delta this frame (s)
+        glm::vec4 oceanSpray1;     // x = breaking threshold (instant-foam value where spray starts), y = upward
+                                   //     kick (m/s), z = forward speed along the wind (m/s), w = spawn lead ahead
+                                   //     of the crest (m)
+        glm::vec4 oceanSpray2;     // x = mist emitter slot, y = foam-chunk emitter slot (uint bits; 0xFFFFFFFF =
+                                   //     fall back to the droplet slot), z = spawn height above the surface (m), w unused
+        glm::vec4 oceanSpray3;     // xyz = relative spawn weights of droplets / mist / foam chunks (normalized in the
+                                   //     shader; a zero weight never spawns that look), w unused
         glm::vec4 terrainParams;   // x = streamed terrain mesh coverage radius (m, radial from camera XZ;
                                    // 0 = no terrain mesh up - fences the ocean land cull),
                                    // y = temperature lapse rate, C per WORLD metre above sea level (<= 0;

@@ -69,9 +69,16 @@ public:
         vk::Sampler   gbufferSampler;
         vk::ImageView rainOcclusionView;    // THIS frame's top-down rain occlusion depth (weather volume shelter)
         vk::Sampler   rainOcclusionSampler; // non-comparison, clamp-to-border white (outside = open sky)
+        vk::ImageView oceanMapsView;        // FFT displacement maps (PARTICLE_FLAG_WATER_FLOOR: the live surface)
+        vk::Sampler   oceanMapsSampler;
+        vk::ImageView terrainView;          // terrain-data cascades (the shore weighting of that surface)
+        vk::Sampler   terrainSampler;
     };
     // Records begin/emit/sim into a begun secondary command buffer (outside any render pass).
     void recordSim(CommandBuffer& commandBuffer, uint32 frameIdx, const SimParams& params);
+    // Points the sim's terrain-data binding (UPDATE_AFTER_BIND) at the active ping-pong image; refreshed
+    // per frame by the Renderer so a CPU re-bake swaps images without re-recording the cached CB.
+    void updateTerrainDescriptor(uint32 frameIdx, vk::ImageView terrainView, vk::Sampler terrainSampler);
 
     struct DrawParams
     {
@@ -81,6 +88,8 @@ public:
         // DEPTH_STENCIL_READ_ONLY while depth-prepass reuse binds this image as the scene pass depth.
         vk::ImageLayout gbufferDepthLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
         vk::Sampler   gbufferSampler;
+        vk::ImageView terrainView;      // terrain-data cascades (PARTICLE_FLAG_GROUND_FADE)
+        vk::Sampler   terrainSampler;
     };
     // Records the indirect billboard draw; the caller has begun a command buffer inside the
     // scene-color render pass and set the viewport/scissor. eye selects the per-eye set/view.
@@ -97,21 +106,29 @@ public:
         uint32 simGroups;   // sim dispatch group count the begin pass computed
         uint32 alive[2];    // per-parity alive counts (draw instanceCounts)
         int32  deadCount;   // free pool entries
+        uint32 gpuSpawns;   // GPU spawn requests the begin pass latched that frame (clamped)
     };
     DebugCounters getDebugCounters(uint32 frameIdx) const
     {
         const oc::span<const uint32> counters = m_mappedReadback[frameIdx];
-        return DebugCounters{ counters[0], { counters[4 + 1], counters[8 + 1] }, (int32)counters[12] };
+        return DebugCounters{ counters[0], { counters[4 + 1], counters[8 + 1] }, (int32)counters[12], counters[13] };
     }
+
+    // The GPU SPAWN PATH's producer-side buffers (particle_spawn.inc.glsl): a compute pass that runs
+    // before the particle sim binds both as storage buffers and appends spawn requests. Single copy,
+    // like the pool; the request count lives in the counters block.
+    Buffer& getCountersBuffer() { return m_countersBuffer; }
+    Buffer& getSpawnRequestBuffer() { return m_spawnRequestBuffer; }
 
 private:
     void buildBeginLayout(ComputePipelineLayout& layout);
-    void buildEmitLayout(ComputePipelineLayout& layout);
+    void buildEmitLayout(ComputePipelineLayout& layout, bool gpuSpawn);
     void buildSimLayout(ComputePipelineLayout& layout);
     void buildDrawLayout(GraphicsPipelineLayout& layout, uint32 maxTextures);
 
     ComputePipeline m_beginPipeline;
-    ComputePipeline m_emitPipeline;
+    ComputePipeline m_emitPipeline;    // the CPU spawn map
+    ComputePipeline m_emitGpuPipeline; // the GPU request buffer (PARTICLE_GPU_SPAWN variant)
     ComputePipeline m_simPipeline;
     GraphicsPipeline m_drawPipeline;
 
@@ -119,7 +136,8 @@ private:
     Buffer m_poolBuffer;
     oc::array<Buffer, 2> m_aliveBuffers; // ping-pong by frame parity
     Buffer m_deadListBuffer;
-    Buffer m_countersBuffer; // sim dispatch args + per-parity draw args + dead-stack top
+    Buffer m_countersBuffer; // sim dispatch args + per-parity draw args + dead-stack top + GPU spawn counter/dispatch
+    Buffer m_spawnRequestBuffer; // MAX_PARTICLE_GPU_SPAWNS requests, appended by producer passes
 
     // Per-frame-in-flight CPU-written inputs.
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_emitterBuffers;
@@ -137,6 +155,7 @@ private:
 
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_beginSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_emitSets;
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_emitGpuSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_simSets;
     static constexpr uint32 MAX_VIEWS = 2;
     static uint32 drawSlot(uint32 frameIdx, uint32 eye) { return frameIdx * MAX_VIEWS + eye; }

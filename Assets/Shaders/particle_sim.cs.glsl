@@ -10,6 +10,11 @@
 #define UBO_BINDING 1
 #include "shared.inc.glsl"
 #include "particle.inc.glsl"
+// The live ocean surface (PARTICLE_FLAG_WATER_FLOOR): the FFT maps + the terrain-data cascades for the
+// shore weighting, the same field the water is drawn with.
+#define OCEAN_MAPS_BINDING 11
+#define TERRAIN_HEIGHT_BINDING 12
+#include "ocean_wave.inc.glsl"
 
 layout (local_size_x = 64) in;
 
@@ -104,6 +109,22 @@ void main()
         }
     }
 
+    // Water floor: a particle that reaches the live wave surface lands on it, stops, and is pushed to
+    // its fade-out so it dissolves ON the water instead of sinking through it (spray rejoining the sea).
+    // The surface height is read at the particle's own XZ (the horizontal chop displacement is ignored:
+    // an error of a few cm at the crests, invisible on a landing droplet).
+    if ((e.texFlags.y & PARTICLE_FLAG_WATER_FLOOR) != 0u)
+    {
+        const vec2 shoreHW = oceanSampleShoreData(pos.xz);
+        const float surfaceY = shoreHW.y + oceanSampleDisplacement(pos.xz, 0.25, 0.0, shoreHW).y;
+        if (pos.y < surfaceY)
+        {
+            pos.y = surfaceY + 0.01;
+            vel = vec3(vel.x, 0.0, vel.z) * 0.3;
+            particle.posAge.w = max(particle.posAge.w, particle.velLife.w * e.fadeParams.y);
+        }
+    }
+
     if (volume)
     {
         // Weather volume: the box rides the emitter (the camera). A drop under the occlusion map's
@@ -134,6 +155,35 @@ void main()
             // Just inside the top face: exactly ON it, the wrap below folds it onto the bottom face.
             rel.y = halfExt.y * 0.999;
             particle.misc.y = seed;
+        }
+        // Underwater volume (silt, bubbles): a particle above the live water surface is put back at a
+        // random depth under it (a bubble reaching the surface pops and re-forms below). When the whole
+        // box is above the water nothing fits; the draw hides the volume while the camera is above sea
+        // level anyway.
+        if ((e.texFlags.y & (PARTICLE_FLAG_UNDERWATER | PARTICLE_FLAG_ABOVE_WATER)) != 0u)
+        {
+            const vec2 shoreHW = oceanSampleShoreData(pos.xz);
+            const float surfaceY = shoreHW.y + oceanSampleDisplacement(pos.xz, 0.25, 0.0, shoreHW).y;
+            if ((e.texFlags.y & PARTICLE_FLAG_UNDERWATER) != 0u)
+            {
+                const float topRel = min(surfaceY - 0.05 - e.posSpawnRadius.y, halfExt.y * 0.999);
+                if (rel.y > topRel && topRel > -halfExt.y)
+                {
+                    uint seed = particle.misc.y;
+                    rel.y = mix(-halfExt.y * 0.999, topRel, particleRand(seed));
+                    particle.misc.y = seed;
+                }
+            }
+            else
+            {   // above-water volume (dust): the inverse - a particle under the surface goes back up over it.
+                const float bottomRel = max(surfaceY + 0.05 - e.posSpawnRadius.y, -halfExt.y * 0.999);
+                if (rel.y < bottomRel && bottomRel < halfExt.y)
+                {
+                    uint seed = particle.misc.y;
+                    rel.y = mix(bottomRel, halfExt.y * 0.999, particleRand(seed));
+                    particle.misc.y = seed;
+                }
+            }
         }
         pos = e.posSpawnRadius.xyz + particleVolumeWrap(rel, halfExt);
     }

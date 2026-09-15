@@ -54,6 +54,14 @@ export struct ParticleEmitterDesc
     bool occlude = false;
     float windResponse = 0.0f;   // 1/s: how fast the horizontal velocity relaxes onto the renderer's weather
                                  // wind ("Particles/Wind *"; heavy drops ~1, flakes ~4); 0 = ignores wind
+    bool underwater = false;     // volume lives BELOW the live ocean surface: a particle above it is relocated
+                                 // to a random depth under it, and the draw hides the volume while the camera
+                                 // is above sea level (silt, bubbles)
+    bool aboveWater = false;     // the inverse: a particle under the surface is relocated above it, and the
+                                 // draw hides the volume while the camera is under sea level (dust). On a
+                                 // NON-volume emitter only the draw gate applies (the ocean spray)
+    float heightFalloff = 0.0f;  // m: alpha falls off as exp(-height above the ground (terrain / water) / this);
+                                 // 0 = off (dust hugging the ground)
 
     // Motion.
     float lifeMin = 1.0f;
@@ -65,6 +73,7 @@ export struct ParticleEmitterDesc
     float turbulenceScroll = 0.0f;     // field scroll speed (m/s, upward)
     bool collide = false;        // screen-space depth collision
     float collisionBounce = 0.3f;
+    bool waterFloor = false;     // the live ocean surface is a floor: a particle reaching it lands, stops and fades out
 
     // Shape over life.
     float sizeStart = 0.1f;      // m
@@ -118,12 +127,14 @@ export struct DecalDesc
 //           Offset x, y, z            Direction x, y, z     InheritVelocity 0.5
 //           Life <min> <max>          Gravity 9.8           Drag 1.5
 //           Turbulence 2 0.5 0.3      # amplitude, frequency, scroll
-//           Collide true              Bounce 0.4
+//           Collide true              Bounce 0.4            WaterFloor true
 //           Size <start> <end>        SizeVariance 0.3
 //           VelocityStretch 0.05      Spin 3                RandomRotation false
 //           FadeIn 0.1                FadeOutStart 0.6      SoftFade 0.5
 //           Volume x, y, z            Count 60000           # weather box (half extents) + its fill count
 //           FollowCamera true         Occlude true          # ride the camera / shelter under roofs
 //           WindResponse 1.0                                # 1/s relaxation onto the Particles/Wind tweaks
+//           Underwater true           AboveWater true       # the volume lives below / above the ocean surface
+//           HeightFalloff 2.5                               # m: alpha fades exp(-height above ground / this)
 // Returns false (with the error in outError) on parse failure.
 export bool loadParticleEffect(const oc::string& path, ParticleEffectDesc& outDesc, oc::string& outError);

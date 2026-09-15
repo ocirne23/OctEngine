@@ -84,6 +84,29 @@ void OceanSimulationPipeline::buildFoamLayout(ComputePipelineLayout& layout)
     layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eCompute, .offset = 0, .size = sizeof(FoamPC) });
 }
 
+void OceanSimulationPipeline::buildSprayLayout(ComputePipelineLayout& layout)
+{
+    layout.computeShaderDebugFilePath = "Shaders/ocean_spray.cs.glsl";
+    layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
+    auto& b = layout.descriptorSetLayoutBindings;
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute });
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // ocean maps
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 2, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // terrain data
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 3, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // particle counters
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 4, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // spawn requests
+    // Binding 2 (terrain-data cascades) is a ping-pong pair rewritten per frame by updateTerrainDescriptor.
+    layout.descriptorBindingFlags.resize(b.size());
+    layout.descriptorBindingFlags[2] = vk::DescriptorBindingFlagBits::eUpdateAfterBind;
+}
+
+void OceanSimulationPipeline::updateTerrainDescriptor(uint32 frameIdx, vk::ImageView terrainView, vk::Sampler terrainSampler)
+{
+    vk::DescriptorImageInfo imageInfo{ .sampler = terrainSampler, .imageView = terrainView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal };
+    vk::WriteDescriptorSet write{ .dstSet = m_spraySets[frameIdx].getDescriptorSet(), .dstBinding = 2, .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };
+    Globals::device.getDevice().updateDescriptorSets(1, &write, 0, nullptr);
+}
+
 void OceanSimulationPipeline::createImages()
 {
     vk::Device vkDevice = Globals::device.getDevice();
@@ -261,6 +284,9 @@ void OceanSimulationPipeline::initialize()
     ComputePipelineLayout foamLayout;
     buildFoamLayout(foamLayout);
     m_foamPipeline.initialize(foamLayout);
+    ComputePipelineLayout sprayLayout;
+    buildSprayLayout(sprayLayout);
+    m_sprayPipeline.initialize(sprayLayout);
 
     for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
     {
@@ -269,6 +295,7 @@ void OceanSimulationPipeline::initialize()
         m_fftVerticalSets[i].initialize(m_fftPipeline.getDescriptorSetLayout());
         m_assembleSets[i].initialize(m_assemblePipeline.getDescriptorSetLayout());
         m_foamSets[i].initialize(m_foamPipeline.getDescriptorSetLayout());
+        m_spraySets[i].initialize(m_sprayPipeline.getDescriptorSetLayout());
     }
 }
 
@@ -290,9 +317,13 @@ void OceanSimulationPipeline::reloadShaders()
     buildFoamLayout(foamLayout);
     if (!m_foamPipeline.reloadShaders(foamLayout))
         printf("OceanSimulationPipeline: foam shader reload failed, keeping previous pipeline\n");
+    ComputePipelineLayout sprayLayout;
+    buildSprayLayout(sprayLayout);
+    if (!m_sprayPipeline.reloadShaders(sprayLayout))
+        printf("OceanSimulationPipeline: spray shader reload failed, keeping previous pipeline\n");
 }
 
-void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo)
+void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, const SprayParams& spray)
 {
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
 
@@ -498,7 +529,8 @@ void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameI
         vk::ImageMemoryBarrier2 toSampled{
             .srcStageMask = vk::PipelineStageFlagBits2::eBlit,
             .srcAccessMask = vk::AccessFlagBits2::eTransferRead | vk::AccessFlagBits2::eTransferWrite,
-            .dstStageMask = vk::PipelineStageFlagBits2::eVertexShader | vk::PipelineStageFlagBits2::eFragmentShader,
+            // Compute included: the spray step below samples the finished maps.
+            .dstStageMask = vk::PipelineStageFlagBits2::eVertexShader | vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader,
             .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
             .oldLayout = vk::ImageLayout::eTransferSrcOptimal,
             .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
@@ -506,5 +538,31 @@ void OceanSimulationPipeline::record(CommandBuffer& commandBuffer, uint32 frameI
             .subresourceRange = allSubresources(m_mapsMipLevels, MAPS_LAYERS),
         };
         cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &toSampled });
+    }
+
+    // ---- 6. Spray: breaking crests -> particle spawn requests (the particle GPU spawn path). Reads the
+    // finished maps; writes the shared request buffer + counter, which the particle sim's head barrier
+    // (compute -> compute) orders before the begin pass. UBO-gated (u_oceanSpray0.x = the emitter slot,
+    // 0xFFFFFFFF = off), so it records once. ----
+    if (spray.particleCounters && spray.particleRequests)
+    {
+        oc::array<DescriptorSetUpdateInfo, 5> updates{
+            DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer,
+                .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
+            DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eCombinedImageSampler,
+                .imageInfos = { vk::DescriptorImageInfo{ .sampler = m_mapsSampler.getSampler(), .imageView = m_mapsView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
+            DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler,
+                .imageInfos = { vk::DescriptorImageInfo{ .sampler = spray.terrainSampler, .imageView = spray.terrainView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
+            DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageBuffer,
+                .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = spray.particleCounters->getBuffer(), .range = spray.particleCounters->getSize() } } },
+            DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageBuffer,
+                .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = spray.particleRequests->getBuffer(), .range = spray.particleRequests->getSize() } } },
+        };
+        vk::DescriptorSet set = m_spraySets[frameIdx].getDescriptorSet();
+        cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_sprayPipeline.getPipeline());
+        commandBuffer.cmdUpdateDescriptorSets(m_sprayPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, set, updates);
+        cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_sprayPipeline.getPipelineLayout(), 0, 1, &set, 0, nullptr);
+        constexpr uint32 GRID = RendererVKLayout::OCEAN_SPRAY_GRID;
+        cmd.dispatch((GRID + 7) / 8, (GRID + 7) / 8, 1);
     }
 }

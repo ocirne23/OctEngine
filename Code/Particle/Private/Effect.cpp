@@ -21,12 +21,16 @@ ParticleEmitterGpu ParticleEmitterDesc::toGpu(uint16 textureIdx) const
     gpu.colorStart = colorStart;
     gpu.colorEnd = colorEnd;
     gpu.fadeParams = glm::vec4(fadeIn, fadeOutStart, additivity, softFadeDistance);
-    gpu.spinParams = glm::vec4(spinMax, randomRotation ? 1.0f : 0.0f, emissiveFloor, 0.0f);
+    gpu.spinParams = glm::vec4(spinMax, randomRotation ? 1.0f : 0.0f, emissiveFloor, glm::max(heightFalloff, 0.0f));
     uint32 flags = 0;
+    if (heightFalloff > 0.0f)
+        flags |= PARTICLE_FLAG_GROUND_FADE;
     if (lit)
         flags |= PARTICLE_FLAG_LIT;
     if (collide)
         flags |= PARTICLE_FLAG_COLLIDE;
+    if (waterFloor)
+        flags |= PARTICLE_FLAG_WATER_FLOOR;
     if (isVolume())
     {
         flags |= PARTICLE_FLAG_VOLUME;
@@ -34,6 +38,12 @@ ParticleEmitterGpu ParticleEmitterDesc::toGpu(uint16 textureIdx) const
             flags |= PARTICLE_FLAG_OCCLUDE;
         gpu.volumeParams = glm::vec4(volume, glm::max(windResponse, 0.0f));
     }
+    // Water-side flags apply to every emitter: the sim's relocation is volume-only by itself, the draw's
+    // camera gate is not (the ocean spray is a non-volume emitter that hides under the sea).
+    if (underwater)
+        flags |= PARTICLE_FLAG_UNDERWATER;
+    if (aboveWater)
+        flags |= PARTICLE_FLAG_ABOVE_WATER;
     const uint32 flipbook = (flipbookCols > 0 && flipbookRows > 0) ? (flipbookCols | (flipbookRows << 16)) : 0;
     gpu.texFlags = glm::uvec4(textureIdx, flags, flipbook, glm::floatBitsToUint(flipbookFps));
     return gpu;
@@ -72,6 +82,7 @@ static void parseEmitter(const AssetNode& node, ParticleEmitterDesc& e)
     if (const AssetNode* n = node.find("Turbulence"))    { e.turbulence = n->asFloat(0, e.turbulence); e.turbulenceFrequency = n->asFloat(1, e.turbulenceFrequency); e.turbulenceScroll = n->asFloat(2, e.turbulenceScroll); }
     if (const AssetNode* n = node.find("Collide"))       e.collide = n->asBool(0, e.collide);
     if (const AssetNode* n = node.find("Bounce"))        e.collisionBounce = n->asFloat(0, e.collisionBounce);
+    if (const AssetNode* n = node.find("WaterFloor"))    e.waterFloor = n->asBool(0, e.waterFloor);
     if (const AssetNode* n = node.find("Size"))          { e.sizeStart = n->asFloat(0, e.sizeStart); e.sizeEnd = n->asFloat(1, e.sizeStart); }
     if (const AssetNode* n = node.find("SizeVariance"))  e.sizeVariance = n->asFloat(0, e.sizeVariance);
     if (const AssetNode* n = node.find("VelocityStretch")) e.velocityStretch = n->asFloat(0, e.velocityStretch);
@@ -85,6 +96,9 @@ static void parseEmitter(const AssetNode& node, ParticleEmitterDesc& e)
     if (const AssetNode* n = node.find("FollowCamera"))  e.followCamera = n->asBool(0, e.followCamera);
     if (const AssetNode* n = node.find("Occlude"))       e.occlude = n->asBool(0, e.occlude);
     if (const AssetNode* n = node.find("WindResponse"))  e.windResponse = n->asFloat(0, e.windResponse);
+    if (const AssetNode* n = node.find("Underwater"))    e.underwater = n->asBool(0, e.underwater);
+    if (const AssetNode* n = node.find("AboveWater"))    e.aboveWater = n->asBool(0, e.aboveWater);
+    if (const AssetNode* n = node.find("HeightFalloff")) e.heightFalloff = n->asFloat(0, e.heightFalloff);
 }
 
 bool loadParticleEffect(const oc::string& path, ParticleEffectDesc& outDesc, oc::string& outError)

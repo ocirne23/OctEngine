@@ -44,8 +44,20 @@ public:
     void initialize();
     void reloadShaders();
 
+    // The spray step's inputs (ocean_spray.cs.glsl, the last step of record: the particle GPU spawn
+    // path's producer buffers plus the terrain-data cascades for the shore test).
+    struct SprayParams
+    {
+        Buffer* particleCounters = nullptr;
+        Buffer* particleRequests = nullptr;
+        vk::ImageView terrainView;
+        vk::Sampler terrainSampler;
+    };
     // Records the whole per-frame simulation. ubo = that frame slot's main UBO (time + ocean params).
-    void record(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo);
+    void record(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, const SprayParams& spray);
+    // Points the spray step's terrain-data binding (UPDATE_AFTER_BIND) at the active ping-pong image;
+    // refreshed per frame by the Renderer so a CPU re-bake swaps images without re-recording the CB.
+    void updateTerrainDescriptor(uint32 frameIdx, vk::ImageView terrainView, vk::Sampler terrainSampler);
 
     // Output maps: 2D array, layers [0, CASCADES) = displacement, [CASCADES, 2*CASCADES) = gradients,
     // full mip chain, SHADER_READ_ONLY between frames. Sampled by the G-buffer/forward vertex shaders
@@ -80,6 +92,7 @@ private:
     void buildFftLayout(ComputePipelineLayout& layout);
     void buildAssembleLayout(ComputePipelineLayout& layout);
     void buildFoamLayout(ComputePipelineLayout& layout);
+    void buildSprayLayout(ComputePipelineLayout& layout);
     void createImages();
     void destroyImages();
 
@@ -87,6 +100,7 @@ private:
     ComputePipeline m_fftPipeline;
     ComputePipeline m_assemblePipeline;
     ComputePipeline m_foamPipeline;
+    ComputePipeline m_sprayPipeline; // breaking-crest spray -> particle spawn requests
 
     // All sets are per frame slot: the spectrum binds that frame's UBO, and the others must not be
     // host-updated (cmdUpdateDescriptorSets is immediate) while the other slot's cached CB is in flight.
@@ -95,6 +109,7 @@ private:
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_fftVerticalSets;   // pong -> ping
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_assembleSets;      // ping -> maps mip 0
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_foamSets;          // maps mip 0 + foam accum
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_spraySets;         // maps + terrain + particle buffers
 
     // Ping/pong complex spectra (RGBA32F = 2 complex values), kept in GENERAL for their whole life.
     vk::Image m_spectrumImage[2]{};

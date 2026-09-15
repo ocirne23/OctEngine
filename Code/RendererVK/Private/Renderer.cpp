@@ -131,6 +131,16 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     Tweak::floatVar("Particles", "Wind sheet contrast", &m_windSheetContrast, 0.0f, 1.0f, 0.01f);
     Tweak::floatVar("Particles", "Wind sheet size", &m_windSheetSize, 2.0f, 200.0f, 1.0f);
     Tweak::floatVar("Particles", "Wind sheet drift", &m_windSheetDrift, 0.0f, 20.0f, 0.1f);
+    Tweak::floatVar("Ocean", "Spray rate", &m_oceanSprayRate, 0.0f, 200.0f, 0.1f);
+    Tweak::floatVar("Ocean", "Spray radius", &m_oceanSprayRadius, 10.0f, 300.0f, 1.0f);
+    Tweak::floatVar("Ocean", "Spray threshold", &m_oceanSprayThreshold, 0.0005f, 0.025f, 0.0005f);
+    Tweak::floatVar("Ocean", "Spray kick", &m_oceanSprayKick, 0.0f, 15.0f, 0.1f);
+    Tweak::floatVar("Ocean", "Spray speed", &m_oceanSpraySpeed, 0.0f, 20.0f, 0.1f);
+    Tweak::floatVar("Ocean", "Spray forward offset", &m_oceanSprayForward, -5.0f, 5.0f, 0.05f);
+    Tweak::floatVar("Ocean", "Spray height offset", &m_oceanSprayHeight, -2.0f, 2.0f, 0.01f);
+    Tweak::floatVar("Ocean", "Spray droplets weight", &m_oceanSprayWeightDroplets, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Ocean", "Spray mist weight", &m_oceanSprayWeightMist, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Ocean", "Spray foam weight", &m_oceanSprayWeightFoam, 0.0f, 1.0f, 0.01f);
     Tweak::boolean("Decals", "Enabled", &m_decalsEnabled);
     // Present mode is swapchain creation state (FIFO vs Immediate), so a change recreates the
     // swapchain (device idle + re-init, same path as a lost acquire). A saved/override value fires
@@ -853,7 +863,7 @@ void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const
         ubo.weatherWind0 = glm::vec4(dir.x * m_windSpeed, 0.0f, dir.y * m_windSpeed, glm::max(m_windGustStrength, 0.0f));
         ubo.weatherWind1 = glm::vec4(1.0f / glm::max(m_windGustSize, 1.0f), glm::clamp(m_windSheetContrast, 0.0f, 1.0f),
             1.0f / glm::max(m_windSheetSize, 1.0f), glm::max(m_windSheetDrift, 0.0f));
-        ubo.weatherWind2 = glm::vec4(dir, 0.0f, 0.0f);
+        ubo.weatherWind2 = glm::vec4(dir, m_cameraWaterSurface, m_cameraWaterSurfaceValid ? 1.0f : 0.0f);
     }
 
     // RTAO and the GI probe contribution both need the acceleration structures, so both fold in the RT
@@ -1165,6 +1175,17 @@ void Renderer::buildUboOcean()
     ubo.oceanParams9 = glm::vec4(0.0f /* x: the removed trough margin */, glm::max(ocean.rtRefractionRange, 1.0f), // the tweak's own minimum; 10 here silently floored 1..9 m
         glm::max(ocean.rtReflectionRange, 50.0f), glm::clamp(ocean.rtReflectionMaxRough, 0.0f, 1.0f));
     ubo.oceanParams10 = glm::vec4(0.0f /* x: the removed breaking limit */, glm::max(ocean.timeScale, 0.0f), 0.0f, 0.0f);
+    // Ocean spray producer: the emitter slot the Particle system published (UINT32_MAX = off), the sim
+    // delta the rate integrates over (frozen with the global pause, like the particle sim itself).
+    const float sprayDt = oc::min((float)Globals::time.getSimDeltaSec(), 0.25f);
+    // Off while the particle chain is disabled: nothing would consume (and reset) the request counter.
+    const uint32 sprayEmitter = m_particlesEnabled ? m_oceanSprayEmitter : UINT32_MAX;
+    ubo.oceanSpray0 = glm::vec4(glm::uintBitsToFloat(sprayEmitter), glm::max(m_oceanSprayRate, 0.0f),
+        glm::max(m_oceanSprayRadius, 1.0f), sprayDt);
+    ubo.oceanSpray1 = glm::vec4(glm::clamp(m_oceanSprayThreshold, 0.0f, 0.99f), glm::max(m_oceanSprayKick, 0.0f),
+        glm::max(m_oceanSpraySpeed, 0.0f), m_oceanSprayForward);
+    ubo.oceanSpray2 = glm::vec4(glm::uintBitsToFloat(m_oceanSprayMistEmitter), glm::uintBitsToFloat(m_oceanSprayFoamEmitter), m_oceanSprayHeight, 0.0f);
+    ubo.oceanSpray3 = glm::vec4(glm::max(m_oceanSprayWeightDroplets, 0.0f), glm::max(m_oceanSprayWeightMist, 0.0f), glm::max(m_oceanSprayWeightFoam, 0.0f), 0.0f);
 }
 
 // Forcefield bubbles (Force library pushes m_forceFieldParams every frame; all UBO-driven = live).
@@ -1944,9 +1965,9 @@ void Renderer::present()
         if (m_particleLogStats && m_frameCounter % 120 == 0)
         {
             const ParticlePipeline::DebugCounters counters = m_particlePipeline.getDebugCounters(frameIdx);
-            printf("Particles: alive %u/%u (parity 0/1), dead %d, simGroups %u, emitters %u, spawn reqs %u, decals %u\n",
+            printf("Particles: alive %u/%u (parity 0/1), dead %d, simGroups %u, emitters %u, spawn reqs %u, GPU spawns %u, decals %u\n",
                 counters.alive[0], counters.alive[1], counters.deadCount, counters.simGroups,
-                (uint32)m_particleEmitters.size(), spawnRequestTotal, m_decalCounter);
+                (uint32)m_particleEmitters.size(), spawnRequestTotal, counters.gpuSpawns, m_decalCounter);
         }
     }
 
@@ -2518,7 +2539,13 @@ void Renderer::recordOceanSim(uint32 frameIdx)
     CommandBuffer& cb = frameData.oceanSimCommandBuffer;
     vk::CommandBufferInheritanceInfo inheritance;
     cb.begin(false, &inheritance);
-    m_oceanSimPipeline.record(cb, frameIdx, frameData.ubo);
+    const OceanSimulationPipeline::SprayParams spray{
+        .particleCounters = &m_particlePipeline.getCountersBuffer(),
+        .particleRequests = &m_particlePipeline.getSpawnRequestBuffer(),
+        .terrainView = m_fogTerrainMap.getView(),
+        .terrainSampler = m_fogTerrainMap.getSampler(),
+    };
+    m_oceanSimPipeline.record(cb, frameIdx, frameData.ubo, spray);
     cb.end();
 }
 
@@ -2909,6 +2936,10 @@ void Renderer::recordParticleSim(uint32 frameIdx)
         .gbufferSampler = frameData.gbuffer.getSampler(),
         .rainOcclusionView = frameData.rainOcclusionMap.getSampleView(),
         .rainOcclusionSampler = frameData.rainOcclusionMap.getDepthSampler(),
+        .oceanMapsView = m_oceanSimPipeline.getMapsView(),
+        .oceanMapsSampler = m_oceanSimPipeline.getMapsSampler(),
+        .terrainView = m_fogTerrainMap.getView(),
+        .terrainSampler = m_fogTerrainMap.getSampler(),
     };
     m_particlePipeline.recordSim(cb, frameIdx, simParams);
     cb.end();
@@ -2934,6 +2965,8 @@ void Renderer::recordParticlesInto(CommandBuffer& cb, uint32 frameIdx, uint32 ey
         // Runs inside the scene pass, where depth-prepass reuse holds the image in DEPTH_STENCIL_READ_ONLY.
         .gbufferDepthLayout = m_depthPrepassReuse ? vk::ImageLayout::eDepthStencilReadOnlyOptimal : vk::ImageLayout::eShaderReadOnlyOptimal,
         .gbufferSampler = frameData.gbuffer.getSampler(),
+        .terrainView = m_fogTerrainMap.getView(),
+        .terrainSampler = m_fogTerrainMap.getSampler(),
     };
     m_particlePipeline.recordDraw(cb, frameIdx, eyeIndex, drawParams);
 }
@@ -3960,6 +3993,8 @@ void Renderer::recordCommandBuffers()
         }
         m_volumetricFogPipeline.updateTerrainDescriptor(frameIdx, m_fogTerrainMap.getView(), m_fogTerrainMap.getSampler());
         m_terrainWetnessPipeline.updateTerrainDescriptor(frameIdx, m_fogTerrainMap.getView(), m_fogTerrainMap.getSampler());
+        m_oceanSimPipeline.updateTerrainDescriptor(frameIdx, m_fogTerrainMap.getView(), m_fogTerrainMap.getSampler());
+        m_particlePipeline.updateTerrainDescriptor(frameIdx, m_fogTerrainMap.getView(), m_fogTerrainMap.getSampler());
         // The wetness clipmap and the GI sky map never change handle; rewritten alongside so a recreated
         // set gets them.
         for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)

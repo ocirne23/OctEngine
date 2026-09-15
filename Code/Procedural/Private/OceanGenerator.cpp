@@ -459,6 +459,7 @@ namespace Procedural
 			m_waveTrough = 0.0f;
 			pushOceanParams(renderer, camera);  // enabled=false gates the GPU FFT + the ocean draw
 			renderer.setOceanWaveTrough(0.0f);  // no waves: the underwater-fog boundary sits at the calm level
+			renderer.clearCameraWaterSurface(); // the particle water gate falls back to the calm level
 			return;
 		}
 		m_disabledIdle = false;
@@ -592,6 +593,15 @@ namespace Procedural
 
 		estimateWaveTrough();
 		renderer.setOceanWaveTrough(m_waveTrough); // sinks the underwater-fog boundary below live troughs
+
+		// The live surface under the camera for the particle draw's camera-side water gate (Underwater /
+		// AboveWater emitters): the buoyancy height field, one sample. -FLT_MAX = no water here (land
+		// past the run-up band, readback not primed) - the gate then falls back to the calm level.
+		const float surfaceY = sampleWaterHeight(camera.position.x, camera.position.z);
+		if (surfaceY > -1.0e30f)
+			renderer.setCameraWaterSurface(surfaceY);
+		else
+			renderer.clearCameraWaterSurface();
 	}
 
 	// FP16 -> FP32 (readback texels are RGBA16F). Fabian Giesen's half_to_float_fast: rebias the
