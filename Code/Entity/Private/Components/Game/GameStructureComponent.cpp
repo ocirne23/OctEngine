@@ -64,7 +64,10 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
             fieldDrain(params.fieldDamageRate * deltaSec);
     }
 
-    if (machineKind == EMachineKind::Barracks && !blueprint)
+    if (blueprint)
+		return; // the game doesn't tick blueprints
+
+    if (machineKind == EMachineKind::Barracks)
     {
         entity.setProfiled(); // latched here: machineKind is stamped by the game AFTER spawn
         BarracksData& b = barracks;
@@ -78,7 +81,7 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
             g_spawnRequests.push_back(structureId);
         }
     }
-    else if (machineKind == EMachineKind::Medic && !blueprint && powered)
+    else if (machineKind == EMachineKind::Medic && powered)
     {
         entity.setProfiled();
         const glm::vec3 pos = entity.pos;
@@ -95,7 +98,7 @@ void GameStructureComponent::update(Entity& entity, float deltaSec)
             u->heal(amount);
         });
     }
-    else if (machineKind == EMachineKind::Turret && !blueprint)
+    else if (machineKind == EMachineKind::Turret)
     {
         entity.setProfiled();
         // The store is the reload bar: capacity = one shot, intake capped to shotEnergy / fireInterval.

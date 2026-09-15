@@ -516,11 +516,8 @@ void Entity::reparentEntity(Entity* newParent)
         return;
 
     EntityPtr keepAlive(this);
-
     if ((flags & EEntityFlag_ContiguousAllocation) && !(flags & EEntityFlag_RootAllocation))
-    {
-        // Moving within the same allocation keeps the tree intact (the root teardown still reaches us);
-        // any other destination - including the failed moves that still detach below - leaves it.
+    { // Moving within the same allocation keeps the tree intact, any other destination leaves it.
         Entity* oldRoot = findAllocationRoot(parent);
         Entity* newRoot = (newParent && hasComponent<SceneComponent>(newParent) && !isSelfOrDescendant(newParent, this))
                         ? findAllocationRoot(newParent) : nullptr;
@@ -531,21 +528,16 @@ void Entity::reparentEntity(Entity* newParent)
 
     if (newParent && !hasComponent<SceneComponent>(newParent))
     {
-        // LOUD refusal: the detach above already ran, so the entity is now parentless - if the
-        // caller drops its EntityPtr believing the parent holds one, the entity silently dies
-        // (this exact failure shipped once: walls parented under a Scene-less ground vanished).
-        Log::warning("Entity: cannot parent '" + oc::string(getName()) + "' under '"
-            + oc::string(newParent->getName()) + "' - the parent has no SceneComponent (add "
-            "'Component Scene' to its prefab); the entity is now UNPARENTED");
+        Log::warning("Entity: cannot parent '" + oc::string(getName()) + "' under '" + oc::string(newParent->getName()) + 
+            "' - the parent has no SceneComponent (add 'Component Scene' to its prefab); the entity is now UNPARENTED");
         return;
     }
     if (newParent && isSelfOrDescendant(newParent, this))
     {
-        Log::warning("Entity: cannot parent '" + oc::string(getName()) + "' under its own "
-            "descendant '" + oc::string(newParent->getName()) + "' (cycle); the entity is now UNPARENTED");
+        Log::warning("Entity: cannot parent '" + oc::string(getName()) + "' under its own descendant '" + 
+            oc::string(newParent->getName()) + "' (cycle); the entity is now UNPARENTED");
         return;
     }
-
     parent = newParent;
 
     if (newParent)

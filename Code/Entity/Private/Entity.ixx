@@ -23,14 +23,18 @@ export enum EEntityFlags : uint8
     EEntityFlag_PrefabInstance = 1 << 0, // root of a locked prefab instance; cleared by "unpack"
     EEntityFlag_Enabled        = 1 << 1, // off = the entity and its whole subtree stop updating (see updateTree)
     EEntityFlag_Frozen         = 1 << 2, // scripts/physics/animator don't update this entity (Entity Editor documents);
-                                         // carried by every member of the subtree, see setFrozen
+
     // A spawned prefab tree is ONE EntityAllocator block (see Entity::create). While the tree is intact
     // (no member reparented/deleted out, no external refs at teardown) the root frees the whole block in
     // one call and members skip their own free. A structural break SPLITS the allocation
     // (breakContiguousAllocation): path ancestors revert to per-entity freeing while every off-path
     // subtree becomes its own RootAllocation over its contiguous DFS range and keeps one-chunk freeing.
-    EEntityFlag_RootAllocation       = 1 << 3, // first entity of its allocation range; frees it while contiguous
-    EEntityFlag_ContiguousAllocation = 1 << 4, // slice still owned by an intact (sub)tree allocation
+    // first entity of its allocation range; frees it while contiguous.
+    EEntityFlag_RootAllocation       = 1 << 3,
+
+    // slice still owned by an intact (sub)tree allocation
+    EEntityFlag_ContiguousAllocation = 1 << 4, 
+
     // Latch for updateSelf: this entity's subtree has already been pulled from the simulation while
     // disabled, so the walk is not repeated every frame. Anything joining the subtree afterwards would
     // miss that walk, so reparentEntity clears it up the new ancestor chain.
@@ -61,7 +65,7 @@ export enum EComponentID : uint16
     EComponentID_Force    = 6,
     EComponentID_Light    = 7,
     EComponentID_Network  = 8,
-    EComponentID_GameUnit = 9,       // game-layer actors (Components/Game/*.ixx)
+    EComponentID_GameUnit = 9,
     EComponentID_GameStructure = 10,
     EComponentID_GameProjectile = 11,
     EComponentID_Script   = 12, // should be last so all other components are available on spawn
@@ -71,15 +75,6 @@ export class Entity
 {
 public:
 
-    // initialFlags (EEntityFlags) applies before components spawn, so e.g. EEntityFlag_Frozen is already
-    // visible to a component's spawn(). EEntityFlag_Enabled comes from the template, not from here.
-    // Allocates ONE block for the entity plus its entire SceneComponent child tree (size cached on the
-    // template); the spawn recursion carves each entity from `treeCursor` via the overload below. Each
-    // entity frees its own exact-size slice on destroy (the allocator's free lists recycle the pieces),
-    // so tree members are independent: any of them can outlive the others or be reparented away.
-    // `parent` links the entity into its tree at construction (before components spawn), so spawn-time
-    // logic never sees a contiguous member with a null parent; the caller still owns attaching the
-    // child handle to the parent's children list.
     static EntityPtr create(const EntitySpawnTemplate& tmpl, const Transform& transform, uint8 initialFlags = 0);
     static EntityPtr create(const EntitySpawnTemplate& tmpl, const Transform& transform, uint8 initialFlags, uint8*& treeCursor, Entity* parent);
     static void destroy(Entity* entity);
@@ -91,27 +86,17 @@ public:
     glm::quat rot;
 
     Entity* parent = nullptr;
-    // NO name field: the display name lives in Globals::entityNames (EntityNames.ixx), keyed by the
-    // entity pointer. getName/setName/hasName forward there.
     const EntitySpawnTemplate* spawnTemplate = nullptr;
-    // EVERY entity's registration in the SpatialIndex (Entity::create; layer Entity, plus Render
-    // when it has a render node): render culling, gameplay queries AND the World's update
-    // selection (its pass mask carries the SIM LOD tier stamps). Refreshed in updateSelf.
     SpatialEntry spatialEntry;
 
     uint16 refCount = 0;
     uint16 typeBits = 0;
-    uint8 flags = 0; // EEntityFlags bitmask
+    uint8 flags = 0;      // EEntityFlags bitmask
     uint8 updateCost = 0; // MEASURED updateSelf weight in 250ns units (0 = not yet measured): the
-                          // World measures the entity's first update, re-measures at a random low
-                          // chance, and fills each fan-out batch until the summed cost reaches its
-                          // time budget - no guessed initial value, the first update IS the guess
-    // World SCHEDULING state, like updateCost: written only by World's update pass (its SIM LOD -
-    // tier + the sim time of the last tick, 1/64 s units wrapping every 256 s). The entity itself
-    // never looks at these. A fresh entity starts UNPLACED (tier 3): its first stamped visit is
-    // then a WAKE edge, which is how a body the spawner parked gets enabled once a player is near.
-    uint16 schedTier : 2 = 3;
-    uint16 schedTick : 14 = 0;
+
+	uint16 schedTier : 2 = 3;  // SIM LOD tier (0 = near, 1 = mid, 2 = far, 3 = unplaced)
+    uint16 schedTick : 14 = 0; // LOD timekeeping
+
     static constexpr float SchedTickHz = 64.0f;
     static constexpr uint32 SchedTickMask = 0x3FFF;
 
@@ -152,8 +137,6 @@ private:
     friend class SceneComponent;
     friend class World;
 };
-// One cache line: components append at alignUp(sizeof(Entity), 16) = 64. The header is full
-// (the 8 bytes freed by moving the name out now hold the SpatialEntry handle).
 static_assert(sizeof(Entity) <= 64);
 
 export struct EntityPtr
@@ -229,8 +212,8 @@ export struct EntitySpawnTemplate
     oc::string sourceFile;
     oc::string prefabName;
     oc::string displayName;
-    bool enabled = true;             // spawns with EEntityFlag_Enabled set/cleared ("Enabled" in the .pre)
-    bool global = false;             // root spawns with EEntityFlag_Global ("Global true" in the .pre)
+    bool enabled = true;              // spawns with EEntityFlag_Enabled set/cleared ("Enabled" in the .pre)
+    bool global = false;              // root spawns with EEntityFlag_Global ("Global true" in the .pre)
     mutable uint32 treeAllocSize = 0; // lazy cache: entity + recursive SceneComponent children, 0 = uncomputed
     // Lazy cache: NetworkComponents in the whole tree, UINT32_MAX = uncomputed (same benign-race
     // scheme as treeAllocSize). Entity::create needs it for server netId contiguity: only a tree
@@ -239,16 +222,17 @@ export struct EntitySpawnTemplate
     mutable uint32 treeNetworkCount = UINT32_MAX;
 };
 
+// Deferred entity change events, thread safe API.
 export struct EntityChange
 {
     struct CreateHierarchy
     {
         oc::string path;
-        EntityPtr   parent;   // nullptr = World root
+        EntityPtr parent; // nullptr = World root
     };
     struct CreateViewport
     {
-        glm::ivec2  screenPos;
+        glm::ivec2 screenPos;
         oc::string path;
     };
     struct AddSceneEntity
@@ -256,9 +240,6 @@ export struct EntityChange
         oc::string displayName;
         EntityPtr parent;
     };
-    // Script spawn (ctx->spawnEntity). Deferred rather than spawned in the thunk: spawning touches the
-    // World caches, box3d and the renderer, none of which tolerate the parallel entity pass running
-    // around them. Lands on the root list, like the thunk's old reparent-to-null did.
     struct SpawnAtPosition
     {
         oc::string path;
@@ -292,9 +273,6 @@ export struct EntityChange
         EntityPtr oldEntity;
         oc::shared_ptr<const EntitySpawnTemplate> tmpl; // freshly assembled from the entity's edited component set
     };
-    // Panel enable-toggles ride the queue rather than calling Entity::setEnabled directly: the
-    // widget pass runs OFF the main thread and setEnabled walks the subtree suspending/resuming
-    // physics bodies - box3d writes, main-thread-only.
     struct SetEnabled
     {
         EntityPtr entity;
