@@ -321,13 +321,29 @@ LOD section in [`Code/Entity/CONTEXT.md`](../Entity/CONTEXT.md).
 
 ### Buoyancy per component
 
-`applyBuoyancy()`, called from `update` ONCE PER STEP INTERVAL and OFF THE STEP FRAME: box3d clears
-forces every step and sums whatever lands before it, so the application goes on the first frame
-after a step that does not step itself (`buoyancyStep` remembers the step it was read after;
-`JobSystem::frameHasPhysicsStep` / `prevFrameHadPhysicsStep` pick the frame) — the step frame is
-already the expensive one. Below the step rate every frame steps and the step frame is the only
-choice. It runs while `buoyant` is set (the SIM LOD gate, `buoyancyMaxTier`) and `buoyancyVolume > 0`
-(dynamic, non-sensor, density > 0; the exact volume from box3d's mass at spawn).
+`applyBuoyancy(steps)`, called from `update` OFF THE STEP FRAME where it can: box3d clears forces
+every step and sums whatever lands before it, so the application goes on the first frame after a
+step that does not step itself (`JobSystem::frameHasPhysicsStep` / `prevFrameHadPhysicsStep` pick
+the frame) — the step frame is already the expensive one. Below the step rate every frame steps and
+the step frame is the only choice. It runs while `buoyant` is set (the SIM LOD gate,
+`buoyancyMaxTier`) and `buoyancyVolume > 0` (dynamic, non-sensor, density > 0; the exact volume
+from box3d's mass at spawn).
+
+> **FRAME-RATE INDEPENDENCE IS THE `steps` ARGUMENT, not the schedule.** That deferral is NOT one
+> application per step: a step frame whose predecessor did not step is skipped, and near the step
+> rate the pattern repeats — at 25 fps against the 20 Hz default, one step in four gets no force,
+> so bodies floated 25 % weaker there than at 200 fps. `buoyancyStep` records the step the last
+> application was read after, and the gap to the current step is what this one OWES. **One step
+> consumes the queued force, so the owed count is its SCALE** and the impulse per second of sim
+> time is the same at any frame rate. A gap over `c_maxBuoyancyCatchUpSteps` (4) means the
+> component was out of the loop — spawned, parked, suspended, or tier-gated off — and starts fresh
+> with no catch-up; `buoyancyStep` also tracks the step count while the gate is off, so turning it
+> back on never fires a catch-up force.
+>
+> Scaling the drag term up would let EXPLICIT damping reverse the velocity, so the drag coefficient
+> is capped at `mass / (fully submerged displaced mass × covered seconds)`. For a body near water
+> density the cap sits far above the tweak and never binds; it binds only for a body far lighter
+> than the water it displaces, where the unscaled step was already unstable.
 
 * **`lockRotation` body** (units, the player): ONE probe at the AABB centre carrying the whole
   volume — a torque could not act, so the grid buys nothing — queued as one `ApplyForce`.

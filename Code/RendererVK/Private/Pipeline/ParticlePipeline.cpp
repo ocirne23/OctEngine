@@ -15,8 +15,9 @@ using namespace RendererVKLayout;
 
 // GPU counters block, see particle.inc.glsl: [0..15] sim dispatch args, [16..31] parity-0 draw args,
 // [32..47] parity-1 draw args (instanceCount = alive count), [48..63] dead-stack top + the GPU spawn
-// counter / latched count + padding, [64..79] the GPU emit dispatch args.
-static constexpr vk::DeviceSize COUNTERS_SIZE = 80;
+// counter / latched count + the dropped-spawn counter, [64..79] the GPU emit dispatch args,
+// [80..95] the retired-non-finite counter + padding.
+static constexpr vk::DeviceSize COUNTERS_SIZE = 96;
 static constexpr vk::DeviceSize GPU_EMIT_DISPATCH_OFFSET = 64;
 static constexpr vk::DeviceSize drawArgsOffset(uint32 parity) { return 16 + parity * 16; }
 

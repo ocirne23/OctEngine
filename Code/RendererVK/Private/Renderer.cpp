@@ -139,9 +139,6 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     Tweak::floatVar("Ocean", "Spray speed", &m_oceanSpraySpeed, 0.0f, 20.0f, 0.1f);
     Tweak::floatVar("Ocean", "Spray forward offset", &m_oceanSprayForward, -5.0f, 5.0f, 0.05f);
     Tweak::floatVar("Ocean", "Spray height offset", &m_oceanSprayHeight, -2.0f, 2.0f, 0.01f);
-    Tweak::floatVar("Ocean", "Spray droplets weight", &m_oceanSprayWeightDroplets, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Ocean", "Spray mist weight", &m_oceanSprayWeightMist, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Ocean", "Spray foam weight", &m_oceanSprayWeightFoam, 0.0f, 1.0f, 0.01f);
     Tweak::boolean("Decals", "Enabled", &m_decalsEnabled);
     // Present mode is swapchain creation state (FIFO vs Immediate), so a change recreates the
     // swapchain (device idle + re-init, same path as a lost acquire). A saved/override value fires
@@ -1174,10 +1171,13 @@ void Renderer::buildUboOcean()
     ubo.oceanParams7 = glm::vec4(glm::max(ocean.cullMargin, 0.0f), glm::clamp(ocean.shoreFoamMax, 0.0f, 1.0f), swashAmp, swashReach);
     ubo.oceanParams8 = glm::vec4(0.0f /* x: the removed swash drawdown */, glm::clamp(ocean.shoreFoamBias, -1.0f, 1.0f),
         glm::max(ocean.swashFlow, 0.0f), glm::max(ocean.rtRayCutoffDist, 0.0f));
-    ubo.oceanParams9 = glm::vec4(0.0f /* x: the removed trough margin */, glm::max(ocean.rtRefractionRange, 1.0f), // the tweak's own minimum; 10 here silently floored 1..9 m
+    ubo.oceanParams9 = glm::vec4(glm::max(ocean.microRoughness, 0.0f), glm::max(ocean.rtRefractionRange, 1.0f), // the tweak's own minimum; 10 here silently floored 1..9 m
         glm::max(ocean.rtReflectionRange, 50.0f), glm::clamp(ocean.rtReflectionMaxRough, 0.0f, 1.0f));
-    ubo.oceanParams10 = glm::vec4(0.0f /* x: the removed breaking limit */, glm::max(ocean.timeScale, 0.0f),
-        glm::clamp(ocean.undersideTransmission, 0.0f, 1.0f), 0.0f);
+    ubo.oceanParams10 = glm::vec4(glm::max(ocean.crestSlopeLimit, 0.0f), glm::max(ocean.timeScale, 0.0f),
+        glm::clamp(ocean.undersideTransmission, 0.0f, 1.0f),
+        ocean.enabled ? m_oceanDisplacementExtent : 0.0f); // w: per-instance cull padding
+    ubo.oceanParams11 = glm::vec4(glm::max(ocean.detailStrength, 0.0f), glm::max(ocean.detailScale, 0.001f),
+        glm::max(ocean.detailFadeDist, 0.0f), ocean.detailRotation);
     // Ocean spray producer: the emitter slot the Particle system published (UINT32_MAX = off), the sim
     // delta the rate integrates over (frozen with the global pause, like the particle sim itself).
     const float sprayDt = oc::min((float)Globals::time.getSimDeltaSec(), 0.25f);
@@ -1187,8 +1187,7 @@ void Renderer::buildUboOcean()
         glm::max(m_oceanSprayRadius, 1.0f), sprayDt);
     ubo.oceanSpray1 = glm::vec4(glm::clamp(m_oceanSprayThreshold, 0.0f, 0.99f), glm::max(m_oceanSprayKick, 0.0f),
         glm::max(m_oceanSpraySpeed, 0.0f), m_oceanSprayForward);
-    ubo.oceanSpray2 = glm::vec4(glm::uintBitsToFloat(m_oceanSprayMistEmitter), glm::uintBitsToFloat(m_oceanSprayFoamEmitter), m_oceanSprayHeight, 0.0f);
-    ubo.oceanSpray3 = glm::vec4(glm::max(m_oceanSprayWeightDroplets, 0.0f), glm::max(m_oceanSprayWeightMist, 0.0f), glm::max(m_oceanSprayWeightFoam, 0.0f), 0.0f);
+    ubo.oceanSpray2 = glm::vec4(m_oceanSprayHeight, 0.0f, 0.0f, 0.0f);
 }
 
 // Forcefield bubbles (Force library pushes m_forceFieldParams every frame; all UBO-driven = live).
@@ -1343,28 +1342,45 @@ void Renderer::buildUboTerrain()
 
     // Terrain wetness clipmap window: TERRAIN_WET_RES texels of texelSize centred on the scene focus, its
     // origin an integer lattice coord (the shaders address the toroidal image by lattice & (RES-1)).
-    // The compute pass carries a texel's wetness only if its coord was inside LAST frame's window, so a
-    // window that was not live last frame (first enable, re-enable) parks the previous origin out of
+    // The compute pass carries a texel's wetness only if its coord was inside the LAST TICK's window, so
+    // a window that was not live last frame (first enable, re-enable) parks the previous origin out of
     // range and every texel starts dry instead of inheriting a stale slot.
+    //
+    // FIXED TICK ("Terrain/Wetness/Update rate"): the pass runs only when the accumulated sim delta
+    // reaches the tick interval, and integrates that whole delta at once. Per frame the change was below
+    // the R16F image's representable step at high fps and rounded away, so wetness depended on the
+    // framerate. Between ticks the pass is skipped and the reader keeps the last tick's layer + origin.
     {
         const TerrainWetTweaks& wet = m_terrainWetTweaks;
         const float texel = glm::max(wet.texelSize, 0.05f);
         const glm::vec3 focus = sceneFocusOrCamera();
         constexpr int32 res = (int32)RendererVKLayout::TERRAIN_WET_RES;
-        const glm::ivec2 origin = glm::ivec2(glm::floor(glm::vec2(focus.x, focus.z) / texel)) - res / 2;
-        const glm::ivec2 prevOrigin = m_terrainWetWasEnabled ? m_terrainWetPrevOrigin : origin + res * 2;
-        m_terrainWetPrevOrigin = origin;
+        const bool wasEnabled = m_terrainWetWasEnabled;
         m_terrainWetWasEnabled = wet.enabled;
         // SIM delta (frozen by the global pause, like the particles), capped so a hitch cannot dry the map.
-        const float dt = oc::min((float)Globals::time.getSimDeltaSec(), 0.25f);
+        m_terrainWetTickAccum = wet.enabled ? m_terrainWetTickAccum + oc::min((float)Globals::time.getSimDeltaSec(), 0.25f) : 0.0f;
+        const float interval = 1.0f / glm::max(wet.updateRate, 1.0f);
+        m_terrainWetTick = wet.enabled && (!wasEnabled || m_terrainWetTickAccum >= interval);
+        float dt = 0.0f; // 0 on skipped frames: the pass does not run, so the rate terms below are unused
+        glm::ivec2 origin = m_terrainWetPrevOrigin;
+        glm::ivec2 prevOrigin = m_terrainWetPrevOrigin;
+        if (m_terrainWetTick)
+        {
+            dt = oc::min(m_terrainWetTickAccum, 1.0f);
+            m_terrainWetTickAccum = 0.0f;
+            origin = glm::ivec2(glm::floor(glm::vec2(focus.x, focus.z) / texel)) - res / 2;
+            prevOrigin = wasEnabled ? m_terrainWetPrevOrigin : origin + res * 2;
+            m_terrainWetPrevOrigin = origin;
+            m_terrainWetLayer = 1u - m_terrainWetLayer; // write the other layer, read the last tick's
+        }
         const float decay = wet.dryTime > 0.0f ? std::exp(-dt / wet.dryTime) : 0.0f;
         ubo.terrainWetParams0 = glm::vec4((float)origin.x, (float)origin.y, (float)prevOrigin.x, (float)prevOrigin.y);
         ubo.terrainWetParams1 = glm::vec4(texel, 1.0f / texel, decay, glm::max(wet.rain, 0.0f) * dt);
         ubo.terrainWetParams2 = glm::vec4(wet.enabled ? 1.0f : 0.0f, glm::clamp(wet.albedoScale, 0.0f, 1.0f),
             glm::clamp(wet.roughness, 0.0f, 1.0f), glm::max(wet.dryTempSens, 0.0f));
-        // Ping/pong layer: frame slots alternate strictly, so the written layer is the slot's parity (the
-        // pass reads the other; the terrain shader samples this one in the same frame).
-        const float writeLayer = (float)(m_swapChain.getCurrentFrameIndex() & 1u);
+        // Ping/pong layer: a tick writes the layer the last tick did not (the pass reads the other one);
+        // between ticks this names the last written layer, which the terrain shader keeps sampling.
+        const float writeLayer = (float)m_terrainWetLayer;
         const float wetIn = wet.wetInTime > 0.0f ? dt / wet.wetInTime : 1.0f;
         // Diffusion spread as a per-frame mix fraction from a per-second rate: the tent's variance then
         // grows by ~rate * texel^2 per second at any framerate (a fixed per-frame fraction would spread
@@ -1965,12 +1981,36 @@ void Renderer::present()
         m_forceFieldPipeline.upload(frameIdx, m_forceEmitters, m_forceQueries, m_forceBakeChunks,
             m_forceBakeSampleY, shellCull);
 
-        if (m_particleLogStats && m_frameCounter % 120 == 0)
+        if (m_particlesEnabled)
         {
             const ParticlePipeline::DebugCounters counters = m_particlePipeline.getDebugCounters(frameIdx);
-            printf("Particles: alive %u/%u (parity 0/1), dead %d, simGroups %u, emitters %u, spawn reqs %u, GPU spawns %u, decals %u\n",
-                counters.alive[0], counters.alive[1], counters.deadCount, counters.simGroups,
-                (uint32)m_particleEmitters.size(), spawnRequestTotal, counters.gpuSpawns, m_decalCounter);
+            if (m_particleLogStats && m_frameCounter % 120 == 0)
+                printf("Particles: alive %u/%u (parity 0/1), dead %d, simGroups %u, emitters %u, spawn reqs %u, GPU spawns %u, dropped %u, broken %u, decals %u\n",
+                    counters.alive[0], counters.alive[1], counters.deadCount, counters.simGroups,
+                    (uint32)m_particleEmitters.size(), spawnRequestTotal, counters.gpuSpawns,
+                    counters.dropSpawns, counters.dropBroken, m_decalCounter);
+            // Pool exhaustion warning, ALWAYS on: a full pool makes every emit drop its spawn without a
+            // trace, so the whole system looks switched off. Logged on the first frame it happens and
+            // then at most once a second, with a recovery line, so a burst cannot flood the console.
+            if (counters.dropSpawns > 0)
+            {
+                if (m_particleDropLogFrame == 0 || m_frameCounter - m_particleDropLogFrame >= 300)
+                {
+                    m_particleDropLogFrame = m_frameCounter;
+                    printf("Particles: POOL EXHAUSTED - dropped %u spawns this frame (alive %u, dead %d of %u, GPU spawns %u, emitters %u)\n",
+                        counters.dropSpawns, counters.alive[1 - (frameIdx & 1u)], counters.deadCount,
+                        RendererVKLayout::MAX_PARTICLES, counters.gpuSpawns, (uint32)m_particleEmitters.size());
+                }
+            }
+            else if (m_particleDropLogFrame != 0)
+            {
+                printf("Particles: pool recovered (dead %d of %u)\n", counters.deadCount, RendererVKLayout::MAX_PARTICLES);
+                m_particleDropLogFrame = 0;
+            }
+            // A non-finite particle used to be an immortal invisible pool slot; the sim now retires it.
+            // A steady count means a live NaN source upstream, so say so once a second.
+            if (counters.dropBroken > 0 && m_frameCounter % 300 == 0)
+                printf("Particles: retired %u non-finite particles this frame (NaN/Inf source upstream)\n", counters.dropBroken);
         }
     }
 
@@ -3656,8 +3696,9 @@ void Renderer::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary)
     if (m_particlesEnabled)
         executeScoped(primary, "Particle sim", frameData.particleSimCommandBuffer.getCommandBuffer());
     // Terrain wetness clipmap: decay + re-wet under this frame's live ocean surface (after the ocean
-    // sim, before the forward pass samples it). Skipped while disabled: the shader presence flag is 0.
-    if (m_terrainWetTweaks.enabled)
+    // sim, before the forward pass samples it). Runs on tick frames only (m_terrainWetTick, decided in
+    // the UBO build that this frame carries); skipped while disabled: the shader presence flag is 0.
+    if (m_terrainWetTweaks.enabled && m_terrainWetTick)
         executeScoped(primary, "Terrain wetness", frameData.terrainWetnessCommandBuffer.getCommandBuffer());
     // RT sun shadows replace the cascades entirely (forward pass traces, GI uses per-probe sun rays),
     // so skip the shadow cull + cascade render.

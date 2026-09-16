@@ -50,11 +50,14 @@ void main()
     const uint emitterIdx = ps_spawnMap[gid];
 #endif
 
-    // Pop a free pool index; underflow = pool exhausted, drop the spawn.
+    // Pop a free pool index; underflow = pool exhausted, drop the spawn. Counted (c_dropSpawns, zeroed
+    // per frame by the begin pass and read back for the log): an exhausted pool silently stops EVERY
+    // emitter, which is indistinguishable from the particle system being switched off.
     const int deadSlot = atomicAdd(c_deadCount, -1);
     if (deadSlot <= 0)
     {
         atomicAdd(c_deadCount, 1);
+        atomicAdd(c_dropSpawns, 1u);
         return;
     }
     const uint particleIdx = pd_deadList[deadSlot - 1];

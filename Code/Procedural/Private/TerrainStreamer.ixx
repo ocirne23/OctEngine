@@ -287,6 +287,7 @@ export namespace Procedural
 		float m_wetInTime = 5.0f;      // s for ground under water to reach full wetness (no per-texel popping)
 		float m_wetFilmDepth = 0.00f;  // m of water over which the wetting target ramps 0 -> 1
 		float m_wetDiffusionRate = 2.0f; // 1/s sideways spread (framerate independent; the on/off toggle is the renderer's define tweak)
+		float m_wetUpdateRate = 20.0f;   // Hz: the wetness pass's fixed tick (see Renderer::TerrainWetTweaks::updateRate)
 		float m_wetPoolScale = 3.0f;      // 1/m: pooling noise scale as the ground dries (0 = uniform film)
 		float m_wetPoolSoftness = 0.15f;  // noise band around the wetness that half-pools
 		float m_wetDampGloss = 0.7f;      // fraction of the roughness drop the damp ground between pools keeps

@@ -7,8 +7,8 @@
 // (explicit LOD at the cell's footprint - this is compute, no derivatives), and where the crest is
 // breaking rolls a hashed dice at "Spray rate" x cell area x dt x breaking. A hit appends spawn
 // requests at the displaced surface with the crest's forward motion (along the wind) plus an upward
-// kick; the particle chain later this frame turns them into droplets of the emitter slot the CPU
-// published (ParticleSystem's Effects/ocean_spray.pfx instance, u_oceanSpray0.x).
+// kick; the particle chain later this frame turns them into particles of the ONE emitter slot the CPU
+// published (the first emitter of ParticleSystem's Effects/ocean_spray.pfx instance, u_oceanSpray0.x).
 //
 // Land is skipped through the shore data (depth <= 0), and the grid ORIGIN is snapped to whole cells so
 // the sample lattice does not swim with the focus.
@@ -106,52 +106,21 @@ void main()
     // from the top or the back. "Spray forward offset" m of lead along the travel direction, and
     // "Spray height offset" m above the surface (so a fresh particle is not depth-cut by the wave).
     const vec2 lead = wind * u_oceanSpray1.w;
-    const vec3 surface = vec3(worldXZ.x + disp.x + lead.x, shoreHW.y + disp.y + u_oceanSpray2.z, worldXZ.y + disp.z + lead.y);
-    // The three looks (Effects/ocean_spray.pfx, in order): droplets, mist, foam chunks. Mist only comes
-    // off crests that are really breaking; a missing slot falls back to droplets.
-    uint mistSlot = floatBitsToUint(u_oceanSpray2.x);
-    uint foamSlot = floatBitsToUint(u_oceanSpray2.y);
-    if (mistSlot == 0xFFFFFFFFu) mistSlot = slot;
-    if (foamSlot == 0xFFFFFFFFu) foamSlot = slot;
+    const vec3 surface = vec3(worldXZ.x + disp.x + lead.x, shoreHW.y + disp.y + u_oceanSpray2.x, worldXZ.y + disp.z + lead.y);
     // Energy: the stronger the breaking, the higher and faster the spray is thrown.
     const float energy = 0.6 + 0.8 * breaking;
-    // The three looks' spawn weights ("Ocean/Spray * weight"), normalized; mist also needs a crest that
-    // is really breaking, else its share goes to droplets.
-    const vec3 weights = u_oceanSpray3.xyz;
-    const float weightSum = max(weights.x + weights.y + weights.z, 1e-4);
-    const float mistShare = weights.y / weightSum;
-    const float foamShare = weights.z / weightSum;
     for (uint i = 0u; i < count; ++i)
     {
         // Jitter biased forward too: the box runs from the lip out to two cells ahead of it.
         const vec2 j2 = vec2(particleRand(seed) - 0.5, particleRand(seed) - 0.5) * cell;
         const vec3 jitter = vec3(j2.x + wind.x * (particleRand(seed) * cell), 0.0, j2.y + wind.y * (particleRand(seed) * cell));
-        const float r = particleRand(seed);
-        vec2 side = vec2(particleRand(seed), particleRand(seed)) * 2.0 - 1.0;
-        uint pick = slot;
-        float fwd, up;
-        if (r < mistShare && breaking > 0.5)
-        {   // mist: hangs above the lip, carried forward with the crest
-            pick = mistSlot;
-            fwd = u_oceanSpray1.z * (0.4 + 0.4 * particleRand(seed)) * energy;
-            up = u_oceanSpray1.y * (0.05 + 0.1 * particleRand(seed)) * energy; // barely lifts: it hangs at the lip
-            side *= 0.6;
-        }
-        else if (r < mistShare + foamShare)
-        {   // foam chunk: torn off the lip, lobbed
-            pick = foamSlot;
-            fwd = u_oceanSpray1.z * (0.6 + 0.5 * particleRand(seed)) * energy;
-            up = u_oceanSpray1.y * (0.5 + 0.5 * particleRand(seed)) * energy;
-            side *= 0.5;
-        }
-        else
-        {   // droplet: the fast ballistic bulk, widest speed spread
-            fwd = u_oceanSpray1.z * (0.4 + 0.9 * particleRand(seed)) * energy;
-            up = u_oceanSpray1.y * (0.4 + 0.9 * particleRand(seed)) * energy;
-            side *= 0.8;
-        }
+        // Atomised mist: carried forward with the crest, barely lifting - it hangs at the lip rather
+        // than arcing away like a thrown droplet would.
+        const vec2 side = (vec2(particleRand(seed), particleRand(seed)) * 2.0 - 1.0) * 0.6;
+        const float fwd = u_oceanSpray1.z * (0.4 + 0.4 * particleRand(seed)) * energy;
+        const float up = u_oceanSpray1.y * (0.05 + 0.1 * particleRand(seed)) * energy;
         const vec3 vel = vec3(wind.x * fwd + side.x, up, wind.y * fwd + side.y);
-        if (!particleRequestSpawn(surface + jitter, vel, pick))
+        if (!particleRequestSpawn(surface + jitter, vel, slot))
             return; // this frame's request buffer is full
     }
 }

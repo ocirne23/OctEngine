@@ -332,7 +332,7 @@ export struct OceanParams
                                 // than the cull's footprint bound), so it draws over distant terrain;
                                 // sinking it a little keeps its crests under near-sea-level ground.
     float amplitude   = 1.0f;   // artistic scale on the spectrum amplitude (1 = physical)
-    float choppiness  = 1.1f;   // horizontal displacement lambda (0 = heightfield only, higher = sharper crests)
+    float choppiness  = 1.25f;   // horizontal displacement lambda (0 = heightfield only, higher = sharper crests)
     float normalStrength = 1.0f; // artistic scale on the shading slopes
     glm::vec3 cascadeSizes = glm::vec3(1536.0f, 188.0f, 25.0f); // FFT patch sizes (m); each TILES with its
                                 // own size, so the largest sets how often the sea repeats - keep it many
@@ -350,9 +350,29 @@ export struct OceanParams
     float scatterStrength  = 1.0f;
     float roughness        = 0.07f; // perceptual micro-roughness (widens the sun glint)
     float glintFilter      = 0.5f;  // 1 = full variance widening, 0 = none (raw sharp GGX)
+    // Slope variance of the waves BELOW the finest cascade's Nyquist - the capillary band the FFT cannot
+    // represent at any distance. The LEAN term only returns variance the MIP CHAIN filtered away, and it
+    // is exactly 0 at mip 0, so near the camera the roughness used to collapse onto its 0.02 clamp and
+    // the water mirrored the sky (plastic). Added to alpha^2 in the same form as LEAN (alpha^2 = 2 sigma^2)
+    // and deliberately NOT scaled by glintFilter: this band is missing from the spectrum, not filtered
+    // out of it. Dimensionless, so the world scale leaves it alone.
+    float microRoughness   = 0.008f;
+    // Rational soft limit on the shading slope, s /= 1 + k * |s| (ocean_wave.inc.glsl). It keeps the
+    // near-fold division from exploding into dark creases, but it compresses exactly the steep crest
+    // faces, which reads as blobby. 0 = no limit (sharpest crests, creases possible at folds).
+    float crestSlopeLimit  = 0.0f;
+    // Sub-band detail (oceanDetailSlope): the finest cascade's gradient field re-sampled at
+    // detailScale x its patch size, in a domain rotated by detailRotation, added to the SHADING slope
+    // only. Wave statistics at a shorter wavelength than the FFT band holds, for one fetch - no extra
+    // memory, no extra FFT, and the displacement (so geometry, prepass and the CPU buoyancy mirror) is
+    // untouched. Faded out past detailFadeDist because this band is absent from the LEAN moments.
+    float detailStrength   = 0.35f; // 0 = off
+    float detailScale      = 0.18f; // fraction of the finest cascade's patch size (smaller = finer)
+    float detailFadeDist   = 60.0f; // m from the camera (a world metre: scaled); 0 = never fade
+    float detailRotation   = 0.9f;  // radians; keeps the borrowed field off the parent's crest lines
     // Crest subsurface scattering (Sea of Thieves-style): back-lit wave crests glow the scatter color,
     // scaled by height above the calm water line. Power shapes the toward-the-sun view lobe.
-    float sssStrength      = 0.65f;  // per meter of crest height; 0 disables (and the extra shadow rays with it)
+    float sssStrength      = 0.75f;  // per meter of crest height; 0 disables (and the extra shadow rays with it)
     float sssPower         = 1.0f;
     float undersideTransmission = 1.0f; // scale on the sky seen through Snell's window from below (1 = Fresnel
                                         // transmission; less = more internal reflection, a darker ceiling)

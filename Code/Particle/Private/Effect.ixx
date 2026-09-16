@@ -73,7 +73,9 @@ export struct ParticleEmitterDesc
     float turbulenceScroll = 0.0f;     // field scroll speed (m/s, upward)
     bool collide = false;        // screen-space depth collision
     float collisionBounce = 0.3f;
-    bool waterFloor = false;     // the live ocean surface is a floor: a particle reaching it lands, stops and fades out
+    bool waterFloor = false;     // the LIVE wave surface is a floor: a finite-life particle reaching it lands,
+                                 // stops and fades out there; a VOLUME particle (no life to end) restarts at
+                                 // the box top at a fresh random XZ instead, so rain never sinks through a wave
 
     // Shape over life.
     float sizeStart = 0.1f;      // m

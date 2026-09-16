@@ -243,12 +243,13 @@ void ParticleSystem::update(Renderer& renderer, float deltaSec)
     // Ocean spray: the renderer's producer pass spawns into this instance's emitter slot (GPU spawn path).
     syncWeather(m_oceanSpray, m_oceanSprayEffect, "Effects/ocean_spray.pfx");
     {
-        // The .pfx's emitters in file order: droplets, mist, foam chunks (missing ones fall back to droplets).
-        uint32 slots[3] = { UINT32_MAX, UINT32_MAX, UINT32_MAX };
+        // The producer spawns every request into the .pfx's FIRST emitter; further emitters would never
+        // be reached, so the asset authors exactly one.
+        uint32 slot = UINT32_MAX;
         if (const EffectInstance* inst = findEffect(m_oceanSprayEffect.m_id))
-            for (size_t i = 0; i < 3 && i < inst->emitters.size(); ++i)
-                slots[i] = inst->emitters[i].rendererSlot;
-        renderer.setOceanSprayEmitters(slots[0], slots[1], slots[2]);
+            if (!inst->emitters.empty())
+                slot = inst->emitters[0].rendererSlot;
+        renderer.setOceanSprayEmitter(slot);
     }
 
     // Weather volumes fill over frames: MAX_PARTICLE_SPAWNS_PER_FRAME caps the whole frame's spawn
@@ -297,6 +298,16 @@ void ParticleSystem::update(Renderer& renderer, float deltaSec)
                 ? glm::normalize(desc.localDirection) : glm::vec3(0, 1, 0);
             gpu.rotation = quatToVec4(rot * rotationBetween(glm::vec3(0, 1, 0), dir));
             gpu.velocityInherit = glm::vec4(follow ? glm::vec3(0.0f) : inst.velocity, desc.inheritVelocity);
+            // A LOWERED count tweak: a volume never ages out, so the surplus is recycled by the sim - it
+            // drops a random fraction of this emitter's live particles in ONE frame (cullParams, cleared
+            // by the next frame's rebuilt config). The live count is what the CPU spawned, so the
+            // fraction is exact up to the binomial spread of the GPU's per-particle draw (~0.2 % at 60 k).
+            const uint32 fillCount = desc.isVolume() ? (uint32)((float)desc.count * countScale) : 0;
+            if (desc.isVolume() && emitter.volumeFillSpawned > fillCount)
+            {
+                gpu.cullParams.x = 1.0f - (float)fillCount / (float)emitter.volumeFillSpawned;
+                emitter.volumeFillSpawned = fillCount;
+            }
             renderer.updateParticleEmitter(emitter.rendererSlot, gpu);
 
             if (desc.isVolume() && desc.occlude)
@@ -315,9 +326,8 @@ void ParticleSystem::update(Renderer& renderer, float deltaSec)
             }
             if (inst.pendingBurst)
                 spawnCount += desc.burst;
-            // The fill count scales live upward only (a lower scale takes effect on the next toggle: the
-            // box never drains, so there is nothing to remove from).
-            const uint32 fillCount = (uint32)((float)desc.count * countScale);
+            // The fill count follows the tweak both ways: up by spawning the deficit over the next frames,
+            // down through the cull fraction set above.
             if (desc.isVolume() && emitter.volumeFillSpawned < fillCount)
             {
                 const uint32 fill = oc::min(fillCount - emitter.volumeFillSpawned, VOLUME_FILL_PER_FRAME);

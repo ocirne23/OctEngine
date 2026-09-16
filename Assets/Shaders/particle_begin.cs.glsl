@@ -43,6 +43,8 @@ void main()
             c_gpuSpawnCount = 0u;
             c_gpuSpawnConsume = 0u;
             c_gpuEmitGroups = uvec4(0u, 1u, 1u, 0u);
+            c_dropSpawns = 0u;
+            c_dropBroken = 0u;
         }
         return;
     }
@@ -50,6 +52,11 @@ void main()
         return;
     const uint outIdx = 1u - p_parity;
     c_draw[outIdx * 4u + 1u] = 0u;
+    // This frame's diagnostic counters: the emit pass adds a dropped spawn (pool exhausted), the sim
+    // pass a retired non-finite particle. Zeroed HERE, read back at the end of the sim pass, so the
+    // readback carries exactly this frame's totals.
+    c_dropSpawns = 0u;
+    c_dropBroken = 0u;
     // GPU spawn path: latch this frame's producer count (clamped to the request buffer), size the GPU
     // emit dispatch, and zero the counter for the NEXT frame's producers (they run after this frame's
     // whole particle chain on the same queue).

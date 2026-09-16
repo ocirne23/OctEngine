@@ -170,7 +170,18 @@ void main()
     const float radius                = meshInfo.radius * instancePosScale.w;
     const vec3 centerPos              = instancePosScale.xyz + centerOffset;
 
-    if (frustumCheck(centerPos, radius))
+    // The ocean clipmap's mesh is the UNDISPLACED lattice: its vertex shader then moves every vertex by
+    // the wave height and by the CHOPPY horizontal displacement, which scales with the "Choppiness"
+    // tweak. A sector's own bounding sphere absorbs some of that incidentally (the XZ half-diagonal
+    // exceeds the half-width), and that spare slack is what choppiness eventually runs out of - sectors
+    // then get culled with their crests still on screen, showing as gaps along the screen edges. Pad by
+    // the live extent the CPU measures off the displacement readback. Frustum test only: the LOD
+    // selection below wants the real bounds (and the ocean has no LOD chain anyway).
+    float cullRadius = radius;
+    if ((instance.pipelineIdxAlphaMode & 0x0000FFFFu) == PIPELINE_IDX_OCEAN)
+        cullRadius += u_oceanParams10.w;
+
+    if (frustumCheck(centerPos, cullRadius))
     {
         // GPU LOD selection: instances always arrive referencing LOD0 (whose bounds culled above);
         // redirect to the selected level's mesh. Buckets have room because the CPU sizes every chain

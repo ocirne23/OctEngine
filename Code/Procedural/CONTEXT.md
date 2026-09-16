@@ -416,6 +416,20 @@ frustum cull drop off-screen water **instead of vertex-shading the whole multi-k
 
 * All sectors share ONE transform, **snapped to a lattice multiple so vertices re-land on the same
   world positions** as the camera moves.
+* **Both culls pad their bounds by `displacementExtent()` every frame.** The mesh they were built from
+  is the UNDISPLACED lattice; the vertex shader then moves each vertex by the wave height and by the
+  CHOPPY horizontal displacement, which scales with "Choppiness". A sector's bounding sphere absorbs
+  some of that incidentally — its XZ half-diagonal exceeds its half-width — and **that spare slack is
+  what a high choppiness runs out of**, dropping sectors with their crests still on screen. It shows at
+  the SCREEN EDGES, where the frustum planes cut closest to a sector's own sphere.
+  * `estimateWaveExtents` (the sparse readback re-scan that already found the trough) also returns the
+    crest and the largest RAW horizontal displacement. **Raw on purpose**: the maps store Dx/Dz before
+    the choppiness lambda, so the live tweak scales the padding with no re-scan.
+  * The CPU side re-registers `baseRadius + extent` per frame; the GPU per-instance cull gets the same
+    number through `u_oceanParams10.w` and adds it for `PIPELINE_IDX_OCEAN` instances
+    (`instanced_indirect.cs.glsl`) — **frustum test only**, so LOD selection still sees real bounds.
+  * The G-buffer prepass and the forward pass draw from the SAME cull output, so they cannot disagree
+    about which sectors exist.
 * **Sector borders duplicate identical vertices, so splitting cannot open seams.**
 * **Every triangle is emitted in BOTH windings** (`pushTri`), so the back-face-culled prepass and Ocean
   pipelines draw the surface from either side and the prepass depth holds the nearest face from below
@@ -471,6 +485,40 @@ waves roll inland.
 
 > Per-pixel domain rotation is **disabled** in `ocean_wave.inc.glsl` — it creases. Read the comment
 > before reviving it.
+
+## Near-field detail: three shading knobs
+
+The FFT band ends at the finest cascade's Nyquist, and the mesh band-limits the displacement well
+above that, so what is left near the camera is a normal map on a smooth surface — the "plastic" look.
+
+* **"Ocean/Shading/Micro roughness"** — the slope variance of everything BELOW that Nyquist (the
+  capillary band), added straight into the GGX `alpha²` as `2σ²`. **The LEAN term cannot cover it**:
+  LEAN returns the variance the MIP CHAIN removed, which is exactly 0 at mip 0, so the near field fell
+  back on the capped screen-derivative AA and then onto the 0.02 alpha clamp — a sky mirror, pixel for
+  pixel what wind 0 looks like. Deliberately **not** scaled by "Glint filtering": that knob trades away
+  filtered variance, and this band was never in the spectrum to filter. 0 restores the mirror.
+* **"Ocean/Shading/Crest slope limit"** — `k` in the shading slope's soft limit `s /= 1 + k·|s|`
+  (both `oceanSampleSurface` and `oceanSampleNormalLod`, which must agree). It keeps the near-fold
+  division from exploding into dark creases, but it compresses exactly the steep crest faces, so
+  **lower = sharper crests**, 0 = no limit. Only the SHADING slope: `oceanSampleDisplacement` has no
+  such limit, so the CPU buoyancy mirror is untouched by this knob.
+* **"Ocean/Shading/Detail strength / scale / fade / rotation"** — `oceanDetailSlope`: the FINEST
+  cascade's own gradient field re-sampled at `scale ×` its patch size and added to the shading slope.
+  Wave statistics at a shorter wavelength than the FFT band holds, for **one fetch — no extra memory,
+  no extra FFT**.
+  * The domain is **rotated**, because an unrotated copy is the same field scaled: its crest lines run
+    parallel to the parent's at every point and read as a fractal repeat rather than as ripples. The
+    slope is rotated back before `oceanFlowToWorld`.
+  * It is **shading only** — never in `oceanSampleDisplacement` — so geometry, the depth prepass and
+    the CPU buoyancy mirror are all untouched, and the shader/mirror rule is not broken.
+  * Implicit LOD: a smaller patch makes the uv derivatives correspondingly larger, so the mip chain
+    filters this band the way it filters the cascades. It still **fades out with distance**, because
+    this band is absent from the LEAN moments — what the mips remove would simply vanish instead of
+    becoming roughness. "Micro roughness" is what covers that band.
+  * It is scaled by the shore surface weight, so it dies into the beach with every other wave term.
+
+The first two are dimensionless (a variance and a slope ratio) and so is the detail strength, scale and
+rotation — `pushOceanParams` world-scales only "Detail fade (m)".
 
 "Ocean/RT" tweaks budget per-pixel scene rays.
 

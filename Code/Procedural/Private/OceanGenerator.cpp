@@ -51,7 +51,7 @@ namespace Procedural
 		Tweak::floatVar("Ocean", "Detail bias", &m_detailBias, -2.0f, 2.0f, 0.05f);
 
 		// TMA/JONSWAP spectrum inputs (Horvath 2015); re-evaluated on the GPU every frame, so all live.
-		Tweak::floatVar("Ocean/Waves", "Wind speed (m/s)", &m_windSpeed, 0.0f, 40.0f, 0.1f);
+		Tweak::floatVar("Ocean/Waves", "Wind speed (m/s)", &m_windSpeed, 0.0f, 100.0f, 0.1f);
 		Tweak::floatVar("Ocean/Waves", "Fetch (km)", &m_fetchKm, 1.0f, 2000.0f, 1.0f);
 		Tweak::floatVar("Ocean/Waves", "Depth (m)", &m_depth, 1.0f, 500.0f, 0.5f);
 		Tweak::floatVar("Ocean/Waves", "Wind angle (rad)", &m_windAngle, 0.0f, 6.2831853f, 0.01f);
@@ -74,6 +74,23 @@ namespace Procedural
 		// Sharper sun glints: sharpness biases the shading-normal mips finer (some shimmer past ~1.5),
 		// filtering scales the roughness-widening variance terms (0 = raw sharp GGX, 1 = fully filtered).
 		Tweak::floatVar("Ocean/Shading", "Glint filtering", &m_glintFilter, 0.0f, 2.0f, 0.05f);
+		// The capillary band below the finest cascade: slope variance the FFT can never carry, added to
+		// the microfacet roughness at every distance. Without it the LEAN variance is 0 at mip 0 and the
+		// near water falls onto the 0.02 roughness clamp - a sky mirror, the "plastic" look. Raise it for
+		// a duller, wetter near field; 0 restores the mirror.
+		Tweak::floatVar("Ocean/Shading", "Micro roughness", &m_microRoughness, 0.0f, 0.05f, 0.0005f);
+		// The shading slope's fold-over soft limit. It also compresses the steep crest faces, so LOWER =
+		// sharper crests (and creases at real folds), 0 = no limit at all.
+		Tweak::floatVar("Ocean/Shading", "Crest slope limit", &m_crestSlopeLimit, 0.0f, 1.0f, 0.01f);
+		// Sub-band detail: the finest cascade's own gradients re-sampled at "Detail scale" x its patch
+		// size, in a domain rotated by "Detail rotation" so the borrowed field cannot line up with the
+		// cascade it came from. Shading slope only - the geometry and the buoyancy mirror never see it.
+		// It fades out past "Detail fade" because this band is absent from the LEAN moments, so what the
+		// mips filter away would just disappear instead of turning into roughness.
+		Tweak::floatVar("Ocean/Shading", "Detail strength", &m_detailStrength, 0.0f, 2.0f, 0.01f);
+		Tweak::floatVar("Ocean/Shading", "Detail scale", &m_detailScale, 0.02f, 1.0f, 0.01f);
+		Tweak::floatVar("Ocean/Shading", "Detail fade (m)", &m_detailFadeDist, 0.0f, 500.0f, 5.0f);
+		Tweak::floatVar("Ocean/Shading", "Detail rotation (rad)", &m_detailRotation, 0.0f, 3.14159265f, 0.01f);
 		// Crest SSS (Sea of Thieves-style): sun shining through back-lit crests, scaled by wave height.
 		Tweak::floatVar("Ocean/Shading", "SSS strength", &m_sssStrength, 0.0f, 4.0f, 0.01f);
 		Tweak::floatVar("Ocean/Shading", "SSS power", &m_sssPower, 1.0f, 16.0f, 0.1f);
@@ -208,10 +225,10 @@ namespace Procedural
 					s.localCenter = (mn + mx) * 0.5f;
 					s.halfXZ = glm::vec2(mx.x - mn.x, mx.z - mn.z) * 0.5f;
 					s.horizonBand = emittingHorizonBand;
-					s.radius = glm::length((mx - mn) * 0.5f) + 8.0f; // headroom for wave/swash displacement
+					s.baseRadius = glm::length((mx - mn) * 0.5f); // the flat lattice; update() pads it live
 					s.spatialEntry = SpatialEntry(Globals::spatialIndex.registerEntry(
-						glm::dvec3(s.localCenter) + glm::dvec3(0.0, m_seaLevel, 0.0), s.radius, 0ull,
-						SpatialLayer_Terrain, false));
+						glm::dvec3(s.localCenter) + glm::dvec3(0.0, m_seaLevel, 0.0),
+						s.baseRadius + displacementExtent(), 0ull, SpatialLayer_Terrain, false));
 				}
 			}
 			positions.clear();
@@ -416,6 +433,12 @@ namespace Procedural
 		params.scatterStrength = m_scatterStrength;
 		params.roughness = m_roughness;
 		params.glintFilter = m_glintFilter;
+		params.microRoughness = m_microRoughness;   // a slope variance: dimensionless, never scaled
+		params.crestSlopeLimit = m_crestSlopeLimit; // a slope ratio: dimensionless, never scaled
+		params.detailStrength = m_detailStrength;   // a slope scale: dimensionless
+		params.detailScale = m_detailScale;         // a fraction of a patch size, which is already scaled
+		params.detailFadeDist = m_detailFadeDist * s; // a world distance: same world, fewer metres
+		params.detailRotation = m_detailRotation;   // an angle
 		params.sssStrength = m_sssStrength / s; // per metre of crest height
 		params.sssPower = m_sssPower;
 		params.undersideTransmission = m_undersideTransmission;
@@ -466,8 +489,11 @@ namespace Procedural
 			m_dispTile.clear();
 			m_dispTileRes = 0;
 			m_waveTrough = 0.0f;
+			m_waveCrest = 0.0f;
+			m_waveHoriz = 0.0f;
 			pushOceanParams(renderer, camera);  // enabled=false gates the GPU FFT + the ocean draw
 			renderer.setOceanWaveTrough(0.0f);  // no waves: the underwater-fog boundary sits at the calm level
+			renderer.setOceanDisplacementExtent(0.0f);
 			renderer.clearCameraWaterSurface(); // the particle water gate falls back to the calm level
 			return;
 		}
@@ -576,6 +602,8 @@ namespace Procedural
 		// GPU per-instance frustum cull refines whatever the CPU gates let through.
 		const SpatialCullingConfig& culling = Globals::spatialIndex.getCullingConfig();
 		const bool gate = culling.mode >= int(ESpatialCullMode::Cull);
+		// One padding for every sector this frame: the vertex shader displaces them all by the same field.
+		const float cullPad = displacementExtent();
 		for (Sector& s : m_sectors)
 		{
 			if (!s.node.isValid())
@@ -583,7 +611,8 @@ namespace Procedural
 			s.node.setTransform(xf);
 			if (s.spatialEntry.isValid())
 				Globals::spatialIndex.updateEntry(s.spatialEntry.handle(),
-					glm::dvec3(px + s.localCenter.x, m_seaLevel + s.localCenter.y, pz + s.localCenter.z), s.radius);
+					glm::dvec3(px + s.localCenter.x, m_seaLevel + s.localCenter.y, pz + s.localCenter.z),
+					s.baseRadius + cullPad);
 			if (sectorDry(s))
 				continue;
 			if (gate && s.spatialEntry.isValid()
@@ -600,8 +629,11 @@ namespace Procedural
 		m_dispTile.assign(tile.begin(), tile.end());
 		m_dispTileRes = tileRes;
 
-		estimateWaveTrough();
+		estimateWaveExtents();
 		renderer.setOceanWaveTrough(m_waveTrough); // sinks the underwater-fog boundary below live troughs
+		// Pads the GPU per-instance frustum cull (the CPU sector radii above read the same value): the
+		// clipmap mesh is the undisplaced lattice, and choppiness moves vertices out of it sideways.
+		renderer.setOceanDisplacementExtent(displacementExtent());
 
 		// The live surface under the camera for the particle draw's camera-side water gate (Underwater /
 		// AboveWater emitters): the buoyancy height field, one sample. -FLT_MAX = no water here (land
@@ -660,26 +692,57 @@ namespace Procedural
 		return glm::vec2(hw.y - hw.x, hw.y);
 	}
 
-	// Deepest-possible current wave trough (m below the calm level) from the readback: the sum of each
-	// cascade's layer minimum bounds any combined trough (cascades add; their minima rarely coincide, so
-	// this is conservative - right for hiding fog under the surface). The minimum over the WHOLE tiling
-	// patch is a sea-state statistic, near-stationary frame to frame, so re-scan sparsely.
-	void OceanGenerator::estimateWaveTrough()
+	// The current wave field's extremes from the readback: the sum of each cascade's layer extreme bounds
+	// any combined one (cascades add; their extremes rarely coincide, so this is conservative - right for
+	// hiding fog under the surface and for padding a cull). The extremes over the WHOLE tiling patch are
+	// sea-state statistics, near-stationary frame to frame, so re-scan sparsely.
+	//
+	// The horizontal reach is kept RAW (the maps store raw Dx/Dz; the shader applies the choppiness
+	// lambda), so the live "Choppiness" tweak scales it without a re-scan.
+	void OceanGenerator::estimateWaveExtents()
 	{
 		if (m_waveTroughCooldown-- > 0 || m_dispTileRes == 0)
 			return;
 		m_waveTroughCooldown = 15;
-		float troughSum = 0.0f;
+		float troughSum = 0.0f, crestSum = 0.0f, horizSum = 0.0f;
 		for (uint32 c = 0; c < RendererVKLayout::OCEAN_CASCADES; ++c)
 		{
 			const size_t n = (size_t)m_dispTileRes * m_dispTileRes;
 			const uint16* layer = m_dispTile.data() + (size_t)c * n * 4;
-			float minH = 0.0f;
+			float minH = 0.0f, maxH = 0.0f, maxXZ = 0.0f;
 			for (size_t i = 0; i < n; ++i)
-				minH = glm::min(minH, halfToFloat(layer[i * 4 + 1])); // texel.y = height displacement
+			{
+				const float h = halfToFloat(layer[i * 4 + 1]); // texel.y = height displacement
+				minH = glm::min(minH, h);
+				maxH = glm::max(maxH, h);
+				maxXZ = glm::max(maxXZ, glm::max(std::fabs(halfToFloat(layer[i * 4 + 0])),
+					std::fabs(halfToFloat(layer[i * 4 + 2])))); // texel.xz = raw Dx / Dz
+			}
 			troughSum -= minH;
+			crestSum += maxH;
+			horizSum += maxXZ;
 		}
 		m_waveTrough = troughSum;
+		m_waveCrest = crestSum;
+		m_waveHoriz = horizSum;
+	}
+
+	// Worst-case distance a clipmap vertex moves from its authored lattice position - the padding both
+	// culls need, because both were built from the UNDISPLACED mesh.
+	//
+	// The vertical term is the obvious one. The HORIZONTAL term is the one that bites: the choppy
+	// displacement is lambda x the raw Dx/Dz, so raising "Choppiness" pushes vertices sideways out of
+	// bounds that never moved - sectors get dropped while their crests are still on screen, and the gaps
+	// show at the screen edges, where a sector's own bounding sphere has the least incidental slack.
+	// The swash tongue's backflow rides on top, already soft-capped in the shader.
+	float OceanGenerator::displacementExtent() const
+	{
+		if (!m_enabled)
+			return 0.0f;
+		const float vertical = glm::max(m_waveCrest, m_waveTrough);
+		const float horizontal = glm::max(m_params.choppiness, 0.0f) * m_waveHoriz
+			+ glm::clamp(0.5f * swashReach(), 0.25f, 1.0f); // the shader's own flowCap on the backflow
+		return glm::length(glm::vec3(horizontal, vertical, horizontal));
 	}
 
 	// Swash run-up reach (m). MIRRORS Renderer.cpp's UBO packing of u_oceanParams7.w - the conservative

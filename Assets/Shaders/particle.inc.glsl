@@ -13,7 +13,7 @@ struct Particle
     uvec4 misc;    // x = emitter slot, y = RNG seed, z = rotation (float bits), w = spin rad/s (float bits)
 };
 
-// Mirror of RendererVKLayout::ParticleEmitterGpu (208 bytes).
+// Mirror of RendererVKLayout::ParticleEmitterGpu (224 bytes).
 struct ParticleEmitter
 {
     vec4 posSpawnRadius;  // xyz = world position, w = spawn radius (m)
@@ -29,6 +29,7 @@ struct ParticleEmitter
     vec4 spinParams;      // x = max spin (rad/s), y = random initial rotation (0/1), z = lit emissive floor, w = ground fade height (m)
     uvec4 texFlags;       // x = texture idx, y = PARTICLE_FLAG_* bits, z = flipbook cols | rows << 16, w = flipbook fps (float bits)
     vec4 volumeParams;    // PARTICLE_FLAG_VOLUME: xyz = box half extents (m) around posSpawnRadius.xyz, w = wind response (1/s)
+    vec4 cullParams;      // x = fraction of the live particles to recycle this frame (a lowered count tweak), yzw unused
 };
 
 // Weather volume helpers (PARTICLE_FLAG_VOLUME). The box is centred on the emitter position, which
@@ -47,19 +48,27 @@ float particleVolumeEdgeFade(vec3 rel, vec3 halfExtents)
 }
 
 // GPU counters block: sim dispatch args + per-parity draw args (instanceCount IS the alive count) +
-// the dead-stack top + the GPU spawn path's counter, latched count and emit dispatch args. Bound as one
-// buffer that is also the indirect dispatch/draw source (80 bytes; ParticlePipeline.cpp offsets).
+// the dead-stack top + the GPU spawn path's counter, latched count and emit dispatch args, plus the two
+// per-frame DIAGNOSTIC counters. Bound as one buffer that is also the indirect dispatch/draw source
+// (96 bytes; ParticlePipeline.cpp offsets).
 // c_draw[parity * 4 + 0..3] = vertexCount(6), instanceCount, firstVertex(0), firstInstance(0).
 // c_gpuSpawnCount: producers append here (unbounded; the begin pass clamps to MAX_PARTICLE_GPU_SPAWNS
 // into c_gpuSpawnConsume, which the GPU emit pass reads, then zeroes it for the next frame's producers).
+// c_dropSpawns / c_dropBroken are zeroed by the begin pass every frame and read back for the log: a
+// pool that has run out is otherwise INVISIBLE (the emit pass just returns), which is exactly the
+// failure that reads as "particles stopped appearing".
 #define PARTICLE_COUNTERS_BLOCK \
     uvec4 c_simGroups;          \
     uint  c_draw[8];            \
     int   c_deadCount;          \
     uint  c_gpuSpawnCount;      \
     uint  c_gpuSpawnConsume;    \
-    uint  c_pad2;               \
-    uvec4 c_gpuEmitGroups;
+    uint  c_dropSpawns;         \
+    uvec4 c_gpuEmitGroups;      \
+    uint  c_dropBroken;         \
+    uint  c_pad3;               \
+    uint  c_pad4;               \
+    uint  c_pad5;
 
 // One GPU spawn request (RendererVKLayout::ParticleSpawnRequestGpu, 32 bytes): see particle_spawn.inc.glsl.
 struct ParticleSpawnRequest

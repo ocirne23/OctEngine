@@ -164,20 +164,28 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                             // weight: the tongue flows back seaward as the wave recedes),
                             // w = RT ray cutoff distance (m from the camera; beyond it the water shader
                             // traces no scene rays at all, 0 = unlimited)
-    vec4 u_oceanParams9;    // x unused (was the trough margin of the removed waterline floor),
+    vec4 u_oceanParams9;    // x = micro roughness: slope variance of the waves below the finest cascade's
+                            //     Nyquist (the capillary band the FFT cannot hold - LEAN only returns what
+                            //     the mip chain filtered, which is 0 at mip 0),
                             // y = RT refraction ray range (m: underwater visibility of traced geometry),
                             // z = RT reflection ray range (m),
                             // w = RT reflection roughness cutoff (rougher pixels skip the mirror ray)
-    vec4 u_oceanParams10;   // x unused (was the breaking limit, removed: the swash amplitude alone shapes
-                            // the shore - oceanSurfaceWeight),
+    vec4 u_oceanParams10;   // x = crest slope limit k in the soft limit s /= 1 + k * |s| (0 = no limit:
+                            //     sharpest crests, creases possible at folds),
                             // y = spectrum clock rate (sqrt(world scale): holds the model sea's periods),
                             // z = underside transmission (scale on the sky seen through Snell's window from
-                            //     below; the rest is internal reflection), w unused
+                            //     below; the rest is internal reflection),
+                            // w = displacement extent (m): how far the ocean VS moves a vertex off its
+                            //     authored lattice - the per-instance frustum cull adds it to the ocean
+                            //     sectors' bounding spheres, which come from the UNDISPLACED mesh
+    vec4 u_oceanParams11;   // Sub-band detail, SHADING ONLY (oceanSampleSurface - never the displacement, so
+                            // the geometry and the CPU buoyancy mirror stay as they are):
+                            // x = strength (0 = off), y = patch fraction of cascade 2 (smaller = finer),
+                            // z = fade distance (m; 0 = no fade), w = domain rotation (radians)
     vec4 u_oceanSpray0;     // x = particle emitter slot (uint bits; 0xFFFFFFFF = off), y = rate (spawns / m^2 / s at
                             //     full breaking), z = grid radius around the scene focus (m), w = sim delta (s)
     vec4 u_oceanSpray1;     // x = breaking threshold (instant foam), y = upward kick (m/s), z = forward speed (m/s), w = spawn lead (m)
-    vec4 u_oceanSpray2;     // x = mist emitter slot, y = foam-chunk emitter slot (uint bits; 0xFFFFFFFF = droplets), z = spawn height (m), w unused
-    vec4 u_oceanSpray3;     // xyz = relative spawn weights of droplets / mist / foam chunks, w unused
+    vec4 u_oceanSpray2;     // x = spawn height above the surface (m), yzw unused
     vec4 u_terrainParams;   // x = streamed terrain mesh coverage radius (m, radial from camera XZ;
                             // 0 = no terrain mesh up - fences the ocean land cull),
                             // y = temperature lapse rate, C per WORLD metre above sea level (<= 0; pairs
@@ -211,7 +219,9 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     // Terrain wetness clipmap (terrain_wetness.inc.glsl; keep in sync with RendererVKLayout::Ubo): a
     // TERRAIN_WET_RES^2 toroidal window of texels around the scene focus, lattice = integer texel index.
     vec4 u_terrainWetParams0; // xy = window origin lattice coord (min corner, exact ints as floats),
-                              // zw = LAST frame's origin (texels that scrolled in start dry)
+                              // zw = the PREVIOUS TICK's origin (texels that scrolled in start dry)
+                              // (the pass runs on a fixed tick: "this frame" below = this tick, dt = the
+                              // sim time accumulated since the last one; between ticks xy/layer hold)
     vec4 u_terrainWetParams1; // x = texel size (m), y = 1 / texel size, z = decay factor this frame
                               // (exp(-dt / dry time)), w = rain wetting added this frame
     vec4 u_terrainWetParams2; // x = enabled (0/1: the map is present), y = albedo multiplier at full

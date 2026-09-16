@@ -187,6 +187,46 @@ float oceanSurfaceWeight(float depth, float waterLevel)
     return 1.0 - oceanSwashFadeIn(depth) * (1.0 - oceanSwashBase(depth, waterLevel));
 }
 
+// --- Sub-band detail --------------------------------------------------------------------------------
+// The FFT band stops at the finest cascade's Nyquist, and the clipmap band-limits the DISPLACEMENT well
+// above even that, so near the camera the sea is a normal map on smooth geometry - what reads as
+// plastic. This borrows the finest cascade's OWN gradient field, re-sampled at a FRACTION of its patch
+// size: the same wave statistics at a shorter wavelength, for one fetch, no extra memory and no extra
+// FFT work.
+//
+// The domain is ROTATED, because an unrotated copy is just the same field scaled - its crest lines run
+// parallel to the parent's at every point and read as a fractal repeat instead of independent ripples.
+// The slope comes back rotated into the sample domain, so the caller's oceanFlowToWorld still takes it
+// the rest of the way.
+//
+// SHADING ONLY: it is never added to oceanSampleDisplacement, so the drawn geometry, the depth prepass
+// and the CPU buoyancy mirror (OceanGenerator::sampleDisplacement) are all untouched - "the shader is
+// what you see, the mirror is what floats on it" still holds.
+//
+// Implicit LOD on purpose: a smaller patch makes the uv derivatives correspondingly larger, so the mip
+// chain filters this band exactly as it filters the cascades. It fades out past "Detail fade (m)"
+// rather than being left to the mips, because its variance is NOT in the LEAN moments - filtered-away
+// detail would silently vanish instead of becoming roughness. "Micro roughness" covers that band.
+vec2 oceanDetailSlope(vec2 sampleXZ, vec2 worldXZ, float surfaceWeight)
+{
+    const float strength = u_oceanParams11.x;
+    if (strength <= 0.0)
+        return vec2(0.0);
+    float fade = surfaceWeight; // dies into the beach with every other wave term
+    const float fadeDist = u_oceanParams11.z;
+    if (fadeDist > 0.0)
+        fade *= 1.0 - smoothstep(0.5 * fadeDist, fadeDist, distance(worldXZ, u_viewPos.xz));
+    if (fade <= 0.0)
+        return vec2(0.0);
+    const int c = OCEAN_CASCADES - 1; // the finest cascade: the shortest waves there are to borrow
+    const float L = max(u_oceanParams2[c] * u_oceanParams11.y, 1e-3);
+    const vec2 rot = vec2(cos(u_oceanParams11.w), sin(u_oceanParams11.w));
+    const vec2 p = vec2(rot.x * sampleXZ.x + rot.y * sampleXZ.y, -rot.y * sampleXZ.x + rot.x * sampleXZ.y);
+    const vec2 g = texture(u_oceanMaps, vec3(p / L, float(OCEAN_CASCADES + c))).xy; // (dh/dx, dh/dz)
+    const vec2 s = g * (strength * fade);
+    return vec2(rot.x * s.x - rot.y * s.y, rot.y * s.x + rot.x * s.y); // back into the sample domain
+}
+
 // Cascade displacement sum at an undisplaced (morphed) world XZ. Choppy lambda applied here so it
 // stays live (the maps store raw Dx/Dz). shoreHW = the vertex's (terrain height, water level),
 // fetched once by the caller. The CPU buoyancy mirror (OceanGenerator::sampleDisplacement) MUST
@@ -289,8 +329,11 @@ void oceanSampleSurface(vec2 worldXZ, out vec2 slope, out float jacobian, out fl
     const float jxz = chop * sxz;
     jacobian = jxx * jzz - jxz * jxz;
     // Floor + rational soft limit: near folds the raw division explodes the slope into dark creases.
+    // "Crest slope limit" (u_oceanParams10.x) is the limit's strength - it also compresses the steep
+    // crest faces, so lowering it sharpens crests at the risk of creases; 0 = off.
     slope = slopeSum / max(vec2(jxx, jzz), vec2(0.6));
-    slope /= 1.0 + 0.2 * length(slope);
+    slope /= 1.0 + u_oceanParams10.x * length(slope);
+    slope += oceanDetailSlope(sampleXZ, worldXZ, w);
     slope = oceanFlowToWorld(slope, fr);
     slopeVar = varSum;
 }
@@ -360,7 +403,7 @@ vec3 oceanSampleNormalLod(vec2 worldXZ, float cellSize, float morph, vec2 shoreH
     slopeSum *= w;
     sxx_szz *= w;
     vec2 slope = slopeSum / max(vec2(1.0) + chop * sxx_szz, vec2(0.6));
-    slope /= 1.0 + 0.2 * length(slope); // same fold-over soft limit as oceanSampleSurface
+    slope /= 1.0 + u_oceanParams10.x * length(slope); // same fold-over soft limit as oceanSampleSurface
     slope = oceanFlowToWorld(slope, fr);
     return normalize(vec3(-slope.x, 1.0, -slope.y));
 }

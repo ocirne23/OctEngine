@@ -8,12 +8,17 @@ import Physics;
 import Spatial;
 import Threading;
 
+// Buoyancy catch-up bound: the scheduling below owes at most two steps, so a bigger gap means the
+// component was out of the loop entirely (spawned, parked, suspended, or gated off by the SIM LOD
+// tier) and starts fresh instead of firing one huge force.
+constexpr uint32 c_maxBuoyancyCatchUpSteps = 4;
+
 void PhysicsComponent::spawn(Entity& entity, const SpawnInfo& info, const Transform& base)
 {
     enabled = info.enabled;
     bodyType = info.bodyType;
     lockRotation = info.lockRotation;
-    lastStep = Globals::physics.getStepCount();
+    lastStep = buoyancyStep = Globals::physics.getStepCount();
 
     // `base` is parent-local for a prefab child; the ancestor chain is already positioned by now.
     Transform world = base;
@@ -101,7 +106,7 @@ void PhysicsComponent::unpark(Entity& entity, const glm::vec3& velocity)
     Globals::physics.queueBodyCommand(body, PhysicsWorld::EBodyCommand::SetEnabled, glm::vec3(1.0f));
 }
 
-void PhysicsComponent::applyBuoyancy()
+void PhysicsComponent::applyBuoyancy(uint32 steps)
 {
     const PhysicsWorld& physics = Globals::physics;
     glm::vec3 lo, hi;
@@ -111,9 +116,17 @@ void PhysicsComponent::applyBuoyancy()
     if (lo.y > waterAtCenter + 1.0f)
         return;
 
+    // One step consumes the queued force, so the steps this application owes are its scale: the
+    // impulse per second of sim time is then the same whatever the frame rate schedules.
+    const float scale = float(steps);
+    const float coveredSec = scale / float(physics.getStepHz());
     const float waterDensity = physics.getWaterDensity();
-    const float drag = physics.getWaterLinearDrag();
     const glm::vec3 gravity = physics.getGravity();
+    // Drag is EXPLICIT damping: over the covered time it must not reverse the velocity, which a
+    // body far lighter than the water it displaces otherwise does. The cap is against the FULLY
+    // submerged displaced mass, so it binds only where the step would have been unstable anyway.
+    const float drag = glm::min(physics.getWaterLinearDrag(),
+        body.getMass() / glm::max(waterDensity * buoyancyVolume * coveredSec, 1e-6f));
 
     if (lockRotation)
     {
@@ -126,7 +139,7 @@ void PhysicsComponent::applyBuoyancy()
         const float displacedMass = waterDensity * buoyancyVolume * submerged;
         glm::vec3 force = -gravity * displacedMass; // Archimedes: weight of the displaced water, upward
         force -= body.getLinearVelocity() * (displacedMass * drag);
-        Globals::physics.queueBodyCommand(body, PhysicsWorld::EBodyCommand::ApplyForce, force);
+        Globals::physics.queueBodyCommand(body, PhysicsWorld::EBodyCommand::ApplyForce, force * scale);
         return;
     }
 
@@ -152,8 +165,8 @@ void PhysicsComponent::applyBuoyancy()
     }
     if (force == glm::vec3(0.0f))
         return;
-    Globals::physics.queueBodyCommand(body, PhysicsWorld::EBodyCommand::ApplyForce, force);
-    Globals::physics.queueBodyCommand(body, PhysicsWorld::EBodyCommand::ApplyTorque, torque);
+    Globals::physics.queueBodyCommand(body, PhysicsWorld::EBodyCommand::ApplyForce, force * scale);
+    Globals::physics.queueBodyCommand(body, PhysicsWorld::EBodyCommand::ApplyTorque, torque * scale);
 }
 
 void PhysicsComponent::update(Entity& entity, const Transform& parentWorld)
@@ -194,16 +207,25 @@ void PhysicsComponent::update(Entity& entity, const Transform& parentWorld)
             entity.rot = local.quat; // a locked body's rot is frozen at spawn - writing it back
                                      // would stomp script-driven facing (see the player capsule)
 
-        // Once per step interval, on a frame that did not step (the step frame is the busy one)
-        // unless every frame steps: the queued force lands at the next drain and box3d holds it
-        // until the step. The pass runs after this frame's physics.update, so `stepCount` is the
-        // step the read follows.
-        if (buoyant && buoyancyVolume > 0.0f && buoyancyStep != stepCount
-            && (!Globals::jobSystem.frameHasPhysicsStep() || Globals::jobSystem.prevFrameHadPhysicsStep())
-            && Globals::physics.isWaterActive())
+        // BUOYANCY, on a frame that did not step (the step frame is the busy one) unless every
+        // frame steps: the queued force lands at the next drain and box3d holds it until the step
+        // consumes it. The pass runs after this frame's physics.update, so `stepCount` is the step
+        // the read follows. That deferral is NOT one application per step — near the step rate a
+        // step frame whose predecessor did not step is skipped, and at 25 fps against the 20 Hz
+        // default that loses one step in four — so the application carries the steps it OWES and
+        // the sim-time impulse comes out the same at any frame rate.
+        if (buoyancyVolume > 0.0f)
         {
-            buoyancyStep = stepCount;
-            applyBuoyancy();
+            const uint32 owed = stepCount - buoyancyStep;
+            if (!buoyant || owed > c_maxBuoyancyCatchUpSteps)
+                buoyancyStep = stepCount; // gated off by the tier, or back from a gap: no catch-up
+            else if (owed != 0
+                && (!Globals::jobSystem.frameHasPhysicsStep() || Globals::jobSystem.prevFrameHadPhysicsStep()))
+            {
+                buoyancyStep = stepCount;
+                if (Globals::physics.isWaterActive()) // once per step, never per frame: it calls the ocean
+                    applyBuoyancy(owed);
+            }
         }
     }
 }

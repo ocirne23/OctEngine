@@ -38,7 +38,11 @@ export namespace RendererVKLayout
     // frame parity. CPU work per frame is only the emitter table + a spawn map (mapped per-frame
     // buffers); emit/simulate run in compute with GPU-written indirect args, so spawning never
     // re-records anything. Sizing constants are injected into every shader compile (Shader.cpp).
-    constexpr uint32 MAX_PARTICLES = 256 * 1024;             // persistent pool capacity (48 B each)
+    // Pool capacity. GPU cost is MAX_PARTICLES * (48 B pool + 4 B dead stack + 2 * 4 B alive lists) =
+    // 30 MB at 512 K. The pool is SHARED by every emitter, and weather volumes hold their fill for the
+    // whole session (rain 60 k, snow 40 k, dust 6.3 k, underwater 8.9 k, each x4 from its count tweak),
+    // so the headroom above the volumes is what the ordinary effects and the GPU producers get.
+    constexpr uint32 MAX_PARTICLES = 512 * 1024;             // persistent pool capacity (48 B each)
     constexpr uint32 MAX_PARTICLE_EMITTERS = 256;            // live emitter slots (table re-uploaded per frame)
     constexpr uint32 MAX_PARTICLE_SPAWNS_PER_FRAME = 16 * 1024; // spawn-map capacity (one uint per spawned particle)
     constexpr uint32 PARTICLE_SIM_GROUP_SIZE = 64;
@@ -95,8 +99,11 @@ export namespace RendererVKLayout
         glm::vec4 spinParams{ 0.0f };              // x = max spin (rad/s, random sign), y = random initial rotation (0/1), z = lit emissive floor [0,1], w = ground fade height (m, PARTICLE_FLAG_GROUND_FADE)
         glm::uvec4 texFlags{ PARTICLE_TEX_NONE, 0u, 0u, 0u }; // x = texture idx (PARTICLE_TEX_NONE = procedural), y = PARTICLE_FLAG_* bits, z = flipbook cols | rows << 16 (0 = none), w = flipbook fps (float bits)
         glm::vec4 volumeParams{ 0.0f };            // PARTICLE_FLAG_VOLUME: xyz = box half extents (m) around posSpawnRadius.xyz, w = wind response (1/s: how fast the horizontal velocity relaxes onto the local wind)
+        glm::vec4 cullParams{ 0.0f };              // x = fraction of this emitter's live particles the sim recycles THIS FRAME
+                                                   // (a lowered count tweak on a weather volume: it never ages out, so there is
+                                                   // nothing else to remove); ONE frame only, the CPU clears it again. yzw unused
     };
-    static_assert(sizeof(ParticleEmitterGpu) == 208);
+    static_assert(sizeof(ParticleEmitterGpu) == 224);
 
     // Projected box decals (DecalPipeline / decal.vs/fs.glsl), submitted per frame like lights
     // (Renderer::addDecal, lock-free). Drawn in the scene-color pass right after the opaque forward
@@ -605,13 +612,21 @@ export namespace RendererVKLayout
                                    // z = swash backflow (horizontal chop scale on the tongue),
                                    // w = RT ray cutoff distance (m from the camera; beyond it the water
                                    //     shader traces no scene rays, 0 = unlimited)
-        glm::vec4 oceanParams9;    // x unused (was the trough margin of the removed waterline floor),
+        glm::vec4 oceanParams9;    // x = micro roughness (slope variance below the finest cascade's Nyquist),
                                    // y = RT refraction ray range (m: underwater visibility),
                                    // z = RT reflection ray range (m),
                                    // w = RT reflection roughness cutoff (rougher = sky fallback)
-        glm::vec4 oceanParams10;   // x unused (was the breaking limit, removed: the swash amplitude alone
-                                   //     shapes the shore - oceanSurfaceWeight),
-                                   // y = spectrum clock rate (sqrt(world scale): holds the model sea's periods), zw unused
+        glm::vec4 oceanParams10;   // x = crest slope limit k in s /= 1 + k * |s| (0 = no limit),
+                                   // y = spectrum clock rate (sqrt(world scale): holds the model sea's periods),
+                                   // z = underside transmission,
+                                   // w = displacement extent (m): how far the ocean VS moves a vertex off its
+                                   //     authored lattice, added to the ocean sectors' cull spheres (they were
+                                   //     built from the UNDISPLACED mesh) - see setOceanDisplacementExtent
+        // Sub-band DETAIL: cascade 2's gradient field re-sampled at a fraction of its patch size in a
+        // rotated domain, added to the SHADING slope only (oceanSampleSurface). Never reaches the
+        // displacement, so geometry, the depth prepass and the CPU buoyancy mirror are untouched.
+        glm::vec4 oceanParams11;   // x = strength (0 = off), y = patch fraction of cascade 2 (smaller = finer),
+                                   // z = fade distance (m; 0 = no fade), w = domain rotation (radians)
         // Ocean spray (ocean_spray.cs.glsl -> the particle GPU spawn path; "Ocean/Spray *" tweaks):
         glm::vec4 oceanSpray0;     // x = particle emitter slot (uint bits; 0xFFFFFFFF = off), y = rate (spawns per
                                    //     m^2 per s at full breaking), z = grid radius around the scene focus (m),
@@ -619,10 +634,7 @@ export namespace RendererVKLayout
         glm::vec4 oceanSpray1;     // x = breaking threshold (instant-foam value where spray starts), y = upward
                                    //     kick (m/s), z = forward speed along the wind (m/s), w = spawn lead ahead
                                    //     of the crest (m)
-        glm::vec4 oceanSpray2;     // x = mist emitter slot, y = foam-chunk emitter slot (uint bits; 0xFFFFFFFF =
-                                   //     fall back to the droplet slot), z = spawn height above the surface (m), w unused
-        glm::vec4 oceanSpray3;     // xyz = relative spawn weights of droplets / mist / foam chunks (normalized in the
-                                   //     shader; a zero weight never spawns that look), w unused
+        glm::vec4 oceanSpray2;     // x = spawn height above the surface (m), yzw unused
         glm::vec4 terrainParams;   // x = streamed terrain mesh coverage radius (m, radial from camera XZ;
                                    // 0 = no terrain mesh up - fences the ocean land cull),
                                    // y = temperature lapse rate, C per WORLD metre above sea level (<= 0;

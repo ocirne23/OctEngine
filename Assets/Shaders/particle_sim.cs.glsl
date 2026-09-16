@@ -57,10 +57,26 @@ void main()
     particle.posAge.w += p_dt;
     const bool killed = (e.texFlags.y & PARTICLE_FLAG_KILL) != 0u;
     const bool volume = (e.texFlags.y & PARTICLE_FLAG_VOLUME) != 0u; // never ages out: it wraps instead
-    if ((particle.posAge.w >= particle.velLife.w && !volume) || killed)
+    // Count-tweak reduction: recycle a random FRACTION of this emitter's live particles (cullParams.x,
+    // set by the CPU for one frame). A volume never ages out, so lowering its count has nothing else to
+    // remove; which particles go is arbitrary, and the draw's own uniform spread hides the thinning.
+    const bool culled = e.cullParams.x > 0.0
+        && float(particlePcg(particleIdx * 0x9E3779B9u + p_frameIndex)) * (1.0 / 4294967296.0) < e.cullParams.x;
+    // NaN / runaway guard. A non-finite particle can NEVER age out - every comparison against NaN is
+    // false, so the retire test below misses it - while its NaN clip position rasterizes to nothing: it
+    // holds its pool slot forever and draws nothing. One such event is one pool slot leaked
+    // PERMANENTLY, and enough of them exhaust the pool and stop every emitter. Retire it instead.
+    // Written as an inverted compare (true for NaN AND Inf) rather than isnan/isinf, which optimizers
+    // are free to fold away under fast math.
+    const bool broken = !(dot(particle.posAge.xyz, particle.posAge.xyz) < 1e30
+        && dot(particle.velLife.xyz, particle.velLife.xyz) < 1e30
+        && particle.posAge.w < 1e30);
+    if ((particle.posAge.w >= particle.velLife.w && !volume) || killed || culled || broken)
     {
         const int deadSlot = atomicAdd(c_deadCount, 1);
         pd_deadList[deadSlot] = particleIdx;
+        if (broken)
+            atomicAdd(c_dropBroken, 1u); // diagnostic: a steady non-zero count is a live NaN source upstream
         return;
     }
 
@@ -109,19 +125,33 @@ void main()
         }
     }
 
-    // Water floor: a particle that reaches the live wave surface lands on it, stops, and is pushed to
-    // its fade-out so it dissolves ON the water instead of sinking through it (spray rejoining the sea).
-    // The surface height is read at the particle's own XZ (the horizontal chop displacement is ignored:
-    // an error of a few cm at the crests, invisible on a landing droplet).
+    // Water floor: the LIVE wave surface (the displaced FFT height at the particle's own XZ - the same
+    // field the water is drawn with, not the calm level), so nothing sinks through a wave.
+    //  - a finite-life particle (spray) LANDS on it: stopped, and pushed to its fade-out so it dissolves
+    //    there instead of sinking;
+    //  - a weather VOLUME particle has no life to end (it wraps forever), so it is only marked here and
+    //    the volume block below restarts it at the box top at a fresh random XZ - rain falling into the
+    //    sea, replaced by new rain from the cloud.
+    // The horizontal chop displacement is ignored (an error of a few cm at the crests).
+    bool hitWater = false;
     if ((e.texFlags.y & PARTICLE_FLAG_WATER_FLOOR) != 0u)
     {
-        const vec2 shoreHW = oceanSampleShoreData(pos.xz);
-        const float surfaceY = shoreHW.y + oceanSampleDisplacement(pos.xz, 0.25, 0.0, shoreHW).y;
-        if (pos.y < surfaceY)
+        const vec2 shoreHW = oceanSampleShoreData(pos.xz); // (terrain height, local calm water level)
+        // Cheap reject first: no wave reaches above the calm level plus the crest band estimated from the
+        // ocean readback (u_fogParams7.y; 0 with the ocean off). Only drops near the water pay the taps.
+        if (pos.y < shoreHW.y + u_fogParams7.y + 0.5)
         {
-            pos.y = surfaceY + 0.01;
-            vel = vec3(vel.x, 0.0, vel.z) * 0.3;
-            particle.posAge.w = max(particle.posAge.w, particle.velLife.w * e.fadeParams.y);
+            const float surfaceY = shoreHW.y + oceanSampleDisplacement(pos.xz, 0.25, 0.0, shoreHW).y;
+            if (pos.y < surfaceY)
+            {
+                hitWater = true;
+                if (!volume)
+                {
+                    pos.y = surfaceY + 0.01;
+                    vel = vec3(vel.x, 0.0, vel.z) * 0.3;
+                    particle.posAge.w = max(particle.posAge.w, particle.velLife.w * e.fadeParams.y);
+                }
+            }
         }
     }
 
@@ -146,8 +176,10 @@ void main()
         // converges, and a per-axis Y wrap would keep each one in its sink forever - the whole volume
         // would drain into "waterfalls". Fresh XZ per fall = new rain from the cloud, uniformly spread,
         // so clustering is bounded by what one fall through the box can do (as in reality).
+        // hitWater = it reached the live wave surface (the water floor above): the same restart, so a
+        // volume never draws a particle below the sea.
         const bool sheltered = (e.texFlags.y & PARTICLE_FLAG_OCCLUDE) != 0u && u_rainOcclusionParams.x > 0.5 && rainSheltered(pos);
-        if (sheltered || rel.y < -halfExt.y)
+        if (sheltered || hitWater || rel.y < -halfExt.y)
         {
             uint seed = particle.misc.y;
             rel.x = (particleRand(seed) * 2.0 - 1.0) * halfExt.x;

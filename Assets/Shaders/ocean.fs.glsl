@@ -472,11 +472,21 @@ void main()
     const float LoH = max(dot(L, H), 0.0);
 
     // Microfacet roughness = base + spec AA + LEAN slope variance (both scaled by "Glint filtering")
-    // + turbulence micro-roughness. The variance terms stretch the sun glitter toward the horizon.
+    // + the sub-grid capillary band + turbulence micro-roughness. The variance terms stretch the sun
+    // glitter toward the horizon.
+    //
+    // "Micro roughness" (u_oceanParams9.x) is the slope variance of everything BELOW the finest
+    // cascade's Nyquist. LEAN returns only the variance the MIP CHAIN removed, so it is exactly zero at
+    // mip 0: without this term the near field fell back on the capped screen-derivative AA and then onto
+    // the 0.02 alpha clamp - a mirror, which is what reads as plastic water up close. It is NOT scaled by
+    // "Glint filtering": that knob trades away FILTERED variance, and this band was never in the
+    // spectrum to filter. Enters as alpha^2 = 2 sigma^2, the same form as the LEAN term.
     const float perceptualRough = clamp(u_oceanAbsorption.w, 0.02, 1.0);
     const float slopeVariance = 0.5 * (slopeVar.x + slopeVar.y) * (ns * ns);
+    const float microVariance = u_oceanParams9.x * (ns * ns);
     const float alphaSq = perceptualRough * perceptualRough * perceptualRough * perceptualRough
-        + (normalVariance(N) + 2.0 * slopeVariance) * u_oceanParams6.y + turbulence * u_oceanParams5.y * 0.35;
+        + (normalVariance(N) + 2.0 * slopeVariance) * u_oceanParams6.y + 2.0 * microVariance
+        + turbulence * u_oceanParams5.y * 0.35;
     const float alphaF = clamp(sqrt(alphaSq), 0.02, 1.0);
 
     // Sun visibility: one RT shadow ray (or PCSS fallback). Back-lit crests still need it while crest

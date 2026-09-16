@@ -519,12 +519,20 @@ Both push params in every frame; the renderer owns none of the tweaks.
   climate), then **ground under the LIVE ocean surface is set to 1** — the same calm-depth + swash
   residual predicate the lit core uses for underwater sunlight, so the wet tongue is where the water
   was drawn, and permanently submerged seabed stays 1 until a drawdown exposes it — plus a uniform
-  rain term. Pointwise per texel, so it reads and writes in place (GENERAL for life, no ping/pong). The
+  rain term. GENERAL for life, two layers ping/ponged (the diffusion tent reads neighbours). The
   TERRAIN fragment shader (binding 18, UPDATE_AFTER_BIND) manual-bilinears it (never across the wrap
   seam), ORs in the current wave's own footprint at mesh resolution, and scales albedo / lerps
   roughness. **Disabled = the pass is skipped and the presence flag is 0**; re-enabling parks the previous
   origin out of range so nothing stale shows. Rain from weather, particle hits and script splats are
   the planned injection sources.
+  **The pass runs on a FIXED TICK** ("Terrain/Wetness/Update rate (Hz)", default 20), not per frame:
+  the UBO build accumulates the sim delta and ticks when it reaches the interval, integrating the whole
+  accumulated delta at once; the primary executes the pass on tick frames only (`m_terrainWetTick`).
+  **Why:** the image is R16F, whose step is ~0.0005 at wetness 0.5 — a per-frame change at 165 fps is
+  below half a step and ROUNDS AWAY in `imageStore`, so rain and drying stalled and wetness depended on
+  the framerate. A tick writes the ping/pong layer the last tick did not (`m_terrainWetLayer`, NOT the
+  frame-slot parity any more); between ticks the UBO keeps naming that layer and the last tick's window
+  origin, so the reader stays consistent with the data. The origin therefore scrolls per tick.
 * **The particle GPU SPAWN PATH + ocean spray.** `ParticlePipeline` keeps one shared spawn-request
   buffer (`MAX_PARTICLE_GPU_SPAWNS` × `ParticleSpawnRequestGpu`) and a request counter in its counters
   block; a producer compute pass that runs BEFORE "Particle sim" binds both (`getCountersBuffer` /
@@ -538,7 +546,7 @@ Both push params in every frame; the renderer owns none of the tweaks.
   cell area × dt × breaking. The emitter slot arrives through `setOceanSprayEmitter` (the Particle
   system's `Effects/ocean_spray.pfx` instance) in `u_oceanSpray0.x`; `UINT32_MAX` switches the step off
   in-shader, so the cached CB records once. Tweaks `Ocean/Spray rate / radius / threshold / kick /
-  speed`.
+  speed / forward offset / height offset`.
 * **`setRainOcclusionVolume`** — the RAIN OCCLUSION MAP for the weather particle volumes
   (`PARTICLE_FLAG_OCCLUDE`, see Particle): ONE top-down orthographic D32 view
   (`RAIN_OCCLUSION_RESOLUTION`², a single-layer `ShadowMap` per frame slot) rendered by SECOND

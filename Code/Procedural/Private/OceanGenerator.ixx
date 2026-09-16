@@ -92,7 +92,13 @@ export namespace Procedural
 		float swashWeight(float depth, float waterLevel) const;     // mirrors oceanSwashWeight
 		float swashBase(float depth, float waterLevel) const;       // mirrors oceanSwashBase (no depth fade-in)
 		glm::vec3 sampleDisplacement(glm::vec2 worldXZ) const;      // CPU mirror of oceanSampleDisplacement
-		void estimateWaveTrough(); // sparse re-scan of the readback for the deepest current trough (underwater fog boundary)
+		void estimateWaveExtents(); // sparse re-scan of the readback for the current trough / crest / chop reach
+		// Worst-case distance a clipmap vertex travels from its authored lattice position. BOTH culls
+		// need it: the mesh the culls were built from is the UNDISPLACED lattice, and the vertex shader
+		// then moves every vertex by the wave height AND - the part that surprises - by the CHOPPY
+		// horizontal displacement, which grows with the "Choppiness" tweak. Without it a high
+		// choppiness drops sectors whose crests are still on screen, opening gaps at the screen edges.
+		float displacementExtent() const;
 
 		// --- Clipmap geometry config (a change rebuilds the mesh) ---
 		bool  m_enabled = false;
@@ -112,9 +118,9 @@ export namespace Procedural
 		// (a finer mip samples detail the mesh cannot hold and simply aliases). At 2 m cells the finest
 		// cascade sat inside ~3 texels and was averaged out of the geometry entirely; 0.5 m gives it ~13
 		// and it comes back as real chop. 0.5 x 7 rings holds the same 4 km reach 2 x 5 rings had.
-		float m_ringCell = 0.5f;       // ring 0 cell size (m); doubles per ring
+		float m_ringCell = 0.25f;      // ring 0 cell size (m); doubles per ring
 		int   m_ringRes = 256;         // cells per axis per ring (ring 0 is a full grid, outer rings are annuli)
-		int   m_rings = 7;             // ring count (defaults: 128 m fine region, ~4 km reach)
+		int   m_rings = 8;             // ring count (defaults: 128 m fine region, ~4 km reach)
 		// One coarse quad band appended past the outermost ring, stretching its edge lattice out to the
 		// camera far plane - the sea meets the horizon in every direction instead of ending at the ring
 		// reach. Its inner edge sits on the last ring's fully-morphed (2x cell) lattice at the matching
@@ -140,7 +146,7 @@ export namespace Procedural
 		float m_steeredWindAngle = 0.0f;  // follows m_windAngle/the flow at the slew rate
 		bool  m_windSteerSynced = false;  // adopt m_windAngle on first use instead of turning in from 0
 		float m_amplitude = 1.0f;      // artistic scale on the spectrum (1 = physical)
-		float m_choppiness = 1.1f;     // horizontal displacement lambda
+		float m_choppiness = 1.25f;     // horizontal displacement lambda
 		float m_normalStrength = 1.0f;
 		// FFT patch sizes (m). Each cascade TILES with its own size, so the largest one sets how often the
 		// sea visibly repeats: at wind 20 / fetch 300 km the JONSWAP peak is a ~200 m wavelength, and the
@@ -156,7 +162,22 @@ export namespace Procedural
 		float m_scatterStrength = 1.0f;
 		float m_roughness = 0.07f;
 		float m_glintFilter = 1.0f;     // scale on the roughness-widening variance (spec AA + LEAN)
-		float m_sssStrength = 0.66f;     // crest SSS: back-lit crests glow the scatter color, per meter of height
+		// Slope variance of the waves below the FINEST cascade's Nyquist - the capillary band no FFT size
+		// can hold. LEAN returns only what the mip chain filtered away and is exactly 0 at mip 0, so
+		// without this the near field collapses onto the 0.02 alpha clamp and mirrors the sky. NOT world
+		// scaled: a slope variance is dimensionless.
+		float m_microRoughness = 0.01f;
+		// Strength of the shading slope's soft limit, s /= 1 + k * |s|. It stops the near-fold division
+		// exploding into dark creases, but it flattens the steep crest faces with it. 0 = off.
+		float m_crestSlopeLimit = 0.0f;
+		// Sub-band detail: the finest cascade's gradient field re-sampled at a fraction of its patch size
+		// in a rotated domain, added to the SHADING slope only - wave statistics below the FFT band for
+		// one fetch. The displacement never sees it, so the CPU buoyancy mirror needs no counterpart.
+		float m_detailStrength = 0.66f;
+		float m_detailScale = 0.33f;     // fraction of the finest cascade's patch size
+		float m_detailFadeDist = 60.0f;  // MODEL metres, like every other metre here (scaled in pushOceanParams)
+		float m_detailRotation = 0.9f;   // radians
+		float m_sssStrength = 0.75f;     // crest SSS: back-lit crests glow the scatter color, per meter of height
 		float m_sssPower = 1.0f;        // crest SSS toward-the-sun view lobe exponent
 		float m_undersideTransmission = 1.0f; // sky through Snell's window from below (1 = Fresnel; less = more internal reflection)
 		bool  m_hitLighting = false; // grid lights at refraction/reflection ray hits (pipeline reload on toggle)
@@ -165,8 +186,8 @@ export namespace Procedural
 		// makes the wake milky/rough.
 		glm::vec3 m_foamColor = glm::vec3(0.88f, 0.92f, 0.94f);
 		float m_foamBias = 0.61f;     // fold threshold (Jacobian below this foams)
-		float m_foamBreakAccel = 0.25f; // breaking threshold (downward crest accel, g units)
-		float m_foamSoftness = 0.75f; // edge width of both thresholds
+		float m_foamBreakAccel = 0.2f; // breaking threshold (downward crest accel, g units)
+		float m_foamSoftness = 0.50f; // edge width of both thresholds
 		float m_foamDecay = 0.999f;  // turbulence retention per frame (wake persistence)
 		float m_foamSpread = 1.2f;   // turbulence diffusion per frame (wake spreads as it lives)
 		float m_foamBoost = 0.67f;    // turbulence -> fold-threshold relaxation (aged-foam amount)
@@ -209,8 +230,12 @@ export namespace Procedural
 		// before beginFrame) without racing the GPU rewriting the slot's readback buffer.
 		oc::vector<uint16> m_dispTile;                  // RGBA16F texels, res^2 per cascade
 		uint32 m_dispTileRes = 0;
-		float m_waveTrough = 0.0f;      // deepest current trough below the calm level (m; see estimateWaveTrough)
-		int   m_waveTroughCooldown = 0; // sparse re-scan counter (the patch minimum is near-stationary)
+		float m_waveTrough = 0.0f;      // deepest current trough below the calm level (m; see estimateWaveExtents)
+		float m_waveCrest = 0.0f;       // highest current crest above it (m)
+		float m_waveHoriz = 0.0f;       // largest RAW horizontal displacement per axis (m, BEFORE choppiness:
+		                                // the maps store raw Dx/Dz, so the live chop tweak multiplies this
+		                                // without needing a re-scan)
+		int   m_waveTroughCooldown = 0; // sparse re-scan counter (the patch extremes are near-stationary)
 
 		bool m_gridDirty = true;
 		bool m_disabledIdle = false; // disabled AND cleared: update() is a branch and a return
@@ -226,8 +251,11 @@ export namespace Procedural
 			glm::vec3 localCenter = glm::vec3(0.0f); // mesh-local bounds center (the node snap adds on top)
 			glm::vec2 halfXZ = glm::vec2(0.0f);      // mesh-local XZ half extents (dry-sector test footprint)
 			bool horizonBand = false;                // never under-terrain-culled (see rebuildGrid)
-			float radius = 0.0f; // bounds sphere radius; the XZ half-diagonal dominates, so it also covers
-			                     // the vertical wave/swash displacement the flat mesh knows nothing about
+			float baseRadius = 0.0f; // bounds sphere of the UNDISPLACED lattice - what the mesh actually is
+			                     // The registered radius is this plus displacementExtent(), refreshed every
+			                     // frame: the XZ half-diagonal used to absorb the displacement incidentally,
+			                     // which held until "Choppiness" pushed vertices further sideways than the
+			                     // spare diagonal, and sectors started dropping with their crests on screen.
 		};
 		oc::vector<Sector> m_sectors;
 

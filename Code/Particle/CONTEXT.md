@@ -56,8 +56,14 @@ and running out logs and skips that emitter.
 
 Shaders `particle_begin.cs.glsl` → `particle_emit.cs.glsl` → `particle_sim.cs.glsl`.
 
-* ONE persistent pool, `MAX_PARTICLES` = 256 K at 48 B each, with a dead-index stack and two alive
-  lists ping-ponged by frame parity.
+* ONE persistent pool, `MAX_PARTICLES` = 512 K at 48 B each (30 MB with the dead stack and the two
+  alive lists), with a dead-index stack and two alive lists ping-ponged by frame parity. **The pool is
+  shared by every emitter AND every GPU producer**, and weather volumes hold their fill for the whole
+  session, so the headroom above them is what everything else draws from.
+* **A non-finite particle is retired by the sim** (the NaN guard in `particle_sim.cs.glsl`). Without
+  it a NaN position or age can never age out — every comparison against NaN is false — while its NaN
+  clip position rasterizes to nothing: **one leaked pool slot per event, permanent**, and enough of
+  them exhaust the pool and stop every emitter. Written as an inverted compare, not `isnan`.
 * **All dispatches are indirect, and the OUT alive count IS the draw's `instanceCount`** — so
   spawning never re-records command buffers.
 * Sim: gravity, drag, noise turbulence, and optional screen-space collision against last frame's
@@ -74,6 +80,24 @@ Shaders `particle_begin.cs.glsl` → `particle_emit.cs.glsl` → `particle_sim.c
   Fog apply ([Renderer.cpp:3526](../RendererVK/Private/Renderer.cpp#L3526)).
 * Tweaks under `Particles/*`: Enabled, Depth collision, Time scale, Log stats (plus the rain
   occlusion trio, see below).
+
+### Diagnosing "the particles stopped"
+
+**A pool that has run out is otherwise invisible**: `particle_emit` rolls its dead-stack pop back and
+returns, so every emitter stops at once and the system looks switched off. Two GPU counters
+(`c_dropSpawns`, `c_dropBroken`, zeroed by the begin pass each frame and read back at the end of the
+sim) close that hole:
+
+* **`Particles: POOL EXHAUSTED ...` is ALWAYS on** — first frame, then at most once a second, with a
+  `pool recovered` line. It prints the dropped count, alive, dead of `MAX_PARTICLES`, the latched GPU
+  spawns and the emitter count, which is enough to name the culprit.
+* `Particles: retired N non-finite particles` (once a second) means a live NaN source upstream. The
+  guard stops the leak; the source is still a bug.
+* `Particles/Log stats` adds the full per-second line, now with `dropped` and `broken`.
+
+> The old log's "GPU spawns" was always 0: it read `c_gpuSpawnCount`, which the begin pass zeroes for
+> the next frame's producers before the readback is taken. It reads the latched `c_gpuSpawnConsume`
+> now, so ocean spray actually shows up as the pool consumer it is.
 
 ## The GPU spawn path (other compute passes driving particles)
 
@@ -94,8 +118,9 @@ colour, lighting, stretch, texture) stays authored, while the producer decides p
 
 **First producer: ocean spray** (`ocean_spray.cs.glsl`, the last `OceanSimulationPipeline` step -
 see RendererVK). The Particle system owns one `Effects/ocean_spray.pfx` instance (`Particles/Ocean
-spray`, `Rate 0`) and publishes its slot through `Renderer::setOceanSprayEmitter` every frame; the
-producer spawns droplets on breaking crests at `Ocean/Spray *` rates.
+spray`, `Rate 0`) and publishes its FIRST emitter's slot through `Renderer::setOceanSprayEmitter` every
+frame; the producer spawns mist on breaking crests at `Ocean/Spray *` rates. **One emitter**: the
+producer has no look selection, so further emitters in the asset would never be reached.
 
 ## Weather volumes (rain / snow)
 
@@ -136,6 +161,12 @@ envelope with an XZ edge fade over the outer 20 % of the box, so the side wrap s
   bubbles). `AboveWater true` is the inverse (a particle under the surface goes back up over it, hidden
   while the camera is under sea level): `Effects/dust.pfx`. On a non-volume emitter only the draw
   gate applies: the ocean spray carries it so the spray hides while the camera is under the sea.
+* `WaterFloor true` — the LIVE wave surface (the displaced FFT height at the particle's XZ, the field
+  the water is drawn with) is a floor. On a VOLUME emitter a particle that reaches it restarts at the
+  box top at a fresh random XZ, exactly like the bottom exit - a volume has no life to end - so rain
+  never sinks through a wave; on a finite-life emitter (the spray) it lands and fades out there. A
+  cheap reject on the calm level plus the crest band (`u_fogParams7.y`) keeps the cascade taps to the
+  particles near the water.
 * `HeightFalloff <m>` — alpha falls off as exp(-height above the ground / m), the ground being the
   terrain or the local water level (the draw binds the terrain-data cascades at 6, refreshed per
   frame like the sim's); dust hugs the ground.
@@ -143,8 +174,10 @@ envelope with an XZ edge fade over the outer 20 % of the box, so the side wrap s
 **Built-in ambient effects** (`ParticleSystem::m_builtins`): `Rain`, `Snow`, `Dust`
 (`Effects/dust.pfx`, motes + fluff) and `Underwater`, each a `Particles/<Name>` toggle that
 creates/destroys one camera-following instance, with `<Name> count / size / alpha / size variation` multiplier tweaks
-applied on top of the `.pfx` every frame (count scales the rate and the fill count - live upward,
-downward on the next toggle since a box never drains). The handles are DETACHED, not destroyed, in
+applied on top of the `.pfx` every frame. Count scales the rate and the volume FILL COUNT, live in both
+directions: up by spawning the deficit over the next frames, down through `ParticleEmitterGpu::cullParams`
+- a one-frame fraction the sim uses to recycle a random subset of that emitter's live particles, because
+a volume never ages out and has nothing else to remove. The handles are DETACHED, not destroyed, in
 `~ParticleSystem` - the plain-XCU particle system outlives the renderer.
 
 ## `.pfx` effects

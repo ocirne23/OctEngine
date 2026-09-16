@@ -233,16 +233,10 @@ public:
     void setRainOcclusionVolume(const glm::vec3& center, const glm::vec3& halfExtents);
     // This frame's camera position (valid after the begin-frame join): the weather volumes follow it.
     const glm::vec3& cameraPos() const { return m_cameraPos; }
-    // The particle emitter slots the ocean spray producer (ocean_spray.cs.glsl, the particle GPU spawn
-    // path) spawns into - the three emitters of the Particle system's Effects/ocean_spray.pfx instance
-    // in file order: droplets, mist, foam chunks. droplets UINT32_MAX = no spray; a missing mist/foam
-    // slot falls back to droplets. Main thread after the begin-frame join (the scene-focus pattern).
-    void setOceanSprayEmitters(uint32 droplets, uint32 mist, uint32 foam)
-    {
-        m_oceanSprayEmitter = droplets;
-        m_oceanSprayMistEmitter = mist;
-        m_oceanSprayFoamEmitter = foam;
-    }
+    // The particle emitter slot the ocean spray producer (ocean_spray.cs.glsl, the particle GPU spawn
+    // path) spawns into - the first emitter of the Particle system's Effects/ocean_spray.pfx instance.
+    // UINT32_MAX = no spray. Main thread after the begin-frame join (the scene-focus pattern).
+    void setOceanSprayEmitter(uint32 slot) { m_oceanSprayEmitter = slot; }
     void addDecal(const RendererVKLayout::DecalInfo& decal); // [Concurrency: LOCK-FREE]
     // Loads a standalone texture (path relative to Assets/) into the bindless array for particle
     // emitters / decals to reference (ParticleEmitterGpu::texFlags.x, DecalInfo::params.x).
@@ -395,6 +389,10 @@ public:
         float diffusionRate = 15.0f; // 1/s: sideways spread through the 3x3 tent (packed per frame as
                                      // 1 - exp(-rate * dt), so it is framerate independent); the toggle is
                                      // the pipeline's own "Diffusion" tweak (a baked define)
+        float updateRate = 20.0f;    // Hz: the pass runs on a FIXED TICK with the accumulated sim delta, not
+                                     // every frame - at high fps a per-frame change is below the R16F image's
+                                     // step (0.0005 at wetness 0.5) and rounds away, so rain and drying stalled
+                                     // there and wetness depended on the framerate. Keep it well under the fps.
         // Two darkening layers (the terrain shader): DAMP = soaked ground everywhere, a plateau above the
         // damp knee that fades smoothly to dry below it; FILM = standing water on top - the whole surface
         // just after a wave (above the spike start) and the pools once it drains. Fully wet = both.
@@ -434,6 +432,12 @@ public:
     // it from its displacement readback). Sizes the waterline band inside which the fog scatter samples
     // the live FFT wave height for the underwater fog boundary (fogParams7.y).
     void setOceanWaveTrough(float meters) { m_oceanWaveTrough = glm::max(meters, 0.0f); }
+    // Worst-case distance the ocean's vertex shader moves a clipmap vertex off its authored lattice
+    // position (OceanGenerator::displacementExtent). The per-instance frustum cull adds it to the ocean
+    // sectors' bounding spheres, which were built from the UNDISPLACED mesh: the choppy horizontal
+    // displacement grows with the "Choppiness" tweak, and without this it culls sectors whose crests are
+    // still on screen - gaps along the screen edges.
+    void setOceanDisplacementExtent(float meters) { m_oceanDisplacementExtent = glm::max(meters, 0.0f); }
     // The LIVE water surface world Y under the camera (the OceanGenerator's CPU wave-height mirror,
     // ~2 frames of latency), or none: the particle draw's camera-side gate (Underwater / AboveWater
     // emitters) reads it from the UBO instead of sampling the waves per particle.
@@ -808,6 +812,7 @@ private:
     bool m_particleCollision = true;
     float m_particleTimeScale = 1.0f;
     bool m_particleLogStats = false; // "Particles/Log stats": prints GPU alive/dead counts ~once a second
+    uint32 m_particleDropLogFrame = 0; // rate limiter for the always-on pool-exhaustion warning (0 = not warning)
     // Rain occlusion volume: the request written by setRainOcclusionVolume (main thread, after the
     // begin-frame join) is latched into the active box by present, so the begin-frame job of the NEXT
     // frame reads it without a race; the pass runs only while a box is active.
@@ -823,7 +828,7 @@ private:
     float m_rainOcclusionCasterPad = 100.0f; // "Particles/Rain occlusion pad": how far above the box a roof still shelters (m)
     float m_rainOcclusionTolerance = 0.25f;  // "Particles/Rain occlusion bias": depth below the surface before a drop counts as sheltered (m)
     float m_streakCameraBlur = 0.15f;        // "Particles/Streak camera blur": fraction of the camera velocity the weather streaks subtract
-    float m_particleAnisotropy = 0.5f;       // "Particles/Anisotropy": the lit particles' scattering phase g (0 = isotropic, forward < 1)
+    float m_particleAnisotropy = 0.33f;       // "Particles/Anisotropy": the lit particles' scattering phase g (0 = isotropic, forward < 1)
     // Weather wind for the volumes ("Particles/Wind *", Ubo::weatherWind0/1/2). A storm: speed 15,
     // gust strength 8, sheet contrast 0.7, sheet drift 6.
     float m_windSpeed = 1.0f;       // m/s
@@ -834,19 +839,14 @@ private:
     float m_windSheetSize = 50.0f;  // m
     float m_windSheetDrift = 5.0f;  // m/s the fields travel along the wind direction on top of half the wind speed
     // Ocean spray (the particle GPU spawn path's first producer; "Ocean/Spray *" tweaks, Ubo::oceanSpray0/1).
-    uint32 m_oceanSprayEmitter = UINT32_MAX;     // setOceanSprayEmitters: droplets
-    uint32 m_oceanSprayMistEmitter = UINT32_MAX; // mist
-    uint32 m_oceanSprayFoamEmitter = UINT32_MAX; // foam chunks
-    float m_oceanSprayRate = 40.0f;     // spawns per m^2 per s at full breaking
+    uint32 m_oceanSprayEmitter = UINT32_MAX;     // setOceanSprayEmitter
+    float m_oceanSprayRate = 10.0f;     // spawns per m^2 per s at full breaking
     float m_oceanSprayRadius = 30.0f;   // m, the producer grid's half extent around the scene focus
     float m_oceanSprayThreshold = 0.002f; // instant-foam value where spray starts
     float m_oceanSprayKick = 0.0;      // m/s upward
     float m_oceanSpraySpeed = 2.0f;     // m/s along the wind
-    float m_oceanSprayForward = 1.0f;   // m, spawn lead ahead of the crest along its travel (negative = behind)
+    float m_oceanSprayForward = 0.0f;   // m, spawn lead ahead of the crest along its travel (negative = behind)
     float m_oceanSprayHeight = 0.0f;    // m, spawn offset above the surface (negative = below)
-    float m_oceanSprayWeightDroplets = 0.3f; // relative spawn weights of the three looks (normalized in the shader)
-    float m_oceanSprayWeightMist = 0.6f;
-    float m_oceanSprayWeightFoam = 0.1f;
     // Pool init/reset request. Cleared only AFTER a frame that carried reset=1 AND executed the sim was
     // actually submitted: a reset consumed by a frame that never runs (acquire failure -> early return,
     // no mesh instances so the sim CB is skipped) would leave the dead stack empty forever, silently
@@ -884,9 +884,16 @@ private:
     glm::vec4 m_terrainSplatClimate[RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS]{};
     TerrainTexTweaks m_terrainTexTweaks; // see setTerrainTextureParams
     TerrainWetTweaks m_terrainWetTweaks; // see setTerrainWetParams
-    glm::ivec2 m_terrainWetPrevOrigin = glm::ivec2(0); // last frame's wetness window origin (lattice coord)
+    glm::ivec2 m_terrainWetPrevOrigin = glm::ivec2(0); // the LAST TICK's wetness window origin (lattice coord)
     bool m_terrainWetWasEnabled = false;                // the window was live last frame (else every texel starts dry)
+    // Fixed-tick wetness (TerrainWetTweaks::updateRate): sim time since the last tick, whether THIS
+    // frame ticks (decided in the UBO build, read by the primary record), and the ping/pong layer the
+    // last tick wrote (the reader samples it until the next tick, which writes the other one).
+    float m_terrainWetTickAccum = 0.0f;
+    bool m_terrainWetTick = false;
+    uint32 m_terrainWetLayer = 0;
     float m_oceanWaveTrough = 0.0f;  // see setOceanWaveTrough; 0 while the ocean is disabled
+    float m_oceanDisplacementExtent = 0.0f; // see setOceanDisplacementExtent; 0 while the ocean is disabled
     float m_cameraWaterSurface = 0.0f; // see setCameraWaterSurface
     bool m_cameraWaterSurfaceValid = false;
     PostParams m_postParams;

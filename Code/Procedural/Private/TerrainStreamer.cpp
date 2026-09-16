@@ -312,12 +312,15 @@ namespace Procedural
 		// wet / dryTime. Rain below the rate never keeps ground wet; above it the ground settles at
 		// dryTime x (rain - rate) - an equilibrium you can dial with "Rain".
 		Tweak::floatVar("Terrain/Wetness", "Dry rate (1/s)", &m_wetDryRate, 0.0f, 0.2f, 0.001f);
-		Tweak::floatVar("Terrain/Wetness", "Rain (1/s)", &m_wetRain, 0.0f, 2.0f, 0.01f);
-		Tweak::floatVar("Terrain/Wetness", "Wet-in time (s)", &m_wetInTime, 0.0f, 5.0f, 0.05f);
+		Tweak::floatVar("Terrain/Wetness", "Rain (1/s)", &m_wetRain, 0.0f, 0.1f, 0.001f);
+		Tweak::floatVar("Terrain/Wetness", "Wet-in time (s)", &m_wetInTime, 0.0f, 10.0f, 0.05f);
 		Tweak::floatVar("Terrain/Wetness", "Film depth (m)", &m_wetFilmDepth, 0.0f, 0.5f, 0.005f);
 		// Sideways spread rate; the on/off toggle is the renderer's own "Diffusion" tweak (a baked define
 		// on terrain_wetness.cs.glsl, reloaded on change).
 		Tweak::floatVar("Terrain/Wetness", "Diffusion rate (1/s)", &m_wetDiffusionRate, 0.0f, 60.0f, 0.5f);
+		// The pass integrates on a fixed tick, not per frame: a per-frame change at high fps is below the
+		// R16F image's step and rounds away (framerate-dependent wetness). Keep it well under the fps.
+		Tweak::floatVar("Terrain/Wetness", "Update rate (Hz)", &m_wetUpdateRate, 1.0f, 30.0f, 0.5f);
 		// Pooling: draining water retreats into the low spots of a world-anchored noise, so the gloss
 		// breaks up into blobs instead of fading uniformly.
 		Tweak::floatVar("Terrain/Wetness", "Pool scale (1/m)", &m_wetPoolScale, 0.0f, 20.0f, 0.1f);
@@ -511,6 +514,7 @@ namespace Procedural
 			.wetInTime = m_wetInTime,
 			.filmDepth = m_wetFilmDepth,
 			.diffusionRate = m_wetDiffusionRate,
+			.updateRate = m_wetUpdateRate,
 			.albedoScale = m_wetAlbedoScale,
 			.dampAlbedoScale = m_wetDampAlbedoScale,
 			.dampKnee = m_wetDampKnee,

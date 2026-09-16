@@ -110,11 +110,16 @@ public:
         uint32 alive[2];    // per-parity alive counts (draw instanceCounts)
         int32  deadCount;   // free pool entries
         uint32 gpuSpawns;   // GPU spawn requests the begin pass latched that frame (clamped)
+        uint32 dropSpawns;  // spawns the emit passes dropped because the pool was empty
+        uint32 dropBroken;  // non-finite particles the sim retired (see the NaN guard in particle_sim)
     };
     DebugCounters getDebugCounters(uint32 frameIdx) const
     {
         const oc::span<const uint32> counters = m_mappedReadback[frameIdx];
-        return DebugCounters{ counters[0], { counters[4 + 1], counters[8 + 1] }, (int32)counters[12], counters[13] };
+        // [13] is c_gpuSpawnCount, which the begin pass ZEROED for the next frame's producers before this
+        // readback was taken - always 0 here. The latched count is [14] (c_gpuSpawnConsume).
+        return DebugCounters{ counters[0], { counters[4 + 1], counters[8 + 1] }, (int32)counters[12],
+            counters[14], counters[15], counters[20] };
     }
 
     // The GPU SPAWN PATH's producer-side buffers (particle_spawn.inc.glsl): a compute pass that runs

@@ -25,7 +25,8 @@ export struct PhysicsComponent
     float shapeScale = 1.0f;  // world scale baked into the shape at spawn
     float buoyancyVolume = 0.0f; // the shape's exact displaced volume (box3d mass / density) at spawn; 0 = never floats
     uint32 lastStep = 0;
-    uint32 buoyancyStep = 0;  // the step count the last buoyancy application was read after (see applyBuoyancy)
+    uint32 buoyancyStep = 0;  // the step count the last buoyancy application was read after; the gap to the
+                              // current step is what the next application owes (see applyBuoyancy)
     EPhysicsBodyType bodyType = EPhysicsBodyType::Dynamic;
     bool lockRotation = false; // locked bodies write back only their position: the body never
                                // rotates, so entity.rot stays free for script-driven facing
@@ -71,18 +72,18 @@ export struct PhysicsComponent
     // ticked units teleport through each other; landing on a body beats exploding out of it).
     void park(bool disable);
     void unpark(Entity& entity, const glm::vec3& velocity = glm::vec3(0.0f));
-    // BUOYANCY, per component on the entity pass (workers), ONCE PER STEP INTERVAL and OFF THE
-    // STEP FRAME: box3d clears forces every step and sums whatever lands before it, so the
-    // application goes on the first frame after a step that does not step itself (the step frame
-    // is already the expensive one) - `buoyancyStep` remembers the step it was read after. Below
-    // the step rate every frame steps, and the step frame is the only choice. There a gated
-    // dynamic body with `lockRotation` uses ONE probe at its AABB centre with the whole volume
-    // (no torque to gain, one force queued); a free one splits its world AABB into 2x2x2 probes, each carrying its share
-    // of the volume scaled by depth as an Archimedes force plus a drag against the probe's point
-    // velocity, and queues the sum as ONE force + ONE torque about the centre of mass (the off-
-    // centre probes give righting torque and tumbling damping for free). Reads only; the writes
-    // ride the body-command queue and land at the next drain, right before the step.
-    void applyBuoyancy();
+    // BUOYANCY, per component on the entity pass (workers). The queued force is consumed by ONE
+    // step, so `steps` - the steps that elapsed since the last application - is the force scale
+    // that makes the impulse per second of SIM TIME the same at any frame rate. It is not always
+    // 1: the caller keeps the work off the step frame (already the busy one) where it can, and
+    // near the step rate that deferral lets a step slip past.
+    // A `lockRotation` body uses ONE probe at its AABB centre with the whole volume (no torque to
+    // gain, one force queued); a free one splits its world AABB into 2x2x2 probes, each carrying
+    // its share of the volume scaled by depth as an Archimedes force plus a drag against the
+    // probe's point velocity, and queues the sum as ONE force + ONE torque about the centre of
+    // mass (the off-centre probes give righting torque and tumbling damping for free). Reads
+    // only; the writes ride the body-command queue and land at the next drain, before the step.
+    void applyBuoyancy(uint32 steps);
 };
 
 // Suspends every PhysicsComponent body in this entity's subtree (used when the entity is disabled -
