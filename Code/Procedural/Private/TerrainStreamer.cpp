@@ -478,6 +478,8 @@ namespace Procedural
 
 	void TerrainStreamer::updateTerrainTextures(Renderer& renderer)
 	{
+        ProfileScope profileScope("updateTerrainTextures", EProfileCategory::Procedural);
+
 		// The crag thresholds are the ONE shader parameter denominated in the same units the generator's
 		// elevation is, so they alone have to follow V3's uniform world scale. Crag relief is a height
 		// difference, so it shrinks with "Meters per pixel" exactly like everything else: the same mountain
@@ -622,6 +624,7 @@ namespace Procedural
 
 	void TerrainStreamer::rebuildMaps()
 	{
+        ProfileScope profileScope("rebuildMaps", EProfileCategory::Procedural);
 		// A one-shot on a config change (the F10 pattern): constructing the generator below probes its
 		// model assets on this thread before the background load starts. At startup main's own scope
 		// covers it; a runtime enable (the tweak panel, the sandbox's override) needs this one.
@@ -888,6 +891,8 @@ namespace Procedural
 	// API keeps the historical "FogTerrainHeightMap" name - fog was its first consumer.)
 	void TerrainStreamer::updateFogHeightMap(Renderer& renderer, const Camera& camera, const oc::shared_ptr<const ITerrainSampler>& maps, float farRange)
 	{
+        ProfileScope profileScope("updateFogHeightMap", EProfileCategory::Procedural);
+
 		const bool active = m_terrainMapEnabled && maps != nullptr;
 		HeightMapBaker::Baked baked;
 		const WaterReach* reach = m_waterReachEnabled ? &m_waterReach : nullptr;
@@ -1078,6 +1083,8 @@ namespace Procedural
 		oc::vector<Request> newRequests;
 		if (ringMoved || m_ringScanNeeded)
 		{
+            ProfileScope profileScope2("ringScan", EProfileCategory::Procedural);
+
 			m_ringScanNeeded = false;
 			for (int dz = -R; dz <= R; ++dz)
 			{
@@ -1148,65 +1155,68 @@ namespace Procedural
 		}
 
 		int uploads = 0;
-		for (Result& res : ready)
-		{
-			if (!res.scene) // pump-dropped (stale at dequeue) or generation failed: just release the key
-			{
-				m_pending.erase(res.key); // re-enters the ring as a fresh request if wanted again
-				m_ringScanNeeded = true;
-				continue;
-			}
-			const bool valid = (res.generation == generation) && (int)res.lod == ringLod(res.coord) && !m_residents.count(res.key);
-			if (!valid)
-			{
-				m_pending.erase(res.key); // stale / no longer wanted / duplicate: done with it
-				m_ringScanNeeded = true;
-				continue;
-			}
-			if (uploads >= m_maxUploadsPerFrame)
-			{
-				m_readyBacklog.push_back(oc::move(res)); // stays "pending" so it isn't re-requested
-				continue;
-			}
+        {
+            ProfileScope profileScope2("processResult", EProfileCategory::Procedural);
+            for (Result& res : ready)
+            {
+                if (!res.scene) // pump-dropped (stale at dequeue) or generation failed: just release the key
+                {
+                    m_pending.erase(res.key); // re-enters the ring as a fresh request if wanted again
+                    m_ringScanNeeded = true;
+                    continue;
+                }
+                const bool valid = (res.generation == generation) && (int)res.lod == ringLod(res.coord) && !m_residents.count(res.key);
+                if (!valid)
+                {
+                    m_pending.erase(res.key); // stale / no longer wanted / duplicate: done with it
+                    m_ringScanNeeded = true;
+                    continue;
+                }
+                if (uploads >= m_maxUploadsPerFrame)
+                {
+                    m_readyBacklog.push_back(oc::move(res)); // stays "pending" so it isn't re-requested
+                    continue;
+                }
 
-			m_pending.erase(res.key);
-			m_ringScanNeeded = true; // conservative: covers the failure continue below
+                m_pending.erase(res.key);
+                m_ringScanNeeded = true; // conservative: covers the failure continue below
 
-			// Route the chunk onto the terrain pipeline variant (procedural height/slope albedo). Keep the
-			// material's own texture indices (fallback) - terrain carries no textures.
-			ObjectContainer::MaterialOverrides overrides;
-			overrides.pipelineIdx = RendererVKLayout::EPipelineIndex::TerrainLit;
-			overrides.useSceneTextures = true;
-			// Chunks are already LOD'd by the streamer (resolution picked per ring distance), so the
-			// renderer's per-chunk meshopt LOD chains are pure redundant churn: 5x the MeshInfos plus LOD
-			// groups and BLAS-alias sharing, all recreated on every re-LOD. Disable them so each chunk is a
-			// single mesh with one identity-aliased BLAS - far less churn through the mesh/RT free lists.
-			overrides.disableGeneratedLods = true;
-			auto container = oc::make_unique<ObjectContainer>();
-			if (!container->initialize(*res.scene, &overrides))
-				continue;
+                // Route the chunk onto the terrain pipeline variant (procedural height/slope albedo). Keep the
+                // material's own texture indices (fallback) - terrain carries no textures.
+                ObjectContainer::MaterialOverrides overrides;
+                overrides.pipelineIdx = RendererVKLayout::EPipelineIndex::TerrainLit;
+                overrides.useSceneTextures = true;
+                // Chunks are already LOD'd by the streamer (resolution picked per ring distance), so the
+                // renderer's per-chunk meshopt LOD chains are pure redundant churn: 5x the MeshInfos plus LOD
+                // groups and BLAS-alias sharing, all recreated on every re-LOD. Disable them so each chunk is a
+                // single mesh with one identity-aliased BLAS - far less churn through the mesh/RT free lists.
+                overrides.disableGeneratedLods = true;
+                auto container = oc::make_unique<ObjectContainer>();
+                if (!container->initialize(*res.scene, &overrides))
+                    continue;
 
-			const Transform transform(
-				glm::vec3((float)res.coord.x * chunkSize, 0.0f, (float)res.coord.y * chunkSize),
-				1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
-			RenderNode node = container->spawnRootNode(transform);
+                const Transform transform(
+                    glm::vec3((float)res.coord.x * chunkSize, 0.0f, (float)res.coord.y * chunkSize),
+                    1.0f, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+                RenderNode node = container->spawnRootNode(transform);
 
-			Resident resident;
-			resident.container = oc::move(container);
-			resident.coord = res.coord;
-			resident.lod = res.lod;
-			resident.node = oc::move(node);
-			// Culling registration: chunks live in the SpatialIndex like entity render components, but on
-			// their own layer (no Entity* behind userData - gameplay queries must not see them),
-			// registered ONCE (chunks never move, so they promote straight into the static tier), and
-			// WITHOUT the spawn-visibility guard (chunks stream in off-screen constantly; the guard
-			// would pin each one in the main pass until it first enters the frustum).
-			const Sphere bounds = resident.node.getWorldBounds();
-			resident.spatialEntry = SpatialEntry(Globals::spatialIndex.registerEntry(
-				glm::dvec3(bounds.pos), bounds.radius, 0ull, SpatialLayer_Terrain, false));
-			m_residents.emplace(res.key, oc::move(resident));
-			++uploads;
-		}
+                Resident resident;
+                resident.container = oc::move(container);
+                resident.coord = res.coord;
+                resident.lod = res.lod;
+                resident.node = oc::move(node);
+                // Culling registration: chunks live in the SpatialIndex like entity render components, but on
+                // their own layer (no Entity* behind userData - gameplay queries must not see them),
+                // registered ONCE (chunks never move, so they promote straight into the static tier), and
+                // WITHOUT the spawn-visibility guard (chunks stream in off-screen constantly; the guard
+                // would pin each one in the main pass until it first enters the frustum).
+                const Sphere bounds = resident.node.getWorldBounds();
+                resident.spatialEntry = SpatialEntry(Globals::spatialIndex.registerEntry(
+                    glm::dvec3(bounds.pos), bounds.radius, 0ull, SpatialLayer_Terrain, false));
+                m_residents.emplace(res.key, oc::move(resident));
+                ++uploads;
+            }
+        }
 
 		const SpatialCullingConfig& culling = Globals::spatialIndex.getCullingConfig();
 		const bool gate = culling.mode >= int(ESpatialCullMode::Cull);
@@ -1217,36 +1227,39 @@ namespace Procedural
 		// SCREEN: a freshly registered replacement isn't main-stamped until the next markVisibleSet, so
 		// evicting on residency alone opened a one-frame hole on every in-view LOD change (and while the
 		// culling is FROZEN the replacement never gets stamped - the old chunk just stays).
-		for (auto it = m_residents.begin(); it != m_residents.end(); )
-		{
-			const Resident& res = it->second;
-			const int want = ringLod(res.coord);
-			bool evict;
-			if (want < 0)
-				evict = true; // column outside the ring
-			else if ((uint32)want == res.lod)
-				evict = false; // this is the wanted LOD
-			else
-			{
-				const auto repIt = m_residents.find(chunkKey(res.coord, (uint32)want));
-				evict = repIt != m_residents.end();
-				if (evict && gate)
-				{
-					// Hole-free handover: the replacement is main-visible, or the old chunk isn't
-					// on screen either (an off-screen swap can't show a hole).
-					const bool newVis = repIt->second.spatialEntry.isValid()
-						&& (Globals::spatialIndex.getPassMask(repIt->second.spatialEntry.handle()) & SpatialPassBit_Main);
-					const bool oldVis = res.spatialEntry.isValid()
-						&& (Globals::spatialIndex.getPassMask(res.spatialEntry.handle()) & SpatialPassBit_Main);
-					evict = newVis || !oldVis;
-				}
-			}
+        {
+            ProfileScope profileScope2("evictResidents", EProfileCategory::Procedural);
+            for (auto it = m_residents.begin(); it != m_residents.end(); )
+            {
+                const Resident& res = it->second;
+                const int want = ringLod(res.coord);
+                bool evict;
+                if (want < 0)
+                    evict = true; // column outside the ring
+                else if ((uint32)want == res.lod)
+                    evict = false; // this is the wanted LOD
+                else
+                {
+                    const auto repIt = m_residents.find(chunkKey(res.coord, (uint32)want));
+                    evict = repIt != m_residents.end();
+                    if (evict && gate)
+                    {
+                        // Hole-free handover: the replacement is main-visible, or the old chunk isn't
+                        // on screen either (an off-screen swap can't show a hole).
+                        const bool newVis = repIt->second.spatialEntry.isValid()
+                            && (Globals::spatialIndex.getPassMask(repIt->second.spatialEntry.handle()) & SpatialPassBit_Main);
+                        const bool oldVis = res.spatialEntry.isValid()
+                            && (Globals::spatialIndex.getPassMask(res.spatialEntry.handle()) & SpatialPassBit_Main);
+                        evict = newVis || !oldVis;
+                    }
+                }
 
-			if (evict)
-				it = m_residents.erase(it);
-			else
-				++it;
-		}
+                if (evict)
+                    it = m_residents.erase(it);
+                else
+                    ++it;
+            }
+        }
 
 		// --- Push resident chunks through the spatial culling gate. Main-visible chunks feed every pass;
 		// main-culled chunks KEEP their shadow/GI passes unconditionally (terrain is the ground
@@ -1254,22 +1267,26 @@ namespace Procedural
 		// the camera from the TLAS/shadow maps visibly breaks GI and long sun shadows; the GPU shadow
 		// cull and the TLAS range bound already refine those passes). MainOnly debug mode drops
 		// main-culled chunks entirely, like entities.
-		for (auto& entry : m_residents)
-		{
-			Resident& res = entry.second;
-			if (!res.node.isValid())
-				continue;
-			if (gate && res.spatialEntry.isValid())
-			{
-				uint32 passMask = RendererVKLayout::PASS_SHADOW | RendererVKLayout::PASS_GI;
-				if (Globals::spatialIndex.getPassMask(res.spatialEntry.handle()) & SpatialPassBit_Main)
-					passMask = RendererVKLayout::PASS_ALL;
-				else if (culling.mode == int(ESpatialCullMode::MainOnly))
-					continue;
-				renderer.renderNode(res.node, passMask);
-			}
-			else
-				renderer.renderNode(res.node);
-		}
+        {
+            ProfileScope profileScope2("renderResidents", EProfileCategory::Procedural);
+
+            for (auto& entry : m_residents) // TODO: <- fix dumb
+            {
+                Resident& res = entry.second;
+                if (!res.node.isValid())
+                    continue;
+                if (gate && res.spatialEntry.isValid())
+                {
+                    uint32 passMask = RendererVKLayout::PASS_SHADOW | RendererVKLayout::PASS_GI;
+                    if (Globals::spatialIndex.getPassMask(res.spatialEntry.handle()) & SpatialPassBit_Main)
+                        passMask = RendererVKLayout::PASS_ALL;
+                    else if (culling.mode == int(ESpatialCullMode::MainOnly))
+                        continue;
+                    renderer.renderNode(res.node, passMask);
+                }
+                else
+                    renderer.renderNode(res.node);
+            }
+        }
 	}
 }
