@@ -840,7 +840,7 @@ private:
     float m_windSheetDrift = 5.0f;  // m/s the fields travel along the wind direction on top of half the wind speed
     // Ocean spray (the particle GPU spawn path's first producer; "Ocean/Spray *" tweaks, Ubo::oceanSpray0/1).
     uint32 m_oceanSprayEmitter = UINT32_MAX;     // setOceanSprayEmitter
-    float m_oceanSprayRate = 10.0f;     // spawns per m^2 per s at full breaking
+    float m_oceanSprayRate = 20.0f;     // spawns per m^2 per s at full breaking
     float m_oceanSprayRadius = 30.0f;   // m, the producer grid's half extent around the scene focus
     float m_oceanSprayThreshold = 0.002f; // instant-foam value where spray starts
     float m_oceanSprayKick = 0.0;      // m/s upward
