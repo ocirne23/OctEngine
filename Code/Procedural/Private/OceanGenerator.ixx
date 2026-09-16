@@ -53,6 +53,11 @@ export namespace Procedural
 		// the swash off everywhere rather than just looking off.
 		void update(Renderer& renderer, const Camera& camera,
 		            oc::shared_ptr<const BakedTerrainData> terrainData = nullptr, float seaLevel = 0.0f);
+		// Joins the job update() kicked (the sector renderNode pushes, the displacement readback copy,
+		// the wave-extent re-scan and the camera water-surface sample) and applies its three renderer
+		// stores. main.cpp calls it right before Renderer::present; update(), rebuildGrid() and the dtor
+		// join it too before they touch m_sectors.
+		void joinRender();
 
 		// Water surface world Y at (x, z), CPU-evaluated from the GPU displacement readback (a full mirror
 		// of the clipmap vertex shader: the raw cascade sum times the shore's surface weight, plus the
@@ -258,6 +263,26 @@ export namespace Procedural
 			                     // spare diagonal, and sectors started dropping with their crests on screen.
 		};
 		oc::vector<Sector> m_sectors;
+		bool sectorDry(const Sector& s, float px, float pz, glm::vec2 camXZ, float meshRadius, float wetNeed) const;
+
+		// The render job (see update / joinRender). The job captures `this` only (inline job storage
+		// is small): its inputs are snapshotted here on main at the kick, its outputs (the wave
+		// extents, m_dispTile, m_cameraSurfaceY) are stored to the renderer in joinRender.
+		struct RenderInput
+		{
+			Renderer* renderer = nullptr;
+			glm::vec3 camPos = glm::vec3(0.0f);
+			glm::vec2 camXZ = glm::vec2(0.0f);
+			float px = 0.0f, pz = 0.0f, meshRadius = 0.0f, wetNeed = 0.0f;
+			bool dryCull = false;
+		};
+		JobCounter          m_renderCounter;
+		RenderInput         m_renderIn;
+		oc::vector<Sector*> m_renderVisible;   // resolved from the hand-over on main; the job walks these
+		bool                m_renderPending = false; // a kicked job's stores still owed to the renderer
+		float               m_cameraSurfaceY = -FLT_MAX;
+		// Last re-centering of the sector entries (update): re-run only when one of these changes.
+		float m_lastPx = FLT_MAX, m_lastPz = FLT_MAX, m_lastSeaLevel = FLT_MAX, m_lastPad = -1.0f;
 
 		// Dry-sector cull: sectors whose whole footprint is buried under land per the baked terrain data
 		// are skipped before anything reaches the GPU (a camera deep inland then renders no water at all).

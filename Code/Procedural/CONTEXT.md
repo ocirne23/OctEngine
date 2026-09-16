@@ -266,7 +266,39 @@ This is the `sampleAltitude` (macro) vs `sampleHeight` (macro + detail) split.
   `Renderer::removeObjectContainer`, **so residency stays bounded across a session.**
 * Each resident registers a `SpatialEntry` on `SpatialLayer_Terrain` with **`spawnVisible = false`** —
   chunks stream in off-screen constantly, and the guard would pin each one in the main pass until it
-  first entered the frustum.
+  first entered the frustum. Its userData is the **chunk key + 1** (0 would read as "dead" to the
+  hand-over below, and key 0 is a real chunk).
+* **The render push never walks the ring** (thousands of residents, a handful on screen). Two sets:
+  1. **Main-visible chunks** come from the cull job's Main stamp through the Spatial visible-set
+     hand-over, collect slot 1 (`setVisibleCollect(SpatialLayer_Terrain, 1)` in `initialize`,
+     `visibleHandles(1)` in `update`) → `PASS_ALL`.
+  2. **Main-culled chunks keep shadow + GI** (the ground behind the camera must stay in the TLAS and
+     the sun cascades), but only inside a `forEachInSphere` around the renderer's scene focus with
+     radius `max(shadow maxDistance + casterPad, RT/TLAS Range)` — the range past which the GPU
+     shadow cull and the TLAS range bound drop the push anyway; farther ground gets its sun shadow
+     from the terrain march over the baked height map. `MainOnly` skips this set; a main-stamped hit
+     is skipped here (already pushed). Culling `Off` keeps the plain walk over every resident.
+
+  **The pushes run on a worker** (`"terrainRenderPush"`, High, `m_renderCounter`): `update` resolves
+  the hand-over handles to node pointers on main (unlocked pool reads; the scatter registers on main
+  meanwhile) and submits the job; main.cpp calls `joinRender()` right before `present`, and `update`
+  / `clearResidents` join it before they touch `m_residents` (a node container, so the pointers hold).
+* **Eviction does not walk the ring either.** The unwanted residents (column outside the ring, or
+  wanting another LOD) are a function of the ring and the resident set only, so `m_evictCandidates`
+  is rebuilt by one walk when `ringMoved` or a chunk uploaded; every frame checks only the candidates
+  against the stamps for the hole-free handover.
+* **The ring scan is a job too** (`"terrainRingScan"`, Normal, `m_ringScanCounter`), kicked LAST in
+  `update` — after the drain and the eviction, the frame's last writers of `m_residents` /
+  `m_pending`, which the scan only reads — from a by-value snapshot (`m_ringScanIn`; the job
+  captures `this` only, inline job storage is small). The NEXT `update` joins it first and applies
+  `m_ringScanOut`: keys that became pending or resident meanwhile are skipped, the rest go pending,
+  get published and kick the pump. One frame of request latency against seconds of generation; a
+  request the ring moved away from is stale like any other and dropped by the pump.
+
+  What stays on main: the config/model polling, the terrain/texture/wet param setters, the fog
+  height-map handover (the bake itself is already a job — `HeightMapBaker::update` polls it), the
+  result drain (`ObjectContainer::initialize` is GPU-facing) and the candidate eviction (a
+  `~Resident` releases GPU residency into the renderer).
 
 ## It owns THE world datum
 
@@ -411,8 +443,9 @@ A FLAT "Horizon band" ring extends to the far plane so the sea always meets the 
 
 The clipmap splits terrain-chunk style: ring 0 whole, each outer ring as 8 rectangular blocks around
 its hole, the horizon band as its 4 sides. **Each is a container/node with its own SpatialIndex entry**
-(`SpatialLayer_Terrain`, `spawnVisible = false`), so the CPU visibility gate and the GPU per-instance
-frustum cull drop off-screen water **instead of vertex-shading the whole multi-km disc every frame.**
+(`SpatialLayer_Ocean`, userData = sector index + 1, `spawnVisible = false`), so the CPU visibility gate
+and the GPU per-instance frustum cull drop off-screen water **instead of vertex-shading the whole
+multi-km disc every frame.**
 
 * All sectors share ONE transform, **snapped to a lattice multiple so vertices re-land on the same
   world positions** as the camera moves.
@@ -439,6 +472,19 @@ frustum cull drop off-screen water **instead of vertex-shading the whole multi-k
   plane instead.
 * The Spatial Main gate skips off-screen sectors (ocean is `PASS_MAIN` only), and a "Dry sector cull"
   skips sectors fully buried AND inside the streamed-mesh radius.
+* **`update` never walks the grid for the push, and mostly not at all.** The re-centering of the
+  sector entries (transform + `updateEntry`, padded by `displacementExtent()`) runs only when the
+  snapped position, the sea level or the pad changed — the snap steps by 8 cells and the pad
+  refreshes every 15 frames — and stays on main (the scatter registers entries later in the frame;
+  an `updateEntry` on a worker could race the pool growth). The main-visible sectors come from the
+  Spatial hand-over, collect slot 2 (`setVisibleCollect(SpatialLayer_Ocean, 2)` in `initialize`,
+  `visibleHandles(2)` resolved to `Sector*` on main); culling `Off` takes every sector.
+* **The rest is a job** (`"oceanRenderPush"`, High, `m_renderCounter`, inputs snapshotted in
+  `m_renderIn`): the dry test + `PASS_MAIN` pushes, the displacement readback copy (`m_dispTile`;
+  buoyancy samples it BEFORE the kick, and the readback slot is stable until present), the sparse
+  wave-extent re-scan and the camera water-surface sample. `joinRender()` — main.cpp right before
+  present; also `update`, `rebuildGrid` and the dtor — applies the three renderer stores (wave
+  trough, displacement extent, camera water surface).
 * **The horizon band is exempt from BOTH under-terrain culls** — a negated cell size flags its
   vertices, because its huge triangles break the vertex cull's footprint assumption.
 

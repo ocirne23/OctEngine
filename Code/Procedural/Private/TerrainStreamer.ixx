@@ -35,6 +35,10 @@ export namespace Procedural
 
 		void initialize();                                     // registers Tweaks + starts the worker thread
 		void update(Renderer& renderer, const Camera& camera); // per-frame: stream, drain, render (call after beginFrame)
+		// Joins the render-push job update() kicked (the renderNode pushes run on a worker). main.cpp
+		// calls it right before Renderer::present; update() and clearResidents() join it too before
+		// they touch m_residents, so a caller never sees the map change under the job.
+		void joinRender();
 
 		// The live height/climate field, for systems that must agree with the rendered terrain (the
 		// ocean's shore-depth bake). nullptr while terrain rendering is disabled - consumers treat that
@@ -337,6 +341,35 @@ export namespace Procedural
 		// --- Main-thread residency state ---
 		oc::unordered_map<uint64, Resident> m_residents;
 		oc::unordered_set<uint64>           m_pending; // requested/queued, not yet resident
+		// Eviction candidates: the residents whose column left the ring (want < 0) or wants another
+		// LOD. A pure function of (ring, residents), so the list is rebuilt by ONE walk only when the
+		// ring moved or a chunk uploaded; the per-frame eviction pass checks just these against the
+		// culling stamps (the hole-free handover) instead of walking every resident.
+		struct EvictCandidate { uint64 key; int want; };
+		oc::vector<EvictCandidate>          m_evictCandidates;
+		// The render push runs on a worker (see update / joinRender): the main-visible nodes are
+		// resolved on main (unlocked SpatialIndex pool reads), the sphere query runs in the job.
+		JobCounter                          m_renderCounter;
+		oc::vector<const RenderNode*>       m_renderMainNodes;
+		// The ring scan runs on a worker too: kicked at the END of update (after the drain and the
+		// eviction, the frame's last writers of m_residents / m_pending, which it only reads) and
+		// applied at the START of the next one (m_pending inserts, the publish, kickPump). One frame
+		// of request latency against seconds of chunk generation; a scan against a ring that moved
+		// again meanwhile is judged stale by the pump like any other request.
+		void joinRingScan();
+		struct RingScanInput // snapshot taken at kick (the job captures only `this`: inline job storage)
+		{
+			int camCX = 0, camCZ = 0, R = 0;
+			glm::vec2 camChunks = glm::vec2(0.0f);
+			float chunkSize = 0.0f, fullRes = 0.0f, lodStep = 0.0f, skirtDepth = 0.0f;
+			uint32 maxLod = 0, lod0Res = 1, generation = 0;
+			bool bounded = false;
+			glm::vec2 boundsMin = glm::vec2(0.0f), boundsMax = glm::vec2(0.0f);
+			oc::shared_ptr<const ITerrainSampler> maps;
+		};
+		JobCounter                          m_ringScanCounter;
+		RingScanInput                       m_ringScanIn;
+		oc::vector<Request>                 m_ringScanOut;
 		// Last ring parameters published to the worker (main-thread copies: the publish is skipped -
 		// no lock taken - while none of them changed and there is nothing new to append).
 		int    m_lastRingCX = INT_MIN;

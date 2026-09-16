@@ -243,6 +243,10 @@ namespace Procedural
 		ProfileScope scope("TerrainStreamer::initialize", EProfileCategory::Procedural);
 		auto dirty = [this]() { m_configDirty = true; };
 
+		// The cull job's Main stamp hands over the main-visible chunk handles (see update's render
+		// push), so the push never walks every resident.
+		Globals::spatialIndex.setVisibleCollect(SpatialLayer_Terrain, 1);
+
 		// Dirty so rebuildMaps runs on toggle: enabling is what kicks the V3 model load (disabled terrain
 		// never loads the 2.28 GB of models onto the GPU).
 		Tweak::boolean("Terrain", "Enabled", &m_enabled, dirty);
@@ -725,9 +729,23 @@ namespace Procedural
 		return s;
 	}
 
+	void TerrainStreamer::joinRender()
+	{
+		Globals::jobSystem.wait(m_renderCounter); // main helps; a no-op once the job is done
+	}
+
+	void TerrainStreamer::joinRingScan()
+	{
+		Globals::jobSystem.wait(m_ringScanCounter);
+	}
+
 	void TerrainStreamer::clearResidents()
 	{
+		joinRender();   // the render job reads m_residents
+		joinRingScan(); // so does the ring scan; its output is against the residents being cleared
+		m_ringScanOut.clear();
 		m_residents.clear();
+		m_evictCandidates.clear();
 		m_pending.clear();
 		m_readyBacklog.clear();
 		m_ringScanNeeded = true;
@@ -975,8 +993,11 @@ namespace Procedural
 
 	void TerrainStreamer::update(Renderer& renderer, const Camera& camera)
 	{
+		joinRender();   // last frame's render job (already joined before present; a cheap no-op)
+		joinRingScan(); // last frame's ring scan: applied below (enabled) or dropped here
 		if (!m_enabled)
 		{
+			m_ringScanOut.clear();
 			// Disabled: no profile scope, no per-frame work. The transition (and any tweak that
 			// re-dirties the config while parked, e.g. sea level) drains through updateDisabled
 			// until nothing is left in flight.
@@ -1078,46 +1099,24 @@ namespace Procedural
 		const bool ringMoved = camChunks != m_lastRingCamPos || camCX != m_lastRingCX || camCZ != m_lastRingCZ
 			|| R != m_lastRingR || lodStep != m_lastRingLodStep || fullRes != m_lastRingFullRes || maxLod != m_lastRingMaxLod;
 
-		// --- Enqueue any ring chunk that is neither resident nor already in flight. The scan is a
-		// pure function of (ring, residents, pending), so it only re-runs when one of them changed.
-		oc::vector<Request> newRequests;
-		if (ringMoved || m_ringScanNeeded)
+		// --- Apply LAST frame's ring scan (the job kicked at the end of update, joined above): enqueue
+		// every ring chunk it found neither resident nor in flight. The scan is a pure function of
+		// (ring, residents, pending), so it only re-runs when one of them changed - and it ran against
+		// last frame's ring, so a key that became pending or resident since is skipped here and a
+		// request the ring has since moved away from is dropped by the pump like any stale one.
+		oc::vector<Request> newRequests = oc::move(m_ringScanOut);
+		m_ringScanOut.clear();
+		for (size_t i = 0; i < newRequests.size(); )
 		{
-            ProfileScope profileScope2("ringScan", EProfileCategory::Procedural);
-
-			m_ringScanNeeded = false;
-			for (int dz = -R; dz <= R; ++dz)
+			const uint64 key = newRequests[i].key;
+			if (m_residents.count(key) || m_pending.count(key))
 			{
-				for (int dx = -R; dx <= R; ++dx)
-				{
-					const glm::ivec2 coord(camCX + dx, camCZ + dz);
-					// Generated bounds: a chunk that does not touch the seeded area is never requested
-					// (its tiles were never generated; see setGeneratedBounds).
-					if (m_bounded)
-					{
-						const float x0 = (float)coord.x * chunkSize, z0 = (float)coord.y * chunkSize;
-						if (x0 + chunkSize <= m_boundsMin.x || x0 >= m_boundsMax.x
-							|| z0 + chunkSize <= m_boundsMin.y || z0 >= m_boundsMax.y)
-							continue;
-					}
-					const uint32 lod = ringLodAt(chunkEdgeDist(camChunks, coord), fullRes, lodStep, maxLod);
-					const uint64 key = chunkKey(coord, lod);
-					if (m_residents.count(key) || m_pending.count(key))
-						continue;
-
-					Request req;
-					req.key = key;
-					req.generation = generation;
-					req.maps = maps;
-					req.params.coord = coord;
-					req.params.lod = lod;
-					req.params.chunkSize = chunkSize;
-					req.params.lod0Res = (uint32)glm::max(1, m_lod0Res);
-					req.params.skirtDepth = m_skirtDepth;
-					newRequests.push_back(oc::move(req));
-					m_pending.insert(key);
-				}
+				newRequests[i] = oc::move(newRequests.back());
+				newRequests.pop_back();
+				continue;
 			}
+			m_pending.insert(key);
+			++i;
 		}
 
 		// The queue is an unordered POOL, not a queue: the worker rescans it on every dequeue and takes the
@@ -1206,13 +1205,15 @@ namespace Procedural
                 resident.lod = res.lod;
                 resident.node = oc::move(node);
                 // Culling registration: chunks live in the SpatialIndex like entity render components, but on
-                // their own layer (no Entity* behind userData - gameplay queries must not see them),
-                // registered ONCE (chunks never move, so they promote straight into the static tier), and
-                // WITHOUT the spawn-visibility guard (chunks stream in off-screen constantly; the guard
-                // would pin each one in the main pass until it first enters the frustum).
+                // their own layer (the userData is the chunk key + 1, NOT an Entity* - gameplay queries
+                // must not see them; +1 because userData 0 means "dead" to the visible-set hand-over and
+                // key 0 is a real chunk), registered ONCE (chunks never move, so they promote straight
+                // into the static tier), and WITHOUT the spawn-visibility guard (chunks stream in
+                // off-screen constantly; the guard would pin each one in the main pass until it first
+                // enters the frustum).
                 const Sphere bounds = resident.node.getWorldBounds();
                 resident.spatialEntry = SpatialEntry(Globals::spatialIndex.registerEntry(
-                    glm::dvec3(bounds.pos), bounds.radius, 0ull, SpatialLayer_Terrain, false));
+                    glm::dvec3(bounds.pos), bounds.radius, res.key + 1, SpatialLayer_Terrain, false));
                 m_residents.emplace(res.key, oc::move(resident));
                 ++uploads;
             }
@@ -1227,66 +1228,190 @@ namespace Procedural
 		// SCREEN: a freshly registered replacement isn't main-stamped until the next markVisibleSet, so
 		// evicting on residency alone opened a one-frame hole on every in-view LOD change (and while the
 		// culling is FROZEN the replacement never gets stamped - the old chunk just stays).
+		//
+		// No per-frame walk of the ring: which residents are unwanted (want < 0 or want != lod) depends
+		// on the ring and the resident set only, so that list is rebuilt by one walk when the ring moved
+		// or a chunk uploaded (m_evictCandidates; the handover replacement can only appear through an
+		// upload, and an eviction never creates a candidate). Every frame checks just the candidates
+		// against the stamps.
         {
             ProfileScope profileScope2("evictResidents", EProfileCategory::Procedural);
-            for (auto it = m_residents.begin(); it != m_residents.end(); )
+            if (ringMoved || uploads > 0)
             {
-                const Resident& res = it->second;
-                const int want = ringLod(res.coord);
-                bool evict;
-                if (want < 0)
-                    evict = true; // column outside the ring
-                else if ((uint32)want == res.lod)
-                    evict = false; // this is the wanted LOD
-                else
+                m_evictCandidates.clear();
+                for (const auto& entry : m_residents)
                 {
-                    const auto repIt = m_residents.find(chunkKey(res.coord, (uint32)want));
-                    evict = repIt != m_residents.end();
-                    if (evict && gate)
+                    const int want = ringLod(entry.second.coord);
+                    if (want < 0 || (uint32)want != entry.second.lod)
+                        m_evictCandidates.push_back({ entry.first, want });
+                }
+            }
+
+            for (size_t i = 0; i < m_evictCandidates.size(); )
+            {
+                const EvictCandidate& cand = m_evictCandidates[i];
+                const auto it = m_residents.find(cand.key);
+                bool evict = it == m_residents.end(); // already gone: drop the candidate
+                if (!evict)
+                {
+                    const Resident& res = it->second;
+                    if (cand.want < 0)
+                        evict = true; // column outside the ring
+                    else
                     {
-                        // Hole-free handover: the replacement is main-visible, or the old chunk isn't
-                        // on screen either (an off-screen swap can't show a hole).
-                        const bool newVis = repIt->second.spatialEntry.isValid()
-                            && (Globals::spatialIndex.getPassMask(repIt->second.spatialEntry.handle()) & SpatialPassBit_Main);
-                        const bool oldVis = res.spatialEntry.isValid()
-                            && (Globals::spatialIndex.getPassMask(res.spatialEntry.handle()) & SpatialPassBit_Main);
-                        evict = newVis || !oldVis;
+                        const auto repIt = m_residents.find(chunkKey(res.coord, (uint32)cand.want));
+                        evict = repIt != m_residents.end();
+                        if (evict && gate)
+                        {
+                            // Hole-free handover: the replacement is main-visible, or the old chunk isn't
+                            // on screen either (an off-screen swap can't show a hole).
+                            const bool newVis = repIt->second.spatialEntry.isValid()
+                                && (Globals::spatialIndex.getPassMask(repIt->second.spatialEntry.handle()) & SpatialPassBit_Main);
+                            const bool oldVis = res.spatialEntry.isValid()
+                                && (Globals::spatialIndex.getPassMask(res.spatialEntry.handle()) & SpatialPassBit_Main);
+                            evict = newVis || !oldVis;
+                        }
                     }
+                    if (evict)
+                        m_residents.erase(it);
                 }
 
                 if (evict)
-                    it = m_residents.erase(it);
+                {
+                    m_evictCandidates[i] = m_evictCandidates.back();
+                    m_evictCandidates.pop_back();
+                }
                 else
-                    ++it;
+                    ++i;
             }
         }
 
-		// --- Push resident chunks through the spatial culling gate. Main-visible chunks feed every pass;
-		// main-culled chunks KEEP their shadow/GI passes unconditionally (terrain is the ground
-		// everywhere - unlike entities, it skips the Near-ball test, because dropping the ground behind
-		// the camera from the TLAS/shadow maps visibly breaks GI and long sun shadows; the GPU shadow
-		// cull and the TLAS range bound already refine those passes). MainOnly debug mode drops
-		// main-culled chunks entirely, like entities.
+		// --- Push resident chunks through the spatial culling gate, WITHOUT walking every resident
+		// (the ring holds thousands of chunks; a handful are on screen):
+		//  1. Main-visible chunks come straight from the cull job's Main stamp, which collects the
+		//     SpatialLayer_Terrain hits for us (setVisibleCollect slot 1, installed in initialize).
+		//     They feed every pass.
+		//  2. Main-culled chunks keep their shadow/GI passes - terrain is the ground everywhere, and
+		//     dropping the ground behind the camera from the TLAS/shadow maps visibly breaks GI and
+		//     long sun shadows - but only within the range those GPU consumers actually read: the
+		//     TLAS range bound, and the sun cascades' maxDistance plus the up-sun casterPad, both
+		//     measured from the scene focus. A sphere query of that radius replaces the full walk;
+		//     the GPU shadow cull and the TLAS range bound would have dropped anything past it.
+		//     Past that, the terrain sun march shades from the baked height map, chunk-free.
+		//     MainOnly debug mode drops main-culled chunks entirely, like entities.
+		// A chunk in both sets is pushed once: the sphere pass skips main-stamped chunks. Every chunk
+		// registers with spawnVisible = false, so a fresh chunk simply waits one stamp for its main
+		// pass and rides the sphere pass meanwhile - and a chunk evicted between the stamp and this
+		// push reads userData 0 (dead handle) and is skipped. Culling Off (or headless: no stamps,
+		// empty hand-over) keeps the plain walk, so nothing is ever culled there.
+		//
+		// The pushes run on a WORKER (renderNode is lock-free from any job between beginFrame and
+		// present); main.cpp joins m_renderCounter right before present, and update/clearResidents
+		// join it before touching m_residents. The main-visible handles resolve to nodes HERE on main:
+		// userData(handle) is an unlocked pool read, and the scatter registers entries (pool growth)
+		// on main while the job runs. The sphere query locks the index itself, and its getPassMask
+		// reads sit inside the emit, under that lock. Resident pointers are stable: the map is a
+		// node container and nothing mutates it until the join.
         {
             ProfileScope profileScope2("renderResidents", EProfileCategory::Procedural);
 
-            for (auto& entry : m_residents) // TODO: <- fix dumb
+            m_renderMainNodes.clear();
+            if (gate)
             {
-                Resident& res = entry.second;
-                if (!res.node.isValid())
-                    continue;
-                if (gate && res.spatialEntry.isValid())
+                for (SpatialHandle handle : Globals::spatialIndex.visibleHandles(1))
                 {
-                    uint32 passMask = RendererVKLayout::PASS_SHADOW | RendererVKLayout::PASS_GI;
-                    if (Globals::spatialIndex.getPassMask(res.spatialEntry.handle()) & SpatialPassBit_Main)
-                        passMask = RendererVKLayout::PASS_ALL;
-                    else if (culling.mode == int(ESpatialCullMode::MainOnly))
+                    const uint64 userData = Globals::spatialIndex.userData(handle);
+                    if (!userData)
                         continue;
-                    renderer.renderNode(res.node, passMask);
+                    const auto it = m_residents.find(userData - 1);
+                    if (it != m_residents.end() && it->second.node.isValid())
+                        m_renderMainNodes.push_back(&it->second.node);
                 }
-                else
-                    renderer.renderNode(res.node);
             }
+            const bool sphere = gate && culling.mode != int(ESpatialCullMode::MainOnly);
+            const ShadowParams& shadow = renderer.shadowParams();
+            const float reach = glm::max(shadow.maxDistance + shadow.casterPad, renderer.giTlasRange());
+            const glm::dvec3 focus = glm::dvec3(renderer.sceneFocusOrCamera());
+
+            Globals::jobSystem.submit([this, &renderer, gate, sphere, reach, focus]
+            {
+                if (!gate)
+                {
+                    for (auto& entry : m_residents)
+                        if (entry.second.node.isValid())
+                            renderer.renderNode(entry.second.node);
+                    return;
+                }
+                for (const RenderNode* node : m_renderMainNodes)
+                    renderer.renderNode(*node, RendererVKLayout::PASS_ALL);
+                if (!sphere)
+                    return;
+                Globals::spatialIndex.forEachInSphere(focus, reach, SpatialLayer_Terrain, [&](uint64 userData)
+                {
+                    if (!userData)
+                        return;
+                    const auto it = m_residents.find(userData - 1);
+                    if (it == m_residents.end() || !it->second.node.isValid())
+                        return;
+                    const Resident& res = it->second;
+                    if (res.spatialEntry.isValid()
+                        && (Globals::spatialIndex.getPassMask(res.spatialEntry.handle()) & SpatialPassBit_Main))
+                        return; // pushed above
+                    renderer.renderNode(res.node, RendererVKLayout::PASS_SHADOW | RendererVKLayout::PASS_GI);
+                });
+            }, { "terrainRenderPush", EProfileCategory::Procedural }, EJobPriority::High, &m_renderCounter);
         }
+
+		// --- Kick THIS frame's ring scan for the next update to apply. Last in update on purpose: the
+		// drain and the eviction above were the frame's last writers of m_residents / m_pending, and
+		// the job only reads them (its output goes to m_ringScanOut, consumed after the join at the
+		// top). Every input is captured by value so a tweak or setGeneratedBounds edit on main cannot
+		// race it.
+		if (ringMoved || m_ringScanNeeded)
+		{
+			m_ringScanNeeded = false;
+			RingScanInput& in = m_ringScanIn;
+			in.camCX = camCX; in.camCZ = camCZ; in.R = R;
+			in.camChunks = camChunks;
+			in.chunkSize = chunkSize; in.fullRes = fullRes; in.lodStep = lodStep; in.skirtDepth = m_skirtDepth;
+			in.maxLod = maxLod; in.lod0Res = (uint32)glm::max(1, m_lod0Res); in.generation = generation;
+			in.bounded = m_bounded; in.boundsMin = m_boundsMin; in.boundsMax = m_boundsMax;
+			in.maps = maps;
+			Globals::jobSystem.submit([this]
+			{
+				const RingScanInput& s = m_ringScanIn;
+				for (int dz = -s.R; dz <= s.R; ++dz)
+				{
+					for (int dx = -s.R; dx <= s.R; ++dx)
+					{
+						const glm::ivec2 coord(s.camCX + dx, s.camCZ + dz);
+						// Generated bounds: a chunk that does not touch the seeded area is never requested
+						// (its tiles were never generated; see setGeneratedBounds).
+						if (s.bounded)
+						{
+							const float x0 = (float)coord.x * s.chunkSize, z0 = (float)coord.y * s.chunkSize;
+							if (x0 + s.chunkSize <= s.boundsMin.x || x0 >= s.boundsMax.x
+								|| z0 + s.chunkSize <= s.boundsMin.y || z0 >= s.boundsMax.y)
+								continue;
+						}
+						const uint32 lod = ringLodAt(chunkEdgeDist(s.camChunks, coord), s.fullRes, s.lodStep, s.maxLod);
+						const uint64 key = chunkKey(coord, lod);
+						if (m_residents.count(key) || m_pending.count(key))
+							continue;
+
+						Request req;
+						req.key = key;
+						req.generation = s.generation;
+						req.maps = s.maps;
+						req.params.coord = coord;
+						req.params.lod = lod;
+						req.params.chunkSize = s.chunkSize;
+						req.params.lod0Res = s.lod0Res;
+						req.params.skirtDepth = s.skirtDepth;
+						m_ringScanOut.push_back(oc::move(req));
+					}
+				}
+			}, { "terrainRingScan", EProfileCategory::Procedural }, EJobPriority::Normal, &m_ringScanCounter);
+		}
 	}
 }

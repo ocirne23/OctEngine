@@ -296,6 +296,8 @@ int main(int argc, char* argv[])
             uiJobKicked = true;
 
             Globals::jobSystem.kickPostUpdateJobs();
+            Globals::terrain.joinRender(); // the chunk render pushes must land before present
+            Globals::ocean.joinRender();   // the sector pushes + the wave-extent stores, likewise
             Globals::rendererVK.present();
         }
         else

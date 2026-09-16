@@ -18,13 +18,38 @@ namespace Procedural
 {
 	OceanGenerator::~OceanGenerator()
 	{
+		joinRender(); // the render job reads m_sectors
 		// Free the sectors while the renderer/device are still alive (each node before its container).
 		m_sectors.clear();
+	}
+
+	void OceanGenerator::joinRender()
+	{
+		Globals::jobSystem.wait(m_renderCounter); // main helps; a no-op once the job is done
+		if (m_renderPending)
+		{
+			// The job's outputs for the renderer, stored HERE on main (present reads them right after):
+			// the trough sinks the underwater-fog boundary below live troughs; the extent pads the GPU
+			// per-instance frustum cull (the CPU sector radii read the same value); the surface under the
+			// camera gates the particle draw's Underwater / AboveWater emitters (-FLT_MAX = no water here:
+			// land past the run-up band, readback not primed - the gate falls back to the calm level).
+			m_renderPending = false;
+			Renderer& renderer = *m_renderIn.renderer;
+			renderer.setOceanWaveTrough(m_waveTrough);
+			renderer.setOceanDisplacementExtent(displacementExtent());
+			if (m_cameraSurfaceY > -1.0e30f)
+				renderer.setCameraWaterSurface(m_cameraSurfaceY);
+			else
+				renderer.clearCameraWaterSurface();
+		}
 	}
 
 	void OceanGenerator::initialize()
 	{
 		ProfileScope scope("OceanGenerator::initialize", EProfileCategory::Procedural);
+		// The cull job's Main stamp hands over the main-visible sector handles (see update's render
+		// push), so the push never walks the grid.
+		Globals::spatialIndex.setVisibleCollect(SpatialLayer_Ocean, 2);
 		auto gridDirty = [this]() { m_gridDirty = true; };
 
 		Tweak::boolean("Ocean", "Enabled", &m_enabled);
@@ -150,6 +175,9 @@ namespace Procedural
 
 	void OceanGenerator::rebuildGrid()
 	{
+		ProfileScope profileScope2("rebuildGrid", EProfileCategory::Procedural);
+		joinRender(); // the render job holds Sector pointers into m_sectors
+
 		m_gridDirty = false;
 		m_sectors.clear(); // release the previous grid first (nodes before their containers)
 
@@ -226,9 +254,11 @@ namespace Procedural
 					s.halfXZ = glm::vec2(mx.x - mn.x, mx.z - mn.z) * 0.5f;
 					s.horizonBand = emittingHorizonBand;
 					s.baseRadius = glm::length((mx - mn) * 0.5f); // the flat lattice; update() pads it live
+					// userData = sector index + 1 (0 reads as "dead" to the visible-set hand-over): the
+					// index is stable - the vector only changes in rebuildGrid, after the join.
 					s.spatialEntry = SpatialEntry(Globals::spatialIndex.registerEntry(
 						glm::dvec3(s.localCenter) + glm::dvec3(0.0, m_seaLevel, 0.0),
-						s.baseRadius + displacementExtent(), 0ull, SpatialLayer_Terrain, false));
+						s.baseRadius + displacementExtent(), (uint64)m_sectors.size(), SpatialLayer_Ocean, false));
 				}
 			}
 			positions.clear();
@@ -472,6 +502,7 @@ namespace Procedural
 	void OceanGenerator::update(Renderer& renderer, const Camera& camera,
 	                           oc::shared_ptr<const BakedTerrainData> terrainData, float seaLevel)
 	{
+		joinRender(); // last frame's job (already joined before present; a cheap no-op) - it reads m_sectors
 		if (!m_enabled)
 		{
 			if (m_disabledIdle)
@@ -515,6 +546,8 @@ namespace Procedural
 		// ground). One ~quarter-ms pass per shipped bake - every ~range/4 of camera travel.
 		if (m_terrainData.get() != m_dryGridSource)
 		{
+			ProfileScope profileScope2("dry grid", EProfileCategory::Procedural);
+
 			m_dryGridSource = m_terrainData.get();
 			m_dryGridValid = false;
 			if (m_terrainData && m_terrainData->cascades > 0 && m_terrainData->res > 0)
@@ -577,72 +610,117 @@ namespace Procedural
 		const float meshRadius = renderer.getTerrainMeshRadius();
 		const glm::vec2 camXZ(camera.position.x, camera.position.z);
 		const float wetNeed = glm::max(m_params.cullMargin, 0.0f) + swashReach() + glm::max(m_params.farCullError, 0.0f) + 2.0f;
-		const auto sectorDry = [&](const Sector& s) {
-			if (!m_drySectorCull || !m_dryGridValid || meshRadius <= 0.0f || s.horizonBand)
-				return false; // the band is the horizon itself: never dropped for terrain
-			const glm::vec2 center(px + s.localCenter.x, pz + s.localCenter.z);
-			// Farthest footprint corner from the camera (the VS fences radially the same way).
-			if (glm::length(glm::abs(center - camXZ) + s.halfXZ) >= meshRadius)
-				return false;
-			const float scale = float(DRY_BLOCKS) / m_dryGridRange;
-			const glm::vec2 bMin = (center - s.halfXZ - m_dryGridCenter) * scale + float(DRY_BLOCKS) * 0.5f;
-			const glm::vec2 bMax = (center + s.halfXZ - m_dryGridCenter) * scale + float(DRY_BLOCKS) * 0.5f;
-			if (bMin.x < 0.0f || bMin.y < 0.0f || bMax.x >= float(DRY_BLOCKS) || bMax.y >= float(DRY_BLOCKS))
-				return false; // reaches past the baked data: unknown terrain, keep it
-			for (int y = (int)bMin.y; y <= (int)bMax.y; ++y)
-				for (int x = (int)bMin.x; x <= (int)bMax.x; ++x)
-					if (m_blockMaxDepth[(size_t)y * DRY_BLOCKS + x] > -wetNeed)
-						return false;
-			return true;
-		};
 
-		// Push the visible sectors, terrain-chunk style: re-center each sector's spatial entry on the
-		// snapped node position, then gate on the dry test and the Main-pass stamp (Spatial/Culling >=
-		// Cull). The ocean draws PASS_MAIN only, so a culled sector has nothing to push at all - and the
-		// GPU per-instance frustum cull refines whatever the CPU gates let through.
+		// Re-center every sector's spatial entry (and node transform) on the snapped position, padded by
+		// this frame's displacement extent - but only when one of those CHANGED: the snap moves the
+		// clipmap in 8-cell steps and the extent is refreshed every 15 frames (estimateWaveExtents), so
+		// most frames touch no sector at all. Stays on main: the scatter registers entries (pool
+		// growth) later this frame, which an updateEntry on a worker could race.
 		const SpatialCullingConfig& culling = Globals::spatialIndex.getCullingConfig();
 		const bool gate = culling.mode >= int(ESpatialCullMode::Cull);
 		// One padding for every sector this frame: the vertex shader displaces them all by the same field.
 		const float cullPad = displacementExtent();
-		for (Sector& s : m_sectors)
+		if (px != m_lastPx || pz != m_lastPz || m_seaLevel != m_lastSeaLevel || cullPad != m_lastPad)
 		{
-			if (!s.node.isValid())
-				continue;
-			s.node.setTransform(xf);
-			if (s.spatialEntry.isValid())
-				Globals::spatialIndex.updateEntry(s.spatialEntry.handle(),
-					glm::dvec3(px + s.localCenter.x, m_seaLevel + s.localCenter.y, pz + s.localCenter.z),
-					s.baseRadius + cullPad);
-			if (sectorDry(s))
-				continue;
-			if (gate && s.spatialEntry.isValid()
-				&& !(Globals::spatialIndex.getPassMask(s.spatialEntry.handle()) & SpatialPassBit_Main))
-				continue;
-			renderer.renderNode(s.node, RendererVKLayout::PASS_MAIN);
+			ProfileScope profileScope2("recenter", EProfileCategory::Procedural);
+			m_lastPx = px; m_lastPz = pz; m_lastSeaLevel = m_seaLevel; m_lastPad = cullPad;
+			for (Sector& s : m_sectors)
+			{
+				if (!s.node.isValid())
+					continue;
+				s.node.setTransform(xf);
+				if (s.spatialEntry.isValid())
+					Globals::spatialIndex.updateEntry(s.spatialEntry.handle(),
+						glm::dvec3(px + s.localCenter.x, m_seaLevel + s.localCenter.y, pz + s.localCenter.z),
+						s.baseRadius + cullPad);
+			}
 		}
 
-		// Refresh the CPU copy of the GPU displacement readback inside this frame's fence-safe window
-		// (the slot's buffer is stable between beginFrame and present, and physics updates BEFORE
-		// beginFrame - so buoyancy must query an owned copy, not the live buffer).
-		uint32 tileRes = 0;
-		const oc::span<const uint16> tile = renderer.getOceanDisplacementReadback(tileRes);
-		m_dispTile.assign(tile.begin(), tile.end());
-		m_dispTileRes = tileRes;
-
-		estimateWaveExtents();
-		renderer.setOceanWaveTrough(m_waveTrough); // sinks the underwater-fog boundary below live troughs
-		// Pads the GPU per-instance frustum cull (the CPU sector radii above read the same value): the
-		// clipmap mesh is the undisplaced lattice, and choppiness moves vertices out of it sideways.
-		renderer.setOceanDisplacementExtent(displacementExtent());
-
-		// The live surface under the camera for the particle draw's camera-side water gate (Underwater /
-		// AboveWater emitters): the buoyancy height field, one sample. -FLT_MAX = no water here (land
-		// past the run-up band, readback not primed) - the gate then falls back to the calm level.
-		const float surfaceY = sampleWaterHeight(camera.position.x, camera.position.z);
-		if (surfaceY > -1.0e30f)
-			renderer.setCameraWaterSurface(surfaceY);
+		// Push the visible sectors, terrain-chunk style, WITHOUT walking the grid: the cull job's Main
+		// stamp collects the SpatialLayer_Ocean hits (setVisibleCollect slot 2, installed in
+		// initialize), resolved to sectors HERE on main (userData(handle) is an unlocked pool read; a
+		// handle whose sector died in rebuildGrid reads 0). The ocean draws PASS_MAIN only, so a culled
+		// sector has nothing to push at all - the GPU per-instance frustum cull refines whatever the
+		// CPU gates let through. Culling Off keeps every sector. The dry test and the pushes run in
+		// the job below.
+		m_renderVisible.clear();
+		if (!gate)
+		{
+			for (Sector& s : m_sectors)
+				m_renderVisible.push_back(&s);
+		}
 		else
-			renderer.clearCameraWaterSurface();
+		{
+			for (SpatialHandle handle : Globals::spatialIndex.visibleHandles(2))
+			{
+				const uint64 userData = Globals::spatialIndex.userData(handle);
+				if (userData && userData <= m_sectors.size())
+					m_renderVisible.push_back(&m_sectors[userData - 1]);
+			}
+		}
+
+		// The rest of the frame's ocean work runs on a WORKER, joined in joinRender (main.cpp, right
+		// before present): the dry test + renderNode pushes (lock-free from any job between beginFrame
+		// and present), then the CPU copy of the GPU displacement readback - the slot's buffer is stable
+		// between beginFrame and present, and physics (buoyancy, sampleWaterHeight) runs BEFORE the
+		// kick and after the join, so the copy never races a reader - the sparse wave-extent re-scan,
+		// and the water-surface sample under the camera. The three renderer stores those feed are
+		// applied on main in joinRender. Captures by value so a tweak on main cannot race the job.
+		{
+			ProfileScope profileScope2("render", EProfileCategory::Procedural);
+			RenderInput& in = m_renderIn; // the job captures `this` only (inline job storage is small)
+			in.renderer = &renderer;
+			in.camPos = camera.position;
+			in.camXZ = camXZ;
+			in.px = px; in.pz = pz;
+			in.meshRadius = meshRadius;
+			in.wetNeed = wetNeed;
+			in.dryCull = m_drySectorCull && m_dryGridValid && meshRadius > 0.0f;
+			m_renderPending = true;
+			Globals::jobSystem.submit([this]
+			{
+				const RenderInput& s = m_renderIn;
+				Renderer& r = *s.renderer;
+				for (const Sector* sector : m_renderVisible)
+				{
+					if (!sector->node.isValid())
+						continue;
+					if (s.dryCull && !sector->horizonBand && sectorDry(*sector, s.px, s.pz, s.camXZ, s.meshRadius, s.wetNeed))
+						continue;
+					r.renderNode(sector->node, RendererVKLayout::PASS_MAIN);
+				}
+
+				uint32 tileRes = 0;
+				const oc::span<const uint16> tile = r.getOceanDisplacementReadback(tileRes);
+				m_dispTile.assign(tile.begin(), tile.end());
+				m_dispTileRes = tileRes;
+
+				estimateWaveExtents();
+				m_cameraSurfaceY = sampleWaterHeight(s.camPos.x, s.camPos.z);
+			}, { "oceanRenderPush", EProfileCategory::Procedural }, EJobPriority::High, &m_renderCounter);
+		}
+	}
+
+	// Dry-sector test: skippable only when every block the footprint overlaps is buried deeper than
+	// the same terms the vertex cull demands (margin + swash reach + far error + slack) - so a skipped
+	// sector could never have contributed geometry. Out-of-range footprints count as wet. The horizon
+	// band is the caller's to exclude (it is the horizon itself: never dropped for terrain).
+	bool OceanGenerator::sectorDry(const Sector& s, float px, float pz, glm::vec2 camXZ, float meshRadius, float wetNeed) const
+	{
+		const glm::vec2 center(px + s.localCenter.x, pz + s.localCenter.z);
+		// Farthest footprint corner from the camera (the VS fences radially the same way).
+		if (glm::length(glm::abs(center - camXZ) + s.halfXZ) >= meshRadius)
+			return false;
+		const float scale = float(DRY_BLOCKS) / m_dryGridRange;
+		const glm::vec2 bMin = (center - s.halfXZ - m_dryGridCenter) * scale + float(DRY_BLOCKS) * 0.5f;
+		const glm::vec2 bMax = (center + s.halfXZ - m_dryGridCenter) * scale + float(DRY_BLOCKS) * 0.5f;
+		if (bMin.x < 0.0f || bMin.y < 0.0f || bMax.x >= float(DRY_BLOCKS) || bMax.y >= float(DRY_BLOCKS))
+			return false; // reaches past the baked data: unknown terrain, keep it
+		for (int y = (int)bMin.y; y <= (int)bMax.y; ++y)
+			for (int x = (int)bMin.x; x <= (int)bMax.x; ++x)
+				if (m_blockMaxDepth[(size_t)y * DRY_BLOCKS + x] > -wetNeed)
+					return false;
+		return true;
 	}
 
 	// FP16 -> FP32 (readback texels are RGBA16F). Fabian Giesen's half_to_float_fast: rebias the
@@ -701,6 +779,8 @@ namespace Procedural
 	// lambda), so the live "Choppiness" tweak scales it without a re-scan.
 	void OceanGenerator::estimateWaveExtents()
 	{
+		ProfileScope profileScope2("estimateWaveExtents", EProfileCategory::Procedural);
+
 		if (m_waveTroughCooldown-- > 0 || m_dispTileRes == 0)
 			return;
 		m_waveTroughCooldown = 15;

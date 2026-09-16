@@ -626,23 +626,38 @@ void SpatialIndex::markVisibleSet(ESpatialPass pass, const Frustum& frustumRelCa
     const SpatialStamp stampId = m_visibleQueryId[passIdx];
     SpatialStamp* lastVisible = m_pool.lastVisible[passIdx].data();
     TraverseStats stats;
-    const uint32 collect = pass == ESpatialPass::Main ? m_visibleCollectLayers : 0;
-    if (collect)
+    uint32 collectAny = 0;
+    if (pass == ESpatialPass::Main)
+        for (uint32 layers : m_visibleCollectLayers)
+            collectAny |= layers;
+    if (collectAny)
     {
-        // Stamp + collect (see setVisibleCollect): the chunk-aware emit appends to its own list.
-        for (oc::vector<SpatialHandle>& chunk : m_visibleCollectChunks)
-            chunk.clear();
-        m_visibleCollected.clear();
-        const auto stampCollect = [this, lastVisible, stampId, collect](uint32 idx, const glm::vec3&, uint32 chunk)
+        // Stamp + collect (see setVisibleCollect): the chunk-aware emit appends to its own list
+        // of every slot whose layers the hit carries.
+        for (uint32 slot = 0; slot < NumVisibleCollectSlots; ++slot)
+        {
+            for (oc::vector<SpatialHandle>& chunk : m_visibleCollectChunks[slot])
+                chunk.clear();
+            m_visibleCollected[slot].clear();
+        }
+        const auto stampCollect = [this, lastVisible, stampId](uint32 idx, const glm::vec3&, uint32 chunk)
         {
             lastVisible[idx] = stampId;
-            if (m_pool.layerMask[idx] & collect)
-                m_visibleCollectChunks[chunk].push_back(SpatialHandle{ idx, m_pool.gen[idx] });
+            const uint32 layers = m_pool.layerMask[idx];
+            for (uint32 slot = 0; slot < NumVisibleCollectSlots; ++slot)
+                if (layers & m_visibleCollectLayers[slot])
+                    m_visibleCollectChunks[slot][chunk].push_back(SpatialHandle{ idx, m_pool.gen[idx] });
         };
-        const auto prepare = [this](uint32 slots) { if (m_visibleCollectChunks.size() < slots) m_visibleCollectChunks.resize(slots); };
+        const auto prepare = [this](uint32 slots)
+        {
+            for (uint32 slot = 0; slot < NumVisibleCollectSlots; ++slot)
+                if (m_visibleCollectChunks[slot].size() < slots)
+                    m_visibleCollectChunks[slot].resize(slots);
+        };
         traverseParallel(FrustumTester{ frustumRelCamera, occlusion, maxDist }, cameraPos, layerMask, stats, stampCollect, prepare, false);
-        for (const oc::vector<SpatialHandle>& chunk : m_visibleCollectChunks)
-            m_visibleCollected.insert(m_visibleCollected.end(), chunk.begin(), chunk.end());
+        for (uint32 slot = 0; slot < NumVisibleCollectSlots; ++slot)
+            for (const oc::vector<SpatialHandle>& chunk : m_visibleCollectChunks[slot])
+                m_visibleCollected[slot].insert(m_visibleCollected[slot].end(), chunk.begin(), chunk.end());
     }
     else
     {
@@ -758,12 +773,13 @@ void SpatialIndex::update(const Camera& camera, const Frustum& frustum, const gl
         occlusion = &Globals::occlusionBuffer;
     }
 
-    // Terrain chunks ride the Main stamp too (TerrainStreamer registers them on their own layer);
-    // they skip the Near ball - main-culled terrain keeps its shadow/GI passes unconditionally.
+    // Terrain chunks and ocean sectors ride the Main stamp too (the streamer and the ocean register
+    // them on their own layers); they skip the Near ball - main-culled terrain keeps its shadow/GI
+    // passes unconditionally, and the ocean is PASS_MAIN only.
     {
         ProfileScope profileScope("Mark visible", EProfileCategory::Spatial);
         markVisibleSet(ESpatialPass::Main, cullFrustum, cameraPos, m_culling.maxDist + m_culling.margin,
-            SpatialLayer_Render | SpatialLayer_Terrain, occlusion);
+            SpatialLayer_Render | SpatialLayer_Terrain | SpatialLayer_Ocean, occlusion);
     }
 
     // The Near ball barely changes frame to frame: inflate it by the slack and requery only once the

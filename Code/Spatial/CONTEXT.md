@@ -127,11 +127,14 @@ sectors and scatter groups all pass false.
 |---|---|---|
 | `SpatialLayer_Render` | 0 | Entities that have a RenderComponent. **This is the gameplay-query layer.** |
 | `SpatialLayer_Stress` | 1 | Synthetic stress-test entries. |
-| `SpatialLayer_Terrain` | 2 | Procedural terrain chunks, ocean sectors, scatter groups. |
+| `SpatialLayer_Terrain` | 2 | Procedural terrain chunks, scatter groups. |
 | `SpatialLayer_Entity` | 3 | EVERY entity. The World's update-selection layer. |
+| `SpatialLayer_Ocean` | 4 | Ocean clipmap sectors (userData = sector index + 1). Its own layer so the ocean's hand-over list (collect slot 2) holds nothing else. |
 
-> **`SpatialLayer_Terrain` entries carry `userData = 0`, not an `Entity*`. Gameplay queries must
-> never include that layer** ([Types.ixx:58](Private/Types.ixx#L58)).
+> **`SpatialLayer_Terrain` entries never carry an `Entity*`** — a terrain chunk's userData is the
+> streamer's chunk key + 1 (so it can resolve its own hand-over list), ocean sectors and scatter
+> groups carry 0. **Gameplay queries must never include that layer**
+> ([Types.ixx:58](Private/Types.ixx#L58)).
 
 ## Visibility stamps
 
@@ -193,14 +196,19 @@ job through `advanceUpdateTiers` + `queryUpdateTiers` (below), off the frame-cri
 
 ### The visible set hand-over (`setVisibleCollect`)
 
-The Main frustum stamp also COLLECTS: with `setVisibleCollect(layerMask)` set (the World passes
-`SpatialLayer_Entity`), the stamp lambda appends the `SpatialHandle` of every hit carrying one of
-those layers to an owner-sliced per-chunk list (`traverseParallel` hands a chunk-aware emit — `(idx,
-pos, chunk)` — slot 0 for its serial expansion, 1 + the chunk's first frontier index for the
-fan-out), merged once inside the job. `visibleHandles()` is valid from `joinUpdateJob` until the
-next kick; `userData(handle)` resolves one and reads 0 for an entry that died in between (the
-destroy windows sit between the join and the World's pass). **This is how the World selects what is
-on screen every frame without a traversal of its own.**
+The Main frustum stamp also COLLECTS: with `setVisibleCollect(layerMask, slot)` set, the stamp
+lambda appends the `SpatialHandle` of every hit carrying one of that slot's layers to the slot's
+owner-sliced per-chunk list (`traverseParallel` hands a chunk-aware emit — `(idx, pos, chunk)` —
+list 0 for its serial expansion, 1 + the chunk's first frontier index for the fan-out), merged once
+inside the job. **Three collect slots** (`NumVisibleCollectSlots`): slot 0 is the World's
+(`SpatialLayer_Entity`, the default argument), slot 1 the terrain streamer's
+(`SpatialLayer_Terrain`, its main-visible chunk push) and slot 2 the ocean's (`SpatialLayer_Ocean`,
+its sector push) — see Procedural. `visibleHandles(slot)` is
+valid from `joinUpdateJob` until the next kick, and a FROZEN cull keeps the last list, like the
+stamps; `userData(handle)` resolves one and reads 0 for an entry that died in between (the destroy
+windows sit between the join and the World's pass). **This is how the World selects what is on
+screen every frame without a traversal of its own**, and how the streamer pushes the on-screen
+chunks without walking its ring.
 
 ### The Near ball's hysteresis
 

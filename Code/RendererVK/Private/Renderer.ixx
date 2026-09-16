@@ -211,6 +211,9 @@ public:
     // game installs its top-down preset at match start and restores the sandbox values at teardown.
     const ShadowParams& shadowParams() const { return m_shadowParams; }
     void setShadowParams(const ShadowParams& params) { m_shadowParams = params; }
+    // The GI TLAS instance range bound ("RT/TLAS Range", m, measured from sceneFocusOrCamera): a
+    // PASS_GI push farther than this never reaches the TLAS, so a CPU pusher may drop it.
+    float giTlasRange() const { return m_giProbePipeline.getTlasRange(); }
     void present();
 
     // ---- GPU particles + projected decals (driven by the Particle library) ----

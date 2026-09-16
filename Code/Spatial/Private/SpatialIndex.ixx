@@ -97,14 +97,17 @@ public:
         const SpatialStamp id = m_visibleQueryId[uint32(pass)];
         return oc::atomic_ref<SpatialStamp>(m_pool.lastVisible[uint32(pass)][handle.idx]).exchange(id, oc::memory_order_relaxed) != id;
     }
-    // The VISIBLE set for the World's update selection, straight from the cull job's Main
-    // frustum pass - no second traversal: the Main stamp also appends the HANDLE of every hit
-    // carrying one of these layers (per-chunk lists, merged once inside the job). Valid from
-    // joinUpdateJob until the next kick; empty when nothing collects (headless, layers 0).
-    // Handles, not userData: entities may die between the join and the consumer (the destroy
-    // windows sit there) - userData(handle) reads 0 for a dead one.
-    void setVisibleCollect(uint32 layerMask) { m_visibleCollectLayers = layerMask; }
-    const oc::vector<SpatialHandle>& visibleHandles() const { return m_visibleCollected; }
+    // The VISIBLE set for a consumer, straight from the cull job's Main frustum pass - no second
+    // traversal: the Main stamp also appends the HANDLE of every hit carrying one of a slot's
+    // layers (per-chunk lists, merged once inside the job). Three slots: 0 = the World's update
+    // selection (SpatialLayer_Entity), 1 = the terrain streamer's render push (SpatialLayer_Terrain),
+    // 2 = the ocean's sector push (SpatialLayer_Ocean). Valid from joinUpdateJob until the next
+    // kick; empty when nothing collects (headless, layers 0); frozen culling keeps the last list,
+    // like the stamps. Handles, not userData: entities may die between the join and the consumer
+    // (the destroy windows sit there) - userData(handle) reads 0 for a dead one.
+    static constexpr uint32 NumVisibleCollectSlots = 3;
+    void setVisibleCollect(uint32 layerMask, uint32 slot = 0) { m_visibleCollectLayers[slot] = layerMask; }
+    const oc::vector<SpatialHandle>& visibleHandles(uint32 slot = 0) const { return m_visibleCollected[slot]; }
     uint64 userData(SpatialHandle handle) const { return m_pool.isValidAlive(handle) ? m_pool.userData[handle.idx] : 0; }
     // PARALLEL (traverseParallel, so one call at a time - the World's selection runs its spheres
     // in sequence): the hits come back as owner-sliced lists, one per traversal chunk (some
@@ -321,11 +324,12 @@ private:
     mutable SpatialStats m_stats;
     oc::vector<FrontierCell> m_frontier;     // traverseParallel scratch (main thread only)
     oc::vector<FrontierCell> m_frontierNext;
-    // setVisibleCollect: slot 0 = the serial frontier expansion, slot 1 + i = fan-out chunk i
-    // (owner-sliced: a chunk appends to its own list only), merged into m_visibleCollected.
-    uint32 m_visibleCollectLayers = 0;
-    oc::vector<oc::vector<SpatialHandle>> m_visibleCollectChunks;
-    oc::vector<SpatialHandle> m_visibleCollected;
+    // setVisibleCollect, per collect slot: chunk list 0 = the serial frontier expansion, 1 + i =
+    // fan-out chunk i (owner-sliced: a chunk appends to its own list only), merged into
+    // m_visibleCollected[slot].
+    uint32 m_visibleCollectLayers[NumVisibleCollectSlots] = {};
+    oc::vector<oc::vector<SpatialHandle>> m_visibleCollectChunks[NumVisibleCollectSlots];
+    oc::vector<SpatialHandle> m_visibleCollected[NumVisibleCollectSlots];
     oc::vector<oc::vector<uint64>> m_tierHitChunks; // queryUpdateTiers' owner-sliced hits (kept: one query per selection sphere)
 
     // Near-ball requery hysteresis, see update.
