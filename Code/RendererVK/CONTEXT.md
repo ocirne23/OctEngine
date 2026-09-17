@@ -501,8 +501,12 @@ Both push params in every frame; the renderer owns none of the tweaks.
   **mean annual temperature below freezing is NOT permanent snow — Siberia averages −10 °C and is
   forest.** The crag wander exists because V3's macro altitude is nearly flat across one mountain, so
   **the raw crag test traces an elevation contour right across a range.**
-* **`setOceanParams`** — flipping `hitLighting` rebuilds the ocean fragment variant (GPU idle + shader
-  reload). `setOceanWaveTrough` sizes the waterline band the fog scatter samples for the underwater fog
+* **`setOceanParams`** — flipping `hitLighting` (`OCEAN_HIT_LIGHTS`) or `rtReflections`
+  (`OCEAN_RT_REFLECTIONS`, the scene mirror ray; "Ocean/RT/Reflections") or `debugMode`
+  (`OCEAN_DEBUG_MODE`, "Ocean/Debug mode"; the mode legend is at the top of `ocean.fs.glsl`) rebuilds the ocean fragment
+  variant (GPU idle + shader reload). The mirror ray's "Reflection max rough" gate reads the roughness
+  WITHOUT "Micro roughness" — that term is a constant floor, so inside the gate it switched the mirror
+  off on every pixel. `setOceanWaveTrough` sizes the waterline band the fog scatter samples for the underwater fog
   boundary.
 * **The Ocean variant is BACK-FACE CULLED, like the prepass.** The clipmap carries every triangle in
   both windings (see Sectors in [`Code/Procedural/CONTEXT.md`](../Procedural/CONTEXT.md)), so the

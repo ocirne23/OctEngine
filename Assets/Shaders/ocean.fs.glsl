@@ -97,13 +97,21 @@ layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 
 layout (location = 0) out vec4 out_color;
 
-// --- Shore debug view: set a mode, F5. Paints the depth-keyed terms instead of shading, to find which
+// --- Debug view ("Ocean/Debug mode" tweak). Paints the depth-keyed terms instead of shading, to find which
 // one's boundary a visible line on the water follows.
 //   1 = calm depth      black 0 -> white 4 m, green iso-lines every 0.5 m, RED = land (depth < 0)
 //   2 = swash weight    the tongue weight (backflow): white = full, black = none
 //   3 = surface weight  oceanSurfaceWeight: white = open water, darker = eased toward the swash amplitude
 //   5 = shore foam band the surf band's nearShore target (u_oceanParams5.z)
+//   6 = mirror ray      GREEN = scene hit (brightness = distance, white-ish near), BLUE = fired, missed
+//                       (TLAS has geometry), CYAN = shadow-ray helper hits where traceScene missed,
+//                       WHITE = hit only past "Reflection range", GREY = nothing hits anywhere (TLAS empty),
+//                       RED = skipped by F <= 2.5%, YELLOW = skipped by "Reflection max rough",
+//                       MAGENTA = skipped by "Ray cutoff dist", BLACK = OCEAN_RT_REFLECTIONS off
+// Set by the "Ocean/Debug mode" tweak (a define on this variant; toggling reloads the pipeline).
+#ifndef OCEAN_DEBUG_MODE
 #define OCEAN_DEBUG_MODE 0
+#endif
 
 float D_GGX(float NoH, float a)
 {
@@ -441,7 +449,7 @@ void main()
             shoreFoam = foamMax * (1.0 - exp(-shoreFoam / foamMax));
         }
     }
-#if OCEAN_DEBUG_MODE != 0
+#if OCEAN_DEBUG_MODE != 0 && OCEAN_DEBUG_MODE != 6
     {
         const float depthDbg = oceanEffectiveDepth(in_uv, shoreHW.y - shoreHW.x);
         const float swDbg = oceanSwashWeight(depthDbg, shoreHW.y);
@@ -519,13 +527,44 @@ void main()
     vec3 reflColor = reflectedSkyRadiance(R);
     // Skipped near nadir (F < 2.5%, the mirror is invisible - the refraction's F > 98% rule mirrored):
     // a top-down camera keeps only its refraction ray. "Reflection max rough": a wide lobe can't be one
-    // mirror sample.
-    if (F > 0.025 && alphaF < u_oceanParams9.w && rtInRange)
+    // mirror sample. The gate reads the roughness WITHOUT "Micro roughness": that term is a constant
+    // floor on every pixel, so with it in the gate a moderate value switched the mirror off everywhere.
+#ifdef OCEAN_RT_REFLECTIONS // "Ocean/RT/Reflections"
+    const float alphaGate = sqrt(max(alphaSq - 2.0 * microVariance, 0.0));
+    if (F > 0.025 && alphaGate < u_oceanParams9.w && rtInRange)
     {
         SceneHit hit;
         if (traceScene(in_pos + N * 0.05, R, u_oceanParams9.z, false, hit)) // "Reflection range"
             reflColor = shadeHit(hit, R, sunTint, L);
     }
+#endif
+#if OCEAN_DEBUG_MODE == 6
+    {
+        vec3 dbg = vec3(0.0);
+#ifdef OCEAN_RT_REFLECTIONS
+        SceneHit dbgHit;
+        if (F <= 0.025)
+            dbg = vec3(1.0, 0.0, 0.0);
+        else if (alphaGate >= u_oceanParams9.w)
+            dbg = vec3(1.0, 1.0, 0.0);
+        else if (!rtInRange)
+            dbg = vec3(1.0, 0.0, 1.0);
+        else if (traceScene(in_pos + N * 0.05, R, u_oceanParams9.z, false, dbgHit))
+            dbg = vec3(0.0, 1.0, 0.0) + vec3(0.8, 0.0, 0.8) * exp(-dbgHit.t * 0.05);
+        else if (rtShadowVisibility(in_pos + N * 0.05, R, 0.05, u_oceanParams9.z) < 0.5)
+            dbg = vec3(0.0, 1.0, 1.0); // CYAN: the shadow-ray helper hits where traceScene missed (ray flags)
+        else if (rtShadowVisibility(in_pos + N * 0.05, R, 0.05, 100000.0) < 0.5)
+            dbg = vec3(1.0);           // WHITE: a hit exists, but past "Reflection range"
+        else if (rtShadowVisibility(in_pos + vec3(0.0, 0.5, 0.0), -V, 0.0, viewDist) < 0.5
+            || rtShadowVisibility(u_viewPos, vec3(0.0, -1.0, 0.0), 0.05, 100000.0) < 0.5)
+            dbg = vec3(0.0, 0.0, 1.0); // BLUE: this ray missed, but the TLAS holds geometry (camera-ward / below the camera)
+        else
+            dbg = vec3(0.3);           // GREY: no ray hits anything - the TLAS is empty or not the bound one
+#endif
+        out_color = vec4(dbg, 1.0);
+        return;
+    }
+#endif
     const vec3 reflection = mix(reflColor, ambientSky, reflBlur);
 
     // Entrained bubbles: turbulent water turns milky ("Turbidity").

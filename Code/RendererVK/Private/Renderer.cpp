@@ -522,13 +522,18 @@ void Renderer::setOceanParams(const OceanParams& ocean)
     // OCEAN_HIT_LIGHTS is a compile-time variant define: flipping the tweak rebuilds the ocean fragment
     // pipeline (GPU idle first - cached CBs reference the old pipeline; the re-record this queues happens
     // in present(), so a mid-frame toggle is safe). Same pattern as the RTAO alpha-test tweak.
-    const bool rebuildOceanVariant = ocean.hitLighting != m_oceanParams.hitLighting;
+    // OCEAN_RT_REFLECTIONS (the scene mirror ray) is the same kind of define.
+    const bool rebuildOceanVariant = ocean.hitLighting != m_oceanParams.hitLighting
+        || ocean.rtReflections != m_oceanParams.rtReflections
+        || ocean.debugMode != m_oceanParams.debugMode;
     m_oceanParams = ocean;
     if (rebuildOceanVariant)
     {
         if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
             return;
         m_staticMeshGraphicsPipeline.setOceanHitLights(ocean.hitLighting);
+        m_staticMeshGraphicsPipeline.setOceanRtReflections(ocean.rtReflections);
+        m_staticMeshGraphicsPipeline.setOceanDebugMode(ocean.debugMode);
         m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_maxTextures);
         setHaveToRecordCommandBuffers();
     }

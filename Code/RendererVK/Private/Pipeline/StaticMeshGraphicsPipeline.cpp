@@ -145,6 +145,11 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 	oc::vector<ShaderDefine> oceanFragDefines;
 	if (m_oceanHitLights)
 		oceanFragDefines.push_back({ "OCEAN_HIT_LIGHTS", "1" });
+	// OCEAN_RT_REFLECTIONS: the ray-traced scene mirror ("Ocean/RT/Reflections" tweak, same reload path).
+	if (m_oceanRtReflections)
+		oceanFragDefines.push_back({ "OCEAN_RT_REFLECTIONS", "1" });
+	if (m_oceanDebugMode != 0) // "Ocean/Debug mode"
+		oceanFragDefines.push_back({ "OCEAN_DEBUG_MODE", oc::to_string(m_oceanDebugMode) });
 	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
 		.vertexShader = ShaderSource{
 			.text = FileSystem::readFileStr(oceanVertexPath),

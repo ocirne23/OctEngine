@@ -168,7 +168,10 @@ namespace Procedural
 		// ALL rays past that camera distance (refraction falls back to the analytic baked-terrain bottom,
 		// reflections to the atmosphere - the same paths misses already take), 0 = unlimited.
 		Tweak::floatVar("Ocean/RT", "Refraction range (m)", &m_rtRefractionRange, 1.0f, 100.0f, 1.0f);
-		Tweak::floatVar("Ocean/RT", "Reflection range (m)", &m_rtReflectionRange, 50.0f, 10000.0f, 50.0f);
+		// 1 depth, 2 swash, 3 surface weight, 5 shore foam band, 6 mirror ray (legend: ocean.fs.glsl)
+		Tweak::intVar("Ocean", "Debug mode", &m_debugMode, 0, 6);
+		Tweak::boolean("Ocean/RT", "Reflections",&m_rtReflections); // scene mirror ray (pipeline reload on toggle)
+		Tweak::floatVar("Ocean/RT", "Reflection range (m)",&m_rtReflectionRange, 50.0f, 10000.0f, 50.0f);
 		Tweak::floatVar("Ocean/RT", "Reflection max rough", &m_rtReflectionMaxRough, 0.0f, 1.0f, 0.01f);
 		Tweak::floatVar("Ocean/RT", "Ray cutoff dist (m)", &m_rtRayCutoffDist, 0.0f, 10000.0f, 50.0f);
 	}
@@ -473,6 +476,8 @@ namespace Procedural
 		params.sssPower = m_sssPower;
 		params.undersideTransmission = m_undersideTransmission;
 		params.hitLighting = m_hitLighting;
+		params.rtReflections = m_rtReflections;
+		params.debugMode = m_debugMode;
 		params.foamColor = m_foamColor;
 		params.foamBias = m_foamBias;
 		params.foamBreakAccel = m_foamBreakAccel;

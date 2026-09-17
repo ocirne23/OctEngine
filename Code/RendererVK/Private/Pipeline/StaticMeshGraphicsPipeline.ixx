@@ -75,6 +75,9 @@ public:
     // Ocean variant: light refraction/reflection ray hits with the grid lights (OCEAN_HIT_LIGHTS define).
     // Takes effect on the next reloadShaders (the Renderer reloads when the tweak flips).
     void setOceanHitLights(bool enabled) { m_oceanHitLights = enabled; }
+    // Ocean variant: the ray-traced mirror of the scene (OCEAN_RT_REFLECTIONS define). Same reload rule.
+    void setOceanRtReflections(bool enabled) { m_oceanRtReflections = enabled; }
+    void setOceanDebugMode(int mode) { m_oceanDebugMode = mode; } // OCEAN_DEBUG_MODE define, same reload rule
     // Global wireframe ("Renderer/Wireframe" tweak): scene variants rasterize as lines.
     // Takes effect on the next reloadShaders (the Renderer reloads when the tweak flips).
     void setWireframe(bool enabled) { m_wireframe = enabled; }
@@ -99,6 +102,8 @@ private:
     vk::RenderPass m_renderPass;
     bool m_stereo = false;
     bool m_oceanHitLights = false; // OCEAN_HIT_LIGHTS define on the ocean fragment variant
+    bool m_oceanRtReflections = true; // OCEAN_RT_REFLECTIONS define, matches OceanParams::rtReflections
+    int  m_oceanDebugMode = 0;        // OceanParams::debugMode, baked as OCEAN_DEBUG_MODE (0 = no define)
     bool m_wireframe = false;      // global wireframe: scene variants get vk::PolygonMode::eLine
     int  m_shadowDebugMode = 0;    // ShadowParams::debugMode, baked as SHADOW_DEBUG (0 = no define)
     int  m_lightGridDebugMode = 0; // LightGridParams::debugMode, baked as LIGHT_GRID_DEBUG (0 = no define)

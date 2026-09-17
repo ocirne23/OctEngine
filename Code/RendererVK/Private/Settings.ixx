@@ -378,6 +378,9 @@ export struct OceanParams
                                         // transmission; less = more internal reflection, a darker ceiling)
     bool  hitLighting      = false; // evaluate the scene's grid lights at refraction/reflection ray hits
                                     // (OCEAN_HIT_LIGHTS shader variant; toggling reloads the pipeline)
+    bool  rtReflections    = true;  // ray-traced mirror of the scene on the top side (OCEAN_RT_REFLECTIONS
+                                    // shader variant; off = sky only, no mirror ray compiled in)
+    int   debugMode        = 0;     // OCEAN_DEBUG_MODE shader variant (mode list: ocean.fs.glsl); 0 = off
     // Foam & turbulence. ONE instant-foam response (oceanInstantFoam) both draws the per-pixel crest
     // foam and injects the accumulated TURBULENCE field (the churn energy breaking leaves behind).
     // Turbulence then drives the wake look: it relaxes the fold threshold (aged foam paints itself along
