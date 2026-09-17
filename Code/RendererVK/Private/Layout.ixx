@@ -341,7 +341,7 @@ export namespace RendererVKLayout
     struct GiGridConfig
     {
         int numCascades = 4;                    // nested clipmap levels (1..8)
-        int dimLog2X = 5, dimLog2Y = 2, dimLog2Z = 5; // probes per axis per cascade as log2 (2..6 = 4..64): power of two for the toroidal mask
+        int dimLog2X = 5, dimLog2Y = 5, dimLog2Z = 5; // probes per axis per cascade as log2 (2..6 = 4..64): power of two for the toroidal mask
         float focusOffsetY = 2.0f;              // metres added to the scene focus before centring the grids (> 0 = more probes above the ground than below)
         int visChebPower = 2;                   // Chebyshev visibility weight exponent (GI_VIS_CHEB_POWER, 1..6; DDGI uses 3) - a define,
                                                 // so the sample loop multiplies instead of pow-ing per probe; a change reloads shaders only
