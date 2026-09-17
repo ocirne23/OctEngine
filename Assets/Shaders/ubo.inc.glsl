@@ -157,7 +157,7 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                             // z = swash amplitude (scale on the un-shoaled wave height running up the
                             // beach, 0 = off), w = swash reach (m; CPU estimate of max run-up height -
                             // sizes the land sampling band and relaxes the vertex cull)
-    vec4 u_oceanParams8;    // x unused (was the swash drawdown of the removed waterline floor),
+    vec4 u_oceanParams8;    // x = reflection fog amount (reflection_fog.inc.glsl; 0 = off, 1 = the scene's fog),
                             // y = shore foam threshold bias (shifts the surf fold threshold:
                             // negative = sparser/more transparent surf),
                             // z = swash backflow (scale on the raw horizontal chop riding the swash
@@ -244,14 +244,16 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                               // above which the whole surface carries the standing-film darkening)
     vec4 u_terrainWetParams6; // surface water (terrain FS draws near-full-wetness ground AS water, with
                               // the ocean's surface terms): x = wetness at which the look is half in,
-                              // y = half-width of that ramp, z = waviness (0 = ground normal, 1 = live
+                              // y = half-width of that ramp, z = waviness (0 = level water plane, 1 = live
                               // FFT wave normal), w = virtual water depth (m) the ground is tinted
                               // through (Beer-Lambert + in-scatter)
     vec4 u_terrainWetParams7; // x = linear dry this frame (dry rate x dt: the constant part of the drain,
                               // next to the proportional exp(-dt / dry time) - together rain settles at
                               // dryTime x (rain - dryRate)),
                               // y = live-surface margin (m): the film + gloss stay on ground up to this far
-                              //     below the estimated live surface (it sits under the drawn ocean edge), zw unused
+                              //     below the estimated live surface (it sits under the drawn ocean edge),
+                              // z = inland wind ripple strength on the film (0 = off),
+                              // w = film wave normal scale (x the ocean's normal strength; 1 = the ocean's)
     vec4 u_terrainSplatClimate[MAX_TERRAIN_SPLAT_MATERIALS]; // ground/rock CLIMATE BOX: xy = t01 range,
                               // zw = h01 range. Weight is 1 inside and Gaussian-decays outside, so a full
                               // 0..1 range on an axis means "this axis does not matter for this entry".

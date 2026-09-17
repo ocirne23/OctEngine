@@ -422,9 +422,12 @@ public:
         // it ramps over [threshold - softness, threshold + softness] so it blends out, never edges.
         float surfaceThreshold = 0.7f; // wetness at which the water look is half in
         float surfaceSoftness = 0.25f; // half-width of the ramp
-        float surfaceWaviness = 0.5f;  // film normal: 0 = the ground's normal, 1 = the live FFT wave normal
+        float surfaceWaviness = 0.5f;  // film normal: 0 = the level water plane, 1 = the live FFT wave normal
         float surfaceDepth = 0.15f;    // m of virtual water the ground is tinted through (the ocean's
                                        // absorption + in-scatter), so the colours match at the waterline
+        float rippleStrength = 0.1f;   // inland film: the finest ocean cascade's slope weight where the shore
+                                       // weight is 0 (0 = off). Amplitude follows the ocean's wind via the spectrum
+        float surfaceNormalScale = 1.0f; // film wave normal strength, on top of the ocean's "Normal strength"
         float liveMargin = 0.08f;      // m: the film + gloss stay on ground up to this far BELOW the estimated
                                        // live surface (the estimate sits under the drawn ocean edge: no choppy
                                        // XZ, no tongue thickness - without the margin a bare band shows above

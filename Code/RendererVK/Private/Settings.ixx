@@ -446,7 +446,8 @@ export struct OceanParams
     float rtReflectionRange = 3000.0f; // max mirror-ray length (m): how distant scenery still reflects
     float rtReflectionMaxRough = 0.25f; // filtered roughness above which the mirror ray is skipped and the
                                         // blurred sky stands in (a wide lobe can't be one mirror sample)
-    float rtRayCutoffDist = 0.0f;  // camera distance (m) beyond which NO scene rays are traced: refraction
+    float rtReflectionFog = 0.2f; // fog on mirror rays (ocean + terrain film): 1 = the reflected source's own fog, 0 = off
+    float rtRayCutoffDist = 0.0f; // camera distance (m) beyond which NO scene rays are traced: refraction
                                    // falls back to the analytic baked-terrain bottom (the same path RT
                                    // misses take), reflections to the atmosphere. 0 = unlimited
 };

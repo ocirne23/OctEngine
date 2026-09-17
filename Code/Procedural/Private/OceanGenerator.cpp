@@ -173,7 +173,8 @@ namespace Procedural
 		Tweak::boolean("Ocean/RT", "Reflections",&m_rtReflections); // scene mirror ray (pipeline reload on toggle)
 		Tweak::floatVar("Ocean/RT", "Reflection range (m)",&m_rtReflectionRange, 50.0f, 10000.0f, 50.0f);
 		Tweak::floatVar("Ocean/RT", "Reflection max rough", &m_rtReflectionMaxRough, 0.0f, 1.0f, 0.01f);
-		Tweak::floatVar("Ocean/RT", "Ray cutoff dist (m)", &m_rtRayCutoffDist, 0.0f, 10000.0f, 50.0f);
+		Tweak::floatVar("Ocean/RT", "Reflection fog", &m_rtReflectionFog, 0.0f, 4.0f, 0.01f); // 1 = a reflection hazes like its source seen directly; also the terrain film's
+		Tweak::floatVar("Ocean/RT", "Ray cutoff dist (m)",&m_rtRayCutoffDist, 0.0f, 10000.0f, 50.0f);
 	}
 
 	void OceanGenerator::rebuildGrid()
@@ -501,6 +502,7 @@ namespace Procedural
 		params.rtReflectionRange = m_rtReflectionRange * s;
 		params.rtReflectionMaxRough = m_rtReflectionMaxRough;
 		params.rtRayCutoffDist = m_rtRayCutoffDist * s;
+		params.rtReflectionFog = m_rtReflectionFog;
 		renderer.setOceanParams(params);
 	}
 

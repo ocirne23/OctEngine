@@ -341,7 +341,12 @@ namespace Procedural
 		Tweak::floatVar("Terrain/Wetness", "Surface water softness", &m_wetSurfaceSoftness, 0.0f, 1.0f, 0.01f);
 		Tweak::floatVar("Terrain/Wetness", "Live surface margin (m)", &m_wetLiveMargin, 0.0f, 1.0f, 0.01f);
 		Tweak::floatVar("Terrain/Wetness", "Surface water waviness", &m_wetSurfaceWaviness, 0.0f, 1.0f, 0.01f);
-		Tweak::floatVar("Terrain/Wetness", "Surface water depth (m)", &m_wetSurfaceDepth, 0.0f, 2.0f, 0.01f);
+		// Inland film (away from the shore, where the FFT wave weight is 0): wind ripples, no foam. The
+		// amplitude follows the ocean's wind speed - they are the ocean's own finest-cascade slopes (the
+		// film's existing taps, so the ripple size is "Ocean/Waves/Cascade 2").
+		Tweak::floatVar("Terrain/Wetness", "Surface water normal scale", &m_wetSurfaceNormalScale, 0.0f, 4.0f, 0.01f); // x the ocean's "Normal strength"
+		Tweak::floatVar("Terrain/Wetness", "Wind ripple strength",&m_wetRippleStrength, 0.0f, 4.0f, 0.01f);
+		Tweak::floatVar("Terrain/Wetness", "Surface water depth (m)",&m_wetSurfaceDepth, 0.0f, 2.0f, 0.01f);
 		// Albedo: DAMP (soaked ground everywhere) is a plateau above the knee that fades smoothly to dry;
 		// the WET scale is the standing-film layer on top - the whole surface just after a wave (above
 		// the spike start) and the pools once it drains. Fully wet = damp x wet.
@@ -535,6 +540,8 @@ namespace Procedural
 			.surfaceSoftness = m_wetSurfaceSoftness,
 			.surfaceWaviness = m_wetSurfaceWaviness,
 			.surfaceDepth = m_wetSurfaceDepth,
+			.rippleStrength = m_wetRippleStrength,
+			.surfaceNormalScale = m_wetSurfaceNormalScale,
 			.liveMargin = m_wetLiveMargin,
 		});
 

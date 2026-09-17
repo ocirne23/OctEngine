@@ -224,7 +224,8 @@ export namespace Procedural
 		bool  m_rtReflections = true;        // OCEAN_RT_REFLECTIONS shader variant (pipeline reload on toggle)
 		float m_rtReflectionRange = 3000.0f; // max mirror-ray length (m): how distant scenery still reflects
 		float m_rtReflectionMaxRough = 0.25f; // roughness above which the mirror ray is skipped (blurred-sky fallback)
-		float m_rtRayCutoffDist = 0.0f;       // camera distance (m) beyond which NO rays trace (analytic
+		float m_rtReflectionFog = 0.2f;      // fog on mirror rays: 1 = the reflected source's own fog, 0 = off
+		float m_rtRayCutoffDist = 0.0f;      // camera distance (m) beyond which NO rays trace (analytic
 		                                      // bottom + sky fallbacks - the same paths misses take); 0 = unlimited
 
 		// The streamer's active baked terrain-data map (adopted each update()); the shared_ptr keeps this

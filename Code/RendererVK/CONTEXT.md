@@ -247,7 +247,10 @@ top-down camera hanging in empty sky shapes none of these:
   `u_giTrace0/1` (the trace tweaks, last frame's focus, the TLAS range), `u_frameIndex`, `u_sceneFocus`
   — so neither shader has push constants. The instance dispatch and the TLAS build cover the instance
   buffer's whole CAPACITY (`m_maxGiTlasInstances`); the shader writes every slot past the live count
-  INACTIVE. `AccelerationStructure::ensureTlasCapacity` (CPU, at the top of `recordCommandBuffers`)
+  INACTIVE. **`u_giTlasNumInstances` is patched in `present()`, not written by the beginFrame UBO
+  build** — that build runs right after `m_meshInstanceCounter = 0`, so a count taken there is always 0:
+  every slot inactive, an empty TLAS, and no ray hits anywhere (RT shadows, RTAO, GI, ocean rays) with
+  no validation error. `AccelerationStructure::ensureTlasCapacity` (CPU, at the top of `recordCommandBuffers`)
   sizes each slot's TLAS to that capacity and invalidates on a handle change, so the GI/RTAO/fog
   secondaries and the forward set's TLAS descriptor all re-record together. Invalidation also comes
   from the instance-capacity growth and from the `RT/Enable RT` + `GI/Enable GI` tweaks (baked in).
@@ -504,7 +507,46 @@ Both push params in every frame; the renderer owns none of the tweaks.
 * **`setOceanParams`** — flipping `hitLighting` (`OCEAN_HIT_LIGHTS`) or `rtReflections`
   (`OCEAN_RT_REFLECTIONS`, the scene mirror ray; "Ocean/RT/Reflections") or `debugMode`
   (`OCEAN_DEBUG_MODE`, "Ocean/Debug mode"; the mode legend is at the top of `ocean.fs.glsl`) rebuilds the ocean fragment
-  variant (GPU idle + shader reload). The mirror ray's "Reflection max rough" gate reads the roughness
+  variant (GPU idle + shader reload). `OCEAN_RT_REFLECTIONS` also goes onto the TERRAIN fragment
+  variant: the surface-water film (`terrainWaterFilm`) traces the same mirror ray under the same gates
+  (`terrainFilmMirror`; a hit takes its material's diffuse texture, no splat at the hit; TERRAIN hits
+  fade out with the local ground slope - a level mirror on a slope would mirror the hill it lies on).
+  **The film's base normal is the LEVEL water plane, not the ground normal** (sun, sky, lights and the
+  mirror ray match the ocean on sloped ground); it eases to the ground normal as the view flattens onto
+  the plane (`V.y` 0.35 -> 0.05), because a hard switch drew a line at eye height. The film runs the
+  ocean's grid-light walk (specular only) and the ground's wet gloss is off under it. **Inland**
+  (above the swash run-up, where the FFT depth weight is 0) the film takes wind ripples: the finest
+  cascade keeps a slope weight of its own there ("Terrain/Wetness/Wind ripple strength",
+  `u_terrainWetParams7.z`) - the film loop's existing taps, no extra fetch. The film also carries the
+  ocean's sub-band DETAIL slope (the `oceanDetailSlope` math inlined, "Ocean/Shading/Detail *", one
+  extra tap), its crest foam (`oceanInstantFoam` inlined, shore-gated) and its own normal knob
+  ("Surface water normal scale", `u_terrainWetParams7.w`, x the ocean's normal strength); no foam inland, and the amplitude follows the ocean wind through the spectrum.
+  **Every scene ray is gated on its VISIBLE weight (2%)**, resolved before it is traced: the ocean's
+  refraction on `(1 - F)(1 - milk)(1 - foam)`, its mirror on `F (1 - reflBlur)(1 - foam)`, the film's
+  mirror on the same x its coverage, the film's shadowed light walk on coverage x `(1 - foam)`, the
+  underside's mirror (+ its sun shadow ray) on `1 - window transmission`, and an underside pixel the
+  water path has absorbed to 0.1% traces nothing.
+  **The UNDERSIDE traces the scene above the water** through Snell's window (the refracted ray into the
+  air; same define, "Reflection range" and cutoff as the mirror ray, gated on the window's transmission
+  > 2%); a miss keeps the sky + sun glitter. Hit and sky are both fogged over the LITERAL path (`applyRayFog` /
+  `applyRayFogSky`):
+  the mirror rule below needs a directly visible source, which an underwater viewer does not have.
+  **The underside wears the surface FOAM too**: the foam terms are resolved before the side split (the
+  turbulence fetch takes screen derivatives), a foam patch is laid over the window + mirror as a backlit
+  diffuse sheet (half the top side's whitewater light), and it scales both underside rays' weights.
+  **Mirror rays are fogged, hits AND the reflected sky** (`reflection_fog.inc.glsl`, ocean + film).
+  **THE RULE: a reflection carries the fog its SOURCE carries when seen directly** -
+  `tau(camera -> what the ray shows) - tau(camera -> the water point)`, the second term being what the
+  screen-space fog pass lays over the water pixel afterwards. NOT the literal path from the water point:
+  height fog is densest at its base (sea level over water, with terrain follow), so a grazing mirror ray
+  stays in the densest metre while the camera's ray to the same shore runs a camera height above it
+  (~7x thinner at the defaults) - the literal path buried every reflection and needed a fudge factor no
+  single value of which fit two fog settings. Closed form (`volAnalyticOpticalDepthLinear`), near medium,
+  capped at the fog range, no fetch: terrain follow is approximated from the origin's and the hit's own
+  height above sea level (half of it - a point's height overshoots the macro altitude). No regional
+  climate, no noise, unshadowed; lit like the far field (HG sun + the GI sky probe).
+  "Ocean/RT/Reflection fog" (`u_oceanParams8.x`): 1 = the source's fog, 0 = off.
+  The mirror ray's "Reflection max rough" gate reads the roughness
   WITHOUT "Micro roughness" — that term is a constant floor, so inside the gate it switched the mirror
   off on every pixel. `setOceanWaveTrough` sizes the waterline band the fog scatter samples for the underwater fog
   boundary.

@@ -188,25 +188,18 @@ float oceanSurfaceWeight(float depth, float waterLevel)
 }
 
 // --- Sub-band detail --------------------------------------------------------------------------------
-// The FFT band stops at the finest cascade's Nyquist, and the clipmap band-limits the DISPLACEMENT well
-// above even that, so near the camera the sea is a normal map on smooth geometry - what reads as
-// plastic. This borrows the finest cascade's OWN gradient field, re-sampled at a FRACTION of its patch
-// size: the same wave statistics at a shorter wavelength, for one fetch, no extra memory and no extra
-// FFT work.
-//
-// The domain is ROTATED, because an unrotated copy is just the same field scaled - its crest lines run
-// parallel to the parent's at every point and read as a fractal repeat instead of independent ripples.
-// The slope comes back rotated into the sample domain, so the caller's oceanFlowToWorld still takes it
-// the rest of the way.
-//
-// SHADING ONLY: it is never added to oceanSampleDisplacement, so the drawn geometry, the depth prepass
-// and the CPU buoyancy mirror (OceanGenerator::sampleDisplacement) are all untouched - "the shader is
-// what you see, the mirror is what floats on it" still holds.
-//
-// Implicit LOD on purpose: a smaller patch makes the uv derivatives correspondingly larger, so the mip
-// chain filters this band exactly as it filters the cascades. It fades out past "Detail fade (m)"
-// rather than being left to the mips, because its variance is NOT in the LEAN moments - filtered-away
-// detail would silently vanish instead of becoming roughness. "Micro roughness" covers that band.
+// The FFT band stops at the finest cascade's Nyquist, and the clipmap band-limits the displacement well
+// above that, so near the camera the sea is a normal map on smooth geometry. This borrows the finest
+// cascade's own gradient field at a FRACTION of its patch size: the same wave statistics at a shorter
+// wavelength, for one fetch and no extra FFT work.
+//   - ROTATED domain: an unrotated copy is the same field scaled - its crests run parallel to the
+//     parent's and read as a fractal repeat. The slope comes back rotated into the sample domain.
+//   - SHADING ONLY: never in oceanSampleDisplacement, so the geometry, the depth prepass and the CPU
+//     buoyancy mirror (OceanGenerator::sampleDisplacement) are untouched.
+//   - Implicit LOD: the smaller patch scales the uv derivatives, so the mip chain filters this band like
+//     the cascades. It still fades out past "Detail fade (m)": its variance is not in the LEAN moments,
+//     so filtered-away detail would vanish instead of becoming roughness ("Micro roughness" covers it).
+// The terrain water film carries an inlined copy (instanced_indirect_terrain.fs.glsl) - keep them in step.
 vec2 oceanDetailSlope(vec2 sampleXZ, vec2 worldXZ, float surfaceWeight)
 {
     const float strength = u_oceanParams11.x;

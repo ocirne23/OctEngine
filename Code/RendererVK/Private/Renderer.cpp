@@ -884,7 +884,7 @@ void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const
     ubo.giTrace1 = glm::vec4(m_giPrevFocusPos, m_giProbePipeline.getTlasRange());
     if (m_rtParams.enabled && m_rtParams.giEnabled)
         m_giPrevFocusPos = sceneFocusOrCamera();
-    ubo.giTlasNumInstances = oc::min(m_meshInstanceCounter, m_maxGiTlasInstances);
+    ubo.giTlasNumInstances = 0; // the counter was just reset: present() patches the real count in
     ubo.frameIndex = m_frameCounter;
     // SIM clock, not the wall clock: shader animation (ocean waves, force pulses, fog) freezes with
     // the global pause (see Time::setPaused).
@@ -1174,7 +1174,7 @@ void Renderer::buildUboOcean()
     const float swashAmp = glm::clamp(ocean.swashAmp, 0.0f, 4.0f);
     const float swashReach = swashAmp * (m_oceanWaveTrough + 0.25f);
     ubo.oceanParams7 = glm::vec4(glm::max(ocean.cullMargin, 0.0f), glm::clamp(ocean.shoreFoamMax, 0.0f, 1.0f), swashAmp, swashReach);
-    ubo.oceanParams8 = glm::vec4(0.0f /* x: the removed swash drawdown */, glm::clamp(ocean.shoreFoamBias, -1.0f, 1.0f),
+    ubo.oceanParams8 = glm::vec4(glm::max(ocean.rtReflectionFog, 0.0f),glm::clamp(ocean.shoreFoamBias, -1.0f, 1.0f),
         glm::max(ocean.swashFlow, 0.0f), glm::max(ocean.rtRayCutoffDist, 0.0f));
     ubo.oceanParams9 = glm::vec4(glm::max(ocean.microRoughness, 0.0f), glm::max(ocean.rtRefractionRange, 1.0f), // the tweak's own minimum; 10 here silently floored 1..9 m
         glm::max(ocean.rtReflectionRange, 50.0f), glm::clamp(ocean.rtReflectionMaxRough, 0.0f, 1.0f));
@@ -1398,7 +1398,8 @@ void Renderer::buildUboTerrain()
             glm::clamp(wet.dampKnee, 0.0f, 1.0f), glm::clamp(wet.spikeStart, 0.0f, 0.99f));
         ubo.terrainWetParams6 = glm::vec4(glm::clamp(wet.surfaceThreshold, 0.0f, 1.0f), glm::clamp(wet.surfaceSoftness, 0.0f, 1.0f),
             glm::clamp(wet.surfaceWaviness, 0.0f, 1.0f), glm::max(wet.surfaceDepth, 0.0f));
-        ubo.terrainWetParams7 = glm::vec4(glm::max(wet.dryRate, 0.0f) * dt, glm::max(wet.liveMargin, 0.0f), 0.0f, 0.0f);
+        ubo.terrainWetParams7 = glm::vec4(glm::max(wet.dryRate, 0.0f) * dt, glm::max(wet.liveMargin, 0.0f),
+            glm::max(wet.rippleStrength, 0.0f), glm::max(wet.surfaceNormalScale, 0.0f));
     }
     static_assert(sizeof(ubo.terrainSplatClimate) == sizeof(m_terrainSplatClimate));
     memcpy(ubo.terrainSplatClimate, m_terrainSplatClimate, sizeof(m_terrainSplatClimate));
@@ -1892,6 +1893,12 @@ void Renderer::present()
     assert(m_renderNodeTransforms.size() == 0 || Globals::textureManager.getNumTextures() > 0 && "Attempting to render object without any textures loaded!");
 
     ProfileScope uploadScope("Per-frame uploads", EProfileCategory::Renderer);
+    // The UBO was uploaded in beginFrame, where the instance counter had just been reset: the TLAS-instance
+    // writer's live count is only known here, so patch that one word. (Left at the beginFrame value it
+    // read 0 every frame - every TLAS slot inactive, an EMPTY TLAS, no ray hit anywhere.)
+    m_ubo.giTlasNumInstances = oc::min(m_meshInstanceCounter, m_maxGiTlasInstances);
+    Globals::stagingManager.upload(frameData.ubo.getBuffer(), sizeof(uint32), &m_ubo.giTlasNumInstances,
+        offsetof(RendererVKLayout::Ubo, giTlasNumInstances));
     ProfileScope transformScope("Transforms upload", EProfileCategory::Renderer);
     // Sparse transform upload: only slots that changed since this frame-in-flight last consumed
     // them, gathered from every worker's dirty list.

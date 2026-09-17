@@ -607,7 +607,7 @@ export namespace RendererVKLayout
                                    // (oceanVertexCulled; 0 = off),
                                    // y = shore foam max coverage (surf band opacity cap),
                                    // z = swash amplitude (0 = off), w = swash reach (m, CPU estimate)
-        glm::vec4 oceanParams8;    // x unused (was the swash drawdown of the removed waterline floor),
+        glm::vec4 oceanParams8;    // x = reflection fog amount (mirror rays, ocean + terrain film; 0 = off, 1 = the scene's fog),
                                    // y = shore foam threshold bias (negative = sparser surf),
                                    // z = swash backflow (horizontal chop scale on the tongue),
                                    // w = RT ray cutoff distance (m from the camera; beyond it the water
@@ -697,14 +697,17 @@ export namespace RendererVKLayout
         glm::vec4 terrainWetParams6; // surface water (the terrain shader draws near-full-wetness ground AS
                                      // water, with the ocean's surface terms): x = wetness at which the
                                      // look is half in, y = half-width of that ramp, z = waviness (0 = the
-                                     // ground's normal, 1 = the live FFT wave normal), w = virtual water
+                                     // level water plane, 1 = the live FFT wave normal), w = virtual water
                                      // depth (m) the ground is tinted through (Beer-Lambert + in-scatter)
         glm::vec4 terrainWetParams7; // x = linear dry this frame (dry rate x dt: the constant part of the
                                      // drain, next to the proportional exp(-dt / dry time) - together
                                      // rain settles at dryTime x (rain - dryRate)),
                                      // y = live-surface margin (m): the film + gloss stay on ground up to this
                                      //     far below the estimated live surface (it sits under the drawn ocean
-                                     //     edge), zw unused
+                                     //     edge),
+                                     // z = inland wind ripple strength on the film (0 = off): the finest ocean
+                                     //     cascade's slope weight where the shore weight is 0,
+                                     // w = film wave normal scale (x the ocean's normal strength; 1 = the ocean's)
         glm::vec4 terrainSplatClimate[MAX_TERRAIN_SPLAT_MATERIALS]; // ground/rock CLIMATE BOX in the
                                      // (t01, h01) space: xy = temperature range, zw = humidity range.
                                      // Weight is 1 inside the box and Gaussian-decays outside it, so a

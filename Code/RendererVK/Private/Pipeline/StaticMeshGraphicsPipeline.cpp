@@ -227,6 +227,11 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
                 || variant.fragmentShader.debugFilePath == terrainVariantPath)
                 variant.fragmentShader.defines.push_back({ name, modeText });
     };
+    // The terrain's surface-water film mirrors the scene with the ocean's ray, under the ocean's toggle.
+    if (m_oceanRtReflections)
+        for (PipelineVariant& variant : graphicsPipelineLayout.additionalVariants)
+            if (variant.fragmentShader.debugFilePath == terrainVariantPath)
+                variant.fragmentShader.defines.push_back({ "OCEAN_RT_REFLECTIONS", "1" });
     defineLitDebug("SHADOW_DEBUG", m_shadowDebugMode);
     defineLitDebug("LIGHT_GRID_DEBUG", m_lightGridDebugMode);
 

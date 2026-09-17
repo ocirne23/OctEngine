@@ -86,6 +86,7 @@ layout (binding = 8) uniform sampler2DArrayShadow u_shadowMap;
 layout (binding = 9) uniform sampler2DArray u_shadowMapDepth;
 #include "shadows.inc.glsl"
 #include "punctual_lights.inc.glsl"
+#include "reflection_fog.inc.glsl"
 
 layout (location = 0) in vec3 in_pos;                       // displaced world position
 layout (location = 1) in mat3 in_tbn;                       // placeholder (normal rebuilt here)
@@ -103,11 +104,14 @@ layout (location = 0) out vec4 out_color;
 //   2 = swash weight    the tongue weight (backflow): white = full, black = none
 //   3 = surface weight  oceanSurfaceWeight: white = open water, darker = eased toward the swash amplitude
 //   5 = shore foam band the surf band's nearShore target (u_oceanParams5.z)
-//   6 = mirror ray      GREEN = scene hit (brightness = distance, white-ish near), BLUE = fired, missed
-//                       (TLAS has geometry), CYAN = shadow-ray helper hits where traceScene missed,
-//                       WHITE = hit only past "Reflection range", GREY = nothing hits anywhere (TLAS empty),
-//                       RED = skipped by F <= 2.5%, YELLOW = skipped by "Reflection max rough",
+//   6 = mirror ray      GREEN = scene hit (pink-white near, pure green far), BLUE = fired, missed (TLAS has
+//                       geometry), WHITE = hit only past "Reflection range", GREY = nothing hits anywhere
+//                       (the TLAS is EMPTY - every RT effect is dead, not just this ray),
+//                       RED = skipped as invisible (mirror weight <= 2%: nadir, foam, blur), YELLOW = skipped by "Reflection max rough",
 //                       MAGENTA = skipped by "Ray cutoff dist", BLACK = OCEAN_RT_REFLECTIONS off
+//                       UNDERSIDE: the same colours for the WINDOW ray (the scene above the water);
+//                       outside Snell's window CYAN = TIR, mirror traced, DARK CYAN = TIR, mirror skipped
+// Modes 1-5 are position-keyed and show on both sides of the surface.
 // Set by the "Ocean/Debug mode" tweak (a define on this variant; toggling reloads the pipeline).
 #ifndef OCEAN_DEBUG_MODE
 #define OCEAN_DEBUG_MODE 0
@@ -313,7 +317,7 @@ vec3 shadeHit(SceneHit hit, vec3 rayDir, vec3 sunRadiance, vec3 L)
 }
 
 // The water body along `dir` from `origin` (a surface point offset to the water side): the scene hit
-// (TLAS; the baked terrain height field when that misses or rays are off), shaded, Beer-Lambert
+// (TLAS; the baked terrain height field ONLY where the TLAS cannot answer), shaded, Beer-Lambert
 // absorbed over the path and blended into the in-scatter. Bounded at ~99% extinction and "Refraction
 // range" (the bottom fades over the range's last 25%: a hard cutoff draws a contour on the seabed).
 // surfPos/shoreHW: the pixel's surface point and its shore fetch, the height-field fallback's first
@@ -327,16 +331,20 @@ vec3 traceWaterBody(vec3 origin, vec3 dir, vec3 surfPos, vec2 shoreHW, vec3 sunT
     const float range = u_oceanParams9.y;
     const float tMax = min(4.6 / minSigma, range);
     SceneHit hit;
+    // A ray the TLAS can answer is FINAL: a miss means no bottom within tMax, which is the in-scatter.
+    // The height field stands in only where the TLAS cannot answer - rays off ("Ray cutoff dist"), or the
+    // ray's reach leaving the TLAS instance range around the scene focus ("RT/TLAS Range").
+    const bool traced = rtInRange && distance(surfPos, u_sceneFocus.xyz) + tMax < u_giTrace1.w;
     bool haveHit = rtInRange && traceScene(origin, dir, tMax, true, hit);
-    if (!haveHit && dir.y < -0.02)
+    if (!haveHit && !traced && dir.y < -0.02)
     {
         float bottom = surfPos.y - shoreHW.x;
         const float t = max(bottom, 0.02) / -dir.y;
         bottom = surfPos.y - oceanSampleShoreData(surfPos.xz + dir.xz * t).x; // one refinement for sloped shelves
         hit.t = max(bottom, 0.02) / -dir.y;
-        if (hit.t < range)
+        // Past tMax the bottom is extinct: the in-scatter, not a hit pulled in to tMax.
+        if (hit.t < tMax)
         {
-            hit.t = min(hit.t, 4.6 / minSigma);
             hit.pos = surfPos + dir * hit.t;
             hit.N = vec3(0.0, 1.0, 0.0);
             hit.albedo = terrainSeabedAlbedo(hit.pos, hit.N, hit.t, hit.waterLevel);
@@ -378,44 +386,8 @@ void main()
     const vec3 faceN = cross(dFdx(in_pos), dFdy(in_pos));
     const float uvFootprint = length(fwidth(in_uv));
 
-    // Underside (camera on the water side of this triangle): refracted sky in Snell's window, the water
-    // body's in-scatter outside it (TIR). The side comes from the rasterized triangle's plane, not
-    // gl_FrontFacing: the clipmap carries both windings under back-face culling, so the surviving copy
-    // is always front-facing.
-    if (dot(faceN, V) * dot(faceN, N) < 0.0)
-    {
-        // Keep the detail normal inside the camera's hemisphere at grazing (a flip would open the window
-        // at TIR angles).
-        const float nv = dot(N, V);
-        if (nv > -1e-3)
-            N = normalize(N - V * (nv + 1e-3));
-        const vec3 inscatterU = u_oceanScatter.rgb * u_oceanScatter.w * (skyAmbientUp(up) + sunTint * max(L.y, 0.0) / PI);
-        // The mirror (TIR, and whatever the window does not transmit): the seabed and submerged shore
-        // reflected in the underside - the same traced water body the top side refracts into, along
-        // the mirrored ray. Sun-shadowed like the top side so the reflected bottom is not lit through
-        // cliffs.
-        const float sunVisU = L.y <= 0.0 ? 0.0
-            : (u_rtSunShadow > 0.5 ? rtShadowVisibility(in_pos + N * 0.1, L, 0.05, 10000.0) : sampleSunShadow(in_pos, N));
-        vec3 color = traceWaterBody(in_pos - N * 0.05, reflect(-V, N), in_pos, shoreHW, sunTint, sunVisU, L, inscatterU, rtInRange);
-        const vec3 refrUp = refract(-V, -N, 1.33);
-        if (dot(refrUp, refrUp) > 1e-6)
-        {
-            const vec3 tDir = normalize(refrUp);
-            // Fresnel from inside the water: Schlick on the transmitted (air-side) cosine, which reaches 0
-            // at the critical angle. "Underside transmission" scales it.
-            const float trans = (1.0 - F_Schlick(clamp(dot(tDir, N), 0.0, 1.0), 0.02)) * u_oceanParams10.z;
-            vec3 sky = reflectedSkyRadiance(tDir);
-            const float sunDot = max(dot(tDir, L), 0.0);
-            sky += sunTint * (pow(sunDot, 600.0) * 30.0 + pow(sunDot, 24.0) * 0.6);
-            color = mix(color, sky, trans);
-        }
-        // The underwater fog carries the water column only within its 100-300 m fade (vol_scatter);
-        // absorb the path beyond it here, on the same curve.
-        color *= exp(-u_oceanAbsorption.rgb * (viewDist * smoothstep(100.0, 300.0, viewDist)));
-        out_color = vec4(color, 1.0);
-        return;
-    }
-
+    // Foam, BEFORE the side split: both sides wear it (the underside sees it from below), and the
+    // turbulence fetch takes screen derivatives, which the underside branch cannot.
     // Accumulated turbulence (churn energy of past breaking). Drives aged foam, milkiness and extra
     // roughness.
     const float turbulence = oceanSampleTurbulence(in_uv, uvFootprint);
@@ -449,7 +421,11 @@ void main()
             shoreFoam = foamMax * (1.0 - exp(-shoreFoam / foamMax));
         }
     }
+    const float foamW = clamp(max(foam, shoreFoam), 0.0, 1.0);
+
 #if OCEAN_DEBUG_MODE != 0 && OCEAN_DEBUG_MODE != 6
+    // The depth-keyed modes are a function of the position alone: before the side split, so the underside
+    // shows them too.
     {
         const float depthDbg = oceanEffectiveDepth(in_uv, shoreHW.y - shoreHW.x);
         const float swDbg = oceanSwashWeight(depthDbg, shoreHW.y);
@@ -470,6 +446,112 @@ void main()
     }
 #endif
 
+    // Underside (camera on the water side of this triangle): through Snell's window the scene above the
+    // water or the sky, outside it (TIR) the mirrored water body, surface foam over both. The side comes from the rasterized triangle's plane, not
+    // gl_FrontFacing: the clipmap carries both windings under back-face culling, so the surviving copy
+    // is always front-facing.
+    if (dot(faceN, V) * dot(faceN, N) < 0.0)
+    {
+        // Keep the detail normal inside the camera's hemisphere at grazing (a flip would open the window
+        // at TIR angles).
+        const float nv = dot(N, V);
+        if (nv > -1e-3)
+            N = normalize(N - V * (nv + 1e-3));
+        // The underwater fog carries the water column only within its 100-300 m fade (vol_scatter); the
+        // path beyond it is absorbed here, on the same curve. Resolved first: past 0.1% nothing this pixel
+        // traces can show (not 2%, the rays' own cut: the window's sun glitter is ~30x the sky).
+        const vec3 pathAbsorb = exp(-u_oceanAbsorption.rgb * (viewDist * smoothstep(100.0, 300.0, viewDist)));
+        if (max(pathAbsorb.r, max(pathAbsorb.g, pathAbsorb.b)) < 0.001)
+        {
+            out_color = vec4(0.0, 0.0, 0.0, 1.0);
+            return;
+        }
+        const vec3 ambientSkyU = skyAmbientUp(up);
+        const vec3 inscatterU = u_oceanScatter.rgb * u_oceanScatter.w * (ambientSkyU + sunTint * max(L.y, 0.0) / PI);
+        // The window's transmission: Fresnel from inside the water - Schlick on the transmitted (air-side)
+        // cosine, which reaches 0 at the critical angle - scaled by "Underside transmission". It splits
+        // the pixel between the window (trans) and the mirror (1 - trans).
+        const vec3 refrUp = refract(-V, -N, 1.33);
+        const bool inWindow = dot(refrUp, refrUp) > 1e-6;
+        const vec3 tDir = inWindow ? normalize(refrUp) : vec3(0.0, 1.0, 0.0);
+        const float trans = inWindow ? (1.0 - F_Schlick(clamp(dot(tDir, N), 0.0, 1.0), 0.02)) * u_oceanParams10.z : 0.0;
+        // Surface foam covers both from below (laid over the result at the end), so it scales both rays'
+        // weights; under 2% a ray is skipped.
+        const float clearW = 1.0 - foamW;
+        const bool traceMirror = (1.0 - trans) * clearW > 0.02;
+#if OCEAN_DEBUG_MODE == 6
+        {
+            // The underside's scene ray is the WINDOW ray; outside the window (TIR) there is only the mirror.
+            vec3 dbg = vec3(0.0);
+            if (!inWindow)
+                dbg = traceMirror ? vec3(0.0, 1.0, 1.0) : vec3(0.0, 0.3, 0.3);
+#ifdef OCEAN_RT_REFLECTIONS
+            else if (trans * clearW <= 0.02)
+                dbg = vec3(1.0, 0.0, 0.0);
+            else if (!rtInRange)
+                dbg = vec3(1.0, 0.0, 1.0);
+            else
+            {
+                SceneHit dbgHit;
+                if (traceScene(in_pos + N * 0.05, tDir, u_oceanParams9.z, false, dbgHit))
+                    dbg = vec3(0.0, 1.0, 0.0) + vec3(0.8, 0.0, 0.8) * exp(-dbgHit.t * 0.05);
+                else if (rtShadowVisibility(in_pos + N * 0.05, tDir, 0.05, 100000.0) < 0.5)
+                    dbg = vec3(1.0);
+                else if (rtShadowVisibility(u_viewPos, vec3(0.0, -1.0, 0.0), 0.05, 100000.0) < 0.5)
+                    dbg = vec3(0.0, 0.0, 1.0);
+                else
+                    dbg = vec3(0.3);
+            }
+#endif
+            out_color = vec4(dbg, 1.0);
+            return;
+        }
+#endif
+        float sunVisU = 0.0; // for the mirrored seabed and the foam's backlight
+        if (L.y > 0.0 && (traceMirror || foamW > 0.003))
+            sunVisU = u_rtSunShadow > 0.5 ? rtShadowVisibility(in_pos + N * 0.1, L, 0.05, 10000.0) : sampleSunShadow(in_pos, N);
+        // The mirror: the seabed and submerged shore reflected in the underside - the same traced water
+        // body the top side refracts into, along the mirrored ray.
+        vec3 color = inscatterU;
+        if (traceMirror)
+            color = traceWaterBody(in_pos - N * 0.05, reflect(-V, N), in_pos, shoreHW, sunTint, sunVisU, L, inscatterU, rtInRange);
+        if (inWindow)
+        {
+            // The window: the scene above the water along the refracted ray, else the sky with the sun's
+            // glitter. The top side's mirror ray in every respect but the fog: the viewer is under water,
+            // so the mirror rule has no direct view to match and the LITERAL path is fogged.
+            vec3 above;
+            bool aboveHit = false;
+#ifdef OCEAN_RT_REFLECTIONS
+            if (trans * clearW > 0.02 && rtInRange)
+            {
+                SceneHit hit;
+                aboveHit = traceScene(in_pos + N * 0.05, tDir, u_oceanParams9.z, false, hit); // "Reflection range"
+                if (aboveHit)
+                    above = applyRayFog(shadeHit(hit, tDir, sunTint, L), in_pos, tDir, hit.t, sunTint, L, ambientSkyU);
+            }
+#endif
+            if (!aboveHit)
+            {
+                above = reflectedSkyRadiance(tDir);
+                const float sunDot = max(dot(tDir, L), 0.0);
+                above += sunTint * (pow(sunDot, 600.0) * 30.0 + pow(sunDot, 24.0) * 0.6);
+                above = applyRayFogSky(above, in_pos, tDir, sunTint, L, ambientSkyU);
+            }
+            color = mix(color, above, trans);
+        }
+        // Foam from below: a backlit diffuse sheet - the top side's whitewater light, of which about half
+        // comes through.
+        if (foamW > 0.003)
+        {
+            const vec3 foamBelow = u_oceanFoam.rgb * (0.5 * (sunTint * (max(L.y, 0.0) * sunVisU) / PI + ambientSkyU + u_ambientColor));
+            color = mix(color, foamBelow, foamW);
+        }
+        color *= pathAbsorb;
+        out_color = vec4(color, 1.0);
+        return;
+    }
+
     if (dot(N, V) < 0.0) // grazing: keep the shading hemisphere consistent
         N = -N;
 
@@ -483,12 +565,11 @@ void main()
     // + the sub-grid capillary band + turbulence micro-roughness. The variance terms stretch the sun
     // glitter toward the horizon.
     //
-    // "Micro roughness" (u_oceanParams9.x) is the slope variance of everything BELOW the finest
-    // cascade's Nyquist. LEAN returns only the variance the MIP CHAIN removed, so it is exactly zero at
-    // mip 0: without this term the near field fell back on the capped screen-derivative AA and then onto
-    // the 0.02 alpha clamp - a mirror, which is what reads as plastic water up close. It is NOT scaled by
-    // "Glint filtering": that knob trades away FILTERED variance, and this band was never in the
-    // spectrum to filter. Enters as alpha^2 = 2 sigma^2, the same form as the LEAN term.
+    // "Micro roughness" (u_oceanParams9.x): the slope variance of everything BELOW the finest cascade's
+    // Nyquist. LEAN returns only what the mip chain removed - exactly zero at mip 0 - so without it the
+    // near field falls onto the 0.02 alpha clamp: a mirror, plastic water up close. Not scaled by "Glint
+    // filtering" (that trades away FILTERED variance; this band was never in the spectrum). Enters as
+    // alpha^2 = 2 sigma^2, like the LEAN term.
     const float perceptualRough = clamp(u_oceanAbsorption.w, 0.02, 1.0);
     const float slopeVariance = 0.5 * (slopeVar.x + slopeVar.y) * (ns * ns);
     const float microVariance = u_oceanParams9.x * (ns * ns);
@@ -510,9 +591,17 @@ void main()
 
     const float F = F_Schlick(NoV, 0.02);
 
+    // Each scene ray's weight in the final pixel, resolved before it is traced: foam covers both,
+    // turbidity replaces the body, Fresnel splits the rest, the roughness blur hands part of the mirror
+    // to the average sky. Under 2% the ray is skipped.
+    const float milk = clamp(turbulence * u_oceanParams5.y, 0.0, 1.0); // entrained bubbles ("Turbidity")
+    const float reflBlur = clamp(alphaF * 2.0 - 0.05, 0.0, 0.6);
+    const float bodyWeight = (1.0 - F) * (1.0 - milk) * (1.0 - foamW);
+    const float mirrorWeight = F * (1.0 - reflBlur) * (1.0 - foamW);
+
     // Refracted body: the traced water column (Beer-Lambert both ways).
     vec3 body = inscatter;
-    if (F < 0.98) // at grazing the transmitted term is invisible: skip the ray
+    if (bodyWeight > 0.02)
     {
         const vec3 refrDir = refract(-V, N, 1.0 / 1.33);
         if (dot(refrDir, refrDir) > 1e-6)
@@ -523,27 +612,29 @@ void main()
     vec3 R = reflect(-V, N);
     R.y = max(R.y, 0.02); // keep grazing reflections just above the horizon
     R = normalize(R);
-    const float reflBlur = clamp(alphaF * 2.0 - 0.05, 0.0, 0.6);
-    vec3 reflColor = reflectedSkyRadiance(R);
-    // Skipped near nadir (F < 2.5%, the mirror is invisible - the refraction's F > 98% rule mirrored):
-    // a top-down camera keeps only its refraction ray. "Reflection max rough": a wide lobe can't be one
-    // mirror sample. The gate reads the roughness WITHOUT "Micro roughness": that term is a constant
-    // floor on every pixel, so with it in the gate a moderate value switched the mirror off everywhere.
+    vec3 reflColor;
+    bool mirrorHit = false;
+    // "Reflection max rough": a wide lobe can't be one mirror sample. The gate reads the roughness WITHOUT
+    // "Micro roughness" - a constant floor on every pixel, which would switch the mirror off everywhere.
 #ifdef OCEAN_RT_REFLECTIONS // "Ocean/RT/Reflections"
     const float alphaGate = sqrt(max(alphaSq - 2.0 * microVariance, 0.0));
-    if (F > 0.025 && alphaGate < u_oceanParams9.w && rtInRange)
+    if (mirrorWeight > 0.02 && alphaGate < u_oceanParams9.w && rtInRange)
     {
         SceneHit hit;
-        if (traceScene(in_pos + N * 0.05, R, u_oceanParams9.z, false, hit)) // "Reflection range"
-            reflColor = shadeHit(hit, R, sunTint, L);
+        mirrorHit = traceScene(in_pos + N * 0.05, R, u_oceanParams9.z, false, hit); // "Reflection range"
+        if (mirrorHit)
+            reflColor = applyReflectionFog(shadeHit(hit, R, sunTint, L), in_pos, R, hit.t, sunTint, L, ambientSky);
     }
 #endif
+    // Sky fallback, fogged too (the baked mirror sky carries none). Only on a miss: a hit replaces it whole.
+    if (!mirrorHit)
+        reflColor = applyReflectionFogSky(reflectedSkyRadiance(R), in_pos, R, sunTint, L, ambientSky);
 #if OCEAN_DEBUG_MODE == 6
     {
         vec3 dbg = vec3(0.0);
 #ifdef OCEAN_RT_REFLECTIONS
         SceneHit dbgHit;
-        if (F <= 0.025)
+        if (mirrorWeight <= 0.02)
             dbg = vec3(1.0, 0.0, 0.0);
         else if (alphaGate >= u_oceanParams9.w)
             dbg = vec3(1.0, 1.0, 0.0);
@@ -551,13 +642,10 @@ void main()
             dbg = vec3(1.0, 0.0, 1.0);
         else if (traceScene(in_pos + N * 0.05, R, u_oceanParams9.z, false, dbgHit))
             dbg = vec3(0.0, 1.0, 0.0) + vec3(0.8, 0.0, 0.8) * exp(-dbgHit.t * 0.05);
-        else if (rtShadowVisibility(in_pos + N * 0.05, R, 0.05, u_oceanParams9.z) < 0.5)
-            dbg = vec3(0.0, 1.0, 1.0); // CYAN: the shadow-ray helper hits where traceScene missed (ray flags)
         else if (rtShadowVisibility(in_pos + N * 0.05, R, 0.05, 100000.0) < 0.5)
             dbg = vec3(1.0);           // WHITE: a hit exists, but past "Reflection range"
-        else if (rtShadowVisibility(in_pos + vec3(0.0, 0.5, 0.0), -V, 0.0, viewDist) < 0.5
-            || rtShadowVisibility(u_viewPos, vec3(0.0, -1.0, 0.0), 0.05, 100000.0) < 0.5)
-            dbg = vec3(0.0, 0.0, 1.0); // BLUE: this ray missed, but the TLAS holds geometry (camera-ward / below the camera)
+        else if (rtShadowVisibility(u_viewPos, vec3(0.0, -1.0, 0.0), 0.05, 100000.0) < 0.5)
+            dbg = vec3(0.0, 0.0, 1.0); // BLUE: this ray missed, but the TLAS holds geometry (straight below the camera)
         else
             dbg = vec3(0.3);           // GREY: no ray hits anything - the TLAS is empty or not the bound one
 #endif
@@ -568,7 +656,7 @@ void main()
     const vec3 reflection = mix(reflColor, ambientSky, reflBlur);
 
     // Entrained bubbles: turbulent water turns milky ("Turbidity").
-    body = mix(body, whitewater * 0.55, clamp(turbulence * u_oceanParams5.y, 0.0, 1.0));
+    body = mix(body, whitewater * 0.55, milk);
 
     // Crest SSS: sun through back-lit crests glows the scatter color, scaled by height above the calm
     // line. In the transmitted body so Fresnel fades it at grazing like all subsurface light.
@@ -589,7 +677,6 @@ void main()
     color += sunTint * (D * Vv * NoL * sunVis) * F_Schlick(LoH, 0.02);
 
     // Crest foam + shoreline surf.
-    const float foamW = clamp(max(foam, shoreFoam), 0.0, 1.0);
     if (foamW > 0.003)
         color = mix(color, whitewater, foamW);
 
