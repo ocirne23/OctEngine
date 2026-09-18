@@ -117,7 +117,7 @@ float giEvalDepth(vec4 c, vec3 d) { return dot(c, shBasisL1(d)); }
 // Fraction of the probe's gather rays that hit backfacing geometry (~1 = embedded in a wall/terrain).
 float giProbeBackfaceFrac(uint cellBase) { return GI_GRID_DATA_NAME[cellBase + GI_MISC_V4].x; }
 
-// Relocation offset: probes embedded in / grazing geometry trace from (and are treated as sitting at)
+// Relocation offset: probes that escaped from inside geometry trace from (and are treated as sitting at)
 // lattice position + offset. Trilinear weights stay on the unmoved lattice.
 vec3 giProbeOffset(uint cellBase) { return GI_GRID_DATA_NAME[cellBase + GI_MISC_V4].yzw; }
 

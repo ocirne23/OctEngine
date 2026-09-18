@@ -292,20 +292,30 @@ void main()
     vec3 c0 = vec3(0.0), c1 = vec3(0.0), c2 = vec3(0.0), c3 = vec3(0.0);
     vec4  dsh = vec4(0.0), d2sh = vec4(0.0); // SH-L1 depth moments for Chebyshev visibility at lookup
     const float depthCap = GI_DEPTH_CAP_SPACING * float(spacing);
+    // Relocation (embedded probes only): the closest backface hit whose escape target lands INSIDE the
+    // offset clamp. A probe deeper in solid geometry than the clamp can never get out - stepping + clamping
+    // it every visit along that visit's random closest ray made it jump around the clamp sphere forever -
+    // so such a probe holds still (it is backface-dead at lookup anyway).
+    const float escapeMargin = 0.075 * float(spacing); // how far past the backface the probe lands
+    const float maxLen       = 0.45 * float(spacing);
     float backfaceSum = 0.0;
-    float closestBack = 1e30, closestFront = 1e30;
-    vec3  closestBackDir = vec3(0.0), closestFrontDir = vec3(0.0);
+    float closestBack = 1e30;
+    vec3  escapeOffset = vec3(0.0);
     for (uint i = 0u; i < N; ++i)
     {
         const vec3 dir = sampleSphere(i, N, jitter);
         float hitDist, backface;
         const vec3 radiance = traceRadiance(probePos, dir, cascade, hitDist, backface);
         backfaceSum += backface;
-        if (backface > 0.5)
+        if (backface > 0.5 && hitDist < closestBack)
         {
-            if (hitDist < closestBack) { closestBack = hitDist; closestBackDir = dir; }
+            const vec3 target = probeOffset + dir * (hitDist + escapeMargin);
+            if (dot(target, target) <= maxLen * maxLen)
+            {
+                closestBack = hitDist;
+                escapeOffset = target;
+            }
         }
-        else if (hitDist < closestFront) { closestFront = hitDist; closestFrontDir = dir; }
         const vec4 Y = shBasisL1(dir);
         c0 += radiance * (Y.x * wsh);
         c1 += radiance * (Y.y * wsh);
@@ -335,25 +345,14 @@ void main()
 
     const float backFrac = backfaceSum / float(N);
 
-    // Relocation update (RTXGI-style, simplified). Embedded probes punch through the closest backface
-    // along the ray that found it; probes grazing a wall back off along the ray that found the closest
-    // frontface; comfortable probes drift home so the offset doesn't fossilize around moved geometry.
-    // Clamped to a fraction of the spacing so the probe stays representative of its trilinear cell.
-    // closestFront/closestBack are minima over few jittered rays - very noisy estimators - so every
-    // steering step except the discrete punch-through is damped: raw per-frame corrections make the probe
-    // position (and with it the whole Chebyshev visibility field) wobble frame to frame.
-    const float minFront = 0.15 * float(spacing);
+    // Relocation update: an embedded probe punches through the closest backface along the ray that found it
+    // - one discrete step, no continuous steering. Front-face back-off and a drift home were tried and
+    // removed: every continuous rule reads a minimum over a few jittered rays, and the probes never came to
+    // rest. The escape target is already inside the clamp (filtered above), so no clamp is needed here; an
+    // offset is otherwise held as is (a fresh slot starts at zero).
     vec3 newOffset = probeOffset;
     if (backFrac > 0.25 && closestBack < 1e29)
-        newOffset += closestBackDir * (closestBack + minFront * 0.5); // escape is all-or-nothing: full step
-    else if (closestFront < minFront)
-        newOffset -= closestFrontDir * (0.5 * (minFront - closestFront));
-    else if (closestFront > minFront * 1.5)
-        newOffset *= 0.99;
-    const float maxLen = 0.45 * float(spacing);
-    const float offLen = length(newOffset);
-    if (offLen > maxLen)
-        newOffset *= maxLen / offLen;
+        newOffset = escapeOffset;
 
     float alpha = fresh ? 1.0 : min(u_giTrace0.y * float(updateInterval), 1.0);
     if (!fresh)

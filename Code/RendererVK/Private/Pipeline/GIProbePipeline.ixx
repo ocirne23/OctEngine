@@ -146,7 +146,7 @@ private:
     // GI probe trace tuning (runtime-tweakable; consumed by GIProbePipeline::recordTrace).
     int m_giRaysPerProbe = 17;         // gather rays per probe per visit
     int m_giUpdateInterval = 8;        // a probe traces every N frames (alpha scaled by N; fresh probes always trace)
-    float m_giTemporalAlpha = 0.005f;  // per-frame blend toward freshly traced irradiance
+    float m_giTemporalAlpha = 0.01f;   // per-frame blend toward freshly traced irradiance
     float m_giMaxRayDist = 8.0f;       // gather ray max distance (world units)
     float m_giStrength = 1.0f;         // multiplier on the sampled probe irradiance at shading time
     float m_tlasRange = 4096.0f;        // TLAS instance range bound around the camera (origin distance)
