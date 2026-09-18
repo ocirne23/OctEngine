@@ -106,8 +106,9 @@ namespace
     }
 }
 
-void LightGridComputePipeline::initialize()
+void LightGridComputePipeline::initialize(uint32 tableEntries)
 {
+    m_gridCapacity = tableEntries / 4;
     for (PerFrameData& perFrame : m_perFrameData)
     {
         perFrame.inIndirectCommandBuffer.initialize(sizeof(vk::DispatchIndirectCommand),
@@ -420,23 +421,20 @@ void LightGridComputePipeline::upload(Buffer& tableBuffer, uint32 tableEntries)
         frameData.inLightListBuffer.flushMappedMemory(m_demand.lightListSize * sizeof(uint32));
     }
 
-    // The hash table the readers probe: header + open-addressed slots holding grid data offsets.
+    // The hash table the readers probe IS the claim table, each slot replaced by its grid's data
+    // offset: one sequential write pass, no hashing, no probing, no read of the mapped memory.
+    const oc::span<const uint32> claimTable = m_claim.table();
+    assert(tableEntries == (uint32)claimTable.size());
     const size_t tableBytes = 3 * sizeof(uint32) + tableEntries * sizeof(uint32);
     oc::span<uint32> table = tableBuffer.mapMemory<uint32>(0, tableBytes);
     uint32 liveGrids = 0;
     uint32* slots = table.data() + 3;
-    memset(slots, 0xFF, tableEntries * sizeof(uint32));
-    const uint32 mask = tableEntries - 1;
-    for (uint32 slot = 0; slot < m_numGrids; ++slot)
+    for (uint32 i = 0; i < tableEntries; ++i)
     {
-        const GridJob& g = m_grids[slot];
-        if (g.cellSize == 0)
-            continue;
-        ++liveGrids;
-        uint32 idx = GridClaim::positionHash(g.pos) & mask;
-        while (slots[idx] != GridClaim::EMPTY_ENTRY)
-            idx = (idx + 1) & mask;
-        slots[idx] = g.dataOffset;
+        const uint32 slot = claimTable[i];
+        const bool live = slot != GridClaim::EMPTY_ENTRY;
+        liveGrids += live;
+        slots[i] = live ? m_grids[slot].dataOffset : GridClaim::EMPTY_ENTRY;
     }
     table[0] = liveGrids;
     table[1] = (uint32)(m_demand.gridDataBytes / sizeof(uint32));

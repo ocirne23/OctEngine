@@ -227,7 +227,7 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     m_compositePipeline.initialize(m_renderPass);
     m_indirectCullComputePipeline.initialize(m_maxInstanceData, m_maxUniqueMeshes);
     m_skinningComputePipeline.initialize(m_maxSkinningPaletteEntries, m_maxSkinningJobs);
-    m_lightGridComputePipeline.initialize();
+    m_lightGridComputePipeline.initialize(m_lightTableEntries);
     m_accelStructure.initialize(m_maxUniqueMeshes);
     m_giProbePipeline.initialize(m_maxGiTlasInstances, m_maxTextures, m_numTextureDescriptors);
     // The GI grid shape is a #define in every probe-sampling shader (Layout.ixx g_giGrid): a change waits
@@ -749,8 +749,8 @@ void Renderer::kickGridBuilds()
             // The mapped (write-combined) lights are only READ on the overflow re-walk, a non-goal path.
             const PerFrameData& frameData = m_perFrameData[frameIdx];
             m_lightGridDemand = m_lightGridComputePipeline.build(oc::span<const RendererVKLayout::LightInfo>(frameData.mappedLightInfos.data(), m_lightCounter));
-            m_lightGridNeedsGrow = m_lightGridDemand.numGrids * 4 > m_lightTableEntries || m_lightGridDemand.gridDataBytes > m_lightGridBufferSize
-                || !m_lightGridComputePipeline.hostBuffersFit(m_lightGridDemand);
+            // hostBuffersFit covers the table: its entries are 4x the pipeline's grid capacity (the claim table IS the GPU table)
+            m_lightGridNeedsGrow = m_lightGridDemand.gridDataBytes > m_lightGridBufferSize || !m_lightGridComputePipeline.hostBuffersFit(m_lightGridDemand);
             if (!m_lightGridNeedsGrow)
                 m_lightGridComputePipeline.upload(m_perFrameData[frameIdx].lightTableBuffer, m_lightTableEntries);
         },
@@ -2446,14 +2446,13 @@ void Renderer::createLightGridBuffers()
 // under a quarter full (hash collision quality), the grid data gets 1.5x.
 void Renderer::growLightGridBuffers(const LightGridComputePipeline::Demand& demand)
 {
-    while (demand.numGrids * 4 > m_lightTableEntries)
-        m_lightTableEntries *= 2; // stays a power of 2 for the hash
     const size_t neededGridBytes = demand.gridDataBytes + demand.gridDataBytes / 2;
     while (m_lightGridBufferSize < neededGridBytes)
         m_lightGridBufferSize *= 2;
     waitForGpuAndFlushStaging();
+    m_lightGridComputePipeline.resizeHostBuffers(demand); // doubles the grid capacity to fit; rehashes the claim table
+    m_lightTableEntries = m_lightGridComputePipeline.getTableEntries(); // the GPU table IS the claim table: same size, a power of 2
     createLightGridBuffers(); // per-frame GPU scratch, rewritten every frame: nothing to preserve
-    m_lightGridComputePipeline.resizeHostBuffers(demand);
     setHaveToRecordCommandBuffers();
     printf("Renderer: grew light grid buffers to %zu bytes / %u table entries (%u grids, %u workgroups)\n",
         m_lightGridBufferSize, m_lightTableEntries, demand.numGrids, demand.numWorkgroups);

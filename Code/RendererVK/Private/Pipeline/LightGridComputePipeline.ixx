@@ -40,7 +40,10 @@ public:
 		uint32 lightListSize = 0;
 	};
 
-	void initialize();
+	// tableEntries (a power of two) sizes the GPU hash table AND the claim table: they are the same
+	// table (4 entries per grid slot), so the renderer's table buffer always has getTableEntries().
+	void initialize(uint32 tableEntries);
+	uint32 getTableEntries() const { return m_gridCapacity * 4; }
 	void reloadShaders();
 	struct RecordParams
 	{
@@ -115,7 +118,7 @@ private:
 	oc::array<PerFrameData, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_perFrameData;
 	ComputePipeline m_computePipeline;
 
-	uint32 m_gridCapacity = 1024;
+	uint32 m_gridCapacity = 0; // tableEntries / 4 (initialize)
 	uint32 m_workgroupCapacity = 16384;
 	uint32 m_lightListCapacity = 65536;
 

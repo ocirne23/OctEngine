@@ -6,8 +6,9 @@ import Core.glm;
 // The lock-free CPU side of a world-space hash grid, shared by the light grid and the force grid:
 // world cells keyed by integer position are CLAIMED from any thread (bump-allocated slots, one CAS
 // per table entry), and (slot, item) TOUCHES are appended in per-item blocks. Both pipelines then
-// counting-sort the touches into per-slot lists and write the GPU table with the SAME hash
-// (getPositionHash in hash_grid.inc.glsl, bit for bit), so the shader readers are unchanged.
+// counting-sort the touches into per-slot lists. The claim table IS the GPU table (the hash is
+// getPositionHash in hash_grid.inc.glsl, bit for bit, and the sizes are equal): the upload writes
+// table() with each slot replaced by its data offset, so the shader readers are unchanged.
 //
 // Capacity is fixed within a frame: a claim past it returns INVALID_SLOT and a block past the touch
 // capacity INVALID_BEGIN, while the cursors keep counting so the frame's DEMAND is exact and the
@@ -32,14 +33,29 @@ public:
 		return n;
 	}
 
-	// Between frames only. The table is 4x the slots (<= 25% load: probes never wrap).
+	// While nothing claims. The table is 4x the slots (<= 25% load: probes never wrap). The live
+	// slots are REHASHED into the new table, so a growth between a build and its upload keeps them.
 	void resize(uint32 slotCapacity)
 	{
+		const uint32 numLive = numSlots();
 		m_capacity = slotCapacity;
 		m_pos.resize(slotCapacity);
 		m_payload.resize(slotCapacity);
 		m_table.assign(slotCapacity * 4, EMPTY_ENTRY);
+		const uint32 mask = (uint32)m_table.size() - 1;
+		for (uint32 slot = 0; slot < numLive; ++slot)
+		{
+			if (isDead(slot))
+				continue;
+			uint32 idx = positionHash(m_pos[slot]) & mask;
+			while (m_table[idx] != EMPTY_ENTRY)
+				idx = (idx + 1) & mask;
+			m_table[idx] = slot;
+		}
 	}
+	// THE hash table, slot indices: same hash, same linear probing and no deletions, so the GPU
+	// table is this one with every slot replaced by its data offset - no second build.
+	oc::span<const uint32> table() const { return m_table; }
 	void beginFrame()
 	{
 		m_cursor.store(0, oc::memory_order_relaxed);

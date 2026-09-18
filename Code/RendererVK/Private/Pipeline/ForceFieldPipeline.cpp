@@ -592,11 +592,7 @@ void ForceFieldPipeline::createGridBuffers()
 
 void ForceFieldPipeline::createClaimTables()
 {
-    const uint32 cellCapacity = m_tableEntries / 4; // <= 25% table load
-    m_gridClaim.resize(cellCapacity);
-    m_cellCounts.resize(cellCapacity);
-    m_cellOffset.resize(cellCapacity);
-    m_cellCursor.resize(cellCapacity);
+    m_gridClaim.resize(m_tableEntries / 4); // <= 25% table load
 }
 
 void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewCount)
@@ -996,13 +992,7 @@ bool ForceFieldPipeline::touchCells(const EmitterWalk& walk, uint32 emitterIdx, 
             {
                 const uint32 slot = m_gridClaim.claim(glm::ivec3(x, y, z), [] { return 0u; });
                 if (slot == GridClaim::INVALID_SLOT)
-                {
-                    // Retract the counts this emitter bumped so far; the caller drops its block and re-walks it.
-                    for (const Touch* t = out; t < cursor; ++t)
-                        oc::atomic_ref<uint32>(m_cellCounts[t->slot]).fetch_sub(1, oc::memory_order_relaxed);
-                    return false;
-                }
-                oc::atomic_ref<uint32>(m_cellCounts[slot]).fetch_add(1, oc::memory_order_relaxed);
+                    return false; // the caller drops the block and re-walks the emitter
                 *cursor++ = Touch{ .slot = slot, .item = emitterIdx };
             }
         }
@@ -1015,7 +1005,6 @@ ForceFieldPipeline::GridDemand ForceFieldPipeline::buildGrid()
     ProfileScope scope("Force grid build", EProfileCategory::Force);
     m_gridClaim.beginFrame();
     m_gridTouches.beginFrame();
-    memset(m_cellCounts.data(), 0, m_cellCounts.size() * sizeof(uint32));
 
     // Per emitter, in parallel: its cells claimed, counted and touched (the light grid does this
     // inline at add time; emitters only get their compact index at the compaction, so it is a
@@ -1062,35 +1051,28 @@ ForceFieldPipeline::GridDemand ForceFieldPipeline::buildGrid()
     }
     m_gridTouches.growToDemand();
 
-    // The cell records: live slots in claim order, FORCE_CELL_UINTS each {pos, count, packed ids}.
+    // The cell records, one per SLOT at slot * FORCE_CELL_UINTS {pos, count, packed ids}: a dead
+    // slot (a lost claim race, rare) keeps an empty record no table entry points at, which is what
+    // makes the offset a multiply instead of a per-slot array. The record's count field is the
+    // scatter cursor: it ends at the true count (forceCellCount clamps).
     const uint32 numSlots = m_gridClaim.numSlots();
-    m_numLiveCells = 0;
+    m_cellData.assign((size_t)numSlots * FORCE_CELL_UINTS, 0u);
     for (uint32 slot = 0; slot < numSlots; ++slot)
     {
-        if (m_gridClaim.isDead(slot))
-            continue;
-        m_cellOffset[slot] = m_numLiveCells++ * FORCE_CELL_UINTS;
-        m_cellCursor[slot] = 0;
-    }
-    m_cellData.assign((size_t)m_numLiveCells * FORCE_CELL_UINTS, 0u);
-    for (uint32 slot = 0; slot < numSlots; ++slot)
-    {
-        if (m_gridClaim.isDead(slot))
-            continue;
-        uint32* cell = m_cellData.data() + m_cellOffset[slot];
+        uint32* cell = m_cellData.data() + (size_t)slot * FORCE_CELL_UINTS;
         const glm::ivec3& pos = m_gridClaim.pos(slot);
         cell[0] = uint32(pos.x);
         cell[1] = uint32(pos.y);
         cell[2] = uint32(pos.z);
-        cell[3] = m_cellCounts[slot]; // the true count; forceCellCount clamps
     }
     const auto scatter = [&](const Touch& t)
     {
         if (t.item == GridTouches::SKIPPED)
             return;
-        const uint32 k = m_cellCursor[t.slot]++;
+        uint32* cell = m_cellData.data() + (size_t)t.slot * FORCE_CELL_UINTS;
+        const uint32 k = cell[3]++;
         if (k < FORCE_CELL_MAX_EMITTERS)
-            m_cellData[m_cellOffset[t.slot] + 4 + k / 2] |= (t.item & 0xFFFFu) << ((k & 1u) == 0u ? 0 : 16);
+            cell[4 + k / 2] |= (t.item & 0xFFFFu) << ((k & 1u) == 0u ? 0 : 16);
     };
     const Touch* touches = m_gridTouches.data();
     const uint32 numTouches = m_gridTouches.numTouches();
@@ -1101,7 +1083,7 @@ ForceFieldPipeline::GridDemand ForceFieldPipeline::buildGrid()
 
     m_gridDemand = GridDemand{
         .numCells = glm::max(m_gridClaim.slotDemand(), numSlots), // failed claims count: growth fits the burst
-        .dataBytes = (size_t)m_numLiveCells * FORCE_CELL_UINTS * sizeof(uint32),
+        .dataBytes = m_cellData.size() * sizeof(uint32),
     };
     return m_gridDemand;
 }
@@ -1126,28 +1108,19 @@ void ForceFieldPipeline::growGridBuffers(const GridDemand& demand)
 void ForceFieldPipeline::uploadGrid(uint32 frameIdx)
 {
     ProfileScope scope("Force grid upload", EProfileCategory::Force);
-    assert(m_numLiveCells * 4 <= m_tableEntries && m_cellData.size() * sizeof(uint32) <= m_gridDataSize);
+    assert(m_cellData.size() * sizeof(uint32) <= m_gridDataSize);
     if (!m_cellData.empty())
     {
         memcpy(m_mappedGridData[frameIdx].data(), m_cellData.data(), m_cellData.size() * sizeof(uint32));
         m_gridDataBuffers[frameIdx].flushMappedMemory(m_cellData.size() * sizeof(uint32));
     }
-    // The hash table the readers probe: header + open-addressed slots holding cell data offsets.
+    // The hash table the readers probe IS the claim table, byte for byte: slot indices, and
+    // forceFindCell turns a slot into its record offset (slot * FORCE_CELL_UINTS).
+    const oc::span<const uint32> claimTable = m_gridClaim.table();
+    assert(m_tableEntries == (uint32)claimTable.size());
     uint32* table = m_mappedGridTable[frameIdx].data();
-    uint32* slots = table + FORCE_TABLE_HEADER_UINTS;
-    memset(slots, 0xFF, (size_t)m_tableEntries * sizeof(uint32));
-    const uint32 mask = m_tableEntries - 1;
-    const uint32 numSlots = m_gridClaim.numSlots();
-    for (uint32 slot = 0; slot < numSlots; ++slot)
-    {
-        if (m_gridClaim.isDead(slot))
-            continue;
-        uint32 idx = GridClaim::positionHash(m_gridClaim.pos(slot)) & mask;
-        while (slots[idx] != GridClaim::EMPTY_ENTRY)
-            idx = (idx + 1) & mask;
-        slots[idx] = m_cellOffset[slot];
-    }
-    table[0] = m_numLiveCells;
+    memcpy(table + FORCE_TABLE_HEADER_UINTS, claimTable.data(), claimTable.size_bytes());
+    table[0] = m_gridClaim.numSlots();
     table[1] = (uint32)m_cellData.size();
     table[2] = m_tableEntries;
     table[3] = 0;

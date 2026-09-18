@@ -664,6 +664,15 @@ calls `reloadShaders()`.
   * **`upload`** writes the grid jobs, the workgroup list (one per 64 cells of a grid), the light
     list, the hash table (header `{numGrids, gridDataUints, tableSize}` + slots — the readers'
     probe loop is unchanged) and the indirect dispatch.
+  * **THE CLAIM TABLE IS THE GPU TABLE** (light and force alike): same hash, same linear probing,
+    no deletions, SAME SIZE — so the light upload is one sequential pass writing
+    `claim[i] == EMPTY ? EMPTY : dataOffset[claim[i]]` (grid data sizes vary with the LOD), and
+    the force upload is a plain `memcpy`: its records are fixed-size, one per slot, so the table
+    keeps SLOT indices and `forceFindCell` does `slot * FORCE_CELL_UINTS`. No hashing, no probing,
+    no read of the mapped memory. That is why the table entry count is tied to the claim capacity
+    (`getTableEntries()` = 4 x grid capacity; the renderer's `m_lightTableEntries` follows it on
+    growth; the force pipeline's claim capacity is `m_tableEntries / 4`), and why
+    `GridClaim::resize` REHASHES the live slots: a growth lands between a build and its upload.
   * **A light added after the kick is missed for that frame.** New light sources go before
     `kickGridBuilds` in the App loop.
   * **GPU (`light_grid.cs.glsl`, GATHER):** one thread per cell loops its grid's candidate list

@@ -10,6 +10,8 @@
 // is no insert shader, so this include is READ-ONLY.
 //
 // TABLE BUFFER: { uint numCells; uint dataCounter; uint tableSize; uint pad; uint table[]; }
+//   table[] holds SLOT indices (the CPU claim table, memcpy'd); a cell's record starts at
+//   slot * FORCE_CELL_UINTS.
 // DATA BUFFER, per cell (FORCE_CELL_UINTS uints):
 //   { ivec3 cellPos; uint count; uint16 emitterIds[FORCE_CELL_MAX_EMITTERS]; }
 //   (count is the TRUE candidate count - it may exceed the cap; forceCellCount clamps)
@@ -71,9 +73,10 @@ uint forceFindCell(ivec3 gridPos)
     uint idx = forceTableIdx(gridPos);
     for (uint probes = 0u; probes < 64u; ++probes)
     {
-        const uint cellIdx = fg_table[idx];
-        if (cellIdx == EMPTY_ENTRY)
+        const uint slot = fg_table[idx]; // the CPU claim table, copied as is: SLOT indices
+        if (slot == EMPTY_ENTRY)
             return FORCE_INVALID_CELL;
+        const uint cellIdx = slot * FORCE_CELL_UINTS; // one fixed-size record per slot
         if (forceCellPos(cellIdx) == gridPos)
             return cellIdx;
         idx = forceNextTableIdx(idx);

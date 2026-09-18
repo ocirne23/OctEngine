@@ -205,7 +205,7 @@ private:
     struct EmitterWalk { glm::ivec3 cellMin, cellMax; bool valid; };
     EmitterWalk walkOf(uint32 emitterIdx) const;
     // Claims + touches the walk's cells into out[]; false = a claim met the cell capacity (the
-    // counts bumped so far are retracted; the caller discards the block).
+    // caller discards the block).
     bool touchCells(const EmitterWalk& walk, uint32 emitterIdx, Touch* out);
     void createClaimTables();
 
@@ -235,18 +235,14 @@ private:
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_gridDataBuffers;
     oc::array<oc::span<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedGridData;
     // The grid build state: the compacted field emitters (a CPU copy - the mapped emitter buffer
-    // is write-combined), the claims (capacity = tableEntries / 4), per-cell counts, the touches,
-    // and the assembled cell records (FORCE_CELL_UINTS each) the upload copies.
+    // is write-combined), the claims (capacity = tableEntries / 4), the touches, and the assembled
+    // cell records the upload copies (one per claim slot, at slot * FORCE_CELL_UINTS).
     oc::vector<RendererVKLayout::ForceEmitterGpu> m_compactEmitters;
     uint32 m_compactFieldCount = 0;
     GridClaim m_gridClaim;
     GridTouches m_gridTouches;
-    oc::vector<uint32> m_cellCounts;
-    oc::vector<uint32> m_cellOffset; // per slot: the record's uint offset (dead slots: unused)
-    oc::vector<uint32> m_cellCursor;
     oc::vector<Touch> m_extraTouches;
     oc::vector<uint32> m_cellData;
-    uint32 m_numLiveCells = 0;
     GridDemand m_gridDemand;
     // GPU-written readbacks (HostVisible|HostCoherent storage, persistently mapped, zeroed at init).
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_forceReadbackBuffers;
