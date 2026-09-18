@@ -11,10 +11,11 @@ import :CommandBuffer;
 import :GraphicsPipeline;
 import :ComputePipeline;
 import :DescriptorSet;
+import :GridClaim;
 import :Layout;
 
 // Forcefield bubbles (Force library): the render pipeline (ray-marched shells) plus the compute
-// side (emitter hash-grid build, per-emitter applied forces, gameplay point queries).
+// side (per-emitter applied forces, gameplay point queries) and the CPU-built emitter hash grid.
 //
 // Draw: one instanced indirect draw of unit cubes (36 verts, front faces culled, fixed-function
 // depth off - the camera can sit inside a bubble) inside the scene-color pass after the debug
@@ -24,12 +25,19 @@ import :Layout;
 // each present and instanceCount rides a mapped indirect buffer, so emitter changes never
 // re-record the cached command buffers.
 //
-// Compute (recordCompute, after the light grid, outside any render pass): fill-clear + rebuild the
-// uniform 32 m emitter hash grid (big emitters ride the emitter header's global list instead), then
-// one thread per emitter integrates the opposing field pressure (13-sample own-field-weighted
-// integral) and one thread per registered query point evaluates the per-team fields - both write
-// SLOT-indexed results straight into host-visible readback buffers the CPU reads ~2 frames later
-// (ocean-readback contract: read the current slot between beginFrame's fence wait and present).
+// The emitter hash grid (uniform 16 m cells) is BUILT ON THE CPU, off the main thread: the
+// renderer's grid job runs upload (the compaction) then buildGrid - lock-free cell claims over the
+// compacted field emitters on a parallelFor (GridClaim / GridTouches, shared with the light grid),
+// a counting sort into fixed-capacity cell records - and uploadGrid writes the cell data + the
+// hash table straight into the (host-visible) buffers every force shader reads. No insert shader.
+// Growth is synchronous and exact (GridDemand from buildGrid, growGridBuffers on the main thread
+// after the join when it does not fit, then uploadGrid).
+//
+// Compute (recordCompute, after the light grid, outside any render pass): one thread per emitter
+// integrates the opposing field pressure (13-sample own-field-weighted integral) and one thread per
+// registered query point evaluates the per-team fields - both write SLOT-indexed results straight
+// into host-visible readback buffers the CPU reads ~2 frames later (ocean-readback contract: read
+// the current slot between beginFrame's fence wait and present).
 //
 // The FORCE_GRID define (setUseGrid) switches every consumer between hash-grid gathering and a
 // brute-force scan (A-B correctness toggle); flipping it reloads the pipelines.
@@ -162,14 +170,14 @@ public:
         return { m_bakeChunkLists[frameIdx], m_mappedBakeReadback[frameIdx] };
     }
 
-    // Grid capacity contract (checkForceGridCapacity): last frame's demand counters, and growth.
-    struct GridDemand { uint32 numCells; uint32 dataCounter; };
-    GridDemand getGridDemand(uint32 frameIdx);
-    uint32 getTableEntries() const { return m_tableEntries; }
-    size_t getGridDataSize() const { return m_gridDataSize; }
-    // Recreates the per-frame grid buffers at the new sizes (caller has drained the GPU and will
-    // re-record; per-frame scratch rebuilt every frame, nothing to preserve).
-    void growGridBuffers(size_t neededDataBytes, uint32 neededTableEntries);
+    // The CPU grid build (a job, after upload's compaction): the frame's exact demand, failed
+    // claims included. gridFits -> uploadGrid at once; else the main thread drains the GPU,
+    // growGridBuffers (per-frame scratch, nothing to preserve; the caller re-records) and uploadGrid.
+    struct GridDemand { uint32 numCells = 0; size_t dataBytes = 0; };
+    GridDemand buildGrid();
+    bool gridFits(const GridDemand& demand) const;
+    void growGridBuffers(const GridDemand& demand);
+    void uploadGrid(uint32 frameIdx);
 
 private:
     void buildDrawLayout(GraphicsPipelineLayout& layout);
@@ -192,8 +200,12 @@ private:
     void createMarchRenderPass();    // the half-res march target's pass, same lifetime
     void destroyIntervalTarget();
 
+    // The grid build's per-emitter phase (any worker of the job's parallelFor) and its scatter.
+    using Touch = GridTouches::Touch;
+    bool touchCells(uint32 emitterIdx, Touch* out); // false = a claim met the cell capacity (retracted)
+    void createClaimTables();
+
     GraphicsPipeline m_pipeline;
-    ComputePipeline m_gridPipeline;
     ComputePipeline m_emitterForcePipeline;
     ComputePipeline m_queryPipeline;
     ComputePipeline m_bakePipeline;
@@ -213,8 +225,25 @@ private:
     oc::array<oc::span<RendererVKLayout::ForceQueriesGpu>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedQueries;
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_indirectBuffers;
     oc::array<oc::span<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedIndirect; // DrawIndirectCommand + 2x DispatchIndirectCommand
-    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_gridTableBuffers; // DeviceLocal|HostVisible: header demand readback
+    // CPU-written (DeviceLocal|HostVisible, persistently mapped): the hash table + the cell records.
+    oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_gridTableBuffers;
+    oc::array<oc::span<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedGridTable;
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_gridDataBuffers;
+    oc::array<oc::span<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedGridData;
+    // The grid build state: the compacted field emitters (a CPU copy - the mapped emitter buffer
+    // is write-combined), the claims (capacity = tableEntries / 4), per-cell counts, the touches,
+    // and the assembled cell records (FORCE_CELL_UINTS each) the upload copies.
+    oc::vector<RendererVKLayout::ForceEmitterGpu> m_compactEmitters;
+    uint32 m_compactFieldCount = 0;
+    GridClaim m_gridClaim;
+    GridTouches m_gridTouches;
+    oc::vector<uint32> m_cellCounts;
+    oc::vector<uint32> m_cellOffset; // per slot: the record's uint offset (dead slots: unused)
+    oc::vector<uint32> m_cellCursor;
+    oc::vector<Touch> m_extraTouches;
+    oc::vector<uint32> m_cellData;
+    uint32 m_numLiveCells = 0;
+    GridDemand m_gridDemand;
     // GPU-written readbacks (HostVisible|HostCoherent storage, persistently mapped, zeroed at init).
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_forceReadbackBuffers;
     oc::array<oc::span<glm::vec4>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_mappedForceReadback;
@@ -255,7 +284,6 @@ private:
     static constexpr uint32 MAX_VIEWS = 2;
     static uint32 drawSlot(uint32 frameIdx, uint32 eye) { return frameIdx * MAX_VIEWS + eye; }
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT * MAX_VIEWS> m_drawSets;
-    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_gridSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_emitterForceSets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_querySets;
     oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_bakeSets;
@@ -266,8 +294,8 @@ private:
     uint32 m_viewCount = 1;
 
     // Offsets into the per-frame indirect buffer (uints): [0..3] draw (sampled-tier proxies - or
-    // ALL drawables with the union pass off), [4..6] grid insert groups (x = emitter COUNT - the
-    // insert runs single-thread workgroups, see force_grid.cs.glsl), [8..10] force groups,
+    // ALL drawables with the union pass off), [4..6] unused (the old grid insert dispatch - the
+    // grid is CPU-built now), [8..10] force groups,
     // [12..14] query groups, [16..18] bake groups (x = chunk count), [20..22] shell-volume bake
     // groups (x = 0 disables - the CB is cached, so the toggle rides here), [24..27] the interval
     // pass draw (analytic drawables, firstInstance = the partition split), [28..31] the union

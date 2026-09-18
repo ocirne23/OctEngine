@@ -337,13 +337,25 @@ union pass needs NO ownership discard** — one march owns every crossing — it
 whose dominant emitter is sampled-tier, since those proxies draw themselves. With the union off
 (VR or tweak) the proxy draw spans both partitions, exactly the old path.
 
-`recordForceCompute`, after the light grid:
+The emitter hash grid is **built on the CPU, off the main thread** (`ForceFieldPipeline::buildGrid`
+in the renderer's "Force grid job", kicked by the App loop right after `forceSystem.update` — the
+last writer of the emitter slots — together with the light grid's merge; `Renderer::kickGridBuilds`):
 
 * A uniform emitter hash grid per frame at `FORCE_GRID_CELL_SIZE` **16 m** — the FORCE grid's OWN
   size, finer than the shared `hash_grid` `GRID_SIZE` 32 the light grid keeps, because gather cost
   scales with small emitters per cell and a swarm packs dozens into a 32 m cell. **EVERY emitter
   inserts** — there is no big-emitter bypass list any more, which is what makes "an empty cell holds
   zero field" provable.
+* The job runs the compaction (`upload`), then a parallelFor over the compacted field emitters
+  claims each one's cells in the lock-free `GridClaim` table (shared with the light grid; the GPU's
+  hash bit for bit) and appends `GridTouches`; a serial counting sort assembles the fixed-size cell
+  records, and `uploadGrid` writes them plus the hash table straight into the host-visible buffers
+  every force shader reads. **There is no insert shader any more** (`force_grid.inc.glsl` is
+  read-only). Growth is exact and synchronous: the job reports the demand (failed claims counted),
+  and `joinGridBuilds` in present grows + re-records + uploads on the main thread only when it did
+  not fit.
+
+`recordForceCompute`, after the light grid:
 * `force_emitter.cs` integrates opposing pressure with a **13-sample integral**; a centre-only tap
   reads zero when big bubbles press rims.
 * `force_query.cs` evaluates the query points. Readbacks are host-visible.

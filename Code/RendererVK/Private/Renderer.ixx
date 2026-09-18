@@ -162,8 +162,9 @@ public:
     // between kick and join (see main.cpp's window comment).
     void kickBeginFrameJob(const Camera& camera, const Rect& viewportRect);
     void joinBeginFrameJob();
-    // The light grid merge job: call after the frame's LAST light add (App: after the force update).
-    void kickLightGridBuild();
+    // The light grid merge + force grid build jobs: call after the frame's LAST light add and the
+    // force update (App: right after it).
+    void kickGridBuilds();
     // The culling view for this frame's spatial cull, computable BEFORE beginFrame. Desktop: the
     // exact frustum beginFrame will build (bit-identical via computeCenterViewProj). VR: LAST
     // frame's head view - one frame of cull latency, absorbed by the culling margin - invalid on
@@ -609,7 +610,6 @@ private:
         ForceFieldPipeline::EDrawPart part = ForceFieldPipeline::EDrawPart::Both);
     void recordForceCompute(uint32 frameIdx);
     void recordForceMarch(uint32 frameIdx);
-    void checkForceGridCapacity();
     void recordAO(uint32 frameIdx);
     void recordVolumetricFog(uint32 frameIdx);
     void recordFogApply(uint32 frameIdx);
@@ -772,13 +772,16 @@ private:
     Rect m_beginFrameJobRect;
     JobCounter m_beginFrameJobCounter;
     bool m_beginFrameDeferred = false; // VR: kick stored, join runs beginFrame synchronously
-    // The light grid merge job (kickLightGridBuild -> joinLightGridBuild in present): its demand and
-    // whether the main thread has to grow + upload after the join.
-    JobCounter m_lightGridJobCounter;
+    // The grid jobs (kickGridBuilds -> joinGridBuilds in present): each build's demand and whether
+    // the main thread has to grow + upload after the join.
+    JobCounter m_gridJobCounter;
+    bool m_gridBuildsKicked = false;
     LightGridComputePipeline::Demand m_lightGridDemand;
     bool m_lightGridNeedsGrow = false;
-    bool m_lightGridKicked = false;
-    void joinLightGridBuild(PerFrameData& frameData);
+    ForceFieldPipeline::ShellCull m_forceShellCull; // the force job's compaction inputs, set at the kick
+    ForceFieldPipeline::GridDemand m_forceGridDemand;
+    bool m_forceGridNeedsGrow = false;
+    void joinGridBuilds(PerFrameData& frameData);
     // VR one-frame-latent cull view (see getCullView); written at the end of beginFrame, VR only.
     Camera m_lastCullCamera;
     bool m_hasCullView = false;

@@ -8,33 +8,17 @@ import :Layout;
 
 namespace
 {
-    // Mirrors of light_grid.inc.glsl / hash_grid.inc.glsl / shared.inc.glsl: keep in sync.
+    // Mirrors of light_grid.inc.glsl / hash_grid.inc.glsl: keep in sync.
     constexpr uint32 GRID_SIZE = 32;
     constexpr uint32 MAX_LARGE_LIGHTS_PER_GRID = 14;
     constexpr uint32 MAX_LIGHTCELL_LIGHTS = 16;
     constexpr uint32 GRID_HEADER_SIZE = 4 + (MAX_LARGE_LIGHTS_PER_GRID / 2 + 1);
     constexpr uint32 CELL_STRIDE = MAX_LIGHTCELL_LIGHTS / 2 + 1;
-    constexpr uint32 EMPTY_ENTRY = 0xFFFFFFFFu;
     constexpr uint32 GATHER_GROUP = 64;        // LIGHT_GRID_GATHER_GROUP
     constexpr uint32 LARGE_BIT = 0x80000000u;
-    constexpr uint32 SKIPPED_TOUCH = 0xFFFFFFFFu;
-    constexpr uint32 INVALID_SLOT = 0xFFFFFFFFu;
     constexpr uint32 CULL_VEC4S_PER_LIGHT = 3;
     constexpr int MAX_GRIDS_PER_AXIS = 32;     // a kilometre-scale light walks 32^3 grids at most
     constexpr uint32 INITIAL_TOUCHES = 65536;
-
-    // getPositionHash in hash_grid.inc.glsl, bit for bit (uint32 wraparound == GLSL uint).
-    uint32 positionHash(const glm::ivec3& p)
-    {
-        const uint32 x = uint32(p.x) * 1597334673u;
-        const uint32 y = uint32(p.y) * 3812015801u;
-        const uint32 z = uint32(p.z) * 2798796415u;
-        uint32 n = x ^ y ^ z;
-        n = n * 747796405u + 2891336453u;
-        n = ((n >> ((n >> 28u) + 4u)) ^ n) * 277803737u;
-        n = (n >> 22u) ^ n;
-        return n;
-    }
 
     glm::ivec3 gridPosOf(const glm::vec3& pos)
     {
@@ -120,14 +104,6 @@ namespace
         b.reach = reach;
         return b;
     }
-
-    uint32 nextPow2(uint32 v)
-    {
-        uint32 p = 1;
-        while (p < v)
-            p *= 2;
-        return p;
-    }
 }
 
 void LightGridComputePipeline::initialize()
@@ -148,8 +124,7 @@ void LightGridComputePipeline::initialize()
     }
     createHostBuffers();
     createClaimTables();
-    m_touches.resize(INITIAL_TOUCHES);
-    m_overflowLights.resize(RendererVKLayout::MAX_LIGHTS);
+    m_touches.resize(INITIAL_TOUCHES, RendererVKLayout::MAX_LIGHTS);
 
     ComputePipelineLayout computePipelineLayout;
     buildComputeLayout(computePipelineLayout);
@@ -177,12 +152,12 @@ void LightGridComputePipeline::createHostBuffers()
 
 void LightGridComputePipeline::createClaimTables()
 {
+    m_claim.resize(m_gridCapacity);
     m_grids.resize(m_gridCapacity);
     m_cellCounts.resize(m_gridCapacity);
     m_largeCounts.resize(m_gridCapacity);
     m_cellCursor.resize(m_gridCapacity);
     m_largeCursor.resize(m_gridCapacity);
-    m_claimTable.assign(m_gridCapacity * 4, EMPTY_ENTRY);
 }
 
 bool LightGridComputePipeline::hostBuffersFit(const Demand& demand) const
@@ -241,10 +216,8 @@ void LightGridComputePipeline::beginFrame(uint32 frameIdx, const LightGridParams
     m_frameIdx = frameIdx;
     m_params = params;
     m_viewPos = viewPos;
-    m_gridCursor.store(0, oc::memory_order_relaxed);
-    m_touchCursor.store(0, oc::memory_order_relaxed);
-    m_overflowCursor.store(0, oc::memory_order_relaxed);
-    memset(m_claimTable.data(), 0xFF, m_claimTable.size() * sizeof(uint32));
+    m_claim.beginFrame();
+    m_touches.beginFrame();
     memset(m_cellCounts.data(), 0, m_cellCounts.size() * sizeof(uint32));
     memset(m_largeCounts.data(), 0, m_largeCounts.size() * sizeof(uint32));
 }
@@ -283,42 +256,9 @@ bool LightGridComputePipeline::isLargeIn(const LightWalk& walk, const glm::ivec3
     return span.x * span.y * span.z > glm::max(m_params.cellBudget, 1);
 }
 
-uint32 LightGridComputePipeline::claimGrid(const glm::ivec3& gridPos)
+bool LightGridComputePipeline::touchGrids(const LightWalk& walk, uint32 lightIdx, Touch* out)
 {
-    const uint32 mask = (uint32)m_claimTable.size() - 1;
-    uint32 idx = positionHash(gridPos) & mask;
-    uint32 mySlot = INVALID_SLOT; // allocated lazily, on the first EMPTY probe
-    while (true)
-    {
-        oc::atomic_ref<uint32> entry(m_claimTable[idx]);
-        uint32 seen = entry.load(oc::memory_order_acquire);
-        if (seen == EMPTY_ENTRY)
-        {
-            if (mySlot == INVALID_SLOT)
-            {
-                mySlot = m_gridCursor.fetch_add(1, oc::memory_order_relaxed);
-                if (mySlot >= m_gridCapacity)
-                    return INVALID_SLOT; // the cursor keeps counting: build reads the true demand
-                GridJob& g = m_grids[mySlot];
-                g.pos = gridPos;
-                g.cellSize = lodCellSize(gridPos, m_viewPos, m_params);
-            }
-            if (entry.compare_exchange_strong(seen, mySlot, oc::memory_order_acq_rel, oc::memory_order_acquire))
-                return mySlot;
-            // Lost the race for this table entry: `seen` now holds the winner, fall through.
-        }
-        if (m_grids[seen].pos == gridPos)
-        {
-            if (mySlot != INVALID_SLOT)
-                m_grids[mySlot].cellSize = 0; // dead slot: another thread claimed this grid first
-            return seen;
-        }
-        idx = (idx + 1) & mask;
-    }
-}
-
-void LightGridComputePipeline::touchGrids(const LightWalk& walk, uint32 lightIdx, Touch* out)
-{
+    Touch* cursor = out;
     for (int x = walk.gridMin.x; x <= walk.gridMax.x; ++x)
     {
         for (int y = walk.gridMin.y; y <= walk.gridMax.y; ++y)
@@ -326,18 +266,25 @@ void LightGridComputePipeline::touchGrids(const LightWalk& walk, uint32 lightIdx
             for (int z = walk.gridMin.z; z <= walk.gridMax.z; ++z)
             {
                 const glm::ivec3 gridPos(x, y, z);
-                const uint32 slot = claimGrid(gridPos);
-                if (slot == INVALID_SLOT)
+                const uint32 slot = m_claim.claim(gridPos, [&] { return lodCellSize(gridPos, m_viewPos, m_params); });
+                if (slot == GridClaim::INVALID_SLOT)
                 {
-                    out->slot = INVALID_SLOT; // the caller retracts the whole block
-                    return;
+                    // Retract this light's touches so far (counts included): the caller re-walks it.
+                    for (Touch* t = out; t < cursor; ++t)
+                    {
+                        const bool large = (t->item & LARGE_BIT) != 0;
+                        oc::atomic_ref<uint32>(large ? m_largeCounts[t->slot] : m_cellCounts[t->slot]).fetch_sub(1, oc::memory_order_relaxed);
+                        *t = Touch{ .slot = 0, .item = GridTouches::SKIPPED };
+                    }
+                    return false;
                 }
-                const bool large = isLargeIn(walk, gridPos, m_grids[slot].cellSize);
+                const bool large = isLargeIn(walk, gridPos, m_claim.payload(slot));
                 oc::atomic_ref<uint32>(large ? m_largeCounts[slot] : m_cellCounts[slot]).fetch_add(1, oc::memory_order_relaxed);
-                *out++ = Touch{ .slot = slot, .light = lightIdx | (large ? LARGE_BIT : 0u) };
+                *cursor++ = Touch{ .slot = slot, .item = lightIdx | (large ? LARGE_BIT : 0u) };
             }
         }
     }
+    return true;
 }
 
 void LightGridComputePipeline::addLight(uint32 lightIdx, const RendererVKLayout::LightInfo& light)
@@ -347,36 +294,18 @@ void LightGridComputePipeline::addLight(uint32 lightIdx, const RendererVKLayout:
         return;
     const glm::ivec3 span = walk.gridMax - walk.gridMin + 1;
     const uint32 numTouches = uint32(span.x * span.y * span.z);
-    const uint32 begin = m_touchCursor.fetch_add(numTouches, oc::memory_order_relaxed);
-    if (begin + numTouches > (uint32)m_touches.size())
+    const uint32 begin = m_touches.claimBlock(numTouches);
+    if (begin == GridTouches::INVALID_BEGIN)
     {
-        m_overflowLights[m_overflowCursor.fetch_add(1, oc::memory_order_relaxed)] = lightIdx;
+        m_touches.pushOverflow(lightIdx);
         return;
     }
     Touch* block = m_touches.data() + begin;
-    block[0].slot = 0;
-    touchGrids(walk, lightIdx, block);
-    // The block is only ever read by build(), after the last add: no publish needed beyond the
-    // counter reads there. A grid-capacity miss retracts the block (build re-walks the light) - the
-    // counts it already bumped are corrected by the retraction too.
-    bool retracted = false;
-    for (uint32 i = 0; i < numTouches; ++i)
+    if (!touchGrids(walk, lightIdx, block))
     {
-        if (block[i].slot == INVALID_SLOT || retracted)
-        {
-            retracted = true;
-            block[i] = Touch{ .slot = 0, .light = SKIPPED_TOUCH };
-        }
-    }
-    if (retracted)
-    {
-        for (uint32 i = 0; i < numTouches && block[i].light != SKIPPED_TOUCH; ++i)
-        {
-            const bool large = (block[i].light & LARGE_BIT) != 0;
-            oc::atomic_ref<uint32>(large ? m_largeCounts[block[i].slot] : m_cellCounts[block[i].slot]).fetch_sub(1, oc::memory_order_relaxed);
-            block[i] = Touch{ .slot = 0, .light = SKIPPED_TOUCH };
-        }
-        m_overflowLights[m_overflowCursor.fetch_add(1, oc::memory_order_relaxed)] = lightIdx;
+        for (uint32 i = 0; i < numTouches; ++i)
+            block[i] = Touch{ .slot = 0, .item = GridTouches::SKIPPED };
+        m_touches.pushOverflow(lightIdx);
     }
 }
 
@@ -386,44 +315,24 @@ void LightGridComputePipeline::addLight(uint32 lightIdx, const RendererVKLayout:
 LightGridComputePipeline::Demand LightGridComputePipeline::build(oc::span<const RendererVKLayout::LightInfo> lights)
 {
     ProfileScope scope("Light grid build", EProfileCategory::Renderer);
-    const uint32 touchDemand = m_touchCursor.load(oc::memory_order_acquire);
-    const uint32 numTouches = glm::min(touchDemand, (uint32)m_touches.size());
-    const uint32 gridDemand = m_gridCursor.load(oc::memory_order_acquire);
-    m_numGrids = glm::min(gridDemand, m_gridCapacity);
+    const uint32 numTouches = m_touches.numTouches();
 
     // The overflow lights, serially (the same claim path; a capacity miss now drops the light for
     // this frame - the demand below grows everything for the next one).
     m_extraTouches.clear();
-    const uint32 numOverflow = m_overflowCursor.load(oc::memory_order_acquire);
-    for (uint32 i = 0; i < numOverflow; ++i)
+    for (const uint32 lightIdx : m_touches.overflow())
     {
-        const uint32 lightIdx = m_overflowLights[i];
         const LightWalk walk = walkOf(lightIdx, lights[lightIdx]);
         if (!walk.valid)
             continue;
         const glm::ivec3 span = walk.gridMax - walk.gridMin + 1;
         const size_t first = m_extraTouches.size();
         m_extraTouches.resize(first + size_t(span.x * span.y * span.z));
-        m_extraTouches[first].slot = 0;
-        touchGrids(walk, lightIdx, m_extraTouches.data() + first);
-        for (size_t t = first; t < m_extraTouches.size(); ++t)
-        {
-            if (m_extraTouches[t].slot == INVALID_SLOT)
-            {
-                // Retract what this light bumped (an in-order prefix of its block) and drop it.
-                for (size_t u = first; u < t; ++u)
-                {
-                    const bool large = (m_extraTouches[u].light & LARGE_BIT) != 0;
-                    --(large ? m_largeCounts[m_extraTouches[u].slot] : m_cellCounts[m_extraTouches[u].slot]);
-                }
-                m_extraTouches.resize(first);
-                break;
-            }
-        }
+        if (!touchGrids(walk, lightIdx, m_extraTouches.data() + first))
+            m_extraTouches.resize(first);
     }
-    m_numGrids = glm::min(m_gridCursor.load(oc::memory_order_relaxed), m_gridCapacity);
-    if (touchDemand > (uint32)m_touches.size())
-        m_touches.resize(nextPow2(touchDemand + touchDemand / 2)); // consumed below before anything adds again
+    m_numGrids = m_claim.numSlots();
+    m_touches.growToDemand(); // consumed below before anything adds again
 
     // Prefix sums over the slots: per-grid list ranges, data offsets, workgroup counts.
     uint32 listSize = 0;
@@ -432,6 +341,8 @@ LightGridComputePipeline::Demand LightGridComputePipeline::build(oc::span<const 
     for (uint32 slot = 0; slot < m_numGrids; ++slot)
     {
         GridJob& g = m_grids[slot];
+        g.pos = m_claim.pos(slot);
+        g.cellSize = m_claim.isDead(slot) ? 0 : m_claim.payload(slot);
         g.lightCount = m_cellCounts[slot];
         g.largeCount = m_largeCounts[slot];
         g.lightBegin = listSize;
@@ -448,22 +359,22 @@ LightGridComputePipeline::Demand LightGridComputePipeline::build(oc::span<const 
         numWorkgroups += (numCells * numCells * numCells + GATHER_GROUP - 1) / GATHER_GROUP;
     }
 
-    // The stable scatter into per-grid [cell candidates..., large lights...] ranges.
+    // The scatter into per-grid [cell candidates..., large lights...] ranges. List order is the
+    // claim order (a thread race); it only matters past the per-cell cap, a deliberate non-goal.
     m_lightList.resize(listSize);
     const auto scatter = [&](const Touch& t)
     {
-        if (t.light == SKIPPED_TOUCH)
+        if (t.item == GridTouches::SKIPPED)
             return;
-        uint32& cursor = (t.light & LARGE_BIT) ? m_largeCursor[t.slot] : m_cellCursor[t.slot];
-        m_lightList[cursor++] = t.light & ~LARGE_BIT;
+        uint32& cursor = (t.item & LARGE_BIT) ? m_largeCursor[t.slot] : m_cellCursor[t.slot];
+        m_lightList[cursor++] = t.item & ~LARGE_BIT;
     };
+    const Touch* touches = m_touches.data();
     for (uint32 i = 0; i < numTouches; ++i)
-        scatter(m_touches[i]);
+        scatter(touches[i]);
     for (const Touch& t : m_extraTouches)
         scatter(t);
 
-    // List order is the claim order (a thread race). It only matters past the per-cell cap, which
-    // is a deliberate non-goal.
     m_workgroups.resize(numWorkgroups * 2);
     uint32 wg = 0;
     for (uint32 slot = 0; slot < m_numGrids; ++slot)
@@ -480,7 +391,7 @@ LightGridComputePipeline::Demand LightGridComputePipeline::build(oc::span<const 
     }
 
     m_demand = Demand{
-        .numGrids = glm::max(gridDemand, m_numGrids), // failed claims count: growth fits the burst
+        .numGrids = glm::max(m_claim.slotDemand(), m_numGrids), // failed claims count: growth fits the burst
         .gridDataBytes = (size_t)dataOffset * sizeof(uint32),
         .numWorkgroups = numWorkgroups,
         .lightListSize = listSize,
@@ -526,8 +437,8 @@ void LightGridComputePipeline::upload(Buffer& tableBuffer, uint32 tableEntries)
         if (g.cellSize == 0)
             continue;
         ++liveGrids;
-        uint32 idx = positionHash(g.pos) & mask;
-        while (slots[idx] != EMPTY_ENTRY)
+        uint32 idx = GridClaim::positionHash(g.pos) & mask;
+        while (slots[idx] != GridClaim::EMPTY_ENTRY)
             idx = (idx + 1) & mask;
         slots[idx] = g.dataOffset;
     }

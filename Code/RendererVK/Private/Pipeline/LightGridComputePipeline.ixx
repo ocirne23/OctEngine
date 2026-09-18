@@ -8,17 +8,18 @@ import :Buffer;
 import :CommandBuffer;
 import :ComputePipeline;
 import :DescriptorSet;
+import :GridClaim;
 import :Layout;
 import :Settings;
 
 // The clustered light grid. The BUILD is split three ways, none of it on the main thread:
 //  1. addLight, INLINE on whatever thread adds the light (the entity pass, the force update, ...):
-//     the light's bounds -> its cull record; every 32^3 grid its box covers is claimed in a
-//     lock-free CPU hash table (the GPU's hash, bit for bit; the grid's distance-LOD cell size is
-//     picked at the claim), the grid's candidate count is bumped, and one (grid slot, light) touch
-//     is appended. The LARGE decision is made here too. This is the bulk of the work, and it
-//     happens the moment the light exists.
-//  2. build, a job kicked right after the last light of the frame (Renderer::kickLightGridBuild,
+//     the light's bounds -> its cull record; every 32^3 grid its box covers is claimed in the
+//     lock-free CPU hash table (GridClaim: the GPU's hash, bit for bit; the grid's distance-LOD
+//     cell size is picked at the claim), the grid's candidate count is bumped, and one (grid
+//     slot, light) touch is appended (GridTouches). The LARGE decision is made here too. This is
+//     the bulk of the work, and it happens the moment the light exists.
+//  2. build, a job kicked right after the last light of the frame (Renderer::kickGridBuilds,
 //     from the App loop after the force update): prefix sums over the grids, the scatter of the
 //     touches into per-grid lists, the data offsets, the workgroup list. O(grids + touches).
 //  3. upload: the same job when the capacity fits; after the growth on the main thread when not.
@@ -94,11 +95,7 @@ private:
 		Buffer inLightListBuffer;
 		oc::span<uint32> mappedLightList;
 	};
-	struct Touch // one (grid, light) pair
-	{
-		uint32 slot;
-		uint32 light; // light index | LARGE_BIT; SKIPPED_TOUCH = the light went to the overflow list
-	};
+	using Touch = GridTouches::Touch;
 	struct LightWalk // a light's grid range plus what the touch needs
 	{
 		glm::ivec3 gridMin, gridMax;
@@ -111,9 +108,9 @@ private:
 	void createClaimTables();
 	LightWalk walkOf(uint32 lightIdx, const RendererVKLayout::LightInfo& light);
 	bool isLargeIn(const LightWalk& walk, const glm::ivec3& gridPos, uint32 cellSize) const;
-	// Lock-free claim: the grid's slot, or INVALID_SLOT when the grid capacity is exhausted.
-	uint32 claimGrid(const glm::ivec3& gridPos);
-	void touchGrids(const LightWalk& walk, uint32 lightIdx, Touch* out);
+	// Claims + touches the walk's grids into out[]; false = a claim met the grid capacity (the
+	// touches written so far are retracted, counts included).
+	bool touchGrids(const LightWalk& walk, uint32 lightIdx, Touch* out);
 
 	oc::array<PerFrameData, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_perFrameData;
 	ComputePipeline m_computePipeline;
@@ -127,24 +124,15 @@ private:
 	LightGridParams m_params;
 	glm::vec3 m_viewPos{ 0.0f };
 
-	// The lock-free claim state. m_grids is bump-allocated (m_gridCursor); m_claimTable is
-	// open-addressed over grid slots at <= 25% load (4 x m_gridCapacity), so a probe never wraps.
-	// The counts are per slot, bumped with atomic_ref. Memory follows the peak, never freed.
-	oc::vector<GridJob> m_grids;
-	oc::vector<uint32> m_claimTable;
+	// The lock-free claim state (payload = the grid's cell size) + per-slot candidate counts.
+	GridClaim m_claim;
+	GridTouches m_touches;
 	oc::vector<uint32> m_cellCounts;
 	oc::vector<uint32> m_largeCounts;
-	oc::atomic<uint32> m_gridCursor{ 0 };
-	// The touch array: a light claims its whole block with one fetch_add; a block that does not fit
-	// (or a light that met an exhausted grid capacity) lands the light in m_overflowLights, re-walked
-	// serially by build.
-	oc::vector<Touch> m_touches;
-	oc::atomic<uint32> m_touchCursor{ 0 };
-	oc::vector<uint32> m_overflowLights; // MAX_LIGHTS
-	oc::atomic<uint32> m_overflowCursor{ 0 };
-	oc::vector<Touch> m_extraTouches;     // build's serial re-walk of the overflow lights
+	oc::vector<Touch> m_extraTouches; // build's serial re-walk of the overflow lights
 
 	// Build scratch, reused every frame.
+	oc::vector<GridJob> m_grids;
 	oc::vector<uint32> m_cellCursor;
 	oc::vector<uint32> m_largeCursor;
 	oc::vector<uint32> m_lightList;

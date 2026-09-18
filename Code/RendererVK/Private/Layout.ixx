@@ -156,9 +156,9 @@ export namespace RendererVKLayout
     // pressure bake instead, which is the default for every ground consumer.
     constexpr uint32 FORCE_FLAG_READBACK = 1u << 2;
 
-    // Force emitter hash grid (uniform 32 m cells, NOT camera-adaptive - gameplay queries happen
-    // anywhere). Fixed per-cell emitter capacity; cells bump-allocate from the data buffer with the
-    // light grid's overflow-inflated-counter growth contract (checkForceGridCapacity).
+    // Force emitter hash grid (uniform 16 m cells, NOT camera-adaptive - gameplay queries happen
+    // anywhere). Fixed per-cell emitter capacity; BUILT ON THE CPU (ForceFieldPipeline::buildGrid,
+    // the renderer's grid job) with exact synchronous growth, like the light grid.
     constexpr uint32 FORCE_CELL_MAX_EMITTERS = 64;  // packed uint16 indices per occupied cell (must stay even)
     constexpr uint32 INITIAL_FORCE_TABLE_ENTRIES = 4096; // power of two (doubling preserves this)
     constexpr size_t INITIAL_FORCE_GRID_DATA_SIZE = 1024 * 1024;

@@ -4,6 +4,7 @@ import Core;
 import Core.glm;
 import Core.Log;
 import File;
+import Threading;
 import :ForceFieldPipeline;
 import :GraphicsPipeline;
 import :ComputePipeline;
@@ -12,6 +13,40 @@ import :Allocator;
 import :Layout;
 
 using namespace RendererVKLayout;
+
+namespace
+{
+    // Mirrors of force_grid.inc.glsl: keep in sync.
+    constexpr float FORCE_GRID_CELL_SIZE = 16.0f;
+    constexpr uint32 FORCE_CELL_UINTS = 4u + FORCE_CELL_MAX_EMITTERS / 2u;
+    constexpr uint32 FORCE_TABLE_HEADER_UINTS = 4; // {numCells, dataCounter, tableSize, pad}
+    constexpr uint32 INITIAL_FORCE_TOUCHES = 32768;
+    constexpr int MAX_FORCE_CELLS_PER_AXIS = 64;  // a map-scale emitter walks 64^3 cells at most
+
+    glm::ivec3 forceGridPosCpu(const glm::vec3& pos)
+    {
+        return glm::ivec3(glm::floor(pos / FORCE_GRID_CELL_SIZE));
+    }
+
+    // World-space AABB of the oriented reach box (forceEmitterBounds + forceEmitterBasis in
+    // force_field.inc.glsl: |basis| * halfExtents around the box centre).
+    void forceEmitterWorldBox(const ForceEmitterGpu& e, glm::vec3& boxMin, glm::vec3& boxMax)
+    {
+        const float R = e.posReach.w;
+        const float m = glm::abs(1.0f - 2.0f * e.dirFocus.w);
+        const float side = 0.5f * R * (1.0f + m) * e.outputParams.w * 1.03f;
+        const float forward = R * 1.02f, back = R * 0.02f;
+        const glm::vec3 dir = glm::vec3(e.dirFocus);
+        const glm::vec3 ref = glm::abs(dir.y) < 0.99f ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
+        const glm::vec3 right = glm::normalize(glm::cross(dir, ref));
+        const glm::vec3 up = glm::cross(dir, right);
+        const glm::vec3 center = glm::vec3(e.posReach) + dir * ((forward - back) * 0.5f);
+        const glm::vec3 halfExtents(side, side, (forward + back) * 0.5f);
+        const glm::vec3 worldExtent = glm::abs(right) * halfExtents.x + glm::abs(up) * halfExtents.y + glm::abs(dir) * halfExtents.z;
+        boxMin = center - worldExtent;
+        boxMax = center + worldExtent;
+    }
+}
 
 // The LIVE team count as the NUM_FORCE_TEAMS define every force shader loops/sizes by (the
 // injected MAX_FORCE_TEAMS stays the cap/sentinel + the UBO color array size).
@@ -412,7 +447,7 @@ void ForceFieldPipeline::buildComputeLayout(ComputePipelineLayout& layout, const
 {
     layout.computeShaderDebugFilePath = shaderPath;
     layout.computeShaderText = FileSystem::readFileStr(shaderPath);
-    // force_grid.cs defines FORCE_GRID itself (it IS the grid pass); the others follow the toggle.
+    // The grid toggle: hash-grid gathering vs the brute-force scan (the grid itself is CPU-built).
     if (m_useGrid)
         layout.defines.push_back({ "FORCE_GRID", "" });
     layout.defines.push_back(numTeamsDefine(m_numTeams));
@@ -535,20 +570,33 @@ void ForceFieldPipeline::createGridBuffers()
 {
     for (uint32 i = 0; i < NUM_FRAMES_IN_FLIGHT; ++i)
     {
-        // Table header {numCells, dataCounter, tableSize, pad} is the CPU demand readback, so the
-        // table stays DeviceLocal|HostVisible (light-grid contract).
-        m_gridTableBuffers[i].initialize(16 + (size_t)m_tableEntries * sizeof(uint32),
-            vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
+        // Both CPU-written every frame (uploadGrid) and GPU-read by every force shader:
+        // DeviceLocal|HostVisible (ReBAR), the light table's contract.
+        m_gridTableBuffers[i].initialize(FORCE_TABLE_HEADER_UINTS * sizeof(uint32) + (size_t)m_tableEntries * sizeof(uint32),
+            vk::BufferUsageFlagBits2::eStorageBuffer,
             vk::MemoryPropertyFlagBits::eDeviceLocal | vk::MemoryPropertyFlagBits::eHostVisible, false, "ForceGridTable");
-        { // zero the demand header: checkForceGridCapacity reads it before the first GPU clear runs
-            oc::span<uint32> header = m_gridTableBuffers[i].mapMemory<uint32>(0, 16);
-            memset(header.data(), 0, 16);
-            m_gridTableBuffers[i].unmapMemory();
-        }
+        m_mappedGridTable[i] = m_gridTableBuffers[i].mapMemory<uint32>();
+        // An empty table until the first upload: header {0, 0, tableSize, 0}, every slot EMPTY.
+        memset(m_mappedGridTable[i].data(), 0xFF, m_mappedGridTable[i].size_bytes());
+        m_mappedGridTable[i][0] = 0;
+        m_mappedGridTable[i][1] = 0;
+        m_mappedGridTable[i][2] = m_tableEntries;
+        m_mappedGridTable[i][3] = 0;
+        m_gridTableBuffers[i].flushMappedMemory(vk::WholeSize);
         m_gridDataBuffers[i].initialize(m_gridDataSize,
-            vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
-            vk::MemoryPropertyFlagBits::eDeviceLocal, false, "ForceGridData");
+            vk::BufferUsageFlagBits2::eStorageBuffer,
+            vk::MemoryPropertyFlagBits::eDeviceLocal | vk::MemoryPropertyFlagBits::eHostVisible, false, "ForceGridData");
+        m_mappedGridData[i] = m_gridDataBuffers[i].mapMemory<uint32>();
     }
+}
+
+void ForceFieldPipeline::createClaimTables()
+{
+    const uint32 cellCapacity = m_tableEntries / 4; // <= 25% table load
+    m_gridClaim.resize(cellCapacity);
+    m_cellCounts.resize(cellCapacity);
+    m_cellOffset.resize(cellCapacity);
+    m_cellCursor.resize(cellCapacity);
 }
 
 void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewCount)
@@ -558,13 +606,11 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
     buildDrawLayout(drawLayout);
     m_pipeline.initialize(sceneRenderPass, drawLayout);
 
-    ComputePipelineLayout gridLayout, forceLayout, queryLayout, bakeLayout, shellBakeLayout;
-    buildComputeLayout(gridLayout, "Shaders/force_grid.cs.glsl");
+    ComputePipelineLayout forceLayout, queryLayout, bakeLayout, shellBakeLayout;
     buildComputeLayout(forceLayout, "Shaders/force_emitter.cs.glsl");
     buildComputeLayout(queryLayout, "Shaders/force_query.cs.glsl");
     buildComputeLayout(bakeLayout, "Shaders/force_bake.cs.glsl");
     buildShellBakeLayout(shellBakeLayout);
-    m_gridPipeline.initialize(gridLayout);
     m_emitterForcePipeline.initialize(forceLayout);
     m_queryPipeline.initialize(queryLayout);
     m_bakePipeline.initialize(bakeLayout);
@@ -581,6 +627,9 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
     m_upsamplePipeline.initialize(sceneRenderPass, upsampleLayout);
 
     createGridBuffers();
+    createClaimTables();
+    m_gridTouches.resize(INITIAL_FORCE_TOUCHES, MAX_FORCE_EMITTERS);
+    m_compactEmitters.resize(MAX_FORCE_EMITTERS);
     createShellVolume();
 
     for (uint32 i = 0; i < NUM_FRAMES_IN_FLIGHT; ++i)
@@ -614,8 +663,6 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
         m_mappedIndirect[i] = m_indirectBuffers[i].mapMemory<uint32>();
         memset(m_mappedIndirect[i].data(), 0, INDIRECT_UINTS * sizeof(uint32));
         m_mappedIndirect[i][DRAW_CMD_OFFSET] = 36; // vertexCount: one cube per emitter
-        m_mappedIndirect[i][GRID_DISPATCH_OFFSET + 1] = 1;
-        m_mappedIndirect[i][GRID_DISPATCH_OFFSET + 2] = 1;
         m_mappedIndirect[i][EMITTER_DISPATCH_OFFSET + 1] = 1;
         m_mappedIndirect[i][EMITTER_DISPATCH_OFFSET + 2] = 1;
         m_mappedIndirect[i][QUERY_DISPATCH_OFFSET + 1] = 1;
@@ -646,7 +693,6 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
 
         for (uint32 eye = 0; eye < m_viewCount; ++eye)
             m_drawSets[drawSlot(i, eye)].initialize(m_pipeline.getDescriptorSetLayout());
-        m_gridSets[i].initialize(m_gridPipeline.getDescriptorSetLayout());
         m_emitterForceSets[i].initialize(m_emitterForcePipeline.getDescriptorSetLayout());
         m_querySets[i].initialize(m_queryPipeline.getDescriptorSetLayout());
         m_bakeSets[i].initialize(m_bakePipeline.getDescriptorSetLayout());
@@ -680,14 +726,11 @@ void ForceFieldPipeline::reloadShaders(vk::RenderPass sceneRenderPass)
     buildDrawLayout(drawLayout);
     if (!m_pipeline.reloadShaders(sceneRenderPass, drawLayout))
         printf("ForceFieldPipeline: shell shader reload failed, keeping previous pipeline\n");
-    ComputePipelineLayout gridLayout, forceLayout, queryLayout, bakeLayout, shellBakeLayout;
-    buildComputeLayout(gridLayout, "Shaders/force_grid.cs.glsl");
+    ComputePipelineLayout forceLayout, queryLayout, bakeLayout, shellBakeLayout;
     buildComputeLayout(forceLayout, "Shaders/force_emitter.cs.glsl");
     buildComputeLayout(queryLayout, "Shaders/force_query.cs.glsl");
     buildComputeLayout(bakeLayout, "Shaders/force_bake.cs.glsl");
     buildShellBakeLayout(shellBakeLayout);
-    if (!m_gridPipeline.reloadShaders(gridLayout))
-        printf("ForceFieldPipeline: grid shader reload failed, keeping previous pipeline\n");
     if (!m_emitterForcePipeline.reloadShaders(forceLayout))
         printf("ForceFieldPipeline: emitter force shader reload failed, keeping previous pipeline\n");
     if (!m_queryPipeline.reloadShaders(queryLayout))
@@ -762,9 +805,10 @@ void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu>
     for (const oc::vector<uint32>& bucket : m_uploadBuckets)
         for (const uint32 slot : bucket)
         {
-            ForceEmitterGpu& out = dst->emitters[count++];
+            ForceEmitterGpu& out = m_compactEmitters[count]; // the CPU copy the grid build reads
             out = slots[slot];
             out.teamFlags.z = slot; // slot-indexed readback target
+            dst->emitters[count++] = out;
         }
     const uint32 sampledDrawCount = (uint32)m_uploadBuckets[0].size();
     const uint32 drawCount = sampledDrawCount + (uint32)m_uploadBuckets[1].size();
@@ -790,6 +834,7 @@ void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu>
     }
     dst->count = fieldCount;
     dst->evalCount = count;
+    m_compactFieldCount = fieldCount;
     m_emitterBuffers[frameIdx].flushMappedMemory(FORCE_EMITTER_HEADER_SIZE + count * sizeof(ForceEmitterGpu));
 
     ForceQueriesGpu* q = m_mappedQueries[frameIdx].data();
@@ -819,7 +864,6 @@ void ForceFieldPipeline::upload(uint32 frameIdx, oc::span<const ForceEmitterGpu>
     ind[INTERVAL_DRAW_OFFSET + 1] = unionActive ? analyticDrawCount : 0;
     ind[INTERVAL_DRAW_OFFSET + 3] = sampledDrawCount; // firstInstance: the analytic partition
     ind[UNION_DRAW_OFFSET] = unionActive ? 3u : 0u;   // the fullscreen triangle
-    ind[GRID_DISPATCH_OFFSET] = fieldCount; // single-thread workgroups (see force_grid.cs.glsl)
     ind[EMITTER_DISPATCH_OFFSET] = (count + FORCE_SIM_GROUP_SIZE - 1) / FORCE_SIM_GROUP_SIZE; // + passive tail
     ind[QUERY_DISPATCH_OFFSET] = (numQueries + FORCE_SIM_GROUP_SIZE - 1) / FORCE_SIM_GROUP_SIZE;
     ind[BAKE_DISPATCH_OFFSET] = numChunks; // one 16x16 workgroup per chunk
@@ -846,40 +890,8 @@ void ForceFieldPipeline::recordCompute(CommandBuffer& commandBuffer, uint32 fram
         };
     };
 
-    if (m_useGrid)
-    {
-        // Clear the table (header counters 0, tableSize, entries EMPTY) + the cell data.
-        vkCb.fillBuffer(m_gridTableBuffers[frameIdx].getBuffer(), 0, 8, 0);
-        vkCb.fillBuffer(m_gridTableBuffers[frameIdx].getBuffer(), 8, 4, m_tableEntries);
-        vkCb.fillBuffer(m_gridTableBuffers[frameIdx].getBuffer(), 12, 4, 0);
-        vkCb.fillBuffer(m_gridTableBuffers[frameIdx].getBuffer(), 16, vk::WholeSize, 0xFFFFFFFF);
-        vkCb.fillBuffer(m_gridDataBuffers[frameIdx].getBuffer(), 0, vk::WholeSize, 0);
-        {
-            vk::MemoryBarrier2 barrier{
-                .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
-                .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-                .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-                .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
-            };
-            vkCb.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &barrier });
-        }
-        vk::DescriptorSet gridSet = m_gridSets[frameIdx].getDescriptorSet();
-        auto gridUpdates = makeUpdates(m_forceReadbackBuffers[frameIdx], m_queryReadbackBuffers[frameIdx]); // 5/6 unused by the shader
-        vkCb.bindPipeline(vk::PipelineBindPoint::eCompute, m_gridPipeline.getPipeline());
-        commandBuffer.cmdUpdateDescriptorSets(m_gridPipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, gridSet, gridUpdates);
-        vkCb.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_gridPipeline.getPipelineLayout(), 0, 1, &gridSet, 0, nullptr);
-        vkCb.dispatchIndirect(m_indirectBuffers[frameIdx].getBuffer(), GRID_DISPATCH_OFFSET * sizeof(uint32));
-        {
-            vk::MemoryBarrier2 barrier{ // grid write -> force/query gather
-                .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-                .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
-                .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-                .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead,
-            };
-            vkCb.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &barrier });
-        }
-    }
-
+    // The grid (table + cell data) is CPU-written before the submit (uploadGrid): no clear, no
+    // insert dispatch, nothing to barrier - the gathers read it like any other host-written buffer.
     {
         vk::DescriptorSet forceSet = m_emitterForceSets[frameIdx].getDescriptorSet();
         auto forceUpdates = makeUpdates(m_forceReadbackBuffers[frameIdx], m_queryReadbackBuffers[frameIdx]);
@@ -956,22 +968,186 @@ void ForceFieldPipeline::recordCompute(CommandBuffer& commandBuffer, uint32 fram
     }
 }
 
-ForceFieldPipeline::GridDemand ForceFieldPipeline::getGridDemand(uint32 frameIdx)
+// ---------------------------------------------------------------------------------------------
+// The CPU grid build (the renderer's grid job, after upload's compaction).
+
+bool ForceFieldPipeline::touchCells(uint32 emitterIdx, Touch* out)
 {
-    oc::span<GridDemand> span = m_gridTableBuffers[frameIdx].mapMemory<GridDemand>(0, sizeof(GridDemand));
-    const GridDemand demand = *span.data();
-    m_gridTableBuffers[frameIdx].unmapMemory();
-    return demand;
+    glm::vec3 boxMin, boxMax;
+    forceEmitterWorldBox(m_compactEmitters[emitterIdx], boxMin, boxMax);
+    const glm::ivec3 cellMin = forceGridPosCpu(boxMin);
+    const glm::ivec3 cellMax = glm::min(forceGridPosCpu(boxMax), cellMin + (MAX_FORCE_CELLS_PER_AXIS - 1));
+    Touch* cursor = out;
+    for (int x = cellMin.x; x <= cellMax.x; ++x)
+    {
+        for (int y = cellMin.y; y <= cellMax.y; ++y)
+        {
+            for (int z = cellMin.z; z <= cellMax.z; ++z)
+            {
+                const uint32 slot = m_gridClaim.claim(glm::ivec3(x, y, z), [] { return 0u; });
+                if (slot == GridClaim::INVALID_SLOT)
+                {
+                    // Retract this emitter's touches so far (counts included): the caller re-walks it.
+                    for (Touch* t = out; t < cursor; ++t)
+                    {
+                        oc::atomic_ref<uint32>(m_cellCounts[t->slot]).fetch_sub(1, oc::memory_order_relaxed);
+                        *t = Touch{ .slot = 0, .item = GridTouches::SKIPPED };
+                    }
+                    return false;
+                }
+                oc::atomic_ref<uint32>(m_cellCounts[slot]).fetch_add(1, oc::memory_order_relaxed);
+                *cursor++ = Touch{ .slot = slot, .item = emitterIdx };
+            }
+        }
+    }
+    return true;
 }
 
-void ForceFieldPipeline::growGridBuffers(size_t neededDataBytes, uint32 neededTableEntries)
+ForceFieldPipeline::GridDemand ForceFieldPipeline::buildGrid()
 {
+    ProfileScope scope("Force grid build", EProfileCategory::Force);
+    m_gridClaim.beginFrame();
+    m_gridTouches.beginFrame();
+    memset(m_cellCounts.data(), 0, m_cellCounts.size() * sizeof(uint32));
+
+    // Per emitter, in parallel: its cells claimed, counted and touched (the light grid does this
+    // inline at add time; emitters only get their compact index at the compaction, so it is a
+    // parallelFor over the compacted field range instead - still off the main thread).
+    Globals::jobSystem.parallelFor(0u, m_compactFieldCount, 64u, JobProfile{ "Force grid claims", EProfileCategory::Force },
+        [this](uint32 begin, uint32 end)
+    {
+        for (uint32 i = begin; i < end; ++i)
+        {
+            glm::vec3 boxMin, boxMax;
+            forceEmitterWorldBox(m_compactEmitters[i], boxMin, boxMax);
+            const glm::vec3 boxSpan = boxMax - boxMin;
+            if (!std::isfinite(boxSpan.x + boxSpan.y + boxSpan.z + boxMin.x + boxMin.y + boxMin.z))
+                continue; // a NaN box (zero direction) would walk forever
+            const glm::ivec3 cellMin = forceGridPosCpu(boxMin);
+            const glm::ivec3 span = glm::min(forceGridPosCpu(boxMax), cellMin + (MAX_FORCE_CELLS_PER_AXIS - 1)) - cellMin + 1;
+            const uint32 numTouches = uint32(span.x * span.y * span.z);
+            const uint32 first = m_gridTouches.claimBlock(numTouches);
+            if (first == GridTouches::INVALID_BEGIN)
+            {
+                m_gridTouches.pushOverflow(i);
+                continue;
+            }
+            Touch* block = m_gridTouches.data() + first;
+            if (!touchCells(i, block))
+            {
+                for (uint32 t = 0; t < numTouches; ++t)
+                    block[t] = Touch{ .slot = 0, .item = GridTouches::SKIPPED };
+                m_gridTouches.pushOverflow(i);
+            }
+        }
+    });
+
+    // The overflow emitters, serially (a capacity miss now drops the emitter from the grid for
+    // this frame - the demand grows everything for the next one).
+    m_extraTouches.clear();
+    for (const uint32 emitterIdx : m_gridTouches.overflow())
+    {
+        glm::vec3 boxMin, boxMax;
+        forceEmitterWorldBox(m_compactEmitters[emitterIdx], boxMin, boxMax);
+        const glm::ivec3 cellMin = forceGridPosCpu(boxMin);
+        const glm::ivec3 span = glm::min(forceGridPosCpu(boxMax), cellMin + (MAX_FORCE_CELLS_PER_AXIS - 1)) - cellMin + 1;
+        const size_t first = m_extraTouches.size();
+        m_extraTouches.resize(first + size_t(span.x * span.y * span.z));
+        if (!touchCells(emitterIdx, m_extraTouches.data() + first))
+            m_extraTouches.resize(first);
+    }
+    m_gridTouches.growToDemand();
+
+    // The cell records: live slots in claim order, FORCE_CELL_UINTS each {pos, count, packed ids}.
+    const uint32 numSlots = m_gridClaim.numSlots();
+    m_numLiveCells = 0;
+    for (uint32 slot = 0; slot < numSlots; ++slot)
+    {
+        if (m_gridClaim.isDead(slot))
+            continue;
+        m_cellOffset[slot] = m_numLiveCells++ * FORCE_CELL_UINTS;
+        m_cellCursor[slot] = 0;
+    }
+    m_cellData.assign((size_t)m_numLiveCells * FORCE_CELL_UINTS, 0u);
+    for (uint32 slot = 0; slot < numSlots; ++slot)
+    {
+        if (m_gridClaim.isDead(slot))
+            continue;
+        uint32* cell = m_cellData.data() + m_cellOffset[slot];
+        const glm::ivec3& pos = m_gridClaim.pos(slot);
+        cell[0] = uint32(pos.x);
+        cell[1] = uint32(pos.y);
+        cell[2] = uint32(pos.z);
+        cell[3] = m_cellCounts[slot]; // the true count; forceCellCount clamps
+    }
+    const auto scatter = [&](const Touch& t)
+    {
+        if (t.item == GridTouches::SKIPPED)
+            return;
+        const uint32 k = m_cellCursor[t.slot]++;
+        if (k < FORCE_CELL_MAX_EMITTERS)
+            m_cellData[m_cellOffset[t.slot] + 4 + k / 2] |= (t.item & 0xFFFFu) << ((k & 1u) == 0u ? 0 : 16);
+    };
+    const Touch* touches = m_gridTouches.data();
+    const uint32 numTouches = m_gridTouches.numTouches();
+    for (uint32 i = 0; i < numTouches; ++i)
+        scatter(touches[i]);
+    for (const Touch& t : m_extraTouches)
+        scatter(t);
+
+    m_gridDemand = GridDemand{
+        .numCells = glm::max(m_gridClaim.slotDemand(), numSlots), // failed claims count: growth fits the burst
+        .dataBytes = (size_t)m_numLiveCells * FORCE_CELL_UINTS * sizeof(uint32),
+    };
+    return m_gridDemand;
+}
+
+bool ForceFieldPipeline::gridFits(const GridDemand& demand) const
+{
+    return demand.numCells * 4 <= m_tableEntries && demand.dataBytes <= m_gridDataSize;
+}
+
+void ForceFieldPipeline::growGridBuffers(const GridDemand& demand)
+{
+    while (demand.numCells * 4 > m_tableEntries)
+        m_tableEntries *= 2; // stays a power of 2 for the hash; the claim capacity follows (entries / 4)
+    const size_t neededDataBytes = demand.dataBytes + demand.dataBytes / 2;
     while (m_gridDataSize < neededDataBytes)
         m_gridDataSize *= 2;
-    while (m_tableEntries < neededTableEntries)
-        m_tableEntries *= 2; // stays a power of 2 for the hash
-    createGridBuffers(); // per-frame GPU scratch, rebuilt every frame: nothing to preserve
-    printf("ForceFieldPipeline: grew grid buffers to %zu bytes / %u table entries\n", m_gridDataSize, m_tableEntries);
+    createGridBuffers(); // per-frame scratch, rewritten every frame: nothing to preserve
+    createClaimTables(); // consumed: the frame's build is done
+    printf("ForceFieldPipeline: grew grid buffers to %zu bytes / %u table entries (%u cells)\n", m_gridDataSize, m_tableEntries, demand.numCells);
+}
+
+void ForceFieldPipeline::uploadGrid(uint32 frameIdx)
+{
+    ProfileScope scope("Force grid upload", EProfileCategory::Force);
+    assert(m_numLiveCells * 4 <= m_tableEntries && m_cellData.size() * sizeof(uint32) <= m_gridDataSize);
+    if (!m_cellData.empty())
+    {
+        memcpy(m_mappedGridData[frameIdx].data(), m_cellData.data(), m_cellData.size() * sizeof(uint32));
+        m_gridDataBuffers[frameIdx].flushMappedMemory(m_cellData.size() * sizeof(uint32));
+    }
+    // The hash table the readers probe: header + open-addressed slots holding cell data offsets.
+    uint32* table = m_mappedGridTable[frameIdx].data();
+    uint32* slots = table + FORCE_TABLE_HEADER_UINTS;
+    memset(slots, 0xFF, (size_t)m_tableEntries * sizeof(uint32));
+    const uint32 mask = m_tableEntries - 1;
+    const uint32 numSlots = m_gridClaim.numSlots();
+    for (uint32 slot = 0; slot < numSlots; ++slot)
+    {
+        if (m_gridClaim.isDead(slot))
+            continue;
+        uint32 idx = GridClaim::positionHash(m_gridClaim.pos(slot)) & mask;
+        while (slots[idx] != GridClaim::EMPTY_ENTRY)
+            idx = (idx + 1) & mask;
+        slots[idx] = m_cellOffset[slot];
+    }
+    table[0] = m_numLiveCells;
+    table[1] = (uint32)m_cellData.size();
+    table[2] = m_tableEntries;
+    table[3] = 0;
+    m_gridTableBuffers[frameIdx].flushMappedMemory(vk::WholeSize);
 }
 
 void ForceFieldPipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameIdx, uint32 eye, const DrawParams& params,

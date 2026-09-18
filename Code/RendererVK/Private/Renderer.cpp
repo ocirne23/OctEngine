@@ -702,9 +702,9 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
 
     m_lightCounter = 0;
     // The light grid's per-light phase runs inline in addLightInfo from here on: snapshot its inputs.
-    // (A build job left in flight by a present() that returned early must finish first - normally done.)
-    Globals::jobSystem.wait(m_lightGridJobCounter);
-    m_lightGridKicked = false;
+    // (Grid jobs left in flight by a present() that returned early must finish first - normally done.)
+    Globals::jobSystem.wait(m_gridJobCounter);
+    m_gridBuildsKicked = false;
     m_lightGridComputePipeline.beginFrame(m_swapChain.getCurrentFrameIndex(), m_lightGridParams, m_cameraPos);
     m_fogVolumeCounter = 0;
     m_decalCounter = 0;
@@ -732,40 +732,83 @@ void Renderer::kickBeginFrameJob(const Camera& camera, const Rect& viewportRect)
         EJobFlag_ForeignWait); // the body waits on m_gpuCollectCounter
 }
 
-// After the frame's last addLightInfo (the App loop, right after the force update - the last light
-// source; present() kicks as a fallback). The merge is O(grids + touches) and rides a job so it
-// overlaps the UI kick, the nav update and present()'s upload phases; the main thread only joins.
-void Renderer::kickLightGridBuild()
+// After the frame's last light add AND the force update (the App loop, right after it; present()
+// kicks as a fallback). Two jobs on one counter: the light grid merge (O(grids + touches) - the
+// per-light work already ran inline in addLightInfo) and the force emitter compaction + CPU grid
+// build. Both overlap the UI kick, the nav update and present()'s upload phases; the main thread
+// only joins (joinGridBuilds), plus the rare exact-fit growth.
+void Renderer::kickGridBuilds()
 {
-    if (m_lightGridKicked)
+    if (m_gridBuildsKicked)
         return;
-    m_lightGridKicked = true;
+    m_gridBuildsKicked = true;
     m_lightCounter = oc::min(m_lightCounter, uint32(RendererVKLayout::MAX_LIGHTS)); // settle the lock-free claims (present repeats it, harmless)
-    Globals::jobSystem.submit([this]
+    const uint32 frameIdx = m_swapChain.getCurrentFrameIndex();
+    Globals::jobSystem.submit([this, frameIdx]
         {
-            const uint32 frameIdx = m_swapChain.getCurrentFrameIndex();
             m_lightGridDemand = m_lightGridComputePipeline.build(oc::span<const RendererVKLayout::LightInfo>(m_lightInfos.data(), m_lightCounter));
             m_lightGridNeedsGrow = m_lightGridDemand.numGrids * 4 > m_lightTableEntries || m_lightGridDemand.gridDataBytes > m_lightGridBufferSize
                 || !m_lightGridComputePipeline.hostBuffersFit(m_lightGridDemand);
             if (!m_lightGridNeedsGrow)
                 m_lightGridComputePipeline.upload(m_perFrameData[frameIdx].lightTableBuffer, m_lightTableEntries);
         },
-        { "Light grid job", EProfileCategory::Renderer }, EJobPriority::High, &m_lightGridJobCounter); // waits only on its own parallelFor: no ForeignWait
+        { "Light grid job", EProfileCategory::Renderer }, EJobPriority::High, &m_gridJobCounter); // no waits inside: no ForeignWait
+
+    // The force compaction's shell-cull inputs (cheap, main): the CENTER view (TAA jitter never bakes into it).
+    ForceFieldPipeline::ShellCull& shellCull = m_forceShellCull;
+    shellCull = ForceFieldPipeline::ShellCull{};
+    shellCull.sampledRadius = m_forceFieldParams.sampledShellRadius > 0.0f
+        ? m_forceFieldParams.sampledShellRadius : FLT_MAX;
+    if (!isVrEnabled()) // one center frustum cannot serve both VR eyes
+    {
+        shellCull.enabled = true;
+        shellCull.frustum = Frustum(getCenterViewProj());
+        shellCull.cameraPos = m_cameraPos;
+        shellCull.pixelScale = m_mipPixelScale * 0.5f; // viewportH/2 / tan(fov/2)
+        shellCull.minPixels = m_forceFieldParams.minShellPixels;
+        // One analytic march per pixel; the density DEBUG view stays per-proxy (the union FS
+        // does not implement it), so it forces the old path while on.
+        shellCull.unionPass = m_forceFieldParams.unionMarch && !m_forceFieldParams.densityView;
+    }
+    shellCull.bakeVolume = m_forceShellBakeActive; // set by buildUboForce (this frame's fit)
+    shellCull.logTierDebug = m_forceFieldParams.logTierDebug;
+    Globals::jobSystem.submit([this, frameIdx]
+        {
+            // Compacts the ACTIVE emitter slots + uploads query positions (this slot's fence was waited).
+            m_forceFieldPipeline.upload(frameIdx, m_forceEmitters, m_forceQueries, m_forceBakeChunks, m_forceBakeSampleY, m_forceShellCull);
+            m_forceGridNeedsGrow = false;
+            if (m_forceFieldParams.enabled && m_forceFieldPipeline.getUseGrid())
+            {
+                m_forceGridDemand = m_forceFieldPipeline.buildGrid();
+                m_forceGridNeedsGrow = !m_forceFieldPipeline.gridFits(m_forceGridDemand);
+                if (!m_forceGridNeedsGrow)
+                    m_forceFieldPipeline.uploadGrid(frameIdx);
+            }
+        },
+        { "Force grid job", EProfileCategory::Force }, EJobPriority::High, &m_gridJobCounter); // waits only on its own parallelFor: no ForeignWait
 }
 
-void Renderer::joinLightGridBuild(PerFrameData& frameData)
+void Renderer::joinGridBuilds(PerFrameData& frameData)
 {
-    kickLightGridBuild(); // no-op when the App loop kicked
+    kickGridBuilds(); // no-op when the App loop kicked
     {
-        ProfileScope profileScope("Light grid join", EProfileCategory::Wait);
-        Globals::jobSystem.wait(m_lightGridJobCounter);
+        ProfileScope profileScope("Grid builds join", EProfileCategory::Wait);
+        Globals::jobSystem.wait(m_gridJobCounter);
     }
+    // The rare main-thread part: an exact-fit growth (GPU idle + re-record), then the upload the job skipped.
     if (m_lightGridNeedsGrow)
     {
-        // The rare main-thread part: an exact-fit growth (GPU idle + re-record), then the upload the job skipped.
         m_lightGridNeedsGrow = false;
         growLightGridBuffers(m_lightGridDemand);
         m_lightGridComputePipeline.upload(frameData.lightTableBuffer, m_lightTableEntries);
+    }
+    if (m_forceGridNeedsGrow)
+    {
+        m_forceGridNeedsGrow = false;
+        waitForGpuAndFlushStaging();
+        m_forceFieldPipeline.growGridBuffers(m_forceGridDemand);
+        setHaveToRecordCommandBuffers();
+        m_forceFieldPipeline.uploadGrid(m_swapChain.getCurrentFrameIndex());
     }
 }
 
@@ -850,8 +893,7 @@ void Renderer::checkFrameCapacities()
     }
 
     syncTextureDescriptorCapacity();
-
-    checkForceGridCapacity(); // the light grid grows synchronously in present() (its build is CPU-side)
+    // The light and force grids grow synchronously in present() (joinGridBuilds): their builds are CPU-side.
 }
 
 // This slot's fence was waited at the loop top, so its last submitted cull's LOD stats have landed:
@@ -1805,27 +1847,6 @@ void Renderer::setForceFieldParams(const ForceFieldParams& params)
     m_forceFieldParams = params;
 }
 
-void Renderer::checkForceGridCapacity()
-{
-    // Light-grid growth contract: read LAST frame's demand counters and grow before the buffers
-    // fill (overflowing inserts drop for one frame but keep incrementing the counter, so the
-    // readback measures true demand).
-    if (!m_forceFieldParams.enabled || !m_forceFieldPipeline.getUseGrid())
-        return;
-    const uint32 prevIdx = (m_swapChain.getCurrentFrameIndex() + RendererVKLayout::NUM_FRAMES_IN_FLIGHT - 1) % RendererVKLayout::NUM_FRAMES_IN_FLIGHT;
-    const ForceFieldPipeline::GridDemand demand = m_forceFieldPipeline.getGridDemand(prevIdx);
-    const bool tableHigh = demand.numCells > m_forceFieldPipeline.getTableEntries() / 4;
-    const bool dataHigh = (size_t)demand.dataCounter * sizeof(uint32) > m_forceFieldPipeline.getGridDataSize() / 4 * 3;
-    if (tableHigh || dataHigh)
-    {
-        waitForGpuAndFlushStaging();
-        m_forceFieldPipeline.growGridBuffers(
-            dataHigh ? (size_t)(demand.dataCounter * sizeof(uint32) * 1.5f) : m_forceFieldPipeline.getGridDataSize(),
-            tableHigh ? demand.numCells * 8 : m_forceFieldPipeline.getTableEntries());
-        setHaveToRecordCommandBuffers();
-    }
-}
-
 uint16 Renderer::createSolidColorMaterial(const glm::vec3& color)
 {
     const std::lock_guard lock(m_spawnMutex); // parallel entity spawning (cache + material registry)
@@ -2015,25 +2036,7 @@ void Renderer::present()
             dt * m_particleTimeScale, m_particleCollision, particleResetCarried);
         m_particleSpawnRequests.clear();
         m_decalPipeline.upload(frameIdx, m_decalCounter);
-        // Compacts the ACTIVE emitter slots + uploads query positions (fence-safe here).
-        ForceFieldPipeline::ShellCull shellCull;
-        shellCull.sampledRadius = m_forceFieldParams.sampledShellRadius > 0.0f
-            ? m_forceFieldParams.sampledShellRadius : FLT_MAX;
-        if (!isVrEnabled()) // one center frustum cannot serve both VR eyes
-        {
-            shellCull.enabled = true;
-            shellCull.frustum = Frustum(getCenterViewProj());
-            shellCull.cameraPos = m_cameraPos;
-            shellCull.pixelScale = m_mipPixelScale * 0.5f; // viewportH/2 / tan(fov/2)
-            shellCull.minPixels = m_forceFieldParams.minShellPixels;
-            // One analytic march per pixel; the density DEBUG view stays per-proxy (the union FS
-            // does not implement it), so it forces the old path while on.
-            shellCull.unionPass = m_forceFieldParams.unionMarch && !m_forceFieldParams.densityView;
-        }
-        shellCull.bakeVolume = m_forceShellBakeActive; // set by buildUboForce (this frame's fit)
-        shellCull.logTierDebug = m_forceFieldParams.logTierDebug;
-        m_forceFieldPipeline.upload(frameIdx, m_forceEmitters, m_forceQueries, m_forceBakeChunks,
-            m_forceBakeSampleY, shellCull);
+        // The force emitter compaction + grid build ride the grid jobs (kickGridBuilds / joinGridBuilds).
 
         if (m_particlesEnabled)
         {
@@ -2109,7 +2112,7 @@ void Renderer::present()
         processPendingTextureFrees();
     }
 
-    joinLightGridBuild(frameData); // before the staging update: a growth waits the GPU and flushes staging
+    joinGridBuilds(frameData); // before the staging update: a growth waits the GPU and flushes staging
 
     vk::Semaphore waitSemaphore;
     {

@@ -239,8 +239,8 @@ top-down camera hanging in empty sky shapes none of these:
   `giEvalBounce`** (gi_probe.inc.glsl, write side): the cheap multi-bounce lookup — no Chebyshev, no
   cross-cascade fade, walk starts at the tracing probe's cascade — because the result is temporally
   blended. The probe buffer is **NOT `coherent`** in the trace (each invocation writes only its own
-  probe; stale cross-probe reads are by design) — the light/force grid INSERT passes must keep theirs
-  (their cell-claim spin re-reads the table with a plain load). **TLAS exclusions are INACTIVE
+  probe; stale cross-probe reads are by design). The light and force grids have no GPU insert pass
+  any more (CPU-built, see the light grid section). **TLAS exclusions are INACTIVE
   instances** (reference 0, `gi_tlas_instances.cs.glsl`), which the build skips entirely, not
   mask-0 nodes.
 * **THE GI RECORD IS SPLIT IN TWO.** `recordGlobalIllumPrep` is the PER-FRAME secondary — the work whose
@@ -659,7 +659,8 @@ calls `reloadShaders()`.
     `growLightGridBuffers` (GPU idle, table / data / host buffers recreated, re-record) fits an
     overflowed burst; the upload then runs on the main thread for that frame. No frame drops a
     light except an overflow light that ALSO meets an exhausted grid capacity in the re-walk
-    (the force grid still uses the old readback-and-grow-next-frame contract).
+    The force grid follows the same contract (`ForceFieldPipeline::buildGrid`, its own job on the
+    same counter; the claim table + touch array live in `Pipeline/GridClaim.ixx`, shared by both).
   * **`upload`** writes the grid jobs, the workgroup list (one per 64 cells of a grid), the light
     list, the hash table (header `{numGrids, gridDataUints, tableSize}` + slots — the readers'
     probe loop is unchanged) and the indirect dispatch.
