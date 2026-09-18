@@ -95,17 +95,10 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
         setHaveToRecordCommandBuffers();
     });
     // Depth prepass reuse binds the G-buffer prepass depth READ-ONLY as the scene pass depth (no copy):
-    // flipping it swaps the scene render pass AND every scene pipeline's depthWrite, so rebuild like the
-    // wireframe toggle.
-    Tweak::boolean("Spatial", "Depth prepass reuse", &m_depthPrepassReuse, [this]() {
-        if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
-            return;
-        m_staticMeshGraphicsPipeline.setDepthReadOnly(m_depthPrepassReuse);
-        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_maxTextures);
-        m_giProbePipeline.setDebugDepthReadOnly(m_depthPrepassReuse);
-        m_giProbePipeline.reloadDebugShaders(m_perFrameData[0].sceneColor.getRenderPass());
-        setHaveToRecordCommandBuffers();
-    });
+    // flipping it swaps the scene render pass AND every scene pipeline's depthWrite. The tweak only sets the
+    // WANTED state; applyDepthPrepassReuse (top of beginFrame) does the rebuild, because the GI probe debug
+    // view also forces reuse off (its spheres need depth writes) and its toggle comes from a key as well.
+    Tweak::boolean("Spatial", "Depth prepass reuse", &m_depthPrepassReuseWanted);
     // GI probe debug cubes - the same state the testbed's P / O keys flip. Enabled is a per-frame stage
     // flag; the colour mode and radius are push constants in the cached debug secondary, so they re-record.
     Tweak::boolean("GI", "Debug probes", &m_giProbeDebugEnabled);
@@ -207,7 +200,8 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     const vk::RenderPass sceneRenderPass = m_perFrameData[0].sceneColor.getRenderPass();
 
     m_maxTextures = Globals::textureManager.getDescriptorCap(); // fixed layout cap; live count grows separately
-    m_staticMeshGraphicsPipeline.setDepthReadOnly(m_depthPrepassReuse); // tweak may have restored a saved value
+    m_depthPrepassReuse = m_depthPrepassReuseWanted && !m_giProbeDebugEnabled; // tweaks may have restored saved values
+    m_staticMeshGraphicsPipeline.setDepthReadOnly(m_depthPrepassReuse);
     m_staticMeshGraphicsPipeline.initialize(sceneRenderPass, m_maxUniqueMeshes, m_maxTextures, m_sceneViewCount > 1);
     m_rtaoPipeline.initialize(&m_rtaoParams, ext.width, ext.height, m_maxTextures, m_numTextureDescriptors, m_sceneViewCount);
     m_oceanSimPipeline.initialize();
@@ -661,6 +655,21 @@ Frustum Renderer::computeCullFrustum(const Camera& camera, const Rect& viewportR
     return frustum;
 }
 
+void Renderer::applyDepthPrepassReuse()
+{
+    const bool reuse = m_depthPrepassReuseWanted && !m_giProbeDebugEnabled;
+    if (reuse == m_depthPrepassReuse)
+        return;
+    if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
+        return;
+    m_depthPrepassReuse = reuse;
+    m_staticMeshGraphicsPipeline.setDepthReadOnly(reuse);
+    m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_maxTextures);
+    m_giProbePipeline.setDebugDepthReadOnly(reuse);
+    m_giProbePipeline.reloadDebugShaders(m_perFrameData[0].sceneColor.getRenderPass());
+    setHaveToRecordCommandBuffers();
+}
+
 const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewportRect)
 {
     ProfileScope beginFrameScope("Begin frame", EProfileCategory::Renderer);
@@ -685,6 +694,7 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
     applyVrHeadPose(cameraIn, camera, vrBaseOrientation);
 
     checkFrameCapacities();
+    applyDepthPrepassReuse();
 
     PerFrameData& frameData = m_perFrameData[m_swapChain.getCurrentFrameIndex()];
     {

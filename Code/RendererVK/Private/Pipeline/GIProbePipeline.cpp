@@ -420,8 +420,10 @@ void GIProbePipeline::buildDebugLayout(GraphicsPipelineLayout& layout)
         layout.depthWriteEnable = false;
 
     auto& b = layout.descriptorSetLayoutBindings;
-    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex }); // UBO (mvp + viewPos)
-    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex }); // clipmap SH volume
+    // Both stages: the sphere impostor's fragment shader intersects the view ray (UBO) and evaluates the probe's SH per pixel.
+    constexpr vk::ShaderStageFlags stages = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = stages }); // UBO (mvp + viewPos)
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = stages }); // clipmap SH volume
     layout.pushConstantRanges.push_back(vk::PushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eVertex, .offset = 0, .size = sizeof(DebugPC) });
 }
 
@@ -463,6 +465,6 @@ void GIProbePipeline::recordDebugDraw(CommandBuffer& commandBuffer, uint32 frame
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_debugPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
     DebugPC pc{ .radius = radius, .mode = mode };
     cmd.pushConstants(m_debugPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eVertex, 0, sizeof(pc), &pc);
-    // One instanced cube (36 verts) per clipmap probe across all cascades.
-    cmd.draw(36, RendererVKLayout::g_giGrid.probesTotal(), 0, 0);
+    // One sphere impostor quad (6 verts) per clipmap probe across all cascades.
+    cmd.draw(6, RendererVKLayout::g_giGrid.probesTotal(), 0, 0);
 }

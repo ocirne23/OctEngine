@@ -1,10 +1,11 @@
 #version 450
 
-// GI probe debug visualization: instanced cubes, one per live probe cell. Instance index maps to a
-// (grid, cell) via the probe work list; the cube is placed at the cell center and sized with the cell.
-// Color = directional irradiance (mode 0), cellSize/LOD band (mode 1), update priority (mode 2) or
-// relocation / backface state (mode 3). Invalid instances collapse
-// off-screen. Procedural geometry (no vertex buffers): 36 verts = 12 triangles of a unit cube.
+// GI probe debug visualization: one instance per clipmap probe, placed at the probe (relocation offset
+// included) and sized with the cascade. Procedural geometry (no vertex buffers).
+// Every probe is a SPHERE IMPOSTOR: 6 verts = a camera-facing quad, and the fragment shader intersects the
+// sphere. Mode 0 (irradiance) evaluates the probe's SH per pixel along the true normal there; modes 1
+// (cascade / LOD), 2 (update priority) and 3 (relocation / backface state) pass a flat colour, which the
+// fragment shader shades by the sphere normal for depth perception.
 
 #include "shared.inc.glsl"
 
@@ -12,22 +13,20 @@ layout (binding = 1, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 
 layout (push_constant) uniform PC
 {
-    float  u_radius; // cube radius as a fraction of probe spacing
+    float  u_radius; // sphere diameter scale (x sqrt(spacing))
     uint   u_mode;   // 0 = irradiance, 1 = cascade/LOD color, 2 = update priority, 3 = relocation / backface state
 } pc;
 
 #define GI_GRID_DATA_NAME  gi_gridData
 #include "gi_probe.inc.glsl"
 
-layout (location = 0) out vec3 v_color;
-layout (location = 1) out vec3 v_normal;
+layout (location = 0) flat out vec3 v_color;       // flat-colour modes: the probe's colour
+layout (location = 1) out vec3 v_world;            // the world point on the impostor quad
+layout (location = 2) flat out vec4 v_sphere;      // xyz = centre, w = radius
+layout (location = 3) flat out uint v_cellBase;    // irradiance mode: the probe the fragment shader evaluates
+layout (location = 4) flat out uint v_mode;
 
-const vec3 CORNERS[8] = vec3[](
-    vec3(-0.5, -0.5, -0.5), vec3(0.5, -0.5, -0.5), vec3(0.5, 0.5, -0.5), vec3(-0.5, 0.5, -0.5),
-    vec3(-0.5, -0.5,  0.5), vec3(0.5, -0.5,  0.5), vec3(0.5, 0.5,  0.5), vec3(-0.5, 0.5,  0.5));
-const int IDX[36] = int[](
-    0,1,2, 0,2,3,   4,5,6, 4,6,7,   0,4,5, 0,5,1,
-    2,6,7, 2,7,3,   0,3,7, 0,7,4,   1,5,6, 1,6,2);
+const vec2 QUAD[6] = vec2[](vec2(-1.0, -1.0), vec2(1.0, -1.0), vec2(1.0, 1.0), vec2(-1.0, -1.0), vec2(1.0, 1.0), vec2(-1.0, 1.0));
 
 void main()
 {
@@ -42,11 +41,30 @@ void main()
     uint  cellBase = giProbeBase(cascade, lc);
     vec3  center  = vec3(lc) * float(spacing) + giProbeOffset(cellBase);
 
-    vec3 corner = CORNERS[IDX[gl_VertexIndex]];
-    vec3 world  = center + corner * (pc.u_radius * sqrt(float(spacing)));
-    gl_Position = u_mvp * vec4(world, 1.0);
+    // Sphere impostor: a quad through the centre, facing the camera. The silhouette of a sphere seen from
+    // distance d is wider than its radius at the centre plane - r * d / sqrt(d^2 - r^2) - so the quad takes
+    // that size and the fragment shader discards what misses. A camera inside (or almost inside) the sphere
+    // has no silhouette: collapse the instance.
+    const float r     = 0.5 * pc.u_radius * sqrt(float(spacing));
+    const vec3  toCam = u_viewPos - center;
+    const float d     = length(toCam);
+    v_cellBase = cellBase;
+    v_mode     = pc.u_mode;
+    v_sphere   = vec4(center, r);
+    v_color    = vec3(0.0);
+    v_world    = center;
+    if (d < r * 1.05)
+    {
+        gl_Position = vec4(0.0, 0.0, 2.0, 1.0); // outside the clip volume
+        return;
+    }
+    const vec3 fwd   = toCam / d;
+    const vec3 right = normalize(cross(abs(fwd.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), fwd));
+    const vec3 up    = cross(fwd, right);
+    const vec2 q     = QUAD[gl_VertexIndex] * (r * d / sqrt(d * d - r * r));
+    v_world     = center + right * q.x + up * q.y;
+    gl_Position = u_mvp * vec4(v_world, 1.0);
 
-    v_normal = normalize(corner);
     if (pc.u_mode == 3u)
     {
         // Relocation / backface state (the misc vec4): red = how far the lookup has faded the probe out as
@@ -86,9 +104,5 @@ void main()
         else if (cascade == 1) v_color = vec3(0.2, 1.0, 0.2);
         else if (cascade == 2) v_color = vec3(0.3, 0.5, 1.0);
         else                   v_color = vec3(1.0, 1.0, 0.2);
-    }
-    else
-    {
-        v_color = giEvalCell(cellBase, v_normal) / PI;
     }
 }

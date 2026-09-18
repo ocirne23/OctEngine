@@ -568,6 +568,9 @@ private:
     glm::mat4 computeCenterViewProj(const Camera& camera) const; // pure: projection (VR: combined eyes) * view, from m_viewportRect
     void applyVrHeadPose(const Camera& cameraIn, Camera& camera, glm::quat& vrBaseOrientation);
     void checkFrameCapacities();
+    // Moves m_depthPrepassReuse to (tweak && !GI probe debug) when that changed: GPU idle, swap the scene
+    // pipelines' depth write, re-record. Runs at the top of beginFrame, so a key or a tweak only flips its flag.
+    void applyDepthPrepassReuse();
     void snapshotLodStats(PerFrameData& frameData);
     void buildFrameUbo(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation, PerFrameData& frameData);
     void buildUboViews(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation);
@@ -948,7 +951,12 @@ private:
     bool m_windowMinimized = false;
     bool m_vsyncEnabled = true; // "Time/VSync" tweak (Saved; --no-vsync overrides it): FIFO vs Immediate, applied by a swapchain recreate
     bool m_wireframe = false; // "Renderer/Wireframe" tweak: forward scene variants rasterize as lines
-    bool m_depthPrepassReuse = true; // "Depth prepass reuse" tweak: forward pass reuses the G-buffer prepass depth for early-Z
+    // The EFFECTIVE state every consumer reads: forward pass reuses the G-buffer prepass depth for early-Z.
+    // = the tweak, AND the GI probe debug view off: reuse binds the scene depth READ-ONLY, and the debug
+    // spheres need depth WRITES to sort among themselves (they are impostors writing gl_FragDepth; draw
+    // order cannot sort them across cascades). applyDepthPrepassReuse() moves it, at the top of the frame.
+    bool m_depthPrepassReuse = true;
+    bool m_depthPrepassReuseWanted = true; // "Spatial/Depth prepass reuse" tweak
     glm::vec2 m_prevTaaJitter{ 0.0f }; // last frame's TAA jitter (ubo.taaJitter.zw): consumers of the PREV depth image compensate with it
     uint32 m_sceneViewCount = 1; // 2 in VR: SceneColor + forward pass are multiview (one layer per eye)
 

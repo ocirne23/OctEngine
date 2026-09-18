@@ -117,7 +117,8 @@ public:
     // u_giPriorityDist / Falloff / FrustumWeight: x = nominal-rate distance from the focus (m), y = distance falloff exponent, z = frustum weight.
     glm::vec3 getPriorityParams() const { return glm::vec3(m_giPriorityDist, oc::max(m_giPriorityFalloff, 0.0f), m_giPriorityFrustumWeight); }
 
-    // Debug visualization: instanced cubes at every clipmap probe, drawn into the main color pass.
+    // Debug visualization: a sphere impostor at every clipmap probe, drawn into the main color pass - the SH
+    // evaluated per pixel (x "GI/Strength") in the irradiance mode, a shaded flat colour in the other modes.
     // initializeDebug must be called after the main render pass exists.
     void initializeDebug(vk::RenderPass renderPass);
     void reloadDebugShaders(vk::RenderPass renderPass);

@@ -271,7 +271,18 @@ top-down camera hanging in empty sky shapes none of these:
   that, **a fresh probe's replace
   visit traces `GI_FRESH_RAY_MULT` (4) x the rays** — its one snapshot is the whole history until the
   next, now rarer, visit. The three values ride the UBO's former GI pad floats. The function
-  lives in gi_probe.inc.glsl, shared with the probe debug view's **"Update priority"** colour mode
+  lives in gi_probe.inc.glsl. **The probe debug view draws SPHERE IMPOSTORS in every mode** (a
+  camera-facing quad, 6 verts; the fragment shader intersects the sphere and writes the hit's
+  `gl_FragDepth`), so both debug bindings carry the fragment stage. The irradiance mode evaluates the
+  SH per pixel along the true normal, scaled by "GI/Strength" (`u_aoParams.y`) like the scene's
+  lookup and unshaded; the flat-colour modes are shaded off the sphere normal. **While the debug view
+  is on, depth-prepass reuse is forced OFF:** reuse binds the scene depth READ-ONLY, and the
+  impostors need depth WRITES to sort among themselves (draw order cannot: a far fine-cascade sphere
+  would overdraw a near coarse one). `m_depthPrepassReuse` is the EFFECTIVE state every consumer
+  reads = the "Spatial/Depth prepass reuse" tweak (`m_depthPrepassReuseWanted`) AND debug off;
+  `applyDepthPrepassReuse()` moves it next to `checkFrameCapacities` at the top of `beginFrame` (GPU
+  idle, swap the scene pipelines' depth write, re-record), so the P key and the tweaks only flip
+  flags. The function is shared with the debug view's **"Update priority"** colour mode
   ("GI/Debug probe colour", key O cycles): it shows the wave's ACTUAL interval in frames: MAGENTA = every frame (the maximum rate; a hue the
   ramp never makes — white was ambiguous, the ramp's yellow can clip to it through exposure/bloom),
   then a LOG ramp (each doubling an equal step) blue (2 frames) -> green (~22) -> yellow (~76)
