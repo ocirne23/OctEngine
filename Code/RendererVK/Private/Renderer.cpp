@@ -77,8 +77,7 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     m_taaParams.registerTweaks(rerecordCallback);
     m_postParams.registerTweaks(rerecordCallback);
     m_lodParams.registerTweaks();
-    m_lightGridParams.registerTweaks(
-        [this]() { if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess) return; m_lightGridComputePipeline.reloadShaders(); setHaveToRecordCommandBuffers(); },
+    m_lightGridParams.registerTweaks( // the LOD params are read by the CPU build every frame: no reload
         [this]() { // "Debug Mode" = the LIGHT_GRID_DEBUG define on the lit fragments (the wireframe pattern below)
             if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
                 return;
@@ -228,7 +227,7 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     m_compositePipeline.initialize(m_renderPass);
     m_indirectCullComputePipeline.initialize(m_maxInstanceData, m_maxUniqueMeshes);
     m_skinningComputePipeline.initialize(m_maxSkinningPaletteEntries, m_maxSkinningJobs);
-    m_lightGridComputePipeline.initialize(&m_lightGridParams);
+    m_lightGridComputePipeline.initialize();
     m_accelStructure.initialize(m_maxUniqueMeshes);
     m_giProbePipeline.initialize(m_maxGiTlasInstances, m_maxTextures, m_numTextureDescriptors);
     // The GI grid shape is a #define in every probe-sampling shader (Layout.ixx g_giGrid): a change waits
@@ -702,6 +701,11 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
     buildFrameUbo(cameraIn, camera, vrBaseOrientation, frameData);
 
     m_lightCounter = 0;
+    // The light grid's per-light phase runs inline in addLightInfo from here on: snapshot its inputs.
+    // (A build job left in flight by a present() that returned early must finish first - normally done.)
+    Globals::jobSystem.wait(m_lightGridJobCounter);
+    m_lightGridKicked = false;
+    m_lightGridComputePipeline.beginFrame(m_swapChain.getCurrentFrameIndex(), m_lightGridParams, m_cameraPos);
     m_fogVolumeCounter = 0;
     m_decalCounter = 0;
     m_frameCounter++;
@@ -726,6 +730,43 @@ void Renderer::kickBeginFrameJob(const Camera& camera, const Rect& viewportRect)
     Globals::jobSystem.submit([this] { beginFrame(m_beginFrameJobCamera, m_beginFrameJobRect); },
         { "Begin frame job", EProfileCategory::Renderer }, EJobPriority::High, &m_beginFrameJobCounter,
         EJobFlag_ForeignWait); // the body waits on m_gpuCollectCounter
+}
+
+// After the frame's last addLightInfo (the App loop, right after the force update - the last light
+// source; present() kicks as a fallback). The merge is O(grids + touches) and rides a job so it
+// overlaps the UI kick, the nav update and present()'s upload phases; the main thread only joins.
+void Renderer::kickLightGridBuild()
+{
+    if (m_lightGridKicked)
+        return;
+    m_lightGridKicked = true;
+    m_lightCounter = oc::min(m_lightCounter, uint32(RendererVKLayout::MAX_LIGHTS)); // settle the lock-free claims (present repeats it, harmless)
+    Globals::jobSystem.submit([this]
+        {
+            const uint32 frameIdx = m_swapChain.getCurrentFrameIndex();
+            m_lightGridDemand = m_lightGridComputePipeline.build(oc::span<const RendererVKLayout::LightInfo>(m_lightInfos.data(), m_lightCounter));
+            m_lightGridNeedsGrow = m_lightGridDemand.numGrids * 4 > m_lightTableEntries || m_lightGridDemand.gridDataBytes > m_lightGridBufferSize
+                || !m_lightGridComputePipeline.hostBuffersFit(m_lightGridDemand);
+            if (!m_lightGridNeedsGrow)
+                m_lightGridComputePipeline.upload(m_perFrameData[frameIdx].lightTableBuffer, m_lightTableEntries);
+        },
+        { "Light grid job", EProfileCategory::Renderer }, EJobPriority::High, &m_lightGridJobCounter); // waits only on its own parallelFor: no ForeignWait
+}
+
+void Renderer::joinLightGridBuild(PerFrameData& frameData)
+{
+    kickLightGridBuild(); // no-op when the App loop kicked
+    {
+        ProfileScope profileScope("Light grid join", EProfileCategory::Wait);
+        Globals::jobSystem.wait(m_lightGridJobCounter);
+    }
+    if (m_lightGridNeedsGrow)
+    {
+        // The rare main-thread part: an exact-fit growth (GPU idle + re-record), then the upload the job skipped.
+        m_lightGridNeedsGrow = false;
+        growLightGridBuffers(m_lightGridDemand);
+        m_lightGridComputePipeline.upload(frameData.lightTableBuffer, m_lightTableEntries);
+    }
 }
 
 void Renderer::joinBeginFrameJob()
@@ -810,8 +851,7 @@ void Renderer::checkFrameCapacities()
 
     syncTextureDescriptorCapacity();
 
-    checkLightGridCapacity();
-    checkForceGridCapacity();
+    checkForceGridCapacity(); // the light grid grows synchronously in present() (its build is CPU-side)
 }
 
 // This slot's fence was waited at the loop top, so its last submitted cull's LOD stats have landed:
@@ -1531,6 +1571,8 @@ void Renderer::addLightInfo(const RendererVKLayout::LightInfo& light)
     {
         PerFrameData& frameData = m_perFrameData[m_swapChain.getCurrentFrameIndex()];
         frameData.mappedLightInfos[idx] = light;
+        m_lightInfos[idx] = light; // the CPU copy the light grid's overflow re-walk reads (the mapped buffer is write-combined)
+        m_lightGridComputePipeline.addLight(idx, light); // bounds + grid claims, right here on the adding thread
     }
 }
 
@@ -2030,7 +2072,6 @@ void Renderer::present()
         ProfileScope computeScope("Cull/skin/light update", EProfileCategory::Renderer);
         m_indirectCullComputePipeline.update(frameIdx, m_meshInstanceCounter);
         m_skinningComputePipeline.update(frameIdx, m_skinningPalettes, m_skinningJobs);
-        m_lightGridComputePipeline.update(frameIdx, m_lightCounter);
     }
     uploadScope.stop();
 
@@ -2067,6 +2108,8 @@ void Renderer::present()
         assert(waitResult == vk::Result::eSuccess && "Failed to wait for device idle before freeing textures");
         processPendingTextureFrees();
     }
+
+    joinLightGridBuild(frameData); // before the staging update: a growth waits the GPU and flushes staging
 
     vk::Semaphore waitSemaphore;
     {
@@ -2394,36 +2437,22 @@ void Renderer::createLightGridBuffers()
     }
 }
 
-void Renderer::growLightGridBuffers(size_t neededGridBytes, uint32 neededTableEntries)
+// Synchronous, from present(): the CPU build knows this frame's exact demand before anything is
+// uploaded, so growth fits it (with headroom) and no frame ever drops a light. The table stays
+// under a quarter full (hash collision quality), the grid data gets 1.5x.
+void Renderer::growLightGridBuffers(const LightGridComputePipeline::Demand& demand)
 {
+    while (demand.numGrids * 4 > m_lightTableEntries)
+        m_lightTableEntries *= 2; // stays a power of 2 for the hash
+    const size_t neededGridBytes = demand.gridDataBytes + demand.gridDataBytes / 2;
     while (m_lightGridBufferSize < neededGridBytes)
         m_lightGridBufferSize *= 2;
-    while (m_lightTableEntries < neededTableEntries)
-        m_lightTableEntries *= 2; // stays a power of 2 for the hash
     waitForGpuAndFlushStaging();
-    createLightGridBuffers(); // per-frame GPU scratch, rebuilt every frame: nothing to preserve
+    createLightGridBuffers(); // per-frame GPU scratch, rewritten every frame: nothing to preserve
+    m_lightGridComputePipeline.resizeHostBuffers(demand);
     setHaveToRecordCommandBuffers();
-    printf("Renderer: grew light grid buffers to %zu bytes / %u table entries\n", m_lightGridBufferSize, m_lightTableEntries);
-}
-
-void Renderer::checkLightGridCapacity()
-{
-    // Read last frame's usage counters (same readback as getStats) and grow before the buffers fill:
-    // above a quarter of the table (hash collision quality) or 3/4 of the grid data. Growth targets FIT
-    // the observed demand (with headroom) rather than doubling once: a burst can overshoot the current
-    // capacity many times over within a single frame. When the shader runs out of space it drops lights
-    // for that frame (getOrInsertGrid -> INVALID_GRID) but keeps incrementing gridDataCounter, so the
-    // readback measures the true demand of an overflowed frame.
-    PerFrameData& lastFrameData = m_perFrameData[(m_swapChain.getCurrentFrameIndex() + m_perFrameData.size() - 1) % m_perFrameData.size()];
-    struct LightGridInfo { uint32 numGrids; uint32 gridDataCounter; };
-    oc::span<LightGridInfo> infoSpan = lastFrameData.lightTableBuffer.mapMemory<LightGridInfo>(0, sizeof(LightGridInfo));
-    const LightGridInfo info = *infoSpan.data();
-    lastFrameData.lightTableBuffer.unmapMemory();
-
-    const bool tableHigh = info.numGrids > m_lightTableEntries / 4;
-    const bool gridHigh = (size_t)info.gridDataCounter * sizeof(uint32) > m_lightGridBufferSize / 4 * 3;
-    if (tableHigh || gridHigh)
-        growLightGridBuffers(gridHigh ? (size_t)(info.gridDataCounter * sizeof(uint32) * 1.5f) : m_lightGridBufferSize, tableHigh ? info.numGrids * 8 : m_lightTableEntries);
+    printf("Renderer: grew light grid buffers to %zu bytes / %u table entries (%u grids, %u workgroups)\n",
+        m_lightGridBufferSize, m_lightTableEntries, demand.numGrids, demand.numWorkgroups);
 }
 
 void Renderer::growInstanceOffsetCapacity(uint32 needed)
@@ -2631,10 +2660,7 @@ void Renderer::recordLightGrid(uint32 frameIdx)
     {
         .descriptorSet = frameData.lightGridPipelineDescriptorSet,
         .ubo = frameData.ubo,
-        .inLightInfoBuffer = frameData.lightInfosBuffer,
         .outLightGridBuffer = frameData.lightGridsBuffer,
-        .outLightTableBuffer = frameData.lightTableBuffer,
-        .numTableEntries = m_lightTableEntries,
     };
     m_lightGridComputePipeline.record(cb, frameIdx, params);
     cb.end();

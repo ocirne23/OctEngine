@@ -634,23 +634,50 @@ calls `reloadShaders()`.
   exponent is the `GI_VIS_CHEB_POWER` define (`g_giGrid.visChebPower`, "GI/Vis Cheb Power", integer;
   a reload-only tweak), unrolled to multiplies.
 * **`shared.inc.glsl` / `ubo.inc.glsl` structs must stay in sync with `Private/Layout.ixx`.**
-* **The light grid's distance LOD** (`light_grid.cs.glsl`, `lodCellSize`) is `LightGridParams`
-  under "Graphics/LOD/Light grid", BAKED AS `#define`s (the loop runs per light per grid) — a
-  change reloads the compute shader: `level = floor(pow(max(dist - start, 0) / step, power))`,
-  `cellSize = clamp(minCell << level, minCell, maxCell)` in world units per cell. Min cell 0
-  (log2) = the full GRID_SIZE cells per axis; min == max pins one resolution everywhere; the
-  defaults (0 m, 16 m, 0.5, 0, 2) follow the old sqrt ramp but stop at 4 m cells.
-  > **THE BUILD IS ONE THREAD PER LIGHT, ONE LANE PER WORKGROUP — ON PURPOSE.** `getOrInsertGrid`
-  > spins on a table slot another thread marked `INITIALIZING_ENTRY`; lanes of one wave have no
-  > forward-progress guarantee against each other, so a wider workgroup can deadlock a wave on
-  > its own insert. **Do not widen `local_size_x` without replacing that spin.** The cost model
-  > that follows from it: a frame is bounded by its SLOWEST light thread, which walks every grid
-  > its box touches and every cell inside (two atomics each). A full-res grid (1 m cells) is
-  > 32^3 cells at `MAX_LIGHTCELL_LIGHTS` 16 = ~1.2 MB, so **"Per-cell budget (cells)"** (1024):
-  > a light spanning more cells than that INSIDE a grid is added as the grid's LARGE light
-  > (`MAX_LARGE_LIGHTS_PER_GRID` 14, one entry evaluated by every pixel of the grid) instead —
-  > a range-12 emitter at full res was 15k serial atomics per grid. Point and spot lights also
-  > skip the cells their range sphere misses (`addLightToGrid`, ~half the box's corners).
+* **The light grid build is split CPU / GPU, and the CPU part is NOT on the main thread**
+  (`LightGridComputePipeline`):
+  * **Inline in `addLightInfo`, on the adding thread (`addLight`):** the light's per-type bounds
+    (point/spot sphere, spot cone sector, area front-half box, tube capsule) → its cull record;
+    every 32^3 grid the box covers is claimed in a lock-free CPU hash table (the same
+    `getPositionHash` as the shaders, bit for bit; bump-allocated slots, CAS on the table entry,
+    a slot that loses the race for a grid stays DEAD with `cellSize 0`), the grid's distance-LOD
+    cell size is picked at the claim, the grid's cell/large count is bumped (`atomic_ref`), and
+    one (slot, light) touch is appended to a bounded array (one `fetch_add` per light for its
+    whole block). A light with `reach > 16 m` or spanning more than **"Per-cell budget (cells)"**
+    (1024) cells inside a grid is that grid's LARGE light (`MAX_LARGE_LIGHTS_PER_GRID` 14, one
+    entry evaluated by every pixel of the grid). A light whose block or grid claim does not fit
+    goes to an overflow list; the touch array grows for the next frame.
+  * **The merge job (`build`, `Renderer::kickLightGridBuild` from the App loop right after the
+    force update — the frame's last light source; `present()` kicks as a fallback):** re-walks the
+    overflow lights serially (reading `Renderer::m_lightInfos`, the CPU copy beside the
+    write-combined mapping), prefix-sums the per-slot counts into per-grid list ranges, data
+    offsets and workgroup counts, scatters the touches (claim order, a thread race — it only
+    matters past the per-cell cap, a non-goal), lays out the workgroups, and — when the capacity
+    fits — `upload`s. O(grids + touches).
+  * **`joinLightGridBuild`** (present, before the staging update) is the ONLY main-thread part:
+    the wait, plus the rare exact-fit growth. The `Demand` counts FAILED claims too, so
+    `growLightGridBuffers` (GPU idle, table / data / host buffers recreated, re-record) fits an
+    overflowed burst; the upload then runs on the main thread for that frame. No frame drops a
+    light except an overflow light that ALSO meets an exhausted grid capacity in the re-walk
+    (the force grid still uses the old readback-and-grow-next-frame contract).
+  * **`upload`** writes the grid jobs, the workgroup list (one per 64 cells of a grid), the light
+    list, the hash table (header `{numGrids, gridDataUints, tableSize}` + slots — the readers'
+    probe loop is unchanged) and the indirect dispatch.
+  * **A light added after the kick is missed for that frame.** New light sources go before
+    `kickLightGridBuild` in the App loop.
+  * **GPU (`light_grid.cs.glsl`, GATHER):** one thread per cell loops its grid's candidate list
+    (box test + the range sphere for point/spot) and writes the cell's count + packed ids in one
+    go. No atomics, no spin, no clear: every header and cell of every grid is written. Counts hold
+    the TRUE candidate count (the debug heat view shows saturation); readers clamp.
+    `light_grid.inc.glsl` is read-only API now; the table wrappers need `TABLE_SIZE_NAME` +
+    `GRID_TABLE_NAME`, the gather shader does without them.
+  * **The distance LOD** is `LightGridParams` under "Graphics/LOD/Light grid", read by the CPU
+    build every frame (no reload): `level = floor(pow(max(dist - start, 0) / step, power))`,
+    `cellSize = clamp(minCell << level, minCell, maxCell)` in world units per cell. Min cell 0
+    (log2) = the full GRID_SIZE cells per axis; min == max pins one resolution everywhere; the
+    defaults (0 m, 16 m, 0.5, 0, 2) follow the old sqrt ramp but stop at 4 m cells.
+  * The three grid constants (`GRID_SIZE`, the two caps) and the header layout are mirrored in
+    `LightGridComputePipeline.cpp`: **change both.**
 * **Debug overlays are `#define`-driven, NEVER uniforms** — a debug switch rebuilds its pipeline
   (GPU idle + reload, the wireframe pattern), so the release shader carries no debug branch at all.
   The three today: `SHADOW_DEBUG` and `LIGHT_GRID_DEBUG` (below, both on the lit fragments) and

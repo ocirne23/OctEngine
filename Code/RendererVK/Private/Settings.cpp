@@ -131,14 +131,14 @@ void RTParams::registerTweaks(const oc::function<void()>& onReRecord)
     Tweak::boolean("RT", "BLAS compaction", &blasCompaction);
 }
 
-void LightGridParams::registerTweaks(const oc::function<void()>& onReloadShaders, const oc::function<void()>& onReloadLitShaders)
+void LightGridParams::registerTweaks(const oc::function<void()>& onReloadLitShaders)
 {
-    Tweak::floatVar("LOD/Light grid", "LOD start (m)", &lodStart, 0.0f, 1000.0f, 1.0f, onReloadShaders);
-    Tweak::floatVar("LOD/Light grid", "LOD step (m)", &lodStep, 0.5f, 1000.0f, 0.5f, onReloadShaders);
-    Tweak::floatVar("LOD/Light grid", "LOD power", &lodPower, 0.1f, 4.0f, 0.05f, onReloadShaders);
-    Tweak::intVar("LOD/Light grid", "Min cell (log2 m)", &minCellLog2, 0, 5, 1.0f, onReloadShaders);
-    Tweak::intVar("LOD/Light grid", "Max cell (log2 m)", &maxCellLog2, 0, 5, 1.0f, onReloadShaders);
-    Tweak::intVar("LOD/Light grid", "Per-cell budget (cells)", &cellBudget, 8, 32768, 8.0f, onReloadShaders);
+    Tweak::floatVar("LOD/Light grid", "LOD start (m)", &lodStart, 0.0f, 1000.0f, 1.0f);
+    Tweak::floatVar("LOD/Light grid", "LOD step (m)", &lodStep, 0.5f, 1000.0f, 0.5f);
+    Tweak::floatVar("LOD/Light grid", "LOD power", &lodPower, 0.1f, 4.0f, 0.05f);
+    Tweak::intVar("LOD/Light grid", "Min cell (log2 m)", &minCellLog2, 0, 5, 1.0f);
+    Tweak::intVar("LOD/Light grid", "Max cell (log2 m)", &maxCellLog2, 0, 5, 1.0f);
+    Tweak::intVar("LOD/Light grid", "Per-cell budget (cells)", &cellBudget, 8, 32768, 8.0f);
     // 0 off, 1 grid cells, 2 light count heat, 3 light ranges (LightGridParams::debugMode) - the
     // LIGHT_GRID_DEBUG define on the lit fragments. Sun cascades: the baked "Shadows/Debug mode".
     Tweak::intVar("LOD/Light grid", "Debug Mode", &debugMode, 0, 3, 0.0f, onReloadLitShaders, ETweakFlags::None);

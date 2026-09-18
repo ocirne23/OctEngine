@@ -288,6 +288,7 @@ int main(int argc, char* argv[])
             Globals::scatter.update(Globals::rendererVK, camera, Globals::terrain.activeClimateMaps());
             Globals::particleSystem.update(Globals::rendererVK, (float)simDeltaSec);
             Globals::forceSystem.update(Globals::rendererVK, (float)simDeltaSec);
+            Globals::rendererVK.kickLightGridBuild(); // the force update is the frame's last light source
 
             Globals::ui.drawGizmoEntity(Globals::rendererVK, (float)deltaSec);
             if (game)

@@ -229,14 +229,14 @@ export struct RTParams
     void registerTweaks(const oc::function<void()>& onReRecord);
 };
 
-// The clustered light grid's distance LOD (light_grid.cs.glsl): each occupied GRID_SIZE^3 grid is
-// split into cells of `cellSize` world units, picked per grid from its view distance:
+// The clustered light grid's distance LOD (LightGridComputePipeline::build, on the CPU): each
+// occupied GRID_SIZE^3 grid is split into cells of `cellSize` world units, picked per grid from its
+// view distance:
 //   level    = floor(pow(max(dist - lodStart, 0) / lodStep, lodPower))
 //   cellSize = clamp(minCell << level, minCell, maxCell)
 // so cells start at minCell (1 = a cell per world unit, the full GRID_SIZE^3 resolution) and double
 // every "step" of the curve; lodPower 0.5 gives the old sqrt ramp, 1 a linear one. minCell ==
-// maxCell pins one resolution everywhere. Baked as shader #defines (the loop runs per light per
-// grid), so a change reloads the shader.
+// maxCell pins one resolution everywhere. Read every frame: a change takes effect at once.
 export struct LightGridParams
 {
     float lodStart = 0.0f;  // m: no coarsening inside this distance
@@ -245,8 +245,8 @@ export struct LightGridParams
     int   minCellLog2 = 0;  // finest cell size = 2^n world units (0 = 1 m: GRID_SIZE cells per axis)
     int   maxCellLog2 = 1;  // coarsest cell size = 2^n world units (5 = 32 = one cell per grid)
     // A light spanning more cells than this inside ONE grid becomes that grid's LARGE light (one
-    // entry, evaluated by every pixel in the grid) instead of a per-cell insert: the build runs one
-    // thread per light, so a wide light in a full-res grid was tens of thousands of serial atomics.
+    // entry, evaluated by every pixel in the grid) instead of a per-cell candidate: it bounds the
+    // candidate list every cell of a full-res grid loops, and the header entry is one uint16.
     int   cellBudget = 1024;
     // Forward-pass lighting debug overlay (computeLitColor, instanced_indirect_lit.inc.glsl), BAKED as
     // the LIGHT_GRID_DEBUG define on the lit fragment variants (a change reloads the static mesh
@@ -255,9 +255,9 @@ export struct LightGridParams
     // lookup missed), 3 light ranges (blue per covering light).
     int   debugMode = 0;
 
-    // onReloadShaders: the LOD defines (the light grid COMPUTE shader); onReloadLitShaders: debugMode
-    // (the static mesh pipeline's lit fragments).
-    void registerTweaks(const oc::function<void()>& onReloadShaders, const oc::function<void()>& onReloadLitShaders);
+    // onReloadLitShaders: debugMode (the static mesh pipeline's lit fragments). The LOD params need
+    // no callback: the CPU build reads them every frame.
+    void registerTweaks(const oc::function<void()>& onReloadLitShaders);
 };
 
 export struct RTAOParams

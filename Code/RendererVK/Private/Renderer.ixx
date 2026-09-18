@@ -162,6 +162,8 @@ public:
     // between kick and join (see main.cpp's window comment).
     void kickBeginFrameJob(const Camera& camera, const Rect& viewportRect);
     void joinBeginFrameJob();
+    // The light grid merge job: call after the frame's LAST light add (App: after the force update).
+    void kickLightGridBuild();
     // The culling view for this frame's spatial cull, computable BEFORE beginFrame. Desktop: the
     // exact frustum beginFrame will build (bit-identical via computeCenterViewProj). VR: LAST
     // frame's head view - one frame of cull latency, absorbed by the culling margin - invalid on
@@ -755,8 +757,7 @@ private:
     void growUniqueMeshCapacity(uint32 needed);
     void growMaterialCapacity(uint32 needed);
     void growInstanceOffsetCapacity(uint32 needed);
-    void growLightGridBuffers(size_t neededGridBytes, uint32 neededTableEntries);
-    void checkLightGridCapacity();
+    void growLightGridBuffers(const LightGridComputePipeline::Demand& demand);
 
 private:
 
@@ -771,6 +772,13 @@ private:
     Rect m_beginFrameJobRect;
     JobCounter m_beginFrameJobCounter;
     bool m_beginFrameDeferred = false; // VR: kick stored, join runs beginFrame synchronously
+    // The light grid merge job (kickLightGridBuild -> joinLightGridBuild in present): its demand and
+    // whether the main thread has to grow + upload after the join.
+    JobCounter m_lightGridJobCounter;
+    LightGridComputePipeline::Demand m_lightGridDemand;
+    bool m_lightGridNeedsGrow = false;
+    bool m_lightGridKicked = false;
+    void joinLightGridBuild(PerFrameData& frameData);
     // VR one-frame-latent cull view (see getCullView); written at the end of beginFrame, VR only.
     Camera m_lastCullCamera;
     bool m_hasCullView = false;
@@ -1011,6 +1019,9 @@ private:
     uint32 m_instanceOffsetCounter = 0;
     uint32 m_meshInstanceCounter = 0;
     uint32 m_lightCounter = 0;
+    // CPU copy of this frame's lights (MAX_LIGHTS, written lock-free beside the mapped buffer): the
+    // light grid build reads it instead of the write-combined mapping.
+    oc::vector<RendererVKLayout::LightInfo> m_lightInfos = oc::vector<RendererVKLayout::LightInfo>(RendererVKLayout::MAX_LIGHTS);
     uint32 m_fogVolumeCounter = 0;
     uint32 m_decalCounter = 0;
     uint32 m_blasBuiltCount = 0;
