@@ -118,10 +118,13 @@ layout (binding = UBO_BINDING, std140) uniform UBO
                           // AO image is exactly (N, 1) so the upsample is skipped; 0 = no falloff),
                           // w = unused (the forward-pass light debug overlay is the LIGHT_GRID_DEBUG define)
     vec4 u_giVisParams;   // x = Chebyshev variance floor (fraction of spacing), y = Chebyshev power, z = probe weight floor, w = mean scale (footprint widening)
-    vec4 u_giTrace0;      // x = rays per probe, y = temporal alpha, z = max ray distance (m), w = update interval (frames)
+    vec4 u_giTrace0;      // x = rays per probe, y = temporal alpha, z = max ray distance (m), w = update interval multiplier (giWaveUpdateInterval)
     vec4 u_giTrace1;      // xyz = LAST frame's scene focus (previous clipmap window -> probe freshness), w = TLAS range (m)
     uint u_giTlasNumInstances; // live mesh-instance count for gi_tlas_instances; slots past it are written inactive
-    float u_giPad0, u_giPad1, u_giPad2;
+    // GI update priority (gi_probe.inc.glsl giWavePriority): the per-wave factor of the update interval.
+    float u_giPriorityDist;          // scene-focus distance (m) of the NOMINAL rate (factor 1) for a wave OUT of view; the interval is proportional to distance, closer = faster
+    float u_giPriorityFalloff;       // exponent on (distance / priorityDist): 1 = linear, 2 = quadratic, 0 = no distance term
+    float u_giPriorityFrustumWeight; // a wave IN the view frustum has its interval divided by this (>= 1; fades out outside it)
 
     // Ocean (FFT/Tessendorf water; ocean_*.cs.glsl simulation + ocean.fs.glsl shading)
     vec4 u_oceanParams0;    // xy = wind direction (unit), z = spectrum amplitude scale, w = choppiness lambda

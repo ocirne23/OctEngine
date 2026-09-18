@@ -25,8 +25,10 @@ import :Layout;
 //   3. Trace pass         : ray-queries the TLAS per probe, shades hits (reusing the light grid + sun), and
 //                           temporally blends into each probe's SH-L1 (full replace for probes that just
 //                           scrolled into the clipmap). The probe set + window is derived from the scene focus.
-//                           "GI/Update interval": a probe traces every N frames (per workgroup, alpha scaled
-//                           by N - same wall-time convergence, 1/N of the rays); fresh probes always trace.
+//                           A wave (4x4x4 probe block) traces every max(1, "GI/Update Interval Mult" x its
+//                           priority factor) frames - close blocks cancel the multiplier, down to every frame -
+//                           with the alpha scaled by the interval (same wall-time convergence); fresh probes
+//                           always trace. See giWaveUpdateInterval in gi_probe.inc.glsl.
 // The TLAS is built by the AccelerationStructure object between passes 1 and 3 (orchestrated by the Renderer).
 export class GIProbePipeline final
 {
@@ -100,9 +102,20 @@ public:
     void recordTrace(CommandBuffer& commandBuffer, uint32 frameIdx, TraceParams& params);
     // Rewrites one slot of the trace set's texture array (binding 13) with a new or streamed texture's view.
     void updateTextureDescriptor(uint32 frameIdx, uint32 slotIdx, vk::ImageView view);
-    // u_giTrace0: x = rays per probe, y = temporal alpha, z = max ray distance, w = update interval (frames).
-    glm::vec4 getTraceParams0() const { return glm::vec4((float)oc::max(m_giRaysPerProbe, 1), m_giTemporalAlpha, m_giMaxRayDist, (float)oc::max(m_giUpdateInterval, 1)); }
+    // u_giTrace0: x = rays per probe, y = temporal alpha of THIS frame, z = max ray distance, w = update interval multiplier.
+    // "GI/Temporal Alpha" is the per-frame blend AT 60 FPS; y is that rate compounded over this frame's wall
+    // delta, so the field converges in the same WALL time at any frame rate. Per frame and uncorrected, 0.01
+    // is a 1.7 s time constant at 60 fps but 0.4 s at 240 fps, and the blend's noise wanders 4x faster - it
+    // reads as flicker. The delta is clamped so a hitch frame cannot replace the history.
+    glm::vec4 getTraceParams0(float wallDeltaSec) const
+    {
+        const float frames60 = 60.0f * glm::clamp(wallDeltaSec, 0.001f, 0.1f);
+        const float frameAlpha = 1.0f - powf(1.0f - glm::clamp(m_giTemporalAlpha, 0.0f, 1.0f), frames60);
+        return glm::vec4((float)oc::max(m_giRaysPerProbe, 1), frameAlpha, m_giMaxRayDist, oc::max(m_giUpdateIntervalMult, 1.0f));
+    }
     float getTlasRange() const { return m_tlasRange; }
+    // u_giPriorityDist / Falloff / FrustumWeight: x = nominal-rate distance from the focus (m), y = distance falloff exponent, z = frustum weight.
+    glm::vec3 getPriorityParams() const { return glm::vec3(m_giPriorityDist, oc::max(m_giPriorityFalloff, 0.0f), m_giPriorityFrustumWeight); }
 
     // Debug visualization: instanced cubes at every clipmap probe, drawn into the main color pass.
     // initializeDebug must be called after the main render pass exists.
@@ -144,20 +157,32 @@ private:
     vk::Sampler m_skyMapSampler; // linear, U repeat (azimuth wraps), V clamp (poles)
 
     // GI probe trace tuning (runtime-tweakable; consumed by GIProbePipeline::recordTrace).
-    int m_giRaysPerProbe = 17;         // gather rays per probe per visit
-    int m_giUpdateInterval = 8;        // a probe traces every N frames (alpha scaled by N; fresh probes always trace)
-    float m_giTemporalAlpha = 0.01f;   // per-frame blend toward freshly traced irradiance
+    int m_giRaysPerProbe = 31;         // gather rays per probe per visit
+    float m_giUpdateIntervalMult = 16.0f; // global factor of a wave's update interval: frames = max(1, this x the priority factor),
+                                         // so it is the interval AT "GI/Priority Distance" and close blocks cancel it (fresh probes always trace)
+    float m_giTemporalAlpha = 0.025f;  // blend toward freshly traced irradiance per frame AT 60 FPS (rescaled by the wall delta, see getTraceParams0)
     float m_giMaxRayDist = 8.0f;       // gather ray max distance (world units)
     float m_giStrength = 1.0f;         // multiplier on the sampled probe irradiance at shading time
     float m_tlasRange = 4096.0f;        // TLAS instance range bound around the camera (origin distance)
 
+    // Update priority (gi_probe.inc.glsl giWavePriority, one factor of giWaveUpdateInterval): a wave's interval is multiplied by
+    // (focus distance / priorityDist) ^ falloff / viewBoost - NO bounds: a close wave's factor < 1 cancels the
+    // interval multiplier, and the far field has no cap. viewBoost = frustumWeight for a wave IN the view
+    // frustum (its interval divides by it), fading to 1 over priorityDist metres outside it.
+    // Defaults (first-person scene, focus = camera, interval mult 16, falloff 3, weight 5): in view the
+    // interval is 16 x (d / 10)^3 / 5 frames - every frame within ~8.5 m, 3 at 10 m, 25 at 20 m, 400 at
+    // 50 m; out of view, 5x that. A steep curve: all the rays go to what is near the focus.
+    float m_giPriorityDist = 10.0f;         // focus distance (m) of the nominal rate (factor 1) for a wave OUT of view; the falloff curve pivots here
+    float m_giPriorityFalloff = 3.0f;       // exponent on (distance / priorityDist): 1 = linear, 2 = quadratic (far field all but stops), 0.5 = gentle, 0 = no distance term
+    float m_giPriorityFrustumWeight = 5.0f; // a wave IN the view frustum has its interval divided by this (1 = the frustum is ignored)
+
     // SH-L1 depth visibility (Chebyshev) lookup tuning. Higher variance floor / lower power = softer,
     // temporally stabler occlusion edges (the L1 depth estimate wobbles with the per-frame ray jitter);
     // lower floor / higher power = sharper leak blocking.
-    float m_visVarianceFloor = 0.3f;   // min std-dev as a fraction of the cascade's probe spacing
+    float m_visVarianceFloor = 0.2f;   // min std-dev as a fraction of the cascade's probe spacing
     // (the Chebyshev exponent lives in RendererVKLayout::g_giGrid.visChebPower - a shader define)
     float m_visWeightFloor = 0.01f;    // occluded probes keep this much weight (0 = hard cutoff)
-    float m_visMeanScale = 2.5f;      // scales the reconstructed mean distance before the Chebyshev test:
+    float m_visMeanScale = 1.5f;      // scales the reconstructed mean distance before the Chebyshev test:
                                        // > 1 widens each probe's visible footprint (more overlap/smoothing),
                                        // countering the L1 blur's distance underestimate at grazing angles
 

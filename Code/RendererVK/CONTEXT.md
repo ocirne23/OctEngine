@@ -227,10 +227,67 @@ top-down camera hanging in empty sky shapes none of these:
 * **`DescriptorSetUpdateInfo` holds small-buffer vectors** (`oc::small_vector<…, 2>`,
   CommandBuffer.ixx): the per-frame passes build these as temporaries with one info each, and with
   `oc::vector` every entry was a heap allocation per record — the bulk of "Record primary"'s churn.
-* **GI trace cost levers** (gi_probe_trace.cs.glsl): **"GI/Update interval (frames)"** — a probe traces
-  every N frames, interleaved per WORKGROUP (whole waves exit) with the blend alpha scaled by N, so
-  wall-time convergence is unchanged and the ray count divides by N; fresh (just scrolled-in) probes
-  always trace. **Dead-probe skipping:** a probe whose stored backface fraction is past
+* **GI trace cost levers** (gi_probe_trace.cs.glsl): **THE update interval of a wave is ONE product**
+  (`giWaveUpdateInterval`, gi_probe.inc.glsl): `"GI/Update Interval Mult"` (the global factor — **NOT a
+  frame count on its own**) x the priority factor, floored ONCE, so it moves in single frames, and
+  floored at ONE frame: **a close block's priority factor < 1 cancels the multiplier, down to every
+  frame.** A wave traces every that many frames, interleaved per WORKGROUP (whole waves exit); the
+  **`"GI/Temporal Alpha"` is the per-frame blend AT 60 FPS**: `getTraceParams0` compounds it over the
+  WALL delta (`u_giTrace0.y` = this frame's alpha; wall, not sim, so GI converges through a pause;
+  clamped so a hitch cannot replace the history), which makes convergence — and the speed at which
+  the blend's noise wanders — frame-rate independent (uncorrected, 0.01 was a 1.7 s time constant at
+  60 fps and 0.4 s at 240). The per-visit alpha compounds that over the interval,
+  `1 - (1 - a)^interval`, capped at `GI_VISIT_ALPHA_MAX` (0.15), so wall-time convergence holds
+  until one visit would dominate the history; fresh (just
+  scrolled-in) probes always trace. **A wave is a compact 4x4x4 probe BLOCK** (the id -> lattice
+  mapping in the trace's `main`; storage is addressed by lattice coord, so the mapping is free) —
+  every per-wave exit only saves time when the whole wave exits, and a block is what is spatially
+  coherent. **The blocks are WORLD-aligned (`lc >> 2`, `giWaveMin`), NOT window-relative** — the id
+  enumerates toroidal SLOT space, whose 4x4x4 blocks are world blocks because every dim is a multiple
+  of 4. Window-relative blocks re-partitioned every probe each time the window scrolled a cell: a
+  probe being walked AWAY from could land in a block whose centre was nearer and speed UP, and the
+  nearest block centre swung 0.5 .. 1.5 spacings within one cell of movement (14 .. 41 m in cascade
+  3). The one block per axis that straddles the wrap seam has its halves on opposite window faces
+  (both ~half a window from the focus); `giWaveMin` folds it so all 64 lanes agree. **Update priority** (`giWavePriority`, a float factor with NO bounds — the old
+  "Priority Max Mult" cap is gone; the 1e6-frame ceiling in `giWaveUpdateInterval` is numeric safety
+  for the uint conversion only): `(focusDist / priorityDist) ^ falloff / viewBoost`.
+  **`"GI/Priority Falloff"`** is how hard the rate drops with distance: 1 = interval proportional to
+  distance, 2 = to its square (the far field all but stops), 0.5 = gentle, 0 = no distance term. The
+  curve pivots on `priorityDist`, so CLOSER than it a higher falloff is a FASTER rate.
+  `focusDist` is measured from **`u_sceneFocus`**, not the camera (the dominant term; the cascades
+  centre on it, and in first person it is the camera) **to the block CENTRE — the block radius is
+  used by the frustum test only**: it is 3.6 spacings (7 m in cascade 0, 58 m in cascade 3), so
+  subtracting it gave one world distance a different priority per cascade.
+  `"GI/Priority Distance (m)"` = the NOMINAL-RATE distance of a block OUT of view: a block there has
+  factor 1 and traces at exactly the interval multiplier, whatever the falloff.
+  **`viewBoost` = `"GI/Priority Frustum Weight"` (>= 1) for a block IN `u_frustumPlanes`
+  — its interval is divided by it — fading to 1 over `priorityDist` metres outside the
+  frustum** (a block just off screen keeps most of it). The weight acts on the VISIBLE blocks on
+  purpose: it is what the debug colours can show, and it is the big lever in first person, where 80%
+  of the near cascades is out of view. Defaults (10 m / falloff 3 / weight 5.0, interval mult 16, 31
+  rays, temporal alpha 0.025) are a STEEP curve that spends the rays near the focus: in view the
+  interval is `16 x (d / 10)^3 / 5` frames — every frame within ~8.5 m, 3 at 10 m, 25 at 20 m, 400
+  at 50 m; out of view, 5x that. Past the alpha cap the far tiers converge slower instead of flickering; to pay for
+  that, **a fresh probe's replace
+  visit traces `GI_FRESH_RAY_MULT` (4) x the rays** — its one snapshot is the whole history until the
+  next, now rarer, visit. The three values ride the UBO's former GI pad floats. The function
+  lives in gi_probe.inc.glsl, shared with the probe debug view's **"Update priority"** colour mode
+  ("GI/Debug probe colour", key O cycles): it shows the wave's ACTUAL interval in frames: MAGENTA = every frame (the maximum rate; a hue the
+  ramp never makes — white was ambiguous, the ramp's yellow can clip to it through exposure/bloom),
+  then a LOG ramp (each doubling an equal step) blue (2 frames) -> green (~22) -> yellow (~76)
+  -> red (256 or more), dead probes dimmed. The **"Relocation /
+  backface"** mode shows the misc vec4: red = the lookup's backface-dead fade, blue = the relocation
+  offset over its clamp, yellow = escaped on its last visit (the stored fraction pinned to exactly
+  DEAD_MAX) — a probe that keeps returning to yellow is re-escaping, and jumps at its visit rate.
+  **Temporal stability** (the blend is an average over the last ~1/alpha visits, so per-visit noise
+  reads as a slow DRIFT, and ray count only buys sqrt(N)): the per-visit shift of the ray lattice is
+  an **R2 sequence over the wave's visit number** (integer fixed point; the per-probe hash only
+  decorrelates neighbours), so the blended shifts are stratified instead of white; and a **step
+  limiter** on the irradiance blend — a visit brighter than `(1 + GI_STEP_LIMIT_REL)` x the stored DC
+  luminance (only brightening can be an outlier) has its step shrunk to the bound's, never below
+  `GI_STEP_LIMIT_MIN` of the asked step, which bounds the switch-on lag. Boosted visits (relocation,
+  just escaped) skip it, and a CLEARED (all-zero) slot is replaced like a fresh one.
+  **Dead-probe skipping:** a probe whose stored backface fraction is past
   `GI_BACKFACE_DEAD_MAX` (under the terrain, inside a wall — the lookup rejects it anyway) traces only
   every `GI_DEAD_INTERVAL` (8) regular visits, enough for the escape relocation and the wake-up; an
   escape visit pins the stored fraction to exactly DEAD_MAX so the next visit is not skipped. **Miss

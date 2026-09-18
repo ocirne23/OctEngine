@@ -101,6 +101,70 @@ uint giProbeBase(int c, ivec3 lc)
     return (uint(c) * uint(GI_CASCADE_PROBES) + giSlotLinear(lc)) * GI_PROBE_STRIDE_V4;
 }
 
+// Min-corner lattice coord of the trace WAVE (4x4x4 probe block) that holds the probe at lattice coord lc,
+// for the window at `origin`. Blocks are WORLD-aligned (lc >> 2), NOT window-relative: the window origin
+// scrolls a cell at a time, and window-relative blocks re-partitioned every probe on every scroll - a probe
+// being walked away from could land in a block whose centre was NEARER, and its rate went UP with distance;
+// the nearest block centre also swung 0.5 .. 1.5 spacings within one cell of movement. Every dim is a
+// multiple of 4, so a world block is also a 4x4x4 block of toroidal SLOT space (what the trace enumerates).
+// The one block per axis that straddles the window's wrap seam has its two halves on opposite faces - both
+// about half a window from the focus; the result is folded into the window so all 64 lanes agree.
+ivec3 giWaveMin(ivec3 lc, ivec3 origin)
+{
+    return origin + (((lc & ~3) - origin) & GI_DIM_MASK);
+}
+
+// Update priority of one trace WAVE (min corner waveMin, from giWaveMin): a factor of the wave's update interval
+// (giWaveUpdateInterval below), with NO upper and NO lower bound:
+//     mult = (focusDist / priorityDist) ^ falloff / viewBoost
+// * falloff - "GI/Priority Falloff", how hard the update rate drops with distance: 1 = the interval is
+//   proportional to the distance, 2 = to its square (the far field all but stops), 0.5 = its root
+//   (gentle), 0 = no distance term. The curve pivots on priorityDist - a block there keeps factor 1
+//   whatever the exponent - so closer than it, a HIGHER falloff is a FASTER rate.
+// * focusDist - distance from the SCENE FOCUS (the dominant term). The focus is what the cascades centre
+//   on and what every other distance-based quality falloff measures from; in first person it IS the
+//   camera. "GI/Priority Distance" is the NOMINAL-RATE distance of a block OUT of view: a block there has
+//   factor 1 and so traces at exactly "GI/Update Interval Mult" frames; the interval is proportional to
+//   the distance on BOTH sides of it, so a close block's factor < 1 CANCELS the global multiplier, down
+//   to every frame. Linear growth is gentler than the ~1/d^2 fall of a probe cell's screen coverage.
+// * viewBoost - "GI/Priority Frustum Weight" (>= 1) for a block IN the view frustum: its interval is
+//   divided by it. The boost fades to 1 over priorityDist metres OUTSIDE the frustum, so a block
+//   just off screen (one small turn from visible, and still lighting visible surfaces through the
+//   bounce) keeps most of it, and one far behind has none. This is the big lever in first person, where
+//   80% of the near cascades is behind or beside the camera: an unseen probe only has to be converged
+//   WHEN it is turned into view, where it gets the boost at once; what it loses meanwhile is response
+//   time to a lighting change nobody sees.
+// The block's bounding sphere (FRUSTUM test only) carries one extra spacing (a probe lights its whole
+// trilinear cell), which is also the guard band that keeps blocks at the screen edge in the in-view class.
+// Identical for every lane of the wave, so the wave exits as a unit. Shared by the trace and the debug
+// view's priority colour mode.
+float giWavePriority(ivec3 waveMin, int spacing)
+{
+    const float s      = float(spacing);
+    const vec3  center = (vec3(waveMin) + 1.5) * s;
+    const float radius = 3.6 * s; // block half-diagonal (1.5 * sqrt(3)) + one spacing
+    float outDist = 0.0;          // planes are normalized and point inward (Core.Frustum)
+    for (int i = 0; i < 6; ++i)
+        outDist = max(outDist, -dot(vec4(center, 1.0), u_frustumPlanes[i]) - radius);
+    // To the block CENTRE, radius not subtracted: the radius is 3.6 spacings - 7 m in cascade 0, 58 m in
+    // cascade 3 - so subtracting it gave the same world distance a different priority per cascade.
+    const float focusDist = distance(center, u_sceneFocus.xyz) * (GI_CASCADE_BASE_SPACING / s);
+    const float priorityDist = max(u_giPriorityDist, 1.0);
+    const float viewBoost    = mix(max(u_giPriorityFrustumWeight, 1.0), 1.0, clamp(outDist / priorityDist, 0.0, 1.0));
+    return pow(max(focusDist / priorityDist, 1e-4), max(u_giPriorityFalloff, 0.0)) / viewBoost; // pow(0, 0) is undefined
+}
+
+// THE update interval of a wave, in frames: every factor of the probe update rate as ONE product -
+// "GI/Update Interval Mult" (the global factor, u_giTrace0.w; NOT a frame count on its own) x the priority
+// factors above - floored once, so the interval moves in single frames, and floored at ONE frame: the
+// closest blocks trace every frame whatever the global factor. The trace's per-probe factors
+// (GI_DEAD_INTERVAL) multiply this.
+uint giWaveUpdateInterval(ivec3 waveMin, int spacing)
+{
+    // The ceiling is numeric safety only (a float past 2^32 has no defined uint conversion), not a rate cap.
+    return max(uint(min(max(u_giTrace0.w, 1.0) * giWavePriority(waveMin, spacing), 1.0e6)), 1u);
+}
+
 // SH-L1 projections of the probe's hit distance and squared hit distance (misses counted as the depth
 // cap). Directional visibility: reconstructing at the probe->surface direction gives the mean and second
 // moment of the distance to geometry that way, for a Chebyshev occlusion test at lookup time.

@@ -73,6 +73,10 @@ layout (binding = 12, std430) buffer GiGridData { vec4 gi_gridData[]; };
 // previous clipmap window for freshness).
 #define GI_MAX_RAY_DIST (u_giTrace0.z)
 #define GI_DEAD_INTERVAL 8 // a backface-dead probe traces every N-th regular visit
+#define GI_VISIT_ALPHA_MAX 0.15    // cap on the per-visit blend alpha the update interval can scale up to
+#define GI_FRESH_RAY_MULT 4        // ray count multiplier for a fresh (just scrolled-in) probe's replace visit
+#define GI_STEP_LIMIT_REL 2.0      // a visit brighter than (1 + this) x the stored luminance has its blend step limited (huge = off)
+#define GI_STEP_LIMIT_MIN 0.25     // ... but never below this fraction of the asked step (bounds the switch-on lag)
 
 // Light grid (read) + shared diffuse lighting.
 #define GRID_DATA_NAME  in_gridData
@@ -94,7 +98,6 @@ uint hashU(uint x)
     x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
     return x;
 }
-float hashToFloat(uint x) { return float(hashU(x) & 0x00FFFFFFu) / float(0x01000000u); }
 
 // jitter = the two per-probe random offsets (loop-invariant; computed once by the caller).
 vec3 sampleSphere(uint i, uint n, vec2 jitter)
@@ -255,23 +258,35 @@ void main()
     if (id >= numProbes)
         return;
 
-    const int  cascade = int(id / uint(GI_CASCADE_PROBES));
-    const uint local   = id - uint(cascade) * uint(GI_CASCADE_PROBES);
-    const uint DX      = uint(GI_PROBE_DIM_X), DY = uint(GI_PROBE_DIM_Y);
-    const ivec3 oc     = ivec3(int(local % DX), int((local / DX) % DY), int(local / (DX * DY)));
-
-    const ivec3 lc = giCascadeOrigin(cascade, u_sceneFocus.xyz) + oc;
+    // A WAVE (64 lanes) IS A COMPACT 4x4x4 PROBE BLOCK, not 64 consecutive x-row probes: every dim is a
+    // power of two >= 4, so the volume tiles exactly. Every per-wave early-out below (update interval,
+    // priority, dead probes) only saves time when the WHOLE wave exits, and a block is what is spatially
+    // coherent - same distance, same side of the frustum, same side of the ground. The id enumerates
+    // toroidal SLOT space, whose 4x4x4 blocks are WORLD-aligned (see giWaveMin for why that matters); lc
+    // is the one lattice coord of the current window that lives in the slot.
+    const int   cascade  = int(id / uint(GI_CASCADE_PROBES));
+    const uint  local    = id - uint(cascade) * uint(GI_CASCADE_PROBES);
+    const uvec2 blocksXY = uvec2(GI_PROBE_DIM_X, GI_PROBE_DIM_Y) / 4u;
+    const uint  block    = local >> 6, inner = local & 63u;
+    const ivec3 slot     = 4 * ivec3(int(block % blocksXY.x), int((block / blocksXY.x) % blocksXY.y), int(block / (blocksXY.x * blocksXY.y)))
+                         + ivec3(int(inner & 3u), int((inner >> 2) & 3u), int(inner >> 4));
+    const ivec3 origin   = giCascadeOrigin(cascade, u_sceneFocus.xyz);
+    const ivec3 lc       = origin + ((slot - origin) & GI_DIM_MASK);
+    const ivec3 waveMin  = giWaveMin(lc, origin);
+    const int   spacing  = giCascadeSpacing(cascade);
 
     // A probe is "fresh" when its lattice coord was outside the previous frame's clipmap window for this
     // cascade (it just scrolled in), so we replace rather than blend to converge immediately.
     const ivec3 prevOrigin = giCascadeOrigin(cascade, u_giTrace1.xyz);
     const bool  fresh = any(lessThan(lc, prevOrigin)) || any(greaterThanEqual(lc, prevOrigin + GI_PROBE_DIMS));
 
-    // Update interval ("GI/Update interval"): a probe traces every updateInterval frames, with the blend
-    // alpha scaled to match, so convergence in WALL time is unchanged while the ray count divides by the
+    // Update interval: the wave traces every updateInterval frames - ONE product of every rate factor
+    // (giWaveUpdateInterval: "GI/Update Interval Mult" x the distance / out-of-view priority, which a close
+    // wave's factor < 1 cancels, down to every frame), with the blend
+    // alpha scaled to match (below), so convergence in WALL time holds while the ray count divides by the
     // interval. Interleaved per WORKGROUP (whole waves exit, no half-empty waves); fresh probes always
     // trace - a skipped fresh slot would show the scrolled-out probe's data for a frame.
-    const uint updateInterval = max(uint(u_giTrace0.w), 1u);
+    const uint updateInterval = giWaveUpdateInterval(waveMin, spacing);
     if (!fresh && ((gl_WorkGroupID.x + u_frameIndex) % updateInterval) != 0u)
         return;
 
@@ -279,7 +294,6 @@ void main()
     // probe's offset -> start back on the lattice).
     // The misc vec4 (x = stored backface fraction, yzw = offset) is read ONCE here and rewritten once at
     // the end (giBlendProbeStats); a fresh slot's contents belong to a scrolled-out probe -> zeros.
-    const int  spacing     = giCascadeSpacing(cascade);
     const uint cellBase    = giProbeBase(cascade, lc);
     const vec4 prevMisc    = fresh ? vec4(0.0) : gi_gridData[cellBase + GI_MISC_V4];
     const vec3 probeOffset = prevMisc.yzw;
@@ -288,17 +302,30 @@ void main()
     // Dead-probe skipping: a probe whose stored backface fraction says "embedded" (under the terrain, inside
     // a wall) produces data the lookup rejects, so it traces only every GI_DEAD_INTERVAL-th visit - enough
     // to keep the escape and the wake-up (geometry moved away) working. The exit is per lane, but embedded
-    // probes are spatially coherent (whole x rows below ground), so most waves exit as a unit. An escape
+    // probes are spatially coherent (whole 4x4x4 blocks below ground), so most waves exit as a unit. An escape
     // visit stores the fraction as exactly DEAD_MAX (see the end), so the escaped probe is NOT skipped on
     // its next visit and refills its history at once.
     if (!fresh && prevMisc.x > GI_BACKFACE_DEAD_MAX
         && ((gl_WorkGroupID.x + u_frameIndex) % (updateInterval * uint(GI_DEAD_INTERVAL))) != 0u)
         return;
 
-    const uint N = max(uint(u_giTrace0.x), 1u);
+    // A fresh probe's visit REPLACES the slot (alpha 1), so its ray count is the whole history: with the
+    // priority multiplier the far tiers then refine that snapshot only every few dozen frames. It traces
+    // GI_FRESH_RAY_MULT times the rays - half the noise at 4x - and costs little, because only the one
+    // probe layer that scrolled in is fresh.
+    const uint N = max(uint(u_giTrace0.x), 1u) * (fresh ? uint(GI_FRESH_RAY_MULT) : 1u);
     const float wsh = 4.0 * PI / float(N);
-    const uint seed = hashU(id ^ (u_frameIndex * 0x9e3779b9u));
-    const vec2 jitter = vec2(hashToFloat(seed), hashToFloat(seed ^ 0x9e3779b9u));
+    // The per-visit shift of the ray lattice is an R2 (plastic-number Kronecker) SEQUENCE over the wave's
+    // visit number, not a white hash: the temporal blend is an average over the last ~1/alpha visits, and
+    // an average of stratified shifts converges ~1/n where random shifts converge 1/sqrt(n) - the same
+    // rays, a much steadier blend. The per-probe hash only decorrelates neighbours. Integer fixed point
+    // (the multipliers are 0.7548776662 and 0.5698402910 x 2^32; the wrap IS the fract): a float product
+    // loses its fraction after a few hundred thousand frames. The visit number is exact on a regular visit
+    // ((workgroup + frame) is a multiple of the interval there) and steps by 1 while the interval holds.
+    const uint visit  = (gl_WorkGroupID.x + u_frameIndex) / updateInterval;
+    const uint seed   = hashU(id);
+    const vec2 jitter = vec2(float((seed + visit * 3242174889u) >> 8),
+                             float((hashU(seed) + visit * 2447445414u) >> 8)) / float(0x01000000u);
 
     vec3 c0 = vec3(0.0), c1 = vec3(0.0), c2 = vec3(0.0), c3 = vec3(0.0);
     vec4  dsh = vec4(0.0), d2sh = vec4(0.0); // SH-L1 depth moments for Chebyshev visibility at lookup
@@ -366,8 +393,22 @@ void main()
     if (escaped)
         newOffset = escapeOffset;
 
-    float alpha = fresh ? 1.0 : min(u_giTrace0.y * float(updateInterval), 1.0);
-    if (!fresh)
+    // u_giTrace0.y is THIS FRAME's blend (the CPU already rescaled "GI/Temporal Alpha" by the wall delta, so
+    // convergence is frame-rate independent). A visit every updateInterval frames compounds it over the
+    // interval - 1 - (1 - a)^k, which saturates where the linear a * k overshoots - so a slow wave converges
+    // at the same WALL-time rate, up to GI_VISIT_ALPHA_MAX: past it one N-ray visit would dominate the
+    // history and the probe would flicker at its visit rate, so the slow tiers converge slower instead.
+    // (A per-frame alpha already above the cap is taken as asked.)
+    // A CLEARED slot (all-zero irradiance: grid reset, start-up) is replaced like a fresh one - blending up
+    // from zero is ~1/alpha visits of a too-dark field, and the step limiter below would read it as an
+    // infinite relative change. (A truly black probe replaces black with black.)
+    const vec3  lumaW   = vec3(0.2126, 0.7152, 0.0722);
+    const float oldLuma = dot(gi_gridData[cellBase].xyz, lumaW); // [0].xyz = the stored SH DC term
+    const bool  replace = fresh || oldLuma <= 0.0;
+    const float frameAlpha = u_giTrace0.y;
+    const float visitAlpha = max(frameAlpha, min(1.0 - pow(1.0 - frameAlpha, float(updateInterval)), GI_VISIT_ALPHA_MAX));
+    float alpha = replace ? 1.0 : visitAlpha;
+    if (!replace)
     {
         // The stored moments were traced from the old position: after a relocation step, blend faster in
         // proportion to how far the probe moved so the depth/irradiance history re-syncs in a few frames
@@ -383,7 +424,24 @@ void main()
             alpha = max(alpha, 0.35);
     }
 
-    giBlendCell(cellBase, c0, c1, c2, c3, alpha);
+    // Step limiter (the irradiance blend only; the depth stats take the plain alpha). One N-ray visit of a
+    // high-variance integrand - a small sunlit patch, a lamp: a ray hits it or not - can land several times
+    // above the converged value, and each such visit kicks the blend; the kicks are what reads as flicker.
+    // Only BRIGHTENING can be an outlier (a visit cannot go below zero), so only a visit more than
+    // (1 + GI_STEP_LIMIT_REL) x the stored DC luminance is limited: its step shrinks to what a visit AT
+    // that bound would have made, but never below GI_STEP_LIMIT_MIN of the asked step - so a real
+    // switch-on is slowed by a bounded factor, and only until the history has climbed to within the bound.
+    // Costs: a small downward bias in probes whose visits are often limited, and that switch-on lag.
+    // Boosted visits (relocation, just escaped) are deliberate fast replaces and skip it.
+    float shAlpha = alpha;
+    if (!replace && alpha == visitAlpha)
+    {
+        const float rel = (dot(c0, lumaW) - oldLuma) / oldLuma;
+        if (rel > GI_STEP_LIMIT_REL)
+            shAlpha *= max(GI_STEP_LIMIT_REL / rel, GI_STEP_LIMIT_MIN);
+    }
+
+    giBlendCell(cellBase, c0, c1, c2, c3, shAlpha);
     // An escape visit pins the stored fraction to exactly DEAD_MAX: still dead at lookup and still
     // triggering the just-escaped flush above (>=), but not skipped by the dead-probe interval (>), so the
     // probe traces from its new position on the very next visit instead of GI_DEAD_INTERVAL visits later.

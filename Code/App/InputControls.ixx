@@ -481,7 +481,7 @@ public:
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_P && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN)
             renderer.toggleGiProbeDebug();          // P: show/hide GI probe debug cubes
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_O && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN)
-            renderer.cycleGiProbeDebugMode();        // O: cycle irradiance <-> cellSize/LOD color
+            renderer.cycleGiProbeDebugMode();        // O: cycle irradiance -> cellSize/LOD color -> update priority -> relocation / backface
         if (evt.scancode == SDL_Scancode::SDL_SCANCODE_L && evt.type == SDL_EventType::SDL_EVENT_KEY_DOWN)
         {
             renderer.setSunLight(-cameraController.getDirection(), glm::vec3(1.0f), 5.0f); // aim the sun along the camera forward

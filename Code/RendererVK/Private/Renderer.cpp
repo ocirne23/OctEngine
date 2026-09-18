@@ -110,7 +110,7 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     // flag; the colour mode and radius are push constants in the cached debug secondary, so they re-record.
     Tweak::boolean("GI", "Debug probes", &m_giProbeDebugEnabled);
     {
-        static constexpr oc::string_view s_giProbeDebugModeNames[] = { "Irradiance", "Cascade / LOD colour" };
+        static constexpr oc::string_view s_giProbeDebugModeNames[] = { "Irradiance", "Cascade / LOD colour", "Update priority", "Relocation / backface" };
         Tweak::enumVar("GI", "Debug probe colour", &m_giProbeDebugMode, s_giProbeDebugModeNames, rerecordCallback);
     }
     Tweak::floatVar("GI", "Debug probe radius", &m_giProbeDebugRadius, 0.02f, 1.0f, 0.01f, rerecordCallback);
@@ -964,8 +964,12 @@ void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const
     // GI trace / TLAS-instance parameters (the GI secondary is cached, so everything per-frame rides here).
     // The previous focus advances only while GI traces, so probes that scrolled in during a GI-off spell
     // still read as fresh (full replace) on the first traced frame, as before.
-    ubo.giTrace0 = m_giProbePipeline.getTraceParams0();
+    ubo.giTrace0 = m_giProbePipeline.getTraceParams0((float)Globals::time.getDeltaSec()); // WALL delta: GI converges through a sim pause
     ubo.giTrace1 = glm::vec4(m_giPrevFocusPos, m_giProbePipeline.getTlasRange());
+    const glm::vec3 giPriority = m_giProbePipeline.getPriorityParams();
+    ubo.giPriorityDist = giPriority.x;
+    ubo.giPriorityFalloff = giPriority.y;
+    ubo.giPriorityFrustumWeight = giPriority.z;
     if (m_rtParams.enabled && m_rtParams.giEnabled)
         m_giPrevFocusPos = sceneFocusOrCamera();
     ubo.giTlasNumInstances = 0; // the counter was just reset: present() patches the real count in

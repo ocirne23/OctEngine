@@ -567,10 +567,13 @@ export namespace RendererVKLayout
         glm::vec4 giVisParams;   // x = Chebyshev variance floor (fraction of spacing), y = Chebyshev power, z = probe weight floor, w = mean scale (footprint widening)
         // GI probe trace + TLAS-instance parameters (gi_probe_trace / gi_tlas_instances): in the UBO, not push
         // constants, so the GI command buffer is recorded ONCE (tweaks and the per-frame values ride the UBO).
-        glm::vec4 giTrace0;      // x = rays per probe, y = temporal alpha, z = max ray distance (m), w = update interval (frames)
+        glm::vec4 giTrace0;      // x = rays per probe, y = temporal alpha, z = max ray distance (m), w = update interval multiplier (giWaveUpdateInterval)
         glm::vec4 giTrace1;      // xyz = LAST frame's scene focus (the previous clipmap window -> probe freshness), w = TLAS range (m)
         uint32 giTlasNumInstances; // live mesh-instance count for the TLAS-instance writer; slots past it become inactive
-        float giPad0, giPad1, giPad2;
+        // GI update priority (gi_probe.inc.glsl giWavePriority): the per-wave factor of the update interval.
+        float giPriorityDist;          // scene-focus distance (m) of the NOMINAL rate (factor 1) for a wave OUT of view; the interval is proportional to distance, closer = faster
+        float giPriorityFalloff;       // exponent on (distance / priorityDist): 1 = linear, 2 = quadratic, 0 = no distance term
+        float giPriorityFrustumWeight; // a wave IN the view frustum has its interval divided by this (>= 1; fades out outside it)
 
         // Ocean (FFT/Tessendorf water; OceanSimulationPipeline + ocean_*.cs.glsl / ocean.fs.glsl)
         glm::vec4 oceanParams0;    // xy = wind direction (unit), z = spectrum amplitude scale, w = choppiness lambda

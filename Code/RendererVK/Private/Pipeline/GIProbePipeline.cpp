@@ -47,7 +47,10 @@ void GIProbePipeline::initialize(uint32 maxTlasInstances, uint32 maxTextures, ui
     fillTextureDescriptors();
 
     Tweak::intVar("GI", "Rays Per Probe", &m_giRaysPerProbe, 1, 128);
-    Tweak::intVar("GI", "Update interval (frames)", &m_giUpdateInterval, 1, 8);
+    Tweak::floatVar("GI", "Update Interval Mult", &m_giUpdateIntervalMult, 1.0f, 32.0f, 0.5f);
+    Tweak::floatVar("GI", "Priority Distance (m)", &m_giPriorityDist, 1.0f, 512.0f, 1.0f);
+    Tweak::floatVar("GI", "Priority Falloff", &m_giPriorityFalloff, 0.0f, 4.0f, 0.05f);
+    Tweak::floatVar("GI", "Priority Frustum Weight", &m_giPriorityFrustumWeight, 1.0f, 8.0f, 0.1f);
     Tweak::floatVar("GI", "Temporal Alpha", &m_giTemporalAlpha, 0.0f, 0.05f, 0.001f);
     Tweak::floatVar("GI", "Max Ray Distance", &m_giMaxRayDist, 0.0f, 128.0f);
     Tweak::floatVar("GI", "Strength", &m_giStrength, 0.0f, 10.0f, 0.01f);
