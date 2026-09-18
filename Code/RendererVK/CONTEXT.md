@@ -230,7 +230,11 @@ top-down camera hanging in empty sky shapes none of these:
 * **GI trace cost levers** (gi_probe_trace.cs.glsl): **"GI/Update interval (frames)"** — a probe traces
   every N frames, interleaved per WORKGROUP (whole waves exit) with the blend alpha scaled by N, so
   wall-time convergence is unchanged and the ray count divides by N; fresh (just scrolled-in) probes
-  always trace. **Miss rays AND the virtual sky probe sample THE SKY MAP** instead of marching the
+  always trace. **Dead-probe skipping:** a probe whose stored backface fraction is past
+  `GI_BACKFACE_DEAD_MAX` (under the terrain, inside a wall — the lookup rejects it anyway) traces only
+  every `GI_DEAD_INTERVAL` (8) regular visits, enough for the escape relocation and the wake-up; an
+  escape visit pins the stored fraction to exactly DEAD_MAX so the next visit is not skipped. **Miss
+  rays AND the virtual sky probe sample THE SKY MAP** instead of marching the
   atmosphere, so the out-of-field fallback matches the misses by construction. **Gather hits use
   `giEvalBounce`** (gi_probe.inc.glsl, write side): the cheap multi-bounce lookup — no Chebyshev, no
   cross-cascade fade, walk starts at the tracing probe's cascade — because the result is temporally

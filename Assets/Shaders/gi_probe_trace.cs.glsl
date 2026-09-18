@@ -72,6 +72,7 @@ layout (binding = 12, std430) buffer GiGridData { vec4 gi_gridData[]; };
 // traces every N frames; fresh probes always trace) and prevViewPos (last frame's scene focus, the
 // previous clipmap window for freshness).
 #define GI_MAX_RAY_DIST (u_giTrace0.z)
+#define GI_DEAD_INTERVAL 8 // a backface-dead probe traces every N-th regular visit
 
 // Light grid (read) + shared diffuse lighting.
 #define GRID_DATA_NAME  in_gridData
@@ -284,6 +285,16 @@ void main()
     const vec3 probeOffset = prevMisc.yzw;
     const vec3 probePos    = vec3(lc) * float(spacing) + probeOffset;
 
+    // Dead-probe skipping: a probe whose stored backface fraction says "embedded" (under the terrain, inside
+    // a wall) produces data the lookup rejects, so it traces only every GI_DEAD_INTERVAL-th visit - enough
+    // to keep the escape and the wake-up (geometry moved away) working. The exit is per lane, but embedded
+    // probes are spatially coherent (whole x rows below ground), so most waves exit as a unit. An escape
+    // visit stores the fraction as exactly DEAD_MAX (see the end), so the escaped probe is NOT skipped on
+    // its next visit and refills its history at once.
+    if (!fresh && prevMisc.x > GI_BACKFACE_DEAD_MAX
+        && ((gl_WorkGroupID.x + u_frameIndex) % (updateInterval * uint(GI_DEAD_INTERVAL))) != 0u)
+        return;
+
     const uint N = max(uint(u_giTrace0.x), 1u);
     const float wsh = 4.0 * PI / float(N);
     const uint seed = hashU(id ^ (u_frameIndex * 0x9e3779b9u));
@@ -351,7 +362,8 @@ void main()
     // rest. The escape target is already inside the clamp (filtered above), so no clamp is needed here; an
     // offset is otherwise held as is (a fresh slot starts at zero).
     vec3 newOffset = probeOffset;
-    if (backFrac > 0.25 && closestBack < 1e29)
+    const bool escaped = backFrac > 0.25 && closestBack < 1e29;
+    if (escaped)
         newOffset = escapeOffset;
 
     float alpha = fresh ? 1.0 : min(u_giTrace0.y * float(updateInterval), 1.0);
@@ -367,10 +379,15 @@ void main()
         // has just escaped: flush the near-black inside-the-wall history quickly - but softly (a hard
         // alpha-1 replace would stamp a single noisy N-ray snapshot that then persists for ~1/alpha
         // frames). This refires for a few frames while the stored fraction descends, averaging the reset.
-        if (prevMisc.x > GI_BACKFACE_DEAD_MAX && backFrac < GI_BACKFACE_DEAD_MIN)
+        if (prevMisc.x >= GI_BACKFACE_DEAD_MAX && backFrac < GI_BACKFACE_DEAD_MIN)
             alpha = max(alpha, 0.35);
     }
 
     giBlendCell(cellBase, c0, c1, c2, c3, alpha);
-    giBlendProbeStats(cellBase, dsh, d2sh, prevMisc.x, backFrac, newOffset, alpha); // depth moments + embedded-probe stats + offset
+    // An escape visit pins the stored fraction to exactly DEAD_MAX: still dead at lookup and still
+    // triggering the just-escaped flush above (>=), but not skipped by the dead-probe interval (>), so the
+    // probe traces from its new position on the very next visit instead of GI_DEAD_INTERVAL visits later.
+    const float storedFrac = escaped ? GI_BACKFACE_DEAD_MAX : prevMisc.x;
+    const float visitFrac  = escaped ? GI_BACKFACE_DEAD_MAX : backFrac;
+    giBlendProbeStats(cellBase, dsh, d2sh, storedFrac, visitFrac, newOffset, alpha); // depth moments + embedded-probe stats + offset
 }
