@@ -149,10 +149,10 @@ private:
         ParticleEffect effect;
     };
     BuiltinEffect m_builtins[4] = {
-        { "Rain", "Rain count", "Rain size", "Rain alpha", "Rain size variation", "Effects/rain.pfx", false },
-        { "Snow", "Snow count", "Snow size", "Snow alpha", "Snow size variation", "Effects/snow.pfx", false },
-        { "Dust", "Dust count", "Dust size", "Dust alpha", "Dust size variation", "Effects/dust.pfx", true, 4.0f, 0.5f, 0.5f },
-        { "Underwater", "Underwater count", "Underwater size", "Underwater alpha", "Underwater size variation", "Effects/underwater.pfx", true, 4.0f, 1.0f, 0.05f },
+        { "Rain", "Rain count", "Rain size", "Rain alpha", "Rain size variation", "Effects/rain.pfx", false, 1.0f, 1.0f, 0.5f },
+        { "Snow", "Snow count", "Snow size", "Snow alpha", "Snow size variation", "Effects/snow.pfx", false, 1.0f, 1.0f, 0.5f },
+        { "Dust", "Dust count", "Dust size", "Dust alpha", "Dust size variation", "Effects/dust.pfx", true, 1.0f, 0.5f, 0.2f, 2.0f },
+        { "Underwater", "Underwater count", "Underwater size", "Underwater alpha", "Underwater size variation", "Effects/underwater.pfx", true, 2.0f, 1.0f, 0.05f },
     };
     // "Particles/Ocean spray": one Effects/ocean_spray.pfx instance (no CPU spawns) whose emitter slot the
     // renderer's ocean spray producer spawns into over the particle GPU spawn path.
