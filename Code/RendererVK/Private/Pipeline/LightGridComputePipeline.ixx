@@ -108,8 +108,8 @@ private:
 	void createClaimTables();
 	LightWalk walkOf(uint32 lightIdx, const RendererVKLayout::LightInfo& light);
 	bool isLargeIn(const LightWalk& walk, const glm::ivec3& gridPos, uint32 cellSize) const;
-	// Claims + touches the walk's grids into out[]; false = a claim met the grid capacity (the
-	// touches written so far are retracted, counts included).
+	// Claims + touches the walk's grids into out[]; false = a claim met the grid capacity (the counts
+	// bumped so far are retracted; the caller discards the block).
 	bool touchGrids(const LightWalk& walk, uint32 lightIdx, Touch* out);
 
 	oc::array<PerFrameData, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_perFrameData;

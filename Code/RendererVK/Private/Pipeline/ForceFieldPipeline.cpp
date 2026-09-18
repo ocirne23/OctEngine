@@ -971,28 +971,35 @@ void ForceFieldPipeline::recordCompute(CommandBuffer& commandBuffer, uint32 fram
 // ---------------------------------------------------------------------------------------------
 // The CPU grid build (the renderer's grid job, after upload's compaction).
 
-bool ForceFieldPipeline::touchCells(uint32 emitterIdx, Touch* out)
+ForceFieldPipeline::EmitterWalk ForceFieldPipeline::walkOf(uint32 emitterIdx) const
 {
+    EmitterWalk w;
     glm::vec3 boxMin, boxMax;
     forceEmitterWorldBox(m_compactEmitters[emitterIdx], boxMin, boxMax);
-    const glm::ivec3 cellMin = forceGridPosCpu(boxMin);
-    const glm::ivec3 cellMax = glm::min(forceGridPosCpu(boxMax), cellMin + (MAX_FORCE_CELLS_PER_AXIS - 1));
+    const glm::vec3 boxSpan = boxMax - boxMin;
+    w.valid = std::isfinite(boxSpan.x + boxSpan.y + boxSpan.z + boxMin.x + boxMin.y + boxMin.z); // a NaN box (zero direction) would walk forever
+    if (!w.valid)
+        return w;
+    w.cellMin = forceGridPosCpu(boxMin);
+    w.cellMax = glm::min(forceGridPosCpu(boxMax), w.cellMin + (MAX_FORCE_CELLS_PER_AXIS - 1));
+    return w;
+}
+
+bool ForceFieldPipeline::touchCells(const EmitterWalk& walk, uint32 emitterIdx, Touch* out)
+{
     Touch* cursor = out;
-    for (int x = cellMin.x; x <= cellMax.x; ++x)
+    for (int x = walk.cellMin.x; x <= walk.cellMax.x; ++x)
     {
-        for (int y = cellMin.y; y <= cellMax.y; ++y)
+        for (int y = walk.cellMin.y; y <= walk.cellMax.y; ++y)
         {
-            for (int z = cellMin.z; z <= cellMax.z; ++z)
+            for (int z = walk.cellMin.z; z <= walk.cellMax.z; ++z)
             {
                 const uint32 slot = m_gridClaim.claim(glm::ivec3(x, y, z), [] { return 0u; });
                 if (slot == GridClaim::INVALID_SLOT)
                 {
-                    // Retract this emitter's touches so far (counts included): the caller re-walks it.
-                    for (Touch* t = out; t < cursor; ++t)
-                    {
+                    // Retract the counts this emitter bumped so far; the caller drops its block and re-walks it.
+                    for (const Touch* t = out; t < cursor; ++t)
                         oc::atomic_ref<uint32>(m_cellCounts[t->slot]).fetch_sub(1, oc::memory_order_relaxed);
-                        *t = Touch{ .slot = 0, .item = GridTouches::SKIPPED };
-                    }
                     return false;
                 }
                 oc::atomic_ref<uint32>(m_cellCounts[slot]).fetch_add(1, oc::memory_order_relaxed);
@@ -1018,13 +1025,10 @@ ForceFieldPipeline::GridDemand ForceFieldPipeline::buildGrid()
     {
         for (uint32 i = begin; i < end; ++i)
         {
-            glm::vec3 boxMin, boxMax;
-            forceEmitterWorldBox(m_compactEmitters[i], boxMin, boxMax);
-            const glm::vec3 boxSpan = boxMax - boxMin;
-            if (!std::isfinite(boxSpan.x + boxSpan.y + boxSpan.z + boxMin.x + boxMin.y + boxMin.z))
-                continue; // a NaN box (zero direction) would walk forever
-            const glm::ivec3 cellMin = forceGridPosCpu(boxMin);
-            const glm::ivec3 span = glm::min(forceGridPosCpu(boxMax), cellMin + (MAX_FORCE_CELLS_PER_AXIS - 1)) - cellMin + 1;
+            const EmitterWalk walk = walkOf(i);
+            if (!walk.valid)
+                continue;
+            const glm::ivec3 span = walk.cellMax - walk.cellMin + 1;
             const uint32 numTouches = uint32(span.x * span.y * span.z);
             const uint32 first = m_gridTouches.claimBlock(numTouches);
             if (first == GridTouches::INVALID_BEGIN)
@@ -1033,7 +1037,7 @@ ForceFieldPipeline::GridDemand ForceFieldPipeline::buildGrid()
                 continue;
             }
             Touch* block = m_gridTouches.data() + first;
-            if (!touchCells(i, block))
+            if (!touchCells(walk, i, block))
             {
                 for (uint32 t = 0; t < numTouches; ++t)
                     block[t] = Touch{ .slot = 0, .item = GridTouches::SKIPPED };
@@ -1047,13 +1051,13 @@ ForceFieldPipeline::GridDemand ForceFieldPipeline::buildGrid()
     m_extraTouches.clear();
     for (const uint32 emitterIdx : m_gridTouches.overflow())
     {
-        glm::vec3 boxMin, boxMax;
-        forceEmitterWorldBox(m_compactEmitters[emitterIdx], boxMin, boxMax);
-        const glm::ivec3 cellMin = forceGridPosCpu(boxMin);
-        const glm::ivec3 span = glm::min(forceGridPosCpu(boxMax), cellMin + (MAX_FORCE_CELLS_PER_AXIS - 1)) - cellMin + 1;
+        const EmitterWalk walk = walkOf(emitterIdx);
+        if (!walk.valid)
+            continue;
+        const glm::ivec3 span = walk.cellMax - walk.cellMin + 1;
         const size_t first = m_extraTouches.size();
         m_extraTouches.resize(first + size_t(span.x * span.y * span.z));
-        if (!touchCells(emitterIdx, m_extraTouches.data() + first))
+        if (!touchCells(walk, emitterIdx, m_extraTouches.data() + first))
             m_extraTouches.resize(first);
     }
     m_gridTouches.growToDemand();

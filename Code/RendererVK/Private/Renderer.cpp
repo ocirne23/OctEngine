@@ -746,7 +746,9 @@ void Renderer::kickGridBuilds()
     const uint32 frameIdx = m_swapChain.getCurrentFrameIndex();
     Globals::jobSystem.submit([this, frameIdx]
         {
-            m_lightGridDemand = m_lightGridComputePipeline.build(oc::span<const RendererVKLayout::LightInfo>(m_lightInfos.data(), m_lightCounter));
+            // The mapped (write-combined) lights are only READ on the overflow re-walk, a non-goal path.
+            const PerFrameData& frameData = m_perFrameData[frameIdx];
+            m_lightGridDemand = m_lightGridComputePipeline.build(oc::span<const RendererVKLayout::LightInfo>(frameData.mappedLightInfos.data(), m_lightCounter));
             m_lightGridNeedsGrow = m_lightGridDemand.numGrids * 4 > m_lightTableEntries || m_lightGridDemand.gridDataBytes > m_lightGridBufferSize
                 || !m_lightGridComputePipeline.hostBuffersFit(m_lightGridDemand);
             if (!m_lightGridNeedsGrow)
@@ -788,7 +790,7 @@ void Renderer::kickGridBuilds()
         { "Force grid job", EProfileCategory::Force }, EJobPriority::High, &m_gridJobCounter); // waits only on its own parallelFor: no ForeignWait
 }
 
-void Renderer::joinGridBuilds(PerFrameData& frameData)
+void Renderer::joinGridBuilds(uint32 frameIdx, PerFrameData& frameData)
 {
     kickGridBuilds(); // no-op when the App loop kicked
     {
@@ -808,7 +810,7 @@ void Renderer::joinGridBuilds(PerFrameData& frameData)
         waitForGpuAndFlushStaging();
         m_forceFieldPipeline.growGridBuffers(m_forceGridDemand);
         setHaveToRecordCommandBuffers();
-        m_forceFieldPipeline.uploadGrid(m_swapChain.getCurrentFrameIndex());
+        m_forceFieldPipeline.uploadGrid(frameIdx);
     }
 }
 
@@ -1613,7 +1615,6 @@ void Renderer::addLightInfo(const RendererVKLayout::LightInfo& light)
     {
         PerFrameData& frameData = m_perFrameData[m_swapChain.getCurrentFrameIndex()];
         frameData.mappedLightInfos[idx] = light;
-        m_lightInfos[idx] = light; // the CPU copy the light grid's overflow re-walk reads (the mapped buffer is write-combined)
         m_lightGridComputePipeline.addLight(idx, light); // bounds + grid claims, right here on the adding thread
     }
 }
@@ -2072,7 +2073,7 @@ void Renderer::present()
     }
 
     {
-        ProfileScope computeScope("Cull/skin/light update", EProfileCategory::Renderer);
+        ProfileScope computeScope("Cull/skin update", EProfileCategory::Renderer);
         m_indirectCullComputePipeline.update(frameIdx, m_meshInstanceCounter);
         m_skinningComputePipeline.update(frameIdx, m_skinningPalettes, m_skinningJobs);
     }
@@ -2112,7 +2113,7 @@ void Renderer::present()
         processPendingTextureFrees();
     }
 
-    joinGridBuilds(frameData); // before the staging update: a growth waits the GPU and flushes staging
+    joinGridBuilds(frameIdx, frameData); // before the staging update: a growth waits the GPU and flushes staging
 
     vk::Semaphore waitSemaphore;
     {

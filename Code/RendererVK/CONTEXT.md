@@ -647,25 +647,25 @@ calls `reloadShaders()`.
     (1024) cells inside a grid is that grid's LARGE light (`MAX_LARGE_LIGHTS_PER_GRID` 14, one
     entry evaluated by every pixel of the grid). A light whose block or grid claim does not fit
     goes to an overflow list; the touch array grows for the next frame.
-  * **The merge job (`build`, `Renderer::kickLightGridBuild` from the App loop right after the
+  * **The merge job (`build`, `Renderer::kickGridBuilds` from the App loop right after the
     force update — the frame's last light source; `present()` kicks as a fallback):** re-walks the
-    overflow lights serially (reading `Renderer::m_lightInfos`, the CPU copy beside the
-    write-combined mapping), prefix-sums the per-slot counts into per-grid list ranges, data
-    offsets and workgroup counts, scatters the touches (claim order, a thread race — it only
-    matters past the per-cell cap, a non-goal), lays out the workgroups, and — when the capacity
-    fits — `upload`s. O(grids + touches).
-  * **`joinLightGridBuild`** (present, before the staging update) is the ONLY main-thread part:
-    the wait, plus the rare exact-fit growth. The `Demand` counts FAILED claims too, so
+    overflow lights serially (reading the mapped, write-combined light buffer — a non-goal path),
+    prefix-sums the per-slot counts into per-grid list ranges, data offsets and workgroup counts,
+    scatters the touches (claim order, a thread race — it only matters past the per-cell cap, a
+    non-goal), lays out the workgroups, and — when the capacity fits — `upload`s.
+    O(grids + touches).
+  * **`joinGridBuilds`** (present, before the staging update) is the ONLY main-thread part: the
+    wait, plus the rare exact-fit growth. The `Demand` counts FAILED claims too, so
     `growLightGridBuffers` (GPU idle, table / data / host buffers recreated, re-record) fits an
     overflowed burst; the upload then runs on the main thread for that frame. No frame drops a
-    light except an overflow light that ALSO meets an exhausted grid capacity in the re-walk
+    light except an overflow light that ALSO meets an exhausted grid capacity in the re-walk.
     The force grid follows the same contract (`ForceFieldPipeline::buildGrid`, its own job on the
     same counter; the claim table + touch array live in `Pipeline/GridClaim.ixx`, shared by both).
   * **`upload`** writes the grid jobs, the workgroup list (one per 64 cells of a grid), the light
     list, the hash table (header `{numGrids, gridDataUints, tableSize}` + slots — the readers'
     probe loop is unchanged) and the indirect dispatch.
   * **A light added after the kick is missed for that frame.** New light sources go before
-    `kickLightGridBuild` in the App loop.
+    `kickGridBuilds` in the App loop.
   * **GPU (`light_grid.cs.glsl`, GATHER):** one thread per cell loops its grid's candidate list
     (box test + the range sphere for point/spot) and writes the cell's count + packed ids in one
     go. No atomics, no spin, no clear: every header and cell of every grid is written. Counts hold

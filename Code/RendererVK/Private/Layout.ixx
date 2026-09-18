@@ -26,7 +26,7 @@ export namespace RendererVKLayout
     constexpr uint32 INITIAL_INSTANCE_DATA = 4;
     constexpr uint32 INITIAL_TEXTURES = 64; // TextureManager grows this, clamped to the device limit
     constexpr size_t INITIAL_LIGHT_GRID_BUFFER_SIZE = 10 * 1024 * 1024;
-	constexpr size_t INITIAL_LIGHT_TABLE_NUM_ENTRIES = 64; // must stay a power of 2 for hashing (doubling preserves this)
+	constexpr size_t INITIAL_LIGHT_TABLE_NUM_ENTRIES = 4096; // power of 2 (doubling preserves this); 4x the CPU build's initial 1024-grid claim capacity, so a normal scene never grows
 
 
     // Debug line overlay (physics collider wireframes etc.): per-frame vertex capacity of the mapped

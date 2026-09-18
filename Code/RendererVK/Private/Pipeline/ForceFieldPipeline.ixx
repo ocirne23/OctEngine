@@ -202,7 +202,11 @@ private:
 
     // The grid build's per-emitter phase (any worker of the job's parallelFor) and its scatter.
     using Touch = GridTouches::Touch;
-    bool touchCells(uint32 emitterIdx, Touch* out); // false = a claim met the cell capacity (retracted)
+    struct EmitterWalk { glm::ivec3 cellMin, cellMax; bool valid; };
+    EmitterWalk walkOf(uint32 emitterIdx) const;
+    // Claims + touches the walk's cells into out[]; false = a claim met the cell capacity (the
+    // counts bumped so far are retracted; the caller discards the block).
+    bool touchCells(const EmitterWalk& walk, uint32 emitterIdx, Touch* out);
     void createClaimTables();
 
     GraphicsPipeline m_pipeline;

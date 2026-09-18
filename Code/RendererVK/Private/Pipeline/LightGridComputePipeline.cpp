@@ -269,13 +269,9 @@ bool LightGridComputePipeline::touchGrids(const LightWalk& walk, uint32 lightIdx
                 const uint32 slot = m_claim.claim(gridPos, [&] { return lodCellSize(gridPos, m_viewPos, m_params); });
                 if (slot == GridClaim::INVALID_SLOT)
                 {
-                    // Retract this light's touches so far (counts included): the caller re-walks it.
-                    for (Touch* t = out; t < cursor; ++t)
-                    {
-                        const bool large = (t->item & LARGE_BIT) != 0;
-                        oc::atomic_ref<uint32>(large ? m_largeCounts[t->slot] : m_cellCounts[t->slot]).fetch_sub(1, oc::memory_order_relaxed);
-                        *t = Touch{ .slot = 0, .item = GridTouches::SKIPPED };
-                    }
+                    // Retract the counts this light bumped so far; the caller drops its block and re-walks it.
+                    for (const Touch* t = out; t < cursor; ++t)
+                        oc::atomic_ref<uint32>((t->item & LARGE_BIT) ? m_largeCounts[t->slot] : m_cellCounts[t->slot]).fetch_sub(1, oc::memory_order_relaxed);
                     return false;
                 }
                 const bool large = isLargeIn(walk, gridPos, m_claim.payload(slot));
