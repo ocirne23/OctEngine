@@ -230,6 +230,14 @@ vec4 sampleAOBilateral(vec2 fullUv, vec3 pos, float viewDist)
 	return wsum > 1e-4 ? sum / wsum : texture(u_ao, fullUv);
 }
 
+// Light debug overlay ("Graphics/LOD/Light grid/Debug Mode"): 0 off, 1 grid cells, 2 per-cell light
+// count heat, 3 light ranges. BAKED: StaticMeshGraphicsPipeline defines LIGHT_GRID_DEBUG and the tweak
+// reloads the pipeline, so at 0 every debug branch and variable below folds away (the sun cascade
+// view is the SHADOW_DEBUG overlay at the end).
+#ifndef LIGHT_GRID_DEBUG
+#define LIGHT_GRID_DEBUG 0
+#endif
+
 // Full surface lighting for one shaded point: screen-space AO + bent-normal GI probe irradiance, sun
 // (with underwater caustics) and the clustered light grid. texAO multiplies only the ambient/indirect
 // term (baked texture AO on top of the screen-space term - pass 1.0 when the material carries none).
@@ -272,17 +280,12 @@ vec3 computeLitColor(vec3 worldPos, vec3 V, vec3 N, vec3 materialColor, float ro
 	const ivec3 gridPos = getGridPos(worldPos);
     uint tableIdx = getTableIdx(gridPos);
 
-	// Light debug overlay ("Graphics/LOD/Light grid/Debug Mode"): 0 off, 1 grid cells, 2 per-cell light
-	// count heat, 3 light ranges. BAKED: StaticMeshGraphicsPipeline defines LIGHT_GRID_DEBUG and the tweak
-	// reloads the pipeline, so at 0 every debug branch and variable below folds away (the sun cascade
-	// view is the SHADOW_DEBUG overlay at the end).
-#ifndef LIGHT_GRID_DEBUG
-#define LIGHT_GRID_DEBUG 0
-#endif
-	const int debugMode = LIGHT_GRID_DEBUG;
+#if LIGHT_GRID_DEBUG == 2
 	bool  debugHit = false;          // this point's grid was found in the hash table
 	uint  debugLightCount = 0u;      // large + cell lights the point evaluated
+#elif LIGHT_GRID_DEBUG == 3
 	vec3  debugRangeTint = vec3(0.0);
+#endif
 
 	while (true)
 	{
@@ -292,15 +295,19 @@ vec3 computeLitColor(vec3 worldPos, vec3 V, vec3 N, vec3 materialColor, float ro
 		const ivec3 gridMin = getGridMin(gridIdx);
 		if (gridMin == gridPos)
 		{
+#if LIGHT_GRID_DEBUG == 2
 			debugHit = true;
+#endif
 			const uint numLargeLights = getLargeLightCount(gridIdx);
 			for (uint i = 0; i < min(numLargeLights, MAX_LARGE_LIGHTS_PER_GRID); ++i)
 			{
 				const uint lightId    = getLargeLightId(gridIdx, i);
 				const LightInfo light = in_lightInfos[lightId];
 				color += doLightShadowed(light, worldPos, V, N, specularColor, matColOverPi, metalness, roughness, roughnessSq);
-				if (debugMode == 3 && distance(worldPos, light.pos) < abs(light.range))
+#if LIGHT_GRID_DEBUG == 3
+				if (distance(worldPos, light.pos) < abs(light.range))
 					debugRangeTint += vec3(0.0, 0.0, 0.08);
+#endif
 			}
 
 			const uint cellOffset = calcCellOffset(gridIdx, gridMin, worldPos);
@@ -310,43 +317,36 @@ vec3 computeLitColor(vec3 worldPos, vec3 V, vec3 N, vec3 materialColor, float ro
 				const uint lightId    = getLightId(cellOffset, i);
 				const LightInfo light = in_lightInfos[lightId];
 				color += doLightShadowed(light, worldPos, V, N, specularColor, matColOverPi, metalness, roughness, roughnessSq);
-				if (debugMode == 3 && distance(worldPos, light.pos) < abs(light.range))
+#if LIGHT_GRID_DEBUG == 3
+				if (distance(worldPos, light.pos) < abs(light.range))
 					debugRangeTint += vec3(0.0, 0.0, 0.08);
+#endif
 			}
+#if LIGHT_GRID_DEBUG == 2
 			debugLightCount = min(numLargeLights, MAX_LARGE_LIGHTS_PER_GRID) + min(numLights, MAX_LIGHTCELL_LIGHTS);
+#endif
 			break;
 		}
 		tableIdx = getNextTableIdx(tableIdx);
 	}
 
-	if (debugMode != 0)
+#if LIGHT_GRID_DEBUG == 1 // one random colour per grid (the coarse hash-table entry)
+	color = mix(color, randomColor(gridPos), 0.4);
+#elif LIGHT_GRID_DEBUG == 2 // light count heat: green (1) -> red (the cell cap); magenta = no grid entry
+	if (!debugHit)
+		color = mix(color, vec3(1.0, 0.0, 1.0), 0.5);
+	else if (debugLightCount > 0u)
 	{
-		if (debugMode == 1)      // one random colour per grid (the coarse hash-table entry)
-			color = mix(color, randomColor(gridPos), 0.4);
-		else if (debugMode == 2) // light count heat: green (1) -> red (the cell cap); magenta = no grid entry
-		{
-			if (!debugHit)
-				color = mix(color, vec3(1.0, 0.0, 1.0), 0.5);
-			else if (debugLightCount > 0u)
-			{
-				const float heat = clamp(float(debugLightCount) / float(MAX_LIGHTCELL_LIGHTS), 0.0, 1.0);
-				color = mix(color, mix(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), heat), 0.5);
-			}
-		}
-		else if (debugMode == 3) // every light whose range covers the point adds a step of blue
-			color += debugRangeTint + vec3(0.0, 0.0, 0.02);
+		const float heat = clamp(float(debugLightCount) / float(MAX_LIGHTCELL_LIGHTS), 0.0, 1.0);
+		color = mix(color, mix(vec3(0.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), heat), 0.5);
 	}
+#elif LIGHT_GRID_DEBUG == 3 // every light whose range covers the point adds a step of blue
+	color += debugRangeTint + vec3(0.0, 0.0, 0.02);
+#endif
 #if defined(SHADOW_DEBUG) && SHADOW_DEBUG != 0
 	color = shadowDebugOverlay(color, worldPos, N); // "Shadows/Debug mode": baked, see shadows.inc.glsl
 #endif
 	return color;
 }
-
-//	#define GI_DEBUG_VIZ 0
-//	#if GI_DEBUG_VIZ == 1
-//		color = giDebugColor(worldPos, N);
-//	#elif GI_DEBUG_VIZ == 2
-//		color = (indirectE.x >= 0.0) ? indirectE / PI : vec3(0.0);
-//	#endif
 
 #endif // INSTANCED_INDIRECT_LIT_INC_GLSL
