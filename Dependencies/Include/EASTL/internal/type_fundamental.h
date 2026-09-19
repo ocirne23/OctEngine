@@ -151,14 +151,6 @@ namespace eastl
 	template <typename T>
 	struct is_integral : public eastl::is_integral_helper<typename eastl::remove_cv<T>::type>{};
 
-	#define EASTL_DECLARE_INTEGRAL(T)                                             \
-	namespace eastl{                                                              \
-		template <> struct is_integral<T>                : public true_type{};    \
-		template <> struct is_integral<const T>          : public true_type{};    \
-		template <> struct is_integral<volatile T>       : public true_type{};    \
-		template <> struct is_integral<const volatile T> : public true_type{};    \
-	}
-
 	#if EASTL_VARIABLE_TEMPLATES_ENABLED
 		template <class T>
 		EA_CONSTEXPR bool is_integral_v = is_integral<T>::value;
@@ -185,14 +177,6 @@ namespace eastl
 
 	template <typename T>
 	struct is_floating_point : public eastl::is_floating_point_helper<typename eastl::remove_cv<T>::type>{};
-
-	#define EASTL_DECLARE_FLOATING_POINT(T)                                             \
-	namespace eastl{                                                                    \
-		template <> struct is_floating_point<T>                : public true_type{};    \
-		template <> struct is_floating_point<const T>          : public true_type{};    \
-		template <> struct is_floating_point<volatile T>       : public true_type{};    \
-		template <> struct is_floating_point<const volatile T> : public true_type{};    \
-	}
 
 	#if EASTL_VARIABLE_TEMPLATES_ENABLED
 		template <class T>
@@ -294,9 +278,9 @@ namespace eastl
 		template <typename T>
 		struct is_enum_helper2
 		{
-			typedef type_or<is_arithmetic<T>::value, is_reference<T>::value, is_class<T>::value> selector;
+			typedef disjunction<is_arithmetic<T>, is_reference<T>, is_class<T>> selector;
 			typedef is_enum_helper<selector::value> helper_t;
-			typedef typename add_reference<T>::type ref_t;
+			typedef typename add_lvalue_reference<T>::type ref_t;
 			typedef typename helper_t::template nest<ref_t> result;
 		};
 
@@ -313,8 +297,6 @@ namespace eastl
 		template<typename T>
 		EA_CONSTEXPR bool is_enum_v = is_enum<T>::value;
 	#endif
-
-	#define EASTL_DECLARE_ENUM(T) namespace eastl{ template <> struct is_enum<T> : public true_type{}; template <> struct is_enum<const T> : public true_type{}; }
 
 
 

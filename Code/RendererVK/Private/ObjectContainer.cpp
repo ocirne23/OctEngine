@@ -522,6 +522,8 @@ void ObjectContainer::initializeMaterials(const ISceneData& sceneData, TempInitD
                 material.flags |= RendererVKLayout::MATERIAL_FLAG_OCEAN;
             if (pOverrides->pipelineIdx == RendererVKLayout::EPipelineIndex::TerrainLit)
                 material.flags |= RendererVKLayout::MATERIAL_FLAG_TERRAIN;
+            if (pOverrides->pipelineIdx == RendererVKLayout::EPipelineIndex::GizmoUI)
+                material.flags |= RendererVKLayout::MATERIAL_FLAG_GIZMO_UI;
         }
         if (pOverrides && !pOverrides->useSceneTextures)
         {
@@ -818,6 +820,7 @@ RenderNode ObjectContainer::spawnNodeForIdx(NodeSpawnIdx idx, const Transform& t
         rebasedOffsetBase = cachedBase;
     }
 
+    bool hasLodChain = false;
     node.m_meshInstances.resize(range.numNodes);
     for (uint32 i = 0; i < range.numNodes; ++i)
     {
@@ -831,22 +834,10 @@ RenderNode ObjectContainer::spawnNodeForIdx(NodeSpawnIdx idx, const Transform& t
         node.m_meshInstances[i].materialIdx = m_baseMaterialInfoIdx + nodeInfo.materialInfoIdx;
 		node.m_meshInstances[i].pipelineIndex = nodeInfo.pipelineIdx;
 		node.m_meshInstances[i].alphaMode = nodeInfo.alphaMode;
-        if (nodeInfo.lodGroupIdx != UINT32_MAX)
-            node.m_lodInstances.push_back(RenderNode::LodInstance{ i, nodeInfo.lodGroupIdx });
+        hasLodChain |= nodeInfo.lodGroupIdx != UINT32_MAX;
     }
-    if (!node.m_lodInstances.empty())
+    if (hasLodChain)
         node.m_lodStateBase = Globals::rendererVK.allocateLodStateRange(range.numNodes); // GPU hysteresis slots, one per instance
-
-    oc::map<uint16, uint16> instancesPerMesh;
-    for (uint32 i = 0; i < range.numNodes; ++i)
-    {
-        instancesPerMesh[node.m_meshInstances[i].meshIdx] += 1;
-    }
-    node.m_numInstancesPerMesh.reserve(instancesPerMesh.size());
-    for (auto& pair : instancesPerMesh)
-    {
-        node.m_numInstancesPerMesh.emplace_back(pair);
-    }
 
     return node;
 }
@@ -971,11 +962,10 @@ RenderNode ObjectContainer::spawnSkinnedNode(const Transform& transform)
 
     const Renderer::SkinnedInstanceBundle& bundle = renderer.getSkinnedBundle(bundleHandle);
     node.m_skinnedBundleHandle = bundleHandle;
-    node.m_skinnedPaletteHandle = bundle.paletteHandle;
 
     Sphere combinedBounds{ glm::vec3(0.0f), 0.0f };
+    bool hasLodChain = false;
     node.m_meshInstances.resize(m_numSkinnedMeshes);
-    oc::map<uint16, uint16> instancesPerMesh;
     for (uint32 k = 0; k < m_numSkinnedMeshes; ++k)
     {
         const RendererVKLayout::SkinnedMeshSource& src = renderer.getSkinnedMeshSource(m_baseSkinnedMeshIdx + k);
@@ -986,23 +976,16 @@ RenderNode ObjectContainer::spawnSkinnedNode(const Transform& transform)
         RendererVKLayout::InMeshInstance& inst = node.m_meshInstances[k];
         inst.renderNodeIdx = node.m_transformIdx;
         inst.instanceOffsetIdx = m_skinnedIdentityOffsetIdx;
+        assert(bundle.baseMeshIdx + k < UINT16_MAX);
         inst.meshIdx = (uint16)(bundle.baseMeshIdx + k);
         inst.materialIdx = m_baseMaterialInfoIdx + src.materialLocalIdx;
         inst.pipelineIndex = src.pipelineIdx;
         inst.alphaMode = src.alphaMode;
-        instancesPerMesh[inst.meshIdx] += 1;
-        if (bundle.lodGroupForMesh[k] != UINT32_MAX)
-            node.m_lodInstances.push_back(RenderNode::LodInstance{ k, bundle.lodGroupForMesh[k] });
+        hasLodChain |= bundle.lodGroupForMesh[k] != UINT32_MAX;
     }
-    if (!node.m_lodInstances.empty())
+    if (hasLodChain)
         node.m_lodStateBase = renderer.allocateLodStateRange(m_numSkinnedMeshes); // GPU hysteresis slots, one per instance
     node.m_bounds = combinedBounds;
-    node.m_numInstancesPerMesh.reserve(instancesPerMesh.size());
-    for (auto& pair : instancesPerMesh)
-    {
-        assert(pair.first != UINT16_MAX);
-        node.m_numInstancesPerMesh.emplace_back(pair);
-    }
 
     return node;
 }

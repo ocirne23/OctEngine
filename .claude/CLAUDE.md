@@ -171,9 +171,19 @@ Vulkan-Hpp (no exceptions, no constructors), SDL3, ImGui docking branch, EASTL, 
 glslang/shaderc, OpenXR loader, Nsight Aftermath, box3d, Steam Audio (static; `phonon(d).lib` bundles
 pffft, mysofa and zlib), miniaudio (single header), meshoptimizer, zstd, onnxruntime.
 
-box3d, steam-audio, meshoptimizer and zstd sources stay vendored for rebuilding the prebuilt libs —
-recipes in `Dependencies/CMakeLists.txt`. They are otherwise unused; everything links prebuilt
-`<name>.lib` / `<name>d.lib` pairs.
+**EASTL is 3.27.01 with ONE LOCAL PATCH:** `Include/EASTL/internal/config.h` defaults
+`EASTL_NAME_ENABLED` to 0 (upstream: `EASTL_DEBUG`), marked `OCTENGINE LOCAL PATCH`. No allocator debug
+names, so an `oc::` container has the SAME size in Debug as in the other configurations (an
+`oc::vector` is 24 bytes). `EASTL.lib` / `EASTLd.lib` are built from those same patched headers, so
+there is no compiler flag on either side. **To update EASTL:** clone the tag, re-apply the patch, build
+with CMake (`-DCMAKE_POLICY_VERSION_MINIMUM=3.5`, Debug with `/Z7` so the lib needs no PDB; EABase comes
+through FetchContent), then replace `Include/EASTL`, `Include/EABase` (`include/Common/EABase`) and both
+libs. **Any EASTL layout switch must be the same in the lib build and the engine**, and the release
+`EASTL.lib` cannot link into Debug (CRT + `_ITERATOR_DEBUG_LEVEL` mismatch).
+
+**`Dependencies/` holds ONLY `Include/`, `Lib/` and `Dll/`** — no vendored source. Everything links
+prebuilt `<name>.lib` / `<name>d.lib` pairs; the recipes to rebuild them from an upstream clone (box3d,
+steam-audio, meshoptimizer, zstd) are the comments in `Dependencies/CMakeLists.txt`.
 
 ## Style
 
@@ -403,6 +413,20 @@ Spawn by prefab name (`world.spawn`) or by path (`world.spawnAssetFile`).
 
 `Animation <name>` clips: source `ObjectContainer`, `Loop`, `Skip` (channels), and
 `Event <name> <normalizedTime>` notifies, fired into the entity's script or animator `onEvent`.
+
+**A `Procedural [Walk]` block replaces the `ObjectContainer`**: the clip is generated against the
+target skeleton (Animation's `buildProceduralClip`). Angles in degrees, phases in 0..1 periods:
+
+* `Duration <sec>`, `Axis x y z` (the default swing axis, bone-local)
+* `Swing <bone> <angleDeg> [phase] [cycles]` (child `Axis`), `Bob <bone> <height> [phase] [cycles]`
+  (child `Direction`)
+* the `Walk` preset adds the four limb swings: `LegAngle` / `ArmAngle`, bone names `LeftLeg` /
+  `RightLeg` / `LeftArm` / `RightArm` (override with the same keys), `BobBone` + `BobHeight`
+* no swings and no bobs = a clip that holds the bind pose (an idle)
+
+On a prefab with `Component Animator` and NO skinned mesh, the bones are the CHILD ENTITY names — see
+AnimatorComponent modes in [`Code/Entity/CONTEXT.md`](../Code/Entity/CONTEXT.md). Demo:
+`Animations/cubeguy.anm`.
 
 ## `.apl` — animator graph
 

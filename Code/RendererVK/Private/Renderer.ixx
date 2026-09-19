@@ -747,7 +747,7 @@ private:
 
     friend class AnimatorComponent;
     uint32 allocateSkinningPalette(uint32 boneCount);
-    void setSkinningPalette(uint32 paletteHandle, oc::span<const glm::mat4> palette);
+    void setSkinningPalette(const RenderNode& node, oc::span<const glm::mat4> palette);
     // A bundle's SkinningJob/SkinnedBlasBuild entries must be one contiguous range (the per-frame
     // skinned BLAS slots are positional), so the range is allocated as a block - from the free list
     // (destroyed containers) when one fits, appended otherwise - and filled per mesh afterwards.
@@ -887,8 +887,7 @@ private:
     bool m_forceShellBakeActive = false; // a large emitter qualified for the sampled shell tier
                                          // this frame (buildUboForce fit the volume)
     ForceFieldParams m_forceFieldParams;
-    PerWorker<oc::vector<DebugLinePipeline::LineVertex>> m_debugLineVerts; // per-worker CPU staging, merged in present()
-    oc::vector<DebugLinePipeline::LineVertex> m_debugLineMergedVerts;
+    PerWorker<oc::vector<DebugLinePipeline::LineVertex>> m_debugLineVerts; // per-worker CPU staging, drained into the mapped buffer in present()
 
     SkyParams m_skyParams;
     ShadowParams m_shadowParams;
@@ -971,6 +970,7 @@ private:
     vk::ImageView m_eyeDepthView;
 
     uint32 m_maxRenderNodes = RendererVKLayout::INITIAL_RENDER_NODES;
+    uint8 m_renderNodeBufferGeneration = 0; // bumped when the per-frame node buffers are recreated (RenderNode dirty bits)
     uint32 m_maxUniqueMeshes = RendererVKLayout::INITIAL_UNIQUE_MESHES;
     uint32 m_maxUniqueMaterials = RendererVKLayout::INITIAL_UNIQUE_MATERIALS;
     uint32 m_maxInstanceOffsets = RendererVKLayout::INITIAL_INSTANCE_OFFSETS;

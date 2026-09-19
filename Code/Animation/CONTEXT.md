@@ -16,6 +16,7 @@ uploads it.
 | Cache clip libraries per skeleton + animator | **Entity** | `World::getOrBuildClipSet` — [World.ixx:238](../Entity/Private/World.ixx#L238) |
 | Drive the player each frame from an `.apl` graph | **Entity** | `AnimatorComponent` |
 | Consume the palette for GPU skinning | **RendererVK** | `allocateSkinningPalette` / `setSkinningPalette` |
+| OR: build a skeleton from an entity hierarchy and write the local pose to the child entities | **Entity** | `EntityRig`, `AnimatorComponent::applyPoseToHierarchy` |
 
 **Retargeting is by BONE NAME**, done at import: `loadAnimations` resolves every channel against a
 target skeleton, so a rig in one file and its animations in others (Mixamo exports) work. A channel
@@ -55,6 +56,28 @@ LOCAL (parent-relative) space. They apply every tick until cleared.
 | `clearBoneModifier` / `clearBoneModifiers` | Remove them. |
 
 `m_anyBoneModifier` short-circuits the whole path when nothing is posed.
+
+### Pose output (no skinning)
+
+`getPosePositions()` / `getPoseRotations()` / `getPoseScales()` give the blended LOCAL pose of the last
+tick, one entry per bone — for a consumer that places its own objects per bone (Entity's hierarchy
+animator). `setPoseOnly(true)` stops `tick()` at that pose: no matrices, no palette. **Bone modifiers
+are NOT in the pose** — they apply to the matrices only.
+
+## Procedural clips — `Animation:Procedural`
+
+[Procedural.ixx](Private/Procedural.ixx). Clips built from code, against any `Skeleton` — an imported
+one, or one built with `Skeleton::addBone(name, parent, bind)` (no skin, identity `inverseBind`).
+
+* **`ClipBuilder(skeleton, name, duration, loop)`** — `position` / `rotation` / `scale` add raw keys
+  (ABSOLUTE local values, kept sorted); `swing(bone, axis, angle, phase, cycles)` is a sine rotation
+  about a local axis AROUND THE BIND rotation; `bob(bone, offset, phase, cycles)` the same for the
+  position; `event(name, t)`; `build()`. A bone name the skeleton does not have is ignored. A looping
+  clip needs a whole number of cycles. Sines are baked to 16 keys per cycle (linear / slerp between).
+* **`ProceduralClipDesc` + `buildProceduralClip`** — the data form (lists of swings and bobs), which
+  is what the `.anm` `Procedural` block parses into. An empty desc is a clip that holds the bind pose.
+* **`makeWalkCycleDesc(WalkCycleParams)`** — the limb walk: legs in opposite phase, each arm opposite
+  to the leg on its side, an optional twice-per-cycle bob.
 
 ## `AnimStateMachine`
 

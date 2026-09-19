@@ -95,10 +95,11 @@ namespace eastl
 
 		enum { kMaxSize = nodeCount };
 
-		using base_type::mAllocator;
 		using base_type::clear;
 
 	protected:
+		using base_type::mAllocator;
+
 		node_type** mBucketBuffer[bucketCount + 1]; // '+1' because the hash table needs a null terminating bucket.
 		char        mNodeBuffer[fixed_allocator_type::kBufferSize]; // kBufferSize will take into account alignment requirements.
 
@@ -135,6 +136,8 @@ namespace eastl
 		const overflow_allocator_type& get_overflow_allocator() const EA_NOEXCEPT;
 		overflow_allocator_type&       get_overflow_allocator() EA_NOEXCEPT;
 		void                           set_overflow_allocator(const overflow_allocator_type& allocator);
+
+		static constexpr bool can_overflow() { return bEnableOverflow; }
 
 		void clear(bool clearBuckets); 
 	}; // fixed_hash_map
@@ -186,10 +189,11 @@ namespace eastl
 
 		enum { kMaxSize = nodeCount };
 
-		using base_type::mAllocator;
 		using base_type::clear;
 
 	protected:
+		using base_type::mAllocator;
+
 		node_type** mBucketBuffer[bucketCount + 1]; // '+1' because the hash table needs a null terminating bucket.
 		char        mNodeBuffer[fixed_allocator_type::kBufferSize]; // kBufferSize will take into account alignment requirements.
 
@@ -227,6 +231,8 @@ namespace eastl
 		overflow_allocator_type&       get_overflow_allocator() EA_NOEXCEPT;
 		void                           set_overflow_allocator(const overflow_allocator_type& allocator);
 
+		static constexpr bool can_overflow() { return bEnableOverflow; }
+
 		void clear(bool clearBuckets); 
 	}; // fixed_hash_multimap
 
@@ -249,10 +255,6 @@ namespace eastl
 
 		if(!bEnableOverflow)
 			base_type::set_max_load_factor(10000.f); // Set it so that we will never resize.
-
-		#if EASTL_NAME_ENABLED
-		mAllocator.set_name(EASTL_FIXED_HASH_MAP_DEFAULT_NAME);
-		#endif
 
 		mAllocator.reset(mNodeBuffer);
 	}
@@ -293,11 +295,7 @@ namespace eastl
 		if (!bEnableOverflow)
 		{
 			base_type::set_max_load_factor(10000.f); // Set it so that we will never resize.
-		}	
-
-		#if EASTL_NAME_ENABLED
-		mAllocator.set_name(EASTL_FIXED_HASH_MAP_DEFAULT_NAME);
-		#endif
+		}
 
 		mAllocator.reset(mNodeBuffer);
 	}
@@ -330,7 +328,7 @@ namespace eastl
 	inline fixed_hash_map<Key, T, nodeCount, bucketCount, bEnableOverflow, Hash, Predicate, bCacheHashCode, OverflowAllocator>::
 	fixed_hash_map(const this_type& x)
 		: base_type(prime_rehash_policy::GetPrevBucketCountOnly(bucketCount), x.hash_function(), 
-					x.equal_function(), fixed_allocator_type(NULL, mBucketBuffer))
+					x.key_eq(), fixed_allocator_type(NULL, mBucketBuffer))
 	{
 		mAllocator.copy_overflow_allocator(x.mAllocator);
 
@@ -352,7 +350,7 @@ namespace eastl
 	inline fixed_hash_map<Key, T, nodeCount, bucketCount, bEnableOverflow, Hash, Predicate, bCacheHashCode, OverflowAllocator>::
 	fixed_hash_map(this_type&& x)
 		: base_type(prime_rehash_policy::GetPrevBucketCountOnly(bucketCount), x.hash_function(), 
-					x.equal_function(), fixed_allocator_type(NULL, mBucketBuffer))
+					x.key_eq(), fixed_allocator_type(NULL, mBucketBuffer))
 	{
 		// This implementation is the same as above. If we could rely on using C++11 delegating constructor support then we could just call that here.
 		mAllocator.copy_overflow_allocator(x.mAllocator);
@@ -375,7 +373,7 @@ namespace eastl
 	inline fixed_hash_map<Key, T, nodeCount, bucketCount, bEnableOverflow, Hash, Predicate, bCacheHashCode, OverflowAllocator>::
 	fixed_hash_map(this_type&& x, const overflow_allocator_type& overflowAllocator)
 		: base_type(prime_rehash_policy::GetPrevBucketCountOnly(bucketCount), x.hash_function(), 
-					x.equal_function(), fixed_allocator_type(NULL, mBucketBuffer, overflowAllocator))
+					x.key_eq(), fixed_allocator_type(NULL, mBucketBuffer, overflowAllocator))
 	{
 		// This implementation is the same as above. If we could rely on using C++11 delegating constructor support then we could just call that here.
 		mAllocator.copy_overflow_allocator(x.mAllocator);
@@ -404,10 +402,6 @@ namespace eastl
 
 		if(!bEnableOverflow)
 			base_type::set_max_load_factor(10000.f); // Set it so that we will never resize.
-
-		#if EASTL_NAME_ENABLED
-		mAllocator.set_name(EASTL_FIXED_HASH_MAP_DEFAULT_NAME);
-		#endif
 
 		mAllocator.reset(mNodeBuffer);
 		base_type::insert(ilist.begin(), ilist.end());
@@ -541,10 +535,6 @@ namespace eastl
 			base_type::set_max_load_factor(10000.f); // Set it so that we will never resize.
 		}
 
-		#if EASTL_NAME_ENABLED
-			mAllocator.set_name(EASTL_FIXED_HASH_MULTIMAP_DEFAULT_NAME);
-		#endif
-
 		mAllocator.reset(mNodeBuffer);
 	}
 
@@ -582,10 +572,6 @@ namespace eastl
 		if(!bEnableOverflow)
 			base_type::set_max_load_factor(10000.f); // Set it so that we will never resize.
 
-		#if EASTL_NAME_ENABLED
-		mAllocator.set_name(EASTL_FIXED_HASH_MULTIMAP_DEFAULT_NAME);
-		#endif
-
 		mAllocator.reset(mNodeBuffer);
 	}
 
@@ -617,7 +603,7 @@ namespace eastl
 	inline fixed_hash_multimap<Key, T, nodeCount, bucketCount, bEnableOverflow, Hash, Predicate, bCacheHashCode, OverflowAllocator>::
 	fixed_hash_multimap(const this_type& x)
 		: base_type(prime_rehash_policy::GetPrevBucketCountOnly(bucketCount), x.hash_function(), 
-					x.equal_function(),fixed_allocator_type(NULL, mBucketBuffer))
+					x.key_eq(),fixed_allocator_type(NULL, mBucketBuffer))
 	{
 		mAllocator.copy_overflow_allocator(x.mAllocator);
 
@@ -639,7 +625,7 @@ namespace eastl
 	inline fixed_hash_multimap<Key, T, nodeCount, bucketCount, bEnableOverflow, Hash, Predicate, bCacheHashCode, OverflowAllocator>::
 	fixed_hash_multimap(this_type&& x)
 		: base_type(prime_rehash_policy::GetPrevBucketCountOnly(bucketCount), x.hash_function(), 
-					x.equal_function(),fixed_allocator_type(NULL, mBucketBuffer))
+					x.key_eq(),fixed_allocator_type(NULL, mBucketBuffer))
 	{
 		// This implementation is the same as above. If we could rely on using C++11 delegating constructor support then we could just call that here.
 		mAllocator.copy_overflow_allocator(x.mAllocator);
@@ -662,7 +648,7 @@ namespace eastl
 	inline fixed_hash_multimap<Key, T, nodeCount, bucketCount, bEnableOverflow, Hash, Predicate, bCacheHashCode, OverflowAllocator>::
 	fixed_hash_multimap(this_type&& x, const overflow_allocator_type& overflowAllocator)
 		: base_type(prime_rehash_policy::GetPrevBucketCountOnly(bucketCount), x.hash_function(), 
-					x.equal_function(), fixed_allocator_type(NULL, mBucketBuffer, overflowAllocator))
+					x.key_eq(), fixed_allocator_type(NULL, mBucketBuffer, overflowAllocator))
 	{
 		// This implementation is the same as above. If we could rely on using C++11 delegating constructor support then we could just call that here.
 		mAllocator.copy_overflow_allocator(x.mAllocator);
@@ -691,10 +677,6 @@ namespace eastl
 
 		if(!bEnableOverflow)
 			base_type::set_max_load_factor(10000.f); // Set it so that we will never resize.
-
-		#if EASTL_NAME_ENABLED
-		mAllocator.set_name(EASTL_FIXED_HASH_MULTIMAP_DEFAULT_NAME);
-		#endif
 
 		mAllocator.reset(mNodeBuffer);
 		base_type::insert(ilist.begin(), ilist.end());

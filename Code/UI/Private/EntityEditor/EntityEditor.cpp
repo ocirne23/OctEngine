@@ -1694,13 +1694,13 @@ void EntityEditor::commitRespawn()
 		}
 	}
 
-	if (m_hasAnimator && !renderContainerName.empty())
+	if (m_hasAnimator && (!renderContainerName.empty() || m_animatorDraft.rig)) // a rig = it drives the child entities
 	{
 		AssetNode holder;
 		AssetNode& node = holder.addChild("Component");
 		node.values.emplace_back("Animator");
 		node.set("Animator", m_animatorDraft.animatorName);
-		if (auto info = Globals::world.buildAnimatorSpawnInfo(node, renderContainerName, ownerName))
+		if (auto info = Globals::world.buildAnimatorSpawnInfo(node, renderContainerName, ownerName, nullptr, m_animatorDraft.rig))
 		{
 			typeBits |= uint16(1 << EComponentID_Animator);
 			infos.push_back(oc::move(info));

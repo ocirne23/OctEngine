@@ -11,29 +11,6 @@ import :Layout;
 export namespace Globals
 {
     oc::vector<Transform> renderNodeTransforms;
-
-    // Sparse transform-upload tracking: per slot, one pending-upload bit per frame in flight, plus
-    // per-WORKER per-frame index lists Renderer::present drains (only changed slots are copied into
-    // that frame's GPU buffer instead of the whole array). Maintained by markRenderNodeTransformDirty.
-    // The bits byte is single-writer per node (one owner pushes a node per frame); the lists are
-    // per-worker so concurrent setTransform calls from parallel jobs never share a vector.
-    oc::vector<uint8> renderNodeDirtyBits;
-    PerWorker<oc::array<oc::vector<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT>> renderNodeDirtyLists;
-}
-
-// [Concurrency: LOCK-FREE across distinct nodes - one owner per node]
-export inline void markRenderNodeTransformDirty(uint32 idx)
-{
-    constexpr uint8 allBits = uint8((1u << RendererVKLayout::NUM_FRAMES_IN_FLIGHT) - 1);
-    uint8& bits = Globals::renderNodeDirtyBits[idx];
-    if (bits == allBits)
-        return;
-    oc::array<oc::vector<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT>& lists = Globals::renderNodeDirtyLists.local();
-    const ThreadLocalScope tlsPin;
-    for (uint32 frame = 0; frame < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++frame)
-        if (!(bits & (1u << frame)))
-            lists[frame].push_back(idx);
-    bits = allBits;
 }
 
 // RAII handle to a spawned renderer instance (movable, like PhysicsBody). Destroying the handle
@@ -61,15 +38,17 @@ public:
     bool isValid() const { return m_transformIdx != UINT32_MAX; }
     void destroy();
 
-    // The only write path: unchanged transforms cost one compare, changed ones are queued for
-    // sparse upload (writing through a mutable getTransform would bypass the dirty tracking).
+    // The only write path: unchanged transforms cost one compare, changed ones set one pending-upload
+    // bit per frame in flight, which Renderer::renderNode consumes for its slot (writing through a
+    // mutable getTransform would bypass the dirty tracking). One owner per node: setTransform and
+    // renderNode of the same node never run concurrently.
     inline void setTransform(const Transform& transform)
     {
         Transform& current = Globals::renderNodeTransforms[m_transformIdx];
         if (current.pos == transform.pos && current.scale == transform.scale && current.quat == transform.quat)
             return;
         current = transform;
-        markRenderNodeTransformDirty(m_transformIdx);
+        m_transformUploadState |= ALL_FRAMES_DIRTY;
     }
 
     inline const Transform& getTransform() const
@@ -88,10 +67,10 @@ public:
             instance.materialIdx = materialIdx;
     }
 
-    // Valid only for nodes spawned via ObjectContainer::spawnSkinnedNode. Pass to Renderer::setSkinningPalette
-    // each frame with the AnimationPlayer's bone palette. UINT32_MAX for non-skinned nodes.
-    inline bool isSkinned() const { return m_skinnedPaletteHandle != UINT32_MAX; }
-    inline uint32 getSkinnedPaletteHandle() const { return m_skinnedPaletteHandle; }
+    // True only for nodes spawned via ObjectContainer::spawnSkinnedNode. Pass the node to
+    // Renderer::setSkinningPalette each frame with the AnimationPlayer's bone palette (the palette
+    // handle lives in the node's skinned bundle).
+    inline bool isSkinned() const { return m_skinnedBundleHandle != UINT32_MAX; }
 
     inline const Sphere& getLocalBounds() const { return m_bounds; }
     inline Sphere getWorldBounds() const
@@ -108,35 +87,35 @@ private:
     void moveFrom(RenderNode&& other) noexcept
     {
         m_transformIdx = other.m_transformIdx;
-        m_skinnedPaletteHandle = other.m_skinnedPaletteHandle;
         m_skinnedBundleHandle = other.m_skinnedBundleHandle;
         m_lodStateBase = other.m_lodStateBase;
+        m_transformUploadState = other.m_transformUploadState;
         m_bounds = other.m_bounds;
         m_meshInstances = oc::move(other.m_meshInstances);
-        m_numInstancesPerMesh = oc::move(other.m_numInstancesPerMesh);
-        m_lodInstances = oc::move(other.m_lodInstances);
         other.m_transformIdx = UINT32_MAX;
-        other.m_skinnedPaletteHandle = UINT32_MAX;
         other.m_skinnedBundleHandle = UINT32_MAX;
         other.m_lodStateBase = UINT32_MAX;
     }
 
+    // One cache line. Everything the push needs beyond these is derived from renderer tables: the per-mesh
+    // instance counts from m_meshInstances, an instance's LOD chain from Renderer::m_meshToLodGroup
+    // (the stored instance references the LOD0 mesh; the GPU cull redirects), the skinning palette
+    // from the skinned bundle.
     uint32 m_transformIdx = UINT32_MAX;
-    uint32 m_skinnedPaletteHandle = UINT32_MAX;
     uint32 m_skinnedBundleHandle = UINT32_MAX;
     // First slot of this node's per-instance LOD hysteresis state range on the GPU (one slot per mesh
     // instance, allocated at spawn when the node has any LOD chain; UINT32_MAX = none). The cull shader
     // addresses it as stateBase + instance ordinal via the per-frame node bias buffer.
     uint32 m_lodStateBase = UINT32_MAX;
+    // Sparse transform upload state. Low bits: one pending bit per frame in flight, cleared by
+    // Renderer::renderNode when it copies the transform into that slot's mapped buffer (mutable: the
+    // push takes a const node). High bits: the renderer's node-buffer generation at the last push; a
+    // mismatch = the GPU buffers were recreated, so all bits count as set. The capacity doubles per
+    // grow, so there are at most 32 generations.
+    static constexpr uint8 ALL_FRAMES_DIRTY = uint8((1u << RendererVKLayout::NUM_FRAMES_IN_FLIGHT) - 1);
+    static_assert(8 - RendererVKLayout::NUM_FRAMES_IN_FLIGHT >= 6, "generation needs 6 bits");
+    mutable uint8 m_transformUploadState = ALL_FRAMES_DIRTY;
     Sphere m_bounds;
     oc::vector<RendererVKLayout::InMeshInstance> m_meshInstances;
-    oc::vector<oc::pair<uint16, uint16>> m_numInstancesPerMesh;
-    // Instances with a LOD chain (the stored instance references the LOD0 mesh; the GPU cull redirects).
-    // Kept CPU-side for the per-frame chain-warmth noteUse and the state-range allocation.
-    struct LodInstance
-    {
-        uint32 instanceIdx = 0;
-        uint32 lodGroupIdx = 0;
-    };
-    oc::vector<LodInstance> m_lodInstances;
 };
+static_assert(sizeof(RenderNode) <= 56);

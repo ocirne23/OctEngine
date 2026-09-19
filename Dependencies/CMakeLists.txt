@@ -1,10 +1,12 @@
-# Unused: all dependencies are prebuilt into Include/Lib/Dll. box3d source is kept in box3d/ for
-# reference and for rebuilding the prebuilt libs (box3d.lib / box3dd.lib in Lib, headers in
-# Include/box3d) — build it standalone with the DLL CRT ("MultiThreaded$<$<CONFIG:Debug>:Debug>DLL",
-# its own CMakeLists defaults to the static CRT) and copy the outputs over.
+# Unused: all dependencies are prebuilt into Include/Lib/Dll, and NO source is kept in this folder.
+# What follows are the recipes to rebuild the prebuilt libs from an upstream clone.
 #
-# Steam Audio (phonon) source is kept in steam-audio/ the same way (miniaudio needs no build, it's
-# a single header in Include/miniaudio). Rebuilding Lib/phonon(d).lib:
+# box3d (box3d.lib / box3dd.lib in Lib, headers in Include/box3d): build it standalone with the DLL
+# CRT ("MultiThreaded$<$<CONFIG:Debug>:Debug>DLL", its own CMakeLists defaults to the static CRT) and
+# copy the outputs over.
+#
+# Steam Audio (phonon) (miniaudio needs no build, it's a single header in Include/miniaudio).
+# Rebuilding Lib/phonon(d).lib from a steam-audio clone:
 # 1. Provision core/deps (gitignored) — build each at the pinned SHA from core/build/dependencies.json
 #    with the DLL CRT (their CMake default; old CMakeLists need "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"):
 #    zlib (zlibstatic target), pffft (PFFFT target, -DTARGET_C_ARCH=AVX), mysofa (point ZLIB_* at the
@@ -21,13 +23,14 @@
 #    Lib/phonon.lib / Lib/phonond.lib, and copy src/core/phonon.h + the generated
 #    build-x64/src/core/phonon_version.h to Include/phonon.
 #
-# meshoptimizer source is kept in meshoptimizer/ (v0.24, demo/tools/js trimmed). Rebuilding
+# meshoptimizer (v0.24, https://github.com/zeux/meshoptimizer). Rebuilding
 # Lib/meshoptimizer(d).lib: configure its own CMakeLists with the DLL CRT
 # ("-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"), build the meshoptimizer
 # target in Release + Debug, copy the .libs over (Debug -> meshoptimizerd.lib) and src/meshoptimizer.h
 # to Include/meshoptimizer.
 #
-# zstd source is kept in zstd/ (v1.5.7, lib + build/cmake only). Rebuilding Lib/zstd(d).lib:
+# zstd source is NOT kept here (v1.5.7, https://github.com/facebook/zstd). Rebuilding Lib/zstd(d).lib:
+# clone the tag, then
 # cmake -B <tmp> -S zstd/build/cmake -DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
 #   -DZSTD_BUILD_PROGRAMS=OFF -DZSTD_BUILD_TESTS=OFF -DZSTD_BUILD_SHARED=OFF -DZSTD_BUILD_STATIC=ON
 #   -DZSTD_LEGACY_SUPPORT=OFF -DZSTD_MULTITHREAD_SUPPORT=OFF

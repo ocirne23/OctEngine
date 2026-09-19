@@ -117,4 +117,9 @@ void main()
     // Geometric consumers of this jittered depth (TAA/AO-temporal/RTAO reprojection+reconstruction)
     // compensate the known jitter analytically - see taaJitterUv in shared.inc.glsl.
     gl_Position.xy += u_taaJitter.xy * gl_Position.w; // TAA sub-pixel jitter (clip space)
+    // GizmoUI: the same near-depth stamp as FORCE_NEAR_DEPTH in instanced_indirect.vs.glsl (bit-exact, so
+    // the gizmo passes eGreaterOrEqual). With depth prepass reuse the forward pass cannot write depth, so
+    // THIS is what stops geometry drawn after the gizmo from covering it.
+    if ((in_materialInfos[inst.meshIdxMaterialIdx >> 16].flags & MATERIAL_FLAG_GIZMO_UI) != 0u)
+        gl_Position.z = mix(gl_Position.w, gl_Position.z, 0.01);
 }

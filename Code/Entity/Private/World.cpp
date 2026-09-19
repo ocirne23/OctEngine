@@ -1048,6 +1048,15 @@ const AnimationSet* World::getOrBuildClipSet(const Skeleton* skel, const Animato
     // Loads one .anm into the set under `localName` (retargeted by bone name to `skel`).
     auto loadClipDesc = [&](const AnimationClipDesc& anm, const oc::string& localName)
     {
+        if (anm.isProcedural)
+        {
+            if (clips.find(localName))
+                return;
+            clips.nameToIndex[localName] = clips.numClips();
+            clips.clips.push_back(buildProceduralClip(*skel, localName, anm.procedural));
+            applyClipMeta(anm, localName);
+            return;
+        }
         oc::string sourcePath = anm.source;
         if (const ObjectContainerDesc* oc = Globals::assetRegistry.findObjectContainer(anm.source))
             sourcePath = oc->path; // source named a registered container; use its file
@@ -1095,7 +1104,43 @@ const AnimationSet* World::getOrBuildClipSet(const Skeleton* skel, const Animato
     return ptr;
 }
 
-oc::shared_ptr<AnimatorComponent::SpawnInfo> World::buildAnimatorSpawnInfo(const AssetNode& animatorNode, const oc::string& siblingContainerName, const oc::string& ownerName)
+static void appendRigBones(EntityRig& rig, const SceneComponent::SpawnInfo& scene, int32 parentBone)
+{
+    for (size_t slot = 0, liveSlot = 0; slot < scene.children.size(); ++slot)
+    {
+        const SceneComponent::SpawnInfo::ChildSpawnInfo& child = scene.children[slot];
+        if (!child.tmpl)
+            continue; // SceneComponent::spawn skips it too, so it takes no child slot
+        const Transform& t = child.localTransform;
+        const glm::mat4 bind = glm::translate(glm::mat4(1.0f), t.pos) * glm::mat4_cast(t.quat) * glm::scale(glm::mat4(1.0f), glm::vec3(t.scale));
+        const int32 bone = (int32)rig.skeleton.addBone(child.name.empty() ? child.tmpl->displayName : child.name, parentBone, bind);
+        rig.childSlots.push_back(uint16(liveSlot++));
+        if (child.tmpl->archetype.typeBits & (1 << EComponentID_Scene)) // Scene is bit 0, so its SpawnInfo is spawnInfos[0]
+            appendRigBones(rig, *static_cast<const SceneComponent::SpawnInfo*>(child.tmpl->spawnInfos[0].get()), bone);
+    }
+}
+
+// Rigs are shared by content, so a prefab reload with an unchanged hierarchy keeps its rig - and with it
+// the clip sets keyed by the rig's skeleton.
+const EntityRig* World::getOrBuildEntityRig(const SceneComponent::SpawnInfo& scene)
+{
+    auto rig = oc::make_unique<EntityRig>();
+    appendRigBones(*rig, scene, -1);
+    if (!rig->skeleton.isValid())
+        return nullptr;
+
+    for (const oc::unique_ptr<EntityRig>& cached : m_entityRigs)
+        if (cached->skeleton.boneNames == rig->skeleton.boneNames
+            && cached->skeleton.parentIndices == rig->skeleton.parentIndices
+            && cached->skeleton.localBind == rig->skeleton.localBind
+            && cached->childSlots == rig->childSlots)
+            return cached.get();
+
+    m_entityRigs.push_back(oc::move(rig));
+    return m_entityRigs.back().get();
+}
+
+oc::shared_ptr<AnimatorComponent::SpawnInfo> World::buildAnimatorSpawnInfo(const AssetNode& animatorNode, const oc::string& siblingContainerName, const oc::string& ownerName, const SceneComponent::SpawnInfo* sceneInfo, const EntityRig* knownRig)
 {
     const AssetNode* nameNode = animatorNode.find("Animator");
     if (!nameNode)
@@ -1108,16 +1153,20 @@ oc::shared_ptr<AnimatorComponent::SpawnInfo> World::buildAnimatorSpawnInfo(const
         Log::warning("Scene: entity '" + ownerName + "' references unknown Animator '" + animatorName + "'");
         return nullptr;
     }
+    // A sibling skinned mesh is driven through its palette; with none, the descendant entities are the rig.
     ObjectContainer* siblingContainer = siblingContainerName.empty() ? nullptr : getOrLoadContainer(siblingContainerName);
-    if (!siblingContainer || !siblingContainer->isSkinned() || !siblingContainer->getSkeleton())
+    const bool skinned = siblingContainer && siblingContainer->isSkinned() && siblingContainer->getSkeleton();
+    const EntityRig* rig = skinned ? nullptr : knownRig ? knownRig : sceneInfo ? getOrBuildEntityRig(*sceneInfo) : nullptr;
+    if (!skinned && !rig)
     {
-        Log::warning("Scene: entity '" + ownerName + "' has an Animator but no sibling skinned mesh to drive");
+        Log::warning("Scene: entity '" + ownerName + "' has an Animator but no sibling skinned mesh and no child entities to drive");
         return nullptr;
     }
 
     auto info = oc::make_shared<AnimatorComponent::SpawnInfo>();
     info->desc = desc;
-    info->skeleton = siblingContainer->getSkeleton();
+    info->rig = rig;
+    info->skeleton = rig ? &rig->skeleton : siblingContainer->getSkeleton();
     info->clipSet = getOrBuildClipSet(info->skeleton, *desc); // shared, imported once per skeleton+animator
     info->animatorName = animatorName;
     if (const AssetNode* n = animatorNode.find("Enabled"))
@@ -1361,7 +1410,8 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
     }
 
     if (const AssetNode* animatorNode = findComponentNode(node, "Animator"); animatorNode && !m_headless)
-        if (oc::shared_ptr<AnimatorComponent::SpawnInfo> info = buildAnimatorSpawnInfo(*animatorNode, renderContainerName, tmpl.displayName))
+        if (oc::shared_ptr<AnimatorComponent::SpawnInfo> info = buildAnimatorSpawnInfo(*animatorNode, renderContainerName, tmpl.displayName,
+                (typeBits & (1 << EComponentID_Scene)) ? static_cast<const SceneComponent::SpawnInfo*>(tmpl.spawnInfos[0].get()) : nullptr))
         {
             typeBits |= uint16(1 << EComponentID_Animator);
             tmpl.spawnInfos.emplace_back(oc::move(info));

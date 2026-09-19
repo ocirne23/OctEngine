@@ -51,7 +51,9 @@ void Entity::setFrozen(bool on)
 
 void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform& parentWorld, oc::vector<EntityUpdateNode>& outChildren)
 {
-    SceneComponent* sc = getComponent<SceneComponent>(this);
+    const ComponentOffsets offsets = getComponentOffsets(typeBits);
+
+    SceneComponent* sc = getComponent<SceneComponent>(this, offsets);
     if (!isEnabled())
     {
         if (!isPhysicsSuspended())
@@ -81,51 +83,51 @@ void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform&
         {
             // Game-layer sim BEFORE the script, so DSL orders/reads see this frame's state. Authority
             // gating and thread-safety live inside the components (see Components/Game/GameUnitComponent.ixx).
-            if (GameUnitComponent* gameUnit = getComponent<GameUnitComponent>(this))
+            if (GameUnitComponent* gameUnit = getComponent<GameUnitComponent>(this, offsets))
                 gameUnit->update(*this, deltaSeconds);
-            if (GameStructureComponent* gameStructure = getComponent<GameStructureComponent>(this))
+            if (GameStructureComponent* gameStructure = getComponent<GameStructureComponent>(this, offsets))
                 gameStructure->update(*this, deltaSeconds);
-            if (GameProjectileComponent* gameProjectile = getComponent<GameProjectileComponent>(this))
+            if (GameProjectileComponent* gameProjectile = getComponent<GameProjectileComponent>(this, offsets))
                 gameProjectile->update(*this, deltaSeconds);
 
-            if (ScriptComponent* script = getComponent<ScriptComponent>(this))
+            if (ScriptComponent* script = getComponent<ScriptComponent>(this, offsets))
                 script->update(*this, deltaSeconds);
         }
 
         // before Physics/composeTransform: a client-side correction to pos/rot lands this same frame
-        if (NetworkComponent* network = getComponent<NetworkComponent>(this))
+        if (NetworkComponent* network = getComponent<NetworkComponent>(this, offsets))
             network->update(*this, deltaSeconds);
 
-        if (AnimatorComponent* animator = getComponent<AnimatorComponent>(this); animator && simStep)
+        if (AnimatorComponent* animator = getComponent<AnimatorComponent>(this, offsets); animator && simStep)
             animator->update(*this, renderer, deltaSeconds); // advance animation + refresh skinning palette
 
-        if (PhysicsComponent* physics = getComponent<PhysicsComponent>(this))
+        if (PhysicsComponent* physics = getComponent<PhysicsComponent>(this, offsets))
             physics->update(*this, parentWorld); // dynamic bodies write the simulated pose into pos/rot
     }
 
     const Transform world = composeTransform(parentWorld, Transform(pos, scale, rot));
     // The spatial entry follows the render bounds when there are any, else the entity position.
     // The node is empty when spawned without a container, or after destroy().
-    if (RenderComponent* render = getComponent<RenderComponent>(this); render && render->node.isValid())
+    if (RenderComponent* render = getComponent<RenderComponent>(this, offsets); render && render->node.isValid())
         render->update(*this, renderer, world);
     else if (spatialEntry.isValid())
         Globals::spatialIndex.updateEntry(spatialEntry.handle(), glm::dvec3(world.pos), 0.0f);
 
-    if (AudioComponent* audio = getComponent<AudioComponent>(this))
+    if (AudioComponent* audio = getComponent<AudioComponent>(this, offsets))
         audio->update(*this, world); // playing follow-sounds track the entity
 
-    if (ParticleComponent* particle = getComponent<ParticleComponent>(this))
+    if (ParticleComponent* particle = getComponent<ParticleComponent>(this, offsets))
         if (!frozen)
             particle->update(*this, world, deltaSeconds); // effect follows the entity (position + velocity)
 
     // Not frozen-gated: placing the bubble is not simulation, and an editor document being dragged by the
     // gizmo still has to carry its field along.
-    if (ForceComponent* force = getComponent<ForceComponent>(this))
+    if (ForceComponent* force = getComponent<ForceComponent>(this, offsets))
         force->update(*this, world);
 
     // Also not frozen-gated: a light is placement, not simulation, so an editor document lights its
     // own scene while frozen. Pushes are lock-free (addLightInfo/addDebugLine), like renderNode.
-    if (LightComponent* light = getComponent<LightComponent>(this))
+    if (LightComponent* light = getComponent<LightComponent>(this, offsets))
         light->update(*this, renderer, world);
 
     if (sc)

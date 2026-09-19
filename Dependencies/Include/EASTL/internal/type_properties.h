@@ -47,13 +47,13 @@ namespace eastl
 	#endif
 
 	///////////////////////////////////////////////////////////////////////
-	// to_underlying 
+	// to_underlying
 	//
 	// Cast a enum value to its underlying type.
 	// For example:
-	// 
+	//
 	// enum class MyEnum : uint8_t { Value = 0; }
-	// auto x = MyEnum::Value; 
+	// auto x = MyEnum::Value;
 	// std::cout << to_underlying(x); // equivalent to  sts::cout << static_cast<uint8_t>(x);
 	///////////////////////////////////////////////////////////////////////
 
@@ -107,13 +107,10 @@ namespace eastl
 	// is_signed<T>::value == true if T is a (possibly cv-qualified) floating-point or signed integer type.
 	//
 	// Used to determine if a type is signed.
-	// Given that there are some user-made classes which emulate integral
-	// types, we provide the EASTL_DECLARE_SIGNED macro to allow you to
-	// set a given class to be identified as a signed type.
 	///////////////////////////////////////////////////////////////////////
 
 	#define EASTL_TYPE_TRAIT_is_signed_CONFORMANCE 1    // is_signed is conforming.
-		
+
 #ifdef _MSC_VER
 	#pragma warning(push)
 	#pragma warning(disable: 4296)  // '<': expression is always false
@@ -135,14 +132,6 @@ namespace eastl
 		EA_CONSTEXPR bool is_signed_v = is_signed<T>::value;
 	#endif
 
-	#define EASTL_DECLARE_SIGNED(T)                                             \
-	namespace eastl{                                                            \
-		template <> struct is_signed<T>                : public true_type{};    \
-		template <> struct is_signed<const T>          : public true_type{};    \
-		template <> struct is_signed<volatile T>       : public true_type{};    \
-		template <> struct is_signed<const volatile T> : public true_type{};    \
-	}
-
 
 
 	///////////////////////////////////////////////////////////////////////
@@ -151,13 +140,10 @@ namespace eastl
 	// is_unsigned<T>::value == true if T is a (possibly cv-qualified) bool or unsigned integer type.
 	//
 	// Used to determine if a type is unsigned.
-	// Given that there are some user-made classes which emulate integral
-	// types, we provide the EASTL_DECLARE_UNSIGNED macro to allow you to
-	// set a given class to be identified as an unsigned type.
 	///////////////////////////////////////////////////////////////////////
 
 	#define EASTL_TYPE_TRAIT_is_unsigned_CONFORMANCE 1    // is_unsigned is conforming.
-		
+
 #ifdef _MSC_VER
 	#pragma warning(push)
 	#pragma warning(disable: 4296)  // '<': expression is always false
@@ -178,14 +164,6 @@ namespace eastl
 		template <class T>
 		EA_CONSTEXPR bool is_unsigned_v = is_unsigned<T>::value;
 	#endif
-
-	#define EASTL_DECLARE_UNSIGNED(T)                                             \
-	namespace eastl{                                                              \
-		template <> struct is_unsigned<T>                : public true_type{};    \
-		template <> struct is_unsigned<const T>          : public true_type{};    \
-		template <> struct is_unsigned<volatile T>       : public true_type{};    \
-		template <> struct is_unsigned<const volatile T> : public true_type{};    \
-	}
 
 	///////////////////////////////////////////////////////////////////////
 	// is_bounded_array
@@ -261,7 +239,7 @@ namespace eastl
 
     ///////////////////////////////////////////////////////////////////////
 	// is_aligned
-	// 
+	//
 	// Defined as true if the type has alignment requirements greater
 	// than default alignment, which is taken to be 8. This allows for
 	// doing specialized object allocation and placement for such types.
@@ -367,30 +345,6 @@ namespace eastl
 	#if EASTL_VARIABLE_TEMPLATES_ENABLED
 		template<typename T>
 		EA_CONSTEXPR bool is_rvalue_reference_v = is_rvalue_reference<T>::value;
-	#endif
-
-
-	///////////////////////////////////////////////////////////////////////
-	// result_of
-	//
-	///////////////////////////////////////////////////////////////////////
-	#define EASTL_TYPE_TRAIT_result_of_CONFORMANCE 1    // result_of is conforming.
-
-	template<typename> struct result_of;
-
-	template<typename F, typename... ArgTypes>
-	struct result_of<F(ArgTypes...)>
-		{ typedef decltype(eastl::declval<F>()(eastl::declval<ArgTypes>()...)) type; };
-
-
-	// result_of_t is the C++14 using typedef for typename result_of<T>::type.
-	// We provide a backwards-compatible means to access it through a macro for pre-C++11 compilers.
-	#if defined(EA_COMPILER_NO_TEMPLATE_ALIASES)
-		#define EASTL_RESULT_OF_T(T) typename result_of<T>::type
-	#else
-		template <typename T>
-		using result_of_t = typename result_of<T>::type;
-		#define EASTL_RESULT_OF_T(T) result_of_t<T>
 	#endif
 
 

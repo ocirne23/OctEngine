@@ -282,7 +282,10 @@ top-down camera hanging in empty sky shapes none of these:
   reads = the "Spatial/Depth prepass reuse" tweak (`m_depthPrepassReuseWanted`) AND debug off;
   `applyDepthPrepassReuse()` moves it next to `checkFrameCapacities` at the top of `beginFrame` (GPU
   idle, swap the scene pipelines' depth write, re-record), so the P key and the tweaks only flip
-  flags. The function is shared with the debug view's **"Update priority"** colour mode
+  flags. **GizmoUI under reuse:** the forward variant cannot write its near depth, so the G-buffer
+  prepass VS stamps the SAME near depth for `MATERIAL_FLAG_GIZMO_UI` materials (set from the `.oc`
+  `PipelineIdx GizmoUI` override; the expression must stay identical to `FORCE_NEAR_DEPTH` in
+  instanced_indirect.vs.glsl) — otherwise geometry drawn after the gizmo covers it. The function is shared with the debug view's **"Update priority"** colour mode
   ("GI/Debug probe colour", key O cycles): it shows the wave's ACTUAL interval in frames: MAGENTA = every frame (the maximum rate; a hue the
   ramp never makes — white was ambiguous, the ramp's yellow can clip to it through exposure/bloom),
   then a LOG ramp (each doubling an equal step) blue (2 frames) -> green (~22) -> yellow (~76)
@@ -397,8 +400,9 @@ off / Reinhard / ACES / AgX).
 > **NEVER roll a bump cursor back.**
 
 `addLightInfo` / `addFogVolume` / `addPointLight` / `addAreaLight` / `addSpotLight` / `addDecal` are
-lock-free too. **`addDebugLine` and the transform dirty lists are `PerWorker`-staged and merged in
-`present()`.**
+lock-free too. **`addDebugLine` is `PerWorker`-staged**; `present()` hands the `PerWorker` to
+`DebugLinePipeline::upload`, which copies each worker list straight into the slot's mapped vertex
+buffer (one memcpy per list, no merged CPU copy) and clears it.
 
 **Pass masks** `PASS_MAIN` / `PASS_SHADOW` / `PASS_GI` (Layout.ixx — the same bits Spatial uses). Main
 cull, shadow cull and the GI TLAS writer each early-out on their bit; TLAS also range-bounds by
@@ -409,8 +413,13 @@ cull, shadow cull and the GI TLAS writer each early-out on their bit; TLAS also 
 it. The buffer stays bound in every build; the readout (the UI's "picks L0-L4") reads zeros in
 RelWithDebInfo / Release. Put any new per-instance stats atomic behind the same define.
 
-**Transforms upload SPARSELY:** write only through `RenderNode::setTransform`, which is change-detected
-into per-frame-in-flight dirty lists. **A mutable `getTransform` would bypass the tracking.**
+**Transforms upload SPARSELY, inside `renderNode`:** write only through `RenderNode::setTransform`,
+which is change-detected into the node's own dirty bits (one per frame in flight). `renderNode` copies
+the transform into its slot's mapped buffer when that slot's bit is set, so there is no dirty list and
+no merge in `present()`, and a node that moves while it is not pushed uploads nothing until its next
+push. **A mutable `getTransform` would bypass the tracking.** One owner per node: `setTransform` and
+`renderNode` of the same node must not run concurrently. `growRenderNodeCapacity` bumps
+`m_renderNodeBufferGeneration`; a node with an older generation counts as all-dirty at its next push.
 
 `IndexRangeFreeList` recycles the contiguous slot ranges freed by destroyed ObjectContainers — mesh
 infos, materials, instance offsets, skinning jobs. Ranges stay sorted and coalesced, and **allocation
@@ -425,6 +434,12 @@ is BEST-FIT so small requests do not shred the large holes.**
 * `spawnNodeForIdx()` returns a move-only RAII `RenderNode`; `spawnSkinnedNode()` the GPU-skinned
   variant, where AnimatorComponent feeds the bone palette through `allocateSkinningPalette` /
   `setSkinningPalette`.
+* **`RenderNode` is ONE CACHE LINE** (`static_assert`): transform slot, skinned bundle handle, LOD
+  state base, the upload-state byte, local bounds and the mesh-instance vector. Everything else the
+  push needs is derived from renderer tables: per-mesh instance counts from the instances themselves,
+  an instance's LOD chain from `m_meshToLodGroup[meshIdx]` (instances reference the LOD0 mesh), the
+  skinning palette from the bundle (`setSkinningPalette(node, palette)`). Do not add per-node side
+  vectors.
 * **Destroying a RenderNode recycles without GPU sync**: transform slots are free-listed, skinned
   bundles parked in place per container, and rebased sub-node offsets shared.
 * `~ObjectContainer` frees ALL renderer resources (`Renderer::removeObjectContainer`).

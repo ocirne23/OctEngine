@@ -23,4 +23,18 @@ export struct Skeleton
         const auto it = nameToIndex.find(name);
         return it == nameToIndex.end() ? -1 : (int32)it->second;
     }
+
+    // Code-built skeletons (no skin: identity inverseBind). The parent must already be added. A duplicate
+    // name stays addressable by index only - the first bone keeps the name.
+    uint32 addBone(const oc::string& name, int32 parent, const glm::mat4& bind = glm::mat4(1.0f))
+    {
+        assert(parent < (int32)numBones());
+        const uint32 idx = numBones();
+        boneNames.push_back(name);
+        parentIndices.push_back(parent);
+        localBind.push_back(bind);
+        inverseBind.push_back(glm::mat4(1.0f));
+        nameToIndex.try_emplace(name, idx);
+        return idx;
+    }
 };

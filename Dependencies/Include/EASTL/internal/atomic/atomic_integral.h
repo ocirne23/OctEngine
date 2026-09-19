@@ -11,15 +11,23 @@
 #endif
 
 
-#include "atomic_push_compiler_options.h"
-
-
 namespace eastl
 {
 
 
 namespace internal
 {
+
+
+// 'class' : multiple assignment operators specified
+EA_DISABLE_VC_WARNING(4522);
+
+// misaligned atomic operation may incur significant performance penalty
+// The above warning is emitted in earlier versions of clang incorrectly.
+// All eastl::atomic<T> objects are size aligned.
+// This is static and runtime asserted.
+// Thus we disable this warning.
+EA_DISABLE_CLANG_WARNING(-Watomic-alignment);
 
 
 #define EASTL_ATOMIC_INTEGRAL_STATIC_ASSERT_FUNCS_IMPL(funcName)	\
@@ -155,21 +163,21 @@ namespace internal
 	template <typename T, unsigned width = sizeof(T)>
 	struct atomic_integral_width;
 
-#define EASTL_ATOMIC_INTEGRAL_FUNC_IMPL(op, bits)						\
-	EASTL_ATOMIC_DEFAULT_INIT(T, retVal);	             				\
-	EA_PREPROCESSOR_JOIN(op, bits)(T, retVal, this->GetAtomicAddress(), arg); \
+#define EASTL_ATOMIC_INTEGRAL_FUNC_IMPL(op, bits, ptr, RetType)	\
+	EASTL_ATOMIC_DEFAULT_INIT(RetType, retVal);	                \
+	EA_PREPROCESSOR_JOIN(op, bits)(RetType, retVal, ptr, arg);  \
 	return retVal;
 
 #define EASTL_ATOMIC_INTEGRAL_FETCH_IMPL(funcName, op, bits)	\
 	T funcName(T arg) EA_NOEXCEPT								\
 	{															\
-		EASTL_ATOMIC_INTEGRAL_FUNC_IMPL(op, bits);				\
+		EASTL_ATOMIC_INTEGRAL_FUNC_IMPL(op, bits, this->GetAtomicAddress(), T); \
 	}
 
-#define EASTL_ATOMIC_INTEGRAL_FETCH_ORDER_IMPL(funcName, orderType, op, bits) \
-	T funcName(T arg, orderType) EA_NOEXCEPT							\
-	{																	\
-		EASTL_ATOMIC_INTEGRAL_FUNC_IMPL(op, bits);						\
+#define EASTL_ATOMIC_INTEGRAL_FETCH_ORDER_IMPL(funcName, orderType, op, bits)   \
+	T funcName(T arg, orderType) EA_NOEXCEPT						            \
+	{																	        \
+		EASTL_ATOMIC_INTEGRAL_FUNC_IMPL(op, bits, this->GetAtomicAddress(), T); \
 	}
 
 #define EASTL_ATOMIC_INTEGRAL_FETCH_OP_JOIN(fetchOp, Order)				\
@@ -307,6 +315,12 @@ namespace internal
 																		\
 		EASTL_ATOMIC_INTEGRAL_FETCH_ASSIGNMENT_OPERATOR_IMPL(^=, xor_fetch) \
 																		\
+	public:                                                             \
+		void acquire_fence() const                                      \
+		{                                                               \
+			EASTL_INTERNAL_TSAN_ACQUIRE(this->GetAtomicAddress());      \
+			EASTL_ATOMIC_ACQUIRE_FENCE();                               \
+		}                                                               \
 	};
 
 
@@ -330,14 +344,14 @@ namespace internal
 	EASTL_ATOMIC_INTEGRAL_WIDTH_SPECIALIZE(16, 128)
 #endif
 
+EA_RESTORE_VC_WARNING();
+
+EA_RESTORE_CLANG_WARNING();
+
 
 } // namespace internal
 
 
 } // namespace eastl
-
-
-#include "atomic_pop_compiler_options.h"
-
 
 #endif /* EASTL_ATOMIC_INTERNAL_INTEGRAL_H */

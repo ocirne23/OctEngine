@@ -43,7 +43,7 @@ export bool contiguousTreeSolelyOwned(Entity* entity);
 export constexpr uint16 MaxInlineComponentTypes = 13;
 export constexpr uint16 ComponentAlignment = 16;
 
-export Transform composeTransform(const Transform& parent, const Transform& local);
+export using ComponentOffsets = oc::array<uint16, MaxInlineComponentTypes>;
 
 export constexpr const char* componentTypeName(EComponentID id)
 {
@@ -120,10 +120,36 @@ export constexpr uint16 getEntityAllocSize(uint16 typeBits)
     return size;
 }
 
+export constexpr ComponentOffsets getComponentOffsets(uint16 typeBits)
+{
+    ComponentOffsets offsets;
+    uint16 offset = EntityComponentDetail::entityBaseOffset;
+    for (uint16 i = 0; i < MaxInlineComponentTypes; ++i)
+    {
+        if (typeBits & (1 << i))
+        {
+            offsets[i] = offset;
+            offset += EntityComponentDetail::inlineSizes[i];
+        }
+        else
+        {
+            offsets[i] = 0;
+        }
+    }
+    return offsets;
+}
+
 export template <typename T>
 bool hasComponent(const Entity* entity)
 {
     return (entity->typeBits & (1 << T::getId())) != 0;
+}
+
+export template <typename T>
+T* getComponent(Entity* entity, const ComponentOffsets& offsets)
+{
+    const uint16 offset = offsets[T::getId()];
+    return offset != 0 ? reinterpret_cast<T*>(reinterpret_cast<uint8*>(entity) + offset) : nullptr;
 }
 
 export template <typename T>

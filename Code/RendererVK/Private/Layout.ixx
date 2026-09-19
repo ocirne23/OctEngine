@@ -851,6 +851,9 @@ export namespace RendererVKLayout
     constexpr uint32 MATERIAL_FLAG_TERRAIN = 1u << 27; // terrain chunk: colors procedurally (TERRAIN variant), the
                                                        // material's diffuse slot is a fallback - RT hits (ocean
                                                        // refraction) substitute the beach splat instead
+    constexpr uint32 MATERIAL_FLAG_GIZMO_UI = 1u << 26; // GizmoUI: the G-buffer prepass stamps the same near depth as
+                                                        // the FORCE_NEAR_DEPTH forward variant, so the gizmo stays on
+                                                        // top when the scene pass cannot write depth (prepass reuse)
 
     struct alignas(16) MaterialInfo
     {

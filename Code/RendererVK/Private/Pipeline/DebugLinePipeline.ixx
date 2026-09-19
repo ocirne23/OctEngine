@@ -2,6 +2,7 @@ export module RendererVK:DebugLinePipeline;
 
 import Core;
 import Core.glm;
+import Threading;
 
 import :VK;
 import :Buffer;
@@ -28,10 +29,11 @@ public:
     void initialize(vk::RenderPass renderPass);
     void reloadShaders(vk::RenderPass renderPass);
 
-    // Copies this frame's vertices into the frame slot's mapped buffers (call after the slot's fence
-    // wait, i.e. from present()). Returns true when the lazy GPU buffers were just created so the
-    // caller re-records its command buffers.
-    bool upload(uint32 frameIdx, oc::span<const LineVertex> verts);
+    // Drains every worker's staged vertices STRAIGHT into the frame slot's mapped buffer, one memcpy
+    // per worker list and no merged CPU copy, and clears the lists (call after the slot's fence wait,
+    // i.e. from present()). Each list holds whole lines (vertex pairs). Returns true when the lazy GPU
+    // buffers were just created so the caller re-records its command buffers.
+    bool upload(uint32 frameIdx, PerWorker<oc::vector<LineVertex>>& workerVerts);
 
     bool hasBuffers() const { return m_buffersReady; }
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo);

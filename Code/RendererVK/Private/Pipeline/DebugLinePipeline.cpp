@@ -42,12 +42,15 @@ void DebugLinePipeline::reloadShaders(vk::RenderPass renderPass)
         printf("DebugLinePipeline: shader reload failed, keeping previous pipeline\n");
 }
 
-bool DebugLinePipeline::upload(uint32 frameIdx, oc::span<const LineVertex> verts)
+bool DebugLinePipeline::upload(uint32 frameIdx, PerWorker<oc::vector<LineVertex>>& workerVerts)
 {
+    size_t total = 0;
+    workerVerts.forEach([&total](oc::vector<LineVertex>& verts) { total += verts.size(); });
+
     bool created = false;
     if (!m_buffersReady)
     {
-        if (verts.empty())
+        if (total == 0)
             return false;
         for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
         {
@@ -70,21 +73,26 @@ bool DebugLinePipeline::upload(uint32 frameIdx, oc::span<const LineVertex> verts
         created = true;
     }
 
-    uint32 count = (uint32)verts.size();
-    if (count > RendererVKLayout::MAX_DEBUG_LINE_VERTICES)
+    constexpr uint32 capacity = RendererVKLayout::MAX_DEBUG_LINE_VERTICES & ~1u; // whole lines only
+    if (total > capacity && !m_overflowWarned)
     {
-        count = RendererVKLayout::MAX_DEBUG_LINE_VERTICES & ~1u;
-        if (!m_overflowWarned)
+        printf("DebugLinePipeline: %zu line vertices exceed the %u capacity, excess dropped\n", total, RendererVKLayout::MAX_DEBUG_LINE_VERTICES);
+        m_overflowWarned = true;
+    }
+    // One memcpy per worker list, straight into the mapped buffer. Every list holds whole lines, so
+    // the running count stays even and a truncated tail still ends on a line boundary.
+    uint32 count = 0;
+    LineVertex* const mapped = m_mappedVerts[frameIdx].data();
+    workerVerts.forEach([&count, mapped](oc::vector<LineVertex>& verts)
         {
-            printf("DebugLinePipeline: %zu line vertices exceed the %u capacity, excess dropped\n", verts.size(), RendererVKLayout::MAX_DEBUG_LINE_VERTICES);
-            m_overflowWarned = true;
-        }
-    }
+            const uint32 numToCopy = oc::min((uint32)verts.size(), capacity - count);
+            if (numToCopy > 0)
+                memcpy(mapped + count, verts.data(), numToCopy * sizeof(LineVertex));
+            count += numToCopy;
+            verts.clear();
+        });
     if (count > 0)
-    {
-        memcpy(m_mappedVerts[frameIdx].data(), verts.data(), count * sizeof(LineVertex));
         m_vertexBuffers[frameIdx].flushMappedMemory(count * sizeof(LineVertex));
-    }
     m_mappedIndirect[frameIdx][0] = count;
     m_indirectBuffers[frameIdx].flushMappedMemory(sizeof(vk::DrawIndirectCommand));
     return created;

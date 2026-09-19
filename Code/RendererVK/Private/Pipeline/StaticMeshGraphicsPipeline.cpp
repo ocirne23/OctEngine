@@ -181,8 +181,9 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 
     // Depth-prepass reuse: the scene pass binds the G-buffer prepass depth READ-ONLY (already complete,
     // bit-identical to what this pass would rasterize), so no variant may write depth - a write-enabled
-    // pipeline against a read-only depth attachment is invalid. Costs the gizmo its internal depth sort
-    // (accepted) and GI-debug sphere self-sorting; everything else only ever re-wrote identical values.
+    // pipeline against a read-only depth attachment is invalid. GizmoUI cannot stamp its near depth here,
+    // so the prepass stamps it instead (MATERIAL_FLAG_GIZMO_UI in gbuffer.vs.glsl). Costs the GI-debug
+    // spheres their self-sorting; everything else only ever re-wrote identical values.
     if (m_depthReadOnly)
     {
         graphicsPipelineLayout.depthWriteEnable = false;

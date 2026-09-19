@@ -5,14 +5,6 @@ import Core.glm;
 import Core.Transform;
 import :Entity;
 
-Transform composeTransform(const Transform& parent, const Transform& local)
-{
-    return Transform(
-        parent.pos + parent.quat * (local.pos * parent.scale),
-        parent.scale * local.scale,
-        glm::normalize(parent.quat * local.quat));
-}
-
 static void detachFromParent(Entity* parent, Entity* child)
 {
     SceneComponent* psc = getComponent<SceneComponent>(parent);
@@ -129,4 +121,16 @@ int componentIdFromName(oc::string_view name)
         if (name == componentTypeName(EComponentID(i)))
             return int(i);
     return -1;
+}
+
+namespace
+{
+    inline constexpr uint32 getTotalInlineComponentSize()
+    {
+        uint32 total = 0;
+        for (const uint16 size : EntityComponentDetail::inlineSizes)
+            total += size;
+        return total;
+    }
+    static_assert(getTotalInlineComponentSize() < UINT16_MAX - 1);
 }

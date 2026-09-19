@@ -257,19 +257,6 @@ namespace eastl
 	#endif
 
 
-	///////////////////////////////////////////////////////////////////////
-	// add_signed
-	//
-	// This is not a C++11 type trait, and is here for backwards compatibility
-	// only. Use the C++11 make_unsigned type trait instead.
-	///////////////////////////////////////////////////////////////////////
-
-	template<class T>
-	struct add_signed : public make_signed<T>
-	{ typedef typename eastl::make_signed<T>::type type; };
-
-
-
 
 	///////////////////////////////////////////////////////////////////////
 	// make_unsigned
@@ -429,25 +416,6 @@ namespace eastl
 
 
 	///////////////////////////////////////////////////////////////////////
-	// add_unsigned
-	//
-	// This is not a C++11 type trait, and is here for backwards compatibility
-	// only. Use the C++11 make_unsigned type trait instead.
-	// 
-	// Adds unsigned-ness to the given type. 
-	// Modifies only integral values; has no effect on others.
-	// add_unsigned<int>::type is unsigned int
-	// add_unsigned<unsigned int>::type is unsigned int
-	//
-	///////////////////////////////////////////////////////////////////////
-
-	template<class T>
-	struct add_unsigned : public make_unsigned<T>
-	{ typedef typename eastl::make_signed<T>::type type; };
-
-
-
-	///////////////////////////////////////////////////////////////////////
 	// remove_pointer
 	//
 	// Remove pointer from a type.
@@ -497,7 +465,7 @@ namespace eastl
 	namespace internal
 	{
 		template <typename T>
-		auto try_add_pointer(int) -> type_identity<typename std::remove_reference<T>::type*>;
+		auto try_add_pointer(int) -> type_identity<typename eastl::remove_reference<T>::type*>;
 		template <typename T>
 		auto try_add_pointer(...) -> type_identity<T>;
 	}
@@ -559,6 +527,8 @@ namespace eastl
 
 	///////////////////////////////////////////////////////////////////////
 	// aligned_storage
+	// 
+	// Deprecated in C++23.
 	//
 	// The aligned_storage transformation trait provides a type that is 
 	// suitably aligned to store an object whose size is does not exceed length 
@@ -651,6 +621,8 @@ namespace eastl
 
 	///////////////////////////////////////////////////////////////////////
 	// aligned_union
+	// 
+	// Deprecated in C++23.
 	//
 	// The member typedef type shall be a POD type suitable for use as
 	// uninitialized storage for any object whose type is listed in Types; 

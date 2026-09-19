@@ -29,6 +29,12 @@ void AnimatorComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
         return;
     const AnimatorDesc& desc = *info.desc;
     clipSet = info.clipSet; // shared, World-cached library (clips already loaded + retargeted)
+    rig = info.rig;
+    if (rig)
+    {
+        boneEntities.resize(rig->skeleton.numBones());
+        player.setPoseOnly(true); // entities take the local pose; nothing consumes a palette
+    }
 
     player.initialize(info.skeleton);
     player.setClipLibrary(clipSet);
@@ -142,8 +148,37 @@ void AnimatorComponent::update(Entity& entity, Renderer& renderer, float deltaSe
         }
     }
 
-    if (RenderComponent* rc = getComponent<RenderComponent>(&entity); rc && rc->node.isSkinned())
-        renderer.setSkinningPalette(rc->node.getSkinnedPaletteHandle(), player.getPalette());
+    if (rig)
+        applyPoseToHierarchy(entity);
+    else if (RenderComponent* rc = getComponent<RenderComponent>(&entity); rc && rc->node.isSkinned())
+        renderer.setSkinningPalette(rc->node, player.getPalette());
+}
+
+// Parent -> child writes, before this entity emits its children: safe inside the parallel pass. The
+// entities are found again every tick through the child slots (no held pointers: a part can be deleted
+// or reparented away); a slot that no longer exists drops that bone and its subtree.
+void AnimatorComponent::applyPoseToHierarchy(Entity& entity)
+{
+    const Skeleton& skel = rig->skeleton;
+    const oc::span<const glm::vec3> positions = player.getPosePositions();
+    const oc::span<const glm::quat> rotations = player.getPoseRotations();
+    const oc::span<const glm::vec3> scales = player.getPoseScales();
+
+    for (uint32 i = 0; i < skel.numBones(); ++i)
+    {
+        const int32 parentBone = skel.parentIndices[i];
+        Entity* parentEntity = parentBone < 0 ? &entity : boneEntities[parentBone];
+        Entity* bone = nullptr;
+        if (parentEntity)
+            if (SceneComponent* sc = getComponent<SceneComponent>(parentEntity); sc && rig->childSlots[i] < sc->children.size())
+                bone = sc->children[rig->childSlots[i]].get();
+        boneEntities[i] = bone;
+        if (!bone)
+            continue;
+        bone->pos = positions[i];
+        bone->rot = rotations[i];
+        bone->scale = scales[i].x; // entities scale uniformly
+    }
 }
 
 void AnimatorComponent::destroy(Entity& entity, const SpawnInfo& info)

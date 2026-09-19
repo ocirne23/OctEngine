@@ -1,0 +1,59 @@
+Prefab CubeGuy
+	Position 0 1.5363203 0
+	Rotation 0 -0 0
+	Scale 0.25
+	Component Scene
+		Entity Head
+			Position 0 2 0
+			Rotation 0 -0 0
+			Scale 0.9
+			Component Render
+				ObjectContainer baseshapes
+				Node Cube
+				Type StaticMesh
+		Entity Body
+			Position 0 -0.5 0
+			Rotation 0 -0 0
+			Scale 1
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar1.5
+				Type StaticMesh
+		Entity LeftLeg
+			Position 0 -2.5 0.6
+			Rotation 0 0 -34.729084
+			Scale 0.5
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Position 0 -2 0
+		Entity RightLeg
+			Position 0 -2.5 -0.6
+			Rotation 0 -0 34.729084
+			Scale 0.5
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Position 0 -2 0
+		Entity LeftArm
+			Position 0 0.5 -1.5
+			Rotation 0 -0 29.767784
+			Scale 0.5
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Position 0 -2 0
+		Entity RightArm
+			Position 0 0.5 1.5
+			Rotation 0 0 -29.767784
+			Scale 0.5
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Position 0 -2 0
+	Component Animator
+		Animator CubeGuyAnimator

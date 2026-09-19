@@ -57,7 +57,6 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
 
     // Per-worker staging for the lock-free submission surface (requires the JobSystem first).
     assert(Globals::jobSystem.getNumContexts() != 0 && "initialize the JobSystem before the Renderer");
-    Globals::renderNodeDirtyLists.initialize();
     m_debugLineVerts.initialize();
 
     auto rerecordCallback = [this]() { setHaveToRecordCommandBuffers(); };
@@ -1532,17 +1531,27 @@ void Renderer::renderNode(const RenderNode& node, uint32 passMask)
         return;
     }
 
-    for (auto& pair : node.m_numInstancesPerMesh)
-        oc::atomic_ref<uint32>(m_numInstancesPerMesh[pair.first]) += pair.second;
-
     noteTextureUse(node, passMask);
     for (const RendererVKLayout::InMeshInstance& instance : node.m_meshInstances)
+    {
+        oc::atomic_ref<uint32>(m_numInstancesPerMesh[instance.meshIdx]) += 1;
         Globals::meshStreamer.noteUse(instance.meshIdx);
+    }
 
-    PerFrameData& frameData = m_perFrameData[m_swapChain.getCurrentFrameIndex()];
+    const uint32 frameIdx = m_swapChain.getCurrentFrameIndex();
+    PerFrameData& frameData = m_perFrameData[frameIdx];
+    // Sparse transform upload: copy only when this slot has not seen the node's latest transform.
+    if ((node.m_transformUploadState >> RendererVKLayout::NUM_FRAMES_IN_FLIGHT) != m_renderNodeBufferGeneration)
+        node.m_transformUploadState = uint8((m_renderNodeBufferGeneration << RendererVKLayout::NUM_FRAMES_IN_FLIGHT) | RenderNode::ALL_FRAMES_DIRTY);
+    const uint8 frameBit = uint8(1u << frameIdx);
+    if (node.m_transformUploadState & frameBit)
+    {
+        memcpy(&frameData.mappedRenderNodeTransforms[node.m_transformIdx], &m_renderNodeTransforms[node.m_transformIdx], sizeof(Transform));
+        node.m_transformUploadState &= uint8(~frameBit);
+    }
     frameData.mappedNodePassMasks[node.m_transformIdx] = passMask;
     memcpy(frameData.mappedMeshInstances.data() + startIdx, node.m_meshInstances.data(), numInstances * sizeof(node.m_meshInstances[0]));
-    if (!node.m_lodInstances.empty())
+    if (node.m_lodStateBase != UINT32_MAX) // allocated at spawn only when the node has a LOD chain
         noteLodChainUse(node, startIdx, frameData); // benign races: same-value stamp + thread-safe noteUse
 }
 
@@ -1575,9 +1584,12 @@ void Renderer::noteLodChainUse(const RenderNode& node, uint32 startIdx, PerFrame
     // mesh sets, and a cold one would draw nothing while it re-streams. Generated chains share LOD0's
     // set, which the caller's per-instance noteUse already touched. Stamped once per group per frame;
     // races on the stamp are benign: both threads write the same frame value, worst case double-noting.
-    for (const RenderNode::LodInstance& lod : node.m_lodInstances)
+    for (const RendererVKLayout::InMeshInstance& instance : node.m_meshInstances)
     {
-        MeshLodGroup& group = m_meshLodGroups[lod.lodGroupIdx];
+        const uint32 groupIdx = m_meshToLodGroup[instance.meshIdx]; // the instance references the chain's LOD0 mesh
+        if (groupIdx == UINT32_MAX)
+            continue;
+        MeshLodGroup& group = m_meshLodGroups[groupIdx];
         if (group.errors[1] == 0.0f && oc::atomic_ref<uint32>(group.lastUseFrame).load(oc::memory_order_relaxed) != m_frameCounter)
         {
             oc::atomic_ref<uint32>(group.lastUseFrame).store(m_frameCounter, oc::memory_order_relaxed);
@@ -1977,20 +1989,6 @@ void Renderer::present()
     m_ubo.giTlasNumInstances = oc::min(m_meshInstanceCounter, m_maxGiTlasInstances);
     Globals::stagingManager.upload(frameData.ubo.getBuffer(), sizeof(uint32), &m_ubo.giTlasNumInstances,
         offsetof(RendererVKLayout::Ubo, giTlasNumInstances));
-    ProfileScope transformScope("Transforms upload", EProfileCategory::Renderer);
-    // Sparse transform upload: only slots that changed since this frame-in-flight last consumed
-    // them, gathered from every worker's dirty list.
-    Globals::renderNodeDirtyLists.forEach([&](oc::array<oc::vector<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT>& lists)
-        {
-            oc::vector<uint32>& transformDirtyList = lists[frameIdx];
-            for (const uint32 idx : transformDirtyList)
-            {
-                memcpy(&frameData.mappedRenderNodeTransforms[idx], &m_renderNodeTransforms[idx], sizeof(Transform));
-                Globals::renderNodeDirtyBits[idx] &= uint8(~(1u << frameIdx));
-            }
-            transformDirtyList.clear();
-        });
-    transformScope.stop();
     ProfileScope bucketScope("Instance buckets + flushes", EProfileCategory::Renderer);
     // Bucket layout for the GPU culls: instances are pushed referencing LOD0, and the cull redirects
     // each one to its selected level - so every member of a LOD chain gets a bucket sized to the
@@ -2026,13 +2024,7 @@ void Renderer::present()
     // Debug overlay lines accumulated since the last present (safe here: this slot's fence was waited
     // in beginFrame). First use lazily creates the GPU buffers -> re-record to pick up the new pass.
     ProfileScope debugLineScope("Debug lines upload", EProfileCategory::Renderer);
-    m_debugLineMergedVerts.clear();
-    m_debugLineVerts.forEach([this](oc::vector<DebugLinePipeline::LineVertex>& verts)
-        {
-            m_debugLineMergedVerts.insert(m_debugLineMergedVerts.end(), verts.begin(), verts.end());
-            verts.clear();
-        });
-    if (m_debugLinePipeline.upload(frameIdx, m_debugLineMergedVerts))
+    if (m_debugLinePipeline.upload(frameIdx, m_debugLineVerts)) // drains + clears the per-worker lists
         setHaveToRecordCommandBuffers();
     debugLineScope.stop();
 
@@ -2193,13 +2185,10 @@ uint32 Renderer::addRenderNodeTransform(const Transform& transform)
         const uint32 renderNodeIdx = m_freeRenderNodeIndexes.back();
         m_freeRenderNodeIndexes.pop_back();
         m_renderNodeTransforms[renderNodeIdx] = transform;
-        markRenderNodeTransformDirty(renderNodeIdx);
-        return renderNodeIdx;
+        return renderNodeIdx; // a fresh RenderNode starts all-dirty, so the reused slot uploads at its first push
     }
     const uint32 renderNodeIdx = (uint32)m_renderNodeTransforms.size();
     m_renderNodeTransforms.emplace_back(transform);
-    Globals::renderNodeDirtyBits.push_back(0);
-    markRenderNodeTransformDirty(renderNodeIdx);
     if ((uint32)m_renderNodeTransforms.size() > m_maxRenderNodes)
         growRenderNodeCapacity((uint32)m_renderNodeTransforms.size());
     return renderNodeIdx;
@@ -2234,9 +2223,7 @@ void Renderer::freeRenderNode(RenderNode& node)
         m_freeLodStateSlots.release(node.m_lodStateBase, (uint32)node.m_meshInstances.size());
         node.m_lodStateBase = UINT32_MAX;
     }
-    node.m_skinnedPaletteHandle = UINT32_MAX;
     node.m_meshInstances.clear();
-    node.m_numInstancesPerMesh.clear();
 }
 
 uint32 Renderer::registerSkinnedBundle(const SkinnedInstanceBundle& bundle)
@@ -2329,7 +2316,7 @@ void Renderer::growRenderNodeCapacity(uint32 needed)
     waitForGpuAndFlushStaging();
     for (PerFrameData& perFrame : m_perFrameData)
     {
-        // No contents to preserve: present() re-copies the full CPU transform list every frame.
+        // No contents to preserve: the generation bump below makes every node re-upload at its next push.
         perFrame.inRenderNodeTransformsBuffer.initialize(m_maxRenderNodes * sizeof(RendererVKLayout::RenderNodeTransform),
             vk::BufferUsageFlagBits2::eStorageBuffer,
             vk::MemoryPropertyFlagBits::eHostVisible, false, "RenderNodeTransforms", BufferHostAccess::eSequentialWrite);
@@ -2347,15 +2334,8 @@ void Renderer::growRenderNodeCapacity(uint32 needed)
             vk::MemoryPropertyFlagBits::eHostVisible, false, "NodeLodStateBias", BufferHostAccess::eSequentialWrite);
         perFrame.mappedNodeLodStateBias = perFrame.inNodeLodStateBiasBuffer.mapMemory<int32>();
     }
-    // Fresh (empty) GPU buffers: every live slot has to upload again.
-    Globals::renderNodeDirtyLists.forEach([](oc::array<oc::vector<uint32>, RendererVKLayout::NUM_FRAMES_IN_FLIGHT>& lists)
-        {
-            for (oc::vector<uint32>& dirtyList : lists)
-                dirtyList.clear();
-        });
-    oc::fill(Globals::renderNodeDirtyBits.begin(), Globals::renderNodeDirtyBits.end(), uint8(0));
-    for (uint32 idx = 0; idx < (uint32)m_renderNodeTransforms.size(); ++idx)
-        markRenderNodeTransformDirty(idx);
+    // Fresh (empty) GPU buffers: every node uploads again at its next push (see renderNode).
+    ++m_renderNodeBufferGeneration;
     setHaveToRecordCommandBuffers();
     printf("Renderer: grew render node capacity to %u\n", m_maxRenderNodes);
 }
@@ -2559,8 +2539,10 @@ uint32 Renderer::allocateSkinningPalette(uint32 boneCount)
     return handle;
 }
 
-void Renderer::setSkinningPalette(uint32 paletteHandle, oc::span<const glm::mat4> palette)
+void Renderer::setSkinningPalette(const RenderNode& node, oc::span<const glm::mat4> palette)
 {
+    assert(node.isSkinned());
+    const uint32 paletteHandle = m_skinnedBundles[node.m_skinnedBundleHandle].paletteHandle;
     assert(paletteHandle < m_skinningPaletteRegions.size());
     const SkinningPaletteRegion& region = m_skinningPaletteRegions[paletteHandle];
     const uint32 count = oc::min((uint32)palette.size(), region.boneCount);

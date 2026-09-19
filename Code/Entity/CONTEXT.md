@@ -652,7 +652,7 @@ renderer state.** It fires, for each side:
 |---|---|
 | `SceneComponent` | Children. |
 | `RenderComponent` | RenderNode + local transform, static or skinned, plus `Color`. `update` places the node, refreshes the spatial entry from its bounds and submits it under the cull pass mask. |
-| `AnimatorComponent` | AnimationPlayer + AnimStateMachine from `.apl`; gameplay through `stateMachine.setFloat/Bool/Trigger`, clip events through `onEvent`. |
+| `AnimatorComponent` | AnimationPlayer + AnimStateMachine from `.apl`; gameplay through `stateMachine.setFloat/Bool/Trigger`, clip events through `onEvent`. Two modes, below. |
 | `ScriptComponent` | See [`Code/Script/CONTEXT.md`](../Script/CONTEXT.md). |
 | `PhysicsComponent` | See [`Code/Physics/CONTEXT.md`](../Physics/CONTEXT.md). |
 | `AudioComponent` | See [`Code/Audio/CONTEXT.md`](../Audio/CONTEXT.md). |
@@ -661,6 +661,27 @@ renderer state.** It fires, for each side:
 | `LightComponent` | Below. |
 | `NetworkComponent` | Multiplayer, below. |
 | Game components (9/10/11) | Below. |
+
+## `AnimatorComponent` modes
+
+* **Skinned** — a sibling skinned `Component Render`: the skeleton is the container's, the palette
+  goes to `setSkinningPalette`.
+* **Hierarchy** — NO sibling skinned mesh, but a `Component Scene`: the DESCENDANT ENTITIES are the
+  rig. `World::getOrBuildEntityRig` builds an `EntityRig` from the template's Scene spawn info — one
+  bone per descendant (DFS), named by the entity name, bind = the authored local transform — shared
+  by content and never freed (the clip sets key on its skeleton). The player runs pose-only and
+  `applyPoseToHierarchy` writes the local pose to each part's `pos` / `rot` / `scale` (scale.x: entities
+  scale uniformly). Parent → child writes before the children are emitted, so it is safe in the pass.
+  * **The animator's own entity is NOT a bone** — its transform belongs to gameplay / physics.
+  * **No held pointers:** the parts are found again every tick through `childSlots` (the index in the
+    parent's `children`); a missing slot drops that bone and its subtree. Reordering the children of a
+    live instance animates the wrong part until a respawn.
+  * **Every bone is written every tick**, bind pose included, so a script cannot pose a rigged part
+    directly while the animator is enabled.
+  * Clips come from `.anm` as usual; a `Procedural` clip needs no source file (see CLAUDE.md).
+    Demo: `Entities/Debug/CubeGuy.pre` + `Animations/cubeguy.anm` / `.apl`.
+  * The Entity Editor keeps a hierarchy animator over a respawn (`knownRig`), but cannot ADD one —
+    author it in the `.pre`.
 
 ## `LightComponent` (ID 7)
 
