@@ -3,8 +3,16 @@ Prefab CubeGuy
 	Rotation 0 -0 0
 	Scale 0.25
 	CullMode RootOnly
-	Component Scene
-		Entity Head
+	Component SceneAnimator
+		Layer Walk
+			Stride 6.0        # per full cycle (two steps), in MODEL units: x the entity scale = metres (0.25 -> 1.5 m)
+			FullSpeed 4.0     # model units/s where the swing reaches full amplitude (0.25 -> 1 m/s)
+			Fade 0.15
+			Axis 0 0 1
+			Walk
+				LegAngle 35
+				ArmAngle 30
+		Bone Head
 			Position 0 2 0
 			Rotation 0 -0 0
 			Scale 0.9
@@ -12,7 +20,7 @@ Prefab CubeGuy
 				ObjectContainer baseshapes
 				Node Cube
 				Type StaticMesh
-		Entity Body
+		Bone Body
 			Position 0 -0.5 0
 			Rotation 0 -0 0
 			Scale 1
@@ -20,7 +28,7 @@ Prefab CubeGuy
 				ObjectContainer baseshapes
 				Node Pillar1.5
 				Type StaticMesh
-		Entity LeftLeg
+		Bone LeftLeg
 			Position 0 -2.5 0.6
 			Rotation 0 -0 0
 			Scale 0.5
@@ -29,7 +37,7 @@ Prefab CubeGuy
 				Node Pillar3
 				Type StaticMesh
 				Position 0 -2 0
-		Entity RightLeg
+		Bone RightLeg
 			Position 0 -2.5 -0.6
 			Rotation 0 -0 0
 			Scale 0.5
@@ -38,7 +46,7 @@ Prefab CubeGuy
 				Node Pillar3
 				Type StaticMesh
 				Position 0 -2 0
-		Entity RightArm
+		Bone RightArm
 			Position 0 0.5 -1.5
 			Rotation 0 -0 0
 			Scale 0.5
@@ -47,7 +55,7 @@ Prefab CubeGuy
 				Node Pillar3
 				Type StaticMesh
 				Position 0 -2 0
-		Entity LeftArm
+		Bone LeftArm
 			Position 0 0.5 1.5
 			Rotation 0 -0 0
 			Scale 0.5
@@ -56,12 +64,3 @@ Prefab CubeGuy
 				Node Pillar3
 				Type StaticMesh
 				Position 0 -2 0
-	Component SceneAnimator
-		Layer Walk
-			Stride 1.5        # metres per full cycle (two steps)
-			FullSpeed 1.0     # m/s where the swing reaches full amplitude
-			Fade 0.15
-			Axis 0 0 1
-			Walk
-				LegAngle 35
-				ArmAngle 30

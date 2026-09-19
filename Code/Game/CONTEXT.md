@@ -148,7 +148,10 @@ by their own position.
 # The world
 
 A flat 600 m plane (`Assets/Entities/Game/*.pre`, baseshapes solid meshes with per-prefab `Color`
-tints), plus generated rock terrain and per-mode resource nodes.
+tints), plus generated rock terrain and per-mode resource nodes. **Every enemy unit's body is the
+shared box-limb model `Debug/CubeGuy.pre`** as a Scene child — size by the reference-site `Scale`,
+colour by `Component GameUnit` `Color`; the GameUnit turns it to the heading and feeds its walk (The
+MODEL, in [`Code/Entity/CONTEXT.md`](../Entity/CONTEXT.md)). `player.pre` keeps its own shape.
 
 **NO win condition yet.** The Force AMBIENT FIELD (the old PvE world field) is fully REMOVED.
 

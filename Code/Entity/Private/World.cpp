@@ -391,6 +391,7 @@ void World::update(Renderer& renderer, float deltaSeconds)
         kind(m_simLod.projectiles, EComponentID_GameProjectile);
         kind(m_simLod.scripts,     EComponentID_Script);
         kind(m_simLod.animators,   EComponentID_Animator);
+        kind(m_simLod.animators,   EComponentID_SceneAnimator); // a self-driven one; a driven model child follows its parent's tick
     }
     m_updateStaging.forEach([](EntityUpdateStaging& s) { for (uint32& n : s.simLodCount) n = 0; });
     setupScope.stop();
@@ -1125,41 +1126,43 @@ oc::shared_ptr<AnimatorComponent::SpawnInfo> World::buildAnimatorSpawnInfo(const
     return info;
 }
 
-// Child-slot path from the animator's entity to the descendant called `name` (DFS, first match). A slot
-// counts only the children SceneComponent::spawn creates.
-static bool findPartPath(const SceneComponent::SpawnInfo& scene, const oc::string& name, oc::vector<uint16>& path, Transform& outBind)
+// `Bone <name>` blocks, DFS so a parent is before its children: Position / Rotation / Scale like an
+// entity, an optional `Component Render`, and nested `Bone`s.
+void World::appendSceneAnimBones(const AssetNode& node, int32 parent, SceneAnimRig& rig, const oc::string& ownerName)
 {
-    uint16 slot = 0;
-    for (const SceneComponent::SpawnInfo::ChildSpawnInfo& child : scene.children)
+    for (const AssetNode* boneNode : node.findAll("Bone"))
     {
-        if (!child.tmpl)
-            continue;
-        path.push_back(slot++);
-        if ((child.name.empty() ? child.tmpl->displayName : child.name) == name)
+        SceneAnimRig::Bone bone;
+        bone.name = boneNode->asString(0);
+        bone.parent = parent;
+        bone.bind = readNodeTransform(*boneNode);
+        if (const AssetNode* renderNode = findComponentNode(*boneNode, "Render"))
         {
-            outBind = child.localTransform;
-            return true;
+            bone.render = buildRenderSpawnInfo(*renderNode, ownerName + "/" + bone.name);
+            if (bone.render && bone.render->skinned)
+                Log::warning("Scene: entity '" + ownerName + "' bone '" + bone.name + "' asks for a SkinnedMesh; a bone renders a static node");
         }
-        if ((child.tmpl->archetype.typeBits & (1 << EComponentID_Scene)) // Scene is bit 0, so its SpawnInfo is spawnInfos[0]
-            && findPartPath(*static_cast<const SceneComponent::SpawnInfo*>(child.tmpl->spawnInfos[0].get()), name, path, outBind))
-            return true;
-        path.pop_back();
+        const int32 index = int32(rig.bones.size());
+        rig.bones.push_back(oc::move(bone));
+        appendSceneAnimBones(*boneNode, index, rig, ownerName);
     }
-    return false;
 }
 
-// Component SceneAnimator: `Layer <name>` blocks. Angles in degrees, phases in 0..1 cycles.
+// Component SceneAnimator: `Bone <name>` blocks (above) + `Layer <name>` blocks that move them by name.
+// Angles in degrees, phases in 0..1 cycles.
 //   Stride <m per cycle> + FullSpeed <m/s>   the phase follows the distance moved, the weight the speed
 //   Duration <sec per cycle> + Weight <0..1>  a timed layer (no Stride)
 //   Fade <sec>, Axis x y z (the layer's default swing axis, part-local)
 //   Walk  (LegAngle / ArmAngle / LeftLeg / RightLeg / LeftArm / RightArm / BobPart / BobHeight)
 //   Swing <part> <angleDeg> [phase] [harmonic 1|2]  (child Axis)
 //   Bob <part> <height> [phase] [harmonic 1|2]      (child Direction)
-oc::shared_ptr<SceneAnimatorComponent::SpawnInfo> World::buildSceneAnimatorSpawnInfo(const AssetNode& node, const SceneComponent::SpawnInfo* sceneInfo, const oc::string& ownerName)
+oc::shared_ptr<SceneAnimatorComponent::SpawnInfo> World::buildSceneAnimatorSpawnInfo(const AssetNode& node, const oc::string& ownerName)
 {
-    if (!sceneInfo)
+    auto rig = oc::make_shared<SceneAnimRig>();
+    appendSceneAnimBones(node, -1, *rig, ownerName);
+    if (rig->bones.empty())
     {
-        Log::warning("Scene: entity '" + ownerName + "' has a SceneAnimator but no Scene children to move");
+        Log::warning("Scene: entity '" + ownerName + "' has a SceneAnimator with no Bone");
         return nullptr;
     }
 
@@ -1206,40 +1209,22 @@ oc::shared_ptr<SceneAnimatorComponent::SpawnInfo> World::buildSceneAnimatorSpawn
         }
     }
 
-    auto rig = oc::make_shared<SceneAnimRig>();
     rig->anim = builder.build();
-    rig->partNodes.assign(rig->anim.parts.size(), SceneAnimRig::InvalidNode);
-    oc::vector<uint16> path;
+    rig->partBones.assign(rig->anim.parts.size(), SceneAnimRig::InvalidBone);
     for (size_t p = 0; p < rig->anim.parts.size(); ++p)
     {
         Part& part = rig->anim.parts[p];
-        Transform bind;
-        path.clear();
-        if (!findPartPath(*sceneInfo, part.name, path, bind))
+        for (size_t b = 0; b < rig->bones.size() && rig->partBones[p] == SceneAnimRig::InvalidBone; ++b)
+            if (rig->bones[b].name == part.name)
+                rig->partBones[p] = uint16(b);
+        if (rig->partBones[p] == SceneAnimRig::InvalidBone)
         {
-            Log::warning("Scene: entity '" + ownerName + "' SceneAnimator moves unknown child '" + part.name + "'");
+            Log::warning("Scene: entity '" + ownerName + "' SceneAnimator moves unknown bone '" + part.name + "'");
             continue;
         }
+        const Transform& bind = rig->bones[rig->partBones[p]].bind;
         part.setBind(bind.pos, bind.quat);
-
-        int32 parent = -1;
-        for (const uint16 slot : path) // share the path entities between parts
-        {
-            int32 found = -1;
-            for (size_t n = 0; n < rig->nodes.size(); ++n)
-                if (rig->nodes[n].parent == parent && rig->nodes[n].slot == slot)
-                    found = int32(n);
-            if (found < 0)
-            {
-                found = int32(rig->nodes.size());
-                rig->nodes.push_back({ parent, slot });
-            }
-            parent = found;
-        }
-        rig->partNodes[p] = uint16(parent);
     }
-    if (rig->nodes.empty())
-        return nullptr;
 
     auto info = oc::make_shared<SceneAnimatorComponent::SpawnInfo>();
     info->rig = oc::move(rig);
@@ -1611,6 +1596,7 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         if (const AssetNode* n = unitNode->find("ShotKind"))      info->shotKind = (uint8)glm::clamp(n->asInt(), 0, 255);
         if (const AssetNode* n = unitNode->find("AlwaysDisplayHealth")) info->alwaysDisplayHealth = n->asBool();
         if (const AssetNode* n = unitNode->find("HeightLimit"))   info->heightLimit = n->asFloat(0, info->heightLimit);
+        if (const AssetNode* n = unitNode->find("Color"))         info->color = n->asVec3(info->color);
         typeBits |= uint16(1 << EComponentID_GameUnit);
         tmpl.spawnInfos.emplace_back(oc::move(info));
     }
@@ -1640,10 +1626,9 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         tmpl.spawnInfos.emplace_back(oc::move(info));
     }
 
-    // Cosmetic, so not headless. Scene is bit 0, so its SpawnInfo is spawnInfos[0].
+    // Render nodes, so not headless.
     if (const AssetNode* partsNode = findComponentNode(node, "SceneAnimator"); partsNode && !m_headless)
-        if (oc::shared_ptr<SceneAnimatorComponent::SpawnInfo> info = buildSceneAnimatorSpawnInfo(*partsNode,
-                (typeBits & (1 << EComponentID_Scene)) ? static_cast<const SceneComponent::SpawnInfo*>(tmpl.spawnInfos[0].get()) : nullptr, tmpl.displayName))
+        if (oc::shared_ptr<SceneAnimatorComponent::SpawnInfo> info = buildSceneAnimatorSpawnInfo(*partsNode, tmpl.displayName))
         {
             typeBits |= uint16(1 << EComponentID_SceneAnimator);
             tmpl.spawnInfos.emplace_back(oc::move(info));

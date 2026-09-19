@@ -127,6 +127,8 @@ void AnimatorComponent::update(Entity& entity, Renderer& renderer, float deltaSe
 {
     if (!enabled || !built)
         return;
+    //ProfileScope profileScope("AnimatorComponent::update", EProfileCategory::Entity);
+
     if (hasStateMachine)
     {
         stateMachine.update(deltaSeconds); // fires transitions + sets the blend axis (does not tick)

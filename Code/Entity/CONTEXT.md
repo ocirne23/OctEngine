@@ -159,7 +159,8 @@ through `spawnTemplate` (`getCullMode`).
   nodes inflated; state stored last, benign race like `treeAllocSize`): measured once from the first
   spawned tree (`gatherTreeCullBounds` composes the authored local transforms — child render nodes sit
   in parent-local space at spawn), then placed by the root's world transform every visit. They are
-  the REST pose: a SceneAnimator swing is not added. `refreshTreeCullBounds` re-measures (the
+  the REST pose: a SceneAnimator swing is not added. **SceneAnimator BONES count as render nodes
+  here** (`SceneAnimatorComponent::addRestBounds`). `refreshTreeCullBounds` re-measures (the
   RespawnEntity change calls it after the child splice).
 * An entity WITH an entry always culls itself, also under a RootOnly ancestor (a PerEntity entity
   reparented in). An entity with no entry and no covering root renders unculled.
@@ -687,10 +688,10 @@ renderer state.** It fires, for each side:
 
 | Component | Notes |
 |---|---|
-| `SceneComponent` | Children. **The list is mutated ONLY through `addChild` / `removeChild` / `replaceChild` / `adoptChildren`** (they invalidate SceneAnimator part pointers — see below). |
+| `SceneComponent` | Children. The list is mutated through `addChild` / `removeChild` / `replaceChild` / `adoptChildren` (plain mutators: the one place to hook a future "children changed"); `spawn` appends directly. |
 | `RenderComponent` | RenderNode + local transform, static or skinned, plus `Color`. `place` sets the node transform; the spatial refresh and the culled submit are `Entity::updateSelf`'s (see CullMode). |
 | `AnimatorComponent` | AnimationPlayer + AnimStateMachine from `.apl`; gameplay through `stateMachine.setFloat/Bool/Trigger`, clip events through `onEvent`. Skinned meshes only. |
-| `SceneAnimatorComponent` | Procedural animation of rigid CHILD ENTITIES. Below. |
+| `SceneAnimatorComponent` | A rigid-part model as BONES inside one entity (transform + RenderNode each) + its procedural animation. Below. |
 | `ScriptComponent` | See [`Code/Script/CONTEXT.md`](../Script/CONTEXT.md). |
 | `PhysicsComponent` | See [`Code/Physics/CONTEXT.md`](../Physics/CONTEXT.md). |
 | `AudioComponent` | See [`Code/Audio/CONTEXT.md`](../Audio/CONTEXT.md). |
@@ -702,69 +703,80 @@ renderer state.** It fires, for each side:
 
 ## `SceneAnimatorComponent` (ID 12)
 
-Procedural animation of a prefab's rigid CHILD ENTITIES — the box-limb character. The math is
-Animation's `Animation:Procedural` (see [`Code/Animation/CONTEXT.md`](../Animation/CONTEXT.md)); this
-component binds it to the tree. **It shares nothing with `AnimatorComponent`**: no skeleton, no
-clips, no `.apl`, no string parameters. No fixed caps: the per-instance data is two vectors sized at
-spawn (the layer states and the cached node pointers), never resized after.
+A rigid-part model INSIDE ONE ENTITY — the box-limb character — and its procedural animation. The
+math is Animation's `Animation:Procedural` (see
+[`Code/Animation/CONTEXT.md`](../Animation/CONTEXT.md)). **It shares nothing with
+`AnimatorComponent`**: no skeleton, no clips, no `.apl`, no string parameters.
+
+**A BONE is what an entity with only a transform and a RenderComponent would be, minus the
+entity**: `Bone { Transform local; Transform world; RenderNode node; }` in the component's `bones`
+vector (one allocation, sized at spawn). No entity allocation, no spatial entry, no visit, no child
+list, no name — CubeGuy is 1 entity, not 7 (a unit: 2, not 8). Bones can nest (`parent`, parent
+before child); a bone with no `Component Render` is a pure joint. The limbs were full child
+entities before; that design, its cached child pointers and `SceneComponent::childrenChanged`
+are gone.
 
 **The design rule is MINIMUM MUTATION:**
 
 * A tick that does not change the pose (`advanceParts` returns false — a unit that stands still)
-  **touches no child at all**: no bind, no evaluation, no write.
-* Only MOVED parts are in the rig. CubeGuy's Head and Body are never read or written.
-* A part gets `rot` only, `pos` only, or both — whatever its tracks move. `scale` is never written.
+  **writes no bone**: no evaluation, no write.
+* A moved part gets `local.quat` only, `local.pos` only, or both — whatever its tracks move.
+* **`place(renderer, world, passMask)`** is the placement tail of `Entity::updateSelf` (every visit,
+  frozen or not, right after the entity's own render submit): when NEITHER a bone's local changed
+  (`placeDirty`) NOR the entity's world transform (`placedWorld`), it composes nothing and only
+  submits the nodes (`renderNode`, lock-free); else one compose chain per bone + `setTransform`.
+  `passMask` 0 = culled: nothing is submitted.
 * **The walk drives itself**: the component measures the planar (XZ) distance its OWN entity moved
   since the last tick, so no script or gameplay code sets a speed. It runs AFTER
   `PhysicsComponent::update` in `updateSelf`, so the distance has this frame's pose. The distance is
   in the parent's space — the world for a root entity, which a unit is; **an animator on a child
   that only moves with its parent sees no distance.**
 * Catch-up ticks (SIM LOD) stay correct: the distance covers the same span as the delta.
+* **A MODEL CHILD is driven by its parent**: `drive(metres, deltaSeconds)` (a parent → child
+  write, before the child's visit) switches the animator to driven mode — it stops measuring itself,
+  and on its own visit it consumes and zeroes the fed distance AND the fed delta.
+  `GameUnitComponent::tickModel` is the user, once per unit tick, also at 0 m (a standing unit's
+  swing still has to fade out).
+* **SIM LOD.** A driven animator ticks ONLY on a frame with a feed, with the PARENT's delta
+  (catch-up included), so it follows the unit's cadence exactly. This is load-bearing: the model
+  child is covered by the unit's RootOnly entry, has no entry of its own, and the World therefore
+  hands it the full frame delta every frame (`alwaysVisited`) — its own delta is not a schedule.
+  A SELF-driven animator (an entity with its own entry) is a following sim kind under the
+  "Follows: animators" tweak, like `AnimatorComponent`. `place()` is placement, not simulation: it
+  runs every visit, and does nothing but submit while no pose and no transform changes.
+* **`Stride` / `FullSpeed` are in the animator entity's LOCAL units** (the distance is divided by
+  `entity.scale`), so one model prefab keeps its gait at every reference-site `Scale` — CubeGuy at
+  0.25 walks `Stride 6` = 1.5 m per cycle, the Titan's at 1.12 walks 6.7 m.
 
-**`SceneAnimRig`** (shared per template, in the SpawnInfo): the `SceneAnimation` plus the path
-data: `nodes` — only the entities on a path to a moved part, parent before child, each a
-(parent node, child slot) pair — and `partNodes` (the node of each part).
-`World::buildSceneAnimatorSpawnInfo` finds each part by entity NAME (DFS, first match) in the
-template's Scene spawn info, and takes the bind from the authored local transform. Parent → child
-writes before the children are emitted, so it is safe in the pass.
+**`SceneAnimRig`** (shared per template, in the SpawnInfo): `bones` (name, parent, authored bind,
+and the bone's render recipe — a plain `RenderComponent::SpawnInfo` from
+`World::buildRenderSpawnInfo`, so a bone authors `Component Render` exactly like an entity: container,
+`Node`, local `Position`, `Color`; static nodes only), the `SceneAnimation`, and `partBones` (the bone
+of each moved part, matched by NAME; an unknown name is a warning and that track does nothing).
 
-**The component HOLDS direct entity pointers** (`nodes`, an `oc::vector<Entity*>` with one entry per
-rig node, sized at spawn; a part is `nodes[rig->partNodes[i]]`), so a pose-changing tick is one
-pointer per part, with no `SceneComponent` lookup:
+**CULLING is the entity's.** The bones ride the entity's pass mask. `CullMode RootOnly` measures
+them into the template's tree bounds (`addRestBounds`, called from `gatherTreeCullBounds`; the REST
+pose, a swing is not added) and gives the entry the Render layer. **A bone model on a `PerEntity`
+entity with no RenderComponent of its own has a point entry on the Entity layer only: it is never
+culled and gameplay queries on the Render layer do not find it — author `RootOnly`, or put it under
+a RootOnly root** (the unit prefabs).
 
-* `bound == false` (the spawn state) → the next pose-changing tick runs `bind()`: it walks the
-  slot paths once and fills `nodes` in place — no scratch (null = the slot does not exist; that
-  part stays still).
-* **Every mutation of a `SceneComponent::children` list drops the cache.** The list is public to
-  READ, but it is MUTATED ONLY through `SceneComponent::addChild` / `removeChild` / `replaceChild` /
-  `adoptChildren` — each ends in the private `childrenChanged()`, which walks from the list's
-  entity UP the parent chain and calls `unbind()` on every SceneAnimatorComponent it meets (a part
-  path can run through any ancestor's descendants). The callers: `detachFromParent` (delete,
-  reparent-away), `Entity::reparentEntity` (arrival), and the RespawnEntity change in World (child
-  splice + in-place replace). **A new mutation site must go through these calls — a direct
-  `children.erase` leaves a dangling part pointer.** `SceneComponent::spawn` alone appends
-  directly: every animator of a tree still in its spawn is unbound.
-* A part cannot die while bound: its parent's list holds a reference, and leaving the list is a
-  mutation. `removeChild` / `replaceChild` notify BEFORE they drop the reference.
-* All these mutations are main-thread and outside the entity pass (script reparent / destroy are
-  deferred `EntityChange`s), so `bound` needs no atomics. A whole-tree teardown (the parallel
-  `releaseBatch`) never calls them: the animator dies with its tree and never reads `parts` again.
-* The paths are by SLOT, not by name: after a mutation that shifts the slots of a live instance
-  (a deleted sibling in front of a limb), the next bind takes whatever entity now sits in the slot.
-
-* **Not headless** (cosmetic), and **no script surface** — nothing registers bit 12 with the DSL
+* `GameUnitComponent`'s `tintSubtree` colours the bones too (it reads `bones` + the rig's render
+  recipes).
+* **Not headless** (render nodes), and **no script surface** — nothing registers bit 12 with the DSL
   bindings, so no script can require it and `syncScriptData` needs no slot branch for it.
 * Gameplay C++: `findLayer(name)` + `setLayerWeight(layer, w)` overrides a layer's weight; `< 0`
   hands it back.
 * The Entity Editor has no section for it; `commitRespawn` carries the authored recipe over as it is.
   The recipe IS the serialization: the SpawnInfo keeps the authored `AssetNode`.
-* **Known hazard:** `savePrefab` of a LIVE, walking instance writes the parts' current `rot` — the
-  pose is baked into the `.pre`. An open Entity Editor document is frozen and does not tick, so
-  saves from there are clean.
+  So a save never bakes a live pose (the old child-entity hazard is gone) — and **the bones are not
+  editable in the Entity Editor**: they are not entities. Edit the `.pre` text.
 
 Authoring (`Component SceneAnimator`, angles in degrees, phases in 0..1 cycles):
 
 ```
+Bone <name>                                   Position / Rotation / Scale like an entity;
+    Component Render ...                      optional; nested `Bone`s are its children
 Layer <name>
     Stride <m per cycle>  FullSpeed <m/s>     stride layer: phase by distance, weight by speed
     Duration <sec per cycle>  Weight <0..1>   timed layer (no Stride)
@@ -839,7 +851,21 @@ it overwrote the push entirely — a launch / snap-back oscillation.
   for `1 / hurtFlashRate` seconds (CAS on a timestamp — a lone hit unit always flashes, a swarm
   in a field shows random flashes across it). **The shield GLOW is not here:** it is the Force
   system's bubble light (see [`Code/Force/CONTEXT.md`](../Force/CONTEXT.md)) — a collapsed
-  shield has no bubble and so no light, and a merged crowd is one light.
+  shield has no bubble and so no light, and a merged crowd is one light. **The MODEL**
+  (`tickModel`, right after the hurt light, every role): the unit's body is a CHILD — the first
+  child with a `SceneAnimatorComponent`, a shared model prefab (`Debug/CubeGuy.pre`). The collider
+  has `LockRotation` and the root's `rot` is the physics pose, so the FACING goes on the model: a
+  yaw about Y that turns the model's +X to the heading, at 12 rad/s, only above 0.25 m/s (a slower
+  move is a shove, not a heading). The same distance feeds the model's walk
+  (`drive` — a child does not move in its parent's space; the feed carries this tick's delta too,
+  so the model follows the unit's SIM LOD cadence). Both come from the entity
+  POSITION delta, never from the sim, so a replicated unit on a client turns and walks too. A unit
+  that stands still writes nothing. The model's authored rotation is replaced by the yaw.
+  **COLOUR:** `Component GameUnit` `Color r g b` is the unit's colour on EVERY render node of its
+  subtree (the shared model has none): `spawn` applies it (Scene, bit 0, has spawned the model by
+  then; `createSolidColorMaterial` is spawn-mutex safe on workers) and `applyTeamTint` mixes the
+  friendly green onto it, over the whole subtree (`tintSubtree`). With no `Color`, each node
+  keeps its own authored Render `Color`, as before.
 * **`GameStructureComponent`** — team, health, blueprint, invulnerable, meleeRadius, its bake-tap
   territory damage, atomic `damage()` / `addLoad()` intake, the three float stores (the game's cable
   transport moves whole cells in and out of them at its tick boundary — see
@@ -863,7 +889,14 @@ every instance, **so replicated units need no type on the wire**), then `Team`, 
 nearest enemy unit or player capsule first, for `AttackDamage` / `PlayerDamage`, else the bitten
 structure for `AttackDamage` — each reported as a `HitRecord` for the game's visual),
 `EmitterDrain`, `Ranged`, `StandoffRange`, `FireInterval`, `ShotKind`, `AlwaysDisplayHealth`,
-`HeightLimit`.
+`HeightLimit`, `Color`.
+
+**A unit prefab's shape:** root = `CullMode RootOnly` + Physics + Network + GameUnit (+ Force), and
+`Component Scene` with ONE `Prefab CubeGuy` child that carries the reference-site `Position` /
+`Scale` (1.38 × / 0.56 × the collider radius: the model is TWICE as tall as the sphere, feet at its
+bottom — visual only, the collider and every gameplay radius stay the sphere). **The root needs `RootOnly`**: it has no render node of its own, and gameplay queries run
+on the Render layer — RootOnly registers the root over the subtree's render bounds, so melee,
+turrets and shells still find the unit. See `Entities/Game/enemyGrunt.pre`.
 
 `ShotKind` (ranged) is what the game does per shot: **0** the direct `enemyShot`, **1** the splash
 `enemyLob`, **2** spawns a loose Swarm body beside the unit.

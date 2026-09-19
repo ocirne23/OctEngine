@@ -3,12 +3,11 @@
 # BAKED pressure field, see enemyGrunt.pre), retargets twice as often; slips through field gaps
 # on speed and picks at whatever is unguarded.
 Prefab gameEnemyRunner
-	Component Render
-		ObjectContainer baseshapes
-		Node Cube
-		Type StaticMesh
-		Color 1 0.25 0.5
-		Scale 0.35 0.5 0.35
+	CullMode RootOnly
+	Component Scene
+		Prefab CubeGuy        # the model - see enemyGrunt.pre
+			Position 0 0.483 0
+			Scale 0.196
 	Component Physics
 		Body Dynamic
 		Shape Sphere
@@ -20,6 +19,7 @@ Prefab gameEnemyRunner
 	Component Network
 	Component GameUnit
 		ShortName RUN
+		Color 1 0.25 0.5
 		Team 1
 		HealthMax 30
 		EnergyMax 0

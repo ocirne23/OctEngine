@@ -5,12 +5,11 @@
 # bake is off), and it still strains emitters (EmitterDrain). Steers toward the nearest structure
 # and gnaws it in attack range. ContactEvents feed projectile hit damage.
 Prefab gameEnemyGrunt
-	Component Render
-		ObjectContainer baseshapes
-		Node Cube
-		Type StaticMesh
-		Color 1 0.4 0.15
-		Scale 0.5 0.8 0.5
+	CullMode RootOnly         # one spatial entry for the body parts; it is also what gameplay queries find
+	Component Scene
+		Prefab CubeGuy        # the model: GameUnit turns it to the heading and feeds its walk
+			Position 0 0.69 0
+			Scale 0.28
 	Component Physics
 		Body Dynamic
 		Shape Sphere
@@ -22,6 +21,7 @@ Prefab gameEnemyGrunt
 	Component Network
 	Component GameUnit
 		ShortName GRNT
+		Color 1 0.4 0.15
 		Team 1
 		HealthMax 60
 		EnergyMax 0

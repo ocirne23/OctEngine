@@ -92,6 +92,8 @@ static void gatherTreeCullBounds(Entity* entity, const Transform& toRoot, Sphere
             any = true;
         }
     }
+    if (const SceneAnimatorComponent* boneModel = getComponent<SceneAnimatorComponent>(entity))
+        boneModel->addRestBounds(toRoot, bounds, any);
     if (const SceneComponent* sc = getComponent<SceneComponent>(entity))
         for (const EntityPtr& child : sc->children)
             gatherTreeCullBounds(child.get(), composeTransform(toRoot, Transform(child->pos, child->scale, child->rot)), bounds, any);
@@ -151,6 +153,7 @@ static uint32 spatialRenderPassMask(SpatialHandle handle)
 
 void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform& parentWorld, uint32 cullPassMask, oc::vector<EntityUpdateNode>& outChildren)
 {
+    //ProfileScope profileScope("Entity::updateSelf", EProfileCategory::Entity);
     const ComponentOffsets offsets = getComponentOffsets(typeBits);
 
     SceneComponent* sc = getComponent<SceneComponent>(this, offsets);
@@ -248,6 +251,8 @@ void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform&
         passMask = cullPassMask;
     if (render && passMask != 0)
         renderer.renderNode(render->node, passMask); // lock-free (the parallel entity pass)
+    if (SceneAnimatorComponent* boneModel = getComponent<SceneAnimatorComponent>(this, offsets))
+        boneModel->place(renderer, world, passMask); // its bones ride this entity's pass mask
 
     if (AudioComponent* audio = getComponent<AudioComponent>(this, offsets))
         audio->update(*this, world); // playing follow-sounds track the entity

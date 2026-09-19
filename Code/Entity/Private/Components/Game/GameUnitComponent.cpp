@@ -72,6 +72,36 @@ static float unitRand01(uint32& state) // per-unit stream, independent of schedu
     return float(state >> 8) * (1.0f / 16777216.0f);
 }
 
+// Every render node of the subtree. unitColor (the prefab's GameUnit Color) wins over a node's own
+// authored colour; the friendly tint pulls toward green, not to a flat colour, so the unit types stay
+// told apart.
+static void tintSubtree(Entity* node, const glm::vec3* unitColor, bool friendly)
+{
+    const auto tint = [&](RenderNode& renderNode, const RenderComponent::SpawnInfo* info)
+    {
+        if (!renderNode.isValid())
+            return;
+        glm::vec3 color(1.0f);
+        if (unitColor)
+            color = *unitColor;
+        else if (info && info->color.x >= 0.0f)
+            color = info->color;
+        constexpr glm::vec3 c_friendlyGreen(0.3f, 1.0f, 0.4f); // the HUD's own-team bar colour
+        constexpr float c_tintStrength = 0.55f;
+        if (friendly)
+            color = glm::mix(color, c_friendlyGreen, c_tintStrength);
+        renderNode.setMaterialOverride(Globals::rendererVK.createSolidColorMaterial(color));
+    };
+    if (RenderComponent* rc = getComponent<RenderComponent>(node))
+        tint(rc->node, getRenderSpawnInfo(node));
+    if (SceneAnimatorComponent* boneModel = getComponent<SceneAnimatorComponent>(node); boneModel && boneModel->rig)
+        for (size_t i = 0; i < boneModel->bones.size(); ++i)
+            tint(boneModel->bones[i].node, boneModel->rig->bones[i].render.get());
+    if (const SceneComponent* sc = getComponent<SceneComponent>(node))
+        for (const EntityPtr& child : sc->children)
+            tintSubtree(child.get(), unitColor, friendly);
+}
+
 void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Transform&)
 {
     puppet = info.puppet;
@@ -118,6 +148,8 @@ void GameUnitComponent::spawn(Entity& entity, const SpawnInfo& info, const Trans
         m_bodyTop = top * entity.scale;
     }
     m_lastHealth = health;
+    if (info.color.x >= 0.0f && Globals::rendererVK.isInitialized())
+        tintSubtree(&entity, &info.color, false); // Scene (bit 0) spawned the model before this component
 }
 
 // Hurt-flash area budget: world XZ bucketed into lightArea squares hashed to a slot table. Slot
@@ -172,9 +204,54 @@ void GameUnitComponent::tickHurtLight(const Entity& entity, float deltaSec)
         params.hurtLightIntensity * (0.5f + 0.5f * bodyRadius) * m_hurtGlow));
 }
 
+// The MODEL is the child with a SceneAnimatorComponent (a shared body prefab such as CubeGuy). The body
+// has LockRotation and the root's rot is the physics pose, so the facing goes on the model: a yaw about Y
+// that turns the model's +X to the heading. The walk is fed with the same distance, because a child does
+// not move in its parent's space. Off the POSITION delta, so a replicated unit on a client does it too.
+// A unit that stands still writes only the feed (two floats). Parent -> child writes: safe in the pass.
+void GameUnitComponent::tickModel(Entity& entity, float deltaSec)
+{
+    const SceneComponent* sc = getComponent<SceneComponent>(&entity);
+    if (!sc)
+        return;
+    const glm::vec2 here(entity.pos.x, entity.pos.z);
+    const glm::vec2 moved = m_hasModelPos ? here - m_modelLastPos : glm::vec2(0.0f);
+    m_modelLastPos = here;
+    m_hasModelPos = true;
+    const float dist = glm::length(moved);
+
+    Entity* model = nullptr;
+    SceneAnimatorComponent* walk = nullptr;
+    for (const EntityPtr& child : sc->children)
+        if ((walk = getComponent<SceneAnimatorComponent>(child.get())) != nullptr)
+        {
+            model = child.get();
+            break;
+        }
+    if (!model)
+        return;
+    // Every tick, also at 0 m: the model ticks ONLY on this feed, with this tick's (SIM LOD) delta.
+    walk->drive(dist, deltaSec);
+
+    constexpr float c_minFacingSpeed = 0.25f; // m/s: below it the move is a shove, not a heading
+    constexpr float c_turnRate = 12.0f;       // rad/s
+    if (dist < c_minFacingSpeed * deltaSec)
+        return;
+    constexpr float c_pi = 3.14159265f;
+    float turn = std::atan2(-moved.y, moved.x) - m_modelYaw;
+    turn -= 2.0f * c_pi * std::floor(turn / (2.0f * c_pi) + 0.5f); // shortest way round
+    const float step = c_turnRate * deltaSec;
+    turn = glm::clamp(turn, -step, step);
+    if (turn == 0.0f)
+        return;
+    m_modelYaw += turn;
+    model->rot = glm::angleAxis(m_modelYaw, glm::vec3(0.0f, 1.0f, 0.0f));
+}
+
 void GameUnitComponent::update(Entity& entity, float deltaSec)
 {
     tickHurtLight(entity, deltaSec);
+    tickModel(entity, deltaSec);
     if (Globals::networkManager.role() == ENetRole::Client)
         return;
     PhysicsComponent* pc = getComponent<PhysicsComponent>(&entity);
@@ -828,25 +905,8 @@ void GameUnitComponent::applyTeamTint(Entity& entity)
     if (unit->tintState == want || (!friendly && unit->tintState == 0))
         return; // an untouched non-friendly unit IS its authored colour
     unit->tintState = want;
-    // A tint toward green (not a flat colour) so the unit types stay told apart.
-    constexpr glm::vec3 c_friendlyGreen(0.3f, 1.0f, 0.4f); // the HUD's own-team bar colour
-    constexpr float c_tintStrength = 0.55f;
-    const auto tintNode = [&](Entity* node)
-    {
-        RenderComponent* rc = getComponent<RenderComponent>(node);
-        if (!rc || !rc->node.isValid())
-            return;
-        glm::vec3 color(1.0f);
-        if (const RenderComponent::SpawnInfo* info = getRenderSpawnInfo(node); info && info->color.x >= 0.0f)
-            color = info->color;
-        if (friendly)
-            color = glm::mix(color, c_friendlyGreen, c_tintStrength);
-        rc->node.setMaterialOverride(Globals::rendererVK.createSolidColorMaterial(color));
-    };
-    tintNode(&entity);
-    if (const SceneComponent* sc = getComponent<SceneComponent>(&entity))
-        for (const EntityPtr& child : sc->children)
-            tintNode(child.get());
+    const SpawnInfo* info = getGameUnitSpawnInfo(&entity);
+    tintSubtree(&entity, info && info->color.x >= 0.0f ? &info->color : nullptr, friendly);
 }
 
 void GameUnitComponent::kill(Entity& entity)
@@ -1011,4 +1071,5 @@ void writeGameUnitSpawnInfo(const GameUnitComponent::SpawnInfo& info, AssetNode&
     if (info.shotKind != d.shotKind)         out.set("ShotKind", oc::to_string((int)info.shotKind));
     if (info.alwaysDisplayHealth != d.alwaysDisplayHealth) out.set("AlwaysDisplayHealth", info.alwaysDisplayHealth);
     if (info.heightLimit != d.heightLimit)   out.set("HeightLimit", info.heightLimit);
+    if (info.color.x >= 0.0f)                out.set("Color", info.color);
 }

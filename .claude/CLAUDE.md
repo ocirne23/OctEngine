@@ -404,9 +404,11 @@ Network/Scene` children, plus the game components `Component GameUnit/GameStruct
 `Type StaticMesh|SkinnedMesh` (skinned adds a nested `Rig <name>`), plus `Position` / `Rotation` /
 `Scale`, and optionally `Color r g b` for the per-entity tint.
 
-`Component SceneAnimator` moves the prefab's rigid CHILD ENTITIES (a box-limb walk) procedurally, by
-entity name, with no `.anm` / `.apl` — the grammar is in
-[`Code/Entity/CONTEXT.md`](../Code/Entity/CONTEXT.md). `Component Animator` is for skinned meshes only.
+`Component SceneAnimator` is a rigid-part model inside ONE entity plus its procedural animation (a
+box-limb walk), with no `.anm` / `.apl`: `Bone <name>` blocks — a transform and an optional
+`Component Render`, authored like an entity but NOT one — and `Layer` blocks that move the bones by
+name. The grammar is in [`Code/Entity/CONTEXT.md`](../Code/Entity/CONTEXT.md); demo
+`Entities/Debug/CubeGuy.pre`. `Component Animator` is for skinned meshes only.
 
 Entity-level `Enabled false` authors the disabled state; `Global true` (**root only, never
 inherited**) makes the World visit it every frame regardless of the SIM LOD.

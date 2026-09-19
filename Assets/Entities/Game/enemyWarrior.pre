@@ -4,12 +4,11 @@
 # harder hits. The early-wave line unit once the shield-less horde stops cutting it. Bigger than
 # the grunt, yellow.
 Prefab gameEnemyWarrior
-	Component Render
-		ObjectContainer baseshapes
-		Node Cube
-		Type StaticMesh
-		Color 0.85 0.75 0.1
-		Scale 0.6 0.95 0.6
+	CullMode RootOnly
+	Component Scene
+		Prefab CubeGuy        # the model - see enemyGrunt.pre
+			Position 0 0.828 0
+			Scale 0.336
 	Component Physics
 		Body Dynamic
 		Shape Sphere
@@ -26,6 +25,7 @@ Prefab gameEnemyWarrior
 	Component Network
 	Component GameUnit
 		ShortName WARR
+		Color 0.85 0.75 0.1
 		HealthMax 80
 		EnergyMax 40
 		ShieldOutput 0.8

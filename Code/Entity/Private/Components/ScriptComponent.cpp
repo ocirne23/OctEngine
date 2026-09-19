@@ -332,6 +332,7 @@ void ScriptComponent::update(Entity& entity, float deltaSeconds)
     syncScriptDataLive(entity); // the module may have been recompiled under us since spawn
     if (!requirementsMet(entity))
         return;
+    //ProfileScope profileScope("ScriptComponent::update", EProfileCategory::Entity);
 
     // Late construction: an entity that didn't satisfy the //@@require set at spawn -- or whose script has
     // since dropped the requirement it was missing -- runs OnSpawn the first frame it qualifies. Without this

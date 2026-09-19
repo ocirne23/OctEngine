@@ -53,6 +53,7 @@ void NetworkComponent::update(Entity& entity, float deltaSeconds)
     // player keeps steering - input stays live, see updatePlayerControl which yields only on Forced)
     if (authority() == ENetAuthority::LocalOwner && !(net.targetFlags & (NetRecFlag_Forced | NetRecFlag_Arbitrated)))
         return;
+    //ProfileScope profileScope("NetworkComponent::update", EProfileCategory::Entity);
 
     net.timeSinceSnapshot += deltaSeconds;
     const NetSyncParams& params = Globals::networkManager.params();

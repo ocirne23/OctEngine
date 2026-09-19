@@ -2,12 +2,11 @@
 # strongest unit bubble in the game, crushing melee against structures and players, and an
 # emitter drain that blacks out a single emitter it leans on. Very slow. Near-black block.
 Prefab gameEnemyTitan
-	Component Render
-		ObjectContainer baseshapes
-		Node Cube
-		Type StaticMesh
-		Color 0.2 0.02 0.08
-		Scale 2 2.8 2
+	CullMode RootOnly
+	Component Scene
+		Prefab CubeGuy        # the model - see enemyGrunt.pre
+			Position 0 2.76 0
+			Scale 1.12
 	Component Physics
 		Body Dynamic
 		Shape Sphere
@@ -24,6 +23,7 @@ Prefab gameEnemyTitan
 	Component Network
 	Component GameUnit
 		ShortName TITAN
+		Color 0.2 0.02 0.08
 		HealthMax 2200
 		EnergyMax 450
 		ShieldOutput 1.3

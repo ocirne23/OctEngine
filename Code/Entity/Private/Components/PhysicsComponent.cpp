@@ -178,6 +178,7 @@ void PhysicsComponent::update(Entity& entity, const Transform& parentWorld)
 
     if (!enabled)
         return;
+    //ProfileScope profileScope("PhysicsComponent::update", EProfileCategory::Entity);
 
     if (bodyType == EPhysicsBodyType::Dynamic)
     {

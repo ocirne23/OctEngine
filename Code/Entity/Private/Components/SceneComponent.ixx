@@ -22,8 +22,8 @@ export struct SceneComponent
         oc::vector<ChildSpawnInfo> children;
     };
 
-    // READ freely; MUTATE ONLY through the calls below. Each one ends in childrenChanged(), which is what
-    // lets a SceneAnimatorComponent hold direct pointers to descendants. Main thread, outside the entity pass.
+    // READ freely; mutate through the calls below (the one place to hook a future "children changed").
+    // Main thread, outside the entity pass.
     oc::vector<EntityPtr> children;
 
     void addChild(EntityPtr child);                       // appends; does NOT set child->parent
@@ -34,9 +34,4 @@ export struct SceneComponent
     // treeCursor: children carve their slices from the tree's single spawn allocation (see Entity::create)
     void spawn(Entity& entity, const SpawnInfo& info, const Transform& base, uint8*& treeCursor);
 	void destroy(Entity& entity, const SpawnInfo& info);
-
-private:
-    // Drops the cached part pointers of every SceneAnimatorComponent on this entity and its ancestors (a
-    // part path can run through any of them).
-    void childrenChanged();
 };

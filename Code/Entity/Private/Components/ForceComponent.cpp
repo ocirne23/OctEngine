@@ -34,6 +34,8 @@ void ForceComponent::update(Entity& entity, const Transform& world)
 {
     if (!emitter.isValid())
         return;
+    //ProfileScope profileScope("ForceComponent::update", EProfileCategory::Entity);
+
     const glm::vec3 worldDir = world.quat * localDirection;
     glm::vec3 pos = world.pos + world.quat * (localOffset * world.scale);
     if (centered)

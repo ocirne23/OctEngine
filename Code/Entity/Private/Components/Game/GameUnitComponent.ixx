@@ -129,6 +129,7 @@ export struct GameUnitComponent
         uint8 shotKind = 0;           // 0 direct, 1 splash lob
         bool alwaysDisplayHealth = false;
         float heightLimit = 0.0f;     // 0 = params.heightLimit, > 0 = own ceiling, < 0 = NONE (flying)
+        glm::vec3 color{ -1.0f };     // x >= 0: the unit's colour on EVERY render node of its subtree (a shared model prefab has none)
     };
 
     uint32 team = 1;
@@ -232,6 +233,7 @@ private:
         bool inEnemyBubble = false; // stamped-radius signal - the shield-less fallback when the bake is off
     };
     void tickHurtLight(const Entity& entity, float deltaSec); // every role, before the client gate
+    void tickModel(Entity& entity, float deltaSec);           // every role too: works off the position delta
     void applyHeightLimit(Tick& t);
     bool applyDamageAndHeal(Tick& t); // false = the unit died this tick
     void resolveWalkTarget(Tick& t); // route, then the locked order, then the Nav fields, then the local search
@@ -253,6 +255,9 @@ private:
     void noteHurtTeam(uint32 sourceTeam) { m_hurtTeam = sourceTeam == UnknownTeam ? 0xFF : (uint8)glm::min(sourceTeam, 254u); }
     uint32 opposingTeamGuess() const;
     float m_bodyTop = 1.0f;     // the collider's top over the entity origin
+    glm::vec2 m_modelLastPos{ 0.0f }; // tickModel: the MODEL is the child with a SceneAnimatorComponent
+    float m_modelYaw = 0.0f;
+    bool m_hasModelPos = false;
     uint32 m_rng = 0;           // per-unit LCG, worker-safe
     float m_pressureTimer = 0.0f; // stalled time (displacement checkpoints)
     // ABSOLUTE sim time, not a countdown: a throttled tick's delta is clipped by "Max catch-up",
