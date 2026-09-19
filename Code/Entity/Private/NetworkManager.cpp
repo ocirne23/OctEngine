@@ -1179,8 +1179,7 @@ void NetworkManager::handleClaimMessage(NetPeerId peer, NetReader& reader)
                     Globals::physics.teleportBody(physics->body, pos, rot);
                     Globals::physics.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::SetLinearVelocity, linVel);
                     Globals::physics.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::SetAngularVelocity, angVel);
-                    physics->prevPos = physics->currPos = pos;
-                    physics->prevRot = physics->currRot = rot;
+                    physics->snapPose(*entity, pos, rot);
                 }
             }
             else
@@ -1824,9 +1823,7 @@ void NetworkManager::handleSnapshot(NetReader& reader)
                 Globals::physics.teleportBody(pc->body, pos, sanitizedRot);
                 Globals::physics.queueBodyCommand(pc->body, PhysicsWorld::EBodyCommand::SetLinearVelocity, glm::vec3(0.0f));
                 Globals::physics.queueBodyCommand(pc->body, PhysicsWorld::EBodyCommand::SetAngularVelocity, glm::vec3(0.0f));
-                pc->prevPos = pc->currPos = pos;
-                pc->prevRot = pc->currRot = sanitizedRot;
-                pc->lastStep = Globals::physics.getStepCount();
+                pc->snapPose(*entity, pos, sanitizedRot);
             }
             entity->pos = pos;
             entity->rot = sanitizedRot;

@@ -108,7 +108,7 @@ void GamePlayer::despawn()
 
 // Distance from the body center to the shape's lowest point, world units (grounds the jump
 // raycast). Same derivation as the testbed's InputControls::shapeBottomDistance.
-static float shapeBottomDistance(const Entity* entity, const PhysicsComponent& pc)
+static float shapeBottomDistance(const Entity* entity)
 {
     const PhysicsComponent::SpawnInfo* si = getPhysicsSpawnInfo(entity);
     float d = 1.0f;
@@ -120,7 +120,7 @@ static float shapeBottomDistance(const Entity* entity, const PhysicsComponent& p
         case EPhysicsShapeType::Capsule: d = si->shape.halfHeight + si->shape.radius; break;
         default: break;
         }
-    return d * pc.shapeScale;
+    return d * getPhysicsShapeScale(entity);
 }
 
 void GamePlayer::tickMovement(const glm::vec3& cameraForwardPlanar, float deltaSec)
@@ -201,7 +201,7 @@ void GamePlayer::tickMovement(const glm::vec3& cameraForwardPlanar, float deltaS
     const bool jumpDown = input.isKeyDown(SDL_Scancode::SDL_SCANCODE_SPACE);
     if (jumpDown && !m_jumpWasDown)
     {
-        const float bottom = shapeBottomDistance(m_entity.get(), *pc);
+        const float bottom = shapeBottomDistance(m_entity.get());
         const glm::vec3 pos = pc->body.getPosition();
         if (Globals::physics.castRayClosest(pos, glm::vec3(0.0f, -(bottom + 0.3f), 0.0f), PhysicsLayers::All, &pc->body).hit)
             vel.y = m_jumpSpeed;
@@ -306,8 +306,7 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
             vel.y = glm::min(vel.y, 0.0f);
             Globals::physics.teleportBody(pc->body, clamped, pc->body.getRotation());
             pc->body.setLinearVelocity(vel);
-            pc->prevPos = pc->currPos = clamped;
-            pc->lastStep = Globals::physics.getStepCount();
+            pc->snapPose(*m_entity, clamped);
         }
     }
 
@@ -320,9 +319,7 @@ void GamePlayer::tickShieldAndHealth(float deltaSec)
         const glm::vec3 spawnAt = m_respawnResolver ? m_respawnResolver(m_spawnPos) : m_spawnPos;
         Globals::physics.teleportBody(pc->body, spawnAt, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
         pc->body.setLinearVelocity(glm::vec3(0.0f));
-        pc->prevPos = pc->currPos = spawnAt;
-        pc->prevRot = pc->currRot = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
-        pc->lastStep = Globals::physics.getStepCount();
+        pc->snapPose(*m_entity, spawnAt, glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
         m_health = m_healthMax;
         m_energy = m_energyMax;
         m_materials = 0.0f; // death drops the carried construction stock
@@ -378,9 +375,7 @@ void GamePlayer::teleport(const glm::vec3& pos)
     const glm::quat rot = pc->body.getRotation(); // the capsule keeps its upright pose
     Globals::physics.teleportBody(pc->body, pos, rot);
     pc->body.setLinearVelocity(glm::vec3(0.0f));
-    pc->prevPos = pc->currPos = pos;
-    pc->prevRot = pc->currRot = rot;
-    pc->lastStep = Globals::physics.getStepCount();
+    pc->snapPose(*m_entity, pos, rot);
     m_hasMoveTarget = false;
 }
 
@@ -389,7 +384,7 @@ glm::vec3 GamePlayer::interpolatedPos() const
     const PhysicsComponent* pc = m_entity ? getComponent<PhysicsComponent>(m_entity.get()) : nullptr;
     if (!pc || !pc->body.isValid())
         return m_spawnPos;
-    return glm::mix(pc->prevPos, pc->currPos, Globals::physics.getInterpolationAlpha());
+    return PhysicsComponent::getShownPosition(*m_entity);
 }
 
 glm::vec3 GamePlayer::bodyPos() const

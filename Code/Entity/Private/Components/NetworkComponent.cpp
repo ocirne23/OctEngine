@@ -77,9 +77,7 @@ void NetworkComponent::update(Entity& entity, float deltaSeconds)
             physicsWorld.teleportBody(physics->body, net.targetPos, net.targetRot);
             physicsWorld.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::SetLinearVelocity, net.targetLinVel);
             physicsWorld.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::SetAngularVelocity, net.targetAngVel);
-            physics->prevPos = physics->currPos = net.targetPos; // see the snap-path comment below
-            physics->prevRot = physics->currRot = net.targetRot;
-            physics->lastStep = Globals::physics.getStepCount(); // see the playback path
+            physics->snapPose(entity, net.targetPos, net.targetRot); // see the snap-path comment below
             if (newSnapshot)
                 net.lastAppliedTick = net.serverTick;
             return;
@@ -127,9 +125,7 @@ void NetworkComponent::update(Entity& entity, float deltaSeconds)
                 physicsWorld.teleportBody(physics->body, net.targetPos, net.targetRot);
                 physicsWorld.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::SetLinearVelocity, glm::vec3(0.0f));
                 physicsWorld.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::SetAngularVelocity, glm::vec3(0.0f));
-                physics->prevPos = physics->currPos = net.targetPos;
-                physics->prevRot = physics->currRot = net.targetRot;
-                physics->lastStep = Globals::physics.getStepCount(); // see the playback path
+                physics->snapPose(entity, net.targetPos, net.targetRot);
             }
             physicsWorld.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::SetAwake, glm::vec3(0.0f));
             return;
@@ -170,12 +166,9 @@ void NetworkComponent::update(Entity& entity, float deltaSeconds)
                 physicsWorld.teleportBody(physics->body, pos, rot);
                 physicsWorld.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::SetLinearVelocity, glm::mix(r0.linVel, r1.linVel, alpha));
                 physicsWorld.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::SetAngularVelocity, glm::mix(r0.angVel, r1.angVel, alpha));
-                physics->prevPos = physics->currPos = pos;
-                physics->prevRot = physics->currRot = rot;
-                // Claim the step: PhysicsComponent::update runs next and would otherwise overwrite
-                // curr with body.getPosition(), which still holds LAST frame's teleport (they apply
-                // at the next physics.update) - rendering backward on stepping frames only.
-                physics->lastStep = Globals::physics.getStepCount();
+                // PhysicsComponent::update runs next and would otherwise show body.getPosition(),
+                // which still holds LAST frame's teleport (they apply at the next physics.update).
+                physics->snapPose(entity, pos, rot);
                 if (newSnapshot)
                     net.lastAppliedTick = net.serverTick;
                 return;
@@ -198,12 +191,10 @@ void NetworkComponent::update(Entity& entity, float deltaSeconds)
             physicsWorld.teleportBody(physics->body, target, net.targetRot);
             physicsWorld.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::SetLinearVelocity, net.targetLinVel);
             physicsWorld.queueBodyCommand(physics->body, PhysicsWorld::EBodyCommand::SetAngularVelocity, net.targetAngVel);
-            // The teleport applies at the NEXT physics.update and prev/curr only refresh on step
-            // boundaries - stomping them makes PhysicsComponent::update (right after this, same
-            // entity) show the corrected pose this frame instead of lerping from stale state.
-            physics->prevPos = physics->currPos = target;
-            physics->prevRot = physics->currRot = net.targetRot;
-            physics->lastStep = Globals::physics.getStepCount(); // see the playback path
+            // The teleport applies at the NEXT physics.update - the snap makes
+            // PhysicsComponent::update (right after this, same entity) show the corrected pose
+            // this frame instead of the stale body pose.
+            physics->snapPose(entity, target, net.targetRot);
             if (newSnapshot)
                 net.lastAppliedTick = net.serverTick;
             return;

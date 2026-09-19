@@ -211,10 +211,9 @@ void GameUnitComponent::applyHeightLimit(Tick& t)
     Globals::physics.teleportBody(t.pc.body, clamped, t.pc.body.getRotation());
     t.vel.y = glm::min(t.vel.y, 0.0f);
     Globals::physics.queueBodyCommand(t.pc.body, PhysicsWorld::EBodyCommand::SetLinearVelocity, t.vel);
-    // Teleport contract: stomp the interpolation poses and claim the step, or PhysicsComponent::update
-    // mixes toward the pre-teleport pose on stepping frames.
-    t.pc.prevPos = t.pc.currPos = clamped;
-    t.pc.lastStep = Globals::physics.getStepCount();
+    // Teleport contract: snap the shown pose, or PhysicsComponent::update shows the pre-teleport
+    // body pose until the queued teleport lands.
+    t.pc.snapPose(t.entity, clamped);
 }
 
 bool GameUnitComponent::applyDamageAndHeal(Tick& t)
@@ -968,11 +967,10 @@ bool GameUnitComponent::updateFar(Entity& entity, float deltaSec)
             return false;
     }
 
-    // Teleport contract: body pose + prev/curr stomp + step claim, entity position, spatial entry.
+    // Teleport contract: body pose + pose snap, entity position, spatial entry.
     const glm::vec3 newPos(next.x, pos.y, next.y);
     Globals::physics.teleportBody(pc->body, newPos, pc->body.getRotation());
-    pc->prevPos = pc->currPos = newPos;
-    pc->lastStep = Globals::physics.getStepCount();
+    pc->snapPose(entity, newPos);
     entity.pos = newPos; // a unit is a root: local == world
     if (entity.spatialEntry.isValid())
     {

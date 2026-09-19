@@ -18,16 +18,12 @@ void PhysicsComponent::spawn(Entity& entity, const SpawnInfo& info, const Transf
     enabled = info.enabled;
     bodyType = info.bodyType;
     lockRotation = info.lockRotation;
-    lastStep = buoyancyStep = Globals::physics.getStepCount();
+    buoyancyStep = uint16(Globals::physics.getStepCount());
 
     // `base` is parent-local for a prefab child; the ancestor chain is already positioned by now.
     Transform world = base;
     for (const Entity* p = entity.parent; p; p = p->parent)
         world = composeTransform(Transform(p->pos, p->scale, p->rot), world);
-
-    shapeScale = world.scale;
-    prevPos = currPos = world.pos;
-    prevRot = currRot = world.quat;
 
     PhysicsBodyDesc desc;
     desc.type = info.bodyType;
@@ -39,19 +35,14 @@ void PhysicsComponent::spawn(Entity& entity, const SpawnInfo& info, const Transf
     if (info.bodyType == EPhysicsBodyType::Dynamic && !info.shape.isSensor && info.shape.density > 0.0f && body.isValid())
         buoyancyVolume = body.getMass() / info.shape.density;
 
-    if (info.bodyType == EPhysicsBodyType::Static)
-    {
-        occluderData = info.occluders;
-        if (occluderData)
-            occluder = SpatialOccluder(Globals::occlusionBuffer.addOccluder(occluderData, world));
-    }
+    if (info.bodyType == EPhysicsBodyType::Static && info.occluders)
+        occluder = SpatialOccluder(Globals::occlusionBuffer.addOccluder(info.occluders, world));
 }
 
 void PhysicsComponent::destroy(Entity& entity, const SpawnInfo& info)
 {
     body.destroy(); // removes the collider from the box3d world (shapes die with the body)
     occluder.reset();
-    occluderData.reset();
 }
 
 void PhysicsComponent::suspendBody()
@@ -99,8 +90,7 @@ void PhysicsComponent::unpark(Entity& entity, const glm::vec3& velocity)
         {
             const glm::vec3 lifted = pos + glm::vec3(0.0f, 2.0f, 0.0f);
             Globals::physics.teleportBody(body, lifted, body.getRotation());
-            prevPos = currPos = lifted;
-            lastStep = Globals::physics.getStepCount();
+            snapPose(entity, lifted);
         }
     }
     Globals::physics.queueBodyCommand(body, PhysicsWorld::EBodyCommand::SetEnabled, glm::vec3(1.0f));
@@ -178,9 +168,12 @@ void PhysicsComponent::update(Entity& entity, const Transform& parentWorld)
     {
         body.setEnabled(true);
         suspended = false;
-        if (occluderData)
-            occluder = SpatialOccluder(Globals::occlusionBuffer.addOccluder(occluderData,
-                Transform(body.getPosition(), shapeScale, body.getRotation())));
+        // Re-bake the occluder at the body's pose. The triangles live in the spawn recipe and the
+        // scale is the composed world scale, the same value spawn() baked into the shape.
+        const SpawnInfo* info = bodyType == EPhysicsBodyType::Static ? getPhysicsSpawnInfo(&entity) : nullptr;
+        if (info && info->occluders)
+            occluder = SpatialOccluder(Globals::occlusionBuffer.addOccluder(info->occluders,
+                Transform(body.getPosition(), parentWorld.scale * entity.scale, body.getRotation())));
     }
 
     if (!enabled)
@@ -188,24 +181,31 @@ void PhysicsComponent::update(Entity& entity, const Transform& parentWorld)
 
     if (bodyType == EPhysicsBodyType::Dynamic)
     {
-        // Track the pose per physics step so rendering can interpolate between fixed steps.
-        const uint32 stepCount = Globals::physics.getStepCount();
-        if (stepCount != lastStep)
+        const uint16 stepCount = uint16(Globals::physics.getStepCount()); // the stamp is modulo 65536
+        if (poseHeld)
+            poseHeld = false; // a snap wrote the entity pose; the queued teleport may not have moved the body yet
+        else
         {
-            prevPos = currPos;
-            prevRot = currRot;
-            currPos = body.getPosition();
-            currRot = body.getRotation();
-            lastStep = stepCount;
+            // THE POSE BETWEEN TWO STEPS, with no stored pose: box3d integrates x1 = x0 + v1 * h,
+            // so the pose `backSec` before the body pose is the body pose moved back along its
+            // velocity. Not exact with sub-steps and contact correction (free fall at 20 Hz: about
+            // 9 mm per step), and a velocity written between two steps moves the shown pose at once.
+            const float backSec = (1.0f - Globals::physics.getInterpolationAlpha()) / float(Globals::physics.getStepHz());
+            const glm::vec3 pos = body.getPosition() - body.getLinearVelocity() * backSec;
+            glm::quat rot = body.getRotation();
+            if (!lockRotation)
+            {
+                const glm::vec3 angVel = body.getAngularVelocity();
+                const float speed = glm::length(angVel);
+                if (speed * backSec > 1e-5f)
+                    rot = glm::normalize(glm::angleAxis(-speed * backSec, angVel / speed) * rot);
+            }
+            const Transform local = parentWorld.inverse() * Transform(pos, parentWorld.scale * entity.scale, rot);
+            entity.pos = local.pos;
+            if (!lockRotation)
+                entity.rot = local.quat; // a locked body's rot is frozen at spawn - writing it back
+                                         // would stomp script-driven facing (see the player capsule)
         }
-        const float alpha = Globals::physics.getInterpolationAlpha();
-        const glm::vec3 pos = glm::mix(prevPos, currPos, alpha);
-        const glm::quat rot = glm::slerp(prevRot, currRot, alpha);
-        const Transform local = parentWorld.inverse() * Transform(pos, parentWorld.scale * entity.scale, rot);
-        entity.pos = local.pos;
-        if (!lockRotation)
-            entity.rot = local.quat; // a locked body's rot is frozen at spawn - writing it back
-                                     // would stomp script-driven facing (see the player capsule)
 
         // BUOYANCY, on a frame that did not step (the step frame is the busy one) unless every
         // frame steps: the queued force lands at the next drain and box3d holds it until the step
@@ -216,7 +216,7 @@ void PhysicsComponent::update(Entity& entity, const Transform& parentWorld)
         // the sim-time impulse comes out the same at any frame rate.
         if (buoyancyVolume > 0.0f)
         {
-            const uint32 owed = stepCount - buoyancyStep;
+            const uint16 owed = uint16(stepCount - buoyancyStep);
             if (!buoyant || owed > c_maxBuoyancyCatchUpSteps)
                 buoyancyStep = stepCount; // gated off by the tier, or back from a gap: no catch-up
             else if (owed != 0
@@ -228,6 +228,36 @@ void PhysicsComponent::update(Entity& entity, const Transform& parentWorld)
             }
         }
     }
+}
+
+static Transform parentWorldOf(const Entity& entity)
+{
+    Transform world;
+    for (const Entity* p = entity.parent; p; p = p->parent)
+        world = composeTransform(Transform(p->pos, p->scale, p->rot), world);
+    return world;
+}
+
+void PhysicsComponent::snapPose(Entity& entity, const glm::vec3& pos, const glm::quat& rot)
+{
+    const Transform parentWorld = parentWorldOf(entity);
+    const Transform local = parentWorld.inverse() * Transform(pos, parentWorld.scale * entity.scale, rot);
+    entity.pos = local.pos;
+    if (!lockRotation)
+        entity.rot = local.quat; // a locked body does not own entity.rot (see update)
+    poseHeld = true;
+}
+
+void PhysicsComponent::snapPose(Entity& entity, const glm::vec3& pos)
+{
+    const Transform parentWorld = parentWorldOf(entity);
+    entity.pos = (parentWorld.inverse() * Transform(pos, parentWorld.scale * entity.scale, glm::quat(1.0f, 0.0f, 0.0f, 0.0f))).pos;
+    poseHeld = true;
+}
+
+glm::vec3 PhysicsComponent::getShownPosition(const Entity& entity)
+{
+    return composeTransform(parentWorldOf(entity), Transform(entity.pos, entity.scale, entity.rot)).pos;
 }
 
 void suspendPhysicsTree(Entity& entity, SceneComponent* sc)
@@ -251,6 +281,14 @@ const PhysicsComponent::SpawnInfo* getPhysicsSpawnInfo(const Entity* entity)
     if (idx >= entity->spawnTemplate->spawnInfos.size())
         return nullptr;
     return static_cast<const PhysicsComponent::SpawnInfo*>(entity->spawnTemplate->spawnInfos[idx].get());
+}
+
+float getPhysicsShapeScale(const Entity* entity)
+{
+    float scale = 1.0f;
+    for (const Entity* e = entity; e; e = e->parent)
+        scale *= e->scale;
+    return scale;
 }
 
 void writePhysicsSpawnInfo(const PhysicsComponent::SpawnInfo& info, AssetNode& out)

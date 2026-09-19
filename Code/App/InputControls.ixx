@@ -186,7 +186,7 @@ public:
 
     // Distance from the body center to the shape's lowest point, world units - grounds the jump
     // raycast for any player shape (capsule, cube, sphere).
-    static float shapeBottomDistance(const Entity* entity, const PhysicsComponent& pc)
+    static float shapeBottomDistance(const Entity* entity)
     {
         const PhysicsComponent::SpawnInfo* si = getPhysicsSpawnInfo(entity);
         float d = 1.0f;
@@ -198,7 +198,7 @@ public:
             case EPhysicsShapeType::Capsule: d = si->shape.halfHeight + si->shape.radius; break;
             default: break;
             }
-        return d * pc.shapeScale;
+        return d * getPhysicsShapeScale(entity);
     }
 
     // The client's own player entity: the ONE locally-owned primary (proximity-transferred objects
@@ -279,7 +279,7 @@ public:
                 // grounded = something under the shape's bottom within a small margin; the ray
                 // ignores the body's own shapes so it can start inside them
                 const glm::vec3 pos = pc->body.getPosition();
-                const float bottom = shapeBottomDistance(root.get(), *pc);
+                const float bottom = shapeBottomDistance(root.get());
                 if (Globals::physics.castRayClosest(pos, glm::vec3(0.0f, -(bottom + 0.3f), 0.0f), PhysicsLayers::All, &pc->body).hit)
                     vel.y = playerJumpSpeed;
             }
@@ -328,7 +328,7 @@ public:
         {
             // grounded = something under the capsule bottom within a small margin; the ray ignores
             // the capsule's own shapes so it can start inside them
-            const float bottom = shapeBottomDistance(playerEntity.get(), *pc);
+            const float bottom = shapeBottomDistance(playerEntity.get());
             const glm::vec3 pos = pc->body.getPosition();
             if (Globals::physics.castRayClosest(pos, glm::vec3(0.0f, -(bottom + 0.3f), 0.0f), PhysicsLayers::All, &pc->body).hit)
                 vel.y = playerJumpSpeed;
@@ -361,8 +361,8 @@ public:
     // Replaces the frame camera with the possessed capsule's view: first person at eye height, or a
     // third-person follow pulled in by a wall raycast. Called from main right after the fly camera
     // produced the frame camera, so everything downstream (UI picking, audio listener, renderer)
-    // sees the player view. The pose interpolates with the same prev/curr/alpha the render mesh
-    // used LAST frame - one sim step behind this frame's mesh, a smooth constant offset.
+    // sees the player view. This runs before the entity pass, so getShownPosition() is the pose the
+    // render mesh showed LAST frame - behind this frame's mesh by a smooth constant offset.
     void applyPlayerCamera(Camera& camera)
     {
         if (!playerControl)
@@ -373,8 +373,7 @@ public:
         PhysicsComponent* pc = player ? getComponent<PhysicsComponent>(player) : nullptr;
         if (!pc || !pc->body.isValid())
             return;
-        const float alpha = Globals::physics.getInterpolationAlpha();
-        const glm::vec3 pos = glm::mix(pc->prevPos, pc->currPos, alpha);
+        const glm::vec3 pos = PhysicsComponent::getShownPosition(*player);
         const glm::vec3 dir = cameraController.getDirection();
         glm::vec3 eye = pos + glm::vec3(0.0f, playerEyeHeight, 0.0f);
         if (playerThirdPerson)

@@ -407,10 +407,11 @@ private:
         player->setName("Player " + oc::to_string(clientId));
         Globals::networkManager.setOwner(*player, clientId);
         if (PhysicsComponent* pc = getComponent<PhysicsComponent>(player.get()))
-            pc->onContact = [clientId](Entity& other, bool begin)
+            pc->onContact = [](Entity& self, Entity& other, bool begin)
             {
-                if (begin)
-                    Globals::networkManager.stealOwnershipOnContact(other, clientId);
+                // a player is never stealable, so its owner stays the client it spawned for
+                if (const NetworkComponent* net = begin ? getComponent<NetworkComponent>(&self) : nullptr)
+                    Globals::networkManager.stealOwnershipOnContact(other, net->ownerClientId);
             };
         Globals::world.addRootEntity(oc::move(player));
     }

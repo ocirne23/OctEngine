@@ -296,17 +296,72 @@ one import serves, then derives hulls, BVHs and occluder sets per container|node
 `Col_*` meshes and nodes are collision proxies: they replace the same-named render mesh for physics
 and are never rendered.
 
+### Size: 32 bytes, `static_assert`ed
+
+The component is inline in every physics entity (16-byte slots), so it holds only per-body state.
+**The 32 bytes are full: a new member costs a whole 16-byte slot** (4 run-time flag bits are spare).
+
+* There is NO stored pose at all — the body is the pose (see *The pose between two steps*).
+* `buoyancyStep` holds the low 16 bits of the step count; the compare is modulo 65536. A body that
+  was out of the loop for N steps with `N mod 65536` in 1..4 (0.006 % of the returns) gets one
+  catch-up force of that many steps.
+* The occluder triangles are NOT a member: they stay in `SpawnInfo::occluders`, read through
+  `getPhysicsSpawnInfo` on the rare resume-from-disabled.
+* The baked shape scale is NOT a member: `getPhysicsShapeScale(entity)` composes it from the parent
+  chain (the jump raycast and the occluder re-bake use it).
+* `onContact` is a plain function pointer `void(*)(Entity& self, Entity& other, bool begin)`, not an
+  `oc::function` (32 bytes). Per-entity state comes from `self`.
+* **The flags are two bytes, grouped by WHO WRITES them** — a bit-field write rewrites its whole
+  byte. `uint8 _unused : 5` fills the spawn byte (2 + 1 + 5 bits), so the run-time bits start a new
+  byte — **a new spawn bit must come out of `_unused`, so that the sum stays 8.**
+  1. `bodyType` / `lockRotation`: spawn constants. **Never write them after `spawn()`**; other
+     workers read them (`unpark`'s overlap probe).
+  2. `enabled` / `suspended` / `buoyant` / `poseHeld`: run-time, written by the entity's own job or
+     by main outside the pass. (`enabled` is written only by `spawn()` today; it sits in this byte
+     so a later setter is safe.) **Known and deliberately left:** the `unpark` probe of ANOTHER worker reads
+     `suspended` while the owner rewrites the byte for `buoyant` / `poseHeld`. The rewrite keeps
+     the `suspended` bit, so the read is right on x86, but it is a data race by the letter of the
+     standard (the same class as the probe's `schedTier` read).
+
 ### The body owns the pose
 
 * Created at spawn from the entity's composed world transform. **Physics never reads the entity's
   position again**, and the world scale is baked into the shape.
 * Dynamic bodies write the simulated pose back into the entity each update, interpolated between
-  fixed steps from `prevPos`/`currPos`/`prevRot`/`currRot`. Non-dynamic bodies stay put.
+  fixed steps (see *The pose between two steps*). Non-dynamic bodies stay put.
 * **A `lockRotation` body writes back only its POSITION**, so `entity.rot` stays free for
   script-driven facing (player yaw).
 * Gizmo-dragging or writing `self.pos` moves only the mesh.
 * The static-mesh occluder is baked once at spawn, and re-baked at the body's pose on
   resume-from-disabled.
+
+### The pose between two steps
+
+**No pose is stored.** box3d integrates `x1 = x0 + v1·h`, so each update shows
+`body − velocity × (1 − alpha) / stepHz`, and the rotation the same with the angular velocity (a
+`lockRotation` body skips it). That costs four box3d reads per dynamic body per update.
+
+Known weaknesses, accepted for the memory:
+
+* Not exact with sub-steps and contact correction: about 9 mm per step in free fall at 20 Hz.
+* **A velocity written between two steps (player jump, unit steering, a queued
+  `SetLinearVelocity`) moves the shown pose at once**, by up to `Δv / stepHz`.
+
+**REJECTED alternatives:**
+
+* `prev` = the pose the entity SHOWS when the step arrives, mixed toward the body. Near the step
+  rate a step arrives on almost every frame with a small alpha, so each frame covers only `alpha` of
+  the gap that is left: at 25 fps / 20 Hz the frame-to-frame motion was 0.91, 0.64, 0.39, 0, 2.06
+  steps.
+* `prev` = `body − velocity / stepHz`, made ONCE on the first update after a step, mixed toward the
+  body. Immune to the between-steps velocity write, but it needs `prevPos` / `prevRot` / `lastStep`
+  (a 64-byte component). **This is the fallback if the velocity pop shows.**
+
+`snapPose(entity, pos[, rot])` is the teleport contract (see Entity's CONTEXT): it writes the WORLD
+pose into the entity at once (the rotation only when the body owns `entity.rot`) and sets `poseHeld`,
+so the next update leaves the entity pose alone. `PhysicsComponent::getShownPosition(entity)` is the
+entity's world position — read before the entity pass (the player camera, frame row 10) it is the pose
+the mesh showed last frame.
 
 ### Suspend / park
 

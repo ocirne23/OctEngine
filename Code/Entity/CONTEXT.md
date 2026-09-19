@@ -1171,14 +1171,14 @@ queue `SetAwake 0`. Kinematic and static bodies use the entity-transform path.
 
 ## The teleport contract
 
-**EVERY teleport must also stomp `PhysicsComponent::prevPos` / `currPos` / `prevRot` / `currRot` AND
-claim the step (`physics->lastStep = getStepCount()`).**
+**EVERY teleport must also call `PhysicsComponent::snapPose(entity, pos[, rot])`.**
 
-`NetworkComponent::update` runs BEFORE `PhysicsComponent::update` on the same entity, so on any frame
-the sim stepped it would otherwise overwrite `curr` with `body.getPosition()` — which still holds LAST
-frame's teleport, since teleports apply at the next `physics.update` — and render
-`mix(thisFramePose, lastFramePose)`, i.e. **BACKWARD on stepping frames and correctly on the
-others. That alternation was the remote-entity pulsing.**
+The component stores no pose: the body IS the pose. But a teleport is queued and applies at the next
+`physics.update`, so `body.getPosition()` still holds the OLD pose (for network playback: LAST
+frame's teleport) when `PhysicsComponent::update` runs. `snapPose` writes the world pose into the
+entity at once and sets `poseHeld`: the next update leaves the entity pose alone. Without it the
+entity shows the stale body pose for a frame — **for a body that teleports every frame that was the
+remote-entity pulsing.**
 
 ## Transfer, steal and arbitration ("Network/Ownership")
 
