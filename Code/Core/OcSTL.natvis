@@ -1,0 +1,563 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AutoVisualizer xmlns="http://schemas.microsoft.com/vstudio/debugger/natvis/2010">
+
+  <!--
+    Visualizers for the oc:: vocabulary (Core.OcSTL). An oc:: name is an ALIAS, so the debugger sees
+    the backing type: every entry below is keyed on eastl::, against the EASTL 3.27.01 layouts in
+    Dependencies/Include/EASTL. Re-check the member names here when EASTL is updated.
+
+    Layout facts these rely on:
+      - 64-bit little-endian, eastl_size_t = size_t.
+      - eastl::compressed_pair keeps a non-empty first as `mFirst` in every variant the engine
+        instantiates (the allocator / default_delete second is an empty base).
+      - oc::unordered_* are aliases of eastl::hash_map / hash_set, oc::atomic is std::atomic
+        (stl.natvis already covers it).
+    oc::small_vector / oc::fixed_vector (Core.SmallVector) sit at the bottom.
+  -->
+
+  <!-- ==== strings ======================================================================== -->
+  <!-- SSO: the last byte holds (SSO_CAPACITY - size), its top bit set = heap layout.
+       SSO_CAPACITY = (24 - 1) / sizeof(char type): 23 / 11 / 5. -->
+
+  <Type Name="eastl::basic_string&lt;char,*&gt;">
+    <AlternativeType Name="eastl::basic_string&lt;char8_t,*&gt;" />
+    <Intrinsic Name="isHeap" Expression="(mPair.mFirst.sso.mRemainingSizeField.mnRemainingSize &amp; 0x80) != 0" />
+    <Intrinsic Name="size" Expression="isHeap() ? mPair.mFirst.heap.mnSize : (unsigned __int64)(23 - mPair.mFirst.sso.mRemainingSizeField.mnRemainingSize)" />
+    <Intrinsic Name="capacity" Expression="isHeap() ? (mPair.mFirst.heap.mnCapacity &amp; 0x7FFFFFFFFFFFFFFF) : (unsigned __int64)23" />
+    <DisplayString Condition="isHeap()">{mPair.mFirst.heap.mpBegin,[mPair.mFirst.heap.mnSize]s8}</DisplayString>
+    <DisplayString>{mPair.mFirst.sso.mData,[size()]s8}</DisplayString>
+    <StringView Condition="isHeap()">mPair.mFirst.heap.mpBegin,[mPair.mFirst.heap.mnSize]s8</StringView>
+    <StringView>mPair.mFirst.sso.mData,[size()]s8</StringView>
+    <Expand>
+      <Item Name="[size]">size()</Item>
+      <Item Name="[capacity]">capacity()</Item>
+      <Item Name="[heap]">isHeap()</Item>
+      <ArrayItems>
+        <Size>size()</Size>
+        <ValuePointer Condition="isHeap()">mPair.mFirst.heap.mpBegin</ValuePointer>
+        <ValuePointer>mPair.mFirst.sso.mData</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+
+  <Type Name="eastl::basic_string&lt;wchar_t,*&gt;">
+    <AlternativeType Name="eastl::basic_string&lt;char16_t,*&gt;" />
+    <Intrinsic Name="isHeap" Expression="(mPair.mFirst.sso.mRemainingSizeField.mnRemainingSize &amp; 0x80) != 0" />
+    <Intrinsic Name="size" Expression="isHeap() ? mPair.mFirst.heap.mnSize : (unsigned __int64)(11 - mPair.mFirst.sso.mRemainingSizeField.mnRemainingSize)" />
+    <Intrinsic Name="capacity" Expression="isHeap() ? (mPair.mFirst.heap.mnCapacity &amp; 0x7FFFFFFFFFFFFFFF) : (unsigned __int64)11" />
+    <DisplayString Condition="isHeap()">{mPair.mFirst.heap.mpBegin,[mPair.mFirst.heap.mnSize]su}</DisplayString>
+    <DisplayString>{mPair.mFirst.sso.mData,[size()]su}</DisplayString>
+    <StringView Condition="isHeap()">mPair.mFirst.heap.mpBegin,[mPair.mFirst.heap.mnSize]su</StringView>
+    <StringView>mPair.mFirst.sso.mData,[size()]su</StringView>
+    <Expand>
+      <Item Name="[size]">size()</Item>
+      <Item Name="[capacity]">capacity()</Item>
+      <Item Name="[heap]">isHeap()</Item>
+      <ArrayItems>
+        <Size>size()</Size>
+        <ValuePointer Condition="isHeap()">mPair.mFirst.heap.mpBegin</ValuePointer>
+        <ValuePointer>mPair.mFirst.sso.mData</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+
+  <Type Name="eastl::basic_string&lt;char32_t,*&gt;">
+    <Intrinsic Name="isHeap" Expression="(mPair.mFirst.sso.mRemainingSizeField.mnRemainingSize &amp; 0x80) != 0" />
+    <Intrinsic Name="size" Expression="isHeap() ? mPair.mFirst.heap.mnSize : (unsigned __int64)(5 - mPair.mFirst.sso.mRemainingSizeField.mnRemainingSize)" />
+    <Intrinsic Name="capacity" Expression="isHeap() ? (mPair.mFirst.heap.mnCapacity &amp; 0x7FFFFFFFFFFFFFFF) : (unsigned __int64)5" />
+    <DisplayString Condition="isHeap()">{mPair.mFirst.heap.mpBegin,[mPair.mFirst.heap.mnSize]s32}</DisplayString>
+    <DisplayString>{mPair.mFirst.sso.mData,[size()]s32}</DisplayString>
+    <StringView Condition="isHeap()">mPair.mFirst.heap.mpBegin,[mPair.mFirst.heap.mnSize]s32</StringView>
+    <StringView>mPair.mFirst.sso.mData,[size()]s32</StringView>
+    <Expand>
+      <Item Name="[size]">size()</Item>
+      <Item Name="[capacity]">capacity()</Item>
+      <Item Name="[heap]">isHeap()</Item>
+      <ArrayItems>
+        <Size>size()</Size>
+        <ValuePointer Condition="isHeap()">mPair.mFirst.heap.mpBegin</ValuePointer>
+        <ValuePointer>mPair.mFirst.sso.mData</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+
+  <Type Name="eastl::basic_string_view&lt;char&gt;">
+    <AlternativeType Name="eastl::basic_string_view&lt;char8_t&gt;" />
+    <DisplayString>{mpBegin,[mnCount]s8}</DisplayString>
+    <StringView>mpBegin,[mnCount]s8</StringView>
+    <Expand>
+      <Item Name="[size]">mnCount</Item>
+      <ArrayItems>
+        <Size>mnCount</Size>
+        <ValuePointer>mpBegin</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+
+  <Type Name="eastl::basic_string_view&lt;wchar_t&gt;">
+    <AlternativeType Name="eastl::basic_string_view&lt;char16_t&gt;" />
+    <DisplayString>{mpBegin,[mnCount]su}</DisplayString>
+    <StringView>mpBegin,[mnCount]su</StringView>
+    <Expand>
+      <Item Name="[size]">mnCount</Item>
+      <ArrayItems>
+        <Size>mnCount</Size>
+        <ValuePointer>mpBegin</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+
+  <Type Name="eastl::basic_string_view&lt;char32_t&gt;">
+    <DisplayString>{mpBegin,[mnCount]s32}</DisplayString>
+    <StringView>mpBegin,[mnCount]s32</StringView>
+    <Expand>
+      <Item Name="[size]">mnCount</Item>
+      <ArrayItems>
+        <Size>mnCount</Size>
+        <ValuePointer>mpBegin</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+
+  <!-- ==== sequence containers ============================================================ -->
+
+  <Type Name="eastl::vector&lt;*&gt;">
+    <DisplayString Condition="mpEnd == mpBegin">empty</DisplayString>
+    <DisplayString>{{ size={mpEnd - mpBegin} }}</DisplayString>
+    <Expand>
+      <Item Name="[size]">mpEnd - mpBegin</Item>
+      <Item Name="[capacity]">mCapacityAllocator.mFirst - mpBegin</Item>
+      <ArrayItems>
+        <Size>mpEnd - mpBegin</Size>
+        <ValuePointer>mpBegin</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+
+  <Type Name="eastl::array&lt;*,*&gt;">
+    <DisplayString>{{ size={$T2} }}</DisplayString>
+    <Expand>
+      <ArrayItems>
+        <Size>$T2</Size>
+        <ValuePointer>mValue</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+
+  <!-- One type for both extents: a fixed extent keeps its size in the type ($T2, the member is
+       static), the dynamic one (extent = size_t(-1)) in mStorage.mnSize. -->
+  <Type Name="eastl::span&lt;*,*&gt;">
+    <DisplayString Condition="(unsigned __int64)$T2 != 0xFFFFFFFFFFFFFFFF">{{ size={$T2} }}</DisplayString>
+    <DisplayString Condition="mStorage.mnSize == 0">empty</DisplayString>
+    <DisplayString>{{ size={mStorage.mnSize} }}</DisplayString>
+    <Expand>
+      <Item Name="[data]">mStorage.mpData</Item>
+      <ArrayItems>
+        <Size Condition="(unsigned __int64)$T2 != 0xFFFFFFFFFFFFFFFF">$T2</Size>
+        <Size>mStorage.mnSize</Size>
+        <ValuePointer>mStorage.mpData</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+
+  <!-- $T3 = kDequeSubarraySize. Element i lives at flat index (offset of begin in its subarray + i). -->
+  <Type Name="eastl::deque&lt;*,*,*&gt;">
+    <Intrinsic Name="beginOffset" Expression="mItBegin.mpCurrent - mItBegin.mpBegin" />
+    <Intrinsic Name="size" Expression="(mItEnd.mpCurrentArrayPtr - mItBegin.mpCurrentArrayPtr) * $T3 + (mItEnd.mpCurrent - mItEnd.mpBegin) - (mItBegin.mpCurrent - mItBegin.mpBegin)" />
+    <DisplayString Condition="mItBegin.mpCurrent == mItEnd.mpCurrent">empty</DisplayString>
+    <DisplayString>{{ size={size()} }}</DisplayString>
+    <Expand>
+      <Item Name="[size]">size()</Item>
+      <IndexListItems>
+        <Size>size()</Size>
+        <ValueNode>mItBegin.mpCurrentArrayPtr[(beginOffset() + $i) / $T3][(beginOffset() + $i) % $T3]</ValueNode>
+      </IndexListItems>
+    </Expand>
+  </Type>
+
+  <!-- The anchor node (mNodeAllocator.mFirst) is end(); EASTL_LIST_SIZE_CACHE is 1, so mSize exists. -->
+  <Type Name="eastl::list&lt;*,*&gt;">
+    <DisplayString Condition="mSize == 0">empty</DisplayString>
+    <DisplayString>{{ size={mSize} }}</DisplayString>
+    <Expand>
+      <LinkedListItems>
+        <Size>mSize</Size>
+        <HeadPointer>mNodeAllocator.mFirst.mpNext</HeadPointer>
+        <NextPointer>mpNext</NextPointer>
+        <ValueNode>((eastl::ListNode&lt;$T1&gt;*)this)-&gt;mValue</ValueNode>
+      </LinkedListItems>
+    </Expand>
+  </Type>
+
+  <Type Name="eastl::ListNode&lt;*&gt;">
+    <DisplayString>{mValue}</DisplayString>
+    <Expand>
+      <ExpandedItem>mValue</ExpandedItem>
+    </Expand>
+  </Type>
+
+  <Type Name="eastl::ListIterator&lt;*&gt;">
+    <DisplayString>{((eastl::ListNode&lt;$T1&gt;*)mpNode)-&gt;mValue}</DisplayString>
+    <Expand>
+      <ExpandedItem>((eastl::ListNode&lt;$T1&gt;*)mpNode)-&gt;mValue</ExpandedItem>
+    </Expand>
+  </Type>
+
+  <!-- Bit i, not word i. $T1 = bit count, $T2 = word type. -->
+  <Type Name="eastl::bitset&lt;*,*&gt;">
+    <DisplayString>{{ bits={$T1} }}</DisplayString>
+    <Expand>
+      <IndexListItems>
+        <Size>$T1</Size>
+        <ValueNode>((mWord[$i / (sizeof($T2) * 8)] &gt;&gt; ($i % (sizeof($T2) * 8))) &amp; 1) != 0</ValueNode>
+      </IndexListItems>
+      <Synthetic Name="[words]">
+        <Expand>
+          <ArrayItems>
+            <Size>($T1 + sizeof($T2) * 8 - 1) / (sizeof($T2) * 8)</Size>
+            <ValuePointer>mWord,x</ValuePointer>
+          </ArrayItems>
+        </Expand>
+      </Synthetic>
+    </Expand>
+  </Type>
+
+  <!-- ==== container adaptors ============================================================= -->
+
+  <Type Name="eastl::queue&lt;*&gt;">
+    <AlternativeType Name="eastl::stack&lt;*&gt;" />
+    <DisplayString>{c}</DisplayString>
+    <Expand>
+      <ExpandedItem>c</ExpandedItem>
+    </Expand>
+  </Type>
+
+  <!-- Heap order, not sorted order: [0] is top(). -->
+  <Type Name="eastl::priority_queue&lt;*&gt;">
+    <DisplayString>{c}</DisplayString>
+    <Expand>
+      <Item Name="[comp]">comp</Item>
+      <ExpandedItem>c</ExpandedItem>
+    </Expand>
+  </Type>
+
+  <!-- ==== ordered associative (red-black tree) =========================================== -->
+  <!-- mAnchor is end(): its parent is the root. `$T1 const`, never `const $T1` - the prefix form
+       re-binds to the pointee when the key is a pointer. -->
+
+  <Type Name="eastl::map&lt;*&gt;">
+    <AlternativeType Name="eastl::multimap&lt;*&gt;" />
+    <DisplayString Condition="mnSize == 0">empty</DisplayString>
+    <DisplayString>{{ size={mnSize} }}</DisplayString>
+    <Expand>
+      <TreeItems>
+        <Size>mnSize</Size>
+        <HeadPointer>mAnchor.mpNodeParent</HeadPointer>
+        <LeftPointer>mpNodeLeft</LeftPointer>
+        <RightPointer>mpNodeRight</RightPointer>
+        <ValueNode Name="[{((eastl::rbtree_node&lt;eastl::pair&lt;$T1 const,$T2&gt; &gt;*)this)-&gt;mValue.first}]">((eastl::rbtree_node&lt;eastl::pair&lt;$T1 const,$T2&gt; &gt;*)this)-&gt;mValue.second</ValueNode>
+      </TreeItems>
+    </Expand>
+  </Type>
+
+  <Type Name="eastl::set&lt;*&gt;">
+    <AlternativeType Name="eastl::multiset&lt;*&gt;" />
+    <DisplayString Condition="mnSize == 0">empty</DisplayString>
+    <DisplayString>{{ size={mnSize} }}</DisplayString>
+    <Expand>
+      <TreeItems>
+        <Size>mnSize</Size>
+        <HeadPointer>mAnchor.mpNodeParent</HeadPointer>
+        <LeftPointer>mpNodeLeft</LeftPointer>
+        <RightPointer>mpNodeRight</RightPointer>
+        <ValueNode>((eastl::rbtree_node&lt;$T1&gt;*)this)-&gt;mValue</ValueNode>
+      </TreeItems>
+    </Expand>
+  </Type>
+
+  <Type Name="eastl::rbtree_node&lt;*&gt;">
+    <DisplayString>{mValue}</DisplayString>
+    <Expand>
+      <ExpandedItem>mValue</ExpandedItem>
+    </Expand>
+  </Type>
+
+  <Type Name="eastl::rbtree_iterator&lt;*&gt;">
+    <DisplayString>{((eastl::rbtree_node&lt;$T1&gt;*)mpNode)-&gt;mValue}</DisplayString>
+    <Expand>
+      <ExpandedItem>((eastl::rbtree_node&lt;$T1&gt;*)mpNode)-&gt;mValue</ExpandedItem>
+    </Expand>
+  </Type>
+
+  <!-- ==== unordered associative (hashtable) ============================================== -->
+  <!-- oc::unordered_map = eastl::hash_map, and so on. Walks every bucket chain; an empty table
+       points at the shared one-slot gpEmptyBucketArray, so mpBucketArray is never null. -->
+
+  <Type Name="eastl::hash_map&lt;*&gt;">
+    <AlternativeType Name="eastl::hash_multimap&lt;*&gt;" />
+    <DisplayString Condition="mnElementCount == 0">empty</DisplayString>
+    <DisplayString>{{ size={mnElementCount} }}</DisplayString>
+    <Expand>
+      <Item Name="[buckets]">mnBucketCount</Item>
+      <CustomListItems MaxItemsPerView="5000">
+        <Variable Name="bucket" InitialValue="(unsigned __int64)0" />
+        <Variable Name="node" InitialValue="mpBucketArray[0]" />
+        <Size>mnElementCount</Size>
+        <Loop>
+          <Break Condition="bucket &gt;= mnBucketCount" />
+          <Exec>node = mpBucketArray[bucket]</Exec>
+          <Loop>
+            <Break Condition="node == 0" />
+            <Item Name="[{node-&gt;mValue.first}]">node-&gt;mValue.second</Item>
+            <Exec>node = node-&gt;mpNext</Exec>
+          </Loop>
+          <Exec>bucket++</Exec>
+        </Loop>
+      </CustomListItems>
+    </Expand>
+  </Type>
+
+  <Type Name="eastl::hash_set&lt;*&gt;">
+    <AlternativeType Name="eastl::hash_multiset&lt;*&gt;" />
+    <AlternativeType Name="eastl::hashtable&lt;*&gt;" />
+    <DisplayString Condition="mnElementCount == 0">empty</DisplayString>
+    <DisplayString>{{ size={mnElementCount} }}</DisplayString>
+    <Expand>
+      <Item Name="[buckets]">mnBucketCount</Item>
+      <CustomListItems MaxItemsPerView="5000">
+        <Variable Name="bucket" InitialValue="(unsigned __int64)0" />
+        <Variable Name="node" InitialValue="mpBucketArray[0]" />
+        <Size>mnElementCount</Size>
+        <Loop>
+          <Break Condition="bucket &gt;= mnBucketCount" />
+          <Exec>node = mpBucketArray[bucket]</Exec>
+          <Loop>
+            <Break Condition="node == 0" />
+            <Item>node-&gt;mValue</Item>
+            <Exec>node = node-&gt;mpNext</Exec>
+          </Loop>
+          <Exec>bucket++</Exec>
+        </Loop>
+      </CustomListItems>
+    </Expand>
+  </Type>
+
+  <Type Name="eastl::hash_node&lt;*&gt;">
+    <DisplayString>{mValue}</DisplayString>
+    <Expand>
+      <ExpandedItem>mValue</ExpandedItem>
+    </Expand>
+  </Type>
+
+  <Type Name="eastl::hashtable_iterator_base&lt;*&gt;">
+    <DisplayString Condition="mpNode == 0">end</DisplayString>
+    <DisplayString>{mpNode-&gt;mValue}</DisplayString>
+    <Expand>
+      <ExpandedItem Condition="mpNode != 0">mpNode-&gt;mValue</ExpandedItem>
+    </Expand>
+  </Type>
+
+  <Type Name="eastl::node_iterator_base&lt;*&gt;">
+    <DisplayString Condition="mpNode == 0">end</DisplayString>
+    <DisplayString>{mpNode-&gt;mValue}</DisplayString>
+    <Expand>
+      <ExpandedItem Condition="mpNode != 0">mpNode-&gt;mValue</ExpandedItem>
+    </Expand>
+  </Type>
+
+  <!-- ==== value types ==================================================================== -->
+
+  <Type Name="eastl::pair&lt;*,*&gt;">
+    <DisplayString>({first}, {second})</DisplayString>
+    <Expand>
+      <Item Name="first">first</Item>
+      <Item Name="second">second</Item>
+    </Expand>
+  </Type>
+
+  <Type Name="eastl::optional&lt;*&gt;">
+    <DisplayString Condition="!engaged">nullopt</DisplayString>
+    <DisplayString>{*($T1*)&amp;val}</DisplayString>
+    <Expand>
+      <ExpandedItem Condition="engaged">*($T1*)&amp;val</ExpandedItem>
+    </Expand>
+  </Type>
+
+  <!-- mIndex / mBuffer come from the private variant_storage base. Alternatives past the 8th
+       fall back to the raw view. -->
+  <Type Name="eastl::variant&lt;*&gt;">
+    <DisplayString Condition="mIndex == 0xFFFFFFFFFFFFFFFF">valueless_by_exception</DisplayString>
+    <DisplayString Condition="mIndex == 0" Optional="true">[0] {*($T1*)&amp;mBuffer}</DisplayString>
+    <DisplayString Condition="mIndex == 1" Optional="true">[1] {*($T2*)&amp;mBuffer}</DisplayString>
+    <DisplayString Condition="mIndex == 2" Optional="true">[2] {*($T3*)&amp;mBuffer}</DisplayString>
+    <DisplayString Condition="mIndex == 3" Optional="true">[3] {*($T4*)&amp;mBuffer}</DisplayString>
+    <DisplayString Condition="mIndex == 4" Optional="true">[4] {*($T5*)&amp;mBuffer}</DisplayString>
+    <DisplayString Condition="mIndex == 5" Optional="true">[5] {*($T6*)&amp;mBuffer}</DisplayString>
+    <DisplayString Condition="mIndex == 6" Optional="true">[6] {*($T7*)&amp;mBuffer}</DisplayString>
+    <DisplayString Condition="mIndex == 7" Optional="true">[7] {*($T8*)&amp;mBuffer}</DisplayString>
+    <DisplayString>index={mIndex}</DisplayString>
+    <Expand>
+      <Item Name="[index]">mIndex</Item>
+      <Item Name="[value]" Condition="mIndex == 0" Optional="true">*($T1*)&amp;mBuffer</Item>
+      <Item Name="[value]" Condition="mIndex == 1" Optional="true">*($T2*)&amp;mBuffer</Item>
+      <Item Name="[value]" Condition="mIndex == 2" Optional="true">*($T3*)&amp;mBuffer</Item>
+      <Item Name="[value]" Condition="mIndex == 3" Optional="true">*($T4*)&amp;mBuffer</Item>
+      <Item Name="[value]" Condition="mIndex == 4" Optional="true">*($T5*)&amp;mBuffer</Item>
+      <Item Name="[value]" Condition="mIndex == 5" Optional="true">*($T6*)&amp;mBuffer</Item>
+      <Item Name="[value]" Condition="mIndex == 6" Optional="true">*($T7*)&amp;mBuffer</Item>
+      <Item Name="[value]" Condition="mIndex == 7" Optional="true">*($T8*)&amp;mBuffer</Item>
+    </Expand>
+  </Type>
+
+  <Type Name="eastl::monostate">
+    <DisplayString>monostate</DisplayString>
+  </Type>
+
+  <Type Name="eastl::nullopt_t">
+    <DisplayString>nullopt</DisplayString>
+  </Type>
+
+  <!-- Element I is the TupleLeaf<I, T, IsEmpty> base of mImpl. An EMPTY element type uses the
+       IsEmpty = 1 leaf (no mValue), so those rows are Optional and just drop out. -->
+  <Type Name="eastl::tuple&lt;&gt;">
+    <DisplayString>()</DisplayString>
+  </Type>
+
+  <Type Name="eastl::tuple&lt;*&gt;">
+    <DisplayString Optional="true">({((eastl::Internal::TupleLeaf&lt;0,$T1,0&gt;*)&amp;mImpl)-&gt;mValue})</DisplayString>
+    <Expand>
+      <Item Name="[0]" Optional="true">((eastl::Internal::TupleLeaf&lt;0,$T1,0&gt;*)&amp;mImpl)-&gt;mValue</Item>
+    </Expand>
+  </Type>
+
+  <Type Name="eastl::tuple&lt;*,*&gt;">
+    <DisplayString Optional="true">({((eastl::Internal::TupleLeaf&lt;0,$T1,0&gt;*)&amp;mImpl)-&gt;mValue}, {((eastl::Internal::TupleLeaf&lt;1,$T2,0&gt;*)&amp;mImpl)-&gt;mValue})</DisplayString>
+    <Expand>
+      <Item Name="[0]" Optional="true">((eastl::Internal::TupleLeaf&lt;0,$T1,0&gt;*)&amp;mImpl)-&gt;mValue</Item>
+      <Item Name="[1]" Optional="true">((eastl::Internal::TupleLeaf&lt;1,$T2,0&gt;*)&amp;mImpl)-&gt;mValue</Item>
+    </Expand>
+  </Type>
+
+  <Type Name="eastl::tuple&lt;*,*,*&gt;">
+    <DisplayString Optional="true">({((eastl::Internal::TupleLeaf&lt;0,$T1,0&gt;*)&amp;mImpl)-&gt;mValue}, {((eastl::Internal::TupleLeaf&lt;1,$T2,0&gt;*)&amp;mImpl)-&gt;mValue}, {((eastl::Internal::TupleLeaf&lt;2,$T3,0&gt;*)&amp;mImpl)-&gt;mValue})</DisplayString>
+    <Expand>
+      <Item Name="[0]" Optional="true">((eastl::Internal::TupleLeaf&lt;0,$T1,0&gt;*)&amp;mImpl)-&gt;mValue</Item>
+      <Item Name="[1]" Optional="true">((eastl::Internal::TupleLeaf&lt;1,$T2,0&gt;*)&amp;mImpl)-&gt;mValue</Item>
+      <Item Name="[2]" Optional="true">((eastl::Internal::TupleLeaf&lt;2,$T3,0&gt;*)&amp;mImpl)-&gt;mValue</Item>
+    </Expand>
+  </Type>
+
+  <Type Name="eastl::tuple&lt;*,*,*,*&gt;">
+    <DisplayString Optional="true">({((eastl::Internal::TupleLeaf&lt;0,$T1,0&gt;*)&amp;mImpl)-&gt;mValue}, {((eastl::Internal::TupleLeaf&lt;1,$T2,0&gt;*)&amp;mImpl)-&gt;mValue}, {((eastl::Internal::TupleLeaf&lt;2,$T3,0&gt;*)&amp;mImpl)-&gt;mValue}, {((eastl::Internal::TupleLeaf&lt;3,$T4,0&gt;*)&amp;mImpl)-&gt;mValue})</DisplayString>
+    <Expand>
+      <Item Name="[0]" Optional="true">((eastl::Internal::TupleLeaf&lt;0,$T1,0&gt;*)&amp;mImpl)-&gt;mValue</Item>
+      <Item Name="[1]" Optional="true">((eastl::Internal::TupleLeaf&lt;1,$T2,0&gt;*)&amp;mImpl)-&gt;mValue</Item>
+      <Item Name="[2]" Optional="true">((eastl::Internal::TupleLeaf&lt;2,$T3,0&gt;*)&amp;mImpl)-&gt;mValue</Item>
+      <Item Name="[3]" Optional="true">((eastl::Internal::TupleLeaf&lt;3,$T4,0&gt;*)&amp;mImpl)-&gt;mValue</Item>
+    </Expand>
+  </Type>
+
+  <Type Name="eastl::tuple&lt;*,*,*,*,*&gt;">
+    <DisplayString>tuple (5)</DisplayString>
+    <Expand>
+      <Item Name="[0]" Optional="true">((eastl::Internal::TupleLeaf&lt;0,$T1,0&gt;*)&amp;mImpl)-&gt;mValue</Item>
+      <Item Name="[1]" Optional="true">((eastl::Internal::TupleLeaf&lt;1,$T2,0&gt;*)&amp;mImpl)-&gt;mValue</Item>
+      <Item Name="[2]" Optional="true">((eastl::Internal::TupleLeaf&lt;2,$T3,0&gt;*)&amp;mImpl)-&gt;mValue</Item>
+      <Item Name="[3]" Optional="true">((eastl::Internal::TupleLeaf&lt;3,$T4,0&gt;*)&amp;mImpl)-&gt;mValue</Item>
+      <Item Name="[4]" Optional="true">((eastl::Internal::TupleLeaf&lt;4,$T5,0&gt;*)&amp;mImpl)-&gt;mValue</Item>
+    </Expand>
+  </Type>
+
+  <!-- ==== smart pointers ================================================================= -->
+
+  <Type Name="eastl::unique_ptr&lt;*&gt;">
+    <SmartPointer Usage="Minimal">mPair.mFirst</SmartPointer>
+    <DisplayString Condition="mPair.mFirst == 0">null</DisplayString>
+    <DisplayString>{*mPair.mFirst}</DisplayString>
+    <Expand>
+      <Item Name="[ptr]">mPair.mFirst</Item>
+      <ExpandedItem Condition="mPair.mFirst != 0">mPair.mFirst</ExpandedItem>
+    </Expand>
+  </Type>
+
+  <!-- The array form has no element count: view more with `ptr.mPair.mFirst,N` in a watch. -->
+  <Type Name="eastl::unique_ptr&lt;*[],*&gt;" Priority="MediumHigh">
+    <DisplayString Condition="mPair.mFirst == 0">null</DisplayString>
+    <DisplayString>{mPair.mFirst}</DisplayString>
+    <Expand>
+      <Item Name="[ptr]">mPair.mFirst</Item>
+      <Item Name="[0]" Condition="mPair.mFirst != 0">*mPair.mFirst</Item>
+    </Expand>
+  </Type>
+
+  <Type Name="eastl::shared_ptr&lt;*&gt;">
+    <SmartPointer Usage="Minimal">mpValue</SmartPointer>
+    <DisplayString Condition="mpRefCount == 0">null</DisplayString>
+    <DisplayString Condition="mpValue == 0">null (strong={mpRefCount-&gt;mRefCount.mAtomic})</DisplayString>
+    <DisplayString>{*mpValue} (strong={mpRefCount-&gt;mRefCount.mAtomic} weak={mpRefCount-&gt;mWeakRefCount.mAtomic - 1})</DisplayString>
+    <Expand>
+      <Item Name="[ptr]">mpValue</Item>
+      <Item Name="[strong]" Condition="mpRefCount != 0">mpRefCount-&gt;mRefCount.mAtomic</Item>
+      <Item Name="[weak]" Condition="mpRefCount != 0">mpRefCount-&gt;mWeakRefCount.mAtomic - 1</Item>
+      <ExpandedItem Condition="mpValue != 0">mpValue</ExpandedItem>
+    </Expand>
+  </Type>
+
+  <Type Name="eastl::weak_ptr&lt;*&gt;">
+    <DisplayString Condition="mpRefCount == 0">null</DisplayString>
+    <DisplayString Condition="mpRefCount-&gt;mRefCount.mAtomic == 0">expired</DisplayString>
+    <DisplayString>{*mpValue} (strong={mpRefCount-&gt;mRefCount.mAtomic} weak={mpRefCount-&gt;mWeakRefCount.mAtomic - 1})</DisplayString>
+    <Expand>
+      <Item Name="[ptr]">mpValue</Item>
+      <Item Name="[strong]" Condition="mpRefCount != 0">mpRefCount-&gt;mRefCount.mAtomic</Item>
+      <Item Name="[weak]" Condition="mpRefCount != 0">mpRefCount-&gt;mWeakRefCount.mAtomic - 1</Item>
+      <ExpandedItem Condition="mpRefCount != 0 &amp;&amp; mpRefCount-&gt;mRefCount.mAtomic != 0">mpValue</ExpandedItem>
+    </Expand>
+  </Type>
+
+  <!-- shared_ptr's counts. oc::atomic itself is std::atomic. -->
+  <Type Name="eastl::atomic&lt;*&gt;">
+    <DisplayString>{mAtomic}</DisplayString>
+    <Expand>
+      <Item Name="[value]">mAtomic</Item>
+    </Expand>
+  </Type>
+
+  <!-- ==== callables ====================================================================== -->
+  <!-- The invoker symbol names the stored callable's type (the lambda and where it was written). -->
+
+  <Type Name="eastl::function&lt;*&gt;">
+    <DisplayString Condition="mMgrFuncPtr == 0">empty</DisplayString>
+    <DisplayString>{mInvokeFuncPtr}</DisplayString>
+    <Expand>
+      <Item Name="[invoker]">mInvokeFuncPtr</Item>
+      <Item Name="[manager]">mMgrFuncPtr</Item>
+      <Item Name="[storage]">mStorage</Item>
+    </Expand>
+  </Type>
+
+  <Type Name="eastl::reference_wrapper&lt;*&gt;">
+    <DisplayString>{*val}</DisplayString>
+    <Expand>
+      <ExpandedItem>val</ExpandedItem>
+    </Expand>
+  </Type>
+
+  <!-- ==== Core.SmallVector =============================================================== -->
+  <!-- oc::fixed_vector is an alias of small_vector<T, N, false>. -->
+
+  <Type Name="oc::small_vector&lt;*,*,*&gt;">
+    <DisplayString Condition="m_size == 0">empty</DisplayString>
+    <DisplayString>{{ size={m_size} }}</DisplayString>
+    <Expand>
+      <Item Name="[size]">m_size</Item>
+      <Item Name="[capacity]">m_capacity</Item>
+      <Item Name="[inline]">m_heap == 0</Item>
+      <ArrayItems>
+        <Size>m_size</Size>
+        <ValuePointer>m_data</ValuePointer>
+      </ArrayItems>
+    </Expand>
+  </Type>
+
+</AutoVisualizer>

@@ -114,6 +114,15 @@ block with plain `delete[]`, so an `_aligned_malloc` block (what the `align_val_
 would reach `Allocator::deallocate` and corrupt the heap. It asserts instead; EASTL only calls it for
 over-aligned element types, so nothing reaches it today.
 
+## Debugger visualizers
+
+[OcSTL.natvis](OcSTL.natvis), globbed into the Core project (`*.natvis` next to CMakeLists, same as
+Entity). An `oc::` name is an alias, so the debugger sees the backing type: **every entry is keyed on
+`eastl::`** (`oc::unordered_map` = `eastl::hash_map`, and so on), plus `oc::small_vector`. The
+expressions name EASTL's private members (`mpBegin`, `mPair.mFirst`, `mpBucketArray`, the string
+SSO byte) — **re-check them when EASTL is updated.** `oc::atomic` is `std::atomic`, which VS's own
+stl.natvis covers. Under the std backing the file is inert.
+
 ---
 
 # `Core.OcBit`
