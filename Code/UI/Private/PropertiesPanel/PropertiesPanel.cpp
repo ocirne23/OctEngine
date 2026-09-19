@@ -117,11 +117,6 @@ void PropertiesPanel::render(Entity* selected)
 			ImGui::Text("Mesh insts");
 			ImGui::SameLine(100.0f);
 			ImGui::Text("%zu", rc->node.getNumMeshInstances());
-
-			ImGui::AlignTextToFramePadding();
-			ImGui::Text("Show bounds");
-			ImGui::SameLine(100.0f);
-			ImGui::Checkbox("##pp_show_bounds", &rc->showBounds);
 		}
 	}
 

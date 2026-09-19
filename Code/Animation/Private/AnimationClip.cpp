@@ -272,8 +272,6 @@ void AnimationPlayer::evaluate()
     sampleForeground(m_poseA);
     if (m_fade < 1.0f)
         blendPose(m_poseA, m_snapshot, 1.0f - m_fade); // = lerp(snapshot, foreground, m_fade)
-    if (m_poseOnly)
-        return;
 
     // Build local matrices from the (blended) TRS, applying any programmatic per-bone modifiers.
     // Into the kept scratch: a fresh vector here was one 4 KB allocation per animator per tick.

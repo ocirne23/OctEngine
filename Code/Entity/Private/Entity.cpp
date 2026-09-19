@@ -103,6 +103,10 @@ void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform&
 
         if (PhysicsComponent* physics = getComponent<PhysicsComponent>(this, offsets))
             physics->update(*this, parentWorld); // dynamic bodies write the simulated pose into pos/rot
+
+        // after Physics: the walk follows the distance this entity moved, this frame's pose included
+        if (SceneAnimatorComponent* parts = getComponent<SceneAnimatorComponent>(this); parts && simStep)
+            parts->update(*this, deltaSeconds);
     }
 
     const Transform world = composeTransform(parentWorld, Transform(pos, scale, rot));
@@ -392,6 +396,13 @@ void Entity::createComponent(EComponentID id, uint16 componentOffset, const void
         gp->spawn(*this, *static_cast<const GameProjectileComponent::SpawnInfo*>(info), base);
         break;
     }
+    case EComponentID_SceneAnimator:
+    {
+        SceneAnimatorComponent* pa = reinterpret_cast<SceneAnimatorComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
+        new (pa) SceneAnimatorComponent();
+        pa->spawn(*this, *static_cast<const SceneAnimatorComponent::SpawnInfo*>(info), base);
+        break;
+    }
     case EComponentID_Script:
     {
         ScriptComponent* scr = reinterpret_cast<ScriptComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
@@ -492,6 +503,13 @@ void Entity::destroyComponent(EComponentID id, uint16 componentOffset, const voi
         gp->~GameProjectileComponent();
         break;
     }
+    case EComponentID_SceneAnimator:
+    {
+        SceneAnimatorComponent* pa = reinterpret_cast<SceneAnimatorComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
+        pa->destroy(*this, *static_cast<const SceneAnimatorComponent::SpawnInfo*>(info));
+        pa->~SceneAnimatorComponent();
+        break;
+    }
     case EComponentID_Script:
     {
         ScriptComponent* scr = reinterpret_cast<ScriptComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
@@ -544,7 +562,7 @@ void Entity::reparentEntity(Entity* newParent)
 
     if (newParent)
     {
-        getComponent<SceneComponent>(newParent)->children.emplace_back(oc::move(keepAlive));
+        getComponent<SceneComponent>(newParent)->addChild(oc::move(keepAlive));
         // The arrival was never part of any ancestor's suspend walk, so those latches are now stale.
         for (Entity* p = newParent; p; p = p->parent)
             p->setPhysicsSuspended(false);

@@ -105,15 +105,6 @@ public:
     oc::span<const glm::mat4> getPalette() const { return m_palette; }
     uint32 getNumBones() const { return (uint32)m_palette.size(); }
 
-    // The blended LOCAL (parent-relative) pose of the last tick(), one entry per bone - for a consumer
-    // that places its own objects per bone (an entity hierarchy) instead of skinning. Bone modifiers
-    // are NOT in it: they apply to the matrices only.
-    oc::span<const glm::vec3> getPosePositions() const { return m_poseA.pos; }
-    oc::span<const glm::quat> getPoseRotations() const { return m_poseA.rot; }
-    oc::span<const glm::vec3> getPoseScales() const { return m_poseA.scale; }
-    // Pose-only: tick() stops at the local pose - no matrices, no palette.
-    void setPoseOnly(bool poseOnly) { m_poseOnly = poseOnly; }
-
     // 0..1 progress of the active source (single-clip time/duration, or blend-space phase). Used by the
     // state machine for exit-time transitions.
     float getNormalizedTime() const;
@@ -178,7 +169,6 @@ private:
     float m_blendParam = 0.0f;
     float m_speed = 1.0f;
     bool m_paused = false;
-    bool m_poseOnly = false;
 
     oc::vector<oc::string> m_firedEvents; // event notifies fired during the last tick()
 

@@ -16,7 +16,8 @@ uploads it.
 | Cache clip libraries per skeleton + animator | **Entity** | `World::getOrBuildClipSet` — [World.ixx:238](../Entity/Private/World.ixx#L238) |
 | Drive the player each frame from an `.apl` graph | **Entity** | `AnimatorComponent` |
 | Consume the palette for GPU skinning | **RendererVK** | `allocateSkinningPalette` / `setSkinningPalette` |
-| OR: build a skeleton from an entity hierarchy and write the local pose to the child entities | **Entity** | `EntityRig`, `AnimatorComponent::applyPoseToHierarchy` |
+
+Rigid child ENTITIES (no skin) do not go through this pipeline at all — see Procedural part animation.
 
 **Retargeting is by BONE NAME**, done at import: `loadAnimations` resolves every channel against a
 target skeleton, so a rig in one file and its animations in others (Mixamo exports) work. A channel
@@ -57,27 +58,42 @@ LOCAL (parent-relative) space. They apply every tick until cleared.
 
 `m_anyBoneModifier` short-circuits the whole path when nothing is posed.
 
-### Pose output (no skinning)
+## Procedural part animation — `Animation:Procedural`
 
-`getPosePositions()` / `getPoseRotations()` / `getPoseScales()` give the blended LOCAL pose of the last
-tick, one entry per bone — for a consumer that places its own objects per bone (Entity's hierarchy
-animator). `setPoseOnly(true)` stops `tick()` at that pose: no matrices, no palette. **Bone modifiers
-are NOT in the pose** — they apply to the matrices only.
+[Procedural.ixx](Private/Procedural.ixx). **A SEPARATE runtime, not a clip source**: no `Skeleton`, no
+keys, no `AnimationPlayer`, no state machine. It moves RIGID PARTS (a box limb, a turret barrel) with
+closed-form sines, and it is made for tens of thousands of instances. Entity's
+`SceneAnimatorComponent` is the consumer; this library still knows nothing about entities.
 
-## Procedural clips — `Animation:Procedural`
+```
+value = layerWeight * amplitude * sin(2 pi * (harmonic * layerPhase + trackPhase))
+```
 
-[Procedural.ixx](Private/Procedural.ixx). Clips built from code, against any `Skeleton` — an imported
-one, or one built with `Skeleton::addBone(name, parent, bind)` (no skin, identity `inverseBind`).
-
-* **`ClipBuilder(skeleton, name, duration, loop)`** — `position` / `rotation` / `scale` add raw keys
-  (ABSOLUTE local values, kept sorted); `swing(bone, axis, angle, phase, cycles)` is a sine rotation
-  about a local axis AROUND THE BIND rotation; `bob(bone, offset, phase, cycles)` the same for the
-  position; `event(name, t)`; `build()`. A bone name the skeleton does not have is ignored. A looping
-  clip needs a whole number of cycles. Sines are baked to 16 keys per cycle (linear / slerp between).
-* **`ProceduralClipDesc` + `buildProceduralClip`** — the data form (lists of swings and bobs), which
-  is what the `.anm` `Procedural` block parses into. An empty desc is a clip that holds the bind pose.
-* **`makeWalkCycleDesc(WalkCycleParams)`** — the limb walk: legs in opposite phase, each arm opposite
-  to the leg on its side, an optional twice-per-cycle bob.
+* **`PartLayer`** — ONE phase + ONE weight. A **stride** layer (`cyclesPerMetre > 0`) advances its
+  phase by the DISTANCE moved (feet do not slide) and takes its weight from the speed (1 at
+  `fullSpeed`); a **timed** layer runs at `cyclesPerSecond` with a constant `weight`. Weights move
+  at `fadeRate` per second. **A blend IS the weight** — there is no pose to blend. Any
+  number of layers.
+* **`PartTrack`** — a rotation about a fixed part-local axis AROUND THE BIND rotation, or a
+  translation along a fixed offset. `harmonic` is 1 or 2 only: harmonic 2 comes from the double-angle
+  identities, and the track phase is stored as sin/cos, so **a tick costs one `sin`/`cos` pair per
+  ACTIVE LAYER, never per track.** The half-angle of the quaternion is a polynomial + normalize
+  (swing capped at 180°).
+* **`SceneAnimation`** — layers + parts + tracks (grouped by part). Immutable and shared: one per
+  prefab. Only parts that a track moves are in it.
+* **`SceneAnimatorState`** — the whole per-instance state: a vector with one `PartLayerState` per
+  layer (`initialize(anim)` sizes it): phase, weight, `manualWeight` (`>= 0` replaces the layer's
+  own weight rule — the gameplay override), and the layer's sin / cos of this tick, which
+  `advanceParts` writes and `evaluatePart` reads.
+* **`advanceParts(anim, state, dt, distance)`** returns FALSE when the pose is the same as
+  after the last tick (every weight steady, and no active layer advanced — a unit that stands
+  still). **The owner then skips the evaluation AND the writes.** A layer with weight 0 does not
+  advance its phase.
+* **`evaluatePart`** gives `outRot` when `part.rotates` and `outPos` when `part.translates` — the
+  owner writes only those.
+* **`SceneAnimationBuilder`** — `addLayer`, `swing`, `bob`, `walkCycle(WalkCycleParams)` (legs in
+  opposite phase, each arm opposite to the leg on its side, an optional twice-per-cycle bob),
+  `build()`. Parts come out with an identity bind; the owner calls `Part::setBind`.
 
 ## `AnimStateMachine`
 

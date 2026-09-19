@@ -7,138 +7,150 @@ namespace
 {
     constexpr float TwoPi = 6.28318530718f;
 
-    template <typename KeyT, typename ValueT>
-    void insertKey(oc::vector<KeyT>& keys, float time, const ValueT& value)
+    // sin / cos of a HALF angle, |x| <= pi/2 (a track swings at most 180 degrees). The quaternion is
+    // normalized after, so the residual (< 2e-4 at the limit) is an angle error, never a scale.
+    inline void halfAngleTrig(float x, float& outSin, float& outCos)
     {
-        auto it = keys.begin();
-        while (it != keys.end() && it->time <= time) ++it;
-        keys.insert(it, KeyT{ time, value });
-    }
-
-    glm::quat bindRotation(const glm::mat4& m)
-    {
-        const glm::vec3 c0(m[0]), c1(m[1]), c2(m[2]);
-        const float sx = glm::length(c0), sy = glm::length(c1), sz = glm::length(c2);
-        const glm::mat3 r(c0 / (sx > 1e-8f ? sx : 1.0f), c1 / (sy > 1e-8f ? sy : 1.0f), c2 / (sz > 1e-8f ? sz : 1.0f));
-        return glm::normalize(glm::quat_cast(r));
-    }
-
-    uint32 sineKeyCount(float cycles, uint32 keysPerCycle)
-    {
-        return glm::max(uint32(std::ceil(glm::max(cycles, 0.0f) * float(glm::max(keysPerCycle, 4u)))), 2u);
+        const float x2 = x * x;
+        outSin = x * (1.0f + x2 * (-1.0f / 6.0f + x2 * (1.0f / 120.0f + x2 * (-1.0f / 5040.0f))));
+        outCos = 1.0f + x2 * (-0.5f + x2 * (1.0f / 24.0f + x2 * (-1.0f / 720.0f + x2 * (1.0f / 40320.0f))));
     }
 }
 
-ClipBuilder::ClipBuilder(const Skeleton& skeleton, const oc::string& name, float durationSeconds, bool loop)
-    : m_skeleton(skeleton)
+bool advanceParts(const SceneAnimation& anim, SceneAnimatorState& state, float deltaSeconds, float distance)
 {
-    m_clip.name = name;
-    m_clip.duration = glm::max(durationSeconds, 1e-3f);
-    m_clip.loop = loop;
-}
-
-AnimationChannel* ClipBuilder::channelFor(const oc::string& bone)
-{
-    const int32 idx = m_skeleton.findBone(bone);
-    if (idx < 0)
-        return nullptr;
-    for (AnimationChannel& ch : m_clip.channels)
-        if (ch.boneIndex == idx)
-            return &ch;
-    AnimationChannel& ch = m_clip.channels.emplace_back();
-    ch.boneIndex = idx;
-    return &ch;
-}
-
-ClipBuilder& ClipBuilder::position(const oc::string& bone, float time, const glm::vec3& value)
-{
-    if (AnimationChannel* ch = channelFor(bone))
-        insertKey(ch->positionKeys, time, value);
-    return *this;
-}
-
-ClipBuilder& ClipBuilder::rotation(const oc::string& bone, float time, const glm::quat& value)
-{
-    if (AnimationChannel* ch = channelFor(bone))
-        insertKey(ch->rotationKeys, time, value);
-    return *this;
-}
-
-ClipBuilder& ClipBuilder::scale(const oc::string& bone, float time, const glm::vec3& value)
-{
-    if (AnimationChannel* ch = channelFor(bone))
-        insertKey(ch->scaleKeys, time, value);
-    return *this;
-}
-
-ClipBuilder& ClipBuilder::swing(const oc::string& bone, const glm::vec3& axis, float angleRadians, float phase, float cycles, uint32 keysPerCycle)
-{
-    AnimationChannel* ch = channelFor(bone);
-    if (!ch || glm::dot(axis, axis) < 1e-12f)
-        return *this;
-
-    const glm::vec3 n = glm::normalize(axis);
-    const glm::quat bind = bindRotation(m_skeleton.localBind[ch->boneIndex]);
-    const uint32 numKeys = sineKeyCount(cycles, keysPerCycle);
-    ch->rotationKeys.clear();
-    ch->rotationKeys.reserve(numKeys + 1);
-    for (uint32 i = 0; i <= numKeys; ++i)
+    bool changed = false;
+    const uint32 numLayers = (uint32)glm::min(anim.layers.size(), state.layers.size());
+    for (uint32 i = 0; i < numLayers; ++i)
     {
-        const float u = float(i) / float(numKeys);
-        const float angle = angleRadians * std::sin(TwoPi * (cycles * u + phase));
-        ch->rotationKeys.push_back({ u * m_clip.duration, bind * glm::angleAxis(angle, n) });
+        const PartLayer& layer = anim.layers[i];
+        PartLayerState& s = state.layers[i];
+        const bool stride = layer.cyclesPerMetre > 0.0f;
+
+        const float target = s.manualWeight >= 0.0f ? s.manualWeight
+            : stride ? glm::min(distance / (deltaSeconds * layer.fullSpeed), 1.0f)
+            : layer.weight;
+        const float step = layer.fadeRate * deltaSeconds;
+        const float weight = s.weight + glm::clamp(target - s.weight, -step, step);
+        changed |= weight != s.weight;
+        s.weight = weight;
+        if (weight <= 0.0f)
+            continue; // the phase of a silent layer has no effect
+
+        const float advance = stride ? distance * layer.cyclesPerMetre : deltaSeconds * layer.cyclesPerSecond;
+        changed |= advance != 0.0f;
+        const float phase = s.phase + advance;
+        s.phase = phase - std::floor(phase);
+
+        const float angle = TwoPi * s.phase;
+        const float s1 = std::sin(angle), c1 = std::cos(angle);
+        s.s[0] = s1;
+        s.c[0] = c1;
+        s.s[1] = 2.0f * s1 * c1; // harmonic 2 from the double-angle identities
+        s.c[1] = c1 * c1 - s1 * s1;
     }
-    return *this;
+    return changed;
 }
 
-ClipBuilder& ClipBuilder::bob(const oc::string& bone, const glm::vec3& offset, float phase, float cycles, uint32 keysPerCycle)
+void evaluatePart(const SceneAnimation& anim, const Part& part, const SceneAnimatorState& state, glm::vec3& outPos, glm::quat& outRot)
 {
-    AnimationChannel* ch = channelFor(bone);
-    if (!ch)
-        return *this;
+    glm::vec3 pos = part.bindPos;
+    glm::quat rot = part.bindRot;
+    bool first = part.bindRotIdentity;
 
-    const glm::vec3 bind(m_skeleton.localBind[ch->boneIndex][3]);
-    const uint32 numKeys = sineKeyCount(cycles, keysPerCycle);
-    ch->positionKeys.clear();
-    ch->positionKeys.reserve(numKeys + 1);
-    for (uint32 i = 0; i <= numKeys; ++i)
+    const PartTrack* track = anim.tracks.data() + part.firstTrack;
+    for (const PartTrack* end = track + part.numTracks; track != end; ++track)
     {
-        const float u = float(i) / float(numKeys);
-        ch->positionKeys.push_back({ u * m_clip.duration, bind + offset * std::sin(TwoPi * (cycles * u + phase)) });
+        const PartLayerState& t = state.layers[track->layer];
+        if (t.weight <= 0.0f)
+            continue;
+        const uint32 h = track->harmonic - 1u;
+        const float value = t.weight * (t.s[h] * track->cosPhase + t.c[h] * track->sinPhase); // sin(a + b)
+        if (track->translate)
+        {
+            pos += track->axis * value;
+            continue;
+        }
+        float sh, ch;
+        halfAngleTrig(0.5f * track->amplitude * value, sh, ch);
+        const float inv = glm::inversesqrt(sh * sh + ch * ch);
+        const glm::quat delta(ch * inv, track->axis * (sh * inv));
+        rot = first ? delta : rot * delta;
+        first = false;
     }
-    return *this;
+    outPos = pos;
+    outRot = rot;
 }
 
-ClipBuilder& ClipBuilder::event(const oc::string& name, float normalizedTime)
+uint32 SceneAnimationBuilder::addLayer(const PartLayer& layer)
 {
-    m_clip.events.push_back({ name, glm::clamp(normalizedTime, 0.0f, 1.0f) });
-    return *this;
+    m_layers.push_back(layer);
+    return (uint32)m_layers.size() - 1u;
 }
 
-AnimationClip buildProceduralClip(const Skeleton& skeleton, const oc::string& name, const ProceduralClipDesc& desc, bool loop)
+void SceneAnimationBuilder::add(uint32 layer, const oc::string& part, PartTrack track, float trackPhase, uint32 harmonic)
 {
-    ClipBuilder builder(skeleton, name, desc.duration, loop);
-    for (const ProceduralSwing& s : desc.swings)
-        builder.swing(s.bone, s.axis, s.angle, s.phase, s.cycles);
-    for (const ProceduralBob& b : desc.bobs)
-        builder.bob(b.bone, b.offset, b.phase, b.cycles);
-    return builder.build();
+    if (part.empty() || layer >= m_layers.size())
+        return;
+    track.layer = uint16(layer);
+    track.harmonic = harmonic >= 2 ? uint8(2) : uint8(1);
+    track.sinPhase = std::sin(TwoPi * trackPhase);
+    track.cosPhase = std::cos(TwoPi * trackPhase);
+    m_pending.push_back({ part, track });
 }
 
-ProceduralClipDesc makeWalkCycleDesc(const WalkCycleParams& params)
+void SceneAnimationBuilder::swing(uint32 layer, const oc::string& part, const glm::vec3& axis, float angleRadians, float trackPhase, uint32 harmonic)
 {
-    ProceduralClipDesc desc;
-    desc.duration = params.duration;
-    auto limb = [&](const oc::string& bone, float angle, float phase)
+    if (glm::dot(axis, axis) < 1e-12f)
+        return;
+    PartTrack track;
+    track.axis = glm::normalize(axis);
+    track.amplitude = glm::clamp(angleRadians, -3.14159265f, 3.14159265f);
+    add(layer, part, track, trackPhase, harmonic);
+}
+
+void SceneAnimationBuilder::bob(uint32 layer, const oc::string& part, const glm::vec3& offset, float trackPhase, uint32 harmonic)
+{
+    PartTrack track;
+    track.axis = offset;
+    track.amplitude = 1.0f;
+    track.translate = true;
+    add(layer, part, track, trackPhase, harmonic);
+}
+
+void SceneAnimationBuilder::walkCycle(uint32 layer, const WalkCycleParams& params)
+{
+    swing(layer, params.leftLeg,  params.axis, params.legAngle, 0.0f);
+    swing(layer, params.rightLeg, params.axis, params.legAngle, 0.5f);
+    swing(layer, params.leftArm,  params.axis, params.armAngle, 0.5f);
+    swing(layer, params.rightArm, params.axis, params.armAngle, 0.0f);
+    if (params.bobHeight != 0.0f)
+        bob(layer, params.bobPart, glm::vec3(0.0f, params.bobHeight, 0.0f));
+}
+
+SceneAnimation SceneAnimationBuilder::build() const
+{
+    SceneAnimation anim;
+    anim.layers = m_layers;
+    for (const Pending& p : m_pending) // parts in first-use order
     {
-        if (!bone.empty())
-            desc.swings.push_back({ bone, params.axis, angle, phase, 1.0f });
-    };
-    limb(params.leftLeg,  params.legAngle, 0.0f);
-    limb(params.rightLeg, params.legAngle, 0.5f);
-    limb(params.leftArm,  params.armAngle, 0.5f);
-    limb(params.rightArm, params.armAngle, 0.0f);
-    if (!params.bobBone.empty() && params.bobHeight != 0.0f)
-        desc.bobs.push_back({ params.bobBone, glm::vec3(0.0f, params.bobHeight, 0.0f), 0.0f, 2.0f });
-    return desc;
+        bool known = false;
+        for (const Part& part : anim.parts)
+            known |= part.name == p.part;
+        if (!known)
+            anim.parts.emplace_back().name = p.part;
+    }
+    for (Part& part : anim.parts)
+    {
+        part.firstTrack = uint16(anim.tracks.size());
+        for (const Pending& p : m_pending)
+        {
+            if (p.part != part.name)
+                continue;
+            anim.tracks.push_back(p.track);
+            (p.track.translate ? part.translates : part.rotates) = true;
+        }
+        part.numTracks = uint16(anim.tracks.size() - part.firstTrack);
+    }
+    return anim;
 }

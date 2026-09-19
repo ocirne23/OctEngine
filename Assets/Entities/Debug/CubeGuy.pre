@@ -21,7 +21,7 @@ Prefab CubeGuy
 				Type StaticMesh
 		Entity LeftLeg
 			Position 0 -2.5 0.6
-			Rotation 0 0 -34.729084
+			Rotation 0 -0 0
 			Scale 0.5
 			Component Render
 				ObjectContainer baseshapes
@@ -30,16 +30,7 @@ Prefab CubeGuy
 				Position 0 -2 0
 		Entity RightLeg
 			Position 0 -2.5 -0.6
-			Rotation 0 -0 34.729084
-			Scale 0.5
-			Component Render
-				ObjectContainer baseshapes
-				Node Pillar3
-				Type StaticMesh
-				Position 0 -2 0
-		Entity LeftArm
-			Position 0 0.5 -1.5
-			Rotation 0 -0 29.767784
+			Rotation 0 -0 0
 			Scale 0.5
 			Component Render
 				ObjectContainer baseshapes
@@ -47,13 +38,29 @@ Prefab CubeGuy
 				Type StaticMesh
 				Position 0 -2 0
 		Entity RightArm
-			Position 0 0.5 1.5
-			Rotation 0 0 -29.767784
+			Position 0 0.5 -1.5
+			Rotation 0 -0 0
 			Scale 0.5
 			Component Render
 				ObjectContainer baseshapes
 				Node Pillar3
 				Type StaticMesh
 				Position 0 -2 0
-	Component Animator
-		Animator CubeGuyAnimator
+		Entity LeftArm
+			Position 0 0.5 1.5
+			Rotation 0 -0 0
+			Scale 0.5
+			Component Render
+				ObjectContainer baseshapes
+				Node Pillar3
+				Type StaticMesh
+				Position 0 -2 0
+	Component SceneAnimator
+		Layer Walk
+			Stride 1.5        # metres per full cycle (two steps)
+			FullSpeed 1.0     # m/s where the swing reaches full amplitude
+			Fade 0.15
+			Axis 0 0 1
+			Walk
+				LegAngle 35
+				ArmAngle 30

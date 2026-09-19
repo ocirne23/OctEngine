@@ -1,9 +1,7 @@
 module Entity;
 
 import Core;
-import Core.glm;
 import File;
-import Animation;
 
 import :AnimationDescription;
 
@@ -19,54 +17,6 @@ static bool animIEquals(oc::string_view a, oc::string_view b)
     return true;
 }
 
-// `Procedural [Walk]`: angles in degrees, phases in 0..1 periods. The Walk preset fills the four limb
-// swings (bone names default to LeftLeg / RightLeg / LeftArm / RightArm); Swing / Bob lines add to either.
-static void parseProcedural(const AssetNode& node, ProceduralClipDesc& out)
-{
-    glm::vec3 axis(0.0f, 0.0f, 1.0f);
-    if (const AssetNode* n = node.find("Axis")) axis = n->asVec3(axis);
-
-    if (animIEquals(node.asString(0), "Walk"))
-    {
-        WalkCycleParams walk;
-        walk.axis = axis;
-        if (const AssetNode* n = node.find("LegAngle"))  walk.legAngle = glm::radians(n->asFloat());
-        if (const AssetNode* n = node.find("ArmAngle"))  walk.armAngle = glm::radians(n->asFloat());
-        if (const AssetNode* n = node.find("LeftLeg"))   walk.leftLeg = n->asString();
-        if (const AssetNode* n = node.find("RightLeg"))  walk.rightLeg = n->asString();
-        if (const AssetNode* n = node.find("LeftArm"))   walk.leftArm = n->asString();
-        if (const AssetNode* n = node.find("RightArm"))  walk.rightArm = n->asString();
-        if (const AssetNode* n = node.find("BobBone"))   walk.bobBone = n->asString();
-        if (const AssetNode* n = node.find("BobHeight")) walk.bobHeight = n->asFloat();
-        out = makeWalkCycleDesc(walk);
-    }
-    if (const AssetNode* n = node.find("Duration")) out.duration = n->asFloat(0, out.duration);
-
-    for (const AssetNode* s : node.findAll("Swing")) // Swing <bone> <angleDeg> [phase] [cycles], child Axis
-    {
-        ProceduralSwing swing;
-        swing.bone = s->asString(0);
-        swing.angle = glm::radians(s->asFloat(1, 30.0f));
-        swing.phase = s->asFloat(2, 0.0f);
-        swing.cycles = s->asFloat(3, 1.0f);
-        swing.axis = axis;
-        if (const AssetNode* n = s->find("Axis")) swing.axis = n->asVec3(axis);
-        out.swings.push_back(oc::move(swing));
-    }
-    for (const AssetNode* b : node.findAll("Bob")) // Bob <bone> <height> [phase] [cycles], child Direction
-    {
-        ProceduralBob bob;
-        bob.bone = b->asString(0);
-        const float height = b->asFloat(1, 0.1f);
-        bob.phase = b->asFloat(2, 0.0f);
-        bob.cycles = b->asFloat(3, 2.0f);
-        glm::vec3 dir(0.0f, 1.0f, 0.0f);
-        if (const AssetNode* n = b->find("Direction")) dir = n->asVec3(dir);
-        bob.offset = dir * height;
-        out.bobs.push_back(oc::move(bob));
-    }
-}
-
 bool toAnimationClipDesc(const AssetNode& node, AnimationClipDesc& out)
 {
     if (!animIEquals(node.key, "Animation"))
@@ -74,11 +24,6 @@ bool toAnimationClipDesc(const AssetNode& node, AnimationClipDesc& out)
 
     out = AnimationClipDesc{};
     out.name = node.asString(0);
-    if (const AssetNode* p = node.find("Procedural"))
-    {
-        out.isProcedural = true;
-        parseProcedural(*p, out.procedural);
-    }
     if (const AssetNode* src = node.find("ObjectContainer"))
     {
         out.source = src->asString();

@@ -404,6 +404,10 @@ Network/Scene` children, plus the game components `Component GameUnit/GameStruct
 `Type StaticMesh|SkinnedMesh` (skinned adds a nested `Rig <name>`), plus `Position` / `Rotation` /
 `Scale`, and optionally `Color r g b` for the per-entity tint.
 
+`Component SceneAnimator` moves the prefab's rigid CHILD ENTITIES (a box-limb walk) procedurally, by
+entity name, with no `.anm` / `.apl` — the grammar is in
+[`Code/Entity/CONTEXT.md`](../Code/Entity/CONTEXT.md). `Component Animator` is for skinned meshes only.
+
 Entity-level `Enabled false` authors the disabled state; `Global true` (**root only, never
 inherited**) makes the World visit it every frame regardless of the SIM LOD.
 
@@ -413,20 +417,6 @@ Spawn by prefab name (`world.spawn`) or by path (`world.spawnAssetFile`).
 
 `Animation <name>` clips: source `ObjectContainer`, `Loop`, `Skip` (channels), and
 `Event <name> <normalizedTime>` notifies, fired into the entity's script or animator `onEvent`.
-
-**A `Procedural [Walk]` block replaces the `ObjectContainer`**: the clip is generated against the
-target skeleton (Animation's `buildProceduralClip`). Angles in degrees, phases in 0..1 periods:
-
-* `Duration <sec>`, `Axis x y z` (the default swing axis, bone-local)
-* `Swing <bone> <angleDeg> [phase] [cycles]` (child `Axis`), `Bob <bone> <height> [phase] [cycles]`
-  (child `Direction`)
-* the `Walk` preset adds the four limb swings: `LegAngle` / `ArmAngle`, bone names `LeftLeg` /
-  `RightLeg` / `LeftArm` / `RightArm` (override with the same keys), `BobBone` + `BobHeight`
-* no swings and no bobs = a clip that holds the bind pose (an idle)
-
-On a prefab with `Component Animator` and NO skinned mesh, the bones are the CHILD ENTITY names — see
-AnimatorComponent modes in [`Code/Entity/CONTEXT.md`](../Code/Entity/CONTEXT.md). Demo:
-`Animations/cubeguy.anm`.
 
 ## `.apl` — animator graph
 

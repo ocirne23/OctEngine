@@ -1694,13 +1694,13 @@ void EntityEditor::commitRespawn()
 		}
 	}
 
-	if (m_hasAnimator && (!renderContainerName.empty() || m_animatorDraft.rig)) // a rig = it drives the child entities
+	if (m_hasAnimator && !renderContainerName.empty())
 	{
 		AssetNode holder;
 		AssetNode& node = holder.addChild("Component");
 		node.values.emplace_back("Animator");
 		node.set("Animator", m_animatorDraft.animatorName);
-		if (auto info = Globals::world.buildAnimatorSpawnInfo(node, renderContainerName, ownerName, nullptr, m_animatorDraft.rig))
+		if (auto info = Globals::world.buildAnimatorSpawnInfo(node, renderContainerName, ownerName))
 		{
 			typeBits |= uint16(1 << EComponentID_Animator);
 			infos.push_back(oc::move(info));
@@ -1822,6 +1822,13 @@ void EntityEditor::commitRespawn()
 		auto info = oc::make_shared<NetworkComponent::SpawnInfo>(m_networkDraft);
 		typeBits |= uint16(1 << EComponentID_Network);
 		infos.push_back(oc::move(info));
+	}
+
+	// No editor section: the authored recipe is carried over as it is.
+	if (const SceneAnimatorComponent::SpawnInfo* parts = getSceneAnimatorSpawnInfo(m_selected.get()))
+	{
+		typeBits |= uint16(1 << EComponentID_SceneAnimator);
+		infos.push_back(oc::make_shared<SceneAnimatorComponent::SpawnInfo>(*parts));
 	}
 
 	if (m_hasScript)

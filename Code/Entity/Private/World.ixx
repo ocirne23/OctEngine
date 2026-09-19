@@ -249,10 +249,9 @@ public:
 
     // Component SpawnInfo builders
     oc::shared_ptr<RenderComponent::SpawnInfo> buildRenderSpawnInfo(const AssetNode& renderNode, const oc::string& ownerName, bool captureCollisionSource = false);
-    // With no sibling skinned mesh the entity's child tree is the rig: built from sceneInfo (the entity's own
-    // Scene spawn info), or knownRig when the caller has one and no spawn info (the Entity Editor's respawn).
-    oc::shared_ptr<AnimatorComponent::SpawnInfo> buildAnimatorSpawnInfo(const AssetNode& animatorNode, const oc::string& siblingContainerName, const oc::string& ownerName,
-        const SceneComponent::SpawnInfo* sceneInfo = nullptr, const EntityRig* knownRig = nullptr);
+    oc::shared_ptr<AnimatorComponent::SpawnInfo> buildAnimatorSpawnInfo(const AssetNode& animatorNode, const oc::string& siblingContainerName, const oc::string& ownerName);
+    // sceneInfo: the entity's own Scene spawn info - the parts are found in it by name
+    oc::shared_ptr<SceneAnimatorComponent::SpawnInfo> buildSceneAnimatorSpawnInfo(const AssetNode& node, const SceneComponent::SpawnInfo* sceneInfo, const oc::string& ownerName);
     oc::shared_ptr<PhysicsComponent::SpawnInfo> buildPhysicsSpawnInfo(const AssetNode& physicsNode, const oc::string& containerName, const oc::string& nodePath, const oc::string& ownerName);
     oc::shared_ptr<AudioComponent::SpawnInfo> buildAudioSpawnInfo(const AssetNode& audioNode, const oc::string& ownerName);
 
@@ -282,7 +281,6 @@ private:
     // Builds (or returns a cached) clip library for an animator, retargeted against `skel`. Cached by
     // skeleton + animator name so a source FBX is imported once, not per spawned entity.
     const AnimationSet* getOrBuildClipSet(const Skeleton* skel, const AnimatorDesc& desc);
-    const EntityRig* getOrBuildEntityRig(const SceneComponent::SpawnInfo& scene);
 
     oc::shared_ptr<const EntitySpawnTemplate> getOrBuildPrefabTemplate(const oc::string& name);
 
@@ -307,7 +305,6 @@ private:
     oc::unordered_map<oc::string, oc::unique_ptr<ObjectContainer>> m_containers;
     CollisionCache m_collision; // collision snapshots + BVHs + occluders derived from loaded containers
     oc::unordered_map<oc::string, oc::unique_ptr<AnimationSet>> m_clipSets; // key: skeleton ptr + animator name
-    oc::vector<oc::unique_ptr<EntityRig>> m_entityRigs; // entity-hierarchy skeletons, shared by content; never freed (clip sets key on them)
     oc::unordered_map<oc::string, oc::shared_ptr<AudioBuffer>> m_audioBuffers; // key: sound file path
     oc::unordered_map<oc::string, oc::shared_ptr<EntitySpawnTemplate>> m_templates; // prefab templates, keyed by name
     oc::vector<oc::shared_ptr<EntitySpawnTemplate>> m_retiredTemplates; // superseded by reloadPrefabs, kept alive for live entities

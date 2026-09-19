@@ -68,7 +68,8 @@ export enum EComponentID : uint16
     EComponentID_GameUnit = 9,
     EComponentID_GameStructure = 10,
     EComponentID_GameProjectile = 11,
-    EComponentID_Script   = 12, // should be last so all other components are available on spawn
+    EComponentID_SceneAnimator = 12,
+    EComponentID_Script   = 13, // should be last so all other components are available on spawn
 };
 
 export class Entity

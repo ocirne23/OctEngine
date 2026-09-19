@@ -7,14 +7,8 @@ import :Entity;
 
 static void detachFromParent(Entity* parent, Entity* child)
 {
-    SceneComponent* psc = getComponent<SceneComponent>(parent);
-    if (!psc)
-        return;
-    auto& kids = psc->children;
-    auto it = oc::find_if(kids.begin(), kids.end(),
-        [child](const EntityPtr& p) { return p.get() == child; });
-    if (it != kids.end())
-        kids.erase(it);
+    if (SceneComponent* psc = getComponent<SceneComponent>(parent))
+        psc->removeChild(child);
 }
 
 void detachFromOwner(Entity* child)

@@ -1048,15 +1048,6 @@ const AnimationSet* World::getOrBuildClipSet(const Skeleton* skel, const Animato
     // Loads one .anm into the set under `localName` (retargeted by bone name to `skel`).
     auto loadClipDesc = [&](const AnimationClipDesc& anm, const oc::string& localName)
     {
-        if (anm.isProcedural)
-        {
-            if (clips.find(localName))
-                return;
-            clips.nameToIndex[localName] = clips.numClips();
-            clips.clips.push_back(buildProceduralClip(*skel, localName, anm.procedural));
-            applyClipMeta(anm, localName);
-            return;
-        }
         oc::string sourcePath = anm.source;
         if (const ObjectContainerDesc* oc = Globals::assetRegistry.findObjectContainer(anm.source))
             sourcePath = oc->path; // source named a registered container; use its file
@@ -1104,43 +1095,7 @@ const AnimationSet* World::getOrBuildClipSet(const Skeleton* skel, const Animato
     return ptr;
 }
 
-static void appendRigBones(EntityRig& rig, const SceneComponent::SpawnInfo& scene, int32 parentBone)
-{
-    for (size_t slot = 0, liveSlot = 0; slot < scene.children.size(); ++slot)
-    {
-        const SceneComponent::SpawnInfo::ChildSpawnInfo& child = scene.children[slot];
-        if (!child.tmpl)
-            continue; // SceneComponent::spawn skips it too, so it takes no child slot
-        const Transform& t = child.localTransform;
-        const glm::mat4 bind = glm::translate(glm::mat4(1.0f), t.pos) * glm::mat4_cast(t.quat) * glm::scale(glm::mat4(1.0f), glm::vec3(t.scale));
-        const int32 bone = (int32)rig.skeleton.addBone(child.name.empty() ? child.tmpl->displayName : child.name, parentBone, bind);
-        rig.childSlots.push_back(uint16(liveSlot++));
-        if (child.tmpl->archetype.typeBits & (1 << EComponentID_Scene)) // Scene is bit 0, so its SpawnInfo is spawnInfos[0]
-            appendRigBones(rig, *static_cast<const SceneComponent::SpawnInfo*>(child.tmpl->spawnInfos[0].get()), bone);
-    }
-}
-
-// Rigs are shared by content, so a prefab reload with an unchanged hierarchy keeps its rig - and with it
-// the clip sets keyed by the rig's skeleton.
-const EntityRig* World::getOrBuildEntityRig(const SceneComponent::SpawnInfo& scene)
-{
-    auto rig = oc::make_unique<EntityRig>();
-    appendRigBones(*rig, scene, -1);
-    if (!rig->skeleton.isValid())
-        return nullptr;
-
-    for (const oc::unique_ptr<EntityRig>& cached : m_entityRigs)
-        if (cached->skeleton.boneNames == rig->skeleton.boneNames
-            && cached->skeleton.parentIndices == rig->skeleton.parentIndices
-            && cached->skeleton.localBind == rig->skeleton.localBind
-            && cached->childSlots == rig->childSlots)
-            return cached.get();
-
-    m_entityRigs.push_back(oc::move(rig));
-    return m_entityRigs.back().get();
-}
-
-oc::shared_ptr<AnimatorComponent::SpawnInfo> World::buildAnimatorSpawnInfo(const AssetNode& animatorNode, const oc::string& siblingContainerName, const oc::string& ownerName, const SceneComponent::SpawnInfo* sceneInfo, const EntityRig* knownRig)
+oc::shared_ptr<AnimatorComponent::SpawnInfo> World::buildAnimatorSpawnInfo(const AssetNode& animatorNode, const oc::string& siblingContainerName, const oc::string& ownerName)
 {
     const AssetNode* nameNode = animatorNode.find("Animator");
     if (!nameNode)
@@ -1153,23 +1108,143 @@ oc::shared_ptr<AnimatorComponent::SpawnInfo> World::buildAnimatorSpawnInfo(const
         Log::warning("Scene: entity '" + ownerName + "' references unknown Animator '" + animatorName + "'");
         return nullptr;
     }
-    // A sibling skinned mesh is driven through its palette; with none, the descendant entities are the rig.
     ObjectContainer* siblingContainer = siblingContainerName.empty() ? nullptr : getOrLoadContainer(siblingContainerName);
-    const bool skinned = siblingContainer && siblingContainer->isSkinned() && siblingContainer->getSkeleton();
-    const EntityRig* rig = skinned ? nullptr : knownRig ? knownRig : sceneInfo ? getOrBuildEntityRig(*sceneInfo) : nullptr;
-    if (!skinned && !rig)
+    if (!siblingContainer || !siblingContainer->isSkinned() || !siblingContainer->getSkeleton())
     {
-        Log::warning("Scene: entity '" + ownerName + "' has an Animator but no sibling skinned mesh and no child entities to drive");
+        Log::warning("Scene: entity '" + ownerName + "' has an Animator but no sibling skinned mesh to drive");
         return nullptr;
     }
 
     auto info = oc::make_shared<AnimatorComponent::SpawnInfo>();
     info->desc = desc;
-    info->rig = rig;
-    info->skeleton = rig ? &rig->skeleton : siblingContainer->getSkeleton();
+    info->skeleton = siblingContainer->getSkeleton();
     info->clipSet = getOrBuildClipSet(info->skeleton, *desc); // shared, imported once per skeleton+animator
     info->animatorName = animatorName;
     if (const AssetNode* n = animatorNode.find("Enabled"))
+        info->enabled = n->asBool();
+    return info;
+}
+
+// Child-slot path from the animator's entity to the descendant called `name` (DFS, first match). A slot
+// counts only the children SceneComponent::spawn creates.
+static bool findPartPath(const SceneComponent::SpawnInfo& scene, const oc::string& name, oc::vector<uint16>& path, Transform& outBind)
+{
+    uint16 slot = 0;
+    for (const SceneComponent::SpawnInfo::ChildSpawnInfo& child : scene.children)
+    {
+        if (!child.tmpl)
+            continue;
+        path.push_back(slot++);
+        if ((child.name.empty() ? child.tmpl->displayName : child.name) == name)
+        {
+            outBind = child.localTransform;
+            return true;
+        }
+        if ((child.tmpl->archetype.typeBits & (1 << EComponentID_Scene)) // Scene is bit 0, so its SpawnInfo is spawnInfos[0]
+            && findPartPath(*static_cast<const SceneComponent::SpawnInfo*>(child.tmpl->spawnInfos[0].get()), name, path, outBind))
+            return true;
+        path.pop_back();
+    }
+    return false;
+}
+
+// Component SceneAnimator: `Layer <name>` blocks. Angles in degrees, phases in 0..1 cycles.
+//   Stride <m per cycle> + FullSpeed <m/s>   the phase follows the distance moved, the weight the speed
+//   Duration <sec per cycle> + Weight <0..1>  a timed layer (no Stride)
+//   Fade <sec>, Axis x y z (the layer's default swing axis, part-local)
+//   Walk  (LegAngle / ArmAngle / LeftLeg / RightLeg / LeftArm / RightArm / BobPart / BobHeight)
+//   Swing <part> <angleDeg> [phase] [harmonic 1|2]  (child Axis)
+//   Bob <part> <height> [phase] [harmonic 1|2]      (child Direction)
+oc::shared_ptr<SceneAnimatorComponent::SpawnInfo> World::buildSceneAnimatorSpawnInfo(const AssetNode& node, const SceneComponent::SpawnInfo* sceneInfo, const oc::string& ownerName)
+{
+    if (!sceneInfo)
+    {
+        Log::warning("Scene: entity '" + ownerName + "' has a SceneAnimator but no Scene children to move");
+        return nullptr;
+    }
+
+    SceneAnimationBuilder builder;
+    for (const AssetNode* layerNode : node.findAll("Layer"))
+    {
+        PartLayer layer;
+        layer.name = layerNode->asString(0);
+        if (const AssetNode* n = layerNode->find("Stride"))    layer.cyclesPerMetre = 1.0f / glm::max(n->asFloat(0, 1.0f), 1e-3f);
+        if (const AssetNode* n = layerNode->find("FullSpeed")) layer.fullSpeed = glm::max(n->asFloat(0, 1.0f), 1e-3f);
+        if (const AssetNode* n = layerNode->find("Duration"))  layer.cyclesPerSecond = 1.0f / glm::max(n->asFloat(0, 1.0f), 1e-3f);
+        if (const AssetNode* n = layerNode->find("Weight"))    layer.weight = glm::clamp(n->asFloat(0, 1.0f), 0.0f, 1.0f);
+        if (const AssetNode* n = layerNode->find("Fade"))      layer.fadeRate = 1.0f / glm::max(n->asFloat(0, 0.125f), 1e-3f);
+        const uint32 layerIdx = builder.addLayer(layer);
+
+        glm::vec3 axis(0.0f, 0.0f, 1.0f);
+        if (const AssetNode* n = layerNode->find("Axis")) axis = n->asVec3(axis);
+
+        if (const AssetNode* w = layerNode->find("Walk"))
+        {
+            WalkCycleParams walk;
+            walk.axis = axis;
+            if (const AssetNode* n = w->find("LegAngle"))  walk.legAngle = glm::radians(n->asFloat());
+            if (const AssetNode* n = w->find("ArmAngle"))  walk.armAngle = glm::radians(n->asFloat());
+            if (const AssetNode* n = w->find("LeftLeg"))   walk.leftLeg = n->asString();
+            if (const AssetNode* n = w->find("RightLeg"))  walk.rightLeg = n->asString();
+            if (const AssetNode* n = w->find("LeftArm"))   walk.leftArm = n->asString();
+            if (const AssetNode* n = w->find("RightArm"))  walk.rightArm = n->asString();
+            if (const AssetNode* n = w->find("BobPart"))   walk.bobPart = n->asString();
+            if (const AssetNode* n = w->find("BobHeight")) walk.bobHeight = n->asFloat();
+            builder.walkCycle(layerIdx, walk);
+        }
+        for (const AssetNode* s : layerNode->findAll("Swing"))
+        {
+            glm::vec3 swingAxis = axis;
+            if (const AssetNode* n = s->find("Axis")) swingAxis = n->asVec3(axis);
+            builder.swing(layerIdx, s->asString(0), swingAxis, glm::radians(s->asFloat(1, 30.0f)), s->asFloat(2, 0.0f), uint32(s->asInt(3, 1)));
+        }
+        for (const AssetNode* b : layerNode->findAll("Bob"))
+        {
+            glm::vec3 dir(0.0f, 1.0f, 0.0f);
+            if (const AssetNode* n = b->find("Direction")) dir = n->asVec3(dir);
+            builder.bob(layerIdx, b->asString(0), dir * b->asFloat(1, 0.1f), b->asFloat(2, 0.0f), uint32(b->asInt(3, 2)));
+        }
+    }
+
+    auto rig = oc::make_shared<SceneAnimRig>();
+    rig->anim = builder.build();
+    rig->partNodes.assign(rig->anim.parts.size(), SceneAnimRig::InvalidNode);
+    oc::vector<uint16> path;
+    for (size_t p = 0; p < rig->anim.parts.size(); ++p)
+    {
+        Part& part = rig->anim.parts[p];
+        Transform bind;
+        path.clear();
+        if (!findPartPath(*sceneInfo, part.name, path, bind))
+        {
+            Log::warning("Scene: entity '" + ownerName + "' SceneAnimator moves unknown child '" + part.name + "'");
+            continue;
+        }
+        part.setBind(bind.pos, bind.quat);
+
+        int32 parent = -1;
+        for (const uint16 slot : path) // share the path entities between parts
+        {
+            int32 found = -1;
+            for (size_t n = 0; n < rig->nodes.size(); ++n)
+                if (rig->nodes[n].parent == parent && rig->nodes[n].slot == slot)
+                    found = int32(n);
+            if (found < 0)
+            {
+                found = int32(rig->nodes.size());
+                rig->nodes.push_back({ parent, slot });
+            }
+            parent = found;
+        }
+        rig->partNodes[p] = uint16(parent);
+    }
+    if (rig->nodes.empty())
+        return nullptr;
+
+    auto info = oc::make_shared<SceneAnimatorComponent::SpawnInfo>();
+    info->rig = oc::move(rig);
+    info->source = node;
+    if (const AssetNode* n = node.find("Enabled"))
         info->enabled = n->asBool();
     return info;
 }
@@ -1410,8 +1485,7 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
     }
 
     if (const AssetNode* animatorNode = findComponentNode(node, "Animator"); animatorNode && !m_headless)
-        if (oc::shared_ptr<AnimatorComponent::SpawnInfo> info = buildAnimatorSpawnInfo(*animatorNode, renderContainerName, tmpl.displayName,
-                (typeBits & (1 << EComponentID_Scene)) ? static_cast<const SceneComponent::SpawnInfo*>(tmpl.spawnInfos[0].get()) : nullptr))
+        if (oc::shared_ptr<AnimatorComponent::SpawnInfo> info = buildAnimatorSpawnInfo(*animatorNode, renderContainerName, tmpl.displayName))
         {
             typeBits |= uint16(1 << EComponentID_Animator);
             tmpl.spawnInfos.emplace_back(oc::move(info));
@@ -1558,6 +1632,15 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         typeBits |= uint16(1 << EComponentID_GameProjectile);
         tmpl.spawnInfos.emplace_back(oc::move(info));
     }
+
+    // Cosmetic, so not headless. Scene is bit 0, so its SpawnInfo is spawnInfos[0].
+    if (const AssetNode* partsNode = findComponentNode(node, "SceneAnimator"); partsNode && !m_headless)
+        if (oc::shared_ptr<SceneAnimatorComponent::SpawnInfo> info = buildSceneAnimatorSpawnInfo(*partsNode,
+                (typeBits & (1 << EComponentID_Scene)) ? static_cast<const SceneComponent::SpawnInfo*>(tmpl.spawnInfos[0].get()) : nullptr, tmpl.displayName))
+        {
+            typeBits |= uint16(1 << EComponentID_SceneAnimator);
+            tmpl.spawnInfos.emplace_back(oc::move(info));
+        }
 
     if (const AssetNode* scriptNode = findComponentNode(node, "Script"))
     {
@@ -1785,11 +1868,7 @@ void World::handleEntityChange(EntityChange& change, const Camera& camera, const
         // a time; whatever was already parented under it stays put).
         if (SceneComponent* oldSc = getComponent<SceneComponent>(rs->oldEntity.get()))
             if (SceneComponent* newSc = getComponent<SceneComponent>(newEntity.get()))
-            {
-                newSc->children = oc::move(oldSc->children);
-                for (EntityPtr& child : newSc->children)
-                    child->parent = newEntity.get();
-            }
+                newSc->adoptChildren(*oldSc);
 
         // Re-attach where the old entity was: a root (in m_rootEntities) or a child (in its parent's
         // SceneComponent::children) - replace it in place so siblings/order aren't disturbed.
@@ -1797,12 +1876,7 @@ void World::handleEntityChange(EntityChange& change, const Camera& camera, const
         {
             newEntity->parent = parent;
             if (SceneComponent* parentSc = getComponent<SceneComponent>(parent))
-                for (EntityPtr& child : parentSc->children)
-                    if (child.get() == rs->oldEntity.get())
-                    {
-                        child = newEntity;
-                        break;
-                    }
+                parentSc->replaceChild(rs->oldEntity.get(), newEntity);
         }
         else
         {

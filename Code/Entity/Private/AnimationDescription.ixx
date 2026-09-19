@@ -2,18 +2,14 @@ export module Entity:AnimationDescription;
 
 import Core;
 import File;
-import Animation;
 
 // .anm - one named animation clip descriptor: a source file + which track inside it. Clips are retargeted
 // by bone name at load (see ISceneData::loadAnimations), so a rig and its animations can live in separate
 // files (Mixamo-style). The clip library that uses these lives in a .apl animator.
-// A `Procedural` block replaces the source file: the clip is generated against the target skeleton.
 export struct AnimationClipDesc
 {
     oc::string name;     // global clip name (referenced from a .apl's `Clip ... Anim <name>`)
-    bool isProcedural = false;
-    ProceduralClipDesc procedural;
-    oc::string source;   // source file path, or a registered ObjectContainer name
+    oc::string source;  // source file path, or a registered ObjectContainer name
     oc::string track;    // track within the source (empty = first kept track)
     bool loop = true;     // false = one-shot (playback clamps + holds the last frame)
     oc::string skip;     // ignore tracks whose name contains this (e.g. "TPose")

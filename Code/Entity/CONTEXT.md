@@ -47,16 +47,16 @@ Per-component `enabled` bools are independent of all of these.
 
 ### Components
 
-`typeBits` masks 13 types in this fixed order:
+`typeBits` masks 14 types in this fixed order:
 
 ```
 Scene(0) Render(1) Animator(2) Physics(3) Audio(4) Particle(5) Force(6) Light(7)
-Network(8) GameUnit(9) GameStructure(10) GameProjectile(11) Script(12)
+Network(8) GameUnit(9) GameStructure(10) GameProjectile(11) SceneAnimator(12) Script(13)
 ```
 
 **Script is LAST so every other component is available when it spawns.**
 `getComponent<T>` / `hasComponent<T>` compute byte offsets from compile-time sizes;
-`MaxInlineComponentTypes` is 13 and `ComponentAlignment` 16.
+`MaxInlineComponentTypes` is 14 and `ComponentAlignment` 16.
 
 Each type is a partition under `Private/Components/` — struct plus `get*SpawnInfo` /
 `write*SpawnInfo` in the `.ixx`, bodies in the same-named `.cpp`. `Component.ixx` re-exports them all
@@ -650,9 +650,10 @@ renderer state.** It fires, for each side:
 
 | Component | Notes |
 |---|---|
-| `SceneComponent` | Children. |
+| `SceneComponent` | Children. **The list is mutated ONLY through `addChild` / `removeChild` / `replaceChild` / `adoptChildren`** (they invalidate SceneAnimator part pointers — see below). |
 | `RenderComponent` | RenderNode + local transform, static or skinned, plus `Color`. `update` places the node, refreshes the spatial entry from its bounds and submits it under the cull pass mask. |
-| `AnimatorComponent` | AnimationPlayer + AnimStateMachine from `.apl`; gameplay through `stateMachine.setFloat/Bool/Trigger`, clip events through `onEvent`. Two modes, below. |
+| `AnimatorComponent` | AnimationPlayer + AnimStateMachine from `.apl`; gameplay through `stateMachine.setFloat/Bool/Trigger`, clip events through `onEvent`. Skinned meshes only. |
+| `SceneAnimatorComponent` | Procedural animation of rigid CHILD ENTITIES. Below. |
 | `ScriptComponent` | See [`Code/Script/CONTEXT.md`](../Script/CONTEXT.md). |
 | `PhysicsComponent` | See [`Code/Physics/CONTEXT.md`](../Physics/CONTEXT.md). |
 | `AudioComponent` | See [`Code/Audio/CONTEXT.md`](../Audio/CONTEXT.md). |
@@ -662,26 +663,82 @@ renderer state.** It fires, for each side:
 | `NetworkComponent` | Multiplayer, below. |
 | Game components (9/10/11) | Below. |
 
-## `AnimatorComponent` modes
+## `SceneAnimatorComponent` (ID 12)
 
-* **Skinned** — a sibling skinned `Component Render`: the skeleton is the container's, the palette
-  goes to `setSkinningPalette`.
-* **Hierarchy** — NO sibling skinned mesh, but a `Component Scene`: the DESCENDANT ENTITIES are the
-  rig. `World::getOrBuildEntityRig` builds an `EntityRig` from the template's Scene spawn info — one
-  bone per descendant (DFS), named by the entity name, bind = the authored local transform — shared
-  by content and never freed (the clip sets key on its skeleton). The player runs pose-only and
-  `applyPoseToHierarchy` writes the local pose to each part's `pos` / `rot` / `scale` (scale.x: entities
-  scale uniformly). Parent → child writes before the children are emitted, so it is safe in the pass.
-  * **The animator's own entity is NOT a bone** — its transform belongs to gameplay / physics.
-  * **No held pointers:** the parts are found again every tick through `childSlots` (the index in the
-    parent's `children`); a missing slot drops that bone and its subtree. Reordering the children of a
-    live instance animates the wrong part until a respawn.
-  * **Every bone is written every tick**, bind pose included, so a script cannot pose a rigged part
-    directly while the animator is enabled.
-  * Clips come from `.anm` as usual; a `Procedural` clip needs no source file (see CLAUDE.md).
-    Demo: `Entities/Debug/CubeGuy.pre` + `Animations/cubeguy.anm` / `.apl`.
-  * The Entity Editor keeps a hierarchy animator over a respawn (`knownRig`), but cannot ADD one —
-    author it in the `.pre`.
+Procedural animation of a prefab's rigid CHILD ENTITIES — the box-limb character. The math is
+Animation's `Animation:Procedural` (see [`Code/Animation/CONTEXT.md`](../Animation/CONTEXT.md)); this
+component binds it to the tree. **It shares nothing with `AnimatorComponent`**: no skeleton, no
+clips, no `.apl`, no string parameters. No fixed caps: the per-instance data is two vectors sized at
+spawn (the layer states and the cached node pointers), never resized after.
+
+**The design rule is MINIMUM MUTATION:**
+
+* A tick that does not change the pose (`advanceParts` returns false — a unit that stands still)
+  **touches no child at all**: no bind, no evaluation, no write.
+* Only MOVED parts are in the rig. CubeGuy's Head and Body are never read or written.
+* A part gets `rot` only, `pos` only, or both — whatever its tracks move. `scale` is never written.
+* **The walk drives itself**: the component measures the planar (XZ) distance its OWN entity moved
+  since the last tick, so no script or gameplay code sets a speed. It runs AFTER
+  `PhysicsComponent::update` in `updateSelf`, so the distance has this frame's pose. The distance is
+  in the parent's space — the world for a root entity, which a unit is; **an animator on a child
+  that only moves with its parent sees no distance.**
+* Catch-up ticks (SIM LOD) stay correct: the distance covers the same span as the delta.
+
+**`SceneAnimRig`** (shared per template, in the SpawnInfo): the `SceneAnimation` plus the path
+data: `nodes` — only the entities on a path to a moved part, parent before child, each a
+(parent node, child slot) pair — and `partNodes` (the node of each part).
+`World::buildSceneAnimatorSpawnInfo` finds each part by entity NAME (DFS, first match) in the
+template's Scene spawn info, and takes the bind from the authored local transform. Parent → child
+writes before the children are emitted, so it is safe in the pass.
+
+**The component HOLDS direct entity pointers** (`nodes`, an `oc::vector<Entity*>` with one entry per
+rig node, sized at spawn; a part is `nodes[rig->partNodes[i]]`), so a pose-changing tick is one
+pointer per part, with no `SceneComponent` lookup:
+
+* `bound == false` (the spawn state) → the next pose-changing tick runs `bind()`: it walks the
+  slot paths once and fills `nodes` in place — no scratch (null = the slot does not exist; that
+  part stays still).
+* **Every mutation of a `SceneComponent::children` list drops the cache.** The list is public to
+  READ, but it is MUTATED ONLY through `SceneComponent::addChild` / `removeChild` / `replaceChild` /
+  `adoptChildren` — each ends in the private `childrenChanged()`, which walks from the list's
+  entity UP the parent chain and calls `unbind()` on every SceneAnimatorComponent it meets (a part
+  path can run through any ancestor's descendants). The callers: `detachFromParent` (delete,
+  reparent-away), `Entity::reparentEntity` (arrival), and the RespawnEntity change in World (child
+  splice + in-place replace). **A new mutation site must go through these calls — a direct
+  `children.erase` leaves a dangling part pointer.** `SceneComponent::spawn` alone appends
+  directly: every animator of a tree still in its spawn is unbound.
+* A part cannot die while bound: its parent's list holds a reference, and leaving the list is a
+  mutation. `removeChild` / `replaceChild` notify BEFORE they drop the reference.
+* All these mutations are main-thread and outside the entity pass (script reparent / destroy are
+  deferred `EntityChange`s), so `bound` needs no atomics. A whole-tree teardown (the parallel
+  `releaseBatch`) never calls them: the animator dies with its tree and never reads `parts` again.
+* The paths are by SLOT, not by name: after a mutation that shifts the slots of a live instance
+  (a deleted sibling in front of a limb), the next bind takes whatever entity now sits in the slot.
+
+* **Not headless** (cosmetic), and **no script surface** — nothing registers bit 12 with the DSL
+  bindings, so no script can require it and `syncScriptData` needs no slot branch for it.
+* Gameplay C++: `findLayer(name)` + `setLayerWeight(layer, w)` overrides a layer's weight; `< 0`
+  hands it back.
+* The Entity Editor has no section for it; `commitRespawn` carries the authored recipe over as it is.
+  The recipe IS the serialization: the SpawnInfo keeps the authored `AssetNode`.
+* **Known hazard:** `savePrefab` of a LIVE, walking instance writes the parts' current `rot` — the
+  pose is baked into the `.pre`. An open Entity Editor document is frozen and does not tick, so
+  saves from there are clean.
+
+Authoring (`Component SceneAnimator`, angles in degrees, phases in 0..1 cycles):
+
+```
+Layer <name>
+    Stride <m per cycle>  FullSpeed <m/s>     stride layer: phase by distance, weight by speed
+    Duration <sec per cycle>  Weight <0..1>   timed layer (no Stride)
+    Fade <sec>    Axis x y z                  the layer's default swing axis, part-local
+    Walk                                      preset: LegAngle / ArmAngle / LeftLeg / RightLeg /
+                                              LeftArm / RightArm / BobPart / BobHeight
+    Swing <part> <angleDeg> [phase] [harmonic 1|2]     child Axis
+    Bob <part> <height> [phase] [harmonic 1|2]         child Direction
+```
+
+Demo: `Entities/Debug/CubeGuy.pre`.
 
 ## `LightComponent` (ID 7)
 

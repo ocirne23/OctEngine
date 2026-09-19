@@ -15,7 +15,6 @@ export struct RenderComponent
 
     RenderNode node; // the entity's SpatialEntry (Entity::spatialEntry) takes its bounds from here
     Transform localTransform;
-    bool showBounds = false;
 
     struct SpawnInfo
     {
