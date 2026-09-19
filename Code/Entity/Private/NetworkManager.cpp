@@ -1827,12 +1827,7 @@ void NetworkManager::handleSnapshot(NetReader& reader)
             }
             entity->pos = pos;
             entity->rot = sanitizedRot;
-            if (entity->spatialEntry.isValid())
-            {
-                const RenderComponent* render = getComponent<RenderComponent>(entity);
-                const float radius = render && render->node.isValid() ? render->node.getWorldBounds().radius : 0.0f;
-                Globals::spatialIndex.updateEntry(entity->spatialEntry.handle(), glm::dvec3(pos), radius);
-            }
+            entity->placeSpatialEntry();
             comp->state->client.lastAppliedTick = tick; // applied: the asleep path must not re-teleport on selection
         }
     }

@@ -117,6 +117,10 @@ public:
     // counts as stamped). Everything when the LOD is inactive. Public for the NetworkManager: an
     // unselected client entity gets its snapshot applied directly (the pass never visits it).
     bool simLodSelected(const Entity& entity) const;
+    // Outside the SIM LOD: a Global root (scheduling) or an entity with no spatial entry
+    // (CullMode None / covered by a RootOnly root - no query can find it). Full rate, never
+    // throttled; as a ROOT it lives in m_globalRoots.
+    static bool alwaysVisited(const Entity& entity) { return entity.isGlobal() || !entity.spatialEntry.isValid(); }
 
     // Headless server mode: set BEFORE any spawn. Templates then carry only Scene/Physics/Script/
     // Network components - everything renderer-touching (Render/Animator/Light/Particle/Force) and
@@ -171,14 +175,15 @@ public:
 
     // Entity Ownership. A new root is also queued for ONE unconditional visit (its spatial entry
     // links at the next commit, so the selection query cannot find it on its spawn frame), and a
-    // Global root joins the always-visited list.
+    // Global root joins the always-visited list - and so does a root WITHOUT a spatial entry
+    // (CullMode None): no selection query can ever find it.
     void addRootEntity(EntityPtr entity)
     {
         if (!entity)
             return;
         Entity* e = entity.get();
         m_rootEntities.push_back(oc::move(entity));
-        if (e->isGlobal())
+        if (alwaysVisited(*e))
             m_globalRoots.push_back(e);
         else
             m_pendingRoots.push_back({ e, m_updateFrame });

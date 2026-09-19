@@ -119,9 +119,10 @@ per-entity visit**:
 ```
 Script → Network → Animator → Physics
   → compose world transform
-  → RenderComponent::update: place the node, refresh the SpatialIndex entry from its bounds,
-    push the RenderNode (gated on getPassMask when Spatial culling mode >= Cull)
-    (no node: the entry follows the entity position, radius 0)
+  → RenderComponent::place, then the culling tail: refresh the SpatialIndex entry (RootOnly root:
+    cached subtree bounds; else the node bounds; no node: the entity position, radius 0),
+    push the RenderNode under the pass mask (own getPassMask when Spatial culling mode >= Cull,
+    or the mask inherited from a RootOnly ancestor — see CullMode)
 ```
 
 `updateSelf` emits its children into a caller-supplied vector rather than recursing, which is what
@@ -129,8 +130,8 @@ lets the parallel pass slice them.
 
 ## Spatial entries
 
-**EVERY entity registers at the end of `Entity::create`** ([Entity.cpp:261](Private/Entity.cpp#L261))
-— parallel-spawn safe, since the index locks.
+**EVERY entity registers at the end of `Entity::create`** — parallel-spawn safe, since the index
+locks — **unless its `CullMode` says otherwise (below).**
 
 * Layer `SpatialLayer_Entity` always, plus `SpatialLayer_Render` when it has a render node.
 * Bounds come from `RenderNode::getWorldBounds`, skinned inflated by the culling config's
@@ -141,6 +142,42 @@ lets the parallel pass slice them.
 * Gameplay queries use the Render layer; **the Entity layer is the World's update-selection layer.**
 * Headless still registers and main.cpp calls `commitFrame()` in place of the cull job, so radius
   queries work server-side.
+
+### `CullMode`
+
+Entity-level `CullMode PerEntity|RootOnly|None` in the `.pre` (`EEntityCullMode`). **It lives on
+`EntitySpawnTemplate::cullMode`, not on the entity** (no room in the cache line); the entity reads it
+through `spawnTemplate` (`getCullMode`).
+
+| Mode | Registration | Render gate |
+|---|---|---|
+| `PerEntity` (default) | Its own entry, as above. | Its own pass mask. |
+| `RootOnly` | This entity registers ONE entry over the render bounds of its whole spawned subtree. **Everything spawned under it registers nothing** (`hasRootOnlyAncestor`, by template mode — the ancestor registers after its children). | The root reads its pass mask once and hands it down in `EntityUpdateNode::cullPassMask`; a covered descendant does NO spatial work. |
+| `None` | No entry. Not inherited by children. | Never culled (`PASS_ALL`). |
+
+* **The subtree bounds are a lazy per-TEMPLATE cache** (`treeCullBounds`, root-LOCAL space, skinned
+  nodes inflated; state stored last, benign race like `treeAllocSize`): measured once from the first
+  spawned tree (`gatherTreeCullBounds` composes the authored local transforms — child render nodes sit
+  in parent-local space at spawn), then placed by the root's world transform every visit. They are
+  the REST pose: a SceneAnimator swing is not added. `refreshTreeCullBounds` re-measures (the
+  RespawnEntity change calls it after the child splice).
+* An entity WITH an entry always culls itself, also under a RootOnly ancestor (a PerEntity entity
+  reparented in). An entity with no entry and no covering root renders unculled.
+* **SIM LOD:** an entry-less child is always `simLodSelected` and gets the full delta, so a covered
+  subtree is visited exactly when its root is. **A ROOT without an entry joins `m_globalRoots`**
+  (`addRootEntity`) — no query can find it, so it is visited every frame. `World::alwaysVisited`
+  (Global, or no entry) is the ONE definition of "outside the SIM LOD".
+* **`Global` is not `None`:** Global is scheduling only — the entity keeps its entry, so it is still
+  culled and still found by gameplay queries (every structure). `terrainroot.pre` carries both: None
+  drops its useless point entry, Global keeps the children's real-stamp selection rule.
+* Gameplay queries see only the root of a RootOnly tree (Render layer when any subtree node renders),
+  and never a `None` entity. `renderIsVisible` goes through `Entity::getCullOwner`.
+* Teleports outside the visit (`GameUnitComponent::updateFar`, the client snapshot apply) re-place
+  the entry through `Entity::placeSpatialEntry`.
+* Entity Editor: the "Cull Mode" combo respawns the selected entity only; children change their
+  registration on the next load of the prefab.
+
+Demo: `Entities/Debug/CubeGuy.pre` (RootOnly — one entry for all body parts).
 
 ## The parallel update pass
 
@@ -651,7 +688,7 @@ renderer state.** It fires, for each side:
 | Component | Notes |
 |---|---|
 | `SceneComponent` | Children. **The list is mutated ONLY through `addChild` / `removeChild` / `replaceChild` / `adoptChildren`** (they invalidate SceneAnimator part pointers — see below). |
-| `RenderComponent` | RenderNode + local transform, static or skinned, plus `Color`. `update` places the node, refreshes the spatial entry from its bounds and submits it under the cull pass mask. |
+| `RenderComponent` | RenderNode + local transform, static or skinned, plus `Color`. `place` sets the node transform; the spatial refresh and the culled submit are `Entity::updateSelf`'s (see CullMode). |
 | `AnimatorComponent` | AnimationPlayer + AnimStateMachine from `.apl`; gameplay through `stateMachine.setFloat/Bool/Trigger`, clip events through `onEvent`. Skinned meshes only. |
 | `SceneAnimatorComponent` | Procedural animation of rigid CHILD ENTITIES. Below. |
 | `ScriptComponent` | See [`Code/Script/CONTEXT.md`](../Script/CONTEXT.md). |

@@ -49,7 +49,107 @@ void Entity::setFrozen(bool on)
             child->setFrozen(on);
 }
 
-void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform& parentWorld, oc::vector<EntityUpdateNode>& outChildren)
+EEntityCullMode Entity::getCullMode() const
+{
+    return spawnTemplate ? spawnTemplate->cullMode : EEntityCullMode::PerEntity;
+}
+
+const Entity* Entity::getCullOwner() const
+{
+    if (spatialEntry.isValid())
+        return this;
+    if (getCullMode() != EEntityCullMode::None)
+        for (const Entity* p = parent; p; p = p->parent)
+            if (p->spatialEntry.isValid() && p->getCullMode() == EEntityCullMode::RootOnly)
+                return p;
+    return nullptr;
+}
+
+// Whether a spawn under `parent` is covered by a RootOnly ancestor. By template mode, not by entry:
+// an ancestor still in its spawn registers only after its children.
+static bool hasRootOnlyAncestor(const Entity* parent)
+{
+    for (const Entity* p = parent; p; p = p->parent)
+        if (p->getCullMode() == EEntityCullMode::RootOnly)
+            return true;
+    return false;
+}
+
+static void gatherTreeCullBounds(Entity* entity, const Transform& toRoot, Sphere& bounds, bool& any)
+{
+    if (const RenderComponent* render = getComponent<RenderComponent>(entity); render && render->node.isValid())
+    {
+        const Sphere& local = render->node.getLocalBounds();
+        if (local.radius >= 0.0f && std::isfinite(local.radius) && !glm::any(glm::isnan(local.pos)) && !glm::any(glm::isinf(local.pos)))
+        {
+            const Transform t = composeTransform(toRoot, render->localTransform);
+            const float inflate = render->node.isSkinned() ? Globals::spatialIndex.getCullingConfig().skinnedRadiusScale : 1.0f;
+            Sphere placed(t.quat * (local.pos * t.scale) + t.pos, local.radius * t.scale * inflate);
+            if (any)
+                bounds.combineSphere(placed);
+            else
+                bounds = placed;
+            any = true;
+        }
+    }
+    if (const SceneComponent* sc = getComponent<SceneComponent>(entity))
+        for (const EntityPtr& child : sc->children)
+            gatherTreeCullBounds(child.get(), composeTransform(toRoot, Transform(child->pos, child->scale, child->rot)), bounds, any);
+}
+
+void Entity::refreshTreeCullBounds()
+{
+    if (!spawnTemplate || spawnTemplate->cullMode != EEntityCullMode::RootOnly)
+        return;
+    Sphere bounds{ glm::vec3(0.0f), 0.0f };
+    bool any = false;
+    gatherTreeCullBounds(this, Transform(), bounds, any);
+    spawnTemplate->treeCullBounds = bounds;
+    oc::atomic_ref<uint32>(spawnTemplate->treeCullBoundsState).store(any ? 2u : 1u);
+}
+
+// The template's cached subtree bounds placed at `world`.
+static Sphere placeTreeCullBounds(const EntitySpawnTemplate& tmpl, const Transform& world)
+{
+    const Sphere& local = tmpl.treeCullBounds;
+    return Sphere(world.quat * (local.pos * world.scale) + world.pos, local.radius * world.scale);
+}
+
+void Entity::placeSpatialEntry()
+{
+    if (!spatialEntry.isValid())
+        return;
+    if (getCullMode() == EEntityCullMode::RootOnly)
+    {
+        const Sphere bounds = placeTreeCullBounds(*spawnTemplate, Transform(pos, scale, rot));
+        Globals::spatialIndex.updateEntry(spatialEntry.handle(), glm::dvec3(bounds.pos), bounds.radius);
+        return;
+    }
+    const RenderComponent* render = getComponent<RenderComponent>(this);
+    const float radius = render && render->node.isValid() ? render->node.getWorldBounds().radius : 0.0f;
+    Globals::spatialIndex.updateEntry(spatialEntry.handle(), glm::dvec3(pos), radius);
+}
+
+// The render pass mask a spatial entry's stamps give under the culling config.
+static uint32 spatialRenderPassMask(SpatialHandle handle)
+{
+    const SpatialIndex& spatialIndex = Globals::spatialIndex;
+    const SpatialCullingConfig& culling = spatialIndex.getCullingConfig();
+    if (culling.mode < int(ESpatialCullMode::Cull))
+        return RendererVKLayout::PASS_ALL;
+    const uint32 spatialMask = spatialIndex.getPassMask(handle);
+    if (spatialMask & SpatialPassBit_Main)
+        return RendererVKLayout::PASS_ALL;
+    if (culling.mode == int(ESpatialCullMode::MainOnly))
+        return 0;
+    if (spatialMask & SpatialPassBit_Near)
+        return RendererVKLayout::PASS_SHADOW | RendererVKLayout::PASS_GI; // off-screen but shadow/RT relevant
+    if (spatialMask & SpatialPassBit_Shadow)
+        return RendererVKLayout::PASS_SHADOW; // off-screen, up-sun of the view
+    return 0;
+}
+
+void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform& parentWorld, uint32 cullPassMask, oc::vector<EntityUpdateNode>& outChildren)
 {
     const ComponentOffsets offsets = getComponentOffsets(typeBits);
 
@@ -110,12 +210,44 @@ void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform&
     }
 
     const Transform world = composeTransform(parentWorld, Transform(pos, scale, rot));
-    // The spatial entry follows the render bounds when there are any, else the entity position.
     // The node is empty when spawned without a container, or after destroy().
-    if (RenderComponent* render = getComponent<RenderComponent>(this, offsets); render && render->node.isValid())
-        render->update(*this, renderer, world);
-    else if (spatialEntry.isValid())
-        Globals::spatialIndex.updateEntry(spatialEntry.handle(), glm::dvec3(world.pos), 0.0f);
+    RenderComponent* render = getComponent<RenderComponent>(this, offsets);
+    if (render && !render->node.isValid())
+        render = nullptr;
+    if (render)
+        render->place(world);
+
+    // CULLING. An entity with an entry refreshes it - a RootOnly cull root from the cached subtree
+    // bounds, else from the render bounds, else the entity position - and culls itself; a
+    // RootOnly root hands its pass mask down, so its entry-less subtree does no spatial work at
+    // all. No entry and no covering root (CullMode None): never culled.
+    const EEntityCullMode cullMode = getCullMode();
+    uint32 passMask = RendererVKLayout::PASS_ALL;
+    uint32 childCullPassMask = cullPassMask;
+    if (spatialEntry.isValid())
+    {
+        const bool cullRoot = cullMode == EEntityCullMode::RootOnly;
+        if (cullRoot)
+        {
+            const Sphere bounds = placeTreeCullBounds(*spawnTemplate, world);
+            Globals::spatialIndex.updateEntry(spatialEntry.handle(), glm::dvec3(bounds.pos), bounds.radius);
+        }
+        else if (render)
+        {
+            const Sphere bounds = render->node.getWorldBounds();
+            const float radius = render->node.isSkinned() ? bounds.radius * Globals::spatialIndex.getCullingConfig().skinnedRadiusScale : bounds.radius;
+            Globals::spatialIndex.updateEntry(spatialEntry.handle(), glm::dvec3(bounds.pos), radius);
+        }
+        else
+            Globals::spatialIndex.updateEntry(spatialEntry.handle(), glm::dvec3(world.pos), 0.0f);
+        if (render || cullRoot)
+            passMask = spatialRenderPassMask(spatialEntry.handle());
+        childCullPassMask = cullRoot ? passMask : EntityCullPass_Own;
+    }
+    else if (cullPassMask != EntityCullPass_Own && cullMode != EEntityCullMode::None)
+        passMask = cullPassMask;
+    if (render && passMask != 0)
+        renderer.renderNode(render->node, passMask); // lock-free (the parallel entity pass)
 
     if (AudioComponent* audio = getComponent<AudioComponent>(this, offsets))
         audio->update(*this, world); // playing follow-sounds track the entity
@@ -136,15 +268,15 @@ void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform&
 
     if (sc)
         for (const EntityPtr& child : sc->children)
-            outChildren.push_back({ child.get(), world });
+            outChildren.push_back({ child.get(), world, childCullPassMask });
 }
 
-void Entity::update(Renderer& renderer, float deltaSeconds, const Transform& parentWorld)
+void Entity::update(Renderer& renderer, float deltaSeconds, const Transform& parentWorld, uint32 cullPassMask)
 {
     oc::vector<EntityUpdateNode> children;
-    updateSelf(renderer, deltaSeconds, parentWorld, children);
+    updateSelf(renderer, deltaSeconds, parentWorld, cullPassMask, children);
     for (const EntityUpdateNode& child : children)
-        child.entity->update(renderer, deltaSeconds, child.parentWorld);
+        child.entity->update(renderer, deltaSeconds, child.parentWorld, child.cullPassMask);
 }
 
 // Recursive alloc size of the template's entity + its whole SceneComponent child tree, lazily cached on
@@ -243,6 +375,18 @@ EntityPtr Entity::create(const EntitySpawnTemplate& tmpl, const Transform& trans
     // the spawn position (for a tree CHILD that is its LOCAL position - the entry links at the
     // next commit and the child's first visit re-places it in world space before any query can
     // see it). Headless has no render nodes, so every entry there is a point.
+    // CullMode: None registers nothing, and neither does anything spawned under a RootOnly
+    // ancestor; the RootOnly root itself registers over its whole subtree (already spawned above).
+    if (tmpl.cullMode == EEntityCullMode::RootOnly && !hasRootOnlyAncestor(parent))
+    {
+        assert(!glm::any(glm::isnan(transform.pos)) && !glm::any(glm::isinf(transform.pos)) && "spawn at a non-finite position");
+        if (oc::atomic_ref<uint32>(tmpl.treeCullBoundsState).load(oc::memory_order_relaxed) == 0)
+            entity->refreshTreeCullBounds();
+        const Sphere bounds = placeTreeCullBounds(tmpl, transform);
+        const uint32 layers = tmpl.treeCullBoundsState == 2 ? SpatialLayer_Entity | SpatialLayer_Render : SpatialLayer_Entity;
+        entity->spatialEntry = SpatialEntry(Globals::spatialIndex.registerEntry(glm::dvec3(bounds.pos), bounds.radius, reinterpret_cast<uint64>(entity), layers));
+    }
+    else if (tmpl.cullMode == EEntityCullMode::PerEntity && !hasRootOnlyAncestor(parent))
     {
         glm::dvec3 center(transform.pos);
         float radius = 0.0f;

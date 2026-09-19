@@ -2,6 +2,7 @@ Prefab CubeGuy
 	Position 0 1.5363203 0
 	Rotation 0 -0 0
 	Scale 0.25
+	CullMode RootOnly
 	Component Scene
 		Entity Head
 			Position 0 2 0

@@ -105,7 +105,7 @@ void World::buildSelectSpheres(oc::vector<SelectSphere>& out) const
 
 bool World::simLodSelected(const Entity& entity) const
 {
-    if (!m_simLodActive || entity.isGlobal() || !entity.spatialEntry.isValid())
+    if (!m_simLodActive || alwaysVisited(entity))
         return true;
     const SpatialIndex& spatialIndex = Globals::spatialIndex;
     const SpatialHandle handle = entity.spatialEntry.handle();
@@ -177,8 +177,8 @@ void World::selectUpdateRoot(Entity* hit, ESpatialPass rootPass, oc::vector<Enti
             Globals::spatialIndex.stampCurrent(p->spatialEntry.handle(), ESpatialPass::UpdateTier2);
         e = p;
     }
-    if (e->isGlobal() || !e->spatialEntry.isValid())
-        return;
+    if (alwaysVisited(*e))
+        return; // in m_globalRoots already
     const SpatialHandle handle = e->spatialEntry.handle();
     if (rootPass == ESpatialPass::VisibleRoot && Globals::spatialIndex.isStampedCurrent(handle, ESpatialPass::UpdateRoot))
         return; // the periodic result holds it already
@@ -318,7 +318,7 @@ float World::simLodDelta(Entity& entity)
     PhysicsComponent* physics = getComponent<PhysicsComponent>(&entity);
     if (physics && physics->bodyType != EPhysicsBodyType::Dynamic)
         physics = nullptr; // only a dynamic body floats: a static structure must not pay the tier lookup
-    if (!m_simLodActive || entity.isGlobal() || !entity.spatialEntry.isValid())
+    if (!m_simLodActive || alwaysVisited(entity))
     {
         if (force)
             force->setActive(true);
@@ -713,10 +713,10 @@ void World::updateBatchJob(const EntityUpdateNode* nodes, uint32 count)
         if (entity->isProfiled())
         {
             ProfileScope entityScope(entity->spawnTemplate->displayName.c_str(), EProfileCategory::Entity);
-            entity->updateSelf(*m_updateRenderer, delta, node.parentWorld, staging.children);
+            entity->updateSelf(*m_updateRenderer, delta, node.parentWorld, node.cullPassMask, staging.children);
         }
         else
-            entity->updateSelf(*m_updateRenderer, delta, node.parentWorld, staging.children);
+            entity->updateSelf(*m_updateRenderer, delta, node.parentWorld, node.cullPassMask, staging.children);
         if (measure)
         {
             const uint64 ns = uint64(std::chrono::nanoseconds(Clock::now() - measureStart).count());
@@ -1441,6 +1441,13 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
     tmpl.displayName = nameNode ? nameNode->asString() : node.asString();
     if (const AssetNode* n = node.find("Enabled")) tmpl.enabled = n->asBool();
     if (const AssetNode* n = node.find("Global")) tmpl.global = n->asBool();
+    if (const AssetNode* n = node.find("CullMode"))
+    {
+        const oc::string& mode = n->asString();
+        if (mode == "RootOnly")       tmpl.cullMode = EEntityCullMode::RootOnly;
+        else if (mode == "None")      tmpl.cullMode = EEntityCullMode::None;
+        else if (mode != "PerEntity") Log::warning("Scene: entity '" + tmpl.displayName + "' has an unknown CullMode '" + mode + "' (PerEntity / RootOnly / None)");
+    }
 
     uint16 typeBits = 0;
 
@@ -1869,6 +1876,7 @@ void World::handleEntityChange(EntityChange& change, const Camera& camera, const
         if (SceneComponent* oldSc = getComponent<SceneComponent>(rs->oldEntity.get()))
             if (SceneComponent* newSc = getComponent<SceneComponent>(newEntity.get()))
                 newSc->adoptChildren(*oldSc);
+        newEntity->refreshTreeCullBounds(); // RootOnly: create() measured the tree before the children arrived
 
         // Re-attach where the old entity was: a root (in m_rootEntities) or a child (in its parent's
         // SceneComponent::children) - replace it in place so siblings/order aren't disturbed.

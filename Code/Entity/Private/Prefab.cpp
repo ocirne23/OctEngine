@@ -17,6 +17,10 @@ static void writeOverrides(Entity* entity, AssetNode& node, const oc::string& to
         node.set("Enabled", false); // enabled is the default, so only the disabled state is authored
     if (entity->isGlobal())
         node.set("Global", true);
+    if (entity->getCullMode() == EEntityCullMode::RootOnly)
+        node.set("CullMode", "RootOnly");
+    else if (entity->getCullMode() == EEntityCullMode::None)
+        node.set("CullMode", "None");
     node.set("Position", entity->pos);
     node.set("Rotation", glm::degrees(glm::eulerAngles(entity->rot)));
     node.set("Scale", entity->scale);

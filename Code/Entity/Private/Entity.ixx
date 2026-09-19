@@ -2,6 +2,7 @@ export module Entity:Entity;
 
 import Core;
 import Core.glm;
+import Core.Sphere;
 import Core.Transform;
 import File.fwd;
 import RendererVK.fwd;
@@ -11,11 +12,24 @@ export struct EntitySpawnTemplate;
 export struct EntityPtr;
 export class Entity;
 
+// `CullMode` in the .pre (entity level). Lives on the template - the entity reads it through spawnTemplate.
+export enum class EEntityCullMode : uint8
+{
+    PerEntity, // every entity owns a spatial entry and culls itself
+    RootOnly,  // only this entity registers, over the render bounds of its whole spawned subtree; the
+               // descendants register nothing and render under this entity's pass mask
+    None,      // no spatial entry: never culled, always visited, invisible to spatial queries
+};
+
+// EntityUpdateNode::cullPassMask: no RootOnly ancestor covers this entity.
+export constexpr uint32 EntityCullPass_Own = UINT32_MAX;
+
 // One entity queued for the depth-parallel update pass: its parent's composed world transform.
 export struct EntityUpdateNode
 {
     Entity* entity = nullptr;
     Transform parentWorld;
+    uint32 cullPassMask = EntityCullPass_Own; // the render pass mask of the RootOnly ancestor covering it
 };
 
 export enum EEntityFlags : uint8
@@ -101,8 +115,15 @@ public:
     static constexpr float SchedTickHz = 64.0f;
     static constexpr uint32 SchedTickMask = 0x3FFF;
 
-    void update(Renderer& renderer, float deltaSeconds, const Transform& parentWorld = Transform());
-    void updateSelf(Renderer& renderer, float deltaSeconds, const Transform& parentWorld, oc::vector<EntityUpdateNode>& outChildren);
+    void update(Renderer& renderer, float deltaSeconds, const Transform& parentWorld = Transform(), uint32 cullPassMask = EntityCullPass_Own);
+    void updateSelf(Renderer& renderer, float deltaSeconds, const Transform& parentWorld, uint32 cullPassMask, oc::vector<EntityUpdateNode>& outChildren);
+    EEntityCullMode getCullMode() const;
+    // The entity whose spatial entry culls this one: itself, the RootOnly ancestor covering it, or null (never culled).
+    const Entity* getCullOwner() const;
+    // Teleport contract: re-places the spatial entry for an entity moved outside its visit (a root: pos is world).
+    void placeSpatialEntry();
+    // RootOnly: rebuilds the template's cached subtree bounds from the live tree (main thread, outside the pass).
+    void refreshTreeCullBounds();
     const char* getName() const; // "" when unnamed; owned by EntityNameRegistry (see EntityNames.ixx)
     bool hasName() const;
     void setName(oc::string_view name);
@@ -215,6 +236,12 @@ export struct EntitySpawnTemplate
     oc::string displayName;
     bool enabled = true;              // spawns with EEntityFlag_Enabled set/cleared ("Enabled" in the .pre)
     bool global = false;              // root spawns with EEntityFlag_Global ("Global true" in the .pre)
+    EEntityCullMode cullMode = EEntityCullMode::PerEntity; // "CullMode" in the .pre
+    // RootOnly lazy cache: the render bounds of the whole spawned subtree in this entity's LOCAL
+    // space (the same for every instance). State 0 = uncomputed, 1 = no render node, 2 = valid;
+    // stored LAST, same benign-race scheme as treeAllocSize (every writer stores the same values).
+    mutable Sphere treeCullBounds{ glm::vec3(0.0f), 0.0f };
+    mutable uint32 treeCullBoundsState = 0;
     mutable uint32 treeAllocSize = 0; // lazy cache: entity + recursive SceneComponent children, 0 = uncomputed
     // Lazy cache: NetworkComponents in the whole tree, UINT32_MAX = uncomputed (same benign-race
     // scheme as treeAllocSize). Entity::create needs it for server netId contiguity: only a tree

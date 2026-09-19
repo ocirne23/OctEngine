@@ -410,6 +410,10 @@ entity name, with no `.anm` / `.apl` — the grammar is in
 
 Entity-level `Enabled false` authors the disabled state; `Global true` (**root only, never
 inherited**) makes the World visit it every frame regardless of the SIM LOD.
+`CullMode PerEntity|RootOnly|None` sets the spatial registration: `PerEntity` (default) — every
+entity culls itself; `RootOnly` — this entity culls for its whole subtree (one entry over all child
+render bounds, e.g. a box-limb character); `None` — no entry, never culled, always visited. See
+CullMode in [`Code/Entity/CONTEXT.md`](../Code/Entity/CONTEXT.md).
 
 Spawn by prefab name (`world.spawn`) or by path (`world.spawnAssetFile`).
 

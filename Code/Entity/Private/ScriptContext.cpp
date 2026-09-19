@@ -1603,9 +1603,10 @@ extern "C" // The thunks have C linkage (external) so the cooked App-Scripts can
     int thunk_renderIsVisible(void* p)
     {
         const Entity* entity = entityOfRender(static_cast<const RenderComponent*>(p));
-        if (!entity->spatialEntry.isValid())
-            return 0;
-        return Globals::spatialIndex.isVisible(entity->spatialEntry.handle()) ? 1 : 0;
+        const Entity* cullOwner = entity->getCullOwner(); // CullMode RootOnly: the covering root's entry
+        if (!cullOwner)
+            return entity->getCullMode() == EEntityCullMode::None ? 1 : 0; // None is never culled
+        return Globals::spatialIndex.isVisible(cullOwner->spatialEntry.handle()) ? 1 : 0;
     }
 
     int thunk_renderIsSkinned(void* p)

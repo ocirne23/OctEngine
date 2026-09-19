@@ -246,8 +246,10 @@ the sweep. No occlusion test: a caster hidden behind a wall still casts. `Shadow
 
 ## Entity integration
 
-**Every entity registers at the end of `Entity::create`**
-([Entity.cpp:261](../Entity/Private/Entity.cpp#L261)) — parallel-spawn safe, since the index locks.
+**Every entity registers at the end of `Entity::create`** — parallel-spawn safe, since the index
+locks. The exception is the entity `CullMode` (see [`Code/Entity/CONTEXT.md`](../Entity/CONTEXT.md)):
+a `RootOnly` root registers one entry over its whole subtree and the subtree registers nothing;
+`None` registers nothing.
 
 * Layer `SpatialLayer_Entity` always, plus `SpatialLayer_Render` when the entity has a render node.
 * Bounds come from `RenderNode::getWorldBounds`, skinned inflated by `skinnedRadiusScale`; otherwise

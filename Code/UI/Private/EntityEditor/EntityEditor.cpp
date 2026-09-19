@@ -234,6 +234,7 @@ void EntityEditor::refreshDraftsFromEntity()
 		return;
 
 	m_hasScene = hasComponent<SceneComponent>(e);
+	m_cullModeDraft = e->getCullMode();
 	m_transformDraft = Transform(e->pos, e->scale, e->rot);
 	if (e == m_editRoot.get())
 		readPrefabFileTransform(m_path, m_transformDraft); // start from what the file stores, not the world pose
@@ -685,6 +686,16 @@ void EntityEditor::renderNameAndTransform()
 	bool enabled = m_selected->isEnabled();
 	if (ImGui::Checkbox("Enabled", &enabled))
 		m_selected->setEnabled(enabled); // direct live mutation - no respawn needed, matches PropertiesPanel
+
+	int cullMode = int(m_cullModeDraft);
+	ImGui::SetNextItemWidth(240.0f);
+	if (ImGui::Combo("Cull Mode", &cullMode, "PerEntity\0RootOnly\0None\0"))
+	{
+		m_cullModeDraft = EEntityCullMode(cullMode);
+		commitRespawn(); // spatial registration happens at spawn
+	}
+	if (ImGui::IsItemHovered())
+		ImGui::SetTooltip("PerEntity: every entity culls itself.\nRootOnly: this entity culls for its whole subtree.\nNone: never culled.\nChildren change their registration on the next load of the prefab.");
 
 	if (ImGui::CollapsingHeader("Transform"))
 	{
@@ -1844,6 +1855,7 @@ void EntityEditor::commitRespawn()
 	tmpl->spawnInfos = oc::move(infos);
 	tmpl->displayName = m_selected->getName();
 	tmpl->enabled = m_selected->isEnabled(); // carry the live enable state onto the respawned entity
+	tmpl->cullMode = m_cullModeDraft;
 	tmpl->sourceFile = m_path; // every node in the document belongs to the open .pre (empty until first save)
 	// Keep the prefab identity across respawns - losing it would break "Open Selected"'s registry lookup
 	// and re-serialize the entity inline instead of as a "Prefab <name>" reference.

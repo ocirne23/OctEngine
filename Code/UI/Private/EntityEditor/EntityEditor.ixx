@@ -122,6 +122,7 @@ private:
 
 	bool      m_syncTransform = false; // Transform floats mirror/edit the live entity; off = detached draft that saves as-is
 	Transform m_transformDraft;        // m_selected's transform as shown in the panel, refreshed on selection change
+	EEntityCullMode m_cullModeDraft = EEntityCullMode::PerEntity;
 
 	oc::vector<EntityChange> m_changes;
 	oc::string m_revealRequest; // .pre to select in the asset browser (drained by UI)

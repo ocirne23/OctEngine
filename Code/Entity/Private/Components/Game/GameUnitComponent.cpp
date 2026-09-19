@@ -972,12 +972,7 @@ bool GameUnitComponent::updateFar(Entity& entity, float deltaSec)
     Globals::physics.teleportBody(pc->body, newPos, pc->body.getRotation());
     pc->snapPose(entity, newPos);
     entity.pos = newPos; // a unit is a root: local == world
-    if (entity.spatialEntry.isValid())
-    {
-        const RenderComponent* render = getComponent<RenderComponent>(&entity);
-        const float radius = render && render->node.isValid() ? render->node.getWorldBounds().radius : 0.0f;
-        Globals::spatialIndex.updateEntry(entity.spatialEntry.handle(), glm::dvec3(newPos), radius);
-    }
+    entity.placeSpatialEntry();
     return true;
 }
 
