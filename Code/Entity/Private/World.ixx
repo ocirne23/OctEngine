@@ -256,6 +256,7 @@ public:
     oc::shared_ptr<RenderComponent::SpawnInfo> buildRenderSpawnInfo(const AssetNode& renderNode, const oc::string& ownerName, bool captureCollisionSource = false);
     oc::shared_ptr<AnimatorComponent::SpawnInfo> buildAnimatorSpawnInfo(const AssetNode& animatorNode, const oc::string& siblingContainerName, const oc::string& ownerName);
     oc::shared_ptr<SceneAnimatorComponent::SpawnInfo> buildSceneAnimatorSpawnInfo(const AssetNode& node, const oc::string& ownerName);
+    oc::shared_ptr<HumanoidAnimatorComponent::SpawnInfo> buildHumanoidAnimatorSpawnInfo(const AssetNode& node, const oc::string& ownerName); // null = the setup does not fit
     oc::shared_ptr<PhysicsComponent::SpawnInfo> buildPhysicsSpawnInfo(const AssetNode& physicsNode, const oc::string& containerName, const oc::string& nodePath, const oc::string& ownerName);
     oc::shared_ptr<AudioComponent::SpawnInfo> buildAudioSpawnInfo(const AssetNode& audioNode, const oc::string& ownerName);
 
@@ -297,7 +298,7 @@ private:
     void buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl);
 
     oc::shared_ptr<SceneComponent::SpawnInfo> buildSceneSpawnInfo(const AssetNode& sceneNode);
-    void appendSceneAnimBones(const AssetNode& node, int32 parent, SceneAnimRig& rig, const oc::string& ownerName);
+    void appendSceneAnimBones(const AssetNode& node, int32 parent, BoneModelRig& rig, const oc::string& ownerName);
 
     // Audio buffer for a sound file, shared between every entity referencing the same path. A failed
     // load is cached too (as an invalid buffer) so a bad path doesn't retry + re-log every spawn.
@@ -421,6 +422,7 @@ private:
     Renderer* m_updateRenderer = nullptr; // pass-scoped: shrinks every batch job's capture to 16 bytes
     float m_updateDelta = 0.0f;
     uint32 m_updateBudget = 1;            // cost units per batch (~25us), computed once per pass
+    uint64 m_batchTimeUs = 200;           // Target time in us per entity batch update
     JobCounter m_updateCounter;           // every batch job in the pass, incl. ones batches spawn
     PerWorker<EntityUpdateStaging> m_updateStaging;
     JobCost m_updateCost{ 2000 };

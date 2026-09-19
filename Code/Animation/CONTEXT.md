@@ -17,7 +17,16 @@ uploads it.
 | Drive the player each frame from an `.apl` graph | **Entity** | `AnimatorComponent` |
 | Consume the palette for GPU skinning | **RendererVK** | `allocateSkinningPalette` / `setSkinningPalette` |
 
-Rigid child ENTITIES (no skin) do not go through this pipeline at all — see Procedural part animation.
+**Rigid-part models (no skin) are NOT in this library** — the box-limb character's bones and walk
+are Entity's `SceneAnimatorComponent` / `HumanoidAnimatorComponent`. The one thing they take from
+here is **`Animation:BoneMath`** ([BoneMath.ixx](Private/BoneMath.ixx)): the numeric kernels both
+share — `polyTrig` / `polyTrig4` (sin + cos by polynomial, scalar and SSE), `phaseTrig` (a 0..1
+phase folded onto the nearest quadrant axis, no CRT call), `phaseSin` (the sine alone, folded with
+`min` and sign bits so it has NO branch; error < 4e-6), and `ParentCompose`
+(`composeTransform(parent, local)` for many locals under one parent, prepared once, SSE).
+**All of it is inline code in the module interface**: it compiles into the caller, so the sharing
+adds no call. The `Transform` layout it relies on (32 bytes, two registers) is static_asserted
+there.
 
 **Retargeting is by BONE NAME**, done at import: `loadAnimations` resolves every channel against a
 target skeleton, so a rig in one file and its animations in others (Mixamo exports) work. A channel
@@ -57,43 +66,6 @@ LOCAL (parent-relative) space. They apply every tick until cleared.
 | `clearBoneModifier` / `clearBoneModifiers` | Remove them. |
 
 `m_anyBoneModifier` short-circuits the whole path when nothing is posed.
-
-## Procedural part animation — `Animation:Procedural`
-
-[Procedural.ixx](Private/Procedural.ixx). **A SEPARATE runtime, not a clip source**: no `Skeleton`, no
-keys, no `AnimationPlayer`, no state machine. It moves RIGID PARTS (a box limb, a turret barrel) with
-closed-form sines, and it is made for tens of thousands of instances. Entity's
-`SceneAnimatorComponent` is the consumer; this library still knows nothing about entities.
-
-```
-value = layerWeight * amplitude * sin(2 pi * (harmonic * layerPhase + trackPhase))
-```
-
-* **`PartLayer`** — ONE phase + ONE weight. A **stride** layer (`cyclesPerMetre > 0`) advances its
-  phase by the DISTANCE moved (feet do not slide) and takes its weight from the speed (1 at
-  `fullSpeed`); a **timed** layer runs at `cyclesPerSecond` with a constant `weight`. Weights move
-  at `fadeRate` per second. **A blend IS the weight** — there is no pose to blend. Any
-  number of layers.
-* **`PartTrack`** — a rotation about a fixed part-local axis AROUND THE BIND rotation, or a
-  translation along a fixed offset. `harmonic` is 1 or 2 only: harmonic 2 comes from the double-angle
-  identities, and the track phase is stored as sin/cos, so **a tick costs one `sin`/`cos` pair per
-  ACTIVE LAYER, never per track.** The half-angle of the quaternion is a polynomial + normalize
-  (swing capped at 180°).
-* **`SceneAnimation`** — layers + parts + tracks (grouped by part). Immutable and shared: one per
-  prefab. Only parts that a track moves are in it.
-* **`SceneAnimatorState`** — the whole per-instance state: a vector with one `PartLayerState` per
-  layer (`initialize(anim)` sizes it): phase, weight, `manualWeight` (`>= 0` replaces the layer's
-  own weight rule — the gameplay override), and the layer's sin / cos of this tick, which
-  `advanceParts` writes and `evaluatePart` reads.
-* **`advanceParts(anim, state, dt, distance)`** returns FALSE when the pose is the same as
-  after the last tick (every weight steady, and no active layer advanced — a unit that stands
-  still). **The owner then skips the evaluation AND the writes.** A layer with weight 0 does not
-  advance its phase.
-* **`evaluatePart`** gives `outRot` when `part.rotates` and `outPos` when `part.translates` — the
-  owner writes only those.
-* **`SceneAnimationBuilder`** — `addLayer`, `swing`, `bob`, `walkCycle(WalkCycleParams)` (legs in
-  opposite phase, each arm opposite to the leg on its side, an optional twice-per-cycle bob),
-  `build()`. Parts come out with an identity bind; the owner calls `Part::setBind`.
 
 ## `AnimStateMachine`
 

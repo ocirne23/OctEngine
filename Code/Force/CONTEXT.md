@@ -121,6 +121,15 @@ merge candidate. The next `update()` that sees it active mints a fresh slot (if 
 uploads it in the same frame. Pass-safe like `setOutput` — the
 setter only writes the bool, and the slot churn itself runs serially in `update()`.
 
+**A dark emitter costs one read per pass, no write.** On a big co-op map most instances are gated
+off, and both passes that own a rest-state reset — the `"Force upload"` loop and the merge's
+`refreshBubbleBounds` — used to rewrite that state for every dark emitter every frame (three cache
+lines each). Each now writes it ONCE and sets its own flag (`EmitterInstance::uploadSettled` /
+`boundsSettled`, in the instance's FIRST cache line beside `generation` / `active`); the next frames
+reject on that line alone, like the bake-box pass does. The pass clears its flag the next time it
+sees the emitter live. **A new per-frame pass over `m_emitters` must reject dark emitters from the
+first line too.**
+
 **The World's SIM LOD drives it by tier** — "Game/Sim LOD/Force bubbles max tier", default 1. See
 [`Code/Entity/CONTEXT.md`](../Entity/CONTEXT.md).
 

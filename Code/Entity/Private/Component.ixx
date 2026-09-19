@@ -16,7 +16,9 @@ export import :NetworkComponent;
 export import :GameUnitComponent;
 export import :GameStructureComponent;
 export import :GameProjectileComponent;
-export import :SceneAnimatorComponent;
+export import :BoneModel; // not a component: what the two bone-model animators below share
+export import :SceneAnimatorComponent; // PARKED: compiled and kept, but it has NO component id / type bit - see its .ixx
+export import :HumanoidAnimatorComponent;
 export import :ScriptComponent;
 
 import :Entity;
@@ -62,7 +64,7 @@ export constexpr const char* componentTypeName(EComponentID id)
     case EComponentID_GameUnit: return "GameUnit";
     case EComponentID_GameStructure: return "GameStructure";
     case EComponentID_GameProjectile: return "GameProjectile";
-    case EComponentID_SceneAnimator: return "SceneAnimator";
+    case EComponentID_HumanoidAnimator: return "HumanoidAnimator";
     case EComponentID_Script: return "Script";
     default:                  return "Unknown";
     }
@@ -85,7 +87,7 @@ export namespace EntityComponentDetail
         alignUp(uint16(sizeof(GameUnitComponent)), ComponentAlignment),
         alignUp(uint16(sizeof(GameStructureComponent)), ComponentAlignment),
         alignUp(uint16(sizeof(GameProjectileComponent)), ComponentAlignment),
-        alignUp(uint16(sizeof(SceneAnimatorComponent)), ComponentAlignment),
+        alignUp(uint16(sizeof(HumanoidAnimatorComponent)), ComponentAlignment),
         alignUp(uint16(sizeof(ScriptComponent)),  ComponentAlignment),
     };
     static_assert(EComponentID_Scene == 0);
@@ -100,7 +102,7 @@ export namespace EntityComponentDetail
     static_assert(EComponentID_GameUnit == 9);
     static_assert(EComponentID_GameStructure == 10);
     static_assert(EComponentID_GameProjectile == 11);
-    static_assert(EComponentID_SceneAnimator == 12);
+    static_assert(EComponentID_HumanoidAnimator == 12);
     static_assert(EComponentID_Script == 13);
 
     inline constexpr uint16 entityBaseOffset = alignUp(uint16(sizeof(Entity)), ComponentAlignment);

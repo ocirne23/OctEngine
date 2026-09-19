@@ -94,7 +94,7 @@ static void tintSubtree(Entity* node, const glm::vec3* unitColor, bool friendly)
     };
     if (RenderComponent* rc = getComponent<RenderComponent>(node))
         tint(rc->node, getRenderSpawnInfo(node));
-    if (SceneAnimatorComponent* boneModel = getComponent<SceneAnimatorComponent>(node); boneModel && boneModel->rig)
+    if (HumanoidAnimatorComponent* boneModel = getComponent<HumanoidAnimatorComponent>(node); boneModel && boneModel->rig)
         for (size_t i = 0; i < boneModel->bones.size(); ++i)
             tint(boneModel->bones[i].node, boneModel->rig->bones[i].render.get());
     if (const SceneComponent* sc = getComponent<SceneComponent>(node))
@@ -204,11 +204,12 @@ void GameUnitComponent::tickHurtLight(const Entity& entity, float deltaSec)
         params.hurtLightIntensity * (0.5f + 0.5f * bodyRadius) * m_hurtGlow));
 }
 
-// The MODEL is the child with a SceneAnimatorComponent (a shared body prefab such as CubeGuy). The body
+// The MODEL is the child with a HumanoidAnimatorComponent (CubeGuy) - a shared body prefab. The body
 // has LockRotation and the root's rot is the physics pose, so the facing goes on the model: a yaw about Y
 // that turns the model's +X to the heading. The walk is fed with the same distance, because a child does
 // not move in its parent's space. Off the POSITION delta, so a replicated unit on a client does it too.
-// A unit that stands still writes only the feed (two floats). Parent -> child writes: safe in the pass.
+// A unit that stands still with its model at rest touches nothing (m_modelResting). Parent -> child
+// writes: safe in the pass.
 void GameUnitComponent::tickModel(Entity& entity, float deltaSec)
 {
     const SceneComponent* sc = getComponent<SceneComponent>(&entity);
@@ -218,24 +219,41 @@ void GameUnitComponent::tickModel(Entity& entity, float deltaSec)
     const glm::vec2 moved = m_hasModelPos ? here - m_modelLastPos : glm::vec2(0.0f);
     m_modelLastPos = here;
     m_hasModelPos = true;
-    const float dist = glm::length(moved);
+    // A standing unit whose model is already at rest: nothing to feed and nothing to turn - out before the
+    // child is even touched (no sqrt either: the test is on the squared length).
+    const float distSq = glm::dot(moved, moved);
+    if (distSq <= 0.0f && m_modelResting)
+        return;
+    const float dist = std::sqrt(distSq);
 
+    // The model ticks ONLY on this feed, with this tick's (SIM LOD) delta - also at 0 m, while its swing
+    // still has to fade out. Once the animator reports the rest pose (it sets atRest in its own visit,
+    // after this one), a standing unit feeds nothing and returns at the top from the next tick on.
     Entity* model = nullptr;
-    SceneAnimatorComponent* walk = nullptr;
+    HumanoidAnimatorComponent* walk = nullptr;
     for (const EntityPtr& child : sc->children)
-        if ((walk = getComponent<SceneAnimatorComponent>(child.get())) != nullptr)
+        if ((walk = getComponent<HumanoidAnimatorComponent>(child.get())) != nullptr)
         {
             model = child.get();
             break;
         }
     if (!model)
+    {
+        m_modelResting = true; // no model (the player capsule): never look again until it moves
         return;
-    // Every tick, also at 0 m: the model ticks ONLY on this feed, with this tick's (SIM LOD) delta.
-    walk->drive(dist, deltaSec);
+    }
+    m_modelResting = distSq <= 0.0f && walk->atRest;
+    if (m_modelResting)
+        return;
+    walk->feed(dist, deltaSec);
 
     constexpr float c_minFacingSpeed = 0.25f; // m/s: below it the move is a shove, not a heading
     constexpr float c_turnRate = 12.0f;       // rad/s
     if (dist < c_minFacingSpeed * deltaSec)
+        return;
+    // A unit that marches straight already faces its heading: one dot, no atan2, no write.
+    constexpr float c_alignedCos = 0.9998f; // ~1.1 degrees
+    if (glm::dot(moved, m_modelForward) >= c_alignedCos * dist)
         return;
     constexpr float c_pi = 3.14159265f;
     float turn = std::atan2(-moved.y, moved.x) - m_modelYaw;
@@ -245,7 +263,9 @@ void GameUnitComponent::tickModel(Entity& entity, float deltaSec)
     if (turn == 0.0f)
         return;
     m_modelYaw += turn;
-    model->rot = glm::angleAxis(m_modelYaw, glm::vec3(0.0f, 1.0f, 0.0f));
+    const float sh = std::sin(0.5f * m_modelYaw), ch = std::cos(0.5f * m_modelYaw);
+    model->rot = glm::quat(ch, 0.0f, sh, 0.0f);
+    m_modelForward = glm::vec2(ch * ch - sh * sh, -2.0f * sh * ch); // the model's +X in world XZ: (cos yaw, -sin yaw)
 }
 
 void GameUnitComponent::update(Entity& entity, float deltaSec)

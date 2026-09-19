@@ -90,10 +90,10 @@ static void writeEntityBody(Entity* entity, AssetNode& node, const oc::string& t
             if (const GameProjectileComponent::SpawnInfo* gi = getGameProjectileSpawnInfo(entity))
                 writeGameProjectileSpawnInfo(*gi, comp);
         }
-        else if (id == EComponentID_SceneAnimator)
+        else if (id == EComponentID_HumanoidAnimator)
         {
-            if (const SceneAnimatorComponent::SpawnInfo* pi = getSceneAnimatorSpawnInfo(entity))
-                writeSceneAnimatorSpawnInfo(*pi, comp);
+            if (const HumanoidAnimatorComponent::SpawnInfo* hi = getHumanoidAnimatorSpawnInfo(entity))
+                writeHumanoidAnimatorSpawnInfo(*hi, comp);
         }
         else if (id == EComponentID_Network)
         {

@@ -92,8 +92,8 @@ static void gatherTreeCullBounds(Entity* entity, const Transform& toRoot, Sphere
             any = true;
         }
     }
-    if (const SceneAnimatorComponent* boneModel = getComponent<SceneAnimatorComponent>(entity))
-        boneModel->addRestBounds(toRoot, bounds, any);
+    if (const HumanoidAnimatorComponent* humanoid = getComponent<HumanoidAnimatorComponent>(entity))
+        humanoid->addRestBounds(toRoot, bounds, any);
     if (const SceneComponent* sc = getComponent<SceneComponent>(entity))
         for (const EntityPtr& child : sc->children)
             gatherTreeCullBounds(child.get(), composeTransform(toRoot, Transform(child->pos, child->scale, child->rot)), bounds, any);
@@ -208,8 +208,8 @@ void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform&
             physics->update(*this, parentWorld); // dynamic bodies write the simulated pose into pos/rot
 
         // after Physics: the walk follows the distance this entity moved, this frame's pose included
-        if (SceneAnimatorComponent* parts = getComponent<SceneAnimatorComponent>(this); parts && simStep)
-            parts->update(*this, deltaSeconds);
+        if (HumanoidAnimatorComponent* humanoid = getComponent<HumanoidAnimatorComponent>(this, offsets); humanoid && simStep)
+            humanoid->update(*this, deltaSeconds);
     }
 
     const Transform world = composeTransform(parentWorld, Transform(pos, scale, rot));
@@ -251,8 +251,8 @@ void Entity::updateSelf(Renderer& renderer, float deltaSeconds, const Transform&
         passMask = cullPassMask;
     if (render && passMask != 0)
         renderer.renderNode(render->node, passMask); // lock-free (the parallel entity pass)
-    if (SceneAnimatorComponent* boneModel = getComponent<SceneAnimatorComponent>(this, offsets))
-        boneModel->place(renderer, world, passMask); // its bones ride this entity's pass mask
+    if (HumanoidAnimatorComponent* humanoid = getComponent<HumanoidAnimatorComponent>(this, offsets))
+        humanoid->place(renderer, world, passMask); // its bones ride this entity's pass mask
 
     if (AudioComponent* audio = getComponent<AudioComponent>(this, offsets))
         audio->update(*this, world); // playing follow-sounds track the entity
@@ -545,11 +545,11 @@ void Entity::createComponent(EComponentID id, uint16 componentOffset, const void
         gp->spawn(*this, *static_cast<const GameProjectileComponent::SpawnInfo*>(info), base);
         break;
     }
-    case EComponentID_SceneAnimator:
+    case EComponentID_HumanoidAnimator:
     {
-        SceneAnimatorComponent* pa = reinterpret_cast<SceneAnimatorComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
-        new (pa) SceneAnimatorComponent();
-        pa->spawn(*this, *static_cast<const SceneAnimatorComponent::SpawnInfo*>(info), base);
+        HumanoidAnimatorComponent* ha = reinterpret_cast<HumanoidAnimatorComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
+        new (ha) HumanoidAnimatorComponent();
+        ha->spawn(*this, *static_cast<const HumanoidAnimatorComponent::SpawnInfo*>(info), base);
         break;
     }
     case EComponentID_Script:
@@ -652,11 +652,11 @@ void Entity::destroyComponent(EComponentID id, uint16 componentOffset, const voi
         gp->~GameProjectileComponent();
         break;
     }
-    case EComponentID_SceneAnimator:
+    case EComponentID_HumanoidAnimator:
     {
-        SceneAnimatorComponent* pa = reinterpret_cast<SceneAnimatorComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
-        pa->destroy(*this, *static_cast<const SceneAnimatorComponent::SpawnInfo*>(info));
-        pa->~SceneAnimatorComponent();
+        HumanoidAnimatorComponent* ha = reinterpret_cast<HumanoidAnimatorComponent*>(reinterpret_cast<uint8*>(this) + componentOffset);
+        ha->destroy(*this, *static_cast<const HumanoidAnimatorComponent::SpawnInfo*>(info));
+        ha->~HumanoidAnimatorComponent();
         break;
     }
     case EComponentID_Script:

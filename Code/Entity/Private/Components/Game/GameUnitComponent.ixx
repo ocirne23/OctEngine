@@ -255,9 +255,11 @@ private:
     void noteHurtTeam(uint32 sourceTeam) { m_hurtTeam = sourceTeam == UnknownTeam ? 0xFF : (uint8)glm::min(sourceTeam, 254u); }
     uint32 opposingTeamGuess() const;
     float m_bodyTop = 1.0f;     // the collider's top over the entity origin
-    glm::vec2 m_modelLastPos{ 0.0f }; // tickModel: the MODEL is the child with a SceneAnimatorComponent
+    glm::vec2 m_modelLastPos{ 0.0f }; // tickModel: the MODEL is the child with a HumanoidAnimatorComponent
     float m_modelYaw = 0.0f;
+    glm::vec2 m_modelForward{ 1.0f, 0.0f }; // of m_modelYaw: the aligned test needs no trig
     bool m_hasModelPos = false;
+    bool m_modelResting = false; // standing, and the model reported its rest pose: tickModel returns at the top
     uint32 m_rng = 0;           // per-unit LCG, worker-safe
     float m_pressureTimer = 0.0f; // stalled time (displacement checkpoints)
     // ABSOLUTE sim time, not a countdown: a throttled tick's delta is clipped by "Max catch-up",

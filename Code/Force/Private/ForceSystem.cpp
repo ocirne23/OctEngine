@@ -598,7 +598,8 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
     for (uint32 emitterIdx = begin; emitterIdx < end; ++emitterIdx)
     {
         EmitterInstance& inst = m_emitters[emitterIdx];
-        if (inst.generation == 0)
+        // Free, or gated off with its rest state already written: one first-line read, no write.
+        if (inst.generation == 0 || (!inst.active && inst.uploadSettled))
             continue;
         const float rampStep = m_activateRamp > 1e-3f ? deltaSec / m_activateRamp : 1.0f;
         if (!inst.active)
@@ -618,11 +619,15 @@ void ForceSystem::update(Renderer& renderer, float deltaSec)
                 inst.light.fade = 0.0f;
                 if (inst.rendererSlot != UINT32_MAX)
                     churn.release.push_back(emitterIdx);
+                inst.uploadSettled = true; // skipped from the next frame on, until it is active again
                 continue;
             }
         }
         else
+        {
+            inst.uploadSettled = false;
             inst.ramp = glm::min(inst.ramp + rampStep, 1.0f);
+        }
         // The bubble light: lit while this emitter projects its OWN bubble (Own / Leaving); a
         // Joining or Merged member fades out as its group's light fades in.
         stepBubbleLight(renderer, inst.light, inst.bubbleRadius > 0.0f && inst.group == 0,
@@ -880,11 +885,16 @@ void ForceSystem::refreshBubbleBounds(EmitterInstance& inst, oc::vector<uint32>&
         // No bubble once gated off AND dark: evicted from its group by the member sweep (radius
         // 0 = unfit), never a candidate. The bounds cache is dropped so reactivation recomputes.
         // (While still fading out it keeps a shrinking OWN bubble below - but is no candidate.)
+        // Written ONCE: the settled flag keeps every later frame a first-line read.
+        if (inst.boundsSettled)
+            return;
         inst.bubbleRadius = 0.0f;
         inst.candidate = false;
         inst.boundsOutput = -1.0f;
+        inst.boundsSettled = true;
         return;
     }
+    inst.boundsSettled = false;
     refreshDistributionScale(inst); // distNorm cache fresh before the fold below
     const float R = glm::max(inst.reach, 1e-3f);
     const glm::vec3 dir = glm::dot(inst.dir, inst.dir) > 1e-6f ? glm::normalize(inst.dir) : glm::vec3(0.0f, 1.0f, 0.0f);

@@ -51,7 +51,7 @@ Per-component `enabled` bools are independent of all of these.
 
 ```
 Scene(0) Render(1) Animator(2) Physics(3) Audio(4) Particle(5) Force(6) Light(7)
-Network(8) GameUnit(9) GameStructure(10) GameProjectile(11) SceneAnimator(12) Script(13)
+Network(8) GameUnit(9) GameStructure(10) GameProjectile(11) HumanoidAnimator(12) Script(13)
 ```
 
 **Script is LAST so every other component is available when it spawns.**
@@ -159,8 +159,8 @@ through `spawnTemplate` (`getCullMode`).
   nodes inflated; state stored last, benign race like `treeAllocSize`): measured once from the first
   spawned tree (`gatherTreeCullBounds` composes the authored local transforms — child render nodes sit
   in parent-local space at spawn), then placed by the root's world transform every visit. They are
-  the REST pose: a SceneAnimator swing is not added. **SceneAnimator BONES count as render nodes
-  here** (`SceneAnimatorComponent::addRestBounds`). `refreshTreeCullBounds` re-measures (the
+  the REST pose: a limb swing is not added. **HumanoidAnimator BONES count as render nodes
+  here** (`HumanoidAnimatorComponent::addRestBounds`). `refreshTreeCullBounds` re-measures (the
   RespawnEntity change calls it after the child splice).
 * An entity WITH an entry always culls itself, also under a RootOnly ancestor (a PerEntity entity
   reparented in). An entity with no entry and no covering root renders unculled.
@@ -691,7 +691,8 @@ renderer state.** It fires, for each side:
 | `SceneComponent` | Children. The list is mutated through `addChild` / `removeChild` / `replaceChild` / `adoptChildren` (plain mutators: the one place to hook a future "children changed"); `spawn` appends directly. |
 | `RenderComponent` | RenderNode + local transform, static or skinned, plus `Color`. `place` sets the node transform; the spatial refresh and the culled submit are `Entity::updateSelf`'s (see CullMode). |
 | `AnimatorComponent` | AnimationPlayer + AnimStateMachine from `.apl`; gameplay through `stateMachine.setFloat/Bool/Trigger`, clip events through `onEvent`. Skinned meshes only. |
-| `SceneAnimatorComponent` | A rigid-part model as BONES inside one entity (transform + RenderNode each) + its procedural animation. Below. |
+| `SceneAnimatorComponent` | **PARKED — no component id, no type bit, unknown to the Entity class.** A rigid-part model as BONES inside one entity + the GENERAL procedural animation (layers / tracks). Kept compiling; below. |
+| `HumanoidAnimatorComponent` | The same bone model with the BARE-MINIMUM animation: four limbs about local Z, nothing else (CubeGuy, every game unit). Below. |
 | `ScriptComponent` | See [`Code/Script/CONTEXT.md`](../Script/CONTEXT.md). |
 | `PhysicsComponent` | See [`Code/Physics/CONTEXT.md`](../Physics/CONTEXT.md). |
 | `AudioComponent` | See [`Code/Audio/CONTEXT.md`](../Audio/CONTEXT.md). |
@@ -701,16 +702,92 @@ renderer state.** It fires, for each side:
 | `NetworkComponent` | Multiplayer, below. |
 | Game components (9/10/11) | Below. |
 
-## `SceneAnimatorComponent` (ID 12)
+## `SceneAnimatorComponent` — PARKED (no ID)
 
-A rigid-part model INSIDE ONE ENTITY — the box-limb character — and its procedural animation. The
-math is Animation's `Animation:Procedural` (see
-[`Code/Animation/CONTEXT.md`](../Animation/CONTEXT.md)). **It shares nothing with
-`AnimatorComponent`**: no skeleton, no clips, no `.apl`, no string parameters.
+> **Nothing uses it now, so it holds NO component id and NO type bit, and the Entity class does not
+> know it**: no create / destroy case, no `update` / `place` call in `updateSelf`, no RootOnly
+> bounds, no prefab write, no Entity Editor pass-through, no natvis entry, no SIM LOD kind, and
+> `GameUnitComponent` (tint, `tickModel`) handles the Humanoid only. A `.pre` that authors
+> `Component SceneAnimator` gets a warning and no component. **The code is kept compiling so it does
+> not rot** (`Component.ixx` still imports the partition; `World::buildSceneAnimatorSpawnInfo`
+> still exists, with no caller). To bring it back, follow the list in the comment above the struct
+> in `SceneAnimatorComponent.ixx` — it is the "Adding a component type" checklist plus the
+> bone-model call sites. **Everything below describes the code as it is, not something that runs.**
+
+A rigid-part model INSIDE ONE ENTITY and its GENERAL procedural animation (layers and tracks). It
+shares nothing with `AnimatorComponent` — no skeleton, no clips, no `.apl`, no string parameters,
+no keys, no sampled pose. The fixed four-limb walk is a SEPARATE component,
+`HumanoidAnimatorComponent` (below); what the two have in common is `:BoneModel` + `BoneMath`.
+
+### What the two bone-model animators share — with NO overhead
+
+Everything shared is an inline function, a template, or a plain struct; **there is no virtual
+call, no function pointer and no base-class dispatch**, so each animator compiles its own copy and
+the sharing costs nothing at run time (non-Debug: `/Ob2` + `/GL`; a Debug build does not inline
+and keeps the calls).
+
+* **`Animation:BoneMath`** (Animation library, Core-only — pure numerics): `polyTrig`,
+  `polyTrig4` (SSE), `phaseTrig`, and `ParentCompose` — `composeTransform(parent, local)` for many
+  locals under one parent, the parent prepared once. The `Transform` layout static_asserts live
+  there.
+* **`Entity:BoneModel`** (it needs `RenderNode`, so it cannot be in Animation): `BoneModelRig` (the
+  authored bones; `SceneAnimRig` and `HumanoidRig` DERIVE from it, plain inheritance) and the
+  templates over the component's own bone type — it needs `nodeLocal` and `node` —
+  `spawnBoneNodes`, `placeFlatBones`, `submitBones`, `addBoneRestBounds`.
+  `World::appendSceneAnimBones` parses `Bone` blocks into a `BoneModelRig` for both.
+* **NOT shared, on purpose: the per-instance state.** Each component holds its own plain fields
+  (`drivenDistance` / `drivenDelta` / `lastPos` / `hasLastPos` for the distance source,
+  `placedWorld` / `placeDirty` for the compose-again test, `atRest`) and its own copy of the two
+  small functions that use them (`feed`, the private `beginTick`; the test is inline in `place`).
+  There is no wrapper struct around them. `GameUnitComponent::tickModel` uses the Humanoid's
+  `feed` + `atRest` directly. (The parked SceneAnimator's `atRest` is a `static constexpr false` —
+  a timed layer moves a standing model, so it has no rest pose.)
+
+**The motion is closed-form.** Shared per template in `SceneAnimRig` (`layers`, `tracks`, `parts`);
+per instance only `layers` — an `oc::small_vector<LayerState, 2>`, inline:
+
+```
+value = layerWeight * amplitude * sin(2 pi * (harmonic * layerPhase + trackPhase))
+```
+
+* **`SceneAnimRig::Layer`** + the instance's **`LayerState`** — ONE phase + ONE weight. A **stride**
+  layer (`cyclesPerMetre > 0`) advances its phase by the DISTANCE moved (feet do not slide) and
+  takes its weight from the speed (1 at `fullSpeed`); a **timed** layer runs at `cyclesPerSecond`
+  with a constant `weight`. Weights move at `fadeRate` per second. **A blend IS the weight.**
+  `manualWeight >= 0` is the gameplay override. A layer with weight 0 does not advance its phase.
+* **`Track`** — a rotation about a fixed bone-local axis AROUND THE BIND rotation, or a translation
+  along a fixed offset. `harmonic` is 1 or 2 only: harmonic 2 comes from the double-angle
+  identities and the track phase is stored as sin/cos, so **a tick costs one `sin`/`cos` pair per
+  ACTIVE LAYER** (kept in `LayerState::s` / `c`), never per track. The quaternion's half-angle is
+  a polynomial + normalize (swing capped at 180°).
+* **`Part`** — a bone that tracks move (bone index; the bind is the bone's). Its tracks are two
+  runs, `numRotations` then `numTranslations`, so `evaluate()` has no branch per track and writes IN
+  PLACE only the channels that have tracks.
+* **`SwingBatch`** — the usual limb (ONE rotation track, no translation, identity bind rotation)
+  does not become a `Part`: `finalize` packs up to four into one SoA batch, and
+  `evaluateSwings` makes the four quaternions in ONE SSE pass (value → half angle → polynomial →
+  `rsqrt` + one Newton step → transpose → four stores). `uniformLayer` (every lane on the same
+  layer + harmonic — the limb walk) broadcasts the layer term instead of gathering it. CubeGuy's
+  four limbs are one batch, and its `parts` list is empty.
+* **`advance(dt, distance)`** returns FALSE when the pose is the same as after the last tick. The
+  layer's sin / cos is `phaseTrig`, not the CRT: the phase is folded onto the nearest quadrant axis,
+  so the polynomial sees |x| ≤ π/4 (error < 4e-7).
+* **SSE in `place()`** (flat rigs): `Transform` is 32 bytes — `(pos.xyz, scale)` + `quat (x, y, z,
+  w)`, static_asserted — so a transform is two registers. `world` is prepared ONCE per call (its
+  rotation as three columns × scale, its quaternion as four sign-folded broadcast rows); each bone
+  is then two loads, six shuffles, seven FMAs and two stores. FMA is baseline (`/arch:AVX2`).
+* `refreshNodeLocal`: a render recipe whose local transform is a pure offset
+  (`Bone::renderOffsetOnly` — the usual mesh offset) needs no quaternion product.
+* **Authoring side** (World's parse): `addLayer` / `swing` / `bob` / `walkCycle(WalkCycle)` name
+  their bone; `finalize(ownerName)` resolves the names (an unknown bone is a warning) and groups
+  the tracks into `parts`. The rig is immutable after.
 
 **A BONE is what an entity with only a transform and a RenderComponent would be, minus the
-entity**: `Bone { Transform local; Transform world; RenderNode node; }` in the component's `bones`
-vector (one allocation, sized at spawn). No entity allocation, no spatial entry, no visit, no child
+entity**: `Bone { Transform local; Transform nodeLocal; RenderNode node; }` in the component's
+`bones` — an `oc::small_vector<Bone, 6>`, so up to 6 bones sit INSIDE the component, in the
+entity's own allocation (no allocation per spawn, and the visit stays in the entity's memory); more
+bones spill to the heap. `nodeLocal` = `local` × the render recipe's local transform, refreshed only
+when `local` changes. No entity allocation, no spatial entry, no visit, no child
 list, no name — CubeGuy is 1 entity, not 7 (a unit: 2, not 8). Bones can nest (`parent`, parent
 before child); a bone with no `Component Render` is a pure joint. The limbs were full child
 entities before; that design, its cached child pointers and `SceneComponent::childrenChanged`
@@ -718,21 +795,27 @@ are gone.
 
 **The design rule is MINIMUM MUTATION:**
 
-* A tick that does not change the pose (`advanceParts` returns false — a unit that stands still)
+* A tick that does not change the pose (`advance` returns false — a unit that stands still)
   **writes no bone**: no evaluation, no write.
 * A moved part gets `local.quat` only, `local.pos` only, or both — whatever its tracks move.
 * **`place(renderer, world, passMask)`** is the placement tail of `Entity::updateSelf` (every visit,
   frozen or not, right after the entity's own render submit): when NEITHER a bone's local changed
   (`placeDirty`) NOR the entity's world transform (`placedWorld`), it composes nothing and only
-  submits the nodes (`renderNode`, lock-free); else one compose chain per bone + `setTransform`.
+  submits the nodes (`renderNode`, lock-free); else, on a FLAT rig (`SceneAnimRig::flat`: no bone
+  has a parent bone — CubeGuy), ONE compose per bone (`world` × `nodeLocal`) + `setTransform`; a
+  nested rig runs the world chain in a stack scratch, two composes per bone.
   `passMask` 0 = culled: nothing is submitted.
+* **Open cost, in RendererVK:** the submit is one `Renderer::renderNode` per bone — per call an
+  atomic claim on the shared instance cursor, per-mesh atomic counts and the texture-use note (a
+  `log2` + three `noteUse`). A batched submit for one model (one claim, one texture note) is the
+  next step; so is a batched spawn (`spawnNodeForIdx` takes the renderer spawn mutex per bone).
 * **The walk drives itself**: the component measures the planar (XZ) distance its OWN entity moved
   since the last tick, so no script or gameplay code sets a speed. It runs AFTER
   `PhysicsComponent::update` in `updateSelf`, so the distance has this frame's pose. The distance is
   in the parent's space — the world for a root entity, which a unit is; **an animator on a child
   that only moves with its parent sees no distance.**
 * Catch-up ticks (SIM LOD) stay correct: the distance covers the same span as the delta.
-* **A MODEL CHILD is driven by its parent**: `drive(metres, deltaSeconds)` (a parent → child
+* **A MODEL CHILD is driven by its parent**: `feed(metres, deltaSeconds)` (a parent → child
   write, before the child's visit) switches the animator to driven mode — it stops measuring itself,
   and on its own visit it consumes and zeroes the fed distance AND the fed delta.
   `GameUnitComponent::tickModel` is the user, once per unit tick, also at 0 m (a standing unit's
@@ -751,8 +834,8 @@ are gone.
 **`SceneAnimRig`** (shared per template, in the SpawnInfo): `bones` (name, parent, authored bind,
 and the bone's render recipe — a plain `RenderComponent::SpawnInfo` from
 `World::buildRenderSpawnInfo`, so a bone authors `Component Render` exactly like an entity: container,
-`Node`, local `Position`, `Color`; static nodes only), the `SceneAnimation`, and `partBones` (the bone
-of each moved part, matched by NAME; an unknown name is a warning and that track does nothing).
+`Node`, local `Position`, `Color`; static nodes only), `flat`, and the motion (`layers`, `tracks`,
+`parts` — above). Tracks find their bone by NAME at `finalize`.
 
 **CULLING is the entity's.** The bones ride the entity's pass mask. `CullMode RootOnly` measures
 them into the template's tree bounds (`addRestBounds`, called from `gatherTreeCullBounds`; the REST
@@ -780,14 +863,65 @@ Bone <name>                                   Position / Rotation / Scale like a
 Layer <name>
     Stride <m per cycle>  FullSpeed <m/s>     stride layer: phase by distance, weight by speed
     Duration <sec per cycle>  Weight <0..1>   timed layer (no Stride)
-    Fade <sec>    Axis x y z                  the layer's default swing axis, part-local
+    Fade <sec>    Axis x y z                  the layer's default swing axis, bone-local
     Walk                                      preset: LegAngle / ArmAngle / LeftLeg / RightLeg /
-                                              LeftArm / RightArm / BobPart / BobHeight
-    Swing <part> <angleDeg> [phase] [harmonic 1|2]     child Axis
-    Bob <part> <height> [phase] [harmonic 1|2]         child Direction
+                                              LeftArm / RightArm / BobBone / BobHeight
+    Swing <bone> <angleDeg> [phase] [harmonic 1|2]     child Axis
+    Bob <bone> <height> [phase] [harmonic 1|2]         child Direction
 ```
 
-Demo: `Entities/Debug/CubeGuy.pre`.
+No demo prefab uses it now (CubeGuy is a `HumanoidAnimator`); the equivalent `Layer Walk` block is
+the comment at the top of `Entities/Debug/CubeGuy.pre`.
+
+## `HumanoidAnimatorComponent` (ID 12)
+
+**THE BARE-MINIMUM ANIMATOR, for exactly one setup (CubeGuy): four limb bones that swing about
+their local Z, driven by the distance moved — and nothing else, on purpose.** No layers, no tracks,
+no parts, no batches, no gameplay weight override. It is a bone model like the SceneAnimator's
+(same `Bone` blocks, same culling and SIM LOD rules, same `feed` from
+`GameUnitComponent::tickModel`, same unit tint) — see the shared-code list above.
+
+* **`HumanoidRig::configure` checks the setup ONCE**, at template build: flat rig, the four bones
+  exist and are distinct, identity bind rotation, and a limb `Component Render` with NO local
+  transform — **the limb mesh's origin must BE the pivot** (baseshapes' `Limb3`, not `Pillar3`
+  with a `Position` offset). **A setup that does not fit is a warning and NO component**
+  (`World::buildHumanoidAnimatorSpawnInfo` returns null — the model is absent, which is hard to
+  miss). **So `update` has no check and no loop over data.**
+* **At rest = no work.** `update` returns right after `beginTick` when the distance is 0 and
+  `walkWeight` is 0 — before the division and the fade. It reports the rest pose in its `atRest`
+  field; `GameUnitComponent::tickModel` then stops feeding a standing unit
+  (`m_modelResting`: it returns at its top, before the model child is touched), so a driven model
+  of an idle unit costs one failed `beginTick` test. A distance > 0 starts it again. Past that test the
+  pose ALWAYS changes (moving, or fading out), so there is no second early-out.
+* **The tick:** one weight, one phase (`walkPhase` / `walkWeight` are the whole state), one
+  `BoneMath::phaseSin` — the sine alone and with NO branch (`phaseTrig`'s quadrant switch depends
+  on the data, and a crowd's phases are random, so it mispredicts) — then **the four limbs as ONE SSE pass** over the rig's one lane set, `halfAngle`.
+  A Z rotation is the quaternion `(0, 0, sin h, cos h)`: no product, no axis multiply. The limbs
+  differ only in the SIGN of their half angle (+leg, −leg, −arm, +arm — the same signs as
+  `SceneAnimRig::walkCycle`), and the polynomial carries it (sin is odd, cos is even). The half
+  angle is clamped to 45° (a 90° swing), where the un-normalized polynomial is within 3e-7, so
+  there is no `rsqrt`.
+* **ROTATION ONLY.** A `RenderNode` turns a mesh about the MESH origin, so a mesh that hangs off
+  its bone by a render offset has to swing on an arc — a position write per limb per tick. With
+  the origin at the pivot the node position never changes: the tick's whole output is an unpack,
+  four shuffles and **four quaternion stores** into `nodeLocal.quat`; `pos` and `scale` keep what
+  spawn set from the bind. That is why `configure` refuses a render offset.
+* **Lane i IS bone i:** `configure` REORDERS the rig's bones so the limbs are bones 0..3 in `Limb`
+  order (LeftLeg, RightLeg, LeftArm, RightArm); the rest follow in authored order. No index
+  table — and the bone order is NOT the `.pre` order (CubeGuy: limbs, then Head, Body).
+* **`Bone` is `{ nodeLocal, node }`** — no separate pose: the tick writes `nodeLocal` directly and
+  `place()` (always the flat SSE path) reads nothing else.
+* A unit that stands still returns after the weight test and writes nothing.
+
+```
+Component HumanoidAnimator
+    Stride / FullSpeed                        the entity's LOCAL units, like a stride Layer
+    Fade <sec>    LegAngle / ArmAngle <deg>   at most 90
+    LeftLeg / RightLeg / LeftArm / RightArm   bone names, default = the key
+    Bone <name> ...                           as in SceneAnimator
+```
+
+Demo: `Entities/Debug/CubeGuy.pre` — the body of every game unit.
 
 ## `LightComponent` (ID 7)
 
@@ -853,11 +987,12 @@ it overwrote the push entirely — a launch / snap-back oscillation.
   system's bubble light (see [`Code/Force/CONTEXT.md`](../Force/CONTEXT.md)) — a collapsed
   shield has no bubble and so no light, and a merged crowd is one light. **The MODEL**
   (`tickModel`, right after the hurt light, every role): the unit's body is a CHILD — the first
-  child with a `SceneAnimatorComponent`, a shared model prefab (`Debug/CubeGuy.pre`). The collider
+  child with a `HumanoidAnimatorComponent`, a
+  shared model prefab (`Debug/CubeGuy.pre`). The collider
   has `LockRotation` and the root's `rot` is the physics pose, so the FACING goes on the model: a
   yaw about Y that turns the model's +X to the heading, at 12 rad/s, only above 0.25 m/s (a slower
   move is a shove, not a heading). The same distance feeds the model's walk
-  (`drive` — a child does not move in its parent's space; the feed carries this tick's delta too,
+  (the animator's `feed` — a child does not move in its parent's space; the feed carries this tick's delta too,
   so the model follows the unit's SIM LOD cadence). Both come from the entity
   POSITION delta, never from the sim, so a replicated unit on a client turns and walks too. A unit
   that stands still writes nothing. The model's authored rotation is replaced by the yaw.

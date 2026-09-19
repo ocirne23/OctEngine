@@ -3,15 +3,14 @@ Prefab CubeGuy
 	Rotation 0 -0 0
 	Scale 0.25
 	CullMode RootOnly
-	Component SceneAnimator
-		Layer Walk
-			Stride 6.0        # per full cycle (two steps), in MODEL units: x the entity scale = metres (0.25 -> 1.5 m)
-			FullSpeed 4.0     # model units/s where the swing reaches full amplitude (0.25 -> 1 m/s)
-			Fade 0.15
-			Axis 0 0 1
-			Walk
-				LegAngle 35
-				ArmAngle 30
+	# The bare-minimum animator: four limbs, local Z only. The general one does the same walk as
+	#   Component SceneAnimator: Layer Walk / Stride 6.0 / FullSpeed 4.0 / Fade 0.15 / Axis 0 0 1 / Walk { LegAngle 35, ArmAngle 30 }
+	Component HumanoidAnimator
+		Stride 6.0        # per full cycle (two steps), in MODEL units: x the entity scale = metres (0.25 -> 1.5 m)
+		FullSpeed 4.0     # model units/s where the swing reaches full amplitude (0.25 -> 1 m/s)
+		Fade 0.15
+		LegAngle 35
+		ArmAngle 30
 		Bone Head
 			Position 0 2 0
 			Rotation 0 -0 0
@@ -34,33 +33,29 @@ Prefab CubeGuy
 			Scale 0.5
 			Component Render
 				ObjectContainer baseshapes
-				Node Pillar3
+				Node Limb3
 				Type StaticMesh
-				Position 0 -2 0
 		Bone RightLeg
 			Position 0 -2.5 -0.6
 			Rotation 0 -0 0
 			Scale 0.5
 			Component Render
 				ObjectContainer baseshapes
-				Node Pillar3
+				Node Limb3
 				Type StaticMesh
-				Position 0 -2 0
 		Bone RightArm
 			Position 0 0.5 -1.5
 			Rotation 0 -0 0
 			Scale 0.5
 			Component Render
 				ObjectContainer baseshapes
-				Node Pillar3
+				Node Limb3
 				Type StaticMesh
-				Position 0 -2 0
 		Bone LeftArm
 			Position 0 0.5 1.5
 			Rotation 0 -0 0
 			Scale 0.5
 			Component Render
 				ObjectContainer baseshapes
-				Node Pillar3
+				Node Limb3
 				Type StaticMesh
-				Position 0 -2 0

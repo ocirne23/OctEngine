@@ -1836,10 +1836,10 @@ void EntityEditor::commitRespawn()
 	}
 
 	// No editor section: the authored recipe is carried over as it is.
-	if (const SceneAnimatorComponent::SpawnInfo* parts = getSceneAnimatorSpawnInfo(m_selected.get()))
+	if (const HumanoidAnimatorComponent::SpawnInfo* humanoid = getHumanoidAnimatorSpawnInfo(m_selected.get()))
 	{
-		typeBits |= uint16(1 << EComponentID_SceneAnimator);
-		infos.push_back(oc::make_shared<SceneAnimatorComponent::SpawnInfo>(*parts));
+		typeBits |= uint16(1 << EComponentID_HumanoidAnimator);
+		infos.push_back(oc::make_shared<HumanoidAnimatorComponent::SpawnInfo>(*humanoid));
 	}
 
 	if (m_hasScript)

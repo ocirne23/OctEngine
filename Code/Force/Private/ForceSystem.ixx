@@ -154,6 +154,13 @@ private:
         uint32 team = 0;
         bool active = true; // see ForceEmitter::setActive
         bool analyticReadback = false; // see ForceEmitter::setAnalyticReadback
+        // DARK AND SETTLED, one flag per pass that owns a reset (the upload / the merge bounds):
+        // set once that pass has written a gated-off, faded-out emitter's rest state, cleared the
+        // next time it sees it live. On a big co-op map most instances are dark, so with these in
+        // the FIRST cache line (in existing padding) a dark emitter costs each pass one read and
+        // NO write - instead of re-dirtying three lines of rest state every frame.
+        bool uploadSettled = false;
+        bool boundsSettled = false;
         float output = 1.0f;  // the SET output; the field uses liveOutput() = output x ramp
         // ACTIVATION RAMP: 0 while gated off, climbing to 1 over "Activate ramp (s)" once active,
         // so a bubble GROWS in (the SIM LOD tier edge, a fresh spawn) instead of popping at full

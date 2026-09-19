@@ -375,10 +375,10 @@ void World::update(Renderer& renderer, float deltaSeconds)
     m_simTimeAccum += deltaSeconds;
     // COST-BUDGETED batches instead of a uniform grain: every entity carries a measured updateCost
     // (unmeasured counts as 1 so it still partitions), and a batch fills until the summed cost
-    // reaches ~25us of measured time (m_updateCost's EMA is fed COST UNITS as its item count, so
+    // reaches ~m_batchTimeUs of measured time (m_updateCost's EMA is fed COST UNITS as its item count, so
     // nsPerItem() self-calibrates to "ns per cost unit"). No even-split term anymore: parallelism
     // now comes from the fan-out itself - children spawn jobs the moment their parent's batch ends.
-    m_updateBudget = uint32(glm::clamp<uint64>(25000 / glm::max<uint64>(m_updateCost.nsPerItem(), 1), 1, 4096));
+    m_updateBudget = uint32(glm::clamp<uint64>((m_batchTimeUs * 1000) / glm::max<uint64>(m_updateCost.nsPerItem(), 1), 1, 4096));
 
     // SIM LOD: resolve the per-pass constants once (the tweaks are live, the pass reads copies).
     m_simLodFollowMask = m_simLodPinMask = 0;
@@ -391,7 +391,7 @@ void World::update(Renderer& renderer, float deltaSeconds)
         kind(m_simLod.projectiles, EComponentID_GameProjectile);
         kind(m_simLod.scripts,     EComponentID_Script);
         kind(m_simLod.animators,   EComponentID_Animator);
-        kind(m_simLod.animators,   EComponentID_SceneAnimator); // a self-driven one; a driven model child follows its parent's tick
+        kind(m_simLod.animators,   EComponentID_HumanoidAnimator); // a self-driven one; a driven model child follows its parent's tick
     }
     m_updateStaging.forEach([](EntityUpdateStaging& s) { for (uint32& n : s.simLodCount) n = 0; });
     setupScope.stop();
@@ -601,7 +601,7 @@ bool World::submitEntityBatches(const EntityUpdateNode* nodes, uint32 count, con
             continue;
         }
         // High: the pass is the frame's critical path (main waits on it), every batch is bounded
-        // (~25us budget), and High is what the window-thread helper serves between pumps.
+        // (~m_batchTimeUs budget), and High is what the window-thread helper serves between pumps.
         Globals::jobSystem.submit([this, batch, n] { updateBatchJob(batch, n); },
             { "Entity Update", EProfileCategory::Entity }, EJobPriority::High, &m_updateCounter);
     }
@@ -1127,14 +1127,15 @@ oc::shared_ptr<AnimatorComponent::SpawnInfo> World::buildAnimatorSpawnInfo(const
 }
 
 // `Bone <name>` blocks, DFS so a parent is before its children: Position / Rotation / Scale like an
-// entity, an optional `Component Render`, and nested `Bone`s.
-void World::appendSceneAnimBones(const AssetNode& node, int32 parent, SceneAnimRig& rig, const oc::string& ownerName)
+// entity, an optional `Component Render`, and nested `Bone`s. Both bone-model animators author them.
+void World::appendSceneAnimBones(const AssetNode& node, int32 parent, BoneModelRig& rig, const oc::string& ownerName)
 {
     for (const AssetNode* boneNode : node.findAll("Bone"))
     {
-        SceneAnimRig::Bone bone;
+        BoneModelRig::Bone bone;
         bone.name = boneNode->asString(0);
         bone.parent = parent;
+        rig.flat &= parent < 0;
         bone.bind = readNodeTransform(*boneNode);
         if (const AssetNode* renderNode = findComponentNode(*boneNode, "Render"))
         {
@@ -1153,9 +1154,9 @@ void World::appendSceneAnimBones(const AssetNode& node, int32 parent, SceneAnimR
 //   Stride <m per cycle> + FullSpeed <m/s>   the phase follows the distance moved, the weight the speed
 //   Duration <sec per cycle> + Weight <0..1>  a timed layer (no Stride)
 //   Fade <sec>, Axis x y z (the layer's default swing axis, part-local)
-//   Walk  (LegAngle / ArmAngle / LeftLeg / RightLeg / LeftArm / RightArm / BobPart / BobHeight)
-//   Swing <part> <angleDeg> [phase] [harmonic 1|2]  (child Axis)
-//   Bob <part> <height> [phase] [harmonic 1|2]      (child Direction)
+//   Walk  (LegAngle / ArmAngle / LeftLeg / RightLeg / LeftArm / RightArm / BobBone / BobHeight)
+//   Swing <bone> <angleDeg> [phase] [harmonic 1|2]  (child Axis)
+//   Bob <bone> <height> [phase] [harmonic 1|2]      (child Direction)
 oc::shared_ptr<SceneAnimatorComponent::SpawnInfo> World::buildSceneAnimatorSpawnInfo(const AssetNode& node, const oc::string& ownerName)
 {
     auto rig = oc::make_shared<SceneAnimRig>();
@@ -1166,24 +1167,23 @@ oc::shared_ptr<SceneAnimatorComponent::SpawnInfo> World::buildSceneAnimatorSpawn
         return nullptr;
     }
 
-    SceneAnimationBuilder builder;
     for (const AssetNode* layerNode : node.findAll("Layer"))
     {
-        PartLayer layer;
+        SceneAnimRig::Layer layer;
         layer.name = layerNode->asString(0);
         if (const AssetNode* n = layerNode->find("Stride"))    layer.cyclesPerMetre = 1.0f / glm::max(n->asFloat(0, 1.0f), 1e-3f);
         if (const AssetNode* n = layerNode->find("FullSpeed")) layer.fullSpeed = glm::max(n->asFloat(0, 1.0f), 1e-3f);
         if (const AssetNode* n = layerNode->find("Duration"))  layer.cyclesPerSecond = 1.0f / glm::max(n->asFloat(0, 1.0f), 1e-3f);
         if (const AssetNode* n = layerNode->find("Weight"))    layer.weight = glm::clamp(n->asFloat(0, 1.0f), 0.0f, 1.0f);
         if (const AssetNode* n = layerNode->find("Fade"))      layer.fadeRate = 1.0f / glm::max(n->asFloat(0, 0.125f), 1e-3f);
-        const uint32 layerIdx = builder.addLayer(layer);
+        const uint32 layerIdx = rig->addLayer(layer);
 
         glm::vec3 axis(0.0f, 0.0f, 1.0f);
         if (const AssetNode* n = layerNode->find("Axis")) axis = n->asVec3(axis);
 
         if (const AssetNode* w = layerNode->find("Walk"))
         {
-            WalkCycleParams walk;
+            SceneAnimRig::WalkCycle walk;
             walk.axis = axis;
             if (const AssetNode* n = w->find("LegAngle"))  walk.legAngle = glm::radians(n->asFloat());
             if (const AssetNode* n = w->find("ArmAngle"))  walk.armAngle = glm::radians(n->asFloat());
@@ -1191,42 +1191,56 @@ oc::shared_ptr<SceneAnimatorComponent::SpawnInfo> World::buildSceneAnimatorSpawn
             if (const AssetNode* n = w->find("RightLeg"))  walk.rightLeg = n->asString();
             if (const AssetNode* n = w->find("LeftArm"))   walk.leftArm = n->asString();
             if (const AssetNode* n = w->find("RightArm"))  walk.rightArm = n->asString();
-            if (const AssetNode* n = w->find("BobPart"))   walk.bobPart = n->asString();
+            if (const AssetNode* n = w->find("BobBone"))   walk.bobBone = n->asString();
             if (const AssetNode* n = w->find("BobHeight")) walk.bobHeight = n->asFloat();
-            builder.walkCycle(layerIdx, walk);
+            rig->walkCycle(layerIdx, walk);
         }
         for (const AssetNode* s : layerNode->findAll("Swing"))
         {
             glm::vec3 swingAxis = axis;
             if (const AssetNode* n = s->find("Axis")) swingAxis = n->asVec3(axis);
-            builder.swing(layerIdx, s->asString(0), swingAxis, glm::radians(s->asFloat(1, 30.0f)), s->asFloat(2, 0.0f), uint32(s->asInt(3, 1)));
+            rig->swing(layerIdx, s->asString(0), swingAxis, glm::radians(s->asFloat(1, 30.0f)), s->asFloat(2, 0.0f), uint32(s->asInt(3, 1)));
         }
         for (const AssetNode* b : layerNode->findAll("Bob"))
         {
             glm::vec3 dir(0.0f, 1.0f, 0.0f);
             if (const AssetNode* n = b->find("Direction")) dir = n->asVec3(dir);
-            builder.bob(layerIdx, b->asString(0), dir * b->asFloat(1, 0.1f), b->asFloat(2, 0.0f), uint32(b->asInt(3, 2)));
+            rig->bob(layerIdx, b->asString(0), dir * b->asFloat(1, 0.1f), b->asFloat(2, 0.0f), uint32(b->asInt(3, 2)));
         }
     }
 
-    rig->anim = builder.build();
-    rig->partBones.assign(rig->anim.parts.size(), SceneAnimRig::InvalidBone);
-    for (size_t p = 0; p < rig->anim.parts.size(); ++p)
-    {
-        Part& part = rig->anim.parts[p];
-        for (size_t b = 0; b < rig->bones.size() && rig->partBones[p] == SceneAnimRig::InvalidBone; ++b)
-            if (rig->bones[b].name == part.name)
-                rig->partBones[p] = uint16(b);
-        if (rig->partBones[p] == SceneAnimRig::InvalidBone)
-        {
-            Log::warning("Scene: entity '" + ownerName + "' SceneAnimator moves unknown bone '" + part.name + "'");
-            continue;
-        }
-        const Transform& bind = rig->bones[rig->partBones[p]].bind;
-        part.setBind(bind.pos, bind.quat);
-    }
+    rig->finalize(ownerName);
 
     auto info = oc::make_shared<SceneAnimatorComponent::SpawnInfo>();
+    info->rig = oc::move(rig);
+    info->source = node;
+    if (const AssetNode* n = node.find("Enabled"))
+        info->enabled = n->asBool();
+    return info;
+}
+
+// Component HumanoidAnimator: `Bone <name>` blocks + the four-limb Z walk. Angles in degrees.
+//   Stride / FullSpeed (the entity's local units), Fade <sec>, LegAngle / ArmAngle (at most 90)
+//   LeftLeg / RightLeg / LeftArm / RightArm <bone name>  (default = the key)
+oc::shared_ptr<HumanoidAnimatorComponent::SpawnInfo> World::buildHumanoidAnimatorSpawnInfo(const AssetNode& node, const oc::string& ownerName)
+{
+    auto rig = oc::make_shared<HumanoidRig>();
+    appendSceneAnimBones(node, -1, *rig, ownerName);
+
+    HumanoidRig::Desc desc;
+    if (const AssetNode* n = node.find("Stride"))    desc.stride = n->asFloat(0, desc.stride);
+    if (const AssetNode* n = node.find("FullSpeed")) desc.fullSpeed = n->asFloat(0, desc.fullSpeed);
+    if (const AssetNode* n = node.find("Fade"))      desc.fadeSeconds = n->asFloat(0, desc.fadeSeconds);
+    if (const AssetNode* n = node.find("LegAngle"))  desc.legAngle = glm::radians(n->asFloat());
+    if (const AssetNode* n = node.find("ArmAngle"))  desc.armAngle = glm::radians(n->asFloat());
+    static constexpr const char* c_limbKeys[HumanoidRig::NumLimbs] = { "LeftLeg", "RightLeg", "LeftArm", "RightArm" };
+    for (uint32 limb = 0; limb < HumanoidRig::NumLimbs; ++limb)
+        if (const AssetNode* n = node.find(c_limbKeys[limb]))
+            desc.limbs[limb] = n->asString();
+    if (!rig->configure(desc, ownerName))
+        return nullptr; // warned; the tick has no checks, so a setup that does not fit gets no component
+
+    auto info = oc::make_shared<HumanoidAnimatorComponent::SpawnInfo>();
     info->rig = oc::move(rig);
     info->source = node;
     if (const AssetNode* n = node.find("Enabled"))
@@ -1626,11 +1640,14 @@ void World::buildTemplate(const AssetNode& node, EntitySpawnTemplate& tmpl)
         tmpl.spawnInfos.emplace_back(oc::move(info));
     }
 
-    // Render nodes, so not headless.
-    if (const AssetNode* partsNode = findComponentNode(node, "SceneAnimator"); partsNode && !m_headless)
-        if (oc::shared_ptr<SceneAnimatorComponent::SpawnInfo> info = buildSceneAnimatorSpawnInfo(*partsNode, tmpl.displayName))
+    // Render nodes, so not headless. (`Component SceneAnimator` is PARKED: it has no type bit, so a prefab
+    // that authors one gets a warning and no component - buildSceneAnimatorSpawnInfo is kept for its return.)
+    if (findComponentNode(node, "SceneAnimator"))
+        Log::warning("Scene: entity '" + tmpl.displayName + "' authors a SceneAnimator, which is parked (no component id) - use HumanoidAnimator");
+    if (const AssetNode* humanoidNode = findComponentNode(node, "HumanoidAnimator"); humanoidNode && !m_headless)
+        if (oc::shared_ptr<HumanoidAnimatorComponent::SpawnInfo> info = buildHumanoidAnimatorSpawnInfo(*humanoidNode, tmpl.displayName))
         {
-            typeBits |= uint16(1 << EComponentID_SceneAnimator);
+            typeBits |= uint16(1 << EComponentID_HumanoidAnimator);
             tmpl.spawnInfos.emplace_back(oc::move(info));
         }
 
