@@ -826,7 +826,7 @@ calls `reloadShaders()`.
     overflowed burst; the upload then runs on the main thread for that frame. No frame drops a
     light except an overflow light that ALSO meets an exhausted grid capacity in the re-walk.
     The force grid follows the same contract (`ForceFieldPipeline::buildGrid`, its own job on the
-    same counter; the claim table + touch array live in `Pipeline/GridClaim.ixx`, shared by both).
+    same counter; the claim table + touch array live in `Util/GridClaim.ixx`, shared by both).
   * **`upload`** writes the grid jobs, the workgroup list (one per 64 cells of a grid), the light
     list, the hash table (header `{numGrids, gridDataUints, tableSize}` + slots — the readers'
     probe loop is unchanged) and the indirect dispatch.
