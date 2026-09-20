@@ -507,9 +507,9 @@ public:
     bool isVrStageSpace() const { return Globals::openXR.isStageSpace(); }
     IVrSession* getVrSession() { return Globals::openXR.isEnabled() ? &Globals::openXR : nullptr; }
 
-    // The testbed keys (P / O) and the "GI/Debug probes" tweaks drive the same state.
-    void toggleGiProbeDebug() { m_giProbeDebugEnabled = !m_giProbeDebugEnabled; }
-    void cycleGiProbeDebugMode() { m_giProbeDebugMode = (m_giProbeDebugMode + 1) % 5; setHaveToRecordCommandBuffers(); } // 0 = irradiance, 1 = cellSize/LOD, 2 = update priority, 3 = relocation / backface, 4 = visibility
+    // The testbed keys (P / O) and the "GI/Debug probes" tweaks drive the same state, owned by the pipeline.
+    void toggleGiProbeDebug() { m_giProbePipeline.toggleDebug(); }
+    void cycleGiProbeDebugMode() { m_giProbePipeline.cycleDebugMode(); setHaveToRecordCommandBuffers(); }
 
     void setWindowMinimized(bool minimized);
     void recreateWindowSurface(Window& window);
@@ -821,10 +821,7 @@ private:
     oc::vector<uint32> m_freeParticleEmitterSlots;
     oc::vector<oc::pair<uint32, uint32>> m_retiredParticleEmitters; // slot, retire frame
     oc::vector<oc::pair<uint16, uint16>> m_particleSpawnRequests;   // emitter slot, count
-    bool m_particlesEnabled = true;
-    bool m_particleCollision = true;
-    float m_particleTimeScale = 1.0f;
-    bool m_particleLogStats = false; // "Particles/Log stats": prints GPU alive/dead counts ~once a second
+    ParticleParams m_particleParams;   // the "Particles" tweaks (sim + weather), see Settings.ixx
     uint32 m_particleDropLogFrame = 0; // rate limiter for the always-on pool-exhaustion warning (0 = not warning)
     // Rain occlusion volume: the request written by setRainOcclusionVolume (main thread, after the
     // begin-frame join) is latched into the active box by present, so the begin-frame job of the NEXT
@@ -837,35 +834,14 @@ private:
     };
     RainOcclusionVolume m_rainVolumeRequest;
     RainOcclusionVolume m_rainVolume;
-    bool m_rainOcclusionEnabled = false;     // "Particles/Rain occlusion" (off by default: the map costs a cull + depth pass per frame)
-    float m_rainOcclusionCasterPad = 100.0f; // "Particles/Rain occlusion pad": how far above the box a roof still shelters (m)
-    float m_rainOcclusionTolerance = 0.25f;  // "Particles/Rain occlusion bias": depth below the surface before a drop counts as sheltered (m)
-    float m_streakCameraBlur = 0.15f;        // "Particles/Streak camera blur": fraction of the camera velocity the weather streaks subtract
-    float m_particleAnisotropy = 0.33f;       // "Particles/Anisotropy": the lit particles' scattering phase g (0 = isotropic, forward < 1)
-    // Weather wind for the volumes ("Particles/Wind *", Ubo::weatherWind0/1/2). A storm: speed 15,
-    // gust strength 8, sheet contrast 0.7, sheet drift 6.
-    float m_windSpeed = 1.0f;       // m/s
-    float m_windAngleDeg = 0.0f;    // direction the wind blows TOWARDS, degrees from +X around +Y
-    float m_windGustStrength = 5.0f; // m/s, amplitude of the 2D gust vector added to the mean (calm air flurries too)
-    float m_windGustSize = 50.0f;   // m, the gust field's feature size
-    float m_windSheetContrast = 0.5f; // [0,1] alpha density bands sweeping through
-    float m_windSheetSize = 50.0f;  // m
-    float m_windSheetDrift = 5.0f;  // m/s the fields travel along the wind direction on top of half the wind speed
     // Ocean spray (the particle GPU spawn path's first producer; "Ocean/Spray *" tweaks, Ubo::oceanSpray0/1).
-    uint32 m_oceanSprayEmitter = UINT32_MAX;     // setOceanSprayEmitter
-    float m_oceanSprayRate = 20.0f;     // spawns per m^2 per s at full breaking
-    float m_oceanSprayRadius = 30.0f;   // m, the producer grid's half extent around the scene focus
-    float m_oceanSprayThreshold = 0.002f; // instant-foam value where spray starts
-    float m_oceanSprayKick = 0.0;      // m/s upward
-    float m_oceanSpraySpeed = 2.0f;     // m/s along the wind
-    float m_oceanSprayForward = 0.0f;   // m, spawn lead ahead of the crest along its travel (negative = behind)
-    float m_oceanSprayHeight = 0.0f;    // m, spawn offset above the surface (negative = below)
+    uint32 m_oceanSprayEmitter = UINT32_MAX; // setOceanSprayEmitter
+    OceanSprayParams m_oceanSprayParams;
     // Pool init/reset request. Cleared only AFTER a frame that carried reset=1 AND executed the sim was
     // actually submitted: a reset consumed by a frame that never runs (acquire failure -> early return,
     // no mesh instances so the sim CB is skipped) would leave the dead stack empty forever, silently
     // dropping every spawn. True at startup: the first simulating frame initializes the pool.
     bool m_particleResetPending = true;
-    bool m_decalsEnabled = true;
     // CPU force-emitter slot table (Force library), compact-uploaded per frame; destroyed slots stay
     // reserved (FORCE_FLAG_ACTIVE cleared) until the in-flight frames drain, then recycle - the
     // per-emitter force readback is slot-indexed and must never pair a new emitter with stale results.
@@ -930,10 +906,6 @@ private:
     // reprojection before overwriting.
     RendererVKLayout::Ubo m_ubo;
 
-    bool   m_giProbeDebugEnabled = false; // a per-frame stage flag (no re-record)
-    int    m_giProbeDebugMode = 0;        // recorded as a push constant: changes re-record ("GI/Debug probe colour")
-    float  m_giProbeDebugRadius = 0.12f;  // idem, cube half-extent as a fraction of sqrt(spacing)
-
     glm::ivec2 m_windowSize;
     const void* m_imguiDrawData = nullptr; // what present records: promoted from the pending slot on main
     oc::atomic<const void*> m_imguiPendingDrawData = nullptr; // see setImGuiDrawData
@@ -942,7 +914,6 @@ private:
     bool m_frameSlotWaited = false; // waitFrameSlot() ran for the current slot (cleared by present)
     bool m_windowMinimized = false;
     bool m_vsyncEnabled = true; // "Time/VSync" tweak (Saved; --no-vsync overrides it): FIFO vs Immediate, applied by a swapchain recreate
-    bool m_wireframe = false; // "Renderer/Wireframe" tweak: forward scene variants rasterize as lines
     glm::vec2 m_prevTaaJitter{ 0.0f }; // last frame's TAA jitter (ubo.taaJitter.zw): consumers of the PREV depth image compensate with it
     uint32 m_sceneViewCount = 1; // 2 in VR: SceneColor + forward pass are multiview (one layer per eye)
 

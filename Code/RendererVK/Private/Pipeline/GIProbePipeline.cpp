@@ -70,6 +70,14 @@ void GIProbePipeline::registerGridTweaks(const oc::function<void()>& onGridChang
     Tweak::floatVar("GI", "Focus Y offset (m)", &grid.focusOffsetY, -128.0f, 128.0f, 0.5f, onGridChanged);
 }
 
+void GIProbePipeline::registerDebugTweaks(const oc::function<void()>& onReRecord)
+{
+    static constexpr oc::string_view s_debugModeNames[] = { "Irradiance", "Cascade / LOD colour", "Update priority", "Relocation / backface", "Visibility" };
+    Tweak::boolean("GI", "Debug probes", &m_debugEnabled);
+    Tweak::enumVar("GI", "Debug probe colour", &m_debugMode, s_debugModeNames, onReRecord);
+    Tweak::floatVar("GI", "Debug probe radius", &m_debugRadius, 0.02f, 1.0f, 0.01f, onReRecord);
+}
+
 void GIProbePipeline::resizeGrid()
 {
     m_giGridData.initialize(RendererVKLayout::g_giGrid.gridDataBufferSize(),
@@ -447,7 +455,7 @@ void GIProbePipeline::reloadDebugShaders(vk::RenderPass renderPass)
         printf("GIProbePipeline: debug shader reload failed, keeping previous pipeline\n");
 }
 
-void GIProbePipeline::recordDebugDraw(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, float radius, uint32 mode)
+void GIProbePipeline::recordDebugDraw(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo)
 {
     DescriptorSet& set = m_debugSets[frameIdx];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
@@ -462,7 +470,7 @@ void GIProbePipeline::recordDebugDraw(CommandBuffer& commandBuffer, uint32 frame
     commandBuffer.cmdUpdateDescriptorSets(m_debugPipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, vkSet, updates);
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_debugPipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_debugPipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
-    DebugPC pc{ .radius = radius, .mode = mode };
+    DebugPC pc{ .radius = m_debugRadius, .mode = (uint32)m_debugMode };
     cmd.pushConstants(m_debugPipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eVertex, 0, sizeof(pc), &pc);
     // One sphere impostor quad (6 verts) per clipmap probe across all cascades.
     cmd.draw(6, RendererVKLayout::g_giGrid.probesTotal(), 0, 0);

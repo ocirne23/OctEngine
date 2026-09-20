@@ -120,7 +120,14 @@ public:
     // initializeDebug must be called after the main render pass exists.
     void initializeDebug(vk::RenderPass renderPass);
     void reloadDebugShaders(vk::RenderPass renderPass);
-    void recordDebugDraw(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo, float radius, uint32 mode);
+    void recordDebugDraw(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo);
+    // The "GI/Debug probe*" tweaks. Enabled is a per-frame stage flag; the colour mode and the radius are
+    // push constants in the CACHED debug secondary, so a change must re-record (onReRecord).
+    void registerDebugTweaks(const oc::function<void()>& onReRecord);
+    // The testbed's P / O keys drive the same state (the caller re-records after cycleDebugMode).
+    bool isDebugEnabled() const { return m_debugEnabled; }
+    void toggleDebug() { m_debugEnabled = !m_debugEnabled; }
+    void cycleDebugMode() { m_debugMode = (m_debugMode + 1) % 5; } // 0 = irradiance, 1 = cascade/LOD, 2 = update priority, 3 = relocation / backface, 4 = visibility
 
     Buffer& getTlasInstanceBuffer(uint32 frameIdx) { return m_tlasInstanceBuffer[frameIdx]; }
     // Persistent GI clipmap SH volume (consumed by the main pass's fragment shader).
@@ -142,6 +149,9 @@ private:
     ComputePipeline m_tracePipeline;
     GraphicsPipeline m_debugPipeline;
     vk::RenderPass m_debugRenderPass;
+    bool  m_debugEnabled = false; // a per-frame stage flag (no re-record)
+    int   m_debugMode = 0;        // recorded as a push constant: changes re-record ("GI/Debug probe colour")
+    float m_debugRadius = 0.12f;  // idem, cube half-extent as a fraction of sqrt(spacing)
 
     // Sky map (gi_sky_map.cs.glsl): a small lat-long RGBA16F 2-layer array (0 = skyRadiance, 1 = mirror
     // sky), GENERAL layout for life, rewritten every frame. Single-buffered under recordSkyMap's barriers.

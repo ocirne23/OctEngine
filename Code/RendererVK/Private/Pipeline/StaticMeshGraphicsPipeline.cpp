@@ -1,6 +1,7 @@
 ﻿module RendererVK;
 
 import Core;
+import Core.Tweaks;
 
 import File;
 
@@ -14,6 +15,11 @@ import :TextureManager;
 
 StaticMeshGraphicsPipeline::StaticMeshGraphicsPipeline() {}
 StaticMeshGraphicsPipeline::~StaticMeshGraphicsPipeline() {}
+
+void StaticMeshGraphicsPipeline::registerTweaks(const oc::function<void()>& onReloadShaders)
+{
+    Tweak::boolean("Editor", "Wireframe", &m_wireframe, onReloadShaders);
+}
 
 void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& graphicsPipelineLayout, uint32 maxTextures)
 {

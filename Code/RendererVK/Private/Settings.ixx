@@ -311,6 +311,52 @@ export struct MeshLodParams
     void registerTweaks();
 };
 
+// The TweakPanel's "Particles" category: the GPU particle sim's own knobs plus the weather inputs the
+// Renderer folds into the per-frame UBO (cameraVelocity.w, weatherWind0/1/2, rainOcclusion*). All live -
+// the particle stage's primary CB re-records every frame, so none of them needs a re-record callback.
+export struct ParticleParams
+{
+    bool  enabled = true;         // the whole GPU particle chain (sim + draw stage)
+    bool  collision = true;       // depth-buffer collision in the sim
+    float timeScale = 1.0f;       // multiplier on the sim delta
+    bool  logStats = false;       // prints GPU alive/dead counts ~once a second
+
+    // Rain occlusion: a top-down depth map of the weather volume, so roofs shelter what is under them.
+    bool  rainOcclusion = false;      // off by default: the map costs a cull + depth pass per frame
+    float rainOcclusionCasterPad = 100.0f; // how far above the box a roof still shelters (m)
+    float rainOcclusionTolerance = 0.25f;  // depth below the surface before a drop counts as sheltered (m)
+
+    float streakCameraBlur = 0.15f; // fraction of the camera velocity the weather streaks subtract
+    float anisotropy = 0.33f;       // the lit particles' scattering phase g (0 = isotropic, forward < 1)
+
+    // Weather wind for the volumes. A storm: speed 15, gust strength 8, sheet contrast 0.7, sheet drift 6.
+    float windSpeed = 1.0f;         // m/s
+    float windAngleDeg = 0.0f;      // direction the wind blows TOWARDS, degrees from +X around +Y
+    float windGustStrength = 5.0f;  // m/s, amplitude of the 2D gust vector added to the mean (calm air flurries too)
+    float windGustSize = 50.0f;     // m, the gust field's feature size
+    float windSheetContrast = 0.5f; // [0,1] alpha density bands sweeping through
+    float windSheetSize = 50.0f;    // m
+    float windSheetDrift = 5.0f;    // m/s the fields travel along the wind direction on top of half the wind speed
+
+    void registerTweaks();
+};
+
+// The TweakPanel's "Ocean" spray knobs - the ocean spray step (ocean_spray.cs.glsl) is the particle GPU
+// spawn path's first producer, so these ride the UBO (oceanSpray0/1/2) rather than OceanParams, which
+// Procedural::OceanGenerator overwrites wholesale every frame.
+export struct OceanSprayParams
+{
+    float rate = 20.0f;       // spawns per m^2 per s at full breaking
+    float radius = 30.0f;     // m, the producer grid's half extent around the scene focus
+    float threshold = 0.002f; // instant-foam value where spray starts
+    float kick = 0.0f;        // m/s upward
+    float speed = 2.0f;       // m/s along the wind
+    float forward = 0.0f;     // m, spawn lead ahead of the crest along its travel (negative = behind)
+    float height = 0.0f;      // m, spawn offset above the surface (negative = below)
+
+    void registerTweaks();
+};
+
 // FFT/Tessendorf ocean: spectrum inputs for the GPU simulation (OceanSimulationPipeline) + water shading.
 // The Renderer feeds these into the per-frame UBO (ocean* fields), which drives BOTH the compute simulation
 // (the TMA spectrum is re-evaluated every frame, so all of it is live) and the surface shading. The grid

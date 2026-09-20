@@ -86,46 +86,16 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
         });
     // Wireframe is baked pipeline state (polygonMode), so flipping it rebuilds the static mesh pipeline -
     // same GPU-idle + reload pattern as the RTAO alpha-test and ocean hit-lighting tweaks.
-    Tweak::boolean("Editor", "Wireframe", &m_wireframe, [this]() {
+    m_staticMeshGraphicsPipeline.registerTweaks([this]() {
         if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
             return;
-        m_staticMeshGraphicsPipeline.setWireframe(m_wireframe);
         m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_maxTextures);
         setHaveToRecordCommandBuffers();
     });
-    // GI probe debug cubes - the same state the testbed's P / O keys flip. Enabled is a per-frame stage
-    // flag; the colour mode and radius are push constants in the cached debug secondary, so they re-record.
-    Tweak::boolean("GI", "Debug probes", &m_giProbeDebugEnabled);
-    {
-        static constexpr oc::string_view s_giProbeDebugModeNames[] = { "Irradiance", "Cascade / LOD colour", "Update priority", "Relocation / backface", "Visibility" };
-        Tweak::enumVar("GI", "Debug probe colour", &m_giProbeDebugMode, s_giProbeDebugModeNames, rerecordCallback);
-    }
-    Tweak::floatVar("GI", "Debug probe radius", &m_giProbeDebugRadius, 0.02f, 1.0f, 0.01f, rerecordCallback);
     // Live toggles: the primary CB re-records every frame, so no re-record callback is needed.
-    Tweak::boolean("Particles", "Enabled", &m_particlesEnabled);
-    Tweak::boolean("Particles", "Depth collision", &m_particleCollision);
-    Tweak::floatVar("Particles", "Time scale", &m_particleTimeScale, 0.0f, 4.0f);
-    Tweak::boolean("Particles", "Log stats", &m_particleLogStats);
-    Tweak::boolean("Particles", "Rain occlusion", &m_rainOcclusionEnabled);
-    Tweak::floatVar("Particles", "Rain occlusion pad", &m_rainOcclusionCasterPad, 0.0f, 500.0f, 1.0f);
-    Tweak::floatVar("Particles", "Rain occlusion bias", &m_rainOcclusionTolerance, 0.0f, 2.0f, 0.01f);
-    Tweak::floatVar("Particles", "Streak camera blur", &m_streakCameraBlur, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Particles", "Anisotropy", &m_particleAnisotropy, -0.9f, 0.95f, 0.01f);
-    Tweak::floatVar("Particles", "Wind speed", &m_windSpeed, 0.0f, 40.0f, 0.1f);
-    Tweak::floatVar("Particles", "Wind angle", &m_windAngleDeg, 0.0f, 360.0f, 1.0f);
-    Tweak::floatVar("Particles", "Wind gust strength", &m_windGustStrength, 0.0f, 20.0f, 0.1f);
-    Tweak::floatVar("Particles", "Wind gust size", &m_windGustSize, 2.0f, 200.0f, 1.0f);
-    Tweak::floatVar("Particles", "Wind sheet contrast", &m_windSheetContrast, 0.0f, 1.0f, 0.01f);
-    Tweak::floatVar("Particles", "Wind sheet size", &m_windSheetSize, 2.0f, 200.0f, 1.0f);
-    Tweak::floatVar("Particles", "Wind sheet drift", &m_windSheetDrift, 0.0f, 20.0f, 0.1f);
-    Tweak::floatVar("Ocean", "Spray rate", &m_oceanSprayRate, 0.0f, 200.0f, 0.1f);
-    Tweak::floatVar("Ocean", "Spray radius", &m_oceanSprayRadius, 10.0f, 300.0f, 1.0f);
-    Tweak::floatVar("Ocean", "Spray threshold", &m_oceanSprayThreshold, 0.0005f, 0.025f, 0.0005f);
-    Tweak::floatVar("Ocean", "Spray kick", &m_oceanSprayKick, 0.0f, 15.0f, 0.1f);
-    Tweak::floatVar("Ocean", "Spray speed", &m_oceanSpraySpeed, 0.0f, 20.0f, 0.1f);
-    Tweak::floatVar("Ocean", "Spray forward offset", &m_oceanSprayForward, -5.0f, 5.0f, 0.05f);
-    Tweak::floatVar("Ocean", "Spray height offset", &m_oceanSprayHeight, -2.0f, 2.0f, 0.01f);
-    Tweak::boolean("Decals", "Enabled", &m_decalsEnabled);
+    m_particleParams.registerTweaks();
+    m_oceanSprayParams.registerTweaks();
+    m_decalPipeline.registerTweaks();
     // Present mode is swapchain creation state (FIFO vs Immediate), so a change recreates the
     // swapchain (device idle + re-init, same path as a lost acquire). A saved/override value fires
     // onChange at registration, before the swapchain exists - the first creation below reads the
@@ -221,6 +191,7 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
             reloadShaders();
         });
     m_giProbePipeline.initializeDebug(sceneRenderPass);
+    m_giProbePipeline.registerDebugTweaks(rerecordCallback);
     m_debugLinePipeline.initialize(sceneRenderPass);
     m_particlePipeline.initialize(sceneRenderPass, m_maxTextures, m_numTextureDescriptors, m_sceneViewCount);
     m_decalPipeline.initialize(sceneRenderPass, m_maxTextures, m_numTextureDescriptors, m_sceneViewCount);
@@ -907,14 +878,15 @@ void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const
         }
         m_prevCameraPos = camera.position;
         m_havePrevCameraPos = true;
-        ubo.cameraVelocity = glm::vec4(velocity, glm::clamp(m_streakCameraBlur, 0.0f, 1.0f));
+        ubo.cameraVelocity = glm::vec4(velocity, glm::clamp(m_particleParams.streakCameraBlur, 0.0f, 1.0f));
     }
     {
-        const float a = glm::radians(m_windAngleDeg);
+        const ParticleParams& particles = m_particleParams;
+        const float a = glm::radians(particles.windAngleDeg);
         const glm::vec2 dir(std::cos(a), std::sin(a));
-        ubo.weatherWind0 = glm::vec4(dir.x * m_windSpeed, 0.0f, dir.y * m_windSpeed, glm::max(m_windGustStrength, 0.0f));
-        ubo.weatherWind1 = glm::vec4(1.0f / glm::max(m_windGustSize, 1.0f), glm::clamp(m_windSheetContrast, 0.0f, 1.0f),
-            1.0f / glm::max(m_windSheetSize, 1.0f), glm::max(m_windSheetDrift, 0.0f));
+        ubo.weatherWind0 = glm::vec4(dir.x * particles.windSpeed, 0.0f, dir.y * particles.windSpeed, glm::max(particles.windGustStrength, 0.0f));
+        ubo.weatherWind1 = glm::vec4(1.0f / glm::max(particles.windGustSize, 1.0f), glm::clamp(particles.windSheetContrast, 0.0f, 1.0f),
+            1.0f / glm::max(particles.windSheetSize, 1.0f), glm::max(particles.windSheetDrift, 0.0f));
         ubo.weatherWind2 = glm::vec4(dir, m_cameraWaterSurface, m_cameraWaterSurfaceValid ? 1.0f : 0.0f);
     }
 
@@ -1137,8 +1109,8 @@ void Renderer::buildUboRainOcclusion()
 {
     RendererVKLayout::Ubo& ubo = m_ubo;
     const RainOcclusionVolume& v = m_rainVolume;
-    const float anisotropy = glm::clamp(m_particleAnisotropy, -0.95f, 0.95f); // rides the params' free w
-    if (!v.active || !m_rainOcclusionEnabled)
+    const float anisotropy = glm::clamp(m_particleParams.anisotropy, -0.95f, 0.95f); // rides the params' free w
+    if (!v.active || !m_particleParams.rainOcclusion)
     {
         ubo.rainOcclusionViewProj = glm::mat4(1.0f);
         ubo.rainOcclusionParams = glm::vec4(0.0f, 0.0f, 0.0f, anisotropy);
@@ -1146,13 +1118,13 @@ void Renderer::buildUboRainOcclusion()
     }
     const float hx = glm::max(v.halfExtents.x, 1.0f) * 1.25f;
     const float hz = glm::max(v.halfExtents.z, 1.0f) * 1.25f;
-    const float pad = glm::max(m_rainOcclusionCasterPad, 1.0f);
+    const float pad = glm::max(m_particleParams.rainOcclusionCasterPad, 1.0f);
     const float range = 2.0f * glm::max(v.halfExtents.y, 1.0f) + pad + 1.0f; // 1 m below the box bottom
     const glm::vec3 eye = v.center + glm::vec3(0.0f, v.halfExtents.y + pad, 0.0f);
     const glm::mat4 view = glm::lookAtRH(eye, v.center, glm::vec3(0.0f, 0.0f, 1.0f));
     const glm::mat4 proj = glm::orthoRH_ZO(-hx, hx, -hz, hz, 0.0f, range);
     ubo.rainOcclusionViewProj = proj * view;
-    ubo.rainOcclusionParams = glm::vec4(1.0f, 1.0f / range, glm::max(m_rainOcclusionTolerance, 0.0f), anisotropy);
+    ubo.rainOcclusionParams = glm::vec4(1.0f, 1.0f / range, glm::max(m_particleParams.rainOcclusionTolerance, 0.0f), anisotropy);
 }
 
 // Volumetric fog params + the fog terrain height cascades (also the ocean's shore-map fallback).
@@ -1240,12 +1212,13 @@ void Renderer::buildUboOcean()
     // delta the rate integrates over (frozen with the global pause, like the particle sim itself).
     const float sprayDt = oc::min((float)Globals::time.getSimDeltaSec(), 0.25f);
     // Off while the particle chain is disabled: nothing would consume (and reset) the request counter.
-    const uint32 sprayEmitter = m_particlesEnabled ? m_oceanSprayEmitter : UINT32_MAX;
-    ubo.oceanSpray0 = glm::vec4(glm::uintBitsToFloat(sprayEmitter), glm::max(m_oceanSprayRate, 0.0f),
-        glm::max(m_oceanSprayRadius, 1.0f), sprayDt);
-    ubo.oceanSpray1 = glm::vec4(glm::clamp(m_oceanSprayThreshold, 0.0f, 0.99f), glm::max(m_oceanSprayKick, 0.0f),
-        glm::max(m_oceanSpraySpeed, 0.0f), m_oceanSprayForward);
-    ubo.oceanSpray2 = glm::vec4(m_oceanSprayHeight, 0.0f, 0.0f, 0.0f);
+    const uint32 sprayEmitter = m_particleParams.enabled ? m_oceanSprayEmitter : UINT32_MAX;
+    const OceanSprayParams& spray = m_oceanSprayParams;
+    ubo.oceanSpray0 = glm::vec4(glm::uintBitsToFloat(sprayEmitter), glm::max(spray.rate, 0.0f),
+        glm::max(spray.radius, 1.0f), sprayDt);
+    ubo.oceanSpray1 = glm::vec4(glm::clamp(spray.threshold, 0.0f, 0.99f), glm::max(spray.kick, 0.0f),
+        glm::max(spray.speed, 0.0f), spray.forward);
+    ubo.oceanSpray2 = glm::vec4(spray.height, 0.0f, 0.0f, 0.0f);
 }
 
 // Forcefield bubbles (Force library pushes m_forceFieldParams every frame; all UBO-driven = live).
@@ -1986,7 +1959,7 @@ void Renderer::present()
 
     // Only spend the pool reset on a frame that will actually execute the sim (see
     // m_particleResetPending); the flag is cleared after this frame's successful submit below.
-    const bool particleResetCarried = m_particleResetPending && m_particlesEnabled && m_meshInstanceCounter > 0;
+    const bool particleResetCarried = m_particleResetPending && m_particleParams.enabled && m_meshInstanceCounter > 0;
     { // Particle emitter table + spawn map + decals into this slot's mapped buffers (fence waited).
         ProfileScope effectsScope("Effects upload", EProfileCategory::Renderer);
         // SIM delta, not a wall-clock difference: the GPU particle sim must freeze with the global
@@ -1996,15 +1969,15 @@ void Renderer::present()
         for (const auto& [slot, count] : m_particleSpawnRequests)
             spawnRequestTotal += count;
         m_particlePipeline.update(frameIdx, m_particleEmitters, m_particleSpawnRequests,
-            dt * m_particleTimeScale, m_particleCollision, particleResetCarried);
+            dt * m_particleParams.timeScale, m_particleParams.collision, particleResetCarried);
         m_particleSpawnRequests.clear();
         m_decalPipeline.upload(frameIdx, m_decalCounter);
         // The force emitter compaction + grid build ride the grid jobs (kickGridBuilds / joinGridBuilds).
 
-        if (m_particlesEnabled)
+        if (m_particleParams.enabled)
         {
             const ParticlePipeline::DebugCounters counters = m_particlePipeline.getDebugCounters(frameIdx);
-            if (m_particleLogStats && m_frameCounter % 120 == 0)
+            if (m_particleParams.logStats && m_frameCounter % 120 == 0)
                 printf("Particles: alive %u/%u (parity 0/1), dead %d, simGroups %u, emitters %u, spawn reqs %u, GPU spawns %u, dropped %u, broken %u, decals %u\n",
                     counters.alive[0], counters.alive[1], counters.deadCount, counters.simGroups,
                     (uint32)m_particleEmitters.size(), spawnRequestTotal, counters.gpuSpawns,
@@ -2885,7 +2858,7 @@ void Renderer::recordGiProbeDebug(uint32 frameIdx)
     const vk::Rect2D scissor{ .offset = vk::Offset2D{ 0, 0 }, .extent = extent };
     vkCb.setViewport(0, { viewport });
     vkCb.setScissor(0, { scissor });
-    m_giProbePipeline.recordDebugDraw(cb, frameIdx, frameData.ubo, m_giProbeDebugRadius, (uint32)m_giProbeDebugMode);
+    m_giProbePipeline.recordDebugDraw(cb, frameIdx, frameData.ubo);
     cb.end();
 }
 
@@ -3616,7 +3589,7 @@ void Renderer::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary)
         executeScoped(primary, "Force compute", frameData.forceComputeCommandBuffer.getCommandBuffer());
     // The weather volume's rain occlusion map (cull + top-down depth), gated on the UBO this frame was
     // built with (buildUboRainOcclusion) so the pass and the sim's shelter test always agree.
-    if (m_particlesEnabled && m_ubo.rainOcclusionParams.x > 0.5f)
+    if (m_particleParams.enabled && m_ubo.rainOcclusionParams.x > 0.5f)
     {
         executeScoped(primary, "Rain occlusion cull", frameData.rainCullCommandBuffer.getCommandBuffer());
         m_gpuProfiler.beginScope(primary, "Rain occlusion draw");
@@ -3639,7 +3612,7 @@ void Renderer::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary)
     // Particle emit/simulate (outside any render pass; reads LAST frame's scene depth for collision and
     // THIS frame's rain occlusion map, writes the alive list + indirect draw args the in-pass billboard
     // draw consumes).
-    if (m_particlesEnabled)
+    if (m_particleParams.enabled)
         executeScoped(primary, "Particle sim", frameData.particleSimCommandBuffer.getCommandBuffer());
     // Terrain wetness clipmap: decay + re-wet under this frame's live ocean surface (after the ocean
     // sim, before the forward pass samples it). Runs on tick frames only (m_terrainWetTick, decided in
@@ -3695,7 +3668,7 @@ void Renderer::recordPrimaryVR(uint32 frameIdx, CommandBuffer& commandBuffer)
     {
         m_gpuProfiler.beginScope(vkCommandBuffer, eye == 0 ? "Eye L" : "Eye R");
         // This eye's forward set (last frame's AO view + TLAS) is written at scene-record time (recordSceneSecondaries).
-        const bool layered = m_decalsEnabled || m_forceFieldParams.enabled || m_particlesEnabled || m_fogParams.enabled;
+        const bool layered = m_decalPipeline.isEnabled() || m_forceFieldParams.enabled || m_particleParams.enabled || m_fogParams.enabled;
         vk::RenderPassBeginInfo eyeRpBegin{
             .renderPass = sceneColor.getStageRenderPass(true, !layered, false),
             .framebuffer = sceneColor.getFramebuffer(eye),
@@ -3716,11 +3689,11 @@ void Renderer::recordPrimaryVR(uint32 frameIdx, CommandBuffer& commandBuffer)
             sceneInstanceBarrier(vkCommandBuffer);
             eyeRpBegin.renderPass = sceneColor.getStageRenderPass(false, true, true);
             vkCommandBuffer.beginRenderPass(eyeRpBegin, vk::SubpassContents::eInline);
-            if (m_decalsEnabled)
+            if (m_decalPipeline.isEnabled())
                 recordDecalsInto(commandBuffer, frameIdx, eye);
             if (m_forceFieldParams.enabled)
                 recordForceFieldInto(commandBuffer, frameIdx, eye);
-            if (m_particlesEnabled)
+            if (m_particleParams.enabled)
                 recordParticlesInto(commandBuffer, frameIdx, eye);
             if (m_fogParams.enabled)
                 recordFogApplyInto(commandBuffer, frameIdx, eye);
@@ -3814,14 +3787,14 @@ void Renderer::recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer vkCommand
     // run with the opaque scene; the AO trace and the decals then see them as geometry (debug only).
     const oc::array<SceneStage, 2> opaqueStages{
         SceneStage{ "Static meshes", frameData.staticMeshCommandBuffer.getCommandBuffer(), true },
-        SceneStage{ "GI probe debug", frameData.giProbeDebugCommandBuffer.getCommandBuffer(), m_giProbeDebugEnabled },
+        SceneStage{ "GI probe debug", frameData.giProbeDebugCommandBuffer.getCommandBuffer(), m_giProbePipeline.isDebugEnabled() },
     };
     const oc::array<SceneStage, 6> layeredStages{
-        SceneStage{ "Decals", frameData.decalCommandBuffer.getCommandBuffer(), m_decalsEnabled },
+        SceneStage{ "Decals", frameData.decalCommandBuffer.getCommandBuffer(), m_decalPipeline.isEnabled() },
         SceneStage{ "Debug lines", frameData.debugLineCommandBuffer.getCommandBuffer(), m_debugLinePipeline.hasBuffers() },
         SceneStage{ "Force shells", frameData.forceFieldCommandBuffer.getCommandBuffer(), m_forceFieldParams.enabled },
         SceneStage{ "Force union blend", frameData.forceUnionCommandBuffer.getCommandBuffer(), m_forceFieldParams.enabled },
-        SceneStage{ "Particles", frameData.particleCommandBuffer.getCommandBuffer(), m_particlesEnabled },
+        SceneStage{ "Particles", frameData.particleCommandBuffer.getCommandBuffer(), m_particleParams.enabled },
         SceneStage{ "Fog apply", frameData.fogApplyCommandBuffer.getCommandBuffer(), m_fogParams.enabled },
     };
     const SceneStage* lastStage = &opaqueStages[0]; // static meshes are always on

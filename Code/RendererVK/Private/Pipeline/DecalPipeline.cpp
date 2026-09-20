@@ -2,6 +2,7 @@ module RendererVK;
 
 import Core;
 import Core.glm;
+import Core.Tweaks;
 import File;
 import :DecalPipeline;
 import :GraphicsPipeline;
@@ -15,6 +16,11 @@ using namespace RendererVKLayout;
 static vk::DescriptorBufferInfo decalBufInfo(const Buffer& buffer)
 {
     return vk::DescriptorBufferInfo{ .buffer = buffer.getBuffer(), .range = buffer.getSize() };
+}
+
+void DecalPipeline::registerTweaks()
+{
+    Tweak::boolean("Decals", "Enabled", &m_enabled);
 }
 
 void DecalPipeline::buildLayout(GraphicsPipelineLayout& layout, uint32 maxTextures)

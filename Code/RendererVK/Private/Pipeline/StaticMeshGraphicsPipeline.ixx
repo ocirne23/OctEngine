@@ -78,9 +78,9 @@ public:
     // Ocean variant: the ray-traced mirror of the scene (OCEAN_RT_REFLECTIONS define). Same reload rule.
     void setOceanRtReflections(bool enabled) { m_oceanRtReflections = enabled; }
     void setOceanDebugMode(int mode) { m_oceanDebugMode = mode; } // OCEAN_DEBUG_MODE define, same reload rule
-    // Global wireframe ("Renderer/Wireframe" tweak): scene variants rasterize as lines.
-    // Takes effect on the next reloadShaders (the Renderer reloads when the tweak flips).
-    void setWireframe(bool enabled) { m_wireframe = enabled; }
+    // "Editor/Wireframe": global wireframe, scene variants rasterize as lines. It is baked pipeline state
+    // (polygonMode), so onReloadShaders must wait for the GPU, reloadShaders() this pipeline and re-record.
+    void registerTweaks(const oc::function<void()>& onReloadShaders);
     void setShadowDebugMode(int mode) { m_shadowDebugMode = mode; }       // SHADOW_DEBUG define on the lit + terrain fragments
     void setLightGridDebugMode(int mode) { m_lightGridDebugMode = mode; } // LIGHT_GRID_DEBUG define, same shaders
     vk::DescriptorSetLayout getDescriptorSetLayout() const { return m_graphicsPipeline.getDescriptorSetLayout(); }

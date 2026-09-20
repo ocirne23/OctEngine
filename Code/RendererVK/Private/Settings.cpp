@@ -180,3 +180,34 @@ void MeshLodParams::registerTweaks()
     Tweak::floatVar("LOD", "Generated reduction", &generateReduction, 0.05f, 0.75f, 0.01f);
     Tweak::intVar("LOD", "Min indices", &minIndices, 32, 4096);
 }
+
+void ParticleParams::registerTweaks()
+{
+    Tweak::boolean("Particles", "Enabled", &enabled);
+    Tweak::boolean("Particles", "Depth collision", &collision);
+    Tweak::floatVar("Particles", "Time scale", &timeScale, 0.0f, 4.0f);
+    Tweak::boolean("Particles", "Log stats", &logStats);
+    Tweak::boolean("Particles", "Rain occlusion", &rainOcclusion);
+    Tweak::floatVar("Particles", "Rain occlusion pad", &rainOcclusionCasterPad, 0.0f, 500.0f, 1.0f);
+    Tweak::floatVar("Particles", "Rain occlusion bias", &rainOcclusionTolerance, 0.0f, 2.0f, 0.01f);
+    Tweak::floatVar("Particles", "Streak camera blur", &streakCameraBlur, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Particles", "Anisotropy", &anisotropy, -0.9f, 0.95f, 0.01f);
+    Tweak::floatVar("Particles", "Wind speed", &windSpeed, 0.0f, 40.0f, 0.1f);
+    Tweak::floatVar("Particles", "Wind angle", &windAngleDeg, 0.0f, 360.0f, 1.0f);
+    Tweak::floatVar("Particles", "Wind gust strength", &windGustStrength, 0.0f, 20.0f, 0.1f);
+    Tweak::floatVar("Particles", "Wind gust size", &windGustSize, 2.0f, 200.0f, 1.0f);
+    Tweak::floatVar("Particles", "Wind sheet contrast", &windSheetContrast, 0.0f, 1.0f, 0.01f);
+    Tweak::floatVar("Particles", "Wind sheet size", &windSheetSize, 2.0f, 200.0f, 1.0f);
+    Tweak::floatVar("Particles", "Wind sheet drift", &windSheetDrift, 0.0f, 20.0f, 0.1f);
+}
+
+void OceanSprayParams::registerTweaks()
+{
+    Tweak::floatVar("Ocean", "Spray rate", &rate, 0.0f, 200.0f, 0.1f);
+    Tweak::floatVar("Ocean", "Spray radius", &radius, 10.0f, 300.0f, 1.0f);
+    Tweak::floatVar("Ocean", "Spray threshold", &threshold, 0.0005f, 0.025f, 0.0005f);
+    Tweak::floatVar("Ocean", "Spray kick", &kick, 0.0f, 15.0f, 0.1f);
+    Tweak::floatVar("Ocean", "Spray speed", &speed, 0.0f, 20.0f, 0.1f);
+    Tweak::floatVar("Ocean", "Spray forward offset", &forward, -5.0f, 5.0f, 0.05f);
+    Tweak::floatVar("Ocean", "Spray height offset", &height, -2.0f, 2.0f, 0.01f);
+}
