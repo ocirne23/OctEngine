@@ -12,7 +12,7 @@
 #include "shared.inc.glsl"
 
 layout (binding = 1) uniform sampler2D u_unionMarch;   // half-res premultiplied march result
-layout (binding = 2) uniform sampler2D u_gbufferDepth; // full-res scene depth (reversed-Z)
+layout (binding = 2) uniform sampler2D u_sceneDepth; // full-res scene depth (reversed-Z)
 
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 
@@ -20,7 +20,7 @@ layout (location = 0) out vec4 out_color;
 
 float sceneDistAt(vec2 uv)
 {
-    const float d = texture(u_gbufferDepth, uv).r;
+    const float d = texture(u_sceneDepth, uv).r;
     return d > 0.0 ? distance(u_viewPos, worldPosFromDepth(uv, d)) : 1e30; // reversed-Z: 0 = sky
 }
 

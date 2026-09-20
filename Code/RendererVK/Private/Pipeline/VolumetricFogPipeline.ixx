@@ -16,7 +16,7 @@ import :Layout;
 //                  blended against last frame's reprojected grid (ping-ponged across frames in flight).
 //   2. integrate : front-to-back accumulation along Z -> in-scatter + transmittance at every slice.
 //   3. apply     : fullscreen blend in the scene-color pass (before TAA), sampling the integrated volume at
-//                  each pixel's G-buffer depth: out = inScatter + sceneColor * transmittance. Everything
+//                  each pixel's scene depth: out = inScatter + sceneColor * transmittance. Everything
 //                  past the volume's far plane is added analytically instead of with more slices, so the
 //                  volume's range is a near-field quality knob and not a view distance (vol_apply.fs.glsl).
 // The grid resolution is fixed (independent of the window size), so no swapchain-recreate handling is needed.
@@ -52,10 +52,10 @@ public:
     {
         Buffer& ubo;
         Buffer& giGridDataBuffer; // far field ambient (virtual sky probe)
-        vk::ImageView gbufferDepthView;
+        vk::ImageView sceneDepthView;
         // SCENE_DEPTH_SAMPLED_LAYOUT: the scene depth is this stage's read-only attachment AND this sampled image.
-        vk::ImageLayout gbufferDepthLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-        vk::Sampler   gbufferSampler;
+        vk::ImageLayout sceneDepthLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        vk::Sampler   sceneDepthSampler;
     };
     // Records the fullscreen apply draw; the caller has begun a command buffer inside the scene-color
     // render pass and set the viewport/scissor. eye selects the per-eye depth/projection (0 = desktop/left).

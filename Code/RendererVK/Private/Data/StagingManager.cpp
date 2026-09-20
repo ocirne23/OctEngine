@@ -250,7 +250,7 @@ vk::Semaphore StagingManager::updateNoLock()
     {
         // The source is a streamed texture's replaced image: every mip sits in eShaderReadOnlyOptimal,
         // and the srcStage covers everything that may still be sampling it from earlier submissions on
-        // this queue (fragment forward/G-buffer/shadow + compute GI/RTAO, incl. their ray queries). It
+        // this queue (fragment forward/shadow + compute GI/RTAO, incl. their ray queries). It
         // is never transitioned back - nothing samples it after this frame's descriptor swap, and it is
         // deferred-destroyed by the TextureStreamer.
         oc::array<vk::ImageMemoryBarrier2, 2> preCopyBarriers{

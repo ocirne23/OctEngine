@@ -3,7 +3,7 @@
 #extension GL_EXT_nonuniform_qualifier : enable
 
 // Projected decal fragment shader: reconstructs the opaque surface under this fragment from the
-// G-buffer depth, projects it into the decal's box space (discarding outside the volume), samples the
+// scene depth, projects it into the decal's box space (discarding outside the volume), samples the
 // decal texture across local XY and blends it over the already-lit scene (premultiplied). Lit decals
 // approximate the forward shading with sun N.L (no shadow) + GI probe irradiance at the surface, so
 // they track the scene's lighting; unlit decals composite the tint as-is (blob shadows, projected
@@ -14,7 +14,7 @@
 #include "decal.inc.glsl"
 
 layout (binding = 1, std430) readonly buffer Decals { Decal d_decals[]; };
-layout (binding = 2) uniform sampler2D u_gbufferDepth;
+layout (binding = 2) uniform sampler2D u_sceneDepth;
 layout (binding = 4, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 layout (binding = 20) uniform sampler2D u_textures[]; // bindless texture array (variable count)
 
@@ -33,7 +33,7 @@ void main()
     const Decal decal = d_decals[v_decalIdx];
 
     const vec2 uv = gl_FragCoord.xy * u_screenSize.zw;
-    const float depth = texture(u_gbufferDepth, uv).r;
+    const float depth = texture(u_sceneDepth, uv).r;
     if (depth <= 0.0) // reversed-Z: sky/far - nothing to project onto
         discard;
     const vec3 worldPos = worldPosFromDepth(uv, depth);
@@ -52,7 +52,7 @@ void main()
     }
 
     // Fade out on surfaces facing away from the projection direction (stretch smearing).
-    const vec3 n = normalFromDepth(u_gbufferDepth, ivec2(gl_FragCoord.xy), depth, u_taaJitter.xy); // geometric: there is no normal target
+    const vec3 n = normalFromDepth(u_sceneDepth, ivec2(gl_FragCoord.xy), depth, u_taaJitter.xy); // geometric: there is no normal target
     const vec3 projDir = decalQuatRotate(decal.rotation, vec3(0.0, 0.0, -1.0)); // toward the surface
     const float facing = dot(n, -projDir);
     const float cutoff = decal.halfExtentsAngleFade.w;

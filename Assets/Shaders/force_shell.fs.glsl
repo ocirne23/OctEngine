@@ -9,13 +9,13 @@
 // geometry). Ownership discard keeps merged same-team bubbles single-shaded: a crossing is only
 // shaded by the fragment whose instance is the DOMINANT contributor there; unowned crossings still
 // advance the march (their owner's fragment draws them). Premultiplied blend over the lit scene,
-// manual depth test against the G-buffer depth (reversed-Z), no depth write - particles and fog
+// manual depth test against the scene depth (reversed-Z), no depth write - particles and fog
 // layer on top.
 
 #include "shared.inc.glsl"
 #include "force_field.inc.glsl" // declares the emitter buffer at FORCE_EMITTERS_BINDING (1)
 
-layout (binding = 2) uniform sampler2D u_gbufferDepth;
+layout (binding = 2) uniform sampler2D u_sceneDepth;
 
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
 
@@ -170,7 +170,7 @@ void main()
     t0 = max(t0, 0.0);
 
     // Manual depth test: clamp the march to the opaque scene.
-    const float sceneDepth = texture(u_gbufferDepth, uv).r;
+    const float sceneDepth = texture(u_sceneDepth, uv).r;
     float sceneDist = 1e30;
     if (sceneDepth > 0.0) // reversed-Z: 0 = sky/far
     {

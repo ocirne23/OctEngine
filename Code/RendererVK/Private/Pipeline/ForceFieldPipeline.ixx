@@ -21,7 +21,7 @@ import :Layout;
 // depth off - the camera can sit inside a bubble) inside the scene-color pass after the debug
 // overlays; each instance is oriented to its emitter's directional reach box and the fragment
 // shader ray-marches the analytic team field (force_field.inc.glsl), depth-testing manually
-// against the G-buffer depth. The live emitter slots are compacted into a mapped per-frame buffer
+// against the scene depth. The live emitter slots are compacted into a mapped per-frame buffer
 // each present and instanceCount rides a mapped indirect buffer, so emitter changes never
 // re-record the cached command buffers.
 //
@@ -112,10 +112,10 @@ public:
     struct DrawParams
     {
         Buffer& ubo;
-        vk::ImageView gbufferDepthView;
+        vk::ImageView sceneDepthView;
         // SCENE_DEPTH_SAMPLED_LAYOUT: the scene depth is this stage's read-only attachment AND this sampled image.
-        vk::ImageLayout gbufferDepthLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-        vk::Sampler gbufferSampler;
+        vk::ImageLayout sceneDepthLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        vk::Sampler sceneDepthSampler;
     };
     // Which half of the shell rendering to record - the desktop primary gives each its own
     // scene-stage secondary so the GPU profiler splits "Force shells" / "Force union march";
@@ -146,12 +146,12 @@ public:
     // Each covered pixel marches once at half res; the "Force union blend" scene stage (recordDraw
     // UnionMarch) then upsamples depth-aware into scene color. The viewport/scissor are the HALF
     // ones (the caller halves the full-res viewport - same 0.5 factor the march FS's uv applies).
-    // gbufferDepth = THIS frame's scene depth in SCENE_DEPTH_SAMPLED_LAYOUT (the march runs after the opaque scene stages).
+    // sceneDepthView = THIS frame's scene depth in SCENE_DEPTH_SAMPLED_LAYOUT (the march runs after the opaque scene stages).
     // Half-res mode only (no march target otherwise).
     void beginUnionMarchPass(vk::CommandBuffer primary);
     void recordUnionMarchDraw(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo,
         const vk::Viewport& viewport, const vk::Rect2D& scissor,
-        vk::ImageView gbufferDepthView, vk::Sampler gbufferSampler);
+        vk::ImageView sceneDepthView, vk::Sampler sceneDepthSampler);
     vk::RenderPass getMarchRenderPass() const { return m_marchRenderPass; }
     vk::Framebuffer getMarchFramebuffer() const { return m_marchFramebuffer; }
     // (Re)creates the interval + march targets at HALF the given (swapchain) extent - call at

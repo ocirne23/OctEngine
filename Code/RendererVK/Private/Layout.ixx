@@ -66,7 +66,7 @@ export namespace RendererVKLayout
 
     // ParticleEmitterGpu::flags bits (mirrored in the particle shaders via the injected defines).
     constexpr uint32 PARTICLE_FLAG_LIT     = 1u << 0; // per-particle GI probe + sun lighting in the vertex shader
-    constexpr uint32 PARTICLE_FLAG_COLLIDE = 1u << 1; // screen-space depth collision (previous frame's G-buffer)
+    constexpr uint32 PARTICLE_FLAG_COLLIDE = 1u << 1; // screen-space depth collision (previous frame's scene depth)
     constexpr uint32 PARTICLE_FLAG_KILL    = 1u << 2; // emitter destroyed: the sim retires its live particles
     constexpr uint32 PARTICLE_FLAG_VOLUME  = 1u << 3; // weather volume: box spawn (volumeParams), particles WRAP at the box faces and never age out
     constexpr uint32 PARTICLE_FLAG_OCCLUDE = 1u << 4; // volume only: a particle under the rain occlusion map's surface restarts at the box top
@@ -107,7 +107,7 @@ export namespace RendererVKLayout
 
     // Projected box decals (DecalPipeline / decal.vs/fs.glsl), submitted per frame like lights
     // (Renderer::addDecal, lock-free). Drawn in the scene-color pass right after the opaque forward
-    // draw: the box's fragments reconstruct the surface from the G-buffer depth, project it into decal
+    // draw: the box's fragments reconstruct the surface from the scene depth, project it into decal
     // space and blend over the lit scene (premultiplied), so decals wrap any static or skinned surface.
     // Local +Z is the projection direction; the texture maps across local XY.
     constexpr uint32 MAX_DECALS = 4096;
@@ -623,7 +623,7 @@ export namespace RendererVKLayout
                                    //     built from the UNDISPLACED mesh) - see setOceanDisplacementExtent
         // Sub-band DETAIL: cascade 2's gradient field re-sampled at a fraction of its patch size in a
         // rotated domain, added to the SHADING slope only (oceanSampleSurface). Never reaches the
-        // displacement, so geometry, the depth prepass and the CPU buoyancy mirror are untouched.
+        // displacement, so geometry and the CPU buoyancy mirror are untouched.
         glm::vec4 oceanParams11;   // x = strength (0 = off), y = patch fraction of cascade 2 (smaller = finer),
                                    // z = fade distance (m; 0 = no fade), w = domain rotation (radians)
         // Ocean spray (ocean_spray.cs.glsl -> the particle GPU spawn path; "Ocean/Spray *" tweaks):

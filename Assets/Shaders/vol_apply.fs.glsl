@@ -1,7 +1,7 @@
 #version 450
 
 // Volumetric fog apply: fullscreen pass in the scene-color render pass (after the forward + sky draws,
-// before TAA so the fog gets antialiased). Reconstructs each pixel's view depth from the G-buffer depth
+// before TAA so the fog gets antialiased). Reconstructs each pixel's view depth from the scene depth
 // and samples the integrated fog volume.
 // Blended with (srcColor = ONE, dstColor = SRC_ALPHA): out = inScatter + sceneColor * transmittance.
 //

@@ -60,7 +60,7 @@ public:
     void updateTerrainDescriptor(uint32 frameIdx, vk::ImageView terrainView, vk::Sampler terrainSampler);
 
     // Output maps: 2D array, layers [0, CASCADES) = displacement, [CASCADES, 2*CASCADES) = gradients,
-    // full mip chain, SHADER_READ_ONLY between frames. Sampled by the G-buffer/forward vertex shaders
+    // full mip chain, SHADER_READ_ONLY between frames. Sampled by the forward ocean vertex shader
     // (displacement) and the ocean fragment shader (gradients).
     vk::ImageView getMapsView() const { return m_mapsView; }
     vk::Sampler getMapsSampler() const { return m_mapsSampler.getSampler(); }

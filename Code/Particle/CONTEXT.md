@@ -207,7 +207,7 @@ or 0 if the spawn was dropped.
 * Pushed per frame through the lock-free `Renderer::addDecal`.
 * Drawn as ONE instanced draw of unit cubes — the `"Decals"` scene stage, right after static meshes.
   `cullMode = Front`, **depth test and write both off**, premultiplied blend.
-* The FS reconstructs the surface from G-buffer depth, projects into decal space (+Z axis),
+* The FS reconstructs the surface from the scene depth (and derives the surface normal from it), projects into decal space (+Z axis),
   angle-fades (`angleFadeDeg` / `angleFadeWidth`) and blends. `DECAL_FLAG_LIT` approximates sun + GI.
 * Being pure screen-space, decals wrap static AND skinned geometry.
 * Tweak `Decals → Enabled`.

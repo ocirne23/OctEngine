@@ -2,7 +2,7 @@
 
 // Particle simulate: one thread per IN-list entry (survivors of last frame + this frame's spawns; the
 // dispatch is GPU-sized by the begin pass). Integrates gravity/drag/turbulence, optionally collides
-// against last frame's G-buffer depth (screen-space; particles outside the view just fly on), and
+// against last frame's scene depth (screen-space; particles outside the view just fly on), and
 // compacts survivors into the OUT alive list - whose count is directly this frame's draw instanceCount.
 // Expired particles return their pool index to the dead stack. Emitters whose slot was destroyed carry
 // PARTICLE_FLAG_KILL, which retires their particles on the next sim step.
@@ -92,7 +92,7 @@ void main()
     }
     vec3 pos = particle.posAge.xyz + vel * p_dt;
 
-    // Screen-space depth collision against last frame's G-buffer (centre view).
+    // Screen-space depth collision against last frame's scene depth (centre view).
     if (p_collision != 0u && (e.texFlags.y & PARTICLE_FLAG_COLLIDE) != 0u)
     {
         const vec4 clip = u_views[VIEW_CENTER].mvp * vec4(pos, 1.0);

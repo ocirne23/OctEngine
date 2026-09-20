@@ -63,8 +63,8 @@ public:
     struct SimParams
     {
         Buffer& ubo;
-        vk::ImageView prevDepthView;   // last frame's G-buffer depth (collision)
-        vk::Sampler   gbufferSampler;
+        vk::ImageView prevDepthView;   // last frame's scene depth (collision)
+        vk::Sampler   sceneDepthSampler;
         vk::ImageView rainOcclusionView;    // THIS frame's top-down rain occlusion depth (weather volume shelter)
         vk::Sampler   rainOcclusionSampler; // non-comparison, clamp-to-border white (outside = open sky)
         vk::ImageView oceanMapsView;        // FFT displacement maps (PARTICLE_FLAG_WATER_FLOOR: the live surface)
@@ -82,10 +82,10 @@ public:
     {
         Buffer& ubo;
         Buffer& giGridDataBuffer;
-        vk::ImageView gbufferDepthView; // this frame's opaque depth (soft particles)
+        vk::ImageView sceneDepthView; // this frame's opaque depth (soft particles)
         // SCENE_DEPTH_SAMPLED_LAYOUT: the scene depth is this stage's read-only attachment AND this sampled image.
-        vk::ImageLayout gbufferDepthLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-        vk::Sampler   gbufferSampler;
+        vk::ImageLayout sceneDepthLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        vk::Sampler   sceneDepthSampler;
         vk::ImageView terrainView;      // terrain-data cascades (PARTICLE_FLAG_GROUND_FADE)
         vk::Sampler   terrainSampler;
         Buffer* lightInfosBuffer = nullptr; // the scene's lights + light grid (LIT particles), this frame slot's

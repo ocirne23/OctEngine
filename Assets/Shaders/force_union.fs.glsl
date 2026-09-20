@@ -16,7 +16,7 @@
 #define FORCE_UNION_UV_SCALE 1.0 // injected 2.0 when the march runs at half res
 #endif
 
-layout (binding = 2) uniform sampler2D u_gbufferDepth;
+layout (binding = 2) uniform sampler2D u_sceneDepth;
 layout (binding = 5) uniform sampler2D u_shellInterval; // (tEntry, -tExit) per pixel, RG16F
 
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
@@ -53,7 +53,7 @@ void main()
     const vec3 rayDir = normalize(worldPosFromDepth(uv, 0.0) - rayOrigin);
 
     // Manual depth test: clamp the march to the opaque scene (once - not per proxy).
-    const float sceneDepth = texture(u_gbufferDepth, uv).r;
+    const float sceneDepth = texture(u_sceneDepth, uv).r;
     float sceneDist = 1e30;
     if (sceneDepth > 0.0) // reversed-Z: 0 = sky/far
     {

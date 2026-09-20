@@ -9,7 +9,7 @@
 
 #include "shared.inc.glsl"
 
-layout (binding = 4) uniform sampler2D u_gbufferDepth; // this frame's opaque scene depth (soft particles)
+layout (binding = 4) uniform sampler2D u_sceneDepth; // this frame's opaque scene depth (soft particles)
 layout (binding = 20) uniform sampler2D u_textures[];  // bindless texture array (variable count)
 
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
@@ -46,7 +46,7 @@ void main()
     // Soft particles: fade out as the quad approaches the opaque scene surface behind it.
     float soft = 1.0;
     const vec2 uv = gl_FragCoord.xy * u_screenSize.zw;
-    const float depth = texture(u_gbufferDepth, uv).r;
+    const float depth = texture(u_sceneDepth, uv).r;
     if (depth > 0.0) // reversed-Z: 0 = sky/far
     {
         const vec3 sceneWorld = worldPosFromDepth(uv, depth);

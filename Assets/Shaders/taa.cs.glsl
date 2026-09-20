@@ -19,8 +19,8 @@ layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 layout (binding = 1) uniform sampler2D u_currentColor;     // this frame's scene colour (jittered render); .a = 0 on ocean pixels
 layout (binding = 2) uniform sampler2D u_historyColor;     // last frame's resolved colour (reprojected)
-layout (binding = 3) uniform sampler2D u_gbufferDepth;     // this frame's camera depth
-layout (binding = 4) uniform sampler2D u_prevGbufferDepth; // last frame's camera depth (disocclusion test)
+layout (binding = 3) uniform sampler2D u_sceneDepth;     // this frame's camera depth
+layout (binding = 4) uniform sampler2D u_prevSceneDepth; // last frame's camera depth (disocclusion test)
 layout (binding = 5, rgba16f) uniform restrict writeonly image2D u_resolveOut;
 
 layout (push_constant) uniform PC
@@ -57,7 +57,7 @@ void main()
         imageStore(u_resolveOut, px, vec4(current, 1.0));
         return;
     }
-    const float depth = texture(u_gbufferDepth, uv).r;
+    const float depth = texture(u_sceneDepth, uv).r;
 
     // Sky pixels (the Sky variant writes no depth, so its depth stays at the cleared far
     // plane - 0.0 under reversed-Z) reproject AT the far plane: the reprojection is then purely rotational
@@ -114,7 +114,7 @@ void main()
     // if the surface moved more than a view-distance-scaled threshold (something else was there last frame).
     // Last frame's depth image is jittered by LAST frame's jitter (u_taaJitter.zw): the surface at unjittered
     // position prevUv lives at pixel prevUv + prevJitter, so fetch there and reconstruct at prevUv.
-    const float prevDepth = texture(u_prevGbufferDepth, prevUv + taaJitterUv(u_taaJitter.zw)).r;
+    const float prevDepth = texture(u_prevSceneDepth, prevUv + taaJitterUv(u_taaJitter.zw)).r;
     float fb = mix(pc.feedback, min(pc.feedback, pc.oceanFeedback), ocean);
     const bool prevSky = prevDepth <= 0.0;
     if (sky != prevSky)

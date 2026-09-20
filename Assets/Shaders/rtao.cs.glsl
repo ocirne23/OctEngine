@@ -8,7 +8,7 @@ layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 #include "shared.inc.glsl"
 
-layout (binding = 2) uniform sampler2D u_gbufferDepth;  // hardware depth (the normal is derived from it)
+layout (binding = 2) uniform sampler2D u_sceneDepth;  // hardware depth (the normal is derived from it)
 layout (binding = 3) uniform accelerationStructureEXT u_tlas;
 layout (binding = 4, rgba16f) uniform restrict writeonly image2D u_aoOut; // rgb = bent normal, a = AO
 
@@ -89,12 +89,12 @@ void main()
     const vec2 uv = (vec2(px) + 0.5) / vec2(pc.aoWidth, pc.aoHeight);
 
     // A ZERO bent normal = "none": the forward pass then evaluates GI along its own shading normal.
-    const ivec2 depthPx = ivec2(uv * vec2(textureSize(u_gbufferDepth, 0)));
-    const float depth = texelFetch(u_gbufferDepth, depthPx, 0).r;
+    const ivec2 depthPx = ivec2(uv * vec2(textureSize(u_sceneDepth, 0)));
+    const float depth = texelFetch(u_sceneDepth, depthPx, 0).r;
     if (depth <= 0.0) { imageStore(u_aoOut, px, vec4(0.0, 0.0, 0.0, 1.0)); return; } // background (reversed-Z far = 0): no occlusion
 
     // Geometric normal from the depth image: there is no normal target.
-    const vec3 N = normalFromDepth(u_gbufferDepth, depthPx, depth, u_taaJitter.xy);
+    const vec3 N = normalFromDepth(u_sceneDepth, depthPx, depth, u_taaJitter.xy);
 
     // The depth image is jittered (the scene pass's own depth); reconstruct at the surface's true
     // unjittered position so ray origins don't wobble sub-pixel with the jitter - see taaJitterUv.

@@ -323,7 +323,7 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
             vk::MemoryPropertyFlagBits::eHostVisible, false, "FirstInstances", BufferHostAccess::eSequentialWrite);
         perFrame.mappedFirstInstances = perFrame.inFirstInstancesBuffer.mapMemory<uint32>();
 
-        // Indirect usage: consumed by DGC (sequenceCountAddress) and drawIndexedIndirectCount.
+        // Indirect usage: consumed by DGC (sequenceCountAddress requires an INDIRECT_BUFFER).
         perFrame.meshCountBuffer.initialize(sizeof(uint32),
             vk::BufferUsageFlagBits2::eIndirectBuffer | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
             vk::MemoryPropertyFlagBits::eHostVisible, false, "MeshCount", BufferHostAccess::eSequentialWrite);
@@ -1970,7 +1970,7 @@ void Renderer::present()
     frameData.inFirstInstancesBuffer.flushMappedMemory(numMeshInfos * sizeof(uint32));
     frameData.lightInfosBuffer.flushMappedMemory(m_lightCounter * sizeof(RendererVKLayout::LightInfo));
 
-    frameData.mappedMeshCount[0] = m_meshInfoCounter; // DGC sequence count / G-buffer draw count for this frame
+    frameData.mappedMeshCount[0] = m_meshInfoCounter; // DGC sequence count for this frame
     frameData.meshCountBuffer.flushMappedMemory(sizeof(uint32));
 
     frameData.mappedFogVolumes.data()->count = m_fogVolumeCounter;
@@ -2820,9 +2820,9 @@ void Renderer::recordAOInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
     const uint32 prevFrameIdx = (frameIdx + 1) % RendererVKLayout::NUM_FRAMES_IN_FLIGHT;
     RTAOPipeline::RecordParams aoParams{
         .ubo = frameData.ubo,
-        .gbufferDepthView = frameData.sceneColor.getDepthView(eyeIndex),
-        .prevGbufferDepthView = m_perFrameData[prevFrameIdx].sceneColor.getDepthView(eyeIndex),
-        .gbufferSampler = frameData.sceneColor.getDepthSampler(),
+        .sceneDepthView = frameData.sceneColor.getDepthView(eyeIndex),
+        .prevSceneDepthView = m_perFrameData[prevFrameIdx].sceneColor.getDepthView(eyeIndex),
+        .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
         .tlas = tlas,
         .vertexBuffer = Globals::meshDataManager.getVertexBuffer(),
         .indexBuffer = Globals::meshDataManager.getIndexBuffer(),
@@ -2846,9 +2846,9 @@ void Renderer::recordFogApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 eye
     VolumetricFogPipeline::ApplyParams params{
         .ubo = frameData.ubo,
         .giGridDataBuffer = m_giProbePipeline.getGiGridDataBuffer(),
-        .gbufferDepthView = frameData.sceneColor.getDepthView(eyeIndex),
-        .gbufferDepthLayout = SCENE_DEPTH_SAMPLED_LAYOUT, // also this stage's read-only depth attachment
-        .gbufferSampler = frameData.sceneColor.getDepthSampler(),
+        .sceneDepthView = frameData.sceneColor.getDepthView(eyeIndex),
+        .sceneDepthLayout = SCENE_DEPTH_SAMPLED_LAYOUT, // also this stage's read-only depth attachment
+        .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
     };
     m_volumetricFogPipeline.recordApply(cb, frameIdx, eyeIndex, params);
 }
@@ -2863,9 +2863,9 @@ void Renderer::recordTaaInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex
         .ubo = frameData.ubo,
         .currentColorView = sceneColor.getColorLayerView(eyeIndex),
         .currentColorSampler = sceneColor.getSampler(),
-        .gbufferDepthView = sceneColor.getDepthView(eyeIndex),
-        .prevGbufferDepthView = m_perFrameData[prevFrameIdx].sceneColor.getDepthView(eyeIndex),
-        .gbufferSampler = sceneColor.getDepthSampler(),
+        .sceneDepthView = sceneColor.getDepthView(eyeIndex),
+        .prevSceneDepthView = m_perFrameData[prevFrameIdx].sceneColor.getDepthView(eyeIndex),
+        .sceneDepthSampler = sceneColor.getDepthSampler(),
         .feedback = m_taaParams.taaEnabled ? m_taaParams.taaFeedback : 0.0f,
         .oceanFeedback = m_taaParams.taaEnabled ? m_taaParams.taaOceanFeedback : 0.0f,
     };
@@ -2907,7 +2907,7 @@ void Renderer::recordDebugLines(uint32 frameIdx)
 }
 
 // Particle GPU sim (begin/emit/simulate compute chain), its own secondary outside any render pass;
-// executed right after the light grid in the primary. Reads LAST frame's G-buffer for depth collision.
+// executed right after the light grid in the primary. Reads LAST frame's scene depth for depth collision.
 void Renderer::recordParticleSim(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
@@ -2918,7 +2918,7 @@ void Renderer::recordParticleSim(uint32 frameIdx)
     ParticlePipeline::SimParams simParams{
         .ubo = frameData.ubo,
         .prevDepthView = m_perFrameData[prevFrameIdx].sceneColor.getDepthView(),
-        .gbufferSampler = frameData.sceneColor.getDepthSampler(),
+        .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
         .rainOcclusionView = frameData.rainOcclusionMap.getSampleView(),
         .rainOcclusionSampler = frameData.rainOcclusionMap.getDepthSampler(),
         .oceanMapsView = m_oceanSimPipeline.getMapsView(),
@@ -2946,9 +2946,9 @@ void Renderer::recordParticlesInto(CommandBuffer& cb, uint32 frameIdx, uint32 ey
     ParticlePipeline::DrawParams drawParams{
         .ubo = frameData.ubo,
         .giGridDataBuffer = m_giProbePipeline.getGiGridDataBuffer(),
-        .gbufferDepthView = frameData.sceneColor.getDepthView(eyeIndex),
-        .gbufferDepthLayout = SCENE_DEPTH_SAMPLED_LAYOUT, // also this stage's read-only depth attachment
-        .gbufferSampler = frameData.sceneColor.getDepthSampler(),
+        .sceneDepthView = frameData.sceneColor.getDepthView(eyeIndex),
+        .sceneDepthLayout = SCENE_DEPTH_SAMPLED_LAYOUT, // also this stage's read-only depth attachment
+        .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
         .terrainView = m_fogTerrainMap.getView(),
         .terrainSampler = m_fogTerrainMap.getSampler(),
         .lightInfosBuffer = &frameData.lightInfosBuffer,
@@ -2984,9 +2984,9 @@ void Renderer::recordDecalsInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIn
     DecalPipeline::DrawParams drawParams{
         .ubo = frameData.ubo,
         .giGridDataBuffer = m_giProbePipeline.getGiGridDataBuffer(),
-        .gbufferDepthView = frameData.sceneColor.getDepthView(eyeIndex),
-        .gbufferDepthLayout = SCENE_DEPTH_SAMPLED_LAYOUT, // also this stage's read-only depth attachment
-        .gbufferSampler = frameData.sceneColor.getDepthSampler(),
+        .sceneDepthView = frameData.sceneColor.getDepthView(eyeIndex),
+        .sceneDepthLayout = SCENE_DEPTH_SAMPLED_LAYOUT, // also this stage's read-only depth attachment
+        .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
     };
     m_decalPipeline.recordDraw(cb, frameIdx, eyeIndex, drawParams);
 }
@@ -3018,9 +3018,9 @@ void Renderer::recordForceFieldInto(CommandBuffer& cb, uint32 frameIdx, uint32 e
     vkCb.setScissor(0, { scissor });
     ForceFieldPipeline::DrawParams drawParams{
         .ubo = frameData.ubo,
-        .gbufferDepthView = frameData.sceneColor.getDepthView(eyeIndex),
-        .gbufferDepthLayout = SCENE_DEPTH_SAMPLED_LAYOUT, // also this stage's read-only depth attachment
-        .gbufferSampler = frameData.sceneColor.getDepthSampler(),
+        .sceneDepthView = frameData.sceneColor.getDepthView(eyeIndex),
+        .sceneDepthLayout = SCENE_DEPTH_SAMPLED_LAYOUT, // also this stage's read-only depth attachment
+        .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
     };
     m_forceFieldPipeline.recordDraw(cb, frameIdx, eyeIndex, drawParams, part);
 }
@@ -3102,9 +3102,9 @@ void Renderer::recordAO(uint32 frameIdx)
         const uint32 prevFrameIdx = (frameIdx + 1) % RendererVKLayout::NUM_FRAMES_IN_FLIGHT;
         RTAOPipeline::RecordParams aoParams{
             .ubo = frameData.ubo,
-            .gbufferDepthView = frameData.sceneColor.getDepthView(),
-            .prevGbufferDepthView = m_perFrameData[prevFrameIdx].sceneColor.getDepthView(),
-            .gbufferSampler = frameData.sceneColor.getDepthSampler(),
+            .sceneDepthView = frameData.sceneColor.getDepthView(),
+            .prevSceneDepthView = m_perFrameData[prevFrameIdx].sceneColor.getDepthView(),
+            .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
             .tlas = tlas,
             .vertexBuffer = Globals::meshDataManager.getVertexBuffer(),
             .indexBuffer = Globals::meshDataManager.getIndexBuffer(),
@@ -3161,9 +3161,9 @@ void Renderer::recordFogApply(uint32 frameIdx)
     VolumetricFogPipeline::ApplyParams params{
         .ubo = frameData.ubo,
         .giGridDataBuffer = m_giProbePipeline.getGiGridDataBuffer(),
-        .gbufferDepthView = frameData.sceneColor.getDepthView(),
-        .gbufferDepthLayout = SCENE_DEPTH_SAMPLED_LAYOUT, // also this stage's read-only depth attachment
-        .gbufferSampler = frameData.sceneColor.getDepthSampler(),
+        .sceneDepthView = frameData.sceneColor.getDepthView(),
+        .sceneDepthLayout = SCENE_DEPTH_SAMPLED_LAYOUT, // also this stage's read-only depth attachment
+        .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
     };
     m_volumetricFogPipeline.recordApply(cb, frameIdx, 0, params);
     cb.end();
@@ -3181,9 +3181,9 @@ void Renderer::recordTaa(uint32 frameIdx)
         .ubo = frameData.ubo,
         .currentColorView = sceneColor.getColorView(),
         .currentColorSampler = sceneColor.getSampler(),
-        .gbufferDepthView = sceneColor.getDepthView(),
-        .prevGbufferDepthView = m_perFrameData[prevFrameIdx].sceneColor.getDepthView(),
-        .gbufferSampler = sceneColor.getDepthSampler(),
+        .sceneDepthView = sceneColor.getDepthView(),
+        .prevSceneDepthView = m_perFrameData[prevFrameIdx].sceneColor.getDepthView(),
+        .sceneDepthSampler = sceneColor.getDepthSampler(),
         .feedback = m_taaParams.taaEnabled ? m_taaParams.taaFeedback : 0.0f,
         .oceanFeedback = m_taaParams.taaEnabled ? m_taaParams.taaOceanFeedback : 0.0f,
     };
@@ -3600,11 +3600,11 @@ void Renderer::recordSceneSecondaries(uint32 frameIdx)
 void Renderer::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
-    // Skin first: deforms skinned meshes into their output vertex regions, which the cull / G-buffer /
-    // forward / shadow passes then consume as ordinary static geometry.
+    // Skin first: deforms skinned meshes into their output vertex regions, which the cull / forward /
+    // shadow passes then consume as ordinary static geometry.
     if (!m_skinningJobs.empty())
         executeScoped(primary, "Skinning", frameData.skinningCommandBuffer.getCommandBuffer());
-    // FFT ocean simulation (spectrum -> IFFT -> maps + mips); the G-buffer/forward vertex shaders and
+    // FFT ocean simulation (spectrum -> IFFT -> maps + mips); the forward ocean vertex shader and
     // the ocean fragment shader sample the maps. Skipped entirely while no ocean is active (the maps
     // rest in SHADER_READ_ONLY, so the samplers stay valid).
     if (m_oceanParams.enabled)
@@ -3636,7 +3636,7 @@ void Renderer::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary)
         primary.endRenderPass();
         m_gpuProfiler.endScope(primary);
     }
-    // Particle emit/simulate (outside any render pass; reads LAST frame's G-buffer for collision and
+    // Particle emit/simulate (outside any render pass; reads LAST frame's scene depth for collision and
     // THIS frame's rain occlusion map, writes the alive list + indirect draw args the in-pass billboard
     // draw consumes).
     if (m_particlesEnabled)
@@ -4266,8 +4266,8 @@ uint32 Renderer::addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>& mesh
     if (m_meshInfoCounter > m_maxUniqueMeshes)
         growUniqueMeshCapacity(m_meshInfoCounter); // re-uploads the full CPU copy; re-records
     // Within capacity no re-record is needed: nothing recorded bakes the mesh count (the cull clears fill
-    // whole capacity-sized buffers, DGC reads the count via sequenceCountAddress, the G-buffer draws via
-    // drawIndexedIndirectCount, and new BLASes build per frame in recordGlobalIllum).
+    // whole capacity-sized buffers, DGC reads the count via sequenceCountAddress, and new BLASes build
+    // per frame in recordGlobalIllum).
     else
     {
         uploadToSharedBuffer(m_meshInfosBuffer, meshInfos.size() * sizeof(RendererVKLayout::MeshInfo),

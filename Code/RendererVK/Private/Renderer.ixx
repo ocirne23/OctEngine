@@ -547,7 +547,7 @@ private:
     void recordSceneSecondaries(uint32 frameIdx);                          // every cached secondary (invalidation frames only)
     void recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary); // skinning .. shadow draw (shared by both view modes)
     void recordPrimaryVR(uint32 frameIdx, CommandBuffer& primary);          // GI + fog, then the per-eye chain inline, eye adaptation, the eye composites
-    void recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer primary);  // G-buffer, GI, RTAO, fog, force passes, the split scene forward, TAA, eye adaptation
+    void recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer primary);  // GI, fog, scene opaque, RTAO, force passes, scene forward, TAA, eye adaptation
     // One GPU-profiler scope around one executeCommands.
     void executeScoped(vk::CommandBuffer primary, const char* scope, vk::CommandBuffer secondary);
     // Rewrites swapped streamed-texture slots in this frame slot's bindless texture arrays (all
@@ -1096,8 +1096,8 @@ private:
         Buffer inFirstInstancesBuffer;
         Buffer lodStatsBuffer; // per-level LOD pick counts, written by the cull, read back for stats
         oc::span<uint32> mappedLodStats;
-        // This frame's unique-mesh count, read on the GPU by the DGC executes (sequenceCountAddress) and
-        // the G-buffer's drawIndexedIndirectCount, so registering new meshes never re-records.
+        // This frame's unique-mesh count, read on the GPU by the DGC executes (sequenceCountAddress),
+        // so registering new meshes never re-records.
         Buffer meshCountBuffer;
         oc::span<uint32> mappedMeshCount;
 

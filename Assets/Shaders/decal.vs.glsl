@@ -3,7 +3,7 @@
 // Projected decal boxes: 36 vertices per instance (a unit cube, outward CCW winding), instanced from
 // the per-frame decal buffer. The pipeline culls FRONT faces and skips the depth test, so the box's
 // far/inside faces rasterize even when the camera sits inside the volume; the fragment shader does the
-// actual surface projection from the G-buffer depth.
+// actual surface projection from the scene depth.
 
 #include "shared.inc.glsl"
 #include "decal.inc.glsl"

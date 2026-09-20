@@ -195,8 +195,8 @@ namespace Procedural
 		// around its hole, the horizon band as its 4 sides - each its own container/node + spatial entry
 		// so both cull paths (Spatial gate + GPU per-instance frustum test) drop off-screen water.
 		// Sector borders duplicate identical vertices: same position, cell size and morph -> watertight.
-		// Every triangle is emitted in both windings, back to back, so the back-face-culled prepass and
-		// Ocean pipelines draw the surface from either side and the prepass depth holds the nearest face
+		// Every triangle is emitted in both windings, back to back, so the back-face-culled
+		// Ocean pipeline draws the surface from either side and the scene depth holds the nearest face
 		// from below as well as above. Adjacent copies hit the vertex cache; only the index count doubles.
 		const int   N = glm::clamp(m_ringRes & ~3, 16, 1024); // multiple of 4: hole/sector edges stay on the lattice
 		const float c0 = glm::max(m_ringCell * m_worldScale, 0.001f); // world metres: the cell rides the scale like the waves it holds

@@ -14,7 +14,7 @@ import :DescriptorSet;
 // the shared vertex mega-buffer, using a bone-matrix palette. The per-instance jobs live in a per-frame
 // SSBO and a single CPU-written indirect dispatch covers all of them (x = groups of the largest job,
 // y = job count), so spawning/despawning skinned instances never invalidates the recorded command buffer.
-// Output is in the standard MeshVertex format (model space), so the existing cull / DGC / G-buffer /
+// Output is in the standard MeshVertex format (model space), so the existing cull / DGC /
 // shadow paths consume it unchanged.
 export class SkinningComputePipeline final
 {

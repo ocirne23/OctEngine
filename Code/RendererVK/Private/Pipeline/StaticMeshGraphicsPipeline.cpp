@@ -131,8 +131,8 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 	// Variant 9 (EPipelineIndex::Ocean): FFT/Tessendorf water. A dedicated vertex shader (same pipeline
 	// layout/interface as the shared one) displaces the clipmap grid by the OceanSimulationPipeline's
 	// displacement maps (binding 7); a dedicated fragment shader shades the surface (Fresnel, GGX sun
-	// glint, RAY-TRACED refraction with Beer-Lambert absorption, Jacobian foam). Opaque + depth write
-	// (matches the G-buffer prepass ocean branch). Back-face culled like the prepass: the clipmap carries
+	// glint, RAY-TRACED refraction with Beer-Lambert absorption, Jacobian foam). Opaque + depth write.
+	// Back-face culled: the clipmap carries
 	// every triangle in both windings (OceanGenerator::rebuildGrid), so the underside draws from below.
 	const oc::string oceanVertexPath = "Shaders/instanced_indirect_ocean.vs.glsl";
 	const oc::string oceanVariantPath = "Shaders/ocean.fs.glsl";

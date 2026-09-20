@@ -124,7 +124,6 @@ bool Device::initialize()
     vk::PhysicalDeviceVulkan12Features vk12Features
     {
         .pNext = &vk11Features,
-        .drawIndirectCount = vk::True, // G-buffer prepass draw count read from the GPU mesh-count buffer
         .storageBuffer8BitAccess = vk::True,
         .shaderFloat16 = vk::True,
 		.shaderInt8 = vk::True,

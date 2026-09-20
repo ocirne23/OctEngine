@@ -31,9 +31,9 @@ public:
         Buffer& ubo;
         vk::ImageView currentColorView;      // this frame's scene colour (SHADER_READ_ONLY); .a = 0 on ocean pixels
         vk::Sampler   currentColorSampler;
-        vk::ImageView gbufferDepthView;      // this frame's scene depth (SCENE_DEPTH_SAMPLED_LAYOUT)
-        vk::ImageView prevGbufferDepthView;  // last frame's scene depth (SCENE_DEPTH_SAMPLED_LAYOUT)
-        vk::Sampler   gbufferSampler;
+        vk::ImageView sceneDepthView;        // this frame's scene depth (SCENE_DEPTH_SAMPLED_LAYOUT)
+        vk::ImageView prevSceneDepthView;    // last frame's scene depth (SCENE_DEPTH_SAMPLED_LAYOUT)
+        vk::Sampler   sceneDepthSampler;
         float feedback;                      // history weight; 0 disables accumulation
         float oceanFeedback;                 // history weight cap on ocean pixels (waves animate without motion vectors)
     };

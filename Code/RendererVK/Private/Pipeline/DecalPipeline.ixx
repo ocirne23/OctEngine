@@ -15,7 +15,7 @@ import :Layout;
 // draw (before particles/fog, so those layer on top). Decals are submitted per frame like lights
 // (Renderer::addDecal, lock-free atomic cursor into a mapped per-frame buffer) and rendered with ONE
 // instanced indirect draw of unit cubes (36 verts, front faces culled, no depth test - works with the
-// camera inside the volume): the fragment shader reconstructs the surface from the G-buffer depth,
+// camera inside the volume): the fragment shader reconstructs the surface from the scene depth,
 // projects it into decal space and blends premultiplied over the lit scene. instanceCount rides in a
 // mapped indirect buffer, so the cached secondary command buffer never re-records for count changes.
 export class DecalPipeline final
@@ -37,10 +37,10 @@ public:
     {
         Buffer& ubo;
         Buffer& giGridDataBuffer;
-        vk::ImageView gbufferDepthView;
+        vk::ImageView sceneDepthView;
         // SCENE_DEPTH_SAMPLED_LAYOUT: the scene depth is this stage's read-only attachment AND this sampled image.
-        vk::ImageLayout gbufferDepthLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-        vk::Sampler   gbufferSampler;
+        vk::ImageLayout sceneDepthLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        vk::Sampler   sceneDepthSampler;
     };
     // Records the indirect instanced box draw; the caller has begun a command buffer inside the
     // scene-color render pass and set the viewport/scissor. eye selects the per-eye set/views.
