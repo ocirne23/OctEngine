@@ -41,9 +41,7 @@ public:
     // The "GI" grid-shape tweaks (RendererVKLayout::g_giGrid: cascades, probes per axis, focus Y offset).
     // They are shader #defines in EVERY pipeline that samples the probes, so onGridChanged must: wait for
     // the GPU, call resizeGrid(), reload ALL shaders (Renderer::reloadShaders) and re-record.
-    // onDefineChanged: g_giGrid values that are shader defines but change no resource (the Chebyshev
-    // power) - reload every shader, no resize, no clipmap clear.
-    void registerGridTweaks(const oc::function<void()>& onGridChanged, const oc::function<void()>& onDefineChanged);
+    void registerGridTweaks(const oc::function<void()>& onGridChanged);
     // Re-allocates the persistent SH clipmap buffer for the current g_giGrid and schedules the one-time
     // clear (nothing is preserved - the toroidal slots mean something else now). GPU must be idle.
     void resizeGrid();
@@ -131,9 +129,9 @@ public:
     // Persistent GI clipmap SH volume (consumed by the main pass's fragment shader).
     Buffer& getGiGridDataBuffer() { return m_giGridData; }
     float getStrength() const { return m_giStrength; }
-    // x = Chebyshev variance floor (fraction of probe spacing), y = Chebyshev power, z = probe weight
-    // floor, w = mean scale. Uploaded to the frame UBO (u_giVisParams) for every probe-sampling shader.
-    glm::vec4 getVisibilityParams() const { return glm::vec4(m_visVarianceFloor, 0.0f /* y unused: the power is the GI_VIS_CHEB_POWER define */, m_visWeightFloor, m_visMeanScale); }
+    // x = Chebyshev variance floor (fraction of probe spacing), y = unused, z = probe weight floor,
+    // w = mean scale. Uploaded to the frame UBO (u_giVisParams) for every probe-sampling shader.
+    glm::vec4 getVisibilityParams() const { return glm::vec4(m_visVarianceFloor, 0.0f, m_visWeightFloor, m_visMeanScale); }
 
 private:
     void buildTlasInstanceLayout(ComputePipelineLayout& layout);
@@ -158,7 +156,7 @@ private:
     vk::Sampler m_skyMapSampler; // linear, U repeat (azimuth wraps), V clamp (poles)
 
     // GI probe trace tuning (runtime-tweakable; consumed by GIProbePipeline::recordTrace).
-    int m_giRaysPerProbe = 31;         // gather rays per probe per visit
+    int m_giRaysPerProbe = 17;         // gather rays per probe per visit
     float m_giUpdateIntervalMult = 16.0f; // global factor of a wave's update interval: frames = max(1, this x the priority factor),
                                          // so it is the interval AT "GI/Priority Distance" and close blocks cancel it (fresh probes always trace)
     float m_giTemporalAlpha = 0.025f;  // blend toward freshly traced irradiance per frame AT 60 FPS (rescaled by the wall delta, see getTraceParams0)
@@ -173,19 +171,23 @@ private:
     // Defaults (first-person scene, focus = camera, interval mult 16, falloff 3, weight 5): in view the
     // interval is 16 x (d / 10)^3 / 5 frames - every frame within ~8.5 m, 3 at 10 m, 25 at 20 m, 400 at
     // 50 m; out of view, 5x that. A steep curve: all the rays go to what is near the focus.
-    float m_giPriorityDist = 10.0f;         // focus distance (m) of the nominal rate (factor 1) for a wave OUT of view; the falloff curve pivots here
-    float m_giPriorityFalloff = 3.0f;       // exponent on (distance / priorityDist): 1 = linear, 2 = quadratic (far field all but stops), 0.5 = gentle, 0 = no distance term
+    float m_giPriorityDist = 8.0f;         // focus distance (m) of the nominal rate (factor 1) for a wave OUT of view; the falloff curve pivots here
+    float m_giPriorityFalloff = 1.5f;       // exponent on (distance / priorityDist): 1 = linear, 2 = quadratic (far field all but stops), 0.5 = gentle, 0 = no distance term
     float m_giPriorityFrustumWeight = 5.0f; // a wave IN the view frustum has its interval divided by this (1 = the frustum is ignored)
 
-    // SH-L1 depth visibility (Chebyshev) lookup tuning. Higher variance floor / lower power = softer,
-    // temporally stabler occlusion edges (the L1 depth estimate wobbles with the per-frame ray jitter);
-    // lower floor / higher power = sharper leak blocking.
-    float m_visVarianceFloor = 0.2f;   // min std-dev as a fraction of the cascade's probe spacing
-    // (the Chebyshev exponent lives in RendererVKLayout::g_giGrid.visChebPower - a shader define)
-    float m_visWeightFloor = 0.01f;    // occluded probes keep this much weight (0 = hard cutoff)
-    float m_visMeanScale = 1.5f;      // scales the reconstructed mean distance before the Chebyshev test:
-                                       // > 1 widens each probe's visible footprint (more overlap/smoothing),
-                                       // countering the L1 blur's distance underestimate at grazing angles
+    // SH-L1 depth visibility (Chebyshev) lookup tuning. Three knobs, each with its own job: the mean scale
+    // moves the occlusion THRESHOLD, the variance floor is the MINIMUM edge softness (the measured variance
+    // widens it where the depth really spreads - sideways past a wall), the weight floor is the leak level /
+    // the all-occluded fallback. The exponent is fixed (GI_VIS_CHEB_POWER = 2 in gi_probe.inc.glsl): near the
+    // threshold it only rescales the floor (weight ~ 1 - p (delta / sigma)^2), and the weight floor cuts the
+    // tail it shapes. An additive mean bias was tried and removed: the same effect as the scale or the floor.
+    float m_visVarianceFloor = 0.35f;  // min std-dev as a fraction of the cascade's probe spacing: covers the L1 mean's error
+                                       // toward a wall (0.15 .. 0.4 spacings); below ~0.25 the ray jitter moves the edge (flicker)
+    float m_visWeightFloor = 0.01f;    // occluded probes keep this much weight (0 = hard cutoff, noisy when all 8 are occluded)
+    float m_visMeanScale = 1.2f;       // scales the reconstructed depth (mean AND, by its square, the second moment, so the
+                                       // variance stays consistent) before the Chebyshev test: > 1 widens each probe's visible
+                                       // footprint. A wall at distance m reads as scale x m, so points up to (scale - 1) x m
+                                       // BEHIND it keep full weight: the leak depth
 
     // Single persistent GI clipmap SH volume: irradiance carries forward in place (toroidal addressing),
     // so there is no prev/cur ping-pong. Read across frames by the fragment shader and read+written by the

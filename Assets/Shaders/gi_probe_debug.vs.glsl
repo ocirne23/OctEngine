@@ -5,7 +5,7 @@
 // Every probe is a SPHERE IMPOSTOR: 6 verts = a camera-facing quad, and the fragment shader intersects the
 // sphere. Mode 0 (irradiance) evaluates the probe's SH per pixel along the true normal there; modes 1
 // (cascade / LOD), 2 (update priority) and 3 (relocation / backface state) pass a flat colour, which the
-// fragment shader shades by the sphere normal for depth perception.
+// fragment shader shades by the sphere normal for depth perception. Mode 4 (visibility) is per pixel too.
 
 #include "shared.inc.glsl"
 
@@ -14,7 +14,7 @@ layout (binding = 1, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 layout (push_constant) uniform PC
 {
     float  u_radius; // sphere diameter scale (x sqrt(spacing))
-    uint   u_mode;   // 0 = irradiance, 1 = cascade/LOD color, 2 = update priority, 3 = relocation / backface state
+    uint   u_mode;   // 0 = irradiance, 1 = cascade/LOD color, 2 = update priority, 3 = relocation / backface state, 4 = visibility
 } pc;
 
 #define GI_GRID_DATA_NAME  gi_gridData
@@ -65,7 +65,13 @@ void main()
     v_world     = center + right * q.x + up * q.y;
     gl_Position = u_mvp * vec4(v_world, 1.0);
 
-    if (pc.u_mode == 3u)
+    if (pc.u_mode == 4u)
+    {
+        // Visibility: evaluated per pixel by the fragment shader. x = spacing (the depth cap's unit),
+        // y = brightness (backface-dead probes, which the lookup rejects, are dimmed).
+        v_color = vec3(float(spacing), giProbeBackfaceFrac(cellBase) > GI_BACKFACE_DEAD_MAX ? 0.2 : 1.0, 0.0);
+    }
+    else if (pc.u_mode == 3u)
     {
         // Relocation / backface state (the misc vec4): red = how far the lookup has faded the probe out as
         // backface-dead, blue = relocation offset as a fraction of its clamp, YELLOW = escaped on its last
@@ -86,7 +92,8 @@ void main()
         // go through the scene's exposure and bloom, where the ramp's bright yellow can clip to white.
         // The rest is a LOG ramp, each doubling an equal step: blue (2 frames) -> green (~22) ->
         // yellow (~76) -> red (256 or more). Backface-dead probes (GI_DEAD_INTERVAL on top) are dimmed.
-        const uint interval = giWaveUpdateInterval(giWaveMin(lc, giCascadeOrigin(cascade, u_sceneFocus.xyz)), spacing);
+        // A COVERED wave (giWaveCovered) shows through its interval: a slow block in the fast centre.
+        const uint interval = giWaveUpdateInterval(cascade, giWaveMin(lc, giCascadeOrigin(cascade, u_sceneFocus.xyz)), spacing);
         if (interval <= 1u)
             v_color = vec3(1.0, 0.0, 1.0);
         else

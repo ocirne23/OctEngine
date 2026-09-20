@@ -1,6 +1,6 @@
 Prefab lightRig
-	Position 0 0 0
-	Rotation 0 -0 0
+	Position 65.04951 8.2304125 1.260599
+	Rotation 72.228355 -47.037174 25.9083
 	Scale 1
 	Component Light
 		Light Spot
@@ -8,5 +8,5 @@ Prefab lightRig
 			Intensity 250
 			Range 30
 			Direction 0 -1 0
-			ConeAngle 19.6
-			EdgeSoftness 0.25
+			ConeAngle 23.2
+			EdgeSoftness 1

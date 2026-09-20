@@ -343,8 +343,6 @@ export namespace RendererVKLayout
         int numCascades = 4;                    // nested clipmap levels (1..8)
         int dimLog2X = 5, dimLog2Y = 5, dimLog2Z = 5; // probes per axis per cascade as log2 (2..6 = 4..64): power of two for the toroidal mask
         float focusOffsetY = 2.0f;              // metres added to the scene focus before centring the grids (> 0 = more probes above the ground than below)
-        int visChebPower = 2;                   // Chebyshev visibility weight exponent (GI_VIS_CHEB_POWER, 1..6; DDGI uses 3) - a define,
-                                                // so the sample loop multiplies instead of pow-ing per probe; a change reloads shaders only
 
         uint32 dimX() const { return 1u << dimLog2X; }
         uint32 dimY() const { return 1u << dimLog2Y; }
@@ -564,7 +562,7 @@ export namespace RendererVKLayout
         glm::vec4 aoParams;      // x = RTAO enabled (0/1), y = GI strength, z = RTAO max distance (m; the
                                  // forward pass skips its AO upsample past it; 0 = no falloff),
                                  // w = unused (the light debug overlay is the LIGHT_GRID_DEBUG define)
-        glm::vec4 giVisParams;   // x = Chebyshev variance floor (fraction of spacing), y = Chebyshev power, z = probe weight floor, w = mean scale (footprint widening)
+        glm::vec4 giVisParams;   // x = Chebyshev variance floor (fraction of spacing), y = unused, z = probe weight floor, w = mean scale (footprint widening)
         // GI probe trace + TLAS-instance parameters (gi_probe_trace / gi_tlas_instances): in the UBO, not push
         // constants, so the GI command buffer is recorded ONCE (tweaks and the per-frame values ride the UBO).
         glm::vec4 giTrace0;      // x = rays per probe, y = temporal alpha, z = max ray distance (m), w = update interval multiplier (giWaveUpdateInterval)

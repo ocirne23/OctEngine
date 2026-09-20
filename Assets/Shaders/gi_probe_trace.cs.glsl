@@ -78,6 +78,11 @@ layout (binding = 12, std430) buffer GiGridData { vec4 gi_gridData[]; };
 #define GI_STEP_LIMIT_REL 2.0      // a visit brighter than (1 + this) x the stored luminance has its blend step limited (huge = off)
 #define GI_STEP_LIMIT_MIN 0.25     // ... but never below this fraction of the asked step (bounds the switch-on lag)
 
+// Alpha-masked-aware shadow rays: sun visibility at gather-ray hits, and the grid lights' shadows there
+// (GI_LIGHT_RT_SHADOWS - lighting.inc.glsl needs rtShadowVisibility in scope, so this comes first).
+#include "rt_shadow.inc.glsl"
+#define GI_LIGHT_RT_SHADOWS
+
 // Light grid (read) + shared diffuse lighting.
 #define GRID_DATA_NAME  in_gridData
 #define GRID_TABLE_NAME in_gridTable
@@ -89,9 +94,6 @@ layout (binding = 12, std430) buffer GiGridData { vec4 gi_gridData[]; };
 #define GI_PROBE_WRITE
 #define GI_GRID_DATA_NAME    gi_gridData
 #include "gi_probe.inc.glsl"
-
-// Alpha-masked-aware shadow rays (sun visibility at gather-ray hits).
-#include "rt_shadow.inc.glsl"
 
 uint hashU(uint x)
 {
@@ -183,10 +185,10 @@ vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out fl
     vec3 radiance = giGatherDirect(worldPos, worldN, albedo);
     // Previous-frame indirect at the hit -> multi-bounce (infinite, temporally). The cur SH already holds
     // the carried-forward irradiance for this frame. The CHEAP lookup (no Chebyshev, no cross-cascade
-    // fade, starting at this probe's own cascade): the result is albedo-scaled and blended at
-    // temporalAlpha, so its noise is free and the shading-quality path's ~2x loads are not.
+    // fade): the result is albedo-scaled and blended at temporalAlpha, so its noise is free and the
+    // shading-quality path's ~2x loads are not.
     float giCov;
-    vec3 prevE = giEvalBounce(worldPos, worldN, cascade, giCov);
+    vec3 prevE = giEvalBounce(worldPos, worldN, giCov);
     if (prevE.x >= 0.0) // fade the multi-bounce with coverage so traced hits near the field's edge don't step
         radiance += albedo * (prevE / PI) * giCov;
     return radiance;
@@ -286,7 +288,7 @@ void main()
     // alpha scaled to match (below), so convergence in WALL time holds while the ray count divides by the
     // interval. Interleaved per WORKGROUP (whole waves exit, no half-empty waves); fresh probes always
     // trace - a skipped fresh slot would show the scrolled-out probe's data for a frame.
-    const uint updateInterval = giWaveUpdateInterval(waveMin, spacing);
+    const uint updateInterval = giWaveUpdateInterval(cascade, waveMin, spacing);
     if (!fresh && ((gl_WorkGroupID.x + u_frameIndex) % updateInterval) != 0u)
         return;
 
@@ -334,7 +336,7 @@ void main()
     // offset clamp. A probe deeper in solid geometry than the clamp can never get out - stepping + clamping
     // it every visit along that visit's random closest ray made it jump around the clamp sphere forever -
     // so such a probe holds still (it is backface-dead at lookup anyway).
-    const float escapeMargin = 0.075 * float(spacing); // how far past the backface the probe lands
+    const float escapeMargin = 0.125  * float(spacing); // how far past the backface the probe lands
     const float maxLen       = 0.45 * float(spacing);
     float backfaceSum = 0.0;
     float closestBack = 1e30;
@@ -406,6 +408,7 @@ void main()
     const float oldLuma = dot(gi_gridData[cellBase].xyz, lumaW); // [0].xyz = the stored SH DC term
     const bool  replace = fresh || oldLuma <= 0.0;
     const float frameAlpha = u_giTrace0.y;
+    //const float visitAlpha = max(frameAlpha, frameAlpha * float(updateInterval)); //max(frameAlpha, min(1.0 - pow(1.0 - frameAlpha, float(updateInterval)), GI_VISIT_ALPHA_MAX));
     const float visitAlpha = max(frameAlpha, min(1.0 - pow(1.0 - frameAlpha, float(updateInterval)), GI_VISIT_ALPHA_MAX));
     float alpha = replace ? 1.0 : visitAlpha;
     if (!replace)

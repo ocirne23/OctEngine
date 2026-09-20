@@ -49,7 +49,7 @@ void GIProbePipeline::initialize(uint32 maxTlasInstances, uint32 maxTextures, ui
     Tweak::intVar("GI", "Rays Per Probe", &m_giRaysPerProbe, 1, 128);
     Tweak::floatVar("GI", "Update Interval Mult", &m_giUpdateIntervalMult, 1.0f, 32.0f, 0.5f);
     Tweak::floatVar("GI", "Priority Distance (m)", &m_giPriorityDist, 1.0f, 512.0f, 1.0f);
-    Tweak::floatVar("GI", "Priority Falloff", &m_giPriorityFalloff, 0.0f, 4.0f, 0.05f);
+    Tweak::floatVar("GI", "Priority Falloff", &m_giPriorityFalloff, 0.0f, 5.0f, 0.05f);
     Tweak::floatVar("GI", "Priority Frustum Weight", &m_giPriorityFrustumWeight, 1.0f, 8.0f, 0.1f);
     Tweak::floatVar("GI", "Temporal Alpha", &m_giTemporalAlpha, 0.0f, 0.05f, 0.001f);
     Tweak::floatVar("GI", "Max Ray Distance", &m_giMaxRayDist, 0.0f, 128.0f);
@@ -60,10 +60,9 @@ void GIProbePipeline::initialize(uint32 maxTlasInstances, uint32 maxTextures, ui
     Tweak::floatVar("GI", "Vis Mean Scale", &m_visMeanScale, 0.5f, 3.0f, 0.05f);
 }
 
-void GIProbePipeline::registerGridTweaks(const oc::function<void()>& onGridChanged, const oc::function<void()>& onDefineChanged)
+void GIProbePipeline::registerGridTweaks(const oc::function<void()>& onGridChanged)
 {
     RendererVKLayout::GiGridConfig& grid = RendererVKLayout::g_giGrid;
-    Tweak::intVar("GI", "Vis Cheb Power", &grid.visChebPower, 1, 6, 1.0f, onDefineChanged); // GI_VIS_CHEB_POWER define
     Tweak::intVar("GI", "Cascades", &grid.numCascades, 1, 8, 1.0f, onGridChanged);
     Tweak::intVar("GI", "Probes X (log2)", &grid.dimLog2X, 2, 6, 1.0f, onGridChanged);
     Tweak::intVar("GI", "Probes Y (log2)", &grid.dimLog2Y, 2, 6, 1.0f, onGridChanged);

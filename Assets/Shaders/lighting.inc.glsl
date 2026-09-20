@@ -85,6 +85,32 @@ vec3 giLightIrradiance(LightInfo light, vec3 pos, vec3 N)
     return light.color * (giSquareFalloff(dist, abs(light.range)) * shape * NdotL);
 }
 
+// One grid light's irradiance with its ray-traced shadow. GI_LIGHT_RT_SHADOWS is defined by an includer
+// that has rt_shadow.inc.glsl (and everything that needs) in scope BEFORE this file - the GI probe trace;
+// without it the light is unshadowed (vol_scatter). One ray to the light's CENTRE, like the falloff: the
+// bounce is low-frequency and temporally blended, so an area light's penumbra is not worth more rays.
+// Unshadowed, a lamp lit every gather hit in its range THROUGH walls - a leak the probe visibility test
+// cannot see, because the light is already in the probe's own SH. Follows the forward pass' toggle
+// (u_rtLightShadows), and traces only past GI_LIGHT_SHADOW_MIN: a cell lists every light whose RANGE
+// touches it, and most of those contribute next to nothing at the hit.
+#ifndef GI_LIGHT_SHADOW_MIN
+#define GI_LIGHT_SHADOW_MIN 0.002
+#endif
+vec3 giLightIrradianceShadowed(LightInfo light, vec3 pos, vec3 N)
+{
+    vec3 e = giLightIrradiance(light, pos, N);
+#ifdef GI_LIGHT_RT_SHADOWS
+    if (u_rtLightShadows > 0.5 && max(max(e.r, e.g), e.b) > GI_LIGHT_SHADOW_MIN)
+    {
+        const vec3  toLight = light.pos - pos;
+        const float dist    = length(toLight);
+        if (dist > 0.05)
+            e *= rtShadowVisibility(pos + N * 0.02, toLight / dist, 0.01, dist - 0.02);
+    }
+#endif
+    return e;
+}
+
 // Optional sun-shadow override: when >= 0, giGatherDirect uses this value instead of the cascade shadow
 // map (giSunShadow). The GI probe trace sets it to a view-independent, ray-traced per-probe visibility so
 // off-screen probes are shadowed correctly (the camera shadow maps only cover the view frustum). The
@@ -124,12 +150,12 @@ vec3 giGatherDirect(vec3 pos, vec3 N, vec3 albedo)
         {
             const uint numLargeLights = getLargeLightCount(gridIdx);
             for (uint i = 0; i < min(numLargeLights, MAX_LARGE_LIGHTS_PER_GRID); ++i)
-                E += giLightIrradiance(in_lightInfos[getLargeLightId(gridIdx, i)], pos, N);
+                E += giLightIrradianceShadowed(in_lightInfos[getLargeLightId(gridIdx, i)], pos, N);
 
             const uint cellOffset = calcCellOffset(gridIdx, gridMin, pos);
             const uint numLights  = getNumLightsForCell(cellOffset);
             for (uint i = 0; i < min(numLights, MAX_LIGHTCELL_LIGHTS); ++i)
-                E += giLightIrradiance(in_lightInfos[getLightId(cellOffset, i)], pos, N);
+                E += giLightIrradianceShadowed(in_lightInfos[getLightId(cellOffset, i)], pos, N);
             break;
         }
         tableIdx = getNextTableIdx(tableIdx);

@@ -293,6 +293,25 @@ top-down camera hanging in empty sky shapes none of these:
   backface"** mode shows the misc vec4: red = the lookup's backface-dead fade, blue = the relocation
   offset over its clamp, yellow = escaped on its last visit (the stored fraction pinned to exactly
   DEAD_MAX) — a probe that keeps returning to yellow is re-escaping, and jumps at its visit rate.
+  The **"Visibility"** mode (4) is per pixel like irradiance: for the sphere normal n it rebuilds what
+  `giSampleCascade`'s Chebyshev test sees for a surface in direction n from the probe (same mean
+  scale, cap and variance floor): grey = mean distance over the cap (black = occluder at the probe,
+  white = open), orange tint (multiplied, so black stays black) = deviation above the variance floor
+  (edge softness, linear to cap / 2), magenta = no depth data yet,
+  dead probes dimmed. **The Chebyshev test has THREE knobs, one job each** (`u_giVisParams`, y
+  unused; `giVisMoments` in gi_probe.inc.glsl, shared with the debug view): w "Vis Mean Scale" (1.2)
+  moves the occlusion THRESHOLD — it scales the DEPTH, so the second moment scales by k² and the
+  variance stays consistent (**the old code scaled the mean only: `mean2 - (k·mean)²` was negative
+  nearly everywhere, the variance was always the floor and the stored second moment did nothing**);
+  a wall at m reads as k·m, so (k - 1)·m behind it leaks. x "Vis Variance Floor" (0.35 spacings)
+  is the MINIMUM edge softness (covers the L1 mean's 0.15..0.4-spacing error toward a wall; under
+  ~0.25 the ray jitter moves the edge); the measured variance widens it sideways past a wall, where
+  the L1 mean is 1.4..1.75x too short. z "Vis Weight Floor" (0.01) is the leak level and the
+  all-occluded fallback. **Removed as redundant:** the "Vis Cheb Power" tweak (fixed define, 2:
+  near the threshold the weight is ~ 1 - p(Δ/σ)², so the power only rescales the floor, and the
+  weight floor cuts the tail it shapes) and the additive "Vis Mean Bias" (same effect as the scale
+  or the floor). **"No depth data" is tested on the DC coefficient (`d2sh.x`), never on the reconstructed
+  mean2** — that rings to <= 0 toward a close wall, and the old test switched the occlusion off there.
   **Temporal stability** (the blend is an average over the last ~1/alpha visits, so per-visit noise
   reads as a slow DRIFT, and ray count only buys sqrt(N)): the per-visit shift of the ray lattice is
   an **R2 sequence over the wave's visit number** (integer fixed point; the per-probe hash only
@@ -304,12 +323,34 @@ top-down camera hanging in empty sky shapes none of these:
   **Dead-probe skipping:** a probe whose stored backface fraction is past
   `GI_BACKFACE_DEAD_MAX` (under the terrain, inside a wall — the lookup rejects it anyway) traces only
   every `GI_DEAD_INTERVAL` (8) regular visits, enough for the escape relocation and the wake-up; an
-  escape visit pins the stored fraction to exactly DEAD_MAX so the next visit is not skipped. **Miss
+  escape visit pins the stored fraction to exactly DEAD_MAX so the next visit is not skipped.
+  **Covered waves (hollow cascades):** the priority distance is in CELLS, so the centre of every
+  coarse cascade — the 1/8 that lies under the next finer window, which no lookup reads — had that
+  cascade's highest rate. `giWaveCovered` (gi_probe.inc.glsl) is true when the block plus one spacing
+  of trilinear support sits inside the finer cascade's fade == 1 box (minus half a finer cell for
+  the normal-bias difference); `giWaveUpdateInterval` then multiplies by `GI_COVERED_INTERVAL` (16).
+  **The cross-cascade fade is `giCascadeFade`:** continuous in the sample point (the old one came from
+  the integer cell index — a staircase, two steps over the band), measured from the UNSNAPPED focus
+  as a box of `DIM/2 - 2` cells (the old band was tied to the snapped window and jumped a whole cell
+  along the seam on every scroll; the snapped window always holds that box, so fade > 0 implies the
+  stencil fits), smoothstepped. Past the box a finer cascade is NOT sampled. The two cascades blend
+  as SH COEFFICIENTS (`giSampleCascade` returns them) and are evaluated once. The outermost
+  cascade's coverage fade (shading and `giEvalBounce`) uses the same function with a 0.2 band.
+  **Not a skip:** the probes stay warm for the all-dead fall-through and for the moment the finer
+  window scrolls off them. The test reads `GI_CASCADE_FADE_BAND` (0.05 of the narrowest dim, shared
+  with `evalProbeSHCoverage`) — **widen the band and fewer blocks are covered; the two cannot drift
+  apart because both read the define.** **Direct light at a gather hit is ray-traced-shadowed for
+  EVERY light:** the sun through `g_sunShadowOverride`, the grid lights through
+  `giLightIrradianceShadowed` (lighting.inc.glsl, compiled in by the trace's `GI_LIGHT_RT_SHADOWS`;
+  one ray to the light's centre, only past `GI_LIGHT_SHADOW_MIN`, and only while `u_rtLightShadows`
+  is on). Unshadowed, a lamp lit every hit in its range through walls — a leak the probe visibility
+  test cannot see. The trace includes rt_shadow.inc.glsl BEFORE lighting.inc.glsl for this. **Miss
   rays AND the virtual sky probe sample THE SKY MAP** instead of marching the
   atmosphere, so the out-of-field fallback matches the misses by construction. **Gather hits use
   `giEvalBounce`** (gi_probe.inc.glsl, write side): the cheap multi-bounce lookup — no Chebyshev, no
-  cross-cascade fade, walk starts at the tracing probe's cascade — because the result is temporally
-  blended. The probe buffer is **NOT `coherent`** in the trace (each invocation writes only its own
+  cross-cascade fade — because the result is temporally blended. Its walk starts at the FINEST
+  cascade, like the shading lookup: starting at the tracing probe's own cascade read the covered
+  coarse probes, which are now nearly stale. The probe buffer is **NOT `coherent`** in the trace (each invocation writes only its own
   probe; stale cross-probe reads are by design). The light and force grids have no GPU insert pass
   any more (CPU-built, see the light grid section). **TLAS exclusions are INACTIVE
   instances** (reference 0, `gi_tlas_instances.cs.glsl`), which the build skips entirely, not
@@ -714,8 +755,8 @@ calls `reloadShaders()`.
 * **The GI probe buffer is `vec4[]`** (every includer declares it so; layout table at the top of
   gi_probe.inc.glsl): a probe is 6 wide loads — SH in 3, depth moments in 2, backface + relocation
   offset packed in 1 — not 24 scalar ones; the write side packs the same way. The Chebyshev weight
-  exponent is the `GI_VIS_CHEB_POWER` define (`g_giGrid.visChebPower`, "GI/Vis Cheb Power", integer;
-  a reload-only tweak), unrolled to multiplies.
+  exponent is the fixed `GI_VIS_CHEB_POWER` define (2, gi_probe.inc.glsl; no tweak), unrolled to
+  multiplies.
 * **`shared.inc.glsl` / `ubo.inc.glsl` structs must stay in sync with `Private/Layout.ixx`.**
 * **The light grid build is split CPU / GPU, and the CPU part is NOT on the main thread**
   (`LightGridComputePipeline`):

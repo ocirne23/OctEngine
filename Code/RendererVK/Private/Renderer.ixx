@@ -511,7 +511,7 @@ public:
 
     // The testbed keys (P / O) and the "GI/Debug probes" tweaks drive the same state.
     void toggleGiProbeDebug() { m_giProbeDebugEnabled = !m_giProbeDebugEnabled; }
-    void cycleGiProbeDebugMode() { m_giProbeDebugMode = (m_giProbeDebugMode + 1) % 4; setHaveToRecordCommandBuffers(); } // 0 = irradiance, 1 = cellSize/LOD, 2 = update priority, 3 = relocation / backface
+    void cycleGiProbeDebugMode() { m_giProbeDebugMode = (m_giProbeDebugMode + 1) % 5; setHaveToRecordCommandBuffers(); } // 0 = irradiance, 1 = cellSize/LOD, 2 = update priority, 3 = relocation / backface, 4 = visibility
 
     void setWindowMinimized(bool minimized);
     void recreateWindowSurface(Window& window);

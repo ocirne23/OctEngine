@@ -102,7 +102,7 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     // flag; the colour mode and radius are push constants in the cached debug secondary, so they re-record.
     Tweak::boolean("GI", "Debug probes", &m_giProbeDebugEnabled);
     {
-        static constexpr oc::string_view s_giProbeDebugModeNames[] = { "Irradiance", "Cascade / LOD colour", "Update priority", "Relocation / backface" };
+        static constexpr oc::string_view s_giProbeDebugModeNames[] = { "Irradiance", "Cascade / LOD colour", "Update priority", "Relocation / backface", "Visibility" };
         Tweak::enumVar("GI", "Debug probe colour", &m_giProbeDebugMode, s_giProbeDebugModeNames, rerecordCallback);
     }
     Tweak::floatVar("GI", "Debug probe radius", &m_giProbeDebugRadius, 0.02f, 1.0f, 0.01f, rerecordCallback);
@@ -231,8 +231,7 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
                 return;
             m_giProbePipeline.resizeGrid();
             reloadShaders();
-        },
-        [this]() { reloadShaders(); }); // define-only (Chebyshev power): reloadShaders waits for the GPU itself
+        });
     m_giProbePipeline.setDebugDepthReadOnly(m_depthPrepassReuse);
     m_giProbePipeline.initializeDebug(sceneRenderPass);
     m_debugLinePipeline.initialize(sceneRenderPass);
