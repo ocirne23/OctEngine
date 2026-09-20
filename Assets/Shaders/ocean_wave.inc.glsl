@@ -5,8 +5,8 @@
 //   layer c                      : displacement (Dx, h, Dz, dDx/dz)
 //   layer   OCEAN_CASCADES + c   : gradients    (dh/dx, dh/dz, dDx/dx, dDz/dz)
 //   layer 2*OCEAN_CASCADES + c   : slope second moments (dhx^2, dhz^2, accel, turbulence [c=0 only])
-// Shared by the displacement passes (instanced_indirect_ocean.vs.glsl, gbuffer.vs.glsl) and the water
-// shading (ocean.fs.glsl) so prepass depth, drawn geometry and shaded normals read the same field.
+// Shared by the displacement pass (instanced_indirect_ocean.vs.glsl) and the water shading
+// (ocean.fs.glsl) so the drawn geometry and the shaded normals read the same field.
 // Requires ubo.inc.glsl; includer may set OCEAN_MAPS_BINDING / TERRAIN_HEIGHT_BINDING first.
 
 #ifndef OCEAN_MAPS_BINDING
@@ -371,34 +371,6 @@ float oceanSampleTurbulence(vec2 worldXZ, float footprint)
     filtered *= 1.0 / 16.0;
 
     return mix(filtered, trilinear, clamp(lod, 0.0, 1.0));
-}
-
-// Vertex-shader shading normal with explicit LOD (the G-buffer prepass writes this as the reference
-// normal). shoreHW = the vertex's (terrain height, water level), fetched once by the caller.
-vec3 oceanSampleNormalLod(vec2 worldXZ, float cellSize, float morph, vec2 shoreHW)
-{
-    const float chop = u_oceanParams0.w;
-    const float depth = oceanEffectiveDepth(worldXZ, shoreHW.y - shoreHW.x);
-    if (depth <= 0.0)
-        return vec3(0.0, 1.0, 0.0); // buried under land: flat
-    const vec2 fr = oceanFlowRotation(worldXZ);
-    const vec2 sampleXZ = oceanFlowSamplePos(worldXZ, fr);
-    vec2 slopeSum = vec2(0.0);
-    vec2 sxx_szz = vec2(0.0);
-    for (int c = 0; c < OCEAN_CASCADES; ++c)
-    {
-        const float L = u_oceanParams2[c];
-        const vec4 g = textureLod(u_oceanMaps, vec3(sampleXZ / L, float(OCEAN_CASCADES + c)), oceanVertexLod(cellSize, morph, L));
-        slopeSum += g.xy;
-        sxx_szz += g.zw;
-    }
-    const float w = oceanSurfaceWeight(depth, shoreHW.y); // the displacement's depth weight
-    slopeSum *= w;
-    sxx_szz *= w;
-    vec2 slope = slopeSum / max(vec2(1.0) + chop * sxx_szz, vec2(0.6));
-    slope /= 1.0 + u_oceanParams10.x * length(slope); // same fold-over soft limit as oceanSampleSurface
-    slope = oceanFlowToWorld(slope, fr);
-    return normalize(vec3(-slope.x, 1.0, -slope.y));
 }
 
 #endif

@@ -73,6 +73,10 @@ export struct GraphicsPipelineLayout
     vk::BlendFactor dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
     // eMin/eMax ignore the factors (the force-shell interval pass MIN-blends its ray interval).
     vk::BlendOp colorBlendOp = vk::BlendOp::eAdd;
+    // false = RGB only, every variant. The scene colour's ALPHA is TAA's animated-surface flag (the
+    // ocean writes 0 - see taa.cs.glsl), so the stages that layer over the opaque scene (decals,
+    // debug draws, force, particles, fog apply) must leave it alone.
+    bool colorWriteAlpha = true;
     bool depthTestEnable = true;
     bool depthWriteEnable = true;
     // The main view renders REVERSED-Z (near = 1, far = 0, cleared to 0) for far-field depth precision,

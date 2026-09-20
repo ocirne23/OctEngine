@@ -29,8 +29,7 @@ layout (binding = 4, std430) buffer AliveOut { uint pa_aliveOut[]; };
 layout (binding = 5, std430) buffer DeadList { uint pd_deadList[]; };
 layout (binding = 6, std430) buffer Counters { PARTICLE_COUNTERS_BLOCK };
 layout (binding = 7, std430) readonly buffer Emitters { ParticleEmitter pe_emitters[]; };
-layout (binding = 8) uniform sampler2D u_prevDepth;   // last frame's G-buffer depth (centre/left view)
-layout (binding = 9) uniform sampler2D u_prevNormal;  // last frame's G-buffer world normal
+layout (binding = 8) uniform sampler2D u_prevDepth;   // last frame's scene depth (centre/left view)
 layout (binding = 10) uniform sampler2DArray u_rainOcclusion; // THIS frame's top-down rain occlusion depth, one layer (standard Z; border 1 = open sky)
 
 // Weather volume shelter test: true when the particle sits deeper than the occlusion map's surface at
@@ -112,7 +111,9 @@ void main()
                     const float thickness = max(0.5, e.sizeParams.x);
                     if (clip.w > sceneW && clip.w - sceneW < thickness)
                     {
-                        vec3 n = normalize(texture(u_prevNormal, uv).xyz + vec3(0.0, 1e-4, 0.0));
+                        // Geometric normal off the depth image (no normal target), in the same
+                        // current-view approximation as scenePos above.
+                        const vec3 n = normalFromDepth(u_prevDepth, ivec2(uv * vec2(textureSize(u_prevDepth, 0))), depth, u_taaJitter.zw);
                         const float vn = dot(vel, n);
                         if (vn < 0.0)
                         {

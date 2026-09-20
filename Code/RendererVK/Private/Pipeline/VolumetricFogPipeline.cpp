@@ -63,6 +63,7 @@ void VolumetricFogPipeline::buildApplyLayout(GraphicsPipelineLayout& layout)
     layout.blendEnable = true;
     layout.srcColorBlendFactor = vk::BlendFactor::eOne;
     layout.dstColorBlendFactor = vk::BlendFactor::eSrcAlpha;
+    layout.colorWriteAlpha = false; // scene colour alpha = TAA's ocean flag
     layout.depthTestEnable = false;
     layout.depthWriteEnable = false;
     auto& b = layout.descriptorSetLayoutBindings;

@@ -46,8 +46,8 @@ layout (binding = 20) uniform sampler2DArray u_skyMap;   // GI's per-frame sky b
 layout (binding = 21) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
 layout (binding = 8) uniform sampler2DArrayShadow u_shadowMap;      // comparison sampler (hardware PCF)
 layout (binding = 9) uniform sampler2DArray u_shadowMapDepth;       // raw depth (PCSS blocker search)
-layout (binding = 13) uniform sampler2D u_ao;                       // denoised half-res screen-space AO (bilateral upsample)
-layout (binding = 12) uniform sampler2D u_gbufferDepth;             // full-res hardware depth (AO upsample edge weights)
+layout (binding = 13) uniform sampler2D u_ao;                       // LAST frame's denoised half-res screen-space AO (reprojected bilateral upsample)
+layout (binding = 12) uniform sampler2D u_prevDepth;                // LAST frame's full-res hardware depth (the AO upsample's edge weights)
 
 layout (binding = 11) uniform accelerationStructureEXT u_tlas;       // ray-traced shadows for punctual/area lights
 
@@ -195,16 +195,27 @@ vec3 doSunLight(vec3 worldPos, vec3 V, vec3 N, vec3 specularCol, vec3 matColOver
 	g_sunRadiance = lightRadiance;
 	return doLight(lightRadiance, L, V, N, specularCol, matColOverPi, metalness, roughness, roughnessSq);
 }
-// Depth-aware 2x2 upsample of the half-res AO/bent-normal image. Plain bilinear bleeds across depth
+// Depth-aware 2x2 upsample of LAST FRAME's half-res AO/bent-normal image, reprojected. The AO is traced
+// from the scene depth, which this pass is still writing - so this pass reads the previous frame's AO
+// against the previous frame's depth: no input of this frame, no ordering constraint on the trace.
+// Static geometry is exact under camera motion (the tap test is in world space); a moving object
+// trails by one frame, inside the temporal accumulation's own lag. Plain bilinear bleeds across depth
 // discontinuities (a far wall's AO/bent normal mixing into a near silhouette shows as a bright GI rim),
-// so each tap's bilinear weight is scaled by its world-space distance to the shaded point. Tap depths
-// come from the full-res depth at the tap's UV (the half-res texel center), which is close enough to
-// the depth the trace actually used.
+// so each tap's bilinear weight is scaled by its world-space distance to the shaded point; the same
+// test rejects disoccluded taps. Returns (0, 0, 0, 1) - no bent normal, no occlusion - without history.
 vec4 sampleAOBilateral(vec2 fullUv, vec3 pos, float viewDist)
 {
+	// Clip-space reprojection of this fragment (see prevScreenUVClip). Both images are jittered: the
+	// fragment's surface sits at uv - jitter, and last frame's image holds a surface at uv + ITS jitter.
+	float clipW;
+	const vec2 prevJitter = taaJitterUv(u_taaJitter.zw);
+	const vec2 prevUv = prevScreenUVClip(fullUv - taaJitterUv(u_taaJitter.xy), gl_FragCoord.z, clipW) + prevJitter;
+	if (clipW <= 0.0 || any(lessThan(prevUv, vec2(0.0))) || any(greaterThan(prevUv, vec2(1.0))))
+		return vec4(0.0, 0.0, 0.0, 1.0);
+
 	const vec2 aoRes   = ceil(u_screenSize.xy * 0.5);
 	const vec2 aoTexel = 1.0 / aoRes;
-	const vec2 st   = fullUv * aoRes - 0.5;
+	const vec2 st   = prevUv * aoRes - 0.5;
 	const vec2 base = (floor(st) + 0.5) * aoTexel;
 	const vec2 f    = fract(st);
 	const float bw[4] = float[]((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
@@ -217,17 +228,17 @@ vec4 sampleAOBilateral(vec2 fullUv, vec3 pos, float viewDist)
 	for (int i = 0; i < 4; ++i)
 	{
 		const vec2 uv = base + offs[i];
-		const float d = texture(u_gbufferDepth, uv).r;
+		const float d = texture(u_prevDepth, uv).r;
 		if (d <= 0.0) // background (reversed-Z far = 0)
 			continue;
-		const vec3 tapPos = worldPosFromDepth(uv, d);
+		const vec3 tapPos = worldPosFromDepthMat(uv - prevJitter, d, u_prevInvMvp);
 		const vec3 dp = tapPos - pos;
 		const float w  = bw[i] * exp2(dot(dp, dp) * gaussK); // squared distance straight from the dot: no sqrt
 		sum  += texture(u_ao, uv) * w;
 		wsum += w;
 	}
-	// All taps rejected (thin geometry the half-res image never saw): fall back to plain bilinear.
-	return wsum > 1e-4 ? sum / wsum : texture(u_ao, fullUv);
+	// All taps rejected: disoccluded this frame, or thin geometry the half-res image never saw.
+	return wsum > 1e-4 ? sum / wsum : vec4(0.0, 0.0, 0.0, 1.0);
 }
 
 // Light debug overlay ("Graphics/LOD/Light grid/Debug Mode"): 0 off, 1 grid cells, 2 per-cell light
@@ -249,8 +260,8 @@ vec3 computeLitColor(vec3 worldPos, vec3 V, vec3 N, vec3 materialColor, float ro
 
 	float ao = 1.0;
 	vec3 bentN = N;
-	// Past the RTAO max distance (u_aoParams.z) the trace writes exactly (N, 1.0) - no occlusion, bent
-	// normal = surface normal (rtao.cs.glsl early-out) - so the depth-aware upsample (up to 8 taps + 4
+	// Past the RTAO max distance (u_aoParams.z) the trace writes exactly (0, 1.0) - no occlusion, no
+	// bent normal (rtao.cs.glsl early-out) - so the depth-aware upsample (up to 8 taps + 4
 	// world-pos reconstructions) would only re-fetch those constants. Skip it and use them directly;
 	// z = 0 (falloff disabled) keeps the upsample everywhere. The gate measures from the SCENE FOCUS, the
 	// same origin as rtao.cs.glsl's early-out; the camera distance still drives the upsample's depth weights.
@@ -263,7 +274,10 @@ vec3 computeLitColor(vec3 worldPos, vec3 V, vec3 N, vec3 materialColor, float ro
 		// Evaluate the indirect irradiance along the bent normal rather than the surface normal: in concave
 		// areas it points toward the open hemisphere, so the low-frequency probe SH stops leaking light from
 		// occluded directions. Mix partway toward N so flat, unoccluded surfaces are left untouched.
-		bentN = normalize(mix(N, normalize(aoSample.xyz), 0.75));
+		// A zero bent normal = none (past the trace's range, fully occluded, or no history): keep N.
+		const float bentLen2 = dot(aoSample.xyz, aoSample.xyz);
+		if (bentLen2 > 1e-6)
+			bentN = normalize(mix(N, aoSample.xyz * inversesqrt(bentLen2), 0.75));
 	}
 	// Blend to the virtual sky probe over the probe field's outer band (coverage) instead of stepping
 	// at the outermost cascade's window face; the fallback is only evaluated where it contributes.

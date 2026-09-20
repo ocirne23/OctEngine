@@ -48,8 +48,8 @@ public:
 		vk::Sampler shadowMapSampler;      // comparison sampler for PCF
 		vk::Sampler shadowMapDepthSampler; // non-comparison sampler for the PCSS blocker search
 
-		vk::ImageView gbufferDepthView;    // full-res depth (AO bilateral upsample edge weights)
-		vk::Sampler gbufferSampler;
+		vk::ImageView prevDepthView;       // LAST frame's full-res depth (edge weights of the reprojected AO upsample)
+		vk::Sampler prevDepthSampler;
 
 		vk::ImageView oceanMapsView;       // FFT ocean displacement/gradient array (VS displacement + FS shading)
 		vk::Sampler oceanMapsSampler;
@@ -83,10 +83,6 @@ public:
     void setWireframe(bool enabled) { m_wireframe = enabled; }
     void setShadowDebugMode(int mode) { m_shadowDebugMode = mode; }       // SHADOW_DEBUG define on the lit + terrain fragments
     void setLightGridDebugMode(int mode) { m_lightGridDebugMode = mode; } // LIGHT_GRID_DEBUG define, same shaders
-    // Depth-prepass reuse: the scene pass binds the G-buffer prepass depth READ-ONLY, so no scene variant
-    // may write depth (rebuild via reloadShaders after flipping, like wireframe). Default matches the
-    // Renderer's m_depthPrepassReuse default.
-    void setDepthReadOnly(bool readOnly) { m_depthReadOnly = readOnly; }
     vk::DescriptorSetLayout getDescriptorSetLayout() const { return m_graphicsPipeline.getDescriptorSetLayout(); }
     const IndirectExecutionSet& getIndirectExecutionSet() const { return m_indirectExecutionSet; }
     const IndirectCommandsLayout& getIndirectCommandsLayout() const { return m_indirectCommandsLayout; }
@@ -107,7 +103,6 @@ private:
     bool m_wireframe = false;      // global wireframe: scene variants get vk::PolygonMode::eLine
     int  m_shadowDebugMode = 0;    // ShadowParams::debugMode, baked as SHADOW_DEBUG (0 = no define)
     int  m_lightGridDebugMode = 0; // LightGridParams::debugMode, baked as LIGHT_GRID_DEBUG (0 = no define)
-    bool m_depthReadOnly = true;   // depth-prepass reuse: all scene variants depthWrite off (read-only depth attachment)
 
     vk::DeviceSize m_preprocessSize = 0;
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_preprocessBuffers;            // opaque pass

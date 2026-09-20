@@ -13,11 +13,13 @@ import :Settings;
 
 // Screen-space ray-traced ambient occlusion with a temporal-reprojection + spatial denoise.
 // Three half-resolution compute passes per frame, all R16F (images kept in GENERAL, no layout churn):
-//   1. trace    : ray-query the GI TLAS from the G-buffer -> raw (noisy) AO.
+//   1. trace    : ray-query the GI TLAS from the scene depth -> raw (noisy) AO.
 //   2. temporal : reproject last frame's accumulated AO via prevMvp, reject on disocclusion, blend ->
 //                 accumulated AO (this frame's becomes next frame's history; ping-ponged like the GI grid).
-//   3. spatial  : depth/normal-aware bilateral blur of the accumulated AO -> final AO (sampled by the
-//                 forward pass and upsampled with a linear sampler).
+//   3. spatial  : depth/plane-aware bilateral blur of the accumulated AO -> final AO.
+// DEPTH IS THE ONLY GEOMETRY INPUT: the normal is derived from it (normalFromDepth, shared.inc.glsl).
+// The forward pass samples the PREVIOUS frame's final AO, reprojected (sampleAOBilateral), so the
+// trace has no ordering constraint against the forward pass. A zero bent normal means "none".
 export class RTAOPipeline final
 {
 public:
@@ -36,8 +38,7 @@ public:
     struct RecordParams
     {
         Buffer& ubo;
-        vk::ImageView gbufferNormalView;     // this frame
-        vk::ImageView gbufferDepthView;      // this frame
+        vk::ImageView gbufferDepthView;      // this frame (the trace + blur derive the normal from it)
         vk::ImageView prevGbufferDepthView;  // previous frame (disocclusion)
         vk::Sampler   gbufferSampler;
         vk::AccelerationStructureKHR tlas;
@@ -52,7 +53,7 @@ public:
     // Rewrites one slot of the trace sets' texture array (binding 10, all eyes) with a streamed texture's current view.
     void updateTextureDescriptor(uint32 frameIdx, uint32 slotIdx, vk::ImageView view);
 
-    // Final denoised AO (half-res) for an eye; sampled by the forward pass with getAOSampler() (linear upsample).
+    // Final denoised AO (half-res) for an eye; the forward pass samples the PREVIOUS slot's with getAOSampler().
     // With the blur disabled (blurRadius <= 0) the spatial pass is skipped, so the accumulated AO is the output.
     vk::ImageView getAOView(uint32 frameIdx, uint32 eye) const
     {

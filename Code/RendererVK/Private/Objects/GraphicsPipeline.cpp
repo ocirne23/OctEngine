@@ -188,6 +188,8 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
     };
 
     vk::ColorComponentFlags colorComponentFlags = vk::FlagTraits<vk::ColorComponentFlagBits>::allFlags;
+    if (!layout.colorWriteAlpha)
+        colorComponentFlags &= ~vk::ColorComponentFlags(vk::ColorComponentFlagBits::eA);
     vk::PipelineColorBlendAttachmentState pipelineColorBlendAttachmentState
     {
         .blendEnable = layout.blendEnable ? vk::True : vk::False,
@@ -293,6 +295,10 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
         pipelineDepthStencilStateCreateInfo.depthTestEnable = variant.depthTest ? vk::True : vk::False;
         pipelineDepthStencilStateCreateInfo.depthWriteEnable = variant.depthWrite ? vk::True : vk::False;
         pipelineColorBlendAttachmentState.blendEnable = variant.blendEnable ? vk::True : vk::False;
+        // A blended variant KEEPS the dst alpha (the opaque surface behind it owns the scene colour's
+        // alpha = TAA's ocean flag; a near-zero material alpha must not read as ocean).
+        pipelineColorBlendAttachmentState.colorWriteMask = variant.blendEnable
+            ? colorComponentFlags & ~vk::ColorComponentFlags(vk::ColorComponentFlagBits::eA) : colorComponentFlags;
         pipelineRasterizationStateCreateInfo.polygonMode = variant.polygonMode;
         pipelineRasterizationStateCreateInfo.lineWidth = rasterizesLines(layout.topology, variant.polygonMode) ? LINE_WIDTH : 1.0f;
         pipelineRasterizationStateCreateInfo.cullMode = variant.cullMode;

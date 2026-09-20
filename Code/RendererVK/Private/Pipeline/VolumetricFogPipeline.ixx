@@ -53,7 +53,7 @@ public:
         Buffer& ubo;
         Buffer& giGridDataBuffer; // far field ambient (virtual sky probe)
         vk::ImageView gbufferDepthView;
-        // DEPTH_STENCIL_READ_ONLY while depth-prepass reuse binds this image as the scene pass depth.
+        // SCENE_DEPTH_SAMPLED_LAYOUT: the scene depth is this stage's read-only attachment AND this sampled image.
         vk::ImageLayout gbufferDepthLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
         vk::Sampler   gbufferSampler;
     };

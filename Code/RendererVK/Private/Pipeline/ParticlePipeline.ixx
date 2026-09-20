@@ -9,7 +9,6 @@ import :CommandBuffer;
 import :ComputePipeline;
 import :GraphicsPipeline;
 import :DescriptorSet;
-import :GBuffer;
 import :Sampler;
 import :Layout;
 
@@ -65,7 +64,6 @@ public:
     {
         Buffer& ubo;
         vk::ImageView prevDepthView;   // last frame's G-buffer depth (collision)
-        vk::ImageView prevNormalView;  // last frame's G-buffer world normal
         vk::Sampler   gbufferSampler;
         vk::ImageView rainOcclusionView;    // THIS frame's top-down rain occlusion depth (weather volume shelter)
         vk::Sampler   rainOcclusionSampler; // non-comparison, clamp-to-border white (outside = open sky)
@@ -85,7 +83,7 @@ public:
         Buffer& ubo;
         Buffer& giGridDataBuffer;
         vk::ImageView gbufferDepthView; // this frame's opaque depth (soft particles)
-        // DEPTH_STENCIL_READ_ONLY while depth-prepass reuse binds this image as the scene pass depth.
+        // SCENE_DEPTH_SAMPLED_LAYOUT: the scene depth is this stage's read-only attachment AND this sampled image.
         vk::ImageLayout gbufferDepthLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
         vk::Sampler   gbufferSampler;
         vk::ImageView terrainView;      // terrain-data cascades (PARTICLE_FLAG_GROUND_FADE)

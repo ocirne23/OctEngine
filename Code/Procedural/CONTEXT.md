@@ -461,13 +461,11 @@ multi-km disc every frame.**
   * The CPU side re-registers `baseRadius + extent` per frame; the GPU per-instance cull gets the same
     number through `u_oceanParams10.w` and adds it for `PIPELINE_IDX_OCEAN` instances
     (`instanced_indirect.cs.glsl`) — **frustum test only**, so LOD selection still sees real bounds.
-  * The G-buffer prepass and the forward pass draw from the SAME cull output, so they cannot disagree
-    about which sectors exist.
 * **Sector borders duplicate identical vertices, so splitting cannot open seams.**
-* **Every triangle is emitted in BOTH windings** (`pushTri`), so the back-face-culled prepass and Ocean
-  pipelines draw the surface from either side and the prepass depth holds the nearest face from below
-  too. (A cull-none forward variant over a prepass with no underside depth shaded every wave crossing
-  along an underwater ray — stacked "water planes".) Only the index count doubles. **So
+* **Every triangle is emitted in BOTH windings** (`pushTri`), so the back-face-culled Ocean pipeline
+  draws the surface from either side and the scene depth holds the nearest face from below too. (A
+  cull-none variant shaded every wave crossing along an underwater ray — stacked "water planes".)
+  Only the index count doubles. **So
   `gl_FrontFacing` is always true on the water**; the ocean shader takes the side from the triangle's
   plane instead.
 * The Spatial Main gate skips off-screen sectors (ocean is `PASS_MAIN` only), and a "Dry sector cull"
@@ -555,8 +553,8 @@ above that, so what is left near the camera is a normal map on a smooth surface 
   * The domain is **rotated**, because an unrotated copy is the same field scaled: its crest lines run
     parallel to the parent's at every point and read as a fractal repeat rather than as ripples. The
     slope is rotated back before `oceanFlowToWorld`.
-  * It is **shading only** — never in `oceanSampleDisplacement` — so geometry, the depth prepass and
-    the CPU buoyancy mirror are all untouched, and the shader/mirror rule is not broken.
+  * It is **shading only** — never in `oceanSampleDisplacement` — so geometry and
+    the CPU buoyancy mirror are untouched, and the shader/mirror rule is not broken.
   * Implicit LOD: a smaller patch makes the uv derivatives correspondingly larger, so the mip chain
     filters this band the way it filters the cascades. It still **fades out with distance**, because
     this band is absent from the LEAN moments — what the mips remove would simply vanish instead of

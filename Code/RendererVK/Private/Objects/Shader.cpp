@@ -149,12 +149,10 @@ static oc::string buildLayoutPreamble()
     def("ALPHA_MODE_MASK", (uint32)EAlphaMode::Mask, "u");
     def("ALPHA_MODE_BLEND", (uint32)EAlphaMode::Blend, "u");
     def("MATERIAL_FLAG_NO_RAYTRACING", MATERIAL_FLAG_NO_RAYTRACING, "u");
-    def("MATERIAL_FLAG_SKY", MATERIAL_FLAG_SKY, "u");
     def("MATERIAL_FLAG_BC5_NORMAL", MATERIAL_FLAG_BC5_NORMAL, "u");
     def("MATERIAL_FLAG_OCEAN", MATERIAL_FLAG_OCEAN, "u");
     def("PIPELINE_IDX_OCEAN", (uint32)EPipelineIndex::Ocean, "u"); // the cull pads ocean bounds by the displacement
     def("MATERIAL_FLAG_TERRAIN", MATERIAL_FLAG_TERRAIN, "u");
-    def("MATERIAL_FLAG_GIZMO_UI", MATERIAL_FLAG_GIZMO_UI, "u");
     def("OCEAN_FFT_SIZE", OCEAN_FFT_SIZE);
     def("OCEAN_CASCADES", OCEAN_CASCADES);
     def("MAX_TERRAIN_SPLAT_MATERIALS", MAX_TERRAIN_SPLAT_MATERIALS);

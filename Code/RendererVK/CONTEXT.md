@@ -150,24 +150,56 @@ GPU Frame
     → Rain occlusion cull → Rain occlusion draw  (only while a weather volume requested the map; see Particle)
     → Particle sim → Terrain wetness
     → Shadow cull → Shadow draw            (both skipped under RT sun shadow)
-    → G-buffer → GI → RTAO → Volumetric fog
+    → GI → Volumetric fog
+    → Scene opaque                         (WRITES the scene depth, then parks it read-only)
+    → RTAO                                 (reads this frame's depth; NEXT frame's forward pass reads the result)
     → Force intervals → Force union march  (own render passes in the primary around cached draw secondaries, half-res, gated on the force enable; see Force)
     → Scene forward → TAA → Eye adaptation
   Composite + UI
 ```
 
-**Inside "Scene forward"**, as separate secondaries with explicit attachment barriers between
-instances ([Renderer.cpp:3519](Private/Renderer.cpp#L3519)):
+> ### THERE IS NO DEPTH PREPASS / G-BUFFER
+>
+> Measured: the prepass cost about as much as the whole forward pass (both are geometry-bound) and
+> its early-Z saved the forward pass ~10 %. It is gone, with its normal target. **`SceneColor` owns THE
+> scene depth**, and every screen-space reader samples that one image: RTAO, the force march, decals,
+> particles, fog apply, TAA — and, as "last frame's depth" out of the OTHER frame slot, the forward
+> pass's AO reprojection, the AO temporal pass and the particle collision.
+>
+> * **The depth has exactly TWO layouts:** `DEPTH_STENCIL_ATTACHMENT` while the opaque stages write
+>   it, and `SCENE_DEPTH_SAMPLED_LAYOUT` (= `DEPTH_STENCIL_READ_ONLY`, SceneColor.ixx) the rest of the
+>   time — the layout of EVERY sampling descriptor and of the layered stages' read-only depth
+>   attachment, which is why those stages may sample the depth they test against. One barrier per
+>   frame and eye (`recordSceneDepthToSampled`); the first stage clears from `UNDEFINED`. A new depth
+>   reader uses that layout constant and runs after "Scene opaque".
+> * **Nothing reads a normal target.** Normals come from depth (`normalFromDepth`, see RTAO below).
+> * **TAA's ocean flag is the scene colour's ALPHA:** `ocean.fs.glsl` writes 0, every other opaque
+>   surface its material alpha (> 0), and TAA reads `alpha < 0.004` on non-sky pixels. So nothing
+>   layered over the opaque scene may write alpha: `GraphicsPipelineLayout::colorWriteAlpha = false`
+>   on decals, debug lines, force shells / union / upsample, particles and fog apply, and
+>   `GraphicsPipeline` masks alpha on every BLENDED variant (a transparent mesh keeps the alpha of
+>   the opaque surface behind it). **A new pipeline that draws into scene colour after the opaque
+>   stages sets `colorWriteAlpha = false`.**
+> * **The Sky variant does not write depth** (`depthWrite = false`): a sky pixel's depth stays at the
+>   cleared far plane, which is how every reader tells "sky". (The prepass did this by skipping the
+>   sky sphere; `MATERIAL_FLAG_SKY` and `MATERIAL_FLAG_GIZMO_UI` are gone with it.)
+
+The scene renders as **one render-pass INSTANCE per enabled stage** (separate secondaries, explicit
+attachment barriers between instances — `sceneInstanceBarrier`, Renderer.cpp), in two groups:
 
 ```
-Static meshes → Decals → GI probe debug → Debug lines
-  → Force shells → Force union blend → Particles → Fog apply
+Scene opaque   (depth WRITTEN):            Static meshes → GI probe debug
+Scene forward  (depth READ-ONLY + sampled): Decals → Debug lines → Force shells → Force union blend → Particles → Fog apply
 ```
 
-Each enabled stage becomes **one render-pass INSTANCE**: the first clears and stores depth, middles
-load/store, and the last hands colour to TAA. They are compatible with the original pass since only
-load/store ops and layouts differ (**the deps are verbatim — they are part of compatibility**). A
-single-stage frame uses the original pass, and **VR eye passes stay unsplit**.
+`SceneColor::getStageRenderPass(first, last, depthReadOnly)`: the first instance clears, the last
+hands colour to TAA, and the depth is either written or a read-only attachment. All variants are
+compatible with the base pass (never begun; pipelines and secondaries are built against it) since only
+load/store ops and layouts differ (**the deps are verbatim — they are part of compatibility**), and
+one framebuffer serves them all. **The GI probe debug impostors write depth** (`gl_FragDepth`, they
+sort among themselves), so they run in the opaque group; the AO trace and the decals then see them as
+geometry (debug only). **VR** records the same split inline per eye: static meshes → barrier → AO →
+one layered instance.
 
 **Line width.** Every pipeline that rasterizes lines — the debug-line pass (line topology) and the
 wireframe variants (`eLine` polygon mode) — is created with `lineWidth = LINE_WIDTH` (3 px, a
@@ -275,17 +307,10 @@ top-down camera hanging in empty sky shapes none of these:
   camera-facing quad, 6 verts; the fragment shader intersects the sphere and writes the hit's
   `gl_FragDepth`), so both debug bindings carry the fragment stage. The irradiance mode evaluates the
   SH per pixel along the true normal, scaled by "GI/Strength" (`u_aoParams.y`) like the scene's
-  lookup and unshaded; the flat-colour modes are shaded off the sphere normal. **While the debug view
-  is on, depth-prepass reuse is forced OFF:** reuse binds the scene depth READ-ONLY, and the
-  impostors need depth WRITES to sort among themselves (draw order cannot: a far fine-cascade sphere
-  would overdraw a near coarse one). `m_depthPrepassReuse` is the EFFECTIVE state every consumer
-  reads = the "Spatial/Depth prepass reuse" tweak (`m_depthPrepassReuseWanted`) AND debug off;
-  `applyDepthPrepassReuse()` moves it next to `checkFrameCapacities` at the top of `beginFrame` (GPU
-  idle, swap the scene pipelines' depth write, re-record), so the P key and the tweaks only flip
-  flags. **GizmoUI under reuse:** the forward variant cannot write its near depth, so the G-buffer
-  prepass VS stamps the SAME near depth for `MATERIAL_FLAG_GIZMO_UI` materials (set from the `.oc`
-  `PipelineIdx GizmoUI` override; the expression must stay identical to `FORCE_NEAR_DEPTH` in
-  instanced_indirect.vs.glsl) — otherwise geometry drawn after the gizmo covers it. The function is shared with the debug view's **"Update priority"** colour mode
+  lookup and unshaded; the flat-colour modes are shaded off the sphere normal. **The impostors
+  need depth WRITES to sort among themselves** (draw order cannot: a far fine-cascade sphere would
+  overdraw a near coarse one), so the stage runs in the "Scene opaque" group, before the depth turns
+  read-only (see Frame order). The `giWaveUpdateInterval` function is shared with the debug view's **"Update priority"** colour mode
   ("GI/Debug probe colour", key O cycles): it shows the wave's ACTUAL interval in frames: MAGENTA = every frame (the maximum rate; a hue the
   ramp never makes — white was ambiguous, the ramp's yellow can clip to it through exposure/bloom),
   then a LOG ramp (each doubling an equal step) blue (2 frames) -> green (~22) -> yellow (~76)
@@ -394,6 +419,23 @@ top-down camera hanging in empty sky shapes none of these:
   forward pass's upsample-skip gate, all measure from `u_sceneFocus`. The ray-origin distance bias
   stays on the CAMERA distance — it compensates a depth-reconstruction error that lies along the view
   ray, and so do the upsample's depth weights.
+* **THE FORWARD PASS READS LAST FRAME'S AO.** `sampleAOBilateral` (instanced_indirect_lit.inc.glsl)
+  reprojects the fragment in clip space (`prevScreenUVClip` off `gl_FragCoord`), samples the PREVIOUS
+  slot's AO image (binding 13) and weights the 2x2 taps by their world distance to the fragment,
+  reconstructed from the PREVIOUS slot's depth (binding 12, `u_prevDepth`, `u_prevInvMvp`, last frame's
+  jitter). No input comes from this frame, so the trace has NO ordering constraint against the forward
+  pass (this is what let the depth prepass go). Static geometry is exact under camera motion; a moving
+  object trails one frame, inside the temporal pass's own lag. No valid tap (disocclusion, off-screen) =
+  `(0, 0, 0, 1)`: no occlusion, no bent normal.
+* **THERE IS NO NORMAL CONSUMER LEFT BUT TAA's OCEAN FLAG.** RTAO, its spatial blur, the decals and the
+  particle collision derive a GEOMETRIC normal from depth: `normalFromDepth` (shared.inc.glsl) — per
+  axis the neighbour with the closer depth, built on `viewRelFromDepth`, the CAMERA-RELATIVE
+  reconstruction (`worldPosFromDepth` rounds at the scale of the world coordinate, which is a pixel
+  footprint near the camera: fine for a position, noise for a difference of neighbours). The blur's
+  crease edge-stop is the tap's distance off the centre's tangent plane (sigma = one AO texel's world
+  footprint), not a per-tap normal compare. **A ZERO bent normal in the AO image means "none"** (past
+  the max distance, fully occluded, background): the lit shader then keeps its own shading normal, so
+  the depth-derived facets never reach the GI lookup.
 
 **Anything new that fades or early-outs by distance measures from `u_sceneFocus`, never `u_viewPos`**
 (view-ray geometry is the exception).
@@ -574,8 +616,8 @@ the TLAS instance `sbtOffset` for hit-shader fetches, and materials stay per-ins
 
 | Directory | Contents |
 |---|---|
-| `Objects/` | Thin Vulkan wrappers: Device, SwapChain, Buffer, ComputePipeline / GraphicsPipeline, AccelerationStructure, GBuffer, SceneColor, ShadowMap, GpuProfiler, BakedWorldMap, Texture, Shader, ... |
-| `Pipeline/` | One class per pass or feature: StaticMeshGraphics, GBuffer, GIProbe, RTAO, TAA, VolumetricFog, EyeAdaptation, Composite, Skinning, DebugLine, Particle, Decal, ForceField, OceanSimulation, TerrainWetness, LightGrid, IndirectCull, ShadowCull, ShadowMapGraphics. **Each registers its own tweaks.** |
+| `Objects/` | Thin Vulkan wrappers: Device, SwapChain, Buffer, ComputePipeline / GraphicsPipeline, AccelerationStructure, SceneColor (colour + THE scene depth), ShadowMap, GpuProfiler, BakedWorldMap, Texture, Shader, ... |
+| `Pipeline/` | One class per pass or feature: StaticMeshGraphics, GIProbe, RTAO, TAA, VolumetricFog, EyeAdaptation, Composite, Skinning, DebugLine, Particle, Decal, ForceField, OceanSimulation, TerrainWetness, LightGrid, IndirectCull, ShadowCull, ShadowMapGraphics. **Each registers its own tweaks.** |
 | `Data/` | MeshDataManager, TextureManager, TextureStreamer, MeshStreamer, StagingManager, ShaderDatabase, GpuCrashTracker (Aftermath, runtime-loaded, optional). |
 | `Layout.ixx` | `RendererVKLayout` — every GPU struct and `MAX_*` cap. **Must stay in sync with `shared.inc.glsl` / `ubo.inc.glsl`.** |
 | `Settings.ixx` | The tweak-backed param structs the outside pushes in (`SkyParams`, `FogParams`, `OceanParams`, `ForceFieldParams`, LOD, RT, ...). **Deliberately does not import `:Layout`** — the one place both are visible static_asserts that `ForceFieldParams::teamColors` covers `MAX_FORCE_TEAMS`. |
@@ -678,11 +720,11 @@ Both push params in every frame; the renderer owns none of the tweaks.
   WITHOUT "Micro roughness" — that term is a constant floor, so inside the gate it switched the mirror
   off on every pixel. `setOceanWaveTrough` sizes the waterline band the fog scatter samples for the underwater fog
   boundary.
-* **The Ocean variant is BACK-FACE CULLED, like the prepass.** The clipmap carries every triangle in
-  both windings (see Sectors in [`Code/Procedural/CONTEXT.md`](../Procedural/CONTEXT.md)), so the
-  underside draws from under water and the prepass holds the nearest face from either side. Do not
-  switch it to cull none: the depth-read-only forward pass would shade every wave crossing along an
-  underwater ray. The underside shading (Snell's window, TIR, the "Underside transmission" tweak in
+* **The Ocean variant is BACK-FACE CULLED.** The clipmap carries every triangle in both windings (see
+  Sectors in [`Code/Procedural/CONTEXT.md`](../Procedural/CONTEXT.md)), so the underside draws from
+  under water and the scene depth holds the nearest face from either side. Do not switch it to cull
+  none: every wave crossing along an underwater ray would be rasterized, and shaded until a nearer
+  one lands (there is no prepass early-Z to reject them). The underside shading (Snell's window, TIR, the "Underside transmission" tweak in
   `u_oceanParams10.z`) lives in `ocean.fs.glsl`.
 * **`setTerrainWetParams`** — the terrain WETNESS clipmap (`TerrainWetnessPipeline`,
   `terrain_wetness.cs.glsl` / `.inc.glsl`): ONE persistent R16F image, `TERRAIN_WET_RES`² texels of

@@ -17,6 +17,7 @@ void DebugLinePipeline::buildLayout(GraphicsPipelineLayout& layout)
     layout.cullMode = vk::CullModeFlagBits::eNone;
     layout.depthTestEnable = true;   // occluded by scene geometry
     layout.depthWriteEnable = false; // overlay: never affects the scene depth
+    layout.colorWriteAlpha = false;  // scene colour alpha = TAA's ocean flag
 
     auto& b = layout.descriptorSetLayoutBindings;
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex });

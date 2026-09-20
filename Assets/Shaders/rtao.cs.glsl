@@ -8,8 +8,7 @@ layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 #include "shared.inc.glsl"
 
-layout (binding = 1) uniform sampler2D u_gbufferNormal; // world-space normal (xyz)
-layout (binding = 2) uniform sampler2D u_gbufferDepth;  // hardware depth
+layout (binding = 2) uniform sampler2D u_gbufferDepth;  // hardware depth (the normal is derived from it)
 layout (binding = 3) uniform accelerationStructureEXT u_tlas;
 layout (binding = 4, rgba16f) uniform restrict writeonly image2D u_aoOut; // rgb = bent normal, a = AO
 
@@ -89,26 +88,26 @@ void main()
 
     const vec2 uv = (vec2(px) + 0.5) / vec2(pc.aoWidth, pc.aoHeight);
 
-    const float depth = texture(u_gbufferDepth, uv).r;
-    if (depth <= 0.0) { imageStore(u_aoOut, px, vec4(0.0, 0.0, 1.0, 1.0)); return; } // background (reversed-Z far = 0): no occlusion
+    // A ZERO bent normal = "none": the forward pass then evaluates GI along its own shading normal.
+    const ivec2 depthPx = ivec2(uv * vec2(textureSize(u_gbufferDepth, 0)));
+    const float depth = texelFetch(u_gbufferDepth, depthPx, 0).r;
+    if (depth <= 0.0) { imageStore(u_aoOut, px, vec4(0.0, 0.0, 0.0, 1.0)); return; } // background (reversed-Z far = 0): no occlusion
 
-    const vec3 nRaw = texture(u_gbufferNormal, uv).xyz;
-    const float nLen = length(nRaw);
-    if (nLen < 0.5) { imageStore(u_aoOut, px, vec4(0.0, 0.0, 1.0, 1.0)); return; }
-    const vec3 N = nRaw / nLen;
+    // Geometric normal from the depth image: there is no normal target.
+    const vec3 N = normalFromDepth(u_gbufferDepth, depthPx, depth, u_taaJitter.xy);
 
-    // The depth image is jittered (exact depth-prepass reuse); reconstruct at the surface's true
+    // The depth image is jittered (the scene pass's own depth); reconstruct at the surface's true
     // unjittered position so ray origins don't wobble sub-pixel with the jitter - see taaJitterUv.
     const vec3 worldPos = worldPosFromDepth(uv - taaJitterUv(u_taaJitter.xy), depth);
     const float focusDist = length(u_sceneFocus.xyz - worldPos);  // quality falloff: from the scene focus (the game's player)
 
     // Past the AO max distance the result is always "no occlusion", so skip the ray loop entirely.
-    // (bent normal = surface normal so the forward pass evaluates GI along the surface.) Measured from
+    // (no bent normal, so the forward pass evaluates GI along its shading normal.) Measured from
     // the scene focus, like the fade below, so a top-down camera far above the ground does not fade
     // the AO out under the player.
     if (pc.maxDistance > 0.0 && focusDist >= pc.maxDistance)
     {
-        imageStore(u_aoOut, px, vec4(N, 1.0));
+        imageStore(u_aoOut, px, vec4(0.0, 0.0, 0.0, 1.0));
         return;
     }
 
@@ -180,7 +179,7 @@ void main()
         float fade = clamp((focusDist - pc.fadeStart) / max(pc.maxDistance - pc.fadeStart, 1e-3), 0.0, 1.0);
         ao = mix(ao, 1.0, fade);
     }
-    // Bent normal = average unoccluded direction; fall back to the surface normal when fully occluded.
-    vec3 bentN = (dot(bent, bent) > 1e-8) ? normalize(bent) : N;
+    // Bent normal = average unoccluded direction; none (zero) when fully occluded.
+    vec3 bentN = (dot(bent, bent) > 1e-8) ? normalize(bent) : vec3(0.0);
     imageStore(u_aoOut, px, vec4(bentN, ao));
 }

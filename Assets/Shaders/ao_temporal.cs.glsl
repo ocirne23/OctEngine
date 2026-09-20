@@ -32,7 +32,7 @@ void main()
     const float depth = texture(u_curDepth, uv).r;
     if (depth <= 0.0) { imageStore(u_accumOut, px, raw); return; } // background (reversed-Z far = 0)
 
-    // The depth image is jittered (exact depth-prepass reuse); compensate geometric uses - see taaJitterUv.
+    // The depth image is jittered (the scene pass's own depth); compensate geometric uses - see taaJitterUv.
     const vec2 uvUnjit = uv - taaJitterUv(u_taaJitter.xy);
 
     float clipW;

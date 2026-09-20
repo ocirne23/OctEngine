@@ -113,7 +113,7 @@ public:
     {
         Buffer& ubo;
         vk::ImageView gbufferDepthView;
-        // DEPTH_STENCIL_READ_ONLY while depth-prepass reuse binds this image as the scene pass depth.
+        // SCENE_DEPTH_SAMPLED_LAYOUT: the scene depth is this stage's read-only attachment AND this sampled image.
         vk::ImageLayout gbufferDepthLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
         vk::Sampler gbufferSampler;
     };
@@ -146,7 +146,7 @@ public:
     // Each covered pixel marches once at half res; the "Force union blend" scene stage (recordDraw
     // UnionMarch) then upsamples depth-aware into scene color. The viewport/scissor are the HALF
     // ones (the caller halves the full-res viewport - same 0.5 factor the march FS's uv applies).
-    // gbufferDepth is SHADER_READ_ONLY at this point in the frame (before the prepass-reuse barrier).
+    // gbufferDepth = THIS frame's scene depth in SCENE_DEPTH_SAMPLED_LAYOUT (the march runs after the opaque scene stages).
     // Half-res mode only (no march target otherwise).
     void beginUnionMarchPass(vk::CommandBuffer primary);
     void recordUnionMarchDraw(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo,

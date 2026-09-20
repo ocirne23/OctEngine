@@ -77,8 +77,8 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec4 u_screenSize;   // xy = full render-target resolution (px); zw = 1/xy
     vec4 u_viewportRect; // xy = viewport min, zw = viewport size, normalized to [0,1] of the full render target
     vec4 u_taaJitter;    // xy = this frame's TAA sub-pixel jitter in NDC, zw = LAST frame's. ALL raster
-                         // passes apply xy in clip space (prepass included: the forward early-Z tests its
-                         // depth directly, read-only); mvp/invMvp/prevMvp stay unjittered and geometric
+                         // passes apply xy in clip space, so the scene depth every screen-space pass reads
+                         // is jittered too; mvp/invMvp/prevMvp stay unjittered and geometric
                          // consumers of sampled depth compensate via taaJitterUv (shared.inc.glsl)
 
     // Volumetric fog (packing documented in vol_fog.inc.glsl)

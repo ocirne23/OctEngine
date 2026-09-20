@@ -13,11 +13,7 @@
 // while the sampled mip blends +1, so adjacent rings meet exactly. The displaced position samples the
 // maps at the ring-matched mip (fixed per world position - waves don't morph with camera motion). The
 // fragment shader (ocean.fs.glsl) re-derives the shading normal per pixel from the (morphed) world XZ
-// in out_uv. The G-buffer prepass (gbuffer.vs.glsl, OCEAN branch) MUST keep identical morph + lod +
-// cull math or its depth diverges from the drawn surface.
-
-// Depth-prepass reuse (gbuffer.vs.glsl) needs bit-exact positions across programs - see the note there.
-invariant gl_Position;
+// in out_uv.
 
 #include "shared.inc.glsl"
 
@@ -82,12 +78,12 @@ void main()
     localPos.xz = mix(localPos.xz, floor(localPos.xz / (2.0 * ringCell) + 0.5) * (2.0 * ringCell), ringMorph);
     vec3 basePos = quat_transform(localPos * inst_scale, inst_quat) + inst_pos;
     // ONE shore fetch per vertex, shared by the land cull, the water-table lift and the displacement
-    // (they each re-fetched it before). The prepass MUST share it the same way.
+    // (they each re-fetched it before).
     const vec2 shoreHW = oceanSampleShoreData(basePos.xz); // (terrain height, water level)
     if (!horizonBand && oceanVertexCulled(basePos.xz, ringCell, shoreHW))
     {
         // Whole triangle footprint is buried under land: a NaN position discards every primitive using
-        // this vertex before rasterization (the G-buffer prepass applies the identical test).
+        // this vertex before rasterization.
         out_pos = basePos;
         out_tbn = mat3(1.0);
         out_uv = basePos.xz;

@@ -51,22 +51,20 @@ void SceneColor::destroy()
 {
     vk::Device vkDevice = Globals::device.getDevice();
     if (m_sampler)      vkDevice.destroySampler(m_sampler);
+    if (m_depthSampler) vkDevice.destroySampler(m_depthSampler);
     for (vk::Framebuffer& fb : m_framebuffers) { if (fb) vkDevice.destroyFramebuffer(fb); fb = nullptr; }
-    for (vk::Framebuffer& fb : m_reuseFramebuffers) { if (fb) vkDevice.destroyFramebuffer(fb); fb = nullptr; }
     if (m_renderPass)   vkDevice.destroyRenderPass(m_renderPass);
-    if (m_reuseRenderPass) vkDevice.destroyRenderPass(m_reuseRenderPass);
-    for (vk::RenderPass& rp : m_splitPasses) { if (rp) vkDevice.destroyRenderPass(rp); rp = nullptr; }
-    for (vk::RenderPass& rp : m_reuseSplitPasses) { if (rp) vkDevice.destroyRenderPass(rp); rp = nullptr; }
+    for (vk::RenderPass& rp : m_stagePasses) { if (rp) vkDevice.destroyRenderPass(rp); rp = nullptr; }
     for (vk::ImageView& v : m_colorLayerViews) { if (v) vkDevice.destroyImageView(v); v = nullptr; }
     for (vk::ImageView& v : m_depthLayerViews) { if (v) vkDevice.destroyImageView(v); v = nullptr; }
     Globals::gpuAllocator.destroyImage(m_colorImage, m_colorMemory);
     Globals::gpuAllocator.destroyImage(m_depthImage, m_depthMemory);
-    m_sampler = nullptr; m_renderPass = nullptr; m_reuseRenderPass = nullptr;
+    m_sampler = nullptr; m_depthSampler = nullptr; m_renderPass = nullptr;
     m_colorImage = nullptr; m_depthImage = nullptr;
     m_colorMemory = nullptr; m_depthMemory = nullptr;
 }
 
-bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height, uint32 viewCount, const oc::array<vk::ImageView, 2>& prepassDepthViews)
+bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height, uint32 viewCount)
 {
     vk::Device vkDevice = Globals::device.getDevice();
     destroy();
@@ -80,9 +78,10 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
     if (!createImage(vkDevice, width, height, colorFormat,
         vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferSrc,
         viewCount, m_colorImage, m_colorMemory, "SceneColor.color")) return false;
-    // Own depth: used only when "Depth prepass reuse" is OFF (the reuse pass binds the G-buffer depth).
+    // THE scene depth: written by the first scene stages, sampled by everything after them and by the
+    // next frame (TRANSFER_DST = the one-time clear below).
     if (!createImage(vkDevice, width, height, SCENE_DEPTH_FORMAT,
-        vk::ImageUsageFlagBits::eDepthStencilAttachment, viewCount, m_depthImage, m_depthMemory, "SceneColor.depth")) return false;
+        vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst, viewCount, m_depthImage, m_depthMemory, "SceneColor.depth")) return false;
 
     for (uint32 i = 0; i < viewCount; ++i)
     {
@@ -90,7 +89,8 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
         if (!createView(vkDevice, m_depthImage, SCENE_DEPTH_FORMAT, vk::ImageAspectFlagBits::eDepth, vk::ImageViewType::e2D, i, 1, m_depthLayerViews[i])) return false;
     }
 
-    // ---- Render pass: colour (ends SHADER_READ_ONLY for the TAA compute pass) + transient depth ----
+    // ---- BASE render pass (never begun - see getStageRenderPass): colour (ends SHADER_READ_ONLY for
+    // the TAA compute pass) + the written depth ----
     oc::array<vk::AttachmentDescription2, 2> attachments{
         vk::AttachmentDescription2{ // 0: scene colour
             .format = colorFormat,
@@ -100,11 +100,11 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
             .initialLayout = vk::ImageLayout::eUndefined,
             .finalLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
         },
-        vk::AttachmentDescription2{ // 1: depth (own transient depth; the tweak-OFF path rebuilds it from scratch)
+        vk::AttachmentDescription2{ // 1: depth
             .format = SCENE_DEPTH_FORMAT,
             .samples = vk::SampleCountFlagBits::e1,
             .loadOp = vk::AttachmentLoadOp::eClear,
-            .storeOp = vk::AttachmentStoreOp::eDontCare,
+            .storeOp = vk::AttachmentStoreOp::eStore,
             .initialLayout = vk::ImageLayout::eUndefined,
             .finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
         },
@@ -181,75 +181,14 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
         m_framebuffers[i] = fbResult.value;
     }
 
-    // ---- Depth-prepass-reuse variant of the pass ("Depth prepass reuse" tweak): same colour attachment,
-    // but the DEPTH attachment is the G-BUFFER's depth, bound READ-ONLY with no copy. The forward pass
-    // tests eGreaterOrEqual directly against the prepass depth (bit-identical rasterization) and writes
-    // none of its own - every scene pipeline flips depthWrite off in this mode, which is also what makes
-    // the forward pass's own u_gbufferDepth sampling legal (read-only depth + sampled is allowed where a
-    // writable attachment would be a feedback loop). loadOp LOAD + storeOp STORE + SHADER_READ_ONLY on
-    // both ends hand the untouched prepass depth straight back to TAA/fog after the pass; the render pass
-    // itself performs both layout transitions.
-    {
-        // Render-pass COMPATIBILITY (validation-enforced for pipelines created against the main pass and
-        // for the cached secondaries' inheritance) allows the two passes to differ ONLY in attachment
-        // load/store ops and layouts - the dependency array must be IDENTICAL, so the reuse pass carries
-        // the main pass's dependencies verbatim and the depth's SHADER_READ_ONLY <-> DEPTH_READ_ONLY
-        // layout round-trip is done with explicit barriers around the pass instead
-        // (Renderer::recordReuseDepthBarrier). initial == final == the reference layout: this pass
-        // performs no depth transitions itself.
-        oc::array<vk::AttachmentDescription2, 2> reuseAttachments{
-            attachments[0], // colour: identical to the main pass
-            vk::AttachmentDescription2{
-                .format = SCENE_DEPTH_FORMAT, // == the G-buffer depth format
-                .samples = vk::SampleCountFlagBits::e1,
-                .loadOp = vk::AttachmentLoadOp::eLoad,
-                .storeOp = vk::AttachmentStoreOp::eStore,
-                .initialLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
-                .finalLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
-            },
-        };
-        vk::AttachmentReference2 reuseDepthRef{ .attachment = 1, .layout = vk::ImageLayout::eDepthStencilReadOnlyOptimal, .aspectMask = vk::ImageAspectFlagBits::eDepth };
-        vk::SubpassDescription2 reuseSubpass{
-            .pipelineBindPoint = vk::PipelineBindPoint::eGraphics,
-            .colorAttachmentCount = 1,
-            .pColorAttachments = &colorRef,
-            .pDepthStencilAttachment = &reuseDepthRef,
-        };
-        vk::RenderPassCreateInfo2 reuseRpInfo{
-            .attachmentCount = (uint32)reuseAttachments.size(),
-            .pAttachments = reuseAttachments.data(),
-            .subpassCount = 1,
-            .pSubpasses = &reuseSubpass,
-            .dependencyCount = (uint32)dependencies.size(),
-            .pDependencies = dependencies.data(),
-        };
-        auto reuseRpResult = vkDevice.createRenderPass2(reuseRpInfo);
-        if (reuseRpResult.result != vk::Result::eSuccess) { assert(false && "scenecolor reuse renderpass"); return false; }
-        m_reuseRenderPass = reuseRpResult.value;
-
-        for (uint32 i = 0; i < viewCount; ++i)
-        {
-            oc::array<vk::ImageView, 2> reuseFbViews{ m_colorLayerViews[i], prepassDepthViews[i] };
-            vk::FramebufferCreateInfo reuseFbInfo{
-                .renderPass = m_reuseRenderPass,
-                .attachmentCount = (uint32)reuseFbViews.size(),
-                .pAttachments = reuseFbViews.data(),
-                .width = width,
-                .height = height,
-                .layers = 1,
-            };
-            auto reuseFbResult = vkDevice.createFramebuffer(reuseFbInfo);
-            if (reuseFbResult.result != vk::Result::eSuccess) { assert(false && "scenecolor reuse framebuffer"); return false; }
-            m_reuseFramebuffers[i] = reuseFbResult.value;
-        }
-    }
-
-    // ---- SPLIT-instance variants (see getSplitRenderPass): first/middle/last x own-depth/reuse.
-    // Compatibility with the main/reuse pass (and the swapchain pass the pipelines are built
-    // against) allows differences ONLY in load/store ops and layouts - the dependency array is
-    // carried VERBATIM in every variant (it is part of render-pass compatibility), which is also
-    // why it cannot express the inter-instance attachment hazards: the Renderer emits explicit
-    // barriers between the instances instead.
+    // ---- STAGE variants (see getStageRenderPass): colour first/last x depth written/read-only.
+    // Compatibility with the base pass (and the swapchain pass the pipelines are built against)
+    // allows differences ONLY in load/store ops and layouts - the dependency array is carried
+    // VERBATIM in every variant (it is part of render-pass compatibility), which is also why it
+    // cannot express the inter-instance attachment hazards or the depth's ATTACHMENT -> READ_ONLY
+    // switch: the Renderer emits explicit barriers between the instances instead. A read-only depth
+    // attachment in DEPTH_STENCIL_READ_ONLY may be sampled by the pass that tests against it (a
+    // writable one would be a feedback loop) - every pipeline of those stages has depthWrite off.
     {
         const auto makePass = [&](const oc::array<vk::AttachmentDescription2, 2>& atts,
             const vk::SubpassDescription2& sp, vk::RenderPass& out)
@@ -293,29 +232,25 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
         constexpr vk::ImageLayout colorAtt = vk::ImageLayout::eColorAttachmentOptimal;
         constexpr vk::ImageLayout depthAtt = vk::ImageLayout::eDepthStencilAttachmentOptimal;
         constexpr vk::ImageLayout depthRo = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
-        const oc::array<vk::AttachmentDescription2, 3> colorVariant{
-            colorDesc(vk::AttachmentLoadOp::eClear, vk::ImageLayout::eUndefined, colorAtt), // first
-            colorDesc(vk::AttachmentLoadOp::eLoad, colorAtt, colorAtt),                     // middle
-            colorDesc(vk::AttachmentLoadOp::eLoad, colorAtt, vk::ImageLayout::eShaderReadOnlyOptimal), // last -> TAA
-        };
-        const oc::array<vk::AttachmentDescription2, 3> ownDepthVariant{
-            depthDesc(vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore, vk::ImageLayout::eUndefined, depthAtt),
-            depthDesc(vk::AttachmentLoadOp::eLoad, vk::AttachmentStoreOp::eStore, depthAtt, depthAtt),
-            depthDesc(vk::AttachmentLoadOp::eLoad, vk::AttachmentStoreOp::eDontCare, depthAtt, depthAtt),
-        };
-        const vk::AttachmentDescription2 reuseDepth = // read-only prepass depth, all three variants
-            depthDesc(vk::AttachmentLoadOp::eLoad, vk::AttachmentStoreOp::eStore, depthRo, depthRo);
-        const vk::AttachmentReference2 splitReuseDepthRef{ .attachment = 1, .layout = depthRo, .aspectMask = vk::ImageAspectFlagBits::eDepth };
-        const vk::SubpassDescription2 splitReuseSubpass{
+        constexpr vk::ImageLayout colorRead = vk::ImageLayout::eShaderReadOnlyOptimal; // -> TAA
+        const vk::AttachmentReference2 readOnlyDepthRef{ .attachment = 1, .layout = depthRo, .aspectMask = vk::ImageAspectFlagBits::eDepth };
+        const vk::SubpassDescription2 readOnlySubpass{
             .pipelineBindPoint = vk::PipelineBindPoint::eGraphics,
             .colorAttachmentCount = 1,
             .pColorAttachments = &colorRef,
-            .pDepthStencilAttachment = &splitReuseDepthRef,
+            .pDepthStencilAttachment = &readOnlyDepthRef,
         };
-        for (int s = 0; s < 3; ++s)
+        for (uint32 i = 0; i < (uint32)m_stagePasses.size(); ++i)
         {
-            if (!makePass({ colorVariant[s], ownDepthVariant[s] }, subpass, m_splitPasses[s])) return false;
-            if (!makePass({ colorVariant[s], reuseDepth }, splitReuseSubpass, m_reuseSplitPasses[s])) return false;
+            const bool first = (i & 1) != 0, last = (i & 2) != 0, readOnly = (i & 4) != 0;
+            const vk::AttachmentDescription2 color = colorDesc(first ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad,
+                first ? vk::ImageLayout::eUndefined : colorAtt, last ? colorRead : colorAtt);
+            // The depth is always STORED: it outlives the pass (TAA, and next frame's readers).
+            const vk::AttachmentDescription2 depth = readOnly
+                ? depthDesc(vk::AttachmentLoadOp::eLoad, vk::AttachmentStoreOp::eStore, depthRo, depthRo)
+                : first ? depthDesc(vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore, vk::ImageLayout::eUndefined, depthAtt)
+                        : depthDesc(vk::AttachmentLoadOp::eLoad, vk::AttachmentStoreOp::eStore, depthAtt, depthAtt);
+            if (!makePass({ color, depth }, readOnly ? readOnlySubpass : subpass, m_stagePasses[i])) return false;
         }
     }
 
@@ -337,13 +272,44 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
     if (samplerResult.result != vk::Result::eSuccess) { assert(false && "scenecolor sampler"); return false; }
     m_sampler = samplerResult.value;
 
+    samplerInfo.magFilter = vk::Filter::eNearest;
+    samplerInfo.minFilter = vk::Filter::eNearest;
+    auto depthSamplerResult = vkDevice.createSampler(samplerInfo);
+    if (depthSamplerResult.result != vk::Result::eSuccess) { assert(false && "scenecolor depth sampler"); return false; }
+    m_depthSampler = depthSamplerResult.value;
+
     // One-time layout init to SHADER_READ_ONLY so a never-yet-rendered target (e.g. the other frame's image
     // sampled before it has been drawn) is in a legal sampling layout. The render pass uses loadOp=Clear with
-    // initialLayout=Undefined, so it does not depend on this.
+    // initialLayout=Undefined, so it does not depend on this. The depth is cleared to the far plane
+    // (reversed-Z 0 = "no geometry" to every reader) and parked in its sampled layout the same way.
     {
         CommandBuffer init;
         init.initialize(vk::CommandBufferLevel::ePrimary);
         vk::CommandBuffer cmd = init.begin(true);
+        const vk::ImageSubresourceRange depthRange{ vk::ImageAspectFlagBits::eDepth, 0, 1, 0, viewCount };
+        vk::ImageMemoryBarrier2 depthToClear{
+            .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
+            .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+            .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+            .oldLayout = vk::ImageLayout::eUndefined,
+            .newLayout = vk::ImageLayout::eTransferDstOptimal,
+            .image = m_depthImage,
+            .subresourceRange = depthRange,
+        };
+        cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &depthToClear });
+        const vk::ClearDepthStencilValue farPlane{ 0.0f, 0 };
+        cmd.clearDepthStencilImage(m_depthImage, vk::ImageLayout::eTransferDstOptimal, &farPlane, 1, &depthRange);
+        vk::ImageMemoryBarrier2 depthToSampled{
+            .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+            .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader,
+            .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
+            .oldLayout = vk::ImageLayout::eTransferDstOptimal,
+            .newLayout = SCENE_DEPTH_SAMPLED_LAYOUT,
+            .image = m_depthImage,
+            .subresourceRange = depthRange,
+        };
+        cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &depthToSampled });
         vk::ImageMemoryBarrier2 bar{
             .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
             .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader,

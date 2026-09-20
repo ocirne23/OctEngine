@@ -13,9 +13,6 @@
 // It ALSO evaluates the baked terrain fields (altitude/temperature/humidity/water level) here, per vertex,
 // and hands them to the FS as one interpolant - see the comment at the evaluation below.
 
-// Depth-prepass reuse (gbuffer.vs.glsl) needs bit-exact positions across programs - see the note there.
-invariant gl_Position;
-
 #include "shared.inc.glsl"
 #define TERRAIN_HEIGHT_BINDING 19
 #include "terrain_height.inc.glsl"

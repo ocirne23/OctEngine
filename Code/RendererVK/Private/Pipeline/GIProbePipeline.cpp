@@ -415,8 +415,8 @@ void GIProbePipeline::buildDebugLayout(GraphicsPipelineLayout& layout)
     layout.vertexShader.text = FileSystem::readFileStr(layout.vertexShader.debugFilePath);
     layout.fragmentShader.text = FileSystem::readFileStr(layout.fragmentShader.debugFilePath);
     layout.cullMode = vk::CullModeFlagBits::eNone; // procedural cube, winding not guaranteed
-    if (m_debugDepthReadOnly) // depth-prepass reuse: read-only scene depth, no writes allowed
-        layout.depthWriteEnable = false;
+    // Depth WRITES stay on: the impostors sort among themselves through gl_FragDepth, so this stage
+    // runs with the depth-writing scene stages (before the depth turns read-only + sampled).
 
     auto& b = layout.descriptorSetLayoutBindings;
     // Both stages: the sphere impostor's fragment shader intersects the view ray (UBO) and evaluates the probe's SH per pixel.

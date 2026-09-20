@@ -522,10 +522,8 @@ export namespace RendererVKLayout
                                 // render target. The scene renders through this sub-rect (editor viewport panel),
                                 // so screen-space reconstruction must map full-frame UV through it.
         glm::vec4 taaJitter;    // xy = this frame's TAA sub-pixel jitter in NDC (0 when TAA disabled), zw =
-                                // LAST frame's. ALL raster passes apply xy in clip space - the G-buffer
-                                // prepass included, so the forward pass's depth-prepass reuse tests its
-                                // depth DIRECTLY, bound read-only (conservative unjittered prefills could
-                                // not cover sub-pixel slits/grazing silhouettes). mvp/invMvp/prevMvp stay
+                                // LAST frame's. ALL raster passes apply xy in clip space, so the scene depth
+                                // every screen-space pass reads is jittered too. mvp/invMvp/prevMvp stay
                                 // unjittered; TAA/AO-temporal/RTAO compensate sampled depth analytically
                                 // (taaJitterUv in shared.inc.glsl), zw compensating the PREV depth image.
 
@@ -840,18 +838,15 @@ export namespace RendererVKLayout
 
     // MaterialInfo::flags bits.
     constexpr uint32 MATERIAL_FLAG_NO_RAYTRACING = 1u << 31; // instance mask 0 in the TLAS: invisible to all rays
-    constexpr uint32 MATERIAL_FLAG_SKY = 1u << 30; // sky sphere: skipped in the G-buffer prepass so its depth
-                                                   // stays at the far plane (TAA reprojects it parallax-free)
+    // bit 30 is free (was MATERIAL_FLAG_SKY, read only by the removed depth prepass; the Sky variant
+    // now simply does not write depth)
     constexpr uint32 MATERIAL_FLAG_BC5_NORMAL = 1u << 29; // normal map is a two-channel BC5 texture (X/Y only):
                                                           // the shader reconstructs Z instead of reading .z
-    constexpr uint32 MATERIAL_FLAG_OCEAN = 1u << 28; // ocean water: the G-buffer prepass vertex shader Gerstner-
-                                                     // displaces these instances so depth/normal match the forward pass
+    constexpr uint32 MATERIAL_FLAG_OCEAN = 1u << 28; // ocean water (the Ocean variant's materials)
     constexpr uint32 MATERIAL_FLAG_TERRAIN = 1u << 27; // terrain chunk: colors procedurally (TERRAIN variant), the
                                                        // material's diffuse slot is a fallback - RT hits (ocean
                                                        // refraction) substitute the beach splat instead
-    constexpr uint32 MATERIAL_FLAG_GIZMO_UI = 1u << 26; // GizmoUI: the G-buffer prepass stamps the same near depth as
-                                                        // the FORCE_NEAR_DEPTH forward variant, so the gizmo stays on
-                                                        // top when the scene pass cannot write depth (prepass reuse)
+    // bit 26 is free (was MATERIAL_FLAG_GIZMO_UI: the removed prepass's copy of the GizmoUI near-depth stamp)
 
     struct alignas(16) MaterialInfo
     {

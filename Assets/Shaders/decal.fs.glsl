@@ -15,7 +15,6 @@
 
 layout (binding = 1, std430) readonly buffer Decals { Decal d_decals[]; };
 layout (binding = 2) uniform sampler2D u_gbufferDepth;
-layout (binding = 3) uniform sampler2D u_gbufferNormal;
 layout (binding = 4, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 layout (binding = 20) uniform sampler2D u_textures[]; // bindless texture array (variable count)
 
@@ -53,7 +52,7 @@ void main()
     }
 
     // Fade out on surfaces facing away from the projection direction (stretch smearing).
-    const vec3 n = normalize(texture(u_gbufferNormal, uv).xyz + vec3(0.0, 1e-4, 0.0));
+    const vec3 n = normalFromDepth(u_gbufferDepth, ivec2(gl_FragCoord.xy), depth, u_taaJitter.xy); // geometric: there is no normal target
     const vec3 projDir = decalQuatRotate(decal.rotation, vec3(0.0, 0.0, -1.0)); // toward the surface
     const float facing = dot(n, -projDir);
     const float cutoff = decal.halfExtentsAngleFade.w;

@@ -67,7 +67,7 @@ Shaders `particle_begin.cs.glsl` → `particle_emit.cs.glsl` → `particle_sim.c
 * **All dispatches are indirect, and the OUT alive count IS the draw's `instanceCount`** — so
   spawning never re-records command buffers.
 * Sim: gravity, drag, noise turbulence, and optional screen-space collision against last frame's
-  G-buffer (`Particles → Depth collision`).
+  scene depth, with the bounce normal derived from it (`Particles → Depth collision`).
 * Draw: billboards in scene colour in ONE pipeline — velocity stretch, flipbooks, per-particle
   lighting, soft depth fade, and premultiplied blend with per-emitter `additivity`
   (0 = smoke .. 1 = fire). `cullMode = None`, depth test on, **depth write off**.

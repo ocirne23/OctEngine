@@ -16,10 +16,6 @@ static vk::DescriptorBufferInfo decalBufInfo(const Buffer& buffer)
 {
     return vk::DescriptorBufferInfo{ .buffer = buffer.getBuffer(), .range = buffer.getSize() };
 }
-static vk::DescriptorImageInfo decalSampledRO(vk::Sampler sampler, vk::ImageView view)
-{
-    return vk::DescriptorImageInfo{ .sampler = sampler, .imageView = view, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal };
-}
 
 void DecalPipeline::buildLayout(GraphicsPipelineLayout& layout, uint32 maxTextures)
 {
@@ -33,6 +29,7 @@ void DecalPipeline::buildLayout(GraphicsPipelineLayout& layout, uint32 maxTextur
     layout.blendEnable = true; // premultiplied: out = src.rgb + dst * (1 - src.a)
     layout.srcColorBlendFactor = vk::BlendFactor::eOne;
     layout.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
+    layout.colorWriteAlpha = false; // scene colour alpha = TAA's ocean flag
     layout.depthTestEnable = false;
     layout.depthWriteEnable = false;
 
@@ -40,7 +37,6 @@ void DecalPipeline::buildLayout(GraphicsPipelineLayout& layout, uint32 maxTextur
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 2, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
-    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 3, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 4, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
     // 20 = the set's highest binding number: required for eVariableDescriptorCount.
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 20, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = maxTextures, .stageFlags = vk::ShaderStageFlagBits::eFragment });
@@ -125,19 +121,18 @@ void DecalPipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameIdx, ui
     DescriptorSet& set = m_sets[drawSlot(frameIdx, eye)];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
 
-    oc::array<DescriptorSetUpdateInfo, 6> updates{
+    oc::array<DescriptorSetUpdateInfo, 5> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(Ubo) } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { decalBufInfo(m_decalBuffers[frameIdx]) } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
             vk::DescriptorImageInfo{ .sampler = params.gbufferSampler, .imageView = params.gbufferDepthView, .imageLayout = params.gbufferDepthLayout } } },
-        DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = { decalSampledRO(params.gbufferSampler, params.gbufferNormalView) } },
         DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { decalBufInfo(params.giGridDataBuffer) } },
         DescriptorSetUpdateInfo{ .binding = 20, .type = vk::DescriptorType::eCombinedImageSampler },
     };
     const size_t numTextures = Globals::textureManager.getNumTextures();
-    updates[5].imageInfos.reserve(numTextures);
+    updates[4].imageInfos.reserve(numTextures);
     for (uint16 texIdx = 0; texIdx < (uint16)numTextures; ++texIdx)
-        updates[5].imageInfos.push_back(vk::DescriptorImageInfo{
+        updates[4].imageInfos.push_back(vk::DescriptorImageInfo{
             .sampler = m_textureSampler.getSampler(),
             .imageView = Globals::textureManager.getViewForDescriptor(texIdx), // freed slots -> fallback
             .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal });

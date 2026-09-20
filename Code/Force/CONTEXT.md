@@ -305,8 +305,10 @@ it idles the device, re-sizes / creates or destroys the targets, and re-injects
   injected scale, and the cached secondaries carry halved viewport and scissor.
 * The march renders into its own RGBA16F pass ("Force union march", cleared 0, no blend, ending
   SHADER_READ_ONLY), split the same way (pass in the primary, draw in its own cached secondary),
-  right after the interval pass where gbuffer depth is still SHADER_READ_ONLY (not recorded or
-  executed in full-res mode).
+  right after the interval pass (not recorded or executed in full-res mode). Both passes run AFTER
+  the "Scene opaque" stages: the march samples THIS frame's scene depth (there is no depth prepass),
+  which is then parked in `SCENE_DEPTH_SAMPLED_LAYOUT` — see Frame order in
+  [`Code/RendererVK/CONTEXT.md`](../RendererVK/CONTEXT.md).
 * The `"Force union blend"` scene stage (`force_union_upsample.fs`) composites it **depth-aware**:
   2×2 bilinear weights × relative depth similarity, where each half texel's representative depth is
   the full-res depth at its own march uv — the exact value it clamped against — with a nearest-depth

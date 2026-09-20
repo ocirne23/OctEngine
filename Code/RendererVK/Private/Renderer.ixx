@@ -32,8 +32,6 @@ import :ShadowCullComputePipeline;
 import :ShadowMapGraphicsPipeline;
 import :AccelerationStructure;
 import :GIProbePipeline;
-import :GBuffer;
-import :GBufferPipeline;
 import :RTAOPipeline;
 import :OceanSimulationPipeline;
 import :TerrainWetnessPipeline;
@@ -568,9 +566,6 @@ private:
     glm::mat4 computeCenterViewProj(const Camera& camera) const; // pure: projection (VR: combined eyes) * view, from m_viewportRect
     void applyVrHeadPose(const Camera& cameraIn, Camera& camera, glm::quat& vrBaseOrientation);
     void checkFrameCapacities();
-    // Moves m_depthPrepassReuse to (tweak && !GI probe debug) when that changed: GPU idle, swap the scene
-    // pipelines' depth write, re-record. Runs at the top of beginFrame, so a key or a tweak only flips its flag.
-    void applyDepthPrepassReuse();
     void snapshotLodStats(PerFrameData& frameData);
     void buildFrameUbo(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation, PerFrameData& frameData);
     void buildUboViews(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation);
@@ -592,12 +587,11 @@ private:
     void recordRainOcclusionDraw(uint32 frameIdx);
     void recordStaticMesh(uint32 frameIdx);
     void recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
-    void recordGBuffer(uint32 frameIdx);
-    void recordGBufferInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
-    // Depth-prepass reuse: transitions this eye's G-buffer depth SHADER_READ_ONLY <-> DEPTH_READ_ONLY
-    // around the scene pass (the reuse render pass performs no transitions itself - its dependency array
-    // must stay identical to the main pass's for render-pass compatibility).
-    void recordReuseDepthBarrier(vk::CommandBuffer cb, vk::Image gbufferDepth, uint32 eyeIndex, bool toAttachment);
+    // The scene depth's ONE layout switch per frame and eye: DEPTH_STENCIL_ATTACHMENT (the depth-writing
+    // scene stages) -> SCENE_DEPTH_SAMPLED_LAYOUT (every reader after them; see SceneColor). The stage
+    // render passes perform no depth transition themselves - their dependency arrays must stay identical
+    // for render-pass compatibility.
+    void recordSceneDepthToSampled(vk::CommandBuffer cb, vk::Image sceneDepth, uint32 eyeIndex);
     void recordAOInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
     void recordFogApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
     void recordTaaInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
@@ -796,7 +790,6 @@ private:
     SkinningComputePipeline m_skinningComputePipeline;
     LightGridComputePipeline m_lightGridComputePipeline;
     StaticMeshGraphicsPipeline m_staticMeshGraphicsPipeline;
-    GBufferPipeline m_gbufferPipeline;
     RTAOPipeline m_rtaoPipeline;
     OceanSimulationPipeline m_oceanSimPipeline;
     TerrainWetnessPipeline m_terrainWetnessPipeline;
@@ -950,12 +943,6 @@ private:
     bool m_windowMinimized = false;
     bool m_vsyncEnabled = true; // "Time/VSync" tweak (Saved; --no-vsync overrides it): FIFO vs Immediate, applied by a swapchain recreate
     bool m_wireframe = false; // "Renderer/Wireframe" tweak: forward scene variants rasterize as lines
-    // The EFFECTIVE state every consumer reads: forward pass reuses the G-buffer prepass depth for early-Z.
-    // = the tweak, AND the GI probe debug view off: reuse binds the scene depth READ-ONLY, and the debug
-    // spheres need depth WRITES to sort among themselves (they are impostors writing gl_FragDepth; draw
-    // order cannot sort them across cascades). applyDepthPrepassReuse() moves it, at the top of the frame.
-    bool m_depthPrepassReuse = true;
-    bool m_depthPrepassReuseWanted = true; // "Spatial/Depth prepass reuse" tweak
     glm::vec2 m_prevTaaJitter{ 0.0f }; // last frame's TAA jitter (ubo.taaJitter.zw): consumers of the PREV depth image compensate with it
     uint32 m_sceneViewCount = 1; // 2 in VR: SceneColor + forward pass are multiview (one layer per eye)
 
@@ -1054,14 +1041,12 @@ private:
 
     struct PerFrameData
     {
-        SceneColor sceneColor;
-        GBuffer gbuffer;
+        SceneColor sceneColor; // colour + THE scene depth (no prepass: every depth reader samples this one)
         ShadowMap shadowMap;
         ShadowMap rainOcclusionMap; // single layer, RAIN_OCCLUSION_RESOLUTION: the weather volume's shelter depth
 
         // Per-eye in VR
         oc::array<DescriptorSet, 2> staticMeshPipelineDescriptorSet;
-        oc::array<DescriptorSet, 2> gbufferDescriptorSet;
         DescriptorSet compositeDescriptorSet;
         DescriptorSet indirectCullPipelineDescriptorSet;
         DescriptorSet skinningDescriptorSet;
@@ -1073,7 +1058,6 @@ private:
 
         CommandBuffer primaryCommandBuffer;
         CommandBuffer staticMeshCommandBuffer;
-        CommandBuffer gbufferCommandBuffer;
         CommandBuffer aoCommandBuffer;
         CommandBuffer indirectCullCommandBuffer;
         CommandBuffer skinningCommandBuffer;

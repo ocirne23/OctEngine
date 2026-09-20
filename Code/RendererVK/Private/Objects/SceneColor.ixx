@@ -7,8 +7,19 @@ import :Allocator;
 // Offscreen colour+depth target the lit scene renders into (instead of straight to the swapchain), so the
 // TAA resolve has an isolated image to accumulate. The colour attachment uses the swapchain surface format
 // (keeping the static-mesh / GI-debug pipelines render-pass-compatible with the swapchain pass) and ends the
-// pass in SHADER_READ_ONLY for the TAA compute pass to sample. One instance per frame-in-flight (written then
-// sampled within the same frame, like GBuffer / ShadowMap).
+// pass in SHADER_READ_ONLY for the TAA compute pass to sample. One instance per frame-in-flight.
+//
+// THE DEPTH IS THE SCENE DEPTH EVERY SCREEN-SPACE CONSUMER READS (there is no depth prepass): RTAO, the
+// force march, decals, particles, fog apply, TAA, and - as "last frame's depth" out of the other slot -
+// the forward pass's AO reprojection and the particle collision. It lives in exactly TWO layouts:
+//   DEPTH_STENCIL_ATTACHMENT  while the depth-WRITING stages run (static meshes, GI probe debug),
+//   DEPTH_STENCIL_READ_ONLY   the rest of the time: SCENE_DEPTH_SAMPLED_LAYOUT, the layout of every
+//                             sampling descriptor AND of the read-only attachment of the later scene
+//                             stages, which may therefore sample the depth they test against.
+// No pass variant transitions the depth itself (initial == final == the reference layout, the first one
+// clears from UNDEFINED); the Renderer emits the one ATTACHMENT -> READ_ONLY barrier per frame.
+export constexpr vk::ImageLayout SCENE_DEPTH_SAMPLED_LAYOUT = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+
 export class SceneColor final
 {
 public:
@@ -19,36 +30,35 @@ public:
     // viewCount > 1 allocates the colour/depth as arraySize=viewCount with a single-layer framebuffer
     // per eye (getFramebuffer(eye)). The render pass stays non-multiview (viewMask 0) so the forward
     // pass's DGC execution set is allowed; the forward is rendered once per eye into its layer.
-    // prepassDepthViews = the G-buffer's per-eye depth views: the REUSE pass variant binds them directly
-    // as a read-only depth attachment ("Depth prepass reuse" - the forward early-Z tests the prepass
-    // depth with no copy and writes none of its own).
-    bool initialize(vk::Format colorFormat, uint32 width, uint32 height, uint32 viewCount, const oc::array<vk::ImageView, 2>& prepassDepthViews);
+    bool initialize(vk::Format colorFormat, uint32 width, uint32 height, uint32 viewCount);
     void destroy();
 
+    // The BASE pass: what the scene pipelines and the cached secondaries are built against. Never begun.
     vk::RenderPass  getRenderPass() const  { return m_renderPass; }
     vk::Framebuffer getFramebuffer() const { return m_framebuffers[0]; }
     vk::Framebuffer getFramebuffer(uint32 eye) const { return m_framebuffers[eye]; }
-    // Depth-prepass-reuse variant: same colour attachment, depth = the G-BUFFER depth bound READ-ONLY.
-    vk::RenderPass  getReuseRenderPass() const { return m_reuseRenderPass; }
-    vk::Framebuffer getReuseFramebuffer(uint32 eye) const { return m_reuseFramebuffers[eye]; }
-    // SPLIT-instance variants: the Renderer records the forward pass as one instance PER STAGE so
-    // the GPU profiler can bracket each stage (timestamps are illegal inside a secondaries
-    // subpass). stage 0 = first (clears, STORES the depth for the followers), 1 = middle (loads,
-    // stores), 2 = last (loads, hands colour to TAA via SHADER_READ_ONLY, drops the depth) - all
-    // COMPATIBLE with the main/reuse pass (identical dependency arrays, only load/store ops and
-    // layouts differ), so the cached secondaries, the pipelines and the framebuffers serve every
-    // variant. A frame with a single active stage uses the original pass instead (clear + final
-    // transition in one instance). Inter-instance attachment hazards are explicit barriers in the
-    // primary (the deps must stay identical for compatibility, so they cannot carry them).
-    vk::RenderPass getSplitRenderPass(int stage, bool reuse) const
+    // The scene renders as one render-pass instance PER STAGE: the GPU profiler brackets each stage
+    // (timestamps are illegal inside a secondaries subpass), and the depth switches from written to
+    // read-only + sampled between two of them. colour: `first` clears, `last` hands the colour to TAA
+    // (SHADER_READ_ONLY); depth: `depthReadOnly` binds it as a read-only attachment (load, no store
+    // needed but kept), otherwise it is written (the first instance clears it). All variants are
+    // COMPATIBLE with the base pass (identical dependency arrays; only load/store ops and layouts
+    // differ), so the secondaries, the pipelines and the framebuffers serve every one of them.
+    // Inter-instance attachment hazards are explicit barriers in the primary (the deps must stay
+    // identical for compatibility, so they cannot carry them).
+    vk::RenderPass getStageRenderPass(bool first, bool last, bool depthReadOnly) const
     {
-        return reuse ? m_reuseSplitPasses[stage] : m_splitPasses[stage];
+        return m_stagePasses[(first ? 1 : 0) | (last ? 2 : 0) | (depthReadOnly ? 4 : 0)];
     }
     vk::ImageView   getColorView() const   { return m_colorLayerViews[0]; } // 2D, layer 0 (sampling)
     vk::ImageView   getColorLayerView(uint32 layer) const { return m_colorLayerViews[layer]; }
     vk::Image       getColorImage() const  { return m_colorImage; }
+    vk::ImageView   getDepthView() const   { return m_depthLayerViews[0]; }
+    vk::ImageView   getDepthView(uint32 eye) const { return m_depthLayerViews[eye]; }
+    vk::Image       getDepthImage() const  { return m_depthImage; }
     uint32          getViewCount() const   { return m_viewCount; }
     vk::Sampler     getSampler() const     { return m_sampler; } // linear, clamp
+    vk::Sampler     getDepthSampler() const { return m_depthSampler; } // nearest, clamp (point sampling for reconstruction)
     uint32 getWidth() const  { return m_width; }
     uint32 getHeight() const { return m_height; }
 
@@ -68,9 +78,7 @@ private:
 
     vk::RenderPass m_renderPass;
     oc::array<vk::Framebuffer, 2> m_framebuffers{}; // one single-layer framebuffer per eye
-    vk::RenderPass m_reuseRenderPass;
-    oc::array<vk::Framebuffer, 2> m_reuseFramebuffers{}; // per eye, depth = the G-buffer depth (read-only)
-    oc::array<vk::RenderPass, 3> m_splitPasses{};      // first/middle/last (see getSplitRenderPass)
-    oc::array<vk::RenderPass, 3> m_reuseSplitPasses{};
+    oc::array<vk::RenderPass, 8> m_stagePasses{};   // see getStageRenderPass
     vk::Sampler m_sampler;
+    vk::Sampler m_depthSampler;
 };

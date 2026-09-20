@@ -17,12 +17,11 @@ layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
 #include "shared.inc.glsl"
 
-layout (binding = 1) uniform sampler2D u_currentColor;     // this frame's scene colour (jittered render)
+layout (binding = 1) uniform sampler2D u_currentColor;     // this frame's scene colour (jittered render); .a = 0 on ocean pixels
 layout (binding = 2) uniform sampler2D u_historyColor;     // last frame's resolved colour (reprojected)
 layout (binding = 3) uniform sampler2D u_gbufferDepth;     // this frame's camera depth
 layout (binding = 4) uniform sampler2D u_prevGbufferDepth; // last frame's camera depth (disocclusion test)
 layout (binding = 5, rgba16f) uniform restrict writeonly image2D u_resolveOut;
-layout (binding = 6) uniform sampler2D u_gbufferNormal;    // this frame's normals; .a = ocean flag
 
 layout (push_constant) uniform PC
 {
@@ -49,7 +48,8 @@ void main()
     const vec2 texel = 1.0 / vec2(pc.width, pc.height);
     const vec2 uv = (vec2(px) + 0.5) * texel;
 
-    const vec3 current = texture(u_currentColor, uv).rgb;
+    const vec4 currentRgba = texture(u_currentColor, uv);
+    const vec3 current = currentRgba.rgb;
 
     // Pixels outside the editor viewport panel carry no reliable motion; pass straight through.
     if (!insideViewport(uv) || pc.feedback <= 0.0)
@@ -59,12 +59,12 @@ void main()
     }
     const float depth = texture(u_gbufferDepth, uv).r;
 
-    // Sky pixels (the sky sphere is excluded from the G-buffer, so its depth stays at the cleared far
+    // Sky pixels (the Sky variant writes no depth, so its depth stays at the cleared far
     // plane - 0.0 under reversed-Z) reproject AT the far plane: the reprojection is then purely rotational
     // (parallax-free, correct for content at infinity) and the jittered sky raster still accumulates.
     const bool sky = depth <= 0.0;
-    // The depth image is JITTERED (the prepass rasterizes identically to the forward pass, for exact
-    // depth-prepass reuse): the surface sampled at uv truly sits at uv - jitter. Compensate every
+    // The depth image is JITTERED (it is the scene pass's own depth, rasterized with the jitter):
+    // the surface sampled at uv truly sits at uv - jitter. Compensate every
     // GEOMETRIC use of the sampled depth - reconstruction and reprojection - with the known jitter;
     // this is exact, and what keeps reprojection wobble-free with a jittered reference.
     const vec2 uvUnjit = uv - taaJitterUv(u_taaJitter.xy);
@@ -81,12 +81,14 @@ void main()
         return;
     }
 
-    // Ocean pixels (prepass normal .a): the waves ANIMATE but this reprojection is camera-only - no
+    // Ocean pixels (scene colour ALPHA == 0: only ocean.fs.glsl writes it, every other opaque surface
+    // writes its material alpha > 0, and the stages layered over the scene leave alpha alone -
+    // GraphicsPipelineLayout::colorWriteAlpha): the waves ANIMATE but this reprojection is camera-only - no
     // motion vectors - so ocean history lands on the wrong wave every frame and full-weight accumulation
     // averages the specular sparkle into blur. Cap the feedback there (TAA/Ocean feedback tweak) and
     // tighten the variance clamp so the moving highlights stay crisp; water has no hard edges, so the
     // reduced accumulation costs no visible aliasing.
-    const float ocean = texture(u_gbufferNormal, uv).a;
+    const float ocean = (!sky && currentRgba.a < 0.004) ? 1.0 : 0.0;
 
     // 3x3 current-colour statistics for the variance-clipping box.
     vec3 nmin = current, nmax = current, m1 = vec3(0.0), m2 = vec3(0.0);

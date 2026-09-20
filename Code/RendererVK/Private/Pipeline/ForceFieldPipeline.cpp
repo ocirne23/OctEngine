@@ -426,6 +426,7 @@ void ForceFieldPipeline::buildDrawLayout(GraphicsPipelineLayout& layout)
     layout.blendEnable = true; // premultiplied: out = src.rgb + dst * (1 - src.a)
     layout.srcColorBlendFactor = vk::BlendFactor::eOne;
     layout.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
+    layout.colorWriteAlpha = false; // scene colour alpha = TAA's ocean flag
     layout.depthTestEnable = false;
     layout.depthWriteEnable = false;
 
@@ -510,6 +511,7 @@ void ForceFieldPipeline::buildUnionLayout(GraphicsPipelineLayout& layout)
         layout.blendEnable = true; // full-res mode: premultiplied directly over the lit scene
         layout.srcColorBlendFactor = vk::BlendFactor::eOne;
         layout.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
+        layout.colorWriteAlpha = false; // scene colour alpha = TAA's ocean flag
     }
     layout.cullMode = vk::CullModeFlagBits::eNone;
     layout.depthTestEnable = false;
@@ -539,6 +541,7 @@ void ForceFieldPipeline::buildUpsampleLayout(GraphicsPipelineLayout& layout)
     layout.blendEnable = true;
     layout.srcColorBlendFactor = vk::BlendFactor::eOne;
     layout.dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha;
+    layout.colorWriteAlpha = false; // scene colour alpha = TAA's ocean flag
     layout.depthTestEnable = false;
     layout.depthWriteEnable = false;
     auto& b = layout.descriptorSetLayoutBindings;
@@ -1194,7 +1197,7 @@ void ForceFieldPipeline::recordUnionMarchDraw(CommandBuffer& commandBuffer, uint
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(Ubo) } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_emitterBuffers[frameIdx].getBuffer(), .range = m_emitterBuffers[frameIdx].getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
-            vk::DescriptorImageInfo{ .sampler = gbufferSampler, .imageView = gbufferDepthView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal } } },
+            vk::DescriptorImageInfo{ .sampler = gbufferSampler, .imageView = gbufferDepthView, .imageLayout = SCENE_DEPTH_SAMPLED_LAYOUT } } },
         DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_gridTableBuffers[frameIdx].getBuffer(), .range = m_gridTableBuffers[frameIdx].getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_gridDataBuffers[frameIdx].getBuffer(), .range = m_gridDataBuffers[frameIdx].getSize() } } },
         DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {

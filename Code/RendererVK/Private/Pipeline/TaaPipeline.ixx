@@ -29,11 +29,10 @@ public:
     struct RecordParams
     {
         Buffer& ubo;
-        vk::ImageView currentColorView;      // this frame's scene colour (SHADER_READ_ONLY)
+        vk::ImageView currentColorView;      // this frame's scene colour (SHADER_READ_ONLY); .a = 0 on ocean pixels
         vk::Sampler   currentColorSampler;
-        vk::ImageView gbufferDepthView;      // this frame's camera depth (SHADER_READ_ONLY)
-        vk::ImageView prevGbufferDepthView;  // last frame's camera depth (SHADER_READ_ONLY)
-        vk::ImageView gbufferNormalView;     // this frame's normals; .a = ocean flag (SHADER_READ_ONLY)
+        vk::ImageView gbufferDepthView;      // this frame's scene depth (SCENE_DEPTH_SAMPLED_LAYOUT)
+        vk::ImageView prevGbufferDepthView;  // last frame's scene depth (SCENE_DEPTH_SAMPLED_LAYOUT)
         vk::Sampler   gbufferSampler;
         float feedback;                      // history weight; 0 disables accumulation
         float oceanFeedback;                 // history weight cap on ocean pixels (waves animate without motion vectors)

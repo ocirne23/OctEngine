@@ -38,9 +38,8 @@ public:
         Buffer& ubo;
         Buffer& giGridDataBuffer;
         vk::ImageView gbufferDepthView;
-        // DEPTH_STENCIL_READ_ONLY while depth-prepass reuse binds this image as the scene pass depth.
+        // SCENE_DEPTH_SAMPLED_LAYOUT: the scene depth is this stage's read-only attachment AND this sampled image.
         vk::ImageLayout gbufferDepthLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-        vk::ImageView gbufferNormalView;
         vk::Sampler   gbufferSampler;
     };
     // Records the indirect instanced box draw; the caller has begun a command buffer inside the

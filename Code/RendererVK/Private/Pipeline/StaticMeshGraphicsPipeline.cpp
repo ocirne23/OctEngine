@@ -23,14 +23,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
     graphicsPipelineLayout.vertexShader.text = FileSystem::readFileStr(graphicsPipelineLayout.vertexShader.debugFilePath);
     graphicsPipelineLayout.fragmentShader.text = FileSystem::readFileStr(graphicsPipelineLayout.fragmentShader.debugFilePath);
 
-    // Reversed-Z forward pass tests DIRECTLY against the G-buffer prepass depth, bound read-only as the
-    // scene pass's depth attachment (SceneColor's reuse render pass - no copy): prepass and forward
-    // rasterize identically (same culled draws, invariant gl_Position, same TAA jitter expression), so
-    // the visible surface's depth EQUALS the attachment value and must pass - eGreaterOrEqual, not
-    // eGreater - while occluded fragments fail early-Z before the expensive lit/terrain shaders run.
-    // Also correct with the tweak off (own depth cleared to far): equivalent to eGreater bar
-    // last-draw-wins on exact coplanar opaque, which this scene never has.
-    graphicsPipelineLayout.depthCompareOp = vk::CompareOp::eGreaterOrEqual;
+    // This pass WRITES the scene depth (there is no prepass): the layout's reversed-Z eGreater default.
 
     // Variant 1 (MeshShaderVariant::LitTransparent): same lit shader, alpha-blended, no depth write.
     graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
@@ -60,6 +53,9 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		.depthWrite = false,
 	});
 	// Variant 4 (EPipelineIndex::Sky): analytic sky + sun disc, for the inside of the sky sphere.
+	// NO DEPTH WRITE: a sky pixel's scene depth must stay at the cleared far plane (reversed-Z 0), which
+	// is how every depth reader tells "sky" - TAA reprojects it parallax-free, AO / decals / fog / the
+	// particle collision skip it. Depth-tested, so the draw order against the geometry does not matter.
 	const oc::string skyVariantPath = "Shaders/sky.fs.glsl";
 	const oc::string skyVariantText = FileSystem::readFileStr(skyVariantPath);
 	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
@@ -67,6 +63,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 			.text = skyVariantText,
 			.debugFilePath = skyVariantPath,
 		},
+		.depthWrite = false,
 	});
 	// Variants 5-7 (Wireframe + gizmos) all shade by vertex position (debug color).
     const oc::string& gizmoVariantPath = unlitVariantPath;
@@ -178,18 +175,6 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 			graphicsPipelineLayout.additionalVariants[i].polygonMode = vk::PolygonMode::eLine;
 		}
 	}
-
-    // Depth-prepass reuse: the scene pass binds the G-buffer prepass depth READ-ONLY (already complete,
-    // bit-identical to what this pass would rasterize), so no variant may write depth - a write-enabled
-    // pipeline against a read-only depth attachment is invalid. GizmoUI cannot stamp its near depth here,
-    // so the prepass stamps it instead (MATERIAL_FLAG_GIZMO_UI in gbuffer.vs.glsl). Costs the GI-debug
-    // spheres their self-sorting; everything else only ever re-wrote identical values.
-    if (m_depthReadOnly)
-    {
-        graphicsPipelineLayout.depthWriteEnable = false;
-        for (PipelineVariant& variant : graphicsPipelineLayout.additionalVariants)
-            variant.depthWrite = false;
-    }
 
     // VR: every shader in this pipeline selects the per-eye view (u_views[u_viewIndex]) from one push
     // constant, gated behind STEREO. Define it once across all shader sources (and add the range once)
@@ -353,7 +338,7 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         .descriptorCount = 1,
         .stageFlags = vk::ShaderStageFlagBits::eFragment
     });
-    descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // u_gbufferDepth (AO bilateral upsample)
+    descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // u_prevDepth (last frame's depth: AO bilateral upsample)
         .binding = 12,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
         .descriptorCount = 1,
@@ -458,9 +443,10 @@ void StaticMeshGraphicsPipeline::updateTerrainWetnessDescriptor(vk::DescriptorSe
 
 void StaticMeshGraphicsPipeline::updateAODescriptor(vk::DescriptorSet descriptorSet, vk::ImageView aoView, vk::Sampler aoSampler)
 {
-    // The cached draw command buffer binds this set by handle, so refreshing the AO image binding each frame
-    // keeps the forward pass pointed at this frame's denoised AO image (recreated on resize, ping-ponged
-    // per frame). The AO images stay in GENERAL layout (written by the compute denoise, sampled here).
+    // The cached draw command buffer binds this set by handle, so the AO image binding is rewritten when
+    // the slot re-records: it points at the PREVIOUS slot's denoised AO image (the forward pass reads
+    // last frame's AO, reprojected). The AO images stay in GENERAL layout (written by the compute
+    // denoise, sampled here).
     vk::DescriptorImageInfo imageInfo{ .sampler = aoSampler, .imageView = aoView, .imageLayout = vk::ImageLayout::eGeneral };
     vk::WriteDescriptorSet write{ .dstSet = descriptorSet, .dstBinding = 13, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };
@@ -653,11 +639,10 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
             .type = vk::DescriptorType::eCombinedImageSampler,
             .imageInfos = {
                 vk::DescriptorImageInfo {
-                    .sampler = params.gbufferSampler,
-                    .imageView = params.gbufferDepthView,
-                    // Depth-prepass reuse binds this same image as the pass's READ-ONLY depth attachment,
-                    // so during the pass it sits in DEPTH_STENCIL_READ_ONLY (legal to sample from there).
-                    .imageLayout = m_depthReadOnly ? vk::ImageLayout::eDepthStencilReadOnlyOptimal : vk::ImageLayout::eShaderReadOnlyOptimal,
+                    // LAST frame's scene depth: the other slot's image, parked in its sampled layout.
+                    .sampler = params.prevDepthSampler,
+                    .imageView = params.prevDepthView,
+                    .imageLayout = SCENE_DEPTH_SAMPLED_LAYOUT,
                 }
             }
         },

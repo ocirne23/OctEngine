@@ -5,9 +5,6 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 
-// Depth-prepass reuse (gbuffer.vs.glsl) needs bit-exact positions across programs - see the note there.
-invariant gl_Position;
-
 #include "shared.inc.glsl"
 
 #ifdef STEREO

@@ -548,7 +548,7 @@ void main()
             color = mix(color, foamBelow, foamW);
         }
         color *= pathAbsorb;
-        out_color = vec4(color, 1.0);
+        out_color = vec4(color, 0.0); // alpha 0 = TAA's ocean flag (see the end of main)
         return;
     }
 
@@ -717,5 +717,9 @@ void main()
         }
     }
 
-    out_color = vec4(color, 1.0);
+    // Scene colour ALPHA = TAA's animated-surface flag: 0 marks this pixel as ocean (the waves move
+    // without motion vectors, so taa.cs.glsl caps the history weight here). The Ocean variant does not
+    // blend, every other opaque surface writes its material alpha (> 0), and the stages layered over
+    // the scene write RGB only.
+    out_color = vec4(color, 0.0);
 }
