@@ -98,7 +98,7 @@ private:
     }
 
     // One cache line. Everything the push needs beyond these is derived from renderer tables: the per-mesh
-    // instance counts from m_meshInstances, an instance's LOD chain from Renderer::m_meshToLodGroup
+    // instance counts from m_meshInstances, an instance's LOD chain from MeshLodRegistry
     // (the stored instance references the LOD0 mesh; the GPU cull redirects), the skinning palette
     // from the skinned bundle.
     uint32 m_transformIdx = UINT32_MAX;

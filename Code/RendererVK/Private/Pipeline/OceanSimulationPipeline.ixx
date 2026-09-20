@@ -9,6 +9,7 @@ import :ComputePipeline;
 import :DescriptorSet;
 import :Sampler;
 import :Layout;
+import :Settings;
 
 // GPU FFT ocean simulation (Tessendorf 2001, "Simulating Ocean Water"; spectrum + spreading from Horvath
 // 2015, "Empirical directional wave spectra for computer graphics"). Per frame, entirely UBO-driven so it
@@ -43,6 +44,13 @@ public:
 
     void initialize();
     void reloadShaders();
+    // The "Ocean/Spray *" tweaks plus the emitter slot the Particle system publishes (UINT32_MAX = off,
+    // Renderer::setOceanSprayEmitter). Everything rides the frame UBO (oceanSpray0/1/2), which the
+    // Renderer builds from getSprayParams() - the spray step itself reads it there.
+    void registerSprayTweaks() { m_sprayParams.registerTweaks(); }
+    const OceanSprayParams& getSprayParams() const { return m_sprayParams; }
+    void setSprayEmitter(uint32 slot) { m_sprayEmitter = slot; }
+    uint32 getSprayEmitter() const { return m_sprayEmitter; }
 
     // The spray step's inputs (ocean_spray.cs.glsl, the last step of record: the particle GPU spawn
     // path's producer buffers plus the terrain-data cascades for the shore test).
@@ -101,6 +109,8 @@ private:
     ComputePipeline m_assemblePipeline;
     ComputePipeline m_foamPipeline;
     ComputePipeline m_sprayPipeline; // breaking-crest spray -> particle spawn requests
+    OceanSprayParams m_sprayParams;
+    uint32 m_sprayEmitter = UINT32_MAX;
 
     // All sets are per frame slot: the spectrum binds that frame's UBO, and the others must not be
     // host-updated (cmdUpdateDescriptorSets is immediate) while the other slot's cached CB is in flight.

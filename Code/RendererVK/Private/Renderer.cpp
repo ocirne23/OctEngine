@@ -58,7 +58,24 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     // Per-worker staging for the lock-free submission surface (requires the JobSystem first).
     assert(Globals::jobSystem.getNumContexts() != 0 && "initialize the JobSystem before the Renderer");
     m_debugLineVerts.initialize();
+    m_particleEmitters.initialize(RendererVKLayout::MAX_PARTICLE_EMITTERS);
+    m_forceEmitters.initialize(RendererVKLayout::MAX_FORCE_EMITTERS);
+    m_forceQueries.initialize(RendererVKLayout::MAX_FORCE_QUERIES);
 
+    registerTweaks(); // before the device: a Saved/override value must be live when the swapchain is made
+    if (!initDeviceAndSwapchain(window, validation, vr))
+        return false;
+    initPipelines();
+    initPerFrameResources();
+    initSharedBuffers();
+
+    m_gpuCrashTracker.Initialize(false);
+    m_initialized = true; // headless server mode never calls initialize; renderer-touching paths gate on this
+    return true;
+}
+
+void Renderer::registerTweaks()
+{
     auto rerecordCallback = [this]() { setHaveToRecordCommandBuffers(); };
     m_skyParams.registerTweaks();
     // "Shadows/Debug mode" is the SHADOW_DEBUG define on the lit fragment variants: GPU-idle + pipeline
@@ -94,7 +111,7 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     });
     // Live toggles: the primary CB re-records every frame, so no re-record callback is needed.
     m_particleParams.registerTweaks();
-    m_oceanSprayParams.registerTweaks();
+    m_oceanSimPipeline.registerSprayTweaks();
     m_decalPipeline.registerTweaks();
     // Present mode is swapchain creation state (FIFO vs Immediate), so a change recreates the
     // swapchain (device idle + re-init, same path as a lost acquire). A saved/override value fires
@@ -102,6 +119,10 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     // variable directly, so the callback only acts once initialized. Main-thread: the panel's
     // onChange runs in UI::flushMainThreadWork, between the frame-slot wait and present.
     Tweak::boolean("Time", "VSync", &m_vsyncEnabled, [this]() { if (m_initialized) recreateSwapchain(); }, ETweakFlags::Saved);
+}
+
+bool Renderer::initDeviceAndSwapchain(Window& window, EValidation validation, EVr vr)
+{
     Globals::meshStreamer.initialize();
 
     glslang::InitializeProcess();
@@ -149,7 +170,12 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     m_framebuffers.initialize(m_renderPass, m_swapChain);
 
     initImgui(window);
+    return true;
+}
 
+void Renderer::initPipelines()
+{
+    auto rerecordCallback = [this]() { setHaveToRecordCommandBuffers(); };
     const vk::Extent2D ext = m_swapChain.getLayout().extent;
 
     m_sceneViewCount = Globals::openXR.isEnabled() ? 2u : 1u;
@@ -209,9 +235,10 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     for (PerFrameData& perFrame : m_perFrameData)
         perFrame.rainOcclusionMap.initialize(RendererVKLayout::RAIN_OCCLUSION_RESOLUTION, 1);
     m_rainMapGraphicsPipeline.initialize(m_perFrameData[0].rainOcclusionMap, m_maxUniqueMeshes, m_maxTextures, true);
+}
 
-    vk::Device vkDevice = Globals::device.getDevice();
-
+void Renderer::initPerFrameResources()
+{
     for (PerFrameData& perFrame : m_perFrameData)
     {
         perFrame.indirectCullPipelineDescriptorSet.initialize(m_indirectCullComputePipeline.getDescriptorSetLayout());
@@ -322,7 +349,10 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
             m_vrCompositeDescriptorSet[i].initialize(m_compositePipeline.getDescriptorSetLayout());
         createEyeCompositeTargets();
     }
+}
 
+void Renderer::initSharedBuffers()
+{
     m_meshInfosBuffer.initialize(m_maxUniqueMeshes * sizeof(RendererVKLayout::MeshInfo),
         vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
         vk::MemoryPropertyFlagBits::eDeviceLocal, true, "MeshInfos");
@@ -335,25 +365,13 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
         vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
         vk::MemoryPropertyFlagBits::eDeviceLocal, true, "InstanceOffsets");
 
-    m_meshLodGroupIdxBuffer.initialize(m_maxUniqueMeshes * sizeof(uint32),
-        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
-        vk::MemoryPropertyFlagBits::eDeviceLocal, false, "MeshLodGroupIdx");
-    m_meshLodGroupsBuffer.initialize(m_maxMeshLodGroups * sizeof(RendererVKLayout::GpuMeshLodGroup),
-        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
-        vk::MemoryPropertyFlagBits::eDeviceLocal, false, "MeshLodGroups");
-    m_lodLevelStateBuffer.initialize(m_maxLodStateSlots * sizeof(uint32),
-        vk::BufferUsageFlagBits2::eStorageBuffer,
-        vk::MemoryPropertyFlagBits::eDeviceLocal, false, "LodLevelState");
+    m_meshLods.initialize(m_maxUniqueMeshes,
+        [this]() { waitForGpuAndFlushStaging(); }, [this]() { setHaveToRecordCommandBuffers(); });
 
 	uint16 diffuseIdx = Globals::textureManager.upload(*ITextureData::createFallbackWhiteTexture(), false);
 	assert(diffuseIdx == RendererVKLayout::FALLBACK_DIFFUSE_TEX_IDX);
 	uint16 normalIdx = Globals::textureManager.upload(*ITextureData::createFallbackNormalTexture(), false);
 	assert(normalIdx == RendererVKLayout::FALLBACK_NORMAL_TEX_IDX);
-
-    m_gpuCrashTracker.Initialize(false);
-
-    m_initialized = true; // headless server mode never calls initialize; renderer-touching paths gate on this
-    return true;
 }
 
 void Renderer::recreateWindowSurface(Window& window)
@@ -713,7 +731,7 @@ void Renderer::kickGridBuilds()
     Globals::jobSystem.submit([this, frameIdx]
         {
             // Compacts the ACTIVE emitter slots + uploads query positions (this slot's fence was waited).
-            m_forceFieldPipeline.upload(frameIdx, m_forceEmitters, m_forceQueries, m_forceBakeChunks, m_forceBakeSampleY, m_forceShellCull);
+            m_forceFieldPipeline.upload(frameIdx, m_forceEmitters.slots(), m_forceQueries.slots(), m_forceBakeChunks, m_forceBakeSampleY, m_forceShellCull);
             m_forceGridNeedsGrow = false;
             if (m_forceFieldParams.enabled && m_forceFieldPipeline.getUseGrid())
             {
@@ -1212,8 +1230,8 @@ void Renderer::buildUboOcean()
     // delta the rate integrates over (frozen with the global pause, like the particle sim itself).
     const float sprayDt = oc::min((float)Globals::time.getSimDeltaSec(), 0.25f);
     // Off while the particle chain is disabled: nothing would consume (and reset) the request counter.
-    const uint32 sprayEmitter = m_particleParams.enabled ? m_oceanSprayEmitter : UINT32_MAX;
-    const OceanSprayParams& spray = m_oceanSprayParams;
+    const uint32 sprayEmitter = m_particleParams.enabled ? m_oceanSimPipeline.getSprayEmitter() : UINT32_MAX;
+    const OceanSprayParams& spray = m_oceanSimPipeline.getSprayParams();
     ubo.oceanSpray0 = glm::vec4(glm::uintBitsToFloat(sprayEmitter), glm::max(spray.rate, 0.0f),
         glm::max(spray.radius, 1.0f), sprayDt);
     ubo.oceanSpray1 = glm::vec4(glm::clamp(spray.threshold, 0.0f, 0.99f), glm::max(spray.kick, 0.0f),
@@ -1247,7 +1265,7 @@ void Renderer::buildUboForce()
     // spread. No qualifying emitter (or tier off) = no bake dispatch and the FS branch stays cold.
     glm::vec3 bakeLo(FLT_MAX), bakeHi(-FLT_MAX);
     if (force.sampledShellRadius > 0.0f)
-        for (const RendererVKLayout::ForceEmitterGpu& e : m_forceEmitters)
+        for (const RendererVKLayout::ForceEmitterGpu& e : m_forceEmitters.slots())
         {
             if ((e.teamFlags.y & RendererVKLayout::FORCE_FLAG_ACTIVE) == 0u
                 || (e.teamFlags.y & RendererVKLayout::FORCE_FLAG_PASSIVE) != 0u
@@ -1328,7 +1346,7 @@ void Renderer::buildUboForce()
     // ONE point per frame, so evaluate the full field at the camera here (CPU mirror) instead of a
     // per-fragment field re-sample at the ray origin in both fragment shaders.
     float phiCam[RendererVKLayout::MAX_FORCE_TEAMS] = {};
-    for (const RendererVKLayout::ForceEmitterGpu& e : m_forceEmitters)
+    for (const RendererVKLayout::ForceEmitterGpu& e : m_forceEmitters.slots())
     {
         if ((e.teamFlags.y & RendererVKLayout::FORCE_FLAG_ACTIVE) == 0u
             || (e.teamFlags.y & RendererVKLayout::FORCE_FLAG_PASSIVE) != 0u)
@@ -1515,10 +1533,10 @@ void Renderer::noteLodChainUse(const RenderNode& node, uint32 startIdx, PerFrame
     // races on the stamp are benign: both threads write the same frame value, worst case double-noting.
     for (const RendererVKLayout::InMeshInstance& instance : node.m_meshInstances)
     {
-        const uint32 groupIdx = m_meshToLodGroup[instance.meshIdx]; // the instance references the chain's LOD0 mesh
+        const uint32 groupIdx = m_meshLods.getGroupIdxForMesh(instance.meshIdx); // the instance references the chain's LOD0 mesh
         if (groupIdx == UINT32_MAX)
             continue;
-        MeshLodGroup& group = m_meshLodGroups[groupIdx];
+        MeshLodGroup& group = m_meshLods.getGroup(groupIdx);
         if (group.errors[1] == 0.0f && oc::atomic_ref<uint32>(group.lastUseFrame).load(oc::memory_order_relaxed) != m_frameCounter)
         {
             oc::atomic_ref<uint32>(group.lastUseFrame).store(m_frameCounter, oc::memory_order_relaxed);
@@ -1528,37 +1546,6 @@ void Renderer::noteLodChainUse(const RenderNode& node, uint32 startIdx, PerFrame
     }
     // Publish the cull's hysteresis-state addressing for this node: stateSlot = instanceIdx + bias.
     frameData.mappedNodeLodStateBias[node.m_transformIdx] = (int32)node.m_lodStateBase - (int32)startIdx;
-}
-
-void Renderer::uploadMeshLodGroup(uint32 groupIdx)
-{
-    const MeshLodGroup& group = m_meshLodGroups[groupIdx];
-    RendererVKLayout::GpuMeshLodGroup gpu{};
-    gpu.numLods = group.numLods;
-    gpu.mesh01 = (uint32)group.meshIdx[0] | ((uint32)group.meshIdx[1] << 16);
-    gpu.mesh23 = (uint32)group.meshIdx[2] | ((uint32)group.meshIdx[3] << 16);
-    gpu.mesh4 = (uint32)group.meshIdx[4];
-    for (uint32 k = 1; k < RendererVKLayout::MAX_MESH_LODS; ++k)
-        gpu.errors1_4[k - 1] = group.errors[k];
-    uploadToSharedBuffer(m_meshLodGroupsBuffer, sizeof(gpu), &gpu, (size_t)groupIdx * sizeof(gpu));
-}
-
-void Renderer::setMeshLodGroupIdx(uint16 meshIdx, uint32 groupIdx)
-{
-    m_meshToLodGroup[meshIdx] = groupIdx;
-    uploadToSharedBuffer(m_meshLodGroupIdxBuffer, sizeof(uint32), &m_meshToLodGroup[meshIdx], (size_t)meshIdx * sizeof(uint32));
-}
-
-uint32 Renderer::allocateLodStateRange(uint32 count)
-{
-    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
-    if (const uint32 reusedBase = m_freeLodStateSlots.allocate(count); reusedBase != UINT32_MAX)
-        return reusedBase;
-    const uint32 base = m_lodStateCounter;
-    m_lodStateCounter += count;
-    if (m_lodStateCounter > m_maxLodStateSlots)
-        growLodStateCapacity(m_lodStateCounter);
-    return base;
 }
 
 
@@ -1596,47 +1583,26 @@ void Renderer::addDecal(const RendererVKLayout::DecalInfo& decal)
         m_decalPipeline.getMapped(m_swapChain.getCurrentFrameIndex())[idx] = decal;
 }
 
+// A retired emitter's slot comes back once its KILL flag has drained through the sim (its particles
+// are gone after the flag has been live for a couple of simulated frames) - see RecycledSlotTable.
 uint32 Renderer::createParticleEmitter(const RendererVKLayout::ParticleEmitterGpu& desc)
 {
     const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
-    // Recycle retired slots once their KILL flag has drained through the sim (their particles are gone
-    // after the flag has been live for a couple of simulated frames).
-    for (size_t i = 0; i < m_retiredParticleEmitters.size();)
-    {
-        if (m_frameCounter - m_retiredParticleEmitters[i].second > RendererVKLayout::NUM_FRAMES_IN_FLIGHT + 2)
-        {
-            m_freeParticleEmitterSlots.push_back(m_retiredParticleEmitters[i].first);
-            m_retiredParticleEmitters.erase(m_retiredParticleEmitters.begin() + i);
-        }
-        else
-            ++i;
-    }
-    uint32 slot;
-    if (!m_freeParticleEmitterSlots.empty())
-    {
-        slot = m_freeParticleEmitterSlots.back();
-        m_freeParticleEmitterSlots.pop_back();
-    }
-    else
-    {
-        if (m_particleEmitters.size() >= RendererVKLayout::MAX_PARTICLE_EMITTERS)
-            return UINT32_MAX;
-        m_particleEmitters.emplace_back();
-        slot = (uint32)m_particleEmitters.size() - 1;
-    }
-    m_particleEmitters[slot] = desc;
+    const uint32 slot = m_particleEmitters.create(m_frameCounter);
+    if (slot != UINT32_MAX)
+        m_particleEmitters[slot] = desc;
     return slot;
 }
 
 void Renderer::updateParticleEmitter(uint32 slot, const RendererVKLayout::ParticleEmitterGpu& desc)
 {
-    assert(slot < m_particleEmitters.size());
+    assert(m_particleEmitters.isValid(slot));
     m_particleEmitters[slot] = desc;
 }
 
 void Renderer::emitParticles(uint32 slot, uint32 count)
 {
-    assert(slot < m_particleEmitters.size());
+    assert(m_particleEmitters.isValid(slot));
     if (count > 0)
         m_particleSpawnRequests.emplace_back((uint16)slot, (uint16)oc::min(count, 0xFFFFu));
 }
@@ -1644,9 +1610,9 @@ void Renderer::emitParticles(uint32 slot, uint32 count)
 void Renderer::destroyParticleEmitter(uint32 slot)
 {
     const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
-    assert(slot < m_particleEmitters.size());
+    assert(m_particleEmitters.isValid(slot));
     m_particleEmitters[slot].texFlags.y |= RendererVKLayout::PARTICLE_FLAG_KILL;
-    m_retiredParticleEmitters.emplace_back(slot, m_frameCounter);
+    m_particleEmitters.retire(slot, m_frameCounter);
 }
 
 void Renderer::setRainOcclusionVolume(const glm::vec3& center, const glm::vec3& halfExtents)
@@ -1656,34 +1622,14 @@ void Renderer::setRainOcclusionVolume(const glm::vec3& center, const glm::vec3& 
     m_rainVolumeRequest.active = true;
 }
 
+// A retired force slot comes back once every frame that could still deliver its slot-indexed readback
+// has drained - the emitter forces and the query results are both slot-indexed (RecycledSlotTable).
 uint32 Renderer::createForceEmitter(const RendererVKLayout::ForceEmitterGpu& desc)
 {
     const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
-    // Recycle retired slots once every frame that could still deliver their slot-indexed force
-    // readback has drained (particle emitter slot pattern).
-    for (size_t i = 0; i < m_retiredForceEmitters.size();)
-    {
-        if (m_frameCounter - m_retiredForceEmitters[i].second > RendererVKLayout::NUM_FRAMES_IN_FLIGHT + 2)
-        {
-            m_freeForceEmitterSlots.push_back(m_retiredForceEmitters[i].first);
-            m_retiredForceEmitters.erase(m_retiredForceEmitters.begin() + i);
-        }
-        else
-            ++i;
-    }
-    uint32 slot;
-    if (!m_freeForceEmitterSlots.empty())
-    {
-        slot = m_freeForceEmitterSlots.back();
-        m_freeForceEmitterSlots.pop_back();
-    }
-    else
-    {
-        if (m_forceEmitters.size() >= RendererVKLayout::MAX_FORCE_EMITTERS)
-            return UINT32_MAX;
-        m_forceEmitters.emplace_back();
-        slot = (uint32)m_forceEmitters.size() - 1;
-    }
+    const uint32 slot = m_forceEmitters.create(m_frameCounter);
+    if (slot == UINT32_MAX)
+        return slot;
     m_forceEmitters[slot] = desc;
     m_forceEmitters[slot].teamFlags.y |= RendererVKLayout::FORCE_FLAG_ACTIVE;
     return slot;
@@ -1691,60 +1637,39 @@ uint32 Renderer::createForceEmitter(const RendererVKLayout::ForceEmitterGpu& des
 
 void Renderer::updateForceEmitter(uint32 slot, const RendererVKLayout::ForceEmitterGpu& desc)
 {
-    assert(slot < m_forceEmitters.size());
+    assert(m_forceEmitters.isValid(slot));
     m_forceEmitters[slot] = desc;
 }
 
 void Renderer::destroyForceEmitter(uint32 slot)
 {
     const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
-    assert(slot < m_forceEmitters.size());
+    assert(m_forceEmitters.isValid(slot));
     m_forceEmitters[slot].teamFlags.y &= ~RendererVKLayout::FORCE_FLAG_ACTIVE;
-    m_retiredForceEmitters.emplace_back(slot, m_frameCounter);
+    m_forceEmitters.retire(slot, m_frameCounter);
 }
 
 uint32 Renderer::createForceQuerySlot()
 {
     const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
-    for (size_t i = 0; i < m_retiredForceQuerySlots.size();)
-    {
-        if (m_frameCounter - m_retiredForceQuerySlots[i].second > RendererVKLayout::NUM_FRAMES_IN_FLIGHT + 2)
-        {
-            m_freeForceQuerySlots.push_back(m_retiredForceQuerySlots[i].first);
-            m_retiredForceQuerySlots.erase(m_retiredForceQuerySlots.begin() + i);
-        }
-        else
-            ++i;
-    }
-    uint32 slot;
-    if (!m_freeForceQuerySlots.empty())
-    {
-        slot = m_freeForceQuerySlots.back();
-        m_freeForceQuerySlots.pop_back();
-    }
-    else
-    {
-        if (m_forceQueries.size() >= RendererVKLayout::MAX_FORCE_QUERIES)
-            return UINT32_MAX;
-        m_forceQueries.emplace_back();
-        slot = (uint32)m_forceQueries.size() - 1;
-    }
-    m_forceQueries[slot].posActive = glm::vec4(0.0f); // inactive until the first setForceQuery
+    const uint32 slot = m_forceQueries.create(m_frameCounter);
+    if (slot != UINT32_MAX)
+        m_forceQueries[slot].posActive = glm::vec4(0.0f); // inactive until the first setForceQuery
     return slot;
 }
 
 void Renderer::setForceQuery(uint32 slot, const glm::vec3& pos)
 {
-    assert(slot < m_forceQueries.size());
+    assert(m_forceQueries.isValid(slot));
     m_forceQueries[slot].posActive = glm::vec4(pos, 1.0f);
 }
 
 void Renderer::destroyForceQuerySlot(uint32 slot)
 {
     const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
-    assert(slot < m_forceQueries.size());
+    assert(m_forceQueries.isValid(slot));
     m_forceQueries[slot].posActive = glm::vec4(0.0f);
-    m_retiredForceQuerySlots.emplace_back(slot, m_frameCounter);
+    m_forceQueries.retire(slot, m_frameCounter);
 }
 
 glm::vec4 Renderer::getForceEmitterReadback(uint32 slot) const
@@ -1929,9 +1854,9 @@ void Renderer::present()
     for (uint32 meshIdx = 0; meshIdx < numMeshInfos; ++meshIdx)
     {
         frameData.mappedFirstInstances[meshIdx] = instanceCounter;
-        const uint32 groupIdx = m_meshToLodGroup[meshIdx];
+        const uint32 groupIdx = m_meshLods.getGroupIdxForMesh((uint16)meshIdx);
         instanceCounter += groupIdx == UINT32_MAX ? m_numInstancesPerMesh[meshIdx]
-            : m_numInstancesPerMesh[m_meshLodGroups[groupIdx].meshIdx[0]];
+            : m_numInstancesPerMesh[m_meshLods.getGroup(groupIdx).meshIdx[0]];
     }
     if (instanceCounter > m_maxInstanceData)
         growMeshInstanceCapacity(instanceCounter);
@@ -1968,7 +1893,7 @@ void Renderer::present()
         uint32 spawnRequestTotal = 0;
         for (const auto& [slot, count] : m_particleSpawnRequests)
             spawnRequestTotal += count;
-        m_particlePipeline.update(frameIdx, m_particleEmitters, m_particleSpawnRequests,
+        m_particlePipeline.update(frameIdx, m_particleEmitters.slots(), m_particleSpawnRequests,
             dt * m_particleParams.timeScale, m_particleParams.collision, particleResetCarried);
         m_particleSpawnRequests.clear();
         m_decalPipeline.upload(frameIdx, m_decalCounter);
@@ -2149,7 +2074,7 @@ void Renderer::freeRenderNode(RenderNode& node)
     }
     if (node.m_lodStateBase != UINT32_MAX)
     {
-        m_freeLodStateSlots.release(node.m_lodStateBase, (uint32)node.m_meshInstances.size());
+        m_meshLods.releaseStateRange(node.m_lodStateBase, (uint32)node.m_meshInstances.size());
         node.m_lodStateBase = UINT32_MAX;
     }
     node.m_meshInstances.clear();
@@ -2311,16 +2236,7 @@ void Renderer::growUniqueMeshCapacity(uint32 needed)
         perFrame.mappedFirstInstances = perFrame.inFirstInstancesBuffer.mapMemory<uint32>();
     }
     m_meshInfosBuffer.resize(m_maxUniqueMeshes * sizeof(RendererVKLayout::MeshInfo));
-    // Fresh (unmirrored) buffer: re-upload the whole per-mesh LOD group mapping, padded to capacity so
-    // future slots read as "no chain".
-    m_meshLodGroupIdxBuffer.initialize(m_maxUniqueMeshes * sizeof(uint32),
-        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
-        vk::MemoryPropertyFlagBits::eDeviceLocal, false, "MeshLodGroupIdx");
-    {
-        oc::vector<uint32> mapping(m_maxUniqueMeshes, UINT32_MAX);
-        memcpy(mapping.data(), m_meshToLodGroup.data(), m_meshToLodGroup.size() * sizeof(uint32));
-        uploadToSharedBuffer(m_meshLodGroupIdxBuffer, mapping.size() * sizeof(uint32), mapping.data(), 0);
-    }
+    m_meshLods.onUniqueMeshCapacityGrown(m_maxUniqueMeshes);
     m_accelStructure.resizeBlasAddressBuffer(m_maxUniqueMeshes);
     m_indirectCullComputePipeline.resizeCommandBuffers(m_maxUniqueMeshes);
     m_shadowCullComputePipeline.resizeCommandBuffers(m_maxUniqueMeshes);
@@ -2390,38 +2306,33 @@ void Renderer::growInstanceOffsetCapacity(uint32 needed)
     printf("Renderer: grew instance offset capacity to %u\n", m_maxInstanceOffsets);
 }
 
-void Renderer::growLodStateCapacity(uint32 needed)
+vk::CommandBuffer Renderer::beginComputeSecondary(CommandBuffer& cb)
 {
-    m_maxLodStateSlots = growCapacity(m_maxLodStateSlots, needed);
-    waitForGpuAndFlushStaging();
-    // Contents are advisory hysteresis history (clamped into a valid band on read), so the old
-    // buffer's state doesn't need preserving.
-    m_lodLevelStateBuffer.initialize(m_maxLodStateSlots * sizeof(uint32),
-        vk::BufferUsageFlagBits2::eStorageBuffer,
-        vk::MemoryPropertyFlagBits::eDeviceLocal, false, "LodLevelState");
-    setHaveToRecordCommandBuffers();
-    printf("Renderer: grew LOD state capacity to %u\n", m_maxLodStateSlots);
+    vk::CommandBufferInheritanceInfo inheritance;
+    return cb.begin(false, &inheritance);
 }
 
-void Renderer::growMeshLodGroupCapacity(uint32 needed)
+vk::CommandBuffer Renderer::beginScenePassSecondary(uint32 frameIdx, CommandBuffer& cb)
 {
-    m_maxMeshLodGroups = growCapacity(m_maxMeshLodGroups, needed);
-    waitForGpuAndFlushStaging();
-    m_meshLodGroupsBuffer.initialize(m_maxMeshLodGroups * sizeof(RendererVKLayout::GpuMeshLodGroup),
-        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
-        vk::MemoryPropertyFlagBits::eDeviceLocal, false, "MeshLodGroups");
-    for (uint32 i = 0; i < (uint32)m_meshLodGroups.size(); ++i)
-        uploadMeshLodGroup(i); // fresh buffer: re-publish every registered group
-    setHaveToRecordCommandBuffers();
-    printf("Renderer: grew mesh LOD group capacity to %u\n", m_maxMeshLodGroups);
+    vk::CommandBufferInheritanceInfo inheritance{ .renderPass = m_perFrameData[frameIdx].sceneColor.getRenderPass() };
+    return cb.begin(false, &inheritance);
+}
+
+void Renderer::setFullViewport(vk::CommandBuffer vkCb) const
+{
+    const glm::ivec2 vpSize = m_viewportRect.getSize();
+    const vk::Viewport viewport{ .x = (float)m_viewportRect.min.x, .y = (float)m_viewportRect.max.y,
+        .width = (float)vpSize.x, .height = -((float)vpSize.y), .minDepth = 0.0f, .maxDepth = 1.0f };
+    const vk::Rect2D scissor{ .offset = vk::Offset2D{ 0, 0 }, .extent = m_swapChain.getLayout().extent };
+    vkCb.setViewport(0, { viewport });
+    vkCb.setScissor(0, { scissor });
 }
 
 void Renderer::recordIndirectCull(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.indirectCullCommandBuffer;
-    vk::CommandBufferInheritanceInfo inheritance;
-    cb.begin(false, &inheritance);
+    beginComputeSecondary(cb);
     IndirectCullComputePipeline::RecordParams cullParams
     {
         .descriptorSet = frameData.indirectCullPipelineDescriptorSet,
@@ -2432,9 +2343,9 @@ void Renderer::recordIndirectCull(uint32 frameIdx)
         .inMeshInfoBuffer = m_meshInfosBuffer,
         .inFirstInstancesBuffer = frameData.inFirstInstancesBuffer,
         .inNodePassMasksBuffer = frameData.inNodePassMasksBuffer,
-        .inMeshLodGroupIdxBuffer = m_meshLodGroupIdxBuffer,
-        .inMeshLodGroupsBuffer = m_meshLodGroupsBuffer,
-        .lodLevelStateBuffer = m_lodLevelStateBuffer,
+        .inMeshLodGroupIdxBuffer = m_meshLods.getGroupIdxBuffer(),
+        .inMeshLodGroupsBuffer = m_meshLods.getGroupsBuffer(),
+        .lodLevelStateBuffer = m_meshLods.getStateBuffer(),
         .inNodeLodStateBiasBuffer = frameData.inNodeLodStateBiasBuffer,
         .outLodStatsBuffer = frameData.lodStatsBuffer,
     };
@@ -2534,8 +2445,7 @@ void Renderer::recordSkinning(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.skinningCommandBuffer;
-    vk::CommandBufferInheritanceInfo inheritance;
-    cb.begin(false, &inheritance);
+    beginComputeSecondary(cb);
     SkinningComputePipeline::RecordParams params{
         .descriptorSet = frameData.skinningDescriptorSet,
         .vertexBuffer = Globals::meshDataManager.getVertexBuffer(),
@@ -2549,8 +2459,7 @@ void Renderer::recordOceanSim(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.oceanSimCommandBuffer;
-    vk::CommandBufferInheritanceInfo inheritance;
-    cb.begin(false, &inheritance);
+    beginComputeSecondary(cb);
     const OceanSimulationPipeline::SprayParams spray{
         .particleCounters = &m_particlePipeline.getCountersBuffer(),
         .particleRequests = &m_particlePipeline.getSpawnRequestBuffer(),
@@ -2565,8 +2474,7 @@ void Renderer::recordTerrainWetness(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.terrainWetnessCommandBuffer;
-    vk::CommandBufferInheritanceInfo inheritance;
-    cb.begin(false, &inheritance);
+    beginComputeSecondary(cb);
     const TerrainWetnessPipeline::RecordParams params{
         .ubo = &frameData.ubo,
         .terrainView = m_fogTerrainMap.getView(),
@@ -2582,8 +2490,7 @@ void Renderer::recordLightGrid(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.lightGridCommandBuffer;
-    vk::CommandBufferInheritanceInfo inheritance;
-    cb.begin(false, &inheritance);
+    beginComputeSecondary(cb);
     LightGridComputePipeline::RecordParams params
     {
         .descriptorSet = frameData.lightGridPipelineDescriptorSet,
@@ -2598,8 +2505,7 @@ void Renderer::recordShadowCull(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.shadowCullCommandBuffer;
-    vk::CommandBufferInheritanceInfo inheritance;
-    cb.begin(false, &inheritance);
+    beginComputeSecondary(cb);
 
     ShadowCullComputePipeline::RecordParams params{
         .descriptorSet = frameData.shadowCullDescriptorSet,
@@ -2612,8 +2518,8 @@ void Renderer::recordShadowCull(uint32 frameIdx)
         .inFirstInstancesBuffer = frameData.inFirstInstancesBuffer,
         .inMaterialInfoBuffer = m_materialInfosBuffer,
         .inNodePassMasksBuffer = frameData.inNodePassMasksBuffer,
-        .inMeshLodGroupIdxBuffer = m_meshLodGroupIdxBuffer,
-        .inMeshLodGroupsBuffer = m_meshLodGroupsBuffer,
+        .inMeshLodGroupIdxBuffer = m_meshLods.getGroupIdxBuffer(),
+        .inMeshLodGroupsBuffer = m_meshLods.getGroupsBuffer(),
     };
     m_shadowCullComputePipeline.record(cb, frameIdx, params);
     cb.end();
@@ -2656,8 +2562,7 @@ void Renderer::recordRainOcclusionCull(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.rainCullCommandBuffer;
-    vk::CommandBufferInheritanceInfo inheritance;
-    cb.begin(false, &inheritance);
+    beginComputeSecondary(cb);
 
     ShadowCullComputePipeline::RecordParams params{
         .descriptorSet = frameData.rainCullDescriptorSet,
@@ -2670,8 +2575,8 @@ void Renderer::recordRainOcclusionCull(uint32 frameIdx)
         .inFirstInstancesBuffer = frameData.inFirstInstancesBuffer,
         .inMaterialInfoBuffer = m_materialInfosBuffer,
         .inNodePassMasksBuffer = frameData.inNodePassMasksBuffer,
-        .inMeshLodGroupIdxBuffer = m_meshLodGroupIdxBuffer,
-        .inMeshLodGroupsBuffer = m_meshLodGroupsBuffer,
+        .inMeshLodGroupIdxBuffer = m_meshLods.getGroupIdxBuffer(),
+        .inMeshLodGroupsBuffer = m_meshLods.getGroupsBuffer(),
     };
     m_rainCullComputePipeline.record(cb, frameIdx, params);
     cb.end();
@@ -2726,10 +2631,8 @@ void Renderer::recordSceneDepthToSampled(vk::CommandBuffer cb, vk::Image sceneDe
 
 void Renderer::recordStaticMesh(uint32 frameIdx)
 {
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    vk::CommandBufferInheritanceInfo inheritance{ .renderPass = frameData.sceneColor.getRenderPass() };
-    CommandBuffer& cb = frameData.staticMeshCommandBuffer;
-    cb.begin(false, &inheritance);
+    CommandBuffer& cb = m_perFrameData[frameIdx].staticMeshCommandBuffer;
+    beginScenePassSecondary(frameIdx, cb);
     recordStaticMeshInto(cb, frameIdx, 0);
     cb.end();
 }
@@ -2737,20 +2640,7 @@ void Renderer::recordStaticMesh(uint32 frameIdx)
 void Renderer::recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
-    vk::CommandBuffer vkCb = cb.getCommandBuffer();
-
-    const vk::Extent2D extent = m_swapChain.getLayout().extent;
-    const glm::ivec2 viewportSize = m_viewportRect.getSize();
-    const vk::Viewport viewport{
-        .x = (float)m_viewportRect.min.x,
-        .y = (float)m_viewportRect.max.y,
-        .width = (float)viewportSize.x,
-        .height = -((float)viewportSize.y),
-        .minDepth = 0.0f,
-        .maxDepth = 1.0f };
-    const vk::Rect2D scissor{ .offset = vk::Offset2D{ 0, 0 }, .extent = extent };
-    vkCb.setViewport(0, { viewport });
-    vkCb.setScissor(0, { scissor });
+    setFullViewport(cb.getCommandBuffer());
     StaticMeshGraphicsPipeline::RecordParams drawParams
     {
         .descriptorSet = frameData.staticMeshPipelineDescriptorSet[eyeIndex],
@@ -2848,16 +2738,8 @@ void Renderer::recordTaaInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex
 void Renderer::recordGiProbeDebug(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
-    vk::CommandBufferInheritanceInfo inheritance{ .renderPass = frameData.sceneColor.getRenderPass() };
     CommandBuffer& cb = frameData.giProbeDebugCommandBuffer;
-    vk::CommandBuffer vkCb = cb.begin(false, &inheritance);
-    const vk::Extent2D extent = m_swapChain.getLayout().extent;
-    const glm::ivec2 vpSize = m_viewportRect.getSize();
-    const vk::Viewport viewport{ .x = (float)m_viewportRect.min.x, .y = (float)m_viewportRect.max.y,
-        .width = (float)vpSize.x, .height = -((float)vpSize.y), .minDepth = 0.0f, .maxDepth = 1.0f };
-    const vk::Rect2D scissor{ .offset = vk::Offset2D{ 0, 0 }, .extent = extent };
-    vkCb.setViewport(0, { viewport });
-    vkCb.setScissor(0, { scissor });
+    setFullViewport(beginScenePassSecondary(frameIdx, cb));
     m_giProbePipeline.recordDebugDraw(cb, frameIdx, frameData.ubo);
     cb.end();
 }
@@ -2865,16 +2747,8 @@ void Renderer::recordGiProbeDebug(uint32 frameIdx)
 void Renderer::recordDebugLines(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
-    vk::CommandBufferInheritanceInfo inheritance{ .renderPass = frameData.sceneColor.getRenderPass() };
     CommandBuffer& cb = frameData.debugLineCommandBuffer;
-    vk::CommandBuffer vkCb = cb.begin(false, &inheritance);
-    const vk::Extent2D extent = m_swapChain.getLayout().extent;
-    const glm::ivec2 vpSize = m_viewportRect.getSize();
-    const vk::Viewport viewport{ .x = (float)m_viewportRect.min.x, .y = (float)m_viewportRect.max.y,
-        .width = (float)vpSize.x, .height = -((float)vpSize.y), .minDepth = 0.0f, .maxDepth = 1.0f };
-    const vk::Rect2D scissor{ .offset = vk::Offset2D{ 0, 0 }, .extent = extent };
-    vkCb.setViewport(0, { viewport });
-    vkCb.setScissor(0, { scissor });
+    setFullViewport(beginScenePassSecondary(frameIdx, cb));
     m_debugLinePipeline.record(cb, frameIdx, frameData.ubo);
     cb.end();
 }
@@ -2885,8 +2759,7 @@ void Renderer::recordParticleSim(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.particleSimCommandBuffer;
-    vk::CommandBufferInheritanceInfo inheritance;
-    cb.begin(false, &inheritance);
+    beginComputeSecondary(cb);
     const uint32 prevFrameIdx = (frameIdx + 1) % RendererVKLayout::NUM_FRAMES_IN_FLIGHT;
     ParticlePipeline::SimParams simParams{
         .ubo = frameData.ubo,
@@ -2908,14 +2781,7 @@ void Renderer::recordParticleSim(uint32 frameIdx)
 void Renderer::recordParticlesInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
-    vk::CommandBuffer vkCb = cb.getCommandBuffer();
-    const vk::Extent2D extent = m_swapChain.getLayout().extent;
-    const glm::ivec2 vpSize = m_viewportRect.getSize();
-    const vk::Viewport viewport{ .x = (float)m_viewportRect.min.x, .y = (float)m_viewportRect.max.y,
-        .width = (float)vpSize.x, .height = -((float)vpSize.y), .minDepth = 0.0f, .maxDepth = 1.0f };
-    const vk::Rect2D scissor{ .offset = vk::Offset2D{ 0, 0 }, .extent = extent };
-    vkCb.setViewport(0, { viewport });
-    vkCb.setScissor(0, { scissor });
+    setFullViewport(cb.getCommandBuffer());
     ParticlePipeline::DrawParams drawParams{
         .ubo = frameData.ubo,
         .giGridDataBuffer = m_giProbePipeline.getGiGridDataBuffer(),
@@ -2933,10 +2799,8 @@ void Renderer::recordParticlesInto(CommandBuffer& cb, uint32 frameIdx, uint32 ey
 
 void Renderer::recordParticles(uint32 frameIdx)
 {
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    vk::CommandBufferInheritanceInfo inheritance{ .renderPass = frameData.sceneColor.getRenderPass() };
-    CommandBuffer& cb = frameData.particleCommandBuffer;
-    cb.begin(false, &inheritance);
+    CommandBuffer& cb = m_perFrameData[frameIdx].particleCommandBuffer;
+    beginScenePassSecondary(frameIdx, cb);
     recordParticlesInto(cb, frameIdx, 0);
     cb.end();
 }
@@ -2946,14 +2810,7 @@ void Renderer::recordParticles(uint32 frameIdx)
 void Renderer::recordDecalsInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
-    vk::CommandBuffer vkCb = cb.getCommandBuffer();
-    const vk::Extent2D extent = m_swapChain.getLayout().extent;
-    const glm::ivec2 vpSize = m_viewportRect.getSize();
-    const vk::Viewport viewport{ .x = (float)m_viewportRect.min.x, .y = (float)m_viewportRect.max.y,
-        .width = (float)vpSize.x, .height = -((float)vpSize.y), .minDepth = 0.0f, .maxDepth = 1.0f };
-    const vk::Rect2D scissor{ .offset = vk::Offset2D{ 0, 0 }, .extent = extent };
-    vkCb.setViewport(0, { viewport });
-    vkCb.setScissor(0, { scissor });
+    setFullViewport(cb.getCommandBuffer());
     DecalPipeline::DrawParams drawParams{
         .ubo = frameData.ubo,
         .giGridDataBuffer = m_giProbePipeline.getGiGridDataBuffer(),
@@ -2966,10 +2823,8 @@ void Renderer::recordDecalsInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIn
 
 void Renderer::recordDecals(uint32 frameIdx)
 {
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    vk::CommandBufferInheritanceInfo inheritance{ .renderPass = frameData.sceneColor.getRenderPass() };
-    CommandBuffer& cb = frameData.decalCommandBuffer;
-    cb.begin(false, &inheritance);
+    CommandBuffer& cb = m_perFrameData[frameIdx].decalCommandBuffer;
+    beginScenePassSecondary(frameIdx, cb);
     recordDecalsInto(cb, frameIdx, 0);
     cb.end();
 }
@@ -2981,14 +2836,7 @@ void Renderer::recordForceFieldInto(CommandBuffer& cb, uint32 frameIdx, uint32 e
     ForceFieldPipeline::EDrawPart part)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
-    vk::CommandBuffer vkCb = cb.getCommandBuffer();
-    const vk::Extent2D extent = m_swapChain.getLayout().extent;
-    const glm::ivec2 vpSize = m_viewportRect.getSize();
-    const vk::Viewport viewport{ .x = (float)m_viewportRect.min.x, .y = (float)m_viewportRect.max.y,
-        .width = (float)vpSize.x, .height = -((float)vpSize.y), .minDepth = 0.0f, .maxDepth = 1.0f };
-    const vk::Rect2D scissor{ .offset = vk::Offset2D{ 0, 0 }, .extent = extent };
-    vkCb.setViewport(0, { viewport });
-    vkCb.setScissor(0, { scissor });
+    setFullViewport(cb.getCommandBuffer());
     ForceFieldPipeline::DrawParams drawParams{
         .ubo = frameData.ubo,
         .sceneDepthView = frameData.sceneColor.getDepthView(eyeIndex),
@@ -2998,20 +2846,20 @@ void Renderer::recordForceFieldInto(CommandBuffer& cb, uint32 frameIdx, uint32 e
     m_forceFieldPipeline.recordDraw(cb, frameIdx, eyeIndex, drawParams, part);
 }
 
-void Renderer::recordForceField(uint32 frameIdx)
+void Renderer::recordForceShells(uint32 frameIdx)
 {
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    vk::CommandBufferInheritanceInfo inheritance{ .renderPass = frameData.sceneColor.getRenderPass() };
-    // Two secondaries so the GPU profiler splits the proxy ray-march and the union march into
-    // their own scene stages ("Force shells" / "Force union march").
-    CommandBuffer& cb = frameData.forceFieldCommandBuffer;
-    cb.begin(false, &inheritance);
+    CommandBuffer& cb = m_perFrameData[frameIdx].forceFieldCommandBuffer;
+    beginScenePassSecondary(frameIdx, cb);
     recordForceFieldInto(cb, frameIdx, 0, ForceFieldPipeline::EDrawPart::Proxies);
     cb.end();
-    CommandBuffer& unionCb = frameData.forceUnionCommandBuffer;
-    unionCb.begin(false, &inheritance);
-    recordForceFieldInto(unionCb, frameIdx, 0, ForceFieldPipeline::EDrawPart::UnionMarch);
-    unionCb.end();
+}
+
+void Renderer::recordForceUnion(uint32 frameIdx)
+{
+    CommandBuffer& cb = m_perFrameData[frameIdx].forceUnionCommandBuffer;
+    beginScenePassSecondary(frameIdx, cb);
+    recordForceFieldInto(cb, frameIdx, 0, ForceFieldPipeline::EDrawPart::UnionMarch);
+    cb.end();
 }
 
 // Force grid build + per-emitter force / point-query dispatches (outside any render pass, after the
@@ -3020,8 +2868,7 @@ void Renderer::recordForceCompute(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.forceComputeCommandBuffer;
-    vk::CommandBufferInheritanceInfo inheritance;
-    cb.begin(false, &inheritance);
+    beginComputeSecondary(cb);
     m_forceFieldPipeline.recordCompute(cb, frameIdx, frameData.ubo);
     cb.end();
 }
@@ -3067,8 +2914,7 @@ void Renderer::recordAO(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.aoCommandBuffer;
-    vk::CommandBufferInheritanceInfo inheritance;
-    cb.begin(false, &inheritance);
+    beginComputeSecondary(cb);
     const vk::AccelerationStructureKHR tlas = m_accelStructure.getTlas(frameIdx);
     if (m_rtParams.enabled && m_rtaoParams.enabled && m_meshInfoCounter > 0 && tlas)
     {
@@ -3094,8 +2940,7 @@ void Renderer::recordVolumetricFog(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.volumetricFogCommandBuffer;
-    vk::CommandBufferInheritanceInfo inheritance;
-    cb.begin(false, &inheritance);
+    beginComputeSecondary(cb);
     const vk::AccelerationStructureKHR tlas = m_accelStructure.getTlas(frameIdx);
     if (m_rtParams.enabled && m_meshInfoCounter > 0 && tlas)
     {
@@ -3120,9 +2965,8 @@ void Renderer::recordVolumetricFog(uint32 frameIdx)
 void Renderer::recordFogApply(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
-    vk::CommandBufferInheritanceInfo inheritance{ .renderPass = frameData.sceneColor.getRenderPass() };
     CommandBuffer& cb = frameData.fogApplyCommandBuffer;
-    vk::CommandBuffer vkCb = cb.begin(false, &inheritance);
+    vk::CommandBuffer vkCb = beginScenePassSecondary(frameIdx, cb);
 
     // Fullscreen triangle in full-render-target UV space (like the composite), scissored to the viewport.
     const vk::Extent2D extent = m_swapChain.getLayout().extent;
@@ -3147,8 +2991,7 @@ void Renderer::recordTaa(uint32 frameIdx)
     PerFrameData& frameData = m_perFrameData[frameIdx];
     SceneColor& sceneColor = frameData.sceneColor;
     CommandBuffer& cb = frameData.taaCommandBuffer;
-    vk::CommandBufferInheritanceInfo inheritance;
-    cb.begin(false, &inheritance);
+    beginComputeSecondary(cb);
     const uint32 prevFrameIdx = (frameIdx + 1) % RendererVKLayout::NUM_FRAMES_IN_FLIGHT;
     TaaPipeline::RecordParams taaParams{
         .ubo = frameData.ubo,
@@ -3168,8 +3011,7 @@ void Renderer::recordEyeAdaptation(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& cb = frameData.eyeAdaptCommandBuffer;
-    vk::CommandBufferInheritanceInfo inheritance;
-    cb.begin(false, &inheritance);
+    beginComputeSecondary(cb);
     // TAA OFF: the pass is not recorded or executed at all (see recordCommandBuffers), so the
     // post chain reads this frame's scene colour directly instead of TAA's resolved image.
     const bool taaOn = m_taaParams.taaEnabled;
@@ -3271,8 +3113,7 @@ void Renderer::recordGlobalIllumPrep(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
     CommandBuffer& prepCommandBuffer = frameData.giPrepCommandBuffer;
-    vk::CommandBufferInheritanceInfo inheritance;
-    vk::CommandBuffer vkPrepCommandBuffer = prepCommandBuffer.begin(false, &inheritance);
+    vk::CommandBuffer vkPrepCommandBuffer = beginComputeSecondary(prepCommandBuffer);
 
     // RT master toggle off: nothing is built (no acceleration-structure churn - diagnostic A/B); the
     // cached secondary then holds only the sky map bake.
@@ -3513,6 +3354,26 @@ void Renderer::executeScoped(vk::CommandBuffer primary, const char* scope, vk::C
 }
 
 // Every cached secondary, on invalidation frames only (setHaveToRecordCommandBuffers).
+// THE scene stage table (see Renderer.ixx): name, gate, cached secondary and per-eye inline recorder.
+// Table order is draw order - the opaque group first (it writes the depth), then the layered group.
+// The GI probe impostors WRITE depth (they sort among themselves through gl_FragDepth), so they run
+// with the opaque scene; the AO trace and the decals then see them as geometry (debug only).
+oc::array<Renderer::SceneStage, 8> Renderer::buildSceneStages(uint32 frameIdx)
+{
+    PerFrameData& f = m_perFrameData[frameIdx];
+    const bool force = m_forceFieldParams.enabled;
+    return {
+        SceneStage{ "Static meshes",     true,  true,                             false, &f.staticMeshCommandBuffer,   &Renderer::recordStaticMesh,   &Renderer::recordStaticMeshInto },
+        SceneStage{ "GI probe debug",    true,  m_giProbePipeline.isDebugEnabled(), false, &f.giProbeDebugCommandBuffer, &Renderer::recordGiProbeDebug, nullptr },
+        SceneStage{ "Decals",            false, m_decalPipeline.isEnabled(),      false, &f.decalCommandBuffer,        &Renderer::recordDecals,       &Renderer::recordDecalsInto },
+        SceneStage{ "Debug lines",       false, m_debugLinePipeline.hasBuffers(), true,  &f.debugLineCommandBuffer,    &Renderer::recordDebugLines,   nullptr },
+        SceneStage{ "Force shells",      false, force,                            false, &f.forceFieldCommandBuffer,   &Renderer::recordForceShells,  &Renderer::recordForceFieldBothInto },
+        SceneStage{ "Force union blend", false, force,                            false, &f.forceUnionCommandBuffer,   &Renderer::recordForceUnion,   nullptr },
+        SceneStage{ "Particles",         false, m_particleParams.enabled,         false, &f.particleCommandBuffer,     &Renderer::recordParticles,    &Renderer::recordParticlesInto },
+        SceneStage{ "Fog apply",         false, m_fogParams.enabled,              false, &f.fogApplyCommandBuffer,     &Renderer::recordFogApply,     &Renderer::recordFogApplyInto },
+    };
+}
+
 void Renderer::recordSceneSecondaries(uint32 frameIdx)
 {
     PerFrameData& frameData = m_perFrameData[frameIdx];
@@ -3551,16 +3412,11 @@ void Renderer::recordSceneSecondaries(uint32 frameIdx)
     // inline in the primary in VR (recordPrimaryVR); on desktop they stay cached secondaries (one eye).
     if (m_sceneViewCount == 1)
     {
-        recordStaticMesh(frameIdx);
-        recordGiProbeDebug(frameIdx);
-        if (m_debugLinePipeline.hasBuffers())
-            recordDebugLines(frameIdx);
-        recordDecals(frameIdx);
-        recordForceField(frameIdx);
+        for (const SceneStage& stage : buildSceneStages(frameIdx))
+            if (!stage.gateRecording || stage.enabled)
+                (this->*stage.recordCached)(frameIdx);
         recordForceMarch(frameIdx);
-        recordParticles(frameIdx);
         recordAO(frameIdx);
-        recordFogApply(frameIdx);
         if (m_taaParams.taaEnabled) // bypassed entirely when off - nothing to record or execute
             recordTaa(frameIdx);
     }
@@ -3664,11 +3520,17 @@ void Renderer::recordPrimaryVR(uint32 frameIdx, CommandBuffer& commandBuffer)
     if (m_fogParams.enabled)
         executeScoped(vkCommandBuffer, "Volumetric fog", frameData.volumetricFogCommandBuffer.getCommandBuffer());
 
+    // The same stage table the desktop path executes; VR records the stages inline instead, skipping
+    // the ones with no inline recorder (the debug overlays).
+    const oc::array<SceneStage, 8> stages = buildSceneStages(frameIdx);
+    bool layered = false;
+    for (const SceneStage& stage : stages)
+        layered = layered || (!stage.opaque && stage.enabled && stage.recordInline);
+
     for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)
     {
         m_gpuProfiler.beginScope(vkCommandBuffer, eye == 0 ? "Eye L" : "Eye R");
         // This eye's forward set (last frame's AO view + TLAS) is written at scene-record time (recordSceneSecondaries).
-        const bool layered = m_decalPipeline.isEnabled() || m_forceFieldParams.enabled || m_particleParams.enabled || m_fogParams.enabled;
         vk::RenderPassBeginInfo eyeRpBegin{
             .renderPass = sceneColor.getStageRenderPass(true, !layered, false),
             .framebuffer = sceneColor.getFramebuffer(eye),
@@ -3677,7 +3539,9 @@ void Renderer::recordPrimaryVR(uint32 frameIdx, CommandBuffer& commandBuffer)
             .pClearValues = s_sceneClears.data(),
         };
         vkCommandBuffer.beginRenderPass(eyeRpBegin, vk::SubpassContents::eInline); // opaque: writes this eye's depth
-        recordStaticMeshInto(commandBuffer, frameIdx, eye);
+        for (const SceneStage& stage : stages)
+            if (stage.opaque && stage.enabled && stage.recordInline)
+                (this->*stage.recordInline)(commandBuffer, frameIdx, eye);
         vkCommandBuffer.endRenderPass();
         recordSceneDepthToSampled(vkCommandBuffer, sceneColor.getDepthImage(), eye);
 
@@ -3689,14 +3553,9 @@ void Renderer::recordPrimaryVR(uint32 frameIdx, CommandBuffer& commandBuffer)
             sceneInstanceBarrier(vkCommandBuffer);
             eyeRpBegin.renderPass = sceneColor.getStageRenderPass(false, true, true);
             vkCommandBuffer.beginRenderPass(eyeRpBegin, vk::SubpassContents::eInline);
-            if (m_decalPipeline.isEnabled())
-                recordDecalsInto(commandBuffer, frameIdx, eye);
-            if (m_forceFieldParams.enabled)
-                recordForceFieldInto(commandBuffer, frameIdx, eye);
-            if (m_particleParams.enabled)
-                recordParticlesInto(commandBuffer, frameIdx, eye);
-            if (m_fogParams.enabled)
-                recordFogApplyInto(commandBuffer, frameIdx, eye);
+            for (const SceneStage& stage : stages)
+                if (!stage.opaque && stage.enabled && stage.recordInline)
+                    (this->*stage.recordInline)(commandBuffer, frameIdx, eye);
             vkCommandBuffer.endRenderPass();
         }
 
@@ -3782,53 +3641,38 @@ void Renderer::recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer vkCommand
     // the last hands colour to TAA - are compatible with the pass the secondaries/pipelines were built
     // against, since only load/store ops and layouts differ. The deps must stay identical for that
     // compatibility, so the inter-instance attachment hazards get an explicit barrier.
-    struct SceneStage { const char* name; vk::CommandBuffer cb; bool enabled; };
-    // The GI probe impostors WRITE depth (they sort among themselves through gl_FragDepth), so they
-    // run with the opaque scene; the AO trace and the decals then see them as geometry (debug only).
-    const oc::array<SceneStage, 2> opaqueStages{
-        SceneStage{ "Static meshes", frameData.staticMeshCommandBuffer.getCommandBuffer(), true },
-        SceneStage{ "GI probe debug", frameData.giProbeDebugCommandBuffer.getCommandBuffer(), m_giProbePipeline.isDebugEnabled() },
-    };
-    const oc::array<SceneStage, 6> layeredStages{
-        SceneStage{ "Decals", frameData.decalCommandBuffer.getCommandBuffer(), m_decalPipeline.isEnabled() },
-        SceneStage{ "Debug lines", frameData.debugLineCommandBuffer.getCommandBuffer(), m_debugLinePipeline.hasBuffers() },
-        SceneStage{ "Force shells", frameData.forceFieldCommandBuffer.getCommandBuffer(), m_forceFieldParams.enabled },
-        SceneStage{ "Force union blend", frameData.forceUnionCommandBuffer.getCommandBuffer(), m_forceFieldParams.enabled },
-        SceneStage{ "Particles", frameData.particleCommandBuffer.getCommandBuffer(), m_particleParams.enabled },
-        SceneStage{ "Fog apply", frameData.fogApplyCommandBuffer.getCommandBuffer(), m_fogParams.enabled },
-    };
-    const SceneStage* lastStage = &opaqueStages[0]; // static meshes are always on
-    for (const SceneStage& stage : opaqueStages)
-        if (stage.enabled)
-            lastStage = &stage;
-    for (const SceneStage& stage : layeredStages)
+    const oc::array<SceneStage, 8> stages = buildSceneStages(frameIdx);
+    const SceneStage* lastStage = &stages[0]; // static meshes are always on
+    for (const SceneStage& stage : stages)
         if (stage.enabled)
             lastStage = &stage;
     bool firstInstance = true;
-    const auto runStage = [&](const SceneStage& stage, bool depthReadOnly)
+    const auto runStage = [&](const SceneStage& stage)
     {
         if (!stage.enabled)
             return;
         if (!firstInstance)
             sceneInstanceBarrier(vkCommandBuffer);
         const vk::RenderPassBeginInfo sceneRpBegin{
-            .renderPass = sceneColor.getStageRenderPass(firstInstance, &stage == lastStage, depthReadOnly),
+            .renderPass = sceneColor.getStageRenderPass(firstInstance, &stage == lastStage, !stage.opaque),
             .framebuffer = sceneColor.getFramebuffer(),
             .renderArea = sceneArea,
             .clearValueCount = (uint32)s_sceneClears.size(), // ignored by the loadOp LOAD variants
             .pClearValues = s_sceneClears.data(),
         };
+        const vk::CommandBuffer stageCb = stage.cb->getCommandBuffer();
         m_gpuProfiler.beginScope(vkCommandBuffer, stage.name);
         vkCommandBuffer.beginRenderPass(sceneRpBegin, vk::SubpassContents::eSecondaryCommandBuffers);
-        vkCommandBuffer.executeCommands(1, &stage.cb);
+        vkCommandBuffer.executeCommands(1, &stageCb);
         vkCommandBuffer.endRenderPass();
         m_gpuProfiler.endScope(vkCommandBuffer);
         firstInstance = false;
     };
 
     m_gpuProfiler.beginScope(vkCommandBuffer, "Scene opaque");
-    for (const SceneStage& stage : opaqueStages)
-        runStage(stage, false);
+    for (const SceneStage& stage : stages)
+        if (stage.opaque)
+            runStage(stage);
     recordSceneDepthToSampled(vkCommandBuffer, sceneColor.getDepthImage(), 0);
     m_gpuProfiler.endScope(vkCommandBuffer); // Scene opaque
 
@@ -3861,8 +3705,9 @@ void Renderer::recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer vkCommand
     // The stages layered over the opaque scene: the depth is their READ-ONLY attachment, which they
     // also sample (decals, soft particles, force shells, fog apply). None of their pipelines writes depth.
     m_gpuProfiler.beginScope(vkCommandBuffer, "Scene forward");
-    for (const SceneStage& stage : layeredStages)
-        runStage(stage, true);
+    for (const SceneStage& stage : stages)
+        if (!stage.opaque)
+            runStage(stage);
     m_gpuProfiler.endScope(vkCommandBuffer); // Scene forward
 
     // SceneColor's render pass has no 0->EXTERNAL dependency of its own (must stay dependency-identical
@@ -3958,10 +3803,10 @@ void Renderer::recordCommandBuffers()
     // Live tunables + delta time into the mapped params buffer (no command-buffer re-record needed).
     if (m_meshInstanceCounter > 0)
     {
-        static Clock::time_point lastTime = Clock::now();
         const Clock::time_point now = Clock::now();
-        const float deltaSeconds = oc::min(std::chrono::duration<float>(now - lastTime).count(), 0.25f);
-        lastTime = now;
+        const float deltaSeconds = m_haveEyeAdaptTime ? oc::min(std::chrono::duration<float>(now - m_eyeAdaptLastTime).count(), 0.25f) : 0.0f;
+        m_eyeAdaptLastTime = now;
+        m_haveEyeAdaptTime = true;
         m_eyeAdaptationPipeline.updateParams(frameIdx, m_postParams, deltaSeconds);
     }
 
@@ -4231,7 +4076,7 @@ uint32 Renderer::addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>& mesh
     m_numInstancesPerMesh.resize(m_meshInfoCounter);
     m_meshVertexCounts.insert(m_meshVertexCounts.end(), vertexCounts.begin(), vertexCounts.end());
     m_meshIsSkinnedOutput.resize(m_meshInfoCounter, skinnedOutputs ? 1 : 0);
-    m_meshToLodGroup.resize(m_meshInfoCounter, UINT32_MAX);
+    m_meshLods.resizeMeshMapping(m_meshInfoCounter);
     assert(m_meshInfoCounter < USHRT_MAX);
 
     m_meshInfosBuffer.appendToBackingStore<RendererVKLayout::MeshInfo>(meshInfos);
@@ -4247,8 +4092,7 @@ uint32 Renderer::addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>& mesh
             meshInfos.data(), baseMeshInfoIdx * sizeof(RendererVKLayout::MeshInfo));
         // Fresh mesh slots must read as "no LOD chain" on the GPU (device memory starts undefined;
         // addMeshLodGroup overwrites the chained ones right after).
-        uploadToSharedBuffer(m_meshLodGroupIdxBuffer, meshInfos.size() * sizeof(uint32),
-            m_meshToLodGroup.data() + baseMeshInfoIdx, (size_t)baseMeshInfoIdx * sizeof(uint32));
+        m_meshLods.uploadMeshMapping(baseMeshInfoIdx, (uint32)meshInfos.size());
     }
 
     // After the capacity check: the alias buffer is grown by resizeBlasAddressBuffer inside
@@ -4445,7 +4289,7 @@ Stats Renderer::getStats()
     stats.numMeshSets = meshStreamStats.numSets;
     stats.numEvictedMeshSets = meshStreamStats.numEvictedSets;
 
-    stats.numMeshLodGroups = (uint32)m_meshLodGroups.size();
+    stats.numMeshLodGroups = m_meshLods.getNumGroups();
     static_assert(sizeof(stats.lodInstanceCounts) == sizeof(uint32) * RendererVKLayout::MAX_MESH_LODS);
     // GPU-written, snapshotted in beginFrame - a few frames behind, and counting VISIBLE picks only.
     for (uint32 i = 0; i < RendererVKLayout::MAX_MESH_LODS; ++i)

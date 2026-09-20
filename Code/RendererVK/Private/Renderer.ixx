@@ -50,6 +50,8 @@ import :Light;
 import :GpuCrashTracker;
 import :Settings;
 import :RenderNode;
+import :SlotTable;
+import :MeshLodRegistry;
 
 import Core.fwd;
 
@@ -59,69 +61,6 @@ static_assert(oc::size(ForceFieldParams{}.teamColors) == RendererVKLayout::MAX_F
 export enum class EValidation { ENABLED, DISABLED };
 export enum class EVr { ENABLED, DISABLED };
 
-// Recycles contiguous slot ranges freed by destroyed ObjectContainers (mesh infos, materials, instance
-// offsets, skinning jobs, ...). Ranges stay sorted and coalesced; allocation is best-fit so small
-// requests don't shred the large holes. All quantities are element counts, not bytes.
-export struct IndexRangeFreeList
-{
-    struct Range { uint32 base; uint32 count; };
-
-    uint32 allocate(uint32 count)
-    {
-        int32 best = -1;
-        for (int32 i = 0; i < (int32)m_ranges.size(); ++i)
-            if (m_ranges[i].count >= count && (best < 0 || m_ranges[i].count < m_ranges[best].count))
-                best = i;
-        if (best < 0)
-            return UINT32_MAX;
-        const uint32 base = m_ranges[best].base;
-        m_ranges[best].base += count;
-        m_ranges[best].count -= count;
-        if (m_ranges[best].count == 0)
-            m_ranges.erase(m_ranges.begin() + best);
-        return base;
-    }
-
-    void release(uint32 base, uint32 count)
-    {
-        if (count == 0)
-            return;
-        auto it = oc::lower_bound(m_ranges.begin(), m_ranges.end(), base,
-            [](const Range& range, uint32 b) { return range.base < b; });
-        it = m_ranges.insert(it, Range{ base, count });
-        if (auto next = it + 1; next != m_ranges.end() && it->base + it->count == next->base)
-        {
-            it->count += next->count;
-            m_ranges.erase(next);
-        }
-        if (it != m_ranges.begin() && (it - 1)->base + (it - 1)->count == it->base)
-        {
-            (it - 1)->count += it->count;
-            m_ranges.erase(it);
-        }
-    }
-
-private:
-    oc::vector<Range> m_ranges; // sorted by base, no two adjacent
-};
-
-// One mesh LOD chain: global mesh indices per level ([0] = full resolution) sharing one set of local
-// bounds. Registered by ObjectContainer at load, referenced by RenderNode::m_lodInstances; selection
-// happens per instance on the GPU (mesh_lod.inc.glsl in the cull shaders), fed by the GpuMeshLodGroup
-// mirror this registers.
-export struct MeshLodGroup
-{
-    uint16 meshIdx[RendererVKLayout::MAX_MESH_LODS] = {};
-    uint8 numLods = 0;
-    glm::vec3 center = glm::vec3(0.0f); // LOD0 local bounds
-    float radius = 0.0f;
-    // Geometric deviation of each level from LOD0 in mesh-local units (meshopt simplify error x mesh
-    // extents), 0 for level 0. Drives screen-space-error selection: a level is usable when its error
-    // projects below "LOD/Max error (px)". All-zero (authored chains without error data) falls back to
-    // the projected-size metric.
-    float errors[RendererVKLayout::MAX_MESH_LODS] = {};
-    uint32 lastUseFrame = UINT32_MAX; // frame stamp for the once-per-frame chain-warmth noteUse
-};
 
 export class Renderer final
 {
@@ -240,7 +179,7 @@ public:
     // The particle emitter slot the ocean spray producer (ocean_spray.cs.glsl, the particle GPU spawn
     // path) spawns into - the first emitter of the Particle system's Effects/ocean_spray.pfx instance.
     // UINT32_MAX = no spray. Main thread after the begin-frame join (the scene-focus pattern).
-    void setOceanSprayEmitter(uint32 slot) { m_oceanSprayEmitter = slot; }
+    void setOceanSprayEmitter(uint32 slot) { m_oceanSimPipeline.setSprayEmitter(slot); }
     void addDecal(const RendererVKLayout::DecalInfo& decal); // [Concurrency: LOCK-FREE]
     // Loads a standalone texture (path relative to Assets/) into the bindless array for particle
     // emitters / decals to reference (ParticleEmitterGpu::texFlags.x, DecalInfo::params.x).
@@ -576,6 +515,14 @@ private:
     void buildUboOcean();
     void buildUboForce();
     void buildUboTerrain();
+
+    // The two shapes every cached secondary begins with; each caller still ends its own cb.
+    vk::CommandBuffer beginComputeSecondary(CommandBuffer& cb);              // outside any render pass
+    vk::CommandBuffer beginScenePassSecondary(uint32 frameIdx, CommandBuffer& cb); // continues the scene-colour pass
+    // The viewport/scissor every full-res scene stage sets: y-flipped over m_viewportRect, scissored
+    // to the whole swapchain extent.
+    void setFullViewport(vk::CommandBuffer vkCb) const;
+
     void recordSkinning(uint32 frameIdx);
     void recordOceanSim(uint32 frameIdx);
     void recordTerrainWetness(uint32 frameIdx);
@@ -602,9 +549,14 @@ private:
     void recordParticlesInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
     void recordDecals(uint32 frameIdx);
     void recordDecalsInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
-    void recordForceField(uint32 frameIdx);
+    // Two secondaries so the GPU profiler scopes the proxy ray-march and the union blend separately.
+    void recordForceShells(uint32 frameIdx);
+    void recordForceUnion(uint32 frameIdx);
     void recordForceFieldInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex,
         ForceFieldPipeline::EDrawPart part = ForceFieldPipeline::EDrawPart::Both);
+    // VR records both parts in one go; a default argument cannot ride a member-function pointer.
+    void recordForceFieldBothInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
+    { recordForceFieldInto(cb, frameIdx, eyeIndex, ForceFieldPipeline::EDrawPart::Both); }
     void recordForceCompute(uint32 frameIdx);
     void recordForceMarch(uint32 frameIdx);
     void recordAO(uint32 frameIdx);
@@ -613,6 +565,25 @@ private:
     void recordTaa(uint32 frameIdx);
     void recordEyeAdaptation(uint32 frameIdx);
     void recordComposite(uint32 frameIdx);
+
+    // ---- THE scene stage table: one declaration per stage drawn inside the scene-colour pass ----
+    // recordSceneSecondaries (what to cache), recordPrimaryDesktop (what to execute, and in which
+    // render-pass instance) and recordPrimaryVR (what to record inline per eye) all read it, so a
+    // stage is added, re-ordered or re-gated in exactly ONE place. Table order IS draw order.
+    struct SceneStage
+    {
+        const char* name;
+        bool opaque;        // runs with the depth-WRITING group, before the read-only switch
+        bool enabled;       // this frame's gate: desktop executes it, VR records it inline
+        bool gateRecording; // ALSO gate the cached record. Debug lines only - its vertex buffers may
+                            // not exist yet and record() would bind a null one. Every other stage
+                            // records unconditionally: their enable tweaks force no re-record, so a
+                            // skipped record would leave a stale secondary when one comes back on.
+        CommandBuffer* cb;                                              // the cached secondary (desktop)
+        void (Renderer::*recordCached)(uint32);                         // fills cb
+        void (Renderer::*recordInline)(CommandBuffer&, uint32, uint32); // VR, per eye; null = desktop only
+    };
+    oc::array<SceneStage, 8> buildSceneStages(uint32 frameIdx);
     // Re-allocates the variable-count texture-array descriptors when the live texture count outgrew them
     // (TextureManager::getGeneration bumped). Runs at beginFrame AND again in present() before recording,
     // because containers loaded after beginFrame (terrain streaming, mid-frame spawns) upload textures
@@ -626,6 +597,13 @@ private:
     void recreateSwapchain();
     void createLightGridBuffers();
     void initImgui(Window& window);
+    // initialize(), in call order. Each is a phase of one construction sequence - none is re-entrant
+    // and none may be called on its own.
+    void registerTweaks();                                                  // every tweak the Renderer owns
+    bool initDeviceAndSwapchain(Window& window, EValidation validation, EVr vr); // instance/device/XR/surface/swapchain + the global managers
+    void initPipelines();                                                   // the scene targets and every pipeline over them
+    void initPerFrameResources();                                           // per-slot descriptor sets, command buffers and mapped buffers
+    void initSharedBuffers();                                               // the frame-independent scene buffers + the fallback textures
 
     friend class ObjectContainer;
     void addObjectContainer(ObjectContainer* pObjectContainer);
@@ -670,47 +648,24 @@ private:
     uint16 getRtMeshAlias(uint16 meshIdx) const { return (uint16)m_accelStructure.getMeshAlias(meshIdx); }
     uint32 addMaterialInfos(const oc::vector<RendererVKLayout::MaterialInfo>& materialInfos);
     uint32 addMeshInstanceOffsets(const oc::vector<RendererVKLayout::MeshInstanceOffset>& meshInstanceOffsets);
+    // GPU LOD selection lives in m_meshLods; only the RT-alias half is the Renderer's, because the
+    // aliases are AccelerationStructure state.
     uint32 addMeshLodGroup(const MeshLodGroup& group)
     {
-        uint32 groupIdx;
-        if (!m_freeMeshLodGroups.empty())
-        {
-            groupIdx = m_freeMeshLodGroups.back();
-            m_freeMeshLodGroups.pop_back();
-            m_meshLodGroups[groupIdx] = group;
-        }
-        else
-        {
-            m_meshLodGroups.push_back(group);
-            groupIdx = (uint32)m_meshLodGroups.size() - 1;
-            if ((uint32)m_meshLodGroups.size() > m_maxMeshLodGroups)
-                growMeshLodGroupCapacity((uint32)m_meshLodGroups.size());
-        }
         // One shared BLAS per chain: every level aliases the RT level's geometry (rays don't need
         // per-level fidelity), so only that level's BLAS is ever built.
         const uint8 rtLevel = (uint8)oc::clamp(m_rtParams.blasLodLevel, 0, (int)group.numLods - 1);
         for (uint8 k = 0; k < group.numLods; ++k)
             m_accelStructure.setMeshAlias(group.meshIdx[k], group.meshIdx[rtLevel]);
-        // GPU LOD selection: publish the group and point every member mesh at it.
-        uploadMeshLodGroup(groupIdx);
-        for (uint8 k = 0; k < group.numLods; ++k)
-            setMeshLodGroupIdx(group.meshIdx[k], groupIdx);
-        return groupIdx;
+        return m_meshLods.addGroup(group);
     }
-    // Frees a LOD group: detaches its member meshes from GPU selection, then recycles the slot.
-    void freeMeshLodGroup(uint32 groupIdx)
-    {
-        const MeshLodGroup& group = m_meshLodGroups[groupIdx];
-        for (uint8 k = 0; k < group.numLods; ++k)
-            setMeshLodGroupIdx(group.meshIdx[k], UINT32_MAX);
-        m_freeMeshLodGroups.push_back(groupIdx);
-    }
-    void uploadMeshLodGroup(uint32 groupIdx);
-    void setMeshLodGroupIdx(uint16 meshIdx, uint32 groupIdx);
+    void freeMeshLodGroup(uint32 groupIdx) { m_meshLods.freeGroup(groupIdx); }
     // Per-instance LOD hysteresis state slots (GPU), one contiguous range per RenderNode with LOD chains.
-    uint32 allocateLodStateRange(uint32 count);
-    void growLodStateCapacity(uint32 needed);
-    void growMeshLodGroupCapacity(uint32 needed);
+    uint32 allocateLodStateRange(uint32 count)
+    {
+        const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
+        return m_meshLods.allocateStateRange(count);
+    }
     uint32 addSkinnedMeshSources(const oc::vector<RendererVKLayout::SkinnedMeshSource>& sources);
     const RendererVKLayout::SkinnedMeshSource& getSkinnedMeshSource(uint32 idx) const { return m_skinnedMeshSources[idx]; }
 
@@ -817,9 +772,7 @@ private:
     ForceFieldPipeline m_forceFieldPipeline;
     // CPU emitter slot table, re-uploaded per frame; retired slots keep their KILL flag alive until the
     // sim has drained their particles, then recycle.
-    oc::vector<RendererVKLayout::ParticleEmitterGpu> m_particleEmitters;
-    oc::vector<uint32> m_freeParticleEmitterSlots;
-    oc::vector<oc::pair<uint32, uint32>> m_retiredParticleEmitters; // slot, retire frame
+    RecycledSlotTable<RendererVKLayout::ParticleEmitterGpu> m_particleEmitters;
     oc::vector<oc::pair<uint16, uint16>> m_particleSpawnRequests;   // emitter slot, count
     ParticleParams m_particleParams;   // the "Particles" tweaks (sim + weather), see Settings.ixx
     uint32 m_particleDropLogFrame = 0; // rate limiter for the always-on pool-exhaustion warning (0 = not warning)
@@ -834,9 +787,6 @@ private:
     };
     RainOcclusionVolume m_rainVolumeRequest;
     RainOcclusionVolume m_rainVolume;
-    // Ocean spray (the particle GPU spawn path's first producer; "Ocean/Spray *" tweaks, Ubo::oceanSpray0/1).
-    uint32 m_oceanSprayEmitter = UINT32_MAX; // setOceanSprayEmitter
-    OceanSprayParams m_oceanSprayParams;
     // Pool init/reset request. Cleared only AFTER a frame that carried reset=1 AND executed the sim was
     // actually submitted: a reset consumed by a frame that never runs (acquire failure -> early return,
     // no mesh instances so the sim CB is skipped) would leave the dead stack empty forever, silently
@@ -845,12 +795,8 @@ private:
     // CPU force-emitter slot table (Force library), compact-uploaded per frame; destroyed slots stay
     // reserved (FORCE_FLAG_ACTIVE cleared) until the in-flight frames drain, then recycle - the
     // per-emitter force readback is slot-indexed and must never pair a new emitter with stale results.
-    oc::vector<RendererVKLayout::ForceEmitterGpu> m_forceEmitters;
-    oc::vector<uint32> m_freeForceEmitterSlots;
-    oc::vector<oc::pair<uint32, uint32>> m_retiredForceEmitters; // slot, retire frame
-    oc::vector<RendererVKLayout::ForceQueryGpu> m_forceQueries;   // persistent query slots (same contract)
-    oc::vector<uint32> m_freeForceQuerySlots;
-    oc::vector<oc::pair<uint32, uint32>> m_retiredForceQuerySlots;
+    RecycledSlotTable<RendererVKLayout::ForceEmitterGpu> m_forceEmitters;
+    RecycledSlotTable<RendererVKLayout::ForceQueryGpu> m_forceQueries; // persistent query slots (same contract)
     oc::vector<glm::ivec4> m_forceBakeChunks; // this frame's baked-field chunk set (main-thread)
     float m_forceBakeSampleY = 1.0f;
     bool m_forceShellBakeActive = false; // a large emitter qualified for the sampled shell tier
@@ -963,8 +909,7 @@ private:
     oc::vector<uint32> m_meshVertexCounts;    // exact per-MeshInfo vertex count (BLAS maxVertex)
     oc::vector<uint8> m_meshIsSkinnedOutput;  // per MeshInfo: skinned output region (no static BLAS build)
     oc::vector<uint32> m_pendingBlasRebuilds; // re-streamed meshes awaiting a BLAS rebuild in recordGlobalIllum
-    oc::vector<MeshLodGroup> m_meshLodGroups;
-    oc::vector<uint32> m_meshToLodGroup; // per MeshInfo: owning MeshLodGroup (UINT32_MAX = no chain); mirrors m_meshLodGroupIdxBuffer
+    MeshLodRegistry m_meshLods; // the chains, the per-mesh mapping and the GPU selection buffers
     oc::array<uint32, RendererVKLayout::MAX_MESH_LODS> m_lodInstanceCounts{}; // stats snapshot of the GPU cull's per-level picks
     oc::vector<uint32> m_freeRenderNodeIndexes;
     oc::vector<SkinnedInstanceBundle> m_skinnedBundles;
@@ -977,10 +922,14 @@ private:
     IndexRangeFreeList m_freeInstanceOffsetSlots;
     IndexRangeFreeList m_freeSkinnedSourceSlots;
     IndexRangeFreeList m_freeSkinningJobSlots;      // freed slots stay inert (vertexCount/indexCount 0)
-    oc::vector<uint32> m_freeMeshLodGroups;
     oc::vector<uint32> m_freeSkinningPaletteHandles; // regions reused on exact boneCount match
     oc::vector<uint32> m_freeSkinnedBundleSlots;
     oc::vector<uint16> m_pendingTextureFrees; // images possibly still sampled in flight; freed in present() after the GPU drain
+
+    // Eye adaptation's wall delta. A member, not a function-local static: /Zc:threadSafeInit- leaves
+    // a non-constant-initialized local static unguarded, and this one is not worth the standing risk.
+    Clock::time_point m_eyeAdaptLastTime;
+    bool m_haveEyeAdaptTime = false;
 
     uint32 m_frameCounter = 0; // monotonic; rotates the GI probe ray/taa samples set each frame
     uint32 m_meshInfoCounter = 0;
@@ -998,17 +947,6 @@ private:
     Buffer m_materialInfosBuffer;
     oc::unordered_map<uint32, uint16> m_solidColorMaterials; // packed RGB8 -> material idx (tint cache)
     Buffer m_instanceOffsetsBuffer;
-
-    // GPU LOD selection (shared, device-local): per-mesh group index, packed group data, and the
-    // per-instance hysteresis state the main cull reads/writes (advisory only - the shader clamps
-    // whatever it reads into the frame's valid band, so cross-frame races and garbage are benign).
-    Buffer m_meshLodGroupIdxBuffer;
-    Buffer m_meshLodGroupsBuffer;
-    Buffer m_lodLevelStateBuffer;
-    IndexRangeFreeList m_freeLodStateSlots;
-    uint32 m_lodStateCounter = 0;
-    uint32 m_maxLodStateSlots = RendererVKLayout::INITIAL_LOD_STATE_SLOTS;
-    uint32 m_maxMeshLodGroups = RendererVKLayout::INITIAL_MESH_LOD_GROUPS;
 
     struct PerFrameData
     {

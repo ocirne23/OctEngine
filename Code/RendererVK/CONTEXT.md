@@ -520,7 +520,7 @@ is BEST-FIT so small requests do not shred the large holes.**
 * **`RenderNode` is ONE CACHE LINE** (`static_assert`): transform slot, skinned bundle handle, LOD
   state base, the upload-state byte, local bounds and the mesh-instance vector. Everything else the
   push needs is derived from renderer tables: per-mesh instance counts from the instances themselves,
-  an instance's LOD chain from `m_meshToLodGroup[meshIdx]` (instances reference the LOD0 mesh), the
+  an instance's LOD chain from `MeshLodRegistry::getGroupIdxForMesh` (instances reference the LOD0 mesh), the
   skinning palette from the bundle (`setSkinningPalette(node, palette)`). Do not add per-node side
   vectors.
 * **Destroying a RenderNode recycles without GPU sync**: transform slots are free-listed, skinned
@@ -618,10 +618,11 @@ the TLAS instance `sbtOffset` for hit-shader fetches, and materials stay per-ins
 |---|---|
 | `Objects/` | Thin Vulkan wrappers: Device, SwapChain, Buffer, ComputePipeline / GraphicsPipeline, AccelerationStructure, SceneColor (colour + THE scene depth), ShadowMap, GpuProfiler, BakedWorldMap, Texture, Shader, ... |
 | `Pipeline/` | One class per pass or feature: StaticMeshGraphics, GIProbe, RTAO, TAA, VolumetricFog, EyeAdaptation, Composite, Skinning, DebugLine, Particle, Decal, ForceField, OceanSimulation, TerrainWetness, LightGrid, IndirectCull, ShadowCull, ShadowMapGraphics. **Each registers its own tweaks.** |
-| `Data/` | MeshDataManager, TextureManager, TextureStreamer, MeshStreamer, StagingManager, ShaderDatabase, GpuCrashTracker (Aftermath, runtime-loaded, optional). |
+| `Data/` | MeshDataManager, TextureManager, TextureStreamer, MeshStreamer, StagingManager, ShaderDatabase, GpuCrashTracker (Aftermath, runtime-loaded, optional), **MeshLodRegistry** (the LOD chains, the per-mesh chain mapping, the three GPU selection buffers and `IndexRangeFreeList`; the Renderer keeps only the RT-alias half of `addMeshLodGroup`). |
 | `Layout.ixx` | `RendererVKLayout` — every GPU struct and `MAX_*` cap. **Must stay in sync with `shared.inc.glsl` / `ubo.inc.glsl`.** |
 | `Settings.ixx` | The tweak-backed param structs — the ones the outside pushes in (`OceanParams`, `ForceFieldParams`) and the ones the Renderer registers itself and folds into the UBO (`SkyParams`, `FogParams`, `ParticleParams`, `OceanSprayParams`, LOD, RT, ...). **Deliberately does not import `:Layout`** — the one place both are visible static_asserts that `ForceFieldParams::teamColors` covers `MAX_FORCE_TEAMS`. |
-| `Renderer.ixx` / `.cpp` | Orchestrates everything; per-pass `record*()` methods. |
+| `Util/` | `VK`, `DDS`, `LightingUtils`, `glslang`, `stb_image`, `GridClaim` (the light/force hash grid's CPU side) and `SlotTable` (`RecycledSlotTable<T>` — the deferred-recycle slot table every emitter/query registry uses). |
+| `Renderer.ixx` / `.cpp` | Orchestrates everything; per-pass `record*()` methods. `initialize()` runs as five phases (`registerTweaks` → `initDeviceAndSwapchain` → `initPipelines` → `initPerFrameResources` → `initSharedBuffers`). **`buildSceneStages()` is THE scene stage table** — name, gate, cached secondary and per-eye inline recorder for every stage inside the scene-colour pass. `recordSceneSecondaries`, `recordPrimaryDesktop` and `recordPrimaryVR` all drive off it, so a stage is added, re-ordered or re-gated in one place; a null `recordInline` means desktop only (the debug overlays). |
 | `OpenXRSession.ixx` | VR (`Globals::openXR`, implements `IVrSession`). |
 
 ## The graphics-queue mutex
