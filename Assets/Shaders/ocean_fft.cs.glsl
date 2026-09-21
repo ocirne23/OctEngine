@@ -3,15 +3,15 @@
 // FFT ocean, pass 2/3: radix-2 Stockham inverse FFT (one axis per dispatch, push constant selects).
 //
 // One workgroup per row (or column) per layer; the whole transform runs in shared memory (all log2(N)
-// stages in a single dispatch), ping-ponging between the two halves of one shared array. Each RGBA32F
+// stages in a single dispatch), ping-ponging between the two halves of one shared array. Each RGBA16F
 // texel carries TWO packed complex signals (rg / ba) that share every twiddle, so the butterflies operate
-// on vec4s. Stockham is auto-sorting: no bit-reversal pass. The inverse transform uses e^{+i...} with no
+// on vec4s - in fp32: only the image load / store at the ends of a pass round to half. Stockham is auto-sorting: no bit-reversal pass. The inverse transform uses e^{+i...} with no
 // 1/N scale - exactly Tessendorf's h(x) = sum h~(k) e^{+ikx}.
 
 layout (local_size_x = OCEAN_FFT_SIZE / 2, local_size_y = 1, local_size_z = 1) in;
 
-layout (binding = 0, rgba32f) uniform readonly image2DArray in_data;
-layout (binding = 1, rgba32f) uniform writeonly image2DArray out_data;
+layout (binding = 0, rgba16f) uniform readonly image2DArray in_data;
+layout (binding = 1, rgba16f) uniform writeonly image2DArray out_data;
 
 layout (push_constant) uniform FftPC { uint u_axis; }; // 0 = rows (x), 1 = columns (y)
 

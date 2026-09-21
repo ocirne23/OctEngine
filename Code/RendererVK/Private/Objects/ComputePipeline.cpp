@@ -103,7 +103,7 @@ bool ComputePipeline::createPipeline(const ComputePipelineLayout& layout, vk::Pi
     };
     vk::ComputePipelineCreateInfo pipelineCreateInfo
     {
-        .flags = {},
+        .flags = Globals::device.capturePipelineStatistics() ? vk::PipelineCreateFlags(vk::PipelineCreateFlagBits::eCaptureStatisticsKHR) : vk::PipelineCreateFlags{},
         .stage =
         {
             .stage = vk::ShaderStageFlagBits::eCompute,
@@ -122,6 +122,8 @@ bool ComputePipeline::createPipeline(const ComputePipelineLayout& layout, vk::Pi
         return false;
     }
     outPipeline = pipelineResult.value;
-    Globals::device.setDebugName(outPipeline, Shader::debugName(layout.computeShaderDebugFilePath).c_str());
+    const oc::string debugName = Shader::debugName(layout.computeShaderDebugFilePath);
+    Globals::device.setDebugName(outPipeline, debugName.c_str());
+    Globals::device.logPipelineStatistics(outPipeline, debugName.c_str());
     return true;
 }

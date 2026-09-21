@@ -1,5 +1,7 @@
 module RendererVK;
 
+import Core.Log;
+import File;
 import :VK;
 import :Instance;
 import :Allocator;
@@ -76,6 +78,10 @@ bool Device::initialize()
         deviceExtensions.push_back(vk::KHRCalibratedTimestampsExtensionName);
         m_supportsCalibratedTimestamps = true;
     }
+    // Optional: per-pipeline driver statistics (register counts) for "Renderer/Log pipeline stats".
+    const bool pipelineExecutableProperties = supportsExtensions({ vk::KHRPipelineExecutablePropertiesExtensionName });
+    if (pipelineExecutableProperties)
+        deviceExtensions.push_back(vk::KHRPipelineExecutablePropertiesExtensionName);
 
     m_graphicsQueueIndex = UINT32_MAX;
     oc::vector<vk::QueueFamilyProperties> queueFamilyProperties = oc::fromStd(m_physicalDevice.getQueueFamilyProperties());
@@ -167,8 +173,12 @@ bool Device::initialize()
         .pNext = &rayQueryFeatures,
         .deviceGeneratedCommands = vk::True
     };
-    vk::DeviceCreateInfo deviceCreateInfo{
+    vk::PhysicalDevicePipelineExecutablePropertiesFeaturesKHR pipelineExecutableFeatures{
         .pNext = &dgcFeatures,
+        .pipelineExecutableInfo = vk::True
+    };
+    vk::DeviceCreateInfo deviceCreateInfo{
+        .pNext = pipelineExecutableProperties ? (void*)&pipelineExecutableFeatures : (void*)&dgcFeatures,
         .queueCreateInfoCount = (uint32)deviceQueueCreateInfos.size(),
         .pQueueCreateInfos = deviceQueueCreateInfos.data(),
         .enabledLayerCount = (uint32)0,
@@ -257,6 +267,14 @@ bool Device::initialize()
     pfVkCreateIndirectExecutionSetEXT = (PFN_vkCreateIndirectExecutionSetEXT)m_device.getProcAddr("vkCreateIndirectExecutionSetEXT");
     pfVkDestroyIndirectExecutionSetEXT = (PFN_vkDestroyIndirectExecutionSetEXT)m_device.getProcAddr("vkDestroyIndirectExecutionSetEXT");
     pfVkUpdateIndirectExecutionSetPipelineEXT = (PFN_vkUpdateIndirectExecutionSetPipelineEXT)m_device.getProcAddr("vkUpdateIndirectExecutionSetPipelineEXT");
+
+    if (pipelineExecutableProperties)
+    {
+        m_pfnGetPipelineExecutableProperties = (PFN_vkGetPipelineExecutablePropertiesKHR)m_device.getProcAddr("vkGetPipelineExecutablePropertiesKHR");
+        m_pfnGetPipelineExecutableStatistics = (PFN_vkGetPipelineExecutableStatisticsKHR)m_device.getProcAddr("vkGetPipelineExecutableStatisticsKHR");
+        if (!m_pfnGetPipelineExecutableProperties)
+            m_pfnGetPipelineExecutableStatistics = nullptr; // capturePipelineStatistics() checks only this one
+    }
 
     if (m_supportsCalibratedTimestamps)
         pfVkGetCalibratedTimestampsKHR = (PFN_vkGetCalibratedTimestampsKHR)m_device.getProcAddr("vkGetCalibratedTimestampsKHR");
@@ -534,6 +552,55 @@ void Device::endDebugLabel(vk::CommandBuffer cmd) const
 {
     if (m_pfnEndDebugLabel)
         m_pfnEndDebugLabel((VkCommandBuffer)cmd);
+}
+
+void Device::logPipelineStatistics(vk::Pipeline pipeline, const char* name)
+{
+    if (!capturePipelineStatistics() || !pipeline)
+        return;
+    const VkPipelineInfoKHR pipelineInfo{ .sType = VK_STRUCTURE_TYPE_PIPELINE_INFO_KHR, .pipeline = (VkPipeline)pipeline };
+    uint32 numExecutables = 0;
+    if (m_pfnGetPipelineExecutableProperties((VkDevice)m_device, &pipelineInfo, &numExecutables, nullptr) != VK_SUCCESS || numExecutables == 0)
+        return;
+    oc::vector<VkPipelineExecutablePropertiesKHR> executables(numExecutables,
+        VkPipelineExecutablePropertiesKHR{ .sType = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_PROPERTIES_KHR });
+    if (m_pfnGetPipelineExecutableProperties((VkDevice)m_device, &pipelineInfo, &numExecutables, executables.data()) != VK_SUCCESS)
+        return;
+
+    // One line per stage: <pipeline>\t<stage>\t<statistic>=<value>... (tab-separated, easy to diff).
+    oc::string text;
+    oc::vector<VkPipelineExecutableStatisticKHR> statistics;
+    for (uint32 i = 0; i < numExecutables; ++i)
+    {
+        const VkPipelineExecutableInfoKHR executableInfo{ .sType = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INFO_KHR, .pipeline = (VkPipeline)pipeline, .executableIndex = i };
+        uint32 numStatistics = 0;
+        if (m_pfnGetPipelineExecutableStatistics((VkDevice)m_device, &executableInfo, &numStatistics, nullptr) != VK_SUCCESS)
+            continue;
+        statistics.assign(numStatistics, VkPipelineExecutableStatisticKHR{ .sType = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_STATISTIC_KHR });
+        if (m_pfnGetPipelineExecutableStatistics((VkDevice)m_device, &executableInfo, &numStatistics, statistics.data()) != VK_SUCCESS)
+            continue;
+        oc::string line = oc::format("{}\t{}", name, executables[i].name);
+        for (const VkPipelineExecutableStatisticKHR& statistic : statistics)
+        {
+            // Integers print their LOW 32 bits: the NVIDIA driver reports "Local Memory Size" as 2^36 + bytes
+            // on every stage (0, 32, 80, ... in the low word); every other statistic is far below 2^32.
+            switch (statistic.format)
+            {
+            case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_BOOL32_KHR: line += oc::format("\t{}={}", statistic.name, statistic.value.b32 != 0); break;
+            case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_INT64_KHR:  line += oc::format("\t{}={}", statistic.name, (uint32)statistic.value.i64); break;
+            case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR: line += oc::format("\t{}={}", statistic.name, (uint32)statistic.value.u64); break;
+            default:                                                 line += oc::format("\t{}={}", statistic.name, statistic.value.f64); break;
+            }
+        }
+        Log::info(line);
+        text += line + "\n";
+    }
+
+    // Pipelines are created on main (startup, F5, tweak reloads); the mutex only keeps the text whole if
+    // one is ever created elsewhere.
+    std::lock_guard<std::mutex> lock(m_pipelineStatsMutex);
+    m_pipelineStatsText += text;
+    (void)FileSystem::writeFileStr("Local/pipeline_stats.txt", m_pipelineStatsText, /*allowMainThread*/ true);
 }
 
 bool Device::supportsExtensions(oc::vector<const char*> extensions)

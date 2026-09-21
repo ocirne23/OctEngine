@@ -6,8 +6,8 @@
 #extension GL_ARB_shading_language_420pack : enable
 
 // FFT ocean clipmap vertex shader (EPipelineIndex::Ocean) - the former OCEAN variant of
-// instanced_indirect.vs.glsl, split into its own file. Same pipeline layout, vertex input and output
-// interface as the shared static-mesh VS (it feeds the same DGC execution set), but the position path
+// instanced_indirect.vs.glsl, split into its own file. Same pipeline layout and vertex input as the
+// shared static-mesh VS (it feeds the same DGC execution set; the outputs are its own), but the position path
 // is the ocean displacement: the texcoord carries (ring cell size, morph weight). Over each ring's
 // outer band the CDLOD morph collapses odd vertices onto the next ring's coarser (2*cell) lattice
 // while the sampled mip blends +1, so adjacent rings meet exactly. The displaced position samples the
@@ -42,7 +42,6 @@ layout (location = 3) in vec2 in_uv; // (ring cell size, morph weight) baked by 
 layout (location = 4) in uint inst_idx;
 
 layout (location = 0) out vec3 out_pos;
-layout (location = 1) out mat3 out_tbn;
 layout (location = 4) out vec2 out_uv;
 layout (location = 5) out flat uint out_meshIdxMaterialIdx;
 
@@ -85,7 +84,6 @@ void main()
         // Whole triangle footprint is buried under land: a NaN position discards every primitive using
         // this vertex before rasterization.
         out_pos = basePos;
-        out_tbn = mat3(1.0);
         out_uv = basePos.xz;
         gl_Position = vec4(uintBitsToFloat(0x7FC00000u));
         return;
@@ -104,7 +102,6 @@ void main()
     }
     else
         out_pos += oceanSampleDisplacement(basePos.xz, ringCell, ringMorph, shoreHW);
-    out_tbn = mat3(vec3(1.0, 0.0, 0.0), vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 0.0));
     out_uv  = basePos.xz;
 
     // Per-eye projection in VR (g_viewIndex set above) / centre view on desktop, with the same TAA

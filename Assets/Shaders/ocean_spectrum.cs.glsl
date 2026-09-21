@@ -16,7 +16,7 @@
 // breaking-crest foam criterion - a crest whose downward acceleration exceeds a fraction of g is
 // breaking, which is what makes LARGE waves foam (their Jacobian folding is choppiness-scaled and weak).
 // All spectra are Hermitian, so pairs pack as one complex signal each (IFFT(A + iB) = a + ib for real
-// a, b): 5 complex signals = 3 RGBA32F layers per cascade (rg = first complex, ba = second).
+// a, b): 5 complex signals = 3 RGBA16F layers per cascade (rg = first complex, ba = second).
 //
 // Cascades band-split the wavenumber range (each keeps [kmin, kmax)) so summing them never duplicates
 // energy - the standard multi-patch setup used by e.g. the Atlas ocean (GDC 2019) and GodotOceanWaves.
@@ -25,7 +25,7 @@
 
 layout (local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-layout (binding = 1, rgba32f) uniform writeonly image2DArray out_spectrum;
+layout (binding = 1, rgba16f) uniform writeonly image2DArray out_spectrum;
 
 const float PI = 3.14159265359;
 const float G = 9.81;

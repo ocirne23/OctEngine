@@ -727,6 +727,42 @@ not only with validation — the validation messenger stays validation-only.
   trigger.
 * Not named: the OpenXR session's own command pool and clear buffer (raw C API, no `:Device` import).
 
+## Pipeline statistics (register counts)
+
+`VK_KHR_pipeline_executable_properties` (optional, enabled when offered). **"Renderer/Log pipeline
+stats"** (not Saved, off): pipelines created while it is on carry `CAPTURE_STATISTICS`, and
+`Device::logPipelineStatistics` writes one tab-separated line per stage - `<debug name> <VS|FS|CS>
+Register Count=.. Binary Size=.. Local Memory Size=.. ...` - to the log AND to
+`Assets/Local/pipeline_stats.txt` (appended since startup; F5 re-creates the pipelines and appends a new
+block). Unattended: `App.exe --quit-after 20 --tweak "Renderer/Log pipeline stats=1"`, then read the file.
+
+* **Register Count sets the occupancy**; a non-zero **Local Memory Size** is spilled registers or
+  dynamically indexed local arrays (both go through L1TEX). Integers print their low 32 bits: the NVIDIA
+  driver reports Local Memory Size as 2^36 + bytes.
+* Measure **RelWithDebInfo** for real numbers: Debug adds `SHADER_STATS` to the cull shaders.
+* Compute and graphics pipelines (every variant) report under their debug name; ImGui's do not.
+
+## Half floats (fp16) - measured on the RTX 4090, 2026-09-21
+
+* **16-bit STORAGE of data that is streamed pays; fp16 MATH / stored halves do not.** On Ampere/Ada plain
+  fp16 math runs at the fp32 rate, and a half that is only stored (math still fp32) is NOT packed: it takes
+  a full 32-bit register. Halving the lit core's surface values (colours, roughness) left registers x 4 +
+  local memory unchanged (352 B/thread) - the driver only moved the register/spill split (72 -> 80 regs).
+  Layout (f16vec3 vs f16vec4) and where glslang puts the OpFConvert made no difference at all.
+* **Kept: the BRDF colour side is REAL fp16 math** (`punctual_lights.inc.glsl`, `computeLitColor`):
+  Fresnel, kD, the diffuse colour and the specular colour factor stay f16vec3 from the material inputs and
+  widen ONCE, where they multiply the fp32 radiance. Lit FS local memory 64 -> 48 B (72 regs); terrain and
+  ocean unchanged. The GGX D / visibility terms, NdotL/HdotV and all radiance stay fp32 (roughness^4
+  underflows in half, HDR overflows). Every caller of `doLight*` needs
+  `GL_EXT_shader_explicit_arithmetic_types`.
+* **Kept: the ocean spectrum / FFT images are RGBA16F** (`SPECTRUM_FORMAT`): 512^2 x 9 layers streamed ~6x
+  per frame, memory-bound; Ocean sim 0.216 -> 0.179 ms. The butterflies stay fp32 in shared memory.
+* **Tried and dropped** (no gain): the terrain splat's TerrainSample in half; a compact half LightInfo (the
+  compiler loads light fields at use, so the record size does not set the peak); a D16 shadow map (Shadow
+  draw unchanged - geometry-bound, D32 is compressed). **Not worth it:** the GI probe buffer (in volume mode
+  only the trace and the bake read it, and it is the fp32 temporal HISTORY - fp16 would round small blend
+  steps away), BakedWorldMap (heights need fp32), vertex attributes (vertex work is tiny).
+
 ## The graphics-queue mutex
 
 **`StagingManager` is THREAD-SAFE** — one internal mutex over the ring and region lists, `upload*`

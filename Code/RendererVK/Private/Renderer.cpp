@@ -122,6 +122,7 @@ void Renderer::registerTweaks()
     m_particles.registerTweaks();
     m_oceanSimPipeline.registerSprayTweaks();
     m_decalPipeline.registerTweaks();
+    Tweak::boolean("Renderer", "Log pipeline stats", &Device::s_logPipelineStats); // F5 re-creates the pipelines with it
 
     Tweak::boolean("Time", "VSync", &m_vsyncEnabled, [this]() { if (m_initialized) recreateSwapchain(); }, ETweakFlags::Saved);
 }

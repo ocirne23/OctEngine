@@ -170,32 +170,63 @@ float pcssBorder(vec4 pa, vec4 pb, int ca, int cb, float texelUV, vec2 rotSC, fl
 	return mix(sumA / nA, sumB / nB, t);
 }
 
-// Selects the cascade, computes a cross-fade factor into the next one, and returns sun visibility.
-float sampleSunShadow(vec3 worldPos, vec3 N)
+// The cascade, the next one, and the cross-fade factor t into it: t ramps 0->1 across the last
+// SHADOW_CASCADE_BLEND fraction of this cascade's range. Returns the focus distance.
+float sunCascadeBlend(vec3 worldPos, out int cascade, out int nextCascade, out float t)
 {
-	int cascade = getSunCascade(worldPos);
-	int nextCascade = min(cascade + 1, NUM_SHADOW_CASCADES - 1);
-
-	// Blend factor t ramps 0->1 across the last SHADOW_CASCADE_BLEND fraction of this cascade's range.
+	cascade = getSunCascade(worldPos);
+	nextCascade = min(cascade + 1, NUM_SHADOW_CASCADES - 1);
 	float dist = length(worldPos - u_sceneFocus.xyz); // the cascades are concentric about the scene focus (the player in game mode)
 	float splitFar = cascadeSplit(cascade);
 	float prevSplit = (cascade > 0) ? cascadeSplit(cascade - 1) : 0.0;
 	float bandStart = mix(prevSplit, splitFar, 1.0 - SHADOW_CASCADE_BLEND);
-	float t = (cascade == nextCascade) ? 0.0 : clamp((dist - bandStart) / max(splitFar - bandStart, 1e-4), 0.0, 1.0);
+	t = (cascade == nextCascade) ? 0.0 : clamp((dist - bandStart) / max(splitFar - bandStart, 1e-4), 0.0, 1.0);
+	return dist;
+}
 
-	// Slope factor (tan of the angle between N and the sun): widen bias at grazing angles where acne
-	// and leaking appear, leaving flat-lit surfaces lightly biased. The normal offset is additionally
-	// scaled by each cascade's world texel size so near/far cascades get a matching offset.
+// Slope factor (tan of the angle between N and the sun): widen bias at grazing angles where acne
+// and leaking appear, leaving flat-lit surfaces lightly biased. The normal offset is additionally
+// scaled by each cascade's world texel size (at the call) so near/far cascades get a matching offset.
+// Distant fragments get progressively larger biases: shadow map depth precision and texel density
+// drop with distance, so the near-tuned bias starts to acne/leak far out. Ramps 1 -> MAX across the
+// full cascade range.
+void sunShadowBias(vec3 N, float dist, out float depthBias, out float normalScale)
+{
 	vec3 L = u_sunDirection.xyz; // normalized on the CPU
 	float NdotL = clamp(dot(N, L), 0.0, 1.0);
 	float slope = clamp(sqrt(1.0 - NdotL * NdotL) / max(NdotL, 1e-3), 1.0, 4.0);
-	// Distant fragments get progressively larger biases: shadow map depth precision and texel density
-	// drop with distance, so the near-tuned bias starts to acne/leak far out. Ramps 1 -> MAX across the
-	// full cascade range.
 	const float SHADOW_BIAS_DIST_MAX = 6.0;
 	float distScale = mix(0.0, SHADOW_BIAS_DIST_MAX, clamp(dist / cascadeSplit(NUM_SHADOW_CASCADES - 1), 0.0, 1.0));
-	float depthBias = u_shadowParams.x * slope * distScale;
-	float normalScale = u_shadowParams.y * slope * distScale;
+	depthBias = u_shadowParams.x * slope * distScale;
+	normalScale = u_shadowParams.y * slope * distScale;
+}
+
+// ONE hardware-PCF tap (the comparison sampler's bilinear 2x2): no blocker search, no Vogel disk. For
+// surfaces whose motion hides a penumbra (the ocean). The cascade cross-fade is a per-pixel dither
+// between the two cascades (TAA resolves it) instead of two evaluations.
+float sampleSunShadowHard(vec3 worldPos, vec3 N)
+{
+	int cascade, nextCascade;
+	float t;
+	float dist = sunCascadeBlend(worldPos, cascade, nextCascade, t);
+	if (t > interleavedGradientNoise(gl_FragCoord.xy))
+		cascade = nextCascade;
+	float depthBias, normalScale;
+	sunShadowBias(N, dist, depthBias, normalScale);
+	vec4 p = projectCascade(worldPos, N, cascade, normalScale * cascadeTexelWorldSize(cascade), depthBias);
+	if (p.w < 0.5)
+		return 1.0; // outside the cascade's coverage
+	return texture(u_shadowMap, vec4(p.xy, float(cascade), p.z));
+}
+
+// Selects the cascade, computes a cross-fade factor into the next one, and returns sun visibility.
+float sampleSunShadow(vec3 worldPos, vec3 N)
+{
+	int cascade, nextCascade;
+	float t;
+	float dist = sunCascadeBlend(worldPos, cascade, nextCascade, t);
+	float depthBias, normalScale;
+	sunShadowBias(N, dist, depthBias, normalScale);
 
 	vec4 pa = projectCascade(worldPos, N, cascade, normalScale * cascadeTexelWorldSize(cascade), depthBias);
 	if (t <= 0.0 && pa.w < 0.5)

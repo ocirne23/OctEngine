@@ -234,6 +234,8 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
         vk::PipelineShaderStageCreateInfo {.stage = vk::ShaderStageFlagBits::eFragment, .pName = "main", },
     };
     vk::PipelineCreateFlags2CreateInfo pipelineFlags2{ .flags = vk::PipelineCreateFlagBits2::eIndirectBindableEXT };
+    if (Globals::device.capturePipelineStatistics())
+        pipelineFlags2.flags |= vk::PipelineCreateFlagBits2::eCaptureStatisticsKHR;
     vk::GraphicsPipelineCreateInfo graphicsPipelineCreateInfo
     {
         .pNext = &pipelineFlags2,
@@ -293,7 +295,9 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
             assert((!assertOnFailure) && "Failed to create graphics pipeline");
             return false;
         }
-        Globals::device.setDebugName(pipeline, pipelineDebugName(layout.vertexShader, layout.fragmentShader).c_str());
+        const oc::string debugName = pipelineDebugName(layout.vertexShader, layout.fragmentShader);
+        Globals::device.setDebugName(pipeline, debugName.c_str());
+        Globals::device.logPipelineStatistics(pipeline, debugName.c_str());
         outPipelines.push_back(pipeline);
     }
 
@@ -335,7 +339,9 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
         }
         const ShaderSource& vs = variant.vertexShader.text.empty() ? layout.vertexShader : variant.vertexShader;
         const ShaderSource& fs = variant.fragmentShader.text.empty() ? layout.fragmentShader : variant.fragmentShader;
-        Globals::device.setDebugName(pipeline, oc::format("{} #{}", pipelineDebugName(vs, fs), i + 1).c_str());
+        const oc::string debugName = oc::format("{} #{}", pipelineDebugName(vs, fs), i + 1);
+        Globals::device.setDebugName(pipeline, debugName.c_str());
+        Globals::device.logPipelineStatistics(pipeline, debugName.c_str());
         outPipelines.push_back(pipeline);
     }
     return true;

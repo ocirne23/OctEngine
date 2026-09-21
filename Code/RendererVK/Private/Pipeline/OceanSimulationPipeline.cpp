@@ -9,7 +9,9 @@ import :Layout;
 
 namespace
 {
-    constexpr vk::Format SPECTRUM_FORMAT = vk::Format::eR32G32B32A32Sfloat; // 2 complex values per texel
+    // 2 complex values per texel. HALF: the passes are bound by memory traffic (512^2 x 9 layers streamed
+    // ~6x per frame), the butterflies run in fp32 shared memory, and the maps they feed are RGBA16F anyway.
+    constexpr vk::Format SPECTRUM_FORMAT = vk::Format::eR16G16B16A16Sfloat;
     constexpr vk::Format MAPS_FORMAT = vk::Format::eR16G16B16A16Sfloat;
 
     struct FftPC { uint32 axis; };        // 0 = horizontal (rows), 1 = vertical (columns)

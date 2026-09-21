@@ -49,6 +49,15 @@ public:
     void beginDebugLabel(vk::CommandBuffer cmd, const char* name) const;
     void endDebugLabel(vk::CommandBuffer cmd) const;
 
+    // VK_KHR_pipeline_executable_properties: per-stage driver statistics (register count - what sets the
+    // occupancy - instruction count, ...). "Renderer/Log pipeline stats" (not Saved; the Renderer registers
+    // it before the device exists, and F5 re-creates the pipelines): pipelines created while it is on carry
+    // CAPTURE_STATISTICS, and logPipelineStatistics writes one line per stage to the log and to
+    // Local/pipeline_stats.txt (appended since startup; a reload appends a new block).
+    static inline bool s_logPipelineStats = false;
+    bool capturePipelineStatistics() const { return s_logPipelineStats && m_pfnGetPipelineExecutableStatistics; }
+    void logPipelineStatistics(vk::Pipeline pipeline, const char* name);
+
 private:
 
     vk::PhysicalDevice m_physicalDevice;
@@ -65,6 +74,10 @@ private:
     PFN_vkSetDebugUtilsObjectNameEXT m_pfnSetDebugName = nullptr;
     PFN_vkCmdBeginDebugUtilsLabelEXT m_pfnBeginDebugLabel = nullptr;
     PFN_vkCmdEndDebugUtilsLabelEXT m_pfnEndDebugLabel = nullptr;
+    PFN_vkGetPipelineExecutablePropertiesKHR m_pfnGetPipelineExecutableProperties = nullptr;
+    PFN_vkGetPipelineExecutableStatisticsKHR m_pfnGetPipelineExecutableStatistics = nullptr;
+    std::mutex m_pipelineStatsMutex;
+    oc::string m_pipelineStatsText;
 
     oc::vector<vk::Format> m_supported2DOptimalFormats;
 };

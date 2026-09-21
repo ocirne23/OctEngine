@@ -267,7 +267,7 @@ vec3 terrainWaterFilm(vec3 body, vec3 worldPos, vec3 V, vec3 geoN, float footpri
 	// show it.
 	vec3 whitewater = vec3(0.0);
 	if (milk > 0.003 || foam > 0.003)
-		whitewater = doLight(g_sunRadianceSurface, L, V, N, vec3(0.0), u_oceanFoam.rgb * INV_PI, 0.0, 0.85, 0.7225)
+		whitewater = doLight(g_sunRadianceSurface, L, V, N, f16vec3(0.0), f16vec3(u_oceanFoam.rgb * INV_PI), 0.0, 0.85, 0.7225)
 			+ u_oceanFoam.rgb * (ambientSky + u_ambientColor);
 	tinted = mix(tinted, whitewater * 0.55, milk);
 
@@ -323,13 +323,13 @@ vec3 terrainWaterFilm(vec3 body, vec3 worldPos, vec3 V, vec3 geoN, float footpri
 	// seabed's caustic focus has no business in it (with g_sunRadiance it warped into the lobe as
 	// distorted caustics on every filmed pixel under a wave). Specular only (no diffuse term: the body
 	// already carries the ground's diffuse light, caustics included).
-	color += doLight(g_sunRadianceSurface, L, V, N, vec3(0.02), vec3(0.0), 0.0, alphaF, alphaF * alphaF);
+	color += doLight(g_sunRadianceSurface, L, V, N, f16vec3(0.02), f16vec3(0.0), 0.0, alphaF, alphaF * alphaF);
 	// Scene lights: the ocean's grid walk, SPECULAR ONLY on the film normal - the body already carries the
 	// ground's diffuse light, and the ground's wet gloss is off under this pass, so this is the one
 	// highlight, on the water's angle. Each light may cost a shadow ray: skipped under 2% visible.
 	if (mask * (1.0 - foam) > 0.02)
 	{
-		const vec3 waterSpec = vec3(0.02);
+		const f16vec3 waterSpec = f16vec3(0.02);
 		const ivec3 gridPos = getGridPos(worldPos);
 		uint tableIdx = getTableIdx(gridPos);
 		while (true)
@@ -342,11 +342,11 @@ vec3 terrainWaterFilm(vec3 body, vec3 worldPos, vec3 V, vec3 geoN, float footpri
 			{
 				const uint numLargeLights = getLargeLightCount(gridIdx);
 				for (uint i = 0; i < min(numLargeLights, MAX_LARGE_LIGHTS_PER_GRID); ++i)
-					color += doLightShadowed(in_lightInfos[getLargeLightId(gridIdx, i)], worldPos, V, N, waterSpec, vec3(0.0), 0.0, alphaF, alphaF * alphaF);
+					color += doLightShadowed(in_lightInfos[getLargeLightId(gridIdx, i)], worldPos, V, N, waterSpec, f16vec3(0.0), 0.0, alphaF, alphaF * alphaF);
 				const uint cellOffset = calcCellOffset(gridIdx, gridMin, worldPos);
 				const uint numLights = getNumLightsForCell(cellOffset);
 				for (uint i = 0; i < min(numLights, MAX_LIGHTCELL_LIGHTS); ++i)
-					color += doLightShadowed(in_lightInfos[getLightId(cellOffset, i)], worldPos, V, N, waterSpec, vec3(0.0), 0.0, alphaF, alphaF * alphaF);
+					color += doLightShadowed(in_lightInfos[getLightId(cellOffset, i)], worldPos, V, N, waterSpec, f16vec3(0.0), 0.0, alphaF, alphaF * alphaF);
 				break;
 			}
 			tableIdx = getNextTableIdx(tableIdx);

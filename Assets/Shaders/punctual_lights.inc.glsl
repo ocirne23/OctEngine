@@ -9,6 +9,7 @@
 //   - rtShadowVisibility (rt_shadow.inc.glsl) + its geometry/texture requirements
 //   - UBO (ubo.inc.glsl via shared.inc.glsl) + PI
 //   - fragment stage (gl_FragCoord-based shadow jitter)
+//   - GL_EXT_shader_explicit_arithmetic_types (the BRDF colour side is half math, see FresnelSchlick)
 
 #ifndef PUNCTUAL_LIGHTS_INC_GLSL
 #define PUNCTUAL_LIGHTS_INC_GLSL
@@ -36,12 +37,6 @@ vec2 shadowJitter()
 	const uint seed = hashU(uint(gl_FragCoord.x) * 1973u + uint(gl_FragCoord.y) * 9277u);
 	const vec2 base = vec2(float(seed & 0x00FFFFFFu), float(hashU(seed) & 0x00FFFFFFu)) / float(0x01000000u);
 	return fract(base + float(u_frameIndex) * SHADOW_TEMPORAL_OFFSET);
-}
-// 1-4 rays based on the light's apparent size: penumbra noise only matters when the emitter subtends a
-// large solid angle, so distant/small lights stay at a single ray.
-uint shadowRayCount(float lightSize, float dist)
-{
-	return clamp(uint(lightSize / max(dist, 1e-4) * 8.0), 1u, 4u);
 }
 // R2 additive recurrence offsets successive rays so they stratify over the emitter within one frame.
 #define R2_OFFSET vec2(0.7548777, 0.5698403)
@@ -103,24 +98,28 @@ vec3 FresnelSchlickRoughness(float HdotV, vec3 F0, float roughness)
 	float x2 = x * x;
 	return F0 + (max(vec3(1.0 - roughness), F0) - F0) * (x2 * x2 * x);
 }
-vec3 FresnelSchlick(float HdotV, vec3 F0)
+// The COLOUR side of the BRDF runs in HALF math - Fresnel, kD and the colour factors live in [0, 1] - and
+// its inputs (specularCol, matColOverPi) are half end to end. GGX D / visibility, N.L and the radiance stay
+// 32-bit (roughness^4 underflows in half; radiance is HDR); each colour factor widens ONCE, at the
+// multiply with the radiance.
+f16vec3 FresnelSchlick(float HdotV, f16vec3 F0)
 {
-	float x = clamp(1.0 - HdotV, 0.0, 1.0);
-	float x2 = x * x;
-	return F0 + (1.0 - F0) * (x2 * x2 * x);
+	float16_t x = float16_t(clamp(1.0 - HdotV, 0.0, 1.0));
+	float16_t x2 = x * x;
+	return F0 + (f16vec3(1.0) - F0) * (x2 * x2 * x);
 }
-vec3 doLightDiffuseOnly(vec3 lightRadiance, vec3 F, vec3 matColOverPi, float metalness, float NdotL)
+vec3 doLightDiffuseOnly(vec3 lightRadiance, f16vec3 F, f16vec3 matColOverPi, float metalness, float NdotL)
 {
-	vec3 kD = (1.0 - F) * (1.0 - metalness);
-	return kD * matColOverPi * lightRadiance * NdotL;
+	const f16vec3 kDColor = (f16vec3(1.0) - F) * matColOverPi * float16_t(1.0 - metalness);
+	return vec3(kDColor) * (lightRadiance * NdotL);
 }
-vec3 doPointLightSpecular(vec3 lightRadiance, vec3 F, float NdotL, float NdotV, float NdotH, float roughness, float roughnessSq)
+vec3 doPointLightSpecular(vec3 lightRadiance, f16vec3 F, float NdotL, float NdotV, float NdotH, float roughness, float roughnessSq)
 {
 	float NDF = DistributionGGX(NdotH, roughnessSq);
 	float Vis = V_SmithGGXCorrelatedFast(NdotV, NdotL, roughness);
-	return (NDF * Vis * F) * lightRadiance * NdotL;
+	return vec3(F) * ((NDF * Vis * NdotL) * lightRadiance);
 }
-vec3 doAreaLightSpecular(vec3 lightRadiance, vec3 Lspec, vec3 V, vec3 N, vec3 specularCol, float lightSize, float distSpec, float roughness, float roughnessSq)
+vec3 doAreaLightSpecular(vec3 lightRadiance, vec3 Lspec, vec3 V, vec3 N, f16vec3 specularCol, float lightSize, float distSpec, float roughness, float roughnessSq)
 {
 	float alphaPrime = clamp(roughness + lightSize / (2.0 * distSpec), 0.0, 1.0);
 	float ap2        = alphaPrime * alphaPrime;
@@ -132,12 +131,12 @@ vec3 doAreaLightSpecular(vec3 lightRadiance, vec3 Lspec, vec3 V, vec3 N, vec3 sp
 	float HdotV  = max(dot(H, V), 0.0);
 	float NdotH  = max(dot(N, H), 0.0);
 
-	vec3  F   = FresnelSchlick(HdotV, specularCol);
+	f16vec3 F = FresnelSchlick(HdotV, specularCol);
 	float NDF = DistributionGGX(NdotH, ap2) * sphereNorm;
 	float Vis = V_SmithGGXCorrelatedFast(NdotV, NdotL, roughness);
-	return (NDF * Vis * F) * lightRadiance * NdotL;
+	return vec3(F) * ((NDF * Vis * NdotL) * lightRadiance);
 }
-vec3 doLight(vec3 lightRadiance, vec3 L, vec3 V, vec3 N, vec3 specularCol, vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
+vec3 doLight(vec3 lightRadiance, vec3 L, vec3 V, vec3 N, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
 {
 	vec3 H = normalize(L + V);
 	float NdotL = max(dot(N, L), 0.0);
@@ -145,11 +144,11 @@ vec3 doLight(vec3 lightRadiance, vec3 L, vec3 V, vec3 N, vec3 specularCol, vec3 
 	float HdotV = max(dot(H, V), 0.0);
 	float NdotH = max(dot(N, H), 0.0);
 
-	vec3 F = FresnelSchlick(HdotV, specularCol);
+	f16vec3 F = FresnelSchlick(HdotV, specularCol);
 	vec3 specular = doPointLightSpecular(lightRadiance, F, NdotL, NdotV, NdotH, roughness, roughnessSq);
 	return specular + doLightDiffuseOnly(lightRadiance, F, matColOverPi, metalness, NdotL);
 }
-vec3 doPointLight(LightInfo light, vec3 pos, vec3 V, vec3 N, vec3 specularCol, vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
+vec3 doPointLight(LightInfo light, vec3 pos, vec3 V, vec3 N, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
 {
 	vec3 lightVec = light.pos - pos;
 	float dist = length(lightVec);
@@ -158,7 +157,7 @@ vec3 doPointLight(LightInfo light, vec3 pos, vec3 V, vec3 N, vec3 specularCol, v
 	vec3 lightRadiance = light.color * falloff;
 	return doLight(lightRadiance, L, V, N, specularCol, matColOverPi, metalness, roughness, roughnessSq);
 }
-vec3 doSpotLight(LightInfo light, vec3 pos, vec3 V, vec3 N, vec3 specularCol, vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
+vec3 doSpotLight(LightInfo light, vec3 pos, vec3 V, vec3 N, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
 {
 	vec3 lightVec = light.pos - pos;
 	float dist = length(lightVec);
@@ -199,7 +198,7 @@ void areaLightBasis(LightInfo light, out vec3 right, out vec3 up, out float half
 	halfWidth   = light.width * 0.5;
 	halfHeight  = height * 0.5;
 }
-vec3 doAreaLight(LightInfo light, vec3 pos, vec3 V, vec3 N, vec3 specularCol, vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
+vec3 doAreaLight(LightInfo light, vec3 pos, vec3 V, vec3 N, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
 {
 	vec3 right, up;
 	float halfWidth, halfHeight;
@@ -226,7 +225,7 @@ vec3 doAreaLight(LightInfo light, vec3 pos, vec3 V, vec3 N, vec3 specularCol, ve
 	float horizonVis  = smoothstep(-halfExtent, halfExtent, NdotLcenter);
 	vec3 diffRadiance = light.color * squareFalloff(distDiff, light.range) * facingDiff;
 	vec3 Hdiff        = normalize(Ldiff + V);
-	vec3 Fdiff        = FresnelSchlick(max(dot(Hdiff, V), 0.0), specularCol);
+	f16vec3 Fdiff     = FresnelSchlick(max(dot(Hdiff, V), 0.0), specularCol);
 	vec3 diffuse      = doLightDiffuseOnly(diffRadiance, Fdiff, matColOverPi, metalness, horizonVis);
 
 	// ---- Specular (representative point) -------------------------------------
@@ -266,7 +265,7 @@ vec3 doAreaLight(LightInfo light, vec3 pos, vec3 V, vec3 N, vec3 specularCol, ve
 
 	return diffuse + specular;
 }
-vec3 doTubeLight(LightInfo light, vec3 pos, vec3 V, vec3 N, vec3 specularCol, vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
+vec3 doTubeLight(LightInfo light, vec3 pos, vec3 V, vec3 N, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
 {
 	float height   = length(light.direction);
 	float halfLen  = height * 0.5;
@@ -294,7 +293,7 @@ vec3 doTubeLight(LightInfo light, vec3 pos, vec3 V, vec3 N, vec3 specularCol, ve
 
 	vec3 diffRadiance = light.color * squareFalloff(distDiff, absRange);
 	vec3 Hdiff = normalize(Ldiff + V);
-	vec3 Fdiff = FresnelSchlick(max(dot(Hdiff, V), 0.0), specularCol);
+	f16vec3 Fdiff = FresnelSchlick(max(dot(Hdiff, V), 0.0), specularCol);
 	vec3 diffuse = doLightDiffuseOnly(diffRadiance, Fdiff, matColOverPi, metalness, horizonVis);
 
 	// ---- Specular (representative point) -------------------------------------
@@ -330,7 +329,7 @@ vec3 doTubeLight(LightInfo light, vec3 pos, vec3 V, vec3 N, vec3 specularCol, ve
 
 	return diffuse + specular;
 }
-vec3 doLight(LightInfo light, vec3 pos, vec3 V, vec3 N, vec3 specularCol, vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
+vec3 doLight(LightInfo light, vec3 pos, vec3 V, vec3 N, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
 {
 	if (light.width > 0.0)
 	{
@@ -342,20 +341,17 @@ vec3 doLight(LightInfo light, vec3 pos, vec3 V, vec3 N, vec3 specularCol, vec3 m
 		return doSpotLight(light, pos, V, N, specularCol, matColOverPi, metalness, roughness, roughnessSq);
 	return doPointLight(light, pos, V, N, specularCol, matColOverPi, metalness, roughness, roughnessSq);
 }
+// Area and tube shadows: ONE ray per pixel per frame, aimed at a jittered point on the emitter. The jitter
+// is spatiotemporal (shadowJitter), so TAA integrates the penumbra over frames. A per-pixel loop of up to 4
+// stratified rays cost the lit fragments 16 registers (96 -> 80) and the terrain 80 bytes of spills
+// (128 -> 48): the loop state stayed live across every ray query + alpha-test loop it inlined.
 float areaLightVisibility(LightInfo light, vec3 pos, vec3 N)
 {
 	vec3 right, up;
 	float halfWidth, halfHeight;
 	areaLightBasis(light, right, up, halfWidth, halfHeight);
-	const uint numRays = shadowRayCount(halfWidth + halfHeight, distance(pos, light.pos));
-	const vec2 jitter = shadowJitter();
-	float vis = 0.0;
-	for (uint i = 0u; i < numRays; ++i)
-	{
-		vec2 u = fract(jitter + R2_OFFSET * float(i)) * 2.0 - 1.0;
-		vis += traceLightVisibility(pos, N, light.pos + right * (u.x * halfWidth) + up * (u.y * halfHeight));
-	}
-	return vis / float(numRays);
+	const vec2 u = shadowJitter() * 2.0 - 1.0;
+	return traceLightVisibility(pos, N, light.pos + right * (u.x * halfWidth) + up * (u.y * halfHeight));
 }
 float tubeLightVisibility(LightInfo light, vec3 pos, vec3 N)
 {
@@ -365,21 +361,13 @@ float tubeLightVisibility(LightInfo light, vec3 pos, vec3 N)
 	float radius  = abs(light.width);
 	// Sample the visible silhouette: jitter along the axis, plus a perpendicular offset within the plane
 	// facing the shaded point (the radial extent the surface actually sees).
-	vec3 toPos = pos - light.pos;
-	vec3 side  = cross(axis, toPos);
+	vec3 side  = cross(axis, pos - light.pos);
 	float sideLen = length(side);
 	side = sideLen > 1e-5 ? side / sideLen : vec3(0.0);
-	const uint numRays = shadowRayCount(halfLen + radius, length(toPos));
-	const vec2 jitter = shadowJitter();
-	float vis = 0.0;
-	for (uint i = 0u; i < numRays; ++i)
-	{
-		vec2 u = fract(jitter + R2_OFFSET * float(i)) * 2.0 - 1.0;
-		vis += traceLightVisibility(pos, N, light.pos + axis * (u.x * halfLen) + side * (u.y * radius));
-	}
-	return vis / float(numRays);
+	const vec2 u = shadowJitter() * 2.0 - 1.0;
+	return traceLightVisibility(pos, N, light.pos + axis * (u.x * halfLen) + side * (u.y * radius));
 }
-vec3 doLightShadowed(LightInfo light, vec3 pos, vec3 V, vec3 N, vec3 specularCol, vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
+vec3 doLightShadowed(LightInfo light, vec3 pos, vec3 V, vec3 N, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
 {
 	vec3 lit = doLight(light, pos, V, N, specularCol, matColOverPi, metalness, roughness, roughnessSq);
 	// The lit fragments bake the toggle (LIT_RT_LIGHT_SHADOWS 0/1): off compiles the ray queries out. The

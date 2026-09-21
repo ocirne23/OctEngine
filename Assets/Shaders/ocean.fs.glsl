@@ -1,5 +1,6 @@
 #version 460
 
+#extension GL_EXT_shader_explicit_arithmetic_types : enable // the BRDF colour side is half (punctual_lights.inc.glsl)
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 #extension GL_EXT_nonuniform_qualifier : enable
@@ -93,7 +94,6 @@ layout (binding = 9) uniform sampler2DArray u_shadowMapDepth;
 #include "reflection_fog.inc.glsl"
 
 layout (location = 0) in vec3 in_pos;                       // displaced world position
-layout (location = 1) in mat3 in_tbn;                       // placeholder (normal rebuilt here)
 layout (location = 4) in vec2 in_uv;                        // undisplaced world XZ
 layout (location = 5) in flat uint in_meshIdxMaterialIdx;
 #ifdef STEREO
@@ -297,7 +297,7 @@ vec3 shadeHit(SceneHit hit, vec3 rayDir, vec3 sunRadiance, vec3 L)
     vec3 radiance = hit.albedo * (sun / PI + (indirect + u_ambientColor) * ambientAtten);
 
 #ifdef OCEAN_HIT_LIGHTS
-    const vec3 matColOverPi = hit.albedo / PI;
+    const f16vec3 matColOverPi = f16vec3(hit.albedo / PI); // half: the BRDF colour side (punctual_lights.inc.glsl)
     const vec3 V = -rayDir;
     const ivec3 gridPos = getGridPos(hit.pos);
     uint tableIdx = getTableIdx(gridPos);
@@ -311,11 +311,11 @@ vec3 shadeHit(SceneHit hit, vec3 rayDir, vec3 sunRadiance, vec3 L)
         {
             const uint numLargeLights = getLargeLightCount(gridIdx);
             for (uint i = 0; i < min(numLargeLights, MAX_LARGE_LIGHTS_PER_GRID); ++i)
-                radiance += doLight(in_lightInfos[getLargeLightId(gridIdx, i)], hit.pos, V, hit.N, vec3(0.04), matColOverPi, 0.0, 0.7, 0.49);
+                radiance += doLight(in_lightInfos[getLargeLightId(gridIdx, i)], hit.pos, V, hit.N, f16vec3(0.04), matColOverPi, 0.0, 0.7, 0.49);
             const uint cellOffset = calcCellOffset(gridIdx, gridMin, hit.pos);
             const uint numLights = getNumLightsForCell(cellOffset);
             for (uint i = 0; i < min(numLights, MAX_LIGHTCELL_LIGHTS); ++i)
-                radiance += doLight(in_lightInfos[getLightId(cellOffset, i)], hit.pos, V, hit.N, vec3(0.04), matColOverPi, 0.0, 0.7, 0.49);
+                radiance += doLight(in_lightInfos[getLightId(cellOffset, i)], hit.pos, V, hit.N, f16vec3(0.04), matColOverPi, 0.0, 0.7, 0.49);
             break;
         }
         tableIdx = getNextTableIdx(tableIdx);
@@ -517,7 +517,7 @@ void main()
 #endif
         float sunVisU = 0.0; // for the mirrored seabed and the foam's backlight
         if (L.y > 0.0 && (traceMirror || foamW > 0.003))
-            sunVisU = u_rtSunShadow > 0.5 ? rtShadowVisibility(in_pos + N * 0.1, L, 0.05, 10000.0) : sampleSunShadow(in_pos, N);
+            sunVisU = u_rtSunShadow > 0.5 ? rtShadowVisibility(in_pos + N * 0.1, L, 0.05, 10000.0) : sampleSunShadowHard(in_pos, N);
         // The mirror: the seabed and submerged shore reflected in the underside - the same traced water
         // body the top side refracts into, along the mirrored ray.
         vec3 color = inscatterU;
@@ -591,7 +591,7 @@ void main()
     const bool sunUp = L.y > 0.0 && (NoL > 0.0 || u_oceanParams6.z > 0.0);
     const float sunVis = !sunUp ? 0.0
         : (u_rtSunShadow > 0.5 ? rtShadowVisibility(in_pos + N * 0.1, L, 0.05, 10000.0)
-                               : sampleSunShadow(in_pos, N));
+                               : sampleSunShadowHard(in_pos, N)); // one tap: the moving water hides a penumbra
     const vec3 ambientSky = skyAmbientUp(up);
     const vec3 whitewater = u_oceanFoam.rgb * (sunTint * (NoL * sunVis) / PI + ambientSky + u_ambientColor);
 
@@ -691,10 +691,10 @@ void main()
     // Scene lights (shared light-grid walk, RT-shadowed): dielectric specular + in-scatter "diffuse";
     // foam patches respond as lambertian whitewater instead.
     {
-        const vec3 matColOverPi = mix(u_oceanScatter.rgb * u_oceanScatter.w, u_oceanFoam.rgb, foamW) / PI;
+        const f16vec3 matColOverPi = f16vec3(mix(u_oceanScatter.rgb * u_oceanScatter.w, u_oceanFoam.rgb, foamW) / PI);
         const float lightRough = clamp(mix(alphaF, 0.85, foamW), 0.02, 1.0);
         const float lightRoughSq = lightRough * lightRough;
-        const vec3 waterSpec = vec3(0.02);
+        const f16vec3 waterSpec = f16vec3(0.02);
 
         const ivec3 gridPos = getGridPos(in_pos);
         uint tableIdx = getTableIdx(gridPos);

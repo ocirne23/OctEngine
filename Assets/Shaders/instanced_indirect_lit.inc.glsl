@@ -169,7 +169,7 @@ void resolveLiveDepth(vec3 worldPos)
 	g_liveWaterLevel = localWaterLevel;
 }
 
-vec3 doSunLight(vec3 worldPos, vec3 V, vec3 N, vec3 specularCol, vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
+vec3 doSunLight(vec3 worldPos, vec3 V, vec3 N, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
 {
 	const vec3 L = u_sunDirection.xyz; // normalized on the CPU (SkyParams / setSunLight)
 	if (dot(N, L) <= 0.0)
@@ -274,11 +274,14 @@ vec4 sampleAOBilateral(vec2 fullUv, vec3 pos, float viewDist)
 // term (baked texture AO on top of the screen-space term - pass 1.0 when the material carries none).
 vec3 computeLitColor(vec3 worldPos, vec3 V, vec3 N, vec3 materialColor, float roughness, float metalness, float texAO)
 {
-	const vec3 specularColor  = mix(vec3(0.04), materialColor, metalness);
+	// The BRDF's colour inputs are HALF and computed in half math, like the colour side of the BRDF itself
+	// (punctual_lights.inc.glsl FresnelSchlick): colours in [0, 1].
+	const f16vec3 materialColorH = f16vec3(materialColor);
+	const f16vec3 specularColor  = mix(f16vec3(0.04), materialColorH, float16_t(metalness));
 	const float roughnessSq = roughness * roughness;
 	// (1 - metalness) folded in ONCE: every direct-light call below passes metalness 0, so the BRDF's
 	// kD = (1 - F) * (1 - 0) and metalness is not live across the light loop (one register fewer).
-	const vec3 diffuseColOverPi = materialColor * (INV_PI * (1.0 - metalness));
+	const f16vec3 diffuseColOverPi = materialColorH * float16_t(INV_PI * (1.0 - metalness));
 
 	// The sun FIRST: its shadow search (PCSS taps or the ray-query loop) is the likely register peak, and
 	// here no AO / GI result is live across it yet.
