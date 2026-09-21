@@ -80,63 +80,39 @@ public:
     ~Renderer();
 
     bool initialize(Window& window, EValidation validation, EVr vr = EVr::DISABLED);
-    // False in headless server mode (the global exists - static init_seg - but initialize never ran).
-    // Anything that may run headless and would touch GPU/mapped state must gate on this.
+    // False in headless server mode; anything that may run headless must gate on it.
     bool isInitialized() const { return m_initialized; }
 
-    // Blocks until this frame slot's previous GPU submission has retired (the slot's fence) - the
-    // vsync/GPU throttle of the whole loop. Call it FIRST THING in the frame, before input is
-    // sampled: nothing else may write the slot's host-visible per-frame buffers before it, and
-    // waiting at the top keeps input -> sim -> present tight instead of letting the sampled input
-    // go stale during the stall. beginFrame asserts it ran; present() re-arms it.
-    // Returns true once the slot's fence is signaled (or was already waited this frame), false on
-    // timeout. The default is the blocking wait; Time::beginFrame passes a bounded timeout to wake
-    // a lead before the predicted frame start and kick the window thread's event pump, then calls
-    // again blocking. A device error recreates the swapchain and reports signaled.
+    // Waits this frame slot's fence - the vsync/GPU throttle of the whole loop. Call it FIRST THING,
+    // before input: nothing else may write the slot's host-visible buffers, and waiting at the top
+    // keeps the sampled input fresh. False = timed out (Time::beginFrame polls, then blocks).
     bool waitFrameSlot(uint64 timeoutNs = UINT64_MAX);
-    // viewportRect is the editor's viewport sub-rect within the swapchain (ignored in VR, which renders
-    // full-extent); a change to it re-records the command buffers.
-    // [Concurrency: SERIAL-OWNER of the render chain - ONE call in flight. Desktop runs it as the
-    // "Begin frame job" in the physics->world.update quiescent window (main.cpp), overlapping
-    // audio.update; nothing may touch renderer frame state until the join, and its outputs
-    // (m_centerViewProj, m_sunCascadeViewProj, the returned frustum, counter resets) are valid only
-    // after it. VR calls it on main (OpenXR poll/beginFrame + head pose live inside).]
+    // viewportRect: the editor's sub-rect of the swapchain (ignored in VR); a change re-records.
+    // [Concurrency: SERIAL OWNER of the render chain - ONE call in flight, and its outputs are valid
+    // only after the join. Nothing may touch renderer frame state in between.]
     const Frustum& beginFrame(const Camera& camera, const Rect& viewportRect);
-    // beginFrame as the High "Begin frame job": kick copies camera + rect into members (the job
-    // outlives the caller's stack) and submits; join waits, helping. In VR the kick only stores and
-    // DEFERS - join then runs beginFrame synchronously on the calling (main) thread, because
-    // xrWaitFrame owns VR pacing and would pin a worker. Renderer frame state must stay untouched
-    // between kick and join (see main.cpp's window comment).
+    // beginFrame as a job. VR defers instead: the join runs it on main, because xrWaitFrame owns VR
+    // pacing and would pin a worker.
     void kickBeginFrameJob(const Camera& camera, const Rect& viewportRect);
     void joinBeginFrameJob();
-    // The light grid merge + force grid build jobs: call after the frame's LAST light add and the
-    // force update (App: right after it).
+    // Call after the frame's LAST light add and the force update.
     void kickGridBuilds();
-    // The culling view for this frame's spatial cull, computable BEFORE beginFrame. Desktop: the
-    // exact frustum beginFrame will build (bit-identical via computeCenterViewProj). VR: LAST
-    // frame's head view - one frame of cull latency, absorbed by the culling margin - invalid on
-    // the first VR frame (the head pose arrives only inside beginFrame).
+    // The spatial cull's view, computable BEFORE beginFrame. VR serves LAST frame's head view (the
+    // pose arrives inside beginFrame), so it lags a frame and is invalid on the first one.
     CullView getCullView(const Camera& camera, const Rect& viewportRect);
-    // Desktop only (asserts !VR): the exact culling frustum beginFrame will build this frame,
-    // computable BEFORE beginFrame - the camera and viewport are final by then and TAA jitter is
-    // never baked into the mvp - so the main loop can kick the spatial cull while beginFrame still
-    // runs. Applies the viewport rect (idempotent with beginFrame's own apply) and publishes
-    // m_centerViewProj, so getCenterViewProj() serves this frame's matrix from here on. In VR the
-    // head pose only exists after openXR.beginFrame() inside beginFrame - VR culls synchronously.
+    // Desktop only (asserts !VR): bit-identical to the frustum beginFrame will build, so the cull can
+    // start while beginFrame runs. Publishes m_centerViewProj, so getCenterViewProj() serves it too.
     Frustum computeCullFrustum(const Camera& camera, const Rect& viewportRect);
-    // passMask (RendererVKLayout::PASS_* bits) selects which culled passes may draw/trace the node
-    // this frame: main view, sun shadows, ray tracing (GI/RTAO/RT shadows).
-    // [Concurrency: LOCK-FREE - callable from any job between beginFrame and present; on an
-    // overflow frame the tail that no longer fits is dropped for one frame and capacity regrows
-    // at the next beginFrame]
+    // passMask (PASS_* bits): which culled passes may draw/trace the node this frame.
+    // [Concurrency: LOCK-FREE between beginFrame and present. An overflow frame drops the tail that
+    // no longer fits; capacity regrows at the next beginFrame.]
     void renderNode(const RenderNode& node, uint32 passMask = RendererVKLayout::PASS_ALL);
     void addLightInfo(const RendererVKLayout::LightInfo& light);   // [Concurrency: LOCK-FREE]
     void addFogVolume(const RendererVKLayout::FogVolumeInfo& fogVolume); // [Concurrency: LOCK-FREE]
     void addPointLight(const PointLight& light);                   // [Concurrency: LOCK-FREE]
     void addAreaLight(const AreaLight& areaLight);                 // [Concurrency: LOCK-FREE]
     void addSpotLight(const SpotLight& spotLight);                 // [Concurrency: LOCK-FREE]
-    // World-space debug overlay line for this frame (physics collider wireframes etc.). color is
-    // packed RGBA8 with R in the low byte. Callable any time between two present() calls.
+    // One frame's world-space overlay line; color is packed RGBA8, R in the low byte.
     // [Concurrency: LOCK-FREE - per-worker staging, merged in present]
     void addDebugLine(const glm::vec3& a, const glm::vec3& b, uint32 color)
     {
@@ -146,31 +122,23 @@ public:
         verts.push_back({ b, color });
     }
     void setSunLight(const glm::vec3& direction, const glm::vec3& color, float intensity);
-    // SCENE FOCUS: the world point every distance-based quality falloff measures from (u_sceneFocus).
-    // Sun cascades: with a focus set they are nested SPHERES around it and the shader picks by
-    // distance to it, so "Shadows/Max distance" and the split lambda are metres from the point.
-    // RTAO: "Fade Start" / "Max Distance" (fade + early-out) are metres from it too. The game sets
-    // its player every windowed frame, so a camera hanging in empty sky no longer shapes either.
-    // Cleared = the camera: classic frustum-slice cascades and camera-distance falloffs.
+    // The world point every distance-based falloff measures from (u_sceneFocus). Set: the sun cascades
+    // become nested SPHERES around it and the RTAO fades are metres from it. Cleared = the camera.
     void setSceneFocus(const glm::vec3& worldPos) { m_sceneFocus = worldPos; m_sceneFocusEnabled = true; }
     void clearSceneFocus() { m_sceneFocusEnabled = false; }
-    // The GI clipmap window and the TLAS range bound centre on this too (frame-loop side, after beginFrame).
+    // The GI clipmap window and the TLAS range bound centre on this too. Valid after beginFrame.
     glm::vec3 sceneFocusOrCamera() const { return m_sceneFocusEnabled ? m_sceneFocus : m_cameraPos; }
-    // The live "Shadows" tweak block (cascade range/split/bias). setShadowParams writes the SAME
-    // members the tweak panel edits, so a caller's preset shows up there and stays editable; the
-    // game installs its top-down preset at match start and restores the sandbox values at teardown.
+    // The live "Shadows" tweaks: a pushed preset shows up in the panel and stays editable, so save the
+    // old block if you mean to restore it.
     const ShadowParams& shadowParams() const { return m_shadowParams; }
     void setShadowParams(const ShadowParams& params) { m_shadowParams = params; }
-    // The GI TLAS instance range bound ("RT/TLAS Range", m, measured from sceneFocusOrCamera): a
-    // PASS_GI push farther than this never reaches the TLAS, so a CPU pusher may drop it.
+    // Metres from sceneFocusOrCamera: a PASS_GI push farther out never reaches the TLAS, so drop it.
     float giTlasRange() const { return m_giProbePipeline.getTlasRange(); }
     void present();
 
     // ---- GPU particles + projected decals (driven by the Particle library) ----
-    // Emitter slot management is main-thread (the Particle system's serial update); addDecal is
-    // lock-free like addLightInfo. An emitter slot's GPU config is re-uploaded every frame, so
-    // updateParticleEmitter edits retroactively drive already-spawned particles.
-    // Returns UINT32_MAX when all MAX_PARTICLE_EMITTERS slots are taken.
+    // Slot management is main-thread. The slot's config re-uploads every frame, so an update drives
+    // already-spawned particles too. UINT32_MAX = all MAX_PARTICLE_EMITTERS slots taken.
     uint32 createParticleEmitter(const RendererVKLayout::ParticleEmitterGpu& desc);
     void updateParticleEmitter(uint32 slot, const RendererVKLayout::ParticleEmitterGpu& desc);
     // Queues count spawns from the slot this frame (clamped to MAX_PARTICLE_SPAWNS_PER_FRAME total).
@@ -178,57 +146,42 @@ public:
     // Flags the slot's live particles for retirement; the slot recycles once the kill has drained.
     void destroyParticleEmitter(uint32 slot);
     void resetParticles() { m_particles.requestReset(); }
-    // Rain occlusion map for the weather particle volumes (PARTICLE_FLAG_OCCLUDE): the world box the
-    // NEXT frame's top-down shelter depth pass covers (main thread, between the begin-frame join and
-    // present - the scene-focus pattern; one call per frame, the request expires each present). The map
-    // is padded 25 % in XZ over the box so the one-frame lag behind the emitter never shows. Nothing
-    // requested = the pass is skipped and the sim's shelter test is off.
+    // The world box the NEXT frame's shelter depth pass covers (PARTICLE_FLAG_OCCLUDE). Main thread,
+    // once per frame; the request expires each present, and no request = no pass and no shelter test.
     void setRainOcclusionVolume(const glm::vec3& center, const glm::vec3& halfExtents);
-    // This frame's camera position (valid after the begin-frame join): the weather volumes follow it.
+    // Valid after the begin-frame join.
     const glm::vec3& cameraPos() const { return m_cameraPos; }
-    // The particle emitter slot the ocean spray producer (ocean_spray.cs.glsl, the particle GPU spawn
-    // path) spawns into - the first emitter of the Particle system's Effects/ocean_spray.pfx instance.
-    // UINT32_MAX = no spray. Main thread after the begin-frame join (the scene-focus pattern).
+    // The emitter ocean_spray.cs.glsl spawns into; UINT32_MAX = no spray. Main thread, after the join.
     void setOceanSprayEmitter(uint32 slot) { m_oceanSimPipeline.setSprayEmitter(slot); }
     void addDecal(const RendererVKLayout::DecalInfo& decal); // [Concurrency: LOCK-FREE]
-    // Loads a standalone texture (path relative to Assets/) into the bindless array for particle
-    // emitters / decals to reference (ParticleEmitterGpu::texFlags.x, DecalInfo::params.x).
+    // Into the bindless array, for ParticleEmitterGpu::texFlags.x / DecalInfo::params.x to reference.
     uint16 loadEffectTexture(const char* filePath, bool sRGB = true);
-    // A material whose diffuse is a 1x1 solid-color texture - the per-entity TINT path: pass the
-    // returned index to RenderNode::setMaterialOverride. Cached per quantized color (repeat calls
-    // with the same color are free); main thread.
+    // The per-entity TINT path: feed the result to RenderNode::setMaterialOverride. Cached per
+    // quantized colour; main thread.
     uint16 createSolidColorMaterial(const glm::vec3& color);
 
     // ---- Forcefield bubbles (driven by the Force library) ----
-    // Emitter slot management is main-thread (the Force system's serial update is the only writer).
-    // Every live slot's GPU config is re-uploaded (compacted) each frame, so updateForceEmitter is
-    // the per-frame transform/param push. Returns UINT32_MAX when all MAX_FORCE_EMITTERS are taken.
+    // Main-thread, and every live slot re-uploads each frame, so update is the per-frame push.
+    // UINT32_MAX = all MAX_FORCE_EMITTERS slots taken.
     uint32 createForceEmitter(const RendererVKLayout::ForceEmitterGpu& desc);
     void updateForceEmitter(uint32 slot, const RendererVKLayout::ForceEmitterGpu& desc);
-    // Deactivates the slot; it recycles after the in-flight frames have drained (the per-emitter
-    // force readback is slot-indexed, so a slot must not be re-issued while stale results can land).
+    // Deactivates the slot; it recycles once the in-flight frames drain, because the readback below
+    // is slot-indexed and must never pair a new emitter with stale results.
     void destroyForceEmitter(uint32 slot);
-    // Persistent gameplay point-query slots (stable indices across the ~2-frame readback latency -
-    // deliberately NOT a lock-free per-frame push). Same main-thread + retirement contract as the
-    // emitter slots. Returns UINT32_MAX when all MAX_FORCE_QUERIES slots are taken.
+    // Persistent point-query slots - indices must stay stable across the readback latency, so this is
+    // deliberately not a per-frame push. Same contract as the emitter slots.
     uint32 createForceQuerySlot();
     void setForceQuery(uint32 slot, const glm::vec3& pos);
-    // The baked pressure field's chunk set for this frame (main-thread, with the emitter push):
-    // uploaded at present, evaluated by force_bake.cs, read back ~2 frames later.
-    void setForceBakeChunks(oc::span<const glm::ivec4> chunks, float sampleY)
-    {
-        m_force.setBakeChunks(chunks, sampleY);
-    }
-    // This frame slot's baked field + the chunk list it was evaluated for (~2 frames old).
+    // This frame's chunk set, pushed with the emitters; read back ~2 frames later.
+    void setForceBakeChunks(oc::span<const glm::ivec4> chunks, float sampleY) { m_force.setBakeChunks(chunks, sampleY); }
+    // The baked field + the chunk list it was evaluated for (~2 frames old).
     RendererVKLayout::ForceBakeReadback getForceBakeReadback() const;
     void destroyForceQuerySlot(uint32 slot);
-    // GPU readbacks, slot-indexed, ~2 frames old; valid to read between beginFrame and present.
-    // Force: xyz = applied force (opposing-field pressure integral), w = mean opposing pressure.
+    // Slot-indexed, ~2 frames old, readable between beginFrame and present.
+    // xyz = applied force (opposing-field pressure integral), w = mean opposing pressure.
     glm::vec4 getForceEmitterReadback(uint32 slot) const;
     RendererVKLayout::ForceQueryResult getForceQueryReadback(uint32 slot) const;
-    // Field/shading params: the Force library owns the tweaks and pushes the struct every frame
-    // (setOceanParams pattern). Everything lands in the per-frame UBO (live) except useGrid, which
-    // rebuilds the force pipelines (FORCE_GRID define) like the ocean hit-lighting toggle.
+    // Pushed every frame; all live except useGrid, which rebuilds the force pipelines (GPU stall).
     void setForceFieldParams(const ForceFieldParams& params);
 
     void setAmbientLight(const glm::vec3& color, float intensity) { m_skyParams.ambientColor = color; m_skyParams.ambientIntensity = intensity; }
@@ -236,87 +189,59 @@ public:
     void setSkyParams(const SkyParams& sky) { m_skyParams = sky; }
     const SkyParams& getSkyParams() const { return m_skyParams; }
     void setFogParams(const FogParams& fog) { m_fogParams = fog; }
-    // Live terrain state for the shaders: meshRadius = radius (m, radial from the camera XZ) inside which
-    // streamed terrain chunks are guaranteed resident - the fence for the ocean's land cull (0 = no
-    // terrain mesh up, cull disabled); seaLevel feeds the terrain shader's coloring. Set per frame.
-    // lapseRate = the generator's temperature change per WORLD metre above sea level (<= 0). The terrain
-    // data map bakes the SEA-LEVEL temperature baseline; this is the other half, and the shaders multiply
-    // it by the height THEY shade to get a temperature (terrainTemperatureAt). One value for the world, so
-    // no consumer can disagree with another about it; 0 = temperature does not vary with height.
+    // Per frame. meshRadius: m from the camera XZ inside which streamed chunks are resident, the fence
+    // for the ocean's land cull (0 = no terrain, cull off). lapseRate: temperature change per world
+    // metre above sea level (<= 0) - ONE value for the world, so no two consumers can disagree.
     void setTerrainParams(float meshRadius, float seaLevel, float lapseRate = 0.0f) { m_terrain.setParams(meshRadius, lapseRate, seaLevel); }
-    // The streamed-mesh coverage radius above (0 = no terrain mesh up). CPU-side ocean culling must
-    // fence on the SAME value its vertex shaders do, or it deletes water the VS would have drawn.
+    // CPU ocean culling must fence on the SAME value its vertex shaders do, or it deletes water the
+    // VS would have drawn.
     float getTerrainMeshRadius() const { return m_terrain.getMeshRadius(); }
-    // Both defined with the terrain state itself; re-spelled here for the existing call sites.
+    // Defined with the terrain state; re-spelled here for the call sites.
     using TerrainSplatMaterial = ::TerrainSplatMaterial;
     using TerrainSplatCounts = ::TerrainSplatCounts;
     using TerrainTexTweaks = ::TerrainTexTweaks;
     using TerrainWetTweaks = ::TerrainWetTweaks;
-    // Registers the terrain texture set: mats must be laid out [numGround][numRock][beach?][snow?] to
-    // match. Call once (or again to replace - old materials stay allocated, textures are freed; cheap
-    // enough for a config-tweak refresh, not a per-frame path). Textures mip-stream like cooked scene
-    // textures.
+    // mats must be laid out [numGround][numRock][beach?][snow?] to match counts. Re-registering frees
+    // the old textures but leaks the old material slots - a config refresh, not a per-frame path.
     void setTerrainSplatMaterials(oc::span<const TerrainSplatMaterial> mats, const TerrainSplatCounts& counts);
-    // The CLIMATE BOX each ground/rock entry covers, parallel to the registered mats (trailing beach/snow
-    // entries are not climate-selected; their boxes are ignored). Per box, in the generator's normalized
-    // space: xy = (t01 min, t01 max), zw = (h01 min, h01 max). Weight is 1 inside the box and
-    // Gaussian-decays outside it, so an entry that does not care about an axis leaves it full width (0..1)
-    // instead of having to claim a fictional value on it.
-    // Cheap - push it per frame. The boxes are authored in real climate units and converted through the
-    // generator's live precipitation scale, so a tweak change must reach the shader without dragging a
-    // texture re-upload behind it.
+    // One climate box per ground/rock entry, parallel to the mats (beach/snow are overlays, ignored).
+    // xy = (t01 min, max), zw = (h01 min, max); weight is 1 inside and Gaussian-decays outside, so an
+    // entry that does not care about an axis leaves it full width. Cheap - push it per frame.
     void setTerrainSplatClimate(oc::span<const glm::vec4> boxes);
     void setTerrainTextureParams(const TerrainTexTweaks& params) { m_terrain.setTexTweaks(params); }
     void setTerrainWetParams(const TerrainWetTweaks& params) { m_terrain.setWetTweaks(params); }
-    // Deepest current ocean wave trough below the calm water level (m, >= 0; the OceanGenerator estimates
-    // it from its displacement readback). Sizes the waterline band inside which the fog scatter samples
-    // the live FFT wave height for the underwater fog boundary (fogParams7.y).
+    // Deepest wave trough below the calm water level (m, >= 0). Sizes the waterline band inside which
+    // the fog scatter samples the live wave height for the underwater boundary.
     void setOceanWaveTrough(float meters) { m_oceanSimPipeline.setWaveTrough(meters); }
-    // Worst-case distance the ocean's vertex shader moves a clipmap vertex off its authored lattice
-    // position (OceanGenerator::displacementExtent). The per-instance frustum cull adds it to the ocean
-    // sectors' bounding spheres, which were built from the UNDISPLACED mesh: the choppy horizontal
-    // displacement grows with the "Choppiness" tweak, and without this it culls sectors whose crests are
-    // still on screen - gaps along the screen edges.
+    // Worst-case distance the ocean VS moves a vertex off its lattice position. The cull pads the ocean
+    // sectors' UNDISPLACED bounding spheres by it; without that, crests still on screen get culled.
     void setOceanDisplacementExtent(float meters) { m_oceanSimPipeline.setDisplacementExtent(meters); }
-    // The LIVE water surface world Y under the camera (the OceanGenerator's CPU wave-height mirror,
-    // ~2 frames of latency), or none: the particle draw's camera-side gate (Underwater / AboveWater
-    // emitters) reads it from the UBO instead of sampling the waves per particle.
+    // The live water surface Y under the camera (~2 frames of latency), or none: the Underwater /
+    // AboveWater particle gate reads it instead of sampling the waves per particle.
     void setCameraWaterSurface(float worldY) { m_oceanSimPipeline.setCameraWaterSurface(worldY); }
     void clearCameraWaterSurface() { m_oceanSimPipeline.clearCameraWaterSurface(); }
     // Flipping OceanParams::hitLighting rebuilds the ocean fragment variant (GPU idle + shader reload).
     void setOceanParams(const OceanParams& ocean);
-    // Replaces the fog terrain map (FOG_TERRAIN_CASCADES layers of FOG_TERRAIN_RES^2 RGBA texel quads,
-    // interleaved floats: R = raw world-space terrain height, G = water surface level, B = regional fog
-    // thickness [0,1], A = spare; near cascade first) centered on centerXZ; cascade i covers
-    // cascadeWorldSizes[i] meters (far cascade = same texel count over a larger range, so long-range
-    // data costs no extra memory). The height fog base rises by Fog/Terrain Follow x the local terrain
-    // height (clamped up to seaLevel, so fog rests on the water), Fog/Region strength modulates density
-    // by the fog channel, and the ocean reads the same cascades for its water depth/level (shoaling,
-    // surf, swash, land cull). Staged ping-pong (BakedWorldMap): active next frame together with its
-    // UBO center/ranges; no GPU sync, no command-buffer re-record.
+    // FOG_TERRAIN_CASCADES layers of FOG_TERRAIN_RES^2 RGBA float quads, near cascade first:
+    // R = terrain height, G = water surface level, B = regional fog thickness [0,1], A = spare.
+    // Cascade i covers cascadeWorldSizes[i] m. Both the height fog base and the ocean's water
+    // depth/level read it. Staged ping-pong: live next frame, no GPU sync and no re-record.
     void setFogTerrainHeightMap(oc::span<const float> heightTexels, const glm::vec2& centerXZ, const glm::vec2& cascadeWorldSizes, float seaLevel) { m_terrain.getHeightMap().upload(heightTexels, centerXZ, cascadeWorldSizes, seaLevel, m_swapChain.getCurrentFrameIndex()); }
     void clearFogTerrainHeightMap() { m_terrain.getHeightMap().clear(); } // fog reverts to the flat height base
-    // This frame slot's ocean displacement readback: RGBA16F texels (Dx, h, Dz, dDxz), outRes^2 per
-    // cascade, cascades packed consecutively. Safe to read between beginFrame (fence waited) and
-    // present (slot resubmits) - copy it out inside that window (Procedural::OceanGenerator does, for
-    // the buoyancy water-height queries); contents are ~2 frames old and only refresh while the ocean
-    // simulates.
+    // RGBA16F (Dx, h, Dz, dDxz), outRes^2 per cascade, cascades packed consecutively. COPY IT OUT
+    // between beginFrame and present - the slot resubmits after that. ~2 frames old.
     oc::span<const uint16> getOceanDisplacementReadback(uint32& outRes) const
     {
         outRes = OceanSimulationPipeline::READBACK_RES;
         return m_oceanSimPipeline.getDisplacementReadback(m_swapChain.getCurrentFrameIndex());
     }
     void setPostParams(const PostParams& post) { m_postParams = post; setHaveToRecordCommandBuffers(); }
-    // The UI's snapshotted ImGui draw data (an ImDrawData*, opaque here); present() records the
-    // ImGui pass from it. Null until the first UI::render - the pass is skipped.
-    // Called by the widget-pass JOB: only PENDING - present must never see a snapshot before main
-    // promoted it in updateImGuiTextures() (after the join, textures uploaded). A fast pass that
-    // finished before present N recorded would otherwise get drawn one frame early, with its
-    // freshly baked atlas texture still a create request (frame 0's atlas, every time).
+    // An ImDrawData*, opaque here. Called from the widget-pass JOB, so it only stores PENDING:
+    // present must not see a snapshot before updateImGuiTextures promoted it, or a fast pass draws a
+    // frame early with its atlas still an unserviced create request.
     void setImGuiDrawData(const void* drawData) { m_imguiPendingDrawData.store(drawData, oc::memory_order_release); }
-    // MAIN THREAD, between the widget pass's join and the next UI::update - see the comment on the
-    // implementation. Uploads the font-atlas changes ImGui queued, which RenderDrawData would
-    // otherwise do from inside present() while the widget pass mutates the same atlas.
+    // MAIN THREAD, between the widget pass's join and the next UI::update. Uploads the queued
+    // font-atlas changes, which present() would otherwise do while the widget pass mutates the atlas.
     void updateImGuiTextures();
 
     uint32 getNumMeshInstances() const { return m_instances.getInstanceCount(); }
@@ -326,13 +251,11 @@ public:
 
     void reloadShaders();
 
-    // Sun cascade matrices computed by beginFrame, for CPU-side shadow-caster queries.
-    // Zero cascades when RT sun shadows replace the cascade maps.
+    // Built by beginFrame, for CPU shadow-caster queries. Zero while RT sun shadows replace them.
     uint32 getNumSunCascades() const { return m_numSunCascades; }
     const glm::mat4* getSunCascadeViewProj() const { return m_sunCascadeViewProj; }
 
-    // The culling view-projection beginFrame built (VR: head-centred two-eye union), for CPU-side
-    // occlusion rasterization against the same view the GPU cull uses.
+    // What the GPU cull used (VR: the head-centred two-eye union), for CPU occlusion rasterization.
     const glm::mat4& getCenterViewProj() const { return m_centerViewProj; }
 
     bool isVrEnabled() const { return Globals::openXR.isEnabled(); }
@@ -340,7 +263,7 @@ public:
     bool isVrStageSpace() const { return Globals::openXR.isStageSpace(); }
     IVrSession* getVrSession() { return Globals::openXR.isEnabled() ? &Globals::openXR : nullptr; }
 
-    // The testbed keys (P / O) and the "GI/Debug probes" tweaks drive the same state, owned by the pipeline.
+    // The testbed keys (P / O) and the "GI/Debug probes" tweaks drive the same state.
     void toggleGiProbeDebug() { m_giProbePipeline.toggleDebug(); }
     void cycleGiProbeDebugMode() { m_giProbePipeline.cycleDebugMode(); setHaveToRecordCommandBuffers(); }
 
@@ -353,9 +276,8 @@ public:
     // cooked files, so they participate in the cache's options hash).
     const MeshLodParams& getLodParams() const { return m_lodParams; }
 
-    // Mesh streaming (MeshStreamer): rewrite one MeshInfo in the CPU backing store + GPU buffer.
-    // Streamed-out meshes keep their bounds but draw zero indices, so the cull's DGC draws, the shadow
-    // pass, and the TLAS-instance writer all become no-ops for them without any re-record.
+    // Mesh streaming (MeshStreamer). A streamed-out mesh keeps its bounds but draws zero indices, so
+    // the cull's DGC draws, the shadow pass and the TLAS-instance writer all no-op for it - no re-record.
     void setMeshStreamedOut(uint16 meshInfoIdx);
     void setMeshStreamedIn(uint16 meshInfoIdx, int32 vertexOffset, uint32 firstIndex, uint32 indexCount);
 
@@ -366,11 +288,8 @@ private:
     Renderer& operator=(const Renderer&) = delete;
     Renderer& operator=(const Renderer&&) = delete;
 
-    // Applied by beginFrame from its viewportRect argument, which is the only way to set it. VR renders
-    // full-extent (no editor panel sub-rect), so the rect is ignored there.
-    // An EMPTY rect is ignored (keeps the previous one): the UI widget pass runs a frame behind, so
-    // frame 0 arrives with the default Rect() - the swapchain-sized rect from initialize() stands
-    // in, instead of a 0/0 aspect reaching glm::perspective (asserted in Debug).
+    // An EMPTY rect keeps the previous one: the UI widget pass runs a frame behind, so frame 0 arrives
+    // with the default Rect() and a 0/0 aspect would reach glm::perspective.
     void setViewportRect(const Rect& rect) { if (Globals::openXR.isEnabled()) return; if (rect.getSize().x <= 0 || rect.getSize().y <= 0) return; if (rect != m_viewportRect) { m_viewportRect = rect; setHaveToRecordCommandBuffers(); } }
 
     CommandBuffer& getCurrentCommandBuffer() { return m_perFrameData[m_swapChain.getCurrentFrameIndex()].primaryCommandBuffer; }
@@ -381,22 +300,17 @@ private:
     void recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary); // skinning .. shadow draw (shared by both view modes)
     void recordPrimaryVR(uint32 frameIdx, CommandBuffer& primary);          // GI + fog, then the per-eye chain inline, eye adaptation, the eye composites
     void recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer primary);  // GI, fog, scene opaque, RTAO, force passes, scene forward, TAA, eye adaptation
-    // One GPU-profiler scope around one executeCommands.
     void executeScoped(vk::CommandBuffer primary, const char* scope, vk::CommandBuffer secondary);
-    // Rewrites swapped streamed-texture slots in this frame slot's bindless texture arrays (all
-    // consuming pipelines). Called from recordCommandBuffers, where the slot's fence has been waited.
     void initBindlessTextures(); // wires the six consumers of the bindless arrays into m_textures
-    // Texture-streaming priority pass: reports the node's projected screen size to the TextureStreamer
-    // for every material texture its instances sample (called from renderNode/renderNodeThreadSafe).
+    // Reports the node's projected screen size to the TextureStreamer, per material texture it samples.
     void noteTextureUse(const RenderNode& node, uint32 passMask);
     struct PerFrameData;
-    // Per-frame CPU side of GPU LOD selection: stamps the node's chains as used (keeps every level's
-    // mesh set warm in the mesh streamer) and publishes the node's state-slot bias for the cull shader.
+    // Keeps every level of the node's chains warm in the mesh streamer, and publishes its state-slot
+    // bias for the cull shader.
     void noteLodChainUse(const RenderNode& node, uint32 startIdx, InstanceStream::FrameSlot& instances);
 
-    // beginFrame helpers, in call order (run wherever beginFrame runs - the desktop job or main in
-    // VR; see each definition in Renderer.cpp).
-    glm::mat4 computeCenterViewProj(const Camera& camera) const; // pure: projection (VR: combined eyes) * view, from m_viewportRect
+    // beginFrame helpers, in call order; they run wherever beginFrame does.
+    glm::mat4 computeCenterViewProj(const Camera& camera) const; // pure: projection (VR: both eyes) * view
     void applyVrHeadPose(const Camera& cameraIn, Camera& camera, glm::quat& vrBaseOrientation);
     void checkFrameCapacities();
     void snapshotLodStats(PerFrameData& frameData);
@@ -410,7 +324,7 @@ private:
     void buildUboForce();
     void buildUboTerrain();
 
-    // The two shapes every cached secondary begins with; each caller still ends its own cb.
+    // Each caller ends its own cb.
     vk::CommandBuffer beginComputeSecondary(CommandBuffer& cb);              // outside any render pass
     vk::CommandBuffer beginScenePassSecondary(uint32 frameIdx, CommandBuffer& cb); // continues the scene-colour pass
     // The viewport/scissor every full-res scene stage sets: y-flipped over m_viewportRect, scissored
@@ -428,10 +342,8 @@ private:
     void recordRainOcclusionDraw(uint32 frameIdx);
     void recordStaticMesh(uint32 frameIdx);
     void recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
-    // The scene depth's ONE layout switch per frame and eye: DEPTH_STENCIL_ATTACHMENT (the depth-writing
-    // scene stages) -> SCENE_DEPTH_SAMPLED_LAYOUT (every reader after them; see SceneColor). The stage
-    // render passes perform no depth transition themselves - their dependency arrays must stay identical
-    // for render-pass compatibility.
+    // The scene depth's ONE layout switch per frame and eye. The stage render passes do no depth
+    // transition of their own - their dependency arrays must stay identical for compatibility.
     void recordSceneDepthToSampled(vk::CommandBuffer cb, vk::Image sceneDepth, uint32 eyeIndex);
     void recordAOInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
     void recordFogApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex);
@@ -460,19 +372,17 @@ private:
     void recordEyeAdaptation(uint32 frameIdx);
     void recordComposite(uint32 frameIdx);
 
-    // ---- THE scene stage table: one declaration per stage drawn inside the scene-colour pass ----
-    // recordSceneSecondaries (what to cache), recordPrimaryDesktop (what to execute, and in which
-    // render-pass instance) and recordPrimaryVR (what to record inline per eye) all read it, so a
-    // stage is added, re-ordered or re-gated in exactly ONE place. Table order IS draw order.
+    // ---- THE scene stage table ----
+    // recordSceneSecondaries, recordPrimaryDesktop and recordPrimaryVR all read it, so a stage is
+    // added, re-ordered or re-gated in exactly ONE place. Table order IS draw order.
     struct SceneStage
     {
         const char* name;
         bool opaque;        // runs with the depth-WRITING group, before the read-only switch
         bool enabled;       // this frame's gate: desktop executes it, VR records it inline
-        bool gateRecording; // ALSO gate the cached record. Debug lines only - its vertex buffers may
-                            // not exist yet and record() would bind a null one. Every other stage
-                            // records unconditionally: their enable tweaks force no re-record, so a
-                            // skipped record would leave a stale secondary when one comes back on.
+        bool gateRecording; // ALSO gate the cached record. Debug lines only: its vertex buffers may not
+                            // exist yet. Others must record unconditionally - their enable tweaks force
+                            // no re-record, so a skipped one leaves a stale secondary.
         CommandBuffer* cb;                                              // the cached secondary (desktop)
         void (Renderer::*recordCached)(uint32);                         // fills cb
         void (Renderer::*recordInline)(CommandBuffer&, uint32, uint32); // VR, per eye; null = desktop only
@@ -484,8 +394,7 @@ private:
     void setHaveToRecordCommandBuffers();
     void recreateSwapchain();
     void initImgui(Window& window);
-    // initialize(), in call order. Each is a phase of one construction sequence - none is re-entrant
-    // and none may be called on its own.
+    // initialize(), in call order; none may be called on its own.
     void registerTweaks();                                                  // every tweak the Renderer owns
     bool initDeviceAndSwapchain(Window& window, EValidation validation, EVr vr); // instance/device/XR/surface/swapchain + the global managers
     void initPipelines();                                                   // the scene targets and every pipeline over them
@@ -494,49 +403,31 @@ private:
 
     friend class ObjectContainer;
     void addObjectContainer(ObjectContainer* pObjectContainer);
-    // Container teardown (~ObjectContainer): returns every renderer resource the container (and its
-    // parked skinned bundles) allocated to the free lists. All RenderNodes spawned from the container
-    // must have been destroyed first. CPU-side slots recycle immediately; vk objects that in-flight
-    // frames may still reference (texture images, static BLASes) are retired and destroyed after the
-    // GPU drain queued for them (BindlessTextures' free queue / the AS retire queue) - freed mega-buffer/slot
-    // ranges are safe to recycle immediately since any future upload into them drains the GPU itself
-    // (see the shared-table upload note below).
+    // ~ObjectContainer. Every RenderNode it spawned must be destroyed first. CPU slots recycle at once;
+    // vk objects an in-flight frame may still sample (textures, static BLASes) retire to a drain queue.
     void removeObjectContainer(ObjectContainer* pObjectContainer);
-    // Neutralizes MeshInfo slots (zero indexCount = draws/TLAS writes no-op, like streamed-out meshes),
-    // retires their BLASes/aliases and returns the range to the free list.
+    // Zeroes the slots' indexCount, so draws and TLAS writes no-op like a streamed-out mesh, then
+    // retires their BLASes and frees the range.
     void freeMeshInfoRange(uint32 baseMeshInfoIdx, uint32 count);
-    // Full teardown of a PARKED bundle (container destruction): frees the per-instance MeshInfo range,
-    // output vertex regions, palette region, skinning-job slots and LOD groups its spawn allocated.
+    // Full teardown of a PARKED bundle: frees everything its spawn allocated.
     void destroySkinnedBundle(uint32 bundleHandle);
-    // The shared (not per-frame-in-flight) tables are read full-range every frame by GI/RTAO compute
-    // and the draw passes, so every contents-only upload into one drains the staging ring first -
-    // SharedTable::upload and MeshLodRegistry do it. See StagingManager::ensureDrainedForSharedWrite
-    // for why that per-frame-gated drain, rather than a later explicit flush, is what's required.
 
-    // PARALLEL ENTITY SPAWNING: one coarse RECURSIVE mutex over every slot/registry allocator the
-    // spawn/despawn path reaches (transform slots, mesh/material/instance-offset registries, LOD
-    // state, skinned bundles/palettes/job ranges, solid-color materials, force/particle slots).
-    // Recursive because ObjectContainer::spawnNodeForIdx/spawnSkinnedNode hold it across their whole
-    // body while calling the locked leaves below. Uncontended outside the spawn window; the parallel
-    // entity PASS never takes it (renderNode/addLightInfo/setTransform stay lock-free as before).
+    // PARALLEL ENTITY SPAWNING: one coarse mutex over every allocator the spawn/despawn path reaches.
+    // RECURSIVE because ObjectContainer::spawnNodeForIdx holds it across its whole body while calling
+    // the locked leaves below. The parallel entity PASS never takes it and stays lock-free.
     std::recursive_mutex m_spawnMutex;
 
     uint32 addRenderNodeTransform(const Transform& transform);
-    // vertexCounts: exact per-MeshInfo vertex count (parallel to meshInfos) - the BLAS builder needs a
-    // tight maxVertex per mesh and offsets are no longer monotonic with the mesh streamer's free-list.
-    // skinnedOutputs: MeshInfos pointing at per-instance skinned output regions - excluded from the
-    // one-time static BLAS builds (and thus compaction): their regions are uninitialized until the
-    // skinning compute runs, and their addresses are owned per frame slot by the skinned BLAS rebuild.
+    // vertexCounts: exact per-MeshInfo vertex count (the BLAS builder needs a tight maxVertex).
+    // skinnedOutputs: per-instance skinned output regions, which never build a static BLAS.
     uint32 addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>& meshInfos, oc::span<const uint32> vertexCounts, bool skinnedOutputs = false);
     uint16 getRtMeshAlias(uint16 meshIdx) const { return (uint16)m_rt.accel().getMeshAlias(meshIdx); }
     uint32 addMaterialInfos(const oc::vector<RendererVKLayout::MaterialInfo>& materialInfos);
     uint32 addMeshInstanceOffsets(const oc::vector<RendererVKLayout::MeshInstanceOffset>& meshInstanceOffsets);
-    // GPU LOD selection lives in m_meshLods; only the RT-alias half is the Renderer's, because the
-    // aliases are AccelerationStructure state.
+    // m_meshLods owns the selection half; only the RT aliases are the Renderer's.
     uint32 addMeshLodGroup(const MeshLodGroup& group)
     {
-        // One shared BLAS per chain: every level aliases the RT level's geometry (rays don't need
-        // per-level fidelity), so only that level's BLAS is ever built.
+        // One shared BLAS per chain: rays don't need per-level fidelity.
         const uint8 rtLevel = (uint8)oc::clamp(m_rtParams.blasLodLevel, 0, (int)group.numLods - 1);
         for (uint8 k = 0; k < group.numLods; ++k)
             m_rt.accel().setMeshAlias(group.meshIdx[k], group.meshIdx[rtLevel]);
@@ -549,8 +440,7 @@ private:
         const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
         return m_meshLods.allocateStateRange(count);
     }
-    // Skinning lives in m_skinned (SkinnedMeshRegistry); these are the spawn-path spellings the
-    // ObjectContainer / AnimatorComponent call sites use, with the spawn mutex taken where needed.
+    // m_skinned owns skinning; these are the spawn-path spellings, with the mutex taken where needed.
     using SkinnedInstanceBundle = SkinnedMeshRegistry::Bundle;
     uint32 addSkinnedMeshSources(const oc::vector<RendererVKLayout::SkinnedMeshSource>& sources)
     {
@@ -585,9 +475,7 @@ private:
         return m_skinned.allocatePalette(boneCount);
     }
     void setSkinningPalette(const RenderNode& node, oc::span<const glm::mat4> palette);
-    // A bundle's SkinningJob/SkinnedBlasBuild entries must be one contiguous range (the per-frame
-    // skinned BLAS slots are positional), so the range is allocated as a block - from the free list
-    // (destroyed containers) when one fits, appended otherwise - and filled per mesh afterwards.
+    // One contiguous block per bundle; fill it per mesh afterwards with setSkinnedInstance.
     uint32 allocateSkinningJobRange(uint32 count)
     {
         const std::lock_guard lock(m_spawnMutex);
@@ -599,9 +487,7 @@ private:
     }
 
     void waitForGpuAndFlushStaging();
-    // Everything besides the mesh-info buffer itself that a unique-mesh capacity growth resizes
-    // (SharedTable's onGrown hook): the per-frame first-instance buffers, the LOD mapping, the BLAS
-    // address buffer, the cull/draw pipelines' per-mesh arrays.
+    // SharedTable's onGrown hook: everything besides the mesh-info buffer that the capacity feeds.
     void onUniqueMeshCapacityGrown(uint32 maxUniqueMeshes);
 
 private:
@@ -612,13 +498,12 @@ private:
     SwapChain m_swapChain;
     GpuProfiler m_gpuProfiler;
     JobCounter m_gpuCollectCounter; // the in-flight timestamp-collect job (beginFrame kicks -> recordCommandBuffers joins)
-    // kickBeginFrameJob storage: the job reads these, so they only change while no job is in flight.
+    // The job reads these, so they only change while no job is in flight.
     Camera m_beginFrameJobCamera;
     Rect m_beginFrameJobRect;
     JobCounter m_beginFrameJobCounter;
     bool m_beginFrameDeferred = false; // VR: kick stored, join runs beginFrame synchronously
-    // The grid jobs (kickGridBuilds -> joinGridBuilds in present): each build's demand and whether
-    // the main thread has to grow + upload after the join.
+    // Both grid jobs share it; what each measured lives in the object that owns that grid.
     JobCounter m_gridJobCounter;
     bool m_gridBuildsKicked = false;
     void joinGridBuilds(uint32 frameIdx, PerFrameData& frameData);
@@ -640,29 +525,20 @@ private:
     TaaPipeline m_taaPipeline;
     ShadowCullComputePipeline m_shadowCullComputePipeline;
     ShadowMapGraphicsPipeline m_shadowMapGraphicsPipeline;
-    // The weather volume's top-down rain occlusion map: RAIN_OCCLUSION variants of the shadow cull +
-    // depth pipelines over a single-layer ShadowMap per frame slot (PerFrameData::rainOcclusionMap).
+    // RAIN_OCCLUSION variants of the two shadow pipelines, over PerFrameData::rainOcclusionMap.
     ShadowCullComputePipeline m_rainCullComputePipeline;
     ShadowMapGraphicsPipeline m_rainMapGraphicsPipeline;
     CompositePipeline m_compositePipeline;
     EyeAdaptationPipeline m_eyeAdaptationPipeline;
-    // The RT scene: the AccelerationStructure itself plus the CPU bookkeeping around it - the BLAS
-    // side tables, the one-time build watermark + rebuild queue, and the TLAS instance capacity.
-    RayTracingScene m_rt;
+    RayTracingScene m_rt; // the AccelerationStructure + the BLAS/TLAS bookkeeping around it
     GIProbePipeline m_giProbePipeline;
     DebugLinePipeline m_debugLinePipeline;
     ParticlePipeline m_particlePipeline;
     DecalPipeline m_decalPipeline;
     ForceFieldPipeline m_forceFieldPipeline;
-    // The GPU particle system's CPU side: emitters, this frame's spawns, the "Particles" tweaks, the
-    // weather volume's rain box and the pool reset. See ParticleState.
-    ParticleState m_particles;
-    // The force fields' whole CPU side: params, the emitter + query slot registries, the bake chunk
-    // set, and the grid job's kick/join handoff. See ForceFieldState.
-    ForceFieldState m_force;
-    // The bindless texture arrays: the layout cap, the live descriptor count, the pending slot writes
-    // and the deferred free queue. See BindlessTextures.
-    BindlessTextures m_textures;
+    ParticleState m_particles; // emitters, this frame's spawns, the tweaks, the rain box, the pool reset
+    ForceFieldState m_force; // params, the emitter + query registries, the bake chunks, the grid job
+    BindlessTextures m_textures; // the layout cap + live descriptor count, slot writes, deferred frees
     PerWorker<oc::vector<DebugLinePipeline::LineVertex>> m_debugLineVerts; // per-worker CPU staging, drained into the mapped buffer in present()
 
     SkyParams m_skyParams;
@@ -670,10 +546,7 @@ private:
     glm::vec3 m_sceneFocus = glm::vec3(0.0f); // setSceneFocus
     bool m_sceneFocusEnabled = false;
     FogParams m_fogParams;
-    // Terrain splat materials (setTerrainSplatMaterials): contiguous material range + owned textures.
-    // The terrain the outside pushes in: params, the splat set + climate, both tweak blocks, the CPU
-    // height/water map every terrain-aware pass samples, and the fixed-tick wetness state machine.
-    TerrainResources m_terrain;
+    TerrainResources m_terrain; // params, splat set + climate, the tweak blocks, the height map, wetness
     PostParams m_postParams;
     RTParams m_rtParams;
     RTAOParams m_rtaoParams;
@@ -691,9 +564,7 @@ private:
     uint32 m_numSunCascades = 0;
     glm::mat4 m_centerViewProj = glm::mat4(1.0f);
 
-    // The frame UBO, assembled by buildFrameUbo each beginFrame (one call in flight - see beginFrame's
-    // concurrency note). Persists across frames: buildUboViews reads last frame's mvps out of it for
-    // reprojection before overwriting.
+    // PERSISTS across frames: buildUboViews reprojects from last frame's mvps before overwriting them.
     RendererVKLayout::Ubo m_ubo;
 
     glm::ivec2 m_windowSize;
@@ -707,36 +578,27 @@ private:
     glm::vec2 m_prevTaaJitter{ 0.0f }; // last frame's TAA jitter (ubo.taaJitter.zw): consumers of the PREV depth image compensate with it
     uint32 m_sceneViewCount = 1; // 2 in VR: SceneColor + forward pass are multiview (one layer per eye)
 
-    // VR: per-eye LDR composite targets
-    VrEyeTargets m_vrEyes;
+    VrEyeTargets m_vrEyes; // VR: the per-eye LDR composite targets
 
 
     uint32 m_meshDataGeneration = 0; // last seen MeshDataManager::getGeneration(); change -> re-record
 
-    // Skinning: the jobs, the bone palettes, the per-container sources and the spawn bundles.
-    SkinnedMeshRegistry m_skinned;
-    // The per-frame mapped buffers the entity pass pushes into, the render-node transform slots and
-    // the lock-free instance claim. See InstanceStream.
-    InstanceStream m_instances;
-    // What the entity pass ADDS rather than draws - lights, fog volumes, decals - plus the light
-    // grid's per-slot GPU scratch. See FrameSubmission.
-    FrameSubmission m_submission;
+    SkinnedMeshRegistry m_skinned;  // the skinning jobs, bone palettes, sources and spawn bundles
+    InstanceStream m_instances;     // the per-frame mapped push buffers + the render-node transform slots
+    FrameSubmission m_submission;   // lights / fog volumes / decals, and the light grid's GPU scratch
 
     oc::vector<ObjectContainer*> m_objectContainers;
     MeshLodRegistry m_meshLods; // the chains, the per-mesh mapping and the GPU selection buffers
     oc::array<uint32, RendererVKLayout::MAX_MESH_LODS> m_lodInstanceCounts{}; // stats snapshot of the GPU cull's per-level picks
 
 
-    // Eye adaptation's wall delta. A member, not a function-local static: /Zc:threadSafeInit- leaves
-    // a non-constant-initialized local static unguarded, and this one is not worth the standing risk.
+    // A member, not a function-local static: /Zc:threadSafeInit- leaves those unguarded.
     Clock::time_point m_eyeAdaptLastTime;
     bool m_haveEyeAdaptTime = false;
 
     uint32 m_frameCounter = 0; // monotonic; rotates the GI probe ray/taa samples set each frame
 
-    // The three APPEND-ONLY device-local scene tables: storage, CPU mirror, slot recycling for
-    // destroyed ObjectContainers (holes are never compacted) and capacity growth all live in
-    // SharedTable. The Renderer keeps the parallel CPU side tables above and reacts to a growth.
+    // The Renderer keeps the parallel CPU side tables (m_rt, m_instances) and reacts to a growth.
     SharedTable<RendererVKLayout::MeshInfo> m_meshInfos;
     SharedTable<RendererVKLayout::MaterialInfo> m_materials;
     SharedTable<RendererVKLayout::MeshInstanceOffset> m_instanceOffsets;
