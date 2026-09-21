@@ -2,6 +2,7 @@ export module RendererVK;
 
 export import :Layout;
 export import :MeshLodRegistry;
+export import :SkinnedMeshRegistry;
 export import :Renderer;
 export import :ObjectContainer;
 export import :RenderNode;

@@ -229,7 +229,7 @@ counter.
 > park rather than nesting so they are immune either way.
 
 Flagged today: the UI widget pass ([UI.cpp:75](../UI/Private/UI.cpp#L75)) and the renderer's
-begin-frame job ([Renderer.cpp:643](../RendererVK/Private/Renderer.cpp#L643)).
+begin-frame job ([Renderer.cpp:690](../RendererVK/Private/Renderer.cpp#L690)).
 
 ## The external helper (the window thread)
 

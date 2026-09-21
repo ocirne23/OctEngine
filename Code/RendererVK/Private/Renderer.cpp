@@ -29,6 +29,12 @@ import :Layout;
 import :ObjectContainer;
 import :LightingUtils;
 
+// Renderer construction, the frame loop (waitFrameSlot -> beginFrame -> present) and the frame UBO
+// build. The other three implementation units of this class: RendererScene.cpp (GPU scene residency),
+// RendererRecord.cpp (command-buffer recording) and RendererSubmit.cpp (the per-frame submission
+// registries).
+
+
 Renderer::~Renderer()
 {
     auto waitResult = Globals::device.graphicsQueueWaitIdle();
@@ -36,11 +42,11 @@ Renderer::~Renderer()
     {
         assert(false && "Failed to wait for device idle in RendererVK::~RendererVK");
     }
-    // m_pendingTextureFrees is NOT processed here: ~TextureManager (init_seg XCU4, destroyed before
+    // The pending texture frees are NOT processed here: ~TextureManager (init_seg XCU4, destroyed before
     // this XCU3 global) destroys every texture wholesale, pending ones included.
     Globals::textureStreamer.shutdown(); // stop the disk worker + retire swapped-out images while the device is idle
     Globals::meshStreamer.shutdown();
-    destroyEyeCompositeTargets();
+    m_vrEyes.destroy();
     m_gpuProfiler.destroy();
     ImGui_ImplVulkan_Shutdown();
 }
@@ -58,9 +64,8 @@ bool Renderer::initialize(Window& window, EValidation validation, EVr vr)
     // Per-worker staging for the lock-free submission surface (requires the JobSystem first).
     assert(Globals::jobSystem.getNumContexts() != 0 && "initialize the JobSystem before the Renderer");
     m_debugLineVerts.initialize();
-    m_particleEmitters.initialize(RendererVKLayout::MAX_PARTICLE_EMITTERS);
-    m_forceEmitters.initialize(RendererVKLayout::MAX_FORCE_EMITTERS);
-    m_forceQueries.initialize(RendererVKLayout::MAX_FORCE_QUERIES);
+    m_particles.initialize();
+    m_force.initialize();
 
     registerTweaks(); // before the device: a Saved/override value must be live when the swapchain is made
     if (!initDeviceAndSwapchain(window, validation, vr))
@@ -84,7 +89,7 @@ void Renderer::registerTweaks()
         if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
             return;
         m_staticMeshGraphicsPipeline.setShadowDebugMode(m_shadowParams.debugMode);
-        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_maxTextures);
+        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_textures.getLayoutCap());
         setHaveToRecordCommandBuffers();
     });
     m_fogParams.registerTweaks();
@@ -98,7 +103,7 @@ void Renderer::registerTweaks()
             if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
                 return;
             m_staticMeshGraphicsPipeline.setLightGridDebugMode(m_lightGridParams.debugMode);
-            m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_maxTextures);
+            m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_textures.getLayoutCap());
             setHaveToRecordCommandBuffers();
         });
     // Wireframe is baked pipeline state (polygonMode), so flipping it rebuilds the static mesh pipeline -
@@ -106,11 +111,11 @@ void Renderer::registerTweaks()
     m_staticMeshGraphicsPipeline.registerTweaks([this]() {
         if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
             return;
-        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_maxTextures);
+        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_textures.getLayoutCap());
         setHaveToRecordCommandBuffers();
     });
     // Live toggles: the primary CB re-records every frame, so no re-record callback is needed.
-    m_particleParams.registerTweaks();
+    m_particles.registerTweaks();
     m_oceanSimPipeline.registerSprayTweaks();
     m_decalPipeline.registerTweaks();
     // Present mode is swapchain creation state (FIFO vs Immediate), so a change recreates the
@@ -178,15 +183,41 @@ void Renderer::initPipelines()
     auto rerecordCallback = [this]() { setHaveToRecordCommandBuffers(); };
     const vk::Extent2D ext = m_swapChain.getLayout().extent;
 
+    initBindlessTextures(); // the layout cap the pipelines below bake in comes from here
+
+    // The per-frame instance stream and the three append-only scene tables, FIRST: every pipeline below
+    // is sized from their capacities.
+    m_instances.initialize(RendererVKLayout::INITIAL_UNIQUE_MESHES,
+        [this]() { waitForGpuAndFlushStaging(); }, [this]() { setHaveToRecordCommandBuffers(); },
+        [this](uint32 maxInstances)
+        {
+            m_indirectCullComputePipeline.resizeInstanceBuffers(maxInstances);
+            m_shadowCullComputePipeline.resizeInstanceBuffers(maxInstances);
+            m_rainCullComputePipeline.resizeInstanceBuffers(maxInstances);
+        });
+
+    m_submission.initialize([this]() { waitForGpuAndFlushStaging(); }, [this]() { setHaveToRecordCommandBuffers(); });
+
+    // The three append-only scene tables.
+    // A growth is: GPU idle -> the table re-creates and re-uploads its own buffer -> onGrown resizes
+    // everything else that capacity feeds, and re-records.
+    const auto onGpuIdle = [this]() { waitForGpuAndFlushStaging(); };
+    constexpr vk::BufferUsageFlags2 tableUsage = vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst;
+    m_meshInfos.initialize("MeshInfos", RendererVKLayout::INITIAL_UNIQUE_MESHES, RendererVKLayout::MESH_MATERIAL_INDEX_LIMIT,
+        tableUsage, onGpuIdle, [this](uint32 capacity) { onUniqueMeshCapacityGrown(capacity); });
+    m_materials.initialize("MaterialInfos", RendererVKLayout::INITIAL_UNIQUE_MATERIALS, RendererVKLayout::MESH_MATERIAL_INDEX_LIMIT,
+        tableUsage, onGpuIdle, [this](uint32 capacity) { setHaveToRecordCommandBuffers(); printf("Renderer: grew material capacity to %u\n", capacity); });
+    m_instanceOffsets.initialize("InstanceOffsets", RendererVKLayout::INITIAL_INSTANCE_OFFSETS, UINT32_MAX,
+        tableUsage, onGpuIdle, [this](uint32 capacity) { setHaveToRecordCommandBuffers(); printf("Renderer: grew instance offset capacity to %u\n", capacity); });
+
     m_sceneViewCount = Globals::openXR.isEnabled() ? 2u : 1u;
 
     for (PerFrameData& perFrame : m_perFrameData)
         perFrame.sceneColor.initialize(RendererVKLayout::SCENE_COLOR_FORMAT, ext.width, ext.height, m_sceneViewCount);
     const vk::RenderPass sceneRenderPass = m_perFrameData[0].sceneColor.getRenderPass();
 
-    m_maxTextures = Globals::textureManager.getDescriptorCap(); // fixed layout cap; live count grows separately
-    m_staticMeshGraphicsPipeline.initialize(sceneRenderPass, m_maxUniqueMeshes, m_maxTextures, m_sceneViewCount > 1);
-    m_rtaoPipeline.initialize(&m_rtaoParams, ext.width, ext.height, m_maxTextures, m_numTextureDescriptors, m_sceneViewCount);
+    m_staticMeshGraphicsPipeline.initialize(sceneRenderPass, m_meshInfos.capacity(), m_textures.getLayoutCap(), m_sceneViewCount > 1);
+    m_rtaoPipeline.initialize(&m_rtaoParams, ext.width, ext.height, m_textures.getLayoutCap(), m_textures.getDescriptorCount(), m_sceneViewCount);
     m_oceanSimPipeline.initialize();
     // "Terrain/Wetness" Diffusion is a baked define on the wetness compute shader: GPU idle + reload +
     // re-record, the light grid's pattern.
@@ -198,15 +229,25 @@ void Renderer::initPipelines()
     });
     m_volumetricFogPipeline.initialize();
     m_volumetricFogPipeline.initializeApply(sceneRenderPass, m_sceneViewCount);
-    m_fogTerrainMap.initialize(RendererVKLayout::FOG_TERRAIN_RES, RendererVKLayout::FOG_TERRAIN_CASCADES, 4, "FogTerrainHeight"); // RGBA: terrain height, water level, fog thickness, spare
+    m_terrain.initialize();
     m_taaPipeline.initialize(ext.width, ext.height, m_sceneViewCount);
     m_eyeAdaptationPipeline.initialize();
     m_compositePipeline.initialize(m_renderPass);
-    m_indirectCullComputePipeline.initialize(m_maxInstanceData, m_maxUniqueMeshes);
-    m_skinningComputePipeline.initialize(m_maxSkinningPaletteEntries, m_maxSkinningJobs);
-    m_lightGridComputePipeline.initialize(m_lightTableEntries);
-    m_accelStructure.initialize(m_maxUniqueMeshes);
-    m_giProbePipeline.initialize(m_maxGiTlasInstances, m_maxTextures, m_numTextureDescriptors);
+    m_indirectCullComputePipeline.initialize(m_instances.getMaxInstances(), m_meshInfos.capacity());
+    m_skinningComputePipeline.initialize(m_skinned.getMaxPaletteEntries(), m_skinned.getMaxJobs());
+    m_skinned.initialize(
+        [this](uint32 entries) { waitForGpuAndFlushStaging(); m_skinningComputePipeline.resizePaletteBuffer(entries);
+            setHaveToRecordCommandBuffers(); printf("Renderer: grew skinning palette capacity to %u\n", entries); },
+        [this](uint32 jobs) { waitForGpuAndFlushStaging(); m_skinningComputePipeline.resizeJobBuffer(jobs);
+            setHaveToRecordCommandBuffers(); printf("Renderer: grew skinning job capacity to %u\n", jobs); });
+    m_lightGridComputePipeline.initialize(m_submission.getLightTableEntries());
+    m_rt.initialize(m_meshInfos.capacity(), [this]() { waitForGpuAndFlushStaging(); },
+        [this](uint32 maxInstances)
+        {
+            m_giProbePipeline.resizeTlasInstanceBuffers(maxInstances);
+            setHaveToRecordCommandBuffers(); // the cached GI secondary bakes the instance buffers + dispatch size
+        });
+    m_giProbePipeline.initialize(m_rt.getMaxTlasInstances(), m_textures.getLayoutCap(), m_textures.getDescriptorCount());
     // The GI grid shape is a #define in every probe-sampling shader (Layout.ixx g_giGrid): a change waits
     // for the GPU, re-allocates the SH clipmap, reloads EVERY shader (reloadShaders waits + re-records).
     m_giProbePipeline.registerGridTweaks(
@@ -219,22 +260,22 @@ void Renderer::initPipelines()
     m_giProbePipeline.initializeDebug(sceneRenderPass);
     m_giProbePipeline.registerDebugTweaks(rerecordCallback);
     m_debugLinePipeline.initialize(sceneRenderPass);
-    m_particlePipeline.initialize(sceneRenderPass, m_maxTextures, m_numTextureDescriptors, m_sceneViewCount);
-    m_decalPipeline.initialize(sceneRenderPass, m_maxTextures, m_numTextureDescriptors, m_sceneViewCount);
+    m_particlePipeline.initialize(sceneRenderPass, m_textures.getLayoutCap(), m_textures.getDescriptorCount(), m_sceneViewCount);
+    m_decalPipeline.initialize(sceneRenderPass, m_textures.getLayoutCap(), m_textures.getDescriptorCount(), m_sceneViewCount);
     m_forceFieldPipeline.initialize(sceneRenderPass, m_sceneViewCount);
     m_forceFieldPipeline.resizeIntervalTarget(ext.width, ext.height); // the union march's target
 
 
-    m_shadowCullComputePipeline.initialize(m_maxInstanceData, m_maxUniqueMeshes);
+    m_shadowCullComputePipeline.initialize(m_instances.getMaxInstances(), m_meshInfos.capacity());
     for (PerFrameData& perFrame : m_perFrameData)
         perFrame.shadowMap.initialize();
-    m_shadowMapGraphicsPipeline.initialize(m_perFrameData[0].shadowMap, m_maxUniqueMeshes, m_maxTextures);
+    m_shadowMapGraphicsPipeline.initialize(m_perFrameData[0].shadowMap, m_meshInfos.capacity(), m_textures.getLayoutCap());
     // The weather volume's top-down rain occlusion map: the same two pipelines in their RAIN_OCCLUSION
     // variant over a single-layer map per frame slot.
-    m_rainCullComputePipeline.initialize(m_maxInstanceData, m_maxUniqueMeshes, true);
+    m_rainCullComputePipeline.initialize(m_instances.getMaxInstances(), m_meshInfos.capacity(), true);
     for (PerFrameData& perFrame : m_perFrameData)
         perFrame.rainOcclusionMap.initialize(RendererVKLayout::RAIN_OCCLUSION_RESOLUTION, 1);
-    m_rainMapGraphicsPipeline.initialize(m_perFrameData[0].rainOcclusionMap, m_maxUniqueMeshes, m_maxTextures, true);
+    m_rainMapGraphicsPipeline.initialize(m_perFrameData[0].rainOcclusionMap, m_meshInfos.capacity(), m_textures.getLayoutCap(), true);
 }
 
 void Renderer::initPerFrameResources()
@@ -245,13 +286,13 @@ void Renderer::initPerFrameResources()
         perFrame.skinningDescriptorSet.initialize(m_skinningComputePipeline.getDescriptorSetLayout());
         perFrame.lightGridPipelineDescriptorSet.initialize(m_lightGridComputePipeline.getDescriptorSetLayout());
         for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)
-            perFrame.staticMeshPipelineDescriptorSet[eye].initialize(m_staticMeshGraphicsPipeline.getDescriptorSetLayout(), m_numTextureDescriptors);
+            perFrame.staticMeshPipelineDescriptorSet[eye].initialize(m_staticMeshGraphicsPipeline.getDescriptorSetLayout(), m_textures.getDescriptorCount());
         perFrame.compositeDescriptorSet.initialize(m_compositePipeline.getDescriptorSetLayout());
 
         perFrame.shadowCullDescriptorSet.initialize(m_shadowCullComputePipeline.getDescriptorSetLayout());
-        perFrame.shadowDrawDescriptorSet.initialize(m_shadowMapGraphicsPipeline.getDescriptorSetLayout(), m_numTextureDescriptors);
+        perFrame.shadowDrawDescriptorSet.initialize(m_shadowMapGraphicsPipeline.getDescriptorSetLayout(), m_textures.getDescriptorCount());
         perFrame.rainCullDescriptorSet.initialize(m_rainCullComputePipeline.getDescriptorSetLayout());
-        perFrame.rainDrawDescriptorSet.initialize(m_rainMapGraphicsPipeline.getDescriptorSetLayout(), m_numTextureDescriptors);
+        perFrame.rainDrawDescriptorSet.initialize(m_rainMapGraphicsPipeline.getDescriptorSetLayout(), m_textures.getDescriptorCount());
 
         perFrame.primaryCommandBuffer.initialize(vk::CommandBufferLevel::ePrimary);
         perFrame.staticMeshCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
@@ -288,90 +329,38 @@ void Renderer::initPerFrameResources()
             vk::BufferUsageFlagBits2::eUniformBuffer | vk::BufferUsageFlagBits2::eTransferDst,
             vk::MemoryPropertyFlagBits::eDeviceLocal, false, "Ubo");
 
-        perFrame.inRenderNodeTransformsBuffer.initialize(m_maxRenderNodes * sizeof(RendererVKLayout::RenderNodeTransform),
-            vk::BufferUsageFlagBits2::eStorageBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible, false, "RenderNodeTransforms", BufferHostAccess::eSequentialWrite);
-        perFrame.mappedRenderNodeTransforms = perFrame.inRenderNodeTransformsBuffer.mapMemory<RendererVKLayout::RenderNodeTransform>();
-
-        perFrame.inNodePassMasksBuffer.initialize(m_maxRenderNodes * sizeof(uint32),
-            vk::BufferUsageFlagBits2::eStorageBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible, false, "NodePassMasks", BufferHostAccess::eSequentialWrite);
-        perFrame.mappedNodePassMasks = perFrame.inNodePassMasksBuffer.mapMemory<uint32>();
-
-        perFrame.inNodeLodStateBiasBuffer.initialize(m_maxRenderNodes * sizeof(int32),
-            vk::BufferUsageFlagBits2::eStorageBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible, false, "NodeLodStateBias", BufferHostAccess::eSequentialWrite);
-        perFrame.mappedNodeLodStateBias = perFrame.inNodeLodStateBiasBuffer.mapMemory<int32>();
-
         perFrame.lodStatsBuffer.initialize(RendererVKLayout::MAX_MESH_LODS * sizeof(uint32),
             vk::BufferUsageFlagBits2::eStorageBuffer,
             vk::MemoryPropertyFlagBits::eHostVisible, false, "LodStats");
         perFrame.mappedLodStats = perFrame.lodStatsBuffer.mapMemory<uint32>();
         memset(perFrame.mappedLodStats.data(), 0, perFrame.mappedLodStats.size_bytes());
 
-        // Kept cached/random: growMeshInstanceCapacity reads the existing mapping to preserve in-flight
-        // instances across a resize, so this buffer must stay CPU-readable.
-        perFrame.inMeshInstancesBuffer.initialize(m_maxInstanceData * sizeof(RendererVKLayout::InMeshInstance),
-            vk::BufferUsageFlagBits2::eStorageBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCached, false, "MeshInstances");
-        perFrame.mappedMeshInstances = perFrame.inMeshInstancesBuffer.mapMemory<RendererVKLayout::InMeshInstance>();
-
-        perFrame.inFirstInstancesBuffer.initialize(m_maxUniqueMeshes * sizeof(uint32),
-            vk::BufferUsageFlagBits2::eStorageBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible, false, "FirstInstances", BufferHostAccess::eSequentialWrite);
-        perFrame.mappedFirstInstances = perFrame.inFirstInstancesBuffer.mapMemory<uint32>();
-
-        // Indirect usage: consumed by DGC (sequenceCountAddress requires an INDIRECT_BUFFER).
-        perFrame.meshCountBuffer.initialize(sizeof(uint32),
-            vk::BufferUsageFlagBits2::eIndirectBuffer | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
-            vk::MemoryPropertyFlagBits::eHostVisible, false, "MeshCount", BufferHostAccess::eSequentialWrite);
-        perFrame.mappedMeshCount = perFrame.meshCountBuffer.mapMemory<uint32>();
-        perFrame.mappedMeshCount[0] = 0;
-        perFrame.meshCountBuffer.flushMappedMemory(sizeof(uint32));
-
-        perFrame.lightInfosBuffer.initialize(sizeof(RendererVKLayout::LightInfo) * RendererVKLayout::MAX_LIGHTS,
-            vk::BufferUsageFlagBits2::eStorageBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible, false, "LightInfos", BufferHostAccess::eSequentialWrite);
-        perFrame.mappedLightInfos = perFrame.lightInfosBuffer.mapMemory<RendererVKLayout::LightInfo>();
-
-        perFrame.fogVolumesBuffer.initialize(sizeof(RendererVKLayout::FogVolumes),
-            vk::BufferUsageFlagBits2::eStorageBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible, false, "FogVolumes", BufferHostAccess::eSequentialWrite);
-        perFrame.mappedFogVolumes = perFrame.fogVolumesBuffer.mapMemory<RendererVKLayout::FogVolumes>();
-        perFrame.mappedFogVolumes.data()->count = 0;
-
     }
-    createLightGridBuffers();
 
     if (m_sceneViewCount > 1)
     {
-        for (uint32 i = 0; i < 2; ++i)
-            m_vrCompositeDescriptorSet[i].initialize(m_compositePipeline.getDescriptorSetLayout());
-        createEyeCompositeTargets();
+        m_vrEyes.initialize(m_compositePipeline.getDescriptorSetLayout());
+        recreateVrEyeTargets();
     }
 }
 
 void Renderer::initSharedBuffers()
 {
-    m_meshInfosBuffer.initialize(m_maxUniqueMeshes * sizeof(RendererVKLayout::MeshInfo),
-        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
-        vk::MemoryPropertyFlagBits::eDeviceLocal, true, "MeshInfos");
-
-    m_materialInfosBuffer.initialize(m_maxUniqueMaterials * sizeof(RendererVKLayout::MaterialInfo),
-        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
-        vk::MemoryPropertyFlagBits::eDeviceLocal, true, "MaterialInfos");
-
-    m_instanceOffsetsBuffer.initialize(m_maxInstanceOffsets * sizeof(RendererVKLayout::MeshInstanceOffset),
-        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
-        vk::MemoryPropertyFlagBits::eDeviceLocal, true, "InstanceOffsets");
-
-    m_meshLods.initialize(m_maxUniqueMeshes,
+    m_meshLods.initialize(m_meshInfos.capacity(),
         [this]() { waitForGpuAndFlushStaging(); }, [this]() { setHaveToRecordCommandBuffers(); });
 
 	uint16 diffuseIdx = Globals::textureManager.upload(*ITextureData::createFallbackWhiteTexture(), false);
 	assert(diffuseIdx == RendererVKLayout::FALLBACK_DIFFUSE_TEX_IDX);
 	uint16 normalIdx = Globals::textureManager.upload(*ITextureData::createFallbackNormalTexture(), false);
 	assert(normalIdx == RendererVKLayout::FALLBACK_NORMAL_TEX_IDX);
+}
+
+// VR only (no-op otherwise): the eye composite targets follow the swapchain's extent and format.
+void Renderer::recreateVrEyeTargets()
+{
+    if (m_sceneViewCount <= 1)
+        return;
+    m_vrEyes.create(m_renderPass.getRenderPass(), m_swapChain.getLayout().extent, m_swapChain.getLayout().surfaceFormat.format);
 }
 
 void Renderer::recreateWindowSurface(Window& window)
@@ -396,7 +385,7 @@ void Renderer::recreateWindowSurface(Window& window)
 
     for (PerFrameData& perFrame : m_perFrameData)
         perFrame.sceneColor.initialize(RendererVKLayout::SCENE_COLOR_FORMAT, ext.width, ext.height, m_sceneViewCount);
-    createEyeCompositeTargets(); // VR: resize the per-eye LDR composite targets
+    recreateVrEyeTargets(); // VR: resize the per-eye LDR composite targets
     m_forceFieldPipeline.resizeIntervalTarget(ext.width, ext.height);
 
     // The cached scene command buffers embed the (now-recreated) scene-colour render pass in their
@@ -426,7 +415,7 @@ void Renderer::recreateSwapchain()
     m_taaPipeline.recreateImages(ext.width, ext.height);
     for (PerFrameData& perFrame : m_perFrameData)
         perFrame.sceneColor.initialize(RendererVKLayout::SCENE_COLOR_FORMAT, ext.width, ext.height, m_sceneViewCount);
-    createEyeCompositeTargets(); // VR: resize the per-eye LDR composite targets
+    recreateVrEyeTargets(); // VR: resize the per-eye LDR composite targets
     m_forceFieldPipeline.resizeIntervalTarget(ext.width, ext.height);
 
     // Cached scene command buffers reference the recreated scene-colour render pass; re-record them.
@@ -444,7 +433,7 @@ void Renderer::reloadShaders()
     Globals::textureStreamer.onGpuIdle();
     Globals::meshStreamer.onGpuIdle();
 
-    m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_maxTextures);
+    m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_textures.getLayoutCap());
     m_rtaoPipeline.reloadShaders();
     m_oceanSimPipeline.reloadShaders();
     m_terrainWetnessPipeline.reloadShaders();
@@ -453,10 +442,10 @@ void Renderer::reloadShaders()
     m_skinningComputePipeline.reloadShaders();
     m_lightGridComputePipeline.reloadShaders();
     m_shadowCullComputePipeline.reloadShaders();
-    m_shadowMapGraphicsPipeline.reloadShaders(m_maxTextures);
+    m_shadowMapGraphicsPipeline.reloadShaders(m_textures.getLayoutCap());
     m_rainCullComputePipeline.reloadShaders();
-    m_rainMapGraphicsPipeline.reloadShaders(m_maxTextures);
-    m_giProbePipeline.reloadShaders(m_maxTextures);
+    m_rainMapGraphicsPipeline.reloadShaders(m_textures.getLayoutCap());
+    m_giProbePipeline.reloadShaders(m_textures.getLayoutCap());
     m_giProbePipeline.reloadDebugShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_debugLinePipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
     m_particlePipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
@@ -476,10 +465,11 @@ void Renderer::setOceanParams(const OceanParams& ocean)
     // pipeline (GPU idle first - cached CBs reference the old pipeline; the re-record this queues happens
     // in present(), so a mid-frame toggle is safe). Same pattern as the RTAO alpha-test tweak.
     // OCEAN_RT_REFLECTIONS (the scene mirror ray) is the same kind of define.
-    const bool rebuildOceanVariant = ocean.hitLighting != m_oceanParams.hitLighting
-        || ocean.rtReflections != m_oceanParams.rtReflections
-        || ocean.debugMode != m_oceanParams.debugMode;
-    m_oceanParams = ocean;
+    const OceanParams& prev = m_oceanSimPipeline.getOceanParams();
+    const bool rebuildOceanVariant = ocean.hitLighting != prev.hitLighting
+        || ocean.rtReflections != prev.rtReflections
+        || ocean.debugMode != prev.debugMode;
+    m_oceanSimPipeline.setOceanParams(ocean);
     if (rebuildOceanVariant)
     {
         if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
@@ -487,7 +477,7 @@ void Renderer::setOceanParams(const OceanParams& ocean)
         m_staticMeshGraphicsPipeline.setOceanHitLights(ocean.hitLighting);
         m_staticMeshGraphicsPipeline.setOceanRtReflections(ocean.rtReflections);
         m_staticMeshGraphicsPipeline.setOceanDebugMode(ocean.debugMode);
-        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_maxTextures);
+        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_textures.getLayoutCap());
         setHaveToRecordCommandBuffers();
     }
 }
@@ -499,58 +489,22 @@ void Renderer::setWindowMinimized(bool minimized)
 
 void Renderer::setTerrainSplatMaterials(oc::span<const TerrainSplatMaterial> mats, const TerrainSplatCounts& counts)
 {
-    assert(mats.size() <= RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS);
-    assert((size_t)counts.numGround + counts.numRock + (counts.hasBeach ? 1 : 0) + (counts.hasSnow ? 1 : 0) == mats.size()
-        && "counts must describe the whole [ground][rock][beach?][snow?] span");
-    // Replacing a live set: the old images may still be sampled in flight - same deferred free path as
-    // ObjectContainer teardown (processed in present() after the GPU drain). The old material slots are
-    // not recycled (nothing tracks their range), but a set replacement is a rare config-refresh event.
-    m_pendingTextureFrees.insert(m_pendingTextureFrees.end(), m_terrainSplatTextures.begin(), m_terrainSplatTextures.end());
-    m_terrainSplatTextures.clear();
-
-    oc::vector<RendererVKLayout::MaterialInfo> materialInfos;
-    materialInfos.reserve(mats.size());
-    for (size_t i = 0; i < mats.size(); ++i)
-    {
-        const TerrainSplatMaterial& mat = mats[i];
-        RendererVKLayout::MaterialInfo& info = materialInfos.emplace_back();
-        info.flags = 0;
-        info.opacity = 1.0f;
-        info.alphaMode = (uint16)RendererVKLayout::EAlphaMode::Opaque;
-        info.diffuseTexIdx = RendererVKLayout::FALLBACK_DIFFUSE_TEX_IDX;
-        info.normalTexIdx = RendererVKLayout::FALLBACK_NORMAL_TEX_IDX;
-        info.metalRoughnessTexIdx = UINT16_MAX;
-
-        const auto upload = [&](const oc::string& path, bool sRGB) -> uint16 {
-            if (path.empty())
-                return UINT16_MAX;
-            const uint16 idx = Globals::textureManager.upload(path.c_str(), true, sRGB);
-            if (idx != UINT16_MAX)
-                m_terrainSplatTextures.push_back(idx);
-            return idx;
-        };
-        if (const uint16 idx = upload(mat.diffuseDds, true); idx != UINT16_MAX)
-            info.diffuseTexIdx = idx;
-        if (const uint16 idx = upload(mat.normalDds, false); idx != UINT16_MAX)
-        {
-            info.normalTexIdx = idx;
-            const vk::Format normalFormat = Globals::textureManager.getTexture(idx).getFormat();
-            if (normalFormat == vk::Format::eBc5UnormBlock || normalFormat == vk::Format::eBc5SnormBlock)
-                info.flags |= RendererVKLayout::MATERIAL_FLAG_BC5_NORMAL;
-        }
-        if (const uint16 idx = upload(mat.armDds, false); idx != UINT16_MAX)
-            info.metalRoughnessTexIdx = idx;
-
-    }
-
-    m_terrainSplatBaseMaterial = (int32)addMaterialInfos(materialInfos);
-    m_terrainSplatCounts = counts;
+    const TerrainResources::SplatUpload io{
+        .addMaterials = [this](const oc::vector<RendererVKLayout::MaterialInfo>& infos) { return addMaterialInfos(infos); },
+        .uploadTexture = [](const oc::string& path, bool sRGB) { return Globals::textureManager.upload(path.c_str(), true, sRGB); },
+        .isBc5Normal = [](uint16 texIdx) {
+            const vk::Format format = Globals::textureManager.getTexture(texIdx).getFormat();
+            return format == vk::Format::eBc5UnormBlock || format == vk::Format::eBc5SnormBlock; },
+    };
+    // The retired set's images may still be sampled in flight: same deferred free path as
+    // ObjectContainer teardown (processed in present() after the GPU drain).
+    const oc::vector<uint16> retired = m_terrain.setSplatMaterials(mats, counts, io);
+    m_textures.queueFree(retired);
 }
 
 void Renderer::setTerrainSplatClimate(oc::span<const glm::vec4> boxes)
 {
-    assert(boxes.size() <= RendererVKLayout::MAX_TERRAIN_SPLAT_MATERIALS);
-    memcpy(m_terrainSplatClimate, boxes.data(), boxes.size() * sizeof(glm::vec4));
+    m_terrain.setSplatClimate(boxes);
 }
 
 bool Renderer::waitFrameSlot(uint64 timeoutNs)
@@ -643,9 +597,7 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
     PerFrameData& frameData = m_perFrameData[m_swapChain.getCurrentFrameIndex()];
     {
         ProfileScope resetScope("Counters + LOD stats", EProfileCategory::Renderer);
-        m_meshInstanceCounter = 0;
-        m_instanceOverflowStart = UINT32_MAX;
-        memset(m_numInstancesPerMesh.data(), 0, m_numInstancesPerMesh.size() * sizeof(m_numInstancesPerMesh[0]));
+        m_instances.beginFrame();
         // Both read from any job during the entity pass (noteTextureUse), so set before returning.
         m_cameraPos = camera.position; // also drives the GI probe region each frame
         m_mipPixelScale = (float)oc::max(1, m_viewportRect.getSize().y) / oc::max(1e-3f, std::tan(glm::radians(camera.fovDeg) * 0.5f));
@@ -654,14 +606,12 @@ const Frustum& Renderer::beginFrame(const Camera& cameraIn, const Rect& viewport
 
     buildFrameUbo(cameraIn, camera, vrBaseOrientation, frameData);
 
-    m_lightCounter = 0;
+    m_submission.beginFrame();
     // The light grid's per-light phase runs inline in addLightInfo from here on: snapshot its inputs.
     // (Grid jobs left in flight by a present() that returned early must finish first - normally done.)
     Globals::jobSystem.wait(m_gridJobCounter);
     m_gridBuildsKicked = false;
     m_lightGridComputePipeline.beginFrame(m_swapChain.getCurrentFrameIndex(), m_lightGridParams, m_cameraPos);
-    m_fogVolumeCounter = 0;
-    m_decalCounter = 0;
     m_frameCounter++;
     if (Globals::openXR.isEnabled())
     {
@@ -696,48 +646,45 @@ void Renderer::kickGridBuilds()
     if (m_gridBuildsKicked)
         return;
     m_gridBuildsKicked = true;
-    m_lightCounter = oc::min(m_lightCounter, uint32(RendererVKLayout::MAX_LIGHTS)); // settle the lock-free claims (present repeats it, harmless)
+    m_submission.settleCounts(); // settle the lock-free claims (present repeats it, harmless)
     const uint32 frameIdx = m_swapChain.getCurrentFrameIndex();
     Globals::jobSystem.submit([this, frameIdx]
         {
-            // The mapped (write-combined) lights are only READ on the overflow re-walk, a non-goal path.
-            const PerFrameData& frameData = m_perFrameData[frameIdx];
-            m_lightGridDemand = m_lightGridComputePipeline.build(oc::span<const RendererVKLayout::LightInfo>(frameData.mappedLightInfos.data(), m_lightCounter));
-            // hostBuffersFit covers the table: its entries are 4x the pipeline's grid capacity (the claim table IS the GPU table)
-            m_lightGridNeedsGrow = m_lightGridDemand.gridDataBytes > m_lightGridBufferSize || !m_lightGridComputePipeline.hostBuffersFit(m_lightGridDemand);
+            m_lightGridDemand = m_lightGridComputePipeline.build(m_submission.getLights(frameIdx));
+            m_lightGridNeedsGrow = m_submission.lightGridNeedsGrow(m_lightGridDemand, m_lightGridComputePipeline);
             if (!m_lightGridNeedsGrow)
-                m_lightGridComputePipeline.upload(m_perFrameData[frameIdx].lightTableBuffer, m_lightTableEntries);
+                m_lightGridComputePipeline.upload(m_submission.slot(frameIdx).lightTable, m_submission.getLightTableEntries());
         },
         { "Light grid job", EProfileCategory::Renderer }, EJobPriority::High, &m_gridJobCounter); // no waits inside: no ForeignWait
 
     // The force compaction's shell-cull inputs (cheap, main): the CENTER view (TAA jitter never bakes into it).
-    ForceFieldPipeline::ShellCull& shellCull = m_forceShellCull;
+    ForceFieldPipeline::ShellCull& shellCull = m_force.getShellCull();
     shellCull = ForceFieldPipeline::ShellCull{};
-    shellCull.sampledRadius = m_forceFieldParams.sampledShellRadius > 0.0f
-        ? m_forceFieldParams.sampledShellRadius : FLT_MAX;
+    shellCull.sampledRadius = m_force.getParams().sampledShellRadius > 0.0f
+        ? m_force.getParams().sampledShellRadius : FLT_MAX;
     if (!isVrEnabled()) // one center frustum cannot serve both VR eyes
     {
         shellCull.enabled = true;
         shellCull.frustum = Frustum(getCenterViewProj());
         shellCull.cameraPos = m_cameraPos;
         shellCull.pixelScale = m_mipPixelScale * 0.5f; // viewportH/2 / tan(fov/2)
-        shellCull.minPixels = m_forceFieldParams.minShellPixels;
+        shellCull.minPixels = m_force.getParams().minShellPixels;
         // One analytic march per pixel; the density DEBUG view stays per-proxy (the union FS
         // does not implement it), so it forces the old path while on.
-        shellCull.unionPass = m_forceFieldParams.unionMarch && !m_forceFieldParams.densityView;
+        shellCull.unionPass = m_force.getParams().unionMarch && !m_force.getParams().densityView;
     }
-    shellCull.bakeVolume = m_forceShellBakeActive; // set by buildUboForce (this frame's fit)
-    shellCull.logTierDebug = m_forceFieldParams.logTierDebug;
+    shellCull.bakeVolume = m_force.isShellBakeActive(); // set by buildUboForce (this frame's fit)
+    shellCull.logTierDebug = m_force.getParams().logTierDebug;
     Globals::jobSystem.submit([this, frameIdx]
         {
             // Compacts the ACTIVE emitter slots + uploads query positions (this slot's fence was waited).
-            m_forceFieldPipeline.upload(frameIdx, m_forceEmitters.slots(), m_forceQueries.slots(), m_forceBakeChunks, m_forceBakeSampleY, m_forceShellCull);
-            m_forceGridNeedsGrow = false;
-            if (m_forceFieldParams.enabled && m_forceFieldPipeline.getUseGrid())
+            m_forceFieldPipeline.upload(frameIdx, m_force.getEmitters(), m_force.getQueries(), m_force.getBakeChunks(), m_force.getBakeSampleY(), m_force.getShellCull());
+            m_force.setGridNeedsGrow(false);
+            if (m_force.isEnabled() && m_forceFieldPipeline.getUseGrid())
             {
-                m_forceGridDemand = m_forceFieldPipeline.buildGrid();
-                m_forceGridNeedsGrow = !m_forceFieldPipeline.gridFits(m_forceGridDemand);
-                if (!m_forceGridNeedsGrow)
+                m_force.getGridDemand() = m_forceFieldPipeline.buildGrid();
+                m_force.setGridNeedsGrow(!m_forceFieldPipeline.gridFits(m_force.getGridDemand()));
+                if (!m_force.getGridNeedsGrow())
                     m_forceFieldPipeline.uploadGrid(frameIdx);
             }
         },
@@ -755,14 +702,14 @@ void Renderer::joinGridBuilds(uint32 frameIdx, PerFrameData& frameData)
     if (m_lightGridNeedsGrow)
     {
         m_lightGridNeedsGrow = false;
-        growLightGridBuffers(m_lightGridDemand);
-        m_lightGridComputePipeline.upload(frameData.lightTableBuffer, m_lightTableEntries);
+        m_submission.growLightGrid(m_lightGridDemand, m_lightGridComputePipeline);
+        m_lightGridComputePipeline.upload(m_submission.slot(frameIdx).lightTable, m_submission.getLightTableEntries());
     }
-    if (m_forceGridNeedsGrow)
+    if (m_force.getGridNeedsGrow())
     {
-        m_forceGridNeedsGrow = false;
+        m_force.setGridNeedsGrow(false);
         waitForGpuAndFlushStaging();
-        m_forceFieldPipeline.growGridBuffers(m_forceGridDemand);
+        m_forceFieldPipeline.growGridBuffers(m_force.getGridDemand());
         setHaveToRecordCommandBuffers();
         m_forceFieldPipeline.uploadGrid(frameIdx);
     }
@@ -829,18 +776,9 @@ void Renderer::checkFrameCapacities()
 {
     ProfileScope capacityScope("Capacity checks", EProfileCategory::Renderer);
     // Mesh instances overflowed mid-frame last frame
-    if (m_pendingMaxInstanceData > m_maxInstanceData)
-        growMeshInstanceCapacity(m_pendingMaxInstanceData);
+    m_instances.growToPendingDemand(m_swapChain.getCurrentFrameIndex());
     // Last frame's instance count (still live here) outgrew the GI TLAS instance buffers.
-    if (m_meshInstanceCounter > m_maxGiTlasInstances)
-    {
-        while (m_maxGiTlasInstances < m_meshInstanceCounter)
-            m_maxGiTlasInstances *= 2;
-        waitForGpuAndFlushStaging();
-        m_giProbePipeline.resizeTlasInstanceBuffers(m_maxGiTlasInstances);
-        setHaveToRecordCommandBuffers(); // the cached GI secondary bakes the instance buffers + dispatch size
-        printf("Renderer: grew GI TLAS instance capacity to %u\n", m_maxGiTlasInstances);
-    }
+    m_rt.growTlasInstancesFor(m_instances.getInstanceCount());
     // A mesh mega-buffer was reallocated (vertex/index data growth)
     if (Globals::meshDataManager.getGeneration() != m_meshDataGeneration)
     {
@@ -848,7 +786,7 @@ void Renderer::checkFrameCapacities()
         setHaveToRecordCommandBuffers();
     }
 
-    syncTextureDescriptorCapacity();
+    m_textures.syncCapacity([this]() { waitForGpuAndFlushStaging(); });
     // The light and force grids grow synchronously in present() (joinGridBuilds): their builds are CPU-side.
 }
 
@@ -864,919 +802,6 @@ void Renderer::snapshotLodStats(PerFrameData& frameData)
 
 // Assembles the frame UBO (matrices, sky/fog/ocean/force/terrain params) into m_ubo and hands it to
 // staging - pure CPU math, live-tweak driven, split by subject into the buildUbo* helpers below.
-// m_ubo persists across frames: buildUboViews reads last frame's mvps out of it for reprojection
-// before overwriting them. Runs wherever beginFrame runs (the desktop "Begin frame job" or main in
-// VR); every param it reads (tweak-bound floats, force/terrain params) is written only outside the
-// quiescent window. The outputs consumers read directly (m_centerViewProj, m_sunCascadeViewProj, the
-// returned frustum) are contractually valid once beginFrame's job is joined.
-void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation, PerFrameData& frameData)
-{
-    ProfileScope uboScope("UBO build", EProfileCategory::Renderer);
-    RendererVKLayout::Ubo& ubo = m_ubo;
-
-    ubo.lodParams0 = glm::vec4(
-        oc::max(0.01f, m_lodParams.maxErrorPixels) * std::exp2((float)m_lodParams.bias),
-        m_lodParams.hysteresis, m_lodParams.fullResPixels, m_mipPixelScale);
-    ubo.lodParams1 = glm::vec4((float)m_lodParams.forceLod, (float)m_lodParams.bias,
-        m_lodParams.enabled ? 1.0f : 0.0f, 0.0f);
-
-    buildUboViews(cameraIn, camera, vrBaseOrientation);
-
-    // Camera velocity over the WALL-CLOCK frame delta (camera motion is not paused with the sim): the
-    // weather volumes' streaks are motion blur relative to the eye. A teleport (first frame, scene
-    // load) reads as zero rather than one huge streak.
-    {
-        const float dt = (float)Globals::time.getDeltaSec();
-        glm::vec3 velocity(0.0f);
-        if (m_havePrevCameraPos && dt > 1e-4f)
-        {
-            velocity = (camera.position - m_prevCameraPos) / dt;
-            if (glm::dot(velocity, velocity) > 200.0f * 200.0f)
-                velocity = glm::vec3(0.0f);
-        }
-        m_prevCameraPos = camera.position;
-        m_havePrevCameraPos = true;
-        ubo.cameraVelocity = glm::vec4(velocity, glm::clamp(m_particleParams.streakCameraBlur, 0.0f, 1.0f));
-    }
-    {
-        const ParticleParams& particles = m_particleParams;
-        const float a = glm::radians(particles.windAngleDeg);
-        const glm::vec2 dir(std::cos(a), std::sin(a));
-        ubo.weatherWind0 = glm::vec4(dir.x * particles.windSpeed, 0.0f, dir.y * particles.windSpeed, glm::max(particles.windGustStrength, 0.0f));
-        ubo.weatherWind1 = glm::vec4(1.0f / glm::max(particles.windGustSize, 1.0f), glm::clamp(particles.windSheetContrast, 0.0f, 1.0f),
-            1.0f / glm::max(particles.windSheetSize, 1.0f), glm::max(particles.windSheetDrift, 0.0f));
-        ubo.weatherWind2 = glm::vec4(dir, m_cameraWaterSurface, m_cameraWaterSurfaceValid ? 1.0f : 0.0f);
-    }
-
-    // RTAO and the GI probe contribution both need the acceleration structures, so both fold in the RT
-    // master toggle; GI additionally gates on its own switch.
-    // z = the RTAO max distance: past it the trace writes exactly (N, 1.0) (rtao.cs.glsl early-out), so
-    // the forward pass skips its depth-aware AO upsample there and uses those values directly.
-    ubo.aoParams = glm::vec4((m_rtParams.enabled && m_rtaoParams.enabled) ? 1.0f : 0.0f,
-        (m_rtParams.enabled && m_rtParams.giEnabled) ? m_giProbePipeline.getStrength() : 0.0f,
-        m_rtaoParams.maxDistance, 0.0f); // w unused: the light grid debug overlay is the LIGHT_GRID_DEBUG define
-    ubo.giVisParams = m_giProbePipeline.getVisibilityParams();
-    // GI trace / TLAS-instance parameters (the GI secondary is cached, so everything per-frame rides here).
-    // The previous focus advances only while GI traces, so probes that scrolled in during a GI-off spell
-    // still read as fresh (full replace) on the first traced frame, as before.
-    ubo.giTrace0 = m_giProbePipeline.getTraceParams0((float)Globals::time.getDeltaSec()); // WALL delta: GI converges through a sim pause
-    ubo.giTrace1 = glm::vec4(m_giPrevFocusPos, m_giProbePipeline.getTlasRange());
-    const glm::vec3 giPriority = m_giProbePipeline.getPriorityParams();
-    ubo.giPriorityDist = giPriority.x;
-    ubo.giPriorityFalloff = giPriority.y;
-    ubo.giPriorityFrustumWeight = giPriority.z;
-    if (m_rtParams.enabled && m_rtParams.giEnabled)
-        m_giPrevFocusPos = sceneFocusOrCamera();
-    ubo.giTlasNumInstances = 0; // the counter was just reset: present() patches the real count in
-    ubo.frameIndex = m_frameCounter;
-    // SIM clock, not the wall clock: shader animation (ocean waves, force pulses, fog) freezes with
-    // the global pause (see Time::setPaused).
-    ubo.timeSeconds = (float)Globals::time.getSimElapsedSec();
-
-    buildUboSky();
-    buildUboSunShadow(camera);
-    buildUboRainOcclusion();
-    buildUboFog();
-    buildUboOcean();
-    buildUboForce();
-    buildUboTerrain();
-
-    Globals::stagingManager.upload(frameData.ubo.getBuffer(), sizeof(RendererVKLayout::Ubo), &m_ubo);
-}
-
-// View matrices, frustum, and TAA jitter: the center (culling) view, the VR eye views, and the
-// screen/viewport constants. Sets m_centerViewProj + m_prevTaaJitter.
-void Renderer::buildUboViews(const Camera& cameraIn, const Camera& camera, const glm::quat& vrBaseOrientation)
-{
-    RendererVKLayout::Ubo& ubo = m_ubo;
-    const glm::ivec2 viewportSize = m_viewportRect.getSize();
-
-    glm::vec2 taaJitterNdc(0.0f);
-    if (m_taaParams.taaEnabled && viewportSize.x > 0 && viewportSize.y > 0)
-    {
-        const uint32 sampleIdx = (m_frameCounter % 16u) + 1u;
-        taaJitterNdc.x = (radicalInverse(sampleIdx, 2u) - 0.5f) * 2.0f / (float)viewportSize.x;
-        taaJitterNdc.y = (radicalInverse(sampleIdx, 3u) - 0.5f) * 2.0f / (float)viewportSize.y;
-    }
-
-    const uint32 numViews = Globals::openXR.isEnabled() ? RendererVKLayout::NUM_UBO_VIEWS : 1;
-    for (uint32 v = 0; v < numViews; ++v)
-    {
-        ubo.views[v].prevMvp = ubo.views[v].mvp;
-        ubo.views[v].prevInvMvp = ubo.views[v].invMvp;
-    }
-
-    RendererVKLayout::ViewData& centerView = ubo.views[RendererVKLayout::VIEW_CENTER];
-    centerView.mvp = computeCenterViewProj(camera);
-    // Invert in double precision: a float32 inverse of a perspective mvp is ill-conditioned and its
-    // error grows with the camera translation, which shows up as per-frame reconstruction jitter
-    // (sky ray, TAA reprojection, RTAO, fog) away from the world origin.
-    const glm::dmat4 centerInvMvpD = glm::inverse(glm::dmat4(centerView.mvp));
-    centerView.invMvp = glm::mat4(centerInvMvpD);
-    // Fused clip->prev-clip reprojection: the double product cancels the (position-scaled) translations
-    // exactly, leaving a near-identity matrix that survives float32 storage at any camera position.
-    centerView.reprojClip = glm::mat4(glm::dmat4(centerView.prevMvp) * centerInvMvpD);
-    centerView.viewPos = glm::vec4(camera.position, 1.0f);
-    // ZO plane extraction (the projection is reversed-Z [0,1] clip; the near/far plane slots swap roles
-    // under the reversal but the extracted volume is identical, so all cull consumers stay correct).
-    ubo.frustum.fromMatrixZO(centerView.mvp);
-    m_centerViewProj = centerView.mvp;
-
-    if (Globals::openXR.isEnabled())
-    {
-        for (uint32 eye = 0; eye < 2; ++eye)
-        {
-            glm::mat4 eyeView;
-            glm::vec3 eyePos;
-            Globals::openXR.getEyeView(eye, cameraIn.position, vrBaseOrientation, eyeView, eyePos);
-            const glm::mat4 eyeProj = Globals::openXR.getEyeProjection(eye, camera.near, camera.far);
-            RendererVKLayout::ViewData& v = ubo.views[eye + 1]; // [1] = left eye, [2] = right eye
-            v.mvp = eyeProj * eyeView;
-            const glm::dmat4 eyeInvMvpD = glm::inverse(glm::dmat4(v.mvp));
-            v.invMvp = glm::mat4(eyeInvMvpD);
-            v.reprojClip = glm::mat4(glm::dmat4(v.prevMvp) * eyeInvMvpD);
-            v.viewPos = glm::vec4(eyePos, 1.0f);
-        }
-    }
-
-    const vk::Extent2D swapExtent = m_swapChain.getLayout().extent;
-    ubo.screenSize = glm::vec4((float)swapExtent.width, (float)swapExtent.height,
-        1.0f / (float)swapExtent.width, 1.0f / (float)swapExtent.height);
-    ubo.viewportRect = glm::vec4(
-        (float)m_viewportRect.min.x / (float)swapExtent.width,
-        (float)m_viewportRect.min.y / (float)swapExtent.height,
-        (float)viewportSize.x / (float)swapExtent.width,
-        (float)viewportSize.y / (float)swapExtent.height);
-    // zw = LAST frame's jitter: TAA/AO-temporal compensate both frames' jittered depth images during
-    // reprojection (all raster passes jitter, the prepass included - see taaJitterUv in shared.inc.glsl).
-    ubo.taaJitter = glm::vec4(taaJitterNdc, m_prevTaaJitter);
-    m_prevTaaJitter = taaJitterNdc;
-}
-
-// Sky atmosphere, sun + eclipse, clouds, stars/moon/nebula, and ground params.
-void Renderer::buildUboSky()
-{
-    RendererVKLayout::Ubo& ubo = m_ubo;
-    const SkyParams& sky = m_skyParams;
-
-    // Earth sea-level scattering coefficients, scaled by the atmosphere tweaks.
-    ubo.betaRayleigh = glm::vec3(5.802e-6f, 13.558e-6f, 33.1e-6f) * sky.rayleighScatter;
-    ubo.rolloffKnee = sky.sunRolloffKnee;
-    ubo.betaMie = 3.996e-6f * sky.mieScatter;
-    ubo.sunDirection = sky.sunDirection;
-    ubo.sunAngularCos = sky.sunAngularCos;
-    // Solar eclipse: fold the moon-covered sun fraction into the UBO sun color so every sun consumer
-    // (sky atmosphere, forward lighting, GI trace, volumetric fog, clouds) dims consistently.
-    const float eclipseVisible = sunVisibleFraction(sky.sunDirection, glm::normalize(sky.moonDirection), sky.sunAngularCos, cosf(glm::radians(sky.moonSizeDeg)), sky.sunGlow);
-    ubo.sunColor = sky.sunColor * sky.sunIntensity;
-    ubo.eclipseParams = glm::vec4(eclipseVisible, sky.sunRolloffHeadroom, 0.0f, 0.0f);
-    ubo.sunGlow = sky.sunGlow;
-
-    ubo.skyRadianceColor = sky.skyRadianceColor * sky.skyRadianceIntensity;
-    ubo.rtSkyRadiance = (m_rtParams.enabled && m_rtParams.rtSkyRadiance) ? 1.0f : 0.0f;
-    ubo.ambientColor = sky.ambientColor * sky.ambientIntensity;
-    ubo.skyUp = sky.up;
-
-    ubo.cloudCoverage = sky.cloudCoverage;
-    ubo.cloudThickness = sky.cloudThickness * sky.cloudThickness;
-    ubo.cloudParams0 = glm::vec4(sky.cloudHeight, 0.00012f * sky.cloudScale, 0.0043f * sky.cloudWindSpeed, sky.cloudWindAngle);
-    ubo.cloudParams1 = glm::vec4(sky.cloudSoftness, sky.cloudShading, 0.0f, 0.0f);
-    ubo.cloudParams2 = glm::vec4(sky.cloudDensity, sky.cloudSharpness, sky.cloudBaseVar, sky.moonBrightness);
-    ubo.skySunParams = glm::vec4(sky.scatterBoost, sky.mieG, sky.sunRolloff, sky.starDensity);
-
-    ubo.moonParams = glm::vec4(glm::normalize(sky.moonDirection), cosf(glm::radians(sky.moonSizeDeg)));
-    ubo.starParams = glm::vec4(sky.starSize, sky.starSizeVar, sky.starBrightness, sky.starColorVar);
-    ubo.nebulaParams = glm::vec4(sky.nebulaIntensity, sky.nebulaScale, sky.nebulaBandWidth, sky.nebulaDust);
-    ubo.nebulaAxis = glm::vec4(glm::normalize(sky.nebulaAxis), 0.0f);
-    ubo.atmosParams = glm::vec4(sky.rayleighHeight, sky.mieHeight, sky.mieExtinction, sky.ozone);
-
-    // Sun transmittance at ground level: the CPU mirror of atmosphere.inc.glsl's
-    // atmosTransmittanceToLight(0, sunDir, up) - Chapman optical depth (r = planet radius, h = 0),
-    // atmosTau, exp. Constant per frame, so the lit fragment shaders read u_sunTransmittance instead of
-    // evaluating it per pixel. KEEP IN SYNC with the GLSL constants (ATMOS_R_PLANET, ATMOS_BETA_OZONE).
-    {
-        constexpr float c_planetRadius = 6371e3f;
-        const glm::vec3 c_betaOzone(0.650e-6f, 1.881e-6f, 0.085e-6f);
-        const auto chapman = [](float X, float cosChi) // Schüler's grazing-incidence closed form
-        {
-            const float c = std::sqrt(1.5707963f * X);
-            if (cosChi >= 0.0f)
-                return c / ((c - 1.0f) * cosChi + 1.0f);
-            const float sinChi = std::sqrt(glm::max(1.0f - cosChi * cosChi, 1e-6f));
-            const float X0 = X * sinChi;
-            return 2.0f * std::sqrt(1.5707963f * X0) * std::exp(glm::min(X - X0, 60.0f)) - c / ((c - 1.0f) * (-cosChi) + 1.0f);
-        };
-        const float cosChi = glm::dot(glm::normalize(sky.up), sky.sunDirection); // pos = up * R, so cos(chi) = up . L
-        const float odR = sky.rayleighHeight * chapman(c_planetRadius / sky.rayleighHeight, cosChi);
-        const float odM = sky.mieHeight * chapman(c_planetRadius / sky.mieHeight, cosChi);
-        const glm::vec3 tau = ubo.betaRayleigh * odR + glm::vec3(ubo.betaMie * sky.mieExtinction) * odM + c_betaOzone * (sky.ozone * odR);
-        ubo.sunTransmittance = glm::exp(-tau);
-    }
-    ubo.groundParams = glm::vec4(sky.groundColor * sky.groundIntensity, glm::clamp(sky.groundHorizon, 0.0f, 1.0f));
-}
-
-// Sun shadow route: the RT-sun toggle, else the PCSS cascade matrices (also consumed CPU-side via
-// getSunCascadeViewProj), plus the long-range terrain shadow march params.
-void Renderer::buildUboSunShadow(const Camera& camera)
-{
-    RendererVKLayout::Ubo& ubo = m_ubo;
-    ubo.rtSunShadow = (m_rtParams.enabled && m_rtParams.rtSunShadow) ? 1.0f : 0.0f;
-    // The shaders' cascade pick and the RTAO falloff measure from here; it matches computeSunCascades'
-    // origin below.
-    ubo.sceneFocus = glm::vec4(m_sceneFocusEnabled ? m_sceneFocus : camera.position, 0.0f);
-
-    // Use the effective flag: with RT off (or RT-sun off) the PCSS cascades supply the sun shadow.
-    if (ubo.rtSunShadow < 0.5f)
-    {
-        const glm::ivec2 viewportSize = m_viewportRect.getSize();
-        const float aspect = (float)viewportSize.x / (float)viewportSize.y;
-        computeSunCascades(camera, aspect, m_skyParams.sunDirection, m_sceneFocusEnabled ? &m_sceneFocus : nullptr,
-            m_shadowParams.maxDistance, m_shadowParams.splitLambda, m_shadowParams.casterPad, m_sunCascadeViewProj);
-        m_numSunCascades = RendererVKLayout::NUM_SHADOW_CASCADES;
-        // PCSS penumbra scale per cascade (the shader's former pcssSunSizeTexels): the physical penumbra
-        // over a world gap g spans 2 g tan(sunRadius); a PCF disk of radius r ramps over ~2r, so the
-        // radius is g tan(sunRadius), and gapNorm * depthRange / texelWorldSize converts it to texels.
-        // depthRange and texelWorldSize ride in the matrices' bottom rows (computeSunCascades).
-        static_assert(RendererVKLayout::NUM_SHADOW_CASCADES == 4, "cascadeSunSizeTexels is one vec4");
-        const float cosT = glm::clamp(m_skyParams.sunAngularCos, 0.5f, 0.9999999f);
-        const float tanT = std::sqrt(1.0f - cosT * cosT) / cosT;
-        for (uint32 c = 0; c < RendererVKLayout::NUM_SHADOW_CASCADES; ++c)
-        {
-            ubo.cascadeViewProj[c] = m_sunCascadeViewProj[c];
-            const float texelWorldSize = m_sunCascadeViewProj[c][1][3];
-            const float depthRange = m_sunCascadeViewProj[c][2][3];
-            ubo.cascadeSunSizeTexels[c] = tanT * depthRange / glm::max(texelWorldSize, 1e-6f);
-        }
-        ubo.shadowParams = glm::vec3(m_shadowParams.depthBias, m_shadowParams.normalBias, 1.0f / (float)RendererVKLayout::SHADOW_MAP_RESOLUTION);
-    }
-    else
-        m_numSunCascades = 0;
-
-    ubo.sunShadowRays = (float)m_rtParams.sunShadowRays;
-    ubo.rtLightShadows = (m_rtParams.enabled && m_rtParams.rtLightShadows) ? 1.0f : 0.0f;
-    ubo.terrainShadowParams = glm::vec4(glm::max(m_shadowParams.terrainMarchStart, 0.0f),
-        glm::max(m_shadowParams.terrainMarchBias, 1.0f), glm::max(m_shadowParams.terrainMarchSpread, 0.002f), 0.0f);
-}
-
-// The weather volume's rain occlusion map: a top-down orthographic view over the latched volume box
-// (setRainOcclusionVolume), looking straight down -Y. The eye sits casterPad above the box top so a roof
-// well above the volume still shelters it; the XZ footprint is padded 25 % over the box (one-frame lag
-// behind the camera-following emitter). Standard Z, plain bottom row: the rain cull, the rain depth
-// pass and the particle sim's shelter test all read it verbatim.
-void Renderer::buildUboRainOcclusion()
-{
-    RendererVKLayout::Ubo& ubo = m_ubo;
-    const RainOcclusionVolume& v = m_rainVolume;
-    const float anisotropy = glm::clamp(m_particleParams.anisotropy, -0.95f, 0.95f); // rides the params' free w
-    if (!v.active || !m_particleParams.rainOcclusion)
-    {
-        ubo.rainOcclusionViewProj = glm::mat4(1.0f);
-        ubo.rainOcclusionParams = glm::vec4(0.0f, 0.0f, 0.0f, anisotropy);
-        return;
-    }
-    const float hx = glm::max(v.halfExtents.x, 1.0f) * 1.25f;
-    const float hz = glm::max(v.halfExtents.z, 1.0f) * 1.25f;
-    const float pad = glm::max(m_particleParams.rainOcclusionCasterPad, 1.0f);
-    const float range = 2.0f * glm::max(v.halfExtents.y, 1.0f) + pad + 1.0f; // 1 m below the box bottom
-    const glm::vec3 eye = v.center + glm::vec3(0.0f, v.halfExtents.y + pad, 0.0f);
-    const glm::mat4 view = glm::lookAtRH(eye, v.center, glm::vec3(0.0f, 0.0f, 1.0f));
-    const glm::mat4 proj = glm::orthoRH_ZO(-hx, hx, -hz, hz, 0.0f, range);
-    ubo.rainOcclusionViewProj = proj * view;
-    ubo.rainOcclusionParams = glm::vec4(1.0f, 1.0f / range, glm::max(m_particleParams.rainOcclusionTolerance, 0.0f), anisotropy);
-}
-
-// Volumetric fog params + the fog terrain height cascades (also the ocean's shore-map fallback).
-void Renderer::buildUboFog()
-{
-    RendererVKLayout::Ubo& ubo = m_ubo;
-    const FogParams& fog = m_fogParams;
-
-    // A freshly uploaded fog terrain height map activates here, in the same frame slot as the UBO that
-    // carries its world center/sizes - descriptors (refreshed per frame in recordCommandBuffers) and
-    // params stay coherent. Presence (fogParams3.y) is independent of Terrain Follow: the ocean also
-    // reads these cascades as its shore-map fallback.
-    m_fogTerrainMap.flipIfPending();
-    const glm::vec2 fogTerrainSizes = m_fogTerrainMap.getWorldSizes();
-    ubo.fogParams0 = glm::vec4(fog.density, fog.heightBase, fog.heightFalloff * fog.heightFalloff, fog.range);
-    ubo.fogParams1 = glm::vec4(fog.albedo * fog.albedoIntensity, fog.anisotropy);
-    ubo.fogParams2 = glm::vec4(fog.noiseScale, fog.noiseStrength, fog.windSpeed, fog.temporalBlend);
-    ubo.fogParams3 = glm::vec4(glm::clamp(fog.terrainFollow, 0.0f, 1.0f),
-        fogTerrainSizes.x > 1.0f ? 1.0f / fogTerrainSizes.x : 0.0f,
-        fog.enabled ? 1.0f : 0.0f, fog.lightShadows ? 1.0f : 0.0f);
-    ubo.fogParams4 = glm::vec4((float)fog.sunRays, fog.spatialFilter ? 1.0f : 0.0f, fog.giAmbient ? 1.0f : 0.0f, fog.sunSoftness);
-    ubo.fogParams5 = glm::vec4(m_fogTerrainMap.getCenter(),
-        fogTerrainSizes.y > 1.0f ? 1.0f / fogTerrainSizes.y : 0.0f, m_fogTerrainMap.getUserParam());
-    ubo.fogParams6 = glm::vec4(glm::clamp(fog.slicePower, 0.25f, 2.0f), fog.terrainShadowDist,
-        glm::clamp(fog.regionStrength, 0.0f, 1.0f), // z: baked regional fog-thickness modulation
-        glm::max(fog.underwaterDensity, 0.0f));     // w: density multiplier below the local water surface
-    // x: underwater fog boundary margin (m) relative to the LIVE wave surface (the fog scatter samples
-    // the FFT displacement maps directly). y: the waterline band half-height gating those samples -
-    // froxel segments outside +-band of the calm level are trivially above/below any possible wave, so
-    // only a thin shell pays for wave taps. The CPU trough estimate (ocean readback) bounds the wave
-    // amplitude; 0 disables wave sampling entirely (ocean off).
-    // The band must also cover the swash RUN-UP (amplitude x (trough + 0.25), the same reach
-    // buildUboOcean packs into oceanParams7.w): with a large swash amplitude the tongue climbs past
-    // 2 x trough, and froxels beyond the band got the calm level while their neighbours got the wave -
-    // a line in the fog's caustics that moved with the amplitude.
-    const float swashReachBand = glm::clamp(m_oceanParams.swashAmp, 0.0f, 4.0f) * (m_oceanWaveTrough + 0.25f);
-    const float waveBand = m_oceanParams.enabled ? glm::max(m_oceanWaveTrough * 2.0f + 0.5f, swashReachBand) : 0.0f;
-    ubo.fogParams7 = glm::vec4(
-        glm::max(fog.shaftBoost, 0.0f),        // x: underwater sun in-scatter gain (fog light shafts)
-        waveBand,
-        glm::max(fog.causticStrength, 0.0f),   // z: underwater caustic focus strength (surfaces + fog shafts)
-        glm::max(fog.causticDepthFade, 0.0f)); // w: caustic contrast decay with depth (1/m)
-    ubo.fogParams8 = glm::vec4(fog.underwaterOffset, glm::max(fog.causticShoreFade, 0.0f), 0.0f, 0.0f);
-    // z: thickness scale inverted into a falloff multiplier on fogParams0.z. w: far-field ground samples.
-    ubo.fogParams9 = glm::vec4(fog.farField ? 1.0f : 0.0f, glm::max(fog.farFieldDensity, 0.0f),
-        1.0f / glm::clamp(fog.farFieldThickness, 0.01f, 100.0f), (float)glm::max(fog.farFieldSteps, 1));
-}
-
-// FFT ocean simulation + shading params.
-void Renderer::buildUboOcean()
-{
-    RendererVKLayout::Ubo& ubo = m_ubo;
-    const OceanParams& ocean = m_oceanParams;
-    const glm::vec2 windDir = glm::length(ocean.windDirection) > 1e-4f ? glm::normalize(ocean.windDirection) : glm::vec2(1.0f, 0.0f);
-    ubo.oceanParams0 = glm::vec4(windDir, ocean.amplitude, ocean.choppiness);
-    // Wind clamped just above 0: the JONSWAP 1/U terms must stay finite; the spectrum's wave-age limit
-    // (ocean_spectrum.cs.glsl) makes this effectively glassy anyway.
-    ubo.oceanParams1 = glm::vec4(glm::max(ocean.windSpeed, 0.01f), glm::max(ocean.fetchKm, 1.0f) * 1000.0f, glm::max(ocean.depth, 1.0f), ocean.normalStrength);
-    ubo.oceanParams2 = glm::vec4(glm::max(ocean.cascadeSizes, glm::vec3(1.0f)), ocean.seaLevel);
-    ubo.oceanAbsorption = glm::vec4(ocean.absorption, ocean.roughness);
-    ubo.oceanScatter = glm::vec4(ocean.scatterColor, ocean.scatterStrength);
-    ubo.oceanFoam = glm::vec4(ocean.foamColor, ocean.foamBias);
-    ubo.oceanParams3 = glm::vec4(ocean.horizonLevelOffset, glm::max(ocean.horizonDepth, 0.0f),
-        glm::clamp(ocean.foamDecay, 0.0f, 0.999f), glm::clamp(ocean.detailBias, -4.0f, 4.0f));
-    ubo.oceanParams4 = glm::vec4(glm::max(ocean.horizonDepthRange, 0.0f),
-        glm::clamp(ocean.foamSpread * 0.25f, 0.0f, 0.95f), glm::max(ocean.shoalScale, 0.0f), glm::max(ocean.foamSoftness, 0.02f));
-    ubo.oceanParams5 = glm::vec4(glm::max(ocean.foamBoost, 0.0f), glm::clamp(ocean.turbidity, 0.0f, 1.0f), glm::max(ocean.shoreFoamDepth, 0.0f), glm::max(ocean.foamBreakAccel, 0.01f));
-    ubo.oceanParams6 = glm::vec4(glm::max(ocean.farCullError, 0.0f), glm::max(ocean.glintFilter, 0.0f),
-        glm::max(ocean.sssStrength, 0.0f), glm::max(ocean.sssPower, 1.0f));
-    // Swash reach: conservative max run-up height from the wave-amplitude readback (trough estimate ~
-    // crest scale) - sizes the on-land sampling band and keeps the vertex cull off the wet beach.
-    const float swashAmp = glm::clamp(ocean.swashAmp, 0.0f, 4.0f);
-    const float swashReach = swashAmp * (m_oceanWaveTrough + 0.25f);
-    ubo.oceanParams7 = glm::vec4(glm::max(ocean.cullMargin, 0.0f), glm::clamp(ocean.shoreFoamMax, 0.0f, 1.0f), swashAmp, swashReach);
-    ubo.oceanParams8 = glm::vec4(glm::max(ocean.rtReflectionFog, 0.0f),glm::clamp(ocean.shoreFoamBias, -1.0f, 1.0f),
-        glm::max(ocean.swashFlow, 0.0f), glm::max(ocean.rtRayCutoffDist, 0.0f));
-    ubo.oceanParams9 = glm::vec4(glm::max(ocean.microRoughness, 0.0f), glm::max(ocean.rtRefractionRange, 1.0f), // the tweak's own minimum; 10 here silently floored 1..9 m
-        glm::max(ocean.rtReflectionRange, 50.0f), glm::clamp(ocean.rtReflectionMaxRough, 0.0f, 1.0f));
-    ubo.oceanParams10 = glm::vec4(glm::max(ocean.crestSlopeLimit, 0.0f), glm::max(ocean.timeScale, 0.0f),
-        glm::clamp(ocean.undersideTransmission, 0.0f, 1.0f),
-        ocean.enabled ? m_oceanDisplacementExtent : 0.0f); // w: per-instance cull padding
-    ubo.oceanParams11 = glm::vec4(glm::max(ocean.detailStrength, 0.0f), glm::max(ocean.detailScale, 0.001f),
-        glm::max(ocean.detailFadeDist, 0.0f), ocean.detailRotation);
-    // Ocean spray producer: the emitter slot the Particle system published (UINT32_MAX = off), the sim
-    // delta the rate integrates over (frozen with the global pause, like the particle sim itself).
-    const float sprayDt = oc::min((float)Globals::time.getSimDeltaSec(), 0.25f);
-    // Off while the particle chain is disabled: nothing would consume (and reset) the request counter.
-    const uint32 sprayEmitter = m_particleParams.enabled ? m_oceanSimPipeline.getSprayEmitter() : UINT32_MAX;
-    const OceanSprayParams& spray = m_oceanSimPipeline.getSprayParams();
-    ubo.oceanSpray0 = glm::vec4(glm::uintBitsToFloat(sprayEmitter), glm::max(spray.rate, 0.0f),
-        glm::max(spray.radius, 1.0f), sprayDt);
-    ubo.oceanSpray1 = glm::vec4(glm::clamp(spray.threshold, 0.0f, 0.99f), glm::max(spray.kick, 0.0f),
-        glm::max(spray.speed, 0.0f), spray.forward);
-    ubo.oceanSpray2 = glm::vec4(spray.height, 0.0f, 0.0f, 0.0f);
-}
-
-// Forcefield bubbles (Force library pushes m_forceFieldParams every frame; all UBO-driven = live).
-void Renderer::buildUboForce()
-{
-    RendererVKLayout::Ubo& ubo = m_ubo;
-    const ForceFieldParams& force = m_forceFieldParams;
-    for (uint32 i = 0; i < RendererVKLayout::MAX_FORCE_TEAMS; ++i)
-        ubo.forceTeamColors[i] = glm::vec4(force.teamColors[i], 0.0f);
-    ubo.forceParams0 = glm::vec4(glm::max(force.isoThreshold, 1e-3f), glm::max(force.rimPower, 0.1f),
-        glm::max(force.rimIntensity, 0.0f), glm::clamp(force.shellAlpha, 0.0f, 1.0f));
-    ubo.forceParams1 = glm::vec4(glm::max(force.contactGlowIntensity, 0.0f), glm::max(force.contactGlowWidth, 1e-3f),
-        glm::max(force.geoGlowDistance, 0.0f), (float)glm::clamp(force.marchSteps, 8, 256));
-    ubo.forceParams2 = glm::vec4(glm::max(force.patternScale, 0.0f), force.patternSpeed,
-        glm::max(force.patternIntensity, 0.0f),
-        // w: the shell march's LOD scale - (px per radius/dist) / full-detail radius, so the FS's
-        // steps taper as side/dist * this (clamped <= 1); 0 disables the taper.
-        m_mipPixelScale * 0.5f / glm::max(force.shellFullResPixels, 1.0f));
-    ubo.forceParams3 = glm::vec4(glm::clamp(force.interiorAlpha, 0.0f, 1.0f),
-        glm::clamp(force.backfaceAlpha, 0.0f, 1.0f), glm::clamp(force.contactWallAlpha, 0.0f, 1.0f),
-        glm::clamp(force.junctionSmoothing, 0.0f, 2.0f));
-    ubo.forceParams4 = glm::vec4(0.0f /* x unused: the density view is the FORCE_DENSITY_VIEW define */, glm::max(force.densityRange, 1e-3f), 0.0f, 0.0f);
-
-    // SAMPLED SHELL TIER: fit the bake volume over the union of the LARGE drawable emitters'
-    // support boxes (+ margin) - the FIXED texel grid's resolution then self-adjusts to the active
-    // spread. No qualifying emitter (or tier off) = no bake dispatch and the FS branch stays cold.
-    glm::vec3 bakeLo(FLT_MAX), bakeHi(-FLT_MAX);
-    if (force.sampledShellRadius > 0.0f)
-        for (const RendererVKLayout::ForceEmitterGpu& e : m_forceEmitters.slots())
-        {
-            if ((e.teamFlags.y & RendererVKLayout::FORCE_FLAG_ACTIVE) == 0u
-                || (e.teamFlags.y & RendererVKLayout::FORCE_FLAG_PASSIVE) != 0u
-                || e.outputParams.y <= 0.0f
-                || RendererVKLayout::forceEmitterVisibleRadius(e) < force.sampledShellRadius)
-                continue;
-            // The proxy's support AABB (the forceEmitterBounds rule): the output line +- side.
-            const float R = e.posReach.w;
-            const float m = glm::abs(1.0f - 2.0f * e.dirFocus.w);
-            const float side = 0.5f * R * (1.0f + m) * e.outputParams.w * 1.03f;
-            const glm::vec3 a = glm::vec3(e.posReach);
-            const glm::vec3 b = a + glm::vec3(e.dirFocus) * R;
-            bakeLo = glm::min(bakeLo, glm::min(a, b) - side);
-            bakeHi = glm::max(bakeHi, glm::max(a, b) + side);
-        }
-    // VIEW FOOTPRINT CLIP (XZ): the volume only has to cover what is on screen. The four corner
-    // rays hit the union's height band at eight points; their XZ box (+ "Volume view margin") clips
-    // the fit, so the fixed texel grid follows the zoom instead of stretching over every large
-    // bubble in the world - a 7 m bubble 100 m off-screen no longer halves a 40 m shell's
-    // resolution. Outside the clipped fit the volume reads border black, but that boundary lies
-    // outside the view by construction. A ray that misses the band (camera looking up: the
-    // free-fly editor camera) leaves the union unclipped.
-    if (bakeLo.x <= bakeHi.x && force.shellVolumeViewMargin > 0.0f && !isVrEnabled())
-    {
-        const glm::mat4 invViewProj = glm::inverse(getCenterViewProj());
-        glm::vec2 footLo(FLT_MAX), footHi(-FLT_MAX);
-        bool valid = true;
-        for (int c = 0; c < 4 && valid; ++c)
-        {
-            const glm::vec2 ndc((c & 1) ? 1.0f : -1.0f, (c & 2) ? 1.0f : -1.0f);
-            glm::vec4 p0 = invViewProj * glm::vec4(ndc, 0.0f, 1.0f);
-            glm::vec4 p1 = invViewProj * glm::vec4(ndc, 1.0f, 1.0f);
-            p0 /= p0.w;
-            p1 /= p1.w;
-            // Reversed-Z or not, the point FARTHER from the camera is on the far side of the ray.
-            const glm::vec3 d0 = glm::vec3(p0) - m_cameraPos, d1 = glm::vec3(p1) - m_cameraPos;
-            const glm::vec3 dir = glm::dot(d1, d1) > glm::dot(d0, d0) ? d1 : d0;
-            for (const float yPlane : { bakeLo.y, bakeHi.y })
-            {
-                const float t = glm::abs(dir.y) > 1e-6f ? (yPlane - m_cameraPos.y) / dir.y : -1.0f;
-                if (t < 0.0f)
-                {
-                    valid = false; // the corner ray never reaches the band
-                    break;
-                }
-                const glm::vec3 hit = m_cameraPos + dir * t;
-                footLo = glm::min(footLo, glm::vec2(hit.x, hit.z));
-                footHi = glm::max(footHi, glm::vec2(hit.x, hit.z));
-            }
-        }
-        if (valid)
-        {
-            footLo -= force.shellVolumeViewMargin;
-            footHi += force.shellVolumeViewMargin;
-            bakeLo.x = glm::max(bakeLo.x, footLo.x);
-            bakeLo.z = glm::max(bakeLo.z, footLo.y);
-            bakeHi.x = glm::min(bakeHi.x, footHi.x);
-            bakeHi.z = glm::min(bakeHi.z, footHi.y);
-            if (bakeLo.x >= bakeHi.x || bakeLo.z >= bakeHi.z)
-                bakeLo = glm::vec3(FLT_MAX); // every large bubble is off-screen: no bake this frame
-        }
-    }
-    m_forceShellBakeActive = bakeLo.x <= bakeHi.x;
-    if (m_forceShellBakeActive)
-    {
-        const glm::vec3 margin = (bakeHi - bakeLo) * 0.02f + 1.0f; // ~2 filter texels of slack
-        bakeLo -= margin;
-        bakeHi += margin;
-        ubo.forceBake0 = glm::vec4(bakeLo, force.sampledShellRadius); // w = the VISIBLE-radius tier threshold
-        ubo.forceBake1 = glm::vec4(1.0f / glm::max(bakeHi - bakeLo, glm::vec3(1e-3f)), 1.0f);
-    }
-    else
-    {
-        ubo.forceBake0 = glm::vec4(0.0f, 0.0f, 0.0f, FLT_MAX); // no emitter reaches the threshold
-        ubo.forceBake1 = glm::vec4(0.0f);
-    }
-    // CAMERA-INSIDE bit (forceBake2.w): the marches' "camera inside a bubble" test is a property of
-    // ONE point per frame, so evaluate the full field at the camera here (CPU mirror) instead of a
-    // per-fragment field re-sample at the ray origin in both fragment shaders.
-    float phiCam[RendererVKLayout::MAX_FORCE_TEAMS] = {};
-    for (const RendererVKLayout::ForceEmitterGpu& e : m_forceEmitters.slots())
-    {
-        if ((e.teamFlags.y & RendererVKLayout::FORCE_FLAG_ACTIVE) == 0u
-            || (e.teamFlags.y & RendererVKLayout::FORCE_FLAG_PASSIVE) != 0u)
-            continue;
-        phiCam[glm::min(e.teamFlags.x, RendererVKLayout::MAX_FORCE_TEAMS - 1u)] += RendererVKLayout::forceContributionCpu(m_cameraPos, e);
-    }
-    float bestCam = 0.0f, secondCam = 0.0f;
-    for (float p : phiCam)
-    {
-        if (p > bestCam) { secondCam = bestCam; bestCam = p; }
-        else secondCam = glm::max(secondCam, p);
-    }
-    const bool cameraInside = bestCam - glm::max(glm::max(force.isoThreshold, 1e-3f), secondCam) > 0.0f;
-
-    ubo.forceBake2 = glm::vec4(glm::max(force.unionStepSize, 0.05f),
-        (float)glm::clamp(force.unionMaxSteps, 8, 512),
-        m_mipPixelScale * 0.5f,                // z: px per (radius/dist) - the union march's distance LOD
-        cameraInside ? 1.0f : 0.0f);           // w: the camera-inside bit
-}
-
-// Terrain rendering + splat texture params; also reports the splat textures to the mip streamer.
-void Renderer::buildUboTerrain()
-{
-    RendererVKLayout::Ubo& ubo = m_ubo;
-    ubo.terrainParams = m_terrainParams;
-
-    const TerrainTexTweaks& tex = m_terrainTexTweaks;
-    // Every start/full pair is ordered here rather than in the shader: an inverted pair from the tweak
-    // UI would otherwise make smoothstep divide by a negative span and flip the layer inside out.
-    ubo.terrainTexParams0 = glm::vec4(m_terrainSplatBaseMaterial < 0 ? -1.0f : (float)m_terrainSplatBaseMaterial,
-        (float)m_terrainSplatCounts.numGround, (float)m_terrainSplatCounts.numRock, glm::max(tex.climateBlend, 1e-3f));
-    ubo.terrainTexParams1 = glm::vec4(tex.uvScaleGround, tex.uvScaleRock,
-        tex.slopeRockStart, glm::max(tex.slopeRockFull, tex.slopeRockStart + 1e-3f));
-    ubo.terrainTexParams2 = glm::vec4(tex.cragStart, glm::max(tex.cragFull, tex.cragStart + 1e-3f),
-        tex.beachBand, tex.uvScaleSnow);
-    ubo.terrainTexParams3 = glm::vec4(m_terrainSplatCounts.hasBeach ? 1.0f : 0.0f, m_terrainSplatCounts.hasSnow ? 1.0f : 0.0f,
-        tex.snowTempFull, glm::max(tex.snowTempNone, tex.snowTempFull + 1e-3f));
-    ubo.terrainTexParams4 = glm::vec4(tex.snowSlopeStart, glm::max(tex.snowSlopeFull, tex.snowSlopeStart + 1e-3f),
-        tex.snowAridity, 0.0f);
-    ubo.terrainTexParams5 = glm::vec4(glm::max(tex.cragWanderAmp, 0.0f),
-        1.0f / glm::max(tex.cragWanderWavelength, 1.0f), 0.0f, 0.0f);
-
-    // Terrain wetness clipmap window: TERRAIN_WET_RES texels of texelSize centred on the scene focus, its
-    // origin an integer lattice coord (the shaders address the toroidal image by lattice & (RES-1)).
-    // The compute pass carries a texel's wetness only if its coord was inside the LAST TICK's window, so
-    // a window that was not live last frame (first enable, re-enable) parks the previous origin out of
-    // range and every texel starts dry instead of inheriting a stale slot.
-    //
-    // FIXED TICK ("Terrain/Wetness/Update rate"): the pass runs only when the accumulated sim delta
-    // reaches the tick interval, and integrates that whole delta at once. Per frame the change was below
-    // the R16F image's representable step at high fps and rounded away, so wetness depended on the
-    // framerate. Between ticks the pass is skipped and the reader keeps the last tick's layer + origin.
-    {
-        const TerrainWetTweaks& wet = m_terrainWetTweaks;
-        const float texel = glm::max(wet.texelSize, 0.05f);
-        const glm::vec3 focus = sceneFocusOrCamera();
-        constexpr int32 res = (int32)RendererVKLayout::TERRAIN_WET_RES;
-        const bool wasEnabled = m_terrainWetWasEnabled;
-        m_terrainWetWasEnabled = wet.enabled;
-        // SIM delta (frozen by the global pause, like the particles), capped so a hitch cannot dry the map.
-        m_terrainWetTickAccum = wet.enabled ? m_terrainWetTickAccum + oc::min((float)Globals::time.getSimDeltaSec(), 0.25f) : 0.0f;
-        const float interval = 1.0f / glm::max(wet.updateRate, 1.0f);
-        m_terrainWetTick = wet.enabled && (!wasEnabled || m_terrainWetTickAccum >= interval);
-        float dt = 0.0f; // 0 on skipped frames: the pass does not run, so the rate terms below are unused
-        glm::ivec2 origin = m_terrainWetPrevOrigin;
-        glm::ivec2 prevOrigin = m_terrainWetPrevOrigin;
-        if (m_terrainWetTick)
-        {
-            dt = oc::min(m_terrainWetTickAccum, 1.0f);
-            m_terrainWetTickAccum = 0.0f;
-            origin = glm::ivec2(glm::floor(glm::vec2(focus.x, focus.z) / texel)) - res / 2;
-            prevOrigin = wasEnabled ? m_terrainWetPrevOrigin : origin + res * 2;
-            m_terrainWetPrevOrigin = origin;
-            m_terrainWetLayer = 1u - m_terrainWetLayer; // write the other layer, read the last tick's
-        }
-        const float decay = wet.dryTime > 0.0f ? std::exp(-dt / wet.dryTime) : 0.0f;
-        ubo.terrainWetParams0 = glm::vec4((float)origin.x, (float)origin.y, (float)prevOrigin.x, (float)prevOrigin.y);
-        ubo.terrainWetParams1 = glm::vec4(texel, 1.0f / texel, decay, glm::max(wet.rain, 0.0f) * dt);
-        ubo.terrainWetParams2 = glm::vec4(wet.enabled ? 1.0f : 0.0f, glm::clamp(wet.albedoScale, 0.0f, 1.0f),
-            glm::clamp(wet.roughness, 0.0f, 1.0f), glm::max(wet.dryTempSens, 0.0f));
-        // Ping/pong layer: a tick writes the layer the last tick did not (the pass reads the other one);
-        // between ticks this names the last written layer, which the terrain shader keeps sampling.
-        const float writeLayer = (float)m_terrainWetLayer;
-        const float wetIn = wet.wetInTime > 0.0f ? dt / wet.wetInTime : 1.0f;
-        // Diffusion spread as a per-frame mix fraction from a per-second rate: the tent's variance then
-        // grows by ~rate * texel^2 per second at any framerate (a fixed per-frame fraction would spread
-        // twice as fast at twice the fps).
-        const float spread = 1.0f - std::exp(-glm::max(wet.diffusionRate, 0.0f) * dt);
-        ubo.terrainWetParams3 = glm::vec4(writeLayer, wetIn, glm::max(wet.filmDepth, 0.0f), spread);
-        ubo.terrainWetParams4 = glm::vec4(glm::max(wet.poolScale, 0.0f), glm::clamp(wet.poolSoftness, 0.0f, 1.0f),
-            glm::clamp(wet.dampGloss, 0.0f, 1.0f), glm::max(wet.poolHold, 1.0f));
-        ubo.terrainWetParams5 = glm::vec4(glm::max(wet.slopeDrain, 0.0f), glm::clamp(wet.dampAlbedoScale, 0.0f, 1.0f),
-            glm::clamp(wet.dampKnee, 0.0f, 1.0f), glm::clamp(wet.spikeStart, 0.0f, 0.99f));
-        ubo.terrainWetParams6 = glm::vec4(glm::clamp(wet.surfaceThreshold, 0.0f, 1.0f), glm::clamp(wet.surfaceSoftness, 0.0f, 1.0f),
-            glm::clamp(wet.surfaceWaviness, 0.0f, 1.0f), glm::max(wet.surfaceDepth, 0.0f));
-        ubo.terrainWetParams7 = glm::vec4(glm::max(wet.dryRate, 0.0f) * dt, glm::max(wet.liveMargin, 0.0f),
-            glm::max(wet.rippleStrength, 0.0f), glm::max(wet.surfaceNormalScale, 0.0f));
-    }
-    static_assert(sizeof(ubo.terrainSplatClimate) == sizeof(m_terrainSplatClimate));
-    memcpy(ubo.terrainSplatClimate, m_terrainSplatClimate, sizeof(m_terrainSplatClimate));
-    // The splat textures belong to no rendered instance's material, so the projected-size priority pass
-    // never sees them - report them here instead: terrain tiles them across the whole view, so they can
-    // always display roughly a screen's worth of texels.
-    if (m_terrainSplatBaseMaterial >= 0)
-    {
-        const float log2Screen = std::log2((float)oc::max(m_windowSize.x, m_windowSize.y) * 2.0f);
-        for (const uint16 texIdx : m_terrainSplatTextures)
-            Globals::textureStreamer.noteUse(texIdx, log2Screen);
-    }
-}
-
-void Renderer::renderNode(const RenderNode& node, uint32 passMask)
-{
-    const uint32 numInstances = (uint32)node.m_meshInstances.size();
-    const uint32 startIdx = oc::atomic_ref<uint32>(m_meshInstanceCounter).fetch_add(numInstances);
-    if (startIdx + numInstances > m_maxInstanceData)
-    {
-        // Doesn't fit this frame: drop the node and grow at the next beginFrame. NO rollback -
-        // un-bumping a non-top claim corrupts the cursor (later claims would land above the final
-        // counter or leave unwritten gaps below it). The cursor is monotonic, so no claim after
-        // this one can fit either: successful claims stay one contiguous prefix, and present()
-        // clamps the counter to the smallest failed claim recorded here.
-        oc::atomic_ref<uint32> overflow(m_instanceOverflowStart);
-        uint32 curOverflow = overflow.load(oc::memory_order_relaxed);
-        while (startIdx < curOverflow && !overflow.compare_exchange_weak(curOverflow, startIdx)) {}
-        oc::atomic_ref<uint32> pending(m_pendingMaxInstanceData);
-        uint32 cur = pending.load(oc::memory_order_relaxed);
-        while (cur < startIdx + numInstances && !pending.compare_exchange_weak(cur, startIdx + numInstances)) {}
-        return;
-    }
-
-    noteTextureUse(node, passMask);
-    for (const RendererVKLayout::InMeshInstance& instance : node.m_meshInstances)
-    {
-        oc::atomic_ref<uint32>(m_numInstancesPerMesh[instance.meshIdx]) += 1;
-        Globals::meshStreamer.noteUse(instance.meshIdx);
-    }
-
-    const uint32 frameIdx = m_swapChain.getCurrentFrameIndex();
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    // Sparse transform upload: copy only when this slot has not seen the node's latest transform.
-    if ((node.m_transformUploadState >> RendererVKLayout::NUM_FRAMES_IN_FLIGHT) != m_renderNodeBufferGeneration)
-        node.m_transformUploadState = uint8((m_renderNodeBufferGeneration << RendererVKLayout::NUM_FRAMES_IN_FLIGHT) | RenderNode::ALL_FRAMES_DIRTY);
-    const uint8 frameBit = uint8(1u << frameIdx);
-    if (node.m_transformUploadState & frameBit)
-    {
-        memcpy(&frameData.mappedRenderNodeTransforms[node.m_transformIdx], &m_renderNodeTransforms[node.m_transformIdx], sizeof(Transform));
-        node.m_transformUploadState &= uint8(~frameBit);
-    }
-    frameData.mappedNodePassMasks[node.m_transformIdx] = passMask;
-    memcpy(frameData.mappedMeshInstances.data() + startIdx, node.m_meshInstances.data(), numInstances * sizeof(node.m_meshInstances[0]));
-    if (node.m_lodStateBase != UINT32_MAX) // allocated at spawn only when the node has a LOD chain
-        noteLodChainUse(node, startIdx, frameData); // benign races: same-value stamp + thread-safe noteUse
-}
-
-void Renderer::noteTextureUse(const RenderNode& node, uint32 passMask)
-{
-    if (!Globals::textureStreamer.isStreamingEnabled())
-        return;
-    const Sphere bounds = node.getWorldBounds();
-    const float dist = oc::max(0.01f, glm::length(bounds.pos - m_cameraPos) - bounds.radius);
-    const float projPixels = bounds.radius * m_mipPixelScale / dist;
-    float log2P = std::log2(oc::max(1.0f, projPixels));
-    if (!(passMask & RendererVKLayout::PASS_MAIN))
-        log2P -= 2.0f; // off-screen (shadow/GI-only) nodes tolerate two mips coarser
-
-    const oc::span<const RendererVKLayout::MaterialInfo> materials =
-        m_materialInfosBuffer.getBackingStoreAs<RendererVKLayout::MaterialInfo>();
-    for (const RendererVKLayout::InMeshInstance& instance : node.m_meshInstances)
-    {
-        const RendererVKLayout::MaterialInfo& material = materials[instance.materialIdx];
-        Globals::textureStreamer.noteUse(material.diffuseTexIdx, log2P);
-        Globals::textureStreamer.noteUse(material.normalTexIdx, log2P);
-        Globals::textureStreamer.noteUse(material.metalRoughnessTexIdx, log2P);
-    }
-}
-
-void Renderer::noteLodChainUse(const RenderNode& node, uint32 startIdx, PerFrameData& frameData)
-{
-    // The GPU cull picks each instance's level, so every level of a referenced chain must stay warm in
-    // the mesh streamer. Only AUTHORED chains (no error data) need this: their levels are independent
-    // mesh sets, and a cold one would draw nothing while it re-streams. Generated chains share LOD0's
-    // set, which the caller's per-instance noteUse already touched. Stamped once per group per frame;
-    // races on the stamp are benign: both threads write the same frame value, worst case double-noting.
-    for (const RendererVKLayout::InMeshInstance& instance : node.m_meshInstances)
-    {
-        const uint32 groupIdx = m_meshLods.getGroupIdxForMesh(instance.meshIdx); // the instance references the chain's LOD0 mesh
-        if (groupIdx == UINT32_MAX)
-            continue;
-        MeshLodGroup& group = m_meshLods.getGroup(groupIdx);
-        if (group.errors[1] == 0.0f && oc::atomic_ref<uint32>(group.lastUseFrame).load(oc::memory_order_relaxed) != m_frameCounter)
-        {
-            oc::atomic_ref<uint32>(group.lastUseFrame).store(m_frameCounter, oc::memory_order_relaxed);
-            for (uint8 k = 1; k < group.numLods; ++k)
-                Globals::meshStreamer.noteUse(group.meshIdx[k]);
-        }
-    }
-    // Publish the cull's hysteresis-state addressing for this node: stateSlot = instanceIdx + bias.
-    frameData.mappedNodeLodStateBias[node.m_transformIdx] = (int32)node.m_lodStateBase - (int32)startIdx;
-}
-
-
-void Renderer::addLightInfo(const RendererVKLayout::LightInfo& light)
-{
-    // lock-free bump; claims beyond MAX_LIGHTS are dropped (present clamps the flush count)
-    const uint32 idx = oc::atomic_ref<uint32>(m_lightCounter).fetch_add(1);
-    if (idx < RendererVKLayout::MAX_LIGHTS)
-    {
-        PerFrameData& frameData = m_perFrameData[m_swapChain.getCurrentFrameIndex()];
-        frameData.mappedLightInfos[idx] = light;
-        m_lightGridComputePipeline.addLight(idx, light); // bounds + grid claims, right here on the adding thread
-    }
-}
-
-void Renderer::addFogVolume(const RendererVKLayout::FogVolumeInfo& fogVolume)
-{
-    const uint32 idx = oc::atomic_ref<uint32>(m_fogVolumeCounter).fetch_add(1);
-    if (idx < RendererVKLayout::MAX_FOG_VOLUMES)
-    {
-        PerFrameData& frameData = m_perFrameData[m_swapChain.getCurrentFrameIndex()];
-        frameData.mappedFogVolumes.data()->volumes[idx] = fogVolume;
-    }
-}
-
-void Renderer::addPointLight(const PointLight& light)   { addLightInfo(light); }
-void Renderer::addAreaLight(const AreaLight& areaLight) { addLightInfo(areaLight); }
-void Renderer::addSpotLight(const SpotLight& spotLight) { addLightInfo(spotLight); }
-
-void Renderer::addDecal(const RendererVKLayout::DecalInfo& decal)
-{
-    // lock-free bump like addLightInfo; claims beyond MAX_DECALS are dropped (present clamps the count)
-    const uint32 idx = oc::atomic_ref<uint32>(m_decalCounter).fetch_add(1);
-    if (idx < RendererVKLayout::MAX_DECALS)
-        m_decalPipeline.getMapped(m_swapChain.getCurrentFrameIndex())[idx] = decal;
-}
-
-// A retired emitter's slot comes back once its KILL flag has drained through the sim (its particles
-// are gone after the flag has been live for a couple of simulated frames) - see RecycledSlotTable.
-uint32 Renderer::createParticleEmitter(const RendererVKLayout::ParticleEmitterGpu& desc)
-{
-    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
-    const uint32 slot = m_particleEmitters.create(m_frameCounter);
-    if (slot != UINT32_MAX)
-        m_particleEmitters[slot] = desc;
-    return slot;
-}
-
-void Renderer::updateParticleEmitter(uint32 slot, const RendererVKLayout::ParticleEmitterGpu& desc)
-{
-    assert(m_particleEmitters.isValid(slot));
-    m_particleEmitters[slot] = desc;
-}
-
-void Renderer::emitParticles(uint32 slot, uint32 count)
-{
-    assert(m_particleEmitters.isValid(slot));
-    if (count > 0)
-        m_particleSpawnRequests.emplace_back((uint16)slot, (uint16)oc::min(count, 0xFFFFu));
-}
-
-void Renderer::destroyParticleEmitter(uint32 slot)
-{
-    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
-    assert(m_particleEmitters.isValid(slot));
-    m_particleEmitters[slot].texFlags.y |= RendererVKLayout::PARTICLE_FLAG_KILL;
-    m_particleEmitters.retire(slot, m_frameCounter);
-}
-
-void Renderer::setRainOcclusionVolume(const glm::vec3& center, const glm::vec3& halfExtents)
-{
-    m_rainVolumeRequest.center = center;
-    m_rainVolumeRequest.halfExtents = halfExtents;
-    m_rainVolumeRequest.active = true;
-}
-
-// A retired force slot comes back once every frame that could still deliver its slot-indexed readback
-// has drained - the emitter forces and the query results are both slot-indexed (RecycledSlotTable).
-uint32 Renderer::createForceEmitter(const RendererVKLayout::ForceEmitterGpu& desc)
-{
-    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
-    const uint32 slot = m_forceEmitters.create(m_frameCounter);
-    if (slot == UINT32_MAX)
-        return slot;
-    m_forceEmitters[slot] = desc;
-    m_forceEmitters[slot].teamFlags.y |= RendererVKLayout::FORCE_FLAG_ACTIVE;
-    return slot;
-}
-
-void Renderer::updateForceEmitter(uint32 slot, const RendererVKLayout::ForceEmitterGpu& desc)
-{
-    assert(m_forceEmitters.isValid(slot));
-    m_forceEmitters[slot] = desc;
-}
-
-void Renderer::destroyForceEmitter(uint32 slot)
-{
-    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
-    assert(m_forceEmitters.isValid(slot));
-    m_forceEmitters[slot].teamFlags.y &= ~RendererVKLayout::FORCE_FLAG_ACTIVE;
-    m_forceEmitters.retire(slot, m_frameCounter);
-}
-
-uint32 Renderer::createForceQuerySlot()
-{
-    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
-    const uint32 slot = m_forceQueries.create(m_frameCounter);
-    if (slot != UINT32_MAX)
-        m_forceQueries[slot].posActive = glm::vec4(0.0f); // inactive until the first setForceQuery
-    return slot;
-}
-
-void Renderer::setForceQuery(uint32 slot, const glm::vec3& pos)
-{
-    assert(m_forceQueries.isValid(slot));
-    m_forceQueries[slot].posActive = glm::vec4(pos, 1.0f);
-}
-
-void Renderer::destroyForceQuerySlot(uint32 slot)
-{
-    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
-    assert(m_forceQueries.isValid(slot));
-    m_forceQueries[slot].posActive = glm::vec4(0.0f);
-    m_forceQueries.retire(slot, m_frameCounter);
-}
-
-glm::vec4 Renderer::getForceEmitterReadback(uint32 slot) const
-{
-    const oc::span<const glm::vec4> forces = m_forceFieldPipeline.getForceReadback(m_swapChain.getCurrentFrameIndex());
-    return slot < forces.size() ? forces[slot] : glm::vec4(0.0f);
-}
-
-RendererVKLayout::ForceBakeReadback Renderer::getForceBakeReadback() const
-{
-    return m_forceFieldPipeline.getBakeReadback(m_swapChain.getCurrentFrameIndex());
-}
-
-RendererVKLayout::ForceQueryResult Renderer::getForceQueryReadback(uint32 slot) const
-{
-    const oc::span<const RendererVKLayout::ForceQueryResult> results = m_forceFieldPipeline.getQueryReadback(m_swapChain.getCurrentFrameIndex());
-    return slot < results.size() ? results[slot] : RendererVKLayout::ForceQueryResult{ RendererVKLayout::MAX_FORCE_TEAMS, 0.0f, 0.0f, 0u };
-}
-
-void Renderer::setForceFieldParams(const ForceFieldParams& params)
-{
-    // The grid toggle and the LIVE team count are compile-time shader defines (FORCE_GRID /
-    // NUM_FORCE_TEAMS): rebuild the force pipelines, same GPU-idle + reload pattern as the ocean
-    // hit-lighting tweak. A team-count change additionally remakes the team-sized bake
-    // volume/buffers (setNumTeams) - a game-mode event, never per-frame.
-    const uint32 numTeams = glm::clamp(params.numTeams, 2u, RendererVKLayout::MAX_FORCE_TEAMS);
-    if (params.useGrid != m_forceFieldPipeline.getUseGrid()
-        || params.densityView != m_forceFieldPipeline.getDensityView() // FORCE_DENSITY_VIEW: the debug overlay is a define too
-        || numTeams != m_forceFieldPipeline.getNumTeams()
-        || params.unionHalfRes != m_forceFieldPipeline.getUnionHalfRes()
-        || params.unionJitter != m_forceFieldPipeline.getUnionJitter())
-    {
-        if (Globals::device.graphicsQueueWaitIdle() == vk::Result::eSuccess)
-        {
-            printf("ForceFieldPipeline: rebuilding force pipelines (grid %d, %u teams, union %s%s)\n",
-                params.useGrid ? 1 : 0, numTeams, // loud: a silent skip here strands stale binaries
-                params.unionHalfRes ? "half-res" : "full-res", params.unionJitter ? "" : ", no jitter");
-            // Shader source reads from the frame loop: intentional, rare main-thread IO (a game-
-            // mode switch or the grid tweak), declared so FileSystem's assert stays meaningful.
-            const FileSystem::AllowMainThreadIO allowIo;
-            m_forceFieldPipeline.setUseGrid(params.useGrid);
-            m_forceFieldPipeline.setDensityView(params.densityView);
-            m_forceFieldPipeline.setNumTeams(numTeams);
-            m_forceFieldPipeline.setUnionJitter(params.unionJitter);
-            if (params.unionHalfRes != m_forceFieldPipeline.getUnionHalfRes())
-            {
-                // The targets change size (and the march target existence) with the mode.
-                m_forceFieldPipeline.setUnionHalfRes(params.unionHalfRes);
-                const vk::Extent2D ext = m_swapChain.getLayout().extent;
-                m_forceFieldPipeline.resizeIntervalTarget(ext.width, ext.height);
-            }
-            m_forceFieldPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass());
-            setHaveToRecordCommandBuffers();
-        }
-    }
-    m_forceFieldParams = params;
-}
-
-uint16 Renderer::createSolidColorMaterial(const glm::vec3& color)
-{
-    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning (cache + material registry)
-    const glm::vec3 c = glm::clamp(color, 0.0f, 1.0f);
-    const uint32 key = uint32(c.x * 255.0f + 0.5f) | (uint32(c.y * 255.0f + 0.5f) << 8)
-        | (uint32(c.z * 255.0f + 0.5f) << 16);
-    if (const auto it = m_solidColorMaterials.find(key); it != m_solidColorMaterials.end())
-        return it->second;
-
-    struct SolidColorTexture final : public ITextureData
-    {
-        Pixel pixel{};
-        const char* getFileName() const override { return "solid_color"; }
-        const Pixel* getPixels() const override { return &pixel; }
-        uint32 getWidth() const override { return 1; }
-        uint32 getHeight() const override { return 1; }
-        const char* getFormatInfo() const override { return "rgba8888"; }
-    };
-    SolidColorTexture texture;
-    texture.pixel = { uint8(key & 0xFF), uint8((key >> 8) & 0xFF), uint8((key >> 16) & 0xFF), 0xFF };
-    const uint16 texIdx = Globals::textureManager.upload(texture, false, true);
-
-    RendererVKLayout::MaterialInfo material{};
-    // No MATERIAL_FLAG_NO_RAYTRACING: the flag also drops the instance from the sun shadow caster cull,
-    // and every tinted game entity (units, structures, the player) went shadowless. Tints cast shadows
-    // and sit in the TLAS like any lit material; gizmo exclusion lives in gizmos.oc.
-    material.flags = 0;
-    material.opacity = 1.0f;
-    material.diffuseTexIdx = texIdx;
-    material.normalTexIdx = RendererVKLayout::FALLBACK_NORMAL_TEX_IDX;
-    material.metalRoughnessTexIdx = 0xFFFF; // lit shading's "no texture": metal 0, roughness 0.65
-    material.alphaMode = 0;
-    const uint16 materialIdx = (uint16)addMaterialInfos({ material });
-    m_solidColorMaterials.emplace(key, materialIdx);
-    // No re-record: the texture upload queued the slot's bindless write for every consuming set
-    // (TextureManager::upload -> TextureStreamer::queueDescriptorWrite), and the material row is a
-    // shared-buffer upload. Capacity growth (textures or materials) invalidates on its own.
-    return materialIdx;
-}
-
-uint16 Renderer::loadEffectTexture(const char* filePath, bool sRGB)
-{
-    const uint16 idx = Globals::textureManager.upload(filePath, true, sRGB);
-    // No re-record: the upload queued the slot's bindless write for every consuming set (the
-    // TextureStreamer's pending-write path, applied in recordCommandBuffers before anything records);
-    // growth beyond the descriptor capacity is caught by syncTextureDescriptorCapacity.
-    return idx;
-}
-
 void Renderer::setSunLight(const glm::vec3& direction, const glm::vec3& color, float intensity)
 {
     m_skyParams.sunDirection = glm::normalize(direction);
@@ -1823,24 +848,23 @@ void Renderer::present()
     // Single-threaded again: settle the lock-free frame counters. Instance claims past capacity
     // never wrote (renderNode's monotonic-cursor overflow path), so the valid prefix ends at the
     // smallest failed claim; light/fog claims past their fixed maxima were dropped the same way.
-    m_meshInstanceCounter = oc::min(m_meshInstanceCounter, m_instanceOverflowStart);
-    m_lightCounter = oc::min(m_lightCounter, uint32(RendererVKLayout::MAX_LIGHTS));
-    m_fogVolumeCounter = oc::min(m_fogVolumeCounter, uint32(RendererVKLayout::MAX_FOG_VOLUMES));
-    m_decalCounter = oc::min(m_decalCounter, uint32(RendererVKLayout::MAX_DECALS));
+    m_instances.clampInstanceCountToOverflow();
+    m_submission.settleCounts();
 
     const uint32 frameIdx = m_swapChain.getCurrentFrameIndex();
     PerFrameData& frameData = m_perFrameData[frameIdx];
+    InstanceStream::FrameSlot& instances = m_instances.slot(frameIdx);
 
-    assert(frameData.mappedRenderNodeTransforms.size() >= m_renderNodeTransforms.size());
-    assert(frameData.mappedMeshInstances.size() >= m_meshInstanceCounter);
-    assert(frameData.mappedFirstInstances.size() >= m_meshInfoCounter);
-    assert(m_renderNodeTransforms.size() == 0 || Globals::textureManager.getNumTextures() > 0 && "Attempting to render object without any textures loaded!");
+    assert(instances.mappedTransforms.size() >= m_instances.getNumTransforms());
+    assert(instances.mappedMeshInstances.size() >= m_instances.getInstanceCount());
+    assert(instances.mappedFirstInstances.size() >= m_meshInfos.count());
+    assert(m_instances.getNumTransforms() == 0 || Globals::textureManager.getNumTextures() > 0 && "Attempting to render object without any textures loaded!");
 
     ProfileScope uploadScope("Per-frame uploads", EProfileCategory::Renderer);
     // The UBO was uploaded in beginFrame, where the instance counter had just been reset: the TLAS-instance
     // writer's live count is only known here, so patch that one word. (Left at the beginFrame value it
     // read 0 every frame - every TLAS slot inactive, an EMPTY TLAS, no ray hit anywhere.)
-    m_ubo.giTlasNumInstances = oc::min(m_meshInstanceCounter, m_maxGiTlasInstances);
+    m_ubo.giTlasNumInstances = oc::min(m_instances.getInstanceCount(), m_rt.getMaxTlasInstances());
     Globals::stagingManager.upload(frameData.ubo.getBuffer(), sizeof(uint32), &m_ubo.giTlasNumInstances,
         offsetof(RendererVKLayout::Ubo, giTlasNumInstances));
     ProfileScope bucketScope("Instance buckets + flushes", EProfileCategory::Renderer);
@@ -1848,31 +872,30 @@ void Renderer::present()
     // each one to its selected level - so every member of a LOD chain gets a bucket sized to the
     // CHAIN's instance count (any split of the instances across levels fits). Non-chain meshes keep
     // exact buckets. The expansion can exceed the pushed instance count; the instance-index buffers
-    // are sized to m_maxInstanceData, so grow when the expanded total outruns it.
+    // are sized to m_instances.getMaxInstances(), so grow when the expanded total outruns it.
     uint32 instanceCounter = 0;
-    const uint32 numMeshInfos = (uint32)m_numInstancesPerMesh.size();
+    const uint32 numMeshInfos = m_instances.getNumMeshCounters();
     for (uint32 meshIdx = 0; meshIdx < numMeshInfos; ++meshIdx)
     {
-        frameData.mappedFirstInstances[meshIdx] = instanceCounter;
+        instances.mappedFirstInstances[meshIdx] = instanceCounter;
         const uint32 groupIdx = m_meshLods.getGroupIdxForMesh((uint16)meshIdx);
-        instanceCounter += groupIdx == UINT32_MAX ? m_numInstancesPerMesh[meshIdx]
-            : m_numInstancesPerMesh[m_meshLods.getGroup(groupIdx).meshIdx[0]];
+        instanceCounter += m_instances.getNumInstancesForMesh(
+            groupIdx == UINT32_MAX ? meshIdx : m_meshLods.getGroup(groupIdx).meshIdx[0]);
     }
-    if (instanceCounter > m_maxInstanceData)
-        growMeshInstanceCapacity(instanceCounter);
+    if (instanceCounter > m_instances.getMaxInstances())
+        m_instances.growInstances(instanceCounter, frameIdx);
 
-    frameData.inRenderNodeTransformsBuffer.flushMappedMemory(m_renderNodeTransforms.size() * sizeof(m_renderNodeTransforms[0]));
-    frameData.inNodePassMasksBuffer.flushMappedMemory(m_renderNodeTransforms.size() * sizeof(uint32));
-    frameData.inNodeLodStateBiasBuffer.flushMappedMemory(m_renderNodeTransforms.size() * sizeof(int32));
-    frameData.inMeshInstancesBuffer.flushMappedMemory(m_meshInstanceCounter * sizeof(RendererVKLayout::InMeshInstance));
-    frameData.inFirstInstancesBuffer.flushMappedMemory(numMeshInfos * sizeof(uint32));
-    frameData.lightInfosBuffer.flushMappedMemory(m_lightCounter * sizeof(RendererVKLayout::LightInfo));
+    const uint32 numNodes = m_instances.getNumTransforms();
+    instances.transforms.flushMappedMemory(numNodes * sizeof(RendererVKLayout::RenderNodeTransform));
+    instances.passMasks.flushMappedMemory(numNodes * sizeof(uint32));
+    instances.lodStateBias.flushMappedMemory(numNodes * sizeof(int32));
+    instances.meshInstances.flushMappedMemory(m_instances.getInstanceCount() * sizeof(RendererVKLayout::InMeshInstance));
+    instances.firstInstances.flushMappedMemory(numMeshInfos * sizeof(uint32));
+    m_submission.flushFrame(frameIdx);
 
-    frameData.mappedMeshCount[0] = m_meshInfoCounter; // DGC sequence count for this frame
-    frameData.meshCountBuffer.flushMappedMemory(sizeof(uint32));
+    instances.mappedMeshCount[0] = m_meshInfos.count(); // DGC sequence count for this frame
+    instances.meshCount.flushMappedMemory(sizeof(uint32));
 
-    frameData.mappedFogVolumes.data()->count = m_fogVolumeCounter;
-    frameData.fogVolumesBuffer.flushMappedMemory(RendererVKLayout::FOG_VOLUME_HEADER_SIZE + m_fogVolumeCounter * sizeof(RendererVKLayout::FogVolumeInfo));
 
     bucketScope.stop();
     // Debug overlay lines accumulated since the last present (safe here: this slot's fence was waited
@@ -1883,47 +906,47 @@ void Renderer::present()
     debugLineScope.stop();
 
     // Only spend the pool reset on a frame that will actually execute the sim (see
-    // m_particleResetPending); the flag is cleared after this frame's successful submit below.
-    const bool particleResetCarried = m_particleResetPending && m_particleParams.enabled && m_meshInstanceCounter > 0;
+    // ParticleState); the flag is cleared after this frame's successful submit below.
+    const bool particleResetCarried = m_particles.isResetPending() && m_particles.isEnabled() && m_instances.getInstanceCount() > 0;
     { // Particle emitter table + spawn map + decals into this slot's mapped buffers (fence waited).
         ProfileScope effectsScope("Effects upload", EProfileCategory::Renderer);
         // SIM delta, not a wall-clock difference: the GPU particle sim must freeze with the global
         // pause (present runs once per Time frame, so this is the same interval when unpaused).
         const float dt = oc::min((float)Globals::time.getSimDeltaSec(), 0.25f);
         uint32 spawnRequestTotal = 0;
-        for (const auto& [slot, count] : m_particleSpawnRequests)
+        for (const auto& [slot, count] : m_particles.getSpawnRequests())
             spawnRequestTotal += count;
-        m_particlePipeline.update(frameIdx, m_particleEmitters.slots(), m_particleSpawnRequests,
-            dt * m_particleParams.timeScale, m_particleParams.collision, particleResetCarried);
-        m_particleSpawnRequests.clear();
-        m_decalPipeline.upload(frameIdx, m_decalCounter);
+        m_particlePipeline.update(frameIdx, m_particles.getEmitters(), m_particles.getSpawnRequests(),
+            dt * m_particles.getParams().timeScale, m_particles.getParams().collision, particleResetCarried);
+        m_particles.clearSpawnRequests();
+        m_decalPipeline.upload(frameIdx, m_submission.getDecalCount());
         // The force emitter compaction + grid build ride the grid jobs (kickGridBuilds / joinGridBuilds).
 
-        if (m_particleParams.enabled)
+        if (m_particles.isEnabled())
         {
             const ParticlePipeline::DebugCounters counters = m_particlePipeline.getDebugCounters(frameIdx);
-            if (m_particleParams.logStats && m_frameCounter % 120 == 0)
+            if (m_particles.getParams().logStats && m_frameCounter % 120 == 0)
                 printf("Particles: alive %u/%u (parity 0/1), dead %d, simGroups %u, emitters %u, spawn reqs %u, GPU spawns %u, dropped %u, broken %u, decals %u\n",
                     counters.alive[0], counters.alive[1], counters.deadCount, counters.simGroups,
-                    (uint32)m_particleEmitters.size(), spawnRequestTotal, counters.gpuSpawns,
-                    counters.dropSpawns, counters.dropBroken, m_decalCounter);
+                    m_particles.getNumEmitters(), spawnRequestTotal, counters.gpuSpawns,
+                    counters.dropSpawns, counters.dropBroken, m_submission.getDecalCount());
             // Pool exhaustion warning, ALWAYS on: a full pool makes every emit drop its spawn without a
             // trace, so the whole system looks switched off. Logged on the first frame it happens and
             // then at most once a second, with a recovery line, so a burst cannot flood the console.
             if (counters.dropSpawns > 0)
             {
-                if (m_particleDropLogFrame == 0 || m_frameCounter - m_particleDropLogFrame >= 300)
+                if (m_particles.shouldLogDrop(m_frameCounter))
                 {
-                    m_particleDropLogFrame = m_frameCounter;
+                    m_particles.noteDropLogged(m_frameCounter);
                     printf("Particles: POOL EXHAUSTED - dropped %u spawns this frame (alive %u, dead %d of %u, GPU spawns %u, emitters %u)\n",
                         counters.dropSpawns, counters.alive[1 - (frameIdx & 1u)], counters.deadCount,
-                        RendererVKLayout::MAX_PARTICLES, counters.gpuSpawns, (uint32)m_particleEmitters.size());
+                        RendererVKLayout::MAX_PARTICLES, counters.gpuSpawns, m_particles.getNumEmitters());
                 }
             }
-            else if (m_particleDropLogFrame != 0)
+            else if (m_particles.wasDropping())
             {
                 printf("Particles: pool recovered (dead %d of %u)\n", counters.deadCount, RendererVKLayout::MAX_PARTICLES);
-                m_particleDropLogFrame = 0;
+                m_particles.clearDropping();
             }
             // A non-finite particle used to be an immortal invisible pool slot; the sim now retires it.
             // A steady count means a live NaN source upstream, so say so once a second.
@@ -1934,8 +957,8 @@ void Renderer::present()
 
     {
         ProfileScope computeScope("Cull/skin update", EProfileCategory::Renderer);
-        m_indirectCullComputePipeline.update(frameIdx, m_meshInstanceCounter);
-        m_skinningComputePipeline.update(frameIdx, m_skinningPalettes, m_skinningJobs);
+        m_indirectCullComputePipeline.update(frameIdx, m_instances.getInstanceCount());
+        m_skinningComputePipeline.update(frameIdx, m_skinned.getPalettes(), m_skinned.getJobs());
     }
     uploadScope.stop();
 
@@ -1949,7 +972,7 @@ void Renderer::present()
 
     // Catch texture-array growth from containers loaded AFTER beginFrame (terrain streaming, mid-frame
     // spawns): without this, this frame's record writes past the descriptor capacity beginFrame sized.
-    syncTextureDescriptorCapacity();
+    m_textures.syncCapacity([this]() { waitForGpuAndFlushStaging(); });
 
     // Same catch-up for the mesh vertex/index mega-buffers (beginFrame only samples the generation once,
     // early): a mid-frame container load (terrain streaming spawning a new chunk) can grow them here, via
@@ -1962,7 +985,7 @@ void Renderer::present()
         setHaveToRecordCommandBuffers();
     }
 
-    if (!m_pendingTextureFrees.empty())
+    if (m_textures.hasPendingFrees())
     {
         // A container was destroyed this frame; its textures may still be sampled by an in-flight frame,
         // so drain before freeing them. Their bindless slots rewrite to the fallback in recordCommandBuffers
@@ -1970,7 +993,7 @@ void Renderer::present()
         ProfileScope profileScope("Texture free drain", EProfileCategory::Wait);
         auto waitResult = Globals::device.graphicsQueueWaitIdle();
         assert(waitResult == vk::Result::eSuccess && "Failed to wait for device idle before freeing textures");
-        processPendingTextureFrees();
+        m_textures.processPendingFrees();
     }
 
     joinGridBuilds(frameIdx, frameData); // before the staging update: a growth waits the GPU and flushes staging
@@ -2010,16 +1033,15 @@ void Renderer::present()
     // The reset actually reached the GPU with this submission; until here any early-out above
     // (acquire failure -> recreateSwapchain return) keeps it pending for the next frame.
     if (particleResetCarried)
-        m_particleResetPending = false;
+        m_particles.clearResetPending();
     // Latch this frame's rain occlusion request for the NEXT frame's begin-frame job (the request is
     // main-thread state written between the join and here); a frame with no request switches it off.
-    m_rainVolume = m_rainVolumeRequest;
-    m_rainVolumeRequest.active = false;
+    m_particles.latchRainVolume();
     // This frame's submission is now new GPU work that could read the shared mesh/material/instance-offset
     // buffers; any upload into them from here on needs a fresh drain. See StagingManager::ensureDrainedForSharedWrite.
     Globals::stagingManager.resetSharedWriteGate();
 
-    Globals::openXR.endFrame(m_eyeColorImage[0], m_eyeColorImage[1], m_swapChain.getLayout().extent, vk::ImageLayout::ePresentSrcKHR);
+    Globals::openXR.endFrame(m_vrEyes.getColorImage(0), m_vrEyes.getColorImage(1), m_swapChain.getLayout().extent, vk::ImageLayout::ePresentSrcKHR);
 
     {
         ProfileScope profileScope("Queue present", EProfileCategory::Wait);
@@ -2031,2151 +1053,6 @@ void Renderer::present()
     m_frameSlotWaited = false; // the slot advanced: next frame must wait its own fence first
 }
 
-uint32 Renderer::addRenderNodeTransform(const Transform& transform)
-{
-    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
-    if (!m_freeRenderNodeIndexes.empty())
-    {
-        const uint32 renderNodeIdx = m_freeRenderNodeIndexes.back();
-        m_freeRenderNodeIndexes.pop_back();
-        m_renderNodeTransforms[renderNodeIdx] = transform;
-        return renderNodeIdx; // a fresh RenderNode starts all-dirty, so the reused slot uploads at its first push
-    }
-    const uint32 renderNodeIdx = (uint32)m_renderNodeTransforms.size();
-    m_renderNodeTransforms.emplace_back(transform);
-    if ((uint32)m_renderNodeTransforms.size() > m_maxRenderNodes)
-        growRenderNodeCapacity((uint32)m_renderNodeTransforms.size());
-    return renderNodeIdx;
-}
-
-void RenderNode::destroy()
-{
-    if (m_transformIdx == UINT32_MAX && m_skinnedBundleHandle == UINT32_MAX)
-        return;
-    Globals::rendererVK.freeRenderNode(*this);
-}
-
-// No GPU sync needed anywhere in the free path: mesh instances, skinning jobs and palettes are
-// re-uploaded into per-frame buffers every frame, transforms upload sparsely on change (dirty on
-// slot reuse), so frames still in flight read their own copies and frames recorded from here on
-// simply never reference the freed slots.
-void Renderer::freeRenderNode(RenderNode& node)
-{
-    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
-    if (node.m_transformIdx != UINT32_MAX)
-    {
-        m_freeRenderNodeIndexes.push_back(node.m_transformIdx);
-        node.m_transformIdx = UINT32_MAX;
-    }
-    if (node.m_skinnedBundleHandle != UINT32_MAX)
-    {
-        releaseSkinnedBundle(node.m_skinnedBundleHandle);
-        node.m_skinnedBundleHandle = UINT32_MAX;
-    }
-    if (node.m_lodStateBase != UINT32_MAX)
-    {
-        m_meshLods.releaseStateRange(node.m_lodStateBase, (uint32)node.m_meshInstances.size());
-        node.m_lodStateBase = UINT32_MAX;
-    }
-    node.m_meshInstances.clear();
-}
-
-uint32 Renderer::registerSkinnedBundle(const SkinnedInstanceBundle& bundle)
-{
-    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
-    if (!m_freeSkinnedBundleSlots.empty())
-    {
-        const uint32 handle = m_freeSkinnedBundleSlots.back();
-        m_freeSkinnedBundleSlots.pop_back();
-        m_skinnedBundles[handle] = bundle;
-        return handle;
-    }
-    const uint32 handle = (uint32)m_skinnedBundles.size();
-    m_skinnedBundles.push_back(bundle);
-    return handle;
-}
-
-void Renderer::releaseSkinnedBundle(uint32 bundleHandle)
-{
-    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
-    const SkinnedInstanceBundle& bundle = m_skinnedBundles[bundleHandle];
-    // Park in place: a zero vertexCount makes the skinning dispatch skip the job, a zero indexCount makes
-    // recordBuildSkinnedBlas skip the rebuild. The entries must keep their positions (see SkinnedInstanceBundle).
-    for (uint32 k = 0; k < bundle.numMeshes; ++k)
-    {
-        m_skinningJobs[bundle.firstJob + k].vertexCount = 0;
-        m_skinnedBlasBuilds[bundle.firstJob + k].indexCount = 0;
-    }
-    m_freeSkinnedBundles[bundle.sourceKey].push_back(bundleHandle);
-}
-
-uint32 Renderer::acquireSkinnedBundle(uint32 sourceKey)
-{
-    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
-    const auto it = m_freeSkinnedBundles.find(sourceKey);
-    if (it == m_freeSkinnedBundles.end() || it->second.empty())
-        return UINT32_MAX;
-    const uint32 bundleHandle = it->second.back();
-    it->second.pop_back();
-
-    const SkinnedInstanceBundle& bundle = m_skinnedBundles[bundleHandle];
-    const SkinningPaletteRegion& region = m_skinningPaletteRegions[bundle.paletteHandle];
-    oc::fill_n(m_skinningPalettes.begin() + region.offset, region.boneCount, glm::mat4(1.0f)); // bind pose until the first setSkinningPalette
-    for (uint32 k = 0; k < bundle.numMeshes; ++k)
-    {
-        const RendererVKLayout::SkinnedMeshSource& src = m_skinnedMeshSources[bundle.sourceKey + k];
-        m_skinningJobs[bundle.firstJob + k].vertexCount = src.vertexCount;
-        // The bundle's recorded count, NOT src.indexCount: the skinned BLAS was created (and its buffer
-        // sized) for the chain's RT level, which may be coarser than level 0.
-        m_skinnedBlasBuilds[bundle.firstJob + k].indexCount = bundle.blasIndexCounts[k];
-    }
-    return bundleHandle;
-}
-
-namespace
-{
-    uint32 growCapacity(uint32 current, uint32 needed, uint32 limit = UINT32_MAX)
-    {
-        uint64 capacity = current;
-        while (capacity < needed)
-            capacity *= 2;
-        assert(needed <= limit);
-        return (uint32)oc::min<uint64>(capacity, limit);
-    }
-}
-
-void Renderer::waitForGpuAndFlushStaging()
-{
-    // Drain first: some buffers being grown here (e.g. m_instanceOffsetsBuffer) aren't per-frame-in-flight,
-    // so an already-submitted draw/dispatch may still be reading one while a queued staging copy is about
-    // to write into it (WRITE_AFTER_READ - no fence/semaphore otherwise orders a fresh copy submission
-    // against earlier submissions on the same queue). Flushing pending copies only after this first wait
-    // means their vkCmdCopyBuffer/Image writes always land on an idle GPU.
-    auto waitResult = Globals::device.graphicsQueueWaitIdle();
-    assert(waitResult == vk::Result::eSuccess && "Failed to wait for device idle during capacity growth");
-    Globals::stagingManager.flushPending();
-    // Drain again: flushPending() just submitted those copies (targeting the buffer the caller is about to
-    // destroy/recreate) as new GPU work. Without this second wait, destroy() below would race that
-    // submission - "buffer currently in use by command buffer" at vkDestroyBuffer.
-    waitResult = Globals::device.graphicsQueueWaitIdle();
-    assert(waitResult == vk::Result::eSuccess && "Failed to wait for device idle after staging flush");
-    Globals::textureStreamer.onGpuIdle();
-    Globals::meshStreamer.onGpuIdle();
-    processPendingTextureFrees();
-}
-
-void Renderer::growRenderNodeCapacity(uint32 needed)
-{
-    m_maxRenderNodes = growCapacity(m_maxRenderNodes, needed);
-    waitForGpuAndFlushStaging();
-    for (PerFrameData& perFrame : m_perFrameData)
-    {
-        // No contents to preserve: the generation bump below makes every node re-upload at its next push.
-        perFrame.inRenderNodeTransformsBuffer.initialize(m_maxRenderNodes * sizeof(RendererVKLayout::RenderNodeTransform),
-            vk::BufferUsageFlagBits2::eStorageBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible, false, "RenderNodeTransforms", BufferHostAccess::eSequentialWrite);
-        perFrame.mappedRenderNodeTransforms = perFrame.inRenderNodeTransformsBuffer.mapMemory<RendererVKLayout::RenderNodeTransform>();
-
-        // No contents to preserve either: masks are rewritten by every renderNode() push, and the grow
-        // happens between frames' pushes (only pushed nodes' instances are ever read).
-        perFrame.inNodePassMasksBuffer.initialize(m_maxRenderNodes * sizeof(uint32),
-            vk::BufferUsageFlagBits2::eStorageBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible, false, "NodePassMasks", BufferHostAccess::eSequentialWrite);
-        perFrame.mappedNodePassMasks = perFrame.inNodePassMasksBuffer.mapMemory<uint32>();
-
-        perFrame.inNodeLodStateBiasBuffer.initialize(m_maxRenderNodes * sizeof(int32),
-            vk::BufferUsageFlagBits2::eStorageBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible, false, "NodeLodStateBias", BufferHostAccess::eSequentialWrite);
-        perFrame.mappedNodeLodStateBias = perFrame.inNodeLodStateBiasBuffer.mapMemory<int32>();
-    }
-    // Fresh (empty) GPU buffers: every node uploads again at its next push (see renderNode).
-    ++m_renderNodeBufferGeneration;
-    setHaveToRecordCommandBuffers();
-    printf("Renderer: grew render node capacity to %u\n", m_maxRenderNodes);
-}
-
-void Renderer::growMeshInstanceCapacity(uint32 needed)
-{
-    m_maxInstanceData = growCapacity(m_maxInstanceData, needed);
-    waitForGpuAndFlushStaging();
-
-    // renderNode() grows inline mid-frame, so the instances already written to the current frame's
-    // mapped buffer this frame must survive the reallocation. (At the beginFrame call site the counter
-    // holds last frame's count and the copy is redundant but harmless.)
-    PerFrameData& currentFrameData = m_perFrameData[m_swapChain.getCurrentFrameIndex()];
-    oc::vector<RendererVKLayout::InMeshInstance> writtenInstances(currentFrameData.mappedMeshInstances.begin(), currentFrameData.mappedMeshInstances.begin() + m_meshInstanceCounter);
-
-    for (PerFrameData& perFrame : m_perFrameData)
-    {
-        // Kept cached/random: growMeshInstanceCapacity reads the existing mapping to preserve in-flight
-        // instances across a resize, so this buffer must stay CPU-readable.
-        perFrame.inMeshInstancesBuffer.initialize(m_maxInstanceData * sizeof(RendererVKLayout::InMeshInstance),
-            vk::BufferUsageFlagBits2::eStorageBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCached, false, "MeshInstances");
-        perFrame.mappedMeshInstances = perFrame.inMeshInstancesBuffer.mapMemory<RendererVKLayout::InMeshInstance>();
-    }
-    memcpy(currentFrameData.mappedMeshInstances.data(), writtenInstances.data(), writtenInstances.size() * sizeof(RendererVKLayout::InMeshInstance));
-
-    m_indirectCullComputePipeline.resizeInstanceBuffers(m_maxInstanceData);
-    m_shadowCullComputePipeline.resizeInstanceBuffers(m_maxInstanceData);
-    m_rainCullComputePipeline.resizeInstanceBuffers(m_maxInstanceData);
-    setHaveToRecordCommandBuffers();
-    printf("Renderer: grew mesh instance capacity to %u\n", m_maxInstanceData);
-}
-
-void Renderer::growUniqueMeshCapacity(uint32 needed)
-{
-    m_maxUniqueMeshes = growCapacity(m_maxUniqueMeshes, needed, RendererVKLayout::MESH_MATERIAL_INDEX_LIMIT);
-    waitForGpuAndFlushStaging();
-    for (PerFrameData& perFrame : m_perFrameData)
-    {
-        // No contents to preserve: first-instance offsets are rewritten every present().
-        perFrame.inFirstInstancesBuffer.initialize(m_maxUniqueMeshes * sizeof(uint32),
-            vk::BufferUsageFlagBits2::eStorageBuffer,
-            vk::MemoryPropertyFlagBits::eHostVisible, false, "FirstInstances", BufferHostAccess::eSequentialWrite);
-        perFrame.mappedFirstInstances = perFrame.inFirstInstancesBuffer.mapMemory<uint32>();
-    }
-    m_meshInfosBuffer.resize(m_maxUniqueMeshes * sizeof(RendererVKLayout::MeshInfo));
-    m_meshLods.onUniqueMeshCapacityGrown(m_maxUniqueMeshes);
-    m_accelStructure.resizeBlasAddressBuffer(m_maxUniqueMeshes);
-    m_indirectCullComputePipeline.resizeCommandBuffers(m_maxUniqueMeshes);
-    m_shadowCullComputePipeline.resizeCommandBuffers(m_maxUniqueMeshes);
-    m_rainCullComputePipeline.resizeCommandBuffers(m_maxUniqueMeshes);
-    m_staticMeshGraphicsPipeline.resizeMeshCapacity(m_maxUniqueMeshes);
-    m_shadowMapGraphicsPipeline.resizeMeshCapacity(m_maxUniqueMeshes);
-    m_rainMapGraphicsPipeline.resizeMeshCapacity(m_maxUniqueMeshes);
-    setHaveToRecordCommandBuffers();
-    printf("Renderer: grew unique mesh capacity to %u\n", m_maxUniqueMeshes);
-}
-
-void Renderer::growMaterialCapacity(uint32 needed)
-{
-    m_maxUniqueMaterials = growCapacity(m_maxUniqueMaterials, needed, RendererVKLayout::MESH_MATERIAL_INDEX_LIMIT);
-    waitForGpuAndFlushStaging();
-    m_materialInfosBuffer.resize(m_maxUniqueMaterials * sizeof(RendererVKLayout::MaterialInfo));
-    setHaveToRecordCommandBuffers();
-    printf("Renderer: grew material capacity to %u\n", m_maxUniqueMaterials);
-}
-
-void Renderer::createLightGridBuffers()
-{
-    for (PerFrameData& perFrame : m_perFrameData)
-    {
-        perFrame.lightGridsBuffer.initialize(m_lightGridBufferSize,
-            vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
-            vk::MemoryPropertyFlagBits::eDeviceLocal, false, "LightGrids");
-
-        // Device-local + host-visible (ReBAR) so GPU writes are fast; the CPU reads the header in getStats,
-        // hence the default random (cached-where-possible) access.
-        perFrame.lightTableBuffer.initialize(3 * sizeof(uint32) + sizeof(uint32) * m_lightTableEntries,
-            vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst,
-            vk::MemoryPropertyFlagBits::eDeviceLocal | vk::MemoryPropertyFlagBits::eHostVisible, false, "LightTable");
-
-        // Zero the readback header so the capacity check / stats never see uninitialized counters
-        // before the first recorded frame fills them in.
-        oc::span<uint32> header = perFrame.lightTableBuffer.mapMemory<uint32>(0, 3 * sizeof(uint32));
-        memset(header.data(), 0, 3 * sizeof(uint32));
-        perFrame.lightTableBuffer.flushMappedMemory(3 * sizeof(uint32));
-        perFrame.lightTableBuffer.unmapMemory();
-    }
-}
-
-// Synchronous, from present(): the CPU build knows this frame's exact demand before anything is
-// uploaded, so growth fits it (with headroom) and no frame ever drops a light. The table stays
-// under a quarter full (hash collision quality), the grid data gets 1.5x.
-void Renderer::growLightGridBuffers(const LightGridComputePipeline::Demand& demand)
-{
-    const size_t neededGridBytes = demand.gridDataBytes + demand.gridDataBytes / 2;
-    while (m_lightGridBufferSize < neededGridBytes)
-        m_lightGridBufferSize *= 2;
-    waitForGpuAndFlushStaging();
-    m_lightGridComputePipeline.resizeHostBuffers(demand); // doubles the grid capacity to fit; rehashes the claim table
-    m_lightTableEntries = m_lightGridComputePipeline.getTableEntries(); // the GPU table IS the claim table: same size, a power of 2
-    createLightGridBuffers(); // per-frame GPU scratch, rewritten every frame: nothing to preserve
-    setHaveToRecordCommandBuffers();
-    printf("Renderer: grew light grid buffers to %zu bytes / %u table entries (%u grids, %u workgroups)\n",
-        m_lightGridBufferSize, m_lightTableEntries, demand.numGrids, demand.numWorkgroups);
-}
-
-void Renderer::growInstanceOffsetCapacity(uint32 needed)
-{
-    m_maxInstanceOffsets = growCapacity(m_maxInstanceOffsets, needed);
-    waitForGpuAndFlushStaging();
-    m_instanceOffsetsBuffer.resize(m_maxInstanceOffsets * sizeof(RendererVKLayout::MeshInstanceOffset));
-    setHaveToRecordCommandBuffers();
-    printf("Renderer: grew instance offset capacity to %u\n", m_maxInstanceOffsets);
-}
-
-vk::CommandBuffer Renderer::beginComputeSecondary(CommandBuffer& cb)
-{
-    vk::CommandBufferInheritanceInfo inheritance;
-    return cb.begin(false, &inheritance);
-}
-
-vk::CommandBuffer Renderer::beginScenePassSecondary(uint32 frameIdx, CommandBuffer& cb)
-{
-    vk::CommandBufferInheritanceInfo inheritance{ .renderPass = m_perFrameData[frameIdx].sceneColor.getRenderPass() };
-    return cb.begin(false, &inheritance);
-}
-
-void Renderer::setFullViewport(vk::CommandBuffer vkCb) const
-{
-    const glm::ivec2 vpSize = m_viewportRect.getSize();
-    const vk::Viewport viewport{ .x = (float)m_viewportRect.min.x, .y = (float)m_viewportRect.max.y,
-        .width = (float)vpSize.x, .height = -((float)vpSize.y), .minDepth = 0.0f, .maxDepth = 1.0f };
-    const vk::Rect2D scissor{ .offset = vk::Offset2D{ 0, 0 }, .extent = m_swapChain.getLayout().extent };
-    vkCb.setViewport(0, { viewport });
-    vkCb.setScissor(0, { scissor });
-}
-
-void Renderer::recordIndirectCull(uint32 frameIdx)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    CommandBuffer& cb = frameData.indirectCullCommandBuffer;
-    beginComputeSecondary(cb);
-    IndirectCullComputePipeline::RecordParams cullParams
-    {
-        .descriptorSet = frameData.indirectCullPipelineDescriptorSet,
-        .ubo = frameData.ubo,
-        .inRenderNodeTransformsBuffer = frameData.inRenderNodeTransformsBuffer,
-        .inMeshInstancesBuffer = frameData.inMeshInstancesBuffer,
-        .inMeshInstanceOffsetsBuffer = m_instanceOffsetsBuffer,
-        .inMeshInfoBuffer = m_meshInfosBuffer,
-        .inFirstInstancesBuffer = frameData.inFirstInstancesBuffer,
-        .inNodePassMasksBuffer = frameData.inNodePassMasksBuffer,
-        .inMeshLodGroupIdxBuffer = m_meshLods.getGroupIdxBuffer(),
-        .inMeshLodGroupsBuffer = m_meshLods.getGroupsBuffer(),
-        .lodLevelStateBuffer = m_meshLods.getStateBuffer(),
-        .inNodeLodStateBiasBuffer = frameData.inNodeLodStateBiasBuffer,
-        .outLodStatsBuffer = frameData.lodStatsBuffer,
-    };
-    m_indirectCullComputePipeline.record(cb, frameIdx, cullParams);
-    cb.end();
-}
-
-uint32 Renderer::allocateSkinningPalette(uint32 boneCount)
-{
-    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
-    // The palette store is a bump allocator; freed regions (destroyed containers) are recycled on an
-    // exact boneCount match - same-skeleton respawns, the common case - instead of tracking sub-ranges.
-    for (size_t i = 0; i < m_freeSkinningPaletteHandles.size(); ++i)
-    {
-        const uint32 handle = m_freeSkinningPaletteHandles[i];
-        const SkinningPaletteRegion& region = m_skinningPaletteRegions[handle];
-        if (region.boneCount == boneCount)
-        {
-            m_freeSkinningPaletteHandles[i] = m_freeSkinningPaletteHandles.back();
-            m_freeSkinningPaletteHandles.pop_back();
-            oc::fill_n(m_skinningPalettes.begin() + region.offset, boneCount, glm::mat4(1.0f));
-            return handle;
-        }
-    }
-    const uint32 handle = (uint32)m_skinningPaletteRegions.size();
-    const uint32 offset = (uint32)m_skinningPalettes.size();
-    m_skinningPaletteRegions.push_back({ offset, boneCount });
-    m_skinningPalettes.resize(offset + boneCount, glm::mat4(1.0f)); // identity until first setSkinningPalette
-    if ((uint32)m_skinningPalettes.size() > m_maxSkinningPaletteEntries)
-        growSkinningPaletteCapacity((uint32)m_skinningPalettes.size());
-    return handle;
-}
-
-void Renderer::setSkinningPalette(const RenderNode& node, oc::span<const glm::mat4> palette)
-{
-    assert(node.isSkinned());
-    const uint32 paletteHandle = m_skinnedBundles[node.m_skinnedBundleHandle].paletteHandle;
-    assert(paletteHandle < m_skinningPaletteRegions.size());
-    const SkinningPaletteRegion& region = m_skinningPaletteRegions[paletteHandle];
-    const uint32 count = oc::min((uint32)palette.size(), region.boneCount);
-    if (count > 0)
-        memcpy(m_skinningPalettes.data() + region.offset, palette.data(), count * sizeof(glm::mat4));
-}
-
-uint32 Renderer::allocateSkinningJobRange(uint32 count)
-{
-    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
-    uint32 firstJob = m_freeSkinningJobSlots.allocate(count);
-    if (firstJob == UINT32_MAX)
-    {
-        firstJob = (uint32)m_skinningJobs.size();
-        // Value-initialized: vertexCount/indexCount 0 keeps a slot inert until setSkinnedInstance fills it.
-        m_skinningJobs.resize(firstJob + count);
-        m_skinnedBlasBuilds.resize(firstJob + count);
-        if ((uint32)m_skinningJobs.size() > m_maxSkinningJobs)
-            growSkinningJobCapacity((uint32)m_skinningJobs.size());
-    }
-    return firstJob;
-}
-
-void Renderer::setSkinnedInstance(uint32 jobIdx, uint32 baseVertexOffset, uint32 skinVertexOffset, uint32 outVertexOffset, uint32 vertexCount, uint32 paletteHandle,
-    uint32 meshIdx, uint32 firstIndex, uint32 indexCount)
-{
-    assert(paletteHandle < m_skinningPaletteRegions.size());
-    m_skinningJobs[jobIdx] = RendererVKLayout::SkinningJob{
-        .baseVertexOffset = baseVertexOffset,
-        .skinVertexOffset = skinVertexOffset,
-        .outVertexOffset = outVertexOffset,
-        .vertexCount = vertexCount,
-        .paletteOffset = m_skinningPaletteRegions[paletteHandle].offset,
-    };
-    m_skinnedBlasBuilds[jobIdx] = AccelerationStructure::SkinnedBlasBuild{
-        .meshIdx = meshIdx, .vertexOffset = outVertexOffset, .vertexCount = vertexCount, .firstIndex = firstIndex, .indexCount = indexCount };
-    // No re-record needed: the jobs are uploaded per frame and dispatched indirectly; the skinned BLAS
-    // list is consumed by recordGlobalIllum, which re-records every frame.
-}
-
-void Renderer::growSkinningPaletteCapacity(uint32 needed)
-{
-    m_maxSkinningPaletteEntries = growCapacity(m_maxSkinningPaletteEntries, needed);
-    waitForGpuAndFlushStaging();
-    m_skinningComputePipeline.resizePaletteBuffer(m_maxSkinningPaletteEntries);
-    setHaveToRecordCommandBuffers();
-    printf("Renderer: grew skinning palette capacity to %u\n", m_maxSkinningPaletteEntries);
-}
-
-void Renderer::growSkinningJobCapacity(uint32 needed)
-{
-    m_maxSkinningJobs = growCapacity(m_maxSkinningJobs, needed);
-    waitForGpuAndFlushStaging();
-    m_skinningComputePipeline.resizeJobBuffer(m_maxSkinningJobs);
-    setHaveToRecordCommandBuffers();
-    printf("Renderer: grew skinning job capacity to %u\n", m_maxSkinningJobs);
-}
-
-void Renderer::recordSkinning(uint32 frameIdx)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    CommandBuffer& cb = frameData.skinningCommandBuffer;
-    beginComputeSecondary(cb);
-    SkinningComputePipeline::RecordParams params{
-        .descriptorSet = frameData.skinningDescriptorSet,
-        .vertexBuffer = Globals::meshDataManager.getVertexBuffer(),
-        .skinningBuffer = Globals::meshDataManager.getSkinningBuffer(),
-    };
-    m_skinningComputePipeline.record(cb, frameIdx, params);
-    cb.end();
-}
-
-void Renderer::recordOceanSim(uint32 frameIdx)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    CommandBuffer& cb = frameData.oceanSimCommandBuffer;
-    beginComputeSecondary(cb);
-    const OceanSimulationPipeline::SprayParams spray{
-        .particleCounters = &m_particlePipeline.getCountersBuffer(),
-        .particleRequests = &m_particlePipeline.getSpawnRequestBuffer(),
-        .terrainView = m_fogTerrainMap.getView(),
-        .terrainSampler = m_fogTerrainMap.getSampler(),
-    };
-    m_oceanSimPipeline.record(cb, frameIdx, frameData.ubo, spray);
-    cb.end();
-}
-
-void Renderer::recordTerrainWetness(uint32 frameIdx)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    CommandBuffer& cb = frameData.terrainWetnessCommandBuffer;
-    beginComputeSecondary(cb);
-    const TerrainWetnessPipeline::RecordParams params{
-        .ubo = &frameData.ubo,
-        .terrainView = m_fogTerrainMap.getView(),
-        .terrainSampler = m_fogTerrainMap.getSampler(),
-        .oceanMapsView = m_oceanSimPipeline.getMapsView(),
-        .oceanMapsSampler = m_oceanSimPipeline.getMapsSampler(),
-    };
-    m_terrainWetnessPipeline.record(cb, frameIdx, params);
-    cb.end();
-}
-
-void Renderer::recordLightGrid(uint32 frameIdx)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    CommandBuffer& cb = frameData.lightGridCommandBuffer;
-    beginComputeSecondary(cb);
-    LightGridComputePipeline::RecordParams params
-    {
-        .descriptorSet = frameData.lightGridPipelineDescriptorSet,
-        .ubo = frameData.ubo,
-        .outLightGridBuffer = frameData.lightGridsBuffer,
-    };
-    m_lightGridComputePipeline.record(cb, frameIdx, params);
-    cb.end();
-}
-
-void Renderer::recordShadowCull(uint32 frameIdx)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    CommandBuffer& cb = frameData.shadowCullCommandBuffer;
-    beginComputeSecondary(cb);
-
-    ShadowCullComputePipeline::RecordParams params{
-        .descriptorSet = frameData.shadowCullDescriptorSet,
-        .ubo = frameData.ubo,
-        .dispatchIndirectBuffer = m_indirectCullComputePipeline.getDispatchIndirectBuffer(frameIdx),
-        .inRenderNodeTransformsBuffer = frameData.inRenderNodeTransformsBuffer,
-        .inMeshInstancesBuffer = frameData.inMeshInstancesBuffer,
-        .inMeshInstanceOffsetsBuffer = m_instanceOffsetsBuffer,
-        .inMeshInfoBuffer = m_meshInfosBuffer,
-        .inFirstInstancesBuffer = frameData.inFirstInstancesBuffer,
-        .inMaterialInfoBuffer = m_materialInfosBuffer,
-        .inNodePassMasksBuffer = frameData.inNodePassMasksBuffer,
-        .inMeshLodGroupIdxBuffer = m_meshLods.getGroupIdxBuffer(),
-        .inMeshLodGroupsBuffer = m_meshLods.getGroupsBuffer(),
-    };
-    m_shadowCullComputePipeline.record(cb, frameIdx, params);
-    cb.end();
-}
-
-void Renderer::recordShadowDraw(uint32 frameIdx)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    ShadowMap& shadowMap = frameData.shadowMap;
-    vk::CommandBufferInheritanceInfo inheritance{ .renderPass = shadowMap.getRenderPass() };
-    CommandBuffer& cb = frameData.shadowDrawCommandBuffer;
-    vk::CommandBuffer vkCb = cb.begin(false, &inheritance);
-
-    // All cascades render in a single multiview render pass; gl_ViewIndex selects the layer.
-    const vk::Extent2D shadowExtent{ shadowMap.getResolution(), shadowMap.getResolution() };
-    const float shadowRes = (float)shadowMap.getResolution();
-    const vk::Viewport viewport{ .x = 0.0f, .y = 0.0f, .width = shadowRes, .height = shadowRes, .minDepth = 0.0f, .maxDepth = 1.0f };
-    const vk::Rect2D scissor{ .offset = vk::Offset2D{ 0, 0 }, .extent = shadowExtent };
-    vkCb.setViewport(0, { viewport });
-    vkCb.setScissor(0, { scissor });
-
-    ShadowMapGraphicsPipeline::RecordParams params{
-        .descriptorSet = frameData.shadowDrawDescriptorSet,
-        .ubo = frameData.ubo,
-        .meshInstanceBuffer = m_shadowCullComputePipeline.getOutMeshInstancesBuffer(frameIdx),
-        .vertexBuffer = Globals::meshDataManager.getVertexBuffer(),
-        .indexBuffer = Globals::meshDataManager.getIndexBuffer(),
-        .instanceIdxBuffer = m_shadowCullComputePipeline.getInstanceIdxBuffer(frameIdx),
-        .indirectCommandBuffer = m_shadowCullComputePipeline.getIndirectCommandBuffer(frameIdx),
-        .meshCountBuffer = frameData.meshCountBuffer,
-    };
-    m_shadowMapGraphicsPipeline.record(cb, frameIdx, params);
-    cb.end();
-}
-
-// The weather volume's rain occlusion map: the shadow cull + depth pass pair in their RAIN_OCCLUSION
-// variant (one view, u_rainOcclusionViewProj). Executed right after the indirect cull, BEFORE the
-// particle sim, so the sim reads this frame's map.
-void Renderer::recordRainOcclusionCull(uint32 frameIdx)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    CommandBuffer& cb = frameData.rainCullCommandBuffer;
-    beginComputeSecondary(cb);
-
-    ShadowCullComputePipeline::RecordParams params{
-        .descriptorSet = frameData.rainCullDescriptorSet,
-        .ubo = frameData.ubo,
-        .dispatchIndirectBuffer = m_indirectCullComputePipeline.getDispatchIndirectBuffer(frameIdx),
-        .inRenderNodeTransformsBuffer = frameData.inRenderNodeTransformsBuffer,
-        .inMeshInstancesBuffer = frameData.inMeshInstancesBuffer,
-        .inMeshInstanceOffsetsBuffer = m_instanceOffsetsBuffer,
-        .inMeshInfoBuffer = m_meshInfosBuffer,
-        .inFirstInstancesBuffer = frameData.inFirstInstancesBuffer,
-        .inMaterialInfoBuffer = m_materialInfosBuffer,
-        .inNodePassMasksBuffer = frameData.inNodePassMasksBuffer,
-        .inMeshLodGroupIdxBuffer = m_meshLods.getGroupIdxBuffer(),
-        .inMeshLodGroupsBuffer = m_meshLods.getGroupsBuffer(),
-    };
-    m_rainCullComputePipeline.record(cb, frameIdx, params);
-    cb.end();
-}
-
-void Renderer::recordRainOcclusionDraw(uint32 frameIdx)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    ShadowMap& map = frameData.rainOcclusionMap;
-    vk::CommandBufferInheritanceInfo inheritance{ .renderPass = map.getRenderPass() };
-    CommandBuffer& cb = frameData.rainDrawCommandBuffer;
-    vk::CommandBuffer vkCb = cb.begin(false, &inheritance);
-
-    const float res = (float)map.getResolution();
-    const vk::Viewport viewport{ .x = 0.0f, .y = 0.0f, .width = res, .height = res, .minDepth = 0.0f, .maxDepth = 1.0f };
-    const vk::Rect2D scissor{ .offset = vk::Offset2D{ 0, 0 }, .extent = vk::Extent2D{ map.getResolution(), map.getResolution() } };
-    vkCb.setViewport(0, { viewport });
-    vkCb.setScissor(0, { scissor });
-
-    ShadowMapGraphicsPipeline::RecordParams params{
-        .descriptorSet = frameData.rainDrawDescriptorSet,
-        .ubo = frameData.ubo,
-        .meshInstanceBuffer = m_rainCullComputePipeline.getOutMeshInstancesBuffer(frameIdx),
-        .vertexBuffer = Globals::meshDataManager.getVertexBuffer(),
-        .indexBuffer = Globals::meshDataManager.getIndexBuffer(),
-        .instanceIdxBuffer = m_rainCullComputePipeline.getInstanceIdxBuffer(frameIdx),
-        .indirectCommandBuffer = m_rainCullComputePipeline.getIndirectCommandBuffer(frameIdx),
-        .meshCountBuffer = frameData.meshCountBuffer,
-    };
-    m_rainMapGraphicsPipeline.record(cb, frameIdx, params);
-    cb.end();
-}
-
-void Renderer::recordSceneDepthToSampled(vk::CommandBuffer cb, vk::Image sceneDepth, uint32 eyeIndex)
-{
-    // The depth-writing scene stages are done: flush their writes and park the depth in its sampled /
-    // read-only-attachment layout for the rest of the frame (AO, force march, the later scene stages,
-    // TAA) and for next frame's readers.
-    const vk::ImageMemoryBarrier2 barrier{
-        .srcStageMask = vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-        .srcAccessMask = vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-        .dstStageMask = vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests
-            | vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eComputeShader,
-        .dstAccessMask = vk::AccessFlagBits2::eDepthStencilAttachmentRead | vk::AccessFlagBits2::eShaderSampledRead,
-        .oldLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
-        .newLayout = SCENE_DEPTH_SAMPLED_LAYOUT,
-        .image = sceneDepth,
-        .subresourceRange = { vk::ImageAspectFlagBits::eDepth, 0, 1, eyeIndex, 1 },
-    };
-    cb.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier });
-}
-
-void Renderer::recordStaticMesh(uint32 frameIdx)
-{
-    CommandBuffer& cb = m_perFrameData[frameIdx].staticMeshCommandBuffer;
-    beginScenePassSecondary(frameIdx, cb);
-    recordStaticMeshInto(cb, frameIdx, 0);
-    cb.end();
-}
-
-void Renderer::recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    setFullViewport(cb.getCommandBuffer());
-    StaticMeshGraphicsPipeline::RecordParams drawParams
-    {
-        .descriptorSet = frameData.staticMeshPipelineDescriptorSet[eyeIndex],
-        .ubo = frameData.ubo,
-        .vertexBuffer = Globals::meshDataManager.getVertexBuffer(),
-        .indexBuffer = Globals::meshDataManager.getIndexBuffer(),
-        .materialInfoBuffer = m_materialInfosBuffer,
-        .instanceIdxBuffer = m_indirectCullComputePipeline.getInstanceIdxBuffer(frameIdx),
-        .meshInstanceBuffer = m_indirectCullComputePipeline.getOutMeshInstancesBuffer(frameIdx),
-        .indirectCommandBuffer = m_indirectCullComputePipeline.getIndirectCommandBuffer(frameIdx),
-        .transparentIndirectCommandBuffer = m_indirectCullComputePipeline.getTransparentIndirectCommandBuffer(frameIdx),
-        .meshCountBuffer = frameData.meshCountBuffer,
-        .lightInfosBuffer = frameData.lightInfosBuffer,
-        .lightGridsBuffer = frameData.lightGridsBuffer,
-        .lightTableBuffer = frameData.lightTableBuffer,
-        .giGridDataBuffer = m_giProbePipeline.getGiGridDataBuffer(),
-        .meshInfoBuffer = m_meshInfosBuffer,
-        .rtMeshInstancesBuffer = frameData.inMeshInstancesBuffer,
-        .shadowMapView = frameData.shadowMap.getSampleView(),
-        .shadowMapSampler = frameData.shadowMap.getSampler(),
-        .shadowMapDepthSampler = frameData.shadowMap.getDepthSampler(),
-        .prevDepthView = m_perFrameData[(frameIdx + 1) % RendererVKLayout::NUM_FRAMES_IN_FLIGHT].sceneColor.getDepthView(eyeIndex),
-        .prevDepthSampler = frameData.sceneColor.getDepthSampler(),
-        .oceanMapsView = m_oceanSimPipeline.getMapsView(),
-        .oceanMapsSampler = m_oceanSimPipeline.getMapsSampler(),
-        .viewIndex = RendererVKLayout::eyeToViewIndex(eyeIndex, m_sceneViewCount),
-    };
-    // Each eye has its own descriptor set (per-eye AO + last frame's depth), so both eyes write their own.
-    m_staticMeshGraphicsPipeline.record(cb, frameIdx, drawParams, true);
-}
-
-// AO trace+denoise for one eye (compute, no render pass); reads that eye's scene depth - so it runs
-// AFTER the depth-writing scene stages - and writes that eye's AO, which NEXT frame's forward pass reads.
-void Renderer::recordAOInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    const vk::AccelerationStructureKHR tlas = m_accelStructure.getTlas(frameIdx);
-    if (!m_rtParams.enabled || m_meshInfoCounter == 0 || !tlas) // RT off: tlas is stale, don't trace it
-        return;
-    const uint32 prevFrameIdx = (frameIdx + 1) % RendererVKLayout::NUM_FRAMES_IN_FLIGHT;
-    RTAOPipeline::RecordParams aoParams{
-        .ubo = frameData.ubo,
-        .sceneDepthView = frameData.sceneColor.getDepthView(eyeIndex),
-        .prevSceneDepthView = m_perFrameData[prevFrameIdx].sceneColor.getDepthView(eyeIndex),
-        .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
-        .tlas = tlas,
-        .vertexBuffer = Globals::meshDataManager.getVertexBuffer(),
-        .indexBuffer = Globals::meshDataManager.getIndexBuffer(),
-        .meshInfos = m_meshInfosBuffer,
-        .meshInstances = frameData.inMeshInstancesBuffer,
-        .materialInfos = m_materialInfosBuffer,
-    };
-    m_rtaoPipeline.record(cb, frameIdx, eyeIndex, aoParams);
-}
-
-// Fog apply draw for one eye, inside the eye's scene-colour render pass (viewport set by the caller).
-void Renderer::recordFogApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    vk::CommandBuffer vkCb = cb.getCommandBuffer();
-    const vk::Extent2D extent = m_swapChain.getLayout().extent;
-    const glm::ivec2 vpMin = m_viewportRect.min;
-    const glm::ivec2 vpSize = m_viewportRect.getSize();
-    vkCb.setViewport(0, vk::Viewport{ .x = 0.0f, .y = 0.0f, .width = (float)extent.width, .height = (float)extent.height, .minDepth = 0.0f, .maxDepth = 1.0f });
-    vkCb.setScissor(0, vk::Rect2D{ .offset = vk::Offset2D{ vpMin.x, vpMin.y }, .extent = vk::Extent2D{ (uint32)vpSize.x, (uint32)vpSize.y } });
-    VolumetricFogPipeline::ApplyParams params{
-        .ubo = frameData.ubo,
-        .giGridDataBuffer = m_giProbePipeline.getGiGridDataBuffer(),
-        .sceneDepthView = frameData.sceneColor.getDepthView(eyeIndex),
-        .sceneDepthLayout = SCENE_DEPTH_SAMPLED_LAYOUT, // also this stage's read-only depth attachment
-        .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
-    };
-    m_volumetricFogPipeline.recordApply(cb, frameIdx, eyeIndex, params);
-}
-
-// TAA resolve for one eye (compute, no render pass); reads that eye's scene colour + depth, writes its history.
-void Renderer::recordTaaInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    SceneColor& sceneColor = frameData.sceneColor;
-    const uint32 prevFrameIdx = (frameIdx + 1) % RendererVKLayout::NUM_FRAMES_IN_FLIGHT;
-    TaaPipeline::RecordParams taaParams{
-        .ubo = frameData.ubo,
-        .currentColorView = sceneColor.getColorLayerView(eyeIndex),
-        .currentColorSampler = sceneColor.getSampler(),
-        .sceneDepthView = sceneColor.getDepthView(eyeIndex),
-        .prevSceneDepthView = m_perFrameData[prevFrameIdx].sceneColor.getDepthView(eyeIndex),
-        .sceneDepthSampler = sceneColor.getDepthSampler(),
-        .feedback = m_taaParams.taaEnabled ? m_taaParams.taaFeedback : 0.0f,
-        .oceanFeedback = m_taaParams.taaEnabled ? m_taaParams.taaOceanFeedback : 0.0f,
-    };
-    m_taaPipeline.record(cb, frameIdx, eyeIndex, taaParams);
-}
-
-void Renderer::recordGiProbeDebug(uint32 frameIdx)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    CommandBuffer& cb = frameData.giProbeDebugCommandBuffer;
-    setFullViewport(beginScenePassSecondary(frameIdx, cb));
-    m_giProbePipeline.recordDebugDraw(cb, frameIdx, frameData.ubo);
-    cb.end();
-}
-
-void Renderer::recordDebugLines(uint32 frameIdx)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    CommandBuffer& cb = frameData.debugLineCommandBuffer;
-    setFullViewport(beginScenePassSecondary(frameIdx, cb));
-    m_debugLinePipeline.record(cb, frameIdx, frameData.ubo);
-    cb.end();
-}
-
-// Particle GPU sim (begin/emit/simulate compute chain), its own secondary outside any render pass;
-// executed right after the light grid in the primary. Reads LAST frame's scene depth for depth collision.
-void Renderer::recordParticleSim(uint32 frameIdx)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    CommandBuffer& cb = frameData.particleSimCommandBuffer;
-    beginComputeSecondary(cb);
-    const uint32 prevFrameIdx = (frameIdx + 1) % RendererVKLayout::NUM_FRAMES_IN_FLIGHT;
-    ParticlePipeline::SimParams simParams{
-        .ubo = frameData.ubo,
-        .prevDepthView = m_perFrameData[prevFrameIdx].sceneColor.getDepthView(),
-        .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
-        .rainOcclusionView = frameData.rainOcclusionMap.getSampleView(),
-        .rainOcclusionSampler = frameData.rainOcclusionMap.getDepthSampler(),
-        .oceanMapsView = m_oceanSimPipeline.getMapsView(),
-        .oceanMapsSampler = m_oceanSimPipeline.getMapsSampler(),
-        .terrainView = m_fogTerrainMap.getView(),
-        .terrainSampler = m_fogTerrainMap.getSampler(),
-    };
-    m_particlePipeline.recordSim(cb, frameIdx, simParams);
-    cb.end();
-}
-
-// Particle billboard draw for one eye, inside the eye's scene-colour render pass (after the opaque
-// forward + decal draws, before fog apply).
-void Renderer::recordParticlesInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    setFullViewport(cb.getCommandBuffer());
-    ParticlePipeline::DrawParams drawParams{
-        .ubo = frameData.ubo,
-        .giGridDataBuffer = m_giProbePipeline.getGiGridDataBuffer(),
-        .sceneDepthView = frameData.sceneColor.getDepthView(eyeIndex),
-        .sceneDepthLayout = SCENE_DEPTH_SAMPLED_LAYOUT, // also this stage's read-only depth attachment
-        .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
-        .terrainView = m_fogTerrainMap.getView(),
-        .terrainSampler = m_fogTerrainMap.getSampler(),
-        .lightInfosBuffer = &frameData.lightInfosBuffer,
-        .lightGridsBuffer = &frameData.lightGridsBuffer,
-        .lightTableBuffer = &frameData.lightTableBuffer,
-    };
-    m_particlePipeline.recordDraw(cb, frameIdx, eyeIndex, drawParams);
-}
-
-void Renderer::recordParticles(uint32 frameIdx)
-{
-    CommandBuffer& cb = m_perFrameData[frameIdx].particleCommandBuffer;
-    beginScenePassSecondary(frameIdx, cb);
-    recordParticlesInto(cb, frameIdx, 0);
-    cb.end();
-}
-
-// Projected decal draw for one eye, inside the eye's scene-colour render pass right after the opaque
-// forward draw (so particles/fog layer on top).
-void Renderer::recordDecalsInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    setFullViewport(cb.getCommandBuffer());
-    DecalPipeline::DrawParams drawParams{
-        .ubo = frameData.ubo,
-        .giGridDataBuffer = m_giProbePipeline.getGiGridDataBuffer(),
-        .sceneDepthView = frameData.sceneColor.getDepthView(eyeIndex),
-        .sceneDepthLayout = SCENE_DEPTH_SAMPLED_LAYOUT, // also this stage's read-only depth attachment
-        .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
-    };
-    m_decalPipeline.recordDraw(cb, frameIdx, eyeIndex, drawParams);
-}
-
-void Renderer::recordDecals(uint32 frameIdx)
-{
-    CommandBuffer& cb = m_perFrameData[frameIdx].decalCommandBuffer;
-    beginScenePassSecondary(frameIdx, cb);
-    recordDecalsInto(cb, frameIdx, 0);
-    cb.end();
-}
-
-// Forcefield shell draw for one eye, inside the eye's scene-colour render pass after the debug
-// overlays (so particles/fog layer on top of the bubbles). part splits the proxy draw and the
-// union march into their own scene stages on desktop (see recordForceField); VR records Both.
-void Renderer::recordForceFieldInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIndex,
-    ForceFieldPipeline::EDrawPart part)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    setFullViewport(cb.getCommandBuffer());
-    ForceFieldPipeline::DrawParams drawParams{
-        .ubo = frameData.ubo,
-        .sceneDepthView = frameData.sceneColor.getDepthView(eyeIndex),
-        .sceneDepthLayout = SCENE_DEPTH_SAMPLED_LAYOUT, // also this stage's read-only depth attachment
-        .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
-    };
-    m_forceFieldPipeline.recordDraw(cb, frameIdx, eyeIndex, drawParams, part);
-}
-
-void Renderer::recordForceShells(uint32 frameIdx)
-{
-    CommandBuffer& cb = m_perFrameData[frameIdx].forceFieldCommandBuffer;
-    beginScenePassSecondary(frameIdx, cb);
-    recordForceFieldInto(cb, frameIdx, 0, ForceFieldPipeline::EDrawPart::Proxies);
-    cb.end();
-}
-
-void Renderer::recordForceUnion(uint32 frameIdx)
-{
-    CommandBuffer& cb = m_perFrameData[frameIdx].forceUnionCommandBuffer;
-    beginScenePassSecondary(frameIdx, cb);
-    recordForceFieldInto(cb, frameIdx, 0, ForceFieldPipeline::EDrawPart::UnionMarch);
-    cb.end();
-}
-
-// Force grid build + per-emitter force / point-query dispatches (outside any render pass, after the
-// light grid). All dispatches ride mapped indirect buffers, so emitter/query changes never re-record.
-void Renderer::recordForceCompute(uint32 frameIdx)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    CommandBuffer& cb = frameData.forceComputeCommandBuffer;
-    beginComputeSecondary(cb);
-    m_forceFieldPipeline.recordCompute(cb, frameIdx, frameData.ubo);
-    cb.end();
-}
-
-// The union march's interval pass + the HALF-RES march itself (each its own render pass, executed
-// before the scene stages on desktop): the analytic-tier proxies MIN-blend their ray intervals at
-// half res, the march walks each covered half-res pixel once, and the "Force union blend" scene
-// stage upsamples the result depth-aware into scene color. The render passes themselves begin and
-// end in the PRIMARY (a secondary cannot begin one); these two render-pass-continue secondaries hold
-// the draws, one per pass so the GPU profiler scopes them separately. Cached: every input is a
-// per-slot handle (UBO, emitter/grid/indirect buffers, interval target, scene depth), the
-// half-res toggle and the resizes already force a re-record, and the draws are indirect.
-// Viewport/scissor are HALVED to match the targets (the FS maps uv back with x2). The march samples
-// THIS frame's scene depth, so both passes run after the depth-writing scene stages.
-void Renderer::recordForceMarch(uint32 frameIdx)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    const bool halfRes = m_forceFieldPipeline.getUnionHalfRes();
-    const float vpScale = halfRes ? 0.5f : 1.0f;
-    const glm::ivec2 vpSize = m_viewportRect.getSize();
-    const vk::Viewport marchViewport{ .x = (float)m_viewportRect.min.x * vpScale, .y = (float)m_viewportRect.max.y * vpScale,
-        .width = (float)vpSize.x * vpScale, .height = -((float)vpSize.y * vpScale), .minDepth = 0.0f, .maxDepth = 1.0f };
-    const vk::Extent2D fullExtent = m_swapChain.getLayout().extent;
-    const vk::Rect2D marchScissor{ .offset = vk::Offset2D{ 0, 0 },
-        .extent = halfRes ? vk::Extent2D{ glm::max(fullExtent.width / 2u, 1u), glm::max(fullExtent.height / 2u, 1u) } : fullExtent };
-    vk::CommandBufferInheritanceInfo intervalInheritance{ .renderPass = m_forceFieldPipeline.getIntervalRenderPass(), .framebuffer = m_forceFieldPipeline.getIntervalFramebuffer() };
-    CommandBuffer& intervalCb = frameData.forceIntervalCommandBuffer;
-    intervalCb.begin(false, &intervalInheritance);
-    m_forceFieldPipeline.recordIntervalDraw(intervalCb, frameIdx, frameData.ubo, marchViewport, marchScissor);
-    intervalCb.end();
-    if (halfRes) // full-res mode has no march target (the secondary is then never executed)
-    {
-        vk::CommandBufferInheritanceInfo marchInheritance{ .renderPass = m_forceFieldPipeline.getMarchRenderPass(), .framebuffer = m_forceFieldPipeline.getMarchFramebuffer() };
-        CommandBuffer& marchCb = frameData.forceMarchCommandBuffer;
-        marchCb.begin(false, &marchInheritance);
-        m_forceFieldPipeline.recordUnionMarchDraw(marchCb, frameIdx, frameData.ubo,
-            marchViewport, marchScissor, frameData.sceneColor.getDepthView(0), frameData.sceneColor.getDepthSampler());
-        marchCb.end();
-    }
-}
-
-void Renderer::recordAO(uint32 frameIdx)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    CommandBuffer& cb = frameData.aoCommandBuffer;
-    beginComputeSecondary(cb);
-    const vk::AccelerationStructureKHR tlas = m_accelStructure.getTlas(frameIdx);
-    if (m_rtParams.enabled && m_rtaoParams.enabled && m_meshInfoCounter > 0 && tlas)
-    {
-        const uint32 prevFrameIdx = (frameIdx + 1) % RendererVKLayout::NUM_FRAMES_IN_FLIGHT;
-        RTAOPipeline::RecordParams aoParams{
-            .ubo = frameData.ubo,
-            .sceneDepthView = frameData.sceneColor.getDepthView(),
-            .prevSceneDepthView = m_perFrameData[prevFrameIdx].sceneColor.getDepthView(),
-            .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
-            .tlas = tlas,
-            .vertexBuffer = Globals::meshDataManager.getVertexBuffer(),
-            .indexBuffer = Globals::meshDataManager.getIndexBuffer(),
-            .meshInfos = m_meshInfosBuffer,
-            .meshInstances = frameData.inMeshInstancesBuffer,
-            .materialInfos = m_materialInfosBuffer,
-        };
-        m_rtaoPipeline.record(cb, frameIdx, 0, aoParams);
-    }
-    cb.end();
-}
-
-void Renderer::recordVolumetricFog(uint32 frameIdx)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    CommandBuffer& cb = frameData.volumetricFogCommandBuffer;
-    beginComputeSecondary(cb);
-    const vk::AccelerationStructureKHR tlas = m_accelStructure.getTlas(frameIdx);
-    if (m_rtParams.enabled && m_meshInfoCounter > 0 && tlas)
-    {
-        VolumetricFogPipeline::RecordParams params{
-            .ubo = frameData.ubo,
-            .lightInfosBuffer = frameData.lightInfosBuffer,
-            .lightGridsBuffer = frameData.lightGridsBuffer,
-            .lightTableBuffer = frameData.lightTableBuffer,
-            .fogVolumesBuffer = frameData.fogVolumesBuffer,
-            .giGridDataBuffer = m_giProbePipeline.getGiGridDataBuffer(),
-            .shadowMapView = frameData.shadowMap.getSampleView(),
-            .shadowMapSampler = frameData.shadowMap.getSampler(),
-            .oceanMapsView = m_oceanSimPipeline.getMapsView(),
-            .oceanMapsSampler = m_oceanSimPipeline.getMapsSampler(),
-            .tlas = tlas,
-        };
-        m_volumetricFogPipeline.record(cb, frameIdx, params);
-    }
-    cb.end();
-}
-
-void Renderer::recordFogApply(uint32 frameIdx)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    CommandBuffer& cb = frameData.fogApplyCommandBuffer;
-    vk::CommandBuffer vkCb = beginScenePassSecondary(frameIdx, cb);
-
-    // Fullscreen triangle in full-render-target UV space (like the composite), scissored to the viewport.
-    const vk::Extent2D extent = m_swapChain.getLayout().extent;
-    const glm::ivec2 vpMin = m_viewportRect.min;
-    const glm::ivec2 vpSize = m_viewportRect.getSize();
-    vkCb.setViewport(0, vk::Viewport{ .x = 0.0f, .y = 0.0f, .width = (float)extent.width, .height = (float)extent.height, .minDepth = 0.0f, .maxDepth = 1.0f });
-    vkCb.setScissor(0, vk::Rect2D{ .offset = vk::Offset2D{ vpMin.x, vpMin.y }, .extent = vk::Extent2D{ (uint32)vpSize.x, (uint32)vpSize.y } });
-
-    VolumetricFogPipeline::ApplyParams params{
-        .ubo = frameData.ubo,
-        .giGridDataBuffer = m_giProbePipeline.getGiGridDataBuffer(),
-        .sceneDepthView = frameData.sceneColor.getDepthView(),
-        .sceneDepthLayout = SCENE_DEPTH_SAMPLED_LAYOUT, // also this stage's read-only depth attachment
-        .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
-    };
-    m_volumetricFogPipeline.recordApply(cb, frameIdx, 0, params);
-    cb.end();
-}
-
-void Renderer::recordTaa(uint32 frameIdx)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    SceneColor& sceneColor = frameData.sceneColor;
-    CommandBuffer& cb = frameData.taaCommandBuffer;
-    beginComputeSecondary(cb);
-    const uint32 prevFrameIdx = (frameIdx + 1) % RendererVKLayout::NUM_FRAMES_IN_FLIGHT;
-    TaaPipeline::RecordParams taaParams{
-        .ubo = frameData.ubo,
-        .currentColorView = sceneColor.getColorView(),
-        .currentColorSampler = sceneColor.getSampler(),
-        .sceneDepthView = sceneColor.getDepthView(),
-        .prevSceneDepthView = m_perFrameData[prevFrameIdx].sceneColor.getDepthView(),
-        .sceneDepthSampler = sceneColor.getDepthSampler(),
-        .feedback = m_taaParams.taaEnabled ? m_taaParams.taaFeedback : 0.0f,
-        .oceanFeedback = m_taaParams.taaEnabled ? m_taaParams.taaOceanFeedback : 0.0f,
-    };
-    m_taaPipeline.record(cb, frameIdx, 0, taaParams);
-    cb.end();
-}
-
-void Renderer::recordEyeAdaptation(uint32 frameIdx)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    CommandBuffer& cb = frameData.eyeAdaptCommandBuffer;
-    beginComputeSecondary(cb);
-    // TAA OFF: the pass is not recorded or executed at all (see recordCommandBuffers), so the
-    // post chain reads this frame's scene colour directly instead of TAA's resolved image.
-    const bool taaOn = m_taaParams.taaEnabled;
-    EyeAdaptationPipeline::RecordParams params{
-        .resolvedView = taaOn ? m_taaPipeline.getResolvedView(frameIdx, 0) : frameData.sceneColor.getColorLayerView(0),
-        .resolvedLayout = taaOn ? vk::ImageLayout::eGeneral : vk::ImageLayout::eShaderReadOnlyOptimal,
-        .sampler = taaOn ? m_taaPipeline.getSampler() : frameData.sceneColor.getSampler(),
-        .viewportMin = m_viewportRect.min,
-        .viewportSize = m_viewportRect.getSize(),
-    };
-    m_eyeAdaptationPipeline.record(cb, frameIdx, params);
-    cb.end();
-}
-
-void Renderer::recordComposite(uint32 frameIdx)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    vk::CommandBufferInheritanceInfo inheritance { .renderPass = m_renderPass.getRenderPass(), };
-    CommandBuffer& cb = frameData.compositeCommandBuffer;
-    vk::CommandBuffer vkCb = cb.begin(false, &inheritance);
-
-    const vk::Extent2D extent = m_swapChain.getLayout().extent;
-    const glm::ivec2 vpMin = m_viewportRect.min;
-    const glm::ivec2 vpSize = m_viewportRect.getSize();
-    vkCb.setViewport(0, vk::Viewport{.x = 0.0f, .y = 0.0f, .width = (float)extent.width, .height = (float)extent.height, .minDepth = 0.0f, .maxDepth = 1.0f });
-    vkCb.setScissor(0, vk::Rect2D{.offset = vk::Offset2D{ vpMin.x, vpMin.y }, .extent = vk::Extent2D{ (uint32)vpSize.x, (uint32)vpSize.y } });
-
-    const bool taaOn = m_taaParams.taaEnabled; // TAA bypassed: tonemap the scene colour directly
-    CompositePipeline::RecordParams params{
-        .descriptorSet = frameData.compositeDescriptorSet,
-        .resolvedView = taaOn ? m_taaPipeline.getResolvedView(frameIdx, 0) : frameData.sceneColor.getColorLayerView(0),
-        .resolvedLayout = taaOn ? vk::ImageLayout::eGeneral : vk::ImageLayout::eShaderReadOnlyOptimal,
-        .sampler = taaOn ? m_taaPipeline.getSampler() : frameData.sceneColor.getSampler(),
-        .exposureBuffer = m_eyeAdaptationPipeline.getExposureBuffer().getBuffer(),
-        .exposureEV = m_postParams.exposureEV,
-        .tonemapper = m_postParams.tonemapper,
-        .autoExposure = m_postParams.autoExposure ? 1 : 0,
-    };
-    m_compositePipeline.record(cb, params);
-    cb.end();
-}
-
-void Renderer::createEyeCompositeTargets()
-{
-    if (m_sceneViewCount <= 1)
-        return;
-    destroyEyeCompositeTargets();
-    vk::Device vkDevice = Globals::device.getDevice();
-    const vk::Extent2D ext = m_swapChain.getLayout().extent;
-    const vk::Format colorFormat = m_swapChain.getLayout().surfaceFormat.format;
-
-    // Shared depth (the swapchain render pass declares a depth attachment; the composite doesn't use it).
-    vk::ImageCreateInfo depthInfo{
-        .imageType = vk::ImageType::e2D, .format = vk::Format::eD32Sfloat, .extent = { ext.width, ext.height, 1 },
-        .mipLevels = 1, .arrayLayers = 1, .samples = vk::SampleCountFlagBits::e1, .tiling = vk::ImageTiling::eOptimal,
-        .usage = vk::ImageUsageFlagBits::eDepthStencilAttachment, .sharingMode = vk::SharingMode::eExclusive, .initialLayout = vk::ImageLayout::eUndefined };
-    Globals::gpuAllocator.createImage(depthInfo, m_eyeDepthImage, m_eyeDepthMem, "VR.eyeDepth");
-    vk::ImageViewCreateInfo depthViewInfo{ .image = m_eyeDepthImage, .viewType = vk::ImageViewType::e2D, .format = vk::Format::eD32Sfloat,
-        .subresourceRange = { vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1 } };
-    m_eyeDepthView = vkDevice.createImageView(depthViewInfo).value;
-
-    for (uint32 i = 0; i < 2; ++i)
-    {
-        vk::ImageCreateInfo colorInfo{
-            .imageType = vk::ImageType::e2D, .format = colorFormat, .extent = { ext.width, ext.height, 1 },
-            .mipLevels = 1, .arrayLayers = 1, .samples = vk::SampleCountFlagBits::e1, .tiling = vk::ImageTiling::eOptimal,
-            .usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferSrc,
-            .sharingMode = vk::SharingMode::eExclusive, .initialLayout = vk::ImageLayout::eUndefined };
-        Globals::gpuAllocator.createImage(colorInfo, m_eyeColorImage[i], m_eyeColorMem[i], "VR.eyeColor");
-        vk::ImageViewCreateInfo colorViewInfo{ .image = m_eyeColorImage[i], .viewType = vk::ImageViewType::e2D, .format = colorFormat,
-            .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 } };
-        m_eyeColorView[i] = vkDevice.createImageView(colorViewInfo).value;
-        oc::array<vk::ImageView, 2> atts{ m_eyeColorView[i], m_eyeDepthView };
-        vk::FramebufferCreateInfo fbInfo{ .renderPass = m_renderPass.getRenderPass(), .attachmentCount = (uint32)atts.size(), .pAttachments = atts.data(),
-            .width = ext.width, .height = ext.height, .layers = 1 };
-        m_eyeFramebuffer[i] = vkDevice.createFramebuffer(fbInfo).value;
-    }
-}
-
-void Renderer::destroyEyeCompositeTargets()
-{
-    vk::Device vkDevice = Globals::device.getDevice();
-    for (uint32 i = 0; i < 2; ++i)
-    {
-        if (m_eyeFramebuffer[i]) { vkDevice.destroyFramebuffer(m_eyeFramebuffer[i]); m_eyeFramebuffer[i] = nullptr; }
-        if (m_eyeColorView[i]) { vkDevice.destroyImageView(m_eyeColorView[i]); m_eyeColorView[i] = nullptr; }
-        if (m_eyeColorImage[i]) { Globals::gpuAllocator.destroyImage(m_eyeColorImage[i], m_eyeColorMem[i]); m_eyeColorImage[i] = nullptr; m_eyeColorMem[i] = nullptr; }
-    }
-    if (m_eyeDepthView) { vkDevice.destroyImageView(m_eyeDepthView); m_eyeDepthView = nullptr; }
-    if (m_eyeDepthImage) { Globals::gpuAllocator.destroyImage(m_eyeDepthImage, m_eyeDepthMem); m_eyeDepthImage = nullptr; m_eyeDepthMem = nullptr; }
-}
-
-// The PER-FRAME half of GI: the work whose content changes frame to frame - one-shot static BLAS builds
-// for meshes added since last frame, compaction copies whose size queries matured, the skinned BLAS rebuild
-// from this frame's deformed vertices, and the one-time probe-volume clear. Empty on most frames. Executed
-// by the primary right before the cached GI secondary (recordGlobalIllum), which builds the TLAS from
-// these BLASes and traces.
-void Renderer::recordGlobalIllumPrep(uint32 frameIdx)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    CommandBuffer& prepCommandBuffer = frameData.giPrepCommandBuffer;
-    vk::CommandBuffer vkPrepCommandBuffer = beginComputeSecondary(prepCommandBuffer);
-
-    // RT master toggle off: nothing is built (no acceleration-structure churn - diagnostic A/B); the
-    // cached secondary then holds only the sky map bake.
-    if (!m_rtParams.enabled)
-    {
-        prepCommandBuffer.end();
-        return;
-    }
-
-    auto fullBarrier = [&](vk::PipelineStageFlags2 srcStage, vk::AccessFlags2 srcAccess,
-        vk::PipelineStageFlags2 dstStage, vk::AccessFlags2 dstAccess)
-        {
-            vk::MemoryBarrier2 bar{ .srcStageMask = srcStage, .srcAccessMask = srcAccess, .dstStageMask = dstStage, .dstAccessMask = dstAccess };
-            vkPrepCommandBuffer.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &bar });
-        };
-
-    // The skinning compute (executed earlier in the primary) wrote the deformed vertices that both the
-    // one-time static build (for skinned output regions) and the per-frame skinned rebuild read.
-    if (!m_skinnedBlasBuilds.empty())
-        fullBarrier(vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite,
-            vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR, vk::AccessFlagBits2::eShaderRead);
-
-    // 1. Build BLASes for meshes added since last frame (one-time per mesh; LOD levels alias their
-    // chain's RT-level BLAS and build nothing) plus any re-streamed meshes queued for a rebuild.
-    if (m_blasBuiltCount < m_meshInfoCounter || !m_pendingBlasRebuilds.empty())
-    {
-        oc::vector<uint32> buildList = oc::move(m_pendingBlasRebuilds);
-        m_pendingBlasRebuilds.clear();
-        for (uint32 meshIdx = m_blasBuiltCount; meshIdx < m_meshInfoCounter; ++meshIdx)
-        {
-            // Skinned output regions never build static BLASes: their data is uninitialized until the
-            // skinning compute runs, and their address entries are owned per frame slot by the skinned
-            // rebuild - a static build entering compaction would clobber them with a garbage BLAS.
-            if (!m_meshIsSkinnedOutput[meshIdx])
-                buildList.push_back(meshIdx);
-        }
-        m_blasBuiltCount = m_meshInfoCounter;
-        m_accelStructure.recordBuildBlas(frameIdx, vkPrepCommandBuffer, Globals::meshDataManager.getVertexBuffer(), Globals::meshDataManager.getIndexBuffer(),
-            m_meshInfosBuffer.getBackingStoreAs<RendererVKLayout::MeshInfo>().data(), m_meshVertexCounts.data(), buildList,
-            m_rtParams.blasCompaction);
-        // No GI clear here: new meshes (terrain streaming!) leave the persistent probe volume intact.
-        // Stale irradiance around new geometry self-corrects - embedded probes relocate out the next
-        // frame (with a fast history re-sync), the rest re-converge at the temporal blend rate.
-    }
-
-    // 1a. Copy-compact BLASes whose size queries matured, and retire replaced originals.
-    m_accelStructure.recordCompaction(frameIdx, vkPrepCommandBuffer);
-
-    // Publish this frame slot's pending static BLAS-address changes (build/compaction/eviction) into its
-    // own fenced address buffer. BEFORE the skinned rebuild, so a slot reused static->skinned keeps the
-    // skinned per-slot address (written next), not a stale static value. Other slots pick up their copies
-    // in their own frames -- static slots are never written here while they may be in flight.
-    m_accelStructure.syncFrameAddresses(frameIdx);
-
-    // 1b. Rebuild skinned meshes' BLASes every frame from this frame's deformed vertices, into this frame's
-    // double-buffered slot (the other slot may still be referenced by the previous frame's in-flight TLAS).
-    if (!m_skinnedBlasBuilds.empty())
-    {
-        m_accelStructure.recordBuildSkinnedBlas(vkPrepCommandBuffer, frameIdx,
-            Globals::meshDataManager.getVertexBuffer(), Globals::meshDataManager.getIndexBuffer(), m_skinnedBlasBuilds);
-        // Skinned BLAS builds -> TLAS build reads them (in the cached secondary executed next).
-        fullBarrier(vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR, vk::AccessFlagBits2::eAccelerationStructureWriteKHR,
-            vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR, vk::AccessFlagBits2::eAccelerationStructureReadKHR);
-    }
-
-    // 2. One-time clear of the persistent probe table/SH (it accumulates across frames thereafter).
-    if (m_rtParams.giEnabled && m_giProbePipeline.needsClear())
-    {
-        m_giProbePipeline.recordClearPersistent(prepCommandBuffer);
-        m_giProbePipeline.markCleared();
-    }
-    prepCommandBuffer.end();
-}
-
-// The CACHED half of GI (recorded only on invalidation frames, with the scene secondaries): the sky map
-// bake, the TLAS-instance write, the TLAS build and the probe trace. Everything per-frame rides the UBO
-// (u_giTlasNumInstances, u_giTrace0/1, u_frameIndex, u_sceneFocus); the TLAS handle and the instance
-// buffers are stable per slot between invalidations (ensureTlasCapacity / the instance-capacity growth
-// both invalidate), and the RT / GI toggles re-record through their tweak callbacks.
-void Renderer::recordGlobalIllum(uint32 frameIdx)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    CommandBuffer& globalIllumCommandBuffer = frameData.globalIllumCommandBuffer;
-    vk::CommandBufferInheritanceInfo globalIllumInheritanceInfo;
-    vk::CommandBuffer vkGlobalIllumCommandBuffer = globalIllumCommandBuffer.begin(false, &globalIllumInheritanceInfo);
-
-    // The sky map (GI miss rays + the ocean / terrain-film mirror rays + the skyRadiance(up) ambient in the
-    // forward pass) is baked on EVERY frame, ahead of the RT toggle: the forward shaders sample it whether
-    // or not anything is ray traced. Its own barriers order last frame's reads before the write and the
-    // write before this frame's compute + fragment reads.
-    m_giProbePipeline.recordSkyMap(globalIllumCommandBuffer, frameIdx, frameData.ubo);
-
-    // RT master toggle off, or no TLAS yet (no instances when this slot last invalidated): the sky map alone.
-    const vk::AccelerationStructureKHR tlas = m_accelStructure.getTlas(frameIdx);
-    if (!m_rtParams.enabled || !tlas)
-    {
-        globalIllumCommandBuffer.end();
-        return;
-    }
-
-    auto fullBarrier = [&](vk::PipelineStageFlags2 srcStage, vk::AccessFlags2 srcAccess,
-        vk::PipelineStageFlags2 dstStage, vk::AccessFlags2 dstAccess)
-        {
-            vk::MemoryBarrier2 bar{ .srcStageMask = srcStage, .srcAccessMask = srcAccess, .dstStageMask = dstStage, .dstAccessMask = dstAccess };
-            vkGlobalIllumCommandBuffer.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &bar });
-        };
-
-    // Make prior writes visible to the GI compute passes:
-    //  - the light grid (compute storage writes) that the trace reuses to shade hits, and
-    //  - the sun cascade shadow map depth writes (late/early fragment tests) that the trace samples.
-    // The shadow render pass only synchronizes its depth writes to the FRAGMENT stage (for the main
-    // pass); without this the compute trace samples the depth image with no dependency, which faults
-    // NVIDIA (depth-compression metadata read from the wrong stage).
-    fullBarrier(vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-        vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-        vk::PipelineStageFlagBits2::eComputeShader,
-        vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eShaderSampledRead);
-
-    // 3. Write the per-instance TLAS records on the GPU (over the whole instance capacity; the live count and
-    // the range bound around the scene focus come from the UBO).
-    GIProbePipeline::TlasInstanceParams tlasParams{
-        .renderNodeTransforms = frameData.inRenderNodeTransformsBuffer,
-        .meshInstances = frameData.inMeshInstancesBuffer,
-        .instanceOffsets = m_instanceOffsetsBuffer,
-        .blasAddresses = m_accelStructure.getBlasAddressBuffer(frameIdx),
-        .rtMeshAlias = m_accelStructure.getMeshAliasBuffer(),
-        .materialInfos = m_materialInfosBuffer,
-        .nodePassMasks = frameData.inNodePassMasksBuffer,
-        .ubo = frameData.ubo,
-        .capacity = m_maxGiTlasInstances,
-    };
-    m_giProbePipeline.recordTlasInstances(globalIllumCommandBuffer, frameIdx, tlasParams);
-
-    // instance write -> TLAS build read. The build reads the instance buffer as SHADER_READ (AS_READ
-    // covers the source acceleration structures, not the instance data), so the dst access must include it.
-    fullBarrier(vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite,
-        vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR,
-        vk::AccessFlagBits2::eAccelerationStructureReadKHR | vk::AccessFlagBits2::eShaderRead);
-
-    // 4. Rebuild this frame's TLAS (double-buffered) over the whole capacity; ensureTlasCapacity (in
-    // recordCommandBuffers, before anything records) sized it and invalidated on a handle change.
-    m_accelStructure.recordBuildTlas(vkGlobalIllumCommandBuffer, frameIdx, m_giProbePipeline.getTlasInstanceBuffer(frameIdx));
-
-    // TLAS build -> ray-query read (GI/AO compute, and the forward fragment pass for RT light shadows)
-    fullBarrier(vk::PipelineStageFlagBits2::eAccelerationStructureBuildKHR, vk::AccessFlagBits2::eAccelerationStructureWriteKHR,
-        vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eFragmentShader,
-        vk::AccessFlagBits2::eAccelerationStructureReadKHR | vk::AccessFlagBits2::eShaderStorageRead);
-
-    // 5. Trace rays per clipmap probe and temporally blend irradiance into the SH. The probe set and
-    // its toroidal window are derived from the SCENE FOCUS (this frame's u_sceneFocus in the UBO - the
-    // player in game mode, else the camera); probes that scrolled in since last frame (relative to
-    // u_giTrace1.xyz, last frame's focus, written by buildUbo) are full-replaced rather than blended.
-    // Gated by the GI toggle - the TLAS built above still serves RTAO and RT shadows when GI is off.
-    if (m_rtParams.giEnabled)
-    {
-    GIProbePipeline::TraceParams traceParams{
-        .ubo = frameData.ubo,
-        .lightInfos = frameData.lightInfosBuffer,
-        .lightGrid = frameData.lightGridsBuffer,
-        .lightTable = frameData.lightTableBuffer,
-        .vertexBuffer = Globals::meshDataManager.getVertexBuffer(),
-        .indexBuffer = Globals::meshDataManager.getIndexBuffer(),
-        .meshInfos = m_meshInfosBuffer,
-        .meshInstances = frameData.inMeshInstancesBuffer,
-        .materialInfos = m_materialInfosBuffer,
-        .tlas = tlas,
-        .shadowMapView = frameData.shadowMap.getSampleView(),
-        .shadowMapSampler = frameData.shadowMap.getSampler(),
-    };
-    m_giProbePipeline.recordTrace(globalIllumCommandBuffer, frameIdx, traceParams);
-
-    // trace (SH write) -> fragment read in the main pass + vertex read (per-particle lighting)
-    fullBarrier(vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite,
-        vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eVertexShader, vk::AccessFlagBits2::eShaderStorageRead);
-    }
-
-    globalIllumCommandBuffer.end();
-}
-
-void Renderer::applyPendingTextureDescriptorWrites(uint32 frameIdx)
-{
-    if (Globals::textureStreamer.debugRewriteAllSlots())
-        for (uint16 i = 0; i < (uint16)Globals::textureManager.getNumTextures(); ++i)
-            Globals::textureStreamer.queueDescriptorWrite(i);
-
-    oc::span<const uint16> writes = Globals::textureStreamer.getPendingDescriptorWrites(frameIdx);
-    if (writes.empty())
-        return;
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    for (uint16 texIdx : writes)
-    {
-        // Slots beyond the live descriptor count appear when a texture upload outgrew the arrays this
-        // frame; the pending capacity growth re-allocates + fully refills every set, so drop them.
-        if (texIdx >= m_numTextureDescriptors || texIdx >= Globals::textureManager.getNumTextures())
-            continue;
-        // Freed slots (destroyed container, not yet recycled) resolve to the fallback view.
-        const vk::ImageView view = Globals::textureManager.getViewForDescriptor(texIdx);
-        for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)
-            m_staticMeshGraphicsPipeline.updateTextureDescriptor(frameData.staticMeshPipelineDescriptorSet[eye].getDescriptorSet(), texIdx, view);
-        m_shadowMapGraphicsPipeline.updateTextureDescriptor(frameData.shadowDrawDescriptorSet.getDescriptorSet(), texIdx, view);
-        m_rainMapGraphicsPipeline.updateTextureDescriptor(frameData.rainDrawDescriptorSet.getDescriptorSet(), texIdx, view);
-        m_giProbePipeline.updateTextureDescriptor(frameIdx, texIdx, view);
-        m_rtaoPipeline.updateTextureDescriptor(frameIdx, texIdx, view);
-        m_particlePipeline.updateTextureDescriptor(frameIdx, texIdx, view);
-        m_decalPipeline.updateTextureDescriptor(frameIdx, texIdx, view);
-    }
-    Globals::textureStreamer.clearPendingDescriptorWrites(frameIdx);
-}
-
-namespace
-{
-    // Reversed-Z: the far plane / "no geometry" depth is 0.0 (shadow maps stay standard, cleared 1.0).
-    constexpr oc::array<vk::ClearValue, 2> s_sceneClears{ vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 1.0f } }, vk::ClearDepthStencilValue{ 0.0f, 0 } };
-
-    // Between two scene render-pass instances: the previous instance's attachment writes -> this
-    // instance's loadOp reads + writes. The stage passes cannot carry it - their dependency arrays
-    // must stay identical for render-pass compatibility (see SceneColor).
-    void sceneInstanceBarrier(vk::CommandBuffer cb)
-    {
-        const vk::PipelineStageFlags2 attStages = vk::PipelineStageFlagBits2::eColorAttachmentOutput
-            | vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests;
-        vk::MemoryBarrier2 barrier{
-            .srcStageMask = attStages,
-            .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite | vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-            .dstStageMask = attStages,
-            .dstAccessMask = vk::AccessFlagBits2::eColorAttachmentRead | vk::AccessFlagBits2::eColorAttachmentWrite
-                | vk::AccessFlagBits2::eDepthStencilAttachmentRead | vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-        };
-        cb.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &barrier });
-    }
-}
-
-void Renderer::executeScoped(vk::CommandBuffer primary, const char* scope, vk::CommandBuffer secondary)
-{
-    m_gpuProfiler.beginScope(primary, scope);
-    primary.executeCommands(1, &secondary);
-    m_gpuProfiler.endScope(primary);
-}
-
-// Every cached secondary, on invalidation frames only (setHaveToRecordCommandBuffers).
-// THE scene stage table (see Renderer.ixx): name, gate, cached secondary and per-eye inline recorder.
-// Table order is draw order - the opaque group first (it writes the depth), then the layered group.
-// The GI probe impostors WRITE depth (they sort among themselves through gl_FragDepth), so they run
-// with the opaque scene; the AO trace and the decals then see them as geometry (debug only).
-oc::array<Renderer::SceneStage, 8> Renderer::buildSceneStages(uint32 frameIdx)
-{
-    PerFrameData& f = m_perFrameData[frameIdx];
-    const bool force = m_forceFieldParams.enabled;
-    return {
-        SceneStage{ "Static meshes",     true,  true,                             false, &f.staticMeshCommandBuffer,   &Renderer::recordStaticMesh,   &Renderer::recordStaticMeshInto },
-        SceneStage{ "GI probe debug",    true,  m_giProbePipeline.isDebugEnabled(), false, &f.giProbeDebugCommandBuffer, &Renderer::recordGiProbeDebug, nullptr },
-        SceneStage{ "Decals",            false, m_decalPipeline.isEnabled(),      false, &f.decalCommandBuffer,        &Renderer::recordDecals,       &Renderer::recordDecalsInto },
-        SceneStage{ "Debug lines",       false, m_debugLinePipeline.hasBuffers(), true,  &f.debugLineCommandBuffer,    &Renderer::recordDebugLines,   nullptr },
-        SceneStage{ "Force shells",      false, force,                            false, &f.forceFieldCommandBuffer,   &Renderer::recordForceShells,  &Renderer::recordForceFieldBothInto },
-        SceneStage{ "Force union blend", false, force,                            false, &f.forceUnionCommandBuffer,   &Renderer::recordForceUnion,   nullptr },
-        SceneStage{ "Particles",         false, m_particleParams.enabled,         false, &f.particleCommandBuffer,     &Renderer::recordParticles,    &Renderer::recordParticlesInto },
-        SceneStage{ "Fog apply",         false, m_fogParams.enabled,              false, &f.fogApplyCommandBuffer,     &Renderer::recordFogApply,     &Renderer::recordFogApplyInto },
-    };
-}
-
-void Renderer::recordSceneSecondaries(uint32 frameIdx)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    // Recorded even with no jobs: the dispatch is indirect (CPU-written dims per frame), so skinned
-    // instances spawned later run without a re-record.
-    recordSkinning(frameIdx);
-    recordOceanSim(frameIdx); // executed only while an ocean is active (m_oceanParams.enabled)
-    recordIndirectCull(frameIdx);
-    recordLightGrid(frameIdx);
-    recordForceCompute(frameIdx); // indirect dispatches: emitter/query changes never re-record
-    recordRainOcclusionCull(frameIdx); // executed only while a weather volume requested the map
-    recordRainOcclusionDraw(frameIdx);
-    recordParticleSim(frameIdx); // indirect dispatches: emitter/spawn changes never re-record
-    recordTerrainWetness(frameIdx); // executed only while enabled (m_terrainWetTweaks.enabled)
-    recordShadowCull(frameIdx);
-    recordShadowDraw(frameIdx);
-    recordVolumetricFog(frameIdx); // shared scatter/integrate (center view in VR)
-    recordEyeAdaptation(frameIdx); // shared (samples the left eye's resolved colour in VR)
-    // Composite secondary draws into the desktop swapchain (the left eye / TAA-resolved colour); in VR
-    // it's the desktop-window mirror, so it's recorded in both modes.
-    recordComposite(frameIdx);
-    recordGlobalIllum(frameIdx); // the cached GI half (sky map, TLAS instances + build, trace)
-    // Per-eye forward set: the PREVIOUS slot's AO view (the forward pass reads last frame's AO,
-    // reprojected - see sampleAOBilateral) + this slot's TLAS (UPDATE_AFTER_BIND). Both are stable per slot
-    // between re-records: every RTAO recreateImages site (and the blur-radius tweak, which switches
-    // the returned view) forces a re-record, and a TLAS handle change (first build / capacity growth)
-    // is caught by ensureTlasCapacity in recordCommandBuffers, which invalidates.
-    for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)
-    {
-        m_staticMeshGraphicsPipeline.updateAODescriptor(frameData.staticMeshPipelineDescriptorSet[eye].getDescriptorSet(),
-            m_rtaoPipeline.getAOView((frameIdx + 1) % RendererVKLayout::NUM_FRAMES_IN_FLIGHT, eye), m_rtaoPipeline.getAOSampler());
-        if (const vk::AccelerationStructureKHR tlas = m_accelStructure.getTlas(frameIdx))
-            m_staticMeshGraphicsPipeline.updateTlasDescriptor(frameData.staticMeshPipelineDescriptorSet[eye].getDescriptorSet(), tlas);
-    }
-    // The remaining per-eye screen-space passes (scene stages, AO, fog apply, TAA) are recorded
-    // inline in the primary in VR (recordPrimaryVR); on desktop they stay cached secondaries (one eye).
-    if (m_sceneViewCount == 1)
-    {
-        for (const SceneStage& stage : buildSceneStages(frameIdx))
-            if (!stage.gateRecording || stage.enabled)
-                (this->*stage.recordCached)(frameIdx);
-        recordForceMarch(frameIdx);
-        recordAO(frameIdx);
-        if (m_taaParams.taaEnabled) // bypassed entirely when off - nothing to record or execute
-            recordTaa(frameIdx);
-    }
-}
-
-// The primary's pre-scene stages, shared by both view modes: skinning, ocean sim, the culls, the light
-// grid, force + particle compute, terrain wetness, the sun shadow cascades. Enable toggles are tested
-// here (the primary is re-recorded every frame) so they take effect at once; the cached secondaries
-// then just go unexecuted.
-void Renderer::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    // Skin first: deforms skinned meshes into their output vertex regions, which the cull / forward /
-    // shadow passes then consume as ordinary static geometry.
-    if (!m_skinningJobs.empty())
-        executeScoped(primary, "Skinning", frameData.skinningCommandBuffer.getCommandBuffer());
-    // FFT ocean simulation (spectrum -> IFFT -> maps + mips); the forward ocean vertex shader and
-    // the ocean fragment shader sample the maps. Skipped entirely while no ocean is active (the maps
-    // rest in SHADER_READ_ONLY, so the samplers stay valid).
-    if (m_oceanParams.enabled)
-        executeScoped(primary, "Ocean sim", frameData.oceanSimCommandBuffer.getCommandBuffer());
-    executeScoped(primary, "Indirect cull", frameData.indirectCullCommandBuffer.getCommandBuffer());
-    executeScoped(primary, "Light grid", frameData.lightGridCommandBuffer.getCommandBuffer());
-    // Forcefield grid build + force/query compute (Force library readbacks land ~2 frames later).
-    if (m_forceFieldParams.enabled)
-        executeScoped(primary, "Force compute", frameData.forceComputeCommandBuffer.getCommandBuffer());
-    // The weather volume's rain occlusion map (cull + top-down depth), gated on the UBO this frame was
-    // built with (buildUboRainOcclusion) so the pass and the sim's shelter test always agree.
-    if (m_particleParams.enabled && m_ubo.rainOcclusionParams.x > 0.5f)
-    {
-        executeScoped(primary, "Rain occlusion cull", frameData.rainCullCommandBuffer.getCommandBuffer());
-        m_gpuProfiler.beginScope(primary, "Rain occlusion draw");
-        ShadowMap& map = frameData.rainOcclusionMap;
-        vk::ClearValue clear;
-        clear.depthStencil = vk::ClearDepthStencilValue{ .depth = 1.0f, .stencil = 0 };
-        const vk::RenderPassBeginInfo rpBegin{
-            .renderPass = map.getRenderPass(),
-            .framebuffer = map.getFramebuffer(),
-            .renderArea = vk::Rect2D{ .offset = vk::Offset2D{ 0, 0 }, .extent = vk::Extent2D{ map.getResolution(), map.getResolution() } },
-            .clearValueCount = 1,
-            .pClearValues = &clear,
-        };
-        vk::CommandBuffer vkRainDraw = frameData.rainDrawCommandBuffer.getCommandBuffer();
-        primary.beginRenderPass(rpBegin, vk::SubpassContents::eSecondaryCommandBuffers);
-        primary.executeCommands(1, &vkRainDraw);
-        primary.endRenderPass();
-        m_gpuProfiler.endScope(primary);
-    }
-    // Particle emit/simulate (outside any render pass; reads LAST frame's scene depth for collision and
-    // THIS frame's rain occlusion map, writes the alive list + indirect draw args the in-pass billboard
-    // draw consumes).
-    if (m_particleParams.enabled)
-        executeScoped(primary, "Particle sim", frameData.particleSimCommandBuffer.getCommandBuffer());
-    // Terrain wetness clipmap: decay + re-wet under this frame's live ocean surface (after the ocean
-    // sim, before the forward pass samples it). Runs on tick frames only (m_terrainWetTick, decided in
-    // the UBO build that this frame carries); skipped while disabled: the shader presence flag is 0.
-    if (m_terrainWetTweaks.enabled && m_terrainWetTick)
-        executeScoped(primary, "Terrain wetness", frameData.terrainWetnessCommandBuffer.getCommandBuffer());
-    // RT sun shadows replace the cascades entirely (forward pass traces, GI uses per-probe sun rays),
-    // so skip the shadow cull + cascade render.
-    if (!m_rtParams.rtSunShadow)
-    {
-        executeScoped(primary, "Shadow cull", frameData.shadowCullCommandBuffer.getCommandBuffer());
-        m_gpuProfiler.beginScope(primary, "Shadow draw");
-        ShadowMap& shadowMap = frameData.shadowMap;
-        vk::ClearValue shadowClear;
-        shadowClear.depthStencil = vk::ClearDepthStencilValue{ .depth = 1.0f, .stencil = 0 };
-        const vk::RenderPassBeginInfo shadowRpBegin{
-            .renderPass = shadowMap.getRenderPass(),
-            .framebuffer = shadowMap.getFramebuffer(),
-            .renderArea = vk::Rect2D{.offset = vk::Offset2D{ 0, 0 }, .extent = vk::Extent2D{ shadowMap.getResolution(), shadowMap.getResolution() } },
-            .clearValueCount = 1,
-            .pClearValues = &shadowClear,
-        };
-        vk::CommandBuffer vkShadowDrawCommandBuffer = frameData.shadowDrawCommandBuffer.getCommandBuffer();
-        primary.beginRenderPass(shadowRpBegin, vk::SubpassContents::eSecondaryCommandBuffers);
-        primary.executeCommands(1, &vkShadowDrawCommandBuffer);
-        primary.endRenderPass();
-        m_gpuProfiler.endScope(primary);
-    }
-}
-
-// ---- VR: per-eye screen-space chain (opaque scene -> AO -> layered scene stages -> TAA), recorded inline ----
-// GI (TLAS build + probe trace) and fog scatter/integrate are shared (built once for the centre view);
-// each eye's scene/AO/TAA then runs against its own images, then eye adaptation and the per-eye LDR
-// composites. Two scene render-pass instances per eye, the same split as the desktop path: the static
-// meshes WRITE the depth, then it turns read-only + sampled for the AO trace and the layered stages.
-void Renderer::recordPrimaryVR(uint32 frameIdx, CommandBuffer& commandBuffer)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    vk::CommandBuffer vkCommandBuffer = commandBuffer.getCommandBuffer();
-    SceneColor& sceneColor = frameData.sceneColor;
-    const vk::Rect2D sceneArea{ .offset = vk::Offset2D{ m_viewportRect.min.x, m_viewportRect.min.y }, .extent = vk::Extent2D{ sceneColor.getWidth() - m_viewportRect.min.x, sceneColor.getHeight() - m_viewportRect.min.y } };
-
-    m_gpuProfiler.beginScope(vkCommandBuffer, "GI");
-    vk::CommandBuffer vkGiPrepCommandBuffer = frameData.giPrepCommandBuffer.getCommandBuffer();
-    vk::CommandBuffer vkGlobalIllumCommandBuffer = frameData.globalIllumCommandBuffer.getCommandBuffer();
-    vkCommandBuffer.executeCommands(1, &vkGiPrepCommandBuffer); // per-frame BLAS work, then the cached rest
-    vkCommandBuffer.executeCommands(1, &vkGlobalIllumCommandBuffer);
-    m_gpuProfiler.endScope(vkCommandBuffer);
-    if (m_fogParams.enabled)
-        executeScoped(vkCommandBuffer, "Volumetric fog", frameData.volumetricFogCommandBuffer.getCommandBuffer());
-
-    // The same stage table the desktop path executes; VR records the stages inline instead, skipping
-    // the ones with no inline recorder (the debug overlays).
-    const oc::array<SceneStage, 8> stages = buildSceneStages(frameIdx);
-    bool layered = false;
-    for (const SceneStage& stage : stages)
-        layered = layered || (!stage.opaque && stage.enabled && stage.recordInline);
-
-    for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)
-    {
-        m_gpuProfiler.beginScope(vkCommandBuffer, eye == 0 ? "Eye L" : "Eye R");
-        // This eye's forward set (last frame's AO view + TLAS) is written at scene-record time (recordSceneSecondaries).
-        vk::RenderPassBeginInfo eyeRpBegin{
-            .renderPass = sceneColor.getStageRenderPass(true, !layered, false),
-            .framebuffer = sceneColor.getFramebuffer(eye),
-            .renderArea = sceneArea,
-            .clearValueCount = (uint32)s_sceneClears.size(),
-            .pClearValues = s_sceneClears.data(),
-        };
-        vkCommandBuffer.beginRenderPass(eyeRpBegin, vk::SubpassContents::eInline); // opaque: writes this eye's depth
-        for (const SceneStage& stage : stages)
-            if (stage.opaque && stage.enabled && stage.recordInline)
-                (this->*stage.recordInline)(commandBuffer, frameIdx, eye);
-        vkCommandBuffer.endRenderPass();
-        recordSceneDepthToSampled(vkCommandBuffer, sceneColor.getDepthImage(), eye);
-
-        if (m_rtaoParams.enabled)
-            recordAOInto(commandBuffer, frameIdx, eye); // compute AO for this eye (NEXT frame's forward pass reads it)
-
-        if (layered)
-        { // the stages layered over the opaque scene: read-only depth, which they also sample
-            sceneInstanceBarrier(vkCommandBuffer);
-            eyeRpBegin.renderPass = sceneColor.getStageRenderPass(false, true, true);
-            vkCommandBuffer.beginRenderPass(eyeRpBegin, vk::SubpassContents::eInline);
-            for (const SceneStage& stage : stages)
-                if (!stage.opaque && stage.enabled && stage.recordInline)
-                    (this->*stage.recordInline)(commandBuffer, frameIdx, eye);
-            vkCommandBuffer.endRenderPass();
-        }
-
-        // Scene colour -> TAA compute sampled read. Explicit image barrier (not a global memory barrier -
-        // see the desktop path) naming this eye's colour layer so the finalLayout transition at
-        // endRenderPass is actually resolved for the compute read.
-        vk::ImageMemoryBarrier2 colorToTaa{
-            .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-            .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
-            .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-            .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
-            .oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-            .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-            .image = sceneColor.getColorImage(),
-            .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, eye, 1 },
-        };
-        vkCommandBuffer.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &colorToTaa });
-        recordTaaInto(commandBuffer, frameIdx, eye); // resolve into this eye's history
-        m_gpuProfiler.endScope(vkCommandBuffer);
-    }
-
-    // Eye adaptation samples the left eye's resolved colour (shared exposure, no per-eye flicker).
-    executeScoped(vkCommandBuffer, "Eye adaptation", frameData.eyeAdaptCommandBuffer.getCommandBuffer());
-
-    // Tonemap each eye's TAA-resolved colour into its LDR composite target (copied into the OpenXR
-    // eye swapchains in present()). TAA left the resolved images in GENERAL with a write->read barrier.
-    m_gpuProfiler.beginScope(vkCommandBuffer, "VR composite");
-    const vk::Extent2D ext = m_swapChain.getLayout().extent;
-    for (uint32 eye = 0; eye < 2; ++eye)
-    {
-        const vk::RenderPassBeginInfo eyeCompositeBegin{
-            .renderPass = m_renderPass.getRenderPass(),
-            .framebuffer = m_eyeFramebuffer[eye],
-            .renderArea = vk::Rect2D{ .offset = vk::Offset2D{ 0, 0 }, .extent = ext },
-            .clearValueCount = (uint32)s_sceneClears.size(),
-            .pClearValues = s_sceneClears.data(),
-        };
-        vkCommandBuffer.beginRenderPass(eyeCompositeBegin, vk::SubpassContents::eInline);
-        vkCommandBuffer.setViewport(0, vk::Viewport{ .x = 0.0f, .y = 0.0f, .width = (float)ext.width, .height = (float)ext.height, .minDepth = 0.0f, .maxDepth = 1.0f });
-        vkCommandBuffer.setScissor(0, vk::Rect2D{ .offset = vk::Offset2D{ 0, 0 }, .extent = ext });
-        CompositePipeline::RecordParams eyeComposite{
-            .descriptorSet = m_vrCompositeDescriptorSet[eye],
-            .resolvedView = m_taaParams.taaEnabled ? m_taaPipeline.getResolvedView(frameIdx, eye)
-                : frameData.sceneColor.getColorLayerView(eye),
-            .resolvedLayout = m_taaParams.taaEnabled ? vk::ImageLayout::eGeneral : vk::ImageLayout::eShaderReadOnlyOptimal,
-            .sampler = m_taaParams.taaEnabled ? m_taaPipeline.getSampler() : frameData.sceneColor.getSampler(),
-            .exposureBuffer = m_eyeAdaptationPipeline.getExposureBuffer().getBuffer(),
-            .exposureEV = m_postParams.exposureEV,
-            .tonemapper = m_postParams.tonemapper,
-            .autoExposure = m_postParams.autoExposure ? 1 : 0,
-        };
-        m_compositePipeline.record(commandBuffer, eyeComposite);
-        vkCommandBuffer.endRenderPass();
-    }
-    m_gpuProfiler.endScope(vkCommandBuffer); // VR composite
-}
-
-// ---- Desktop: GI -> fog -> scene opaque (writes the depth) -> RTAO -> force passes -> scene forward
-// (the layered stages, depth read-only + sampled) -> TAA -> eye adaptation ----
-// THERE IS NO DEPTH PREPASS. The opaque scene stages write THE scene depth; one barrier then parks it
-// read-only, and everything that reads this frame's depth runs after that point: the AO trace (whose
-// result the NEXT frame's forward pass reads), the force march, the layered scene stages and TAA.
-void Renderer::recordPrimaryDesktop(uint32 frameIdx, vk::CommandBuffer vkCommandBuffer)
-{
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-    SceneColor& sceneColor = frameData.sceneColor;
-    const vk::Rect2D sceneArea{ .offset = vk::Offset2D{ m_viewportRect.min.x, m_viewportRect.min.y }, .extent = vk::Extent2D{ sceneColor.getWidth() - m_viewportRect.min.x, sceneColor.getHeight() - m_viewportRect.min.y } };
-
-    m_gpuProfiler.beginScope(vkCommandBuffer, "GI");
-    vk::CommandBuffer vkGiPrepCommandBuffer = frameData.giPrepCommandBuffer.getCommandBuffer();
-    vk::CommandBuffer vkGlobalIllumCommandBuffer = frameData.globalIllumCommandBuffer.getCommandBuffer();
-    vkCommandBuffer.executeCommands(1, &vkGiPrepCommandBuffer); // per-frame BLAS work, then the cached rest
-    vkCommandBuffer.executeCommands(1, &vkGlobalIllumCommandBuffer);
-    m_gpuProfiler.endScope(vkCommandBuffer);
-    // Fog scatter/integrate compute (the integrated grid was cleared to "no fog" at init when disabled).
-    if (m_fogParams.enabled)
-        executeScoped(vkCommandBuffer, "Volumetric fog", frameData.volumetricFogCommandBuffer.getCommandBuffer());
-    // The forward set's AO view (LAST frame's) + TLAS are written at scene-record time (recordSceneSecondaries).
-
-    // The scene renders as ONE render-pass instance per stage: timestamps are illegal inside a
-    // SECONDARY_COMMAND_BUFFERS subpass (so the GPU profiler needs the split), and the depth switches
-    // from written to read-only between the two groups. SceneColor's stage variants - the first clears,
-    // the last hands colour to TAA - are compatible with the pass the secondaries/pipelines were built
-    // against, since only load/store ops and layouts differ. The deps must stay identical for that
-    // compatibility, so the inter-instance attachment hazards get an explicit barrier.
-    const oc::array<SceneStage, 8> stages = buildSceneStages(frameIdx);
-    const SceneStage* lastStage = &stages[0]; // static meshes are always on
-    for (const SceneStage& stage : stages)
-        if (stage.enabled)
-            lastStage = &stage;
-    bool firstInstance = true;
-    const auto runStage = [&](const SceneStage& stage)
-    {
-        if (!stage.enabled)
-            return;
-        if (!firstInstance)
-            sceneInstanceBarrier(vkCommandBuffer);
-        const vk::RenderPassBeginInfo sceneRpBegin{
-            .renderPass = sceneColor.getStageRenderPass(firstInstance, &stage == lastStage, !stage.opaque),
-            .framebuffer = sceneColor.getFramebuffer(),
-            .renderArea = sceneArea,
-            .clearValueCount = (uint32)s_sceneClears.size(), // ignored by the loadOp LOAD variants
-            .pClearValues = s_sceneClears.data(),
-        };
-        const vk::CommandBuffer stageCb = stage.cb->getCommandBuffer();
-        m_gpuProfiler.beginScope(vkCommandBuffer, stage.name);
-        vkCommandBuffer.beginRenderPass(sceneRpBegin, vk::SubpassContents::eSecondaryCommandBuffers);
-        vkCommandBuffer.executeCommands(1, &stageCb);
-        vkCommandBuffer.endRenderPass();
-        m_gpuProfiler.endScope(vkCommandBuffer);
-        firstInstance = false;
-    };
-
-    m_gpuProfiler.beginScope(vkCommandBuffer, "Scene opaque");
-    for (const SceneStage& stage : stages)
-        if (stage.opaque)
-            runStage(stage);
-    recordSceneDepthToSampled(vkCommandBuffer, sceneColor.getDepthImage(), 0);
-    m_gpuProfiler.endScope(vkCommandBuffer); // Scene opaque
-
-    if (m_rtaoParams.enabled)
-        executeScoped(vkCommandBuffer, "RTAO", frameData.aoCommandBuffer.getCommandBuffer());
-
-    // The union march's interval pass + the half-res march: their render passes begin/end HERE (a
-    // secondary cannot begin one), the draws are cached secondaries (recordForceMarch). Gated like the
-    // force compute and the two force scene stages: with the field off the passes would only clear their
-    // targets for a 0-vertex draw.
-    if (m_forceFieldParams.enabled)
-    {
-        vk::CommandBuffer vkForceIntervalCommandBuffer = frameData.forceIntervalCommandBuffer.getCommandBuffer();
-        m_gpuProfiler.beginScope(vkCommandBuffer, "Force intervals");
-        m_forceFieldPipeline.beginIntervalPass(vkCommandBuffer);
-        vkCommandBuffer.executeCommands(1, &vkForceIntervalCommandBuffer);
-        vkCommandBuffer.endRenderPass();
-        m_gpuProfiler.endScope(vkCommandBuffer);
-        if (m_forceFieldPipeline.getUnionHalfRes())
-        {
-            vk::CommandBuffer vkForceMarchCommandBuffer = frameData.forceMarchCommandBuffer.getCommandBuffer();
-            m_gpuProfiler.beginScope(vkCommandBuffer, "Force union march");
-            m_forceFieldPipeline.beginUnionMarchPass(vkCommandBuffer);
-            vkCommandBuffer.executeCommands(1, &vkForceMarchCommandBuffer);
-            vkCommandBuffer.endRenderPass();
-            m_gpuProfiler.endScope(vkCommandBuffer);
-        }
-    }
-
-    // The stages layered over the opaque scene: the depth is their READ-ONLY attachment, which they
-    // also sample (decals, soft particles, force shells, fog apply). None of their pipelines writes depth.
-    m_gpuProfiler.beginScope(vkCommandBuffer, "Scene forward");
-    for (const SceneStage& stage : stages)
-        if (!stage.opaque)
-            runStage(stage);
-    m_gpuProfiler.endScope(vkCommandBuffer); // Scene forward
-
-    // SceneColor's render pass has no 0->EXTERNAL dependency of its own (must stay dependency-identical
-    // to the swapchain pass, see SceneColor.cpp), so its finalLayout->SHADER_READ_ONLY transition at
-    // endRenderPass is only ordered by the implicit (no-access) end dependency. An explicit image
-    // barrier naming the colour image is what actually resolves that transition for TAA's compute read
-    // (a global vk::MemoryBarrier2 was insufficient - validation still saw it as an unsynchronized
-    // layout-transition read). Same-layout SHADER_READ_ONLY->SHADER_READ_ONLY, sync-only.
-    vk::ImageMemoryBarrier2 colorToTaaImg{
-        .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-        .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
-        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
-        .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
-        .oldLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-        .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-        .image = sceneColor.getColorImage(),
-        .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 },
-    };
-    // TAA OFF: eye adaptation (compute) and the composite (fragment) sample this image
-    // instead of TAA's resolved one, so the read must be visible to both stages.
-    if (!m_taaParams.taaEnabled)
-        colorToTaaImg.dstStageMask |= vk::PipelineStageFlagBits2::eFragmentShader;
-    vkCommandBuffer.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &colorToTaaImg });
-    // Disabled TAA is skipped outright (it used to run a full-screen copy with feedback 0).
-    if (m_taaParams.taaEnabled)
-        executeScoped(vkCommandBuffer, "TAA", frameData.taaCommandBuffer.getCommandBuffer());
-    // Eye adaptation: reads the resolved colour (TAA barrier above), writes the exposure the composite reads.
-    executeScoped(vkCommandBuffer, "Eye adaptation", frameData.eyeAdaptCommandBuffer.getCommandBuffer());
-}
-
-void Renderer::recordCommandBuffers()
-{
-    const uint32 frameIdx = m_swapChain.getCurrentFrameIndex();
-    PerFrameData& frameData = m_perFrameData[frameIdx];
-
-    // Streamed textures: refresh swapped bindless slots in this frame slot's sets before anything
-    // records against them (safe here: acquireNextImage waited this slot's fence, and the texture
-    // arrays are UPDATE_AFTER_BIND for the cached CBs).
-    ProfileScope descriptorScope("Bindless descriptor writes", EProfileCategory::Renderer);
-    applyPendingTextureDescriptorWrites(frameIdx);
-
-    // This slot's TLAS, sized to the instance capacity, BEFORE anything records: every secondary that bakes
-    // the handle (GI, RTAO, fog) and the forward set's descriptor are written from it below, and a handle
-    // change (first build / capacity growth) invalidates them all. Nothing to trace without RT or instances.
-    if (m_rtParams.enabled && m_meshInstanceCounter > 0 && m_accelStructure.ensureTlasCapacity(frameIdx, m_maxGiTlasInstances))
-        setHaveToRecordCommandBuffers();
-
-    const bool recordScene = !frameData.updated && m_meshInstanceCounter > 0;
-
-    // Baked terrain-data cascades: point this slot's sets at the active ping-pong image
-    // (UPDATE_AFTER_BIND, like the AO/TLAS bindings - a re-bake swaps images without re-recording
-    // anything). The ocean passes read them for water depth/level (shoaling, surf, swash, land cull).
-    // Rewritten only when this slot's sets re-record (recreated sets always come with a
-    // setHaveToRecordCommandBuffers) or the ping-pong flipped since this slot last wrote (generation).
-    if (recordScene || m_fogTerrainDescGen[frameIdx] != m_fogTerrainMap.getGeneration())
-    {
-        m_fogTerrainDescGen[frameIdx] = m_fogTerrainMap.getGeneration();
-        for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)
-            m_staticMeshGraphicsPipeline.updateTerrainHeightDescriptor(frameData.staticMeshPipelineDescriptorSet[eye].getDescriptorSet(),
-                m_fogTerrainMap.getView(), m_fogTerrainMap.getSampler());
-        m_volumetricFogPipeline.updateTerrainDescriptor(frameIdx, m_fogTerrainMap.getView(), m_fogTerrainMap.getSampler());
-        m_terrainWetnessPipeline.updateTerrainDescriptor(frameIdx, m_fogTerrainMap.getView(), m_fogTerrainMap.getSampler());
-        m_oceanSimPipeline.updateTerrainDescriptor(frameIdx, m_fogTerrainMap.getView(), m_fogTerrainMap.getSampler());
-        m_particlePipeline.updateTerrainDescriptor(frameIdx, m_fogTerrainMap.getView(), m_fogTerrainMap.getSampler());
-        // The wetness clipmap and the GI sky map never change handle; rewritten alongside so a recreated
-        // set gets them.
-        for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)
-        {
-            m_staticMeshGraphicsPipeline.updateTerrainWetnessDescriptor(frameData.staticMeshPipelineDescriptorSet[eye].getDescriptorSet(),
-                m_terrainWetnessPipeline.getView(), m_terrainWetnessPipeline.getSampler());
-            m_staticMeshGraphicsPipeline.updateSkyMapDescriptor(frameData.staticMeshPipelineDescriptorSet[eye].getDescriptorSet(),
-                m_giProbePipeline.getSkyMapView(), m_giProbePipeline.getSkyMapSampler());
-        }
-    }
-
-    descriptorScope.stop();
-
-    if (recordScene)
-    {
-        // Only on invalidation frames (setHaveToRecordCommandBuffers) - the secondaries are cached.
-        ProfileScope sceneScope("Record scene secondaries", EProfileCategory::Renderer);
-        recordSceneSecondaries(frameIdx);
-        frameData.updated = true;
-    }
-
-    {
-        // The per-frame GI half: one-shot BLAS builds / compaction / the skinned rebuild (empty most frames).
-        ProfileScope giScope("Record GI", EProfileCategory::Renderer);
-        if (m_meshInstanceCounter > 0)
-            recordGlobalIllumPrep(frameIdx);
-    }
-
-    // Live tunables + delta time into the mapped params buffer (no command-buffer re-record needed).
-    if (m_meshInstanceCounter > 0)
-    {
-        const Clock::time_point now = Clock::now();
-        const float deltaSeconds = m_haveEyeAdaptTime ? oc::min(std::chrono::duration<float>(now - m_eyeAdaptLastTime).count(), 0.25f) : 0.0f;
-        m_eyeAdaptLastTime = now;
-        m_haveEyeAdaptTime = true;
-        m_eyeAdaptationPipeline.updateParams(frameIdx, m_postParams, deltaSeconds);
-    }
-
-    vk::CommandBufferInheritanceInfo inheritance{ .renderPass = m_renderPass.getRenderPass() };
-    ProfileScope imguiScope("Record ImGui", EProfileCategory::Renderer); // RenderDrawData copies every UI vertex
-    vk::CommandBuffer vkImguiCommandBuffer = frameData.imguiCommandBuffer.begin(true, &inheritance);
-    // From the UI's deep-copied snapshot, never ImGui::GetDrawData(): the next widget pass (a job)
-    // calls ImGui::NewFrame mid-frame, which invalidates the live draw lists. Null until the first
-    // UI::render (frame 0) - the empty secondary CB still executes fine.
-    if (m_imguiDrawData)
-        ImGui_ImplVulkan_RenderDrawData(static_cast<ImDrawData*>(const_cast<void*>(m_imguiDrawData)), vkImguiCommandBuffer, nullptr);
-    frameData.imguiCommandBuffer.end();
-
-    imguiScope.stop();
-
-    // The primary is re-recorded EVERY frame (timestamps, per-frame barriers, executeCommands of the
-    // cached secondaries) - the steady-state cost of this function lives here.
-    ProfileScope primaryScope("Record primary", EProfileCategory::Renderer);
-    CommandBuffer& commandBuffer = frameData.primaryCommandBuffer;
-    vk::CommandBuffer vkCommandBuffer = commandBuffer.begin(true);
-    // GPU pass timings: timestamps live in the primary (re-recorded every frame) and OUTSIDE render
-    // passes only; results are collected by a job kicked in beginFrame when this slot's fence is next
-    // waited - join it before beginRecord resets the slot's scope list + query pool it reads.
-    Globals::jobSystem.wait(m_gpuCollectCounter);
-    m_gpuProfiler.beginRecord(vkCommandBuffer, frameIdx);
-    m_gpuProfiler.beginScope(vkCommandBuffer, "GPU Frame");
-    // Pending baked-map uploads (fog terrain cascades): copied here in the primary (re-recorded
-    // every frame) because the destination ping-pong images were sampled by older submissions - the
-    // transitions need an execution dependency on those reads, which the StagingManager's fresh-image
-    // upload path doesn't emit.
-    m_fogTerrainMap.recordUpload(commandBuffer);
-    { // Sync for ubo copy
-        vk::MemoryBarrier2 memoryBarrier{
-            .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
-            .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-            .dstStageMask = vk::PipelineStageFlagBits2::eVertexShader | vk::PipelineStageFlagBits2::eFragmentShader,
-            .dstAccessMask = vk::AccessFlagBits2::eUniformRead,
-        };
-        vkCommandBuffer.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &memoryBarrier });
-    }
-
-    if (m_meshInstanceCounter > 0)
-    {
-        recordPrimaryPreScene(frameIdx, vkCommandBuffer);
-        if (m_sceneViewCount > 1)
-            recordPrimaryVR(frameIdx, commandBuffer);
-        else
-            recordPrimaryDesktop(frameIdx, vkCommandBuffer);
-    }
-
-    // Swapchain render pass: composite the resolved scene into the swapchain, then ImGui on top.
-    constexpr oc::array<vk::ClearValue, 2> clearValues{ vk::ClearColorValue{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } }, vk::ClearDepthStencilValue{ 0.0f, 0 } };
-    const vk::RenderPassBeginInfo renderPassBeginInfo{
-        .renderPass = m_renderPass.getRenderPass(),
-        .framebuffer = m_framebuffers.getFramebuffer(m_swapChain.getCurrentImageIdx()),
-        .renderArea = vk::Rect2D { .offset = vk::Offset2D { 0, 0 }, .extent = m_swapChain.getLayout().extent },
-        .clearValueCount = (uint32)clearValues.size(),
-        .pClearValues = clearValues.data(),
-    };
-    m_gpuProfiler.beginScope(vkCommandBuffer, "Composite + UI");
-    vkCommandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eSecondaryCommandBuffers);
-    if (m_meshInstanceCounter > 0)
-    {
-        vk::CommandBuffer vkCompositeCommandBuffer = frameData.compositeCommandBuffer.getCommandBuffer();
-        vkCommandBuffer.executeCommands(1, &vkCompositeCommandBuffer);
-    }
-    vkCommandBuffer.executeCommands(1, &vkImguiCommandBuffer);
-    vkCommandBuffer.endRenderPass();
-    m_gpuProfiler.endScope(vkCommandBuffer);
-    m_gpuProfiler.endScope(vkCommandBuffer); // GPU Frame
-    commandBuffer.end();
-}
-
-void Renderer::setHaveToRecordCommandBuffers()
-{
-    for (PerFrameData& perFrame : m_perFrameData)
-        perFrame.updated = false;
-}
-
-void Renderer::syncTextureDescriptorCapacity()
-{
-    // The live texture count outgrew the variable-count texture-array descriptors.
-    if (Globals::textureManager.getGeneration() == m_textureGeneration)
-        return;
-    m_textureGeneration = Globals::textureManager.getGeneration();
-    m_numTextureDescriptors = Globals::textureManager.getMaxTextures();
-    waitForGpuAndFlushStaging();
-    m_giProbePipeline.resizeTextureDescriptors(m_numTextureDescriptors);
-    m_rtaoPipeline.resizeTextureDescriptors(m_numTextureDescriptors);
-    m_particlePipeline.resizeTextureDescriptors(m_numTextureDescriptors);
-    m_decalPipeline.resizeTextureDescriptors(m_numTextureDescriptors);
-    for (PerFrameData& perFrame : m_perFrameData)
-    {
-        for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)
-            perFrame.staticMeshPipelineDescriptorSet[eye].initialize(m_staticMeshGraphicsPipeline.getDescriptorSetLayout(), m_numTextureDescriptors);
-        perFrame.shadowDrawDescriptorSet.initialize(m_shadowMapGraphicsPipeline.getDescriptorSetLayout(), m_numTextureDescriptors);
-        perFrame.rainDrawDescriptorSet.initialize(m_rainMapGraphicsPipeline.getDescriptorSetLayout(), m_numTextureDescriptors);
-    }
-    setHaveToRecordCommandBuffers();
-}
-
-void Renderer::addObjectContainer(ObjectContainer* pObjectContainer)
-{
-    m_objectContainers.push_back(pObjectContainer);
-}
-
-void Renderer::removeObjectContainer(ObjectContainer* pObjectContainer)
-{
-    oc::erase(m_objectContainers, pObjectContainer);
-    ObjectContainer& container = *pObjectContainer;
-
-    // Parked skinned bundles first (they free MeshInfos/output regions that reference the sources).
-    // Every live RenderNode must have been destroyed before the container, so all of its bundles are
-    // parked in m_freeSkinnedBundles by now.
-    if (container.m_baseSkinnedMeshIdx != UINT32_MAX)
-    {
-        if (auto it = m_freeSkinnedBundles.find(container.m_baseSkinnedMeshIdx); it != m_freeSkinnedBundles.end())
-        {
-            for (const uint32 bundleHandle : it->second)
-                destroySkinnedBundle(bundleHandle);
-            m_freeSkinnedBundles.erase(it);
-        }
-        m_freeSkinnedSourceSlots.release(container.m_baseSkinnedMeshIdx, container.m_numSkinnedMeshes);
-    }
-
-    // Streamed mesh sets own their CURRENT mega-buffer ranges (re-streams relocate them); everything
-    // the container uploaded outside a stream set is freed from its own records.
-    if (container.m_numMeshInfos > 0)
-        Globals::meshStreamer.unregisterSets(container.m_baseMeshInfoIdx, container.m_numMeshInfos);
-    for (const ObjectContainer::OwnedDataRange& range : container.m_ownedDataRanges)
-    {
-        switch (range.kind)
-        {
-        case ObjectContainer::EOwnedRange::Vertex:   Globals::meshDataManager.freeVertexData(range.offset, range.size); break;
-        case ObjectContainer::EOwnedRange::Index:    Globals::meshDataManager.freeIndexData(range.offset, range.size); break;
-        case ObjectContainer::EOwnedRange::Skinning: Globals::meshDataManager.freeSkinningData(range.offset, range.size); break;
-        }
-    }
-
-    freeMeshInfoRange(container.m_baseMeshInfoIdx, container.m_numMeshInfos);
-    m_freeMaterialSlots.release(container.m_baseMaterialInfoIdx, (uint32)container.m_materialNames.size());
-
-    m_freeInstanceOffsetSlots.release(container.m_baseMeshInstanceOffsetsIdx, (uint32)container.m_meshInstanceOffsets.size());
-    for (uint32 i = 0; i < (uint32)container.m_rebasedOffsetBaseForIdx.size(); ++i)
-        if (container.m_rebasedOffsetBaseForIdx[i] != UINT32_MAX)
-            m_freeInstanceOffsetSlots.release(container.m_rebasedOffsetBaseForIdx[i], container.m_nodeMeshRanges[i].numNodes);
-    if (container.m_skinnedIdentityOffsetIdx != UINT32_MAX)
-        m_freeInstanceOffsetSlots.release(container.m_skinnedIdentityOffsetIdx, 1);
-
-    for (const uint32 groupIdx : container.m_ownedLodGroups)
-        freeMeshLodGroup(groupIdx); // also detaches the member meshes from GPU LOD selection
-
-    // The images may still be sampled by in-flight frames: destroyed in present() once the GPU has
-    // drained, their bindless slots rewritten to the fallback at the next record.
-    m_pendingTextureFrees.insert(m_pendingTextureFrees.end(), container.m_ownedTextures.begin(), container.m_ownedTextures.end());
-    // Freed mega-buffer/slot ranges may be recycled by an upload later this frame; uploadToSharedBuffer
-    // drains the GPU itself before queuing, so no extra synchronization is needed here for that.
-}
-
-void Renderer::freeMeshInfoRange(uint32 baseMeshInfoIdx, uint32 count)
-{
-    if (count == 0)
-        return;
-    // Neutralize the slots: zero indexCount makes the cull's DGC draws, the shadow pass and the TLAS
-    // writer no-ops for any instance still referencing them this frame (a node pushed before the
-    // container died), exactly like streamed-out meshes.
-    const oc::span<RendererVKLayout::MeshInfo> infos = m_meshInfosBuffer.getBackingStoreAs<RendererVKLayout::MeshInfo>();
-    for (uint32 i = baseMeshInfoIdx; i < baseMeshInfoIdx + count; ++i)
-    {
-        infos[i] = RendererVKLayout::MeshInfo{};
-        m_meshVertexCounts[i] = 0;
-        m_meshIsSkinnedOutput[i] = 0;
-    }
-    uploadToSharedBuffer(m_meshInfosBuffer, count * sizeof(RendererVKLayout::MeshInfo), infos.data() + baseMeshInfoIdx,
-        (size_t)baseMeshInfoIdx * sizeof(RendererVKLayout::MeshInfo));
-    m_accelStructure.onMeshRangeFreed(baseMeshInfoIdx, count);
-    oc::erase_if(m_pendingBlasRebuilds, [&](uint32 meshIdx) { return meshIdx >= baseMeshInfoIdx && meshIdx < baseMeshInfoIdx + count; });
-    m_freeMeshInfoSlots.release(baseMeshInfoIdx, count);
-}
-
-void Renderer::destroySkinnedBundle(uint32 bundleHandle)
-{
-    SkinnedInstanceBundle& bundle = m_skinnedBundles[bundleHandle];
-    uint32 numMeshInfos = bundle.numMeshes; // level 0s + the LOD levels appended after them
-    for (uint32 k = 0; k < bundle.numMeshes; ++k)
-    {
-        const RendererVKLayout::SkinnedMeshSource& src = m_skinnedMeshSources[bundle.sourceKey + k];
-        numMeshInfos += src.numLodLevels;
-        // The job entry is parked (vertexCount 0) but keeps its output offset for exactly this purpose.
-        Globals::meshDataManager.freeVertexData(
-            (size_t)m_skinningJobs[bundle.firstJob + k].outVertexOffset * sizeof(RendererVKLayout::MeshVertex),
-            (size_t)src.vertexCount * sizeof(RendererVKLayout::MeshVertex));
-    }
-    freeMeshInfoRange(bundle.baseMeshIdx, numMeshInfos);
-    m_accelStructure.freeSkinnedJobSlots(bundle.firstJob, bundle.numMeshes);
-    m_freeSkinningJobSlots.release(bundle.firstJob, bundle.numMeshes);
-    m_freeSkinningPaletteHandles.push_back(bundle.paletteHandle);
-    for (const uint32 groupIdx : bundle.lodGroupForMesh)
-        if (groupIdx != UINT32_MAX)
-            freeMeshLodGroup(groupIdx); // also detaches the member meshes from GPU LOD selection
-    bundle = SkinnedInstanceBundle{ .sourceKey = UINT32_MAX, .baseMeshIdx = 0, .paletteHandle = 0, .firstJob = 0, .numMeshes = 0 };
-    m_freeSkinnedBundleSlots.push_back(bundleHandle);
-}
-
-void Renderer::processPendingTextureFrees()
-{
-    for (const uint16 texIdx : m_pendingTextureFrees)
-        Globals::textureManager.free(texIdx);
-    m_pendingTextureFrees.clear();
-}
-
-void Renderer::uploadToSharedBuffer(Buffer& buffer, vk::DeviceSize dataSize, const void* data, vk::DeviceSize dstOffset)
-{
-    Globals::stagingManager.ensureDrainedForSharedWrite();
-    buffer.upload(dataSize, data, dstOffset);
-}
-
-void Renderer::setMeshStreamedOut(uint16 meshInfoIdx)
-{
-    RendererVKLayout::MeshInfo& info = m_meshInfosBuffer.getBackingStoreAs<RendererVKLayout::MeshInfo>()[meshInfoIdx];
-    info.indexCount = 0;
-    uploadToSharedBuffer(m_meshInfosBuffer, sizeof(info), &info, (size_t)meshInfoIdx * sizeof(info));
-    // The BLAS goes with the mesh data (rebuilt on re-stream); safe because eviction requires the set
-    // to have been unreferenced for far longer than any in-flight TLAS.
-    m_accelStructure.onMeshEvicted(meshInfoIdx);
-}
-
-void Renderer::setMeshStreamedIn(uint16 meshInfoIdx, int32 vertexOffset, uint32 firstIndex, uint32 indexCount)
-{
-    RendererVKLayout::MeshInfo& info = m_meshInfosBuffer.getBackingStoreAs<RendererVKLayout::MeshInfo>()[meshInfoIdx];
-    info.vertexOffset = vertexOffset;
-    info.firstIndex = firstIndex;
-    info.indexCount = indexCount;
-    uploadToSharedBuffer(m_meshInfosBuffer, sizeof(info), &info, (size_t)meshInfoIdx * sizeof(info));
-    if (m_accelStructure.getMeshAlias(meshInfoIdx) == meshInfoIdx)
-        m_pendingBlasRebuilds.push_back(meshInfoIdx); // built by the next recordGlobalIllum
-}
-
-uint32 Renderer::addMeshInfos(const oc::vector<RendererVKLayout::MeshInfo>& meshInfos, oc::span<const uint32> vertexCounts, bool skinnedOutputs)
-{
-    assert(vertexCounts.size() == meshInfos.size() && "one exact vertex count per MeshInfo");
-    if (meshInfos.empty())
-        return m_meshInfoCounter;
-    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
-
-    // Reuse a range freed by a destroyed container before growing the counter (holes are never compacted).
-    if (const uint32 reusedBase = m_freeMeshInfoSlots.allocate((uint32)meshInfos.size()); reusedBase != UINT32_MAX)
-    {
-        const oc::span<RendererVKLayout::MeshInfo> infos = m_meshInfosBuffer.getBackingStoreAs<RendererVKLayout::MeshInfo>();
-        memcpy(infos.data() + reusedBase, meshInfos.data(), meshInfos.size() * sizeof(RendererVKLayout::MeshInfo));
-        for (uint32 i = 0; i < (uint32)meshInfos.size(); ++i)
-        {
-            m_meshVertexCounts[reusedBase + i] = vertexCounts[i];
-            m_meshIsSkinnedOutput[reusedBase + i] = skinnedOutputs ? 1 : 0;
-            // Slots below the one-time build watermark won't be caught up by recordGlobalIllum's
-            // counter scan; queue their BLAS builds explicitly (aliases are identity, reset at free).
-            if (!skinnedOutputs && reusedBase + i < m_blasBuiltCount)
-                m_pendingBlasRebuilds.push_back(reusedBase + i);
-        }
-        uploadToSharedBuffer(m_meshInfosBuffer, meshInfos.size() * sizeof(RendererVKLayout::MeshInfo),
-            meshInfos.data(), (size_t)reusedBase * sizeof(RendererVKLayout::MeshInfo));
-        return reusedBase;
-    }
-
-    const uint32 baseMeshInfoIdx = m_meshInfoCounter;
-    m_meshInfoCounter += (uint32)meshInfos.size();
-    m_numInstancesPerMesh.resize(m_meshInfoCounter);
-    m_meshVertexCounts.insert(m_meshVertexCounts.end(), vertexCounts.begin(), vertexCounts.end());
-    m_meshIsSkinnedOutput.resize(m_meshInfoCounter, skinnedOutputs ? 1 : 0);
-    m_meshLods.resizeMeshMapping(m_meshInfoCounter);
-    assert(m_meshInfoCounter < USHRT_MAX);
-
-    m_meshInfosBuffer.appendToBackingStore<RendererVKLayout::MeshInfo>(meshInfos);
-
-    if (m_meshInfoCounter > m_maxUniqueMeshes)
-        growUniqueMeshCapacity(m_meshInfoCounter); // re-uploads the full CPU copy; re-records
-    // Within capacity no re-record is needed: nothing recorded bakes the mesh count (the cull clears fill
-    // whole capacity-sized buffers, DGC reads the count via sequenceCountAddress, and new BLASes build
-    // per frame in recordGlobalIllum).
-    else
-    {
-        uploadToSharedBuffer(m_meshInfosBuffer, meshInfos.size() * sizeof(RendererVKLayout::MeshInfo),
-            meshInfos.data(), baseMeshInfoIdx * sizeof(RendererVKLayout::MeshInfo));
-        // Fresh mesh slots must read as "no LOD chain" on the GPU (device memory starts undefined;
-        // addMeshLodGroup overwrites the chained ones right after).
-        m_meshLods.uploadMeshMapping(baseMeshInfoIdx, (uint32)meshInfos.size());
-    }
-
-    // After the capacity check: the alias buffer is grown by resizeBlasAddressBuffer inside
-    // growUniqueMeshCapacity, and setNumMeshes writes identity entries for the new range.
-    m_accelStructure.setNumMeshes(m_meshInfoCounter); // identity RT aliases until a LOD group overrides
-
-    return baseMeshInfoIdx;
-}
-
-uint32 Renderer::addSkinnedMeshSources(const oc::vector<RendererVKLayout::SkinnedMeshSource>& sources)
-{
-    if (const uint32 reusedBase = m_freeSkinnedSourceSlots.allocate((uint32)sources.size()); reusedBase != UINT32_MAX)
-    {
-        oc::copy(sources.begin(), sources.end(), m_skinnedMeshSources.begin() + reusedBase);
-        return reusedBase;
-    }
-    const uint32 baseIdx = (uint32)m_skinnedMeshSources.size();
-    m_skinnedMeshSources.insert(m_skinnedMeshSources.end(), sources.begin(), sources.end());
-    return baseIdx;
-}
-
-uint32 Renderer::addMaterialInfos(const oc::vector<RendererVKLayout::MaterialInfo>& materialInfos)
-{
-    if (materialInfos.empty())
-        return m_materialInfoCounter;
-    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
-
-    if (const uint32 reusedBase = m_freeMaterialSlots.allocate((uint32)materialInfos.size()); reusedBase != UINT32_MAX)
-    {
-        const oc::span<RendererVKLayout::MaterialInfo> materials = m_materialInfosBuffer.getBackingStoreAs<RendererVKLayout::MaterialInfo>();
-        memcpy(materials.data() + reusedBase, materialInfos.data(), materialInfos.size() * sizeof(RendererVKLayout::MaterialInfo));
-        uploadToSharedBuffer(m_materialInfosBuffer, materialInfos.size() * sizeof(RendererVKLayout::MaterialInfo),
-            materialInfos.data(), (size_t)reusedBase * sizeof(RendererVKLayout::MaterialInfo));
-        return reusedBase;
-    }
-
-    const uint32 baseMaterialInfoIdx = m_materialInfoCounter;
-    m_materialInfoCounter += (uint32)materialInfos.size();
-    assert(m_materialInfoCounter < USHRT_MAX);
-
-    m_materialInfosBuffer.appendToBackingStore<RendererVKLayout::MaterialInfo>(materialInfos);
-
-    if (m_materialInfoCounter > m_maxUniqueMaterials)
-        growMaterialCapacity(m_materialInfoCounter); // re-uploads the full CPU copy; re-records
-    // Within capacity this is a contents-only upload: every pass binds the whole buffer and nothing
-    // recorded depends on the material count, so no re-record is needed.
-    else
-        uploadToSharedBuffer(m_materialInfosBuffer, materialInfos.size() * sizeof(RendererVKLayout::MaterialInfo),
-            materialInfos.data(), baseMaterialInfoIdx * sizeof(RendererVKLayout::MaterialInfo));
-
-    return baseMaterialInfoIdx;
-}
-
-uint32 Renderer::addMeshInstanceOffsets(const oc::vector<RendererVKLayout::MeshInstanceOffset>& meshInstanceOffsets)
-{
-    if (meshInstanceOffsets.empty())
-        return m_instanceOffsetCounter;
-    const std::lock_guard lock(m_spawnMutex); // parallel entity spawning
-
-    if (const uint32 reusedBase = m_freeInstanceOffsetSlots.allocate((uint32)meshInstanceOffsets.size()); reusedBase != UINT32_MAX)
-    {
-        const oc::span<RendererVKLayout::MeshInstanceOffset> offsets = m_instanceOffsetsBuffer.getBackingStoreAs<RendererVKLayout::MeshInstanceOffset>();
-        memcpy(offsets.data() + reusedBase, meshInstanceOffsets.data(), meshInstanceOffsets.size() * sizeof(RendererVKLayout::MeshInstanceOffset));
-        uploadToSharedBuffer(m_instanceOffsetsBuffer, meshInstanceOffsets.size() * sizeof(RendererVKLayout::MeshInstanceOffset),
-            meshInstanceOffsets.data(), (size_t)reusedBase * sizeof(RendererVKLayout::MeshInstanceOffset));
-        return reusedBase;
-    }
-
-    const uint32 baseInstanceOffsetIdx = m_instanceOffsetCounter;
-    m_instanceOffsetCounter += (uint32)meshInstanceOffsets.size();
-
-    m_instanceOffsetsBuffer.appendToBackingStore<RendererVKLayout::MeshInstanceOffset>(meshInstanceOffsets);
-
-    if (m_instanceOffsetCounter > m_maxInstanceOffsets)
-        growInstanceOffsetCapacity(m_instanceOffsetCounter); // re-uploads the full CPU copy; re-records
-    // Within capacity this is a contents-only upload: every pass binds the whole buffer and nothing
-    // recorded depends on the offset count, so no re-record is needed (rebased static spawns hit this).
-    else
-        uploadToSharedBuffer(m_instanceOffsetsBuffer, meshInstanceOffsets.size() * sizeof(RendererVKLayout::MeshInstanceOffset),
-            meshInstanceOffsets.data(), baseInstanceOffsetIdx * sizeof(RendererVKLayout::MeshInstanceOffset));
-
-    return baseInstanceOffsetIdx;
-}
 
 void Renderer::initImgui(Window& window)
 {
@@ -4218,23 +1095,23 @@ Stats Renderer::getStats()
 {
     Stats stats;
 
-    stats.numLights = m_lightCounter;
+    stats.numLights = m_submission.getLightCount();
     stats.maxLights = RendererVKLayout::MAX_LIGHTS;
 
-    stats.numMeshInstances = m_meshInstanceCounter;
-    stats.maxMeshInstances = m_maxInstanceData;
+    stats.numMeshInstances = m_instances.getInstanceCount();
+    stats.maxMeshInstances = m_instances.getMaxInstances();
 
-    stats.numInstanceOffsets = m_instanceOffsetCounter;
-    stats.maxInstanceOffsets = m_maxInstanceOffsets;
+    stats.numInstanceOffsets = m_instanceOffsets.count();
+    stats.maxInstanceOffsets = m_instanceOffsets.capacity();
 
-    stats.numMeshTypes = m_meshInfoCounter;
-    stats.maxMeshTypes = m_maxUniqueMeshes;
+    stats.numMeshTypes = m_meshInfos.count();
+    stats.maxMeshTypes = m_meshInfos.capacity();
 
-    stats.numMaterials = m_materialInfoCounter;
-    stats.maxMaterials = m_maxUniqueMaterials;
+    stats.numMaterials = m_materials.count();
+    stats.maxMaterials = m_materials.capacity();
 
-    stats.numRenderNodes = (uint32)(m_renderNodeTransforms.size() - m_freeRenderNodeIndexes.size());
-    stats.maxRenderNodes = m_maxRenderNodes;
+    stats.numRenderNodes = m_instances.getNumLiveTransforms();
+    stats.maxRenderNodes = m_instances.getMaxRenderNodes();
 
     stats.numTextures = (uint32)Globals::textureManager.getNumTextures();
 	stats.maxTextures = Globals::textureManager.getMaxTextures();
@@ -4249,20 +1126,20 @@ Stats Renderer::getStats()
 
     const uint32 frameIdx = m_swapChain.getCurrentFrameIndex();
 
-    PerFrameData& lastFrameData = m_perFrameData[(frameIdx - 1) % m_perFrameData.size()];
+    const uint32 lastFrameIdx = (frameIdx - 1) % (uint32)m_perFrameData.size();
     struct LightGridInfo
     {
         uint32 inout_numGrids;
         uint32 inout_gridDataCounter;
     } info;
-    oc::span<LightGridInfo> infoSpan = lastFrameData.lightTableBuffer.mapMemory<LightGridInfo>(0, sizeof(LightGridInfo));
-    //lastFrameData.lightTableBuffer.flushMappedMemory(sizeof(LightGridInfo));
+    oc::span<LightGridInfo> infoSpan = m_submission.slot(lastFrameIdx).lightTable.mapMemory<LightGridInfo>(0, sizeof(LightGridInfo));
+    //m_submission.slot(lastFrameIdx).lightTable.flushMappedMemory(sizeof(LightGridInfo));
     info = *infoSpan.data();
-    lastFrameData.lightTableBuffer.unmapMemory();
+    m_submission.slot(lastFrameIdx).lightTable.unmapMemory();
     stats.numLightGrids = info.inout_numGrids;
-    stats.maxLightGrids = m_lightTableEntries / 2; // We don't want to go over 50% because of hash table collisions
+    stats.maxLightGrids = m_submission.getLightTableEntries() / 2; // We don't want to go over 50% because of hash table collisions
     stats.lightGridMemUsageBytes = info.inout_gridDataCounter * sizeof(uint32);
-    stats.maxLightGridMemUsageBytes = m_lightGridBufferSize;
+    stats.maxLightGridMemUsageBytes = m_submission.getLightGridBufferSize();
 
     const Allocator::MemoryUsage gpuMem = Globals::gpuAllocator.getMemoryUsage();
     stats.gpuMemoryUsedBytes = gpuMem.usedBytes;
@@ -4278,8 +1155,8 @@ Stats Renderer::getStats()
     stats.numStreamableTextures = streamStats.numStreamable;
     stats.numStreamOpsInFlight = streamStats.numOpsInFlight;
 
-    stats.blasBytes = m_accelStructure.getBlasTotalBytes();
-    stats.blasCompactionSavedBytes = m_accelStructure.getCompactionSavedBytes();
+    stats.blasBytes = m_rt.accel().getBlasTotalBytes();
+    stats.blasCompactionSavedBytes = m_rt.accel().getCompactionSavedBytes();
 
     const MeshStreamer::Stats meshStreamStats = Globals::meshStreamer.getStats();
     stats.meshBudgetBytes = meshStreamStats.budgetBytes;

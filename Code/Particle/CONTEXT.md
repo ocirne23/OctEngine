@@ -77,7 +77,7 @@ Shaders `particle_begin.cs.glsl` → `particle_emit.cs.glsl` → `particle_sim.c
   isotropically (a particle is a scattering speck with no normal; spot cones apply, area and tube lights
   count as points). `EmissiveFloor` blends toward unlit.
 * It is the `"Particles"` scene stage inside "Scene forward", after Force union blend and before
-  Fog apply ([Renderer.cpp:3526](../RendererVK/Private/Renderer.cpp#L3526)).
+  Fog apply (the stage table, [RendererRecord.cpp:984](../RendererVK/Private/RendererRecord.cpp#L984)).
 * Tweaks under `Particles/*`: Enabled, Depth collision, Time scale, Log stats (plus the rain
   occlusion trio, see below).
 

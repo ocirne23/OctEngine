@@ -1,6 +1,7 @@
-export module RendererVK:OceanSimulationPipeline;
+﻿export module RendererVK:OceanSimulationPipeline;
 
 import Core;
+import Core.glm;
 import :VK;
 import :Allocator;
 import :Buffer;
@@ -48,6 +49,31 @@ public:
     // Renderer::setOceanSprayEmitter). Everything rides the frame UBO (oceanSpray0/1/2), which the
     // Renderer builds from getSprayParams() - the spray step itself reads it there.
     void registerSprayTweaks() { m_sprayParams.registerTweaks(); }
+
+    // ---- The CPU mirror of the ocean, pushed in by Procedural::OceanGenerator ----
+    // The spectrum params drive BOTH this compute simulation (the TMA spectrum is re-evaluated every
+    // frame, so all of it is live) and the surface shading, through the frame UBO the Renderer builds.
+    void setOceanParams(const OceanParams& params) { m_oceanParams = params; }
+    const OceanParams& getOceanParams() const { return m_oceanParams; }
+    bool isOceanEnabled() const { return m_oceanParams.enabled; }
+    // Deepest current wave trough below the calm water level (m, >= 0; the generator estimates it from
+    // its displacement readback). Sizes the waterline band inside which the fog scatter samples the live
+    // FFT wave height for the underwater fog boundary.
+    void setWaveTrough(float meters) { m_waveTrough = glm::max(meters, 0.0f); }
+    float getWaveTrough() const { return m_waveTrough; }
+    // Worst-case distance the ocean's vertex shader moves a clipmap vertex off its authored lattice
+    // position. The per-instance frustum cull adds it to the ocean sectors' bounding spheres, which were
+    // built from the UNDISPLACED mesh: the choppy horizontal displacement grows with "Choppiness", and
+    // without this it culls sectors whose crests are still on screen - gaps along the screen edges.
+    void setDisplacementExtent(float meters) { m_displacementExtent = glm::max(meters, 0.0f); }
+    float getDisplacementExtent() const { return m_displacementExtent; }
+    // The LIVE water surface world Y under the camera (the generator's CPU wave-height mirror, ~2 frames
+    // of latency), or none: the particle draw's camera-side gate reads it from the UBO instead of
+    // sampling the waves per particle.
+    void setCameraWaterSurface(float worldY) { m_cameraWaterSurface = worldY; m_cameraWaterSurfaceValid = true; }
+    void clearCameraWaterSurface() { m_cameraWaterSurfaceValid = false; }
+    float getCameraWaterSurface() const { return m_cameraWaterSurface; }
+    bool hasCameraWaterSurface() const { return m_cameraWaterSurfaceValid; }
     const OceanSprayParams& getSprayParams() const { return m_sprayParams; }
     void setSprayEmitter(uint32 slot) { m_sprayEmitter = slot; }
     uint32 getSprayEmitter() const { return m_sprayEmitter; }
@@ -111,6 +137,11 @@ private:
     ComputePipeline m_sprayPipeline; // breaking-crest spray -> particle spawn requests
     OceanSprayParams m_sprayParams;
     uint32 m_sprayEmitter = UINT32_MAX;
+    OceanParams m_oceanParams;
+    float m_waveTrough = 0.0f;          // 0 while the ocean is disabled
+    float m_displacementExtent = 0.0f;  // idem
+    float m_cameraWaterSurface = 0.0f;
+    bool m_cameraWaterSurfaceValid = false;
 
     // All sets are per frame slot: the spectrum binds that frame's UBO, and the others must not be
     // host-updated (cmdUpdateDescriptorSets is immediate) while the other slot's cached CB is in flight.
