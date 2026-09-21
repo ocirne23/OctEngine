@@ -10,6 +10,7 @@ import :TextureManager;
 import :Device;
 import :Sampler;
 import :Layout;
+import :GIProbePipeline;
 
 using namespace RendererVKLayout;
 
@@ -44,9 +45,11 @@ void DecalPipeline::buildLayout(GraphicsPipelineLayout& layout, uint32 maxTextur
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 2, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 4, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eFragment });
+    b.push_back(GiVolumeDescriptors::layoutBinding(5, vk::ShaderStageFlagBits::eFragment)); // the GI irradiance volume + sky SH
     // 20 = the set's highest binding number: required for eVariableDescriptorCount.
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 20, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = maxTextures, .stageFlags = vk::ShaderStageFlagBits::eFragment });
     layout.descriptorBindingFlags.resize(b.size());
+    layout.descriptorBindingFlags[b.size() - 2] = vk::DescriptorBindingFlagBits::ePartiallyBound; // the volume: live cascades only
     layout.descriptorBindingFlags.back() = vk::DescriptorBindingFlagBits::ePartiallyBound
         | vk::DescriptorBindingFlagBits::eVariableDescriptorCount | vk::DescriptorBindingFlagBits::eUpdateAfterBind;
 
@@ -127,13 +130,15 @@ void DecalPipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameIdx, ui
     DescriptorSet& set = m_sets[drawSlot(frameIdx, eye)];
     vk::DescriptorSet vkSet = set.getDescriptorSet();
 
-    oc::array<DescriptorSetUpdateInfo, 5> updates{
+    oc::array<DescriptorSetUpdateInfo, 7> updates{
         DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = params.ubo.getBuffer(), .range = sizeof(Ubo) } } },
         DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { decalBufInfo(m_decalBuffers[frameIdx]) } },
         DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eCombinedImageSampler, .imageInfos = {
             vk::DescriptorImageInfo{ .sampler = params.sceneDepthSampler, .imageView = params.sceneDepthView, .imageLayout = params.sceneDepthLayout } } },
         DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { decalBufInfo(params.giGridDataBuffer) } },
         DescriptorSetUpdateInfo{ .binding = 20, .type = vk::DescriptorType::eCombinedImageSampler },
+        DescriptorSetUpdateInfo{}, // [5] + [6] the GI volume cascades + sky: written only while it exists
+        DescriptorSetUpdateInfo{},
     };
     const size_t numTextures = Globals::textureManager.getNumTextures();
     updates[4].imageInfos.reserve(numTextures);
@@ -142,8 +147,11 @@ void DecalPipeline::recordDraw(CommandBuffer& commandBuffer, uint32 frameIdx, ui
             .sampler = m_textureSampler.getSampler(),
             .imageView = Globals::textureManager.getViewForDescriptor(texIdx), // freed slots -> fallback
             .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal });
+    if (!params.giVolume.empty())
+        params.giVolume.fillUpdates(5, updates[5], updates[6]);
 
-    commandBuffer.cmdUpdateDescriptorSets(m_pipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, vkSet, updates);
+    commandBuffer.cmdUpdateDescriptorSets(m_pipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, vkSet,
+        oc::span<DescriptorSetUpdateInfo>(updates.data(), params.giVolume.empty() ? 5 : 7));
     cmd.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline.getPipeline());
     cmd.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_pipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
     cmd.pushConstants(m_pipeline.getPipelineLayout(), vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, 0, sizeof(uint32), &viewIndex);

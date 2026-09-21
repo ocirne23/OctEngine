@@ -88,7 +88,7 @@ void Renderer::buildFrameUbo(const Camera& cameraIn, const Camera& camera, const
     ubo.aoParams = glm::vec4((m_rtParams.enabled && m_rtaoParams.enabled) ? 1.0f : 0.0f,
         (m_rtParams.enabled && m_rtParams.giEnabled) ? m_giProbePipeline.getStrength() : 0.0f,
         m_rtaoParams.maxDistance, 0.0f); // w unused: the light grid debug overlay is the LIGHT_GRID_DEBUG define
-    ubo.giVisParams = m_giProbePipeline.getVisibilityParams();
+    ubo.giVisParams = m_giProbePipeline.takeVisibilityParams(m_rtParams.enabled && m_rtParams.giEnabled); // once per frame: y = the one-frame full volume bake
     // GI trace / TLAS-instance parameters (the GI secondary is cached, so everything per-frame rides here).
     // The previous focus advances only while GI traces, so probes that scrolled in during a GI-off spell
     // still read as fresh (full replace) on the first traced frame, as before.

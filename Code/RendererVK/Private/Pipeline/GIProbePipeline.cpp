@@ -37,14 +37,34 @@ void GIProbePipeline::initialize(uint32 maxTlasInstances, uint32 maxTextures, ui
     ComputePipelineLayout tlasLayout;  buildTlasInstanceLayout(tlasLayout);     m_tlasInstancePipeline.initialize(tlasLayout);
     ComputePipelineLayout skyLayout;   buildSkyMapLayout(skyLayout);            m_skyMapPipeline.initialize(skyLayout);
     ComputePipelineLayout traceLayout; buildTraceLayout(traceLayout, maxTextures); m_tracePipeline.initialize(traceLayout);
+    ComputePipelineLayout bakeLayout;  buildVolumeBakeLayout(bakeLayout);       m_volumeBakePipeline.initialize(bakeLayout);
 
     for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
     {
         m_tlasInstanceSets[i].initialize(m_tlasInstancePipeline.getDescriptorSetLayout(), "GI.tlasInstances");
         m_skyMapSets[i].initialize(m_skyMapPipeline.getDescriptorSetLayout(), "GI.skyMap");
         m_traceSets[i].initialize(m_tracePipeline.getDescriptorSetLayout(), "GI.trace", numTextureDescriptors);
+        m_volumeBakeSets[i].initialize(m_volumeBakePipeline.getDescriptorSetLayout(), "GI.volumeBake");
     }
     fillTextureDescriptors();
+
+    // The volume's sampler: REPEAT on every axis is the toroidal wrap (see giVolumeCascade), linear, no mips.
+    vk::SamplerCreateInfo volumeSamplerInfo{
+        .magFilter = vk::Filter::eLinear,
+        .minFilter = vk::Filter::eLinear,
+        .mipmapMode = vk::SamplerMipmapMode::eNearest,
+        .addressModeU = vk::SamplerAddressMode::eRepeat,
+        .addressModeV = vk::SamplerAddressMode::eRepeat,
+        .addressModeW = vk::SamplerAddressMode::eRepeat,
+        .anisotropyEnable = vk::False,
+        .minLod = 0.0f,
+        .maxLod = 0.0f,
+        .unnormalizedCoordinates = vk::False,
+    };
+    auto volumeSamplerResult = Globals::device.getDevice().createSampler(volumeSamplerInfo);
+    assert(volumeSamplerResult.result == vk::Result::eSuccess);
+    m_volumeSampler = volumeSamplerResult.value;
+    Globals::device.setDebugName(m_volumeSampler, "GI.volume");
 
     Tweak::intVar("GI", "Rays Per Probe", &m_giRaysPerProbe, 1, 128);
     Tweak::floatVar("GI", "Update Interval Mult", &m_giUpdateIntervalMult, 1.0f, 32.0f, 0.5f);
@@ -60,7 +80,7 @@ void GIProbePipeline::initialize(uint32 maxTlasInstances, uint32 maxTextures, ui
     Tweak::floatVar("GI", "Vis Mean Scale", &m_visMeanScale, 0.5f, 3.0f, 0.05f);
 }
 
-void GIProbePipeline::registerGridTweaks(const oc::function<void()>& onGridChanged)
+void GIProbePipeline::registerGridTweaks(const oc::function<void()>& onGridChanged, const oc::function<void()>& onVolumeChanged)
 {
     RendererVKLayout::GiGridConfig& grid = RendererVKLayout::g_giGrid;
     Tweak::intVar("GI", "Cascades", &grid.numCascades, 1, 8, 1.0f, onGridChanged);
@@ -68,6 +88,10 @@ void GIProbePipeline::registerGridTweaks(const oc::function<void()>& onGridChang
     Tweak::intVar("GI", "Probes Y (log2)", &grid.dimLog2Y, 2, 6, 1.0f, onGridChanged);
     Tweak::intVar("GI", "Probes Z (log2)", &grid.dimLog2Z, 2, 6, 1.0f, onGridChanged);
     Tweak::floatVar("GI", "Focus Y offset (m)", &grid.focusOffsetY, -128.0f, 128.0f, 0.5f, onGridChanged);
+    // The irradiance volume: its images + the GI_VOLUME / GI_VOLUME_RES defines - NOT the probe buffer, so a
+    // volume change keeps the traced history (onVolumeChanged: resizeVolume + reload, no resizeGrid).
+    Tweak::boolean("GI", "Irradiance volume", &grid.volume, onVolumeChanged);
+    Tweak::intVar("GI", "Volume voxels per probe", &grid.volumeRes, 1, 2, 1.0f, onVolumeChanged);
 }
 
 void GIProbePipeline::registerDebugTweaks(const oc::function<void()>& onReRecord)
@@ -82,7 +106,146 @@ void GIProbePipeline::resizeGrid()
 {
     m_giGridData.initialize(RendererVKLayout::g_giGrid.gridDataBufferSize(),
         vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "GI.probes");
+    // One uint per wave (the probe count is a multiple of 64). Zeroed with the probes; a stale stamp can
+    // only ever cause an extra re-bake, never a missed one (it would have to equal this frame's stamp).
+    m_waveStamps.initialize((vk::DeviceSize)(RendererVKLayout::g_giGrid.probesTotal() / 64) * sizeof(uint32),
+        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "GI.waveStamps");
     doClear(); // fresh storage: the next GI frame zeroes it before the first trace
+    createVolume();
+}
+
+void GIProbePipeline::destroyVolume()
+{
+    vk::Device dev = Globals::device.getDevice();
+    for (const vk::ImageView view : m_volumeViews)
+        dev.destroyImageView(view);
+    if (m_volumeSkyView)
+        dev.destroyImageView(m_volumeSkyView);
+    m_volumeSkyView = nullptr;
+    for (size_t i = 0; i < m_volumeImages.size(); ++i)
+        Globals::gpuAllocator.destroyImage(m_volumeImages[i], m_volumeMemory[i]);
+    m_volumeViews.clear();
+    m_volumeImages.clear();
+    m_volumeMemory.clear();
+}
+
+void GIProbePipeline::createVolume()
+{
+    destroyVolume();
+    const RendererVKLayout::GiGridConfig& grid = RendererVKLayout::g_giGrid;
+    if (!grid.volume)
+        return;
+
+    vk::Device dev = Globals::device.getDevice();
+    // B10G11R11 and RG16 storage are "extended" storage formats: the device enables every supported core
+    // feature (Device::initialize), so they only need the format support itself - which every RTX has.
+    for (const vk::Format format : RendererVKLayout::GI_VOLUME_FORMATS)
+    {
+        const vk::FormatFeatureFlags needed = vk::FormatFeatureFlagBits::eStorageImage | vk::FormatFeatureFlagBits::eSampledImageFilterLinear;
+        const vk::FormatFeatureFlags have = Globals::device.getPhysicalDevice().getFormatProperties(format).optimalTilingFeatures;
+        assert((have & needed) == needed && "GI volume format lacks storage or linear filtering support");
+        (void)have; (void)needed;
+    }
+    const vk::Extent3D extent{ grid.volumeDimX(), grid.volumeDimY(), grid.volumeDimZ() };
+    for (int c = 0; c < grid.numCascades; ++c)
+    {
+        for (uint32 k = 0; k < RendererVKLayout::GI_VOLUME_IMAGES_PER_CASCADE; ++k)
+        {
+            const vk::Format format = RendererVKLayout::GI_VOLUME_FORMATS[k];
+            vk::ImageCreateInfo info{
+                .imageType = vk::ImageType::e3D,
+                .format = format,
+                .extent = extent,
+                .mipLevels = 1,
+                .arrayLayers = 1,
+                .samples = vk::SampleCountFlagBits::e1,
+                .tiling = vk::ImageTiling::eOptimal,
+                .usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst,
+                .sharingMode = vk::SharingMode::eExclusive,
+                .initialLayout = vk::ImageLayout::eUndefined,
+            };
+            const oc::string name = oc::format("GI.volume{}.{}", c, k);
+            vk::Image image;
+            VmaAllocation memory{};
+            (void)Globals::gpuAllocator.createImage(info, image, memory, name.c_str());
+            vk::ImageViewCreateInfo viewInfo{
+                .image = image,
+                .viewType = vk::ImageViewType::e3D,
+                .format = format,
+                .subresourceRange = { .aspectMask = vk::ImageAspectFlagBits::eColor, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 },
+            };
+            auto viewResult = dev.createImageView(viewInfo);
+            assert(viewResult.result == vk::Result::eSuccess);
+            Globals::device.setDebugName(viewResult.value, name.c_str());
+            m_volumeImages.push_back(image);
+            m_volumeMemory.push_back(memory);
+            m_volumeViews.push_back(viewResult.value);
+        }
+    }
+
+    // The sky SH image: the 3 SH vec4s of the virtual sky probe as texels (0..2, 0, 0), read with texelFetch.
+    {
+        vk::ImageCreateInfo info{
+            .imageType = vk::ImageType::e3D,
+            .format = vk::Format::eR16G16B16A16Sfloat,
+            .extent = { RendererVKLayout::GI_VOLUME_SKY_TEXELS, 1, 1 },
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = vk::SampleCountFlagBits::e1,
+            .tiling = vk::ImageTiling::eOptimal,
+            .usage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst,
+            .sharingMode = vk::SharingMode::eExclusive,
+            .initialLayout = vk::ImageLayout::eUndefined,
+        };
+        vk::Image image;
+        VmaAllocation memory{};
+        (void)Globals::gpuAllocator.createImage(info, image, memory, "GI.volumeSky");
+        vk::ImageViewCreateInfo viewInfo{
+            .image = image,
+            .viewType = vk::ImageViewType::e3D,
+            .format = info.format,
+            .subresourceRange = { .aspectMask = vk::ImageAspectFlagBits::eColor, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 },
+        };
+        auto viewResult = dev.createImageView(viewInfo);
+        assert(viewResult.result == vk::Result::eSuccess);
+        Globals::device.setDebugName(viewResult.value, "GI.volumeSky");
+        m_volumeImages.push_back(image);
+        m_volumeMemory.push_back(memory);
+        m_volumeSkyView = viewResult.value;
+    }
+
+    // UNDEFINED -> GENERAL (for life: storage write + sampled read) and cleared to zero: W = 0 reads as "no
+    // data" (the lookup falls through), where uninitialized fp16 could hold NaNs that survive x GI strength 0.
+    CommandBuffer init;
+    init.initialize(vk::CommandBufferLevel::ePrimary, "GI.volume.init");
+    vk::CommandBuffer cmd = init.begin(true);
+    const vk::ImageSubresourceRange range{ vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 };
+    oc::vector<vk::ImageMemoryBarrier2> toGeneral;
+    for (const vk::Image image : m_volumeImages)
+        toGeneral.push_back(vk::ImageMemoryBarrier2{
+            .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
+            .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+            .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+            .oldLayout = vk::ImageLayout::eUndefined,
+            .newLayout = vk::ImageLayout::eGeneral,
+            .image = image,
+            .subresourceRange = range,
+        });
+    cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = (uint32)toGeneral.size(), .pImageMemoryBarriers = toGeneral.data() });
+    const vk::ClearColorValue zero{ std::array<float, 4>{ 0.0f, 0.0f, 0.0f, 0.0f } };
+    for (const vk::Image image : m_volumeImages)
+        cmd.clearColorImage(image, vk::ImageLayout::eGeneral, &zero, 1, &range);
+    vk::MemoryBarrier2 cleared{
+        .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+        .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eVertexShader | vk::PipelineStageFlagBits2::eFragmentShader,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageWrite | vk::AccessFlagBits2::eShaderSampledRead,
+    };
+    cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &cleared });
+    init.end();
+    init.submitGraphics();
+    (void)Globals::device.graphicsQueueWaitIdle();
+    m_volumeFullBake = true; // zeroed images: the next bake must fill every voxel, not only the visited ones
 }
 
 void GIProbePipeline::resizeTlasInstanceBuffers(uint32 maxTlasInstances)
@@ -102,7 +265,7 @@ void GIProbePipeline::resizeTextureDescriptors(uint32 numTextureDescriptors)
     fillTextureDescriptors(); // fresh sets: the pending-write path only carries slots swapped from now on
 }
 
-// Writes every live texture view into the trace sets' texture array (binding 13). Called when the sets are
+// Writes every live texture view into the trace sets' texture array (binding 15). Called when the sets are
 // (re)allocated; afterwards new uploads and streamed swaps arrive one slot at a time through
 // updateTextureDescriptor (the TextureStreamer's pending-write path), so the per-frame record writes none.
 void GIProbePipeline::fillTextureDescriptors()
@@ -116,7 +279,7 @@ void GIProbePipeline::fillTextureDescriptors()
         infos.push_back(vk::DescriptorImageInfo{ .sampler = m_textureSampler.getSampler(), .imageView = Globals::textureManager.getViewForDescriptor(texIdx), .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal });
     for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
     {
-        vk::WriteDescriptorSet write{ .dstSet = m_traceSets[i].getDescriptorSet(), .dstBinding = 13, .dstArrayElement = 0, .descriptorCount = numTextures,
+        vk::WriteDescriptorSet write{ .dstSet = m_traceSets[i].getDescriptorSet(), .dstBinding = 15, .dstArrayElement = 0, .descriptorCount = numTextures,
             .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = infos.data() };
         Globals::device.getDevice().updateDescriptorSets(1, &write, 0, nullptr);
     }
@@ -125,6 +288,9 @@ void GIProbePipeline::fillTextureDescriptors()
 GIProbePipeline::~GIProbePipeline()
 {
     vk::Device dev = Globals::device.getDevice();
+    destroyVolume();
+    if (m_volumeSampler)
+        dev.destroySampler(m_volumeSampler);
     if (m_skyMapSampler)
         dev.destroySampler(m_skyMapSampler);
     if (m_skyMapView)
@@ -138,9 +304,11 @@ void GIProbePipeline::reloadShaders(uint32 maxTextures)
     ComputePipelineLayout tlasLayout;  buildTlasInstanceLayout(tlasLayout);
     ComputePipelineLayout skyLayout;   buildSkyMapLayout(skyLayout);
     ComputePipelineLayout traceLayout; buildTraceLayout(traceLayout, maxTextures);
+    ComputePipelineLayout bakeLayout;  buildVolumeBakeLayout(bakeLayout);
     bool ok = m_tlasInstancePipeline.reloadShaders(tlasLayout);
     ok = m_skyMapPipeline.reloadShaders(skyLayout) && ok;
     ok = m_tracePipeline.reloadShaders(traceLayout) && ok;
+    ok = m_volumeBakePipeline.reloadShaders(bakeLayout) && ok;
     if (!ok)
         printf("GIProbePipeline: shader reload failed, keeping previous pipeline(s)\n");
 }
@@ -284,10 +452,13 @@ void GIProbePipeline::buildTraceLayout(ComputePipelineLayout& layout, uint32 max
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 10, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // miss-ray sky map
     b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 11, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // shadow map
     b.push_back(storageBinding(12)); // GI clipmap SH volume (read + write)
-    // Texture array last (13 = the set's highest binding number, required for eVariableDescriptorCount):
+    b.push_back(GiVolumeDescriptors::layoutBinding(13, vk::ShaderStageFlagBits::eCompute)); // the irradiance volume (hit bounce lookup)
+    b.push_back(storageBinding(14)); // the per-wave visit stamps (written, for the volume's partial bake)
+    // Texture array last (15 = the set's highest binding number, required for eVariableDescriptorCount):
     // the layout declares the fixed device-limit cap, the live size comes from the set allocation.
-    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 13, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = maxTextures, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // textures
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 15, .descriptorType = vk::DescriptorType::eCombinedImageSampler, .descriptorCount = maxTextures, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // textures
     layout.descriptorBindingFlags.resize(b.size());
+    layout.descriptorBindingFlags[b.size() - 3] = vk::DescriptorBindingFlagBits::ePartiallyBound; // the volume: live cascades only
     layout.descriptorBindingFlags.back() = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount | vk::DescriptorBindingFlagBits::eUpdateAfterBind;
 }
 
@@ -297,7 +468,7 @@ void GIProbePipeline::updateTextureDescriptor(uint32 frameIdx, uint32 slotIdx, v
     // after fillTextureDescriptors (the record never rewrites the array). UPDATE_AFTER_BIND, so the cached
     // command buffer that binds the set needs no re-record.
     vk::DescriptorImageInfo imageInfo{ .sampler = m_textureSampler.getSampler(), .imageView = view, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal };
-    vk::WriteDescriptorSet write{ .dstSet = m_traceSets[frameIdx].getDescriptorSet(), .dstBinding = 13, .dstArrayElement = slotIdx, .descriptorCount = 1,
+    vk::WriteDescriptorSet write{ .dstSet = m_traceSets[frameIdx].getDescriptorSet(), .dstBinding = 15, .dstArrayElement = slotIdx, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };
     Globals::device.getDevice().updateDescriptorSets(1, &write, 0, nullptr);
 }
@@ -308,6 +479,7 @@ void GIProbePipeline::recordClearPersistent(CommandBuffer& commandBuffer)
     // Zero the persistent clipmap SH so reads before the first trace are well-defined. The trace replaces
     // (alpha=1) every probe on its first visit anyway, so this is just initial-frame hygiene.
     cmd.fillBuffer(m_giGridData.getBuffer(), 0, vk::WholeSize, 0);
+    cmd.fillBuffer(m_waveStamps.getBuffer(), 0, vk::WholeSize, 0);
 
     vk::MemoryBarrier2 bar{
         .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
@@ -340,6 +512,7 @@ void GIProbePipeline::buildUpdateScratch()
     DescriptorSetUpdateInfo sky{ .binding = 10, .type = vk::DescriptorType::eCombinedImageSampler };    // [11] miss-ray sky map
     sky.imageInfos.resize(1);
     m_traceUpdates.push_back(oc::move(sky));
+    m_traceUpdates.push_back(buf(14));                                                                  // [12] per-wave visit stamps
 
     m_skyUpdates[0] = buf(0, vk::DescriptorType::eUniformBuffer);
     m_skyUpdates[1] = DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageImage };
@@ -397,10 +570,20 @@ void GIProbePipeline::recordTrace(CommandBuffer& commandBuffer, uint32 frameIdx,
     m_traceUpdates[9].bufferInfos[0] = bufInfo(m_giGridData);
     m_traceUpdates[10].imageInfos[0] = vk::DescriptorImageInfo{ .sampler = params.shadowMapSampler, .imageView = params.shadowMapView, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal };
     m_traceUpdates[11].imageInfos[0] = vk::DescriptorImageInfo{ .sampler = m_skyMapSampler, .imageView = m_skyMapView, .imageLayout = vk::ImageLayout::eGeneral };
+    m_traceUpdates[12].bufferInfos[0] = bufInfo(m_waveStamps);
 
     vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
     commandBuffer.cmdUpdateDescriptorSets(m_tracePipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, m_traceUpdates);
-    // The texture array (binding 13) is NOT rewritten here: filled at set allocation (fillTextureDescriptors)
+    // The irradiance volume (13): the bounce lookup at hits reads LAST frame's bake (this frame's runs after
+    // the trace). Written only while the volume exists.
+    const GiVolumeDescriptors volume = getVolumeDescriptors();
+    if (!volume.empty())
+    {
+        oc::array<DescriptorSetUpdateInfo, 2> volumeUpdates;
+        volume.fillUpdates(13, volumeUpdates[0], volumeUpdates[1]);
+        commandBuffer.cmdUpdateDescriptorSets(m_tracePipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, volumeUpdates);
+    }
+    // The texture array (binding 15) is NOT rewritten here: filled at set allocation (fillTextureDescriptors)
     // and kept current per slot by the TextureStreamer's pending-write path (updateTextureDescriptor).
 
     // The acceleration-structure descriptor (binding 4) needs a pNext'd write the buffer/image helper
@@ -416,6 +599,82 @@ void GIProbePipeline::recordTrace(CommandBuffer& commandBuffer, uint32 frameIdx,
     // u_frameIndex - see getTraceParams), so this record is cached. Rays are amortized over frames via the
     // temporal blend.
     cmd.dispatch((RendererVKLayout::g_giGrid.traceThreads() + 63) / 64, 1, 1);
+}
+
+void GIProbePipeline::buildVolumeBakeLayout(ComputePipelineLayout& layout)
+{
+    layout.computeShaderDebugFilePath = "Shaders/gi_volume_bake.cs.glsl";
+    layout.computeShaderText = FileSystem::readFileStr(layout.computeShaderDebugFilePath);
+    auto& b = layout.descriptorSetLayoutBindings;
+    b.push_back(vk::DescriptorSetLayoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eCompute }); // UBO (focus, vis params)
+    b.push_back(storageBinding(1)); // the probe SH clipmap (read)
+    // One binding per image FORMAT (a storage image array has one format qualifier), sized for the cascade
+    // tweak's maximum (like the consumers' sampler arrays), written for the live cascades.
+    const auto imageArray = [&](uint32 binding, uint32 count)
+    {
+        b.push_back(vk::DescriptorSetLayoutBinding{ .binding = binding, .descriptorType = vk::DescriptorType::eStorageImage, .descriptorCount = count, .stageFlags = vk::ShaderStageFlagBits::eCompute });
+    };
+    imageArray(2, RendererVKLayout::GI_MAX_CASCADES);     // [0] L0 x W (r11f_g11f_b10f)
+    imageArray(3, RendererVKLayout::GI_MAX_CASCADES * 2); // [1], [2] the L1 ratios (rgba8_snorm)
+    imageArray(4, 1);                                     // the sky SH (rgba16f)
+    imageArray(5, RendererVKLayout::GI_MAX_CASCADES);     // [3] the last ratio + W (rg16f)
+    b.push_back(storageBinding(6));                       // the trace's per-wave visit stamps (read)
+    layout.descriptorBindingFlags.resize(b.size());
+    for (const size_t i : { 2u, 3u, 5u })
+        layout.descriptorBindingFlags[i] = vk::DescriptorBindingFlagBits::ePartiallyBound;
+}
+
+// Recorded in the CACHED GI secondary (only on invalidation, so the update lists below may allocate); the
+// focus that places every cascade window rides the UBO.
+void GIProbePipeline::recordVolumeBake(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo)
+{
+    if (m_volumeViews.empty())
+        return;
+    const RendererVKLayout::GiGridConfig& grid = RendererVKLayout::g_giGrid;
+
+    oc::array<DescriptorSetUpdateInfo, 7> updates{
+        DescriptorSetUpdateInfo{ .binding = 0, .type = vk::DescriptorType::eUniformBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = ubo.getBuffer(), .range = sizeof(RendererVKLayout::Ubo) } } },
+        DescriptorSetUpdateInfo{ .binding = 1, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_giGridData.getBuffer(), .range = m_giGridData.getSize() } } },
+        DescriptorSetUpdateInfo{ .binding = 2, .type = vk::DescriptorType::eStorageImage },
+        DescriptorSetUpdateInfo{ .binding = 3, .type = vk::DescriptorType::eStorageImage },
+        DescriptorSetUpdateInfo{ .binding = 4, .type = vk::DescriptorType::eStorageImage, .imageInfos = { vk::DescriptorImageInfo{ .imageView = m_volumeSkyView, .imageLayout = vk::ImageLayout::eGeneral } } },
+        DescriptorSetUpdateInfo{ .binding = 5, .type = vk::DescriptorType::eStorageImage },
+        DescriptorSetUpdateInfo{ .binding = 6, .type = vk::DescriptorType::eStorageBuffer, .bufferInfos = { vk::DescriptorBufferInfo{ .buffer = m_waveStamps.getBuffer(), .range = m_waveStamps.getSize() } } },
+    };
+    // m_volumeViews is cascade-major, GI_VOLUME_IMAGES_PER_CASCADE each, in GI_VOLUME_FORMATS order: image k of
+    // every cascade goes to its format's binding (k 0 -> 2, k 1..2 -> 3, k 3 -> 5), in cascade order.
+    static constexpr oc::array<uint32, RendererVKLayout::GI_VOLUME_IMAGES_PER_CASCADE> s_updateForImage = { 2, 3, 3, 5 };
+    for (size_t i = 0; i < m_volumeViews.size(); ++i)
+        updates[s_updateForImage[i % RendererVKLayout::GI_VOLUME_IMAGES_PER_CASCADE]].imageInfos.push_back(
+            vk::DescriptorImageInfo{ .imageView = m_volumeViews[i], .imageLayout = vk::ImageLayout::eGeneral });
+    vk::DescriptorSet vkSet = m_volumeBakeSets[frameIdx].getDescriptorSet();
+    commandBuffer.cmdUpdateDescriptorSets(m_volumeBakePipeline.getPipelineLayout(), vk::PipelineBindPoint::eCompute, vkSet, updates);
+
+    vk::CommandBuffer cmd = commandBuffer.getCommandBuffer();
+    // The trace's SH writes -> this read; last frame's reads of the single-buffered images (fragment, vertex,
+    // compute) -> this write (an execution dependency is all a write-after-read needs).
+    vk::MemoryBarrier2 before{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader | vk::PipelineStageFlagBits2::eVertexShader | vk::PipelineStageFlagBits2::eFragmentShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderStorageRead | vk::AccessFlagBits2::eShaderStorageWrite,
+    };
+    cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &before });
+
+    cmd.bindPipeline(vk::PipelineBindPoint::eCompute, m_volumeBakePipeline.getPipeline());
+    cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute, m_volumeBakePipeline.getPipelineLayout(), 0, 1, &vkSet, 0, nullptr);
+    // 4x4x4 workgroups; z runs over every cascade's slabs (a volume dim is a multiple of 4).
+    cmd.dispatch(grid.volumeDimX() / 4, grid.volumeDimY() / 4, grid.volumeDimZ() * (uint32)grid.numCascades / 4);
+
+    // bake write -> every consumer's filtered reads: fragment (lit, ocean, decals, fog apply), vertex
+    // (particles) and compute (the fog scatter this frame, the trace's bounce lookup next frame).
+    vk::MemoryBarrier2 after{
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderStorageWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eFragmentShader | vk::PipelineStageFlagBits2::eVertexShader | vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderSampledRead,
+    };
+    cmd.pipelineBarrier2(vk::DependencyInfo{ .memoryBarrierCount = 1, .pMemoryBarriers = &after });
 }
 
 void GIProbePipeline::buildDebugLayout(GraphicsPipelineLayout& layout)

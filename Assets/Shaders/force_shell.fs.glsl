@@ -28,8 +28,9 @@ layout (location = 0) out vec4 out_color;
 #include "force_shell_shade.inc.glsl"
 
 // The SAMPLED SHELL TIER's field volumes (force_shellbake.cs.glsl): every LIVE team's phi, baked
-// over the fitted u_forceBake0/1 box, TEAM-SIZED (one texture holds up to 4 teams; the second
-// exists only for 5+). Clamp-to-border transparent black = zero field outside.
+// over the fitted u_forceBake0/1 box, TEAM-SIZED (one texture holds up to 4 teams - RG16F at <= 2,
+// RGBA16F above; the second exists only for 5+). Only channels < NUM_FORCE_TEAMS are read, so an
+// RG16F volume's filled-in b/a never matter. Clamp-to-border transparent black = zero field outside.
 layout (binding = 5) uniform sampler3D u_shellVolumeA; // phi[0..3]
 #if NUM_FORCE_TEAMS > 4
 layout (binding = 6) uniform sampler3D u_shellVolumeB; // phi[4..7]

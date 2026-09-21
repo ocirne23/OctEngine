@@ -343,6 +343,12 @@ export namespace RendererVKLayout
         int numCascades = 4;                    // nested clipmap levels (1..8)
         int dimLog2X = 5, dimLog2Y = 5, dimLog2Z = 5; // probes per axis per cascade as log2 (2..6 = 4..64): power of two for the toroidal mask
         float focusOffsetY = 2.0f;              // metres added to the scene focus before centring the grids (> 0 = more probes above the ground than below)
+        // The IRRADIANCE VOLUME (GIProbePipeline::recordVolumeBake, gi_volume_bake.cs.glsl): per frame, the probe
+        // field is baked into one set of 3D textures per cascade, visibility-weighted at every voxel centre, and
+        // the forward lit shaders read it with hardware trilinear filtering instead of looping over 8 probes.
+        // volumeRes = voxels per probe spacing per axis (1 or 2, a power of two for the toroidal mask).
+        bool volume = true;
+        int  volumeRes = 2;
 
         uint32 dimX() const { return 1u << dimLog2X; }
         uint32 dimY() const { return 1u << dimLog2Y; }
@@ -353,7 +359,27 @@ export namespace RendererVKLayout
         // + one extra SH-L1 slot after the last probe: the "virtual sky probe" (skyRadiance projected by the
         // trace pass), evaluated as the out-of-field fallback so it matches the probes by construction.
         size_t gridDataBufferSize() const { return ((size_t)probesTotal() * GI_PROBE_STRIDE + GI_SH_STRIDE) * sizeof(uint32); }
+        uint32 volumeDimX() const { return dimX() * (uint32)volumeRes; }
+        uint32 volumeDimY() const { return dimY() * (uint32)volumeRes; }
+        uint32 volumeDimZ() const { return dimZ() * (uint32)volumeRes; }
     };
+    // Irradiance volume images per cascade, 16 B per voxel (gi_volume_bake.cs.glsl writes, giVolumeCascade reads):
+    //   [0] B10G11R11_UFLOAT  L0 x W: the DC term, PREMULTIPLIED by the summed weight (a weight-correct trilinear
+    //                         fetch); a small float, so the HDR range keeps ~1.5% relative steps
+    //   [1] R8G8B8A8_SNORM    q1.rgb, q2.r      q = (L1 / L0) / sqrt(3): for a non-negative radiance each L1 / L0
+    //   [2] R8G8B8A8_SNORM    q2.gb, q3.rg      ratio lies in [-sqrt(3), sqrt(3)], so it fits SNORM exactly
+    //   [3] R16G16_SFLOAT     q3.b, W           (W in fp16: L0 = fetch[0] / W needs its precision at small W)
+    // The volume is NOT accumulated (every bake writes a finished value from the fp32 probe history), so the
+    // quantization never compounds. Then ONE more image at a fixed slot: the sky SH (the out-of-field fallback,
+    // GI_VOLUME_SKY_TEXELS texels RGBA16F), copied from the probe buffer by the bake. Every consumer's sampler3D
+    // array is sized for the cascade tweak's maximum + the sky, so no layout changes with the grid.
+    constexpr uint32 GI_MAX_CASCADES = 8;
+    constexpr uint32 GI_VOLUME_IMAGES_PER_CASCADE = 4;
+    constexpr uint32 GI_VOLUME_SKY_TEXELS = 3; // the sky SH's 3 vec4s (the probe buffer's packing)
+    inline constexpr vk::Format GI_VOLUME_FORMATS[GI_VOLUME_IMAGES_PER_CASCADE] = {
+        vk::Format::eB10G11R11UfloatPack32, vk::Format::eR8G8B8A8Snorm, vk::Format::eR8G8B8A8Snorm, vk::Format::eR16G16Sfloat };
+    constexpr uint32 GI_VOLUME_SKY_IMAGE = GI_MAX_CASCADES * GI_VOLUME_IMAGES_PER_CASCADE;
+    constexpr uint32 GI_VOLUME_MAX_IMAGES = GI_VOLUME_SKY_IMAGE + 1;
     // THE live grid shape: GIProbePipeline owns the tweaks on it; buildLayoutPreamble reads it at every
     // shader compile, so a change must be followed by a full shader reload (see registerGridTweaks).
     inline GiGridConfig g_giGrid;
@@ -560,7 +586,7 @@ export namespace RendererVKLayout
         glm::vec4 aoParams;      // x = RTAO enabled (0/1), y = GI strength, z = RTAO max distance (m; the
                                  // forward pass skips its AO upsample past it; 0 = no falloff),
                                  // w = unused (the light debug overlay is the LIGHT_GRID_DEBUG define)
-        glm::vec4 giVisParams;   // x = Chebyshev variance floor (fraction of spacing), y = unused, z = probe weight floor, w = mean scale (footprint widening)
+        glm::vec4 giVisParams;   // x = Chebyshev variance floor (fraction of spacing), y = full irradiance-volume bake this frame (1/0), z = probe weight floor, w = mean scale (footprint widening)
         // GI probe trace + TLAS-instance parameters (gi_probe_trace / gi_tlas_instances): in the UBO, not push
         // constants, so the GI command buffer is recorded ONCE (tweaks and the per-frame values ride the UBO).
         glm::vec4 giTrace0;      // x = rays per probe, y = temporal alpha, z = max ray distance (m), w = update interval multiplier (giWaveUpdateInterval)

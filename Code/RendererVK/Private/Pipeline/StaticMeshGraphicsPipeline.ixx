@@ -11,6 +11,7 @@ import :IndirectCommandsLayout;
 import :DescriptorSet;
 import :Texture;
 import :Sampler;
+import :GIProbePipeline;
 
 class CommandBuffer;
 class ObjectContainer;
@@ -40,6 +41,7 @@ public:
 		Buffer& lightTableBuffer;
 
 		Buffer& giGridDataBuffer;    // GI probe clipmap SH volume (read in the fragment shader)
+		GiVolumeDescriptors giVolume; // the baked irradiance volume + sky SH (binding 21); empty = off
 
 		Buffer& meshInfoBuffer;        // shadow-ray alpha test (firstIndex/vertexOffset per mesh)
 		Buffer& rtMeshInstancesBuffer; // the unculled instance list the TLAS records index into
@@ -63,7 +65,7 @@ public:
     void record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params, bool updateDescriptors = true);
     void updateAODescriptor(vk::DescriptorSet descriptorSet, vk::ImageView aoView, vk::Sampler aoSampler);
     void updateTlasDescriptor(vk::DescriptorSet descriptorSet, vk::AccelerationStructureKHR tlas);
-    // Rewrites one slot of the texture array (binding 21) with a streamed texture's current view.
+    // Rewrites one slot of the texture array (binding 22) with a streamed texture's current view.
     void updateTextureDescriptor(vk::DescriptorSet descriptorSet, uint32 slotIdx, vk::ImageView view);
     // Points the sky map binding (20) at GI's per-frame sky bake (GENERAL layout).
     void updateSkyMapDescriptor(vk::DescriptorSet descriptorSet, vk::ImageView skyView, vk::Sampler skySampler);

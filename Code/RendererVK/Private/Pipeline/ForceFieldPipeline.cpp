@@ -313,13 +313,19 @@ void ForceFieldPipeline::resizeIntervalTarget(uint32 width, uint32 height)
 void ForceFieldPipeline::createShellVolume()
 {
     vk::Device vkDevice = Globals::device.getDevice();
-    // TEAM-SIZED: <= 4 teams fit ONE RGBA16F volume (half the 8-team footprint), only 5+ need the
-    // second texture. Deliberately NOT RG16F for the 2-team case: rg16f image STORES need the
-    // shaderStorageImageExtendedFormats device feature, which the engine does not enable - rgba16f
-    // is in the always-supported storage set. The unused second view slot stays null - bindings
-    // fall back to view A, which those shader variants never statically use.
+    // TEAM-SIZED: <= 2 teams fit ONE RG16F volume (3 MiB), 3-4 teams ONE RGBA16F (6 MiB), only 5+ need
+    // the second RGBA16F texture. One fetch in the shell FS reads every team's phi up to 4 teams. The
+    // format MUST match force_shellbake.cs.glsl's layout qualifier, which follows the same NUM_FORCE_TEAMS
+    // (a team change recreates this volume and reloads the shaders together). RG16F image stores need
+    // shaderStorageImageExtendedFormats, which Device enables with every other supported core feature.
+    // The unused second view slot stays null - bindings fall back to view A, which those shader variants
+    // never statically use.
     const int numVolumes = m_numTeams > 4 ? 2 : 1;
-    const vk::Format format = vk::Format::eR16G16B16A16Sfloat;
+    const vk::Format format = m_numTeams <= 2 ? vk::Format::eR16G16Sfloat : vk::Format::eR16G16B16A16Sfloat;
+    assert((Globals::device.getPhysicalDevice().getFormatProperties(format).optimalTilingFeatures
+        & (vk::FormatFeatureFlagBits::eStorageImage | vk::FormatFeatureFlagBits::eSampledImageFilterLinear))
+        == (vk::FormatFeatureFlagBits::eStorageImage | vk::FormatFeatureFlagBits::eSampledImageFilterLinear)
+        && "force shell volume format lacks storage or linear filtering support");
     for (int i = 0; i < numVolumes; ++i)
     {
         const vk::ImageCreateInfo info{

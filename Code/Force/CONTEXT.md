@@ -156,12 +156,16 @@ The live count rides `ForceFieldParams::numTeams`, and the renderer detects the 
 
 * recompiles every force shader with the per-pipeline `NUM_FORCE_TEAMS` define, so all per-team loops
   and phi arrays size by it (**2 teams = a quarter of the 8-team accumulation**);
-* remakes the team-sized resources: the shell volume (ONE RGBA16F 3D texture at ≤ 4 teams, two at 5+)
-  and the CPU-bake readback.
+* remakes the team-sized resources: the shell volume (ONE RG16F 3D texture at ≤ 2 teams, ONE RGBA16F
+  at 3–4, two RGBA16F at 5+) and the CPU-bake readback.
 
-> The shell volume is **deliberately never RG16F**: `rg16f` image stores need the
-> `shaderStorageImageExtendedFormats` feature the engine does not enable. At ≤ 4 teams the second
-> view slot is null and bindings fall back to view A.
+> The shell volume is sized so that **one fetch reads every team's φ up to 4 teams**: RG16F at ≤ 2
+> teams (3 MiB instead of 6), RGBA16F above. **The image format (`createShellVolume`) and
+> `force_shellbake.cs.glsl`'s layout qualifier both follow `NUM_FORCE_TEAMS` and must stay in step**; a
+> team change recreates the volume and reloads the shaders together. RG16F image stores need
+> `shaderStorageImageExtendedFormats`, which `Device` enables with every other supported core feature
+> (`createShellVolume` asserts the format support). The shell FS reads only channels < the team count.
+> At ≤ 4 teams the second view slot is null and bindings fall back to view A.
 
 Emitter and query team values clamp below the live count.
 
@@ -251,7 +255,8 @@ analytic candidate loop.
 > all shield sizes. The SAME metric drives the upload partition, the bake-volume fit and the union's
 > ownership skip.
 
-* Two RGBA16F 3D textures, `FORCE_SHELL_VOLUME` 128×48×128, holding all team φ. ONE set, serialized
+* 3D textures (team-sized: one RG16F at ≤ 2 teams, one RGBA16F at 3–4, two at 5+), `FORCE_SHELL_VOLUME` 128×48×128,
+  holding all team φ. ONE set, serialized
   by an acquire barrier, GENERAL for life.
 * Written by `force_shellbake.cs` each frame — indirect dispatch, x = 0 when no emitter qualifies, so
   the CB is cached — with the FULL analytic field, small-bubble deformation included.

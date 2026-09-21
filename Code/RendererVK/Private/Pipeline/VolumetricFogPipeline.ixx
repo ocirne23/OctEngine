@@ -9,6 +9,7 @@ import :ComputePipeline;
 import :GraphicsPipeline;
 import :DescriptorSet;
 import :Layout;
+import :GIProbePipeline;
 
 // Froxel-based volumetric fog (camera-frustum-aligned 3D grid, VOL_FROXEL_* texels, exponential Z slices):
 //   1. scatter   : per froxel, media density (global height fog + noise + local fog volumes) and in-scattered
@@ -40,6 +41,7 @@ public:
         Buffer& lightTableBuffer;
         Buffer& fogVolumesBuffer;
         Buffer& giGridDataBuffer;
+        GiVolumeDescriptors giVolume; // empty = the volume is off (the shader reads the probe buffer)
         vk::ImageView shadowMapView;
         vk::Sampler   shadowMapSampler;
         vk::ImageView oceanMapsView;   // FFT displacement maps: the scatter pass samples the live wave
@@ -52,6 +54,7 @@ public:
     {
         Buffer& ubo;
         Buffer& giGridDataBuffer; // far field ambient (virtual sky probe)
+        GiVolumeDescriptors giVolume; // the same sky SH in volume mode; empty = off
         vk::ImageView sceneDepthView;
         // SCENE_DEPTH_SAMPLED_LAYOUT: the scene depth is this stage's read-only attachment AND this sampled image.
         vk::ImageLayout sceneDepthLayout = vk::ImageLayout::eShaderReadOnlyOptimal;

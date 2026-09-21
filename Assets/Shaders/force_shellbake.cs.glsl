@@ -14,10 +14,15 @@ layout (local_size_x = FORCE_SHELL_VOLUME_GROUP, local_size_y = FORCE_SHELL_VOLU
 #include "shared.inc.glsl" // UBO + the hash-table sentinels the grid include needs
 #include "force_field.inc.glsl"
 
-// TEAM-SIZED (see ForceFieldPipeline::createShellVolume): ONE RGBA16F volume at <= 4 live teams,
-// a second only at 5+. Always rgba16f: a format-less writeonly image and rg16f stores each need a
-// device feature the engine does not enable, and rgba16f is in the always-supported storage set.
-layout (binding = 5, rgba16f) uniform writeonly image3D u_outA; // phi[0..3]
+// TEAM-SIZED (see ForceFieldPipeline::createShellVolume): ONE RG16F volume at <= 2 live teams, ONE
+// RGBA16F at 3-4, a second RGBA16F only at 5+ - so ONE fetch in the shell FS reads every team's phi up
+// to 4 teams. The qualifier MUST match the image format createShellVolume picks from the same count.
+#if NUM_FORCE_TEAMS <= 2
+#define FORCE_SHELL_FORMAT_A rg16f
+#else
+#define FORCE_SHELL_FORMAT_A rgba16f
+#endif
+layout (binding = 5, FORCE_SHELL_FORMAT_A) uniform writeonly image3D u_outA; // phi[0..3] (phi[0..1] as rg16f)
 #if NUM_FORCE_TEAMS > 4
 layout (binding = 6, rgba16f) uniform writeonly image3D u_outB; // phi[4..7]
 #endif

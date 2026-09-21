@@ -19,7 +19,7 @@ layout (binding = 2, std430) readonly buffer InMaterialInfos
     MaterialInfo in_materialInfos[];
 };
 
-layout (binding = 21) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
+layout (binding = 22) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
 
 layout (location = 0) in vec4 in_posU;    // xyz = world position, w = uv.x (instanced_indirect.vs.glsl)
 layout (location = 1) in vec4 in_normalV; // xyz = normal, w = uv.y

@@ -10,6 +10,7 @@ import :GraphicsPipeline;
 import :DescriptorSet;
 import :Sampler;
 import :Layout;
+import :GIProbePipeline;
 
 // Projected box decals, drawn inside the scene-color render pass immediately after the opaque forward
 // draw (before particles/fog, so those layer on top). Decals are submitted per frame like lights
@@ -40,6 +41,7 @@ public:
     {
         Buffer& ubo;
         Buffer& giGridDataBuffer;
+        GiVolumeDescriptors giVolume; // empty = the volume is off (the shader reads the probe buffer)
         vk::ImageView sceneDepthView;
         // SCENE_DEPTH_SAMPLED_LAYOUT: the scene depth is this stage's read-only attachment AND this sampled image.
         vk::ImageLayout sceneDepthLayout = vk::ImageLayout::eShaderReadOnlyOptimal;

@@ -117,7 +117,7 @@ layout (binding = UBO_BINDING, std140) uniform UBO
     vec4 u_aoParams;      // x = RTAO enabled (0/1), y = GI strength, z = RTAO max distance (m; past it the
                           // AO image is exactly (N, 1) so the upsample is skipped; 0 = no falloff),
                           // w = unused (the forward-pass light debug overlay is the LIGHT_GRID_DEBUG define)
-    vec4 u_giVisParams;   // x = Chebyshev variance floor (fraction of spacing), y = unused, z = probe weight floor, w = mean scale (footprint widening)
+    vec4 u_giVisParams;   // x = Chebyshev variance floor (fraction of spacing), y = full irradiance-volume bake this frame (1/0), z = probe weight floor, w = mean scale (footprint widening)
     vec4 u_giTrace0;      // x = rays per probe, y = temporal alpha, z = max ray distance (m), w = update interval multiplier (giWaveUpdateInterval)
     vec4 u_giTrace1;      // xyz = LAST frame's scene focus (previous clipmap window -> probe freshness), w = TLAS range (m)
     uint u_giTlasNumInstances; // live mesh-instance count for gi_tlas_instances; slots past it are written inactive

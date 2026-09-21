@@ -1,5 +1,7 @@
 #version 450
 
+#extension GL_EXT_nonuniform_qualifier : enable // gi_probe.inc.glsl's volume lookup (only the sky SH is used here)
+
 // Volumetric fog apply: fullscreen pass in the scene-color render pass (after the forward + sky draws,
 // before TAA so the fog gets antialiased). Reconstructs each pixel's view depth from the scene depth
 // and samples the integrated fog volume.
@@ -19,6 +21,10 @@ layout (binding = 4, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 #define TERRAIN_HEIGHT_BINDING 3
 #include "terrain_height.inc.glsl"
 #define GI_GRID_DATA_NAME gi_gridData
+#ifdef GI_VOLUME
+layout (binding = 5) uniform sampler3D u_giVolume[GI_VOLUME_MAX_IMAGES]; // the volume's copy of the sky SH (giEvalSkySH)
+#define GI_VOLUME_TEXTURES_NAME u_giVolume
+#endif
 #include "gi_probe.inc.glsl"
 
 layout (location = 0) out vec4 out_color;

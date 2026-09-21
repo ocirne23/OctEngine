@@ -305,6 +305,7 @@ void Renderer::recordStaticMeshInto(CommandBuffer& cb, uint32 frameIdx, uint32 e
         .lightGridsBuffer = submission.lightGrids,
         .lightTableBuffer = submission.lightTable,
         .giGridDataBuffer = m_giProbePipeline.getGiGridDataBuffer(),
+        .giVolume = m_giProbePipeline.getVolumeDescriptors(),
         .meshInfoBuffer = m_meshInfos.getBuffer(),
         .rtMeshInstancesBuffer = instances.meshInstances,
         .shadowMapView = frameData.shadowMap.getSampleView(),
@@ -358,6 +359,7 @@ void Renderer::recordFogApplyInto(CommandBuffer& cb, uint32 frameIdx, uint32 eye
     VolumetricFogPipeline::ApplyParams params{
         .ubo = frameData.ubo,
         .giGridDataBuffer = m_giProbePipeline.getGiGridDataBuffer(),
+        .giVolume = m_giProbePipeline.getVolumeDescriptors(),
         .sceneDepthView = frameData.sceneColor.getDepthView(eyeIndex),
         .sceneDepthLayout = SCENE_DEPTH_SAMPLED_LAYOUT, // also this stage's read-only depth attachment
         .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
@@ -435,6 +437,7 @@ void Renderer::recordParticlesInto(CommandBuffer& cb, uint32 frameIdx, uint32 ey
     ParticlePipeline::DrawParams drawParams{
         .ubo = frameData.ubo,
         .giGridDataBuffer = m_giProbePipeline.getGiGridDataBuffer(),
+        .giVolume = m_giProbePipeline.getVolumeDescriptors(),
         .sceneDepthView = frameData.sceneColor.getDepthView(eyeIndex),
         .sceneDepthLayout = SCENE_DEPTH_SAMPLED_LAYOUT, // also this stage's read-only depth attachment
         .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
@@ -464,6 +467,7 @@ void Renderer::recordDecalsInto(CommandBuffer& cb, uint32 frameIdx, uint32 eyeIn
     DecalPipeline::DrawParams drawParams{
         .ubo = frameData.ubo,
         .giGridDataBuffer = m_giProbePipeline.getGiGridDataBuffer(),
+        .giVolume = m_giProbePipeline.getVolumeDescriptors(),
         .sceneDepthView = frameData.sceneColor.getDepthView(eyeIndex),
         .sceneDepthLayout = SCENE_DEPTH_SAMPLED_LAYOUT, // also this stage's read-only depth attachment
         .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
@@ -603,6 +607,7 @@ void Renderer::recordVolumetricFog(uint32 frameIdx)
             .lightTableBuffer = submission.lightTable,
             .fogVolumesBuffer = submission.fogVolumes,
             .giGridDataBuffer = m_giProbePipeline.getGiGridDataBuffer(),
+            .giVolume = m_giProbePipeline.getVolumeDescriptors(),
             .shadowMapView = frameData.shadowMap.getSampleView(),
             .shadowMapSampler = frameData.shadowMap.getSampler(),
             .oceanMapsView = m_oceanSimPipeline.getMapsView(),
@@ -630,6 +635,7 @@ void Renderer::recordFogApply(uint32 frameIdx)
     VolumetricFogPipeline::ApplyParams params{
         .ubo = frameData.ubo,
         .giGridDataBuffer = m_giProbePipeline.getGiGridDataBuffer(),
+        .giVolume = m_giProbePipeline.getVolumeDescriptors(),
         .sceneDepthView = frameData.sceneColor.getDepthView(),
         .sceneDepthLayout = SCENE_DEPTH_SAMPLED_LAYOUT, // also this stage's read-only depth attachment
         .sceneDepthSampler = frameData.sceneColor.getDepthSampler(),
@@ -880,6 +886,10 @@ void Renderer::recordGlobalIllum(uint32 frameIdx)
         .shadowMapSampler = frameData.shadowMap.getSampler(),
     };
     m_giProbePipeline.recordTrace(globalIllumCommandBuffer, frameIdx, traceParams);
+
+    // 6. Bake the traced probes into the irradiance volume the forward lit shaders sample (no-op while the
+    // volume is off). Its own barriers: trace write -> bake read, bake write -> fragment read.
+    m_giProbePipeline.recordVolumeBake(globalIllumCommandBuffer, frameIdx, frameData.ubo);
 
     // trace (SH write) -> fragment read in the main pass + vertex read (per-particle lighting)
     fullBarrier(vk::PipelineStageFlagBits2::eComputeShader, vk::AccessFlagBits2::eShaderStorageWrite,

@@ -11,6 +11,7 @@ import :GraphicsPipeline;
 import :DescriptorSet;
 import :Sampler;
 import :Layout;
+import :GIProbePipeline;
 
 // GPU-driven particle system. The particle pool, dead-index stack and two alive lists are persistent
 // device-local state (single copy - frames in flight are serialized on the graphics queue, with a WAR
@@ -82,6 +83,7 @@ public:
     {
         Buffer& ubo;
         Buffer& giGridDataBuffer;
+        GiVolumeDescriptors giVolume; // empty = the volume is off (the shader reads the probe buffer)
         vk::ImageView sceneDepthView; // this frame's opaque depth (soft particles)
         // SCENE_DEPTH_SAMPLED_LAYOUT: the scene depth is this stage's read-only attachment AND this sampled image.
         vk::ImageLayout sceneDepthLayout = vk::ImageLayout::eShaderReadOnlyOptimal;

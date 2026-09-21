@@ -149,6 +149,16 @@ static oc::string buildLayoutPreamble()
     def("GI_PROBE_DIM_Z", g_giGrid.dimZ());
     def("GI_FOCUS_Y_OFFSET", g_giGrid.focusOffsetY); // float literal (to_string keeps the decimal point)
     def("GI_CASCADE_BASE_SPACING", GI_CASCADE_BASE_SPACING);
+    // The irradiance volume (g_giGrid.volume / volumeRes, same reload path as the grid shape). GI_VOLUME is
+    // defined only while it is on: the lit shaders then read the volume instead of the probes.
+    def("GI_VOLUME_RES", g_giGrid.volumeRes);
+    def("GI_MAX_CASCADES", GI_MAX_CASCADES);
+    def("GI_VOLUME_SKY_TEXELS", GI_VOLUME_SKY_TEXELS);
+    def("GI_VOLUME_IMAGES_PER_CASCADE", GI_VOLUME_IMAGES_PER_CASCADE);
+    def("GI_VOLUME_SKY_IMAGE", GI_VOLUME_SKY_IMAGE);
+    def("GI_VOLUME_MAX_IMAGES", GI_VOLUME_MAX_IMAGES);
+    if (g_giGrid.volume)
+        def("GI_VOLUME", 1);
     def("VOL_FROXEL_X", VOL_FROXEL_X);
     def("VOL_FROXEL_Y", VOL_FROXEL_Y);
     def("VOL_FROXEL_Z", VOL_FROXEL_Z);

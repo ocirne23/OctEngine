@@ -30,6 +30,35 @@ import :Layout;
 //                           with the alpha scaled by the interval (same wall-time convergence); fresh probes
 //                           always trace. See giWaveUpdateInterval in gi_probe.inc.glsl.
 // The TLAS is built by the AccelerationStructure object between passes 1 and 3 (orchestrated by the Renderer).
+
+// The irradiance volume as EVERY consumer binds it (forward lit set, ocean, terrain, decals, particles, fog,
+// the trace's bounce lookup): one sampler3D array of GI_VOLUME_MAX_IMAGES, partially bound - the cascades
+// from element 0 (cascade-major, GI_VOLUME_IMAGES_PER_CASCADE each) and the sky SH at GI_VOLUME_SKY_IMAGE.
+// Empty while the volume is off: the consumers' shaders then take the probe-buffer path and skip the writes.
+export struct GiVolumeDescriptors
+{
+    oc::span<const vk::ImageView> cascadeViews;
+    vk::ImageView skyView;
+    vk::Sampler sampler;
+
+    bool empty() const { return cascadeViews.empty(); }
+    static vk::DescriptorSetLayoutBinding layoutBinding(uint32 binding, vk::ShaderStageFlags stages)
+    {
+        return vk::DescriptorSetLayoutBinding{ .binding = binding, .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+            .descriptorCount = RendererVKLayout::GI_VOLUME_MAX_IMAGES, .stageFlags = stages };
+    }
+    // The two writes for `binding` (the cascades from element 0, the sky at its fixed slot). A zero-count write
+    // is invalid, so callers leave both out while empty().
+    void fillUpdates(uint32 binding, DescriptorSetUpdateInfo& cascades, DescriptorSetUpdateInfo& sky) const
+    {
+        cascades = DescriptorSetUpdateInfo{ .binding = binding, .type = vk::DescriptorType::eCombinedImageSampler };
+        for (const vk::ImageView view : cascadeViews)
+            cascades.imageInfos.push_back(vk::DescriptorImageInfo{ .sampler = sampler, .imageView = view, .imageLayout = vk::ImageLayout::eGeneral });
+        sky = DescriptorSetUpdateInfo{ .binding = binding, .startIdx = RendererVKLayout::GI_VOLUME_SKY_IMAGE, .type = vk::DescriptorType::eCombinedImageSampler,
+            .imageInfos = { vk::DescriptorImageInfo{ .sampler = sampler, .imageView = skyView, .imageLayout = vk::ImageLayout::eGeneral } } };
+    }
+};
+
 export class GIProbePipeline final
 {
 public:
@@ -40,11 +69,17 @@ public:
     void reloadShaders(uint32 maxTextures);
     // The "GI" grid-shape tweaks (RendererVKLayout::g_giGrid: cascades, probes per axis, focus Y offset).
     // They are shader #defines in EVERY pipeline that samples the probes, so onGridChanged must: wait for
-    // the GPU, call resizeGrid(), reload ALL shaders (Renderer::reloadShaders) and re-record.
-    void registerGridTweaks(const oc::function<void()>& onGridChanged);
-    // Re-allocates the persistent SH clipmap buffer for the current g_giGrid and schedules the one-time
-    // clear (nothing is preserved - the toroidal slots mean something else now). GPU must be idle.
+    // the GPU, call resizeGrid(), reload ALL shaders (Renderer::reloadShaders) and re-record. The two
+    // irradiance-volume tweaks call onVolumeChanged instead: wait, resizeVolume(), reload ALL shaders - the
+    // probe buffer and its history stay.
+    void registerGridTweaks(const oc::function<void()>& onGridChanged, const oc::function<void()>& onVolumeChanged);
+    // Re-allocates the persistent SH clipmap buffer (+ the per-wave visit stamps and the volume) for the
+    // current g_giGrid and schedules the one-time clear (nothing is preserved - the toroidal slots mean
+    // something else now). GPU must be idle.
     void resizeGrid();
+    // Re-creates only the irradiance volume for the current g_giGrid.volume / volumeRes (a full bake
+    // follows). GPU must be idle.
+    void resizeVolume() { createVolume(); }
     // Grows the per-frame TLAS instance buffers (GPU scratch, nothing preserved; GPU must be idle).
     void resizeTlasInstanceBuffers(uint32 maxTlasInstances);
     // Re-allocates the trace descriptor sets with a grown live texture count (GPU must be idle).
@@ -98,7 +133,20 @@ public:
     // Cached (recorded once per invalidation): the frame index, the previous focus and the tweaks ride the
     // UBO (u_frameIndex, u_giTrace0/1 - see getTraceParams0 / getTlasRange).
     void recordTrace(CommandBuffer& commandBuffer, uint32 frameIdx, TraceParams& params);
-    // Rewrites one slot of the trace set's texture array (binding 13) with a new or streamed texture's view.
+
+    // THE IRRADIANCE VOLUME (g_giGrid.volume, "GI/Irradiance volume"): bakes the probe field into per-cascade
+    // 3D textures (gi_volume_bake.cs.glsl) right after the trace, plus the sky SH into its own small image,
+    // for every probe consumer's filtered lookup (evalProbeVolumeCoverage / giEvalSkySH). Its own barriers:
+    // the trace's writes and last frame's reads -> the bake -> this frame's fragment, vertex and compute
+    // reads (the next frame's trace reads it for the bounce). No-op while the volume is off.
+    void recordVolumeBake(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo);
+    // GENERAL layout for life; empty while the volume is off.
+    GiVolumeDescriptors getVolumeDescriptors() const
+    {
+        return GiVolumeDescriptors{ .cascadeViews = oc::span<const vk::ImageView>(m_volumeViews.data(), m_volumeViews.size()),
+            .skyView = m_volumeSkyView, .sampler = m_volumeSampler };
+    }
+    // Rewrites one slot of the trace set's texture array (binding 15) with a new or streamed texture's view.
     void updateTextureDescriptor(uint32 frameIdx, uint32 slotIdx, vk::ImageView view);
     // u_giTrace0: x = rays per probe, y = temporal alpha of THIS frame, z = max ray distance, w = update interval multiplier.
     // "GI/Temporal Alpha" is the per-frame blend AT 60 FPS; y is that rate compounded over this frame's wall
@@ -133,20 +181,39 @@ public:
     // Persistent GI clipmap SH volume (consumed by the main pass's fragment shader).
     Buffer& getGiGridDataBuffer() { return m_giGridData; }
     float getStrength() const { return m_giStrength; }
-    // x = Chebyshev variance floor (fraction of probe spacing), y = unused, z = probe weight floor,
-    // w = mean scale. Uploaded to the frame UBO (u_giVisParams) for every probe-sampling shader.
-    glm::vec4 getVisibilityParams() const { return glm::vec4(m_visVarianceFloor, 0.0f, m_visWeightFloor, m_visMeanScale); }
+    // x = Chebyshev variance floor (fraction of probe spacing), y = FULL volume bake this frame (1/0), z = probe
+    // weight floor, w = mean scale. Uploaded to the frame UBO (u_giVisParams) for every probe-sampling shader.
+    // Called ONCE per frame by the UBO build: y is 1 for the one frame after the volume images were (re)created
+    // or a Chebyshev knob changed - the bake is otherwise partial (only voxels whose probes the trace visits),
+    // and a far probe can go hundreds of frames without a visit. bakeRuns = this frame records the bake (RT and
+    // GI on): the request is held until such a frame, so a knob moved while GI is off still lands.
+    glm::vec4 takeVisibilityParams(bool bakeRuns)
+    {
+        const glm::vec3 knobs(m_visVarianceFloor, m_visWeightFloor, m_visMeanScale);
+        m_volumeFullBake = m_volumeFullBake || knobs != m_lastVisKnobs;
+        m_lastVisKnobs = knobs;
+        const bool fullBake = m_volumeFullBake && bakeRuns;
+        if (bakeRuns)
+            m_volumeFullBake = false;
+        return glm::vec4(knobs.x, fullBake ? 1.0f : 0.0f, knobs.y, knobs.z);
+    }
 
 private:
     void buildTlasInstanceLayout(ComputePipelineLayout& layout);
     void buildSkyMapLayout(ComputePipelineLayout& layout);
     void buildTraceLayout(ComputePipelineLayout& layout, uint32 maxTextures);
     void buildDebugLayout(GraphicsPipelineLayout& layout);
+    void buildVolumeBakeLayout(ComputePipelineLayout& layout);
     void createSkyMap();
+    // (Re)creates the volume images for the current g_giGrid (or only destroys them while it is off),
+    // cleared to zero. GPU must be idle.
+    void createVolume();
+    void destroyVolume();
 
     ComputePipeline m_tlasInstancePipeline;
     ComputePipeline m_skyMapPipeline;
     ComputePipeline m_tracePipeline;
+    ComputePipeline m_volumeBakePipeline;
     GraphicsPipeline m_debugPipeline;
     vk::RenderPass m_debugRenderPass;
     bool  m_debugEnabled = false; // a per-frame stage flag (no re-record)
@@ -161,6 +228,18 @@ private:
     VmaAllocation m_skyMapMemory{};
     vk::ImageView m_skyMapView;
     vk::Sampler m_skyMapSampler; // linear, U repeat (azimuth wraps), V clamp (poles)
+
+    // The irradiance volume: per cascade the 4 images of RendererVKLayout::GI_VOLUME_FORMATS, volumeDim^3 texels,
+    // GENERAL for life. Views are cascade-major (GiVolumeDescriptors); the images/allocations parallel them,
+    // with the sky SH image (3x1x1 RGBA16F, its own view) appended LAST.
+    oc::vector<vk::Image> m_volumeImages;
+    oc::vector<VmaAllocation> m_volumeMemory;
+    oc::vector<vk::ImageView> m_volumeViews;
+    vk::ImageView m_volumeSkyView;
+    vk::Sampler m_volumeSampler; // linear, REPEAT on every axis (the toroidal wrap), no mips
+    bool m_volumeFullBake = true;   // see takeVisibilityParams: set by createVolume, consumed by the next UBO build
+    glm::vec3 m_lastVisKnobs{ -1.0f };
+    oc::array<DescriptorSet, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_volumeBakeSets;
 
     // GI probe trace tuning (runtime-tweakable; consumed by GIProbePipeline::recordTrace).
     int m_giRaysPerProbe = 17;         // gather rays per probe per visit
@@ -200,6 +279,10 @@ private:
     // so there is no prev/cur ping-pong. Read across frames by the fragment shader and read+written by the
     // trace compute; GI is low-frequency so the cross-frame hazard is tolerated (slightly stale reads).
     Buffer m_giGridData;
+    // One uint per trace WAVE (4x4x4 probe block = one trace workgroup, indexed by giWaveWorkgroup): the trace
+    // writes u_frameIndex + 1 on a wave's regular visit, the volume bake re-bakes the voxels over the waves
+    // stamped this frame. The trace's own decision, so the partial bake cannot drift from the schedule.
+    Buffer m_waveStamps;
 
     // Per-frame instance buffer: written each frame by the TLAS-instance compute and consumed by that
     // frame's TLAS build; double-buffered for the same cross-frame-hazard reason as the TLAS itself.
@@ -221,7 +304,7 @@ private:
     oc::array<DescriptorSetUpdateInfo, 9> m_tlasUpdates;   // bindings 0..7 of the TLAS-instance set + the UBO (8)
     oc::array<DescriptorSetUpdateInfo, 2> m_skyUpdates;    // the sky-map set: UBO + storage image
     oc::vector<DescriptorSetUpdateInfo> m_traceUpdates;    // the trace set's fixed bindings (see recordTrace for the index map)
-    // Writes every live texture view into the trace sets' array (binding 13) - at (re)allocation only.
+    // Writes every live texture view into the trace sets' array (binding 15) - at (re)allocation only.
     void fillTextureDescriptors();
 
     bool m_cleared = false;

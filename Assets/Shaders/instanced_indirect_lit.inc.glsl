@@ -43,7 +43,12 @@ layout (binding = 6, std430) readonly buffer InGridTable
 };
 
 layout (binding = 20) uniform sampler2DArray u_skyMap;   // GI's per-frame sky bake (atmosphere.inc.glsl: skyMapUV / SKY_MAP_LAYER_*)
-layout (binding = 21) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
+layout (binding = 22) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
+#ifdef GI_VOLUME
+// The baked irradiance volume (GIProbePipeline, gi_volume_bake.cs.glsl): 4 images per cascade, partially bound.
+layout (binding = 21) uniform sampler3D u_giVolume[GI_VOLUME_MAX_IMAGES];
+#define GI_VOLUME_TEXTURES_NAME u_giVolume
+#endif
 layout (binding = 8) uniform sampler2DArrayShadow u_shadowMap;      // comparison sampler (hardware PCF)
 layout (binding = 9) uniform sampler2DArray u_shadowMapDepth;       // raw depth (PCSS blocker search)
 layout (binding = 13) uniform sampler2D u_ao;                       // LAST frame's denoised half-res screen-space AO (reprojected bilateral upsample)
@@ -303,7 +308,11 @@ vec3 computeLitColor(vec3 worldPos, vec3 V, vec3 N, vec3 materialColor, float ro
 	// Blend to the virtual sky probe over the probe field's outer band (coverage) instead of stepping
 	// at the outermost cascade's window face; the fallback is only evaluated where it contributes.
 	float giCoverage;
+#ifdef GI_VOLUME
+	const vec3 indirectE = evalProbeVolumeCoverage(worldPos, bentN, giCoverage); // ~8 filtered fetches, not ~100 probe loads
+#else
 	const vec3 indirectE = evalProbeSHCoverage(worldPos, bentN, giCoverage);
+#endif
 	vec3 indirect = (indirectE.x >= 0.0) ? (indirectE * INV_PI) : vec3(0.0);
 	if (giCoverage < 1.0)
 		indirect = mix(giEvalSkySH(bentN) * INV_PI, indirect, giCoverage);

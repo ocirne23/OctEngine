@@ -253,6 +253,13 @@ void Renderer::initPipelines()
                 return;
             m_giProbePipeline.resizeGrid();
             reloadShaders();
+        },
+        // The irradiance-volume tweaks: only the volume images and the defines change - the probe history stays.
+        [this]() {
+            if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
+                return;
+            m_giProbePipeline.resizeVolume();
+            reloadShaders();
         });
     m_giProbePipeline.initializeDebug(sceneRenderPass);
     m_giProbePipeline.registerDebugTweaks(rerecordCallback);

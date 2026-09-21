@@ -58,7 +58,10 @@ layout (binding = 6, std430) readonly buffer InIndices     { uint in_indices[]; 
 layout (binding = 7, std430) readonly buffer InMeshInfos   { InMeshInfo in_meshInfos[]; };
 layout (binding = 8, std430) readonly buffer InInstances   { InMeshInstance in_instances[]; };
 layout (binding = 9, std430) readonly buffer InMaterials   { MaterialInfo in_materialInfos[]; };
-layout (binding = 13) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
+layout (binding = 15) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
+// Per-wave visit stamps (one uint per trace workgroup): u_frameIndex + 1 on a regular visit, for the irradiance
+// volume's partial bake (gi_volume_bake.cs.glsl), which re-bakes only the voxels over this frame's waves.
+layout (binding = 14, std430) writeonly buffer GiWaveStamps { uint gi_waveStamp[]; };
 layout (binding = 10) uniform sampler2DArray u_skyMap; // the per-frame sky bake (gi_sky_map.cs.glsl; mapping in atmosphere.inc.glsl)
 layout (binding = 11) uniform sampler2DArrayShadow u_shadowMap;
 // GI probe clipmap volume (persistent SH, read+write for the multi-bounce lookup + temporal blend).
@@ -93,6 +96,12 @@ layout (binding = 12, std430) buffer GiGridData { vec4 gi_gridData[]; };
 // GI probe clipmap (read + write).
 #define GI_PROBE_WRITE
 #define GI_GRID_DATA_NAME    gi_gridData
+#ifdef GI_VOLUME
+// The irradiance volume: the multi-bounce lookup at gather hits reads LAST frame's bake (this frame's bake
+// runs after the trace) - the probe path read probes this dispatch may be writing, so the lag is the same.
+layout (binding = 13) uniform sampler3D u_giVolume[GI_VOLUME_MAX_IMAGES];
+#define GI_VOLUME_TEXTURES_NAME u_giVolume
+#endif
 #include "gi_probe.inc.glsl"
 
 uint hashU(uint x)
@@ -184,11 +193,16 @@ vec3 traceRadiance(vec3 origin, vec3 dir, int cascade, out float hitDist, out fl
     g_sunShadowOverride = sunVisibility(worldPos + worldN * 0.02);
     vec3 radiance = giGatherDirect(worldPos, worldN, albedo);
     // Previous-frame indirect at the hit -> multi-bounce (infinite, temporally). The cur SH already holds
-    // the carried-forward irradiance for this frame. The CHEAP lookup (no Chebyshev, no cross-cascade
-    // fade): the result is albedo-scaled and blended at temporalAlpha, so its noise is free and the
-    // shading-quality path's ~2x loads are not.
+    // the carried-forward irradiance for this frame. Probe path: the CHEAP lookup (no Chebyshev, no
+    // cross-cascade fade): the result is albedo-scaled and blended at temporalAlpha, so its noise is free
+    // and the shading-quality path's ~2x loads are not. Volume path: the shading lookup itself - 4 filtered
+    // fetches per cascade, WITH the baked Chebyshev visibility, cheaper than either probe loop.
     float giCov;
+#ifdef GI_VOLUME
+    vec3 prevE = evalProbeVolumeCoverage(worldPos, worldN, giCov);
+#else
     vec3 prevE = giEvalBounce(worldPos, worldN, giCov);
+#endif
     if (prevE.x >= 0.0) // fade the multi-bounce with coverage so traced hits near the field's edge don't step
         radiance += albedo * (prevE / PI) * giCov;
     return radiance;
@@ -279,8 +293,7 @@ void main()
 
     // A probe is "fresh" when its lattice coord was outside the previous frame's clipmap window for this
     // cascade (it just scrolled in), so we replace rather than blend to converge immediately.
-    const ivec3 prevOrigin = giCascadeOrigin(cascade, u_giTrace1.xyz);
-    const bool  fresh = any(lessThan(lc, prevOrigin)) || any(greaterThanEqual(lc, prevOrigin + GI_PROBE_DIMS));
+    const bool fresh = giProbeFresh(cascade, lc);
 
     // Update interval: the wave traces every updateInterval frames - ONE product of every rate factor
     // (giWaveUpdateInterval: "GI/Update Interval Mult" x the distance / out-of-view priority, which a close
@@ -289,7 +302,13 @@ void main()
     // interval. Interleaved per WORKGROUP (whole waves exit, no half-empty waves); fresh probes always
     // trace - a skipped fresh slot would show the scrolled-out probe's data for a frame.
     const uint updateInterval = giWaveUpdateInterval(cascade, waveMin, spacing);
-    if (!fresh && ((gl_WorkGroupID.x + u_frameIndex) % updateInterval) != 0u)
+    const bool visits = giWaveVisits(gl_WorkGroupID.x, updateInterval);
+    // Publish the regular visit for the irradiance volume's partial bake: THIS decision, once per wave (the
+    // interval is identical on every lane). Fresh probes are the bake's own test (giProbeFresh); the dead-probe
+    // skip below may still drop the visit, which only costs the bake an unneeded re-bake.
+    if (visits && gl_LocalInvocationIndex == 0u)
+        gi_waveStamp[gl_WorkGroupID.x] = u_frameIndex + 1u;
+    if (!fresh && !visits)
         return;
 
     // Relocation: trace from the offset position steered in previous frames (fresh slots hold a scrolled-out

@@ -50,7 +50,7 @@ layout (binding = 6, std430) readonly buffer InGridTable
 #include "light_grid.inc.glsl"
 
 layout (binding = 20) uniform sampler2DArray u_skyMap;   // GI's per-frame sky bake (atmosphere.inc.glsl: skyMapUV / SKY_MAP_LAYER_*)
-layout (binding = 21) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
+layout (binding = 22) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
 layout (binding = 11) uniform accelerationStructureEXT u_tlas;
 
 // Scene geometry for ray hits (custom index = index into in_instances; RT meshIdx rides the sbtOffset).
@@ -77,6 +77,10 @@ layout (binding = 17, std430) readonly buffer InRTInstances { InMeshInstance in_
 
 layout (binding = 10, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 #define GI_GRID_DATA_NAME gi_gridData
+#ifdef GI_VOLUME
+layout (binding = 21) uniform sampler3D u_giVolume[GI_VOLUME_MAX_IMAGES]; // the baked irradiance volume + sky SH
+#define GI_VOLUME_TEXTURES_NAME u_giVolume
+#endif
 #include "gi_probe.inc.glsl"
 
 #include "rt_shadow.inc.glsl"
@@ -278,7 +282,11 @@ vec3 shadeHit(SceneHit hit, vec3 rayDir, vec3 sunRadiance, vec3 L)
 {
     const vec3 sun = sunRadiance * max(dot(hit.N, L), 0.0);
     float giCoverage;
+#ifdef GI_VOLUME
+    const vec3 probeE = evalProbeVolumeCoverage(hit.pos, hit.N, giCoverage);
+#else
     const vec3 probeE = evalProbeSHCoverage(hit.pos, hit.N, giCoverage);
+#endif
     vec3 indirect = probeE.x >= 0.0 ? probeE / PI : vec3(0.0);
     if (giCoverage < 1.0)
         indirect = mix(giEvalSkySH(hit.N) / PI, indirect, giCoverage);

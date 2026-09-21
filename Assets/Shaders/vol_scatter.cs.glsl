@@ -1,6 +1,7 @@
 #version 460
 
 #extension GL_EXT_ray_query : require
+#extension GL_EXT_nonuniform_qualifier : enable // the GI volume's per-cascade texture index
 
 // Volumetric fog scatter: one invocation per froxel. Evaluates the participating-media density at the
 // froxel (global height fog with wind-animated noise, plus local fog volume boxes) and the light scattered
@@ -70,6 +71,10 @@ layout (binding = 9, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 
 // GI probe clipmap (read-only): fog picks up bounced/ambient light.
 #define GI_GRID_DATA_NAME gi_gridData
+#ifdef GI_VOLUME
+layout (binding = 12) uniform sampler3D u_giVolume[GI_VOLUME_MAX_IMAGES]; // the baked irradiance volume + sky SH
+#define GI_VOLUME_TEXTURES_NAME u_giVolume
+#endif
 #include "gi_probe.inc.glsl"
 
 uint hashU(uint x)
@@ -412,7 +417,11 @@ void main()
         vec3 amb = vec3(0.0);
         if (u_fogParams4.z > 0.5)
         {
+#ifdef GI_VOLUME
+            amb = evalProbeVolumeCoverage(worldPos, -dir, giCov);
+#else
             amb = evalProbeSHCoverage(worldPos, -dir, giCov);
+#endif
             if (amb.x < 0.0)
                 amb = vec3(0.0);
         }

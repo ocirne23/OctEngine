@@ -325,7 +325,7 @@ top-down camera hanging in empty sky shapes none of these:
   white = open), orange tint (multiplied, so black stays black) = deviation above the variance floor
   (edge softness, linear to cap / 2), magenta = no depth data yet,
   dead probes dimmed. **The Chebyshev test has THREE knobs, one job each** (`u_giVisParams`, y
-  unused; `giVisMoments` in gi_probe.inc.glsl, shared with the debug view): w "Vis Mean Scale" (1.2)
+  = the irradiance volume's full-bake flag; `giVisMoments` in gi_probe.inc.glsl, shared with the debug view): w "Vis Mean Scale" (1.2)
   moves the occlusion THRESHOLD — it scales the DEPTH, so the second moment scales by k² and the
   variance stays consistent (**the old code scaled the mean only: `mean2 - (k·mean)²` was negative
   nearly everywhere, the variance was always the floor and the stored second moment did nothing**);
@@ -407,9 +407,64 @@ top-down camera hanging in empty sky shapes none of these:
   the forward pass's per-frame-constant `skyRadiance(up)` ambient), layer 1 = `mirrorSkyRadiance`
   (atmosphere.inc.glsl: the ocean's and the terrain wet film's reflection-ray sky, 12-step march +
   saturation). Mapping + layer ids live in atmosphere.inc.glsl (`skyMapUV` / `skyMapDir`,
-  `SKY_MAP_LAYER_*`); the forward set binds it at **20** (the texture array moved to **21**, still the
-  set's highest binding for the variable count). Anything that would call `skyRadiance` or
-  `atmosphereScatterCheap` per pixel samples the map instead.
+  `SKY_MAP_LAYER_*`); the forward set binds it at **20** (binding **21** is the GI irradiance volume, and
+  the texture array is **22**, still the set's highest binding for the variable count). Anything that
+  would call `skyRadiance` or `atmosphereScatterCheap` per pixel samples the map instead.
+* **THE GI IRRADIANCE VOLUME** ("GI/Irradiance volume", on by default; "GI/Volume voxels per probe" 1–2,
+  default 2 — both in `g_giGrid`; they reload every shader but keep the probe buffer, see below). Per
+  frame, right after the trace (inside the GI toggle), `GIProbePipeline::recordVolumeBake`
+  (`gi_volume_bake.cs.glsl`) bakes every cascade into 3D images: the probe lattice refined `volumeRes`
+  times per axis, stored TOROIDALLY like the probes (slot = fine coord & (dims − 1)), so the lookup is
+  REPEAT addressing + hardware trilinear. A voxel = the visibility-weighted blend of its 8 probes AT THE
+  VOXEL CENTRE (trilinear × backface-dead fade × Chebyshev). **16 B per voxel, 4 images per cascade**
+  (`RendererVKLayout::GI_VOLUME_FORMATS`): L0 × W in B10G11R11_UFLOAT (PREMULTIPLIED by the summed weight,
+  so a pixel's trilinear fetch is a weight-correct blend and a dead voxel adds nothing instead of black; a
+  small float keeps the HDR range at ~1.5 % steps), the 9 L1 terms as RATIOS to L0 scaled by 1/√3 (for a
+  non-negative radiance every ratio is within ±√3) in 2 × RGBA8_SNORM + the 9th in RG16F next to W (fp16,
+  because L0 = fetch / W needs W's precision when it is small). Low precision is safe here because the
+  volume is never accumulated — every bake writes a finished value from the fp32 probe history. The price:
+  the ratios filter unweighted, so where L0 changes fast the direction is slightly off, and a dead voxel's
+  zero ratio pulls its neighbours' L1 a little toward 0. `createVolume` asserts storage + linear-filter
+  support for the formats; B10G11R11 / RG16 storage need `shaderStorageImageExtendedFormats`, which
+  `Device` enables with every other supported core feature. `evalProbeVolumeCoverage` (gi_probe.inc.glsl — same
+  cascade walk, fade, coverage and dead fall-through as `evalProbeSHCoverage`) reads 4 filtered fetches per
+  cascade instead of 8 probes × 6 vec4 loads.
+  **The price: the half-Lambert probe-direction weight needs the surface normal and is NOT baked, and the
+  Chebyshev test runs from the voxel centre — more leaking through geometry thinner than a voxel** (the
+  per-pixel normal bias of the sample point is kept).
+  **EVERY probe consumer switches with the toggle** (`GI_VOLUME` define; the probe code stays for the off
+  path): the lit core, the ocean and the terrain's mirror hits (static-mesh set binding 21), decals (5),
+  particles (10, vertex), fog scatter (12) and fog apply (5, sky only), and the TRACE's multi-bounce lookup at
+  gather hits (13 — the wave stamps are 14, its texture array moved to 15), which reads LAST frame's bake with the baked Chebyshev
+  instead of `giEvalBounce`. **The sky SH (the out-of-field fallback)** is copied by the bake every frame,
+  before the partial early-out, into one extra 3×1×1 RGBA16F image at the fixed slot `GI_VOLUME_SKY_IMAGE`;
+  in volume mode `giEvalSkySH` `texelFetch`es it. So in volume mode no consumer reads the probe buffer —
+  only the trace, the bake and the probe debug view do. (The sky SH is GPU-made by the trace, so the UBO
+  could only carry it through a CPU port of the sky or a readback; the sky map could hold it too, but every
+  correct consumer multiplies it by the GI strength, so being valid with GI off buys nothing.) Every
+  consumer binds `GiVolumeDescriptors` (GIProbePipeline.ixx): one sampler3D array of
+  `GI_VOLUME_MAX_IMAGES` (8 cascades × 4 + the sky), partially bound, written with `fillUpdates` only while
+  the volume exists — so no set layout changes with the grid. Images are GENERAL for life, cleared to zero
+  at creation (W = 0 = no data). Default grid: 4 × 64³ voxels, ~16 MB. The bake's barriers cover
+  fragment, vertex and compute readers.
+  **Every GI consumer multiplies its GI term by `u_aoParams.y`** (GI strength, 0 with GI or RT off, where
+  the probes and the sky SH are stale) — decals and particles did not, and kept stale GI with GI off.
+  **The bake is PARTIAL, on the trace's own decision:** on a wave's regular visit, trace lane 0 writes
+  `u_frameIndex + 1` into `GI.waveStamps` (one uint per wave = per trace workgroup, trace binding 14, bake
+  binding 6). A voxel re-bakes only when a wave under its 8-probe stencil carries this frame's stamp
+  (`gi_waveStamp[giWaveWorkgroup(...)]`) or one of those probes is fresh (`giProbeFresh` on the stencil's two
+  corners — the trace's own test; a scrolled-in voxel always has a fresh probe); every other voxel keeps its
+  value. The bake never evaluates `giWaveUpdateInterval` itself, so it cannot drift from the schedule. The
+  stamp is written before the trace's dead-probe skip, so dead waves re-bake more often than they trace
+  (harmless). **A new trace skip condition before the stamp must keep the stamp exact; a fresh-probe change
+  goes through `giProbeFresh`.** `u_giVisParams.y` = one full bake: `takeVisibilityParams` sets it after
+  `createVolume` and when a Chebyshev knob moves (the baked value depends on them), held until a frame with
+  RT + GI on. **The two volume tweaks reload through their own callback** (`resizeVolume` + reload): they
+  never re-allocate the probe buffer, so the traced history survives a volume toggle.
+  **The cascade walks test the FADE only** (`evalProbeSHCoverage` / `evalProbeVolumeCoverage`): fade > 0
+  implies the stencil fits, the coarser cascade of a blend always fits, and past the outermost box
+  (coverage 0) nothing is sampled, because every caller then uses only its sky fallback. `giEvalBounce`
+  keeps the fit test on purpose (no fade band) but skips the outermost cascade at coverage 0.
 * **"Record GI" allocates nothing per frame.** `GIProbePipeline` keeps its `DescriptorSetUpdateInfo`
   lists as members (`buildUpdateScratch`, handles patched per record), and
   `AccelerationStructure::recordBuildSkinnedBlas` refills member build arrays. Keep it that way: a

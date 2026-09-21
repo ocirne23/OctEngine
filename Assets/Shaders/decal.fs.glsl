@@ -19,6 +19,10 @@ layout (binding = 4, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 layout (binding = 20) uniform sampler2D u_textures[]; // bindless texture array (variable count)
 
 #define GI_GRID_DATA_NAME gi_gridData
+#ifdef GI_VOLUME
+layout (binding = 5) uniform sampler3D u_giVolume[GI_VOLUME_MAX_IMAGES]; // the baked irradiance volume + sky SH
+#define GI_VOLUME_TEXTURES_NAME u_giVolume
+#endif
 #include "gi_probe.inc.glsl"
 
 layout (push_constant) uniform ViewPC { uint u_viewIndex; };
@@ -68,8 +72,14 @@ void main()
     if ((decal.params.y & DECAL_FLAG_LIT) != 0u)
     {
         float coverage;
+#ifdef GI_VOLUME
+        const vec3 E = evalProbeVolumeCoverage(worldPos, n, coverage);
+#else
         const vec3 E = evalProbeSHCoverage(worldPos, n, coverage);
-        const vec3 irr = mix(giEvalSkySH(n), E, coverage);
+#endif
+        // x "GI/Strength" (u_aoParams.y, 0 with GI or RT off, where the probes and the sky SH are stale),
+        // like every other GI consumer.
+        const vec3 irr = mix(giEvalSkySH(n), E, coverage) * u_aoParams.y;
         const vec3 sun = atmosTransmittanceToLight(0.0, normalize(u_sunDirection), u_skyUp)
             * u_sunColor.rgb * u_eclipseParams.x * max(dot(n, normalize(u_sunDirection)), 0.0);
         color *= (irr + sun) * (1.0 / PI) + u_ambientColor;

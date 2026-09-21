@@ -1,5 +1,7 @@
 #version 460
 
+#extension GL_EXT_nonuniform_qualifier : enable // the GI volume's per-cascade texture index
+
 // Particle billboard vertex shader: 6 vertices per instance (one quad), instance -> pool index via the
 // OUT alive list the sim pass compacted this frame (the indirect draw's instanceCount is its count).
 // All per-particle work lives here (color/size over life, fades, flipbook frame select, optional
@@ -14,6 +16,10 @@ layout (binding = 3, std430) readonly buffer Emitters { ParticleEmitter pe_emitt
 layout (binding = 5, std430) readonly buffer GiGridData { vec4 gi_gridData[]; };
 
 #define GI_GRID_DATA_NAME gi_gridData
+#ifdef GI_VOLUME
+layout (binding = 10) uniform sampler3D u_giVolume[GI_VOLUME_MAX_IMAGES]; // the baked irradiance volume + sky SH
+#define GI_VOLUME_TEXTURES_NAME u_giVolume
+#endif
 #include "gi_probe.inc.glsl"
 // The terrain-data cascades (height / water level) for the ground fade (PARTICLE_FLAG_GROUND_FADE).
 #define TERRAIN_HEIGHT_BINDING 6
@@ -223,8 +229,14 @@ void main()
         // its far edge and the sprite reads as a gradient rather than a flat card.
         const vec3 n = normalize(u_viewPos - world + vec3(0.0, 1e-4, 0.0));
         float coverage;
+#ifdef GI_VOLUME
+        vec3 E = evalProbeVolumeCoverage(world, n, coverage);
+#else
         vec3 E = evalProbeSHCoverage(world, n, coverage);
-        const vec3 irr = mix(giEvalSkySH(n), E, coverage);
+#endif
+        // x "GI/Strength" (u_aoParams.y, 0 with GI or RT off, where the probes and the sky SH are stale),
+        // like every other GI consumer.
+        const vec3 irr = mix(giEvalSkySH(n), E, coverage) * u_aoParams.y;
         // The sun and the scene's lights are phase-weighted (particlePhase): a back-lit mist glows, a
         // side-lit one dims. GI and ambient stay isotropic - they come from everywhere.
         const vec3 toEye = n;

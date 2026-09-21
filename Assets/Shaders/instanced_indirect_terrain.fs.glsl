@@ -97,7 +97,11 @@ bool terrainFilmMirror(vec3 origin, vec3 dir, float tMax, vec3 sunRadiance, vec3
 	}
 
 	float giCoverage;
+#ifdef GI_VOLUME
+	const vec3 probeE = evalProbeVolumeCoverage(hitPos, hitN, giCoverage);
+#else
 	const vec3 probeE = evalProbeSHCoverage(hitPos, hitN, giCoverage);
+#endif
 	vec3 indirect = probeE.x >= 0.0 ? probeE * INV_PI : vec3(0.0);
 	if (giCoverage < 1.0)
 		indirect = mix(giEvalSkySH(hitN) * INV_PI, indirect, giCoverage);

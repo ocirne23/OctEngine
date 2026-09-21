@@ -71,7 +71,8 @@ Shaders `particle_begin.cs.glsl` → `particle_emit.cs.glsl` → `particle_sim.c
 * Draw: billboards in scene colour in ONE pipeline — velocity stretch, flipbooks, per-particle
   lighting, soft depth fade, and premultiplied blend with per-emitter `additivity`
   (0 = smoke .. 1 = fire). `cullMode = None`, depth test on, **depth write off**.
-* **`Lit true`** = per particle (in the vertex shader): the GI probe irradiance + sun + ambient PLUS
+* **`Lit true`** = per particle (in the vertex shader): the GI irradiance (× "GI/Strength"; from the baked
+  irradiance volume, draw-set binding 10, while "GI/Irradiance volume" is on — see RendererVK) + sun + ambient PLUS
   the scene's punctual lights through the LIGHT GRID (the forward pass's own light-info / grid / table
   buffers, bindings 7..9 of the draw set): each covering light adds its falloff-attenuated colour
   isotropically (a particle is a scattering speck with no normal; spot cones apply, area and tube lights

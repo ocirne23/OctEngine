@@ -12,6 +12,7 @@ import :Layout;
 import :StagingManager;
 import :IndirectCullComputePipeline;
 import :TextureManager;
+import :GIProbePipeline;
 
 StaticMeshGraphicsPipeline::StaticMeshGraphicsPipeline() {}
 StaticMeshGraphicsPipeline::~StaticMeshGraphicsPipeline() {}
@@ -405,9 +406,12 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
         .stageFlags = vk::ShaderStageFlagBits::eFragment
     });
 
-    // 21 = the set's highest binding number: required for eVariableDescriptorCount.
+    // u_giVolume: the baked GI irradiance volume + sky SH, GENERAL layout, sized for the cascade tweak's max.
+    descriptorSetBindings.push_back(GiVolumeDescriptors::layoutBinding(21, vk::ShaderStageFlagBits::eFragment));
+
+    // 22 = the set's highest binding number: required for eVariableDescriptorCount.
     descriptorSetBindings.push_back(vk::DescriptorSetLayoutBinding{ // u_textures
-        .binding = 21,
+        .binding = 22,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler,
         .descriptorCount = maxTextures,
         .stageFlags = vk::ShaderStageFlagBits::eFragment
@@ -415,9 +419,10 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 
     // Per-binding flags (parallel to descriptorSetBindings): the AO (13), TLAS (11), terrain wetness (18),
     // baked terrain height (19) and sky map (20) bindings are refreshed after the (cached) draw CB is
-    // recorded -> UPDATE_AFTER_BIND; the texture array (21) is variable-count (allocated at the live
-    // texture capacity), only partially written, and UPDATE_AFTER_BIND so the TextureStreamer can rewrite
-    // swapped slots without re-recording the cached draw CBs.
+    // recorded -> UPDATE_AFTER_BIND; the GI volume (21) is written at record only for the live cascades
+    // (partially bound; the images change only with the grid, which re-records); the texture array (22) is
+    // variable-count (allocated at the live texture capacity), only partially written, and UPDATE_AFTER_BIND
+    // so the TextureStreamer can rewrite swapped slots without re-recording the cached draw CBs.
     graphicsPipelineLayout.descriptorBindingFlags.resize(descriptorSetBindings.size());
     for (size_t i = 0; i < descriptorSetBindings.size(); ++i)
     {
@@ -425,6 +430,8 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
             || descriptorSetBindings[i].binding == 18 || descriptorSetBindings[i].binding == 19 || descriptorSetBindings[i].binding == 20)
             graphicsPipelineLayout.descriptorBindingFlags[i] = vk::DescriptorBindingFlagBits::eUpdateAfterBind;
         else if (descriptorSetBindings[i].binding == 21)
+            graphicsPipelineLayout.descriptorBindingFlags[i] = vk::DescriptorBindingFlagBits::ePartiallyBound;
+        else if (descriptorSetBindings[i].binding == 22)
             graphicsPipelineLayout.descriptorBindingFlags[i] = vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount | vk::DescriptorBindingFlagBits::eUpdateAfterBind;
     }
 }
@@ -433,7 +440,7 @@ void StaticMeshGraphicsPipeline::updateTextureDescriptor(vk::DescriptorSet descr
 {
     // Streamed texture slot rewrite (same recorded-once CB situation as the AO/TLAS bindings above).
     vk::DescriptorImageInfo imageInfo{ .sampler = m_sampler.getSampler(), .imageView = view, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal };
-    vk::WriteDescriptorSet write{ .dstSet = descriptorSet, .dstBinding = 21, .dstArrayElement = slotIdx, .descriptorCount = 1,
+    vk::WriteDescriptorSet write{ .dstSet = descriptorSet, .dstBinding = 22, .dstArrayElement = slotIdx, .descriptorCount = 1,
         .descriptorType = vk::DescriptorType::eCombinedImageSampler, .pImageInfo = &imageInfo };
     Globals::device.getDevice().updateDescriptorSets(1, &write, 0, nullptr);
 }
@@ -562,7 +569,7 @@ void StaticMeshGraphicsPipeline::reloadShaders(vk::RenderPass renderPass, uint32
 
 void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params, bool updateDescriptors)
 {
-    oc::array<DescriptorSetUpdateInfo, 16> graphicsDescriptorSetUpdateInfos
+    oc::array<DescriptorSetUpdateInfo, 18> graphicsDescriptorSetUpdateInfos
     {
         DescriptorSetUpdateInfo{
             .binding = 0,
@@ -694,16 +701,21 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
             .type = vk::DescriptorType::eStorageBuffer,
             .bufferInfos = { vk::DescriptorBufferInfo { .buffer = params.rtMeshInstancesBuffer.getBuffer(), .range = params.rtMeshInstancesBuffer.getSize() } }
         },
-        DescriptorSetUpdateInfo{
-            .binding = 21,
+        DescriptorSetUpdateInfo{ // [15] the texture array
+            .binding = 22,
             .type = vk::DescriptorType::eCombinedImageSampler,
         },
+        DescriptorSetUpdateInfo{}, // [16] + [17] the GI volume cascades + sky: written only while it exists
+        DescriptorSetUpdateInfo{},
     };
+    if (!params.giVolume.empty())
+        params.giVolume.fillUpdates(21, graphicsDescriptorSetUpdateInfos[16], graphicsDescriptorSetUpdateInfos[17]);
+    const size_t numUpdates = params.giVolume.empty() ? 16 : 18;
 
     const size_t numTextures = Globals::textureManager.getNumTextures();
     for (uint16 texIdx = 0; texIdx < (uint16)numTextures; ++texIdx)
     {
-        graphicsDescriptorSetUpdateInfos.back().imageInfos.push_back(
+        graphicsDescriptorSetUpdateInfos[15].imageInfos.push_back(
             vk::DescriptorImageInfo{
                 .sampler = m_sampler.getSampler(),
                 .imageView = Globals::textureManager.getViewForDescriptor(texIdx), // freed slots -> fallback
@@ -715,7 +727,8 @@ void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 fra
     vk::CommandBuffer vkCommandBuffer = commandBuffer.getCommandBuffer();
     vk::DescriptorSet descriptorSet = params.descriptorSet.getDescriptorSet();
     if (updateDescriptors)
-        commandBuffer.cmdUpdateDescriptorSets(m_graphicsPipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, descriptorSet, graphicsDescriptorSetUpdateInfos);
+        commandBuffer.cmdUpdateDescriptorSets(m_graphicsPipeline.getPipelineLayout(), vk::PipelineBindPoint::eGraphics, descriptorSet,
+            oc::span<DescriptorSetUpdateInfo>(graphicsDescriptorSetUpdateInfos.data(), numUpdates));
     vkCommandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_graphicsPipeline.getPipeline());
     vkCommandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, m_graphicsPipeline.getPipelineLayout(), 0, 1, &descriptorSet, 0, nullptr);
     if (m_stereo) // select the eye matrix/view pos for the generated draws (vertex + fragment read it)
