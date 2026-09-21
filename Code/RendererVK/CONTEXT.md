@@ -766,13 +766,22 @@ lit 96/32 (416) -> 64/32 (288), terrain 96/80 (464) -> 80/32 (352), ocean 80/48 
     not, so it is clamped to 65504 as it lands in a half accumulator.
   * The driver moves its register/spill split by +-16 B on neutral changes (e.g. the order of two
     independent blocks) - a 16 B difference needs a bisect before it means anything.
+  * **Packing halves by hand does NOT work on this driver:** it folds `packFloat2x16` / `unpackFloat2x16`
+    pairs away - packing the lit core's 13 surface halves across the light loop gave a BYTE-IDENTICAL
+    binary. Each live half costs a full 32-bit register, so fewer live VALUES is the only lever.
+  * **fp32 stays, for a certain reason, where:** positions, UVs, depths and ray data (precision); absolute
+    heights (a 1 m band at 500 m altitude is 1 half step); a distance squared (overflows half past 256 m);
+    E[x^2] - E[x]^2 (catastrophic cancellation - the LEAN variance); a value that underflows half's normal
+    range (0.02^4, the water's base alpha^2); hash inputs (`fract` of large products); the GI cascade walk
+    (measured +16 B in half).
 * **The direct-light BRDF** (`punctual_lights.inc.glsl`, the `*H` copies beside the fp32 functions): N, V,
   L, H, the dots, GGX D + visibility, Fresnel and the colour factors; each light's factor widens once, at
   the multiply with its fp32 radiance. GGX D is Filament's fp16 form: `1 - NoH^2` as `|N x H|^2` (no
   cancellation near the peak) and the square after the divide (alpha^4 never forms), clamped to 65504.
   **Alpha must be >= 0.01** (the lit FS, the splat and the film clamp it).
 * **The lit core:** `computeLitColor(worldPos, V, f16vec3 N, f16vec3 albedo, float16_t alpha, metalness,
-  AO)`, a half accumulator, half AO / bent normal. `g_sunVisSurface` (one half scalar; the film rebuilds the
+  AO)`, a half accumulator, half AO / bent normal; the light loop puts each light's result into half BEFORE
+  its shadow ray (`lightShadowVisibility`), so no 32-bit light result is live across the query. `g_sunVisSurface` (one half scalar; the film rebuilds the
   surface sun radiance with `sunSurfaceRadiance()`) replaced two fp32 vec3 globals that were live across the
   whole light loop.
 * **The terrain splat** (`terrain_splat.inc.glsl`) is half: samples, coverages, blend weights, normals.
@@ -783,9 +792,17 @@ lit 96/32 (416) -> 64/32 (288), terrain 96/80 (464) -> 80/32 (352), ocean 80/48 
   16 B/thread against the fp32 walk converted once. The reflection fog's blend is half on `giEvalSkySHH`.
 * **The ocean spectrum / FFT images are RGBA16F** (`SPECTRUM_FORMAT`): 512^2 x 9 layers streamed ~6x per
   frame, memory-bound; Ocean sim 0.216 -> 0.179 ms. The butterflies stay fp32 in shared memory.
-* **Where the peaks are now** (bisected): terrain without the water film is 72/16 - the film's MIRROR ray
-  query (traversal + alpha test + hit fetch, fp32-bound) is the terrain's peak; the ocean's seabed splat
-  costs 16 B. NVIDIA returns no internal representations (no SASS) through
+* **Where the peaks are now** (bisected): terrain 80/32 with the film's own light walk; without film
+  lights at all 72/48; without the film 72/16. The film's scene mirror ray is disabled
+  (`TERRAIN_FILM_RT_MIRROR`). The ocean's seabed splat costs 16 B. The film surface (wave taps, slopes,
+  Jacobians, foam) and the terrain's wetness block are half math.
+* **Tried and dropped: the film's lights in the lit core's loop** (one loop, one shadow ray per light for
+  both lobes; code 184 -> 145 KB): 80/64. The film surface must then be resolved BEFORE that loop and its
+  values stay live across the shadow ray query; packing them did nothing (the driver folds it), and a
+  variant with the film surface after the loop (lobe on the unrippled base normal) measured 80/144 - the
+  scheduler's placement of the film's independent texture taps is not controllable from GLSL. Same
+  register count as the film's own loop, so no occupancy gain, and the spill cost lands on EVERY terrain
+  pixel while the saving is only on filmed ones. NVIDIA returns no internal representations (no SASS) through
   `VK_KHR_pipeline_executable_properties`, so bisecting is the only way to locate a peak.
 * **Tried and dropped:** a compact half LightInfo (the compiler loads light fields at use); a D16 shadow map
   (geometry-bound, D32 is compressed); the film's lights before its mirror (N / V then live across the
@@ -852,14 +869,17 @@ Both push params in every frame; the renderer owns none of the tweaks.
 * **`setOceanParams`** — flipping `hitLighting` (`OCEAN_HIT_LIGHTS`) or `rtReflections`
   (`OCEAN_RT_REFLECTIONS`, the scene mirror ray; "Ocean/RT/Reflections") or `debugMode`
   (`OCEAN_DEBUG_MODE`, "Ocean/Debug mode"; the mode legend is at the top of `ocean.fs.glsl`) rebuilds the ocean fragment
-  variant (GPU idle + shader reload). `OCEAN_RT_REFLECTIONS` also goes onto the TERRAIN fragment
-  variant: the surface-water film (`terrainWaterFilm`) traces the same mirror ray under the same gates
-  (`terrainFilmMirror`; a hit takes its material's diffuse texture, no splat at the hit; TERRAIN hits
-  fade out with the local ground slope - a level mirror on a slope would mirror the hill it lies on).
-  **The film's base normal is the LEVEL water plane, not the ground normal** (sun, sky, lights and the
-  mirror ray match the ocean on sloped ground); it eases to the ground normal as the view flattens onto
-  the plane (`V.y` 0.35 -> 0.05), because a hard switch drew a line at eye height. The film runs the
-  ocean's grid-light walk (specular only) and the ground's wet gloss is off under it. **Inland**
+  variant (GPU idle + shader reload). **The surface-water film (`terrainWaterFilm`) reflects the SKY
+  only** (the baked mirror sky, fogged). Its scene mirror ray (`terrainFilmMirror`, the ocean's ray under
+  the ocean's gates) is DISABLED behind `TERRAIN_FILM_RT_MIRROR` (a `constexpr false` in
+  StaticMeshGraphicsPipeline): a ray query sets the terrain's register allocation for every pixel, filmed
+  or not, and Nsight showed the Static meshes pixel warps launch-stalled on register allocation 72% of the
+  range. **The film's base normal is the LEVEL water plane, not the ground normal** (sun, sky and lights
+  match the ocean on sloped ground); it eases to the ground normal as the view flattens onto
+  the plane (`V.y` 0.35 -> 0.05), because a hard switch drew a line at eye height. The film runs after
+  `computeLitColor` in two stages (`terrainFilmSurface`, `terrainFilmShade`) with its OWN grid-light walk
+  (specular only, full light shapes); the ground's wet gloss is off under it. (Merging the film's lights
+  into the lit core's loop - one shadow ray per light for both - was tried and dropped, see Half floats.) **Inland**
   (above the swash run-up, where the FFT depth weight is 0) the film takes wind ripples: the finest
   cascade keeps a slope weight of its own there ("Terrain/Wetness/Wind ripple strength",
   `u_terrainWetParams7.z`) - the film loop's existing taps, no extra fetch. The film also carries the
@@ -868,7 +888,7 @@ Both push params in every frame; the renderer owns none of the tweaks.
   ("Surface water normal scale", `u_terrainWetParams7.w`, x the ocean's normal strength); no foam inland, and the amplitude follows the ocean wind through the spectrum.
   **Every scene ray is gated on its VISIBLE weight (2%)**, resolved before it is traced: the ocean's
   refraction on `(1 - F)(1 - milk)(1 - foam)`, its mirror on `F (1 - reflBlur)(1 - foam)`, the film's
-  mirror on the same x its coverage, the film's shadowed light walk on coverage x `(1 - foam)`, the
+  shadowed light walk on coverage x `(1 - foam)`, the
   underside's mirror (+ its sun shadow ray) on `1 - window transmission`, and an underside pixel the
   water path has absorbed to 0.1% traces nothing.
   **The UNDERSIDE traces the scene above the water** through Snell's window (the refracted ray into the

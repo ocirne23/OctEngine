@@ -229,11 +229,14 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
                 || variant.fragmentShader.debugFilePath == terrainVariantPath)
                 variant.fragmentShader.defines.push_back({ name, modeText });
     };
-    // The terrain's surface-water film mirrors the scene with the ocean's ray, under the ocean's toggle.
-    if (m_oceanRtReflections)
+    // The terrain's surface-water film could mirror the scene with the ocean's ray, under the ocean's toggle.
+    // DISABLED: that ray query set the terrain's register allocation for every pixel (see terrainFilmMirror in
+    // instanced_indirect_terrain.fs.glsl); the film reflects the sky only.
+    constexpr bool TERRAIN_FILM_RT_MIRROR = false;
+    if (TERRAIN_FILM_RT_MIRROR && m_oceanRtReflections)
         for (PipelineVariant& variant : graphicsPipelineLayout.additionalVariants)
             if (variant.fragmentShader.debugFilePath == terrainVariantPath)
-                variant.fragmentShader.defines.push_back({ "OCEAN_RT_REFLECTIONS", "1" });
+                variant.fragmentShader.defines.push_back({ "TERRAIN_FILM_RT_MIRROR", "1" });
     defineLitDebug("SHADOW_DEBUG", m_shadowDebugMode);
     defineLitDebug("LIGHT_GRID_DEBUG", m_lightGridDebugMode);
     // The RT shadow toggles, always defined (0/1) on the lit-core fragments: only the active sun-shadow

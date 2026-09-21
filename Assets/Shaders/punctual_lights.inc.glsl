@@ -426,12 +426,8 @@ float tubeLightVisibility(LightInfo light, vec3 pos, vec3 N)
 	const vec2 u = shadowJitter() * 2.0 - 1.0;
 	return traceLightVisibility(pos, N, light.pos + axis * (u.x * halfLen) + side * (u.y * radius));
 }
-vec3 doLightShadowed(LightInfo light, vec3 pos, f16vec3 V, f16vec3 Nh, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float16_t roughness)
-{
-	vec3 lit = doLight(light, pos, V, Nh, specularCol, matColOverPi, metalness, roughness);
-	const vec3 N = vec3(Nh); // the shadow rays' origin offset
-	// The lit fragments bake the toggle (LIT_RT_LIGHT_SHADOWS 0/1): off compiles the ray queries out. The
-	// ocean has no define and reads the uniform.
+// The lit fragments bake the toggle (LIT_RT_LIGHT_SHADOWS 0/1): off compiles the ray queries out. The
+// ocean has no define and reads the uniform.
 #ifdef LIT_RT_LIGHT_SHADOWS
 #define PL_RT_LIGHTS_COMPILED LIT_RT_LIGHT_SHADOWS
 #define PL_RT_LIGHTS_ON true
@@ -439,13 +435,21 @@ vec3 doLightShadowed(LightInfo light, vec3 pos, f16vec3 V, f16vec3 Nh, f16vec3 s
 #define PL_RT_LIGHTS_COMPILED 1
 #define PL_RT_LIGHTS_ON (u_rtLightShadows > 0.5)
 #endif
+// One light's ray-traced shadow visibility at pos (N = the ray origin's offset): one ray, jittered over an
+// area / tube emitter. The caller gates it on PL_RT_LIGHTS_COMPILED / PL_RT_LIGHTS_ON and on a non-black
+// analytic term.
+float lightShadowVisibility(LightInfo light, vec3 pos, vec3 N)
+{
+	if (light.width > 0.0)
+		return light.range < 0.0 ? tubeLightVisibility(light, pos, N) : areaLightVisibility(light, pos, N);
+	return traceLightVisibility(pos, N, light.pos); // point/spot: genuinely punctual, one center ray
+}
+vec3 doLightShadowed(LightInfo light, vec3 pos, f16vec3 V, f16vec3 Nh, f16vec3 specularCol, f16vec3 matColOverPi, float metalness, float16_t roughness)
+{
+	vec3 lit = doLight(light, pos, V, Nh, specularCol, matColOverPi, metalness, roughness);
 #if PL_RT_LIGHTS_COMPILED
 	if (PL_RT_LIGHTS_ON && dot(lit, lit) > 1e-7) // toggle off, or black analytic term: skip the trace
-	{
-		if (light.width > 0.0)
-			return lit * (light.range < 0.0 ? tubeLightVisibility(light, pos, N) : areaLightVisibility(light, pos, N));
-		return lit * traceLightVisibility(pos, N, light.pos); // point/spot: genuinely punctual, one center ray
-	}
+		lit *= lightShadowVisibility(light, pos, vec3(Nh));
 #endif
 	return lit;
 }

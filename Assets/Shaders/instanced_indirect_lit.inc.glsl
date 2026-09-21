@@ -279,6 +279,9 @@ vec4 sampleAOBilateral(vec2 fullUv, vec3 pos, float viewDist)
 // The surface arrives HALF (N, colour, roughness = GGX alpha >= 0.01, metalness, AO): the direct-light BRDF
 // is half math end to end (punctual_lights.inc.glsl, the fp16 BRDF), and so is the ambient/indirect term.
 // Only V converts here; no 32-bit copy of the surface exists to stay live across the sun's shadow search.
+// (A second, specular-only lobe riding this light loop - the terrain's water film, one shadow ray per light
+// for both - was tried and dropped: the film's surface then had to be resolved before the loop and its
+// values stayed live across the shadow ray query, 80/64 regs/local against 80/32 with the film's own loop.)
 vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, float16_t roughnessH, float16_t metalness, float16_t texAO)
 {
 	const f16vec3 V = f16vec3(Vf);
@@ -343,7 +346,7 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 #if LIGHT_GRID_DEBUG == 2
 			debugHit = true;
 #endif
-			// ONE loop over the grid's large lights, then the cell's lights: doLightShadowed inlines every
+			// ONE loop over the grid's large lights, then the cell's lights: the loop body inlines every
 			// light type plus the shadow ray queries, and two loops carried two copies of all of it.
 			const uint numLargeLights = min(getLargeLightCount(gridIdx), MAX_LARGE_LIGHTS_PER_GRID);
 			const uint cellOffset     = calcCellOffset(gridIdx, gridMin, worldPos);
@@ -352,7 +355,16 @@ vec3 computeLitColor(vec3 worldPos, vec3 Vf, f16vec3 N, f16vec3 materialColor, f
 			{
 				const uint lightId    = i < numLargeLights ? getLargeLightId(gridIdx, i) : getLightId(cellOffset, i - numLargeLights);
 				const LightInfo light = in_lightInfos[lightId];
-				colorH = min(colorH + f16vec3(min(doLightShadowed(light, worldPos, V, N, specularColor, diffuseColOverPi, 0.0, roughnessH), vec3(MEDIUMP_FLT_MAX))), f16vec3(MEDIUMP_FLT_MAX));
+				// The analytic term goes HALF before the shadow ray: only the half result (not its 32-bit value,
+				// not the light record) is live across the query, the loop's peak.
+				const vec3 lit = doLight(light, worldPos, V, N, specularColor, diffuseColOverPi, 0.0, roughnessH);
+				const f16vec3 litH = f16vec3(min(lit, vec3(MEDIUMP_FLT_MAX)));
+				float16_t visibility = float16_t(1.0);
+#if PL_RT_LIGHTS_COMPILED
+				if (PL_RT_LIGHTS_ON && dot(lit, lit) > 1e-7) // toggle off, or black analytic term: skip the trace
+					visibility = float16_t(lightShadowVisibility(light, worldPos, vec3(N)));
+#endif
+				colorH = min(colorH + litH * visibility, f16vec3(MEDIUMP_FLT_MAX));
 #if LIGHT_GRID_DEBUG == 3
 				if (distance(worldPos, light.pos) < abs(light.range))
 					debugRangeTint += vec3(0.0, 0.0, 0.08);

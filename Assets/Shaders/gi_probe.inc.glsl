@@ -602,7 +602,7 @@ f16vec3 giEvalSkySHH(f16vec3 n)
 f16vec3 giEvalSkySHH(f16vec3 n) { return f16vec3(giEvalSkySH(vec3(n))); }
 #endif
 // The probe-field indirect irradiance / pi at a half-shaded point, faded to the sky SH over the field's edge:
-// the whole block every half caller runs (computeLitColor, the ocean's hits, the film's mirror).
+// the whole block every half caller runs (computeLitColor, the ocean's hits).
 f16vec3 giIndirectOverPiH(vec3 worldPos, f16vec3 n)
 {
     // 32-bit to the end, converted once (measured: a half coverage / sky blend here cost the lit FS 16 B).
