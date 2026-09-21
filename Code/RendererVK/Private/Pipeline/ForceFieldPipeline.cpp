@@ -124,6 +124,7 @@ void ForceFieldPipeline::createIntervalRenderPass()
     auto result = Globals::device.getDevice().createRenderPass2(info);
     if (result.result != vk::Result::eSuccess) { assert(false && "force interval renderpass"); return; }
     m_intervalRenderPass = result.value;
+    Globals::device.setDebugName(m_intervalRenderPass, "Force.interval");
 }
 
 // The half-res march target's pass: RGBA16F premultiplied output, cleared to 0 (uncovered pixels
@@ -164,6 +165,7 @@ void ForceFieldPipeline::createMarchRenderPass()
     auto result = Globals::device.getDevice().createRenderPass2(info);
     if (result.result != vk::Result::eSuccess) { assert(false && "force march renderpass"); return; }
     m_marchRenderPass = result.value;
+    Globals::device.setDebugName(m_marchRenderPass, "Force.unionMarch");
 }
 
 void ForceFieldPipeline::destroyIntervalTarget()
@@ -231,6 +233,7 @@ void ForceFieldPipeline::resizeIntervalTarget(uint32 width, uint32 height)
     auto viewResult = vkDevice.createImageView(viewInfo);
     if (viewResult.result != vk::Result::eSuccess) { assert(false && "force interval view"); return; }
     m_intervalView = viewResult.value;
+    Globals::device.setDebugName(m_intervalView, "ForceShellInterval");
     const vk::FramebufferCreateInfo fbInfo{
         .renderPass = m_intervalRenderPass,
         .attachmentCount = 1,
@@ -242,6 +245,7 @@ void ForceFieldPipeline::resizeIntervalTarget(uint32 width, uint32 height)
     auto fbResult = vkDevice.createFramebuffer(fbInfo);
     if (fbResult.result != vk::Result::eSuccess) { assert(false && "force interval framebuffer"); return; }
     m_intervalFramebuffer = fbResult.value;
+    Globals::device.setDebugName(m_intervalFramebuffer, "ForceShellInterval");
     if (!m_intervalSampler)
     {
         const vk::SamplerCreateInfo samplerInfo{
@@ -255,6 +259,7 @@ void ForceFieldPipeline::resizeIntervalTarget(uint32 width, uint32 height)
         auto samplerResult = vkDevice.createSampler(samplerInfo);
         if (samplerResult.result != vk::Result::eSuccess) { assert(false && "force interval sampler"); return; }
         m_intervalSampler = samplerResult.value;
+        Globals::device.setDebugName(m_intervalSampler, "ForceShellInterval");
     }
 
     if (!m_unionHalfRes)
@@ -287,6 +292,7 @@ void ForceFieldPipeline::resizeIntervalTarget(uint32 width, uint32 height)
     auto marchViewResult = vkDevice.createImageView(marchViewInfo);
     if (marchViewResult.result != vk::Result::eSuccess) { assert(false && "force march view"); return; }
     m_marchView = marchViewResult.value;
+    Globals::device.setDebugName(m_marchView, "ForceUnionMarch");
     const vk::FramebufferCreateInfo marchFbInfo{
         .renderPass = m_marchRenderPass,
         .attachmentCount = 1,
@@ -298,6 +304,7 @@ void ForceFieldPipeline::resizeIntervalTarget(uint32 width, uint32 height)
     auto marchFbResult = vkDevice.createFramebuffer(marchFbInfo);
     if (marchFbResult.result != vk::Result::eSuccess) { assert(false && "force march framebuffer"); return; }
     m_marchFramebuffer = marchFbResult.value;
+    Globals::device.setDebugName(m_marchFramebuffer, "ForceUnionMarch");
 }
 
 // The sampled shell tier's two field volumes (phi[0..3]/phi[4..7], RGBA16F) + the sampler the
@@ -344,6 +351,7 @@ void ForceFieldPipeline::createShellVolume()
         auto viewResult = vkDevice.createImageView(viewInfo);
         if (viewResult.result != vk::Result::eSuccess) { assert(false && "force shell volume view"); return; }
         m_shellVolumeView[i] = viewResult.value;
+        Globals::device.setDebugName(m_shellVolumeView[i], i == 0 ? "ForceShellVolumeA" : "ForceShellVolumeB");
     }
     const vk::SamplerCreateInfo samplerInfo{
         .magFilter = vk::Filter::eLinear,
@@ -359,12 +367,13 @@ void ForceFieldPipeline::createShellVolume()
     auto samplerResult = vkDevice.createSampler(samplerInfo);
     if (samplerResult.result != vk::Result::eSuccess) { assert(false && "force shell volume sampler"); return; }
     m_shellVolumeSampler = samplerResult.value;
+    Globals::device.setDebugName(m_shellVolumeSampler, "ForceShellVolume");
 
     // One-time GENERAL transition + zero-clear (the images stay GENERAL for life: compute writes
     // and fragment samples both use it, so the per-frame reuse needs no layout traffic) - a
     // never-yet-baked read decodes as zero field.
     CommandBuffer init;
-    init.initialize(vk::CommandBufferLevel::ePrimary);
+    init.initialize(vk::CommandBufferLevel::ePrimary, "ForceShellVolume.init");
     vk::CommandBuffer cmd = init.begin(true);
     for (int i = 0; i < numVolumes; ++i)
     {
@@ -691,14 +700,14 @@ void ForceFieldPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 viewC
         memset(m_mappedQueryReadback[i].data(), 0, m_mappedQueryReadback[i].size_bytes());
 
         for (uint32 eye = 0; eye < m_viewCount; ++eye)
-            m_drawSets[drawSlot(i, eye)].initialize(m_pipeline.getDescriptorSetLayout());
-        m_emitterForceSets[i].initialize(m_emitterForcePipeline.getDescriptorSetLayout());
-        m_querySets[i].initialize(m_queryPipeline.getDescriptorSetLayout());
-        m_bakeSets[i].initialize(m_bakePipeline.getDescriptorSetLayout());
-        m_shellBakeSets[i].initialize(m_shellBakePipeline.getDescriptorSetLayout());
-        m_intervalSets[i].initialize(m_intervalPipeline.getDescriptorSetLayout());
-        m_unionSets[i].initialize(m_unionPipeline.getDescriptorSetLayout());
-        m_upsampleSets[i].initialize(m_upsamplePipeline.getDescriptorSetLayout());
+            m_drawSets[drawSlot(i, eye)].initialize(m_pipeline.getDescriptorSetLayout(), "Force.shell");
+        m_emitterForceSets[i].initialize(m_emitterForcePipeline.getDescriptorSetLayout(), "Force.emitterForce");
+        m_querySets[i].initialize(m_queryPipeline.getDescriptorSetLayout(), "Force.query");
+        m_bakeSets[i].initialize(m_bakePipeline.getDescriptorSetLayout(), "Force.bake");
+        m_shellBakeSets[i].initialize(m_shellBakePipeline.getDescriptorSetLayout(), "Force.shellBake");
+        m_intervalSets[i].initialize(m_intervalPipeline.getDescriptorSetLayout(), "Force.interval");
+        m_unionSets[i].initialize(m_unionPipeline.getDescriptorSetLayout(), "Force.union");
+        m_upsampleSets[i].initialize(m_upsamplePipeline.getDescriptorSetLayout(), "Force.upsample");
     }
     createBakeReadbackBuffers();
 }

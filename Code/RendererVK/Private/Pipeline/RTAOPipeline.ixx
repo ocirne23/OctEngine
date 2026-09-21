@@ -80,7 +80,7 @@ private:
     void buildTraceLayout(ComputePipelineLayout& layout, uint32 maxTextures);
     void buildTemporalLayout(ComputePipelineLayout& layout);
     void buildSpatialLayout(ComputePipelineLayout& layout);
-    void createImageSet(ImageSet& set);
+    void createImageSet(ImageSet& set, const char* debugName);
     void destroyImageSet(ImageSet& set);
     void transitionToGeneral(vk::CommandBuffer cmd, ImageSet& set, uint32 slotIdx, bool forWrite);
 

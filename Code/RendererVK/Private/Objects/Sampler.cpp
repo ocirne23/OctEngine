@@ -39,6 +39,10 @@ bool Sampler::initialize(vk::SamplerAddressMode addressMode)
         return false;
     }
     m_sampler = createResult.value;
+    Globals::device.setDebugName(m_sampler,
+        addressMode == vk::SamplerAddressMode::eRepeat ? "Sampler.repeat" :
+        addressMode == vk::SamplerAddressMode::eClampToEdge ? "Sampler.clamp" :
+        addressMode == vk::SamplerAddressMode::eMirroredRepeat ? "Sampler.mirror" : "Sampler.border");
 
     return true;
 }

@@ -16,7 +16,7 @@ public:
     ~ShadowMap();
     ShadowMap(const ShadowMap&) = delete;
 
-    bool initialize(uint32 resolution = RendererVKLayout::SHADOW_MAP_RESOLUTION, uint32 numCascades = RendererVKLayout::NUM_SHADOW_CASCADES);
+    bool initialize(const char* debugName, uint32 resolution = RendererVKLayout::SHADOW_MAP_RESOLUTION, uint32 numCascades = RendererVKLayout::NUM_SHADOW_CASCADES);
 
     vk::RenderPass getRenderPass() const { return m_renderPass; }
     vk::Framebuffer getFramebuffer() const { return m_framebuffer; } // single layered framebuffer (multiview)

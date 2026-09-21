@@ -173,12 +173,12 @@ void ParticlePipeline::initialize(vk::RenderPass sceneRenderPass, uint32 maxText
         m_mappedReadback[i] = m_readbackBuffers[i].mapMemory<uint32>();
         memset(m_mappedReadback[i].data(), 0, COUNTERS_SIZE);
 
-        m_beginSets[i].initialize(m_beginPipeline.getDescriptorSetLayout());
-        m_emitSets[i].initialize(m_emitPipeline.getDescriptorSetLayout());
-        m_emitGpuSets[i].initialize(m_emitGpuPipeline.getDescriptorSetLayout());
-        m_simSets[i].initialize(m_simPipeline.getDescriptorSetLayout());
+        m_beginSets[i].initialize(m_beginPipeline.getDescriptorSetLayout(), "Particles.begin");
+        m_emitSets[i].initialize(m_emitPipeline.getDescriptorSetLayout(), "Particles.emit");
+        m_emitGpuSets[i].initialize(m_emitGpuPipeline.getDescriptorSetLayout(), "Particles.emitGpu");
+        m_simSets[i].initialize(m_simPipeline.getDescriptorSetLayout(), "Particles.sim");
         for (uint32 eye = 0; eye < m_viewCount; ++eye)
-            m_drawSets[drawSlot(i, eye)].initialize(m_drawPipeline.getDescriptorSetLayout(), numTextureDescriptors);
+            m_drawSets[drawSlot(i, eye)].initialize(m_drawPipeline.getDescriptorSetLayout(), "Particles.draw", numTextureDescriptors);
     }
 }
 
@@ -202,7 +202,7 @@ void ParticlePipeline::resizeTextureDescriptors(uint32 numTextureDescriptors)
 {
     for (uint32 i = 0; i < NUM_FRAMES_IN_FLIGHT; ++i)
         for (uint32 eye = 0; eye < m_viewCount; ++eye)
-            m_drawSets[drawSlot(i, eye)].initialize(m_drawPipeline.getDescriptorSetLayout(), numTextureDescriptors);
+            m_drawSets[drawSlot(i, eye)].initialize(m_drawPipeline.getDescriptorSetLayout(), "Particles.draw", numTextureDescriptors);
 }
 
 void ParticlePipeline::updateTextureDescriptor(uint32 frameIdx, uint32 slotIdx, vk::ImageView view)

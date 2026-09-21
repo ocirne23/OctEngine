@@ -12,7 +12,7 @@ DescriptorSet::~DescriptorSet()
         m_descriptorSet = nullptr;
     }
 }
-bool DescriptorSet::initialize(vk::DescriptorSetLayout descriptorSetLayout, uint32 variableDescriptorCount)
+bool DescriptorSet::initialize(vk::DescriptorSetLayout descriptorSetLayout, const char* debugName, uint32 variableDescriptorCount)
 {
     vk::Device vkDevice = Globals::device.getDevice();
     if (m_descriptorSet) // re-initialize (e.g. the variable descriptor count grew): release the old set back to the pool
@@ -39,5 +39,6 @@ bool DescriptorSet::initialize(vk::DescriptorSetLayout descriptorSetLayout, uint
         return false;
     }
     m_descriptorSet = allocateResult.value[0];
+    Globals::device.setDebugName(m_descriptorSet, debugName);
     return true;
 }

@@ -8,7 +8,7 @@ import :Allocator;
 void VrEyeTargets::initialize(vk::DescriptorSetLayout compositeLayout)
 {
     for (DescriptorSet& set : m_compositeSet)
-        set.initialize(compositeLayout);
+        set.initialize(compositeLayout, "VR.composite");
 }
 
 void VrEyeTargets::create(vk::RenderPass swapchainRenderPass, vk::Extent2D extent, vk::Format colorFormat)
@@ -25,6 +25,7 @@ void VrEyeTargets::create(vk::RenderPass swapchainRenderPass, vk::Extent2D exten
     vk::ImageViewCreateInfo depthViewInfo{ .image = m_depthImage, .viewType = vk::ImageViewType::e2D, .format = vk::Format::eD32Sfloat,
         .subresourceRange = { vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1 } };
     m_depthView = vkDevice.createImageView(depthViewInfo).value;
+    Globals::device.setDebugName(m_depthView, "VR.eyeDepth");
 
     for (uint32 i = 0; i < 2; ++i)
     {
@@ -37,10 +38,12 @@ void VrEyeTargets::create(vk::RenderPass swapchainRenderPass, vk::Extent2D exten
         vk::ImageViewCreateInfo colorViewInfo{ .image = m_colorImage[i], .viewType = vk::ImageViewType::e2D, .format = colorFormat,
             .subresourceRange = { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 } };
         m_colorView[i] = vkDevice.createImageView(colorViewInfo).value;
+        Globals::device.setDebugName(m_colorView[i], i == 0 ? "VR.eyeColor L" : "VR.eyeColor R");
         oc::array<vk::ImageView, 2> atts{ m_colorView[i], m_depthView };
         vk::FramebufferCreateInfo fbInfo{ .renderPass = swapchainRenderPass, .attachmentCount = (uint32)atts.size(), .pAttachments = atts.data(),
             .width = extent.width, .height = extent.height, .layers = 1 };
         m_framebuffer[i] = vkDevice.createFramebuffer(fbInfo).value;
+        Globals::device.setDebugName(m_framebuffer[i], i == 0 ? "VR.eye L" : "VR.eye R");
     }
 }
 

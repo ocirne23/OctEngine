@@ -156,10 +156,6 @@ That is why these hold namespace-scope objects:
 * `g_bodyLifecycleMutex` (Physics/Body.ixx) — a `std::mutex` is constant-initialized, so static init
   is safe, but it sits at namespace scope for the same reason
 
-**Known and deliberately left:** the two `static PFN_vkSetDebugUtilsObjectNameEXT` in
-RendererVK/Objects/Allocator.cpp are worker-reachable through the streamers, but a racing reader sees
-the zero-initialized slot and just skips the debug name — **no torn value on an aligned pointer.**
-
 `Procedural`'s diffusion `.cpp` TUs override to `/fp:precise /wd5050` — **load-bearing; see
 `Code/Procedural/CMakeLists.txt`.**
 

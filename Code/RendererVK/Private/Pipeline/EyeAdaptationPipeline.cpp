@@ -39,8 +39,8 @@ void EyeAdaptationPipeline::initialize()
     { ComputePipelineLayout layout; buildReduceLayout(layout); m_reducePipeline.initialize(layout); }
     for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
     {
-        m_histogramSets[i].initialize(m_histogramPipeline.getDescriptorSetLayout());
-        m_reduceSets[i].initialize(m_reducePipeline.getDescriptorSetLayout());
+        m_histogramSets[i].initialize(m_histogramPipeline.getDescriptorSetLayout(), "EyeAdapt.histogram");
+        m_reduceSets[i].initialize(m_reducePipeline.getDescriptorSetLayout(), "EyeAdapt.reduce");
     }
 
     m_histogramBuffer.initialize(NUM_BINS * sizeof(uint32),
@@ -58,7 +58,7 @@ void EyeAdaptationPipeline::initialize()
 
     // Zero the persistent adaptation state (avgLum = 0 -> the reduce shader snaps on the first frame).
     CommandBuffer init;
-    init.initialize(vk::CommandBufferLevel::ePrimary);
+    init.initialize(vk::CommandBufferLevel::ePrimary, "EyeAdapt.init");
     vk::CommandBuffer cmd = init.begin(true);
     cmd.fillBuffer(m_adaptBuffer.getBuffer(), 0, vk::WholeSize, 0u);
     init.end();

@@ -12,7 +12,7 @@ public:
     ~IndirectExecutionSet();
     IndirectExecutionSet(const IndirectExecutionSet&) = delete;
 
-    bool initialize(const GraphicsPipeline& pipeline);
+    bool initialize(const GraphicsPipeline& pipeline, const char* debugName);
     void destroy();
 
     vk::IndirectExecutionSetEXT getHandle() const { return m_indirectExecutionSet; }

@@ -235,7 +235,7 @@ bool TextureStreamer::swapResidency(uint16 texIdx, StreamState& state, uint8 tar
     };
     vk::Image image;
     VmaAllocation memory = nullptr;
-    if (!Globals::gpuAllocator.createImage(imageCreateInfo, image, memory, "TextureStreamed"))
+    if (!Globals::gpuAllocator.createImage(imageCreateInfo, image, memory, state.meta.filePath.c_str()))
         return false;
     const vk::ImageViewCreateInfo viewInfo{
         .image = image,
@@ -250,6 +250,7 @@ bool TextureStreamer::swapResidency(uint16 texIdx, StreamState& state, uint8 tar
         Globals::gpuAllocator.destroyImage(image, memory);
         return false;
     }
+    Globals::device.setDebugName(viewResult.value, state.meta.filePath.c_str());
 
     uint64 bufferOffset = 0;
     for (uint32 i = targetTop; i < dataMipEnd; i++)

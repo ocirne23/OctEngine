@@ -40,9 +40,9 @@ void GIProbePipeline::initialize(uint32 maxTlasInstances, uint32 maxTextures, ui
 
     for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
     {
-        m_tlasInstanceSets[i].initialize(m_tlasInstancePipeline.getDescriptorSetLayout());
-        m_skyMapSets[i].initialize(m_skyMapPipeline.getDescriptorSetLayout());
-        m_traceSets[i].initialize(m_tracePipeline.getDescriptorSetLayout(), numTextureDescriptors);
+        m_tlasInstanceSets[i].initialize(m_tlasInstancePipeline.getDescriptorSetLayout(), "GI.tlasInstances");
+        m_skyMapSets[i].initialize(m_skyMapPipeline.getDescriptorSetLayout(), "GI.skyMap");
+        m_traceSets[i].initialize(m_tracePipeline.getDescriptorSetLayout(), "GI.trace", numTextureDescriptors);
     }
     fillTextureDescriptors();
 
@@ -81,7 +81,7 @@ void GIProbePipeline::registerDebugTweaks(const oc::function<void()>& onReRecord
 void GIProbePipeline::resizeGrid()
 {
     m_giGridData.initialize(RendererVKLayout::g_giGrid.gridDataBufferSize(),
-        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal);
+        vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal, false, "GI.probes");
     doClear(); // fresh storage: the next GI frame zeroes it before the first trace
 }
 
@@ -90,7 +90,7 @@ void GIProbePipeline::resizeTlasInstanceBuffers(uint32 maxTlasInstances)
     for (Buffer& instBuf : m_tlasInstanceBuffer)
         instBuf.initialize((vk::DeviceSize)maxTlasInstances * RendererVKLayout::GI_TLAS_INSTANCE_SIZE,
             vk::BufferUsageFlagBits2::eShaderDeviceAddress | vk::BufferUsageFlagBits2::eAccelerationStructureBuildInputReadOnlyKHR | vk::BufferUsageFlagBits2::eStorageBuffer,
-            vk::MemoryPropertyFlagBits::eDeviceLocal);
+            vk::MemoryPropertyFlagBits::eDeviceLocal, false, "GI.tlasInstances");
 }
 
 void GIProbePipeline::resizeTextureDescriptors(uint32 numTextureDescriptors)
@@ -98,7 +98,7 @@ void GIProbePipeline::resizeTextureDescriptors(uint32 numTextureDescriptors)
     // Variable-count texture binding: only the trace descriptor sets need re-allocating with the grown
     // count; the layout and pipeline declare the fixed device-limit cap and stay untouched.
     for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
-        m_traceSets[i].initialize(m_tracePipeline.getDescriptorSetLayout(), numTextureDescriptors);
+        m_traceSets[i].initialize(m_tracePipeline.getDescriptorSetLayout(), "GI.trace", numTextureDescriptors);
     fillTextureDescriptors(); // fresh sets: the pending-write path only carries slots swapped from now on
 }
 
@@ -191,10 +191,11 @@ void GIProbePipeline::createSkyMap()
     auto viewResult = dev.createImageView(viewInfo);
     assert(viewResult.result == vk::Result::eSuccess);
     m_skyMapView = viewResult.value;
+    Globals::device.setDebugName(m_skyMapView, "GI.skyMap");
 
     // One-time UNDEFINED -> GENERAL; the image stays GENERAL for life (storage write + sampled read).
     CommandBuffer init;
-    init.initialize(vk::CommandBufferLevel::ePrimary);
+    init.initialize(vk::CommandBufferLevel::ePrimary, "GI.skyMap.init");
     vk::CommandBuffer cmd = init.begin(true);
     vk::ImageMemoryBarrier2 bar{
         .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
@@ -227,6 +228,7 @@ void GIProbePipeline::createSkyMap()
     auto samplerResult = dev.createSampler(samplerInfo);
     assert(samplerResult.result == vk::Result::eSuccess);
     m_skyMapSampler = samplerResult.value;
+    Globals::device.setDebugName(m_skyMapSampler, "GI.skyMap");
 }
 
 void GIProbePipeline::recordSkyMap(CommandBuffer& commandBuffer, uint32 frameIdx, Buffer& ubo)
@@ -440,7 +442,7 @@ void GIProbePipeline::initializeDebug(vk::RenderPass renderPass)
     GraphicsPipelineLayout layout; buildDebugLayout(layout);
     m_debugPipeline.initialize(renderPass, layout);
     for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
-        m_debugSets[i].initialize(m_debugPipeline.getDescriptorSetLayout());
+        m_debugSets[i].initialize(m_debugPipeline.getDescriptorSetLayout(), "GI.probeDebug");
 }
 
 void GIProbePipeline::reloadDebugShaders(vk::RenderPass renderPass)

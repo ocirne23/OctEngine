@@ -360,7 +360,10 @@ top-down camera hanging in empty sky shapes none of these:
   as a box of `DIM/2 - 2` cells (the old band was tied to the snapped window and jumped a whole cell
   along the seam on every scroll; the snapped window always holds that box, so fade > 0 implies the
   stencil fits), smoothstepped. Past the box a finer cascade is NOT sampled. The two cascades blend
-  as SH COEFFICIENTS (`giSampleCascade` returns them) and are evaluated once. The outermost
+  as UNCLAMPED irradiance (`giSampleCascade` returns `giEvalSHLinear` against `giIrradianceBasis(n)`)
+  and are clamped once — identical to blending the SH coefficients, because everything before the
+  `max(0)` is linear in them, but 3 live floats per cascade instead of 12 (it was the forward shader's
+  register peak). The outermost
   cascade's coverage fade (shading and `giEvalBounce`) uses the same function with a 0.2 band.
   **Not a skip:** the probes stay warm for the all-dead fall-through and for the moment the finer
   window scrolls off them. The test reads `GI_CASCADE_FADE_BAND` (0.05 of the narrowest dim, shared
@@ -640,6 +643,35 @@ the TLAS instance `sbtOffset` for hit-shader fetches, and materials stay per-ins
 | `RendererRecord.cpp` | Command-buffer recording: one `record*()` per pass, plus the two primaries (desktop / VR). **`buildSceneStages()` is THE scene stage table** — name, gate, cached secondary and per-eye inline recorder for every stage inside the scene-colour pass. `recordSceneSecondaries`, `recordPrimaryDesktop` and `recordPrimaryVR` all drive off it, so a stage is added, re-ordered or re-gated in ONE place; a null `recordInline` means desktop only (the debug overlays). |
 | `OpenXRSession.ixx` | VR (`Globals::openXR`, implements `IVrSession`). |
 
+## Debug names and labels (Nsight / RenderDoc)
+
+`VK_EXT_debug_utils` is enabled in EVERY build when the loader offers it (`Instance::isDebugUtilsEnabled`),
+not only with validation — the validation messenger stays validation-only.
+
+* **`Globals::device.setDebugName(handle, name)`** names any Vulkan-Hpp handle (the object type comes from
+  `T::objectType`). Name an object where it is created (the call needs external sync on the object); the
+  string is copied, so an `oc::format` temporary is fine. A no-op without the extension.
+* **KEEP NAMES SHORT.** `setDebugName` caps a name at 63 characters and keeps the TAIL (a path keeps its
+  file name). Put no defines or other decoration into a name.
+* **Named automatically:** shader modules (the file path), pipelines + their layouts / set layouts /
+  caches (`Shader::debugName`: the file name only; a graphics pipeline takes its FRAGMENT shader, or the
+  vertex shader when it has none, extra variants add `#i`), every `Allocator` image and buffer that passes
+  a name, textures (their file path). Variants of one file with different defines share a name.
+* **Named by the caller — the parameter is REQUIRED so the compiler finds every site:**
+  `CommandBuffer::initialize(level, name)`, `DescriptorSet::initialize(layout, name, count)`,
+  `ShadowMap::initialize(name, ...)`, `IndirectCommandsLayout::initialize(name, ...)`,
+  `IndirectExecutionSet::initialize(pipeline, name)`. Views, samplers, framebuffers, render passes,
+  fences and semaphores are named inline after their `create*`. **A new object gets a name the same way.**
+* **Command labels = the `GpuProfiler` scopes.** `beginScope` / `endScope` also emit
+  `vkCmdBegin/EndDebugUtilsLabelEXT` (`Device::beginDebugLabel`), BEFORE their early-outs, so the pair
+  holds even when timestamps are off. A new profiled pass is therefore a Nsight marker range for free.
+* **Nsight 2026.3.1 GPU Trace: turn OFF "multi-pass metrics"** in the capture settings. With it on,
+  opening a capture that holds these labels crashes Nsight (heap corruption in its "Per Shader Warp
+  Occupancy" code) for every labelled range that does not start at the beginning of the primary. The
+  label structure is valid; the object names and the shader debug info were each ruled out as the
+  trigger.
+* Not named: the OpenXR session's own command pool and clear buffer (raw C API, no `:Device` import).
+
 ## The graphics-queue mutex
 
 **`StagingManager` is THREAD-SAFE** — one internal mutex over the ring and region lists, `upload*`
@@ -810,11 +842,19 @@ GLSL in `Assets/Shaders/`, **compiled at runtime with glslang — shader edits n
 calls `reloadShaders()`.
 
 * `*.inc.glsl` are includes.
+* **Compile in ONE `parse()` with the includer** (`Shader::GLSLtoSPV`), never `preprocess()` + a
+  re-parse of its output. The SPIR-V carries full NonSemantic debug info (the `-gVS` equivalent), and
+  one pass embeds the original text of the file and of every include at their true lines. The old
+  re-parse embedded the flattened text, and its `#line N 0` include epilogues kept the last include's
+  file name, so every function after an `#include` (`main` too) pointed into that include — Nsight
+  reports that as "incorrect function definition locations ... glslangValidator 15.0.0".
+  `Local/Shaders/*.spv` is the dump of each compile (`spirv-dis` it to check the debug info).
 * **Per-pixel work hoisted to the UBO / per pixel:** `u_sunTransmittance` is the CPU mirror of
   `atmosTransmittanceToLight(0, sun, up)` (`buildUboSky`; keep the constants in sync with
   atmosphere.inc.glsl) — the lit sun term never runs the Chapman function per pixel; `u_sunDirection` is
   normalized on the CPU, so shaders use it raw; the PCSS Vogel disk rotates its compile-time tap angles
-  by ONE per-pixel `(cos, sin)` (`rotSC`) instead of a sincos per tap; `u_cascadeSunSizeTexels` holds
+  by ONE per-pixel `(cos, sin)` (`rotSC`) instead of a sincos per tap (keep the tap loops fully
+  unrolled: 4-tap batches with a run-time-indexed offset table measured 93 registers against 83); `u_cascadeSunSizeTexels` holds
   the per-cascade PCSS penumbra scale (`buildUboSunShadow`, from the matrices' bottom-row scalars);
   divide-by-PI is `* INV_PI`; the AO bilateral weights use `exp2` of the squared distance.
 * **The GI probe buffer is `vec4[]`** (every includer declares it so; layout table at the top of
@@ -823,6 +863,23 @@ calls `reloadShaders()`.
   exponent is the fixed `GI_VIS_CHEB_POWER` define (2, gi_probe.inc.glsl; no tweak), unrolled to
   multiplies.
 * **`shared.inc.glsl` / `ubo.inc.glsl` structs must stay in sync with `Private/Layout.ixx`.**
+* **Only `EPipelineIndex::LitMasked` discards** (the lit fragment compiled with `ALPHA_MASK`). A
+  `discard` anywhere in a pipeline's shader costs it early depth WRITES, and with no prepass that is
+  every opaque pixel's overdraw. `ObjectContainer` sends a Mask material that resolved to `LitOpaque`
+  (after the `.oc` overrides) to `LitMasked`. Keep `discard` out of `LitOpaque`.
+* **The RT shadow toggles are BAKED into the lit-core fragments** (lit, masked, transparent, terrain):
+  `LIT_RT_SUN_SHADOW` / `LIT_RT_LIGHT_SHADOWS`, always defined 0/1 from `RTParams::effectiveSunShadow()`
+  / `effectiveLightShadows()` (master AND toggle — the same expression as the UBO flags). The lit
+  core `#error`s without them. Why: register allocation covers every compiled path, so the PCSS
+  search and the RT sun loop in one shader cost the occupancy of the larger one. "RT/Enable RT",
+  "RT Sun" and "RT Lights" reload the pipeline; the setter runs BEFORE the idle test, because a Saved
+  value fires at registration and `initialize()` must build with it. The ocean, fog and GI still read
+  the uniforms. `computeLitColor` evaluates the sun FIRST, so no AO/GI value is live across the shadow
+  search.
+* **The default static-mesh VS packs its interpolants into 4 locations** (was 6): `posU` (xyz + uv.x),
+  `normalV` (xyz + uv.y), `tangent` (xyz + bitangent sign), flat `meshIdxMaterialIdx` at 3. The
+  fragment shader rebuilds the bitangent. Every FS paired with that VS (lit, unlit, the gizmos, sky)
+  uses this layout; the terrain and ocean VS have their own.
 * **The light grid build is split CPU / GPU, and the CPU part is NOT on the main thread**
   (`LightGridComputePipeline`):
   * **Inline in `addLightInfo`, on the adding thread (`addLight`):** the light's per-type bounds

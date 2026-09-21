@@ -91,6 +91,7 @@ bool RenderPass::initialize(const SwapChain& swapChain)
         return false;
     }
     m_renderPass = createResult.value;
+    Globals::device.setDebugName(m_renderPass, "RenderPass.swapchain");
 
     return true;
 }

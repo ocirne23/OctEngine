@@ -1044,7 +1044,7 @@ void Renderer::recordPrimaryPreScene(uint32 frameIdx, vk::CommandBuffer primary)
         executeScoped(primary, "Terrain wetness", frameData.terrainWetnessCommandBuffer.getCommandBuffer());
     // RT sun shadows replace the cascades entirely (forward pass traces, GI uses per-probe sun rays),
     // so skip the shadow cull + cascade render.
-    if (!m_rtParams.rtSunShadow)
+    if (!m_rtParams.effectiveSunShadow())
     {
         executeScoped(primary, "Shadow cull", frameData.shadowCullCommandBuffer.getCommandBuffer());
         m_gpuProfiler.beginScope(primary, "Shadow draw");

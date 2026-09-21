@@ -44,6 +44,8 @@ float interleavedGradientNoise(vec2 p)
 // rotSC = (cos, sin) of the per-pixel rotation, computed ONCE in sampleSunShadow: the tap's own angle
 // i * GOLDEN_ANGLE is a compile-time constant once the fixed-count loops unroll, so the rotation is a
 // 2x2 multiply per tap instead of a sincos per tap (32 sincos per pixel before).
+// Keep the loops FULLY unrolled: batching them (a [[dont_unroll]] outer loop over 4-tap groups, the
+// offsets from a run-time-indexed table) was measured at 93 registers against 83.
 vec2 vogelDisk(int i, int count, vec2 rotSC)
 {
 	float r = sqrt((float(i) + 0.5) / float(count));

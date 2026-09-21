@@ -382,11 +382,24 @@ float tubeLightVisibility(LightInfo light, vec3 pos, vec3 N)
 vec3 doLightShadowed(LightInfo light, vec3 pos, vec3 V, vec3 N, vec3 specularCol, vec3 matColOverPi, float metalness, float roughness, float roughnessSq)
 {
 	vec3 lit = doLight(light, pos, V, N, specularCol, matColOverPi, metalness, roughness, roughnessSq);
-	if (u_rtLightShadows < 0.5 || dot(lit, lit) <= 1e-7) // toggle off, or black analytic term: skip the trace
-		return lit;
-	if (light.width > 0.0)
-		return lit * (light.range < 0.0 ? tubeLightVisibility(light, pos, N) : areaLightVisibility(light, pos, N));
-	return lit * traceLightVisibility(pos, N, light.pos); // point/spot: genuinely punctual, one center ray
+	// The lit fragments bake the toggle (LIT_RT_LIGHT_SHADOWS 0/1): off compiles the ray queries out. The
+	// ocean has no define and reads the uniform.
+#ifdef LIT_RT_LIGHT_SHADOWS
+#define PL_RT_LIGHTS_COMPILED LIT_RT_LIGHT_SHADOWS
+#define PL_RT_LIGHTS_ON true
+#else
+#define PL_RT_LIGHTS_COMPILED 1
+#define PL_RT_LIGHTS_ON (u_rtLightShadows > 0.5)
+#endif
+#if PL_RT_LIGHTS_COMPILED
+	if (PL_RT_LIGHTS_ON && dot(lit, lit) > 1e-7) // toggle off, or black analytic term: skip the trace
+	{
+		if (light.width > 0.0)
+			return lit * (light.range < 0.0 ? tubeLightVisibility(light, pos, N) : areaLightVisibility(light, pos, N));
+		return lit * traceLightVisibility(pos, N, light.pos); // point/spot: genuinely punctual, one center ray
+	}
+#endif
+	return lit;
 }
 
 #endif // PUNCTUAL_LIGHTS_INC_GLSL

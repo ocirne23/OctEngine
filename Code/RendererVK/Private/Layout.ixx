@@ -834,6 +834,7 @@ export namespace RendererVKLayout
         GizmoWorld     = 7, // tangent-debug color, depth tested, alpha-blended, no depth write (world-space gizmo occluded by geometry)
         TerrainLit     = 8, // lit opaque, procedural height/slope albedo (no textures) for procedural terrain chunks
         Ocean          = 9, // GPU-animated Gerstner-spectrum water: vertex displacement + analytic-normal water shading
+        LitMasked      = 10, // LitOpaque + the alpha-mask discard (ALPHA_MASK); ObjectContainer routes Mask materials here
     };
 
     // MaterialInfo::flags bits.

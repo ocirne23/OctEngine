@@ -20,12 +20,14 @@ public:
     bool supportsLayer(const char* pLayerName) const;
     bool supportsExtension(const char* pExtensionName) const;
     uint32 getApiVersion() const { return m_apiVersion; }
+    bool isDebugUtilsEnabled() const { return m_debugUtilsEnabled; }
 
 private:
 
     vk::Instance m_instance;
     uint32 m_apiVersion = 0;
     bool m_breakOnValidationLayerError = false;
+    bool m_debugUtilsEnabled = false;
     oc::vector<const char*> m_enabledLayers;
 
     oc::vector<vk::ExtensionProperties> m_supportedExtensions;

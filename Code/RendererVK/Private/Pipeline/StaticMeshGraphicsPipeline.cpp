@@ -165,6 +165,15 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
 		},
 		.cullMode = vk::CullModeFlagBits::eBack,
 	});
+	// Variant 10 (EPipelineIndex::LitMasked): the lit shader WITH the alpha-mask discard. Only this variant
+	// carries a discard, so the LitOpaque variant keeps early depth writes.
+	graphicsPipelineLayout.additionalVariants.push_back(PipelineVariant{
+		.fragmentShader = ShaderSource{
+			.text = graphicsPipelineLayout.fragmentShader.text,
+			.debugFilePath = graphicsPipelineLayout.fragmentShader.debugFilePath,
+			.defines = { { "ALPHA_MASK", "1" } },
+		},
+	});
 
 	// Global wireframe ("Renderer/Wireframe" tweak): rasterize every scene variant as lines. The sky and
 	// gizmo overlays stay solid so the view keeps a background and the editor gizmos stay usable.
@@ -226,6 +235,19 @@ void StaticMeshGraphicsPipeline::buildPipelineLayout(GraphicsPipelineLayout& gra
                 variant.fragmentShader.defines.push_back({ "OCEAN_RT_REFLECTIONS", "1" });
     defineLitDebug("SHADOW_DEBUG", m_shadowDebugMode);
     defineLitDebug("LIGHT_GRID_DEBUG", m_lightGridDebugMode);
+    // The RT shadow toggles, always defined (0/1) on the lit-core fragments: only the active sun-shadow
+    // path and (when off) no light ray query is compiled, so the register allocation covers less code.
+    const auto defineLit = [&](const char* name, bool on)
+    {
+        const ShaderDefine define{ name, on ? "1" : "0" };
+        graphicsPipelineLayout.fragmentShader.defines.push_back(define);
+        for (PipelineVariant& variant : graphicsPipelineLayout.additionalVariants)
+            if (variant.fragmentShader.debugFilePath == graphicsPipelineLayout.fragmentShader.debugFilePath
+                || variant.fragmentShader.debugFilePath == terrainVariantPath)
+                variant.fragmentShader.defines.push_back(define);
+    };
+    defineLit("LIT_RT_SUN_SHADOW", m_rtSunShadow);
+    defineLit("LIT_RT_LIGHT_SHADOWS", m_rtLightShadows);
 
     auto& bindingDescriptions = graphicsPipelineLayout.vertexLayoutInfo.bindingDescriptions;
     bindingDescriptions.push_back(vk::VertexInputBindingDescription{
@@ -479,8 +501,8 @@ void StaticMeshGraphicsPipeline::initialize(vk::RenderPass renderPass, uint32 ma
     buildPipelineLayout(graphicsPipelineLayout, maxTextures);
     m_graphicsPipeline.initialize(renderPass, graphicsPipelineLayout);
 
-    m_indirectExecutionSet.initialize(m_graphicsPipeline);
-    m_indirectCommandsLayout.initialize(m_graphicsPipeline.getPipelineLayout(),
+    m_indirectExecutionSet.initialize(m_graphicsPipeline, "StaticMesh.executionSet");
+    m_indirectCommandsLayout.initialize("StaticMesh.dgcLayout", m_graphicsPipeline.getPipelineLayout(),
         vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment);
 
     createPreprocessBuffers(maxUniqueMeshes);
@@ -510,10 +532,10 @@ void StaticMeshGraphicsPipeline::createPreprocessBuffers(uint32 maxUniqueMeshes)
         {
             m_preprocessBuffers[i].initialize(m_preprocessSize,
                 vk::BufferUsageFlagBits2::ePreprocessBufferEXT | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
-                vk::MemoryPropertyFlagBits::eDeviceLocal);
+                vk::MemoryPropertyFlagBits::eDeviceLocal, false, "StaticMesh.dgcPreprocess");
             m_transparentPreprocessBuffers[i].initialize(m_preprocessSize,
                 vk::BufferUsageFlagBits2::ePreprocessBufferEXT | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
-                vk::MemoryPropertyFlagBits::eDeviceLocal);
+                vk::MemoryPropertyFlagBits::eDeviceLocal, false, "StaticMesh.dgcPreprocessTransparent");
         }
     }
 }
@@ -535,7 +557,7 @@ void StaticMeshGraphicsPipeline::reloadShaders(vk::RenderPass renderPass, uint32
     }
 
     m_indirectExecutionSet.destroy();
-    m_indirectExecutionSet.initialize(m_graphicsPipeline);
+    m_indirectExecutionSet.initialize(m_graphicsPipeline, "StaticMesh.executionSet");
 }
 
 void StaticMeshGraphicsPipeline::record(CommandBuffer& commandBuffer, uint32 frameIdx, RecordParams& params, bool updateDescriptors)

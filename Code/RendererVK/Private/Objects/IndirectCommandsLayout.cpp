@@ -10,7 +10,7 @@ IndirectCommandsLayout::~IndirectCommandsLayout()
     destroy();
 }
 
-bool IndirectCommandsLayout::initialize(vk::PipelineLayout pipelineLayout, vk::ShaderStageFlags shaderStages, bool useExecutionSet)
+bool IndirectCommandsLayout::initialize(const char* debugName, vk::PipelineLayout pipelineLayout, vk::ShaderStageFlags shaderStages, bool useExecutionSet)
 {
     // Token 0 (optional): select the pipeline variant for this sequence from the Indirect Execution Set.
     vk::IndirectCommandsExecutionSetTokenEXT executionSetToken{
@@ -51,6 +51,7 @@ bool IndirectCommandsLayout::initialize(vk::PipelineLayout pipelineLayout, vk::S
         return false;
     }
     m_layout = createResult.value;
+    Globals::device.setDebugName(m_layout, debugName);
     return true;
 }
 

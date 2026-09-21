@@ -149,12 +149,17 @@ bool Instance::initialize(Window& window, bool enableValidationLayers)
         .pEnabledValidationFeatures = validationFeaturesList.data(),
 	};
 
+    // Debug utils in EVERY build, not only with validation: the object names and command labels are what
+    // Nsight / RenderDoc show (Device::setDebugName, beginDebugLabel). Without a tool attached the calls are
+    // near free.
+    m_debugUtilsEnabled = supportsExtension(vk::EXTDebugUtilsExtensionName);
+    if (m_debugUtilsEnabled)
+        extensions.push_back(vk::EXTDebugUtilsExtensionName);
+
     if (enableValidationLayers)
     {
         if (supportsLayer(VK_VALIDATION_LAYER_NAME))
             m_enabledLayers.push_back(VK_VALIDATION_LAYER_NAME);
-        if (supportsExtension(vk::EXTDebugUtilsExtensionName))
-            extensions.push_back(vk::EXTDebugUtilsExtensionName);
         //if (supportsExtension(vk::EXTDebugReportExtensionName))
         //    extensions.push_back(vk::EXTDebugReportExtensionName);
         createInfo.pNext = &validationFeatures;
@@ -173,7 +178,7 @@ bool Instance::initialize(Window& window, bool enableValidationLayers)
     }
     m_instance = createInstanceResult.value;
 
-    if (enableValidationLayers)
+    if (enableValidationLayers && m_debugUtilsEnabled)
     {
         VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo2 = debugCreateInfo;
         VkDebugUtilsMessengerEXT debugMessenger;

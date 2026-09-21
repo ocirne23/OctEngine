@@ -91,7 +91,7 @@ void MeshDataManager::growBuffer(Buffer& buffer, size_t& bufSize, size_t usedSiz
     if (usedSize > 0)
     {
         CommandBuffer copyCommandBuffer;
-        copyCommandBuffer.initialize(vk::CommandBufferLevel::ePrimary);
+        copyCommandBuffer.initialize(vk::CommandBufferLevel::ePrimary, "CB.meshBufferGrow");
         vk::CommandBuffer vkCmd = copyCommandBuffer.begin(true);
         const vk::BufferCopy region{ .srcOffset = 0, .dstOffset = 0, .size = usedSize };
         vkCmd.copyBuffer(oldBuffer.getBuffer(), buffer.getBuffer(), 1, &region);

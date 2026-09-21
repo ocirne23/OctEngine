@@ -30,10 +30,12 @@ layout (location = 2) in vec4 in_tangent;
 layout (location = 3) in vec2 in_uv;
 layout (location = 4) in uint inst_idx;
 
-layout (location = 0) out vec3 out_pos;
-layout (location = 1) out mat3 out_tbn;
-layout (location = 4) out vec2 out_uv;
-layout (location = 5) out flat uint out_meshIdxMaterialIdx;
+// Packed into 4 locations (was 6: a full mat3 TBN + a separate uv): fewer ISBE / TRAM slots per vertex.
+// The fragment shader rebuilds the bitangent from N, T and the sign.
+layout (location = 0) out vec4 out_posU;    // xyz = world position, w = uv.x
+layout (location = 1) out vec4 out_normalV; // xyz = normal, w = uv.y
+layout (location = 2) out vec4 out_tangent; // xyz = tangent, w = bitangent sign
+layout (location = 3) out flat uint out_meshIdxMaterialIdx;
 
 vec3 quat_transform(vec3 v, vec4 q)
 {
@@ -52,17 +54,14 @@ void main()
 
     out_meshIdxMaterialIdx = inst.meshIdxMaterialIdx;
 
-    vec3 N = quat_transform(in_normal, inst_quat);
-    vec3 T = quat_transform(in_tangent.xyz, inst_quat);
-    vec3 B = cross(N, T) * in_tangent.w;
-
-    out_pos = quat_transform(in_pos * inst_scale, inst_quat) + inst_pos;
-    out_tbn = mat3(T, B, N);
-    out_uv  = in_uv;
+    const vec3 pos = quat_transform(in_pos * inst_scale, inst_quat) + inst_pos;
+    out_posU    = vec4(pos, in_uv.x);
+    out_normalV = vec4(quat_transform(in_normal, inst_quat), in_uv.y);
+    out_tangent = vec4(quat_transform(in_tangent.xyz, inst_quat), in_tangent.w);
 
     // Per-eye projection in VR (g_viewIndex set above) / centre view on desktop, with the same TAA
     // sub-pixel jitter both eyes (per-eye TAA accumulates it just like desktop).
-    gl_Position = u_mvp * vec4(out_pos, 1.0);
+    gl_Position = u_mvp * vec4(pos, 1.0);
     gl_Position.xy += u_taaJitter.xy * gl_Position.w; // TAA sub-pixel jitter (clip space)
 #ifdef FORCE_NEAR_DEPTH
     // GizmoUI: stamp (nearly) the nearest depth - NDC z = 1 under REVERSED-Z, eGreater compare. Only z is

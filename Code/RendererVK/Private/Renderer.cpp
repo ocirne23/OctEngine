@@ -37,8 +37,7 @@ Renderer::~Renderer()
     {
         assert(false && "Failed to wait for device idle in RendererVK::~RendererVK");
     }
-    // The pending texture frees are NOT processed here: ~TextureManager (init_seg XCU4, destroyed before
-    // this XCU3 global) destroys every texture wholesale, pending ones included.
+    // The pending texture frees are NOT processed here: ~TextureManager (init_seg XCU4, destroyed before this XCU3 global) destroys every texture wholesale, pending ones included.
     Globals::textureStreamer.shutdown(); // stop the disk worker + retire swapped-out images while the device is idle
     Globals::meshStreamer.shutdown();
     m_vrEyes.destroy();
@@ -88,7 +87,17 @@ void Renderer::registerTweaks()
         setHaveToRecordCommandBuffers();
     });
     m_fogParams.registerTweaks();
-    m_rtParams.registerTweaks(rerecordCallback); // the master + GI toggles are baked into the cached GI secondary
+    // The master + GI toggles are baked into the cached GI secondary; the master, "RT Sun" and "RT Lights"
+    // also into the lit fragments (LIT_RT_*). The flags are handed over BEFORE the idle test: a Saved value
+    // fires at registration, before the device exists, and initialize() must then build with it.
+    m_rtParams.registerTweaks(rerecordCallback, [this]() {
+        m_staticMeshGraphicsPipeline.setRtShadows(m_rtParams.effectiveSunShadow(), m_rtParams.effectiveLightShadows());
+        if (!m_initialized || Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
+            return;
+        m_staticMeshGraphicsPipeline.reloadShaders(m_perFrameData[0].sceneColor.getRenderPass(), m_textures.getLayoutCap());
+        setHaveToRecordCommandBuffers();
+    });
+    m_staticMeshGraphicsPipeline.setRtShadows(m_rtParams.effectiveSunShadow(), m_rtParams.effectiveLightShadows());
     m_rtaoParams.registerTweaks(rerecordCallback, [this]() { if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess) return; m_rtaoPipeline.reloadShaders(); setHaveToRecordCommandBuffers(); });
     m_taaParams.registerTweaks(rerecordCallback);
     m_postParams.registerTweaks(rerecordCallback);
@@ -113,11 +122,7 @@ void Renderer::registerTweaks()
     m_particles.registerTweaks();
     m_oceanSimPipeline.registerSprayTweaks();
     m_decalPipeline.registerTweaks();
-    // Present mode is swapchain creation state (FIFO vs Immediate), so a change recreates the
-    // swapchain (device idle + re-init, same path as a lost acquire). A saved/override value fires
-    // onChange at registration, before the swapchain exists - the first creation below reads the
-    // variable directly, so the callback only acts once initialized. Main-thread: the panel's
-    // onChange runs in UI::flushMainThreadWork, between the frame-slot wait and present.
+
     Tweak::boolean("Time", "VSync", &m_vsyncEnabled, [this]() { if (m_initialized) recreateSwapchain(); }, ETweakFlags::Saved);
 }
 
@@ -180,8 +185,7 @@ void Renderer::initPipelines()
 
     initBindlessTextures(); // the layout cap the pipelines below bake in comes from here
 
-    // The per-frame instance stream and the three append-only scene tables, FIRST: every pipeline below
-    // is sized from their capacities.
+    // The per-frame instance stream and the three append-only scene tables, FIRST: every pipeline below is sized from their capacities.
     m_instances.initialize(RendererVKLayout::INITIAL_UNIQUE_MESHES,
         [this]() { waitForGpuAndFlushStaging(); }, [this]() { setHaveToRecordCommandBuffers(); },
         [this](uint32 maxInstances)
@@ -193,9 +197,7 @@ void Renderer::initPipelines()
 
     m_submission.initialize([this]() { waitForGpuAndFlushStaging(); }, [this]() { setHaveToRecordCommandBuffers(); });
 
-    // The three append-only scene tables.
-    // A growth is: GPU idle -> the table re-creates and re-uploads its own buffer -> onGrown resizes
-    // everything else that capacity feeds, and re-records.
+    // The three append-only scene tables. A growth is: GPU idle -> the table re-creates and re-uploads its own buffer -> onGrown resizes everything else that capacity feeds, and re-records.
     const auto onGpuIdle = [this]() { waitForGpuAndFlushStaging(); };
     constexpr vk::BufferUsageFlags2 tableUsage = vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst;
     m_meshInfos.initialize("MeshInfos", RendererVKLayout::INITIAL_UNIQUE_MESHES, RendererVKLayout::MESH_MATERIAL_INDEX_LIMIT,
@@ -214,8 +216,8 @@ void Renderer::initPipelines()
     m_staticMeshGraphicsPipeline.initialize(sceneRenderPass, m_meshInfos.capacity(), m_textures.getLayoutCap(), m_sceneViewCount > 1);
     m_rtaoPipeline.initialize(&m_rtaoParams, ext.width, ext.height, m_textures.getLayoutCap(), m_textures.getDescriptorCount(), m_sceneViewCount);
     m_oceanSimPipeline.initialize();
-    // "Terrain/Wetness" Diffusion is a baked define on the wetness compute shader: GPU idle + reload +
-    // re-record, the light grid's pattern.
+
+    // "Terrain/Wetness" Diffusion is a baked define on the wetness compute shader: GPU idle + reload + re-record, the light grid's pattern.
     m_terrainWetnessPipeline.initialize([this]() {
         if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
             return;
@@ -243,8 +245,8 @@ void Renderer::initPipelines()
             setHaveToRecordCommandBuffers(); // the cached GI secondary bakes the instance buffers + dispatch size
         });
     m_giProbePipeline.initialize(m_rt.getMaxTlasInstances(), m_textures.getLayoutCap(), m_textures.getDescriptorCount());
-    // The GI grid shape is a #define in every probe-sampling shader (Layout.ixx g_giGrid): a change waits
-    // for the GPU, re-allocates the SH clipmap, reloads EVERY shader (reloadShaders waits + re-records).
+
+    // The GI grid shape is a #define in every probe-sampling shader (Layout.ixx g_giGrid): a change waits for the GPU, re-allocates the SH clipmap, reloads EVERY shader (reloadShaders waits + re-records).
     m_giProbePipeline.registerGridTweaks(
         [this]() {
             if (Globals::device.graphicsQueueWaitIdle() != vk::Result::eSuccess)
@@ -260,16 +262,14 @@ void Renderer::initPipelines()
     m_forceFieldPipeline.initialize(sceneRenderPass, m_sceneViewCount);
     m_forceFieldPipeline.resizeIntervalTarget(ext.width, ext.height); // the union march's target
 
-
     m_shadowCullComputePipeline.initialize(m_instances.getMaxInstances(), m_meshInfos.capacity());
     for (PerFrameData& perFrame : m_perFrameData)
-        perFrame.shadowMap.initialize();
+        perFrame.shadowMap.initialize("ShadowMap");
     m_shadowMapGraphicsPipeline.initialize(m_perFrameData[0].shadowMap, m_meshInfos.capacity(), m_textures.getLayoutCap());
-    // The weather volume's top-down rain occlusion map: the same two pipelines in their RAIN_OCCLUSION
-    // variant over a single-layer map per frame slot.
+    // The weather volume's top-down rain occlusion map: the same two pipelines in their RAIN_OCCLUSION variant over a single-layer map per frame slot.
     m_rainCullComputePipeline.initialize(m_instances.getMaxInstances(), m_meshInfos.capacity(), true);
     for (PerFrameData& perFrame : m_perFrameData)
-        perFrame.rainOcclusionMap.initialize(RendererVKLayout::RAIN_OCCLUSION_RESOLUTION, 1);
+        perFrame.rainOcclusionMap.initialize("RainOcclusionMap", RendererVKLayout::RAIN_OCCLUSION_RESOLUTION, 1);
     m_rainMapGraphicsPipeline.initialize(m_perFrameData[0].rainOcclusionMap, m_meshInfos.capacity(), m_textures.getLayoutCap(), true);
 }
 
@@ -277,48 +277,48 @@ void Renderer::initPerFrameResources()
 {
     for (PerFrameData& perFrame : m_perFrameData)
     {
-        perFrame.indirectCullPipelineDescriptorSet.initialize(m_indirectCullComputePipeline.getDescriptorSetLayout());
-        perFrame.skinningDescriptorSet.initialize(m_skinningComputePipeline.getDescriptorSetLayout());
-        perFrame.lightGridPipelineDescriptorSet.initialize(m_lightGridComputePipeline.getDescriptorSetLayout());
+        perFrame.indirectCullPipelineDescriptorSet.initialize(m_indirectCullComputePipeline.getDescriptorSetLayout(), "IndirectCull");
+        perFrame.skinningDescriptorSet.initialize(m_skinningComputePipeline.getDescriptorSetLayout(), "Skinning");
+        perFrame.lightGridPipelineDescriptorSet.initialize(m_lightGridComputePipeline.getDescriptorSetLayout(), "LightGrid");
         for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)
-            perFrame.staticMeshPipelineDescriptorSet[eye].initialize(m_staticMeshGraphicsPipeline.getDescriptorSetLayout(), m_textures.getDescriptorCount());
-        perFrame.compositeDescriptorSet.initialize(m_compositePipeline.getDescriptorSetLayout());
+            perFrame.staticMeshPipelineDescriptorSet[eye].initialize(m_staticMeshGraphicsPipeline.getDescriptorSetLayout(), "StaticMesh", m_textures.getDescriptorCount());
+        perFrame.compositeDescriptorSet.initialize(m_compositePipeline.getDescriptorSetLayout(), "Composite");
 
-        perFrame.shadowCullDescriptorSet.initialize(m_shadowCullComputePipeline.getDescriptorSetLayout());
-        perFrame.shadowDrawDescriptorSet.initialize(m_shadowMapGraphicsPipeline.getDescriptorSetLayout(), m_textures.getDescriptorCount());
-        perFrame.rainCullDescriptorSet.initialize(m_rainCullComputePipeline.getDescriptorSetLayout());
-        perFrame.rainDrawDescriptorSet.initialize(m_rainMapGraphicsPipeline.getDescriptorSetLayout(), m_textures.getDescriptorCount());
+        perFrame.shadowCullDescriptorSet.initialize(m_shadowCullComputePipeline.getDescriptorSetLayout(), "ShadowCull");
+        perFrame.shadowDrawDescriptorSet.initialize(m_shadowMapGraphicsPipeline.getDescriptorSetLayout(), "ShadowDraw", m_textures.getDescriptorCount());
+        perFrame.rainCullDescriptorSet.initialize(m_rainCullComputePipeline.getDescriptorSetLayout(), "RainOcclusionCull");
+        perFrame.rainDrawDescriptorSet.initialize(m_rainMapGraphicsPipeline.getDescriptorSetLayout(), "RainOcclusionDraw", m_textures.getDescriptorCount());
 
-        perFrame.primaryCommandBuffer.initialize(vk::CommandBufferLevel::ePrimary);
-        perFrame.staticMeshCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.aoCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.indirectCullCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.skinningCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.oceanSimCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.terrainWetnessCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.lightGridCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.imguiCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.shadowCullCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.shadowDrawCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.rainCullCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.rainDrawCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.globalIllumCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.giPrepCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.volumetricFogCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.fogApplyCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.giProbeDebugCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.debugLineCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.particleSimCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.particleCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.decalCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.forceFieldCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.forceUnionCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.forceIntervalCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.forceMarchCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.forceComputeCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.taaCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.eyeAdaptCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
-        perFrame.compositeCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary);
+        perFrame.primaryCommandBuffer.initialize(vk::CommandBufferLevel::ePrimary, "CB.primary");
+        perFrame.staticMeshCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.staticMesh");
+        perFrame.aoCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.rtao");
+        perFrame.indirectCullCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.indirectCull");
+        perFrame.skinningCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.skinning");
+        perFrame.oceanSimCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.oceanSim");
+        perFrame.terrainWetnessCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.terrainWetness");
+        perFrame.lightGridCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.lightGrid");
+        perFrame.imguiCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.imgui");
+        perFrame.shadowCullCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.shadowCull");
+        perFrame.shadowDrawCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.shadowDraw");
+        perFrame.rainCullCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.rainOcclusionCull");
+        perFrame.rainDrawCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.rainOcclusionDraw");
+        perFrame.globalIllumCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.gi");
+        perFrame.giPrepCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.giPrep");
+        perFrame.volumetricFogCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.volumetricFog");
+        perFrame.fogApplyCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.fogApply");
+        perFrame.giProbeDebugCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.giProbeDebug");
+        perFrame.debugLineCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.debugLines");
+        perFrame.particleSimCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.particleSim");
+        perFrame.particleCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.particles");
+        perFrame.decalCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.decals");
+        perFrame.forceFieldCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.forceShells");
+        perFrame.forceUnionCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.forceUnionBlend");
+        perFrame.forceIntervalCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.forceIntervals");
+        perFrame.forceMarchCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.forceUnionMarch");
+        perFrame.forceComputeCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.forceCompute");
+        perFrame.taaCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.taa");
+        perFrame.eyeAdaptCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.eyeAdapt");
+        perFrame.compositeCommandBuffer.initialize(vk::CommandBufferLevel::eSecondary, "CB.composite");
 
         perFrame.ubo.initialize(sizeof(RendererVKLayout::Ubo),
             vk::BufferUsageFlagBits2::eUniformBuffer | vk::BufferUsageFlagBits2::eTransferDst,
@@ -350,7 +350,6 @@ void Renderer::initSharedBuffers()
 	assert(normalIdx == RendererVKLayout::FALLBACK_NORMAL_TEX_IDX);
 }
 
-// VR only (no-op otherwise): the eye composite targets follow the swapchain's extent and format.
 void Renderer::recreateVrEyeTargets()
 {
     if (m_sceneViewCount <= 1)
@@ -383,8 +382,7 @@ void Renderer::recreateWindowSurface(Window& window)
     recreateVrEyeTargets(); // VR: resize the per-eye LDR composite targets
     m_forceFieldPipeline.resizeIntervalTarget(ext.width, ext.height);
 
-    // The cached scene command buffers embed the (now-recreated) scene-colour render pass in their
-    // inheritance info, so force them to re-record against the new handle.
+    // The cached scene command buffers embed the (now-recreated) scene-colour render pass in their inheritance info, so force them to re-record against the new handle.
     setHaveToRecordCommandBuffers();
     auto waitResult2 = Globals::device.graphicsQueueWaitIdle();
     if (waitResult2 != vk::Result::eSuccess)
@@ -456,10 +454,6 @@ void Renderer::reloadShaders()
 
 void Renderer::setOceanParams(const OceanParams& ocean)
 {
-    // OCEAN_HIT_LIGHTS is a compile-time variant define: flipping the tweak rebuilds the ocean fragment
-    // pipeline (GPU idle first - cached CBs reference the old pipeline; the re-record this queues happens
-    // in present(), so a mid-frame toggle is safe). Same pattern as the RTAO alpha-test tweak.
-    // OCEAN_RT_REFLECTIONS (the scene mirror ray) is the same kind of define.
     const OceanParams& prev = m_oceanSimPipeline.getOceanParams();
     const bool rebuildOceanVariant = ocean.hitLighting != prev.hitLighting
         || ocean.rtReflections != prev.rtReflections
@@ -994,7 +988,6 @@ void Renderer::present()
     }
     m_frameSlotWaited = false; // the slot advanced: next frame must wait its own fence first
 }
-
 
 void Renderer::initImgui(Window& window)
 {

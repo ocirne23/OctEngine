@@ -92,6 +92,15 @@ layout (binding = 10, std430) readonly buffer GiGridData { vec4 gi_gridData[]; }
 
 #include "punctual_lights.inc.glsl"
 
+// The RT shadow toggles are defines on every includer of this core (the lit, masked, transparent and
+// terrain fragments); the uniforms stay for the ocean, the fog and GI, which read them at run time.
+#ifndef LIT_RT_SUN_SHADOW
+#error "LIT_RT_SUN_SHADOW must be defined by the pipeline"
+#endif
+#ifndef LIT_RT_LIGHT_SHADOWS
+#error "LIT_RT_LIGHT_SHADOWS must be defined by the pipeline"
+#endif
+
 // Terrain data cascades (height/water level/climate/altitude) + FFT ocean maps: underwater sunlight
 // (caustics) for EVERY lit material, and the terrain variant's procedural coloring. Both bindings exist
 // set-wide (19 = terrain data, 7 = u_oceanMaps - see StaticMeshGraphicsPipeline::buildPipelineLayout).
@@ -166,7 +175,13 @@ vec3 doSunLight(vec3 worldPos, vec3 V, vec3 N, vec3 specularCol, vec3 matColOver
 	resolveLiveDepth(worldPos);
 	const float depthBelow = g_liveDepthBelow;
 	const float localWaterLevel = g_liveWaterLevel;
-	float visibility = u_rtSunShadow > 0.5 ? traceSunVisibility(worldPos, N) : sampleSunShadow(worldPos, N);
+	// BAKED (LIT_RT_SUN_SHADOW, StaticMeshGraphicsPipeline): only the active path is compiled, so the
+	// registers are allocated for one of the PCSS search and the ray-query loop, not for the larger one.
+#if LIT_RT_SUN_SHADOW
+	float visibility = traceSunVisibility(worldPos, N);
+#else
+	float visibility = sampleSunShadow(worldPos, N);
+#endif
 	// Long-range terrain shadows. BOTH sources above run out of data well inside the streamed mesh ring -
 	// the cascades end at Shadows/Max distance (3 km default), the RT path's instances at RT/TLAS Range
 	// (4 km) - while terrain meshes run to ~33 km, so distant ground otherwise sits uniformly lit behind a
@@ -256,7 +271,13 @@ vec3 computeLitColor(vec3 worldPos, vec3 V, vec3 N, vec3 materialColor, float ro
 {
 	const vec3 specularColor  = mix(vec3(0.04), materialColor, metalness);
 	const float roughnessSq = roughness * roughness;
-	const vec3 matColOverPi = materialColor * INV_PI;
+	// (1 - metalness) folded in ONCE: every direct-light call below passes metalness 0, so the BRDF's
+	// kD = (1 - F) * (1 - 0) and metalness is not live across the light loop (one register fewer).
+	const vec3 diffuseColOverPi = materialColor * (INV_PI * (1.0 - metalness));
+
+	// The sun FIRST: its shadow search (PCSS taps or the ray-query loop) is the likely register peak, and
+	// here no AO / GI result is live across it yet.
+	vec3 color = doSunLight(worldPos, V, N, specularColor, diffuseColOverPi, 0.0, roughness, roughnessSq);
 
 	float ao = 1.0;
 	vec3 bentN = N;
@@ -288,9 +309,8 @@ vec3 computeLitColor(vec3 worldPos, vec3 V, vec3 N, vec3 materialColor, float ro
 		indirect = mix(giEvalSkySH(bentN) * INV_PI, indirect, giCoverage);
 	// indirect * strength + ambient, times AO: two scalar folds fewer than the previous grouping.
 	ao *= texAO;
-	vec3 color = materialColor * ((indirect * u_aoParams.y + u_ambientColor) * ao);
+	color += materialColor * ((indirect * u_aoParams.y + u_ambientColor) * ao);
 
-	color += doSunLight(worldPos, V, N, specularColor, matColOverPi, metalness, roughness, roughnessSq);
 	const ivec3 gridPos = getGridPos(worldPos);
     uint tableIdx = getTableIdx(gridPos);
 
@@ -312,32 +332,23 @@ vec3 computeLitColor(vec3 worldPos, vec3 V, vec3 N, vec3 materialColor, float ro
 #if LIGHT_GRID_DEBUG == 2
 			debugHit = true;
 #endif
-			const uint numLargeLights = getLargeLightCount(gridIdx);
-			for (uint i = 0; i < min(numLargeLights, MAX_LARGE_LIGHTS_PER_GRID); ++i)
+			// ONE loop over the grid's large lights, then the cell's lights: doLightShadowed inlines every
+			// light type plus the shadow ray queries, and two loops carried two copies of all of it.
+			const uint numLargeLights = min(getLargeLightCount(gridIdx), MAX_LARGE_LIGHTS_PER_GRID);
+			const uint cellOffset     = calcCellOffset(gridIdx, gridMin, worldPos);
+			const uint numLights      = numLargeLights + min(getNumLightsForCell(cellOffset), MAX_LIGHTCELL_LIGHTS);
+			for (uint i = 0; i < numLights; ++i)
 			{
-				const uint lightId    = getLargeLightId(gridIdx, i);
+				const uint lightId    = i < numLargeLights ? getLargeLightId(gridIdx, i) : getLightId(cellOffset, i - numLargeLights);
 				const LightInfo light = in_lightInfos[lightId];
-				color += doLightShadowed(light, worldPos, V, N, specularColor, matColOverPi, metalness, roughness, roughnessSq);
-#if LIGHT_GRID_DEBUG == 3
-				if (distance(worldPos, light.pos) < abs(light.range))
-					debugRangeTint += vec3(0.0, 0.0, 0.08);
-#endif
-			}
-
-			const uint cellOffset = calcCellOffset(gridIdx, gridMin, worldPos);
-			const uint numLights  = getNumLightsForCell(cellOffset);
-			for (uint i = 0; i < min(numLights, MAX_LIGHTCELL_LIGHTS); ++i)
-			{
-				const uint lightId    = getLightId(cellOffset, i);
-				const LightInfo light = in_lightInfos[lightId];
-				color += doLightShadowed(light, worldPos, V, N, specularColor, matColOverPi, metalness, roughness, roughnessSq);
+				color += doLightShadowed(light, worldPos, V, N, specularColor, diffuseColOverPi, 0.0, roughness, roughnessSq);
 #if LIGHT_GRID_DEBUG == 3
 				if (distance(worldPos, light.pos) < abs(light.range))
 					debugRangeTint += vec3(0.0, 0.0, 0.08);
 #endif
 			}
 #if LIGHT_GRID_DEBUG == 2
-			debugLightCount = min(numLargeLights, MAX_LARGE_LIGHTS_PER_GRID) + min(numLights, MAX_LIGHTCELL_LIGHTS);
+			debugLightCount = numLights;
 #endif
 			break;
 		}

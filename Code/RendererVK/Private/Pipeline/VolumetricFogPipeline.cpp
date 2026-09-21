@@ -82,7 +82,7 @@ void VolumetricFogPipeline::buildApplyLayout(GraphicsPipelineLayout& layout)
         .stageFlags = vk::ShaderStageFlagBits::eFragment, .offset = 0, .size = sizeof(uint32) });
 }
 
-void VolumetricFogPipeline::createImageSet(ImageSet& set)
+void VolumetricFogPipeline::createImageSet(ImageSet& set, const char* debugName)
 {
     vk::Device vkDevice = Globals::device.getDevice();
     for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
@@ -99,7 +99,7 @@ void VolumetricFogPipeline::createImageSet(ImageSet& set)
             .sharingMode = vk::SharingMode::eExclusive,
             .initialLayout = vk::ImageLayout::eUndefined,
         };
-        (void)Globals::gpuAllocator.createImage(info, set.image[i], set.memory[i], "VolumetricFog");
+        (void)Globals::gpuAllocator.createImage(info, set.image[i], set.memory[i], debugName);
 
         vk::ImageViewCreateInfo viewInfo{
             .image = set.image[i],
@@ -110,6 +110,7 @@ void VolumetricFogPipeline::createImageSet(ImageSet& set)
         auto viewResult = vkDevice.createImageView(viewInfo);
         assert(viewResult.result == vk::Result::eSuccess);
         set.view[i] = viewResult.value;
+        Globals::device.setDebugName(set.view[i], debugName);
     }
 }
 
@@ -138,17 +139,17 @@ void VolumetricFogPipeline::initialize()
     ComputePipelineLayout integrateLayout; buildIntegrateLayout(integrateLayout); m_integratePipeline.initialize(integrateLayout);
     for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
     {
-        m_scatterSets[i].initialize(m_scatterPipeline.getDescriptorSetLayout());
-        m_integrateSets[i].initialize(m_integratePipeline.getDescriptorSetLayout());
+        m_scatterSets[i].initialize(m_scatterPipeline.getDescriptorSetLayout(), "Fog.scatter");
+        m_integrateSets[i].initialize(m_integratePipeline.getDescriptorSetLayout(), "Fog.integrate");
     }
 
-    createImageSet(m_scatter);
-    createImageSet(m_integrated);
+    createImageSet(m_scatter, "Fog.scatter");
+    createImageSet(m_integrated, "Fog.integrated");
 
     // One-time UNDEFINED -> GENERAL (images stay in GENERAL forever) + clear: the scatter history must read
     // zeros on the first frame, and the integrated grid must hold "no fog" (transmittance 1) while disabled.
     CommandBuffer init;
-    init.initialize(vk::CommandBufferLevel::ePrimary);
+    init.initialize(vk::CommandBufferLevel::ePrimary, "Fog.init");
     vk::CommandBuffer cmd = init.begin(true);
     const ImageSet* sets[] = { &m_scatter, &m_integrated };
     oc::vector<vk::ImageMemoryBarrier2> bars;
@@ -197,6 +198,7 @@ void VolumetricFogPipeline::initialize()
     auto samplerResult = Globals::device.getDevice().createSampler(samplerInfo);
     assert(samplerResult.result == vk::Result::eSuccess);
     m_sampler = samplerResult.value;
+    Globals::device.setDebugName(m_sampler, "Fog");
 }
 
 void VolumetricFogPipeline::initializeApply(vk::RenderPass renderPass, uint32 viewCount)
@@ -207,7 +209,7 @@ void VolumetricFogPipeline::initializeApply(vk::RenderPass renderPass, uint32 vi
     m_applyPipeline.initialize(renderPass, layout);
     for (uint32 f = 0; f < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++f)
     for (uint32 e = 0; e < m_applyViewCount; ++e)
-        m_applySets[applySlot(f, e)].initialize(m_applyPipeline.getDescriptorSetLayout());
+        m_applySets[applySlot(f, e)].initialize(m_applyPipeline.getDescriptorSetLayout(), "Fog.apply");
 }
 
 void VolumetricFogPipeline::reloadShaders(vk::RenderPass renderPass)

@@ -225,8 +225,11 @@ export struct RTParams
                                 // chain; rays don't need per-level fidelity). Applied when containers load.
     bool blasCompaction = true; // copy-compact static BLASes after build (~30-50% of their memory back);
                                 // applies to BLASes built after a change
-    // onReRecord: the master + GI toggles are baked into the cached GI command buffer.
-    void registerTweaks(const oc::function<void()>& onReRecord);
+    // onReRecord: the GI toggle is baked into the cached GI command buffer. onReloadLitShaders (also
+    // re-records): the master, "RT Sun" and "RT Lights" are baked into the lit fragment shaders.
+    void registerTweaks(const oc::function<void()>& onReRecord, const oc::function<void()>& onReloadLitShaders);
+    bool effectiveSunShadow() const { return enabled && rtSunShadow; }
+    bool effectiveLightShadows() const { return enabled && rtLightShadows; }
 };
 
 // The clustered light grid's distance LOD (LightGridComputePipeline::build, on the CPU): each

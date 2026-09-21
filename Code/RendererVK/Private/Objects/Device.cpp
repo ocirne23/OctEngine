@@ -184,6 +184,20 @@ bool Device::initialize()
     }
     m_device = createResult.value;
 
+    // Instance-extension commands: loaded through the instance (vkGetDeviceProcAddr need not serve them).
+    if (Globals::instance.isDebugUtilsEnabled())
+    {
+        m_pfnSetDebugName = (PFN_vkSetDebugUtilsObjectNameEXT)instance.getProcAddr("vkSetDebugUtilsObjectNameEXT");
+        m_pfnBeginDebugLabel = (PFN_vkCmdBeginDebugUtilsLabelEXT)instance.getProcAddr("vkCmdBeginDebugUtilsLabelEXT");
+        m_pfnEndDebugLabel = (PFN_vkCmdEndDebugUtilsLabelEXT)instance.getProcAddr("vkCmdEndDebugUtilsLabelEXT");
+        if (!m_pfnBeginDebugLabel || !m_pfnEndDebugLabel) // only in pairs: a lone end is invalid
+        {
+            m_pfnBeginDebugLabel = nullptr;
+            m_pfnEndDebugLabel = nullptr;
+        }
+    }
+    setDebugName(m_device, "Device");
+
     vk::CommandPoolCreateInfo poolCreateInfo{
         .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
         .queueFamilyIndex = m_graphicsQueueIndex,
@@ -195,6 +209,7 @@ bool Device::initialize()
         return false;
     }
     m_commandPool = commandPoolResult.value;
+    setDebugName(m_commandPool, "Device.commandPool");
 
     const uint32 poolSize = 1024;
     vk::DescriptorPoolSize poolSizes[] =
@@ -227,6 +242,7 @@ bool Device::initialize()
         return false;
     }
     m_descriptorPool = descriptorPoolResult.value;
+    setDebugName(m_descriptorPool, "Device.descriptorPool");
 
     pfVkCmdPushDescriptorSetKHR = (PFN_vkCmdPushDescriptorSetKHR)m_device.getProcAddr("vkCmdPushDescriptorSetKHR");
 
@@ -259,6 +275,7 @@ bool Device::initialize()
         assert(false && "Could not get the graphics queue\n");
         return false;
     }
+    setDebugName(m_graphicsQueue, "GraphicsQueue");
 
     oc::vector<vk::Format> candidates = {
          vk::Format::eUndefined                                ,
@@ -478,6 +495,45 @@ void Device::destroy()
         m_device.destroy();
     }
     m_device = nullptr;
+}
+
+void Device::setDebugName(vk::ObjectType type, uint64 handle, const char* name) const
+{
+    if (!m_pfnSetDebugName || !handle || !name)
+        return;
+    // Short names read better in tool UIs. Over the cap, keep the TAIL - for a path that is the file name.
+    constexpr size_t MAX_DEBUG_NAME_LENGTH = 63;
+    const size_t length = strlen(name);
+    if (length > MAX_DEBUG_NAME_LENGTH)
+    {
+        name += length - MAX_DEBUG_NAME_LENGTH;
+        while ((*name & 0xC0) == 0x80) // never start inside a UTF-8 sequence
+            ++name;
+    }
+    const VkDebugUtilsObjectNameInfoEXT info{
+        .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+        .objectType = (VkObjectType)type,
+        .objectHandle = handle,
+        .pObjectName = name,
+    };
+    m_pfnSetDebugName((VkDevice)m_device, &info);
+}
+
+void Device::beginDebugLabel(vk::CommandBuffer cmd, const char* name) const
+{
+    if (!m_pfnBeginDebugLabel)
+        return;
+    const VkDebugUtilsLabelEXT label{
+        .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
+        .pLabelName = name,
+    };
+    m_pfnBeginDebugLabel((VkCommandBuffer)cmd, &label);
+}
+
+void Device::endDebugLabel(vk::CommandBuffer cmd) const
+{
+    if (m_pfnEndDebugLabel)
+        m_pfnEndDebugLabel((VkCommandBuffer)cmd);
 }
 
 bool Device::supportsExtensions(oc::vector<const char*> extensions)

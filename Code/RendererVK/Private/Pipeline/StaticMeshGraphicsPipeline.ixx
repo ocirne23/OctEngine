@@ -83,6 +83,9 @@ public:
     void registerTweaks(const oc::function<void()>& onReloadShaders);
     void setShadowDebugMode(int mode) { m_shadowDebugMode = mode; }       // SHADOW_DEBUG define on the lit + terrain fragments
     void setLightGridDebugMode(int mode) { m_lightGridDebugMode = mode; } // LIGHT_GRID_DEBUG define, same shaders
+    // LIT_RT_SUN_SHADOW / LIT_RT_LIGHT_SHADOWS (0/1) on the same shaders: the EFFECTIVE flags (RT master AND
+    // the toggle), matching the UBO's u_rtSunShadow / u_rtLightShadows. Same reload rule.
+    void setRtShadows(bool sun, bool lights) { m_rtSunShadow = sun; m_rtLightShadows = lights; }
     vk::DescriptorSetLayout getDescriptorSetLayout() const { return m_graphicsPipeline.getDescriptorSetLayout(); }
     const IndirectExecutionSet& getIndirectExecutionSet() const { return m_indirectExecutionSet; }
     const IndirectCommandsLayout& getIndirectCommandsLayout() const { return m_indirectCommandsLayout; }
@@ -103,6 +106,8 @@ private:
     bool m_wireframe = false;      // global wireframe: scene variants get vk::PolygonMode::eLine
     int  m_shadowDebugMode = 0;    // ShadowParams::debugMode, baked as SHADOW_DEBUG (0 = no define)
     int  m_lightGridDebugMode = 0; // LightGridParams::debugMode, baked as LIGHT_GRID_DEBUG (0 = no define)
+    bool m_rtSunShadow = false;    // baked as LIT_RT_SUN_SHADOW
+    bool m_rtLightShadows = true;  // baked as LIT_RT_LIGHT_SHADOWS
 
     vk::DeviceSize m_preprocessSize = 0;
     oc::array<Buffer, RendererVKLayout::NUM_FRAMES_IN_FLIGHT> m_preprocessBuffers;            // opaque pass

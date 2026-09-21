@@ -135,6 +135,7 @@ void OceanSimulationPipeline::createImages()
         auto viewResult = vkDevice.createImageView(viewInfo);
         assert(viewResult.result == vk::Result::eSuccess);
         m_spectrumView[i] = viewResult.value;
+        Globals::device.setDebugName(m_spectrumView[i], "OceanSpectrum");
     }
 
     m_mapsMipLevels = 1;
@@ -162,10 +163,12 @@ void OceanSimulationPipeline::createImages()
     auto mapsViewResult = vkDevice.createImageView(mapsViewInfo);
     assert(mapsViewResult.result == vk::Result::eSuccess);
     m_mapsView = mapsViewResult.value;
+    Globals::device.setDebugName(m_mapsView, "OceanMaps");
     mapsViewInfo.subresourceRange.levelCount = 1;
     auto mip0Result = vkDevice.createImageView(mapsViewInfo);
     assert(mip0Result.result == vk::Result::eSuccess);
     m_mapsMip0View = mip0Result.value;
+    Globals::device.setDebugName(m_mapsMip0View, "OceanMaps.mip0");
 
     // Persistent foam coverage mask over cascade 0's patch. Two layers = ping/pong: the foam pass reads
     // last frame's layer through a small diffusion tent and writes the other (frame slots alternate
@@ -193,13 +196,14 @@ void OceanSimulationPipeline::createImages()
     auto foamViewResult = vkDevice.createImageView(foamViewInfo);
     assert(foamViewResult.result == vk::Result::eSuccess);
     m_foamView = foamViewResult.value;
+    Globals::device.setDebugName(m_foamView, "OceanFoam");
 
     // One-time layout init: the spectra live in GENERAL forever; the maps rest in SHADER_READ_ONLY
     // between frames so the draw passes can sample them even before the first simulation ran; the foam
     // accumulator is cleared to zero (its previous-frame read feeds back into itself).
     {
         CommandBuffer init;
-        init.initialize(vk::CommandBufferLevel::ePrimary);
+        init.initialize(vk::CommandBufferLevel::ePrimary, "Ocean.init");
         vk::CommandBuffer cmd = init.begin(true);
         oc::array<vk::ImageMemoryBarrier2, 4> barriers;
         for (uint32 i = 0; i < 2; ++i)
@@ -290,12 +294,12 @@ void OceanSimulationPipeline::initialize()
 
     for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
     {
-        m_spectrumSets[i].initialize(m_spectrumPipeline.getDescriptorSetLayout());
-        m_fftHorizontalSets[i].initialize(m_fftPipeline.getDescriptorSetLayout());
-        m_fftVerticalSets[i].initialize(m_fftPipeline.getDescriptorSetLayout());
-        m_assembleSets[i].initialize(m_assemblePipeline.getDescriptorSetLayout());
-        m_foamSets[i].initialize(m_foamPipeline.getDescriptorSetLayout());
-        m_spraySets[i].initialize(m_sprayPipeline.getDescriptorSetLayout());
+        m_spectrumSets[i].initialize(m_spectrumPipeline.getDescriptorSetLayout(), "Ocean.spectrum");
+        m_fftHorizontalSets[i].initialize(m_fftPipeline.getDescriptorSetLayout(), "Ocean.fftHorizontal");
+        m_fftVerticalSets[i].initialize(m_fftPipeline.getDescriptorSetLayout(), "Ocean.fftVertical");
+        m_assembleSets[i].initialize(m_assemblePipeline.getDescriptorSetLayout(), "Ocean.assemble");
+        m_foamSets[i].initialize(m_foamPipeline.getDescriptorSetLayout(), "Ocean.foam");
+        m_spraySets[i].initialize(m_sprayPipeline.getDescriptorSetLayout(), "Ocean.spray");
     }
 }
 

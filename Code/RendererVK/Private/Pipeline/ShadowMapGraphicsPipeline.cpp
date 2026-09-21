@@ -67,7 +67,7 @@ void ShadowMapGraphicsPipeline::buildIndirectState(uint32 maxUniqueMeshes)
     // The shadow pass renders all cascades in a single multiview render pass (non-zero viewMask), where DGC
     // forbids an Indirect Execution Set. We only ever use the one depth-only pipeline anyway, so the commands
     // layout omits the EXECUTION_SET token and we bind the pipeline explicitly + pass a null execution set.
-    m_indirectCommandsLayout.initialize(m_graphicsPipeline.getPipelineLayout(),
+    m_indirectCommandsLayout.initialize(m_rainOcclusion ? "RainOcclusion.dgcLayout" : "Shadow.dgcLayout", m_graphicsPipeline.getPipelineLayout(),
         vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment, /*useExecutionSet*/ false);
 
     createPreprocessBuffers(maxUniqueMeshes);
@@ -97,7 +97,7 @@ void ShadowMapGraphicsPipeline::createPreprocessBuffers(uint32 maxUniqueMeshes)
         for (Buffer& preprocess : m_preprocessBuffers)
             preprocess.initialize(m_preprocessSize,
                 vk::BufferUsageFlagBits2::ePreprocessBufferEXT | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
-                vk::MemoryPropertyFlagBits::eDeviceLocal);
+                vk::MemoryPropertyFlagBits::eDeviceLocal, false, m_rainOcclusion ? "RainOcclusion.dgcPreprocess" : "Shadow.dgcPreprocess");
     }
 }
 

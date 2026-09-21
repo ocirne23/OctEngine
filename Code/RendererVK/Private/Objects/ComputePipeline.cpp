@@ -19,6 +19,7 @@ ComputePipeline::~ComputePipeline()
 bool ComputePipeline::initialize(const ComputePipelineLayout& layout)
 {
     vk::Device vkDevice = Globals::device.getDevice();
+    const oc::string debugName = Shader::debugName(layout.computeShaderDebugFilePath);
     vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
         .bindingCount = (uint32)layout.descriptorBindingFlags.size(),
         .pBindingFlags = layout.descriptorBindingFlags.data(),
@@ -42,6 +43,7 @@ bool ComputePipeline::initialize(const ComputePipelineLayout& layout)
         return false;
     }
     m_descriptorSetLayout = layoutResult.value;
+    Globals::device.setDebugName(m_descriptorSetLayout, debugName.c_str());
 
     vk::PipelineLayoutCreateInfo pipelineLayoutCreateInfo
     {
@@ -58,6 +60,7 @@ bool ComputePipeline::initialize(const ComputePipelineLayout& layout)
         return false;
     }
     m_pipelineLayout = pipelineLayoutResult.value;
+    Globals::device.setDebugName(m_pipelineLayout, debugName.c_str());
 
     auto pipelineCacheResult = vkDevice.createPipelineCache(vk::PipelineCacheCreateInfo());
     if (pipelineCacheResult.result != vk::Result::eSuccess)
@@ -66,6 +69,7 @@ bool ComputePipeline::initialize(const ComputePipelineLayout& layout)
         return false;
     }
     m_pipelineCache = pipelineCacheResult.value;
+    Globals::device.setDebugName(m_pipelineCache, debugName.c_str());
 
     return createPipeline(layout, m_pipeline, true);
 }
@@ -118,5 +122,6 @@ bool ComputePipeline::createPipeline(const ComputePipelineLayout& layout, vk::Pi
         return false;
     }
     outPipeline = pipelineResult.value;
+    Globals::device.setDebugName(outPipeline, Shader::debugName(layout.computeShaderDebugFilePath).c_str());
     return true;
 }

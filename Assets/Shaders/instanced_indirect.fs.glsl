@@ -10,10 +10,10 @@
 
 #include "shared.inc.glsl"
 
-layout (location = 0) in vec3 in_pos;
-layout (location = 1) in mat3 in_tbn;
-layout (location = 4) in vec2 in_uv;
-layout (location = 5) in flat uint in_meshIdxMaterialIdx;
+layout (location = 0) in vec4 in_posU;    // xyz = world position, w = uv.x
+layout (location = 1) in vec4 in_normalV; // xyz = normal, w = uv.y
+layout (location = 2) in vec4 in_tangent; // xyz = tangent, w = bitangent sign
+layout (location = 3) in flat uint in_meshIdxMaterialIdx;
 #ifdef STEREO
 layout (push_constant) uniform ViewPC { uint u_viewIndex; }; // selects the per-eye view (1=left, 2=right) in VR
 #endif
@@ -27,19 +27,24 @@ void main()
 #ifdef STEREO
 	g_viewIndex = int(u_viewIndex); // per-eye reconstruction (AO upsample) + view pos
 #endif
-	const vec3 V = normalize(u_viewPos - in_pos);
+	const vec3 pos = in_posU.xyz;
+	const vec3 V = normalize(u_viewPos - pos);
 
 	const uint16_t materialIdx   = uint16_t((in_meshIdxMaterialIdx & 0xFFFF0000) >> 16);
 	const MaterialInfo material  = in_materialInfos[materialIdx];
 	const uint16_t diffuseTexIdx = uint16_t(material.diffuseNormalTexIdx & 0x0000FFFF);
 	const uint16_t normalTexIdx  = uint16_t((material.diffuseNormalTexIdx & 0xFFFF0000) >> 16);
 	const uint16_t metalRoughnessTexIdx = uint16_t(material.metalRoughnessTexIdxAlphaMode & 0x0000FFFF);
-	const uint16_t alphaMode     = uint16_t((material.metalRoughnessTexIdxAlphaMode & 0xFFFF0000) >> 16);
-	const vec2 uv = in_uv; //spomDisplaceUV(uint(normalTexIdx), V);
+	const vec2 uv = vec2(in_posU.w, in_normalV.w);
 
 	const vec4 diffuseSample  = texture(u_textures[diffuseTexIdx], uv);
+#ifdef ALPHA_MASK
+	// Only the LitMasked variant discards: a discard anywhere in the shader costs the pipeline its early
+	// depth write. The alpha-mode test stays, because a material override can put an opaque material here.
+	const uint16_t alphaMode = uint16_t((material.metalRoughnessTexIdxAlphaMode & 0xFFFF0000) >> 16);
 	if (alphaMode == ALPHA_MODE_MASK && diffuseSample.a < material.opacity)
 		discard;
+#endif
 
 	float roughness = 0.65;
 	float metalness = 0.0;
@@ -64,8 +69,11 @@ void main()
 	{
 		tangentNormal = normalize(normalSample * 2.0 - 1.0);
 	}
-	const vec3 N = normalize(in_tbn * tangentNormal);
+	const vec3 geoN = in_normalV.xyz;
+	const vec3 T = in_tangent.xyz;
+	const vec3 B = cross(geoN, T) * (in_tangent.w < 0.0 ? -1.0 : 1.0);
+	const vec3 N = normalize(T * tangentNormal.x + B * tangentNormal.y + geoN * tangentNormal.z);
 
-	const vec3 color = computeLitColor(in_pos, V, N, materialColor, roughness, metalness, 1.0);
+	const vec3 color = computeLitColor(pos, V, N, materialColor, roughness, metalness, 1.0);
 	out_color = vec4(color, min(diffuseSample.a, material.opacity));
 }

@@ -19,6 +19,13 @@ static bool rasterizesLines(vk::PrimitiveTopology topology, vk::PolygonMode poly
         || topology == vk::PrimitiveTopology::eLineStripWithAdjacency;
 }
 
+// The fragment shader's file name (it names the pass - the vertex shader is often a shared one like
+// composite.vs.glsl); a depth-only pass without a fragment shader takes its vertex shader.
+static oc::string pipelineDebugName(const ShaderSource& vs, const ShaderSource& fs)
+{
+    return Shader::debugName(fs.text.empty() ? vs.debugFilePath : fs.debugFilePath);
+}
+
 GraphicsPipeline::GraphicsPipeline() {}
 GraphicsPipeline::~GraphicsPipeline()
 {
@@ -46,6 +53,7 @@ bool GraphicsPipeline::reloadShaders(const RenderPass& renderPass, GraphicsPipel
 bool GraphicsPipeline::initialize(vk::RenderPass renderPass, GraphicsPipelineLayout& layout)
 {
     vk::Device vkDevice = Globals::device.getDevice();
+    const oc::string debugName = pipelineDebugName(layout.vertexShader, layout.fragmentShader);
     vk::DescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
         .bindingCount = (uint32)layout.descriptorBindingFlags.size(),
         .pBindingFlags = layout.descriptorBindingFlags.data(),
@@ -67,6 +75,7 @@ bool GraphicsPipeline::initialize(vk::RenderPass renderPass, GraphicsPipelineLay
         return false;
     }
 	m_descriptorSetLayout = createLayoutResult.value;
+    Globals::device.setDebugName(m_descriptorSetLayout, debugName.c_str());
 
     vk::PipelineLayoutCreateInfo pipelineLayoutCreateInfo
     {
@@ -83,6 +92,7 @@ bool GraphicsPipeline::initialize(vk::RenderPass renderPass, GraphicsPipelineLay
         return false;
     }
     m_pipelineLayout = createPipelineLayoutResult.value;
+    Globals::device.setDebugName(m_pipelineLayout, debugName.c_str());
 
     auto createPipelineCacheResult = vkDevice.createPipelineCache(vk::PipelineCacheCreateInfo());
     if (createPipelineCacheResult.result != vk::Result::eSuccess)
@@ -91,6 +101,7 @@ bool GraphicsPipeline::initialize(vk::RenderPass renderPass, GraphicsPipelineLay
         return false;
     }
     m_pipelineCache = createPipelineCacheResult.value;
+    Globals::device.setDebugName(m_pipelineCache, debugName.c_str());
 
     return createPipelines(renderPass, layout, m_pipelines, true);
 }
@@ -282,6 +293,7 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
             assert((!assertOnFailure) && "Failed to create graphics pipeline");
             return false;
         }
+        Globals::device.setDebugName(pipeline, pipelineDebugName(layout.vertexShader, layout.fragmentShader).c_str());
         outPipelines.push_back(pipeline);
     }
 
@@ -321,6 +333,9 @@ bool GraphicsPipeline::createPipelines(vk::RenderPass renderPass, GraphicsPipeli
             assert((!assertOnFailure) && "Failed to create graphics pipeline");
             return false;
         }
+        const ShaderSource& vs = variant.vertexShader.text.empty() ? layout.vertexShader : variant.vertexShader;
+        const ShaderSource& fs = variant.fragmentShader.text.empty() ? layout.fragmentShader : variant.fragmentShader;
+        Globals::device.setDebugName(pipeline, oc::format("{} #{}", pipelineDebugName(vs, fs), i + 1).c_str());
         outPipelines.push_back(pipeline);
     }
     return true;

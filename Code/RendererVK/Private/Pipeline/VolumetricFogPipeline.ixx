@@ -80,7 +80,7 @@ private:
     void buildScatterLayout(ComputePipelineLayout& layout);
     void buildIntegrateLayout(ComputePipelineLayout& layout);
     void buildApplyLayout(GraphicsPipelineLayout& layout);
-    void createImageSet(ImageSet& set);
+    void createImageSet(ImageSet& set, const char* debugName);
     void destroyImageSet(ImageSet& set);
 
     ComputePipeline m_scatterPipeline;

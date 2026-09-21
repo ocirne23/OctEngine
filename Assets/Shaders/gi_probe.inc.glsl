@@ -226,14 +226,23 @@ void giReadSH(uint cellBase, out vec3 c0, out vec3 c1, out vec3 c2, out vec3 c3)
     c3 = p2.yzw;
 }
 
+// The SH-L1 basis at n with the cosine-lobe convolution (A0, A1) folded in: dot the coefficients with it
+// to get the UNCLAMPED irradiance, which is LINEAR in the coefficients.
+vec4 giIrradianceBasis(vec3 n)
+{
+    const float A0 = PI;
+    const float A1 = 2.0 * PI / 3.0;
+    return shBasisL1(n) * vec4(A0, A1, A1, A1);
+}
+vec3 giEvalSHLinear(vec3 c0, vec3 c1, vec3 c2, vec3 c3, vec4 Yk)
+{
+    return c0 * Yk.x + c1 * Yk.y + c2 * Yk.z + c3 * Yk.w;
+}
+
 // Cosine-convolved irradiance E(n) from SH-L1 coefficients. Diffuse exit radiance is albedo/PI * E(n).
 vec3 giEvalSH(vec3 c0, vec3 c1, vec3 c2, vec3 c3, vec3 n)
 {
-    vec4 Y = shBasisL1(n);
-    const float A0 = PI;
-    const float A1 = 2.0 * PI / 3.0;
-    vec3 E = A0 * c0 * Y.x + A1 * (c1 * Y.y + c2 * Y.z + c3 * Y.w);
-    return max(E, vec3(0.0));
+    return max(giEvalSHLinear(c0, c1, c2, c3, giIrradianceBasis(n)), vec3(0.0));
 }
 
 vec3 giEvalCell(uint cellBase, vec3 n)
@@ -290,13 +299,16 @@ void giVisMoments(vec4 dsh, vec4 d2sh, vec3 dir, int s, out float mean, out floa
 // behind the surface are faded out to limit light leaking through thin geometry). totalW returns the
 // summed weight so the caller can detect the all-backfaced case and fall through to a coarser cascade.
 // samplePos is the normal-BIASED query point (giBiasedSample), not the raw surface position.
-// Returns the weight-normalized SH-L1 COEFFICIENTS, not irradiance: the caller evaluates once, after the
-// cross-cascade blend - the cosine convolution's max(0) is a nonlinearity, and applying it per probe (or
-// per cascade) leaves kinks that show up as ripples on flat surfaces and as a harder cascade seam.
-void giSampleCascade(int c, int s, ivec3 base, vec3 frac, vec3 samplePos, vec3 n,
-                     out vec3 a0, out vec3 a1, out vec3 a2, out vec3 a3, out float totalW)
+// Returns the weight-normalized UNCLAMPED irradiance (giEvalSHLinear, Yk = giIrradianceBasis(n)). The
+// max(0) is a nonlinearity - applied per probe (or per cascade) it leaves kinks that show up as ripples on
+// flat surfaces and as a harder cascade seam - so the caller clamps ONCE, after the cross-cascade blend.
+// Everything before the clamp is linear in the coefficients, so reducing each probe to 3 floats here is
+// exactly the old "blend the 12 coefficients, evaluate once": 3 accumulators live instead of 12, and the
+// first cascade holds 3 floats (not 12) while the second one samples - that span was the register peak.
+void giSampleCascade(int c, int s, ivec3 base, vec3 frac, vec3 samplePos, vec3 n, vec4 Yk,
+                     out vec3 eLin, out float totalW)
 {
-    a0 = vec3(0.0); a1 = vec3(0.0); a2 = vec3(0.0); a3 = vec3(0.0);
+    eLin = vec3(0.0);
     totalW = 0.0;
     for (int i = 0; i < 8; ++i)
     {
@@ -357,13 +369,12 @@ void giSampleCascade(int c, int s, ivec3 base, vec3 frac, vec3 samplePos, vec3 n
 
         vec3 c0, c1, c2, c3;
         giReadSH(cellBase, c0, c1, c2, c3);
-        a0 += w * c0; a1 += w * c1; a2 += w * c2; a3 += w * c3;
+        eLin += w * giEvalSHLinear(c0, c1, c2, c3, Yk);
         totalW += w;
     }
     if (totalW <= 1e-4)
         return;
-    float inv = 1.0 / totalW;
-    a0 *= inv; a1 *= inv; a2 *= inv; a3 *= inv;
+    eLin *= 1.0 / totalW;
 }
 
 // Cross-cascade fade of cascade spacing s at the (biased) sample point p: 1 = this cascade alone, 0 = the
@@ -401,6 +412,7 @@ vec3 giBiasedSample(vec3 worldPos, vec3 n, int s)
 vec3 evalProbeSHCoverage(vec3 worldPos, vec3 n, out float coverage)
 {
     coverage = 1.0;
+    const vec4 Yk = giIrradianceBasis(n);
     for (int c = 0; c < GI_NUM_CASCADES; ++c)
     {
         vec3  p = giBiasedSample(worldPos, n, giCascadeSpacing(c));
@@ -419,8 +431,8 @@ vec3 evalProbeSHCoverage(vec3 worldPos, vec3 n, out float coverage)
         // raw surface point puts the Chebyshev direction exactly in the wall plane, where the blurry L1
         // depth reconstruction underestimates distance and false-occludes everything lateral to a probe
         // (bright probe-footprint circles on walls).
-        vec3 a0, a1, a2, a3; float w0;
-        giSampleCascade(c, s, base, frac, p, n, a0, a1, a2, a3, w0);
+        vec3 e0; float w0;
+        giSampleCascade(c, s, base, frac, p, n, Yk, e0, w0);
         if (w0 <= 1e-4)
             continue; // every probe backfaced -> try a coarser (differently-aligned) cascade
 
@@ -432,16 +444,13 @@ vec3 evalProbeSHCoverage(vec3 worldPos, vec3 n, out float coverage)
             ivec3 base2, origin2; int s2; vec3 frac2;
             if (giCascadeFits(c + 1, p2, base2, origin2, s2, frac2))
             {
-                vec3 b0, b1, b2, b3; float w1;
-                giSampleCascade(c + 1, s2, base2, frac2, p2, n, b0, b1, b2, b3, w1);
+                vec3 e1; float w1;
+                giSampleCascade(c + 1, s2, base2, frac2, p2, n, Yk, e1, w1);
                 if (w1 > 1e-4)
-                {
-                    a0 = mix(b0, a0, fade); a1 = mix(b1, a1, fade);
-                    a2 = mix(b2, a2, fade); a3 = mix(b3, a3, fade);
-                }
+                    e0 = mix(e1, e0, fade);
             }
         }
-        return giEvalSH(a0, a1, a2, a3, n);
+        return max(e0, vec3(0.0));
     }
     coverage = 0.0;
     return vec3(-1.0);

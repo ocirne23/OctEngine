@@ -46,8 +46,15 @@ bool Shader::initialize(vk::ShaderStageFlagBits stage, const oc::string& shaderS
         return false;
     }
     m_shaderModule = createResult.value;
+    Globals::device.setDebugName(m_shaderModule, debugFilePath.c_str());
 
     return true;
+}
+
+oc::string Shader::debugName(const oc::string& debugFilePath)
+{
+    const size_t slash = debugFilePath.find_last_of("/\\");
+    return slash == oc::string::npos ? debugFilePath : debugFilePath.substr(slash + 1);
 }
 
 EShLanguage translateShaderStage(vk::ShaderStageFlagBits stage)
@@ -208,74 +215,25 @@ static oc::string buildPreamble(const oc::vector<ShaderDefine>& defines)
 
 bool Shader::GLSLtoSPV(const vk::ShaderStageFlagBits type, const oc::string& source, oc::vector<unsigned int>& spirv, const oc::string& debugFilePath, const oc::vector<ShaderDefine>& defines)
 {
-    oc::string debugOutputFolder = "Local/";
-	// make folder if it doesn't exist
-	if (!FileSystem::exists(debugOutputFolder, /*allowMainThread*/ true))
-		FileSystem::createDirectories(debugOutputFolder, true);
-    oc::string spvBinPath = debugOutputFolder + debugFilePath + ".spv";
-	oc::string preprocessFilePath = debugOutputFolder + debugFilePath;
-    const oc::string preprocessFileFolder = FileSystem::parentPath(preprocessFilePath);
-    if (!FileSystem::exists(preprocessFileFolder, /*allowMainThread*/ true))
-        FileSystem::createDirectories(preprocessFileFolder, true);
+    const oc::string spvBinPath = "Local/" + debugFilePath + ".spv";
+    const oc::string spvBinFolder = FileSystem::parentPath(spvBinPath);
+    if (!FileSystem::exists(spvBinFolder, /*allowMainThread*/ true))
+        FileSystem::createDirectories(spvBinFolder, true);
 
-    // Enable SPIR-V and Vulkan rules when parsing GLSL
+    // ONE parse with the includer, never preprocess() + a re-parse of its output: the debug info then
+    // embeds the original text of the file and of every include, at their true lines. A re-parse
+    // embedded the flattened text, and its "#line N 0" include epilogues kept the LAST include's file
+    // name, so all code after an #include (main included) was attributed to that include - Nsight reads
+    // that as the old glslang "incorrect function definition locations" bug.
     EShMessages messages = (EShMessages)(EShMsgSpvRules | EShMsgVulkanRules);
     EShLanguage stage = translateShaderStage(type);
-    std::string preprocessed; // glslang::TShader::preprocess writes into a std::string* directly
-    {
-        glslang::TShader preprocessShader(stage);
-        const char* shaderStrings[1] = { source.data() };
-        preprocessShader.setStrings(shaderStrings, 1);
-        preprocessShader.addSourceText(source.c_str(), source.length());
-        preprocessShader.setSourceFile(debugFilePath.c_str());
-        preprocessShader.setDebugInfo(false);
-
-        // Target Vulkan 1.3 / SPIR-V 1.6 so modern extensions compile (notably GL_EXT_ray_query, which
-        // needs the RayQueryKHR capability and SPIR-V 1.4+). Without this glslang defaults to SPIR-V 1.0.
-        preprocessShader.setEnvInput(glslang::EShSourceGlsl, stage, glslang::EShClientVulkan, 100);
-        preprocessShader.setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_3);
-        preprocessShader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_6);
-
-        const oc::string preamble = buildPreamble(defines);
-        if (!preamble.empty())
-            preprocessShader.setPreamble(preamble.c_str());
-
-        // Enable SPIR-V and Vulkan rules when parsing GLSL
-        ShaderIncluder includer(debugFilePath);
-        if (!preprocessShader.preprocess(GetDefaultResources(), 100, ENoProfile, false, false, messages, &preprocessed, includer))
-        {
-			puts(preprocessShader.getInfoLog());
-			puts(preprocessShader.getInfoDebugLog());
-			std::cout.flush();
-            assert(false);
-			return false;  // something didn't work
-        }
-    }
-
-    // swap the line with #version with the top line in preprocessed
-    size_t versionPos = preprocessed.find("#version");
-    if (versionPos != oc::string::npos)
-    {
-        size_t lineEnd = preprocessed.find('\n', versionPos);
-        if (lineEnd != oc::string::npos)
-        {
-            std::string versionLine = preprocessed.substr(versionPos, lineEnd - versionPos + 1);
-            preprocessed.erase(versionPos, lineEnd - versionPos + 1);
-            preprocessed = versionLine + preprocessed;
-        }
-    }
-
     glslang::TShader shader(stage);
-    //std::ofstream f(preprocessFilePath, std::ios::out | std::ios::binary);
-    //if (f)
-    //{
-    //    f.write((const char*)preprocessed.data(), preprocessed.size());
-    //}
-
-    const char* shaderStrings[1] = { preprocessed.data() };
-    shader.setStrings(shaderStrings, 1);
-    shader.addSourceText(preprocessed.c_str(), preprocessed.length());
-    shader.setSourceFile(preprocessFilePath.c_str());
+    const char* shaderStrings[1] = { source.c_str() };
+    const int shaderLengths[1] = { (int)source.length() };
+    const char* shaderNames[1] = { debugFilePath.c_str() }; // same name as the source file: one DebugSource
+    shader.setStringsWithLengthsAndNames(shaderStrings, shaderLengths, shaderNames, 1);
+    shader.addSourceText(source.c_str(), source.length());
+    shader.setSourceFile(debugFilePath.c_str());
     shader.setDebugInfo(true);
 
     // Target Vulkan 1.3 / SPIR-V 1.6 so modern extensions compile (notably GL_EXT_ray_query, which
@@ -284,7 +242,13 @@ bool Shader::GLSLtoSPV(const vk::ShaderStageFlagBits type, const oc::string& sou
     shader.setEnvClient(glslang::EShClientVulkan, glslang::EShTargetVulkan_1_3);
     shader.setEnvTarget(glslang::EShTargetSpv, glslang::EShTargetSpv_1_6);
 
-    if (!shader.parse(GetDefaultResources(), 100, ENoProfile, false, false, messages))
+    // The preamble's #extension may precede the file's #version: glslang scans the version from the
+    // shader strings alone. The string must outlive parse().
+    const oc::string preamble = buildPreamble(defines);
+    shader.setPreamble(preamble.c_str());
+
+    ShaderIncluder includer(debugFilePath);
+    if (!shader.parse(GetDefaultResources(), 100, ENoProfile, false, false, messages, includer))
     {
         puts(shader.getInfoLog());
         puts(shader.getInfoDebugLog());

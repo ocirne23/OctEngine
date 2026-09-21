@@ -82,20 +82,8 @@ bool Allocator::createImage(const vk::ImageCreateInfo& info, vk::Image& outImage
     if (debugName)
     {
         vmaSetAllocationName(m_allocator, outAllocation, debugName);
-        // VMA's allocation name is leak-report only; give the VkImage itself a real debug-utils object name
-        // so validation layer messages (which report bare image handles) can be matched back to source.
-        static PFN_vkSetDebugUtilsObjectNameEXT setObjectName =
-            (PFN_vkSetDebugUtilsObjectNameEXT)Globals::instance.getInstance().getProcAddr("vkSetDebugUtilsObjectNameEXT");
-        if (setObjectName)
-        {
-            const VkDebugUtilsObjectNameInfoEXT nameInfo{
-                .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
-                .objectType = VK_OBJECT_TYPE_IMAGE,
-                .objectHandle = (uint64_t)image,
-                .pObjectName = debugName,
-            };
-            setObjectName((VkDevice)Globals::device.getDevice(), &nameInfo);
-        }
+        // VMA's allocation name is leak-report only; the VkImage itself gets the debug-utils object name.
+        Globals::device.setDebugName(vk::Image(image), debugName);
     }
     outImage = vk::Image(image);
     return true;
@@ -136,18 +124,7 @@ bool Allocator::createBuffer(const vk::BufferCreateInfo& info, vk::MemoryPropert
     if (debugName)
     {
         vmaSetAllocationName(m_allocator, outAllocation, debugName);
-        static PFN_vkSetDebugUtilsObjectNameEXT setObjectName =
-            (PFN_vkSetDebugUtilsObjectNameEXT)Globals::instance.getInstance().getProcAddr("vkSetDebugUtilsObjectNameEXT");
-        if (setObjectName)
-        {
-            const VkDebugUtilsObjectNameInfoEXT nameInfo{
-                .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
-                .objectType = VK_OBJECT_TYPE_BUFFER,
-                .objectHandle = (uint64_t)buffer,
-                .pObjectName = debugName,
-            };
-            setObjectName((VkDevice)Globals::device.getDevice(), &nameInfo);
-        }
+        Globals::device.setDebugName(vk::Buffer(buffer), debugName);
     }
     outBuffer = vk::Buffer(buffer);
     outMappedData = allocInfo.pMappedData;

@@ -30,7 +30,7 @@ void DebugLinePipeline::initialize(vk::RenderPass renderPass)
     GraphicsPipelineLayout layout; buildLayout(layout);
     m_pipeline.initialize(renderPass, layout);
     for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
-        m_sets[i].initialize(m_pipeline.getDescriptorSetLayout());
+        m_sets[i].initialize(m_pipeline.getDescriptorSetLayout(), "DebugLines");
 }
 
 void DebugLinePipeline::reloadShaders(vk::RenderPass renderPass)

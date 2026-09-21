@@ -39,7 +39,7 @@ void ShadowCullComputePipeline::resizeCommandBuffers(uint32 maxUniqueMeshes)
     {
         perFrame.outIndirectCommandBuffer.initialize(maxUniqueMeshes * sizeof(RendererVKLayout::IndirectDrawSequence), // 8 (single opaque region)
             vk::BufferUsageFlagBits2::eIndirectBuffer | vk::BufferUsageFlagBits2::eStorageBuffer | vk::BufferUsageFlagBits2::eTransferDst | vk::BufferUsageFlagBits2::eShaderDeviceAddress,
-            vk::MemoryPropertyFlagBits::eDeviceLocal);
+            vk::MemoryPropertyFlagBits::eDeviceLocal, false, "ShadowCullOutCommands");
     }
 }
 

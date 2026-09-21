@@ -10,7 +10,7 @@ IndirectExecutionSet::~IndirectExecutionSet()
     destroy();
 }
 
-bool IndirectExecutionSet::initialize(const GraphicsPipeline& pipeline)
+bool IndirectExecutionSet::initialize(const GraphicsPipeline& pipeline, const char* debugName)
 {
     const uint32 variantCount = pipeline.getPipelineVariantCount();
     assert(variantCount > 0 && "Cannot build an indirect execution set without pipelines");
@@ -36,6 +36,7 @@ bool IndirectExecutionSet::initialize(const GraphicsPipeline& pipeline)
         return false;
     }
     m_indirectExecutionSet = createResult.value;
+    Globals::device.setDebugName(m_indirectExecutionSet, debugName);
 
     oc::vector<vk::WriteIndirectExecutionSetPipelineEXT> writes;
     writes.reserve(variantCount);

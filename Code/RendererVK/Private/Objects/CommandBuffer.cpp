@@ -10,7 +10,7 @@ CommandBuffer::~CommandBuffer()
         Globals::device.getDevice().freeCommandBuffers(Globals::device.getCommandPool(), m_commandBuffer);
 }
 
-bool CommandBuffer::initialize(vk::CommandBufferLevel level)
+bool CommandBuffer::initialize(vk::CommandBufferLevel level, const char* debugName)
 {
     vk::CommandBufferAllocateInfo allocInfo
     {
@@ -30,6 +30,7 @@ bool CommandBuffer::initialize(vk::CommandBufferLevel level)
         assert(false && "Failed to allocate command buffer");
         return false;
     }
+    Globals::device.setDebugName(m_commandBuffer, debugName);
     m_signalSemaphores.reserve(4);
     m_signalSemaphores.shrink_to_fit();
 

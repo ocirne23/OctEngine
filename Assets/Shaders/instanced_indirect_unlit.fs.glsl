@@ -21,10 +21,9 @@ layout (binding = 2, std430) readonly buffer InMaterialInfos
 
 layout (binding = 21) uniform sampler2D u_textures[]; // highest binding in the set: variable descriptor count
 
-layout (location = 0) in vec3 in_pos;
-layout (location = 1) in mat3 in_tbn;
-layout (location = 4) in vec2 in_uv;
-layout (location = 5) in flat uint in_meshIdxMaterialIdx;
+layout (location = 0) in vec4 in_posU;    // xyz = world position, w = uv.x (instanced_indirect.vs.glsl)
+layout (location = 1) in vec4 in_normalV; // xyz = normal, w = uv.y
+layout (location = 3) in flat uint in_meshIdxMaterialIdx;
 
 layout (location = 0) out vec4 out_color;
 
@@ -36,7 +35,7 @@ void main()
     const uint16_t metalRoughnessTexIdx = uint16_t(material.metalRoughnessTexIdxAlphaMode & 0x0000FFFF);
 	const uint16_t alphaMode = uint16_t((material.metalRoughnessTexIdxAlphaMode & 0xFFFF0000) >> 16);
 
-    const vec4 diffuseSample = texture(u_textures[diffuseTexIdx], in_uv);
+    const vec4 diffuseSample = texture(u_textures[diffuseTexIdx], vec2(in_posU.w, in_normalV.w));
     //const vec4 diffuseSample = vec4(0.5, 0.5, 0.5, 1.0);
 
     // Alpha mask (alphaMode 1): discard fragments below the cutoff (stored in material.opacity).

@@ -67,12 +67,13 @@ void TerrainWetnessPipeline::createImage()
     auto viewResult = vkDevice.createImageView(viewInfo);
     assert(viewResult.result == vk::Result::eSuccess);
     m_view = viewResult.value;
+    Globals::device.setDebugName(m_view, "TerrainWetness");
 
     // One-time init: clear to dry, then GENERAL for its whole life (compute read/write in place, fragment
     // sampled read) - no per-frame layout churn.
     {
         CommandBuffer init;
-        init.initialize(vk::CommandBufferLevel::ePrimary);
+        init.initialize(vk::CommandBufferLevel::ePrimary, "TerrainWetness.init");
         vk::CommandBuffer cmd = init.begin(true);
         vk::ImageMemoryBarrier2 toClear{
             .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
@@ -114,7 +115,7 @@ void TerrainWetnessPipeline::initialize(oc::function<void()> onDefinesChanged)
     buildLayout(layout);
     m_pipeline.initialize(layout);
     for (uint32 i = 0; i < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++i)
-        m_sets[i].initialize(m_pipeline.getDescriptorSetLayout());
+        m_sets[i].initialize(m_pipeline.getDescriptorSetLayout(), "TerrainWetness");
 }
 
 void TerrainWetnessPipeline::reloadShaders()

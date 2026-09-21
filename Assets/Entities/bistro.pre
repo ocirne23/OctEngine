@@ -6,16 +6,13 @@ Prefab bistro
 	Component Scene
 		Prefab cube
 			Position 21.76226 4.54 -12.484905
-			Rotation 0 -26.999996 0
+			Rotation 0 -26.999994 0
 			Scale 8
 		Prefab cube
 			Position 19.514183 4.088229 -22.092806
-			Rotation 0 -28.499996 0
+			Rotation 0 -28.499994 0
 			Scale 6
 	Component Render
 		ObjectContainer Bistro
 		Node ROOT
 		Type StaticMesh
-	Component Physics
-		Body Static
-		Shape Mesh

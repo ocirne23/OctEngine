@@ -519,6 +519,10 @@ void ObjectContainer::initializeMaterials(const ISceneData& sceneData, TempInitD
             if (pOverrides->pipelineIdx == RendererVKLayout::EPipelineIndex::TerrainLit)
                 material.flags |= RendererVKLayout::MATERIAL_FLAG_TERRAIN;
         }
+        // After the override: a masked material on the lit opaque path takes the one variant that discards.
+        if (temp.pipelineAlphaForMaterialIdx.back().first == RendererVKLayout::EPipelineIndex::LitOpaque
+            && temp.pipelineAlphaForMaterialIdx.back().second == RendererVKLayout::EAlphaMode::Mask)
+            temp.pipelineAlphaForMaterialIdx.back().first = RendererVKLayout::EPipelineIndex::LitMasked;
         if (pOverrides && !pOverrides->useSceneTextures)
         {
             material.diffuseTexIdx = pOverrides->diffuseTexIdx;

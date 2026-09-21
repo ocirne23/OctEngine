@@ -25,7 +25,7 @@ public:
     // sRGB: the pixel data is sRGB-encoded color (albedo/emissive) - sample through an Srgb format so
     // the hardware linearizes it. Data textures (normals, metal/roughness) must stay Unorm.
     bool initialize(const ITextureData& textureData, bool generateMips, bool sRGB = false);
-    bool initialize(uint32 width, uint32 height, vk::Format format, const oc::vector<oc::span<uint8>>& imageDataMips, bool generateMips);
+    bool initialize(uint32 width, uint32 height, vk::Format format, const oc::vector<oc::span<uint8>>& imageDataMips, bool generateMips, const char* debugName);
 
     vk::ImageView getImageView() const { return m_imageView; }
     vk::Image getImage() const { return m_image; }

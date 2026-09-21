@@ -29,7 +29,7 @@ namespace
     }
 
     bool createView(vk::Device vkDevice, vk::Image image, vk::Format format, vk::ImageAspectFlags aspect,
-        vk::ImageViewType viewType, uint32 baseLayer, uint32 layerCount, vk::ImageView& outView)
+        vk::ImageViewType viewType, uint32 baseLayer, uint32 layerCount, vk::ImageView& outView, const char* name)
     {
         vk::ImageViewCreateInfo info{
             .image = image,
@@ -40,6 +40,7 @@ namespace
         auto result = vkDevice.createImageView(info);
         if (result.result != vk::Result::eSuccess) { assert(false && "scenecolor view"); return false; }
         outView = result.value;
+        Globals::device.setDebugName(outView, name);
         return true;
     }
 }
@@ -85,8 +86,10 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
 
     for (uint32 i = 0; i < viewCount; ++i)
     {
-        if (!createView(vkDevice, m_colorImage, colorFormat, vk::ImageAspectFlagBits::eColor, vk::ImageViewType::e2D, i, 1, m_colorLayerViews[i])) return false;
-        if (!createView(vkDevice, m_depthImage, SCENE_DEPTH_FORMAT, vk::ImageAspectFlagBits::eDepth, vk::ImageViewType::e2D, i, 1, m_depthLayerViews[i])) return false;
+        if (!createView(vkDevice, m_colorImage, colorFormat, vk::ImageAspectFlagBits::eColor, vk::ImageViewType::e2D, i, 1, m_colorLayerViews[i],
+            oc::format("SceneColor.color[{}]", i).c_str())) return false;
+        if (!createView(vkDevice, m_depthImage, SCENE_DEPTH_FORMAT, vk::ImageAspectFlagBits::eDepth, vk::ImageViewType::e2D, i, 1, m_depthLayerViews[i],
+            oc::format("SceneColor.depth[{}]", i).c_str())) return false;
     }
 
     // ---- BASE render pass (never begun - see getStageRenderPass): colour (ends SHADER_READ_ONLY for
@@ -164,6 +167,7 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
     auto rpResult = vkDevice.createRenderPass2(rpInfo);
     if (rpResult.result != vk::Result::eSuccess) { assert(false && "scenecolor renderpass"); return false; }
     m_renderPass = rpResult.value;
+    Globals::device.setDebugName(m_renderPass, "SceneColor.base");
 
     for (uint32 i = 0; i < viewCount; ++i)
     {
@@ -179,6 +183,7 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
         auto fbResult = vkDevice.createFramebuffer(fbInfo);
         if (fbResult.result != vk::Result::eSuccess) { assert(false && "scenecolor framebuffer"); return false; }
         m_framebuffers[i] = fbResult.value;
+        Globals::device.setDebugName(m_framebuffers[i], oc::format("SceneColor[{}]", i).c_str());
     }
 
     // ---- STAGE variants (see getStageRenderPass): colour first/last x depth written/read-only.
@@ -251,6 +256,8 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
                 : first ? depthDesc(vk::AttachmentLoadOp::eClear, vk::AttachmentStoreOp::eStore, vk::ImageLayout::eUndefined, depthAtt)
                         : depthDesc(vk::AttachmentLoadOp::eLoad, vk::AttachmentStoreOp::eStore, depthAtt, depthAtt);
             if (!makePass({ color, depth }, readOnly ? readOnlySubpass : subpass, m_stagePasses[i])) return false;
+            Globals::device.setDebugName(m_stagePasses[i], oc::format("SceneColor.stage{}{}{}",
+                first ? " first" : "", last ? " last" : "", readOnly ? " depthRO" : "").c_str());
         }
     }
 
@@ -271,12 +278,14 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
     auto samplerResult = vkDevice.createSampler(samplerInfo);
     if (samplerResult.result != vk::Result::eSuccess) { assert(false && "scenecolor sampler"); return false; }
     m_sampler = samplerResult.value;
+    Globals::device.setDebugName(m_sampler, "SceneColor.sampler");
 
     samplerInfo.magFilter = vk::Filter::eNearest;
     samplerInfo.minFilter = vk::Filter::eNearest;
     auto depthSamplerResult = vkDevice.createSampler(samplerInfo);
     if (depthSamplerResult.result != vk::Result::eSuccess) { assert(false && "scenecolor depth sampler"); return false; }
     m_depthSampler = depthSamplerResult.value;
+    Globals::device.setDebugName(m_depthSampler, "SceneColor.depthSampler");
 
     // One-time layout init to SHADER_READ_ONLY so a never-yet-rendered target (e.g. the other frame's image
     // sampled before it has been drawn) is in a legal sampling layout. The render pass uses loadOp=Clear with
@@ -284,7 +293,7 @@ bool SceneColor::initialize(vk::Format colorFormat, uint32 width, uint32 height,
     // (reversed-Z 0 = "no geometry" to every reader) and parked in its sampled layout the same way.
     {
         CommandBuffer init;
-        init.initialize(vk::CommandBufferLevel::ePrimary);
+        init.initialize(vk::CommandBufferLevel::ePrimary, "SceneColor.init");
         vk::CommandBuffer cmd = init.begin(true);
         const vk::ImageSubresourceRange depthRange{ vk::ImageAspectFlagBits::eDepth, 0, 1, 0, viewCount };
         vk::ImageMemoryBarrier2 depthToClear{

@@ -299,6 +299,7 @@ void AccelerationStructure::recordBuildBlas(uint32 frameIdx, vk::CommandBuffer c
             auto res = dev.createAccelerationStructureKHR(ci);
             assert(res.result == vk::Result::eSuccess && "Failed to create BLAS");
             blas.handle = res.value;
+            Globals::device.setDebugName(blas.handle, oc::format("BLAS mesh {}", toBuild[i]).c_str());
 
             buildInfos[i].dstAccelerationStructure = blas.handle;
             buildInfos[i].scratchData.deviceAddress = m_blasScratchAlignedAddr[frameIdx] + scratchOffsets[i];
@@ -342,6 +343,7 @@ void AccelerationStructure::recordBuildBlas(uint32 frameIdx, vk::CommandBuffer c
                 .queryType = vk::QueryType::eAccelerationStructureCompactedSizeKHR, .queryCount = count });
             assert(poolRes.result == vk::Result::eSuccess && "Failed to create compaction query pool");
             batch.queryPool = poolRes.value;
+            Globals::device.setDebugName(batch.queryPool, "AS.compactedSize");
             cmd.resetQueryPool(batch.queryPool, 0, count);
             cmd.writeAccelerationStructuresPropertiesKHR((uint32)batch.handles.size(), batch.handles.data(),
                 vk::QueryType::eAccelerationStructureCompactedSizeKHR, batch.queryPool, 0);
@@ -418,6 +420,7 @@ void AccelerationStructure::recordCompaction(uint32 frameIdx, vk::CommandBuffer 
                 };
                 auto res = dev.createAccelerationStructureKHR(ci);
                 assert(res.result == vk::Result::eSuccess && "Failed to create compacted BLAS");
+                Globals::device.setDebugName(res.value, oc::format("BLAS mesh {} compacted", meshIdx).c_str());
 
                 cmd.copyAccelerationStructureKHR(vk::CopyAccelerationStructureInfoKHR{
                     .src = blas.handle, .dst = res.value, .mode = vk::CopyAccelerationStructureModeKHR::eCompact });
@@ -542,6 +545,7 @@ void AccelerationStructure::recordBuildSkinnedBlas(vk::CommandBuffer cmd, uint32
             auto res = dev.createAccelerationStructureKHR(ci);
             assert(res.result == vk::Result::eSuccess && "Failed to create skinned BLAS");
             blas.handle = res.value;
+            Globals::device.setDebugName(blas.handle, oc::format("BLAS skinned mesh {}", b.meshIdx).c_str());
             vk::AccelerationStructureDeviceAddressInfoKHR ai{ .accelerationStructure = blas.handle };
             m_mappedBlasAddresses[frameIdx][b.meshIdx] = dev.getAccelerationStructureAddressKHR(ai);
             wroteAddresses = true; // fresh slot OR a freed job slot re-created for new geometry
@@ -628,6 +632,7 @@ bool AccelerationStructure::ensureTlasCapacity(uint32 frameIdx, uint32 capacity)
     auto res = dev.createAccelerationStructureKHR(ci);
     assert(res.result == vk::Result::eSuccess && "Failed to create TLAS");
     m_tlas[frameIdx] = res.value;
+    Globals::device.setDebugName(m_tlas[frameIdx], oc::format("TLAS[{}]", frameIdx).c_str());
     ensureScratch(m_tlasScratch[frameIdx], m_tlasScratchAlignedAddr[frameIdx], sizes.buildScratchSize);
     m_tlasCapacity[frameIdx] = capacity;
     return true;

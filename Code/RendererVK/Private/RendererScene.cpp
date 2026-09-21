@@ -277,9 +277,9 @@ void Renderer::initBindlessTextures()
             for (PerFrameData& perFrame : m_perFrameData)
             {
                 for (uint32 eye = 0; eye < m_sceneViewCount; ++eye)
-                    perFrame.staticMeshPipelineDescriptorSet[eye].initialize(m_staticMeshGraphicsPipeline.getDescriptorSetLayout(), count);
-                perFrame.shadowDrawDescriptorSet.initialize(m_shadowMapGraphicsPipeline.getDescriptorSetLayout(), count);
-                perFrame.rainDrawDescriptorSet.initialize(m_rainMapGraphicsPipeline.getDescriptorSetLayout(), count);
+                    perFrame.staticMeshPipelineDescriptorSet[eye].initialize(m_staticMeshGraphicsPipeline.getDescriptorSetLayout(), "StaticMesh", count);
+                perFrame.shadowDrawDescriptorSet.initialize(m_shadowMapGraphicsPipeline.getDescriptorSetLayout(), "ShadowDraw", count);
+                perFrame.rainDrawDescriptorSet.initialize(m_rainMapGraphicsPipeline.getDescriptorSetLayout(), "RainOcclusionDraw", count);
             }
             setHaveToRecordCommandBuffers();
         },

@@ -85,6 +85,7 @@ void TaaPipeline::createImageSet(ImageSet& set)
         auto viewResult = vkDevice.createImageView(viewInfo);
         assert(viewResult.result == vk::Result::eSuccess);
         set.view[i] = viewResult.value;
+        Globals::device.setDebugName(set.view[i], "Taa.resolved");
     }
 }
 
@@ -114,7 +115,7 @@ void TaaPipeline::recreateImages(uint32 width, uint32 height)
         m_resolved.initialized[i] = true;
     }
     CommandBuffer init;
-    init.initialize(vk::CommandBufferLevel::ePrimary);
+    init.initialize(vk::CommandBufferLevel::ePrimary, "Taa.init");
     vk::CommandBuffer cmd = init.begin(true);
     cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = (uint32)bars.size(), .pImageMemoryBarriers = bars.data() });
     init.end();
@@ -128,7 +129,7 @@ void TaaPipeline::initialize(uint32 width, uint32 height, uint32 viewCount)
     ComputePipelineLayout layout; buildLayout(layout); m_pipeline.initialize(layout);
     for (uint32 f = 0; f < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++f)
     for (uint32 e = 0; e < m_viewCount; ++e)
-        m_sets[slot(f, e)].initialize(m_pipeline.getDescriptorSetLayout());
+        m_sets[slot(f, e)].initialize(m_pipeline.getDescriptorSetLayout(), "Taa");
 
     recreateImages(width, height);
 
@@ -148,6 +149,7 @@ void TaaPipeline::initialize(uint32 width, uint32 height, uint32 viewCount)
     auto samplerResult = Globals::device.getDevice().createSampler(samplerInfo);
     assert(samplerResult.result == vk::Result::eSuccess);
     m_sampler = samplerResult.value;
+    Globals::device.setDebugName(m_sampler, "Taa");
 }
 
 void TaaPipeline::reloadShaders()

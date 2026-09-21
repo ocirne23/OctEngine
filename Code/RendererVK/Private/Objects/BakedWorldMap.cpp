@@ -59,6 +59,7 @@ void BakedWorldMap::initialize(uint32 resolution, uint32 numLayers, uint32 chann
         auto viewResult = vkDevice.createImageView(viewInfo);
         assert(viewResult.result == vk::Result::eSuccess);
         m_view[i] = viewResult.value;
+        Globals::device.setDebugName(m_view[i], debugName);
     }
     m_sampler.initialize(vk::SamplerAddressMode::eClampToEdge);
 
@@ -75,7 +76,7 @@ void BakedWorldMap::initialize(uint32 resolution, uint32 numLayers, uint32 chann
     // One-time UNDEFINED -> SHADER_READ_ONLY: the images are statically bound from the first frame but
     // never sampled until the first upload sets the consumers' UBO 1/size flags.
     CommandBuffer init;
-    init.initialize(vk::CommandBufferLevel::ePrimary);
+    init.initialize(vk::CommandBufferLevel::ePrimary, "BakedWorldMap.init");
     vk::CommandBuffer cmd = init.begin(true);
     oc::array<vk::ImageMemoryBarrier2, 2> bars;
     for (uint32 i = 0; i < 2; ++i)

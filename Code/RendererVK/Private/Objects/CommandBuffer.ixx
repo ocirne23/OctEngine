@@ -25,7 +25,7 @@ public:
     CommandBuffer(const CommandBuffer&) = delete;
     CommandBuffer(CommandBuffer&&) = default;
 
-    bool initialize(vk::CommandBufferLevel level);
+    bool initialize(vk::CommandBufferLevel level, const char* debugName);
 
     vk::CommandBuffer begin(bool once = false, vk::CommandBufferInheritanceInfo* pInheritanceInfo = nullptr);
     void end();

@@ -25,7 +25,7 @@ void ShadowMap::destroy()
     m_sampler = nullptr; m_depthSampler = nullptr; m_framebuffer = nullptr; m_renderPass = nullptr; m_sampleView = nullptr; m_image = nullptr; m_imageMemory = nullptr;
 }
 
-bool ShadowMap::initialize(uint32 resolution, uint32 numCascades)
+bool ShadowMap::initialize(const char* debugName, uint32 resolution, uint32 numCascades)
 {
     vk::Device vkDevice = Globals::device.getDevice();
     m_resolution = resolution;
@@ -44,7 +44,7 @@ bool ShadowMap::initialize(uint32 resolution, uint32 numCascades)
         .sharingMode = vk::SharingMode::eExclusive,
         .initialLayout = vk::ImageLayout::eUndefined,
     };
-    if (!Globals::gpuAllocator.createImage(imageInfo, m_image, m_imageMemory, "ShadowMap")) { assert(false && "shadow image"); return false; }
+    if (!Globals::gpuAllocator.createImage(imageInfo, m_image, m_imageMemory, debugName)) { assert(false && "shadow image"); return false; }
 
     // ---- Views -------------------------------------------------------------
     vk::ImageViewCreateInfo sampleViewInfo{
@@ -56,6 +56,7 @@ bool ShadowMap::initialize(uint32 resolution, uint32 numCascades)
     auto sampleViewResult = vkDevice.createImageView(sampleViewInfo);
     if (sampleViewResult.result != vk::Result::eSuccess) { assert(false && "shadow sample view"); return false; }
     m_sampleView = sampleViewResult.value;
+    Globals::device.setDebugName(m_sampleView, debugName);
 
     // ---- Depth-only multiview render pass (one view per cascade) ----------
     vk::AttachmentDescription2 depthAttachment{
@@ -107,6 +108,7 @@ bool ShadowMap::initialize(uint32 resolution, uint32 numCascades)
     auto rpResult = vkDevice.createRenderPass2(renderPassInfo);
     if (rpResult.result != vk::Result::eSuccess) { assert(false && "shadow renderpass"); return false; }
     m_renderPass = rpResult.value;
+    Globals::device.setDebugName(m_renderPass, debugName);
 
     // ---- Single layered framebuffer (multiview targets the array view) ----
     // With multiview the framebuffer has layers = 1; the array view supplies one layer per view.
@@ -121,6 +123,7 @@ bool ShadowMap::initialize(uint32 resolution, uint32 numCascades)
     auto fbResult = vkDevice.createFramebuffer(fbInfo);
     if (fbResult.result != vk::Result::eSuccess) { assert(false && "shadow framebuffer"); return false; }
     m_framebuffer = fbResult.value;
+    Globals::device.setDebugName(m_framebuffer, debugName);
 
     // ---- Comparison sampler (hardware PCF) --------------------------------
     vk::SamplerCreateInfo samplerInfo{
@@ -141,6 +144,7 @@ bool ShadowMap::initialize(uint32 resolution, uint32 numCascades)
     auto samplerResult = vkDevice.createSampler(samplerInfo);
     if (samplerResult.result != vk::Result::eSuccess) { assert(false && "shadow sampler"); return false; }
     m_sampler = samplerResult.value;
+    Globals::device.setDebugName(m_sampler, oc::format("{}.compare", debugName).c_str());
 
     // ---- Non-comparison sampler (raw depth reads for the PCSS blocker search) ----------
     vk::SamplerCreateInfo depthSamplerInfo{
@@ -160,6 +164,7 @@ bool ShadowMap::initialize(uint32 resolution, uint32 numCascades)
     auto depthSamplerResult = vkDevice.createSampler(depthSamplerInfo);
     if (depthSamplerResult.result != vk::Result::eSuccess) { assert(false && "shadow depth sampler"); return false; }
     m_depthSampler = depthSamplerResult.value;
+    Globals::device.setDebugName(m_depthSampler, oc::format("{}.depth", debugName).c_str());
 
     // One-time UNDEFINED -> SHADER_READ_ONLY so the image is in its sampled layout even if the cascade
     // render pass never runs (RT sun shadows skip it); the render pass starts from UNDEFINED anyway.
@@ -173,7 +178,7 @@ bool ShadowMap::initialize(uint32 resolution, uint32 numCascades)
         .subresourceRange = { vk::ImageAspectFlagBits::eDepth, 0, 1, 0, numCascades },
     };
     CommandBuffer initCmd;
-    initCmd.initialize(vk::CommandBufferLevel::ePrimary);
+    initCmd.initialize(vk::CommandBufferLevel::ePrimary, "ShadowMap.init");
     vk::CommandBuffer cmd = initCmd.begin(true);
     cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &initBarrier });
     initCmd.end();

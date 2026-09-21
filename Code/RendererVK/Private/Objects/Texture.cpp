@@ -260,7 +260,7 @@ bool Texture::initialize(const char* filePath, bool generateMips, bool sRGB)
 	// A streamed source's mip layout must stay exactly the file's: never synthesize a chain from it
 	// (a partial-chain DDS whose tail is a single mip would otherwise hit the blit-generate path and
 	// desync the image from the TextureStreamer's bookkeeping).
-	return initialize(width, height, format, imgData, generateMips && !m_pStreamingMeta);
+	return initialize(width, height, format, imgData, generateMips && !m_pStreamingMeta, filePath);
 }
 
 bool Texture::initialize(const ITextureData& textureData, bool generateMips, bool sRGB)
@@ -353,10 +353,11 @@ bool Texture::initialize(const ITextureData& textureData, bool generateMips, boo
 		}
     }
 
-    return initialize(width, height, format, imgData, generateMips);
+    const char* name = textureData.getFileName();
+    return initialize(width, height, format, imgData, generateMips, (name && *name) ? name : "Texture.generated");
 }
 
-bool Texture::initialize(uint32 width, uint32 height, vk::Format format, const oc::vector<oc::span<uint8>>& imageDataMips, bool generateMips)
+bool Texture::initialize(uint32 width, uint32 height, vk::Format format, const oc::vector<oc::span<uint8>>& imageDataMips, bool generateMips, const char* debugName)
 {
     vk::Device vkDevice = Globals::device.getDevice();
 	m_width = width;
@@ -390,7 +391,7 @@ bool Texture::initialize(uint32 width, uint32 height, vk::Format format, const o
 	}
 	auto imageFormatProperties = imageFormatPropertiesresult.value;
 
-    if (!Globals::gpuAllocator.createImage(imageCreateInfo, m_image, m_imageMemory, "Texture"))
+    if (!Globals::gpuAllocator.createImage(imageCreateInfo, m_image, m_imageMemory, debugName))
         return false;
 
     vk::ImageViewCreateInfo imageViewInfo{
@@ -413,6 +414,7 @@ bool Texture::initialize(uint32 width, uint32 height, vk::Format format, const o
         return false;
     }
     m_imageView = createImageViewResult.value;
+    Globals::device.setDebugName(m_imageView, debugName);
 
     if (generateFromSingle)
     {

@@ -37,6 +37,7 @@ void GpuProfiler::initialize()
             return;
         }
         slot.queryPool = createResult.value;
+        Globals::device.setDebugName(slot.queryPool, "GpuProfiler.timestamps");
     }
 
     m_track = Globals::profiler.createNamedTrack("GPU", 1);
@@ -151,6 +152,9 @@ void GpuProfiler::beginRecord(vk::CommandBuffer cmd, uint32 frameIdx)
 
 void GpuProfiler::beginScope(vk::CommandBuffer cmd, const char* name)
 {
+    // The same scope as a debug-utils label - the marker range Nsight / RenderDoc show. Before every
+    // early-out, and endScope mirrors it, so the labels stay paired whatever the timestamps do.
+    Globals::device.beginDebugLabel(cmd, name);
     if (!m_supported)
         return;
     FrameSlot& slot = m_slots[m_recordSlot];
@@ -167,6 +171,7 @@ void GpuProfiler::beginScope(vk::CommandBuffer cmd, const char* name)
 
 void GpuProfiler::endScope(vk::CommandBuffer cmd)
 {
+    Globals::device.endDebugLabel(cmd);
     if (!m_supported)
         return;
     FrameSlot& slot = m_slots[m_recordSlot];

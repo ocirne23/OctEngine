@@ -136,7 +136,7 @@ void RTAOPipeline::destroyImageSet(ImageSet& set)
     }
 }
 
-void RTAOPipeline::createImageSet(ImageSet& set)
+void RTAOPipeline::createImageSet(ImageSet& set, const char* debugName)
 {
     vk::Device vkDevice = Globals::device.getDevice();
     for (uint32 f = 0; f < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++f)
@@ -155,7 +155,7 @@ void RTAOPipeline::createImageSet(ImageSet& set)
             .sharingMode = vk::SharingMode::eExclusive,
             .initialLayout = vk::ImageLayout::eUndefined,
         };
-        (void)Globals::gpuAllocator.createImage(info, set.image[i], set.memory[i], "Rtao");
+        (void)Globals::gpuAllocator.createImage(info, set.image[i], set.memory[i], debugName);
 
         vk::ImageViewCreateInfo viewInfo{
             .image = set.image[i],
@@ -166,6 +166,7 @@ void RTAOPipeline::createImageSet(ImageSet& set)
         auto viewResult = vkDevice.createImageView(viewInfo);
         assert(viewResult.result == vk::Result::eSuccess);
         set.view[i] = viewResult.value;
+        Globals::device.setDebugName(set.view[i], debugName);
     }
 }
 
@@ -176,9 +177,9 @@ void RTAOPipeline::recreateImages(uint32 fullWidth, uint32 fullHeight)
     destroyImageSet(m_final);
     m_width = (fullWidth + 1) / 2;
     m_height = (fullHeight + 1) / 2;
-    createImageSet(m_raw);
-    createImageSet(m_accum);
-    createImageSet(m_final);
+    createImageSet(m_raw, "Rtao.raw");
+    createImageSet(m_accum, "Rtao.accum");
+    createImageSet(m_final, "Rtao.final");
 
     // One-time UNDEFINED -> GENERAL for every AO image, so the history accum buffer can be sampled on the very first frame
     ImageSet* sets[] = { &m_raw, &m_accum, &m_final };
@@ -200,7 +201,7 @@ void RTAOPipeline::recreateImages(uint32 fullWidth, uint32 fullHeight)
             s->initialized[i] = true;
         }
     CommandBuffer init;
-    init.initialize(vk::CommandBufferLevel::ePrimary);
+    init.initialize(vk::CommandBufferLevel::ePrimary, "Rtao.init");
     vk::CommandBuffer cmd = init.begin(true);
     cmd.pipelineBarrier2(vk::DependencyInfo{ .imageMemoryBarrierCount = (uint32)bars.size(), .pImageMemoryBarriers = bars.data() });
     init.end();
@@ -221,9 +222,9 @@ void RTAOPipeline::initialize(const RTAOParams* pParams, uint32 fullWidth, uint3
     for (uint32 e = 0; e < m_viewCount; ++e)
     {
         const uint32 i = slot(f, e);
-        m_traceSets[i].initialize(m_tracePipeline.getDescriptorSetLayout(), numTextureDescriptors);
-        m_temporalSets[i].initialize(m_temporalPipeline.getDescriptorSetLayout());
-        m_spatialSets[i].initialize(m_spatialPipeline.getDescriptorSetLayout());
+        m_traceSets[i].initialize(m_tracePipeline.getDescriptorSetLayout(), "Rtao.trace", numTextureDescriptors);
+        m_temporalSets[i].initialize(m_temporalPipeline.getDescriptorSetLayout(), "Rtao.temporal");
+        m_spatialSets[i].initialize(m_spatialPipeline.getDescriptorSetLayout(), "Rtao.spatial");
     }
 
     recreateImages(fullWidth, fullHeight);
@@ -244,6 +245,7 @@ void RTAOPipeline::initialize(const RTAOParams* pParams, uint32 fullWidth, uint3
     auto samplerResult = Globals::device.getDevice().createSampler(samplerInfo);
     assert(samplerResult.result == vk::Result::eSuccess);
     m_aoSampler = samplerResult.value;
+    Globals::device.setDebugName(m_aoSampler, "Rtao");
 }
 
 void RTAOPipeline::resizeTextureDescriptors(uint32 numTextureDescriptors)
@@ -252,7 +254,7 @@ void RTAOPipeline::resizeTextureDescriptors(uint32 numTextureDescriptors)
     // layout/pipeline declare the fixed device-limit cap and stay untouched (mirrors the GI probe path).
     for (uint32 f = 0; f < RendererVKLayout::NUM_FRAMES_IN_FLIGHT; ++f)
     for (uint32 e = 0; e < m_viewCount; ++e)
-        m_traceSets[slot(f, e)].initialize(m_tracePipeline.getDescriptorSetLayout(), numTextureDescriptors);
+        m_traceSets[slot(f, e)].initialize(m_tracePipeline.getDescriptorSetLayout(), "Rtao.trace", numTextureDescriptors);
 }
 
 void RTAOPipeline::reloadShaders()

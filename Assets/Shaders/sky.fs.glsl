@@ -16,10 +16,7 @@
 
 #include "shared.inc.glsl"
 
-layout (location = 0) in vec3 in_pos;
-layout (location = 1) in mat3 in_tbn;
-layout (location = 4) in vec2 in_uv;
-layout (location = 5) in flat uint in_meshIdxMaterialIdx;
+// Reads no interpolant: the view ray comes from gl_FragCoord (see main).
 #ifdef STEREO
 layout (push_constant) uniform ViewPC { uint u_viewIndex; }; // selects the per-eye view (1=left, 2=right) in VR
 #endif

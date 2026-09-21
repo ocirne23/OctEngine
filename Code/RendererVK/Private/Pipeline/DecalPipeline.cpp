@@ -80,7 +80,7 @@ void DecalPipeline::initialize(vk::RenderPass sceneRenderPass, uint32 maxTexture
         m_indirectBuffers[i].flushMappedMemory(sizeof(vk::DrawIndirectCommand));
 
         for (uint32 eye = 0; eye < m_viewCount; ++eye)
-            m_sets[drawSlot(i, eye)].initialize(m_pipeline.getDescriptorSetLayout(), numTextureDescriptors);
+            m_sets[drawSlot(i, eye)].initialize(m_pipeline.getDescriptorSetLayout(), "Decals", numTextureDescriptors);
     }
 }
 
@@ -104,7 +104,7 @@ void DecalPipeline::resizeTextureDescriptors(uint32 numTextureDescriptors)
 {
     for (uint32 i = 0; i < NUM_FRAMES_IN_FLIGHT; ++i)
         for (uint32 eye = 0; eye < m_viewCount; ++eye)
-            m_sets[drawSlot(i, eye)].initialize(m_pipeline.getDescriptorSetLayout(), numTextureDescriptors);
+            m_sets[drawSlot(i, eye)].initialize(m_pipeline.getDescriptorSetLayout(), "Decals", numTextureDescriptors);
 }
 
 void DecalPipeline::updateTextureDescriptor(uint32 frameIdx, uint32 slotIdx, vk::ImageView view)

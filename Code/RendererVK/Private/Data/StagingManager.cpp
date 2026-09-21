@@ -45,7 +45,7 @@ bool StagingManager::initialize()
         if (!m_stagingBuffers[i].initialize(STAGING_BUFFER_SIZE, vk::BufferUsageFlagBits2::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible, false, "Staging", BufferHostAccess::eSequentialWrite))
             return false;
 
-        m_commandBuffers[i].initialize(vk::CommandBufferLevel::ePrimary);
+        m_commandBuffers[i].initialize(vk::CommandBufferLevel::ePrimary, "CB.staging");
         auto createFenceResult = vkDevice.createFence(vk::FenceCreateInfo{ .flags = vk::FenceCreateFlagBits::eSignaled });
         if (createFenceResult.result != vk::Result::eSuccess)
         {
@@ -61,6 +61,8 @@ bool StagingManager::initialize()
             return false;
         }
         m_semaphores[i] = createSemaphoreResult.value;
+        Globals::device.setDebugName(m_fences[i], "Staging");
+        Globals::device.setDebugName(m_semaphores[i], "Staging");
         m_mappedStagingBuffers[i] = m_stagingBuffers[i].mapMemory();
     }
     m_mappedMemory = m_mappedStagingBuffers[m_currentBuffer];

@@ -119,12 +119,12 @@ void PostParams::registerTweaks(const oc::function<void()>& onReRecord)
     Tweak::floatVar("Post", "Adapt Max EV", &adaptMaxEV, 0.0f, 12.0f, 0.1f);
 }
 
-void RTParams::registerTweaks(const oc::function<void()>& onReRecord)
+void RTParams::registerTweaks(const oc::function<void()>& onReRecord, const oc::function<void()>& onReloadLitShaders)
 {
-    Tweak::boolean("RT", "Enable RT", &enabled, onReRecord);
+    Tweak::boolean("RT", "Enable RT", &enabled, onReloadLitShaders);
     Tweak::boolean("GI", "Enable GI", &giEnabled, onReRecord); // its own Graphics category (with the GIProbePipeline knobs); still needs "RT/Enable RT"
-    Tweak::boolean("RT", "RT Lights", &rtLightShadows);
-    Tweak::boolean("RT", "RT Sun", &rtSunShadow);
+    Tweak::boolean("RT", "RT Lights", &rtLightShadows, onReloadLitShaders);
+    Tweak::boolean("RT", "RT Sun", &rtSunShadow, onReloadLitShaders);
     Tweak::intVar("RT", "RT Sun Rays", &sunShadowRays, 1, 8);
     Tweak::boolean("RT", "RT Sky Radiance", &rtSkyRadiance);
     Tweak::intVar("RT", "BLAS LOD level", &blasLodLevel, 0, 4);

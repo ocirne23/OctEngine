@@ -101,6 +101,10 @@ bool SwapChain::initialize(const Surface& surface, uint32 swapChainSize, bool vs
             return false;
         }
         m_syncObjects[i].inFlight = inFlightCreateFenceResult.value;
+
+        Globals::device.setDebugName(m_syncObjects[i].presentComplete, oc::format("SwapChain.presentComplete[{}]", i).c_str());
+        Globals::device.setDebugName(m_syncObjects[i].renderComplete, oc::format("SwapChain.renderComplete[{}]", i).c_str());
+        Globals::device.setDebugName(m_syncObjects[i].inFlight, oc::format("SwapChain.inFlight[{}]", i).c_str());
     }
     
     vk::SwapchainCreateInfoKHR createInfo{
@@ -131,6 +135,7 @@ bool SwapChain::initialize(const Surface& surface, uint32 swapChainSize, bool vs
         return false;
     }
     m_swapChain = createSwapChainResult.value;
+    Globals::device.setDebugName(m_swapChain, "SwapChain");
 
     auto imagesResult = vkDevice.getSwapchainImagesKHR(m_swapChain);
     if (imagesResult.result != vk::Result::eSuccess)
@@ -139,6 +144,8 @@ bool SwapChain::initialize(const Surface& surface, uint32 swapChainSize, bool vs
         return false;
     }
     m_images = oc::fromStd(imagesResult.value);
+    for (uint32 i = 0; i < (uint32)m_images.size(); i++)
+        Globals::device.setDebugName(m_images[i], oc::format("Swapchain[{}]", i).c_str());
 
     return true;
 }

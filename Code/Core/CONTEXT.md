@@ -92,8 +92,8 @@ call site:
 
 * Vulkan-Hpp `enumerate*` (returns `std::vector`), `vk::ClearColorValue` (`std::array`) and
   `vk::ResultValue`'s tuple conversion (`std::tie`)
-* glslang `preprocess` / `GlslangToSpv` / `OutputSpvBin` (`std::string` + `std::vector<unsigned>` by
-  reference)
+* glslang `Includer::IncludeResult` / `GlslangToSpv` / `OutputSpvBin` (a `std::string` name +
+  `std::vector<unsigned>` by reference)
 * ONNX Runtime `Session::Run` (`std::vector<Ort::Value>` — **move-only, so it cannot even be
   converted** and stays std entirely)
 * `<filesystem>` inside File, the iostream/sstream parsers, and the Nsight Aftermath `to_string`

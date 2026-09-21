@@ -48,6 +48,7 @@ bool Framebuffers::initialize(const RenderPass& renderPass, const SwapChain& swa
     m_imageViews.reserve(images.size());
     for (const vk::Image& image : images)
     {
+        const oc::string name = oc::format("Swapchain[{}]", m_imageViews.size());
         vk::ImageViewCreateInfo viewInfo =
         {
             .image = image,
@@ -70,6 +71,7 @@ bool Framebuffers::initialize(const RenderPass& renderPass, const SwapChain& swa
             assert(false && "Could not create an image view\n");
             return false;
         }
+        Globals::device.setDebugName(createViewResult.value, name.c_str());
         m_imageViews.push_back(createViewResult.value);
     }
     const vk::Extent2D size = swapChain.getLayout().extent;
@@ -113,6 +115,7 @@ bool Framebuffers::initialize(const RenderPass& renderPass, const SwapChain& swa
         return false;
     }
     m_depthImageView = createDepthImageViewResult.value;
+    Globals::device.setDebugName(m_depthImageView, "Framebuffers.depth");
     oc::array<vk::ImageView, 2> attachments;
     attachments[1] = createDepthImageViewResult.value;
     m_framebuffers.reserve(m_imageViews.size());
@@ -134,6 +137,7 @@ bool Framebuffers::initialize(const RenderPass& renderPass, const SwapChain& swa
             assert(false && "Could not create a framebuffer\n");
             return false;
         }
+        Globals::device.setDebugName(createFramebufferResult.value, oc::format("Swapchain[{}]", i).c_str());
         m_framebuffers.push_back(createFramebufferResult.value);
     }
 
